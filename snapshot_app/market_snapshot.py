@@ -1,0 +1,1092 @@
+import argparse
+import json
+import os
+import re
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Deque, Dict, Iterable, List, Optional
+
+import numpy as np
+import pandas as pd
+import requests
+
+try:
+    from snapshot_app.greeks_calculator import GreeksCalculator
+except Exception:  # pragma: no cover - runtime dependency
+    GreeksCalculator = None
+
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _credentials_candidates() -> List[Path]:
+    out: List[Path] = []
+    configured = str(os.getenv("KITE_CREDENTIALS_PATH") or "").strip()
+    if configured:
+        out.append(Path(configured))
+    out.append(Path.cwd() / "credentials.json")
+    out.append(Path(__file__).resolve().parents[3] / "credentials.json")
+    seen: set[str] = set()
+    uniq: List[Path] = []
+    for path in out:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(path)
+    return uniq
+
+
+def _load_kite_credentials() -> tuple[Optional[str], Optional[str]]:
+    api_key = str(os.getenv("KITE_API_KEY") or "").strip()
+    access_token = str(os.getenv("KITE_ACCESS_TOKEN") or "").strip()
+    if api_key and access_token:
+        return api_key, access_token
+
+    for path in _credentials_candidates():
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        key = str(payload.get("api_key") or "").strip()
+        token = str(
+            payload.get("access_token")
+            or ((payload.get("data") or {}).get("access_token") if isinstance(payload.get("data"), dict) else "")
+            or ""
+        ).strip()
+        if key and token:
+            return key, token
+    return None, None
+
+
+def _build_kite_client(api_key: str, access_token: str) -> Any:
+    from kiteconnect import KiteConnect
+
+    client = KiteConnect(api_key=api_key, timeout=int(os.getenv("KITE_HTTP_TIMEOUT", "30")))
+    client.set_access_token(access_token)
+    return client
+
+
+def _extract_underlying_symbol(contract_symbol: str) -> str:
+    symbol = str(contract_symbol or "").strip().upper()
+    match = re.match(r"^([A-Z]+)\d", symbol)
+    if match:
+        return match.group(1)
+    if symbol.endswith("-I"):
+        return symbol[:-2]
+    for suffix in ("FUT", "CE", "PE"):
+        if suffix in symbol:
+            left = symbol.split(suffix)[0]
+            left = re.sub(r"\d+", "", left)
+            return left
+    return re.sub(r"[^A-Z]", "", symbol)
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        if value is None:
+            return float("nan")
+        return float(value)
+    except Exception:
+        return float("nan")
+
+
+def _nullable_float(value: Any) -> Optional[float]:
+    out = _safe_float(value)
+    if np.isfinite(out):
+        return float(out)
+    return None
+
+
+def _nullable_int(value: Any) -> Optional[int]:
+    out = _safe_float(value)
+    if np.isfinite(out):
+        return int(round(float(out)))
+    return None
+
+
+def _to_ist_timestamp(value: Any) -> pd.Timestamp:
+    ts = pd.to_datetime(value, errors="coerce")
+    if pd.isna(ts):
+        raise ValueError(f"unable to parse timestamp: {value}")
+    if ts.tzinfo is None:
+        return pd.Timestamp(ts)
+    return pd.Timestamp(ts.tz_convert(IST).tz_localize(None))
+
+
+def _option_expiry_date(chain_expiry: Any, trade_date: pd.Timestamp) -> pd.Timestamp:
+    raw = str(chain_expiry or "").strip()
+    if raw:
+        for fmt in ("%Y-%m-%d", "%d%b%y", "%Y%m%d"):
+            try:
+                dt = datetime.strptime(raw.upper(), fmt)
+                return pd.Timestamp(dt.date())
+            except Exception:
+                continue
+        try:
+            ts = pd.to_datetime(raw, errors="coerce")
+            if pd.notna(ts):
+                if ts.tzinfo is not None:
+                    ts = ts.tz_convert(IST).tz_localize(None)
+                return pd.Timestamp(ts.date())
+        except Exception:
+            pass
+
+    wd = int(trade_date.dayofweek)
+    delta = (3 - wd) % 7
+    return pd.Timestamp((trade_date + pd.Timedelta(days=int(delta))).date())
+
+
+def _session_phase(ts: pd.Timestamp) -> str:
+    minute = int(ts.hour * 60 + ts.minute)
+    open_min = 9 * 60 + 15
+    discover_end = 9 * 60 + 45
+    active_end = 14 * 60 + 30
+    close_end = 15 * 60 + 30
+    if open_min <= minute < discover_end:
+        return "DISCOVERY"
+    if discover_end <= minute < active_end:
+        return "ACTIVE"
+    if active_end <= minute <= close_end:
+        return "PRE_CLOSE"
+    return "CLOSED"
+
+
+def _minutes_since_open(ts: pd.Timestamp) -> Optional[int]:
+    open_ts = ts.normalize() + pd.Timedelta(hours=9, minutes=15)
+    mins = int((ts - open_ts) / pd.Timedelta(minutes=1))
+    if mins < 0:
+        return None
+    return mins
+
+
+def _normalize_ohlc_frame(ohlc: pd.DataFrame) -> pd.DataFrame:
+    if ohlc is None or len(ohlc) == 0:
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume", "oi"])
+    out = ohlc.copy()
+    if "timestamp" not in out.columns:
+        if "start_at" in out.columns:
+            out["timestamp"] = out["start_at"]
+        else:
+            raise ValueError("ohlc frame missing timestamp/start_at")
+    out["timestamp"] = out["timestamp"].map(_to_ist_timestamp)
+    for col in ("open", "high", "low", "close", "volume", "oi"):
+        if col not in out.columns:
+            out[col] = np.nan
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+    return out
+
+
+def _merge_ohlc_history(primary: pd.DataFrame, supplemental: pd.DataFrame) -> pd.DataFrame:
+    if supplemental is None or len(supplemental) == 0:
+        return _normalize_ohlc_frame(primary)
+    if primary is None or len(primary) == 0:
+        return _normalize_ohlc_frame(supplemental)
+    merged = pd.concat([supplemental, primary], ignore_index=True)
+    merged = _normalize_ohlc_frame(merged)
+    merged = merged.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp").reset_index(drop=True)
+    return merged
+
+
+def _extract_chain_strikes(chain: Dict[str, Any]) -> List[Dict[str, Any]]:
+    raw_strikes = chain.get("strikes")
+    if not isinstance(raw_strikes, list):
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for row in raw_strikes:
+        if not isinstance(row, dict):
+            continue
+        strike = _safe_float(row.get("strike"))
+        if not np.isfinite(strike):
+            continue
+
+        ce = row.get("CE") if isinstance(row.get("CE"), dict) else {}
+        pe = row.get("PE") if isinstance(row.get("PE"), dict) else {}
+        ce_ltp = _safe_float(row.get("ce_ltp") if row.get("ce_ltp") is not None else ce.get("last_price"))
+        pe_ltp = _safe_float(row.get("pe_ltp") if row.get("pe_ltp") is not None else pe.get("last_price"))
+        ce_oi = _safe_float(row.get("ce_oi") if row.get("ce_oi") is not None else ce.get("oi"))
+        pe_oi = _safe_float(row.get("pe_oi") if row.get("pe_oi") is not None else pe.get("oi"))
+        ce_vol = _safe_float(row.get("ce_volume") if row.get("ce_volume") is not None else ce.get("volume"))
+        pe_vol = _safe_float(row.get("pe_volume") if row.get("pe_volume") is not None else pe.get("volume"))
+        ce_iv = _safe_float(row.get("ce_iv") if row.get("ce_iv") is not None else ce.get("iv"))
+        pe_iv = _safe_float(row.get("pe_iv") if row.get("pe_iv") is not None else pe.get("iv"))
+
+        out.append(
+            {
+                "strike": float(strike),
+                "ce_ltp": ce_ltp,
+                "pe_ltp": pe_ltp,
+                "ce_oi": ce_oi,
+                "pe_oi": pe_oi,
+                "ce_volume": ce_vol,
+                "pe_volume": pe_vol,
+                "ce_iv": ce_iv,
+                "pe_iv": pe_iv,
+            }
+        )
+    return out
+
+
+def _nearest_strike(strikes: List[Dict[str, Any]], fut_close: float) -> Optional[float]:
+    if not strikes or not np.isfinite(fut_close):
+        return None
+    values = [float(x["strike"]) for x in strikes if np.isfinite(_safe_float(x.get("strike")))]
+    if not values:
+        return None
+    return float(min(values, key=lambda x: abs(x - fut_close)))
+
+
+def _find_history_30m(history: Deque[Dict[str, Any]], current_ts: pd.Timestamp) -> Optional[Dict[str, Any]]:
+    target = current_ts - pd.Timedelta(minutes=30)
+    for item in reversed(history):
+        ts = item.get("timestamp")
+        if not isinstance(ts, pd.Timestamp):
+            continue
+        if ts <= target:
+            return item
+    return None
+
+
+def _history_mean(history: Deque[Dict[str, Any]], key: str, limit: int = 30) -> Optional[float]:
+    vals: List[float] = []
+    for item in reversed(history):
+        v = _safe_float(item.get(key))
+        if np.isfinite(v):
+            vals.append(float(v))
+        if len(vals) >= int(limit):
+            break
+    if not vals:
+        return None
+    return float(np.mean(vals))
+
+
+def _repo_rate_for_date(trade_date: pd.Timestamp, default_rate: float = 0.065) -> float:
+    dt = pd.Timestamp(trade_date).date()
+    if dt <= datetime(2021, 12, 31).date():
+        return 0.04
+    if dt <= datetime(2024, 12, 31).date():
+        return 0.065
+    return float(default_rate)
+
+
+def _time_to_expiry_years(current_ts: pd.Timestamp, expiry_date: pd.Timestamp) -> float:
+    expiry_dt = pd.Timestamp(expiry_date).normalize() + pd.Timedelta(hours=15, minutes=30)
+    seconds = float((expiry_dt - current_ts).total_seconds())
+    min_seconds = 60.0
+    return max(seconds, min_seconds) / (365.0 * 24.0 * 3600.0)
+
+
+def _normalize_iv(value: float) -> Optional[float]:
+    if not np.isfinite(value):
+        return None
+    iv = float(value)
+    if iv > 3.0:
+        iv = iv / 100.0
+    if iv <= 0.0:
+        return None
+    return float(iv)
+
+
+def _compute_iv(
+    *,
+    market_price: float,
+    underlying_price: float,
+    strike: float,
+    option_type: str,
+    current_ts: pd.Timestamp,
+    expiry_date: pd.Timestamp,
+    risk_free_rate: float,
+) -> Optional[float]:
+    if GreeksCalculator is None:
+        return None
+    if not (np.isfinite(market_price) and market_price > 0.0):
+        return None
+    if not (np.isfinite(underlying_price) and underlying_price > 0.0):
+        return None
+    if not (np.isfinite(strike) and strike > 0.0):
+        return None
+    t = _time_to_expiry_years(current_ts=current_ts, expiry_date=expiry_date)
+    try:
+        iv = GreeksCalculator.calculate_implied_volatility(
+            market_price=float(market_price),
+            spot_price=float(underlying_price),
+            strike=float(strike),
+            time_to_expiry=float(t),
+            risk_free_rate=float(risk_free_rate),
+            option_type=str(option_type).upper(),
+        )
+    except Exception:
+        return None
+    if iv is None:
+        return None
+    return _normalize_iv(float(iv))
+
+
+def _compute_max_pain(strikes: List[Dict[str, Any]]) -> Optional[int]:
+    if not strikes:
+        return None
+    min_val = float("inf")
+    best: Optional[int] = None
+    for row in strikes:
+        strike = _safe_float(row.get("strike"))
+        if not np.isfinite(strike):
+            continue
+        pain = 0.0
+        for other in strikes:
+            sp = _safe_float(other.get("strike"))
+            if not np.isfinite(sp):
+                continue
+            ce_oi = _safe_float(other.get("ce_oi"))
+            pe_oi = _safe_float(other.get("pe_oi"))
+            ce_oi = float(ce_oi) if np.isfinite(ce_oi) else 0.0
+            pe_oi = float(pe_oi) if np.isfinite(pe_oi) else 0.0
+            if sp < strike:
+                pain += (strike - sp) * ce_oi
+            elif sp > strike:
+                pain += (sp - strike) * pe_oi
+        if pain < min_val:
+            min_val = float(pain)
+            best = int(round(strike))
+    return best
+
+
+def _compute_vix_block(
+    *,
+    trade_date: pd.Timestamp,
+    vix_daily: pd.DataFrame,
+    vix_live_current: Optional[float],
+) -> Dict[str, Any]:
+    out = {
+        "vix_prev_close": None,
+        "vix_open": None,
+        "vix_current": None,
+        "vix_change_from_prev": None,
+        "vix_intraday_chg": None,
+        "vix_regime": None,
+        "vix_spike_flag": False,
+    }
+
+    vd = pd.DataFrame()
+    if vix_daily is not None and len(vix_daily) > 0:
+        vd = vix_daily.copy()
+        vd["trade_date"] = pd.to_datetime(vd["trade_date"], errors="coerce")
+        for col in ("vix_open", "vix_high", "vix_low", "vix_close"):
+            if col in vd.columns:
+                vd[col] = pd.to_numeric(vd[col], errors="coerce")
+        vd = vd.dropna(subset=["trade_date"]).sort_values("trade_date").reset_index(drop=True)
+
+    td = pd.Timestamp(trade_date).normalize()
+    hist = vd[vd["trade_date"] < td] if len(vd) else pd.DataFrame()
+    today = vd[vd["trade_date"] == td] if len(vd) else pd.DataFrame()
+
+    prev_close = _safe_float(hist.iloc[-1]["vix_close"]) if len(hist) else float("nan")
+    vix_open = _safe_float(today.iloc[-1]["vix_open"]) if len(today) else float("nan")
+    vix_current = _safe_float(today.iloc[-1]["vix_close"]) if len(today) else float("nan")
+    if np.isfinite(_safe_float(vix_live_current)):
+        vix_current = float(vix_live_current)
+    if not np.isfinite(vix_open) and np.isfinite(prev_close):
+        vix_open = float(prev_close)
+    if not np.isfinite(vix_current) and np.isfinite(vix_open):
+        vix_current = float(vix_open)
+
+    vix_prev_close = _nullable_float(prev_close)
+    vix_open_n = _nullable_float(vix_open)
+    vix_current_n = _nullable_float(vix_current)
+    out["vix_prev_close"] = vix_prev_close
+    out["vix_open"] = vix_open_n
+    out["vix_current"] = vix_current_n
+
+    if vix_prev_close is not None and vix_prev_close != 0.0 and vix_current_n is not None:
+        out["vix_change_from_prev"] = float(((vix_current_n - vix_prev_close) / vix_prev_close) * 100.0)
+    if vix_open_n is not None and vix_open_n != 0.0 and vix_current_n is not None:
+        out["vix_intraday_chg"] = float(((vix_current_n - vix_open_n) / vix_open_n) * 100.0)
+
+    if vix_current_n is not None:
+        if vix_current_n < 14.0:
+            out["vix_regime"] = "LOW"
+        elif vix_current_n <= 20.0:
+            out["vix_regime"] = "NORMAL"
+        else:
+            out["vix_regime"] = "ELEVATED"
+    out["vix_spike_flag"] = bool(out["vix_intraday_chg"] is not None and out["vix_intraday_chg"] > 15.0)
+    return out
+
+
+@dataclass
+class MarketSnapshotState:
+    chain_history: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=4000))
+    iv_history_expiry: Deque[float] = field(default_factory=lambda: deque(maxlen=30000))
+    iv_history_non_expiry: Deque[float] = field(default_factory=lambda: deque(maxlen=30000))
+
+def build_market_snapshot(
+    *,
+    instrument: str,
+    ohlc: pd.DataFrame,
+    chain: Dict[str, Any],
+    state: Optional[MarketSnapshotState] = None,
+    vix_daily: Optional[pd.DataFrame] = None,
+    vix_live_current: Optional[float] = None,
+    prev_session_chain_baseline: Optional[Dict[str, Any]] = None,
+    risk_free_rate_default: float = 0.065,
+) -> Dict[str, Any]:
+    if state is None:
+        state = MarketSnapshotState()
+
+    bars = _normalize_ohlc_frame(ohlc)
+    if len(bars) == 0:
+        raise ValueError("cannot build MarketSnapshot: empty ohlc frame")
+
+    latest = bars.iloc[-1]
+    ts = pd.Timestamp(latest["timestamp"])
+    trade_date = pd.Timestamp(ts.date())
+    minute_of_day = int(ts.hour * 60 + ts.minute)
+    snapshot_id = ts.strftime("%Y%m%d_%H%M")
+
+    fut_close = _safe_float(latest.get("close"))
+    strikes = _extract_chain_strikes(chain)
+    atm_strike = _nearest_strike(strikes=strikes, fut_close=fut_close)
+    atm_row = None
+    if atm_strike is not None:
+        for row in strikes:
+            if int(round(_safe_float(row.get("strike")))) == int(round(atm_strike)):
+                atm_row = row
+                break
+
+    expiry_date = _option_expiry_date(chain.get("expiry"), trade_date=trade_date)
+    dte_days = int((expiry_date.normalize() - trade_date.normalize()).days)
+    dte_days = max(dte_days, 0)
+    mss1 = {
+        "snapshot_id": snapshot_id,
+        "timestamp": ts.isoformat(),
+        "date": str(trade_date.date()),
+        "time": ts.strftime("%H:%M:%S"),
+        "minutes_since_open": _minutes_since_open(ts),
+        "day_of_week": int(ts.dayofweek),
+        "days_to_expiry": dte_days,
+        "is_expiry_day": bool(dte_days == 0),
+        "session_phase": _session_phase(ts),
+    }
+
+    mss2 = {
+        "fut_open": _nullable_float(latest.get("open")),
+        "fut_high": _nullable_float(latest.get("high")),
+        "fut_low": _nullable_float(latest.get("low")),
+        "fut_close": _nullable_float(fut_close),
+        "fut_volume": _nullable_int(latest.get("volume")),
+        "fut_oi": _nullable_int(latest.get("oi")),
+    }
+
+    bars_calc = bars.copy()
+    bars_calc["ret_1m"] = bars_calc["close"].pct_change(1, fill_method=None)
+    bars_calc["fut_return_5m"] = bars_calc["close"].pct_change(5, fill_method=None)
+    bars_calc["fut_return_15m"] = bars_calc["close"].pct_change(15, fill_method=None)
+    bars_calc["fut_return_30m"] = bars_calc["close"].pct_change(30, fill_method=None)
+    bars_calc["realized_vol_30m"] = (
+        bars_calc["ret_1m"].rolling(30, min_periods=30).std(ddof=0) * np.sqrt(252.0 * 375.0)
+    )
+    bars_calc["trade_date"] = bars_calc["timestamp"].dt.date.astype(str)
+    bars_calc["minute_of_day"] = bars_calc["timestamp"].dt.hour * 60 + bars_calc["timestamp"].dt.minute
+    same_day = bars_calc[bars_calc["trade_date"] == str(trade_date.date())].copy()
+
+    rv_now = _safe_float(bars_calc["realized_vol_30m"].iloc[-1])
+    rv_profile = (
+        bars_calc[bars_calc["trade_date"] < str(trade_date.date())]
+        .groupby("minute_of_day", sort=False)["realized_vol_30m"]
+        .mean()
+    )
+    vol_baseline = _safe_float(rv_profile.get(minute_of_day))
+    if not np.isfinite(vol_baseline) or vol_baseline <= 0.0:
+        vol_baseline = _safe_float(same_day["realized_vol_30m"].expanding(min_periods=20).mean().iloc[-1])
+    vol_ratio = float(rv_now / vol_baseline) if np.isfinite(rv_now) and np.isfinite(vol_baseline) and vol_baseline > 0 else float("nan")
+
+    vol_profile = (
+        bars_calc[bars_calc["trade_date"] < str(trade_date.date())]
+        .groupby("minute_of_day", sort=False)["volume"]
+        .mean()
+    )
+    vol_ref = _safe_float(vol_profile.get(minute_of_day))
+    if not np.isfinite(vol_ref) or vol_ref <= 0.0:
+        vol_ref = _safe_float(same_day["volume"].rolling(30, min_periods=10).mean().iloc[-1])
+    fut_volume = _safe_float(latest.get("volume"))
+    fut_volume_ratio = float(fut_volume / vol_ref) if np.isfinite(fut_volume) and np.isfinite(vol_ref) and vol_ref > 0 else float("nan")
+
+    oi_prev_30 = _safe_float(bars_calc["oi"].shift(30).iloc[-1])
+    oi_now = _safe_float(latest.get("oi"))
+    fut_oi_change_30m = float(oi_now - oi_prev_30) if np.isfinite(oi_now) and np.isfinite(oi_prev_30) else float("nan")
+
+    mss3 = {
+        "fut_return_5m": _nullable_float(bars_calc["fut_return_5m"].iloc[-1]),
+        "fut_return_15m": _nullable_float(bars_calc["fut_return_15m"].iloc[-1]),
+        "fut_return_30m": _nullable_float(bars_calc["fut_return_30m"].iloc[-1]),
+        "realized_vol_30m": _nullable_float(rv_now),
+        "vol_ratio": _nullable_float(vol_ratio),
+        "fut_volume_ratio": _nullable_float(fut_volume_ratio),
+        "fut_oi_change_30m": _nullable_int(fut_oi_change_30m),
+    }
+
+    day_bars = bars_calc[bars_calc["trade_date"] == str(trade_date.date())].copy()
+    open_window = day_bars[
+        (day_bars["timestamp"].dt.hour == 9)
+        & (day_bars["timestamp"].dt.minute >= 15)
+        & (day_bars["timestamp"].dt.minute < 30)
+    ]
+    orh = _safe_float(open_window["high"].max()) if len(open_window) else float("nan")
+    orl = _safe_float(open_window["low"].min()) if len(open_window) else float("nan")
+    or_width = float(orh - orl) if np.isfinite(orh) and np.isfinite(orl) else float("nan")
+    price_vs_orh = float((fut_close - orh) / orh) if np.isfinite(fut_close) and np.isfinite(orh) and orh != 0 else float("nan")
+    price_vs_orl = float((fut_close - orl) / orl) if np.isfinite(fut_close) and np.isfinite(orl) and orl != 0 else float("nan")
+
+    five = day_bars.copy()
+    five["bucket"] = five["timestamp"].dt.floor("5min")
+    close_5m = five.groupby("bucket", sort=True)["close"].last().reset_index()
+    close_after_or = close_5m[
+        close_5m["bucket"] >= (ts.normalize() + pd.Timedelta(hours=9, minutes=30))
+    ]
+    orh_broken = bool(np.isfinite(orh) and len(close_after_or) and (close_after_or["close"] > orh).any())
+    orl_broken = bool(np.isfinite(orl) and len(close_after_or) and (close_after_or["close"] < orl).any())
+    mss4 = {
+        "orh": _nullable_float(orh),
+        "orl": _nullable_float(orl),
+        "or_width": _nullable_float(or_width),
+        "price_vs_orh": _nullable_float(price_vs_orh),
+        "price_vs_orl": _nullable_float(price_vs_orl),
+        "orh_broken": orh_broken,
+        "orl_broken": orl_broken,
+    }
+
+    mss5 = _compute_vix_block(
+        trade_date=trade_date,
+        vix_daily=(vix_daily if vix_daily is not None else pd.DataFrame()),
+        vix_live_current=vix_live_current,
+    )
+
+    total_ce_oi = float(np.nansum([_safe_float(x.get("ce_oi")) for x in strikes])) if strikes else float("nan")
+    total_pe_oi = float(np.nansum([_safe_float(x.get("pe_oi")) for x in strikes])) if strikes else float("nan")
+    pcr = _safe_float(chain.get("pcr"))
+    if not np.isfinite(pcr):
+        pcr = (total_pe_oi / total_ce_oi) if np.isfinite(total_ce_oi) and total_ce_oi > 0 else float("nan")
+    max_pain = _nullable_int(chain.get("max_pain"))
+    if max_pain is None:
+        max_pain = _compute_max_pain(strikes)
+    ce_oi_top_strike = None
+    pe_oi_top_strike = None
+    if strikes:
+        ce_best = max(strikes, key=lambda x: _safe_float(x.get("ce_oi")))
+        pe_best = max(strikes, key=lambda x: _safe_float(x.get("pe_oi")))
+        ce_oi_top_strike = _nullable_int(ce_best.get("strike"))
+        pe_oi_top_strike = _nullable_int(pe_best.get("strike"))
+
+    prev_30 = _find_history_30m(state.chain_history, ts)
+    pcr_change_30m = None
+    if prev_30 is not None:
+        prev_pcr = _safe_float(prev_30.get("pcr"))
+        if np.isfinite(prev_pcr) and np.isfinite(pcr):
+            pcr_change_30m = float(pcr - prev_pcr)
+
+    mss6 = {
+        "atm_strike": _nullable_int(atm_strike),
+        "total_ce_oi": _nullable_int(total_ce_oi),
+        "total_pe_oi": _nullable_int(total_pe_oi),
+        "pcr": _nullable_float(pcr),
+        "pcr_change_30m": _nullable_float(pcr_change_30m),
+        "max_pain": max_pain,
+        "ce_oi_top_strike": ce_oi_top_strike,
+        "pe_oi_top_strike": pe_oi_top_strike,
+    }
+
+    ce_ltp = _safe_float(atm_row.get("ce_ltp")) if isinstance(atm_row, dict) else float("nan")
+    pe_ltp = _safe_float(atm_row.get("pe_ltp")) if isinstance(atm_row, dict) else float("nan")
+    ce_oi = _safe_float(atm_row.get("ce_oi")) if isinstance(atm_row, dict) else float("nan")
+    pe_oi = _safe_float(atm_row.get("pe_oi")) if isinstance(atm_row, dict) else float("nan")
+    ce_vol = _safe_float(atm_row.get("ce_volume")) if isinstance(atm_row, dict) else float("nan")
+    pe_vol = _safe_float(atm_row.get("pe_volume")) if isinstance(atm_row, dict) else float("nan")
+
+    ce_iv = _normalize_iv(_safe_float(atm_row.get("ce_iv"))) if isinstance(atm_row, dict) else None
+    pe_iv = _normalize_iv(_safe_float(atm_row.get("pe_iv"))) if isinstance(atm_row, dict) else None
+    rf = _repo_rate_for_date(trade_date=trade_date, default_rate=risk_free_rate_default)
+    if ce_iv is None and atm_strike is not None:
+        ce_iv = _compute_iv(
+            market_price=ce_ltp,
+            underlying_price=fut_close,
+            strike=float(atm_strike),
+            option_type="CE",
+            current_ts=ts,
+            expiry_date=expiry_date,
+            risk_free_rate=rf,
+        )
+    if pe_iv is None and atm_strike is not None:
+        pe_iv = _compute_iv(
+            market_price=pe_ltp,
+            underlying_price=fut_close,
+            strike=float(atm_strike),
+            option_type="PE",
+            current_ts=ts,
+            expiry_date=expiry_date,
+            risk_free_rate=rf,
+        )
+
+    ce_oi_change_30m = None
+    pe_oi_change_30m = None
+    ce_vol_ratio = None
+    pe_vol_ratio = None
+    if prev_30 is not None:
+        prev_ce_oi = _safe_float(prev_30.get("atm_ce_oi"))
+        prev_pe_oi = _safe_float(prev_30.get("atm_pe_oi"))
+        if np.isfinite(ce_oi) and np.isfinite(prev_ce_oi):
+            ce_oi_change_30m = float(ce_oi - prev_ce_oi)
+        if np.isfinite(pe_oi) and np.isfinite(prev_pe_oi):
+            pe_oi_change_30m = float(pe_oi - prev_pe_oi)
+    ce_vol_mean = _history_mean(state.chain_history, "atm_ce_volume", limit=30)
+    pe_vol_mean = _history_mean(state.chain_history, "atm_pe_volume", limit=30)
+    if np.isfinite(ce_vol) and ce_vol_mean is not None and ce_vol_mean > 0:
+        ce_vol_ratio = float(ce_vol / ce_vol_mean)
+    if np.isfinite(pe_vol) and pe_vol_mean is not None and pe_vol_mean > 0:
+        pe_vol_ratio = float(pe_vol / pe_vol_mean)
+
+    mss7 = {
+        "atm_ce_strike": _nullable_int(atm_strike),
+        "atm_ce_open": _nullable_float(ce_ltp),
+        "atm_ce_high": _nullable_float(ce_ltp),
+        "atm_ce_low": _nullable_float(ce_ltp),
+        "atm_ce_close": _nullable_float(ce_ltp),
+        "atm_ce_volume": _nullable_int(ce_vol),
+        "atm_ce_oi": _nullable_int(ce_oi),
+        "atm_ce_oi_change_30m": _nullable_int(ce_oi_change_30m),
+        "atm_ce_iv": _nullable_float(ce_iv),
+        "atm_ce_vol_ratio": _nullable_float(ce_vol_ratio),
+        "atm_pe_strike": _nullable_int(atm_strike),
+        "atm_pe_open": _nullable_float(pe_ltp),
+        "atm_pe_high": _nullable_float(pe_ltp),
+        "atm_pe_low": _nullable_float(pe_ltp),
+        "atm_pe_close": _nullable_float(pe_ltp),
+        "atm_pe_volume": _nullable_int(pe_vol),
+        "atm_pe_oi": _nullable_int(pe_oi),
+        "atm_pe_oi_change_30m": _nullable_int(pe_oi_change_30m),
+        "atm_pe_iv": _nullable_float(pe_iv),
+        "atm_pe_vol_ratio": _nullable_float(pe_vol_ratio),
+    }
+
+    iv_skew = None
+    if ce_iv is not None and pe_iv is not None:
+        iv_skew = float(ce_iv - pe_iv)
+    if iv_skew is None:
+        iv_skew_dir = None
+    elif iv_skew < -0.005:
+        iv_skew_dir = "PUT_FEAR"
+    elif iv_skew > 0.005:
+        iv_skew_dir = "CALL_GREED"
+    else:
+        iv_skew_dir = "NEUTRAL"
+
+    expiry_type = "EXPIRY_DAY" if bool(mss1["is_expiry_day"]) else "NON_EXPIRY"
+    atm_iv = None
+    if ce_iv is not None and pe_iv is not None:
+        atm_iv = float((ce_iv + pe_iv) / 2.0)
+    elif ce_iv is not None:
+        atm_iv = float(ce_iv)
+    elif pe_iv is not None:
+        atm_iv = float(pe_iv)
+
+    hist = state.iv_history_expiry if expiry_type == "EXPIRY_DAY" else state.iv_history_non_expiry
+    iv_percentile = None
+    if atm_iv is not None and len(hist) > 0:
+        arr = np.asarray(list(hist), dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if arr.size > 0:
+            iv_percentile = float(100.0 * (np.sum(arr <= float(atm_iv)) / arr.size))
+    if atm_iv is not None and np.isfinite(atm_iv):
+        hist.append(float(atm_iv))
+
+    iv_regime = None
+    if iv_percentile is not None:
+        if iv_percentile < 40.0:
+            iv_regime = "CHEAP"
+        elif iv_percentile <= 75.0:
+            iv_regime = "NEUTRAL"
+        else:
+            iv_regime = "EXPENSIVE"
+    mss8 = {
+        "iv_skew": _nullable_float(iv_skew),
+        "iv_skew_dir": iv_skew_dir,
+        "iv_percentile": _nullable_float(iv_percentile),
+        "iv_regime": iv_regime,
+        "iv_expiry_type": expiry_type,
+    }
+
+    bars_levels = bars_calc.copy()
+    by_day = {}
+    for d, grp in bars_levels.groupby("trade_date", sort=True):
+        by_day[str(d)] = grp.sort_values("timestamp")
+    current_day_key = str(trade_date.date())
+    day_keys = sorted(by_day.keys())
+    prev_day_key = None
+    for d in day_keys:
+        if d < current_day_key:
+            prev_day_key = d
+        else:
+            break
+    prev_day_high = prev_day_low = prev_day_close = None
+    week_high = week_low = overnight_gap = None
+    if prev_day_key is not None:
+        prev_df = by_day[prev_day_key]
+        prev_day_high = _nullable_float(prev_df["high"].max())
+        prev_day_low = _nullable_float(prev_df["low"].min())
+        prev_day_close = _nullable_float(prev_df["close"].iloc[-1])
+        prev_window_days = [d for d in day_keys if d < current_day_key][-5:]
+        if prev_window_days:
+            window = pd.concat([by_day[d] for d in prev_window_days], ignore_index=True)
+            week_high = _nullable_float(window["high"].max())
+            week_low = _nullable_float(window["low"].min())
+        today_df = by_day.get(current_day_key)
+        today_open = _safe_float(today_df["open"].iloc[0]) if today_df is not None and len(today_df) else float("nan")
+        if prev_day_close is not None and np.isfinite(today_open) and prev_day_close != 0.0:
+            overnight_gap = float((today_open - prev_day_close) / prev_day_close)
+
+    prev_day_pcr = None
+    prev_day_max_pain = None
+    if isinstance(prev_session_chain_baseline, dict):
+        prev_day_pcr = _nullable_float(prev_session_chain_baseline.get("pcr"))
+        prev_day_max_pain = _nullable_int(prev_session_chain_baseline.get("max_pain"))
+    if prev_day_key is not None and (prev_day_pcr is None or prev_day_max_pain is None):
+        prev_items = [x for x in state.chain_history if str(x.get("trade_date")) == prev_day_key]
+        if prev_items:
+            last_prev = prev_items[-1]
+            if prev_day_pcr is None:
+                prev_day_pcr = _nullable_float(last_prev.get("pcr"))
+            if prev_day_max_pain is None:
+                prev_day_max_pain = _nullable_int(last_prev.get("max_pain"))
+    mss9 = {
+        "prev_day_high": prev_day_high,
+        "prev_day_low": prev_day_low,
+        "prev_day_close": prev_day_close,
+        "week_high": week_high,
+        "week_low": week_low,
+        "overnight_gap": _nullable_float(overnight_gap),
+        "prev_day_pcr": prev_day_pcr,
+        "prev_day_max_pain": prev_day_max_pain,
+    }
+
+    state.chain_history.append(
+        {
+            "timestamp": ts,
+            "trade_date": str(trade_date.date()),
+            "pcr": _nullable_float(pcr),
+            "max_pain": max_pain,
+            "atm_ce_oi": _nullable_float(ce_oi),
+            "atm_pe_oi": _nullable_float(pe_oi),
+            "atm_ce_volume": _nullable_float(ce_vol),
+            "atm_pe_volume": _nullable_float(pe_vol),
+        }
+    )
+
+    return {
+        "schema_name": "MarketSnapshot",
+        "version": "1.0",
+        "snapshot_id": snapshot_id,
+        "instrument": str(instrument or ""),
+        "session_context": mss1,
+        "futures_bar": mss2,
+        "futures_derived": mss3,
+        "opening_range": mss4,
+        "vix_context": mss5,
+        "chain_aggregates": mss6,
+        "atm_options": mss7,
+        "iv_derived": mss8,
+        "session_levels": mss9,
+    }
+
+
+class LiveMarketSnapshotBuilder:
+    def __init__(
+        self,
+        *,
+        instrument: str,
+        market_api_base: str = "http://127.0.0.1:8004",
+        dashboard_api_base: str = "http://127.0.0.1:8002",
+        timeout_seconds: float = 5.0,
+        risk_free_rate_default: float = 0.065,
+        enable_kite_backfill: bool = True,
+        kite_history_days: int = 12,
+    ):
+        self.instrument = str(instrument or "").strip().upper()
+        if not self.instrument:
+            raise ValueError("instrument is required")
+        self.market_api_base = market_api_base.rstrip("/")
+        self.dashboard_api_base = dashboard_api_base.rstrip("/")
+        self.timeout_seconds = float(timeout_seconds)
+        self.state = MarketSnapshotState()
+        self.risk_free_rate_default = float(risk_free_rate_default)
+        disable_backfill_env = _truthy(os.getenv("ML_PIPELINE_DISABLE_KITE_BACKFILL", "0"))
+        self.enable_kite_backfill = bool(enable_kite_backfill and not disable_backfill_env)
+        self.kite_history_days = max(2, int(kite_history_days))
+        self._kite_client: Any = None
+        self._kite_client_unavailable = False
+        self._kite_instrument_token: Optional[int] = None
+        self._kite_history_cache: pd.DataFrame = pd.DataFrame()
+        self._kite_history_cache_end_date: Optional[datetime.date] = None
+        # VIX for live snapshots is sourced strictly from market API stream/tick endpoints.
+        self.vix_daily = pd.DataFrame()
+
+    def _get_json(self, url: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        response = requests.get(
+            url,
+            params=params,
+            timeout=self.timeout_seconds,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def fetch_ohlc(self, limit: int = 1800) -> pd.DataFrame:
+        params = {"timeframe": "1m", "limit": int(limit), "order": "asc"}
+        endpoints = [
+            f"{self.market_api_base}/api/v1/market/ohlc/{self.instrument}",
+            f"{self.market_api_base}/api/v1/ohlc/{self.instrument}",
+            f"{self.dashboard_api_base}/api/market-data/ohlc/{self.instrument}",
+        ]
+        for url in endpoints:
+            try:
+                payload = self._get_json(url, params=params)
+                if isinstance(payload, list):
+                    frame = _normalize_ohlc_frame(pd.DataFrame(payload))
+                    if len(frame):
+                        return frame
+            except Exception:
+                continue
+        return pd.DataFrame()
+
+    def _get_kite_client(self) -> Optional[Any]:
+        if self._kite_client is not None:
+            return self._kite_client
+        if self._kite_client_unavailable:
+            return None
+        api_key, access_token = _load_kite_credentials()
+        if not api_key or not access_token:
+            self._kite_client_unavailable = True
+            return None
+        try:
+            self._kite_client = _build_kite_client(api_key=api_key, access_token=access_token)
+            return self._kite_client
+        except Exception:
+            self._kite_client_unavailable = True
+            return None
+
+    def _resolve_kite_instrument_token(self, kite: Any) -> Optional[int]:
+        if self._kite_instrument_token is not None:
+            return self._kite_instrument_token
+        try:
+            rows = kite.instruments("NFO")
+        except Exception:
+            return None
+        if not isinstance(rows, list) or len(rows) == 0:
+            return None
+
+        symbol = self.instrument.upper()
+        exact = next(
+            (
+                row
+                for row in rows
+                if str(row.get("tradingsymbol") or "").upper() == symbol and str(row.get("instrument_token") or "").isdigit()
+            ),
+            None,
+        )
+        if exact is not None:
+            self._kite_instrument_token = int(exact.get("instrument_token"))
+            return self._kite_instrument_token
+
+        if symbol.endswith("FUT"):
+            base = _extract_underlying_symbol(symbol)
+            fut_rows = [
+                row
+                for row in rows
+                if str(row.get("instrument_type") or "").upper() == "FUT"
+                and str(row.get("name") or "").upper() == base
+                and str(row.get("instrument_token") or "").isdigit()
+            ]
+            if fut_rows:
+                today = pd.Timestamp.now(tz=IST).date()
+                parsed: List[tuple[datetime.date, Dict[str, Any]]] = []
+                for row in fut_rows:
+                    exp = pd.to_datetime(row.get("expiry"), errors="coerce")
+                    if pd.isna(exp):
+                        continue
+                    parsed.append((pd.Timestamp(exp).date(), row))
+                if parsed:
+                    future = [item for item in parsed if item[0] >= today]
+                    chosen = min(future, key=lambda x: x[0]) if future else max(parsed, key=lambda x: x[0])
+                    self._kite_instrument_token = int(chosen[1].get("instrument_token"))
+                    return self._kite_instrument_token
+        return None
+
+    def _fetch_kite_previous_days_ohlc(self, latest_ts: pd.Timestamp) -> pd.DataFrame:
+        if not self.enable_kite_backfill:
+            return pd.DataFrame()
+
+        end_date = (pd.Timestamp(latest_ts).date() - timedelta(days=1))
+        if self._kite_history_cache_end_date == end_date and len(self._kite_history_cache):
+            return self._kite_history_cache.copy()
+
+        kite = self._get_kite_client()
+        if kite is None:
+            return pd.DataFrame()
+        token = self._resolve_kite_instrument_token(kite)
+        if token is None:
+            return pd.DataFrame()
+
+        lookback_days = max(14, int(self.kite_history_days) * 2)
+        start_date = end_date - timedelta(days=lookback_days)
+        if start_date >= end_date:
+            return pd.DataFrame()
+
+        use_continuous = self.instrument.upper().endswith("FUT")
+        try:
+            rows = kite.historical_data(
+                instrument_token=token,
+                from_date=start_date,
+                to_date=end_date,
+                interval="minute",
+                continuous=use_continuous,
+                oi=True,
+            )
+        except Exception as exc:
+            if "invalid interval for continuous data" in str(exc).lower():
+                try:
+                    rows = kite.historical_data(
+                        instrument_token=token,
+                        from_date=start_date,
+                        to_date=end_date,
+                        interval="minute",
+                        continuous=False,
+                        oi=True,
+                    )
+                except Exception:
+                    return pd.DataFrame()
+            else:
+                return pd.DataFrame()
+
+        if not isinstance(rows, list) or len(rows) == 0:
+            return pd.DataFrame()
+
+        frame = pd.DataFrame(rows)
+        if "date" not in frame.columns:
+            return pd.DataFrame()
+        frame = frame.rename(columns={"date": "timestamp"})
+        if "oi" not in frame.columns and "open_interest" in frame.columns:
+            frame["oi"] = frame["open_interest"]
+        for col in ("open", "high", "low", "close", "volume", "oi"):
+            if col not in frame.columns:
+                frame[col] = np.nan
+        out = _normalize_ohlc_frame(frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume", "oi"]])
+        if len(out):
+            self._kite_history_cache = out.copy()
+            self._kite_history_cache_end_date = end_date
+        return out
+
+    def _augment_ohlc_with_kite_history(self, ohlc: pd.DataFrame) -> pd.DataFrame:
+        if ohlc is None or len(ohlc) == 0:
+            return pd.DataFrame()
+        latest_ts = pd.Timestamp(ohlc["timestamp"].iloc[-1])
+        prev_days = self._fetch_kite_previous_days_ohlc(latest_ts=latest_ts)
+        if prev_days is None or len(prev_days) == 0:
+            return ohlc
+        return _merge_ohlc_history(primary=ohlc, supplemental=prev_days)
+
+    def fetch_options_chain(self) -> Dict[str, Any]:
+        try:
+            payload = self._get_json(f"{self.market_api_base}/api/v1/options/chain/{self.instrument}")
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            pass
+        payload = self._get_json(f"{self.dashboard_api_base}/api/market-data/options/{self.instrument}")
+        if isinstance(payload, dict):
+            return payload
+        return {}
+
+    def fetch_live_vix(self) -> Optional[float]:
+        candidates = [
+            "INDIA VIX",
+            "INDIAVIX",
+            "NIFTYVIX",
+            "VIX",
+        ]
+        for symbol in candidates:
+            try:
+                payload = self._get_json(f"{self.market_api_base}/api/v1/market/tick/{symbol}")
+                if isinstance(payload, dict):
+                    price = _nullable_float(payload.get("last_price"))
+                    if price is not None and price > 0:
+                        return price
+            except Exception:
+                continue
+        return None
+
+    def build_snapshot(
+        self,
+        ohlc_limit: int = 1800,
+        prev_session_chain_baseline: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        ohlc = self.fetch_ohlc(limit=int(ohlc_limit))
+        if len(ohlc) == 0:
+            raise RuntimeError(f"no OHLC bars available for {self.instrument}")
+        ohlc = self._augment_ohlc_with_kite_history(ohlc=ohlc)
+        chain = self.fetch_options_chain()
+        vix_live = self.fetch_live_vix()
+        return build_market_snapshot(
+            instrument=self.instrument,
+            ohlc=ohlc,
+            chain=chain,
+            state=self.state,
+            vix_daily=self.vix_daily,
+            vix_live_current=vix_live,
+            prev_session_chain_baseline=prev_session_chain_baseline,
+            risk_free_rate_default=self.risk_free_rate_default,
+        )
+
+
+def run_cli(argv: Optional[Iterable[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Build live MarketSnapshot (MSS.1-MSS.9) from market APIs")
+    parser.add_argument("--instrument", required=True, help="Instrument symbol, e.g. BANKNIFTY26MARFUT")
+    parser.add_argument("--market-api-base", default="http://127.0.0.1:8004")
+    parser.add_argument("--dashboard-api-base", default="http://127.0.0.1:8002")
+    parser.add_argument("--timeout-seconds", type=float, default=5.0)
+    parser.add_argument("--ohlc-limit", type=int, default=1800, help="1m bars to fetch for derived/session levels")
+    parser.add_argument("--out-jsonl", default=None, help="Optional output JSONL path")
+    parser.add_argument("--disable-kite-backfill", action="store_true", help="Disable automatic Zerodha history backfill")
+    parser.add_argument("--kite-history-days", type=int, default=12, help="Trading-history lookback target used for Kite backfill")
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    builder = LiveMarketSnapshotBuilder(
+        instrument=str(args.instrument),
+        market_api_base=str(args.market_api_base),
+        dashboard_api_base=str(args.dashboard_api_base),
+        timeout_seconds=float(args.timeout_seconds),
+        enable_kite_backfill=(not bool(args.disable_kite_backfill)),
+        kite_history_days=int(args.kite_history_days),
+    )
+
+    snap = builder.build_snapshot(ohlc_limit=int(args.ohlc_limit))
+    line = json.dumps(snap, ensure_ascii=False)
+    print(line)
+
+    if args.out_jsonl:
+        out_path = Path(args.out_jsonl)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(run_cli())

@@ -1,0 +1,302 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ingestion_app:
+    build:
+      context: .
+      dockerfile: ingestion_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26MARFUT}"
+      KITE_CREDENTIALS_PATH: "${KITE_CREDENTIALS_PATH:-/app/secrets/credentials.json}"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      IDLE_SLEEP_SECONDS: "${IDLE_SLEEP_SECONDS:-60}"
+      LIVE_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+      HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+      SNAPSHOT_V1_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+    command:
+      [
+        "python",
+        "-m",
+        "ingestion_app.market_session_runner",
+        "--mode",
+        "live",
+        "--holidays-file",
+        "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}",
+        "--idle-sleep-seconds",
+        "${IDLE_SLEEP_SECONDS:-60}",
+        "--state-file",
+        "/app/.run/ingestion_app/session_state.json",
+      ]
+    volumes:
+      - ./.run:/app/.run
+      - ./credentials.json:/app/secrets/credentials.json:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    ports:
+      - "${INGESTION_API_PORT:-8004}:8004"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "ingestion_app.market_session_runner",
+          "--healthcheck",
+          "--state-file",
+          "/app/.run/ingestion_app/session_state.json",
+          "--max-stale-seconds",
+          "240",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  snapshot_app:
+    build:
+      context: .
+      dockerfile: snapshot_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      ingestion_app:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26MARFUT}"
+      KITE_CREDENTIALS_PATH: "${KITE_CREDENTIALS_PATH:-/app/secrets/credentials.json}"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      IDLE_SLEEP_SECONDS: "${IDLE_SLEEP_SECONDS:-60}"
+      LIVE_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+      HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+      SNAPSHOT_V1_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+      ML_PIPELINE_DISABLE_KITE_BACKFILL: "${ML_PIPELINE_DISABLE_KITE_BACKFILL:-1}"
+    command:
+      [
+        "python",
+        "-m",
+        "snapshot_app.main_live",
+        "--foreground",
+        "--instrument",
+        "${INSTRUMENT_SYMBOL:-BANKNIFTY26MARFUT}",
+        "--market-api-base",
+        "http://ingestion_app:8004",
+        "--dashboard-api-base",
+        "http://dashboard:8008",
+        "--out-jsonl",
+        "/app/.run/snapshot_app/events.jsonl",
+      ]
+    volumes:
+      - ./.run:/app/.run
+      - ./credentials.json:/app/secrets/credentials.json:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "snapshot_app.health",
+          "--events-path",
+          "/app/.run/snapshot_app/events.jsonl",
+          "--max-age-seconds",
+          "300",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  persistence_app:
+    build:
+      context: .
+      dockerfile: persistence_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      snapshot_app:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      MONGO_COLL_SNAPSHOTS: "${MONGO_COLL_SNAPSHOTS:-phase1_market_snapshots}"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+      HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+      SNAPSHOT_V1_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+    command:
+      [
+        "python",
+        "-m",
+        "persistence_app.main_snapshot_consumer",
+        "--foreground",
+        "--event-topic",
+        "${LIVE_TOPIC:-market:snapshot:v1}",
+      ]
+    volumes:
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "persistence_app.health",
+          "--max-age-seconds",
+          "300",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  strategy_app:
+    build:
+      context: .
+      dockerfile: strategy_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      snapshot_app:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+      HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+      SNAPSHOT_V1_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+    command:
+      [
+        "python",
+        "-m",
+        "strategy_app.main",
+        "--engine",
+        "${STRATEGY_ENGINE:-deterministic}",
+        "--topic",
+        "${LIVE_TOPIC:-market:snapshot:v1}",
+      ]
+    volumes:
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-m", "strategy_app.health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  dashboard:
+    profiles: ["ui"]
+    build:
+      context: ./market_data_dashboard
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      ingestion_app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26MARFUT}"
+    ports:
+      - "${DASHBOARD_PORT:-8008}:8008"
+
+  historical_replay:
+    profiles: ["historical"]
+    build:
+      context: .
+      dockerfile: snapshot_app/Dockerfile
+    restart: "no"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+      SNAPSHOT_V1_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+    command:
+      [
+        "python",
+        "-m",
+        "snapshot_app.historical.replay_runner",
+        "--base",
+        "/app/ml_pipeline/artifacts/data/parquet_data",
+        "--topic",
+        "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}",
+      ]
+    volumes:
+      - ./ml_pipeline/artifacts/data/parquet_data:/app/ml_pipeline/artifacts/data/parquet_data:ro
+      - ./.run:/app/.run
+
+volumes:
+  redis_data:
+  mongo_data:

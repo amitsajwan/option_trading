@@ -1,0 +1,174 @@
+"""Replay prebuilt historical snapshots to redis topic."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import time
+from pathlib import Path
+from typing import Iterable, Optional
+
+import pandas as pd
+
+from contracts_app import build_snapshot_event, historical_snapshot_topic
+from snapshot_app.redis_publisher import RedisEventPublisher
+
+from .parquet_store import ParquetStore
+
+logger = logging.getLogger(__name__)
+
+
+DEFAULT_PARQUET_BASE = Path(r"C:\code\market\ml_pipeline\artifacts\data\parquet_data")
+
+
+def _load_snapshots(
+    *,
+    store: ParquetStore,
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> pd.DataFrame:
+    snapshot_days = store.available_snapshot_days()
+    if not snapshot_days:
+        return pd.DataFrame()
+
+    start = start_date or snapshot_days[0]
+    end = end_date or snapshot_days[-1]
+    frame = store.snapshots_for_date_range(start, end)
+    if len(frame) == 0:
+        return frame
+    frame["timestamp"] = pd.to_datetime(frame.get("timestamp"), errors="coerce")
+    frame = frame.sort_values("timestamp").reset_index(drop=True)
+    return frame
+
+
+def _snapshot_from_row(row: pd.Series) -> Optional[dict]:
+    raw = row.get("snapshot_raw_json")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return None
+    return None
+
+
+def replay_snapshots(
+    *,
+    parquet_base: str | Path,
+    topic: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    speed: float = 0.0,
+    loop: bool = False,
+    emit_jsonl: Optional[str] = None,
+    max_events: int = 0,
+) -> dict:
+    """Replay snapshots from parquet to redis topic."""
+    store = ParquetStore(parquet_base)
+    publisher = RedisEventPublisher()
+    out_path = Path(emit_jsonl).resolve() if emit_jsonl else None
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    resolved_topic = str(topic or historical_snapshot_topic()).strip()
+    if not resolved_topic:
+        resolved_topic = historical_snapshot_topic()
+
+    events_limit = max(0, int(max_events))
+    emitted = 0
+    cycles = 0
+    started_at = time.time()
+    sleep_sec = 0.0 if float(speed) <= 0 else (60.0 / float(speed))
+
+    while True:
+        frame = _load_snapshots(store=store, start_date=start_date, end_date=end_date)
+        if len(frame) == 0:
+            return {
+                "status": "no_snapshots",
+                "topic": resolved_topic,
+                "start_date": start_date,
+                "end_date": end_date,
+                "events_emitted": emitted,
+            }
+
+        cycles += 1
+        for _, row in frame.iterrows():
+            if events_limit > 0 and emitted >= events_limit:
+                elapsed = round(time.time() - started_at, 2)
+                return {
+                    "status": "complete",
+                    "topic": resolved_topic,
+                    "events_emitted": emitted,
+                    "cycles": cycles,
+                    "elapsed_sec": elapsed,
+                }
+
+            snapshot = _snapshot_from_row(row)
+            if snapshot is None:
+                continue
+
+            event = build_snapshot_event(
+                snapshot=snapshot,
+                source="snapshot_historical_replay",
+                metadata={
+                    "replay": True,
+                    "session_timezone": "IST",
+                    "topic": resolved_topic,
+                },
+            )
+            publisher.publish(topic=resolved_topic, payload=event)
+            emitted += 1
+
+            if out_path is not None:
+                with out_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+
+            if emitted % 500 == 0:
+                logger.info("historical replay emitted=%s topic=%s", emitted, resolved_topic)
+            if sleep_sec > 0.0:
+                time.sleep(sleep_sec)
+
+        if not loop:
+            break
+
+    elapsed = round(time.time() - started_at, 2)
+    return {
+        "status": "complete",
+        "topic": resolved_topic,
+        "events_emitted": emitted,
+        "cycles": cycles,
+        "elapsed_sec": elapsed,
+    }
+
+
+def run_cli(argv: Optional[Iterable[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Replay historical snapshots to redis topic.")
+    parser.add_argument("--base", default=str(DEFAULT_PARQUET_BASE), help=f"Parquet base path (default: {DEFAULT_PARQUET_BASE})")
+    parser.add_argument("--topic", default=None, help="Destination topic (default: market:snapshot:v1:historical)")
+    parser.add_argument("--start-date", default=None, help="Replay start date YYYY-MM-DD")
+    parser.add_argument("--end-date", default=None, help="Replay end date YYYY-MM-DD")
+    parser.add_argument("--speed", type=float, default=0.0, help="Replay speed multiplier (0 = max speed, 1 = real time)")
+    parser.add_argument("--loop", action="store_true", help="Loop date range continuously")
+    parser.add_argument("--emit-jsonl", default=None, help="Optional event copy path (.jsonl)")
+    parser.add_argument("--max-events", type=int, default=0, help="Stop after N emitted events (0 = no limit)")
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    result = replay_snapshots(
+        parquet_base=args.base,
+        topic=args.topic,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        speed=float(args.speed),
+        loop=bool(args.loop),
+        emit_jsonl=args.emit_jsonl,
+        max_events=int(args.max_events),
+    )
+    print(json.dumps(result, indent=2, default=str))
+    return 0 if str(result.get("status")) in {"complete", "no_snapshots"} else 1
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+    raise SystemExit(run_cli())

@@ -1,0 +1,47 @@
+# VCS
+.git/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual env
+.venv/
+venv/
+
+# Env and secrets
+.env
+.env.*
+!.env.compose.example
+!.env.example
+credentials.json
+*.pem
+*.key
+
+# Runtime/logs
+.run/
+logs/
+*.log
+*.jsonl
+
+# Data/artifacts
+artifacts/
+data/
+*.parquet
+*.feather
+*.csv
+
+# Explicit exclusions requested
+market_data/
+scripts/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
