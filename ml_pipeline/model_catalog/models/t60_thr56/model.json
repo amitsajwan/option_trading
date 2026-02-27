@@ -1,0 +1,11 @@
+{
+  "instance_key": "t60_core_v2_h5_ts0_thr56_best_model",
+  "profile_key": "t60_thr56",
+  "title": "T60 Core V2 Thr56",
+  "summary": "T60 core model with threshold profile from training cycle report.",
+  "description": "Primary T60 model profile currently used in trading and diagnostics.",
+  "recommended": true,
+  "model_package": "ml_pipeline/artifacts/models/by_features/core_v2/h5_ts0/model/model.joblib",
+  "threshold_report": "ml_pipeline/artifacts/models/by_features/core_v2/h5_ts0/config/profiles/thr56/threshold_report.json",
+  "training_report_path": "ml_pipeline/artifacts/models/by_features/core_v2/h5_ts0/config/profiles/thr56/training_report.json"
+}

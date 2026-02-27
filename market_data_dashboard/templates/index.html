@@ -1,0 +1,1702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Market Data Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@stomp/stompjs@7.0.0/bundles/stomp.umd.min.js"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <header class="mb-8">
+            <div class="flex justify-between items-center mb-2">
+                <h1 class="text-3xl font-bold text-gray-800">Market Data Dashboard</h1>
+                <div class="text-lg flex items-center gap-3">
+                    <a href="/trading" class="inline-flex items-center px-4 py-2 rounded-full bg-teal-600 text-white hover:bg-teal-700 text-sm font-semibold">
+                        Open Trading Terminal
+                    </a>
+                    <a href="/trading/models" class="inline-flex items-center px-4 py-2 rounded-full bg-slate-700 text-white hover:bg-slate-800 text-sm font-semibold">
+                        Model Catalog
+                    </a>
+                    <a href="/trading/model/a" target="_blank" rel="noopener" class="inline-flex items-center px-3 py-2 rounded-full bg-sky-100 text-sky-800 hover:bg-sky-200 text-xs font-semibold">
+                        model=a
+                    </a>
+                    <a href="/trading/model/b" target="_blank" rel="noopener" class="inline-flex items-center px-3 py-2 rounded-full bg-amber-100 text-amber-800 hover:bg-amber-200 text-xs font-semibold">
+                        model=b
+                    </a>
+                    <div id="mode-badge">
+                        <span class="inline-flex items-center px-4 py-2 rounded-full bg-gray-300 text-gray-700">
+                            <svg class="w-4 h-4 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Loading...
+                        </span>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-between items-center">
+                <p class="text-gray-600">Real-time market data monitoring and visualization</p>
+                <p class="text-sm text-gray-500">
+                    <span id="effective-time">Loading...</span>
+                </p>
+            </div>
+        </header>
+
+        <!-- Status & Freshness Overview -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold">Connectivity</h3>
+                    <span class="text-xs text-gray-500">API / WS / Auth</span>
+                </div>
+                <div id="system-status" class="space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center text-sm text-gray-800">
+                            <div id="auth-status-icon" class="w-3 h-3 rounded-full mr-2 bg-gray-500"></div>
+                            <span id="auth-status">Checking...</span>
+                        </div>
+                        <div class="text-xs text-gray-500" id="last-update">--</div>
+                    </div>
+                    <div class="flex items-center justify-between text-sm">
+                        <div class="flex items-center">
+                            <div id="api-status" class="w-3 h-3 rounded-full mr-2"></div>
+                            <span class="text-gray-800">Market Data API</span>
+                        </div>
+                        <span id="effective-time-secondary" class="text-xs text-gray-500">--</span>
+                    </div>
+                    <div class="flex items-center justify-between text-sm">
+                        <div class="flex items-center">
+                            <div id="ws-status-icon" class="w-3 h-3 rounded-full mr-2"></div>
+                            <span class="text-gray-800">WebSocket</span>
+                        </div>
+                        <span id="ws-status" class="text-xs text-gray-600">Connecting...</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold">Data Quality</h3>
+                    <span class="text-xs text-gray-500">Validation</span>
+                </div>
+                <div id="data-validation" class="space-y-2">
+                    <div class="text-2xl font-bold" id="overall-status">Loading...</div>
+                    <div class="text-sm text-gray-600">
+                        <span id="instruments-count">0/0</span> instruments with data
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold">Freshness</h3>
+                    <span class="text-xs text-gray-500">Age vs thresholds</span>
+                </div>
+                <div class="space-y-4 text-sm">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <div class="text-xs font-semibold text-gray-500 uppercase">Indicators</div>
+                            <div id="indicator-age-text" class="font-semibold text-gray-800">--</div>
+                            <div class="text-xs text-gray-500">Threshold <span id="indicator-threshold-text">--</span></div>
+                        </div>
+                        <span id="indicator-freshness-badge" class="px-3 py-1 rounded-full text-xs bg-gray-200 text-gray-700">--</span>
+                    </div>
+                    <div class="flex items-center justify-between pt-3 border-t border-gray-100">
+                        <div>
+                            <div class="text-xs font-semibold text-gray-500 uppercase">Depth</div>
+                            <div id="depth-age-text" class="font-semibold text-gray-800">--</div>
+                            <div class="text-xs text-gray-500">Threshold <span id="depth-threshold-text">--</span></div>
+                        </div>
+                        <span id="depth-freshness-badge" class="px-3 py-1 rounded-full text-xs bg-gray-200 text-gray-700">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold">Trader Actions</h3>
+                    <span class="text-xs text-gray-500">Utilities</span>
+                </div>
+                <div class="space-y-2">
+                    <button onclick="refreshData()" class="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                        Refresh Data
+                    </button>
+                    <button onclick="scheduleRealtimeRefresh(100)" class="w-full bg-indigo-500 text-white px-4 py-2 rounded hover:bg-indigo-600">
+                        Sync Charts
+                    </button>
+                    <button onclick="window.location.reload()" class="w-full bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">
+                        Reload Page
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Instruments Status -->
+        <div class="bg-white rounded-lg shadow p-6 mb-8">
+            <h3 class="text-lg font-semibold mb-4">Instruments Status</h3>
+            <div id="instruments-grid" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <!-- Instruments will be populated here -->
+            </div>
+        </div>
+
+        <!-- Timeframe Selector -->
+        <div class="bg-white rounded-lg shadow p-6 mb-8">
+            <h3 class="text-lg font-semibold mb-4">Timeframe Selection</h3>
+            <div class="flex flex-wrap items-center gap-3 mb-4">
+                <label for="instrument-select" class="text-sm font-medium text-gray-700">Active Instrument</label>
+                <select id="instrument-select" class="border border-gray-300 rounded px-3 py-2 text-sm" onchange="onInstrumentChange(this.value)">
+                    <option value="">Loading...</option>
+                </select>
+                <span id="instrument-note" class="text-xs text-gray-500"></span>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <button onclick="setTimeframe('1min')" id="tf-1min" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">1M</button>
+                <button onclick="setTimeframe('5min')" id="tf-5min" class="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500">5M</button>
+                <button onclick="setTimeframe('15min')" id="tf-15min" class="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500">15M</button>
+                <button onclick="setTimeframe('1h')" id="tf-1h" class="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500">1H</button>
+                <button onclick="setTimeframe('4h')" id="tf-4h" class="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500">4H</button>
+                <button onclick="setTimeframe('1d')" id="tf-1d" class="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500">1D</button>
+            </div>
+        </div>
+
+        <!-- Current Indicators Values -->
+        <div class="bg-white rounded-lg shadow p-6 mb-8">
+            <h3 class="text-lg font-semibold mb-4" id="indicators-title">Technical Indicators</h3>
+            <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+                <!-- Trend Indicators -->
+                <div class="border-l-4 border-purple-500 pl-4">
+                    <h4 class="text-xs font-semibold text-gray-600 uppercase mb-2">Trend</h4>
+                    <div class="space-y-1 text-sm">
+                        <div><span class="font-bold" id="rsi-status">--</span> RSI</div>
+                        <div><span class="font-bold" id="macd-status">--</span> MACD</div>
+                        <div><span class="font-bold" id="trend-dir">--</span> Trend</div>
+                        <div><span class="font-bold" id="adx-status">--</span> ADX</div>
+                    </div>
+                </div>
+                
+                <!-- Momentum Indicators -->
+                <div class="border-l-4 border-green-500 pl-4">
+                    <h4 class="text-xs font-semibold text-gray-600 uppercase mb-2">Momentum</h4>
+                    <div class="space-y-1 text-sm">
+                        <div><span class="font-bold" id="momentum-val">--</span> Momentum</div>
+                        <div><span class="font-bold" id="roc-val">--</span> ROC</div>
+                        <div><span class="font-bold" id="mfi-val">--</span> MFI</div>
+                        <div><span class="font-bold" id="stoch-k">--</span> Stoch K</div>
+                    </div>
+                </div>
+                
+                <!-- Volatility Indicators -->
+                <div class="border-l-4 border-yellow-500 pl-4">
+                    <h4 class="text-xs font-semibold text-gray-600 uppercase mb-2">Volatility</h4>
+                    <div class="space-y-1 text-sm">
+                        <div><span class="font-bold" id="atr-val">--</span> ATR</div>
+                        <div><span class="font-bold" id="bolling-val">--</span> Bollinger</div>
+                        <div><span class="font-bold" id="volatility-lvl">--</span> Vol Level</div>
+                        <div><span class="font-bold" id="cci-val">--</span> CCI</div>
+                    </div>
+                </div>
+                
+                <!-- Support/Resistance -->
+                <div class="border-l-4 border-red-500 pl-4">
+                    <h4 class="text-xs font-semibold text-gray-600 uppercase mb-2">Levels</h4>
+                    <div class="space-y-1 text-sm">
+                        <div><span class="font-bold" id="pivot-p">--</span> Pivot</div>
+                        <div><span class="font-bold" id="resistance">--</span> R1</div>
+                        <div><span class="font-bold" id="support">--</span> S1</div>
+                        <div><span class="font-bold" id="range-val">--</span> Range</div>
+                    </div>
+                </div>
+
+                <!-- Open Interest -->
+                <div class="border-l-4 border-indigo-500 pl-4">
+                    <h4 class="text-xs font-semibold text-gray-600 uppercase mb-2">Open Interest</h4>
+                    <div class="space-y-1 text-sm">
+                        <div><span class="font-bold" id="oi-val">--</span> OI</div>
+                        <div><span class="font-bold" id="oi-change">--</span> Δ OI</div>
+                        <div><span class="font-bold" id="oi-pct">--</span> Δ OI %</div>
+                        <div><span class="font-bold" id="oi-sma5">--</span> OI SMA(5)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Indicator Metadata -->
+        <div class="bg-white rounded-lg shadow p-6 mb-8">
+            <h3 class="text-lg font-semibold mb-4">Indicator Metadata</h3>
+            <div class="grid grid-cols-1 md:grid-cols-5 gap-4 text-sm">
+                <div class="border-l-4 border-blue-500 pl-4">
+                    <h4 class="text-xs font-semibold text-gray-600 uppercase mb-1">Calculated At</h4>
+                    <div id="meta-indicator-ts" class="font-semibold">--</div>
+                </div>
+                <div class="border-l-4 border-purple-500 pl-4">
+                    <h4 class="text-xs font-semibold text-gray-600 uppercase mb-1">Source</h4>
+                    <div id="meta-source" class="font-semibold">--</div>
+                </div>
+                <div class="border-l-4 border-indigo-500 pl-4">
+                    <h4 class="text-xs font-semibold text-gray-600 uppercase mb-1">Stream</h4>
+                    <div id="meta-stream" class="font-semibold">--</div>
+                </div>
+                <div class="border-l-4 border-green-500 pl-4">
+                    <h4 class="text-xs font-semibold text-gray-600 uppercase mb-1">Timeframe</h4>
+                    <div id="meta-timeframe" class="font-semibold">--</div>
+                </div>
+                <div class="border-l-4 border-yellow-500 pl-4">
+                    <h4 class="text-xs font-semibold text-gray-600 uppercase mb-1">Update Type</h4>
+                    <div id="meta-update-type" class="font-semibold">--</div>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-5 gap-4 mt-4 text-xs text-gray-600">
+                <div>Market Timestamp: <span id="meta-market-ts" class="font-mono">--</span></div>
+                <div>Response Timestamp: <span id="meta-api-ts" class="font-mono">--</span></div>
+                <div>Mode: <span id="meta-mode" class="font-mono">--</span></div>
+                <div>Status: <span id="meta-status" class="font-semibold">--</span></div>
+                <div>Freshness: <span id="meta-indicator-age" class="font-semibold">--</span> (<span id="meta-indicator-freshness" class="font-semibold">--</span>)</div>
+            </div>
+        </div>
+
+        <!-- Charts Section -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4" id="price-chart-title">Price Chart</h3>
+                <canvas id="banknifty-chart" width="400" height="300"></canvas>
+            </div>
+
+            <div class="bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4">Technical Indicators Chart</h3>
+                <canvas id="indicators-chart" width="400" height="300"></canvas>
+            </div>
+        </div>
+
+        <!-- Market Depth Section -->
+        <div class="bg-white rounded-lg shadow p-6 mb-8">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-semibold">Market Depth (Order Book)</h3>
+                <span id="depth-freshness-pill" class="px-3 py-1 rounded-full text-xs font-semibold bg-gray-200 text-gray-700">--</span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Buy Orders (Bids) -->
+                <div>
+                    <h4 class="text-sm font-semibold text-green-600 mb-3">BUY ORDERS</h4>
+                    <div class="space-y-2">
+                        <div class="grid grid-cols-3 text-xs font-semibold text-gray-600 border-b pb-2">
+                            <div>Price</div>
+                            <div class="text-center">Quantity</div>
+                            <div class="text-right">Orders</div>
+                        </div>
+                        <div id="depth-buy-orders" class="space-y-1">
+                            <!-- Buy orders will be populated here -->
+                            <div class="text-sm text-gray-500 py-4 text-center">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Sell Orders (Asks) -->
+                <div>
+                    <h4 class="text-sm font-semibold text-red-600 mb-3">SELL ORDERS</h4>
+                    <div class="space-y-2">
+                        <div class="grid grid-cols-3 text-xs font-semibold text-gray-600 border-b pb-2">
+                            <div>Price</div>
+                            <div class="text-center">Quantity</div>
+                            <div class="text-right">Orders</div>
+                        </div>
+                        <div id="depth-sell-orders" class="space-y-1">
+                            <!-- Sell orders will be populated here -->
+                            <div class="text-sm text-gray-500 py-4 text-center">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-4 text-xs text-gray-500 space-x-4">
+                <span>Last updated: <span id="depth-timestamp">--</span></span>
+                <span>Age: <span id="depth-age-inline">--</span></span>
+            </div>
+        </div>
+
+        <!-- Options Chain Section -->
+        <div class="bg-white rounded-lg shadow p-6 mb-8">
+            <h3 class="text-lg font-semibold mb-4">Options Chain</h3>
+            <div id="options-status" class="text-sm text-gray-600 mb-4">
+                <!-- Status message will appear here -->
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead>
+                        <tr class="border-b">
+                            <th colspan="5" class="py-2 text-green-600 text-center">CALL OPTIONS</th>
+                            <th class="py-2 text-gray-800 text-center font-bold">STRIKE</th>
+                            <th colspan="5" class="py-2 text-red-600 text-center">PUT OPTIONS</th>
+                        </tr>
+                        <tr class="text-xs text-gray-600 border-b">
+                            <!-- Call headers -->
+                            <th class="py-1 px-2">OI</th>
+                            <th class="py-1 px-2">Volume</th>
+                            <th class="py-1 px-2">LTP</th>
+                            <th class="py-1 px-2">IV</th>
+                            <th class="py-1 px-2">Delta</th>
+                            <!-- Strike -->
+                            <th class="py-1 px-2 bg-gray-100">Strike</th>
+                            <!-- Put headers -->
+                            <th class="py-1 px-2">Delta</th>
+                            <th class="py-1 px-2">IV</th>
+                            <th class="py-1 px-2">LTP</th>
+                            <th class="py-1 px-2">Volume</th>
+                            <th class="py-1 px-2">OI</th>
+                        </tr>
+                    </thead>
+                    <tbody id="options-chain-body">
+                        <!-- Options data will be populated here -->
+                        <tr>
+                            <td colspan="11" class="text-center py-8 text-gray-500">
+                                Loading options chain...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-4 text-xs text-gray-500">
+                <span>PCR: <span id="options-pcr" class="font-bold">--</span></span>
+                <span class="ml-4">Max Pain: <span id="options-maxpain" class="font-bold">--</span></span>
+                <span class="ml-4">Last updated: <span id="options-timestamp">--</span></span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let bankniftyChart, indicatorsChart;
+        let statusData = {};
+        let stompClient = null;
+        let stompSubscriptions = [];
+        let currentInstrument = null; // Will be set dynamically from API
+        let currentTimeframe = '1min'; // Default timeframe
+        let currentSystemMode = 'unknown';
+        let manualInstrumentSelection = false;
+        const STATUS_POLL_MS = 15000;
+        const DEPTH_POLL_MS = 10000;
+        const OPTIONS_POLL_MS = 45000;
+        
+        // Available timeframes
+        const TIMEFRAMES = ['1min', '5min', '15min', '1h', '4h', '1d'];
+
+        let wsFailureCount = 0;
+        let wsConnectedOnce = false;
+
+        function markWsUnavailable(context = '') {
+            console.error('WebSocket unavailable. Automatic REST fallback is disabled.', context);
+            setWsStatus('Unavailable (no REST fallback)', 'text-red-700', 'w-3 h-3 rounded-full mr-2 bg-red-600');
+        }
+
+        function recordWsFailure(context = '') {
+            wsFailureCount += 1;
+            console.warn(`WebSocket failure #${wsFailureCount}`, context);
+            if (wsFailureCount >= 3) {
+                markWsUnavailable(context || 'WebSocket unavailable');
+            }
+        }
+
+        // Timestamp parsing helpers (handles ISO, "YYYY-MM-DD HH:mm:ss", and epoch values)
+        function parseTimestamp(value) {
+            if (value === null || value === undefined || value === '') return null;
+
+            if (typeof value === 'number') {
+                const ms = value < 1e12 ? value * 1000 : value;
+                const d = new Date(ms);
+                return Number.isNaN(d.getTime()) ? null : d;
+            }
+
+            if (typeof value !== 'string') return null;
+
+            const raw = value.trim();
+            if (!raw) return null;
+
+            if (/^\d+$/.test(raw)) {
+                const num = Number(raw);
+                const ms = num < 1e12 ? num * 1000 : num;
+                const d = new Date(ms);
+                return Number.isNaN(d.getTime()) ? null : d;
+            }
+
+            let normalized = raw;
+            if (/^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}/.test(normalized)) {
+                normalized = normalized.replace(' ', 'T');
+            }
+            // Normalize timezone offset from +0530 to +05:30 for Safari/strict parsers
+            normalized = normalized.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+
+            let parsed = new Date(normalized);
+            if (!Number.isNaN(parsed.getTime())) return parsed;
+
+            // Last attempt: drop trailing timezone token and parse local time
+            const withoutTz = normalized.replace(/([+-]\d{2}:?\d{2}|Z)$/, '');
+            parsed = new Date(withoutTz);
+            return Number.isNaN(parsed.getTime()) ? null : parsed;
+        }
+
+        function formatDateTime(value, fallback = 'Invalid Date') {
+            const d = parseTimestamp(value);
+            return d ? d.toLocaleString() : fallback;
+        }
+
+        function formatTime(value, fallback = 'Invalid Date') {
+            const d = parseTimestamp(value);
+            return d ? d.toLocaleTimeString() : fallback;
+        }
+
+        let realtimeRefreshTimer = null;
+        let statusRefreshTimer = null;
+        let lastSlowDataInstrument = null;
+
+        // Chart update coalescing/abort controls.
+        let chartsUpdateInProgress = false;
+        let chartsUpdateQueued = false;
+        let chartsAbortController = null;
+        let lastChartsUpdateAt = 0;
+
+        function scheduleRealtimeRefresh(delayMs = 1000) {
+            if (realtimeRefreshTimer) return;
+            realtimeRefreshTimer = setTimeout(async () => {
+                realtimeRefreshTimer = null;
+                await updateCharts();
+            }, delayMs);
+        }
+
+        function scheduleStatusRefresh(delayMs = 1200) {
+            if (statusRefreshTimer) return;
+            statusRefreshTimer = setTimeout(async () => {
+                statusRefreshTimer = null;
+                await fetchStatus();
+            }, delayMs);
+        }
+
+        function setWsStatus(text, colorClass, iconClass) {
+            document.getElementById('ws-status').textContent = text;
+            document.getElementById('ws-status').className = colorClass;
+            document.getElementById('ws-status-icon').className = iconClass;
+        }
+
+        function applyCurrentInstrumentUI() {
+            if (!currentInstrument) return;
+            const indicatorsTitle = document.getElementById('indicators-title');
+            const priceChartTitle = document.getElementById('price-chart-title');
+            const instrumentNote = document.getElementById('instrument-note');
+
+            if (indicatorsTitle) {
+                indicatorsTitle.textContent = `Current Technical Indicators (${currentInstrument})`;
+            }
+            if (priceChartTitle) {
+                priceChartTitle.textContent = `${currentInstrument} Price Chart`;
+            }
+            if (instrumentNote) {
+                instrumentNote.textContent = `Showing charts/indicators for ${currentInstrument}`;
+            }
+        }
+
+        function refreshSlowDataForCurrentInstrument(force = false) {
+            if (!currentInstrument) return;
+            if (!force && lastSlowDataInstrument === currentInstrument) return;
+
+            lastSlowDataInstrument = currentInstrument;
+            fetchMarketDepth();
+            fetchOptionsChain();
+        }
+
+        function populateInstrumentSelector(instruments = []) {
+            const select = document.getElementById('instrument-select');
+            if (!select) return;
+
+            const sorted = [...new Set(instruments)].sort();
+            if (!sorted.length) {
+                select.innerHTML = '<option value="">No instruments</option>';
+                return;
+            }
+
+            const current = currentInstrument && sorted.includes(currentInstrument)
+                ? currentInstrument
+                : sorted[0];
+
+            if (!currentInstrument) {
+                currentInstrument = current;
+            }
+
+            select.innerHTML = sorted
+                .map((inst) => `<option value="${inst}" ${inst === currentInstrument ? 'selected' : ''}>${inst}</option>`)
+                .join('');
+        }
+
+        function onInstrumentChange(instrument) {
+            if (!instrument || instrument === currentInstrument) return;
+            manualInstrumentSelection = true;
+            currentInstrument = instrument;
+            indicatorReducer.reset();
+            applyCurrentInstrumentUI();
+
+            // Re-subscribe realtime streams to selected instrument
+            if (stompClient && stompClient.connected) {
+                subscribeStompTopics();
+            }
+
+            scheduleRealtimeRefresh(50);
+            refreshSlowDataForCurrentInstrument(true);
+        }
+
+        function formatMaybeNumber(value, decimals = 2, suffix = '') {
+            if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) {
+                return '--';
+            }
+            return `${Number(value).toFixed(decimals)}${suffix}`;
+        }
+
+        function formatSigned(value, decimals = 2, suffix = '') {
+            if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) {
+                return '--';
+            }
+            const n = Number(value);
+            const sign = n > 0 ? '+' : '';
+            return `${sign}${n.toFixed(decimals)}${suffix}`;
+        }
+
+        function updateIndicatorCards(latestIndicator) {
+            if (!latestIndicator || typeof latestIndicator !== 'object') return;
+
+            // Trend
+            const rsiNum = Number(latestIndicator.rsi_14);
+            const hasRsiNum = Number.isFinite(rsiNum);
+            const rsiState = latestIndicator.rsi_status;
+            let rsiText = '--';
+            if (hasRsiNum) {
+                rsiText = rsiState ? `${rsiNum.toFixed(1)} (${rsiState})` : rsiNum.toFixed(1);
+            } else if (rsiState) {
+                rsiText = rsiState;
+            }
+
+            setMetaText('rsi-status', rsiText);
+            setMetaText('macd-status', formatMaybeNumber(latestIndicator.macd_value, 2));
+            setMetaText('trend-dir', latestIndicator.trend_direction || '--');
+            setMetaText('adx-status', formatMaybeNumber(latestIndicator.adx_14, 1));
+
+            // Momentum
+            setMetaText('momentum-val', formatMaybeNumber(latestIndicator.momentum_10, 2));
+            setMetaText('roc-val', formatMaybeNumber(latestIndicator.roc_12, 2));
+            setMetaText('mfi-val', formatMaybeNumber(latestIndicator.mfi_14, 1));
+            setMetaText('stoch-k', formatMaybeNumber(latestIndicator.stoch_k, 1));
+
+            // Volatility
+            setMetaText('atr-val', formatMaybeNumber(latestIndicator.atr_14, 2));
+            const bollPct = (latestIndicator.bollinger_percent_b === null || latestIndicator.bollinger_percent_b === undefined)
+                ? '--'
+                : formatMaybeNumber(Number(latestIndicator.bollinger_percent_b) * 100, 1, '%');
+            setMetaText('bolling-val', bollPct);
+            setMetaText('volatility-lvl', latestIndicator.volatility_level || '--');
+            setMetaText('cci-val', formatMaybeNumber(latestIndicator.cci_20, 0));
+
+            // Levels
+            setMetaText('pivot-p', formatMaybeNumber(latestIndicator.pivot_point, 2));
+            setMetaText('resistance', formatMaybeNumber(latestIndicator.pivot_r1, 2));
+            setMetaText('support', formatMaybeNumber(latestIndicator.pivot_s1, 2));
+            setMetaText('range-val', formatMaybeNumber(latestIndicator.range_20, 2));
+
+            // Open Interest
+            setMetaText('oi-val', formatMaybeNumber(latestIndicator.oi, 0));
+            setMetaText('oi-change', formatSigned(latestIndicator.oi_change, 0));
+            setMetaText('oi-pct', formatSigned(latestIndicator.oi_pct_change, 2, '%'));
+            setMetaText('oi-sma5', formatMaybeNumber(latestIndicator.oi_sma_5, 0));
+        }
+
+        function setMetaText(id, value, fallback = '--') {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const text = (value === null || value === undefined || value === '') ? fallback : String(value);
+            el.textContent = text;
+        }
+
+        function formatAgeSeconds(ageSeconds) {
+            if (!Number.isFinite(Number(ageSeconds))) return '--';
+            const age = Number(ageSeconds);
+            if (age < 90) return `${Math.round(age)}s`;
+            if (age < 3600) return `${(age / 60).toFixed(1)}m`;
+            return `${(age / 3600).toFixed(1)}h`;
+        }
+
+        function updateFreshnessCard(kind, ageSeconds, isStale, thresholdSeconds) {
+            const ageEl = document.getElementById(`${kind}-age-text`);
+            const thrEl = document.getElementById(`${kind}-threshold-text`);
+            const badgeEl = document.getElementById(`${kind}-freshness-badge`);
+
+            if (thrEl) {
+                const thrNum = Number(thresholdSeconds);
+                thrEl.textContent = Number.isFinite(thrNum)
+                    ? `${formatAgeSeconds(thrNum)} max`
+                    : 'n/a';
+            }
+
+            if (!ageEl || !badgeEl) return;
+
+            const ageNum = Number(ageSeconds);
+            const hasAge = Number.isFinite(ageNum);
+            ageEl.textContent = hasAge ? formatAgeSeconds(ageNum) : '--';
+
+            const stale = isStale === true;
+            const thrNum = Number(thresholdSeconds);
+            const nearStale = hasAge && Number.isFinite(thrNum) && ageNum >= (thrNum * 0.7) && !stale;
+
+            let badgeClass = 'bg-gray-200 text-gray-700';
+            let badgeText = hasAge ? (stale ? 'STALE' : 'FRESH') : 'UNKNOWN';
+
+            if (stale) {
+                badgeClass = 'bg-red-100 text-red-700';
+                badgeText = `STALE • ${formatAgeSeconds(ageNum)}`;
+            } else if (nearStale) {
+                badgeClass = 'bg-yellow-100 text-yellow-700';
+                badgeText = `AGING • ${formatAgeSeconds(ageNum)}`;
+            } else if (hasAge) {
+                badgeClass = 'bg-green-100 text-green-700';
+                badgeText = `FRESH • ${formatAgeSeconds(ageNum)}`;
+            }
+
+            badgeEl.className = `px-3 py-1 rounded-full text-xs font-semibold ${badgeClass}`;
+            badgeEl.textContent = badgeText;
+        }
+
+        function normalizeTimeframe(tf) {
+            if (!tf) return '';
+            const v = String(tf).trim().toLowerCase();
+            if (v === 'minute' || v === '1m') return '1min';
+            return v;
+        }
+
+        const indicatorReducer = {
+            state: { lastTsMs: 0, lastSource: null, lastTf: null },
+
+            reset() {
+                this.state.lastTsMs = 0;
+                this.state.lastSource = null;
+                this.state.lastTf = null;
+            },
+
+            normalize(raw, source = 'rest') {
+                const streamPayload = (raw && typeof raw === 'object' && raw.payload && typeof raw.payload === 'object')
+                    ? raw.payload
+                    : raw;
+
+                const indicators = (streamPayload && typeof streamPayload === 'object' && streamPayload.indicators && typeof streamPayload.indicators === 'object')
+                    ? streamPayload.indicators
+                    : (streamPayload && typeof streamPayload === 'object') ? streamPayload : {};
+
+                const tf = normalizeTimeframe(
+                    raw?.timeframe || streamPayload?.timeframe || indicators?.timeframe || raw?.tf || indicators?.tf || currentTimeframe
+                );
+
+                const indicatorTsRaw = streamPayload?.indicator_timestamp || indicators?.indicator_timestamp || raw?.emitted_at || raw?.timestamp;
+                const marketTsRaw = streamPayload?.market_timestamp || indicators?.market_timestamp || raw?.event_time || raw?.market_timestamp || null;
+                const responseTsRaw = raw?.emitted_at || raw?.timestamp || null;
+
+                const tsToMs = (value) => {
+                    const d = parseTimestamp(value);
+                    return d ? d.getTime() : NaN;
+                };
+
+                const candidateTsMs = (() => {
+                    const candidates = [indicatorTsRaw, responseTsRaw, Date.now()];
+                    for (const c of candidates) {
+                        const ms = tsToMs(c);
+                        if (Number.isFinite(ms)) return ms;
+                    }
+                    return Date.now();
+                })();
+
+                const ageSeconds = streamPayload?.indicator_age_seconds
+                    ?? indicators?.indicator_age_seconds
+                    ?? indicators?.age_seconds
+                    ?? null;
+                const isStale = streamPayload?.indicator_is_stale
+                    ?? indicators?.indicator_is_stale
+                    ?? streamPayload?.is_stale
+                    ?? false;
+                const staleThreshold = streamPayload?.indicator_stale_threshold_seconds
+                    ?? indicators?.indicator_stale_threshold_seconds
+                    ?? null;
+
+                const status = streamPayload?.status || raw?.status || (isStale ? 'stale' : (source === 'stream' ? 'stream' : 'ok'));
+                const renderedSource = streamPayload?.indicator_source || indicators?.source || raw?.indicator_source || source;
+                const renderedStream = streamPayload?.indicator_stream || raw?.stream || indicators?.indicator_stream || '--';
+                const renderedUpdateType = streamPayload?.indicator_update_type || indicators?.indicator_update_type || indicators?.update_type || '--';
+
+                return {
+                    indicators,
+                    tf,
+                    indicatorTsRaw,
+                    marketTsRaw,
+                    responseTsRaw,
+                    tsMs: candidateTsMs,
+                    ageSeconds,
+                    isStale,
+                    staleThreshold,
+                    status,
+                    source: renderedSource,
+                    stream: renderedStream,
+                    updateType: renderedUpdateType,
+                };
+            },
+
+            shouldApply(envelope, force = false) {
+                if (!envelope || typeof envelope !== 'object') return false;
+
+                const currentTf = normalizeTimeframe(currentTimeframe);
+                const envTf = normalizeTimeframe(envelope.tf || currentTf);
+                if (currentTf !== '1min' && envTf && envTf !== currentTf) {
+                    return false;
+                }
+
+                if (force) return true;
+
+                const tsMs = Number(envelope.tsMs);
+                if (this.state.lastTsMs && Number.isFinite(this.state.lastTsMs)) {
+                    if (!Number.isFinite(tsMs) || tsMs <= this.state.lastTsMs) {
+                        return false;
+                    }
+                }
+                return true;
+            },
+
+            renderMetadata(envelope) {
+                const tf = normalizeTimeframe(envelope.tf || currentTimeframe) || '--';
+                const statusDisplay = (() => {
+                    const s = String(envelope.status || '').toLowerCase();
+                    if (s === 'stream') return envelope.isStale ? 'stale' : 'ok';
+                    return s || 'ok';
+                })();
+
+                setMetaText('meta-indicator-ts', envelope.indicatorTsRaw ? formatDateTime(envelope.indicatorTsRaw) : '--');
+                setMetaText('meta-market-ts', envelope.marketTsRaw ? formatDateTime(envelope.marketTsRaw) : '--');
+                setMetaText('meta-source', envelope.source || '--');
+                setMetaText('meta-stream', envelope.stream || '--');
+                setMetaText('meta-timeframe', String(tf).toUpperCase());
+
+                const updateType = envelope.updateType || '--';
+                setMetaText('meta-update-type', updateType);
+
+                setMetaText('meta-api-ts', envelope.responseTsRaw ? formatDateTime(envelope.responseTsRaw) : '--');
+                setMetaText('meta-mode', String(currentSystemMode || '--').toUpperCase());
+                setMetaText('meta-status', String(statusDisplay).toUpperCase());
+                setMetaText('meta-indicator-age', Number.isFinite(Number(envelope.ageSeconds)) ? formatAgeSeconds(Number(envelope.ageSeconds)) : '--');
+                setMetaText('meta-indicator-freshness', envelope.isStale ? 'STALE' : 'FRESH');
+                updateFreshnessCard('indicator', envelope.ageSeconds, envelope.isStale, envelope.staleThreshold);
+
+                const statusEl = document.getElementById('meta-status');
+                if (statusEl) {
+                    const s = String(statusDisplay).toLowerCase();
+                    statusEl.className = `font-semibold ${
+                        s === 'ok' ? 'text-green-700' :
+                        s === 'stale' ? 'text-yellow-700' :
+                        s === 'error' ? 'text-red-700' :
+                        'text-gray-700'
+                    }`;
+                }
+            },
+
+            apply(raw, source = 'rest', opts = {}) {
+                const force = opts.force === true;
+                const envelope = this.normalize(raw, source);
+                if (!this.shouldApply(envelope, force)) return false;
+
+                if (envelope.indicators && Object.keys(envelope.indicators).length > 0) {
+                    updateIndicatorCards(envelope.indicators);
+                }
+
+                this.renderMetadata(envelope);
+
+                const tsMs = Number(envelope.tsMs);
+                this.state.lastTsMs = Number.isFinite(tsMs) ? tsMs : Date.now();
+                this.state.lastSource = envelope.source;
+                this.state.lastTf = normalizeTimeframe(envelope.tf || currentTimeframe);
+                return true;
+            }
+        };
+
+        function clearStompSubscriptions() {
+            try {
+                stompSubscriptions.forEach((s) => s.unsubscribe());
+            } catch (e) {
+                // ignore
+            }
+            stompSubscriptions = [];
+        }
+
+        function subscribeStompTopics() {
+            if (!stompClient || !stompClient.connected || !currentInstrument) return;
+            clearStompSubscriptions();
+
+            const subscribe = (dest) => stompClient.subscribe(dest, (message) => {
+                try {
+                    const payload = JSON.parse(message.body);
+                    if (payload && payload.type === 'message') {
+                        handleRedisMessage(payload);
+                    }
+                } catch (e) {
+                    console.error('Failed to parse STOMP message:', e);
+                }
+            });
+
+            stompSubscriptions.push(subscribe('/topic/auth/status'));
+            stompSubscriptions.push(subscribe(`/topic/market/ohlc/${currentInstrument}`));
+            stompSubscriptions.push(subscribe(`/topic/indicators/${currentInstrument}`));
+        }
+
+        function resolveWebSocketUrl() {
+            const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+
+            // On some Windows setups, `localhost` resolves to IPv6 (::1) first for
+            // WebSocket handshakes while the server is bound to IPv4 (0.0.0.0), which
+            // causes transport-level close-before-connect errors.
+            if (location.hostname === 'localhost') {
+                const port = location.port || (location.protocol === 'https:' ? '443' : '80');
+                return `${wsProtocol}://127.0.0.1:${port}/ws`;
+            }
+
+            return `${wsProtocol}://${location.host}/ws`;
+        }
+
+        // WebSocket connection for real-time updates (STOMP preferred)
+        function connectWebSocket() {
+            const wsUrl = resolveWebSocketUrl();
+
+            // Prefer STOMP if available
+            if (window.StompJs && window.StompJs.Client) {
+                if (stompClient && stompClient.active) return;
+
+                setWsStatus('Connecting...', 'text-blue-600', 'w-3 h-3 rounded-full mr-2 bg-blue-500');
+
+                stompClient = new StompJs.Client({
+                    brokerURL: wsUrl,
+                    reconnectDelay: 5000,
+                    connectionTimeout: 4000,
+                    heartbeatIncoming: 0,
+                    heartbeatOutgoing: 0,
+                    debug: function(str) {
+                        // Keep it quiet-ish; comment in if you need wire logs
+                        // console.log(str);
+                    }
+                });
+
+                stompClient.onConnect = function() {
+                    console.log('STOMP connected');
+                    wsConnectedOnce = true;
+                    wsFailureCount = 0;
+                    setWsStatus('Connected', 'text-green-600', 'w-3 h-3 rounded-full mr-2 bg-green-500');
+                    subscribeStompTopics();
+                };
+
+                stompClient.onWebSocketClose = function() {
+                    setWsStatus('Disconnected', 'text-red-600', 'w-3 h-3 rounded-full mr-2 bg-red-500');
+                    clearStompSubscriptions();
+                    recordWsFailure('stomp socket close');
+                };
+
+                stompClient.onStompError = function(frame) {
+                    console.error('STOMP error:', frame.headers['message'], frame.body);
+                    setWsStatus('Error', 'text-red-600', 'w-3 h-3 rounded-full mr-2 bg-red-500');
+                    recordWsFailure('stomp protocol error');
+                };
+
+                stompClient.onWebSocketError = function(event) {
+                    console.error('STOMP websocket transport error:', event);
+                    recordWsFailure('stomp transport error');
+                };
+
+                stompClient.activate();
+                return;
+            }
+
+            // STOMP not available, cannot connect
+            setWsStatus('WebSocket library not available', 'text-red-600', 'w-3 h-3 rounded-full mr-2 bg-red-500');
+        }
+
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/api/market-data/status');
+                statusData = await response.json();
+
+                // Pick/adjust current instrument based on what's actually available.
+                // This matters on FreshStart where Redis may be briefly empty, causing the UI
+                // to select a default instrument that later has no data.
+                if (statusData.instruments) {
+                    const instruments = Object.keys(statusData.instruments);
+                    if (instruments.length > 0) {
+                        const currentInfo = currentInstrument ? statusData.instruments[currentInstrument] : null;
+
+                        // Prefer an instrument that is marked available (has data).
+                        const bestAvailable = instruments.find(k => (statusData.instruments[k]?.status === 'available'));
+
+                        // Auto-switch only when user hasn't manually chosen instrument.
+                        const shouldSwitch = (!manualInstrumentSelection && ((!currentInstrument) || (!currentInfo) || (currentInfo.status !== 'available' && bestAvailable)))
+                            || (manualInstrumentSelection && currentInstrument && !statusData.instruments[currentInstrument]);
+                        if (shouldSwitch) {
+                            currentInstrument = bestAvailable || instruments[0];
+                            indicatorReducer.reset();
+                            console.log('Current instrument set to:', currentInstrument);
+                            applyCurrentInstrumentUI();
+
+                            // (Re)subscribe to realtime streams now that instrument is known
+                            if (stompClient && stompClient.connected) {
+                                subscribeStompTopics();
+                            }
+
+                            // Slow endpoints depend on instrument, so fetch once after selection.
+                            refreshSlowDataForCurrentInstrument(true);
+                        }
+
+                        populateInstrumentSelector(instruments);
+                        applyCurrentInstrumentUI();
+
+                        // Ensure first-load depth/options fetch even if shouldSwitch was false.
+                        refreshSlowDataForCurrentInstrument(false);
+                    }
+                }
+                
+                updateUI();
+            } catch (error) {
+                console.error('Failed to fetch status:', error);
+            }
+        }
+
+        function updateUI() {
+            // Update system status
+            const apiStatus = statusData.market_data_api?.status;
+            const apiStatusEl = document.getElementById('api-status');
+            const lastUpdateEl = document.getElementById('last-update');
+
+            if (apiStatus === 'healthy') {
+                apiStatusEl.className = 'w-3 h-3 rounded-full mr-2 bg-green-500';
+            } else {
+                apiStatusEl.className = 'w-3 h-3 rounded-full mr-2 bg-red-500';
+            }
+
+            lastUpdateEl.textContent = formatDateTime(statusData.timestamp);
+
+            // Update data validation
+            const validation = statusData.data_validation;
+            const overallStatusEl = document.getElementById('overall-status');
+            const instrumentsCountEl = document.getElementById('instruments-count');
+
+            overallStatusEl.textContent = validation.overall_status.toUpperCase();
+            overallStatusEl.className = `text-2xl font-bold ${
+                validation.overall_status === 'healthy' ? 'text-green-600' :
+                validation.overall_status === 'degraded' ? 'text-orange-600' :
+                validation.overall_status === 'warning' ? 'text-yellow-600' :
+                validation.overall_status === 'critical' ? 'text-red-600' : 'text-gray-600'
+            }`;
+
+            instrumentsCountEl.textContent = `${validation.checks.instruments_with_data}/${validation.checks.total_instruments}`;
+
+            // Update instruments grid
+            updateInstrumentsGrid();
+
+            // Update charts (throttled) — avoid triggering heavy fetches repeatedly
+            // from status polling + websocket updates.
+            if (Date.now() - lastChartsUpdateAt > 2500) {
+                scheduleRealtimeRefresh(100);
+            }
+        }
+
+        function updateInstrumentsGrid() {
+            const grid = document.getElementById('instruments-grid');
+            grid.innerHTML = '';
+
+            for (const [instrument, info] of Object.entries(statusData.instruments || {})) {
+                const card = document.createElement('div');
+                const normalizedStatus = String(info.status || 'unknown').toLowerCase();
+
+                let statusColor = 'text-red-600';
+                let statusIcon = '🔴';
+                let statusBadgeClass = 'bg-red-50 border border-red-200';
+
+                if (normalizedStatus === 'available') {
+                    statusColor = 'text-green-700';
+                    statusIcon = '🟢';
+                    statusBadgeClass = 'bg-green-50 border border-green-200';
+                } else if (normalizedStatus === 'mode_mismatch') {
+                    statusColor = 'text-yellow-800';
+                    statusIcon = '🟡';
+                    statusBadgeClass = 'bg-yellow-50 border border-yellow-200';
+                }
+
+                card.className = `border rounded-lg p-4 ${statusBadgeClass}`;
+
+                const latestPriceNum = Number(info.latest_price);
+                const latestPriceText = Number.isFinite(latestPriceNum)
+                    ? latestPriceNum.toFixed(2)
+                    : (info.latest_price ?? '--');
+                const statusLabel = String(info.status || 'unknown').replaceAll('_', ' ');
+
+                card.innerHTML = `
+                    <div class="font-semibold">${instrument}</div>
+                    <div class="text-sm font-medium ${statusColor}">${statusIcon} ${statusLabel}</div>
+                    ${info.data_points ? `<div class="text-sm text-gray-600">${info.data_points} data points</div>` : ''}
+                    ${info.latest_price !== undefined && info.latest_price !== null ? `<div class="text-sm font-mono">${latestPriceText}</div>` : ''}
+                    ${info.first_timestamp ? `<div class="text-xs text-gray-500">Start: ${formatDateTime(info.first_timestamp)}</div>` : ''}
+                    ${info.latest_timestamp ? `<div class="text-xs text-gray-500">Latest: ${formatDateTime(info.latest_timestamp)}</div>` : ''}
+                    ${info.mode_mismatch ? `<div class="text-xs text-yellow-800 mt-1">Using <strong>${info.data_mode || 'unknown'}</strong> data while system expects <strong>${info.expected_mode || 'unknown'}</strong></div>` : ''}
+                `;
+
+                grid.appendChild(card);
+            }
+        }
+
+        async function updateCharts() {
+            if (!currentInstrument) {
+                console.log('No instrument selected yet');
+                return;
+            }
+
+            // Coalesce concurrent calls; if a newer update is requested while a fetch is
+            // running, abort the in-flight request and run again.
+            if (chartsUpdateInProgress) {
+                chartsUpdateQueued = true;
+                try {
+                    if (chartsAbortController) chartsAbortController.abort();
+                } catch (e) {
+                    // ignore
+                }
+                return;
+            }
+
+            chartsUpdateInProgress = true;
+            chartsUpdateQueued = false;
+            chartsAbortController = new AbortController();
+            const signal = chartsAbortController.signal;
+            let chartsDidUpdate = false;
+
+            const limitByTf = {
+                '1min': 1500,
+                '5min': 500,
+                '15min': 200,
+                '1h': 150,
+                '4h': 150,
+                '1d': 150
+            };
+            const reqLimit = limitByTf[currentTimeframe] || 200;
+            
+            try {
+                const chartResp = await fetch(
+                    `/api/market-data/charts/${currentInstrument}?timeframe=${currentTimeframe}&limit=${reqLimit}`,
+                    { signal }
+                );
+                if (!chartResp.ok) {
+                    console.warn('Chart data fetch failed', currentInstrument, currentTimeframe, chartResp.status);
+                    return;
+                }
+
+                const chartData = await chartResp.json();
+                const priceChart = chartData?.price_chart || {};
+                const indicatorsChartData = chartData?.indicators_chart || {};
+
+                const labels = Array.isArray(priceChart.labels) ? priceChart.labels : [];
+                const prices = Array.isArray(priceChart.prices) ? priceChart.prices : [];
+                const volumes = Array.isArray(priceChart.volumes_millions) ? priceChart.volumes_millions : [];
+                const oiSeries = Array.isArray(priceChart.oi) ? priceChart.oi : [];
+                const volumeLabel = priceChart.volume_label || 'Volume (M)';
+                const volumeAxisTitle = priceChart.volume_axis_title || 'Volume (M)';
+
+                // Price chart (update in place to avoid heavy destroy/recreate loops)
+                if (!bankniftyChart) {
+                    bankniftyChart = new Chart(document.getElementById('banknifty-chart'), {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: `${currentInstrument} (${currentTimeframe})`,
+                                data: prices,
+                                borderColor: 'rgb(59, 130, 246)',
+                                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                yAxisID: 'y',
+                                tension: 0.1
+                            }, {
+                                label: volumeLabel,
+                                data: volumes,
+                                borderColor: 'rgb(245, 101, 101)',
+                                backgroundColor: 'rgba(245, 101, 101, 0.1)',
+                                yAxisID: 'y1',
+                                type: 'bar',
+                                tension: 0.1
+                            }, {
+                                label: 'OI',
+                                data: oiSeries,
+                                borderColor: 'rgb(99, 102, 241)',
+                                backgroundColor: 'rgba(99, 102, 241, 0.08)',
+                                yAxisID: 'y2',
+                                tension: 0.1,
+                                spanGaps: true,
+                                pointRadius: 0
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            scales: {
+                                y: {
+                                    type: 'linear',
+                                    display: true,
+                                    position: 'left',
+                                    title: {
+                                        display: true,
+                                        text: 'Price'
+                                    },
+                                    beginAtZero: false
+                                },
+                                y1: {
+                                    type: 'linear',
+                                    display: true,
+                                    position: 'right',
+                                    title: {
+                                        display: true,
+                                        text: volumeAxisTitle
+                                    },
+                                    grid: {
+                                        drawOnChartArea: false,
+                                    }
+                                },
+                                y2: {
+                                    type: 'linear',
+                                    display: false,
+                                    position: 'right',
+                                    title: {
+                                        display: true,
+                                        text: 'OI'
+                                    },
+                                    grid: {
+                                        drawOnChartArea: false,
+                                    }
+                                }
+                            }
+                        }
+                    });
+                } else {
+                    bankniftyChart.data.labels = labels;
+                    bankniftyChart.data.datasets[0].label = `${currentInstrument} (${currentTimeframe})`;
+                    bankniftyChart.data.datasets[0].data = prices;
+                    if (bankniftyChart.data.datasets[1]) {
+                        bankniftyChart.data.datasets[1].label = volumeLabel;
+                        bankniftyChart.data.datasets[1].data = volumes;
+                    }
+                    if (bankniftyChart.data.datasets[2]) {
+                        bankniftyChart.data.datasets[2].data = oiSeries;
+                    }
+                    if (bankniftyChart.options?.scales?.y1?.title) {
+                        bankniftyChart.options.scales.y1.title.text = volumeAxisTitle;
+                    }
+                    bankniftyChart.update('none');
+                }
+
+                chartsDidUpdate = true;
+
+                const indicatorLabels = Array.isArray(indicatorsChartData.labels) ? indicatorsChartData.labels : [];
+                const chartRSI = Array.isArray(indicatorsChartData.rsi) ? indicatorsChartData.rsi : [];
+                const chartMACD = Array.isArray(indicatorsChartData.macd) ? indicatorsChartData.macd : [];
+                const chartSignal = Array.isArray(indicatorsChartData.signal) ? indicatorsChartData.signal : [];
+                const rsiPeriod = Number(indicatorsChartData.rsi_period || 14);
+                const macdLabel = indicatorsChartData.macd_label || 'MACD';
+                const macdSignalLabel = indicatorsChartData.macd_signal_label || 'MACD Signal';
+                const macdPoints = chartMACD.filter(v => v !== null && v !== undefined).length;
+
+                console.log(
+                    'Chart payload loaded - RSI points:',
+                    chartRSI.filter(v => v !== null && v !== undefined).length,
+                    'MACD points:',
+                    macdPoints
+                );
+
+                    if (!indicatorsChart) {
+                        indicatorsChart = new Chart(document.getElementById('indicators-chart'), {
+                            type: 'line',
+                            data: {
+                                labels: indicatorLabels,
+                                datasets: [{
+                                    label: `RSI (${rsiPeriod})`,
+                                    data: chartRSI,
+                                    borderColor: 'rgb(245, 101, 101)',
+                                    backgroundColor: 'rgba(245, 101, 101, 0.1)',
+                                    yAxisID: 'y',
+                                    tension: 0.1,
+                                    spanGaps: true
+                                }, {
+                                    label: macdLabel,
+                                    data: chartMACD,
+                                    borderColor: 'rgb(16, 185, 129)',
+                                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                                    yAxisID: 'y1',
+                                    tension: 0.1,
+                                    spanGaps: true
+                                }, {
+                                    label: macdSignalLabel,
+                                    data: chartSignal,
+                                    borderColor: 'rgb(59, 130, 246)',
+                                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                    yAxisID: 'y1',
+                                    tension: 0.1,
+                                    spanGaps: true
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                interaction: {
+                                    intersect: false,
+                                    mode: 'index'
+                                },
+                                scales: {
+                                    y: {
+                                        type: 'linear',
+                                        display: true,
+                                        position: 'left',
+                                        title: {
+                                            display: true,
+                                            text: 'RSI'
+                                        },
+                                        min: 0,
+                                        max: 100
+                                    },
+                                    y1: {
+                                        type: 'linear',
+                                        display: macdPoints > 0,
+                                        position: 'right',
+                                        title: {
+                                            display: true,
+                                            text: 'MACD'
+                                        },
+                                        grid: {
+                                            drawOnChartArea: false,
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    } else {
+                        indicatorsChart.data.labels = indicatorLabels;
+                        indicatorsChart.data.datasets[0].label = `RSI (${rsiPeriod})`;
+                        indicatorsChart.data.datasets[0].data = chartRSI;
+                        indicatorsChart.data.datasets[1].label = macdLabel;
+                        indicatorsChart.data.datasets[1].data = chartMACD;
+                        indicatorsChart.data.datasets[2].label = macdSignalLabel;
+                        indicatorsChart.data.datasets[2].data = chartSignal;
+                        if (indicatorsChart.options?.scales?.y1) {
+                            indicatorsChart.options.scales.y1.display = macdPoints > 0;
+                        }
+                        indicatorsChart.update('none');
+                    }
+                    
+                    // Fetch indicator snapshot when needed:
+                    // - always for higher timeframes (stream is primarily 1min)
+                    // - for 1min when stream is not connected
+                    // - for 1min even if stream is connected, when no recent indicator stream payload arrived
+                    const indicatorStreamFallbackMs = 15000;
+                    const indicatorStreamAgeMs = indicatorReducer.state.lastTsMs
+                        ? (Date.now() - Number(indicatorReducer.state.lastTsMs))
+                        : Number.POSITIVE_INFINITY;
+                    const shouldFetchIndicatorsViaRest =
+                        normalizeTimeframe(currentTimeframe) !== '1min' ||
+                        !(stompClient && stompClient.connected) ||
+                        !Number.isFinite(indicatorStreamAgeMs) ||
+                        indicatorStreamAgeMs > indicatorStreamFallbackMs;
+
+                    if (shouldFetchIndicatorsViaRest) {
+                        const indicatorsResponse = await fetch(`/api/market-data/indicators/${currentInstrument}?timeframe=${currentTimeframe}`, { signal });
+                        if (indicatorsResponse.ok) {
+                            const indicatorsData = await indicatorsResponse.json();
+                            indicatorReducer.apply(indicatorsData, 'rest', { force: true });
+                        }
+                    }
+            } catch (error) {
+                // Aborts are expected when new updates arrive quickly.
+                if (error && (error.name === 'AbortError' || String(error).includes('AbortError'))) {
+                    return;
+                }
+                console.error('Failed to update charts:', error);
+                // Keep last known card values (from WS or prior fetch) instead of overriding with errors.
+            } finally {
+                chartsUpdateInProgress = false;
+                chartsAbortController = null;
+
+                if (chartsDidUpdate) {
+                    lastChartsUpdateAt = Date.now();
+                }
+
+                if (chartsUpdateQueued) {
+                    chartsUpdateQueued = false;
+                    scheduleRealtimeRefresh(100);
+                }
+            }
+        }
+
+        function setTimeframe(tf) {
+            currentTimeframe = tf;
+            indicatorReducer.reset();
+            
+            // Update button styling
+            document.querySelectorAll('[id^="tf-"]').forEach(btn => {
+                btn.className = 'px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500';
+            });
+            document.getElementById(`tf-${tf}`).className = 'px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600';
+            
+            // Refresh charts
+            scheduleRealtimeRefresh(50);
+            console.log('Timeframe changed to:', tf);
+        }
+
+        function handleRedisMessage(data) {
+            // Handle incoming Redis pub/sub messages
+            const channel = data.channel;
+            const message = data.data;
+
+            if (channel === 'auth:status') {
+                // Authentication status update
+                handleAuthStatus(message);
+            } else if (channel.startsWith('market:ohlc:')) {
+                // OHLC data update - refresh charts
+                scheduleRealtimeRefresh(250);
+                scheduleStatusRefresh(1500);
+            } else if (channel.startsWith('indicators:')) {
+                // Indicators update - refresh indicators chart
+                try {
+                    indicatorReducer.apply(message, 'stream', { force: false });
+                } catch (e) {
+                    console.warn('Failed to apply WS indicator payload', e);
+                }
+                // Indicators may publish frequently; coalesce with normal chart refresh.
+                scheduleRealtimeRefresh(400);
+            } else if (channel.startsWith('market:tick:')) {
+                // Tick stream is intentionally ignored at UI level to keep WS stable.
+            } else if (channel.startsWith('market:depth:')) {
+                // Reserved for optional live depth push updates.
+            }
+        }
+
+        function handleAuthStatus(authData) {
+            console.log('Auth status update:', authData);
+            
+            const statusElement = document.getElementById('auth-status');
+            const statusIcon = document.getElementById('auth-status-icon');
+            
+            if (statusElement && statusIcon) {
+                // Update status text and styling based on auth status
+                switch (authData.status) {
+                    case 'authenticated':
+                        statusElement.textContent = 'Authenticated';
+                        statusElement.className = 'text-green-600';
+                        statusIcon.className = 'w-3 h-3 rounded-full mr-2 bg-green-500';
+                        break;
+                    case 'failed':
+                        statusElement.textContent = 'Authentication Failed';
+                        statusElement.className = 'text-red-600';
+                        statusIcon.className = 'w-3 h-3 rounded-full mr-2 bg-red-500';
+                        // Show alert for failed auth
+                        alert(`❌ ${authData.message}\n\n${authData.details?.action_required === 'manual_login' ? 'Please visit the authentication page to complete login.' : ''}`);
+                        break;
+                    case 'expired':
+                        statusElement.textContent = 'Token Expired';
+                        statusElement.className = 'text-yellow-600';
+                        statusIcon.className = 'w-3 h-3 rounded-full mr-2 bg-yellow-500';
+                        break;
+                    case 'pending':
+                        statusElement.textContent = 'Authenticating...';
+                        statusElement.className = 'text-blue-600';
+                        statusIcon.className = 'w-3 h-3 rounded-full mr-2 bg-blue-500';
+                        break;
+                    default:
+                        statusElement.textContent = 'Unknown Status';
+                        statusElement.className = 'text-gray-600';
+                        statusIcon.className = 'w-3 h-3 rounded-full mr-2 bg-gray-500';
+                }
+            }
+        }
+
+        function refreshData(includeSlow = true) {
+            fetchStatus();
+            if (includeSlow) {
+                refreshSlowDataForCurrentInstrument(true);
+            }
+            updateModeIndicator(); // Update mode badge
+        }
+
+        // Update mode indicator badge
+        async function updateModeIndicator() {
+            try {
+                const response = await fetch('/api/v1/system/mode');
+                if (!response.ok) {
+                    console.warn('Failed to fetch mode:', response.status);
+                    return;
+                }
+                
+                const data = await response.json();
+                const badge = document.getElementById('mode-badge');
+                const effectiveTime = document.getElementById('effective-time');
+                const effectiveTimeSecondary = document.getElementById('effective-time-secondary');
+                currentSystemMode = String(data.mode || 'unknown').toLowerCase();
+                
+                // Determine if we're in live mode
+                const isLive = data.mode === 'live' && !data.virtual_time_enabled;
+                
+                // Update badge with appropriate styling
+                const badgeClass = isLive ? 'bg-green-500' : 'bg-blue-500';
+                const icon = isLive 
+                    ? '<svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="4" class="animate-pulse"/></svg>'
+                    : '<svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z"/></svg>';
+                
+                const modeText = data.mode.toUpperCase();
+                const dateInfo = data.virtual_time ? ` (${data.virtual_time.split('T')[0]})` : '';
+                
+                badge.innerHTML = `
+                    <span class="inline-flex items-center px-4 py-2 rounded-full ${badgeClass} text-white font-semibold">
+                        ${icon}
+                        ${modeText}${dateInfo}
+                    </span>
+                `;
+                
+                // Update effective time display
+                if (data.effective_time) {
+                    const formattedEffective = formatDateTime(data.effective_time);
+                    if (effectiveTime) {
+                        effectiveTime.textContent = formattedEffective;
+                        effectiveTime.title = `System: ${formatDateTime(data.system_time)}\nMode: ${data.mode}\nVirtual Time: ${data.virtual_time_enabled ? 'Enabled' : 'Disabled'}`;
+                    }
+                    if (effectiveTimeSecondary) {
+                        effectiveTimeSecondary.textContent = formattedEffective;
+                        effectiveTimeSecondary.title = effectiveTime?.title || '';
+                    }
+                }
+
+                setMetaText('meta-mode', String(currentSystemMode || '--').toUpperCase());
+                const normalizeMode = (m) => {
+                    const v = String(m || '').trim().toLowerCase();
+                    return v === 'backtest' ? 'historical' : v;
+                };
+                
+                // Add mode mismatch warning if detected
+                if (data.redis_mode && normalizeMode(data.redis_mode) !== normalizeMode(data.mode)) {
+                    console.warn(`Mode mismatch: ENV=${data.mode}, Redis=${data.redis_mode}`);
+                    badge.innerHTML += `<span class="ml-2 text-xs text-yellow-300" title="Mode mismatch detected">⚠️</span>`;
+                }
+                
+            } catch (err) {
+                console.error('Failed to update mode indicator:', err);
+                const badge = document.getElementById('mode-badge');
+                badge.innerHTML = `
+                    <span class="inline-flex items-center px-4 py-2 rounded-full bg-red-500 text-white">
+                        <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                        </svg>
+                        ERROR
+                    </span>
+                `;
+            }
+        }
+
+        async function fetchMarketDepth() {
+            if (!currentInstrument) return;
+            
+            try {
+                const response = await fetch(`/api/market-data/depth/${currentInstrument}`);
+                if (response.ok) {
+                    const depthData = await response.json();
+                    console.log('Depth data:', depthData);
+                    
+                    updateDepthDisplay(depthData);
+                } else {
+                    console.error('Failed to fetch depth data');
+                }
+            } catch (error) {
+                console.error('Error fetching depth:', error);
+            }
+        }
+
+        function updateDepthDisplay(depthData) {
+            const buyOrdersEl = document.getElementById('depth-buy-orders');
+            const sellOrdersEl = document.getElementById('depth-sell-orders');
+            const depthTimestampEl = document.getElementById('depth-timestamp');
+            const depthFreshnessPill = document.getElementById('depth-freshness-pill');
+            const depthAgeInline = document.getElementById('depth-age-inline');
+            
+            // Update timestamp
+            if (depthData.timestamp) {
+                depthTimestampEl.textContent = formatTime(depthData.timestamp);
+            }
+
+            const depthAge = depthData.depth_age_seconds ?? depthData.age_seconds ?? depthData.age ?? null;
+            const depthStale = depthData.depth_is_stale ?? depthData.is_stale ?? false;
+            const depthThreshold = depthData.depth_stale_threshold_seconds ?? depthData.stale_threshold_seconds ?? null;
+            updateFreshnessCard('depth', depthAge, depthStale, depthThreshold);
+
+            if (depthFreshnessPill) {
+                depthFreshnessPill.textContent = depthStale ? 'Stale' : 'Live';
+                depthFreshnessPill.className = `px-2 py-1 rounded-full text-xs font-semibold ${depthStale ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`;
+            }
+
+            if (depthAgeInline) {
+                const ageNum = Number(depthAge);
+                depthAgeInline.textContent = Number.isFinite(ageNum) ? formatAgeSeconds(ageNum) : '--';
+            }
+            
+            // Update buy orders
+            if (depthData.buy && depthData.buy.length > 0) {
+                buyOrdersEl.innerHTML = depthData.buy.map(order => `
+                    <div class="grid grid-cols-3 text-sm border-b border-gray-100 py-1">
+                        <div class="font-mono text-green-600">${order.price > 0 ? order.price.toFixed(2) : '--'}</div>
+                        <div class="text-center">${order.quantity > 0 ? order.quantity : '--'}</div>
+                        <div class="text-right text-gray-600">${order.orders > 0 ? order.orders : '--'}</div>
+                    </div>
+                `).join('');
+            } else {
+                buyOrdersEl.innerHTML = '<div class="text-sm text-gray-500 py-4 text-center">No buy orders (historical mode)</div>';
+            }
+            
+            // Update sell orders
+            if (depthData.sell && depthData.sell.length > 0) {
+                sellOrdersEl.innerHTML = depthData.sell.map(order => `
+                    <div class="grid grid-cols-3 text-sm border-b border-gray-100 py-1">
+                        <div class="font-mono text-red-600">${order.price > 0 ? order.price.toFixed(2) : '--'}</div>
+                        <div class="text-center">${order.quantity > 0 ? order.quantity : '--'}</div>
+                        <div class="text-right text-gray-600">${order.orders > 0 ? order.orders : '--'}</div>
+                    </div>
+                `).join('');
+            } else {
+                sellOrdersEl.innerHTML = '<div class="text-sm text-gray-500 py-4 text-center">No sell orders (historical mode)</div>';
+            }
+        }
+
+        async function fetchOptionsChain() {
+            if (!currentInstrument) return;
+            
+            try {
+                const response = await fetch(`/api/market-data/options/${currentInstrument}`);
+                if (response.ok) {
+                    const optionsData = await response.json();
+                    console.log('Options data:', optionsData);
+                    
+                    updateOptionsDisplay(optionsData);
+                } else {
+                    console.error('Failed to fetch options data');
+                }
+            } catch (error) {
+                console.error('Error fetching options:', error);
+            }
+        }
+
+        function updateOptionsDisplay(optionsData) {
+            const optionsBodyEl = document.getElementById('options-chain-body');
+            const optionsStatusEl = document.getElementById('options-status');
+            const optionsPcrEl = document.getElementById('options-pcr');
+            const optionsMaxpainEl = document.getElementById('options-maxpain');
+            const optionsTimestampEl = document.getElementById('options-timestamp');
+            
+            // Update timestamp
+            if (optionsData.timestamp) {
+                optionsTimestampEl.textContent = formatTime(optionsData.timestamp);
+            }
+            
+            // Show status message
+            const modeHint = String(optionsData.mode_hint || currentSystemMode || 'unknown').toLowerCase();
+            if (optionsData.status === 'stale') {
+                optionsStatusEl.innerHTML = `
+                    <div class="bg-yellow-50 border border-yellow-200 rounded p-3 text-yellow-800">
+                        ⚠️ Showing last known options chain snapshot.${optionsData.warning ? ` (${optionsData.warning})` : ''}
+                    </div>
+                `;
+            } else if (optionsData.status === 'no_data' || optionsData.message) {
+                let message = optionsData.message;
+                if (!message) {
+                    message = modeHint === 'historical'
+                        ? 'Options chain data not available. This is normal for historical mode.'
+                        : `Options chain data is currently unavailable in ${modeHint.toUpperCase()} mode for this instrument.`;
+                }
+
+                // Guard against stale hardcoded historical message when the system is not historical.
+                if (modeHint !== 'historical' && /historical mode/i.test(message)) {
+                    message = `Options chain data is currently unavailable in ${modeHint.toUpperCase()} mode for this instrument.`;
+                }
+
+                optionsStatusEl.innerHTML = `
+                    <div class="bg-yellow-50 border border-yellow-200 rounded p-3 text-yellow-800">
+                        ℹ️ ${message}
+                    </div>
+                `;
+            } else if (optionsData.status === 'error') {
+                optionsStatusEl.innerHTML = `
+                    <div class="bg-red-50 border border-red-200 rounded p-3 text-red-800">
+                        ❌ Error loading options data: ${optionsData.error || 'Unknown error'}
+                    </div>
+                `;
+            } else {
+                optionsStatusEl.innerHTML = '';
+            }
+            
+            // Update PCR and max pain
+            if (optionsData.pcr) {
+                optionsPcrEl.textContent = optionsData.pcr.toFixed(2);
+            }
+            if (optionsData.max_pain) {
+                optionsMaxpainEl.textContent = optionsData.max_pain.toFixed(2);
+            }
+            
+            // Update options chain table
+            if (optionsData.strikes && optionsData.strikes.length > 0) {
+                optionsBodyEl.innerHTML = optionsData.strikes.map(strike => {
+                    // Support both nested format (CE/PE) and flattened format (ce_ltp/ce_oi/...)
+                    const ce = strike.CE || {
+                        last_price: strike.ce_ltp,
+                        oi: strike.ce_oi,
+                        volume: strike.ce_volume,
+                        iv: strike.ce_iv,
+                        delta: strike.ce_delta
+                    };
+                    const pe = strike.PE || {
+                        last_price: strike.pe_ltp,
+                        oi: strike.pe_oi,
+                        volume: strike.pe_volume,
+                        iv: strike.pe_iv,
+                        delta: strike.pe_delta
+                    };
+                    
+                    return `
+                        <tr class="text-xs border-b hover:bg-gray-50">
+                            <!-- Call options -->
+                            <td class="py-1 px-2">${ce.oi || '--'}</td>
+                            <td class="py-1 px-2">${ce.volume || '--'}</td>
+                            <td class="py-1 px-2 font-mono text-green-600">${ce.last_price ? ce.last_price.toFixed(2) : '--'}</td>
+                            <td class="py-1 px-2">${ce.iv ? (ce.iv * 100).toFixed(1) + '%' : '--'}</td>
+                            <td class="py-1 px-2">${ce.delta ? ce.delta.toFixed(2) : '--'}</td>
+                            <!-- Strike price -->
+                            <td class="py-1 px-2 bg-gray-100 font-bold text-center">${strike.strike}</td>
+                            <!-- Put options -->
+                            <td class="py-1 px-2">${pe.delta ? pe.delta.toFixed(2) : '--'}</td>
+                            <td class="py-1 px-2">${pe.iv ? (pe.iv * 100).toFixed(1) + '%' : '--'}</td>
+                            <td class="py-1 px-2 font-mono text-red-600">${pe.last_price ? pe.last_price.toFixed(2) : '--'}</td>
+                            <td class="py-1 px-2">${pe.volume || '--'}</td>
+                            <td class="py-1 px-2">${pe.oi || '--'}</td>
+                        </tr>
+                    `;
+                }).join('');
+            } else {
+                optionsBodyEl.innerHTML = `
+                    <tr>
+                        <td colspan="11" class="text-center py-8 text-gray-500">
+                            No options chain data available
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            connectWebSocket();
+            fetchStatus();
+            fetchMarketDepth();
+            fetchOptionsChain();
+            updateModeIndicator(); // Initial mode update
+            setInterval(fetchStatus, STATUS_POLL_MS);
+            setInterval(updateModeIndicator, STATUS_POLL_MS);
+            setInterval(fetchMarketDepth, DEPTH_POLL_MS);
+            setInterval(fetchOptionsChain, OPTIONS_POLL_MS);
+        });
+    </script>
+</body>
+</html>

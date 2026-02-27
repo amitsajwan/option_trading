@@ -1,0 +1,12 @@
+{
+  "instance_key": "a",
+  "profile_key": "t29_threshold_baseline",
+  "title": "T29 Threshold Baseline",
+  "summary": "Runner-aligned threshold profile with explicit CE/PE cutoffs.",
+  "description": "Use this when you want predictable runner behavior. Threshold policy is directly compatible with the current paper runner.",
+  "recommended": true,
+  "model_package": "ml_pipeline/artifacts/models/by_features/futures_options_only/t29_auto/model/model.joblib",
+  "threshold_report": "ml_pipeline/artifacts/models/by_features/futures_options_only/t29_auto/config/profiles/baseline/threshold_report.json",
+  "eval_summary_path": "ml_pipeline/artifacts/models/by_features/futures_options_only/t29_auto/reports/evaluation/eval_summary_baseline.json",
+  "training_report_path": "ml_pipeline/artifacts/models/by_features/futures_options_only/t29_auto/config/profiles/baseline/training_report.json"
+}

@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Model Catalog</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg0: #f3f7f4;
+            --bg1: #deece6;
+            --card: #ffffff;
+            --ink: #192126;
+            --muted: #5e6d77;
+            --line: #d5dde2;
+            --ok: #0f9d7a;
+            --warn: #c67812;
+            --bad: #cb4b3e;
+            --accent: #155e84;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            color: var(--ink);
+            font-family: "Space Grotesk", sans-serif;
+            background:
+                radial-gradient(circle at 8% 12%, #eaf7ee 0%, rgba(234, 247, 238, 0) 38%),
+                radial-gradient(circle at 92% 84%, #dbe9ff 0%, rgba(219, 233, 255, 0) 44%),
+                linear-gradient(170deg, var(--bg0), var(--bg1));
+            min-height: 100vh;
+        }
+
+        .page {
+            max-width: 1380px;
+            margin: 0 auto;
+            padding: 22px;
+            display: grid;
+            gap: 14px;
+        }
+
+        .panel {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            box-shadow: 0 10px 28px rgba(23, 35, 49, 0.07);
+        }
+
+        .hero {
+            padding: 18px 20px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .hero h1 {
+            margin: 0;
+            font-size: 30px;
+        }
+        .sub {
+            margin-top: 6px;
+            color: var(--muted);
+            font-size: 14px;
+            max-width: 860px;
+        }
+        .hero-links {
+            display: inline-flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .hero-links a {
+            text-decoration: none;
+            height: 36px;
+            padding: 0 12px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            color: var(--ink);
+            background: #f7fafc;
+            display: inline-flex;
+            align-items: center;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .summary {
+            padding: 0 20px 18px;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(120px, 1fr));
+            gap: 10px;
+        }
+        .stat {
+            border: 1px dashed var(--line);
+            border-radius: 12px;
+            padding: 10px 12px;
+        }
+        .stat .k {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+        .stat .v {
+            margin-top: 3px;
+            font-size: 22px;
+            font-family: "IBM Plex Mono", monospace;
+            font-weight: 600;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
+            gap: 12px;
+        }
+
+        .card {
+            padding: 14px;
+            display: grid;
+            gap: 10px;
+        }
+        .card.ready {
+            border-left: 5px solid #1c9f7b;
+        }
+        .card.warn {
+            border-left: 5px solid #cf7f19;
+        }
+        .head {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            align-items: flex-start;
+        }
+        .title {
+            font-size: 18px;
+            margin: 0;
+        }
+        .desc {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+        .chips {
+            display: inline-flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .chip {
+            height: 24px;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            padding: 0 9px;
+            border: 1px solid var(--line);
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .chip.rec { background: #e8f7f0; color: #0f7d5f; border-color: #bbe6d4; }
+        .chip.key { background: #eef5ff; color: #2b5e8b; border-color: #cfe2f5; }
+        .chip.src { background: #fff7ea; color: #9d6215; border-color: #f0debe; }
+        .chip.bad { background: #ffeceb; color: #a93f31; border-color: #f3c8c3; }
+        .chip.good { background: #e9f7f2; color: #0f7d5f; border-color: #bbe6d4; }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(100px, 1fr));
+            gap: 8px;
+        }
+        .metric {
+            border: 1px dashed var(--line);
+            border-radius: 10px;
+            padding: 8px;
+        }
+        .metric .k {
+            font-size: 10px;
+            color: var(--muted);
+            text-transform: uppercase;
+        }
+        .metric .v {
+            margin-top: 3px;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .paths {
+            background: #fbfdff;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 8px 10px;
+            display: grid;
+            gap: 5px;
+            font-size: 12px;
+        }
+        .path-row {
+            display: grid;
+            grid-template-columns: 130px 1fr auto;
+            gap: 8px;
+            align-items: center;
+        }
+        code {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 12px;
+            overflow-wrap: anywhere;
+        }
+        .ok { color: var(--ok); font-weight: 700; }
+        .miss { color: var(--bad); font-weight: 700; }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .actions a {
+            text-decoration: none;
+            height: 34px;
+            padding: 0 11px;
+            border-radius: 10px;
+            display: inline-flex;
+            align-items: center;
+            font-size: 12px;
+            font-weight: 700;
+            border: 1px solid var(--line);
+        }
+        .a-primary {
+            background: linear-gradient(135deg, #0d8a6a, #155e84);
+            color: #fff;
+            border: 0;
+        }
+        .a-secondary {
+            background: #f7fafc;
+            color: #30414b;
+        }
+
+        @media (max-width: 860px) {
+            .summary { grid-template-columns: 1fr; }
+            .grid { grid-template-columns: 1fr; }
+            .metric-grid { grid-template-columns: 1fr 1fr; }
+            .path-row { grid-template-columns: 1fr; gap: 2px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <section class="panel">
+            <div class="hero">
+                <div>
+                    <h1>Trading Model Catalog</h1>
+                    <div class="sub">
+                        Pick a model profile based on training coverage, OOS behavior, and threshold policy.
+                        Each card launches its own isolated terminal instance so you can test models in parallel.
+                    </div>
+                </div>
+                <div class="hero-links">
+                    <a href="/">Dashboard</a>
+                    <a href="/trading">Trading Terminal</a>
+                    <a href="/api/trading/models" target="_blank" rel="noopener">Catalog API</a>
+                </div>
+            </div>
+            <div class="summary">
+                <div class="stat"><div class="k">Total Models</div><div class="v">{{ summary.total }}</div></div>
+                <div class="stat"><div class="k">Ready To Run</div><div class="v">{{ summary.ready }}</div></div>
+                <div class="stat"><div class="k">Recommended</div><div class="v">{{ summary.recommended }}</div></div>
+            </div>
+        </section>
+
+        <section class="grid">
+            {% for model in models %}
+            <article class="panel card {% if model.ready_to_run %}ready{% else %}warn{% endif %}">
+                <div class="head">
+                    <div>
+                        <h2 class="title">{{ model.title }}</h2>
+                        <p class="desc">{{ model.summary }}</p>
+                        <p class="desc">{{ model.description }}</p>
+                    </div>
+                    <div class="chips">
+                        <span class="chip key">{{ model.instance_key }}</span>
+                        <span class="chip src">{{ model.source }}</span>
+                        {% if model.recommended %}<span class="chip rec">recommended</span>{% endif %}
+                        {% if model.ready_to_run %}
+                        <span class="chip good">ready</span>
+                        {% else %}
+                        <span class="chip bad">needs setup</span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="metric-grid">
+                    <div class="metric">
+                        <div class="k">Coverage</div>
+                        <div class="v">
+                            {{ model.metrics.training_coverage_start or "--" }}
+                            to
+                            {{ model.metrics.training_coverage_end or "--" }}
+                        </div>
+                    </div>
+                    <div class="metric">
+                        <div class="k">Full OOS Win %</div>
+                        <div class="v">
+                            {% if model.metrics.full_oos_win_rate is not none %}{{ "%.2f"|format(model.metrics.full_oos_win_rate) }}%{% else %}--{% endif %}
+                        </div>
+                    </div>
+                    <div class="metric">
+                        <div class="k">Latest Slice Win %</div>
+                        <div class="v">
+                            {% if model.metrics.latest_oos_win_rate is not none %}{{ "%.2f"|format(model.metrics.latest_oos_win_rate) }}%{% else %}--{% endif %}
+                        </div>
+                    </div>
+                    <div class="metric">
+                        <div class="k">CE Threshold</div>
+                        <div class="v">{% if model.metrics.ce_threshold is not none %}{{ "%.3f"|format(model.metrics.ce_threshold) }}{% else %}--{% endif %}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="k">PE Threshold</div>
+                        <div class="v">{% if model.metrics.pe_threshold is not none %}{{ "%.3f"|format(model.metrics.pe_threshold) }}{% else %}--{% endif %}</div>
+                    </div>
+                    <div class="metric">
+                        <div class="k">Policy Mode</div>
+                        <div class="v">{{ model.metrics.policy_mode or "--" }}</div>
+                    </div>
+                </div>
+
+                <div class="paths">
+                    <div class="path-row">
+                        <span>Model Package</span>
+                        <code>{{ model.model_package or "--" }}</code>
+                        <span class="{% if model.exists.model_package %}ok{% else %}miss{% endif %}">
+                            {% if model.exists.model_package %}found{% else %}missing{% endif %}
+                        </span>
+                    </div>
+                    <div class="path-row">
+                        <span>Threshold Report</span>
+                        <code>{{ model.threshold_report or "--" }}</code>
+                        <span class="{% if model.exists.threshold_report %}ok{% else %}miss{% endif %}">
+                            {% if model.exists.threshold_report %}found{% else %}missing{% endif %}
+                        </span>
+                    </div>
+                    <div class="path-row">
+                        <span>Eval Summary</span>
+                        <code>{{ model.eval_summary_path or "--" }}</code>
+                        <span class="{% if model.exists.eval_summary_path %}ok{% else %}miss{% endif %}">
+                            {% if model.exists.eval_summary_path %}found{% else %}missing{% endif %}
+                        </span>
+                    </div>
+                    <div class="path-row">
+                        <span>Training Report</span>
+                        <code>{{ model.training_report_path or "--" }}</code>
+                        <span class="{% if model.exists.training_report_path %}ok{% else %}miss{% endif %}">
+                            {% if model.exists.training_report_path %}found{% else %}missing{% endif %}
+                        </span>
+                    </div>
+                </div>
+
+                <div class="desc"><strong>Runner compatibility:</strong> {{ model.compatibility_note or "No compatibility note." }}</div>
+
+                {% if model.missing_required %}
+                <div class="desc"><strong>Missing required:</strong> {{ model.missing_required | join(", ") }}</div>
+                {% endif %}
+
+                <div class="actions">
+                    <a class="a-primary" href="{{ model.prefill_url }}" target="_blank" rel="noopener">Open Prefilled Terminal</a>
+                    <a class="a-secondary" href="{{ model.launch_url }}" target="_blank" rel="noopener">Open By Instance</a>
+                    {% if model.evaluation_api_url %}
+                    <a class="a-secondary" href="{{ model.evaluation_api_url }}" target="_blank" rel="noopener">Open Eval JSON</a>
+                    {% endif %}
+                </div>
+            </article>
+            {% endfor %}
+        </section>
+    </div>
+</body>
+</html>
