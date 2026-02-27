@@ -96,11 +96,11 @@ sequenceDiagram
 
 ## 7) What To Read Next
 
-1. [PROCESS_TOPOLOGY.md](/c:/code/market/PROCESS_TOPOLOGY.md) for exact run/start/stop commands.
+1. [PROCESS_TOPOLOGY.md](PROCESS_TOPOLOGY.md) for exact run/start/stop commands.
 2. Service docs:
-   - [ingestion_app/README.md](/c:/code/market/ingestion_app/README.md)
-   - [snapshot_app/README.md](/c:/code/market/snapshot_app/README.md)
-   - [persistence_app/README.md](/c:/code/market/persistence_app/README.md)
-   - [strategy_app/README.md](/c:/code/market/strategy_app/README.md)
+   - [ingestion_app/README.md](ingestion_app/README.md)
+   - [snapshot_app/README.md](snapshot_app/README.md)
+   - [persistence_app/README.md](persistence_app/README.md)
+   - [strategy_app/README.md](strategy_app/README.md)
 3. Historical snapshot build guide:
-   - [snapshot_app/historical/README.md](/c:/code/market/snapshot_app/historical/README.md)
+   - [snapshot_app/historical/README.md](snapshot_app/historical/README.md)

@@ -4,8 +4,8 @@ This repo is a microservice-based trading data platform with live and historical
 
 If you are new, follow this reading order:
 
-1. [ARCHITECTURE.md](/c:/code/market/ARCHITECTURE.md)
-2. [PROCESS_TOPOLOGY.md](/c:/code/market/PROCESS_TOPOLOGY.md)
+1. [ARCHITECTURE.md](ARCHITECTURE.md)
+2. [PROCESS_TOPOLOGY.md](PROCESS_TOPOLOGY.md)
 3. Service-level READMEs (linked below)
 
 ## Services
@@ -65,8 +65,8 @@ python -m stop_apps --include-dashboard
 
 ## Service Docs
 
-- [ingestion_app/README.md](/c:/code/market/ingestion_app/README.md)
-- [snapshot_app/README.md](/c:/code/market/snapshot_app/README.md)
-- [persistence_app/README.md](/c:/code/market/persistence_app/README.md)
-- [strategy_app/README.md](/c:/code/market/strategy_app/README.md)
-- [market_data_dashboard/README.md](/c:/code/market/market_data_dashboard/README.md)
+- [ingestion_app/README.md](ingestion_app/README.md)
+- [snapshot_app/README.md](snapshot_app/README.md)
+- [persistence_app/README.md](persistence_app/README.md)
+- [strategy_app/README.md](strategy_app/README.md)
+- [market_data_dashboard/README.md](market_data_dashboard/README.md)
