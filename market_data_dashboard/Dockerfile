@@ -8,11 +8,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY market_data_dashboard/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Copy application code
-COPY . .
+# Copy application code + shared packages used by dashboard
+COPY market_data_dashboard /app/market_data_dashboard
+COPY contracts_app /app/contracts_app
+COPY ingestion_app /app/ingestion_app
+COPY redis_key_manager.py /app/redis_key_manager.py
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app \
@@ -27,4 +30,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8008/api/health', timeout=5)"
 
 # Run the application
+WORKDIR /app/market_data_dashboard
+ENV PYTHONPATH=/app
 CMD ["python", "app.py"]

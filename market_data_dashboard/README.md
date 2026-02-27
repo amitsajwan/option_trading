@@ -3,9 +3,9 @@
 Frontend + backend dashboard service for status monitoring, charts, and Redis-to-browser streaming.
 
 For quick run commands by scenario, see `../README.md`.
-For explicit mode/source execution instructions, see `../RUN_MODES_GUIDE.md`.
+For startup and run instructions, see `../PROCESS_TOPOLOGY.md`.
 **For GenAI agent data integration**, see `../GENAI_AGENT_DATA_REFERENCE.md`.
-For stream topology and timestamp lineage, see `../market_data/src/market_data/EVENT_DERIVATION_CONTRACT.md`.
+For stream topology and timestamp lineage, see `../PROCESS_TOPOLOGY.md`.
 
 ## What this service does
 

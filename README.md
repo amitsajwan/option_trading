@@ -1,38 +1,72 @@
-# option_trading
+# BankNifty Options Algo - Repo Guide
 
-Architecture-first repository for the BankNifty options system.
+This repo is a microservice-based trading data platform with live and historical snapshot pipelines.
 
-Included modules:
-- `contracts_app`
-- `ingestion_app`
-- `snapshot_app` (live + historical snapshot pipeline)
-- `persistence_app`
-- `strategy_app`
-- `market_data_dashboard`
-- `ml_pipeline`
-- `docker-compose.yml` and compose env template
+If you are new, follow this reading order:
 
-Intentionally excluded:
-- `scripts/`
-- cache/log/run artifacts
-- local data/artifacts
-- secrets (`credentials.json`, `.env`)
+1. [ARCHITECTURE.md](/c:/code/market/ARCHITECTURE.md)
+2. [PROCESS_TOPOLOGY.md](/c:/code/market/PROCESS_TOPOLOGY.md)
+3. Service-level READMEs (linked below)
 
-## Quick start
+## Services
 
-1. Copy env template:
-   - `cp .env.compose.example .env.compose`
-2. Start core stack:
-   - `python -m start_apps`
-3. Start core stack plus dashboard:
-   - `python -m start_apps --include-dashboard`
-4. Stop stack:
-   - `python -m stop_apps`
+- `ingestion_app`: market data API + session-aware live runner
+- `snapshot_app`: builds and publishes canonical MarketSnapshot (MSS.1-MSS.9)
+- `persistence_app`: consumes snapshot events and writes to MongoDB
+- `strategy_app`: consumes snapshots for deterministic/ML strategy logic
+- `market_data_dashboard` (optional): UI + monitoring APIs
+- `contracts_app`: shared contracts (topics/events/session/math)
 
-See full process topology and commands in:
-- `PROCESS_TOPOLOGY.md`
+## Runtime Profiles
 
-## Notes
+- Baseline live stack: `redis`, `mongo`, `ingestion_app`, `snapshot_app`, `persistence_app`, `strategy_app`
+- Optional dashboard profile: `dashboard`
+- Optional historical replay profile: `historical_replay`
 
-- This repo is curated to keep only architecture-related components.
-- Legacy runtime folders and generated data are intentionally not tracked.
+## Quick Start (Docker Compose)
+
+```bash
+cp .env.compose.example .env.compose
+docker compose --env-file .env.compose up -d --build redis mongo ingestion_app snapshot_app persistence_app strategy_app
+```
+
+Optional dashboard:
+
+```bash
+docker compose --env-file .env.compose --profile ui up -d dashboard
+```
+
+Optional historical replay:
+
+```bash
+docker compose --env-file .env.compose --profile historical up historical_replay
+```
+
+## Local Start (No Compose)
+
+Use one local launcher path:
+
+```bash
+python -m start_apps --include-dashboard
+```
+
+Stop:
+
+```bash
+python -m stop_apps --include-dashboard
+```
+
+## Key Runtime Rules
+
+- Session-gated live processing (IST market hours).
+- Fail-closed token behavior (invalid/missing token keeps ingestion idle).
+- Live and historical topics are isolated.
+- Snapshot builder contract is centralized in `snapshot_app.market_snapshot`.
+
+## Service Docs
+
+- [ingestion_app/README.md](/c:/code/market/ingestion_app/README.md)
+- [snapshot_app/README.md](/c:/code/market/snapshot_app/README.md)
+- [persistence_app/README.md](/c:/code/market/persistence_app/README.md)
+- [strategy_app/README.md](/c:/code/market/strategy_app/README.md)
+- [market_data_dashboard/README.md](/c:/code/market/market_data_dashboard/README.md)

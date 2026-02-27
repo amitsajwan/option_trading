@@ -1,4 +1,4 @@
-"""Shared environment resolution helpers for market_data services."""
+"""Shared environment resolution helpers for ingestion services."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ except Exception:  # pragma: no cover
 def _detect_repo_root() -> Path:
     current = Path(__file__).resolve()
     for parent in current.parents:
-        if (parent / "market_data" / "src").exists():
+        if (parent / "ingestion_app").exists() and (parent / "snapshot_app").exists():
             return parent
     return current.parents[1]
 
@@ -28,7 +28,7 @@ def _load_dotenv_candidates() -> None:
     candidates = [
         Path.cwd() / ".env",
         repo_root / ".env",
-        repo_root / "market_data" / ".env",
+        repo_root / "ingestion_app" / ".env",
         repo_root / "market_data_dashboard" / ".env",
     ]
     seen = set()
@@ -104,8 +104,7 @@ def mongo_config() -> dict:
 
 
 def credentials_path_candidates(filename: str = "credentials.json") -> list[Path]:
-    runtime_file = Path(__file__).resolve()
-    repo_root = runtime_file.parents[3]  # trading_ai/
+    repo_root = _detect_repo_root()
     explicit = env_str("KITE_CREDENTIALS_PATH")
     paths: list[Path] = []
     if explicit:
@@ -114,7 +113,6 @@ def credentials_path_candidates(filename: str = "credentials.json") -> list[Path
         [
             Path.cwd() / filename,
             repo_root / filename,
-            repo_root / "market_data" / filename,
         ]
     )
 

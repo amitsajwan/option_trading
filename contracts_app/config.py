@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover - optional dependency at runtime
 def _detect_repo_root() -> Path:
     current = Path(__file__).resolve()
     for parent in current.parents:
-        if (parent / "market_data" / "src").exists():
+        if (parent / "ingestion_app").exists() and (parent / "snapshot_app").exists():
             return parent
     return current.parents[1]
 
@@ -26,7 +26,8 @@ def _load_dotenv_candidates() -> None:
     candidates = [
         Path.cwd() / ".env",
         repo_root / ".env",
-        repo_root / "market_data" / ".env",
+        repo_root / "ingestion_app" / ".env",
+        repo_root / "snapshot_app" / ".env",
     ]
     seen: set[str] = set()
     for path in candidates:

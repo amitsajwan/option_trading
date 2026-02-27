@@ -10,8 +10,9 @@ Shared contracts for inter-process communication.
 - `topics.py`: topic resolvers (for example `snapshot_topic()`).
 - `events.py`: event envelope builders/parsers (`market_snapshot` v1.0).
 - `config.py`: shared process-app config contracts (for example `redis_connection_kwargs()`).
-  - Loads `.env` from current working directory, repo root, and `market_data/.env` (without overriding existing shell vars).
+  - Loads `.env` from current working directory, repo root, and app-local env files (without overriding existing shell vars).
   - Supports `for_pubsub=True` to disable read timeout for long-lived Redis subscribers.
+- `options_math.py`: shared Black-Scholes pricing and Greeks helpers for dashboard/analytics use.
 - `market_session.py`: shared IST market-session gate helpers:
   - `is_trading_day_ist(...)`
   - `is_market_open_ist(...)`

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ingestion runner (supervisor) that spawns market-data server, collectors, and historical replayer as separate processes.
+"""Ingestion runner (supervisor) that spawns ingestion API, collectors, and historical replayer as separate processes.
 
 Usage examples:
   python -m ingestion_app.runner --mode live --start-collectors
@@ -44,7 +44,7 @@ def main():
 
     # Run diagnostics if requested
     if args.diagnostics:
-        print('[INFO] Running market_data diagnostics...')
+        print('[INFO] Running ingestion diagnostics...')
         from .diagnostics import print_diagnostics
         print_diagnostics()
         return
@@ -54,7 +54,7 @@ def main():
     try:
         # Validate dependencies before starting anything
         if not args.skip_validation:
-            print('[INFO] Validating market_data dependencies...')
+            print('[INFO] Validating ingestion dependencies...')
             from .dependency_validator import validate_dependencies
 
             if not validate_dependencies():
@@ -64,20 +64,20 @@ def main():
             print('[OK] All dependencies validated successfully')
         else:
             print('[WARN] Skipping dependency validation (--skip-validation used)')
-        # Start the market-data API server (always)
+        # Start the ingestion API server (always)
         if not args.no_server:
-            server_cmd = [PYTHON, '-m', 'market_data.api_service']
-            server_proc = start_process('Market Data API', server_cmd)
-            procs.append(('Market Data API', server_proc))
+            server_cmd = [PYTHON, '-m', 'ingestion_app.api_service']
+            server_proc = start_process('Ingestion API', server_cmd)
+            procs.append(('Ingestion API', server_proc))
 
             # Wait for health (increased timeout for dependency validation during startup)
             ok = wait_for_http('http://127.0.0.1:8004/health', timeout=60)
             if not ok:
-                print('[ERROR] Market Data API failed to become healthy within 60 seconds')
+                print('[ERROR] Ingestion API failed to become healthy within 60 seconds')
                 print('[INFO] This may indicate a dependency issue - check logs above')
                 print('[INFO] Run with --diagnostics for detailed troubleshooting')
                 raise SystemExit(1)
-            print(_sanitize_for_console('   [OK] Market Data API healthy'))
+            print(_sanitize_for_console('   [OK] Ingestion API healthy'))
 
         if args.mode == 'live':
             if args.start_collectors:
@@ -87,24 +87,13 @@ def main():
 
                 # If not ok and prompt-login requested, try interactive login
                 if not ok and args.prompt_login and not use_mock:
-                    print('[INFO] Prompt-login requested; attempting interactive login...')
-                    try:
-                        from market_data.tools.kite_auth_service import KiteAuthService
-                        svc = KiteAuthService()
-                        success = svc.trigger_interactive_login(timeout=300)
-                        if success:
-                            print(_sanitize_for_console('   [OK] Interactive login succeeded; re-checking credentials...'))
-                            ok, msg = check_zerodha_credentials()
-                        else:
-                            print('[WARN] Interactive login did not complete or failed')
-                    except Exception as e:
-                        print(f'[WARN] Interactive login failed: {e}')
+                    print('[WARN] Interactive login is not available in ingestion_app runner; refresh credentials.json manually')
 
                 if not ok and not use_mock:
                     print('[ERROR] Cannot start collectors: Zerodha credentials not valid or missing')
                     print('   💡 Fix options:')
                     print('      - Ensure KITE_API_KEY and KITE_ACCESS_TOKEN are set in environment')
-                    print('      - Run: python -m market_data.tools.kite_auth to generate credentials interactively')
+                    print('      - Run your manual Kite login flow and refresh credentials.json')
                     print('      - Or set USE_MOCK_KITE=1 to use the mock provider for testing')
                     if msg:
                         print(f'[INFO] Details: {msg}')
@@ -114,16 +103,7 @@ def main():
                 if not use_mock:
                     pre_ok, pre_reason, pre_detail = kite_startup_preflight(attempts=2, base_delay_sec=1.0)
                     if not pre_ok and pre_reason == 'credential' and args.prompt_login:
-                        print('[WARN] Live preflight detected invalid credentials; attempting automatic re-login...')
-                        try:
-                            from market_data.tools.kite_auth_service import KiteAuthService
-                            svc = KiteAuthService()
-                            if svc.trigger_interactive_login(timeout=300):
-                                pre_ok, pre_reason, pre_detail = kite_startup_preflight(attempts=2, base_delay_sec=1.0)
-                        except Exception as e:
-                            pre_ok = False
-                            pre_reason = 'credential'
-                            pre_detail = f'Interactive login failed: {e}'
+                        print('[WARN] Prompt login requested but interactive auth is not wired in ingestion_app')
 
                     if not pre_ok:
                         if pre_reason == 'network':
@@ -140,17 +120,19 @@ def main():
                 # Pass Zerodha credentials to collectors
                 collector_env = build_collector_env(os.environ.copy())
 
-                websocket_cmd = [PYTHON, '-m', 'ingestion_app.collectors.websocket_tick_collector']
-                ltp_cmd = [PYTHON, '-m', 'ingestion_app.collectors.ltp_collector']
-                depth_cmd = [PYTHON, '-m', 'ingestion_app.collectors.depth_collector']
-                websocket_proc = start_process('WebSocket Tick Collector', websocket_cmd, env=collector_env)
-                ltp_proc = start_process('LTP Processor', ltp_cmd, env=collector_env)
-                depth_proc = start_process('Depth Collector', depth_cmd, env=collector_env)
-                procs.extend([('WebSocket Tick Collector', websocket_proc), ('LTP Processor', ltp_proc), ('Depth Collector', depth_proc)])
-
-                # Wait a little for collectors to seed data into Redis
-                print('   [*] Waiting briefly for collectors to seed data (5s)...')
-                time.sleep(5)
+                collectors_enabled = str(os.getenv('INGESTION_COLLECTORS_ENABLED', '0')).strip().lower() in ('1', 'true', 'yes', 'on')
+                if collectors_enabled:
+                    websocket_cmd = [PYTHON, '-m', 'ingestion_app.collectors.websocket_tick_collector']
+                    ltp_cmd = [PYTHON, '-m', 'ingestion_app.collectors.ltp_collector']
+                    depth_cmd = [PYTHON, '-m', 'ingestion_app.collectors.depth_collector']
+                    websocket_proc = start_process('WebSocket Tick Collector', websocket_cmd, env=collector_env)
+                    ltp_proc = start_process('LTP Processor', ltp_cmd, env=collector_env)
+                    depth_proc = start_process('Depth Collector', depth_cmd, env=collector_env)
+                    procs.extend([('WebSocket Tick Collector', websocket_proc), ('LTP Processor', ltp_proc), ('Depth Collector', depth_proc)])
+                    print('   [*] Waiting briefly for collectors to seed data (5s)...')
+                    time.sleep(5)
+                else:
+                    print('[INFO] Collectors disabled (INGESTION_COLLECTORS_ENABLED=0); serving data via ingestion API on-demand')
 
         elif args.mode in ('historical', 'mock'):
             # Start historical runner as a separate process.
@@ -181,7 +163,7 @@ def main():
                     print('[ERROR] Zerodha historical replay requested but credentials/token are missing or invalid')
                     print('   💡 Fix options:')
                     print('      - Set KITE_API_KEY and KITE_ACCESS_TOKEN in environment')
-                    print('      - Or run: python -m market_data.tools.kite_auth (interactive login)')
+                    print('      - Refresh credentials.json with a valid access_token')
                     if msg:
                         print(f'[INFO] Details: {msg}')
                     raise SystemExit(1)
@@ -189,17 +171,7 @@ def main():
                 # Dedicated preflight: classify early failure as network vs credential.
                 pre_ok, pre_reason, pre_detail = kite_startup_preflight(attempts=2, base_delay_sec=1.0)
                 if not pre_ok and pre_reason == 'credential' and args.prompt_login:
-                    print('[WARN] Kite preflight detected invalid credentials; attempting automatic re-login...')
-                    try:
-                        from market_data.tools.kite_auth_service import KiteAuthService
-
-                        svc = KiteAuthService()
-                        if svc.trigger_interactive_login(timeout=300):
-                            pre_ok, pre_reason, pre_detail = kite_startup_preflight(attempts=2, base_delay_sec=1.0)
-                    except Exception as e:
-                        pre_ok = False
-                        pre_reason = 'credential'
-                        pre_detail = f'Interactive login failed: {e}'
+                    print('[WARN] Prompt login requested but interactive auth is not wired in ingestion_app')
 
                 if not pre_ok:
                     if pre_reason == 'network':
@@ -234,7 +206,7 @@ def main():
                 else:
                     # Fallback to API tick endpoint
                     if wait_for_http('http://127.0.0.1:8004/api/v1/market/tick/BANKNIFTY', timeout=60):
-                        print(_sanitize_for_console('   [OK] Historical data available via Market Data API'))
+                        print(_sanitize_for_console('   [OK] Historical data available via Ingestion API'))
                     else:
                         if requested_source == 'zerodha':
                             print('[ERROR] Zerodha historical replay did not produce data within timeout (fail-fast)')
@@ -247,9 +219,9 @@ def main():
                     if requested_source == 'zerodha':
                         print('[ERROR] Zerodha historical replay did not produce data within timeout (fail-fast)')
                         raise SystemExit(1)
-                    print('[WARN] Historical data not found at Market Data API within timeout')
+                    print('[WARN] Historical data not found at Ingestion API within timeout')
                 else:
-                    print('   ✅ Historical data available via Market Data API')
+                    print('   ✅ Historical data available via Ingestion API')
 
         # Keep supervisor running until Ctrl+C
         print('\nSupervisor running. Press Ctrl+C to stop all spawned processes.')

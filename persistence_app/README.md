@@ -41,12 +41,12 @@ Consumes snapshot events and persists them to MongoDB.
 - PowerShell wrappers:
   - `persistence_app/start.ps1`
   - `persistence_app/stop.ps1`
-- Docker:
-  - `persistence_app/Dockerfile`
+  - Docker:
+    - `persistence_app/Dockerfile`
   - Build from repo root:
     - `docker build -f persistence_app/Dockerfile -t persistence_app:local .`
   - Run:
-    - `docker run --rm -it --name persistence_app --env-file market_data/.env persistence_app:local`
+    - `docker run --rm -it --name persistence_app --env-file .env persistence_app:local`
 
 ## Compose Runtime Notes
 - Use foreground consumer in containers:

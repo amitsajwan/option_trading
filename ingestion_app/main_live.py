@@ -22,16 +22,7 @@ def _ist_now_iso() -> str:
 
 
 def _build_runtime_env() -> dict[str, str]:
-    env = os.environ.copy()
-    # Transitional compatibility while market_data package still lives under market_data/src.
-    src_root = (Path(__file__).resolve().parents[1] / "market_data" / "src").resolve()
-    if src_root.exists():
-        src_text = str(src_root)
-        current = str(env.get("PYTHONPATH") or "")
-        parts = [p for p in current.split(os.pathsep) if p] if current else []
-        if src_text not in parts:
-            env["PYTHONPATH"] = src_text if not current else f"{src_text}{os.pathsep}{current}"
-    return env
+    return os.environ.copy()
 
 
 def _detached_popen_kwargs() -> dict:

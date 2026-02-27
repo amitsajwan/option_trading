@@ -50,6 +50,7 @@ services:
       MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
       NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
       IDLE_SLEEP_SECONDS: "${IDLE_SLEEP_SECONDS:-60}"
+      INGESTION_COLLECTORS_ENABLED: "${INGESTION_COLLECTORS_ENABLED:-0}"
       LIVE_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
       HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
       SNAPSHOT_V1_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
@@ -252,8 +253,8 @@ services:
   dashboard:
     profiles: ["ui"]
     build:
-      context: ./market_data_dashboard
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: market_data_dashboard/Dockerfile
     restart: unless-stopped
     depends_on:
       ingestion_app:
@@ -265,6 +266,7 @@ services:
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
       INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26MARFUT}"
+      MARKET_DATA_API_URL: "http://ingestion_app:8004"
     ports:
       - "${DASHBOARD_PORT:-8008}:8008"
 

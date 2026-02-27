@@ -65,7 +65,7 @@ python -m ml_pipeline.execution_simulator_v2 --events-jsonl ml_pipeline\artifact
 
 For run-mode driven simulation:
 
-1. Start system with historical/local replay (clock semantics) as documented in `RUN_MODES_GUIDE.md`.
+1. Start system with historical/local replay as documented in `PROCESS_TOPOLOGY.md`.
 2. Emit decision events via `live_inference_adapter` (live API or replay modes).
 3. Run T30 with `--market-source api` to consume current dashboard options/depth snapshots.
 

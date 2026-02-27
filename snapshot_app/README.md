@@ -41,12 +41,12 @@ Builds and publishes canonical `MarketSnapshot` (MSS.1-MSS.9) events.
 - PowerShell wrappers:
   - `snapshot_app/start.ps1`
   - `snapshot_app/stop.ps1`
-- Docker:
-  - `snapshot_app/Dockerfile`
+  - Docker:
+    - `snapshot_app/Dockerfile`
   - Build from repo root:
     - `docker build -f snapshot_app/Dockerfile -t snapshot_app:local .`
   - Run (dashboard API mapped via host):
-    - `docker run --rm -it --name snapshot_app --env-file market_data/.env snapshot_app:local`
+    - `docker run --rm -it --name snapshot_app --env-file .env snapshot_app:local`
 
 ## Compose Runtime Notes
 - Foreground command for containers:

@@ -21,7 +21,7 @@ try:
         print(f"Loaded environment from: {local_env}")
     
     # Load parent .env as fallback
-    parent_env = os.path.join(script_dir, "..", "market_data", ".env")
+    parent_env = os.path.join(script_dir, "..", ".env")
     if os.path.exists(parent_env):
         load_dotenv(parent_env, override=False)  # Don't override local settings
         print(f"Loaded fallback environment from: {parent_env}")

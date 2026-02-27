@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from market_data.collectors.depth_collector import main
+import time
+
+
+def main() -> None:
+    print("[ingestion.collectors.depth] collector disabled; ingestion API serves market data directly")
+    while True:
+        time.sleep(60)
 
 
 if __name__ == "__main__":
     main()
-

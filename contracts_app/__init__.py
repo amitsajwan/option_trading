@@ -9,6 +9,7 @@ from .market_session import (
 from .process_control import terminate_matching_processes
 from .process_inspect import find_matching_processes, find_matching_python_processes
 from .topics import historical_snapshot_topic, snapshot_topic
+from .options_math import black_scholes_price, calculate_option_greeks, estimate_risk_free_rate
 
 __all__ = [
     "snapshot_topic",
@@ -23,4 +24,7 @@ __all__ = [
     "find_matching_processes",
     "find_matching_python_processes",
     "terminate_matching_processes",
+    "black_scholes_price",
+    "calculate_option_greeks",
+    "estimate_risk_free_rate",
 ]

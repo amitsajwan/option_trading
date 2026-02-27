@@ -10,9 +10,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY contracts_app /app/contracts_app
 COPY ingestion_app /app/ingestion_app
-COPY market_data/src /app/market_data/src
+COPY redis_key_manager.py /app/redis_key_manager.py
 
-ENV PYTHONPATH=/app:/app/market_data/src
+ENV PYTHONPATH=/app
 
 EXPOSE 8004
 

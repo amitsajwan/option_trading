@@ -31,23 +31,14 @@ from collections import deque
 from urllib.parse import urlencode
 
 try:
-    import sys
-    # Ensure market_data src is importable for shared option math helpers
-    MARKET_DATA_SRC = Path(__file__).parent.parent / "market_data" / "src"
-    if MARKET_DATA_SRC.exists():
-        sys.path.insert(0, str(MARKET_DATA_SRC))
-    from market_data.options_calculations import (
-        black_scholes_price,
-        calculate_option_greeks,
-        estimate_risk_free_rate,
-    )
+    from contracts_app.options_math import black_scholes_price, calculate_option_greeks, estimate_risk_free_rate
 except Exception:
     black_scholes_price = None
     calculate_option_greeks = None
     estimate_risk_free_rate = None
 
 try:
-    from market_data.env_settings import redis_config as _redis_env_config, resolve_instrument_symbol
+    from ingestion_app.env_settings import redis_config as _redis_env_config, resolve_instrument_symbol
 except Exception:
     _redis_env_config = None
     resolve_instrument_symbol = None

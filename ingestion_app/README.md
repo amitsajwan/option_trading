@@ -1,21 +1,21 @@
 # ingestion_app
 
-Process that starts live/historical ingestion workers and the market API.
+Process that starts live ingestion API/runtime with session-aware supervision.
 
 ## Ownership
 - Owns ingestion runtime entrypoints and process supervision.
 - Canonical modules:
   - `main_live.py`
   - `runner.py`
-  - `runner_historical.py`
   - `runtime.py`
-  - `collectors/*` (module entrypoint wrappers)
+  - `api_service.py`
+  - `collectors/*` (optional placeholders, disabled by default)
 
 ## Entrypoints
 - `python -m ingestion_app.main_live --mode live --start-collectors` (non-blocking launcher; writes logs to `.run/ingestion_app/`)
 - `python -m ingestion_app.main_live --mode live --start-collectors --foreground` (blocking/foreground)
 - `python -m ingestion_app.runner --mode live --start-collectors`
-- `python -m ingestion_app.runner_historical --historical-source zerodha`
+- `python -m ingestion_app.api_service`
 - Health: `python -m ingestion_app.health --api-base http://127.0.0.1:8004`
 - Stop: `python -m ingestion_app.stop`
 
@@ -31,10 +31,10 @@ Process that starts live/historical ingestion workers and the market API.
 ## Start Safety
 - Non-blocking launcher is idempotent: if already running, it returns `launcher.action=already_running` and does not start duplicates.
 
-## Compatibility
-- Legacy `market_data.runner*` and related runtime modules are shims to `ingestion_app`.
-- Transitional root-split compatibility: `main_live` injects `market_data/src` into `PYTHONPATH`
-  for spawned processes so existing `market_data.*` imports keep working during migration.
+## Decoupling
+- `ingestion_app` does not import `market_data.*`.
+- API serving is owned by `ingestion_app.api_service`.
+- Shared contracts/utilities come from `contracts_app`.
 
 ## Runtime Assets
 - Env template: `ingestion_app/.env.example`
@@ -46,14 +46,14 @@ Process that starts live/historical ingestion workers and the market API.
   - Build from repo root:
     - `docker build -f ingestion_app/Dockerfile -t ingestion_app:local .`
   - Run:
-    - `docker run --rm -it --name ingestion_app --env-file market_data/.env ingestion_app:local`
+    - `docker run --rm -it --name ingestion_app --env-file .env ingestion_app:local`
 
 ## Compose Session Runner (IST)
 - Container entrypoint uses `python -m ingestion_app.market_session_runner --mode live`.
 - During market session (`09:15-15:30 Asia/Kolkata`, trading days), wrapper starts `ingestion_app.runner --mode live --start-collectors`.
-- Outside session, wrapper keeps container idle and stops live collectors.
+- Outside session, wrapper keeps container idle and stops live subprocesses.
 
 ## Token Lifecycle (Fail Closed)
 - Credentials are read from `KITE_CREDENTIALS_PATH` (compose default `/app/secrets/credentials.json`).
-- If token is missing/expired at open, collectors are not started (no synthetic fallback).
+- If token is missing/expired at open, live ingestion subprocess is not started (no synthetic fallback).
 - Update `credentials.json` from host after manual login; wrapper auto-retries and starts when credentials become valid.
