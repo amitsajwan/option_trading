@@ -1,0 +1,29 @@
+{
+  "inputs": {
+    "stage1_run_dir": "CHANGE_ME_stage1_run_dir"
+  },
+  "training": {
+    "feature_profile": "all",
+    "feature_sets": ["fo_expiry_aware_v2"],
+    "models": ["xgb_shallow"],
+    "max_experiments": null,
+    "objective": "brier",
+    "cv": {
+      "train_days": 60,
+      "valid_days": 15,
+      "test_days": 15,
+      "step_days": 15
+    }
+  },
+  "gating": {
+    "move_threshold": 0.6,
+    "direction_threshold_grid": [0.55, 0.6, 0.65],
+    "cost_per_trade": 0.0006
+  },
+  "outputs": {
+    "out_root": "../../artifacts/research",
+    "run_name": "direction_from_move_quick",
+    "run_dir": "",
+    "resume": false
+  }
+}

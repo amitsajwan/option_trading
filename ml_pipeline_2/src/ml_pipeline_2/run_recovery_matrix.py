@@ -1,0 +1,529 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
+
+import pandas as pd
+
+from .contracts.manifests import RECOVERY_KIND, load_and_resolve_manifest
+from .experiment_control.background import get_background_job_status, launch_background_job
+
+
+DEFAULT_BASE_MANIFEST = "ml_pipeline_2/configs/research/fo_expiry_aware_recovery.default.json"
+DEFAULT_TP_GRID = (0.0020, 0.0025, 0.0030)
+DEFAULT_SL_GRID = (0.0008, 0.0010, 0.0012)
+DEFAULT_HORIZON_GRID = (15, 20)
+DEFAULT_BARRIER_MODES = ("fixed", "atr_scaled")
+DEFAULT_MODELS = ("xgb_shallow", "lgbm_dart", "logreg_balanced")
+DEFAULT_FEATURE_SETS = ("fo_expiry_aware_v2", "fo_oi_pcr_momentum", "fo_no_time_context")
+DEFAULT_MATRIX_ROOT = "ml_pipeline_2/artifacts/research_matrices"
+DEFAULT_JOB_ROOT = "ml_pipeline_2/artifacts/background_jobs"
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _timestamp_suffix() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _read_json(path: Path) -> Dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_json(path: Path, payload: Dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return path
+
+
+def _sanitize_name(value: object) -> str:
+    cleaned = "".join(ch.lower() if str(ch).isalnum() else "_" for ch in str(value))
+    collapsed = "_".join(part for part in cleaned.split("_") if part)
+    return collapsed or "item"
+
+
+def _parse_float_grid(value: Any, default_items: Sequence[float]) -> List[float]:
+    if isinstance(value, (list, tuple)):
+        return [float(item) for item in value]
+    if value is None:
+        return [float(item) for item in default_items]
+    return [float(part) for part in str(value).split(",") if str(part).strip()]
+
+
+def _parse_int_grid(value: Any, default_items: Sequence[int]) -> List[int]:
+    if isinstance(value, (list, tuple)):
+        return [int(item) for item in value]
+    if value is None:
+        return [int(item) for item in default_items]
+    return [int(part) for part in str(value).split(",") if str(part).strip()]
+
+
+def _parse_name_list(value: Any, default_items: Sequence[str]) -> List[str]:
+    if isinstance(value, (list, tuple)):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return items or [str(item) for item in default_items]
+    if value is None:
+        return [str(item) for item in default_items]
+    items = [part.strip() for part in str(value).split(",") if part.strip()]
+    return items or [str(item) for item in default_items]
+
+
+def _load_config(path: Optional[str]) -> tuple[Dict[str, Any], Path]:
+    if path is None or not str(path).strip():
+        return {}, Path.cwd().resolve()
+    config_path = Path(path).resolve()
+    return _read_json(config_path), config_path.parent
+
+
+def _pick(cli_value: Any, config_value: Any, default_value: Any) -> Any:
+    return cli_value if cli_value is not None else (config_value if config_value is not None else default_value)
+
+
+def _resolve_abs_path(value: Any, *, base_dir: Path) -> Path:
+    path = Path(str(value))
+    return path.resolve() if path.is_absolute() else (base_dir / path).resolve()
+
+
+def _resolve_path_choice(cli_value: Any, config_value: Any, default_value: Any, *, config_dir: Path) -> str:
+    if cli_value is not None:
+        return str(_resolve_abs_path(cli_value, base_dir=Path.cwd().resolve()))
+    if config_value is not None:
+        return str(_resolve_abs_path(config_value, base_dir=config_dir))
+    return str(_resolve_abs_path(default_value, base_dir=Path.cwd().resolve()))
+
+
+def build_recovery_recipe_grid(
+    *,
+    horizon_grid: Sequence[int],
+    tp_grid: Sequence[float],
+    sl_grid: Sequence[float],
+    barrier_modes: Sequence[str],
+) -> List[Dict[str, Any]]:
+    recipes: List[Dict[str, Any]] = []
+    for horizon in list(horizon_grid):
+        for take_profit in list(tp_grid):
+            for stop_loss in list(sl_grid):
+                for barrier_mode in list(barrier_modes):
+                    mode_key = "ATR" if str(barrier_mode).strip().lower() == "atr_scaled" else "FIXED"
+                    recipe_id = f"{mode_key}_H{int(horizon)}_TP{int(round(float(take_profit) * 10000.0))}_SL{int(round(float(stop_loss) * 10000.0))}"
+                    recipes.append(
+                        {
+                            "recipe_id": recipe_id,
+                            "horizon_minutes": int(horizon),
+                            "take_profit_pct": float(take_profit),
+                            "stop_loss_pct": float(stop_loss),
+                            "barrier_mode": str(barrier_mode),
+                        }
+                    )
+    return recipes
+
+
+def _matrix_index_path(matrix_root: Path) -> Path:
+    return matrix_root / "matrix.json"
+
+
+def _combo_output_root(*, matrix_root: Path, combo_key: str) -> Path:
+    return matrix_root / "runs" / combo_key
+
+
+def _combo_job_metadata(*, matrix_root: Path, combo_key: str, feature_set: str, model_name: str, artifacts_root: Path, manifest_path: Path) -> Dict[str, Any]:
+    return {
+        "matrix_root": str(matrix_root.resolve()),
+        "combo_key": combo_key,
+        "feature_set": str(feature_set),
+        "primary_model": str(model_name),
+        "summary_filename": "summary.json",
+        "outputs": {
+            "artifacts_root": str(artifacts_root.resolve()),
+            "run_name": "run",
+        },
+        "manifest_path": str(manifest_path.resolve()),
+        "experiment_kind": RECOVERY_KIND,
+    }
+
+
+def _combo_summary_path(artifacts_root: Path, *, run_name: str) -> Optional[Path]:
+    if not artifacts_root.exists():
+        return None
+    candidates = sorted(
+        [path for path in artifacts_root.glob(f"{run_name}_*") if path.is_dir()],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        return None
+    summary_path = candidates[0] / "summary.json"
+    return summary_path if summary_path.exists() else None
+
+
+def _load_matrix_index(matrix_root: Path) -> Dict[str, Any]:
+    return _read_json(_matrix_index_path(matrix_root))
+
+
+def generate_recovery_matrix(
+    *,
+    base_manifest_path: Path,
+    matrix_root: Path,
+    horizon_grid: Sequence[int],
+    tp_grid: Sequence[float],
+    sl_grid: Sequence[float],
+    barrier_modes: Sequence[str],
+    models: Sequence[str],
+    feature_sets: Sequence[str],
+    launch_background: bool,
+    job_root: Optional[Path],
+    max_parallel_launches: Optional[int] = None,
+) -> Dict[str, Any]:
+    resolved = load_and_resolve_manifest(base_manifest_path, validate_paths=True)
+    if str(resolved["experiment_kind"]) != RECOVERY_KIND:
+        raise ValueError(f"base manifest must be {RECOVERY_KIND}: {base_manifest_path}")
+    recipes = build_recovery_recipe_grid(
+        horizon_grid=horizon_grid,
+        tp_grid=tp_grid,
+        sl_grid=sl_grid,
+        barrier_modes=barrier_modes,
+    )
+    base_inputs = dict(resolved["inputs"])
+    base_windows = json.loads(json.dumps(resolved["windows"], default=str))
+    base_training = json.loads(json.dumps(resolved["training"], default=str))
+    base_scenario = json.loads(json.dumps(resolved["scenario"], default=str))
+    base_catalog = json.loads(json.dumps(resolved["catalog"], default=str))
+
+    matrix_root.mkdir(parents=True, exist_ok=True)
+    manifests_root = matrix_root / "manifests"
+    combos: List[Dict[str, Any]] = []
+    launch_cap = (max(0, int(max_parallel_launches)) if max_parallel_launches is not None else None)
+    launched_count = 0
+    for feature_set in list(feature_sets):
+        for model_name in list(models):
+            combo_key = _sanitize_name(f"{feature_set}__{model_name}")
+            artifacts_root = _combo_output_root(matrix_root=matrix_root, combo_key=combo_key)
+            manifest_payload = {
+                "schema_version": int(resolved["schema_version"]),
+                "experiment_kind": str(resolved["experiment_kind"]),
+                "inputs": {
+                    "model_window_features_path": str(Path(base_inputs["model_window_features_path"]).resolve()),
+                    "holdout_features_path": str(Path(base_inputs["holdout_features_path"]).resolve()),
+                    "base_path": str(Path(base_inputs["base_path"]).resolve()),
+                    "baseline_json_path": (str(Path(base_inputs["baseline_json_path"]).resolve()) if base_inputs.get("baseline_json_path") is not None else ""),
+                },
+                "outputs": {
+                    "artifacts_root": str(artifacts_root.resolve()),
+                    "run_name": "run",
+                },
+                "catalog": {
+                    "feature_profile": str(base_catalog["feature_profile"]),
+                    "feature_sets": [str(feature_set)],
+                    "models": [str(model_name)],
+                },
+                "windows": dict(base_windows),
+                "training": dict(base_training),
+                "scenario": {
+                    **dict(base_scenario),
+                    "recipes": list(recipes),
+                    "primary_model": str(model_name),
+                },
+            }
+            manifest_path = manifests_root / f"{combo_key}.json"
+            _write_json(manifest_path, manifest_payload)
+            combo_payload: Dict[str, Any] = {
+                "combo_key": combo_key,
+                "feature_set": str(feature_set),
+                "primary_model": str(model_name),
+                "manifest_path": str(manifest_path.resolve()),
+                "artifacts_root": str(artifacts_root.resolve()),
+                "run_name": "run",
+            }
+            should_launch = bool(launch_background) and (launch_cap is None or launched_count < launch_cap)
+            if should_launch:
+                job = launch_background_job(
+                    module="ml_pipeline_2.run_research",
+                    args=["--config", str(manifest_path.resolve())],
+                    job_name=combo_key,
+                    metadata=_combo_job_metadata(
+                        matrix_root=matrix_root,
+                        combo_key=combo_key,
+                        feature_set=str(feature_set),
+                        model_name=str(model_name),
+                        artifacts_root=artifacts_root,
+                        manifest_path=manifest_path,
+                    ),
+                    job_root=job_root,
+                )
+                combo_payload["background_job_id"] = str(job["job_id"])
+                combo_payload["background_job_path"] = str((Path(job["job_dir"]) / "job.json").resolve())
+                launched_count += 1
+            combos.append(combo_payload)
+    index_payload = {
+        "created_at_utc": _utc_now(),
+        "matrix_root": str(matrix_root.resolve()),
+        "base_manifest_path": str(base_manifest_path.resolve()),
+        "recipe_count": int(len(recipes)),
+        "max_parallel_launches": launch_cap,
+        "recipes": list(recipes),
+        "combos": combos,
+    }
+    _write_json(_matrix_index_path(matrix_root), index_payload)
+    refresh_recovery_matrix_report(matrix_root)
+    return index_payload
+
+
+def _recipe_id(recipe: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(recipe, dict):
+        return None
+    return str(recipe.get("recipe_id") or "").strip() or None
+
+
+def _candidate_rank_key(row: Dict[str, Any]) -> tuple[float, ...]:
+    return (
+        float(int(bool(row.get("effective_stage_a_passed", False)))),
+        float(int(bool(row.get("effective_side_share_in_band", False)))),
+        float(row.get("effective_profit_factor", float("-inf"))),
+        float(row.get("effective_net_return_sum", float("-inf"))),
+        float(row.get("effective_trades", 0.0)),
+    )
+
+
+def launch_pending_recovery_matrix_jobs(matrix_root: Path, *, max_parallel: int, job_root: Optional[Path]) -> Dict[str, Any]:
+    if int(max_parallel) <= 0:
+        raise ValueError("max_parallel must be > 0")
+    index_payload = _load_matrix_index(matrix_root)
+    combos = list(index_payload.get("combos") or [])
+    running_count = 0
+    launched: List[str] = []
+    for combo in combos:
+        job_path = combo.get("background_job_path")
+        if job_path:
+            status = str(get_background_job_status(job_path=str(job_path)).get("status"))
+            if status == "running":
+                running_count += 1
+            continue
+        summary_file = _combo_summary_path(Path(combo["artifacts_root"]).resolve(), run_name=str(combo["run_name"]))
+        if summary_file is not None:
+            continue
+        if running_count >= int(max_parallel):
+            continue
+        manifest_path = Path(combo["manifest_path"]).resolve()
+        artifacts_root = Path(combo["artifacts_root"]).resolve()
+        job = launch_background_job(
+            module="ml_pipeline_2.run_research",
+            args=["--config", str(manifest_path)],
+            job_name=str(combo["combo_key"]),
+            metadata=_combo_job_metadata(
+                matrix_root=matrix_root,
+                combo_key=str(combo["combo_key"]),
+                feature_set=str(combo["feature_set"]),
+                model_name=str(combo["primary_model"]),
+                artifacts_root=artifacts_root,
+                manifest_path=manifest_path,
+            ),
+            job_root=job_root,
+        )
+        combo["background_job_id"] = str(job["job_id"])
+        combo["background_job_path"] = str((Path(job["job_dir"]) / "job.json").resolve())
+        launched.append(str(combo["combo_key"]))
+        running_count += 1
+    index_payload["combos"] = combos
+    index_payload["max_parallel_launches"] = int(max_parallel)
+    _write_json(_matrix_index_path(matrix_root), index_payload)
+    report = refresh_recovery_matrix_report(matrix_root)
+    return {
+        "matrix_root": str(matrix_root.resolve()),
+        "max_parallel": int(max_parallel),
+        "running_count": int(sum(1 for row in report.get("combos", []) if str(row.get("status")) == "running")),
+        "launched_combo_keys": launched,
+        "report": report,
+    }
+
+
+def refresh_recovery_matrix_report(matrix_root: Path) -> Dict[str, Any]:
+    index_payload = _load_matrix_index(matrix_root)
+    summary_rows: List[Dict[str, Any]] = []
+    recipe_rows: List[Dict[str, Any]] = []
+    for combo in list(index_payload.get("combos") or []):
+        job_path = combo.get("background_job_path")
+        if job_path:
+            job_status = get_background_job_status(job_path=str(job_path))
+            status = str(job_status.get("status"))
+            output_root = job_status.get("output_root")
+            summary_path = job_status.get("summary_path")
+        else:
+            artifacts_root = Path(combo["artifacts_root"]).resolve()
+            summary_file = _combo_summary_path(artifacts_root, run_name=str(combo["run_name"]))
+            output_root = str(summary_file.parent.resolve()) if summary_file is not None else None
+            summary_path = str(summary_file.resolve()) if summary_file is not None else None
+            status = "completed" if summary_file is not None else "pending"
+        summary_payload = _read_json(Path(summary_path)) if summary_path else {}
+        primary_rows = list(summary_payload.get("primary_recipes") or [])
+        selected_primary_recipe_id = str(summary_payload.get("selected_primary_recipe_id") or "").strip() or None
+        selected_primary = next(
+            (
+                row
+                for row in primary_rows
+                if _recipe_id(dict(row.get("recipe") or {})) == selected_primary_recipe_id
+            ),
+            None,
+        )
+        primary_holdout = dict((selected_primary or {}).get("holdout_summary") or {})
+        meta_gate = dict(summary_payload.get("meta_gate") or {})
+        meta_holdout = dict(meta_gate.get("holdout_summary") or {})
+        effective = meta_holdout if meta_holdout else primary_holdout
+        summary_rows.append(
+            {
+                "combo_key": combo["combo_key"],
+                "feature_set": combo["feature_set"],
+                "primary_model": combo["primary_model"],
+                "status": status,
+                "output_root": output_root,
+                "summary_path": summary_path,
+                "selected_primary_recipe_id": selected_primary_recipe_id,
+                "primary_stage_a_passed": primary_holdout.get("stage_a_passed"),
+                "primary_side_share_in_band": primary_holdout.get("side_share_in_band"),
+                "primary_profit_factor": primary_holdout.get("profit_factor"),
+                "primary_net_return_sum": primary_holdout.get("net_return_sum"),
+                "primary_long_share": primary_holdout.get("long_share"),
+                "primary_trades": primary_holdout.get("trades"),
+                "meta_enabled": bool(meta_holdout),
+                "meta_profit_factor": meta_holdout.get("profit_factor"),
+                "meta_net_return_sum": meta_holdout.get("net_return_sum"),
+                "meta_ce_share": meta_holdout.get("ce_share"),
+                "meta_trades": meta_holdout.get("trades"),
+                "effective_stage_a_passed": effective.get("stage_a_passed"),
+                "effective_side_share_in_band": effective.get("side_share_in_band"),
+                "effective_profit_factor": effective.get("profit_factor"),
+                "effective_net_return_sum": effective.get("net_return_sum"),
+                "effective_trades": effective.get("trades"),
+            }
+        )
+        for primary in primary_rows:
+            recipe = dict(primary.get("recipe") or {})
+            holdout = dict(primary.get("holdout_summary") or {})
+            recipe_rows.append(
+                {
+                    "combo_key": combo["combo_key"],
+                    "feature_set": combo["feature_set"],
+                    "primary_model": combo["primary_model"],
+                    "recipe_id": recipe.get("recipe_id"),
+                    "barrier_mode": recipe.get("barrier_mode"),
+                    "horizon_minutes": recipe.get("horizon_minutes"),
+                    "take_profit_pct": recipe.get("take_profit_pct"),
+                    "stop_loss_pct": recipe.get("stop_loss_pct"),
+                    "stage_a_passed": holdout.get("stage_a_passed"),
+                    "side_share_in_band": holdout.get("side_share_in_band"),
+                    "profit_factor": holdout.get("profit_factor"),
+                    "net_return_sum": holdout.get("net_return_sum"),
+                    "long_share": holdout.get("long_share"),
+                    "trades": holdout.get("trades"),
+                }
+            )
+    completed_rows = [row for row in summary_rows if str(row.get("status")) == "completed"]
+    recommended = max(completed_rows, key=_candidate_rank_key) if completed_rows else None
+    report = {
+        "created_at_utc": _utc_now(),
+        "matrix_root": str(matrix_root.resolve()),
+        "combo_count": int(len(summary_rows)),
+        "completed_count": int(len(completed_rows)),
+        "recommended_combo_key": (recommended or {}).get("combo_key"),
+        "recommended": recommended,
+        "combos": summary_rows,
+    }
+    _write_json(matrix_root / "report.json", report)
+    pd.DataFrame(summary_rows).to_csv(matrix_root / "report.csv", index=False)
+    pd.DataFrame(recipe_rows).to_csv(matrix_root / "recipe_report.csv", index=False)
+    return report
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Generate, launch, and report recovery experiment matrices.")
+    parser.add_argument("--config", help="Optional matrix config JSON")
+    parser.add_argument("--base-manifest", help="Base recovery manifest JSON")
+    parser.add_argument("--tp-grid", help="Comma-separated take-profit percents")
+    parser.add_argument("--sl-grid", help="Comma-separated stop-loss percents")
+    parser.add_argument("--horizon-grid", help="Comma-separated horizon minutes")
+    parser.add_argument("--barrier-modes", help="Comma-separated barrier modes")
+    parser.add_argument("--models", help="Comma-separated primary models")
+    parser.add_argument("--feature-sets", help="Comma-separated feature sets")
+    parser.add_argument("--matrix-root", help="Root directory for matrix artifacts")
+    parser.add_argument("--matrix-name", help="Matrix run name prefix")
+    parser.add_argument("--job-root", help="Background job registry root")
+    parser.add_argument("--launch-background", action="store_true", help="Launch each combo as a detached background job")
+    parser.add_argument("--launch-pending", action="store_true", help="Launch pending combos for an existing matrix root up to the parallel cap")
+    parser.add_argument("--max-parallel", type=int, help="Maximum number of background combos to keep active at once")
+    parser.add_argument("--report-only", action="store_true", help="Only refresh reports for an existing matrix root")
+    return parser
+
+
+def _resolve_args(args: argparse.Namespace) -> Dict[str, Any]:
+    payload, config_dir = _load_config(args.config)
+    inputs_cfg = dict(payload.get("inputs") or {})
+    matrix_cfg = dict(payload.get("matrix") or {})
+    outputs_cfg = dict(payload.get("outputs") or {})
+    launch_cfg = dict(payload.get("launch") or {})
+    base_manifest = _resolve_path_choice(args.base_manifest, inputs_cfg.get("base_manifest"), DEFAULT_BASE_MANIFEST, config_dir=config_dir)
+    matrix_root_base = _resolve_path_choice(args.matrix_root, outputs_cfg.get("matrix_root"), DEFAULT_MATRIX_ROOT, config_dir=config_dir)
+    matrix_name = str(_pick(args.matrix_name, outputs_cfg.get("matrix_name"), "recovery_matrix")).strip()
+    resolved = {
+        "base_manifest_path": str(Path(base_manifest).resolve()),
+        "matrix_root": str((Path(matrix_root_base).resolve() / f"{matrix_name}_{_timestamp_suffix()}").resolve()),
+        "existing_matrix_root": (
+            _resolve_path_choice(args.matrix_root, None, matrix_root_base, config_dir=config_dir)
+            if args.matrix_root is not None
+            else str(Path(matrix_root_base).resolve())
+        ),
+        "tp_grid": _parse_float_grid(_pick(args.tp_grid, matrix_cfg.get("tp_grid"), None), DEFAULT_TP_GRID),
+        "sl_grid": _parse_float_grid(_pick(args.sl_grid, matrix_cfg.get("sl_grid"), None), DEFAULT_SL_GRID),
+        "horizon_grid": _parse_int_grid(_pick(args.horizon_grid, matrix_cfg.get("horizon_grid"), None), DEFAULT_HORIZON_GRID),
+        "barrier_modes": _parse_name_list(_pick(args.barrier_modes, matrix_cfg.get("barrier_modes"), None), DEFAULT_BARRIER_MODES),
+        "models": _parse_name_list(_pick(args.models, matrix_cfg.get("models"), None), DEFAULT_MODELS),
+        "feature_sets": _parse_name_list(_pick(args.feature_sets, matrix_cfg.get("feature_sets"), None), DEFAULT_FEATURE_SETS),
+        "launch_background": bool(args.launch_background or bool(launch_cfg.get("background", False))),
+        "launch_pending": bool(args.launch_pending),
+        "max_parallel": _pick(args.max_parallel, launch_cfg.get("max_parallel"), None),
+        "job_root": _resolve_path_choice(args.job_root, launch_cfg.get("job_root"), DEFAULT_JOB_ROOT, config_dir=config_dir),
+        "report_only": bool(args.report_only),
+    }
+    return resolved
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    resolved = _resolve_args(args)
+    if bool(resolved["report_only"]):
+        report = refresh_recovery_matrix_report(Path(resolved["existing_matrix_root"]).resolve())
+        print(json.dumps(report, indent=2, default=str))
+        return 0
+    if bool(resolved["launch_pending"]):
+        if args.matrix_root is None:
+            raise ValueError("--launch-pending requires --matrix-root to point to an existing matrix directory")
+        payload = launch_pending_recovery_matrix_jobs(
+            Path(resolved["existing_matrix_root"]).resolve(),
+            max_parallel=int(resolved["max_parallel"] or 1),
+            job_root=Path(resolved["job_root"]).resolve(),
+        )
+        print(json.dumps(payload, indent=2, default=str))
+        return 0
+    index = generate_recovery_matrix(
+        base_manifest_path=Path(resolved["base_manifest_path"]).resolve(),
+        matrix_root=Path(resolved["matrix_root"]).resolve(),
+        horizon_grid=list(resolved["horizon_grid"]),
+        tp_grid=list(resolved["tp_grid"]),
+        sl_grid=list(resolved["sl_grid"]),
+        barrier_modes=list(resolved["barrier_modes"]),
+        models=list(resolved["models"]),
+        feature_sets=list(resolved["feature_sets"]),
+        launch_background=bool(resolved["launch_background"]),
+        job_root=Path(resolved["job_root"]).resolve(),
+        max_parallel_launches=(int(resolved["max_parallel"]) if resolved["max_parallel"] is not None else None),
+    )
+    print(json.dumps(index, indent=2, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

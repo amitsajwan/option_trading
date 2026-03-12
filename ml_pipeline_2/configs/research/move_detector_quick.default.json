@@ -1,0 +1,42 @@
+{
+  "inputs": {
+    "model_window_features": "../../../.data/ml_pipeline/frozen/model_window_features.parquet",
+    "holdout_features": "../../../.data/ml_pipeline/frozen/holdout_features.parquet"
+  },
+  "windows": {
+    "train": {
+      "start": "2024-03-01",
+      "end": "2024-07-31"
+    },
+    "holdout": {
+      "start": "2024-08-01",
+      "end": "2024-08-31"
+    }
+  },
+  "label": {
+    "horizon_minutes": 20,
+    "atr_multiplier": 1.75,
+    "fallback_barrier_pct": 0.0025,
+    "min_entry_time": "09:20"
+  },
+  "training": {
+    "feature_profile": "all",
+    "feature_sets": ["fo_expiry_aware_v2"],
+    "models": ["xgb_shallow"],
+    "max_experiments": null,
+    "objective": "brier",
+    "threshold_grid": [0.5, 0.55, 0.6, 0.65],
+    "cv": {
+      "train_days": 60,
+      "valid_days": 15,
+      "test_days": 15,
+      "step_days": 15
+    }
+  },
+  "outputs": {
+    "out_root": "../../artifacts/research",
+    "run_name": "move_detector_quick",
+    "run_dir": "",
+    "resume": false
+  }
+}

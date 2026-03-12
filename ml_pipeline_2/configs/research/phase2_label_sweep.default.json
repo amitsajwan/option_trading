@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "phase2_label_sweep_v1",
+  "inputs": {
+    "model_window_features_path": "../../../.data/ml_pipeline/frozen/model_window_features.parquet",
+    "holdout_features_path": "../../../.data/ml_pipeline/frozen/holdout_features.parquet",
+    "base_path": "../../../.data/ml_pipeline"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "label_sweep_fo_expiry_aware_4y"
+  },
+  "catalog": {
+    "feature_profile": "all",
+    "feature_sets": [
+      "fo_expiry_aware_v2"
+    ],
+    "models": [
+      "xgb_shallow",
+      "lgbm_dart",
+      "logreg_balanced"
+    ]
+  },
+  "windows": {
+    "research_train": {
+      "start": "2020-08-03",
+      "end": "2024-04-30"
+    },
+    "research_valid": {
+      "start": "2024-05-01",
+      "end": "2024-07-31"
+    },
+    "full_model": {
+      "start": "2020-08-03",
+      "end": "2024-07-31"
+    },
+    "final_holdout": {
+      "start": "2024-08-01",
+      "end": "2024-10-31"
+    }
+  },
+  "training": {
+    "objective": "trade_utility",
+    "label_target": "path_tp_sl_time_stop_zero",
+    "preprocess": {
+      "max_missing_rate": 0.35,
+      "clip_lower_q": 0.01,
+      "clip_upper_q": 0.99
+    },
+    "cv_config": {
+      "train_days": 84,
+      "valid_days": 21,
+      "test_days": 21,
+      "step_days": 21,
+      "purge_days": 0,
+      "embargo_days": 0,
+      "purge_mode": "days",
+      "embargo_rows": 0,
+      "event_end_col": null
+    },
+    "utility": {
+      "ce_threshold": 0.3,
+      "pe_threshold": 0.3,
+      "cost_per_trade": 0.0006,
+      "min_profit_factor": 1.5,
+      "max_equity_drawdown_pct": 0.1,
+      "min_trades": 50,
+      "take_profit_pct": 0.0025,
+      "stop_loss_pct": 0.0008,
+      "discard_time_stop": false,
+      "risk_per_trade_pct": 0.01
+    }
+  },
+  "scenario": {
+    "recipes": [
+      {
+        "recipe_id": "L0",
+        "horizon_minutes": 15,
+        "take_profit_pct": 0.0025,
+        "stop_loss_pct": 0.0008
+      },
+      {
+        "recipe_id": "L1",
+        "horizon_minutes": 15,
+        "take_profit_pct": 0.002,
+        "stop_loss_pct": 0.0008
+      },
+      {
+        "recipe_id": "L2",
+        "horizon_minutes": 15,
+        "take_profit_pct": 0.002,
+        "stop_loss_pct": 0.001
+      },
+      {
+        "recipe_id": "L3",
+        "horizon_minutes": 20,
+        "take_profit_pct": 0.0025,
+        "stop_loss_pct": 0.001
+      }
+    ],
+    "threshold_grid": [
+      0.25,
+      0.3,
+      0.35
+    ],
+    "default_model": "xgb_shallow",
+    "stress_models": [
+      "xgb_shallow",
+      "lgbm_dart",
+      "logreg_balanced"
+    ],
+    "baseline_recipe_ids": [
+      "L3",
+      "L1"
+    ],
+    "acceptance": {
+      "holdout_side_share_min": 0.35,
+      "holdout_side_share_max": 0.65
+    },
+    "evaluation_gates": {}
+  }
+}

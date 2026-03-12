@@ -120,6 +120,7 @@ logs/
 # Temporary files
 temp_*
 *.tmp
+.tmp_test/
 credentials.json.backup
 credentials*.backup
 
@@ -128,9 +129,11 @@ market_data/
 scripts/
 artifacts/
 data/
+.data/
 *.parquet
 *.feather
 *.csv
+ingestion_app/credentials.json
 
 # OS
 .DS_Store
