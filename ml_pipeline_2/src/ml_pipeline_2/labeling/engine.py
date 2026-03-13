@@ -232,6 +232,41 @@ def _move_first_hit_side(long_reason: object, short_reason: object) -> str:
     return "invalid"
 
 
+_RESOLVED_PATH_REASONS = frozenset({"tp", "sl", "tp_sl_same_bar"})
+_SIDE_LABEL_COLUMNS = (
+    "entry_price",
+    "exit_price",
+    "forward_return",
+    "mfe",
+    "mae",
+    "label_valid",
+    "label",
+    "tp_hit",
+    "sl_hit",
+    "first_hit",
+    "first_hit_offset_min",
+    "path_exit_reason",
+    "tp_price",
+    "sl_price",
+    "time_stop_exit",
+    "hold_extension_eligible",
+    "triple_barrier_state",
+    "barrier_upper_return",
+    "barrier_lower_return",
+    "event_end_ts",
+    "path_target_valid",
+)
+
+
+def _prepare_side_label_frame(side_df: pd.DataFrame) -> pd.DataFrame:
+    out = side_df.copy()
+    reason = out["path_exit_reason"].astype(str)
+    valid = pd.to_numeric(out["label_valid"], errors="coerce").fillna(0.0)
+    out["label"] = reason.map(_path_label_from_reason)
+    out["path_target_valid"] = ((valid == 1.0) & reason.str.lower().isin(_RESOLVED_PATH_REASONS)).astype(float)
+    return out.loc[:, list(_SIDE_LABEL_COLUMNS)]
+
+
 def label_day_futures(features_day: pd.DataFrame, cfg: EffectiveLabelConfig) -> pd.DataFrame:
     out = features_day.sort_values("timestamp").copy()
     out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
@@ -256,80 +291,62 @@ def label_day_futures(features_day: pd.DataFrame, cfg: EffectiveLabelConfig) -> 
         decision_ts = pd.Timestamp(row.timestamp)
         long_rows.append(_compute_futures_trade_metrics(table, decision_ts, cfg.horizon_minutes, cfg, side="long", feature_row=row))
         short_rows.append(_compute_futures_trade_metrics(table, decision_ts, cfg.horizon_minutes, cfg, side="short", feature_row=row))
-    long_df = pd.DataFrame(long_rows)
-    short_df = pd.DataFrame(short_rows)
-    out["label_horizon_minutes"] = int(cfg.horizon_minutes)
-    out["label_return_threshold"] = float(cfg.return_threshold)
-    for side_name, side_df in (("long", long_df), ("short", short_df)):
-        out[f"{side_name}_entry_price"] = side_df["entry_price"].to_numpy()
-        out[f"{side_name}_exit_price"] = side_df["exit_price"].to_numpy()
-        out[f"{side_name}_forward_return"] = side_df["forward_return"].to_numpy()
-        out[f"{side_name}_mfe"] = side_df["mfe"].to_numpy()
-        out[f"{side_name}_mae"] = side_df["mae"].to_numpy()
-        out[f"{side_name}_label_valid"] = side_df["label_valid"].to_numpy()
-        out[f"{side_name}_label"] = side_df["path_exit_reason"].map(_path_label_from_reason).to_numpy()
-        out[f"{side_name}_tp_hit"] = side_df["tp_hit"].to_numpy()
-        out[f"{side_name}_sl_hit"] = side_df["sl_hit"].to_numpy()
-        out[f"{side_name}_first_hit"] = side_df["first_hit"].astype(str).to_numpy()
-        out[f"{side_name}_first_hit_offset_min"] = side_df["first_hit_offset_min"].to_numpy()
-        out[f"{side_name}_path_exit_reason"] = side_df["path_exit_reason"].astype(str).to_numpy()
-        out[f"{side_name}_tp_price"] = side_df["tp_price"].to_numpy()
-        out[f"{side_name}_sl_price"] = side_df["sl_price"].to_numpy()
-        out[f"{side_name}_time_stop_exit"] = side_df["time_stop_exit"].to_numpy()
-        out[f"{side_name}_hold_extension_eligible"] = side_df["hold_extension_eligible"].to_numpy()
-        out[f"{side_name}_triple_barrier_state"] = side_df["triple_barrier_state"].to_numpy()
-        out[f"{side_name}_barrier_upper_return"] = side_df["barrier_upper_return"].to_numpy()
-        out[f"{side_name}_barrier_lower_return"] = side_df["barrier_lower_return"].to_numpy()
-        out[f"{side_name}_event_end_ts"] = side_df["event_end_ts"].to_numpy()
-        out[f"{side_name}_path_target_valid"] = (
-            (out[f"{side_name}_label_valid"].fillna(0.0) == 1.0)
-            & out[f"{side_name}_path_exit_reason"].astype(str).str.lower().isin({"tp", "sl", "tp_sl_same_bar"})
-        ).astype(float)
-    for lhs, rhs in (("ce", "long"), ("pe", "short")):
-        for suffix in (
-            "entry_price",
-            "exit_price",
-            "forward_return",
-            "mfe",
-            "mae",
-            "label_valid",
-            "label",
-            "tp_hit",
-            "sl_hit",
-            "first_hit",
-            "first_hit_offset_min",
-            "path_exit_reason",
-            "tp_price",
-            "sl_price",
-            "time_stop_exit",
-            "hold_extension_eligible",
-            "triple_barrier_state",
-            "barrier_upper_return",
-            "barrier_lower_return",
-            "event_end_ts",
-            "path_target_valid",
-        ):
-            out[f"{lhs}_{suffix}"] = out[f"{rhs}_{suffix}"]
-    out["move_label_valid"] = (
-        (pd.to_numeric(out["long_label_valid"], errors="coerce").fillna(0.0) == 1.0)
-        & (pd.to_numeric(out["short_label_valid"], errors="coerce").fillna(0.0) == 1.0)
+    long_df = _prepare_side_label_frame(pd.DataFrame(long_rows))
+    short_df = _prepare_side_label_frame(pd.DataFrame(short_rows))
+    long_prefixed = long_df.add_prefix("long_")
+    short_prefixed = short_df.add_prefix("short_")
+    ce_prefixed = long_prefixed.rename(columns=lambda col: col.replace("long_", "ce_", 1))
+    pe_prefixed = short_prefixed.rename(columns=lambda col: col.replace("short_", "pe_", 1))
+
+    long_reason = long_df["path_exit_reason"].astype(str)
+    short_reason = short_df["path_exit_reason"].astype(str)
+    move_label = [
+        _move_label_from_reasons(long_reason_value, short_reason_value)
+        for long_reason_value, short_reason_value in zip(long_reason, short_reason)
+    ]
+    move_path_exit_reason = [
+        _move_first_hit_side(long_reason_value, short_reason_value)
+        for long_reason_value, short_reason_value in zip(long_reason, short_reason)
+    ]
+    move_label_valid = (
+        (pd.to_numeric(long_df["label_valid"], errors="coerce").fillna(0.0) == 1.0)
+        & (pd.to_numeric(short_df["label_valid"], errors="coerce").fillna(0.0) == 1.0)
     ).astype(float)
-    out["move_label"] = [
-        _move_label_from_reasons(long_reason, short_reason)
-        for long_reason, short_reason in zip(out["long_path_exit_reason"], out["short_path_exit_reason"])
-    ]
-    out["move_path_exit_reason"] = [
-        _move_first_hit_side(long_reason, short_reason)
-        for long_reason, short_reason in zip(out["long_path_exit_reason"], out["short_path_exit_reason"])
-    ]
-    out["move_first_hit_side"] = out["move_path_exit_reason"].astype(str)
-    out["move_event_end_ts"] = out["long_event_end_ts"]
-    out["move_barrier_upper_return"] = pd.to_numeric(out["long_barrier_upper_return"], errors="coerce")
-    out["move_barrier_lower_return"] = pd.to_numeric(out["long_barrier_lower_return"], errors="coerce")
-    ce_candidate = out["ce_label"].fillna(0.0)
-    pe_candidate = out["pe_label"].fillna(0.0)
-    out["best_side_label"] = np.where((ce_candidate <= 0.0) & (pe_candidate <= 0.0), 0, np.where(ce_candidate >= pe_candidate, 1, -1))
-    return out
+    ce_candidate = pd.to_numeric(long_df["label"], errors="coerce").fillna(0.0).to_numpy()
+    pe_candidate = pd.to_numeric(short_df["label"], errors="coerce").fillna(0.0).to_numpy()
+
+    additions = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "label_horizon_minutes": np.full(len(out), int(cfg.horizon_minutes), dtype=int),
+                    "label_return_threshold": np.full(len(out), float(cfg.return_threshold), dtype=float),
+                },
+                index=out.index,
+            ),
+            long_prefixed.set_index(out.index),
+            short_prefixed.set_index(out.index),
+            ce_prefixed.set_index(out.index),
+            pe_prefixed.set_index(out.index),
+            pd.DataFrame(
+                {
+                    "move_label_valid": move_label_valid.to_numpy(),
+                    "move_label": move_label,
+                    "move_path_exit_reason": move_path_exit_reason,
+                    "move_first_hit_side": np.asarray(move_path_exit_reason, dtype=object),
+                    "move_event_end_ts": pd.to_datetime(long_df["event_end_ts"], errors="coerce").to_numpy(),
+                    "move_barrier_upper_return": pd.to_numeric(long_df["barrier_upper_return"], errors="coerce").to_numpy(),
+                    "move_barrier_lower_return": pd.to_numeric(long_df["barrier_lower_return"], errors="coerce").to_numpy(),
+                    "best_side_label": np.where((ce_candidate <= 0.0) & (pe_candidate <= 0.0), 0, np.where(ce_candidate >= pe_candidate, 1, -1)),
+                },
+                index=out.index,
+            ),
+        ],
+        axis=1,
+    )
+    out = out.drop(columns=[col for col in additions.columns if col in out.columns], errors="ignore")
+    out = pd.concat([out, additions], axis=1)
+    return out.copy()
 
 
 def build_labeled_dataset(features: pd.DataFrame, *, cfg: EffectiveLabelConfig) -> pd.DataFrame:

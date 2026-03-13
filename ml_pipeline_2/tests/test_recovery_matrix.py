@@ -3,8 +3,27 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ml_pipeline_2.run_recovery_matrix import generate_recovery_matrix, launch_pending_recovery_matrix_jobs, refresh_recovery_matrix_report
+from ml_pipeline_2.run_recovery_matrix import (
+    _build_parser,
+    _resolve_args,
+    generate_recovery_matrix,
+    launch_pending_recovery_matrix_jobs,
+    refresh_recovery_matrix_report,
+)
 from ml_pipeline_2.tests.helpers import build_recovery_smoke_manifest, build_synthetic_feature_frames
+
+
+TUNED_TREE_MODELS = [
+    "xgb_shallow",
+    "xgb_balanced",
+    "xgb_regularized",
+    "xgb_deep_v1",
+    "xgb_deep_slow_v1",
+    "lgbm_fast",
+    "lgbm_dart",
+    "lgbm_large_v1",
+    "lgbm_large_dart_v1",
+]
 
 
 def test_generate_recovery_matrix_writes_combo_manifests(tmp_path: Path) -> None:
@@ -31,6 +50,32 @@ def test_generate_recovery_matrix_writes_combo_manifests(tmp_path: Path) -> None
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert payload["catalog"]["feature_sets"] == ["fo_expiry_aware_v2"]
     assert payload["scenario"]["primary_model"] == "logreg_balanced"
+
+
+def test_generate_recovery_matrix_writes_combo_manifests_for_tuned_models(tmp_path: Path) -> None:
+    model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
+    base_manifest = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
+    matrix_root = tmp_path / "matrix"
+
+    index = generate_recovery_matrix(
+        base_manifest_path=base_manifest,
+        matrix_root=matrix_root,
+        horizon_grid=[15],
+        tp_grid=[0.0030],
+        sl_grid=[0.0012],
+        barrier_modes=["fixed"],
+        models=["xgb_deep_v1", "lgbm_large_v1"],
+        feature_sets=["fo_expiry_aware_v2"],
+        launch_background=False,
+        job_root=None,
+    )
+
+    combo_models = {combo["primary_model"] for combo in index["combos"]}
+    assert combo_models == {"xgb_deep_v1", "lgbm_large_v1"}
+    for combo in index["combos"]:
+        payload = json.loads(Path(combo["manifest_path"]).read_text(encoding="utf-8"))
+        assert payload["catalog"]["models"] == [combo["primary_model"]]
+        assert payload["scenario"]["primary_model"] == combo["primary_model"]
 
 
 def test_refresh_recovery_matrix_report_summarizes_completed_combo(tmp_path: Path) -> None:
@@ -163,3 +208,37 @@ def test_launch_pending_recovery_matrix_jobs_fills_to_parallel_cap(tmp_path: Pat
     assert len(payload["launched_combo_keys"]) == 1
     assert "background_job_path" in updated["combos"][1]
     assert updated["max_parallel_launches"] == 2
+
+
+def test_tuning_matrix_configs_resolve_expected_search_space() -> None:
+    parser = _build_parser()
+
+    args_1m = parser.parse_args(["--config", "ml_pipeline_2/configs/research/recovery_matrix.tuning_1m_e2e.json"])
+    resolved_1m = _resolve_args(args_1m)
+    assert resolved_1m["models"] == TUNED_TREE_MODELS
+    assert resolved_1m["feature_sets"] == ["fo_expiry_aware_v2"]
+    assert resolved_1m["tp_grid"] == [0.003]
+    assert resolved_1m["sl_grid"] == [0.0012]
+    assert resolved_1m["horizon_grid"] == [15]
+    assert resolved_1m["barrier_modes"] == ["fixed"]
+    assert resolved_1m["max_parallel"] == 3
+
+    args_5m = parser.parse_args(["--config", "ml_pipeline_2/configs/research/recovery_matrix.tuning_5m.json"])
+    resolved_5m = _resolve_args(args_5m)
+    assert resolved_5m["models"] == TUNED_TREE_MODELS
+    assert resolved_5m["feature_sets"] == ["fo_expiry_aware_v2", "fo_oi_pcr_momentum", "fo_no_time_context"]
+    assert resolved_5m["tp_grid"] == [0.002, 0.0025, 0.003]
+    assert resolved_5m["sl_grid"] == [0.0008, 0.001, 0.0012]
+    assert resolved_5m["horizon_grid"] == [15, 20]
+    assert resolved_5m["barrier_modes"] == ["fixed", "atr_scaled"]
+    assert resolved_5m["max_parallel"] == 3
+
+    args_4y = parser.parse_args(["--config", "ml_pipeline_2/configs/research/recovery_matrix.tuning_4y.json"])
+    resolved_4y = _resolve_args(args_4y)
+    assert resolved_4y["models"] == TUNED_TREE_MODELS
+    assert resolved_4y["feature_sets"] == ["fo_expiry_aware_v2", "fo_oi_pcr_momentum", "fo_no_time_context"]
+    assert resolved_4y["tp_grid"] == [0.002, 0.0025, 0.003]
+    assert resolved_4y["sl_grid"] == [0.0008, 0.001, 0.0012]
+    assert resolved_4y["horizon_grid"] == [15, 20]
+    assert resolved_4y["barrier_modes"] == ["fixed", "atr_scaled"]
+    assert resolved_4y["max_parallel"] == 8

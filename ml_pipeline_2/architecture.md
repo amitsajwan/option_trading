@@ -48,6 +48,24 @@ Owns:
 - built-in model specs
 - checked-in research defaults
 
+Current tuned tree presets:
+- XGBoost:
+  - `xgb_shallow`
+  - `xgb_balanced`
+  - `xgb_regularized`
+  - `xgb_deep_v1`
+  - `xgb_deep_slow_v1`
+- LightGBM:
+  - `lgbm_fast`
+  - `lgbm_dart`
+  - `lgbm_large_v1`
+  - `lgbm_large_dart_v1`
+
+Rule:
+- tuned models are preset-based catalog entries, not free-form manifest hyperparameters
+- XGBoost and LightGBM stay at `n_jobs=1`
+- scaling is handled by outer experiment parallelism, not per-model thread expansion
+
 Key files:
 - [catalog/feature_profiles.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/catalog/feature_profiles.py)
 - [catalog/feature_sets.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/catalog/feature_sets.py)
@@ -161,10 +179,12 @@ Owns:
 - manifest hash persistence
 - `state.jsonl`
 - scenario dispatch
+- detached background job metadata for long matrix runs
 
 Key files:
 - [experiment_control/runner.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/experiment_control/runner.py)
 - [experiment_control/state.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/experiment_control/state.py)
+- [experiment_control/background.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/experiment_control/background.py)
 
 ### `scenario_flows`
 
@@ -306,6 +326,24 @@ Validation and hyper-tuning contract:
 - the searched feature-set/model grid is recorded in `training_report.json`
 - CV slices are recorded in `training_report.json.cv_config`
 - the chosen experiment is recorded in `training_report.json.best_experiment`
+
+Recovery tuning matrix contract:
+- matrix generation writes one resolved manifest per `(feature_set, primary_model)` combo
+- combo launches may be capped with `max_parallel`
+- pending combos are launched later with `run_recovery_matrix --launch-pending`
+- invalid model or feature-set names fail before combo manifests are written
+
+Current staged tuning workflow:
+1. `recovery_matrix.tuning_1m_e2e.json`
+   - 1 recipe
+   - 1 feature set
+   - tuned tree model sweep
+   - `max_parallel=3`
+2. `recovery_matrix.tuning_5m.json`
+   - existing recovery recipe grid
+   - feature-set sweep across `fo_expiry_aware_v2`, `fo_oi_pcr_momentum`, `fo_no_time_context`
+   - same tuned tree model sweep
+   - `max_parallel=3`
 
 Resume behavior:
 - operator supplies a fixed `run_dir`

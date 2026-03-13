@@ -50,9 +50,15 @@ The checked-in research configs are Ubuntu-ready and resolve paths relative to t
 - [`configs/research/phase2_label_sweep.default.json`](configs/research/phase2_label_sweep.default.json)
 - [`configs/research/fo_expiry_aware_recovery.default.json`](configs/research/fo_expiry_aware_recovery.default.json)
 - [`configs/research/fo_expiry_aware_recovery.best_1m_e2e.json`](configs/research/fo_expiry_aware_recovery.best_1m_e2e.json)
+- [`configs/research/fo_expiry_aware_recovery.tuning_1m_e2e.json`](configs/research/fo_expiry_aware_recovery.tuning_1m_e2e.json)
+- [`configs/research/fo_expiry_aware_recovery.tuning_5m.json`](configs/research/fo_expiry_aware_recovery.tuning_5m.json)
+- [`configs/research/fo_expiry_aware_recovery.tuning_4y.json`](configs/research/fo_expiry_aware_recovery.tuning_4y.json)
 - [`configs/research/move_detector_quick.default.json`](configs/research/move_detector_quick.default.json)
 - [`configs/research/direction_from_move_quick.default.json`](configs/research/direction_from_move_quick.default.json)
 - [`configs/research/recovery_matrix.default.json`](configs/research/recovery_matrix.default.json)
+- [`configs/research/recovery_matrix.tuning_1m_e2e.json`](configs/research/recovery_matrix.tuning_1m_e2e.json)
+- [`configs/research/recovery_matrix.tuning_5m.json`](configs/research/recovery_matrix.tuning_5m.json)
+- [`configs/research/recovery_matrix.tuning_4y.json`](configs/research/recovery_matrix.tuning_4y.json)
 
 Default output roots resolve into `ml_pipeline_2/artifacts/...`.
 
@@ -81,6 +87,22 @@ python -m ml_pipeline_2.run_recovery_matrix \
   --config ml_pipeline_2/configs/research/recovery_matrix.default.json
 ```
 
+Run the stronger 1-month tuning sweep:
+
+```bash
+python -m ml_pipeline_2.run_recovery_matrix \
+  --config ml_pipeline_2/configs/research/recovery_matrix.tuning_1m_e2e.json
+```
+
+Refill a capped matrix after one or more background jobs finish:
+
+```bash
+python -m ml_pipeline_2.run_recovery_matrix \
+  --launch-pending \
+  --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
+  --max-parallel 3
+```
+
 Run the verified 1-month end-to-end recovery smoke:
 
 ```bash
@@ -101,6 +123,25 @@ Run Stage 2 direction from a completed Stage 1 run:
 python -m ml_pipeline_2.run_direction_from_move_quick \
   --config ml_pipeline_2/configs/research/direction_from_move_quick.default.json
 ```
+
+## Stronger Model Tuning V1
+
+The shared model catalog now includes a first preset-based tuning wave for tree models:
+- XGBoost: `xgb_shallow`, `xgb_balanced`, `xgb_regularized`, `xgb_deep_v1`, `xgb_deep_slow_v1`
+- LightGBM: `lgbm_fast`, `lgbm_dart`, `lgbm_large_v1`, `lgbm_large_dart_v1`
+
+Resource strategy:
+- keep per-model `n_jobs=1`
+- scale only through outer matrix parallelism
+- cap active background jobs with `launch.max_parallel` or `--max-parallel`
+
+Recommended staged workflow:
+1. Run [`configs/research/recovery_matrix.tuning_1m_e2e.json`](configs/research/recovery_matrix.tuning_1m_e2e.json) first.
+2. Review the best completed 1-month combo under `artifacts/research_matrices/.../report.json`.
+3. Run [`configs/research/recovery_matrix.tuning_5m.json`](configs/research/recovery_matrix.tuning_5m.json) second.
+4. Run [`configs/research/recovery_matrix.tuning_4y.json`](configs/research/recovery_matrix.tuning_4y.json) on the GCP VM when you are ready for the full restart.
+
+The default manifests remain stable. The tuning configs are opt-in.
 
 ## Docs
 

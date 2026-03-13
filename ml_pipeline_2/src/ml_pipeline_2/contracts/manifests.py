@@ -92,6 +92,25 @@ def _validate_catalog(payload: Dict[str, Any], errors: List[str]) -> None:
         errors.append(f"unknown models: {unknown_models}; valid options: {model_names()}")
 
 
+def _validate_model_reference(value: Any, *, field: str, catalog_models: Iterable[str], errors: List[str]) -> None:
+    model_name = str(value or "").strip()
+    valid_models = set(model_names())
+    allowed_models = {str(item) for item in catalog_models}
+    if not model_name:
+        errors.append(f"{field} must not be empty")
+        return
+    if model_name not in valid_models:
+        errors.append(f"{field} references unknown model: {model_name}; valid options: {model_names()}")
+        return
+    if model_name not in allowed_models:
+        errors.append(f"{field} must be included in catalog.models: {model_name}")
+
+
+def _validate_model_reference_list(values: Iterable[Any], *, field: str, catalog_models: Iterable[str], errors: List[str]) -> None:
+    for idx, value in enumerate(list(values)):
+        _validate_model_reference(value, field=f"{field}[{idx}]", catalog_models=catalog_models, errors=errors)
+
+
 def _validate_training(payload: Dict[str, Any], errors: List[str]) -> None:
     label_target = str(payload.get("label_target", "")).strip().lower()
     if label_target not in LABEL_TARGET_CHOICES:
@@ -114,7 +133,7 @@ def _validate_training(payload: Dict[str, Any], errors: List[str]) -> None:
             errors.append(f"training.utility.{key} must be in [0,1]")
 
 
-def _validate_phase2_scenario(payload: Dict[str, Any], errors: List[str]) -> None:
+def _validate_phase2_scenario(payload: Dict[str, Any], *, catalog_models: Iterable[str], errors: List[str]) -> None:
     recipes = list(payload.get("recipes") or [])
     if not recipes:
         errors.append("scenario.recipes must not be empty")
@@ -141,11 +160,17 @@ def _validate_phase2_scenario(payload: Dict[str, Any], errors: List[str]) -> Non
     unknown = sorted(set(str(x) for x in payload.get("baseline_recipe_ids") or []) - seen)
     if unknown:
         errors.append(f"scenario.baseline_recipe_ids reference unknown recipes: {unknown}")
+    _validate_model_reference(payload.get("default_model"), field="scenario.default_model", catalog_models=catalog_models, errors=errors)
+    stress_models = list(payload.get("stress_models") or [])
+    if not stress_models:
+        errors.append("scenario.stress_models must not be empty")
+    _validate_model_reference_list(stress_models, field="scenario.stress_models", catalog_models=catalog_models, errors=errors)
 
 
-def _validate_recovery_scenario(payload: Dict[str, Any], errors: List[str]) -> None:
+def _validate_recovery_scenario(payload: Dict[str, Any], *, catalog_models: Iterable[str], errors: List[str]) -> None:
     if not list(payload.get("recipes") or []):
         errors.append("scenario.recipes must not be empty")
+    _validate_model_reference(payload.get("primary_model"), field="scenario.primary_model", catalog_models=catalog_models, errors=errors)
     try:
         threshold = float(payload.get("primary_threshold"))
         if threshold < 0.0 or threshold > 1.0:
@@ -226,9 +251,9 @@ def resolve_manifest(payload: Dict[str, Any], *, manifest_path: Path, validate_p
     _validate_catalog(catalog_payload, errors)
     _validate_training(training_payload, errors)
     if kind == PHASE2_LABEL_SWEEP_KIND:
-        _validate_phase2_scenario(scenario_payload, errors)
+        _validate_phase2_scenario(scenario_payload, catalog_models=list(catalog_payload.get("models") or []), errors=errors)
     elif kind == RECOVERY_KIND:
-        _validate_recovery_scenario(scenario_payload, errors)
+        _validate_recovery_scenario(scenario_payload, catalog_models=list(catalog_payload.get("models") or []), errors=errors)
     if validate_paths:
         _validate_paths(resolved, errors)
     if errors:

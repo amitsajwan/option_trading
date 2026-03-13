@@ -9,6 +9,19 @@ from ml_pipeline_2.contracts.manifests import ManifestValidationError, load_and_
 from ml_pipeline_2.tests.helpers import build_synthetic_feature_frames
 
 
+TUNED_TREE_MODELS = [
+    "xgb_shallow",
+    "xgb_balanced",
+    "xgb_regularized",
+    "xgb_deep_v1",
+    "xgb_deep_slow_v1",
+    "lgbm_fast",
+    "lgbm_dart",
+    "lgbm_large_v1",
+    "lgbm_large_dart_v1",
+]
+
+
 def test_manifest_rejects_unknown_model(tmp_path: Path) -> None:
     payload = json.loads(Path("ml_pipeline_2/configs/research/phase2_label_sweep.default.json").read_text(encoding="utf-8"))
     payload["catalog"]["models"] = ["does_not_exist"]
@@ -51,3 +64,55 @@ def test_manifest_accepts_real_paths(tmp_path: Path) -> None:
     resolved = resolve_manifest(payload, manifest_path=tmp_path / "manifest.json", validate_paths=True)
     assert resolved["inputs"]["model_window_features_path"] == model_window_path
 
+
+def test_manifest_rejects_recovery_primary_model_outside_catalog(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/fo_expiry_aware_recovery.default.json").read_text(encoding="utf-8"))
+    payload["catalog"]["models"] = ["xgb_shallow"]
+    payload["scenario"]["primary_model"] = "xgb_deep_v1"
+    with pytest.raises(ManifestValidationError):
+        resolve_manifest(payload, manifest_path=tmp_path / "bad_recovery.json", validate_paths=False)
+
+
+@pytest.mark.parametrize(
+    "config_name,expected_windows",
+    [
+        (
+            "fo_expiry_aware_recovery.tuning_1m_e2e.json",
+            {
+                "full_model": {"start": "2024-07-01", "end": "2024-07-31"},
+                "final_holdout": {"start": "2024-08-01", "end": "2024-08-30"},
+            },
+        ),
+        (
+            "fo_expiry_aware_recovery.tuning_5m.json",
+            {
+                "full_model": {"start": "2024-03-01", "end": "2024-07-31"},
+                "final_holdout": {"start": "2024-08-01", "end": "2024-08-31"},
+            },
+        ),
+        (
+            "fo_expiry_aware_recovery.tuning_4y.json",
+            {
+                "full_model": {"start": "2020-08-03", "end": "2024-07-31"},
+                "final_holdout": {"start": "2024-08-01", "end": "2024-10-31"},
+            },
+        ),
+    ],
+)
+def test_tuning_recovery_manifests_validate_with_new_model_catalog(
+    tmp_path: Path,
+    config_name: str,
+    expected_windows: dict[str, dict[str, str]],
+) -> None:
+    model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
+    manifest_path = Path("ml_pipeline_2/configs/research") / config_name
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["inputs"]["model_window_features_path"] = str(model_window_path)
+    payload["inputs"]["holdout_features_path"] = str(holdout_path)
+    payload["inputs"]["base_path"] = str(tmp_path)
+
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / config_name, validate_paths=True)
+
+    assert resolved["catalog"]["models"] == TUNED_TREE_MODELS
+    assert resolved["scenario"]["primary_model"] == "xgb_shallow"
+    assert resolved["windows"] == expected_windows

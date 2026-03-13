@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
 
+from .catalog.feature_sets import feature_set_names
+from .catalog.models import model_names
 from .contracts.manifests import RECOVERY_KIND, load_and_resolve_manifest
 from .experiment_control.background import get_background_job_status, launch_background_job
 
@@ -166,6 +168,15 @@ def _load_matrix_index(matrix_root: Path) -> Dict[str, Any]:
     return _read_json(_matrix_index_path(matrix_root))
 
 
+def _validate_search_space_names(values: Sequence[str], *, kind: str, valid_options: Sequence[str]) -> None:
+    selected = [str(value).strip() for value in list(values) if str(value).strip()]
+    if not selected:
+        raise ValueError(f"{kind} must not be empty")
+    unknown = sorted(set(selected) - set(valid_options))
+    if unknown:
+        raise ValueError(f"unknown {kind}: {unknown}; valid options: {sorted(valid_options)}")
+
+
 def generate_recovery_matrix(
     *,
     base_manifest_path: Path,
@@ -183,6 +194,8 @@ def generate_recovery_matrix(
     resolved = load_and_resolve_manifest(base_manifest_path, validate_paths=True)
     if str(resolved["experiment_kind"]) != RECOVERY_KIND:
         raise ValueError(f"base manifest must be {RECOVERY_KIND}: {base_manifest_path}")
+    _validate_search_space_names(models, kind="models", valid_options=model_names())
+    _validate_search_space_names(feature_sets, kind="feature_sets", valid_options=feature_set_names())
     recipes = build_recovery_recipe_grid(
         horizon_grid=horizon_grid,
         tp_grid=tp_grid,
