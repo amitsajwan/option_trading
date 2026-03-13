@@ -1,0 +1,45 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from market_data_dashboard import app as dashboard_app
+
+
+def test_artifact_discovery_includes_ml_pipeline_2_published_models(tmp_path: Path, monkeypatch) -> None:
+    group_root = tmp_path / "ml_pipeline_2" / "artifacts" / "published_models" / "banknifty_futures" / "h15_tp_auto"
+    (group_root / "model").mkdir(parents=True, exist_ok=True)
+    (group_root / "config" / "profiles" / "openfe_v9_dual").mkdir(parents=True, exist_ok=True)
+    (group_root / "reports" / "training").mkdir(parents=True, exist_ok=True)
+    (group_root / "model" / "model.joblib").write_bytes(b"dummy")
+    (group_root / "config" / "profiles" / "openfe_v9_dual" / "threshold_report.json").write_text("{}", encoding="utf-8")
+    (group_root / "config" / "profiles" / "openfe_v9_dual" / "training_report.json").write_text("{}", encoding="utf-8")
+    (group_root / "model_contract.json").write_text(json.dumps({"required_features": ["ret_5m"]}), encoding="utf-8")
+    (group_root / "reports" / "training" / "latest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run_20260313_010101",
+                "model_group": "banknifty_futures/h15_tp_auto",
+                "profile_id": "openfe_v9_dual",
+                "published_paths": {
+                    "model_package": "ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/model/model.joblib",
+                    "threshold_report": "ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/threshold_report.json",
+                    "training_report": "ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/training_report.json",
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(dashboard_app, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(dashboard_app, "ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline_2" / "artifacts" / "published_models")
+    monkeypatch.setattr(dashboard_app, "ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline" / "artifacts" / "models" / "by_features")
+
+    entries = dashboard_app._build_artifact_discovery_entries()
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["source"] == "artifact_discovery_ml_pipeline_2"
+    assert entry["model_group"] == "banknifty_futures/h15_tp_auto"
+    assert entry["profile_id"] == "openfe_v9_dual"

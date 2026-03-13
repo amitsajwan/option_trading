@@ -33,6 +33,7 @@ Installed console scripts:
 - `ml-pipeline-direction`
 - `ml-pipeline-recovery-matrix`
 - `ml-pipeline-background-job`
+- `ml-pipeline-publish-model`
 
 ## Sync Inputs
 
@@ -120,6 +121,15 @@ python -m ml_pipeline_2.run_research \
   --config ml_pipeline_2/configs/research/fo_expiry_aware_recovery.best_1m_e2e.json
 ```
 
+Publish a completed recovery run for runtime consumption:
+
+```bash
+python -m ml_pipeline_2.run_publish_model \
+  --run-dir ml_pipeline_2/artifacts/research/<run_name>_<timestamp> \
+  --model-group banknifty_futures/h15_tp_auto \
+  --profile-id openfe_v9_dual
+```
+
 Run the Stage 1 move detector:
 
 ```bash
@@ -152,6 +162,23 @@ Recommended staged workflow:
 4. Run [`configs/research/recovery_matrix.tuning_4y.json`](configs/research/recovery_matrix.tuning_4y.json) on the GCP VM when you are ready for the full restart.
 
 The default manifests remain stable. The tuning configs are opt-in.
+
+## Published Models
+
+Published runtime artifacts now live under:
+
+```text
+ml_pipeline_2/artifacts/published_models/<model_group>/
+├── model/model.joblib
+├── config/profiles/<profile_id>/threshold_report.json
+├── config/profiles/<profile_id>/training_report.json
+├── model_contract.json
+└── reports/training/
+    ├── run_<run_id>.json
+    └── latest.json
+```
+
+Per-run copies are also preserved under `data/training_runs/<run_id>/...` so run-id based switching resolves stable historical artifacts instead of whichever model was published most recently.
 
 ## Docs
 

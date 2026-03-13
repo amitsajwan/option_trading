@@ -36,6 +36,7 @@ services:
       mongo:
         condition: service_healthy
     environment:
+      TZ: "Asia/Kolkata"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
@@ -70,7 +71,7 @@ services:
       ]
     volumes:
       - ./.run:/app/.run
-      - ./credentials.json:/app/secrets/credentials.json:ro
+      - ./ingestion_app/credentials.json:/app/secrets/credentials.json:ro
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
     ports:
       - "${INGESTION_API_PORT:-8004}:8004"
@@ -87,9 +88,9 @@ services:
           "--max-stale-seconds",
           "240",
         ]
-      interval: 20s
-      timeout: 5s
-      retries: 5
+      interval: 60s
+      timeout: 15s
+      retries: 3
 
   snapshot_app:
     build:
@@ -104,6 +105,7 @@ services:
       ingestion_app:
         condition: service_healthy
     environment:
+      TZ: "Asia/Kolkata"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
@@ -139,7 +141,7 @@ services:
       ]
     volumes:
       - ./.run:/app/.run
-      - ./credentials.json:/app/secrets/credentials.json:ro
+      - ./ingestion_app/credentials.json:/app/secrets/credentials.json:ro
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
     healthcheck:
       test:
@@ -170,6 +172,7 @@ services:
       snapshot_app:
         condition: service_healthy
     environment:
+      TZ: "Asia/Kolkata"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
@@ -195,7 +198,10 @@ services:
         "${LIVE_TOPIC:-market:snapshot:v1}",
       ]
     volumes:
+      - ./.run:/app/.run
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./ml_pipeline/artifacts:/app/ml_pipeline/artifacts:ro
+      - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
     healthcheck:
       test:
         [
@@ -210,6 +216,61 @@ services:
       timeout: 5s
       retries: 5
 
+  strategy_persistence_app:
+    build:
+      context: .
+      dockerfile: persistence_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      strategy_app:
+        condition: service_started
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_VOTE_TOPIC: "${STRATEGY_VOTE_TOPIC:-market:strategy:votes:v1}"
+      TRADE_SIGNAL_TOPIC: "${TRADE_SIGNAL_TOPIC:-market:strategy:signals:v1}"
+      STRATEGY_POSITION_TOPIC: "${STRATEGY_POSITION_TOPIC:-market:strategy:positions:v1}"
+      MONGO_COLL_STRATEGY_VOTES: "${MONGO_COLL_STRATEGY_VOTES:-strategy_votes}"
+      MONGO_COLL_TRADE_SIGNALS: "${MONGO_COLL_TRADE_SIGNALS:-trade_signals}"
+      MONGO_COLL_STRATEGY_POSITIONS: "${MONGO_COLL_STRATEGY_POSITIONS:-strategy_positions}"
+    command:
+      [
+        "python",
+        "-m",
+        "persistence_app.main_strategy_consumer",
+        "--foreground",
+        "--vote-topic",
+        "${STRATEGY_VOTE_TOPIC:-market:strategy:votes:v1}",
+        "--signal-topic",
+        "${TRADE_SIGNAL_TOPIC:-market:strategy:signals:v1}",
+        "--position-topic",
+        "${STRATEGY_POSITION_TOPIC:-market:strategy:positions:v1}",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "persistence_app.strategy_health",
+          "--max-age-seconds",
+          "300",
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./.run:/app/.run
+
   strategy_app:
     build:
       context: .
@@ -221,6 +282,7 @@ services:
       snapshot_app:
         condition: service_healthy
     environment:
+      TZ: "Asia/Kolkata"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
@@ -229,9 +291,36 @@ services:
       MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
       MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
       NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      STRATEGY_REDIS_PUBLISH_ENABLED: "${STRATEGY_REDIS_PUBLISH_ENABLED:-1}"
+      STRATEGY_VOTE_TOPIC: "${STRATEGY_VOTE_TOPIC:-market:strategy:votes:v1}"
+      TRADE_SIGNAL_TOPIC: "${TRADE_SIGNAL_TOPIC:-market:strategy:signals:v1}"
+      STRATEGY_POSITION_TOPIC: "${STRATEGY_POSITION_TOPIC:-market:strategy:positions:v1}"
       LIVE_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
       HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
       SNAPSHOT_V1_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+      ML_ENTRY_REGISTRY: "${STRATEGY_ML_ENTRY_REGISTRY:-}"
+      ML_ENTRY_EXPERIMENT_ID: "${STRATEGY_ML_ENTRY_EXPERIMENT_ID:-}"
+      ML_ENTRY_THRESHOLD_POLICY: "${STRATEGY_ML_ENTRY_THRESHOLD_POLICY:-}"
+      RISK_PROFILE: "${RISK_PROFILE:-}"
+      RISK_LOT_SIZING_MODE: "${RISK_LOT_SIZING_MODE:-risk_based}"
+      RISK_NOTIONAL_PER_TRADE: "${RISK_NOTIONAL_PER_TRADE:-0}"
+      RISK_LOT_BUDGET_USES_LOT_SIZE: "${RISK_LOT_BUDGET_USES_LOT_SIZE:-1}"
+      RISK_MAX_DAILY_LOSS_PCT: "${RISK_MAX_DAILY_LOSS_PCT:-0.02}"
+      RISK_MAX_CONSECUTIVE_LOSSES: "${RISK_MAX_CONSECUTIVE_LOSSES:-3}"
+      RISK_MAX_LOTS_PER_TRADE: "${RISK_MAX_LOTS_PER_TRADE:-5}"
+      RISK_PER_TRADE_PCT: "${RISK_PER_TRADE_PCT:-0.005}"
+      RISK_CAPITAL_ALLOCATED: "${RISK_CAPITAL_ALLOCATED:-500000}"
+      RISK_VIX_HALT_THRESHOLD: "${RISK_VIX_HALT_THRESHOLD:-15}"
+      RISK_VIX_RESUME_THRESHOLD: "${RISK_VIX_RESUME_THRESHOLD:-8}"
+      STRATEGY_STARTUP_WARMUP_MINUTES: "${STRATEGY_STARTUP_WARMUP_MINUTES:-0}"
+      STRATEGY_STARTUP_WARMUP_EVENTS: "${STRATEGY_STARTUP_WARMUP_EVENTS:-0}"
+      STRATEGY_STRIKE_SELECTION_POLICY: "${STRATEGY_STRIKE_SELECTION_POLICY:-atm}"
+      STRATEGY_STRIKE_MAX_OTM_STEPS: "${STRATEGY_STRIKE_MAX_OTM_STEPS:-2}"
+      STRATEGY_STRIKE_MIN_OI: "${STRATEGY_STRIKE_MIN_OI:-50000}"
+      STRATEGY_STRIKE_MIN_VOLUME: "${STRATEGY_STRIKE_MIN_VOLUME:-15000}"
+      STRATEGY_STRIKE_LIQUIDITY_WEIGHT: "${STRATEGY_STRIKE_LIQUIDITY_WEIGHT:-1.0}"
+      STRATEGY_STRIKE_AFFORDABILITY_WEIGHT: "${STRATEGY_STRIKE_AFFORDABILITY_WEIGHT:-0.25}"
+      STRATEGY_STRIKE_DISTANCE_PENALTY: "${STRATEGY_STRIKE_DISTANCE_PENALTY:-0.05}"
     command:
       [
         "python",
@@ -239,16 +328,25 @@ services:
         "strategy_app.main",
         "--engine",
         "${STRATEGY_ENGINE:-deterministic}",
+        "--min-confidence",
+        "${STRATEGY_MIN_CONFIDENCE:-0.65}",
         "--topic",
         "${LIVE_TOPIC:-market:snapshot:v1}",
+        "--rollout-stage",
+        "${STRATEGY_ROLLOUT_STAGE:-paper}",
+        "--position-size-multiplier",
+        "${STRATEGY_POSITION_SIZE_MULTIPLIER:-1.0}",
+        "--ml-runtime-guard-file",
+        "${STRATEGY_ML_RUNTIME_GUARD_FILE:-}",
       ]
     volumes:
+      - ./.run:/app/.run
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
     healthcheck:
       test: ["CMD", "python", "-m", "strategy_app.health"]
-      interval: 20s
-      timeout: 5s
-      retries: 5
+      interval: 60s
+      timeout: 10s
+      retries: 3
 
   dashboard:
     profiles: ["ui"]
@@ -257,21 +355,78 @@ services:
       dockerfile: market_data_dashboard/Dockerfile
     restart: unless-stopped
     depends_on:
-      ingestion_app:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
+      TZ: "Asia/Kolkata"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      MONGO_COLL_STRATEGY_VOTES: "${MONGO_COLL_STRATEGY_VOTES:-strategy_votes}"
+      MONGO_COLL_TRADE_SIGNALS: "${MONGO_COLL_TRADE_SIGNALS:-trade_signals}"
+      MONGO_COLL_STRATEGY_POSITIONS: "${MONGO_COLL_STRATEGY_POSITIONS:-strategy_positions}"
+      MONGO_COLL_STRATEGY_VOTES_HISTORICAL: "${MONGO_COLL_STRATEGY_VOTES_HISTORICAL:-strategy_votes_historical}"
+      MONGO_COLL_TRADE_SIGNALS_HISTORICAL: "${MONGO_COLL_TRADE_SIGNALS_HISTORICAL:-trade_signals_historical}"
+      MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL: "${MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL:-strategy_positions_historical}"
+      MONGO_COLL_STRATEGY_EVAL_RUNS: "${MONGO_COLL_STRATEGY_EVAL_RUNS:-strategy_eval_runs}"
+      STRATEGY_EVAL_COMMAND_TOPIC: "${STRATEGY_EVAL_COMMAND_TOPIC:-strategy:eval:command}"
+      STRATEGY_EVAL_GLOBAL_CHANNEL: "${STRATEGY_EVAL_GLOBAL_CHANNEL:-strategy:eval:global}"
+      STRATEGY_EVAL_RUN_CHANNEL_PREFIX: "${STRATEGY_EVAL_RUN_CHANNEL_PREFIX:-strategy:eval:run:}"
+      DASHBOARD_CORS_ORIGINS: "${DASHBOARD_CORS_ORIGINS:-http://localhost:8011,http://127.0.0.1:8011,http://localhost:5173,http://127.0.0.1:5173}"
       INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26MARFUT}"
       MARKET_DATA_API_URL: "http://ingestion_app:8004"
     ports:
       - "${DASHBOARD_PORT:-8008}:8008"
+    volumes:
+      - ./ml_pipeline/artifacts:/app/ml_pipeline/artifacts:ro
+      - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
+
+  strategy_eval_orchestrator:
+    profiles: ["ui", "historical"]
+    build:
+      context: .
+      dockerfile: strategy_eval_orchestrator/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      MONGO_COLL_STRATEGY_EVAL_RUNS: "${MONGO_COLL_STRATEGY_EVAL_RUNS:-strategy_eval_runs}"
+      STRATEGY_EVAL_COMMAND_TOPIC: "${STRATEGY_EVAL_COMMAND_TOPIC:-strategy:eval:command}"
+      STRATEGY_EVAL_GLOBAL_CHANNEL: "${STRATEGY_EVAL_GLOBAL_CHANNEL:-strategy:eval:global}"
+      STRATEGY_EVAL_RUN_CHANNEL_PREFIX: "${STRATEGY_EVAL_RUN_CHANNEL_PREFIX:-strategy:eval:run:}"
+      HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+      SNAPSHOT_PARQUET_BASE: "${SNAPSHOT_PARQUET_BASE:-/app/ml_pipeline/artifacts/data/parquet_data}"
+    volumes:
+      - ./ml_pipeline/artifacts/data/parquet_data:/app/ml_pipeline/artifacts/data/parquet_data:ro
+      - ./.run:/app/.run
+
+  strategy_eval_ui:
+    profiles: ["ui"]
+    build:
+      context: .
+      dockerfile: strategy_eval_ui/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      dashboard:
+        condition: service_started
+    ports:
+      - "${STRATEGY_EVAL_UI_PORT:-8011}:8011"
 
   historical_replay:
-    profiles: ["historical"]
+    profiles: ["historical_replay"]
     build:
       context: .
       dockerfile: snapshot_app/Dockerfile
@@ -280,6 +435,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      TZ: "Asia/Kolkata"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
@@ -298,6 +454,199 @@ services:
     volumes:
       - ./ml_pipeline/artifacts/data/parquet_data:/app/ml_pipeline/artifacts/data/parquet_data:ro
       - ./.run:/app/.run
+
+  persistence_app_historical:
+    profiles: ["historical"]
+    build:
+      context: .
+      dockerfile: persistence_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      MONGO_COLL_SNAPSHOTS: "${MONGO_COLL_SNAPSHOTS_HISTORICAL:-phase1_market_snapshots_historical}"
+      MARKET_SESSION_ENABLED: "0"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+      HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+      SNAPSHOT_V1_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+    command:
+      [
+        "python",
+        "-m",
+        "persistence_app.main_snapshot_consumer",
+        "--foreground",
+        "--event-topic",
+        "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}",
+      ]
+    volumes:
+      - ./.run:/app/.run
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./ml_pipeline/artifacts:/app/ml_pipeline/artifacts:ro
+      - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "persistence_app.health",
+          "--max-age-seconds",
+          "300",
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  strategy_app_historical:
+    profiles: ["historical"]
+    build:
+      context: .
+      dockerfile: strategy_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MARKET_SESSION_ENABLED: "0"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      STRATEGY_REDIS_PUBLISH_ENABLED: "${STRATEGY_REDIS_PUBLISH_ENABLED:-1}"
+      STRATEGY_VOTE_TOPIC: "${STRATEGY_VOTE_TOPIC_HISTORICAL:-market:strategy:votes:v1:historical}"
+      TRADE_SIGNAL_TOPIC: "${TRADE_SIGNAL_TOPIC_HISTORICAL:-market:strategy:signals:v1:historical}"
+      STRATEGY_POSITION_TOPIC: "${STRATEGY_POSITION_TOPIC_HISTORICAL:-market:strategy:positions:v1:historical}"
+      LIVE_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+      HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+      SNAPSHOT_V1_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+      ML_ENTRY_REGISTRY: "${STRATEGY_ML_ENTRY_REGISTRY:-}"
+      ML_ENTRY_EXPERIMENT_ID: "${STRATEGY_ML_ENTRY_EXPERIMENT_ID:-}"
+      ML_ENTRY_THRESHOLD_POLICY: "${STRATEGY_ML_ENTRY_THRESHOLD_POLICY:-}"
+      RISK_PROFILE: "${RISK_PROFILE:-}"
+      RISK_LOT_SIZING_MODE: "${RISK_LOT_SIZING_MODE:-risk_based}"
+      RISK_NOTIONAL_PER_TRADE: "${RISK_NOTIONAL_PER_TRADE:-0}"
+      RISK_LOT_BUDGET_USES_LOT_SIZE: "${RISK_LOT_BUDGET_USES_LOT_SIZE:-1}"
+      RISK_MAX_DAILY_LOSS_PCT: "${RISK_MAX_DAILY_LOSS_PCT:-0.02}"
+      RISK_MAX_CONSECUTIVE_LOSSES: "${RISK_MAX_CONSECUTIVE_LOSSES:-3}"
+      RISK_MAX_LOTS_PER_TRADE: "${RISK_MAX_LOTS_PER_TRADE:-5}"
+      RISK_PER_TRADE_PCT: "${RISK_PER_TRADE_PCT:-0.005}"
+      RISK_CAPITAL_ALLOCATED: "${RISK_CAPITAL_ALLOCATED:-500000}"
+      RISK_VIX_HALT_THRESHOLD: "${RISK_VIX_HALT_THRESHOLD:-15}"
+      RISK_VIX_RESUME_THRESHOLD: "${RISK_VIX_RESUME_THRESHOLD:-8}"
+      STRATEGY_STARTUP_WARMUP_MINUTES: "${STRATEGY_STARTUP_WARMUP_MINUTES:-0}"
+      STRATEGY_STARTUP_WARMUP_EVENTS: "${STRATEGY_STARTUP_WARMUP_EVENTS:-0}"
+      STRATEGY_STRIKE_SELECTION_POLICY: "${STRATEGY_STRIKE_SELECTION_POLICY:-atm}"
+      STRATEGY_STRIKE_MAX_OTM_STEPS: "${STRATEGY_STRIKE_MAX_OTM_STEPS:-2}"
+      STRATEGY_STRIKE_MIN_OI: "${STRATEGY_STRIKE_MIN_OI:-50000}"
+      STRATEGY_STRIKE_MIN_VOLUME: "${STRATEGY_STRIKE_MIN_VOLUME:-15000}"
+      STRATEGY_STRIKE_LIQUIDITY_WEIGHT: "${STRATEGY_STRIKE_LIQUIDITY_WEIGHT:-1.0}"
+      STRATEGY_STRIKE_AFFORDABILITY_WEIGHT: "${STRATEGY_STRIKE_AFFORDABILITY_WEIGHT:-0.25}"
+      STRATEGY_STRIKE_DISTANCE_PENALTY: "${STRATEGY_STRIKE_DISTANCE_PENALTY:-0.05}"
+    command:
+      [
+        "python",
+        "-m",
+        "strategy_app.main",
+        "--engine",
+        "${STRATEGY_ENGINE:-deterministic}",
+        "--min-confidence",
+        "${STRATEGY_MIN_CONFIDENCE:-0.65}",
+        "--topic",
+        "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}",
+        "--run-dir",
+        "/app/.run/strategy_app_historical",
+        "--rollout-stage",
+        "${STRATEGY_ROLLOUT_STAGE:-paper}",
+        "--position-size-multiplier",
+        "${STRATEGY_POSITION_SIZE_MULTIPLIER:-1.0}",
+        "--ml-runtime-guard-file",
+        "${STRATEGY_ML_RUNTIME_GUARD_FILE:-}",
+      ]
+    volumes:
+      - ./.run:/app/.run
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-m", "strategy_app.health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  strategy_persistence_app_historical:
+    profiles: ["historical"]
+    build:
+      context: .
+      dockerfile: persistence_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      strategy_app_historical:
+        condition: service_started
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      MARKET_SESSION_ENABLED: "0"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      STRATEGY_VOTE_TOPIC: "${STRATEGY_VOTE_TOPIC_HISTORICAL:-market:strategy:votes:v1:historical}"
+      TRADE_SIGNAL_TOPIC: "${TRADE_SIGNAL_TOPIC_HISTORICAL:-market:strategy:signals:v1:historical}"
+      STRATEGY_POSITION_TOPIC: "${STRATEGY_POSITION_TOPIC_HISTORICAL:-market:strategy:positions:v1:historical}"
+      MONGO_COLL_STRATEGY_VOTES: "${MONGO_COLL_STRATEGY_VOTES_HISTORICAL:-strategy_votes_historical}"
+      MONGO_COLL_TRADE_SIGNALS: "${MONGO_COLL_TRADE_SIGNALS_HISTORICAL:-trade_signals_historical}"
+      MONGO_COLL_STRATEGY_POSITIONS: "${MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL:-strategy_positions_historical}"
+    command:
+      [
+        "python",
+        "-m",
+        "persistence_app.main_strategy_consumer",
+        "--foreground",
+        "--vote-topic",
+        "${STRATEGY_VOTE_TOPIC_HISTORICAL:-market:strategy:votes:v1:historical}",
+        "--signal-topic",
+        "${TRADE_SIGNAL_TOPIC_HISTORICAL:-market:strategy:signals:v1:historical}",
+        "--position-topic",
+        "${STRATEGY_POSITION_TOPIC_HISTORICAL:-market:strategy:positions:v1:historical}",
+      ]
+    volumes:
+      - ./.run:/app/.run
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "persistence_app.strategy_health",
+          "--max-age-seconds",
+          "300",
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
 
 volumes:
   redis_data:

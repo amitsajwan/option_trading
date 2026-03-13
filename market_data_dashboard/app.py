@@ -7,19 +7,23 @@ completely decoupled from engine/trading functionality.
 """
 
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 import requests
 import json
+import csv
 import asyncio
 import math
 from datetime import datetime, timezone, timedelta
 import os
 import logging
+import re
 from typing import Dict, Any, List, Optional, Sequence, Tuple
 import time
+import numpy as np
 import redis
 import uuid
 import threading
@@ -28,7 +32,24 @@ import fnmatch
 import subprocess
 import sys
 from collections import deque
-from urllib.parse import urlencode
+from functools import lru_cache
+from urllib.parse import quote, urlencode
+
+try:
+    from .live_strategy_monitor_service import LiveStrategyMonitorService
+except Exception:
+    try:
+        from live_strategy_monitor_service import LiveStrategyMonitorService  # type: ignore
+    except Exception:
+        LiveStrategyMonitorService = None
+
+try:
+    from .strategy_evaluation_service import StrategyEvaluationService
+except Exception:
+    try:
+        from strategy_evaluation_service import StrategyEvaluationService  # type: ignore
+    except Exception:
+        StrategyEvaluationService = None
 
 try:
     from contracts_app.options_math import black_scholes_price, calculate_option_greeks, estimate_risk_free_rate
@@ -36,6 +57,16 @@ except Exception:
     black_scholes_price = None
     calculate_option_greeks = None
     estimate_risk_free_rate = None
+
+try:
+    from contracts_app import IST_ZONE, TimestampSourceMode, isoformat_ist, parse_timestamp_to_ist
+except Exception:
+    from zoneinfo import ZoneInfo
+
+    IST_ZONE = ZoneInfo("Asia/Kolkata")
+    TimestampSourceMode = None  # type: ignore
+    isoformat_ist = None  # type: ignore
+    parse_timestamp_to_ist = None  # type: ignore
 
 try:
     from ingestion_app.env_settings import redis_config as _redis_env_config, resolve_instrument_symbol
@@ -72,6 +103,39 @@ _PLACEHOLDER_INSTRUMENTS = {"FALLBACK_TEST"}
 def _is_placeholder_instrument(value: Any) -> bool:
     return str(value or "").strip().upper() in _PLACEHOLDER_INSTRUMENTS
 
+
+def _normalize_instrument_symbol(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    return text
+
+
+def _infer_exchange_for_symbol(symbol: str) -> Optional[str]:
+    normalized = _normalize_instrument_symbol(symbol)
+    if not normalized:
+        return None
+    if normalized.endswith(("FUT", "CE", "PE")):
+        return "NFO"
+    if normalized in {"INDIA VIX", "INDIAVIX", "BANKNIFTY", "NIFTY", "NIFTY BANK", "NIFTY 50"}:
+        return "NSE"
+    return None
+
+
+def _normalize_instrument_entry(raw: Any) -> Optional[Dict[str, Optional[str]]]:
+    if isinstance(raw, dict):
+        symbol = _normalize_instrument_symbol(raw.get("symbol"))
+        exchange = str(raw.get("exchange") or "").strip().upper() or None
+    else:
+        symbol = _normalize_instrument_symbol(raw)
+        exchange = None
+    if not symbol or _is_placeholder_instrument(symbol):
+        return None
+    return {
+        "symbol": symbol,
+        "exchange": exchange or _infer_exchange_for_symbol(symbol),
+    }
+
 def get_virtual_time_info():
     """Get virtual time status and current time."""
     try:
@@ -91,7 +155,11 @@ def get_virtual_time_info():
 
 
 def _parse_timestamp_flexible(value: Any) -> Optional[datetime]:
-    """Parse various timestamp representations into a timezone-aware datetime (UTC)."""
+    """Parse various timestamp representations into a timezone-aware datetime (IST)."""
+    if parse_timestamp_to_ist is not None:
+        parsed = parse_timestamp_to_ist(value, naive_mode=TimestampSourceMode.MARKET_IST)
+        if parsed is not None:
+            return parsed
     if value is None:
         return None
 
@@ -101,7 +169,7 @@ def _parse_timestamp_flexible(value: Any) -> Optional[datetime]:
         if ts > 1e12:  # milliseconds
             ts = ts / 1000.0
         try:
-            return datetime.fromtimestamp(ts, tz=timezone.utc)
+            return datetime.fromtimestamp(ts, tz=IST_ZONE)
         except Exception:
             return None
 
@@ -116,7 +184,7 @@ def _parse_timestamp_flexible(value: Any) -> Optional[datetime]:
                 num = int(raw)
                 if num > 1e12:
                     num = num / 1000
-                return datetime.fromtimestamp(num, tz=timezone.utc)
+                return datetime.fromtimestamp(num, tz=IST_ZONE)
             except Exception:
                 return None
 
@@ -136,19 +204,23 @@ def _parse_timestamp_flexible(value: Any) -> Optional[datetime]:
             return None
 
         if dt.tzinfo is None:
-            # Default naive timestamps to IST to match existing market time assumptions
-            dt = dt.replace(tzinfo=timezone(timedelta(hours=5, minutes=30)))
-        return dt.astimezone(timezone.utc)
+            dt = dt.replace(tzinfo=IST_ZONE)
+        return dt.astimezone(IST_ZONE)
 
     return None
 
 
 def _normalize_timestamp_string(value: Any) -> Any:
-    """Normalize a timestamp-like value to ISO-8601 UTC string when parseable."""
+    """Normalize a timestamp-like value to ISO-8601 IST string when parseable."""
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
+        # Preserve date-only fields as-is; converting through timezone creates confusing day shifts.
+        return value
     dt = _parse_timestamp_flexible(value)
     if not dt:
         return value
-    return dt.isoformat().replace("+00:00", "Z")
+    if isoformat_ist is not None:
+        return isoformat_ist(dt)
+    return dt.astimezone(IST_ZONE).isoformat()
 
 
 def _normalize_timestamp_fields(payload: Any) -> Any:
@@ -162,9 +234,13 @@ def _normalize_timestamp_fields(payload: Any) -> Any:
             key_l = str(key).lower()
             if isinstance(value, (dict, list)):
                 normalized[key] = _normalize_timestamp_fields(value)
-            elif any(
-                token in key_l
-                for token in ["timestamp", "_at", "date", "time"]
+            elif (
+                key_l == "timestamp"
+                or key_l.endswith("_timestamp")
+                or key_l.endswith("_time")
+                or key_l.endswith("_date")
+                or key_l.endswith("_at")
+                or key_l in {"entry_dt", "exit_dt", "started_at", "ended_at", "submitted_at", "updated_at"}
             ):
                 normalized[key] = _normalize_timestamp_string(value)
             else:
@@ -420,6 +496,70 @@ def _select_most_active_instrument(
 
 def _extract_bar_timestamp(bar: Dict[str, Any]) -> Optional[str]:
     return bar.get("start_at") or bar.get("timestamp")
+
+
+def _fetch_api_instrument_fallback(symbol: str) -> Optional[Dict[str, Any]]:
+    """Best-effort API fallback when Redis OHLC history is absent for an instrument."""
+    normalized_symbol = _normalize_instrument_symbol(symbol)
+    if not normalized_symbol:
+        return None
+
+    encoded_symbol = quote(normalized_symbol, safe="")
+    tick_payload: Optional[Dict[str, Any]] = None
+    ohlc_payload: List[Dict[str, Any]] = []
+
+    try:
+        tick_response = requests.get(
+            f"{MARKET_DATA_API_URL}/api/v1/market/tick/{encoded_symbol}",
+            timeout=2,
+        )
+        if tick_response.status_code == 200:
+            payload = tick_response.json()
+            if isinstance(payload, dict):
+                tick_payload = payload
+    except Exception:
+        pass
+
+    try:
+        ohlc_response = requests.get(
+            f"{MARKET_DATA_API_URL}/api/v1/market/ohlc/{encoded_symbol}?timeframe=1m&limit=2&order=desc",
+            timeout=3,
+        )
+        if ohlc_response.status_code == 200:
+            payload = ohlc_response.json()
+            if isinstance(payload, list):
+                ohlc_payload = [item for item in payload if isinstance(item, dict)]
+    except Exception:
+        pass
+
+    if not tick_payload and not ohlc_payload:
+        return None
+
+    latest_bar = ohlc_payload[0] if ohlc_payload else {}
+    oldest_bar = ohlc_payload[-1] if ohlc_payload else latest_bar
+    latest_timestamp = (
+        _extract_bar_timestamp(latest_bar)
+        or (tick_payload or {}).get("timestamp")
+    )
+    first_timestamp = (
+        _extract_bar_timestamp(oldest_bar)
+        or latest_timestamp
+    )
+    latest_price = (
+        latest_bar.get("close")
+        or latest_bar.get("last_price")
+        or (tick_payload or {}).get("last_price")
+    )
+
+    return {
+        "status": "available",
+        "data_points": len(ohlc_payload) if ohlc_payload else (1 if tick_payload else 0),
+        "first_timestamp": _normalize_timestamp_string(first_timestamp),
+        "latest_timestamp": _normalize_timestamp_string(latest_timestamp),
+        "latest_price": latest_price,
+        "data_source": "api_fallback",
+        "tick_timestamp": _normalize_timestamp_string((tick_payload or {}).get("timestamp")),
+    }
 
 
 def _merge_ohlc_bars_by_timeframe(data: List[Dict[str, Any]], timeframe: str) -> List[Dict[str, Any]]:
@@ -933,12 +1073,317 @@ def _build_chart_payload_from_ohlc(
         },
     }
 
+
+def _canonical_indicator_timeframe(raw: Any) -> str:
+    text = str(raw or "1min").strip().lower()
+    aliases = {
+        "1m": "1min",
+        "1min": "1min",
+        "minute": "1min",
+        "5m": "5min",
+        "5min": "5min",
+        "15m": "15min",
+        "15min": "15min",
+        "1h": "1h",
+        "4h": "4h",
+        "1d": "1d",
+    }
+    return aliases.get(text, text or "1min")
+
+
+def _indicator_stale_threshold_seconds(timeframe: str) -> int:
+    tf = _canonical_indicator_timeframe(timeframe)
+    return {
+        "1min": 180,
+        "5min": 900,
+        "15min": 1800,
+        "1h": 5400,
+        "4h": 21600,
+        "1d": 86400,
+    }.get(tf, 180)
+
+
+def _has_indicator_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        text = value.strip()
+        return bool(text and text != "--")
+    if isinstance(value, (int, float)):
+        return not (math.isnan(float(value)) or math.isinf(float(value)))
+    return True
+
+
+def _rsi_status_label(rsi_value: Optional[float]) -> Optional[str]:
+    if rsi_value is None or not math.isfinite(rsi_value):
+        return None
+    if rsi_value >= 70.0:
+        return "OVERBOUGHT"
+    if rsi_value <= 30.0:
+        return "OVERSOLD"
+    if rsi_value >= 55.0:
+        return "BULLISH"
+    if rsi_value <= 45.0:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def _volatility_level_from_metrics(
+    *,
+    atr: Optional[float],
+    price: Optional[float],
+    realized_vol_30m: Optional[float],
+) -> Optional[str]:
+    rv = _safe_float(realized_vol_30m, None)
+    if rv is not None and math.isfinite(rv):
+        if rv >= 0.18:
+            return "HIGH"
+        if rv >= 0.10:
+            return "MEDIUM"
+        return "LOW"
+    if atr is None or price is None or not math.isfinite(atr) or not math.isfinite(price) or price == 0:
+        return None
+    ratio = abs(float(atr) / float(price))
+    if ratio >= 0.010:
+        return "HIGH"
+    if ratio >= 0.004:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _snapshot_to_indicator_fields(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(snapshot, dict):
+        return {}
+    session_levels = snapshot.get("session_levels") if isinstance(snapshot.get("session_levels"), dict) else {}
+    futures_bar = snapshot.get("futures_bar") if isinstance(snapshot.get("futures_bar"), dict) else {}
+    futures_derived = snapshot.get("futures_derived") if isinstance(snapshot.get("futures_derived"), dict) else {}
+    mtf_derived = snapshot.get("mtf_derived") if isinstance(snapshot.get("mtf_derived"), dict) else {}
+    opening_range = snapshot.get("opening_range") if isinstance(snapshot.get("opening_range"), dict) else {}
+
+    oi = _safe_float(futures_bar.get("fut_oi"), None)
+    oi_change = _safe_float(futures_derived.get("fut_oi_change_30m"), None)
+    oi_pct_change = None
+    if oi is not None and oi_change is not None:
+        prev_oi = oi - oi_change
+        if prev_oi != 0:
+            oi_pct_change = (oi_change / prev_oi) * 100.0
+
+    pivot_point = pivot_r1 = pivot_s1 = None
+    prev_high = _safe_float(session_levels.get("prev_day_high"), None)
+    prev_low = _safe_float(session_levels.get("prev_day_low"), None)
+    prev_close = _safe_float(session_levels.get("prev_day_close"), None)
+    if prev_high is not None and prev_low is not None and prev_close is not None:
+        pivot_point = (prev_high + prev_low + prev_close) / 3.0
+        pivot_r1 = (2.0 * pivot_point) - prev_low
+        pivot_s1 = (2.0 * pivot_point) - prev_high
+
+    rsi_14 = _safe_float(mtf_derived.get("rsi_14_1m"), None)
+    trend_direction = str(mtf_derived.get("ema_trend_5m") or "").strip().upper() or None
+
+    out = {
+        "rsi_14": rsi_14,
+        "rsi_status": _rsi_status_label(rsi_14),
+        "macd_value": _safe_float(mtf_derived.get("macd_line_5m"), None),
+        "trend_direction": trend_direction,
+        "atr_14": _safe_float(mtf_derived.get("atr_14_1m"), None),
+        "bollinger_percent_b": _safe_float(mtf_derived.get("bb_pct_b_5m"), None),
+        "volatility_level": _volatility_level_from_metrics(
+            atr=_safe_float(mtf_derived.get("atr_14_1m"), None),
+            price=_safe_float(futures_bar.get("fut_close"), None),
+            realized_vol_30m=_safe_float(futures_derived.get("realized_vol_30m"), None),
+        ),
+        "pivot_point": pivot_point,
+        "pivot_r1": pivot_r1,
+        "pivot_s1": pivot_s1,
+        "range_20": _safe_float(opening_range.get("or_width"), None),
+        "oi": oi,
+        "oi_change": oi_change,
+        "oi_pct_change": oi_pct_change,
+        "oi_sma_5": oi,
+    }
+    return {k: v for k, v in out.items() if _has_indicator_value(v)}
+
+
+def _extract_snapshot_timestamp(snapshot: Dict[str, Any], fallback_ts: Any = None) -> Optional[str]:
+    session_context = snapshot.get("session_context") if isinstance(snapshot.get("session_context"), dict) else {}
+    raw = (
+        session_context.get("timestamp")
+        or session_context.get("time")
+        or fallback_ts
+    )
+    normalized = _normalize_timestamp_string(raw)
+    return str(normalized) if normalized else None
+
+
+def _load_latest_snapshot_from_mongo(instrument: str) -> Optional[Dict[str, Any]]:
+    if _strategy_eval_service is None:
+        return None
+    try:
+        coll_name = str(os.getenv("MONGO_COLL_SNAPSHOTS") or "phase1_market_snapshots").strip() or "phase1_market_snapshots"
+        coll = _strategy_eval_service._db()[coll_name]
+        query = {"instrument": str(instrument).strip().upper()}
+        projection = {
+            "_id": 0,
+            "timestamp": 1,
+            "trade_date_ist": 1,
+            "payload.snapshot": 1,
+        }
+        # Some historical rows may carry mixed timestamp formats/types.
+        # trade_date_ist is normalized YYYY-MM-DD and sorts reliably.
+        doc = coll.find_one(
+            query,
+            projection=projection,
+            sort=[("trade_date_ist", -1), ("timestamp", -1)],
+        )
+        if not isinstance(doc, dict):
+            return None
+        payload = doc.get("payload") if isinstance(doc.get("payload"), dict) else {}
+        snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
+        if not snapshot:
+            return None
+        return {
+            "snapshot": snapshot,
+            "snapshot_timestamp": _normalize_timestamp_string(doc.get("timestamp")),
+            "trade_date_ist": doc.get("trade_date_ist"),
+            "source": "mongo_snapshots",
+        }
+    except Exception:
+        return None
+
+
+def _redis_get_first_value(
+    r: redis.Redis,
+    keys: Sequence[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    for key in keys:
+        try:
+            value = r.get(str(key))
+        except Exception:
+            continue
+        if value is not None:
+            return str(key), str(value)
+    return None, None
+
+
+def _redis_prefixed_keys(mode_hint: Optional[str], suffixes: Sequence[str]) -> List[str]:
+    out: List[str] = []
+    for mode in _mode_priority(mode_hint):
+        for suffix in suffixes:
+            out.append(f"{mode}:{suffix}")
+    out.extend([str(s) for s in suffixes])
+    # stable de-dup
+    return list(dict.fromkeys(out))
+
+
+def _mongo_latest_ts_for_instrument(
+    coll_name: str,
+    instrument: str,
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "collection": coll_name,
+        "collection_exists": False,
+        "timestamp": None,
+        "has_data": False,
+    }
+    if _strategy_eval_service is None:
+        out["error"] = "strategy_evaluation_service_unavailable"
+        return out
+    try:
+        db = _strategy_eval_service._db()
+        existing = set(db.list_collection_names())
+        if coll_name not in existing:
+            return out
+        out["collection_exists"] = True
+        query = {"instrument": str(instrument).strip().upper()}
+        doc = db[coll_name].find_one(query, projection={"_id": 0, "timestamp": 1}, sort=[("timestamp", -1)])
+        if isinstance(doc, dict):
+            out["timestamp"] = _normalize_timestamp_string(doc.get("timestamp"))
+            out["has_data"] = True
+        return out
+    except Exception as exc:
+        out["error"] = str(exc)
+        return out
+
+
+def _lag_check_payload(
+    *,
+    name: str,
+    redis_timestamp: Any,
+    mongo_timestamp: Any,
+    threshold_seconds: int,
+    redis_source: Optional[str] = None,
+    mongo_source: Optional[str] = None,
+    note: Optional[str] = None,
+) -> Dict[str, Any]:
+    redis_norm = _normalize_timestamp_string(redis_timestamp)
+    mongo_norm = _normalize_timestamp_string(mongo_timestamp)
+    redis_dt = _parse_timestamp_flexible(redis_norm)
+    mongo_dt = _parse_timestamp_flexible(mongo_norm)
+
+    raw_delta_seconds: Optional[float] = None
+    mongo_lag_seconds: Optional[float] = None
+    if redis_dt is not None and mongo_dt is not None:
+        raw_delta_seconds = (redis_dt - mongo_dt).total_seconds()
+        mongo_lag_seconds = max(0.0, raw_delta_seconds)
+
+    if redis_dt is None and mongo_dt is None:
+        status = "no_data"
+    elif redis_dt is None:
+        status = "redis_missing"
+    elif mongo_dt is None:
+        status = "mongo_missing"
+    elif mongo_lag_seconds is not None and mongo_lag_seconds > float(threshold_seconds):
+        status = "lagging"
+    else:
+        status = "ok"
+
+    return {
+        "name": name,
+        "status": status,
+        "threshold_seconds": int(max(1, threshold_seconds)),
+        "redis_timestamp": redis_norm,
+        "mongo_timestamp": mongo_norm,
+        "raw_delta_seconds": raw_delta_seconds,
+        "mongo_lag_seconds": mongo_lag_seconds,
+        "redis_source": redis_source,
+        "mongo_source": mongo_source,
+        "note": note,
+    }
+
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Market Data Dashboard",
     description="Standalone market data monitoring and visualization",
     version="1.0.0"
+)
+
+_cors_default = ",".join(
+    [
+        "http://localhost:8011",
+        "http://127.0.0.1:8011",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+)
+_cors_raw = str(os.getenv("DASHBOARD_CORS_ORIGINS") or _cors_default)
+_cors_origins = [item.strip() for item in _cors_raw.split(",") if item.strip()]
+_cors_allow_all = "*" in _cors_origins
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if _cors_allow_all else _cors_origins,
+    allow_credentials=False if _cors_allow_all else True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+_strategy_eval_service = StrategyEvaluationService() if StrategyEvaluationService is not None else None
+_live_strategy_monitor_service = (
+    LiveStrategyMonitorService(_strategy_eval_service)
+    if (LiveStrategyMonitorService is not None and _strategy_eval_service is not None)
+    else None
 )
 
 # Mount static files (optional - create directory if needed)
@@ -956,13 +1401,12 @@ MARKET_DATA_API_URL = os.getenv("MARKET_DATA_API_URL") or (
     f"{os.getenv('MARKET_DATA_API_PORT', '8004')}"
 )
 
-# Lightweight in-memory caches to keep UI responsive when upstream API is slow.
-_LAST_GOOD_INDICATORS: Dict[str, Dict[str, Any]] = {}
+# Lightweight in-memory caches for selected API payloads.
 _LAST_GOOD_DEPTH: Dict[str, Dict[str, Any]] = {}
 _LAST_GOOD_OPTIONS: Dict[str, Dict[str, Any]] = {}
 
 PUBLIC_SCHEMA_VERSION = "v1"
-PUBLIC_TOPICS: Tuple[str, ...] = ("mode", "tick", "ohlc", "indicators", "depth", "options")
+PUBLIC_TOPICS: Tuple[str, ...] = ("mode", "tick", "ohlc", "indicators", "depth", "options", "strategy_eval")
 PUBLIC_TIMEFRAMES: Tuple[str, ...] = ("1m", "5m", "15m")
 PUBLIC_TIMEFRAME_ALIASES: Dict[str, List[str]] = {
     "1m": ["1m", "1min", "minute"],
@@ -1014,6 +1458,12 @@ DEFAULT_MODEL_POLICY_REPORT_PATH = (
     / "threshold_report.json"
 )
 TRADING_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline" / "model_catalog" / "models"
+ARTIFACT_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline" / "artifacts" / "models" / "by_features"
+ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "published_models"
+SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR = REPO_ROOT / "ml_pipeline" / "contracts" / "snapshot_ml_flat_v1"
+SNAPSHOT_ML_FLAT_V1_SCHEMA_PATH = SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR / "snapshot_ml_flat_v1.schema.json"
+SNAPSHOT_ML_FLAT_V1_FEATURE_GROUPS_PATH = SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR / "feature_groups.json"
+SNAPSHOT_ML_FLAT_V1_LEGACY_MAP_PATH = SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR / "legacy_to_v1.csv"
 
 _TRADING_LOCK = threading.Lock()
 _TRADING_DEFAULT_INSTANCE = "default"
@@ -1175,6 +1625,199 @@ def _first_existing_path(candidates: Sequence[Path]) -> Optional[Path]:
     return None
 
 
+def _read_csv_dict_rows(path: Path) -> List[Dict[str, str]]:
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            return [dict(row) for row in csv.DictReader(handle)]
+    except Exception:
+        return []
+
+
+def _humanize_identifier_token(token: str) -> str:
+    raw = str(token or "").strip()
+    if not raw:
+        return ""
+    token_map = {
+        "atr": "ATR",
+        "atm": "ATM",
+        "ce": "CE",
+        "ctx": "Context",
+        "dte": "DTE",
+        "ema": "EMA",
+        "fut": "Fut",
+        "iv": "IV",
+        "oi": "OI",
+        "opt": "Opt",
+        "osc": "Osc",
+        "pcr": "PCR",
+        "pe": "PE",
+        "px": "Price",
+        "ret": "Return",
+        "rsi": "RSI",
+        "vix": "VIX",
+        "vwap": "VWAP",
+    }
+    lowered = raw.lower()
+    if lowered in token_map:
+        return token_map[lowered]
+    if raw.isdigit():
+        return raw
+    if raw[:-1].isdigit() and raw.endswith("m"):
+        return raw
+    if raw[:-1].isdigit() and raw.endswith("d"):
+        return raw.upper()
+    if len(raw) <= 3 and raw.isalpha():
+        return raw.upper()
+    return raw.replace("-", " ").capitalize()
+
+
+def _humanize_model_catalog_title(model_group: str, profile_id: Optional[str] = None) -> str:
+    base = " / ".join(
+        " ".join(_humanize_identifier_token(part) for part in section.split("_") if str(part).strip())
+        for section in str(model_group or "").split("/")
+        if str(section).strip()
+    )
+    suffix = str(profile_id or "").strip()
+    if not suffix:
+        return base or "Published Model"
+    pretty_suffix = " ".join(_humanize_identifier_token(part) for part in suffix.split("_") if str(part).strip())
+    return f"{base} [{pretty_suffix}]" if base else pretty_suffix
+
+
+@lru_cache(maxsize=1)
+def _load_snapshot_ml_flat_v1_dictionary() -> Dict[str, Any]:
+    groups_payload = _safe_load_json(SNAPSHOT_ML_FLAT_V1_FEATURE_GROUPS_PATH) or {}
+    schema_payload = _safe_load_json(SNAPSHOT_ML_FLAT_V1_SCHEMA_PATH) or {}
+    mapping_rows = _read_csv_dict_rows(SNAPSHOT_ML_FLAT_V1_LEGACY_MAP_PATH)
+
+    group_payloads = groups_payload.get("groups") if isinstance(groups_payload, dict) else {}
+    group_order: List[str] = []
+    groups: Dict[str, Dict[str, Any]] = {}
+    column_to_group: Dict[str, str] = {}
+    field_labels: Dict[str, str] = {}
+    for group_key, payload in (group_payloads or {}).items():
+        key = str(group_key or "").strip()
+        if not key or not isinstance(payload, dict):
+            continue
+        label = str(payload.get("label") or key).strip() or key
+        columns = [str(col).strip() for col in payload.get("columns", []) if str(col).strip()]
+        groups[key] = {"label": label, "columns": columns}
+        group_order.append(key)
+        prefix = f"{key}_"
+        for column in columns:
+            column_to_group[column] = key
+            trimmed = column[len(prefix):] if column.startswith(prefix) else column
+            field_labels[column] = " ".join(_humanize_identifier_token(part) for part in trimmed.split("_") if part)
+
+    rename_map: Dict[str, str] = {}
+    removed_legacy: set[str] = set()
+    for row in mapping_rows:
+        legacy_name = str(row.get("legacy_name") or "").strip()
+        new_name = str(row.get("new_name") or "").strip()
+        is_removed = str(row.get("is_removed") or "").strip().lower() == "true"
+        if not legacy_name:
+            continue
+        if is_removed:
+            removed_legacy.add(legacy_name)
+            continue
+        if new_name:
+            rename_map[legacy_name] = new_name
+
+    schema_fields = schema_payload.get("fields") if isinstance(schema_payload, dict) else []
+    required_columns = schema_payload.get("required_columns") if isinstance(schema_payload, dict) else []
+    return {
+        "contract_id": str(schema_payload.get("contract_id") or groups_payload.get("contract_id") or "snapshot_ml_flat_v1"),
+        "schema_version": str(schema_payload.get("schema_version") or groups_payload.get("schema_version") or "unknown"),
+        "group_order": group_order,
+        "groups": groups,
+        "column_to_group": column_to_group,
+        "field_labels": field_labels,
+        "rename_map": rename_map,
+        "removed_legacy": removed_legacy,
+        "schema_fields": schema_fields if isinstance(schema_fields, list) else [],
+        "required_columns": required_columns if isinstance(required_columns, list) else [],
+    }
+
+
+def _discover_latest_profile_paths(model_dir: Path) -> Tuple[Optional[Path], Optional[Path]]:
+    profiles_dir = model_dir / "config" / "profiles"
+    if not profiles_dir.exists():
+        return None, None
+    training_reports = sorted(
+        profiles_dir.glob("*/training_report.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    threshold_reports = sorted(
+        profiles_dir.glob("*/threshold_report.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return (
+        training_reports[0] if training_reports else None,
+        threshold_reports[0] if threshold_reports else None,
+    )
+
+
+def _discover_published_model_roots(root: Path, *, source_label: str) -> List[Dict[str, Any]]:
+    if not root.exists():
+        return []
+    entries: List[Dict[str, Any]] = []
+    for model_contract_path in sorted(root.rglob("model_contract.json")):
+        model_dir = model_contract_path.parent
+        latest_payload = _safe_load_json(model_dir / "reports" / "training" / "latest.json") or {}
+        published = latest_payload.get("published_paths") if isinstance(latest_payload, dict) else {}
+        training_fallback, threshold_fallback = _discover_latest_profile_paths(model_dir)
+
+        model_group = str(latest_payload.get("model_group") or "").strip()
+        if not model_group:
+            try:
+                rel = model_dir.relative_to(root)
+                model_group = rel.as_posix()
+            except Exception:
+                model_group = model_dir.name
+        profile_id = str(latest_payload.get("profile_id") or "").strip()
+        run_id = str(latest_payload.get("run_id") or "").strip()
+        feature_profile = str(latest_payload.get("feature_profile") or "").strip()
+        if not feature_profile:
+            feature_profile = str(model_group.split("/", 1)[0]).strip()
+
+        raw_entry = {
+            "instance_key": _normalize_trading_instance(model_group.replace("/", "_")),
+            "profile_key": profile_id or _normalize_trading_instance(model_group),
+            "title": _humanize_model_catalog_title(model_group, profile_id),
+            "summary": f"Published artifact discovery for {model_group}",
+            "description": f"run={run_id or '--'} profile={profile_id or '--'}",
+            "recommended": False,
+            "model_group": model_group,
+            "profile_id": profile_id,
+            "run_id": run_id,
+            "feature_profile": feature_profile,
+            "model_package": str(
+                published.get("model_package")
+                or _path_text(model_dir / "model" / "model.joblib")
+            ),
+            "threshold_report": str(
+                published.get("threshold_report")
+                or _path_text(threshold_fallback)
+            ),
+            "training_report_path": str(
+                published.get("training_report")
+                or _path_text(training_fallback)
+            ),
+            "model_contract": _path_text(model_contract_path),
+        }
+        entries.append(_build_catalog_entry(raw_entry, source=source_label, load_eval_snapshot=False))
+    return entries
+
+
+def _build_artifact_discovery_entries() -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    entries.extend(_discover_published_model_roots(ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR, source_label="artifact_discovery_ml_pipeline_2"))
+    entries.extend(_discover_published_model_roots(ARTIFACT_MODEL_CATALOG_DIR, source_label="artifact_discovery_ml_pipeline"))
+    return entries
+
+
 def _build_model_eval_snapshot(
     summary_file: Optional[Path],
     training_file: Optional[Path],
@@ -1284,6 +1927,7 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
     threshold_path = _resolve_repo_path(raw.get("threshold_report"))
     summary_path = _resolve_repo_path(raw.get("eval_summary_path"))
     training_path = _resolve_repo_path(raw.get("training_report_path"))
+    model_contract_path = _resolve_repo_path(raw.get("model_contract"))
 
     if load_eval_snapshot:
         eval_snapshot = _build_model_eval_snapshot(summary_path, training_path, threshold_path)
@@ -1307,6 +1951,7 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
         "threshold_report": bool(threshold_path and threshold_path.exists()),
         "eval_summary_path": bool(summary_path and summary_path.exists()),
         "training_report_path": bool(training_path and training_path.exists()),
+        "model_contract": bool(model_contract_path and model_contract_path.exists()),
     }
     missing_required: List[str] = []
     if not existence["model_package"]:
@@ -1323,6 +1968,8 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
         query_values["eval_summary_path"] = _path_text(summary_path)
     if training_path:
         query_values["training_report_path"] = _path_text(training_path)
+    if model_contract_path:
+        query_values["model_contract"] = _path_text(model_contract_path)
     prefill_url = f"/trading?{urlencode(query_values)}"
 
     eval_query: Dict[str, str] = {}
@@ -1333,11 +1980,16 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
     if threshold_path:
         eval_query["policy_report_path"] = _path_text(threshold_path)
     evaluation_api_url = f"/api/trading/model-evaluation?{urlencode(eval_query)}" if eval_query else ""
+    feature_intelligence_api_url = f"/api/trading/feature-intelligence?model={quote(instance_key, safe='')}"
 
     return {
         "source": source,
         "instance_key": instance_key,
         "profile_key": str(raw.get("profile_key") or ""),
+        "model_group": str(raw.get("model_group") or ""),
+        "profile_id": str(raw.get("profile_id") or ""),
+        "run_id": str(raw.get("run_id") or ""),
+        "feature_profile": str(raw.get("feature_profile") or ""),
         "title": str(raw.get("title") or instance_key),
         "summary": str(raw.get("summary") or ""),
         "description": str(raw.get("description") or ""),
@@ -1346,6 +1998,7 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
         "threshold_report": _path_text(threshold_path),
         "eval_summary_path": _path_text(summary_path),
         "training_report_path": _path_text(training_path),
+        "model_contract": _path_text(model_contract_path),
         "exists": existence,
         "ready_to_run": len(missing_required) == 0,
         "missing_required": missing_required,
@@ -1370,11 +2023,13 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
         "launch_url": f"/trading/model/{instance_key}",
         "prefill_url": prefill_url,
         "evaluation_api_url": evaluation_api_url,
+        "feature_intelligence_api_url": feature_intelligence_api_url,
     }
 
 
 def _build_trading_model_catalog() -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
+    seen_keys: set[str] = set()
 
     manifest_paths = sorted(TRADING_MODEL_CATALOG_DIR.glob("*/model.json")) if TRADING_MODEL_CATALOG_DIR.exists() else []
     for manifest in manifest_paths:
@@ -1384,9 +2039,370 @@ def _build_trading_model_catalog() -> List[Dict[str, Any]]:
         required = ("instance_key", "model_package", "threshold_report")
         if any(not str(payload.get(k) or "").strip() for k in required):
             continue
-        entries.append(_build_catalog_entry(payload, source="catalog_manifest", load_eval_snapshot=True))
+        entry = _build_catalog_entry(payload, source="catalog_manifest", load_eval_snapshot=True)
+        key = str(entry.get("instance_key") or "").strip().lower()
+        if key and key not in seen_keys:
+            entries.append(entry)
+            seen_keys.add(key)
 
+    for entry in _build_artifact_discovery_entries():
+        key = str(entry.get("instance_key") or "").strip().lower()
+        if key and key in seen_keys:
+            continue
+        entries.append(entry)
+        if key:
+            seen_keys.add(key)
+
+    entries.sort(
+        key=lambda item: (
+            not bool(item.get("ready_to_run")),
+            str(item.get("source") or "") != "artifact_discovery",
+            not bool(item.get("recommended")),
+            str(item.get("title") or "").lower(),
+        )
+    )
     return entries
+
+
+def _resolve_trading_model_catalog_entry(model: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    catalog = _build_trading_model_catalog()
+    if not catalog:
+        return None
+    lookup = _normalize_trading_instance(model) if model else ""
+    if lookup:
+        for entry in catalog:
+            if _normalize_trading_instance(entry.get("instance_key")) == lookup:
+                return entry
+            if _normalize_trading_instance(entry.get("profile_key")) == lookup:
+                return entry
+            if _normalize_trading_instance(entry.get("model_group")) == lookup:
+                return entry
+    for entry in catalog:
+        if entry.get("ready_to_run"):
+            return entry
+    return catalog[0]
+
+
+def _coerce_iso_day(value: Optional[str]) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text[:10]).date().isoformat()
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=16)
+def _load_model_package_cached(model_path_text: str) -> Optional[Dict[str, Any]]:
+    if not model_path_text:
+        return None
+    try:
+        if str(ML_PIPELINE_SRC) not in sys.path:
+            sys.path.insert(0, str(ML_PIPELINE_SRC))
+        import joblib  # type: ignore
+
+        payload = joblib.load(model_path_text)
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def _extract_pipeline_feature_scores(model_obj: Any, base_feature_names: Sequence[str]) -> Tuple[List[str], List[Optional[float]]]:
+    feature_names = [str(name).strip() for name in base_feature_names if str(name).strip()]
+    estimator = model_obj
+    if hasattr(model_obj, "named_steps"):
+        named_steps = getattr(model_obj, "named_steps", {}) or {}
+        estimator = named_steps.get("model") or (list(named_steps.values())[-1] if named_steps else model_obj)
+        pre = named_steps.get("pre")
+        if pre is not None and hasattr(pre, "get_feature_names_out"):
+            try:
+                transformed = [str(name).split("__")[-1].strip() for name in pre.get_feature_names_out()]
+                if transformed:
+                    feature_names = transformed
+            except Exception:
+                pass
+
+    values: Optional[np.ndarray] = None
+    if hasattr(estimator, "coef_"):
+        try:
+            coef = np.asarray(getattr(estimator, "coef_"), dtype=float)
+            values = np.abs(coef)
+            if values.ndim > 1:
+                values = values.mean(axis=0)
+        except Exception:
+            values = None
+    elif hasattr(estimator, "feature_importances_"):
+        try:
+            values = np.asarray(getattr(estimator, "feature_importances_"), dtype=float)
+        except Exception:
+            values = None
+
+    if values is None:
+        return feature_names, [None for _ in feature_names]
+
+    flat = np.ravel(values)
+    if len(flat) != len(feature_names) and len(flat) == len(base_feature_names):
+        feature_names = [str(name).strip() for name in base_feature_names if str(name).strip()]
+    if len(flat) != len(feature_names):
+        limit = min(len(flat), len(feature_names))
+        flat = flat[:limit]
+        feature_names = feature_names[:limit]
+
+    scores: List[Optional[float]] = []
+    for value in flat.tolist():
+        try:
+            numeric = float(value)
+        except Exception:
+            numeric = float("nan")
+        scores.append(numeric if math.isfinite(numeric) else None)
+    return feature_names, scores
+
+
+def _build_feature_intelligence_snapshot(
+    model_entry: Dict[str, Any],
+    *,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> Dict[str, Any]:
+    contract = _load_snapshot_ml_flat_v1_dictionary()
+    model_path = _resolve_repo_path(model_entry.get("model_package"))
+    training_path = _resolve_repo_path(model_entry.get("training_report_path"))
+    model_contract_path = _resolve_repo_path(model_entry.get("model_contract"))
+
+    package = (
+        _load_model_package_cached(str(model_path.resolve()))
+        if isinstance(model_path, Path) and model_path.exists()
+        else None
+    )
+    training_payload = _safe_load_json(training_path) if isinstance(training_path, Path) else None
+    model_contract_payload = _safe_load_json(model_contract_path) if isinstance(model_contract_path, Path) else None
+
+    base_feature_names = []
+    if isinstance(package, dict):
+        base_feature_names = [str(name).strip() for name in package.get("feature_columns", []) if str(name).strip()]
+    if not base_feature_names and isinstance(model_contract_payload, dict):
+        base_feature_names = [str(name).strip() for name in model_contract_payload.get("required_features", []) if str(name).strip()]
+
+    side_models = package.get("models") if isinstance(package, dict) and isinstance(package.get("models"), dict) else {}
+    side_keys = [str(key).strip() for key in side_models.keys() if str(key).strip()]
+    direction_semantics = package.get("direction_semantics") if isinstance(package, dict) else {}
+
+    raw_features: Dict[str, Dict[str, Any]] = {}
+    for raw_name in base_feature_names:
+        if raw_name not in raw_features:
+            raw_features[raw_name] = {"side_scores": {}, "source_feature_count": 0}
+
+    for side_key in side_keys:
+        feature_names, scores = _extract_pipeline_feature_scores(side_models.get(side_key), base_feature_names)
+        for raw_name, score in zip(feature_names, scores):
+            row = raw_features.setdefault(raw_name, {"side_scores": {}, "source_feature_count": 0})
+            row["source_feature_count"] = int(row.get("source_feature_count") or 0) + 1
+            if score is not None:
+                row["side_scores"][side_key] = score
+
+    v1_features: Dict[str, Dict[str, Any]] = {}
+    removed_legacy_count = 0
+    unmapped_feature_count = 0
+    rename_map = contract.get("rename_map", {})
+    column_to_group = contract.get("column_to_group", {})
+    removed_legacy = contract.get("removed_legacy", set())
+    groups = contract.get("groups", {})
+    field_labels = contract.get("field_labels", {})
+
+    for raw_name, row in raw_features.items():
+        translated_name = ""
+        if raw_name in column_to_group:
+            translated_name = raw_name
+        elif raw_name in rename_map:
+            translated_name = str(rename_map.get(raw_name) or "").strip()
+        elif raw_name in removed_legacy:
+            removed_legacy_count += 1
+            continue
+        else:
+            unmapped_feature_count += 1
+            continue
+
+        group_key = str(column_to_group.get(translated_name) or "other")
+        group_label = str((groups.get(group_key) or {}).get("label") or "Other")
+        entry = v1_features.setdefault(
+            translated_name,
+            {
+                "feature_name": translated_name,
+                "feature_label": str(field_labels.get(translated_name) or translated_name),
+                "group_key": group_key,
+                "group_label": group_label,
+                "side_scores": {},
+                "source_feature_count": 0,
+            },
+        )
+        entry["source_feature_count"] = int(entry.get("source_feature_count") or 0) + int(row.get("source_feature_count") or 1)
+        for side_key, score in (row.get("side_scores") or {}).items():
+            if score is None:
+                continue
+            existing = entry["side_scores"].get(side_key)
+            entry["side_scores"][side_key] = max(existing, score) if existing is not None else score
+
+    ranking_rows: List[Dict[str, Any]] = []
+    for entry in v1_features.values():
+        scores = [float(value) for value in (entry.get("side_scores") or {}).values() if value is not None]
+        importance_score = float(np.mean(scores)) if scores else None
+        ranking_rows.append(
+            {
+                **entry,
+                "importance_score": importance_score,
+            }
+        )
+    ranking_rows.sort(
+        key=lambda row: (
+            row.get("importance_score") is None,
+            -float(row.get("importance_score") or 0.0),
+            str(row.get("feature_name") or ""),
+        )
+    )
+    for idx, row in enumerate(ranking_rows, start=1):
+        row["rank"] = idx
+
+    ranking_by_name = {str(row.get("feature_name")): row for row in ranking_rows}
+
+    grouped_rows: List[Dict[str, Any]] = []
+    for group_key in contract.get("group_order", []):
+        payload = groups.get(group_key) or {}
+        columns = [str(name).strip() for name in payload.get("columns", []) if str(name).strip()]
+        features: List[Dict[str, Any]] = []
+        selected_count = 0
+        importance_values: List[float] = []
+        for column in columns:
+            selected = ranking_by_name.get(column)
+            if selected is not None:
+                selected_count += 1
+                if selected.get("importance_score") is not None:
+                    importance_values.append(float(selected["importance_score"]))
+            features.append(
+                {
+                    "feature_name": column,
+                    "feature_label": str(field_labels.get(column) or column),
+                    "group_key": group_key,
+                    "group_label": str(payload.get("label") or group_key),
+                    "is_selected": bool(selected),
+                    "importance_score": selected.get("importance_score") if selected else None,
+                    "rank": selected.get("rank") if selected else None,
+                    "side_scores": selected.get("side_scores") if selected else {},
+                }
+            )
+        grouped_rows.append(
+            {
+                "group_key": group_key,
+                "group_label": str(payload.get("label") or group_key),
+                "contract_columns_total": len(columns),
+                "selected_columns_count": selected_count,
+                "inactive_columns_count": len(columns) - selected_count,
+                "importance_mean": float(np.mean(importance_values)) if importance_values else None,
+                "features": features,
+            }
+        )
+
+    axis_keys = side_keys[:2]
+    axis_labels: List[str] = []
+    for side_key in axis_keys:
+        label_value = None
+        if isinstance(direction_semantics, dict):
+            label_value = direction_semantics.get(side_key)
+            if isinstance(label_value, dict):
+                label_value = label_value.get("label") or label_value.get("name") or label_value.get("side")
+        pretty = str(label_value or side_key).strip().upper() or side_key.upper()
+        axis_labels.append(f"{pretty} importance")
+
+    scatter_points: List[Dict[str, Any]] = []
+    for row in ranking_rows:
+        side_scores = row.get("side_scores") or {}
+        if axis_keys:
+            x_value = side_scores.get(axis_keys[0])
+            y_value = side_scores.get(axis_keys[1]) if len(axis_keys) > 1 else row.get("importance_score")
+        else:
+            x_value = row.get("importance_score")
+            y_value = row.get("importance_score")
+        if x_value is None or y_value is None:
+            continue
+        scatter_points.append(
+            {
+                "feature_name": row.get("feature_name"),
+                "feature_label": row.get("feature_label"),
+                "group_key": row.get("group_key"),
+                "group_label": row.get("group_label"),
+                "x": x_value,
+                "y": y_value,
+                "importance_score": row.get("importance_score"),
+                "rank": row.get("rank"),
+            }
+        )
+
+    coverage_start, coverage_end, coverage_days = _extract_training_coverage_range(training_payload)
+    requested_from = _coerce_iso_day(date_from)
+    requested_to = _coerce_iso_day(date_to)
+    coverage_match: Optional[bool] = None
+    if coverage_start and coverage_end and requested_from and requested_to:
+        coverage_match = coverage_start <= requested_from and requested_to <= coverage_end
+
+    selected_model = package.get("selected_model") if isinstance(package, dict) and isinstance(package.get("selected_model"), dict) else {}
+    return {
+        "model": {
+            "instance_key": str(model_entry.get("instance_key") or ""),
+            "title": str(model_entry.get("title") or model_entry.get("instance_key") or "model"),
+            "source": str(model_entry.get("source") or ""),
+            "model_group": str(model_entry.get("model_group") or ""),
+            "profile_id": str(model_entry.get("profile_id") or ""),
+            "run_id": str(model_entry.get("run_id") or ""),
+            "feature_profile": str(model_entry.get("feature_profile") or package.get("feature_profile") or ""),
+            "selected_feature_set": str(package.get("selected_feature_set") or ""),
+            "selected_model_name": str(selected_model.get("name") or ""),
+            "selected_model_family": str(selected_model.get("family") or ""),
+            "coverage": {
+                "training_start": coverage_start,
+                "training_end": coverage_end,
+                "training_days": coverage_days,
+                "requested_start": requested_from,
+                "requested_end": requested_to,
+                "requested_range_in_coverage": coverage_match,
+            },
+        },
+        "contract": {
+            "contract_id": str(contract.get("contract_id") or "snapshot_ml_flat_v1"),
+            "schema_version": str(contract.get("schema_version") or "unknown"),
+            "groups": [
+                {
+                    "group_key": group_key,
+                    "group_label": str((groups.get(group_key) or {}).get("label") or group_key),
+                    "contract_columns_total": len((groups.get(group_key) or {}).get("columns") or []),
+                }
+                for group_key in contract.get("group_order", [])
+            ],
+        },
+        "summary": {
+            "selected_v1_feature_count": len(ranking_rows),
+            "contract_group_count": len(grouped_rows),
+            "removed_legacy_feature_count": removed_legacy_count,
+            "unmapped_feature_count": unmapped_feature_count,
+            "scatter_point_count": len(scatter_points),
+            "requested_range_in_coverage": coverage_match,
+        },
+        "ranking": {
+            "rows": ranking_rows,
+        },
+        "groups": grouped_rows,
+        "scatter": {
+            "x_axis_key": axis_keys[0] if axis_keys else "importance_score",
+            "x_axis_label": axis_labels[0] if axis_labels else "Importance",
+            "y_axis_key": axis_keys[1] if len(axis_keys) > 1 else "importance_score",
+            "y_axis_label": axis_labels[1] if len(axis_labels) > 1 else "Importance",
+            "points": scatter_points,
+        },
+        "files": {
+            "model_package": _path_text(model_path),
+            "training_report": _path_text(training_path),
+            "model_contract": _path_text(model_contract_path),
+        },
+    }
 
 
 def _get_current_mode_hint(timeout_seconds: float = 1.5) -> Optional[str]:
@@ -1465,7 +2481,7 @@ def _current_time_for_mode(mode_hint: Optional[str] = None) -> datetime:
     except Exception:
         pass
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(IST_ZONE)
     if mode_hint == "historical":
         return now
     return now
@@ -1636,7 +2652,7 @@ def _normalize_options_contract(
 ) -> Dict[str, Any]:
     """Force a stable options payload shape for API/UI/agents."""
     out: Dict[str, Any] = dict(payload or {})
-    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    now_iso = _now_iso_ist()
 
     inst = str(out.get("instrument") or instrument or "").strip() or instrument
     resolved_mode = str(out.get("mode_hint") or mode_hint or _get_current_mode_hint() or "unknown").lower()
@@ -1681,7 +2697,7 @@ def _normalize_depth_contract(
 ) -> Dict[str, Any]:
     """Force a stable depth payload shape for API/UI/agents."""
     out: Dict[str, Any] = dict(payload or {})
-    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    now_iso = _now_iso_ist()
 
     inst = str(out.get("instrument") or instrument or "").strip() or instrument
     resolved_mode = str(out.get("mode_hint") or mode_hint or _get_current_mode_hint() or "unknown").lower()
@@ -1802,6 +2818,15 @@ def _stomp_destination_to_redis(destination: str) -> List[Tuple[str, str]]:
         instrument = destination.split("/", 4)[-1]
         return [("pattern", f"market:tick:{instrument}:*")]
 
+    # Strategy evaluation run progress
+    if destination.startswith("/topic/strategy/eval/run/"):
+        run_id = destination.split("/", 5)[-1]
+        if run_id:
+            return [("channel", f"strategy:eval:run:{run_id}")]
+
+    if destination == "/topic/strategy/eval/global":
+        return [("channel", "strategy:eval:global")]
+
     # Debug/raw access (exact Redis channel)
     if destination.startswith("/topic/raw/"):
         channel = destination.split("/", 3)[-1]
@@ -1921,7 +2946,7 @@ async def websocket_stomp(ws: WebSocket):
                 "type": "message",
                 "channel": channel,
                 "data": decoded,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": _now_iso_ist(),
             }
 
             if mode == "legacy":
@@ -2163,6 +3188,12 @@ async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+@app.get("/live/strategy", response_class=HTMLResponse)
+async def live_strategy(request: Request):
+    """Live strategy operator page."""
+    return templates.TemplateResponse("live_strategy.html", {"request": request})
+
+
 def _truthy(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -2221,6 +3252,12 @@ def _load_latest_backtest_state(instance: str) -> Optional[Dict[str, Any]]:
     with _TRADING_LOCK:
         _TRADING_LAST_BACKTEST[key] = payload
     return payload
+
+
+def _now_iso_ist() -> str:
+    if isoformat_ist is not None:
+        return isoformat_ist()
+    return datetime.now(IST_ZONE).isoformat()
 
 
 def _default_trading_paths(instance: str) -> Tuple[Path, Path, Path]:
@@ -2740,6 +3777,316 @@ async def get_trading_model_evaluation(
     return snapshot
 
 
+@app.get("/api/trading/feature-intelligence")
+async def get_trading_feature_intelligence(
+    model: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+):
+    """Return grouped v1 feature intelligence for the selected published model."""
+    model_entry = _resolve_trading_model_catalog_entry(model)
+    if not isinstance(model_entry, dict):
+        return {
+            "status": "no_data",
+            "message": "No runnable trading model artifacts were discovered.",
+            "ranking": {"rows": []},
+            "groups": [],
+            "scatter": {"points": []},
+        }
+
+    snapshot = _build_feature_intelligence_snapshot(
+        model_entry,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    snapshot["status"] = "ok" if snapshot.get("ranking", {}).get("rows") else "no_data"
+    return snapshot
+
+
+def _require_strategy_eval_service() -> Any:
+    if _strategy_eval_service is None:
+        raise HTTPException(status_code=500, detail="strategy evaluation service unavailable")
+    return _strategy_eval_service
+
+
+def _require_live_strategy_monitor_service() -> Any:
+    if _live_strategy_monitor_service is None:
+        raise HTTPException(status_code=500, detail="live strategy monitor service unavailable")
+    return _live_strategy_monitor_service
+
+
+@app.get("/api/live/strategy/session")
+async def get_live_strategy_session(
+    date: Optional[str] = None,
+    instrument: Optional[str] = None,
+    limit_votes: int = 25,
+    limit_signals: int = 25,
+    limit_trades: int = 20,
+    initial_capital: Optional[float] = None,
+    timeline_limit: int = 25,
+    debug_view: int = 0,
+):
+    service = _require_live_strategy_monitor_service()
+    try:
+        payload = service.get_live_strategy_session(
+            date=date,
+            instrument=instrument,
+            limit_votes=limit_votes,
+            limit_signals=limit_signals,
+            limit_trades=limit_trades,
+            initial_capital=initial_capital,
+            timeline_limit=timeline_limit,
+            debug_view=debug_view,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to build live strategy session: {exc}")
+    return _normalize_timestamp_fields(payload)
+
+
+@app.get("/api/strategy/evaluation/summary")
+async def get_strategy_evaluation_summary(
+    dataset: str = "historical",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    strategy: Optional[str] = None,
+    regime: Optional[str] = None,
+    run_id: Optional[str] = None,
+    initial_capital: float = 1000.0,
+    cost_bps: float = 0.0,
+):
+    service = _require_strategy_eval_service()
+    try:
+        filt = service.parse_filters(
+            dataset=dataset,
+            date_from=str(date_from or ""),
+            date_to=str(date_to or ""),
+            strategy_raw=strategy,
+            regime_raw=regime,
+            run_id_raw=run_id,
+            initial_capital=float(initial_capital),
+            cost_bps=float(cost_bps),
+            page=1,
+            page_size=50,
+            sort_by="exit_time",
+            sort_dir="desc",
+        )
+        payload = service.compute_summary(
+            dataset=filt["dataset"],
+            date_from=filt["date_from"],
+            date_to=filt["date_to"],
+            strategies=filt["strategies"],
+            regimes=filt["regimes"],
+            initial_capital=filt["initial_capital"],
+            cost_bps=filt["cost_bps"],
+            run_id=filt["run_id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _normalize_timestamp_fields(payload)
+
+
+@app.get("/api/strategy/evaluation/equity")
+async def get_strategy_evaluation_equity(
+    dataset: str = "historical",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    strategy: Optional[str] = None,
+    regime: Optional[str] = None,
+    run_id: Optional[str] = None,
+    initial_capital: float = 1000.0,
+    cost_bps: float = 0.0,
+):
+    service = _require_strategy_eval_service()
+    try:
+        filt = service.parse_filters(
+            dataset=dataset,
+            date_from=str(date_from or ""),
+            date_to=str(date_to or ""),
+            strategy_raw=strategy,
+            regime_raw=regime,
+            run_id_raw=run_id,
+            initial_capital=float(initial_capital),
+            cost_bps=float(cost_bps),
+            page=1,
+            page_size=50,
+            sort_by="exit_time",
+            sort_dir="desc",
+        )
+        payload = service.compute_equity(
+            dataset=filt["dataset"],
+            date_from=filt["date_from"],
+            date_to=filt["date_to"],
+            strategies=filt["strategies"],
+            regimes=filt["regimes"],
+            initial_capital=filt["initial_capital"],
+            cost_bps=filt["cost_bps"],
+            run_id=filt["run_id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _normalize_timestamp_fields(payload)
+
+
+@app.get("/api/strategy/evaluation/days")
+async def get_strategy_evaluation_days(
+    dataset: str = "historical",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    strategy: Optional[str] = None,
+    regime: Optional[str] = None,
+    run_id: Optional[str] = None,
+    initial_capital: float = 1000.0,
+    cost_bps: float = 0.0,
+    page: int = 1,
+    page_size: int = 50,
+):
+    service = _require_strategy_eval_service()
+    try:
+        filt = service.parse_filters(
+            dataset=dataset,
+            date_from=str(date_from or ""),
+            date_to=str(date_to or ""),
+            strategy_raw=strategy,
+            regime_raw=regime,
+            run_id_raw=run_id,
+            initial_capital=float(initial_capital),
+            cost_bps=float(cost_bps),
+            page=int(page),
+            page_size=int(page_size),
+            sort_by="exit_time",
+            sort_dir="desc",
+        )
+        payload = service.compute_days(
+            dataset=filt["dataset"],
+            date_from=filt["date_from"],
+            date_to=filt["date_to"],
+            strategies=filt["strategies"],
+            regimes=filt["regimes"],
+            initial_capital=filt["initial_capital"],
+            cost_bps=filt["cost_bps"],
+            page=filt["page"],
+            page_size=filt["page_size"],
+            run_id=filt["run_id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _normalize_timestamp_fields(payload)
+
+
+@app.get("/api/strategy/evaluation/trades")
+async def get_strategy_evaluation_trades(
+    dataset: str = "historical",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    strategy: Optional[str] = None,
+    regime: Optional[str] = None,
+    run_id: Optional[str] = None,
+    initial_capital: float = 1000.0,
+    cost_bps: float = 0.0,
+    page: int = 1,
+    page_size: int = 50,
+    sort_by: str = "exit_time",
+    sort_dir: str = "desc",
+):
+    service = _require_strategy_eval_service()
+    try:
+        filt = service.parse_filters(
+            dataset=dataset,
+            date_from=str(date_from or ""),
+            date_to=str(date_to or ""),
+            strategy_raw=strategy,
+            regime_raw=regime,
+            run_id_raw=run_id,
+            initial_capital=float(initial_capital),
+            cost_bps=float(cost_bps),
+            page=int(page),
+            page_size=int(page_size),
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+        )
+        payload = service.compute_trades(
+            dataset=filt["dataset"],
+            date_from=filt["date_from"],
+            date_to=filt["date_to"],
+            strategies=filt["strategies"],
+            regimes=filt["regimes"],
+            initial_capital=filt["initial_capital"],
+            cost_bps=filt["cost_bps"],
+            page=filt["page"],
+            page_size=filt["page_size"],
+            sort_by=filt["sort_by"],
+            sort_dir=filt["sort_dir"],
+            run_id=filt["run_id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _normalize_timestamp_fields(payload)
+
+
+@app.post("/api/strategy/evaluation/runs")
+async def create_strategy_evaluation_run(request: Request):
+    service = _require_strategy_eval_service()
+    payload: Dict[str, Any] = {}
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            payload = body
+    except Exception:
+        payload = {}
+    dataset = str(payload.get("dataset") or "historical").strip().lower()
+    date_from = str(payload.get("date_from") or "").strip()
+    date_to = str(payload.get("date_to") or "").strip()
+    speed = float(payload.get("speed") or 0.0)
+    base_path = str(payload.get("base_path") or "").strip() or None
+    risk_config = {
+        "stop_loss_pct": payload.get("stop_loss_pct"),
+        "target_pct": payload.get("target_pct"),
+        "trailing_enabled": payload.get("trailing_enabled"),
+        "trailing_activation_pct": payload.get("trailing_activation_pct"),
+        "trailing_offset_pct": payload.get("trailing_offset_pct"),
+        "trailing_lock_breakeven": payload.get("trailing_lock_breakeven"),
+    }
+    if not date_from or not date_to:
+        raise HTTPException(status_code=400, detail="date_from and date_to are required")
+    try:
+        result = service.queue_replay_run(
+            dataset=dataset,
+            date_from=date_from,
+            date_to=date_to,
+            speed=float(speed),
+            base_path=base_path,
+            risk_config=risk_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to queue run: {exc}")
+    return _normalize_timestamp_fields(result)
+
+
+@app.get("/api/strategy/evaluation/runs/latest")
+async def get_latest_strategy_evaluation_run(dataset: str = "historical", status: str = "completed"):
+    service = _require_strategy_eval_service()
+    item = service.get_latest_run(dataset=str(dataset or "historical"), status=str(status or "completed"))
+    if not isinstance(item, dict):
+        raise HTTPException(
+            status_code=404,
+            detail=f"no run found for dataset='{dataset}' status='{status}'",
+        )
+    return _normalize_timestamp_fields(item)
+
+
+@app.get("/api/strategy/evaluation/runs/{run_id}")
+async def get_strategy_evaluation_run(run_id: str):
+    service = _require_strategy_eval_service()
+    item = service.get_run(run_id=str(run_id))
+    if not isinstance(item, dict):
+        raise HTTPException(status_code=404, detail=f"run '{run_id}' not found")
+    return _normalize_timestamp_fields(item)
+
+
 @app.post("/api/trading/backtest/run")
 async def run_trading_backtest(request: Request):
     """Run one-date backtest using selected model artifacts (auto source: local archive or Mongo)."""
@@ -2789,7 +4136,7 @@ async def run_trading_backtest(request: Request):
     out_dir = Path(out_dir_rel) if Path(out_dir_rel).is_absolute() else (REPO_ROOT / out_dir_rel)
     instance_key = _normalize_trading_instance(payload.get("instance"))
 
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_id = datetime.now(IST_ZONE).strftime("%Y%m%d_%H%M%S")
     safe_instrument = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in instrument)
     run_tag = str(payload.get("tag") or f"{backtest_date}_{safe_instrument}_{run_id}")
 
@@ -3094,10 +4441,15 @@ async def start_trading_runner(request: Request):
     stdout_path = default_stdout_path
     stderr_path = default_stderr_path
 
+    legacy_runner_note = (
+        "This page launches the legacy paper runner and requires legacy "
+        "model_package + threshold_report artifacts. It does not use the "
+        "live registry-backed strategy_app deployment."
+    )
     if not model_path.exists():
-        raise HTTPException(status_code=400, detail=f"model package not found: {model_path}")
+        raise HTTPException(status_code=400, detail=f"{legacy_runner_note} Missing model package: {model_path}")
     if not threshold_path.exists():
-        raise HTTPException(status_code=400, detail=f"threshold report not found: {threshold_path}")
+        raise HTTPException(status_code=400, detail=f"{legacy_runner_note} Missing threshold report: {threshold_path}")
     if ce_threshold is not None and (ce_threshold < 0.0 or ce_threshold > 1.0):
         raise HTTPException(status_code=400, detail=f"ce_threshold must be within [0, 1], got {ce_threshold}")
     if pe_threshold is not None and (pe_threshold < 0.0 or pe_threshold > 1.0):
@@ -3426,7 +4778,7 @@ async def health():
     return {
         "status": "healthy",
         "service": "market-data-dashboard",
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        "timestamp": _now_iso_ist()
     }
 
 @app.get("/api/market-data/health")
@@ -3439,7 +4791,7 @@ async def market_data_health():
         return {
             "status": "unhealthy",
             "error": str(e),
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            "timestamp": _now_iso_ist()
         }
 
 @app.get("/api/v1/system/mode")
@@ -3453,13 +4805,13 @@ async def get_system_mode():
             return {
                 "mode": "unknown",
                 "error": f"API returned status {response.status_code}",
-                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                "timestamp": _now_iso_ist()
             }
     except Exception as e:
         return {
             "mode": "unknown",
             "error": str(e),
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            "timestamp": _now_iso_ist()
         }
 
 
@@ -3655,11 +5007,38 @@ def _public_topic_schemas() -> Dict[str, Dict[str, Any]]:
             },
             "additionalProperties": True,
         },
+        "strategy_eval": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "Strategy Evaluation Run Event",
+            "type": "object",
+            "required": ["event_type", "run_id", "timestamp"],
+            "properties": {
+                "event_type": {
+                    "type": "string",
+                    "enum": [
+                        "run_queued",
+                        "run_started",
+                        "run_progress",
+                        "run_completed",
+                        "run_failed",
+                        "evaluation_ready",
+                    ],
+                },
+                "run_id": {"type": "string"},
+                "timestamp": {"type": "string", "format": "date-time"},
+                "progress_pct": {"type": ["number", "null"]},
+                "current_day": {"type": ["string", "null"]},
+                "total_days": {"type": ["integer", "number", "null"]},
+                "message": {"type": ["string", "null"]},
+                "error": {"type": ["string", "null"]},
+            },
+            "additionalProperties": True,
+        },
     }
 
 
 async def _build_runtime_catalog(instrument: Optional[str] = None) -> Dict[str, Any]:
-    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    now_iso = _now_iso_ist()
     instruments = await _load_runtime_instruments(max_instruments=50)
     selected_instrument = str(instrument or "").strip() or (instruments[0] if instruments else (DEFAULT_INSTRUMENT or ""))
     mode_hint = _get_current_mode_hint(timeout_seconds=1.0)
@@ -3697,6 +5076,8 @@ async def _build_runtime_catalog(instrument: Optional[str] = None) -> Dict[str, 
             "ohlc_tf": f"/topic/market/ohlc/{selected_instrument}/1m" if selected_instrument else None,
             "indicators": f"/topic/indicators/{selected_instrument}" if selected_instrument else None,
             "ticks": f"/topic/market/tick/{selected_instrument}" if selected_instrument else None,
+            "strategy_eval_global": "/topic/strategy/eval/global",
+            "strategy_eval_run_template": "/topic/strategy/eval/run/{run_id}",
         },
         "availability": {},
     }
@@ -3993,7 +5374,7 @@ async def _build_runtime_catalog(instrument: Optional[str] = None) -> Dict[str, 
 @app.get("/api/schema")
 async def get_public_schema_index():
     """Versioned schema index for external consumers."""
-    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    now_iso = _now_iso_ist()
     schemas = _public_topic_schemas()
     topics = [
         {
@@ -4027,7 +5408,7 @@ async def get_public_topic_schema(topic: str):
             "status": "ok",
             "topic": topic_key,
             "schema_version": PUBLIC_SCHEMA_VERSION,
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": _now_iso_ist(),
             "schema": schemas[topic_key],
         }
     )
@@ -4042,7 +5423,7 @@ async def get_public_capabilities(instrument: str = None):
         {
             "status": catalog.get("status", "ok"),
             "schema_version": PUBLIC_SCHEMA_VERSION,
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": _now_iso_ist(),
             "mode": catalog.get("mode"),
             "instruments": catalog.get("instruments", []),
             "default_instrument": selected_instrument,
@@ -4107,13 +5488,24 @@ async def get_public_topic_example(topic: str, instrument: str = None, timeframe
         sample = await get_market_depth(selected_instrument)
     elif topic_key == "options":
         sample = await get_options_chain(selected_instrument)
+    elif topic_key == "strategy_eval":
+        sample = {
+            "event_type": "run_progress",
+            "run_id": "example-run-id",
+            "timestamp": _now_iso_ist(),
+            "progress_pct": 42.5,
+            "current_day": "2024-01-15",
+            "total_days": 20,
+            "message": "Replay in progress",
+            "error": None,
+        }
 
     return _normalize_timestamp_fields(
         {
             "status": "ok",
             "topic": topic_key,
             "schema_version": PUBLIC_SCHEMA_VERSION,
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": _now_iso_ist(),
             "mode": _get_current_mode_hint(timeout_seconds=1.0) or "unknown",
             "instrument": selected_instrument,
             "timeframe": tf,
@@ -4122,11 +5514,226 @@ async def get_public_topic_example(topic: str, instrument: str = None, timeframe
     )
 
 
+@app.get("/api/market-data/sync-lag")
+async def get_redis_mongo_sync_lag(instrument: str = ""):
+    """Report Redis vs Mongo lag for live read-model domains."""
+    selected_instrument = _normalize_instrument_symbol(instrument) or DEFAULT_INSTRUMENT
+    if not selected_instrument:
+        discovered = await asyncio.to_thread(_discover_instruments_from_redis, 1)
+        selected_instrument = discovered[0] if discovered else ""
+    if not selected_instrument:
+        return {
+            "status": "no_instrument",
+            "error": "No instrument provided and no redis-discovered instrument available",
+            "timestamp": _now_iso_ist(),
+            "checks": {},
+        }
+
+    mode_hint = _get_current_mode_hint(timeout_seconds=1.0)
+    thresholds = {
+        "snapshot": int(os.getenv("SYNC_LAG_THRESHOLD_SNAPSHOT_SECONDS") or "120"),
+        "tick": int(os.getenv("SYNC_LAG_THRESHOLD_TICK_SECONDS") or "30"),
+        "depth": int(os.getenv("SYNC_LAG_THRESHOLD_DEPTH_SECONDS") or "60"),
+        "options": int(os.getenv("SYNC_LAG_THRESHOLD_OPTIONS_SECONDS") or "120"),
+    }
+
+    redis_ok = False
+    redis_error: Optional[str] = None
+    r: Optional[redis.Redis] = None
+    try:
+        r = _redis_sync_client()
+        r.ping()
+        redis_ok = True
+    except Exception as exc:
+        redis_error = str(exc)
+
+    checks: Dict[str, Any] = {}
+
+    # Snapshot lag: compare latest Redis OHLC minute timestamp (proxy for live stream)
+    # with latest persisted snapshot timestamp in Mongo.
+    redis_snapshot_ts = None
+    redis_snapshot_source = None
+    if redis_ok and r is not None:
+        bars, redis_ohlc_key = await asyncio.to_thread(
+            _read_ohlc_from_redis,
+            selected_instrument,
+            "1min",
+            1,
+            "desc",
+            mode_hint,
+            bool(mode_hint),
+        )
+        if bars:
+            latest_bar = bars[-1]
+            redis_snapshot_ts = latest_bar.get("start_at") or latest_bar.get("timestamp")
+            redis_snapshot_source = redis_ohlc_key or "ohlc_sorted_proxy"
+    mongo_snapshot = await asyncio.to_thread(_load_latest_snapshot_from_mongo, selected_instrument)
+    snapshot_doc_ts = (mongo_snapshot or {}).get("snapshot_timestamp")
+    checks["snapshot"] = _lag_check_payload(
+        name="snapshot",
+        redis_timestamp=redis_snapshot_ts,
+        mongo_timestamp=snapshot_doc_ts,
+        threshold_seconds=thresholds["snapshot"],
+        redis_source=redis_snapshot_source or "redis_ohlc_proxy",
+        mongo_source=str(os.getenv("MONGO_COLL_SNAPSHOTS") or "phase1_market_snapshots"),
+        note="Redis side uses latest 1m OHLC timestamp as snapshot proxy (snapshot events are pub/sub).",
+    )
+
+    # Tick lag
+    redis_tick_ts = None
+    redis_tick_source = None
+    if redis_ok and r is not None:
+        tick_keys = _redis_prefixed_keys(
+            mode_hint,
+            [
+                f"websocket:tick:{selected_instrument}:latest",
+                f"tick:{selected_instrument}:latest",
+                f"tick:{selected_instrument}",
+            ],
+        )
+        tick_key, tick_raw = _redis_get_first_value(r, tick_keys)
+        redis_tick_source = tick_key
+        tick_obj = _safe_json_loads(tick_raw) if tick_raw else None
+        if isinstance(tick_obj, dict):
+            redis_tick_ts = tick_obj.get("timestamp") or tick_obj.get("exchange_timestamp")
+    mongo_tick_info = await asyncio.to_thread(
+        _mongo_latest_ts_for_instrument,
+        str(os.getenv("MONGO_COLL_TICKS") or "live_ticks").strip() or "live_ticks",
+        selected_instrument,
+    )
+    checks["tick"] = _lag_check_payload(
+        name="tick",
+        redis_timestamp=redis_tick_ts,
+        mongo_timestamp=mongo_tick_info.get("timestamp"),
+        threshold_seconds=thresholds["tick"],
+        redis_source=redis_tick_source,
+        mongo_source=mongo_tick_info.get("collection"),
+        note=(
+            "Mongo tick persistence appears disabled or not wired."
+            if not mongo_tick_info.get("collection_exists")
+            else None
+        ),
+    )
+
+    # Depth lag
+    redis_depth_ts = None
+    redis_depth_source = None
+    if redis_ok and r is not None:
+        depth_keys = _redis_prefixed_keys(mode_hint, [f"depth:{selected_instrument}:timestamp"])
+        depth_key, depth_raw = _redis_get_first_value(r, depth_keys)
+        redis_depth_source = depth_key
+        redis_depth_ts = depth_raw
+    mongo_depth_info = await asyncio.to_thread(
+        _mongo_latest_ts_for_instrument,
+        str(os.getenv("MONGO_COLL_DEPTH") or "live_depth").strip() or "live_depth",
+        selected_instrument,
+    )
+    checks["depth"] = _lag_check_payload(
+        name="depth",
+        redis_timestamp=redis_depth_ts,
+        mongo_timestamp=mongo_depth_info.get("timestamp"),
+        threshold_seconds=thresholds["depth"],
+        redis_source=redis_depth_source,
+        mongo_source=mongo_depth_info.get("collection"),
+        note=(
+            "Mongo depth persistence appears disabled or not wired."
+            if not mongo_depth_info.get("collection_exists")
+            else None
+        ),
+    )
+
+    # Options lag
+    redis_options_ts = None
+    redis_options_source = None
+    if redis_ok and r is not None:
+        options_keys = _redis_prefixed_keys(
+            mode_hint,
+            [f"options:{selected_instrument}:chain"],
+        )
+        opt_key, opt_raw = _redis_get_first_value(r, options_keys)
+        if opt_raw is None:
+            for mode in _mode_priority(mode_hint):
+                scan_matches = _scan_keys_limited(
+                    r,
+                    f"{mode}:options:{selected_instrument}:*:chain",
+                    max_keys=3,
+                    max_pages=4,
+                )
+                if scan_matches:
+                    candidate_key = scan_matches[0]
+                    try:
+                        candidate_raw = r.get(candidate_key)
+                    except Exception:
+                        candidate_raw = None
+                    if candidate_raw is not None:
+                        opt_key = candidate_key
+                        opt_raw = candidate_raw
+                        break
+        redis_options_source = opt_key
+        opt_obj = _safe_json_loads(opt_raw) if opt_raw else None
+        if isinstance(opt_obj, dict):
+            redis_options_ts = opt_obj.get("timestamp")
+    mongo_options_info = await asyncio.to_thread(
+        _mongo_latest_ts_for_instrument,
+        str(os.getenv("MONGO_COLL_OPTIONS") or "live_options_chain").strip() or "live_options_chain",
+        selected_instrument,
+    )
+    checks["options"] = _lag_check_payload(
+        name="options",
+        redis_timestamp=redis_options_ts,
+        mongo_timestamp=mongo_options_info.get("timestamp"),
+        threshold_seconds=thresholds["options"],
+        redis_source=redis_options_source,
+        mongo_source=mongo_options_info.get("collection"),
+        note=(
+            "Mongo options persistence appears disabled or not wired."
+            if not mongo_options_info.get("collection_exists")
+            else None
+        ),
+    )
+
+    summary_counts = {
+        "ok": 0,
+        "lagging": 0,
+        "mongo_missing": 0,
+        "redis_missing": 0,
+        "no_data": 0,
+    }
+    for item in checks.values():
+        s = str((item or {}).get("status") or "").lower()
+        if s in summary_counts:
+            summary_counts[s] += 1
+
+    overall_status = "ok"
+    if summary_counts["lagging"] > 0:
+        overall_status = "lagging"
+    elif (summary_counts["mongo_missing"] + summary_counts["redis_missing"] + summary_counts["no_data"]) > 0:
+        overall_status = "partial"
+
+    return _normalize_timestamp_fields(
+        {
+            "status": overall_status,
+            "timestamp": _now_iso_ist(),
+            "mode_hint": mode_hint or "unknown",
+            "instrument": selected_instrument,
+            "redis": {
+                "ok": redis_ok,
+                "error": redis_error,
+                "host": REDIS_HOST,
+                "port": REDIS_PORT,
+            },
+            "checks": checks,
+            "summary": summary_counts,
+            "architecture_note": "Keep split: Redis for low-latency market reads, Mongo for durable snapshot/strategy truth.",
+        }
+    )
+
+
 @app.get("/api/market-data/status")
 async def market_data_status():
     """Get comprehensive market data status"""
     status = {
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp": _now_iso_ist(),
         "market_data_api": {"status": "unknown"},
         "redis": {"status": "unknown"},
         "instruments": {},
@@ -4144,8 +5751,12 @@ async def market_data_status():
         }
 
     # Prefer Redis for instrument/data availability (fast, avoids API key-prefix mismatches).
-    default_instruments: List[str] = [DEFAULT_INSTRUMENT] if DEFAULT_INSTRUMENT else []
-    instruments: List[str] = default_instruments[:]
+    default_instruments: List[Dict[str, Optional[str]]] = []
+    if DEFAULT_INSTRUMENT:
+        normalized_default = _normalize_instrument_entry(DEFAULT_INSTRUMENT)
+        if normalized_default is not None:
+            default_instruments.append(normalized_default)
+    instrument_specs: List[Dict[str, Optional[str]]] = default_instruments[:]
     try:
         resp = requests.get(f"{MARKET_DATA_API_URL}/api/v1/market/instruments", timeout=2)
         if resp.status_code == 200:
@@ -4153,7 +5764,13 @@ async def market_data_status():
             if isinstance(api_instruments, dict) and "instruments" in api_instruments:
                 api_instruments = api_instruments["instruments"]
             if isinstance(api_instruments, list) and api_instruments:
-                instruments = [str(x) for x in api_instruments if not _is_placeholder_instrument(x)]
+                normalized_api_instruments: List[Dict[str, Optional[str]]] = []
+                for item in api_instruments:
+                    normalized = _normalize_instrument_entry(item)
+                    if normalized is not None:
+                        normalized_api_instruments.append(normalized)
+                if normalized_api_instruments:
+                    instrument_specs = normalized_api_instruments
     except Exception:
         pass
 
@@ -4166,11 +5783,17 @@ async def market_data_status():
         r = None
 
     # If API instruments endpoint is missing/unhelpful, auto-discover instruments from Redis.
-    if r is not None and (not instruments or instruments == default_instruments):
+    if r is not None and (not instrument_specs or instrument_specs == default_instruments):
         try:
             discovered = await asyncio.to_thread(_discover_instruments_from_redis, 25)
             if discovered:
-                instruments = discovered
+                normalized_discovered: List[Dict[str, Optional[str]]] = []
+                for item in discovered:
+                    normalized = _normalize_instrument_entry(item)
+                    if normalized is not None:
+                        normalized_discovered.append(normalized)
+                if normalized_discovered:
+                    instrument_specs = normalized_discovered
         except Exception:
             pass
 
@@ -4178,10 +5801,19 @@ async def market_data_status():
     if api_mode not in {"live", "historical", "paper"}:
         api_mode = None
 
-    for instrument in instruments:
+    for spec in instrument_specs:
+        symbol = str(spec.get("symbol") or "").strip()
+        exchange = str(spec.get("exchange") or "").strip().upper() or None
+        if not symbol:
+            continue
         try:
             if not r:
-                status["instruments"][instrument] = {"status": "unreachable", "error": "Redis unavailable"}
+                status["instruments"][symbol] = {
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "status": "unreachable",
+                    "error": "Redis unavailable",
+                }
                 continue
 
             # Prefer keys from current execution mode, then fall back to any mode.
@@ -4192,7 +5824,7 @@ async def market_data_status():
             best_mode_count = 0
 
             for key in _ohlc_sorted_keys_to_try(
-                instrument,
+                symbol,
                 "1min",
                 preferred_mode=api_mode,
                 strict_mode=bool(api_mode),
@@ -4217,7 +5849,18 @@ async def market_data_status():
                 best_count = best_mode_count
 
             if not best_key or best_count == 0:
-                status["instruments"][instrument] = {
+                api_fallback = await asyncio.to_thread(_fetch_api_instrument_fallback, symbol)
+                if api_fallback is not None:
+                    status["instruments"][symbol] = {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        **api_fallback,
+                    }
+                    continue
+
+                status["instruments"][symbol] = {
+                    "symbol": symbol,
+                    "exchange": exchange,
                     "status": "no_data",
                     "data_points": 0,
                     "first_timestamp": None,
@@ -4234,7 +5877,9 @@ async def market_data_status():
             data_mode = _extract_key_mode(best_key)
             mode_mismatch = bool(api_mode and data_mode and data_mode != api_mode)
 
-            status["instruments"][instrument] = {
+            status["instruments"][symbol] = {
+                "symbol": symbol,
+                "exchange": exchange,
                 "status": "mode_mismatch" if mode_mismatch else "available",
                 "data_points": int(best_count),
                 "first_timestamp": _normalize_timestamp_string(_extract_bar_timestamp(first_bar)),
@@ -4246,7 +5891,12 @@ async def market_data_status():
                 "mode_mismatch": mode_mismatch,
             }
         except Exception as e:
-            status["instruments"][instrument] = {"status": "error", "error": str(e)}
+            status["instruments"][symbol] = {
+                "symbol": symbol,
+                "exchange": exchange,
+                "status": "error",
+                "error": str(e),
+            }
 
     # Data validation checks
     status["data_validation"] = validate_data_availability(status)
@@ -4418,7 +6068,7 @@ async def get_chart_data(
             req_limit=req_limit,
             indicators_bars_needed=indicators_bars_needed,
         )
-        payload["timestamp"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        payload["timestamp"] = _now_iso_ist()
         payload["status"] = "ok"
         return _normalize_timestamp_fields(payload)
     except HTTPException:
@@ -4429,108 +6079,106 @@ async def get_chart_data(
 
 @app.get("/api/market-data/indicators/{instrument}")
 async def get_technical_indicators(instrument: str, timeframe: str = "1min"):
-    """Get technical indicators for an instrument"""
-    cache_key = f"{instrument}:{timeframe}"
+    """Get technical indicators from persisted snapshot source (Mongo)."""
+    tf_canonical = _canonical_indicator_timeframe(timeframe)
+    threshold = _indicator_stale_threshold_seconds(tf_canonical)
     try:
-        # Normalize timeframe for API call
-        tf = timeframe
-        if tf == "1min":
-            tf = "minute"  # API expects "minute" for 1min
-
-        response = requests.get(
-            f"{MARKET_DATA_API_URL}/api/v1/technical/indicators/{instrument}?timeframe={tf}",
-            timeout=(1.5, 4)
+        selected_snapshot = await asyncio.to_thread(_load_latest_snapshot_from_mongo, instrument)
+        snapshot = (
+            selected_snapshot.get("snapshot")
+            if isinstance(selected_snapshot, dict) and isinstance(selected_snapshot.get("snapshot"), dict)
+            else {}
         )
-        if response.status_code == 200:
-            payload = _normalize_timestamp_fields(response.json())
-            if isinstance(payload, dict):
-                payload.setdefault("instrument", instrument)
-                payload.setdefault("timeframe", timeframe)
-                payload.setdefault("status", "ok")
-                indicators_payload = payload.get("indicators") if isinstance(payload.get("indicators"), dict) else {}
-                payload.setdefault(
-                    "indicator_timestamp",
-                    payload.get("timestamp")
-                    or indicators_payload.get("indicator_timestamp")
-                    or indicators_payload.get("timestamp")
-                )
-                payload.setdefault(
-                    "indicator_source",
-                    indicators_payload.get("source") or "market_data_api"
-                )
-                payload.setdefault(
-                    "indicator_stream",
-                    payload.get("stream") or indicators_payload.get("indicator_stream") or "Y2"
-                )
-                payload.setdefault(
-                    "indicator_update_type",
-                    indicators_payload.get("indicator_update_type") or indicators_payload.get("update_type") or "batch_recalculate"
-                )
-                payload.setdefault("bars_available", indicators_payload.get("bars_available", 0))
-                payload.setdefault(
-                    "warmup_requirements",
-                    payload.get("warmup_requirements") or indicators_payload.get("warmup_requirements") or {}
-                )
-                _LAST_GOOD_INDICATORS[cache_key] = payload
-            return payload
+        if not snapshot:
+            return {
+                "instrument": instrument,
+                "timeframe": tf_canonical,
+                "indicators": {},
+                "status": "no_data",
+                "error": "No persisted snapshot found for instrument",
+                "indicator_timestamp": None,
+                "indicator_source": "mongo_snapshots",
+                "indicator_stream": "Y2",
+                "indicator_update_type": "snapshot_event",
+                "indicator_age_seconds": None,
+                "indicator_is_stale": True,
+                "indicator_stale_threshold_seconds": threshold,
+                "bars_available": 0,
+                "warmup_requirements": {},
+                "timestamp": _now_iso_ist(),
+            }
 
-        # Upstream returned non-200: serve stale cache if present.
-        cached = _LAST_GOOD_INDICATORS.get(cache_key)
-        if cached:
-            out = dict(cached)
-            out["status"] = "stale"
-            out["warning"] = f"Upstream indicators API returned {response.status_code}"
-            out["timestamp"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            out.setdefault("indicator_timestamp", out.get("timestamp"))
-            out.setdefault("indicator_source", "cache")
-            out.setdefault("indicator_stream", out.get("indicator_stream") or "Y2")
-            out.setdefault("indicator_update_type", out.get("indicator_update_type") or "cache")
-            out.setdefault("bars_available", out.get("bars_available", 0))
-            out.setdefault("warmup_requirements", out.get("warmup_requirements", {}))
-            return _normalize_timestamp_fields(out)
+        indicators = _snapshot_to_indicator_fields(snapshot)
+        if not indicators:
+            return {
+                "instrument": instrument,
+                "timeframe": tf_canonical,
+                "indicators": {},
+                "status": "no_data",
+                "error": "Latest snapshot missing indicator fields (mtf_derived/futures_derived)",
+                "indicator_timestamp": _extract_snapshot_timestamp(
+                    snapshot,
+                    fallback_ts=(selected_snapshot or {}).get("snapshot_timestamp"),
+                ),
+                "indicator_source": "mongo_snapshots",
+                "indicator_stream": "Y2",
+                "indicator_update_type": "snapshot_event",
+                "indicator_age_seconds": None,
+                "indicator_is_stale": True,
+                "indicator_stale_threshold_seconds": threshold,
+                "bars_available": 0,
+                "warmup_requirements": {},
+                "timestamp": _now_iso_ist(),
+            }
 
-        return {
-            "instrument": instrument,
-            "timeframe": timeframe,
-            "indicators": {},
-            "status": "no_data",
-            "error": f"Upstream indicators API returned {response.status_code}",
-            "indicator_timestamp": None,
-            "indicator_source": "no_data",
-            "indicator_stream": "Y2",
-            "indicator_update_type": "no_data",
-            "bars_available": 0,
-            "warmup_requirements": {},
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        }
+        indicator_timestamp = _extract_snapshot_timestamp(
+            snapshot,
+            fallback_ts=(selected_snapshot or {}).get("snapshot_timestamp"),
+        ) or _now_iso_ist()
+        parsed_ts = _parse_timestamp_flexible(indicator_timestamp)
+        age_seconds: Optional[float] = None
+        is_stale = False
+        if parsed_ts is not None:
+            age_seconds = max(0.0, (datetime.now(tz=IST_ZONE) - parsed_ts).total_seconds())
+            is_stale = age_seconds > float(threshold)
+
+        return _normalize_timestamp_fields(
+            {
+                "instrument": instrument,
+                "timeframe": tf_canonical,
+                "indicators": indicators,
+                "status": "stale" if is_stale else "ok",
+                "timestamp": _now_iso_ist(),
+                "market_timestamp": indicator_timestamp,
+                "indicator_timestamp": indicator_timestamp,
+                "indicator_source": "mongo_snapshots",
+                "indicator_stream": "Y2",
+                "indicator_update_type": "snapshot_event",
+                "indicator_age_seconds": age_seconds,
+                "indicator_is_stale": is_stale,
+                "indicator_stale_threshold_seconds": threshold,
+                "bars_available": 0,
+                "warmup_requirements": {},
+            }
+        )
     except Exception as e:
-        cached = _LAST_GOOD_INDICATORS.get(cache_key)
-        if cached:
-            out = dict(cached)
-            out["status"] = "stale"
-            out["warning"] = f"Using cached indicators due to upstream error: {e}"
-            out["timestamp"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            out.setdefault("indicator_timestamp", out.get("timestamp"))
-            out.setdefault("indicator_source", "cache")
-            out.setdefault("indicator_stream", out.get("indicator_stream") or "Y2")
-            out.setdefault("indicator_update_type", out.get("indicator_update_type") or "cache")
-            out.setdefault("bars_available", out.get("bars_available", 0))
-            out.setdefault("warmup_requirements", out.get("warmup_requirements", {}))
-            return _normalize_timestamp_fields(out)
-
+        logger.exception("Failed to load indicators from mongo snapshots for %s", instrument)
         return {
             "instrument": instrument,
-            "timeframe": timeframe,
+            "timeframe": tf_canonical,
             "indicators": {},
             "status": "error",
             "error": str(e),
             "indicator_timestamp": None,
-            "indicator_source": "error",
+            "indicator_source": "mongo_snapshots",
             "indicator_stream": "Y2",
-            "indicator_update_type": "error",
+            "indicator_update_type": "snapshot_event",
+            "indicator_age_seconds": None,
+            "indicator_is_stale": True,
+            "indicator_stale_threshold_seconds": threshold,
             "bars_available": 0,
             "warmup_requirements": {},
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            "timestamp": _now_iso_ist(),
         }
 
 @app.get("/api/market-data/instruments")
@@ -4547,7 +6195,7 @@ async def get_available_instruments():
                 {
                     "instruments": instruments,
                     "count": len(instruments),
-                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "timestamp": _now_iso_ist(),
                 }
             )
         else:
@@ -4599,7 +6247,7 @@ async def get_market_depth(instrument: str):
                 out = dict(cached)
                 out["status"] = "stale"
                 out["warning"] = upstream_error or "No fresh depth data available"
-                out["timestamp"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                out["timestamp"] = _now_iso_ist()
                 return _normalize_depth_contract(
                     instrument,
                     out,
@@ -4610,7 +6258,7 @@ async def get_market_depth(instrument: str):
                 "instrument": instrument,
                 "buy": [],
                 "sell": [],
-                "timestamp": _normalize_timestamp_string(timestamp) or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "timestamp": _normalize_timestamp_string(timestamp) or _now_iso_ist(),
                 "status": "no_data",
                 "warning": upstream_error,
             }, mode_hint=mode_hint, default_status="no_data")
@@ -4622,7 +6270,7 @@ async def get_market_depth(instrument: str):
             "instrument": instrument,
             "buy": buy_levels[:5],  # Top 5 bids
             "sell": sell_levels[:5],  # Top 5 asks
-            "timestamp": _normalize_timestamp_string(timestamp) or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": _normalize_timestamp_string(timestamp) or _now_iso_ist(),
             "status": "ok"
         }
         out = _normalize_depth_contract(
@@ -4641,7 +6289,7 @@ async def get_market_depth(instrument: str):
             out = dict(cached)
             out["status"] = "stale"
             out["warning"] = str(e)
-            out["timestamp"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            out["timestamp"] = _now_iso_ist()
             return _normalize_depth_contract(
                 instrument,
                 out,
@@ -4652,7 +6300,7 @@ async def get_market_depth(instrument: str):
             "instrument": instrument,
             "buy": [],
             "sell": [],
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": _now_iso_ist(),
             "error": str(e),
             "status": "error"
         }, mode_hint=mode_hint, default_status="error")
@@ -4778,7 +6426,7 @@ async def get_options_chain(instrument: str, expiry: str = None):
                 out = dict(cached)
                 out["status"] = "stale"
                 out["warning"] = upstream_error or "No fresh options chain data available"
-                out["timestamp"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                out["timestamp"] = _now_iso_ist()
                 return _normalize_options_contract(
                     instrument,
                     out,
@@ -4815,7 +6463,7 @@ async def get_options_chain(instrument: str, expiry: str = None):
                 "instrument": instrument,
                 "expiry": expiry,
                 "strikes": [],
-                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "timestamp": _now_iso_ist(),
                 "status": "no_data",
                 "mode_hint": mode_hint,
                 "message": message,
@@ -4841,7 +6489,7 @@ async def get_options_chain(instrument: str, expiry: str = None):
             out = dict(cached)
             out["status"] = "stale"
             out["warning"] = str(e)
-            out["timestamp"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            out["timestamp"] = _now_iso_ist()
             return _normalize_options_contract(
                 instrument,
                 out,
@@ -4853,7 +6501,7 @@ async def get_options_chain(instrument: str, expiry: str = None):
             "instrument": instrument,
             "expiry": expiry,
             "strikes": [],
-            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "timestamp": _now_iso_ist(),
             "error": str(e),
             "status": "error"
         }, expiry=expiry, mode_hint=mode_hint, default_status="error")

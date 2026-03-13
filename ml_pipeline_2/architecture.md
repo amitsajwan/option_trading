@@ -7,9 +7,10 @@
 Design goals:
 - config-driven experimentation
 - explicit ownership by package boundary
-- no runtime dependency on `ml_pipeline`
+- no model-building dependency on `ml_pipeline`
 - restart-safe artifact writing for long or failure-prone runs
 - clear separation between Stage 1 move detection and later Stage 2 direction logic
+- first-class publication of runtime-usable dual-side recovery models
 
 Operational runbook:
 - [`docs/ubuntu_gcp_runbook.md`](docs/ubuntu_gcp_runbook.md)
@@ -185,6 +186,25 @@ Key files:
 - [experiment_control/runner.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/experiment_control/runner.py)
 - [experiment_control/state.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/experiment_control/state.py)
 - [experiment_control/background.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/experiment_control/background.py)
+
+### `publishing`
+
+Owns:
+- published-model layout under `artifacts/published_models`
+- publish-time threshold and model contract generation
+- run/latest publish reports
+- run-id and model-group resolution for downstream consumers
+
+Current V1 scope:
+- publish only completed `fo_expiry_aware_recovery` runs
+- publish only the selected primary dual-side recipe
+- no meta-gate publishing
+- no quick-runner publishing
+
+Key files:
+- [publishing/publish.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/publishing/publish.py)
+- [publishing/resolver.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/publishing/resolver.py)
+- [run_publish_model.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/run_publish_model.py)
 
 ### `scenario_flows`
 
