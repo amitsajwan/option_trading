@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -303,6 +304,21 @@ def _candidate_rank_key(row: Dict[str, Any]) -> tuple[float, ...]:
     )
 
 
+def _report_status_counts(report: Dict[str, Any]) -> Dict[str, int]:
+    rows = list(report.get("combos") or [])
+    counts = {
+        "completed": 0,
+        "running": 0,
+        "pending": 0,
+        "failed": 0,
+    }
+    for row in rows:
+        status = str(row.get("status") or "").strip().lower()
+        if status in counts:
+            counts[status] += 1
+    return counts
+
+
 def launch_pending_recovery_matrix_jobs(matrix_root: Path, *, max_parallel: int, job_root: Optional[Path]) -> Dict[str, Any]:
     if int(max_parallel) <= 0:
         raise ValueError("max_parallel must be > 0")
@@ -353,6 +369,42 @@ def launch_pending_recovery_matrix_jobs(matrix_root: Path, *, max_parallel: int,
         "launched_combo_keys": launched,
         "report": report,
     }
+
+
+def watch_pending_recovery_matrix_jobs(
+    matrix_root: Path,
+    *,
+    max_parallel: int,
+    job_root: Optional[Path],
+    poll_seconds: int = 120,
+) -> Dict[str, Any]:
+    if int(max_parallel) <= 0:
+        raise ValueError("max_parallel must be > 0")
+    if int(poll_seconds) <= 0:
+        raise ValueError("poll_seconds must be > 0")
+    iterations = 0
+    launched_combo_keys: List[str] = []
+    while True:
+        payload = launch_pending_recovery_matrix_jobs(
+            matrix_root,
+            max_parallel=int(max_parallel),
+            job_root=job_root,
+        )
+        iterations += 1
+        launched_combo_keys.extend(list(payload.get("launched_combo_keys") or []))
+        report = dict(payload.get("report") or {})
+        status_counts = _report_status_counts(report)
+        if status_counts["pending"] == 0 and status_counts["running"] == 0:
+            return {
+                "matrix_root": str(matrix_root.resolve()),
+                "max_parallel": int(max_parallel),
+                "poll_seconds": int(poll_seconds),
+                "iterations": int(iterations),
+                "launched_combo_keys": launched_combo_keys,
+                "status_counts": status_counts,
+                "report": report,
+            }
+        time.sleep(int(poll_seconds))
 
 
 def refresh_recovery_matrix_report(matrix_root: Path) -> Dict[str, Any]:
@@ -467,7 +519,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--job-root", help="Background job registry root")
     parser.add_argument("--launch-background", action="store_true", help="Launch each combo as a detached background job")
     parser.add_argument("--launch-pending", action="store_true", help="Launch pending combos for an existing matrix root up to the parallel cap")
+    parser.add_argument("--watch-pending", action="store_true", help="Continuously refill pending combos for an existing matrix root until all combos are completed or failed")
     parser.add_argument("--max-parallel", type=int, help="Maximum number of background combos to keep active at once")
+    parser.add_argument("--poll-seconds", type=int, help="Polling interval in seconds for --watch-pending")
     parser.add_argument("--report-only", action="store_true", help="Only refresh reports for an existing matrix root")
     return parser
 
@@ -497,7 +551,9 @@ def _resolve_args(args: argparse.Namespace) -> Dict[str, Any]:
         "feature_sets": _parse_name_list(_pick(args.feature_sets, matrix_cfg.get("feature_sets"), None), DEFAULT_FEATURE_SETS),
         "launch_background": bool(args.launch_background or bool(launch_cfg.get("background", False))),
         "launch_pending": bool(args.launch_pending),
+        "watch_pending": bool(args.watch_pending),
         "max_parallel": _pick(args.max_parallel, launch_cfg.get("max_parallel"), None),
+        "poll_seconds": int(_pick(args.poll_seconds, launch_cfg.get("poll_seconds"), 120)),
         "job_root": _resolve_path_choice(args.job_root, launch_cfg.get("job_root"), DEFAULT_JOB_ROOT, config_dir=config_dir),
         "report_only": bool(args.report_only),
     }
@@ -518,6 +574,17 @@ def main(argv: list[str] | None = None) -> int:
             Path(resolved["existing_matrix_root"]).resolve(),
             max_parallel=int(resolved["max_parallel"] or 1),
             job_root=Path(resolved["job_root"]).resolve(),
+        )
+        print(json.dumps(payload, indent=2, default=str))
+        return 0
+    if bool(resolved["watch_pending"]):
+        if args.matrix_root is None:
+            raise ValueError("--watch-pending requires --matrix-root to point to an existing matrix directory")
+        payload = watch_pending_recovery_matrix_jobs(
+            Path(resolved["existing_matrix_root"]).resolve(),
+            max_parallel=int(resolved["max_parallel"] or 1),
+            job_root=Path(resolved["job_root"]).resolve(),
+            poll_seconds=int(resolved["poll_seconds"]),
         )
         print(json.dumps(payload, indent=2, default=str))
         return 0

@@ -103,6 +103,16 @@ python -m ml_pipeline_2.run_recovery_matrix \
   --max-parallel 3
 ```
 
+Keep a matrix topped up automatically until it finishes:
+
+```bash
+python -m ml_pipeline_2.run_recovery_matrix \
+  --watch-pending \
+  --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
+  --max-parallel 3 \
+  --poll-seconds 120
+```
+
 Run the verified 1-month end-to-end recovery smoke:
 
 ```bash

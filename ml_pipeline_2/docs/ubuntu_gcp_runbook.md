@@ -214,6 +214,16 @@ python -m ml_pipeline_2.run_recovery_matrix \
   --max-parallel 8
 ```
 
+Or keep the matrix topped up automatically until all combos are completed or failed:
+
+```bash
+python -m ml_pipeline_2.run_recovery_matrix \
+  --watch-pending \
+  --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
+  --max-parallel 8 \
+  --poll-seconds 120
+```
+
 Then inspect:
 - `artifacts/research_matrices/<matrix_name_timestamp>/report.json`
 - `artifacts/research_matrices/<matrix_name_timestamp>/report.csv`

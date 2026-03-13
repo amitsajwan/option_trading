@@ -9,6 +9,7 @@ from ml_pipeline_2.run_recovery_matrix import (
     generate_recovery_matrix,
     launch_pending_recovery_matrix_jobs,
     refresh_recovery_matrix_report,
+    watch_pending_recovery_matrix_jobs,
 )
 from ml_pipeline_2.tests.helpers import build_recovery_smoke_manifest, build_synthetic_feature_frames
 
@@ -242,3 +243,71 @@ def test_tuning_matrix_configs_resolve_expected_search_space() -> None:
     assert resolved_4y["horizon_grid"] == [15, 20]
     assert resolved_4y["barrier_modes"] == ["fixed", "atr_scaled"]
     assert resolved_4y["max_parallel"] == 8
+    assert resolved_4y["poll_seconds"] == 120
+
+    watch_args = parser.parse_args(
+        [
+            "--config",
+            "ml_pipeline_2/configs/research/recovery_matrix.tuning_4y.json",
+            "--watch-pending",
+            "--matrix-root",
+            "ml_pipeline_2/artifacts/research_matrices/example",
+            "--poll-seconds",
+            "45",
+        ]
+    )
+    watch_resolved = _resolve_args(watch_args)
+    assert watch_resolved["watch_pending"] is True
+    assert watch_resolved["poll_seconds"] == 45
+
+
+def test_watch_pending_recovery_matrix_jobs_runs_until_completion(tmp_path: Path, monkeypatch) -> None:
+    reports = iter(
+        [
+            {
+                "combos": [
+                    {"status": "running"},
+                    {"status": "pending"},
+                    {"status": "completed"},
+                ]
+            },
+            {
+                "combos": [
+                    {"status": "completed"},
+                    {"status": "failed"},
+                    {"status": "completed"},
+                ]
+            },
+        ]
+    )
+    launches = iter(
+        [
+            {"launched_combo_keys": ["combo_a"], "report": next(reports)},
+            {"launched_combo_keys": ["combo_b"], "report": next(reports)},
+        ]
+    )
+    sleeps = []
+
+    monkeypatch.setattr("ml_pipeline_2.run_recovery_matrix.launch_pending_recovery_matrix_jobs", lambda *args, **kwargs: next(launches))
+    monkeypatch.setattr("ml_pipeline_2.run_recovery_matrix.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    payload = watch_pending_recovery_matrix_jobs(
+        tmp_path / "matrix",
+        max_parallel=8,
+        job_root=tmp_path / "jobs",
+        poll_seconds=7,
+    )
+
+    assert payload["iterations"] == 2
+    assert payload["launched_combo_keys"] == ["combo_a", "combo_b"]
+    assert payload["status_counts"] == {"completed": 2, "running": 0, "pending": 0, "failed": 1}
+    assert sleeps == [7]
+
+
+def test_watch_pending_requires_positive_poll_seconds(tmp_path: Path) -> None:
+    try:
+        watch_pending_recovery_matrix_jobs(tmp_path / "matrix", max_parallel=1, job_root=tmp_path / "jobs", poll_seconds=0)
+    except ValueError as exc:
+        assert "poll_seconds" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for non-positive poll_seconds")
