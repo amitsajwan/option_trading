@@ -12,6 +12,7 @@ from .experiment_control.runner import run_research
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run ml_pipeline_2 research manifests.")
     parser.add_argument("--config", required=True, help="Path to manifest JSON")
+    parser.add_argument("--run-output-root", help="Optional existing or explicit run directory to reuse instead of creating a timestamped directory")
     parser.add_argument("--validate-only", action="store_true", help="Validate the manifest and exit")
     parser.add_argument("--print-resolved-config", action="store_true", help="Print the resolved config JSON and exit")
     return parser
@@ -26,7 +27,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
     if args.validate_only:
         return 0
-    summary = run_research(resolved)
+    summary = run_research(
+        resolved,
+        run_output_root=(Path(args.run_output_root).resolve() if args.run_output_root else None),
+    )
     print(json.dumps(summary, indent=2, default=str))
     return 0
 

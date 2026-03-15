@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -112,6 +112,47 @@ def build_actions(ce_prob: np.ndarray, pe_prob: np.ndarray, ce_thr: float, pe_th
     return actions
 
 
+def _path_exit_reason(frame: pd.DataFrame, *, prefix: str, idx: int) -> str:
+    col = f"{prefix}_path_exit_reason"
+    if col not in frame.columns:
+        return ""
+    return str(frame.iloc[idx][col]).strip().lower()
+
+
+def _path_gross_return(frame: pd.DataFrame, *, prefix: str, idx: int, fallback_return: float) -> Optional[float]:
+    realized_col = f"{prefix}_realized_return"
+    if realized_col in frame.columns:
+        realized = safe_float(frame.iloc[idx][realized_col])
+        if realized is not None:
+            return float(realized)
+    reason = _path_exit_reason(frame, prefix=prefix, idx=idx)
+    if reason in {"tp", "tp_sl_same_bar"}:
+        upper = safe_float(frame.iloc[idx][f"{prefix}_barrier_upper_return"]) if f"{prefix}_barrier_upper_return" in frame.columns else None
+        if upper is not None:
+            return float(upper)
+    if reason == "sl":
+        lower = safe_float(frame.iloc[idx][f"{prefix}_barrier_lower_return"]) if f"{prefix}_barrier_lower_return" in frame.columns else None
+        if lower is not None:
+            return float(-lower)
+    fallback = safe_float(fallback_return)
+    return float(fallback) if fallback is not None else None
+
+
+def _trade_detail(frame: pd.DataFrame, *, idx: int, action: str, fallback_return: float, cost_per_trade: float) -> Optional[Dict[str, Any]]:
+    prefix = "ce" if action == "BUY_CE" else "pe"
+    gross_return = _path_gross_return(frame, prefix=prefix, idx=idx, fallback_return=fallback_return)
+    if gross_return is None:
+        return None
+    exit_reason = _path_exit_reason(frame, prefix=prefix, idx=idx) or "forward"
+    net_return = float(gross_return - float(cost_per_trade))
+    return {
+        "prefix": prefix,
+        "exit_reason": exit_reason,
+        "gross_return": float(gross_return),
+        "net_return": net_return,
+    }
+
+
 def stage_b(frame: pd.DataFrame, probs: pd.DataFrame, ce_threshold: float, pe_threshold: float, cost_per_trade: float, gates: FuturesPromotionGates) -> Dict[str, object]:
     _, _, long_ret_col = side_cols(frame, "long")
     _, _, short_ret_col = side_cols(frame, "short")
@@ -121,18 +162,66 @@ def stage_b(frame: pd.DataFrame, probs: pd.DataFrame, ce_threshold: float, pe_th
     long_ret = pd.to_numeric(frame[long_ret_col], errors="coerce").to_numpy(dtype=float)
     short_ret = pd.to_numeric(frame[short_ret_col], errors="coerce").to_numpy(dtype=float)
     net_returns: list[float] = []
+    gross_returns: list[float] = []
     long_trades = 0
     short_trades = 0
     hold_count = 0
+    invalid_trades = 0
+    tp_trades = 0
+    sl_trades = 0
+    time_stop_trades = 0
+    tp_sl_same_bar_trades = 0
+    time_stop_gross_wins = 0
+    time_stop_gross_losses = 0
+    time_stop_gross_flats = 0
+    time_stop_net_wins = 0
+    time_stop_net_losses = 0
+    time_stop_net_flats = 0
     for idx, act in enumerate(action):
-        if act == "BUY_CE" and safe_float(long_ret[idx]) is not None:
-            long_trades += 1
-            net_returns.append(float(long_ret[idx]) - float(cost_per_trade))
-        elif act == "BUY_PE" and safe_float(short_ret[idx]) is not None:
-            short_trades += 1
-            net_returns.append(float(short_ret[idx]) - float(cost_per_trade))
-        else:
+        if act not in {"BUY_CE", "BUY_PE"}:
             hold_count += 1
+            continue
+        detail = _trade_detail(
+            frame,
+            idx=idx,
+            action=str(act),
+            fallback_return=(long_ret[idx] if act == "BUY_CE" else short_ret[idx]),
+            cost_per_trade=float(cost_per_trade),
+        )
+        if detail is None:
+            invalid_trades += 1
+            hold_count += 1
+            continue
+        if act == "BUY_CE":
+            long_trades += 1
+        else:
+            short_trades += 1
+        gross_returns.append(float(detail["gross_return"]))
+        net_returns.append(float(detail["net_return"]))
+        exit_reason = str(detail["exit_reason"])
+        if exit_reason == "tp":
+            tp_trades += 1
+        elif exit_reason == "tp_sl_same_bar":
+            tp_trades += 1
+            tp_sl_same_bar_trades += 1
+        elif exit_reason == "sl":
+            sl_trades += 1
+        elif exit_reason == "time_stop":
+            time_stop_trades += 1
+            gross_return = float(detail["gross_return"])
+            net_return = float(detail["net_return"])
+            if gross_return > 0.0:
+                time_stop_gross_wins += 1
+            elif gross_return < 0.0:
+                time_stop_gross_losses += 1
+            else:
+                time_stop_gross_flats += 1
+            if net_return > 0.0:
+                time_stop_net_wins += 1
+            elif net_return < 0.0:
+                time_stop_net_losses += 1
+            else:
+                time_stop_net_flats += 1
     trades = int(long_trades + short_trades)
     rows_total = int(len(frame))
     long_share = float(long_trades / max(1, trades)) if trades > 0 else 0.0
@@ -141,7 +230,46 @@ def stage_b(frame: pd.DataFrame, probs: pd.DataFrame, ce_threshold: float, pe_th
     pf = float(profit_factor(net_returns))
     mdd = float(max_drawdown_pct(net_returns))
     passed = bool(trades >= int(gates.futures_trades_min) and pf >= float(gates.futures_pf_min) and mdd <= float(gates.futures_max_drawdown_pct_max) and float(gates.side_share_min) <= long_share <= float(gates.side_share_max) and float(gates.side_share_min) <= short_share <= float(gates.side_share_max) and block_rate >= float(gates.block_rate_min))
-    return {"passed": passed, "status": "computed", "rows_total": rows_total, "trades": trades, "long_trades": int(long_trades), "short_trades": int(short_trades), "hold_count": int(hold_count), "block_rate": block_rate, "long_share": long_share, "short_share": short_share, "profit_factor": pf, "max_drawdown_pct": mdd, "win_rate": float(np.mean(np.asarray(net_returns, dtype=float) > 0.0)) if trades else 0.0, "mean_net_return_per_trade": float(np.mean(net_returns)) if trades else 0.0, "net_return_sum": float(np.sum(net_returns)) if trades else 0.0, "gates": {"futures_pf_min": float(gates.futures_pf_min), "futures_max_drawdown_pct_max": float(gates.futures_max_drawdown_pct_max), "futures_trades_min": int(gates.futures_trades_min), "side_share_min": float(gates.side_share_min), "side_share_max": float(gates.side_share_max), "block_rate_min": float(gates.block_rate_min)}}
+    return {
+        "passed": passed,
+        "status": "computed",
+        "rows_total": rows_total,
+        "trades": trades,
+        "long_trades": int(long_trades),
+        "short_trades": int(short_trades),
+        "hold_count": int(hold_count),
+        "block_rate": block_rate,
+        "long_share": long_share,
+        "short_share": short_share,
+        "profit_factor": pf,
+        "gross_profit_factor": float(profit_factor(gross_returns)),
+        "max_drawdown_pct": mdd,
+        "win_rate": float(np.mean(np.asarray(net_returns, dtype=float) > 0.0)) if trades else 0.0,
+        "gross_win_rate": float(np.mean(np.asarray(gross_returns, dtype=float) > 0.0)) if trades else 0.0,
+        "mean_net_return_per_trade": float(np.mean(net_returns)) if trades else 0.0,
+        "mean_gross_return_per_trade": float(np.mean(gross_returns)) if trades else 0.0,
+        "net_return_sum": float(np.sum(net_returns)) if trades else 0.0,
+        "gross_return_sum": float(np.sum(gross_returns)) if trades else 0.0,
+        "tp_trades": int(tp_trades),
+        "sl_trades": int(sl_trades),
+        "time_stop_trades": int(time_stop_trades),
+        "tp_sl_same_bar_trades": int(tp_sl_same_bar_trades),
+        "invalid_trades": int(invalid_trades),
+        "time_stop_gross_wins": int(time_stop_gross_wins),
+        "time_stop_gross_losses": int(time_stop_gross_losses),
+        "time_stop_gross_flats": int(time_stop_gross_flats),
+        "time_stop_net_wins": int(time_stop_net_wins),
+        "time_stop_net_losses": int(time_stop_net_losses),
+        "time_stop_net_flats": int(time_stop_net_flats),
+        "gates": {
+            "futures_pf_min": float(gates.futures_pf_min),
+            "futures_max_drawdown_pct_max": float(gates.futures_max_drawdown_pct_max),
+            "futures_trades_min": int(gates.futures_trades_min),
+            "side_share_min": float(gates.side_share_min),
+            "side_share_max": float(gates.side_share_max),
+            "block_rate_min": float(gates.block_rate_min),
+        },
+    }
 
 
 def stage_c(frame: pd.DataFrame, stage_b_report: Dict[str, object]) -> Dict[str, object]:
@@ -171,4 +299,3 @@ def positive_rate_diagnostics(*, training_frame: Optional[pd.DataFrame], holdout
     gap_long = float(abs(float(holdout_long) - float(train_long))) if holdout_long is not None and train_long is not None else None
     gap_short = float(abs(float(holdout_short) - float(train_short))) if holdout_short is not None and train_short is not None else None
     return {"training_positive_rate_long": train_long, "training_positive_rate_short": train_short, "holdout_positive_rate_long": holdout_long, "holdout_positive_rate_short": holdout_short, "holdout_train_pos_rate_gap_long": gap_long, "holdout_train_pos_rate_gap_short": gap_short, "flagged": bool((gap_long is not None and gap_long > float(gap_flag_threshold)) or (gap_short is not None and gap_short > float(gap_flag_threshold)))}
-

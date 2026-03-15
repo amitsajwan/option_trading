@@ -191,42 +191,74 @@ python -m ml_pipeline_2.run_recovery_matrix \
 
 This keeps the same tuned tree model list, keeps `max_parallel=3`, and expands back to the recovery recipe grid plus the 3 selected feature sets.
 
-When you are ready for the fresh full-window restart on the GCP VM, run the 4-year tuning matrix:
+Before any full 4-year expansion on the same VM, run the 4-year shortlist matrix:
 
 ```bash
 python -m ml_pipeline_2.run_recovery_matrix \
-  --config ml_pipeline_2/configs/research/recovery_matrix.tuning_4y.json
+  --config ml_pipeline_2/configs/research/recovery_matrix.shortlist_4y.json
 ```
 
 This run uses:
 - `full_model`: `2020-08-03` to `2024-07-31`
 - `final_holdout`: `2024-08-01` to `2024-10-31`
-- `3 feature sets x 9 models = 27 combos`
-- the full `36`-recipe TP/SL/horizon/barrier grid
-- `max_parallel=8`
+- `1 feature set x 3 models = 3 combos`
+- the exact 4 shortlisted fixed-barrier recipes
+- `training.runtime.model_n_jobs=4`
+- `max_parallel=1`
+- `meta_gate.enabled=false`
+- `resume_primary=true`
 
-Top up the matrix when slots free up:
+This shortlist is the safe same-VM path after the OOM failures from the larger matrix. Do not restart the full `recovery_matrix.tuning_4y.json` on this VM until the shortlist shows materially better post-sweep behavior.
+
+Top up the shortlist when the active slot frees up:
 
 ```bash
 python -m ml_pipeline_2.run_recovery_matrix \
   --launch-pending \
   --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 8
+  --max-parallel 1
 ```
 
-Or keep the matrix topped up automatically until all combos are completed or failed:
+If a combo fails, retry it into the same run directory instead of starting a fresh timestamped run:
+
+```bash
+python -m ml_pipeline_2.run_recovery_matrix \
+  --launch-pending \
+  --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
+  --max-parallel 1 \
+  --retry-failed
+```
+
+Or keep the shortlist topped up automatically until all combos are completed or failed:
 
 ```bash
 python -m ml_pipeline_2.run_recovery_matrix \
   --watch-pending \
   --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 8 \
+  --max-parallel 1 \
+  --retry-failed \
   --poll-seconds 120
 ```
 
 Then inspect:
 - `artifacts/research_matrices/<matrix_name_timestamp>/report.json`
 - `artifacts/research_matrices/<matrix_name_timestamp>/report.csv`
+- `artifacts/research_matrices/<matrix_name_timestamp>/recipe_report.csv`
+
+The matrix report now includes:
+- `recipes_completed`
+- `recipes_total`
+- `last_state_event`
+- `last_event_ts`
+- `current_recipe_id`
+
+If you need to rerun a single combo directly into its existing run directory, reuse the output root:
+
+```bash
+python -m ml_pipeline_2.run_research \
+  --config ml_pipeline_2/configs/research/fo_expiry_aware_recovery.shortlist_4y.json \
+  --run-output-root ml_pipeline_2/artifacts/research/<run_name>_<timestamp>
+```
 
 ## Quick Research Flows
 

@@ -1,0 +1,55 @@
+{
+  "inputs": {
+    "base_manifest": "fo_expiry_aware_recovery.shortlist_4y.json"
+  },
+  "matrix": {
+    "recipes": [
+      {
+        "recipe_id": "FIXED_H15_TP25_SL10",
+        "horizon_minutes": 15,
+        "take_profit_pct": 0.0025,
+        "stop_loss_pct": 0.001,
+        "barrier_mode": "fixed"
+      },
+      {
+        "recipe_id": "FIXED_H15_TP20_SL8",
+        "horizon_minutes": 15,
+        "take_profit_pct": 0.002,
+        "stop_loss_pct": 0.0008,
+        "barrier_mode": "fixed"
+      },
+      {
+        "recipe_id": "FIXED_H15_TP25_SL12",
+        "horizon_minutes": 15,
+        "take_profit_pct": 0.0025,
+        "stop_loss_pct": 0.0012,
+        "barrier_mode": "fixed"
+      },
+      {
+        "recipe_id": "FIXED_H15_TP20_SL10",
+        "horizon_minutes": 15,
+        "take_profit_pct": 0.002,
+        "stop_loss_pct": 0.001,
+        "barrier_mode": "fixed"
+      }
+    ],
+    "models": [
+      "xgb_balanced",
+      "xgb_regularized",
+      "xgb_shallow"
+    ],
+    "feature_sets": [
+      "fo_no_time_context"
+    ]
+  },
+  "outputs": {
+    "matrix_root": "../../artifacts/research_matrices",
+    "matrix_name": "recovery_shortlist_4y"
+  },
+  "launch": {
+    "background": true,
+    "max_parallel": 1,
+    "poll_seconds": 120,
+    "job_root": "../../artifacts/background_jobs"
+  }
+}

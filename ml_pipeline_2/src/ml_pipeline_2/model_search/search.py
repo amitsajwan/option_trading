@@ -207,17 +207,18 @@ def _evaluate_trade_utility(base_df: pd.DataFrame, folds: Sequence[Dict[str, Seq
     }
 
 
-def _build_model(model_spec: ModelSpec, random_state: int, preprocess_cfg: PreprocessConfig) -> Pipeline:
+def _build_model(model_spec: ModelSpec, random_state: int, preprocess_cfg: PreprocessConfig, model_n_jobs: int = 1) -> Pipeline:
     family = str(model_spec.family).strip().lower()
     params = dict(model_spec.params or {})
+    resolved_n_jobs = max(1, int(model_n_jobs))
     if family == "logreg":
         return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler(with_mean=True, with_std=True)), ("model", LogisticRegression(C=float(params.get("c", 1.0)), class_weight=params.get("class_weight"), random_state=int(random_state), max_iter=int(params.get("max_iter", 1000)), solver=str(params.get("solver", "lbfgs"))))])
     if family == "xgb":
-        return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("model", XGBClassifier(objective="binary:logistic", eval_metric="logloss", random_state=int(random_state), seed=int(random_state), n_jobs=1, tree_method="hist", verbosity=0, max_depth=int(params.get("max_depth", 4)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 1.0))))])
+        return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("model", XGBClassifier(objective="binary:logistic", eval_metric="logloss", random_state=int(random_state), seed=int(random_state), n_jobs=resolved_n_jobs, tree_method="hist", verbosity=0, max_depth=int(params.get("max_depth", 4)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 1.0))))])
     if family == "lgbm":
         if LGBMClassifier is None:
             raise RuntimeError("LightGBM is required for lgbm models")
-        return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("model", LGBMClassifier(objective="binary", random_state=int(random_state), n_jobs=1, verbosity=-1, boosting_type=str(params.get("boosting_type", "gbdt")), num_leaves=int(params.get("num_leaves", 31)), max_depth=int(params.get("max_depth", -1)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 0.0)), min_child_samples=int(params.get("min_child_samples", 20)), class_weight=params.get("class_weight")))])
+        return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("model", LGBMClassifier(objective="binary", random_state=int(random_state), n_jobs=resolved_n_jobs, verbosity=-1, boosting_type=str(params.get("boosting_type", "gbdt")), num_leaves=int(params.get("num_leaves", 31)), max_depth=int(params.get("max_depth", -1)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 0.0)), min_child_samples=int(params.get("min_child_samples", 20)), class_weight=params.get("class_weight")))])
     raise ValueError(f"unsupported model family: {model_spec.family}")
 
 
@@ -311,12 +312,12 @@ def _prepare_move_df(df: pd.DataFrame) -> pd.DataFrame:
     return out[out["target"].notna()].assign(target=lambda frame: frame["target"].astype(int)).sort_values("timestamp").reset_index(drop=True)
 
 
-def _fit_model_for_fold(train_df: pd.DataFrame, feature_columns: Sequence[str], model_spec: ModelSpec, random_state: int, preprocess_cfg: PreprocessConfig) -> object:
+def _fit_model_for_fold(train_df: pd.DataFrame, feature_columns: Sequence[str], model_spec: ModelSpec, random_state: int, preprocess_cfg: PreprocessConfig, model_n_jobs: int) -> object:
     y_train = train_df["target"].astype(int).to_numpy()
     classes = np.unique(y_train)
     if len(classes) < 2:
         return ConstantProbModel(float(classes[0]) if len(classes) == 1 else 0.0)
-    model = _build_model(model_spec, random_state=random_state, preprocess_cfg=preprocess_cfg)
+    model = _build_model(model_spec, random_state=random_state, preprocess_cfg=preprocess_cfg, model_n_jobs=model_n_jobs)
     model.fit(train_df.loc[:, list(feature_columns)], y_train)
     return model
 
@@ -346,6 +347,7 @@ def _evaluate_move_experiment(
     random_state: int,
     preprocess_cfg: PreprocessConfig,
     label_target: str,
+    model_n_jobs: int,
     return_utility_score_payload: bool = False,
 ) -> Tuple[Dict[str, object], Optional[Dict[str, object]]]:
     days = sorted(df["trade_date"].astype(str).unique().tolist())
@@ -382,7 +384,7 @@ def _evaluate_move_experiment(
             fold_details.append({"fold_ok": False, "days": fold, "error": "empty partition"})
             continue
         score_df = _rows_for_days(single_df, fold["test_days"])
-        fold_model = _fit_model_for_fold(train_df, feature_columns, model_spec, random_state, preprocess_cfg)
+        fold_model = _fit_model_for_fold(train_df, feature_columns, model_spec, random_state, preprocess_cfg, model_n_jobs)
         valid_prob = _predict_with_fold_model(fold_model, valid_df, feature_columns)
         test_prob = _predict_with_fold_model(fold_model, test_df, feature_columns)
         score_prob = _predict_with_fold_model(fold_model, score_df, feature_columns)
@@ -419,7 +421,7 @@ def _evaluate_move_experiment(
     return result, payload
 
 
-def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model_spec: ModelSpec, cv_config: Dict[str, Any], random_state: int, preprocess_cfg: PreprocessConfig, label_target: str, utility_cfg: TradingObjectiveConfig, return_utility_score_payload: bool = False) -> Tuple[Dict[str, object], Optional[Dict[str, object]]]:
+def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model_spec: ModelSpec, cv_config: Dict[str, Any], random_state: int, preprocess_cfg: PreprocessConfig, label_target: str, utility_cfg: TradingObjectiveConfig, model_n_jobs: int, return_utility_score_payload: bool = False) -> Tuple[Dict[str, object], Optional[Dict[str, object]]]:
     if _is_move_label_target(label_target):
         return _evaluate_move_experiment(
             df,
@@ -429,6 +431,7 @@ def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model
             random_state,
             preprocess_cfg,
             label_target,
+            model_n_jobs,
             return_utility_score_payload=return_utility_score_payload,
         )
     days = sorted(df["trade_date"].astype(str).unique().tolist())
@@ -454,7 +457,7 @@ def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model
                 fold_details.append({"fold_ok": False, "days": fold, "error": "empty partition"})
                 continue
             utility_df = _rows_for_days(df, fold["test_days"])
-            fold_model = _fit_model_for_fold(train_df, feature_columns, model_spec, random_state, preprocess_cfg)
+            fold_model = _fit_model_for_fold(train_df, feature_columns, model_spec, random_state, preprocess_cfg, model_n_jobs)
             valid_prob = _predict_with_fold_model(fold_model, valid_df, feature_columns)
             test_prob = _predict_with_fold_model(fold_model, test_df, feature_columns)
             utility_prob = _predict_with_fold_model(fold_model, utility_df, feature_columns)
@@ -514,7 +517,7 @@ def _is_better(candidate: Dict[str, object], incumbent: Dict[str, object], objec
     return str(candidate.get("experiment_id", "")) < str(incumbent.get("experiment_id", ""))
 
 
-def _fit_final_models(labeled_df: pd.DataFrame, feature_columns: Sequence[str], model_spec: ModelSpec, random_state: int, preprocess_cfg: PreprocessConfig, label_target: str) -> Dict[str, object]:
+def _fit_final_models(labeled_df: pd.DataFrame, feature_columns: Sequence[str], model_spec: ModelSpec, random_state: int, preprocess_cfg: PreprocessConfig, label_target: str, model_n_jobs: int) -> Dict[str, object]:
     if _is_move_label_target(label_target):
         meta = _single_target_meta(label_target)
         single_df = _prepare_single_target_df(labeled_df, label_target)
@@ -522,7 +525,7 @@ def _fit_final_models(labeled_df: pd.DataFrame, feature_columns: Sequence[str], 
         classes = np.unique(y)
         if len(classes) < 2:
             return {meta["model_key"]: ConstantProbModel(float(classes[0]) if len(classes) == 1 else 0.0)}
-        model = _build_model(model_spec, random_state=random_state, preprocess_cfg=preprocess_cfg)
+        model = _build_model(model_spec, random_state=random_state, preprocess_cfg=preprocess_cfg, model_n_jobs=model_n_jobs)
         model.fit(single_df.loc[:, list(feature_columns)], y)
         return {meta["model_key"]: model}
     models: Dict[str, object] = {}
@@ -533,15 +536,15 @@ def _fit_final_models(labeled_df: pd.DataFrame, feature_columns: Sequence[str], 
         if len(classes) < 2:
             models[side] = ConstantProbModel(float(classes[0]) if len(classes) == 1 else 0.0)
             continue
-        model = _build_model(model_spec, random_state=random_state, preprocess_cfg=preprocess_cfg)
+        model = _build_model(model_spec, random_state=random_state, preprocess_cfg=preprocess_cfg, model_n_jobs=model_n_jobs)
         model.fit(side_df.loc[:, list(feature_columns)], y)
         models[side] = model
     return models
 
 
-def _build_model_package(created_at_utc: str, feature_profile: str, objective: str, label_target: str, feature_columns: Sequence[str], feature_set: str, model_meta: Dict[str, object], cv_config: Dict[str, object], preprocessing: Dict[str, object], trading_utility_config: Dict[str, object], models: Dict[str, object]) -> Dict[str, object]:
+def _build_model_package(created_at_utc: str, feature_profile: str, objective: str, label_target: str, feature_columns: Sequence[str], feature_set: str, model_meta: Dict[str, object], cv_config: Dict[str, object], preprocessing: Dict[str, object], runtime_config: Dict[str, object], trading_utility_config: Dict[str, object], models: Dict[str, object]) -> Dict[str, object]:
     single_target = _single_target_meta(label_target) if _is_move_label_target(label_target) else None
-    return {"kind": "ml_pipeline_2_research_model_package", "created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "prediction_mode": (single_target["prediction_mode"] if single_target is not None else "directional"), "single_target": single_target, "feature_columns": list(feature_columns), "selected_feature_set": str(feature_set), "selected_model": dict(model_meta), "cv_config": dict(cv_config), "preprocessing": dict(preprocessing), "trading_utility_config": dict(trading_utility_config), "models": models, "_model_input_contract": {"required_features": list(feature_columns), "missing_policy": "error", "source": "feature_columns"}}
+    return {"kind": "ml_pipeline_2_research_model_package", "created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "prediction_mode": (single_target["prediction_mode"] if single_target is not None else "directional"), "single_target": single_target, "feature_columns": list(feature_columns), "selected_feature_set": str(feature_set), "selected_model": dict(model_meta), "cv_config": dict(cv_config), "preprocessing": dict(preprocessing), "runtime": dict(runtime_config), "trading_utility_config": dict(trading_utility_config), "models": models, "_model_input_contract": {"required_features": list(feature_columns), "missing_policy": "error", "source": "feature_columns"}}
 
 
 def _build_leaderboard(experiments: Sequence[Dict[str, object]], objective: str) -> List[Dict[str, object]]:
@@ -554,7 +557,7 @@ def _build_leaderboard(experiments: Sequence[Dict[str, object]], objective: str)
     return sorted(rows, key=lambda row: ((float("inf") if row["objective_value"] is None else float(row["objective_value"])) if minimize else -(float("-inf") if row["objective_value"] is None else float(row["objective_value"])), int(row["feature_count"]), str(row["experiment_id"])))
 
 
-def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str = "all", objective: str = "trade_utility", random_state: int = 42, max_experiments: Optional[int] = None, preprocess_cfg: Optional[PreprocessConfig] = None, label_target: str = LABEL_TARGET_BASE, utility_cfg: Optional[TradingObjectiveConfig] = None, model_whitelist: Optional[Sequence[str]] = None, feature_set_whitelist: Optional[Sequence[str]] = None, progress_callback: Optional[Callable[[Dict[str, object]], None]] = None, retain_utility_score_payload: bool = False, fit_all_final_models: bool = False, **cv_kwargs: Any) -> Dict[str, object]:
+def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str = "all", objective: str = "trade_utility", random_state: int = 42, max_experiments: Optional[int] = None, preprocess_cfg: Optional[PreprocessConfig] = None, label_target: str = LABEL_TARGET_BASE, utility_cfg: Optional[TradingObjectiveConfig] = None, model_whitelist: Optional[Sequence[str]] = None, feature_set_whitelist: Optional[Sequence[str]] = None, progress_callback: Optional[Callable[[Dict[str, object]], None]] = None, retain_utility_score_payload: bool = False, fit_all_final_models: bool = False, model_n_jobs: int = 1, **cv_kwargs: Any) -> Dict[str, object]:
     frame = _ensure_sorted(labeled_df)
     if str(label_target).strip().lower() not in LABEL_TARGET_CHOICES:
         raise ValueError(f"unsupported label_target: {label_target}")
@@ -562,6 +565,7 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
         raise ValueError("move_barrier_hit does not support trade_utility objective; use brier or rmse")
     effective_preprocess = preprocess_cfg or PreprocessConfig()
     effective_utility = utility_cfg or TradingObjectiveConfig()
+    effective_model_n_jobs = max(1, int(model_n_jobs))
     base_features = select_feature_columns(frame, feature_profile=feature_profile)
     if not base_features:
         raise ValueError("no base features for training cycle")
@@ -582,6 +586,7 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
         model_names = [name for name in model_names if name in set(model_whitelist)]
     cv_config = {"train_days": int(cv_kwargs.get("train_days")), "valid_days": int(cv_kwargs.get("valid_days")), "test_days": int(cv_kwargs.get("test_days")), "step_days": int(cv_kwargs.get("step_days")), "purge_days": int(cv_kwargs.get("purge_days", 0)), "embargo_days": int(cv_kwargs.get("embargo_days", 0)), "purge_mode": normalize_purge_mode(cv_kwargs.get("purge_mode", PURGE_MODE_DAYS)), "embargo_rows": int(cv_kwargs.get("embargo_rows", 0)), "event_end_col": cv_kwargs.get("event_end_col")}
     preprocessing = {"max_missing_rate": float(effective_preprocess.max_missing_rate), "clip_lower_q": float(effective_preprocess.clip_lower_q), "clip_upper_q": float(effective_preprocess.clip_upper_q), "dropped_features_by_missing_rate": dropped_by_missing, "features_after_preprocess_gate": int(len(base_features))}
+    runtime_config = {"model_n_jobs": int(effective_model_n_jobs)}
     if callable(progress_callback):
         progress_callback({"phase": "training_cycle", "event": "search_space", "feature_sets": feature_names, "models": model_names, "experiments_total": int(min(len(feature_names) * len(model_names), max_experiments) if max_experiments is not None else len(feature_names) * len(model_names))})
     experiments: List[Dict[str, object]] = []
@@ -599,7 +604,7 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
             experiment_id = f"{feature_set_name}__{model_name}"
             if callable(progress_callback):
                 progress_callback({"phase": "training_cycle", "event": "experiment_start", "experiment_index": int(experiment_counter), "experiment_id": experiment_id, "feature_set": feature_set_name, "model": model_name})
-            result, utility_score_payload = _evaluate_experiment(frame, selected_features, model_spec, cv_config, random_state, effective_preprocess, label_target, effective_utility, return_utility_score_payload=retain_utility_score_payload)
+            result, utility_score_payload = _evaluate_experiment(frame, selected_features, model_spec, cv_config, random_state, effective_preprocess, label_target, effective_utility, effective_model_n_jobs, return_utility_score_payload=retain_utility_score_payload)
             experiments.append({"experiment_id": experiment_id, "feature_set": feature_set_name, "model": model_spec.to_dict(), "feature_count": int(len(selected_features)), "selected_features": list(selected_features), "result": result, "objective_value": _objective_value(result, objective), "fallback_objective_value": _fallback_objective_value(result, objective), "utility_score_payload": utility_score_payload})
         if max_exp is not None and experiment_counter >= max_exp:
             break
@@ -614,14 +619,14 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
         best = {**best, "selected_by_fallback": True}
     selected_model_spec = model_specs_by_name()[best["model"]["name"]]
     created_at_utc = datetime.now(timezone.utc).isoformat()
-    best_package = _build_model_package(created_at_utc, feature_profile, objective, label_target, best["selected_features"], best["feature_set"], best["model"], cv_config, preprocessing, effective_utility.to_dict(), _fit_final_models(frame, best["selected_features"], selected_model_spec, random_state, effective_preprocess, label_target))
+    best_package = _build_model_package(created_at_utc, feature_profile, objective, label_target, best["selected_features"], best["feature_set"], best["model"], cv_config, preprocessing, runtime_config, effective_utility.to_dict(), _fit_final_models(frame, best["selected_features"], selected_model_spec, random_state, effective_preprocess, label_target, effective_model_n_jobs))
     bundles = [{"experiment_id": best["experiment_id"], "model_package": best_package, "training_result": best["result"], "utility_score_payload": best.get("utility_score_payload")}]
     if fit_all_final_models:
         for experiment in experiments:
             if experiment["experiment_id"] == best["experiment_id"]:
                 continue
             model_spec = model_specs_by_name()[experiment["model"]["name"]]
-            package = _build_model_package(created_at_utc, feature_profile, objective, label_target, experiment["selected_features"], experiment["feature_set"], experiment["model"], cv_config, preprocessing, effective_utility.to_dict(), _fit_final_models(frame, experiment["selected_features"], model_spec, random_state, effective_preprocess, label_target))
+            package = _build_model_package(created_at_utc, feature_profile, objective, label_target, experiment["selected_features"], experiment["feature_set"], experiment["model"], cv_config, preprocessing, runtime_config, effective_utility.to_dict(), _fit_final_models(frame, experiment["selected_features"], model_spec, random_state, effective_preprocess, label_target, effective_model_n_jobs))
             bundles.append({"experiment_id": experiment["experiment_id"], "model_package": package, "training_result": experiment["result"], "utility_score_payload": experiment.get("utility_score_payload")})
-    report = {"created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "rows_total": int(len(frame)), "days_total": int(frame["trade_date"].nunique()), "experiments_total": int(len(experiments)), "best_experiment": {"experiment_id": best["experiment_id"], "feature_set": best["feature_set"], "feature_count": int(best["feature_count"]), "model": best["model"], "objective_value": best.get("objective_value"), "fallback_objective_value": best.get("fallback_objective_value"), "selected_by_fallback": bool(best.get("selected_by_fallback", False))}, "leaderboard": _build_leaderboard(experiments, objective), "preprocessing": preprocessing, "cv_config": cv_config, "trading_utility_config": effective_utility.to_dict()}
+    report = {"created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "rows_total": int(len(frame)), "days_total": int(frame["trade_date"].nunique()), "experiments_total": int(len(experiments)), "best_experiment": {"experiment_id": best["experiment_id"], "feature_set": best["feature_set"], "feature_count": int(best["feature_count"]), "model": best["model"], "objective_value": best.get("objective_value"), "fallback_objective_value": best.get("fallback_objective_value"), "selected_by_fallback": bool(best.get("selected_by_fallback", False))}, "leaderboard": _build_leaderboard(experiments, objective), "preprocessing": preprocessing, "runtime": runtime_config, "cv_config": cv_config, "trading_utility_config": effective_utility.to_dict()}
     return {"report": report, "model_package": best_package, "experiment_bundles": bundles}

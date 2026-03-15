@@ -77,6 +77,33 @@ def _parse_name_list(value: Any, default_items: Sequence[str]) -> List[str]:
     return items or [str(item) for item in default_items]
 
 
+def _parse_recipe_list(value: Any) -> List[Dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("matrix.recipes must be a list of recipe objects")
+    recipes: List[Dict[str, Any]] = []
+    for idx, item in enumerate(list(value)):
+        if not isinstance(item, dict):
+            raise ValueError(f"matrix.recipes[{idx}] must be an object")
+        recipe_id = str(item.get("recipe_id") or "").strip()
+        barrier_mode = str(item.get("barrier_mode") or "").strip()
+        if not recipe_id:
+            raise ValueError(f"matrix.recipes[{idx}].recipe_id must not be empty")
+        if not barrier_mode:
+            raise ValueError(f"matrix.recipes[{idx}].barrier_mode must not be empty")
+        recipes.append(
+            {
+                "recipe_id": recipe_id,
+                "horizon_minutes": int(item.get("horizon_minutes")),
+                "take_profit_pct": float(item.get("take_profit_pct")),
+                "stop_loss_pct": float(item.get("stop_loss_pct")),
+                "barrier_mode": barrier_mode,
+            }
+        )
+    return recipes
+
+
 def _load_config(path: Optional[str]) -> tuple[Dict[str, Any], Path]:
     if path is None or not str(path).strip():
         return {}, Path.cwd().resolve()
@@ -135,8 +162,8 @@ def _combo_output_root(*, matrix_root: Path, combo_key: str) -> Path:
     return matrix_root / "runs" / combo_key
 
 
-def _combo_job_metadata(*, matrix_root: Path, combo_key: str, feature_set: str, model_name: str, artifacts_root: Path, manifest_path: Path) -> Dict[str, Any]:
-    return {
+def _combo_job_metadata(*, matrix_root: Path, combo_key: str, feature_set: str, model_name: str, artifacts_root: Path, manifest_path: Path, output_root: Optional[Path] = None) -> Dict[str, Any]:
+    payload = {
         "matrix_root": str(matrix_root.resolve()),
         "combo_key": combo_key,
         "feature_set": str(feature_set),
@@ -149,9 +176,12 @@ def _combo_job_metadata(*, matrix_root: Path, combo_key: str, feature_set: str, 
         "manifest_path": str(manifest_path.resolve()),
         "experiment_kind": RECOVERY_KIND,
     }
+    if output_root is not None:
+        payload["output_root"] = str(output_root.resolve())
+    return payload
 
 
-def _combo_summary_path(artifacts_root: Path, *, run_name: str) -> Optional[Path]:
+def _latest_run_dir(artifacts_root: Path, *, run_name: str) -> Optional[Path]:
     if not artifacts_root.exists():
         return None
     candidates = sorted(
@@ -159,9 +189,14 @@ def _combo_summary_path(artifacts_root: Path, *, run_name: str) -> Optional[Path
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
-    if not candidates:
+    return candidates[0] if candidates else None
+
+
+def _combo_summary_path(artifacts_root: Path, *, run_name: str) -> Optional[Path]:
+    latest_run_dir = _latest_run_dir(artifacts_root, run_name=run_name)
+    if latest_run_dir is None:
         return None
-    summary_path = candidates[0] / "summary.json"
+    summary_path = latest_run_dir / "summary.json"
     return summary_path if summary_path.exists() else None
 
 
@@ -186,6 +221,7 @@ def generate_recovery_matrix(
     tp_grid: Sequence[float],
     sl_grid: Sequence[float],
     barrier_modes: Sequence[str],
+    recipes_override: Optional[Sequence[Dict[str, Any]]],
     models: Sequence[str],
     feature_sets: Sequence[str],
     launch_background: bool,
@@ -197,11 +233,15 @@ def generate_recovery_matrix(
         raise ValueError(f"base manifest must be {RECOVERY_KIND}: {base_manifest_path}")
     _validate_search_space_names(models, kind="models", valid_options=model_names())
     _validate_search_space_names(feature_sets, kind="feature_sets", valid_options=feature_set_names())
-    recipes = build_recovery_recipe_grid(
-        horizon_grid=horizon_grid,
-        tp_grid=tp_grid,
-        sl_grid=sl_grid,
-        barrier_modes=barrier_modes,
+    recipes = (
+        [dict(recipe) for recipe in list(recipes_override or [])]
+        if recipes_override
+        else build_recovery_recipe_grid(
+            horizon_grid=horizon_grid,
+            tp_grid=tp_grid,
+            sl_grid=sl_grid,
+            barrier_modes=barrier_modes,
+        )
     )
     base_inputs = dict(resolved["inputs"])
     base_windows = json.loads(json.dumps(resolved["windows"], default=str))
@@ -256,18 +296,9 @@ def generate_recovery_matrix(
             }
             should_launch = bool(launch_background) and (launch_cap is None or launched_count < launch_cap)
             if should_launch:
-                job = launch_background_job(
-                    module="ml_pipeline_2.run_research",
-                    args=["--config", str(manifest_path.resolve())],
-                    job_name=combo_key,
-                    metadata=_combo_job_metadata(
-                        matrix_root=matrix_root,
-                        combo_key=combo_key,
-                        feature_set=str(feature_set),
-                        model_name=str(model_name),
-                        artifacts_root=artifacts_root,
-                        manifest_path=manifest_path,
-                    ),
+                job = _launch_combo_job(
+                    combo=combo_payload,
+                    matrix_root=matrix_root,
                     job_root=job_root,
                 )
                 combo_payload["background_job_id"] = str(job["job_id"])
@@ -319,7 +350,90 @@ def _report_status_counts(report: Dict[str, Any]) -> Dict[str, int]:
     return counts
 
 
-def launch_pending_recovery_matrix_jobs(matrix_root: Path, *, max_parallel: int, job_root: Optional[Path]) -> Dict[str, Any]:
+def _combo_recipe_total(combo: Dict[str, Any]) -> Optional[int]:
+    manifest_path = str(combo.get("manifest_path") or "").strip()
+    if not manifest_path:
+        return None
+    payload = _read_json(Path(manifest_path).resolve())
+    scenario = dict(payload.get("scenario") or {})
+    recipes = list(scenario.get("recipes") or [])
+    selected_recipe_ids = {
+        str(item).strip()
+        for item in list(scenario.get("recipe_selection") or [])
+        if str(item).strip()
+    }
+    if not selected_recipe_ids:
+        return int(len(recipes))
+    return int(sum(1 for recipe in recipes if str((recipe or {}).get("recipe_id") or "").strip() in selected_recipe_ids))
+
+
+def _completed_recipe_count(output_root: Optional[str]) -> int:
+    if not output_root:
+        return 0
+    recipe_root = Path(output_root).resolve() / "primary_recipes"
+    if not recipe_root.exists():
+        return 0
+    return int(sum(1 for path in recipe_root.glob("*/summary.json") if path.is_file()))
+
+
+def _latest_state_info(output_root: Optional[str]) -> Dict[str, Any]:
+    if not output_root:
+        return {"last_state_event": None, "last_event_ts": None, "current_recipe_id": None}
+    state_path = Path(output_root).resolve() / "state.jsonl"
+    if not state_path.exists():
+        return {"last_state_event": None, "last_event_ts": None, "current_recipe_id": None}
+    last_event = None
+    last_ts = None
+    current_recipe_id = None
+    for line in state_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        event = str(payload.get("event") or "").strip() or None
+        recipe_id = str(payload.get("recipe_id") or "").strip() or None
+        last_event = event
+        last_ts = payload.get("ts_utc")
+        if event == "primary_recipe_start":
+            current_recipe_id = recipe_id
+        elif event in {"primary_recipe_done", "primary_recipe_skipped"} and recipe_id and recipe_id == current_recipe_id:
+            current_recipe_id = None
+    return {
+        "last_state_event": last_event,
+        "last_event_ts": last_ts,
+        "current_recipe_id": current_recipe_id,
+    }
+
+
+def _launch_combo_job(*, combo: Dict[str, Any], matrix_root: Path, job_root: Optional[Path], reuse_run_dir: Optional[Path] = None) -> Dict[str, Any]:
+    manifest_path = Path(combo["manifest_path"]).resolve()
+    artifacts_root = Path(combo["artifacts_root"]).resolve()
+    args = ["--config", str(manifest_path)]
+    if reuse_run_dir is not None:
+        args.extend(["--run-output-root", str(reuse_run_dir.resolve())])
+    job = launch_background_job(
+        module="ml_pipeline_2.run_research",
+        args=args,
+        job_name=str(combo["combo_key"]),
+        metadata=_combo_job_metadata(
+            matrix_root=matrix_root,
+            combo_key=str(combo["combo_key"]),
+            feature_set=str(combo["feature_set"]),
+            model_name=str(combo["primary_model"]),
+            artifacts_root=artifacts_root,
+            manifest_path=manifest_path,
+            output_root=reuse_run_dir,
+        ),
+        job_root=job_root,
+    )
+    combo["background_job_id"] = str(job["job_id"])
+    combo["background_job_path"] = str((Path(job["job_dir"]) / "job.json").resolve())
+    return job
+
+
+def launch_pending_recovery_matrix_jobs(matrix_root: Path, *, max_parallel: int, job_root: Optional[Path], retry_failed: bool = False) -> Dict[str, Any]:
     if int(max_parallel) <= 0:
         raise ValueError("max_parallel must be > 0")
     index_payload = _load_matrix_index(matrix_root)
@@ -329,30 +443,24 @@ def launch_pending_recovery_matrix_jobs(matrix_root: Path, *, max_parallel: int,
     for combo in combos:
         job_path = combo.get("background_job_path")
         if job_path:
-            status = str(get_background_job_status(job_path=str(job_path)).get("status"))
+            job_status = get_background_job_status(job_path=str(job_path))
+            status = str(job_status.get("status"))
             if status == "running":
                 running_count += 1
-            continue
+                continue
+            if status == "completed" or not bool(retry_failed):
+                continue
         summary_file = _combo_summary_path(Path(combo["artifacts_root"]).resolve(), run_name=str(combo["run_name"]))
         if summary_file is not None:
             continue
         if running_count >= int(max_parallel):
             continue
-        manifest_path = Path(combo["manifest_path"]).resolve()
-        artifacts_root = Path(combo["artifacts_root"]).resolve()
-        job = launch_background_job(
-            module="ml_pipeline_2.run_research",
-            args=["--config", str(manifest_path)],
-            job_name=str(combo["combo_key"]),
-            metadata=_combo_job_metadata(
-                matrix_root=matrix_root,
-                combo_key=str(combo["combo_key"]),
-                feature_set=str(combo["feature_set"]),
-                model_name=str(combo["primary_model"]),
-                artifacts_root=artifacts_root,
-                manifest_path=manifest_path,
-            ),
+        reuse_run_dir = _latest_run_dir(Path(combo["artifacts_root"]).resolve(), run_name=str(combo["run_name"])) if job_path and bool(retry_failed) else None
+        job = _launch_combo_job(
+            combo=combo,
+            matrix_root=matrix_root,
             job_root=job_root,
+            reuse_run_dir=reuse_run_dir,
         )
         combo["background_job_id"] = str(job["job_id"])
         combo["background_job_path"] = str((Path(job["job_dir"]) / "job.json").resolve())
@@ -365,6 +473,7 @@ def launch_pending_recovery_matrix_jobs(matrix_root: Path, *, max_parallel: int,
     return {
         "matrix_root": str(matrix_root.resolve()),
         "max_parallel": int(max_parallel),
+        "retry_failed": bool(retry_failed),
         "running_count": int(sum(1 for row in report.get("combos", []) if str(row.get("status")) == "running")),
         "launched_combo_keys": launched,
         "report": report,
@@ -376,6 +485,7 @@ def watch_pending_recovery_matrix_jobs(
     *,
     max_parallel: int,
     job_root: Optional[Path],
+    retry_failed: bool = False,
     poll_seconds: int = 120,
 ) -> Dict[str, Any]:
     if int(max_parallel) <= 0:
@@ -389,6 +499,7 @@ def watch_pending_recovery_matrix_jobs(
             matrix_root,
             max_parallel=int(max_parallel),
             job_root=job_root,
+            retry_failed=bool(retry_failed),
         )
         iterations += 1
         launched_combo_keys.extend(list(payload.get("launched_combo_keys") or []))
@@ -398,6 +509,7 @@ def watch_pending_recovery_matrix_jobs(
             return {
                 "matrix_root": str(matrix_root.resolve()),
                 "max_parallel": int(max_parallel),
+                "retry_failed": bool(retry_failed),
                 "poll_seconds": int(poll_seconds),
                 "iterations": int(iterations),
                 "launched_combo_keys": launched_combo_keys,
@@ -421,9 +533,13 @@ def refresh_recovery_matrix_report(matrix_root: Path) -> Dict[str, Any]:
         else:
             artifacts_root = Path(combo["artifacts_root"]).resolve()
             summary_file = _combo_summary_path(artifacts_root, run_name=str(combo["run_name"]))
-            output_root = str(summary_file.parent.resolve()) if summary_file is not None else None
+            latest_run_dir = _latest_run_dir(artifacts_root, run_name=str(combo["run_name"]))
+            output_root = str((summary_file.parent if summary_file is not None else latest_run_dir).resolve()) if (summary_file is not None or latest_run_dir is not None) else None
             summary_path = str(summary_file.resolve()) if summary_file is not None else None
             status = "completed" if summary_file is not None else "pending"
+        recipe_total = _combo_recipe_total(combo)
+        recipes_completed = _completed_recipe_count(output_root)
+        state_info = _latest_state_info(output_root)
         summary_payload = _read_json(Path(summary_path)) if summary_path else {}
         primary_rows = list(summary_payload.get("primary_recipes") or [])
         selected_primary_recipe_id = str(summary_payload.get("selected_primary_recipe_id") or "").strip() or None
@@ -447,13 +563,22 @@ def refresh_recovery_matrix_report(matrix_root: Path) -> Dict[str, Any]:
                 "status": status,
                 "output_root": output_root,
                 "summary_path": summary_path,
+                "recipes_completed": int(recipes_completed),
+                "recipes_total": recipe_total,
+                "last_state_event": state_info["last_state_event"],
+                "last_event_ts": state_info["last_event_ts"],
+                "current_recipe_id": state_info["current_recipe_id"],
                 "selected_primary_recipe_id": selected_primary_recipe_id,
                 "primary_stage_a_passed": primary_holdout.get("stage_a_passed"),
                 "primary_side_share_in_band": primary_holdout.get("side_share_in_band"),
                 "primary_profit_factor": primary_holdout.get("profit_factor"),
+                "primary_gross_profit_factor": primary_holdout.get("gross_profit_factor"),
                 "primary_net_return_sum": primary_holdout.get("net_return_sum"),
+                "primary_gross_return_sum": primary_holdout.get("gross_return_sum"),
                 "primary_long_share": primary_holdout.get("long_share"),
                 "primary_trades": primary_holdout.get("trades"),
+                "primary_time_stop_net_wins": primary_holdout.get("time_stop_net_wins"),
+                "primary_time_stop_net_losses": primary_holdout.get("time_stop_net_losses"),
                 "meta_enabled": bool(meta_holdout),
                 "meta_profit_factor": meta_holdout.get("profit_factor"),
                 "meta_net_return_sum": meta_holdout.get("net_return_sum"),
@@ -482,9 +607,19 @@ def refresh_recovery_matrix_report(matrix_root: Path) -> Dict[str, Any]:
                     "stage_a_passed": holdout.get("stage_a_passed"),
                     "side_share_in_band": holdout.get("side_share_in_band"),
                     "profit_factor": holdout.get("profit_factor"),
+                    "gross_profit_factor": holdout.get("gross_profit_factor"),
                     "net_return_sum": holdout.get("net_return_sum"),
+                    "gross_return_sum": holdout.get("gross_return_sum"),
                     "long_share": holdout.get("long_share"),
                     "trades": holdout.get("trades"),
+                    "tp_trades": holdout.get("tp_trades"),
+                    "sl_trades": holdout.get("sl_trades"),
+                    "time_stop_trades": holdout.get("time_stop_trades"),
+                    "invalid_trades": holdout.get("invalid_trades"),
+                    "time_stop_gross_wins": holdout.get("time_stop_gross_wins"),
+                    "time_stop_gross_losses": holdout.get("time_stop_gross_losses"),
+                    "time_stop_net_wins": holdout.get("time_stop_net_wins"),
+                    "time_stop_net_losses": holdout.get("time_stop_net_losses"),
                 }
             )
     completed_rows = [row for row in summary_rows if str(row.get("status")) == "completed"]
@@ -520,6 +655,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--launch-background", action="store_true", help="Launch each combo as a detached background job")
     parser.add_argument("--launch-pending", action="store_true", help="Launch pending combos for an existing matrix root up to the parallel cap")
     parser.add_argument("--watch-pending", action="store_true", help="Continuously refill pending combos for an existing matrix root until all combos are completed or failed")
+    parser.add_argument("--retry-failed", action="store_true", help="When launching pending jobs, also relaunch failed combos into their latest run directory")
     parser.add_argument("--max-parallel", type=int, help="Maximum number of background combos to keep active at once")
     parser.add_argument("--poll-seconds", type=int, help="Polling interval in seconds for --watch-pending")
     parser.add_argument("--report-only", action="store_true", help="Only refresh reports for an existing matrix root")
@@ -547,11 +683,13 @@ def _resolve_args(args: argparse.Namespace) -> Dict[str, Any]:
         "sl_grid": _parse_float_grid(_pick(args.sl_grid, matrix_cfg.get("sl_grid"), None), DEFAULT_SL_GRID),
         "horizon_grid": _parse_int_grid(_pick(args.horizon_grid, matrix_cfg.get("horizon_grid"), None), DEFAULT_HORIZON_GRID),
         "barrier_modes": _parse_name_list(_pick(args.barrier_modes, matrix_cfg.get("barrier_modes"), None), DEFAULT_BARRIER_MODES),
+        "recipes": _parse_recipe_list(matrix_cfg.get("recipes")),
         "models": _parse_name_list(_pick(args.models, matrix_cfg.get("models"), None), DEFAULT_MODELS),
         "feature_sets": _parse_name_list(_pick(args.feature_sets, matrix_cfg.get("feature_sets"), None), DEFAULT_FEATURE_SETS),
         "launch_background": bool(args.launch_background or bool(launch_cfg.get("background", False))),
         "launch_pending": bool(args.launch_pending),
         "watch_pending": bool(args.watch_pending),
+        "retry_failed": bool(args.retry_failed),
         "max_parallel": _pick(args.max_parallel, launch_cfg.get("max_parallel"), None),
         "poll_seconds": int(_pick(args.poll_seconds, launch_cfg.get("poll_seconds"), 120)),
         "job_root": _resolve_path_choice(args.job_root, launch_cfg.get("job_root"), DEFAULT_JOB_ROOT, config_dir=config_dir),
@@ -574,6 +712,7 @@ def main(argv: list[str] | None = None) -> int:
             Path(resolved["existing_matrix_root"]).resolve(),
             max_parallel=int(resolved["max_parallel"] or 1),
             job_root=Path(resolved["job_root"]).resolve(),
+            retry_failed=bool(resolved["retry_failed"]),
         )
         print(json.dumps(payload, indent=2, default=str))
         return 0
@@ -584,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
             Path(resolved["existing_matrix_root"]).resolve(),
             max_parallel=int(resolved["max_parallel"] or 1),
             job_root=Path(resolved["job_root"]).resolve(),
+            retry_failed=bool(resolved["retry_failed"]),
             poll_seconds=int(resolved["poll_seconds"]),
         )
         print(json.dumps(payload, indent=2, default=str))
@@ -595,6 +735,7 @@ def main(argv: list[str] | None = None) -> int:
         tp_grid=list(resolved["tp_grid"]),
         sl_grid=list(resolved["sl_grid"]),
         barrier_modes=list(resolved["barrier_modes"]),
+        recipes_override=list(resolved["recipes"]),
         models=list(resolved["models"]),
         feature_sets=list(resolved["feature_sets"]),
         launch_background=bool(resolved["launch_background"]),

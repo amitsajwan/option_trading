@@ -271,7 +271,7 @@ def build_recovery_trade_report(
     net_returns = pd.to_numeric(trades.get("net_return_after_cost"), errors="coerce").to_numpy(dtype=float) if len(trades) else np.asarray([], dtype=float)
     gross_returns = pd.to_numeric(trades.get("gross_return"), errors="coerce").to_numpy(dtype=float) if len(trades) else np.asarray([], dtype=float)
     payload = {
-        "created_at_utc": pd.Timestamp.utcnow().isoformat(),
+        "created_at_utc": pd.Timestamp.now("UTC").isoformat(),
         "status": "completed",
         "run_dir": str(run_dir),
         "recipe_id": chosen_recipe_id,

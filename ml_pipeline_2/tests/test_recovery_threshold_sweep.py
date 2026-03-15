@@ -26,6 +26,8 @@ def test_recovery_threshold_sweep_runs_from_completed_recovery_run(tmp_path: Pat
     assert sweep["recipe_id"] == summary["selected_primary_recipe_id"]
     assert sweep["primary_threshold"] == 0.50
     assert len(list(sweep["rows"])) == 3
+    assert "gross_profit_factor" in sweep["rows"][0]
+    assert "time_stop_net_wins" in sweep["rows"][0]
     assert Path(str(sweep["paths"]["holdout_labeled"])).exists()
     assert Path(str(sweep["paths"]["holdout_probabilities"])).exists()
     assert Path(str(sweep["paths"]["report_csv"])).exists()

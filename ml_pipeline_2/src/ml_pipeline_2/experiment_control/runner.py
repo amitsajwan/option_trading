@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from ..contracts.manifests import PHASE2_LABEL_SWEEP_KIND, RECOVERY_KIND, load_and_resolve_manifest
 from .state import RunContext
@@ -25,8 +25,12 @@ def _scenario_runner(kind: str):
     raise ValueError(f"unsupported experiment kind: {kind}")
 
 
-def run_research(resolved_config: Dict[str, Any]) -> Dict[str, Any]:
-    out_root = Path(resolved_config["outputs"]["artifacts_root"]) / f"{resolved_config['outputs']['run_name']}_{_timestamp_suffix()}"
+def run_research(resolved_config: Dict[str, Any], *, run_output_root: Optional[Path] = None) -> Dict[str, Any]:
+    out_root = (
+        Path(run_output_root).resolve()
+        if run_output_root is not None
+        else Path(resolved_config["outputs"]["artifacts_root"]) / f"{resolved_config['outputs']['run_name']}_{_timestamp_suffix()}"
+    )
     out_root.mkdir(parents=True, exist_ok=True)
     resolved = dict(resolved_config)
     resolved["outputs"] = dict(resolved_config["outputs"])
@@ -43,8 +47,8 @@ def run_research(resolved_config: Dict[str, Any]) -> Dict[str, Any]:
     return summary
 
 
-def run_manifest(manifest_path: Path, *, validate_only: bool = False) -> Dict[str, Any]:
+def run_manifest(manifest_path: Path, *, validate_only: bool = False, run_output_root: Optional[Path] = None) -> Dict[str, Any]:
     resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
     if validate_only:
         return {"status": "validated", "resolved_config": resolved}
-    return run_research(resolved)
+    return run_research(resolved, run_output_root=run_output_root)

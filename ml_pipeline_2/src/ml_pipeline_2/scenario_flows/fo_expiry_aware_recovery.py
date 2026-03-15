@@ -176,7 +176,40 @@ def _holdout_candidate_summary(holdout_labeled: pd.DataFrame, model_package: Dic
     stage_eval = evaluate_futures_stages_from_frame(frame=holdout_labeled, probs=probs, ce_threshold=float(threshold), pe_threshold=float(threshold), cost_per_trade=float(cost_per_trade), gates=gates)
     raw_stage_b = stage_b(frame=holdout_labeled, probs=probs, ce_threshold=float(threshold), pe_threshold=float(threshold), cost_per_trade=float(cost_per_trade), gates=gates)
     long_share = float(raw_stage_b.get("long_share", 0.0))
-    return {"input_contract": input_contract, "stage_eval": stage_eval, "stage_a_passed": bool(((stage_eval.get("stage_a_predictive_quality") or {}).get("passed"))), "trades": int(raw_stage_b.get("trades", 0)), "long_share": long_share, "short_share": float(raw_stage_b.get("short_share", 0.0)), "side_share_in_band": _side_share_in_band(long_share), "side_penalty": _side_penalty(long_share), "profit_factor": float(raw_stage_b.get("profit_factor", 0.0)), "net_return_sum": float(raw_stage_b.get("net_return_sum", 0.0)), "positive_net_return": bool(float(raw_stage_b.get("net_return_sum", 0.0)) > 0.0), "block_rate": float(raw_stage_b.get("block_rate", 0.0)), "rows_total": int(raw_stage_b.get("rows_total", 0))}
+    return {
+        "input_contract": input_contract,
+        "stage_eval": stage_eval,
+        "stage_a_passed": bool(((stage_eval.get("stage_a_predictive_quality") or {}).get("passed"))),
+        "trades": int(raw_stage_b.get("trades", 0)),
+        "long_trades": int(raw_stage_b.get("long_trades", 0)),
+        "short_trades": int(raw_stage_b.get("short_trades", 0)),
+        "hold_count": int(raw_stage_b.get("hold_count", 0)),
+        "long_share": long_share,
+        "short_share": float(raw_stage_b.get("short_share", 0.0)),
+        "side_share_in_band": _side_share_in_band(long_share),
+        "side_penalty": _side_penalty(long_share),
+        "profit_factor": float(raw_stage_b.get("profit_factor", 0.0)),
+        "gross_profit_factor": float(raw_stage_b.get("gross_profit_factor", 0.0)),
+        "net_return_sum": float(raw_stage_b.get("net_return_sum", 0.0)),
+        "gross_return_sum": float(raw_stage_b.get("gross_return_sum", 0.0)),
+        "mean_net_return_per_trade": float(raw_stage_b.get("mean_net_return_per_trade", 0.0)),
+        "mean_gross_return_per_trade": float(raw_stage_b.get("mean_gross_return_per_trade", 0.0)),
+        "win_rate": float(raw_stage_b.get("win_rate", 0.0)),
+        "gross_win_rate": float(raw_stage_b.get("gross_win_rate", 0.0)),
+        "tp_trades": int(raw_stage_b.get("tp_trades", 0)),
+        "sl_trades": int(raw_stage_b.get("sl_trades", 0)),
+        "time_stop_trades": int(raw_stage_b.get("time_stop_trades", 0)),
+        "tp_sl_same_bar_trades": int(raw_stage_b.get("tp_sl_same_bar_trades", 0)),
+        "invalid_trades": int(raw_stage_b.get("invalid_trades", 0)),
+        "time_stop_gross_wins": int(raw_stage_b.get("time_stop_gross_wins", 0)),
+        "time_stop_gross_losses": int(raw_stage_b.get("time_stop_gross_losses", 0)),
+        "time_stop_net_wins": int(raw_stage_b.get("time_stop_net_wins", 0)),
+        "time_stop_net_losses": int(raw_stage_b.get("time_stop_net_losses", 0)),
+        "positive_net_return": bool(float(raw_stage_b.get("net_return_sum", 0.0)) > 0.0),
+        "positive_gross_return": bool(float(raw_stage_b.get("gross_return_sum", 0.0)) > 0.0),
+        "block_rate": float(raw_stage_b.get("block_rate", 0.0)),
+        "rows_total": int(raw_stage_b.get("rows_total", 0)),
+    }
 
 
 def _build_meta_candidate_dataset(*, labeled_df: pd.DataFrame, utility_payload: Dict[str, object], threshold: float, cost_per_trade: float) -> pd.DataFrame:
@@ -309,13 +342,14 @@ def run_recovery_research(ctx: RunContext) -> Dict[str, Any]:
         training_report_path = recipe_root / "training_report.json"
         if bool(scenario.get("resume_primary")) and summary_path.exists() and model_path.exists() and training_report_path.exists():
             reused = json.loads(summary_path.read_text(encoding="utf-8"))
+            ctx.append_state("primary_recipe_skipped", recipe_id=recipe.recipe_id, reason="resume_primary")
             primary_results.append(dict(reused))
             continue
         ctx.append_state("primary_recipe_start", recipe_id=recipe.recipe_id, barrier_mode=recipe.barrier_mode)
         label_cfg = _effective_label_cfg(recipe, train_features=model_window_features, event_sampling_mode=str(scenario.get("event_sampling_mode", "none")), event_signal_col=scenario.get("event_signal_col"))
         train_labeled, train_sampling_meta, train_lineage = _prepare_labeled_frame(model_window_features, recipe=recipe, label_cfg=label_cfg, event_sampling_mode=str(scenario.get("event_sampling_mode", "none")), context=f"recovery:{recipe.recipe_id}:train")
         holdout_labeled, holdout_sampling_meta, holdout_lineage = _prepare_labeled_frame(holdout_features, recipe=recipe, label_cfg=label_cfg, event_sampling_mode=str(scenario.get("event_sampling_mode", "none")), context=f"recovery:{recipe.recipe_id}:holdout")
-        catalog = run_training_cycle_catalog(labeled_df=train_labeled, feature_profile=str(resolved["catalog"]["feature_profile"]), objective=str(training["objective"]), train_days=int(training["cv_config"]["train_days"]), valid_days=int(training["cv_config"]["valid_days"]), test_days=int(training["cv_config"]["test_days"]), step_days=int(training["cv_config"]["step_days"]), purge_days=int(training["cv_config"].get("purge_days", 0)), embargo_days=int(training["cv_config"].get("embargo_days", 0)), purge_mode=str(training["cv_config"].get("purge_mode", "days")), embargo_rows=int(training["cv_config"].get("embargo_rows", 0)), event_end_col=training["cv_config"].get("event_end_col"), random_state=42, max_experiments=1, preprocess_cfg=preprocess_cfg, label_target=str(training["label_target"]), utility_cfg=utility_cfg, model_whitelist=[str(scenario["primary_model"])], feature_set_whitelist=list(resolved["catalog"]["feature_sets"]), retain_utility_score_payload=True, fit_all_final_models=True)
+        catalog = run_training_cycle_catalog(labeled_df=train_labeled, feature_profile=str(resolved["catalog"]["feature_profile"]), objective=str(training["objective"]), train_days=int(training["cv_config"]["train_days"]), valid_days=int(training["cv_config"]["valid_days"]), test_days=int(training["cv_config"]["test_days"]), step_days=int(training["cv_config"]["step_days"]), purge_days=int(training["cv_config"].get("purge_days", 0)), embargo_days=int(training["cv_config"].get("embargo_days", 0)), purge_mode=str(training["cv_config"].get("purge_mode", "days")), embargo_rows=int(training["cv_config"].get("embargo_rows", 0)), event_end_col=training["cv_config"].get("event_end_col"), random_state=42, max_experiments=1, preprocess_cfg=preprocess_cfg, label_target=str(training["label_target"]), utility_cfg=utility_cfg, model_whitelist=[str(scenario["primary_model"])], feature_set_whitelist=list(resolved["catalog"]["feature_sets"]), retain_utility_score_payload=True, fit_all_final_models=True, model_n_jobs=int(((training.get("runtime") or {}).get("model_n_jobs")) or 1))
         selected_bundle = list(catalog.get("experiment_bundles") or [])[0]
         model_package = dict(selected_bundle["model_package"])
         holdout_summary = _holdout_candidate_summary(holdout_labeled, model_package, threshold=float(scenario["primary_threshold"]), gates=gates, cost_per_trade=float(utility_cfg.cost_per_trade))
@@ -326,6 +360,15 @@ def run_recovery_research(ctx: RunContext) -> Dict[str, Any]:
         summary_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
         (recipe_root / "train_label_lineage.json").write_text(json.dumps(train_lineage, indent=2), encoding="utf-8")
         (recipe_root / "holdout_label_lineage.json").write_text(json.dumps(holdout_lineage, indent=2), encoding="utf-8")
+        ctx.append_state(
+            "primary_recipe_done",
+            recipe_id=recipe.recipe_id,
+            barrier_mode=recipe.barrier_mode,
+            stage_a_passed=bool(holdout_summary.get("stage_a_passed")),
+            trades=int(holdout_summary.get("trades", 0)),
+            profit_factor=float(holdout_summary.get("profit_factor", 0.0)),
+            net_return_sum=float(holdout_summary.get("net_return_sum", 0.0)),
+        )
         primary_results.append({**result, "selected_bundle": selected_bundle, "model_package": model_package, "train_labeled": train_labeled, "holdout_labeled": holdout_labeled})
     if primary_results:
         selected_primary = max(primary_results, key=lambda row: (float((row["holdout_summary"]).get("stage_a_passed", False)), float((row["holdout_summary"]).get("side_share_in_band", False)), float((row["holdout_summary"]).get("profit_factor", float("-inf"))), float((row["holdout_summary"]).get("net_return_sum", float("-inf")))))

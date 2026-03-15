@@ -41,6 +41,27 @@ def test_recovery_smoke_runs_end_to_end(tmp_path: Path) -> None:
     assert (output_root / "meta_gate" / "summary.json").exists()
 
 
+def test_recovery_run_can_reuse_explicit_output_root_with_resume_primary(tmp_path: Path) -> None:
+    model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
+    manifest_path = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
+    resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    resolved["scenario"] = dict(resolved["scenario"])
+    resolved["scenario"]["resume_primary"] = True
+    run_output_root = tmp_path / "artifacts" / "reused_run"
+
+    first_summary = run_research(resolved, run_output_root=run_output_root)
+    recipe_summary_path = run_output_root / "primary_recipes" / "TB_BASE_L1" / "summary.json"
+    first_recipe_summary = recipe_summary_path.read_text(encoding="utf-8")
+
+    second_summary = run_research(resolved, run_output_root=run_output_root)
+    state_lines = (run_output_root / "state.jsonl").read_text(encoding="utf-8").splitlines()
+
+    assert Path(first_summary["output_root"]) == run_output_root
+    assert Path(second_summary["output_root"]) == run_output_root
+    assert recipe_summary_path.read_text(encoding="utf-8") == first_recipe_summary
+    assert any('"event": "primary_recipe_skipped"' in line and '"reason": "resume_primary"' in line for line in state_lines)
+
+
 def _build_training_cycle_smoke_frame(tmp_path: Path) -> pd.DataFrame:
     model_window_path, _ = build_synthetic_feature_frames(tmp_path)
     features = pd.read_parquet(model_window_path)
@@ -93,10 +114,13 @@ def test_training_cycle_smoke_supports_xgb_deep_v1(tmp_path: Path) -> None:
         model_whitelist=["xgb_deep_v1"],
         feature_set_whitelist=["fo_expiry_aware_v2"],
         fit_all_final_models=False,
+        model_n_jobs=2,
     )
 
     assert result["report"]["best_experiment"]["model"]["name"] == "xgb_deep_v1"
     assert result["model_package"]["selected_model"]["name"] == "xgb_deep_v1"
+    assert result["report"]["runtime"]["model_n_jobs"] == 2
+    assert result["model_package"]["runtime"]["model_n_jobs"] == 2
 
 
 def test_training_cycle_smoke_supports_lgbm_large_v1(tmp_path: Path) -> None:

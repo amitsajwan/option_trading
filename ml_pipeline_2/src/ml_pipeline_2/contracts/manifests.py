@@ -131,6 +131,14 @@ def _validate_training(payload: Dict[str, Any], errors: List[str]) -> None:
             continue
         if value < 0.0 or value > 1.0:
             errors.append(f"training.utility.{key} must be in [0,1]")
+    runtime = payload.get("runtime") or {}
+    if "model_n_jobs" in runtime:
+        try:
+            model_n_jobs = int(runtime.get("model_n_jobs"))
+            if model_n_jobs <= 0:
+                raise ValueError
+        except Exception:
+            errors.append("training.runtime.model_n_jobs must be an integer > 0")
 
 
 def _validate_phase2_scenario(payload: Dict[str, Any], *, catalog_models: Iterable[str], errors: List[str]) -> None:

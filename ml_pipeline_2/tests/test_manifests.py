@@ -73,6 +73,17 @@ def test_manifest_rejects_recovery_primary_model_outside_catalog(tmp_path: Path)
         resolve_manifest(payload, manifest_path=tmp_path / "bad_recovery.json", validate_paths=False)
 
 
+def test_manifest_validates_optional_runtime_model_n_jobs(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/fo_expiry_aware_recovery.default.json").read_text(encoding="utf-8"))
+    payload["training"]["runtime"] = {"model_n_jobs": 4}
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "recovery_runtime.json", validate_paths=False)
+    assert resolved["training"]["runtime"]["model_n_jobs"] == 4
+
+    payload["training"]["runtime"] = {"model_n_jobs": 0}
+    with pytest.raises(ManifestValidationError):
+        resolve_manifest(payload, manifest_path=tmp_path / "bad_runtime.json", validate_paths=False)
+
+
 @pytest.mark.parametrize(
     "config_name,expected_windows",
     [
@@ -97,6 +108,13 @@ def test_manifest_rejects_recovery_primary_model_outside_catalog(tmp_path: Path)
                 "final_holdout": {"start": "2024-08-01", "end": "2024-10-31"},
             },
         ),
+        (
+            "fo_expiry_aware_recovery.shortlist_4y.json",
+            {
+                "full_model": {"start": "2020-08-03", "end": "2024-07-31"},
+                "final_holdout": {"start": "2024-08-01", "end": "2024-10-31"},
+            },
+        ),
     ],
 )
 def test_tuning_recovery_manifests_validate_with_new_model_catalog(
@@ -113,6 +131,11 @@ def test_tuning_recovery_manifests_validate_with_new_model_catalog(
 
     resolved = resolve_manifest(payload, manifest_path=tmp_path / config_name, validate_paths=True)
 
-    assert resolved["catalog"]["models"] == TUNED_TREE_MODELS
-    assert resolved["scenario"]["primary_model"] == "xgb_shallow"
+    if config_name == "fo_expiry_aware_recovery.shortlist_4y.json":
+        assert resolved["catalog"]["models"] == ["xgb_balanced", "xgb_regularized", "xgb_shallow"]
+        assert resolved["scenario"]["primary_model"] == "xgb_balanced"
+        assert resolved["training"]["runtime"]["model_n_jobs"] == 4
+    else:
+        assert resolved["catalog"]["models"] == TUNED_TREE_MODELS
+        assert resolved["scenario"]["primary_model"] == "xgb_shallow"
     assert resolved["windows"] == expected_windows

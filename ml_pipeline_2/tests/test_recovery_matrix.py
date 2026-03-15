@@ -39,6 +39,7 @@ def test_generate_recovery_matrix_writes_combo_manifests(tmp_path: Path) -> None
         tp_grid=[0.0010],
         sl_grid=[0.0005],
         barrier_modes=["fixed", "atr_scaled"],
+        recipes_override=None,
         models=["logreg_balanced"],
         feature_sets=["fo_expiry_aware_v2"],
         launch_background=False,
@@ -64,7 +65,8 @@ def test_generate_recovery_matrix_writes_combo_manifests_for_tuned_models(tmp_pa
         horizon_grid=[15],
         tp_grid=[0.0030],
         sl_grid=[0.0012],
-        barrier_modes=["fixed"],
+        barrier_modes=["fixed", "atr_scaled"],
+        recipes_override=None,
         models=["xgb_deep_v1", "lgbm_large_v1"],
         feature_sets=["fo_expiry_aware_v2"],
         launch_background=False,
@@ -89,7 +91,8 @@ def test_refresh_recovery_matrix_report_summarizes_completed_combo(tmp_path: Pat
         horizon_grid=[2],
         tp_grid=[0.0010],
         sl_grid=[0.0005],
-        barrier_modes=["fixed"],
+        barrier_modes=["fixed", "atr_scaled"],
+        recipes_override=None,
         models=["logreg_balanced"],
         feature_sets=["fo_expiry_aware_v2"],
         launch_background=False,
@@ -158,6 +161,7 @@ def test_generate_recovery_matrix_respects_max_parallel_launches(tmp_path: Path,
         tp_grid=[0.0010],
         sl_grid=[0.0005],
         barrier_modes=["fixed"],
+        recipes_override=None,
         models=["logreg_balanced", "xgb_shallow"],
         feature_sets=["fo_expiry_aware_v2", "fo_no_time_context"],
         launch_background=True,
@@ -194,6 +198,7 @@ def test_launch_pending_recovery_matrix_jobs_fills_to_parallel_cap(tmp_path: Pat
         tp_grid=[0.0010],
         sl_grid=[0.0005],
         barrier_modes=["fixed"],
+        recipes_override=None,
         models=["logreg_balanced", "xgb_shallow"],
         feature_sets=["fo_expiry_aware_v2"],
         launch_background=True,
@@ -244,6 +249,20 @@ def test_tuning_matrix_configs_resolve_expected_search_space() -> None:
     assert resolved_4y["barrier_modes"] == ["fixed", "atr_scaled"]
     assert resolved_4y["max_parallel"] == 8
     assert resolved_4y["poll_seconds"] == 120
+    assert resolved_4y["recipes"] == []
+
+    shortlist_args = parser.parse_args(["--config", "ml_pipeline_2/configs/research/recovery_matrix.shortlist_4y.json"])
+    shortlist_resolved = _resolve_args(shortlist_args)
+    assert shortlist_resolved["models"] == ["xgb_balanced", "xgb_regularized", "xgb_shallow"]
+    assert shortlist_resolved["feature_sets"] == ["fo_no_time_context"]
+    assert shortlist_resolved["max_parallel"] == 1
+    assert len(shortlist_resolved["recipes"]) == 4
+    assert {recipe["recipe_id"] for recipe in shortlist_resolved["recipes"]} == {
+        "FIXED_H15_TP25_SL10",
+        "FIXED_H15_TP20_SL8",
+        "FIXED_H15_TP25_SL12",
+        "FIXED_H15_TP20_SL10",
+    }
 
     watch_args = parser.parse_args(
         [
@@ -295,12 +314,14 @@ def test_watch_pending_recovery_matrix_jobs_runs_until_completion(tmp_path: Path
         tmp_path / "matrix",
         max_parallel=8,
         job_root=tmp_path / "jobs",
+        retry_failed=True,
         poll_seconds=7,
     )
 
     assert payload["iterations"] == 2
     assert payload["launched_combo_keys"] == ["combo_a", "combo_b"]
     assert payload["status_counts"] == {"completed": 2, "running": 0, "pending": 0, "failed": 1}
+    assert payload["retry_failed"] is True
     assert sleeps == [7]
 
 
@@ -311,3 +332,139 @@ def test_watch_pending_requires_positive_poll_seconds(tmp_path: Path) -> None:
         assert "poll_seconds" in str(exc)
     else:
         raise AssertionError("expected ValueError for non-positive poll_seconds")
+
+
+def test_generate_recovery_matrix_supports_explicit_recipe_list(tmp_path: Path) -> None:
+    model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
+    base_manifest = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
+    matrix_root = tmp_path / "matrix"
+
+    index = generate_recovery_matrix(
+        base_manifest_path=base_manifest,
+        matrix_root=matrix_root,
+        horizon_grid=[99],
+        tp_grid=[0.0099],
+        sl_grid=[0.0042],
+        barrier_modes=["atr_scaled"],
+        recipes_override=[
+            {"recipe_id": "FIXED_H15_TP25_SL10", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0010, "barrier_mode": "fixed"},
+            {"recipe_id": "FIXED_H15_TP20_SL8", "horizon_minutes": 15, "take_profit_pct": 0.0020, "stop_loss_pct": 0.0008, "barrier_mode": "fixed"},
+            {"recipe_id": "FIXED_H15_TP25_SL12", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0012, "barrier_mode": "fixed"},
+            {"recipe_id": "FIXED_H15_TP20_SL10", "horizon_minutes": 15, "take_profit_pct": 0.0020, "stop_loss_pct": 0.0010, "barrier_mode": "fixed"},
+        ],
+        models=["xgb_balanced", "xgb_regularized", "xgb_shallow"],
+        feature_sets=["fo_no_time_context"],
+        launch_background=False,
+        job_root=None,
+        max_parallel_launches=1,
+    )
+
+    assert index["recipe_count"] == 4
+    assert len(index["combos"]) == 3
+    assert {recipe["recipe_id"] for recipe in index["recipes"]} == {
+        "FIXED_H15_TP25_SL10",
+        "FIXED_H15_TP20_SL8",
+        "FIXED_H15_TP25_SL12",
+        "FIXED_H15_TP20_SL10",
+    }
+
+
+def test_launch_pending_retry_failed_reuses_latest_run_dir(tmp_path: Path, monkeypatch) -> None:
+    model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
+    base_manifest = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
+    matrix_root = tmp_path / "matrix"
+    launches = []
+
+    def _fake_launch_background_job(*, module, args, job_name, metadata, job_root):
+        job_dir = tmp_path / "jobs" / f"{job_name}_retry"
+        job_dir.mkdir(parents=True, exist_ok=True)
+        launches.append({"job_name": job_name, "args": list(args), "metadata": dict(metadata or {})})
+        return {"job_id": f"{job_name}_retry_id", "job_dir": str(job_dir)}
+
+    monkeypatch.setattr("ml_pipeline_2.run_recovery_matrix.launch_background_job", _fake_launch_background_job)
+    monkeypatch.setattr("ml_pipeline_2.run_recovery_matrix.refresh_recovery_matrix_report", lambda matrix_root: {"combos": [{"status": "running"}]})
+
+    index = generate_recovery_matrix(
+        base_manifest_path=base_manifest,
+        matrix_root=matrix_root,
+        horizon_grid=[2],
+        tp_grid=[0.0010],
+        sl_grid=[0.0005],
+        barrier_modes=["fixed", "atr_scaled"],
+        recipes_override=None,
+        models=["logreg_balanced"],
+        feature_sets=["fo_expiry_aware_v2"],
+        launch_background=True,
+        job_root=tmp_path / "jobs",
+        max_parallel_launches=1,
+    )
+    combo = index["combos"][0]
+    run_dir = Path(combo["artifacts_root"]) / "run_20240101_000000"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "state.jsonl").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "ml_pipeline_2.run_recovery_matrix.get_background_job_status",
+        lambda **kwargs: {"status": "failed", "output_root": str(run_dir), "summary_path": None},
+    )
+
+    payload = launch_pending_recovery_matrix_jobs(
+        matrix_root,
+        max_parallel=1,
+        job_root=tmp_path / "jobs",
+        retry_failed=True,
+    )
+
+    assert payload["retry_failed"] is True
+    assert payload["launched_combo_keys"] == [combo["combo_key"]]
+    assert any("--run-output-root" in launch["args"] for launch in launches)
+    assert any(str(run_dir) in launch["args"] for launch in launches)
+
+
+def test_refresh_recovery_matrix_report_includes_recipe_progress(tmp_path: Path, monkeypatch) -> None:
+    model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
+    base_manifest = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
+    matrix_root = tmp_path / "matrix"
+    index = generate_recovery_matrix(
+        base_manifest_path=base_manifest,
+        matrix_root=matrix_root,
+        horizon_grid=[2],
+        tp_grid=[0.0010],
+        sl_grid=[0.0005],
+        barrier_modes=["fixed", "atr_scaled"],
+        recipes_override=None,
+        models=["logreg_balanced"],
+        feature_sets=["fo_expiry_aware_v2"],
+        launch_background=True,
+        job_root=tmp_path / "jobs",
+        max_parallel_launches=1,
+    )
+    combo = index["combos"][0]
+    output_root = Path(combo["artifacts_root"]) / "run_20240101_000000"
+    recipe_root = output_root / "primary_recipes" / "TB_BASE_L1"
+    recipe_root.mkdir(parents=True, exist_ok=True)
+    (recipe_root / "summary.json").write_text(json.dumps({"recipe": {"recipe_id": "TB_BASE_L1"}, "holdout_summary": {}}), encoding="utf-8")
+    (output_root / "state.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"ts_utc": "2026-03-15T00:00:00+00:00", "event": "job_start"}),
+                json.dumps({"ts_utc": "2026-03-15T00:01:00+00:00", "event": "primary_recipe_start", "recipe_id": "TB_BASE_L1"}),
+                json.dumps({"ts_utc": "2026-03-15T00:02:00+00:00", "event": "primary_recipe_done", "recipe_id": "TB_BASE_L1"}),
+                json.dumps({"ts_utc": "2026-03-15T00:03:00+00:00", "event": "primary_recipe_start", "recipe_id": "TB_ATR_L1"}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "ml_pipeline_2.run_recovery_matrix.get_background_job_status",
+        lambda **kwargs: {"status": "running", "output_root": str(output_root), "summary_path": None},
+    )
+
+    report = refresh_recovery_matrix_report(matrix_root)
+    combo_row = report["combos"][0]
+
+    assert combo_row["recipes_completed"] == 1
+    assert combo_row["recipes_total"] == 2
+    assert combo_row["last_state_event"] == "primary_recipe_start"
+    assert combo_row["current_recipe_id"] == "TB_ATR_L1"

@@ -151,15 +151,41 @@ The shared model catalog now includes a first preset-based tuning wave for tree 
 - LightGBM: `lgbm_fast`, `lgbm_dart`, `lgbm_large_v1`, `lgbm_large_dart_v1`
 
 Resource strategy:
-- keep per-model `n_jobs=1`
-- scale only through outer matrix parallelism
-- cap active background jobs with `launch.max_parallel` or `--max-parallel`
+- set per-model tree threads with `training.runtime.model_n_jobs`
+- keep same-VM 4-year runs at `max_parallel=1`
+- use outer matrix parallelism only when the machine has enough RAM for multiple combos
 
 Recommended staged workflow:
 1. Run [`configs/research/recovery_matrix.tuning_1m_e2e.json`](configs/research/recovery_matrix.tuning_1m_e2e.json) first.
 2. Review the best completed 1-month combo under `artifacts/research_matrices/.../report.json`.
 3. Run [`configs/research/recovery_matrix.tuning_5m.json`](configs/research/recovery_matrix.tuning_5m.json) second.
-4. Run [`configs/research/recovery_matrix.tuning_4y.json`](configs/research/recovery_matrix.tuning_4y.json) on the GCP VM when you are ready for the full restart.
+4. On the same VM, run [`configs/research/recovery_matrix.shortlist_4y.json`](configs/research/recovery_matrix.shortlist_4y.json) before any full 4-year expansion.
+5. Only widen beyond the shortlist after a shortlist combo materially improves after threshold sweep.
+
+Same-VM 4-year shortlist commands:
+
+```bash
+python -m ml_pipeline_2.run_recovery_matrix \
+  --config ml_pipeline_2/configs/research/recovery_matrix.shortlist_4y.json
+```
+
+Retry failed shortlist combos into their existing run directories:
+
+```bash
+python -m ml_pipeline_2.run_recovery_matrix \
+  --launch-pending \
+  --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
+  --max-parallel 1 \
+  --retry-failed
+```
+
+Reuse a specific run directory directly:
+
+```bash
+python -m ml_pipeline_2.run_research \
+  --config ml_pipeline_2/configs/research/fo_expiry_aware_recovery.shortlist_4y.json \
+  --run-output-root ml_pipeline_2/artifacts/research/<run_name>_<timestamp>
+```
 
 The default manifests remain stable. The tuning configs are opt-in.
 
