@@ -3,6 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
+from snapshot_app.runtime_features import _add_group_features
 from strategy_app.engines.rolling_feature_state import RollingFeatureState
 from strategy_app.engines.snapshot_accessor import SnapshotAccessor
 
@@ -65,12 +66,6 @@ def _build_snapshot_from_row(row: pd.Series) -> SnapshotAccessor:
 
 class FeatureParityBatchVsStreamTests(unittest.TestCase):
     def test_parity_for_core_streamable_features(self) -> None:
-        try:
-            from ml_pipeline.feature.engineering import _add_group_features
-        except Exception:
-            self.skipTest("ml_pipeline package import unavailable in this test environment")
-            return
-
         n = 80
         ts = pd.date_range("2026-03-02 09:15:00+05:30", periods=n, freq="min")
         base = 50000.0 + np.linspace(0.0, 120.0, n) + 8.0 * np.sin(np.arange(n) / 5.0)
