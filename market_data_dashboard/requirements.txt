@@ -12,4 +12,3 @@ numpy
 pandas
 pyarrow
 scikit-learn
-xgboost

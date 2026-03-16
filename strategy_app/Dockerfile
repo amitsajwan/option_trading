@@ -10,7 +10,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY strategy_app/requirements.txt /tmp/requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install --no-cache-dir --no-deps xgboost==2.1.4
 
 COPY contracts_app /app/contracts_app
 COPY ml_pipeline_2 /app/ml_pipeline_2

@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
 COPY market_data_dashboard/requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install --no-cache-dir --no-deps xgboost==2.1.4
 
 # Copy application code + shared packages used by dashboard
 COPY market_data_dashboard /app/market_data_dashboard
