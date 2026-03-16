@@ -177,10 +177,14 @@ Keep the fast-path matrix topped up:
 python -m ml_pipeline_2.run_recovery_matrix \
   --watch-pending \
   --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 4 \
+  --max-parallel 16 \
   --retry-failed \
   --poll-seconds 120
 ```
+
+This fast path fans out the 4 narrowed recipes into independent jobs:
+- `2 feature sets x 2 models x 4 recipes = 16` recipe-level combos
+- all 16 jobs can run together on a larger VM without widening back to weaker model families
 
 Run a threshold sweep on a completed combo:
 

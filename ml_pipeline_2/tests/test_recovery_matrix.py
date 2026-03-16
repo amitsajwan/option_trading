@@ -42,6 +42,7 @@ def test_generate_recovery_matrix_writes_combo_manifests(tmp_path: Path) -> None
         recipes_override=None,
         models=["logreg_balanced"],
         feature_sets=["fo_expiry_aware_v2"],
+        recipe_fanout=False,
         launch_background=False,
         job_root=None,
     )
@@ -69,6 +70,7 @@ def test_generate_recovery_matrix_writes_combo_manifests_for_tuned_models(tmp_pa
         recipes_override=None,
         models=["xgb_deep_v1", "lgbm_large_v1"],
         feature_sets=["fo_expiry_aware_v2"],
+        recipe_fanout=False,
         launch_background=False,
         job_root=None,
     )
@@ -95,6 +97,7 @@ def test_refresh_recovery_matrix_report_summarizes_completed_combo(tmp_path: Pat
         recipes_override=None,
         models=["logreg_balanced"],
         feature_sets=["fo_expiry_aware_v2"],
+        recipe_fanout=False,
         launch_background=False,
         job_root=None,
     )
@@ -164,6 +167,7 @@ def test_generate_recovery_matrix_respects_max_parallel_launches(tmp_path: Path,
         recipes_override=None,
         models=["logreg_balanced", "xgb_shallow"],
         feature_sets=["fo_expiry_aware_v2", "fo_no_time_context"],
+        recipe_fanout=False,
         launch_background=True,
         job_root=tmp_path / "jobs",
         max_parallel_launches=1,
@@ -201,6 +205,7 @@ def test_launch_pending_recovery_matrix_jobs_fills_to_parallel_cap(tmp_path: Pat
         recipes_override=None,
         models=["logreg_balanced", "xgb_shallow"],
         feature_sets=["fo_expiry_aware_v2"],
+        recipe_fanout=False,
         launch_background=True,
         job_root=tmp_path / "jobs",
         max_parallel_launches=1,
@@ -268,7 +273,8 @@ def test_tuning_matrix_configs_resolve_expected_search_space() -> None:
     fast_path_resolved = _resolve_args(fast_path_args)
     assert fast_path_resolved["models"] == ["xgb_shallow", "xgb_regularized"]
     assert fast_path_resolved["feature_sets"] == ["fo_expiry_aware_v2", "fo_oi_pcr_momentum"]
-    assert fast_path_resolved["max_parallel"] == 4
+    assert fast_path_resolved["recipe_fanout"] is True
+    assert fast_path_resolved["max_parallel"] == 16
     assert fast_path_resolved["poll_seconds"] == 120
     assert len(fast_path_resolved["recipes"]) == 4
     assert {recipe["recipe_id"] for recipe in fast_path_resolved["recipes"]} == {
@@ -368,6 +374,7 @@ def test_generate_recovery_matrix_supports_explicit_recipe_list(tmp_path: Path) 
         ],
         models=["xgb_balanced", "xgb_regularized", "xgb_shallow"],
         feature_sets=["fo_no_time_context"],
+        recipe_fanout=False,
         launch_background=False,
         job_root=None,
         max_parallel_launches=1,
@@ -408,6 +415,7 @@ def test_launch_pending_retry_failed_reuses_latest_run_dir(tmp_path: Path, monke
         recipes_override=None,
         models=["logreg_balanced"],
         feature_sets=["fo_expiry_aware_v2"],
+        recipe_fanout=False,
         launch_background=True,
         job_root=tmp_path / "jobs",
         max_parallel_launches=1,
@@ -449,6 +457,7 @@ def test_refresh_recovery_matrix_report_includes_recipe_progress(tmp_path: Path,
         recipes_override=None,
         models=["logreg_balanced"],
         feature_sets=["fo_expiry_aware_v2"],
+        recipe_fanout=False,
         launch_background=True,
         job_root=tmp_path / "jobs",
         max_parallel_launches=1,
@@ -482,3 +491,37 @@ def test_refresh_recovery_matrix_report_includes_recipe_progress(tmp_path: Path,
     assert combo_row["recipes_total"] == 2
     assert combo_row["last_state_event"] == "primary_recipe_start"
     assert combo_row["current_recipe_id"] == "TB_ATR_L1"
+
+
+def test_generate_recovery_matrix_can_fanout_recipes_into_independent_combos(tmp_path: Path) -> None:
+    model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
+    base_manifest = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
+    matrix_root = tmp_path / "matrix"
+
+    index = generate_recovery_matrix(
+        base_manifest_path=base_manifest,
+        matrix_root=matrix_root,
+        horizon_grid=[2],
+        tp_grid=[0.0010],
+        sl_grid=[0.0005],
+        barrier_modes=["fixed", "atr_scaled"],
+        recipes_override=[
+            {"recipe_id": "TB_BASE_L1", "horizon_minutes": 2, "take_profit_pct": 0.0010, "stop_loss_pct": 0.0005, "barrier_mode": "fixed"},
+            {"recipe_id": "TB_ATR_L1", "horizon_minutes": 2, "take_profit_pct": 0.0010, "stop_loss_pct": 0.0005, "barrier_mode": "atr_scaled"},
+        ],
+        models=["logreg_balanced", "xgb_shallow"],
+        feature_sets=["fo_expiry_aware_v2"],
+        recipe_fanout=True,
+        launch_background=False,
+        job_root=None,
+    )
+
+    assert index["recipe_fanout"] is True
+    assert index["recipe_count"] == 2
+    assert len(index["combos"]) == 4
+    assert {combo["recipe_id"] for combo in index["combos"]} == {"TB_BASE_L1", "TB_ATR_L1"}
+    for combo in index["combos"]:
+        payload = json.loads(Path(combo["manifest_path"]).read_text(encoding="utf-8"))
+        assert len(payload["scenario"]["recipes"]) == 1
+        assert payload["scenario"]["recipe_selection"] == [combo["recipe_id"]]
+        assert payload["scenario"]["recipes"][0]["recipe_id"] == combo["recipe_id"]

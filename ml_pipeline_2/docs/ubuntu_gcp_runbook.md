@@ -209,11 +209,12 @@ python -m ml_pipeline_2.run_recovery_matrix \
 This run uses:
 - `full_model`: `2020-08-03` to `2024-07-31`
 - `final_holdout`: `2024-08-01` to `2024-10-31`
-- `2 feature sets x 2 models = 4 combos`
+- `2 feature sets x 2 models x 4 recipes = 16` recipe-level combos
 - the exact 4 narrowed `H15 / TP30 / SL8-10` recipes
 - `event_sampling_mode=cusum`
 - candidate filtering on event-sampled, non-expiry-day, non-high-ATR, tradeable-context rows
-- `max_parallel=4`
+- `recipe_fanout=true`
+- `max_parallel=16`
 - `meta_gate.enabled=false`
 - `resume_primary=true`
 
@@ -225,7 +226,7 @@ Keep the fast-path matrix topped up:
 python -m ml_pipeline_2.run_recovery_matrix \
   --watch-pending \
   --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 4 \
+  --max-parallel 16 \
   --retry-failed \
   --poll-seconds 120
 ```
@@ -236,7 +237,7 @@ If you only want a one-shot refill instead of the watcher:
 python -m ml_pipeline_2.run_recovery_matrix \
   --launch-pending \
   --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 4 \
+  --max-parallel 16 \
   --retry-failed
 ```
 

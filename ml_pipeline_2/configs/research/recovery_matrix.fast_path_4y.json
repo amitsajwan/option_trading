@@ -3,6 +3,7 @@
     "base_manifest": "fo_expiry_aware_recovery.fast_path_4y.json"
   },
   "matrix": {
+    "recipe_fanout": true,
     "recipes": [
       {
         "recipe_id": "ATR_H15_TP30_SL8",
@@ -48,7 +49,7 @@
   },
   "launch": {
     "background": true,
-    "max_parallel": 4,
+    "max_parallel": 16,
     "poll_seconds": 120,
     "job_root": "../../artifacts/background_jobs"
   }

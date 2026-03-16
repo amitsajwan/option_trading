@@ -162,12 +162,13 @@ def _combo_output_root(*, matrix_root: Path, combo_key: str) -> Path:
     return matrix_root / "runs" / combo_key
 
 
-def _combo_job_metadata(*, matrix_root: Path, combo_key: str, feature_set: str, model_name: str, artifacts_root: Path, manifest_path: Path, output_root: Optional[Path] = None) -> Dict[str, Any]:
+def _combo_job_metadata(*, matrix_root: Path, combo_key: str, feature_set: str, model_name: str, artifacts_root: Path, manifest_path: Path, recipe_id: Optional[str] = None, output_root: Optional[Path] = None) -> Dict[str, Any]:
     payload = {
         "matrix_root": str(matrix_root.resolve()),
         "combo_key": combo_key,
         "feature_set": str(feature_set),
         "primary_model": str(model_name),
+        "recipe_id": (str(recipe_id).strip() or None) if recipe_id is not None else None,
         "summary_filename": "summary.json",
         "outputs": {
             "artifacts_root": str(artifacts_root.resolve()),
@@ -224,6 +225,7 @@ def generate_recovery_matrix(
     recipes_override: Optional[Sequence[Dict[str, Any]]],
     models: Sequence[str],
     feature_sets: Sequence[str],
+    recipe_fanout: bool,
     launch_background: bool,
     job_root: Optional[Path],
     max_parallel_launches: Optional[int] = None,
@@ -256,60 +258,74 @@ def generate_recovery_matrix(
     launched_count = 0
     for feature_set in list(feature_sets):
         for model_name in list(models):
-            combo_key = _sanitize_name(f"{feature_set}__{model_name}")
-            artifacts_root = _combo_output_root(matrix_root=matrix_root, combo_key=combo_key)
-            manifest_payload = {
-                "schema_version": int(resolved["schema_version"]),
-                "experiment_kind": str(resolved["experiment_kind"]),
-                "inputs": {
-                    "model_window_features_path": str(Path(base_inputs["model_window_features_path"]).resolve()),
-                    "holdout_features_path": str(Path(base_inputs["holdout_features_path"]).resolve()),
-                    "base_path": str(Path(base_inputs["base_path"]).resolve()),
-                    "baseline_json_path": (str(Path(base_inputs["baseline_json_path"]).resolve()) if base_inputs.get("baseline_json_path") is not None else ""),
-                },
-                "outputs": {
-                    "artifacts_root": str(artifacts_root.resolve()),
-                    "run_name": "run",
-                },
-                "catalog": {
-                    "feature_profile": str(base_catalog["feature_profile"]),
-                    "feature_sets": [str(feature_set)],
-                    "models": [str(model_name)],
-                },
-                "windows": dict(base_windows),
-                "training": dict(base_training),
-                "scenario": {
+            recipe_variants = list(recipes) if bool(recipe_fanout) else [None]
+            for recipe in recipe_variants:
+                combo_name = f"{feature_set}__{model_name}"
+                scenario_payload = {
                     **dict(base_scenario),
-                    "recipes": list(recipes),
+                    "recipes": ([dict(recipe)] if recipe is not None else list(recipes)),
                     "primary_model": str(model_name),
-                },
-            }
-            manifest_path = manifests_root / f"{combo_key}.json"
-            _write_json(manifest_path, manifest_payload)
-            combo_payload: Dict[str, Any] = {
-                "combo_key": combo_key,
-                "feature_set": str(feature_set),
-                "primary_model": str(model_name),
-                "manifest_path": str(manifest_path.resolve()),
-                "artifacts_root": str(artifacts_root.resolve()),
-                "run_name": "run",
-            }
-            should_launch = bool(launch_background) and (launch_cap is None or launched_count < launch_cap)
-            if should_launch:
-                job = _launch_combo_job(
-                    combo=combo_payload,
-                    matrix_root=matrix_root,
-                    job_root=job_root,
+                }
+                combo_payload: Dict[str, Any] = {
+                    "feature_set": str(feature_set),
+                    "primary_model": str(model_name),
+                    "run_name": "run",
+                }
+                if recipe is not None:
+                    recipe_id = str(recipe.get("recipe_id") or "").strip()
+                    combo_name = f"{combo_name}__{recipe_id}"
+                    scenario_payload["recipe_selection"] = [recipe_id]
+                    combo_payload["recipe_id"] = recipe_id
+                combo_key = _sanitize_name(combo_name)
+                artifacts_root = _combo_output_root(matrix_root=matrix_root, combo_key=combo_key)
+                manifest_payload = {
+                    "schema_version": int(resolved["schema_version"]),
+                    "experiment_kind": str(resolved["experiment_kind"]),
+                    "inputs": {
+                        "model_window_features_path": str(Path(base_inputs["model_window_features_path"]).resolve()),
+                        "holdout_features_path": str(Path(base_inputs["holdout_features_path"]).resolve()),
+                        "base_path": str(Path(base_inputs["base_path"]).resolve()),
+                        "baseline_json_path": (str(Path(base_inputs["baseline_json_path"]).resolve()) if base_inputs.get("baseline_json_path") is not None else ""),
+                    },
+                    "outputs": {
+                        "artifacts_root": str(artifacts_root.resolve()),
+                        "run_name": "run",
+                    },
+                    "catalog": {
+                        "feature_profile": str(base_catalog["feature_profile"]),
+                        "feature_sets": [str(feature_set)],
+                        "models": [str(model_name)],
+                    },
+                    "windows": dict(base_windows),
+                    "training": dict(base_training),
+                    "scenario": scenario_payload,
+                }
+                manifest_path = manifests_root / f"{combo_key}.json"
+                _write_json(manifest_path, manifest_payload)
+                combo_payload.update(
+                    {
+                        "combo_key": combo_key,
+                        "manifest_path": str(manifest_path.resolve()),
+                        "artifacts_root": str(artifacts_root.resolve()),
+                    }
                 )
-                combo_payload["background_job_id"] = str(job["job_id"])
-                combo_payload["background_job_path"] = str((Path(job["job_dir"]) / "job.json").resolve())
-                launched_count += 1
-            combos.append(combo_payload)
+                should_launch = bool(launch_background) and (launch_cap is None or launched_count < launch_cap)
+                if should_launch:
+                    job = _launch_combo_job(
+                        combo=combo_payload,
+                        matrix_root=matrix_root,
+                        job_root=job_root,
+                    )
+                    combo_payload["background_job_id"] = str(job["job_id"])
+                    combo_payload["background_job_path"] = str((Path(job["job_dir"]) / "job.json").resolve())
+                    launched_count += 1
+                combos.append(combo_payload)
     index_payload = {
         "created_at_utc": _utc_now(),
         "matrix_root": str(matrix_root.resolve()),
         "base_manifest_path": str(base_manifest_path.resolve()),
         "recipe_count": int(len(recipes)),
+        "recipe_fanout": bool(recipe_fanout),
         "max_parallel_launches": launch_cap,
         "recipes": list(recipes),
         "combos": combos,
@@ -424,6 +440,7 @@ def _launch_combo_job(*, combo: Dict[str, Any], matrix_root: Path, job_root: Opt
             model_name=str(combo["primary_model"]),
             artifacts_root=artifacts_root,
             manifest_path=manifest_path,
+            recipe_id=combo.get("recipe_id"),
             output_root=reuse_run_dir,
         ),
         job_root=job_root,
@@ -560,6 +577,7 @@ def refresh_recovery_matrix_report(matrix_root: Path) -> Dict[str, Any]:
                 "combo_key": combo["combo_key"],
                 "feature_set": combo["feature_set"],
                 "primary_model": combo["primary_model"],
+                "recipe_id": combo.get("recipe_id"),
                 "status": status,
                 "output_root": output_root,
                 "summary_path": summary_path,
@@ -649,6 +667,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--barrier-modes", help="Comma-separated barrier modes")
     parser.add_argument("--models", help="Comma-separated primary models")
     parser.add_argument("--feature-sets", help="Comma-separated feature sets")
+    parser.add_argument("--recipe-fanout", action="store_true", help="Expand one combo per recipe so recipes can run independently")
     parser.add_argument("--matrix-root", help="Root directory for matrix artifacts")
     parser.add_argument("--matrix-name", help="Matrix run name prefix")
     parser.add_argument("--job-root", help="Background job registry root")
@@ -686,6 +705,7 @@ def _resolve_args(args: argparse.Namespace) -> Dict[str, Any]:
         "recipes": _parse_recipe_list(matrix_cfg.get("recipes")),
         "models": _parse_name_list(_pick(args.models, matrix_cfg.get("models"), None), DEFAULT_MODELS),
         "feature_sets": _parse_name_list(_pick(args.feature_sets, matrix_cfg.get("feature_sets"), None), DEFAULT_FEATURE_SETS),
+        "recipe_fanout": bool(args.recipe_fanout or bool(matrix_cfg.get("recipe_fanout", False))),
         "launch_background": bool(args.launch_background or bool(launch_cfg.get("background", False))),
         "launch_pending": bool(args.launch_pending),
         "watch_pending": bool(args.watch_pending),
@@ -738,6 +758,7 @@ def main(argv: list[str] | None = None) -> int:
         recipes_override=list(resolved["recipes"]),
         models=list(resolved["models"]),
         feature_sets=list(resolved["feature_sets"]),
+        recipe_fanout=bool(resolved["recipe_fanout"]),
         launch_background=bool(resolved["launch_background"]),
         job_root=Path(resolved["job_root"]).resolve(),
         max_parallel_launches=(int(resolved["max_parallel"]) if resolved["max_parallel"] is not None else None),
