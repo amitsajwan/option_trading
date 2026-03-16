@@ -3,12 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import UTC, datetime
 from typing import Any, Iterable, Optional
 
 import redis
 
-from contracts_app import find_matching_python_processes, redis_connection_kwargs
+from contracts_app import find_matching_python_processes, isoformat_ist, redis_connection_kwargs
 
 
 def _truthy(value: Any) -> bool:
@@ -40,7 +39,7 @@ def evaluate(*, topic: str) -> tuple[dict[str, Any], int]:
 
     result = {
         "component": "strategy_app",
-        "checked_at_utc": datetime.now(tz=UTC).isoformat().replace("+00:00", "Z"),
+        "checked_at_ist": isoformat_ist(),
         "status": status,
         "process": {
             "running": process_running,

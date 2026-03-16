@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - optional runtime dependency
     ASCENDING = 1
     MongoClient = None
 
-from .time_utils import IST, minute_bucket_ist, parse_market_timestamp_ist, to_ist
+from .time_utils import IST, minute_bucket_ist, parse_market_timestamp_ist, to_ist, to_ist_iso
 
 logger = logging.getLogger(__name__)
 
@@ -163,9 +163,10 @@ class MongoPersistenceSink:
             "source": str(source),
             "instrument": instrument_upper,
             "underlying_symbol": extract_underlying_symbol(instrument_upper),
-            "timestamp": ts,
+            "timestamp": to_ist_iso(ts),
             "market_minute": _minute_bucket(ts),
-            "received_at_ist": _ist_now(),
+            "received_at_ist": to_ist_iso(_ist_now()),
+            "received_at_ttl": _ist_now(),
             "last_price": payload.get("last_price"),
             "candle_volume": payload.get("candle_volume"),
             "cumulative_volume": payload.get("cumulative_volume"),
@@ -202,11 +203,12 @@ class MongoPersistenceSink:
             "instrument": instrument_upper,
             "underlying_symbol": underlying,
             "futures_instrument": str(futures_instrument).upper() if futures_instrument else None,
-            "timestamp": ts,
+            "timestamp": to_ist_iso(ts_ist),
             "market_minute": _minute_bucket(ts),
             "trade_date_ist": ts_ist.date().isoformat(),
             "market_time_ist": ts_ist.strftime("%H:%M:%S"),
-            "received_at_ist": _ist_now(),
+            "received_at_ist": to_ist_iso(_ist_now()),
+            "received_at_ttl": _ist_now(),
             "expiry": snap.get("expiry"),
             "strike_count": len(strikes) if isinstance(strikes, list) else 0,
             "futures_price": snap.get("futures_price"),
@@ -242,9 +244,10 @@ class MongoPersistenceSink:
             "source": str(source),
             "instrument": instrument_upper,
             "underlying_symbol": extract_underlying_symbol(instrument_upper),
-            "timestamp": ts,
+            "timestamp": to_ist_iso(ts),
             "market_minute": _minute_bucket(ts),
-            "received_at_ist": _ist_now(),
+            "received_at_ist": to_ist_iso(_ist_now()),
+            "received_at_ttl": _ist_now(),
             "buy_depth": buy,
             "sell_depth": sell,
             "total_bid_qty": total_bid_qty,
@@ -280,11 +283,12 @@ class MongoPersistenceSink:
             "instrument": instrument,
             "snapshot_id": str(payload.get("snapshot_id") or snapshot.get("snapshot_id") or ""),
             "event_id": str(payload.get("event_id") or ""),
-            "timestamp": ts,
+            "timestamp": to_ist_iso(ts_ist),
             "market_minute": _minute_bucket(ts),
             "trade_date_ist": ts_ist.date().isoformat(),
             "market_time_ist": ts_ist.strftime("%H:%M:%S"),
-            "received_at_ist": _ist_now(),
+            "received_at_ist": to_ist_iso(_ist_now()),
+            "received_at_ttl": _ist_now(),
             "payload": payload,
         }
         return self._enqueue({"event_type": "snapshot", "doc": doc})
@@ -406,10 +410,10 @@ class MongoPersistenceSink:
             ttl_days = int(os.getenv("MONGO_PERSIST_TTL_DAYS", "0"))
             if ttl_days > 0:
                 ttl_seconds = int(ttl_days * 24 * 60 * 60)
-                self._db[self.tick_collection].create_index("received_at_ist", expireAfterSeconds=ttl_seconds)
-                self._db[self.options_collection].create_index("received_at_ist", expireAfterSeconds=ttl_seconds)
-                self._db[self.depth_collection].create_index("received_at_ist", expireAfterSeconds=ttl_seconds)
-                self._db[self.snapshot_collection].create_index("received_at_ist", expireAfterSeconds=ttl_seconds)
+                self._db[self.tick_collection].create_index("received_at_ttl", expireAfterSeconds=ttl_seconds)
+                self._db[self.options_collection].create_index("received_at_ttl", expireAfterSeconds=ttl_seconds)
+                self._db[self.depth_collection].create_index("received_at_ttl", expireAfterSeconds=ttl_seconds)
+                self._db[self.snapshot_collection].create_index("received_at_ttl", expireAfterSeconds=ttl_seconds)
             self._indexes_ready = True
         except Exception as exc:
             logger.warning("Mongo persistence index setup failed: %s", exc)

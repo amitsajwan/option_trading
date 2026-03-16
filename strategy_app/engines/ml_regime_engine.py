@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
 from ..contracts import SnapshotPayload, StrategyEngine, TradeSignal
 
@@ -13,6 +13,10 @@ class MLRegimeEngine(StrategyEngine):
 
     def __init__(self, delegate: Optional[StrategyEngine] = None) -> None:
         self._delegate = delegate
+
+    def set_run_context(self, run_id: Optional[str], metadata: Optional[dict[str, Any]] = None) -> None:
+        if self._delegate is not None and hasattr(self._delegate, "set_run_context"):
+            self._delegate.set_run_context(run_id, metadata)  # type: ignore[attr-defined]
 
     def on_session_start(self, trade_date: date) -> None:
         if self._delegate is not None:

@@ -9,6 +9,8 @@ from typing import Any, Iterable, Optional
 from zoneinfo import ZoneInfo
 
 from contracts_app import (
+    isoformat_ist,
+    parse_timestamp_to_ist,
     find_matching_python_processes,
     is_market_open_ist,
     is_trading_day_ist,
@@ -28,7 +30,7 @@ except Exception:  # pragma: no cover
 
 
 def _ist_now_iso() -> str:
-    return datetime.now(tz=IST).isoformat()
+    return isoformat_ist(datetime.now(tz=IST))
 
 
 def _truthy(value: Any) -> bool:
@@ -87,6 +89,8 @@ def _mongo_latest() -> tuple[bool, dict[str, Any], Optional[str]]:
         client.admin.command("ping")
         coll = client[db_name][coll_name]
         total_docs = int(coll.count_documents({}))
+        # Prefer session date/time keys for ordering because historical rows may carry
+        # mixed BSON types in `timestamp` (Date vs string), which can break pure timestamp sort.
         doc = coll.find_one(
             {},
             {
@@ -97,7 +101,7 @@ def _mongo_latest() -> tuple[bool, dict[str, Any], Optional[str]]:
                 "market_time_ist": 1,
                 "timestamp": 1,
             },
-            sort=[("timestamp", -1)],
+            sort=[("trade_date_ist", -1), ("market_time_ist", -1), ("timestamp", -1)],
         )
         out = {"db": db_name, "collection": coll_name, "total_docs": total_docs, "latest": doc}
         return True, out, None
@@ -139,8 +143,8 @@ def evaluate(*, max_age_seconds: float) -> tuple[dict[str, Any], int]:
             age_seconds = (datetime.now(tz=IST) - dt_from_market.astimezone(IST)).total_seconds()
         else:
             ts = latest.get("timestamp")
-            if isinstance(ts, datetime):
-                dt = ts if ts.tzinfo else ts.replace(tzinfo=IST)
+            dt = parse_timestamp_to_ist(ts)
+            if dt is not None:
                 age_seconds = (datetime.now(tz=IST) - dt.astimezone(IST)).total_seconds()
 
     status = "healthy"
@@ -148,6 +152,17 @@ def evaluate(*, max_age_seconds: float) -> tuple[dict[str, Any], int]:
     if not mongo_ok:
         status = "unhealthy"
         code = 2
+    elif not market_session_enabled:
+        total_docs = int(mongo_data.get("total_docs") or 0) if isinstance(mongo_data, dict) else 0
+        if not process_running:
+            status = "degraded" if total_docs > 0 else "unhealthy"
+            code = 1 if total_docs > 0 else 2
+        elif latest is None:
+            status = "degraded"
+            code = 1
+        else:
+            status = "healthy"
+            code = 0
     elif market_session_enabled and market_open is False:
         status = "healthy" if process_running else "degraded"
         code = 0 if process_running else 1

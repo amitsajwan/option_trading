@@ -11,6 +11,7 @@ from typing import Any, Deque, Dict, Iterable, List, Optional
 import numpy as np
 import pandas as pd
 import requests
+from contracts_app import TimestampSourceMode, isoformat_ist
 
 try:
     from snapshot_app.greeks_calculator import GreeksCalculator
@@ -212,16 +213,21 @@ def _extract_chain_strikes(chain: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not np.isfinite(strike):
             continue
 
-        ce = row.get("CE") if isinstance(row.get("CE"), dict) else {}
-        pe = row.get("PE") if isinstance(row.get("PE"), dict) else {}
-        ce_ltp = _safe_float(row.get("ce_ltp") if row.get("ce_ltp") is not None else ce.get("last_price"))
-        pe_ltp = _safe_float(row.get("pe_ltp") if row.get("pe_ltp") is not None else pe.get("last_price"))
-        ce_oi = _safe_float(row.get("ce_oi") if row.get("ce_oi") is not None else ce.get("oi"))
-        pe_oi = _safe_float(row.get("pe_oi") if row.get("pe_oi") is not None else pe.get("oi"))
-        ce_vol = _safe_float(row.get("ce_volume") if row.get("ce_volume") is not None else ce.get("volume"))
-        pe_vol = _safe_float(row.get("pe_volume") if row.get("pe_volume") is not None else pe.get("volume"))
-        ce_iv = _safe_float(row.get("ce_iv") if row.get("ce_iv") is not None else ce.get("iv"))
-        pe_iv = _safe_float(row.get("pe_iv") if row.get("pe_iv") is not None else pe.get("iv"))
+        # v2.0 contract: strike rows carry flat fields with optional OHLC.
+        ce_ltp = _safe_float(row.get("ce_ltp"))
+        pe_ltp = _safe_float(row.get("pe_ltp"))
+        ce_oi = _safe_float(row.get("ce_oi"))
+        pe_oi = _safe_float(row.get("pe_oi"))
+        ce_vol = _safe_float(row.get("ce_volume"))
+        pe_vol = _safe_float(row.get("pe_volume"))
+        ce_iv = _safe_float(row.get("ce_iv"))
+        pe_iv = _safe_float(row.get("pe_iv"))
+        ce_open = _safe_float(row.get("ce_open"))
+        ce_high = _safe_float(row.get("ce_high"))
+        ce_low = _safe_float(row.get("ce_low"))
+        pe_open = _safe_float(row.get("pe_open"))
+        pe_high = _safe_float(row.get("pe_high"))
+        pe_low = _safe_float(row.get("pe_low"))
 
         out.append(
             {
@@ -234,6 +240,12 @@ def _extract_chain_strikes(chain: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "pe_volume": pe_vol,
                 "ce_iv": ce_iv,
                 "pe_iv": pe_iv,
+                "ce_open": ce_open,
+                "ce_high": ce_high,
+                "ce_low": ce_low,
+                "pe_open": pe_open,
+                "pe_high": pe_high,
+                "pe_low": pe_low,
             }
         )
     return out
@@ -270,6 +282,221 @@ def _history_mean(history: Deque[Dict[str, Any]], key: str, limit: int = 30) -> 
     if not vals:
         return None
     return float(np.mean(vals))
+
+
+def _ema_last(series: pd.Series, span: int) -> Optional[float]:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    if len(values) < int(span):
+        return None
+    ema = values.ewm(span=int(span), adjust=False, min_periods=int(span)).mean().iloc[-1]
+    return _nullable_float(ema)
+
+
+def _session_vwap(day_bars: pd.DataFrame) -> Optional[float]:
+    if day_bars is None or len(day_bars) == 0:
+        return None
+
+    work = day_bars.copy()
+    for col in ("high", "low", "close", "volume"):
+        work[col] = pd.to_numeric(work.get(col), errors="coerce")
+    work = work.dropna(subset=["high", "low", "close", "volume"])
+    if len(work) == 0:
+        return None
+
+    typical_price = (work["high"] + work["low"] + work["close"]) / 3.0
+    volume = work["volume"].clip(lower=0.0)
+    valid = typical_price.notna() & volume.notna() & (volume > 0.0)
+    if not bool(valid.any()):
+        return None
+
+    cum_pv = (typical_price[valid] * volume[valid]).cumsum()
+    cum_volume = volume[valid].cumsum()
+    if len(cum_volume) == 0 or float(cum_volume.iloc[-1]) <= 0.0:
+        return None
+    return _nullable_float((cum_pv / cum_volume).iloc[-1])
+
+
+def _resample_bars(bars: pd.DataFrame, *, timeframe_minutes: int) -> pd.DataFrame:
+    if bars is None or len(bars) == 0:
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume", "oi"])
+
+    minutes = max(1, int(timeframe_minutes))
+    work = bars.copy()
+    work["bucket"] = work["timestamp"].dt.floor(f"{minutes}min")
+    grouped = (
+        work.groupby("bucket", sort=True)
+        .agg(
+            open=("open", "first"),
+            high=("high", "max"),
+            low=("low", "min"),
+            close=("close", "last"),
+            volume=("volume", "sum"),
+            oi=("oi", "last"),
+        )
+        .reset_index()
+        .rename(columns={"bucket": "timestamp"})
+    )
+    return _normalize_ohlc_frame(grouped)
+
+
+def _rsi_last(series: pd.Series, period: int = 14) -> Optional[float]:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    p = max(2, int(period))
+    if len(values) < (p + 1):
+        return None
+    delta = values.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=(1.0 / p), adjust=False, min_periods=p).mean()
+    avg_loss = loss.ewm(alpha=(1.0 / p), adjust=False, min_periods=p).mean()
+    last_gain = _safe_float(avg_gain.iloc[-1])
+    last_loss = _safe_float(avg_loss.iloc[-1])
+    if np.isfinite(last_gain) and np.isfinite(last_loss):
+        if last_loss == 0.0:
+            return 100.0 if last_gain > 0.0 else 50.0
+        rs = float(last_gain / last_loss)
+        return _nullable_float(100.0 - (100.0 / (1.0 + rs)))
+    return None
+
+
+def _atr_last(bars: pd.DataFrame, period: int = 14) -> Optional[float]:
+    if bars is None or len(bars) == 0:
+        return None
+    p = max(2, int(period))
+    high = pd.to_numeric(bars.get("high"), errors="coerce")
+    low = pd.to_numeric(bars.get("low"), errors="coerce")
+    close = pd.to_numeric(bars.get("close"), errors="coerce")
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1, skipna=True)
+    atr = tr.ewm(alpha=(1.0 / p), adjust=False, min_periods=p).mean()
+    if len(atr) == 0:
+        return None
+    return _nullable_float(atr.iloc[-1])
+
+
+def _macd_last(
+    series: pd.Series,
+    *,
+    fast_span: int = 12,
+    slow_span: int = 26,
+    signal_span: int = 9,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    fast = max(2, int(fast_span))
+    slow = max(fast + 1, int(slow_span))
+    signal = max(2, int(signal_span))
+    if len(values) < (slow + signal):
+        return None, None, None
+    ema_fast = values.ewm(span=fast, adjust=False, min_periods=fast).mean()
+    ema_slow = values.ewm(span=slow, adjust=False, min_periods=slow).mean()
+    macd_line = ema_fast - ema_slow
+    macd_signal = macd_line.ewm(span=signal, adjust=False, min_periods=signal).mean()
+    macd_hist = macd_line - macd_signal
+    return (
+        _nullable_float(macd_line.iloc[-1]),
+        _nullable_float(macd_signal.iloc[-1]),
+        _nullable_float(macd_hist.iloc[-1]),
+    )
+
+
+def _bollinger_last(series: pd.Series, period: int = 20, n_std: float = 2.0) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    p = max(2, int(period))
+    if len(values) < p:
+        return None, None, None, None
+    ma = values.rolling(window=p, min_periods=p).mean()
+    std = values.rolling(window=p, min_periods=p).std(ddof=0)
+    center = _safe_float(ma.iloc[-1])
+    width_std = _safe_float(std.iloc[-1])
+    last_close = _safe_float(values.iloc[-1])
+    if not (np.isfinite(center) and np.isfinite(width_std)):
+        return None, None, None, None
+    upper = float(center + float(n_std) * width_std)
+    lower = float(center - float(n_std) * width_std)
+    band_width = float((upper - lower) / center) if center != 0.0 else float("nan")
+    pct_b = float((last_close - lower) / (upper - lower)) if (upper > lower and np.isfinite(last_close)) else float("nan")
+    return _nullable_float(upper), _nullable_float(lower), _nullable_float(band_width), _nullable_float(pct_b)
+
+
+def _ema_trend_label(ema9: Optional[float], ema21: Optional[float], ema50: Optional[float]) -> str:
+    e9 = _safe_float(ema9)
+    e21 = _safe_float(ema21)
+    e50 = _safe_float(ema50)
+    if not (np.isfinite(e9) and np.isfinite(e21) and np.isfinite(e50)):
+        return "MIXED"
+    if e9 > e21 > e50:
+        return "BULLISH"
+    if e9 < e21 < e50:
+        return "BEARISH"
+    return "MIXED"
+
+
+def _compute_mtf_block(bars: pd.DataFrame) -> Dict[str, Any]:
+    bars_1m = _normalize_ohlc_frame(bars)
+    bars_5m = _resample_bars(bars_1m, timeframe_minutes=5)
+    bars_15m = _resample_bars(bars_1m, timeframe_minutes=15)
+
+    rsi_14_1m = _rsi_last(bars_1m.get("close", pd.Series(dtype=float)), period=14)
+    rsi_14_5m = _rsi_last(bars_5m.get("close", pd.Series(dtype=float)), period=14)
+    rsi_14_15m = _rsi_last(bars_15m.get("close", pd.Series(dtype=float)), period=14)
+
+    ema_9_5m = _ema_last(bars_5m.get("close", pd.Series(dtype=float)), span=9)
+    ema_21_5m = _ema_last(bars_5m.get("close", pd.Series(dtype=float)), span=21)
+    ema_50_5m = _ema_last(bars_5m.get("close", pd.Series(dtype=float)), span=50)
+    ema_9_15m = _ema_last(bars_15m.get("close", pd.Series(dtype=float)), span=9)
+    ema_21_15m = _ema_last(bars_15m.get("close", pd.Series(dtype=float)), span=21)
+    ema_50_15m = _ema_last(bars_15m.get("close", pd.Series(dtype=float)), span=50)
+
+    macd_line_5m, macd_signal_5m, macd_hist_5m = _macd_last(bars_5m.get("close", pd.Series(dtype=float)))
+
+    atr_14_1m = _atr_last(bars_1m, period=14)
+    atr_14_5m = _atr_last(bars_5m, period=14)
+    atr_14_15m = _atr_last(bars_15m, period=14)
+
+    bb_upper_5m, bb_lower_5m, bb_width_5m, bb_pct_b_5m = _bollinger_last(
+        bars_5m.get("close", pd.Series(dtype=float)),
+        period=20,
+        n_std=2.0,
+    )
+
+    ema_trend_5m = _ema_trend_label(ema_9_5m, ema_21_5m, ema_50_5m)
+    ema_trend_15m = _ema_trend_label(ema_9_15m, ema_21_15m, ema_50_15m)
+    mtf_aligned = bool(
+        (ema_trend_5m == ema_trend_15m)
+        and (ema_trend_5m in {"BULLISH", "BEARISH"})
+    )
+
+    return {
+        "rsi_14_1m": rsi_14_1m,
+        "rsi_14_5m": rsi_14_5m,
+        "rsi_14_15m": rsi_14_15m,
+        "ema_9_5m": ema_9_5m,
+        "ema_21_5m": ema_21_5m,
+        "ema_50_5m": ema_50_5m,
+        "ema_9_15m": ema_9_15m,
+        "ema_21_15m": ema_21_15m,
+        "ema_50_15m": ema_50_15m,
+        "macd_line_5m": macd_line_5m,
+        "macd_signal_5m": macd_signal_5m,
+        "macd_hist_5m": macd_hist_5m,
+        "atr_14_1m": atr_14_1m,
+        "atr_14_5m": atr_14_5m,
+        "atr_14_15m": atr_14_15m,
+        "bb_upper_5m": bb_upper_5m,
+        "bb_lower_5m": bb_lower_5m,
+        "bb_width_5m": bb_width_5m,
+        "bb_pct_b_5m": bb_pct_b_5m,
+        "ema_trend_5m": ema_trend_5m,
+        "ema_trend_15m": ema_trend_15m,
+        "mtf_aligned": mtf_aligned,
+    }
 
 
 def _repo_rate_for_date(trade_date: pd.Timestamp, default_rate: float = 0.065) -> float:
@@ -469,7 +696,7 @@ def build_market_snapshot(
     dte_days = max(dte_days, 0)
     mss1 = {
         "snapshot_id": snapshot_id,
-        "timestamp": ts.isoformat(),
+        "timestamp": isoformat_ist(ts.to_pydatetime(), naive_mode=TimestampSourceMode.MARKET_IST),
         "date": str(trade_date.date()),
         "time": ts.strftime("%H:%M:%S"),
         "minutes_since_open": _minutes_since_open(ts),
@@ -525,6 +752,15 @@ def build_market_snapshot(
     oi_prev_30 = _safe_float(bars_calc["oi"].shift(30).iloc[-1])
     oi_now = _safe_float(latest.get("oi"))
     fut_oi_change_30m = float(oi_now - oi_prev_30) if np.isfinite(oi_now) and np.isfinite(oi_prev_30) else float("nan")
+    ema_9 = _ema_last(bars_calc["close"], span=9)
+    ema_21 = _ema_last(bars_calc["close"], span=21)
+    ema_50 = _ema_last(bars_calc["close"], span=50)
+    vwap = _session_vwap(same_day)
+    price_vs_vwap = (
+        float((fut_close - vwap) / vwap)
+        if np.isfinite(fut_close) and vwap is not None and vwap != 0.0
+        else float("nan")
+    )
 
     mss3 = {
         "fut_return_5m": _nullable_float(bars_calc["fut_return_5m"].iloc[-1]),
@@ -534,7 +770,13 @@ def build_market_snapshot(
         "vol_ratio": _nullable_float(vol_ratio),
         "fut_volume_ratio": _nullable_float(fut_volume_ratio),
         "fut_oi_change_30m": _nullable_int(fut_oi_change_30m),
+        "ema_9": ema_9,
+        "ema_21": ema_21,
+        "ema_50": ema_50,
+        "vwap": vwap,
+        "price_vs_vwap": _nullable_float(price_vs_vwap),
     }
+    mss_mtf = _compute_mtf_block(bars_calc)
 
     day_bars = bars_calc[bars_calc["trade_date"] == str(trade_date.date())].copy()
     open_window = day_bars[
@@ -597,6 +839,7 @@ def build_market_snapshot(
 
     mss6 = {
         "atm_strike": _nullable_int(atm_strike),
+        "strike_count": int(len(strikes)),
         "total_ce_oi": _nullable_int(total_ce_oi),
         "total_pe_oi": _nullable_int(total_pe_oi),
         "pcr": _nullable_float(pcr),
@@ -608,6 +851,12 @@ def build_market_snapshot(
 
     ce_ltp = _safe_float(atm_row.get("ce_ltp")) if isinstance(atm_row, dict) else float("nan")
     pe_ltp = _safe_float(atm_row.get("pe_ltp")) if isinstance(atm_row, dict) else float("nan")
+    ce_open = _safe_float(atm_row.get("ce_open")) if isinstance(atm_row, dict) else float("nan")
+    ce_high = _safe_float(atm_row.get("ce_high")) if isinstance(atm_row, dict) else float("nan")
+    ce_low = _safe_float(atm_row.get("ce_low")) if isinstance(atm_row, dict) else float("nan")
+    pe_open = _safe_float(atm_row.get("pe_open")) if isinstance(atm_row, dict) else float("nan")
+    pe_high = _safe_float(atm_row.get("pe_high")) if isinstance(atm_row, dict) else float("nan")
+    pe_low = _safe_float(atm_row.get("pe_low")) if isinstance(atm_row, dict) else float("nan")
     ce_oi = _safe_float(atm_row.get("ce_oi")) if isinstance(atm_row, dict) else float("nan")
     pe_oi = _safe_float(atm_row.get("pe_oi")) if isinstance(atm_row, dict) else float("nan")
     ce_vol = _safe_float(atm_row.get("ce_volume")) if isinstance(atm_row, dict) else float("nan")
@@ -657,9 +906,9 @@ def build_market_snapshot(
 
     mss7 = {
         "atm_ce_strike": _nullable_int(atm_strike),
-        "atm_ce_open": _nullable_float(ce_ltp),
-        "atm_ce_high": _nullable_float(ce_ltp),
-        "atm_ce_low": _nullable_float(ce_ltp),
+        "atm_ce_open": _nullable_float(ce_open),
+        "atm_ce_high": _nullable_float(ce_high),
+        "atm_ce_low": _nullable_float(ce_low),
         "atm_ce_close": _nullable_float(ce_ltp),
         "atm_ce_volume": _nullable_int(ce_vol),
         "atm_ce_oi": _nullable_int(ce_oi),
@@ -667,9 +916,9 @@ def build_market_snapshot(
         "atm_ce_iv": _nullable_float(ce_iv),
         "atm_ce_vol_ratio": _nullable_float(ce_vol_ratio),
         "atm_pe_strike": _nullable_int(atm_strike),
-        "atm_pe_open": _nullable_float(pe_ltp),
-        "atm_pe_high": _nullable_float(pe_ltp),
-        "atm_pe_low": _nullable_float(pe_ltp),
+        "atm_pe_open": _nullable_float(pe_open),
+        "atm_pe_high": _nullable_float(pe_high),
+        "atm_pe_low": _nullable_float(pe_low),
         "atm_pe_close": _nullable_float(pe_ltp),
         "atm_pe_volume": _nullable_int(pe_vol),
         "atm_pe_oi": _nullable_int(pe_oi),
@@ -793,14 +1042,16 @@ def build_market_snapshot(
 
     return {
         "schema_name": "MarketSnapshot",
-        "version": "1.0",
+        "version": "2.0",
         "snapshot_id": snapshot_id,
         "instrument": str(instrument or ""),
         "session_context": mss1,
         "futures_bar": mss2,
         "futures_derived": mss3,
+        "mtf_derived": mss_mtf,
         "opening_range": mss4,
         "vix_context": mss5,
+        "strikes": strikes,
         "chain_aggregates": mss6,
         "atm_options": mss7,
         "iv_derived": mss8,

@@ -7,32 +7,33 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from contracts_app import (
     build_snapshot_event,
+    configure_ist_logging,
     find_matching_python_processes,
+    isoformat_ist,
     is_market_open_ist,
     is_trading_day_ist,
     load_holidays,
     seconds_until_next_open_ist,
     snapshot_topic,
 )
-from snapshot_app.market_snapshot import LiveMarketSnapshotBuilder
+from snapshot_app.live_ml_flat import LiveSnapshotMLFlatBuilder
 
-from .baseline_provider import MongoPrevSessionBaseline
 from .health import evaluate as evaluate_health
 from .publisher import EventPublisher
 from .redis_publisher import RedisEventPublisher
 
 
 logger = logging.getLogger(__name__)
-IST = timezone(timedelta(hours=5, minutes=30))
 DEFAULT_MARKET_TZ = "Asia/Kolkata"
 DEFAULT_MARKET_OPEN = "09:15"
 DEFAULT_MARKET_CLOSE = "15:30"
@@ -83,7 +84,12 @@ def _append_jsonl(path: Optional[str], payload: dict[str, Any]) -> None:
 
 
 def _ist_now_iso() -> str:
-    return datetime.now(tz=IST).isoformat()
+    return isoformat_ist()
+
+
+def _build_run_id() -> str:
+    stamp = datetime.now(tz=ZoneInfo(DEFAULT_MARKET_TZ)).strftime("%Y%m%d_%H%M%S")
+    return f"live_{stamp}_{uuid4().hex[:8]}"
 
 
 def _detached_popen_kwargs() -> dict:
@@ -144,17 +150,15 @@ def run_loop(
     market_close_time: str,
     holidays_file: Optional[str],
     idle_sleep_seconds: int,
+    build_run_id: str,
 ) -> int:
-    builder = LiveMarketSnapshotBuilder(
+    builder = LiveSnapshotMLFlatBuilder(
         instrument=instrument,
         market_api_base=market_api_base,
         dashboard_api_base=dashboard_api_base,
         timeout_seconds=timeout_seconds,
     )
-    baseline_provider = MongoPrevSessionBaseline() if enable_prev_session_baseline else None
     last_snapshot_id: Optional[str] = None
-    baseline_cache_date: Optional[str] = None
-    baseline_cache: Optional[dict[str, Any]] = None
 
     logger.info("snapshot_app started instrument=%s topic=%s", instrument, event_topic)
     published_count = 0
@@ -195,20 +199,9 @@ def run_loop(
             time.sleep(max(5, min(int(idle_sleep_seconds), 30)))
             continue
         try:
-            baseline = None
-            if baseline_provider is not None:
-                today_key = datetime.now(tz=IST).date().isoformat()
-                if today_key != baseline_cache_date:
-                    baseline_cache = baseline_provider.get(
-                        instrument=instrument,
-                        trade_date_ist=datetime.now(tz=IST).date(),
-                    )
-                    baseline_cache_date = today_key
-                baseline = baseline_cache
-
-            snapshot = builder.build_snapshot(
+            snapshot = builder.build_snapshot_ml_flat(
                 ohlc_limit=int(ohlc_limit),
-                prev_session_chain_baseline=baseline,
+                build_run_id=build_run_id,
             )
             snapshot_id = str(snapshot.get("snapshot_id") or "")
             if not snapshot_id or snapshot_id == last_snapshot_id:
@@ -219,7 +212,11 @@ def run_loop(
             event = build_snapshot_event(
                 snapshot=snapshot,
                 source="snapshot_app",
-                metadata={"session_timezone": "IST"},
+                metadata={
+                    "session_timezone": "IST",
+                    "snapshot_contract_id": "snapshot_ml_flat_v1",
+                    "build_run_id": build_run_id,
+                },
             )
             publisher.publish(topic=event_topic, payload=event)
             _append_jsonl(out_jsonl, event)
@@ -237,11 +234,12 @@ def run_loop(
             if last_published_monotonic is not None:
                 last_age = round(now_mono - last_published_monotonic, 3)
             logger.info(
-                "snapshot_app health published=%s errors=%s last_snapshot_id=%s seconds_since_last_publish=%s",
+                "snapshot_app health published=%s errors=%s last_snapshot_id=%s seconds_since_last_publish=%s build_run_id=%s",
                 published_count,
                 error_count,
                 last_snapshot_id,
                 last_age,
+                build_run_id,
             )
             last_health_log_monotonic = now_mono
         time.sleep(poll_interval_sec)
@@ -250,7 +248,7 @@ def run_loop(
 
 def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
-    parser = argparse.ArgumentParser(description="Top-level Snapshot process (MSS producer)")
+    parser = argparse.ArgumentParser(description="Top-level SnapshotMLFlat live producer")
     parser.add_argument("--instrument", default=None)
     parser.add_argument("--market-api-base", default="http://127.0.0.1:8004")
     parser.add_argument("--dashboard-api-base", default="http://127.0.0.1:8002")
@@ -259,7 +257,11 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--ohlc-limit", type=int, default=1800)
     parser.add_argument("--out-jsonl", default=".run/snapshot_app/events.jsonl")
     parser.add_argument("--event-topic", default=None)
-    parser.add_argument("--disable-prev-session-baseline", action="store_true")
+    parser.add_argument(
+        "--disable-prev-session-baseline",
+        action="store_true",
+        help="Legacy no-op retained for CLI compatibility.",
+    )
     parser.add_argument("--health-log-interval-sec", type=float, default=30.0)
     parser.add_argument("--foreground", action="store_true")
     parser.add_argument("--run-dir", default=".run/snapshot_app")
@@ -332,6 +334,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     holidays_file = str(os.getenv("NSE_HOLIDAYS_FILE") or "").strip() or None
     idle_sleep_seconds = max(5, int(os.getenv("IDLE_SLEEP_SECONDS") or DEFAULT_IDLE_SLEEP_SECONDS))
     publisher = RedisEventPublisher()
+    build_run_id = str(os.getenv("SNAPSHOT_BUILD_RUN_ID") or "").strip() or _build_run_id()
     return run_loop(
         instrument=instrument,
         market_api_base=str(args.market_api_base),
@@ -350,9 +353,10 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         market_close_time=market_close_time,
         holidays_file=holidays_file,
         idle_sleep_seconds=idle_sleep_seconds,
+        build_run_id=build_run_id,
     )
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+    configure_ist_logging(level=logging.INFO)
     raise SystemExit(run_cli())

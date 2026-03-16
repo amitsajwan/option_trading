@@ -7,24 +7,26 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
 import redis
 
-from contracts_app import find_matching_python_processes, redis_connection_kwargs, snapshot_topic
+from contracts_app import configure_ist_logging, find_matching_python_processes, isoformat_ist, redis_connection_kwargs, snapshot_topic
 
 from .health import evaluate as evaluate_health
 from .mongo_writer import SnapshotMongoWriter
 
 
 logger = logging.getLogger(__name__)
-IST = timezone(timedelta(hours=5, minutes=30))
+MIN_PAPER_DAYS = 10
+MIN_SHADOW_DAYS = 10
+MAX_CAPPED_LIVE_SIZE_MULTIPLIER = 0.25
 
 
 def _ist_now_iso() -> str:
-    return datetime.now(tz=IST).isoformat()
+    return isoformat_ist()
 
 
 def _detached_popen_kwargs() -> dict:
@@ -70,12 +72,41 @@ def _redis_client() -> redis.Redis:
     return redis.Redis(**redis_connection_kwargs(decode_responses=True, for_pubsub=True))
 
 
-def run_loop(*, topic: str, health_log_interval_sec: float) -> int:
+def _validate_rollout_context(
+    *,
+    rollout_stage: str,
+    paper_days_observed: int,
+    shadow_days_observed: int,
+    position_size_multiplier: float,
+    ml_runtime_enabled: bool,
+    offline_strict_positive_passed: bool,
+    approved_for_runtime: bool,
+) -> Optional[str]:
+    stage = str(rollout_stage or "").strip().lower()
+    if stage in {"shadow", "capped_live"} and int(paper_days_observed) < MIN_PAPER_DAYS:
+        return f"rollout requires >= {MIN_PAPER_DAYS} paper days before {stage}"
+    if stage == "capped_live" and int(shadow_days_observed) < MIN_SHADOW_DAYS:
+        return f"capped_live requires >= {MIN_SHADOW_DAYS} shadow days"
+    if stage == "capped_live" and float(position_size_multiplier) > MAX_CAPPED_LIVE_SIZE_MULTIPLIER:
+        return f"capped_live position_size_multiplier must be <= {MAX_CAPPED_LIVE_SIZE_MULTIPLIER}"
+    if bool(ml_runtime_enabled):
+        if stage != "capped_live":
+            return "ml runtime is allowed only in capped_live stage"
+        if not bool(offline_strict_positive_passed):
+            return "ml runtime requires offline_strict_positive_passed=true"
+        if not bool(approved_for_runtime):
+            return "ml runtime requires approved_for_runtime=true"
+    return None
+
+
+def run_loop(*, topic: str, health_log_interval_sec: float, rollout_context: Optional[dict[str, object]] = None) -> int:
     writer = SnapshotMongoWriter()
     client = _redis_client()
     pubsub = client.pubsub(ignore_subscribe_messages=True)
     pubsub.subscribe(topic)
     logger.info("persistence_app subscribed topic=%s", topic)
+    if isinstance(rollout_context, dict) and rollout_context:
+        logger.info("persistence_app rollout_context=%s", json.dumps(rollout_context, ensure_ascii=False, default=str))
     consumed_count = 0
     written_count = 0
     ignored_count = 0
@@ -138,6 +169,15 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--run-dir", default=".run/persistence_app")
     parser.add_argument("--health-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--health-max-age-seconds", type=float, default=900.0)
+    parser.add_argument("--rollout-stage", choices=["paper", "shadow", "capped_live"], default="paper")
+    parser.add_argument("--paper-days-observed", type=int, default=0)
+    parser.add_argument("--shadow-days-observed", type=int, default=0)
+    parser.add_argument("--position-size-multiplier", type=float, default=1.0)
+    parser.add_argument("--halt-consecutive-losses", type=int, default=3)
+    parser.add_argument("--halt-daily-dd-pct", type=float, default=-0.75)
+    parser.add_argument("--ml-runtime-enabled", action="store_true")
+    parser.add_argument("--offline-strict-positive-passed", action="store_true")
+    parser.add_argument("--approved-for-runtime", action="store_true")
     args = parser.parse_args(raw_argv)
 
     controls = {
@@ -185,9 +225,35 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         return int(code)
 
     topic = str(args.event_topic or snapshot_topic()).strip() or snapshot_topic()
-    return run_loop(topic=topic, health_log_interval_sec=max(0.0, float(args.health_log_interval_sec)))
+    rollout_error = _validate_rollout_context(
+        rollout_stage=str(args.rollout_stage),
+        paper_days_observed=int(args.paper_days_observed),
+        shadow_days_observed=int(args.shadow_days_observed),
+        position_size_multiplier=float(args.position_size_multiplier),
+        ml_runtime_enabled=bool(args.ml_runtime_enabled),
+        offline_strict_positive_passed=bool(args.offline_strict_positive_passed),
+        approved_for_runtime=bool(args.approved_for_runtime),
+    )
+    if rollout_error:
+        raise SystemExit(rollout_error)
+    rollout_context = {
+        "rollout_stage": str(args.rollout_stage),
+        "paper_days_observed": int(args.paper_days_observed),
+        "shadow_days_observed": int(args.shadow_days_observed),
+        "position_size_multiplier": float(args.position_size_multiplier),
+        "halt_consecutive_losses": int(args.halt_consecutive_losses),
+        "halt_daily_dd_pct": float(args.halt_daily_dd_pct),
+        "ml_runtime_enabled": bool(args.ml_runtime_enabled),
+        "offline_strict_positive_passed": bool(args.offline_strict_positive_passed),
+        "approved_for_runtime": bool(args.approved_for_runtime),
+    }
+    return run_loop(
+        topic=topic,
+        health_log_interval_sec=max(0.0, float(args.health_log_interval_sec)),
+        rollout_context=rollout_context,
+    )
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+    configure_ist_logging(level=logging.INFO)
     raise SystemExit(run_cli())
