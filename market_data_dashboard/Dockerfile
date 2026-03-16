@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements first for better caching
 COPY market_data_dashboard/requirements.txt /tmp/requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Copy application code + shared packages used by dashboard
