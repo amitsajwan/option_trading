@@ -10,7 +10,6 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY contracts_app /app/contracts_app
 COPY ingestion_app /app/ingestion_app
-COPY redis_key_manager.py /app/redis_key_manager.py
 
 ENV PYTHONPATH=/app
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import redis
 import uvicorn
 
-from redis_key_manager import get_redis_key
+from contracts_app import TimestampSourceMode, get_redis_key, isoformat_ist, parse_timestamp_to_ist
 
 from .env_settings import credentials_path_candidates, redis_config, resolve_instrument_symbol
 from .kite_client import create_kite_client
@@ -44,22 +45,30 @@ def _now_ist() -> datetime:
 
 
 def _iso_now_ist() -> str:
-    return _now_ist().isoformat()
+    return isoformat_ist(_now_ist())
 
 
 def _extract_underlying(symbol: str) -> str:
     raw = str(symbol or "").strip().upper()
     if not raw:
         return ""
+    if ":" in raw:
+        raw = raw.split(":", 1)[1].strip().upper()
+    compact = raw.replace(" ", "")
+    if compact in {"NIFTYBANK", "BANKNIFTY"}:
+        return "BANKNIFTY"
+    if compact in {"NIFTY", "NIFTY50"}:
+        return "NIFTY"
+    match = re.match(r"^([A-Z]+)\d", compact)
+    if match:
+        return str(match.group(1) or "").strip().upper()
     for suffix in ("FUT", "CE", "PE"):
-        if suffix in raw:
-            left = raw.split(suffix)[0]
+        if compact.endswith(suffix):
+            left = compact[: -len(suffix)]
             out = "".join(ch for ch in left if ch.isalpha())
             if out:
                 return out
-    if raw in {"NIFTY BANK", "BANKNIFTY", "NIFTY", "NIFTY 50"}:
-        return "BANKNIFTY" if "BANK" in raw else "NIFTY"
-    out = "".join(ch for ch in raw if ch.isalpha())
+    out = "".join(ch for ch in compact if ch.isalpha())
     return out
 
 
@@ -220,6 +229,16 @@ class KiteDataService:
             "detail": detail,
         }
 
+    def system_mode_payload(self) -> Dict[str, Any]:
+        mode = str(os.getenv("EXECUTION_MODE") or "live").strip().lower() or "live"
+        if mode not in {"live", "historical", "paper"}:
+            mode = "unknown"
+        return {
+            "mode": mode,
+            "timestamp": _iso_now_ist(),
+            "source": "ingestion_app",
+        }
+
     def _load_instruments(self, exchange: str) -> List[Dict[str, Any]]:
         key = str(exchange).upper()
         cached = self._ins_cache.get(key)
@@ -369,7 +388,7 @@ class KiteDataService:
                     "close": _to_float(row.get("close")),
                     "volume": _to_int(row.get("volume")) or 0,
                     "oi": _to_int(row.get("oi")),
-                    "start_at": dt.astimezone(IST).replace(tzinfo=None).isoformat(),
+                    "start_at": isoformat_ist(dt.astimezone(IST)),
                 }
             )
 
@@ -385,7 +404,7 @@ class KiteDataService:
         try:
             pipe = self.redis_client.pipeline()
             for row in normalized[-min(len(normalized), max(1, limit)) :]:
-                ts = datetime.fromisoformat(str(row["start_at"])).replace(tzinfo=IST).timestamp()
+                ts = (parse_timestamp_to_ist(row["start_at"], naive_mode=TimestampSourceMode.MARKET_IST) or _now_ist()).timestamp()
                 pipe.zadd(key, {json.dumps(row, default=str): ts})
             pipe.execute()
             size = int(self.redis_client.zcard(key) or 0)
@@ -581,6 +600,11 @@ async def health() -> Dict[str, Any]:
 @app.get("/api/v1/market/tick/{instrument}")
 async def market_tick(instrument: str) -> Dict[str, Any]:
     return svc.get_tick(instrument)
+
+
+@app.get("/api/v1/system/mode")
+async def system_mode() -> Dict[str, Any]:
+    return svc.system_mode_payload()
 
 
 @app.get("/api/v1/market/ohlc/{instrument}")
