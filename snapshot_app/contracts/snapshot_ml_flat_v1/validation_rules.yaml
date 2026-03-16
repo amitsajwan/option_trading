@@ -1,0 +1,125 @@
+contract_id: snapshot_ml_flat_v1
+schema_name: SnapshotMLFlat
+schema_version: 1.0.0
+identity_keys:
+  - trade_date
+  - timestamp
+  - snapshot_id
+
+tier0:
+  enforce_non_null: true
+  enforce_finite_numeric: true
+  columns:
+    - trade_date
+    - year
+    - instrument
+    - timestamp
+    - snapshot_id
+    - schema_name
+    - schema_version
+    - build_source
+    - build_run_id
+    - px_fut_open
+    - px_fut_high
+    - px_fut_low
+    - px_fut_close
+    - fut_flow_volume
+    - fut_flow_oi
+    - time_minute_of_day
+    - time_day_of_week
+    - time_minute_index
+
+tier1:
+  per_day_completeness_min: 0.98
+  columns:
+    - px_spot_open
+    - px_spot_high
+    - px_spot_low
+    - px_spot_close
+    - opt_flow_atm_strike
+    - opt_flow_rows
+    - opt_flow_ce_oi_total
+    - opt_flow_pe_oi_total
+    - opt_flow_ce_volume_total
+    - opt_flow_pe_volume_total
+    - opt_flow_pcr_oi
+    - ctx_opening_range_ready
+    - ctx_opening_range_breakout_up
+    - ctx_opening_range_breakout_down
+    - ctx_dte_days
+    - ctx_is_expiry_day
+    - ctx_is_near_expiry
+    - ctx_is_high_vix_day
+    - ctx_regime_atr_high
+    - ctx_regime_atr_low
+    - ctx_regime_trend_up
+    - ctx_regime_trend_down
+    - ctx_regime_expiry_near
+
+tier2:
+  per_day_completeness_min_after_warmup: 0.95
+  columns:
+    - ret_1m
+    - ret_3m
+    - ret_5m
+    - ema_9
+    - ema_21
+    - ema_50
+    - ema_9_21_spread
+    - ema_9_slope
+    - ema_21_slope
+    - ema_50_slope
+    - osc_rsi_14
+    - osc_atr_14
+    - osc_atr_ratio
+    - osc_atr_percentile
+    - osc_atr_daily_percentile
+    - vwap_fut
+    - vwap_distance
+    - dist_from_day_high
+    - dist_from_day_low
+    - dist_basis
+    - dist_basis_change_1m
+    - fut_flow_rel_volume_20
+    - fut_flow_volume_accel_1m
+    - fut_flow_oi_change_1m
+    - fut_flow_oi_change_5m
+    - fut_flow_oi_rel_20
+    - fut_flow_oi_zscore_20
+    - opt_flow_atm_call_return_1m
+    - opt_flow_atm_put_return_1m
+    - opt_flow_atm_oi_change_1m
+    - opt_flow_ce_pe_oi_diff
+    - opt_flow_ce_pe_volume_diff
+    - opt_flow_options_volume_total
+    - opt_flow_rel_volume_20
+  warmup_bars_by_column:
+    ret_1m: 1
+    ret_3m: 3
+    ret_5m: 5
+    osc_rsi_14: 14
+    osc_atr_14: 14
+    osc_atr_ratio: 14
+    osc_atr_percentile: 20
+    fut_flow_rel_volume_20: 5
+    fut_flow_oi_rel_20: 5
+    fut_flow_oi_zscore_20: 5
+    opt_flow_rel_volume_20: 5
+    opt_flow_atm_call_return_1m: 1
+    opt_flow_atm_put_return_1m: 1
+    opt_flow_atm_oi_change_1m: 1
+  min_historical_sessions_by_column:
+    osc_atr_daily_percentile: 5
+
+removed_columns_exact:
+  - snapshot_raw_json
+  - strike_m1
+  - strike_0
+  - strike_p1
+
+removed_columns_regex:
+  - '^opt_(m1|0|p1)_(ce|pe)_(open|high|low|close|oi|volume)$'
+
+allowed_build_sources:
+  - historical
+  - live

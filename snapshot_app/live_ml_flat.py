@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +13,15 @@ from snapshot_app.market_snapshot import (
     _extract_underlying_symbol,
     _normalize_ohlc_frame,
 )
+from snapshot_app.runtime_features import (
+    _add_cross_session_atr_percentile,
+    _add_dealer_proxy_features,
+    _add_dte_features,
+    _add_group_features,
+    _add_vix_features,
+    attach_regime_features,
+)
+from snapshot_app.snapshot_ml_flat_contract import load_contract_schema, load_legacy_mapping, validate_snapshot_ml_flat_rows
 
 
 _CONTRACT_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -80,29 +88,11 @@ _PANEL_SOURCE_COLUMNS = [
     "opt_p1_pe_oi",
     "opt_p1_pe_volume",
 ]
-
-
-def _ensure_ml_pipeline_src_on_path() -> None:
-    src = Path(__file__).resolve().parents[1] / "ml_pipeline" / "src"
-    src_str = str(src)
-    if src_str not in sys.path:
-        sys.path.insert(0, src_str)
-
-
 def _contract_context(contract_dir: Optional[Path] = None) -> Dict[str, Any]:
     key = str(Path(contract_dir).resolve()) if contract_dir is not None else "<default>"
     cached = _CONTRACT_CACHE.get(key)
     if cached is not None:
         return cached
-
-    _ensure_ml_pipeline_src_on_path()
-
-    import ml_pipeline.feature.engineering as feature_engineering
-    from ml_pipeline.snapshot_ml_flat_contract import (
-        load_contract_schema,
-        load_legacy_mapping,
-        validate_snapshot_ml_flat_rows,
-    )
 
     schema = load_contract_schema(contract_dir=contract_dir)
     mapping = load_legacy_mapping(contract_dir=contract_dir)
@@ -115,7 +105,6 @@ def _contract_context(contract_dir: Optional[Path] = None) -> Dict[str, Any]:
             rename_map[legacy] = new
 
     ctx = {
-        "feature_engineering": feature_engineering,
         "validate_snapshot_ml_flat_rows": validate_snapshot_ml_flat_rows,
         "schema_name": str(schema.get("schema_name") or "SnapshotMLFlat"),
         "schema_version": str(schema.get("schema_version") or "1.0.0"),
@@ -689,18 +678,17 @@ def build_snapshot_ml_flat_from_inputs(
     max_rows = state.panel_rows.maxlen or _PANEL_MAX_ROWS
     state.panel_rows = deque(panel.tail(max_rows).to_dict(orient="records"), maxlen=max_rows)
 
-    feature_engineering = ctx["feature_engineering"]
     groups = []
     for _, group in panel.groupby("trade_date", sort=True):
-        groups.append(feature_engineering._add_group_features(group))
+        groups.append(_add_group_features(group))
     if not groups:
         raise ValueError("cannot build SnapshotMLFlat: no grouped panel rows")
     features = pd.concat(groups, ignore_index=True)
-    features = feature_engineering._add_dte_features(features)
-    features = feature_engineering._add_vix_features(features, vix_source=None)
-    features = feature_engineering._add_cross_session_atr_percentile(features)
-    features = feature_engineering.attach_regime_features(features)
-    features = feature_engineering._add_dealer_proxy_features(features)
+    features = _add_dte_features(features)
+    features = _add_vix_features(features, vix_source=None)
+    features = _add_cross_session_atr_percentile(features)
+    features = attach_regime_features(features)
+    features = _add_dealer_proxy_features(features)
     zero_fill_cols = (
         "ema_9_slope",
         "ema_21_slope",

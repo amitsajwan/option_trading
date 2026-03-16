@@ -9,9 +9,8 @@ COPY snapshot_app/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY contracts_app /app/contracts_app
-COPY ml_pipeline /app/ml_pipeline
 COPY snapshot_app /app/snapshot_app
 
-ENV PYTHONPATH=/app:/app/ml_pipeline/src
+ENV PYTHONPATH=/app
 
 CMD ["python", "-m", "snapshot_app.main_live", "--foreground"]
