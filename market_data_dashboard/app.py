@@ -52,6 +52,15 @@ except Exception:
         StrategyEvaluationService = None
 
 try:
+    from .research_eval_service import evaluate_recovery_scenario, list_recovery_scenarios
+except Exception:
+    try:
+        from research_eval_service import evaluate_recovery_scenario, list_recovery_scenarios  # type: ignore
+    except Exception:
+        evaluate_recovery_scenario = None  # type: ignore
+        list_recovery_scenarios = None  # type: ignore
+
+try:
     from contracts_app.options_math import black_scholes_price, calculate_option_greeks, estimate_risk_free_rate
 except Exception:
     black_scholes_price = None
@@ -3749,6 +3758,47 @@ async def get_trading_models():
     }
 
 
+@app.get("/trading/research", response_class=HTMLResponse)
+async def trading_research_page(request: Request):
+    """Research evaluation explorer for already-completed recovery runs."""
+    _require_research_eval_service()
+    return templates.TemplateResponse(
+        "trading_research.html",
+        {
+            "request": request,
+        },
+    )
+
+
+@app.get("/api/trading/research/scenarios")
+async def get_trading_research_scenarios():
+    _require_research_eval_service()
+    return list_recovery_scenarios()
+
+
+@app.get("/api/trading/research/evaluation")
+async def get_trading_research_evaluation(
+    scenario_key: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    recipe_id: Optional[str] = None,
+    threshold: Optional[float] = None,
+):
+    _require_research_eval_service()
+    try:
+        return evaluate_recovery_scenario(
+            scenario_key=scenario_key,
+            date_from=date_from,
+            date_to=date_to,
+            recipe_id=recipe_id,
+            threshold=threshold,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.get("/trading/model/{model_key}")
 async def trading_terminal_model(model_key: str):
     """Convenience route for model-scoped terminal tabs."""
@@ -3813,6 +3863,11 @@ def _require_live_strategy_monitor_service() -> Any:
     if _live_strategy_monitor_service is None:
         raise HTTPException(status_code=500, detail="live strategy monitor service unavailable")
     return _live_strategy_monitor_service
+
+
+def _require_research_eval_service() -> None:
+    if evaluate_recovery_scenario is None or list_recovery_scenarios is None:
+        raise HTTPException(status_code=500, detail="research evaluation service unavailable")
 
 
 @app.get("/api/live/strategy/session")
