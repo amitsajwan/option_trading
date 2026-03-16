@@ -1821,7 +1821,8 @@ def _discover_published_model_roots(root: Path, *, source_label: str) -> List[Di
     for model_contract_path in sorted(root.rglob("model_contract.json")):
         model_dir = model_contract_path.parent
         latest_payload = _safe_load_json(model_dir / "reports" / "training" / "latest.json") or {}
-        published = latest_payload.get("published_paths") if isinstance(latest_payload, dict) else {}
+        published_raw = latest_payload.get("published_paths") if isinstance(latest_payload, dict) else {}
+        published = published_raw if isinstance(published_raw, dict) else {}
         training_fallback, threshold_fallback = _discover_latest_profile_paths(model_dir)
 
         model_group = str(latest_payload.get("model_group") or "").strip()

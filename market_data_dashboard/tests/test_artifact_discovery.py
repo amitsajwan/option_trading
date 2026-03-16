@@ -48,6 +48,41 @@ def test_artifact_discovery_includes_ml_pipeline_2_published_models(tmp_path: Pa
     assert entry["profile_id"] == "openfe_v9_dual"
 
 
+def test_artifact_discovery_tolerates_non_dict_published_paths(tmp_path: Path, monkeypatch) -> None:
+    group_root = tmp_path / "ml_pipeline_2" / "artifacts" / "published_models" / "banknifty_futures" / "h15_tp_auto"
+    (group_root / "model").mkdir(parents=True, exist_ok=True)
+    (group_root / "config" / "profiles" / "openfe_v9_dual").mkdir(parents=True, exist_ok=True)
+    (group_root / "reports" / "training").mkdir(parents=True, exist_ok=True)
+    (group_root / "model" / "model.joblib").write_bytes(b"dummy")
+    (group_root / "config" / "profiles" / "openfe_v9_dual" / "threshold_report.json").write_text("{}", encoding="utf-8")
+    (group_root / "config" / "profiles" / "openfe_v9_dual" / "training_report.json").write_text("{}", encoding="utf-8")
+    (group_root / "model_contract.json").write_text(json.dumps({"required_features": ["ret_5m"]}), encoding="utf-8")
+    (group_root / "reports" / "training" / "latest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run_20260313_010101",
+                "model_group": "banknifty_futures/h15_tp_auto",
+                "profile_id": "openfe_v9_dual",
+                "published_paths": "invalid-shape",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(dashboard_app, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(dashboard_app, "ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline_2" / "artifacts" / "published_models")
+    monkeypatch.setattr(dashboard_app, "ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline" / "artifacts" / "models" / "by_features")
+
+    entries = dashboard_app._build_artifact_discovery_entries()
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["source"] == "artifact_discovery_ml_pipeline_2"
+    assert entry["exists"]["model_package"] is True
+    assert entry["exists"]["threshold_report"] is True
+
+
 def test_artifact_discovery_includes_recovery_research_models(tmp_path: Path, monkeypatch) -> None:
     model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
     manifest_path = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
