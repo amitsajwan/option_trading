@@ -13,10 +13,9 @@ COPY strategy_app/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY contracts_app /app/contracts_app
-COPY ml_pipeline /app/ml_pipeline
-COPY ml_pipeline_2/src /app/ml_pipeline_2/src
+COPY ml_pipeline_2 /app/ml_pipeline_2
 COPY strategy_app /app/strategy_app
 
-ENV PYTHONPATH=/app:/app/ml_pipeline/src:/app/ml_pipeline_2/src
+ENV PYTHONPATH=/app
 
 CMD ["python", "-m", "strategy_app.main", "--engine", "deterministic"]

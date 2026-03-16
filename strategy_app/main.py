@@ -214,18 +214,7 @@ def _load_model_switch_resolver():
             return resolve_ml_pure_artifacts, validate_switch_strict
         except Exception:
             pass
-    try:
-        from ml_pipeline.model_switch_resolver import resolve_ml_pure_artifacts, validate_switch_strict
-
-        return resolve_ml_pure_artifacts, validate_switch_strict
-    except Exception:
-        repo_root = Path(__file__).resolve().parents[1]
-        ml_src = (repo_root / "ml_pipeline" / "src").resolve()
-        if ml_src.exists() and str(ml_src) not in sys.path:
-            sys.path.insert(0, str(ml_src))
-        from ml_pipeline.model_switch_resolver import resolve_ml_pure_artifacts, validate_switch_strict
-
-        return resolve_ml_pure_artifacts, validate_switch_strict
+    raise ImportError("ml_pipeline_2 publishing resolver unavailable; ml_pure run-id mode requires ml_pipeline_2")
 
 
 def _resolve_ml_pure_switch_paths(

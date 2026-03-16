@@ -1,0 +1,40 @@
+{
+  "event": "VOTE",
+  "strategy": "EMA_CROSSOVER",
+  "snapshot_id": "snap-100",
+  "timestamp": "2026-03-07T15:00:00+05:30",
+  "trade_date": "2026-03-07",
+  "regime": null,
+  "regime_conf": null,
+  "regime_reason": null,
+  "signal_type": "ENTRY",
+  "direction": "CE",
+  "confidence": 0.72,
+  "reason": "allowed score=0.71",
+  "exit_reason": null,
+  "proposed_strike": null,
+  "proposed_entry_premium": null,
+  "proposed_stop_loss_pct": 0.4,
+  "proposed_target_pct": 0.8,
+  "engine_mode": "deterministic",
+  "decision_mode": "ml_gate",
+  "decision_reason_code": "policy_allowed",
+  "decision_metrics": {
+    "confidence": 0.72,
+    "policy_score": 0.71,
+    "ml_score_calibrated": 0.71,
+    "ml_threshold": 0.65
+  },
+  "strategy_family_version": "DET_V1",
+  "strategy_profile_id": "det_core_v1",
+  "raw_signals": {
+    "_policy_allowed": true,
+    "_policy_score": 0.71,
+    "_policy_reason": "allowed score=0.71",
+    "_policy_checks": {
+      "ml_score_calibrated": "score=0.71",
+      "ml_threshold": "threshold=0.65"
+    }
+  },
+  "run_id": "run-parity"
+}
