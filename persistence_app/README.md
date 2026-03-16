@@ -1,23 +1,35 @@
 # persistence_app
 
-Consumes snapshot events and persists them to MongoDB.
+Consumes snapshot and strategy events and persists them to MongoDB.
 
 ## Ownership
 - Owns database write path for snapshot events.
 - Canonical modules:
   - `main_snapshot_consumer.py`
+  - `main_strategy_consumer.py`
   - `mongo_writer.py`
   - `mongo_sink.py`
 
 ## Entrypoint
 - `python -m persistence_app.main_snapshot_consumer` (non-blocking launcher; logs in `.run/persistence_app/`)
 - `python -m persistence_app.main_snapshot_consumer --foreground` (blocking/foreground)
+- `python -m persistence_app.main_strategy_consumer` (non-blocking launcher; logs in `.run/persistence_app_strategy/`)
+- `python -m persistence_app.main_strategy_consumer --foreground` (blocking/foreground)
 - Health: `python -m persistence_app.health`
+- Strategy health: `python -m persistence_app.strategy_health`
+- Strategy report: `python -m persistence_app.strategy_report`
+- Strategy evaluation: `python -m persistence_app.strategy_evaluation`
 - Stop: `python -m persistence_app.stop`
 
 ## Event Contract
 - Subscribes to `contracts_app.snapshot_topic()` (`market:snapshot:v1` by default).
 - Accepts `market_snapshot` v1.0 envelope only.
+- Strategy consumer subscribes to:
+  - `contracts_app.strategy_vote_topic()` (`market:strategy:votes:v1`)
+  - `contracts_app.trade_signal_topic()` (`market:strategy:signals:v1`)
+  - `contracts_app.strategy_position_topic()` (`market:strategy:positions:v1`)
+  - Accepts `strategy_vote`, `trade_signal`, and `strategy_position` envelopes v1.0.
+  - Health query checks `MONGO_COLL_TRADE_SIGNALS` (`trade_signals` by default).
 
 ## Time Convention
 - Persists IST market fields (`trade_date_ist`, `market_time_ist`).
@@ -53,3 +65,28 @@ Consumes snapshot events and persists them to MongoDB.
   - `python -m persistence_app.main_snapshot_consumer --foreground --event-topic market:snapshot:v1`
 - Health check is session-aware when `MARKET_SESSION_ENABLED=1`.
 - On off-market windows, stale snapshot age does not fail container health if process is alive.
+- In replay/offline mode (`MARKET_SESSION_ENABLED=0`), document age is ignored; health is based on process liveness plus whether any documents have been persisted yet.
+
+## Historical Strategy Evaluation
+
+Evaluate persisted historical trades inside the historical strategy persistence container so the correct Mongo env and collection names are already in place:
+
+```powershell
+docker compose --profile historical exec -T strategy_persistence_app_historical `
+  python -m persistence_app.strategy_evaluation `
+  --date-from 2024-01-01 `
+  --date-to 2024-01-31 `
+  --limit 20
+```
+
+Write the report to a host file by redirecting stdout from `docker exec`:
+
+```powershell
+docker compose --profile historical exec -T strategy_persistence_app_historical `
+  python -m persistence_app.strategy_evaluation `
+  --date-from 2024-01-01 `
+  --date-to 2024-01-31 `
+  --limit 20 > .run\strategy_evaluation_2024-01.json
+```
+
+Use `--output` when running locally outside Compose, or when you explicitly want the report written inside the container filesystem.

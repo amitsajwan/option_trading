@@ -1,17 +1,18 @@
 # snapshot_app
 
-Builds and publishes canonical `MarketSnapshot` (MSS.1-MSS.9) events.
+Builds and publishes live `SnapshotMLFlat` v1 events for ML consumption.
 
 ## Ownership
 - Owns snapshot assembly runtime and publishing.
-- Canonical builder lives in `snapshot_app/market_snapshot.py`.
+- Historical `MarketSnapshot` builder lives in `snapshot_app/market_snapshot.py`.
+- Live flat-contract builder lives in `snapshot_app/live_ml_flat.py`.
 - `main_live.py` emits one event per new `snapshot_id`.
 
 ## Entrypoint
 - `python -m snapshot_app.main_live --instrument BANKNIFTY26MARFUT` (non-blocking launcher; logs in `.run/snapshot_app/`)
 - `python -m snapshot_app.main_live --instrument BANKNIFTY26MARFUT --foreground` (blocking/foreground)
 - Health: `python -m snapshot_app.health --events-path .run/snapshot_app/events.jsonl`
-- Live snapshot quality check: `python -m snapshot_app.live_validate --events-path .run/snapshot_app/events.jsonl --tail 500`
+- Live contract validation: `python -m snapshot_app.live_validate --events-path .run/snapshot_app/events.jsonl --tail 500`
 - Stop: `python -m snapshot_app.stop`
 
 ## Historical Snapshot Build

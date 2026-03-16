@@ -3,9 +3,9 @@
 Frontend + backend dashboard service for status monitoring, charts, and Redis-to-browser streaming.
 
 For quick run commands by scenario, see `../README.md`.
-For startup and run instructions, see `../PROCESS_TOPOLOGY.md`.
-**For GenAI agent data integration**, see `../GENAI_AGENT_DATA_REFERENCE.md`.
-For stream topology and timestamp lineage, see `../PROCESS_TOPOLOGY.md`.
+For startup and run instructions, see [../docs/PROCESS_TOPOLOGY.md](../docs/PROCESS_TOPOLOGY.md).
+For architecture and code mapping, see [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) and [../docs/DOCS_CODE_MAP.md](../docs/DOCS_CODE_MAP.md).
+For stream topology and timestamp lineage, see [../docs/PROCESS_TOPOLOGY.md](../docs/PROCESS_TOPOLOGY.md).
 
 ## What this service does
 
@@ -13,6 +13,18 @@ For stream topology and timestamp lineage, see `../PROCESS_TOPOLOGY.md`.
 - Proxies market-data HTTP endpoints
 - Reads Redis directly when API endpoints are missing/slow
 - Bridges Redis pub/sub to browser via STOMP-over-WebSocket (`/ws`)
+- Supports the Live+Dashboard operator profile for the current runtime stack
+
+Supported profile for this milestone:
+
+- live monitoring pages and APIs
+- live strategy session/diagnostics
+- `ml_pipeline_2` published-model discovery
+
+Legacy / not part of the supported Live+Dashboard target:
+
+- paper trading terminal and legacy paper runner launch flow
+- historical replay/eval operator flows
 
 ## Runtime dependencies
 
@@ -48,6 +60,7 @@ Port behavior note:
 ## Main endpoints
 
 - `GET /` -> dashboard page
+- `GET /live/strategy` -> live operator monitor for `strategy_app`
 - `GET /trading` -> paper trading terminal page
 - `GET /trading/models` -> model catalog page (profiles + artifact health + launch links)
 - `GET /trading?model=a|b|...` -> model-scoped terminal tab (separate runner instance)
@@ -59,6 +72,8 @@ Port behavior note:
 - `GET /api/market-data/depth/{instrument}`
 - `GET /api/market-data/options/{instrument}`
 - `GET /api/market-data/instruments`
+- `GET /api/market-data/sync-lag?instrument=...` -> Redis vs Mongo lag monitor by domain
+- `GET /api/live/strategy/session` -> live operator session payload from Mongo-backed strategy state
 - `GET /api/trading/state?instance={key}` -> per-instance paper runner status + positions/trades/capital
 - `GET /api/trading/models` -> machine-readable model catalog for UI/automation
 - `POST /api/trading/start` -> start paper trading runner (payload supports `instance`)
@@ -72,16 +87,77 @@ Port behavior note:
 	- returns `status=ok` when fresh,
 	- `status=stale` when serving last-good cache,
 	- `status=no_data` with mode-aware message when no chain is present.
-- `/api/market-data/depth/{instrument}` and `/api/market-data/indicators/{instrument}` also use stale fallback behavior under transient upstream failures.
+- `/api/market-data/depth/{instrument}` uses stale fallback behavior under transient upstream failures.
 - `/api/market-data/indicators/{instrument}` includes metadata fields for provenance/recency:
 	- `indicator_timestamp`
-	- `indicator_source`
+	- `indicator_source` (`mongo_snapshots`)
 	- `indicator_stream` (`Y2` snapshot, `LZ1` intrabar)
-	- `indicator_update_type` (`candle`, `tick`, `batch_initialize`, `batch_recalculate`)
+	- `indicator_update_type` (`snapshot_event`)
 	- `bars_available`
 	- `warmup_requirements`
 	- `timeframe`
 	- `status`
+- `/api/market-data/indicators/{instrument}` now reads persisted snapshots from Mongo as the canonical source (no upstream technical-indicator API dependency, no OHLC fallback path).
+- `/api/market-data/sync-lag` reports Redis vs Mongo lag for `snapshot` (Redis OHLC proxy), `tick`, `depth`, and `options`, and flags domains that are Redis-only in current runtime.
+
+### Live Strategy Session Engine-Aware Additions
+
+`GET /api/live/strategy/session` remains backward-compatible and now includes:
+
+- `engine_context` (active engine mode + observed modes + strategy family/profile)
+- `decision_diagnostics` with lane-specific blocks:
+  - `ml_pure` (CE/PE/HOLD counts, hold-reason distribution, edge/confidence distributions)
+  - `ml_gate` (existing deterministic ML-gate diagnostics)
+- `promotion_lane` (`ml_pure` or `deterministic`)
+- `ml_diagnostics` is preserved as a compatibility alias to `decision_diagnostics.ml_gate`.
+
+`/live/strategy` renders both `ml_pure` and deterministic/ml-gate panels and auto-emphasizes the currently active engine lane.
+
+### Live Strategy UX Clarity (Operator-First v1)
+
+`GET /api/live/strategy/session` now also returns additive operator-focused blocks:
+
+- `ops_state`:
+  - `market_state`
+  - `engine_state`
+  - `risk_state`
+  - `data_health_state`
+  - `active_blocker`
+- `active_alerts`: severity-ranked alert list with operator next-step hints.
+- `decision_explainability`:
+  - `latest_decision`
+  - `timeline`
+  - `gate_funnel`
+  - `reason_playbook_summary`
+- `ui_hints`:
+  - `active_engine_panel`
+  - `recommended_focus_panel`
+  - `degraded_mode`
+  - `debug_view`
+
+Optional additive query params:
+
+- `timeline_limit` (default `25`, max `100`)
+- `debug_view` (`0|1`, default `0`)
+
+Feature flag:
+
+- `LIVE_STRATEGY_UX_V1=1` enables derived operator UX blocks in the session payload.
+
+Alert noise tuning env vars:
+
+- `LIVE_STRATEGY_ALERT_ML_BLOCK_RATE_WARN` (default `0.80`)
+- `LIVE_STRATEGY_ALERT_ML_PURE_HOLD_RATE_WARN` (default `0.80`)
+
+### Live Monitor Module Map (v2.3 Phase-1)
+
+The live session backend keeps `LiveStrategyMonitorService` as façade and now uses:
+
+- `market_data_dashboard/live_strategy_repository.py` for Mongo read models/projections
+- `market_data_dashboard/diagnostics/ml_gate.py` for deterministic+ML-gate diagnostics
+- `market_data_dashboard/diagnostics/ml_pure.py` for pure-ML diagnostics
+- `market_data_dashboard/live_strategy_session_assembler.py` for engine context and final payload assembly
+- `market_data_dashboard/strategy_monitor_contracts.py` for typed payload aliases
 
 ## STOMP topic mapping
 
@@ -140,4 +216,4 @@ Check:
 
 ---
 
-Last updated: 2026-02-14
+Last updated: 2026-03-06

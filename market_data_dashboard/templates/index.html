@@ -14,6 +14,9 @@
             <div class="flex justify-between items-center mb-2">
                 <h1 class="text-3xl font-bold text-gray-800">Market Data Dashboard</h1>
                 <div class="text-lg flex items-center gap-3">
+                    <a href="/live/strategy" class="inline-flex items-center px-4 py-2 rounded-full bg-emerald-700 text-white hover:bg-emerald-800 text-sm font-semibold">
+                        Live Strategy Monitor
+                    </a>
                     <a href="/trading" class="inline-flex items-center px-4 py-2 rounded-full bg-teal-600 text-white hover:bg-teal-700 text-sm font-semibold">
                         Open Trading Terminal
                     </a>
@@ -476,11 +479,27 @@
             document.getElementById('ws-status-icon').className = iconClass;
         }
 
+        function getInstrumentInfo(symbol) {
+            if (!symbol) return {};
+            const instruments = (statusData && statusData.instruments) || {};
+            return instruments[symbol] || {};
+        }
+
+        function getInstrumentExchange(symbol) {
+            const exchange = getInstrumentInfo(symbol).exchange;
+            return String(exchange || '').trim().toUpperCase();
+        }
+
+        function instrumentPathSegment(symbol) {
+            return encodeURIComponent(String(symbol || '').trim());
+        }
+
         function applyCurrentInstrumentUI() {
             if (!currentInstrument) return;
             const indicatorsTitle = document.getElementById('indicators-title');
             const priceChartTitle = document.getElementById('price-chart-title');
             const instrumentNote = document.getElementById('instrument-note');
+            const exchange = getInstrumentExchange(currentInstrument);
 
             if (indicatorsTitle) {
                 indicatorsTitle.textContent = `Current Technical Indicators (${currentInstrument})`;
@@ -489,7 +508,9 @@
                 priceChartTitle.textContent = `${currentInstrument} Price Chart`;
             }
             if (instrumentNote) {
-                instrumentNote.textContent = `Showing charts/indicators for ${currentInstrument}`;
+                instrumentNote.textContent = exchange
+                    ? `Showing charts/indicators for ${currentInstrument} | Exchange ${exchange}`
+                    : `Showing charts/indicators for ${currentInstrument}`;
             }
         }
 
@@ -1029,9 +1050,11 @@
                     ? latestPriceNum.toFixed(2)
                     : (info.latest_price ?? '--');
                 const statusLabel = String(info.status || 'unknown').replaceAll('_', ' ');
+                const exchange = String(info.exchange || '').trim().toUpperCase();
 
                 card.innerHTML = `
                     <div class="font-semibold">${instrument}</div>
+                    ${exchange ? `<div class="text-xs text-gray-500">${exchange}</div>` : ''}
                     <div class="text-sm font-medium ${statusColor}">${statusIcon} ${statusLabel}</div>
                     ${info.data_points ? `<div class="text-sm text-gray-600">${info.data_points} data points</div>` : ''}
                     ${info.latest_price !== undefined && info.latest_price !== null ? `<div class="text-sm font-mono">${latestPriceText}</div>` : ''}
@@ -1080,7 +1103,7 @@
             
             try {
                 const chartResp = await fetch(
-                    `/api/market-data/charts/${currentInstrument}?timeframe=${currentTimeframe}&limit=${reqLimit}`,
+                    `/api/market-data/charts/${instrumentPathSegment(currentInstrument)}?timeframe=${currentTimeframe}&limit=${reqLimit}`,
                     { signal }
                 );
                 if (!chartResp.ok) {
@@ -1299,7 +1322,7 @@
                         indicatorStreamAgeMs > indicatorStreamFallbackMs;
 
                     if (shouldFetchIndicatorsViaRest) {
-                        const indicatorsResponse = await fetch(`/api/market-data/indicators/${currentInstrument}?timeframe=${currentTimeframe}`, { signal });
+                        const indicatorsResponse = await fetch(`/api/market-data/indicators/${instrumentPathSegment(currentInstrument)}?timeframe=${currentTimeframe}`, { signal });
                         if (indicatorsResponse.ok) {
                             const indicatorsData = await indicatorsResponse.json();
                             indicatorReducer.apply(indicatorsData, 'rest', { force: true });
@@ -1494,7 +1517,7 @@
             if (!currentInstrument) return;
             
             try {
-                const response = await fetch(`/api/market-data/depth/${currentInstrument}`);
+                const response = await fetch(`/api/market-data/depth/${instrumentPathSegment(currentInstrument)}`);
                 if (response.ok) {
                     const depthData = await response.json();
                     console.log('Depth data:', depthData);
@@ -1566,7 +1589,7 @@
             if (!currentInstrument) return;
             
             try {
-                const response = await fetch(`/api/market-data/options/${currentInstrument}`);
+                const response = await fetch(`/api/market-data/options/${instrumentPathSegment(currentInstrument)}`);
                 if (response.ok) {
                     const optionsData = await response.json();
                     console.log('Options data:', optionsData);

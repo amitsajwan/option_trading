@@ -7,8 +7,8 @@ Shared contracts for inter-process communication.
 - No business logic, no I/O, no process orchestration.
 
 ## Modules
-- `topics.py`: topic resolvers (for example `snapshot_topic()`).
-- `events.py`: event envelope builders/parsers (`market_snapshot` v1.0).
+- `topics.py`: topic resolvers (for example `snapshot_topic()`, `strategy_vote_topic()`).
+- `events.py`: event envelope builders/parsers (`market_snapshot`, `strategy_vote`, `trade_signal`, `strategy_position` v1.0).
 - `config.py`: shared process-app config contracts (for example `redis_connection_kwargs()`).
   - Loads `.env` from current working directory, repo root, and app-local env files (without overriding existing shell vars).
   - Supports `for_pubsub=True` to disable read timeout for long-lived Redis subscribers.
