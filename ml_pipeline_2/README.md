@@ -54,12 +54,14 @@ The checked-in research configs are Ubuntu-ready and resolve paths relative to t
 - [`configs/research/fo_expiry_aware_recovery.tuning_1m_e2e.json`](configs/research/fo_expiry_aware_recovery.tuning_1m_e2e.json)
 - [`configs/research/fo_expiry_aware_recovery.tuning_5m.json`](configs/research/fo_expiry_aware_recovery.tuning_5m.json)
 - [`configs/research/fo_expiry_aware_recovery.tuning_4y.json`](configs/research/fo_expiry_aware_recovery.tuning_4y.json)
+- [`configs/research/fo_expiry_aware_recovery.fast_path_4y.json`](configs/research/fo_expiry_aware_recovery.fast_path_4y.json)
 - [`configs/research/move_detector_quick.default.json`](configs/research/move_detector_quick.default.json)
 - [`configs/research/direction_from_move_quick.default.json`](configs/research/direction_from_move_quick.default.json)
 - [`configs/research/recovery_matrix.default.json`](configs/research/recovery_matrix.default.json)
 - [`configs/research/recovery_matrix.tuning_1m_e2e.json`](configs/research/recovery_matrix.tuning_1m_e2e.json)
 - [`configs/research/recovery_matrix.tuning_5m.json`](configs/research/recovery_matrix.tuning_5m.json)
 - [`configs/research/recovery_matrix.tuning_4y.json`](configs/research/recovery_matrix.tuning_4y.json)
+- [`configs/research/recovery_matrix.fast_path_4y.json`](configs/research/recovery_matrix.fast_path_4y.json)
 
 Default output roots resolve into `ml_pipeline_2/artifacts/...`.
 
@@ -159,32 +161,43 @@ Recommended staged workflow:
 1. Run [`configs/research/recovery_matrix.tuning_1m_e2e.json`](configs/research/recovery_matrix.tuning_1m_e2e.json) first.
 2. Review the best completed 1-month combo under `artifacts/research_matrices/.../report.json`.
 3. Run [`configs/research/recovery_matrix.tuning_5m.json`](configs/research/recovery_matrix.tuning_5m.json) second.
-4. On the same VM, run [`configs/research/recovery_matrix.shortlist_4y.json`](configs/research/recovery_matrix.shortlist_4y.json) before any full 4-year expansion.
-5. Only widen beyond the shortlist after a shortlist combo materially improves after threshold sweep.
+4. Run the narrowed deployable lane [`configs/research/recovery_matrix.fast_path_4y.json`](configs/research/recovery_matrix.fast_path_4y.json) before any broader 4-year re-expansion.
+5. Only widen again if the fast path fails to produce a publishable candidate after threshold sweep.
 
-Same-VM 4-year shortlist commands:
+Fast-path 4-year commands:
 
 ```bash
 python -m ml_pipeline_2.run_recovery_matrix \
-  --config ml_pipeline_2/configs/research/recovery_matrix.shortlist_4y.json
+  --config ml_pipeline_2/configs/research/recovery_matrix.fast_path_4y.json
 ```
 
-Retry failed shortlist combos into their existing run directories:
+Keep the fast-path matrix topped up:
 
 ```bash
 python -m ml_pipeline_2.run_recovery_matrix \
-  --launch-pending \
+  --watch-pending \
   --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 1 \
-  --retry-failed
+  --max-parallel 4 \
+  --retry-failed \
+  --poll-seconds 120
 ```
 
-Reuse a specific run directory directly:
+Run a threshold sweep on a completed combo:
 
 ```bash
-python -m ml_pipeline_2.run_research \
-  --config ml_pipeline_2/configs/research/fo_expiry_aware_recovery.shortlist_4y.json \
-  --run-output-root ml_pipeline_2/artifacts/research/<run_name>_<timestamp>
+python -m ml_pipeline_2.run_recovery_threshold_sweep \
+  --run-dir ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp>/runs/<combo_key>/<run_dir> \
+  --threshold-grid 0.30 0.35 0.40 0.45 0.50
+```
+
+Publish the selected run using the sweep-recommended threshold:
+
+```bash
+python -m ml_pipeline_2.run_publish_model \
+  --run-dir ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp>/runs/<combo_key>/<run_dir> \
+  --model-group banknifty_futures/h15_tp_auto \
+  --profile-id openfe_v9_dual \
+  --threshold-source threshold_sweep_recommended
 ```
 
 The default manifests remain stable. The tuning configs are opt-in.

@@ -264,6 +264,20 @@ def test_tuning_matrix_configs_resolve_expected_search_space() -> None:
         "FIXED_H15_TP20_SL10",
     }
 
+    fast_path_args = parser.parse_args(["--config", "ml_pipeline_2/configs/research/recovery_matrix.fast_path_4y.json"])
+    fast_path_resolved = _resolve_args(fast_path_args)
+    assert fast_path_resolved["models"] == ["xgb_shallow", "xgb_regularized"]
+    assert fast_path_resolved["feature_sets"] == ["fo_expiry_aware_v2", "fo_oi_pcr_momentum"]
+    assert fast_path_resolved["max_parallel"] == 4
+    assert fast_path_resolved["poll_seconds"] == 120
+    assert len(fast_path_resolved["recipes"]) == 4
+    assert {recipe["recipe_id"] for recipe in fast_path_resolved["recipes"]} == {
+        "ATR_H15_TP30_SL8",
+        "ATR_H15_TP30_SL10",
+        "FIXED_H15_TP30_SL8",
+        "FIXED_H15_TP30_SL10",
+    }
+
     watch_args = parser.parse_args(
         [
             "--config",

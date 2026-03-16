@@ -15,8 +15,10 @@ from .evaluation import evaluate_futures_stages_from_frame, stage_b
 from .experiment_control.state import utc_now
 from .inference_contract import load_model_package, predict_probabilities_from_frame
 from .scenario_flows.fo_expiry_aware_recovery import (
+    apply_candidate_filter,
     _effective_label_cfg,
     _gates,
+    _normalize_candidate_filter,
     _prepare_labeled_frame,
     _side_penalty,
     _side_share_in_band,
@@ -223,6 +225,11 @@ def sweep_recovery_thresholds(
         event_sampling_mode=str(scenario.get("event_sampling_mode", "none")),
         context=f"recovery.threshold_sweep:{recipe.recipe_id}:holdout",
     )
+    holdout_labeled, holdout_filtering_meta = apply_candidate_filter(
+        holdout_labeled,
+        candidate_filter=_normalize_candidate_filter(dict(scenario.get("candidate_filter") or {})),
+        context=f"recovery.threshold_sweep:{recipe.recipe_id}:holdout",
+    )
     model_package = load_model_package(model_path)
     probs, input_contract = predict_probabilities_from_frame(
         holdout_labeled,
@@ -284,6 +291,7 @@ def sweep_recovery_thresholds(
         "rows": rows,
         "holdout_rows": int(len(holdout_labeled)),
         "holdout_sampling_meta": holdout_sampling_meta,
+        "holdout_filtering_meta": holdout_filtering_meta,
         "holdout_label_lineage": holdout_lineage,
         "input_contract": input_contract,
     }

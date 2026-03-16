@@ -120,6 +120,14 @@ python -m ml_pipeline_2.run_research \
   --validate-only
 ```
 
+Validate the narrowed 4-year fast-path base manifest:
+
+```bash
+python -m ml_pipeline_2.run_research \
+  --config ml_pipeline_2/configs/research/fo_expiry_aware_recovery.fast_path_4y.json \
+  --validate-only
+```
+
 Validate phase 2:
 
 ```bash
@@ -191,53 +199,53 @@ python -m ml_pipeline_2.run_recovery_matrix \
 
 This keeps the same tuned tree model list, keeps `max_parallel=3`, and expands back to the recovery recipe grid plus the 3 selected feature sets.
 
-Before any full 4-year expansion on the same VM, run the 4-year shortlist matrix:
+Before any broader 4-year expansion, run the narrowed fast-path matrix:
 
 ```bash
 python -m ml_pipeline_2.run_recovery_matrix \
-  --config ml_pipeline_2/configs/research/recovery_matrix.shortlist_4y.json
+  --config ml_pipeline_2/configs/research/recovery_matrix.fast_path_4y.json
 ```
 
 This run uses:
 - `full_model`: `2020-08-03` to `2024-07-31`
 - `final_holdout`: `2024-08-01` to `2024-10-31`
-- `1 feature set x 3 models = 3 combos`
-- the exact 4 shortlisted fixed-barrier recipes
-- `training.runtime.model_n_jobs=4`
-- `max_parallel=1`
+- `2 feature sets x 2 models = 4 combos`
+- the exact 4 narrowed `H15 / TP30 / SL8-10` recipes
+- `event_sampling_mode=cusum`
+- candidate filtering on event-sampled, non-expiry-day, non-high-ATR, tradeable-context rows
+- `max_parallel=4`
 - `meta_gate.enabled=false`
 - `resume_primary=true`
 
-This shortlist is the safe same-VM path after the OOM failures from the larger matrix. Do not restart the full `recovery_matrix.tuning_4y.json` on this VM until the shortlist shows materially better post-sweep behavior.
+This fast path is the preferred deployable lane after the wider exploratory runs. Do not restart the full `recovery_matrix.tuning_4y.json` unless the fast path still fails to produce a publishable candidate.
 
-Top up the shortlist when the active slot frees up:
-
-```bash
-python -m ml_pipeline_2.run_recovery_matrix \
-  --launch-pending \
-  --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 1
-```
-
-If a combo fails, retry it into the same run directory instead of starting a fresh timestamped run:
-
-```bash
-python -m ml_pipeline_2.run_recovery_matrix \
-  --launch-pending \
-  --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 1 \
-  --retry-failed
-```
-
-Or keep the shortlist topped up automatically until all combos are completed or failed:
+Keep the fast-path matrix topped up:
 
 ```bash
 python -m ml_pipeline_2.run_recovery_matrix \
   --watch-pending \
   --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 1 \
+  --max-parallel 4 \
   --retry-failed \
   --poll-seconds 120
+```
+
+If you only want a one-shot refill instead of the watcher:
+
+```bash
+python -m ml_pipeline_2.run_recovery_matrix \
+  --launch-pending \
+  --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
+  --max-parallel 4 \
+  --retry-failed
+```
+
+After a combo completes, sweep the narrowed threshold grid:
+
+```bash
+python -m ml_pipeline_2.run_recovery_threshold_sweep \
+  --run-dir ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp>/runs/<combo_key>/<run_dir> \
+  --threshold-grid 0.30 0.35 0.40 0.45 0.50
 ```
 
 Then inspect:
@@ -256,9 +264,21 @@ If you need to rerun a single combo directly into its existing run directory, re
 
 ```bash
 python -m ml_pipeline_2.run_research \
-  --config ml_pipeline_2/configs/research/fo_expiry_aware_recovery.shortlist_4y.json \
+  --config ml_pipeline_2/configs/research/fo_expiry_aware_recovery.fast_path_4y.json \
   --run-output-root ml_pipeline_2/artifacts/research/<run_name>_<timestamp>
 ```
+
+When the chosen combo has a good sweep result, publish it with the sweep-selected threshold:
+
+```bash
+python -m ml_pipeline_2.run_publish_model \
+  --run-dir ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp>/runs/<combo_key>/<run_dir> \
+  --model-group banknifty_futures/h15_tp_auto \
+  --profile-id openfe_v9_dual \
+  --threshold-source threshold_sweep_recommended
+```
+
+Then switch `strategy_app` to the published run through the existing Pure ML model-switch flow. No runtime architecture change is required for this path.
 
 ## Quick Research Flows
 

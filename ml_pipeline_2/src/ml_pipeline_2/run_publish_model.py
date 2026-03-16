@@ -12,6 +12,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-dir", required=True, help="Completed fo_expiry_aware_recovery run directory")
     parser.add_argument("--model-group", required=True, help="Published model group, e.g. banknifty_futures/h15_tp_auto")
     parser.add_argument("--profile-id", required=True, help="Published runtime profile id")
+    parser.add_argument(
+        "--threshold-source",
+        choices=("training", "threshold_sweep_recommended"),
+        default="training",
+        help="Threshold source for the published runtime profile",
+    )
     return parser
 
 
@@ -21,6 +27,7 @@ def main(argv: list[str] | None = None) -> int:
         run_dir=args.run_dir,
         model_group=args.model_group,
         profile_id=args.profile_id,
+        threshold_source=args.threshold_source,
     )
     print(json.dumps(payload, indent=2, default=str))
     return 0

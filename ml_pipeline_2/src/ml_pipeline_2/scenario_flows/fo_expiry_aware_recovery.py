@@ -37,6 +37,14 @@ META_FEATURE_COLUMNS = (
     "time_minute_of_day",
 )
 
+CANDIDATE_FILTER_FIELDS = (
+    "require_event_sampled",
+    "exclude_expiry_day",
+    "exclude_regime_atr_high",
+    "require_tradeable_context",
+    "allow_near_expiry_context",
+)
+
 
 class _ConstantMetaModel:
     def __init__(self, p1: float):
@@ -169,6 +177,87 @@ def _prepare_labeled_frame(features: pd.DataFrame, *, recipe: RecoveryRecipe, la
     if str(event_sampling_mode).strip().lower() == "cusum":
         labeled = labeled[pd.to_numeric(labeled.get("event_sampled"), errors="coerce").fillna(0.0) == 1.0].copy().reset_index(drop=True)
     return labeled, sampling_meta, build_label_lineage(labeled, label_cfg)
+
+
+def _normalize_candidate_filter(payload: Optional[Dict[str, Any]]) -> Dict[str, bool]:
+    raw = dict(payload or {})
+    return {
+        field: (raw.get(field) if isinstance(raw.get(field), bool) else False)
+        for field in CANDIDATE_FILTER_FIELDS
+    }
+
+
+def _first_available_flag(frame: pd.DataFrame, columns: Sequence[str]) -> pd.Series:
+    present = [
+        pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+        for column in columns
+        if column in frame.columns
+    ]
+    if not present:
+        return pd.Series(0.0, index=frame.index, dtype=float)
+    out = present[0].astype(float).copy()
+    for series in present[1:]:
+        out = pd.Series(np.maximum(out.to_numpy(dtype=float), series.to_numpy(dtype=float)), index=frame.index, dtype=float)
+    return out.fillna(0.0)
+
+
+def apply_candidate_filter(
+    frame: pd.DataFrame,
+    *,
+    candidate_filter: Optional[Dict[str, Any]],
+    context: str,
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    config = _normalize_candidate_filter(candidate_filter)
+    filtered = frame.copy()
+    dropped_by_rule: Dict[str, int] = {}
+
+    def _apply_rule(rule_name: str, keep_mask: pd.Series) -> None:
+        nonlocal filtered
+        before = int(len(filtered))
+        filtered = filtered.loc[keep_mask.fillna(False)].copy().reset_index(drop=True)
+        dropped_by_rule[rule_name] = before - int(len(filtered))
+
+    if config["require_event_sampled"]:
+        sampled = pd.to_numeric(filtered.get("event_sampled"), errors="coerce").fillna(0.0) == 1.0
+        _apply_rule("require_event_sampled", sampled)
+    else:
+        dropped_by_rule["require_event_sampled"] = 0
+
+    if config["exclude_expiry_day"]:
+        expiry_day = _first_available_flag(filtered, ("ctx_is_expiry_day",)) == 1.0
+        _apply_rule("exclude_expiry_day", ~expiry_day)
+    else:
+        dropped_by_rule["exclude_expiry_day"] = 0
+
+    if config["exclude_regime_atr_high"]:
+        atr_high = _first_available_flag(filtered, ("ctx_regime_atr_high", "regime_atr_high")) == 1.0
+        _apply_rule("exclude_regime_atr_high", ~atr_high)
+    else:
+        dropped_by_rule["exclude_regime_atr_high"] = 0
+
+    if config["require_tradeable_context"]:
+        tradeable = _first_available_flag(
+            filtered,
+            ("ctx_regime_trend_up", "ctx_regime_trend_down", "regime_trend_up", "regime_trend_down"),
+        ) == 1.0
+        if config["allow_near_expiry_context"]:
+            tradeable = tradeable | (
+                _first_available_flag(filtered, ("ctx_regime_expiry_near", "regime_expiry_near")) == 1.0
+            )
+        _apply_rule("require_tradeable_context", tradeable)
+    else:
+        dropped_by_rule["require_tradeable_context"] = 0
+
+    meta = {
+        "context": str(context),
+        "candidate_filter": config,
+        "rows_before": int(len(frame)),
+        "rows_after": int(len(filtered)),
+        "dropped_by_rule": dropped_by_rule,
+    }
+    if len(filtered) <= 0:
+        raise ValueError(f"{context} candidate_filter removed all rows")
+    return filtered, meta
 
 
 def _holdout_candidate_summary(holdout_labeled: pd.DataFrame, model_package: Dict[str, Any], *, threshold: float, gates: FuturesPromotionGates, cost_per_trade: float) -> Dict[str, Any]:
@@ -329,6 +418,7 @@ def run_recovery_research(ctx: RunContext) -> Dict[str, Any]:
     preprocess_cfg = _preprocess_cfg(training["preprocess"])
     utility_cfg = _utility_cfg(training["utility"])
     gates = _gates(dict(scenario.get("evaluation_gates") or {}))
+    candidate_filter = _normalize_candidate_filter(dict(scenario.get("candidate_filter") or {}))
     primary_results: List[Dict[str, Any]] = []
     selected_primary: Optional[Dict[str, Any]] = None
     for recipe_payload in list(scenario["recipes"]):
@@ -349,11 +439,21 @@ def run_recovery_research(ctx: RunContext) -> Dict[str, Any]:
         label_cfg = _effective_label_cfg(recipe, train_features=model_window_features, event_sampling_mode=str(scenario.get("event_sampling_mode", "none")), event_signal_col=scenario.get("event_signal_col"))
         train_labeled, train_sampling_meta, train_lineage = _prepare_labeled_frame(model_window_features, recipe=recipe, label_cfg=label_cfg, event_sampling_mode=str(scenario.get("event_sampling_mode", "none")), context=f"recovery:{recipe.recipe_id}:train")
         holdout_labeled, holdout_sampling_meta, holdout_lineage = _prepare_labeled_frame(holdout_features, recipe=recipe, label_cfg=label_cfg, event_sampling_mode=str(scenario.get("event_sampling_mode", "none")), context=f"recovery:{recipe.recipe_id}:holdout")
+        train_labeled, train_filtering_meta = apply_candidate_filter(
+            train_labeled,
+            candidate_filter=candidate_filter,
+            context=f"recovery:{recipe.recipe_id}:train",
+        )
+        holdout_labeled, holdout_filtering_meta = apply_candidate_filter(
+            holdout_labeled,
+            candidate_filter=candidate_filter,
+            context=f"recovery:{recipe.recipe_id}:holdout",
+        )
         catalog = run_training_cycle_catalog(labeled_df=train_labeled, feature_profile=str(resolved["catalog"]["feature_profile"]), objective=str(training["objective"]), train_days=int(training["cv_config"]["train_days"]), valid_days=int(training["cv_config"]["valid_days"]), test_days=int(training["cv_config"]["test_days"]), step_days=int(training["cv_config"]["step_days"]), purge_days=int(training["cv_config"].get("purge_days", 0)), embargo_days=int(training["cv_config"].get("embargo_days", 0)), purge_mode=str(training["cv_config"].get("purge_mode", "days")), embargo_rows=int(training["cv_config"].get("embargo_rows", 0)), event_end_col=training["cv_config"].get("event_end_col"), random_state=42, max_experiments=1, preprocess_cfg=preprocess_cfg, label_target=str(training["label_target"]), utility_cfg=utility_cfg, model_whitelist=[str(scenario["primary_model"])], feature_set_whitelist=list(resolved["catalog"]["feature_sets"]), retain_utility_score_payload=True, fit_all_final_models=True, model_n_jobs=int(((training.get("runtime") or {}).get("model_n_jobs")) or 1))
         selected_bundle = list(catalog.get("experiment_bundles") or [])[0]
         model_package = dict(selected_bundle["model_package"])
         holdout_summary = _holdout_candidate_summary(holdout_labeled, model_package, threshold=float(scenario["primary_threshold"]), gates=gates, cost_per_trade=float(utility_cfg.cost_per_trade))
-        result = {"recipe": recipe.to_dict(), "label_config": {"barrier_mode": label_cfg.barrier_mode, "atr_reference_col": label_cfg.atr_reference_col, "atr_tp_multiplier": label_cfg.atr_tp_multiplier, "atr_sl_multiplier": label_cfg.atr_sl_multiplier, "neutral_policy": label_cfg.neutral_policy, "event_sampling_mode": label_cfg.event_sampling_mode, "event_signal_col": label_cfg.event_signal_col, "event_end_ts_mode": label_cfg.event_end_ts_mode}, "train_sampling_meta": train_sampling_meta, "holdout_sampling_meta": holdout_sampling_meta, "train_rows": int(len(train_labeled)), "holdout_rows": int(len(holdout_labeled)), "training_report": dict(catalog["report"]), "holdout_summary": holdout_summary, "baseline_comparison": _compare_to_phase2_baseline(holdout_summary, baseline_payload), "model_package_path": str(model_path), "training_report_path": str(training_report_path)}
+        result = {"recipe": recipe.to_dict(), "label_config": {"barrier_mode": label_cfg.barrier_mode, "atr_reference_col": label_cfg.atr_reference_col, "atr_tp_multiplier": label_cfg.atr_tp_multiplier, "atr_sl_multiplier": label_cfg.atr_sl_multiplier, "neutral_policy": label_cfg.neutral_policy, "event_sampling_mode": label_cfg.event_sampling_mode, "event_signal_col": label_cfg.event_signal_col, "event_end_ts_mode": label_cfg.event_end_ts_mode}, "train_sampling_meta": train_sampling_meta, "holdout_sampling_meta": holdout_sampling_meta, "train_filtering_meta": train_filtering_meta, "holdout_filtering_meta": holdout_filtering_meta, "train_rows": int(len(train_labeled)), "holdout_rows": int(len(holdout_labeled)), "training_report": dict(catalog["report"]), "holdout_summary": holdout_summary, "baseline_comparison": _compare_to_phase2_baseline(holdout_summary, baseline_payload), "model_package_path": str(model_path), "training_report_path": str(training_report_path)}
         recipe_root.mkdir(parents=True, exist_ok=True)
         joblib.dump(model_package, model_path)
         training_report_path.write_text(json.dumps(dict(catalog["report"]), indent=2), encoding="utf-8")
@@ -395,6 +495,6 @@ def run_recovery_research(ctx: RunContext) -> Dict[str, Any]:
         joblib.dump({"kind": "fo_expiry_aware_meta_gate_v1", "created_at_utc": utc_now(), "primary_recipe_id": ((selected_primary.get("recipe") or {}).get("recipe_id")), "primary_threshold": float(scenario["primary_threshold"]), "meta_threshold": float(meta_threshold), "feature_columns": meta_gate_summary["feature_columns"], "model": meta_model}, meta_root / "meta_model.joblib")
         holdout_candidates.to_parquet(meta_root / "holdout_candidates.parquet", index=False)
         (meta_root / "summary.json").write_text(json.dumps(meta_gate_summary, indent=2), encoding="utf-8")
-    summary = {"created_at_utc": utc_now(), "status": "completed", "paths": {"model_window_features": str(Path(inputs["model_window_features_path"]).resolve()), "holdout_features": str(Path(inputs["holdout_features_path"]).resolve()), "phase2_binary_baseline": (str(Path(baseline_json).resolve()) if baseline_json is not None and Path(baseline_json).exists() else None)}, "event_sampling_mode": str(scenario.get("event_sampling_mode", "none")), "recipe_ids": (sorted(selected_recipe_ids) if selected_recipe_ids else None), "skip_meta": not bool((scenario.get("meta_gate") or {}).get("enabled", False)), "resume_primary": bool(scenario.get("resume_primary", False)), "primary_recipes": [{key: value for key, value in row.items() if key not in {"selected_bundle", "model_package", "train_labeled", "holdout_labeled"}} for row in primary_results], "selected_primary_recipe_id": ((selected_primary.get("recipe") or {}).get("recipe_id") if selected_primary else None), "meta_gate": meta_gate_summary}
+    summary = {"created_at_utc": utc_now(), "status": "completed", "paths": {"model_window_features": str(Path(inputs["model_window_features_path"]).resolve()), "holdout_features": str(Path(inputs["holdout_features_path"]).resolve()), "phase2_binary_baseline": (str(Path(baseline_json).resolve()) if baseline_json is not None and Path(baseline_json).exists() else None)}, "event_sampling_mode": str(scenario.get("event_sampling_mode", "none")), "candidate_filter": candidate_filter, "recipe_ids": (sorted(selected_recipe_ids) if selected_recipe_ids else None), "skip_meta": not bool((scenario.get("meta_gate") or {}).get("enabled", False)), "resume_primary": bool(scenario.get("resume_primary", False)), "primary_recipes": [{key: value for key, value in row.items() if key not in {"selected_bundle", "model_package", "train_labeled", "holdout_labeled"}} for row in primary_results], "selected_primary_recipe_id": ((selected_primary.get("recipe") or {}).get("recipe_id") if selected_primary else None), "meta_gate": meta_gate_summary}
     ctx.write_json("summary.json", summary)
     return summary

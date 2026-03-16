@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pandas as pd
 
@@ -54,3 +55,27 @@ def test_recovery_threshold_sweep_can_target_recipe_before_run_summary_selection
 
     assert sweep["recipe_id"] == "TB_BASE_L1"
     assert len(list(sweep["rows"])) == 1
+
+
+def test_recovery_threshold_sweep_preserves_holdout_filtering_meta(tmp_path: Path) -> None:
+    model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
+    manifest_path = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["scenario"]["candidate_filter"] = {
+        "require_event_sampled": True,
+        "exclude_expiry_day": True,
+        "exclude_regime_atr_high": True,
+        "require_tradeable_context": True,
+        "allow_near_expiry_context": True,
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    summary = run_research(load_and_resolve_manifest(manifest_path, validate_paths=True))
+    run_dir = Path(summary["output_root"])
+
+    sweep = sweep_recovery_thresholds(
+        run_dir=run_dir,
+        threshold_grid=[0.50],
+    )
+
+    assert "holdout_filtering_meta" in sweep
+    assert sweep["holdout_filtering_meta"]["rows_after"] <= sweep["holdout_filtering_meta"]["rows_before"]

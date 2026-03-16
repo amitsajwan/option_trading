@@ -7,6 +7,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from ml_pipeline_2.publishing import publish_recovery_run
 from ml_pipeline_2.publishing import resolve_ml_pure_artifacts, validate_switch_strict
 from ml_pipeline_2.run_publish_model import main as publish_main
 
@@ -21,7 +22,7 @@ class _ConstantProbModel:
         return np.column_stack([1.0 - p1, p1])
 
 
-def _build_completed_recovery_run(root: Path) -> tuple[Path, str]:
+def _build_completed_recovery_run(root: Path, *, with_threshold_sweep: bool = False) -> tuple[Path, str]:
     run_dir = root / "ml_pipeline_2" / "artifacts" / "research" / "recovery_publish_fixture_20260313_010101"
     recipe_root = run_dir / "primary_recipes" / "FIXED_H15_TP30_SL12"
     recipe_root.mkdir(parents=True, exist_ok=True)
@@ -67,6 +68,27 @@ def _build_completed_recovery_run(root: Path) -> tuple[Path, str]:
         ],
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    if with_threshold_sweep:
+        sweep_root = recipe_root / "threshold_sweep"
+        sweep_root.mkdir(parents=True, exist_ok=True)
+        (sweep_root / "summary.json").write_text(
+            json.dumps(
+                {
+                    "recommended_threshold": 0.40,
+                    "recommended_row": {
+                        "threshold": 0.40,
+                        "profit_factor": 1.25,
+                        "net_return_sum": 0.12,
+                    },
+                    "rows": [
+                        {"threshold": 0.35, "profit_factor": 1.10, "net_return_sum": 0.08},
+                        {"threshold": 0.40, "profit_factor": 1.25, "net_return_sum": 0.12},
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
     return run_dir, run_dir.name
 
 
@@ -122,3 +144,60 @@ def test_ml_pipeline_2_publish_resolver_reads_run_specific_artifacts(tmp_path: P
 
     ok, reason = validate_switch_strict(dict(resolved["run_report_payload"]))
     assert ok, reason
+
+
+def test_publish_model_cli_can_use_threshold_sweep_recommendation(tmp_path: Path, monkeypatch, capsys) -> None:
+    run_dir, _ = _build_completed_recovery_run(tmp_path, with_threshold_sweep=True)
+    monkeypatch.setenv("MODEL_SWITCH_REPO_ROOT", str(tmp_path))
+
+    rc = publish_main(
+        [
+            "--run-dir",
+            str(run_dir),
+            "--model-group",
+            "banknifty_futures/h15_tp_auto",
+            "--profile-id",
+            "openfe_v9_dual",
+            "--threshold-source",
+            "threshold_sweep_recommended",
+        ]
+    )
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    threshold_report = json.loads(
+        (
+            tmp_path
+            / "ml_pipeline_2"
+            / "artifacts"
+            / "published_models"
+            / "banknifty_futures"
+            / "h15_tp_auto"
+            / "config"
+            / "profiles"
+            / "openfe_v9_dual"
+            / "threshold_report.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert payload["threshold_source"] == "threshold_sweep_recommended"
+    assert threshold_report["ce_threshold"] == 0.40
+    assert threshold_report["pe_threshold"] == 0.40
+    assert threshold_report["threshold_source"] == "threshold_sweep_recommended"
+    assert threshold_report["threshold_sweep_row"]["threshold"] == 0.40
+
+
+def test_publish_recovery_run_requires_threshold_sweep_summary_when_requested(tmp_path: Path, monkeypatch) -> None:
+    run_dir, _ = _build_completed_recovery_run(tmp_path, with_threshold_sweep=False)
+    monkeypatch.setenv("MODEL_SWITCH_REPO_ROOT", str(tmp_path))
+
+    try:
+        publish_recovery_run(
+            run_dir=run_dir,
+            model_group="banknifty_futures/h15_tp_auto",
+            profile_id="openfe_v9_dual",
+            threshold_source="threshold_sweep_recommended",
+        )
+    except FileNotFoundError as exc:
+        assert "threshold sweep summary" in str(exc).lower()
+    else:
+        raise AssertionError("expected missing threshold sweep summary to fail")

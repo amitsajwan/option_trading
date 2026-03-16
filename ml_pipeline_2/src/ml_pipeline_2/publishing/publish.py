@@ -123,6 +123,51 @@ def _extract_thresholds(training_report: Dict[str, Any]) -> tuple[float, float]:
     raise ValueError("training report missing ce_threshold/pe_threshold")
 
 
+def _read_threshold_sweep_summary(path: Path) -> Dict[str, Any]:
+    payload = _load_json(path)
+    if not isinstance(payload, dict):
+        raise ValueError(f"threshold sweep summary must be a JSON object: {path}")
+    return payload
+
+
+def _match_threshold_row(rows: object, *, threshold: float) -> Optional[Dict[str, Any]]:
+    for row in list(rows or []):
+        if not isinstance(row, dict):
+            continue
+        try:
+            row_threshold = float(row.get("threshold"))
+        except Exception:
+            continue
+        if abs(row_threshold - float(threshold)) <= 1e-9:
+            return dict(row)
+    return None
+
+
+def _resolve_publish_threshold_payload(
+    *,
+    training_report: Dict[str, Any],
+    threshold_source: str,
+    threshold_sweep_summary_path: Optional[Path],
+) -> tuple[float, float, Optional[Path], Optional[Dict[str, Any]]]:
+    normalized = str(threshold_source or "training").strip().lower()
+    if normalized == "training":
+        ce_threshold, pe_threshold = _extract_thresholds(training_report)
+        return float(ce_threshold), float(pe_threshold), None, None
+    if normalized != "threshold_sweep_recommended":
+        raise ValueError(f"unsupported threshold_source: {threshold_source}")
+    if threshold_sweep_summary_path is None or not threshold_sweep_summary_path.exists():
+        raise FileNotFoundError(f"threshold sweep summary not found: {threshold_sweep_summary_path}")
+    sweep_summary = _read_threshold_sweep_summary(threshold_sweep_summary_path)
+    recommended_threshold = sweep_summary.get("recommended_threshold")
+    if recommended_threshold is None:
+        raise ValueError(f"threshold sweep summary missing recommended_threshold: {threshold_sweep_summary_path}")
+    threshold_value = float(recommended_threshold)
+    selected_row = dict(sweep_summary.get("recommended_row") or {})
+    if not selected_row:
+        selected_row = _match_threshold_row(sweep_summary.get("rows"), threshold=threshold_value) or {}
+    return threshold_value, threshold_value, threshold_sweep_summary_path, selected_row
+
+
 def _build_threshold_report(
     *,
     run_id: str,
@@ -130,8 +175,19 @@ def _build_threshold_report(
     profile_id: str,
     training_report: Dict[str, Any],
     input_contract: Dict[str, Any],
+    threshold_source: str,
+    threshold_sweep_summary_path: Optional[Path],
+    threshold_sweep_row: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    ce_threshold, pe_threshold = _extract_thresholds(training_report)
+    ce_threshold, pe_threshold, resolved_sweep_path, resolved_sweep_row = _resolve_publish_threshold_payload(
+        training_report=training_report,
+        threshold_source=threshold_source,
+        threshold_sweep_summary_path=threshold_sweep_summary_path,
+    )
+    trading_utility_config = dict(training_report.get("trading_utility_config") or {})
+    if trading_utility_config:
+        trading_utility_config["ce_threshold"] = float(ce_threshold)
+        trading_utility_config["pe_threshold"] = float(pe_threshold)
     return {
         "schema_version": "1.0",
         "publisher": "ml_pipeline_2",
@@ -142,10 +198,13 @@ def _build_threshold_report(
         "profile_id": profile_id,
         "ce_threshold": float(ce_threshold),
         "pe_threshold": float(pe_threshold),
+        "threshold_source": str(threshold_source),
+        "threshold_sweep_summary_path": (str(resolved_sweep_path.resolve()) if resolved_sweep_path is not None else None),
+        "threshold_sweep_row": dict(threshold_sweep_row or resolved_sweep_row or {}),
         "label_target": training_report.get("label_target"),
         "feature_profile": training_report.get("feature_profile"),
         "objective": training_report.get("objective"),
-        "trading_utility_config": dict(training_report.get("trading_utility_config") or {}),
+        "trading_utility_config": trading_utility_config,
         "input_contract": input_contract,
     }
 
@@ -195,6 +254,7 @@ def publish_recovery_run(
     run_dir: str | Path,
     model_group: str,
     profile_id: str,
+    threshold_source: str = "training",
     root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     publish_root = repo_root(root)
@@ -213,6 +273,7 @@ def publish_recovery_run(
         raise FileNotFoundError(f"selected primary model package not found: {model_package_path}")
     if not training_report_path.exists():
         raise FileNotFoundError(f"selected primary training report not found: {training_report_path}")
+    threshold_sweep_summary_path = training_report_path.parent / "threshold_sweep" / "summary.json"
 
     run_id = str(source_run_dir.name).strip()
     group = str(model_group or "").strip().strip("/\\")
@@ -254,6 +315,9 @@ def publish_recovery_run(
         profile_id=profile,
         training_report=training_report,
         input_contract=input_contract,
+        threshold_source=str(threshold_source),
+        threshold_sweep_summary_path=threshold_sweep_summary_path if str(threshold_source).strip().lower() == "threshold_sweep_recommended" else None,
+        threshold_sweep_row=None,
     )
     model_contract = _build_model_contract(
         run_id=run_id,
@@ -281,11 +345,19 @@ def publish_recovery_run(
         "label_target": training_report.get("label_target"),
         "selected_primary_recipe_id": summary.get("selected_primary_recipe_id"),
         "selected_primary_recipe": dict(selected_row.get("recipe") or {}),
+        "threshold_source": str(threshold_source),
+        "threshold_sweep_summary_path": threshold_report.get("threshold_sweep_summary_path"),
+        "threshold_sweep_row": dict(threshold_report.get("threshold_sweep_row") or {}),
         "source_paths": {
             "run_dir": _to_rel_repo(source_run_dir, root=publish_root),
             "summary": _to_rel_repo(summary_path, root=publish_root),
             "model_package": _to_rel_repo(model_package_path, root=publish_root),
             "training_report": _to_rel_repo(training_report_path, root=publish_root),
+            "threshold_sweep_summary": (
+                _to_rel_repo(Path(str(threshold_report["threshold_sweep_summary_path"])), root=publish_root)
+                if threshold_report.get("threshold_sweep_summary_path")
+                else None
+            ),
         },
         "published_paths": {
             "model_package": _to_rel_repo(run_model_path, root=publish_root),

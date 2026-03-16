@@ -15,6 +15,13 @@ from .types import FEATURE_PROFILES, LABEL_TARGET_CHOICES
 PHASE2_LABEL_SWEEP_KIND = "phase2_label_sweep_v1"
 RECOVERY_KIND = "fo_expiry_aware_recovery_v1"
 MANIFEST_KINDS = (PHASE2_LABEL_SWEEP_KIND, RECOVERY_KIND)
+CANDIDATE_FILTER_FIELDS = {
+    "require_event_sampled",
+    "exclude_expiry_day",
+    "exclude_regime_atr_high",
+    "require_tradeable_context",
+    "allow_near_expiry_context",
+}
 
 
 class ManifestValidationError(ValueError):
@@ -197,6 +204,17 @@ def _validate_recovery_scenario(payload: Dict[str, Any], *, catalog_models: Iter
             continue
         if out < 0.0 or out > 1.0:
             errors.append(f"scenario.meta_gate.validation_threshold_grid[{idx}] must be in [0,1]")
+    candidate_filter = payload.get("candidate_filter")
+    if candidate_filter is not None:
+        if not isinstance(candidate_filter, dict):
+            errors.append("scenario.candidate_filter must be an object when provided")
+        else:
+            unknown_keys = sorted(set(str(key) for key in candidate_filter) - CANDIDATE_FILTER_FIELDS)
+            if unknown_keys:
+                errors.append(f"scenario.candidate_filter contains unknown fields: {unknown_keys}")
+            for field in sorted(CANDIDATE_FILTER_FIELDS):
+                if field in candidate_filter and not isinstance(candidate_filter.get(field), bool):
+                    errors.append(f"scenario.candidate_filter.{field} must be boolean")
 
 
 def _validate_windows(kind: str, windows_payload: Dict[str, Any], errors: List[str]) -> Dict[str, Dict[str, str]]:
