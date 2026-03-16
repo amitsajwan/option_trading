@@ -200,8 +200,6 @@ services:
     volumes:
       - ./.run:/app/.run
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
-      - ./ml_pipeline/artifacts:/app/ml_pipeline/artifacts:ro
-      - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
     healthcheck:
       test:
         [
@@ -301,6 +299,13 @@ services:
       ML_ENTRY_REGISTRY: "${STRATEGY_ML_ENTRY_REGISTRY:-}"
       ML_ENTRY_EXPERIMENT_ID: "${STRATEGY_ML_ENTRY_EXPERIMENT_ID:-}"
       ML_ENTRY_THRESHOLD_POLICY: "${STRATEGY_ML_ENTRY_THRESHOLD_POLICY:-}"
+      ML_PIPELINE_2_REPO_ROOT: "/app"
+      ML_PURE_RUN_ID: "${ML_PURE_RUN_ID:-}"
+      ML_PURE_MODEL_GROUP: "${ML_PURE_MODEL_GROUP:-}"
+      ML_PURE_MODEL_PACKAGE: "${ML_PURE_MODEL_PACKAGE:-}"
+      ML_PURE_THRESHOLD_REPORT: "${ML_PURE_THRESHOLD_REPORT:-}"
+      ML_PURE_CE_THRESHOLD: "${ML_PURE_CE_THRESHOLD:-}"
+      ML_PURE_PE_THRESHOLD: "${ML_PURE_PE_THRESHOLD:-}"
       RISK_PROFILE: "${RISK_PROFILE:-}"
       RISK_LOT_SIZING_MODE: "${RISK_LOT_SIZING_MODE:-risk_based}"
       RISK_NOTIONAL_PER_TRADE: "${RISK_NOTIONAL_PER_TRADE:-0}"
@@ -338,10 +343,19 @@ services:
         "${STRATEGY_POSITION_SIZE_MULTIPLIER:-1.0}",
         "--ml-runtime-guard-file",
         "${STRATEGY_ML_RUNTIME_GUARD_FILE:-}",
+        "--ml-pure-run-id",
+        "${ML_PURE_RUN_ID:-}",
+        "--ml-pure-model-group",
+        "${ML_PURE_MODEL_GROUP:-}",
+        "--ml-pure-model-package",
+        "${ML_PURE_MODEL_PACKAGE:-}",
+        "--ml-pure-threshold-report",
+        "${ML_PURE_THRESHOLD_REPORT:-}",
       ]
     volumes:
       - ./.run:/app/.run
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
     healthcheck:
       test: ["CMD", "python", "-m", "strategy_app.health"]
       interval: 60s
@@ -382,7 +396,6 @@ services:
       - "${DASHBOARD_PORT:-8008}:8008"
     volumes:
       - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
-      - ./ml_pipeline/artifacts:/app/ml_pipeline/artifacts:ro
       - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
 
   strategy_eval_orchestrator:
