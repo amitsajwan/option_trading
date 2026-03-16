@@ -61,6 +61,13 @@ except Exception:
         list_recovery_scenarios = None  # type: ignore
 
 try:
+    from snapshot_app.snapshot_ml_flat_contract import load_contract_schema, load_feature_groups, load_legacy_mapping
+except Exception:
+    load_contract_schema = None  # type: ignore
+    load_feature_groups = None  # type: ignore
+    load_legacy_mapping = None  # type: ignore
+
+try:
     from contracts_app.options_math import black_scholes_price, calculate_option_greeks, estimate_risk_free_rate
 except Exception:
     black_scholes_price = None
@@ -84,9 +91,7 @@ except Exception:
     resolve_instrument_symbol = None
 
 try:
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-    from redis_key_manager import get_redis_key
+    from contracts_app import get_redis_key
 except Exception:
     def get_redis_key(key: str, *args, **kwargs):
         return key
@@ -1426,59 +1431,24 @@ PUBLIC_TIMEFRAME_ALIASES: Dict[str, List[str]] = {
 # Trading terminal runtime state (paper runner process managed by dashboard UI).
 REPO_ROOT = Path(__file__).parent.parent
 ML_PIPELINE_SRC = REPO_ROOT / "ml_pipeline" / "src"
-DEFAULT_TRADING_EVENTS_PATH = REPO_ROOT / "ml_pipeline" / "artifacts" / "t33_paper_capital_events_actual.jsonl"
-DEFAULT_TRADING_STDOUT_PATH = REPO_ROOT / "ml_pipeline" / "artifacts" / "t33_paper_capital_runner_stdout.log"
-DEFAULT_TRADING_STDERR_PATH = REPO_ROOT / "ml_pipeline" / "artifacts" / "t33_paper_capital_runner_stderr.log"
-DEFAULT_MODEL_EVAL_SUMMARY_PATH = (
-    REPO_ROOT
-    / "ml_pipeline"
-    / "artifacts"
-    / "models"
-    / "by_features"
-    / "core_v2"
-    / "h5_ts0_lgbm_regime"
-    / "reports"
-    / "evaluation"
-    / "openfe_v9_dual_eval_summary.json"
-)
-DEFAULT_MODEL_TRAINING_REPORT_PATH = (
-    REPO_ROOT
-    / "ml_pipeline"
-    / "artifacts"
-    / "models"
-    / "by_features"
-    / "core_v2"
-    / "h5_ts0_lgbm_regime"
-    / "reports"
-    / "training"
-    / "openfe_v9_dual_modeling_report.json"
-)
-DEFAULT_MODEL_POLICY_REPORT_PATH = (
-    REPO_ROOT
-    / "ml_pipeline"
-    / "artifacts"
-    / "models"
-    / "by_features"
-    / "core_v2"
-    / "h5_ts0_lgbm_regime"
-    / "config"
-    / "profiles"
-    / "openfe_v9_dual"
-    / "threshold_report.json"
-)
-TRADING_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline" / "model_catalog" / "models"
-ARTIFACT_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline" / "artifacts" / "models" / "by_features"
+_LEGACY_TRADING_ARTIFACTS_DIR = REPO_ROOT / ".run" / "dashboard_state"
+DEFAULT_TRADING_EVENTS_PATH = _LEGACY_TRADING_ARTIFACTS_DIR / "t33_paper_capital_events_actual.jsonl"
+DEFAULT_TRADING_STDOUT_PATH = _LEGACY_TRADING_ARTIFACTS_DIR / "t33_paper_capital_runner_stdout.log"
+DEFAULT_TRADING_STDERR_PATH = _LEGACY_TRADING_ARTIFACTS_DIR / "t33_paper_capital_runner_stderr.log"
+DEFAULT_MODEL_EVAL_SUMMARY_PATH = None
+DEFAULT_MODEL_TRAINING_REPORT_PATH = None
+DEFAULT_MODEL_POLICY_REPORT_PATH = None
+TRADING_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "published_models"
+ARTIFACT_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "published_models"
 ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "published_models"
-SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR = REPO_ROOT / "ml_pipeline" / "contracts" / "snapshot_ml_flat_v1"
-SNAPSHOT_ML_FLAT_V1_SCHEMA_PATH = SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR / "snapshot_ml_flat_v1.schema.json"
-SNAPSHOT_ML_FLAT_V1_FEATURE_GROUPS_PATH = SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR / "feature_groups.json"
-SNAPSHOT_ML_FLAT_V1_LEGACY_MAP_PATH = SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR / "legacy_to_v1.csv"
+SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR = REPO_ROOT / "snapshot_app" / "contracts" / "snapshot_ml_flat_v1"
+_LEGACY_TRADING_RUNTIME_AVAILABLE = ML_PIPELINE_SRC.exists()
 
 _TRADING_LOCK = threading.Lock()
 _TRADING_DEFAULT_INSTANCE = "default"
 _TRADING_RUNNERS: Dict[str, Dict[str, Any]] = {}
 _TRADING_LAST_BACKTEST: Dict[str, Dict[str, Any]] = {}
-_TRADING_BACKTEST_STATE_DIR = REPO_ROOT / "ml_pipeline" / "artifacts" / "dashboard_state"
+_TRADING_BACKTEST_STATE_DIR = REPO_ROOT / ".run" / "dashboard_state"
 
 
 def _safe_load_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -1695,9 +1665,10 @@ def _humanize_model_catalog_title(model_group: str, profile_id: Optional[str] = 
 
 @lru_cache(maxsize=1)
 def _load_snapshot_ml_flat_v1_dictionary() -> Dict[str, Any]:
-    groups_payload = _safe_load_json(SNAPSHOT_ML_FLAT_V1_FEATURE_GROUPS_PATH) or {}
-    schema_payload = _safe_load_json(SNAPSHOT_ML_FLAT_V1_SCHEMA_PATH) or {}
-    mapping_rows = _read_csv_dict_rows(SNAPSHOT_ML_FLAT_V1_LEGACY_MAP_PATH)
+    groups_payload = load_feature_groups(SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR) if load_feature_groups is not None else {}
+    schema_payload = load_contract_schema(SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR) if load_contract_schema is not None else {}
+    mapping_frame = load_legacy_mapping(SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR) if load_legacy_mapping is not None else pd.DataFrame()
+    mapping_rows = mapping_frame.to_dict(orient="records") if isinstance(mapping_frame, pd.DataFrame) else []
 
     group_payloads = groups_payload.get("groups") if isinstance(groups_payload, dict) else {}
     group_order: List[str] = []
@@ -1823,7 +1794,6 @@ def _discover_published_model_roots(root: Path, *, source_label: str) -> List[Di
 def _build_artifact_discovery_entries() -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
     entries.extend(_discover_published_model_roots(ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR, source_label="artifact_discovery_ml_pipeline_2"))
-    entries.extend(_discover_published_model_roots(ARTIFACT_MODEL_CATALOG_DIR, source_label="artifact_discovery_ml_pipeline"))
     return entries
 
 
@@ -2107,8 +2077,6 @@ def _load_model_package_cached(model_path_text: str) -> Optional[Dict[str, Any]]
     if not model_path_text:
         return None
     try:
-        if str(ML_PIPELINE_SRC) not in sys.path:
-            sys.path.insert(0, str(ML_PIPELINE_SRC))
         import joblib  # type: ignore
 
         payload = joblib.load(model_path_text)
@@ -3273,7 +3241,7 @@ def _default_trading_paths(instance: str) -> Tuple[Path, Path, Path]:
     key = _normalize_trading_instance(instance)
     if key == _TRADING_DEFAULT_INSTANCE:
         return DEFAULT_TRADING_EVENTS_PATH, DEFAULT_TRADING_STDOUT_PATH, DEFAULT_TRADING_STDERR_PATH
-    artifacts_dir = REPO_ROOT / "ml_pipeline" / "artifacts"
+    artifacts_dir = _LEGACY_TRADING_ARTIFACTS_DIR
     return (
         artifacts_dir / f"t33_paper_capital_events_{key}.jsonl",
         artifacts_dir / f"t33_paper_capital_runner_{key}_stdout.log",
@@ -4389,6 +4357,11 @@ async def get_trading_state(
 @app.post("/api/trading/start")
 async def start_trading_runner(request: Request):
     """Start paper capital runner in background."""
+    if not _LEGACY_TRADING_RUNTIME_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Legacy paper trading runner is not part of the supported Live+Dashboard profile. Use strategy_app deterministic/ml_pure runtime instead.",
+        )
     payload: Dict[str, Any] = {}
     try:
         body = await request.json()

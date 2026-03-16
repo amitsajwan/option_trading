@@ -1,0 +1,1364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Strategy Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+    <style>
+        :root {
+            --bg: #f3f6f9;
+            --card: #ffffff;
+            --ink: #10212d;
+            --muted: #64748b;
+            --line: #dbe4eb;
+            --accent: #0f766e;
+            --accent-2: #0f4c81;
+            --good: #0f9d58;
+            --bad: #c2410c;
+            --warn: #b7791f;
+            --shadow: 0 12px 28px rgba(16, 33, 45, 0.08);
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: "Segoe UI", system-ui, sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top left, #e8f4f1 0%, rgba(232, 244, 241, 0) 30%),
+                radial-gradient(circle at bottom right, #e8eef9 0%, rgba(232, 238, 249, 0) 32%),
+                var(--bg);
+        }
+
+        .page {
+            width: min(1500px, calc(100vw - 24px));
+            margin: 0 auto;
+            padding: 16px 0 28px;
+        }
+
+        .header,
+        .panel {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            box-shadow: var(--shadow);
+        }
+
+        .header {
+            padding: 18px 22px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 14px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            letter-spacing: -0.02em;
+        }
+
+        .header p {
+            margin: 6px 0 0;
+            color: var(--muted);
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .chip,
+        .nav-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border-radius: 999px;
+            padding: 10px 14px;
+            border: 1px solid var(--line);
+            background: #f8fbfd;
+            color: var(--ink);
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .nav-link.primary {
+            background: linear-gradient(135deg, var(--accent-2), #16629d);
+            border-color: transparent;
+            color: #ffffff;
+        }
+
+        .banner {
+            display: none;
+            margin-bottom: 14px;
+            padding: 12px 16px;
+            border-radius: 14px;
+            border: 1px solid transparent;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .banner.show { display: block; }
+        .banner.error { background: #fff1f2; border-color: #fecdd3; color: #9f1239; }
+        .banner.warn { background: #fff8eb; border-color: #f5deb3; color: #8a5c00; }
+
+        .view-toggle {
+            margin-bottom: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .toggle-group {
+            display: inline-flex;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            overflow: hidden;
+            background: #f8fbfd;
+        }
+
+        .toggle-group button {
+            border: 0;
+            background: transparent;
+            padding: 9px 14px;
+            font-size: 13px;
+            font-weight: 700;
+            color: #445b6e;
+            cursor: pointer;
+        }
+
+        .toggle-group button.active {
+            color: #ffffff;
+            background: linear-gradient(135deg, var(--accent-2), #16629d);
+        }
+
+        .now-bar {
+            margin-bottom: 14px;
+        }
+
+        .now-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .state-pill {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 2px 8px;
+            font-size: 11px;
+            font-weight: 700;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        .state-ok { background: #eaf8ef; color: var(--good); }
+        .state-warn { background: #fff8eb; color: var(--warn); }
+        .state-critical { background: #fff0ea; color: var(--bad); }
+
+        .panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .panel-head h2,
+        .panel-head h3 {
+            margin: 0;
+        }
+
+        .toggle-btn {
+            border: 1px solid var(--line);
+            background: #f8fbfd;
+            color: #2f4a5f;
+            border-radius: 10px;
+            padding: 6px 10px;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .collapsible-content.collapsed {
+            display: none;
+        }
+
+        .focus-highlight {
+            border-color: #86efac;
+            box-shadow: 0 12px 28px rgba(22, 163, 74, 0.15);
+        }
+
+        .alerts-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .alert-item {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 10px 12px;
+            background: #fbfdff;
+        }
+
+        .alert-item.critical { border-color: #fca5a5; background: #fff1f2; }
+        .alert-item.warning { border-color: #f5deb3; background: #fff8eb; }
+        .alert-item.info { border-color: #d4e2f0; background: #f6fbff; }
+
+        .alert-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 13px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .timeline-row {
+            cursor: pointer;
+        }
+
+        .timeline-row.selected {
+            background: #e8f4f1;
+        }
+
+        .timeline-row.changed {
+            animation: fadePulse 1.4s ease;
+            background: #edf7ff;
+        }
+
+        @keyframes fadePulse {
+            0% { background: #d9efff; }
+            100% { background: transparent; }
+        }
+
+        body.operator-mode .debug-only {
+            display: none !important;
+        }
+
+        body.debug-mode .debug-only {
+            display: grid;
+        }
+
+        .kpis {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .kpi {
+            padding: 16px;
+        }
+
+        .kpi .label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+        }
+
+        .kpi .value {
+            margin-top: 8px;
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .kpi .sub {
+            margin-top: 6px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 420px 1fr;
+            gap: 14px;
+            margin-bottom: 14px;
+        }
+
+        .stack {
+            display: grid;
+            gap: 14px;
+        }
+
+        .panel {
+            padding: 18px;
+        }
+
+        .engine-panel {
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .engine-panel.active {
+            border-color: #7dd3fc;
+            box-shadow: 0 12px 28px rgba(14, 116, 144, 0.18);
+        }
+
+        .panel h2,
+        .panel h3 {
+            margin: 0 0 14px;
+            font-size: 18px;
+        }
+
+        .empty {
+            padding: 18px;
+            border-radius: 14px;
+            background: #f8fbfd;
+            border: 1px dashed var(--line);
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .kv {
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: #f8fbfd;
+            border: 1px solid #e7eef4;
+        }
+
+        .kv .label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+        }
+
+        .kv .value {
+            margin-top: 6px;
+            font-size: 14px;
+            font-weight: 700;
+            word-break: break-word;
+        }
+
+        .chart-wrap {
+            height: 460px;
+            width: 100%;
+        }
+
+        .detail-card {
+            margin-top: 12px;
+            padding: 12px;
+            border-radius: 14px;
+            background: #f8fbfd;
+            border: 1px solid #e7eef4;
+        }
+
+        .tables {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            margin-bottom: 14px;
+        }
+
+        .diag {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .table-wrap {
+            overflow: auto;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: #fbfdff;
+            max-height: 350px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        th, td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #edf2f7;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            background: #f3f7fb;
+            color: #395062;
+            z-index: 1;
+        }
+
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .tag.entry { background: #eaf8ef; color: var(--good); }
+        .tag.exit { background: #fff0ea; color: var(--bad); }
+        .tag.open { background: #eaf8ef; color: var(--good); }
+        .tag.closed { background: #eef2f7; color: #475569; }
+        .tag.pe { background: #fff5e8; color: #b45309; }
+        .tag.ce { background: #ebf4ff; color: #1d4ed8; }
+        .tag.ml { background: #ebf4ff; color: #0f4c81; }
+        .tag.rule { background: #eef2f7; color: #475569; }
+        .tag.pass { background: #eaf8ef; color: var(--good); }
+        .tag.block { background: #fff0ea; color: var(--bad); }
+        .tag.warmup { background: #fff8eb; color: var(--warn); }
+        .up { color: var(--good); }
+        .down { color: var(--bad); }
+        .muted { color: var(--muted); }
+
+        @media (max-width: 1280px) {
+            .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .layout { grid-template-columns: 1fr; }
+            .tables, .diag { grid-template-columns: 1fr; }
+            .now-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+
+        @media (max-width: 760px) {
+            .page { width: calc(100vw - 16px); }
+            .header { flex-direction: column; align-items: flex-start; }
+            .header-actions { justify-content: flex-start; }
+            .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .grid-2 { grid-template-columns: 1fr; }
+            .chart-wrap { height: 340px; }
+            .now-grid { grid-template-columns: 1fr; }
+            .view-toggle { flex-direction: column; align-items: stretch; }
+            .now-bar {
+                position: sticky;
+                top: 8px;
+                z-index: 9;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <section class="header">
+            <div>
+                <h1>Live Strategy Monitor</h1>
+                <p>Operator view for live BankNifty strategy state, trades, and chart overlays.</p>
+            </div>
+            <div class="header-actions">
+                <div class="chip" id="sessionChip">Session: loading...</div>
+                <div class="chip" id="freshnessChip">Freshness: checking...</div>
+                <a class="nav-link primary" href="/">Main Dashboard</a>
+                <a class="nav-link" href="/api/live/strategy/session" target="_blank" rel="noopener">Session API</a>
+            </div>
+        </section>
+
+        <div class="banner" id="errorBanner"></div>
+        <div class="banner" id="warnBanner"></div>
+
+        <section class="panel view-toggle">
+            <div class="toggle-group">
+                <button id="operatorViewBtn" class="active" type="button">Operator View</button>
+                <button id="debugViewBtn" type="button">Debug View</button>
+            </div>
+            <div class="muted" id="viewModeNote">Operator mode focuses on now-state, alerts, and decision timeline.</div>
+        </section>
+
+        <section class="panel now-bar" id="nowBarPanel">
+            <h2 style="margin-top:0;">Now</h2>
+            <div class="now-grid">
+                <div class="kv"><div class="label">Engine</div><div class="value" id="nowEngine">--</div></div>
+                <div class="kv"><div class="label">Last Decision</div><div class="value" id="nowLastDecision">--</div></div>
+                <div class="kv"><div class="label">Active Blocker</div><div class="value" id="nowActiveBlocker">--</div></div>
+                <div class="kv"><div class="label">Data Health</div><div class="value" id="nowDataHealth">--</div></div>
+                <div class="kv"><div class="label">Risk State</div><div class="value" id="nowRiskState">--</div></div>
+            </div>
+        </section>
+
+        <section class="panel" style="margin-bottom: 14px;">
+            <h2>Engine Context</h2>
+            <div class="grid-2">
+                <div class="kv"><div class="label">Active Engine</div><div class="value" id="engineActive">--</div></div>
+                <div class="kv"><div class="label">Promotion Lane</div><div class="value" id="engineLane">--</div></div>
+                <div class="kv"><div class="label">Strategy Family Version</div><div class="value" id="engineFamilyVersion">--</div></div>
+                <div class="kv"><div class="label">Strategy Profile ID</div><div class="value" id="engineProfileId">--</div></div>
+            </div>
+        </section>
+
+        <section class="kpis">
+            <div class="panel kpi"><div class="label">Configured Capital</div><div class="value" id="kpiCapital">--</div><div class="sub">Risk engine capital base</div></div>
+            <div class="panel kpi"><div class="label">Realized PnL</div><div class="value" id="kpiPnlAmount">--</div><div class="sub" id="kpiPnlPct">--</div></div>
+            <div class="panel kpi"><div class="label">Open Positions</div><div class="value" id="kpiOpenPositions">--</div><div class="sub">Current live exposure</div></div>
+            <div class="panel kpi"><div class="label">Trades Today</div><div class="value" id="kpiTrades">--</div><div class="sub">Closed trades in current session</div></div>
+            <div class="panel kpi"><div class="label">Latest Event</div><div class="value" id="kpiLatestEvent">--</div><div class="sub">Most recent vote / signal / position event</div></div>
+            <div class="panel kpi"><div class="label">Instrument</div><div class="value" id="kpiInstrument">--</div><div class="sub" id="kpiDate">--</div></div>
+        </section>
+
+        <section class="layout" style="grid-template-columns: 380px 1fr;">
+            <div class="stack">
+                <div class="panel" id="activeAlertsPanel">
+                    <div class="panel-head">
+                        <h2>Active Alerts</h2>
+                        <span class="chip" id="alertCountChip">0 alerts</span>
+                    </div>
+                    <div id="activeAlertsList" class="alerts-list"></div>
+                </div>
+            </div>
+
+            <div class="panel" id="decisionTimelinePanel">
+                <div class="panel-head">
+                    <h2>Decision Timeline</h2>
+                    <span class="chip" id="timelineLimitChip">Last 25</span>
+                </div>
+                <div class="table-wrap" style="max-height: 320px;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Action</th>
+                                <th>Engine</th>
+                                <th>Reason</th>
+                                <th>Why</th>
+                                <th>Key Metrics</th>
+                            </tr>
+                        </thead>
+                        <tbody id="decisionTimelineTable"></tbody>
+                    </table>
+                </div>
+                <div class="detail-card" id="timelineDetail">Select a decision row to inspect gate path and operator hint.</div>
+            </div>
+        </section>
+
+        <section class="layout">
+            <div class="stack">
+                <div class="panel">
+                    <h2>Current Position</h2>
+                    <div id="currentPosition"></div>
+                </div>
+                <div class="panel">
+                    <h2>Latest Closed Trade</h2>
+                    <div id="latestClosedTrade"></div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>Underlying Chart</h2>
+                <div class="chart-wrap" id="underlyingChart"></div>
+                <div class="detail-card" id="markerDetail">
+                    Select a marker to inspect the exact entry/exit context.
+                </div>
+            </div>
+        </section>
+
+        <section class="panel engine-panel" id="mlPurePanel" style="margin-bottom: 14px;">
+            <div class="panel-head">
+                <h2>ML-Pure Decision Monitor</h2>
+                <button class="toggle-btn" id="mlPureToggle" data-target="mlPurePanelBody" type="button">Expand</button>
+            </div>
+            <div class="collapsible-content collapsed" id="mlPurePanelBody">
+            <div class="grid-2">
+                <div class="kv"><div class="label">Status</div><div class="value" id="mlPureStatus">--</div></div>
+                <div class="kv"><div class="label">Summary</div><div class="value" id="mlPureSummary">--</div></div>
+                <div class="kv"><div class="label">CE Entries</div><div class="value" id="mlPureCountCe">--</div></div>
+                <div class="kv"><div class="label">PE Entries</div><div class="value" id="mlPureCountPe">--</div></div>
+                <div class="kv"><div class="label">HOLD Decisions</div><div class="value" id="mlPureCountHold">--</div></div>
+                <div class="kv"><div class="label">HOLD Rate</div><div class="value" id="mlPureHoldRate">--</div></div>
+                <div class="kv"><div class="label">Low-Edge Conflict Rate</div><div class="value" id="mlPureLowEdgeRate">--</div></div>
+                <div class="kv"><div class="label">Stale/Incomp HOLD Rate</div><div class="value" id="mlPureStaleIncompleteRate">--</div></div>
+                <div class="kv"><div class="label">CE vs PE Skew</div><div class="value" id="mlPureCePeSkew">--</div></div>
+                <div class="kv"><div class="label">Edge (P50 / P90)</div><div class="value" id="mlPureEdgeStats">--</div></div>
+                <div class="kv"><div class="label">Confidence (P50 / P90)</div><div class="value" id="mlPureConfidenceStats">--</div></div>
+                <div class="kv"><div class="label">Top HOLD Reasons</div><div class="value" id="mlPureHoldReasons">--</div></div>
+            </div>
+            </div>
+        </section>
+
+        <section class="panel engine-panel" id="mlGatePanel" style="margin-bottom: 14px;">
+            <div class="panel-head">
+                <h2>Deterministic / ML-Gate Monitor</h2>
+                <button class="toggle-btn" id="mlGateToggle" data-target="mlGatePanelBody" type="button">Expand</button>
+            </div>
+            <div class="collapsible-content collapsed" id="mlGatePanelBody">
+            <div class="grid-2">
+                <div class="kv"><div class="label">Status</div><div class="value" id="mlStatus">--</div></div>
+                <div class="kv"><div class="label">Summary</div><div class="value" id="mlSummary">--</div></div>
+                <div class="kv"><div class="label">Directional Entry Votes (Day)</div><div class="value" id="mlCountDirectional">--</div></div>
+                <div class="kv"><div class="label">Policy Evaluated Votes (Day)</div><div class="value" id="mlCountPolicy">--</div></div>
+                <div class="kv"><div class="label">Base Allowed Votes (Day)</div><div class="value" id="mlCountBaseAllowed">--</div></div>
+                <div class="kv"><div class="label">ML Scored Votes (Day)</div><div class="value" id="mlCountMl">--</div></div>
+                <div class="kv"><div class="label">ML Allowed Votes (Day)</div><div class="value" id="mlCountMlAllowed">--</div></div>
+                <div class="kv"><div class="label">ML Blocked Votes (Day)</div><div class="value" id="mlCountMlBlocked">--</div></div>
+                <div class="kv"><div class="label">Warmup Blocked Votes (Day)</div><div class="value" id="mlCountWarmup">--</div></div>
+                <div class="kv"><div class="label">ML Scored / Base Allowed</div><div class="value" id="mlRatioScored">--</div></div>
+                <div class="kv"><div class="label">ML Block Rate (of ML Scored)</div><div class="value" id="mlRatioBlocked">--</div></div>
+                <div class="kv"><div class="label">Latest ML Decision (Day)</div><div class="value" id="mlLatestDay">--</div></div>
+                <div class="kv"><div class="label">Latest ML Decision (Any)</div><div class="value" id="mlLatestAny">--</div></div>
+            </div>
+            <div class="table-wrap" style="margin-top:12px; max-height: 260px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Strategy</th>
+                            <th>Dir</th>
+                            <th>Mode</th>
+                            <th>Decision</th>
+                            <th>Score</th>
+                            <th>Threshold</th>
+                            <th>Policy Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="mlDecisionsTable"></tbody>
+                </table>
+            </div>
+            </div>
+        </section>
+
+        <section class="tables debug-only">
+            <div class="panel">
+                <h3>Recent Votes</h3>
+                <div class="table-wrap"><table><thead><tr><th>Time</th><th>Strategy</th><th>Dir</th><th>Conf</th><th>Policy</th></tr></thead><tbody id="votesTable"></tbody></table></div>
+            </div>
+            <div class="panel">
+                <h3>Recent Signals</h3>
+                <div class="table-wrap"><table><thead><tr><th>Time</th><th>Type</th><th>Strategy</th><th>Dir</th><th>Strike</th><th>Premium</th><th>Reason</th></tr></thead><tbody id="signalsTable"></tbody></table></div>
+            </div>
+            <div class="panel">
+                <h3>Recent Trade Activity</h3>
+                <div class="table-wrap"><table><thead><tr><th>Update</th><th>Entry Time</th><th>Status</th><th>Strategy</th><th>Dir</th><th>Strike</th><th>Entry</th><th>LTP</th><th>Exit Reason</th><th>PnL</th></tr></thead><tbody id="tradesTable"></tbody></table></div>
+            </div>
+        </section>
+
+        <section class="diag debug-only">
+            <div class="panel">
+                <h3>By Strategy</h3>
+                <div class="table-wrap"><table><thead><tr><th>Strategy</th><th>Trades</th><th>Total Cap PnL%</th></tr></thead><tbody id="strategyDiag"></tbody></table></div>
+            </div>
+            <div class="panel">
+                <h3>By Regime</h3>
+                <div class="table-wrap"><table><thead><tr><th>Regime</th><th>Trades</th><th>Total Cap PnL%</th></tr></thead><tbody id="regimeDiag"></tbody></table></div>
+            </div>
+            <div class="panel">
+                <h3>Exit Reasons</h3>
+                <div class="table-wrap"><table><thead><tr><th>Reason</th><th>Count</th><th>Avg Cap PnL%</th></tr></thead><tbody id="exitDiag"></tbody></table></div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const state = {
+            session: null,
+            chart: null,
+            chartInstance: null,
+            selectedMarker: null,
+            selectedTimelineId: null,
+            previousTimelineIds: new Set(),
+            sessionTimer: null,
+            chartTimer: null,
+            viewMode: "operator",
+            timelineLimit: 25,
+        };
+
+        function qs(value) {
+            return document.querySelector(value);
+        }
+
+        function money(value) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+            return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
+        }
+
+        function pct(value) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+            return `${(Number(value) * 100).toFixed(2)}%`;
+        }
+
+        function ratio(value, digits = 1) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+            return `${(Number(value) * 100).toFixed(digits)}%`;
+        }
+
+        function shortTs(value) {
+            if (!value) return "--";
+            const dt = new Date(value);
+            if (Number.isNaN(dt.getTime())) return String(value);
+            return dt.toLocaleString("en-IN", {
+                timeZone: "Asia/Kolkata",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                day: "2-digit",
+                month: "short",
+            });
+        }
+
+        function text(value) {
+            return value === null || value === undefined || value === "" ? "--" : String(value);
+        }
+
+        function setBanner(id, kind, message) {
+            const el = qs(id);
+            el.className = "banner";
+            if (!message) {
+                el.textContent = "";
+                return;
+            }
+            el.classList.add("show", kind);
+            el.textContent = message;
+        }
+
+        async function fetchJson(url) {
+            const res = await fetch(url);
+            if (!res.ok) {
+                let body = {};
+                try { body = await res.json(); } catch (_) {}
+                throw new Error(body.detail || `HTTP ${res.status}`);
+            }
+            return res.json();
+        }
+
+        function toneForState(value) {
+            const token = String(value || "").toLowerCase();
+            if (!token) return "state-warn";
+            if (token.includes("critical") || token.includes("halt") || token.includes("risk_halt")) return "state-critical";
+            if (token.includes("warn") || token.includes("pause") || token.includes("stale") || token.includes("degraded")) return "state-warn";
+            return "state-ok";
+        }
+
+        function metricsSummary(metrics) {
+            if (!metrics || typeof metrics !== "object") return "--";
+            const ordered = ["edge", "confidence", "ce_prob", "pe_prob", "ce_threshold", "pe_threshold"];
+            const items = [];
+            ordered.forEach((key) => {
+                if (metrics[key] === null || metrics[key] === undefined || Number.isNaN(Number(metrics[key]))) return;
+                items.push(`${key}=${Number(metrics[key]).toFixed(3)}`);
+            });
+            return items.length ? items.slice(0, 3).join(" | ") : "--";
+        }
+
+        function setPanelCollapsed(panelKey, collapsed) {
+            const bodyId = panelKey === "mlPure" ? "#mlPurePanelBody" : "#mlGatePanelBody";
+            const btnId = panelKey === "mlPure" ? "#mlPureToggle" : "#mlGateToggle";
+            const body = qs(bodyId);
+            const btn = qs(btnId);
+            if (!body || !btn) return;
+            body.classList.toggle("collapsed", collapsed);
+            btn.textContent = collapsed ? "Expand" : "Collapse";
+        }
+
+        function applyViewMode(mode, forceRefresh = false) {
+            state.viewMode = mode === "debug" ? "debug" : "operator";
+            document.body.classList.toggle("debug-mode", state.viewMode === "debug");
+            document.body.classList.toggle("operator-mode", state.viewMode !== "debug");
+            qs("#operatorViewBtn")?.classList.toggle("active", state.viewMode === "operator");
+            qs("#debugViewBtn")?.classList.toggle("active", state.viewMode === "debug");
+            qs("#viewModeNote").textContent = state.viewMode === "debug"
+                ? "Debug mode shows dense raw diagnostics and policy tables."
+                : "Operator mode focuses on now-state, alerts, and decision timeline.";
+            if (state.viewMode === "debug") {
+                setPanelCollapsed("mlPure", false);
+                setPanelCollapsed("mlGate", false);
+            } else {
+                setPanelCollapsed("mlPure", true);
+                setPanelCollapsed("mlGate", true);
+            }
+            if (forceRefresh) {
+                clearTimeout(state.sessionTimer);
+                refreshSession();
+            }
+        }
+
+        function renderTimelineDetail(item) {
+            const container = qs("#timelineDetail");
+            if (!container) return;
+            if (!item) {
+                container.textContent = "Select a decision row to inspect gate path and operator hint.";
+                return;
+            }
+            container.innerHTML = `
+                <strong>${text(item.action)} | ${text(item.reason_code)}</strong><br>
+                <span class="muted">Time:</span> ${shortTs(item.ts)} |
+                <span class="muted">Engine:</span> ${text(item.engine_mode)} |
+                <span class="muted">Mode:</span> ${text(item.decision_mode)}<br>
+                <span class="muted">Why:</span> ${text(item.explanation)}<br>
+                <span class="muted">Operator Hint:</span> ${text(item.operator_hint)}<br>
+                <span class="muted">Gate Path:</span> ${text(item.gate_path)}<br>
+                <span class="muted">Metrics:</span> ${metricsSummary(item.metrics)}
+            `;
+        }
+
+        function renderDecisionTimeline(session) {
+            const explain = session?.decision_explainability || {};
+            const timeline = Array.isArray(explain.timeline) ? explain.timeline : [];
+            const table = qs("#decisionTimelineTable");
+            if (!table) return;
+            qs("#timelineLimitChip").textContent = `Last ${timeline.length}`;
+            if (!timeline.length) {
+                table.innerHTML = `<tr><td colspan="6" class="muted">No recent decisions available.</td></tr>`;
+                renderTimelineDetail(null);
+                return;
+            }
+            const prevIds = state.previousTimelineIds;
+            const nextIds = new Set();
+            table.innerHTML = timeline.map((item) => {
+                const rowId = String(item.id || `${item.ts || ""}:${item.reason_code || ""}`);
+                nextIds.add(rowId);
+                const selected = rowId === state.selectedTimelineId;
+                const changed = !prevIds.has(rowId);
+                return `
+                    <tr class="timeline-row${selected ? " selected" : ""}${changed ? " changed" : ""}" data-row-id="${rowId}">
+                        <td>${shortTs(item.ts)}</td>
+                        <td><span class="tag ${String(item.action || "").toLowerCase() === "hold" ? "rule" : (String(item.action || "").toLowerCase() === "exit" ? "exit" : "entry")}">${text(item.action)}</span></td>
+                        <td>${text(item.engine_mode)}</td>
+                        <td>${text(item.reason_code)}</td>
+                        <td title="${text(item.explanation)}">${text(item.explanation)}</td>
+                        <td>${metricsSummary(item.metrics)}</td>
+                    </tr>
+                `;
+            }).join("");
+            if (!state.selectedTimelineId || !timeline.some((item) => String(item.id || `${item.ts || ""}:${item.reason_code || ""}`) === state.selectedTimelineId)) {
+                state.selectedTimelineId = String(timeline[0].id || `${timeline[0].ts || ""}:${timeline[0].reason_code || ""}`);
+            }
+            table.querySelectorAll("tr[data-row-id]").forEach((row) => {
+                row.addEventListener("click", () => {
+                    state.selectedTimelineId = String(row.getAttribute("data-row-id") || "");
+                    renderDecisionTimeline(session);
+                });
+            });
+            const selectedItem = timeline.find((item) => String(item.id || `${item.ts || ""}:${item.reason_code || ""}`) === state.selectedTimelineId) || timeline[0];
+            renderTimelineDetail(selectedItem);
+            state.previousTimelineIds = nextIds;
+        }
+
+        function renderActiveAlerts(session) {
+            const alerts = Array.isArray(session?.active_alerts) ? session.active_alerts : [];
+            const container = qs("#activeAlertsList");
+            if (!container) return;
+            qs("#alertCountChip").textContent = `${alerts.length} alert${alerts.length === 1 ? "" : "s"}`;
+            if (!alerts.length) {
+                container.innerHTML = `<div class="empty">No active alerts.</div>`;
+                return;
+            }
+            container.innerHTML = alerts.map((alert) => `
+                <div class="alert-item ${String(alert.severity || "info").toLowerCase()}">
+                    <div class="alert-title">
+                        <span>${text(alert.title)}</span>
+                        <span class="tag ${String(alert.severity || "").toLowerCase() === "critical" ? "block" : (String(alert.severity || "").toLowerCase() === "warning" ? "warmup" : "rule")}">${text(alert.severity)}</span>
+                    </div>
+                    <div>${text(alert.detail)}</div>
+                    <div class="muted" style="margin-top:4px;">Operator next step: ${text(alert.operator_next_step)}</div>
+                    <div class="muted" style="margin-top:4px;">Source: ${text(alert.source)} | Seen: ${shortTs(alert.last_seen_ist)} | x${text(alert.occurrences)}</div>
+                </div>
+            `).join("");
+        }
+
+        function renderCurrentPosition(position) {
+            const container = qs("#currentPosition");
+            if (!position) {
+                container.innerHTML = `<div class="empty">No open position.</div>`;
+                return;
+            }
+            container.innerHTML = `
+                <div class="grid-2">
+                    <div class="kv"><div class="label">Position</div><div class="value">${text(position.position_id)}</div></div>
+                    <div class="kv"><div class="label">Strategy</div><div class="value">${text(position.strategy)}</div></div>
+                    <div class="kv"><div class="label">Regime</div><div class="value">${text(position.regime)}</div></div>
+                    <div class="kv"><div class="label">Direction / Strike</div><div class="value">${text(position.direction)} / ${text(position.strike)}</div></div>
+                    <div class="kv"><div class="label">Entry</div><div class="value">${shortTs(position.entry_time)} @ ${money(position.entry_premium)}</div></div>
+                    <div class="kv"><div class="label">Current</div><div class="value">${money(position.current_premium)} (${pct(position.pnl_pct)})</div></div>
+                    <div class="kv"><div class="label">Unrealized PnL</div><div class="value">${money(position.unrealized_pnl_amount)} / ${pct(position.unrealized_pnl_pct)}</div></div>
+                    <div class="kv"><div class="label">Stop / Target</div><div class="value">${money(position.stop_price)} / ${pct(position.target_pct)}</div></div>
+                    <div class="kv"><div class="label">High Water</div><div class="value">${money(position.high_water_premium)}</div></div>
+                    <div class="kv"><div class="label">Trail</div><div class="value">${position.trailing_enabled ? "Enabled" : "Off"}${position.trailing_active ? " / Active" : ""}</div></div>
+                </div>
+                <div class="detail-card"><strong>Reason:</strong> ${text(position.entry_reason)}</div>
+            `;
+        }
+
+        function renderLatestClosedTrade(trade) {
+            const container = qs("#latestClosedTrade");
+            if (!trade) {
+                container.innerHTML = `<div class="empty">No closed trade for this session yet.</div>`;
+                return;
+            }
+            container.innerHTML = `
+                <div class="grid-2">
+                    <div class="kv"><div class="label">Position</div><div class="value">${text(trade.position_id)}</div></div>
+                    <div class="kv"><div class="label">Strategy</div><div class="value">${text(trade.entry_strategy)}</div></div>
+                    <div class="kv"><div class="label">Regime</div><div class="value">${text(trade.regime)}</div></div>
+                    <div class="kv"><div class="label">Direction / Strike</div><div class="value">${text(trade.direction)} / ${text(trade.strike)}</div></div>
+                    <div class="kv"><div class="label">Entry</div><div class="value">${shortTs(trade.entry_time)} @ ${money(trade.entry_premium)}</div></div>
+                    <div class="kv"><div class="label">Exit</div><div class="value">${shortTs(trade.exit_time)} @ ${money(trade.exit_premium)}</div></div>
+                    <div class="kv"><div class="label">Capital PnL</div><div class="value">${money(trade.capital_pnl_amount)} / ${pct(trade.capital_pnl_pct)}</div></div>
+                    <div class="kv"><div class="label">Option PnL</div><div class="value">${pct(trade.pnl_pct_net)}</div></div>
+                </div>
+                <div class="detail-card"><strong>Exit:</strong> ${text(trade.exit_reason)}<br><strong>Entry reason:</strong> ${text(trade.entry_reason)}</div>
+            `;
+        }
+
+        function renderRows(targetId, rows, rowHtml, emptyText, colspan = 5) {
+            const target = qs(targetId);
+            if (!Array.isArray(rows) || rows.length === 0) {
+                target.innerHTML = `<tr><td colspan="${colspan}" class="muted">${emptyText}</td></tr>`;
+                return;
+            }
+            target.innerHTML = rows.map(rowHtml).join("");
+        }
+
+        function renderDiagnostics(session) {
+            const summary = session?.today_summary || {};
+            renderRows("#strategyDiag", summary.by_strategy || [], (row) => `
+                <tr>
+                    <td>${text(row.entry_strategy)}</td>
+                    <td>${text(row.trades)}</td>
+                    <td>${pct(row.total_capital_pnl_pct)}</td>
+                </tr>
+            `, "No strategy diagnostics.", 3);
+            renderRows("#regimeDiag", summary.by_regime || [], (row) => `
+                <tr>
+                    <td>${text(row.regime)}</td>
+                    <td>${text(row.trades)}</td>
+                    <td>${pct(row.total_capital_pnl_pct)}</td>
+                </tr>
+            `, "No regime diagnostics.", 3);
+            renderRows("#exitDiag", summary.exit_reasons || [], (row) => `
+                <tr>
+                    <td>${text(row.exit_reason)}</td>
+                    <td>${text(row.count)}</td>
+                    <td>${pct(row.avg_capital_pnl_pct)}</td>
+                </tr>
+            `, "No exits yet.", 3);
+        }
+
+        function renderEngineContext(session) {
+            const ctx = session?.engine_context || {};
+            const hints = session?.ui_hints || {};
+            const activePanel = String(hints.active_engine_panel || "").toLowerCase();
+            const active = String(ctx.active_engine_mode || "unknown").toLowerCase();
+            qs("#engineActive").textContent = text(ctx.active_engine_mode || "unknown");
+            qs("#engineLane").textContent = text(session?.promotion_lane || "deterministic");
+            qs("#engineFamilyVersion").textContent = text(ctx.strategy_family_version);
+            qs("#engineProfileId").textContent = text(ctx.strategy_profile_id);
+            const pureActive = activePanel ? activePanel === "ml_pure" : active === "ml_pure";
+            qs("#mlPurePanel").classList.toggle("active", pureActive);
+            qs("#mlGatePanel").classList.toggle("active", !pureActive);
+        }
+
+        function renderOpsState(session) {
+            const ops = session?.ops_state || {};
+            const latest = session?.decision_explainability?.latest_decision || null;
+            const engineValue = text(session?.engine_context?.active_engine_mode || ops.engine_state || "unknown");
+            const lastDecision = latest ? `${text(latest.action)} | ${text(latest.reason_code)}` : "--";
+            const blocker = text(ops.active_blocker);
+            const dataHealth = text(ops.data_health_state);
+            const riskState = text(ops.risk_state);
+            qs("#nowEngine").innerHTML = `${engineValue}<span class="state-pill ${toneForState(ops.engine_state)}">${text(ops.engine_state)}</span>`;
+            qs("#nowLastDecision").innerHTML = `${lastDecision}${latest ? `<span class="state-pill ${toneForState(latest.action)}">${text(latest.action)}</span>` : ""}`;
+            qs("#nowActiveBlocker").innerHTML = `${blocker}${blocker !== "--" ? `<span class="state-pill ${toneForState(blocker)}">${text(blocker)}</span>` : ""}`;
+            qs("#nowDataHealth").innerHTML = `${dataHealth}<span class="state-pill ${toneForState(dataHealth)}">${text(dataHealth)}</span>`;
+            qs("#nowRiskState").innerHTML = `${riskState}<span class="state-pill ${toneForState(riskState)}">${text(riskState)}</span>`;
+        }
+
+        function renderUiHints(session) {
+            const hints = session?.ui_hints || {};
+            const activePanel = String(hints.active_engine_panel || "").toLowerCase();
+            const focusPanel = String(hints.recommended_focus_panel || "").toLowerCase();
+            qs("#mlPurePanel").classList.toggle("active", activePanel === "ml_pure");
+            qs("#mlGatePanel").classList.toggle("active", activePanel === "ml_gate" || activePanel === "");
+            ["#activeAlertsPanel", "#decisionTimelinePanel", "#mlPurePanel", "#mlGatePanel"].forEach((id) => {
+                qs(id)?.classList.remove("focus-highlight");
+            });
+            if (focusPanel === "active_alerts") qs("#activeAlertsPanel")?.classList.add("focus-highlight");
+            if (focusPanel === "decision_timeline") qs("#decisionTimelinePanel")?.classList.add("focus-highlight");
+            if (focusPanel === "engine_panel") {
+                if (activePanel === "ml_pure") qs("#mlPurePanel")?.classList.add("focus-highlight");
+                else qs("#mlGatePanel")?.classList.add("focus-highlight");
+            }
+        }
+
+        function renderMlPureDiagnostics(session) {
+            const diag = session?.decision_diagnostics?.ml_pure || {};
+            const counts = diag.counts || {};
+            const ratios = diag.ratios || {};
+            const edge = diag.edge_distribution || {};
+            const conf = diag.confidence_distribution || {};
+            const holdReasons = diag.hold_reasons || {};
+            const topReasons = Object.entries(holdReasons)
+                .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+                .slice(0, 3)
+                .map(([k, v]) => `${k}:${v}`)
+                .join(" | ");
+
+            qs("#mlPureStatus").textContent = text(diag.status);
+            qs("#mlPureSummary").textContent = text(diag.summary);
+            qs("#mlPureCountCe").textContent = text(counts.entries_ce);
+            qs("#mlPureCountPe").textContent = text(counts.entries_pe);
+            qs("#mlPureCountHold").textContent = text(counts.holds);
+            qs("#mlPureHoldRate").textContent = ratio(ratios.hold_rate);
+            qs("#mlPureLowEdgeRate").textContent = ratio(ratios.low_edge_conflict_rate);
+            const staleIncomplete = Number(ratios.feature_stale_hold_rate || 0) + Number(ratios.feature_incomplete_hold_rate || 0);
+            qs("#mlPureStaleIncompleteRate").textContent = ratio(staleIncomplete);
+            qs("#mlPureCePeSkew").textContent = ratio(ratios.ce_vs_pe_skew);
+            qs("#mlPureEdgeStats").textContent = edge.samples ? `${money(edge.p50)} / ${money(edge.p90)}` : "--";
+            qs("#mlPureConfidenceStats").textContent = conf.samples ? `${money(conf.p50)} / ${money(conf.p90)}` : "--";
+            qs("#mlPureHoldReasons").textContent = topReasons || "--";
+        }
+
+        function renderMlDiagnostics(session) {
+            const diag = session?.decision_diagnostics?.ml_gate || session?.ml_diagnostics || {};
+            const counts = diag.counts || {};
+            const ratios = diag.ratios || {};
+            qs("#mlStatus").textContent = text(diag.status);
+            qs("#mlSummary").textContent = text(diag.summary);
+            qs("#mlCountDirectional").textContent = text(counts.directional_entry_votes_day);
+            qs("#mlCountPolicy").textContent = text(counts.policy_evaluated_votes_day);
+            qs("#mlCountBaseAllowed").textContent = text(counts.base_allowed_votes_day);
+            qs("#mlCountMl").textContent = text(counts.ml_policy_votes_day);
+            qs("#mlCountMlAllowed").textContent = text(counts.ml_allowed_votes_day);
+            qs("#mlCountMlBlocked").textContent = text(counts.ml_blocked_votes_day);
+            qs("#mlCountWarmup").textContent = text(counts.warmup_blocked_votes_day);
+            qs("#mlRatioScored").textContent = ratio(ratios.ml_scored_to_base_allowed);
+            qs("#mlRatioBlocked").textContent = ratio(ratios.ml_block_rate_day);
+
+            const latestDay = diag.latest_ml_decision_day;
+            const latestAny = diag.latest_ml_decision_any;
+            qs("#mlLatestDay").textContent = latestDay ? `${shortTs(latestDay.timestamp)} | ${text(latestDay.strategy)}` : "--";
+            qs("#mlLatestAny").textContent = latestAny ? `${shortTs(latestAny.timestamp)} | ${text(latestAny.strategy)}` : "--";
+
+            renderRows("#mlDecisionsTable", diag.recent_policy_decisions || [], (row) => {
+                const modeTag = row.ml_applied ? `<span class="tag ml">ML</span>` : `<span class="tag rule">BASE</span>`;
+                let decisionTag = "--";
+                if (row.warmup_blocked) {
+                    decisionTag = `<span class="tag warmup">WARMUP</span>`;
+                } else if (row.policy_allowed === true) {
+                    decisionTag = `<span class="tag pass">PASS</span>`;
+                } else if (row.policy_allowed === false) {
+                    decisionTag = `<span class="tag block">BLOCK</span>`;
+                }
+                const score = row.ml_applied ? money(row.ml_score_calibrated) : money(row.policy_score);
+                const threshold = row.ml_applied ? money(row.ml_threshold) : "--";
+                return `
+                    <tr>
+                        <td>${shortTs(row.timestamp)}</td>
+                        <td>${text(row.strategy)}</td>
+                        <td>${text(row.direction)}</td>
+                        <td>${modeTag}</td>
+                        <td>${decisionTag}</td>
+                        <td>${score}</td>
+                        <td>${threshold}</td>
+                        <td title="${text(row.policy_reason || row.warmup_reason)}">${text(row.policy_reason || row.warmup_reason)}</td>
+                    </tr>
+                `;
+            }, "No policy decisions in sampled window.", 8);
+        }
+
+        function updateHeader(session) {
+            const fresh = session.session?.data_freshness || {};
+            const flags = [fresh.votes_fresh, fresh.signals_fresh, fresh.positions_fresh];
+            const allFresh = flags.every(Boolean);
+            qs("#sessionChip").textContent = `Session: ${text(session.session?.date_ist)} IST`;
+            qs("#freshnessChip").textContent = `Freshness: ${allFresh ? "fresh" : "degraded"}`;
+            qs("#kpiCapital").textContent = money(session.capital?.configured_capital);
+            qs("#kpiPnlAmount").innerHTML = `<span class="${Number(session.capital?.realized_pnl_amount || 0) >= 0 ? "up" : "down"}">${money(session.capital?.realized_pnl_amount)}</span>`;
+            qs("#kpiPnlPct").textContent = pct(session.capital?.realized_pnl_pct);
+            qs("#kpiOpenPositions").textContent = text(session.counts?.open_positions);
+            qs("#kpiTrades").textContent = text(session.counts?.closed_trades);
+            qs("#kpiLatestEvent").textContent = shortTs(session.session?.latest_event_time);
+            qs("#kpiInstrument").textContent = text(session.session?.instrument);
+            qs("#kpiDate").textContent = `Session ${text(session.session?.date_ist)}`;
+        }
+
+        function buildMarkerDetail(marker) {
+            if (!marker) {
+                qs("#markerDetail").textContent = "Select a marker to inspect the exact entry/exit context.";
+                return;
+            }
+            qs("#markerDetail").innerHTML = `
+                <strong>${text(marker.label)}</strong><br>
+                <span class="muted">Time:</span> ${shortTs(marker.timestamp)} |
+                <span class="muted">Strategy:</span> ${text(marker.strategy)} |
+                <span class="muted">Regime:</span> ${text(marker.regime)} |
+                <span class="muted">Direction:</span> ${text(marker.direction)} |
+                <span class="muted">Strike:</span> ${text(marker.strike)} |
+                <span class="muted">Premium:</span> ${money(marker.premium)}
+            `;
+        }
+
+        function nearestChartIndex(series, timestamp) {
+            if (!Array.isArray(series) || series.length === 0 || !timestamp) return -1;
+            const target = new Date(timestamp).getTime();
+            if (Number.isNaN(target)) return -1;
+            let best = -1;
+            let bestDiff = Number.POSITIVE_INFINITY;
+            series.forEach((value, index) => {
+                const current = new Date(value).getTime();
+                if (Number.isNaN(current)) return;
+                const diff = Math.abs(current - target);
+                if (diff < bestDiff) {
+                    best = index;
+                    bestDiff = diff;
+                }
+            });
+            return best;
+        }
+
+        function renderChart() {
+            if (!state.chartInstance) {
+                state.chartInstance = echarts.init(qs("#underlyingChart"));
+                state.chartInstance.on("click", (params) => {
+                    const marker = params?.data?.marker || null;
+                    if (marker) {
+                        state.selectedMarker = marker;
+                        buildMarkerDetail(marker);
+                    }
+                });
+            }
+            const chart = state.session?.session_chart || state.chart?.price_chart;
+            if (!chart || !Array.isArray(chart.timestamps) || chart.timestamps.length === 0) {
+                state.chartInstance.clear();
+                qs("#markerDetail").textContent = "Chart data unavailable.";
+                return;
+            }
+            const markers = Array.isArray(state.session?.chart_markers) ? state.session.chart_markers : [];
+            const entries = [];
+            const exits = [];
+            markers.forEach((marker) => {
+                const index = nearestChartIndex(chart.timestamps, marker.timestamp);
+                if (index < 0) return;
+                const point = { value: [chart.labels[index] || chart.timestamps[index], chart.prices[index]], marker };
+                if (marker.type === "exit") {
+                    exits.push(point);
+                } else {
+                    entries.push(point);
+                }
+            });
+            state.chartInstance.setOption({
+                animation: false,
+                grid: { left: 54, right: 20, top: 28, bottom: 40 },
+                tooltip: {
+                    trigger: "axis",
+                    axisPointer: { type: "cross" },
+                },
+                xAxis: {
+                    type: "category",
+                    data: chart.labels,
+                    axisLabel: { color: "#5b7081" },
+                },
+                yAxis: {
+                    type: "value",
+                    scale: true,
+                    axisLabel: { color: "#5b7081" },
+                    splitLine: { lineStyle: { color: "#ebf0f4" } },
+                },
+                legend: {
+                    top: 0,
+                    textStyle: { color: "#4b6070" },
+                },
+                series: [
+                    {
+                        name: "Underlying",
+                        type: "line",
+                        smooth: false,
+                        symbol: "none",
+                        data: chart.prices,
+                        lineStyle: { width: 2, color: "#0f4c81" },
+                        itemStyle: { color: "#0f4c81" },
+                    },
+                    {
+                        name: "Buy",
+                        type: "scatter",
+                        data: entries,
+                        symbol: "triangle",
+                        symbolRotate: 0,
+                        symbolSize: 16,
+                        label: {
+                            show: true,
+                            formatter: "BUY",
+                            position: "top",
+                            color: "#0f9d58",
+                            fontWeight: 700,
+                            fontSize: 11,
+                        },
+                        itemStyle: { color: "#0f9d58" },
+                        z: 8,
+                        tooltip: {
+                            formatter: (params) => {
+                                const marker = params?.data?.marker || {};
+                                return `BUY<br>${marker.label || "Entry"}<br>${shortTs(marker.timestamp)}<br>Premium: ${money(marker.premium)}`;
+                            },
+                        },
+                    },
+                    {
+                        name: "Sell",
+                        type: "scatter",
+                        data: exits,
+                        symbol: "triangle",
+                        symbolRotate: 180,
+                        symbolSize: 16,
+                        label: {
+                            show: true,
+                            formatter: "SELL",
+                            position: "bottom",
+                            color: "#c2410c",
+                            fontWeight: 700,
+                            fontSize: 11,
+                        },
+                        itemStyle: { color: "#c2410c" },
+                        z: 8,
+                        tooltip: {
+                            formatter: (params) => {
+                                const marker = params?.data?.marker || {};
+                                return `SELL<br>${marker.label || "Exit"}<br>${shortTs(marker.timestamp)}<br>Premium: ${money(marker.premium)}`;
+                            },
+                        },
+                    },
+                ],
+            });
+            if (!state.selectedMarker && markers.length) {
+                state.selectedMarker = markers[markers.length - 1];
+            }
+            buildMarkerDetail(state.selectedMarker);
+        }
+
+        async function refreshSession() {
+            try {
+                const params = new URLSearchParams();
+                params.set("timeline_limit", String(state.timelineLimit));
+                params.set("debug_view", state.viewMode === "debug" ? "1" : "0");
+                const data = await fetchJson(`/api/live/strategy/session?${params.toString()}`);
+                state.session = data;
+                updateHeader(data);
+                renderEngineContext(data);
+                renderOpsState(data);
+                renderUiHints(data);
+                renderActiveAlerts(data);
+                renderDecisionTimeline(data);
+                renderCurrentPosition(data.current_position);
+                renderLatestClosedTrade(data.latest_closed_trade);
+
+                const fresh = data.session?.data_freshness || {};
+                const stale = [fresh.votes_fresh, fresh.signals_fresh, fresh.positions_fresh].some((item) => item === false);
+                const criticalAlert = (Array.isArray(data.active_alerts) ? data.active_alerts : []).find(
+                    (item) => String(item.severity || "").toLowerCase() === "critical"
+                );
+                setBanner("#errorBanner", "error", criticalAlert ? `${text(criticalAlert.title)}: ${text(criticalAlert.detail)}` : "");
+                setBanner(
+                    "#warnBanner",
+                    "warn",
+                    stale ? "Live strategy data is stale relative to the expected polling window." : (data.warnings || []).join(", ")
+                );
+
+                if (!document.hidden) {
+                    renderRows("#votesTable", data.recent_votes || [], (row) => `
+                        <tr>
+                            <td>${shortTs(row.timestamp)}</td>
+                            <td>${text(row.strategy)}</td>
+                            <td><span class="tag ${String(row.direction || "").toLowerCase() === "pe" ? "pe" : "ce"}">${text(row.direction)}</span></td>
+                            <td>${row.confidence === null || row.confidence === undefined ? "--" : Number(row.confidence).toFixed(2)}</td>
+                            <td>${row.policy_allowed === null || row.policy_allowed === undefined ? "--" : (row.policy_allowed ? "PASS" : "BLOCK")}</td>
+                        </tr>
+                    `, "No votes yet.", 5);
+                    renderRows("#signalsTable", data.recent_signals || [], (row) => `
+                        <tr>
+                            <td>${shortTs(row.timestamp)}</td>
+                            <td><span class="tag ${String(row.signal_type || "").toLowerCase() === "exit" ? "exit" : "entry"}">${text(row.signal_type)}</span></td>
+                            <td>${text(row.strategy)}</td>
+                            <td>${text(row.direction)}</td>
+                            <td>${text(row.strike)}</td>
+                            <td>${money(row.premium)}</td>
+                            <td title="${text(row.reason)}">${text(row.exit_reason || row.reason)}</td>
+                        </tr>
+                    `, "No signals yet.", 7);
+                    renderRows("#tradesTable", data.recent_activity || [], (row) => `
+                        <tr>
+                            <td>${shortTs(row.last_update_time || row.event_time)}</td>
+                            <td>${shortTs(row.entry_time)}</td>
+                            <td><span class="tag ${String(row.status || "").toLowerCase() === "open" ? "open" : "closed"}">${text(row.status)}</span></td>
+                            <td>${text(row.strategy)}</td>
+                            <td>${text(row.direction)}</td>
+                            <td>${text(row.strike)}</td>
+                            <td>${money(row.entry_premium)}</td>
+                            <td>${money(row.current_premium)}</td>
+                            <td>${text(row.exit_reason)}</td>
+                            <td class="${Number(row.capital_pnl_amount || 0) >= 0 ? "up" : "down"}">${money(row.capital_pnl_amount)}</td>
+                        </tr>
+                    `, "No trade activity yet.", 10);
+                    renderDiagnostics(data);
+                    renderMlPureDiagnostics(data);
+                    renderMlDiagnostics(data);
+                }
+            } catch (error) {
+                setBanner("#errorBanner", "error", `Live session load failed: ${error.message}`);
+            } finally {
+                scheduleSessionRefresh();
+            }
+        }
+
+        async function refreshChart() {
+            if (document.hidden) {
+                scheduleChartRefresh();
+                return;
+            }
+            const instrument = state.session?.session?.instrument;
+            if (!instrument) {
+                scheduleChartRefresh();
+                return;
+            }
+            try {
+                const data = await fetchJson(`/api/market-data/charts/${encodeURIComponent(instrument)}?timeframe=1m&limit=480`);
+                state.chart = data;
+                renderChart();
+            } catch (error) {
+                setBanner("#warnBanner", "warn", `Chart data unavailable: ${error.message}`);
+            } finally {
+                scheduleChartRefresh();
+            }
+        }
+
+        function scheduleSessionRefresh() {
+            clearTimeout(state.sessionTimer);
+            state.sessionTimer = setTimeout(refreshSession, 3000);
+        }
+
+        function scheduleChartRefresh() {
+            clearTimeout(state.chartTimer);
+            const delay = state.session?.counts?.open_positions ? 5000 : 15000;
+            state.chartTimer = setTimeout(refreshChart, delay);
+        }
+
+        qs("#operatorViewBtn")?.addEventListener("click", () => applyViewMode("operator", true));
+        qs("#debugViewBtn")?.addEventListener("click", () => applyViewMode("debug", true));
+        qs("#mlPureToggle")?.addEventListener("click", () => {
+            const isCollapsed = qs("#mlPurePanelBody")?.classList.contains("collapsed");
+            setPanelCollapsed("mlPure", !isCollapsed);
+        });
+        qs("#mlGateToggle")?.addEventListener("click", () => {
+            const isCollapsed = qs("#mlGatePanelBody")?.classList.contains("collapsed");
+            setPanelCollapsed("mlGate", !isCollapsed);
+        });
+
+        const initialParams = new URLSearchParams(window.location.search);
+        if (initialParams.get("debug_view") === "1") {
+            state.viewMode = "debug";
+        }
+        applyViewMode(state.viewMode, false);
+
+        refreshSession();
+        refreshChart();
+        window.addEventListener("resize", () => {
+            if (state.chartInstance) state.chartInstance.resize();
+        });
+    </script>
+</body>
+</html>

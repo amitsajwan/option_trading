@@ -17,9 +17,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY market_data_dashboard /app/market_data_dashboard
 COPY contracts_app /app/contracts_app
 COPY ingestion_app /app/ingestion_app
-COPY ml_pipeline /app/ml_pipeline
+COPY snapshot_app /app/snapshot_app
 COPY ml_pipeline_2 /app/ml_pipeline_2
-COPY redis_key_manager.py /app/redis_key_manager.py
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app \
