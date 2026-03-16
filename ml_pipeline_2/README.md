@@ -32,6 +32,7 @@ Installed console scripts:
 - `ml-pipeline-move-detector`
 - `ml-pipeline-direction`
 - `ml-pipeline-recovery-matrix`
+- `ml-pipeline-recovery-release`
 - `ml-pipeline-background-job`
 - `ml-pipeline-publish-model`
 
@@ -98,6 +99,31 @@ python -m ml_pipeline_2.run_recovery_matrix \
   --config ml_pipeline_2/configs/research/recovery_matrix.tuning_1m_e2e.json
 ```
 
+Run the supported end-to-end release flow for a recovery manifest:
+
+```bash
+python -m ml_pipeline_2.run_recovery_release \
+  --config ml_pipeline_2/configs/research/fo_expiry_aware_recovery.best_1m_e2e.json \
+  --model-group banknifty_futures/h15_tp_auto \
+  --profile-id openfe_v9_dual \
+  --model-bucket-url gs://<model-bucket>/published_models
+```
+
+This release flow will:
+- run training when `--config` is used, or reuse an existing run via `--run-dir`
+- run a threshold sweep by default
+- block non-promotable/fallback candidates by default
+- publish locally under `ml_pipeline_2/artifacts/published_models/...`
+- optionally sync the published model group to GCS
+- write `release/ml_pure_runtime.env` with the `ML_PURE_*` handoff for live/eval
+
+Apply the generated `release/ml_pure_runtime.env` to `.env.compose` with:
+
+```bash
+export RELEASE_ENV_PATH=ml_pipeline_2/artifacts/research/<run_name>_<timestamp>/release/ml_pure_runtime.env
+./ops/gcp/apply_ml_pure_release.sh
+```
+
 Refill a capped matrix after one or more background jobs finish:
 
 ```bash
@@ -132,6 +158,8 @@ python -m ml_pipeline_2.run_publish_model \
   --model-group banknifty_futures/h15_tp_auto \
   --profile-id openfe_v9_dual
 ```
+
+`run_publish_model` is now guarded by default and will refuse `HOLD` / fallback / utility-failed runs unless you explicitly pass `--allow-unsafe-publish`.
 
 Run the Stage 1 move detector:
 

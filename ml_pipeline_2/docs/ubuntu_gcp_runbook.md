@@ -8,6 +8,8 @@ Use two machines with different responsibilities:
 
 No Windows runtime is required for ML execution.
 
+This runbook remains the training/research operator flow for Ubuntu VMs.
+
 ## External Data Contract
 
 The source of truth is GCS, not git.
@@ -269,17 +271,25 @@ python -m ml_pipeline_2.run_research \
   --run-output-root ml_pipeline_2/artifacts/research/<run_name>_<timestamp>
 ```
 
-When the chosen combo has a good sweep result, publish it with the sweep-selected threshold:
+When the chosen combo looks good, prefer the guarded release flow so the VM handles sweep, publish safety checks, and optional GCS sync in one command:
 
 ```bash
-python -m ml_pipeline_2.run_publish_model \
+python -m ml_pipeline_2.run_recovery_release \
   --run-dir ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp>/runs/<combo_key>/<run_dir> \
   --model-group banknifty_futures/h15_tp_auto \
   --profile-id openfe_v9_dual \
-  --threshold-source threshold_sweep_recommended
+  --threshold-source threshold_sweep_recommended \
+  --model-bucket-url gs://<model-bucket>/published_models
 ```
 
-Then switch `strategy_app` to the published run through the existing Pure ML model-switch flow. No runtime architecture change is required for this path.
+This writes `release/ml_pure_runtime.env` inside the run directory. Use that handoff for the existing `strategy_app` Pure ML model-switch flow. No runtime architecture change is required for this path.
+
+To apply that handoff into `.env.compose` on the runtime checkout:
+
+```bash
+export RELEASE_ENV_PATH=ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp>/runs/<combo_key>/<run_dir>/release/ml_pure_runtime.env
+./ops/gcp/apply_ml_pure_release.sh
+```
 
 ## Quick Research Flows
 

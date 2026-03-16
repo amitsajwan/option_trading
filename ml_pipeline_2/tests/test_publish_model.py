@@ -6,6 +6,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+import pytest
 
 from ml_pipeline_2.publishing import publish_recovery_run
 from ml_pipeline_2.publishing import resolve_ml_pure_artifacts, validate_switch_strict
@@ -22,7 +23,12 @@ class _ConstantProbModel:
         return np.column_stack([1.0 - p1, p1])
 
 
-def _build_completed_recovery_run(root: Path, *, with_threshold_sweep: bool = False) -> tuple[Path, str]:
+def _build_completed_recovery_run(
+    root: Path,
+    *,
+    with_threshold_sweep: bool = False,
+    publishable: bool = True,
+) -> tuple[Path, str]:
     run_dir = root / "ml_pipeline_2" / "artifacts" / "research" / "recovery_publish_fixture_20260313_010101"
     recipe_root = run_dir / "primary_recipes" / "FIXED_H15_TP30_SL12"
     recipe_root.mkdir(parents=True, exist_ok=True)
@@ -46,6 +52,16 @@ def _build_completed_recovery_run(root: Path, *, with_threshold_sweep: bool = Fa
                 "feature_profile": "all",
                 "objective": "trade_utility",
                 "label_target": "path_tp_sl_resolved_only",
+                "best_experiment": {
+                    "experiment_id": "fo_expiry_aware__logreg_balanced",
+                    "selected_by_fallback": (not publishable),
+                },
+                "leaderboard": [
+                    {
+                        "experiment_id": "fo_expiry_aware__logreg_balanced",
+                        "utility_constraints_pass": bool(publishable),
+                    }
+                ],
                 "trading_utility_config": {
                     "ce_threshold": 0.63,
                     "pe_threshold": 0.61,
@@ -62,6 +78,17 @@ def _build_completed_recovery_run(root: Path, *, with_threshold_sweep: bool = Fa
         "primary_recipes": [
             {
                 "recipe": {"recipe_id": "FIXED_H15_TP30_SL12"},
+                "holdout_summary": {
+                    "stage_a_passed": bool(publishable),
+                    "side_share_in_band": bool(publishable),
+                    "profit_factor": 1.25 if publishable else 0.45,
+                    "net_return_sum": 0.12 if publishable else -0.08,
+                    "trades": 42 if publishable else 12,
+                    "stage_eval": {
+                        "promotion_gates": {"promotion_eligible": bool(publishable)},
+                        "promotion_decision": {"decision": "PROMOTE" if publishable else "HOLD"},
+                    },
+                },
                 "model_package_path": str(model_path.resolve()),
                 "training_report_path": str(training_report_path.resolve()),
             }
@@ -77,12 +104,16 @@ def _build_completed_recovery_run(root: Path, *, with_threshold_sweep: bool = Fa
                     "recommended_threshold": 0.40,
                     "recommended_row": {
                         "threshold": 0.40,
+                        "stage_a_passed": True,
+                        "promotion_eligible": True,
+                        "side_share_in_band": True,
                         "profit_factor": 1.25,
                         "net_return_sum": 0.12,
+                        "trades": 42,
                     },
                     "rows": [
-                        {"threshold": 0.35, "profit_factor": 1.10, "net_return_sum": 0.08},
-                        {"threshold": 0.40, "profit_factor": 1.25, "net_return_sum": 0.12},
+                        {"threshold": 0.35, "stage_a_passed": True, "promotion_eligible": True, "side_share_in_band": True, "profit_factor": 1.10, "net_return_sum": 0.08, "trades": 38},
+                        {"threshold": 0.40, "stage_a_passed": True, "promotion_eligible": True, "side_share_in_band": True, "profit_factor": 1.25, "net_return_sum": 0.12, "trades": 42},
                     ],
                 },
                 indent=2,
@@ -201,3 +232,41 @@ def test_publish_recovery_run_requires_threshold_sweep_summary_when_requested(tm
         assert "threshold sweep summary" in str(exc).lower()
     else:
         raise AssertionError("expected missing threshold sweep summary to fail")
+
+
+def test_publish_recovery_run_blocks_non_publishable_candidates_by_default(tmp_path: Path, monkeypatch) -> None:
+    run_dir, _ = _build_completed_recovery_run(tmp_path, publishable=False)
+    monkeypatch.setenv("MODEL_SWITCH_REPO_ROOT", str(tmp_path))
+
+    with pytest.raises(ValueError, match="not publishable"):
+        publish_recovery_run(
+            run_dir=run_dir,
+            model_group="banknifty_futures/h15_tp_auto",
+            profile_id="openfe_v9_dual",
+        )
+
+
+def test_publish_recovery_run_can_override_non_publishable_candidates(tmp_path: Path, monkeypatch, capsys) -> None:
+    run_dir, run_id = _build_completed_recovery_run(tmp_path, publishable=False)
+    monkeypatch.setenv("MODEL_SWITCH_REPO_ROOT", str(tmp_path))
+
+    rc = publish_main(
+        [
+            "--run-dir",
+            str(run_dir),
+            "--model-group",
+            "banknifty_futures/h15_tp_auto",
+            "--profile-id",
+            "openfe_v9_dual",
+            "--allow-unsafe-publish",
+        ]
+    )
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["publish_override"] is True
+    assert payload["release_assessment"]["publishable"] is False
+    resolved = resolve_ml_pure_artifacts(run_id, "banknifty_futures/h15_tp_auto")
+    ok, reason = validate_switch_strict(dict(resolved["run_report_payload"]))
+    assert not ok
+    assert "release_assessment=" in reason

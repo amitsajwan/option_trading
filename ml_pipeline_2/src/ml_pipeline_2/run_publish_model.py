@@ -18,6 +18,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="training",
         help="Threshold source for the published runtime profile",
     )
+    parser.add_argument(
+        "--allow-unsafe-publish",
+        action="store_true",
+        help="Allow publishing a completed run even when release assessment marks it non-publishable",
+    )
     return parser
 
 
@@ -28,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
         model_group=args.model_group,
         profile_id=args.profile_id,
         threshold_source=args.threshold_source,
+        allow_unsafe_publish=bool(args.allow_unsafe_publish),
     )
     print(json.dumps(payload, indent=2, default=str))
     return 0

@@ -68,6 +68,12 @@ def validate_switch_strict(run_report_payload: Dict[str, object]) -> Tuple[bool,
     if decision != "PUBLISH" and publish_status != "published":
         return False, f"publish_status={publish_status or decision or 'MISSING'}"
 
+    release_assessment = run_report_payload.get("release_assessment")
+    if isinstance(release_assessment, dict) and not bool(release_assessment.get("publishable")):
+        reasons = list(release_assessment.get("blocking_reasons") or [])
+        reason = ",".join(str(item) for item in reasons) if reasons else "release_assessment_failed"
+        return False, f"release_assessment={reason}"
+
     published_paths = run_report_payload.get("published_paths")
     if not isinstance(published_paths, dict):
         return False, "missing published_paths"

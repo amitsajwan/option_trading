@@ -256,6 +256,7 @@ def publish_recovery_run(
     profile_id: str,
     threshold_source: str = "training",
     root: Optional[Path] = None,
+    allow_unsafe_publish: bool = False,
 ) -> Dict[str, Any]:
     publish_root = repo_root(root)
     source_run_dir = Path(run_dir).resolve()
@@ -282,6 +283,18 @@ def publish_recovery_run(
         raise ValueError("model_group must be non-empty")
     if not profile:
         raise ValueError("profile_id must be non-empty")
+
+    from .release import assess_recovery_release_candidate
+
+    release_assessment = assess_recovery_release_candidate(
+        run_dir=source_run_dir,
+        threshold_source=str(threshold_source),
+    )
+    if not bool(release_assessment.get("publishable")) and not allow_unsafe_publish:
+        raise ValueError(
+            "recovery run is not publishable without override: "
+            + ", ".join(str(reason) for reason in list(release_assessment.get("blocking_reasons") or []))
+        )
 
     group_root = published_models_root(root=publish_root) / Path(group)
     data_run_root = group_root / "data" / "training_runs" / run_id
@@ -336,7 +349,8 @@ def publish_recovery_run(
         "publisher": "ml_pipeline_2",
         "publish_kind": "recovery_primary_dual_v1",
         "publish_status": "published",
-        "publish_decision": {"decision": "PUBLISH"},
+        "publish_decision": {"decision": "PUBLISH", "allow_unsafe_publish": bool(allow_unsafe_publish)},
+        "publish_override": bool(allow_unsafe_publish and not bool(release_assessment.get("publishable"))),
         "run_id": run_id,
         "model_group": group,
         "profile_id": profile,
@@ -348,6 +362,7 @@ def publish_recovery_run(
         "threshold_source": str(threshold_source),
         "threshold_sweep_summary_path": threshold_report.get("threshold_sweep_summary_path"),
         "threshold_sweep_row": dict(threshold_report.get("threshold_sweep_row") or {}),
+        "release_assessment": release_assessment,
         "source_paths": {
             "run_dir": _to_rel_repo(source_run_dir, root=publish_root),
             "summary": _to_rel_repo(summary_path, root=publish_root),
@@ -371,6 +386,10 @@ def publish_recovery_run(
             "threshold_report": _to_rel_repo(active_threshold_path, root=publish_root),
             "training_report": _to_rel_repo(active_training_path, root=publish_root),
             "model_contract": _to_rel_repo(active_contract_path, root=publish_root),
+        },
+        "report_paths": {
+            "run_report": _to_rel_repo(run_report_path, root=publish_root),
+            "latest_report": _to_rel_repo(latest_report_path, root=publish_root),
         },
         "input_contract": input_contract,
     }
