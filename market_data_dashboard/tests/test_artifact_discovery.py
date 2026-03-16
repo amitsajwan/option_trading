@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 
 from market_data_dashboard import app as dashboard_app
+from ml_pipeline_2.contracts.manifests import load_and_resolve_manifest
+from ml_pipeline_2.experiment_control.runner import run_research
+from ml_pipeline_2.tests.helpers import build_recovery_smoke_manifest, build_synthetic_feature_frames
 
 
 def test_artifact_discovery_includes_ml_pipeline_2_published_models(tmp_path: Path, monkeypatch) -> None:
@@ -43,3 +46,28 @@ def test_artifact_discovery_includes_ml_pipeline_2_published_models(tmp_path: Pa
     assert entry["source"] == "artifact_discovery_ml_pipeline_2"
     assert entry["model_group"] == "banknifty_futures/h15_tp_auto"
     assert entry["profile_id"] == "openfe_v9_dual"
+
+
+def test_artifact_discovery_includes_recovery_research_models(tmp_path: Path, monkeypatch) -> None:
+    model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
+    manifest_path = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
+    summary = run_research(load_and_resolve_manifest(manifest_path, validate_paths=True))
+    recipe_id = str(summary["selected_primary_recipe_id"])
+
+    monkeypatch.setattr(dashboard_app, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(dashboard_app, "ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline_2" / "artifacts" / "published_models")
+    monkeypatch.setattr(dashboard_app, "ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline" / "artifacts" / "models" / "by_features")
+
+    entries = dashboard_app._build_artifact_discovery_entries()
+
+    recovery_entries = [entry for entry in entries if entry.get("source") == "artifact_discovery_recovery"]
+    assert recovery_entries
+
+    entry = recovery_entries[0]
+    assert entry["catalog_kind"] == "recovery"
+    assert entry["profile_id"] == recipe_id
+    assert entry["research_url"].startswith("/trading/research?")
+    assert entry["evaluation_api_url"].startswith("/api/trading/research/evaluation?")
+    assert entry["metrics"]["trades"] is not None
+    assert any(path_row["label"] == "Recipe Summary" for path_row in entry["path_rows"])
+    assert recipe_id in entry["title"]

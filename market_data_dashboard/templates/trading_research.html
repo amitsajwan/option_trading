@@ -352,6 +352,15 @@
             scenarios: [],
             priceChart: null,
             probChart: null,
+            initialSelectionApplied: false,
+        };
+        const pageParams = new URLSearchParams(window.location.search);
+        const initialSelection = {
+            scenarioKey: (pageParams.get("scenario_key") || "").trim(),
+            recipeId: (pageParams.get("recipe_id") || "").trim(),
+            dateFrom: (pageParams.get("date_from") || "").trim(),
+            dateTo: (pageParams.get("date_to") || "").trim(),
+            threshold: (pageParams.get("threshold") || "").trim(),
         };
 
         const qs = (selector) => document.querySelector(selector);
@@ -416,6 +425,21 @@
                 ? String(recipe.recommended_threshold)
                 : "";
             rangeHint.innerHTML = `Allowed out-of-sample range: <code>${windowMeta.allowed_start || "--"}</code> to <code>${windowMeta.allowed_end || "--"}</code>`;
+            renderScenarioMeta();
+        }
+
+        function applyInitialSelection() {
+            if (state.initialSelectionApplied) return;
+            const scenario = activeScenario();
+            if (!scenario) return;
+            const recipes = scenario.recipes || [];
+            if (initialSelection.recipeId && recipes.some((item) => item.recipe_id === initialSelection.recipeId)) {
+                recipeSelect.value = initialSelection.recipeId;
+            }
+            if (initialSelection.dateFrom) dateFromInput.value = initialSelection.dateFrom;
+            if (initialSelection.dateTo) dateToInput.value = initialSelection.dateTo;
+            if (initialSelection.threshold) thresholdInput.value = initialSelection.threshold;
+            state.initialSelectionApplied = true;
             renderScenarioMeta();
         }
 
@@ -624,8 +648,16 @@
                 showBanner("warn", "No completed recovery scenarios were discovered.");
                 return;
             }
-            scenarioSelect.value = state.scenarios[0].scenario_key;
+            if (initialSelection.scenarioKey && state.scenarios.some((item) => item.scenario_key === initialSelection.scenarioKey)) {
+                scenarioSelect.value = initialSelection.scenarioKey;
+            } else {
+                scenarioSelect.value = state.scenarios[0].scenario_key;
+                if (initialSelection.scenarioKey) {
+                    showBanner("warn", `Requested scenario was not found; showing latest available scenario instead.`);
+                }
+            }
             fillScenarioControls();
+            applyInitialSelection();
         }
 
         async function loadEvaluation() {

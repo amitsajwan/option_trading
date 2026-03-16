@@ -24,6 +24,7 @@ import re
 from typing import Dict, Any, List, Optional, Sequence, Tuple
 import time
 import numpy as np
+import pandas as pd
 import redis
 import uuid
 import threading
@@ -1663,6 +1664,80 @@ def _humanize_model_catalog_title(model_group: str, profile_id: Optional[str] = 
     return f"{base} [{pretty_suffix}]" if base else pretty_suffix
 
 
+def _format_catalog_number(value: Any, *, digits: int = 2) -> str:
+    try:
+        number = float(value)
+    except Exception:
+        return "--"
+    if not math.isfinite(number):
+        return "--"
+    return f"{number:.{digits}f}"
+
+
+def _format_catalog_percent(value: Any, *, digits: int = 2) -> str:
+    try:
+        number = float(value)
+    except Exception:
+        return "--"
+    if not math.isfinite(number):
+        return "--"
+    return f"{number * 100:.{digits}f}%"
+
+
+def _format_catalog_int(value: Any) -> str:
+    try:
+        number = int(value)
+    except Exception:
+        return "--"
+    return f"{number:d}"
+
+
+def _catalog_metric_card(label: str, value: str) -> Dict[str, str]:
+    return {"label": str(label or "").strip(), "value": str(value or "--").strip() or "--"}
+
+
+def _catalog_path_row(label: str, path: Optional[Path]) -> Dict[str, Any]:
+    return {
+        "label": str(label or "").strip(),
+        "path": _path_text(path),
+        "exists": bool(path and path.exists()),
+    }
+
+
+def _catalog_action(label: str, url: str, *, primary: bool = False) -> Optional[Dict[str, Any]]:
+    text = str(label or "").strip()
+    href = str(url or "").strip()
+    if not text or not href:
+        return None
+    return {"label": text, "url": href, "primary": bool(primary)}
+
+
+def _default_catalog_actions(
+    *,
+    prefill_url: str,
+    launch_url: str,
+    evaluation_api_url: str,
+    supports_terminal: bool,
+    research_url: str = "",
+) -> List[Dict[str, Any]]:
+    actions: List[Dict[str, Any]] = []
+    if research_url:
+        action = _catalog_action("Open Research Explorer", research_url, primary=True)
+        if action:
+            actions.append(action)
+    if supports_terminal:
+        action = _catalog_action("Open Prefilled Terminal", prefill_url, primary=not actions)
+        if action:
+            actions.append(action)
+        action = _catalog_action("Open By Instance", launch_url)
+        if action:
+            actions.append(action)
+    action = _catalog_action("Open Eval JSON", evaluation_api_url)
+    if action:
+        actions.append(action)
+    return actions
+
+
 @lru_cache(maxsize=1)
 def _load_snapshot_ml_flat_v1_dictionary() -> Dict[str, Any]:
     groups_payload = load_feature_groups(SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR) if load_feature_groups is not None else {}
@@ -1791,9 +1866,179 @@ def _discover_published_model_roots(root: Path, *, source_label: str) -> List[Di
     return entries
 
 
+def _recovery_discovery_roots() -> Tuple[Path, ...]:
+    roots = (
+        REPO_ROOT / "artifacts",
+        REPO_ROOT / "ml_pipeline_2" / "artifacts",
+    )
+    unique: List[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        try:
+            resolved = root.resolve()
+        except Exception:
+            resolved = root
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(resolved)
+    return tuple(unique)
+
+
+def _build_recovery_catalog_entries() -> List[Dict[str, Any]]:
+    if list_recovery_scenarios is None:
+        return []
+    try:
+        payload = list_recovery_scenarios(roots=_recovery_discovery_roots())
+    except Exception:
+        return []
+
+    scenarios = list(payload.get("scenarios") or []) if isinstance(payload, dict) else []
+    entries: List[Dict[str, Any]] = []
+    for scenario in scenarios:
+        if not isinstance(scenario, dict):
+            continue
+        scenario_key = str(scenario.get("scenario_key") or "").strip()
+        run_dir = _resolve_repo_path(scenario.get("run_dir"))
+        if not scenario_key or not isinstance(run_dir, Path):
+            continue
+
+        feature_sets = [str(item).strip() for item in scenario.get("feature_sets", []) if str(item).strip()]
+        primary_model = str(scenario.get("primary_model") or "").strip()
+        eval_window = dict(scenario.get("eval_window") or {})
+        default_from = str(eval_window.get("default_start") or eval_window.get("allowed_start") or "").strip()
+        default_to = str(eval_window.get("default_end") or eval_window.get("allowed_end") or "").strip()
+        run_name = str(scenario.get("run_name") or scenario.get("title") or run_dir.name).strip() or run_dir.name
+        if run_name.lower() == "run" or run_name == run_dir.name:
+            parent_name = str(run_dir.parent.name or "").strip()
+            if parent_name:
+                run_name = parent_name
+        created_at_utc = str(scenario.get("created_at_utc") or "").strip()
+
+        for recipe_meta in list(scenario.get("recipes") or []):
+            if not isinstance(recipe_meta, dict):
+                continue
+            recipe_id = str(recipe_meta.get("recipe_id") or "").strip()
+            if not recipe_id:
+                continue
+
+            holdout_metrics = dict(recipe_meta.get("holdout_metrics") or {})
+            stage_a_passed = bool(holdout_metrics.get("stage_a_passed"))
+            side_share_in_band = bool(holdout_metrics.get("side_share_in_band"))
+            recommended_threshold = recipe_meta.get("recommended_threshold")
+            if recommended_threshold is None:
+                recommended_threshold = recipe_meta.get("default_threshold")
+
+            query_values: Dict[str, str] = {
+                "scenario_key": scenario_key,
+                "recipe_id": recipe_id,
+            }
+            if default_from:
+                query_values["date_from"] = default_from
+            if default_to:
+                query_values["date_to"] = default_to
+            if recommended_threshold is not None:
+                query_values["threshold"] = str(recommended_threshold)
+
+            recipe_dir = run_dir / "primary_recipes" / recipe_id
+            model_path = recipe_dir / "model.joblib"
+            recipe_summary_path = recipe_dir / "summary.json"
+            training_path = recipe_dir / "training_report.json"
+            threshold_sweep_path = recipe_dir / "threshold_sweep" / "summary.json"
+
+            title = run_name if recipe_id.lower() in run_name.lower() else f"{run_name} [{recipe_id}]"
+            feature_set_text = ", ".join(feature_sets) if feature_sets else "--"
+            net_return_sum = holdout_metrics.get("net_return_sum")
+            profit_factor = holdout_metrics.get("profit_factor")
+            trades = holdout_metrics.get("trades")
+            win_rate = holdout_metrics.get("win_rate")
+            long_share = holdout_metrics.get("long_share")
+
+            actions = _default_catalog_actions(
+                prefill_url="",
+                launch_url="",
+                evaluation_api_url=f"/api/trading/research/evaluation?{urlencode(query_values)}",
+                supports_terminal=False,
+                research_url=f"/trading/research?{urlencode(query_values)}",
+            )
+            entries.append(
+                {
+                    "catalog_kind": "recovery",
+                    "source": "artifact_discovery_recovery",
+                    "source_label": "recovery research",
+                    "instance_key": _normalize_trading_instance(f"{scenario_key}_{recipe_id}"),
+                    "profile_key": recipe_id,
+                    "model_group": primary_model,
+                    "profile_id": recipe_id,
+                    "run_id": run_dir.name,
+                    "feature_profile": feature_set_text,
+                    "title": title,
+                    "summary": f"Recovery model · {feature_set_text} · {primary_model or '--'}",
+                    "description": (
+                        f"Recipe {recipe_id} · Created {created_at_utc or '--'} · "
+                        f"Trades {_format_catalog_int(trades)} · Net {_format_catalog_percent(net_return_sum)} · "
+                        f"PF {_format_catalog_number(profit_factor)}"
+                    ),
+                    "recommended": stage_a_passed and side_share_in_band and float(holdout_metrics.get("net_return_sum") or 0.0) > 0.0,
+                    "model_package": _path_text(model_path),
+                    "threshold_report": _path_text(threshold_sweep_path) if threshold_sweep_path.exists() else "",
+                    "eval_summary_path": _path_text(recipe_summary_path),
+                    "training_report_path": _path_text(training_path),
+                    "model_contract": "",
+                    "exists": {
+                        "model_package": model_path.exists(),
+                        "threshold_report": threshold_sweep_path.exists(),
+                        "eval_summary_path": recipe_summary_path.exists(),
+                        "training_report_path": training_path.exists(),
+                        "model_contract": False,
+                    },
+                    "ready_to_run": False,
+                    "supports_terminal": False,
+                    "research_url": f"/trading/research?{urlencode(query_values)}",
+                    "missing_required": [],
+                    "card_tone": "ready" if stage_a_passed else "warn",
+                    "status_chip_class": "good" if stage_a_passed else "bad",
+                    "status_label": "stage a pass" if stage_a_passed else "stage a fail",
+                    "metrics": {
+                        "stage_a_passed": stage_a_passed,
+                        "side_share_in_band": side_share_in_band,
+                        "profit_factor": profit_factor,
+                        "net_return_sum": net_return_sum,
+                        "trades": trades,
+                        "win_rate": win_rate,
+                        "long_share": long_share,
+                        "threshold": recommended_threshold,
+                    },
+                    "metric_cards": [
+                        _catalog_metric_card("Stage A", "PASS" if stage_a_passed else "FAIL"),
+                        _catalog_metric_card("Side Balance", "PASS" if side_share_in_band else "FAIL"),
+                        _catalog_metric_card("Trades", _format_catalog_int(trades)),
+                        _catalog_metric_card("Win Rate", _format_catalog_percent(win_rate)),
+                        _catalog_metric_card("Net Return", _format_catalog_percent(net_return_sum)),
+                        _catalog_metric_card("Profit Factor", _format_catalog_number(profit_factor)),
+                    ],
+                    "path_rows": [
+                        _catalog_path_row("Model Package", model_path),
+                        _catalog_path_row("Recipe Summary", recipe_summary_path),
+                        _catalog_path_row("Training Report", training_path),
+                        _catalog_path_row("Threshold Sweep", threshold_sweep_path),
+                    ],
+                    "compatibility_note": "Use Research Explorer to replay this recovery model on any allowed out-of-sample range.",
+                    "launch_url": "",
+                    "prefill_url": "",
+                    "evaluation_api_url": f"/api/trading/research/evaluation?{urlencode(query_values)}",
+                    "feature_intelligence_api_url": "",
+                    "actions": actions,
+                    "_sort_group": 1 if stage_a_passed else 2,
+                }
+            )
+    return entries
+
+
 def _build_artifact_discovery_entries() -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
     entries.extend(_discover_published_model_roots(ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR, source_label="artifact_discovery_ml_pipeline_2"))
+    entries.extend(_build_recovery_catalog_entries())
     return entries
 
 
@@ -1937,6 +2182,21 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
         missing_required.append("model_package")
     if not existence["threshold_report"]:
         missing_required.append("threshold_report")
+    override_missing = raw.get("missing_required")
+    if isinstance(override_missing, list):
+        missing_required = [str(item).strip() for item in override_missing if str(item).strip()]
+
+    ready_to_run = bool(raw.get("ready_to_run")) if "ready_to_run" in raw else len(missing_required) == 0
+    supports_terminal = (
+        bool(raw.get("supports_terminal"))
+        if "supports_terminal" in raw
+        else ready_to_run
+    )
+    research_url = str(raw.get("research_url") or "").strip()
+    card_tone = str(raw.get("card_tone") or ("ready" if ready_to_run else "warn")).strip() or "warn"
+    status_chip_class = str(raw.get("status_chip_class") or ("good" if ready_to_run else "bad")).strip() or "bad"
+    status_label = str(raw.get("status_label") or ("ready" if ready_to_run else "needs setup")).strip() or "unknown"
+    source_label = str(raw.get("source_label") or source).strip() or source
 
     query_values = {"model": instance_key}
     if model_path:
@@ -1960,9 +2220,35 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
         eval_query["policy_report_path"] = _path_text(threshold_path)
     evaluation_api_url = f"/api/trading/model-evaluation?{urlencode(eval_query)}" if eval_query else ""
     feature_intelligence_api_url = f"/api/trading/feature-intelligence?model={quote(instance_key, safe='')}"
+    metric_cards = [
+        _catalog_metric_card(
+            "Coverage",
+            f"{training.get('coverage_start_date') or '--'} to {training.get('coverage_end_date') or '--'}",
+        ),
+        _catalog_metric_card("Full OOS Win %", _format_catalog_percent((full_oos or {}).get("win_rate"))),
+        _catalog_metric_card("Latest Slice Win %", _format_catalog_percent((latest_oos or {}).get("win_rate"))),
+        _catalog_metric_card("CE Threshold", _format_catalog_number(policy.get("ce_threshold"), digits=3)),
+        _catalog_metric_card("PE Threshold", _format_catalog_number(policy.get("pe_threshold"), digits=3)),
+        _catalog_metric_card("Policy Mode", str(policy.get("selection_mode") or "--")),
+    ]
+    path_rows = [
+        _catalog_path_row("Model Package", model_path),
+        _catalog_path_row("Threshold Report", threshold_path),
+        _catalog_path_row("Eval Summary", summary_path),
+        _catalog_path_row("Training Report", training_path),
+    ]
+    actions = _default_catalog_actions(
+        prefill_url=prefill_url,
+        launch_url=f"/trading/model/{instance_key}",
+        evaluation_api_url=evaluation_api_url,
+        supports_terminal=supports_terminal,
+        research_url=research_url,
+    )
 
     return {
+        "catalog_kind": str(raw.get("catalog_kind") or "terminal"),
         "source": source,
+        "source_label": source_label,
         "instance_key": instance_key,
         "profile_key": str(raw.get("profile_key") or ""),
         "model_group": str(raw.get("model_group") or ""),
@@ -1979,8 +2265,13 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
         "training_report_path": _path_text(training_path),
         "model_contract": _path_text(model_contract_path),
         "exists": existence,
-        "ready_to_run": len(missing_required) == 0,
+        "ready_to_run": ready_to_run,
+        "supports_terminal": supports_terminal,
+        "research_url": research_url,
         "missing_required": missing_required,
+        "card_tone": card_tone,
+        "status_chip_class": status_chip_class,
+        "status_label": status_label,
         "metrics": {
             "training_coverage_start": training.get("coverage_start_date"),
             "training_coverage_end": training.get("coverage_end_date"),
@@ -1998,11 +2289,15 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
             "latest_oos_win_rate": (latest_oos or {}).get("win_rate") if isinstance(latest_oos, dict) else None,
             "latest_oos_days": (latest_oos or {}).get("days") if isinstance(latest_oos, dict) else None,
         },
+        "metric_cards": metric_cards,
+        "path_rows": path_rows,
         "compatibility_note": eval_snapshot.get("runner_compatibility", {}).get("note"),
         "launch_url": f"/trading/model/{instance_key}",
         "prefill_url": prefill_url,
         "evaluation_api_url": evaluation_api_url,
         "feature_intelligence_api_url": feature_intelligence_api_url,
+        "actions": actions,
+        "_sort_group": int(raw.get("_sort_group")) if raw.get("_sort_group") is not None else (0 if ready_to_run else 2),
     }
 
 
@@ -2034,9 +2329,9 @@ def _build_trading_model_catalog() -> List[Dict[str, Any]]:
 
     entries.sort(
         key=lambda item: (
-            not bool(item.get("ready_to_run")),
-            str(item.get("source") or "") != "artifact_discovery",
+            int(item.get("_sort_group", 2)),
             not bool(item.get("recommended")),
+            str(item.get("source") or "").lower(),
             str(item.get("title") or "").lower(),
         )
     )
@@ -3708,6 +4003,7 @@ async def trading_models_page(request: Request):
             "summary": {
                 "total": len(models),
                 "ready": sum(1 for m in models if m.get("ready_to_run")),
+                "research": sum(1 for m in models if str(m.get("catalog_kind") or "") == "recovery"),
                 "recommended": sum(1 for m in models if m.get("recommended")),
             },
         },
@@ -3722,6 +4018,7 @@ async def get_trading_models():
         "status": "ok",
         "count": len(models),
         "ready_count": sum(1 for m in models if m.get("ready_to_run")),
+        "research_count": sum(1 for m in models if str(m.get("catalog_kind") or "") == "recovery"),
         "models": models,
     }
 
