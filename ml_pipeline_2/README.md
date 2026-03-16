@@ -62,6 +62,7 @@ The checked-in research configs are Ubuntu-ready and resolve paths relative to t
 - [`configs/research/recovery_matrix.tuning_5m.json`](configs/research/recovery_matrix.tuning_5m.json)
 - [`configs/research/recovery_matrix.tuning_4y.json`](configs/research/recovery_matrix.tuning_4y.json)
 - [`configs/research/recovery_matrix.fast_path_4y.json`](configs/research/recovery_matrix.fast_path_4y.json)
+- [`configs/research/recovery_matrix.ablation_opportunity_4y.json`](configs/research/recovery_matrix.ablation_opportunity_4y.json)
 
 Default output roots resolve into `ml_pipeline_2/artifacts/...`.
 
@@ -185,6 +186,19 @@ python -m ml_pipeline_2.run_recovery_matrix \
 This fast path fans out the 4 narrowed recipes into independent jobs:
 - `2 feature sets x 2 models x 4 recipes = 16` recipe-level combos
 - all 16 jobs can run together on a larger VM without widening back to weaker model families
+
+Systematic 4-year opportunity-set ablation:
+
+```bash
+python -m ml_pipeline_2.run_recovery_matrix \
+  --config ml_pipeline_2/configs/research/recovery_matrix.ablation_opportunity_4y.json
+```
+
+This diagnostic matrix is intentionally narrow and directly comparable:
+- `1 feature set x 1 model x 2 recipes x 5 predeclared variants = 10` combos
+- all 10 jobs can run together on a larger VM
+- variants isolate the current failure hypotheses before widening models or feature sets:
+  `baseline`, `allow_atr_high`, `allow_expiry_day`, `allow_atr_high_and_expiry_day`, `no_cusum_allow_atr_high_and_expiry_day`
 
 Run a threshold sweep on a completed combo:
 

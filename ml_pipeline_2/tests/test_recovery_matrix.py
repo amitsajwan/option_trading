@@ -83,6 +83,52 @@ def test_generate_recovery_matrix_writes_combo_manifests_for_tuned_models(tmp_pa
         assert payload["scenario"]["primary_model"] == combo["primary_model"]
 
 
+def test_generate_recovery_matrix_applies_variant_manifest_overrides(tmp_path: Path) -> None:
+    model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
+    base_manifest = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
+    matrix_root = tmp_path / "matrix"
+
+    index = generate_recovery_matrix(
+        base_manifest_path=base_manifest,
+        matrix_root=matrix_root,
+        horizon_grid=[15],
+        tp_grid=[0.0030],
+        sl_grid=[0.0010],
+        barrier_modes=["fixed"],
+        recipes_override=None,
+        models=["xgb_regularized"],
+        feature_sets=["fo_expiry_aware_v2"],
+        recipe_fanout=False,
+        launch_background=False,
+        job_root=None,
+        variants=[
+            {
+                "variant_id": "allow_atr_high",
+                "description": "keep atr-high rows",
+                "manifest_overrides": {
+                    "scenario": {
+                        "event_sampling_mode": "cusum",
+                        "candidate_filter": {
+                            "require_event_sampled": True,
+                            "exclude_expiry_day": True,
+                            "exclude_regime_atr_high": False,
+                            "require_tradeable_context": True,
+                            "allow_near_expiry_context": True,
+                        },
+                    }
+                },
+            }
+        ],
+    )
+
+    assert index["variants"][0]["variant_id"] == "allow_atr_high"
+    assert index["combos"][0]["variant_id"] == "allow_atr_high"
+    manifest_path = Path(index["combos"][0]["manifest_path"])
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["scenario"]["event_sampling_mode"] == "cusum"
+    assert payload["scenario"]["candidate_filter"]["exclude_regime_atr_high"] is False
+
+
 def test_refresh_recovery_matrix_report_summarizes_completed_combo(tmp_path: Path) -> None:
     model_window_path, holdout_path = build_synthetic_feature_frames(tmp_path)
     base_manifest = build_recovery_smoke_manifest(tmp_path, model_window_path, holdout_path)
@@ -283,6 +329,26 @@ def test_tuning_matrix_configs_resolve_expected_search_space() -> None:
         "FIXED_H15_TP30_SL8",
         "FIXED_H15_TP30_SL10",
     }
+
+    ablation_args = parser.parse_args(["--config", "ml_pipeline_2/configs/research/recovery_matrix.ablation_opportunity_4y.json"])
+    ablation_resolved = _resolve_args(ablation_args)
+    assert ablation_resolved["models"] == ["xgb_regularized"]
+    assert ablation_resolved["feature_sets"] == ["fo_expiry_aware_v2"]
+    assert ablation_resolved["recipe_fanout"] is True
+    assert ablation_resolved["max_parallel"] == 10
+    assert len(ablation_resolved["recipes"]) == 2
+    assert len(ablation_resolved["variants"]) == 5
+    assert {variant["variant_id"] for variant in ablation_resolved["variants"]} == {
+        "baseline",
+        "allow_atr_high",
+        "allow_expiry_day",
+        "allow_atr_high_and_expiry_day",
+        "no_cusum_allow_atr_high_and_expiry_day",
+    }
+    no_cusum = next(variant for variant in ablation_resolved["variants"] if variant["variant_id"] == "no_cusum_allow_atr_high_and_expiry_day")
+    assert no_cusum["manifest_overrides"]["scenario"]["event_sampling_mode"] == "none"
+    assert no_cusum["manifest_overrides"]["scenario"]["candidate_filter"]["exclude_regime_atr_high"] is False
+    assert no_cusum["manifest_overrides"]["scenario"]["candidate_filter"]["exclude_expiry_day"] is False
 
     watch_args = parser.parse_args(
         [

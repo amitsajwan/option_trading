@@ -104,6 +104,79 @@ def _parse_recipe_list(value: Any) -> List[Dict[str, Any]]:
     return recipes
 
 
+def _clone_jsonable(value: Any) -> Any:
+    return json.loads(json.dumps(value, default=str))
+
+
+def _deep_merge_dict(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
+    merged = _clone_jsonable(base)
+    for key, value in dict(overrides).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(dict(merged.get(key) or {}), value)
+        else:
+            merged[key] = _clone_jsonable(value)
+    return merged
+
+
+def _merge_variant_section(
+    manifest_overrides: Dict[str, Any],
+    *,
+    section_name: str,
+    section_value: Any,
+    idx: int,
+    field_name: str,
+) -> None:
+    if section_value is None:
+        return
+    if not isinstance(section_value, dict):
+        raise ValueError(f"matrix.variants[{idx}].{field_name} must be an object")
+    existing = manifest_overrides.get(section_name)
+    if existing is not None and not isinstance(existing, dict):
+        raise ValueError(f"matrix.variants[{idx}].manifest_overrides.{section_name} must be an object")
+    manifest_overrides[section_name] = _deep_merge_dict(dict(existing or {}), dict(section_value))
+
+
+def _parse_variants(value: Any) -> List[Dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("matrix.variants must be a list of variant objects")
+    variants: List[Dict[str, Any]] = []
+    for idx, item in enumerate(list(value)):
+        if not isinstance(item, dict):
+            raise ValueError(f"matrix.variants[{idx}] must be an object")
+        variant_id = str(item.get("variant_id") or "").strip()
+        if not variant_id:
+            raise ValueError(f"matrix.variants[{idx}].variant_id must not be empty")
+        manifest_overrides_raw = item.get("manifest_overrides") or {}
+        if not isinstance(manifest_overrides_raw, dict):
+            raise ValueError(f"matrix.variants[{idx}].manifest_overrides must be an object")
+        manifest_overrides = _clone_jsonable(manifest_overrides_raw)
+        for field_name, section_name in (
+            ("inputs_overrides", "inputs"),
+            ("outputs_overrides", "outputs"),
+            ("catalog_overrides", "catalog"),
+            ("windows_overrides", "windows"),
+            ("training_overrides", "training"),
+            ("scenario_overrides", "scenario"),
+        ):
+            _merge_variant_section(
+                manifest_overrides,
+                section_name=section_name,
+                section_value=item.get(field_name),
+                idx=idx,
+                field_name=field_name,
+            )
+        variants.append(
+            {
+                "variant_id": variant_id,
+                "description": str(item.get("description") or "").strip() or None,
+                "manifest_overrides": manifest_overrides,
+            }
+        )
+    return variants
+
+
 def _load_config(path: Optional[str]) -> tuple[Dict[str, Any], Path]:
     if path is None or not str(path).strip():
         return {}, Path.cwd().resolve()
@@ -162,10 +235,11 @@ def _combo_output_root(*, matrix_root: Path, combo_key: str) -> Path:
     return matrix_root / "runs" / combo_key
 
 
-def _combo_job_metadata(*, matrix_root: Path, combo_key: str, feature_set: str, model_name: str, artifacts_root: Path, manifest_path: Path, recipe_id: Optional[str] = None, output_root: Optional[Path] = None) -> Dict[str, Any]:
+def _combo_job_metadata(*, matrix_root: Path, combo_key: str, feature_set: str, model_name: str, artifacts_root: Path, manifest_path: Path, recipe_id: Optional[str] = None, variant_id: Optional[str] = None, output_root: Optional[Path] = None) -> Dict[str, Any]:
     payload = {
         "matrix_root": str(matrix_root.resolve()),
         "combo_key": combo_key,
+        "variant_id": (str(variant_id).strip() or None) if variant_id is not None else None,
         "feature_set": str(feature_set),
         "primary_model": str(model_name),
         "recipe_id": (str(recipe_id).strip() or None) if recipe_id is not None else None,
@@ -229,6 +303,7 @@ def generate_recovery_matrix(
     launch_background: bool,
     job_root: Optional[Path],
     max_parallel_launches: Optional[int] = None,
+    variants: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     resolved = load_and_resolve_manifest(base_manifest_path, validate_paths=True)
     if str(resolved["experiment_kind"]) != RECOVERY_KIND:
@@ -246,80 +321,98 @@ def generate_recovery_matrix(
         )
     )
     base_inputs = dict(resolved["inputs"])
-    base_windows = json.loads(json.dumps(resolved["windows"], default=str))
-    base_training = json.loads(json.dumps(resolved["training"], default=str))
-    base_scenario = json.loads(json.dumps(resolved["scenario"], default=str))
-    base_catalog = json.loads(json.dumps(resolved["catalog"], default=str))
+    base_windows = _clone_jsonable(resolved["windows"])
+    base_training = _clone_jsonable(resolved["training"])
+    base_scenario = _clone_jsonable(resolved["scenario"])
+    base_catalog = _clone_jsonable(resolved["catalog"])
+    base_outputs = _clone_jsonable(resolved["outputs"])
+    variant_rows = list(variants or [])
+    if not variant_rows:
+        variant_rows = [{"variant_id": None, "description": None, "manifest_overrides": {}}]
 
     matrix_root.mkdir(parents=True, exist_ok=True)
     manifests_root = matrix_root / "manifests"
     combos: List[Dict[str, Any]] = []
     launch_cap = (max(0, int(max_parallel_launches)) if max_parallel_launches is not None else None)
     launched_count = 0
-    for feature_set in list(feature_sets):
-        for model_name in list(models):
-            recipe_variants = list(recipes) if bool(recipe_fanout) else [None]
-            for recipe in recipe_variants:
-                combo_name = f"{feature_set}__{model_name}"
-                scenario_payload = {
-                    **dict(base_scenario),
-                    "recipes": ([dict(recipe)] if recipe is not None else list(recipes)),
-                    "primary_model": str(model_name),
-                }
-                combo_payload: Dict[str, Any] = {
-                    "feature_set": str(feature_set),
-                    "primary_model": str(model_name),
-                    "run_name": "run",
-                }
-                if recipe is not None:
-                    recipe_id = str(recipe.get("recipe_id") or "").strip()
-                    combo_name = f"{combo_name}__{recipe_id}"
-                    scenario_payload["recipe_selection"] = [recipe_id]
-                    combo_payload["recipe_id"] = recipe_id
-                combo_key = _sanitize_name(combo_name)
-                artifacts_root = _combo_output_root(matrix_root=matrix_root, combo_key=combo_key)
-                manifest_payload = {
-                    "schema_version": int(resolved["schema_version"]),
-                    "experiment_kind": str(resolved["experiment_kind"]),
-                    "inputs": {
-                        "model_window_features_path": str(Path(base_inputs["model_window_features_path"]).resolve()),
-                        "holdout_features_path": str(Path(base_inputs["holdout_features_path"]).resolve()),
-                        "base_path": str(Path(base_inputs["base_path"]).resolve()),
-                        "baseline_json_path": (str(Path(base_inputs["baseline_json_path"]).resolve()) if base_inputs.get("baseline_json_path") is not None else ""),
-                    },
-                    "outputs": {
-                        "artifacts_root": str(artifacts_root.resolve()),
-                        "run_name": "run",
-                    },
-                    "catalog": {
-                        "feature_profile": str(base_catalog["feature_profile"]),
-                        "feature_sets": [str(feature_set)],
-                        "models": [str(model_name)],
-                    },
-                    "windows": dict(base_windows),
-                    "training": dict(base_training),
-                    "scenario": scenario_payload,
-                }
-                manifest_path = manifests_root / f"{combo_key}.json"
-                _write_json(manifest_path, manifest_payload)
-                combo_payload.update(
-                    {
-                        "combo_key": combo_key,
-                        "manifest_path": str(manifest_path.resolve()),
-                        "artifacts_root": str(artifacts_root.resolve()),
+    for variant in variant_rows:
+        variant_id = str(variant.get("variant_id") or "").strip() or None
+        variant_description = str(variant.get("description") or "").strip() or None
+        manifest_overrides = dict(variant.get("manifest_overrides") or {})
+        effective_inputs = _deep_merge_dict(base_inputs, dict(manifest_overrides.get("inputs") or {}))
+        effective_outputs = _deep_merge_dict(base_outputs, dict(manifest_overrides.get("outputs") or {}))
+        effective_catalog = _deep_merge_dict(base_catalog, dict(manifest_overrides.get("catalog") or {}))
+        effective_windows = _deep_merge_dict(base_windows, dict(manifest_overrides.get("windows") or {}))
+        effective_training = _deep_merge_dict(base_training, dict(manifest_overrides.get("training") or {}))
+        effective_scenario = _deep_merge_dict(base_scenario, dict(manifest_overrides.get("scenario") or {}))
+        for feature_set in list(feature_sets):
+            for model_name in list(models):
+                recipe_variants = list(recipes) if bool(recipe_fanout) else [None]
+                for recipe in recipe_variants:
+                    combo_name_parts = [part for part in [variant_id, feature_set, model_name] if part]
+                    scenario_payload = {
+                        **dict(effective_scenario),
+                        "recipes": ([dict(recipe)] if recipe is not None else list(recipes)),
+                        "primary_model": str(model_name),
                     }
-                )
-                should_launch = bool(launch_background) and (launch_cap is None or launched_count < launch_cap)
-                if should_launch:
-                    job = _launch_combo_job(
-                        combo=combo_payload,
-                        matrix_root=matrix_root,
-                        job_root=job_root,
+                    combo_payload: Dict[str, Any] = {
+                        "variant_id": variant_id,
+                        "variant_description": variant_description,
+                        "feature_set": str(feature_set),
+                        "primary_model": str(model_name),
+                        "run_name": "run",
+                    }
+                    if recipe is not None:
+                        recipe_id = str(recipe.get("recipe_id") or "").strip()
+                        combo_name_parts.append(recipe_id)
+                        scenario_payload["recipe_selection"] = [recipe_id]
+                        combo_payload["recipe_id"] = recipe_id
+                    combo_key = _sanitize_name("__".join(combo_name_parts))
+                    artifacts_root = _combo_output_root(matrix_root=matrix_root, combo_key=combo_key)
+                    manifest_payload = {
+                        "schema_version": int(resolved["schema_version"]),
+                        "experiment_kind": str(resolved["experiment_kind"]),
+                        "inputs": {
+                            "model_window_features_path": str(Path(effective_inputs["model_window_features_path"]).resolve()),
+                            "holdout_features_path": str(Path(effective_inputs["holdout_features_path"]).resolve()),
+                            "base_path": str(Path(effective_inputs["base_path"]).resolve()),
+                            "baseline_json_path": (str(Path(effective_inputs["baseline_json_path"]).resolve()) if effective_inputs.get("baseline_json_path") is not None else ""),
+                        },
+                        "outputs": {
+                            **dict(effective_outputs),
+                            "artifacts_root": str(artifacts_root.resolve()),
+                            "run_name": "run",
+                        },
+                        "catalog": {
+                            **dict(effective_catalog),
+                            "feature_profile": str(effective_catalog["feature_profile"]),
+                            "feature_sets": [str(feature_set)],
+                            "models": [str(model_name)],
+                        },
+                        "windows": dict(effective_windows),
+                        "training": dict(effective_training),
+                        "scenario": scenario_payload,
+                    }
+                    manifest_path = manifests_root / f"{combo_key}.json"
+                    _write_json(manifest_path, manifest_payload)
+                    combo_payload.update(
+                        {
+                            "combo_key": combo_key,
+                            "manifest_path": str(manifest_path.resolve()),
+                            "artifacts_root": str(artifacts_root.resolve()),
+                        }
                     )
-                    combo_payload["background_job_id"] = str(job["job_id"])
-                    combo_payload["background_job_path"] = str((Path(job["job_dir"]) / "job.json").resolve())
-                    launched_count += 1
-                combos.append(combo_payload)
+                    should_launch = bool(launch_background) and (launch_cap is None or launched_count < launch_cap)
+                    if should_launch:
+                        job = _launch_combo_job(
+                            combo=combo_payload,
+                            matrix_root=matrix_root,
+                            job_root=job_root,
+                        )
+                        combo_payload["background_job_id"] = str(job["job_id"])
+                        combo_payload["background_job_path"] = str((Path(job["job_dir"]) / "job.json").resolve())
+                        launched_count += 1
+                    combos.append(combo_payload)
     index_payload = {
         "created_at_utc": _utc_now(),
         "matrix_root": str(matrix_root.resolve()),
@@ -328,6 +421,7 @@ def generate_recovery_matrix(
         "recipe_fanout": bool(recipe_fanout),
         "max_parallel_launches": launch_cap,
         "recipes": list(recipes),
+        "variants": variant_rows if any(row.get("variant_id") for row in variant_rows) else [],
         "combos": combos,
     }
     _write_json(_matrix_index_path(matrix_root), index_payload)
@@ -441,6 +535,7 @@ def _launch_combo_job(*, combo: Dict[str, Any], matrix_root: Path, job_root: Opt
             artifacts_root=artifacts_root,
             manifest_path=manifest_path,
             recipe_id=combo.get("recipe_id"),
+            variant_id=combo.get("variant_id"),
             output_root=reuse_run_dir,
         ),
         job_root=job_root,
@@ -575,6 +670,8 @@ def refresh_recovery_matrix_report(matrix_root: Path) -> Dict[str, Any]:
         summary_rows.append(
             {
                 "combo_key": combo["combo_key"],
+                "variant_id": combo.get("variant_id"),
+                "variant_description": combo.get("variant_description"),
                 "feature_set": combo["feature_set"],
                 "primary_model": combo["primary_model"],
                 "recipe_id": combo.get("recipe_id"),
@@ -615,6 +712,8 @@ def refresh_recovery_matrix_report(matrix_root: Path) -> Dict[str, Any]:
             recipe_rows.append(
                 {
                     "combo_key": combo["combo_key"],
+                    "variant_id": combo.get("variant_id"),
+                    "variant_description": combo.get("variant_description"),
                     "feature_set": combo["feature_set"],
                     "primary_model": combo["primary_model"],
                     "recipe_id": recipe.get("recipe_id"),
@@ -705,6 +804,7 @@ def _resolve_args(args: argparse.Namespace) -> Dict[str, Any]:
         "recipes": _parse_recipe_list(matrix_cfg.get("recipes")),
         "models": _parse_name_list(_pick(args.models, matrix_cfg.get("models"), None), DEFAULT_MODELS),
         "feature_sets": _parse_name_list(_pick(args.feature_sets, matrix_cfg.get("feature_sets"), None), DEFAULT_FEATURE_SETS),
+        "variants": _parse_variants(matrix_cfg.get("variants")),
         "recipe_fanout": bool(args.recipe_fanout or bool(matrix_cfg.get("recipe_fanout", False))),
         "launch_background": bool(args.launch_background or bool(launch_cfg.get("background", False))),
         "launch_pending": bool(args.launch_pending),
@@ -758,6 +858,7 @@ def main(argv: list[str] | None = None) -> int:
         recipes_override=list(resolved["recipes"]),
         models=list(resolved["models"]),
         feature_sets=list(resolved["feature_sets"]),
+        variants=list(resolved["variants"]),
         recipe_fanout=bool(resolved["recipe_fanout"]),
         launch_background=bool(resolved["launch_background"]),
         job_root=Path(resolved["job_root"]).resolve(),
