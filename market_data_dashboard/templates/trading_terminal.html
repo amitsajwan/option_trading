@@ -536,6 +536,7 @@
         <section class="panel notice-banner">
             <div><strong>Legacy paper-trading UI only.</strong> This page launches `ml_pipeline.paper_capital_runner` for older paper-trading workflows.</div>
             <div>It is <strong>not</strong> the live registry-backed ML deployment UI. The current live ML deployment runs inside `strategy_app`, not from this page.</div>
+            <div><strong>Default branch behavior:</strong> this launcher is disabled unless `{{ legacy_trading_runtime.env_var }}` is set explicitly on the dashboard process.</div>
             <div>Use the main dashboard plus `strategy_app` logs and `.run/strategy_app/*.jsonl` files to monitor the live stack.</div>
             <div class="notice-links">
                 <a class="notice-link" href="/" target="_blank" rel="noopener">main dashboard</a>
@@ -801,7 +802,7 @@
                 </div>
                 <div class="field">
                     <label>Output JSONL</label>
-                    <input id="outputJsonl" value="ml_pipeline/artifacts/t33_paper_capital_events_actual.jsonl" />
+                    <input id="outputJsonl" value=".run/dashboard_state/t33_paper_capital_events_actual.jsonl" />
                 </div>
                 <div class="actions legacy-hidden">
                     <button class="btn-start" id="btnStart">Start Trading</button>
@@ -1282,6 +1283,7 @@
         const URL_PARAMS = new URLSearchParams(window.location.search);
         const MODEL_PAGE_KEY = String(URL_PARAMS.get("model") || "default").trim();
         const TRADING_INSTANCE = MODEL_PAGE_KEY || "default";
+        const LEGACY_TRADING_RUNTIME = {{ legacy_trading_runtime | tojson }};
         const QUERY_INSTRUMENT = String(
             URL_PARAMS.get("instrument")
             || URL_PARAMS.get("instrument_symbol")
@@ -1427,7 +1429,10 @@
             if (!summary || !counts || !status) return;
             counts.textContent = `Catalog models: ${legacyCatalogCount} | Runnable legacy models: ${legacyCatalogReadyCount}`;
             summary.classList.remove("warning", "ok");
-            if (legacyCatalogReadyCount > 0) {
+            if (!LEGACY_TRADING_RUNTIME.enabled) {
+                summary.classList.add("warning");
+                status.textContent = String(LEGACY_TRADING_RUNTIME.detail || "Legacy trading runtime unavailable.");
+            } else if (legacyCatalogReadyCount > 0) {
                 summary.classList.add("ok");
                 status.textContent = "Legacy paper runner can use only catalog entries marked runnable, or custom legacy paths.";
             } else if (legacyCatalogAvailable) {
@@ -1444,7 +1449,7 @@
             const btnStop = document.getElementById("btnStop");
             const btnQuickStop = document.getElementById("btnQuickStop");
             const key = selectedLegacyProfileKey();
-            const canStart = selectedLegacyProfileReady();
+            const canStart = Boolean(LEGACY_TRADING_RUNTIME.enabled && selectedLegacyProfileReady());
             const startBlocked = !legacyRunnerRunning && !canStart;
             let blockedMessage = "";
             if (btnStart) btnStart.disabled = legacyRunnerRunning || !canStart;
@@ -1452,7 +1457,9 @@
             if (btnStop) btnStop.disabled = !legacyRunnerRunning;
             if (btnQuickStop) btnQuickStop.disabled = !legacyRunnerRunning;
             if (startBlocked) {
-                if (key === "custom" && !hasCompleteCustomLegacyPaths()) {
+                if (!LEGACY_TRADING_RUNTIME.enabled) {
+                    blockedMessage = String(LEGACY_TRADING_RUNTIME.detail || "Legacy paper runner is disabled.");
+                } else if (key === "custom" && !hasCompleteCustomLegacyPaths()) {
                     blockedMessage = `Legacy paper runner start disabled: custom mode requires both model_package and threshold_report paths | instance=${TRADING_INSTANCE}`;
                 } else if (legacyCatalogReadyCount === 0) {
                     blockedMessage = `No runnable legacy paper-trading model is configured in the catalog | instance=${TRADING_INSTANCE}`;
@@ -1520,9 +1527,9 @@
                 .replace(/[^a-z0-9_-]/g, "_")
                 .replace(/^_+|_+$/g, "") || "default";
             if (safe === "default") {
-                return "ml_pipeline/artifacts/t33_paper_capital_events_actual.jsonl";
+                return ".run/dashboard_state/t33_paper_capital_events_actual.jsonl";
             }
-            return `ml_pipeline/artifacts/t33_paper_capital_events_${safe}.jsonl`;
+            return `.run/dashboard_state/t33_paper_capital_events_${safe}.jsonl`;
         }
         function defaultOutputPathForModelProfile(profileKey) {
             const safe = String(profileKey || "default")
@@ -1987,6 +1994,11 @@
         async function startTrading() {
             ACTIVE_VIEW_MODE = "live";
             BACKTEST_UI_STATE = null;
+            if (!LEGACY_TRADING_RUNTIME.enabled) {
+                alert(String(LEGACY_TRADING_RUNTIME.detail || "Legacy paper runner is disabled."));
+                updateLegacyStartControls();
+                return;
+            }
             if (!selectedLegacyProfileReady()) {
                 alert("Legacy paper runner start is disabled. Use a runnable legacy catalog model or provide both custom legacy artifact paths.");
                 updateLegacyStartControls();
@@ -2084,6 +2096,11 @@
         }
 
         async function runDateBacktest(triggerButtonId = "btnRunBacktest") {
+            if (!LEGACY_TRADING_RUNTIME.enabled) {
+                alert(String(LEGACY_TRADING_RUNTIME.detail || "Legacy backtest runner is disabled."));
+                updateLegacyStartControls();
+                return;
+            }
             const btn = document.getElementById(triggerButtonId) || document.getElementById("btnRunBacktest");
             const quickBtn = document.getElementById("btnQuickBacktest");
             const legacyBtn = document.getElementById("btnRunBacktest");

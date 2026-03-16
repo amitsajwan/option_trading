@@ -13,7 +13,7 @@ Legacy status for the current milestone:
 ```powershell
 python -m snapshot_app.historical.snapshot_batch_runner `
   --validate-only `
-  --base ml_pipeline/artifacts/data/parquet_data `
+  --base .data/ml_pipeline/parquet_data `
   --window-manifest-out .run/window_manifest_latest.json
 ```
 
@@ -40,7 +40,7 @@ Formal run must fail if any readiness condition is false:
 ```powershell
 python -m strategy_app.tools.open_search_rebaseline_cycle `
   --window-manifest .run/window_manifest_latest.json `
-  --parquet-base ml_pipeline/artifacts/data/parquet_data `
+  --parquet-base .data/ml_pipeline/parquet_data `
   --output-root .run/open_search_rebaseline_exploratory
 ```
 
@@ -50,7 +50,7 @@ python -m strategy_app.tools.open_search_rebaseline_cycle `
 python -m strategy_app.tools.open_search_rebaseline_cycle `
   --window-manifest .run/window_manifest_latest.json `
   --formal-run `
-  --parquet-base ml_pipeline/artifacts/data/parquet_data `
+  --parquet-base .data/ml_pipeline/parquet_data `
   --output-root .run/open_search_rebaseline_formal `
   --require-positive-return `
   --max-champions 3
@@ -64,7 +64,7 @@ Use explicit lists to control matrix size:
 python -m strategy_app.tools.open_search_rebaseline_cycle `
   --window-manifest .run/window_manifest_latest.json `
   --formal-run `
-  --parquet-base ml_pipeline/artifacts/data/parquet_data `
+  --parquet-base .data/ml_pipeline/parquet_data `
   --output-root .run/open_search_rebaseline_custom `
   --feature-profiles eq_core_snapshot_v1,eq_full_v1 `
   --label-profiles mfe15_gt_5_v1 `

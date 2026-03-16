@@ -26,6 +26,11 @@ Legacy / not part of the supported Live+Dashboard target:
 - paper trading terminal and legacy paper runner launch flow
 - historical replay/eval operator flows
 
+Legacy launcher note:
+
+- `/trading`, `/api/trading/start`, and `/api/trading/backtest/run` are opt-in only
+- set `ENABLE_LEGACY_TRADING_UI=1` on the dashboard process only if you intentionally need deprecated `ml_pipeline` paper/backtest workflows
+
 ## Runtime dependencies
 
 From `requirements.txt`:
@@ -61,7 +66,7 @@ Port behavior note:
 
 - `GET /` -> dashboard page
 - `GET /live/strategy` -> live operator monitor for `strategy_app`
-- `GET /trading` -> paper trading terminal page
+- `GET /trading` -> legacy paper trading terminal page (opt-in launcher)
 - `GET /trading/models` -> model catalog page (profiles + artifact health + launch links)
 - `GET /trading?model=a|b|...` -> model-scoped terminal tab (separate runner instance)
 - `GET /trading/model/{model_key}` -> redirect to `/trading?model={model_key}`
@@ -76,7 +81,8 @@ Port behavior note:
 - `GET /api/live/strategy/session` -> live operator session payload from Mongo-backed strategy state
 - `GET /api/trading/state?instance={key}` -> per-instance paper runner status + positions/trades/capital
 - `GET /api/trading/models` -> machine-readable model catalog for UI/automation
-- `POST /api/trading/start` -> start paper trading runner (payload supports `instance`)
+- `POST /api/trading/start` -> start legacy paper trading runner (payload supports `instance`)
+- `POST /api/trading/backtest/run` -> run legacy one-date backtest launcher
 - `POST /api/trading/stop?instance={key}` -> stop paper trading runner for that instance
 - `WS /ws` -> STOMP + legacy JSON websocket
 

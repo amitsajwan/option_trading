@@ -1443,13 +1443,41 @@ TRADING_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "publish
 ARTIFACT_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "published_models"
 ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "published_models"
 SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR = REPO_ROOT / "snapshot_app" / "contracts" / "snapshot_ml_flat_v1"
-_LEGACY_TRADING_RUNTIME_AVAILABLE = ML_PIPELINE_SRC.exists()
+LEGACY_TRADING_RUNTIME_ENV = "ENABLE_LEGACY_TRADING_UI"
 
 _TRADING_LOCK = threading.Lock()
 _TRADING_DEFAULT_INSTANCE = "default"
 _TRADING_RUNNERS: Dict[str, Dict[str, Any]] = {}
 _TRADING_LAST_BACKTEST: Dict[str, Dict[str, Any]] = {}
 _TRADING_BACKTEST_STATE_DIR = REPO_ROOT / ".run" / "dashboard_state"
+
+
+def _legacy_trading_runtime_requested() -> bool:
+    return _truthy(os.getenv(LEGACY_TRADING_RUNTIME_ENV), default=False)
+
+
+def _legacy_trading_runtime_status() -> Dict[str, Any]:
+    requested = _legacy_trading_runtime_requested()
+    package_present = ML_PIPELINE_SRC.exists()
+    enabled = bool(requested and package_present)
+    if enabled:
+        detail = "Legacy paper-trading launcher is enabled explicitly for this dashboard."
+    elif package_present:
+        detail = (
+            "Legacy paper-trading launcher is disabled by default on this branch. "
+            f"Set {LEGACY_TRADING_RUNTIME_ENV}=1 only if you intentionally need the deprecated ml_pipeline workflow."
+        )
+    else:
+        detail = (
+            "Legacy paper-trading launcher is unavailable because deprecated ml_pipeline runtime code is not present."
+        )
+    return {
+        "enabled": enabled,
+        "requested": requested,
+        "package_present": package_present,
+        "env_var": LEGACY_TRADING_RUNTIME_ENV,
+        "detail": detail,
+    }
 
 
 def _safe_load_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -3964,6 +3992,7 @@ def _build_trading_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
 @app.get("/trading", response_class=HTMLResponse)
 async def trading_terminal(request: Request):
     """Trading operator terminal UI."""
+    legacy_trading_runtime = _legacy_trading_runtime_status()
     query = dict(request.query_params)
     model_key_raw = str(query.get("model") or "").strip()
     if model_key_raw:
@@ -3989,18 +4018,26 @@ async def trading_terminal(request: Request):
             merged["model"] = safe_key
             if changed or safe_key != model_key_raw:
                 return RedirectResponse(url=f"/trading?{urlencode(merged)}", status_code=307)
-    return templates.TemplateResponse("trading_terminal.html", {"request": request})
+    return templates.TemplateResponse(
+        "trading_terminal.html",
+        {
+            "request": request,
+            "legacy_trading_runtime": legacy_trading_runtime,
+        },
+    )
 
 
 @app.get("/trading/models", response_class=HTMLResponse)
 async def trading_models_page(request: Request):
     """Model catalog page for choosing a trading model/profile."""
     models = _build_trading_model_catalog()
+    legacy_trading_runtime = _legacy_trading_runtime_status()
     return templates.TemplateResponse(
         "trading_models.html",
         {
             "request": request,
             "models": models,
+            "legacy_trading_runtime": legacy_trading_runtime,
             "summary": {
                 "total": len(models),
                 "ready": sum(1 for m in models if m.get("ready_to_run")),
@@ -4020,6 +4057,7 @@ async def get_trading_models():
         "count": len(models),
         "ready_count": sum(1 for m in models if m.get("ready_to_run")),
         "research_count": sum(1 for m in models if str(m.get("catalog_kind") or "") == "recovery"),
+        "legacy_trading_runtime": _legacy_trading_runtime_status(),
         "models": models,
     }
 
@@ -4411,6 +4449,9 @@ async def get_strategy_evaluation_run(run_id: str):
 @app.post("/api/trading/backtest/run")
 async def run_trading_backtest(request: Request):
     """Run one-date backtest using selected model artifacts (auto source: local archive or Mongo)."""
+    legacy_trading_runtime = _legacy_trading_runtime_status()
+    if not bool(legacy_trading_runtime.get("enabled")):
+        raise HTTPException(status_code=503, detail=str(legacy_trading_runtime.get("detail") or "legacy trading runtime unavailable"))
     payload: Dict[str, Any] = {}
     try:
         body = await request.json()
@@ -4453,7 +4494,7 @@ async def run_trading_backtest(request: Request):
     mongo_db = str(payload.get("mongo_db") or os.getenv("MONGO_DB") or "trading_ai").strip()
     vix_path = str(payload.get("vix_path") or "").strip()
     t19_path = _resolve_repo_path(str(payload.get("t19_report") or "").strip()) if payload.get("t19_report") else None
-    out_dir_rel = str(payload.get("out_dir") or "ml_pipeline/artifacts/backtest_runs").strip()
+    out_dir_rel = str(payload.get("out_dir") or ".run/dashboard_backtests").strip()
     out_dir = Path(out_dir_rel) if Path(out_dir_rel).is_absolute() else (REPO_ROOT / out_dir_rel)
     instance_key = _normalize_trading_instance(payload.get("instance"))
 
@@ -4655,10 +4696,14 @@ async def get_trading_state(
 @app.post("/api/trading/start")
 async def start_trading_runner(request: Request):
     """Start paper capital runner in background."""
-    if not _LEGACY_TRADING_RUNTIME_AVAILABLE:
+    legacy_trading_runtime = _legacy_trading_runtime_status()
+    if not bool(legacy_trading_runtime.get("enabled")):
         raise HTTPException(
             status_code=503,
-            detail="Legacy paper trading runner is not part of the supported Live+Dashboard profile. Use strategy_app deterministic/ml_pure runtime instead.",
+            detail=str(
+                legacy_trading_runtime.get("detail")
+                or "Legacy paper trading runner is not part of the supported Live+Dashboard profile. Use strategy_app deterministic/ml_pure runtime instead."
+            ),
         )
     payload: Dict[str, Any] = {}
     try:

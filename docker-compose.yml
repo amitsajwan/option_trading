@@ -422,9 +422,9 @@ services:
       STRATEGY_EVAL_GLOBAL_CHANNEL: "${STRATEGY_EVAL_GLOBAL_CHANNEL:-strategy:eval:global}"
       STRATEGY_EVAL_RUN_CHANNEL_PREFIX: "${STRATEGY_EVAL_RUN_CHANNEL_PREFIX:-strategy:eval:run:}"
       HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
-      SNAPSHOT_PARQUET_BASE: "${SNAPSHOT_PARQUET_BASE:-/app/ml_pipeline/artifacts/data/parquet_data}"
+      SNAPSHOT_PARQUET_BASE: "${SNAPSHOT_PARQUET_BASE:-/app/.data/ml_pipeline/parquet_data}"
     volumes:
-      - ./ml_pipeline/artifacts/data/parquet_data:/app/ml_pipeline/artifacts/data/parquet_data:ro
+      - ./.data/ml_pipeline/parquet_data:/app/.data/ml_pipeline/parquet_data:ro
       - ./.run:/app/.run
 
   strategy_eval_ui:
@@ -461,12 +461,12 @@ services:
         "-m",
         "snapshot_app.historical.replay_runner",
         "--base",
-        "/app/ml_pipeline/artifacts/data/parquet_data",
+        "/app/.data/ml_pipeline/parquet_data",
         "--topic",
         "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}",
       ]
     volumes:
-      - ./ml_pipeline/artifacts/data/parquet_data:/app/ml_pipeline/artifacts/data/parquet_data:ro
+      - ./.data/ml_pipeline/parquet_data:/app/.data/ml_pipeline/parquet_data:ro
       - ./.run:/app/.run
 
   persistence_app_historical:
