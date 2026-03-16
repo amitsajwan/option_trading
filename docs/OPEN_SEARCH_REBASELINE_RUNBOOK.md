@@ -6,7 +6,8 @@ Legacy status for the current milestone:
 
 - this runbook remains valid for offline/historical research flows
 - it is not part of the supported fresh-machine `Live+Dashboard` runtime target
-- it may continue to reference `ml_pipeline` until the offline rebaseline lane is migrated separately
+- offline entry-quality stages now resolve through `strategy_app.offline_ml`
+- frozen parquet inputs still come from `.data/ml_pipeline/parquet_data`
 
 ## 1. Generate/Refresh Window Manifest
 

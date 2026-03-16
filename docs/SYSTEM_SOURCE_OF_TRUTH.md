@@ -48,7 +48,7 @@ Core constraints:
 
 Champion selection in:
 
-- `ml_pipeline.entry_quality_champion_select.select_champions`
+- `strategy_app.offline_ml.entry_quality_champion_select.select_champions`
 
 Core constraints:
 

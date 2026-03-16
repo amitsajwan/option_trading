@@ -4,23 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
 import pandas as pd
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-ML_PIPELINE_SRC = REPO_ROOT / "ml_pipeline" / "src"
-if ML_PIPELINE_SRC.exists():
-    src_path = str(ML_PIPELINE_SRC)
-    if src_path not in sys.path:
-        sys.path.insert(0, src_path)
-
-from ml_pipeline.entry_candidate_dataset import build_entry_candidate_dataset
-from ml_pipeline.entry_quality_champion_select import select_champions
-from ml_pipeline.entry_quality_config import (
+from strategy_app.offline_ml.entry_candidate_dataset import build_entry_candidate_dataset
+from strategy_app.offline_ml.entry_quality_champion_select import select_champions
+from strategy_app.offline_ml.entry_quality_config import (
     EntryQualityDatasetConfig,
     EntryQualitySplitConfig,
     FEATURE_PROFILES,
@@ -29,8 +21,8 @@ from ml_pipeline.entry_quality_config import (
     SEGMENTATION_POLICIES,
     THRESHOLD_POLICIES,
 )
-from ml_pipeline.entry_quality_experiments import run_experiments
-from ml_pipeline.entry_quality_replay_eval import run_replay_evaluation
+from strategy_app.offline_ml.entry_quality_experiments import run_experiments
+from strategy_app.offline_ml.entry_quality_replay_eval import run_replay_evaluation
 from snapshot_app.historical.parquet_store import ParquetStore
 from snapshot_app.historical.snapshot_access import (
     DEFAULT_HISTORICAL_PARQUET_BASE,
@@ -288,7 +280,7 @@ def run_cycle(
         split=split_cfg,
     )
     dataset_meta = _stage_meta(
-        command="ml_pipeline.entry_candidate_dataset",
+        command="strategy_app.offline_ml.entry_candidate_dataset",
         formal_run=bool(formal_run),
         manifest_meta=manifest_meta,
         split=split,
@@ -312,7 +304,7 @@ def run_cycle(
 
     experiments_dir = ml_root / "experiments"
     experiments_meta = _stage_meta(
-        command="ml_pipeline.entry_quality_experiments",
+        command="strategy_app.offline_ml.entry_quality_experiments",
         formal_run=bool(formal_run),
         manifest_meta=manifest_meta,
         split=split,
@@ -332,7 +324,7 @@ def run_cycle(
 
     valid_eval_dir = ml_root / "replay_valid"
     valid_eval_meta = _stage_meta(
-        command="ml_pipeline.entry_quality_replay_eval.valid",
+        command="strategy_app.offline_ml.entry_quality_replay_eval.valid",
         formal_run=bool(formal_run),
         manifest_meta=manifest_meta,
         split=split,
@@ -384,7 +376,7 @@ def run_cycle(
 
     holdout_eval_dir = ml_root / "replay_holdout"
     holdout_eval_meta = _stage_meta(
-        command="ml_pipeline.entry_quality_replay_eval.holdout",
+        command="strategy_app.offline_ml.entry_quality_replay_eval.holdout",
         formal_run=bool(formal_run),
         manifest_meta=manifest_meta,
         split=split,

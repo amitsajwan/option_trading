@@ -11,8 +11,8 @@ This file is the canonical map between active docs, code ownership, and operatio
 | `docs/PROCESS_TOPOLOGY.md` | `docker-compose.yml`, `start_apps.py`, `stop_apps.py` | `docker compose --env-file .env.compose up ...`, `python -m start_apps`, `python -m stop_apps` |
 | `docs/SUPPORT_BRINGUP_GUIDE.md` | `ingestion_app/kite_auth.py`, `strategy_app/main.py`, `ml_pipeline_2/src/ml_pipeline_2/publishing/resolver.py`, `snapshot_app/health.py`, `strategy_app/health.py` | `python -m ingestion_app.kite_auth --verify`, `docker compose logs ...`, `python -m snapshot_app.health ...`, `python -m strategy_app.health` |
 | `docs/strategy_catalog.md` | `strategy_app/engines/strategies/all_strategies.py`, `strategy_app/engines/strategy_router.py`, `strategy_app/engines/deterministic_rule_engine.py`, `strategy_app/engines/regime.py` | `python -m strategy_app.main --engine deterministic ...` |
-| `docs/strategy_eval_architecture.md` | `market_data_dashboard/strategy_evaluation_service.py`, `strategy_eval_orchestrator/main.py`, `strategy_app/tools/deterministic_open_matrix.py`, `ml_pipeline/src/ml_pipeline/entry_quality_replay_eval.py` | `python -m strategy_eval_orchestrator.main`, `python -m strategy_app.tools.deterministic_open_matrix ...`, `python -m ml_pipeline.entry_quality_replay_eval ...` |
-| `docs/OPEN_SEARCH_REBASELINE_RUNBOOK.md` | `strategy_app/tools/open_search_rebaseline_cycle.py`, `snapshot_app/historical/snapshot_batch_runner.py`, `ml_pipeline/src/ml_pipeline/entry_candidate_dataset.py`, `ml_pipeline/src/ml_pipeline/entry_quality_experiments.py` | `python -m strategy_app.tools.open_search_rebaseline_cycle ...` |
+| `docs/strategy_eval_architecture.md` | `market_data_dashboard/strategy_evaluation_service.py`, `strategy_eval_orchestrator/main.py`, `strategy_app/tools/deterministic_open_matrix.py`, `strategy_app/offline_ml/entry_quality_replay_eval.py` | `python -m strategy_eval_orchestrator.main`, `python -m strategy_app.tools.deterministic_open_matrix ...`, `python -m strategy_app.offline_ml.entry_quality_replay_eval ...` |
+| `docs/OPEN_SEARCH_REBASELINE_RUNBOOK.md` | `strategy_app/tools/open_search_rebaseline_cycle.py`, `snapshot_app/historical/snapshot_batch_runner.py`, `strategy_app/offline_ml/entry_candidate_dataset.py`, `strategy_app/offline_ml/entry_quality_experiments.py` | `python -m strategy_app.tools.open_search_rebaseline_cycle ...` |
 
 ## 2. Package -> Canonical Doc
 
@@ -20,7 +20,7 @@ This file is the canonical map between active docs, code ownership, and operatio
 |---|---|
 | `snapshot_app` | `docs/ARCHITECTURE.md`, `docs/OPEN_SEARCH_REBASELINE_RUNBOOK.md` |
 | `strategy_app` | `docs/strategy_catalog.md`, `docs/SYSTEM_SOURCE_OF_TRUTH.md`, `docs/SUPPORT_BRINGUP_GUIDE.md` |
-| `ml_pipeline` | `docs/OPEN_SEARCH_REBASELINE_RUNBOOK.md`, `docs/strategy_eval_architecture.md` |
+| `strategy_app.offline_ml` | `docs/OPEN_SEARCH_REBASELINE_RUNBOOK.md`, `docs/strategy_eval_architecture.md` |
 | `persistence_app` | `docs/ARCHITECTURE.md`, `docs/PROCESS_TOPOLOGY.md` |
 | `strategy_eval_orchestrator` | `docs/strategy_eval_architecture.md`, `docs/PROCESS_TOPOLOGY.md` |
 | `market_data_dashboard` | `docs/PROCESS_TOPOLOGY.md`, `docs/SUPPORT_BRINGUP_GUIDE.md` |

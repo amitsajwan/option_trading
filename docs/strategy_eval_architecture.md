@@ -6,7 +6,8 @@ Legacy status for the current milestone:
 
 - this document describes historical replay/evaluation flows
 - it is not part of the supported fresh-machine `Live+Dashboard` runtime target
-- it may still depend on deprecated `ml_pipeline` components until the eval stack is migrated separately
+- replay/eval orchestration is still a legacy lane
+- offline entry-quality stages now resolve through `strategy_app.offline_ml`
 
 ## 1. Evaluation Planes
 
@@ -44,10 +45,10 @@ Stages:
 
 1. Manifest validation (`snapshot_app.historical.window_manifest`)
 2. Deterministic open-matrix search (`strategy_app.tools.deterministic_open_matrix`)
-3. Candidate dataset build (`ml_pipeline.entry_candidate_dataset`)
-4. ML experiment matrix (`ml_pipeline.entry_quality_experiments`)
-5. Replay valid and holdout (`ml_pipeline.entry_quality_replay_eval`)
-6. Champion selection (`ml_pipeline.entry_quality_champion_select`)
+3. Candidate dataset build (`strategy_app.offline_ml.entry_candidate_dataset`)
+4. ML experiment matrix (`strategy_app.offline_ml.entry_quality_experiments`)
+5. Replay valid and holdout (`strategy_app.offline_ml.entry_quality_replay_eval`)
+6. Champion selection (`strategy_app.offline_ml.entry_quality_champion_select`)
 
 ## 4. Formal Cycle Contract
 
