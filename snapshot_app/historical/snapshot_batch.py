@@ -52,6 +52,13 @@ def _normalize_output_dataset(value: str | None) -> str:
     return OUTPUT_DATASET_ML_FLAT
 
 
+def _resolve_write_dataset(value: str | None) -> str:
+    dataset = str(value or OUTPUT_DATASET_ML_FLAT).strip() or OUTPUT_DATASET_ML_FLAT
+    if dataset == OUTPUT_DATASET_SNAPSHOTS:
+        return OUTPUT_DATASET_SNAPSHOTS
+    return _normalize_output_dataset(dataset)
+
+
 def _default_build_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -940,7 +947,7 @@ def write_days_to_parquet(
     if not rows:
         return 0
 
-    out_dir = out_base / _normalize_output_dataset(output_dataset) / f"year={year}"
+    out_dir = out_base / _resolve_write_dataset(output_dataset) / f"year={year}"
     out_path = out_dir / "data.parquet"
     out_dir.mkdir(parents=True, exist_ok=True)
 
