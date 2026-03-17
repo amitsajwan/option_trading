@@ -24,6 +24,7 @@ from snapshot_app.snapshot_ml_flat_contract import (
     load_legacy_mapping,
     validate_snapshot_ml_flat_rows,
 )
+from snapshot_app.stage_views import project_stage_views
 
 from .parquet_store import ParquetStore
 
@@ -38,6 +39,14 @@ DAY_PROGRESS_EVERY_MINUTES = 120
 _EMPTY_CHAIN: dict[str, Any] = {"expiry": None, "pcr": None, "max_pain": None, "strikes": []}
 OUTPUT_DATASET_SNAPSHOTS = "snapshots"
 OUTPUT_DATASET_ML_FLAT = "snapshots_ml_flat"
+OUTPUT_DATASET_STAGE1_ENTRY = "stage1_entry_view"
+OUTPUT_DATASET_STAGE2_DIRECTION = "stage2_direction_view"
+OUTPUT_DATASET_STAGE3_RECIPE = "stage3_recipe_view"
+STAGE_OUTPUT_DATASETS = (
+    OUTPUT_DATASET_STAGE1_ENTRY,
+    OUTPUT_DATASET_STAGE2_DIRECTION,
+    OUTPUT_DATASET_STAGE3_RECIPE,
+)
 ML_FLAT_SCHEMA_NAME = "SnapshotMLFlat"
 ML_FLAT_SCHEMA_VERSION = FINAL_SNAPSHOT_SCHEMA_VERSION
 
@@ -56,6 +65,8 @@ def _resolve_write_dataset(value: str | None) -> str:
     dataset = str(value or OUTPUT_DATASET_ML_FLAT).strip() or OUTPUT_DATASET_ML_FLAT
     if dataset == OUTPUT_DATASET_SNAPSHOTS:
         return OUTPUT_DATASET_SNAPSHOTS
+    if dataset in STAGE_OUTPUT_DATASETS:
+        return dataset
     return _normalize_output_dataset(dataset)
 
 
@@ -820,6 +831,26 @@ def _flatten_snapshot(snapshot: dict[str, Any], trade_date: str, year: int) -> d
     return row
 
 
+def _project_stage_rows(
+    snapshot: dict[str, Any],
+    *,
+    trade_date: str,
+    year: int,
+    build_source: str,
+    build_run_id: str,
+) -> dict[str, dict[str, Any]]:
+    projected = project_stage_views(snapshot)
+    out: dict[str, dict[str, Any]] = {}
+    for dataset_name, row in projected.items():
+        stage_row = dict(row)
+        stage_row["trade_date"] = trade_date
+        stage_row["year"] = int(year)
+        stage_row["build_source"] = str(build_source)
+        stage_row["build_run_id"] = str(build_run_id)
+        out[dataset_name] = stage_row
+    return out
+
+
 def process_day(
     *,
     trade_date: str,
@@ -833,7 +864,7 @@ def process_day(
     build_source: str = "historical",
     build_run_id: str | None = None,
     validate_ml_flat_contract: bool = False,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """Build one day's minute-level snapshots from Layer-1 parquet inputs."""
     resolved_output_dataset = _normalize_output_dataset(output_dataset)
     day_started_at = time.perf_counter()
@@ -862,6 +893,7 @@ def process_day(
 
     source_rows: list[dict[str, Any]] = []
     snapshot_rows: list[dict[str, Any]] = []
+    stage_rows: dict[str, list[dict[str, Any]]] = {name: [] for name in STAGE_OUTPUT_DATASETS}
     year = int(pd.Timestamp(trade_date).year)
     today_indices = fut_window.index[today_mask].tolist()
 
@@ -892,6 +924,15 @@ def process_day(
                 build_run_id=str(build_run_id or _default_build_run_id()),
             )
         )
+        per_stage_rows = _project_stage_rows(
+            snapshot,
+            trade_date=trade_date,
+            year=year,
+            build_source=build_source,
+            build_run_id=str(build_run_id or _default_build_run_id()),
+        )
+        for dataset_name, row in per_stage_rows.items():
+            stage_rows.setdefault(dataset_name, []).append(row)
         row = _flatten_snapshot(snapshot, trade_date=trade_date, year=year)
         spot_values = spot_by_ts.get(ts_key) or spot_by_ts.get(ts_min_key, {})
         row["spot_open"] = pd.to_numeric(spot_values.get("spot_open"), errors="coerce")
@@ -933,6 +974,7 @@ def process_day(
     return {
         "snapshot_rows": snapshot_rows,
         "ml_flat_rows": projected,
+        "stage_rows": stage_rows,
     }
 
 
@@ -1130,13 +1172,18 @@ def run_snapshot_batch(
     buffered_year: int | None = None
     buffered_snapshot_rows: list[dict[str, Any]] = []
     buffered_ml_flat_rows: list[dict[str, Any]] = []
+    buffered_stage_rows: dict[str, list[dict[str, Any]]] = {name: [] for name in STAGE_OUTPUT_DATASETS}
     buffered_trade_dates: set[str] = set()
     buffered_day_count = 0
     total_snapshot_rows = 0
 
     def _flush_buffer() -> None:
-        nonlocal total_rows, total_snapshot_rows, buffered_snapshot_rows, buffered_ml_flat_rows, buffered_trade_dates, buffered_day_count
-        if buffered_year is None or (not buffered_snapshot_rows and not buffered_ml_flat_rows):
+        nonlocal total_rows, total_snapshot_rows, buffered_snapshot_rows, buffered_ml_flat_rows, buffered_stage_rows, buffered_trade_dates, buffered_day_count
+        if buffered_year is None or (
+            not buffered_snapshot_rows
+            and not buffered_ml_flat_rows
+            and not any(buffered_stage_rows.values())
+        ):
             return
         snapshot_written = write_days_to_parquet(
             buffered_snapshot_rows,
@@ -1152,10 +1199,19 @@ def run_snapshot_batch(
             output_dataset=resolved_output_dataset,
             replace_trade_dates=buffered_trade_dates,
         )
+        for dataset_name in STAGE_OUTPUT_DATASETS:
+            write_days_to_parquet(
+                buffered_stage_rows.get(dataset_name, []),
+                out_base=out_base,
+                year=buffered_year,
+                output_dataset=dataset_name,
+                replace_trade_dates=buffered_trade_dates,
+            )
         total_snapshot_rows += snapshot_written
         total_rows += ml_flat_written
         buffered_snapshot_rows = []
         buffered_ml_flat_rows = []
+        buffered_stage_rows = {name: [] for name in STAGE_OUTPUT_DATASETS}
         buffered_trade_dates = set()
         buffered_day_count = 0
 
@@ -1185,6 +1241,10 @@ def run_snapshot_batch(
             )
             snapshot_rows = list(rows.get("snapshot_rows") or [])
             ml_flat_rows = list(rows.get("ml_flat_rows") or [])
+            per_stage_rows = {
+                name: list((rows.get("stage_rows") or {}).get(name) or [])
+                for name in STAGE_OUTPUT_DATASETS
+            }
             if not snapshot_rows or not ml_flat_rows:
                 no_rows_days.append(day)
                 continue
@@ -1207,6 +1267,8 @@ def run_snapshot_batch(
 
             buffered_snapshot_rows.extend(snapshot_rows)
             buffered_ml_flat_rows.extend(ml_flat_rows)
+            for dataset_name in STAGE_OUTPUT_DATASETS:
+                buffered_stage_rows[dataset_name].extend(per_stage_rows.get(dataset_name, []))
             buffered_trade_dates.add(str(day))
             buffered_day_count += 1
             if buffered_day_count >= batch_days:
@@ -1242,7 +1304,7 @@ def run_snapshot_batch(
         "error_days": [entry["day"] for entry in errors],
         "total_rows": int(total_rows),
         "total_snapshot_rows": int(total_snapshot_rows),
-        "written_datasets": [OUTPUT_DATASET_SNAPSHOTS, resolved_output_dataset],
+        "written_datasets": [OUTPUT_DATASET_SNAPSHOTS, resolved_output_dataset, *list(STAGE_OUTPUT_DATASETS)],
         "iv_diagnostics": iv_diag_total,
         "iv_diagnostics_days_with_failures": iv_diag_by_day,
         "elapsed_sec": elapsed,

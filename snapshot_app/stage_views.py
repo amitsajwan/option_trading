@@ -24,7 +24,7 @@ _COMMON_SESSION_FIELDS: tuple[str, ...] = (
 )
 
 _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
-    "stage1_entry": {
+    "stage1_entry_view": {
         None: _COMMON_TOP_LEVEL_FIELDS,
         "session_context": _COMMON_SESSION_FIELDS,
         "futures_derived": (
@@ -81,7 +81,7 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
             "near_atm_volume_concentration",
         ),
     },
-    "stage2_direction": {
+    "stage2_direction_view": {
         None: _COMMON_TOP_LEVEL_FIELDS,
         "session_context": _COMMON_SESSION_FIELDS,
         "futures_derived": (
@@ -160,7 +160,7 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
             "iv_regime",
         ),
     },
-    "stage3_recipe": {
+    "stage3_recipe_view": {
         None: _COMMON_TOP_LEVEL_FIELDS,
         "session_context": _COMMON_SESSION_FIELDS,
         "futures_derived": (
@@ -247,22 +247,22 @@ def _project_view(snapshot: dict[str, Any], view_name: str) -> dict[str, Any]:
 
 
 def project_stage1_entry_view(snapshot: dict[str, Any]) -> dict[str, Any]:
-    return _project_view(snapshot, "stage1_entry")
+    return _project_view(snapshot, "stage1_entry_view")
 
 
 def project_stage2_direction_view(snapshot: dict[str, Any]) -> dict[str, Any]:
-    return _project_view(snapshot, "stage2_direction")
+    return _project_view(snapshot, "stage2_direction_view")
 
 
 def project_stage3_recipe_view(snapshot: dict[str, Any]) -> dict[str, Any]:
-    return _project_view(snapshot, "stage3_recipe")
+    return _project_view(snapshot, "stage3_recipe_view")
 
 
 def project_stage_views(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
-        "stage1_entry": project_stage1_entry_view(snapshot),
-        "stage2_direction": project_stage2_direction_view(snapshot),
-        "stage3_recipe": project_stage3_recipe_view(snapshot),
+        "stage1_entry_view": project_stage1_entry_view(snapshot),
+        "stage2_direction_view": project_stage2_direction_view(snapshot),
+        "stage3_recipe_view": project_stage3_recipe_view(snapshot),
     }
 
 

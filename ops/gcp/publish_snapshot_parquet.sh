@@ -6,6 +6,7 @@ PARQUET_BASE="${PARQUET_BASE:-${REPO_ROOT}/.data/ml_pipeline/parquet_data}"
 REPORT_ROOT="${REPORT_ROOT:-${REPO_ROOT}/.run/snapshot_parquet}"
 SNAPSHOT_PARQUET_BUCKET_URL="${SNAPSHOT_PARQUET_BUCKET_URL:?set SNAPSHOT_PARQUET_BUCKET_URL, for example gs://my-snapshot-bucket/parquet_data}"
 PUBLISH_DERIVED_ML_FLAT="${PUBLISH_DERIVED_ML_FLAT:-1}"
+PUBLISH_STAGE_VIEWS="${PUBLISH_STAGE_VIEWS:-1}"
 PUBLISH_NORMALIZED_CACHE="${PUBLISH_NORMALIZED_CACHE:-0}"
 
 TARGET_ROOT="${SNAPSHOT_PARQUET_BUCKET_URL%/}"
@@ -30,6 +31,12 @@ sync_dir "${SNAPSHOT_ROOT}" "${TARGET_ROOT}/snapshots"
 
 if [ "${PUBLISH_DERIVED_ML_FLAT}" = "1" ]; then
   sync_dir "${PARQUET_BASE}/snapshots_ml_flat" "${TARGET_ROOT}/snapshots_ml_flat"
+fi
+
+if [ "${PUBLISH_STAGE_VIEWS}" = "1" ]; then
+  sync_dir "${PARQUET_BASE}/stage1_entry_view" "${TARGET_ROOT}/stage1_entry_view"
+  sync_dir "${PARQUET_BASE}/stage2_direction_view" "${TARGET_ROOT}/stage2_direction_view"
+  sync_dir "${PARQUET_BASE}/stage3_recipe_view" "${TARGET_ROOT}/stage3_recipe_view"
 fi
 
 if [ "${PUBLISH_NORMALIZED_CACHE}" = "1" ]; then

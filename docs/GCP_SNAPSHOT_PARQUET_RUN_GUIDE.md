@@ -64,10 +64,13 @@ Resources intentionally not created in this phase:
 - model bucket
 - runtime-config bucket
 
-The snapshot pipeline writes two final datasets under `.data/ml_pipeline/parquet_data`:
+The snapshot pipeline writes these final datasets under `.data/ml_pipeline/parquet_data`:
 
 - `snapshots/year=YYYY/data.parquet`
 - `snapshots_ml_flat/year=YYYY/data.parquet`
+- `stage1_entry_view/year=YYYY/data.parquet`
+- `stage2_direction_view/year=YYYY/data.parquet`
+- `stage3_recipe_view/year=YYYY/data.parquet`
 
 The recommended GCS target is:
 
