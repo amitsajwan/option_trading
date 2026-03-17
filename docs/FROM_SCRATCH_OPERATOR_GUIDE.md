@@ -54,11 +54,18 @@ Use [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md).
 
 This covers:
 
+- minimal snapshot-only GCP setup
 - raw archive upload
 - high-power build VM
 - final canonical `snapshots`
 - derived `snapshots_ml_flat`
 - GCS upload of parquet and reports
+
+This lane does not require:
+
+- runtime image build
+- runtime config publish
+- keeping the runtime VM running
 
 ### Need to train and publish a model release
 

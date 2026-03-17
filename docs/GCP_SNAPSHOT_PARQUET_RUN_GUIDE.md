@@ -9,7 +9,15 @@ Use this when you want:
 - a resumable build path from raw BankNifty archive
 - outputs stored in GCS so they are accessible from other VMs and future runs
 
-If you do not have base GCP infra or shared snapshot storage yet, start with [GCP_BOOTSTRAP_RUNBOOK.md](GCP_BOOTSTRAP_RUNBOOK.md).
+This is a snapshot-only path.
+
+For this runbook you do not need:
+
+- runtime image build
+- runtime config publish
+- a running runtime VM
+
+If the GCP project is brand new, you only need the minimal project and API preparation from [GCP_BOOTSTRAP_RUNBOOK.md](GCP_BOOTSTRAP_RUNBOOK.md). Do not follow the runtime/image steps for this lane.
 
 ## 1. What This Produces
 
@@ -37,33 +45,31 @@ SNAPSHOT_PARQUET_BUCKET_URL="gs://gen-lang-client-0909109011-option-trading-snap
 
 These are the values the rest of this runbook assumes.
 
-## 3. Make Sure The Snapshot Bucket Exists
+## 3. Minimal Snapshot-Only Setup
 
-If you already bootstrapped base infra but did not create snapshot storage yet:
-
-1. add the three values above to `ops/gcp/operator.env`
-2. rerun bootstrap without image build or runtime-config sync
-
-Example:
+For snapshot build only, do this minimal setup in Cloud Shell:
 
 ```bash
-cd ~/option_trading
-export PATH="$HOME/bin:$PATH"
-RUN_IMAGE_BUILD=0 RUN_RUNTIME_CONFIG_SYNC=0 ./ops/gcp/from_scratch_bootstrap.sh
+gcloud config set project gen-lang-client-0909109011
+gcloud services enable \
+  compute.googleapis.com \
+  storage.googleapis.com \
+  iamcredentials.googleapis.com \
+  cloudresourcemanager.googleapis.com
 ```
 
-Expected Terraform output:
-
-```text
-snapshot_data_bucket_url = "gs://gen-lang-client-0909109011-option-trading-snapshots"
-```
-
-If you only need snapshot and training right now, stop the runtime VM after Terraform is done:
+Create the shared snapshot bucket directly:
 
 ```bash
-cd ~/option_trading
-./ops/gcp/stop_runtime.sh
+gcloud storage buckets create \
+  "gs://gen-lang-client-0909109011-option-trading-snapshots" \
+  --location="asia-south1" \
+  --uniform-bucket-level-access
 ```
+
+If the bucket already exists, that is fine. Continue.
+
+You do not need to run `from_scratch_bootstrap.sh` for this snapshot-only lane.
 
 ## 4. Upload Raw Archive Once
 
@@ -121,13 +127,15 @@ On that VM:
 
 ```bash
 gcloud config set project gen-lang-client-0909109011
+sudo apt-get update
+sudo apt-get install -y git python3-venv
 git clone https://github.com/amitsajwan/option_trading.git
 cd ~/option_trading
 git checkout chore/ml-pipeline-ubuntu-gcp-runbook
 git pull --ff-only
 ```
 
-Create `ops/gcp/operator.env` on the VM and make sure it contains at least:
+Create `ops/gcp/operator.env` on the VM and make sure it contains at least these snapshot values:
 
 ```bash
 PROJECT_ID="gen-lang-client-0909109011"
@@ -139,6 +147,8 @@ SNAPSHOT_DATA_BUCKET_NAME="gen-lang-client-0909109011-option-trading-snapshots"
 RAW_ARCHIVE_BUCKET_URL="gs://gen-lang-client-0909109011-option-trading-snapshots/banknifty_data"
 SNAPSHOT_PARQUET_BUCKET_URL="gs://gen-lang-client-0909109011-option-trading-snapshots/parquet_data"
 ```
+
+No runtime bucket, model bucket, runtime image tag, or runtime config values are required for this runbook.
 
 ## 7. Build And Publish Final Parquet
 
