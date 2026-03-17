@@ -25,35 +25,52 @@ The recommended GCS target is:
 - final parquet prefix:
   - `gs://<snapshot-data-bucket>/parquet_data`
 
-## 2. Recommended Machine
+## 2. Exact Bucket Values For This Project
 
-Do the full rebuild on a disposable Linux VM with enough CPU and disk.
-
-Recommended starting point:
-
-- `n2-highmem-32`
-- at least `500 GB` balanced persistent disk
-
-The default training template is still smaller. For a full multi-year historical rebuild, temporarily use a larger machine for the snapshot build window, then delete it after upload.
-
-## 3. One-Time Storage Setup
-
-In [operator.env.example](../ops/gcp/operator.env.example), fill these optional snapshot-storage values in your real `ops/gcp/operator.env`:
+For project `gen-lang-client-0909109011`, use these values in `ops/gcp/operator.env`:
 
 ```bash
-SNAPSHOT_DATA_BUCKET_NAME="my-option-trading-snapshots"
-RAW_ARCHIVE_BUCKET_URL="gs://my-option-trading-snapshots/banknifty_data"
-SNAPSHOT_PARQUET_BUCKET_URL="gs://my-option-trading-snapshots/parquet_data"
+SNAPSHOT_DATA_BUCKET_NAME="gen-lang-client-0909109011-option-trading-snapshots"
+RAW_ARCHIVE_BUCKET_URL="gs://gen-lang-client-0909109011-option-trading-snapshots/banknifty_data"
+SNAPSHOT_PARQUET_BUCKET_URL="gs://gen-lang-client-0909109011-option-trading-snapshots/parquet_data"
 ```
 
-If `SNAPSHOT_DATA_BUCKET_NAME` is set before running [from_scratch_bootstrap.sh](../ops/gcp/from_scratch_bootstrap.sh), Terraform will create the snapshot-data bucket too.
+These are the values the rest of this runbook assumes.
+
+## 3. Make Sure The Snapshot Bucket Exists
+
+If you already bootstrapped base infra but did not create snapshot storage yet:
+
+1. add the three values above to `ops/gcp/operator.env`
+2. rerun bootstrap without image build or runtime-config sync
+
+Example:
+
+```bash
+cd ~/option_trading
+export PATH="$HOME/bin:$PATH"
+RUN_IMAGE_BUILD=0 RUN_RUNTIME_CONFIG_SYNC=0 ./ops/gcp/from_scratch_bootstrap.sh
+```
+
+Expected Terraform output:
+
+```text
+snapshot_data_bucket_url = "gs://gen-lang-client-0909109011-option-trading-snapshots"
+```
+
+If you only need snapshot and training right now, stop the runtime VM after Terraform is done:
+
+```bash
+cd ~/option_trading
+./ops/gcp/stop_runtime.sh
+```
 
 ## 4. Upload Raw Archive Once
 
 From a machine that has the raw archive locally:
 
 ```bash
-export RAW_ARCHIVE_BUCKET_URL="gs://my-option-trading-snapshots/banknifty_data"
+export RAW_ARCHIVE_BUCKET_URL="gs://gen-lang-client-0909109011-option-trading-snapshots/banknifty_data"
 export RAW_DATA_ROOT="/path/to/banknifty_data"
 ./ops/gcp/publish_raw_market_data.sh
 ```
@@ -65,18 +82,70 @@ Expected raw root layout:
 - `banknifty_spot`
 - `VIX`
 
-## 5. Build And Publish Final Parquet
+## 5. Create The Temporary High-Power Snapshot VM
 
-On the high-power GCP VM:
+Do the full rebuild on a disposable Linux VM with enough CPU and disk.
+
+Recommended starting point:
+
+- `n2-highmem-32`
+- at least `500 GB` balanced persistent disk
+
+The default training template is still smaller. For a full multi-year historical rebuild, create a separate temporary VM for the snapshot build window, then delete it after upload.
+
+Example create command:
+
+```bash
+gcloud compute instances create option-trading-snapshot-build-01 \
+  --project "gen-lang-client-0909109011" \
+  --zone "asia-south1-b" \
+  --machine-type "n2-highmem-32" \
+  --boot-disk-size "500GB" \
+  --boot-disk-type "pd-balanced" \
+  --image-family "ubuntu-2204-lts" \
+  --image-project "ubuntu-os-cloud" \
+  --scopes "https://www.googleapis.com/auth/cloud-platform"
+```
+
+If `asia-south1-b` does not have capacity, retry in another zone that has capacity and update the guide commands accordingly.
+
+## 6. Prepare The Snapshot VM
+
+SSH to the VM:
+
+```bash
+gcloud compute ssh option-trading-snapshot-build-01 --zone "asia-south1-b"
+```
+
+On that VM:
+
+```bash
+gcloud config set project gen-lang-client-0909109011
+git clone https://github.com/amitsajwan/option_trading.git
+cd ~/option_trading
+git checkout chore/ml-pipeline-ubuntu-gcp-runbook
+git pull --ff-only
+```
+
+Create `ops/gcp/operator.env` on the VM and make sure it contains at least:
+
+```bash
+PROJECT_ID="gen-lang-client-0909109011"
+REGION="asia-south1"
+ZONE="asia-south1-b"
+REPO_CLONE_URL="https://github.com/amitsajwan/option_trading.git"
+REPO_REF="chore/ml-pipeline-ubuntu-gcp-runbook"
+SNAPSHOT_DATA_BUCKET_NAME="gen-lang-client-0909109011-option-trading-snapshots"
+RAW_ARCHIVE_BUCKET_URL="gs://gen-lang-client-0909109011-option-trading-snapshots/banknifty_data"
+SNAPSHOT_PARQUET_BUCKET_URL="gs://gen-lang-client-0909109011-option-trading-snapshots/parquet_data"
+```
+
+## 7. Build And Publish Final Parquet
+
+On the temporary high-power GCP VM:
 
 ```bash
 cd ~/option_trading
-git pull
-```
-
-Then run:
-
-```bash
 export SYNC_RAW_ARCHIVE_FROM_GCS=1
 export NORMALIZE_JOBS=24
 export SNAPSHOT_JOBS=8
@@ -96,7 +165,7 @@ What this does:
    - latest window manifest
 6. uploads final parquet and reports to `SNAPSHOT_PARQUET_BUCKET_URL`
 
-## 6. Useful Variants
+## 8. Useful Variants
 
 Build one year only:
 
@@ -140,7 +209,7 @@ export PUBLISH_NORMALIZED_CACHE=1
 ./ops/gcp/run_snapshot_parquet_pipeline.sh
 ```
 
-## 7. Published Layout In GCS
+## 9. Published Layout In GCS
 
 After a successful upload, the bucket prefix should contain:
 
@@ -157,7 +226,7 @@ If `PUBLISH_NORMALIZED_CACHE=1`, it will also contain:
 - `parquet_data/normalized/spot/...`
 - `parquet_data/normalized/vix/...`
 
-## 8. Resume Strategy
+## 10. Resume Strategy
 
 The historical runner is resumable by default.
 
@@ -174,7 +243,7 @@ The easiest steady-state pattern is:
 3. upload final parquet to `SNAPSHOT_PARQUET_BUCKET_URL`
 4. delete the VM after success
 
-## 9. Verification Commands
+## 11. Verification Commands
 
 List generated local datasets:
 
@@ -191,10 +260,18 @@ python -m snapshot_app.historical.snapshot_batch_runner --validate-only --valida
 Inspect the uploaded GCS layout:
 
 ```bash
-gcloud storage ls "gs://my-option-trading-snapshots/parquet_data/**"
+gcloud storage ls "gs://gen-lang-client-0909109011-option-trading-snapshots/parquet_data/**"
 ```
 
-## 10. Related Files
+## 12. Delete The Temporary Snapshot VM
+
+After parquet and reports are safely in GCS:
+
+```bash
+gcloud compute instances delete option-trading-snapshot-build-01 --zone "asia-south1-b" --quiet
+```
+
+## 13. Related Files
 
 - [ops/gcp/README.md](../ops/gcp/README.md)
 - [snapshot_app/historical/README.md](../snapshot_app/historical/README.md)

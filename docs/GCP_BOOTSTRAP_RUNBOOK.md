@@ -25,6 +25,24 @@ If you only need historical parquet, training, or runtime cutover after bootstra
 - repo is checked out on the target operator machine
 - you know the repo branch or tag you want VMs to use
 
+## First Commands In Cloud Shell
+
+If you are starting from a fresh Cloud Shell session:
+
+```bash
+gcloud config set project <project-id>
+git clone <repo-clone-url>
+cd option_trading
+git checkout <repo-ref>
+git pull --ff-only
+```
+
+Replace:
+
+- `<project-id>` with `PROJECT_ID`
+- `<repo-clone-url>` with `REPO_CLONE_URL`
+- `<repo-ref>` with `REPO_REF`
+
 ## Inputs To Fill
 
 Copy [operator.env.example](../ops/gcp/operator.env.example) to `ops/gcp/operator.env` and fill at least:
@@ -178,4 +196,3 @@ Choose the next lane:
 - train and publish a model: [TRAINING_RELEASE_RUNBOOK.md](TRAINING_RELEASE_RUNBOOK.md)
 - deploy or cut over runtime: [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md)
 - stop or tear down resources: [CLEANUP_ROLLBACK_RUNBOOK.md](CLEANUP_ROLLBACK_RUNBOOK.md)
-

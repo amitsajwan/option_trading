@@ -14,6 +14,26 @@ Use this if you are:
 - deploying or cutting over runtime
 - stopping, rolling back, or cleaning up resources
 
+## First Commands In Cloud Shell
+
+If you are starting on a fresh Cloud Shell session, begin here:
+
+```bash
+gcloud config set project <project-id>
+git clone <repo-clone-url>
+cd option_trading
+git checkout <repo-ref>
+git pull --ff-only
+```
+
+For this repo, the concrete values usually come from `ops/gcp/operator.env`:
+
+- `PROJECT_ID`
+- `REPO_CLONE_URL`
+- `REPO_REF`
+
+After the checkout is ready, continue with the runbook lane below.
+
 ## Choose The Right Runbook
 
 ### No GCP resources exist yet
