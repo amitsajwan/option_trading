@@ -114,12 +114,17 @@ This covers:
 
 ## Standard Sequences
 
-### Day 0 full setup
+### Day 0 full runtime-capable setup
 
 1. [GCP_BOOTSTRAP_RUNBOOK.md](GCP_BOOTSTRAP_RUNBOOK.md)
 2. [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md) if historical parquet is required
 3. [TRAINING_RELEASE_RUNBOOK.md](TRAINING_RELEASE_RUNBOOK.md) if you need a fresh model release
 4. [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md)
+
+### Day 0 snapshot-only setup
+
+1. [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
+2. [CLEANUP_ROLLBACK_RUNBOOK.md](CLEANUP_ROLLBACK_RUNBOOK.md) if you want to delete the temporary snapshot VM after upload
 
 ### Normal recurring release
 
@@ -138,9 +143,9 @@ This covers:
 
 - project setup
 - API enablement
-- Terraform base infra creation
-- snapshot storage bucket setup
-- first runtime bootstrap
+- Terraform base infra creation for runtime/training lanes
+- snapshot storage bucket setup for the snapshot lane
+- first runtime bootstrap for runtime/deploy lanes
 
 ### Recurring
 

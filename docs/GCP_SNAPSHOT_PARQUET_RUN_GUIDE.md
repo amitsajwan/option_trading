@@ -17,6 +17,12 @@ For this runbook you do not need:
 - runtime config publish
 - a running runtime VM
 
+## Tooling Choice
+
+For this runbook, use `gcloud` only.
+
+Do not use Terraform for the snapshot-only lane unless you intentionally also want the full runtime and training base platform.
+
 If the GCP project is brand new, you only need the minimal project and API preparation from [GCP_BOOTSTRAP_RUNBOOK.md](GCP_BOOTSTRAP_RUNBOOK.md). Do not follow the runtime/image steps for this lane.
 
 ## 1. What This Produces
