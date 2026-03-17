@@ -21,7 +21,7 @@ ML note:
 
 - supported ML training, threshold sweep, publishing, and `ml_pure` runtime switching now live in `ml_pipeline_2`
 - preferred operator flow is now the guarded `ml_pipeline_2.run_recovery_release` command for train/sweep/publish/GCS handoff
-- deprecated `ml_pipeline` may still exist for legacy historical/eval tooling, but it is not part of the supported Live+Dashboard runtime path
+- legacy `ml_pipeline` package has been dropped from this branch; only the external data root `.data/ml_pipeline` remains as the frozen input cache used by supported research and replay tooling
 - `strategy_app` remains the live runtime consumer for `deterministic` and `ml_pure`
 
 ## Services

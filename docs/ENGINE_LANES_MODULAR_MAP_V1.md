@@ -51,12 +51,12 @@ Phase-1 modularization map for v2.3 lane-aware runtime, persistence, dashboard d
   - Outputs: `/api/live/strategy/session` payload with `engine_context`, `decision_diagnostics`, `promotion_lane`, `ops_state`, `active_alerts`, `decision_explainability`, `ui_hints`
 
 - Promotion reporting:
-  - `ml_pipeline/src/ml_pipeline/evaluation/futures_stage_metrics.py`
-  - `ml_pipeline/src/ml_pipeline/evaluation/futures_promotion_ladder.py`
-  - `ml_pipeline/src/ml_pipeline/evaluation/futures_direction_eval.py` (facade)
-  - `ml_pipeline/src/ml_pipeline/publishing/promotion_summary.py`
+  - `ml_pipeline_2/src/ml_pipeline_2/evaluation/stage_metrics.py`
+  - `ml_pipeline_2/src/ml_pipeline_2/evaluation/promotion.py`
+  - `ml_pipeline_2/src/ml_pipeline_2/evaluation/direction.py` (facade)
+  - `ml_pipeline_2/src/ml_pipeline_2/publishing/release.py`
   - Inputs: holdout eval report + training replay utility summary
-  - Outputs: `promotion_ladders.ml_pure`, `promotion_ladders.deterministic`, `promotion_decision`
+  - Outputs: `promotion_ladders.ml_pure`, `promotion_decision`, release publishability assessment
 
 ## Compatibility Notes
 

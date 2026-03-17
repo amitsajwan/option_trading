@@ -9,7 +9,7 @@ This document describes the live architecture and active data contracts only.
 - `strategy_app`: consumes snapshots, classifies regime, routes deterministic strategies, optionally applies ML entry gate.
 - `persistence_app`: persists snapshot stream and strategy stream into MongoDB.
 - `strategy_eval_orchestrator`: replays historical snapshot rows to historical topics.
-- `ml_pipeline`: offline dataset/EDA/training/replay/champion selection.
+- `ml_pipeline_2`: offline research/training/threshold sweep/publish/release for `ml_pure`.
 - `market_data_dashboard` / `strategy_eval_ui`: operator + evaluation UI surfaces.
 
 ## 2. Core Contracts
@@ -59,7 +59,7 @@ This document describes the live architecture and active data contracts only.
 
 - `snapshot_app`: snapshot schema, batch/replay tooling, window readiness.
 - `strategy_app`: runtime strategy decisions, regime/router/risk, ML runtime guard.
-- `ml_pipeline`: offline model development and champion gating.
+- `ml_pipeline_2`: offline model development, evaluation, publish/release gating.
 - `strategy_eval_orchestrator`: replay transport and rollout-stage validation.
 - `persistence_app`: Mongo write path and evaluation persistence reads.
 

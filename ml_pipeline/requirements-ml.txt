@@ -1,7 +1,0 @@
-pandas>=2,<3
-numpy>=1.26,<3
-scikit-learn>=1.4,<2
-joblib>=1.3,<2
-xgboost>=2,<3
-pyarrow>=14,<20
-requests>=2.31,<3
