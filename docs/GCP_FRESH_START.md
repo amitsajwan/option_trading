@@ -281,3 +281,25 @@ Use this because:
 - models are already in GCS
 
 So you only need to recreate the infra and let the runtime VM boot.
+
+## 15. Local Repo Cleanup
+
+After you migrate to the current branch shape, clean up the local workspace with this rule:
+
+- delete the old ignored `ml_pipeline/` directory if it is still present locally
+- keep `.data/ml_pipeline/` because that is still the supported frozen-data cache for `ml_pipeline_2` and historical replay tooling
+- keep `ml_pipeline_2/artifacts/` only if you still need local unpublished research outputs
+
+Safe local cleanup commands from the repo root:
+
+```bash
+rm -rf ml_pipeline
+rm -rf .pytest_cache
+```
+
+On Windows PowerShell:
+
+```powershell
+Remove-Item -Recurse -Force .\ml_pipeline
+Remove-Item -Recurse -Force .\.pytest_cache -ErrorAction SilentlyContinue
+```

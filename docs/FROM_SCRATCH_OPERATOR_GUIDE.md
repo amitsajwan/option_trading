@@ -688,6 +688,26 @@ Follow these rules going forward:
 - always use Terraform for new machine creation
 - always let GitHub Actions orchestrate deploys once the workflows are in place
 
+### Local repo cleanup after migration
+
+When you update an older local checkout to this branch shape:
+
+- delete the ignored local `ml_pipeline/` directory if it still exists
+- do not delete `.data/ml_pipeline/`; it is still the supported frozen-data cache for `ml_pipeline_2` and historical replay tooling
+- only delete `ml_pipeline_2/artifacts/` if you are sure you do not need unpublished local research outputs
+
+Safe cleanup examples:
+
+```bash
+rm -rf ml_pipeline
+rm -rf .pytest_cache
+```
+
+```powershell
+Remove-Item -Recurse -Force .\ml_pipeline
+Remove-Item -Recurse -Force .\.pytest_cache -ErrorAction SilentlyContinue
+```
+
 ## 26. Which Document To Follow
 
 Use this document as the main guide.
