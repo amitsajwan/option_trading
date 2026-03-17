@@ -166,7 +166,54 @@ Even with GitHub Actions, some steps should remain manual on purpose:
 
 This is good. Those are change-control points, not automation failures.
 
-## 6. What Must Be Installed Where
+## 6. What You Do Only Once Vs What You Repeat
+
+Do not treat the Day 0 bootstrap as the normal operating path.
+
+### Day 0 only
+
+These are usually one-time setup steps for a new GCP project:
+
+- create/select the GCP project
+- attach billing
+- enable required APIs
+- pick a region and zone that actually have quota and capacity
+- install or pin a Terraform version that satisfies this repo
+- fill `ops/gcp/operator.env`
+- apply Terraform for the first time
+- publish the first runtime config bundle
+- build and push the first image set
+
+### Repeated when code changes
+
+These are normal repeat actions:
+
+- build and push new runtime images
+- publish updated runtime config
+- restart or recreate the runtime VM
+
+### Repeated only when ML changes
+
+These are ML-release actions, not every-day actions:
+
+- create a disposable training VM
+- run the guarded release flow
+- sync published models to GCS
+- apply the generated `ML_PURE_*` handoff
+- roll runtime forward to the approved model
+
+### Why we did so many manual steps this time
+
+This session was a true Day 0 bootstrap, so we had to discover and fix project-level issues in sequence:
+
+- missing required APIs
+- incompatible Terraform version in Cloud Shell
+- zone capacity issue for the selected runtime machine type
+- first-run infra validation issues in the checked-in scripts/templates
+
+That is exactly why the runbook must distinguish Day 0 from steady-state operations.
+
+## 7. What Must Be Installed Where
 
 ### Operator machine
 
@@ -200,7 +247,40 @@ Installed automatically by the training startup script:
 - `libgomp1`
 - Google Cloud CLI
 
-## 7. Cost Decision First
+## 8. GCP APIs Required
+
+At minimum, make sure these APIs are enabled before Terraform apply:
+
+- `compute.googleapis.com`
+- `artifactregistry.googleapis.com`
+- `cloudbuild.googleapis.com`
+- `storage.googleapis.com`
+- `iamcredentials.googleapis.com`
+- `cloudresourcemanager.googleapis.com`
+
+Why `cloudresourcemanager.googleapis.com` matters:
+
+- Terraform uses project IAM operations for the runtime and training service-account role bindings
+- without it, the IAM member resources fail even though some compute and storage resources may still create successfully
+
+## 9. Terraform Version Note
+
+This repo currently requires Terraform `>= 1.6.0`.
+
+If Cloud Shell ships an older Terraform version, install a newer binary into `~/bin` and prepend that to `PATH` before running Terraform commands.
+
+Example:
+
+```bash
+mkdir -p ~/bin
+cd /tmp
+curl -LO https://releases.hashicorp.com/terraform/1.14.7/terraform_1.14.7_linux_amd64.zip
+unzip -o terraform_1.14.7_linux_amd64.zip -d ~/bin
+export PATH="$HOME/bin:$PATH"
+terraform version
+```
+
+## 10. Cost Decision First
 
 If the current 32-core training VM does not contain anything you still need locally:
 
@@ -213,7 +293,7 @@ If the current 32-core training VM does not contain anything you still need loca
 
 If you are unsure, export anything important to GCS first.
 
-## 8. Recommended Starting Sizes
+## 11. Recommended Starting Sizes
 
 Start small and scale only if needed:
 
@@ -222,7 +302,13 @@ Start small and scale only if needed:
 
 Those recommended example sizes are reflected in [terraform.tfvars.example](/c:/code/option_trading/infra/gcp/terraform.tfvars.example).
 
-## 9. Prerequisites
+Important:
+
+- machine type existence is not enough
+- quota and zone capacity both matter
+- if a zone has insufficient capacity, move to another zone in the same region and re-run Terraform
+
+## 12. Prerequisites
 
 Before provisioning, make sure you have:
 
@@ -241,7 +327,7 @@ Useful repo entry points:
 - [infra/gcp/README.md](/c:/code/option_trading/infra/gcp/README.md)
 - [ops/gcp/README.md](/c:/code/option_trading/ops/gcp/README.md)
 
-## 10. Fill The Operator Template
+## 13. Fill The Operator Template
 
 Copy the template:
 
@@ -263,7 +349,7 @@ This is the main input file for the runnable operator scripts.
 
 This file is also the best source of truth when you later create GitHub Actions variables and secrets.
 
-## 11. Provision Base Infrastructure
+## 14. Provision Base Infrastructure
 
 From the repo root:
 
@@ -291,7 +377,7 @@ Terraform creates:
 
 The same logical inputs should later be mirrored into GitHub Actions repo variables and environments.
 
-## 12. Prepare The Baseline Runtime Bootstrap Bundle
+## 15. Prepare The Baseline Runtime Bootstrap Bundle
 
 Prepare `.env.compose` for the baseline runtime first.
 
@@ -303,7 +389,7 @@ Recommended starting point:
 
 The bootstrap script above will publish the runtime config bundle if `.env.compose` already exists.
 
-## 13. Runtime Bring-Up
+## 16. Runtime Bring-Up
 
 The runtime VM startup script will:
 
@@ -316,7 +402,7 @@ The runtime VM startup script will:
 
 Your runtime VM should now be the only always-on machine.
 
-## 14. Create A Disposable Training VM
+## 17. Create A Disposable Training VM
 
 Do not keep a large training VM running all the time.
 
@@ -328,7 +414,7 @@ When you need ML work:
 
 Then let it bootstrap the repo and Python environment.
 
-## 15. Supported Release Flow
+## 18. Supported Release Flow
 
 On the training VM, use the runnable wrapper:
 
@@ -360,7 +446,7 @@ python -m ml_pipeline_2.run_recovery_release \
   --model-bucket-url gs://<model-bucket>/published_models
 ```
 
-## 16. Switch Runtime To The Released ML Model Manually If Needed
+## 19. Switch Runtime To The Released ML Model Manually If Needed
 
 Take the generated handoff file and apply it to `.env.compose`:
 
@@ -386,7 +472,7 @@ export RUNTIME_CONFIG_BUCKET_URL=gs://<runtime-config-bucket>/runtime
 ./ops/gcp/apply_ml_pure_release.sh
 ```
 
-## 17. How GitHub Actions Should Call This
+## 20. How GitHub Actions Should Call This
 
 The recommended GitHub Actions model is:
 
@@ -431,7 +517,7 @@ Run after an approved release:
 
 Do not duplicate business logic inside the workflow YAML if it already exists in `ops/gcp` scripts.
 
-## 18. What You Still Need To Do Per Release
+## 21. What You Still Need To Do Per Release
 
 Normal human tasks per release:
 
@@ -442,7 +528,82 @@ Normal human tasks per release:
 
 That is the correct amount of manual involvement.
 
-## 19. Rollout To Runtime VM
+## 22. How To Stop Or Destroy Resources
+
+Use the right level of shutdown for the situation.
+
+### Lowest-cost normal state
+
+Recommended steady state:
+
+- keep only the small runtime VM running
+- do not keep a training VM running unless you are actively training
+
+### Stop only the runtime VM
+
+If you want to pause most compute cost temporarily:
+
+```bash
+gcloud compute instances stop option-trading-runtime --zone <zone>
+```
+
+This keeps:
+
+- static IP
+- disks
+- Artifact Registry repo
+- buckets
+- service accounts
+- instance template
+
+Use this when you want a pause, not a teardown.
+
+### Delete a disposable training VM
+
+When a training VM exists and you are done with it:
+
+```bash
+gcloud compute instances delete <training-vm-name> --zone <zone>
+```
+
+Do this routinely. The training VM is meant to be disposable.
+
+### Destroy everything managed by Terraform
+
+If you want a full teardown of the managed infra:
+
+```bash
+cd infra/gcp
+export PATH="$HOME/bin:$PATH"
+terraform destroy
+```
+
+This is the right command when you want to remove:
+
+- runtime VM
+- training instance template
+- firewall rules
+- service accounts
+- static IP
+- Artifact Registry repo
+- buckets
+
+Important:
+
+- bucket deletion may fail if buckets are not empty
+- if so, empty the model/runtime-config buckets first, then rerun `terraform destroy`
+
+### What Terraform destroy will not clean automatically
+
+Terraform only destroys what is in its state.
+
+Be careful about:
+
+- ad hoc training VMs created later outside Terraform state
+- extra buckets or IPs created manually
+- build artifacts you may want to keep
+
+## 23. Rollout To Runtime VM
 
 After the runtime config bundle has been updated:
 
@@ -451,7 +612,7 @@ After the runtime config bundle has been updated:
 
 Because the runtime VM is disposable, recreating it is a valid and often cleaner deployment path.
 
-## 20. Rollback
+## 24. Rollback
 
 If a released ML model is not acceptable:
 
@@ -465,7 +626,7 @@ If a released ML model is not acceptable:
 
 This keeps rollback simple and fast.
 
-## 21. Day-2 Rules
+## 25. Day-2 Rules
 
 Follow these rules going forward:
 
@@ -477,7 +638,7 @@ Follow these rules going forward:
 - always use Terraform for new machine creation
 - always let GitHub Actions orchestrate deploys once the workflows are in place
 
-## 22. Which Document To Follow
+## 26. Which Document To Follow
 
 Use this document as the main guide.
 

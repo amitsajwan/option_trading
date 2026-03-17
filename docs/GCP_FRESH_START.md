@@ -190,3 +190,27 @@ Use this split consistently:
 - training: disposable VM only when needed
 
 That is the path that prevents VM-by-VM drift and keeps cost under control.
+
+## 12. Stop Vs Destroy
+
+Use the right action for the goal:
+
+- `stop runtime VM`
+  - lowest-friction pause for compute cost
+- `delete training VM`
+  - normal cleanup after training
+- `terraform destroy`
+  - full teardown of managed infra
+
+Typical commands:
+
+```bash
+gcloud compute instances stop option-trading-runtime --zone <zone>
+gcloud compute instances delete <training-vm-name> --zone <zone>
+cd infra/gcp && terraform destroy
+```
+
+Note:
+
+- bucket deletion may require emptying the buckets first
+- ad hoc VMs created outside Terraform state must be deleted separately
