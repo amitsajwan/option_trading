@@ -1,0 +1,35 @@
+{
+  "remediation_id": "fixed_strike_20200101_20230928",
+  "signed_at_utc": "YYYY-MM-DDTHH:MM:SSZ",
+  "scope": {
+    "window_start": "2020-01-01",
+    "window_end": "2023-09-28",
+    "snapshot_schema_version": "1.0",
+    "canonical_root": ".run/canonical_eq_e2e_fixed_strike_20200101_20230928"
+  },
+  "approvals": {
+    "architect": {
+      "name": "",
+      "approved": false,
+      "notes": ""
+    },
+    "trader": {
+      "name": "",
+      "approved": false,
+      "notes": ""
+    },
+    "data_scientist": {
+      "name": "",
+      "approved": false,
+      "notes": ""
+    }
+  },
+  "evidence": {
+    "evaluation_registry": ".run/canonical_eq_e2e_fixed_strike_20200101_20230928/eval_frozen/evaluation_registry.csv",
+    "champion_registry": ".run/canonical_eq_e2e_fixed_strike_20200101_20230928/champions/champion_registry.csv",
+    "tests": [
+      "strategy_app/tests/test_position_risk.py",
+      "ml_pipeline/tests/test_market_snapshot.py"
+    ]
+  }
+}
