@@ -134,6 +134,7 @@ node_modules/
 *.parquet
 *.feather
 *.csv
+!snapshot_app/contracts/snapshot_ml_flat/legacy_to_flat.csv
 ingestion_app/credentials.json
 ops/gcp/operator.env
 .tmp_pip_probe/
