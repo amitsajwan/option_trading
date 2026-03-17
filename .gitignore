@@ -133,6 +133,9 @@ data/
 *.feather
 *.csv
 ingestion_app/credentials.json
+ops/gcp/operator.env
+.tmp_pip_probe/
+.tmp_pip_probe312/
 
 # Infrastructure state
 .terraform/
