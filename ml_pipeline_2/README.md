@@ -267,5 +267,7 @@ Per-run copies are also preserved under `data/training_runs/<run_id>/...` so run
 
 ## Docs
 
+- From-scratch operator guide: [`../docs/FROM_SCRATCH_OPERATOR_GUIDE.md`](../docs/FROM_SCRATCH_OPERATOR_GUIDE.md)
 - Ubuntu operator flow: [`docs/ubuntu_gcp_runbook.md`](docs/ubuntu_gcp_runbook.md)
 - Bounded-context architecture: [`architecture.md`](architecture.md)
+- GCP runtime/training deployment: [`../docs/GCP_DEPLOYMENT.md`](../docs/GCP_DEPLOYMENT.md)

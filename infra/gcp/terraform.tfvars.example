@@ -1,0 +1,26 @@
+project_id                   = "my-gcp-project"
+region                       = "asia-south1"
+zone                         = "asia-south1-a"
+repo_clone_url               = "https://github.com/<org>/option_trading.git"
+repo_ref                     = "main"
+
+runtime_name                 = "option-trading-runtime"
+runtime_machine_type         = "e2-standard-4"
+training_machine_type        = "n2-standard-8"
+
+artifact_registry_repository_id = "option-trading-runtime"
+artifact_registry_location      = "asia-south1"
+app_image_tag                   = "20260317-1"
+
+model_bucket_name            = "my-option-trading-models"
+runtime_config_bucket_name   = "my-option-trading-runtime-config"
+
+runtime_config_sync_source   = "gs://my-option-trading-runtime-config/runtime"
+published_models_sync_source = "gs://my-option-trading-models/published_models"
+data_sync_source             = "gs://option-trading-ml/data"
+
+dashboard_port               = 8008
+enable_dashboard_profile     = true
+
+ssh_source_ranges            = ["0.0.0.0/0"]
+dashboard_source_ranges      = ["0.0.0.0/0"]

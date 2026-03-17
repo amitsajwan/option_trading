@@ -13,10 +13,14 @@ If you are new, follow this reading order:
 7. [docs/OPEN_SEARCH_REBASELINE_RUNBOOK.md](docs/OPEN_SEARCH_REBASELINE_RUNBOOK.md)
 8. [docs/DOCS_CODE_MAP.md](docs/DOCS_CODE_MAP.md)
 9. Service-level READMEs (linked below)
+10. [docs/FROM_SCRATCH_OPERATOR_GUIDE.md](docs/FROM_SCRATCH_OPERATOR_GUIDE.md)
+11. [docs/GCP_DEPLOYMENT.md](docs/GCP_DEPLOYMENT.md)
+12. [docs/GCP_FRESH_START.md](docs/GCP_FRESH_START.md)
 
 ML note:
 
 - supported ML training, threshold sweep, publishing, and `ml_pure` runtime switching now live in `ml_pipeline_2`
+- preferred operator flow is now the guarded `ml_pipeline_2.run_recovery_release` command for train/sweep/publish/GCS handoff
 - deprecated `ml_pipeline` may still exist for legacy historical/eval tooling, but it is not part of the supported Live+Dashboard runtime path
 - `strategy_app` remains the live runtime consumer for `deterministic` and `ml_pure`
 
@@ -92,6 +96,21 @@ Optional dashboard:
 ```bash
 docker compose --env-file .env.compose --profile ui up -d dashboard
 ```
+
+## GCP Deployment
+
+For repeatable GCP deployment, use:
+
+- [docs/GCP_DEPLOYMENT.md](docs/GCP_DEPLOYMENT.md) for the runtime/training architecture
+- [infra/gcp/README.md](infra/gcp/README.md) for Terraform scaffolding
+- [docker-compose.gcp.yml](docker-compose.gcp.yml) for Artifact Registry-backed service images
+
+Recommended production shape:
+
+- small always-on runtime VM for Live+Dashboard
+- separate disposable high-memory training VM
+- Artifact Registry for application images
+- Cloud Storage for published models and frozen ML inputs
 
 The optional dashboard profile is part of the supported target.
 Historical replay and eval profiles are still legacy and not part of the first supported fresh-machine E2E path.
