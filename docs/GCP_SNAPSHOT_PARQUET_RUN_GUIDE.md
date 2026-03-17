@@ -1,6 +1,6 @@
 # GCP Snapshot Parquet Run Guide
 
-This is the operator path for rebuilding the final historical parquet datasets on a high-power GCP machine and saving them to shared Cloud Storage.
+This is the operator path for rebuilding the final historical parquet datasets on a temporary GCP machine and saving them to shared Cloud Storage.
 
 Use this when you want:
 
@@ -125,16 +125,25 @@ Current local archive layout observed under `C:\code\banknifty_data`:
 
 That means the practical full-archive rebuild for the current raw set is `2020` through `2024`, with the VIX coverage above.
 
-## 5. Create The Temporary High-Power Snapshot VM
+## 5. Create The Temporary Snapshot VM
 
 Do the full rebuild on a disposable Linux VM with enough CPU and disk.
 
 Recommended starting point:
 
-- `n2-highmem-32`
-- at least `500 GB` balanced persistent disk
+- `n2-highmem-8`
+- `300 GB` balanced persistent disk
+
+Why this is the current default:
+
+- the current snapshot build parallelizes mainly by calendar year
+- the current raw archive spans `2020` through `2024`
+- so the snapshot phase runs at about `5` year workers max
+- a much larger machine is usually underutilized for the current architecture
 
 The default training template is still smaller. For a full multi-year historical rebuild, create a separate temporary VM for the snapshot build window, then delete it after upload.
+
+If you later redesign snapshot assembly to parallelize below the year level, you can revisit a larger machine.
 
 Example create command:
 
@@ -142,8 +151,8 @@ Example create command:
 gcloud compute instances create option-trading-snapshot-build-01 \
   --project "gen-lang-client-0909109011" \
   --zone "asia-south1-b" \
-  --machine-type "n2-highmem-32" \
-  --boot-disk-size "500GB" \
+  --machine-type "n2-highmem-8" \
+  --boot-disk-size "300GB" \
   --boot-disk-type "pd-balanced" \
   --image-family "ubuntu-2204-lts" \
   --image-project "ubuntu-os-cloud" \
@@ -151,6 +160,7 @@ gcloud compute instances create option-trading-snapshot-build-01 \
 ```
 
 If `asia-south1-b` does not have capacity, retry in another zone that has capacity and update the guide commands accordingly.
+If you keep other `pd-balanced` disks in the same region, reduce the boot disk size further or delete unused VMs first to stay within `SSD_TOTAL_GB` quota.
 
 ## 6. Prepare The Snapshot VM
 
@@ -205,8 +215,8 @@ Run:
 ```bash
 cd ~/option_trading
 export SYNC_RAW_ARCHIVE_FROM_GCS=1
-export NORMALIZE_JOBS=24
-export SNAPSHOT_JOBS=8
+export NORMALIZE_JOBS=8
+export SNAPSHOT_JOBS=5
 export VALIDATE_DAYS=5
 unset YEAR
 unset MIN_DAY
@@ -221,6 +231,8 @@ If you prefer to drive the current archive explicitly by year, run these one at 
 ```bash
 cd ~/option_trading
 export SYNC_RAW_ARCHIVE_FROM_GCS=1
+export NORMALIZE_JOBS=8
+export SNAPSHOT_JOBS=1
 for YEAR in 2020 2021 2022 2023 2024; do
   export YEAR
   ./ops/gcp/run_snapshot_parquet_pipeline.sh
@@ -230,13 +242,13 @@ unset YEAR
 
 ### General Build Command
 
-On the temporary high-power GCP VM:
+On the temporary snapshot VM:
 
 ```bash
 cd ~/option_trading
 export SYNC_RAW_ARCHIVE_FROM_GCS=1
-export NORMALIZE_JOBS=24
-export SNAPSHOT_JOBS=8
+export NORMALIZE_JOBS=8
+export SNAPSHOT_JOBS=5
 export VALIDATE_DAYS=5
 ./ops/gcp/run_snapshot_parquet_pipeline.sh
 ```
