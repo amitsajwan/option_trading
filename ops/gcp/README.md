@@ -10,6 +10,8 @@ Run them from:
 
 They assume a Bash environment.
 
+These scripts are also the intended execution layer for future GitHub Actions workflows. The workflow YAML should call these scripts instead of re-implementing the same logic.
+
 ## Files To Copy First
 
 1. Copy [operator.env.example](/c:/code/option_trading/ops/gcp/operator.env.example) to `ops/gcp/operator.env`

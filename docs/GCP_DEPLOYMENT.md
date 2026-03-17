@@ -12,10 +12,31 @@ The design goal is simple:
 - frozen ML inputs come from Cloud Storage
 - infrastructure comes from Terraform
 - VMs are disposable
+- GitHub Actions orchestrates the repeatable deploy path
 
 If you want the exact tear-down/rebuild sequence from an oversized legacy VM, use [GCP_FRESH_START.md](/c:/code/option_trading/docs/GCP_FRESH_START.md).
 If you want the full operator step-by-step from zero, use [FROM_SCRATCH_OPERATOR_GUIDE.md](/c:/code/option_trading/docs/FROM_SCRATCH_OPERATOR_GUIDE.md).
 If you want the runnable wrapper scripts, use [ops/gcp/README.md](/c:/code/option_trading/ops/gcp/README.md).
+
+## 0. Recommended Automation Boundary
+
+Use GitHub Actions for orchestration and GCP for execution.
+
+Recommended split:
+
+- GitHub Actions:
+  - CI
+  - image builds
+  - Terraform plan/apply
+  - manual training-release dispatch
+  - controlled runtime deploys
+- GCP:
+  - runtime VM
+  - training VM
+  - Artifact Registry
+  - Cloud Storage
+
+This is the preferred path over a permanently manual operator-machine workflow.
 
 ## 1. Recommended Architecture
 
@@ -224,6 +245,7 @@ This deployment plan removes that class of problem by:
 For this repo, the pragmatic expert default is:
 
 - Terraform for infra
+- GitHub Actions for orchestration
 - Cloud Build + Artifact Registry for app images
 - Cloud Storage for published models and frozen data
 - Docker Compose on the runtime VM

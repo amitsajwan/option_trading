@@ -16,6 +16,7 @@ At the end of this guide you will have:
 - Artifact Registry for container images
 - Cloud Storage for published models and runtime bootstrap files
 - one supported ML release path from training to live runtime
+- one clear split between GitHub Actions automation and the small number of manual operator steps that still remain
 
 Runnable helper scripts live under [ops/gcp/README.md](/c:/code/option_trading/ops/gcp/README.md).
 
@@ -36,10 +37,136 @@ Use this operating model:
   - published models: Cloud Storage
   - runtime bootstrap config: Cloud Storage
   - infrastructure: Terraform
+  - deployment orchestration: GitHub Actions
 
 Do not go back to host-side `nohup python ...` processes on public ports.
 
-## 2. What Must Be Installed Where
+## 2. Recommended Control Plane
+
+Use GitHub Actions as the control plane and GCP as the execution environment.
+
+That means:
+
+- GitHub Actions should run CI, image builds, Terraform plan/apply, and release orchestration
+- GCP should run the actual runtime VM and the actual training VM
+- heavy model training should not run on a normal GitHub-hosted runner
+- the checked-in Bash scripts under `ops/gcp` should remain the executable building blocks, whether a human runs them from Cloud Shell/WSL or GitHub Actions runs them in automation
+
+Recommended workflow split:
+
+- `ci`
+  - run tests and validation on pull requests
+- `images`
+  - build and push runtime images to Artifact Registry on merge to `main`
+- `infra`
+  - run Terraform plan/apply with approval
+- `train-release`
+  - create a disposable training VM
+  - run the guarded `ml_pipeline_2.run_recovery_release` flow
+  - sync published model artifacts to GCS
+  - refresh the runtime config bundle
+- `deploy-runtime`
+  - restart or recreate the runtime VM so it pulls the latest config, models, and images
+
+## 3. Will This Work?
+
+Yes, this deployment shape should work reliably if the one-time setup below is done correctly.
+
+The checked-in repo pieces already cover:
+
+- Terraform-based infra creation
+- runtime VM bootstrap
+- disposable training VM creation
+- image build/push scripts
+- guarded train/sweep/publish/sync flow
+- runtime handoff via `ML_PURE_*`
+
+What is still required is disciplined setup around GitHub and GCP:
+
+- the repo must be hosted in GitHub
+- GitHub Actions must be enabled for the repo
+- GCP APIs must be enabled
+- Workload Identity Federation between GitHub and GCP must be configured
+- GitHub repository or environment secrets/variables must be set
+- `.env.compose` and any ingestion credentials must be valid
+
+If those pieces are in place, the operational model is sound:
+
+- merge code
+- build images
+- provision or update infra
+- run a release
+- switch runtime
+
+## 4. What Must Be Done Manually Once
+
+These are the main one-time manual tasks. They are normal and expected even in a mature setup.
+
+### GitHub repository setup
+
+Do these once:
+
+- create or confirm the GitHub repo
+- enable GitHub Actions
+- create protected environments such as `staging` and `production`
+- configure branch protection for `main`
+
+### GCP project setup
+
+Do these once:
+
+- create or select the GCP project
+- enable required APIs:
+  - Compute Engine
+  - Artifact Registry
+  - Cloud Build
+  - Cloud Storage
+  - IAM Credentials API
+- choose region and zone defaults
+
+### GitHub to GCP authentication
+
+Do these once:
+
+- create a Workload Identity Pool and Provider in GCP
+- create the GitHub-deploy service account(s)
+- grant the required IAM roles
+- allow the GitHub repository to impersonate those service accounts
+
+Recommended minimum split:
+
+- one deploy identity for image build and runtime deploy
+- one infra identity for Terraform
+
+### Repository configuration
+
+Do these once:
+
+- create GitHub repository variables for non-secret values such as project ID, region, repository name, bucket names, runtime name, and image tag strategy
+- create GitHub secrets only for values that are actually secret
+- keep long-lived JSON keys out of GitHub if possible
+
+### Baseline runtime config
+
+Do these once before the first deploy:
+
+- prepare `.env.compose`
+- verify deterministic runtime works first
+- add ingestion credentials if that service is required
+
+## 5. What Stays Manual Even After Automation
+
+Even with GitHub Actions, some steps should remain manual on purpose:
+
+- approving Terraform apply into production
+- approving production runtime deploys
+- deciding when to run a training release
+- reviewing model quality before accepting a new live model
+- emergency rollback decisions
+
+This is good. Those are change-control points, not automation failures.
+
+## 6. What Must Be Installed Where
 
 ### Operator machine
 
@@ -49,6 +176,8 @@ Install these manually:
 - `terraform`
 - `git`
 - optional: Docker for local Compose checks
+- optional but recommended: `gh` CLI
+- a Bash-capable shell such as Ubuntu, WSL, or Cloud Shell
 
 ### Runtime VM
 
@@ -71,7 +200,7 @@ Installed automatically by the training startup script:
 - `libgomp1`
 - Google Cloud CLI
 
-## 3. Cost Decision First
+## 7. Cost Decision First
 
 If the current 32-core training VM does not contain anything you still need locally:
 
@@ -84,7 +213,7 @@ If the current 32-core training VM does not contain anything you still need loca
 
 If you are unsure, export anything important to GCS first.
 
-## 4. Recommended Starting Sizes
+## 8. Recommended Starting Sizes
 
 Start small and scale only if needed:
 
@@ -93,7 +222,7 @@ Start small and scale only if needed:
 
 Those recommended example sizes are reflected in [terraform.tfvars.example](/c:/code/option_trading/infra/gcp/terraform.tfvars.example).
 
-## 5. Prerequisites
+## 9. Prerequisites
 
 Before provisioning, make sure you have:
 
@@ -103,6 +232,7 @@ Before provisioning, make sure you have:
 - repo access for the clone URL you will put into Terraform
 - a clean `.env.compose` ready for runtime bootstrap
 - a Bash-capable operator shell such as Ubuntu, WSL, or Cloud Shell for the helper scripts
+- if using GitHub Actions, the GitHub-to-GCP federation pieces from this guide already created
 
 Useful repo entry points:
 
@@ -111,7 +241,7 @@ Useful repo entry points:
 - [infra/gcp/README.md](/c:/code/option_trading/infra/gcp/README.md)
 - [ops/gcp/README.md](/c:/code/option_trading/ops/gcp/README.md)
 
-## 6. Fill The Operator Template
+## 10. Fill The Operator Template
 
 Copy the template:
 
@@ -123,7 +253,9 @@ Edit `ops/gcp/operator.env` with your real values.
 
 This is the main input file for the runnable operator scripts.
 
-## 7. Provision Base Infrastructure
+This file is also the best source of truth when you later create GitHub Actions variables and secrets.
+
+## 11. Provision Base Infrastructure
 
 From the repo root:
 
@@ -149,7 +281,9 @@ Terraform creates:
 - static runtime IP
 - firewall rules
 
-## 8. Prepare The Baseline Runtime Bootstrap Bundle
+The same logical inputs should later be mirrored into GitHub Actions repo variables and environments.
+
+## 12. Prepare The Baseline Runtime Bootstrap Bundle
 
 Prepare `.env.compose` for the baseline runtime first.
 
@@ -161,7 +295,7 @@ Recommended starting point:
 
 The bootstrap script above will publish the runtime config bundle if `.env.compose` already exists.
 
-## 9. Runtime Bring-Up
+## 13. Runtime Bring-Up
 
 The runtime VM startup script will:
 
@@ -174,7 +308,7 @@ The runtime VM startup script will:
 
 Your runtime VM should now be the only always-on machine.
 
-## 10. Create A Disposable Training VM
+## 14. Create A Disposable Training VM
 
 Do not keep a large training VM running all the time.
 
@@ -186,7 +320,7 @@ When you need ML work:
 
 Then let it bootstrap the repo and Python environment.
 
-## 11. Supported Release Flow
+## 15. Supported Release Flow
 
 On the training VM, use the runnable wrapper:
 
@@ -218,7 +352,7 @@ python -m ml_pipeline_2.run_recovery_release \
   --model-bucket-url gs://<model-bucket>/published_models
 ```
 
-## 12. Switch Runtime To The Released ML Model Manually If Needed
+## 16. Switch Runtime To The Released ML Model Manually If Needed
 
 Take the generated handoff file and apply it to `.env.compose`:
 
@@ -244,7 +378,63 @@ export RUNTIME_CONFIG_BUCKET_URL=gs://<runtime-config-bucket>/runtime
 ./ops/gcp/apply_ml_pure_release.sh
 ```
 
-## 13. Rollout To Runtime VM
+## 17. How GitHub Actions Should Call This
+
+The recommended GitHub Actions model is:
+
+### `ci`
+
+Run on pull requests:
+
+- tests
+- static checks
+- config validation
+
+### `images`
+
+Run on merge to `main`:
+
+- authenticate to GCP
+- call `ops/gcp/build_runtime_images.sh`
+
+### `infra`
+
+Run on manual dispatch or protected promotion:
+
+- generate `infra/gcp/terraform.tfvars`
+- run `terraform plan`
+- require approval
+- run `terraform apply`
+
+### `train-release`
+
+Run on manual dispatch:
+
+- create the disposable training VM
+- SSH into that VM or invoke its startup command path
+- run `ops/gcp/run_recovery_release_pipeline.sh`
+
+### `deploy-runtime`
+
+Run after an approved release:
+
+- restart or recreate the runtime VM
+- or remotely rerun the runtime bootstrap commands
+
+Do not duplicate business logic inside the workflow YAML if it already exists in `ops/gcp` scripts.
+
+## 18. What You Still Need To Do Per Release
+
+Normal human tasks per release:
+
+1. decide whether to run a new training release
+2. watch the run and inspect the resulting quality summary
+3. approve switching runtime to the new model
+4. monitor the runtime after rollout
+
+That is the correct amount of manual involvement.
+
+## 19. Rollout To Runtime VM
 
 After the runtime config bundle has been updated:
 
@@ -253,7 +443,7 @@ After the runtime config bundle has been updated:
 
 Because the runtime VM is disposable, recreating it is a valid and often cleaner deployment path.
 
-## 14. Rollback
+## 20. Rollback
 
 If a released ML model is not acceptable:
 
@@ -267,7 +457,7 @@ If a released ML model is not acceptable:
 
 This keeps rollback simple and fast.
 
-## 15. Day-2 Rules
+## 21. Day-2 Rules
 
 Follow these rules going forward:
 
@@ -277,8 +467,9 @@ Follow these rules going forward:
 - never switch runtime from ad hoc local files
 - always publish models to GCS
 - always use Terraform for new machine creation
+- always let GitHub Actions orchestrate deploys once the workflows are in place
 
-## 16. Which Document To Follow
+## 22. Which Document To Follow
 
 Use this document as the main guide.
 
