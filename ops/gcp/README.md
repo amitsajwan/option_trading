@@ -45,6 +45,24 @@ Example:
 ./ops/gcp/create_training_vm.sh
 ```
 
+### `delete_training_vm.sh`
+
+Use this to delete a disposable training VM when you are done with training.
+
+By default it uses `TRAINING_VM_NAME` from `operator.env`, but you can also pass a VM name as the first argument.
+
+Example:
+
+```bash
+./ops/gcp/delete_training_vm.sh
+```
+
+or:
+
+```bash
+./ops/gcp/delete_training_vm.sh option-trading-training-02
+```
+
 ### `run_recovery_release_pipeline.sh`
 
 Use this on the training VM or a repo checkout that has the training data and runtime config available.
@@ -79,6 +97,47 @@ Uploads `.env.compose` and optional ingestion credentials to the runtime config 
 
 Syncs the local `published_models` tree to the model bucket.
 
+### `stop_runtime.sh`
+
+Stops the always-on runtime VM without deleting any persistent resources.
+
+Use this for a cheap idle state when you want to pause compute cost but keep:
+
+- Artifact Registry images
+- published models in GCS
+- runtime config in GCS
+- Terraform-managed infra definitions
+
+Example:
+
+```bash
+./ops/gcp/stop_runtime.sh
+```
+
+### `destroy_infra_preserve_data.sh`
+
+Destroys the Terraform-managed compute/network/IAM resources while preserving:
+
+- Artifact Registry repository
+- published model bucket
+- runtime config bucket
+
+This is the script to use when you want to tear down most cost-bearing infrastructure but keep deployable state.
+
+By default it will also delete the disposable training VM named in `TRAINING_VM_NAME` if it exists.
+
+Examples:
+
+```bash
+./ops/gcp/destroy_infra_preserve_data.sh
+```
+
+```bash
+AUTO_APPROVE=1 ./ops/gcp/destroy_infra_preserve_data.sh
+```
+
+If you truly want a full wipe including buckets and Artifact Registry, use plain `terraform destroy` from `infra/gcp` instead of this helper.
+
 ## Recommended Use
 
 For a clean rebuild, the normal order is:
@@ -86,5 +145,15 @@ For a clean rebuild, the normal order is:
 1. `from_scratch_bootstrap.sh`
 2. `create_training_vm.sh`
 3. `run_recovery_release_pipeline.sh`
+
+For a cheap idle state after you are done:
+
+1. `delete_training_vm.sh`
+2. `stop_runtime.sh`
+
+For a deeper teardown that still preserves images and published models:
+
+1. `delete_training_vm.sh`
+2. `destroy_infra_preserve_data.sh`
 
 For the full human-facing procedure, use [FROM_SCRATCH_OPERATOR_GUIDE.md](/c:/code/option_trading/docs/FROM_SCRATCH_OPERATOR_GUIDE.md).

@@ -199,18 +199,22 @@ Use the right action for the goal:
   - lowest-friction pause for compute cost
 - `delete training VM`
   - normal cleanup after training
+- `destroy infra but preserve data`
+  - remove most cost-bearing infra while keeping Artifact Registry images and GCS model/config data
 - `terraform destroy`
   - full teardown of managed infra
 
 Typical commands:
 
 ```bash
-gcloud compute instances stop option-trading-runtime --zone <zone>
-gcloud compute instances delete <training-vm-name> --zone <zone>
+./ops/gcp/stop_runtime.sh
+./ops/gcp/delete_training_vm.sh
+./ops/gcp/destroy_infra_preserve_data.sh
 cd infra/gcp && terraform destroy
 ```
 
 Note:
 
+- `destroy_infra_preserve_data.sh` is the recommended teardown if you want to keep images and published models
 - bucket deletion may require emptying the buckets first
 - ad hoc VMs created outside Terraform state must be deleted separately

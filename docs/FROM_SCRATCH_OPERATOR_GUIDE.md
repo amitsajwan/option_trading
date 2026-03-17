@@ -543,8 +543,10 @@ Recommended steady state:
 
 If you want to pause most compute cost temporarily:
 
+Use:
+
 ```bash
-gcloud compute instances stop option-trading-runtime --zone <zone>
+./ops/gcp/stop_runtime.sh
 ```
 
 This keeps:
@@ -562,11 +564,35 @@ Use this when you want a pause, not a teardown.
 
 When a training VM exists and you are done with it:
 
+Use:
+
 ```bash
-gcloud compute instances delete <training-vm-name> --zone <zone>
+./ops/gcp/delete_training_vm.sh
+```
+
+or:
+
+```bash
+./ops/gcp/delete_training_vm.sh <training-vm-name>
 ```
 
 Do this routinely. The training VM is meant to be disposable.
+
+### Destroy most infra but preserve images and models
+
+If you want to tear down compute/network/IAM resources but keep deployable state in Artifact Registry and GCS:
+
+```bash
+./ops/gcp/destroy_infra_preserve_data.sh
+```
+
+This preserves:
+
+- Artifact Registry repository and images
+- model bucket and published models
+- runtime config bucket and runtime bootstrap bundle
+
+This is the recommended deeper teardown path when you do not want to lose images or published models.
 
 ### Destroy everything managed by Terraform
 
@@ -590,6 +616,7 @@ This is the right command when you want to remove:
 
 Important:
 
+- this is a full wipe
 - bucket deletion may fail if buckets are not empty
 - if so, empty the model/runtime-config buckets first, then rerun `terraform destroy`
 
