@@ -251,6 +251,14 @@ cp ops/gcp/operator.env.example ops/gcp/operator.env
 
 Edit `ops/gcp/operator.env` with your real values.
 
+Important:
+
+- this file is sourced by Bash
+- keep values shell-safe
+- use quotes around string values
+- replace placeholders fully
+- do not leave placeholders like `<org>` or `<project>` in the file
+
 This is the main input file for the runnable operator scripts.
 
 This file is also the best source of truth when you later create GitHub Actions variables and secrets.
