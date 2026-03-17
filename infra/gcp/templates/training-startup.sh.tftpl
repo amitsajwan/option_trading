@@ -18,11 +18,11 @@ fi
 
 mkdir -p /opt
 
-if [ ! -d "${REPO_DIR}/.git" ]; then
-  git clone "${repo_clone_url}" "${REPO_DIR}"
+if [ ! -d "$${REPO_DIR}/.git" ]; then
+  git clone "${repo_clone_url}" "$${REPO_DIR}"
 fi
 
-cd "${REPO_DIR}"
+cd "$${REPO_DIR}"
 git fetch --all --tags
 git checkout "${repo_ref}"
 if git show-ref --verify --quiet "refs/remotes/origin/${repo_ref}"; then
@@ -34,9 +34,9 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ./ml_pipeline_2
 
-mkdir -p "${REPO_DIR}/.data/ml_pipeline"
+mkdir -p "$${REPO_DIR}/.data/ml_pipeline"
 if [ -n "${data_sync_source}" ]; then
-  gcloud storage rsync "${data_sync_source}" "${REPO_DIR}/.data/ml_pipeline" --recursive --project "${project_id}"
+  gcloud storage rsync "${data_sync_source}" "$${REPO_DIR}/.data/ml_pipeline" --recursive --project "${project_id}"
 fi
 
-chown -R ${runtime_os_user}:${runtime_os_user} "${REPO_DIR}"
+chown -R ${runtime_os_user}:${runtime_os_user} "$${REPO_DIR}"
