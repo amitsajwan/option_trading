@@ -16,7 +16,7 @@ Two planes are active:
 1. Replay execution plane (event-driven)
 2. Open-search formal cycle plane (offline, manifest-gated)
 
-Both planes use the same snapshot v2.0 source contract.
+Both planes use the same final canonical snapshot source contract (`schema_version=3.0`).
 
 ## 2. Replay Execution Plane
 
@@ -57,14 +57,14 @@ Stages:
 Required fields:
 
 - `window_start`, `window_end`, `trading_days`
-- `all_days_v2`, `schema_version`
+- `all_days_required_schema`, `schema_version`
 - `generated_at`, `source_path`
 - derived: `manifest_hash`, `formal_ready`, `exploratory_only`
 
 Formal run readiness:
 
-- `all_days_v2=true`
-- `schema_version=2.0`
+- `all_days_required_schema=true`
+- `schema_version=3.0`
 - `trading_days>=150`
 
 ## Split contract

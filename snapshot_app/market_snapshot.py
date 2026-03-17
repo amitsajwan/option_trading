@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import requests
 from contracts_app import TimestampSourceMode, isoformat_ist
+from snapshot_app.market_snapshot_contract import SCHEMA_NAME, SCHEMA_VERSION
 
 try:
     from snapshot_app.greeks_calculator import GreeksCalculator
@@ -1041,10 +1042,12 @@ def build_market_snapshot(
     )
 
     return {
-        "schema_name": "MarketSnapshot",
-        "version": "2.0",
+        "schema_name": SCHEMA_NAME,
+        "schema_version": SCHEMA_VERSION,
         "snapshot_id": snapshot_id,
         "instrument": str(instrument or ""),
+        "trade_date": str(trade_date.date()),
+        "timestamp": isoformat_ist(ts.to_pydatetime(), naive_mode=TimestampSourceMode.MARKET_IST),
         "session_context": mss1,
         "futures_bar": mss2,
         "futures_derived": mss3,

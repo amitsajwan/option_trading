@@ -9,7 +9,7 @@ from typing import Iterator, Optional
 
 from .parquet_store import ParquetStore
 from .snapshot_access import SNAPSHOT_DATASET_ML_FLAT
-from .snapshot_batch import OUTPUT_DATASET_ML_FLAT
+from .snapshot_batch import OUTPUT_DATASET_ML_FLAT, OUTPUT_DATASET_SNAPSHOTS
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,8 @@ class ProducerStats:
 
 def _unsupported_message() -> str:
     return (
-        "ParquetBarProducer is unsupported after legacy snapshot removal. "
-        f"Historical builds now persist only `{OUTPUT_DATASET_ML_FLAT}`, which does not include `snapshot_raw_json`."
+        "ParquetBarProducer remains unsupported. "
+        f"Use canonical `{OUTPUT_DATASET_SNAPSHOTS}` or derived `{OUTPUT_DATASET_ML_FLAT}` via ParquetStore/replay runners."
     )
 
 

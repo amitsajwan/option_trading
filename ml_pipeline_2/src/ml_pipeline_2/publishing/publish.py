@@ -221,7 +221,7 @@ def _build_model_contract(
         "schema_version": "1.0",
         "publisher": "ml_pipeline_2",
         "publish_kind": "recovery_primary_dual_v1",
-        "contract_id": str(input_contract.get("contract_id") or "snapshot_ml_flat_v1"),
+        "contract_id": str(input_contract.get("contract_id") or "snapshot_ml_flat"),
         "model_group": model_group,
         "profile_id": profile_id,
         "run_id": run_id,

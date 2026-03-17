@@ -12,13 +12,14 @@ from typing import Iterable, Optional
 import pandas as pd
 
 from contracts_app import build_snapshot_event, historical_snapshot_topic
+from snapshot_app.market_snapshot_contract import validate_market_snapshot
 from snapshot_app.redis_publisher import RedisEventPublisher
 
 from .parquet_store import ParquetStore
 from .snapshot_access import (
     DEFAULT_HISTORICAL_PARQUET_BASE,
-    SNAPSHOT_DATASET_LEGACY_RAW,
-    SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+    SNAPSHOT_DATASET_CANONICAL,
+    SNAPSHOT_INPUT_MODE_CANONICAL,
     require_snapshot_access,
 )
 
@@ -73,13 +74,13 @@ def replay_snapshots(
 ) -> dict:
     """Replay snapshots from parquet to redis topic."""
     snapshot_access = require_snapshot_access(
-        mode=SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
         context="historical.replay_runner",
         parquet_base=Path(parquet_base),
         min_day=start_date,
         max_day=end_date,
     )
-    store = ParquetStore(parquet_base, snapshots_dataset=SNAPSHOT_DATASET_LEGACY_RAW)
+    store = ParquetStore(parquet_base, snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
     publisher = RedisEventPublisher()
     out_path = Path(emit_jsonl).resolve() if emit_jsonl else None
     if out_path is not None:
@@ -123,6 +124,7 @@ def replay_snapshots(
             snapshot = _snapshot_from_row(row)
             if snapshot is None:
                 continue
+            validate_market_snapshot(snapshot, raise_on_error=True)
 
             event = build_snapshot_event(
                 snapshot=snapshot,

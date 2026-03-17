@@ -73,9 +73,8 @@ class ParquetStore:
             ml_flat_root = self.base_path / "snapshots_ml_flat"
             if self._has_parquet(ml_flat_root):
                 raise FileNotFoundError(
-                    f"{context} requires legacy `snapshots` parquet with `snapshot_raw_json`, "
-                    "but this environment only has `snapshots_ml_flat`. "
-                    "This tool is unsupported on the v1-only ML snapshot lane."
+                    f"{context} requires canonical `snapshots` parquet with `snapshot_raw_json`, "
+                    "but this environment only has `snapshots_ml_flat`."
                 )
         return False
 
@@ -511,7 +510,7 @@ class ParquetStore:
             "window_start": days[0],
             "window_end": days[-1],
             "trading_days": int(len(days)),
-            "all_days_v2": bool(all(bool(row.get("is_required_schema_day")) for row in block)),
+            "all_days_required_schema": bool(all(bool(row.get("is_required_schema_day")) for row in block)),
             "schema_version": required,
             "days": days,
             "max_gap_days": gap_limit,
@@ -520,7 +519,7 @@ class ParquetStore:
     def latest_contiguous_snapshot_block(
         self,
         *,
-        required_schema_version: str = "2.0",
+        required_schema_version: str = "3.0",
         min_day: str | None = None,
         max_day: str | None = None,
         max_gap_days: int = 7,
@@ -536,7 +535,7 @@ class ParquetStore:
     def build_window_readiness_artifact(
         self,
         *,
-        required_schema_version: str = "2.0",
+        required_schema_version: str = "3.0",
         min_trading_days: int = 150,
         min_day: str | None = None,
         max_day: str | None = None,
@@ -550,9 +549,9 @@ class ParquetStore:
             max_gap_days=max_gap_days,
         )
         trading_days = int((block or {}).get("trading_days") or 0)
-        all_days_v2 = bool((block or {}).get("all_days_v2"))
+        all_days_required_schema = bool((block or {}).get("all_days_required_schema"))
         formal_ready = bool(
-            all_days_v2
+            all_days_required_schema
             and str((block or {}).get("schema_version") or "").strip() == str(required_schema_version).strip()
             and trading_days >= int(min_trading_days)
         )
@@ -560,7 +559,7 @@ class ParquetStore:
             "window_start": (block or {}).get("window_start"),
             "window_end": (block or {}).get("window_end"),
             "trading_days": trading_days,
-            "all_days_v2": all_days_v2,
+            "all_days_required_schema": all_days_required_schema,
             "schema_version": str(required_schema_version),
             "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "source_path": str(self._snapshots_root.resolve()),

@@ -601,7 +601,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             "required_schema_version": str(args.manifest_required_schema_version),
             "min_trading_days_required": int(args.manifest_min_trading_days),
             "window_trading_days": (manifest_meta or {}).get("trading_days"),
-            "all_days_v2": (manifest_meta or {}).get("all_days_v2"),
+            "all_days_required_schema": (manifest_meta or {}).get("all_days_required_schema"),
         },
     }
 

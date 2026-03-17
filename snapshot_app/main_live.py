@@ -26,7 +26,8 @@ from contracts_app import (
     seconds_until_next_open_ist,
     snapshot_topic,
 )
-from snapshot_app.live_ml_flat import LiveSnapshotMLFlatBuilder
+from snapshot_app.market_snapshot import LiveMarketSnapshotBuilder
+from snapshot_app.market_snapshot_contract import CONTRACT_ID as MARKET_SNAPSHOT_CONTRACT_ID, validate_market_snapshot
 
 from .health import evaluate as evaluate_health
 from .publisher import EventPublisher
@@ -152,7 +153,7 @@ def run_loop(
     idle_sleep_seconds: int,
     build_run_id: str,
 ) -> int:
-    builder = LiveSnapshotMLFlatBuilder(
+    builder = LiveMarketSnapshotBuilder(
         instrument=instrument,
         market_api_base=market_api_base,
         dashboard_api_base=dashboard_api_base,
@@ -199,10 +200,8 @@ def run_loop(
             time.sleep(max(5, min(int(idle_sleep_seconds), 30)))
             continue
         try:
-            snapshot = builder.build_snapshot_ml_flat(
-                ohlc_limit=int(ohlc_limit),
-                build_run_id=build_run_id,
-            )
+            snapshot = builder.build_snapshot(ohlc_limit=int(ohlc_limit))
+            validate_market_snapshot(snapshot, raise_on_error=True)
             snapshot_id = str(snapshot.get("snapshot_id") or "")
             if not snapshot_id or snapshot_id == last_snapshot_id:
                 time.sleep(poll_interval_sec)
@@ -214,7 +213,7 @@ def run_loop(
                 source="snapshot_app",
                 metadata={
                     "session_timezone": "IST",
-                    "snapshot_contract_id": "snapshot_ml_flat_v1",
+                    "snapshot_contract_id": MARKET_SNAPSHOT_CONTRACT_ID,
                     "build_run_id": build_run_id,
                 },
             )
@@ -248,7 +247,7 @@ def run_loop(
 
 def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
-    parser = argparse.ArgumentParser(description="Top-level SnapshotMLFlat live producer")
+    parser = argparse.ArgumentParser(description="Top-level MarketSnapshot live producer")
     parser.add_argument("--instrument", default=None)
     parser.add_argument("--market-api-base", default="http://127.0.0.1:8004")
     parser.add_argument("--dashboard-api-base", default="http://127.0.0.1:8002")

@@ -6,12 +6,14 @@ This folder contains a first-pass Terraform scaffold for the deployment model us
 - one disposable training VM template
 - Artifact Registry for runtime images
 - Cloud Storage for published models and runtime bootstrap files
+- optional Cloud Storage bucket for raw archive and final historical parquet
 
 ## What It Creates
 
 - Docker Artifact Registry repository
 - model artifact bucket with versioning enabled
 - runtime config bucket
+- optional snapshot data bucket
 - runtime service account
 - training service account
 - runtime static IP
@@ -23,7 +25,12 @@ This folder contains a first-pass Terraform scaffold for the deployment model us
 
 - [versions.tf](versions.tf)
 - [variables.tf](variables.tf)
-- [main.tf](main.tf)
+- [locals.tf](locals.tf)
+- [artifact_registry.tf](artifact_registry.tf)
+- [storage.tf](storage.tf)
+- [iam.tf](iam.tf)
+- [networking.tf](networking.tf)
+- [compute.tf](compute.tf)
 - [outputs.tf](outputs.tf)
 - [terraform.tfvars.example](terraform.tfvars.example)
 
@@ -45,8 +52,10 @@ terraform apply
 4. Publish and sync models with [ops/gcp/publish_published_models.sh](../../ops/gcp/publish_published_models.sh).
 5. Let the runtime VM startup script sync artifacts and start Compose.
 6. Create a large training VM only when needed from the output training template.
+7. Optionally use the snapshot data bucket for raw archive and final historical parquet artifacts.
 
 If you want the runnable operator scripts that sit on top of this scaffold, use [ops/gcp/README.md](../../ops/gcp/README.md).
+If you want the human-facing Day 0 procedure, use [GCP_BOOTSTRAP_RUNBOOK.md](../../docs/GCP_BOOTSTRAP_RUNBOOK.md).
 
 ## Notes
 

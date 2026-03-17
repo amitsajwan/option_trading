@@ -1441,7 +1441,7 @@ DEFAULT_MODEL_TRAINING_REPORT_PATH = None
 DEFAULT_MODEL_POLICY_REPORT_PATH = None
 TRADING_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "published_models"
 ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "published_models"
-SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR = REPO_ROOT / "snapshot_app" / "contracts" / "snapshot_ml_flat_v1"
+SNAPSHOT_ML_FLAT_CONTRACT_DIR = REPO_ROOT / "snapshot_app" / "contracts" / "snapshot_ml_flat"
 LEGACY_TRADING_RUNTIME_ENV = "ENABLE_LEGACY_TRADING_UI"
 
 _TRADING_LOCK = threading.Lock()
@@ -1766,10 +1766,10 @@ def _default_catalog_actions(
 
 
 @lru_cache(maxsize=1)
-def _load_snapshot_ml_flat_v1_dictionary() -> Dict[str, Any]:
-    groups_payload = load_feature_groups(SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR) if load_feature_groups is not None else {}
-    schema_payload = load_contract_schema(SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR) if load_contract_schema is not None else {}
-    mapping_frame = load_legacy_mapping(SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR) if load_legacy_mapping is not None else pd.DataFrame()
+def _load_snapshot_ml_flat_dictionary() -> Dict[str, Any]:
+    groups_payload = load_feature_groups(SNAPSHOT_ML_FLAT_CONTRACT_DIR) if load_feature_groups is not None else {}
+    schema_payload = load_contract_schema(SNAPSHOT_ML_FLAT_CONTRACT_DIR) if load_contract_schema is not None else {}
+    mapping_frame = load_legacy_mapping(SNAPSHOT_ML_FLAT_CONTRACT_DIR) if load_legacy_mapping is not None else pd.DataFrame()
     mapping_rows = mapping_frame.to_dict(orient="records") if isinstance(mapping_frame, pd.DataFrame) else []
 
     group_payloads = groups_payload.get("groups") if isinstance(groups_payload, dict) else {}
@@ -1808,7 +1808,7 @@ def _load_snapshot_ml_flat_v1_dictionary() -> Dict[str, Any]:
     schema_fields = schema_payload.get("fields") if isinstance(schema_payload, dict) else []
     required_columns = schema_payload.get("required_columns") if isinstance(schema_payload, dict) else []
     return {
-        "contract_id": str(schema_payload.get("contract_id") or groups_payload.get("contract_id") or "snapshot_ml_flat_v1"),
+        "contract_id": str(schema_payload.get("contract_id") or groups_payload.get("contract_id") or "snapshot_ml_flat"),
         "schema_version": str(schema_payload.get("schema_version") or groups_payload.get("schema_version") or "unknown"),
         "group_order": group_order,
         "groups": groups,
@@ -2465,7 +2465,7 @@ def _build_feature_intelligence_snapshot(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
 ) -> Dict[str, Any]:
-    contract = _load_snapshot_ml_flat_v1_dictionary()
+    contract = _load_snapshot_ml_flat_dictionary()
     model_path = _resolve_repo_path(model_entry.get("model_package"))
     training_path = _resolve_repo_path(model_entry.get("training_report_path"))
     model_contract_path = _resolve_repo_path(model_entry.get("model_contract"))
@@ -2667,7 +2667,7 @@ def _build_feature_intelligence_snapshot(
             },
         },
         "contract": {
-            "contract_id": str(contract.get("contract_id") or "snapshot_ml_flat_v1"),
+            "contract_id": str(contract.get("contract_id") or "snapshot_ml_flat"),
             "schema_version": str(contract.get("schema_version") or "unknown"),
             "groups": [
                 {

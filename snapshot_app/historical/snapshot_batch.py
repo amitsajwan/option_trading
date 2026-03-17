@@ -14,6 +14,10 @@ from typing import Any, Deque, Optional
 import numpy as np
 import pandas as pd
 
+from snapshot_app.market_snapshot_contract import (
+    SCHEMA_VERSION as FINAL_SNAPSHOT_SCHEMA_VERSION,
+    validate_market_snapshot,
+)
 from snapshot_app.market_snapshot import MarketSnapshotState, build_market_snapshot
 from snapshot_app.snapshot_ml_flat_contract import (
     load_contract_schema,
@@ -32,16 +36,17 @@ OPTION_PRICE_HISTORY_MAXLEN = 4_000
 DAY_PROGRESS_EVERY_MINUTES = 120
 
 _EMPTY_CHAIN: dict[str, Any] = {"expiry": None, "pcr": None, "max_pain": None, "strikes": []}
+OUTPUT_DATASET_SNAPSHOTS = "snapshots"
 OUTPUT_DATASET_ML_FLAT = "snapshots_ml_flat"
 ML_FLAT_SCHEMA_NAME = "SnapshotMLFlat"
-ML_FLAT_SCHEMA_VERSION = "1.0.0"
+ML_FLAT_SCHEMA_VERSION = FINAL_SNAPSHOT_SCHEMA_VERSION
 
 
 def _normalize_output_dataset(value: str | None) -> str:
     dataset = str(value or OUTPUT_DATASET_ML_FLAT).strip() or OUTPUT_DATASET_ML_FLAT
     if dataset != OUTPUT_DATASET_ML_FLAT:
         raise ValueError(
-            "legacy snapshot outputs are removed; only "
+            "historical batch always writes canonical `snapshots` plus derived "
             f"output_dataset='{OUTPUT_DATASET_ML_FLAT}' is supported"
         )
     return OUTPUT_DATASET_ML_FLAT
@@ -71,7 +76,7 @@ def _load_ml_flat_required_columns() -> list[str]:
     payload = load_contract_schema()
     cols = [str(x) for x in list(payload.get("required_columns", []))]
     if not cols:
-        raise ValueError("snapshot_ml_flat_v1 schema has no required_columns")
+        raise ValueError("snapshot_ml_flat schema has no required_columns")
     return cols
 
 
@@ -753,13 +758,35 @@ def _validate_ml_flat_rows_or_raise(rows: list[dict[str, Any]]) -> dict[str, Any
     return validate_snapshot_ml_flat_rows(rows, raise_on_error=True)
 
 
+def _snapshot_record(
+    snapshot: dict[str, Any],
+    *,
+    build_source: str,
+    build_run_id: str,
+) -> dict[str, Any]:
+    session_context = snapshot.get("session_context") if isinstance(snapshot.get("session_context"), dict) else {}
+    trade_date = str(snapshot.get("trade_date") or session_context.get("date") or "").strip()
+    timestamp = str(snapshot.get("timestamp") or session_context.get("timestamp") or "").strip()
+    return {
+        "trade_date": trade_date,
+        "timestamp": timestamp,
+        "snapshot_id": str(snapshot.get("snapshot_id") or "").strip(),
+        "schema_name": str(snapshot.get("schema_name") or "").strip(),
+        "schema_version": str(snapshot.get("schema_version") or "").strip(),
+        "instrument": str(snapshot.get("instrument") or "").strip(),
+        "build_source": str(build_source),
+        "build_run_id": str(build_run_id),
+        "snapshot_raw_json": json.dumps(snapshot, ensure_ascii=False, default=str),
+    }
+
+
 def _flatten_snapshot(snapshot: dict[str, Any], trade_date: str, year: int) -> dict[str, Any]:
     """Flatten a MarketSnapshot into the intermediate source row used for v1 projection."""
     row: dict[str, Any] = {
         "trade_date": trade_date,
         "year": year,
         "instrument": snapshot.get("instrument"),
-        "schema_version": snapshot.get("version", "1.0"),
+        "schema_version": snapshot.get("schema_version", FINAL_SNAPSHOT_SCHEMA_VERSION),
         "schema_name": snapshot.get("schema_name", "MarketSnapshot"),
         "snapshot_id": snapshot.get("snapshot_id"),
     }
@@ -825,7 +852,8 @@ def process_day(
     state = MarketSnapshotState()
     iv_carrier.seed_state(state)
 
-    rows: list[dict[str, Any]] = []
+    source_rows: list[dict[str, Any]] = []
+    snapshot_rows: list[dict[str, Any]] = []
     year = int(pd.Timestamp(trade_date).year)
     today_indices = fut_window.index[today_mask].tolist()
 
@@ -847,7 +875,15 @@ def process_day(
             vix_daily=vix_daily,
             vix_live_current=None,
         )
+        validate_market_snapshot(snapshot, raise_on_error=True)
         _update_iv_diag(day_iv_diag, snapshot, chain)
+        snapshot_rows.append(
+            _snapshot_record(
+                snapshot,
+                build_source=build_source,
+                build_run_id=str(build_run_id or _default_build_run_id()),
+            )
+        )
         row = _flatten_snapshot(snapshot, trade_date=trade_date, year=year)
         spot_values = spot_by_ts.get(ts_key) or spot_by_ts.get(ts_min_key, {})
         row["spot_open"] = pd.to_numeric(spot_values.get("spot_open"), errors="coerce")
@@ -865,7 +901,7 @@ def process_day(
             if np.isfinite(ce_volume_total) and np.isfinite(pe_volume_total)
             else float("nan")
         )
-        rows.append(row)
+        source_rows.append(row)
         if (
             idx_in_day == 1
             or idx_in_day == total_minutes
@@ -880,13 +916,16 @@ def process_day(
 
     iv_carrier.absorb_state(state)
     projected = _project_rows_to_ml_flat(
-        rows,
+        source_rows,
         build_source=build_source,
         build_run_id=str(build_run_id or _default_build_run_id()),
     )
     if validate_ml_flat_contract:
         _validate_ml_flat_rows_or_raise(projected)
-    return projected
+    return {
+        "snapshot_rows": snapshot_rows,
+        "ml_flat_rows": projected,
+    }
 
 
 def write_days_to_parquet(
@@ -998,7 +1037,9 @@ def run_snapshot_batch(
     started_at = time.time()
     resolved_output_dataset = _normalize_output_dataset(output_dataset)
     resolved_build_run_id = str(build_run_id or _default_build_run_id())
-    store = ParquetStore(parquet_base, snapshots_dataset=resolved_output_dataset)
+    store = ParquetStore(parquet_base, snapshots_dataset=OUTPUT_DATASET_SNAPSHOTS)
+    snapshots_store = ParquetStore(parquet_base, snapshots_dataset=OUTPUT_DATASET_SNAPSHOTS)
+    ml_flat_store = ParquetStore(parquet_base, snapshots_dataset=OUTPUT_DATASET_ML_FLAT)
     out_base = Path(parquet_base)
 
     requested_days = {str(day) for day in (explicit_days or []) if str(day).strip()}
@@ -1012,7 +1053,17 @@ def run_snapshot_batch(
             "days_available": 0,
         }
 
-    already_done = set(store.available_snapshot_days(min_day=min_day, max_day=max_day)) if resume else set()
+    already_done_snapshots = (
+        set(snapshots_store.available_snapshot_days(min_day=min_day, max_day=max_day))
+        if resume
+        else set()
+    )
+    already_done_ml_flat = (
+        set(ml_flat_store.available_snapshot_days(min_day=min_day, max_day=max_day))
+        if resume
+        else set()
+    )
+    already_done = already_done_snapshots.intersection(already_done_ml_flat) if resume else set()
     if requested_days:
         already_done = already_done.intersection(requested_days)
     pending_days = [day for day in all_days if day not in already_done]
@@ -1020,7 +1071,7 @@ def run_snapshot_batch(
     print(f"[snapshot_batch] Days available        : {len(all_days)}")
     print(f"[snapshot_batch] Days already built    : {len(already_done)}")
     print(f"[snapshot_batch] Days pending          : {len(pending_days)}")
-    print(f"[snapshot_batch] Output dataset        : {resolved_output_dataset}")
+    print(f"[snapshot_batch] Output datasets       : {OUTPUT_DATASET_SNAPSHOTS}, {resolved_output_dataset}")
     print(f"[snapshot_batch] Build source/run      : {build_source}/{resolved_build_run_id}")
     if min_day or max_day:
         print(f"[snapshot_batch] Date filter           : {min_day or 'start'} -> {max_day or 'end'}")
@@ -1069,23 +1120,34 @@ def run_snapshot_batch(
     errors: list[dict[str, str]] = []
     batch_days = max(1, int(write_batch_days))
     buffered_year: int | None = None
-    buffered_rows: list[dict[str, Any]] = []
+    buffered_snapshot_rows: list[dict[str, Any]] = []
+    buffered_ml_flat_rows: list[dict[str, Any]] = []
     buffered_trade_dates: set[str] = set()
     buffered_day_count = 0
+    total_snapshot_rows = 0
 
     def _flush_buffer() -> None:
-        nonlocal total_rows, buffered_rows, buffered_trade_dates, buffered_day_count
-        if buffered_year is None or not buffered_rows:
+        nonlocal total_rows, total_snapshot_rows, buffered_snapshot_rows, buffered_ml_flat_rows, buffered_trade_dates, buffered_day_count
+        if buffered_year is None or (not buffered_snapshot_rows and not buffered_ml_flat_rows):
             return
-        written = write_days_to_parquet(
-            buffered_rows,
+        snapshot_written = write_days_to_parquet(
+            buffered_snapshot_rows,
+            out_base=out_base,
+            year=buffered_year,
+            output_dataset=OUTPUT_DATASET_SNAPSHOTS,
+            replace_trade_dates=buffered_trade_dates,
+        )
+        ml_flat_written = write_days_to_parquet(
+            buffered_ml_flat_rows,
             out_base=out_base,
             year=buffered_year,
             output_dataset=resolved_output_dataset,
             replace_trade_dates=buffered_trade_dates,
         )
-        total_rows += written
-        buffered_rows = []
+        total_snapshot_rows += snapshot_written
+        total_rows += ml_flat_written
+        buffered_snapshot_rows = []
+        buffered_ml_flat_rows = []
         buffered_trade_dates = set()
         buffered_day_count = 0
 
@@ -1113,7 +1175,9 @@ def run_snapshot_batch(
                 build_run_id=resolved_build_run_id,
                 validate_ml_flat_contract=bool(validate_ml_flat_contract),
             )
-            if not rows:
+            snapshot_rows = list(rows.get("snapshot_rows") or [])
+            ml_flat_rows = list(rows.get("ml_flat_rows") or [])
+            if not snapshot_rows or not ml_flat_rows:
                 no_rows_days.append(day)
                 continue
 
@@ -1133,7 +1197,8 @@ def run_snapshot_batch(
                 _flush_buffer()
                 buffered_year = year
 
-            buffered_rows.extend(rows)
+            buffered_snapshot_rows.extend(snapshot_rows)
+            buffered_ml_flat_rows.extend(ml_flat_rows)
             buffered_trade_dates.add(str(day))
             buffered_day_count += 1
             if buffered_day_count >= batch_days:
@@ -1141,7 +1206,7 @@ def run_snapshot_batch(
             days_done += 1
             day_elapsed = time.perf_counter() - day_started_at
             print(
-                f"[snapshot_batch] Completed day={day} rows={len(rows)} elapsed_sec={day_elapsed:.1f}",
+                f"[snapshot_batch] Completed day={day} snapshots={len(snapshot_rows)} flat_rows={len(ml_flat_rows)} elapsed_sec={day_elapsed:.1f}",
                 flush=True,
             )
         except MissingInputsError:
@@ -1168,6 +1233,8 @@ def run_snapshot_batch(
         "error_count": len(errors),
         "error_days": [entry["day"] for entry in errors],
         "total_rows": int(total_rows),
+        "total_snapshot_rows": int(total_snapshot_rows),
+        "written_datasets": [OUTPUT_DATASET_SNAPSHOTS, resolved_output_dataset],
         "iv_diagnostics": iv_diag_total,
         "iv_diagnostics_days_with_failures": iv_diag_by_day,
         "elapsed_sec": elapsed,

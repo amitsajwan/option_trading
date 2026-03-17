@@ -1,23 +1,47 @@
 # Historical Snapshot User Guide
 
-Builds Layer-2 historical `MarketSnapshot` parquet (MSS.1-MSS.9) from Layer-1 parquet inputs.
+Builds the final historical `MarketSnapshot` contract through one unified code path:
+
+1. raw CSV input under a source root such as `C:\code\banknifty_data`
+2. normalized parquet cache under `.data/ml_pipeline/parquet_data`
+3. canonical `snapshots` parquet under the same parquet base
+4. derived `snapshots_ml_flat` parquet for ML research
+
+The preferred operator entrypoint is always:
+
+```powershell
+python -m snapshot_app.historical.snapshot_batch_runner
+```
+
+Internally, that runner now uses `snapshot_app.pipeline` for raw normalization and orchestration, so there is no separate "old historical builder" to keep in sync.
+
+For the GCP operator flow that builds final parquet on a high-power VM and uploads it to GCS, see [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](../../docs/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md).
 
 ## What This Produces
 
-Input (already converted):
-- `.data/ml_pipeline/parquet_data/futures/year=YYYY/data.parquet`
-- `.data/ml_pipeline/parquet_data/options/year=YYYY/data.parquet`
-- `.data/ml_pipeline/parquet_data/spot/year=YYYY/data.parquet`
+Input options:
+- raw CSV root:
+  - `C:\code\banknifty_data\banknifty_fut\YYYY\M\*.csv`
+  - `C:\code\banknifty_data\banknifty_options\YYYY\M\*.csv`
+  - `C:\code\banknifty_data\banknifty_spot\YYYY\M\*.csv`
+  - `C:\code\banknifty_data\VIX\*.csv`
+- or already-normalized parquet:
+- `.data/ml_pipeline/parquet_data/futures/year=YYYY/month=MM/data.parquet`
+- `.data/ml_pipeline/parquet_data/options/year=YYYY/month=MM/data.parquet`
+- `.data/ml_pipeline/parquet_data/spot/year=YYYY/month=MM/data.parquet`
 - `.data/ml_pipeline/parquet_data/vix/vix.parquet`
 
 Output:
-- `.data/ml_pipeline/parquet_data/snapshots_ml_flat/year=YYYY/data.parquet` (`snapshot_app` v1 contract)
+- `.data/ml_pipeline/parquet_data/snapshots/year=YYYY/data.parquet` (canonical `MarketSnapshot` contract)
+- `.data/ml_pipeline/parquet_data/snapshots_ml_flat/year=YYYY/data.parquet` (derived ML-flat contract)
 
-Each output row is one minute snapshot_ml_flat record with v1 metadata and flat feature columns.
+Each trading minute now produces:
+- one canonical nested `MarketSnapshot`
+- one derived `snapshots_ml_flat` row for offline ML
 
 Contract baseline:
 - `schema_name = MarketSnapshot`
-- `schema_version = 2.0`
+- `schema_version = 3.0`
 - `chain_aggregates.strike_count` is required for rebuild gating
 - `atm_ce_open/high/low` and `atm_pe_open/high/low` are strict nullable feed values (no fallback to close)
 
@@ -33,6 +57,38 @@ If needed explicitly:
 
 ```powershell
 pip install pandas pyarrow duckdb
+```
+
+## Preferred Build Modes
+
+### Mode A: Raw CSV to snapshots
+
+This is the preferred mode when rebuilding from the full raw archive.
+
+1. Normalize only:
+
+```powershell
+python -m snapshot_app.historical.snapshot_batch_runner --raw-root C:\code\banknifty_data --normalize-only
+```
+
+2. Normalize and build a small slice:
+
+```powershell
+python -m snapshot_app.historical.snapshot_batch_runner --raw-root C:\code\banknifty_data --min-day 2020-01-01 --max-day 2020-01-10
+```
+
+3. Full resumable raw-to-snapshot build:
+
+```powershell
+python -m snapshot_app.historical.snapshot_batch_runner --raw-root C:\code\banknifty_data
+```
+
+### Mode B: Build from existing parquet cache
+
+This mode is still supported, but it uses the same runner and the same snapshot build path.
+
+```powershell
+python -m snapshot_app.historical.snapshot_batch_runner --min-day 2020-01-01 --max-day 2020-01-10
 ```
 
 ## Verify Layer-1 Parquet First
@@ -73,13 +129,13 @@ python -m snapshot_app.historical.snapshot_batch_runner --validate-only --valida
 python -m snapshot_app.historical.snapshot_batch_runner
 ```
 
-5. Build Team A v1 flat snapshot dataset:
+5. Build canonical snapshots plus derived flat dataset:
 
 ```powershell
 python -m snapshot_app.historical.snapshot_batch_runner --build-source historical --validate-ml-flat-contract --manifest-out .run/snapshot_ml_flat/team_b/build_manifest.json
 ```
 
-6. Validate Team A v1 dataset and write report:
+6. Validate canonical snapshots plus derived flat dataset and write report:
 
 ```powershell
 python -m snapshot_app.historical.snapshot_batch_runner --validate-only --validate-days 5 --validation-report-out .run/snapshot_ml_flat/team_b/validation_report.json
@@ -98,6 +154,16 @@ python -m snapshot_app.historical.snapshot_batch_runner --year 2024 --validate-m
 ```
 
 Year-sliced runs are safe for parallel execution because each worker writes a different yearly parquet file. They do not preserve cross-run carried state across `YYYY-12-31 -> YYYY+1-01-01`; continuous multi-year state can be added later if required.
+
+On larger machines, the runner now has two performance levers:
+- `--normalize-jobs` for raw CSV to parquet conversion
+- `--snapshot-jobs` for year-sliced snapshot workers
+
+Example for a 32-core box:
+
+```powershell
+python -m snapshot_app.historical.snapshot_batch_runner --raw-root C:\code\banknifty_data --normalize-jobs 24 --snapshot-jobs 8
+```
 
 ## Broadcast Historical Snapshots (L3 Replay)
 

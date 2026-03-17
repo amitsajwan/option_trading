@@ -23,6 +23,11 @@ output "runtime_config_bucket_url" {
   description = "Cloud Storage bucket for runtime bootstrap files."
 }
 
+output "snapshot_data_bucket_url" {
+  value       = var.create_snapshot_data_bucket ? "gs://${google_storage_bucket.snapshot_data[0].name}" : ""
+  description = "Optional Cloud Storage bucket for raw archive and final historical parquet outputs."
+}
+
 output "training_instance_template" {
   value       = google_compute_instance_template.training.self_link_unique
   description = "Instance template self-link for creating disposable training VMs."

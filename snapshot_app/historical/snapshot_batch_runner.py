@@ -9,14 +9,21 @@ from typing import Any
 
 import pandas as pd
 
+from snapshot_app.market_snapshot_contract import validate_market_snapshot
 from snapshot_app.snapshot_ml_flat_contract import validate_snapshot_ml_flat_frame
+from snapshot_app.pipeline import (
+    DEFAULT_NORMALIZE_JOBS,
+    DEFAULT_RAW_DATA_ROOT,
+    DEFAULT_SNAPSHOT_JOBS,
+)
+from snapshot_app.pipeline.normalize import normalize_raw_to_parquet
+from snapshot_app.pipeline.orchestrator import run_snapshot_builds
 
 from .parquet_store import ParquetStore
 from .snapshot_access import DEFAULT_HISTORICAL_PARQUET_BASE
 from .snapshot_batch import (
     ML_FLAT_SCHEMA_VERSION,
     OUTPUT_DATASET_ML_FLAT,
-    run_snapshot_batch,
 )
 
 DEFAULT_PARQUET_BASE = DEFAULT_HISTORICAL_PARQUET_BASE
@@ -241,6 +248,40 @@ def _validate_ml_flat_frame(frame: pd.DataFrame) -> dict[str, Any]:
     return validate_snapshot_ml_flat_frame(frame, raise_on_error=False)
 
 
+def _validate_market_snapshot_frame(frame: pd.DataFrame) -> dict[str, Any]:
+    if frame is None or len(frame) == 0:
+        return {"ok": True, "rows": 0, "error_count": 0, "errors": []}
+    if "snapshot_raw_json" not in frame.columns:
+        return {
+            "ok": False,
+            "rows": int(len(frame)),
+            "error_count": 1,
+            "errors": ["missing required column snapshot_raw_json"],
+        }
+
+    errors: list[str] = []
+    parsed_rows = 0
+    for idx, raw in enumerate(frame["snapshot_raw_json"].tolist()):
+        try:
+            payload = json.loads(str(raw))
+        except Exception as exc:
+            errors.append(f"row={idx} invalid snapshot_raw_json: {exc}")
+            continue
+        report = validate_market_snapshot(payload, raise_on_error=False)
+        if not bool(report.get("ok")):
+            row_errors = list(report.get("errors") or [])
+            for item in row_errors[:5]:
+                errors.append(f"row={idx} {item}")
+        parsed_rows += 1
+    return {
+        "ok": len(errors) == 0,
+        "rows": int(len(frame)),
+        "parsed_rows": int(parsed_rows),
+        "error_count": int(len(errors)),
+        "errors": errors,
+    }
+
+
 def validate_output(
     parquet_base: Path,
     n_days: int = 5,
@@ -253,6 +294,7 @@ def validate_output(
 ) -> dict[str, Any]:
     """Validate produced snapshots for row counts, null rates, and schema parity."""
     store = ParquetStore(parquet_base, snapshots_dataset=output_dataset)
+    canonical_store = ParquetStore(parquet_base, snapshots_dataset="snapshots")
     snapshot_days = store.available_snapshot_days(min_day=min_day, max_day=max_day)
     if not snapshot_days:
         print(f"[validate] No snapshot days found in dataset={output_dataset}. Build snapshots first.")
@@ -292,11 +334,18 @@ def validate_output(
             "reason": "no_rows_in_range",
         }
 
-    print("\n[validate] Team A contract validation (SnapshotMLFlatV1)")
+    print("\n[validate] Derived SnapshotMLFlat contract validation")
     report = _validate_ml_flat_frame(df_range)
     print(json.dumps(report, indent=2))
+
+    canonical_report = {"ok": False, "rows": 0, "error_count": 1, "errors": ["canonical snapshots missing for validation range"]}
+    canonical_frame = canonical_store.snapshots_for_date_range(sample_days[0], sample_days[-1])
+    if len(canonical_frame):
+        print("\n[validate] Canonical MarketSnapshot validation")
+        canonical_report = _validate_market_snapshot_frame(canonical_frame)
+        print(json.dumps(canonical_report, indent=2))
     return {
-        "ok": bool(report.get("ok")) and all_ok,
+        "ok": bool(report.get("ok")) and bool(canonical_report.get("ok")) and all_ok,
         "output_dataset": output_dataset,
         "min_day": min_day,
         "max_day": max_day,
@@ -304,6 +353,7 @@ def validate_output(
         "row_counts": row_counts,
         "required_schema_version": str(required_schema_version),
         "contract_report": report,
+        "canonical_contract_report": canonical_report,
     }
 
 
@@ -385,6 +435,44 @@ def write_json_artifact(path: Path, payload: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build historical Layer-2 snapshots from parquet Layer-1 inputs.")
     parser.add_argument("--base", default=str(DEFAULT_PARQUET_BASE), help=f"Parquet base path (default: {DEFAULT_PARQUET_BASE})")
+    parser.add_argument(
+        "--raw-root",
+        default=None,
+        help=(
+            "Optional raw CSV root. When provided, normalize raw futures/options/spot/VIX into parquet "
+            "before snapshot build (example: C:/code/banknifty_data)."
+        ),
+    )
+    parser.add_argument(
+        "--vix-root",
+        default=None,
+        help="Optional dedicated VIX raw root. Defaults to raw-root recursive discovery when omitted.",
+    )
+    parser.add_argument(
+        "--normalize-only",
+        action="store_true",
+        help="Normalize raw CSV inputs into parquet cache and exit.",
+    )
+    parser.add_argument(
+        "--force-normalize",
+        action="store_true",
+        help="Rebuild normalized parquet partitions even if they already exist.",
+    )
+    parser.add_argument(
+        "--normalize-jobs",
+        type=int,
+        default=DEFAULT_NORMALIZE_JOBS,
+        help=f"Parallel workers for raw normalization (default: {DEFAULT_NORMALIZE_JOBS}).",
+    )
+    parser.add_argument(
+        "--snapshot-jobs",
+        type=int,
+        default=DEFAULT_SNAPSHOT_JOBS,
+        help=(
+            "Parallel year-sliced snapshot workers. Values >1 keep one code path but run independent calendar years "
+            f"in separate processes (default: {DEFAULT_SNAPSHOT_JOBS})."
+        ),
+    )
     parser.add_argument("--instrument", default=DEFAULT_INSTRUMENT, help=f"Snapshot instrument (default: {DEFAULT_INSTRUMENT})")
     parser.add_argument("--year", type=int, default=None, help="Restrict build/validation window to one calendar year.")
     parser.add_argument(
@@ -412,7 +500,7 @@ def main() -> int:
         nargs="+",
         default=None,
         help=(
-            "Fields that must be populated in snapshots_ml_flat "
+            "Fields that must be populated in derived snapshots_ml_flat "
             f"(default: {' '.join(DEFAULT_REQUIRED_FIELDS_ML_FLAT)})."
         ),
     )
@@ -437,17 +525,17 @@ def main() -> int:
     parser.add_argument(
         "--build-source",
         default="historical",
-        help="Build source metadata for SnapshotMLFlat rows (default: historical).",
+        help="Build source metadata for canonical snapshots and derived ml-flat rows (default: historical).",
     )
     parser.add_argument(
         "--build-run-id",
         default=None,
-        help="Optional build run id for SnapshotMLFlat rows (default: auto UTC stamp).",
+        help="Optional build run id for canonical snapshots and derived ml-flat rows (default: auto UTC stamp).",
     )
     parser.add_argument(
         "--validate-ml-flat-contract",
         action="store_true",
-        help="Validate each processed day against Team A SnapshotMLFlat contract during build.",
+        help="Validate each processed day against the derived SnapshotMLFlat contract during build.",
     )
     parser.add_argument(
         "--manifest-out",
@@ -479,6 +567,22 @@ def main() -> int:
     args = parser.parse_args()
 
     base = Path(args.base)
+    raw_root = Path(args.raw_root) if args.raw_root else None
+    vix_root = Path(args.vix_root) if args.vix_root else None
+
+    if raw_root is not None or args.normalize_only:
+        effective_raw_root = raw_root or DEFAULT_RAW_DATA_ROOT
+        normalization = normalize_raw_to_parquet(
+            raw_root=effective_raw_root,
+            parquet_base=base,
+            vix_root=vix_root,
+            jobs=int(args.normalize_jobs),
+            force=bool(args.force_normalize),
+        )
+        print(json.dumps({"normalization": normalization}, indent=2, default=str))
+        if args.normalize_only:
+            return 0
+
     if not base.exists():
         print(f"ERROR: parquet base path not found: {base}")
         return 1
@@ -602,7 +706,7 @@ def main() -> int:
             print("[snapshot_batch_runner] No snapshot days require field backfill.")
             return 0
 
-    result = run_snapshot_batch(
+    result = run_snapshot_builds(
         parquet_base=base,
         instrument=args.instrument,
         min_day=effective_min_day,
@@ -617,6 +721,7 @@ def main() -> int:
         build_source=args.build_source,
         build_run_id=args.build_run_id,
         validate_ml_flat_contract=args.validate_ml_flat_contract,
+        snapshot_jobs=max(1, int(args.snapshot_jobs)),
     )
     print(json.dumps(result, indent=2, default=str))
     if args.print_iv_diagnostics:

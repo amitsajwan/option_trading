@@ -4,7 +4,7 @@ from typing import Optional
 
 import pandas as pd
 
-REQUIRED_SNAPSHOT_SCHEMA_VERSION = "2.0"
+REQUIRED_SNAPSHOT_SCHEMA_VERSION = "3.0"
 
 
 def enforce_snapshot_schema_version(
@@ -41,4 +41,3 @@ def enforce_snapshot_schema_version(
         f"{context}: found {bad_count}/{total} rows not on schema_version={required_version}."
         f"{bad_days_msg}"
     )
-

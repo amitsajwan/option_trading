@@ -12,8 +12,8 @@ def test_window_manifest_hash_is_stable_for_same_payload() -> None:
         "window_start": "2026-01-01",
         "window_end": "2026-07-31",
         "trading_days": 150,
-        "all_days_v2": True,
-        "schema_version": "2.0",
+        "all_days_required_schema": True,
+        "schema_version": "3.0",
         "generated_at": "2026-03-17T00:00:00Z",
         "source_path": "C:/data",
     }
@@ -25,8 +25,8 @@ def test_validate_window_manifest_marks_formal_ready() -> None:
         "window_start": "2026-01-01",
         "window_end": "2026-07-31",
         "trading_days": 150,
-        "all_days_v2": True,
-        "schema_version": "2.0",
+        "all_days_required_schema": True,
+        "schema_version": "3.0",
         "generated_at": "2026-03-17T00:00:00Z",
         "source_path": "C:/data",
     }

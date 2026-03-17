@@ -8,7 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
 
-DEFAULT_REQUIRED_SCHEMA_VERSION = "2.0"
+DEFAULT_REQUIRED_SCHEMA_VERSION = "3.0"
 DEFAULT_MIN_TRADING_DAYS = 150
 
 
@@ -39,7 +39,7 @@ def validate_window_manifest(
         "window_start",
         "window_end",
         "trading_days",
-        "all_days_v2",
+        "all_days_required_schema",
         "schema_version",
         "generated_at",
         "source_path",
@@ -67,15 +67,17 @@ def validate_window_manifest(
     if trading_days < 0:
         raise ValueError(f"{context}: trading_days must be >= 0")
 
-    all_days_v2 = bool(manifest.get("all_days_v2"))
+    all_days_required_schema = bool(manifest.get("all_days_required_schema"))
     schema_version = str(manifest.get("schema_version") or "").strip()
     required = str(required_schema_version).strip()
-    formal_ready = bool(all_days_v2 and schema_version == required and trading_days >= int(min_trading_days))
+    formal_ready = bool(
+        all_days_required_schema and schema_version == required and trading_days >= int(min_trading_days)
+    )
 
     if formal_run and not formal_ready:
         reasons: list[str] = []
-        if not all_days_v2:
-            reasons.append("all_days_v2=false")
+        if not all_days_required_schema:
+            reasons.append("all_days_required_schema=false")
         if schema_version != required:
             reasons.append(f"schema_version={schema_version!r} expected={required!r}")
         if trading_days < int(min_trading_days):
@@ -88,7 +90,7 @@ def validate_window_manifest(
             "window_start": window_start,
             "window_end": window_end,
             "trading_days": trading_days,
-            "all_days_v2": all_days_v2,
+            "all_days_required_schema": all_days_required_schema,
             "schema_version": schema_version,
             "required_schema_version": required,
             "min_trading_days_required": int(min_trading_days),
@@ -159,4 +161,3 @@ def split_boundaries_for_days(
         "eval_start": eval_days[0],
         "eval_end": eval_days[-1],
     }
-

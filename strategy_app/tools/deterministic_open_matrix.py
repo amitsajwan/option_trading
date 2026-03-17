@@ -15,8 +15,8 @@ import pandas as pd
 from snapshot_app.historical.parquet_store import ParquetStore
 from snapshot_app.historical.snapshot_access import (
     DEFAULT_HISTORICAL_PARQUET_BASE,
-    SNAPSHOT_DATASET_LEGACY_RAW,
-    SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+    SNAPSHOT_DATASET_CANONICAL,
+    SNAPSHOT_INPUT_MODE_CANONICAL,
     require_snapshot_access,
 )
 from snapshot_app.historical.window_manifest import (
@@ -281,13 +281,13 @@ def run_deterministic_open_matrix(
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     snapshot_access = require_snapshot_access(
-        mode=SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
         context="deterministic_open_matrix",
         parquet_base=parquet_base,
         min_day=str(split_boundaries["valid_start"]),
         max_day=str(split_boundaries["eval_end"]),
     )
-    store = ParquetStore(parquet_base, snapshots_dataset=SNAPSHOT_DATASET_LEGACY_RAW)
+    store = ParquetStore(parquet_base, snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
 
     valid_start = str(split_boundaries["valid_start"])
     valid_end = str(split_boundaries["valid_end"])
@@ -430,13 +430,13 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         context="deterministic_open_matrix.window_manifest",
     )
     snapshot_access = require_snapshot_access(
-        mode=SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
         context="deterministic_open_matrix",
         parquet_base=Path(args.parquet_base),
         min_day=str(manifest_meta["window_start"]),
         max_day=str(manifest_meta["window_end"]),
     )
-    store = ParquetStore(Path(args.parquet_base), snapshots_dataset=SNAPSHOT_DATASET_LEGACY_RAW)
+    store = ParquetStore(Path(args.parquet_base), snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
     days = store.available_snapshot_days(str(manifest_meta["window_start"]), str(manifest_meta["window_end"]))
     split = split_boundaries_for_days(days)
     run_meta = {
@@ -456,7 +456,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             "required_schema_version": str(args.manifest_required_schema_version),
             "min_trading_days_required": int(args.manifest_min_trading_days),
             "window_trading_days": manifest_meta.get("trading_days"),
-            "all_days_v2": manifest_meta.get("all_days_v2"),
+            "all_days_required_schema": manifest_meta.get("all_days_required_schema"),
         },
     }
     result = run_deterministic_open_matrix(

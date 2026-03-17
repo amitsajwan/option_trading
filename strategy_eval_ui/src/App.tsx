@@ -1263,11 +1263,11 @@ export default function App() {
         <div className="table-head">
           <div>
             <h3>Feature Intelligence</h3>
-            <div className="section-caption feature-caption">snapshot_ml_flat_v1 grouped feature dictionary</div>
+            <div className="section-caption feature-caption">snapshot_ml_flat grouped feature dictionary</div>
           </div>
           <div className="badge-row">
             <span className={`badge ${featureCoverageBadgeClass}`}>{featureCoverageLabel}</span>
-            <span className="badge">{featureQ.data?.contract?.contract_id || "snapshot_ml_flat_v1"}</span>
+            <span className="badge">{featureQ.data?.contract?.contract_id || "snapshot_ml_flat"}</span>
           </div>
         </div>
 
@@ -1315,7 +1315,7 @@ export default function App() {
 
             {(Number(featureSummary.removed_legacy_feature_count || 0) > 0 || Number(featureSummary.unmapped_feature_count || 0) > 0) && (
               <div className="feature-note">
-                UI is showing mapped `snapshot_ml_flat_v1` fields only. Hidden inputs: removed legacy {featureSummary.removed_legacy_feature_count ?? 0}, unmapped {featureSummary.unmapped_feature_count ?? 0}.
+                UI is showing mapped `snapshot_ml_flat` fields only. Hidden inputs: removed legacy {featureSummary.removed_legacy_feature_count ?? 0}, unmapped {featureSummary.unmapped_feature_count ?? 0}.
               </div>
             )}
 

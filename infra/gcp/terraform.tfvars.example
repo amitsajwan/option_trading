@@ -14,6 +14,8 @@ app_image_tag                   = "20260317-1"
 
 model_bucket_name            = "my-option-trading-models"
 runtime_config_bucket_name   = "my-option-trading-runtime-config"
+create_snapshot_data_bucket  = true
+snapshot_data_bucket_name    = "my-option-trading-snapshots"
 
 runtime_config_sync_source   = "gs://my-option-trading-runtime-config/runtime"
 published_models_sync_source = "gs://my-option-trading-models/published_models"

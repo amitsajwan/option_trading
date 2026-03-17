@@ -1,4 +1,4 @@
-"""Validate live SnapshotMLFlat events written to JSONL."""
+"""Validate live MarketSnapshot events written to JSONL."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 
 import pandas as pd
 
-from snapshot_app.snapshot_ml_flat_contract import validate_snapshot_ml_flat_frame
+from snapshot_app.market_snapshot_contract import validate_market_snapshot
 
 
 def _read_lines(path: Path, tail: int = 0) -> list[str]:
@@ -72,35 +72,37 @@ def validate_live_events(events_path: Path, tail: int = 0) -> int:
         names = sorted({str(x) for x in frame["schema_name"].dropna().astype(str).tolist()})
         print(f"[live-validate] schema_name values: {names}")
 
-    report = validate_snapshot_ml_flat_frame(frame, raise_on_error=False)
-    print(f"[live-validate] Contract ok: {bool(report.get('ok'))}")
-    print(f"[live-validate] Contract errors: {int(report.get('error_count') or 0)}")
-    for err in list(report.get("errors") or [])[:10]:
-        print(f"  - {err}")
+    reports = [validate_market_snapshot(snapshot, raise_on_error=False) for snapshot in rows]
+    error_reports = [report for report in reports if not bool(report.get("ok"))]
+    print(f"[live-validate] Contract ok: {len(error_reports) == 0}")
+    print(f"[live-validate] Invalid snapshots: {len(error_reports)}")
+    for report in error_reports[:5]:
+        for err in list(report.get("errors") or [])[:5]:
+            print(f"  - {err}")
 
-    key_fields = [
-        "px_fut_close",
-        "px_spot_close",
-        "opt_flow_pcr_oi",
-        "opt_flow_atm_call_return_1m",
-        "opt_flow_rel_volume_20",
-        "ctx_dte_days",
-        "ctx_is_high_vix_day",
+    print("\n[live-validate] Block presence")
+    block_names = [
+        "session_context",
+        "futures_bar",
+        "futures_derived",
+        "opening_range",
+        "vix_context",
+        "chain_aggregates",
+        "atm_options",
+        "iv_derived",
+        "session_levels",
     ]
-    print("\n[live-validate] Null rates")
-    total = float(len(frame))
-    for field in key_fields:
-        if field not in frame.columns:
-            print(f"  {field:<28} MISSING")
-            continue
-        null_pct = (float(frame[field].isna().sum()) / total) * 100.0 if total > 0 else 0.0
-        print(f"  {field:<28} {null_pct:6.2f}%")
+    total = float(len(rows))
+    for block_name in block_names:
+        present = sum(1 for snapshot in rows if isinstance(snapshot.get(block_name), dict))
+        pct = (float(present) / total) * 100.0 if total > 0 else 0.0
+        print(f"  {block_name:<20} {pct:6.2f}%")
 
-    return 0 if bool(report.get("ok")) else 1
+    return 0 if not error_reports else 1
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate live SnapshotMLFlat JSONL against Team A contract.")
+    parser = argparse.ArgumentParser(description="Validate live MarketSnapshot JSONL against the final snapshot contract.")
     parser.add_argument("--events-path", default=".run/snapshot_app/events.jsonl")
     parser.add_argument("--tail", type=int, default=0, help="Only validate last N lines")
     args = parser.parse_args()

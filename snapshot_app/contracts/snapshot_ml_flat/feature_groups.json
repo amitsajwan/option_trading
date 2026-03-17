@@ -1,6 +1,6 @@
 {
-  "contract_id": "snapshot_ml_flat_v1",
-  "schema_version": "1.0.0",
+  "contract_id": "snapshot_ml_flat",
+  "schema_version": "3.0",
   "groups": {
     "px": {
       "label": "Price OHLC",

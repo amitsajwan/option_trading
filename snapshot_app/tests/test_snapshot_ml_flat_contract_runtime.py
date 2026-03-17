@@ -11,7 +11,7 @@ def test_snapshot_ml_flat_runtime_contract_accepts_minimal_valid_row() -> None:
         "timestamp": "2026-03-16T09:30:00+05:30",
         "snapshot_id": "2026-03-16T09:30:00+05:30",
         "schema_name": "SnapshotMLFlat",
-        "schema_version": "1.0.0",
+        "schema_version": "3.0",
         "build_source": "live",
         "build_run_id": "test_run",
         "px_fut_open": 50000.0,

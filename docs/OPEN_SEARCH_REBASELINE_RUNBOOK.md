@@ -1,6 +1,6 @@
 # Open-Search Rebaseline Runbook
 
-This runbook is the active procedure for deterministic + ML rebaseline on snapshot schema `2.0`.
+This runbook is the active procedure for deterministic + ML rebaseline on the final snapshot contract (`schema_version=3.0`).
 
 Legacy status for the current milestone:
 
@@ -21,7 +21,7 @@ python -m snapshot_app.historical.snapshot_batch_runner `
 Mandatory manifest fields:
 
 - `window_start`, `window_end`, `trading_days`
-- `all_days_v2`, `schema_version`
+- `all_days_required_schema`, `schema_version`
 - `generated_at`, `source_path`
 - `formal_ready`, `exploratory_only`
 
@@ -32,8 +32,8 @@ Mandatory manifest fields:
 
 Formal run must fail if any readiness condition is false:
 
-- `all_days_v2=true`
-- `schema_version=2.0`
+- `all_days_required_schema=true`
+- `schema_version=3.0`
 - `trading_days>=150`
 
 ## 3. Exploratory Cycle

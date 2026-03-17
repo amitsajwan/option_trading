@@ -26,8 +26,8 @@ from strategy_app.offline_ml.entry_quality_replay_eval import run_replay_evaluat
 from snapshot_app.historical.parquet_store import ParquetStore
 from snapshot_app.historical.snapshot_access import (
     DEFAULT_HISTORICAL_PARQUET_BASE,
-    SNAPSHOT_DATASET_LEGACY_RAW,
-    SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+    SNAPSHOT_DATASET_CANONICAL,
+    SNAPSHOT_INPUT_MODE_CANONICAL,
     require_snapshot_access,
 )
 from snapshot_app.historical.window_manifest import (
@@ -213,13 +213,13 @@ def run_cycle(
         context="open_search_rebaseline_cycle.window_manifest",
     )
     snapshot_access = require_snapshot_access(
-        mode=SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
         context="open_search_rebaseline_cycle",
         parquet_base=parquet_base,
         min_day=str(manifest_meta["window_start"]),
         max_day=str(manifest_meta["window_end"]),
     )
-    store = ParquetStore(parquet_base, snapshots_dataset=SNAPSHOT_DATASET_LEGACY_RAW)
+    store = ParquetStore(parquet_base, snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
     days = store.available_snapshot_days(str(manifest_meta["window_start"]), str(manifest_meta["window_end"]))
     split = split_boundaries_for_days(days)
     gate_results = {
@@ -227,7 +227,7 @@ def run_cycle(
         "required_schema_version": str(manifest_required_schema_version),
         "min_trading_days_required": int(manifest_min_trading_days),
         "window_trading_days": manifest_meta.get("trading_days"),
-        "all_days_v2": manifest_meta.get("all_days_v2"),
+        "all_days_required_schema": manifest_meta.get("all_days_required_schema"),
     }
 
     cycle_id = f"{manifest_meta['window_start']}_{manifest_meta['window_end']}_{str(manifest_meta.get('manifest_hash') or '')[:10]}"

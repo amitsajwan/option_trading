@@ -8,10 +8,12 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from snapshot_app.market_snapshot_contract import SCHEMA_VERSION as FINAL_SNAPSHOT_SCHEMA_VERSION
 
-CONTRACT_ID = "snapshot_ml_flat_v1"
+CONTRACT_ID = "snapshot_ml_flat"
+CONTRACT_FILES_DIR = "snapshot_ml_flat"
 SCHEMA_NAME = "SnapshotMLFlat"
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = FINAL_SNAPSHOT_SCHEMA_VERSION
 PRIMARY_KEY = ["trade_date", "timestamp", "snapshot_id"]
 REQUIRED_COLUMNS = [
     "trade_date",
@@ -124,7 +126,7 @@ FIELD_TYPES = {
 
 
 def _default_contract_dir() -> Path:
-    return Path(__file__).resolve().parent / "contracts" / CONTRACT_ID
+    return Path(__file__).resolve().parent / "contracts" / CONTRACT_FILES_DIR
 
 
 def load_contract_schema(contract_dir: Optional[Path] = None) -> Dict[str, Any]:
@@ -154,7 +156,7 @@ def load_validation_rules(contract_dir: Optional[Path] = None) -> Dict[str, Any]
 
 def load_legacy_mapping(contract_dir: Optional[Path] = None) -> pd.DataFrame:
     base = Path(contract_dir) if contract_dir is not None else _default_contract_dir()
-    return pd.read_csv(base / "legacy_to_v1.csv")
+    return pd.read_csv(base / "legacy_to_flat.csv")
 
 
 def _stringify_day(value: object) -> str:
@@ -362,7 +364,7 @@ def validate_snapshot_ml_flat_frame(
     if errors and raise_on_error:
         preview = "; ".join(errors[:5])
         more = "" if len(errors) <= 5 else f"; ... (+{len(errors) - 5} more)"
-        raise ValueError(f"snapshot_ml_flat_v1 validation failed: {preview}{more}")
+        raise ValueError(f"snapshot_ml_flat validation failed: {preview}{more}")
     return report
 
 
@@ -377,6 +379,7 @@ def validate_snapshot_ml_flat_rows(
 
 __all__ = [
     "CONTRACT_ID",
+    "CONTRACT_FILES_DIR",
     "load_contract_schema",
     "load_feature_groups",
     "load_validation_rules",

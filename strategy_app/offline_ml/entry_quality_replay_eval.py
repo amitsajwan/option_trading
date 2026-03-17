@@ -10,8 +10,8 @@ import pandas as pd
 
 from snapshot_app.historical.parquet_store import ParquetStore
 from snapshot_app.historical.snapshot_access import (
-    SNAPSHOT_DATASET_LEGACY_RAW,
-    SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+    SNAPSHOT_DATASET_CANONICAL,
+    SNAPSHOT_INPUT_MODE_CANONICAL,
     require_snapshot_access,
 )
 from snapshot_app.historical.window_manifest import (
@@ -81,13 +81,13 @@ def _parse_custom_fixed_threshold_policy(policy_id: str) -> Optional[float]:
 
 def _load_snapshots(parquet_base: Path, start_date: str, end_date: str) -> pd.DataFrame:
     require_snapshot_access(
-        mode=SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
         context="entry_quality_replay_eval",
         parquet_base=parquet_base,
         min_day=start_date,
         max_day=end_date,
     )
-    store = ParquetStore(parquet_base, snapshots_dataset=SNAPSHOT_DATASET_LEGACY_RAW)
+    store = ParquetStore(parquet_base, snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
     df = store.snapshots_for_date_range(start_date, end_date)
     df = enforce_snapshot_schema_version(
         df,
@@ -279,7 +279,7 @@ def run_replay_evaluation(
     selected = selected_df.to_dict(orient="records")
     output_root.mkdir(parents=True, exist_ok=True)
     snapshot_access = require_snapshot_access(
-        mode=SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
         context="entry_quality_replay_eval",
         parquet_base=parquet_base,
         min_day=start_date,
@@ -383,14 +383,14 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         start_date = str(manifest_meta["window_start"])
         end_date = str(manifest_meta["window_end"])
         try:
-            store = ParquetStore(Path(args.parquet_base), snapshots_dataset=SNAPSHOT_DATASET_LEGACY_RAW)
+            store = ParquetStore(Path(args.parquet_base), snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
             split_days = store.available_snapshot_days(start_date, end_date)
             split_bounds = split_boundaries_for_days(split_days)
         except Exception:
             split_bounds = None
 
     snapshot_access = require_snapshot_access(
-        mode=SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
         context="entry_quality_replay_eval",
         parquet_base=Path(args.parquet_base),
         min_day=start_date,
@@ -423,7 +423,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             "required_schema_version": str(args.manifest_required_schema_version),
             "min_trading_days_required": int(args.manifest_min_trading_days),
             "window_trading_days": (manifest_meta or {}).get("trading_days"),
-            "all_days_v2": (manifest_meta or {}).get("all_days_v2"),
+            "all_days_required_schema": (manifest_meta or {}).get("all_days_required_schema"),
         },
     }
 

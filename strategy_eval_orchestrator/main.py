@@ -13,11 +13,12 @@ import redis
 from pymongo import MongoClient
 
 from contracts_app import build_snapshot_event, historical_snapshot_topic
+from snapshot_app.market_snapshot_contract import validate_market_snapshot
 from snapshot_app.historical.parquet_store import ParquetStore
 from snapshot_app.historical.snapshot_access import (
     DEFAULT_HISTORICAL_PARQUET_BASE,
-    SNAPSHOT_DATASET_LEGACY_RAW,
-    SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+    SNAPSHOT_DATASET_CANONICAL,
+    SNAPSHOT_INPUT_MODE_CANONICAL,
     require_snapshot_access,
 )
 
@@ -152,13 +153,13 @@ def _replay_and_publish(
 ) -> dict[str, Any]:
     topic = _historical_topic()
     snapshot_access = require_snapshot_access(
-        mode=SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
         context="strategy_eval_orchestrator",
         parquet_base=Path(base_path),
         min_day=date_from,
         max_day=date_to,
     )
-    store = ParquetStore(base_path, snapshots_dataset=SNAPSHOT_DATASET_LEGACY_RAW)
+    store = ParquetStore(base_path, snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
     frame = store.snapshots_for_date_range(date_from, date_to)
     if len(frame) == 0:
         return {"status": "no_snapshots", "events_emitted": 0, **snapshot_access.to_metadata()}
@@ -185,6 +186,7 @@ def _replay_and_publish(
         snapshot = _parse_snapshot_raw(row.get("snapshot_raw_json"))
         if snapshot is None:
             continue
+        validate_market_snapshot(snapshot, raise_on_error=True)
         event = build_snapshot_event(
             snapshot=snapshot,
             source="strategy_eval_orchestrator",

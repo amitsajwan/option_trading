@@ -97,6 +97,36 @@ Uploads `.env.compose` and optional ingestion credentials to the runtime config 
 
 Syncs the local `published_models` tree to the model bucket.
 
+### `publish_raw_market_data.sh`
+
+Syncs a local raw `banknifty_data` archive to a GCS prefix such as `RAW_ARCHIVE_BUCKET_URL`.
+
+Use this once when you want the full raw archive accessible from disposable GCP build machines.
+
+### `run_snapshot_parquet_pipeline.sh`
+
+Builds final historical parquet from the raw archive or existing normalized cache.
+
+It will:
+
+1. optionally sync raw archive from GCS
+2. create or reuse `.venv`
+3. run the final historical snapshot builder
+4. write build and validation reports
+5. optionally upload final parquet to GCS
+
+### `publish_snapshot_parquet.sh`
+
+Syncs local final parquet outputs to `SNAPSHOT_PARQUET_BUCKET_URL`.
+
+By default it uploads:
+
+- canonical `snapshots`
+- derived `snapshots_ml_flat`
+- snapshot build reports
+
+Optionally it can also upload normalized parquet cache.
+
 ### `stop_runtime.sh`
 
 Stops the always-on runtime VM without deleting any persistent resources.
@@ -146,6 +176,13 @@ For a clean rebuild, the normal order is:
 2. `create_training_vm.sh`
 3. `run_recovery_release_pipeline.sh`
 
+For a final historical parquet rebuild on a high-power machine, the normal order is:
+
+1. `publish_raw_market_data.sh` once from a machine that has the archive locally
+2. create or use a large disposable GCP VM
+3. `run_snapshot_parquet_pipeline.sh`
+4. delete the build VM after parquet is uploaded
+
 For a cheap idle state after you are done:
 
 1. `delete_training_vm.sh`
@@ -169,4 +206,9 @@ export PATH="$HOME/bin:$PATH"
 RUN_IMAGE_BUILD=0 RUN_RUNTIME_CONFIG_SYNC=0 ./ops/gcp/from_scratch_bootstrap.sh
 ```
 
-For the full human-facing procedure, use [FROM_SCRATCH_OPERATOR_GUIDE.md](../../docs/FROM_SCRATCH_OPERATOR_GUIDE.md).
+For the operator index, use [FROM_SCRATCH_OPERATOR_GUIDE.md](../../docs/FROM_SCRATCH_OPERATOR_GUIDE.md).
+For Day 0 bootstrap, use [GCP_BOOTSTRAP_RUNBOOK.md](../../docs/GCP_BOOTSTRAP_RUNBOOK.md).
+For the dedicated historical parquet procedure, use [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](../../docs/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md).
+For model release, use [TRAINING_RELEASE_RUNBOOK.md](../../docs/TRAINING_RELEASE_RUNBOOK.md).
+For runtime deploy and cutover, use [GCP_DEPLOYMENT.md](../../docs/GCP_DEPLOYMENT.md).
+For cleanup and rollback, use [CLEANUP_ROLLBACK_RUNBOOK.md](../../docs/CLEANUP_ROLLBACK_RUNBOOK.md).

@@ -1,4 +1,4 @@
-"""Shared snapshot input access contract for flat and legacy snapshot datasets."""
+"""Shared snapshot input access contract for canonical and derived snapshot datasets."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ except ImportError:  # pragma: no cover - exercised in runtime
 
 
 SNAPSHOT_INPUT_MODE_ML_FLAT = "ml_flat"
-SNAPSHOT_INPUT_MODE_LEGACY_RAW = "legacy_raw"
-SNAPSHOT_INPUT_MODES = frozenset({SNAPSHOT_INPUT_MODE_ML_FLAT, SNAPSHOT_INPUT_MODE_LEGACY_RAW})
+SNAPSHOT_INPUT_MODE_CANONICAL = "canonical"
+SNAPSHOT_INPUT_MODES = frozenset({SNAPSHOT_INPUT_MODE_ML_FLAT, SNAPSHOT_INPUT_MODE_CANONICAL})
 
 SNAPSHOT_DATASET_ML_FLAT = "snapshots_ml_flat"
-SNAPSHOT_DATASET_LEGACY_RAW = "snapshots"
+SNAPSHOT_DATASET_CANONICAL = "snapshots"
 DEFAULT_EXTERNAL_DATA_ROOT = Path(__file__).resolve().parents[2] / ".data" / "ml_pipeline"
 DEFAULT_HISTORICAL_PARQUET_BASE = DEFAULT_EXTERNAL_DATA_ROOT / "parquet_data"
 
@@ -104,11 +104,10 @@ def _raise_post_archive_error(
     available_max_day: str,
     mode: str,
 ) -> None:
-    if mode == SNAPSHOT_INPUT_MODE_LEGACY_RAW:
+    if mode == SNAPSHOT_INPUT_MODE_CANONICAL:
         raise FileNotFoundError(
-            f"{context} requires legacy `snapshots` parquet with `snapshot_raw_json` through {requested_max_day}, "
-            f"but archived canonical `snapshots` only runs through {available_max_day}. "
-            "This tool is unsupported on the flat-only lane for post-archive dates."
+            f"{context} requires canonical `snapshots` parquet with `snapshot_raw_json` through {requested_max_day}, "
+            f"but available canonical `snapshots` only run through {available_max_day}."
         )
     raise FileNotFoundError(
         f"{context} requires snapshots_ml_flat input through {requested_max_day}, "
@@ -134,36 +133,35 @@ def require_snapshot_access(
             root = Path(parquet_base) / SNAPSHOT_DATASET_ML_FLAT
         if root is None:
             raise FileNotFoundError(
-                f"{context_text} requires snapshots_ml_flat input (snapshot_ml_flat_v1). "
+                f"{context_text} requires derived snapshots_ml_flat input. "
                 "Pass snapshot_root or provide a parquet base with snapshots_ml_flat."
             )
         if not _has_parquet(root, mode=resolved_mode):
             raise FileNotFoundError(
-                f"{context_text} requires snapshots_ml_flat input (snapshot_ml_flat_v1). "
+                f"{context_text} requires derived snapshots_ml_flat input. "
                 f"Expected root: {str(root).replace(chr(92), '/')}"
             )
         dataset_name = SNAPSHOT_DATASET_ML_FLAT
     else:
         if parquet_base is None:
             raise FileNotFoundError(
-                f"{context_text} requires legacy `snapshots` parquet with `snapshot_raw_json`, "
+                f"{context_text} requires canonical `snapshots` parquet with `snapshot_raw_json`, "
                 "but no parquet base was provided."
             )
         base = Path(parquet_base)
-        root = base / SNAPSHOT_DATASET_LEGACY_RAW
+        root = base / SNAPSHOT_DATASET_CANONICAL
         if not _has_parquet(root, mode=resolved_mode):
             ml_flat_root = base / SNAPSHOT_DATASET_ML_FLAT
             if _has_parquet(ml_flat_root, mode=SNAPSHOT_INPUT_MODE_ML_FLAT):
                 raise FileNotFoundError(
-                    f"{context_text} requires legacy `snapshots` parquet with `snapshot_raw_json`, "
-                    "but this environment only has `snapshots_ml_flat`. "
-                    "This tool is unsupported on the v1-only ML snapshot lane."
+                    f"{context_text} requires canonical `snapshots` parquet with `snapshot_raw_json`, "
+                    "but this environment only has `snapshots_ml_flat`."
                 )
             raise FileNotFoundError(
-                f"{context_text} requires legacy `snapshots` parquet with `snapshot_raw_json`, "
+                f"{context_text} requires canonical `snapshots` parquet with `snapshot_raw_json`, "
                 f"but dataset was not found under {str(root).replace(chr(92), '/')}."
             )
-        dataset_name = SNAPSHOT_DATASET_LEGACY_RAW
+        dataset_name = SNAPSHOT_DATASET_CANONICAL
 
     glob_expr = _glob_expr(root, mode=resolved_mode)
     min_trade_date, max_trade_date, trading_days = _query_trade_day_summary(glob_expr)

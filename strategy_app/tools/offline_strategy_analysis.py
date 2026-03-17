@@ -16,8 +16,8 @@ import pandas as pd
 from snapshot_app.historical.parquet_store import ParquetStore
 from snapshot_app.historical.snapshot_access import (
     DEFAULT_HISTORICAL_PARQUET_BASE,
-    SNAPSHOT_DATASET_LEGACY_RAW,
-    SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+    SNAPSHOT_DATASET_CANONICAL,
+    SNAPSHOT_INPUT_MODE_CANONICAL,
     require_snapshot_access,
 )
 from snapshot_app.historical.window_manifest import (
@@ -475,13 +475,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     min_day = manifest_start or args.start_date
     max_day = manifest_end or args.end_date
     snapshot_access = require_snapshot_access(
-        mode=SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
         context="offline_strategy_analysis",
         parquet_base=Path(args.parquet_base),
         min_day=min_day,
         max_day=max_day,
     )
-    store = ParquetStore(args.parquet_base, snapshots_dataset=SNAPSHOT_DATASET_LEGACY_RAW)
+    store = ParquetStore(args.parquet_base, snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
     try:
         days = store.available_snapshot_days(min_day, max_day)
     except FileNotFoundError as exc:
@@ -592,7 +592,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "required_schema_version": str(args.manifest_required_schema_version),
             "min_trading_days_required": int(args.manifest_min_trading_days),
             "window_trading_days": (manifest_meta or {}).get("trading_days"),
-            "all_days_v2": (manifest_meta or {}).get("all_days_v2"),
+            "all_days_required_schema": (manifest_meta or {}).get("all_days_required_schema"),
         },
     }
     (output_dir / "run_meta.json").write_text(json.dumps(run_meta, indent=2), encoding="utf-8")

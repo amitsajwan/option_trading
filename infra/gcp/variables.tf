@@ -131,6 +131,18 @@ variable "runtime_config_bucket_name" {
   type        = string
 }
 
+variable "create_snapshot_data_bucket" {
+  description = "Whether Terraform should create a bucket for raw archive and final historical parquet artifacts."
+  type        = bool
+  default     = false
+}
+
+variable "snapshot_data_bucket_name" {
+  description = "Optional Cloud Storage bucket for raw BankNifty archive and final historical parquet outputs."
+  type        = string
+  default     = ""
+}
+
 variable "create_training_data_bucket" {
   description = "Whether Terraform should create a training data bucket."
   type        = bool

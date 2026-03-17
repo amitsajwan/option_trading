@@ -81,6 +81,13 @@ ssh_source_ranges            = ["${SSH_SOURCE_RANGES}"]
 dashboard_source_ranges      = ["${DASHBOARD_SOURCE_RANGES}"]
 EOF
 
+if [ -n "${SNAPSHOT_DATA_BUCKET_NAME:-}" ]; then
+  cat >> "${TF_DIR}/terraform.tfvars" <<EOF
+create_snapshot_data_bucket  = true
+snapshot_data_bucket_name    = "${SNAPSHOT_DATA_BUCKET_NAME}"
+EOF
+fi
+
 echo "Wrote ${TF_DIR}/terraform.tfvars"
 
 if [ "${RUN_TERRAFORM}" = "1" ]; then

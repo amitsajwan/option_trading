@@ -13,8 +13,8 @@ import pandas as pd
 
 from snapshot_app.historical.parquet_store import ParquetStore
 from snapshot_app.historical.snapshot_access import (
-    SNAPSHOT_DATASET_LEGACY_RAW,
-    SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+    SNAPSHOT_DATASET_CANONICAL,
+    SNAPSHOT_INPUT_MODE_CANONICAL,
     require_snapshot_access,
 )
 from snapshot_app.historical.window_manifest import (
@@ -484,13 +484,13 @@ def build_entry_candidate_dataset(
     policy_diagnostic_warn_threshold: float = 0.30,
 ) -> dict[str, Any]:
     snapshot_access = require_snapshot_access(
-        mode=SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
         context="entry_candidate_dataset",
         parquet_base=config.snapshot_base,
         min_day=config.start_date,
         max_day=config.end_date,
     )
-    store = ParquetStore(config.snapshot_base, snapshots_dataset=SNAPSHOT_DATASET_LEGACY_RAW)
+    store = ParquetStore(config.snapshot_base, snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
     snapshots = _load_snapshots(store, config.start_date, config.end_date)
     output_dir = output_root or config.output_root
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -703,7 +703,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         )
         start_date = str(manifest_meta["window_start"])
         end_date = str(manifest_meta["window_end"])
-        store = ParquetStore(Path(args.snapshot_base), snapshots_dataset=SNAPSHOT_DATASET_LEGACY_RAW)
+        store = ParquetStore(Path(args.snapshot_base), snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
         split_days = store.available_snapshot_days(start_date, end_date)
         split_map = split_boundaries_for_days(split_days)
         split = EntryQualitySplitConfig(
@@ -725,7 +725,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         split=split,
     )
     snapshot_access = require_snapshot_access(
-        mode=SNAPSHOT_INPUT_MODE_LEGACY_RAW,
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
         context="entry_candidate_dataset",
         parquet_base=Path(args.snapshot_base),
         min_day=config.start_date,
@@ -755,7 +755,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             "required_schema_version": str(args.manifest_required_schema_version),
             "min_trading_days_required": int(args.manifest_min_trading_days),
             "window_trading_days": (manifest_meta or {}).get("trading_days"),
-            "all_days_v2": (manifest_meta or {}).get("all_days_v2"),
+            "all_days_required_schema": (manifest_meta or {}).get("all_days_required_schema"),
         },
     }
     requested_profile_ids = [item.strip() for item in str(args.label_profiles).split(",") if item.strip()]

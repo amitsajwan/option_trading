@@ -41,7 +41,7 @@ def _build_completed_recovery_run(
             "required_features": ["ret_5m", "opt_flow_pcr_oi", "time_minute_of_day"],
             "allow_extra_features": True,
             "missing_policy": "error",
-            "contract_id": "snapshot_ml_flat_v1",
+            "contract_id": "snapshot_ml_flat",
         },
         "models": {"ce": _ConstantProbModel(0.8), "pe": _ConstantProbModel(0.2)},
     }
