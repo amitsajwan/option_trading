@@ -21,11 +21,11 @@ This folder contains a first-pass Terraform scaffold for the deployment model us
 
 ## Files
 
-- [versions.tf](/c:/code/option_trading/infra/gcp/versions.tf)
-- [variables.tf](/c:/code/option_trading/infra/gcp/variables.tf)
-- [main.tf](/c:/code/option_trading/infra/gcp/main.tf)
-- [outputs.tf](/c:/code/option_trading/infra/gcp/outputs.tf)
-- [terraform.tfvars.example](/c:/code/option_trading/infra/gcp/terraform.tfvars.example)
+- [versions.tf](versions.tf)
+- [variables.tf](variables.tf)
+- [main.tf](main.tf)
+- [outputs.tf](outputs.tf)
+- [terraform.tfvars.example](terraform.tfvars.example)
 
 ## Quick Start
 
@@ -40,13 +40,13 @@ terraform apply
 ## Expected Workflow
 
 1. Apply Terraform once for the base infra.
-2. Build and push runtime images with [ops/gcp/build_runtime_images.sh](/c:/code/option_trading/ops/gcp/build_runtime_images.sh).
-3. Upload `.env.compose` and `ingestion_app/credentials.json` with [ops/gcp/publish_runtime_config.sh](/c:/code/option_trading/ops/gcp/publish_runtime_config.sh).
-4. Publish and sync models with [ops/gcp/publish_published_models.sh](/c:/code/option_trading/ops/gcp/publish_published_models.sh).
+2. Build and push runtime images with [ops/gcp/build_runtime_images.sh](../../ops/gcp/build_runtime_images.sh).
+3. Upload `.env.compose` and `ingestion_app/credentials.json` with [ops/gcp/publish_runtime_config.sh](../../ops/gcp/publish_runtime_config.sh).
+4. Publish and sync models with [ops/gcp/publish_published_models.sh](../../ops/gcp/publish_published_models.sh).
 5. Let the runtime VM startup script sync artifacts and start Compose.
 6. Create a large training VM only when needed from the output training template.
 
-If you want the runnable operator scripts that sit on top of this scaffold, use [ops/gcp/README.md](/c:/code/option_trading/ops/gcp/README.md).
+If you want the runnable operator scripts that sit on top of this scaffold, use [ops/gcp/README.md](../../ops/gcp/README.md).
 
 ## Notes
 

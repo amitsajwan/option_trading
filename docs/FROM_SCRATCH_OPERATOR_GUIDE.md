@@ -18,7 +18,7 @@ At the end of this guide you will have:
 - one supported ML release path from training to live runtime
 - one clear split between GitHub Actions automation and the small number of manual operator steps that still remain
 
-Runnable helper scripts live under [ops/gcp/README.md](/c:/code/option_trading/ops/gcp/README.md).
+Runnable helper scripts live under [ops/gcp/README.md](../ops/gcp/README.md).
 
 ## 1. Target Shape
 
@@ -300,7 +300,7 @@ Start small and scale only if needed:
 - runtime VM: `e2-standard-4`
 - training VM template: `n2-standard-8`
 
-Those recommended example sizes are reflected in [terraform.tfvars.example](/c:/code/option_trading/infra/gcp/terraform.tfvars.example).
+Those recommended example sizes are reflected in [terraform.tfvars.example](../infra/gcp/terraform.tfvars.example).
 
 Important:
 
@@ -322,10 +322,10 @@ Before provisioning, make sure you have:
 
 Useful repo entry points:
 
-- [GCP_DEPLOYMENT.md](/c:/code/option_trading/docs/GCP_DEPLOYMENT.md)
-- [GCP_FRESH_START.md](/c:/code/option_trading/docs/GCP_FRESH_START.md)
-- [infra/gcp/README.md](/c:/code/option_trading/infra/gcp/README.md)
-- [ops/gcp/README.md](/c:/code/option_trading/ops/gcp/README.md)
+- [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md)
+- [GCP_FRESH_START.md](GCP_FRESH_START.md)
+- [infra/gcp/README.md](../infra/gcp/README.md)
+- [ops/gcp/README.md](../ops/gcp/README.md)
 
 ## 13. Fill The Operator Template
 
@@ -714,8 +714,8 @@ Use this document as the main guide.
 
 Use these supporting docs only when you need detail:
 
-- [GCP_FRESH_START.md](/c:/code/option_trading/docs/GCP_FRESH_START.md): shorter tear-down/rebuild checklist
-- [GCP_DEPLOYMENT.md](/c:/code/option_trading/docs/GCP_DEPLOYMENT.md): deployment architecture and rationale
-- [infra/gcp/README.md](/c:/code/option_trading/infra/gcp/README.md): Terraform scaffold details
-- [ops/gcp/README.md](/c:/code/option_trading/ops/gcp/README.md): runnable operator scripts
-- [ml_pipeline_2/README.md](/c:/code/option_trading/ml_pipeline_2/README.md): ML release commands and experiment notes
+- [GCP_FRESH_START.md](GCP_FRESH_START.md): shorter tear-down/rebuild checklist
+- [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md): deployment architecture and rationale
+- [infra/gcp/README.md](../infra/gcp/README.md): Terraform scaffold details
+- [ops/gcp/README.md](../ops/gcp/README.md): runnable operator scripts
+- [ml_pipeline_2/README.md](../ml_pipeline_2/README.md): ML release commands and experiment notes

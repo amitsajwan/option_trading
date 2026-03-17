@@ -14,9 +14,9 @@ The design goal is simple:
 - VMs are disposable
 - GitHub Actions orchestrates the repeatable deploy path
 
-If you want the exact tear-down/rebuild sequence from an oversized legacy VM, use [GCP_FRESH_START.md](/c:/code/option_trading/docs/GCP_FRESH_START.md).
-If you want the full operator step-by-step from zero, use [FROM_SCRATCH_OPERATOR_GUIDE.md](/c:/code/option_trading/docs/FROM_SCRATCH_OPERATOR_GUIDE.md).
-If you want the runnable wrapper scripts, use [ops/gcp/README.md](/c:/code/option_trading/ops/gcp/README.md).
+If you want the exact tear-down/rebuild sequence from an oversized legacy VM, use [GCP_FRESH_START.md](GCP_FRESH_START.md).
+If you want the full operator step-by-step from zero, use [FROM_SCRATCH_OPERATOR_GUIDE.md](FROM_SCRATCH_OPERATOR_GUIDE.md).
+If you want the runnable wrapper scripts, use [ops/gcp/README.md](../ops/gcp/README.md).
 
 ## 0. Recommended Automation Boundary
 
@@ -71,7 +71,7 @@ When training is done, sync published artifacts to GCS and delete the VM.
 
 Store runtime images in Artifact Registry.
 
-This repo now includes [docker-compose.gcp.yml](/c:/code/option_trading/docker-compose.gcp.yml), which maps services to Artifact Registry image names instead of relying on per-VM builds.
+This repo now includes [docker-compose.gcp.yml](../docker-compose.gcp.yml), which maps services to Artifact Registry image names instead of relying on per-VM builds.
 
 ### Published models
 
@@ -99,7 +99,7 @@ Keep training inputs in Cloud Storage and sync them locally on the training VM t
 
 ### Provision infra
 
-Use the Terraform scaffold in [infra/gcp/README.md](/c:/code/option_trading/infra/gcp/README.md):
+Use the Terraform scaffold in [infra/gcp/README.md](../infra/gcp/README.md):
 
 - Artifact Registry repository
 - model bucket
@@ -110,7 +110,7 @@ Use the Terraform scaffold in [infra/gcp/README.md](/c:/code/option_trading/infr
 
 ### Build and push runtime images
 
-Use [ops/gcp/build_runtime_images.sh](/c:/code/option_trading/ops/gcp/build_runtime_images.sh):
+Use [ops/gcp/build_runtime_images.sh](../ops/gcp/build_runtime_images.sh):
 
 ```bash
 export PROJECT_ID=<gcp-project>
@@ -125,7 +125,7 @@ This builds the distinct runtime images with Cloud Build and pushes them to Arti
 
 ### Publish runtime bootstrap bundle
 
-Use [ops/gcp/publish_runtime_config.sh](/c:/code/option_trading/ops/gcp/publish_runtime_config.sh):
+Use [ops/gcp/publish_runtime_config.sh](../ops/gcp/publish_runtime_config.sh):
 
 ```bash
 export RUNTIME_CONFIG_BUCKET_URL=gs://<runtime-config-bucket>/runtime
@@ -155,7 +155,7 @@ That single flow will:
 5. sync the selected model group to GCS
 6. write the `ML_PURE_*` runtime handoff env file for live/eval deployment
 
-To apply that handoff into the runtime compose env on the operator machine or runtime repo checkout, use [ops/gcp/apply_ml_pure_release.sh](/c:/code/option_trading/ops/gcp/apply_ml_pure_release.sh):
+To apply that handoff into the runtime compose env on the operator machine or runtime repo checkout, use [ops/gcp/apply_ml_pure_release.sh](../ops/gcp/apply_ml_pure_release.sh):
 
 ```bash
 export RELEASE_ENV_PATH=ml_pipeline_2/artifacts/research/<run_name>/release/ml_pure_runtime.env
@@ -171,7 +171,7 @@ export RUNTIME_CONFIG_BUCKET_URL=gs://<runtime-config-bucket>/runtime
 ./ops/gcp/apply_ml_pure_release.sh
 ```
 
-Use [ops/gcp/publish_published_models.sh](/c:/code/option_trading/ops/gcp/publish_published_models.sh):
+Use [ops/gcp/publish_published_models.sh](../ops/gcp/publish_published_models.sh):
 
 ```bash
 export MODEL_BUCKET_URL=gs://<model-bucket>/published_models

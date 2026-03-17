@@ -14,7 +14,7 @@ These scripts are also the intended execution layer for future GitHub Actions wo
 
 ## Files To Copy First
 
-1. Copy [operator.env.example](/c:/code/option_trading/ops/gcp/operator.env.example) to `ops/gcp/operator.env`
+1. Copy [operator.env.example](operator.env.example) to `ops/gcp/operator.env`
 2. Fill in your actual project, bucket, repo, and release values
 
 ## Main Scripts
@@ -169,4 +169,4 @@ export PATH="$HOME/bin:$PATH"
 RUN_IMAGE_BUILD=0 RUN_RUNTIME_CONFIG_SYNC=0 ./ops/gcp/from_scratch_bootstrap.sh
 ```
 
-For the full human-facing procedure, use [FROM_SCRATCH_OPERATOR_GUIDE.md](/c:/code/option_trading/docs/FROM_SCRATCH_OPERATOR_GUIDE.md).
+For the full human-facing procedure, use [FROM_SCRATCH_OPERATOR_GUIDE.md](../../docs/FROM_SCRATCH_OPERATOR_GUIDE.md).

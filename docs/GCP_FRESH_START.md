@@ -9,8 +9,8 @@ This is the clean-from-scratch path for the current repo shape:
 - store published models in Cloud Storage
 - use Terraform so new VMs are reproducible
 
-If you want the full operator-facing step-by-step guide, start with [FROM_SCRATCH_OPERATOR_GUIDE.md](/c:/code/option_trading/docs/FROM_SCRATCH_OPERATOR_GUIDE.md).
-If you want the runnable helper scripts, use [ops/gcp/README.md](/c:/code/option_trading/ops/gcp/README.md).
+If you want the full operator-facing step-by-step guide, start with [FROM_SCRATCH_OPERATOR_GUIDE.md](FROM_SCRATCH_OPERATOR_GUIDE.md).
+If you want the runnable helper scripts, use [ops/gcp/README.md](../ops/gcp/README.md).
 
 ## 1. Retire The Old VM
 
@@ -32,7 +32,7 @@ Use smaller sizes first and only scale back up if you hit memory pressure:
 - runtime VM: `e2-standard-4`
 - training VM template: `n2-standard-8`
 
-That recommendation is now reflected in [terraform.tfvars.example](/c:/code/option_trading/infra/gcp/terraform.tfvars.example).
+That recommendation is now reflected in [terraform.tfvars.example](../infra/gcp/terraform.tfvars.example).
 
 ## 3. Provision Base Infra
 

@@ -38,8 +38,8 @@ Owns:
 - manifest validation and resolution
 
 Key files:
-- [contracts/types.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/contracts/types.py)
-- [contracts/manifests.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/contracts/manifests.py)
+- [contracts/types.py](src/ml_pipeline_2/contracts/types.py)
+- [contracts/manifests.py](src/ml_pipeline_2/contracts/manifests.py)
 
 ### `catalog`
 
@@ -68,9 +68,9 @@ Rule:
 - scaling is handled by outer experiment parallelism, not per-model thread expansion
 
 Key files:
-- [catalog/feature_profiles.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/catalog/feature_profiles.py)
-- [catalog/feature_sets.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/catalog/feature_sets.py)
-- [catalog/models.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/catalog/models.py)
+- [catalog/feature_profiles.py](src/ml_pipeline_2/catalog/feature_profiles.py)
+- [catalog/feature_sets.py](src/ml_pipeline_2/catalog/feature_sets.py)
+- [catalog/models.py](src/ml_pipeline_2/catalog/models.py)
 
 ### `dataset_windowing`
 
@@ -81,7 +81,7 @@ Owns:
 - path overlap checks
 
 Key file:
-- [dataset_windowing/frames.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/dataset_windowing/frames.py)
+- [dataset_windowing/frames.py](src/ml_pipeline_2/dataset_windowing/frames.py)
 
 ### `labeling`
 
@@ -109,8 +109,8 @@ Current important outputs:
 These move fields are the contract between Stage 1 and Stage 2.
 
 Key files:
-- [labeling/engine.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/labeling/engine.py)
-- [labeling/prepare.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/labeling/prepare.py)
+- [labeling/engine.py](src/ml_pipeline_2/labeling/engine.py)
+- [labeling/prepare.py](src/ml_pipeline_2/labeling/prepare.py)
 
 ### `model_search`
 
@@ -136,9 +136,9 @@ Rule:
 - Stage 1 `move_barrier_hit` uses standard model-search infrastructure, but it does not use trade-utility scoring because that objective assumes directional CE/PE execution.
 
 Key files:
-- [model_search/features.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/model_search/features.py)
-- [model_search/search.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/model_search/search.py)
-- [model_search/walk_forward.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/model_search/walk_forward.py)
+- [model_search/features.py](src/ml_pipeline_2/model_search/features.py)
+- [model_search/search.py](src/ml_pipeline_2/model_search/search.py)
+- [model_search/walk_forward.py](src/ml_pipeline_2/model_search/walk_forward.py)
 
 ### `inference_contract`
 
@@ -153,7 +153,7 @@ Current package modes:
 - direction packages require `models["direction"]`
 
 Key file:
-- [inference_contract/predict.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/inference_contract/predict.py)
+- [inference_contract/predict.py](src/ml_pipeline_2/inference_contract/predict.py)
 
 ### `evaluation`
 
@@ -169,8 +169,8 @@ Current limitation:
 - Stage 2 direction-from-move is also summarized by the quick runner today
 
 Key files:
-- [evaluation/stage_metrics.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/evaluation/stage_metrics.py)
-- [evaluation/direction.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/evaluation/direction.py)
+- [evaluation/stage_metrics.py](src/ml_pipeline_2/evaluation/stage_metrics.py)
+- [evaluation/direction.py](src/ml_pipeline_2/evaluation/direction.py)
 
 ### `experiment_control`
 
@@ -183,9 +183,9 @@ Owns:
 - detached background job metadata for long matrix runs
 
 Key files:
-- [experiment_control/runner.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/experiment_control/runner.py)
-- [experiment_control/state.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/experiment_control/state.py)
-- [experiment_control/background.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/experiment_control/background.py)
+- [experiment_control/runner.py](src/ml_pipeline_2/experiment_control/runner.py)
+- [experiment_control/state.py](src/ml_pipeline_2/experiment_control/state.py)
+- [experiment_control/background.py](src/ml_pipeline_2/experiment_control/background.py)
 
 ### `publishing`
 
@@ -202,9 +202,9 @@ Current V1 scope:
 - no quick-runner publishing
 
 Key files:
-- [publishing/publish.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/publishing/publish.py)
-- [publishing/resolver.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/publishing/resolver.py)
-- [run_publish_model.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/run_publish_model.py)
+- [publishing/publish.py](src/ml_pipeline_2/publishing/publish.py)
+- [publishing/resolver.py](src/ml_pipeline_2/publishing/resolver.py)
+- [run_publish_model.py](src/ml_pipeline_2/run_publish_model.py)
 
 ### `scenario_flows`
 
@@ -213,8 +213,8 @@ Owns orchestration only:
 - recovery research
 
 Key files:
-- [scenario_flows/phase2_label_sweep.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/scenario_flows/phase2_label_sweep.py)
-- [scenario_flows/fo_expiry_aware_recovery.py](/c:/code/option_trading/ml_pipeline_2/src/ml_pipeline_2/scenario_flows/fo_expiry_aware_recovery.py)
+- [scenario_flows/phase2_label_sweep.py](src/ml_pipeline_2/scenario_flows/phase2_label_sweep.py)
+- [scenario_flows/fo_expiry_aware_recovery.py](src/ml_pipeline_2/scenario_flows/fo_expiry_aware_recovery.py)
 
 ## Dependency Rules
 
@@ -230,7 +230,7 @@ Enforced expectations:
 - scenario flows do not import each other
 
 Boundary tests:
-- [test_boundaries.py](/c:/code/option_trading/ml_pipeline_2/tests/test_boundaries.py)
+- [test_boundaries.py](tests/test_boundaries.py)
 
 ## Stage 1 Move Detector Design
 
@@ -291,7 +291,7 @@ For the move detector lane, change these in JSON or CLI:
 - resume toggle
 
 Checked-in template:
-- [configs/research/move_detector_quick.default.json](/c:/code/option_trading/ml_pipeline_2/configs/research/move_detector_quick.default.json)
+- [configs/research/move_detector_quick.default.json](configs/research/move_detector_quick.default.json)
 
 For the direction-from-move lane, change these in JSON or CLI:
 - Stage 1 run directory
@@ -307,7 +307,7 @@ For the direction-from-move lane, change these in JSON or CLI:
 - resume toggle
 
 Checked-in template:
-- [configs/research/direction_from_move_quick.default.json](/c:/code/option_trading/ml_pipeline_2/configs/research/direction_from_move_quick.default.json)
+- [configs/research/direction_from_move_quick.default.json](configs/research/direction_from_move_quick.default.json)
 
 ## Restart-Safe Artifact Rule
 
