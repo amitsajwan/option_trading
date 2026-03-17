@@ -508,7 +508,6 @@ services:
     volumes:
       - ./.run:/app/.run
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
-      - ./ml_pipeline/artifacts:/app/ml_pipeline/artifacts:ro
       - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
     healthcheck:
       test:

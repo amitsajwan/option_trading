@@ -1440,7 +1440,6 @@ DEFAULT_MODEL_EVAL_SUMMARY_PATH = None
 DEFAULT_MODEL_TRAINING_REPORT_PATH = None
 DEFAULT_MODEL_POLICY_REPORT_PATH = None
 TRADING_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "published_models"
-ARTIFACT_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "published_models"
 ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR = REPO_ROOT / "ml_pipeline_2" / "artifacts" / "published_models"
 SNAPSHOT_ML_FLAT_V1_CONTRACT_DIR = REPO_ROOT / "snapshot_app" / "contracts" / "snapshot_ml_flat_v1"
 LEGACY_TRADING_RUNTIME_ENV = "ENABLE_LEGACY_TRADING_UI"

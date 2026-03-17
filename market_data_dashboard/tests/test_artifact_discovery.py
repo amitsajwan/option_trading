@@ -37,7 +37,6 @@ def test_artifact_discovery_includes_ml_pipeline_2_published_models(tmp_path: Pa
 
     monkeypatch.setattr(dashboard_app, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(dashboard_app, "ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline_2" / "artifacts" / "published_models")
-    monkeypatch.setattr(dashboard_app, "ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline" / "artifacts" / "models" / "by_features")
 
     entries = dashboard_app._build_artifact_discovery_entries()
 
@@ -72,7 +71,6 @@ def test_artifact_discovery_tolerates_non_dict_published_paths(tmp_path: Path, m
 
     monkeypatch.setattr(dashboard_app, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(dashboard_app, "ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline_2" / "artifacts" / "published_models")
-    monkeypatch.setattr(dashboard_app, "ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline" / "artifacts" / "models" / "by_features")
 
     entries = dashboard_app._build_artifact_discovery_entries()
 
@@ -91,7 +89,6 @@ def test_artifact_discovery_includes_recovery_research_models(tmp_path: Path, mo
 
     monkeypatch.setattr(dashboard_app, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(dashboard_app, "ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline_2" / "artifacts" / "published_models")
-    monkeypatch.setattr(dashboard_app, "ARTIFACT_MODEL_CATALOG_DIR", tmp_path / "ml_pipeline" / "artifacts" / "models" / "by_features")
 
     entries = dashboard_app._build_artifact_discovery_entries()
 

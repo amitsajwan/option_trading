@@ -86,6 +86,15 @@ def test_live_compose_profile_does_not_mount_ml_pipeline_into_supported_services
         assert "./ml_pipeline/artifacts:/app/ml_pipeline/artifacts:ro" not in block
 
 
+def test_historical_persistence_profile_does_not_mount_legacy_ml_pipeline_artifacts() -> None:
+    compose_text = _read("docker-compose.yml")
+    pattern = r"(?ms)^  persistence_app_historical:\n(.*?)(?=^  [A-Za-z0-9_]+:|\Z)"
+    match = re.search(pattern, compose_text)
+    assert match is not None, "service block missing: persistence_app_historical"
+    block = match.group(1)
+    assert "./ml_pipeline/artifacts:/app/ml_pipeline/artifacts:ro" not in block
+
+
 def test_strategy_app_live_compose_supports_ml_pure_inputs() -> None:
     compose_text = _read("docker-compose.yml")
     env_example = _read(".env.compose.example")
