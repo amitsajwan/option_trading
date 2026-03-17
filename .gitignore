@@ -129,6 +129,8 @@ market_data/
 artifacts/
 data/
 .data/
+node_modules/
+*.tsbuildinfo
 *.parquet
 *.feather
 *.csv
@@ -136,6 +138,8 @@ ingestion_app/credentials.json
 ops/gcp/operator.env
 .tmp_pip_probe/
 .tmp_pip_probe312/
+strategy_eval_ui/vite.config.js
+strategy_eval_ui/vite.config.d.ts
 
 # Infrastructure state
 .terraform/
