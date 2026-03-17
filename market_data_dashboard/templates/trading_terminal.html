@@ -534,7 +534,7 @@
         </section>
 
         <section class="panel notice-banner">
-            <div><strong>Legacy paper-trading UI only.</strong> This page launches `ml_pipeline.paper_capital_runner` for older paper-trading workflows.</div>
+            <div><strong>Archived paper-trading UI only.</strong> This page exists only for older paper/backtest workflows that are outside the supported production runtime.</div>
             <div>It is <strong>not</strong> the live registry-backed ML deployment UI. The current live ML deployment runs inside `strategy_app`, not from this page.</div>
             <div><strong>Default branch behavior:</strong> this launcher is disabled unless `{{ legacy_trading_runtime.env_var }}` is set explicitly on the dashboard process.</div>
             <div>Use the main dashboard plus `strategy_app` logs and `.run/strategy_app/*.jsonl` files to monitor the live stack.</div>
@@ -549,7 +549,7 @@
                 <div class="control-heading">
                     <div>
                         <div class="control-title">Primary Run Controls</div>
-                        <div class="control-note">Set instrument/date/model first, then start the legacy paper runner or run a date backtest.</div>
+                        <div class="control-note">Set instrument/date/model first, then start the archived paper runner or run a date backtest.</div>
                     </div>
                     <div class="control-links">
                         <a class="control-link" href="/trading/models" target="_blank" rel="noopener">model catalog</a>
@@ -1434,7 +1434,7 @@
                 status.textContent = String(LEGACY_TRADING_RUNTIME.detail || "Legacy trading runtime unavailable.");
             } else if (legacyCatalogReadyCount > 0) {
                 summary.classList.add("ok");
-                status.textContent = "Legacy paper runner can use only catalog entries marked runnable, or custom legacy paths.";
+                status.textContent = "Archived paper runner can use only catalog entries marked runnable, or custom legacy paths.";
             } else if (legacyCatalogAvailable) {
                 summary.classList.add("warning");
                 status.textContent = "No runnable legacy paper-trading model is configured in the catalog.";
@@ -1458,9 +1458,9 @@
             if (btnQuickStop) btnQuickStop.disabled = !legacyRunnerRunning;
             if (startBlocked) {
                 if (!LEGACY_TRADING_RUNTIME.enabled) {
-                    blockedMessage = String(LEGACY_TRADING_RUNTIME.detail || "Legacy paper runner is disabled.");
+                    blockedMessage = String(LEGACY_TRADING_RUNTIME.detail || "Archived paper runner is disabled.");
                 } else if (key === "custom" && !hasCompleteCustomLegacyPaths()) {
-                    blockedMessage = `Legacy paper runner start disabled: custom mode requires both model_package and threshold_report paths | instance=${TRADING_INSTANCE}`;
+                    blockedMessage = `Archived paper runner start disabled: custom mode requires both model_package and threshold_report paths | instance=${TRADING_INSTANCE}`;
                 } else if (legacyCatalogReadyCount === 0) {
                     blockedMessage = `No runnable legacy paper-trading model is configured in the catalog | instance=${TRADING_INSTANCE}`;
                 } else {
@@ -1995,12 +1995,12 @@
             ACTIVE_VIEW_MODE = "live";
             BACKTEST_UI_STATE = null;
             if (!LEGACY_TRADING_RUNTIME.enabled) {
-                alert(String(LEGACY_TRADING_RUNTIME.detail || "Legacy paper runner is disabled."));
+                alert(String(LEGACY_TRADING_RUNTIME.detail || "Archived paper runner is disabled."));
                 updateLegacyStartControls();
                 return;
             }
             if (!selectedLegacyProfileReady()) {
-                alert("Legacy paper runner start is disabled. Use a runnable legacy catalog model or provide both custom legacy artifact paths.");
+                alert("Archived paper runner start is disabled. Use a runnable legacy catalog model or provide both custom legacy artifact paths.");
                 updateLegacyStartControls();
                 return;
             }

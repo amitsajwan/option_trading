@@ -3,6 +3,12 @@
 Last updated: 2026-03-09  
 Audience: New reader with no prior context
 
+Historical note:
+
+- this document is preserved as a postmortem record
+- it references the removed `ml_pipeline` package and its artifact paths as they existed at the time of the incident
+- do not use the code paths in this document as current operator guidance; use `ml_pipeline_2` docs and the active GCP/operator runbooks instead
+
 ## 1) One-page Summary
 
 We attempted a full model search to find a new champion for:

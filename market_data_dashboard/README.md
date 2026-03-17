@@ -29,7 +29,8 @@ Legacy / not part of the supported Live+Dashboard target:
 Legacy launcher note:
 
 - `/trading`, `/api/trading/start`, and `/api/trading/backtest/run` are opt-in only
-- set `ENABLE_LEGACY_TRADING_UI=1` on the dashboard process only if you intentionally need deprecated `ml_pipeline` paper/backtest workflows
+- set `ENABLE_LEGACY_TRADING_UI=1` on the dashboard process only if you intentionally need archived paper/backtest workflows
+- do not treat that launcher as part of the supported production runtime path
 
 ## Runtime dependencies
 

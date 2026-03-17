@@ -29,7 +29,7 @@
     "champion_registry": ".run/canonical_eq_e2e_fixed_strike_20200101_20230928/champions/champion_registry.csv",
     "tests": [
       "strategy_app/tests/test_position_risk.py",
-      "ml_pipeline/tests/test_market_snapshot.py"
+      "snapshot_app/tests/test_snapshot_ml_flat_contract_runtime.py"
     ]
   }
 }

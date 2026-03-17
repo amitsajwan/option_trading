@@ -1,6 +1,12 @@
 # Fixed-Strike Remediation Checklist
 
-Run from repo root: `c:\code\option_trading`
+Historical note:
+
+- this checklist is preserved for incident history and fixed-strike remediation context
+- commands that invoke removed `ml_pipeline` modules are no longer runnable on the current branch
+- use current `snapshot_app`, `strategy_app`, and `ml_pipeline_2` docs for active operator workflows
+
+Run from repo root: repo checkout root
 
 ## A. Pre-Flight
 
@@ -12,7 +18,7 @@ Run from repo root: `c:\code\option_trading`
 
 ```powershell
 python -m snapshot_app.historical.snapshot_batch_runner `
-  --base ml_pipeline/artifacts/data/parquet_data `
+  --base .data/ml_pipeline/parquet_data `
   --rebuild-missing-fields `
   --log-every 10 `
   --write-batch-days 20 `
@@ -34,7 +40,7 @@ Validation:
 
 ```powershell
 python -m snapshot_app.historical.snapshot_batch_runner `
-  --base ml_pipeline/artifacts/data/parquet_data `
+  --base .data/ml_pipeline/parquet_data `
   --validate-only `
   --validate-days 20
 ```
@@ -50,7 +56,7 @@ Create canonical root:
 Copy snapshots into required layout:
 
 ```powershell
-robocopy ml_pipeline/artifacts/data/parquet_data/snapshots `
+robocopy .data/ml_pipeline/parquet_data/snapshots `
   .run/canonical_eq_e2e_fixed_strike_20200101_20230928/snapshots `
   /E
 ```
@@ -72,9 +78,10 @@ Copy-Item `
 
 ## D. Replay Eval + Champion
 
-```powershell
-$env:PYTHONPATH="ml_pipeline/src"
-```
+Removed on current branch:
+
+- the legacy `ml_pipeline` replay-eval and champion-select modules referenced below were part of the retired package
+- keep this section as historical evidence only
 
 Replay eval:
 
@@ -111,7 +118,7 @@ python -m ml_pipeline.entry_quality_champion_select `
 
 ```powershell
 python -m pytest strategy_app/tests/test_position_risk.py -q
-python -m pytest ml_pipeline/tests/test_market_snapshot.py -q
+python -m pytest snapshot_app/tests/test_snapshot_ml_flat_contract_runtime.py -q
 ```
 
 - [ ] Fixed-strike regression tests pass.

@@ -1464,7 +1464,7 @@ def _legacy_trading_runtime_status() -> Dict[str, Any]:
     elif package_present:
         detail = (
             "Legacy paper-trading launcher is disabled by default on this branch. "
-            f"Set {LEGACY_TRADING_RUNTIME_ENV}=1 only if you intentionally need the deprecated ml_pipeline workflow."
+            f"Set {LEGACY_TRADING_RUNTIME_ENV}=1 only if you intentionally need the archived paper/backtest workflow."
         )
     else:
         detail = (
@@ -4812,7 +4812,7 @@ async def start_trading_runner(request: Request):
     stderr_path = default_stderr_path
 
     legacy_runner_note = (
-        "This page launches the legacy paper runner and requires legacy "
+        "This page launches the archived paper runner and requires legacy "
         "model_package + threshold_report artifacts. It does not use the "
         "live registry-backed strategy_app deployment."
     )
