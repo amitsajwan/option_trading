@@ -594,6 +594,29 @@ This preserves:
 
 This is the recommended deeper teardown path when you do not want to lose images or published models.
 
+Most common command:
+
+```bash
+AUTO_APPROVE=1 ./ops/gcp/destroy_infra_preserve_data.sh
+```
+
+### Resume later after preserve-data teardown
+
+When you come back later, recreate the infra with:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+RUN_IMAGE_BUILD=0 RUN_RUNTIME_CONFIG_SYNC=0 ./ops/gcp/from_scratch_bootstrap.sh
+```
+
+Use this because the preserved data already exists in:
+
+- Artifact Registry
+- model bucket
+- runtime config bucket
+
+So you do not need to rebuild images or republish the runtime bundle unless something changed.
+
 ### Destroy everything managed by Terraform
 
 If you want a full teardown of the managed infra:

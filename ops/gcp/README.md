@@ -156,4 +156,17 @@ For a deeper teardown that still preserves images and published models:
 1. `delete_training_vm.sh`
 2. `destroy_infra_preserve_data.sh`
 
+To recreate later after the preserve-data teardown:
+
+1. `from_scratch_bootstrap.sh` with `RUN_IMAGE_BUILD=0`
+2. skip image rebuild unless code changed
+3. skip runtime config sync unless `.env.compose` changed
+
+Example:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+RUN_IMAGE_BUILD=0 RUN_RUNTIME_CONFIG_SYNC=0 ./ops/gcp/from_scratch_bootstrap.sh
+```
+
 For the full human-facing procedure, use [FROM_SCRATCH_OPERATOR_GUIDE.md](/c:/code/option_trading/docs/FROM_SCRATCH_OPERATOR_GUIDE.md).

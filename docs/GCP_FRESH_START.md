@@ -218,3 +218,66 @@ Note:
 - `destroy_infra_preserve_data.sh` is the recommended teardown if you want to keep images and published models
 - bucket deletion may require emptying the buckets first
 - ad hoc VMs created outside Terraform state must be deleted separately
+
+## 13. Recommended End-Of-Day Flow
+
+If you are done for the day and do not want heavy resources running, use one of these paths.
+
+### Option A: cheapest quick pause
+
+Use this when you want to keep all infrastructure and resume quickly:
+
+```bash
+./ops/gcp/delete_training_vm.sh
+./ops/gcp/stop_runtime.sh
+```
+
+This keeps:
+
+- runtime VM definition
+- static IP
+- firewall rules
+- service accounts
+- training instance template
+- Artifact Registry images
+- model bucket
+- runtime config bucket
+
+### Option B: deeper teardown but preserve deployable state
+
+Use this when you want to remove most cost-bearing infra but keep images and published models:
+
+```bash
+AUTO_APPROVE=1 ./ops/gcp/destroy_infra_preserve_data.sh
+```
+
+This keeps:
+
+- Artifact Registry images
+- published models in GCS
+- runtime config bundle in GCS
+
+This removes:
+
+- runtime VM
+- training instance template
+- firewall rules
+- static IP
+- runtime/training service accounts
+
+## 14. How To Recreate Later
+
+If you used the preserve-data teardown, recreate compute later with:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+RUN_IMAGE_BUILD=0 RUN_RUNTIME_CONFIG_SYNC=0 ./ops/gcp/from_scratch_bootstrap.sh
+```
+
+Use this because:
+
+- images are already in Artifact Registry
+- runtime config is already in GCS
+- models are already in GCS
+
+So you only need to recreate the infra and let the runtime VM boot.
