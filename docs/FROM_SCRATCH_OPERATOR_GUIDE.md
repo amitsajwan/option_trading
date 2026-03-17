@@ -48,6 +48,8 @@ This covers:
 - runtime/training base infrastructure
 - first image and runtime-config bootstrap
 
+This is the full-platform lane. It creates more than the snapshot-only lane and more than day-to-day training needs.
+
 ### Need final historical parquet from raw data
 
 Use [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md).
@@ -63,6 +65,11 @@ This covers:
 
 This lane does not require:
 
+- Artifact Registry
+- model bucket
+- runtime-config bucket
+- runtime VM
+- training VM template
 - runtime image build
 - runtime config publish
 - keeping the runtime VM running
@@ -79,6 +86,12 @@ This covers:
 - published model sync
 - runtime handoff generation
 
+This lane does not require:
+
+- runtime image build
+- a running runtime VM
+- a snapshot-build VM
+
 ### Need to deploy or switch live runtime
 
 Use [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md).
@@ -89,6 +102,11 @@ This covers:
 - runtime config publish
 - runtime VM restart or recreate
 - validation and rollback
+
+This lane does not require:
+
+- a running training VM
+- a snapshot-build VM
 
 ### Need full stack or Docker bring-up
 
@@ -128,6 +146,69 @@ This covers:
 2. [CLEANUP_ROLLBACK_RUNBOOK.md](CLEANUP_ROLLBACK_RUNBOOK.md) if you want to delete the temporary snapshot VM after upload
 
 This path is `gcloud`-only.
+
+## Resources By Phase
+
+### Snapshot-only phase
+
+Create only:
+
+- snapshot data bucket
+- one temporary snapshot-build VM
+
+Avoid creating:
+
+- runtime VM
+- training VM template
+- model bucket
+- runtime-config bucket
+- Artifact Registry
+
+### Training/release phase
+
+Use or keep:
+
+- training VM template
+- one disposable training VM
+- model bucket
+- runtime-config bucket
+
+Optional:
+
+- runtime VM can stay stopped until deploy time
+
+Not required for training itself:
+
+- runtime image build
+- running runtime VM
+- snapshot-build VM
+
+### Runtime/deploy phase
+
+Use or keep:
+
+- runtime VM
+- Artifact Registry
+- runtime-config bucket
+- model bucket
+
+Not required:
+
+- training VM after publish
+- snapshot-build VM
+
+### Full bootstrap phase
+
+Creates the shared runtime/training platform:
+
+- runtime VM
+- training VM template
+- model bucket
+- runtime-config bucket
+- Artifact Registry
+- IAM, firewall, static IP
+
+Use this only when you actually want the full platform in place.
 
 ### Normal recurring release
 

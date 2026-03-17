@@ -12,6 +12,27 @@ This is the Day 0 operator procedure for:
 
 If you only need historical parquet, training, or runtime cutover after bootstrap, return to [FROM_SCRATCH_OPERATOR_GUIDE.md](FROM_SCRATCH_OPERATOR_GUIDE.md) and choose the narrower runbook.
 
+## What This Runbook Creates
+
+This is the full-platform bootstrap lane.
+
+It creates the shared runtime/training base platform:
+
+- Artifact Registry repository
+- model bucket
+- runtime-config bucket
+- optional snapshot data bucket
+- runtime VM
+- training instance template
+- runtime and training service accounts
+- firewall rules
+- runtime static IP
+
+Use this runbook only when you actually want the full runtime/training platform.
+
+If you only need historical snapshot parquet, use [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md) instead.
+If you only need day-to-day training after bootstrap is already done, use [TRAINING_RELEASE_RUNBOOK.md](TRAINING_RELEASE_RUNBOOK.md) instead.
+
 ## Audience
 
 - release manager
@@ -159,6 +180,11 @@ After a successful bootstrap you should have:
 - runtime and training service accounts
 - firewall rules
 - runtime static IP
+
+Cost note:
+
+- the runtime VM is the main always-on compute cost from this lane
+- if you are not deploying immediately, stop it after bootstrap with [stop_runtime.sh](../ops/gcp/stop_runtime.sh)
 
 ## Validation
 

@@ -13,6 +13,11 @@ This is a snapshot-only path.
 
 For this runbook you do not need:
 
+- Artifact Registry
+- model bucket
+- runtime-config bucket
+- runtime VM
+- training VM template
 - runtime image build
 - runtime config publish
 - a running runtime VM
@@ -45,6 +50,19 @@ This guide does not use:
 If the GCP project is brand new, you only need the minimal project and API preparation from [GCP_BOOTSTRAP_RUNBOOK.md](GCP_BOOTSTRAP_RUNBOOK.md). Do not follow the runtime/image steps for this lane.
 
 ## 1. What This Produces
+
+Resources created or used in this phase:
+
+- one shared snapshot data bucket
+- one temporary snapshot-build VM
+
+Resources intentionally not created in this phase:
+
+- runtime VM
+- training VM template
+- Artifact Registry
+- model bucket
+- runtime-config bucket
 
 The snapshot pipeline writes two final datasets under `.data/ml_pipeline/parquet_data`:
 
@@ -95,6 +113,7 @@ gcloud storage buckets create \
 If the bucket already exists, that is fine. Continue.
 
 You do not need to run `from_scratch_bootstrap.sh` for this snapshot-only lane.
+You also do not need Terraform for this lane.
 
 ## 4. Upload Raw Archive Once
 
@@ -161,6 +180,8 @@ gcloud compute instances create option-trading-snapshot-build-01 \
 
 If `asia-south1-b` does not have capacity, retry in another zone that has capacity and update the guide commands accordingly.
 If you keep other `pd-balanced` disks in the same region, reduce the boot disk size further or delete unused VMs first to stay within `SSD_TOTAL_GB` quota.
+
+Delete this VM after parquet upload. It is not part of the long-lived platform.
 
 ## 6. Prepare The Snapshot VM
 

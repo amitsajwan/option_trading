@@ -2,6 +2,23 @@
 
 Use this when base GCP infrastructure already exists and you want to create a disposable training VM, run the guarded ML release flow, and publish the runtime handoff.
 
+## Resources In This Phase
+
+Resources used in this phase:
+
+- training VM template
+- one disposable training VM
+- model bucket
+- runtime-config bucket
+
+Resources not required for training itself:
+
+- a running runtime VM
+- runtime image build
+- a snapshot-build VM
+
+If the full bootstrap lane already created a runtime VM, it can stay stopped until you are ready to deploy.
+
 ## Audience
 
 - ML operator
@@ -26,6 +43,16 @@ Check these values in `ops/gcp/operator.env` before starting:
 - `RECOVERY_CONFIG`
 - `MODEL_BUCKET_URL`
 - `RUNTIME_CONFIG_BUCKET_URL`
+
+## Recommended Training VM Size
+
+The training VM is created from the Terraform instance template controlled by `TRAINING_MACHINE_TYPE`.
+
+Practical starting point:
+
+- `n2-standard-8` for the normal guarded release flow
+
+Go larger only if the release workload is clearly CPU- or memory-bound. To change the size, update `TRAINING_MACHINE_TYPE`, rerun the Terraform/bootstrap lane, and then create the disposable training VM.
 
 ## Step 1: Create The Disposable Training VM
 

@@ -14,6 +14,20 @@ For Day 0 infra creation, use [GCP_BOOTSTRAP_RUNBOOK.md](GCP_BOOTSTRAP_RUNBOOK.m
 For model publishing, use [TRAINING_RELEASE_RUNBOOK.md](TRAINING_RELEASE_RUNBOOK.md).
 For full stack Docker support checks, use [SUPPORT_BRINGUP_GUIDE.md](SUPPORT_BRINGUP_GUIDE.md).
 
+## Resources In This Phase
+
+Resources used in this phase:
+
+- runtime VM
+- Artifact Registry
+- runtime-config bucket
+- model bucket
+
+Resources not required in this phase:
+
+- training VM after model publish is complete
+- snapshot-build VM
+
 ## Preconditions
 
 - base infra exists
