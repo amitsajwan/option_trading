@@ -66,6 +66,7 @@ This lane does not require:
 - runtime image build
 - runtime config publish
 - keeping the runtime VM running
+- Terraform
 
 ### Need to train and publish a model release
 
@@ -125,6 +126,8 @@ This covers:
 
 1. [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
 2. [CLEANUP_ROLLBACK_RUNBOOK.md](CLEANUP_ROLLBACK_RUNBOOK.md) if you want to delete the temporary snapshot VM after upload
+
+This path is `gcloud`-only.
 
 ### Normal recurring release
 

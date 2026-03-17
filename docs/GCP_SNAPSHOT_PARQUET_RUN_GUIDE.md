@@ -23,6 +23,25 @@ For this runbook, use `gcloud` only.
 
 Do not use Terraform for the snapshot-only lane unless you intentionally also want the full runtime and training base platform.
 
+## Execution Summary
+
+This guide uses:
+
+1. `gcloud services enable`
+2. `gcloud storage buckets create`
+3. `gcloud compute instances create`
+4. `gcloud compute ssh`
+5. `gcloud storage rsync`
+6. the repo's snapshot build scripts on the temporary VM
+
+This guide does not use:
+
+- `terraform init`
+- `terraform apply`
+- `from_scratch_bootstrap.sh`
+- runtime image build
+- runtime config publish
+
 If the GCP project is brand new, you only need the minimal project and API preparation from [GCP_BOOTSTRAP_RUNBOOK.md](GCP_BOOTSTRAP_RUNBOOK.md). Do not follow the runtime/image steps for this lane.
 
 ## 1. What This Produces
