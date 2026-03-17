@@ -88,6 +88,18 @@ Expected raw root layout:
 - `banknifty_spot`
 - `VIX`
 
+Current local archive layout observed under `C:\code\banknifty_data`:
+
+- futures, options, and spot year folders: `2020`, `2021`, `2022`, `2023`, `2024`
+- VIX files:
+  - `2020`
+  - `2021-03-31` through `2021-12-31`
+  - `2022`
+  - `2023`
+  - `2024-01-01` through `2024-12-01`
+
+That means the practical full-archive rebuild for the current raw set is `2020` through `2024`, with the VIX coverage above.
+
 ## 5. Create The Temporary High-Power Snapshot VM
 
 Do the full rebuild on a disposable Linux VM with enough CPU and disk.
@@ -151,6 +163,47 @@ SNAPSHOT_PARQUET_BUCKET_URL="gs://gen-lang-client-0909109011-option-trading-snap
 No runtime bucket, model bucket, runtime image tag, or runtime config values are required for this runbook.
 
 ## 7. Build And Publish Final Parquet
+
+### Full Current Archive
+
+To process the full raw archive currently present in GCS, do not set `YEAR`, `MIN_DAY`, or `MAX_DAY`.
+
+This will process all available raw data under:
+
+- `banknifty_fut/2020` through `banknifty_fut/2024`
+- `banknifty_options/2020` through `banknifty_options/2024`
+- `banknifty_spot/2020` through `banknifty_spot/2024`
+- all available `VIX` files
+
+Run:
+
+```bash
+cd ~/option_trading
+export SYNC_RAW_ARCHIVE_FROM_GCS=1
+export NORMALIZE_JOBS=24
+export SNAPSHOT_JOBS=8
+export VALIDATE_DAYS=5
+unset YEAR
+unset MIN_DAY
+unset MAX_DAY
+./ops/gcp/run_snapshot_parquet_pipeline.sh
+```
+
+### Full Current Archive By Explicit Year
+
+If you prefer to drive the current archive explicitly by year, run these one at a time:
+
+```bash
+cd ~/option_trading
+export SYNC_RAW_ARCHIVE_FROM_GCS=1
+for YEAR in 2020 2021 2022 2023 2024; do
+  export YEAR
+  ./ops/gcp/run_snapshot_parquet_pipeline.sh
+done
+unset YEAR
+```
+
+### General Build Command
 
 On the temporary high-power GCP VM:
 
