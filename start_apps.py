@@ -230,6 +230,9 @@ def run_cli() -> int:
     parser.add_argument("--instrument", default="BANKNIFTY26MARFUT")
     parser.add_argument("--ingestion-api-base", default="http://127.0.0.1:8004")
     parser.add_argument("--snapshot-dashboard-api-base", default="http://127.0.0.1:8002")
+    parser.add_argument("--strategy-engine", default="deterministic")
+    parser.add_argument("--strategy-topic", default="market:snapshot:v1")
+    parser.add_argument("--strategy-min-confidence", type=float, default=0.65)
     parser.add_argument("--include-dashboard", action="store_true")
     parser.add_argument("--snapshot-events-path", default=".run/snapshot_app/events.jsonl")
     parser.add_argument("--snapshot-ohlc-limit", type=int, default=300)
@@ -239,6 +242,8 @@ def run_cli() -> int:
     parser.add_argument("--skip-ingestion", action="store_true")
     parser.add_argument("--skip-snapshot", action="store_true")
     parser.add_argument("--skip-persistence", action="store_true")
+    parser.add_argument("--skip-strategy", action="store_true")
+    parser.add_argument("--skip-strategy-persistence", action="store_true")
     args = parser.parse_args()
 
     components: list[dict[str, Any]] = []
@@ -331,6 +336,44 @@ def run_cli() -> int:
             }
         )
 
+    if not bool(args.skip_strategy):
+        strategy_cmd = [
+            sys.executable,
+            "-m",
+            "strategy_app.main",
+            "--engine",
+            str(args.strategy_engine),
+            "--topic",
+            str(args.strategy_topic),
+            "--min-confidence",
+            str(float(args.strategy_min_confidence)),
+        ]
+        code, payload = _run_json_command(strategy_cmd, timeout_seconds=float(args.health_timeout_seconds) + 10.0)
+        components.append(
+            {
+                "component": "strategy_app",
+                "start_status": _status_from_code(code),
+                "exit_code": int(code),
+                "result": payload,
+            }
+        )
+
+    if not bool(args.skip_strategy_persistence):
+        strategy_persistence_cmd = [
+            sys.executable,
+            "-m",
+            "persistence_app.main_strategy_consumer",
+        ]
+        code, payload = _run_json_command(strategy_persistence_cmd, timeout_seconds=float(args.health_timeout_seconds) + 10.0)
+        components.append(
+            {
+                "component": "strategy_persistence_app",
+                "start_status": _status_from_code(code),
+                "exit_code": int(code),
+                "result": payload,
+            }
+        )
+
     if not components:
         payload = {
             "checked_at_ist": _ist_now_iso(),
@@ -347,6 +390,8 @@ def run_cli() -> int:
         f"python -m ingestion_app.health --api-base {str(args.ingestion_api_base)}",
         f"python -m snapshot_app.health --events-path {str(args.snapshot_events_path)} --max-age-seconds {float(args.snapshot_max_age_seconds)}",
         f"python -m persistence_app.health --max-age-seconds {float(args.persistence_max_age_seconds)}",
+        "python -m strategy_app.health",
+        f"python -m persistence_app.strategy_health --max-age-seconds {float(args.persistence_max_age_seconds)}",
     ]
     if bool(args.include_dashboard):
         health_commands.append(f"curl {str(args.snapshot_dashboard_api_base).rstrip('/')}/api/health")

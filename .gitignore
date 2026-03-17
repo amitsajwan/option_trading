@@ -126,7 +126,6 @@ credentials*.backup
 
 # Repo-specific exclusions for filtered architecture repo
 market_data/
-scripts/
 artifacts/
 data/
 .data/
@@ -134,6 +133,12 @@ data/
 *.feather
 *.csv
 ingestion_app/credentials.json
+
+# Infrastructure state
+.terraform/
+*.tfstate
+*.tfstate.*
+*.auto.tfvars
 
 # OS
 .DS_Store
