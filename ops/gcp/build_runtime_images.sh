@@ -41,11 +41,27 @@ for service in "${SERVICES[@]}"; do
 
   image="${REGISTRY_HOST}/${PROJECT_ID}/${REPOSITORY}/${service}:${TAG}"
   echo "Building ${service} -> ${image}"
+  build_config="$(mktemp)"
+  cat > "${build_config}" <<EOF
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - ${dockerfile}
+      - -t
+      - ${image}
+      - .
+images:
+  - ${image}
+EOF
+
   gcloud builds submit . \
     --project "${PROJECT_ID}" \
     --region "${REGION}" \
-    --file "${dockerfile}" \
-    --tag "${image}"
+    --config "${build_config}"
+
+  rm -f "${build_config}"
 done
 
 echo "Build complete."
