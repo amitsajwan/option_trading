@@ -806,6 +806,7 @@ def _flatten_snapshot(snapshot: dict[str, Any], trade_date: str, year: int) -> d
         "opening_range",
         "vix_context",
         "chain_aggregates",
+        "ladder_aggregates",
         "atm_options",
         "iv_derived",
         "option_price",

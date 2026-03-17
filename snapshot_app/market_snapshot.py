@@ -21,6 +21,9 @@ except Exception:  # pragma: no cover - runtime dependency
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
+SESSION_OPEN_MINUTE = 9 * 60 + 15
+SESSION_CLOSE_MINUTE = 15 * 60 + 30
+OPTION_PRICE_HISTORY_MAXLEN = 4_000
 
 
 def _truthy(value: Any) -> bool:
@@ -172,6 +175,11 @@ def _minutes_since_open(ts: pd.Timestamp) -> Optional[int]:
     return mins
 
 
+def _minutes_to_close(ts: pd.Timestamp) -> int:
+    minute = int(ts.hour * 60 + ts.minute)
+    return max(0, int(SESSION_CLOSE_MINUTE - minute))
+
+
 def _normalize_ohlc_frame(ohlc: pd.DataFrame) -> pd.DataFrame:
     if ohlc is None or len(ohlc) == 0:
         return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume", "oi"])
@@ -261,20 +269,66 @@ def _nearest_strike(strikes: List[Dict[str, Any]], fut_close: float) -> Optional
     return float(min(values, key=lambda x: abs(x - fut_close)))
 
 
-def _find_history_30m(history: Deque[Dict[str, Any]], current_ts: pd.Timestamp) -> Optional[Dict[str, Any]]:
+def _same_atm_strike(item: Dict[str, Any], atm_strike: Optional[float]) -> bool:
+    if atm_strike is None:
+        return True
+    item_strike = _safe_float(item.get("atm_strike"))
+    if not np.isfinite(item_strike):
+        return False
+    return int(round(item_strike)) == int(round(float(atm_strike)))
+
+
+def _find_history_30m(
+    history: Deque[Dict[str, Any]],
+    current_ts: pd.Timestamp,
+    *,
+    atm_strike: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
     target = current_ts - pd.Timedelta(minutes=30)
     for item in reversed(history):
         ts = item.get("timestamp")
         if not isinstance(ts, pd.Timestamp):
+            continue
+        if not _same_atm_strike(item, atm_strike):
             continue
         if ts <= target:
             return item
     return None
 
 
-def _history_mean(history: Deque[Dict[str, Any]], key: str, limit: int = 30) -> Optional[float]:
+def _find_recent_history(
+    history: Deque[Dict[str, Any]],
+    current_ts: pd.Timestamp,
+    *,
+    max_lookback_minutes: int,
+    atm_strike: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    threshold = current_ts - pd.Timedelta(minutes=max(1, int(max_lookback_minutes)))
+    for item in reversed(history):
+        ts = item.get("timestamp")
+        if not isinstance(ts, pd.Timestamp):
+            continue
+        if not _same_atm_strike(item, atm_strike):
+            continue
+        if ts >= current_ts:
+            continue
+        if ts < threshold:
+            return None
+        return item
+    return None
+
+
+def _history_mean(
+    history: Deque[Dict[str, Any]],
+    key: str,
+    limit: int = 30,
+    *,
+    atm_strike: Optional[float] = None,
+) -> Optional[float]:
     vals: List[float] = []
     for item in reversed(history):
+        if not _same_atm_strike(item, atm_strike):
+            continue
         v = _safe_float(item.get(key))
         if np.isfinite(v):
             vals.append(float(v))
@@ -380,6 +434,134 @@ def _atr_last(bars: pd.DataFrame, period: int = 14) -> Optional[float]:
     if len(atr) == 0:
         return None
     return _nullable_float(atr.iloc[-1])
+
+
+def _atr_series(bars: pd.DataFrame, period: int = 14) -> pd.Series:
+    if bars is None or len(bars) == 0:
+        return pd.Series(dtype=float)
+    p = max(2, int(period))
+    high = pd.to_numeric(bars.get("high"), errors="coerce")
+    low = pd.to_numeric(bars.get("low"), errors="coerce")
+    close = pd.to_numeric(bars.get("close"), errors="coerce")
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1, skipna=True)
+    return tr.ewm(alpha=(1.0 / p), adjust=False, min_periods=p).mean()
+
+
+def _daily_atr_percentile(bars: pd.DataFrame, trade_date: pd.Timestamp, period: int = 14) -> Optional[float]:
+    work = _normalize_ohlc_frame(bars)
+    if len(work) == 0:
+        return None
+    work = work.copy()
+    work["trade_date"] = work["timestamp"].dt.date.astype(str)
+    work["atr_14"] = _atr_series(work, period=period)
+    daily = work.groupby("trade_date", sort=True)["atr_14"].last().reset_index()
+    daily = daily.dropna(subset=["atr_14"]).reset_index(drop=True)
+    if len(daily) == 0:
+        return None
+    daily["atr_daily_percentile"] = daily["atr_14"].expanding(min_periods=5).rank(pct=True)
+    current = daily.loc[daily["trade_date"].astype(str) == str(pd.Timestamp(trade_date).date()), "atr_daily_percentile"]
+    if len(current) == 0:
+        return None
+    return _nullable_float(current.iloc[-1])
+
+
+def _bars_since_first_true(condition: pd.Series) -> Optional[int]:
+    if condition is None or len(condition) == 0:
+        return None
+    valid = condition.fillna(False).astype(bool)
+    if not bool(valid.any()):
+        return None
+    first_idx = int(np.flatnonzero(valid.to_numpy())[0])
+    last_idx = len(valid) - 1
+    return max(0, int(last_idx - first_idx))
+
+
+def _ladder_aggregates(
+    strikes: List[Dict[str, Any]],
+    *,
+    atm_strike: Optional[float],
+    total_ce_oi: float,
+    total_pe_oi: float,
+    total_ce_volume: float,
+    total_pe_volume: float,
+) -> Dict[str, Any]:
+    out = {
+        "near_atm_pcr": None,
+        "near_atm_oi_concentration": None,
+        "near_atm_volume_concentration": None,
+        "oi_sum_m3_p3_ce": None,
+        "oi_sum_m3_p3_pe": None,
+        "vol_sum_m3_p3_ce": None,
+        "vol_sum_m3_p3_pe": None,
+    }
+    if not strikes or atm_strike is None:
+        return out
+
+    ordered = [
+        row
+        for row in sorted(
+            strikes,
+            key=lambda item: _safe_float(item.get("strike")),
+        )
+        if np.isfinite(_safe_float(row.get("strike")))
+    ]
+    if not ordered:
+        return out
+
+    atm_idx = min(
+        range(len(ordered)),
+        key=lambda idx: abs(_safe_float(ordered[idx].get("strike")) - float(atm_strike)),
+    )
+    start = max(0, int(atm_idx - 3))
+    end = min(len(ordered), int(atm_idx + 4))
+    window = ordered[start:end]
+    ce_oi_sum = float(np.nansum([_safe_float(item.get("ce_oi")) for item in window]))
+    pe_oi_sum = float(np.nansum([_safe_float(item.get("pe_oi")) for item in window]))
+    ce_vol_sum = float(np.nansum([_safe_float(item.get("ce_volume")) for item in window]))
+    pe_vol_sum = float(np.nansum([_safe_float(item.get("pe_volume")) for item in window]))
+
+    near_atm_pcr = None
+    if np.isfinite(ce_oi_sum) and ce_oi_sum > 0.0 and np.isfinite(pe_oi_sum):
+        near_atm_pcr = float(pe_oi_sum / ce_oi_sum)
+
+    oi_concentration = None
+    total_oi = (
+        float(total_ce_oi) + float(total_pe_oi)
+        if np.isfinite(total_ce_oi) and np.isfinite(total_pe_oi)
+        else float("nan")
+    )
+    if np.isfinite(total_oi) and total_oi > 0.0:
+        oi_concentration = float((ce_oi_sum + pe_oi_sum) / total_oi)
+
+    volume_concentration = None
+    total_volume = (
+        float(total_ce_volume) + float(total_pe_volume)
+        if np.isfinite(total_ce_volume) and np.isfinite(total_pe_volume)
+        else float("nan")
+    )
+    if np.isfinite(total_volume) and total_volume > 0.0:
+        volume_concentration = float((ce_vol_sum + pe_vol_sum) / total_volume)
+
+    out.update(
+        {
+            "near_atm_pcr": _nullable_float(near_atm_pcr),
+            "near_atm_oi_concentration": _nullable_float(oi_concentration),
+            "near_atm_volume_concentration": _nullable_float(volume_concentration),
+            "oi_sum_m3_p3_ce": _nullable_float(ce_oi_sum),
+            "oi_sum_m3_p3_pe": _nullable_float(pe_oi_sum),
+            "vol_sum_m3_p3_ce": _nullable_float(ce_vol_sum),
+            "vol_sum_m3_p3_pe": _nullable_float(pe_vol_sum),
+        }
+    )
+    return out
 
 
 def _macd_last(
@@ -657,6 +839,7 @@ class MarketSnapshotState:
     chain_history: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=4000))
     iv_history_expiry: Deque[float] = field(default_factory=lambda: deque(maxlen=30000))
     iv_history_non_expiry: Deque[float] = field(default_factory=lambda: deque(maxlen=30000))
+    option_price_history: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=OPTION_PRICE_HISTORY_MAXLEN))
 
 def build_market_snapshot(
     *,
@@ -695,16 +878,21 @@ def build_market_snapshot(
     expiry_date = _option_expiry_date(chain.get("expiry"), trade_date=trade_date)
     dte_days = int((expiry_date.normalize() - trade_date.normalize()).days)
     dte_days = max(dte_days, 0)
+    minutes_since_open = _minutes_since_open(ts)
+    minutes_to_close = _minutes_to_close(ts)
     mss1 = {
         "snapshot_id": snapshot_id,
         "timestamp": isoformat_ist(ts.to_pydatetime(), naive_mode=TimestampSourceMode.MARKET_IST),
         "date": str(trade_date.date()),
         "time": ts.strftime("%H:%M:%S"),
-        "minutes_since_open": _minutes_since_open(ts),
+        "minutes_since_open": minutes_since_open,
+        "minutes_to_close": minutes_to_close,
         "day_of_week": int(ts.dayofweek),
         "days_to_expiry": dte_days,
         "is_expiry_day": bool(dte_days == 0),
         "session_phase": _session_phase(ts),
+        "is_first_hour": bool(minutes_since_open is not None and minutes_since_open < 60),
+        "is_last_hour": bool(minutes_to_close <= 60),
     }
 
     mss2 = {
@@ -718,6 +906,8 @@ def build_market_snapshot(
 
     bars_calc = bars.copy()
     bars_calc["ret_1m"] = bars_calc["close"].pct_change(1, fill_method=None)
+    bars_calc["fut_return_1m"] = bars_calc["ret_1m"]
+    bars_calc["fut_return_3m"] = bars_calc["close"].pct_change(3, fill_method=None)
     bars_calc["fut_return_5m"] = bars_calc["close"].pct_change(5, fill_method=None)
     bars_calc["fut_return_15m"] = bars_calc["close"].pct_change(15, fill_method=None)
     bars_calc["fut_return_30m"] = bars_calc["close"].pct_change(30, fill_method=None)
@@ -756,14 +946,38 @@ def build_market_snapshot(
     ema_9 = _ema_last(bars_calc["close"], span=9)
     ema_21 = _ema_last(bars_calc["close"], span=21)
     ema_50 = _ema_last(bars_calc["close"], span=50)
+    ema_9_slope = _nullable_float(pd.to_numeric(bars_calc.get("close"), errors="coerce").ewm(span=9, adjust=False).mean().diff().iloc[-1])
+    ema_21_slope = _nullable_float(pd.to_numeric(bars_calc.get("close"), errors="coerce").ewm(span=21, adjust=False).mean().diff().iloc[-1])
+    ema_50_slope = _nullable_float(pd.to_numeric(bars_calc.get("close"), errors="coerce").ewm(span=50, adjust=False).mean().diff().iloc[-1])
     vwap = _session_vwap(same_day)
     price_vs_vwap = (
         float((fut_close - vwap) / vwap)
         if np.isfinite(fut_close) and vwap is not None and vwap != 0.0
         else float("nan")
     )
+    atr_14 = _atr_last(bars_calc, period=14)
+    atr_ratio = (
+        float(atr_14 / fut_close)
+        if atr_14 is not None and np.isfinite(fut_close) and fut_close != 0.0
+        else float("nan")
+    )
+    atr_daily_percentile = _daily_atr_percentile(bars_calc, trade_date, period=14)
+    day_high = _safe_float(same_day["high"].cummax().iloc[-1]) if len(same_day) else float("nan")
+    day_low = _safe_float(same_day["low"].cummin().iloc[-1]) if len(same_day) else float("nan")
+    dist_from_day_high = (
+        float((fut_close - day_high) / day_high)
+        if np.isfinite(fut_close) and np.isfinite(day_high) and day_high != 0.0
+        else float("nan")
+    )
+    dist_from_day_low = (
+        float((fut_close - day_low) / day_low)
+        if np.isfinite(fut_close) and np.isfinite(day_low) and day_low != 0.0
+        else float("nan")
+    )
 
     mss3 = {
+        "fut_return_1m": _nullable_float(bars_calc["fut_return_1m"].iloc[-1]),
+        "fut_return_3m": _nullable_float(bars_calc["fut_return_3m"].iloc[-1]),
         "fut_return_5m": _nullable_float(bars_calc["fut_return_5m"].iloc[-1]),
         "fut_return_15m": _nullable_float(bars_calc["fut_return_15m"].iloc[-1]),
         "fut_return_30m": _nullable_float(bars_calc["fut_return_30m"].iloc[-1]),
@@ -774,8 +988,15 @@ def build_market_snapshot(
         "ema_9": ema_9,
         "ema_21": ema_21,
         "ema_50": ema_50,
+        "ema_9_slope": ema_9_slope,
+        "ema_21_slope": ema_21_slope,
+        "ema_50_slope": ema_50_slope,
         "vwap": vwap,
         "price_vs_vwap": _nullable_float(price_vs_vwap),
+        "atr_ratio": _nullable_float(atr_ratio),
+        "atr_daily_percentile": _nullable_float(atr_daily_percentile),
+        "dist_from_day_high": _nullable_float(dist_from_day_high),
+        "dist_from_day_low": _nullable_float(dist_from_day_low),
     }
     mss_mtf = _compute_mtf_block(bars_calc)
 
@@ -788,6 +1009,11 @@ def build_market_snapshot(
     orh = _safe_float(open_window["high"].max()) if len(open_window) else float("nan")
     orl = _safe_float(open_window["low"].min()) if len(open_window) else float("nan")
     or_width = float(orh - orl) if np.isfinite(orh) and np.isfinite(orl) else float("nan")
+    or_width_pct = (
+        float(or_width / fut_close)
+        if np.isfinite(or_width) and np.isfinite(fut_close) and fut_close != 0.0
+        else float("nan")
+    )
     price_vs_orh = float((fut_close - orh) / orh) if np.isfinite(fut_close) and np.isfinite(orh) and orh != 0 else float("nan")
     price_vs_orl = float((fut_close - orl) / orl) if np.isfinite(fut_close) and np.isfinite(orl) and orl != 0 else float("nan")
 
@@ -799,14 +1025,26 @@ def build_market_snapshot(
     ]
     orh_broken = bool(np.isfinite(orh) and len(close_after_or) and (close_after_or["close"] > orh).any())
     orl_broken = bool(np.isfinite(orl) and len(close_after_or) and (close_after_or["close"] < orl).any())
+    breakout_up_series = pd.Series(False, index=day_bars.index)
+    breakout_down_series = pd.Series(False, index=day_bars.index)
+    if np.isfinite(orh):
+        breakout_up_series = day_bars["close"] > orh
+    if np.isfinite(orl):
+        breakout_down_series = day_bars["close"] < orl
+    bars_since_or_break_up = _bars_since_first_true(breakout_up_series)
+    bars_since_or_break_down = _bars_since_first_true(breakout_down_series)
     mss4 = {
         "orh": _nullable_float(orh),
         "orl": _nullable_float(orl),
         "or_width": _nullable_float(or_width),
+        "or_width_pct": _nullable_float(or_width_pct),
         "price_vs_orh": _nullable_float(price_vs_orh),
         "price_vs_orl": _nullable_float(price_vs_orl),
+        "opening_range_ready": bool(minutes_since_open is not None and minutes_since_open >= 15),
         "orh_broken": orh_broken,
         "orl_broken": orl_broken,
+        "bars_since_or_break_up": _nullable_int(bars_since_or_break_up),
+        "bars_since_or_break_down": _nullable_int(bars_since_or_break_down),
     }
 
     mss5 = _compute_vix_block(
@@ -815,8 +1053,23 @@ def build_market_snapshot(
         vix_live_current=vix_live_current,
     )
 
+    ce_ltp = _safe_float(atm_row.get("ce_ltp")) if isinstance(atm_row, dict) else float("nan")
+    pe_ltp = _safe_float(atm_row.get("pe_ltp")) if isinstance(atm_row, dict) else float("nan")
+    ce_open = _safe_float(atm_row.get("ce_open")) if isinstance(atm_row, dict) else float("nan")
+    ce_high = _safe_float(atm_row.get("ce_high")) if isinstance(atm_row, dict) else float("nan")
+    ce_low = _safe_float(atm_row.get("ce_low")) if isinstance(atm_row, dict) else float("nan")
+    pe_open = _safe_float(atm_row.get("pe_open")) if isinstance(atm_row, dict) else float("nan")
+    pe_high = _safe_float(atm_row.get("pe_high")) if isinstance(atm_row, dict) else float("nan")
+    pe_low = _safe_float(atm_row.get("pe_low")) if isinstance(atm_row, dict) else float("nan")
+    ce_oi = _safe_float(atm_row.get("ce_oi")) if isinstance(atm_row, dict) else float("nan")
+    pe_oi = _safe_float(atm_row.get("pe_oi")) if isinstance(atm_row, dict) else float("nan")
+    ce_vol = _safe_float(atm_row.get("ce_volume")) if isinstance(atm_row, dict) else float("nan")
+    pe_vol = _safe_float(atm_row.get("pe_volume")) if isinstance(atm_row, dict) else float("nan")
+
     total_ce_oi = float(np.nansum([_safe_float(x.get("ce_oi")) for x in strikes])) if strikes else float("nan")
     total_pe_oi = float(np.nansum([_safe_float(x.get("pe_oi")) for x in strikes])) if strikes else float("nan")
+    total_ce_volume = float(np.nansum([_safe_float(x.get("ce_volume")) for x in strikes])) if strikes else float("nan")
+    total_pe_volume = float(np.nansum([_safe_float(x.get("pe_volume")) for x in strikes])) if strikes else float("nan")
     pcr = _safe_float(chain.get("pcr"))
     if not np.isfinite(pcr):
         pcr = (total_pe_oi / total_ce_oi) if np.isfinite(total_ce_oi) and total_ce_oi > 0 else float("nan")
@@ -831,37 +1084,56 @@ def build_market_snapshot(
         ce_oi_top_strike = _nullable_int(ce_best.get("strike"))
         pe_oi_top_strike = _nullable_int(pe_best.get("strike"))
 
-    prev_30 = _find_history_30m(state.chain_history, ts)
+    prev_30 = _find_history_30m(state.chain_history, ts, atm_strike=atm_strike)
     pcr_change_30m = None
     if prev_30 is not None:
         prev_pcr = _safe_float(prev_30.get("pcr"))
         if np.isfinite(prev_pcr) and np.isfinite(pcr):
             pcr_change_30m = float(pcr - prev_pcr)
+    ce_pe_oi_diff = (
+        float(total_ce_oi - total_pe_oi)
+        if np.isfinite(total_ce_oi) and np.isfinite(total_pe_oi)
+        else float("nan")
+    )
+    ce_pe_volume_diff = (
+        float(total_ce_volume - total_pe_volume)
+        if np.isfinite(total_ce_volume) and np.isfinite(total_pe_volume)
+        else float("nan")
+    )
+    atm_straddle_price = (
+        float(ce_ltp + pe_ltp)
+        if np.isfinite(_safe_float(ce_ltp)) and np.isfinite(_safe_float(pe_ltp))
+        else float("nan")
+    )
+    atm_straddle_pct = (
+        float(atm_straddle_price / fut_close)
+        if np.isfinite(atm_straddle_price) and np.isfinite(fut_close) and fut_close != 0.0
+        else float("nan")
+    )
+    distance_to_max_pain_pct = (
+        float((fut_close - float(max_pain)) / fut_close)
+        if max_pain is not None and np.isfinite(fut_close) and fut_close != 0.0
+        else float("nan")
+    )
 
     mss6 = {
         "atm_strike": _nullable_int(atm_strike),
         "strike_count": int(len(strikes)),
         "total_ce_oi": _nullable_int(total_ce_oi),
         "total_pe_oi": _nullable_int(total_pe_oi),
+        "total_ce_volume": _nullable_int(total_ce_volume),
+        "total_pe_volume": _nullable_int(total_pe_volume),
         "pcr": _nullable_float(pcr),
         "pcr_change_30m": _nullable_float(pcr_change_30m),
         "max_pain": max_pain,
         "ce_oi_top_strike": ce_oi_top_strike,
         "pe_oi_top_strike": pe_oi_top_strike,
+        "ce_pe_oi_diff": _nullable_float(ce_pe_oi_diff),
+        "ce_pe_volume_diff": _nullable_float(ce_pe_volume_diff),
+        "atm_straddle_price": _nullable_float(atm_straddle_price),
+        "atm_straddle_pct": _nullable_float(atm_straddle_pct),
+        "distance_to_max_pain_pct": _nullable_float(distance_to_max_pain_pct),
     }
-
-    ce_ltp = _safe_float(atm_row.get("ce_ltp")) if isinstance(atm_row, dict) else float("nan")
-    pe_ltp = _safe_float(atm_row.get("pe_ltp")) if isinstance(atm_row, dict) else float("nan")
-    ce_open = _safe_float(atm_row.get("ce_open")) if isinstance(atm_row, dict) else float("nan")
-    ce_high = _safe_float(atm_row.get("ce_high")) if isinstance(atm_row, dict) else float("nan")
-    ce_low = _safe_float(atm_row.get("ce_low")) if isinstance(atm_row, dict) else float("nan")
-    pe_open = _safe_float(atm_row.get("pe_open")) if isinstance(atm_row, dict) else float("nan")
-    pe_high = _safe_float(atm_row.get("pe_high")) if isinstance(atm_row, dict) else float("nan")
-    pe_low = _safe_float(atm_row.get("pe_low")) if isinstance(atm_row, dict) else float("nan")
-    ce_oi = _safe_float(atm_row.get("ce_oi")) if isinstance(atm_row, dict) else float("nan")
-    pe_oi = _safe_float(atm_row.get("pe_oi")) if isinstance(atm_row, dict) else float("nan")
-    ce_vol = _safe_float(atm_row.get("ce_volume")) if isinstance(atm_row, dict) else float("nan")
-    pe_vol = _safe_float(atm_row.get("pe_volume")) if isinstance(atm_row, dict) else float("nan")
 
     ce_iv = _normalize_iv(_safe_float(atm_row.get("ce_iv"))) if isinstance(atm_row, dict) else None
     pe_iv = _normalize_iv(_safe_float(atm_row.get("pe_iv"))) if isinstance(atm_row, dict) else None
@@ -891,6 +1163,29 @@ def build_market_snapshot(
     pe_oi_change_30m = None
     ce_vol_ratio = None
     pe_vol_ratio = None
+    prev_1m = _find_recent_history(
+        state.option_price_history,
+        ts,
+        max_lookback_minutes=2,
+        atm_strike=atm_strike,
+    )
+    atm_ce_return_1m = None
+    atm_pe_return_1m = None
+    atm_ce_oi_change_1m = None
+    atm_pe_oi_change_1m = None
+    if prev_1m is not None and str(prev_1m.get("trade_date") or "") == str(trade_date.date()):
+        prev_ce_close = _safe_float(prev_1m.get("atm_ce_close"))
+        prev_pe_close = _safe_float(prev_1m.get("atm_pe_close"))
+        prev_ce_oi_1m = _safe_float(prev_1m.get("atm_ce_oi"))
+        prev_pe_oi_1m = _safe_float(prev_1m.get("atm_pe_oi"))
+        if np.isfinite(ce_ltp) and np.isfinite(prev_ce_close) and prev_ce_close != 0.0:
+            atm_ce_return_1m = float((ce_ltp - prev_ce_close) / prev_ce_close)
+        if np.isfinite(pe_ltp) and np.isfinite(prev_pe_close) and prev_pe_close != 0.0:
+            atm_pe_return_1m = float((pe_ltp - prev_pe_close) / prev_pe_close)
+        if np.isfinite(ce_oi) and np.isfinite(prev_ce_oi_1m):
+            atm_ce_oi_change_1m = float(ce_oi - prev_ce_oi_1m)
+        if np.isfinite(pe_oi) and np.isfinite(prev_pe_oi_1m):
+            atm_pe_oi_change_1m = float(pe_oi - prev_pe_oi_1m)
     if prev_30 is not None:
         prev_ce_oi = _safe_float(prev_30.get("atm_ce_oi"))
         prev_pe_oi = _safe_float(prev_30.get("atm_pe_oi"))
@@ -898,12 +1193,22 @@ def build_market_snapshot(
             ce_oi_change_30m = float(ce_oi - prev_ce_oi)
         if np.isfinite(pe_oi) and np.isfinite(prev_pe_oi):
             pe_oi_change_30m = float(pe_oi - prev_pe_oi)
-    ce_vol_mean = _history_mean(state.chain_history, "atm_ce_volume", limit=30)
-    pe_vol_mean = _history_mean(state.chain_history, "atm_pe_volume", limit=30)
+    ce_vol_mean = _history_mean(state.chain_history, "atm_ce_volume", limit=30, atm_strike=atm_strike)
+    pe_vol_mean = _history_mean(state.chain_history, "atm_pe_volume", limit=30, atm_strike=atm_strike)
     if np.isfinite(ce_vol) and ce_vol_mean is not None and ce_vol_mean > 0:
         ce_vol_ratio = float(ce_vol / ce_vol_mean)
     if np.isfinite(pe_vol) and pe_vol_mean is not None and pe_vol_mean > 0:
         pe_vol_ratio = float(pe_vol / pe_vol_mean)
+    atm_ce_pe_price_diff = (
+        float(ce_ltp - pe_ltp)
+        if np.isfinite(ce_ltp) and np.isfinite(pe_ltp)
+        else float("nan")
+    )
+    atm_ce_pe_iv_diff = (
+        float(ce_iv - pe_iv)
+        if ce_iv is not None and pe_iv is not None
+        else float("nan")
+    )
 
     mss7 = {
         "atm_ce_strike": _nullable_int(atm_strike),
@@ -911,8 +1216,10 @@ def build_market_snapshot(
         "atm_ce_high": _nullable_float(ce_high),
         "atm_ce_low": _nullable_float(ce_low),
         "atm_ce_close": _nullable_float(ce_ltp),
+        "atm_ce_return_1m": _nullable_float(atm_ce_return_1m),
         "atm_ce_volume": _nullable_int(ce_vol),
         "atm_ce_oi": _nullable_int(ce_oi),
+        "atm_ce_oi_change_1m": _nullable_int(atm_ce_oi_change_1m),
         "atm_ce_oi_change_30m": _nullable_int(ce_oi_change_30m),
         "atm_ce_iv": _nullable_float(ce_iv),
         "atm_ce_vol_ratio": _nullable_float(ce_vol_ratio),
@@ -921,11 +1228,15 @@ def build_market_snapshot(
         "atm_pe_high": _nullable_float(pe_high),
         "atm_pe_low": _nullable_float(pe_low),
         "atm_pe_close": _nullable_float(pe_ltp),
+        "atm_pe_return_1m": _nullable_float(atm_pe_return_1m),
         "atm_pe_volume": _nullable_int(pe_vol),
         "atm_pe_oi": _nullable_int(pe_oi),
+        "atm_pe_oi_change_1m": _nullable_int(atm_pe_oi_change_1m),
         "atm_pe_oi_change_30m": _nullable_int(pe_oi_change_30m),
         "atm_pe_iv": _nullable_float(pe_iv),
         "atm_pe_vol_ratio": _nullable_float(pe_vol_ratio),
+        "atm_ce_pe_price_diff": _nullable_float(atm_ce_pe_price_diff),
+        "atm_ce_pe_iv_diff": _nullable_float(atm_ce_pe_iv_diff),
     }
 
     iv_skew = None
@@ -974,6 +1285,14 @@ def build_market_snapshot(
         "iv_regime": iv_regime,
         "iv_expiry_type": expiry_type,
     }
+    mss_ladder = _ladder_aggregates(
+        strikes,
+        atm_strike=atm_strike,
+        total_ce_oi=total_ce_oi,
+        total_pe_oi=total_pe_oi,
+        total_ce_volume=total_ce_volume,
+        total_pe_volume=total_pe_volume,
+    )
 
     bars_levels = bars_calc.copy()
     by_day = {}
@@ -1034,10 +1353,22 @@ def build_market_snapshot(
             "trade_date": str(trade_date.date()),
             "pcr": _nullable_float(pcr),
             "max_pain": max_pain,
+            "atm_strike": _nullable_float(atm_strike),
             "atm_ce_oi": _nullable_float(ce_oi),
             "atm_pe_oi": _nullable_float(pe_oi),
             "atm_ce_volume": _nullable_float(ce_vol),
             "atm_pe_volume": _nullable_float(pe_vol),
+        }
+    )
+    state.option_price_history.append(
+        {
+            "timestamp": ts,
+            "trade_date": str(trade_date.date()),
+            "atm_strike": _nullable_float(atm_strike),
+            "atm_ce_close": _nullable_float(ce_ltp),
+            "atm_pe_close": _nullable_float(pe_ltp),
+            "atm_ce_oi": _nullable_float(ce_oi),
+            "atm_pe_oi": _nullable_float(pe_oi),
         }
     )
 
@@ -1056,6 +1387,7 @@ def build_market_snapshot(
         "vix_context": mss5,
         "strikes": strikes,
         "chain_aggregates": mss6,
+        "ladder_aggregates": mss_ladder,
         "atm_options": mss7,
         "iv_derived": mss8,
         "session_levels": mss9,

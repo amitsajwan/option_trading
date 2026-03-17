@@ -169,6 +169,7 @@ def _extract_live_fields(payload: dict[str, Any]) -> set[str]:
         "opening_range",
         "vix_context",
         "chain_aggregates",
+        "ladder_aggregates",
         "atm_options",
         "iv_derived",
         "option_price",
