@@ -62,7 +62,7 @@ except Exception:
         list_recovery_scenarios = None  # type: ignore
 
 try:
-    from snapshot_app.snapshot_ml_flat_contract import load_contract_schema, load_feature_groups, load_legacy_mapping
+    from snapshot_app.core.snapshot_ml_flat_contract import load_contract_schema, load_feature_groups, load_legacy_mapping
 except Exception:
     load_contract_schema = None  # type: ignore
     load_feature_groups = None  # type: ignore

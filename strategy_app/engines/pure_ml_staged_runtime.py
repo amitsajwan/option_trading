@@ -6,7 +6,7 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-from snapshot_app.stage_views import project_stage_views
+from snapshot_app.core.stage_views import project_stage_views
 
 from ml_pipeline_2.inference_contract.predict import predict_probabilities_from_frame
 from ml_pipeline_2.staged.runtime_contract import STAGED_RUNTIME_BUNDLE_KIND, load_staged_runtime_policy

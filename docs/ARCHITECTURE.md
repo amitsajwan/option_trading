@@ -16,7 +16,7 @@ This document describes the live architecture and active data contracts only.
 
 ### Snapshot contract
 
-- Builder: `snapshot_app.market_snapshot.build_market_snapshot`
+- Builder: `snapshot_app.core.market_snapshot.build_market_snapshot`
 - Schema identity:
   - `schema_name=MarketSnapshot`
   - `schema_version=3.0`
@@ -72,10 +72,10 @@ python -m snapshot_app.historical.snapshot_batch_runner --raw-root C:\code\bankn
 
 Implementation split:
 - `snapshot_app.pipeline.normalize`: raw CSV -> normalized parquet partitions
-- `snapshot_app.pipeline.orchestrator`: raw-to-snapshot orchestration and year-sliced parallel builds
-- `snapshot_app.market_snapshot`: canonical snapshot assembly logic used by both live and historical flows
+- `snapshot_app.pipeline.orchestrator`: raw-to-snapshot orchestration and chunked parallel builds with warmup continuity
+- `snapshot_app.core.market_snapshot`: canonical snapshot assembly logic used by both live and historical flows
 
-This keeps live and historical snapshot logic on one code path while allowing raw rebuilds and faster parallel batch execution on larger CPUs.
+This keeps live and historical snapshot logic on one code path while allowing raw rebuilds, chunked incremental outputs, and faster parallel batch execution on larger CPUs.
 
 ## 6. Ownership by Package
 

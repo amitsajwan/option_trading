@@ -3,9 +3,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from snapshot_app.market_snapshot import MarketSnapshotState, build_market_snapshot
-from snapshot_app.market_snapshot_contract import validate_market_snapshot
-from snapshot_app.stage_views import (
+from snapshot_app.core.market_snapshot import (
+    MarketSnapshotState,
+    _normalize_ohlc_frame,
+    build_market_snapshot,
+    prepare_market_snapshot_window,
+)
+from snapshot_app.core.market_snapshot_contract import validate_market_snapshot
+from snapshot_app.core.stage_views import (
     project_stage1_entry_view,
     project_stage2_direction_view,
     project_stage3_recipe_view,
@@ -160,3 +165,150 @@ def test_build_market_snapshot_does_not_cross_compare_changed_atm_strike() -> No
     assert second_snapshot["atm_options"]["atm_pe_return_1m"] is None
     assert second_snapshot["atm_options"]["atm_ce_oi_change_1m"] is None
     assert second_snapshot["atm_options"]["atm_pe_oi_change_1m"] is None
+
+
+def test_normalize_ohlc_frame_drops_invalid_timestamp_rows() -> None:
+    frame = pd.DataFrame(
+        {
+            "timestamp": ["2026-03-17T09:15:00+05:30", "not-a-timestamp"],
+            "open": [1.0, 2.0],
+            "high": [1.5, 2.5],
+            "low": [0.5, 1.5],
+            "close": [1.2, 2.2],
+            "volume": [100.0, 200.0],
+            "oi": [1000.0, 2000.0],
+        }
+    )
+
+    normalized = _normalize_ohlc_frame(frame)
+
+    assert len(normalized) == 1
+    assert pd.Timestamp(normalized.iloc[0]["timestamp"]).isoformat() == "2026-03-17T09:15:00"
+
+
+def test_build_market_snapshot_realized_vol_30m_uses_sample_std() -> None:
+    state = MarketSnapshotState()
+    closes = [50_000.0 + (idx * 5.0) for idx in range(31)]
+    bars = _ohlc_frame(start="2026-03-17 09:15:00", periods=len(closes), closes=closes)
+
+    snapshot = build_market_snapshot(
+        instrument="BANKNIFTY-I",
+        ohlc=bars,
+        chain=_chain_for_price(fut_close=float(bars.iloc[-1]["close"]), atm_override=50100),
+        state=state,
+    )
+
+    ret_1m = pd.Series(closes, dtype=float).pct_change(fill_method=None)
+    expected = float(ret_1m.rolling(30, min_periods=30).std(ddof=1).iloc[-1] * np.sqrt(252.0 * 375.0))
+    actual = float(snapshot["futures_derived"]["realized_vol_30m"])
+    assert np.isclose(actual, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_build_market_snapshot_prepared_window_matches_direct_mid_session() -> None:
+    day1 = _ohlc_frame(
+        start="2026-03-16 09:15:00",
+        periods=45,
+        closes=[49_800.0 + (idx * 0.8) for idx in range(45)],
+    )
+    day2 = _ohlc_frame(
+        start="2026-03-17 09:15:00",
+        periods=45,
+        closes=[50_050.0 + (idx * 1.1) for idx in range(45)],
+    )
+    full_bars = pd.concat([day1, day2], ignore_index=True)
+    direct_index = len(day1) + 30
+    prepared = prepare_market_snapshot_window(
+        full_bars,
+        current_trade_date=pd.Timestamp("2026-03-17"),
+    )
+    chain = _chain_for_price(
+        fut_close=float(full_bars.iloc[direct_index]["close"]),
+        atm_override=50100,
+        ce_bump=3.0,
+        pe_bump=-2.0,
+    )
+
+    direct_snapshot = build_market_snapshot(
+        instrument="BANKNIFTY-I",
+        ohlc=full_bars.iloc[: direct_index + 1],
+        chain=chain,
+        state=MarketSnapshotState(),
+    )
+    prepared_snapshot = build_market_snapshot(
+        instrument="BANKNIFTY-I",
+        ohlc=full_bars,
+        chain=chain,
+        state=MarketSnapshotState(),
+        prepared_window=prepared,
+        current_index=direct_index,
+    )
+
+    assert prepared_snapshot == direct_snapshot
+
+
+def test_build_market_snapshot_prepared_window_preserves_stateful_atm_history() -> None:
+    day1 = _ohlc_frame(
+        start="2026-03-16 09:15:00",
+        periods=45,
+        closes=[49_900.0 + (idx * 0.7) for idx in range(45)],
+    )
+    day2 = _ohlc_frame(
+        start="2026-03-17 09:15:00",
+        periods=45,
+        closes=[50_020.0 + (idx * 0.9) for idx in range(45)],
+    )
+    full_bars = pd.concat([day1, day2], ignore_index=True)
+    first_index = len(day1) + 20
+    second_index = first_index + 1
+    prepared = prepare_market_snapshot_window(
+        full_bars,
+        current_trade_date=pd.Timestamp("2026-03-17"),
+    )
+
+    direct_state = MarketSnapshotState()
+    prepared_state = MarketSnapshotState()
+
+    first_chain = _chain_for_price(
+        fut_close=float(full_bars.iloc[first_index]["close"]),
+        atm_override=50000,
+    )
+    first_direct = build_market_snapshot(
+        instrument="BANKNIFTY-I",
+        ohlc=full_bars.iloc[: first_index + 1],
+        chain=first_chain,
+        state=direct_state,
+    )
+    first_prepared = build_market_snapshot(
+        instrument="BANKNIFTY-I",
+        ohlc=full_bars,
+        chain=first_chain,
+        state=prepared_state,
+        prepared_window=prepared,
+        current_index=first_index,
+    )
+
+    second_chain = _chain_for_price(
+        fut_close=float(full_bars.iloc[second_index]["close"]),
+        atm_override=50000,
+        ce_bump=4.0,
+        pe_bump=-3.0,
+        ce_oi_bump=125.0,
+        pe_oi_bump=-95.0,
+    )
+    second_direct = build_market_snapshot(
+        instrument="BANKNIFTY-I",
+        ohlc=full_bars.iloc[: second_index + 1],
+        chain=second_chain,
+        state=direct_state,
+    )
+    second_prepared = build_market_snapshot(
+        instrument="BANKNIFTY-I",
+        ohlc=full_bars,
+        chain=second_chain,
+        state=prepared_state,
+        prepared_window=prepared,
+        current_index=second_index,
+    )
+
+    assert first_prepared == first_direct
+    assert second_prepared == second_direct

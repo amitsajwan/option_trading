@@ -66,11 +66,13 @@ Resources intentionally not created in this phase:
 
 The snapshot pipeline writes these final datasets under `.data/ml_pipeline/parquet_data`:
 
-- `snapshots/year=YYYY/data.parquet`
-- `snapshots_ml_flat/year=YYYY/data.parquet`
-- `stage1_entry_view/year=YYYY/data.parquet`
-- `stage2_direction_view/year=YYYY/data.parquet`
-- `stage3_recipe_view/year=YYYY/data.parquet`
+- `snapshots/**/data.parquet`
+- `snapshots_ml_flat/**/data.parquet`
+- `stage1_entry_view/**/data.parquet`
+- `stage2_direction_view/**/data.parquet`
+- `stage3_recipe_view/**/data.parquet`
+
+The current builder writes chunked parquet partitions under each `year=YYYY` directory so it can parallelize below the year level without write conflicts.
 
 The recommended GCS target is:
 
@@ -158,14 +160,14 @@ Recommended starting point:
 
 Why this is the current default:
 
-- the current snapshot build parallelizes mainly by calendar year
-- the current raw archive spans `2020` through `2024`
-- so the snapshot phase runs at about `5` year workers max
-- a much larger machine is usually underutilized for the current architecture
+- the current snapshot build parallelizes with chunked calendar slices plus warmup continuity
+- the default builder settings use:
+  - `SNAPSHOT_JOBS=8`
+  - `SNAPSHOT_SLICE_MONTHS=6`
+  - `SNAPSHOT_SLICE_WARMUP_DAYS=90`
+- `n2-highmem-8` is a good current balance of CPU, RAM, and disk for a full clean rebuild
 
 The default training template is still smaller. For a full multi-year historical rebuild, create a separate temporary VM for the snapshot build window, then delete it after upload.
-
-If you later redesign snapshot assembly to parallelize below the year level, you can revisit a larger machine.
 
 Example create command:
 
@@ -223,6 +225,28 @@ No runtime bucket, model bucket, runtime image tag, or runtime config values are
 
 ## 7. Build And Publish Final Parquet
 
+### Clean Rebuild Requirement
+
+The fast parallel builder now writes chunked parquet under each year directory.
+
+If this VM or parquet base already contains old legacy snapshot outputs like:
+
+- `snapshots/year=YYYY/data.parquet`
+- `snapshots_ml_flat/year=YYYY/data.parquet`
+
+delete those snapshot output roots before starting the new full build:
+
+```bash
+cd ~/option_trading
+rm -rf .data/ml_pipeline/parquet_data/snapshots
+rm -rf .data/ml_pipeline/parquet_data/snapshots_ml_flat
+rm -rf .data/ml_pipeline/parquet_data/stage1_entry_view
+rm -rf .data/ml_pipeline/parquet_data/stage2_direction_view
+rm -rf .data/ml_pipeline/parquet_data/stage3_recipe_view
+```
+
+Do not delete the normalized cache (`futures`, `options`, `spot`, `vix`) unless you intentionally want to rebuild Layer-1 too.
+
 ### Full Current Archive
 
 To process the full raw archive currently present in GCS, do not set `YEAR`, `MIN_DAY`, or `MAX_DAY`.
@@ -240,12 +264,45 @@ Run:
 cd ~/option_trading
 export SYNC_RAW_ARCHIVE_FROM_GCS=1
 export NORMALIZE_JOBS=8
-export SNAPSHOT_JOBS=5
+export SNAPSHOT_JOBS=8
+export SNAPSHOT_SLICE_MONTHS=6
+export SNAPSHOT_SLICE_WARMUP_DAYS=90
 export VALIDATE_DAYS=5
 unset YEAR
 unset MIN_DAY
 unset MAX_DAY
 ./ops/gcp/run_snapshot_parquet_pipeline.sh
+```
+
+### Clean Full Rebuild On An Existing VM
+
+If this VM already contains old snapshot outputs or a partial interrupted run, clean only the final snapshot output roots and restart from scratch:
+
+```bash
+cd ~/option_trading
+rm -rf .data/ml_pipeline/parquet_data/snapshots
+rm -rf .data/ml_pipeline/parquet_data/snapshots_ml_flat
+rm -rf .data/ml_pipeline/parquet_data/stage1_entry_view
+rm -rf .data/ml_pipeline/parquet_data/stage2_direction_view
+rm -rf .data/ml_pipeline/parquet_data/stage3_recipe_view
+
+export SYNC_RAW_ARCHIVE_FROM_GCS=0
+export NORMALIZE_JOBS=8
+export SNAPSHOT_JOBS=8
+export SNAPSHOT_SLICE_MONTHS=6
+export SNAPSHOT_SLICE_WARMUP_DAYS=90
+export VALIDATE_DAYS=5
+unset YEAR
+unset MIN_DAY
+unset MAX_DAY
+export NO_RESUME=1
+nohup ./ops/gcp/run_snapshot_parquet_pipeline.sh > snapshot_full_run.log 2>&1 &
+```
+
+Monitor the run:
+
+```bash
+tail -f snapshot_full_run.log
 ```
 
 ### Full Current Archive By Explicit Year
@@ -257,6 +314,8 @@ cd ~/option_trading
 export SYNC_RAW_ARCHIVE_FROM_GCS=1
 export NORMALIZE_JOBS=8
 export SNAPSHOT_JOBS=1
+unset SNAPSHOT_SLICE_MONTHS
+unset SNAPSHOT_SLICE_WARMUP_DAYS
 for YEAR in 2020 2021 2022 2023 2024; do
   export YEAR
   ./ops/gcp/run_snapshot_parquet_pipeline.sh
@@ -272,7 +331,9 @@ On the temporary snapshot VM:
 cd ~/option_trading
 export SYNC_RAW_ARCHIVE_FROM_GCS=1
 export NORMALIZE_JOBS=8
-export SNAPSHOT_JOBS=5
+export SNAPSHOT_JOBS=8
+export SNAPSHOT_SLICE_MONTHS=6
+export SNAPSHOT_SLICE_WARMUP_DAYS=90
 export VALIDATE_DAYS=5
 ./ops/gcp/run_snapshot_parquet_pipeline.sh
 ```
@@ -283,11 +344,12 @@ What this does:
 2. creates or reuses `.venv`
 3. installs `snapshot_app` build dependencies
 4. runs `snapshot_app.historical.snapshot_batch_runner`
-5. writes:
+5. partitions the archive into chunked calendar slices with warmup continuity
+6. writes:
    - build manifest
    - validation report
    - latest window manifest
-6. uploads final parquet and reports to `SNAPSHOT_PARQUET_BUCKET_URL`
+7. uploads final parquet and reports to `SNAPSHOT_PARQUET_BUCKET_URL`
 
 ## 8. Useful Variants
 
@@ -295,6 +357,9 @@ Build one year only:
 
 ```bash
 export SYNC_RAW_ARCHIVE_FROM_GCS=1
+export SNAPSHOT_JOBS=1
+unset SNAPSHOT_SLICE_MONTHS
+unset SNAPSHOT_SLICE_WARMUP_DAYS
 export YEAR=2024
 ./ops/gcp/run_snapshot_parquet_pipeline.sh
 ```
@@ -303,6 +368,9 @@ Build a small date slice:
 
 ```bash
 export SYNC_RAW_ARCHIVE_FROM_GCS=1
+export SNAPSHOT_JOBS=8
+export SNAPSHOT_SLICE_MONTHS=6
+export SNAPSHOT_SLICE_WARMUP_DAYS=90
 export MIN_DAY=2024-01-01
 export MAX_DAY=2024-03-31
 ./ops/gcp/run_snapshot_parquet_pipeline.sh
@@ -321,6 +389,9 @@ Rebuild a range from scratch:
 ```bash
 export SYNC_RAW_ARCHIVE_FROM_GCS=1
 export NO_RESUME=1
+export SNAPSHOT_JOBS=8
+export SNAPSHOT_SLICE_MONTHS=6
+export SNAPSHOT_SLICE_WARMUP_DAYS=90
 export YEAR=2024
 ./ops/gcp/run_snapshot_parquet_pipeline.sh
 ```
@@ -330,6 +401,9 @@ Also upload normalized parquet cache:
 ```bash
 export SYNC_RAW_ARCHIVE_FROM_GCS=1
 export PUBLISH_NORMALIZED_CACHE=1
+export SNAPSHOT_JOBS=8
+export SNAPSHOT_SLICE_MONTHS=6
+export SNAPSHOT_SLICE_WARMUP_DAYS=90
 ./ops/gcp/run_snapshot_parquet_pipeline.sh
 ```
 
@@ -337,8 +411,11 @@ export PUBLISH_NORMALIZED_CACHE=1
 
 After a successful upload, the bucket prefix should contain:
 
-- `parquet_data/snapshots/year=YYYY/data.parquet`
-- `parquet_data/snapshots_ml_flat/year=YYYY/data.parquet`
+- `parquet_data/snapshots/**/data.parquet`
+- `parquet_data/snapshots_ml_flat/**/data.parquet`
+- `parquet_data/stage1_entry_view/**/data.parquet`
+- `parquet_data/stage2_direction_view/**/data.parquet`
+- `parquet_data/stage3_recipe_view/**/data.parquet`
 - `parquet_data/reports/<build_run_id>/build_manifest.json`
 - `parquet_data/reports/<build_run_id>/validation_report.json`
 - `parquet_data/reports/<build_run_id>/window_manifest_latest.json`

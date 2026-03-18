@@ -33,16 +33,16 @@ def _norm_pdf(x: float) -> float:
 
 class GreeksCalculator:
     """Calculate Black-Scholes Greeks for options and Implied Volatility (IV)."""
-    
+
     # Default risk-free rate for India (7%)
     DEFAULT_RISK_FREE_RATE = 0.07
-    
+
     # Constants for IV calculation
     MAX_ITERATIONS = 100
     IV_TOLERANCE = 1e-6  # 0.0001% accuracy
     IV_MAX = 5.0  # 500% max volatility (safety limit)
     IV_MIN = 0.001  # 0.1% min volatility
-    
+
     @staticmethod
     def calculate_greeks(
         spot_price: float,
@@ -167,7 +167,7 @@ class GreeksCalculator:
         risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
         option_type: str = 'CE'
     ) -> float:
-        """Calculate delta only (faster for single Greek)."""
+        """Convenience helper that returns only delta."""
         greeks = GreeksCalculator.calculate_greeks(
             spot_price, strike, time_to_expiry, volatility, risk_free_rate, option_type
         )
@@ -199,12 +199,6 @@ class GreeksCalculator:
         
         return True, None
     
-    # Constants for IV calculation
-    MAX_ITERATIONS = 100
-    IV_TOLERANCE = 1e-6  # 0.0001% accuracy
-    IV_MAX = 5.0  # 500% max volatility (safety limit)
-    IV_MIN = 0.001  # 0.1% min volatility
-    
     @staticmethod
     def calculate_option_price(
         spot_price: float,
@@ -235,11 +229,11 @@ class GreeksCalculator:
                 return max(0, strike - spot_price)
         
         if volatility <= 0:
-            # No volatility: intrinsic value discounted
+            # Zero-volatility Black-Scholes limit.
             if option_type == 'CE':
-                return max(0, spot_price * math.exp(-risk_free_rate * time_to_expiry) - strike * math.exp(-risk_free_rate * time_to_expiry))
+                return max(0.0, spot_price - (strike * math.exp(-risk_free_rate * time_to_expiry)))
             else:
-                return max(0, strike * math.exp(-risk_free_rate * time_to_expiry) - spot_price * math.exp(-risk_free_rate * time_to_expiry))
+                return max(0.0, (strike * math.exp(-risk_free_rate * time_to_expiry)) - spot_price)
         
         sqrt_t = math.sqrt(time_to_expiry)
         d1 = (math.log(spot_price / strike) + (risk_free_rate + 0.5 * volatility**2) * time_to_expiry) / (volatility * sqrt_t)

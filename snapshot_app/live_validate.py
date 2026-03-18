@@ -10,7 +10,7 @@ from typing import Any
 
 import pandas as pd
 
-from snapshot_app.market_snapshot_contract import validate_market_snapshot
+from snapshot_app.core.market_snapshot_contract import validate_market_snapshot
 
 
 def _read_lines(path: Path, tail: int = 0) -> list[str]:

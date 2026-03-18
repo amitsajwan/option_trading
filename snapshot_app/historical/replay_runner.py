@@ -12,7 +12,7 @@ from typing import Iterable, Optional
 import pandas as pd
 
 from contracts_app import build_snapshot_event, historical_snapshot_topic
-from snapshot_app.market_snapshot_contract import validate_market_snapshot
+from snapshot_app.core.market_snapshot_contract import validate_market_snapshot
 from snapshot_app.redis_publisher import RedisEventPublisher
 
 from .parquet_store import ParquetStore

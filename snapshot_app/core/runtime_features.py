@@ -107,9 +107,11 @@ def _add_group_features(group: pd.DataFrame) -> pd.DataFrame:
     oi_std = out["fut_oi"].rolling(20, min_periods=5).std(ddof=0).replace(0.0, np.nan)
     out["fut_oi_zscore_20"] = (out["fut_oi"] - oi_roll) / oi_std
 
-    out["atm_call_return_1m"] = out["opt_0_ce_close"].pct_change(1, fill_method=None)
-    out["atm_put_return_1m"] = out["opt_0_pe_close"].pct_change(1, fill_method=None)
-    out["atm_oi_change_1m"] = (out["opt_0_ce_oi"] + out["opt_0_pe_oi"]).diff()
+    atm_strike = _first_numeric_series(out, ["opt_flow_atm_strike", "atm_strike"])
+    same_atm_as_prev = atm_strike.notna() & atm_strike.eq(atm_strike.shift(1))
+    out["atm_call_return_1m"] = out["opt_0_ce_close"].pct_change(1, fill_method=None).where(same_atm_as_prev)
+    out["atm_put_return_1m"] = out["opt_0_pe_close"].pct_change(1, fill_method=None).where(same_atm_as_prev)
+    out["atm_oi_change_1m"] = ((out["opt_0_ce_oi"] + out["opt_0_pe_oi"]).diff()).where(same_atm_as_prev)
     out["ce_pe_oi_diff"] = out["ce_oi_total"] - out["pe_oi_total"]
     out["ce_pe_volume_diff"] = out["ce_volume_total"] - out["pe_volume_total"]
     out["options_volume_total"] = out["ce_volume_total"] + out["pe_volume_total"]

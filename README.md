@@ -166,7 +166,7 @@ python -m stop_apps --include-dashboard
 - Session-gated live processing (IST market hours).
 - Fail-closed token behavior (invalid/missing token keeps ingestion idle).
 - Live and historical topics are isolated.
-- Snapshot builder contract is centralized in `snapshot_app.market_snapshot`.
+- Snapshot builder contract is centralized in `snapshot_app.core.market_snapshot`.
 
 ## Service Docs
 

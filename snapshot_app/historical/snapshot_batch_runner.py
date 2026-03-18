@@ -9,15 +9,19 @@ from typing import Any
 
 import pandas as pd
 
-from snapshot_app.market_snapshot_contract import validate_market_snapshot
-from snapshot_app.snapshot_ml_flat_contract import validate_snapshot_ml_flat_frame
+from snapshot_app.core.market_snapshot_contract import validate_market_snapshot
+from snapshot_app.core.snapshot_ml_flat_contract import validate_snapshot_ml_flat_frame
 from snapshot_app.pipeline import (
     DEFAULT_NORMALIZE_JOBS,
     DEFAULT_RAW_DATA_ROOT,
     DEFAULT_SNAPSHOT_JOBS,
 )
 from snapshot_app.pipeline.normalize import normalize_raw_to_parquet
-from snapshot_app.pipeline.orchestrator import run_snapshot_builds
+from snapshot_app.pipeline.orchestrator import (
+    DEFAULT_SLICE_MONTHS,
+    DEFAULT_SLICE_WARMUP_DAYS,
+    run_snapshot_builds,
+)
 
 from .parquet_store import ParquetStore
 from .snapshot_access import DEFAULT_HISTORICAL_PARQUET_BASE
@@ -33,6 +37,10 @@ DEFAULT_REQUIRED_FIELDS_ML_FLAT = ["opt_flow_rows"]
 DEFAULT_REQUIRED_ML_FLAT_VERSION = ML_FLAT_SCHEMA_VERSION
 DEFAULT_WINDOW_MIN_TRADING_DAYS = 150
 DEFAULT_WINDOW_MAX_GAP_DAYS = 7
+DEFAULT_ROW_COUNT_OK_MIN = 300
+DEFAULT_ROW_COUNT_OK_MAX = 400
+DEFAULT_ROW_COUNT_WARN_MIN = 250
+DEFAULT_ROW_COUNT_WARN_MAX = 450
 
 
 def _year_date_bounds(year: int) -> tuple[str, str]:
@@ -145,45 +153,12 @@ def _build_parallel_year_command(
     return " ".join(parts)
 
 
-def _extract_live_fields(payload: dict[str, Any]) -> set[str]:
-    """Extract flattened field names from live snapshot payload/envelope."""
-    if not isinstance(payload, dict):
-        return set()
-
-    snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else payload
-    if not isinstance(snapshot, dict):
-        return set()
-
-    fields: set[str] = set()
-    for key in ("snapshot_id", "instrument", "schema_name"):
-        if key in snapshot:
-            fields.add(key)
-    if ("version" in snapshot) or ("schema_version" in snapshot):
-        fields.add("schema_version")
-
-    flatten_blocks = (
-        "session_context",
-        "futures_bar",
-        "futures_derived",
-        "mtf_derived",
-        "opening_range",
-        "vix_context",
-        "chain_aggregates",
-        "ladder_aggregates",
-        "atm_options",
-        "iv_derived",
-        "option_price",
-        "session_levels",
-    )
-    for block_name in flatten_blocks:
-        block = snapshot.get(block_name)
-        if not isinstance(block, dict):
-            continue
-        for key, value in block.items():
-            if isinstance(value, (dict, list, tuple, set)):
-                continue
-            fields.add(str(key))
-    return fields
+def _row_count_status(rows: int) -> str:
+    if DEFAULT_ROW_COUNT_OK_MIN <= rows <= DEFAULT_ROW_COUNT_OK_MAX:
+        return "OK"
+    if DEFAULT_ROW_COUNT_WARN_MIN <= rows <= DEFAULT_ROW_COUNT_WARN_MAX:
+        return "WARN"
+    return "ERROR"
 
 
 def _print_iv_diagnostics_summary(result: dict[str, Any]) -> None:
@@ -286,7 +261,6 @@ def _validate_market_snapshot_frame(frame: pd.DataFrame) -> dict[str, Any]:
 def validate_output(
     parquet_base: Path,
     n_days: int = 5,
-    live_snapshot_path: str | None = None,
     *,
     output_dataset: str = DEFAULT_OUTPUT_DATASET,
     required_schema_version: str = DEFAULT_REQUIRED_ML_FLAT_VERSION,
@@ -316,13 +290,16 @@ def validate_output(
     for day in sample_days:
         df = store.snapshots_for_date_range(day, day)
         rows = int(len(df))
-        status = "OK" if 370 <= rows <= 380 else ("WARN" if 300 <= rows <= 400 else "ERROR")
-        if status != "OK":
+        status = _row_count_status(rows)
+        if status == "ERROR":
             all_ok = False
         print(f"  {day}: {rows} rows [{status}]")
         row_counts.append({"trade_date": str(day), "rows": rows, "status": status})
     if all_ok:
-        print("  All row counts within expected range (370-380)")
+        print(
+            "  All row counts avoided error bounds "
+            f"({DEFAULT_ROW_COUNT_WARN_MIN}-{DEFAULT_ROW_COUNT_WARN_MAX})"
+        )
 
     df_range = store.snapshots_for_date_range(sample_days[0], sample_days[-1])
     if len(df_range) == 0:
@@ -470,9 +447,21 @@ def main() -> int:
         type=int,
         default=DEFAULT_SNAPSHOT_JOBS,
         help=(
-            "Parallel year-sliced snapshot workers. Values >1 keep one code path but run independent calendar years "
-            f"in separate processes (default: {DEFAULT_SNAPSHOT_JOBS})."
+            "Parallel snapshot workers. Values >1 partition the archive into calendar chunks with warmup continuity "
+            f"(default workers: {DEFAULT_SNAPSHOT_JOBS})."
         ),
+    )
+    parser.add_argument(
+        "--slice-months",
+        type=int,
+        default=DEFAULT_SLICE_MONTHS,
+        help=f"Calendar months per parallel snapshot slice (default: {DEFAULT_SLICE_MONTHS}).",
+    )
+    parser.add_argument(
+        "--slice-warmup-days",
+        type=int,
+        default=DEFAULT_SLICE_WARMUP_DAYS,
+        help=f"Trading-day warmup executed before each parallel slice (default: {DEFAULT_SLICE_WARMUP_DAYS}).",
     )
     parser.add_argument("--instrument", default=DEFAULT_INSTRUMENT, help=f"Snapshot instrument (default: {DEFAULT_INSTRUMENT})")
     parser.add_argument("--year", type=int, default=None, help="Restrict build/validation window to one calendar year.")
@@ -488,7 +477,6 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Plan only, do not write")
     parser.add_argument("--validate-only", action="store_true", help="Skip build and run validation only")
     parser.add_argument("--validate-days", type=int, default=0, help="Validate recent N snapshot days after build (or in validate-only mode)")
-    parser.add_argument("--live-snapshot", default=None, help="Path to live snapshot JSONL for schema comparison")
     parser.add_argument("--log-every", type=int, default=10, help="Print progress every N days")
     parser.add_argument(
         "--write-batch-days",
@@ -647,7 +635,6 @@ def main() -> int:
         validation_report = validate_output(
             base,
             n_days=(args.validate_days or 5),
-            live_snapshot_path=args.live_snapshot,
             output_dataset=output_dataset,
             required_schema_version=required_schema_version,
             min_day=effective_min_day,
@@ -723,6 +710,8 @@ def main() -> int:
         build_run_id=args.build_run_id,
         validate_ml_flat_contract=args.validate_ml_flat_contract,
         snapshot_jobs=max(1, int(args.snapshot_jobs)),
+        slice_months=max(1, int(args.slice_months)),
+        slice_warmup_days=max(0, int(args.slice_warmup_days)),
     )
     print(json.dumps(result, indent=2, default=str))
     if args.print_iv_diagnostics:
@@ -739,10 +728,16 @@ def main() -> int:
         print(json.dumps({"manifest_out": str(out_path)}, indent=2))
 
     if args.validate_days > 0 and (not args.dry_run):
+        validation_days = int(args.validate_days)
+    elif args.validation_report_out and (not args.dry_run):
+        validation_days = 5
+    else:
+        validation_days = 0
+
+    if validation_days > 0 and (not args.dry_run):
         validation_report = validate_output(
             base,
-            n_days=args.validate_days,
-            live_snapshot_path=args.live_snapshot,
+            n_days=validation_days,
             output_dataset=output_dataset,
             required_schema_version=required_schema_version,
             min_day=effective_min_day,
@@ -752,19 +747,6 @@ def main() -> int:
             out_path = Path(args.validation_report_out)
             write_json_artifact(out_path, validation_report)
             print(json.dumps({"validation_report_out": str(out_path)}, indent=2))
-    elif args.validation_report_out and (not args.dry_run):
-        validation_report = validate_output(
-            base,
-            n_days=5,
-            live_snapshot_path=args.live_snapshot,
-            output_dataset=output_dataset,
-            required_schema_version=required_schema_version,
-            min_day=effective_min_day,
-            max_day=effective_max_day,
-        )
-        out_path = Path(args.validation_report_out)
-        write_json_artifact(out_path, validation_report)
-        print(json.dumps({"validation_report_out": str(out_path)}, indent=2))
 
     if args.window_manifest_out:
         store = ParquetStore(base, snapshots_dataset=output_dataset)

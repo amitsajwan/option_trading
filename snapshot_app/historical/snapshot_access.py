@@ -53,14 +53,10 @@ class SnapshotAccessInfo:
 def _has_parquet(root: Path, *, mode: str) -> bool:
     if not root.exists():
         return False
-    if mode == SNAPSHOT_INPUT_MODE_ML_FLAT:
-        return next(root.glob("year=*/data.parquet"), None) is not None
     return next(root.rglob("*.parquet"), None) is not None
 
 
 def _glob_expr(root: Path, *, mode: str) -> str:
-    if mode == SNAPSHOT_INPUT_MODE_ML_FLAT:
-        return (root / "year=*" / "data.parquet").as_posix()
     return (root / "**" / "data.parquet").as_posix()
 
 

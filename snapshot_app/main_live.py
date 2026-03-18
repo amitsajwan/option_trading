@@ -26,8 +26,8 @@ from contracts_app import (
     seconds_until_next_open_ist,
     snapshot_topic,
 )
-from snapshot_app.market_snapshot import LiveMarketSnapshotBuilder
-from snapshot_app.market_snapshot_contract import CONTRACT_ID as MARKET_SNAPSHOT_CONTRACT_ID, validate_market_snapshot
+from snapshot_app.core.market_snapshot import LiveMarketSnapshotBuilder
+from snapshot_app.core.market_snapshot_contract import CONTRACT_ID as MARKET_SNAPSHOT_CONTRACT_ID, validate_market_snapshot
 
 from .health import evaluate as evaluate_health
 from .publisher import EventPublisher
@@ -143,7 +143,6 @@ def run_loop(
     publisher: EventPublisher,
     event_topic: str,
     out_jsonl: Optional[str],
-    enable_prev_session_baseline: bool,
     health_log_interval_sec: float,
     market_session_enabled: bool,
     market_timezone: str,
@@ -256,11 +255,6 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--ohlc-limit", type=int, default=1800)
     parser.add_argument("--out-jsonl", default=".run/snapshot_app/events.jsonl")
     parser.add_argument("--event-topic", default=None)
-    parser.add_argument(
-        "--disable-prev-session-baseline",
-        action="store_true",
-        help="Legacy no-op retained for CLI compatibility.",
-    )
     parser.add_argument("--health-log-interval-sec", type=float, default=30.0)
     parser.add_argument("--foreground", action="store_true")
     parser.add_argument("--run-dir", default=".run/snapshot_app")
@@ -344,7 +338,6 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         publisher=publisher,
         event_topic=topic,
         out_jsonl=(str(args.out_jsonl).strip() or None),
-        enable_prev_session_baseline=(not bool(args.disable_prev_session_baseline)),
         health_log_interval_sec=max(0.0, float(args.health_log_interval_sec)),
         market_session_enabled=market_session_enabled,
         market_timezone=market_timezone,

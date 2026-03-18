@@ -10,8 +10,11 @@ SYNC_RAW_ARCHIVE_FROM_GCS="${SYNC_RAW_ARCHIVE_FROM_GCS:-0}"
 PUBLISH_SNAPSHOT_PARQUET="${PUBLISH_SNAPSHOT_PARQUET:-1}"
 PUBLISH_DERIVED_ML_FLAT="${PUBLISH_DERIVED_ML_FLAT:-1}"
 PUBLISH_NORMALIZED_CACHE="${PUBLISH_NORMALIZED_CACHE:-0}"
+ALLOW_PARTIAL_PUBLISH="${ALLOW_PARTIAL_PUBLISH:-0}"
 NORMALIZE_JOBS="${NORMALIZE_JOBS:-24}"
 SNAPSHOT_JOBS="${SNAPSHOT_JOBS:-8}"
+SNAPSHOT_SLICE_MONTHS="${SNAPSHOT_SLICE_MONTHS:-6}"
+SNAPSHOT_SLICE_WARMUP_DAYS="${SNAPSHOT_SLICE_WARMUP_DAYS:-90}"
 VALIDATE_DAYS="${VALIDATE_DAYS:-5}"
 WINDOW_MIN_TRADING_DAYS="${WINDOW_MIN_TRADING_DAYS:-150}"
 WINDOW_MAX_GAP_DAYS="${WINDOW_MAX_GAP_DAYS:-7}"
@@ -48,14 +51,33 @@ fi
 
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
-python -m pip install --upgrade pip
-python -m pip install -r "${REPO_ROOT}/snapshot_app/requirements.txt"
+REQUIREMENTS_FILE="${REPO_ROOT}/snapshot_app/requirements.txt"
+REQ_HASH_FILE="${VENV_DIR}/.snapshot_requirements.sha256"
+CURRENT_REQ_HASH="$(
+  python - <<'PY' "${REQUIREMENTS_FILE}"
+import hashlib
+import sys
+from pathlib import Path
+
+print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+INSTALLED_REQ_HASH="$(cat "${REQ_HASH_FILE}" 2>/dev/null || true)"
+if [ "${CURRENT_REQ_HASH}" != "${INSTALLED_REQ_HASH}" ]; then
+  python -m pip install --upgrade pip
+  python -m pip install -r "${REPO_ROOT}/snapshot_app/requirements.txt"
+  printf '%s' "${CURRENT_REQ_HASH}" > "${REQ_HASH_FILE}"
+else
+  echo "snapshot_app requirements unchanged; skipping pip install"
+fi
 
 CMD=(
   python -m snapshot_app.historical.snapshot_batch_runner
   --base "${PARQUET_BASE}"
   --normalize-jobs "${NORMALIZE_JOBS}"
   --snapshot-jobs "${SNAPSHOT_JOBS}"
+  --slice-months "${SNAPSHOT_SLICE_MONTHS}"
+  --slice-warmup-days "${SNAPSHOT_SLICE_WARMUP_DAYS}"
   --build-source "${BUILD_SOURCE}"
   --build-run-id "${BUILD_RUN_ID}"
   --validate-ml-flat-contract
@@ -100,7 +122,33 @@ fi
   "${CMD[@]}"
 )
 
-if [ "${PUBLISH_SNAPSHOT_PARQUET}" = "1" ] && [ "${VALIDATE_ONLY}" != "1" ] && [ "${NORMALIZE_ONLY}" != "1" ]; then
+CAN_PUBLISH=1
+if [ "${VALIDATE_ONLY}" != "1" ] && [ "${NORMALIZE_ONLY}" != "1" ] && [ "${ALLOW_PARTIAL_PUBLISH}" != "1" ]; then
+  if [ ! -f "${MANIFEST_ROOT}/build_manifest.json" ]; then
+    echo "Skipping publish because build_manifest.json is missing (incomplete run)."
+    CAN_PUBLISH=0
+  else
+    PUBLISH_READY="$(
+      python - <<'PY' "${MANIFEST_ROOT}/build_manifest.json"
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+result = payload.get("result") or {}
+status = str(result.get("status") or "").strip()
+error_count = int(result.get("error_count") or 0)
+print("1" if status == "complete" and error_count == 0 else "0")
+PY
+    )"
+    if [ "${PUBLISH_READY}" != "1" ]; then
+      echo "Skipping publish because the snapshot build is incomplete or has errors. Set ALLOW_PARTIAL_PUBLISH=1 to override."
+      CAN_PUBLISH=0
+    fi
+  fi
+fi
+
+if [ "${PUBLISH_SNAPSHOT_PARQUET}" = "1" ] && [ "${CAN_PUBLISH}" = "1" ] && [ "${VALIDATE_ONLY}" != "1" ] && [ "${NORMALIZE_ONLY}" != "1" ]; then
   export REPO_ROOT PARQUET_BASE
   export REPORT_ROOT="${MANIFEST_ROOT}"
   export SNAPSHOT_PARQUET_BUCKET_URL="${SNAPSHOT_PARQUET_BUCKET_URL:?set SNAPSHOT_PARQUET_BUCKET_URL in operator.env}"
@@ -114,6 +162,6 @@ echo "Snapshot parquet pipeline complete."
 echo "  build run id: ${BUILD_RUN_ID}"
 echo "  parquet base: ${PARQUET_BASE}"
 echo "  report root: ${MANIFEST_ROOT}"
-if [ "${PUBLISH_SNAPSHOT_PARQUET}" = "1" ] && [ "${VALIDATE_ONLY}" != "1" ] && [ "${NORMALIZE_ONLY}" != "1" ]; then
+if [ "${PUBLISH_SNAPSHOT_PARQUET}" = "1" ] && [ "${CAN_PUBLISH}" = "1" ] && [ "${VALIDATE_ONLY}" != "1" ] && [ "${NORMALIZE_ONLY}" != "1" ]; then
   echo "  gcs target: ${SNAPSHOT_PARQUET_BUCKET_URL}"
 fi

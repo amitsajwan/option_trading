@@ -13,7 +13,7 @@ import redis
 from pymongo import MongoClient
 
 from contracts_app import build_snapshot_event, historical_snapshot_topic
-from snapshot_app.market_snapshot_contract import validate_market_snapshot
+from snapshot_app.core.market_snapshot_contract import validate_market_snapshot
 from snapshot_app.historical.parquet_store import ParquetStore
 from snapshot_app.historical.snapshot_access import (
     DEFAULT_HISTORICAL_PARQUET_BASE,

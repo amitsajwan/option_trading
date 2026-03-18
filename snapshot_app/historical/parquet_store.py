@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import pandas as pd
 
@@ -44,6 +44,7 @@ class ParquetStore:
         # This avoids accidental reads of quarantined/corrupt backups.
         self.snapshots_glob = (self._snapshots_root / "**" / "data.parquet").as_posix()
         self._options_columns: Optional[frozenset[str]] = None
+        self._connection: Optional["duckdb.DuckDBPyConnection"] = None
 
     @staticmethod
     def _glob(root: Path) -> str:
@@ -55,16 +56,24 @@ class ParquetStore:
             return False
         return next(root.rglob("*.parquet"), None) is not None
 
-    @staticmethod
-    def _con() -> "duckdb.DuckDBPyConnection":
-        return duckdb.connect(database=":memory:")
+    def _con(self) -> "duckdb.DuckDBPyConnection":
+        if self._connection is None:
+            self._connection = duckdb.connect(database=":memory:")
+        return self._connection
+
+    def close(self) -> None:
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+
+    def __del__(self) -> None:  # pragma: no cover - best effort cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _query(self, sql: str, params: list[Any] | None = None) -> pd.DataFrame:
-        con = self._con()
-        try:
-            return con.execute(sql, params or None).df()
-        finally:
-            con.close()
+        return self._con().execute(sql, params or None).df()
 
     def _ensure_snapshots_available(self, *, context: str) -> bool:
         if self._has_parquet(self._snapshots_root):
@@ -111,12 +120,17 @@ class ParquetStore:
             r"^(?P<underlying>[A-Z]+)"
             r"(?P<dd>\d{2})"
             r"(?P<mon>[A-Z]{3})"
-            r"(?P<yy>\d{2}|\d{4})"
-            r"(?P<strike>\d+)"
+            r"(?P<suffix>\d+)"
             r"(?P<option_type>CE|PE)$"
         )
-        parsed_strike = pd.to_numeric(parsed["strike"], errors="coerce")
-        parsed_expiry = parsed["dd"].fillna("") + parsed["mon"].fillna("") + parsed["yy"].fillna("")
+        suffix = parsed["suffix"].fillna("").astype(str)
+        use_four_digit_year = suffix.str.startswith("20") & (suffix.str.len() >= 9)
+        parsed_year = suffix.where(use_four_digit_year, suffix.str.slice(0, 2))
+        parsed_year.loc[use_four_digit_year] = suffix.loc[use_four_digit_year].str.slice(0, 4)
+        parsed_strike_text = suffix.where(use_four_digit_year, suffix.str.slice(2))
+        parsed_strike_text.loc[use_four_digit_year] = suffix.loc[use_four_digit_year].str.slice(4)
+        parsed_strike = pd.to_numeric(parsed_strike_text, errors="coerce")
+        parsed_expiry = parsed["dd"].fillna("") + parsed["mon"].fillna("") + parsed_year.fillna("")
 
         if "strike" not in out.columns:
             out["strike"] = parsed_strike
@@ -213,6 +227,46 @@ class ParquetStore:
         )
         return len(df) > 0
 
+    def all_days_with_options(
+        self,
+        *,
+        min_day: str | None = None,
+        max_day: str | None = None,
+    ) -> list[str]:
+        """Return sorted trade dates that have at least one option row."""
+        if not self._has_parquet(self._options_root):
+            return []
+
+        where = []
+        params: list[Any] = []
+        if min_day:
+            where.append("trade_date >= ?")
+            params.append(min_day)
+        if max_day:
+            where.append("trade_date <= ?")
+            params.append(max_day)
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+
+        df = self._query(
+            f"""
+            SELECT DISTINCT trade_date
+            FROM read_parquet('{self.options_glob}', hive_partitioning=true)
+            {clause}
+            ORDER BY trade_date ASC
+            """,
+            params=params or None,
+        )
+        return df["trade_date"].astype(str).tolist() if len(df) else []
+
+    @staticmethod
+    def _postprocess_futures_frame(df: pd.DataFrame) -> pd.DataFrame:
+        if len(df):
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+            for col in ("open", "high", "low", "close", "volume", "oi"):
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
+
     def futures_window(self, trade_date: str, lookback_days: int = 30) -> pd.DataFrame:
         """Return futures bars for day and prior lookback trading days."""
         if not self._has_parquet(self._futures_root):
@@ -243,12 +297,33 @@ class ParquetStore:
             """,
             params=[trade_date],
         )
-        if len(df):
-            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-            for col in ("open", "high", "low", "close", "volume", "oi"):
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-        return df
+        return self._postprocess_futures_frame(df)
+
+    def futures_window_for_days(self, trade_dates: Sequence[str]) -> pd.DataFrame:
+        """Return futures bars for an explicit ordered list of trade dates."""
+        if not self._has_parquet(self._futures_root):
+            return pd.DataFrame()
+
+        ordered_days = [str(day).strip() for day in trade_dates if str(day).strip()]
+        if not ordered_days:
+            return pd.DataFrame()
+
+        placeholders = ", ".join("?" for _ in ordered_days)
+        df = self._query(
+            f"""
+            SELECT
+                timestamp,
+                trade_date,
+                symbol,
+                open, high, low, close,
+                volume, oi
+            FROM read_parquet('{self.futures_glob}', hive_partitioning=true)
+            WHERE trade_date IN ({placeholders})
+            ORDER BY timestamp ASC
+            """,
+            params=ordered_days,
+        )
+        return self._postprocess_futures_frame(df)
 
     def options_for_day(self, trade_date: str) -> pd.DataFrame:
         """Return all option rows for one trade day."""

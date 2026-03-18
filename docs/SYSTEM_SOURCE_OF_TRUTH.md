@@ -15,7 +15,7 @@ If any active doc conflicts with code, code wins. If active docs conflict with e
   - `--position-size-multiplier <= 0.25`
   - guard artifact approval (`--ml-runtime-guard-file` or `ML_ENTRY_RUNTIME_GUARD_FILE`)
 - Event bus is Redis, persistence is MongoDB.
-- Canonical snapshot producer is `snapshot_app.market_snapshot.build_market_snapshot()` with `schema_version=3.0`.
+- Canonical snapshot producer is `snapshot_app.core.market_snapshot.build_market_snapshot()` with `schema_version=3.0`.
 
 ## 2. Active Gating Policy
 

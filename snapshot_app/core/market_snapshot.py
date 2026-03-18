@@ -12,10 +12,10 @@ import numpy as np
 import pandas as pd
 import requests
 from contracts_app import TimestampSourceMode, isoformat_ist
-from snapshot_app.market_snapshot_contract import SCHEMA_NAME, SCHEMA_VERSION
+from .market_snapshot_contract import SCHEMA_NAME, SCHEMA_VERSION
 
 try:
-    from snapshot_app.greeks_calculator import GreeksCalculator
+    from .greeks_calculator import GreeksCalculator
 except Exception:  # pragma: no cover - runtime dependency
     GreeksCalculator = None
 
@@ -36,7 +36,7 @@ def _credentials_candidates() -> List[Path]:
     if configured:
         out.append(Path(configured))
     out.append(Path.cwd() / "credentials.json")
-    out.append(Path(__file__).resolve().parents[3] / "credentials.json")
+    out.append(Path(__file__).resolve().parents[2] / "credentials.json")
     seen: set[str] = set()
     uniq: List[Path] = []
     for path in out:
@@ -129,6 +129,13 @@ def _to_ist_timestamp(value: Any) -> pd.Timestamp:
     return pd.Timestamp(ts.tz_convert(IST).tz_localize(None))
 
 
+def _coerce_ist_timestamp(value: Any) -> Any:
+    try:
+        return _to_ist_timestamp(value)
+    except Exception:
+        return pd.NaT
+
+
 def _option_expiry_date(chain_expiry: Any, trade_date: pd.Timestamp) -> pd.Timestamp:
     raw = str(chain_expiry or "").strip()
     if raw:
@@ -189,7 +196,7 @@ def _normalize_ohlc_frame(ohlc: pd.DataFrame) -> pd.DataFrame:
             out["timestamp"] = out["start_at"]
         else:
             raise ValueError("ohlc frame missing timestamp/start_at")
-    out["timestamp"] = out["timestamp"].map(_to_ist_timestamp)
+    out["timestamp"] = out["timestamp"].map(_coerce_ist_timestamp)
     for col in ("open", "high", "low", "close", "volume", "oi"):
         if col not in out.columns:
             out[col] = np.nan
@@ -841,6 +848,174 @@ class MarketSnapshotState:
     iv_history_non_expiry: Deque[float] = field(default_factory=lambda: deque(maxlen=30000))
     option_price_history: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=OPTION_PRICE_HISTORY_MAXLEN))
 
+
+@dataclass
+class PreparedMarketSnapshotWindow:
+    bars: pd.DataFrame
+    trade_date: pd.Timestamp
+    trade_date_key: str
+    futures_derived: pd.DataFrame
+    session_levels: Dict[str, Any]
+
+
+def prepare_market_snapshot_window(
+    ohlc: pd.DataFrame,
+    *,
+    current_trade_date: Optional[pd.Timestamp] = None,
+) -> PreparedMarketSnapshotWindow:
+    bars = _normalize_ohlc_frame(ohlc)
+    if len(bars) == 0:
+        raise ValueError("cannot prepare MarketSnapshot window: empty ohlc frame")
+
+    if current_trade_date is None:
+        current_trade_date = pd.Timestamp(pd.Timestamp(bars.iloc[-1]["timestamp"]).date())
+    resolved_trade_date = pd.Timestamp(current_trade_date).normalize()
+    trade_date_key = str(resolved_trade_date.date())
+
+    bars_calc = bars.copy()
+    bars_calc["trade_date"] = bars_calc["timestamp"].dt.date.astype(str)
+    bars_calc["minute_of_day"] = bars_calc["timestamp"].dt.hour * 60 + bars_calc["timestamp"].dt.minute
+    bars_calc["ret_1m"] = bars_calc["close"].pct_change(1, fill_method=None)
+    bars_calc["fut_return_1m"] = bars_calc["ret_1m"]
+    bars_calc["fut_return_3m"] = bars_calc["close"].pct_change(3, fill_method=None)
+    bars_calc["fut_return_5m"] = bars_calc["close"].pct_change(5, fill_method=None)
+    bars_calc["fut_return_15m"] = bars_calc["close"].pct_change(15, fill_method=None)
+    bars_calc["fut_return_30m"] = bars_calc["close"].pct_change(30, fill_method=None)
+    bars_calc["realized_vol_30m"] = (
+        bars_calc["ret_1m"].rolling(30, min_periods=30).std(ddof=1) * np.sqrt(252.0 * 375.0)
+    )
+
+    close = pd.to_numeric(bars_calc["close"], errors="coerce")
+    bars_calc["ema_9"] = close.ewm(span=9, adjust=False, min_periods=9).mean()
+    bars_calc["ema_21"] = close.ewm(span=21, adjust=False, min_periods=21).mean()
+    bars_calc["ema_50"] = close.ewm(span=50, adjust=False, min_periods=50).mean()
+    bars_calc["ema_9_slope"] = close.ewm(span=9, adjust=False).mean().diff()
+    bars_calc["ema_21_slope"] = close.ewm(span=21, adjust=False).mean().diff()
+    bars_calc["ema_50_slope"] = close.ewm(span=50, adjust=False).mean().diff()
+    bars_calc["atr_14"] = _atr_series(bars_calc, period=14)
+
+    same_day = bars_calc[bars_calc["trade_date"] == trade_date_key].copy()
+    if len(same_day) == 0:
+        raise ValueError(f"cannot prepare MarketSnapshot window: no bars for trade_date={trade_date_key}")
+
+    rv_profile = (
+        bars_calc[bars_calc["trade_date"] < trade_date_key]
+        .groupby("minute_of_day", sort=False)["realized_vol_30m"]
+        .mean()
+    )
+    same_day["vol_baseline"] = same_day["minute_of_day"].map(rv_profile)
+    same_day["vol_baseline_fallback"] = same_day["realized_vol_30m"].expanding(min_periods=20).mean()
+    invalid_vol_baseline = same_day["vol_baseline"].isna() | (same_day["vol_baseline"] <= 0.0)
+    same_day.loc[invalid_vol_baseline, "vol_baseline"] = same_day.loc[invalid_vol_baseline, "vol_baseline_fallback"]
+    same_day["vol_ratio"] = same_day["realized_vol_30m"] / same_day["vol_baseline"].replace(0.0, np.nan)
+
+    vol_profile = (
+        bars_calc[bars_calc["trade_date"] < trade_date_key]
+        .groupby("minute_of_day", sort=False)["volume"]
+        .mean()
+    )
+    same_day["vol_ref"] = same_day["minute_of_day"].map(vol_profile)
+    same_day["vol_ref_fallback"] = same_day["volume"].rolling(30, min_periods=10).mean()
+    invalid_vol_ref = same_day["vol_ref"].isna() | (same_day["vol_ref"] <= 0.0)
+    same_day.loc[invalid_vol_ref, "vol_ref"] = same_day.loc[invalid_vol_ref, "vol_ref_fallback"]
+    same_day["fut_volume_ratio"] = same_day["volume"] / same_day["vol_ref"].replace(0.0, np.nan)
+
+    oi_shift_30 = pd.to_numeric(bars_calc["oi"], errors="coerce").shift(30)
+    same_day["fut_oi_change_30m"] = (
+        pd.to_numeric(same_day["oi"], errors="coerce") - oi_shift_30.reindex(same_day.index)
+    )
+
+    typical_price = (same_day["high"] + same_day["low"] + same_day["close"]) / 3.0
+    volume = pd.to_numeric(same_day["volume"], errors="coerce").clip(lower=0.0)
+    valid_vwap = typical_price.notna() & volume.notna() & (volume > 0.0)
+    cumulative_volume = volume.where(valid_vwap, 0.0).cumsum()
+    cumulative_pv = (typical_price.where(valid_vwap, 0.0) * volume.where(valid_vwap, 0.0)).cumsum()
+    same_day["vwap"] = np.nan
+    positive_volume = cumulative_volume > 0.0
+    same_day.loc[positive_volume, "vwap"] = cumulative_pv.loc[positive_volume] / cumulative_volume.loc[positive_volume]
+    same_day["price_vs_vwap"] = (same_day["close"] - same_day["vwap"]) / same_day["vwap"].replace(0.0, np.nan)
+
+    same_day["atr_ratio"] = same_day["atr_14"] / same_day["close"].replace(0.0, np.nan)
+    atr_daily_percentile = _daily_atr_percentile(bars_calc, resolved_trade_date, period=14)
+    same_day["atr_daily_percentile"] = atr_daily_percentile
+
+    same_day["day_high"] = same_day["high"].cummax()
+    same_day["day_low"] = same_day["low"].cummin()
+    same_day["dist_from_day_high"] = (same_day["close"] - same_day["day_high"]) / same_day["day_high"].replace(0.0, np.nan)
+    same_day["dist_from_day_low"] = (same_day["close"] - same_day["day_low"]) / same_day["day_low"].replace(0.0, np.nan)
+
+    by_day = {}
+    for day_key, grp in bars_calc.groupby("trade_date", sort=True):
+        by_day[str(day_key)] = grp.sort_values("timestamp")
+    day_keys = sorted(by_day.keys())
+    prev_day_key = None
+    for day_key in day_keys:
+        if day_key < trade_date_key:
+            prev_day_key = day_key
+        else:
+            break
+
+    prev_day_high = prev_day_low = prev_day_close = None
+    week_high = week_low = overnight_gap = None
+    if prev_day_key is not None:
+        prev_df = by_day[prev_day_key]
+        prev_day_high = _nullable_float(prev_df["high"].max())
+        prev_day_low = _nullable_float(prev_df["low"].min())
+        prev_day_close = _nullable_float(prev_df["close"].iloc[-1])
+        prev_window_days = [day_key for day_key in day_keys if day_key < trade_date_key][-5:]
+        if prev_window_days:
+            window = pd.concat([by_day[day_key] for day_key in prev_window_days], ignore_index=True)
+            week_high = _nullable_float(window["high"].max())
+            week_low = _nullable_float(window["low"].min())
+        today_df = by_day.get(trade_date_key)
+        today_open = _safe_float(today_df["open"].iloc[0]) if today_df is not None and len(today_df) else float("nan")
+        if prev_day_close is not None and np.isfinite(today_open) and prev_day_close != 0.0:
+            overnight_gap = float((today_open - prev_day_close) / prev_day_close)
+
+    futures_derived = same_day.loc[
+        :,
+        [
+            "fut_return_1m",
+            "fut_return_3m",
+            "fut_return_5m",
+            "fut_return_15m",
+            "fut_return_30m",
+            "realized_vol_30m",
+            "vol_ratio",
+            "fut_volume_ratio",
+            "fut_oi_change_30m",
+            "ema_9",
+            "ema_21",
+            "ema_50",
+            "ema_9_slope",
+            "ema_21_slope",
+            "ema_50_slope",
+            "vwap",
+            "price_vs_vwap",
+            "atr_ratio",
+            "atr_daily_percentile",
+            "dist_from_day_high",
+            "dist_from_day_low",
+        ],
+    ].copy()
+
+    session_levels = {
+        "prev_day_high": prev_day_high,
+        "prev_day_low": prev_day_low,
+        "prev_day_close": prev_day_close,
+        "week_high": week_high,
+        "week_low": week_low,
+        "overnight_gap": _nullable_float(overnight_gap),
+    }
+
+    return PreparedMarketSnapshotWindow(
+        bars=bars,
+        trade_date=resolved_trade_date,
+        trade_date_key=trade_date_key,
+        futures_derived=futures_derived,
+        session_levels=session_levels,
+    )
+
 def build_market_snapshot(
     *,
     instrument: str,
@@ -851,19 +1026,54 @@ def build_market_snapshot(
     vix_live_current: Optional[float] = None,
     prev_session_chain_baseline: Optional[Dict[str, Any]] = None,
     risk_free_rate_default: float = 0.065,
+    prepared_window: Optional[PreparedMarketSnapshotWindow] = None,
+    current_index: Optional[int] = None,
 ) -> Dict[str, Any]:
     if state is None:
         state = MarketSnapshotState()
 
-    bars = _normalize_ohlc_frame(ohlc)
-    if len(bars) == 0:
-        raise ValueError("cannot build MarketSnapshot: empty ohlc frame")
+    if prepared_window is None:
+        bars = _normalize_ohlc_frame(ohlc)
+        if len(bars) == 0:
+            raise ValueError("cannot build MarketSnapshot: empty ohlc frame")
+        resolved_index = int(len(bars) - 1 if current_index is None else current_index)
+        if resolved_index < 0 or resolved_index >= len(bars):
+            raise IndexError(
+                f"current_index out of range for prepared MarketSnapshot window: {resolved_index}"
+            )
+        prepared_window = prepare_market_snapshot_window(
+            bars,
+            current_trade_date=pd.Timestamp(pd.Timestamp(bars.iloc[resolved_index]["timestamp"]).date()),
+        )
+    else:
+        bars = prepared_window.bars
+        if len(bars) == 0:
+            raise ValueError("cannot build MarketSnapshot: empty prepared MarketSnapshot window")
+        resolved_index = int(len(bars) - 1 if current_index is None else current_index)
+        if resolved_index < 0 or resolved_index >= len(bars):
+            raise IndexError(
+                f"current_index out of range for prepared MarketSnapshot window: {resolved_index}"
+            )
 
-    latest = bars.iloc[-1]
+    latest = bars.iloc[resolved_index]
     ts = pd.Timestamp(latest["timestamp"])
     trade_date = pd.Timestamp(ts.date())
     minute_of_day = int(ts.hour * 60 + ts.minute)
     snapshot_id = ts.strftime("%Y%m%d_%H%M")
+
+    if prepared_window.trade_date_key != str(trade_date.date()) or resolved_index not in prepared_window.futures_derived.index:
+        prefix_bars = bars.iloc[: resolved_index + 1].copy()
+        prepared_window = prepare_market_snapshot_window(
+            prefix_bars,
+            current_trade_date=trade_date,
+        )
+        bars = prepared_window.bars
+        resolved_index = len(bars) - 1
+        latest = bars.iloc[resolved_index]
+        ts = pd.Timestamp(latest["timestamp"])
+        trade_date = pd.Timestamp(ts.date())
+        minute_of_day = int(ts.hour * 60 + ts.minute)
+        snapshot_id = ts.strftime("%Y%m%d_%H%M")
 
     fut_close = _safe_float(latest.get("close"))
     strikes = _extract_chain_strikes(chain)
@@ -880,6 +1090,7 @@ def build_market_snapshot(
     dte_days = max(dte_days, 0)
     minutes_since_open = _minutes_since_open(ts)
     minutes_to_close = _minutes_to_close(ts)
+    prefix_bars = bars.iloc[: resolved_index + 1].copy()
     mss1 = {
         "snapshot_id": snapshot_id,
         "timestamp": isoformat_ist(ts.to_pydatetime(), naive_mode=TimestampSourceMode.MARKET_IST),
@@ -904,99 +1115,34 @@ def build_market_snapshot(
         "fut_oi": _nullable_int(latest.get("oi")),
     }
 
-    bars_calc = bars.copy()
-    bars_calc["ret_1m"] = bars_calc["close"].pct_change(1, fill_method=None)
-    bars_calc["fut_return_1m"] = bars_calc["ret_1m"]
-    bars_calc["fut_return_3m"] = bars_calc["close"].pct_change(3, fill_method=None)
-    bars_calc["fut_return_5m"] = bars_calc["close"].pct_change(5, fill_method=None)
-    bars_calc["fut_return_15m"] = bars_calc["close"].pct_change(15, fill_method=None)
-    bars_calc["fut_return_30m"] = bars_calc["close"].pct_change(30, fill_method=None)
-    bars_calc["realized_vol_30m"] = (
-        bars_calc["ret_1m"].rolling(30, min_periods=30).std(ddof=0) * np.sqrt(252.0 * 375.0)
-    )
+    bars_calc = prefix_bars.copy()
     bars_calc["trade_date"] = bars_calc["timestamp"].dt.date.astype(str)
     bars_calc["minute_of_day"] = bars_calc["timestamp"].dt.hour * 60 + bars_calc["timestamp"].dt.minute
     same_day = bars_calc[bars_calc["trade_date"] == str(trade_date.date())].copy()
-
-    rv_now = _safe_float(bars_calc["realized_vol_30m"].iloc[-1])
-    rv_profile = (
-        bars_calc[bars_calc["trade_date"] < str(trade_date.date())]
-        .groupby("minute_of_day", sort=False)["realized_vol_30m"]
-        .mean()
-    )
-    vol_baseline = _safe_float(rv_profile.get(minute_of_day))
-    if not np.isfinite(vol_baseline) or vol_baseline <= 0.0:
-        vol_baseline = _safe_float(same_day["realized_vol_30m"].expanding(min_periods=20).mean().iloc[-1])
-    vol_ratio = float(rv_now / vol_baseline) if np.isfinite(rv_now) and np.isfinite(vol_baseline) and vol_baseline > 0 else float("nan")
-
-    vol_profile = (
-        bars_calc[bars_calc["trade_date"] < str(trade_date.date())]
-        .groupby("minute_of_day", sort=False)["volume"]
-        .mean()
-    )
-    vol_ref = _safe_float(vol_profile.get(minute_of_day))
-    if not np.isfinite(vol_ref) or vol_ref <= 0.0:
-        vol_ref = _safe_float(same_day["volume"].rolling(30, min_periods=10).mean().iloc[-1])
-    fut_volume = _safe_float(latest.get("volume"))
-    fut_volume_ratio = float(fut_volume / vol_ref) if np.isfinite(fut_volume) and np.isfinite(vol_ref) and vol_ref > 0 else float("nan")
-
-    oi_prev_30 = _safe_float(bars_calc["oi"].shift(30).iloc[-1])
-    oi_now = _safe_float(latest.get("oi"))
-    fut_oi_change_30m = float(oi_now - oi_prev_30) if np.isfinite(oi_now) and np.isfinite(oi_prev_30) else float("nan")
-    ema_9 = _ema_last(bars_calc["close"], span=9)
-    ema_21 = _ema_last(bars_calc["close"], span=21)
-    ema_50 = _ema_last(bars_calc["close"], span=50)
-    ema_9_slope = _nullable_float(pd.to_numeric(bars_calc.get("close"), errors="coerce").ewm(span=9, adjust=False).mean().diff().iloc[-1])
-    ema_21_slope = _nullable_float(pd.to_numeric(bars_calc.get("close"), errors="coerce").ewm(span=21, adjust=False).mean().diff().iloc[-1])
-    ema_50_slope = _nullable_float(pd.to_numeric(bars_calc.get("close"), errors="coerce").ewm(span=50, adjust=False).mean().diff().iloc[-1])
-    vwap = _session_vwap(same_day)
-    price_vs_vwap = (
-        float((fut_close - vwap) / vwap)
-        if np.isfinite(fut_close) and vwap is not None and vwap != 0.0
-        else float("nan")
-    )
-    atr_14 = _atr_last(bars_calc, period=14)
-    atr_ratio = (
-        float(atr_14 / fut_close)
-        if atr_14 is not None and np.isfinite(fut_close) and fut_close != 0.0
-        else float("nan")
-    )
-    atr_daily_percentile = _daily_atr_percentile(bars_calc, trade_date, period=14)
-    day_high = _safe_float(same_day["high"].cummax().iloc[-1]) if len(same_day) else float("nan")
-    day_low = _safe_float(same_day["low"].cummin().iloc[-1]) if len(same_day) else float("nan")
-    dist_from_day_high = (
-        float((fut_close - day_high) / day_high)
-        if np.isfinite(fut_close) and np.isfinite(day_high) and day_high != 0.0
-        else float("nan")
-    )
-    dist_from_day_low = (
-        float((fut_close - day_low) / day_low)
-        if np.isfinite(fut_close) and np.isfinite(day_low) and day_low != 0.0
-        else float("nan")
-    )
+    current_futures = prepared_window.futures_derived.loc[resolved_index]
 
     mss3 = {
-        "fut_return_1m": _nullable_float(bars_calc["fut_return_1m"].iloc[-1]),
-        "fut_return_3m": _nullable_float(bars_calc["fut_return_3m"].iloc[-1]),
-        "fut_return_5m": _nullable_float(bars_calc["fut_return_5m"].iloc[-1]),
-        "fut_return_15m": _nullable_float(bars_calc["fut_return_15m"].iloc[-1]),
-        "fut_return_30m": _nullable_float(bars_calc["fut_return_30m"].iloc[-1]),
-        "realized_vol_30m": _nullable_float(rv_now),
-        "vol_ratio": _nullable_float(vol_ratio),
-        "fut_volume_ratio": _nullable_float(fut_volume_ratio),
-        "fut_oi_change_30m": _nullable_int(fut_oi_change_30m),
-        "ema_9": ema_9,
-        "ema_21": ema_21,
-        "ema_50": ema_50,
-        "ema_9_slope": ema_9_slope,
-        "ema_21_slope": ema_21_slope,
-        "ema_50_slope": ema_50_slope,
-        "vwap": vwap,
-        "price_vs_vwap": _nullable_float(price_vs_vwap),
-        "atr_ratio": _nullable_float(atr_ratio),
-        "atr_daily_percentile": _nullable_float(atr_daily_percentile),
-        "dist_from_day_high": _nullable_float(dist_from_day_high),
-        "dist_from_day_low": _nullable_float(dist_from_day_low),
+        "fut_return_1m": _nullable_float(current_futures.get("fut_return_1m")),
+        "fut_return_3m": _nullable_float(current_futures.get("fut_return_3m")),
+        "fut_return_5m": _nullable_float(current_futures.get("fut_return_5m")),
+        "fut_return_15m": _nullable_float(current_futures.get("fut_return_15m")),
+        "fut_return_30m": _nullable_float(current_futures.get("fut_return_30m")),
+        "realized_vol_30m": _nullable_float(current_futures.get("realized_vol_30m")),
+        "vol_ratio": _nullable_float(current_futures.get("vol_ratio")),
+        "fut_volume_ratio": _nullable_float(current_futures.get("fut_volume_ratio")),
+        "fut_oi_change_30m": _nullable_int(current_futures.get("fut_oi_change_30m")),
+        "ema_9": _nullable_float(current_futures.get("ema_9")),
+        "ema_21": _nullable_float(current_futures.get("ema_21")),
+        "ema_50": _nullable_float(current_futures.get("ema_50")),
+        "ema_9_slope": _nullable_float(current_futures.get("ema_9_slope")),
+        "ema_21_slope": _nullable_float(current_futures.get("ema_21_slope")),
+        "ema_50_slope": _nullable_float(current_futures.get("ema_50_slope")),
+        "vwap": _nullable_float(current_futures.get("vwap")),
+        "price_vs_vwap": _nullable_float(current_futures.get("price_vs_vwap")),
+        "atr_ratio": _nullable_float(current_futures.get("atr_ratio")),
+        "atr_daily_percentile": _nullable_float(current_futures.get("atr_daily_percentile")),
+        "dist_from_day_high": _nullable_float(current_futures.get("dist_from_day_high")),
+        "dist_from_day_low": _nullable_float(current_futures.get("dist_from_day_low")),
     }
     mss_mtf = _compute_mtf_block(bars_calc)
 
@@ -1294,34 +1440,11 @@ def build_market_snapshot(
         total_pe_volume=total_pe_volume,
     )
 
-    bars_levels = bars_calc.copy()
-    by_day = {}
-    for d, grp in bars_levels.groupby("trade_date", sort=True):
-        by_day[str(d)] = grp.sort_values("timestamp")
-    current_day_key = str(trade_date.date())
-    day_keys = sorted(by_day.keys())
     prev_day_key = None
-    for d in day_keys:
-        if d < current_day_key:
-            prev_day_key = d
-        else:
-            break
-    prev_day_high = prev_day_low = prev_day_close = None
-    week_high = week_low = overnight_gap = None
-    if prev_day_key is not None:
-        prev_df = by_day[prev_day_key]
-        prev_day_high = _nullable_float(prev_df["high"].max())
-        prev_day_low = _nullable_float(prev_df["low"].min())
-        prev_day_close = _nullable_float(prev_df["close"].iloc[-1])
-        prev_window_days = [d for d in day_keys if d < current_day_key][-5:]
-        if prev_window_days:
-            window = pd.concat([by_day[d] for d in prev_window_days], ignore_index=True)
-            week_high = _nullable_float(window["high"].max())
-            week_low = _nullable_float(window["low"].min())
-        today_df = by_day.get(current_day_key)
-        today_open = _safe_float(today_df["open"].iloc[0]) if today_df is not None and len(today_df) else float("nan")
-        if prev_day_close is not None and np.isfinite(today_open) and prev_day_close != 0.0:
-            overnight_gap = float((today_open - prev_day_close) / prev_day_close)
+    current_day_key = str(trade_date.date())
+    prior_day_values = sorted({str(x.get("trade_date")) for x in state.chain_history if str(x.get("trade_date")) < current_day_key})
+    if prior_day_values:
+        prev_day_key = prior_day_values[-1]
 
     prev_day_pcr = None
     prev_day_max_pain = None
@@ -1337,12 +1460,12 @@ def build_market_snapshot(
             if prev_day_max_pain is None:
                 prev_day_max_pain = _nullable_int(last_prev.get("max_pain"))
     mss9 = {
-        "prev_day_high": prev_day_high,
-        "prev_day_low": prev_day_low,
-        "prev_day_close": prev_day_close,
-        "week_high": week_high,
-        "week_low": week_low,
-        "overnight_gap": _nullable_float(overnight_gap),
+        "prev_day_high": _nullable_float(prepared_window.session_levels.get("prev_day_high")),
+        "prev_day_low": _nullable_float(prepared_window.session_levels.get("prev_day_low")),
+        "prev_day_close": _nullable_float(prepared_window.session_levels.get("prev_day_close")),
+        "week_high": _nullable_float(prepared_window.session_levels.get("week_high")),
+        "week_low": _nullable_float(prepared_window.session_levels.get("week_low")),
+        "overnight_gap": _nullable_float(prepared_window.session_levels.get("overnight_gap")),
         "prev_day_pcr": prev_day_pcr,
         "prev_day_max_pain": prev_day_max_pain,
     }

@@ -39,24 +39,39 @@ class _FakeStore:
             "2024-01-02",
         ]
 
+    def available_snapshot_days(self, min_day: str | None = None, max_day: str | None = None) -> list[str]:
+        return []
 
-def test_run_snapshot_builds_parallel_year_slices_aggregates(monkeypatch, tmp_path: Path) -> None:
-    calls: list[tuple[str | None, str | None]] = []
+
+def test_run_snapshot_builds_parallel_slices_aggregate_results(monkeypatch, tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
 
     def _fake_run_snapshot_batch(**kwargs):
-        calls.append((kwargs.get("min_day"), kwargs.get("max_day")))
+        calls.append(
+            {
+                "min_day": kwargs.get("min_day"),
+                "max_day": kwargs.get("max_day"),
+                "planned_days": list(kwargs.get("planned_days") or []),
+                "emit_days": list(kwargs.get("emit_days") or kwargs.get("explicit_days") or []),
+                "partition_key": kwargs.get("partition_key"),
+            }
+        )
+        emitted = list(kwargs.get("emit_days") or kwargs.get("explicit_days") or [])
+        warmup = list(kwargs.get("planned_days") or [])
         return {
             "status": "complete",
-            "days_available": 1,
-            "days_pending": 1,
-            "days_processed": 1,
+            "days_available": len(emitted),
+            "days_pending": len(emitted),
+            "days_processed": len(emitted),
+            "warmup_days_processed": max(0, len(warmup) - len(emitted)),
             "days_skipped_existing": 0,
             "days_skipped_missing_inputs": 0,
             "days_no_rows": 0,
             "error_count": 0,
             "error_days": [],
-            "total_rows": 10,
-            "iv_diagnostics": {"minutes": 10, "ce_iv_non_null": 5},
+            "total_rows": 10 * len(emitted),
+            "total_snapshot_rows": 10 * len(emitted),
+            "iv_diagnostics": {"minutes": 10 * len(emitted), "ce_iv_non_null": 5 * len(emitted)},
             "iv_diagnostics_days_with_failures": [],
             "elapsed_sec": 1.5,
         }
@@ -70,11 +85,73 @@ def test_run_snapshot_builds_parallel_year_slices_aggregates(monkeypatch, tmp_pa
         parquet_base=tmp_path,
         instrument="BANKNIFTY-I",
         snapshot_jobs=2,
+        slice_months=6,
+        slice_warmup_days=1,
     )
 
     assert result["status"] == "complete"
-    assert result["parallel_year_slices"] == 2
-    assert result["days_processed"] == 2
-    assert result["total_rows"] == 20
-    assert result["iv_diagnostics"]["minutes"] == 20
-    assert sorted(calls) == [("2023-12-29", "2023-12-29"), ("2024-01-01", "2024-01-02")]
+    assert result["parallel_slices"] == 2
+    assert result["days_processed"] == 3
+    assert result["warmup_days_processed"] == 1
+    assert result["total_rows"] == 30
+    assert result["iv_diagnostics"]["minutes"] == 30
+    assert len(calls) == 2
+    assert calls[0]["planned_days"] == ["2023-12-29"]
+    assert calls[0]["emit_days"] == ["2023-12-29"]
+    assert calls[1]["planned_days"] == ["2023-12-29", "2024-01-01", "2024-01-02"]
+    assert calls[1]["emit_days"] == ["2024-01-01", "2024-01-02"]
+
+
+def test_run_snapshot_builds_sparse_explicit_days_keep_internal_continuity(monkeypatch, tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
+
+    class _SparseStore(_FakeStore):
+        def available_days(self, min_day: str | None = None, max_day: str | None = None) -> list[str]:
+            return [
+                "2024-01-01",
+                "2024-01-02",
+                "2024-01-03",
+            ]
+
+    def _fake_run_snapshot_batch(**kwargs):
+        calls.append(
+            {
+                "planned_days": list(kwargs.get("planned_days") or []),
+                "emit_days": list(kwargs.get("emit_days") or []),
+            }
+        )
+        return {
+            "status": "complete",
+            "days_available": len(kwargs.get("emit_days") or []),
+            "days_pending": len(kwargs.get("emit_days") or []),
+            "days_processed": len(kwargs.get("emit_days") or []),
+            "warmup_days_processed": max(0, len(kwargs.get("planned_days") or []) - len(kwargs.get("emit_days") or [])),
+            "days_skipped_existing": 0,
+            "days_skipped_missing_inputs": 0,
+            "days_no_rows": 0,
+            "error_count": 0,
+            "error_days": [],
+            "total_rows": 10,
+            "total_snapshot_rows": 10,
+            "iv_diagnostics": {"minutes": 10},
+            "iv_diagnostics_days_with_failures": [],
+            "elapsed_sec": 1.0,
+        }
+
+    monkeypatch.setattr("snapshot_app.pipeline.orchestrator.ParquetStore", _SparseStore)
+    monkeypatch.setattr("snapshot_app.pipeline.orchestrator.run_snapshot_batch", _fake_run_snapshot_batch)
+    monkeypatch.setattr("snapshot_app.pipeline.orchestrator.ProcessPoolExecutor", _FakeExecutor)
+    monkeypatch.setattr("snapshot_app.pipeline.orchestrator.as_completed", lambda futures: list(futures))
+
+    run_snapshot_builds(
+        parquet_base=tmp_path,
+        instrument="BANKNIFTY-I",
+        explicit_days=["2024-01-01", "2024-01-03"],
+        snapshot_jobs=2,
+        slice_months=1,
+        slice_warmup_days=0,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["planned_days"] == ["2024-01-01", "2024-01-02", "2024-01-03"]
+    assert calls[0]["emit_days"] == ["2024-01-01", "2024-01-03"]

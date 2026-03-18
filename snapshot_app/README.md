@@ -1,12 +1,13 @@
 # snapshot_app
 
-Builds and publishes the canonical live `MarketSnapshot` contract and derives historical `snapshots_ml_flat` for ML research.
+Builds and publishes the canonical live `MarketSnapshot` contract and the historical snapshot datasets used by research and staged ML.
 
 ## Ownership
 - Owns snapshot assembly runtime and publishing.
-- Historical `MarketSnapshot` builder lives in `snapshot_app/market_snapshot.py`.
+- Historical `MarketSnapshot` builder lives in `snapshot_app/core/market_snapshot.py`.
 - Historical raw-to-snapshot orchestration lives in `snapshot_app/pipeline/`.
-- Derived flat ML projection lives in `snapshot_app/live_ml_flat.py` and `snapshot_app/historical/snapshot_batch.py`.
+- Derived flat ML projection lives in `snapshot_app/core/live_ml_flat.py` and `snapshot_app/historical/snapshot_batch.py`.
+- Stage-view projections live in `snapshot_app/core/stage_views.py`.
 - `main_live.py` emits one event per new `snapshot_id`.
 
 ## Entrypoint
@@ -21,8 +22,9 @@ Builds and publishes the canonical live `MarketSnapshot` contract and derives hi
 - Full user guide: `snapshot_app/historical/README.md`
 - This is the single historical code path.
 - It can start either from raw CSV root (`--raw-root C:\code\banknifty_data`) or from an existing parquet cache.
-- It writes canonical `snapshots` plus derived `snapshots_ml_flat` from the same run.
-- It reuses `snapshot_app/market_snapshot.py` for canonical snapshot logic and `snapshot_app.pipeline` for raw normalization/orchestration.
+- It writes canonical `snapshots`, derived `snapshots_ml_flat`, and staged parquet views from the same run.
+- It reuses `snapshot_app/core/market_snapshot.py` for canonical snapshot logic and `snapshot_app.pipeline` for raw normalization/orchestration.
+- Parallel historical builds now use chunked calendar partitions with warmup continuity.
 
 ## Data and Time Convention
 - Session/business timestamps are IST-focused.

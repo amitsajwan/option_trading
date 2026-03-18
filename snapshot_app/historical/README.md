@@ -32,8 +32,11 @@ Input options:
 - `.data/ml_pipeline/parquet_data/vix/vix.parquet`
 
 Output:
-- `.data/ml_pipeline/parquet_data/snapshots/year=YYYY/data.parquet` (canonical `MarketSnapshot` contract)
-- `.data/ml_pipeline/parquet_data/snapshots_ml_flat/year=YYYY/data.parquet` (derived ML-flat contract)
+- `.data/ml_pipeline/parquet_data/snapshots/**/data.parquet` (canonical `MarketSnapshot` contract)
+- `.data/ml_pipeline/parquet_data/snapshots_ml_flat/**/data.parquet` (derived ML-flat contract)
+- `.data/ml_pipeline/parquet_data/stage1_entry_view/**/data.parquet`
+- `.data/ml_pipeline/parquet_data/stage2_direction_view/**/data.parquet`
+- `.data/ml_pipeline/parquet_data/stage3_recipe_view/**/data.parquet`
 
 Each trading minute now produces:
 - one canonical nested `MarketSnapshot`
@@ -153,16 +156,32 @@ python -m snapshot_app.historical.snapshot_batch_runner --min-day 2022-01-01 --m
 python -m snapshot_app.historical.snapshot_batch_runner --year 2024 --validate-ml-flat-contract --validate-days 5
 ```
 
-Year-sliced runs are safe for parallel execution because each worker writes a different yearly parquet file. They do not preserve cross-run carried state across `YYYY-12-31 -> YYYY+1-01-01`; continuous multi-year state can be added later if required.
+On larger machines, the runner now uses chunked calendar partitions with warmup continuity when `--snapshot-jobs > 1`.
 
-On larger machines, the runner now has two performance levers:
+Current performance levers:
 - `--normalize-jobs` for raw CSV to parquet conversion
-- `--snapshot-jobs` for year-sliced snapshot workers
+- `--snapshot-jobs` for parallel snapshot workers
+- `--slice-months` for calendar months per parallel chunk
+- `--slice-warmup-days` for pre-chunk state warmup
 
-Example for a 32-core box:
+Recommended fast full-build settings:
 
 ```powershell
-python -m snapshot_app.historical.snapshot_batch_runner --raw-root C:\code\banknifty_data --normalize-jobs 24 --snapshot-jobs 8
+python -m snapshot_app.historical.snapshot_batch_runner --raw-root C:\code\banknifty_data --normalize-jobs 8 --snapshot-jobs 8 --slice-months 6 --slice-warmup-days 90
+```
+
+Important:
+- the chunked builder writes under `year=YYYY/chunk=.../data.parquet`
+- if you already have old legacy outputs like `snapshots/year=2024/data.parquet`, delete the existing snapshot output roots before the first full chunked rebuild
+
+Legacy yearly/flat outputs to remove before a clean full rebuild:
+
+```powershell
+Remove-Item -Recurse -Force .data\ml_pipeline\parquet_data\snapshots
+Remove-Item -Recurse -Force .data\ml_pipeline\parquet_data\snapshots_ml_flat
+Remove-Item -Recurse -Force .data\ml_pipeline\parquet_data\stage1_entry_view
+Remove-Item -Recurse -Force .data\ml_pipeline\parquet_data\stage2_direction_view
+Remove-Item -Recurse -Force .data\ml_pipeline\parquet_data\stage3_recipe_view
 ```
 
 ## Broadcast Historical Snapshots (L3 Replay)

@@ -8,12 +8,12 @@ from typing import Any, Deque, Dict, Optional
 import numpy as np
 import pandas as pd
 
-from snapshot_app.market_snapshot import (
+from .market_snapshot import (
     LiveMarketSnapshotBuilder,
     _extract_underlying_symbol,
     _normalize_ohlc_frame,
 )
-from snapshot_app.runtime_features import (
+from .runtime_features import (
     _add_cross_session_atr_percentile,
     _add_dealer_proxy_features,
     _add_dte_features,
@@ -21,7 +21,7 @@ from snapshot_app.runtime_features import (
     _add_vix_features,
     attach_regime_features,
 )
-from snapshot_app.snapshot_ml_flat_contract import load_contract_schema, load_legacy_mapping, validate_snapshot_ml_flat_rows
+from .snapshot_ml_flat_contract import load_contract_schema, load_legacy_mapping, validate_snapshot_ml_flat_rows
 
 
 _CONTRACT_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -208,11 +208,11 @@ def _build_runtime_compat_payload(
     work = panel.sort_values("timestamp").copy()
     closes = pd.to_numeric(work.get("fut_close"), errors="coerce")
     rets = closes.pct_change(fill_method=None)
-    realized_vol_30m = _nullable_float(rets.rolling(30, min_periods=10).std().iloc[-1]) if len(rets) else None
+    realized_vol_30m = _nullable_float(rets.rolling(30, min_periods=10).std(ddof=1).iloc[-1]) if len(rets) else None
     if len(work) >= 40:
         same_day = work[work["trade_date"].astype(str) == str(ts.date())].copy()
         same_day_rets = pd.to_numeric(same_day.get("fut_close"), errors="coerce").pct_change(fill_method=None)
-        baseline = same_day_rets.rolling(30, min_periods=10).std().expanding(min_periods=20).mean().iloc[-1]
+        baseline = same_day_rets.rolling(30, min_periods=10).std(ddof=1).expanding(min_periods=20).mean().iloc[-1]
         baseline_value = _nullable_float(baseline)
     else:
         baseline_value = None
@@ -242,9 +242,9 @@ def _build_runtime_compat_payload(
     elif vix_current is not None and vix_current <= 20.0:
         vix_regime = "NORMAL"
     elif vix_current is not None:
-        vix_regime = "HIGH"
+        vix_regime = "ELEVATED"
     else:
-        vix_regime = ""
+        vix_regime = None
 
     opening_range_high = _nullable_float(feature_row.get("opening_range_high"))
     opening_range_low = _nullable_float(feature_row.get("opening_range_low"))
@@ -371,8 +371,8 @@ def _build_runtime_compat_payload(
         "iv_derived": {
             "iv_skew": _nullable_float(feature_row.get("iv_skew")),
             "iv_percentile": None,
-            "iv_regime": "",
-            "iv_expiry_type": "",
+            "iv_regime": None,
+            "iv_expiry_type": None,
         },
         "strikes": strikes,
         "session_phase": session_phase,

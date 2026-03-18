@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from snapshot_app.runtime_features import _add_group_features
+from snapshot_app.core.runtime_features import _add_group_features
 from strategy_app.engines.rolling_feature_state import RollingFeatureState
 from strategy_app.engines.snapshot_accessor import SnapshotAccessor
 

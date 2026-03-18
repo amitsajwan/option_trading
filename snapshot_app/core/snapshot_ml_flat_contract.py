@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from snapshot_app.market_snapshot_contract import SCHEMA_VERSION as FINAL_SNAPSHOT_SCHEMA_VERSION
+from .market_snapshot_contract import SCHEMA_VERSION as FINAL_SNAPSHOT_SCHEMA_VERSION
 
 CONTRACT_ID = "snapshot_ml_flat"
 CONTRACT_FILES_DIR = "snapshot_ml_flat"
@@ -126,7 +126,7 @@ FIELD_TYPES = {
 
 
 def _default_contract_dir() -> Path:
-    return Path(__file__).resolve().parent / "contracts" / CONTRACT_FILES_DIR
+    return Path(__file__).resolve().parents[1] / "contracts" / CONTRACT_FILES_DIR
 
 
 def load_contract_schema(contract_dir: Optional[Path] = None) -> Dict[str, Any]:
@@ -302,6 +302,11 @@ def _check_tier2(frame: pd.DataFrame, rules: Dict[str, Any]) -> List[str]:
     if "time_minute_index" not in frame.columns:
         return ["tier2 requires time_minute_index column"]
 
+    continuity_cols = {
+        "opt_flow_atm_call_return_1m",
+        "opt_flow_atm_put_return_1m",
+        "opt_flow_atm_oi_change_1m",
+    }
     day_order = {day: idx + 1 for idx, day in enumerate(sorted({_stringify_day(value) for value in frame["trade_date"].tolist()}))}
     for col in cols:
         if col not in frame.columns:
@@ -314,6 +319,15 @@ def _check_tier2(frame: pd.DataFrame, rules: Dict[str, Any]) -> List[str]:
                 continue
             grp_idx = pd.to_numeric(grp["time_minute_index"], errors="coerce")
             eligible = grp_idx >= warmup_bars
+            if col in continuity_cols:
+                if "opt_flow_atm_strike" not in grp.columns:
+                    errors.append(f"tier2 requires opt_flow_atm_strike column for {col}")
+                    continue
+                atm_strike = pd.to_numeric(grp["opt_flow_atm_strike"], errors="coerce")
+                eligible = eligible & atm_strike.notna() & atm_strike.eq(atm_strike.shift(1))
+                if "opt_flow_rows" in grp.columns:
+                    opt_rows = pd.to_numeric(grp["opt_flow_rows"], errors="coerce")
+                    eligible = eligible & (opt_rows > 0.0)
             eligible_count = int(eligible.sum())
             if eligible_count <= 0:
                 continue

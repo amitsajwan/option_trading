@@ -115,6 +115,14 @@ It will:
 4. write build and validation reports
 5. optionally upload final parquet to GCS
 
+Important runtime knobs:
+
+- `SNAPSHOT_JOBS`
+- `SNAPSHOT_SLICE_MONTHS`
+- `SNAPSHOT_SLICE_WARMUP_DAYS`
+
+The current fast path uses chunked snapshot partitions with warmup continuity, not calendar-year-only workers.
+
 ### `publish_snapshot_parquet.sh`
 
 Syncs local final parquet outputs to `SNAPSHOT_PARQUET_BUCKET_URL`.
