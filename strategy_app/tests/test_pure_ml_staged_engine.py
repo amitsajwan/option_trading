@@ -91,24 +91,38 @@ def _snapshot(ts: str) -> dict[str, object]:
 
 
 class PureMLStagedEngineTests(unittest.TestCase):
-    def _write_bundle(self, root: Path, *, recipe_probs: dict[str, float]) -> tuple[Path, Path]:
+    def _write_bundle(
+        self,
+        root: Path,
+        *,
+        recipe_probs: dict[str, float],
+        runtime_gate_ids: list[str] | None = None,
+        runtime_block_expiry: bool = False,
+        stage1_feature_columns: list[str] | None = None,
+        stage2_feature_columns: list[str] | None = None,
+        stage3_feature_columns: list[str] | None = None,
+    ) -> tuple[Path, Path]:
         model_path = root / "model.joblib"
         threshold_path = root / "thresholds.json"
+        gate_ids = runtime_gate_ids or ["rollout_guard_v1", "feature_freshness_v1", "liquidity_gate_v1"]
+        stage1_features = stage1_feature_columns or ["fut_return_5m", "pcr"]
+        stage2_features = stage2_feature_columns or ["fut_return_5m", "pcr"]
+        stage3_features = stage3_feature_columns or ["realized_vol_30m", "stage1_entry_prob", "stage2_direction_up_prob"]
         bundle = {
             "kind": "ml_pipeline_2_staged_runtime_bundle_v1",
-            "runtime": {"prefilter_gate_ids": ["rollout_guard_v1", "feature_freshness_v1", "liquidity_gate_v1"]},
+            "runtime": {"prefilter_gate_ids": gate_ids, "block_expiry": runtime_block_expiry},
             "stages": {
                 "stage1": {
-                    "model_package": _single_target_package(prob=0.80, model_key="move", prob_col="move_prob", feature_columns=["fut_return_5m", "pcr"]),
+                    "model_package": _single_target_package(prob=0.80, model_key="move", prob_col="move_prob", feature_columns=stage1_features),
                     "view_name": "stage1_entry_view",
                 },
                 "stage2": {
-                    "model_package": _single_target_package(prob=0.75, model_key="direction", prob_col="direction_up_prob", feature_columns=["fut_return_5m", "pcr"]),
+                    "model_package": _single_target_package(prob=0.75, model_key="direction", prob_col="direction_up_prob", feature_columns=stage2_features),
                     "view_name": "stage2_direction_view",
                 },
                 "stage3": {
                     "recipe_packages": {
-                        recipe_id: _single_target_package(prob=prob, model_key="move", prob_col="move_prob", feature_columns=["realized_vol_30m", "stage1_entry_prob", "stage2_direction_up_prob"])
+                        recipe_id: _single_target_package(prob=prob, model_key="move", prob_col="move_prob", feature_columns=stage3_features)
                         for recipe_id, prob in recipe_probs.items()
                     },
                     "view_name": "stage3_recipe_view",
@@ -120,7 +134,7 @@ class PureMLStagedEngineTests(unittest.TestCase):
             "stage1": {"selected_threshold": 0.55},
             "stage2": {"selected_ce_threshold": 0.60, "selected_pe_threshold": 0.60, "selected_min_edge": 0.10},
             "stage3": {"selected_threshold": 0.60, "selected_margin_min": 0.10},
-            "runtime": {"prefilter_gate_ids": ["rollout_guard_v1", "feature_freshness_v1", "liquidity_gate_v1"]},
+            "runtime": {"prefilter_gate_ids": gate_ids, "block_expiry": runtime_block_expiry},
             "recipe_catalog": [
                 {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008},
                 {"recipe_id": "L1", "horizon_minutes": 15, "take_profit_pct": 0.0020, "stop_loss_pct": 0.0008},
@@ -182,6 +196,115 @@ class PureMLStagedEngineTests(unittest.TestCase):
                     signal_logger=SignalLogger(root),
                     max_feature_age_sec=10_000_000,
                 )
+
+    def test_staged_bundle_backfills_missing_stage_view_fields_from_rolling_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            model_path, threshold_path = self._write_bundle(
+                root,
+                recipe_probs={"L0": 0.82, "L1": 0.55},
+                runtime_gate_ids=["rollout_guard_v1", "feature_completeness_v1", "feature_freshness_v1", "liquidity_gate_v1"],
+                stage1_feature_columns=["fut_return_5m"],
+                stage2_feature_columns=["fut_return_5m"],
+                stage3_feature_columns=["stage1_entry_prob", "stage2_direction_up_prob"],
+            )
+            engine = PureMLEngine(
+                model_package_path=str(model_path),
+                threshold_report_path=str(threshold_path),
+                signal_logger=SignalLogger(root),
+                max_feature_age_sec=10_000_000,
+                max_nan_features=0,
+            )
+            engine.on_session_start(date(2026, 3, 18))
+
+            signal = None
+            for idx, close in enumerate((50000.0, 50010.0, 50020.0, 50030.0, 50040.0, 50060.0), start=15):
+                snap = _snapshot(f"2026-03-18T09:{idx:02d}:00+05:30")
+                snap["futures_bar"] = {
+                    "fut_open": close - 5.0,
+                    "fut_high": close + 10.0,
+                    "fut_low": close - 10.0,
+                    "fut_close": close,
+                    "fut_volume": 10_000.0 + idx * 100.0,
+                    "fut_oi": 100_000.0 + idx * 10.0,
+                }
+                snap["futures_derived"] = {
+                    "fut_return_15m": 0.020,
+                    "realized_vol_30m": 0.010,
+                    "vol_ratio": 1.2,
+                    "price_vs_vwap": 0.001,
+                }
+                signal = engine.evaluate(snap)
+
+            self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertEqual(signal.signal_type, SignalType.ENTRY)
+            self.assertEqual(signal.direction, "CE")
+
+    def test_staged_bundle_warns_when_constructor_min_edge_is_overridden(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            model_path, threshold_path = self._write_bundle(root, recipe_probs={"L0": 0.82, "L1": 0.55})
+            with self.assertLogs("strategy_app.engines.pure_ml_engine", level="WARNING") as logs:
+                PureMLEngine(
+                    model_package_path=str(model_path),
+                    threshold_report_path=str(threshold_path),
+                    signal_logger=SignalLogger(root),
+                    max_feature_age_sec=10_000_000,
+                    min_edge=0.05,
+                )
+            self.assertTrue(any("ignores constructor min_edge" in message for message in logs.output))
+
+    def test_staged_bundle_can_block_expiry_via_runtime_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            model_path, threshold_path = self._write_bundle(
+                root,
+                recipe_probs={"L0": 0.82, "L1": 0.55},
+                runtime_gate_ids=["rollout_guard_v1", "regime_gate_v1", "feature_freshness_v1", "liquidity_gate_v1"],
+                runtime_block_expiry=True,
+            )
+            engine = PureMLEngine(
+                model_package_path=str(model_path),
+                threshold_report_path=str(threshold_path),
+                signal_logger=SignalLogger(root),
+                max_feature_age_sec=10_000_000,
+            )
+            engine.on_session_start(date(2026, 3, 18))
+            snap = _snapshot("2026-03-18T09:30:00+05:30")
+            snap["session_context"]["is_expiry_day"] = True
+            snap["session_context"]["days_to_expiry"] = 0
+
+            signal = engine.evaluate(snap)
+
+            self.assertIsNone(signal)
+
+    def test_staged_bundle_default_runtime_policy_does_not_block_expiry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            model_path, threshold_path = self._write_bundle(
+                root,
+                recipe_probs={"L0": 0.82, "L1": 0.55},
+                runtime_gate_ids=["rollout_guard_v1", "regime_gate_v1", "feature_freshness_v1", "liquidity_gate_v1"],
+                runtime_block_expiry=False,
+            )
+            engine = PureMLEngine(
+                model_package_path=str(model_path),
+                threshold_report_path=str(threshold_path),
+                signal_logger=SignalLogger(root),
+                max_feature_age_sec=10_000_000,
+            )
+            engine.on_session_start(date(2026, 3, 18))
+            snap = _snapshot("2026-03-18T09:30:00+05:30")
+            snap["session_context"]["is_expiry_day"] = True
+            snap["session_context"]["days_to_expiry"] = 0
+
+            signal = engine.evaluate(snap)
+
+            self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertEqual(signal.signal_type, SignalType.ENTRY)
+            self.assertEqual(signal.direction, "CE")
 
 
 if __name__ == "__main__":

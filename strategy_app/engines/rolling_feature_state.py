@@ -127,6 +127,7 @@ class RollingFeatureState:
         self._ema_21: Optional[float] = None
         self._ema_50: Optional[float] = None
         self._last_day_atr: Optional[float] = None
+        self._last_atm_oi_sum: Optional[float] = None
 
     def on_session_start(self, trade_date: date) -> None:
         self._roll_day(str(trade_date))
@@ -156,6 +157,7 @@ class RollingFeatureState:
         self._ema_21 = None
         self._ema_50 = None
         self._last_day_atr = None
+        self._last_atm_oi_sum = None
 
     def update(self, snap: SnapshotAccessor) -> dict[str, object]:
         ts = snap.timestamp
@@ -270,6 +272,11 @@ class RollingFeatureState:
         trend_up = 1.0 if (snap.fut_return_5m is not None and snap.fut_return_15m is not None and snap.fut_return_5m > 0 and snap.fut_return_15m > 0) else 0.0
         trend_down = 1.0 if (snap.fut_return_5m is not None and snap.fut_return_15m is not None and snap.fut_return_5m < 0 and snap.fut_return_15m < 0) else 0.0
         is_near_expiry = 1.0 if (snap.days_to_expiry is not None and snap.days_to_expiry <= 1) else 0.0
+        prev_atm_oi_sum = self._prev_atm_oi_sum(snap) if (snap.atm_ce_oi is not None or snap.atm_pe_oi is not None) else None
+        atm_oi_change_1m = None
+        if prev_atm_oi_sum is not None and (snap.atm_ce_oi is not None or snap.atm_pe_oi is not None):
+            current_atm_oi_sum = float((snap.atm_ce_oi or 0.0) + (snap.atm_pe_oi or 0.0))
+            atm_oi_change_1m = float(current_atm_oi_sum - prev_atm_oi_sum)
 
         return {
             "ret_1m": ret_1m,
@@ -347,10 +354,7 @@ class RollingFeatureState:
                 self._atm_pe_closes[-2] if len(self._atm_pe_closes) >= 2 else None,
             ),
             "atm_oi_change_1m": (
-                float((snap.atm_ce_oi or 0.0) + (snap.atm_pe_oi or 0.0))
-                - float((self._prev_atm_oi_sum(snap) or 0.0))
-                if (snap.atm_ce_oi is not None or snap.atm_pe_oi is not None)
-                else None
+                atm_oi_change_1m
             ),
             "atm_iv": (
                 float(((snap.atm_ce_iv or 0.0) + (snap.atm_pe_iv or 0.0)) / 2.0)
@@ -364,6 +368,6 @@ class RollingFeatureState:
         current = None
         if snap.atm_ce_oi is not None or snap.atm_pe_oi is not None:
             current = float((snap.atm_ce_oi or 0.0) + (snap.atm_pe_oi or 0.0))
-        prev = getattr(self, "_last_atm_oi_sum", None)
+        prev = self._last_atm_oi_sum
         self._last_atm_oi_sum = current
         return _to_float(prev)

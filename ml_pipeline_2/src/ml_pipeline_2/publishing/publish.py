@@ -123,6 +123,22 @@ def _extract_thresholds(training_report: Dict[str, Any]) -> tuple[float, float]:
     raise ValueError("training report missing ce_threshold/pe_threshold")
 
 
+def _extract_block_expiry(training_report: Dict[str, Any]) -> bool:
+    candidates = [
+        training_report.get("runtime"),
+        training_report,
+        training_report.get("dual_mode_policy"),
+        training_report.get("trading_utility_config"),
+    ]
+    for payload in candidates:
+        if not isinstance(payload, dict) or "block_expiry" not in payload:
+            continue
+        value = payload.get("block_expiry")
+        if isinstance(value, bool):
+            return value
+    return False
+
+
 def _read_threshold_sweep_summary(path: Path) -> Dict[str, Any]:
     payload = _load_json(path)
     if not isinstance(payload, dict):
@@ -205,6 +221,9 @@ def _build_threshold_report(
         "feature_profile": training_report.get("feature_profile"),
         "objective": training_report.get("objective"),
         "trading_utility_config": trading_utility_config,
+        "runtime": {
+            "block_expiry": bool(_extract_block_expiry(training_report)),
+        },
         "input_contract": input_contract,
     }
 

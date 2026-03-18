@@ -87,6 +87,7 @@
     }
   },
   "runtime": {
+    "block_expiry": false,
     "prefilter_gate_ids": [
       "rollout_guard_v1",
       "risk_halt_pause_v1",

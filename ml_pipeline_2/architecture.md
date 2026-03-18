@@ -9,8 +9,8 @@ Design goals:
 - explicit ownership by package boundary
 - no model-building dependency on `ml_pipeline`
 - restart-safe artifact writing for long or failure-prone runs
-- clear separation between Stage 1 move detection and later Stage 2 direction logic
-- first-class publication of runtime-usable dual-side recovery models
+- explicit staged training across entry, direction, and recipe-selection steps
+- first-class publication of runtime-usable staged `ml_pure` bundles
 
 Operational runbook:
 - [`docs/ubuntu_gcp_runbook.md`](docs/ubuntu_gcp_runbook.md)
@@ -18,14 +18,19 @@ Operational runbook:
 ## Current Supported Flows
 
 Research scenarios:
+- `staged_dual_recipe_v1`
 - `phase2_label_sweep_v1`
 - `fo_expiry_aware_recovery_v1`
 
-Operator utility flow:
+Primary operator flow:
+- `run_staged_release.py`
+- `run_publish_model.py`
+
+Legacy utility flows:
 - `run_move_detector_quick.py`
 - `run_direction_from_move_quick.py`
 
-The move detector is not a replacement for the manifest-driven research runner. It is a bounded operator tool for fast Stage 1 binary experiments while the full Stage 2 direction workflow is still being built.
+The staged manifest-driven runner is the supported release lane for this branch. The quick runners remain in-tree as bounded research utilities and are not the primary operator path.
 
 ## Bounded Contexts
 
@@ -165,12 +170,26 @@ Owns:
 
 Current limitation:
 - `evaluation` is still directional-first
-- Stage 1 move detector quality is currently summarized by classification metrics in the quick runner, not by the promotion ladder
-- Stage 2 direction-from-move is also summarized by the quick runner today
+- staged release quality is summarized in `staged/pipeline.py` via holdout metrics and hard gates
+- the legacy quick runners still emit their own standalone summaries
 
 Key files:
 - [evaluation/stage_metrics.py](src/ml_pipeline_2/evaluation/stage_metrics.py)
 - [evaluation/direction.py](src/ml_pipeline_2/evaluation/direction.py)
+
+### `staged`
+
+Owns:
+- staged oracle target construction
+- Stage 1 / Stage 2 / Stage 3 orchestration
+- staged policy search and hard-gate assessment
+- staged runtime bundle and policy publication
+
+Key files:
+- [staged/pipeline.py](src/ml_pipeline_2/staged/pipeline.py)
+- [staged/publish.py](src/ml_pipeline_2/staged/publish.py)
+- [staged/registries.py](src/ml_pipeline_2/staged/registries.py)
+- [staged/recipes.py](src/ml_pipeline_2/staged/recipes.py)
 
 ### `experiment_control`
 
@@ -196,10 +215,9 @@ Owns:
 - run-id and model-group resolution for downstream consumers
 
 Current V1 scope:
-- publish only completed `fo_expiry_aware_recovery` runs
-- publish only the selected primary dual-side recipe
-- no meta-gate publishing
-- no quick-runner publishing
+- resolve published staged and recovery artifacts for downstream consumers
+- maintain run/latest publish reports under `artifacts/published_models`
+- support staged runtime switch-by-run-id for `ml_pure`
 
 Key files:
 - [publishing/publish.py](src/ml_pipeline_2/publishing/publish.py)
@@ -209,10 +227,12 @@ Key files:
 ### `scenario_flows`
 
 Owns orchestration only:
+- staged dual-recipe research
 - phase-2 label sweep
 - recovery research
 
 Key files:
+- [scenario_flows/staged_dual_recipe.py](src/ml_pipeline_2/scenario_flows/staged_dual_recipe.py)
 - [scenario_flows/phase2_label_sweep.py](src/ml_pipeline_2/scenario_flows/phase2_label_sweep.py)
 - [scenario_flows/fo_expiry_aware_recovery.py](src/ml_pipeline_2/scenario_flows/fo_expiry_aware_recovery.py)
 
@@ -221,6 +241,7 @@ Key files:
 Intended dependency direction:
 - `contracts` and `catalog` are foundational
 - `dataset_windowing`, `labeling`, `model_search`, `inference_contract`, and `evaluation` depend on foundation layers
+- `staged` composes labeling, model-search, and publish-facing contexts for the supported release lane
 - `scenario_flows` orchestrates core contexts
 - `experiment_control` dispatches into scenario flows
 - `run_move_detector_quick.py` may compose existing bounded contexts, but it must not bypass them by duplicating model or label logic inline
@@ -275,7 +296,19 @@ Current status:
 
 The flow we are currently building must be operable without editing Python for routine reruns.
 
-For the move detector lane, change these in JSON or CLI:
+For the supported staged lane, routine reruns should change only the checked-in staged manifest:
+- [configs/research/staged_dual_recipe.default.json](configs/research/staged_dual_recipe.default.json)
+
+The staged manifest owns:
+- parquet root and support dataset
+- train/valid/full-model/holdout windows
+- per-stage model catalogs and feature-set catalogs
+- per-stage policy grids
+- runtime prefilter gate ids
+- staged hard gates for publishability
+
+Legacy quick-runner knobs remain configurable in JSON or CLI:
+- move detector lane
 - input parquet paths
 - train/holdout windows
 - ATR multiplier
@@ -293,7 +326,7 @@ For the move detector lane, change these in JSON or CLI:
 Checked-in template:
 - [configs/research/move_detector_quick.default.json](configs/research/move_detector_quick.default.json)
 
-For the direction-from-move lane, change these in JSON or CLI:
+- direction-from-move lane
 - Stage 1 run directory
 - feature profile
 - one or more feature sets
@@ -313,7 +346,24 @@ Checked-in template:
 
 Long or fragile runs must persist byproducts early enough to restart without recomputing everything.
 
-The move detector lane now writes:
+The supported staged lane now writes:
+- `resolved_config.json`
+- `manifest_hash.txt`
+- `state.jsonl`
+- `stages/stage1/selection_model.joblib`
+- `stages/stage1/model.joblib`
+- `stages/stage2/selection_model.joblib`
+- `stages/stage2/model.joblib`
+- `stages/stage3/recipes/<recipe_id>/model.joblib`
+- `stages/*/training_report.json`
+- `stages/*/feature_contract.json`
+- `summary.json`
+- `release/assessment.json`
+- `release/ml_pure_runtime.env`
+- `release/release_summary.json`
+
+Legacy quick-runner artifacts:
+- move detector lane
 - `resolved_config.json`
 - `state.jsonl`
 - `model_window_features_windowed.parquet`
@@ -327,7 +377,7 @@ The move detector lane now writes:
 - `holdout_predictions.csv`
 - `summary.json`
 
-The direction-from-move lane now writes:
+- direction-from-move lane
 - `resolved_config.json`
 - `state.jsonl`
 - `stage1_reference.json`
@@ -375,11 +425,10 @@ Resume behavior:
 
 Not owned by `ml_pipeline_2` in this phase:
 - production training flows
-- publishing and activation
 - live inference runtime
 - old wrapper CLIs from `ml_pipeline`
-- full Stage 2 direction execution policy
 - portfolio/risk management
+- snapshot-stage-view generation
 
 ## Extension Rules
 

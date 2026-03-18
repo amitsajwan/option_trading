@@ -21,6 +21,7 @@ If you are using a side-specific threshold report, also verify:
 - `trained_side`
 - `ce_threshold`
 - `pe_threshold`
+- `runtime.block_expiry` for `ml_pure` lanes
 
 ### 0.2 Source of truth by field
 
@@ -28,6 +29,7 @@ If you are using a side-specific threshold report, also verify:
 - `trained_side`: from side-specific threshold/metadata artifact (if present)
 - `ce_threshold`, `pe_threshold`: from side-specific threshold report (if present)
 - `calibration_method`: from bundle segment (`calibration_method`) and/or experiment summary (`selected_calibration_method`)
+- `runtime.block_expiry`: from staged runtime policy or dual threshold report runtime block
 
 ### 0.3 Practical verification steps
 
@@ -42,6 +44,7 @@ If you are using a side-specific threshold report, also verify:
    - segment `threshold`
    - segment `calibration_method`
 4. If `trained_side` / `ce_threshold` / `pe_threshold` are absent, you are not on a side-specific threshold artifact; use the selected segment threshold/calibration fields as the operative runtime values.
+5. For `ml_pure` runtime, verify `runtime.block_expiry` explicitly. Current published defaults keep it `false`, so EXPIRY blocking is opt-in until changed by policy.
 
 ## 1. What Runs in Order
 
@@ -132,6 +135,20 @@ Decision reason becomes:
 
 - `ml: calibrated_score=... threshold=...` (allow), or
 - `ml: calibrated_score=...<threshold=...` (block)
+
+### 2.5a ML Pure expiry policy
+
+`ml_pure` runtimes now expose `runtime.block_expiry` in their runtime config:
+
+- dual path: threshold report `runtime.block_expiry`
+- staged path: staged runtime policy `runtime.block_expiry`
+
+Behavior:
+
+- `false` (current default): ML paths may trade on `EXPIRY` if their learned thresholds pass
+- `true`: both `ml_pure_dual` and `ml_pure_staged` hold on `EXPIRY` before entry scoring
+
+This keeps the choice explicit instead of leaving expiry handling to undocumented engine divergence.
 
 ### 2.6 How strategies and gates work together (actual runtime precedence)
 

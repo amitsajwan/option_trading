@@ -594,9 +594,10 @@ def _project_rows_to_ml_flat(
     ema_9_slope_raw = num("ema_9_slope")
     ema_21_slope_raw = num("ema_21_slope")
     ema_50_slope_raw = num("ema_50_slope")
-    out["ema_9_slope"] = ema_9_slope_raw.where(ema_9_slope_raw.notna(), out["ema_9"].diff())
-    out["ema_21_slope"] = ema_21_slope_raw.where(ema_21_slope_raw.notna(), out["ema_21"].diff())
-    out["ema_50_slope"] = ema_50_slope_raw.where(ema_50_slope_raw.notna(), out["ema_50"].diff())
+    close_denom = close.replace(0.0, np.nan)
+    out["ema_9_slope"] = ema_9_slope_raw.where(ema_9_slope_raw.notna(), out["ema_9"].diff() / close_denom)
+    out["ema_21_slope"] = ema_21_slope_raw.where(ema_21_slope_raw.notna(), out["ema_21"].diff() / close_denom)
+    out["ema_50_slope"] = ema_50_slope_raw.where(ema_50_slope_raw.notna(), out["ema_50"].diff() / close_denom)
 
     # Oscillators and volatility.
     rsi_legacy = num("osc_rsi_14", "rsi_14_1m")
@@ -614,9 +615,13 @@ def _project_rows_to_ml_flat(
         out["osc_atr_14"] / close.replace(0.0, np.nan),
     )
     atr_pct_legacy = num("osc_atr_percentile", "atr_percentile")
+    atr_daily_base = num("atr_daily_percentile")
     out["osc_atr_percentile"] = atr_pct_legacy.where(
         atr_pct_legacy.notna(),
-        out["osc_atr_ratio"].expanding(min_periods=20).rank(pct=True),
+        atr_daily_base.where(
+            atr_daily_base.notna(),
+            out["osc_atr_ratio"].expanding(min_periods=20).rank(pct=True),
+        ),
     )
     atr_daily_pct = num("osc_atr_daily_percentile", "atr_daily_percentile")
     out["osc_atr_daily_percentile"] = atr_daily_pct.where(atr_daily_pct.notna(), out["osc_atr_percentile"])

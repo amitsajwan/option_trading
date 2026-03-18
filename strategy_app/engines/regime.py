@@ -172,6 +172,9 @@ class RegimeClassifier:
         }
 
         if None in (r5m, r15m, r30m):
+            # Warmup policy: require full 5m/15m/30m history before classifying trend.
+            # When the regime gate is enabled, this can suppress entries during roughly
+            # the first 30 session minutes until r30m becomes available.
             return RegimeSignal(
                 regime=Regime.SIDEWAYS,
                 confidence=0.60,

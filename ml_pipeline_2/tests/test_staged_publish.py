@@ -6,9 +6,11 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+import pytest
 
 from ml_pipeline_2.publishing import resolve_ml_pure_artifacts, validate_switch_strict
-from ml_pipeline_2.staged.publish import publish_staged_run
+from ml_pipeline_2.staged.publish import publish_staged_run, release_staged_run
+from ml_pipeline_2.staged.runtime_contract import load_staged_runtime_policy
 
 
 class _ConstantProbModel:
@@ -59,6 +61,7 @@ def test_publish_staged_run_writes_runtime_bundle_and_resolver_can_switch(tmp_pa
         "recipe_catalog_id": "fixed_l0_l3_v1",
         "publish_assessment": {"decision": "PUBLISH", "publishable": True, "blocking_reasons": []},
         "runtime_prefilter_gate_ids": ["rollout_guard_v1", "feature_freshness_v1"],
+        "runtime_block_expiry": True,
         "policy_reports": {
             "stage1": {"policy_id": "entry_threshold_v1", "selected_threshold": 0.55},
             "stage2": {"policy_id": "direction_dual_threshold_v1", "selected_ce_threshold": 0.60, "selected_pe_threshold": 0.60, "selected_min_edge": 0.10},
@@ -97,7 +100,94 @@ def test_publish_staged_run_writes_runtime_bundle_and_resolver_can_switch(tmp_pa
     assert ok, reason
     threshold_report = json.loads(Path(str(resolved["threshold_report_path"])).read_text(encoding="utf-8"))
     assert threshold_report["kind"] == "ml_pipeline_2_staged_runtime_policy_v1"
+    assert threshold_report["runtime"]["block_expiry"] is True
     runtime_bundle = joblib.load(Path(str(resolved["model_package_path"])))
+    assert runtime_bundle["runtime"]["block_expiry"] is True
     assert runtime_bundle["stages"]["stage1"]["view_name"] == "stage1_entry_view"
     assert runtime_bundle["stages"]["stage2"]["view_name"] == "stage2_direction_view"
     assert sorted(runtime_bundle["stages"]["stage3"]["recipe_packages"]) == ["L0", "L1"]
+
+
+def test_release_staged_run_rejects_non_gcs_bucket_url(tmp_path: Path) -> None:
+    run_dir = tmp_path / "ml_pipeline_2" / "artifacts" / "research" / "staged_publish_fixture_20260318_010101"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "experiment_kind": "staged_dual_recipe_v1",
+                "run_id": run_dir.name,
+                "publish_assessment": {"decision": "PUBLISH", "publishable": True, "blocking_reasons": []},
+                "recipe_catalog_id": "fixed_l0_l3_v1",
+                "runtime_prefilter_gate_ids": [],
+                "policy_reports": {"stage1": {}, "stage2": {}, "stage3": {}},
+                "component_ids": {
+                    "stage1": {"view_id": "stage1_entry_view_v1"},
+                    "stage2": {"view_id": "stage2_direction_view_v1"},
+                    "stage3": {"view_id": "stage3_recipe_view_v1"},
+                },
+                "stage_artifacts": {
+                    "stage1": {"model_package_path": "missing"},
+                    "stage2": {"model_package_path": "missing"},
+                    "stage3": {"training_report_path": "missing", "recipes": [], "recipe_artifacts": {}},
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="model_bucket_url must start with gs://"):
+        release_staged_run(
+            run_dir=run_dir,
+            model_group="banknifty_futures/h15_tp_auto",
+            profile_id="openfe_v9_dual",
+            model_bucket_url="C:/tmp/not-a-bucket",
+        )
+
+
+def test_load_staged_runtime_policy_defaults_block_expiry_false(tmp_path: Path) -> None:
+    policy_path = tmp_path / "thresholds.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "kind": "ml_pipeline_2_staged_runtime_policy_v1",
+                "stage1": {"selected_threshold": 0.55},
+                "stage2": {"selected_ce_threshold": 0.60, "selected_pe_threshold": 0.60, "selected_min_edge": 0.10},
+                "stage3": {"selected_threshold": 0.60, "selected_margin_min": 0.10},
+                "runtime": {"prefilter_gate_ids": ["rollout_guard_v1"]},
+                "recipe_catalog": [
+                    {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008}
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = load_staged_runtime_policy(policy_path)
+
+    assert payload["runtime"]["block_expiry"] is False
+
+
+def test_load_staged_runtime_policy_rejects_non_bool_block_expiry(tmp_path: Path) -> None:
+    policy_path = tmp_path / "thresholds.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "kind": "ml_pipeline_2_staged_runtime_policy_v1",
+                "stage1": {"selected_threshold": 0.55},
+                "stage2": {"selected_ce_threshold": 0.60, "selected_pe_threshold": 0.60, "selected_min_edge": 0.10},
+                "stage3": {"selected_threshold": 0.60, "selected_margin_min": 0.10},
+                "runtime": {"prefilter_gate_ids": ["rollout_guard_v1"], "block_expiry": "true"},
+                "recipe_catalog": [
+                    {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008}
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="runtime.block_expiry must be boolean"):
+        load_staged_runtime_policy(policy_path)

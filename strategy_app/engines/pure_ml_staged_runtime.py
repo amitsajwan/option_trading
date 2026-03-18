@@ -11,6 +11,22 @@ from snapshot_app.core.stage_views import project_stage_views
 from ml_pipeline_2.inference_contract.predict import predict_probabilities_from_frame
 from ml_pipeline_2.staged.runtime_contract import STAGED_RUNTIME_BUNDLE_KIND, load_staged_runtime_policy
 
+_STAGED_ROLLING_ALIASES: dict[str, str] = {
+    "days_to_expiry": "dte_days",
+    "fut_return_1m": "ret_1m",
+    "fut_return_3m": "ret_3m",
+    "fut_return_5m": "ret_5m",
+    "rsi_14_1m": "rsi_14",
+    "price_vs_vwap": "vwap_distance",
+    "dist_from_day_high": "distance_from_day_high",
+    "dist_from_day_low": "distance_from_day_low",
+    "orh_broken": "opening_range_breakout_up",
+    "orl_broken": "opening_range_breakout_down",
+    "pcr": "pcr_oi",
+    "atm_ce_return_1m": "atm_call_return_1m",
+    "atm_pe_return_1m": "atm_put_return_1m",
+}
+
 
 @dataclass(frozen=True)
 class StagedRuntimeDecision:
@@ -53,8 +69,33 @@ def _feature_completeness_reason(feature_row: dict[str, object], package: dict[s
     return None
 
 
+def _is_missing_value(value: object) -> bool:
+    if value is None:
+        return True
+    try:
+        return not np.isfinite(float(value))
+    except Exception:
+        return False
+
+
+def _backfill_stage_row(view_row: dict[str, object], rolling_features: dict[str, object]) -> dict[str, object]:
+    if not rolling_features:
+        return dict(view_row)
+    out = dict(view_row)
+    for view_key, rolling_key in _STAGED_ROLLING_ALIASES.items():
+        if not _is_missing_value(out.get(view_key)):
+            continue
+        rolling_value = rolling_features.get(rolling_key)
+        if _is_missing_value(rolling_value):
+            continue
+        out[view_key] = rolling_value
+    return out
+
+
 def _score_prob(package: dict[str, Any], feature_row: dict[str, object], *, default_prob_col: str) -> float:
     feature_frame = pd.DataFrame([feature_row])
+    # The "error" policy here only guards against structurally absent columns.
+    # NaN content is checked separately by _feature_completeness_reason before scoring.
     probs, _ = predict_probabilities_from_frame(
         feature_frame,
         package,
@@ -71,6 +112,7 @@ def _run_prefilter_chain(engine: Any, snap: Any, stage1_row: dict[str, object], 
     regime_signal = None
     for gate_id in gate_ids:
         if gate_id == "rollout_guard_v1":
+            # Reserved for future percentage-rollout control; intentional no-op for now.
             continue
         if gate_id == "risk_halt_pause_v1":
             if engine._risk.is_halted:
@@ -90,10 +132,14 @@ def _run_prefilter_chain(engine: Any, snap: Any, stage1_row: dict[str, object], 
                 return stale_reason, None
         elif gate_id == "regime_gate_v1":
             regime_signal = regime_signal or engine._regime.classify(snap)
+            if engine._runtime_controls.block_expiry and regime_signal.regime.value == "EXPIRY":
+                return "regime_expiry", regime_signal
             if regime_signal.regime.value in {"SIDEWAYS", "AVOID"}:
                 return f"regime_{regime_signal.regime.value.lower()}", regime_signal
         elif gate_id == "regime_confidence_gate_v1":
             regime_signal = regime_signal or engine._regime.classify(snap)
+            if engine._runtime_controls.block_expiry and regime_signal.regime.value == "EXPIRY":
+                return "regime_expiry", regime_signal
             if float(regime_signal.confidence) < 0.60:
                 return "regime_low_confidence", regime_signal
         elif gate_id == "feature_completeness_v1":
@@ -102,6 +148,10 @@ def _run_prefilter_chain(engine: Any, snap: Any, stage1_row: dict[str, object], 
             continue
         else:
             raise ValueError(f"unknown staged runtime gate_id: {gate_id}")
+    if engine._runtime_controls.block_expiry:
+        regime_signal = regime_signal or engine._regime.classify(snap)
+        if regime_signal.regime.value == "EXPIRY":
+            return "regime_expiry", regime_signal
     return None, regime_signal
 
 
@@ -120,7 +170,7 @@ def predict_staged(
     stage3_packages = dict(((bundle.get("stages") or {}).get("stage3") or {}).get("recipe_packages") or {})
     recipe_catalog = list(policy.get("recipe_catalog") or [])
 
-    stage1_row = engine._merge_feature_rows(stage_views["stage1_entry_view"], rolling_features)
+    stage1_row = _backfill_stage_row(engine._merge_feature_rows(stage_views["stage1_entry_view"], rolling_features), rolling_features)
     gate_reason, _ = _run_prefilter_chain(engine, snap, stage1_row, gate_ids)
     if gate_reason is not None:
         return StagedRuntimeDecision(action="HOLD", reason=gate_reason)
@@ -134,7 +184,7 @@ def predict_staged(
     if float(entry_prob) < entry_threshold:
         return StagedRuntimeDecision(action="HOLD", reason="entry_below_threshold", entry_prob=float(entry_prob))
 
-    stage2_row = engine._merge_feature_rows(stage_views["stage2_direction_view"], rolling_features)
+    stage2_row = _backfill_stage_row(engine._merge_feature_rows(stage_views["stage2_direction_view"], rolling_features), rolling_features)
     if "feature_completeness_v1" in gate_ids:
         incomplete_reason = _feature_completeness_reason(stage2_row, stage2_package, max_nan_features=engine._max_nan_features)
         if incomplete_reason is not None:
@@ -165,7 +215,7 @@ def predict_staged(
     if "liquidity_gate_v1" in gate_ids and not engine._liquidity_ok(snap=snap, direction=direction, strike=int(strike)):
         return StagedRuntimeDecision(action="HOLD", reason="liquidity_gate_block", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
 
-    stage3_row = engine._merge_feature_rows(stage_views["stage3_recipe_view"], rolling_features)
+    stage3_row = _backfill_stage_row(engine._merge_feature_rows(stage_views["stage3_recipe_view"], rolling_features), rolling_features)
     stage3_row["stage1_entry_prob"] = float(entry_prob)
     stage3_row["stage2_direction_up_prob"] = float(direction_up_prob)
     stage3_row["stage2_direction_down_prob"] = float(1.0 - direction_up_prob)

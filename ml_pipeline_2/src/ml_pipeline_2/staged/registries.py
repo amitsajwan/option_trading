@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from typing import Any, Callable, Dict
 
 
@@ -14,6 +15,7 @@ class ViewSpec:
         return asdict(self)
 
 
+@lru_cache(maxsize=None)
 def view_registry() -> Dict[str, ViewSpec]:
     return {
         "stage1_entry_view_v1": ViewSpec("stage1_entry_view_v1", "stage1_entry_view", "stage1"),
@@ -22,6 +24,7 @@ def view_registry() -> Dict[str, ViewSpec]:
     }
 
 
+@lru_cache(maxsize=None)
 def label_registry() -> dict[str, str]:
     return {
         "entry_best_recipe_v1": "stage1",
@@ -30,6 +33,7 @@ def label_registry() -> dict[str, str]:
     }
 
 
+@lru_cache(maxsize=None)
 def trainer_registry() -> dict[str, str]:
     return {
         "binary_catalog_v1": "binary_catalog",
@@ -37,6 +41,7 @@ def trainer_registry() -> dict[str, str]:
     }
 
 
+@lru_cache(maxsize=None)
 def policy_registry() -> dict[str, str]:
     return {
         "entry_threshold_v1": "stage1",
@@ -45,6 +50,7 @@ def policy_registry() -> dict[str, str]:
     }
 
 
+@lru_cache(maxsize=None)
 def publish_registry() -> dict[str, str]:
     return {
         "staged_bundle_v1": "staged_bundle",

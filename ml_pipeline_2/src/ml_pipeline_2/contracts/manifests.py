@@ -241,6 +241,8 @@ def _validate_staged_components(payload: Dict[str, Any], errors: List[str]) -> N
     gate_ids = list(runtime.get("prefilter_gate_ids") or [])
     if not gate_ids:
         errors.append("runtime.prefilter_gate_ids must not be empty")
+    if "block_expiry" in runtime and not isinstance(runtime.get("block_expiry"), bool):
+        errors.append("runtime.block_expiry must be boolean")
     if str((payload.get("catalog") or {}).get("recipe_catalog_id") or "").strip() not in set(recipe_catalog_ids()):
         errors.append(f"catalog.recipe_catalog_id must be one of {recipe_catalog_ids()}")
 
@@ -266,11 +268,14 @@ def _validate_staged_training(payload: Dict[str, Any], errors: List[str]) -> Non
         objective = str((objectives or {}).get(stage_name) or "").strip().lower()
         if objective not in {"rmse", "brier"}:
             errors.append(f"training.objectives_by_stage.{stage_name} must be one of ['brier', 'rmse']")
-    try:
-        if int(payload.get("random_state", 0)) <= 0:
-            raise ValueError
-    except Exception:
-        errors.append("training.random_state must be an integer > 0")
+    if "random_state" not in payload:
+        errors.append("training.random_state must be set")
+    else:
+        try:
+            if int(payload.get("random_state")) < 0:
+                raise ValueError
+        except Exception:
+            errors.append("training.random_state must be an integer >= 0")
     runtime = payload.get("runtime") or {}
     try:
         if int(runtime.get("model_n_jobs", 0)) <= 0:
@@ -343,8 +348,8 @@ def _validate_staged_hard_gates(payload: Dict[str, Any], errors: List[str]) -> N
                 elif key in {"side_share_min", "side_share_max", "block_rate_min", "max_drawdown_pct_max"}:
                     if value < 0.0 or value > 1.0:
                         errors.append(f"hard_gates.combined.{key} must be in [0,1]")
-                elif key in {"profit_factor_min"} and value < 0.0:
-                    errors.append("hard_gates.combined.profit_factor_min must be >= 0")
+                elif key == "profit_factor_min" and value < 1.0:
+                    errors.append("hard_gates.combined.profit_factor_min must be >= 1.0")
         if section == "combined" and isinstance(block, dict):
             try:
                 side_share_min = float(block["side_share_min"])
@@ -439,8 +444,10 @@ def _validate_windows(kind: str, windows_payload: Dict[str, Any], errors: List[s
     if kind == PHASE2_LABEL_SWEEP_KIND and all(key in resolved for key in ("research_train", "research_valid", "full_model", "final_holdout")):
         if resolved["research_train"]["end"] >= resolved["research_valid"]["start"]:
             errors.append("research_train must end before research_valid starts")
-        if resolved["full_model"]["start"] > resolved["research_train"]["start"] or resolved["full_model"]["end"] < resolved["research_valid"]["end"]:
-            errors.append("full_model window must fully contain research_train and research_valid windows")
+        if resolved["full_model"]["start"] > resolved["research_train"]["start"]:
+            errors.append("full_model.start must be on or before research_train.start")
+        if resolved["full_model"]["end"] < resolved["research_valid"]["end"]:
+            errors.append("full_model.end must be on or after research_valid.end")
         if resolved["full_model"]["end"] >= resolved["final_holdout"]["start"]:
             errors.append("full_model window must end before final_holdout starts")
     if kind == RECOVERY_KIND and all(key in resolved for key in ("full_model", "final_holdout")):
@@ -449,8 +456,10 @@ def _validate_windows(kind: str, windows_payload: Dict[str, Any], errors: List[s
     if kind == STAGED_KIND and all(key in resolved for key in ("research_train", "research_valid", "full_model", "final_holdout")):
         if resolved["research_train"]["end"] >= resolved["research_valid"]["start"]:
             errors.append("research_train must end before research_valid starts")
-        if resolved["full_model"]["start"] > resolved["research_train"]["start"] or resolved["full_model"]["end"] < resolved["research_valid"]["end"]:
-            errors.append("full_model window must fully contain research_train and research_valid windows")
+        if resolved["full_model"]["start"] > resolved["research_train"]["start"]:
+            errors.append("full_model.start must be on or before research_train.start")
+        if resolved["full_model"]["end"] < resolved["research_valid"]["end"]:
+            errors.append("full_model.end must be on or after research_valid.end")
         if resolved["full_model"]["end"] >= resolved["final_holdout"]["start"]:
             errors.append("full_model window must end before final_holdout starts")
     return resolved

@@ -23,6 +23,11 @@ class PureMLThresholds:
 
 
 @dataclass(frozen=True)
+class PureMLRuntimeControls:
+    block_expiry: bool = False
+
+
+@dataclass(frozen=True)
 class PureMLDecision:
     action: str
     ce_prob: float
@@ -40,6 +45,12 @@ def _safe_float(value: object) -> Optional[float]:
     if not np.isfinite(parsed):
         return None
     return float(parsed)
+
+
+def _coerce_bool(value: object) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    return None
 
 
 def _predict_proba_quiet(model: object, x: pd.DataFrame) -> np.ndarray:
@@ -104,6 +115,25 @@ def load_thresholds(path: str | Path) -> PureMLThresholds:
     if ce is None or pe is None:
         raise ValueError("pure ml threshold report missing ce/pe thresholds")
     return PureMLThresholds(ce=float(ce), pe=float(pe))
+
+
+def load_runtime_controls(path: str | Path) -> PureMLRuntimeControls:
+    payload_dict = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload_dict, dict):
+        raise ValueError("pure ml threshold report payload invalid")
+    candidates = [
+        payload_dict.get("runtime"),
+        payload_dict,
+        payload_dict.get("dual_mode_policy"),
+        payload_dict.get("trading_utility_config"),
+    ]
+    for payload in candidates:
+        if not isinstance(payload, dict) or "block_expiry" not in payload:
+            continue
+        parsed = _coerce_bool(payload.get("block_expiry"))
+        if parsed is not None:
+            return PureMLRuntimeControls(block_expiry=parsed)
+    return PureMLRuntimeControls()
 
 
 def apply_threshold_overrides(

@@ -573,22 +573,47 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
     if not base_features:
         raise ValueError("all features dropped by preprocessing missing-rate gate")
     feature_names = [spec.name for spec in DEFAULT_FEATURE_SET_SPECS]
-    model_names = [spec.name for spec in DEFAULT_MODEL_SPECS]
+    candidate_model_names = [spec.name for spec in DEFAULT_MODEL_SPECS]
     if feature_set_whitelist:
         unknown = sorted(set(feature_set_whitelist) - set(feature_names))
         if unknown:
             raise ValueError(f"unknown feature_set: {unknown}; valid options: {sorted(feature_names)}")
         feature_names = [name for name in feature_names if name in set(feature_set_whitelist)]
     if model_whitelist:
-        unknown = sorted(set(model_whitelist) - set(model_names))
+        unknown = sorted(set(model_whitelist) - set(candidate_model_names))
         if unknown:
-            raise ValueError(f"unknown model: {unknown}; valid options: {sorted(model_names)}")
-        model_names = [name for name in model_names if name in set(model_whitelist)]
+            raise ValueError(f"unknown model: {unknown}; valid options: {sorted(candidate_model_names)}")
+        candidate_model_names = [name for name in candidate_model_names if name in set(model_whitelist)]
     cv_config = {"train_days": int(cv_kwargs.get("train_days")), "valid_days": int(cv_kwargs.get("valid_days")), "test_days": int(cv_kwargs.get("test_days")), "step_days": int(cv_kwargs.get("step_days")), "purge_days": int(cv_kwargs.get("purge_days", 0)), "embargo_days": int(cv_kwargs.get("embargo_days", 0)), "purge_mode": normalize_purge_mode(cv_kwargs.get("purge_mode", PURGE_MODE_DAYS)), "embargo_rows": int(cv_kwargs.get("embargo_rows", 0)), "event_end_col": cv_kwargs.get("event_end_col")}
     preprocessing = {"max_missing_rate": float(effective_preprocess.max_missing_rate), "clip_lower_q": float(effective_preprocess.clip_lower_q), "clip_upper_q": float(effective_preprocess.clip_upper_q), "dropped_features_by_missing_rate": dropped_by_missing, "features_after_preprocess_gate": int(len(base_features))}
     runtime_config = {"model_n_jobs": int(effective_model_n_jobs)}
+    days = sorted(frame["trade_date"].astype(str).unique().tolist())
+    folds = build_day_folds(
+        days=days,
+        train_days=int(cv_config["train_days"]),
+        valid_days=int(cv_config["valid_days"]),
+        test_days=int(cv_config["test_days"]),
+        step_days=int(cv_config["step_days"]),
+        purge_days=int(cv_config.get("purge_days", 0)),
+        embargo_days=int(cv_config.get("embargo_days", 0)),
+    )
+    if not folds:
+        required_span = (
+            int(cv_config["train_days"])
+            + int(cv_config.get("purge_days", 0))
+            + int(cv_config["valid_days"])
+            + int(cv_config.get("embargo_days", 0))
+            + int(cv_config["test_days"])
+        )
+        raise ValueError(
+            "no walk-forward folds produced: "
+            f"days_total={len(days)} span_required={required_span} "
+            f"train_days={cv_config['train_days']} valid_days={cv_config['valid_days']} "
+            f"test_days={cv_config['test_days']} purge_days={cv_config.get('purge_days', 0)} "
+            f"embargo_days={cv_config.get('embargo_days', 0)}"
+        )
     if callable(progress_callback):
-        progress_callback({"phase": "training_cycle", "event": "search_space", "feature_sets": feature_names, "models": model_names, "experiments_total": int(min(len(feature_names) * len(model_names), max_experiments) if max_experiments is not None else len(feature_names) * len(model_names))})
+        progress_callback({"phase": "training_cycle", "event": "search_space", "feature_sets": feature_names, "models": candidate_model_names, "experiments_total": int(min(len(feature_names) * len(candidate_model_names), max_experiments) if max_experiments is not None else len(feature_names) * len(candidate_model_names))})
     experiments: List[Dict[str, object]] = []
     experiment_counter = 0
     max_exp = int(max_experiments) if max_experiments is not None else None
@@ -596,7 +621,7 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
         selected_features = _apply_feature_set(base_features, feature_set_name)
         if not selected_features:
             continue
-        for model_name in model_names:
+        for model_name in candidate_model_names:
             experiment_counter += 1
             if max_exp is not None and experiment_counter > max_exp:
                 break

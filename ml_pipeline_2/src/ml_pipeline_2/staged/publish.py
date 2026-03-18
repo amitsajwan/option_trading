@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
 import joblib
 
@@ -23,15 +24,47 @@ def _load_json(path: Path) -> Dict[str, Any]:
     return payload
 
 
+def _temp_path(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path.parent / f".{path.name}.{uuid4().hex}.tmp"
+
+
 def _write_json(path: Path, payload: Dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temp_path = _temp_path(path)
+    try:
+        temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temp_path.replace(path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
     return path
 
 
 def _write_env(path: Path, payload: Dict[str, str]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(f"{key}={value}" for key, value in payload.items()) + "\n", encoding="utf-8")
+    temp_path = _temp_path(path)
+    try:
+        temp_path.write_text(
+            "\n".join(f"{key}={value}" for key, value in payload.items()) + "\n",
+            encoding="utf-8",
+        )
+        temp_path.replace(path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+    return path
+
+
+def _write_joblib(path: Path, payload: Dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = _temp_path(path)
+    try:
+        joblib.dump(payload, temp_path)
+        temp_path.replace(path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
     return path
 
 
@@ -99,6 +132,7 @@ def _build_runtime_bundle(summary: Dict[str, Any], *, model_group: str, profile_
         "recipe_catalog": recipe_catalog,
         "runtime": {
             "prefilter_gate_ids": list(summary.get("runtime_prefilter_gate_ids") or []),
+            "block_expiry": bool(summary.get("runtime_block_expiry", False)),
         },
         "stages": {
             "stage1": {
@@ -133,6 +167,7 @@ def _build_runtime_policy(summary: Dict[str, Any], *, model_group: str, profile_
         "stage3": dict(policy_reports.get("stage3") or {}),
         "runtime": {
             "prefilter_gate_ids": list(summary.get("runtime_prefilter_gate_ids") or []),
+            "block_expiry": bool(summary.get("runtime_block_expiry", False)),
         },
         "recipe_catalog": recipe_catalog,
     }
@@ -177,10 +212,8 @@ def publish_staged_run(
 
     runtime_bundle = _build_runtime_bundle(summary, model_group=group, profile_id=profile)
     runtime_policy = _build_runtime_policy(summary, model_group=group, profile_id=profile)
-    run_model_path.parent.mkdir(parents=True, exist_ok=True)
-    active_model_path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(runtime_bundle, run_model_path)
-    joblib.dump(runtime_bundle, active_model_path)
+    _write_joblib(run_model_path, runtime_bundle)
+    _write_joblib(active_model_path, runtime_bundle)
     _write_json(run_threshold_path, runtime_policy)
     _write_json(active_threshold_path, runtime_policy)
     _write_json(run_training_path, summary)
@@ -197,20 +230,22 @@ def publish_staged_run(
     _write_json(run_contract_path, model_contract)
     _write_json(active_contract_path, model_contract)
 
+    publish_decision = {"decision": str(assessment["decision"])}
+    publish_assessment = {
+        "publishable": bool(assessment["publishable"]),
+        "decision": str(assessment["decision"]),
+        "blocking_reasons": list(assessment["blocking_reasons"]),
+    }
     publish_summary = {
         "created_at_utc": utc_now(),
         "publisher": "ml_pipeline_2",
         "publish_kind": STAGED_RUNTIME_BUNDLE_KIND,
         "publish_status": "published",
-        "publish_decision": {"decision": "PUBLISH"},
+        "publish_decision": publish_decision,
         "run_id": run_id,
         "model_group": group,
         "profile_id": profile,
-        "publish_assessment": {
-            "publishable": True,
-            "decision": "PUBLISH",
-            "blocking_reasons": [],
-        },
+        "publish_assessment": publish_assessment,
         "published_paths": {
             "model_package": _to_rel_repo(run_model_path, root=publish_root),
             "threshold_report": _to_rel_repo(run_threshold_path, root=publish_root),
@@ -246,6 +281,9 @@ def release_staged_run(
 ) -> Dict[str, Any]:
     if bool(config) == bool(run_dir):
         raise ValueError("exactly one of config or run_dir must be provided")
+    normalized_bucket_url = str(model_bucket_url or "").strip() or None
+    if normalized_bucket_url is not None and not normalized_bucket_url.startswith("gs://"):
+        raise ValueError("model_bucket_url must start with gs://")
     research_summary: Optional[Dict[str, Any]] = None
     if config is not None:
         manifest_path = Path(config).resolve()
@@ -274,9 +312,9 @@ def release_staged_run(
     }
     runtime_env_path = _write_env(release_root / "ml_pure_runtime.env", runtime_env)
     gcs_sync = None
-    if model_bucket_url:
+    if normalized_bucket_url:
         gcs_sync = sync_published_model_group_to_gcs(
-            model_bucket_url=str(model_bucket_url),
+            model_bucket_url=normalized_bucket_url,
             model_group=str(publish_summary["model_group"]),
             root=root,
         )

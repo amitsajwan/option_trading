@@ -213,6 +213,7 @@ def test_publish_model_cli_can_use_threshold_sweep_recommendation(tmp_path: Path
     assert payload["threshold_source"] == "threshold_sweep_recommended"
     assert threshold_report["ce_threshold"] == 0.40
     assert threshold_report["pe_threshold"] == 0.40
+    assert threshold_report["runtime"]["block_expiry"] is False
     assert threshold_report["threshold_source"] == "threshold_sweep_recommended"
     assert threshold_report["threshold_sweep_row"]["threshold"] == 0.40
 

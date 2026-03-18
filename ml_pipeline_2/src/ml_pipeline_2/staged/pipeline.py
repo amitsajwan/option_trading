@@ -21,6 +21,7 @@ from .registries import resolve_labeler, resolve_policy, resolve_trainer, view_r
 
 KEY_COLUMNS = ["trade_date", "timestamp", "snapshot_id"]
 STAGE_ORDER = ("stage1", "stage2", "stage3")
+SUMMARY_SCHEMA_VERSION = 2
 
 
 def _load_dataset(parquet_root: Path, dataset_name: str) -> pd.DataFrame:
@@ -106,17 +107,56 @@ def _label_recipe_frame(support: pd.DataFrame, recipe: LabelRecipe) -> pd.DataFr
     return labeled
 
 
+def _align_recipe_frame(support: pd.DataFrame, labeled: pd.DataFrame, *, recipe_id: str) -> pd.DataFrame:
+    required_columns = KEY_COLUMNS + [
+        "ce_label_valid",
+        "pe_label_valid",
+        "ce_path_exit_reason",
+        "pe_path_exit_reason",
+        "ce_barrier_upper_return",
+        "pe_barrier_upper_return",
+        "ce_barrier_lower_return",
+        "pe_barrier_lower_return",
+        "ce_forward_return",
+        "pe_forward_return",
+        "ce_mae",
+        "pe_mae",
+    ]
+    missing_columns = [name for name in required_columns if name not in labeled.columns]
+    if missing_columns:
+        raise ValueError(f"recipe frame missing required columns for {recipe_id}: {missing_columns}")
+    work = labeled.loc[:, required_columns].copy()
+    if bool(work.duplicated(subset=KEY_COLUMNS).any()):
+        raise ValueError(f"recipe frame has duplicate keys for {recipe_id}")
+    aligned = support.loc[:, KEY_COLUMNS].merge(work, on=KEY_COLUMNS, how="left", sort=False, indicator=True)
+    missing_rows = aligned["_merge"] != "both"
+    if bool(missing_rows.any()):
+        raise ValueError(
+            f"recipe frame alignment mismatch for {recipe_id}: missing_rows={int(missing_rows.sum())}"
+        )
+    return aligned.drop(columns="_merge").reset_index(drop=True)
+
+
 def _build_oracle_targets(
     support: pd.DataFrame,
     recipes: Sequence[LabelRecipe],
     *,
     cost_per_trade: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if bool(support.duplicated(subset=KEY_COLUMNS).any()):
+        raise ValueError("support frame contains duplicate staged oracle keys")
     utility = support.loc[:, KEY_COLUMNS].copy()
-    recipe_frames: dict[str, pd.DataFrame] = {}
+    recipe_rows_by_key: dict[str, dict[tuple[str, pd.Timestamp, str], dict[str, Any]]] = {}
     for recipe in recipes:
-        labeled = _label_recipe_frame(support, recipe)
-        recipe_frames[recipe.recipe_id] = labeled
+        labeled = _align_recipe_frame(support, _label_recipe_frame(support, recipe), recipe_id=recipe.recipe_id)
+        recipe_rows_by_key[recipe.recipe_id] = {
+            (
+                str(row["trade_date"]),
+                pd.Timestamp(row["timestamp"]),
+                str(row["snapshot_id"]),
+            ): dict(row)
+            for row in labeled.to_dict(orient="records")
+        }
         utility[f"{recipe.recipe_id}__ce_net_return"] = labeled.apply(
             lambda row: _path_return(row, prefix="ce") - float(cost_per_trade),
             axis=1,
@@ -133,16 +173,29 @@ def _build_oracle_targets(
     utility["best_available_net_return_after_cost"] = utility[
         ["best_ce_net_return_after_cost", "best_pe_net_return_after_cost"]
     ].max(axis=1)
+    utility_by_key = {
+        (
+            str(row["trade_date"]),
+            pd.Timestamp(row["timestamp"]),
+            str(row["snapshot_id"]),
+        ): dict(row)
+        for row in utility.to_dict(orient="records")
+    }
 
     oracle_rows: list[dict[str, Any]] = []
-    for idx in range(len(support)):
+    for support_row in support.to_dict(orient="records"):
+        key = (
+            str(support_row["trade_date"]),
+            pd.Timestamp(support_row["timestamp"]),
+            str(support_row["snapshot_id"]),
+        )
+        utility_row = utility_by_key[key]
         best: Optional[dict[str, Any]] = None
         for recipe in recipes:
-            labeled = recipe_frames[recipe.recipe_id]
-            row = labeled.iloc[idx]
+            row = recipe_rows_by_key[recipe.recipe_id][key]
             for side, prefix, direction_up in (("CE", "ce", 1), ("PE", "pe", 0)):
                 valid = _safe_float(row.get(f"{prefix}_label_valid"), default=0.0)
-                net = _safe_float(utility.iloc[idx][f"{recipe.recipe_id}__{prefix}_net_return"])
+                net = _safe_float(utility_row[f"{recipe.recipe_id}__{prefix}_net_return"])
                 if valid != 1.0 or (not np.isfinite(net)) or net <= 0.0:
                     continue
                 candidate = {
@@ -159,15 +212,17 @@ def _build_oracle_targets(
                     best = candidate
         oracle_rows.append(
             {
-                "trade_date": str(support.iloc[idx]["trade_date"]),
-                "timestamp": pd.Timestamp(support.iloc[idx]["timestamp"]),
-                "snapshot_id": str(support.iloc[idx]["snapshot_id"]),
+                "trade_date": str(support_row["trade_date"]),
+                "timestamp": pd.Timestamp(support_row["timestamp"]),
+                "snapshot_id": str(support_row["snapshot_id"]),
                 "entry_label": int(best is not None),
                 "direction_label": (str(best["side"]) if best is not None else None),
                 "direction_up": (int(best["direction_up"]) if best is not None else None),
                 "recipe_label": (str(best["recipe_id"]) if best is not None else None),
                 "best_net_return_after_cost": (
-                    float(best["net_return_after_cost"]) if best is not None else float(utility.iloc[idx]["best_available_net_return_after_cost"])
+                    float(best["net_return_after_cost"])
+                    if best is not None
+                    else float(utility_row["best_available_net_return_after_cost"])
                 ),
             }
         )
@@ -192,10 +247,13 @@ def build_stage1_labels(stage_frame: pd.DataFrame, oracle: pd.DataFrame, *_: Any
 def build_stage2_labels(stage_frame: pd.DataFrame, oracle: pd.DataFrame, *_: Any, **__: Any) -> pd.DataFrame:
     labeled = _attach_labels(stage_frame, oracle)
     labeled = labeled[pd.to_numeric(labeled["entry_label"], errors="coerce").fillna(0.0) == 1.0].copy()
+    direction = labeled["direction_label"].astype(str).str.upper()
+    labeled = labeled[direction.isin({"CE", "PE"})].copy()
+    direction = labeled["direction_label"].astype(str).str.upper()
     labeled["move_label_valid"] = 1.0
     labeled["move_label"] = 1.0
     labeled["move_first_hit_side"] = np.where(
-        labeled["direction_label"].astype(str).str.upper() == "CE",
+        direction == "CE",
         "up",
         "down",
     )
@@ -239,10 +297,15 @@ def _stage_binary_frame(frame: pd.DataFrame, *, mode: str, label_col: str, posit
         out["move_label"] = pd.to_numeric(out[label_col], errors="coerce").fillna(0.0)
         return out
     if mode == "direction":
+        positive = str(positive_value).upper()
+        direction = out[label_col].astype(str).str.upper()
+        valid_direction = direction.isin({positive, "PE"} if positive == "CE" else {positive})
+        out = out.loc[valid_direction].copy()
+        direction = out[label_col].astype(str).str.upper()
         out["move_label_valid"] = 1.0
         out["move_label"] = 1.0
         out["move_first_hit_side"] = np.where(
-            out[label_col].astype(str).str.upper() == str(positive_value).upper(),
+            direction == positive,
             "up",
             "down",
         )
@@ -770,7 +833,7 @@ def _combined_gate_result(summary: dict[str, Any], gates: dict[str, Any]) -> tup
     if int(summary.get("trades", 0)) < int(gates.get("trades_min", 0)):
         reasons.append(f"trades<{gates.get('trades_min')}")
     if float(summary.get("net_return_sum", 0.0)) <= float(gates.get("net_return_sum_min", 0.0)):
-        reasons.append("net_return_sum<=0")
+        reasons.append(f"net_return_sum<={gates.get('net_return_sum_min')}")
     side_share = float(summary.get("long_share", 0.0))
     if side_share < float(gates.get("side_share_min", 0.0)) or side_share > float(gates.get("side_share_max", 1.0)):
         reasons.append("side_share_out_of_band")
@@ -812,6 +875,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             "final_holdout": _window(labeled, manifest["windows"]["final_holdout"]),
         }
 
+    stage1_started_at = utc_now()
     stage1_result = resolve_trainer(components["stage1"]["trainer_id"])(
         stage_name="stage1",
         train_frame=labeled_frames["stage1"]["research_train"],
@@ -826,6 +890,8 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         output_root=ctx.output_root / "stages",
         prob_col="entry_prob",
     )
+    stage1_completed_at = utc_now()
+    stage2_started_at = utc_now()
     stage2_result = resolve_trainer(components["stage2"]["trainer_id"])(
         stage_name="stage2",
         train_frame=labeled_frames["stage2"]["research_train"],
@@ -840,7 +906,8 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         output_root=ctx.output_root / "stages",
         prob_col="direction_up_prob",
     )
-
+    stage2_completed_at = utc_now()
+    stage3_started_at = utc_now()
     stage3_result = resolve_trainer(components["stage3"]["trainer_id"])(
         stage_name="stage3",
         train_frame=_add_upstream_probs(labeled_frames["stage3"]["research_train"], stage1_package=stage1_result["search_package"], stage2_package=stage2_result["search_package"]),
@@ -852,6 +919,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         feature_sets=list(manifest["catalog"]["feature_sets_by_stage"]["stage3"]),
         output_root=ctx.output_root / "stages",
     )
+    stage3_completed_at = utc_now()
 
     utility_valid = _window(utility, manifest["windows"]["research_valid"])
     utility_holdout = _window(utility, manifest["windows"]["final_holdout"])
@@ -902,6 +970,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     publish_assessment = {"decision": ("PUBLISH" if not blocking_reasons else "HOLD"), "publishable": not blocking_reasons, "blocking_reasons": blocking_reasons}
 
     summary = {
+        "summary_schema_version": SUMMARY_SCHEMA_VERSION,
         "created_at_utc": utc_now(),
         "status": "completed",
         "experiment_kind": str(manifest["experiment_kind"]),
@@ -924,10 +993,25 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         },
         "publish_assessment": publish_assessment,
         "runtime_prefilter_gate_ids": list(manifest["runtime"]["prefilter_gate_ids"]),
+        "runtime_block_expiry": bool(manifest["runtime"].get("block_expiry", False)),
         "stage_artifacts": {
-            "stage1": {"model_package_path": stage1_result["model_package_path"], "training_report_path": stage1_result["training_report_path"], "feature_contract_path": stage1_result["feature_contract_path"]},
-            "stage2": {"model_package_path": stage2_result["model_package_path"], "training_report_path": stage2_result["training_report_path"], "feature_contract_path": stage2_result["feature_contract_path"]},
+            "stage1": {
+                "started_at_utc": stage1_started_at,
+                "completed_at_utc": stage1_completed_at,
+                "model_package_path": stage1_result["model_package_path"],
+                "training_report_path": stage1_result["training_report_path"],
+                "feature_contract_path": stage1_result["feature_contract_path"],
+            },
+            "stage2": {
+                "started_at_utc": stage2_started_at,
+                "completed_at_utc": stage2_completed_at,
+                "model_package_path": stage2_result["model_package_path"],
+                "training_report_path": stage2_result["training_report_path"],
+                "feature_contract_path": stage2_result["feature_contract_path"],
+            },
             "stage3": {
+                "started_at_utc": stage3_started_at,
+                "completed_at_utc": stage3_completed_at,
                 "training_report_path": stage3_result["training_report_path"],
                 "recipes": sorted(stage3_result["recipe_packages"].keys()),
                 "recipe_artifacts": dict(stage3_result["recipe_artifacts"]),

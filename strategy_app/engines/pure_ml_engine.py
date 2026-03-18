@@ -18,10 +18,12 @@ from ..risk.manager import RiskManager
 from .decision_annotation import annotate_signal_contract as apply_signal_contract
 from .pure_ml_inference import (
     PureMLDecision,
+    PureMLRuntimeControls,
     PureMLThresholds,
     apply_threshold_overrides,
     build_snapshot_feature_row,
     load_model_package,
+    load_runtime_controls,
     load_thresholds,
     predict_dual,
 )
@@ -57,12 +59,19 @@ class PureMLEngine(StrategyEngine):
     ) -> None:
         self._model_package = load_model_package(model_package_path)
         self._staged_runtime_policy: Optional[dict[str, Any]] = None
+        self._runtime_controls: PureMLRuntimeControls
         self._thresholds: Optional[PureMLThresholds]
         if is_staged_runtime_bundle(self._model_package):
             self._staged_runtime_policy = load_staged_policy(threshold_report_path)
+            runtime_payload = dict(self._staged_runtime_policy.get("runtime") or {})
+            bundle_runtime_payload = dict(self._model_package.get("runtime") or {})
+            self._runtime_controls = PureMLRuntimeControls(
+                block_expiry=bool(runtime_payload.get("block_expiry", bundle_runtime_payload.get("block_expiry", False))),
+            )
             self._thresholds = None
         else:
             base_thresholds = load_thresholds(threshold_report_path)
+            self._runtime_controls = load_runtime_controls(threshold_report_path)
             self._thresholds = apply_threshold_overrides(
                 base_thresholds,
                 ce_override=ce_threshold_override,
@@ -90,10 +99,15 @@ class PureMLEngine(StrategyEngine):
         self._strategy_family_version = "ML_PURE_STAGED_V1" if self._staged_runtime_policy is not None else "ML_PURE_DUAL_V1"
         default_profile_id = "ml_pure_staged_v1" if self._staged_runtime_policy is not None else "ml_pure_dual_v1"
         self._strategy_profile_id = str(strategy_profile_id or default_profile_id).strip() or default_profile_id
+        if self._staged_runtime_policy is not None and abs(self._min_edge - 0.15) > 1e-12:
+            logger.warning(
+                "pure ml staged engine ignores constructor min_edge=%.3f; using stage2.selected_min_edge from staged runtime policy",
+                self._min_edge,
+            )
         self._set_logger_context(None)
         if self._thresholds is not None:
             logger.info(
-                "pure ml engine initialized ce_threshold=%.3f pe_threshold=%.3f max_hold_bars=%d min_oi=%.0f min_volume=%.0f min_edge=%.3f max_feature_age_sec=%d max_nan_features=%d",
+                "pure ml engine initialized ce_threshold=%.3f pe_threshold=%.3f max_hold_bars=%d min_oi=%.0f min_volume=%.0f min_edge=%.3f max_feature_age_sec=%d max_nan_features=%d block_expiry=%s",
                 float(self._thresholds.ce),
                 float(self._thresholds.pe),
                 self._max_hold_bars,
@@ -102,14 +116,16 @@ class PureMLEngine(StrategyEngine):
                 self._min_edge,
                 self._max_feature_age_sec,
                 self._max_nan_features,
+                str(self._runtime_controls.block_expiry).lower(),
             )
         else:
             logger.info(
-                "pure ml staged engine initialized max_feature_age_sec=%d max_nan_features=%d min_oi=%.0f min_volume=%.0f",
+                "pure ml staged engine initialized max_feature_age_sec=%d max_nan_features=%d min_oi=%.0f min_volume=%.0f block_expiry=%s",
                 self._max_feature_age_sec,
                 self._max_nan_features,
                 self._min_oi,
                 self._min_volume,
+                str(self._runtime_controls.block_expiry).lower(),
             )
 
     def set_run_context(self, run_id: Optional[str], metadata: Optional[dict[str, Any]] = None) -> None:
@@ -117,6 +133,9 @@ class PureMLEngine(StrategyEngine):
             profile = str(metadata.get("strategy_profile_id") or "").strip()
             if profile:
                 self._strategy_profile_id = profile
+            regime_payload = metadata.get("regime_config")
+            if isinstance(regime_payload, dict):
+                self._regime.configure(regime_payload)
         self._set_logger_context(run_id)
 
     def _set_logger_context(self, run_id: Optional[str]) -> None:
@@ -265,6 +284,9 @@ class PureMLEngine(StrategyEngine):
             return None
         if regime_signal.regime == Regime.AVOID:
             self._log_hold("avoid_regime", snap)
+            return None
+        if self._runtime_controls.block_expiry and regime_signal.regime == Regime.EXPIRY:
+            self._log_hold("regime_expiry", snap)
             return None
         if regime_signal.confidence < 0.60:
             self._log_hold("regime_low_confidence", snap)

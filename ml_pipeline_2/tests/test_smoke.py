@@ -94,6 +94,13 @@ def test_recovery_smoke_persists_filtering_meta(tmp_path: Path) -> None:
         "allow_near_expiry_context": True,
     }
     payload["scenario"]["meta_gate"]["enabled"] = False
+    payload["training"]["cv_config"] = {
+        **payload["training"]["cv_config"],
+        "train_days": 3,
+        "valid_days": 2,
+        "test_days": 2,
+        "step_days": 1,
+    }
     manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     summary = run_research(load_and_resolve_manifest(manifest_path, validate_paths=True))

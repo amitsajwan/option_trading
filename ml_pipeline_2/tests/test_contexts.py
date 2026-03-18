@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from ml_pipeline_2.evaluation import FuturesPromotionGates, evaluate_futures_stages_from_frame, stage_b
+from ml_pipeline_2.evaluation import FuturesPromotionGates, evaluate_futures_stages_from_frame, stage_a, stage_b
 from ml_pipeline_2.inference_contract import validate_model_input_columns
 from ml_pipeline_2.labeling import EffectiveLabelConfig, build_label_lineage, build_labeled_dataset
 from ml_pipeline_2.model_search import run_training_cycle_catalog
@@ -48,3 +48,70 @@ def test_evaluation_reports_expected_viability_shape() -> None:
     raw_stage_b = stage_b(frame=frame, probs=probs, ce_threshold=0.5, pe_threshold=0.5, cost_per_trade=0.0001, gates=gates)
     assert report["stage_a_predictive_quality"]["passed"] is True
     assert raw_stage_b["profit_factor"] > 1.0
+
+
+def test_stage_a_allows_unmeasurable_half_split_drift_when_other_gates_pass() -> None:
+    frame = pd.DataFrame(
+        {
+            "long_label": [1, 0] * 6,
+            "long_label_valid": [1.0] * 12,
+            "short_label": [0, 1] * 6,
+            "short_label_valid": [1.0] * 12,
+        }
+    )
+    probs = pd.DataFrame({"ce_prob": [0.95, 0.05] * 6, "pe_prob": [0.05, 0.95] * 6})
+    gates = FuturesPromotionGates(long_roc_auc_min=0.5, short_roc_auc_min=0.5, brier_max=0.3, roc_auc_drift_max_abs=0.01)
+    report = stage_a(frame=frame, probs=probs, gates=gates)
+    assert report["passed"] is True
+    assert report["sides"]["long"]["roc_auc_drift_measurable"] is False
+    assert report["sides"]["short"]["roc_auc_drift_measurable"] is False
+
+
+def test_stage_b_matches_staged_long_share_band_semantics() -> None:
+    frame = pd.DataFrame(
+        {
+            "long_label": [1, 1, 1, 1, 0],
+            "long_label_valid": [1.0] * 5,
+            "short_label": [0, 0, 0, 0, 1],
+            "short_label_valid": [1.0] * 5,
+            "long_forward_return": [0.02, 0.02, 0.02, 0.02, 0.01],
+            "short_forward_return": [0.01, 0.01, 0.01, 0.01, 0.02],
+        }
+    )
+    probs = pd.DataFrame(
+        {
+            "ce_prob": [0.90, 0.88, 0.87, 0.86, 0.10],
+            "pe_prob": [0.10, 0.12, 0.13, 0.14, 0.92],
+        }
+    )
+    gates = FuturesPromotionGates(
+        futures_pf_min=0.5,
+        futures_max_drawdown_pct_max=1.0,
+        futures_trades_min=1,
+        side_share_min=0.25,
+        side_share_max=0.90,
+        block_rate_min=0.0,
+    )
+    report = stage_b(frame=frame, probs=probs, ce_threshold=0.5, pe_threshold=0.5, cost_per_trade=0.0001, gates=gates)
+    assert report["passed"] is True
+    assert report["long_share"] == pytest.approx(0.8)
+    assert report["short_share"] == pytest.approx(0.2)
+
+
+def test_training_cycle_raises_when_cv_produces_zero_folds(tmp_path: Path) -> None:
+    labeled = _load_labeled_training_frame(tmp_path)
+    with pytest.raises(ValueError, match="no walk-forward folds produced"):
+        run_training_cycle_catalog(
+            labeled_df=labeled,
+            feature_profile="all",
+            objective="trade_utility",
+            train_days=10_000,
+            valid_days=2,
+            test_days=2,
+            step_days=2,
+            random_state=42,
+            max_experiments=1,
+            model_whitelist=["logreg_balanced"],
+            feature_set_whitelist=["fo_expiry_aware"],
+            label_target="path_tp_sl_time_stop_zero",
+        )

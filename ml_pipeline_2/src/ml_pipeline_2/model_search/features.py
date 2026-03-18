@@ -19,6 +19,15 @@ IDENTITY_COLUMNS: Tuple[str, ...] = (
 )
 
 LABEL_COLUMNS: Tuple[str, ...] = (
+    "entry_label",
+    "direction_label",
+    "direction_up",
+    "recipe_label",
+    "chosen_direction_up",
+    "best_net_return_after_cost",
+    "best_ce_net_return_after_cost",
+    "best_pe_net_return_after_cost",
+    "best_available_net_return_after_cost",
     "label_horizon_minutes",
     "label_return_threshold",
     "ce_entry_price",

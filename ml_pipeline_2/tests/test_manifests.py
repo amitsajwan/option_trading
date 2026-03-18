@@ -183,6 +183,34 @@ def test_staged_manifest_validates_with_explicit_contract(tmp_path: Path) -> Non
     assert resolved["views"]["stage1_view_id"] == "stage1_entry_view_v1"
 
 
+def test_staged_manifest_accepts_random_state_zero(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["training"]["random_state"] = 0
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_random_state_zero.json", validate_paths=False)
+    assert resolved["training"]["random_state"] == 0
+
+
+def test_staged_manifest_accepts_runtime_block_expiry_bool(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["runtime"]["block_expiry"] = True
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_block_expiry_true.json", validate_paths=False)
+    assert resolved["runtime"]["block_expiry"] is True
+
+
+def test_staged_manifest_rejects_runtime_block_expiry_non_bool(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["runtime"]["block_expiry"] = "true"
+    with pytest.raises(ManifestValidationError, match="runtime.block_expiry must be boolean"):
+        resolve_manifest(payload, manifest_path=tmp_path / "staged_block_expiry_invalid.json", validate_paths=False)
+
+
+def test_staged_manifest_rejects_profit_factor_floor_below_one(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["hard_gates"]["combined"]["profit_factor_min"] = 0.99
+    with pytest.raises(ManifestValidationError, match="hard_gates.combined.profit_factor_min must be >= 1.0"):
+        resolve_manifest(payload, manifest_path=tmp_path / "staged_bad_profit_factor.json", validate_paths=False)
+
+
 def test_staged_manifest_validate_paths_requires_stage_view_datasets(tmp_path: Path) -> None:
     parquet_root = tmp_path / "parquet"
     (parquet_root / "snapshots_ml_flat").mkdir(parents=True, exist_ok=True)

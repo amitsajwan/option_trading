@@ -100,6 +100,22 @@ class RollingFeatureStateTests(unittest.TestCase):
         self.assertAlmostEqual(float(day2_first["distance_from_day_high"]), (51000.0 - 51010.0) / 51010.0, places=8)
         self.assertAlmostEqual(float(day2_first["distance_from_day_low"]), (51000.0 - 50990.0) / 50990.0, places=8)
 
+    def test_first_bar_and_day_roll_do_not_emit_spurious_atm_oi_change(self) -> None:
+        state = RollingFeatureState()
+        start = date(2026, 3, 2)
+        state.on_session_start(start)
+
+        first = state.update(_snap("2026-03-02T09:15:00+05:30", close=50000.0, volume=10000.0))
+        second = state.update(_snap("2026-03-02T09:16:00+05:30", close=50010.0, volume=10100.0))
+
+        state.on_session_end()
+        state.on_session_start(start + timedelta(days=1))
+        next_day_first = state.update(_snap("2026-03-03T09:15:00+05:30", close=51000.0, volume=12000.0))
+
+        self.assertIsNone(first.get("atm_oi_change_1m"))
+        self.assertEqual(float(second["atm_oi_change_1m"]), 0.0)
+        self.assertIsNone(next_day_first.get("atm_oi_change_1m"))
+
 
 if __name__ == "__main__":
     unittest.main()

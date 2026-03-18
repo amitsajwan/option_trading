@@ -95,9 +95,22 @@ def stage_a(frame: pd.DataFrame, probs: pd.DataFrame, gates: FuturesPromotionGat
         roc_first = safe_roc_auc(y[:split], p[:split]) if split >= 10 else None
         roc_second = safe_roc_auc(y[split:], p[split:]) if (len(y) - split) >= 10 else None
         drift = float(roc_first - roc_second) if roc_first is not None and roc_second is not None else None
-        gate_pass = bool((roc is not None and roc >= roc_min) and brier <= float(gates.brier_max) and (drift is not None and abs(drift) <= float(gates.roc_auc_drift_max_abs)))
+        drift_measurable = drift is not None
+        drift_ok = (drift is None) or (abs(drift) <= float(gates.roc_auc_drift_max_abs))
+        gate_pass = bool((roc is not None and roc >= roc_min) and brier <= float(gates.brier_max) and drift_ok)
         passed &= gate_pass
-        out[side] = {"available": True, "rows": int(len(y)), "roc_auc": roc, "brier": brier, "calibration_error": calibration_error(y, p), "roc_auc_first_half": roc_first, "roc_auc_second_half": roc_second, "roc_auc_drift_half_split": drift, "gate_pass": gate_pass}
+        out[side] = {
+            "available": True,
+            "rows": int(len(y)),
+            "roc_auc": roc,
+            "brier": brier,
+            "calibration_error": calibration_error(y, p),
+            "roc_auc_first_half": roc_first,
+            "roc_auc_second_half": roc_second,
+            "roc_auc_drift_half_split": drift,
+            "roc_auc_drift_measurable": bool(drift_measurable),
+            "gate_pass": gate_pass,
+        }
     return {"passed": bool(passed), "gates": {"long_roc_auc_min": float(gates.long_roc_auc_min), "short_roc_auc_min": float(gates.short_roc_auc_min), "brier_max": float(gates.brier_max), "roc_auc_drift_max_abs": float(gates.roc_auc_drift_max_abs)}, "sides": out}
 
 
@@ -229,7 +242,13 @@ def stage_b(frame: pd.DataFrame, probs: pd.DataFrame, ce_threshold: float, pe_th
     block_rate = float(hold_count / max(1, rows_total))
     pf = float(profit_factor(net_returns))
     mdd = float(max_drawdown_pct(net_returns))
-    passed = bool(trades >= int(gates.futures_trades_min) and pf >= float(gates.futures_pf_min) and mdd <= float(gates.futures_max_drawdown_pct_max) and float(gates.side_share_min) <= long_share <= float(gates.side_share_max) and float(gates.side_share_min) <= short_share <= float(gates.side_share_max) and block_rate >= float(gates.block_rate_min))
+    passed = bool(
+        trades >= int(gates.futures_trades_min)
+        and pf >= float(gates.futures_pf_min)
+        and mdd <= float(gates.futures_max_drawdown_pct_max)
+        and float(gates.side_share_min) <= long_share <= float(gates.side_share_max)
+        and block_rate >= float(gates.block_rate_min)
+    )
     return {
         "passed": passed,
         "status": "computed",

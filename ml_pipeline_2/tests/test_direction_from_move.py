@@ -110,8 +110,27 @@ def test_label_derived_numeric_columns_are_excluded_from_feature_selection(tmp_p
         stop_loss_pct=0.0005,
     )
     labeled = build_labeled_dataset(features=features, cfg=cfg)
+    labeled["entry_label"] = 1
+    labeled["direction_label"] = "CE"
+    labeled["direction_up"] = 1
+    labeled["recipe_label"] = "r1"
+    labeled["chosen_direction_up"] = 1
+    labeled["best_net_return_after_cost"] = 0.25
+    labeled["best_ce_net_return_after_cost"] = 0.30
+    labeled["best_pe_net_return_after_cost"] = 0.10
+    labeled["best_available_net_return_after_cost"] = 0.30
+    labeled["stage1_entry_prob"] = 0.65
+    labeled["stage2_direction_up_prob"] = 0.70
+    labeled["stage2_direction_down_prob"] = 0.30
     selected = set(select_feature_columns(labeled, feature_profile="all"))
     forbidden = {
+        "entry_label",
+        "direction_up",
+        "chosen_direction_up",
+        "best_net_return_after_cost",
+        "best_ce_net_return_after_cost",
+        "best_pe_net_return_after_cost",
+        "best_available_net_return_after_cost",
         "ce_triple_barrier_state",
         "ce_barrier_upper_return",
         "ce_barrier_lower_return",
@@ -126,3 +145,4 @@ def test_label_derived_numeric_columns_are_excluded_from_feature_selection(tmp_p
         "move_barrier_lower_return",
     }
     assert selected.isdisjoint(forbidden)
+    assert {"stage1_entry_prob", "stage2_direction_up_prob", "stage2_direction_down_prob"}.issubset(selected)

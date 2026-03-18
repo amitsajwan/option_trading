@@ -200,3 +200,71 @@ def test_project_rows_to_ml_flat_prefers_canonical_same_strike_atm_fields() -> N
     assert projected[1]["opt_flow_atm_call_return_1m"] == 0.123
     assert projected[1]["opt_flow_atm_put_return_1m"] == -0.234
     assert projected[1]["opt_flow_atm_oi_change_1m"] == 30.0
+
+
+def test_project_rows_to_ml_flat_normalizes_ema_slope_fallbacks() -> None:
+    rows = [
+        {
+            "trade_date": "2020-01-30",
+            "year": 2020,
+            "instrument": "BANKNIFTY-I",
+            "timestamp": "2020-01-30T09:15:00+05:30",
+            "snapshot_id": "20200130_0915",
+            "fut_open": 100.0,
+            "fut_high": 101.0,
+            "fut_low": 99.0,
+            "fut_close": 100.0,
+        },
+        {
+            "trade_date": "2020-01-30",
+            "year": 2020,
+            "instrument": "BANKNIFTY-I",
+            "timestamp": "2020-01-30T09:16:00+05:30",
+            "snapshot_id": "20200130_0916",
+            "fut_open": 110.0,
+            "fut_high": 111.0,
+            "fut_low": 109.0,
+            "fut_close": 110.0,
+        },
+    ]
+
+    projected = _project_rows_to_ml_flat(rows, build_source="historical", build_run_id="test_run")
+
+    assert abs(projected[1]["ema_9_slope"] - (2.0 / 110.0)) < 1e-9
+    assert projected[1]["ema_9_slope"] < 0.1
+
+
+def test_project_rows_to_ml_flat_uses_daily_atr_percentile_as_fallback() -> None:
+    rows = [
+        {
+            "trade_date": "2020-01-30",
+            "year": 2020,
+            "instrument": "BANKNIFTY-I",
+            "timestamp": "2020-01-30T09:15:00+05:30",
+            "snapshot_id": "20200130_0915",
+            "fut_open": 100.0,
+            "fut_high": 101.0,
+            "fut_low": 99.0,
+            "fut_close": 100.0,
+            "atr_daily_percentile": 0.42,
+        },
+        {
+            "trade_date": "2020-01-30",
+            "year": 2020,
+            "instrument": "BANKNIFTY-I",
+            "timestamp": "2020-01-30T09:16:00+05:30",
+            "snapshot_id": "20200130_0916",
+            "fut_open": 101.0,
+            "fut_high": 102.0,
+            "fut_low": 100.0,
+            "fut_close": 101.0,
+            "atr_daily_percentile": 0.42,
+        },
+    ]
+
+    projected = _project_rows_to_ml_flat(rows, build_source="historical", build_run_id="test_run")
+
+    assert projected[0]["osc_atr_percentile"] == 0.42
+    assert projected[1]["osc_atr_percentile"] == 0.42
+    assert projected[0]["osc_atr_daily_percentile"] == 0.42
+    assert projected[1]["osc_atr_daily_percentile"] == 0.42

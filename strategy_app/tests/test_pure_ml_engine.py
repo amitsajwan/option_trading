@@ -41,6 +41,8 @@ def _snapshot(
     vol_ratio: float = 1.5,
     orh_broken: bool = True,
     orl_broken: bool = False,
+    is_expiry_day: bool = False,
+    days_to_expiry: int = 2,
 ) -> dict[str, object]:
     return {
         "snapshot_id": snapshot_id,
@@ -49,8 +51,8 @@ def _snapshot(
             "timestamp": ts,
             "date": ts[:10],
             "session_phase": session_phase,
-            "days_to_expiry": 2,
-            "is_expiry_day": False,
+            "days_to_expiry": days_to_expiry,
+            "is_expiry_day": is_expiry_day,
         },
         "futures_derived": {
             "fut_return_5m": r5m,
@@ -268,9 +270,13 @@ class PureMLEngineTests(unittest.TestCase):
         joblib.dump(bundle, path)
         return path
 
-    def _write_threshold_report(self, root: Path, *, ce_threshold: float, pe_threshold: float) -> Path:
+    def _write_threshold_report(self, root: Path, *, ce_threshold: float, pe_threshold: float, block_expiry: bool = False) -> Path:
         path = root / "thresholds.json"
-        payload = {"ce_threshold": ce_threshold, "pe_threshold": pe_threshold}
+        payload = {
+            "ce_threshold": ce_threshold,
+            "pe_threshold": pe_threshold,
+            "runtime": {"block_expiry": bool(block_expiry)},
+        }
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
@@ -287,6 +293,7 @@ class PureMLEngineTests(unittest.TestCase):
         max_feature_age_sec: int = 10_000_000,
         max_nan_features: int = 3,
         feature_columns: list[str] | None = None,
+        block_expiry: bool = False,
     ) -> PureMLEngine:
         model_path = self._write_model_bundle(
             root,
@@ -294,7 +301,7 @@ class PureMLEngineTests(unittest.TestCase):
             pe_prob=pe_prob,
             feature_columns=feature_columns,
         )
-        threshold_path = self._write_threshold_report(root, ce_threshold=ce_threshold, pe_threshold=pe_threshold)
+        threshold_path = self._write_threshold_report(root, ce_threshold=ce_threshold, pe_threshold=pe_threshold, block_expiry=block_expiry)
         return PureMLEngine(
             model_package_path=str(model_path),
             threshold_report_path=str(threshold_path),
@@ -470,6 +477,54 @@ class PureMLEngineTests(unittest.TestCase):
             engine.on_session_start(date(2026, 3, 2))
 
             signal = engine.evaluate(_flat_snapshot(snapshot_id="flat-1", ts="2026-03-02T09:30:00+05:30"))
+
+            self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertEqual(signal.signal_type, SignalType.ENTRY)
+            self.assertEqual(signal.direction, "CE")
+
+    def test_set_run_context_applies_regime_config_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            engine = self._build_engine(root=root, ce_prob=0.80, pe_prob=0.20)
+            baseline = float(engine._regime._trend_return_min)
+
+            engine.set_run_context("run-1", {"regime_config": {"trend_return_min": 0.25}})
+
+            self.assertNotEqual(baseline, float(engine._regime._trend_return_min))
+            self.assertEqual(float(engine._regime._trend_return_min), 0.25)
+
+    def test_dual_engine_can_block_expiry_via_threshold_runtime_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            engine = self._build_engine(root=root, ce_prob=0.80, pe_prob=0.20, block_expiry=True)
+            engine.on_session_start(date(2026, 3, 2))
+
+            signal = engine.evaluate(
+                _snapshot(
+                    snapshot_id="snap-expiry",
+                    ts="2026-03-02T09:30:00+05:30",
+                    is_expiry_day=True,
+                    days_to_expiry=0,
+                )
+            )
+
+            self.assertIsNone(signal)
+
+    def test_dual_engine_default_runtime_controls_do_not_block_expiry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            engine = self._build_engine(root=root, ce_prob=0.80, pe_prob=0.20, block_expiry=False)
+            engine.on_session_start(date(2026, 3, 2))
+
+            signal = engine.evaluate(
+                _snapshot(
+                    snapshot_id="snap-expiry-allowed",
+                    ts="2026-03-02T09:30:00+05:30",
+                    is_expiry_day=True,
+                    days_to_expiry=0,
+                )
+            )
 
             self.assertIsNotNone(signal)
             assert signal is not None

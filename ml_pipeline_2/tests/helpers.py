@@ -416,7 +416,7 @@ def build_staged_smoke_manifest(root: Path, parquet_root: Path) -> Path:
             },
             "stage3": {"max_drawdown_slack": 1.0},
             "combined": {
-                "profit_factor_min": 0.5,
+                "profit_factor_min": 1.0,
                 "max_drawdown_pct_max": 1.0,
                 "trades_min": 1,
                 "net_return_sum_min": -1.0,
