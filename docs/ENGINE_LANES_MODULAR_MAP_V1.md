@@ -10,7 +10,7 @@ Phase-1 modularization map for v2.3 lane-aware runtime, persistence, dashboard d
 - `decision_mode`: `rule_vote|ml_gate|ml_dual`
 - `decision_reason_code`: normalized reason code
 - `decision_metrics`: optional numeric metrics
-- `strategy_family_version`: `DET_V1|ML_GATE_V1|ML_PURE_DUAL_V1`
+- `strategy_family_version`: `DET_V1|ML_GATE_V1|ML_PURE_DUAL_V1|ML_PURE_STAGED_V1`
 - `strategy_profile_id`: strategy set version id
 
 ## Owner Modules

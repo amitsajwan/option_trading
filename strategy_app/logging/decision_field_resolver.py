@@ -144,6 +144,8 @@ class DecisionFieldResolver:
             return text
         if self._context_strategy_family_version:
             return self._context_strategy_family_version
+        if decision_mode == "ml_staged":
+            return "ML_PURE_STAGED_V1"
         if decision_mode == "ml_dual" or engine_mode == "ml_pure":
             return "ML_PURE_DUAL_V1"
         if decision_mode == "ml_gate" or engine_mode == "ml":
@@ -156,6 +158,8 @@ class DecisionFieldResolver:
             return text
         if self._context_strategy_profile_id:
             return self._context_strategy_profile_id
+        if str(self._context_strategy_family_version or "").strip() == "ML_PURE_STAGED_V1":
+            return "ml_pure_staged_v1"
         if engine_mode == "ml_pure":
             return "ml_pure_dual_v1"
         return "det_core_v1"

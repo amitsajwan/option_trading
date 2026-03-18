@@ -14,6 +14,7 @@ class StrategyDecisionContractTests(unittest.TestCase):
     def test_normalization(self) -> None:
         self.assertEqual(normalize_engine_mode("ML_PURE"), "ml_pure")
         self.assertEqual(normalize_decision_mode("ML_GATE"), "ml_gate")
+        self.assertEqual(normalize_decision_mode("ML_STAGED"), "ml_staged")
         self.assertEqual(normalize_reason_code("warmup_blocked"), "entry_warmup_block")
         self.assertIsNone(normalize_engine_mode("unknown"))
 

@@ -50,7 +50,7 @@ python -m strategy_app.main `
   --ml-entry-threshold-policy fixed_custom_062
 ```
 
-Switch `ml_pure` model by run-id (strict safe):
+Switch `ml_pure` staged bundle by run-id (strict safe):
 
 ```powershell
 python -m strategy_app.main `
@@ -68,6 +68,24 @@ Strict switch checks:
 - `publish_decision.decision` must be `PUBLISH` or `publish_status` must be `published`
 - `published_paths.model_package` must exist
 - `published_paths.threshold_report` must exist
+
+For staged releases, the resolved artifacts are:
+
+- an atomic staged runtime bundle in `model/model.joblib`
+- a staged runtime policy in `config/profiles/<profile_id>/threshold_report.json`
+
+The live engine then runs:
+
+1. hard deterministic prefilters
+2. Stage 1 entry gate
+3. Stage 2 direction choice
+4. Stage 3 recipe choice
+
+Stage 3 directly sets:
+
+- `max_hold_bars`
+- `stop_loss_pct`
+- `target_pct`
 
 If you prefer legacy explicit paths, keep using:
 
@@ -152,10 +170,10 @@ The deterministic engine logs regime metadata on every vote and signal so Mongo/
 Vote/signal records now include additive engine-aware fields for replay comparability and monitoring:
 
 - `engine_mode`: `deterministic|ml|ml_pure`
-- `decision_mode`: `rule_vote|ml_gate|ml_dual`
+- `decision_mode`: `rule_vote|ml_gate|ml_dual|ml_staged`
 - `decision_reason_code`: normalized decision code (`below_threshold`, `low_edge_conflict`, `feature_stale`, etc.)
 - `decision_metrics`: optional metrics payload (`ce_prob`, `pe_prob`, thresholds, edge, confidence)
-- `strategy_family_version`: `DET_V1|ML_GATE_V1|ML_PURE_DUAL_V1`
+- `strategy_family_version`: `DET_V1|ML_GATE_V1|ML_PURE_DUAL_V1|ML_PURE_STAGED_V1`
 - `strategy_profile_id`: versioned strategy set identifier (default deterministic profile: `det_core_v1`)
 
 For non-default deterministic router configurations, set `strategy_profile_id` in run metadata (or `--strategy-profile-id`) so comparisons remain lane/profile-consistent.

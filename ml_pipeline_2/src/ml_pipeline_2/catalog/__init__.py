@@ -6,6 +6,7 @@ from .research_defaults import (
     DEFAULT_RECOVERY_RECIPES,
     default_phase2_manifest_payload,
     default_recovery_manifest_payload,
+    default_staged_manifest_payload,
 )
 
 __all__ = [
@@ -17,10 +18,10 @@ __all__ = [
     "apply_feature_profile",
     "default_phase2_manifest_payload",
     "default_recovery_manifest_payload",
+    "default_staged_manifest_payload",
     "feature_set_names",
     "feature_set_specs_by_name",
     "is_feature_excluded",
     "model_names",
     "model_specs_by_name",
 ]
-

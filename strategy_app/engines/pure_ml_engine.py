@@ -25,6 +25,7 @@ from .pure_ml_inference import (
     load_thresholds,
     predict_dual,
 )
+from .pure_ml_staged_runtime import StagedRuntimeDecision, is_staged_runtime_bundle, load_staged_policy, predict_staged
 from .rolling_feature_state import RollingFeatureState
 from .regime import Regime, RegimeClassifier
 from .snapshot_accessor import SnapshotAccessor
@@ -52,15 +53,21 @@ class PureMLEngine(StrategyEngine):
         stop_loss_pct: float = 0.05,
         target_pct: float = 0.20,
         signal_logger: Optional[SignalLogger] = None,
-        strategy_profile_id: str = "ml_pure_dual_v1",
+        strategy_profile_id: Optional[str] = None,
     ) -> None:
         self._model_package = load_model_package(model_package_path)
-        base_thresholds = load_thresholds(threshold_report_path)
-        self._thresholds: PureMLThresholds = apply_threshold_overrides(
-            base_thresholds,
-            ce_override=ce_threshold_override,
-            pe_override=pe_threshold_override,
-        )
+        self._staged_runtime_policy: Optional[dict[str, Any]] = None
+        self._thresholds: Optional[PureMLThresholds]
+        if is_staged_runtime_bundle(self._model_package):
+            self._staged_runtime_policy = load_staged_policy(threshold_report_path)
+            self._thresholds = None
+        else:
+            base_thresholds = load_thresholds(threshold_report_path)
+            self._thresholds = apply_threshold_overrides(
+                base_thresholds,
+                ce_override=ce_threshold_override,
+                pe_override=pe_threshold_override,
+            )
         self._regime = RegimeClassifier()
         self._feature_state = RollingFeatureState()
         self._tracker = PositionTracker()
@@ -80,20 +87,30 @@ class PureMLEngine(StrategyEngine):
         self._session_start_monotonic: Optional[float] = None
         self._session_event_count = 0
         self._engine_mode = "ml_pure"
-        self._strategy_family_version = "ML_PURE_DUAL_V1"
-        self._strategy_profile_id = str(strategy_profile_id or "ml_pure_dual_v1").strip() or "ml_pure_dual_v1"
+        self._strategy_family_version = "ML_PURE_STAGED_V1" if self._staged_runtime_policy is not None else "ML_PURE_DUAL_V1"
+        default_profile_id = "ml_pure_staged_v1" if self._staged_runtime_policy is not None else "ml_pure_dual_v1"
+        self._strategy_profile_id = str(strategy_profile_id or default_profile_id).strip() or default_profile_id
         self._set_logger_context(None)
-        logger.info(
-            "pure ml engine initialized ce_threshold=%.3f pe_threshold=%.3f max_hold_bars=%d min_oi=%.0f min_volume=%.0f min_edge=%.3f max_feature_age_sec=%d max_nan_features=%d",
-            float(self._thresholds.ce),
-            float(self._thresholds.pe),
-            self._max_hold_bars,
-            self._min_oi,
-            self._min_volume,
-            self._min_edge,
-            self._max_feature_age_sec,
-            self._max_nan_features,
-        )
+        if self._thresholds is not None:
+            logger.info(
+                "pure ml engine initialized ce_threshold=%.3f pe_threshold=%.3f max_hold_bars=%d min_oi=%.0f min_volume=%.0f min_edge=%.3f max_feature_age_sec=%d max_nan_features=%d",
+                float(self._thresholds.ce),
+                float(self._thresholds.pe),
+                self._max_hold_bars,
+                self._min_oi,
+                self._min_volume,
+                self._min_edge,
+                self._max_feature_age_sec,
+                self._max_nan_features,
+            )
+        else:
+            logger.info(
+                "pure ml staged engine initialized max_feature_age_sec=%d max_nan_features=%d min_oi=%.0f min_volume=%.0f",
+                self._max_feature_age_sec,
+                self._max_nan_features,
+                self._min_oi,
+                self._min_volume,
+            )
 
     def set_run_context(self, run_id: Optional[str], metadata: Optional[dict[str, Any]] = None) -> None:
         if isinstance(metadata, dict):
@@ -166,6 +183,67 @@ class PureMLEngine(StrategyEngine):
                     snapshot_id=snap.snapshot_id,
                 )
             return None
+
+        if self._staged_runtime_policy is not None:
+            decision = predict_staged(
+                engine=self,
+                snap=snap,
+                rolling_features=rolling_features,
+                bundle=self._model_package,
+                policy=self._staged_runtime_policy,
+            )
+            if decision.action == "HOLD":
+                self._log_hold(str(decision.reason), snap, staged_decision=decision)
+                return None
+            strike = snap.atm_strike
+            if strike is None or int(strike) <= 0:
+                self._log_hold("missing_atm_strike", snap, staged_decision=decision)
+                return None
+            direction = "CE" if decision.action == "BUY_CE" else "PE"
+            premium = snap.option_ltp(direction, int(strike))
+            if premium is None or premium <= 0:
+                self._log_hold("missing_option_premium", snap, staged_decision=decision)
+                return None
+            stop_loss_pct = float(decision.stop_loss_pct or self._stop_loss_pct)
+            target_pct = float(decision.target_pct or self._target_pct)
+            max_hold_bars = int(decision.horizon_minutes or self._max_hold_bars)
+            signal = TradeSignal(
+                signal_id=str(uuid.uuid4())[:8],
+                timestamp=snap.timestamp_or_now,
+                snapshot_id=snap.snapshot_id,
+                signal_type=SignalType.ENTRY,
+                direction=direction,
+                strike=int(strike),
+                entry_premium=float(premium),
+                max_hold_bars=max_hold_bars,
+                stop_loss_pct=stop_loss_pct,
+                target_pct=target_pct,
+                max_lots=self._risk.compute_lots(
+                    entry_premium=float(premium),
+                    stop_loss_pct=stop_loss_pct,
+                    confidence=float(max(decision.ce_prob, decision.pe_prob)),
+                ),
+                entry_strategy_name="ML_PURE_STAGED",
+                entry_regime_name="staged_ml",
+                source="ML_PURE",
+                confidence=float(max(decision.ce_prob, decision.pe_prob)),
+                reason=(
+                    f"ml_pure_staged: action={decision.action} entry_prob={decision.entry_prob:.4f} "
+                    f"dir_up_prob={decision.direction_up_prob:.4f} recipe={decision.recipe_id} "
+                    f"recipe_prob={decision.recipe_prob:.4f} recipe_margin={decision.recipe_margin:.4f} "
+                    f"reason={decision.reason}"
+                ),
+                votes=[],
+            )
+            self._annotate_signal_contract(
+                signal,
+                decision_reason_code=str(decision.reason),
+                decision_metrics=self._staged_decision_metrics(decision),
+            )
+            opened = self._tracker.open_position(signal, snap)
+            self._log.log_signal(signal, acted_on=True)
+            self._log.log_position_open(signal, opened)
+            return signal
 
         if self._risk.is_halted:
             self._log_hold("risk_halt", snap)
@@ -325,12 +403,19 @@ class PureMLEngine(StrategyEngine):
             engine_mode=self._engine_mode,
             strategy_family_version=self._strategy_family_version,
             strategy_profile_id=self._strategy_profile_id,
-            decision_mode="ml_dual",
+            decision_mode=("ml_staged" if self._staged_runtime_policy is not None else "ml_dual"),
             decision_reason_code=decision_reason_code,
             decision_metrics=decision_metrics,
         )
 
     def _decision_metrics(self, decision: PureMLDecision) -> dict[str, float]:
+        if self._thresholds is None:
+            return {
+                "ce_prob": float(decision.ce_prob),
+                "pe_prob": float(decision.pe_prob),
+                "edge": float(decision.margin),
+                "confidence": float(decision.confidence),
+            }
         return {
             "ce_prob": float(decision.ce_prob),
             "pe_prob": float(decision.pe_prob),
@@ -340,21 +425,45 @@ class PureMLEngine(StrategyEngine):
             "confidence": float(decision.confidence),
         }
 
-    def _log_hold(self, reason: str, snap: SnapshotAccessor, decision: Optional[PureMLDecision] = None) -> None:
+    def _staged_decision_metrics(self, decision: StagedRuntimeDecision) -> dict[str, float]:
+        return {
+            "entry_prob": float(decision.entry_prob),
+            "direction_up_prob": float(decision.direction_up_prob),
+            "ce_prob": float(decision.ce_prob),
+            "pe_prob": float(decision.pe_prob),
+            "recipe_prob": float(decision.recipe_prob),
+            "recipe_margin": float(decision.recipe_margin),
+        }
+
+    def _log_hold(
+        self,
+        reason: str,
+        snap: SnapshotAccessor,
+        decision: Optional[PureMLDecision] = None,
+        staged_decision: Optional[StagedRuntimeDecision] = None,
+    ) -> None:
         hold_signal = TradeSignal(
             signal_id=str(uuid.uuid4())[:8],
             timestamp=snap.timestamp_or_now,
             snapshot_id=snap.snapshot_id,
             signal_type=SignalType.HOLD,
             source="ML_PURE",
-            confidence=(float(decision.confidence) if decision is not None else None),
+            confidence=(
+                float(decision.confidence)
+                if decision is not None
+                else (float(max(staged_decision.ce_prob, staged_decision.pe_prob)) if staged_decision is not None else None)
+            ),
             reason=f"ml_pure_hold:{str(reason).strip().lower()}",
             votes=[],
         )
         self._annotate_signal_contract(
             hold_signal,
             decision_reason_code=str(reason).strip().lower(),
-            decision_metrics=(self._decision_metrics(decision) if decision is not None else None),
+            decision_metrics=(
+                self._decision_metrics(decision)
+                if decision is not None
+                else (self._staged_decision_metrics(staged_decision) if staged_decision is not None else None)
+            ),
         )
         self._log.log_signal(hold_signal, acted_on=False)
         logger.debug("ml_pure hold reason=%s snapshot_id=%s", reason, snap.snapshot_id)

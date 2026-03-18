@@ -17,7 +17,7 @@ source "${OPERATOR_ENV_FILE}"
 
 MODEL_GROUP="${MODEL_GROUP:?set MODEL_GROUP in operator.env}"
 PROFILE_ID="${PROFILE_ID:?set PROFILE_ID in operator.env}"
-RECOVERY_CONFIG="${RECOVERY_CONFIG:?set RECOVERY_CONFIG in operator.env}"
+STAGED_CONFIG="${STAGED_CONFIG:?set STAGED_CONFIG in operator.env}"
 MODEL_BUCKET_URL="${MODEL_BUCKET_URL:?set MODEL_BUCKET_URL in operator.env}"
 
 if [ ! -f "${REPO_ROOT}/.env.compose" ] && [ -f "${REPO_ROOT}/.env.compose.example" ]; then
@@ -37,8 +37,8 @@ python -m pip install -e "${REPO_ROOT}/ml_pipeline_2"
 RELEASE_JSON="$(mktemp)"
 trap 'rm -f "${RELEASE_JSON}"' EXIT
 
-python -m ml_pipeline_2.run_recovery_release \
-  --config "${RECOVERY_CONFIG}" \
+python -m ml_pipeline_2.run_staged_release \
+  --config "${STAGED_CONFIG}" \
   --model-group "${MODEL_GROUP}" \
   --profile-id "${PROFILE_ID}" \
   --model-bucket-url "${MODEL_BUCKET_URL}" > "${RELEASE_JSON}"
@@ -69,5 +69,5 @@ if [ "${PUBLISH_RUNTIME_CONFIG}" = "1" ]; then
 fi
 
 echo
-echo "Release pipeline complete."
+echo "Staged release pipeline complete."
 echo "  runtime handoff: ${RELEASE_ENV_PATH}"

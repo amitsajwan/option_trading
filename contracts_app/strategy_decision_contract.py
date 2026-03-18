@@ -5,7 +5,7 @@ import re
 from typing import Any, Optional
 
 ENGINE_MODES = frozenset({"deterministic", "ml", "ml_pure"})
-DECISION_MODES = frozenset({"rule_vote", "ml_gate", "ml_dual"})
+DECISION_MODES = frozenset({"rule_vote", "ml_gate", "ml_dual", "ml_staged"})
 ALIAS_REASON_CODES = {
     "entry_warmup": "entry_warmup_block",
     "warmup_blocked": "entry_warmup_block",

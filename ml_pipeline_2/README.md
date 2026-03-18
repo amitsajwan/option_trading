@@ -1,24 +1,19 @@
 # ml_pipeline_2
 
-`ml_pipeline_2` is the research-only ML package for manifest-driven experiments on frozen feature inputs.
+`ml_pipeline_2` is the supported staged ML package for this repo.
 
-Supported runtime model:
-- Windows laptop: code, git, result inspection
-- Ubuntu GCP VM: all training, matrix runs, and artifact generation
+The active operator path is:
 
-The supported data contract is external to git. Sync inputs from GCS into a local ignored cache before running:
-- `gs://option-trading-ml/data/frozen/model_window_features.parquet`
-- `gs://option-trading-ml/data/frozen/holdout_features.parquet`
-- `gs://option-trading-ml/data/snapshots_ml_flat/year=YYYY/data.parquet`
+1. build snapshot parquet and stage views
+2. run staged training and release
+3. publish a staged runtime bundle
+4. switch live runtime with `ML_PURE_RUN_ID` and `ML_PURE_MODEL_GROUP`
 
-The supported local cache root is `.data/ml_pipeline`, so the checked-in manifests resolve to:
-- `.data/ml_pipeline/frozen/model_window_features.parquet`
-- `.data/ml_pipeline/frozen/holdout_features.parquet`
-- `.data/ml_pipeline/snapshots_ml_flat/year=YYYY/data.parquet`
+Legacy recovery-only research code may still exist in-tree for archived analysis, but it is not the supported release lane for this branch.
 
 ## Install
 
-Run from the repo root on Ubuntu:
+Run from repo root on Ubuntu or GCP:
 
 ```bash
 python3 -m venv .venv
@@ -28,129 +23,88 @@ python -m pip install -e ./ml_pipeline_2
 ```
 
 Installed console scripts:
+
 - `ml-pipeline-research`
-- `ml-pipeline-move-detector`
-- `ml-pipeline-direction`
-- `ml-pipeline-recovery-matrix`
-- `ml-pipeline-recovery-release`
-- `ml-pipeline-background-job`
+- `ml-pipeline-staged-release`
 - `ml-pipeline-publish-model`
 
-## Sync Inputs
+## Supported Data Contract
+
+Sync inputs from GCS into the local ignored cache `.data/ml_pipeline`.
+
+Required staged parquet datasets:
+
+- `.data/ml_pipeline/parquet_data/snapshots/year=YYYY/data.parquet`
+- `.data/ml_pipeline/parquet_data/snapshots_ml_flat/year=YYYY/data.parquet`
+- `.data/ml_pipeline/parquet_data/stage1_entry_view/year=YYYY/data.parquet`
+- `.data/ml_pipeline/parquet_data/stage2_direction_view/year=YYYY/data.parquet`
+- `.data/ml_pipeline/parquet_data/stage3_recipe_view/year=YYYY/data.parquet`
+
+Sync example:
 
 ```bash
 mkdir -p .data
 gsutil -m rsync -r gs://option-trading-ml/data .data/ml_pipeline
-gsutil ls gs://option-trading-ml/data/frozen/
 ```
 
-Direct `gs://` manifest inputs are not supported in this branch. Sync locally first, then run against local files.
+Direct `gs://` manifest paths are intentionally unsupported. Sync locally first, then run.
 
-## Checked-In Manifests
+## Checked-In Manifest
 
-The checked-in research configs are Ubuntu-ready and resolve paths relative to their config directory:
-- [`configs/research/phase2_label_sweep.default.json`](configs/research/phase2_label_sweep.default.json)
-- [`configs/research/fo_expiry_aware_recovery.default.json`](configs/research/fo_expiry_aware_recovery.default.json)
-- [`configs/research/fo_expiry_aware_recovery.best_1m_e2e.json`](configs/research/fo_expiry_aware_recovery.best_1m_e2e.json)
-- [`configs/research/fo_expiry_aware_recovery.tuning_1m_e2e.json`](configs/research/fo_expiry_aware_recovery.tuning_1m_e2e.json)
-- [`configs/research/fo_expiry_aware_recovery.tuning_5m.json`](configs/research/fo_expiry_aware_recovery.tuning_5m.json)
-- [`configs/research/fo_expiry_aware_recovery.tuning_4y.json`](configs/research/fo_expiry_aware_recovery.tuning_4y.json)
-- [`configs/research/fo_expiry_aware_recovery.fast_path_4y.json`](configs/research/fo_expiry_aware_recovery.fast_path_4y.json)
-- [`configs/research/move_detector_quick.default.json`](configs/research/move_detector_quick.default.json)
-- [`configs/research/direction_from_move_quick.default.json`](configs/research/direction_from_move_quick.default.json)
-- [`configs/research/recovery_matrix.default.json`](configs/research/recovery_matrix.default.json)
-- [`configs/research/recovery_matrix.tuning_1m_e2e.json`](configs/research/recovery_matrix.tuning_1m_e2e.json)
-- [`configs/research/recovery_matrix.tuning_5m.json`](configs/research/recovery_matrix.tuning_5m.json)
-- [`configs/research/recovery_matrix.tuning_4y.json`](configs/research/recovery_matrix.tuning_4y.json)
-- [`configs/research/recovery_matrix.fast_path_4y.json`](configs/research/recovery_matrix.fast_path_4y.json)
-- [`configs/research/recovery_matrix.ablation_opportunity_4y.json`](configs/research/recovery_matrix.ablation_opportunity_4y.json)
+The supported staged manifest is:
 
-Default output roots resolve into `ml_pipeline_2/artifacts/...`.
+- [configs/research/staged_dual_recipe.default.json](configs/research/staged_dual_recipe.default.json)
+
+It is explicit by design:
+
+- view IDs
+- labeler IDs
+- trainer IDs
+- policy IDs
+- runtime gate IDs
+- recipe catalog ID
+- windows
+- CV config
+- hard gates
+
+No implicit training defaults are part of the staged operator flow.
 
 ## Common Commands
 
-Validate a research manifest:
+Validate the staged manifest:
 
 ```bash
 python -m ml_pipeline_2.run_research \
-  --config ml_pipeline_2/configs/research/fo_expiry_aware_recovery.default.json \
+  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json \
   --validate-only
 ```
 
-Print the resolved research config:
+Print the resolved config:
 
 ```bash
 ml-pipeline-research \
-  --config ml_pipeline_2/configs/research/phase2_label_sweep.default.json \
+  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json \
   --print-resolved-config
 ```
 
-Run the recovery matrix:
+Run a staged research job:
 
 ```bash
-python -m ml_pipeline_2.run_recovery_matrix \
-  --config ml_pipeline_2/configs/research/recovery_matrix.default.json
+python -m ml_pipeline_2.run_research \
+  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json
 ```
 
-Run the stronger 1-month tuning sweep:
+Run the supported end-to-end staged release flow:
 
 ```bash
-python -m ml_pipeline_2.run_recovery_matrix \
-  --config ml_pipeline_2/configs/research/recovery_matrix.tuning_1m_e2e.json
-```
-
-Run the supported end-to-end release flow for a recovery manifest:
-
-```bash
-python -m ml_pipeline_2.run_recovery_release \
-  --config ml_pipeline_2/configs/research/fo_expiry_aware_recovery.best_1m_e2e.json \
+python -m ml_pipeline_2.run_staged_release \
+  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json \
   --model-group banknifty_futures/h15_tp_auto \
   --profile-id openfe_v9_dual \
   --model-bucket-url gs://<model-bucket>/published_models
 ```
 
-This release flow will:
-- run training when `--config` is used, or reuse an existing run via `--run-dir`
-- run a threshold sweep by default
-- block non-promotable/fallback candidates by default
-- publish locally under `ml_pipeline_2/artifacts/published_models/...`
-- optionally sync the published model group to GCS
-- write `release/ml_pure_runtime.env` with the `ML_PURE_*` handoff for live/eval
-
-Apply the generated `release/ml_pure_runtime.env` to `.env.compose` with:
-
-```bash
-export RELEASE_ENV_PATH=ml_pipeline_2/artifacts/research/<run_name>_<timestamp>/release/ml_pure_runtime.env
-./ops/gcp/apply_ml_pure_release.sh
-```
-
-Refill a capped matrix after one or more background jobs finish:
-
-```bash
-python -m ml_pipeline_2.run_recovery_matrix \
-  --launch-pending \
-  --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 3
-```
-
-Keep a matrix topped up automatically until it finishes:
-
-```bash
-python -m ml_pipeline_2.run_recovery_matrix \
-  --watch-pending \
-  --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 3 \
-  --poll-seconds 120
-```
-
-Run the verified 1-month end-to-end recovery smoke:
-
-```bash
-python -m ml_pipeline_2.run_research \
-  --config ml_pipeline_2/configs/research/fo_expiry_aware_recovery.best_1m_e2e.json
-```
-
-Publish a completed recovery run for runtime consumption:
+Publish an already-completed staged run:
 
 ```bash
 python -m ml_pipeline_2.run_publish_model \
@@ -159,115 +113,60 @@ python -m ml_pipeline_2.run_publish_model \
   --profile-id openfe_v9_dual
 ```
 
-`run_publish_model` is now guarded by default and will refuse `HOLD` / fallback / utility-failed runs unless you explicitly pass `--allow-unsafe-publish`.
+`run_publish_model` auto-detects staged vs recovery runs. Staged publish does not support unsafe override.
 
-Run the Stage 1 move detector:
+## What The Staged Release Produces
 
-```bash
-python -m ml_pipeline_2.run_move_detector_quick \
-  --config ml_pipeline_2/configs/research/move_detector_quick.default.json
-```
+Each staged run writes:
 
-Run Stage 2 direction from a completed Stage 1 run:
+- `summary.json`
+- `stages/stage1/model.joblib`
+- `stages/stage2/model.joblib`
+- `stages/stage3/recipes/<recipe_id>/model.joblib`
+- `stages/*/training_report.json`
+- `stages/*/feature_contract.json`
 
-```bash
-python -m ml_pipeline_2.run_direction_from_move_quick \
-  --config ml_pipeline_2/configs/research/direction_from_move_quick.default.json
-```
+Each successful staged publish writes:
 
-## Stronger Model Tuning V1
+- published staged runtime bundle at `artifacts/published_models/<model_group>/model/model.joblib`
+- staged runtime policy at `config/profiles/<profile_id>/threshold_report.json`
+- run summary at `config/profiles/<profile_id>/training_report.json`
+- `release/ml_pure_runtime.env`
 
-The shared model catalog now includes a first preset-based tuning wave for tree models:
-- XGBoost: `xgb_shallow`, `xgb_balanced`, `xgb_regularized`, `xgb_deep_v1`, `xgb_deep_slow_v1`
-- LightGBM: `lgbm_fast`, `lgbm_dart`, `lgbm_large_v1`, `lgbm_large_dart_v1`
+The runtime bundle contains:
 
-Resource strategy:
-- set per-model tree threads with `training.runtime.model_n_jobs`
-- keep same-VM 4-year runs at `max_parallel=1`
-- use outer matrix parallelism only when the machine has enough RAM for multiple combos
+- Stage 1 model package
+- Stage 2 model package
+- Stage 3 recipe packages
+- recipe catalog
+- runtime prefilter gate order
 
-Recommended staged workflow:
-1. Run [`configs/research/recovery_matrix.tuning_1m_e2e.json`](configs/research/recovery_matrix.tuning_1m_e2e.json) first.
-2. Review the best completed 1-month combo under `artifacts/research_matrices/.../report.json`.
-3. Run [`configs/research/recovery_matrix.tuning_5m.json`](configs/research/recovery_matrix.tuning_5m.json) second.
-4. Run the narrowed deployable lane [`configs/research/recovery_matrix.fast_path_4y.json`](configs/research/recovery_matrix.fast_path_4y.json) before any broader 4-year re-expansion.
-5. Only widen again if the fast path fails to produce a publishable candidate after threshold sweep.
+The runtime policy contains:
 
-Fast-path 4-year commands:
+- Stage 1 threshold
+- Stage 2 CE/PE thresholds and min edge
+- Stage 3 recipe threshold and recipe margin
 
-```bash
-python -m ml_pipeline_2.run_recovery_matrix \
-  --config ml_pipeline_2/configs/research/recovery_matrix.fast_path_4y.json
-```
+## Live Runtime Handoff
 
-Keep the fast-path matrix topped up:
+The staged release writes `release/ml_pure_runtime.env` with:
 
-```bash
-python -m ml_pipeline_2.run_recovery_matrix \
-  --watch-pending \
-  --matrix-root ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp> \
-  --max-parallel 16 \
-  --retry-failed \
-  --poll-seconds 120
-```
+- `STRATEGY_ENGINE=ml_pure`
+- `ML_PURE_RUN_ID=<published_run_id>`
+- `ML_PURE_MODEL_GROUP=<model_group>`
 
-This fast path fans out the 4 narrowed recipes into independent jobs:
-- `2 feature sets x 2 models x 4 recipes = 16` recipe-level combos
-- all 16 jobs can run together on a larger VM without widening back to weaker model families
-
-Systematic 4-year opportunity-set ablation:
+Apply it into `.env.compose` with:
 
 ```bash
-python -m ml_pipeline_2.run_recovery_matrix \
-  --config ml_pipeline_2/configs/research/recovery_matrix.ablation_opportunity_4y.json
+export RELEASE_ENV_PATH=ml_pipeline_2/artifacts/research/<run_name>_<timestamp>/release/ml_pure_runtime.env
+./ops/gcp/apply_ml_pure_release.sh
 ```
 
-This diagnostic matrix is intentionally narrow and directly comparable:
-- `1 feature set x 1 model x 2 recipes x 5 predeclared variants = 10` combos
-- all 10 jobs can run together on a larger VM
-- variants isolate the current failure hypotheses before widening models or feature sets:
-  `baseline`, `allow_atr_high`, `allow_expiry_day`, `allow_atr_high_and_expiry_day`, `no_cusum_allow_atr_high_and_expiry_day`
+Live runtime resolves the staged bundle by run ID and model group. No explicit model path is required in the normal operator path.
 
-Run a threshold sweep on a completed combo:
+## Operator Docs
 
-```bash
-python -m ml_pipeline_2.run_recovery_threshold_sweep \
-  --run-dir ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp>/runs/<combo_key>/<run_dir> \
-  --threshold-grid 0.30 0.35 0.40 0.45 0.50
-```
-
-Publish the selected run using the sweep-recommended threshold:
-
-```bash
-python -m ml_pipeline_2.run_publish_model \
-  --run-dir ml_pipeline_2/artifacts/research_matrices/<matrix_name_timestamp>/runs/<combo_key>/<run_dir> \
-  --model-group banknifty_futures/h15_tp_auto \
-  --profile-id openfe_v9_dual \
-  --threshold-source threshold_sweep_recommended
-```
-
-The default manifests remain stable. The tuning configs are opt-in.
-
-## Published Models
-
-Published runtime artifacts now live under:
-
-```text
-ml_pipeline_2/artifacts/published_models/<model_group>/
-├── model/model.joblib
-├── config/profiles/<profile_id>/threshold_report.json
-├── config/profiles/<profile_id>/training_report.json
-├── model_contract.json
-└── reports/training/
-    ├── run_<run_id>.json
-    └── latest.json
-```
-
-Per-run copies are also preserved under `data/training_runs/<run_id>/...` so run-id based switching resolves stable historical artifacts instead of whichever model was published most recently.
-
-## Docs
-
-- From-scratch operator guide: [`../docs/FROM_SCRATCH_OPERATOR_GUIDE.md`](../docs/FROM_SCRATCH_OPERATOR_GUIDE.md)
-- Ubuntu operator flow: [`docs/ubuntu_gcp_runbook.md`](docs/ubuntu_gcp_runbook.md)
-- Bounded-context architecture: [`architecture.md`](architecture.md)
-- GCP runtime/training deployment: [`../docs/GCP_DEPLOYMENT.md`](../docs/GCP_DEPLOYMENT.md)
+- From-scratch operator index: [../docs/FROM_SCRATCH_OPERATOR_GUIDE.md](../docs/FROM_SCRATCH_OPERATOR_GUIDE.md)
+- Training release runbook: [../docs/TRAINING_RELEASE_RUNBOOK.md](../docs/TRAINING_RELEASE_RUNBOOK.md)
+- Ubuntu/GCP ML runbook: [docs/ubuntu_gcp_runbook.md](docs/ubuntu_gcp_runbook.md)
+- Runtime deploy/cutover: [../docs/GCP_DEPLOYMENT.md](../docs/GCP_DEPLOYMENT.md)

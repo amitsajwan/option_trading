@@ -25,7 +25,7 @@ ml-pipeline-direction = "ml_pipeline_2.run_direction_from_move_quick:main"
 ml-pipeline-recovery-matrix = "ml_pipeline_2.run_recovery_matrix:main"
 ml-pipeline-recovery-threshold-sweep = "ml_pipeline_2.run_recovery_threshold_sweep:main"
 ml-pipeline-recovery-trade-report = "ml_pipeline_2.run_recovery_trade_report:main"
-ml-pipeline-recovery-release = "ml_pipeline_2.run_recovery_release:main"
+ml-pipeline-staged-release = "ml_pipeline_2.run_staged_release:main"
 ml-pipeline-background-job = "ml_pipeline_2.run_background_job:main"
 ml-pipeline-publish-model = "ml_pipeline_2.run_publish_model:main"
 

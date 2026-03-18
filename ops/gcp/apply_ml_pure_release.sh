@@ -7,7 +7,7 @@ RELEASE_ENV_PATH="${RELEASE_ENV_PATH:-}"
 AUTO_PUBLISH_RUNTIME_CONFIG="${AUTO_PUBLISH_RUNTIME_CONFIG:-0}"
 
 if [ -z "${RELEASE_ENV_PATH}" ]; then
-  echo "Set RELEASE_ENV_PATH to the release/ml_pure_runtime.env file from run_recovery_release." >&2
+  echo "Set RELEASE_ENV_PATH to the release/ml_pure_runtime.env file from the staged or recovery release flow." >&2
   exit 1
 fi
 

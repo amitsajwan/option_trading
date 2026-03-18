@@ -63,7 +63,7 @@ or:
 ./ops/gcp/delete_training_vm.sh option-trading-training-02
 ```
 
-### `run_recovery_release_pipeline.sh`
+### `run_staged_release_pipeline.sh`
 
 Use this on the training VM or a repo checkout that has the training data and runtime config available.
 
@@ -71,14 +71,14 @@ It will:
 
 1. ensure the virtualenv exists
 2. install `ml_pipeline_2`
-3. run the guarded recovery release flow
+3. run the staged 1/2/3 release flow
 4. apply the generated `ML_PURE_*` handoff into `.env.compose`
 5. republish the runtime config bundle
 
 Example:
 
 ```bash
-./ops/gcp/run_recovery_release_pipeline.sh
+./ops/gcp/run_staged_release_pipeline.sh
 ```
 
 ### `apply_ml_pure_release.sh`
@@ -170,11 +170,11 @@ If you truly want a full wipe including buckets and Artifact Registry, use plain
 
 ## Recommended Use
 
-For a clean rebuild, the normal order is:
+For a staged model release, the normal order is:
 
 1. `from_scratch_bootstrap.sh`
 2. `create_training_vm.sh`
-3. `run_recovery_release_pipeline.sh`
+3. `run_staged_release_pipeline.sh`
 
 For a final historical parquet rebuild on a high-power machine, the normal order is:
 

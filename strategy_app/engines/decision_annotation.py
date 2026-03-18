@@ -101,9 +101,13 @@ def annotate_signal_contract(
     elif signal.confidence is not None:
         signal.decision_metrics = {"confidence": float(signal.confidence)}
     signal.strategy_family_version = (
+        "ML_PURE_STAGED_V1"
+        if mode == "ml_staged"
+        else (
         "ML_GATE_V1"
         if mode == "ml_gate"
         else ("ML_PURE_DUAL_V1" if (mode == "ml_dual" or engine_mode == "ml_pure") else strategy_family_version)
+        )
     )
     signal.strategy_profile_id = strategy_profile_id
 

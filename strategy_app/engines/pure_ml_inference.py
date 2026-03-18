@@ -56,6 +56,8 @@ def load_model_package(path: str | Path) -> dict[str, object]:
     package = joblib.load(Path(path))
     if not isinstance(package, dict):
         raise ValueError("pure ml model package must be dict")
+    if str(package.get("kind") or "").strip() == "ml_pipeline_2_staged_runtime_bundle_v1":
+        return package
     feature_columns = package.get("feature_columns")
     if not isinstance(feature_columns, list) or len(feature_columns) == 0:
         raise ValueError("pure ml model package missing feature_columns")

@@ -303,7 +303,7 @@ def build_engine(
             min_oi=float(ml_pure_min_oi),
             min_volume=float(ml_pure_min_volume),
             signal_logger=signal_logger,
-            strategy_profile_id=(strategy_profile_id or "ml_pure_dual_v1"),
+            strategy_profile_id=strategy_profile_id,
         )
 
     experiment_id = _normalize_optional_str(ml_entry_experiment_id)
@@ -402,7 +402,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     )
     strategy_profile_id = _resolve_strategy_profile_id(args.strategy_profile_id)
     if strategy_profile_id is None:
-        strategy_profile_id = "ml_pure_dual_v1" if engine_key == "ml_pure" else "det_core_v1"
+        strategy_profile_id = None if engine_key == "ml_pure" else "det_core_v1"
     ml_runtime_guard_file = _resolve_ml_runtime_guard_file(args.ml_runtime_guard_file)
     runtime_ml_enabled = (engine_key == "ml" and bool(ml_entry_experiment_id)) or (
         engine_key == "ml_pure" and bool(ml_pure_model_package)
