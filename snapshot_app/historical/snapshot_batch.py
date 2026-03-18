@@ -1204,8 +1204,8 @@ def run_snapshot_batch(
     min_bound = min_day
     max_bound = max_day
     if planned_day_values:
-        min_bound = min_bound or min(planned_day_values)
-        max_bound = max_bound or max(planned_day_values)
+        min_bound = min(planned_day_values)
+        max_bound = max(planned_day_values)
     elif requested_days:
         min_bound = min_bound or min(requested_days)
         max_bound = max_bound or max(requested_days)

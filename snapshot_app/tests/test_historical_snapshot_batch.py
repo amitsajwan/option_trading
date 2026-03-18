@@ -114,6 +114,8 @@ def test_run_snapshot_batch_flushes_canonical_and_ml_flat(monkeypatch, tmp_path:
     result = run_snapshot_batch(
         parquet_base=tmp_path,
         instrument="BANKNIFTY-I",
+        min_day="2020-01-30",
+        max_day="2020-01-30",
         planned_days=["2020-01-29", "2020-01-30"],
         emit_days=["2020-01-30"],
         resume=False,
