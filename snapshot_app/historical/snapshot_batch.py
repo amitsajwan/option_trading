@@ -422,7 +422,11 @@ def _chain_totals(chain: dict[str, Any]) -> tuple[float, float, float]:
     return ce_volume_total, pe_volume_total, rows
 
 
-def _build_spot_map(spot_day: pd.DataFrame) -> dict[str, dict[str, float]]:
+def _build_spot_map(
+    spot_day: pd.DataFrame,
+    *,
+    fut_timestamps: pd.Series | list[Any] | None = None,
+) -> dict[str, dict[str, float]]:
     if spot_day is None or len(spot_day) == 0:
         return {}
 
@@ -438,8 +442,23 @@ def _build_spot_map(spot_day: pd.DataFrame) -> dict[str, dict[str, float]]:
         else:
             work[col] = np.nan
     work = work.sort_values("timestamp").reset_index(drop=True)
-    work["_ts"] = work["timestamp"].dt.floor("min").dt.strftime("%Y-%m-%d %H:%M:%S")
-    grouped = work.groupby("_ts", sort=False).last().reset_index()
+    spot_frame = work.loc[:, ["timestamp", "open", "high", "low", "close"]].copy()
+
+    if fut_timestamps is not None:
+        fut_ts = pd.to_datetime(pd.Series(list(fut_timestamps)), errors="coerce")
+        fut_frame = pd.DataFrame({"timestamp": fut_ts}).dropna(subset=["timestamp"])
+        fut_frame = fut_frame.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
+        grouped = pd.merge_asof(
+            fut_frame,
+            spot_frame.sort_values("timestamp"),
+            on="timestamp",
+            direction="backward",
+        )
+    else:
+        grouped = spot_frame.copy()
+
+    grouped["_ts"] = grouped["timestamp"].dt.floor("min").dt.strftime("%Y-%m-%d %H:%M:%S")
+    grouped = grouped.groupby("_ts", sort=False).last().reset_index()
 
     def _num(value: Any) -> float:
         out = pd.to_numeric(value, errors="coerce")
@@ -663,9 +682,12 @@ def _project_rows_to_ml_flat(
     out["fut_flow_oi"] = num("fut_flow_oi", "fut_oi")
     vol_roll = out["fut_flow_volume"].rolling(20, min_periods=5).mean()
     fut_rel_volume_20 = num("fut_flow_rel_volume_20", "fut_rel_volume_20")
+    fut_rel_volume_fallback = out["fut_flow_volume"] / vol_roll.replace(0.0, np.nan)
+    zero_fut_volume_windows = out["fut_flow_volume"].fillna(0.0).eq(0.0) & vol_roll.fillna(0.0).eq(0.0)
+    fut_rel_volume_fallback.loc[zero_fut_volume_windows] = 0.0
     out["fut_flow_rel_volume_20"] = fut_rel_volume_20.where(
         fut_rel_volume_20.notna(),
-        out["fut_flow_volume"] / vol_roll.replace(0.0, np.nan),
+        fut_rel_volume_fallback,
     )
     fut_volume_accel_1m = num("fut_flow_volume_accel_1m", "fut_volume_accel_1m")
     out["fut_flow_volume_accel_1m"] = fut_volume_accel_1m.where(
@@ -683,16 +705,23 @@ def _project_rows_to_ml_flat(
         out["fut_flow_oi"].diff(5),
     )
     oi_roll = out["fut_flow_oi"].rolling(20, min_periods=5).mean()
-    oi_std = out["fut_flow_oi"].rolling(20, min_periods=5).std(ddof=0).replace(0.0, np.nan)
+    oi_std_raw = out["fut_flow_oi"].rolling(20, min_periods=5).std(ddof=0)
+    oi_std = oi_std_raw.replace(0.0, np.nan)
     fut_oi_rel_20 = num("fut_flow_oi_rel_20", "fut_oi_rel_20")
+    fut_oi_rel_fallback = out["fut_flow_oi"] / oi_roll.replace(0.0, np.nan)
+    zero_fut_oi_windows = out["fut_flow_oi"].fillna(0.0).eq(0.0) & oi_roll.fillna(0.0).eq(0.0)
+    fut_oi_rel_fallback.loc[zero_fut_oi_windows] = 0.0
     out["fut_flow_oi_rel_20"] = fut_oi_rel_20.where(
         fut_oi_rel_20.notna(),
-        out["fut_flow_oi"] / oi_roll,
+        fut_oi_rel_fallback,
     )
     fut_oi_zscore_20 = num("fut_flow_oi_zscore_20", "fut_oi_zscore_20")
+    fut_oi_zscore_fallback = (out["fut_flow_oi"] - oi_roll) / oi_std
+    zero_std_mask = oi_std_raw.fillna(0.0).eq(0.0) & (out["fut_flow_oi"] - oi_roll).fillna(0.0).eq(0.0)
+    fut_oi_zscore_fallback.loc[zero_std_mask] = 0.0
     out["fut_flow_oi_zscore_20"] = fut_oi_zscore_20.where(
         fut_oi_zscore_20.notna(),
-        (out["fut_flow_oi"] - oi_roll) / oi_std,
+        fut_oi_zscore_fallback,
     )
 
     # Option flow.
@@ -771,9 +800,15 @@ def _project_rows_to_ml_flat(
     )
     opt_vol_roll = out["opt_flow_options_volume_total"].rolling(20, min_periods=5).mean()
     opt_rel_volume_20 = num("opt_flow_rel_volume_20", "options_rel_volume_20")
+    opt_rel_volume_fallback = out["opt_flow_options_volume_total"] / opt_vol_roll.replace(0.0, np.nan)
+    zero_opt_volume_windows = (
+        out["opt_flow_options_volume_total"].fillna(0.0).eq(0.0)
+        & opt_vol_roll.fillna(0.0).eq(0.0)
+    )
+    opt_rel_volume_fallback.loc[zero_opt_volume_windows] = 0.0
     out["opt_flow_rel_volume_20"] = opt_rel_volume_20.where(
         opt_rel_volume_20.notna(),
-        out["opt_flow_options_volume_total"] / opt_vol_roll.replace(0.0, np.nan),
+        opt_rel_volume_fallback,
     )
 
     # Time/session fields.
@@ -782,12 +817,7 @@ def _project_rows_to_ml_flat(
     out["time_minute_of_day"] = minute_of_day.where(minute_of_day.notna(), minute_of_day_calc)
     dow = num("time_day_of_week", "day_of_week")
     out["time_day_of_week"] = dow.where(dow.notna(), work["timestamp"].dt.dayofweek.astype(float))
-    minute_idx = num("time_minute_index", "minute_index")
-    if not bool(minute_idx.notna().any()):
-        minute_idx = num("minutes_since_open")
-    if not bool(minute_idx.notna().any()):
-        minute_idx = pd.Series(np.arange(len(work), dtype=float), index=work.index)
-    out["time_minute_index"] = minute_idx
+    out["time_minute_index"] = work.groupby(out["trade_date"], sort=False).cumcount().astype(float)
 
     # Context/regime.
     ready_legacy = num("ctx_opening_range_ready", "opening_range_ready")
@@ -954,7 +984,10 @@ def process_day(
         raise MissingInputsError(f"no futures minute bars for day={trade_date}")
 
     chains_by_ts = _build_all_chains(options_day)
-    spot_by_ts = _build_spot_map(spot_day)
+    spot_by_ts = _build_spot_map(
+        spot_day,
+        fut_timestamps=fut_window.loc[today_mask, "timestamp"],
+    )
     atr_daily_percentile = _compute_daily_atr_percentile(fut_window, trade_date)
 
     state = MarketSnapshotState()

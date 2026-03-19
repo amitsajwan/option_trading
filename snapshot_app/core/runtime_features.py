@@ -98,14 +98,21 @@ def _add_group_features(group: pd.DataFrame) -> pd.DataFrame:
     out["basis_change_1m"] = out["basis"].diff()
     vol_roll = out["fut_volume"].rolling(20, min_periods=5).mean()
     out["fut_rel_volume_20"] = out["fut_volume"] / vol_roll.replace(0.0, np.nan)
+    zero_fut_volume_windows = out["fut_volume"].fillna(0.0).eq(0.0) & vol_roll.fillna(0.0).eq(0.0)
+    out.loc[zero_fut_volume_windows, "fut_rel_volume_20"] = 0.0
     out["fut_volume_accel_1m"] = out["fut_volume"].pct_change(1, fill_method=None).replace([np.inf, -np.inf], np.nan)
 
     oi_roll = out["fut_oi"].rolling(20, min_periods=5).mean()
     out["fut_oi_change_1m"] = out["fut_oi"].diff(1)
     out["fut_oi_change_5m"] = out["fut_oi"].diff(5)
     out["fut_oi_rel_20"] = out["fut_oi"] / oi_roll.replace(0.0, np.nan)
-    oi_std = out["fut_oi"].rolling(20, min_periods=5).std(ddof=0).replace(0.0, np.nan)
+    zero_fut_oi_windows = out["fut_oi"].fillna(0.0).eq(0.0) & oi_roll.fillna(0.0).eq(0.0)
+    out.loc[zero_fut_oi_windows, "fut_oi_rel_20"] = 0.0
+    oi_std_raw = out["fut_oi"].rolling(20, min_periods=5).std(ddof=0)
+    oi_std = oi_std_raw.replace(0.0, np.nan)
     out["fut_oi_zscore_20"] = (out["fut_oi"] - oi_roll) / oi_std
+    zero_oi_zscore_windows = oi_std_raw.fillna(0.0).eq(0.0) & (out["fut_oi"] - oi_roll).fillna(0.0).eq(0.0)
+    out.loc[zero_oi_zscore_windows, "fut_oi_zscore_20"] = 0.0
 
     atm_strike = _first_numeric_series(out, ["opt_flow_atm_strike", "atm_strike"])
     same_atm_as_prev = atm_strike.notna() & atm_strike.eq(atm_strike.shift(1))
@@ -117,6 +124,8 @@ def _add_group_features(group: pd.DataFrame) -> pd.DataFrame:
     out["options_volume_total"] = out["ce_volume_total"] + out["pe_volume_total"]
     opt_vol_roll = out["options_volume_total"].rolling(20, min_periods=5).mean()
     out["options_rel_volume_20"] = out["options_volume_total"] / opt_vol_roll.replace(0.0, np.nan)
+    zero_opt_volume_windows = out["options_volume_total"].fillna(0.0).eq(0.0) & opt_vol_roll.fillna(0.0).eq(0.0)
+    out.loc[zero_opt_volume_windows, "options_rel_volume_20"] = 0.0
 
     ce_iv = pd.to_numeric(out.get("opt_0_ce_iv"), errors="coerce") if "opt_0_ce_iv" in out.columns else pd.Series(np.nan, index=out.index)
     pe_iv = pd.to_numeric(out.get("opt_0_pe_iv"), errors="coerce") if "opt_0_pe_iv" in out.columns else pd.Series(np.nan, index=out.index)

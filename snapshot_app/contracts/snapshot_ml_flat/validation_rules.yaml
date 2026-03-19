@@ -58,6 +58,10 @@ tier1:
 
 tier2:
   per_day_completeness_min_after_warmup: 0.95
+  per_day_completeness_min_after_warmup_by_column:
+    opt_flow_atm_call_return_1m: 0.80
+    opt_flow_atm_put_return_1m: 0.80
+    opt_flow_atm_oi_change_1m: 0.80
   columns:
     - ret_1m
     - ret_3m

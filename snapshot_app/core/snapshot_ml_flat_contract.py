@@ -296,6 +296,10 @@ def _check_tier2(frame: pd.DataFrame, rules: Dict[str, Any]) -> List[str]:
     tier2 = rules.get("tier2", {}) if isinstance(rules.get("tier2"), dict) else {}
     cols = [str(x) for x in list(tier2.get("columns", []))]
     threshold = float(tier2.get("per_day_completeness_min_after_warmup", 0.95))
+    threshold_by_column = {
+        str(key): float(value)
+        for key, value in dict(tier2.get("per_day_completeness_min_after_warmup_by_column", {})).items()
+    }
     warmup = {str(key): int(value) for key, value in dict(tier2.get("warmup_bars_by_column", {})).items()}
     min_sessions = {str(key): int(value) for key, value in dict(tier2.get("min_historical_sessions_by_column", {})).items()}
 
@@ -312,6 +316,7 @@ def _check_tier2(frame: pd.DataFrame, rules: Dict[str, Any]) -> List[str]:
         if col not in frame.columns:
             continue
         warmup_bars = int(warmup.get(col, 0))
+        col_threshold = float(threshold_by_column.get(col, threshold))
         min_hist = int(min_sessions.get(col, 1))
         for day, grp in frame.groupby("trade_date", sort=True):
             day_key = _stringify_day(day)
@@ -333,11 +338,11 @@ def _check_tier2(frame: pd.DataFrame, rules: Dict[str, Any]) -> List[str]:
                 continue
             filled = int(grp.loc[eligible, col].notna().sum())
             completeness = float(filled / eligible_count)
-            if completeness < threshold:
+            if completeness < col_threshold:
                 errors.append(
                     "tier2 completeness: "
                     f"column={col} day={day_key} warmup={warmup_bars} eligible={eligible_count} "
-                    f"filled={filled} threshold={threshold:.4f} actual={completeness:.4f}"
+                    f"filled={filled} threshold={col_threshold:.4f} actual={completeness:.4f}"
                 )
     return errors
 

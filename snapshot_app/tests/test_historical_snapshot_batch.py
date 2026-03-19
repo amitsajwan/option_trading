@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from snapshot_app.historical.snapshot_batch import _project_rows_to_ml_flat, run_snapshot_batch
+from snapshot_app.historical.snapshot_batch import _build_spot_map, _project_rows_to_ml_flat, run_snapshot_batch
 
 
 class _FakeParquetStore:
@@ -200,6 +200,111 @@ def test_project_rows_to_ml_flat_prefers_canonical_same_strike_atm_fields() -> N
     assert projected[1]["opt_flow_atm_call_return_1m"] == 0.123
     assert projected[1]["opt_flow_atm_put_return_1m"] == -0.234
     assert projected[1]["opt_flow_atm_oi_change_1m"] == 30.0
+
+
+def test_build_spot_map_uses_asof_alignment_for_futures_minutes() -> None:
+    spot_day = pd.DataFrame(
+        {
+            "timestamp": ["2021-02-24 09:15:00", "2021-02-24 09:17:00"],
+            "open": [100.0, 102.0],
+            "high": [101.0, 103.0],
+            "low": [99.0, 101.0],
+            "close": [100.5, 102.5],
+        }
+    )
+
+    mapped = _build_spot_map(
+        spot_day,
+        fut_timestamps=pd.Series(
+            pd.to_datetime(
+                [
+                    "2021-02-24 09:15:00",
+                    "2021-02-24 09:16:00",
+                    "2021-02-24 09:17:00",
+                ]
+            )
+        ),
+    )
+
+    assert mapped["2021-02-24 09:15:00"]["spot_close"] == 100.5
+    assert mapped["2021-02-24 09:16:00"]["spot_close"] == 100.5
+    assert mapped["2021-02-24 09:17:00"]["spot_close"] == 102.5
+
+
+def test_project_rows_to_ml_flat_uses_session_bar_index_for_short_sessions() -> None:
+    rows = []
+    for idx, minute in enumerate([18 * 60 + 15, 18 * 60 + 16, 18 * 60 + 17]):
+        rows.append(
+            {
+                "trade_date": "2023-11-12",
+                "year": 2023,
+                "instrument": "BANKNIFTY-I",
+                "timestamp": f"2023-11-12T{minute // 60:02d}:{minute % 60:02d}:00+05:30",
+                "snapshot_id": f"20231112_{idx}",
+                "fut_open": 100.0 + idx,
+                "fut_high": 101.0 + idx,
+                "fut_low": 99.0 + idx,
+                "fut_close": 100.5 + idx,
+                "spot_open": 100.0 + idx,
+                "spot_high": 101.0 + idx,
+                "spot_low": 99.0 + idx,
+                "spot_close": 100.25 + idx,
+                "fut_volume": 1000.0 + idx,
+                "fut_oi": 2000.0 + idx,
+                "strike_count": 3.0,
+                "total_ce_oi": 100.0,
+                "total_pe_oi": 100.0,
+                "total_ce_volume": 10.0,
+                "total_pe_volume": 10.0,
+                "pcr": 1.0,
+                "days_to_expiry": 2.0,
+                "is_expiry_day": 0.0,
+                "minutes_since_open": 540.0 + idx,
+            }
+        )
+
+    projected = _project_rows_to_ml_flat(rows, build_source="historical", build_run_id="test_run")
+
+    assert [row["time_minute_index"] for row in projected] == [0.0, 1.0, 2.0]
+
+
+def test_project_rows_to_ml_flat_zero_denominator_flow_features_fill_zero() -> None:
+    rows = []
+    for idx in range(25):
+        rows.append(
+            {
+                "trade_date": "2020-06-04",
+                "year": 2020,
+                "instrument": "BANKNIFTY-I",
+                "timestamp": f"2020-06-04T09:{15 + idx:02d}:00+05:30",
+                "snapshot_id": f"20200604_{idx}",
+                "fut_open": 100.0,
+                "fut_high": 101.0,
+                "fut_low": 99.0,
+                "fut_close": 100.0,
+                "spot_open": 99.5,
+                "spot_high": 100.5,
+                "spot_low": 99.0,
+                "spot_close": 99.8,
+                "fut_volume": 0.0,
+                "fut_oi": 0.0,
+                "strike_count": 0.0,
+                "total_ce_oi": None,
+                "total_pe_oi": None,
+                "total_ce_volume": None,
+                "total_pe_volume": None,
+                "pcr": None,
+                "days_to_expiry": 2.0,
+                "is_expiry_day": 0.0,
+            }
+        )
+
+    projected = _project_rows_to_ml_flat(rows, build_source="historical", build_run_id="test_run")
+
+    assert projected[-1]["fut_flow_rel_volume_20"] == 0.0
+    assert projected[-1]["fut_flow_oi_rel_20"] == 0.0
+    assert projected[-1]["fut_flow_oi_zscore_20"] == 0.0
+    assert projected[-1]["opt_flow_rel_volume_20"] == 0.0
 
 
 def test_project_rows_to_ml_flat_normalizes_ema_slope_fallbacks() -> None:

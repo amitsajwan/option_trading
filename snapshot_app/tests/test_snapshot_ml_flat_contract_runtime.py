@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from snapshot_app.core.snapshot_ml_flat_contract import validate_snapshot_ml_flat_rows
+import pandas as pd
+
+from snapshot_app.core.snapshot_ml_flat_contract import _check_tier2, validate_snapshot_ml_flat_rows
 
 
 def test_snapshot_ml_flat_runtime_contract_accepts_minimal_valid_row() -> None:
@@ -181,3 +183,35 @@ def test_snapshot_ml_flat_tier2_allows_atm_shift_nulls_when_continuity_breaks() 
 
     assert report["ok"] is True
     assert report["error_count"] == 0
+
+
+def test_tier2_allows_column_threshold_override_for_atm_continuity() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "trade_date": "2020-03-27",
+                "time_minute_index": idx,
+                "opt_flow_atm_strike": 50000.0,
+                "opt_flow_rows": 3.0,
+                "opt_flow_atm_call_return_1m": (0.01 if idx < 9 else None),
+            }
+            for idx in range(10)
+        ]
+    )
+
+    rules = {
+        "tier2": {
+            "columns": ["opt_flow_atm_call_return_1m"],
+            "per_day_completeness_min_after_warmup": 0.95,
+            "per_day_completeness_min_after_warmup_by_column": {
+                "opt_flow_atm_call_return_1m": 0.80,
+            },
+            "warmup_bars_by_column": {
+                "opt_flow_atm_call_return_1m": 1,
+            },
+        }
+    }
+
+    errors = _check_tier2(frame, rules)
+
+    assert errors == []
