@@ -124,9 +124,12 @@ def _compute_futures_trade_metrics(symbol_table: pd.DataFrame, decision_ts: pd.T
     if not np.isfinite(entry_price) or entry_price <= 0.0 or not np.isfinite(exit_price):
         return _empty_metrics()
     upper_return, lower_return = _resolve_barrier_returns(feature_row, entry_price=float(entry_price), cfg=cfg)
-    window = symbol_table.loc[(symbol_table.index >= entry_ts) & (symbol_table.index <= exit_ts)]
+    window = symbol_table.loc[entry_ts:exit_ts]
     if window.empty:
         return _empty_metrics()
+    highs = pd.to_numeric(window["fut_high"], errors="coerce").to_numpy(dtype=float, copy=False)
+    lows = pd.to_numeric(window["fut_low"], errors="coerce").to_numpy(dtype=float, copy=False)
+    window_timestamps = pd.to_datetime(window["timestamp"], errors="coerce")
     max_high = float(window["fut_high"].max())
     min_low = float(window["fut_low"].min())
     is_long = str(side).lower() == "long"
@@ -136,42 +139,38 @@ def _compute_futures_trade_metrics(symbol_table: pd.DataFrame, decision_ts: pd.T
         mae = (min_low - entry_price) / entry_price
         tp_price = entry_price * (1.0 + float(upper_return))
         sl_price = entry_price * (1.0 - float(lower_return))
+        hit_tp = np.isfinite(highs) & (highs >= tp_price)
+        hit_sl = np.isfinite(lows) & (lows <= sl_price)
     else:
         forward_return = (entry_price - exit_price) / entry_price
         mfe = (entry_price - min_low) / entry_price
         mae = (entry_price - max_high) / entry_price
         tp_price = entry_price * (1.0 - float(upper_return))
         sl_price = entry_price * (1.0 + float(lower_return))
+        hit_tp = np.isfinite(lows) & (lows <= tp_price)
+        hit_sl = np.isfinite(highs) & (highs >= sl_price)
     tp_hit = 0.0
     sl_hit = 0.0
     first_hit = "none"
     first_hit_offset = np.nan
     event_end_ts = exit_ts
-    for offset, (_, bar) in enumerate(window.iterrows()):
-        high = float(bar["fut_high"])
-        low = float(bar["fut_low"])
-        bar_ts = pd.Timestamp(bar["timestamp"])
-        hit_tp = (np.isfinite(high) and high >= tp_price) if is_long else (np.isfinite(low) and low <= tp_price)
-        hit_sl = (np.isfinite(low) and low <= sl_price) if is_long else (np.isfinite(high) and high >= sl_price)
-        if hit_tp and hit_sl:
+    first_hit_candidates = np.flatnonzero(hit_tp | hit_sl)
+    if first_hit_candidates.size:
+        first_idx = int(first_hit_candidates[0])
+        first_hit_offset = float(first_idx)
+        event_end_ts = pd.Timestamp(window_timestamps.iloc[first_idx])
+        first_bar_tp = bool(hit_tp[first_idx])
+        first_bar_sl = bool(hit_sl[first_idx])
+        if first_bar_tp and first_bar_sl:
             tp_hit = 1.0
             sl_hit = 1.0
             first_hit = "tp_sl_same_bar"
-            first_hit_offset = float(offset)
-            event_end_ts = bar_ts
-            break
-        if hit_tp:
+        elif first_bar_tp:
             tp_hit = 1.0
             first_hit = "tp"
-            first_hit_offset = float(offset)
-            event_end_ts = bar_ts
-            break
-        if hit_sl:
+        else:
             sl_hit = 1.0
             first_hit = "sl"
-            first_hit_offset = float(offset)
-            event_end_ts = bar_ts
-            break
     time_stop_exit = 1.0 if first_hit == "none" else 0.0
     path_exit_reason = first_hit if first_hit != "none" else "time_stop"
     return {
@@ -223,6 +222,8 @@ def _move_first_hit_side(long_reason: object, short_reason: object) -> str:
     short_txt = str(short_reason or "").strip().lower()
     if long_txt == "invalid" or short_txt == "invalid":
         return "invalid"
+    # This label tracks futures direction, not option side. A short-path stop means price moved up
+    # through the short barrier; a long-path stop means price moved down through the long barrier.
     if long_txt in {"tp", "tp_sl_same_bar"} or short_txt == "sl":
         return "up"
     if short_txt in {"tp", "tp_sl_same_bar"} or long_txt == "sl":

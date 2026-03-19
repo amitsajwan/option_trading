@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import ml_pipeline_2.publishing.publish as publish_paths
 from ml_pipeline_2.publishing import resolve_ml_pure_artifacts, validate_switch_strict
 from ml_pipeline_2.staged.publish import publish_staged_run, release_staged_run
 from ml_pipeline_2.staged.runtime_contract import load_staged_runtime_policy
@@ -191,3 +192,23 @@ def test_load_staged_runtime_policy_rejects_non_bool_block_expiry(tmp_path: Path
 
     with pytest.raises(ValueError, match="runtime.block_expiry must be boolean"):
         load_staged_runtime_policy(policy_path)
+
+
+def test_repo_root_accepts_repo_cwd_without_artifacts(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "ml_pipeline_2").mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MODEL_SWITCH_REPO_ROOT", raising=False)
+    monkeypatch.delenv("ML_PIPELINE_2_REPO_ROOT", raising=False)
+
+    assert publish_paths.repo_root() == tmp_path.resolve()
+
+
+def test_repo_root_raises_when_no_resolution_path_matches(tmp_path: Path, monkeypatch) -> None:
+    fake_install = tmp_path / "venv" / "lib" / "site-packages" / "ml_pipeline_2" / "publishing" / "publish.py"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MODEL_SWITCH_REPO_ROOT", raising=False)
+    monkeypatch.delenv("ML_PIPELINE_2_REPO_ROOT", raising=False)
+    monkeypatch.setattr(publish_paths, "__file__", str(fake_install))
+
+    with pytest.raises(RuntimeError, match="could not resolve option_trading repo root"):
+        publish_paths.repo_root()

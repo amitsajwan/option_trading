@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from ml_pipeline_2.labeling import prepare_snapshot_labeled_frame
+from ml_pipeline_2.labeling.dealer_proxy import attach_dealer_proxy_features
 
 
 def test_prepare_snapshot_labeled_frame_derives_dealer_proxy_columns() -> None:
@@ -38,4 +39,30 @@ def test_prepare_snapshot_labeled_frame_derives_dealer_proxy_columns() -> None:
     assert np.isfinite(float(out["dealer_proxy_pcr_change_5m"].iloc[-1]))
     assert np.isfinite(float(out["dealer_proxy_atm_oi_velocity_5m"].iloc[-1]))
     assert np.isfinite(float(out["dealer_proxy_volume_imbalance"].iloc[-1]))
+
+
+def test_attach_dealer_proxy_features_preserves_filtered_index_alignment() -> None:
+    frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-01"] * 5,
+            "opt_flow_ce_oi_total": [1000.0] * 5,
+            "opt_flow_pe_oi_total": [1000.0] * 5,
+            "opt_flow_pcr_oi": [1.0] * 5,
+            "opt_flow_atm_oi_change_1m": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "opt_flow_ce_pe_volume_diff": [0.0] * 5,
+            "opt_flow_ce_volume_total": [500.0] * 5,
+            "opt_flow_pe_volume_total": [500.0] * 5,
+            "ctx_dte_days": [0.0] * 5,
+            "ctx_is_high_vix_day": [0.0] * 5,
+        },
+        index=[10, 20, 30, 40, 50],
+    )
+
+    out = attach_dealer_proxy_features(frame)
+
+    pd.testing.assert_index_equal(out.index, frame.index)
+    np.testing.assert_allclose(
+        out["dealer_proxy_atm_oi_velocity_5m"].to_numpy(dtype=float),
+        np.asarray([1.0, 3.0, 6.0, 10.0, 15.0], dtype=float),
+    )
 

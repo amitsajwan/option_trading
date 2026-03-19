@@ -72,6 +72,7 @@ def attach_dealer_proxy_features(frame: pd.DataFrame) -> pd.DataFrame:
                 .rolling(5, min_periods=1)
                 .sum()
                 .reset_index(level=0, drop=True)
+                .reindex(out.index)
             )
         else:
             out["dealer_proxy_atm_oi_velocity_5m"] = atm_oi_weighted.rolling(5, min_periods=1).sum()

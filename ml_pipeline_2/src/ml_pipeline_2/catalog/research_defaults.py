@@ -110,7 +110,8 @@ def default_staged_manifest_payload() -> Dict[str, Any]:
                 "liquidity_gate_v1",
                 "regime_gate_v1",
                 "regime_confidence_gate_v1",
-            ]
+            ],
+            "block_expiry": False,
         },
         "publish": {"publisher_id": "staged_bundle_v1"},
         "hard_gates": {

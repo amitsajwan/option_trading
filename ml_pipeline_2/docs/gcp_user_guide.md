@@ -1,5 +1,7 @@
 # ml_pipeline_2 GCP and User Guide
 
+This is the canonical `ml_pipeline_2` run guide for local Ubuntu and GCP operator flows.
+
 This is the canonical operator guide for running `ml_pipeline_2`.
 
 It covers:
@@ -172,6 +174,8 @@ git pull --ff-only
 ```bash
 ./ops/gcp/run_staged_release_pipeline.sh
 ```
+
+Run it from `/opt/option_trading`, or export `REPO_ROOT=/opt/option_trading` before invoking it.
 
 That script is the managed wrapper around the staged release lane. It installs the package, runs `ml_pipeline_2.run_staged_release`, applies the generated ML runtime env, and republishes runtime config.
 

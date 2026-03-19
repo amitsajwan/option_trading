@@ -25,6 +25,7 @@ def evaluate_futures_stages_from_frame(*, frame: pd.DataFrame, probs: pd.DataFra
     else:
         stage_b_report = stage_b(frame, probs, float(ce_threshold), float(pe_threshold), float(cost_per_trade), cfg)
     stage_c_report = stage_c(frame, stage_b_report)
+    # This remains true in the normal path; flipping it false is an operator override that blocks promotion.
     promotion_eligible = bool(stage_a_report.get("passed") and stage_b_report.get("passed") and bool(cfg.no_gate_relaxed_after_results))
     report = {"created_at_utc": _utc_now(), "stage_a_predictive_quality": stage_a_report, "stage_b_futures_utility": stage_b_report, "stage_c_option_mapping_diagnostic": stage_c_report, "promotion_gates": {"no_gate_relaxed_after_results": bool(cfg.no_gate_relaxed_after_results), "promotion_eligible": promotion_eligible}}
     ml_pure = build_ml_pure_promotion_ladder(report)

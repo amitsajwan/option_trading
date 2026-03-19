@@ -8,6 +8,12 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from contracts_app.regime_thresholds import (
+    ATR_PERCENTILE_HIGH,
+    ATR_PERCENTILE_LOW,
+    VIX_HIGH_THRESHOLD,
+    VIX_LOW_THRESHOLD,
+)
 
 from .snapshot_accessor import SnapshotAccessor
 
@@ -221,6 +227,7 @@ class RollingFeatureState:
         if atr_14 is not None:
             self._last_day_atr = float(atr_14)
         atr_ratio = (float(atr_14) / float(close)) if (atr_14 is not None and close != 0.0) else None
+        atr_daily_percentile = _day_percentile(list(self._daily_atr_history), self._last_day_atr)
 
         ret_1m = _pct_change(closes[-1], closes[-2] if len(closes) >= 2 else None)
         ret_3m = _pct_change(closes[-1], closes[-4] if len(closes) >= 4 else None)
@@ -266,9 +273,14 @@ class RollingFeatureState:
             minute_of_day = int(555 + int(snap.minutes_since_open))
             day_of_week = snap.day_of_week
 
-        regime_vol_high = 1.0 if ((snap.vix_current is not None and snap.vix_current >= 20.0) or (snap.realized_vol_30m is not None and snap.realized_vol_30m >= 0.015)) else 0.0
-        regime_vol_low = 1.0 if (snap.vix_current is not None and snap.vix_current <= 12.0) else 0.0
-        regime_vol_neutral = 1.0 if (regime_vol_high == 0.0 and regime_vol_low == 0.0) else 0.0
+        vix_current = _to_float(snap.vix_current)
+        vix_reference = _to_float(snap.vix_prev_close)
+        if vix_reference is None:
+            vix_reference = vix_current
+        high_vix_day = 1.0 if (vix_current is not None and vix_current >= VIX_HIGH_THRESHOLD) else 0.0
+        regime_vol_high = 1.0 if (high_vix_day == 1.0 or (vix_reference is not None and vix_reference >= VIX_HIGH_THRESHOLD)) else 0.0
+        regime_vol_low = 1.0 if (vix_reference is not None and vix_reference < VIX_LOW_THRESHOLD) else 0.0
+        regime_vol_neutral = 1.0 if (vix_reference is not None and regime_vol_high == 0.0 and regime_vol_low == 0.0) else 0.0
         trend_up = 1.0 if (snap.fut_return_5m is not None and snap.fut_return_15m is not None and snap.fut_return_5m > 0 and snap.fut_return_15m > 0) else 0.0
         trend_down = 1.0 if (snap.fut_return_5m is not None and snap.fut_return_15m is not None and snap.fut_return_5m < 0 and snap.fut_return_15m < 0) else 0.0
         is_near_expiry = 1.0 if (snap.days_to_expiry is not None and snap.days_to_expiry <= 1) else 0.0
@@ -292,7 +304,7 @@ class RollingFeatureState:
             "ema_50_slope": (float(self._ema_50 - prev_ema_50) if (self._ema_50 is not None and prev_ema_50 is not None) else None),
             "rsi_14": rsi_14,
             "atr_ratio": atr_ratio,
-            "atr_daily_percentile": _day_percentile(list(self._daily_atr_history), self._last_day_atr),
+            "atr_daily_percentile": atr_daily_percentile,
             "vwap_distance": (float((close - vwap) / vwap) if (vwap is not None and vwap != 0.0) else None),
             "distance_from_day_high": (
                 float((close - self._day_high) / self._day_high)
@@ -323,12 +335,12 @@ class RollingFeatureState:
             "vix_prev_close": _to_float(snap.vix_prev_close),
             "vix_prev_close_change_1d": None,
             "vix_prev_close_zscore_20d": None,
-            "is_high_vix_day": (1.0 if (snap.vix_current is not None and snap.vix_current >= 20.0) else 0.0),
+            "is_high_vix_day": high_vix_day,
             "regime_vol_high": regime_vol_high,
             "regime_vol_low": regime_vol_low,
             "regime_vol_neutral": regime_vol_neutral,
-            "regime_atr_high": 1.0 if (snap.realized_vol_30m is not None and snap.realized_vol_30m >= 0.015) else 0.0,
-            "regime_atr_low": 1.0 if (snap.realized_vol_30m is not None and snap.realized_vol_30m <= 0.005) else 0.0,
+            "regime_atr_high": 1.0 if (atr_daily_percentile is not None and atr_daily_percentile >= ATR_PERCENTILE_HIGH) else 0.0,
+            "regime_atr_low": 1.0 if (atr_daily_percentile is not None and atr_daily_percentile <= ATR_PERCENTILE_LOW) else 0.0,
             "regime_trend_up": trend_up,
             "regime_trend_down": trend_down,
             "regime_expiry_near": is_near_expiry,

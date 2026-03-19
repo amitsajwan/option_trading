@@ -25,3 +25,4 @@ def test_default_staged_manifest_matches_checked_in_default() -> None:
     assert payload["training"]["cv_config"] == defaults["training"]["cv_config"]
     assert payload["policy"]["stage1"]["threshold_grid"] == defaults["policy"]["stage1"]["threshold_grid"]
     assert payload["runtime"]["prefilter_gate_ids"] == defaults["runtime"]["prefilter_gate_ids"]
+    assert defaults["runtime"]["block_expiry"] is False

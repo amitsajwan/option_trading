@@ -1,0 +1,6 @@
+from __future__ import annotations
+
+VIX_HIGH_THRESHOLD = 20.0
+VIX_LOW_THRESHOLD = 16.0
+ATR_PERCENTILE_HIGH = 0.70
+ATR_PERCENTILE_LOW = 0.30

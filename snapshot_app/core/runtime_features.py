@@ -5,6 +5,12 @@ from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
+from contracts_app.regime_thresholds import (
+    ATR_PERCENTILE_HIGH,
+    ATR_PERCENTILE_LOW,
+    VIX_HIGH_THRESHOLD,
+    VIX_LOW_THRESHOLD,
+)
 
 
 def _compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -206,14 +212,23 @@ def attach_regime_features(frame: pd.DataFrame) -> pd.DataFrame:
     else:
         atr_pct = _first_numeric_series(out, ["atr_percentile", "osc_atr_percentile"])
 
-    vol_high = pd.Series(np.where(vix.notna(), (vix >= 20.0).astype(float), np.nan), index=out.index)
+    vol_high = pd.Series(np.where(vix.notna(), (vix >= VIX_HIGH_THRESHOLD).astype(float), np.nan), index=out.index)
     if ctx_high_vix.notna().any():
         vol_high = ctx_high_vix.where(ctx_high_vix.notna(), vol_high)
     out["regime_vol_high"] = vol_high
-    out["regime_vol_low"] = pd.Series(np.where(vix.notna(), (vix < 16.0).astype(float), np.nan), index=out.index)
-    out["regime_vol_neutral"] = pd.Series(np.where(vix.notna(), ((vix >= 16.0) & (vix < 20.0)).astype(float), np.nan), index=out.index)
-    out["regime_atr_high"] = ctx_atr_high.where(ctx_atr_high.notna(), pd.Series(np.where(atr_pct.notna(), (atr_pct >= 0.70).astype(float), np.nan), index=out.index))
-    out["regime_atr_low"] = ctx_atr_low.where(ctx_atr_low.notna(), pd.Series(np.where(atr_pct.notna(), (atr_pct <= 0.30).astype(float), np.nan), index=out.index))
+    out["regime_vol_low"] = pd.Series(np.where(vix.notna(), (vix < VIX_LOW_THRESHOLD).astype(float), np.nan), index=out.index)
+    out["regime_vol_neutral"] = pd.Series(
+        np.where(vix.notna(), ((vix >= VIX_LOW_THRESHOLD) & (vix < VIX_HIGH_THRESHOLD)).astype(float), np.nan),
+        index=out.index,
+    )
+    out["regime_atr_high"] = ctx_atr_high.where(
+        ctx_atr_high.notna(),
+        pd.Series(np.where(atr_pct.notna(), (atr_pct >= ATR_PERCENTILE_HIGH).astype(float), np.nan), index=out.index),
+    )
+    out["regime_atr_low"] = ctx_atr_low.where(
+        ctx_atr_low.notna(),
+        pd.Series(np.where(atr_pct.notna(), (atr_pct <= ATR_PERCENTILE_LOW).astype(float), np.nan), index=out.index),
+    )
     out["regime_trend_up"] = ctx_trend_up.where(ctx_trend_up.notna(), pd.Series(np.where(ema_spread.notna(), (ema_spread > 0.0).astype(float), np.nan), index=out.index))
     out["regime_trend_down"] = ctx_trend_down.where(ctx_trend_down.notna(), pd.Series(np.where(ema_spread.notna(), (ema_spread < 0.0).astype(float), np.nan), index=out.index))
     out["regime_expiry_near"] = ctx_expiry_near.where(
