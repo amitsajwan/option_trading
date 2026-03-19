@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
@@ -350,16 +352,38 @@ def label_day_futures(features_day: pd.DataFrame, cfg: EffectiveLabelConfig) -> 
     return out.copy()
 
 
+def _label_day_frame(day_features: pd.DataFrame, cfg: EffectiveLabelConfig) -> pd.DataFrame:
+    return label_day_futures(day_features, cfg).sort_values("timestamp").reset_index(drop=True)
+
+
+def _resolve_label_workers(day_count: int) -> int:
+    if day_count <= 1:
+        return 1
+    raw = str(os.getenv("ML_PIPELINE_LABEL_WORKERS", "") or "").strip()
+    if raw:
+        try:
+            requested = int(raw)
+        except Exception:
+            requested = 1
+    else:
+        requested = min(8, int(os.cpu_count() or 1))
+    return max(1, min(int(day_count), int(requested)))
+
+
 def build_labeled_dataset(features: pd.DataFrame, *, cfg: EffectiveLabelConfig) -> pd.DataFrame:
     frame = features.copy()
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
     if "trade_date" not in frame.columns:
         frame["trade_date"] = frame["timestamp"].dt.strftime("%Y-%m-%d")
     frame = frame.dropna(subset=["timestamp", "trade_date"]).sort_values("timestamp")
-    labeled_parts: List[pd.DataFrame] = []
-    for day in frame["trade_date"].astype(str).unique().tolist():
-        day_features = frame[frame["trade_date"].astype(str) == day].copy()
-        labeled_parts.append(label_day_futures(day_features, cfg).sort_values("timestamp").reset_index(drop=True))
+    frame["trade_date"] = frame["trade_date"].astype(str)
+    day_frames = [day_frame.copy() for _, day_frame in frame.groupby("trade_date", sort=False)]
+    workers = _resolve_label_workers(len(day_frames))
+    if workers <= 1:
+        labeled_parts = [_label_day_frame(day_features, cfg) for day_features in day_frames]
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            labeled_parts = list(executor.map(_label_day_frame, day_frames, [cfg] * len(day_frames)))
     return pd.concat(labeled_parts, ignore_index=True).sort_values("timestamp").reset_index(drop=True) if labeled_parts else pd.DataFrame()
 
 
