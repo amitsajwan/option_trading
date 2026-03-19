@@ -1491,8 +1491,13 @@ def run_snapshot_batch(
     _flush_buffer()
 
     elapsed = round(time.time() - started_at, 2)
+    final_status = "complete"
+    if errors:
+        final_status = "partial_error"
+    elif skipped_missing_inputs or no_rows_days:
+        final_status = "partial_incomplete"
     return {
-        "status": "complete",
+        "status": final_status,
         "output_dataset": resolved_output_dataset,
         "build_source": build_source,
         "build_run_id": resolved_build_run_id,
@@ -1504,7 +1509,9 @@ def run_snapshot_batch(
         "warmup_days_processed": int(warmup_days_processed),
         "days_skipped_existing": len(already_done),
         "days_skipped_missing_inputs": len(skipped_missing_inputs),
+        "missing_input_days": skipped_missing_inputs[:50],
         "days_no_rows": len(no_rows_days),
+        "no_row_days": no_rows_days[:50],
         "error_count": len(errors),
         "error_days": [entry["day"] for entry in errors],
         "total_rows": int(total_rows),

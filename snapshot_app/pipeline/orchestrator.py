@@ -165,6 +165,8 @@ def run_snapshot_builds(
         max_day=max_day,
         explicit_days=explicit_days,
     )
+    option_ready_days = set(store.all_days_with_options(min_day=min_day, max_day=max_day))
+    target_days = [day for day in target_days if day in option_ready_days]
     if not target_days:
         return {
             "status": "no_days",
@@ -309,7 +311,11 @@ def run_snapshot_builds(
 
     statuses = {str(row.get("status") or "") for row in slice_results}
     status = "complete"
-    if statuses == {"dry_run"}:
+    if "partial_error" in statuses:
+        status = "partial_error"
+    elif "partial_incomplete" in statuses:
+        status = "partial_incomplete"
+    elif statuses == {"dry_run"}:
         status = "dry_run"
     elif statuses == {"already_complete"}:
         status = "already_complete"
@@ -331,7 +337,17 @@ def run_snapshot_builds(
         "warmup_days_processed": int(sum(int(row.get("warmup_days_processed") or 0) for row in slice_results)),
         "days_skipped_existing": int(len(completed_days)),
         "days_skipped_missing_inputs": int(sum(int(row.get("days_skipped_missing_inputs") or 0) for row in slice_results)),
+        "missing_input_days": [
+            day
+            for row in slice_results
+            for day in list(row.get("missing_input_days") or [])
+        ],
         "days_no_rows": int(sum(int(row.get("days_no_rows") or 0) for row in slice_results)),
+        "no_row_days": [
+            day
+            for row in slice_results
+            for day in list(row.get("no_row_days") or [])
+        ],
         "error_count": int(sum(int(row.get("error_count") or 0) for row in slice_results)),
         "error_days": [
             day

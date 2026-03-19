@@ -138,11 +138,13 @@ payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 result = payload.get("result") or {}
 status = str(result.get("status") or "").strip()
 error_count = int(result.get("error_count") or 0)
-print("1" if status == "complete" and error_count == 0 else "0")
+skipped_missing_inputs = int(result.get("days_skipped_missing_inputs") or 0)
+days_no_rows = int(result.get("days_no_rows") or 0)
+print("1" if status == "complete" and error_count == 0 and skipped_missing_inputs == 0 and days_no_rows == 0 else "0")
 PY
     )"
     if [ "${PUBLISH_READY}" != "1" ]; then
-      echo "Skipping publish because the snapshot build is incomplete or has errors. Set ALLOW_PARTIAL_PUBLISH=1 to override."
+      echo "Skipping publish because the snapshot build is incomplete, has skipped-input days, has no-row days, or has errors. Set ALLOW_PARTIAL_PUBLISH=1 to override."
       CAN_PUBLISH=0
     fi
   fi

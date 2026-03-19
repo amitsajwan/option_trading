@@ -161,6 +161,65 @@ def test_run_snapshot_batch_flushes_canonical_and_ml_flat(monkeypatch, tmp_path:
     ]
 
 
+def test_run_snapshot_batch_marks_missing_input_days_as_partial_incomplete(monkeypatch, tmp_path: Path) -> None:
+    class _MissingOptionsStore(_FakeParquetStore):
+        def all_days_with_options(self, *, min_day: str | None = None, max_day: str | None = None) -> list[str]:
+            return ["2020-01-29"]
+
+    def _fake_process_day(**kwargs):
+        trade_date = str(kwargs["trade_date"])
+        return {
+            "snapshot_rows": [
+                {
+                    "trade_date": trade_date,
+                    "timestamp": f"{trade_date} 09:15:00",
+                    "snapshot_id": f"{trade_date}_001",
+                    "snapshot_raw_json": "{}",
+                    "build_source": "historical",
+                    "build_run_id": "test_run",
+                }
+            ],
+            "ml_flat_rows": [
+                {
+                    "trade_date": trade_date,
+                    "timestamp": f"{trade_date} 09:15:00",
+                    "snapshot_id": f"{trade_date}_001",
+                    "schema_name": "SnapshotMLFlat",
+                    "schema_version": "3.0",
+                    "build_source": "historical",
+                    "build_run_id": "test_run",
+                    "opt_flow_rows": 3,
+                }
+            ],
+            "stage_rows": {
+                "stage1_entry_view": [],
+                "stage2_direction_view": [],
+                "stage3_recipe_view": [],
+            },
+        }
+
+    monkeypatch.setattr("snapshot_app.historical.snapshot_batch.ParquetStore", _MissingOptionsStore)
+    monkeypatch.setattr("snapshot_app.historical.snapshot_batch.process_day", _fake_process_day)
+
+    result = run_snapshot_batch(
+        parquet_base=tmp_path,
+        instrument="BANKNIFTY-I",
+        min_day="2020-01-29",
+        max_day="2020-01-30",
+        resume=False,
+        write_batch_days=1,
+        build_source="historical",
+        build_run_id="test_run",
+        validate_ml_flat_contract=False,
+        partition_key="202001_202001_m1",
+    )
+
+    assert result["status"] == "partial_incomplete"
+    assert result["days_processed"] == 1
+    assert result["days_skipped_missing_inputs"] == 1
+    assert result["missing_input_days"] == ["2020-01-30"]
+
+
 def test_project_rows_to_ml_flat_prefers_canonical_same_strike_atm_fields() -> None:
     rows = [
         {
