@@ -40,8 +40,6 @@ class ParquetStore:
         self.options_glob = self._glob(self._options_root)
         self.spot_glob = self._glob(self._spot_root)
         self.vix_path = self._vix_file.as_posix()
-        # Restrict snapshots to canonical yearly files only.
-        # This avoids accidental reads of quarantined/corrupt backups.
         self.snapshots_glob = (self._snapshots_root / "**" / "data.parquet").as_posix()
         self._options_columns: Optional[frozenset[str]] = None
         self._connection: Optional["duckdb.DuckDBPyConnection"] = None
@@ -74,6 +72,15 @@ class ParquetStore:
 
     def _query(self, sql: str, params: list[Any] | None = None) -> pd.DataFrame:
         return self._con().execute(sql, params or None).df()
+
+    @staticmethod
+    def _snapshot_parquet_read_expr(path_glob: str) -> str:
+        return (
+            "read_parquet("
+            f"'{path_glob}', "
+            "hive_partitioning=false, "
+            "union_by_name=true)"
+        )
 
     def _ensure_snapshots_available(self, *, context: str) -> bool:
         if self._has_parquet(self._snapshots_root):
@@ -204,7 +211,7 @@ class ParquetStore:
         df = self._query(
             f"""
             SELECT DISTINCT trade_date
-            FROM read_parquet('{self.snapshots_glob}', hive_partitioning=true, union_by_name=true)
+            FROM {self._snapshot_parquet_read_expr(self.snapshots_glob)}
             {clause}
             ORDER BY trade_date ASC
             """,
@@ -412,7 +419,7 @@ class ParquetStore:
         df = self._query(
             f"""
             SELECT *
-            FROM read_parquet('{self.snapshots_glob}', hive_partitioning=true, union_by_name=true)
+            FROM {self._snapshot_parquet_read_expr(self.snapshots_glob)}
             WHERE trade_date BETWEEN ? AND ?
             ORDER BY timestamp ASC
             """,
@@ -439,7 +446,7 @@ class ParquetStore:
         schema = self._query(
             f"""
             SELECT *
-            FROM read_parquet('{self.snapshots_glob}', hive_partitioning=true, union_by_name=true)
+            FROM {self._snapshot_parquet_read_expr(self.snapshots_glob)}
             LIMIT 0
             """
         )
@@ -467,7 +474,7 @@ class ParquetStore:
             f"""
             SELECT
                 {", ".join(projections)}
-            FROM read_parquet('{self.snapshots_glob}', hive_partitioning=true, union_by_name=true)
+            FROM {self._snapshot_parquet_read_expr(self.snapshots_glob)}
             {clause}
             GROUP BY trade_date
             ORDER BY trade_date ASC
@@ -488,7 +495,7 @@ class ParquetStore:
         schema = self._query(
             f"""
             SELECT *
-            FROM read_parquet('{self.snapshots_glob}', hive_partitioning=true, union_by_name=true)
+            FROM {self._snapshot_parquet_read_expr(self.snapshots_glob)}
             LIMIT 0
             """
         )
@@ -515,7 +522,7 @@ class ParquetStore:
                 SUM(CASE WHEN schema_version IS NOT NULL THEN 1 ELSE 0 END) AS rows_with_schema_version,
                 MIN(CAST(schema_version AS VARCHAR)) AS min_schema_version,
                 MAX(CAST(schema_version AS VARCHAR)) AS max_schema_version
-            FROM read_parquet('{self.snapshots_glob}', hive_partitioning=true, union_by_name=true)
+            FROM {self._snapshot_parquet_read_expr(self.snapshots_glob)}
             {clause}
             GROUP BY trade_date
             ORDER BY trade_date ASC
@@ -667,7 +674,11 @@ class ParquetStore:
                         MIN(trade_date) AS first_day,
                         MAX(trade_date) AS last_day,
                         COUNT(DISTINCT trade_date) AS trading_days
-                    FROM read_parquet('{glob_expr}', hive_partitioning=true)
+                    FROM {
+                        self._snapshot_parquet_read_expr(glob_expr)
+                        if name == "snapshots"
+                        else f"read_parquet('{glob_expr}', hive_partitioning=true)"
+                    }
                     """
                 )
                 out[name] = df.iloc[0].to_dict() if len(df) else {"status": "empty"}

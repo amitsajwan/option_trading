@@ -107,6 +107,7 @@ tier2:
     osc_atr_percentile: 20
     fut_flow_rel_volume_20: 5
     fut_flow_oi_rel_20: 5
+    fut_flow_oi_change_5m: 5
     fut_flow_oi_zscore_20: 5
     opt_flow_rel_volume_20: 5
     opt_flow_atm_call_return_1m: 1
