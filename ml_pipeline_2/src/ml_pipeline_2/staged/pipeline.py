@@ -24,6 +24,13 @@ STAGE_ORDER = ("stage1", "stage2", "stage3")
 SUMMARY_SCHEMA_VERSION = 2
 
 
+def _normalize_timestamp_series(values: pd.Series) -> pd.Series:
+    out = pd.to_datetime(values, errors="coerce")
+    if getattr(out.dt, "tz", None) is not None:
+        out = out.dt.tz_localize(None)
+    return out
+
+
 def _load_dataset(parquet_root: Path, dataset_name: str) -> pd.DataFrame:
     dataset_dir = parquet_root / dataset_name
     if not dataset_dir.exists():
@@ -34,7 +41,7 @@ def _load_dataset(parquet_root: Path, dataset_name: str) -> pd.DataFrame:
     if not files:
         raise FileNotFoundError(f"dataset has no year partitions: {dataset_dir}")
     frame = pd.concat([pd.read_parquet(path) for path in files], ignore_index=True)
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+    frame["timestamp"] = _normalize_timestamp_series(frame["timestamp"])
     frame = frame.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
     frame["trade_date"] = normalize_trade_date(frame["trade_date"])
     return frame
@@ -138,7 +145,7 @@ def _label_recipe_frame(support: pd.DataFrame, recipe: LabelRecipe) -> pd.DataFr
     labeled = build_labeled_dataset(support.copy(), cfg=_recipe_cfg(recipe))
     labeled = prepare_snapshot_labeled_frame(labeled, context=f"staged:{recipe.recipe_id}")
     labeled["trade_date"] = normalize_trade_date(labeled["trade_date"])
-    labeled["timestamp"] = pd.to_datetime(labeled["timestamp"], errors="coerce")
+    labeled["timestamp"] = _normalize_timestamp_series(labeled["timestamp"])
     return labeled
 
 
