@@ -23,7 +23,7 @@ def test_launch_background_job_writes_job_metadata(tmp_path: Path, monkeypatch) 
     payload = background.launch_background_job(
         module="ml_pipeline_2.run_research",
         args=["--config", "test.json"],
-        job_name="Recovery Matrix",
+        job_name="Research Job",
         metadata={"summary_filename": "summary.json"},
         job_root=tmp_path / "jobs",
     )

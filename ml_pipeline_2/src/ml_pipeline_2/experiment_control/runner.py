@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..contracts.manifests import PHASE2_LABEL_SWEEP_KIND, RECOVERY_KIND, STAGED_KIND, load_and_resolve_manifest
+from ..contracts.manifests import STAGED_KIND, load_and_resolve_manifest
 from .state import RunContext
 
 
@@ -14,18 +14,10 @@ def _timestamp_suffix() -> str:
 
 
 def _scenario_runner(kind: str):
-    if kind == PHASE2_LABEL_SWEEP_KIND:
-        from ..scenario_flows.phase2_label_sweep import run_phase2_label_sweep
-
-        return run_phase2_label_sweep
-    if kind == RECOVERY_KIND:
-        from ..scenario_flows.fo_expiry_aware_recovery import run_recovery_research
-
-        return run_recovery_research
     if kind == STAGED_KIND:
-        from ..scenario_flows.staged_dual_recipe import run_staged_dual_recipe
+        from ..staged import run_staged_research
 
-        return run_staged_dual_recipe
+        return run_staged_research
     raise ValueError(f"unsupported experiment kind: {kind}")
 
 

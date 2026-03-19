@@ -26,6 +26,7 @@ def _derive_ctx_expiry_columns(frame: pd.DataFrame) -> pd.DataFrame:
     if "ctx_dte_days" in out.columns:
         ctx_dte = pd.to_numeric(out["ctx_dte_days"], errors="coerce")
         if "ctx_is_expiry_day" not in out.columns:
+            # Missing DTE stays non-expiry here; callers that need stricter handling must validate upstream.
             out["ctx_is_expiry_day"] = (ctx_dte == 0).astype(float)
         if "ctx_is_near_expiry" not in out.columns:
             out["ctx_is_near_expiry"] = ((ctx_dte >= 0) & (ctx_dte <= 1)).astype(float)

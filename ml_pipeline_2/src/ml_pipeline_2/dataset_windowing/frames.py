@@ -26,6 +26,7 @@ def load_feature_frame(path: Path) -> pd.DataFrame:
 
 def filter_trade_dates(frame: pd.DataFrame, start_day: str, end_day: str) -> pd.DataFrame:
     out = frame.copy()
+    # Defensive normalization: most callers already pass normalized frames, but legacy entrypoints do not.
     out["trade_date"] = normalize_trade_date(out["trade_date"])
     mask = out["trade_date"].notna() & (out["trade_date"] >= str(start_day)) & (out["trade_date"] <= str(end_day))
     return out.loc[mask].copy().sort_values("timestamp").reset_index(drop=True)

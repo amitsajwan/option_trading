@@ -15,14 +15,13 @@ def test_ml_pipeline_2_does_not_import_ml_pipeline() -> None:
 
 def test_scenario_flows_do_not_import_each_other() -> None:
     root = Path("ml_pipeline_2/src/ml_pipeline_2/scenario_flows")
+    flow_names = {path.stem for path in root.glob("*.py") if path.name != "__init__.py"}
     offenders = []
     for path in root.glob("*.py"):
         if path.name == "__init__.py":
             continue
         text = path.read_text(encoding="utf-8")
-        if "from .phase2_label_sweep" in text or "import .phase2_label_sweep" in text:
-            offenders.append(str(path))
-        if "from .fo_expiry_aware_recovery" in text or "import .fo_expiry_aware_recovery" in text:
+        if any(f"from .{name}" in text or f"import .{name}" in text for name in sorted(flow_names - {path.stem})):
             offenders.append(str(path))
     assert offenders == []
 

@@ -118,21 +118,3 @@ class LabelRecipe:
             "take_profit_pct": float(self.take_profit_pct),
             "stop_loss_pct": float(self.stop_loss_pct),
         }
-
-
-@dataclass(frozen=True)
-class RecoveryRecipe:
-    recipe_id: str
-    horizon_minutes: int
-    take_profit_pct: float
-    stop_loss_pct: float
-    barrier_mode: str
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "recipe_id": str(self.recipe_id),
-            "horizon_minutes": int(self.horizon_minutes),
-            "take_profit_pct": float(self.take_profit_pct),
-            "stop_loss_pct": float(self.stop_loss_pct),
-            "barrier_mode": str(self.barrier_mode),
-        }

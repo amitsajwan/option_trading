@@ -6,6 +6,7 @@ import numpy as np
 
 
 def max_drawdown_pct(returns: Sequence[float]) -> float:
+    """Return max drawdown from a geometrically compounded return path."""
     r = np.asarray(list(returns), dtype=float)
     if len(r) == 0:
         return 0.0
@@ -16,6 +17,7 @@ def max_drawdown_pct(returns: Sequence[float]) -> float:
 
 
 def profit_factor(returns: Sequence[float]) -> float:
+    """Return gross-profit / gross-loss using additive trade returns."""
     r = np.asarray(list(returns), dtype=float)
     if len(r) == 0:
         return 0.0

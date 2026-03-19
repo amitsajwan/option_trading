@@ -1,7 +1,5 @@
 from .manifests import (
     MANIFEST_KINDS,
-    PHASE2_LABEL_SWEEP_KIND,
-    RECOVERY_KIND,
     STAGED_KIND,
     ManifestValidationError,
     load_and_resolve_manifest,
@@ -24,7 +22,6 @@ from .types import (
     LabelRecipe,
     ModelSpec,
     PreprocessConfig,
-    RecoveryRecipe,
     TradingObjectiveConfig,
 )
 
@@ -47,11 +44,8 @@ __all__ = [
     "MANIFEST_KINDS",
     "ManifestValidationError",
     "ModelSpec",
-    "PHASE2_LABEL_SWEEP_KIND",
     "PreprocessConfig",
-    "RECOVERY_KIND",
     "STAGED_KIND",
-    "RecoveryRecipe",
     "TradingObjectiveConfig",
     "load_and_resolve_manifest",
 ]

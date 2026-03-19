@@ -52,8 +52,8 @@ def apply_event_overlap_purge(train_df: pd.DataFrame, *, heldout_frames: Sequenc
         keep_mask &= ~overlap.to_numpy(dtype=bool)
     embargo = max(0, int(embargo_rows))
     if embargo > 0 and len(heldout_start) > 0:
-        combined_ts = pd.concat([train_start, heldout_start], ignore_index=True).dropna().sort_values().reset_index(drop=True)
-        median_step = combined_ts.diff().dropna().median() if len(combined_ts) >= 2 else pd.Timedelta(minutes=1)
+        observed_train_steps = train_start.dropna().sort_values().reset_index(drop=True)
+        median_step = observed_train_steps.diff().dropna().median() if len(observed_train_steps) >= 2 else pd.Timedelta(minutes=1)
         if pd.isna(median_step) or median_step <= pd.Timedelta(0):
             median_step = pd.Timedelta(minutes=1)
         cutoff = heldout_start.min() - (median_step * embargo)

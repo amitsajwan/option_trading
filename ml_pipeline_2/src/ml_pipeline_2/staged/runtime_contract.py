@@ -22,7 +22,7 @@ _STAGE_POLICY_REQUIRED_FIELDS = {
 }
 
 
-def _coerce_bool(value: object, *, field_name: str) -> bool:
+def _require_bool(value: object, *, field_name: str) -> bool:
     if isinstance(value, bool):
         return value
     raise ValueError(f"{field_name} must be boolean")
@@ -82,6 +82,6 @@ def load_staged_runtime_policy(path: str | Path) -> dict[str, Any]:
     gate_ids = list(runtime.get("prefilter_gate_ids") or [])
     if not gate_ids:
         raise ValueError("staged runtime policy runtime.prefilter_gate_ids must not be empty")
-    runtime["block_expiry"] = _coerce_bool(runtime.get("block_expiry", False), field_name="staged runtime policy runtime.block_expiry")
+    runtime["block_expiry"] = _require_bool(runtime.get("block_expiry", False), field_name="staged runtime policy runtime.block_expiry")
     payload["runtime"] = runtime
     return payload

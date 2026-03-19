@@ -42,6 +42,39 @@ def _window(frame: pd.DataFrame, window: Dict[str, str]) -> pd.DataFrame:
     return filter_trade_dates(frame, str(window["start"]), str(window["end"]))
 
 
+def _expiry_day_mask(frame: pd.DataFrame, *, context: str) -> tuple[pd.Series, str]:
+    if "ctx_is_expiry_day" in frame.columns:
+        mask = pd.to_numeric(frame["ctx_is_expiry_day"], errors="coerce").fillna(0.0) == 1.0
+        return mask, "ctx_is_expiry_day"
+    if "ctx_dte_days" in frame.columns:
+        mask = pd.to_numeric(frame["ctx_dte_days"], errors="coerce") == 0.0
+        return mask.fillna(False), "ctx_dte_days"
+    raise ValueError(f"{context} cannot apply block_expiry without ctx_is_expiry_day or ctx_dte_days")
+
+
+def _apply_runtime_filters(
+    frame: pd.DataFrame,
+    *,
+    block_expiry: bool,
+    context: str,
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    out = frame.copy()
+    meta: Dict[str, Any] = {
+        "rows_before": int(len(out)),
+        "rows_after": int(len(out)),
+        "expiry_rows_dropped": 0,
+        "signal_column": None,
+    }
+    if not block_expiry:
+        return out, meta
+    expiry_mask, signal_column = _expiry_day_mask(out, context=context)
+    meta["signal_column"] = signal_column
+    meta["expiry_rows_dropped"] = int(expiry_mask.sum())
+    out = out.loc[~expiry_mask].copy().sort_values("timestamp").reset_index(drop=True)
+    meta["rows_after"] = int(len(out))
+    return out, meta
+
+
 def _recipe_cfg(recipe: LabelRecipe) -> EffectiveLabelConfig:
     return EffectiveLabelConfig(
         horizon_minutes=int(recipe.horizon_minutes),
@@ -855,9 +888,24 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     manifest = dict(ctx.resolved_config)
     parquet_root = Path(manifest["inputs"]["parquet_root"]).resolve()
     support_dataset = str(manifest["inputs"]["support_dataset"])
+    runtime_block_expiry = bool(manifest["runtime"].get("block_expiry", False))
     recipe_catalog = get_recipe_catalog(str(manifest["catalog"]["recipe_catalog_id"]))
-    support = _load_dataset(parquet_root, support_dataset)
+    support, support_filter_meta = _apply_runtime_filters(
+        _load_dataset(parquet_root, support_dataset),
+        block_expiry=runtime_block_expiry,
+        context=f"staged support dataset {support_dataset}",
+    )
     oracle, utility = _build_oracle_targets(support, recipe_catalog, cost_per_trade=float(manifest["training"]["cost_per_trade"]))
+    runtime_filtering: Dict[str, Any] = {
+        "block_expiry": {
+            "enabled": runtime_block_expiry,
+            "support": {
+                "dataset_name": support_dataset,
+                **support_filter_meta,
+            },
+            "stages": {},
+        }
+    }
 
     components: dict[str, dict[str, str]] = {}
     labeled_frames: dict[str, dict[str, pd.DataFrame]] = {}
@@ -865,7 +913,15 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         component_ids = _stage_component_ids(manifest, stage_name)
         components[stage_name] = component_ids
         dataset_name = view_registry()[component_ids["view_id"]].dataset_name
-        stage_frame = _load_dataset(parquet_root, dataset_name)
+        stage_frame, stage_filter_meta = _apply_runtime_filters(
+            _load_dataset(parquet_root, dataset_name),
+            block_expiry=runtime_block_expiry,
+            context=f"staged {stage_name} dataset {dataset_name}",
+        )
+        runtime_filtering["block_expiry"]["stages"][stage_name] = {
+            "dataset_name": dataset_name,
+            **stage_filter_meta,
+        }
         labeler = resolve_labeler(component_ids["labeler_id"])
         labeled = labeler(stage_frame, oracle)
         labeled_frames[stage_name] = {
@@ -993,7 +1049,8 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         },
         "publish_assessment": publish_assessment,
         "runtime_prefilter_gate_ids": list(manifest["runtime"]["prefilter_gate_ids"]),
-        "runtime_block_expiry": bool(manifest["runtime"].get("block_expiry", False)),
+        "runtime_block_expiry": runtime_block_expiry,
+        "runtime_filtering": runtime_filtering,
         "stage_artifacts": {
             "stage1": {
                 "started_at_utc": stage1_started_at,
