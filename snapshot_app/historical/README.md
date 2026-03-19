@@ -1,11 +1,12 @@
 # Historical Snapshot User Guide
 
-Builds the final historical `MarketSnapshot` contract through one unified code path:
+Builds the final historical `MarketSnapshot` contract through one staged pipeline:
 
 1. raw CSV input under a source root such as `C:\code\banknifty_data`
 2. normalized parquet cache under `.data/ml_pipeline/parquet_data`
 3. canonical `snapshots` parquet under the same parquet base
-4. derived `snapshots_ml_flat` parquet for ML research
+4. intermediate `market_base` parquet under the same parquet base
+5. derived `snapshots_ml_flat` and stage-view parquet for ML research
 
 The preferred operator entrypoint is always:
 
@@ -33,6 +34,7 @@ Input options:
 
 Output:
 - `.data/ml_pipeline/parquet_data/snapshots/**/data.parquet` (canonical `MarketSnapshot` contract)
+- `.data/ml_pipeline/parquet_data/market_base/**/data.parquet` (stateful flattened intermediate for downstream projection)
 - `.data/ml_pipeline/parquet_data/snapshots_ml_flat/**/data.parquet` (derived ML-flat contract)
 - `.data/ml_pipeline/parquet_data/stage1_entry_view/**/data.parquet`
 - `.data/ml_pipeline/parquet_data/stage2_direction_view/**/data.parquet`
@@ -40,6 +42,7 @@ Output:
 
 Each trading minute now produces:
 - one canonical nested `MarketSnapshot`
+- one `market_base` row for downstream projection
 - one derived `snapshots_ml_flat` row for offline ML
 
 Contract baseline:
@@ -132,28 +135,40 @@ python -m snapshot_app.historical.snapshot_batch_runner --validate-only --valida
 python -m snapshot_app.historical.snapshot_batch_runner
 ```
 
-5. Build canonical snapshots plus derived flat dataset:
+5. Build canonical snapshots plus market_base only:
 
 ```powershell
-python -m snapshot_app.historical.snapshot_batch_runner --build-source historical --validate-ml-flat-contract --manifest-out .run/snapshot_ml_flat/team_b/build_manifest.json
+python -m snapshot_app.historical.snapshot_batch_runner --build-stage snapshots
 ```
 
-6. Validate canonical snapshots plus derived flat dataset and write report:
+6. Build derived ML-flat plus stage views from existing market_base:
+
+```powershell
+python -m snapshot_app.historical.snapshot_batch_runner --build-stage derived --validate-ml-flat-contract
+```
+
+7. Build the full staged pipeline in one command:
+
+```powershell
+python -m snapshot_app.historical.snapshot_batch_runner --build-stage all --build-source historical --validate-ml-flat-contract --manifest-out .run/snapshot_ml_flat/team_b/build_manifest.json
+```
+
+8. Validate canonical snapshots plus derived flat dataset and write report:
 
 ```powershell
 python -m snapshot_app.historical.snapshot_batch_runner --validate-only --validate-days 5 --validation-report-out .run/snapshot_ml_flat/team_b/validation_report.json
 ```
 
-7. Print year-by-year parallel commands for a large range:
+9. Print year-by-year parallel commands for a large range:
 
 ```powershell
-python -m snapshot_app.historical.snapshot_batch_runner --min-day 2022-01-01 --max-day 2024-12-31 --validate-ml-flat-contract --validate-days 5 --manifest-out .run/snapshot_ml_flat/team_b/build_manifest.json --validation-report-out .run/snapshot_ml_flat/team_b/validation_report.json --plan-year-runs
+python -m snapshot_app.historical.snapshot_batch_runner --build-stage all --min-day 2022-01-01 --max-day 2024-12-31 --validate-ml-flat-contract --validate-days 5 --manifest-out .run/snapshot_ml_flat/team_b/build_manifest.json --validation-report-out .run/snapshot_ml_flat/team_b/validation_report.json --plan-year-runs
 ```
 
-8. Run one specific calendar year:
+10. Run one specific calendar year:
 
 ```powershell
-python -m snapshot_app.historical.snapshot_batch_runner --year 2024 --validate-ml-flat-contract --validate-days 5
+python -m snapshot_app.historical.snapshot_batch_runner --build-stage all --year 2024 --validate-ml-flat-contract --validate-days 5
 ```
 
 On larger machines, the runner now uses chunked calendar partitions with warmup continuity when `--snapshot-jobs > 1`.

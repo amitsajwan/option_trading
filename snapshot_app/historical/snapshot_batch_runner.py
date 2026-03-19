@@ -18,6 +18,7 @@ from snapshot_app.pipeline import (
 )
 from snapshot_app.pipeline.normalize import normalize_raw_to_parquet
 from snapshot_app.pipeline.orchestrator import (
+    DEFAULT_BUILD_STAGE,
     DEFAULT_SLICE_MONTHS,
     DEFAULT_SLICE_WARMUP_DAYS,
     run_snapshot_builds,
@@ -28,6 +29,7 @@ from .snapshot_access import DEFAULT_HISTORICAL_PARQUET_BASE
 from .snapshot_batch import (
     ML_FLAT_SCHEMA_VERSION,
     OUTPUT_DATASET_ML_FLAT,
+    OUTPUT_DATASET_SNAPSHOTS,
 )
 
 DEFAULT_PARQUET_BASE = DEFAULT_HISTORICAL_PARQUET_BASE
@@ -123,6 +125,7 @@ def _build_parallel_year_command(
     no_resume: bool,
     validate_days: int,
     build_source: str,
+    build_stage: str,
     validate_ml_flat_contract: bool,
     manifest_out: str | None,
     validation_report_out: str | None,
@@ -136,6 +139,7 @@ def _build_parallel_year_command(
         f"--lookback-days {int(lookback_days)}",
         f"--instrument {_quote_cli_value(instrument)}",
         f"--build-source {_quote_cli_value(build_source)}",
+        f"--build-stage {_quote_cli_value(build_stage)}",
         f"--required-schema-version {_quote_cli_value(required_schema_version)}",
     ]
     if no_resume:
@@ -335,6 +339,54 @@ def validate_output(
     }
 
 
+def validate_canonical_output(
+    parquet_base: Path,
+    n_days: int = 5,
+    *,
+    min_day: str | None = None,
+    max_day: str | None = None,
+) -> dict[str, Any]:
+    store = ParquetStore(parquet_base, snapshots_dataset=OUTPUT_DATASET_SNAPSHOTS)
+    snapshot_days = store.available_snapshot_days(min_day=min_day, max_day=max_day)
+    if not snapshot_days:
+        print("[validate] No canonical snapshot days found in dataset=snapshots. Build snapshots first.")
+        return {
+            "ok": False,
+            "output_dataset": OUTPUT_DATASET_SNAPSHOTS,
+            "min_day": min_day,
+            "max_day": max_day,
+            "reason": "no_snapshot_days",
+        }
+
+    sample_days = snapshot_days[-max(1, int(n_days)) :]
+    print(f"[validate] dataset=snapshots checking {len(sample_days)} recent day(s): {sample_days}")
+    print("\n[validate] Row counts per day")
+    all_ok = True
+    row_counts: list[dict[str, Any]] = []
+    for day in sample_days:
+        df = store.snapshots_for_date_range(day, day)
+        rows = int(len(df))
+        status = _row_count_status(rows)
+        if status == "ERROR":
+            all_ok = False
+        print(f"  {day}: {rows} rows [{status}]")
+        row_counts.append({"trade_date": str(day), "rows": rows, "status": status})
+
+    canonical_frame = store.snapshots_for_date_range(sample_days[0], sample_days[-1])
+    canonical_report = _validate_market_snapshot_frame(canonical_frame)
+    print("\n[validate] Canonical MarketSnapshot validation")
+    print(json.dumps(canonical_report, indent=2))
+    return {
+        "ok": bool(canonical_report.get("ok")) and all_ok,
+        "output_dataset": OUTPUT_DATASET_SNAPSHOTS,
+        "min_day": min_day,
+        "max_day": max_day,
+        "sample_days": sample_days,
+        "row_counts": row_counts,
+        "canonical_contract_report": canonical_report,
+    }
+
+
 def find_days_missing_fields(
     store: ParquetStore,
     *,
@@ -463,6 +515,12 @@ def main() -> int:
         default=DEFAULT_SLICE_WARMUP_DAYS,
         help=f"Trading-day warmup executed before each parallel slice (default: {DEFAULT_SLICE_WARMUP_DAYS}).",
     )
+    parser.add_argument(
+        "--build-stage",
+        choices=["all", "snapshots", "derived"],
+        default=DEFAULT_BUILD_STAGE,
+        help="Pipeline stage to build: snapshots (canonical + market_base), derived (ml-flat + stage views), or all.",
+    )
     parser.add_argument("--instrument", default=DEFAULT_INSTRUMENT, help=f"Snapshot instrument (default: {DEFAULT_INSTRUMENT})")
     parser.add_argument("--year", type=int, default=None, help="Restrict build/validation window to one calendar year.")
     parser.add_argument(
@@ -576,7 +634,7 @@ def main() -> int:
         print(f"ERROR: parquet base path not found: {base}")
         return 1
 
-    output_dataset = DEFAULT_OUTPUT_DATASET
+    output_dataset = OUTPUT_DATASET_SNAPSHOTS if args.build_stage == "snapshots" else DEFAULT_OUTPUT_DATASET
     effective_min_day = args.min_day
     effective_max_day = args.max_day
     if args.year is not None:
@@ -613,6 +671,7 @@ def main() -> int:
                     no_resume=bool(args.no_resume),
                     validate_days=int(args.validate_days or 0),
                     build_source=args.build_source,
+                    build_stage=args.build_stage,
                     validate_ml_flat_contract=bool(args.validate_ml_flat_contract),
                     manifest_out=args.manifest_out,
                     validation_report_out=args.validation_report_out,
@@ -632,19 +691,28 @@ def main() -> int:
         return 0
 
     if args.validate_only:
-        validation_report = validate_output(
-            base,
-            n_days=(args.validate_days or 5),
-            output_dataset=output_dataset,
-            required_schema_version=required_schema_version,
-            min_day=effective_min_day,
-            max_day=effective_max_day,
+        validation_report = (
+            validate_canonical_output(
+                base,
+                n_days=(args.validate_days or 5),
+                min_day=effective_min_day,
+                max_day=effective_max_day,
+            )
+            if args.build_stage == "snapshots"
+            else validate_output(
+                base,
+                n_days=(args.validate_days or 5),
+                output_dataset=output_dataset,
+                required_schema_version=required_schema_version,
+                min_day=effective_min_day,
+                max_day=effective_max_day,
+            )
         )
         if args.validation_report_out:
             out_path = Path(args.validation_report_out)
             write_json_artifact(out_path, validation_report)
             print(json.dumps({"validation_report_out": str(out_path)}, indent=2))
-        if args.window_manifest_out:
+        if args.window_manifest_out and args.build_stage != "snapshots":
             store = ParquetStore(base, snapshots_dataset=output_dataset)
             artifact = build_window_readiness_artifact(
                 store,
@@ -661,6 +729,9 @@ def main() -> int:
 
     explicit_days: list[str] | None = None
     if args.rebuild_missing_fields:
+        if args.build_stage == "snapshots":
+            print("ERROR: --rebuild-missing-fields only applies to derived SnapshotMLFlat outputs.")
+            return 1
         store = ParquetStore(base, snapshots_dataset=output_dataset)
         required_fields = list(args.required_fields or default_required_fields)
         missing_field_days = find_days_missing_fields(
@@ -712,6 +783,7 @@ def main() -> int:
         snapshot_jobs=max(1, int(args.snapshot_jobs)),
         slice_months=max(1, int(args.slice_months)),
         slice_warmup_days=max(0, int(args.slice_warmup_days)),
+        build_stage=args.build_stage,
     )
     print(json.dumps(result, indent=2, default=str))
     if args.print_iv_diagnostics:
@@ -719,6 +791,7 @@ def main() -> int:
     if args.manifest_out:
         manifest_payload = {
             "generated_at_utc": pd.Timestamp.utcnow().isoformat(),
+            "build_stage": str(args.build_stage),
             "output_dataset": output_dataset,
             "required_schema_version": required_schema_version,
             "result": result,
@@ -735,20 +808,29 @@ def main() -> int:
         validation_days = 0
 
     if validation_days > 0 and (not args.dry_run):
-        validation_report = validate_output(
-            base,
-            n_days=validation_days,
-            output_dataset=output_dataset,
-            required_schema_version=required_schema_version,
-            min_day=effective_min_day,
-            max_day=effective_max_day,
+        validation_report = (
+            validate_canonical_output(
+                base,
+                n_days=validation_days,
+                min_day=effective_min_day,
+                max_day=effective_max_day,
+            )
+            if args.build_stage == "snapshots"
+            else validate_output(
+                base,
+                n_days=validation_days,
+                output_dataset=output_dataset,
+                required_schema_version=required_schema_version,
+                min_day=effective_min_day,
+                max_day=effective_max_day,
+            )
         )
         if args.validation_report_out:
             out_path = Path(args.validation_report_out)
             write_json_artifact(out_path, validation_report)
             print(json.dumps({"validation_report_out": str(out_path)}, indent=2))
 
-    if args.window_manifest_out:
+    if args.window_manifest_out and args.build_stage != "snapshots":
         store = ParquetStore(base, snapshots_dataset=output_dataset)
         artifact = build_window_readiness_artifact(
             store,

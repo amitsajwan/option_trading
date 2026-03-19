@@ -15,7 +15,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, average_precision_score, brier_score_loss, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from xgboost import XGBClassifier
+try:
+    from xgboost import XGBClassifier
+except Exception:  # pragma: no cover
+    XGBClassifier = None  # type: ignore[assignment]
 
 from ..catalog.feature_sets import DEFAULT_FEATURE_SET_SPECS, feature_set_specs_by_name
 from ..catalog.models import DEFAULT_MODEL_SPECS, model_specs_by_name
@@ -207,6 +210,66 @@ def _evaluate_trade_utility(base_df: pd.DataFrame, folds: Sequence[Dict[str, Seq
     }
 
 
+def _missing_model_family_dependency(family: str) -> Optional[str]:
+    normalized = str(family).strip().lower()
+    if normalized == "lgbm" and LGBMClassifier is None:
+        return "lightgbm"
+    if normalized == "xgb" and XGBClassifier is None:
+        return "xgboost"
+    return None
+
+
+def _filter_runnable_model_names(model_names: Sequence[str]) -> Tuple[List[str], List[Dict[str, str]]]:
+    specs = model_specs_by_name()
+    runnable: List[str] = []
+    unavailable: List[Dict[str, str]] = []
+    for model_name in model_names:
+        spec = specs[model_name]
+        missing_dependency = _missing_model_family_dependency(spec.family)
+        if missing_dependency is None:
+            runnable.append(model_name)
+            continue
+        unavailable.append(
+            {
+                "model_name": str(spec.name),
+                "model_family": str(spec.family),
+                "missing_dependency": str(missing_dependency),
+                "reason": f"requires optional dependency '{missing_dependency}'",
+            }
+        )
+    return runnable, unavailable
+
+
+def _format_unavailable_models_error(unavailable_models: Sequence[Dict[str, str]]) -> str:
+    details = ", ".join(
+        f"{row['model_name']} ({row['reason']})"
+        for row in unavailable_models
+    )
+    dependencies = ", ".join(sorted({row["missing_dependency"] for row in unavailable_models}))
+    return (
+        "no requested models are runnable in this environment: "
+        f"{details}. Reinstall project dependencies (for example `python -m pip install -e ./ml_pipeline_2`) "
+        f"or install missing dependencies directly: {dependencies}"
+    )
+
+
+def resolve_requested_model_runtime(model_names: Sequence[str]) -> Dict[str, object]:
+    requested_models = [str(name) for name in model_names]
+    runnable_models, unavailable_models = _filter_runnable_model_names(requested_models)
+    return {
+        "requested_models": requested_models,
+        "runnable_models": runnable_models,
+        "unavailable_models": unavailable_models,
+    }
+
+
+def ensure_requested_models_runnable(model_names: Sequence[str], *, context: str = "requested models") -> Dict[str, object]:
+    resolution = resolve_requested_model_runtime(model_names)
+    if resolution["runnable_models"]:
+        return resolution
+    raise RuntimeError(f"{context}: {_format_unavailable_models_error(resolution['unavailable_models'])}")
+
+
 def _build_model(model_spec: ModelSpec, random_state: int, preprocess_cfg: PreprocessConfig, model_n_jobs: int = 1) -> Pipeline:
     family = str(model_spec.family).strip().lower()
     params = dict(model_spec.params or {})
@@ -214,10 +277,12 @@ def _build_model(model_spec: ModelSpec, random_state: int, preprocess_cfg: Prepr
     if family == "logreg":
         return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler(with_mean=True, with_std=True)), ("model", LogisticRegression(C=float(params.get("c", 1.0)), class_weight=params.get("class_weight"), random_state=int(random_state), max_iter=int(params.get("max_iter", 1000)), solver=str(params.get("solver", "lbfgs"))))])
     if family == "xgb":
+        if XGBClassifier is None:
+            raise RuntimeError("XGBoost is required for xgb models; install 'xgboost' to enable them")
         return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("model", XGBClassifier(objective="binary:logistic", eval_metric="logloss", random_state=int(random_state), seed=int(random_state), n_jobs=resolved_n_jobs, tree_method="hist", verbosity=0, max_depth=int(params.get("max_depth", 4)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 1.0))))])
     if family == "lgbm":
         if LGBMClassifier is None:
-            raise RuntimeError("LightGBM is required for lgbm models")
+            raise RuntimeError("LightGBM is required for lgbm models; install 'lightgbm' to enable them")
         return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("model", LGBMClassifier(objective="binary", random_state=int(random_state), n_jobs=resolved_n_jobs, verbosity=-1, boosting_type=str(params.get("boosting_type", "gbdt")), num_leaves=int(params.get("num_leaves", 31)), max_depth=int(params.get("max_depth", -1)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 0.0)), min_child_samples=int(params.get("min_child_samples", 20)), class_weight=params.get("class_weight")))])
     raise ValueError(f"unsupported model family: {model_spec.family}")
 
@@ -584,6 +649,9 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
         if unknown:
             raise ValueError(f"unknown model: {unknown}; valid options: {sorted(candidate_model_names)}")
         candidate_model_names = [name for name in candidate_model_names if name in set(model_whitelist)]
+    model_runtime = ensure_requested_models_runnable(candidate_model_names, context="requested model search space")
+    candidate_model_names = list(model_runtime["runnable_models"])
+    unavailable_models = list(model_runtime["unavailable_models"])
     cv_config = {"train_days": int(cv_kwargs.get("train_days")), "valid_days": int(cv_kwargs.get("valid_days")), "test_days": int(cv_kwargs.get("test_days")), "step_days": int(cv_kwargs.get("step_days")), "purge_days": int(cv_kwargs.get("purge_days", 0)), "embargo_days": int(cv_kwargs.get("embargo_days", 0)), "purge_mode": normalize_purge_mode(cv_kwargs.get("purge_mode", PURGE_MODE_DAYS)), "embargo_rows": int(cv_kwargs.get("embargo_rows", 0)), "event_end_col": cv_kwargs.get("event_end_col")}
     preprocessing = {"max_missing_rate": float(effective_preprocess.max_missing_rate), "clip_lower_q": float(effective_preprocess.clip_lower_q), "clip_upper_q": float(effective_preprocess.clip_upper_q), "dropped_features_by_missing_rate": dropped_by_missing, "features_after_preprocess_gate": int(len(base_features))}
     runtime_config = {"model_n_jobs": int(effective_model_n_jobs)}
@@ -653,5 +721,5 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
             model_spec = model_specs_by_name()[experiment["model"]["name"]]
             package = _build_model_package(created_at_utc, feature_profile, objective, label_target, experiment["selected_features"], experiment["feature_set"], experiment["model"], cv_config, preprocessing, runtime_config, effective_utility.to_dict(), _fit_final_models(frame, experiment["selected_features"], model_spec, random_state, effective_preprocess, label_target, effective_model_n_jobs))
             bundles.append({"experiment_id": experiment["experiment_id"], "model_package": package, "training_result": experiment["result"], "utility_score_payload": experiment.get("utility_score_payload")})
-    report = {"created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "rows_total": int(len(frame)), "days_total": int(frame["trade_date"].nunique()), "experiments_total": int(len(experiments)), "best_experiment": {"experiment_id": best["experiment_id"], "feature_set": best["feature_set"], "feature_count": int(best["feature_count"]), "model": best["model"], "objective_value": best.get("objective_value"), "fallback_objective_value": best.get("fallback_objective_value"), "selected_by_fallback": bool(best.get("selected_by_fallback", False))}, "leaderboard": _build_leaderboard(experiments, objective), "preprocessing": preprocessing, "runtime": runtime_config, "cv_config": cv_config, "trading_utility_config": effective_utility.to_dict()}
+    report = {"created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "rows_total": int(len(frame)), "days_total": int(frame["trade_date"].nunique()), "experiments_total": int(len(experiments)), "search_space": {"runnable_models": list(candidate_model_names), "unavailable_models": unavailable_models}, "best_experiment": {"experiment_id": best["experiment_id"], "feature_set": best["feature_set"], "feature_count": int(best["feature_count"]), "model": best["model"], "objective_value": best.get("objective_value"), "fallback_objective_value": best.get("fallback_objective_value"), "selected_by_fallback": bool(best.get("selected_by_fallback", False))}, "leaderboard": _build_leaderboard(experiments, objective), "preprocessing": preprocessing, "runtime": runtime_config, "cv_config": cv_config, "trading_utility_config": effective_utility.to_dict()}
     return {"report": report, "model_package": best_package, "experiment_bundles": bundles}

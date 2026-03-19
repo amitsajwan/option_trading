@@ -5,6 +5,7 @@ This is the operator path for rebuilding the final historical parquet datasets o
 Use this when you want:
 
 - canonical historical `MarketSnapshot` parquet
+- intermediate `market_base` parquet for staged projection
 - derived `snapshots_ml_flat` parquet for ML research
 - a resumable build path from raw BankNifty archive
 - outputs stored in GCS so they are accessible from other VMs and future runs
@@ -67,12 +68,13 @@ Resources intentionally not created in this phase:
 The snapshot pipeline writes these final datasets under `.data/ml_pipeline/parquet_data`:
 
 - `snapshots/**/data.parquet`
+- `market_base/**/data.parquet`
 - `snapshots_ml_flat/**/data.parquet`
 - `stage1_entry_view/**/data.parquet`
 - `stage2_direction_view/**/data.parquet`
 - `stage3_recipe_view/**/data.parquet`
 
-The current builder writes chunked parquet partitions under each `year=YYYY` directory so it can parallelize below the year level without write conflicts.
+The current builder writes chunked parquet partitions under each `year=YYYY` directory so it can parallelize below the year level without write conflicts. The default operator stage is `BUILD_STAGE=all`, which runs canonical `snapshots + market_base` first and then projects the derived datasets from `market_base`.
 
 The recommended GCS target is:
 

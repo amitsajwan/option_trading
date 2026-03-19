@@ -246,6 +246,22 @@ def _project_view(snapshot: dict[str, Any], view_name: str) -> dict[str, Any]:
     return out
 
 
+def _project_view_from_flat_row(row: dict[str, Any], view_name: str) -> dict[str, Any]:
+    work = row if isinstance(row, dict) else {}
+    spec = _STAGE_FIELD_SPECS[view_name]
+    out: dict[str, Any] = {"view_name": view_name}
+
+    for field_name in spec.get(None, ()):
+        out[field_name] = work.get(field_name)
+
+    for block_name, field_names in spec.items():
+        if block_name is None:
+            continue
+        for field_name in field_names:
+            out[field_name] = work.get(field_name)
+    return out
+
+
 def project_stage1_entry_view(snapshot: dict[str, Any]) -> dict[str, Any]:
     return _project_view(snapshot, "stage1_entry_view")
 
@@ -266,9 +282,33 @@ def project_stage_views(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def project_stage1_entry_view_from_flat_row(row: dict[str, Any]) -> dict[str, Any]:
+    return _project_view_from_flat_row(row, "stage1_entry_view")
+
+
+def project_stage2_direction_view_from_flat_row(row: dict[str, Any]) -> dict[str, Any]:
+    return _project_view_from_flat_row(row, "stage2_direction_view")
+
+
+def project_stage3_recipe_view_from_flat_row(row: dict[str, Any]) -> dict[str, Any]:
+    return _project_view_from_flat_row(row, "stage3_recipe_view")
+
+
+def project_stage_views_from_flat_row(row: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        "stage1_entry_view": project_stage1_entry_view_from_flat_row(row),
+        "stage2_direction_view": project_stage2_direction_view_from_flat_row(row),
+        "stage3_recipe_view": project_stage3_recipe_view_from_flat_row(row),
+    }
+
+
 __all__ = [
     "project_stage1_entry_view",
     "project_stage2_direction_view",
     "project_stage3_recipe_view",
     "project_stage_views",
+    "project_stage1_entry_view_from_flat_row",
+    "project_stage2_direction_view_from_flat_row",
+    "project_stage3_recipe_view_from_flat_row",
+    "project_stage_views_from_flat_row",
 ]

@@ -21,7 +21,21 @@ def _scenario_runner(kind: str):
     raise ValueError(f"unsupported experiment kind: {kind}")
 
 
+def _scenario_environment_validator(kind: str):
+    if kind == STAGED_KIND:
+        from ..staged.pipeline import validate_staged_research_environment
+
+        return validate_staged_research_environment
+    raise ValueError(f"unsupported experiment kind: {kind}")
+
+
+def validate_runtime_environment(resolved_config: Dict[str, Any]) -> Dict[str, Any]:
+    validator = _scenario_environment_validator(str(resolved_config["experiment_kind"]))
+    return validator(resolved_config)
+
+
 def run_research(resolved_config: Dict[str, Any], *, run_output_root: Optional[Path] = None) -> Dict[str, Any]:
+    validate_runtime_environment(resolved_config)
     out_root = (
         Path(run_output_root).resolve()
         if run_output_root is not None
@@ -46,5 +60,5 @@ def run_research(resolved_config: Dict[str, Any], *, run_output_root: Optional[P
 def run_manifest(manifest_path: Path, *, validate_only: bool = False, run_output_root: Optional[Path] = None) -> Dict[str, Any]:
     resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
     if validate_only:
-        return {"status": "validated", "resolved_config": resolved}
+        return {"status": "validated", "resolved_config": resolved, "runtime_environment": validate_runtime_environment(resolved)}
     return run_research(resolved, run_output_root=run_output_root)

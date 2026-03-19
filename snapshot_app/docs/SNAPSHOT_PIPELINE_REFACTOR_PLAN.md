@@ -2,7 +2,14 @@
 
 ## Status
 
-Design proposal only. No code changes to snapshot production semantics are part of this plan.
+Implemented in the historical snapshot pipeline:
+
+- `market_base` dataset added as the staged intermediate
+- canonical snapshot build split from derived ML/stage projection
+- stage-specific orchestration and CLI modes: `snapshots`, `derived`, `all`
+- publish flow updated to include `market_base`
+
+Additional algorithmic optimization remains an open follow-up area.
 
 ## Goal
 

@@ -14,7 +14,7 @@ from ..dataset_windowing import filter_trade_dates, normalize_trade_date
 from ..experiment_control.state import RunContext, utc_now
 from ..inference_contract.predict import predict_probabilities_from_frame
 from ..labeling import EffectiveLabelConfig, build_labeled_dataset, prepare_snapshot_labeled_frame
-from ..model_search import run_training_cycle_catalog
+from ..model_search import ensure_requested_models_runnable, run_training_cycle_catalog
 from ..model_search.metrics import max_drawdown_pct, profit_factor
 from .recipes import get_recipe_catalog
 from .registries import resolve_labeler, resolve_policy, resolve_trainer, view_registry
@@ -893,8 +893,39 @@ def _stage_component_ids(manifest: Dict[str, Any], stage_name: str) -> dict[str,
     }
 
 
+def validate_staged_research_environment(manifest: Dict[str, Any]) -> dict[str, Any]:
+    catalog = dict(manifest.get("catalog") or {})
+    models_by_stage = dict(catalog.get("models_by_stage") or {})
+    resolved_models_by_stage: dict[str, list[str]] = {}
+    stages: dict[str, dict[str, Any]] = {}
+    for stage_name in STAGE_ORDER:
+        resolution = ensure_requested_models_runnable(
+            list(models_by_stage.get(stage_name) or []),
+            context=f"catalog.models_by_stage.{stage_name}",
+        )
+        resolved_models_by_stage[stage_name] = list(resolution["runnable_models"])
+        stages[stage_name] = {
+            "requested_models": list(resolution["requested_models"]),
+            "runnable_models": list(resolution["runnable_models"]),
+            "unavailable_models": list(resolution["unavailable_models"]),
+        }
+    return {
+        "stages": stages,
+        "resolved_models_by_stage": resolved_models_by_stage,
+    }
+
+
 def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     manifest = dict(ctx.resolved_config)
+    training_environment = validate_staged_research_environment(manifest)
+    manifest["catalog"] = dict(manifest["catalog"])
+    manifest["catalog"]["models_by_stage"] = {
+        **dict(manifest["catalog"].get("models_by_stage") or {}),
+        **{
+            stage_name: list(model_names)
+            for stage_name, model_names in dict(training_environment["resolved_models_by_stage"]).items()
+        },
+    }
     parquet_root = Path(manifest["inputs"]["parquet_root"]).resolve()
     support_dataset = str(manifest["inputs"]["support_dataset"])
     runtime_block_expiry = bool(manifest["runtime"].get("block_expiry", False))
@@ -1060,6 +1091,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "runtime_prefilter_gate_ids": list(manifest["runtime"]["prefilter_gate_ids"]),
         "runtime_block_expiry": runtime_block_expiry,
         "runtime_filtering": runtime_filtering,
+        "training_environment": dict(training_environment["stages"]),
         "stage_artifacts": {
             "stage1": {
                 "started_at_utc": stage1_started_at,
@@ -1098,4 +1130,5 @@ __all__ = [
     "select_recipe_policy",
     "train_binary_catalog_stage",
     "train_recipe_ovr_stage",
+    "validate_staged_research_environment",
 ]

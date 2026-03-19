@@ -1,6 +1,7 @@
 """Historical snapshot build package for snapshot_app."""
 
 from .parquet_store import ParquetStore
+from .derived_batch import run_derived_batch
 
 
 def run_snapshot_batch(*args, **kwargs):
@@ -9,4 +10,4 @@ def run_snapshot_batch(*args, **kwargs):
 
     return _run_snapshot_batch(*args, **kwargs)
 
-__all__ = ["ParquetStore", "run_snapshot_batch"]
+__all__ = ["ParquetStore", "run_snapshot_batch", "run_derived_batch"]

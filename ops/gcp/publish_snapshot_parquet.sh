@@ -7,6 +7,7 @@ REPORT_ROOT="${REPORT_ROOT:-${REPO_ROOT}/.run/snapshot_parquet}"
 SNAPSHOT_PARQUET_BUCKET_URL="${SNAPSHOT_PARQUET_BUCKET_URL:?set SNAPSHOT_PARQUET_BUCKET_URL, for example gs://my-snapshot-bucket/parquet_data}"
 PUBLISH_DERIVED_ML_FLAT="${PUBLISH_DERIVED_ML_FLAT:-1}"
 PUBLISH_STAGE_VIEWS="${PUBLISH_STAGE_VIEWS:-1}"
+PUBLISH_MARKET_BASE="${PUBLISH_MARKET_BASE:-1}"
 PUBLISH_NORMALIZED_CACHE="${PUBLISH_NORMALIZED_CACHE:-0}"
 
 TARGET_ROOT="${SNAPSHOT_PARQUET_BUCKET_URL%/}"
@@ -28,6 +29,10 @@ sync_dir() {
 }
 
 sync_dir "${SNAPSHOT_ROOT}" "${TARGET_ROOT}/snapshots"
+
+if [ "${PUBLISH_MARKET_BASE}" = "1" ]; then
+  sync_dir "${PARQUET_BASE}/market_base" "${TARGET_ROOT}/market_base"
+fi
 
 if [ "${PUBLISH_DERIVED_ML_FLAT}" = "1" ]; then
   sync_dir "${PARQUET_BASE}/snapshots_ml_flat" "${TARGET_ROOT}/snapshots_ml_flat"

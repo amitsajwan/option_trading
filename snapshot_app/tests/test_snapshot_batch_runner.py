@@ -30,6 +30,7 @@ def test_main_validates_without_report_path(tmp_path, monkeypatch) -> None:
             snapshot_jobs=1,
             slice_months=6,
             slice_warmup_days=90,
+            build_stage="all",
             instrument="BANKNIFTY-I",
             year=None,
             plan_year_runs=False,

@@ -30,7 +30,7 @@ class _FakeParquetStore:
         return pd.DataFrame()
 
 
-def test_run_snapshot_batch_flushes_canonical_and_ml_flat(monkeypatch, tmp_path: Path) -> None:
+def test_run_snapshot_batch_flushes_canonical_and_market_base(monkeypatch, tmp_path: Path) -> None:
     emit_calls: list[tuple[str, bool]] = []
     futures_window_calls: list[tuple[str, list[str] | None]] = []
 
@@ -41,12 +41,7 @@ def test_run_snapshot_batch_flushes_canonical_and_ml_flat(monkeypatch, tmp_path:
         if not bool(kwargs.get("emit_outputs", True)):
             return {
                 "snapshot_rows": [],
-                "ml_flat_rows": [],
-                "stage_rows": {
-                    "stage1_entry_view": [],
-                    "stage2_direction_view": [],
-                    "stage3_recipe_view": [],
-                },
+                "market_base_rows": [],
             }
         return {
             "snapshot_rows": [
@@ -59,53 +54,20 @@ def test_run_snapshot_batch_flushes_canonical_and_ml_flat(monkeypatch, tmp_path:
                     "build_run_id": "test_run",
                 }
             ],
-            "ml_flat_rows": [
+            "market_base_rows": [
                 {
                     "trade_date": trade_date,
+                    "year": 2020,
                     "timestamp": f"{trade_date} 09:15:00",
                     "snapshot_id": f"{trade_date}_001",
-                    "schema_name": "SnapshotMLFlat",
+                    "schema_name": "MarketSnapshot",
                     "schema_version": "3.0",
+                    "instrument": "BANKNIFTY-I",
                     "build_source": "historical",
                     "build_run_id": "test_run",
                     "opt_flow_rows": 3,
                 }
             ],
-            "stage_rows": {
-                "stage1_entry_view": [
-                    {
-                        "trade_date": trade_date,
-                        "year": 2020,
-                        "timestamp": f"{trade_date} 09:15:00",
-                        "snapshot_id": f"{trade_date}_001",
-                        "build_source": "historical",
-                        "build_run_id": "test_run",
-                        "view_name": "stage1_entry_view",
-                    }
-                ],
-                "stage2_direction_view": [
-                    {
-                        "trade_date": trade_date,
-                        "year": 2020,
-                        "timestamp": f"{trade_date} 09:15:00",
-                        "snapshot_id": f"{trade_date}_001",
-                        "build_source": "historical",
-                        "build_run_id": "test_run",
-                        "view_name": "stage2_direction_view",
-                    }
-                ],
-                "stage3_recipe_view": [
-                    {
-                        "trade_date": trade_date,
-                        "year": 2020,
-                        "timestamp": f"{trade_date} 09:15:00",
-                        "snapshot_id": f"{trade_date}_001",
-                        "build_source": "historical",
-                        "build_run_id": "test_run",
-                        "view_name": "stage3_recipe_view",
-                    }
-                ],
-            },
         }
 
     monkeypatch.setattr("snapshot_app.historical.snapshot_batch.ParquetStore", _FakeParquetStore)
@@ -127,33 +89,22 @@ def test_run_snapshot_batch_flushes_canonical_and_ml_flat(monkeypatch, tmp_path:
     )
 
     snapshots_path = tmp_path / "snapshots" / "year=2020" / "chunk=202001_202001_m1" / "data.parquet"
-    ml_flat_path = tmp_path / "snapshots_ml_flat" / "year=2020" / "chunk=202001_202001_m1" / "data.parquet"
-    stage1_path = tmp_path / "stage1_entry_view" / "year=2020" / "chunk=202001_202001_m1" / "data.parquet"
-    stage2_path = tmp_path / "stage2_direction_view" / "year=2020" / "chunk=202001_202001_m1" / "data.parquet"
-    stage3_path = tmp_path / "stage3_recipe_view" / "year=2020" / "chunk=202001_202001_m1" / "data.parquet"
+    market_base_path = tmp_path / "market_base" / "year=2020" / "chunk=202001_202001_m1" / "data.parquet"
 
     assert result["status"] == "complete"
     assert result["days_processed"] == 1
     assert result["warmup_days_processed"] == 1
     assert result["total_snapshot_rows"] == 1
     assert result["total_rows"] == 1
+    assert result["total_market_base_rows"] == 1
     assert snapshots_path.exists()
-    assert ml_flat_path.exists()
-    assert stage1_path.exists()
-    assert stage2_path.exists()
-    assert stage3_path.exists()
+    assert market_base_path.exists()
 
     snapshots_df = pd.read_parquet(snapshots_path)
-    ml_flat_df = pd.read_parquet(ml_flat_path)
-    stage1_df = pd.read_parquet(stage1_path)
-    stage2_df = pd.read_parquet(stage2_path)
-    stage3_df = pd.read_parquet(stage3_path)
+    market_base_df = pd.read_parquet(market_base_path)
 
     assert snapshots_df["trade_date"].astype(str).tolist() == ["2020-01-30"]
-    assert ml_flat_df["trade_date"].astype(str).tolist() == ["2020-01-30"]
-    assert stage1_df["view_name"].tolist() == ["stage1_entry_view"]
-    assert stage2_df["view_name"].tolist() == ["stage2_direction_view"]
-    assert stage3_df["view_name"].tolist() == ["stage3_recipe_view"]
+    assert market_base_df["trade_date"].astype(str).tolist() == ["2020-01-30"]
     assert emit_calls == [("2020-01-29", False), ("2020-01-30", True)]
     assert futures_window_calls == [
         ("2020-01-29", ["2020-01-29"]),
@@ -179,23 +130,20 @@ def test_run_snapshot_batch_marks_missing_input_days_as_partial_incomplete(monke
                     "build_run_id": "test_run",
                 }
             ],
-            "ml_flat_rows": [
+            "market_base_rows": [
                 {
                     "trade_date": trade_date,
+                    "year": 2020,
                     "timestamp": f"{trade_date} 09:15:00",
                     "snapshot_id": f"{trade_date}_001",
-                    "schema_name": "SnapshotMLFlat",
+                    "schema_name": "MarketSnapshot",
                     "schema_version": "3.0",
+                    "instrument": "BANKNIFTY-I",
                     "build_source": "historical",
                     "build_run_id": "test_run",
                     "opt_flow_rows": 3,
                 }
             ],
-            "stage_rows": {
-                "stage1_entry_view": [],
-                "stage2_direction_view": [],
-                "stage3_recipe_view": [],
-            },
         }
 
     monkeypatch.setattr("snapshot_app.historical.snapshot_batch.ParquetStore", _MissingOptionsStore)

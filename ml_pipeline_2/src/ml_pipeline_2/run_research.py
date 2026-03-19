@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from .contracts.manifests import load_and_resolve_manifest
-from .experiment_control.runner import run_research
+from .experiment_control.runner import run_research, validate_runtime_environment
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -24,8 +24,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_resolved_config:
         print(json.dumps(resolved, indent=2, default=str))
         if args.validate_only:
+            validate_runtime_environment(resolved)
             return 0
     if args.validate_only:
+        validate_runtime_environment(resolved)
         return 0
     summary = run_research(
         resolved,

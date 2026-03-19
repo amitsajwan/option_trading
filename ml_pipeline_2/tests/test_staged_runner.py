@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from ml_pipeline_2.contracts.manifests import load_and_resolve_manifest
 from ml_pipeline_2.experiment_control.runner import run_manifest
+from ml_pipeline_2.model_search import search as search_module
 from ml_pipeline_2.tests.helpers import build_staged_parquet_root, build_staged_smoke_manifest
 
 
@@ -25,6 +28,7 @@ def test_staged_runner_builds_summary_and_stage_artifacts(tmp_path: Path) -> Non
     assert summary["component_ids"]["stage2"]["trainer_id"] == "binary_catalog_v1"
     assert summary["component_ids"]["stage3"]["policy_id"] == "recipe_top_margin_v1"
     assert "publish_assessment" in summary
+    assert summary["training_environment"]["stage1"]["runnable_models"] == ["logreg_balanced"]
     assert sorted(summary["stage_artifacts"]) == ["stage1", "stage2", "stage3"]
     assert summary["stage_artifacts"]["stage1"]["started_at_utc"]
     assert summary["stage_artifacts"]["stage1"]["completed_at_utc"]
@@ -60,3 +64,42 @@ def test_staged_runner_applies_block_expiry_runtime_filtering_to_training_frames
         assert stage_meta["rows_before"] > stage_meta["rows_after"]
         assert stage_meta["expiry_rows_dropped"] > 0
         assert stage_meta["signal_column"] in {"ctx_is_expiry_day", "ctx_dte_days"}
+
+
+def test_staged_runner_validate_only_reports_pruned_training_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["catalog"]["models_by_stage"] = {
+        "stage1": ["lgbm_large_v1", "logreg_balanced"],
+        "stage2": ["lgbm_large_v1", "logreg_balanced"],
+        "stage3": ["lgbm_large_v1", "logreg_balanced"],
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    monkeypatch.setattr(search_module, "LGBMClassifier", None)
+
+    result = run_manifest(manifest_path, validate_only=True)
+
+    assert result["status"] == "validated"
+    assert result["runtime_environment"]["stages"]["stage1"]["requested_models"] == ["lgbm_large_v1", "logreg_balanced"]
+    assert result["runtime_environment"]["stages"]["stage1"]["runnable_models"] == ["logreg_balanced"]
+    assert result["runtime_environment"]["stages"]["stage1"]["unavailable_models"] == [
+        {
+            "model_name": "lgbm_large_v1",
+            "model_family": "lgbm",
+            "missing_dependency": "lightgbm",
+            "reason": "requires optional dependency 'lightgbm'",
+        }
+    ]
+
+
+def test_staged_runner_validate_only_fails_fast_when_stage_has_no_runnable_models(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["catalog"]["models_by_stage"]["stage1"] = ["lgbm_large_v1"]
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    monkeypatch.setattr(search_module, "LGBMClassifier", None)
+
+    with pytest.raises(RuntimeError, match="catalog.models_by_stage.stage1"):
+        run_manifest(manifest_path, validate_only=True)

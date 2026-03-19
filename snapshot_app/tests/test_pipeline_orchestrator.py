@@ -92,6 +92,7 @@ def test_run_snapshot_builds_parallel_slices_aggregate_results(monkeypatch, tmp_
         snapshot_jobs=2,
         slice_months=6,
         slice_warmup_days=1,
+        build_stage="snapshots",
     )
 
     assert result["status"] == "complete"
@@ -156,6 +157,7 @@ def test_run_snapshot_builds_sparse_explicit_days_keep_internal_continuity(monke
         explicit_days=["2024-01-01", "2024-01-03"],
         snapshot_jobs=2,
         slice_months=1,
+        build_stage="snapshots",
         slice_warmup_days=0,
     )
 
@@ -201,6 +203,7 @@ def test_run_snapshot_builds_propagates_partial_incomplete_status(monkeypatch, t
         snapshot_jobs=2,
         slice_months=6,
         slice_warmup_days=1,
+        build_stage="snapshots",
     )
 
     assert result["status"] == "partial_incomplete"
@@ -253,6 +256,7 @@ def test_run_snapshot_builds_filters_out_days_without_options_before_slicing(mon
         parquet_base=tmp_path,
         instrument="BANKNIFTY-I",
         snapshot_jobs=1,
+        build_stage="snapshots",
     )
 
     assert result["status"] == "complete"
@@ -264,3 +268,83 @@ def test_run_snapshot_builds_filters_out_days_without_options_before_slicing(mon
             "emit_days": ["2024-01-01", "2024-01-03"],
         }
     ]
+
+
+def test_run_snapshot_builds_all_stage_aggregates_snapshots_and_derived(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    class _AllStageStore(_FakeStore):
+        def available_snapshot_days(self, min_day: str | None = None, max_day: str | None = None) -> list[str]:
+            if self.snapshots_dataset == "market_base":
+                return ["2024-01-01", "2024-01-02"]
+            return []
+
+        def all_days_with_options(self, *, min_day: str | None = None, max_day: str | None = None) -> list[str]:
+            return ["2024-01-01", "2024-01-02"]
+
+    def _fake_run_snapshot_batch(**kwargs):
+        emitted = list(kwargs.get("emit_days") or kwargs.get("explicit_days") or [])
+        calls.append(("snapshots", emitted))
+        return {
+            "status": "complete",
+            "days_available": len(emitted),
+            "days_pending": len(emitted),
+            "days_processed": len(emitted),
+            "warmup_days_processed": 0,
+            "days_skipped_existing": 0,
+            "days_skipped_missing_inputs": 0,
+            "missing_input_days": [],
+            "days_no_rows": 0,
+            "no_row_days": [],
+            "error_count": 0,
+            "error_days": [],
+            "total_rows": 10 * len(emitted),
+            "total_snapshot_rows": 10 * len(emitted),
+            "total_market_base_rows": 10 * len(emitted),
+            "iv_diagnostics": {"minutes": 10 * len(emitted)},
+            "iv_diagnostics_days_with_failures": [],
+            "elapsed_sec": 1.0,
+        }
+
+    def _fake_run_derived_batch(**kwargs):
+        emitted = list(kwargs.get("emit_days") or kwargs.get("explicit_days") or [])
+        calls.append(("derived", emitted))
+        return {
+            "status": "complete",
+            "days_available": len(emitted),
+            "days_pending": len(emitted),
+            "days_processed": len(emitted),
+            "warmup_days_processed": 0,
+            "days_skipped_existing": 0,
+            "days_skipped_missing_inputs": 0,
+            "missing_input_days": [],
+            "days_no_rows": 0,
+            "no_row_days": [],
+            "error_count": 0,
+            "error_days": [],
+            "total_rows": 5 * len(emitted),
+            "total_snapshot_rows": 0,
+            "total_market_base_rows": 0,
+            "iv_diagnostics": {},
+            "iv_diagnostics_days_with_failures": [],
+            "elapsed_sec": 0.5,
+        }
+
+    monkeypatch.setattr("snapshot_app.pipeline.orchestrator.ParquetStore", _AllStageStore)
+    monkeypatch.setattr("snapshot_app.pipeline.orchestrator.run_snapshot_batch", _fake_run_snapshot_batch)
+    monkeypatch.setattr("snapshot_app.pipeline.orchestrator.run_derived_batch", _fake_run_derived_batch)
+
+    result = run_snapshot_builds(
+        parquet_base=tmp_path,
+        instrument="BANKNIFTY-I",
+        snapshot_jobs=1,
+        build_stage="all",
+    )
+
+    assert result["status"] == "complete"
+    assert result["days_processed"] == 2
+    assert result["total_snapshot_rows"] == 20
+    assert result["total_market_base_rows"] == 20
+    assert result["total_rows"] == 10
+    assert ("snapshots", ["2024-01-01", "2024-01-02"]) in calls
+    assert ("derived", ["2024-01-01", "2024-01-02"]) in calls
