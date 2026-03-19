@@ -30,6 +30,8 @@ def _load_dataset(parquet_root: Path, dataset_name: str) -> pd.DataFrame:
         raise FileNotFoundError(f"dataset not found: {dataset_dir}")
     files = sorted(dataset_dir.glob("year=*/data.parquet"))
     if not files:
+        files = sorted(dataset_dir.glob("year=*/chunk=*/data.parquet"))
+    if not files:
         raise FileNotFoundError(f"dataset has no year partitions: {dataset_dir}")
     frame = pd.concat([pd.read_parquet(path) for path in files], ignore_index=True)
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
