@@ -232,7 +232,7 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
         self.assertEqual(chart["labels"], ["12:45:00"])
         self.assertEqual(chart["timestamps"], ["2026-03-02T07:15:00Z"])
 
-    def test_build_ml_diagnostics_exposes_gate_effectiveness_ratios(self) -> None:
+    def test_build_deterministic_diagnostics_exposes_policy_effectiveness_ratios(self) -> None:
         class CursorStub:
             def __init__(self, docs):
                 self._docs = list(docs)
@@ -259,22 +259,11 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
             def count_documents(self, query):
                 if query.get("signal_type") == "ENTRY" and query.get("direction") == {"$in": ["CE", "PE"]}:
                     return 9
-                if query.get("payload.vote.raw_signals._policy_reason") == {"$exists": True} and "$or" not in query:
-                    return 5
-                if query.get("payload.vote.raw_signals._policy_reason") == {"$exists": True} and "$or" in query:
                     return 10
-                if (
-                    query.get("payload.vote.raw_signals._policy_checks.ml_score_calibrated") == {"$exists": True}
-                    and query.get("payload.vote.raw_signals._policy_allowed") is True
-                ):
-                    return 3
-                if (
-                    query.get("payload.vote.raw_signals._policy_checks.ml_score_calibrated") == {"$exists": True}
-                    and query.get("payload.vote.raw_signals._policy_allowed") is False
-                ):
-                    return 5
-                if query.get("payload.vote.raw_signals._policy_checks.ml_score_calibrated") == {"$exists": True}:
-                    return 8
+                if query.get("payload.vote.raw_signals._policy_allowed") is True:
+                    return 6
+                if query.get("payload.vote.raw_signals._policy_allowed") is False:
+                    return 4
                 if query.get("payload.vote.raw_signals._entry_warmup_blocked") is True:
                     return 1
                 return 0
@@ -299,17 +288,16 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
                 },
             }
         ]
-        diagnostics = self.service.build_ml_diagnostics(
+        diagnostics = self.service.build_deterministic_diagnostics(
             date_ist="2026-03-06",
             votes_coll=CollectionStub(docs),
         )
-        self.assertEqual(diagnostics["counts"]["base_allowed_votes_day"], 10)
-        self.assertEqual(diagnostics["counts"]["ml_policy_votes_day"], 8)
-        self.assertEqual(diagnostics["counts"]["ml_allowed_votes_day"], 3)
-        self.assertEqual(diagnostics["counts"]["ml_blocked_votes_day"], 5)
-        self.assertAlmostEqual(diagnostics["ratios"]["ml_scored_to_base_allowed"], 0.8, places=6)
-        self.assertAlmostEqual(diagnostics["ratios"]["ml_block_rate_day"], 0.625, places=6)
-        self.assertAlmostEqual(diagnostics["ratios"]["ml_pass_rate_day"], 0.375, places=6)
+        self.assertEqual(diagnostics["counts"]["policy_evaluated_votes_day"], 10)
+        self.assertEqual(diagnostics["counts"]["policy_allowed_votes_day"], 6)
+        self.assertEqual(diagnostics["counts"]["policy_blocked_votes_day"], 4)
+        self.assertAlmostEqual(diagnostics["ratios"]["policy_pass_rate_day"], 0.6, places=6)
+        self.assertAlmostEqual(diagnostics["ratios"]["policy_block_rate_day"], 0.4, places=6)
+        self.assertAlmostEqual(diagnostics["ratios"]["warmup_block_rate_day"], 1.0 / 9.0, places=6)
 
     def test_build_ml_pure_diagnostics_tracks_hold_reasons_and_skew(self) -> None:
         class CursorStub:
@@ -339,7 +327,7 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
                 "signal_type": "ENTRY",
                 "direction": "CE",
                 "engine_mode": "ml_pure",
-                "decision_mode": "ml_dual",
+                "decision_mode": "ml_staged",
                 "decision_reason_code": "ce_above_threshold",
                 "decision_metrics": {"ce_prob": 0.70, "pe_prob": 0.40, "edge": 0.30, "confidence": 0.70},
             },
@@ -349,7 +337,7 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
                 "signal_type": "ENTRY",
                 "direction": "PE",
                 "engine_mode": "ml_pure",
-                "decision_mode": "ml_dual",
+                "decision_mode": "ml_staged",
                 "decision_reason_code": "pe_above_threshold",
                 "decision_metrics": {"ce_prob": 0.35, "pe_prob": 0.68, "edge": 0.33, "confidence": 0.68},
             },
@@ -358,7 +346,7 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
                 "signal_id": "s3",
                 "signal_type": "HOLD",
                 "engine_mode": "ml_pure",
-                "decision_mode": "ml_dual",
+                "decision_mode": "ml_staged",
                 "decision_reason_code": "low_edge_conflict",
                 "decision_metrics": {"ce_prob": 0.61, "pe_prob": 0.60, "edge": 0.01, "confidence": 0.61},
             },
@@ -367,7 +355,7 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
                 "signal_id": "s4",
                 "signal_type": "HOLD",
                 "engine_mode": "ml_pure",
-                "decision_mode": "ml_dual",
+                "decision_mode": "ml_staged",
                 "decision_reason_code": "feature_stale",
                 "decision_metrics": {"confidence": 0.60},
             },
@@ -418,15 +406,15 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
             recent_signals=[
                 {
                     "engine_mode": "ml_pure",
-                    "strategy_family_version": "ML_PURE_DUAL_V1",
-                    "strategy_profile_id": "ml_pure_dual_v1",
+                    "strategy_family_version": "ML_PURE_STAGED_V1",
+                    "strategy_profile_id": "ml_pure_staged_v1",
                 }
             ],
         )
 
         self.assertEqual(ctx["active_engine_mode"], "ml_pure")
-        self.assertEqual(ctx["strategy_family_version"], "ML_PURE_DUAL_V1")
-        self.assertEqual(ctx["strategy_profile_id"], "ml_pure_dual_v1")
+        self.assertEqual(ctx["strategy_family_version"], "ML_PURE_STAGED_V1")
+        self.assertEqual(ctx["strategy_profile_id"], "ml_pure_staged_v1")
         self.assertEqual(self.service.promotion_lane_from_engine(ctx["active_engine_mode"]), "ml_pure")
 
 

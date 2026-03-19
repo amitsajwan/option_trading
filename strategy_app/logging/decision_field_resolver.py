@@ -73,30 +73,15 @@ class DecisionFieldResolver:
         if explicit is not None:
             return explicit
         if engine_mode == "ml_pure":
-            return "ml_dual"
-        raw_signals = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
-        checks = raw_signals.get("_policy_checks") if isinstance(raw_signals.get("_policy_checks"), dict) else {}
-        policy_reason = str(raw_signals.get("_policy_reason") or "").strip().lower()
-        ml_applied = bool(
-            any(str(key).startswith("ml_") for key in checks.keys())
-            or policy_reason.startswith("ml:")
-        )
-        return "ml_gate" if ml_applied else "rule_vote"
+            return "ml_staged"
+        return "rule_vote"
 
     def resolve_decision_mode_for_signal(self, signal: TradeSignal, engine_mode: str) -> str:
         explicit = normalize_decision_mode(signal.decision_mode)
         if explicit is not None:
             return explicit
         if engine_mode == "ml_pure":
-            return "ml_dual"
-        for vote in signal.votes:
-            vote_mode = normalize_decision_mode(getattr(vote, "decision_mode", None))
-            if vote_mode == "ml_gate":
-                return "ml_gate"
-            raw = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
-            checks = raw.get("_policy_checks") if isinstance(raw.get("_policy_checks"), dict) else {}
-            if any(str(key).startswith("ml_") for key in checks.keys()):
-                return "ml_gate"
+            return "ml_staged"
         return "rule_vote"
 
     def resolve_reason_code_for_vote(self, vote: StrategyVote) -> Optional[str]:
@@ -109,10 +94,6 @@ class DecisionFieldResolver:
         policy_reason = str(raw_signals.get("_policy_reason") or "").strip()
         if policy_reason:
             if policy_reason.lower().startswith("allowed score="):
-                return "policy_allowed"
-            if policy_reason.lower().startswith("ml:"):
-                if "<threshold" in policy_reason.lower():
-                    return "below_threshold"
                 return "policy_allowed"
             return "policy_block"
         return extract_reason_code_from_text(vote.reason)
@@ -144,12 +125,8 @@ class DecisionFieldResolver:
             return text
         if self._context_strategy_family_version:
             return self._context_strategy_family_version
-        if decision_mode == "ml_staged":
+        if decision_mode == "ml_staged" or engine_mode == "ml_pure":
             return "ML_PURE_STAGED_V1"
-        if decision_mode == "ml_dual" or engine_mode == "ml_pure":
-            return "ML_PURE_DUAL_V1"
-        if decision_mode == "ml_gate" or engine_mode == "ml":
-            return "ML_GATE_V1"
         return "DET_V1"
 
     def resolve_strategy_profile_id(self, *, explicit: Any, engine_mode: str) -> str:
@@ -161,22 +138,17 @@ class DecisionFieldResolver:
         if str(self._context_strategy_family_version or "").strip() == "ML_PURE_STAGED_V1":
             return "ml_pure_staged_v1"
         if engine_mode == "ml_pure":
-            return "ml_pure_dual_v1"
+            return "ml_pure_staged_v1"
         return "det_core_v1"
 
     def vote_decision_metrics(self, vote: StrategyVote) -> dict[str, float]:
         raw_signals = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
-        checks = raw_signals.get("_policy_checks") if isinstance(raw_signals.get("_policy_checks"), dict) else {}
         policy_score = _safe_float(raw_signals.get("_policy_score"))
-        ml_score = parse_metric_token(checks.get("ml_score_calibrated"), "score")
-        ml_threshold = parse_metric_token(checks.get("ml_threshold"), "threshold")
         return merge_decision_metrics(
             vote.decision_metrics,
             {
                 "confidence": vote.confidence,
                 "policy_score": policy_score,
-                "ml_score_calibrated": ml_score,
-                "ml_threshold": ml_threshold,
             },
         )
 

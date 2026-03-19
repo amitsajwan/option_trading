@@ -12,7 +12,7 @@ class AlertsTests(unittest.TestCase):
             warnings=[],
             engine_context={"active_engine_mode": "ml_pure"},
             decision_diagnostics={
-                "ml_gate": {"counts": {"directional_entry_votes_day": 3}, "ratios": {"ml_block_rate_day": 0.2}},
+                "deterministic": {"counts": {"directional_entry_votes_day": 3}, "ratios": {"policy_block_rate_day": 0.2}},
                 "ml_pure": {"ratios": {"hold_rate": 0.1}},
             },
             counts={"open_positions": 1},
@@ -30,7 +30,7 @@ class AlertsTests(unittest.TestCase):
             warnings=["service_latency_warning", "service_latency_warning"],
             engine_context={"active_engine_mode": "ml_pure"},
             decision_diagnostics={
-                "ml_gate": {"counts": {"directional_entry_votes_day": 0}, "ratios": {}},
+                "deterministic": {"counts": {"directional_entry_votes_day": 0}, "ratios": {}},
                 "ml_pure": {"ratios": {}},
             },
             counts={"open_positions": 0},
@@ -45,7 +45,7 @@ class AlertsTests(unittest.TestCase):
         with patch.dict(
             "os.environ",
             {
-                "LIVE_STRATEGY_ALERT_ML_BLOCK_RATE_WARN": "0.95",
+                "LIVE_STRATEGY_ALERT_POLICY_BLOCK_RATE_WARN": "0.95",
                 "LIVE_STRATEGY_ALERT_ML_PURE_HOLD_RATE_WARN": "0.95",
             },
             clear=False,
@@ -56,7 +56,7 @@ class AlertsTests(unittest.TestCase):
                 warnings=[],
                 engine_context={"active_engine_mode": "ml_pure"},
                 decision_diagnostics={
-                    "ml_gate": {"counts": {"directional_entry_votes_day": 5}, "ratios": {"ml_block_rate_day": 0.90}},
+                    "deterministic": {"counts": {"directional_entry_votes_day": 5}, "ratios": {"policy_block_rate_day": 0.90}},
                     "ml_pure": {"ratios": {"hold_rate": 0.90}},
                 },
                 counts={"open_positions": 0},
@@ -64,7 +64,7 @@ class AlertsTests(unittest.TestCase):
                 previous_engine_mode=None,
             )
         ids = {str(row.get("id") or "") for row in alerts}
-        self.assertNotIn("high_ml_block_rate", ids)
+        self.assertNotIn("high_policy_block_rate", ids)
         self.assertNotIn("high_ml_pure_hold_rate", ids)
 
 

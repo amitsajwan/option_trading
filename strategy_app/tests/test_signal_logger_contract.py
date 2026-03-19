@@ -17,12 +17,12 @@ class SignalLoggerContractTests(unittest.TestCase):
                 "run-1",
                 {
                     "engine_mode": "ml_pure",
-                    "strategy_family_version": "ML_PURE_DUAL_V1",
-                    "strategy_profile_id": "ml_pure_dual_v1",
+                    "strategy_family_version": "ML_PURE_STAGED_V1",
+                    "strategy_profile_id": "ml_pure_staged_v1",
                 },
             )
             vote = StrategyVote(
-                strategy_name="ML_PURE_DUAL",
+                strategy_name="ML_PURE_STAGED",
                 snapshot_id="snap-1",
                 timestamp=datetime(2026, 3, 7, 9, 30, tzinfo=timezone.utc),
                 trade_date="2026-03-07",
@@ -51,15 +51,15 @@ class SignalLoggerContractTests(unittest.TestCase):
             signal_row = json.loads((root / "signals.jsonl").read_text(encoding="utf-8").strip().splitlines()[0])
 
             self.assertEqual(vote_row["engine_mode"], "ml_pure")
-            self.assertEqual(vote_row["strategy_family_version"], "ML_PURE_DUAL_V1")
-            self.assertEqual(vote_row["strategy_profile_id"], "ml_pure_dual_v1")
+            self.assertEqual(vote_row["strategy_family_version"], "ML_PURE_STAGED_V1")
+            self.assertEqual(vote_row["strategy_profile_id"], "ml_pure_staged_v1")
             self.assertEqual(vote_row["decision_reason_code"], "low_edge_conflict")
             self.assertIsInstance(vote_row["decision_metrics"], dict)
 
             self.assertEqual(signal_row["engine_mode"], "ml_pure")
-            self.assertEqual(signal_row["decision_mode"], "ml_dual")
+            self.assertEqual(signal_row["decision_mode"], "ml_staged")
             self.assertEqual(signal_row["decision_reason_code"], "feature_stale")
-            self.assertEqual(signal_row["strategy_profile_id"], "ml_pure_dual_v1")
+            self.assertEqual(signal_row["strategy_profile_id"], "ml_pure_staged_v1")
             self.assertEqual(signal_row["acted_on"], False)
 
 

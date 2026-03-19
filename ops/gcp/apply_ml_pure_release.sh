@@ -61,8 +61,6 @@ updates = {
     "ML_PURE_MODEL_GROUP": release_values["ML_PURE_MODEL_GROUP"],
     "ML_PURE_MODEL_PACKAGE": "",
     "ML_PURE_THRESHOLD_REPORT": "",
-    "ML_PURE_CE_THRESHOLD": "",
-    "ML_PURE_PE_THRESHOLD": "",
 }
 
 seen = set()

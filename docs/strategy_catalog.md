@@ -19,9 +19,15 @@ From `StrategyRouter._entry_sets`:
 - `HIGH_VOL`: `IV_FILTER`, `HIGH_VOL_ORB`
 - `AVOID`: no entries
 
-Exit vote evaluation uses universal exit strategies:
+Exit vote candidates come from the shared exit strategy set:
 
 - `ORB`, `EMA_CROSSOVER`, `VWAP_RECLAIM`, `OI_BUILDUP`
+
+Selection is owner-first, not universal-first:
+
+- owner strategy exit wins when present
+- configured helper exits are allowed for specific owner/regime pairs
+- non-owner exits require high confidence
 
 Helper exit override currently configured:
 

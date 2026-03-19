@@ -28,7 +28,6 @@ from snapshot_app.historical.window_manifest import (
 )
 from strategy_app.contracts import PositionContext, StrategyVote, TradeSignal
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
-from strategy_app.engines.ml_entry_policy import MLEntryPolicy
 
 DEFAULT_PARQUET_BASE = DEFAULT_HISTORICAL_PARQUET_BASE
 DEFAULT_OUTPUT_ROOT = Path(".run/strategy_research")
@@ -215,17 +214,9 @@ def _run_scenario(
     scenario: Scenario,
     snapshots: pd.DataFrame,
     capital_allocated: float,
-    ml_entry_model_package: Optional[str] = None,
-    ml_entry_threshold: Optional[float] = None,
 ) -> pd.DataFrame:
     logger = MemorySignalLogger(capital_allocated=capital_allocated)
-    entry_policy = None
-    if ml_entry_model_package:
-        entry_policy = MLEntryPolicy(
-            model_package_path=ml_entry_model_package,
-            default_threshold=ml_entry_threshold,
-        )
-    engine = DeterministicRuleEngine(signal_logger=logger, entry_policy=entry_policy)
+    engine = DeterministicRuleEngine(signal_logger=logger)
     engine.set_run_context(f"offline-{scenario.name}", {"risk_config": scenario.risk_config})
 
     current_day: Optional[str] = None
@@ -448,8 +439,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--end-date", default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--capital", type=float, default=DEFAULT_CAPITAL)
-    parser.add_argument("--ml-entry-model-package", default=None)
-    parser.add_argument("--ml-entry-threshold", type=float, default=None)
     parser.add_argument("--window-manifest", default=None, help="Path to canonical window manifest JSON.")
     parser.add_argument("--formal-run", action="store_true", help="Enforce formal readiness rules from window manifest.")
     parser.add_argument("--manifest-min-trading-days", type=int, default=DEFAULT_MIN_TRADING_DAYS)
@@ -508,8 +497,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             scenario=scenario,
             snapshots=snapshots,
             capital_allocated=float(args.capital),
-            ml_entry_model_package=args.ml_entry_model_package,
-            ml_entry_threshold=args.ml_entry_threshold,
         )
         scenario_frames.append(df)
         summary = _summary(df, capital_allocated=float(args.capital))
@@ -555,8 +542,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"Top baseline strategy by total capital contribution: {top_strategy.get('entry_strategy')} ({top_strategy.get('total_capital_pnl_pct'):.2%})." if top_strategy else "No top strategy available.",
             f"Worst baseline strategy by total capital contribution: {worst_strategy.get('entry_strategy')} ({worst_strategy.get('total_capital_pnl_pct'):.2%})." if worst_strategy else "No worst strategy available.",
             "This report uses capital-weighted returns based on current lot sizing, not the dashboard shortcut that compounds raw option PnL percentages as portfolio equity.",
-            f"ML entry policy package: {args.ml_entry_model_package}" if args.ml_entry_model_package else "ML entry policy disabled.",
-            f"ML entry policy threshold override: {args.ml_entry_threshold:.2f}" if args.ml_entry_threshold is not None else "ML entry policy threshold override: none.",
+            "Legacy ML entry overlay removed. This report evaluates deterministic strategy behavior only.",
         ],
     )
 

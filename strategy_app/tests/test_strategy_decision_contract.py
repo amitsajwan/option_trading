@@ -13,8 +13,12 @@ from contracts_app.strategy_decision_contract import (
 class StrategyDecisionContractTests(unittest.TestCase):
     def test_normalization(self) -> None:
         self.assertEqual(normalize_engine_mode("ML_PURE"), "ml_pure")
-        self.assertEqual(normalize_decision_mode("ML_GATE"), "ml_gate")
+        self.assertEqual(normalize_engine_mode("DETERMINISTIC"), "deterministic")
+        self.assertIsNone(normalize_engine_mode("ML"))
+        self.assertEqual(normalize_decision_mode("RULE_VOTE"), "rule_vote")
         self.assertEqual(normalize_decision_mode("ML_STAGED"), "ml_staged")
+        self.assertIsNone(normalize_decision_mode("ML_DUAL"))
+        self.assertIsNone(normalize_decision_mode("ML_GATE"))
         self.assertEqual(normalize_reason_code("warmup_blocked"), "entry_warmup_block")
         self.assertIsNone(normalize_engine_mode("unknown"))
 

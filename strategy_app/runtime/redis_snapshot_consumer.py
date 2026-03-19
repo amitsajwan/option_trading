@@ -146,11 +146,20 @@ class RedisSnapshotConsumer:
             return
         if session_day != self._current_session:
             prev = self._current_session
-            self.engine.on_session_end(prev)
-            self.engine.on_session_start(session_day)
-            self._current_session = session_day
-            self._seen_snapshot_keys.clear()
-            self._seen_snapshot_order.clear()
+            try:
+                if prev is not None:
+                    try:
+                        self.engine.on_session_end(prev)
+                    except Exception:
+                        logger.exception("session end hook failed prev=%s", prev.isoformat())
+            finally:
+                try:
+                    self.engine.on_session_start(session_day)
+                    self._current_session = session_day
+                except Exception:
+                    logger.exception("session start hook failed session=%s", session_day.isoformat())
+                self._seen_snapshot_keys.clear()
+                self._seen_snapshot_order.clear()
 
     def _snapshot_process_key(self, event: dict[str, object], snapshot: dict[str, object]) -> str:
         run_id = _event_run_id(event) or ""

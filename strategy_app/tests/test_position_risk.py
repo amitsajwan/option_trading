@@ -8,9 +8,9 @@ from contracts_app import IST_ZONE
 from strategy_app.contracts import Direction, ExitReason, PositionContext, RiskContext, SignalType, StrategyVote, TradeSignal
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
 from strategy_app.engines.entry_policy import EntryPolicyDecision, PolicyConfig
-from strategy_app.engines.ml_entry_policy import MLEntryPolicy
 from strategy_app.engines.regime import Regime, RegimeSignal
 from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.engines.strategies.all_strategies import ExpiryMaxPainStrategy
 from strategy_app.engines.strategy_router import StrategyRouter
 from strategy_app.logging.signal_logger import SignalLogger
 from strategy_app.position.tracker import PositionTracker
@@ -692,6 +692,32 @@ class PositionRiskTests(unittest.TestCase):
         self.assertNotIn("EXPIRY_MAX_PAIN", sideways_entries)
         self.assertNotIn("EXPIRY_MAX_PAIN", exit_universal)
 
+    def test_expiry_max_pain_can_emit_entry_when_enabled_and_guards_pass(self) -> None:
+        strategy = ExpiryMaxPainStrategy(enabled=True, min_distance_points=150.0, min_minute=105, min_vol_ratio=1.5)
+        snapshot = {
+            "snapshot_id": "snap-expiry",
+            "session_context": {
+                "snapshot_id": "snap-expiry",
+                "timestamp": "2026-03-26T11:30:00+05:30",
+                "date": "2026-03-26",
+                "session_phase": "ACTIVE",
+                "minutes_since_open": 135,
+                "is_expiry_day": True,
+                "days_to_expiry": 0,
+            },
+            "futures_bar": {"fut_close": 50200.0},
+            "futures_derived": {"vol_ratio": 1.8},
+            "chain_aggregates": {"max_pain": 50000, "atm_strike": 50000},
+            "atm_options": {"atm_ce_close": 120.0, "atm_pe_close": 115.0},
+        }
+
+        vote = strategy.evaluate(snapshot, None, RiskContext())
+
+        self.assertIsNotNone(vote)
+        assert vote is not None
+        self.assertEqual(vote.strategy_name, "EXPIRY_MAX_PAIN")
+        self.assertEqual(vote.direction, Direction.PE)
+
     def test_entry_policy_uses_next_ranked_vote_when_top_candidate_is_blocked(self) -> None:
         prior = os.environ.get("STRATEGY_REDIS_PUBLISH_ENABLED")
         os.environ["STRATEGY_REDIS_PUBLISH_ENABLED"] = "0"
@@ -1121,41 +1147,6 @@ class PositionRiskTests(unittest.TestCase):
 
         self.assertIsNone(signal)
         self.assertEqual(called["force_exit"], 0)
-
-    def test_ml_entry_policy_prefers_strategy_specific_threshold_over_default(self) -> None:
-        policy = MLEntryPolicy.__new__(MLEntryPolicy)
-        policy._default_threshold = 0.60
-        policy._strategy_threshold_overrides = {"OI_BUILDUP": 0.50}
-        policy._strategy_regime_threshold_overrides = {("TRENDING", "EMA_CROSSOVER"): 0.80}
-
-        self.assertAlmostEqual(
-            policy._resolve_threshold(
-                strategy_name="OI_BUILDUP",
-                regime_name="TRENDING",
-                segment={"threshold": 0.65},
-            ),
-            0.50,
-            places=6,
-        )
-        self.assertAlmostEqual(
-            policy._resolve_threshold(
-                strategy_name="EMA_CROSSOVER",
-                regime_name="TRENDING",
-                segment={"threshold": 0.65},
-            ),
-            0.80,
-            places=6,
-        )
-        self.assertAlmostEqual(
-            policy._resolve_threshold(
-                strategy_name="ORB",
-                regime_name="PRE_EXPIRY",
-                segment={"threshold": 0.65},
-            ),
-            0.60,
-            places=6,
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

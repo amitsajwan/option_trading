@@ -191,9 +191,18 @@ class OIBuildupStrategy(BaseStrategy):
 
     name = "OI_BUILDUP"
 
-    def __init__(self, *, oi_change_threshold: float = 0.02, confidence_base: float = 0.70) -> None:
+    def __init__(
+        self,
+        *,
+        oi_change_threshold: float = 0.02,
+        confidence_base: float = 0.70,
+        exit_r5m_threshold: float = 0.0,
+        min_exit_hold_bars: int = 1,
+    ) -> None:
         self._oi_change_threshold = oi_change_threshold
         self._confidence_base = confidence_base
+        self._exit_r5m_threshold = float(exit_r5m_threshold)
+        self._min_exit_hold_bars = max(0, int(min_exit_hold_bars))
 
     def evaluate(
         self,
@@ -277,6 +286,8 @@ class OIBuildupStrategy(BaseStrategy):
         return None
 
     def _check_exit(self, snap: SnapshotAccessor, position: PositionContext) -> Optional[StrategyVote]:
+        if position.bars_held < self._min_exit_hold_bars:
+            return None
         oi_change = snap.fut_oi_change_30m
         fut_oi = snap.fut_oi
         # Exit uses r5m (not r15m) to react to immediate momentum reversal.
@@ -284,7 +295,11 @@ class OIBuildupStrategy(BaseStrategy):
         if oi_change is None or fut_oi is None or fut_oi <= 0 or r5m is None:
             return None
         oi_change_pct = oi_change / fut_oi
-        if position.direction == "CE" and oi_change_pct < -self._oi_change_threshold and r5m < 0:
+        if (
+            position.direction == "CE"
+            and oi_change_pct < -self._oi_change_threshold
+            and r5m < -abs(self._exit_r5m_threshold)
+        ):
             return StrategyVote(
                 strategy_name=self.name,
                 snapshot_id=snap.snapshot_id,
@@ -293,10 +308,24 @@ class OIBuildupStrategy(BaseStrategy):
                 signal_type=SignalType.EXIT,
                 direction=Direction.EXIT,
                 confidence=0.75,
-                reason=f"OI_LONG_UNWIND: oi_chg={oi_change_pct:.2%} r5m={r5m:.4f}",
+                reason=(
+                    f"OI_LONG_UNWIND: oi_chg={oi_change_pct:.2%} "
+                    f"r5m={r5m:.4f} min_hold={self._min_exit_hold_bars}"
+                ),
+                raw_signals={
+                    "oi_change_pct": oi_change_pct,
+                    "fut_oi_change_30m": oi_change,
+                    "fut_oi": fut_oi,
+                    "r5m": r5m,
+                    "bars_held": position.bars_held,
+                },
                 exit_reason=ExitReason.REGIME_SHIFT,
             )
-        if position.direction == "PE" and oi_change_pct < -self._oi_change_threshold and r5m > 0:
+        if (
+            position.direction == "PE"
+            and oi_change_pct < -self._oi_change_threshold
+            and r5m > abs(self._exit_r5m_threshold)
+        ):
             return StrategyVote(
                 strategy_name=self.name,
                 snapshot_id=snap.snapshot_id,
@@ -305,7 +334,17 @@ class OIBuildupStrategy(BaseStrategy):
                 signal_type=SignalType.EXIT,
                 direction=Direction.EXIT,
                 confidence=0.75,
-                reason=f"OI_SHORT_COVER: oi_chg={oi_change_pct:.2%} r5m={r5m:.4f}",
+                reason=(
+                    f"OI_SHORT_COVER: oi_chg={oi_change_pct:.2%} "
+                    f"r5m={r5m:.4f} min_hold={self._min_exit_hold_bars}"
+                ),
+                raw_signals={
+                    "oi_change_pct": oi_change_pct,
+                    "fut_oi_change_30m": oi_change,
+                    "fut_oi": fut_oi,
+                    "r5m": r5m,
+                    "bars_held": position.bars_held,
+                },
                 exit_reason=ExitReason.REGIME_SHIFT,
             )
         return None
@@ -320,10 +359,14 @@ class EMAcrossoverStrategy(BaseStrategy):
         self,
         *,
         min_spread_pct: float = 0.0003,
-        confidence_base: float = 0.60,
+        confidence_base: float = 0.65,
+        ema_exit_min_bars_held: int = 2,
+        ema_exit_min_spread_pct: float = 0.001,
     ) -> None:
         self._min_spread_pct = min_spread_pct
         self._confidence_base = confidence_base
+        self._ema_exit_min_bars_held = max(0, int(ema_exit_min_bars_held))
+        self._ema_exit_min_spread_pct = float(ema_exit_min_spread_pct)
 
     def evaluate(
         self,
@@ -411,6 +454,11 @@ class EMAcrossoverStrategy(BaseStrategy):
         ema_21 = snap.ema_21
         if close is None or ema_9 is None or ema_21 is None:
             return None
+        if position.bars_held < self._ema_exit_min_bars_held:
+            return None
+        spread_to_price = abs(ema_9 - ema_21) / close if close else 0.0
+        if spread_to_price < self._ema_exit_min_spread_pct:
+            return None
         if position.direction == "CE" and ema_9 < ema_21:
             return StrategyVote(
                 strategy_name=self.name,
@@ -421,6 +469,7 @@ class EMAcrossoverStrategy(BaseStrategy):
                 direction=Direction.EXIT,
                 confidence=0.65,
                 reason=f"EMA_EXIT: close={close:.0f} ema9={ema_9:.0f} ema21={ema_21:.0f}",
+                raw_signals={"bars_held": position.bars_held, "ema_spread": spread_to_price},
                 exit_reason=ExitReason.REGIME_SHIFT,
             )
         if position.direction == "PE" and ema_9 > ema_21:
@@ -433,6 +482,7 @@ class EMAcrossoverStrategy(BaseStrategy):
                 direction=Direction.EXIT,
                 confidence=0.65,
                 reason=f"EMA_EXIT: close={close:.0f} ema9={ema_9:.0f} ema21={ema_21:.0f}",
+                raw_signals={"bars_held": position.bars_held, "ema_spread": spread_to_price},
                 exit_reason=ExitReason.REGIME_SHIFT,
             )
         return None
@@ -652,10 +702,73 @@ class ExpiryMaxPainStrategy(BaseStrategy):
 
     name = "EXPIRY_MAX_PAIN"
 
-    def __init__(self, *, min_distance_points: float = 150.0, min_minute: int = 105, confidence_base: float = 0.70) -> None:
+    def __init__(
+        self,
+        *,
+        min_distance_points: float = 150.0,
+        min_minute: int = 105,
+        confidence_base: float = 0.70,
+        max_bars_in_trade: int = 30,
+        enabled: bool = False,
+        max_entries_per_expiry_day: int = 1,
+        min_vol_ratio: float = 1.5,
+    ) -> None:
         self._min_distance_points = min_distance_points
         self._min_minute = min_minute
         self._confidence_base = confidence_base
+        self._max_bars_in_trade = max(1, int(max_bars_in_trade))
+        self._enabled = bool(enabled)
+        self._max_entries_per_expiry_day = max(1, int(max_entries_per_expiry_day))
+        self._min_vol_ratio = float(min_vol_ratio)
+        self._trade_day: Optional[str] = None
+        self._trade_day_entries = 0
+
+    @staticmethod
+    def _resolve_trade_day(snap: SnapshotAccessor) -> Optional[str]:
+        trade_day = snap.trade_date
+        if isinstance(trade_day, str) and trade_day:
+            return trade_day
+        ts = snap.timestamp
+        if ts is not None:
+            return ts.date().isoformat()
+        return None
+
+    def _next_expiry_entry(self, snap: SnapshotAccessor) -> bool:
+        if not self._enabled:
+            return False
+        if not snap.trade_date and snap.timestamp is None:
+            return False
+        trade_day = self._resolve_trade_day(snap)
+        if trade_day is None:
+            return False
+        if self._trade_day != trade_day:
+            self._trade_day = trade_day
+            self._trade_day_entries = 0
+        if self._trade_day_entries >= self._max_entries_per_expiry_day:
+            return False
+        return True
+
+    def _mark_expiry_entry(self, snap: SnapshotAccessor) -> None:
+        if not self._enabled:
+            return
+        if not snap.trade_date and snap.timestamp is None:
+            return
+        trade_day = self._resolve_trade_day(snap)
+        if trade_day is None:
+            return
+        if self._trade_day != trade_day:
+            self._trade_day = trade_day
+            self._trade_day_entries = 0
+        self._trade_day_entries += 1
+
+    def _is_halted_entry(self, snap: SnapshotAccessor) -> bool:
+        if not self._enabled:
+            return True
+        if snap.fut_close is None or snap.max_pain is None:
+            return True
+        if snap.vol_ratio is None or snap.vol_ratio < self._min_vol_ratio:
+            return True
+        return False
 
     def evaluate(
         self,
@@ -669,14 +782,16 @@ class ExpiryMaxPainStrategy(BaseStrategy):
             return None
         if position is not None:
             return self._check_exit(snap, position)
+        if self._is_halted_entry(snap):
+            return None
         if not snap.is_valid_entry_phase or snap.minutes < self._min_minute:
             return None
-        if snap.fut_close is None or snap.max_pain is None:
+        if not self._next_expiry_entry(snap):
             return None
-
         distance = snap.fut_close - snap.max_pain
         if abs(distance) < self._min_distance_points:
             return None
+        self._mark_expiry_entry(snap)
         confidence = min(1.0, self._confidence_base + abs(distance) / 1000.0)
         if distance > 0:
             return StrategyVote(
@@ -710,6 +825,19 @@ class ExpiryMaxPainStrategy(BaseStrategy):
         if snap.fut_close is None or snap.max_pain is None:
             return None
         distance = snap.fut_close - snap.max_pain
+        if position.bars_held >= self._max_bars_in_trade:
+            return StrategyVote(
+                strategy_name=self.name,
+                snapshot_id=snap.snapshot_id,
+                timestamp=snap.timestamp_or_now,
+                trade_date=snap.trade_date,
+                signal_type=SignalType.EXIT,
+                direction=Direction.EXIT,
+                confidence=0.80,
+                reason=f"MAX_PAIN_TIMEOUT: bars={position.bars_held} max={self._max_bars_in_trade}",
+                raw_signals={"bars_held": position.bars_held, "max_bars_in_trade": self._max_bars_in_trade},
+                exit_reason=ExitReason.TIME_STOP,
+            )
         if position.direction == "CE" and distance >= -50:
             return StrategyVote(
                 strategy_name=self.name,
@@ -816,5 +944,4 @@ def build_default_strategy_set() -> list[BaseStrategy]:
         EMAcrossoverStrategy(),
         VWAPReclaimStrategy(),
         PrevDayLevelBreakout(),
-        ExpiryMaxPainStrategy(),
     ]

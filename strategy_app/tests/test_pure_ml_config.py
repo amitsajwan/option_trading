@@ -5,48 +5,83 @@ from pathlib import Path
 from unittest.mock import patch
 
 import joblib
-import numpy as np
-import pandas as pd
 
 from strategy_app.engines.pure_ml_engine import PureMLEngine
 from strategy_app.logging.signal_logger import SignalLogger
 from strategy_app.main import (
-    _resolve_ml_pure_model_group,
     _resolve_ml_pure_float,
     _resolve_ml_pure_int,
+    _resolve_ml_pure_model_group,
     _resolve_ml_pure_model_package,
     _resolve_ml_pure_run_id,
     _resolve_ml_pure_switch_paths,
-    _resolve_ml_pure_threshold_override,
     _resolve_ml_pure_threshold_report,
     build_engine,
 )
-
-
-class _ConstantProbModel:
-    def __init__(self, prob: float) -> None:
-        self._prob = float(prob)
-
-    def predict_proba(self, x: pd.DataFrame) -> np.ndarray:
-        n = int(len(x))
-        p1 = np.full(shape=(n,), fill_value=self._prob, dtype=float)
-        p0 = 1.0 - p1
-        return np.column_stack([p0, p1])
 
 
 class PureMLConfigTests(unittest.TestCase):
     def _write_model_bundle(self, root: Path) -> Path:
         path = root / "model.joblib"
         bundle = {
-            "feature_columns": ["ret_5m"],
-            "models": {"ce": _ConstantProbModel(0.8), "pe": _ConstantProbModel(0.2)},
+            "kind": "ml_pipeline_2_staged_runtime_bundle_v1",
+            "runtime": {
+                "prefilter_gate_ids": ["valid_entry_phase_v1"],
+                "block_expiry": True,
+            },
+            "stages": {
+                "stage1": {
+                    "model_package": {
+                        "feature_columns": ["ret_5m"],
+                    }
+                },
+                "stage2": {
+                    "model_package": {
+                        "feature_columns": ["ret_5m"],
+                    }
+                },
+                "stage3": {
+                    "recipe_packages": {
+                        "base": {
+                            "feature_columns": ["ret_5m"],
+                        }
+                    }
+                },
+            },
         }
         joblib.dump(bundle, path)
         return path
 
     def _write_threshold_report(self, root: Path) -> Path:
         path = root / "thresholds.json"
-        path.write_text(json.dumps({"ce_threshold": 0.6, "pe_threshold": 0.6}), encoding="utf-8")
+        payload = {
+            "kind": "ml_pipeline_2_staged_runtime_policy_v1",
+            "stage1": {
+                "selected_threshold": 0.60,
+            },
+            "stage2": {
+                "selected_ce_threshold": 0.60,
+                "selected_pe_threshold": 0.60,
+                "selected_min_edge": 0.15,
+            },
+            "stage3": {
+                "selected_threshold": 0.55,
+                "selected_margin_min": 0.05,
+            },
+            "runtime": {
+                "prefilter_gate_ids": ["valid_entry_phase_v1"],
+                "block_expiry": True,
+            },
+            "recipe_catalog": [
+                {
+                    "recipe_id": "base",
+                    "horizon_minutes": 15,
+                    "take_profit_pct": 0.20,
+                    "stop_loss_pct": 0.05,
+                }
+            ],
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
     def test_resolve_ml_pure_paths_prefers_cli(self) -> None:
@@ -73,11 +108,6 @@ class PureMLConfigTests(unittest.TestCase):
             self.assertEqual(_resolve_ml_pure_model_package(None), "env-model.joblib")
             self.assertEqual(_resolve_ml_pure_threshold_report(None), "env-thresholds.json")
 
-    def test_resolve_ml_pure_threshold_overrides_prefers_cli_then_env(self) -> None:
-        with patch.dict("os.environ", {"ML_PURE_CE_THRESHOLD": "0.66"}, clear=False):
-            self.assertAlmostEqual(_resolve_ml_pure_threshold_override(0.63, "ML_PURE_CE_THRESHOLD") or 0.0, 0.63, places=6)
-            self.assertAlmostEqual(_resolve_ml_pure_threshold_override(None, "ML_PURE_CE_THRESHOLD") or 0.0, 0.66, places=6)
-
     def test_resolve_ml_pure_run_selector_from_env(self) -> None:
         with patch.dict(
             "os.environ",
@@ -93,7 +123,6 @@ class PureMLConfigTests(unittest.TestCase):
             self.assertAlmostEqual(_resolve_ml_pure_float(None, "ML_PURE_MIN_OI", 50000.0), 50000.0, places=6)
             self.assertEqual(_resolve_ml_pure_int(None, "ML_PURE_MAX_FEATURE_AGE_SEC", 90), 90)
             self.assertEqual(_resolve_ml_pure_int(None, "ML_PURE_MAX_NAN_FEATURES", 3), 3)
-            self.assertAlmostEqual(_resolve_ml_pure_float(None, "ML_PURE_MIN_EDGE", 0.15), 0.15, places=6)
 
     def test_build_engine_ml_pure_requires_model_package(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

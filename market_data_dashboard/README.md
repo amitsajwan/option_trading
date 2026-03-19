@@ -114,11 +114,10 @@ Port behavior note:
 - `engine_context` (active engine mode + observed modes + strategy family/profile)
 - `decision_diagnostics` with lane-specific blocks:
   - `ml_pure` (CE/PE/HOLD counts, hold-reason distribution, edge/confidence distributions)
-  - `ml_gate` (existing deterministic ML-gate diagnostics)
+  - `deterministic` (policy counts, block/pass ratios, warmup activity)
 - `promotion_lane` (`ml_pure` or `deterministic`)
-- `ml_diagnostics` is preserved as a compatibility alias to `decision_diagnostics.ml_gate`.
 
-`/live/strategy` renders both `ml_pure` and deterministic/ml-gate panels and auto-emphasizes the currently active engine lane.
+`/live/strategy` renders the active engine lane and exposes deterministic diagnostics under `decision_diagnostics.deterministic`.
 
 ### Live Strategy UX Clarity (Operator-First v1)
 
@@ -153,7 +152,7 @@ Feature flag:
 
 Alert noise tuning env vars:
 
-- `LIVE_STRATEGY_ALERT_ML_BLOCK_RATE_WARN` (default `0.80`)
+- `LIVE_STRATEGY_ALERT_POLICY_BLOCK_RATE_WARN` (default `0.80`)
 - `LIVE_STRATEGY_ALERT_ML_PURE_HOLD_RATE_WARN` (default `0.80`)
 
 ### Live Monitor Module Map (v2.3 Phase-1)
@@ -161,7 +160,7 @@ Alert noise tuning env vars:
 The live session backend keeps `LiveStrategyMonitorService` as façade and now uses:
 
 - `market_data_dashboard/live_strategy_repository.py` for Mongo read models/projections
-- `market_data_dashboard/diagnostics/ml_gate.py` for deterministic+ML-gate diagnostics
+- `market_data_dashboard/diagnostics/deterministic.py` for deterministic policy diagnostics
 - `market_data_dashboard/diagnostics/ml_pure.py` for pure-ML diagnostics
 - `market_data_dashboard/live_strategy_session_assembler.py` for engine context and final payload assembly
 - `market_data_dashboard/strategy_monitor_contracts.py` for typed payload aliases

@@ -186,13 +186,14 @@ class RiskManager:
         ctx = self._context
         if entry_premium <= 0 or ctx.capital_allocated <= 0:
             return 1
+        confidence_scale = min(1.0, max(0.5, float(confidence)))
         if self._lot_sizing_mode in {"budget_per_trade", "notional_budget"} and self._notional_per_trade > 0:
             lot_cost = float(entry_premium)
             if self._lot_budget_uses_lot_size:
                 lot_cost *= BANKNIFTY_LOT_SIZE
             if lot_cost <= 0:
                 return 1
-            base_lots = int(self._notional_per_trade / lot_cost)
+            base_lots = int(self._notional_per_trade * confidence_scale / lot_cost)
             return min(max(1, base_lots), ctx.max_lots_per_trade)
         stop_pct = max(0.0, float(stop_loss_pct))
         if stop_pct <= 0:
@@ -202,7 +203,7 @@ class RiskManager:
         if max_loss_per_lot <= 0:
             return 1
         base_lots = int(risk_capital / max_loss_per_lot)
-        scaled = max(1, int(base_lots * min(1.0, max(0.25, confidence))))
+        scaled = max(1, int(base_lots * min(1.0, max(0.5, confidence))))
         return min(scaled, ctx.max_lots_per_trade)
 
     def _check_vix_spike(self, snap: SnapshotAccessor) -> None:
@@ -248,4 +249,19 @@ class RiskManager:
             return
 
         if ctx.vix_spike_halt:
+            if ctx.vix_below_resume_since is None:
+                ctx.vix_below_resume_since = now_ts
+            elif (now_ts - ctx.vix_below_resume_since) >= self._vix_resume_cooldown:
+                logger.info(
+                    "vix spike resolved from missing chg payload cooldown_minutes=%d",
+                    int(self._vix_resume_cooldown.total_seconds() // 60),
+                )
+                ctx.vix_spike_halt = False
+                ctx.vix_last_resume_at = now_ts
+                ctx.vix_below_resume_since = None
+                ctx.post_halt_resume_boost_available = True
+            else:
+                # wait through cooldown while intraday data is missing
+                pass
+        else:
             ctx.vix_below_resume_since = None

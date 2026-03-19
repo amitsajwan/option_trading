@@ -87,13 +87,8 @@ class DeterministicRuleEngine(StrategyEngine):
         self._current_session: Optional[date] = None
         self._regime_shift_streak: dict[str, int] = {}
         self._ml_score_all_snapshots = False
-        self._engine_mode = str(engine_mode or "deterministic").strip().lower()
-        if self._engine_mode not in {"deterministic", "ml"}:
-            self._engine_mode = "deterministic"
-        self._strategy_family_version = str(
-            strategy_family_version
-            or ("ML_GATE_V1" if self._engine_mode == "ml" else "DET_V1")
-        ).strip() or ("ML_GATE_V1" if self._engine_mode == "ml" else "DET_V1")
+        self._engine_mode = "deterministic"
+        self._strategy_family_version = str(strategy_family_version or "DET_V1").strip() or "DET_V1"
         self._strategy_profile_id = str(strategy_profile_id or DEFAULT_STRATEGY_PROFILE_ID).strip() or DEFAULT_STRATEGY_PROFILE_ID
         self._set_logger_context(None)
         logger.info("deterministic engine initialized min_confidence=%.2f", self._min_confidence)
@@ -304,23 +299,55 @@ class DeterministicRuleEngine(StrategyEngine):
         snap: SnapshotAccessor,
         position: PositionContext,
     ) -> Optional[TradeSignal]:
-        exit_votes = [
+        all_exit_votes = [
             vote
             for vote in votes
             if vote.signal_type == SignalType.EXIT
             and vote.direction == Direction.EXIT
             and vote.confidence >= EXIT_CONFIDENCE
         ]
+        exit_votes = list(all_exit_votes)
+        owned_exit_votes = [vote for vote in all_exit_votes if str(vote.strategy_name or "").strip().upper() == str(position.entry_strategy or "").strip().upper()]
+        used_owned_pool = False
+        if owned_exit_votes:
+            exit_votes = owned_exit_votes
+            used_owned_pool = True
+            logger.debug(
+                "using owned strategy exit-only pool entry_strategy=%s votes=%d",
+                position.entry_strategy,
+                len(owned_exit_votes),
+            )
+            best_vote = self._select_exit_vote(exit_votes, position)
+            if best_vote is None:
+                exit_votes = [
+                    vote
+                    for vote in votes
+                    if vote.signal_type == SignalType.EXIT
+                    and vote.direction == Direction.EXIT
+                    and vote.confidence >= EXIT_CONFIDENCE
+                ]
+                logger.debug(
+                    "owned exit not triggered, falling back to universal exit pool entry_strategy=%s",
+                    position.entry_strategy,
+                )
+        else:
+            logger.debug(
+                "owned strategy exit votes missing, using universal exit pool entry_strategy=%s pool=%d",
+                position.entry_strategy,
+                len(exit_votes),
+            )
         best_vote = self._select_exit_vote(exit_votes, position)
+        if best_vote is None:
+            return None
         if best_vote is not None and self._should_defer_regime_shift_exit(position, best_vote):
             non_regime_votes = [
                 vote
-                for vote in exit_votes
+                for vote in (all_exit_votes if used_owned_pool else exit_votes)
                 if (vote.exit_reason or ExitReason.STRATEGY_EXIT) != ExitReason.REGIME_SHIFT
             ]
             best_vote = self._select_exit_vote(non_regime_votes, position)
-        if best_vote is None:
-            return None
+            if best_vote is None:
+                return None
         vote_reason = best_vote.exit_reason or ExitReason.STRATEGY_EXIT
         if vote_reason == ExitReason.REGIME_SHIFT:
             if not self._accept_regime_shift_exit(position):

@@ -46,6 +46,18 @@ class _FakeEngine:
         return None
 
 
+class _FailingEndEngine(_FakeEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self._failed_once = False
+
+    def on_session_end(self, trade_date: date) -> None:
+        self.ends.append(trade_date)
+        if not self._failed_once:
+            self._failed_once = True
+            raise RuntimeError("boom")
+
+
 class _FakePubSub:
     def __init__(self, payloads: list[dict]) -> None:
         self._messages = [{"data": json.dumps(payload)} for payload in payloads]
@@ -138,6 +150,25 @@ class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "duplicate strategy consumer detected"):
             consumer.start(max_events=0)
+
+    def test_session_start_still_runs_when_prior_session_end_fails(self) -> None:
+        payloads = [
+            _event("20260306_1514", "2026-03-06T15:14:00+05:30"),
+            _event("20260307_0915", "2026-03-07T09:15:00+05:30"),
+        ]
+        engine = _FailingEndEngine()
+        consumer = RedisSnapshotConsumer(
+            engine=engine,
+            topic="market:snapshot:v1",
+            client=_FakeRedis(payloads),
+            poll_interval_sec=0.001,
+        )
+
+        consumed = consumer.start(max_events=2)
+
+        self.assertEqual(consumed, 2)
+        self.assertEqual(engine.starts, [date(2026, 3, 6), date(2026, 3, 7)])
+        self.assertEqual(engine.evaluated_snapshot_ids, ["20260306_1514", "20260307_0915"])
 
 
 if __name__ == "__main__":

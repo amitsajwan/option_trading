@@ -51,8 +51,8 @@ except ImportError:
     )
 
 try:
-    from .diagnostics.ml_gate import (
-        build_ml_gate_diagnostics as _build_ml_gate_diagnostics_module,
+    from .diagnostics.deterministic import (
+        build_deterministic_diagnostics as _build_deterministic_diagnostics_module,
         policy_row_from_vote_doc as _policy_row_from_vote_doc_module,
     )
     from .diagnostics.ml_pure import build_ml_pure_diagnostics as _build_ml_pure_diagnostics_module
@@ -65,8 +65,8 @@ try:
     from .ux.alerts import build_active_alerts as _build_active_alerts_module
     from .ux.decision_explainer import build_decision_explainability as _build_decision_explainability_module
 except ImportError:
-    from diagnostics.ml_gate import (  # type: ignore
-        build_ml_gate_diagnostics as _build_ml_gate_diagnostics_module,
+    from diagnostics.deterministic import (  # type: ignore
+        build_deterministic_diagnostics as _build_deterministic_diagnostics_module,
         policy_row_from_vote_doc as _policy_row_from_vote_doc_module,
     )
     from diagnostics.ml_pure import build_ml_pure_diagnostics as _build_ml_pure_diagnostics_module  # type: ignore
@@ -198,17 +198,17 @@ class LiveStrategyMonitorService:
     def _policy_row_from_vote_doc(self, doc: dict[str, Any]) -> Optional[dict[str, Any]]:
         return _policy_row_from_vote_doc_module(doc)
 
-    def build_ml_diagnostics(self, *, date_ist: str, votes_coll: Any) -> dict[str, Any]:
-        return _build_ml_gate_diagnostics_module(date_ist=date_ist, votes_coll=votes_coll)
+    def build_deterministic_diagnostics(self, *, date_ist: str, votes_coll: Any) -> dict[str, Any]:
+        return _build_deterministic_diagnostics_module(date_ist=date_ist, votes_coll=votes_coll)
 
     def build_ml_pure_diagnostics(self, *, date_ist: str, signals_coll: Any) -> dict[str, Any]:
         return _build_ml_pure_diagnostics_module(date_ist=date_ist, signals_coll=signals_coll)
 
     def build_decision_diagnostics(self, *, date_ist: str, votes_coll: Any, signals_coll: Any) -> DecisionDiagnostics:
-        ml_gate = self.build_ml_diagnostics(date_ist=date_ist, votes_coll=votes_coll)
+        deterministic = self.build_deterministic_diagnostics(date_ist=date_ist, votes_coll=votes_coll)
         ml_pure = self.build_ml_pure_diagnostics(date_ist=date_ist, signals_coll=signals_coll)
         return {
-            "ml_gate": ml_gate,
+            "deterministic": deterministic,
             "ml_pure": ml_pure,
         }
 
@@ -538,8 +538,6 @@ class LiveStrategyMonitorService:
         mode = str(engine_context.get("active_engine_mode") or "unknown").strip().lower()
         if mode == "ml_pure":
             engine_state = "ml_pure_active"
-        elif mode == "ml":
-            engine_state = "ml_gate_active"
         elif mode == "deterministic":
             engine_state = "deterministic_active"
         else:
@@ -585,7 +583,7 @@ class LiveStrategyMonitorService:
         debug_view: bool,
     ) -> UiHints:
         mode = str(engine_context.get("active_engine_mode") or "").strip().lower()
-        panel = "ml_pure" if mode == "ml_pure" else "ml_gate"
+        panel = "ml_pure" if mode == "ml_pure" else "deterministic"
         has_critical = any(str(alert.get("severity") or "").lower() == "critical" for alert in active_alerts)
         has_warning = any(str(alert.get("severity") or "").lower() == "warning" for alert in active_alerts)
         all_fresh = bool(freshness.get("votes_fresh")) and bool(freshness.get("signals_fresh")) and bool(freshness.get("positions_fresh"))
@@ -640,7 +638,6 @@ class LiveStrategyMonitorService:
             votes_coll=votes_coll,
             signals_coll=signals_coll,
         )
-        ml_diagnostics = dict(decision_diagnostics.get("ml_gate") or {})
         engine_context = self.infer_engine_context(
             recent_votes=recent_votes,
             recent_signals=recent_signals,
@@ -808,7 +805,6 @@ class LiveStrategyMonitorService:
             recent_signals=recent_signals,
             recent_votes=recent_votes,
             decision_diagnostics=decision_diagnostics,
-            ml_diagnostics=ml_diagnostics,
             ops_state=ops_state,
             active_alerts=active_alerts,
             decision_explainability=decision_explainability,

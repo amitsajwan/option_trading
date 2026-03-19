@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
+import joblib
 import numpy as np
 import pandas as pd
 
@@ -44,12 +46,26 @@ class StagedRuntimeDecision:
     target_pct: Optional[float] = None
 
 
+@dataclass(frozen=True)
+class PureMLRuntimeControls:
+    block_expiry: bool = False
+
+
 def is_staged_runtime_bundle(bundle: dict[str, object]) -> bool:
     return str(bundle.get("kind") or "").strip() == STAGED_RUNTIME_BUNDLE_KIND
 
 
 def load_staged_policy(path: str) -> dict[str, Any]:
     return load_staged_runtime_policy(path)
+
+
+def load_staged_model_package(path: str | Path) -> dict[str, object]:
+    package = joblib.load(Path(path))
+    if not isinstance(package, dict):
+        raise ValueError("pure ml model package must be dict")
+    if not is_staged_runtime_bundle(package):
+        raise ValueError("ml_pure requires a staged runtime bundle")
+    return package
 
 
 def _feature_completeness_reason(feature_row: dict[str, object], package: dict[str, Any], *, max_nan_features: int) -> Optional[str]:

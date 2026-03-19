@@ -112,10 +112,8 @@ def explain_reason_code(reason_code: Any) -> tuple[str, str]:
 
 def _gate_path(decision_mode: Optional[str], action: str) -> str:
     mode = normalize_decision_mode(decision_mode) or "rule_vote"
-    if mode == "ml_dual":
-        return f"Candidate -> ML Dual -> Risk/Phase -> {action}"
-    if mode == "ml_gate":
-        return f"Candidate -> Policy -> ML Gate -> Risk/Phase -> {action}"
+    if mode == "ml_staged":
+        return f"Candidate -> ML Staged -> Risk/Phase -> {action}"
     return f"Candidate -> Policy -> Risk/Phase -> {action}"
 
 
@@ -192,15 +190,15 @@ def _reason_summary(rows: list[DecisionTimelineItem]) -> list[dict[str, Any]]:
 
 
 def _gate_funnel(decision_diagnostics: dict[str, Any]) -> dict[str, Any]:
-    ml_gate = (decision_diagnostics.get("ml_gate") or {}) if isinstance(decision_diagnostics, dict) else {}
+    deterministic = (decision_diagnostics.get("deterministic") or {}) if isinstance(decision_diagnostics, dict) else {}
     ml_pure = (decision_diagnostics.get("ml_pure") or {}) if isinstance(decision_diagnostics, dict) else {}
-    ml_gate_counts = (ml_gate.get("counts") or {}) if isinstance(ml_gate, dict) else {}
+    deterministic_counts = (deterministic.get("counts") or {}) if isinstance(deterministic, dict) else {}
     ml_pure_counts = (ml_pure.get("counts") or {}) if isinstance(ml_pure, dict) else {}
     return {
-        "directional_entry_votes_day": int(ml_gate_counts.get("directional_entry_votes_day") or 0),
-        "policy_evaluated_votes_day": int(ml_gate_counts.get("policy_evaluated_votes_day") or 0),
-        "ml_scored_votes_day": int(ml_gate_counts.get("ml_policy_votes_day") or 0),
-        "ml_blocked_votes_day": int(ml_gate_counts.get("ml_blocked_votes_day") or 0),
+        "directional_entry_votes_day": int(deterministic_counts.get("directional_entry_votes_day") or 0),
+        "policy_evaluated_votes_day": int(deterministic_counts.get("policy_evaluated_votes_day") or 0),
+        "policy_allowed_votes_day": int(deterministic_counts.get("policy_allowed_votes_day") or 0),
+        "policy_blocked_votes_day": int(deterministic_counts.get("policy_blocked_votes_day") or 0),
         "ml_pure_entries_ce": int(ml_pure_counts.get("entries_ce") or 0),
         "ml_pure_entries_pe": int(ml_pure_counts.get("entries_pe") or 0),
         "ml_pure_holds": int(ml_pure_counts.get("holds") or 0),

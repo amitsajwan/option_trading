@@ -17,13 +17,11 @@
   "proposed_stop_loss_pct": 0.4,
   "proposed_target_pct": 0.8,
   "engine_mode": "deterministic",
-  "decision_mode": "ml_gate",
+  "decision_mode": "rule_vote",
   "decision_reason_code": "policy_allowed",
   "decision_metrics": {
     "confidence": 0.72,
-    "policy_score": 0.71,
-    "ml_score_calibrated": 0.71,
-    "ml_threshold": 0.65
+    "policy_score": 0.71
   },
   "strategy_family_version": "DET_V1",
   "strategy_profile_id": "det_core_v1",
@@ -31,10 +29,7 @@
     "_policy_allowed": true,
     "_policy_score": 0.71,
     "_policy_reason": "allowed score=0.71",
-    "_policy_checks": {
-      "ml_score_calibrated": "score=0.71",
-      "ml_threshold": "threshold=0.65"
-    }
+    "_policy_checks": {}
   },
   "run_id": "run-parity"
 }

@@ -110,17 +110,17 @@ def build_active_alerts(
             operator_next_step="Check stream health before trusting new entry signals.",
         )
 
-    ml_gate = (decision_diagnostics.get("ml_gate") or {}) if isinstance(decision_diagnostics, dict) else {}
+    deterministic = (decision_diagnostics.get("deterministic") or {}) if isinstance(decision_diagnostics, dict) else {}
     ml_pure = (decision_diagnostics.get("ml_pure") or {}) if isinstance(decision_diagnostics, dict) else {}
-    ml_gate_counts = (ml_gate.get("counts") or {}) if isinstance(ml_gate, dict) else {}
-    ml_gate_ratios = (ml_gate.get("ratios") or {}) if isinstance(ml_gate, dict) else {}
+    deterministic_counts = (deterministic.get("counts") or {}) if isinstance(deterministic, dict) else {}
+    deterministic_ratios = (deterministic.get("ratios") or {}) if isinstance(deterministic, dict) else {}
     ml_pure_ratios = (ml_pure.get("ratios") or {}) if isinstance(ml_pure, dict) else {}
 
-    directional_votes = int(ml_gate_counts.get("directional_entry_votes_day") or 0)
-    warmup_blocked = int(ml_gate_counts.get("warmup_blocked_votes_day") or 0)
-    block_rate = _safe_ratio(ml_gate_ratios.get("ml_block_rate_day"))
+    directional_votes = int(deterministic_counts.get("directional_entry_votes_day") or 0)
+    warmup_blocked = int(deterministic_counts.get("warmup_blocked_votes_day") or 0)
+    block_rate = _safe_ratio(deterministic_ratios.get("policy_block_rate_day"))
     hold_rate = _safe_ratio(ml_pure_ratios.get("hold_rate"))
-    block_rate_warn_threshold = _threshold_from_env("LIVE_STRATEGY_ALERT_ML_BLOCK_RATE_WARN", 0.80)
+    block_rate_warn_threshold = _threshold_from_env("LIVE_STRATEGY_ALERT_POLICY_BLOCK_RATE_WARN", 0.80)
     hold_rate_warn_threshold = _threshold_from_env("LIVE_STRATEGY_ALERT_ML_PURE_HOLD_RATE_WARN", 0.80)
 
     latest_reason = str((latest_decision or {}).get("reason_code") or "").strip().lower()
@@ -148,12 +148,12 @@ def build_active_alerts(
     if block_rate is not None and block_rate >= block_rate_warn_threshold:
         _add_alert(
             alerts,
-            alert_id="high_ml_block_rate",
+            alert_id="high_policy_block_rate",
             severity="warning",
-            title="High ML-Gate Block Rate",
-            detail=f"ML block rate is elevated ({block_rate * 100.0:.1f}% >= {block_rate_warn_threshold * 100.0:.1f}%).",
-            source="decision_diagnostics.ml_gate",
-            operator_next_step="Review threshold policy and base candidate quality.",
+            title="High Deterministic Policy Block Rate",
+            detail=f"Deterministic policy block rate is elevated ({block_rate * 100.0:.1f}% >= {block_rate_warn_threshold * 100.0:.1f}%).",
+            source="decision_diagnostics.deterministic",
+            operator_next_step="Review deterministic policy checks and base candidate quality.",
         )
     if hold_rate is not None and hold_rate >= hold_rate_warn_threshold:
         _add_alert(
@@ -208,7 +208,7 @@ def build_active_alerts(
             severity="info",
             title="Warmup Blocks Observed",
             detail=f"Warmup blocked {warmup_blocked} candidate(s) today.",
-            source="decision_diagnostics.ml_gate",
+            source="decision_diagnostics.deterministic",
             operator_next_step="No action unless warmup extends beyond expected window.",
         )
 
@@ -219,7 +219,7 @@ def build_active_alerts(
             severity="info",
             title="No Directional Votes Today",
             detail="No CE/PE directional entry votes recorded in current session window.",
-            source="decision_diagnostics.ml_gate",
+            source="decision_diagnostics.deterministic",
             operator_next_step="Check whether session phase or regime is intentionally restrictive.",
         )
 

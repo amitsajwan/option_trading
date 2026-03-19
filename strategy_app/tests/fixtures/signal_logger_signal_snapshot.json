@@ -35,7 +35,7 @@
   "confidence": 0.62,
   "reason": "ml_pure_hold:feature_stale",
   "engine_mode": "ml_pure",
-  "decision_mode": "ml_dual",
+  "decision_mode": "ml_staged",
   "decision_reason_code": "feature_stale",
   "decision_metrics": {
     "confidence": 0.62

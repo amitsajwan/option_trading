@@ -20,7 +20,7 @@ class DecisionExplainerTests(unittest.TestCase):
                 "signal_id": "sig-1",
                 "signal_type": "HOLD",
                 "engine_mode": "ml_pure",
-                "decision_mode": "ml_dual",
+                "decision_mode": "ml_staged",
                 "decision_reason_code": "low_edge_conflict",
                 "decision_metrics": {"edge": 0.01, "confidence": 0.61},
             }
@@ -55,7 +55,7 @@ class DecisionExplainerTests(unittest.TestCase):
                 "signal_id": "sig-1",
                 "signal_type": "ENTRY",
                 "engine_mode": "ml_pure",
-                "decision_mode": "ml_dual",
+                "decision_mode": "ml_staged",
                 "decision_reason_code": "ce_above_threshold",
                 "decision_metrics": {"edge": 0.20},
             }

@@ -584,26 +584,26 @@
             </div>
         </section>
 
-        <section class="panel engine-panel" id="mlGatePanel" style="margin-bottom: 14px;">
+        <section class="panel engine-panel" id="deterministicPanel" style="margin-bottom: 14px;">
             <div class="panel-head">
-                <h2>Deterministic / ML-Gate Monitor</h2>
-                <button class="toggle-btn" id="mlGateToggle" data-target="mlGatePanelBody" type="button">Expand</button>
+                <h2>Deterministic Policy Monitor</h2>
+                <button class="toggle-btn" id="deterministicToggle" data-target="deterministicPanelBody" type="button">Expand</button>
             </div>
-            <div class="collapsible-content collapsed" id="mlGatePanelBody">
+            <div class="collapsible-content collapsed" id="deterministicPanelBody">
             <div class="grid-2">
-                <div class="kv"><div class="label">Status</div><div class="value" id="mlStatus">--</div></div>
-                <div class="kv"><div class="label">Summary</div><div class="value" id="mlSummary">--</div></div>
-                <div class="kv"><div class="label">Directional Entry Votes (Day)</div><div class="value" id="mlCountDirectional">--</div></div>
-                <div class="kv"><div class="label">Policy Evaluated Votes (Day)</div><div class="value" id="mlCountPolicy">--</div></div>
-                <div class="kv"><div class="label">Base Allowed Votes (Day)</div><div class="value" id="mlCountBaseAllowed">--</div></div>
-                <div class="kv"><div class="label">ML Scored Votes (Day)</div><div class="value" id="mlCountMl">--</div></div>
-                <div class="kv"><div class="label">ML Allowed Votes (Day)</div><div class="value" id="mlCountMlAllowed">--</div></div>
-                <div class="kv"><div class="label">ML Blocked Votes (Day)</div><div class="value" id="mlCountMlBlocked">--</div></div>
-                <div class="kv"><div class="label">Warmup Blocked Votes (Day)</div><div class="value" id="mlCountWarmup">--</div></div>
-                <div class="kv"><div class="label">ML Scored / Base Allowed</div><div class="value" id="mlRatioScored">--</div></div>
-                <div class="kv"><div class="label">ML Block Rate (of ML Scored)</div><div class="value" id="mlRatioBlocked">--</div></div>
-                <div class="kv"><div class="label">Latest ML Decision (Day)</div><div class="value" id="mlLatestDay">--</div></div>
-                <div class="kv"><div class="label">Latest ML Decision (Any)</div><div class="value" id="mlLatestAny">--</div></div>
+                <div class="kv"><div class="label">Status</div><div class="value" id="detStatus">--</div></div>
+                <div class="kv"><div class="label">Summary</div><div class="value" id="detSummary">--</div></div>
+                <div class="kv"><div class="label">Directional Entry Votes (Day)</div><div class="value" id="detCountDirectional">--</div></div>
+                <div class="kv"><div class="label">Policy Evaluated Votes (Day)</div><div class="value" id="detCountPolicy">--</div></div>
+                <div class="kv"><div class="label">Policy Allowed Votes (Day)</div><div class="value" id="detCountAllowed">--</div></div>
+                <div class="kv"><div class="label">Policy Blocked Votes (Day)</div><div class="value" id="detCountBlocked">--</div></div>
+                <div class="kv"><div class="label">Sampled Votes</div><div class="value" id="detCountSampled">--</div></div>
+                <div class="kv"><div class="label">Sampled Policy Rows</div><div class="value" id="detCountSampledPolicy">--</div></div>
+                <div class="kv"><div class="label">Warmup Blocked Votes (Day)</div><div class="value" id="detCountWarmup">--</div></div>
+                <div class="kv"><div class="label">Policy Pass Rate</div><div class="value" id="detRatioPass">--</div></div>
+                <div class="kv"><div class="label">Policy Block Rate</div><div class="value" id="detRatioBlocked">--</div></div>
+                <div class="kv"><div class="label">Warmup Block Rate</div><div class="value" id="detRatioWarmup">--</div></div>
+                <div class="kv"><div class="label">Latest Policy Decision</div><div class="value" id="detLatestPolicy">--</div></div>
             </div>
             <div class="table-wrap" style="margin-top:12px; max-height: 260px;">
                 <table>
@@ -612,14 +612,13 @@
                             <th>Time</th>
                             <th>Strategy</th>
                             <th>Dir</th>
-                            <th>Mode</th>
                             <th>Decision</th>
                             <th>Score</th>
-                            <th>Threshold</th>
                             <th>Policy Reason</th>
+                            <th>Warmup</th>
                         </tr>
                     </thead>
-                    <tbody id="mlDecisionsTable"></tbody>
+                    <tbody id="deterministicDecisionsTable"></tbody>
                 </table>
             </div>
             </div>
@@ -748,8 +747,8 @@
         }
 
         function setPanelCollapsed(panelKey, collapsed) {
-            const bodyId = panelKey === "mlPure" ? "#mlPurePanelBody" : "#mlGatePanelBody";
-            const btnId = panelKey === "mlPure" ? "#mlPureToggle" : "#mlGateToggle";
+            const bodyId = panelKey === "mlPure" ? "#mlPurePanelBody" : "#deterministicPanelBody";
+            const btnId = panelKey === "mlPure" ? "#mlPureToggle" : "#deterministicToggle";
             const body = qs(bodyId);
             const btn = qs(btnId);
             if (!body || !btn) return;
@@ -952,7 +951,7 @@
             qs("#engineProfileId").textContent = text(ctx.strategy_profile_id);
             const pureActive = activePanel ? activePanel === "ml_pure" : active === "ml_pure";
             qs("#mlPurePanel").classList.toggle("active", pureActive);
-            qs("#mlGatePanel").classList.toggle("active", !pureActive);
+            qs("#deterministicPanel").classList.toggle("active", !pureActive);
         }
 
         function renderOpsState(session) {
@@ -975,15 +974,15 @@
             const activePanel = String(hints.active_engine_panel || "").toLowerCase();
             const focusPanel = String(hints.recommended_focus_panel || "").toLowerCase();
             qs("#mlPurePanel").classList.toggle("active", activePanel === "ml_pure");
-            qs("#mlGatePanel").classList.toggle("active", activePanel === "ml_gate" || activePanel === "");
-            ["#activeAlertsPanel", "#decisionTimelinePanel", "#mlPurePanel", "#mlGatePanel"].forEach((id) => {
+            qs("#deterministicPanel").classList.toggle("active", activePanel === "deterministic" || activePanel === "");
+            ["#activeAlertsPanel", "#decisionTimelinePanel", "#mlPurePanel", "#deterministicPanel"].forEach((id) => {
                 qs(id)?.classList.remove("focus-highlight");
             });
             if (focusPanel === "active_alerts") qs("#activeAlertsPanel")?.classList.add("focus-highlight");
             if (focusPanel === "decision_timeline") qs("#decisionTimelinePanel")?.classList.add("focus-highlight");
             if (focusPanel === "engine_panel") {
                 if (activePanel === "ml_pure") qs("#mlPurePanel")?.classList.add("focus-highlight");
-                else qs("#mlGatePanel")?.classList.add("focus-highlight");
+                else qs("#deterministicPanel")?.classList.add("focus-highlight");
             }
         }
 
@@ -1015,29 +1014,34 @@
             qs("#mlPureHoldReasons").textContent = topReasons || "--";
         }
 
-        function renderMlDiagnostics(session) {
-            const diag = session?.decision_diagnostics?.ml_gate || session?.ml_diagnostics || {};
+        function renderDeterministicDiagnostics(session) {
+            const diag = session?.decision_diagnostics?.deterministic || {};
             const counts = diag.counts || {};
             const ratios = diag.ratios || {};
-            qs("#mlStatus").textContent = text(diag.status);
-            qs("#mlSummary").textContent = text(diag.summary);
-            qs("#mlCountDirectional").textContent = text(counts.directional_entry_votes_day);
-            qs("#mlCountPolicy").textContent = text(counts.policy_evaluated_votes_day);
-            qs("#mlCountBaseAllowed").textContent = text(counts.base_allowed_votes_day);
-            qs("#mlCountMl").textContent = text(counts.ml_policy_votes_day);
-            qs("#mlCountMlAllowed").textContent = text(counts.ml_allowed_votes_day);
-            qs("#mlCountMlBlocked").textContent = text(counts.ml_blocked_votes_day);
-            qs("#mlCountWarmup").textContent = text(counts.warmup_blocked_votes_day);
-            qs("#mlRatioScored").textContent = ratio(ratios.ml_scored_to_base_allowed);
-            qs("#mlRatioBlocked").textContent = ratio(ratios.ml_block_rate_day);
+            qs("#detStatus").textContent = text(diag.status);
+            qs("#detSummary").textContent = text(diag.summary);
+            qs("#detCountDirectional").textContent = text(counts.directional_entry_votes_day);
+            qs("#detCountPolicy").textContent = text(counts.policy_evaluated_votes_day);
+            qs("#detCountAllowed").textContent = text(counts.policy_allowed_votes_day);
+            qs("#detCountBlocked").textContent = text(counts.policy_blocked_votes_day);
+            qs("#detCountSampled").textContent = text(counts.sampled_votes);
+            qs("#detCountSampledPolicy").textContent = text(counts.sampled_policy_rows);
+            qs("#detCountWarmup").textContent = text(counts.warmup_blocked_votes_day);
+            qs("#detRatioPass").textContent = ratio(ratios.policy_pass_rate_day);
+            qs("#detRatioBlocked").textContent = ratio(ratios.policy_block_rate_day);
+            qs("#detRatioWarmup").textContent = ratio(ratios.warmup_block_rate_day);
 
-            const latestDay = diag.latest_ml_decision_day;
-            const latestAny = diag.latest_ml_decision_any;
-            qs("#mlLatestDay").textContent = latestDay ? `${shortTs(latestDay.timestamp)} | ${text(latestDay.strategy)}` : "--";
-            qs("#mlLatestAny").textContent = latestAny ? `${shortTs(latestAny.timestamp)} | ${text(latestAny.strategy)}` : "--";
+            const latestPolicy = diag.latest_policy_decision;
+            let latestPolicyText = "--";
+            if (latestPolicy) {
+                let outcome = text(latestPolicy.decision_reason_code);
+                if (latestPolicy.policy_allowed === true) outcome = "PASS";
+                else if (latestPolicy.policy_allowed === false) outcome = "BLOCK";
+                latestPolicyText = `${shortTs(latestPolicy.timestamp)} | ${text(latestPolicy.strategy)} | ${outcome}`;
+            }
+            qs("#detLatestPolicy").textContent = latestPolicyText;
 
-            renderRows("#mlDecisionsTable", diag.recent_policy_decisions || [], (row) => {
-                const modeTag = row.ml_applied ? `<span class="tag ml">ML</span>` : `<span class="tag rule">BASE</span>`;
+            renderRows("#deterministicDecisionsTable", diag.recent_policy_decisions || [], (row) => {
                 let decisionTag = "--";
                 if (row.warmup_blocked) {
                     decisionTag = `<span class="tag warmup">WARMUP</span>`;
@@ -1046,18 +1050,16 @@
                 } else if (row.policy_allowed === false) {
                     decisionTag = `<span class="tag block">BLOCK</span>`;
                 }
-                const score = row.ml_applied ? money(row.ml_score_calibrated) : money(row.policy_score);
-                const threshold = row.ml_applied ? money(row.ml_threshold) : "--";
+                const score = money(row.policy_score);
                 return `
                     <tr>
                         <td>${shortTs(row.timestamp)}</td>
                         <td>${text(row.strategy)}</td>
                         <td>${text(row.direction)}</td>
-                        <td>${modeTag}</td>
                         <td>${decisionTag}</td>
                         <td>${score}</td>
-                        <td>${threshold}</td>
                         <td title="${text(row.policy_reason || row.warmup_reason)}">${text(row.policy_reason || row.warmup_reason)}</td>
+                        <td title="${text(row.warmup_reason)}">${text(row.warmup_reason)}</td>
                     </tr>
                 `;
             }, "No policy decisions in sampled window.", 8);
@@ -1296,7 +1298,7 @@
                     `, "No trade activity yet.", 10);
                     renderDiagnostics(data);
                     renderMlPureDiagnostics(data);
-                    renderMlDiagnostics(data);
+                    renderDeterministicDiagnostics(data);
                 }
             } catch (error) {
                 setBanner("#errorBanner", "error", `Live session load failed: ${error.message}`);
@@ -1343,9 +1345,9 @@
             const isCollapsed = qs("#mlPurePanelBody")?.classList.contains("collapsed");
             setPanelCollapsed("mlPure", !isCollapsed);
         });
-        qs("#mlGateToggle")?.addEventListener("click", () => {
-            const isCollapsed = qs("#mlGatePanelBody")?.classList.contains("collapsed");
-            setPanelCollapsed("mlGate", !isCollapsed);
+        qs("#deterministicToggle")?.addEventListener("click", () => {
+            const isCollapsed = qs("#deterministicPanelBody")?.classList.contains("collapsed");
+            setPanelCollapsed("deterministic", !isCollapsed);
         });
 
         const initialParams = new URLSearchParams(window.location.search);

@@ -55,16 +55,6 @@ cp .env.compose.example .env.compose
 docker compose --env-file .env.compose up -d --build redis mongo ingestion_app snapshot_app persistence_app strategy_app strategy_persistence_app
 ```
 
-To enable registry-backed ML entry gating in `strategy_app`, set these in `.env.compose`:
-
-```bash
-STRATEGY_ML_ENTRY_REGISTRY=.run/canonical_eq_e2e_refreshed_rerun2/eval/evaluation_registry.csv
-STRATEGY_ML_ENTRY_EXPERIMENT_ID=eq_core_snapshot_v1__mfe15_gt_5_v1__seg_regime_v1__lgbm_default_v1__fixed_060
-```
-
-Compose injects those values into the container as `ML_ENTRY_REGISTRY` and `ML_ENTRY_EXPERIMENT_ID`.
-Direct CLI flags still override env values for local/manual runs.
-
 To enable `ml_pure` runtime from published `ml_pipeline_2` artifacts, set:
 
 ```bash
@@ -85,10 +75,11 @@ Do not mix run-id mode and explicit-path mode in one launch.
 If PowerShell interpolation looks wrong, clear stale shell vars before `docker compose`:
 
 ```powershell
-Remove-Item Env:ML_ENTRY_REGISTRY -ErrorAction SilentlyContinue
-Remove-Item Env:ML_ENTRY_EXPERIMENT_ID -ErrorAction SilentlyContinue
-Remove-Item Env:STRATEGY_ML_ENTRY_REGISTRY -ErrorAction SilentlyContinue
-Remove-Item Env:STRATEGY_ML_ENTRY_EXPERIMENT_ID -ErrorAction SilentlyContinue
+Remove-Item Env:ML_RUNTIME_GUARD_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:ML_PURE_RUN_ID -ErrorAction SilentlyContinue
+Remove-Item Env:ML_PURE_MODEL_GROUP -ErrorAction SilentlyContinue
+Remove-Item Env:ML_PURE_MODEL_PACKAGE -ErrorAction SilentlyContinue
+Remove-Item Env:ML_PURE_THRESHOLD_REPORT -ErrorAction SilentlyContinue
 ```
 
 Optional dashboard:

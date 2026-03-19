@@ -19,9 +19,6 @@ def _safe_float(value: Any) -> Optional[float]:
 
 
 def derive_decision_mode(policy_decision: Optional[EntryPolicyDecision]) -> str:
-    checks = dict(policy_decision.checks) if policy_decision is not None else {}
-    if any(str(key).startswith("ml_") for key in checks.keys()):
-        return "ml_gate"
     return "rule_vote"
 
 
@@ -29,8 +26,6 @@ def derive_reason_code(policy_decision: Optional[EntryPolicyDecision]) -> str:
     if policy_decision is None:
         return "policy_unknown"
     reason = str(policy_decision.reason or "").strip().lower()
-    if reason.startswith("ml:"):
-        return "below_threshold" if "<threshold" in reason else "policy_allowed"
     if reason.startswith("allowed score="):
         return "policy_allowed"
     if reason.startswith("score:"):
@@ -56,24 +51,20 @@ def annotate_vote_contract(
     strategy_profile_id: str,
 ) -> None:
     raw_signals = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
-    checks = raw_signals.get("_policy_checks") if isinstance(raw_signals.get("_policy_checks"), dict) else {}
     policy_reason = str(raw_signals.get("_policy_reason") or "").strip().lower()
-    ml_applied = bool(any(str(key).startswith("ml_") for key in checks.keys()) or policy_reason.startswith("ml:"))
     vote.engine_mode = engine_mode
-    vote.decision_mode = "ml_gate" if ml_applied else "rule_vote"
+    vote.decision_mode = "rule_vote"
     if bool(raw_signals.get("_entry_warmup_blocked")):
         vote.decision_reason_code = "entry_warmup_block"
     elif policy_reason.startswith("allowed score="):
         vote.decision_reason_code = "policy_allowed"
-    elif policy_reason.startswith("ml:"):
-        vote.decision_reason_code = "below_threshold" if "<threshold" in policy_reason else "policy_allowed"
     elif policy_reason:
         vote.decision_reason_code = "policy_block"
     vote.decision_metrics = {
         "confidence": float(vote.confidence),
         "policy_score": _safe_float(raw_signals.get("_policy_score")),
     }
-    vote.strategy_family_version = "ML_GATE_V1" if vote.decision_mode == "ml_gate" else strategy_family_version
+    vote.strategy_family_version = strategy_family_version
     vote.strategy_profile_id = strategy_profile_id
 
 
@@ -89,7 +80,7 @@ def annotate_signal_contract(
 ) -> None:
     mode = str(decision_mode or "").strip()
     if not mode:
-        mode = "ml_dual" if engine_mode == "ml_pure" else "rule_vote"
+        mode = "ml_staged" if engine_mode == "ml_pure" else "rule_vote"
     signal.engine_mode = engine_mode
     signal.decision_mode = mode
     if decision_reason_code:
@@ -102,12 +93,8 @@ def annotate_signal_contract(
         signal.decision_metrics = {"confidence": float(signal.confidence)}
     signal.strategy_family_version = (
         "ML_PURE_STAGED_V1"
-        if mode == "ml_staged"
-        else (
-        "ML_GATE_V1"
-        if mode == "ml_gate"
-        else ("ML_PURE_DUAL_V1" if (mode == "ml_dual" or engine_mode == "ml_pure") else strategy_family_version)
-        )
+        if (mode == "ml_staged" or engine_mode == "ml_pure")
+        else strategy_family_version
     )
     signal.strategy_profile_id = strategy_profile_id
 

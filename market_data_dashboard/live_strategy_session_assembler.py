@@ -73,7 +73,6 @@ def build_session_payload(
     recent_signals: list[dict[str, Any]],
     recent_votes: list[dict[str, Any]],
     decision_diagnostics: dict[str, Any],
-    ml_diagnostics: dict[str, Any],
     ops_state: Optional[OpsState] = None,
     active_alerts: Optional[list[AlertItem]] = None,
     decision_explainability: Optional[DecisionExplainability] = None,
@@ -100,7 +99,6 @@ def build_session_payload(
         "recent_signals": recent_signals,
         "recent_votes": recent_votes,
         "decision_diagnostics": decision_diagnostics,
-        "ml_diagnostics": ml_diagnostics,
         "chart_markers": chart_markers,
     }
     if ops_state is not None:

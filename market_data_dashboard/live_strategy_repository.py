@@ -5,7 +5,6 @@ from typing import Any
 from contracts_app.strategy_decision_contract import (
     normalize_decision_mode,
     normalize_engine_mode,
-    parse_metric_token,
 )
 
 try:
@@ -89,19 +88,6 @@ class LiveStrategyRepository:
                     "policy_score": _safe_float(raw_signals.get("_policy_score")),
                     "policy_reason": str(raw_signals.get("_policy_reason") or "").strip() or None,
                     "policy_checks": raw_signals.get("_policy_checks") if isinstance(raw_signals.get("_policy_checks"), dict) else {},
-                    "ml_applied": bool(
-                        isinstance(raw_signals.get("_policy_checks"), dict)
-                        and "ml_score_calibrated" in (raw_signals.get("_policy_checks") or {})
-                    )
-                    or str(raw_signals.get("_policy_reason") or "").strip().lower().startswith("ml:"),
-                    "ml_score_calibrated": parse_metric_token(
-                        ((raw_signals.get("_policy_checks") or {}) if isinstance(raw_signals.get("_policy_checks"), dict) else {}).get("ml_score_calibrated"),
-                        "score",
-                    ),
-                    "ml_threshold": parse_metric_token(
-                        ((raw_signals.get("_policy_checks") or {}) if isinstance(raw_signals.get("_policy_checks"), dict) else {}).get("ml_threshold"),
-                        "threshold",
-                    ),
                     "entry_warmup_blocked": bool(raw_signals.get("_entry_warmup_blocked")),
                     "entry_warmup_reason": str(raw_signals.get("_entry_warmup_reason") or "").strip() or None,
                     "snapshot_id": str(vote.get("snapshot_id") or "").strip() or None,

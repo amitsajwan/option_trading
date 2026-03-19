@@ -11,16 +11,13 @@ class EngineContext(TypedDict, total=False):
     observed_engine_modes: dict[str, int]
 
 
-class MlGateDiagnostics(TypedDict, total=False):
+class DeterministicDiagnostics(TypedDict, total=False):
     status: str
     summary: str
     counts: dict[str, Any]
     ratios: dict[str, Any]
     latest_policy_decision: Optional[dict[str, Any]]
-    latest_ml_decision_day: Optional[dict[str, Any]]
-    latest_ml_decision_any: Optional[dict[str, Any]]
     recent_policy_decisions: list[dict[str, Any]]
-    recent_ml_decisions: list[dict[str, Any]]
 
 
 class MlPureDiagnostics(TypedDict, total=False):
@@ -36,7 +33,7 @@ class MlPureDiagnostics(TypedDict, total=False):
 
 
 class DecisionDiagnostics(TypedDict, total=False):
-    ml_gate: MlGateDiagnostics
+    deterministic: DeterministicDiagnostics
     ml_pure: MlPureDiagnostics
 
 
@@ -108,7 +105,6 @@ class LiveStrategySessionPayload(TypedDict, total=False):
     recent_signals: list[dict[str, Any]]
     recent_votes: list[dict[str, Any]]
     decision_diagnostics: DecisionDiagnostics
-    ml_diagnostics: MlGateDiagnostics
     ops_state: OpsState
     active_alerts: list[AlertItem]
     decision_explainability: DecisionExplainability
@@ -118,7 +114,7 @@ class LiveStrategySessionPayload(TypedDict, total=False):
 
 __all__ = [
     "EngineContext",
-    "MlGateDiagnostics",
+    "DeterministicDiagnostics",
     "MlPureDiagnostics",
     "DecisionDiagnostics",
     "OpsState",

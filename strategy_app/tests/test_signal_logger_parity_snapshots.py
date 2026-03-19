@@ -38,7 +38,7 @@ class SignalLoggerParitySnapshotTests(unittest.TestCase):
                     "_policy_allowed": True,
                     "_policy_score": 0.71,
                     "_policy_reason": "allowed score=0.71",
-                    "_policy_checks": {"ml_score_calibrated": "score=0.71", "ml_threshold": "threshold=0.65"},
+                    "_policy_checks": {},
                 },
             )
             hold_signal = TradeSignal(
