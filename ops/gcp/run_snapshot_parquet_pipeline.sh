@@ -46,12 +46,16 @@ ensure_raw_archive_layout() {
   local raw_root="$1"
   local missing=0
   local entry
-  for entry in banknifty_fut banknifty_options banknifty_spot VIX; do
+  for entry in banknifty_fut banknifty_options banknifty_spot; do
     if [ ! -e "${raw_root}/${entry}" ]; then
       echo "Local raw archive is missing required entry: ${raw_root}/${entry}" >&2
       missing=1
     fi
   done
+  if [ ! -e "${raw_root}/VIX" ] && [ ! -e "${raw_root}/vix" ]; then
+    echo "Local raw archive is missing required VIX entry: ${raw_root}/VIX or ${raw_root}/vix" >&2
+    missing=1
+  fi
   if [ "${missing}" != "0" ]; then
     exit 1
   fi

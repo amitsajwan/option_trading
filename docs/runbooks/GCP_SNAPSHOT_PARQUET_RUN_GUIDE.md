@@ -137,7 +137,7 @@ The expected raw archive layout is:
 - `banknifty_fut`
 - `banknifty_options`
 - `banknifty_spot`
-- `VIX`
+- `VIX` or `vix`
 
 Verify:
 
