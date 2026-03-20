@@ -500,14 +500,26 @@ def _merge_score_frames(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
 def _add_upstream_probs(
     frame: pd.DataFrame,
     *,
+    stage1_source_frame: pd.DataFrame,
+    stage2_source_frame: pd.DataFrame,
     stage1_package: Dict[str, Any],
     stage2_package: Dict[str, Any],
 ) -> pd.DataFrame:
     out = frame.copy()
-    stage1_scores = _score_single_target(out, stage1_package, prob_col="stage1_entry_prob")
-    stage2_scores = _score_single_target(out, stage2_package, prob_col="stage2_direction_up_prob")
+    stage1_scores = _score_single_target(stage1_source_frame, stage1_package, prob_col="stage1_entry_prob")
+    stage2_scores = _score_single_target(stage2_source_frame, stage2_package, prob_col="stage2_direction_up_prob")
     out = out.merge(stage1_scores, on=KEY_COLUMNS, how="left")
     out = out.merge(stage2_scores, on=KEY_COLUMNS, how="left")
+    missing_stage1 = out["stage1_entry_prob"].isna()
+    missing_stage2 = out["stage2_direction_up_prob"].isna()
+    if bool(missing_stage1.any()) or bool(missing_stage2.any()):
+        missing_keys = out.loc[missing_stage1 | missing_stage2, KEY_COLUMNS].head(5).to_dict(orient="records")
+        raise ValueError(
+            "stage3 upstream probability alignment failed: "
+            f"missing stage1={int(missing_stage1.sum())} "
+            f"missing stage2={int(missing_stage2.sum())} "
+            f"example_keys={missing_keys}"
+        )
     out["stage2_direction_down_prob"] = 1.0 - pd.to_numeric(out["stage2_direction_up_prob"], errors="coerce")
     return out
 
@@ -1006,10 +1018,34 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     stage3_started_at = utc_now()
     stage3_result = resolve_trainer(components["stage3"]["trainer_id"])(
         stage_name="stage3",
-        train_frame=_add_upstream_probs(labeled_frames["stage3"]["research_train"], stage1_package=stage1_result["search_package"], stage2_package=stage2_result["search_package"]),
-        valid_frame=_add_upstream_probs(labeled_frames["stage3"]["research_valid"], stage1_package=stage1_result["search_package"], stage2_package=stage2_result["search_package"]),
-        full_model_frame=_add_upstream_probs(labeled_frames["stage3"]["full_model"], stage1_package=stage1_result["model_package"], stage2_package=stage2_result["model_package"]),
-        holdout_frame=_add_upstream_probs(labeled_frames["stage3"]["final_holdout"], stage1_package=stage1_result["model_package"], stage2_package=stage2_result["model_package"]),
+        train_frame=_add_upstream_probs(
+            labeled_frames["stage3"]["research_train"],
+            stage1_source_frame=labeled_frames["stage1"]["research_train"],
+            stage2_source_frame=labeled_frames["stage2"]["research_train"],
+            stage1_package=stage1_result["search_package"],
+            stage2_package=stage2_result["search_package"],
+        ),
+        valid_frame=_add_upstream_probs(
+            labeled_frames["stage3"]["research_valid"],
+            stage1_source_frame=labeled_frames["stage1"]["research_valid"],
+            stage2_source_frame=labeled_frames["stage2"]["research_valid"],
+            stage1_package=stage1_result["search_package"],
+            stage2_package=stage2_result["search_package"],
+        ),
+        full_model_frame=_add_upstream_probs(
+            labeled_frames["stage3"]["full_model"],
+            stage1_source_frame=labeled_frames["stage1"]["full_model"],
+            stage2_source_frame=labeled_frames["stage2"]["full_model"],
+            stage1_package=stage1_result["model_package"],
+            stage2_package=stage2_result["model_package"],
+        ),
+        holdout_frame=_add_upstream_probs(
+            labeled_frames["stage3"]["final_holdout"],
+            stage1_source_frame=labeled_frames["stage1"]["final_holdout"],
+            stage2_source_frame=labeled_frames["stage2"]["final_holdout"],
+            stage1_package=stage1_result["model_package"],
+            stage2_package=stage2_result["model_package"],
+        ),
         manifest=manifest,
         models=list(manifest["catalog"]["models_by_stage"]["stage3"]),
         feature_sets=list(manifest["catalog"]["feature_sets_by_stage"]["stage3"]),

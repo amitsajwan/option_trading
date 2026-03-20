@@ -131,3 +131,61 @@ def test_build_stage2_labels_drops_invalid_direction_rows() -> None:
 
 def test_view_registry_is_cached() -> None:
     assert view_registry() is view_registry()
+
+
+def test_add_upstream_probs_scores_on_source_stage_views(monkeypatch) -> None:
+    target = pd.DataFrame(
+        [
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:15:00"),
+                "snapshot_id": "snap_a",
+                "atr_ratio": 1.1,
+            }
+        ]
+    )
+    stage1_source = pd.DataFrame(
+        [
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:15:00"),
+                "snapshot_id": "snap_a",
+                "ema_9_slope": 0.02,
+            }
+        ]
+    )
+    stage2_source = pd.DataFrame(
+        [
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:15:00"),
+                "snapshot_id": "snap_a",
+                "ema_21_slope": 0.03,
+            }
+        ]
+    )
+    calls: list[tuple[str, list[str]]] = []
+
+    def _fake_score(frame: pd.DataFrame, _package: dict[str, object], *, prob_col: str) -> pd.DataFrame:
+        calls.append((prob_col, list(frame.columns)))
+        out = frame.loc[:, staged_pipeline.KEY_COLUMNS].copy()
+        out[prob_col] = 0.7 if prob_col == "stage1_entry_prob" else 0.4
+        return out
+
+    monkeypatch.setattr(staged_pipeline, "_score_single_target", _fake_score)
+
+    out = staged_pipeline._add_upstream_probs(
+        target,
+        stage1_source_frame=stage1_source,
+        stage2_source_frame=stage2_source,
+        stage1_package={},
+        stage2_package={},
+    )
+
+    assert out["stage1_entry_prob"].tolist() == [0.7]
+    assert out["stage2_direction_up_prob"].tolist() == [0.4]
+    assert out["stage2_direction_down_prob"].tolist() == [0.6]
+    assert calls == [
+        ("stage1_entry_prob", ["trade_date", "timestamp", "snapshot_id", "ema_9_slope"]),
+        ("stage2_direction_up_prob", ["trade_date", "timestamp", "snapshot_id", "ema_21_slope"]),
+    ]
