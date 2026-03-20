@@ -9,7 +9,7 @@ Use these files as the source of truth:
 - [detailed_design.md](detailed_design.md)
   - file-by-file design map for `src/ml_pipeline_2`
 - [gcp_user_guide.md](gcp_user_guide.md)
-  - supported operator flow for staged training, release, and publish handoff
+  - module-level detail for staged training, release, and publish handoff
 - [ubuntu_gcp_runbook.md](ubuntu_gcp_runbook.md)
   - Ubuntu/GCP execution notes for this module
 
@@ -19,9 +19,9 @@ Supported staged manifest:
 
 Repo-level documents that remain outside this module because they are cross-system:
 
-- [`../../docs/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`](../../docs/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
-- [`../../docs/GCP_BOOTSTRAP_RUNBOOK.md`](../../docs/GCP_BOOTSTRAP_RUNBOOK.md)
-- [`../../docs/GCP_DEPLOYMENT.md`](../../docs/GCP_DEPLOYMENT.md)
-- [`../../docs/FROM_SCRATCH_OPERATOR_GUIDE.md`](../../docs/FROM_SCRATCH_OPERATOR_GUIDE.md)
+- [`../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md`](../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md)
+- [`../../docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`](../../docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
+- [`../../docs/runbooks/GCP_DEPLOYMENT.md`](../../docs/runbooks/GCP_DEPLOYMENT.md)
+- [`../../docs/runbooks/README.md`](../../docs/runbooks/README.md)
 
 Do not add maintained architecture or design docs at the `ml_pipeline_2` module root.

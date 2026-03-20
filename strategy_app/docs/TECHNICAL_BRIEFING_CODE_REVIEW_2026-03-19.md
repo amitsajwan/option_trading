@@ -19,7 +19,7 @@ This version is aligned to the current repository state. It separates:
 - historical research claims that were referenced in older review notes but were not revalidated in this pass
 
 Primary cross-check document:
-`docs/STRATEGY_SYSTEM_VALIDATION_2026-03-19.md`
+`strategy_app/docs/CURRENT_TREE_VALIDATION.md`
 
 ---
 

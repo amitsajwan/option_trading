@@ -20,7 +20,7 @@ Layer-4 strategy consumer runtime for snapshot events.
 - Default `EXPIRY` routing is `IV_FILTER + VWAP_RECLAIM`; `EXPIRY_MAX_PAIN` is not enabled by default.
 - Deterministic exits are owner-first, with helper and high-confidence non-owner fallback.
 
-Cross-system validation for the current tree lives at `docs/STRATEGY_SYSTEM_VALIDATION_2026-03-19.md`.
+Current code-verified status for this package lives at `strategy_app/docs/CURRENT_TREE_VALIDATION.md`.
 
 ## Contract
 
@@ -199,7 +199,8 @@ Both deterministic and `ml_pure` engines call this shared annotation layer so de
 For end-to-end replay and evaluation documentation, see:
 
 - [STRATEGY_ML_FLOW.md](STRATEGY_ML_FLOW.md)
-- [../docs/strategy_catalog.md](../docs/strategy_catalog.md)
+- [strategy_catalog.md](strategy_catalog.md)
+- [CURRENT_TREE_VALIDATION.md](CURRENT_TREE_VALIDATION.md)
 - [ENGINE_CONSOLIDATION_PLAN.md](ENGINE_CONSOLIDATION_PLAN.md)
 - [../docs/DOCS_CODE_MAP.md](../docs/DOCS_CODE_MAP.md)
 

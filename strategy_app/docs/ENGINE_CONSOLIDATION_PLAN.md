@@ -14,7 +14,7 @@ This plan is no longer a proposal. Most structural consolidation work is already
 - Default deterministic routing already excludes `EXPIRY_MAX_PAIN`.
 - Deterministic exit handling is owner-first with helper and high-confidence non-owner fallback.
 
-Use `docs/STRATEGY_SYSTEM_VALIDATION_2026-03-19.md` for the code-verified status check behind these statements.
+Use `strategy_app/docs/CURRENT_TREE_VALIDATION.md` for the code-verified status check behind these statements.
 
 ## Why This Plan Exists
 

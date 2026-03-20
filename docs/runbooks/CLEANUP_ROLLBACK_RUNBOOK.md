@@ -114,7 +114,7 @@ gcloud storage ls "${RUNTIME_CONFIG_BUCKET_URL}"
 
 ## Related Files
 
-- [ops/gcp/stop_runtime.sh](../ops/gcp/stop_runtime.sh)
-- [ops/gcp/delete_training_vm.sh](../ops/gcp/delete_training_vm.sh)
-- [ops/gcp/destroy_infra_preserve_data.sh](../ops/gcp/destroy_infra_preserve_data.sh)
-- [FROM_SCRATCH_OPERATOR_GUIDE.md](FROM_SCRATCH_OPERATOR_GUIDE.md)
+- [ops/gcp/stop_runtime.sh](../../ops/gcp/stop_runtime.sh)
+- [ops/gcp/delete_training_vm.sh](../../ops/gcp/delete_training_vm.sh)
+- [ops/gcp/destroy_infra_preserve_data.sh](../../ops/gcp/destroy_infra_preserve_data.sh)
+- [README.md](README.md)

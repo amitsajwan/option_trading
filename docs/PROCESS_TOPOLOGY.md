@@ -11,6 +11,9 @@ Use exactly one runtime path at a time:
 
 Do not run Compose and local launchers together.
 
+Supported live runtime lane is `ml_pure`.
+Use `deterministic` here for replay and diagnosis only.
+
 ## 2. Compose Topology
 
 ### Baseline live stack
@@ -124,5 +127,6 @@ Get-Content .run/strategy_app/signals.jsonl -Tail 5
 
 - [SYSTEM_SOURCE_OF_TRUTH.md](SYSTEM_SOURCE_OF_TRUTH.md)
 - [ARCHITECTURE.md](ARCHITECTURE.md)
-- [SUPPORT_BRINGUP_GUIDE.md](SUPPORT_BRINGUP_GUIDE.md)
+- [runbooks/README.md](runbooks/README.md)
+- [runbooks/GCP_DEPLOYMENT.md](runbooks/GCP_DEPLOYMENT.md)
 - [DOCS_CODE_MAP.md](DOCS_CODE_MAP.md)

@@ -221,9 +221,9 @@ Responsibilities:
 
 These files are intentionally not moved into `ml_pipeline_2/src` because they belong to other systems:
 
-- `docs/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md` - upstream parquet build lane
-- `docs/GCP_BOOTSTRAP_RUNBOOK.md` - GCP bootstrap and infra lane
-- `docs/GCP_DEPLOYMENT.md` - runtime deployment and cutover lane
+- `docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md` - upstream parquet build lane
+- `docs/runbooks/TRAINING_RELEASE_RUNBOOK.md` - staged training operator lane, including required GCP setup
+- `docs/runbooks/GCP_DEPLOYMENT.md` - runtime deployment and cutover lane
 - `snapshot_app/...` - live and historical snapshot production
 - `strategy_app/...` - live runtime consumption of the published bundle
 

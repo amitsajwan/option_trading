@@ -1,28 +1,35 @@
 # BankNifty Options Algo - Repo Guide
 
-This repo is a microservice-based trading data platform with live and historical snapshot pipelines.
+This repo is a cross-service trading runtime plus staged ML training pipeline.
 
-If you are new, follow this reading order:
+Root `docs/` contains cross-cutting system docs.
+Operator runbooks live under `docs/runbooks/`.
+Package-specific design and runtime notes live under the owning package:
+
+- `strategy_app/docs`
+- `ml_pipeline_2/docs`
+- `snapshot_app/historical`
+
+If you are new, read in this order:
 
 1. [docs/SYSTEM_SOURCE_OF_TRUTH.md](docs/SYSTEM_SOURCE_OF_TRUTH.md)
 2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-3. [docs/SUPPORT_BRINGUP_GUIDE.md](docs/SUPPORT_BRINGUP_GUIDE.md)
-4. [docs/PROCESS_TOPOLOGY.md](docs/PROCESS_TOPOLOGY.md)
-5. [docs/strategy_eval_architecture.md](docs/strategy_eval_architecture.md)
-6. [docs/strategy_catalog.md](docs/strategy_catalog.md)
-7. [docs/OPEN_SEARCH_REBASELINE_RUNBOOK.md](docs/OPEN_SEARCH_REBASELINE_RUNBOOK.md)
-8. [docs/DOCS_CODE_MAP.md](docs/DOCS_CODE_MAP.md)
-9. Service-level READMEs (linked below)
-10. [docs/FROM_SCRATCH_OPERATOR_GUIDE.md](docs/FROM_SCRATCH_OPERATOR_GUIDE.md)
-11. [docs/GCP_DEPLOYMENT.md](docs/GCP_DEPLOYMENT.md)
-12. [docs/GCP_FRESH_START.md](docs/GCP_FRESH_START.md)
+3. [docs/runbooks/README.md](docs/runbooks/README.md)
+4. [docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
+5. [docs/runbooks/TRAINING_RELEASE_RUNBOOK.md](docs/runbooks/TRAINING_RELEASE_RUNBOOK.md)
+6. [docs/runbooks/GCP_DEPLOYMENT.md](docs/runbooks/GCP_DEPLOYMENT.md)
+7. [docs/PROCESS_TOPOLOGY.md](docs/PROCESS_TOPOLOGY.md)
+8. [strategy_app/docs/README.md](strategy_app/docs/README.md)
+9. [ml_pipeline_2/docs/README.md](ml_pipeline_2/docs/README.md)
+10. [snapshot_app/historical/README.md](snapshot_app/historical/README.md)
+11. [docs/DOCS_CODE_MAP.md](docs/DOCS_CODE_MAP.md)
 
-ML note:
+Current runtime and training rules:
 
-- supported ML training, threshold sweep, publishing, and `ml_pure` runtime switching now live in `ml_pipeline_2`
-- preferred operator flow is now the staged `ml_pipeline_2.run_staged_release` command for train/publish/GCS handoff
-- legacy `ml_pipeline` package has been dropped from this branch; only the external data root `.data/ml_pipeline` remains as the frozen input cache used by supported research and replay tooling
-- `strategy_app` remains the live runtime consumer for `deterministic` and `ml_pure`
+- supported live runtime lane: `strategy_app --engine ml_pure`
+- deterministic runtime: replay and research only
+- supported ML training and publish lane: staged `ml_pipeline_2`
+- retired `ml_pipeline`, open-search, and champion-registry flows are not part of the current branch
 
 ## Services
 
@@ -37,8 +44,8 @@ ML note:
 
 - Baseline live stack: `redis`, `mongo`, `ingestion_app`, `snapshot_app`, `persistence_app`, `strategy_app`, `strategy_persistence_app`
 - Optional dashboard profile: `dashboard`
-- Legacy historical strategy profile: `persistence_app_historical`, `strategy_app_historical`, `strategy_persistence_app_historical`
-- Legacy manual historical replay profile: `historical_replay`
+- Historical replay profile: `persistence_app_historical`, `strategy_app_historical`, `strategy_persistence_app_historical`
+- Manual historical replay profile: `historical_replay`
 
 Supported E2E target for this milestone:
 
@@ -54,6 +61,13 @@ Supported E2E target for this milestone:
 cp .env.compose.example .env.compose
 docker compose --env-file .env.compose up -d --build redis mongo ingestion_app snapshot_app persistence_app strategy_app strategy_persistence_app
 ```
+
+Compose startup is expected to work from repo root.
+
+The two external prerequisites that commonly block a fully live stack are:
+
+1. `ingestion_app/credentials.json` for live Kite/NSE access
+2. a valid staged `ml_pure` handoff plus runtime guard if `STRATEGY_ENGINE=ml_pure`
 
 To enable `ml_pure` runtime from published `ml_pipeline_2` artifacts, set:
 
@@ -90,9 +104,12 @@ docker compose --env-file .env.compose --profile ui up -d dashboard
 
 ## GCP Deployment
 
-For repeatable GCP deployment, use:
+For repeatable GCP operations, use:
 
-- [docs/GCP_DEPLOYMENT.md](docs/GCP_DEPLOYMENT.md) for the runtime/training architecture
+- [docs/runbooks/README.md](docs/runbooks/README.md) for the workflow index
+- [docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md) for historical parquet creation
+- [docs/runbooks/TRAINING_RELEASE_RUNBOOK.md](docs/runbooks/TRAINING_RELEASE_RUNBOOK.md) for staged training and publish
+- [docs/runbooks/GCP_DEPLOYMENT.md](docs/runbooks/GCP_DEPLOYMENT.md) for runtime deploy/cutover
 - [infra/gcp/README.md](infra/gcp/README.md) for Terraform scaffolding
 - [docker-compose.gcp.yml](docker-compose.gcp.yml) for Artifact Registry-backed service images
 

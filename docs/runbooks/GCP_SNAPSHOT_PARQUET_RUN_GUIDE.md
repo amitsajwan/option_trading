@@ -2,7 +2,13 @@
 
 Use this runbook to build historical parquet on GCP and publish it for later training or replay use.
 
-This workflow is self-contained. It includes the GCP setup it needs.
+This runbook is centered on one supported operator command:
+
+```bash
+./ops/gcp/run_snapshot_parquet_pipeline.sh
+```
+
+The script can take a local raw `banknifty_data` archive all the way to final GCS publish in one run.
 
 ## What This Produces
 
@@ -13,6 +19,10 @@ This workflow is self-contained. It includes the GCP setup it needs.
 - `stage1_entry_view`
 - `stage2_direction_view`
 - `stage3_recipe_view`
+- `reports/build_manifest.json`
+- `reports/validation_report.json`
+- `reports/window_manifest_latest.json`
+- `reports/coverage_audit.json`
 
 ## Step 1: Prepare GCP For Snapshot Build
 
@@ -57,32 +67,10 @@ Look for:
 
 - the bucket is listed
 
-## Step 3: Upload Raw Archive If Needed
+## Step 3: Create The Snapshot Build VM
 
-From a machine that already has the raw BankNifty archive locally:
-
-```bash
-export RAW_ARCHIVE_BUCKET_URL="gs://${SNAPSHOT_DATA_BUCKET_NAME}/banknifty_data"
-export RAW_DATA_ROOT="/path/to/banknifty_data"
-./ops/gcp/publish_raw_market_data.sh
-```
-
-Verify:
-
-```bash
-gcloud storage ls "${RAW_ARCHIVE_BUCKET_URL}"
-```
-
-Look for:
-
-- `banknifty_fut`
-- `banknifty_options`
-- `banknifty_spot`
-- `VIX`
-
-## Step 4: Create The Temporary Snapshot VM
-
-Create a disposable high-power VM for the build.
+Create a disposable high-power VM.
+Use a machine with at least `16` vCPU so the pipeline can use up to `16` worker processes by default.
 
 Example:
 
@@ -90,7 +78,7 @@ Example:
 gcloud compute instances create option-trading-snapshot-build-01 \
   --project "${PROJECT_ID}" \
   --zone "${ZONE}" \
-  --machine-type "n2-highmem-8" \
+  --machine-type "n2-highmem-16" \
   --boot-disk-size "300GB" \
   --boot-disk-type "pd-balanced" \
   --image-family "ubuntu-2204-lts" \
@@ -111,9 +99,9 @@ Look for:
 
 - `RUNNING`
 
-## Step 5: Prepare The VM
+## Step 4: Prepare The VM
 
-SSH to the VM and prepare the repo:
+SSH to the VM:
 
 ```bash
 gcloud compute ssh option-trading-snapshot-build-01 --zone "${ZONE}"
@@ -140,38 +128,112 @@ Set at least these values in `ops/gcp/operator.env`:
 - `SNAPSHOT_PARQUET_BUCKET_URL`
 - `SNAPSHOT_DATA_BUCKET_NAME`
 
+Optional but recommended when the raw archive already exists on the VM:
+
+- `LOCAL_RAW_ARCHIVE_ROOT`
+
+The expected raw archive layout is:
+
+- `banknifty_fut`
+- `banknifty_options`
+- `banknifty_spot`
+- `VIX`
+
 Verify:
 
 ```bash
-grep -E "RAW_ARCHIVE_BUCKET_URL|SNAPSHOT_PARQUET_BUCKET_URL|SNAPSHOT_DATA_BUCKET_NAME" ops/gcp/operator.env
+grep -E "RAW_ARCHIVE_BUCKET_URL|SNAPSHOT_PARQUET_BUCKET_URL|SNAPSHOT_DATA_BUCKET_NAME|LOCAL_RAW_ARCHIVE_ROOT" ops/gcp/operator.env
 ```
 
 Look for:
 
-- all three variables are present and non-empty
+- bucket URLs are present and non-empty
+- `LOCAL_RAW_ARCHIVE_ROOT` is set only if the raw archive is already on this VM
 
-## Step 6: Check Source Coverage Before Backfill
-
-Snapshots only build for days that have normalized futures input and option-chain input.
-If futures or spot extend farther than options, the snapshot builder will stop at the option coverage boundary.
+## Step 5: Run The Single Snapshot Build And Publish Script
 
 On the snapshot VM:
 
 ```bash
-find .data/ml_pipeline/parquet_data/options -maxdepth 2 -type d | sort
-find .data/ml_pipeline/parquet_data/futures -maxdepth 2 -type d | sort
-find .data/ml_pipeline/parquet_data/spot -maxdepth 2 -type d | sort
+cd ~/option_trading
+./ops/gcp/run_snapshot_parquet_pipeline.sh
+```
+
+What the script does:
+
+1. uploads `LOCAL_RAW_ARCHIVE_ROOT` to `RAW_ARCHIVE_BUCKET_URL` when `LOCAL_RAW_ARCHIVE_ROOT` is set
+2. syncs `RAW_ARCHIVE_BUCKET_URL` into the VM cache under `.cache/banknifty_data`
+3. creates or reuses `.venv`
+4. installs `snapshot_app` requirements if needed
+5. normalizes raw futures, options, spot, and VIX into `.data/ml_pipeline/parquet_data`
+6. audits source coverage vs built coverage and writes `coverage_audit.json`
+7. fails closed if source options coverage is missing
+8. builds only pending snapshot and derived days with resume enabled by default
+9. regenerates manifest and validation reports even when the local parquet tree is already complete
+10. cleans remote GCS prefixes by default
+11. publishes datasets and reports to `SNAPSHOT_PARQUET_BUCKET_URL`
+12. verifies the published GCS layout
+
+Notes:
+
+- worker defaults auto-detect CPU and cap at `16`
+- rerunning the same command resumes from the existing local parquet state
+- the script publishes only after the local build and validation state is publishable, unless `ALLOW_PARTIAL_PUBLISH=1` is set explicitly
+
+Verify:
+
+- command exits successfully
+- final output includes `Snapshot parquet pipeline complete.`
+- final output prints:
+  - `build run id`
+  - `parquet base`
+  - `report root`
+  - `raw source gcs`
+  - `raw cache`
+  - `normalize jobs`
+  - `snapshot jobs`
+  - `publish root`
+
+## Step 6: Verify Published GCS Outputs
+
+Verify:
+
+```bash
+gcloud storage ls "${SNAPSHOT_PARQUET_BUCKET_URL}/**"
 ```
 
 Look for:
 
-- the target backfill years exist under `options`
-- the target backfill years exist under `futures`
-- the target backfill years exist under `spot`
+- `snapshots`
+- `market_base`
+- `snapshots_ml_flat`
+- `stage1_entry_view`
+- `stage2_direction_view`
+- `stage3_recipe_view`
+- `reports/build_manifest.json`
+- `reports/validation_report.json`
+- `reports/window_manifest_latest.json`
+- `reports/coverage_audit.json`
 
-If the target years are missing under `options`, upload the missing raw archive first and rerun normalization before starting snapshot backfill.
+Also verify that each published dataset only contains the expected chunk files:
 
-For a precise gap audit, run:
+```bash
+for ds in snapshots market_base snapshots_ml_flat stage1_entry_view stage2_direction_view stage3_recipe_view; do
+  echo "== ${ds}"
+  gcloud storage ls "${SNAPSHOT_PARQUET_BUCKET_URL}/${ds}/**" | grep 'data.parquet$' | sort
+done
+```
+
+Look for:
+
+- one `data.parquet` per expected published chunk
+- no duplicate old and new chunk layouts for the same date range
+
+## Troubleshooting Appendix
+
+Use these only when the one-shot script failed and you need a more direct diagnostic or recovery path.
+
+### Check Coverage Directly
 
 ```bash
 cd ~/option_trading
@@ -192,186 +254,39 @@ source_missing = sorted(futures_days - option_days)
 print("futures_days:", len(futures_days), min(futures_days) if futures_days else None, max(futures_days) if futures_days else None)
 print("option_days:", len(option_days), min(option_days) if option_days else None, max(option_days) if option_days else None)
 print("built_days:", len(built_days), min(built_days) if built_days else None, max(built_days) if built_days else None)
-
-print("\nbuildable_missing_count:", len(buildable_missing))
-print("buildable_missing_first_20:", buildable_missing[:20])
-print("buildable_missing_last_20:", buildable_missing[-20:])
-
-print("\nsource_missing_count:", len(source_missing))
-print("source_missing_first_20:", source_missing[:20])
-print("source_missing_last_20:", source_missing[-20:])
+print("buildable_missing_count:", len(buildable_missing))
+print("source_missing_count:", len(source_missing))
 PY
 ```
 
 Interpretation:
 
-- `buildable_missing_count > 0`: inputs exist and only the snapshot build is missing
-- `source_missing_count > 0`: options coverage is missing, so rerunning the snapshot builder alone will not recover those days
+- `buildable_missing_count > 0`: inputs exist and rerunning the main script should backfill those days
+- `source_missing_count > 0`: raw or normalized options coverage is missing and must be fixed before publish
 
-## Step 7: Run The Snapshot Pipeline
-
-On the snapshot VM:
+### Rerun One Targeted Year Or Date Window
 
 ```bash
 cd ~/option_trading
-export SYNC_RAW_ARCHIVE_FROM_GCS=1
-export NORMALIZE_JOBS=8
-export SNAPSHOT_JOBS=8
-export SNAPSHOT_SLICE_MONTHS=6
-export SNAPSHOT_SLICE_WARMUP_DAYS=90
-export VALIDATE_DAYS=5
+export YEAR=2022
 ./ops/gcp/run_snapshot_parquet_pipeline.sh
 ```
 
-Verify:
-
-- command exits successfully
-- final output includes `Snapshot parquet pipeline complete`
-- final output prints:
-  - `build run id`
-  - `parquet base`
-  - `report root`
-
-Also verify local outputs:
-
-```bash
-find .data/ml_pipeline/parquet_data -maxdepth 2 -type d | sort
-```
-
-Look for:
-
-- `snapshots`
-- `market_base`
-- `snapshots_ml_flat`
-- `stage1_entry_view`
-- `stage2_direction_view`
-- `stage3_recipe_view`
-
-## Optional: One-Shot Autonomous Backfill And Publish
-
-Use this instead of the manual backfill and publish steps below when you want the snapshot VM to handle sync, normalization, coverage audit, backfill, validation, and publish in one command.
-
-This helper is designed for release-manager operation with no manual intervention after launch.
-It will:
-
-- sync the raw archive from GCS
-- normalize raw data into local parquet
-- audit source coverage vs built coverage
-- stop early if raw options coverage is still missing
-- backfill any newly buildable dates
-- generate manifest and validation artifacts
-- publish the finished parquet outputs
-- optionally clean stale published dataset prefixes first
-
-On the snapshot VM:
-
 ```bash
 cd ~/option_trading
-chmod +x ./ops/gcp/backfill_snapshot_parquet_and_publish.sh
-
-set -a
-source ops/gcp/operator.env
-set +a
-
-export SYNC_RAW_ARCHIVE_FROM_GCS=1
-export NORMALIZE_JOBS=8
-export SNAPSHOT_JOBS=8
-export SNAPSHOT_SLICE_MONTHS=6
-export SNAPSHOT_SLICE_WARMUP_DAYS=90
-export VALIDATE_DAYS=5
-./ops/gcp/backfill_snapshot_parquet_and_publish.sh
-```
-
-Optional targeting:
-
-```bash
-export YEAR=2022
-./ops/gcp/backfill_snapshot_parquet_and_publish.sh
-```
-
-```bash
 export MIN_DAY=2021-06-01
 export MAX_DAY=2021-09-30
-./ops/gcp/backfill_snapshot_parquet_and_publish.sh
-```
-
-Optional clean republish when chunk layout changed:
-
-```bash
-export CLEAN_PUBLISH_PREFIXES=1
-./ops/gcp/backfill_snapshot_parquet_and_publish.sh
-```
-
-Verify:
-
-- command exits successfully
-- final output includes `Backfill and publish complete.`
-- final output prints:
-  - `run id`
-  - `report root`
-  - `parquet base`
-  - `publish root`
-
-## Step 8: Backfill Missing Years Or Date Gaps
-
-Use resumable targeted runs instead of rebuilding everything.
-Leave resume enabled by default so already-built days are skipped.
-
-Plan a large missing range first:
-
-```bash
-python -m snapshot_app.historical.snapshot_batch_runner \
-  --base .data/ml_pipeline/parquet_data \
-  --build-stage all \
-  --min-day 2022-01-01 \
-  --max-day 2024-12-31 \
-  --validate-ml-flat-contract \
-  --validate-days 5 \
-  --plan-year-runs
-```
-
-Backfill one whole calendar year:
-
-```bash
-cd ~/option_trading
-unset MIN_DAY MAX_DAY
-export YEAR=2022
-export SYNC_RAW_ARCHIVE_FROM_GCS=1
-export NORMALIZE_JOBS=8
-export SNAPSHOT_JOBS=8
-export SNAPSHOT_SLICE_MONTHS=6
-export SNAPSHOT_SLICE_WARMUP_DAYS=90
-export VALIDATE_DAYS=5
-./ops/gcp/run_snapshot_parquet_pipeline.sh
-```
-
-Backfill one specific missing date gap:
-
-```bash
-cd ~/option_trading
-unset YEAR
-export MIN_DAY=2021-06-01
-export MAX_DAY=2021-09-30
-export SYNC_RAW_ARCHIVE_FROM_GCS=1
-export NORMALIZE_JOBS=8
-export SNAPSHOT_JOBS=8
-export SNAPSHOT_SLICE_MONTHS=6
-export SNAPSHOT_SLICE_WARMUP_DAYS=90
-export VALIDATE_DAYS=5
 ./ops/gcp/run_snapshot_parquet_pipeline.sh
 ```
 
 Notes:
 
-- use year-scoped runs when an entire year is missing
-- use `MIN_DAY` and `MAX_DAY` when only one gap is missing
-- do not set `NO_RESUME=1` for normal backfills
-- if the build prints `days_available: 0` or still does not include the missing range, the source archive for that range is still missing or not normalized under `options`
+- leave resume enabled by default
+- do not set `NO_RESUME=1` for normal recovery
 
-## Step 9: Publish Existing Local Parquet Without Rebuild
+### Publish Existing Local Parquet Without Rebuild
 
-If the local parquet tree is already complete and you only need manifest generation, validation, and publish, use the direct runner plus the publish script.
-This is also the safe path when the wrapper run would return `already_complete`.
+If the local parquet tree is complete and you only need fresh reports plus a republish:
 
 ```bash
 cd ~/option_trading
@@ -380,10 +295,9 @@ set -a
 source ops/gcp/operator.env
 set +a
 
-export REPO_ROOT=~/option_trading
-export PARQUET_BASE="${REPO_ROOT}/.data/ml_pipeline/parquet_data"
-export BUILD_RUN_ID="snapshot_publish_$(date -u +%Y%m%dT%H%M%SZ)"
-export REPORT_ROOT="${REPO_ROOT}/.run/snapshot_parquet/${BUILD_RUN_ID}"
+export REPO_ROOT="${REPO_ROOT:-$HOME/option_trading}"
+export PARQUET_BASE="${PARQUET_BASE:-${REPO_ROOT}/.data/ml_pipeline/parquet_data}"
+export REPORT_ROOT="${REPO_ROOT}/.run/snapshot_parquet/snapshot_publish_$(date -u +%Y%m%dT%H%M%SZ)"
 
 python -m snapshot_app.historical.snapshot_batch_runner \
   --base "${PARQUET_BASE}" \
@@ -395,75 +309,24 @@ python -m snapshot_app.historical.snapshot_batch_runner \
   --validation-report-out "${REPORT_ROOT}/validation_report.json" \
   --window-manifest-out "${REPORT_ROOT}/window_manifest_latest.json"
 
-./ops/gcp/publish_snapshot_parquet.sh
-```
-
-Important:
-
-- `publish_snapshot_parquet.sh` expects `SNAPSHOT_PARQUET_BUCKET_URL` to be exported in the current shell
-- `source ops/gcp/operator.env` alone is not enough if the shell variables are not exported to child processes; use `set -a` before sourcing
-
-## Step 10: Clean Published Dataset Prefixes Before Republish When Chunk Layout Changed
-
-The publish script uses `gcloud storage rsync` and does not delete stale remote files.
-If the bucket already contains older chunk layouts, republishing can leave overlapping `chunk=*` parquet files in place.
-
-Clean the published dataset prefixes first when either of these is true:
-
-- this is the first publish after moving from legacy yearly files to chunked files
-- you are rebuilding an already-published year with different chunk boundaries
-
-```bash
-cd ~/option_trading
-source .venv/bin/activate
-set -a
-source ops/gcp/operator.env
-set +a
-
-for ds in snapshots market_base snapshots_ml_flat stage1_entry_view stage2_direction_view stage3_recipe_view; do
-  gcloud storage rm --recursive "${SNAPSHOT_PARQUET_BUCKET_URL}/${ds}"
+for ds in snapshots market_base snapshots_ml_flat stage1_entry_view stage2_direction_view stage3_recipe_view reports; do
+  gcloud storage rm --recursive "${SNAPSHOT_PARQUET_BUCKET_URL}/${ds}" || true
 done
 
 ./ops/gcp/publish_snapshot_parquet.sh
 ```
 
-## Step 11: Verify Published GCS Outputs
+### Seed GCS Raw Archive Outside The Main Script
 
-Verify:
-
-```bash
-gcloud storage ls "${SNAPSHOT_PARQUET_BUCKET_URL}/**"
-```
-
-Look for:
-
-- `snapshots`
-- `market_base`
-- `snapshots_ml_flat`
-- `stage1_entry_view`
-- `stage2_direction_view`
-- `stage3_recipe_view`
-- `reports/build_manifest.json`
-- `reports/validation_report.json`
-- `reports/window_manifest_latest.json`
-
-Also verify that each published dataset only contains the expected chunk files and no overlapping old chunk layouts:
+If the raw archive lives on another machine and you want to pre-stage it in GCS:
 
 ```bash
-for ds in snapshots market_base snapshots_ml_flat stage1_entry_view stage2_direction_view stage3_recipe_view; do
-  echo "== ${ds}"
-  gcloud storage ls "${SNAPSHOT_PARQUET_BUCKET_URL}/${ds}/**" | grep 'data.parquet$' | sort
-done
+export RAW_ARCHIVE_BUCKET_URL="gs://${SNAPSHOT_DATA_BUCKET_NAME}/banknifty_data"
+export RAW_DATA_ROOT="/path/to/banknifty_data"
+./ops/gcp/publish_raw_market_data.sh
 ```
 
-Look for:
-
-- one `data.parquet` per expected published chunk
-- no duplicate monthly and six-month chunk files for the same date range
-
-If you see both monthly chunks like `chunk=202110_202110_m1` and six-month chunks like `chunk=202110_202112_m6` under the same dataset/year, clean the published dataset prefixes and republish before using the bucket for training.
-
-## Step 12: Delete Temporary Snapshot Infra
+## Step 7: Delete Temporary Snapshot Infra
 
 Delete the temporary snapshot VM after publish is complete:
 
@@ -483,8 +346,3 @@ gcloud compute instances describe option-trading-snapshot-build-01 \
 Look for:
 
 - instance not found
-
-Optional cleanup:
-
-- if the snapshot bucket was created only for a one-off run and is no longer needed, delete it separately
-- do not delete it if training or replay still needs the parquet outputs

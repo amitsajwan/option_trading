@@ -1,6 +1,6 @@
 # BankNifty System Source Of Truth
 
-As-of date: `2026-03-19`
+As-of date: `2026-03-20`
 
 If active docs conflict with code, code wins. If active docs conflict with each other, this file wins.
 
@@ -36,15 +36,23 @@ When live ML is enabled:
 
 - Deterministic replay validates B1-B5 behavior and exit attribution.
 - After replay validation, decide whether staged views, label recipes, or training windows need regeneration before retraining `ml_pipeline_2`.
+- The supported training and publish entrypoint is `python -m ml_pipeline_2.run_staged_release ...`.
+- `python -m ml_pipeline_2.run_research ...` remains supported for manifest validation and research runs, but it does not publish a live runtime handoff by itself.
 - There is no supported runtime ML overlay on top of deterministic votes.
 
 ## 5. Canonical References
 
+- Runbooks index: `docs/runbooks/README.md`
+- Snapshot workflow: `docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`
+- Training workflow: `docs/runbooks/TRAINING_RELEASE_RUNBOOK.md`
+- Live runtime workflow: `docs/runbooks/GCP_DEPLOYMENT.md`
+- Cleanup workflow: `docs/runbooks/CLEANUP_ROLLBACK_RUNBOOK.md`
 - Runtime flow: `strategy_app/docs/STRATEGY_ML_FLOW.md`
+- Strategy current-state validation: `strategy_app/docs/CURRENT_TREE_VALIDATION.md`
+- Strategy catalog: `strategy_app/docs/strategy_catalog.md`
 - Module design: `strategy_app/docs/detailed-design.md`
 - Consolidation status: `strategy_app/docs/ENGINE_CONSOLIDATION_PLAN.md`
-- Live bring-up: `docs/SUPPORT_BRINGUP_GUIDE.md`
-- Current-tree validation: `docs/STRATEGY_SYSTEM_VALIDATION_2026-03-19.md`
+- Module-level staged ML detail: `ml_pipeline_2/docs/gcp_user_guide.md`
 
 ## 6. Last Verified Commands
 

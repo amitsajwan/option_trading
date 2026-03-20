@@ -39,6 +39,21 @@ def _predict_proba(model: object, x: pd.DataFrame) -> np.ndarray:
     return np.asarray(out, dtype=float)
 
 
+def _empty_probability_frame(model_package: Dict[str, object]) -> pd.DataFrame:
+    models = dict(model_package.get("models") or {})
+    single_target = model_package.get("single_target") if isinstance(model_package, dict) else None
+    if isinstance(single_target, dict):
+        model_key = str(single_target.get("model_key", "")).strip()
+        prob_col = str(single_target.get("prob_col", "")).strip()
+        if model_key and prob_col and model_key in models and "ce" not in models and "pe" not in models:
+            return pd.DataFrame({prob_col: pd.Series(dtype=float)})
+    if "move" in models and "ce" not in models and "pe" not in models:
+        return pd.DataFrame({"move_prob": pd.Series(dtype=float)})
+    if "direction" in models and "ce" not in models and "pe" not in models:
+        return pd.DataFrame({"direction_up_prob": pd.Series(dtype=float)})
+    return pd.DataFrame({"ce_prob": pd.Series(dtype=float), "pe_prob": pd.Series(dtype=float)})
+
+
 def predict_probabilities_from_frame(feature_df: pd.DataFrame, model_package: Dict[str, object], *, missing_policy_override: Optional[str] = None, context: str = "predict_probabilities_from_frame") -> Tuple[pd.DataFrame, Dict[str, object]]:
     validation = validate_model_input_columns(list(feature_df.columns), model_package, context=context, missing_policy_override=missing_policy_override)
     feature_cols = [str(col) for col in list(model_package["feature_columns"])]
@@ -47,6 +62,8 @@ def predict_probabilities_from_frame(feature_df: pd.DataFrame, model_package: Di
         if col not in x.columns:
             x[col] = np.nan
     x = x.loc[:, feature_cols]
+    if len(x) == 0:
+        return _empty_probability_frame(model_package), validation
     models = dict(model_package["models"])
     single_target = model_package.get("single_target") if isinstance(model_package, dict) else None
     if isinstance(single_target, dict):

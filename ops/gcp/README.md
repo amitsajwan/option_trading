@@ -101,26 +101,37 @@ Syncs the local `published_models` tree to the model bucket.
 
 Syncs a local raw `banknifty_data` archive to a GCS prefix such as `RAW_ARCHIVE_BUCKET_URL`.
 
-Use this once when you want the full raw archive accessible from disposable GCP build machines.
+Use this when you want to seed or refresh the canonical raw archive in GCS outside the main snapshot build script.
+The historical parquet operator flow can also do this upload automatically when `LOCAL_RAW_ARCHIVE_ROOT` is set.
 
 ### `run_snapshot_parquet_pipeline.sh`
 
-Builds final historical parquet from the raw archive or existing normalized cache.
+This is the only supported operator entrypoint for historical parquet creation and publish.
 
 It will:
 
-1. optionally sync raw archive from GCS
-2. create or reuse `.venv`
-3. run the final historical snapshot builder
-4. write build and validation reports
-5. optionally upload final parquet to GCS
+1. optionally upload a local raw `banknifty_data` archive to `RAW_ARCHIVE_BUCKET_URL`
+2. sync the raw archive from GCS into `RAW_DATA_ROOT`
+3. create or reuse `.venv`
+4. normalize raw futures/options/spot/VIX into local parquet cache
+5. audit source coverage vs built coverage
+6. build only pending snapshot and derived parquet days with resume enabled by default
+7. write build and validation reports, including `coverage_audit.json`
+8. clean the stable GCS publish prefixes by default
+9. publish final parquet and reports to `SNAPSHOT_PARQUET_BUCKET_URL`
+10. verify the published GCS layout
 
 Important runtime knobs:
 
+- `LOCAL_RAW_ARCHIVE_ROOT`
+- `RAW_ARCHIVE_BUCKET_URL`
+- `SNAPSHOT_PARQUET_BUCKET_URL`
+- `NORMALIZE_JOBS`
 - `SNAPSHOT_JOBS`
 - `SNAPSHOT_SLICE_MONTHS`
 - `SNAPSHOT_SLICE_WARMUP_DAYS`
 
+Worker defaults auto-detect the machine CPU count and cap parallelism at `16`.
 The current fast path uses chunked snapshot partitions with warmup continuity, not calendar-year-only workers.
 
 ### `publish_snapshot_parquet.sh`
@@ -186,9 +197,9 @@ For a staged model release, the normal order is:
 
 For a final historical parquet rebuild on a high-power machine, the normal order is:
 
-1. `publish_raw_market_data.sh` once from a machine that has the archive locally
-2. create or use a large disposable GCP VM
-3. `run_snapshot_parquet_pipeline.sh`
+1. create or use a large disposable GCP VM
+2. place the raw archive on that machine and set `LOCAL_RAW_ARCHIVE_ROOT`, or pre-seed `RAW_ARCHIVE_BUCKET_URL`
+3. run `run_snapshot_parquet_pipeline.sh`
 4. delete the build VM after parquet is uploaded
 
 For a cheap idle state after you are done:
@@ -214,9 +225,9 @@ export PATH="$HOME/bin:$PATH"
 RUN_IMAGE_BUILD=0 RUN_RUNTIME_CONFIG_SYNC=0 ./ops/gcp/from_scratch_bootstrap.sh
 ```
 
-For the operator index, use [FROM_SCRATCH_OPERATOR_GUIDE.md](../../docs/FROM_SCRATCH_OPERATOR_GUIDE.md).
-For Day 0 bootstrap, use [GCP_BOOTSTRAP_RUNBOOK.md](../../docs/GCP_BOOTSTRAP_RUNBOOK.md).
-For the dedicated historical parquet procedure, use [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](../../docs/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md).
-For model release, use [TRAINING_RELEASE_RUNBOOK.md](../../docs/TRAINING_RELEASE_RUNBOOK.md).
-For runtime deploy and cutover, use [GCP_DEPLOYMENT.md](../../docs/GCP_DEPLOYMENT.md).
-For cleanup and rollback, use [CLEANUP_ROLLBACK_RUNBOOK.md](../../docs/CLEANUP_ROLLBACK_RUNBOOK.md).
+For the operator index, use [runbooks/README.md](../../docs/runbooks/README.md).
+For historical parquet creation, use [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](../../docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md).
+For staged training and publish, use [TRAINING_RELEASE_RUNBOOK.md](../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md).
+For runtime deploy and cutover, use [GCP_DEPLOYMENT.md](../../docs/runbooks/GCP_DEPLOYMENT.md).
+For cleanup and rollback, use [CLEANUP_ROLLBACK_RUNBOOK.md](../../docs/runbooks/CLEANUP_ROLLBACK_RUNBOOK.md).
+Use [../../ml_pipeline_2/docs/gcp_user_guide.md](../../ml_pipeline_2/docs/gcp_user_guide.md) only for package-level staged ML detail.

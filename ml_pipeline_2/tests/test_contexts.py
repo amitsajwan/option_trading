@@ -6,9 +6,9 @@ import pandas as pd
 import pytest
 
 from ml_pipeline_2.evaluation import FuturesPromotionGates, evaluate_futures_stages_from_frame, stage_a, stage_b
-from ml_pipeline_2.inference_contract import validate_model_input_columns
+from ml_pipeline_2.inference_contract import predict_probabilities_from_frame, validate_model_input_columns
 from ml_pipeline_2.labeling import EffectiveLabelConfig, build_label_lineage, build_labeled_dataset
-from ml_pipeline_2.model_search import run_training_cycle_catalog
+from ml_pipeline_2.model_search import ConstantProbModel, run_training_cycle_catalog
 from ml_pipeline_2.tests.helpers import build_synthetic_feature_frames
 
 
@@ -38,6 +38,19 @@ def test_inference_contract_rejects_missing_required_features() -> None:
     package = {"feature_columns": ["a", "b"], "models": {}, "_model_input_contract": {"required_features": ["a", "b"], "missing_policy": "error", "source": "feature_columns"}}
     with pytest.raises(ValueError):
         validate_model_input_columns(["a"], package, context="unit-test")
+
+
+def test_inference_contract_allows_empty_single_target_frames() -> None:
+    package = {
+        "feature_columns": ["a", "b"],
+        "models": {"move": ConstantProbModel(0.7)},
+        "single_target": {"model_key": "move", "prob_col": "move_prob"},
+        "_model_input_contract": {"required_features": ["a", "b"], "missing_policy": "error", "source": "feature_columns"},
+    }
+    probs, validation = predict_probabilities_from_frame(pd.DataFrame(columns=["a", "b"]), package, context="unit-test")
+    assert list(probs.columns) == ["move_prob"]
+    assert probs.empty
+    assert validation["missing_required_count"] == 0
 
 
 def test_evaluation_reports_expected_viability_shape() -> None:

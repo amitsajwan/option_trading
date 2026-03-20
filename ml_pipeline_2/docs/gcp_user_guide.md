@@ -1,8 +1,9 @@
 # ml_pipeline_2 GCP and User Guide
 
-This is the canonical `ml_pipeline_2` run guide for local Ubuntu and GCP operator flows.
+This is the detailed module guide for `ml_pipeline_2` on local Ubuntu and disposable GCP training VMs.
 
-This is the canonical operator guide for running `ml_pipeline_2`.
+The primary operator entrypoint for this workflow is `docs/runbooks/TRAINING_RELEASE_RUNBOOK.md`.
+Use this file when you need package-specific detail behind that runbook.
 
 It covers:
 - local Ubuntu execution
@@ -15,9 +16,9 @@ It does not cover:
 - runtime VM deployment or cutover
 
 For those external lanes, use:
-- `docs/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`
-- `docs/GCP_BOOTSTRAP_RUNBOOK.md`
-- `docs/GCP_DEPLOYMENT.md`
+- `docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`
+- `docs/runbooks/TRAINING_RELEASE_RUNBOOK.md`
+- `docs/runbooks/GCP_DEPLOYMENT.md`
 
 ## Supported Operator Path
 
@@ -30,6 +31,11 @@ The supported path for this branch is the staged 1 / 2 / 3 release lane:
 5. inspect `summary.json` and publish outputs
 6. apply `release/ml_pure_runtime.env`
 7. continue with runtime deployment outside this package
+
+Retired paths such as open-search rebaseline and the removed legacy `ml_pipeline` package are not part of the supported operator flow.
+
+On the current branch there is no separate "champion selection" operator step for ML releases.
+The staged flow writes `summary.json` with `publish_assessment.decision = PUBLISH|HOLD`, and `run_staged_release` publishes only when that staged run is publishable.
 
 ## Required Inputs
 
@@ -61,14 +67,29 @@ python -m pip install --upgrade pip
 python -m pip install -e ./ml_pipeline_2
 ```
 
-### 2. Sync Inputs
+### 2. Sync Or Build Inputs
+
+If final staged parquet already exists in GCS, sync it into the local cache root:
 
 ```bash
-mkdir -p .data
-gsutil -m rsync -r gs://option-trading-ml/data .data/ml_pipeline
+mkdir -p .data/ml_pipeline/parquet_data
+gcloud storage rsync \
+  "gs://<snapshot-data-bucket>/parquet_data" \
+  ".data/ml_pipeline/parquet_data" \
+  --recursive
 ```
 
-Direct `gs://` manifest paths are intentionally unsupported. Sync locally first.
+If local `market_base` already exists but the staged derived datasets are missing, rebuild them locally:
+
+```bash
+python -m snapshot_app.historical.snapshot_batch_runner \
+  --build-stage derived \
+  --validate-ml-flat-contract
+```
+
+There is no repo-wide default training bucket. The old `gs://option-trading-ml/data` example is retired.
+
+Direct `gs://` manifest paths are intentionally unsupported. Sync or build the datasets locally first.
 
 ### 3. Validate the Manifest
 
@@ -77,6 +98,10 @@ python -m ml_pipeline_2.run_research \
   --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json \
   --validate-only
 ```
+
+`--validate-only` checks manifest resolution and runtime dependencies, including staged model backend availability.
+It does not prove that the available parquet window is large enough to produce walk-forward folds for the chosen manifest.
+If you only built a narrow historical slice, use a matching research manifest instead of `staged_dual_recipe.default.json`.
 
 Optional resolved-config print:
 
@@ -142,11 +167,14 @@ Values to verify in `ops/gcp/operator.env`:
 - `PROJECT_ID`
 - `ZONE`
 - `TRAINING_VM_NAME`
+- `DATA_SYNC_SOURCE`
 - `MODEL_GROUP`
 - `PROFILE_ID`
 - `STAGED_CONFIG`
 - `MODEL_BUCKET_URL`
 - `RUNTIME_CONFIG_BUCKET_URL`
+
+`DATA_SYNC_SOURCE` must materialize local `.data/ml_pipeline/*` on the VM. It is not a built-in shared bucket name.
 
 ### 1. Create the VM
 
@@ -222,6 +250,22 @@ Within the published model group:
 - `config/profiles/<profile_id>/threshold_report.json`
 - `config/profiles/<profile_id>/training_report.json`
 
+## Champion Terminology
+
+Older repo history used "champion" language for the removed `ml_pipeline` and open-search flows.
+
+That is not the release contract for the supported staged lane.
+
+For staged `ml_pipeline_2`, the decision path is:
+
+1. train Stage 1 / 2 / 3
+2. score `final_holdout`
+3. compute `publish_assessment`
+4. if `publish_assessment.decision=PUBLISH`, write published artifacts and `release/ml_pure_runtime.env`
+5. if `publish_assessment.decision=HOLD`, do not publish
+
+Use `summary.json`, `release/assessment.json`, and `release/release_summary.json` as the current release records, not a champion registry.
+
 ## Runtime Handoff
 
 The staged release writes:
@@ -248,8 +292,8 @@ Stop and investigate if:
 - the model bucket does not receive published artifacts
 - the runtime handoff file is missing or incomplete
 
-## Documents That Redirect Here
+## Related Docs
 
-The following older locations now point to this guide:
 - `ml_pipeline_2/docs/ubuntu_gcp_runbook.md`
-- `docs/TRAINING_RELEASE_RUNBOOK.md`
+- `docs/runbooks/README.md`
+- `docs/runbooks/GCP_DEPLOYMENT.md`

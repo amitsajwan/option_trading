@@ -1,101 +1,106 @@
-# BankNifty Architecture (Current)
+# BankNifty Architecture
 
-This document describes the live architecture and active data contracts only.
+This document is the current cross-cutting system view. Package-specific details live under the owning package docs.
 
 ## 1. Component Boundaries
 
-- `ingestion_app`: live market collectors + market data API.
-- `snapshot_app`: builds canonical `MarketSnapshot` (`schema_version=3.0`) and publishes snapshot events.
-- `strategy_app`: consumes snapshots, classifies regime, routes deterministic strategies, optionally applies ML entry gate.
-- `persistence_app`: persists snapshot stream and strategy stream into MongoDB.
-- `strategy_eval_orchestrator`: replays historical snapshot rows to historical topics.
-- `ml_pipeline_2`: offline research/training/threshold sweep/publish/release for `ml_pure`.
-- `market_data_dashboard` / `strategy_eval_ui`: operator + evaluation UI surfaces.
+- `ingestion_app`: live market collector and provider-authenticated data access
+- `snapshot_app`: builds canonical `MarketSnapshot` (`schema_version=3.0`) and publishes snapshot events
+- `strategy_app`: consumes snapshots and runs one of two engines:
+  - `ml_pure` for the supported live lane
+  - `deterministic` for replay and research
+- `persistence_app`: persists snapshot and strategy streams to MongoDB
+- `ml_pipeline_2`: offline staged training, publish gating, runtime bundle generation, and runtime handoff for `ml_pure`
+- `strategy_eval_orchestrator` and UI services: optional replay and evaluation surfaces
+- `market_data_dashboard`: optional operator UI
 
 ## 2. Core Contracts
 
 ### Snapshot contract
 
-- Builder: `snapshot_app.core.market_snapshot.build_market_snapshot`
-- Schema identity:
+- builder: `snapshot_app.core.market_snapshot.build_market_snapshot`
+- schema identity:
   - `schema_name=MarketSnapshot`
   - `schema_version=3.0`
-- Snapshot contains canonical blocks:
-  - `session_context`, `futures_bar`, `futures_derived`, `mtf_derived`, `opening_range`
-  - `vix_context`, `strikes`, `chain_aggregates`, `atm_options`, `iv_derived`, `session_levels`
+- key blocks include:
+  - `session_context`
+  - `futures_bar`
+  - `futures_derived`
+  - `opening_range`
+  - `vix_context`
+  - `chain_aggregates`
+  - `atm_options`
+  - `iv_derived`
+  - `session_levels`
 
 ### Event contract
 
-- Envelope helper: `contracts_app.build_snapshot_event`
-- Topic resolution: `contracts_app.snapshot_topic`, `contracts_app.historical_snapshot_topic`
-- Primary live topic: `market:snapshot:v1`
-- Primary historical topic: `market:snapshot:v1:historical`
+- live topic: `market:snapshot:v1`
+- historical topic: `market:snapshot:v1:historical`
+- strategy topics:
+  - `market:strategy:votes:v1`
+  - `market:strategy:signals:v1`
+  - `market:strategy:positions:v1`
 
-### Strategy stream contracts
+## 3. Supported Runtime Lanes
 
-- Votes topic: `market:strategy:votes:v1`
-- Signals topic: `market:strategy:signals:v1`
-- Positions topic: `market:strategy:positions:v1`
+- supported live lane: `strategy_app.main --engine ml_pure`
+- replay and research lane: `strategy_app.main --engine deterministic`
 
-## 3. Canonical Live Sequence
+There is no supported live runtime path where ML is layered on top of deterministic vote outputs.
 
-1. `ingestion_app` updates market API/cache from data provider.
-2. `snapshot_app.main_live` reads market APIs, builds canonical `MarketSnapshot`, validates it, and publishes event to Redis live topic.
-3. `strategy_app.main` consumes live topic and runs `DeterministicRuleEngine`.
-4. `strategy_app` publishes votes/signals/positions topics.
-5. `persistence_app.main_snapshot_consumer` stores snapshots in Mongo.
-6. `persistence_app.main_strategy_consumer` stores strategy artifacts in Mongo.
-7. Dashboard reads Redis/Mongo for operator views.
+## 4. Canonical Live Sequence
 
-## 4. Historical Replay Sequence
+1. `ingestion_app` refreshes provider-backed market state.
+2. `snapshot_app.main_live` builds and validates `MarketSnapshot`.
+3. `snapshot_app` publishes to `market:snapshot:v1`.
+4. `strategy_app.main --engine ml_pure` consumes the live topic and scores the staged runtime bundle resolved from published `ml_pipeline_2` artifacts.
+5. `strategy_app` emits strategy votes, signals, and positions.
+6. `persistence_app` stores snapshot and strategy streams in MongoDB.
+7. Optional dashboard and UI services read Redis and MongoDB.
 
-1. `strategy_eval_orchestrator.main` receives replay command.
-2. Reads parquet snapshots via `snapshot_app.historical.ParquetStore`.
-3. Publishes replay snapshots to `market:snapshot:v1:historical`.
-4. Historical strategy/persistence services consume historical topic and write historical collections.
-5. Evaluation APIs reconstruct trade/equity summaries from persisted historical strategy data.
+## 5. Historical Replay Sequence
 
-## 5. Historical Snapshot Pipeline
+1. `snapshot_app.historical.snapshot_batch_runner` builds canonical parquet datasets.
+2. `strategy_eval_orchestrator` or replay tooling republishes those snapshots on `market:snapshot:v1:historical`.
+3. `strategy_app.main --engine deterministic` consumes the historical topic.
+4. Historical persistence services write isolated replay collections.
+5. Evaluation surfaces reconstruct replay outputs from persisted historical data.
 
-There is one supported historical snapshot build path:
+## 6. Historical Data And Training Sequence
 
-1. raw BankNifty archive under `C:\code\banknifty_data`
-2. normalized parquet cache under `.data/ml_pipeline/parquet_data`
-3. canonical historical `snapshots`
-4. derived historical `snapshots_ml_flat`
+1. Raw archive is normalized and built by `snapshot_app.historical.snapshot_batch_runner`.
+2. Local parquet root `.data/ml_pipeline/parquet_data` contains:
+  - `snapshots`
+  - `snapshots_ml_flat`
+  - `stage1_entry_view`
+  - `stage2_direction_view`
+  - `stage3_recipe_view`
+3. `ml_pipeline_2.run_staged_release` trains Stage 1 / 2 / 3, scores holdout, computes `publish_assessment`, and publishes only when the staged run is eligible.
+4. Live runtime switches by `ML_PURE_RUN_ID` + `ML_PURE_MODEL_GROUP`, or explicit bundle/report paths.
 
-Preferred operator entrypoint:
+## 7. External Preconditions
 
-```powershell
-python -m snapshot_app.historical.snapshot_batch_runner --raw-root C:\code\banknifty_data
-```
+Two external prerequisites commonly affect end-to-end bring-up:
 
-Implementation split:
-- `snapshot_app.pipeline.normalize`: raw CSV -> normalized parquet partitions
-- `snapshot_app.pipeline.orchestrator`: raw-to-snapshot orchestration and chunked parallel builds with warmup continuity
-- `snapshot_app.core.market_snapshot`: canonical snapshot assembly logic used by both live and historical flows
+1. provider credentials for `ingestion_app`
+2. a valid staged `ml_pure` handoff and runtime guard for live ML
 
-This keeps live and historical snapshot logic on one code path while allowing raw rebuilds, chunked incremental outputs, and faster parallel batch execution on larger CPUs.
+Most other containers are expected to start from repo root through Compose without special per-service setup.
 
-## 6. Ownership by Package
+## 8. Constraints
 
-- `snapshot_app`: snapshot schema, batch/replay tooling, window readiness.
-- `strategy_app`: runtime strategy decisions, regime/router/risk, ML runtime guard.
-- `ml_pipeline_2`: offline model development, evaluation, publish/release gating.
-- `strategy_eval_orchestrator`: replay transport and rollout-stage validation.
-- `persistence_app`: Mongo write path and evaluation persistence reads.
+- live and historical topics must remain isolated
+- live ML is allowed only in `capped_live` with a guard artifact
+- deterministic remains the inspectable replay lane
+- staged `ml_pipeline_2` is the only supported ML training and publish source
 
-## 7. Architecture Constraints
-
-- Live and historical flows are topic-isolated.
-- Session-aware execution for live mode (`Asia/Kolkata` market window).
-- Formal research runs require manifest readiness checks before execution.
-- Runtime ML remains guarded and is allowed only in `capped_live` stage with approval artifact.
-
-## 8. Related Docs
+## 9. Related Docs
 
 - [SYSTEM_SOURCE_OF_TRUTH.md](SYSTEM_SOURCE_OF_TRUTH.md)
+- [runbooks/README.md](runbooks/README.md)
+- [runbooks/GCP_DEPLOYMENT.md](runbooks/GCP_DEPLOYMENT.md)
 - [PROCESS_TOPOLOGY.md](PROCESS_TOPOLOGY.md)
-- [SUPPORT_BRINGUP_GUIDE.md](SUPPORT_BRINGUP_GUIDE.md)
-- [strategy_eval_architecture.md](strategy_eval_architecture.md)
 - [DOCS_CODE_MAP.md](DOCS_CODE_MAP.md)
+- [../strategy_app/docs/README.md](../strategy_app/docs/README.md)
+- [../ml_pipeline_2/docs/README.md](../ml_pipeline_2/docs/README.md)
