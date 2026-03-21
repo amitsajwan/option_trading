@@ -4,55 +4,631 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Market Data Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@stomp/stompjs@7.0.0/bundles/stomp.umd.min.js"></script>
+    <style>
+        :root {
+            --shell-ink: #17324d;
+            --shell-muted: #5c7084;
+            --shell-line: rgba(23, 50, 77, 0.12);
+            --shell-surface: rgba(255, 252, 246, 0.94);
+            --shell-accent: #005f73;
+            --shell-glow-a: rgba(10, 147, 150, 0.18);
+            --shell-glow-b: rgba(238, 155, 0, 0.16);
+            --shell-shadow: 0 24px 60px rgba(23, 50, 77, 0.12);
+        }
+
+        body.operator-shell {
+            background:
+                radial-gradient(circle at 12% 18%, var(--shell-glow-a), transparent 34%),
+                radial-gradient(circle at 88% 12%, var(--shell-glow-b), transparent 28%),
+                linear-gradient(180deg, #f8f4eb 0%, #f4efe3 44%, #fbfaf6 100%);
+            color: var(--shell-ink);
+            font-family: "Manrope", sans-serif;
+        }
+
+        .dashboard-shell {
+            max-width: 1480px;
+            position: relative;
+        }
+
+        .dashboard-shell::before,
+        .dashboard-shell::after {
+            content: "";
+            position: absolute;
+            border-radius: 999px;
+            filter: blur(40px);
+            opacity: 0.8;
+            pointer-events: none;
+        }
+
+        .dashboard-shell::before {
+            width: 220px;
+            height: 220px;
+            top: 60px;
+            right: 40px;
+            background: rgba(10, 147, 150, 0.12);
+        }
+
+        .dashboard-shell::after {
+            width: 180px;
+            height: 180px;
+            left: -20px;
+            bottom: 140px;
+            background: rgba(238, 155, 0, 0.12);
+        }
+
+        .hero-shell,
+        .panel-shell {
+            position: relative;
+            overflow: hidden;
+            border: 1px solid var(--shell-line);
+            background: var(--shell-surface);
+            box-shadow: var(--shell-shadow);
+            backdrop-filter: blur(18px);
+        }
+
+        .hero-shell {
+            border-radius: 32px;
+            padding: 2rem;
+            animation: rise-in 420ms ease-out both;
+        }
+
+        .hero-shell::after,
+        .panel-shell::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.6), transparent 45%);
+            pointer-events: none;
+        }
+
+        .hero-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.95fr);
+            gap: 1.5rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .hero-kicker,
+        .section-label {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--shell-accent);
+        }
+
+        .hero-title,
+        .section-heading {
+            font-family: "Space Grotesk", sans-serif;
+            font-weight: 700;
+            letter-spacing: -0.04em;
+            color: #10253d;
+        }
+
+        .hero-title {
+            font-size: clamp(2.3rem, 5vw, 4.2rem);
+            line-height: 0.98;
+            margin: 0.55rem 0 0.85rem;
+            max-width: 10ch;
+        }
+
+        .hero-subtitle,
+        .section-aside,
+        .support-copy {
+            color: var(--shell-muted);
+        }
+
+        .hero-subtitle {
+            max-width: 60ch;
+            font-size: 1rem;
+            line-height: 1.7;
+        }
+
+        .hero-chip-row,
+        .link-rail,
+        .command-snapshot {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        .hero-chip-row {
+            margin-top: 1.25rem;
+        }
+
+        .info-chip,
+        .watch-badge,
+        .mode-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            border-radius: 999px;
+            padding: 0.68rem 0.95rem;
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+            border: 1px solid rgba(23, 50, 77, 0.08);
+            background: rgba(255, 255, 255, 0.88);
+            color: #17324d;
+        }
+
+        .info-chip[data-tone="success"],
+        .watch-badge[data-tone="success"],
+        .mode-pill[data-tone="success"] {
+            background: rgba(10, 147, 150, 0.12);
+            color: #005f73;
+            border-color: rgba(10, 147, 150, 0.2);
+        }
+
+        .info-chip[data-tone="warning"],
+        .watch-badge[data-tone="warning"],
+        .mode-pill[data-tone="warning"] {
+            background: rgba(238, 155, 0, 0.14);
+            color: #9b5d00;
+            border-color: rgba(238, 155, 0, 0.22);
+        }
+
+        .info-chip[data-tone="critical"],
+        .watch-badge[data-tone="critical"],
+        .mode-pill[data-tone="critical"] {
+            background: rgba(187, 62, 3, 0.12);
+            color: #9b2226;
+            border-color: rgba(187, 62, 3, 0.18);
+        }
+
+        .nav-pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 44px;
+            padding: 0.7rem 1rem;
+            border-radius: 999px;
+            font-size: 0.88rem;
+            font-weight: 700;
+            border: 1px solid transparent;
+            transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+        }
+
+        .nav-pill:hover,
+        .action-btn:hover,
+        .timeframe-btn:hover,
+        .watch-card:hover,
+        .selector-control:hover {
+            transform: translateY(-1px);
+        }
+
+        .nav-pill-primary {
+            background: linear-gradient(135deg, #005f73 0%, #0a9396 100%);
+            color: #fffaf2;
+            box-shadow: 0 14px 30px rgba(0, 95, 115, 0.22);
+        }
+
+        .nav-pill-secondary {
+            background: rgba(255, 255, 255, 0.88);
+            color: var(--shell-ink);
+            border-color: rgba(23, 50, 77, 0.1);
+        }
+
+        .hero-side,
+        .hero-status-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .hero-status-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+        }
+
+        .hero-status-card,
+        .summary-card {
+            position: relative;
+            z-index: 1;
+            border-radius: 24px;
+            padding: 1.25rem;
+            background: rgba(255, 255, 255, 0.76);
+            border: 1px solid rgba(23, 50, 77, 0.08);
+        }
+
+        .hero-time {
+            margin-top: 0.6rem;
+            font-family: "Space Grotesk", sans-serif;
+            font-size: clamp(1.5rem, 2vw, 2rem);
+            font-weight: 700;
+            letter-spacing: -0.04em;
+            color: #10253d;
+        }
+
+        .hero-time-subtle {
+            margin-top: 0.45rem;
+            color: var(--shell-muted);
+            font-size: 0.88rem;
+        }
+
+        .ops-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 1.25rem;
+        }
+
+        .summary-card h3 {
+            font-family: "Space Grotesk", sans-serif;
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: #10253d;
+        }
+
+        .summary-card .summary-kicker {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.7rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--shell-muted);
+        }
+
+        .summary-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .action-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            min-height: 44px;
+            border-radius: 16px;
+            padding: 0.8rem 1rem;
+            font-weight: 700;
+            transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+        }
+
+        .action-btn-primary {
+            background: linear-gradient(135deg, #005f73 0%, #0a9396 100%);
+            color: #fffaf2;
+            box-shadow: 0 14px 28px rgba(0, 95, 115, 0.18);
+        }
+
+        .action-btn-secondary {
+            background: linear-gradient(135deg, #264653 0%, #3d5a6c 100%);
+            color: #f8f4eb;
+        }
+
+        .action-btn-neutral {
+            background: rgba(255, 255, 255, 0.92);
+            color: var(--shell-ink);
+            border: 1px solid rgba(23, 50, 77, 0.1);
+        }
+
+        .panel-shell {
+            border-radius: 28px;
+            padding: 1.5rem;
+        }
+
+        .section-top {
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            align-items: flex-start;
+            margin-bottom: 1.2rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .section-heading {
+            font-size: 1.6rem;
+            margin-top: 0.35rem;
+        }
+
+        .section-aside {
+            max-width: 26ch;
+            text-align: right;
+            font-size: 0.92rem;
+        }
+
+        .command-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 1.1rem;
+        }
+
+        .command-label {
+            font-size: 0.78rem;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #35566f;
+        }
+
+        .selector-control {
+            width: 100%;
+            min-height: 52px;
+            padding: 0.9rem 1rem;
+            border-radius: 18px;
+            border: 1px solid rgba(23, 50, 77, 0.12);
+            background: rgba(255, 255, 255, 0.92);
+            color: #17324d;
+            font-weight: 700;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+        }
+
+        .command-snapshot {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.85rem;
+        }
+
+        .inline-stat {
+            padding: 0.95rem 1rem;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid rgba(23, 50, 77, 0.08);
+        }
+
+        .inline-stat span,
+        .metric-label,
+        .watch-exchange,
+        .watch-foot {
+            display: block;
+            color: var(--shell-muted);
+            font-size: 0.8rem;
+        }
+
+        .inline-stat strong,
+        .metric-value,
+        .watch-symbol,
+        .watch-price {
+            display: block;
+            margin-top: 0.25rem;
+            font-family: "Space Grotesk", sans-serif;
+            font-weight: 700;
+            color: #10253d;
+        }
+
+        .inline-stat strong[data-tone="success"] {
+            color: #005f73;
+        }
+
+        .inline-stat strong[data-tone="warning"] {
+            color: #9b5d00;
+        }
+
+        .inline-stat strong[data-tone="critical"] {
+            color: #9b2226;
+        }
+
+        .timeframe-grid {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 0.7rem;
+        }
+
+        .timeframe-btn {
+            min-height: 48px;
+            border-radius: 16px;
+            border: 1px solid rgba(23, 50, 77, 0.1);
+            background: rgba(255, 255, 255, 0.8);
+            color: #35566f;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+        }
+
+        .timeframe-btn.is-active {
+            background: linear-gradient(135deg, #005f73 0%, #0a9396 100%);
+            color: #fffaf2;
+            border-color: transparent;
+            box-shadow: 0 12px 24px rgba(0, 95, 115, 0.18);
+        }
+
+        .watch-card {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+            padding: 1.1rem;
+            border-radius: 22px;
+            border: 1px solid rgba(23, 50, 77, 0.08);
+            background: rgba(255, 255, 255, 0.82);
+            box-shadow: 0 14px 30px rgba(23, 50, 77, 0.08);
+            cursor: pointer;
+            transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+        }
+
+        .watch-card.is-active {
+            border-color: rgba(10, 147, 150, 0.38);
+            box-shadow: 0 18px 34px rgba(0, 95, 115, 0.15);
+            transform: translateY(-2px);
+        }
+
+        .watch-card:focus {
+            outline: none;
+            border-color: rgba(10, 147, 150, 0.42);
+            box-shadow: 0 0 0 4px rgba(10, 147, 150, 0.15);
+        }
+
+        .watch-head,
+        .watch-metrics {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.8rem;
+        }
+
+        .watch-price {
+            font-size: 1.5rem;
+            letter-spacing: -0.03em;
+        }
+
+        .watch-metrics {
+            gap: 0.75rem;
+        }
+
+        .metric-block {
+            flex: 1;
+            min-width: 0;
+            padding: 0.85rem;
+            border-radius: 18px;
+            background: rgba(247, 244, 237, 0.92);
+            border: 1px solid rgba(23, 50, 77, 0.06);
+        }
+
+        .watch-foot {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.75rem;
+            border-top: 1px solid rgba(23, 50, 77, 0.08);
+            padding-top: 0.8rem;
+        }
+
+        .watch-warning {
+            color: #9b5d00;
+            font-weight: 700;
+        }
+
+        .empty-state {
+            padding: 2.5rem 1rem;
+            border-radius: 22px;
+            border: 1px dashed rgba(23, 50, 77, 0.18);
+            background: rgba(255, 255, 255, 0.6);
+            color: var(--shell-muted);
+            text-align: center;
+        }
+
+        .chart-panel canvas {
+            min-height: 320px;
+        }
+
+        @keyframes rise-in {
+            from {
+                opacity: 0;
+                transform: translateY(16px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (max-width: 1279px) {
+            .ops-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 1024px) {
+            .hero-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .section-top {
+                flex-direction: column;
+            }
+
+            .section-aside {
+                max-width: none;
+                text-align: left;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .hero-shell,
+            .panel-shell {
+                border-radius: 24px;
+            }
+
+            .hero-shell {
+                padding: 1.4rem;
+            }
+
+            .ops-grid,
+            .command-snapshot,
+            .timeframe-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .hero-title {
+                max-width: none;
+            }
+
+            .link-rail {
+                flex-direction: column;
+            }
+        }
+    </style>
 </head>
-<body class="bg-gray-100 min-h-screen">
-    <div class="container mx-auto px-4 py-8">
-        <header class="mb-8">
-            <div class="flex justify-between items-center mb-2">
-                <h1 class="text-3xl font-bold text-gray-800">Market Data Dashboard</h1>
-                <div class="text-lg flex items-center gap-3">
-                    <a href="/live/strategy" class="inline-flex items-center px-4 py-2 rounded-full bg-emerald-700 text-white hover:bg-emerald-800 text-sm font-semibold">
-                        Live Strategy Monitor
-                    </a>
-                    <a href="/trading" class="inline-flex items-center px-4 py-2 rounded-full bg-teal-600 text-white hover:bg-teal-700 text-sm font-semibold">
-                        Open Trading Terminal
-                    </a>
-                    <a href="/trading/models" class="inline-flex items-center px-4 py-2 rounded-full bg-slate-700 text-white hover:bg-slate-800 text-sm font-semibold">
-                        Model Catalog
-                    </a>
-                    <a href="/trading/model/a" target="_blank" rel="noopener" class="inline-flex items-center px-3 py-2 rounded-full bg-sky-100 text-sky-800 hover:bg-sky-200 text-xs font-semibold">
-                        model=a
-                    </a>
-                    <a href="/trading/model/b" target="_blank" rel="noopener" class="inline-flex items-center px-3 py-2 rounded-full bg-amber-100 text-amber-800 hover:bg-amber-200 text-xs font-semibold">
-                        model=b
-                    </a>
-                    <div id="mode-badge">
-                        <span class="inline-flex items-center px-4 py-2 rounded-full bg-gray-300 text-gray-700">
-                            <svg class="w-4 h-4 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            Loading...
-                        </span>
+<body class="operator-shell min-h-screen">
+    <div class="dashboard-shell mx-auto px-4 py-6 lg:py-8">
+        <header class="hero-shell mb-8">
+            <div class="hero-grid">
+                <div>
+                    <p class="hero-kicker">Trading Operations Deck</p>
+                    <h1 class="hero-title">Market Data Command Deck</h1>
+                    <p class="hero-subtitle">
+                        Real-time operator view across system mode, market-data coverage, chart freshness, depth, and options chain behavior for the active instrument.
+                    </p>
+                    <div class="hero-chip-row">
+                        <span id="current-instrument-chip" class="info-chip">Instrument: --</span>
+                        <span id="current-timeframe-chip" class="info-chip">Timeframe: 1MIN</span>
+                        <span id="current-exchange-chip" class="info-chip">Exchange: --</span>
+                        <span id="refresh-state-chip" class="info-chip">Status refresh pending</span>
+                    </div>
+                </div>
+                <div class="hero-side">
+                    <div class="link-rail">
+                        <a href="/live/strategy" class="nav-pill nav-pill-primary">
+                            Live Strategy Monitor
+                        </a>
+                        <a href="/trading" class="nav-pill nav-pill-secondary">
+                            Open Trading Terminal
+                        </a>
+                        <a href="/trading/models" class="nav-pill nav-pill-secondary">
+                            Model Catalog
+                        </a>
+                        <a href="/trading/model/a" target="_blank" rel="noopener" class="nav-pill nav-pill-secondary">
+                            model=a
+                        </a>
+                        <a href="/trading/model/b" target="_blank" rel="noopener" class="nav-pill nav-pill-secondary">
+                            model=b
+                        </a>
+                    </div>
+                    <div class="hero-status-grid">
+                        <div class="hero-status-card">
+                            <div class="section-label">System Mode</div>
+                            <div id="mode-badge">
+                                <span class="mode-pill" data-tone="warning">Loading mode...</span>
+                            </div>
+                        </div>
+                        <div class="hero-status-card">
+                            <div class="section-label">Effective Market Time</div>
+                            <div id="effective-time" class="hero-time">Loading...</div>
+                            <div class="hero-time-subtle">
+                                Mode clock <span id="effective-time-secondary">--</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
-            <div class="flex justify-between items-center">
-                <p class="text-gray-600">Real-time market data monitoring and visualization</p>
-                <p class="text-sm text-gray-500">
-                    <span id="effective-time">Loading...</span>
-                </p>
-            </div>
         </header>
 
-        <!-- Status & Freshness Overview -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-            <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+        <div class="ops-grid mb-8">
+            <section class="panel-shell summary-card">
                 <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-lg font-semibold">Connectivity</h3>
+                    <div>
+                        <div class="summary-kicker">Network</div>
+                        <h3>Connectivity</h3>
+                    </div>
                     <span class="text-xs text-gray-500">API / WS / Auth</span>
                 </div>
                 <div id="system-status" class="space-y-3">
@@ -68,7 +644,7 @@
                             <div id="api-status" class="w-3 h-3 rounded-full mr-2"></div>
                             <span class="text-gray-800">Market Data API</span>
                         </div>
-                        <span id="effective-time-secondary" class="text-xs text-gray-500">--</span>
+                        <span class="text-xs text-gray-500">Primary feed</span>
                     </div>
                     <div class="flex items-center justify-between text-sm">
                         <div class="flex items-center">
@@ -78,12 +654,15 @@
                         <span id="ws-status" class="text-xs text-gray-600">Connecting...</span>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+            <section class="panel-shell summary-card">
                 <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-lg font-semibold">Data Quality</h3>
-                    <span class="text-xs text-gray-500">Validation</span>
+                    <div>
+                        <div class="summary-kicker">Validation</div>
+                        <h3>Data Quality</h3>
+                    </div>
+                    <span class="text-xs text-gray-500">Coverage</span>
                 </div>
                 <div id="data-validation" class="space-y-2">
                     <div class="text-2xl font-bold" id="overall-status">Loading...</div>
@@ -91,11 +670,14 @@
                         <span id="instruments-count">0/0</span> instruments with data
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+            <section class="panel-shell summary-card">
                 <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-lg font-semibold">Freshness</h3>
+                    <div>
+                        <div class="summary-kicker">Latency</div>
+                        <h3>Freshness</h3>
+                    </div>
                     <span class="text-xs text-gray-500">Age vs thresholds</span>
                 </div>
                 <div class="space-y-4 text-sm">
@@ -116,58 +698,104 @@
                         <span id="depth-freshness-badge" class="px-3 py-1 rounded-full text-xs bg-gray-200 text-gray-700">--</span>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <div class="bg-white rounded-lg shadow p-6 border border-gray-100">
+            <section class="panel-shell summary-card summary-actions">
                 <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-lg font-semibold">Trader Actions</h3>
-                    <span class="text-xs text-gray-500">Utilities</span>
+                    <div>
+                        <div class="summary-kicker">Utilities</div>
+                        <h3>Operator Actions</h3>
+                    </div>
+                    <span class="text-xs text-gray-500">Manual controls</span>
                 </div>
-                <div class="space-y-2">
-                    <button onclick="refreshData()" class="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
-                        Refresh Data
-                    </button>
-                    <button onclick="scheduleRealtimeRefresh(100)" class="w-full bg-indigo-500 text-white px-4 py-2 rounded hover:bg-indigo-600">
-                        Sync Charts
-                    </button>
-                    <button onclick="window.location.reload()" class="w-full bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">
-                        Reload Page
-                    </button>
-                </div>
-            </div>
+                <button onclick="refreshData()" class="action-btn action-btn-primary">
+                    Refresh Data
+                </button>
+                <button onclick="scheduleRealtimeRefresh(100)" class="action-btn action-btn-secondary">
+                    Sync Charts
+                </button>
+                <button onclick="window.location.reload()" class="action-btn action-btn-neutral">
+                    Reload Page
+                </button>
+            </section>
         </div>
 
-        <!-- Instruments Status -->
-        <div class="bg-white rounded-lg shadow p-6 mb-8">
-            <h3 class="text-lg font-semibold mb-4">Instruments Status</h3>
-            <div id="instruments-grid" class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <!-- Instruments will be populated here -->
-            </div>
-        </div>
+        <div class="grid grid-cols-1 xl:grid-cols-[1.45fr,0.95fr] gap-8 mb-8">
+            <section class="panel-shell">
+                <div class="section-top">
+                    <div>
+                        <div class="section-label">Coverage</div>
+                        <h3 class="section-heading">Instrument Watchlist</h3>
+                    </div>
+                    <div class="section-aside">Select any card to pivot charts, depth, and options without leaving the operator deck.</div>
+                </div>
+                <div id="instruments-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    <!-- Instruments will be populated here -->
+                </div>
+            </section>
 
-        <!-- Timeframe Selector -->
-        <div class="bg-white rounded-lg shadow p-6 mb-8">
-            <h3 class="text-lg font-semibold mb-4">Timeframe Selection</h3>
-            <div class="flex flex-wrap items-center gap-3 mb-4">
-                <label for="instrument-select" class="text-sm font-medium text-gray-700">Active Instrument</label>
-                <select id="instrument-select" class="border border-gray-300 rounded px-3 py-2 text-sm" onchange="onInstrumentChange(this.value)">
-                    <option value="">Loading...</option>
-                </select>
-                <span id="instrument-note" class="text-xs text-gray-500"></span>
-            </div>
-            <div class="flex flex-wrap gap-2">
-                <button onclick="setTimeframe('1min')" id="tf-1min" class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">1M</button>
-                <button onclick="setTimeframe('5min')" id="tf-5min" class="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500">5M</button>
-                <button onclick="setTimeframe('15min')" id="tf-15min" class="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500">15M</button>
-                <button onclick="setTimeframe('1h')" id="tf-1h" class="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500">1H</button>
-                <button onclick="setTimeframe('4h')" id="tf-4h" class="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500">4H</button>
-                <button onclick="setTimeframe('1d')" id="tf-1d" class="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500">1D</button>
-            </div>
+            <section class="panel-shell command-panel">
+                <div class="section-top">
+                    <div>
+                        <div class="section-label">Command Deck</div>
+                        <h3 class="section-heading">Instrument and Timeframe Control</h3>
+                    </div>
+                    <div id="command-deck-status" class="section-aside">Waiting for instruments</div>
+                </div>
+                <div class="space-y-5">
+                    <div class="space-y-2">
+                        <label for="instrument-select" class="command-label">Active Instrument</label>
+                        <select id="instrument-select" class="selector-control" onchange="onInstrumentChange(this.value)">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                    <p id="instrument-note" class="support-copy text-sm">Waiting for current instrument context.</p>
+                    <div class="command-snapshot">
+                        <div class="inline-stat">
+                            <span>Instrument</span>
+                            <strong id="focus-instrument-value">--</strong>
+                        </div>
+                        <div class="inline-stat">
+                            <span>Exchange</span>
+                            <strong id="focus-exchange-value">--</strong>
+                        </div>
+                        <div class="inline-stat">
+                            <span>Timeframe</span>
+                            <strong id="focus-timeframe-value">1MIN</strong>
+                        </div>
+                        <div class="inline-stat">
+                            <span>Coverage</span>
+                            <strong id="coverage-stat">--</strong>
+                        </div>
+                        <div class="inline-stat">
+                            <span>Mode</span>
+                            <strong id="current-mode-chip">--</strong>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="command-label mb-2">Timeline Density</div>
+                        <div class="timeframe-grid">
+                            <button onclick="setTimeframe('1min')" id="tf-1min" class="timeframe-btn is-active">1M</button>
+                            <button onclick="setTimeframe('5min')" id="tf-5min" class="timeframe-btn">5M</button>
+                            <button onclick="setTimeframe('15min')" id="tf-15min" class="timeframe-btn">15M</button>
+                            <button onclick="setTimeframe('1h')" id="tf-1h" class="timeframe-btn">1H</button>
+                            <button onclick="setTimeframe('4h')" id="tf-4h" class="timeframe-btn">4H</button>
+                            <button onclick="setTimeframe('1d')" id="tf-1d" class="timeframe-btn">1D</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
         </div>
 
         <!-- Current Indicators Values -->
-        <div class="bg-white rounded-lg shadow p-6 mb-8">
-            <h3 class="text-lg font-semibold mb-4" id="indicators-title">Technical Indicators</h3>
+        <section class="panel-shell mb-8">
+            <div class="section-top">
+                <div>
+                    <div class="section-label">Signal Lens</div>
+                    <h3 class="section-heading" id="indicators-title">Technical Indicators</h3>
+                </div>
+                <div class="section-aside">Latest derived values for the active instrument and selected timeframe.</div>
+            </div>
             <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
                 <!-- Trend Indicators -->
                 <div class="border-l-4 border-purple-500 pl-4">
@@ -218,17 +846,23 @@
                     <h4 class="text-xs font-semibold text-gray-600 uppercase mb-2">Open Interest</h4>
                     <div class="space-y-1 text-sm">
                         <div><span class="font-bold" id="oi-val">--</span> OI</div>
-                        <div><span class="font-bold" id="oi-change">--</span> Δ OI</div>
-                        <div><span class="font-bold" id="oi-pct">--</span> Δ OI %</div>
+                        <div><span class="font-bold" id="oi-change">--</span> Delta OI</div>
+                        <div><span class="font-bold" id="oi-pct">--</span> Delta OI %</div>
                         <div><span class="font-bold" id="oi-sma5">--</span> OI SMA(5)</div>
                     </div>
                 </div>
             </div>
-        </div>
+        </section>
 
         <!-- Indicator Metadata -->
-        <div class="bg-white rounded-lg shadow p-6 mb-8">
-            <h3 class="text-lg font-semibold mb-4">Indicator Metadata</h3>
+        <section class="panel-shell mb-8">
+            <div class="section-top">
+                <div>
+                    <div class="section-label">Context</div>
+                    <h3 class="section-heading">Indicator Metadata</h3>
+                </div>
+                <div class="section-aside">Source, timestamps, mode, and freshness metadata behind the live indicator snapshot.</div>
+            </div>
             <div class="grid grid-cols-1 md:grid-cols-5 gap-4 text-sm">
                 <div class="border-l-4 border-blue-500 pl-4">
                     <h4 class="text-xs font-semibold text-gray-600 uppercase mb-1">Calculated At</h4>
@@ -258,25 +892,43 @@
                 <div>Status: <span id="meta-status" class="font-semibold">--</span></div>
                 <div>Freshness: <span id="meta-indicator-age" class="font-semibold">--</span> (<span id="meta-indicator-freshness" class="font-semibold">--</span>)</div>
             </div>
-        </div>
+        </section>
 
         <!-- Charts Section -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold mb-4" id="price-chart-title">Price Chart</h3>
+            <section class="panel-shell chart-panel">
+                <div class="section-top">
+                    <div>
+                        <div class="section-label">Price Action</div>
+                        <h3 class="section-heading" id="price-chart-title">Price Chart</h3>
+                    </div>
+                    <div class="section-aside">Price, volume, and open interest in one view for the active instrument.</div>
+                </div>
                 <canvas id="banknifty-chart" width="400" height="300"></canvas>
-            </div>
+            </section>
 
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold mb-4">Technical Indicators Chart</h3>
+            <section class="panel-shell chart-panel">
+                <div class="section-top">
+                    <div>
+                        <div class="section-label">Signal History</div>
+                        <h3 class="section-heading">Technical Indicators Chart</h3>
+                    </div>
+                    <div class="section-aside">RSI and MACD traces aligned to the selected timeframe.</div>
+                </div>
                 <canvas id="indicators-chart" width="400" height="300"></canvas>
-            </div>
+            </section>
         </div>
 
         <!-- Market Depth Section -->
-        <div class="bg-white rounded-lg shadow p-6 mb-8">
+        <section class="panel-shell mb-8">
+            <div class="section-top">
+                <div>
+                    <div class="section-label">Microstructure</div>
+                    <h3 class="section-heading">Market Depth</h3>
+                </div>
+                <div class="section-aside">Live order-book view when available, with freshness tracking for stale depth conditions.</div>
+            </div>
             <div class="flex items-center justify-between mb-4">
-                <h3 class="text-lg font-semibold">Market Depth (Order Book)</h3>
                 <span id="depth-freshness-pill" class="px-3 py-1 rounded-full text-xs font-semibold bg-gray-200 text-gray-700">--</span>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -316,11 +968,17 @@
                 <span>Last updated: <span id="depth-timestamp">--</span></span>
                 <span>Age: <span id="depth-age-inline">--</span></span>
             </div>
-        </div>
+        </section>
 
         <!-- Options Chain Section -->
-        <div class="bg-white rounded-lg shadow p-6 mb-8">
-            <h3 class="text-lg font-semibold mb-4">Options Chain</h3>
+        <section class="panel-shell mb-8">
+            <div class="section-top">
+                <div>
+                    <div class="section-label">Derivatives</div>
+                    <h3 class="section-heading">Options Chain</h3>
+                </div>
+                <div class="section-aside">Side-by-side call and put structure with PCR, max pain, and last update timing.</div>
+            </div>
             <div id="options-status" class="text-sm text-gray-600 mb-4">
                 <!-- Status message will appear here -->
             </div>
@@ -364,7 +1022,7 @@
                 <span class="ml-4">Max Pain: <span id="options-maxpain" class="font-bold">--</span></span>
                 <span class="ml-4">Last updated: <span id="options-timestamp">--</span></span>
             </div>
-        </div>
+        </section>
     </div>
 
     <script>
@@ -494,6 +1152,100 @@
             return encodeURIComponent(String(symbol || '').trim());
         }
 
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function setTone(id, tone = '') {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (tone) {
+                el.dataset.tone = tone;
+            } else {
+                el.removeAttribute('data-tone');
+            }
+        }
+
+        function setChipText(id, text, tone = '') {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.textContent = text;
+            if (tone) {
+                el.dataset.tone = tone;
+            } else {
+                el.removeAttribute('data-tone');
+            }
+        }
+
+        function toneFromStatus(status) {
+            const normalized = String(status || '').trim().toLowerCase();
+            if (['healthy', 'available', 'live', 'connected', 'authenticated'].includes(normalized)) {
+                return 'success';
+            }
+            if (['degraded', 'warning', 'mode_mismatch', 'historical', 'pending', 'expired'].includes(normalized)) {
+                return 'warning';
+            }
+            if (['critical', 'failed', 'error', 'disconnected', 'unknown'].includes(normalized)) {
+                return 'critical';
+            }
+            return '';
+        }
+
+        function formatTimeframeLabel(tf = currentTimeframe) {
+            return String(tf || '--').toUpperCase();
+        }
+
+        function syncTimeframeButtons() {
+            document.querySelectorAll('[id^="tf-"]').forEach((btn) => {
+                btn.className = 'timeframe-btn';
+                btn.setAttribute('aria-pressed', 'false');
+            });
+
+            const activeButton = document.getElementById(`tf-${currentTimeframe}`);
+            if (activeButton) {
+                activeButton.className = 'timeframe-btn is-active';
+                activeButton.setAttribute('aria-pressed', 'true');
+            }
+        }
+
+        function updateCommandDeck() {
+            const exchange = getInstrumentExchange(currentInstrument) || '--';
+            const timeframeLabel = formatTimeframeLabel();
+            const coverageChecks = statusData?.data_validation?.checks;
+            const coverageText = coverageChecks
+                ? `${coverageChecks.instruments_with_data}/${coverageChecks.total_instruments}`
+                : '--';
+
+            setChipText('current-instrument-chip', `Instrument: ${currentInstrument || '--'}`);
+            setChipText('current-timeframe-chip', `Timeframe: ${timeframeLabel}`);
+            setChipText('current-exchange-chip', `Exchange: ${exchange}`);
+            setMetaText('focus-instrument-value', currentInstrument || '--');
+            setMetaText('focus-exchange-value', exchange);
+            setMetaText('focus-timeframe-value', timeframeLabel);
+            setMetaText('coverage-stat', coverageText);
+
+            const deckStatus = document.getElementById('command-deck-status');
+            if (deckStatus) {
+                if (currentInstrument) {
+                    deckStatus.textContent = coverageChecks
+                        ? `${currentInstrument} on ${timeframeLabel} | ${coverageText} instruments with data`
+                        : `${currentInstrument} on ${timeframeLabel}`;
+                } else {
+                    deckStatus.textContent = 'Waiting for instruments';
+                }
+            }
+
+            const select = document.getElementById('instrument-select');
+            if (select && currentInstrument) {
+                select.value = currentInstrument;
+            }
+        }
+
         function applyCurrentInstrumentUI() {
             if (!currentInstrument) return;
             const indicatorsTitle = document.getElementById('indicators-title');
@@ -512,6 +1264,8 @@
                     ? `Showing charts/indicators for ${currentInstrument} | Exchange ${exchange}`
                     : `Showing charts/indicators for ${currentInstrument}`;
             }
+
+            updateCommandDeck();
         }
 
         function refreshSlowDataForCurrentInstrument(force = false) {
@@ -544,6 +1298,7 @@
             select.innerHTML = sorted
                 .map((inst) => `<option value="${inst}" ${inst === currentInstrument ? 'selected' : ''}>${inst}</option>`)
                 .join('');
+            updateCommandDeck();
         }
 
         function onInstrumentChange(instrument) {
@@ -667,13 +1422,13 @@
 
             if (stale) {
                 badgeClass = 'bg-red-100 text-red-700';
-                badgeText = `STALE • ${formatAgeSeconds(ageNum)}`;
+                badgeText = `STALE | ${formatAgeSeconds(ageNum)}`;
             } else if (nearStale) {
                 badgeClass = 'bg-yellow-100 text-yellow-700';
-                badgeText = `AGING • ${formatAgeSeconds(ageNum)}`;
+                badgeText = `AGING | ${formatAgeSeconds(ageNum)}`;
             } else if (hasAge) {
                 badgeClass = 'bg-green-100 text-green-700';
-                badgeText = `FRESH • ${formatAgeSeconds(ageNum)}`;
+                badgeText = `FRESH | ${formatAgeSeconds(ageNum)}`;
             }
 
             badgeEl.className = `px-3 py-1 rounded-full text-xs font-semibold ${badgeClass}`;
@@ -979,6 +1734,7 @@
                 updateUI();
             } catch (error) {
                 console.error('Failed to fetch status:', error);
+                setChipText('refresh-state-chip', 'Status refresh failed', 'critical');
             }
         }
 
@@ -1010,61 +1766,115 @@
             }`;
 
             instrumentsCountEl.textContent = `${validation.checks.instruments_with_data}/${validation.checks.total_instruments}`;
+            setChipText(
+                'refresh-state-chip',
+                statusData.timestamp ? `Status refresh ${formatTime(statusData.timestamp)}` : 'Status refresh pending',
+                toneFromStatus(validation.overall_status)
+            );
+            updateCommandDeck();
 
             // Update instruments grid
             updateInstrumentsGrid();
 
-            // Update charts (throttled) — avoid triggering heavy fetches repeatedly
+            // Update charts (throttled) to avoid triggering heavy fetches repeatedly
             // from status polling + websocket updates.
             if (Date.now() - lastChartsUpdateAt > 2500) {
                 scheduleRealtimeRefresh(100);
             }
         }
 
+        function renderInstrumentWatchGrid(grid, instruments) {
+            instruments.forEach(([instrument, info]) => {
+                const card = document.createElement('div');
+                const normalizedStatus = String(info.status || 'unknown').toLowerCase();
+                const isActive = instrument === currentInstrument;
+                const badgeTone = normalizedStatus === 'available'
+                    ? 'success'
+                    : normalizedStatus === 'mode_mismatch'
+                        ? 'warning'
+                        : 'critical';
+                const latestPriceNum = Number(info.latest_price);
+                const latestPriceText = Number.isFinite(latestPriceNum)
+                    ? latestPriceNum.toFixed(2)
+                    : '--';
+                const exchange = String(info.exchange || '').trim().toUpperCase();
+                const latestTime = info.latest_timestamp ? formatTime(info.latest_timestamp, '--') : '--';
+                const startTime = info.first_timestamp ? formatTime(info.first_timestamp, '--') : '--';
+                const dataPoints = info.data_points ?? '--';
+                const statusLabel = String(info.status || 'unknown').replaceAll('_', ' ');
+                const modeWarning = info.mode_mismatch
+                    ? `Expect ${escapeHtml(info.expected_mode || 'unknown')} but received ${escapeHtml(info.data_mode || 'unknown')}`
+                    : 'Select to update charts and diagnostics.';
+
+                card.className = `watch-card${isActive ? ' is-active' : ''}`;
+                card.tabIndex = 0;
+                card.setAttribute('role', 'button');
+                card.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+                card.innerHTML = `
+                    <div class="watch-head">
+                        <div>
+                            <div class="watch-symbol">${escapeHtml(instrument)}</div>
+                            ${exchange ? `<div class="watch-exchange">${escapeHtml(exchange)}</div>` : ''}
+                        </div>
+                        <span class="watch-badge" data-tone="${badgeTone}">${escapeHtml(statusLabel)}</span>
+                    </div>
+                    <div class="watch-price">${escapeHtml(latestPriceText)}</div>
+                    <div class="watch-metrics">
+                        <div class="metric-block">
+                            <span class="metric-label">Samples</span>
+                            <span class="metric-value">${escapeHtml(String(dataPoints))}</span>
+                        </div>
+                        <div class="metric-block">
+                            <span class="metric-label">Latest</span>
+                            <span class="metric-value">${escapeHtml(latestTime)}</span>
+                        </div>
+                    </div>
+                    <div class="watch-foot">
+                        <span>Start ${escapeHtml(startTime)}</span>
+                        <span${info.mode_mismatch ? ' class="watch-warning"' : ''}>${modeWarning}</span>
+                    </div>
+                `;
+
+                const selectInstrument = () => {
+                    const select = document.getElementById('instrument-select');
+                    if (select) {
+                        select.value = instrument;
+                    }
+
+                    if (instrument !== currentInstrument) {
+                        onInstrumentChange(instrument);
+                    } else {
+                        scheduleRealtimeRefresh(50);
+                        refreshSlowDataForCurrentInstrument(true);
+                    }
+                };
+
+                card.addEventListener('click', selectInstrument);
+                card.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        selectInstrument();
+                    }
+                });
+
+                grid.appendChild(card);
+            });
+        }
+
         function updateInstrumentsGrid() {
             const grid = document.getElementById('instruments-grid');
             grid.innerHTML = '';
 
-            for (const [instrument, info] of Object.entries(statusData.instruments || {})) {
-                const card = document.createElement('div');
-                const normalizedStatus = String(info.status || 'unknown').toLowerCase();
-
-                let statusColor = 'text-red-600';
-                let statusIcon = '🔴';
-                let statusBadgeClass = 'bg-red-50 border border-red-200';
-
-                if (normalizedStatus === 'available') {
-                    statusColor = 'text-green-700';
-                    statusIcon = '🟢';
-                    statusBadgeClass = 'bg-green-50 border border-green-200';
-                } else if (normalizedStatus === 'mode_mismatch') {
-                    statusColor = 'text-yellow-800';
-                    statusIcon = '🟡';
-                    statusBadgeClass = 'bg-yellow-50 border border-yellow-200';
-                }
-
-                card.className = `border rounded-lg p-4 ${statusBadgeClass}`;
-
-                const latestPriceNum = Number(info.latest_price);
-                const latestPriceText = Number.isFinite(latestPriceNum)
-                    ? latestPriceNum.toFixed(2)
-                    : (info.latest_price ?? '--');
-                const statusLabel = String(info.status || 'unknown').replaceAll('_', ' ');
-                const exchange = String(info.exchange || '').trim().toUpperCase();
-
-                card.innerHTML = `
-                    <div class="font-semibold">${instrument}</div>
-                    ${exchange ? `<div class="text-xs text-gray-500">${exchange}</div>` : ''}
-                    <div class="text-sm font-medium ${statusColor}">${statusIcon} ${statusLabel}</div>
-                    ${info.data_points ? `<div class="text-sm text-gray-600">${info.data_points} data points</div>` : ''}
-                    ${info.latest_price !== undefined && info.latest_price !== null ? `<div class="text-sm font-mono">${latestPriceText}</div>` : ''}
-                    ${info.first_timestamp ? `<div class="text-xs text-gray-500">Start: ${formatDateTime(info.first_timestamp)}</div>` : ''}
-                    ${info.latest_timestamp ? `<div class="text-xs text-gray-500">Latest: ${formatDateTime(info.latest_timestamp)}</div>` : ''}
-                    ${info.mode_mismatch ? `<div class="text-xs text-yellow-800 mt-1">Using <strong>${info.data_mode || 'unknown'}</strong> data while system expects <strong>${info.expected_mode || 'unknown'}</strong></div>` : ''}
-                `;
-
-                grid.appendChild(card);
+            const instruments = Object.entries(statusData.instruments || {});
+            if (!instruments.length) {
+                grid.innerHTML = '<div class="empty-state md:col-span-2 xl:col-span-3">Awaiting instrument snapshots from the market-data service.</div>';
+                return;
             }
+
+            renderInstrumentWatchGrid(grid, instruments);
+            return;
+
+            // Legacy renderer removed. The watchlist above is the active instrument grid.
         }
 
         async function updateCharts() {
@@ -1353,12 +2163,8 @@
         function setTimeframe(tf) {
             currentTimeframe = tf;
             indicatorReducer.reset();
-            
-            // Update button styling
-            document.querySelectorAll('[id^="tf-"]').forEach(btn => {
-                btn.className = 'px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500';
-            });
-            document.getElementById(`tf-${tf}`).className = 'px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600';
+            syncTimeframeButtons();
+            updateCommandDeck();
             
             // Refresh charts
             scheduleRealtimeRefresh(50);
@@ -1412,7 +2218,7 @@
                         statusElement.className = 'text-red-600';
                         statusIcon.className = 'w-3 h-3 rounded-full mr-2 bg-red-500';
                         // Show alert for failed auth
-                        alert(`❌ ${authData.message}\n\n${authData.details?.action_required === 'manual_login' ? 'Please visit the authentication page to complete login.' : ''}`);
+                        alert(`Authentication error: ${authData.message}\n\n${authData.details?.action_required === 'manual_login' ? 'Please visit the authentication page to complete login.' : ''}`);
                         break;
                     case 'expired':
                         statusElement.textContent = 'Token Expired';
@@ -1457,22 +2263,24 @@
                 
                 // Determine if we're in live mode
                 const isLive = data.mode === 'live' && !data.virtual_time_enabled;
+                const modeTone = isLive ? 'success' : 'warning';
                 
                 // Update badge with appropriate styling
-                const badgeClass = isLive ? 'bg-green-500' : 'bg-blue-500';
                 const icon = isLive 
-                    ? '<svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="4" class="animate-pulse"/></svg>'
-                    : '<svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z"/></svg>';
+                    ? '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="4" class="animate-pulse"/></svg>'
+                    : '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z"/></svg>';
                 
                 const modeText = data.mode.toUpperCase();
                 const dateInfo = data.virtual_time ? ` (${data.virtual_time.split('T')[0]})` : '';
                 
                 badge.innerHTML = `
-                    <span class="inline-flex items-center px-4 py-2 rounded-full ${badgeClass} text-white font-semibold">
+                    <span class="mode-pill" data-tone="${modeTone}">
                         ${icon}
                         ${modeText}${dateInfo}
                     </span>
                 `;
+                setMetaText('current-mode-chip', modeText);
+                setTone('current-mode-chip', modeTone);
                 
                 // Update effective time display
                 if (data.effective_time) {
@@ -1496,20 +2304,22 @@
                 // Add mode mismatch warning if detected
                 if (data.redis_mode && normalizeMode(data.redis_mode) !== normalizeMode(data.mode)) {
                     console.warn(`Mode mismatch: ENV=${data.mode}, Redis=${data.redis_mode}`);
-                    badge.innerHTML += `<span class="ml-2 text-xs text-yellow-300" title="Mode mismatch detected">⚠️</span>`;
+                    badge.innerHTML += `<span class="ml-2 text-xs text-yellow-700" title="Mode mismatch detected">[!]</span>`;
                 }
                 
             } catch (err) {
                 console.error('Failed to update mode indicator:', err);
                 const badge = document.getElementById('mode-badge');
                 badge.innerHTML = `
-                    <span class="inline-flex items-center px-4 py-2 rounded-full bg-red-500 text-white">
+                    <span class="mode-pill" data-tone="critical">
                         <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
                         </svg>
                         ERROR
                     </span>
                 `;
+                setMetaText('current-mode-chip', 'ERROR');
+                setTone('current-mode-chip', 'critical');
             }
         }
 
@@ -1620,7 +2430,7 @@
             if (optionsData.status === 'stale') {
                 optionsStatusEl.innerHTML = `
                     <div class="bg-yellow-50 border border-yellow-200 rounded p-3 text-yellow-800">
-                        ⚠️ Showing last known options chain snapshot.${optionsData.warning ? ` (${optionsData.warning})` : ''}
+                        Warning: showing last known options chain snapshot.${optionsData.warning ? ` (${optionsData.warning})` : ''}
                     </div>
                 `;
             } else if (optionsData.status === 'no_data' || optionsData.message) {
@@ -1638,13 +2448,13 @@
 
                 optionsStatusEl.innerHTML = `
                     <div class="bg-yellow-50 border border-yellow-200 rounded p-3 text-yellow-800">
-                        ℹ️ ${message}
+                        Note: ${message}
                     </div>
                 `;
             } else if (optionsData.status === 'error') {
                 optionsStatusEl.innerHTML = `
                     <div class="bg-red-50 border border-red-200 rounded p-3 text-red-800">
-                        ❌ Error loading options data: ${optionsData.error || 'Unknown error'}
+                        Error loading options data: ${optionsData.error || 'Unknown error'}
                     </div>
                 `;
             } else {
@@ -1710,6 +2520,8 @@
 
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
+            syncTimeframeButtons();
+            updateCommandDeck();
             connectWebSocket();
             fetchStatus();
             fetchMarketDepth();

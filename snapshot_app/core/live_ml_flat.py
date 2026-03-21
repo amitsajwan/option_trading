@@ -801,11 +801,12 @@ class LiveSnapshotMLFlatBuilder(LiveMarketSnapshotBuilder):
 
     def fetch_spot_ohlc(self, limit: int = 1800) -> pd.DataFrame:
         params = {"timeframe": "1m", "limit": int(limit), "order": "asc"}
-        endpoints = (
+        endpoints = [
             "{base}/api/v1/market/ohlc/{symbol}",
             "{base}/api/v1/ohlc/{symbol}",
-            "{base}/api/market-data/ohlc/{symbol}",
-        )
+        ]
+        if self.dashboard_api_base:
+            endpoints.append("{base}/api/market-data/ohlc/{symbol}")
         for symbol in _spot_symbol_candidates(self.instrument):
             for template in endpoints:
                 if "/api/market-data/" in template:

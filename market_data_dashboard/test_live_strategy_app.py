@@ -2,6 +2,7 @@ import asyncio
 import json
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import market_data_dashboard.app as dashboard_app
 
@@ -184,6 +185,45 @@ class LiveStrategyAppTests(unittest.TestCase):
         self.assertEqual(normalized["capital_at_risk"], 13830.0)
         self.assertEqual(normalized["exit_time"], "2026-03-02T07:17:00+05:30")
         self.assertEqual(normalized["nested"]["updated_at"], "2026-03-02T07:18:00+05:30")
+
+    def test_health_endpoint_reports_dependency_summary(self) -> None:
+        old_strategy = dashboard_app._strategy_eval_service
+        dashboard_app._strategy_eval_service = object()
+        try:
+            with mock.patch.object(
+                dashboard_app._operator_routes,
+                "_probe_market_data_health",
+                return_value={
+                    "status": "healthy",
+                    "reachable": True,
+                    "status_code": 200,
+                    "latency_ms": 12.3,
+                    "url": "http://localhost:8004/health",
+                    "timestamp": "2026-03-02T07:17:00+05:30",
+                    "error": None,
+                },
+            ), mock.patch.object(
+                dashboard_app._operator_routes,
+                "_probe_redis",
+                return_value={
+                    "status": "healthy",
+                    "reachable": True,
+                    "host": "localhost",
+                    "port": 6379,
+                    "latency_ms": 1.2,
+                    "error": None,
+                },
+            ):
+                payload = asyncio.run(dashboard_app.health())
+        finally:
+            dashboard_app._strategy_eval_service = old_strategy
+
+        self.assertEqual(payload["status"], "healthy")
+        self.assertTrue(payload["ready"])
+        self.assertTrue(payload["checks"]["strategy_evaluation_service"])
+        self.assertTrue(payload["checks"]["live_strategy_monitor_service"])
+        self.assertEqual(payload["dependencies"]["market_data_api"]["status"], "healthy")
+        self.assertEqual(payload["dependencies"]["redis"]["status"], "healthy")
 
 
 if __name__ == "__main__":

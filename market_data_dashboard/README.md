@@ -57,6 +57,8 @@ Environment used by dashboard:
 - `DASHBOARD_PORT` (default `8000`)
 - `MARKET_DATA_API_URL` (default `http://localhost:8004`)
 - `REDIS_HOST`, `REDIS_PORT`
+- `DASHBOARD_ENABLE_DEBUG_ROUTES` (default disabled; required for `/test*` and `/simple*`)
+- `DASHBOARD_LEGACY_BACKTEST_TIMEOUT_SECONDS` (default `1800`)
 
 Port behavior note:
 
@@ -87,6 +89,11 @@ Port behavior note:
 - `POST /api/trading/stop?instance={key}` -> stop paper trading runner for that instance
 - `WS /ws` -> STOMP + legacy JSON websocket
 
+Debug-only endpoints:
+
+- `/test*` and `/simple*` are disabled by default in production.
+- set `DASHBOARD_ENABLE_DEBUG_ROUTES=1` only for controlled debugging sessions.
+
 ### Endpoint behavior notes
 
 - `/api/market-data/status` is mode-aware and can mark per-instrument `mode_mismatch` when Redis data exists in a non-current namespace.
@@ -106,6 +113,10 @@ Port behavior note:
 	- `status`
 - `/api/market-data/indicators/{instrument}` now reads persisted snapshots from Mongo as the canonical source (no upstream technical-indicator API dependency, no OHLC fallback path).
 - `/api/market-data/sync-lag` reports Redis vs Mongo lag for `snapshot` (Redis OHLC proxy), `tick`, `depth`, and `options`, and flags domains that are Redis-only in current runtime.
+- `/api/health` reports dashboard dependency state as well as process health:
+  - `status` remains reachable-health oriented for launcher checks
+  - `ready` reflects whether the supported operator profile is actually available
+  - `dependencies` includes market-data API, Redis, and live-strategy service status
 
 ### Live Strategy Session Engine-Aware Additions
 
@@ -210,6 +221,18 @@ STOMP payload contract:
 - Metadata semantics:
 	- `Source` = calculation/update origin (`indicator_source`)
 	- `Stream` = transport stream (`indicator_stream`, typically `Y2` or `LZ1`)
+
+## Release verification checklist
+
+Before calling the dashboard slice production-ready, verify:
+
+1. `GET /api/health` returns `status=healthy` and `ready=true` for the supported operator profile.
+2. `GET /api/live/strategy/session` returns a valid session payload for the active instrument/date.
+3. `GET /api/market-data/status`, `GET /api/market-data/sync-lag`, `GET /api/market-data/instruments`, `GET /api/market-data/ohlc/{instrument}`, `GET /api/market-data/indicators/{instrument}`, `GET /api/market-data/depth/{instrument}`, and `GET /api/market-data/options/{instrument}` all return the documented top-level contract shape.
+4. `GET /api/examples/ohlc`, `GET /api/examples/indicators`, `GET /api/examples/depth`, and `GET /api/examples/options` succeed, proving the public-contract router remains bound to live market-data handlers.
+5. `/live/strategy` and `/` render without console errors and recover cleanly after Redis or upstream market-data restarts.
+6. Debug-only endpoints remain hidden unless `DASHBOARD_ENABLE_DEBUG_ROUTES=1`.
+7. If `ENABLE_LEGACY_TRADING_UI=1` is enabled intentionally, `/trading` and the legacy launcher paths are exercised separately and treated as non-core flows.
 
 ## Troubleshooting
 

@@ -98,7 +98,14 @@ def _detached_popen_kwargs() -> dict[str, Any]:
     return {"start_new_session": True, "close_fds": True}
 
 
-def _launch_detached(*, cmd: list[str], run_dir: str, cwd: str | None = None, env: dict[str, str] | None = None) -> dict[str, Any]:
+def _launch_detached(
+    *,
+    cmd: list[str],
+    run_dir: str,
+    component: str,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+) -> dict[str, Any]:
     out_dir = Path(run_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = out_dir / "stdout.log"
@@ -115,7 +122,7 @@ def _launch_detached(*, cmd: list[str], run_dir: str, cwd: str | None = None, en
             **_detached_popen_kwargs(),
         )
     meta = {
-        "component": "dashboard",
+        "component": str(component or "process"),
         "pid": int(proc.pid),
         "command": cmd,
         "started_at_ist": _ist_now_iso(),
@@ -187,7 +194,13 @@ def _start_or_verify_dashboard(
     env = os.environ.copy()
     env["MARKET_DATA_API_URL"] = str(ingestion_api_base)
     env["DASHBOARD_PORT"] = str(_port_from_base_url(dashboard_api_base, default=8002))
-    launch_meta = _launch_detached(cmd=cmd, run_dir=run_dir, cwd=str(dashboard_dir), env=env)
+    launch_meta = _launch_detached(
+        cmd=cmd,
+        run_dir=run_dir,
+        component="dashboard",
+        cwd=str(dashboard_dir),
+        env=env,
+    )
 
     deadline = time.monotonic() + max(2.0, float(health_timeout_seconds))
     ok = False
@@ -225,12 +238,94 @@ def _start_or_verify_dashboard(
     return code, result
 
 
+def _strategy_health_command(*, strategy_topic: str) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "strategy_app.health",
+        "--topic",
+        str(strategy_topic),
+    ]
+
+
+def _normalize_strategy_health_result(code: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    process_payload = payload.get("process") if isinstance(payload.get("process"), dict) else {}
+    if bool(process_payload.get("running")):
+        return int(code), payload
+    normalized = dict(payload)
+    normalized["status"] = "unhealthy"
+    return 2, normalized
+
+
+def _start_or_verify_strategy(
+    *,
+    strategy_engine: str,
+    strategy_topic: str,
+    strategy_min_confidence: float,
+    health_timeout_seconds: float,
+) -> tuple[int, dict[str, Any]]:
+    run_dir = str(Path(".run/strategy_app").resolve())
+    health_cmd = _strategy_health_command(strategy_topic=strategy_topic)
+    controls = {
+        "logs_dir": run_dir,
+        "stop_command": "python -m stop_apps",
+        "health_command": " ".join(health_cmd),
+    }
+    running = find_matching_python_processes(["strategy_app.main"])
+    if running:
+        code, payload = _run_json_command(health_cmd, timeout_seconds=max(5.0, float(health_timeout_seconds)))
+        code, payload = _normalize_strategy_health_result(code, payload)
+        payload.update(
+            {
+                "launcher": {
+                    "component": "strategy_app",
+                    "action": "already_running",
+                    "pids": [int(pid) for pid, _ in running[:10]],
+                    "duplicate_processes_detected": len(running) > 1,
+                    "run_dir": run_dir,
+                },
+                "controls": controls,
+            }
+        )
+        return code, payload
+
+    launch_cmd = [
+        sys.executable,
+        "-m",
+        "strategy_app.main",
+        "--engine",
+        str(strategy_engine),
+        "--topic",
+        str(strategy_topic),
+        "--min-confidence",
+        str(float(strategy_min_confidence)),
+        "--run-dir",
+        run_dir,
+    ]
+    launch_meta = _launch_detached(cmd=launch_cmd, run_dir=run_dir, component="strategy_app")
+    deadline = time.monotonic() + max(2.0, float(health_timeout_seconds))
+    result = None
+    code = 2
+    while time.monotonic() < deadline:
+        code, result = _run_json_command(health_cmd, timeout_seconds=5.0)
+        code, result = _normalize_strategy_health_result(code, result)
+        if int(code) == 0:
+            break
+        time.sleep(1.0)
+    if result is None:
+        code, result = _run_json_command(health_cmd, timeout_seconds=5.0)
+        code, result = _normalize_strategy_health_result(code, result)
+    result["launcher"] = launch_meta
+    result["controls"] = controls
+    return int(code), result
+
+
 def run_cli() -> int:
     parser = argparse.ArgumentParser(description="Start process-app components sequentially with health output")
     parser.add_argument("--instrument", default="BANKNIFTY26MARFUT")
     parser.add_argument("--ingestion-api-base", default="http://127.0.0.1:8004")
     parser.add_argument("--snapshot-dashboard-api-base", default="http://127.0.0.1:8002")
-    parser.add_argument("--strategy-engine", default="deterministic")
+    parser.add_argument("--strategy-engine", default=str(os.getenv("STRATEGY_ENGINE") or "ml_pure"))
     parser.add_argument("--strategy-topic", default="market:snapshot:v1")
     parser.add_argument("--strategy-min-confidence", type=float, default=0.65)
     parser.add_argument("--include-dashboard", action="store_true")
@@ -337,18 +432,12 @@ def run_cli() -> int:
         )
 
     if not bool(args.skip_strategy):
-        strategy_cmd = [
-            sys.executable,
-            "-m",
-            "strategy_app.main",
-            "--engine",
-            str(args.strategy_engine),
-            "--topic",
-            str(args.strategy_topic),
-            "--min-confidence",
-            str(float(args.strategy_min_confidence)),
-        ]
-        code, payload = _run_json_command(strategy_cmd, timeout_seconds=float(args.health_timeout_seconds) + 10.0)
+        code, payload = _start_or_verify_strategy(
+            strategy_engine=str(args.strategy_engine),
+            strategy_topic=str(args.strategy_topic),
+            strategy_min_confidence=float(args.strategy_min_confidence),
+            health_timeout_seconds=float(args.health_timeout_seconds),
+        )
         components.append(
             {
                 "component": "strategy_app",
@@ -375,22 +464,24 @@ def run_cli() -> int:
         )
 
     if not components:
+        stop_all_command = "python -m stop_apps --include-dashboard" if bool(args.include_dashboard) else "python -m stop_apps"
         payload = {
             "checked_at_ist": _ist_now_iso(),
             "status": "unhealthy",
             "error": "nothing_to_start",
-            "controls": {"stop_all_command": "python -m stop_apps"},
+            "controls": {"stop_all_command": stop_all_command},
         }
         print(json.dumps(payload, ensure_ascii=False, default=str))
         return 2
 
     max_code = max(int(c["exit_code"]) for c in components)
     overall_status = _status_from_code(max_code)
+    stop_all_command = "python -m stop_apps --include-dashboard" if bool(args.include_dashboard) else "python -m stop_apps"
     health_commands = [
         f"python -m ingestion_app.health --api-base {str(args.ingestion_api_base)}",
         f"python -m snapshot_app.health --events-path {str(args.snapshot_events_path)} --max-age-seconds {float(args.snapshot_max_age_seconds)}",
         f"python -m persistence_app.health --max-age-seconds {float(args.persistence_max_age_seconds)}",
-        "python -m strategy_app.health",
+        f"python -m strategy_app.health --topic {str(args.strategy_topic)}",
         f"python -m persistence_app.strategy_health --max-age-seconds {float(args.persistence_max_age_seconds)}",
     ]
     if bool(args.include_dashboard):
@@ -401,7 +492,7 @@ def run_cli() -> int:
         "status": overall_status,
         "components": components,
         "controls": {
-            "stop_all_command": "python -m stop_apps",
+            "stop_all_command": stop_all_command,
             "health_commands": health_commands,
         },
     }

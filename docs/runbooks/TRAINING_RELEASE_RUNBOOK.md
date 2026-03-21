@@ -4,6 +4,11 @@ Use this runbook to train, publish, and generate the staged `ml_pure` runtime ha
 
 This workflow is self-contained. It includes the GCP setup it needs.
 
+Host note:
+
+- runtime and training execution are container/VM-first
+- local Python on Windows is only needed for VS Code features, host-side tests, or running helper scripts directly from the repo
+
 ## What This Produces
 
 - one disposable training VM

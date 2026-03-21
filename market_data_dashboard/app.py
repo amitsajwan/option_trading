@@ -38,46 +38,86 @@ from urllib.parse import quote, urlencode
 
 try:
     from .live_strategy_monitor_service import LiveStrategyMonitorService
-except Exception:
+except ImportError:
     try:
         from live_strategy_monitor_service import LiveStrategyMonitorService  # type: ignore
-    except Exception:
+    except ImportError:
         LiveStrategyMonitorService = None
 
 try:
     from .strategy_evaluation_service import StrategyEvaluationService
-except Exception:
+except ImportError:
     try:
         from strategy_evaluation_service import StrategyEvaluationService  # type: ignore
-    except Exception:
+    except ImportError:
         StrategyEvaluationService = None
 
 try:
     from .research_eval_service import evaluate_recovery_scenario, list_recovery_scenarios
-except Exception:
+except ImportError:
     try:
         from research_eval_service import evaluate_recovery_scenario, list_recovery_scenarios  # type: ignore
-    except Exception:
+    except ImportError:
         evaluate_recovery_scenario = None  # type: ignore
         list_recovery_scenarios = None  # type: ignore
 
 try:
+    from .operator_routes import DashboardOperatorRouter
+except ImportError:
+    from operator_routes import DashboardOperatorRouter  # type: ignore
+
+try:
+    from .strategy_evaluation_routes import DashboardStrategyEvaluationRouter
+except ImportError:
+    from strategy_evaluation_routes import DashboardStrategyEvaluationRouter  # type: ignore
+
+try:
+    from .model_catalog_routes import DashboardModelCatalogRouter
+except ImportError:
+    from model_catalog_routes import DashboardModelCatalogRouter  # type: ignore
+
+try:
+    from .research_routes import DashboardResearchRouter
+except ImportError:
+    from research_routes import DashboardResearchRouter  # type: ignore
+
+try:
+    from .public_contract_routes import DashboardPublicContractRouter
+except ImportError:
+    from public_contract_routes import DashboardPublicContractRouter  # type: ignore
+
+try:
+    from .market_data_routes import DashboardMarketDataRouter
+except ImportError:
+    from market_data_routes import DashboardMarketDataRouter  # type: ignore
+
+try:
+    from .debug_routes import DashboardDebugRouter
+except ImportError:
+    from debug_routes import DashboardDebugRouter  # type: ignore
+
+try:
+    from .legacy_trading_runtime_routes import DashboardLegacyTradingRouter
+except ImportError:
+    from legacy_trading_runtime_routes import DashboardLegacyTradingRouter  # type: ignore
+
+try:
     from snapshot_app.core.snapshot_ml_flat_contract import load_contract_schema, load_feature_groups, load_legacy_mapping
-except Exception:
+except ImportError:
     load_contract_schema = None  # type: ignore
     load_feature_groups = None  # type: ignore
     load_legacy_mapping = None  # type: ignore
 
 try:
     from contracts_app.options_math import black_scholes_price, calculate_option_greeks, estimate_risk_free_rate
-except Exception:
+except ImportError:
     black_scholes_price = None
     calculate_option_greeks = None
     estimate_risk_free_rate = None
 
 try:
     from contracts_app import IST_ZONE, TimestampSourceMode, isoformat_ist, parse_timestamp_to_ist
-except Exception:
+except ImportError:
     from zoneinfo import ZoneInfo
 
     IST_ZONE = ZoneInfo("Asia/Kolkata")
@@ -87,7 +127,7 @@ except Exception:
 
 try:
     from ingestion_app.env_settings import redis_config as _redis_env_config, resolve_instrument_symbol
-except Exception:
+except ImportError:
     _redis_env_config = None
     resolve_instrument_symbol = None
 
@@ -1407,8 +1447,8 @@ if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Setup templates
-templates = Path(__file__).parent / "templates"
-templates = Jinja2Templates(directory=str(templates))
+templates_dir = Path(__file__).parent / "templates"
+templates = Jinja2Templates(directory=str(templates_dir))
 
 # Market Data API configuration
 MARKET_DATA_API_URL = os.getenv("MARKET_DATA_API_URL") or (
@@ -1913,6 +1953,26 @@ def _recovery_discovery_roots() -> Tuple[Path, ...]:
     return tuple(unique)
 
 
+def _list_recovery_scenarios_for_dashboard() -> Any:
+    if list_recovery_scenarios is None:
+        raise RuntimeError("research evaluation service unavailable")
+    roots = _recovery_discovery_roots()
+    try:
+        return list_recovery_scenarios(roots=roots)
+    except TypeError:
+        return list_recovery_scenarios()
+
+
+def _evaluate_recovery_scenario_for_dashboard(**kwargs: Any) -> Any:
+    if evaluate_recovery_scenario is None:
+        raise RuntimeError("research evaluation service unavailable")
+    roots = _recovery_discovery_roots()
+    try:
+        return evaluate_recovery_scenario(**kwargs, roots=roots)
+    except TypeError:
+        return evaluate_recovery_scenario(**kwargs)
+
+
 def _build_recovery_catalog_entries() -> List[Dict[str, Any]]:
     if list_recovery_scenarios is None:
         return []
@@ -2001,10 +2061,10 @@ def _build_recovery_catalog_entries() -> List[Dict[str, Any]]:
                     "run_id": run_dir.name,
                     "feature_profile": feature_set_text,
                     "title": title,
-                    "summary": f"Recovery model · {feature_set_text} · {primary_model or '--'}",
+                    "summary": f"Recovery model - {feature_set_text} - {primary_model or '--'}",
                     "description": (
-                        f"Recipe {recipe_id} · Created {created_at_utc or '--'} · "
-                        f"Trades {_format_catalog_int(trades)} · Net {_format_catalog_percent(net_return_sum)} · "
+                        f"Recipe {recipe_id} - Created {created_at_utc or '--'} - "
+                        f"Trades {_format_catalog_int(trades)} - Net {_format_catalog_percent(net_return_sum)} - "
                         f"PF {_format_catalog_number(profit_factor)}"
                     ),
                     "recommended": stage_a_passed and side_share_in_band and float(holdout_metrics.get("net_return_sum") or 0.0) > 0.0,
@@ -3482,18 +3542,6 @@ async def websocket_stomp(ws: WebSocket):
         except Exception:
             pass
 
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    """Main dashboard page"""
-    return templates.TemplateResponse("index.html", {"request": request})
-
-
-@app.get("/live/strategy", response_class=HTMLResponse)
-async def live_strategy(request: Request):
-    """Live strategy operator page."""
-    return templates.TemplateResponse("live_strategy.html", {"request": request})
-
-
 def _truthy(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -3558,6 +3606,172 @@ def _now_iso_ist() -> str:
     if isoformat_ist is not None:
         return isoformat_ist()
     return datetime.now(IST_ZONE).isoformat()
+
+
+_operator_routes = DashboardOperatorRouter(
+    templates=templates,
+    templates_dir=templates_dir,
+    market_data_api_url=MARKET_DATA_API_URL,
+    redis_host=REDIS_HOST,
+    redis_port=REDIS_PORT,
+    get_live_strategy_monitor_service=lambda: _live_strategy_monitor_service,
+    get_strategy_eval_service=lambda: _strategy_eval_service,
+    normalize_timestamp_fields=_normalize_timestamp_fields,
+    now_iso_ist=_now_iso_ist,
+)
+app.include_router(_operator_routes.router)
+
+_strategy_evaluation_routes = DashboardStrategyEvaluationRouter(
+    get_strategy_eval_service=lambda: _strategy_eval_service,
+    normalize_timestamp_fields=_normalize_timestamp_fields,
+)
+app.include_router(_strategy_evaluation_routes.router)
+
+_model_catalog_routes = DashboardModelCatalogRouter(
+    templates=templates,
+    build_trading_model_catalog=lambda: _build_trading_model_catalog(),
+    legacy_trading_runtime_status=lambda: _legacy_trading_runtime_status(),
+    normalize_trading_instance=lambda value: _normalize_trading_instance(value),
+    resolve_trading_model_catalog_entry=lambda model: _resolve_trading_model_catalog_entry(model),
+    resolve_repo_path=lambda value, default=None: _resolve_repo_path(value, default),
+    build_model_eval_snapshot=lambda summary_file, training_file, policy_file: _build_model_eval_snapshot(
+        summary_file,
+        training_file,
+        policy_file,
+    ),
+    build_feature_intelligence_snapshot=lambda model_entry, date_from=None, date_to=None: _build_feature_intelligence_snapshot(
+        model_entry,
+        date_from=date_from,
+        date_to=date_to,
+    ),
+    default_model_eval_summary_path=DEFAULT_MODEL_EVAL_SUMMARY_PATH,
+    default_model_training_report_path=DEFAULT_MODEL_TRAINING_REPORT_PATH,
+    default_model_policy_report_path=DEFAULT_MODEL_POLICY_REPORT_PATH,
+)
+app.include_router(_model_catalog_routes.router)
+
+_research_routes = DashboardResearchRouter(
+    templates=templates,
+    list_recovery_scenarios_fn=lambda: _list_recovery_scenarios_for_dashboard(),
+    evaluate_recovery_scenario_fn=lambda **kwargs: _evaluate_recovery_scenario_for_dashboard(**kwargs),
+    research_eval_available=lambda: evaluate_recovery_scenario is not None and list_recovery_scenarios is not None,
+)
+app.include_router(_research_routes.router)
+
+async def _unbound_public_contract_market_data_handler(*args: Any, **kwargs: Any) -> Any:
+    raise RuntimeError("public contract market-data handlers are not bound")
+
+_public_contract_routes = DashboardPublicContractRouter(
+    now_iso_ist=_now_iso_ist,
+    normalize_timestamp_fields=_normalize_timestamp_fields,
+    public_topic_schemas=lambda: _public_topic_schemas(),
+    public_schema_version=PUBLIC_SCHEMA_VERSION,
+    public_topics=PUBLIC_TOPICS,
+    build_runtime_catalog=lambda instrument=None: _build_runtime_catalog(instrument=instrument),
+    public_timeframes=PUBLIC_TIMEFRAMES,
+    load_runtime_instruments=lambda max_instruments=20: _load_runtime_instruments(max_instruments=max_instruments),
+    default_instrument=DEFAULT_INSTRUMENT,
+    canonical_contract_timeframe=lambda timeframe: _canonical_contract_timeframe(timeframe),
+    get_system_mode=_operator_routes.get_system_mode,
+    market_data_api_url=MARKET_DATA_API_URL,
+    requests_get=lambda url, timeout=3: requests.get(url, timeout=timeout),
+    get_ohlc_data=_unbound_public_contract_market_data_handler,
+    get_technical_indicators=_unbound_public_contract_market_data_handler,
+    get_market_depth=_unbound_public_contract_market_data_handler,
+    get_options_chain=_unbound_public_contract_market_data_handler,
+    get_current_mode_hint=lambda timeout_seconds=1.0: _get_current_mode_hint(timeout_seconds=timeout_seconds),
+)
+app.include_router(_public_contract_routes.router)
+
+_debug_routes = DashboardDebugRouter(
+    base_dir=Path(__file__).parent,
+    require_debug_routes_enabled=_require_debug_routes_enabled,
+    redis_host=REDIS_HOST,
+    redis_port=REDIS_PORT,
+    default_instrument=DEFAULT_INSTRUMENT,
+    logger=logger,
+)
+app.include_router(_debug_routes.router)
+
+_legacy_trading_routes = DashboardLegacyTradingRouter(
+    templates=templates,
+    repo_root=REPO_ROOT,
+    ml_pipeline_src=ML_PIPELINE_SRC,
+    default_instrument=DEFAULT_INSTRUMENT,
+    redis_host=REDIS_HOST,
+    redis_port=REDIS_PORT,
+    default_trading_events_path=DEFAULT_TRADING_EVENTS_PATH,
+    default_model_package="ml_pipeline/artifacts/models/by_features/core_v2/h5_ts0_lgbm_regime/model/model.joblib",
+    default_threshold_report="ml_pipeline/artifacts/models/by_features/core_v2/h5_ts0_lgbm_regime/config/profiles/openfe_v9_dual/threshold_report.json",
+    logger=logger,
+    legacy_trading_runtime_status=lambda: _legacy_trading_runtime_status(),
+    build_trading_model_catalog=lambda: _build_trading_model_catalog(),
+    normalize_trading_instance=lambda value: _normalize_trading_instance(value),
+    resolve_repo_path=lambda value, default=None: _resolve_repo_path(value, default),
+    coerce_float=lambda value: _coerce_float(value),
+    truthy=lambda value, default=False: _truthy(value, default=default),
+    now_ist=lambda: datetime.now(IST_TZ),
+    json_safe_value=lambda value: _json_safe_value(value),
+    save_latest_backtest_state=lambda instance, payload: _save_latest_backtest_state(instance, payload),
+    load_latest_backtest_state=lambda instance: _load_latest_backtest_state(instance),
+    trading_lock=_TRADING_LOCK,
+    default_trading_paths=lambda instance: _default_trading_paths(instance),
+    refresh_trading_runner_state=lambda instance: _refresh_trading_runner_state(instance),
+    stop_trading_process_locked=lambda state, reason="manual_stop": _stop_trading_process_locked(state, reason=reason),
+    close_trading_log_handles=lambda state: _close_trading_log_handles(state),
+    load_runtime_instruments=lambda max_instruments=50: _load_runtime_instruments(max_instruments=max_instruments),
+    select_most_active_instrument=lambda instruments, preferred_mode="live": _select_most_active_instrument(
+        instruments,
+        preferred_mode=preferred_mode,
+    ),
+    is_placeholder_instrument=lambda value: _is_placeholder_instrument(value),
+    load_trading_events=lambda path, limit=None: _load_trading_events(path, limit=limit),
+    build_trading_state=lambda events: _build_trading_state(events),
+    backtest_timeout_seconds=int(os.getenv("DASHBOARD_LEGACY_BACKTEST_TIMEOUT_SECONDS") or "1800"),
+)
+app.include_router(_legacy_trading_routes.router)
+
+# Backward-compatible callables used by local tests/imports.
+home = _operator_routes.home
+live_strategy = _operator_routes.live_strategy
+get_live_strategy_session = _operator_routes.get_live_strategy_session
+health = _operator_routes.health
+market_data_health = _operator_routes.market_data_health
+get_system_mode = _operator_routes.get_system_mode
+get_strategy_evaluation_summary = _strategy_evaluation_routes.get_strategy_evaluation_summary
+get_strategy_evaluation_equity = _strategy_evaluation_routes.get_strategy_evaluation_equity
+get_strategy_evaluation_days = _strategy_evaluation_routes.get_strategy_evaluation_days
+get_strategy_evaluation_trades = _strategy_evaluation_routes.get_strategy_evaluation_trades
+create_strategy_evaluation_run = _strategy_evaluation_routes.create_strategy_evaluation_run
+get_latest_strategy_evaluation_run = _strategy_evaluation_routes.get_latest_strategy_evaluation_run
+get_strategy_evaluation_run = _strategy_evaluation_routes.get_strategy_evaluation_run
+trading_models_page = _model_catalog_routes.trading_models_page
+get_trading_models = _model_catalog_routes.get_trading_models
+trading_terminal_model = _model_catalog_routes.trading_terminal_model
+get_trading_model_evaluation = _model_catalog_routes.get_trading_model_evaluation
+get_trading_feature_intelligence = _model_catalog_routes.get_trading_feature_intelligence
+trading_research_page = _research_routes.trading_research_page
+get_trading_research_scenarios = _research_routes.get_trading_research_scenarios
+get_trading_research_evaluation = _research_routes.get_trading_research_evaluation
+get_public_schema_index = _public_contract_routes.get_public_schema_index
+get_public_topic_schema = _public_contract_routes.get_public_topic_schema
+get_public_capabilities = _public_contract_routes.get_public_capabilities
+get_public_catalog = _public_contract_routes.get_public_catalog
+get_public_topic_example = _public_contract_routes.get_public_topic_example
+test_page = _debug_routes.test_page
+test_redis = _debug_routes.test_redis
+test_ltp = _debug_routes.test_ltp
+test_ohlc = _debug_routes.test_ohlc
+simple_dashboard = _debug_routes.simple_dashboard
+simple_ohlc = _debug_routes.simple_ohlc
+simple_ltp = _debug_routes.simple_ltp
+simple_redis_stats = _debug_routes.simple_redis_stats
+trading_terminal = _legacy_trading_routes.trading_terminal
+run_trading_backtest = _legacy_trading_routes.run_trading_backtest
+get_latest_backtest_state = _legacy_trading_routes.get_latest_backtest_state
+get_trading_state = _legacy_trading_routes.get_trading_state
+start_trading_runner = _legacy_trading_routes.start_trading_runner
+stop_trading_runner = _legacy_trading_routes.stop_trading_runner
 
 
 def _default_trading_paths(instance: str) -> Tuple[Path, Path, Path]:
@@ -3988,1201 +4202,12 @@ def _build_trading_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-@app.get("/trading", response_class=HTMLResponse)
-async def trading_terminal(request: Request):
-    """Trading operator terminal UI."""
-    legacy_trading_runtime = _legacy_trading_runtime_status()
-    query = dict(request.query_params)
-    model_key_raw = str(query.get("model") or "").strip()
-    if model_key_raw:
-        safe_key = _normalize_trading_instance(model_key_raw)
-        catalog = _build_trading_model_catalog()
-        selected = next(
-            (
-                item
-                for item in catalog
-                if str(item.get("instance_key") or "").strip().lower() == safe_key.lower()
-            ),
-            None,
-        )
-        if isinstance(selected, dict):
-            merged = dict(query)
-            changed = False
-            for key in ("model_package", "threshold_report", "eval_summary_path", "training_report_path"):
-                if not str(merged.get(key) or "").strip():
-                    value = str(selected.get(key) or "").strip()
-                    if value:
-                        merged[key] = value
-                        changed = True
-            merged["model"] = safe_key
-            if changed or safe_key != model_key_raw:
-                return RedirectResponse(url=f"/trading?{urlencode(merged)}", status_code=307)
-    return templates.TemplateResponse(
-        "trading_terminal.html",
-        {
-            "request": request,
-            "legacy_trading_runtime": legacy_trading_runtime,
-        },
-    )
+_DEBUG_ROUTES_ENV = "DASHBOARD_ENABLE_DEBUG_ROUTES"
 
 
-@app.get("/trading/models", response_class=HTMLResponse)
-async def trading_models_page(request: Request):
-    """Model catalog page for choosing a trading model/profile."""
-    models = _build_trading_model_catalog()
-    legacy_trading_runtime = _legacy_trading_runtime_status()
-    return templates.TemplateResponse(
-        "trading_models.html",
-        {
-            "request": request,
-            "models": models,
-            "legacy_trading_runtime": legacy_trading_runtime,
-            "summary": {
-                "total": len(models),
-                "ready": sum(1 for m in models if m.get("ready_to_run")),
-                "research": sum(1 for m in models if str(m.get("catalog_kind") or "") == "recovery"),
-                "recommended": sum(1 for m in models if m.get("recommended")),
-            },
-        },
-    )
-
-
-@app.get("/api/trading/models")
-async def get_trading_models():
-    """Machine-readable catalog of configured and discovered model artifacts."""
-    models = _build_trading_model_catalog()
-    return {
-        "status": "ok",
-        "count": len(models),
-        "ready_count": sum(1 for m in models if m.get("ready_to_run")),
-        "research_count": sum(1 for m in models if str(m.get("catalog_kind") or "") == "recovery"),
-        "legacy_trading_runtime": _legacy_trading_runtime_status(),
-        "models": models,
-    }
-
-
-@app.get("/trading/research", response_class=HTMLResponse)
-async def trading_research_page(request: Request):
-    """Research evaluation explorer for already-completed recovery runs."""
-    _require_research_eval_service()
-    return templates.TemplateResponse(
-        "trading_research.html",
-        {
-            "request": request,
-        },
-    )
-
-
-@app.get("/api/trading/research/scenarios")
-async def get_trading_research_scenarios():
-    _require_research_eval_service()
-    return list_recovery_scenarios()
-
-
-@app.get("/api/trading/research/evaluation")
-async def get_trading_research_evaluation(
-    scenario_key: str,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    recipe_id: Optional[str] = None,
-    threshold: Optional[float] = None,
-):
-    _require_research_eval_service()
-    try:
-        return evaluate_recovery_scenario(
-            scenario_key=scenario_key,
-            date_from=date_from,
-            date_to=date_to,
-            recipe_id=recipe_id,
-            threshold=threshold,
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-
-@app.get("/trading/model/{model_key}")
-async def trading_terminal_model(model_key: str):
-    """Convenience route for model-scoped terminal tabs."""
-    safe_key = _normalize_trading_instance(model_key)
-    for entry in _build_trading_model_catalog():
-        if str(entry.get("instance_key") or "").strip().lower() == safe_key.lower():
-            prefill_url = str(entry.get("prefill_url") or "").strip()
-            if prefill_url:
-                return RedirectResponse(url=prefill_url, status_code=307)
-            break
-    return RedirectResponse(url=f"/trading?model={safe_key}", status_code=307)
-
-
-@app.get("/api/trading/model-evaluation")
-async def get_trading_model_evaluation(
-    summary_path: Optional[str] = None,
-    training_report_path: Optional[str] = None,
-    policy_report_path: Optional[str] = None,
-):
-    """Return model quality snapshot for UI (OOS, training, and policy metadata)."""
-    summary_file = _resolve_repo_path(summary_path, DEFAULT_MODEL_EVAL_SUMMARY_PATH)
-    training_file = _resolve_repo_path(training_report_path, DEFAULT_MODEL_TRAINING_REPORT_PATH)
-    policy_file = _resolve_repo_path(policy_report_path, DEFAULT_MODEL_POLICY_REPORT_PATH)
-    snapshot = _build_model_eval_snapshot(summary_file, training_file, policy_file)
-    snapshot["status"] = "ok"
-    return snapshot
-
-
-@app.get("/api/trading/feature-intelligence")
-async def get_trading_feature_intelligence(
-    model: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-):
-    """Return grouped v1 feature intelligence for the selected published model."""
-    model_entry = _resolve_trading_model_catalog_entry(model)
-    if not isinstance(model_entry, dict):
-        return {
-            "status": "no_data",
-            "message": "No runnable trading model artifacts were discovered.",
-            "ranking": {"rows": []},
-            "groups": [],
-            "scatter": {"points": []},
-        }
-
-    snapshot = _build_feature_intelligence_snapshot(
-        model_entry,
-        date_from=date_from,
-        date_to=date_to,
-    )
-    snapshot["status"] = "ok" if snapshot.get("ranking", {}).get("rows") else "no_data"
-    return snapshot
-
-
-def _require_strategy_eval_service() -> Any:
-    if _strategy_eval_service is None:
-        raise HTTPException(status_code=500, detail="strategy evaluation service unavailable")
-    return _strategy_eval_service
-
-
-def _require_live_strategy_monitor_service() -> Any:
-    if _live_strategy_monitor_service is None:
-        raise HTTPException(status_code=500, detail="live strategy monitor service unavailable")
-    return _live_strategy_monitor_service
-
-
-def _require_research_eval_service() -> None:
-    if evaluate_recovery_scenario is None or list_recovery_scenarios is None:
-        raise HTTPException(status_code=500, detail="research evaluation service unavailable")
-
-
-@app.get("/api/live/strategy/session")
-async def get_live_strategy_session(
-    date: Optional[str] = None,
-    instrument: Optional[str] = None,
-    limit_votes: int = 25,
-    limit_signals: int = 25,
-    limit_trades: int = 20,
-    initial_capital: Optional[float] = None,
-    timeline_limit: int = 25,
-    debug_view: int = 0,
-):
-    service = _require_live_strategy_monitor_service()
-    try:
-        payload = service.get_live_strategy_session(
-            date=date,
-            instrument=instrument,
-            limit_votes=limit_votes,
-            limit_signals=limit_signals,
-            limit_trades=limit_trades,
-            initial_capital=initial_capital,
-            timeline_limit=timeline_limit,
-            debug_view=debug_view,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"failed to build live strategy session: {exc}")
-    return _normalize_timestamp_fields(payload)
-
-
-@app.get("/api/strategy/evaluation/summary")
-async def get_strategy_evaluation_summary(
-    dataset: str = "historical",
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    strategy: Optional[str] = None,
-    regime: Optional[str] = None,
-    run_id: Optional[str] = None,
-    initial_capital: float = 1000.0,
-    cost_bps: float = 0.0,
-):
-    service = _require_strategy_eval_service()
-    try:
-        filt = service.parse_filters(
-            dataset=dataset,
-            date_from=str(date_from or ""),
-            date_to=str(date_to or ""),
-            strategy_raw=strategy,
-            regime_raw=regime,
-            run_id_raw=run_id,
-            initial_capital=float(initial_capital),
-            cost_bps=float(cost_bps),
-            page=1,
-            page_size=50,
-            sort_by="exit_time",
-            sort_dir="desc",
-        )
-        payload = service.compute_summary(
-            dataset=filt["dataset"],
-            date_from=filt["date_from"],
-            date_to=filt["date_to"],
-            strategies=filt["strategies"],
-            regimes=filt["regimes"],
-            initial_capital=filt["initial_capital"],
-            cost_bps=filt["cost_bps"],
-            run_id=filt["run_id"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return _normalize_timestamp_fields(payload)
-
-
-@app.get("/api/strategy/evaluation/equity")
-async def get_strategy_evaluation_equity(
-    dataset: str = "historical",
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    strategy: Optional[str] = None,
-    regime: Optional[str] = None,
-    run_id: Optional[str] = None,
-    initial_capital: float = 1000.0,
-    cost_bps: float = 0.0,
-):
-    service = _require_strategy_eval_service()
-    try:
-        filt = service.parse_filters(
-            dataset=dataset,
-            date_from=str(date_from or ""),
-            date_to=str(date_to or ""),
-            strategy_raw=strategy,
-            regime_raw=regime,
-            run_id_raw=run_id,
-            initial_capital=float(initial_capital),
-            cost_bps=float(cost_bps),
-            page=1,
-            page_size=50,
-            sort_by="exit_time",
-            sort_dir="desc",
-        )
-        payload = service.compute_equity(
-            dataset=filt["dataset"],
-            date_from=filt["date_from"],
-            date_to=filt["date_to"],
-            strategies=filt["strategies"],
-            regimes=filt["regimes"],
-            initial_capital=filt["initial_capital"],
-            cost_bps=filt["cost_bps"],
-            run_id=filt["run_id"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return _normalize_timestamp_fields(payload)
-
-
-@app.get("/api/strategy/evaluation/days")
-async def get_strategy_evaluation_days(
-    dataset: str = "historical",
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    strategy: Optional[str] = None,
-    regime: Optional[str] = None,
-    run_id: Optional[str] = None,
-    initial_capital: float = 1000.0,
-    cost_bps: float = 0.0,
-    page: int = 1,
-    page_size: int = 50,
-):
-    service = _require_strategy_eval_service()
-    try:
-        filt = service.parse_filters(
-            dataset=dataset,
-            date_from=str(date_from or ""),
-            date_to=str(date_to or ""),
-            strategy_raw=strategy,
-            regime_raw=regime,
-            run_id_raw=run_id,
-            initial_capital=float(initial_capital),
-            cost_bps=float(cost_bps),
-            page=int(page),
-            page_size=int(page_size),
-            sort_by="exit_time",
-            sort_dir="desc",
-        )
-        payload = service.compute_days(
-            dataset=filt["dataset"],
-            date_from=filt["date_from"],
-            date_to=filt["date_to"],
-            strategies=filt["strategies"],
-            regimes=filt["regimes"],
-            initial_capital=filt["initial_capital"],
-            cost_bps=filt["cost_bps"],
-            page=filt["page"],
-            page_size=filt["page_size"],
-            run_id=filt["run_id"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return _normalize_timestamp_fields(payload)
-
-
-@app.get("/api/strategy/evaluation/trades")
-async def get_strategy_evaluation_trades(
-    dataset: str = "historical",
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    strategy: Optional[str] = None,
-    regime: Optional[str] = None,
-    run_id: Optional[str] = None,
-    initial_capital: float = 1000.0,
-    cost_bps: float = 0.0,
-    page: int = 1,
-    page_size: int = 50,
-    sort_by: str = "exit_time",
-    sort_dir: str = "desc",
-):
-    service = _require_strategy_eval_service()
-    try:
-        filt = service.parse_filters(
-            dataset=dataset,
-            date_from=str(date_from or ""),
-            date_to=str(date_to or ""),
-            strategy_raw=strategy,
-            regime_raw=regime,
-            run_id_raw=run_id,
-            initial_capital=float(initial_capital),
-            cost_bps=float(cost_bps),
-            page=int(page),
-            page_size=int(page_size),
-            sort_by=sort_by,
-            sort_dir=sort_dir,
-        )
-        payload = service.compute_trades(
-            dataset=filt["dataset"],
-            date_from=filt["date_from"],
-            date_to=filt["date_to"],
-            strategies=filt["strategies"],
-            regimes=filt["regimes"],
-            initial_capital=filt["initial_capital"],
-            cost_bps=filt["cost_bps"],
-            page=filt["page"],
-            page_size=filt["page_size"],
-            sort_by=filt["sort_by"],
-            sort_dir=filt["sort_dir"],
-            run_id=filt["run_id"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return _normalize_timestamp_fields(payload)
-
-
-@app.post("/api/strategy/evaluation/runs")
-async def create_strategy_evaluation_run(request: Request):
-    service = _require_strategy_eval_service()
-    payload: Dict[str, Any] = {}
-    try:
-        body = await request.json()
-        if isinstance(body, dict):
-            payload = body
-    except Exception:
-        payload = {}
-    dataset = str(payload.get("dataset") or "historical").strip().lower()
-    date_from = str(payload.get("date_from") or "").strip()
-    date_to = str(payload.get("date_to") or "").strip()
-    speed = float(payload.get("speed") or 0.0)
-    base_path = str(payload.get("base_path") or "").strip() or None
-    risk_config = {
-        "stop_loss_pct": payload.get("stop_loss_pct"),
-        "target_pct": payload.get("target_pct"),
-        "trailing_enabled": payload.get("trailing_enabled"),
-        "trailing_activation_pct": payload.get("trailing_activation_pct"),
-        "trailing_offset_pct": payload.get("trailing_offset_pct"),
-        "trailing_lock_breakeven": payload.get("trailing_lock_breakeven"),
-    }
-    if not date_from or not date_to:
-        raise HTTPException(status_code=400, detail="date_from and date_to are required")
-    try:
-        result = service.queue_replay_run(
-            dataset=dataset,
-            date_from=date_from,
-            date_to=date_to,
-            speed=float(speed),
-            base_path=base_path,
-            risk_config=risk_config,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"failed to queue run: {exc}")
-    return _normalize_timestamp_fields(result)
-
-
-@app.get("/api/strategy/evaluation/runs/latest")
-async def get_latest_strategy_evaluation_run(dataset: str = "historical", status: str = "completed"):
-    service = _require_strategy_eval_service()
-    item = service.get_latest_run(dataset=str(dataset or "historical"), status=str(status or "completed"))
-    if not isinstance(item, dict):
-        raise HTTPException(
-            status_code=404,
-            detail=f"no run found for dataset='{dataset}' status='{status}'",
-        )
-    return _normalize_timestamp_fields(item)
-
-
-@app.get("/api/strategy/evaluation/runs/{run_id}")
-async def get_strategy_evaluation_run(run_id: str):
-    service = _require_strategy_eval_service()
-    item = service.get_run(run_id=str(run_id))
-    if not isinstance(item, dict):
-        raise HTTPException(status_code=404, detail=f"run '{run_id}' not found")
-    return _normalize_timestamp_fields(item)
-
-
-@app.post("/api/trading/backtest/run")
-async def run_trading_backtest(request: Request):
-    """Run one-date backtest using selected model artifacts (auto source: local archive or Mongo)."""
-    legacy_trading_runtime = _legacy_trading_runtime_status()
-    if not bool(legacy_trading_runtime.get("enabled")):
-        raise HTTPException(status_code=503, detail=str(legacy_trading_runtime.get("detail") or "legacy trading runtime unavailable"))
-    payload: Dict[str, Any] = {}
-    try:
-        body = await request.json()
-        if isinstance(body, dict):
-            payload = body
-    except Exception:
-        payload = {}
-
-    backtest_date = str(payload.get("date") or "").strip()
-    if not backtest_date:
-        raise HTTPException(status_code=400, detail="date is required (YYYY-MM-DD)")
-    try:
-        datetime.strptime(backtest_date, "%Y-%m-%d")
-    except Exception:
-        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
-
-    instrument = str(payload.get("instrument") or "").strip().upper()
-    if not instrument:
-        raise HTTPException(status_code=400, detail="instrument is required")
-
-    model_path = _resolve_repo_path(str(payload.get("model_package") or "").strip())
-    threshold_path = _resolve_repo_path(str(payload.get("threshold_report") or "").strip())
-    ce_threshold = _coerce_float(payload.get("ce_threshold"))
-    pe_threshold = _coerce_float(payload.get("pe_threshold"))
-    if not isinstance(model_path, Path) or not model_path.exists():
-        raise HTTPException(status_code=400, detail=f"model package not found: {model_path}")
-    if not isinstance(threshold_path, Path) or not threshold_path.exists():
-        raise HTTPException(status_code=400, detail=f"threshold report not found: {threshold_path}")
-    if ce_threshold is not None and (ce_threshold < 0.0 or ce_threshold > 1.0):
-        raise HTTPException(status_code=400, detail=f"ce_threshold must be within [0, 1], got {ce_threshold}")
-    if pe_threshold is not None and (pe_threshold < 0.0 or pe_threshold > 1.0):
-        raise HTTPException(status_code=400, detail=f"pe_threshold must be within [0, 1], got {pe_threshold}")
-
-    source = str(payload.get("source") or "auto").strip().lower()
-    if source not in {"auto", "local", "mongo"}:
-        raise HTTPException(status_code=400, detail="source must be one of: auto, local, mongo")
-
-    base_path = str(payload.get("base_path") or "").strip()
-    mongo_uri = str(payload.get("mongo_uri") or os.getenv("MONGODB_URI") or "mongodb://localhost:27017/").strip()
-    mongo_db = str(payload.get("mongo_db") or os.getenv("MONGO_DB") or "trading_ai").strip()
-    vix_path = str(payload.get("vix_path") or "").strip()
-    t19_path = _resolve_repo_path(str(payload.get("t19_report") or "").strip()) if payload.get("t19_report") else None
-    out_dir_rel = str(payload.get("out_dir") or ".run/dashboard_backtests").strip()
-    out_dir = Path(out_dir_rel) if Path(out_dir_rel).is_absolute() else (REPO_ROOT / out_dir_rel)
-    instance_key = _normalize_trading_instance(payload.get("instance"))
-
-    run_id = datetime.now(IST_ZONE).strftime("%Y%m%d_%H%M%S")
-    safe_instrument = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in instrument)
-    run_tag = str(payload.get("tag") or f"{backtest_date}_{safe_instrument}_{run_id}")
-
-    env = dict(os.environ)
-    current_pythonpath = str(env.get("PYTHONPATH") or "").strip()
-    if current_pythonpath:
-        env["PYTHONPATH"] = f"{ML_PIPELINE_SRC}{os.pathsep}{current_pythonpath}"
-    else:
-        env["PYTHONPATH"] = str(ML_PIPELINE_SRC)
-    auto_refresh_vix = _truthy(payload.get("auto_refresh_vix"), default=True)
-    if auto_refresh_vix:
-        env["ML_PIPELINE_AUTO_FETCH_VIX"] = "1"
-        env["ML_PIPELINE_VIX_FROM_DATE"] = str(payload.get("vix_from_date") or "2024-01-01").strip()
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "ml_pipeline.date_backtest_runner",
-        "--date",
-        backtest_date,
-        "--instrument",
-        instrument,
-        "--model-package",
-        str(model_path),
-        "--threshold-report",
-        str(threshold_path),
-        "--source",
-        source,
-        "--mongo-uri",
-        mongo_uri,
-        "--mongo-db",
-        mongo_db,
-        "--out-dir",
-        str(out_dir),
-        "--tag",
-        run_tag,
-    ]
-    if base_path:
-        cmd.extend(["--base-path", base_path])
-    if vix_path:
-        cmd.extend(["--vix-path", vix_path])
-    if isinstance(t19_path, Path):
-        cmd.extend(["--t19-report", str(t19_path)])
-    if ce_threshold is not None:
-        cmd.extend(["--ce-threshold", str(float(ce_threshold))])
-    if pe_threshold is not None:
-        cmd.extend(["--pe-threshold", str(float(pe_threshold))])
-
-    proc = subprocess.run(
-        cmd,
-        cwd=str(REPO_ROOT),
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip()
-        if len(detail) > 1800:
-            detail = detail[-1800:]
-        raise HTTPException(status_code=500, detail=f"backtest failed: {detail}")
-
-    full_report_path: Optional[Path] = None
-    for line in (proc.stdout or "").splitlines():
-        text = str(line).strip()
-        if text.startswith("FULL_REPORT="):
-            candidate = text.split("=", 1)[1].strip()
-            if candidate:
-                full_report_path = Path(candidate)
-                break
-    if full_report_path is None:
-        expected = out_dir / run_tag / "full_report.json"
-        if expected.exists():
-            full_report_path = expected
-    if full_report_path is None or not full_report_path.exists():
-        raise HTTPException(status_code=500, detail="backtest completed but full report was not found")
-
-    try:
-        result = json.loads(full_report_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"failed to parse backtest report: {exc}")
-
-    # Build a UI-ready snapshot from backtest decisions so terminal tables/charts
-    # can switch from live runner state to this run immediately.
-    ui_state: Dict[str, Any] = {}
-    try:
-        decisions_path_raw = (
-            ((result.get("artifacts") or {}).get("decisions_jsonl"))
-            if isinstance(result, dict)
-            else None
-        )
-        decisions_path = Path(str(decisions_path_raw)) if decisions_path_raw else None
-        if isinstance(decisions_path, Path) and decisions_path.exists():
-            events = _load_trading_events(decisions_path, limit=5000)
-            ui_state = _build_trading_state(events)
-            ui_state["runner"] = {
-                "instance": _normalize_trading_instance(payload.get("instance")),
-                "running": False,
-                "pid": None,
-                "started_at": None,
-                "last_exit_code": 0,
-                "config": {
-                    "instrument": instrument,
-                    "model_package": str(model_path),
-                    "threshold_report": str(threshold_path),
-                    "ce_threshold": float(ce_threshold) if ce_threshold is not None else None,
-                    "pe_threshold": float(pe_threshold) if pe_threshold is not None else None,
-                    "mode": "backtest",
-                },
-                "events_path": str(decisions_path),
-                "view_mode": "backtest",
-                "backtest_date": backtest_date,
-                "backtest_run_tag": run_tag,
-            }
-    except Exception:
-        ui_state = {}
-
-    response_payload = {
-        "status": "ok",
-        "instance": instance_key,
-        "run_tag": run_tag,
-        "report_path": str(full_report_path),
-        "result": result,
-        "ui_state": ui_state,
-    }
-    safe_payload = _json_safe_value(response_payload)
-    _save_latest_backtest_state(
-        instance_key,
-        {
-            "instance": instance_key,
-            "run_tag": run_tag,
-            "report_path": str(full_report_path),
-            "created_at": datetime.now(IST_TZ).isoformat(),
-            "ui_state": safe_payload.get("ui_state") if isinstance(safe_payload, dict) else {},
-        },
-    )
-    return safe_payload
-
-
-@app.get("/api/trading/backtest/latest")
-async def get_latest_backtest_state(instance: Optional[str] = None):
-    instance_key = _normalize_trading_instance(instance)
-    latest = _load_latest_backtest_state(instance_key)
-    if not isinstance(latest, dict):
-        return {"status": "not_found", "instance": instance_key}
-    return {"status": "ok", **latest}
-
-
-@app.get("/api/trading/state")
-async def get_trading_state(
-    limit: int = 2000,
-    instance: Optional[str] = None,
-    view: Optional[str] = None,
-):
-    """Get paper trading runner status + capital/positions/trades from JSONL output."""
-    instance_key = _normalize_trading_instance(instance)
-    with _TRADING_LOCK:
-        state = _refresh_trading_runner_state(instance_key)
-        process = state.get("process")
-        runner_pid = process.pid if process is not None else None
-        runner_running = (process is not None and process.poll() is None)
-        started_at = state.get("started_at")
-        last_exit = state.get("last_exit_code")
-        runner_cfg = dict(state.get("config") or {})
-        events_path = state.get("events_path")
-        if not isinstance(events_path, Path):
-            events_path = Path(str(events_path or DEFAULT_TRADING_EVENTS_PATH))
-
-    view_mode = str(view or "auto").strip().lower()
-    if view_mode in {"backtest", "latest_backtest"}:
-        latest = _load_latest_backtest_state(instance_key)
-        ui_state = latest.get("ui_state") if isinstance(latest, dict) else None
-        if isinstance(ui_state, dict):
-            return ui_state
-
-    events = _load_trading_events(events_path, limit=max(1, int(limit)))
-    if (not runner_running) and len(events) == 0:
-        latest = _load_latest_backtest_state(instance_key)
-        ui_state = latest.get("ui_state") if isinstance(latest, dict) else None
-        if isinstance(ui_state, dict):
-            return ui_state
-
-    payload = _build_trading_state(events)
-    payload["runner"] = {
-        "instance": instance_key,
-        "running": runner_running,
-        "pid": runner_pid,
-        "started_at": started_at,
-        "last_exit_code": last_exit,
-        "config": runner_cfg,
-        "events_path": str(events_path),
-    }
-    return payload
-
-
-@app.post("/api/trading/start")
-async def start_trading_runner(request: Request):
-    """Start paper capital runner in background."""
-    legacy_trading_runtime = _legacy_trading_runtime_status()
-    if not bool(legacy_trading_runtime.get("enabled")):
-        raise HTTPException(
-            status_code=503,
-            detail=str(
-                legacy_trading_runtime.get("detail")
-                or "Legacy paper trading runner is not part of the supported Live+Dashboard profile. Use strategy_app deterministic/ml_pure runtime instead."
-            ),
-        )
-    payload: Dict[str, Any] = {}
-    try:
-        body = await request.json()
-        if isinstance(body, dict):
-            payload = body
-    except Exception:
-        payload = {}
-    instance = _normalize_trading_instance(payload.get("instance"))
-
-    mode = str(payload.get("mode") or "dual").strip().lower()
-    if mode not in {"dual", "ce_only", "pe_only"}:
-        raise HTTPException(status_code=400, detail="mode must be one of: dual, ce_only, pe_only")
-
-    requested_instrument = str(payload.get("instrument") or "").strip().upper()
-    if requested_instrument and not _is_placeholder_instrument(requested_instrument):
-        instrument = requested_instrument
-    else:
-        runtime_instruments = await _load_runtime_instruments(max_instruments=25)
-        if DEFAULT_INSTRUMENT and not _is_placeholder_instrument(DEFAULT_INSTRUMENT):
-            runtime_instruments = [str(DEFAULT_INSTRUMENT)] + list(runtime_instruments or [])
-        instrument = str(
-            _select_most_active_instrument(runtime_instruments, preferred_mode="live") or ""
-        ).strip().upper()
-        if not instrument:
-            instrument = "BANKNIFTY-I"
-        logger.info(
-            "[trading/start] Auto-selected instrument=%s (requested=%s)",
-            instrument,
-            requested_instrument or "<empty>",
-        )
-    redis_host = str(payload.get("redis_host") or REDIS_HOST).strip()
-    redis_port = int(payload.get("redis_port") or REDIS_PORT)
-    redis_db = int(payload.get("redis_db") or 0)
-    initial_ce_capital = float(payload.get("initial_ce_capital") or 1000.0)
-    initial_pe_capital = float(payload.get("initial_pe_capital") or 1000.0)
-    fee_bps = float(payload.get("fee_bps") or 5.0)
-    max_iterations = int(payload.get("max_iterations") or 800)
-    max_hold_minutes = int(payload.get("max_hold_minutes") or 5)
-    confidence_buffer = float(payload.get("confidence_buffer") or 0.05)
-    max_idle_seconds = float(payload.get("max_idle_seconds") or 300.0)
-    stop_loss_pct = float(payload.get("stop_loss_pct") or 0.0)
-    trailing_enabled = _truthy(payload.get("trailing_enabled"), default=False)
-    trailing_activation_pct = float(payload.get("trailing_activation_pct") or 10.0)
-    trailing_offset_pct = float(payload.get("trailing_offset_pct") or 5.0)
-    trailing_lock_breakeven = _truthy(payload.get("trailing_lock_breakeven"), default=True)
-    model_exit_policy = str(payload.get("model_exit_policy") or "strict").strip().lower()
-    stagnation_enabled = _truthy(payload.get("stagnation_enabled"), default=False)
-    _stagnation_window_raw = payload.get("stagnation_window_minutes")
-    _stagnation_threshold_raw = payload.get("stagnation_threshold_pct")
-    _stagnation_vol_mult_raw = payload.get("stagnation_volatility_multiplier")
-    _stagnation_min_hold_raw = payload.get("stagnation_min_hold_minutes")
-    stagnation_window_minutes = int(10 if _stagnation_window_raw in (None, "") else _stagnation_window_raw)
-    stagnation_threshold_pct = float(0.8 if _stagnation_threshold_raw in (None, "") else _stagnation_threshold_raw)
-    stagnation_volatility_multiplier = float(2.0 if _stagnation_vol_mult_raw in (None, "") else _stagnation_vol_mult_raw)
-    stagnation_min_hold_minutes = int(0 if _stagnation_min_hold_raw in (None, "") else _stagnation_min_hold_raw)
-    stop_execution_mode = str(payload.get("stop_execution_mode") or "stop_market").strip().lower()
-    stop_limit_offset_pct = float(payload.get("stop_limit_offset_pct") or 0.2)
-    stop_limit_max_wait_events = int(payload.get("stop_limit_max_wait_events") or 3)
-    runtime_guard_max_consecutive_losses = int(payload.get("runtime_guard_max_consecutive_losses") or 0)
-    runtime_guard_max_drawdown_pct = float(payload.get("runtime_guard_max_drawdown_pct") or 0.0)
-    quality_max_entries_per_day = int(payload.get("quality_max_entries_per_day") or 0)
-    quality_entry_cutoff_hour = int(payload.get("quality_entry_cutoff_hour") or -1)
-    quality_entry_cooldown_minutes = int(payload.get("quality_entry_cooldown_minutes") or 0)
-    quality_min_side_prob = float(payload.get("quality_min_side_prob") or 0.0)
-    quality_min_prob_edge = float(payload.get("quality_min_prob_edge") or 0.0)
-    quality_skip_weekdays = str(payload.get("quality_skip_weekdays") or "")
-    option_lot_size = float(payload.get("option_lot_size") or 15.0)
-    fresh_start = _truthy(payload.get("fresh_start"), default=True)
-    restart_if_running = _truthy(payload.get("restart_if_running"), default=True)
-
-    if model_exit_policy not in {"strict", "signal_only", "stop_only", "training_parity"}:
-        raise HTTPException(
-            status_code=400,
-            detail="model_exit_policy must be one of: strict, signal_only, stop_only, training_parity",
-        )
-    if stop_execution_mode not in {"stop_market", "stop_limit"}:
-        raise HTTPException(status_code=400, detail="stop_execution_mode must be one of: stop_market, stop_limit")
-
-    default_events_path, default_stdout_path, default_stderr_path = _default_trading_paths(instance)
-    model_rel = str(
-        payload.get("model_package")
-        or "ml_pipeline/artifacts/models/by_features/core_v2/h5_ts0_lgbm_regime/model/model.joblib"
-    )
-    threshold_rel = str(
-        payload.get("threshold_report")
-        or "ml_pipeline/artifacts/models/by_features/core_v2/h5_ts0_lgbm_regime/config/profiles/openfe_v9_dual/threshold_report.json"
-    )
-    output_raw = payload.get("output_jsonl")
-    output_rel = str(output_raw).strip() if output_raw is not None else ""
-    trace_raw = payload.get("feature_trace_jsonl")
-    trace_rel = str(trace_raw).strip() if trace_raw is not None else ""
-
-    model_path = Path(model_rel) if Path(model_rel).is_absolute() else (REPO_ROOT / model_rel)
-    threshold_path = Path(threshold_rel) if Path(threshold_rel).is_absolute() else (REPO_ROOT / threshold_rel)
-    ce_threshold = _coerce_float(payload.get("ce_threshold"))
-    pe_threshold = _coerce_float(payload.get("pe_threshold"))
-    if output_rel:
-        output_path = Path(output_rel) if Path(output_rel).is_absolute() else (REPO_ROOT / output_rel)
-    else:
-        output_path = default_events_path
-    if trace_rel:
-        feature_trace_path = Path(trace_rel) if Path(trace_rel).is_absolute() else (REPO_ROOT / trace_rel)
-    else:
-        feature_trace_path = output_path.parent / f"t33_paper_feature_trace_{instance}.jsonl"
-    stdout_path = default_stdout_path
-    stderr_path = default_stderr_path
-
-    legacy_runner_note = (
-        "This page launches the archived paper runner and requires legacy "
-        "model_package + threshold_report artifacts. It does not use the "
-        "live registry-backed strategy_app deployment."
-    )
-    if not model_path.exists():
-        raise HTTPException(status_code=400, detail=f"{legacy_runner_note} Missing model package: {model_path}")
-    if not threshold_path.exists():
-        raise HTTPException(status_code=400, detail=f"{legacy_runner_note} Missing threshold report: {threshold_path}")
-    if ce_threshold is not None and (ce_threshold < 0.0 or ce_threshold > 1.0):
-        raise HTTPException(status_code=400, detail=f"ce_threshold must be within [0, 1], got {ce_threshold}")
-    if pe_threshold is not None and (pe_threshold < 0.0 or pe_threshold > 1.0):
-        raise HTTPException(status_code=400, detail=f"pe_threshold must be within [0, 1], got {pe_threshold}")
-
-    requested_identity = {
-        "instance": instance,
-        "mode": mode,
-        "instrument": instrument,
-        "redis_host": redis_host,
-        "redis_port": redis_port,
-        "redis_db": redis_db,
-        "initial_ce_capital": initial_ce_capital,
-        "initial_pe_capital": initial_pe_capital,
-        "fee_bps": fee_bps,
-        "max_iterations": max_iterations,
-        "max_hold_minutes": max_hold_minutes,
-        "confidence_buffer": confidence_buffer,
-        "max_idle_seconds": max_idle_seconds,
-        "stop_loss_pct": stop_loss_pct,
-        "trailing_enabled": trailing_enabled,
-        "trailing_activation_pct": trailing_activation_pct,
-        "trailing_offset_pct": trailing_offset_pct,
-        "trailing_lock_breakeven": trailing_lock_breakeven,
-        "model_exit_policy": model_exit_policy,
-        "stagnation_enabled": bool(stagnation_enabled),
-        "stagnation_window_minutes": max(2, int(stagnation_window_minutes)),
-        "stagnation_threshold_pct": max(0.0, float(stagnation_threshold_pct)),
-        "stagnation_volatility_multiplier": max(0.0, float(stagnation_volatility_multiplier)),
-        "stagnation_min_hold_minutes": max(0, int(stagnation_min_hold_minutes)),
-        "stop_execution_mode": stop_execution_mode,
-        "stop_limit_offset_pct": max(0.0, float(stop_limit_offset_pct)),
-        "stop_limit_max_wait_events": max(1, int(stop_limit_max_wait_events)),
-        "runtime_guard_max_consecutive_losses": max(0, int(runtime_guard_max_consecutive_losses)),
-        "runtime_guard_max_drawdown_pct": max(0.0, float(runtime_guard_max_drawdown_pct)),
-        "quality_max_entries_per_day": max(0, int(quality_max_entries_per_day)),
-        "quality_entry_cutoff_hour": int(quality_entry_cutoff_hour),
-        "quality_entry_cooldown_minutes": max(0, int(quality_entry_cooldown_minutes)),
-        "quality_min_side_prob": min(1.0, max(0.0, float(quality_min_side_prob))),
-        "quality_min_prob_edge": min(1.0, max(0.0, float(quality_min_prob_edge))),
-        "quality_skip_weekdays": quality_skip_weekdays,
-        "option_lot_size": max(1.0, float(option_lot_size)),
-        "model_package": str(model_path),
-        "threshold_report": str(threshold_path),
-        "ce_threshold": (float(ce_threshold) if ce_threshold is not None else None),
-        "pe_threshold": (float(pe_threshold) if pe_threshold is not None else None),
-        "output_jsonl": str(output_path),
-        "feature_trace_jsonl": str(feature_trace_path),
-    }
-
-    with _TRADING_LOCK:
-        state = _refresh_trading_runner_state(instance)
-        current_process = state.get("process")
-        restart_meta: Optional[Dict[str, Any]] = None
-        if current_process is not None and current_process.poll() is None:
-            current_cfg = dict(state.get("config") or {})
-            changed_keys = sorted([k for k, v in requested_identity.items() if current_cfg.get(k) != v])
-            if not restart_if_running and len(changed_keys) == 0:
-                return {
-                    "status": "already_running",
-                    "instance": instance,
-                    "pid": current_process.pid,
-                    "events_path": str(state.get("events_path") or output_path),
-                    "config": dict(state.get("config") or {}),
-                }
-            if restart_if_running or len(changed_keys) > 0:
-                restart_meta = _stop_trading_process_locked(
-                    state,
-                    reason="restart_with_new_config" if len(changed_keys) > 0 else "restart_requested",
-                )
-                restart_meta["changed_keys"] = changed_keys
-                current_process = None
-                state = _refresh_trading_runner_state(instance)
-
-        if current_process is not None and current_process.poll() is None:
-            return {
-                "status": "already_running",
-                "instance": instance,
-                "pid": current_process.pid,
-                "events_path": str(state.get("events_path") or output_path),
-                "config": dict(state.get("config") or {}),
-            }
-
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        feature_trace_path.parent.mkdir(parents=True, exist_ok=True)
-        stdout_path.parent.mkdir(parents=True, exist_ok=True)
-        stderr_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if fresh_start:
-            try:
-                if output_path.exists():
-                    output_path.unlink()
-            except Exception:
-                pass
-            try:
-                if stdout_path.exists():
-                    stdout_path.unlink()
-            except Exception:
-                pass
-            try:
-                if stderr_path.exists():
-                    stderr_path.unlink()
-            except Exception:
-                pass
-            try:
-                if feature_trace_path.exists():
-                    feature_trace_path.unlink()
-            except Exception:
-                pass
-
-        env = dict(os.environ)
-        current_pythonpath = str(env.get("PYTHONPATH") or "").strip()
-        if current_pythonpath:
-            env["PYTHONPATH"] = f"{ML_PIPELINE_SRC}{os.pathsep}{current_pythonpath}"
-        else:
-            env["PYTHONPATH"] = str(ML_PIPELINE_SRC)
-        auto_refresh_vix = _truthy(payload.get("auto_refresh_vix"), default=True)
-        if auto_refresh_vix:
-            env["ML_PIPELINE_AUTO_FETCH_VIX"] = "1"
-            env["ML_PIPELINE_VIX_FROM_DATE"] = str(payload.get("vix_from_date") or "2024-01-01").strip()
-
-        cmd = [
-            sys.executable,
-            "-m",
-            "ml_pipeline.paper_capital_runner",
-            "--mode",
-            mode,
-            "--instrument",
-            instrument,
-            "--model-package",
-            str(model_path),
-            "--threshold-report",
-            str(threshold_path),
-            "--redis-host",
-            redis_host,
-            "--redis-port",
-            str(redis_port),
-            "--redis-db",
-            str(redis_db),
-            "--initial-ce-capital",
-            str(initial_ce_capital),
-            "--initial-pe-capital",
-            str(initial_pe_capital),
-            "--fee-bps",
-            str(fee_bps),
-            "--max-iterations",
-            str(max_iterations),
-            "--max-hold-minutes",
-            str(max_hold_minutes),
-            "--confidence-buffer",
-            str(confidence_buffer),
-            "--max-idle-seconds",
-            str(max_idle_seconds),
-            "--stop-loss-pct",
-            str(max(0.0, float(stop_loss_pct))),
-            "--trailing-activation-pct",
-            str(max(0.0, float(trailing_activation_pct))),
-            "--trailing-offset-pct",
-            str(max(0.0, float(trailing_offset_pct))),
-            "--model-exit-policy",
-            model_exit_policy,
-            "--stagnation-window-minutes",
-            str(max(2, int(stagnation_window_minutes))),
-            "--stagnation-threshold-pct",
-            str(max(0.0, float(stagnation_threshold_pct))),
-            "--stagnation-volatility-multiplier",
-            str(max(0.0, float(stagnation_volatility_multiplier))),
-            "--stagnation-min-hold-minutes",
-            str(max(0, int(stagnation_min_hold_minutes))),
-            "--stop-execution-mode",
-            stop_execution_mode,
-            "--stop-limit-offset-pct",
-            str(max(0.0, float(stop_limit_offset_pct))),
-            "--stop-limit-max-wait-events",
-            str(max(1, int(stop_limit_max_wait_events))),
-            "--runtime-guard-max-consecutive-losses",
-            str(max(0, int(runtime_guard_max_consecutive_losses))),
-            "--runtime-guard-max-drawdown-pct",
-            str(max(0.0, float(runtime_guard_max_drawdown_pct))),
-            "--quality-max-entries-per-day",
-            str(max(0, int(quality_max_entries_per_day))),
-            "--quality-entry-cutoff-hour",
-            str(int(quality_entry_cutoff_hour)),
-            "--quality-entry-cooldown-minutes",
-            str(max(0, int(quality_entry_cooldown_minutes))),
-            "--quality-min-side-prob",
-            str(min(1.0, max(0.0, float(quality_min_side_prob)))),
-            "--quality-min-prob-edge",
-            str(min(1.0, max(0.0, float(quality_min_prob_edge)))),
-            "--quality-skip-weekdays",
-            quality_skip_weekdays,
-            "--option-lot-size",
-            str(max(1.0, float(option_lot_size))),
-            "--output-jsonl",
-            str(output_path),
-            "--feature-trace-jsonl",
-            str(feature_trace_path),
-        ]
-        if ce_threshold is not None:
-            cmd.extend(["--ce-threshold", str(float(ce_threshold))])
-        if pe_threshold is not None:
-            cmd.extend(["--pe-threshold", str(float(pe_threshold))])
-        if bool(trailing_enabled):
-            cmd.append("--trailing-enabled")
-        if not bool(trailing_lock_breakeven):
-            cmd.append("--no-trailing-lock-breakeven")
-        if bool(stagnation_enabled):
-            cmd.append("--stagnation-enabled")
-
-        _close_trading_log_handles(state)
-        state["stdout_handle"] = open(stdout_path, "a", encoding="utf-8")
-        state["stderr_handle"] = open(stderr_path, "a", encoding="utf-8")
-        process = subprocess.Popen(
-            cmd,
-            cwd=str(REPO_ROOT),
-            env=env,
-            stdout=state["stdout_handle"],
-            stderr=state["stderr_handle"],
-        )
-
-        state["process"] = process
-        state["started_at"] = datetime.now(IST_TZ).isoformat()
-        state["last_exit_code"] = None
-        state["events_path"] = output_path
-        state["stdout_path"] = stdout_path
-        state["stderr_path"] = stderr_path
-        state["config"] = dict(requested_identity)
-
-        response_payload: Dict[str, Any] = {
-            "status": "restarted" if restart_meta else "started",
-            "instance": instance,
-            "pid": process.pid,
-            "started_at": state.get("started_at"),
-            "events_path": str(output_path),
-            "config": dict(state.get("config") or {}),
-        }
-        if restart_meta:
-            response_payload["restart"] = restart_meta
-        return response_payload
-
-
-@app.post("/api/trading/stop")
-async def stop_trading_runner(instance: Optional[str] = None):
-    """Stop background paper capital runner."""
-    instance_key = _normalize_trading_instance(instance)
-    with _TRADING_LOCK:
-        state = _refresh_trading_runner_state(instance_key)
-        if state.get("process") is None:
-            return {
-                "status": "not_running",
-                "instance": instance_key,
-                "last_exit_code": state.get("last_exit_code"),
-            }
-        stop_meta = _stop_trading_process_locked(state, reason="manual_stop")
-        return {
-            "status": "stopped",
-            "instance": instance_key,
-            "last_exit_code": stop_meta.get("last_exit_code"),
-        }
-
-
-@app.get("/test", response_class=HTMLResponse)
-async def test_page():
-    """Test page for debugging"""
-    test_page_path = Path(__file__).parent / "test_page.html"
-    return HTMLResponse(test_page_path.read_text())
-
-@app.get("/test/redis")
-async def test_redis():
-    """Test Redis connection"""
-    try:
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
-        r.ping()
-        instrument_pattern = DEFAULT_INSTRUMENT or "*"
-        keys = r.keys(f"*{instrument_pattern}*")
-        return {
-            "connected": True,
-            "host": REDIS_HOST,
-            "port": REDIS_PORT,
-            "total_keys": len(keys),
-            "sample_keys": keys[:10] if keys else []
-        }
-    except Exception as e:
-        return {"connected": False, "error": str(e)}
-
-@app.get("/test/ltp/{instrument}")
-async def test_ltp(instrument: str):
-    """Test LTP direct from Redis"""
-    try:
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
-        ltp_raw = r.get(f"ltp:{instrument}")
-        if ltp_raw:
-            import json
-            return json.loads(ltp_raw)
-        return {"error": "No LTP data found"}
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.get("/test/ohlc/{instrument}")
-async def test_ohlc(instrument: str):
-    """Test OHLC direct from Redis"""
-    try:
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
-        import json
-        
-        # Try different keys
-        keys_to_try = [
-            f"live:ohlc_sorted:{instrument}:5min",
-            f"ohlc_sorted:{instrument}:5min",
-            f"live:ohlc_sorted:{instrument}:5m",
-        ]
-        
-        for key in keys_to_try:
-            entries = r.zrange(key, -5, -1)  # Last 5 bars
-            if entries:
-                bars = [json.loads(e) for e in entries]
-                return {"key": key, "count": len(bars), "bars": bars}
-        
-        return {"error": "No OHLC data found", "tried_keys": keys_to_try}
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.get("/api/health")
-async def health():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "service": "market-data-dashboard",
-        "timestamp": _now_iso_ist()
-    }
-
-@app.get("/api/market-data/health")
-async def market_data_health():
-    """Get market data API health"""
-    try:
-        response = requests.get(f"{MARKET_DATA_API_URL}/health", timeout=5)
-        return _normalize_timestamp_fields(response.json())
-    except Exception as e:
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": _now_iso_ist()
-        }
-
-@app.get("/api/v1/system/mode")
-async def get_system_mode():
-    """Proxy system mode request to market data API"""
-    try:
-        response = requests.get(f"{MARKET_DATA_API_URL}/api/v1/system/mode", timeout=5)
-        if response.status_code == 200:
-            return _normalize_timestamp_fields(response.json())
-        else:
-            return {
-                "mode": "unknown",
-                "error": f"API returned status {response.status_code}",
-                "timestamp": _now_iso_ist()
-            }
-    except Exception as e:
-        return {
-            "mode": "unknown",
-            "error": str(e),
-            "timestamp": _now_iso_ist()
-        }
+def _require_debug_routes_enabled() -> None:
+    if not _truthy(os.getenv(_DEBUG_ROUTES_ENV), default=False):
+        raise HTTPException(status_code=404, detail="Not found")
 
 
 def _canonical_contract_timeframe(value: Optional[str]) -> str:
@@ -5741,150 +4766,6 @@ async def _build_runtime_catalog(instrument: Optional[str] = None) -> Dict[str, 
     return _normalize_timestamp_fields(catalog)
 
 
-@app.get("/api/schema")
-async def get_public_schema_index():
-    """Versioned schema index for external consumers."""
-    now_iso = _now_iso_ist()
-    schemas = _public_topic_schemas()
-    topics = [
-        {
-            "topic": topic,
-            "version": PUBLIC_SCHEMA_VERSION,
-            "schema_url": f"/api/schema/{topic}",
-            "example_url": f"/api/examples/{topic}",
-        }
-        for topic in PUBLIC_TOPICS
-        if topic in schemas
-    ]
-    return _normalize_timestamp_fields(
-        {
-            "status": "ok",
-            "schema_version": PUBLIC_SCHEMA_VERSION,
-            "timestamp": now_iso,
-            "topics": topics,
-        }
-    )
-
-
-@app.get("/api/schema/{topic}")
-async def get_public_topic_schema(topic: str):
-    """Return JSON Schema for a single topic."""
-    topic_key = str(topic or "").strip().lower()
-    schemas = _public_topic_schemas()
-    if topic_key not in schemas:
-        raise HTTPException(status_code=404, detail=f"Unknown topic '{topic_key}'. Supported: {', '.join(PUBLIC_TOPICS)}")
-    return _normalize_timestamp_fields(
-        {
-            "status": "ok",
-            "topic": topic_key,
-            "schema_version": PUBLIC_SCHEMA_VERSION,
-            "timestamp": _now_iso_ist(),
-            "schema": schemas[topic_key],
-        }
-    )
-
-
-@app.get("/api/capabilities")
-async def get_public_capabilities(instrument: str = None):
-    """Dynamic runtime capabilities for current mode/instrument set."""
-    catalog = await _build_runtime_catalog(instrument=instrument)
-    selected_instrument = catalog.get("instrument")
-    return _normalize_timestamp_fields(
-        {
-            "status": catalog.get("status", "ok"),
-            "schema_version": PUBLIC_SCHEMA_VERSION,
-            "timestamp": _now_iso_ist(),
-            "mode": catalog.get("mode"),
-            "instruments": catalog.get("instruments", []),
-            "default_instrument": selected_instrument,
-            "timeframes": list(PUBLIC_TIMEFRAMES),
-            "topics": list(PUBLIC_TOPICS),
-            "availability": catalog.get("availability", {}),
-            "apis": catalog.get("apis", {}),
-            "ws_topics": catalog.get("ws_topics", {}),
-            "schema_index": "/api/schema",
-        }
-    )
-
-
-@app.get("/api/catalog")
-async def get_public_catalog(instrument: str = None):
-    """Dynamic key/API catalog resolved at runtime for one instrument."""
-    return await _build_runtime_catalog(instrument=instrument)
-
-
-@app.get("/api/examples/{topic}")
-async def get_public_topic_example(topic: str, instrument: str = None, timeframe: str = "1m"):
-    """Return a current runtime sample payload for a topic."""
-    topic_key = str(topic or "").strip().lower()
-    if topic_key not in PUBLIC_TOPICS:
-        raise HTTPException(status_code=404, detail=f"Unknown topic '{topic_key}'. Supported: {', '.join(PUBLIC_TOPICS)}")
-
-    instruments = await _load_runtime_instruments(max_instruments=20)
-    selected_instrument = str(instrument or "").strip() or (instruments[0] if instruments else DEFAULT_INSTRUMENT)
-    tf = _canonical_contract_timeframe(timeframe)
-    tf_for_endpoint = tf if tf != "1m" else "1min"
-
-    sample: Any = None
-    if topic_key != "mode" and not selected_instrument:
-        sample = {"status": "no_data", "message": "No instrument available"}
-    elif topic_key == "mode":
-        sample = await get_system_mode()
-    elif topic_key == "tick":
-        try:
-            resp = requests.get(
-                f"{MARKET_DATA_API_URL}/api/v1/market/tick/{selected_instrument}",
-                timeout=3,
-            )
-            if resp.status_code == 200:
-                sample = _normalize_timestamp_fields(resp.json())
-            else:
-                sample = {"status": "no_data", "error": f"Upstream tick API returned {resp.status_code}"}
-        except Exception as e:
-            sample = {"status": "error", "error": str(e)}
-    elif topic_key == "ohlc":
-        sample = await get_ohlc_data(
-            instrument=selected_instrument,
-            timeframe=tf_for_endpoint,
-            limit=3,
-            order="desc",
-        )
-    elif topic_key == "indicators":
-        sample = await get_technical_indicators(
-            instrument=selected_instrument,
-            timeframe=tf_for_endpoint,
-        )
-    elif topic_key == "depth":
-        sample = await get_market_depth(selected_instrument)
-    elif topic_key == "options":
-        sample = await get_options_chain(selected_instrument)
-    elif topic_key == "strategy_eval":
-        sample = {
-            "event_type": "run_progress",
-            "run_id": "example-run-id",
-            "timestamp": _now_iso_ist(),
-            "progress_pct": 42.5,
-            "current_day": "2024-01-15",
-            "total_days": 20,
-            "message": "Replay in progress",
-            "error": None,
-        }
-
-    return _normalize_timestamp_fields(
-        {
-            "status": "ok",
-            "topic": topic_key,
-            "schema_version": PUBLIC_SCHEMA_VERSION,
-            "timestamp": _now_iso_ist(),
-            "mode": _get_current_mode_hint(timeout_seconds=1.0) or "unknown",
-            "instrument": selected_instrument,
-            "timeframe": tf,
-            "sample": sample,
-        }
-    )
-
-
-@app.get("/api/market-data/sync-lag")
 async def get_redis_mongo_sync_lag(instrument: str = ""):
     """Report Redis vs Mongo lag for live read-model domains."""
     selected_instrument = _normalize_instrument_symbol(instrument) or DEFAULT_INSTRUMENT
@@ -6099,7 +4980,6 @@ async def get_redis_mongo_sync_lag(instrument: str = ""):
     )
 
 
-@app.get("/api/market-data/status")
 async def market_data_status():
     """Get comprehensive market data status"""
     status = {
@@ -6270,6 +5150,7 @@ async def market_data_status():
 
     # Data validation checks
     status["data_validation"] = validate_data_availability(status)
+    status["status"] = str(status["data_validation"].get("overall_status") or "unknown")
 
     return _normalize_timestamp_fields(status)
 
@@ -6311,7 +5192,6 @@ def validate_data_availability(status: Dict[str, Any]) -> Dict[str, Any]:
 
     return validation
 
-@app.get("/api/market-data/ohlc/{instrument}")
 async def get_ohlc_data(
     instrument: str,
     timeframe: str = "1min",
@@ -6400,7 +5280,6 @@ async def get_ohlc_data(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/market-data/charts/{instrument}")
 async def get_chart_data(
     instrument: str,
     timeframe: str = "1min",
@@ -6447,7 +5326,6 @@ async def get_chart_data(
         logger.exception("Unexpected error building chart data for %s %s", instrument, timeframe)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/market-data/indicators/{instrument}")
 async def get_technical_indicators(instrument: str, timeframe: str = "1min"):
     """Get technical indicators from persisted snapshot source (Mongo)."""
     tf_canonical = _canonical_indicator_timeframe(timeframe)
@@ -6551,7 +5429,6 @@ async def get_technical_indicators(instrument: str, timeframe: str = "1min"):
             "timestamp": _now_iso_ist(),
         }
 
-@app.get("/api/market-data/instruments")
 async def get_available_instruments():
     """Get list of available instruments"""
     try:
@@ -6568,15 +5445,19 @@ async def get_available_instruments():
                     "timestamp": _now_iso_ist(),
                 }
             )
-        else:
-            # fallback to Redis discovery
-            discovered = await asyncio.to_thread(_discover_instruments_from_redis, 50)
-            return {"instruments": discovered or ([DEFAULT_INSTRUMENT] if DEFAULT_INSTRUMENT else [])}
-    except Exception as e:
+        # fallback to Redis discovery
         discovered = await asyncio.to_thread(_discover_instruments_from_redis, 50)
-        return {"instruments": discovered or ([DEFAULT_INSTRUMENT] if DEFAULT_INSTRUMENT else [])}
+    except Exception:
+        discovered = await asyncio.to_thread(_discover_instruments_from_redis, 50)
+    instruments = discovered or ([DEFAULT_INSTRUMENT] if DEFAULT_INSTRUMENT else [])
+    return _normalize_timestamp_fields(
+        {
+            "instruments": instruments,
+            "count": len(instruments),
+            "timestamp": _now_iso_ist(),
+        }
+    )
 
-@app.get("/api/market-data/depth/{instrument}")
 async def get_market_depth(instrument: str):
     """Get market depth (order book) for an instrument"""
     cache_key = instrument
@@ -6675,7 +5556,6 @@ async def get_market_depth(instrument: str):
             "status": "error"
         }, mode_hint=mode_hint, default_status="error")
 
-@app.get("/api/market-data/options/{instrument}")
 async def get_options_chain(instrument: str, expiry: str = None):
     """Get options chain for an instrument"""
     cache_key = f"{instrument}:{expiry or 'default'}"
@@ -6877,109 +5757,39 @@ async def get_options_chain(instrument: str, expiry: str = None):
         }, expiry=expiry, mode_hint=mode_hint, default_status="error")
 
 
+_market_data_routes = DashboardMarketDataRouter(
+    get_redis_mongo_sync_lag_fn=get_redis_mongo_sync_lag,
+    market_data_status_fn=market_data_status,
+    validate_data_availability_fn=validate_data_availability,
+    get_ohlc_data_fn=get_ohlc_data,
+    get_chart_data_fn=get_chart_data,
+    get_technical_indicators_fn=get_technical_indicators,
+    get_available_instruments_fn=get_available_instruments,
+    get_market_depth_fn=get_market_depth,
+    get_options_chain_fn=get_options_chain,
+)
+app.include_router(_market_data_routes.router)
+_public_contract_routes.bind_market_data_handlers(
+    get_ohlc_data=_market_data_routes.get_ohlc_data,
+    get_technical_indicators=_market_data_routes.get_technical_indicators,
+    get_market_depth=_market_data_routes.get_market_depth,
+    get_options_chain=_market_data_routes.get_options_chain,
+)
+
+get_redis_mongo_sync_lag = _market_data_routes.get_redis_mongo_sync_lag
+market_data_status = _market_data_routes.market_data_status
+validate_data_availability = _market_data_routes.validate_data_availability
+get_ohlc_data = _market_data_routes.get_ohlc_data
+get_chart_data = _market_data_routes.get_chart_data
+get_technical_indicators = _market_data_routes.get_technical_indicators
+get_available_instruments = _market_data_routes.get_available_instruments
+get_market_depth = _market_data_routes.get_market_depth
+get_options_chain = _market_data_routes.get_options_chain
+
+
 # ============================================================================
 # SIMPLE/FAST ENDPOINTS - Direct Redis Access (No Complex Processing)
 # ============================================================================
-
-@app.get("/simple")
-async def simple_dashboard(request: Request):
-    """Serve simple fast-loading dashboard."""
-    from pathlib import Path
-    html_path = Path(__file__).parent / "simple.html"
-    with open(html_path, 'r') as f:
-        content = f.read()
-    return HTMLResponse(content=content)
-
-
-@app.get("/api/simple/ohlc/{instrument}")
-def simple_ohlc(instrument: str):
-    """Get OHLC data directly from Redis - tries multiple key patterns."""
-    try:
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
-        
-        # Try multiple key patterns (live:, historical:, paper:, unprefixed)
-        patterns = [
-            f"live:ohlc_sorted:{instrument}:1m",
-            f"ohlc_sorted:{instrument}:1m",
-            f"historical:ohlc_sorted:{instrument}:1m",
-            f"paper:ohlc_sorted:{instrument}:1m",
-        ]
-        
-        for key in patterns:
-            try:
-                results = r.zrange(key, -50, -1)  # Last 50 bars
-                if results:
-                    bars = []
-                    for json_data in results:
-                        try:
-                            bar = json.loads(json_data)
-                            bars.append(bar)
-                        except:
-                            continue
-                    if bars:
-                        return JSONResponse(content=bars)
-            except Exception as e:
-                logger.warning(f"Failed to read {key}: {e}")
-                continue
-        
-        # No data found
-        return JSONResponse(content=[])
-        
-    except Exception as e:
-        logger.error(f"Simple OHLC error: {e}")
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-@app.get("/api/simple/ltp/{instrument}")
-async def simple_ltp(instrument: str):
-    """Get LTP directly from Redis."""
-    try:
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
-        
-        # Try multiple patterns
-        patterns = [f"ltp:{instrument}", f"live:ltp:{instrument}"]
-        
-        for key in patterns:
-            try:
-                data = r.get(key)
-                if data:
-                    return JSONResponse(content=json.loads(data))
-            except:
-                continue
-        
-        return JSONResponse(content={})
-        
-    except Exception as e:
-        logger.error(f"Simple LTP error: {e}")
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-@app.get("/api/simple/redis-stats")
-async def simple_redis_stats():
-    """Get Redis connection stats."""
-    try:
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
-        
-        # Get total keys
-        total_keys = r.dbsize()
-        
-        # Count OHLC keys
-        ohlc_keys = len(list(r.scan_iter(match="*ohlc*", count=1000)))
-        
-        return JSONResponse(content={
-            "connected": True,
-            "total_keys": total_keys,
-            "ohlc_keys": ohlc_keys,
-            "server": f"{REDIS_HOST}:{REDIS_PORT}"
-        })
-        
-    except Exception as e:
-        logger.error(f"Redis stats error: {e}")
-        return JSONResponse(content={
-            "connected": False,
-            "error": str(e)
-        }, status_code=500)
-
 
 if __name__ == "__main__":
     import uvicorn

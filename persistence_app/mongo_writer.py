@@ -120,6 +120,37 @@ def _actual_outcome_from_position(position: dict[str, Any]) -> Optional[str]:
     return "unknown" if exit_reason or pnl_pct is not None else None
 
 
+def _identity_candidate(**values: Any) -> Optional[dict[str, Any]]:
+    candidate: dict[str, Any] = {}
+    for key, value in values.items():
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = str(value).strip()
+            if not text:
+                return None
+            candidate[str(key)] = text
+            continue
+        candidate[str(key)] = value
+    return candidate or None
+
+
+def _upsert_doc(collection: Any, *, identity: Optional[dict[str, Any]], doc: dict[str, Any]) -> None:
+    payload = dict(doc)
+    if not identity or not hasattr(collection, "update_one"):
+        collection.insert_one(payload)
+        return
+    collection.update_one(dict(identity), {"$setOnInsert": payload}, upsert=True)
+
+
+def _partial_non_empty_strings(*fields: str) -> dict[str, Any]:
+    return {
+        str(field): {"$type": "string", "$ne": ""}
+        for field in fields
+        if str(field).strip()
+    }
+
+
 class SnapshotMongoWriter:
     def __init__(self) -> None:
         self.collection_name = str(os.getenv("MONGO_COLL_SNAPSHOTS") or "phase1_market_snapshots")
@@ -155,6 +186,16 @@ class SnapshotMongoWriter:
         if self._db is None or self._indexes_ready:
             return
         coll = self._db[self.collection_name]
+        coll.create_index(
+            [("snapshot_id", ASCENDING)],
+            unique=True,
+            partialFilterExpression=_partial_non_empty_strings("snapshot_id"),
+        )
+        coll.create_index(
+            [("event_id", ASCENDING)],
+            unique=True,
+            partialFilterExpression=_partial_non_empty_strings("event_id"),
+        )
         coll.create_index([("snapshot_id", ASCENDING), ("timestamp", ASCENDING)])
         coll.create_index([("instrument", ASCENDING), ("trade_date_ist", ASCENDING), ("timestamp", ASCENDING)])
         ttl_days = int(os.getenv("MONGO_PERSIST_TTL_DAYS") or "0")
@@ -189,7 +230,8 @@ class SnapshotMongoWriter:
             "received_at_ttl": datetime.now(tz=IST),
             "payload": event,
         }
-        db[self.collection_name].insert_one(doc)
+        identity = _identity_candidate(snapshot_id=doc["snapshot_id"]) or _identity_candidate(event_id=doc["event_id"])
+        _upsert_doc(db[self.collection_name], identity=identity, doc=doc)
         return True
 
 
@@ -233,15 +275,43 @@ class StrategyMongoWriter:
         signal_coll = self._db[self.signal_collection_name]
         position_coll = self._db[self.position_collection_name]
 
+        vote_coll.create_index(
+            [("snapshot_id", ASCENDING), ("strategy", ASCENDING), ("trade_date_ist", ASCENDING)],
+            unique=True,
+            partialFilterExpression=_partial_non_empty_strings("snapshot_id", "strategy", "trade_date_ist"),
+        )
+        vote_coll.create_index(
+            [("event_id", ASCENDING)],
+            unique=True,
+            partialFilterExpression=_partial_non_empty_strings("event_id"),
+        )
         vote_coll.create_index([("strategy", ASCENDING), ("trade_date_ist", ASCENDING), ("timestamp", ASCENDING)])
         vote_coll.create_index([("snapshot_id", ASCENDING), ("strategy", ASCENDING)])
         vote_coll.create_index([("run_id", ASCENDING), ("trade_date_ist", ASCENDING), ("timestamp", ASCENDING)])
         vote_coll.create_index([("trade_date_ist", ASCENDING), ("engine_mode", ASCENDING), ("timestamp", ASCENDING)])
-        signal_coll.create_index([("signal_id", ASCENDING)], unique=True)
+        signal_coll.create_index(
+            [("signal_id", ASCENDING)],
+            unique=True,
+            partialFilterExpression=_partial_non_empty_strings("signal_id"),
+        )
+        signal_coll.create_index(
+            [("event_id", ASCENDING)],
+            unique=True,
+            partialFilterExpression=_partial_non_empty_strings("event_id"),
+        )
         signal_coll.create_index([("trade_date_ist", ASCENDING), ("signal_type", ASCENDING), ("timestamp", ASCENDING)])
         signal_coll.create_index([("run_id", ASCENDING), ("trade_date_ist", ASCENDING), ("timestamp", ASCENDING)])
         signal_coll.create_index([("trade_date_ist", ASCENDING), ("engine_mode", ASCENDING), ("timestamp", ASCENDING)])
-        position_coll.create_index([("position_id", ASCENDING), ("event", ASCENDING), ("timestamp", ASCENDING)])
+        position_coll.create_index(
+            [("position_id", ASCENDING), ("event", ASCENDING), ("timestamp", ASCENDING)],
+            unique=True,
+            partialFilterExpression=_partial_non_empty_strings("position_id", "event", "timestamp"),
+        )
+        position_coll.create_index(
+            [("event_id", ASCENDING)],
+            unique=True,
+            partialFilterExpression=_partial_non_empty_strings("event_id"),
+        )
         position_coll.create_index([("trade_date_ist", ASCENDING), ("timestamp", ASCENDING)])
         position_coll.create_index([("run_id", ASCENDING), ("trade_date_ist", ASCENDING), ("timestamp", ASCENDING)])
 
@@ -300,7 +370,15 @@ class StrategyMongoWriter:
             "strategy_profile_id": _optional_text(vote.get("strategy_profile_id")),
             "payload": event,
         }
-        db[self.vote_collection_name].insert_one(doc)
+        identity = (
+            _identity_candidate(
+                snapshot_id=doc["snapshot_id"],
+                strategy=doc["strategy"],
+                trade_date_ist=doc["trade_date_ist"],
+            )
+            or _identity_candidate(event_id=doc["event_id"])
+        )
+        _upsert_doc(db[self.vote_collection_name], identity=identity, doc=doc)
         return True
 
     def write_trade_signal_event(self, payload: dict[str, Any]) -> bool:
@@ -344,7 +422,8 @@ class StrategyMongoWriter:
             "strategy_profile_id": _optional_text(signal.get("strategy_profile_id")),
             "payload": event,
         }
-        db[self.signal_collection_name].insert_one(doc)
+        identity = _identity_candidate(signal_id=doc["signal_id"]) or _identity_candidate(event_id=doc["event_id"])
+        _upsert_doc(db[self.signal_collection_name], identity=identity, doc=doc)
         return True
 
     def write_strategy_position_event(self, payload: dict[str, Any]) -> bool:
@@ -389,5 +468,13 @@ class StrategyMongoWriter:
             "strategy_profile_id": _optional_text(position.get("strategy_profile_id")),
             "payload": event,
         }
-        db[self.position_collection_name].insert_one(doc)
+        identity = (
+            _identity_candidate(
+                position_id=doc["position_id"],
+                event=doc["event"],
+                timestamp=doc["timestamp"],
+            )
+            or _identity_candidate(event_id=doc["event_id"])
+        )
+        _upsert_doc(db[self.position_collection_name], identity=identity, doc=doc)
         return True

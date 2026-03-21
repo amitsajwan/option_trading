@@ -6,33 +6,51 @@
     <title>Live Strategy Monitor</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
     <style>
+        @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap");
+
         :root {
-            --bg: #f3f6f9;
-            --card: #ffffff;
-            --ink: #10212d;
-            --muted: #64748b;
-            --line: #dbe4eb;
+            --bg: #f5efe4;
+            --card: rgba(255, 253, 248, 0.88);
+            --card-strong: #fffdf8;
+            --ink: #13202c;
+            --muted: #637381;
+            --line: rgba(19, 32, 44, 0.12);
             --accent: #0f766e;
-            --accent-2: #0f4c81;
-            --good: #0f9d58;
-            --bad: #c2410c;
+            --accent-2: #145c8b;
+            --good: #127356;
+            --bad: #b42318;
             --warn: #b7791f;
-            --shadow: 0 12px 28px rgba(16, 33, 45, 0.08);
+            --shadow: 0 18px 34px rgba(19, 32, 44, 0.1);
         }
 
         * { box-sizing: border-box; }
         body {
             margin: 0;
-            font-family: "Segoe UI", system-ui, sans-serif;
+            font-family: "Manrope", "Segoe UI", sans-serif;
             color: var(--ink);
             background:
-                radial-gradient(circle at top left, #e8f4f1 0%, rgba(232, 244, 241, 0) 30%),
-                radial-gradient(circle at bottom right, #e8eef9 0%, rgba(232, 238, 249, 0) 32%),
+                radial-gradient(circle at top left, rgba(15, 118, 110, 0.18) 0%, rgba(15, 118, 110, 0) 28%),
+                radial-gradient(circle at top right, rgba(20, 92, 139, 0.14) 0%, rgba(20, 92, 139, 0) 30%),
+                radial-gradient(circle at bottom left, rgba(183, 121, 31, 0.12) 0%, rgba(183, 121, 31, 0) 26%),
                 var(--bg);
         }
 
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image:
+                linear-gradient(rgba(19, 32, 44, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(19, 32, 44, 0.03) 1px, transparent 1px);
+            background-size: 48px 48px;
+            opacity: 0.28;
+            mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 0.84), transparent 82%);
+        }
+
         .page {
-            width: min(1500px, calc(100vw - 24px));
+            position: relative;
+            width: min(1680px, calc(100vw - 24px));
             margin: 0 auto;
             padding: 16px 0 28px;
         }
@@ -52,17 +70,25 @@
             align-items: center;
             gap: 16px;
             margin-bottom: 14px;
+            background:
+                linear-gradient(135deg, rgba(15, 118, 110, 0.14), rgba(20, 92, 139, 0.08) 42%, rgba(255, 253, 248, 0.92)),
+                var(--card);
+            box-shadow: 0 24px 48px rgba(19, 32, 44, 0.12);
         }
 
         .header h1 {
             margin: 0;
-            font-size: 28px;
-            letter-spacing: -0.02em;
+            font-family: "Space Grotesk", "Manrope", sans-serif;
+            font-size: clamp(32px, 4vw, 50px);
+            line-height: 0.96;
+            letter-spacing: -0.04em;
         }
 
         .header p {
-            margin: 6px 0 0;
+            margin: 10px 0 0;
             color: var(--muted);
+            max-width: 900px;
+            line-height: 1.6;
         }
 
         .header-actions {
@@ -81,17 +107,55 @@
             border-radius: 999px;
             padding: 10px 14px;
             border: 1px solid var(--line);
-            background: #f8fbfd;
+            background: rgba(255, 255, 255, 0.72);
             color: var(--ink);
             text-decoration: none;
-            font-size: 13px;
-            font-weight: 600;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            font-family: "IBM Plex Mono", monospace;
         }
 
         .nav-link.primary {
-            background: linear-gradient(135deg, var(--accent-2), #16629d);
+            background: linear-gradient(135deg, var(--accent-2), #0e4568);
             border-color: transparent;
             color: #ffffff;
+            box-shadow: 0 12px 22px rgba(20, 92, 139, 0.22);
+        }
+
+        .action-btn,
+        .timeline-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            border-radius: 999px;
+            min-height: 40px;
+            padding: 10px 14px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.72);
+            color: var(--ink);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            font-family: "IBM Plex Mono", monospace;
+            cursor: pointer;
+        }
+
+        .timeline-group {
+            display: inline-flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .timeline-btn.active {
+            color: #ffffff;
+            border-color: transparent;
+            background: linear-gradient(135deg, var(--accent-2), #0e4568);
+            box-shadow: 0 12px 22px rgba(20, 92, 139, 0.22);
         }
 
         .banner {
@@ -425,11 +489,166 @@
         .down { color: var(--bad); }
         .muted { color: var(--muted); }
 
+        .command-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+            gap: 14px;
+            margin-bottom: 14px;
+        }
+
+        .rail-panel {
+            position: sticky;
+            top: 14px;
+        }
+
+        .context-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .hero-note,
+        .feed-note {
+            padding: 14px;
+            border-radius: 14px;
+            border: 1px solid #e7eef4;
+            background: rgba(255, 255, 255, 0.78);
+        }
+
+        .hero-note strong,
+        .feed-note strong {
+            display: block;
+            font-size: 15px;
+            margin-bottom: 6px;
+        }
+
+        .timeline-feed {
+            display: grid;
+            gap: 10px;
+        }
+
+        .timeline-card {
+            position: relative;
+            overflow: hidden;
+            padding: 14px;
+            border-radius: 14px;
+            border: 1px solid #e7eef4;
+            background: rgba(255, 255, 255, 0.84);
+            cursor: pointer;
+            transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+        }
+
+        .timeline-card::before,
+        .alert-item::before {
+            content: "";
+            position: absolute;
+            inset: 0 auto 0 0;
+            width: 4px;
+            background: #dbe4eb;
+        }
+
+        .timeline-card.ok::before { background: var(--good); }
+        .timeline-card.warn::before { background: var(--warn); }
+        .timeline-card.critical::before { background: var(--bad); }
+        .alert-item.critical::before { background: var(--bad); }
+        .alert-item.warning::before { background: var(--warn); }
+        .alert-item.info::before { background: var(--accent-2); }
+
+        .timeline-card:hover {
+            transform: translateY(-1px);
+            border-color: rgba(20, 92, 139, 0.22);
+            box-shadow: 0 12px 24px rgba(19, 32, 44, 0.08);
+        }
+
+        .timeline-card.selected {
+            border-color: rgba(20, 92, 139, 0.28);
+            box-shadow: 0 18px 32px rgba(20, 92, 139, 0.16);
+            background: rgba(238, 247, 255, 0.88);
+        }
+
+        .timeline-card.changed {
+            animation: fadePulse 1.2s ease;
+        }
+
+        .timeline-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+
+        .metric-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .metric-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(19, 32, 44, 0.05);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            font-family: "IBM Plex Mono", monospace;
+        }
+
+        .funnel-grid,
+        .playbook-list,
+        .roster-list,
+        .stale-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .funnel-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .funnel-card,
+        .playbook-item,
+        .roster-item,
+        .stale-item {
+            padding: 13px;
+            border-radius: 14px;
+            border: 1px solid #e7eef4;
+            background: rgba(255, 255, 255, 0.82);
+        }
+
+        .funnel-card strong {
+            display: block;
+            margin-top: 8px;
+            font-family: "Space Grotesk", "Manrope", sans-serif;
+            font-size: 26px;
+            letter-spacing: -0.04em;
+        }
+
+        .inline-stat {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border-radius: 999px;
+            padding: 5px 9px;
+            background: rgba(19, 32, 44, 0.05);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            font-family: "IBM Plex Mono", monospace;
+        }
+
         @media (max-width: 1280px) {
             .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .layout { grid-template-columns: 1fr; }
             .tables, .diag { grid-template-columns: 1fr; }
             .now-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .command-grid { grid-template-columns: 1fr; }
+            .rail-panel { position: static; }
         }
 
         @media (max-width: 760px) {
@@ -441,6 +660,7 @@
             .chart-wrap { height: 340px; }
             .now-grid { grid-template-columns: 1fr; }
             .view-toggle { flex-direction: column; align-items: stretch; }
+            .funnel-grid { grid-template-columns: 1fr; }
             .now-bar {
                 position: sticky;
                 top: 8px;
@@ -454,11 +674,16 @@
         <section class="header">
             <div>
                 <h1>Live Strategy Monitor</h1>
-                <p>Operator view for live BankNifty strategy state, trades, and chart overlays.</p>
+                <p>Mission-control view for live strategy execution. The surface is tuned for one job first: identify what is live now, what changed, and what the operator should do next.</p>
             </div>
             <div class="header-actions">
                 <div class="chip" id="sessionChip">Session: loading...</div>
                 <div class="chip" id="freshnessChip">Freshness: checking...</div>
+                <div class="chip" id="modeChip">Lane: --</div>
+                <div class="chip" id="pollStateChip">Polling: auto</div>
+                <div class="chip" id="lastRefreshChip">Last refresh: --</div>
+                <button class="action-btn" id="refreshNowBtn" type="button">Refresh Now</button>
+                <button class="action-btn" id="pauseLiveBtn" type="button">Pause Live</button>
                 <a class="nav-link primary" href="/">Main Dashboard</a>
                 <a class="nav-link" href="/api/live/strategy/session" target="_blank" rel="noopener">Session API</a>
             </div>
@@ -468,9 +693,16 @@
         <div class="banner" id="warnBanner"></div>
 
         <section class="panel view-toggle">
-            <div class="toggle-group">
-                <button id="operatorViewBtn" class="active" type="button">Operator View</button>
-                <button id="debugViewBtn" type="button">Debug View</button>
+            <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                <div class="toggle-group">
+                    <button id="operatorViewBtn" class="active" type="button">Operator View</button>
+                    <button id="debugViewBtn" type="button">Debug View</button>
+                </div>
+                <div class="timeline-group">
+                    <button class="timeline-btn" id="timeline10Btn" data-limit="10" type="button">Timeline 10</button>
+                    <button class="timeline-btn active" id="timeline25Btn" data-limit="25" type="button">Timeline 25</button>
+                    <button class="timeline-btn" id="timeline50Btn" data-limit="50" type="button">Timeline 50</button>
+                </div>
             </div>
             <div class="muted" id="viewModeNote">Operator mode focuses on now-state, alerts, and decision timeline.</div>
         </section>
@@ -478,11 +710,11 @@
         <section class="panel now-bar" id="nowBarPanel">
             <h2 style="margin-top:0;">Now</h2>
             <div class="now-grid">
-                <div class="kv"><div class="label">Engine</div><div class="value" id="nowEngine">--</div></div>
-                <div class="kv"><div class="label">Last Decision</div><div class="value" id="nowLastDecision">--</div></div>
-                <div class="kv"><div class="label">Active Blocker</div><div class="value" id="nowActiveBlocker">--</div></div>
+                <div class="kv card" id="engineStateCard"><div class="label">Engine</div><div class="value" id="nowEngine">--</div></div>
+                <div class="kv card" id="decisionStateCard"><div class="label">Last Decision</div><div class="value" id="nowLastDecision">--</div></div>
+                <div class="kv card" id="blockerStateCard"><div class="label">Active Blocker</div><div class="value" id="nowActiveBlocker">--</div></div>
                 <div class="kv"><div class="label">Data Health</div><div class="value" id="nowDataHealth">--</div></div>
-                <div class="kv"><div class="label">Risk State</div><div class="value" id="nowRiskState">--</div></div>
+                <div class="kv card" id="riskStateCard"><div class="label">Risk State</div><div class="value" id="nowRiskState">--</div></div>
             </div>
         </section>
 
@@ -493,6 +725,7 @@
                 <div class="kv"><div class="label">Promotion Lane</div><div class="value" id="engineLane">--</div></div>
                 <div class="kv"><div class="label">Strategy Family Version</div><div class="value" id="engineFamilyVersion">--</div></div>
                 <div class="kv"><div class="label">Strategy Profile ID</div><div class="value" id="engineProfileId">--</div></div>
+                <div class="kv"><div class="label">Observed Engine Modes</div><div class="value" id="engineObservedModes">--</div></div>
             </div>
         </section>
 
@@ -505,38 +738,26 @@
             <div class="panel kpi"><div class="label">Instrument</div><div class="value" id="kpiInstrument">--</div><div class="sub" id="kpiDate">--</div></div>
         </section>
 
-        <section class="layout" style="grid-template-columns: 380px 1fr;">
-            <div class="stack">
-                <div class="panel" id="activeAlertsPanel">
-                    <div class="panel-head">
-                        <h2>Active Alerts</h2>
-                        <span class="chip" id="alertCountChip">0 alerts</span>
-                    </div>
-                    <div id="activeAlertsList" class="alerts-list"></div>
+        <section class="command-grid">
+            <div class="panel rail-panel" id="activeAlertsPanel">
+                <div class="panel-head">
+                    <h2>Incident Rail</h2>
+                    <span class="chip" id="alertCountChip">0 alerts</span>
                 </div>
+                <div class="hero-note">
+                    <strong>Operator Lead</strong>
+                    <div class="muted" id="missionFocus">Waiting for live session.</div>
+                </div>
+                <div id="activeAlertsList" class="alerts-list" style="margin-top:10px;"></div>
             </div>
 
             <div class="panel" id="decisionTimelinePanel">
                 <div class="panel-head">
-                    <h2>Decision Timeline</h2>
+                    <h2>Decision Feed</h2>
                     <span class="chip" id="timelineLimitChip">Last 25</span>
                 </div>
-                <div class="table-wrap" style="max-height: 320px;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Time</th>
-                                <th>Action</th>
-                                <th>Engine</th>
-                                <th>Reason</th>
-                                <th>Why</th>
-                                <th>Key Metrics</th>
-                            </tr>
-                        </thead>
-                        <tbody id="decisionTimelineTable"></tbody>
-                    </table>
-                </div>
-                <div class="detail-card" id="timelineDetail">Select a decision row to inspect gate path and operator hint.</div>
+                <div id="decisionTimelineTable" class="timeline-feed"></div>
+                <div class="detail-card" id="timelineDetail">Select a decision item to inspect gate path and operator hint.</div>
             </div>
         </section>
 
@@ -545,9 +766,14 @@
                 <div class="panel">
                     <h2>Current Position</h2>
                     <div id="currentPosition"></div>
+                    <div class="detail-card" id="positionRoster" style="margin-top:12px;">Active position roster is loading.</div>
+                    <div class="detail-card" id="stalePositions" style="margin-top:12px;">Stale position diagnostics will appear here when needed.</div>
                 </div>
                 <div class="panel">
-                    <h2>Latest Closed Trade</h2>
+                    <div class="panel-head">
+                        <h2>Latest Closed Trade</h2>
+                        <span class="chip" id="closedTradeChip">Waiting</span>
+                    </div>
                     <div id="latestClosedTrade"></div>
                 </div>
             </div>
@@ -558,6 +784,23 @@
                 <div class="detail-card" id="markerDetail">
                     Select a marker to inspect the exact entry/exit context.
                 </div>
+            </div>
+        </section>
+
+        <section class="layout" style="margin-bottom: 14px;">
+            <div class="panel">
+                <div class="panel-head">
+                    <h2>Decision Funnel</h2>
+                    <span class="chip">Execution Shape</span>
+                </div>
+                <div class="funnel-grid" id="gateFunnelGrid"></div>
+            </div>
+            <div class="panel">
+                <div class="panel-head">
+                    <h2>Reason Playbook</h2>
+                    <span class="chip">Top Reasons</span>
+                </div>
+                <div class="playbook-list" id="reasonPlaybookList"></div>
             </div>
         </section>
 
@@ -707,10 +950,26 @@
             chartTimer: null,
             viewMode: "operator",
             timelineLimit: 25,
+            autoRefresh: true,
+            lastRefreshAt: null,
+            lastSessionDelayMs: 3000,
         };
 
         function qs(value) {
             return document.querySelector(value);
+        }
+
+        function qsa(value) {
+            return Array.from(document.querySelectorAll(value));
+        }
+
+        function escapeHtml(value) {
+            return String(value)
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#39;");
         }
 
         function money(value) {
@@ -744,6 +1003,10 @@
 
         function text(value) {
             return value === null || value === undefined || value === "" ? "--" : String(value);
+        }
+
+        function safe(value) {
+            return escapeHtml(text(value));
         }
 
         function setBanner(id, kind, message) {
@@ -786,6 +1049,31 @@
             return items.length ? items.slice(0, 3).join(" | ") : "--";
         }
 
+        function metricsPills(metrics) {
+            if (!metrics || typeof metrics !== "object") return `<span class="metric-pill">no-metrics</span>`;
+            const ordered = ["edge", "confidence", "ce_prob", "pe_prob", "ce_threshold", "pe_threshold"];
+            const items = [];
+            ordered.forEach((key) => {
+                if (metrics[key] === null || metrics[key] === undefined || Number.isNaN(Number(metrics[key]))) return;
+                items.push(`<span class="metric-pill">${escapeHtml(key)}=${Number(metrics[key]).toFixed(3)}</span>`);
+            });
+            return items.length ? items.join("") : `<span class="metric-pill">no-metrics</span>`;
+        }
+
+        function syncTimelineButtons() {
+            qsa(".timeline-btn").forEach((button) => {
+                const limit = Number(button.getAttribute("data-limit") || "25");
+                button.classList.toggle("active", limit === state.timelineLimit);
+            });
+        }
+
+        function updateControls() {
+            qs("#pauseLiveBtn").textContent = state.autoRefresh ? "Pause Live" : "Resume Live";
+            qs("#lastRefreshChip").textContent = state.lastRefreshAt ? `Last refresh: ${shortTs(state.lastRefreshAt)}` : "Last refresh: --";
+            qs("#pollStateChip").textContent = state.autoRefresh ? `Polling: ${Math.round(state.lastSessionDelayMs / 1000)}s` : "Polling: paused";
+            syncTimelineButtons();
+        }
+
         function setPanelCollapsed(panelKey, collapsed) {
             const bodyId = panelKey === "mlPure" ? "#mlPurePanelBody" : "#deterministicPanelBody";
             const btnId = panelKey === "mlPure" ? "#mlPureToggle" : "#deterministicToggle";
@@ -807,14 +1095,17 @@
                 : "Operator mode focuses on now-state, alerts, and decision timeline.";
             if (state.viewMode === "debug") {
                 setPanelCollapsed("mlPure", false);
-                setPanelCollapsed("mlGate", false);
+                setPanelCollapsed("deterministic", false);
             } else {
-                setPanelCollapsed("mlPure", true);
-                setPanelCollapsed("mlGate", true);
+                const active = String(state.session?.ui_hints?.active_engine_panel || state.session?.engine_context?.active_engine_mode || "deterministic").toLowerCase();
+                setPanelCollapsed("mlPure", active !== "ml_pure");
+                setPanelCollapsed("deterministic", active === "ml_pure");
             }
             if (forceRefresh) {
                 clearTimeout(state.sessionTimer);
+                clearTimeout(state.chartTimer);
                 refreshSession();
+                refreshChart();
             }
         }
 
@@ -822,29 +1113,29 @@
             const container = qs("#timelineDetail");
             if (!container) return;
             if (!item) {
-                container.textContent = "Select a decision row to inspect gate path and operator hint.";
+                container.textContent = "Select a decision item to inspect gate path and operator hint.";
                 return;
             }
             container.innerHTML = `
-                <strong>${text(item.action)} | ${text(item.reason_code)}</strong><br>
-                <span class="muted">Time:</span> ${shortTs(item.ts)} |
-                <span class="muted">Engine:</span> ${text(item.engine_mode)} |
-                <span class="muted">Mode:</span> ${text(item.decision_mode)}<br>
-                <span class="muted">Why:</span> ${text(item.explanation)}<br>
-                <span class="muted">Operator Hint:</span> ${text(item.operator_hint)}<br>
-                <span class="muted">Gate Path:</span> ${text(item.gate_path)}<br>
-                <span class="muted">Metrics:</span> ${metricsSummary(item.metrics)}
+                <div class="label">Decision</div>
+                <div style="margin-top:8px; font-weight:700;">${safe(item.action)} | ${safe(item.reason_code)} | ${safe(shortTs(item.ts))}</div>
+                <div class="muted" style="margin-top:8px;">${safe(item.explanation)}</div>
+                <div class="muted" style="margin-top:8px;">Operator hint: ${safe(item.operator_hint)}</div>
+                <div class="muted" style="margin-top:8px;">Gate path: ${safe(item.gate_path)}</div>
+                <div class="metric-pills">${metricsPills(item.metrics)}</div>
             `;
         }
 
         function renderDecisionTimeline(session) {
             const explain = session?.decision_explainability || {};
-            const timeline = Array.isArray(explain.timeline) ? explain.timeline : [];
+            const sourceTimeline = Array.isArray(explain.timeline) ? explain.timeline : [];
+            const latestDecision = explain.latest_decision && typeof explain.latest_decision === "object" ? explain.latest_decision : null;
+            const timeline = sourceTimeline.length ? sourceTimeline : (latestDecision ? [latestDecision] : []);
             const table = qs("#decisionTimelineTable");
             if (!table) return;
             qs("#timelineLimitChip").textContent = `Last ${timeline.length}`;
             if (!timeline.length) {
-                table.innerHTML = `<tr><td colspan="6" class="muted">No recent decisions available.</td></tr>`;
+                table.innerHTML = `<div class="empty">No recent decisions available.</div>`;
                 renderTimelineDetail(null);
                 return;
             }
@@ -855,21 +1146,28 @@
                 nextIds.add(rowId);
                 const selected = rowId === state.selectedTimelineId;
                 const changed = !prevIds.has(rowId);
+                const actionTone = String(item.action || "").toLowerCase() === "entry"
+                    ? "entry"
+                    : (String(item.action || "").toLowerCase() === "exit" ? "exit" : "hold");
+                const cardTone = toneForState(item.reason_code || item.action);
                 return `
-                    <tr class="timeline-row${selected ? " selected" : ""}${changed ? " changed" : ""}" data-row-id="${rowId}">
-                        <td>${shortTs(item.ts)}</td>
-                        <td><span class="tag ${String(item.action || "").toLowerCase() === "hold" ? "rule" : (String(item.action || "").toLowerCase() === "exit" ? "exit" : "entry")}">${text(item.action)}</span></td>
-                        <td>${text(item.engine_mode)}</td>
-                        <td>${text(item.reason_code)}</td>
-                        <td title="${text(item.explanation)}">${text(item.explanation)}</td>
-                        <td>${metricsSummary(item.metrics)}</td>
-                    </tr>
+                    <article class="timeline-card ${cardTone === "state-critical" ? "critical" : (cardTone === "state-warn" ? "warn" : "ok")}${selected ? " selected" : ""}${changed ? " changed" : ""}" data-row-id="${escapeHtml(rowId)}">
+                        <div class="timeline-head">
+                            <div>
+                                <strong>${safe(item.reason_code)}</strong>
+                                <div class="muted" style="margin-top:4px;">${safe(shortTs(item.ts))} • ${safe(item.engine_mode || "unknown")} • ${safe(item.decision_mode || "unknown")}</div>
+                            </div>
+                            <span class="tag ${actionTone}">${safe(item.action)}</span>
+                        </div>
+                        <div style="font-size:14px; line-height:1.55;">${safe(item.explanation)}</div>
+                        <div class="metric-pills">${metricsPills(item.metrics)}</div>
+                    </article>
                 `;
             }).join("");
             if (!state.selectedTimelineId || !timeline.some((item) => String(item.id || `${item.ts || ""}:${item.reason_code || ""}`) === state.selectedTimelineId)) {
                 state.selectedTimelineId = String(timeline[0].id || `${timeline[0].ts || ""}:${timeline[0].reason_code || ""}`);
             }
-            table.querySelectorAll("tr[data-row-id]").forEach((row) => {
+            table.querySelectorAll("[data-row-id]").forEach((row) => {
                 row.addEventListener("click", () => {
                     state.selectedTimelineId = String(row.getAttribute("data-row-id") || "");
                     renderDecisionTimeline(session);
@@ -881,23 +1179,30 @@
         }
 
         function renderActiveAlerts(session) {
-            const alerts = Array.isArray(session?.active_alerts) ? session.active_alerts : [];
+            const alerts = Array.isArray(session?.active_alerts) ? [...session.active_alerts] : [];
             const container = qs("#activeAlertsList");
             if (!container) return;
+            alerts.sort((left, right) => {
+                const order = { critical: 0, warning: 1, info: 2 };
+                const leftRank = order[String(left?.severity || "info").toLowerCase()] ?? 2;
+                const rightRank = order[String(right?.severity || "info").toLowerCase()] ?? 2;
+                return leftRank - rightRank;
+            });
             qs("#alertCountChip").textContent = `${alerts.length} alert${alerts.length === 1 ? "" : "s"}`;
+            qs("#missionFocus").textContent = alerts[0]?.operator_next_step || "No active intervention required.";
             if (!alerts.length) {
-                container.innerHTML = `<div class="empty">No active alerts.</div>`;
+                container.innerHTML = `<div class="empty">No active alerts. The live session is quiet from an incident perspective.</div>`;
                 return;
             }
             container.innerHTML = alerts.map((alert) => `
                 <div class="alert-item ${String(alert.severity || "info").toLowerCase()}">
                     <div class="alert-title">
-                        <span>${text(alert.title)}</span>
-                        <span class="tag ${String(alert.severity || "").toLowerCase() === "critical" ? "block" : (String(alert.severity || "").toLowerCase() === "warning" ? "warmup" : "rule")}">${text(alert.severity)}</span>
+                        <span>${safe(alert.title)}</span>
+                        <span class="tag ${String(alert.severity || "").toLowerCase() === "critical" ? "block" : (String(alert.severity || "").toLowerCase() === "warning" ? "warmup" : "rule")}">${safe(alert.severity)}</span>
                     </div>
-                    <div>${text(alert.detail)}</div>
-                    <div class="muted" style="margin-top:4px;">Operator next step: ${text(alert.operator_next_step)}</div>
-                    <div class="muted" style="margin-top:4px;">Source: ${text(alert.source)} | Seen: ${shortTs(alert.last_seen_ist)} | x${text(alert.occurrences)}</div>
+                    <div>${safe(alert.detail)}</div>
+                    <div class="muted" style="margin-top:6px; font-weight:700;">Operator next step: ${safe(alert.operator_next_step)}</div>
+                    <div class="muted" style="margin-top:4px;">Source: ${safe(alert.source)} | Seen: ${safe(shortTs(alert.last_seen_ist))} | x${safe(alert.occurrences)}</div>
                 </div>
             `).join("");
         }
@@ -908,46 +1213,132 @@
                 container.innerHTML = `<div class="empty">No open position.</div>`;
                 return;
             }
+            const pnlClass = Number(position.unrealized_pnl_amount || 0) >= 0 ? "up" : "down";
             container.innerHTML = `
                 <div class="grid-2">
-                    <div class="kv"><div class="label">Position</div><div class="value">${text(position.position_id)}</div></div>
-                    <div class="kv"><div class="label">Strategy</div><div class="value">${text(position.strategy)}</div></div>
-                    <div class="kv"><div class="label">Regime</div><div class="value">${text(position.regime)}</div></div>
-                    <div class="kv"><div class="label">Direction / Strike</div><div class="value">${text(position.direction)} / ${text(position.strike)}</div></div>
-                    <div class="kv"><div class="label">Entry</div><div class="value">${shortTs(position.entry_time)} @ ${money(position.entry_premium)}</div></div>
+                    <div class="kv"><div class="label">Position</div><div class="value">${safe(position.position_id)}</div></div>
+                    <div class="kv"><div class="label">Strategy</div><div class="value">${safe(position.strategy)}</div></div>
+                    <div class="kv"><div class="label">Regime</div><div class="value">${safe(position.regime)}</div></div>
+                    <div class="kv"><div class="label">Direction / Strike</div><div class="value"><span class="tag ${String(position.direction || "").toLowerCase() === "pe" ? "pe" : "ce"}">${safe(position.direction)}</span> ${safe(position.strike)}</div></div>
+                    <div class="kv"><div class="label">Entry</div><div class="value">${safe(shortTs(position.entry_time))} @ ${money(position.entry_premium)}</div></div>
                     <div class="kv"><div class="label">Current</div><div class="value">${money(position.current_premium)} (${pct(position.pnl_pct)})</div></div>
-                    <div class="kv"><div class="label">Unrealized PnL</div><div class="value">${money(position.unrealized_pnl_amount)} / ${pct(position.unrealized_pnl_pct)}</div></div>
+                    <div class="kv"><div class="label">Unrealized PnL</div><div class="value ${pnlClass}">${money(position.unrealized_pnl_amount)} / ${pct(position.unrealized_pnl_pct)}</div></div>
                     <div class="kv"><div class="label">Stop / Target</div><div class="value">${money(position.stop_price)} / ${pct(position.target_pct)}</div></div>
                     <div class="kv"><div class="label">High Water</div><div class="value">${money(position.high_water_premium)}</div></div>
                     <div class="kv"><div class="label">Trail</div><div class="value">${position.trailing_enabled ? "Enabled" : "Off"}${position.trailing_active ? " / Active" : ""}</div></div>
                 </div>
-                <div class="detail-card"><strong>Reason:</strong> ${text(position.entry_reason)}</div>
+                <div class="detail-card"><strong>Reason:</strong> ${safe(position.entry_reason)}</div>
             `;
+        }
+
+        function renderPositionDiagnostics(session) {
+            const active = Array.isArray(session?.current_positions) ? session.current_positions : [];
+            const stale = Array.isArray(session?.stale_open_positions) ? session.stale_open_positions : [];
+            const roster = qs("#positionRoster");
+            const staleList = qs("#stalePositions");
+            if (roster) {
+                if (!active.length) {
+                    roster.innerHTML = "Active position roster: none.";
+                } else {
+                    roster.innerHTML = active.map((position) => `
+                        <div class="roster-item">
+                            <div class="roster-head">
+                                <strong>${safe(position.strategy || "unknown")} • ${safe(position.position_id)}</strong>
+                                <span class="tag ${String(position.direction || "").toLowerCase() === "pe" ? "pe" : "ce"}">${safe(position.direction)}</span>
+                            </div>
+                            <div class="roster-metrics">
+                                <span class="inline-stat">entry ${money(position.entry_premium)}</span>
+                                <span class="inline-stat">current ${money(position.current_premium)}</span>
+                                <span class="inline-stat ${Number(position.unrealized_pnl_amount || 0) >= 0 ? "up" : "down"}">pnl ${money(position.unrealized_pnl_amount)}</span>
+                                <span class="inline-stat">bars ${safe(position.bars_held)}</span>
+                            </div>
+                        </div>
+                    `).join("");
+                }
+            }
+            if (staleList) {
+                if (!stale.length) {
+                    staleList.innerHTML = "No stale positions detected.";
+                } else {
+                    staleList.innerHTML = stale.map((position) => `
+                        <div class="stale-item">
+                            <strong>${safe(position.position_id)}</strong>
+                            <div class="muted" style="margin-top:6px;">Reason ${safe(position.stale_reason)} • age ${safe(position.stale_age_sec)}s • lag ${safe(position.lag_vs_latest_position_sec)}s</div>
+                            <div style="margin-top:8px; font-weight:700;">${safe(position.reconciliation_action)}</div>
+                        </div>
+                    `).join("");
+                }
+            }
         }
 
         function renderLatestClosedTrade(trade) {
             const container = qs("#latestClosedTrade");
             if (!trade) {
+                qs("#closedTradeChip").textContent = "No closed trade";
                 container.innerHTML = `<div class="empty">No closed trade for this session yet.</div>`;
                 return;
             }
+            qs("#closedTradeChip").textContent = shortTs(trade.exit_time || trade.entry_time);
             container.innerHTML = `
                 <div class="grid-2">
-                    <div class="kv"><div class="label">Position</div><div class="value">${text(trade.position_id)}</div></div>
-                    <div class="kv"><div class="label">Strategy</div><div class="value">${text(trade.entry_strategy)}</div></div>
-                    <div class="kv"><div class="label">Regime</div><div class="value">${text(trade.regime)}</div></div>
-                    <div class="kv"><div class="label">Direction / Strike</div><div class="value">${text(trade.direction)} / ${text(trade.strike)}</div></div>
-                    <div class="kv"><div class="label">Entry</div><div class="value">${shortTs(trade.entry_time)} @ ${money(trade.entry_premium)}</div></div>
-                    <div class="kv"><div class="label">Exit</div><div class="value">${shortTs(trade.exit_time)} @ ${money(trade.exit_premium)}</div></div>
+                    <div class="kv"><div class="label">Position</div><div class="value">${safe(trade.position_id)}</div></div>
+                    <div class="kv"><div class="label">Strategy</div><div class="value">${safe(trade.entry_strategy)}</div></div>
+                    <div class="kv"><div class="label">Regime</div><div class="value">${safe(trade.regime)}</div></div>
+                    <div class="kv"><div class="label">Direction / Strike</div><div class="value"><span class="tag ${String(trade.direction || "").toLowerCase() === "pe" ? "pe" : "ce"}">${safe(trade.direction)}</span> ${safe(trade.strike)}</div></div>
+                    <div class="kv"><div class="label">Entry</div><div class="value">${safe(shortTs(trade.entry_time))} @ ${money(trade.entry_premium)}</div></div>
+                    <div class="kv"><div class="label">Exit</div><div class="value">${safe(shortTs(trade.exit_time))} @ ${money(trade.exit_premium)}</div></div>
                     <div class="kv"><div class="label">Capital PnL</div><div class="value">${money(trade.capital_pnl_amount)} / ${pct(trade.capital_pnl_pct)}</div></div>
                     <div class="kv"><div class="label">Option PnL</div><div class="value">${pct(trade.pnl_pct_net)}</div></div>
                 </div>
-                <div class="detail-card"><strong>Exit:</strong> ${text(trade.exit_reason)}<br><strong>Entry reason:</strong> ${text(trade.entry_reason)}</div>
+                <div class="detail-card"><strong>Exit:</strong> ${safe(trade.exit_reason)}<br><strong>Entry reason:</strong> ${safe(trade.entry_reason)}</div>
             `;
+        }
+
+        function renderDecisionFunnel(session) {
+            const funnel = session?.decision_explainability?.gate_funnel || {};
+            const container = qs("#gateFunnelGrid");
+            if (!container) return;
+            const items = [
+                ["Det votes", funnel.directional_entry_votes_day],
+                ["Policy eval", funnel.policy_evaluated_votes_day],
+                ["Policy pass", funnel.policy_allowed_votes_day],
+                ["Policy block", funnel.policy_blocked_votes_day],
+                ["ML CE", funnel.ml_pure_entries_ce],
+                ["ML PE", funnel.ml_pure_entries_pe],
+                ["ML holds", funnel.ml_pure_holds],
+                ["Signals", session?.counts?.signals],
+            ];
+            container.innerHTML = items.map(([label, value]) => `
+                <div class="funnel-card">
+                    <div class="label">${escapeHtml(label)}</div>
+                    <strong>${escapeHtml(text(value))}</strong>
+                </div>
+            `).join("");
+        }
+
+        function renderReasonPlaybook(session) {
+            const rows = Array.isArray(session?.decision_explainability?.reason_playbook_summary)
+                ? session.decision_explainability.reason_playbook_summary
+                : [];
+            const container = qs("#reasonPlaybookList");
+            if (!container) return;
+            if (!rows.length) {
+                container.innerHTML = `<div class="empty">No recent mapped decision reasons in the current session.</div>`;
+                return;
+            }
+            container.innerHTML = rows.map((row) => `
+                <div class="playbook-item">
+                    <strong>${safe(row.reason_code)}</strong>
+                    <div class="muted" style="margin-top:6px;">${safe(row.explanation)}</div>
+                    <div style="margin-top:8px; font-weight:700;">${safe(row.operator_hint)}</div>
+                    <div class="muted" style="margin-top:6px;">Count ${safe(row.count)}</div>
+                </div>
+            `).join("");
         }
 
         function renderRows(targetId, rows, rowHtml, emptyText, colspan = 5) {
             const target = qs(targetId);
+            if (!target) return;
             if (!Array.isArray(rows) || rows.length === 0) {
                 target.innerHTML = `<tr><td colspan="${colspan}" class="muted">${emptyText}</td></tr>`;
                 return;
@@ -985,18 +1376,24 @@
             const hints = session?.ui_hints || {};
             const activePanel = String(hints.active_engine_panel || "").toLowerCase();
             const active = String(ctx.active_engine_mode || "unknown").toLowerCase();
+            const observed = ctx.observed_engine_modes && typeof ctx.observed_engine_modes === "object"
+                ? Object.entries(ctx.observed_engine_modes).map(([key, value]) => `${key}:${value}`).join(" · ")
+                : "";
             qs("#engineActive").textContent = text(ctx.active_engine_mode || "unknown");
             qs("#engineLane").textContent = text(session?.promotion_lane || "deterministic");
             qs("#engineFamilyVersion").textContent = text(ctx.strategy_family_version);
             qs("#engineProfileId").textContent = text(ctx.strategy_profile_id);
+            if (qs("#engineObservedModes")) qs("#engineObservedModes").textContent = text(observed || ctx.latest_engine_mode || "--");
             const pureActive = activePanel ? activePanel === "ml_pure" : active === "ml_pure";
             qs("#mlPurePanel").classList.toggle("active", pureActive);
             qs("#deterministicPanel").classList.toggle("active", !pureActive);
+            qs("#modeChip").textContent = `Lane: ${text(session?.promotion_lane || ctx.active_engine_mode || "unknown")}`;
         }
 
         function renderOpsState(session) {
             const ops = session?.ops_state || {};
             const latest = session?.decision_explainability?.latest_decision || null;
+            const alerts = Array.isArray(session?.active_alerts) ? session.active_alerts : [];
             const engineValue = text(session?.engine_context?.active_engine_mode || ops.engine_state || "unknown");
             const lastDecision = latest ? `${text(latest.action)} | ${text(latest.reason_code)}` : "--";
             const blocker = text(ops.active_blocker);
@@ -1007,6 +1404,19 @@
             qs("#nowActiveBlocker").innerHTML = `${blocker}${blocker !== "--" ? `<span class="state-pill ${toneForState(blocker)}">${text(blocker)}</span>` : ""}`;
             qs("#nowDataHealth").innerHTML = `${dataHealth}<span class="state-pill ${toneForState(dataHealth)}">${text(dataHealth)}</span>`;
             qs("#nowRiskState").innerHTML = `${riskState}<span class="state-pill ${toneForState(riskState)}">${text(riskState)}</span>`;
+            qs("#missionFocus").textContent = alerts[0]?.operator_next_step || latest?.operator_hint || "No immediate operator action required.";
+            ["#engineStateCard", "#decisionStateCard", "#riskStateCard", "#blockerStateCard"].forEach((id, index) => {
+                const tones = [
+                    toneForState(ops.engine_state),
+                    toneForState(latest?.reason_code || latest?.action),
+                    toneForState(riskState),
+                    toneForState(blocker),
+                ];
+                const element = qs(id);
+                if (!element) return;
+                element.classList.remove("ok", "warn", "critical");
+                element.classList.add(tones[index].replace("state-", ""));
+            });
         }
 
         function renderUiHints(session) {
@@ -1024,6 +1434,7 @@
                 if (activePanel === "ml_pure") qs("#mlPurePanel")?.classList.add("focus-highlight");
                 else qs("#deterministicPanel")?.classList.add("focus-highlight");
             }
+            if (session?.counts?.open_positions) qs("#currentPosition")?.closest(".panel")?.classList.add("focus-highlight");
         }
 
         function renderMlPureDiagnostics(session) {
@@ -1148,6 +1559,7 @@
             const allFresh = flags.every(Boolean);
             qs("#sessionChip").textContent = `Session: ${text(session.session?.date_ist)} IST`;
             qs("#freshnessChip").textContent = `Freshness: ${allFresh ? "fresh" : "degraded"}`;
+            qs("#freshnessChip").className = `chip ${allFresh ? "ok" : "warn"}`;
             qs("#kpiCapital").textContent = money(session.capital?.configured_capital);
             qs("#kpiPnlAmount").innerHTML = `<span class="${Number(session.capital?.realized_pnl_amount || 0) >= 0 ? "up" : "down"}">${money(session.capital?.realized_pnl_amount)}</span>`;
             qs("#kpiPnlPct").textContent = pct(session.capital?.realized_pnl_pct);
@@ -1164,12 +1576,12 @@
                 return;
             }
             qs("#markerDetail").innerHTML = `
-                <strong>${text(marker.label)}</strong><br>
-                <span class="muted">Time:</span> ${shortTs(marker.timestamp)} |
-                <span class="muted">Strategy:</span> ${text(marker.strategy)} |
-                <span class="muted">Regime:</span> ${text(marker.regime)} |
-                <span class="muted">Direction:</span> ${text(marker.direction)} |
-                <span class="muted">Strike:</span> ${text(marker.strike)} |
+                <strong>${safe(marker.label)}</strong><br>
+                <span class="muted">Time:</span> ${safe(shortTs(marker.timestamp))} |
+                <span class="muted">Strategy:</span> ${safe(marker.strategy)} |
+                <span class="muted">Regime:</span> ${safe(marker.regime)} |
+                <span class="muted">Direction:</span> ${safe(marker.direction)} |
+                <span class="muted">Strike:</span> ${safe(marker.strike)} |
                 <span class="muted">Premium:</span> ${money(marker.premium)}
             `;
         }
@@ -1206,10 +1618,12 @@
             const chart = state.session?.session_chart || state.chart?.price_chart;
             if (!chart || !Array.isArray(chart.timestamps) || chart.timestamps.length === 0) {
                 state.chartInstance.clear();
+                if (qs("#chartMarkerCountChip")) qs("#chartMarkerCountChip").textContent = "0 markers";
                 qs("#markerDetail").textContent = "Chart data unavailable.";
                 return;
             }
             const markers = Array.isArray(state.session?.chart_markers) ? state.session.chart_markers : [];
+            if (qs("#chartMarkerCountChip")) qs("#chartMarkerCountChip").textContent = `${markers.length} marker${markers.length === 1 ? "" : "s"}`;
             const entries = [];
             const exits = [];
             markers.forEach((marker) => {
@@ -1317,6 +1731,7 @@
                 params.set("debug_view", state.viewMode === "debug" ? "1" : "0");
                 const data = await fetchJson(`/api/live/strategy/session?${params.toString()}`);
                 state.session = data;
+                state.lastRefreshAt = new Date();
                 updateHeader(data);
                 renderEngineContext(data);
                 renderOpsState(data);
@@ -1324,7 +1739,10 @@
                 renderActiveAlerts(data);
                 renderDecisionTimeline(data);
                 renderCurrentPosition(data.current_position);
+                renderPositionDiagnostics(data);
                 renderLatestClosedTrade(data.latest_closed_trade);
+                renderDecisionFunnel(data);
+                renderReasonPlaybook(data);
 
                 const fresh = data.session?.data_freshness || {};
                 const stale = [fresh.votes_fresh, fresh.signals_fresh, fresh.positions_fresh].some((item) => item === false);
@@ -1380,12 +1798,13 @@
             } catch (error) {
                 setBanner("#errorBanner", "error", `Live session load failed: ${error.message}`);
             } finally {
+                updateControls();
                 scheduleSessionRefresh();
             }
         }
 
         async function refreshChart() {
-            if (document.hidden) {
+            if (document.hidden && state.autoRefresh) {
                 scheduleChartRefresh();
                 return;
             }
@@ -1407,17 +1826,50 @@
 
         function scheduleSessionRefresh() {
             clearTimeout(state.sessionTimer);
-            state.sessionTimer = setTimeout(refreshSession, 3000);
+            state.lastSessionDelayMs = 3000;
+            if (!state.autoRefresh) {
+                updateControls();
+                return;
+            }
+            state.sessionTimer = setTimeout(refreshSession, state.lastSessionDelayMs);
         }
 
         function scheduleChartRefresh() {
             clearTimeout(state.chartTimer);
+            if (!state.autoRefresh) return;
             const delay = state.session?.counts?.open_positions ? 5000 : 15000;
             state.chartTimer = setTimeout(refreshChart, delay);
         }
 
+        function toggleAutoRefresh() {
+            state.autoRefresh = !state.autoRefresh;
+            if (state.autoRefresh) {
+                refreshNow();
+                return;
+            }
+            clearTimeout(state.sessionTimer);
+            clearTimeout(state.chartTimer);
+            updateControls();
+        }
+
+        function refreshNow() {
+            clearTimeout(state.sessionTimer);
+            clearTimeout(state.chartTimer);
+            refreshSession();
+            refreshChart();
+        }
+
         qs("#operatorViewBtn")?.addEventListener("click", () => applyViewMode("operator", true));
         qs("#debugViewBtn")?.addEventListener("click", () => applyViewMode("debug", true));
+        qsa(".timeline-btn").forEach((button) => {
+            button.addEventListener("click", () => {
+                state.timelineLimit = Number(button.getAttribute("data-limit") || "25");
+                syncTimelineButtons();
+                refreshSession();
+            });
+        });
+        qs("#refreshNowBtn")?.addEventListener("click", refreshNow);
+        qs("#pauseLiveBtn")?.addEventListener("click", toggleAutoRefresh);
         qs("#mlPureToggle")?.addEventListener("click", () => {
             const isCollapsed = qs("#mlPurePanelBody")?.classList.contains("collapsed");
             setPanelCollapsed("mlPure", !isCollapsed);
@@ -1432,9 +1884,15 @@
             state.viewMode = "debug";
         }
         applyViewMode(state.viewMode, false);
+        updateControls();
 
         refreshSession();
         refreshChart();
+        document.addEventListener("visibilitychange", () => {
+            if (!document.hidden && state.autoRefresh) {
+                refreshNow();
+            }
+        });
         window.addEventListener("resize", () => {
             if (state.chartInstance) state.chartInstance.resize();
         });

@@ -68,6 +68,15 @@ python -m pip install --upgrade pip
 python -m pip install -e ./ml_pipeline_2
 ```
 
+Windows PowerShell equivalent:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .\ml_pipeline_2
+```
+
 ### 2. Sync Or Build Inputs
 
 If final staged parquet already exists in GCS, sync it into the local cache root:

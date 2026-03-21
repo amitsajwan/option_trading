@@ -135,7 +135,7 @@ services:
         "--market-api-base",
         "http://ingestion_app:8004",
         "--dashboard-api-base",
-        "http://dashboard:8008",
+        "${SNAPSHOT_DASHBOARD_API_BASE:-}",
         "--out-jsonl",
         "/app/.run/snapshot_app/events.jsonl",
       ]
@@ -327,7 +327,7 @@ services:
         "-m",
         "strategy_app.main",
         "--engine",
-        "${STRATEGY_ENGINE:-deterministic}",
+        "${STRATEGY_ENGINE:-ml_pure}",
         "--min-confidence",
         "${STRATEGY_MIN_CONFIDENCE:-0.65}",
         "--topic",

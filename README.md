@@ -102,6 +102,36 @@ Optional dashboard:
 docker compose --env-file .env.compose --profile ui up -d dashboard
 ```
 
+## Local Python For VS Code
+
+The runtime is container-first, but VS Code still needs a local Python interpreter if you want:
+
+- Python language service and imports to resolve locally
+- host-side `pytest` runs
+- host-side helper commands like `python -m start_apps`
+
+On this Windows workspace, VS Code will not recognize Python until Python itself is installed on the host.
+
+Recommended Windows bootstrap:
+
+```powershell
+winget install -e --id Python.Python.3.11
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r market_data_dashboard\requirements.txt
+python -m pip install -r persistence_app\requirements.txt
+python -m pip install -r snapshot_app\requirements.txt
+python -m pip install -r strategy_app\requirements.txt
+```
+
+This repo now includes `.vscode/settings.json` with:
+
+- interpreter path: `.venv\\Scripts\\python.exe`
+- pytest discovery enabled
+
+After creating `.venv`, run `Python: Select Interpreter` in VS Code once if it does not pick it up automatically.
+
 ## GCP Deployment
 
 For repeatable GCP operations, use:

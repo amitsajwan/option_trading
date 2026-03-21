@@ -1616,8 +1616,9 @@ class LiveMarketSnapshotBuilder:
         endpoints = [
             f"{self.market_api_base}/api/v1/market/ohlc/{self.instrument}",
             f"{self.market_api_base}/api/v1/ohlc/{self.instrument}",
-            f"{self.dashboard_api_base}/api/market-data/ohlc/{self.instrument}",
         ]
+        if self.dashboard_api_base:
+            endpoints.append(f"{self.dashboard_api_base}/api/market-data/ohlc/{self.instrument}")
         for url in endpoints:
             try:
                 payload = self._get_json(url, params=params)
@@ -1772,6 +1773,8 @@ class LiveMarketSnapshotBuilder:
                 return payload
         except Exception:
             pass
+        if not self.dashboard_api_base:
+            return {}
         payload = self._get_json(f"{self.dashboard_api_base}/api/market-data/options/{self.instrument}")
         if isinstance(payload, dict):
             return payload

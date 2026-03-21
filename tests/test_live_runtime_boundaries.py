@@ -121,3 +121,15 @@ def test_strategy_app_live_compose_supports_ml_pure_inputs() -> None:
     ]
     for arg in expected_args:
         assert f'"{arg}"' in block
+
+
+def test_live_compose_strategy_engine_defaults_to_ml_pure_only_for_live_service() -> None:
+    compose_text = _read("docker-compose.yml")
+
+    live_match = re.search(r'(?ms)^  strategy_app:\n(.*?)(?=^  [A-Za-z0-9_]+:|\Z)', compose_text)
+    assert live_match is not None, "service block missing: strategy_app"
+    assert '"${STRATEGY_ENGINE:-ml_pure}"' in live_match.group(1)
+
+    historical_match = re.search(r'(?ms)^  strategy_app_historical:\n(.*?)(?=^  [A-Za-z0-9_]+:|\Z)', compose_text)
+    assert historical_match is not None, "service block missing: strategy_app_historical"
+    assert '"${STRATEGY_ENGINE:-deterministic}"' in historical_match.group(1)

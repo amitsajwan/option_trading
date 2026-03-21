@@ -109,6 +109,9 @@ dmypy.json
 # IDE
 .vscode/
 .idea/
+!.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
 
 # Logs
 logs/
