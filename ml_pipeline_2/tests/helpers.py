@@ -237,7 +237,7 @@ def build_staged_smoke_manifest(root: Path, parquet_root: Path) -> Path:
             },
             "feature_sets_by_stage": {
                 "stage1": ["fo_expiry_aware_v2"],
-                "stage2": ["fo_expiry_aware_v2"],
+                "stage2": ["fo_expiry_aware_v3"],
                 "stage3": ["fo_full"],
             },
             "recipe_catalog_id": "fixed_l0_l3_v1",

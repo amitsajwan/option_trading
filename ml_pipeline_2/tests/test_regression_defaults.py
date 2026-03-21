@@ -11,6 +11,7 @@ def test_default_staged_manifest_matches_checked_in_default() -> None:
     defaults = default_staged_manifest_payload()
 
     assert defaults["catalog"]["feature_sets_by_stage"]["stage1"] == ["fo_expiry_aware_v2"]
+    assert defaults["catalog"]["feature_sets_by_stage"]["stage2"] == ["fo_expiry_aware_v3"]
     assert defaults["catalog"]["feature_sets_by_stage"]["stage3"] == ["fo_full"]
     assert payload["catalog"]["feature_sets_by_stage"] == defaults["catalog"]["feature_sets_by_stage"]
     assert payload["inputs"] == {
