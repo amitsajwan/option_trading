@@ -181,6 +181,14 @@ Vote/signal records now include additive engine-aware fields for replay comparab
 
 For non-default deterministic router configurations, set `strategy_profile_id` in run metadata (or `--strategy-profile-id`) so comparisons remain lane/profile-consistent.
 
+Position lifecycle records now preserve the originating entry linkage as well:
+
+- `signal_id` remains the entry signal id across `POSITION_OPEN`, `POSITION_MANAGE`, and `POSITION_CLOSE`
+- `snapshot_id` points at the snapshot that triggered that lifecycle event
+- `entry_snapshot_id` preserves the original open snapshot on all lifecycle rows
+
+Risk sizing treats `RISK_NOTIONAL_PER_TRADE` and `RISK_PER_TRADE_PCT` as hard caps. `RISK_CONFIDENCE_FLOOR` only limits how far allocation can scale down; it does not boost lot sizing above the configured cap.
+
 ## Modularization Notes (v2.3 Phase-1)
 
 The logging and annotation paths are now split into focused modules with `SignalLogger` kept as the public entrypoint:

@@ -38,6 +38,8 @@ You need at least these values in `ops/gcp/operator.env`:
 - `PROFILE_ID`
 - `STAGED_CONFIG`
 
+`DATA_SYNC_SOURCE` should point at the parent prefix that syncs into `.data/ml_pipeline` on the VM and already contains `parquet_data/` underneath it. After startup, the expected local path is `/opt/option_trading/.data/ml_pipeline/parquet_data`.
+
 Verify:
 
 ```bash
@@ -83,6 +85,8 @@ gcloud compute ssh "${TRAINING_VM_NAME}" --zone "${ZONE}"
 On the VM:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y tmux
 cd /opt/option_trading
 git rev-parse --short HEAD
 find .data/ml_pipeline/parquet_data -maxdepth 2 -type d | sort
@@ -102,13 +106,35 @@ Look for:
 
 If those datasets are missing, stop here and complete the snapshot workflow first.
 
+For long-running staged training, always use `tmux`.
+If the SSH session drops while the training job is running in a plain foreground shell, the training process usually stops with the shell.
+
+Basic `tmux` commands:
+
+```bash
+tmux new -s training
+tmux attach -t training
+tmux ls
+```
+
+Detach from `tmux` without stopping the run:
+
+- press `Ctrl+b`
+- then press `d`
+
 ## Step 4: Run The Staged Release Pipeline
 
 On the training VM:
 
 ```bash
 cd /opt/option_trading
-./ops/gcp/run_staged_release_pipeline.sh
+tmux new -s training
+```
+
+Inside the `tmux` session:
+
+```bash
+./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release.log
 ```
 
 Verify:
@@ -116,6 +142,8 @@ Verify:
 - command exits successfully
 - output includes `Staged release pipeline complete`
 - output prints the `runtime handoff` path
+- follow live progress from another SSH session with `tail -f /opt/option_trading/training-release.log`
+- if you disconnect, reconnect and run `tmux attach -t training`
 
 Also verify the latest local release handoff:
 
@@ -126,6 +154,36 @@ find /opt/option_trading/ml_pipeline_2/artifacts/research -path "*/release/ml_pu
 Look for:
 
 - a concrete `release/ml_pure_runtime.env` path
+
+If you were disconnected and are not sure whether the job finished:
+
+```bash
+cd /opt/option_trading
+pgrep -af "run_staged_release_pipeline.sh|ml_pipeline_2.run_staged_release"
+tail -n 50 training-release.log
+find /opt/option_trading/ml_pipeline_2/artifacts/research -path "*/release/ml_pure_runtime.env" | sort | tail -n 1
+```
+
+Interpretation:
+
+- active process found: training is still running; reattach with `tmux attach -t training`
+- no active process and `Staged release pipeline complete` is present: proceed to publish verification
+- no active process and the wrapper exited without the completion marker: do not assume interruption only; inspect the latest staged artifacts first
+
+When the wrapper exits without the completion marker, inspect the newest staged run directory before rerunning anything:
+
+```bash
+cd /opt/option_trading
+LATEST_RUN="$(ls -1dt ml_pipeline_2/artifacts/research/* 2>/dev/null | head -n 1)"
+echo "${LATEST_RUN}"
+find "${LATEST_RUN}" -maxdepth 2 \( -name summary.json -o -name assessment.json -o -name release_summary.json \) | sort
+```
+
+Interpret those artifacts before deciding what to do:
+
+- `summary.json` exists and `publish_assessment.decision` is `HOLD`: the staged run completed enough to reject publish; investigate blocking reasons instead of rerunning blindly
+- `release/assessment.json` exists but `release/ml_pure_runtime.env` does not: the release step reached publish assessment and rejected the candidate as non-publishable
+- no staged summary artifacts exist for the latest run: the wrapper likely stopped before the research run completed; rerun the wrapper from the top
 
 ## Step 5: Verify Publish Results
 
@@ -158,6 +216,13 @@ What to inspect in the run summary:
 - `publish_assessment.decision` should be `PUBLISH`
 - `publish_assessment.publishable` should be `true`
 - `blocking_reasons` should be empty
+
+Useful artifact meanings:
+
+- `summary.json`: staged research summary, including `publish_assessment`, stage artifacts, CV prechecks, and any early-hold outcome
+- `release/assessment.json`: publishability decision for the completed staged run
+- `release/release_summary.json`: final publish and handoff result for the completed staged release; this exists for both `PUBLISH` and `HOLD` outcomes
+- `release/ml_pure_runtime.env`: runtime handoff for deployment; this exists only after a successful publish
 
 If the staged release returns `HOLD`, stop and investigate the holdout gates before live deployment.
 

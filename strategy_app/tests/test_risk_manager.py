@@ -37,10 +37,10 @@ class RiskManagerTests(unittest.TestCase):
         ):
             mgr = RiskManager()
             mgr.on_session_start(date(2026, 3, 5))
-            # Confidence is clamped to a 0.5 floor in budget mode:
-            # int((100000 * 0.5) / (200 * 15)) = 16 lots.
+            # Budget remains a hard cap. Low confidence is floored to 0.65 of that cap:
+            # base_lots = int(100000 / (200 * 15)) = 33 lots, scaled -> int(33 * 0.65) = 21.
             lots = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.40, confidence=0.25)
-            self.assertEqual(lots, 16)
+            self.assertEqual(lots, 21)
 
     def test_aggressive_safe_profile_applies_defaults(self) -> None:
         with mock.patch.dict("os.environ", {"RISK_PROFILE": "aggressive_safe_v1"}, clear=False):
@@ -49,10 +49,10 @@ class RiskManagerTests(unittest.TestCase):
             self.assertEqual(mgr.context.max_consecutive_losses, 3)
             self.assertAlmostEqual(float(mgr.context.max_daily_loss_pct), 0.02, places=8)
             self.assertEqual(mgr.context.max_lots_per_trade, 20)
-            # Confidence floor applies here too:
-            # int((50000 * 0.5) / (250 * 15)) = 6 lots.
+            # The profile keeps the configured notional cap and scales down at the floor:
+            # int(50000 / (250 * 15)) = 13 lots, scaled -> int(13 * 0.65) = 8.
             lots = mgr.compute_lots(entry_premium=250.0, stop_loss_pct=0.40, confidence=0.25)
-            self.assertEqual(lots, 6)
+            self.assertEqual(lots, 8)
 
     def test_profile_can_be_overridden_by_env(self) -> None:
         with mock.patch.dict(
@@ -70,7 +70,7 @@ class RiskManagerTests(unittest.TestCase):
             lots = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.40, confidence=1.0)
             self.assertEqual(lots, 10)
 
-    def test_budget_sizing_scales_with_confidence_and_clamps_low_values(self) -> None:
+    def test_budget_sizing_scales_within_hard_notional_cap(self) -> None:
         with mock.patch.dict(
             "os.environ",
             {
@@ -85,12 +85,27 @@ class RiskManagerTests(unittest.TestCase):
             mgr.on_session_start(date(2026, 3, 5))
 
             floored = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.40, confidence=0.10)
-            half = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.40, confidence=0.50)
+            floor = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.40, confidence=0.65)
+            higher = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.40, confidence=0.80)
             full = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.40, confidence=1.00)
 
-            self.assertEqual(floored, half)
-            self.assertEqual(half, 16)
+            self.assertEqual(floored, floor)
+            self.assertEqual(floor, 21)
+            self.assertGreater(higher, floor)
+            self.assertEqual(higher, 26)
             self.assertEqual(full, 33)
+
+    def test_risk_based_sizing_scales_within_hard_risk_cap(self) -> None:
+        mgr = RiskManager()
+        mgr.on_session_start(date(2026, 3, 5))
+
+        floor = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.20, confidence=0.65)
+        higher = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.20, confidence=0.80)
+        full = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.20, confidence=1.0)
+
+        self.assertEqual(floor, 2)
+        self.assertEqual(higher, 3)
+        self.assertEqual(full, 4)
 
     def test_vix_resume_requires_30min_continuous_below_threshold(self) -> None:
         mgr = RiskManager()

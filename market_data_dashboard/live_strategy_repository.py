@@ -11,12 +11,14 @@ try:
     from .strategy_evaluation_service import (
         _iso_or_none,
         _parse_reason,
+        _resolve_position_signal_id,
         _safe_float,
     )
 except ImportError:
     from strategy_evaluation_service import (  # type: ignore
         _iso_or_none,
         _parse_reason,
+        _resolve_position_signal_id,
         _safe_float,
     )
 
@@ -169,6 +171,7 @@ class LiveStrategyRepository:
         projection = {
             "_id": 0,
             "position_id": 1,
+            "signal_id": 1,
             "event": 1,
             "timestamp": 1,
             "trade_date_ist": 1,
@@ -181,6 +184,11 @@ class LiveStrategyRepository:
                 continue
             payload_position = ((doc.get("payload") or {}).get("position")) if isinstance(doc.get("payload"), dict) else {}
             payload_position = payload_position if isinstance(payload_position, dict) else {}
+            if not str(payload_position.get("signal_id") or "").strip():
+                payload_position = dict(payload_position)
+                resolved_signal_id = _resolve_position_signal_id(payload_position, doc)
+                if resolved_signal_id:
+                    payload_position["signal_id"] = resolved_signal_id
             slot = out.setdefault(position_id, {"position_id": position_id})
             event = str(doc.get("event") or payload_position.get("event") or "").strip().upper()
             if event == "POSITION_OPEN":

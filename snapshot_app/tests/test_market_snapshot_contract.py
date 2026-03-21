@@ -128,6 +128,8 @@ def _valid_snapshot() -> dict:
             "total_ce_volume": 1000,
             "total_pe_volume": 900,
             "pcr": 1.1,
+            "pcr_change_5m": 0.02,
+            "pcr_change_15m": 0.03,
             "pcr_change_30m": 0.01,
             "max_pain": 50000,
             "ce_oi_top_strike": 50000,
@@ -140,6 +142,7 @@ def _valid_snapshot() -> dict:
         },
         "ladder_aggregates": {
             "near_atm_pcr": 1.08,
+            "near_atm_oi_ratio": 0.48,
             "near_atm_oi_concentration": 0.72,
             "near_atm_volume_concentration": 0.68,
             "oi_sum_m3_p3_ce": 10000.0,
@@ -174,6 +177,7 @@ def _valid_snapshot() -> dict:
             "atm_pe_vol_ratio": 1.0,
             "atm_ce_pe_price_diff": 10.0,
             "atm_ce_pe_iv_diff": -0.01,
+            "atm_oi_ratio": 0.4761904762,
         },
         "iv_derived": {
             "iv_skew": -0.01,
@@ -207,3 +211,6 @@ def test_snapshot_accessor_reads_final_market_snapshot_contract() -> None:
     assert snap.trade_date == "2026-03-17"
     assert snap.atm_ce_close == 100.0
     assert snap.pcr == 1.1
+    assert snap.pcr_change_5m == 0.02
+    assert snap.atm_oi_ratio == 0.4761904762
+    assert snap.near_atm_oi_ratio == 0.48

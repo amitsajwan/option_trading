@@ -55,7 +55,7 @@ terraform apply
 7. Optionally use the snapshot data bucket for raw archive and final historical parquet artifacts.
 
 If you want the runnable operator scripts that sit on top of this scaffold, use [ops/gcp/README.md](../../ops/gcp/README.md).
-If you want the human-facing Day 0 procedure, use [GCP_BOOTSTRAP_RUNBOOK.md](../../docs/GCP_BOOTSTRAP_RUNBOOK.md).
+If you want the human-facing operator workflow docs, use [docs/runbooks/README.md](../../docs/runbooks/README.md).
 
 ## Notes
 

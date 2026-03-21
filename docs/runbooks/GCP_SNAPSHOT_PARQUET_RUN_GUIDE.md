@@ -111,7 +111,7 @@ On the VM:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y git python3-venv
+sudo apt-get install -y git python3-venv tmux
 git clone <repo-clone-url>
 cd option_trading
 git checkout <repo-ref>
@@ -150,13 +150,35 @@ Look for:
 - bucket URLs are present and non-empty
 - `LOCAL_RAW_ARCHIVE_ROOT` is set only if the raw archive is already on this VM
 
+For long-running snapshot builds, always use `tmux`.
+If the SSH session drops while the script is running in a plain foreground shell, the build usually stops with the shell.
+
+Basic `tmux` commands:
+
+```bash
+tmux new -s snapshot
+tmux attach -t snapshot
+tmux ls
+```
+
+Detach from `tmux` without stopping the build:
+
+- press `Ctrl+b`
+- then press `d`
+
 ## Step 5: Run The Single Snapshot Build And Publish Script
 
 On the snapshot VM:
 
 ```bash
 cd ~/option_trading
-./ops/gcp/run_snapshot_parquet_pipeline.sh
+tmux new -s snapshot
+```
+
+Inside the `tmux` session:
+
+```bash
+./ops/gcp/run_snapshot_parquet_pipeline.sh 2>&1 | tee snapshot-run.log
 ```
 
 What the script does:
@@ -179,6 +201,8 @@ Notes:
 - worker defaults auto-detect CPU and cap at `16`
 - rerunning the same command resumes from the existing local parquet state
 - the script publishes only after the local build and validation state is publishable, unless `ALLOW_PARTIAL_PUBLISH=1` is set explicitly
+- follow live progress from another SSH session with `tail -f ~/option_trading/snapshot-run.log`
+- if you disconnect, reconnect and run `tmux attach -t snapshot`
 
 Verify:
 
@@ -264,6 +288,50 @@ Interpretation:
 - `buildable_missing_count > 0`: inputs exist and rerunning the main script should backfill those days
 - `source_missing_count > 0`: raw or normalized options coverage is missing and must be fixed before publish
 
+### Recover After SSH Disconnect
+
+Check whether the wrapper or publish step is still running:
+
+```bash
+cd ~/option_trading
+pgrep -af "run_snapshot_parquet_pipeline.sh|snapshot_batch_runner|publish_snapshot_parquet.sh"
+```
+
+Inspect the latest run directory:
+
+```bash
+cd ~/option_trading
+LATEST="$(ls -1dt .run/snapshot_parquet/* 2>/dev/null | head -n 1)"
+echo "${LATEST}"
+ls -lah "${LATEST}"
+```
+
+Interpretation:
+
+- active process found: the build is still running; reattach with `tmux attach -t snapshot` or watch `tail -f ~/option_trading/snapshot-run.log`
+- no active process and only `coverage_audit.json` exists: the run stopped before build completion; rerun the main script
+- `build_manifest.json` exists locally but GCS is still empty or partial: the run reached local report generation but did not finish publish; rerun the main script
+
+The main script is resumable by default, so the standard recovery path is:
+
+```bash
+cd ~/option_trading
+tmux attach -t snapshot
+```
+
+If no `snapshot` session exists yet:
+
+```bash
+cd ~/option_trading
+tmux new -s snapshot
+```
+
+Inside the `tmux` session, rerun:
+
+```bash
+./ops/gcp/run_snapshot_parquet_pipeline.sh 2>&1 | tee snapshot-run.log
+```
+
 ### Rerun One Targeted Year Or Date Window
 
 ```bash
@@ -286,7 +354,34 @@ Notes:
 
 ### Publish Existing Local Parquet Without Rebuild
 
-If the local parquet tree is complete and you only need fresh reports plus a republish:
+This is a manual recovery path, not the normal operator path.
+It is not equivalent to `run_snapshot_parquet_pipeline.sh`.
+
+Important differences from the supported wrapper:
+
+- it does not run the wrapper's source-coverage audit gate before publish
+- it does not verify that the requested build window is fully closed before publish
+- it can republish incomplete local parquet if you skip the checks below
+
+Use it only when you have already verified that the local parquet tree is complete and consistent for the intended publish window.
+
+Minimum checks before manual republish:
+
+```bash
+cd ~/option_trading
+LATEST_REPORT="$(ls -1dt .run/snapshot_parquet/* 2>/dev/null | head -n 1)"
+echo "${LATEST_REPORT}"
+test -f "${LATEST_REPORT}/coverage_audit.json" && cat "${LATEST_REPORT}/coverage_audit.json"
+test -f "${LATEST_REPORT}/build_manifest.json" && cat "${LATEST_REPORT}/build_manifest.json"
+```
+
+Look for:
+
+- `source_missing_count` is `0`
+- `buildable_missing_count` is `0`
+- `build_manifest.json` reports a publishable local build state
+
+Only then use the manual republish sequence below:
 
 ```bash
 cd ~/option_trading
@@ -314,6 +409,12 @@ for ds in snapshots market_base snapshots_ml_flat stage1_entry_view stage2_direc
 done
 
 ./ops/gcp/publish_snapshot_parquet.sh
+```
+
+If any of the checks above fail, stop and rerun the supported wrapper instead:
+
+```bash
+./ops/gcp/run_snapshot_parquet_pipeline.sh 2>&1 | tee snapshot-run.log
 ```
 
 ### Seed GCS Raw Archive Outside The Main Script

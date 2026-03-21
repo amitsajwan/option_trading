@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from market_data_dashboard.live_strategy_monitor_service import LiveStrategyMonitorService
 from market_data_dashboard.strategy_evaluation_service import StrategyEvaluationService
@@ -63,6 +64,42 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
         self.assertAlmostEqual(rows[0]["unrealized_pnl_pct"], 240.0 / 500000.0, places=9)
         self.assertTrue(rows[0]["trailing_active"])
 
+    def test_build_current_open_positions_uses_top_level_signal_id_fallback(self) -> None:
+        position_map = {
+            "open-legacy": {
+                "position_id": "open-legacy",
+                "open": {
+                    "entry_strategy": "OI_BUILDUP",
+                    "direction": "CE",
+                    "entry_premium": 100.0,
+                    "lots": 1,
+                    "reason": "[PRE_EXPIRY] OI_BUILDUP: entry",
+                },
+                "open_doc": {
+                    "signal_id": "sig-legacy-1",
+                    "timestamp": "2026-03-02T10:00:00Z",
+                },
+                "latest_manage": {
+                    "current_premium": 108.0,
+                    "pnl_pct": 0.08,
+                },
+                "latest_manage_doc": {"timestamp": "2026-03-02T10:03:00Z"},
+            },
+        }
+        signal_map = {
+            "sig-legacy-1": {
+                "regime": "PRE_EXPIRY",
+                "reason": "[PRE_EXPIRY] OI_BUILDUP: entry",
+            }
+        }
+
+        rows = self.service.build_current_open_positions(position_map, signal_map, initial_capital=500000.0)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["signal_id"], "sig-legacy-1")
+        self.assertEqual(rows[0]["strategy"], "OI_BUILDUP")
+        self.assertEqual(rows[0]["regime"], "PRE_EXPIRY")
+
     def test_build_latest_closed_trade_reconstructs_capital_metrics(self) -> None:
         position_map = {
             "closed-1": {
@@ -113,6 +150,53 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
         self.assertAlmostEqual(trade["capital_at_risk"], 3000.0, places=6)
         self.assertAlmostEqual(trade["capital_pnl_amount"], 300.0, places=6)
         self.assertAlmostEqual(trade["capital_pnl_pct"], 300.0 / 500000.0, places=9)
+
+    def test_build_latest_closed_trade_uses_top_level_signal_id_fallback(self) -> None:
+        position_map = {
+            "closed-legacy": {
+                "position_id": "closed-legacy",
+                "open": {
+                    "timestamp": "2026-03-02T10:00:00Z",
+                    "direction": "PE",
+                    "strike": 60000,
+                    "entry_premium": 200.0,
+                    "lots": 1,
+                    "reason": "[TRENDING] EMA_CROSSOVER: bear",
+                },
+                "open_doc": {
+                    "trade_date_ist": "2026-03-02",
+                    "signal_id": "sig-legacy-close-1",
+                },
+                "close": {
+                    "timestamp": "2026-03-02T10:02:00Z",
+                    "direction": "PE",
+                    "strike": 60000,
+                    "entry_premium": 200.0,
+                    "exit_premium": 220.0,
+                    "pnl_pct": 0.10,
+                    "mfe_pct": 0.12,
+                    "mae_pct": -0.01,
+                    "bars_held": 2,
+                    "exit_reason": "TARGET_HIT",
+                },
+                "close_doc": {
+                    "trade_date_ist": "2026-03-02",
+                },
+            }
+        }
+        signal_map = {
+            "sig-legacy-close-1": {
+                "regime": "TRENDING",
+                "reason": "[TRENDING] EMA_CROSSOVER: bear",
+            }
+        }
+
+        trade = self.service.build_latest_closed_trade(position_map, signal_map, initial_capital=500000.0)
+
+        self.assertIsNotNone(trade)
+        assert trade is not None
+        self.assertEqual(trade["signal_id"], "sig-legacy-close-1")
+        self.assertEqual(trade["entry_strategy"], "EMA_CROSSOVER")
 
     def test_build_chart_markers_emits_entry_and_exit_pairs(self) -> None:
         closed_trades = [
@@ -329,7 +413,7 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
                 "engine_mode": "ml_pure",
                 "decision_mode": "ml_staged",
                 "decision_reason_code": "ce_above_threshold",
-                "decision_metrics": {"ce_prob": 0.70, "pe_prob": 0.40, "edge": 0.30, "confidence": 0.70},
+                "decision_metrics": {"entry_prob": 0.70, "ce_prob": 0.70, "pe_prob": 0.40, "edge": 0.30, "confidence": 0.70},
             },
             {
                 "timestamp": "2026-03-07T09:31:00+05:30",
@@ -339,7 +423,7 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
                 "engine_mode": "ml_pure",
                 "decision_mode": "ml_staged",
                 "decision_reason_code": "pe_above_threshold",
-                "decision_metrics": {"ce_prob": 0.35, "pe_prob": 0.68, "edge": 0.33, "confidence": 0.68},
+                "decision_metrics": {"entry_prob": 0.62, "ce_prob": 0.35, "pe_prob": 0.68, "edge": 0.33, "confidence": 0.68},
             },
             {
                 "timestamp": "2026-03-07T09:32:00+05:30",
@@ -361,10 +445,95 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
             },
         ]
 
-        diagnostics = self.service.build_ml_pure_diagnostics(
-            date_ist="2026-03-07",
-            signals_coll=CollectionStub(docs),
-        )
+        position_docs = [
+            {
+                "position_id": "p1",
+                "signal_id": "s1",
+                "event": "POSITION_OPEN",
+                "timestamp": "2026-03-07T09:30:00+05:30",
+                "trade_date_ist": "2026-03-07",
+                "engine_mode": "ml_pure",
+                "payload": {
+                    "position": {
+                        "signal_id": "s1",
+                        "timestamp": "2026-03-07T09:30:00+05:30",
+                        "direction": "CE",
+                        "entry_premium": 100.0,
+                        "lots": 1,
+                        "stop_loss_pct": 0.05,
+                        "target_pct": 0.20,
+                        "reason": "[TRENDING] ML_PURE_STAGED: entry",
+                    }
+                },
+            },
+            {
+                "position_id": "p1",
+                "event": "POSITION_CLOSE",
+                "timestamp": "2026-03-07T09:40:00+05:30",
+                "trade_date_ist": "2026-03-07",
+                "engine_mode": "ml_pure",
+                "actual_outcome": "win",
+                "actual_return_pct": 0.10,
+                "payload": {
+                    "position": {
+                        "timestamp": "2026-03-07T09:40:00+05:30",
+                        "exit_premium": 110.0,
+                        "pnl_pct": 0.10,
+                        "mfe_pct": 0.11,
+                        "mae_pct": -0.02,
+                        "bars_held": 10,
+                        "exit_reason": "TARGET_HIT",
+                    }
+                },
+            },
+            {
+                "position_id": "p2",
+                "signal_id": "s2",
+                "event": "POSITION_OPEN",
+                "timestamp": "2026-03-07T09:31:00+05:30",
+                "trade_date_ist": "2026-03-07",
+                "engine_mode": "ml_pure",
+                "payload": {
+                    "position": {
+                        "signal_id": "s2",
+                        "timestamp": "2026-03-07T09:31:00+05:30",
+                        "direction": "PE",
+                        "entry_premium": 100.0,
+                        "lots": 1,
+                        "stop_loss_pct": 0.05,
+                        "target_pct": 0.20,
+                        "reason": "[TRENDING] ML_PURE_STAGED: entry",
+                    }
+                },
+            },
+            {
+                "position_id": "p2",
+                "event": "POSITION_CLOSE",
+                "timestamp": "2026-03-07T09:41:00+05:30",
+                "trade_date_ist": "2026-03-07",
+                "engine_mode": "ml_pure",
+                "actual_outcome": "loss",
+                "actual_return_pct": -0.05,
+                "payload": {
+                    "position": {
+                        "timestamp": "2026-03-07T09:41:00+05:30",
+                        "exit_premium": 95.0,
+                        "pnl_pct": -0.05,
+                        "mfe_pct": 0.03,
+                        "mae_pct": -0.06,
+                        "bars_held": 10,
+                        "exit_reason": "STOP_LOSS",
+                    }
+                },
+            },
+        ]
+
+        with patch.dict("os.environ", {"ML_PURE_STAGE1_THRESHOLD": "0.60"}, clear=False):
+            diagnostics = self.service.build_ml_pure_diagnostics(
+                date_ist="2026-03-07",
+                signals_coll=CollectionStub(docs),
+                positions_coll=CollectionStub(position_docs),
+            )
 
         self.assertEqual(diagnostics["counts"]["entries_ce"], 1)
         self.assertEqual(diagnostics["counts"]["entries_pe"], 1)
@@ -373,6 +542,106 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
         self.assertEqual(diagnostics["hold_reasons"]["feature_stale"], 1)
         self.assertAlmostEqual(diagnostics["ratios"]["hold_rate"], 0.5, places=6)
         self.assertAlmostEqual(diagnostics["ratios"]["ce_vs_pe_skew"], 0.5, places=6)
+        self.assertIn("rolling_quality", diagnostics)
+        self.assertTrue(diagnostics["rolling_quality"]["stage1_precision"]["available"])
+        self.assertAlmostEqual(diagnostics["rolling_quality"]["stage1_precision"]["precision"], 0.5, places=6)
+        self.assertEqual(diagnostics["rolling_quality"]["status"], "ok")
+
+    def test_build_ml_pure_diagnostics_surfaces_monitoring_failure(self) -> None:
+        class CursorStub:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def sort(self, *_args, **_kwargs):
+                return self
+
+            def limit(self, value):
+                return CursorStub(self._docs[: int(value)])
+
+            def __iter__(self):
+                return iter(self._docs)
+
+        class CollectionStub:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def find(self, *_args, **_kwargs):
+                return CursorStub(self._docs)
+
+        docs = [
+            {
+                "timestamp": "2026-03-07T09:30:00+05:30",
+                "signal_id": "s1",
+                "signal_type": "ENTRY",
+                "direction": "CE",
+                "engine_mode": "ml_pure",
+                "decision_mode": "ml_staged",
+                "decision_reason_code": "ce_above_threshold",
+                "decision_metrics": {"entry_prob": 0.70, "ce_prob": 0.70, "pe_prob": 0.30, "edge": 0.40, "confidence": 0.70},
+            }
+        ]
+
+        with patch("market_data_dashboard.diagnostics.ml_pure._rolling_ml_quality_from_collections", side_effect=RuntimeError("mongo unavailable")):
+            diagnostics = self.service.build_ml_pure_diagnostics(
+                date_ist="2026-03-07",
+                signals_coll=CollectionStub(docs),
+                positions_coll=CollectionStub([]),
+            )
+
+        self.assertIn("rolling_quality", diagnostics)
+        self.assertEqual(diagnostics["rolling_quality"]["status"], "error")
+        self.assertEqual(diagnostics["rolling_quality"]["error"]["type"], "RuntimeError")
+        self.assertEqual(diagnostics["rolling_quality"]["error"]["message"], "mongo unavailable")
+        self.assertIn("30d monitoring error", diagnostics["summary"])
+
+    def test_ml_pure_diagnostics_surfaces_rolling_quality_errors(self) -> None:
+        class CursorStub:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def sort(self, *_args, **_kwargs):
+                return self
+
+            def limit(self, value):
+                return CursorStub(self._docs[: int(value)])
+
+            def __iter__(self):
+                return iter(self._docs)
+
+        class CollectionStub:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def find(self, *_args, **_kwargs):
+                return CursorStub(self._docs)
+
+        docs = [
+            {
+                "timestamp": "2026-03-07T09:30:00+05:30",
+                "trade_date_ist": "2026-03-07",
+                "signal_id": "s1",
+                "signal_type": "ENTRY",
+                "direction": "CE",
+                "engine_mode": "ml_pure",
+                "decision_mode": "ml_staged",
+                "decision_reason_code": "ce_above_threshold",
+                "decision_metrics": {"entry_prob": 0.70, "ce_prob": 0.70, "pe_prob": 0.30, "edge": 0.40, "confidence": 0.70},
+            }
+        ]
+
+        with patch(
+            "market_data_dashboard.diagnostics.ml_pure._rolling_ml_quality_from_collections",
+            side_effect=RuntimeError("bad-threshold-report"),
+        ):
+            diagnostics = self.service.build_ml_pure_diagnostics(
+                date_ist="2026-03-07",
+                signals_coll=CollectionStub(docs),
+                positions_coll=CollectionStub([]),
+            )
+
+        self.assertIn("rolling_quality", diagnostics)
+        self.assertEqual(diagnostics["rolling_quality"]["error"]["type"], "RuntimeError")
+        self.assertIn("30d monitoring error", diagnostics["summary"])
 
     def test_ops_state_and_ui_hints_reflect_critical_conditions(self) -> None:
         alerts = [{"id": "data_stale_with_exposure", "severity": "critical"}]

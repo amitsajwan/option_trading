@@ -314,6 +314,107 @@ def test_project_rows_to_ml_flat_zero_denominator_flow_features_fill_zero() -> N
     assert projected[-1]["opt_flow_rel_volume_20"] == 0.0
 
 
+def test_project_rows_to_ml_flat_pcr_change_fallback_resets_by_trade_date() -> None:
+    rows = []
+    for idx in range(6):
+        rows.append(
+            {
+                "trade_date": "2020-06-04",
+                "year": 2020,
+                "instrument": "BANKNIFTY-I",
+                "timestamp": f"2020-06-04T09:{15 + idx:02d}:00+05:30",
+                "snapshot_id": f"20200604_{idx}",
+                "fut_open": 100.0,
+                "fut_high": 101.0,
+                "fut_low": 99.0,
+                "fut_close": 100.0,
+                "pcr": 1.00 + (0.01 * idx),
+            }
+        )
+    rows.append(
+        {
+            "trade_date": "2020-06-05",
+            "year": 2020,
+            "instrument": "BANKNIFTY-I",
+            "timestamp": "2020-06-05T09:15:00+05:30",
+            "snapshot_id": "20200605_0",
+            "fut_open": 101.0,
+            "fut_high": 102.0,
+            "fut_low": 100.0,
+            "fut_close": 101.0,
+            "pcr": 1.50,
+        }
+    )
+
+    projected = _project_rows_to_ml_flat(rows, build_source="historical", build_run_id="test_run")
+
+    assert projected[0]["pcr_change_5m"] is None
+    assert projected[4]["pcr_change_5m"] is None
+    assert projected[5]["pcr_change_5m"] == 0.05
+    assert projected[6]["pcr_change_5m"] is None
+    assert projected[6]["pcr_change_15m"] is None
+
+
+def test_project_rows_to_ml_flat_atm_fallbacks_reset_by_trade_date() -> None:
+    rows = [
+        {
+            "trade_date": "2020-06-04",
+            "year": 2020,
+            "instrument": "BANKNIFTY-I",
+            "timestamp": "2020-06-04T09:15:00+05:30",
+            "snapshot_id": "20200604_0",
+            "fut_open": 100.0,
+            "fut_high": 101.0,
+            "fut_low": 99.0,
+            "fut_close": 100.0,
+            "atm_ce_close": 100.0,
+            "atm_pe_close": 200.0,
+            "atm_ce_oi": 1000.0,
+            "atm_pe_oi": 900.0,
+        },
+        {
+            "trade_date": "2020-06-04",
+            "year": 2020,
+            "instrument": "BANKNIFTY-I",
+            "timestamp": "2020-06-04T09:16:00+05:30",
+            "snapshot_id": "20200604_1",
+            "fut_open": 101.0,
+            "fut_high": 102.0,
+            "fut_low": 100.0,
+            "fut_close": 101.0,
+            "atm_ce_close": 110.0,
+            "atm_pe_close": 180.0,
+            "atm_ce_oi": 1010.0,
+            "atm_pe_oi": 920.0,
+        },
+        {
+            "trade_date": "2020-06-05",
+            "year": 2020,
+            "instrument": "BANKNIFTY-I",
+            "timestamp": "2020-06-05T09:15:00+05:30",
+            "snapshot_id": "20200605_0",
+            "fut_open": 102.0,
+            "fut_high": 103.0,
+            "fut_low": 101.0,
+            "fut_close": 102.0,
+            "atm_ce_close": 150.0,
+            "atm_pe_close": 250.0,
+            "atm_ce_oi": 1100.0,
+            "atm_pe_oi": 980.0,
+        },
+    ]
+
+    projected = _project_rows_to_ml_flat(rows, build_source="historical", build_run_id="test_run")
+
+    assert projected[0]["opt_flow_atm_call_return_1m"] is None
+    assert projected[1]["opt_flow_atm_call_return_1m"] == 0.10
+    assert projected[1]["opt_flow_atm_put_return_1m"] == -0.10
+    assert projected[1]["opt_flow_atm_oi_change_1m"] == 30.0
+    assert projected[2]["opt_flow_atm_call_return_1m"] is None
+    assert projected[2]["opt_flow_atm_put_return_1m"] is None
+    assert projected[2]["opt_flow_atm_oi_change_1m"] is None
+
+
 def test_project_rows_to_ml_flat_normalizes_ema_slope_fallbacks() -> None:
     rows = [
         {

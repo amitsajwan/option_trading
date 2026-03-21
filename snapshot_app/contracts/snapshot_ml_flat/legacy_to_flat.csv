@@ -52,9 +52,13 @@ pe_oi_total,opt_flow_pe_oi_total,false,options flow namespace
 ce_volume_total,opt_flow_ce_volume_total,false,options flow namespace
 pe_volume_total,opt_flow_pe_volume_total,false,options flow namespace
 pcr_oi,opt_flow_pcr_oi,false,options flow namespace
+pcr_change_5m,pcr_change_5m,false,options flow namespace
+pcr_change_15m,pcr_change_15m,false,options flow namespace
 atm_call_return_1m,opt_flow_atm_call_return_1m,false,options flow namespace
 atm_put_return_1m,opt_flow_atm_put_return_1m,false,options flow namespace
 atm_oi_change_1m,opt_flow_atm_oi_change_1m,false,options flow namespace
+atm_oi_ratio,atm_oi_ratio,false,options flow namespace
+near_atm_oi_ratio,near_atm_oi_ratio,false,options flow namespace
 ce_pe_oi_diff,opt_flow_ce_pe_oi_diff,false,options flow namespace
 ce_pe_volume_diff,opt_flow_ce_pe_volume_diff,false,options flow namespace
 options_volume_total,opt_flow_options_volume_total,false,options flow namespace

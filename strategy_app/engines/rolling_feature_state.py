@@ -36,6 +36,37 @@ def _pct_change(current: Optional[float], previous: Optional[float]) -> Optional
     return float((cur - prev) / prev)
 
 
+def _oi_ratio(call_oi: Optional[float], put_oi: Optional[float]) -> Optional[float]:
+    ce = _to_float(call_oi)
+    pe = _to_float(put_oi)
+    if ce is None or pe is None:
+        return None
+    total = ce + pe
+    if total <= 0.0:
+        return None
+    return float(ce / total)
+
+
+def _near_atm_oi_ratio(snap: SnapshotAccessor) -> Optional[float]:
+    raw = snap.raw_payload if isinstance(snap.raw_payload, dict) else {}
+    strikes = raw.get("strikes") if isinstance(raw.get("strikes"), list) else []
+    atm_strike = snap.atm_strike
+    aggregate_ratio = snap.near_atm_oi_ratio
+    if not strikes or atm_strike is None:
+        return aggregate_ratio if aggregate_ratio is not None else _oi_ratio(snap.atm_ce_oi, snap.atm_pe_oi)
+    ordered = [row for row in strikes if isinstance(row, dict) and _to_float(row.get("strike")) is not None]
+    if not ordered:
+        return aggregate_ratio if aggregate_ratio is not None else _oi_ratio(snap.atm_ce_oi, snap.atm_pe_oi)
+    ordered = sorted(ordered, key=lambda row: float(row["strike"]))
+    atm_index = min(range(len(ordered)), key=lambda idx: abs(float(ordered[idx]["strike"]) - float(atm_strike)))
+    window = ordered[max(0, atm_index - 1) : min(len(ordered), atm_index + 2)]
+    ce_sum = sum(_to_float(row.get("ce_oi")) or 0.0 for row in window)
+    pe_sum = sum(_to_float(row.get("pe_oi")) or 0.0 for row in window)
+    if ce_sum <= 0.0 and pe_sum <= 0.0:
+        return aggregate_ratio if aggregate_ratio is not None else _oi_ratio(snap.atm_ce_oi, snap.atm_pe_oi)
+    return _oi_ratio(ce_sum, pe_sum)
+
+
 def _rsi_wilder(values: list[float], period: int = 14) -> Optional[float]:
     if len(values) < period + 1:
         return None
@@ -122,6 +153,7 @@ class RollingFeatureState:
         self._lows: deque[float] = deque(maxlen=self._max_bars)
         self._volumes: deque[float] = deque(maxlen=self._max_bars)
         self._fut_ois: deque[float] = deque(maxlen=self._max_bars)
+        self._pcr_values: deque[float] = deque(maxlen=self._max_bars)
         self._atm_ce_closes: deque[float] = deque(maxlen=self._max_bars)
         self._atm_pe_closes: deque[float] = deque(maxlen=self._max_bars)
         self._option_total_volume: deque[float] = deque(maxlen=self._max_bars)
@@ -152,6 +184,7 @@ class RollingFeatureState:
         self._lows.clear()
         self._volumes.clear()
         self._fut_ois.clear()
+        self._pcr_values.clear()
         self._atm_ce_closes.clear()
         self._atm_pe_closes.clear()
         self._option_total_volume.clear()
@@ -193,6 +226,8 @@ class RollingFeatureState:
             self._volumes.append(float(volume))
         if fut_oi is not None:
             self._fut_ois.append(float(fut_oi))
+        pcr = _to_float(snap.pcr)
+        self._pcr_values.append(float(pcr) if pcr is not None else float("nan"))
 
         ce_close = _to_float(snap.atm_ce_close)
         pe_close = _to_float(snap.atm_pe_close)
@@ -263,6 +298,16 @@ class RollingFeatureState:
             oi_std = float(np.std(oi_recent, ddof=0)) if len(oi_recent) > 0 else 0.0
             if oi_std > 0.0 and fut_oi is not None:
                 fut_oi_zscore_20 = float((fut_oi - oi_mean) / oi_std)
+        pcr_change_5m = None
+        pcr_change_15m = None
+        if len(self._pcr_values) >= 6:
+            prev_pcr_5 = _to_float(self._pcr_values[-6])
+            if pcr is not None and prev_pcr_5 is not None:
+                pcr_change_5m = float(pcr - prev_pcr_5)
+        if len(self._pcr_values) >= 16:
+            prev_pcr_15 = _to_float(self._pcr_values[-16])
+            if pcr is not None and prev_pcr_15 is not None:
+                pcr_change_15m = float(pcr - prev_pcr_15)
 
         minute_of_day = None
         day_of_week = None
@@ -289,6 +334,8 @@ class RollingFeatureState:
         if prev_atm_oi_sum is not None and (snap.atm_ce_oi is not None or snap.atm_pe_oi is not None):
             current_atm_oi_sum = float((snap.atm_ce_oi or 0.0) + (snap.atm_pe_oi or 0.0))
             atm_oi_change_1m = float(current_atm_oi_sum - prev_atm_oi_sum)
+        atm_oi_ratio = _oi_ratio(snap.atm_ce_oi, snap.atm_pe_oi)
+        near_atm_oi_ratio = _near_atm_oi_ratio(snap)
 
         return {
             "ret_1m": ret_1m,
@@ -344,7 +391,9 @@ class RollingFeatureState:
             "regime_trend_up": trend_up,
             "regime_trend_down": trend_down,
             "regime_expiry_near": is_near_expiry,
-            "pcr_oi": _to_float(snap.pcr),
+            "pcr_oi": pcr,
+            "pcr_change_5m": pcr_change_5m,
+            "pcr_change_15m": pcr_change_15m,
             "ce_pe_oi_diff": (
                 float((snap.total_ce_oi or 0.0) - (snap.total_pe_oi or 0.0))
                 if (snap.total_ce_oi is not None or snap.total_pe_oi is not None)
@@ -368,6 +417,8 @@ class RollingFeatureState:
             "atm_oi_change_1m": (
                 atm_oi_change_1m
             ),
+            "atm_oi_ratio": atm_oi_ratio,
+            "near_atm_oi_ratio": near_atm_oi_ratio,
             "atm_iv": (
                 float(((snap.atm_ce_iv or 0.0) + (snap.atm_pe_iv or 0.0)) / 2.0)
                 if (snap.atm_ce_iv is not None and snap.atm_pe_iv is not None)

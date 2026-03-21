@@ -28,6 +28,7 @@ class MlPureDiagnostics(TypedDict, total=False):
     hold_reasons: dict[str, int]
     edge_distribution: dict[str, Any]
     confidence_distribution: dict[str, Any]
+    rolling_quality: dict[str, Any]
     latest_decision: Optional[dict[str, Any]]
     recent_decisions: list[dict[str, Any]]
 

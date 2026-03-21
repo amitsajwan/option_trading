@@ -9,6 +9,7 @@ from typing import Optional
 
 from ..contracts import ExitReason, PositionContext, RiskContext, SignalType, TradeSignal
 from ..engines.snapshot_accessor import SnapshotAccessor
+from ..logging.decision_field_resolver import DecisionFieldResolver
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class PositionTracker:
     def __init__(self) -> None:
         self._position: Optional[PositionContext] = None
         self._closed_positions: list[dict[str, object]] = []
+        self._resolver = DecisionFieldResolver()
 
     def on_session_start(self, trade_date: date) -> None:
         self._position = None
@@ -58,6 +60,8 @@ class PositionTracker:
         if premium is None or premium <= 0:
             raise RuntimeError("cannot open position without a valid premium")
 
+        engine_mode = self._resolver.effective_engine_mode(signal.engine_mode, source=signal.source)
+        decision_mode = self._resolver.resolve_decision_mode_for_signal(signal, engine_mode)
         self._position = PositionContext(
             position_id=str(uuid.uuid4())[:8],
             direction=signal.direction or "",
@@ -66,6 +70,7 @@ class PositionTracker:
             entry_premium=premium,
             entry_time=signal.timestamp,
             entry_snapshot_id=signal.snapshot_id,
+            signal_id=str(signal.signal_id or "").strip() or None,
             lots=max(1, int(signal.max_lots or 1)),
             max_hold_bars=(max(1, int(signal.max_hold_bars)) if signal.max_hold_bars is not None else None),
             current_premium=premium,
@@ -95,6 +100,19 @@ class PositionTracker:
             entry_strategy=str(signal.entry_strategy_name or ""),
             entry_regime=str(signal.entry_regime_name or ""),
             entry_reason=signal.reason,
+            decision_metrics=self._resolver.signal_decision_metrics(signal),
+            engine_mode=engine_mode,
+            decision_mode=decision_mode,
+            decision_reason_code=self._resolver.resolve_reason_code_for_signal(signal),
+            strategy_family_version=self._resolver.resolve_strategy_family_version(
+                explicit=signal.strategy_family_version,
+                engine_mode=engine_mode,
+                decision_mode=decision_mode,
+            ),
+            strategy_profile_id=self._resolver.resolve_strategy_profile_id(
+                explicit=signal.strategy_profile_id,
+                engine_mode=engine_mode,
+            ),
         )
         logger.info(
             "position opened id=%s dir=%s strike=%s premium=%.2f lots=%d stop=%.2f trailing=%s",

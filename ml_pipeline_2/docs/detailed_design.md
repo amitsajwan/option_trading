@@ -23,7 +23,7 @@ Execution sequence:
 5. `src/ml_pipeline_2/experiment_control/runner.py`
    - creates the run root and dispatches by experiment kind.
 6. `src/ml_pipeline_2/staged/pipeline.py`
-   - loads parquet, builds oracle labels, trains Stage 1 / 2 / 3, selects policy, scores holdout, and writes `summary.json`.
+   - loads parquet, builds oracle labels, runs the Stage 2 signal precheck, trains Stage 1 / 2 / 3 with CV prechecks between stages, selects policy, scores holdout when all stages complete, and writes `summary.json`.
 7. `src/ml_pipeline_2/staged/runtime_contract.py`
    - validates the staged runtime bundle and policy contract.
 8. `src/ml_pipeline_2/publishing/publish.py`
@@ -51,7 +51,9 @@ Research outputs:
 - `ml_pipeline_2/artifacts/research/<run_id>/stages/stage1/model.joblib`
 - `ml_pipeline_2/artifacts/research/<run_id>/stages/stage2/model.joblib`
 - `ml_pipeline_2/artifacts/research/<run_id>/stages/stage3/recipes/<recipe_id>/model.joblib`
-- `ml_pipeline_2/artifacts/research/<run_id>/release/ml_pure_runtime.env`
+- `ml_pipeline_2/artifacts/research/<run_id>/release/assessment.json`
+- `ml_pipeline_2/artifacts/research/<run_id>/release/release_summary.json`
+- `ml_pipeline_2/artifacts/research/<run_id>/release/ml_pure_runtime.env` on publishable runs only
 
 Published outputs:
 - `ml_pipeline_2/artifacts/published_models/<model_group>/model/model.joblib`
@@ -177,7 +179,7 @@ Responsibilities:
 - load stage views and support datasets from local parquet
 - normalize timestamps and trade dates
 - derive expiry and regime context
-- build staged oracle labels and utility targets
+- build staged oracle labels and utility targets, masking invalid side/recipe returns out of staged utility before policy search
 - apply stage-specific labelers
 
 ### 3. Model Search and Holdout Evaluation
@@ -197,7 +199,7 @@ Responsibilities:
 - apply purge and embargo logic
 - fit candidate models
 - select winning packages
-- score validation and holdout windows
+- score validation windows on labeled slices and policy/holdout windows on the raw stage views
 - compute publish-gate summaries
 
 ### 4. Publish and Runtime Handoff
@@ -210,10 +212,11 @@ Files:
 - `src/ml_pipeline_2/publishing/resolver.py`
 
 Responsibilities:
-- reject non-publishable staged runs
+- reject non-publishable staged runs in the explicit publish-only path
+- record completed `HOLD` release outcomes with `release/assessment.json` and `release/release_summary.json` in the staged release path
 - build the staged runtime bundle and runtime policy
 - write the published-model layout
-- write `release/ml_pure_runtime.env`
+- write `release/ml_pure_runtime.env` on `PUBLISH`
 - optionally sync the published group to a bucket
 - support downstream resolution by run ID and model group
 

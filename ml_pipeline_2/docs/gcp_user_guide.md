@@ -35,7 +35,8 @@ The supported path for this branch is the staged 1 / 2 / 3 release lane:
 Retired paths such as open-search rebaseline and the removed legacy `ml_pipeline` package are not part of the supported operator flow.
 
 On the current branch there is no separate "champion selection" operator step for ML releases.
-The staged flow writes `summary.json` with `publish_assessment.decision = PUBLISH|HOLD`, and `run_staged_release` publishes only when that staged run is publishable.
+The staged flow writes `summary.json` with `publish_assessment.decision = PUBLISH|HOLD`.
+`run_staged_release` always writes `release/assessment.json` and `release/release_summary.json`, and publishes the runtime bundle only when that staged run is publishable.
 
 ## Required Inputs
 
@@ -134,12 +135,14 @@ python -m ml_pipeline_2.run_staged_release \
 
 This flow:
 1. validates the manifest
-2. trains Stage 1, Stage 2, and Stage 3
-3. selects policy on `research_valid`
-4. scores `final_holdout` once
-5. applies hard gates
-6. publishes the staged runtime bundle
-7. writes `release/ml_pure_runtime.env`
+2. runs the Stage 2 signal precheck on the labeled `full_model` window
+3. trains Stage 1 and applies the Stage 1 CV precheck
+4. trains Stage 2 and applies the Stage 2 CV precheck
+5. trains Stage 3 and selects policy on `research_valid` only if the earlier prechecks passed
+6. scores `final_holdout` once
+7. applies hard gates and computes `publish_assessment`
+8. writes `release/assessment.json` and `release/release_summary.json`
+9. publishes the staged runtime bundle and writes `release/ml_pure_runtime.env` only on `PUBLISH`
 
 ### 6. Publish an Existing Completed Run
 
@@ -191,6 +194,8 @@ gcloud compute ssh "${TRAINING_VM_NAME}" --zone "${ZONE}"
 On the VM:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y tmux
 cd /opt/option_trading
 git fetch --all --tags
 git checkout "${REPO_REF}"
@@ -200,12 +205,29 @@ git pull --ff-only
 ### 3. Run the Training Pipeline Script
 
 ```bash
-./ops/gcp/run_staged_release_pipeline.sh
+tmux new -s training
+```
+
+Inside the `tmux` session:
+
+```bash
+./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release.log
 ```
 
 Run it from `/opt/option_trading`, or export `REPO_ROOT=/opt/option_trading` before invoking it.
 
 That script is the managed wrapper around the staged release lane. It installs the package, runs `ml_pipeline_2.run_staged_release`, applies the generated ML runtime env, and republishes runtime config.
+
+For GCP VM execution, prefer `tmux` for every long training run.
+If the SSH session drops while the command is running in a plain foreground shell, the staged release usually stops with that shell.
+
+Useful commands:
+
+```bash
+tmux attach -t training
+tmux ls
+tail -f /opt/option_trading/training-release.log
+```
 
 ### 4. Inspect Results
 
@@ -242,8 +264,9 @@ Within the run directory:
 - `stages/stage2/model.joblib`
 - `stages/stage3/recipes/<recipe_id>/model.joblib`
 - stage training reports
-- `release/ml_pure_runtime.env`
 - `release/release_summary.json`
+- `release/assessment.json`
+- `release/ml_pure_runtime.env` on `PUBLISH` only
 
 Within the published model group:
 - `model/model.joblib`
@@ -258,13 +281,23 @@ That is not the release contract for the supported staged lane.
 
 For staged `ml_pipeline_2`, the decision path is:
 
-1. train Stage 1 / 2 / 3
-2. score `final_holdout`
+1. run the Stage 2 signal precheck and Stage 1 / 2 CV prechecks
+2. if those pass, train all three stages and score `final_holdout`
 3. compute `publish_assessment`
-4. if `publish_assessment.decision=PUBLISH`, write published artifacts and `release/ml_pure_runtime.env`
-5. if `publish_assessment.decision=HOLD`, do not publish
+4. write `release/assessment.json` and `release/release_summary.json`
+5. if `publish_assessment.decision=PUBLISH`, write published artifacts and `release/ml_pure_runtime.env`
+6. if `publish_assessment.decision=HOLD`, do not publish and do not write `release/ml_pure_runtime.env`
 
 Use `summary.json`, `release/assessment.json`, and `release/release_summary.json` as the current release records, not a champion registry.
+
+`summary.json` can complete in one of four modes:
+- `completed`
+- `stage2_signal_check_failed`
+- `stage1_cv_gate_failed`
+- `stage2_cv_gate_failed`
+
+Every `summary.json` includes `completion_mode` and `cv_prechecks`.
+Early-HOLD summaries intentionally omit downstream sections that were not computed, such as `holdout_reports`, `policy_reports`, and `gates`.
 
 ## Runtime Handoff
 
@@ -288,9 +321,10 @@ Live runtime deployment still happens outside this package.
 Stop and investigate if:
 - manifest validation fails
 - staged release returns `HOLD`
-- `summary.json` is missing `publish_assessment`
+- `summary.json` is missing `publish_assessment`, `completion_mode`, or `cv_prechecks`
 - the model bucket does not receive published artifacts
-- the runtime handoff file is missing or incomplete
+- `release/assessment.json` or `release/release_summary.json` is missing
+- `publish_assessment.decision=PUBLISH` but the runtime handoff file is missing or incomplete
 
 ## Related Docs
 

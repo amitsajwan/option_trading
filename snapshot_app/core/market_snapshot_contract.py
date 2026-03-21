@@ -113,6 +113,8 @@ REQUIRED_BLOCK_FIELDS: dict[str, tuple[str, ...]] = {
         "total_ce_volume",
         "total_pe_volume",
         "pcr",
+        "pcr_change_5m",
+        "pcr_change_15m",
         "pcr_change_30m",
         "max_pain",
         "ce_oi_top_strike",
@@ -125,6 +127,7 @@ REQUIRED_BLOCK_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "ladder_aggregates": (
         "near_atm_pcr",
+        "near_atm_oi_ratio",
         "near_atm_oi_concentration",
         "near_atm_volume_concentration",
         "oi_sum_m3_p3_ce",
@@ -159,6 +162,7 @@ REQUIRED_BLOCK_FIELDS: dict[str, tuple[str, ...]] = {
         "atm_pe_vol_ratio",
         "atm_ce_pe_price_diff",
         "atm_ce_pe_iv_diff",
+        "atm_oi_ratio",
     ),
     "iv_derived": ("iv_skew", "iv_skew_dir", "iv_percentile", "iv_regime", "iv_expiry_type"),
     "session_levels": (

@@ -230,6 +230,10 @@ def _build_runtime_compat_payload(
                 atm_row = row
                 break
 
+    def _atm_value(primary_key: str, fallback_key: str) -> Optional[float]:
+        primary = _nullable_float((atm_row or {}).get(primary_key))
+        return primary if primary is not None else _nullable_float(feature_row.get(fallback_key))
+
     vix_prev_close = _nullable_float(feature_row.get("vix_prev_close"))
     vix_current = _nullable_float(vix_live_current)
     vix_intraday_chg = None
@@ -248,7 +252,8 @@ def _build_runtime_compat_payload(
 
     opening_range_high = _nullable_float(feature_row.get("opening_range_high"))
     opening_range_low = _nullable_float(feature_row.get("opening_range_low"))
-    fut_close = _nullable_float(feature_row.get("px_fut_close") or feature_row.get("fut_close"))
+    px_fut_close = feature_row.get("px_fut_close")
+    fut_close = _nullable_float(px_fut_close if px_fut_close is not None else feature_row.get("fut_close"))
     price_vs_orh = None
     price_vs_orl = None
     or_width = None
@@ -349,20 +354,44 @@ def _build_runtime_compat_payload(
             "pe_oi_top_strike": pe_oi_top_strike,
         },
         "atm_options": {
-            "atm_ce_close": _nullable_float((atm_row or {}).get("ce_ltp") or feature_row.get("opt_0_ce_close")),
-            "atm_pe_close": _nullable_float((atm_row or {}).get("pe_ltp") or feature_row.get("opt_0_pe_close")),
-            "atm_ce_open": _nullable_float((atm_row or {}).get("ce_open") or feature_row.get("opt_0_ce_open")),
-            "atm_ce_high": _nullable_float((atm_row or {}).get("ce_high") or feature_row.get("opt_0_ce_high")),
-            "atm_ce_low": _nullable_float((atm_row or {}).get("ce_low") or feature_row.get("opt_0_ce_low")),
-            "atm_pe_open": _nullable_float((atm_row or {}).get("pe_open") or feature_row.get("opt_0_pe_open")),
-            "atm_pe_high": _nullable_float((atm_row or {}).get("pe_high") or feature_row.get("opt_0_pe_high")),
-            "atm_pe_low": _nullable_float((atm_row or {}).get("pe_low") or feature_row.get("opt_0_pe_low")),
-            "atm_ce_volume": _nullable_float((atm_row or {}).get("ce_volume") or feature_row.get("opt_0_ce_volume")),
-            "atm_pe_volume": _nullable_float((atm_row or {}).get("pe_volume") or feature_row.get("opt_0_pe_volume")),
-            "atm_ce_oi": _nullable_float((atm_row or {}).get("ce_oi") or feature_row.get("opt_0_ce_oi")),
-            "atm_pe_oi": _nullable_float((atm_row or {}).get("pe_oi") or feature_row.get("opt_0_pe_oi")),
-            "atm_ce_iv": _nullable_float((atm_row or {}).get("ce_iv")),
-            "atm_pe_iv": _nullable_float((atm_row or {}).get("pe_iv")),
+            "atm_ce_close": _atm_value("ce_ltp", "opt_0_ce_close"),
+            "atm_pe_close": _atm_value("pe_ltp", "opt_0_pe_close"),
+            "atm_ce_open": _atm_value("ce_open", "opt_0_ce_open"),
+            "atm_ce_high": _atm_value("ce_high", "opt_0_ce_high"),
+            "atm_ce_low": _atm_value("ce_low", "opt_0_ce_low"),
+            "atm_pe_open": _atm_value("pe_open", "opt_0_pe_open"),
+            "atm_pe_high": _atm_value("pe_high", "opt_0_pe_high"),
+            "atm_pe_low": _atm_value("pe_low", "opt_0_pe_low"),
+            "atm_ce_volume": _nullable_float(
+                (atm_row or {}).get("ce_volume")
+                if (atm_row or {}).get("ce_volume") is not None
+                else feature_row.get("opt_0_ce_volume")
+            ),
+            "atm_pe_volume": _nullable_float(
+                (atm_row or {}).get("pe_volume")
+                if (atm_row or {}).get("pe_volume") is not None
+                else feature_row.get("opt_0_pe_volume")
+            ),
+            "atm_ce_oi": _nullable_float(
+                (atm_row or {}).get("ce_oi")
+                if (atm_row or {}).get("ce_oi") is not None
+                else feature_row.get("opt_0_ce_oi")
+            ),
+            "atm_pe_oi": _nullable_float(
+                (atm_row or {}).get("pe_oi")
+                if (atm_row or {}).get("pe_oi") is not None
+                else feature_row.get("opt_0_pe_oi")
+            ),
+            "atm_ce_iv": _nullable_float(
+                (atm_row or {}).get("ce_iv")
+                if (atm_row or {}).get("ce_iv") is not None
+                else feature_row.get("opt_0_ce_iv")
+            ),
+            "atm_pe_iv": _nullable_float(
+                (atm_row or {}).get("pe_iv")
+                if (atm_row or {}).get("pe_iv") is not None
+                else feature_row.get("opt_0_pe_iv")
+            ),
             "atm_ce_vol_ratio": None,
             "atm_pe_vol_ratio": None,
             "atm_ce_oi_change_30m": None,

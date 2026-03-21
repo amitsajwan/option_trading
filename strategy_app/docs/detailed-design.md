@@ -172,6 +172,7 @@ Both modes continue to produce standard `TradeSignal` objects with risk-aware lo
 `RiskManager` controls:
 
 - capital-aware lot sizing
+- confidence-aware downscaling within configured risk/notional caps
 - max daily drawdown breaches
 - consecutive-loss kill logic
 - VIX/spike halt and cooldown resume
@@ -201,7 +202,13 @@ Every decision path writes structured artifacts:
 - signal events (`signals.jsonl`)
 - position events (`positions.jsonl`)
 
-The same logical events are also pushed to Redis topics. Event fields are normalized via `decision_field_resolver` and emitted as canonical contracts by `SignalLogger`.
+Position lifecycle records preserve the originating entry `signal_id` and carry snapshot linkage:
+
+- `POSITION_OPEN`: `snapshot_id` + `entry_snapshot_id` reference the opening snapshot
+- `POSITION_MANAGE`: `snapshot_id` references the current manage snapshot and `entry_snapshot_id` preserves the origin
+- `POSITION_CLOSE`: `snapshot_id` references the closing snapshot and `entry_snapshot_id` preserves the origin
+
+Canonical decision metrics and normalized contract fields are stored on the live `PositionContext` before logging so `SignalLogger` remains a serialization/publish boundary, not a runtime state mutator. The same logical events are also pushed to Redis topics.
 
 ## 13) Health and Operational Behavior
 

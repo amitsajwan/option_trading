@@ -126,6 +126,7 @@ class MemorySignalLogger:
         self,
         *,
         exit_signal: TradeSignal,
+        position: Optional[PositionContext] = None,  # noqa: ARG002
         entry_premium: float,
         exit_premium: float,
         pnl_pct: float,

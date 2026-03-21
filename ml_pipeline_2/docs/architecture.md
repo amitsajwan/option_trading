@@ -36,12 +36,14 @@ The supported release lane for this branch is the staged manifest-driven path:
 2. resolve the manifest contract
 3. load historical parquet views
 4. construct staged oracle labels and training frames
-5. train Stage 1 entry, Stage 2 direction, and Stage 3 recipe-selection models
-6. select policy on `research_valid`
-7. score `final_holdout` once
-8. apply hard gates
-9. publish the staged runtime bundle and runtime policy
-10. hand off `ML_PURE_RUN_ID` and `ML_PURE_MODEL_GROUP`
+5. run the Stage 2 signal precheck on the labeled `full_model` slice
+6. train Stage 1 entry, then apply the Stage 1 CV precheck
+7. train Stage 2 direction, then apply the Stage 2 CV precheck
+8. train Stage 3 recipe-selection and select policy on `research_valid` only if the earlier prechecks passed
+9. score `final_holdout` once on the completed staged policy
+10. apply hard gates and compute `publish_assessment`
+11. if publishable, publish the staged runtime bundle and runtime policy
+12. write release assessment artifacts either way, then hand off `ML_PURE_RUN_ID` and `ML_PURE_MODEL_GROUP` only on `PUBLISH`
 
 Primary entrypoints:
 - `src/ml_pipeline_2/run_research.py`
@@ -175,7 +177,9 @@ Research-run artifacts under `ml_pipeline_2/artifacts/research/<run_id>`:
 - staged model packages
 - training reports
 - `summary.json`
-- `release/ml_pure_runtime.env`
+- `release/assessment.json`
+- `release/release_summary.json`
+- `release/ml_pure_runtime.env` on `PUBLISH` only
 
 Published artifacts under `ml_pipeline_2/artifacts/published_models/<model_group>`:
 - `model/model.joblib`
@@ -204,6 +208,7 @@ Current design rules for the package:
 - the staged manifest is explicit; hidden training defaults are avoided in the supported lane
 - direct dependencies on the old `ml_pipeline` package are not allowed
 - staged publish is gated by holdout and combined hard-gate checks
+- staged research may complete early with `completion_mode=stage2_signal_check_failed|stage1_cv_gate_failed|stage2_cv_gate_failed`; those summaries still write `publish_assessment=HOLD`, `cv_prechecks`, and partial `stage_artifacts`
 - runtime handoff uses run ID and model group, not ad hoc local model paths
 - if `runtime.block_expiry=true`, staged training filters expiry-day rows before oracle construction and stage labeling so training and runtime semantics stay aligned
 

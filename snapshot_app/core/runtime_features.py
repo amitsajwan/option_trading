@@ -73,6 +73,13 @@ def _first_numeric_series(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
     return pd.Series(np.nan, index=frame.index, dtype=float)
 
 
+def _sum_numeric_columns(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
+    values = [pd.to_numeric(frame[column], errors="coerce") for column in columns if column in frame.columns]
+    if not values:
+        return pd.Series(np.nan, index=frame.index, dtype=float)
+    return pd.concat(values, axis=1).sum(axis=1, min_count=1)
+
+
 def _add_group_features(group: pd.DataFrame) -> pd.DataFrame:
     out = group.sort_values("timestamp").copy()
     out["ret_1m"] = out["fut_close"].pct_change(1, fill_method=None)
@@ -128,6 +135,18 @@ def _add_group_features(group: pd.DataFrame) -> pd.DataFrame:
     out["ce_pe_oi_diff"] = out["ce_oi_total"] - out["pe_oi_total"]
     out["ce_pe_volume_diff"] = out["ce_volume_total"] - out["pe_volume_total"]
     out["options_volume_total"] = out["ce_volume_total"] + out["pe_volume_total"]
+    pcr_series = _first_numeric_series(out, ["opt_flow_pcr_oi", "pcr_oi"])
+    out["pcr_change_5m"] = pcr_series.diff(5)
+    out["pcr_change_15m"] = pcr_series.diff(15)
+    atm_ce_oi = _first_numeric_series(out, ["atm_ce_oi", "opt_0_ce_oi"])
+    atm_pe_oi = _first_numeric_series(out, ["atm_pe_oi", "opt_0_pe_oi"])
+    atm_total_oi = atm_ce_oi + atm_pe_oi
+    out["atm_oi_ratio"] = (atm_ce_oi / atm_total_oi.replace(0.0, np.nan)).where(atm_ce_oi.notna() & atm_pe_oi.notna())
+    near_ce_oi = _sum_numeric_columns(out, ["opt_m1_ce_oi", "opt_0_ce_oi", "opt_p1_ce_oi"])
+    near_pe_oi = _sum_numeric_columns(out, ["opt_m1_pe_oi", "opt_0_pe_oi", "opt_p1_pe_oi"])
+    near_total_oi = near_ce_oi + near_pe_oi
+    near_ratio = (near_ce_oi / near_total_oi.replace(0.0, np.nan)).where(near_ce_oi.notna() & near_pe_oi.notna())
+    out["near_atm_oi_ratio"] = near_ratio.where(near_ratio.notna(), out["atm_oi_ratio"])
     opt_vol_roll = out["options_volume_total"].rolling(20, min_periods=5).mean()
     out["options_rel_volume_20"] = out["options_volume_total"] / opt_vol_roll.replace(0.0, np.nan)
     zero_opt_volume_windows = out["options_volume_total"].fillna(0.0).eq(0.0) & opt_vol_roll.fillna(0.0).eq(0.0)

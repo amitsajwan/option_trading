@@ -40,6 +40,14 @@ def _resolve_run_id(event: dict[str, Any], body: dict[str, Any]) -> Optional[str
     return text or None
 
 
+def _resolve_metadata_text(event: dict[str, Any], key: str) -> Optional[str]:
+    metadata = event.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    text = str(metadata.get(key) or "").strip()
+    return text or None
+
+
 def _optional_text(value: Any) -> Optional[str]:
     text = str(value or "").strip()
     return text or None
@@ -66,6 +74,50 @@ def _optional_metrics(value: Any) -> Optional[dict[str, Any]]:
             continue
         out[str(key)] = raw
     return out or None
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed:
+        return None
+    return float(parsed)
+
+
+def _flatten_ml_metrics(value: Any) -> dict[str, Optional[float]]:
+    metrics = value if isinstance(value, dict) else {}
+    direction_up = _optional_float(metrics.get("direction_up_prob"))
+    ce_prob = _optional_float(metrics.get("ce_prob"))
+    pe_prob = _optional_float(metrics.get("pe_prob"))
+    if ce_prob is None and direction_up is not None:
+        ce_prob = float(direction_up)
+    if pe_prob is None and direction_up is not None:
+        pe_prob = float(1.0 - direction_up)
+    return {
+        "ml_entry_prob": _optional_float(metrics.get("entry_prob")),
+        "ml_direction_up_prob": direction_up,
+        "ml_ce_prob": ce_prob,
+        "ml_pe_prob": pe_prob,
+        "ml_recipe_prob": _optional_float(metrics.get("recipe_prob")),
+        "ml_recipe_margin": _optional_float(metrics.get("recipe_margin")),
+    }
+
+
+def _actual_outcome_from_position(position: dict[str, Any]) -> Optional[str]:
+    exit_reason = str(position.get("exit_reason") or "").strip().upper()
+    pnl_pct = _optional_float(position.get("pnl_pct"))
+    if exit_reason in {"STOP_LOSS", "TRAILING_STOP", "RISK_BREACH"}:
+        return "stop"
+    if exit_reason == "TIME_STOP":
+        return "time"
+    if pnl_pct is not None:
+        if pnl_pct > 0:
+            return "win"
+        if pnl_pct < 0:
+            return "loss"
+    return "unknown" if exit_reason or pnl_pct is not None else None
 
 
 class SnapshotMongoWriter:
@@ -243,6 +295,7 @@ class StrategyMongoWriter:
             "decision_mode": _optional_decision_mode(vote.get("decision_mode")),
             "decision_reason_code": _optional_reason_code(vote.get("decision_reason_code")),
             "decision_metrics": _optional_metrics(vote.get("decision_metrics")),
+            **_flatten_ml_metrics(vote.get("decision_metrics")),
             "strategy_family_version": _optional_text(vote.get("strategy_family_version")),
             "strategy_profile_id": _optional_text(vote.get("strategy_profile_id")),
             "payload": event,
@@ -286,6 +339,7 @@ class StrategyMongoWriter:
             "decision_mode": _optional_decision_mode(signal.get("decision_mode")),
             "decision_reason_code": _optional_reason_code(signal.get("decision_reason_code")),
             "decision_metrics": _optional_metrics(signal.get("decision_metrics")),
+            **_flatten_ml_metrics(signal.get("decision_metrics")),
             "strategy_family_version": _optional_text(signal.get("strategy_family_version")),
             "strategy_profile_id": _optional_text(signal.get("strategy_profile_id")),
             "payload": event,
@@ -305,12 +359,15 @@ class StrategyMongoWriter:
         run_id = _resolve_run_id(event, position)
         ts = _parse_ts(position.get("timestamp")) or _parse_ts(event.get("published_at")) or datetime.now(tz=IST)
         ts_ist = to_ist(ts)
+        actual_outcome = _actual_outcome_from_position(position) if str(position.get("event") or "").strip().upper() == "POSITION_CLOSE" else None
+        actual_return_pct = _optional_float(position.get("pnl_pct")) if actual_outcome is not None else None
         doc = {
             "event_type": "strategy_position",
             "event_version": str(event.get("event_version") or "1.0"),
             "source": str(event.get("source") or "strategy_app"),
             "event_id": str(event.get("event_id") or ""),
             "position_id": str(position.get("position_id") or ""),
+            "signal_id": _optional_text(position.get("signal_id")) or _resolve_metadata_text(event, "signal_id"),
             "event": str(position.get("event") or ""),
             "timestamp": to_ist_iso(ts_ist),
             "trade_date_ist": ts_ist.date().isoformat(),
@@ -324,6 +381,10 @@ class StrategyMongoWriter:
             "engine_mode": _optional_engine_mode(position.get("engine_mode")),
             "decision_mode": _optional_decision_mode(position.get("decision_mode")),
             "decision_reason_code": _optional_reason_code(position.get("decision_reason_code")),
+            "decision_metrics": _optional_metrics(position.get("decision_metrics")),
+            **_flatten_ml_metrics(position.get("decision_metrics")),
+            "actual_outcome": actual_outcome,
+            "actual_return_pct": actual_return_pct,
             "strategy_family_version": _optional_text(position.get("strategy_family_version")),
             "strategy_profile_id": _optional_text(position.get("strategy_profile_id")),
             "payload": event,

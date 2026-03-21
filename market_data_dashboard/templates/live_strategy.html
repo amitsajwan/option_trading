@@ -580,6 +580,46 @@
                 <div class="kv"><div class="label">Edge (P50 / P90)</div><div class="value" id="mlPureEdgeStats">--</div></div>
                 <div class="kv"><div class="label">Confidence (P50 / P90)</div><div class="value" id="mlPureConfidenceStats">--</div></div>
                 <div class="kv"><div class="label">Top HOLD Reasons</div><div class="value" id="mlPureHoldReasons">--</div></div>
+                <div class="kv"><div class="label">Rolling Window</div><div class="value" id="mlPureRollingWindow">--</div></div>
+                <div class="kv"><div class="label">30d Stage 1 Precision</div><div class="value" id="mlPureRollingPrecision">--</div></div>
+                <div class="kv"><div class="label">30d Profit Factor</div><div class="value" id="mlPureRollingPf">--</div></div>
+                <div class="kv"><div class="label">Max Regime Drift</div><div class="value" id="mlPureRollingDrift">--</div></div>
+            </div>
+            <div class="grid-2" style="margin-top:12px;">
+                <div>
+                    <h3 style="margin:0 0 8px;">30-Day Direction Calibration</h3>
+                    <div class="table-wrap" style="max-height: 220px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Bucket</th>
+                                    <th>CE Pred</th>
+                                    <th>CE Actual</th>
+                                    <th>PE Pred</th>
+                                    <th>PE Actual</th>
+                                    <th>Samples</th>
+                                </tr>
+                            </thead>
+                            <tbody id="mlPureCalibrationTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div>
+                    <h3 style="margin:0 0 8px;">30-Day Regime Drift</h3>
+                    <div class="table-wrap" style="max-height: 220px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Regime</th>
+                                    <th>Live</th>
+                                    <th>Training</th>
+                                    <th>Shift</th>
+                                </tr>
+                            </thead>
+                            <tbody id="mlPureRegimeDriftTable"></tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
             </div>
         </section>
@@ -993,6 +1033,12 @@
             const edge = diag.edge_distribution || {};
             const conf = diag.confidence_distribution || {};
             const holdReasons = diag.hold_reasons || {};
+            const rolling = diag.rolling_quality || {};
+            const stage1 = rolling.stage1_precision || {};
+            const profitFactor = rolling.profit_factor || {};
+            const regimeDrift = rolling.regime_drift || {};
+            const ceBuckets = (rolling.stage2_ce_calibration || {}).buckets || [];
+            const peBuckets = (rolling.stage2_pe_calibration || {}).buckets || [];
             const topReasons = Object.entries(holdReasons)
                 .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
                 .slice(0, 3)
@@ -1012,6 +1058,37 @@
             qs("#mlPureEdgeStats").textContent = edge.samples ? `${money(edge.p50)} / ${money(edge.p90)}` : "--";
             qs("#mlPureConfidenceStats").textContent = conf.samples ? `${money(conf.p50)} / ${money(conf.p90)}` : "--";
             qs("#mlPureHoldReasons").textContent = topReasons || "--";
+            const windowDates = rolling.window_dates || {};
+            qs("#mlPureRollingWindow").textContent = windowDates.days_total ? `${text(windowDates.days_total)}d | ${text(windowDates.date_from)} to ${text(windowDates.date_to)}` : "--";
+            qs("#mlPureRollingPrecision").textContent = ratio(stage1.precision);
+            qs("#mlPureRollingPf").textContent = money(profitFactor.profit_factor);
+            qs("#mlPureRollingDrift").textContent = ratio(regimeDrift.max_abs_shift);
+
+            const ceMap = Object.fromEntries(ceBuckets.map((row) => [String(row.bucket || ""), row]));
+            const peMap = Object.fromEntries(peBuckets.map((row) => [String(row.bucket || ""), row]));
+            const bucketKeys = [...new Set([...Object.keys(ceMap), ...Object.keys(peMap)])];
+            renderRows("#mlPureCalibrationTable", bucketKeys, (bucket) => {
+                const ce = ceMap[bucket] || {};
+                const pe = peMap[bucket] || {};
+                return `
+                    <tr>
+                        <td>${text(bucket)}</td>
+                        <td>${pct(ce.avg_predicted_prob)}</td>
+                        <td>${pct(ce.actual_win_rate)}</td>
+                        <td>${pct(pe.avg_predicted_prob)}</td>
+                        <td>${pct(pe.actual_win_rate)}</td>
+                        <td>${text(ce.samples || pe.samples)}</td>
+                    </tr>
+                `;
+            }, "No rolling calibration buckets.", 6);
+            renderRows("#mlPureRegimeDriftTable", regimeDrift.rows || [], (row) => `
+                <tr>
+                    <td>${text(row.regime)}</td>
+                    <td>${pct(row.live_share)}</td>
+                    <td>${pct(row.training_share)}</td>
+                    <td>${pct(row.abs_shift)}</td>
+                </tr>
+            `, "No training regime baseline loaded.", 4);
         }
 
         function renderDeterministicDiagnostics(session) {

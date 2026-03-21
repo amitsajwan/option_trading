@@ -120,14 +120,25 @@ def test_build_market_snapshot_populates_final_contract_and_stage_views() -> Non
     assert snapshot_2["session_context"]["minutes_to_close"] == 331
     assert snapshot_2["chain_aggregates"]["atm_straddle_price"] is not None
     assert snapshot_2["ladder_aggregates"]["near_atm_pcr"] is not None
+    assert snapshot_2["ladder_aggregates"]["near_atm_oi_ratio"] is not None
     assert snapshot_2["atm_options"]["atm_ce_return_1m"] is not None
     assert snapshot_2["atm_options"]["atm_pe_oi_change_1m"] is not None
+    assert snapshot_2["atm_options"]["atm_oi_ratio"] == (
+        snapshot_2["atm_options"]["atm_ce_oi"]
+        / (snapshot_2["atm_options"]["atm_ce_oi"] + snapshot_2["atm_options"]["atm_pe_oi"])
+    )
 
     stage1 = project_stage1_entry_view(snapshot_2)
     stage2 = project_stage2_direction_view(snapshot_2)
     stage3 = project_stage3_recipe_view(snapshot_2)
 
     assert stage1["near_atm_pcr"] == snapshot_2["ladder_aggregates"]["near_atm_pcr"]
+    assert stage2["pcr_change_5m"] == snapshot_2["chain_aggregates"]["pcr_change_5m"]
+    assert stage2["pcr_change_15m"] == snapshot_2["chain_aggregates"]["pcr_change_15m"]
+    assert stage2["atm_ce_oi"] == snapshot_2["atm_options"]["atm_ce_oi"]
+    assert stage2["atm_pe_oi"] == snapshot_2["atm_options"]["atm_pe_oi"]
+    assert stage2["atm_oi_ratio"] == snapshot_2["atm_options"]["atm_oi_ratio"]
+    assert stage2["near_atm_oi_ratio"] == snapshot_2["ladder_aggregates"]["near_atm_oi_ratio"]
     assert stage2["atm_ce_pe_price_diff"] == snapshot_2["atm_options"]["atm_ce_pe_price_diff"]
     assert stage3["atm_straddle_pct"] == snapshot_2["chain_aggregates"]["atm_straddle_pct"]
     assert snapshot_1["chain_aggregates"]["atm_strike"] == 50000
@@ -165,6 +176,50 @@ def test_build_market_snapshot_does_not_cross_compare_changed_atm_strike() -> No
     assert second_snapshot["atm_options"]["atm_pe_return_1m"] is None
     assert second_snapshot["atm_options"]["atm_ce_oi_change_1m"] is None
     assert second_snapshot["atm_options"]["atm_pe_oi_change_1m"] is None
+
+
+def test_build_market_snapshot_pcr_change_resets_by_session_boundary() -> None:
+    state = MarketSnapshotState()
+    day1_bars = _ohlc_frame(
+        start="2026-03-17 09:15:00",
+        periods=6,
+        closes=[50_000.0 + float(idx) for idx in range(6)],
+    )
+    day2_bars = _ohlc_frame(
+        start="2026-03-18 09:15:00",
+        periods=2,
+        closes=[50_100.0, 50_101.0],
+    )
+
+    day1_snapshots = []
+    for idx in range(len(day1_bars)):
+        chain = _chain_for_price(fut_close=float(day1_bars.iloc[idx]["close"]), atm_override=50000)
+        chain["pcr"] = 1.00 + (0.01 * idx)
+        day1_snapshots.append(
+            build_market_snapshot(
+                instrument="BANKNIFTY-I",
+                ohlc=day1_bars.iloc[: idx + 1],
+                chain=chain,
+                state=state,
+            )
+        )
+
+    day2_ohlc = pd.concat([day1_bars, day2_bars], ignore_index=True)
+    first_day2_chain = _chain_for_price(fut_close=float(day2_bars.iloc[0]["close"]), atm_override=50100)
+    first_day2_chain["pcr"] = 1.50
+    first_day2_snapshot = build_market_snapshot(
+        instrument="BANKNIFTY-I",
+        ohlc=day2_ohlc.iloc[: len(day1_bars) + 1],
+        chain=first_day2_chain,
+        state=state,
+    )
+
+    assert day1_snapshots[0]["chain_aggregates"]["pcr_change_5m"] is None
+    assert day1_snapshots[4]["chain_aggregates"]["pcr_change_5m"] is None
+    assert np.isclose(float(day1_snapshots[5]["chain_aggregates"]["pcr_change_5m"]), 0.05)
+    assert day1_snapshots[5]["chain_aggregates"]["pcr_change_15m"] is None
+    assert first_day2_snapshot["chain_aggregates"]["pcr_change_5m"] is None
+    assert first_day2_snapshot["chain_aggregates"]["pcr_change_15m"] is None
 
 
 def test_normalize_ohlc_frame_drops_invalid_timestamp_rows() -> None:

@@ -766,6 +766,13 @@ def _project_rows_to_ml_flat(
     pcr_calc = out["opt_flow_pe_oi_total"] / out["opt_flow_ce_oi_total"].replace(0.0, np.nan)
     out["opt_flow_pcr_oi"] = pcr.where(pcr.notna(), pcr_fallback.where(pcr_fallback.notna(), pcr_calc))
     out.loc[no_option_rows, "opt_flow_pcr_oi"] = out.loc[no_option_rows, "opt_flow_pcr_oi"].fillna(1.0)
+    pcr_change_5m = num("pcr_change_5m")
+    pcr_change_15m = num("pcr_change_15m")
+    trade_date_groups = out["trade_date"].astype(str)
+    pcr_diff_5m = out.groupby(trade_date_groups, sort=False)["opt_flow_pcr_oi"].diff(5)
+    pcr_diff_15m = out.groupby(trade_date_groups, sort=False)["opt_flow_pcr_oi"].diff(15)
+    out["pcr_change_5m"] = pcr_change_5m.where(pcr_change_5m.notna(), pcr_diff_5m)
+    out["pcr_change_15m"] = pcr_change_15m.where(pcr_change_15m.notna(), pcr_diff_15m)
 
     call_ret_canonical = num("atm_ce_return_1m")
     put_ret_canonical = num("atm_pe_return_1m")
@@ -773,18 +780,21 @@ def _project_rows_to_ml_flat(
     put_ret_legacy = num("opt_flow_atm_put_return_1m", "atm_put_return_1m")
     atm_ce_close = num("atm_ce_close")
     atm_pe_close = num("atm_pe_close")
+    atm_groups = out["trade_date"].astype(str)
+    atm_ce_close_pct_change = atm_ce_close.groupby(atm_groups, sort=False).pct_change(1, fill_method=None)
+    atm_pe_close_pct_change = atm_pe_close.groupby(atm_groups, sort=False).pct_change(1, fill_method=None)
     out["opt_flow_atm_call_return_1m"] = call_ret_canonical.where(
         call_ret_canonical.notna(),
         call_ret_legacy.where(
             call_ret_legacy.notna(),
-            atm_ce_close.pct_change(1, fill_method=None),
+            atm_ce_close_pct_change,
         ),
     )
     out["opt_flow_atm_put_return_1m"] = put_ret_canonical.where(
         put_ret_canonical.notna(),
         put_ret_legacy.where(
             put_ret_legacy.notna(),
-            atm_pe_close.pct_change(1, fill_method=None),
+            atm_pe_close_pct_change,
         ),
     )
     atm_oi_change_legacy = num("opt_flow_atm_oi_change_1m", "atm_oi_change_1m")
@@ -796,13 +806,22 @@ def _project_rows_to_ml_flat(
         atm_ce_oi_change_canonical.loc[canonical_mask] + atm_pe_oi_change_canonical.loc[canonical_mask]
     )
     atm_total_oi = num("atm_ce_oi") + num("atm_pe_oi")
+    atm_total_oi_diff = atm_total_oi.groupby(atm_groups, sort=False).diff()
     out["opt_flow_atm_oi_change_1m"] = atm_oi_change_canonical.where(
         atm_oi_change_canonical.notna(),
         atm_oi_change_legacy.where(
             atm_oi_change_legacy.notna(),
-            atm_total_oi.diff(),
+            atm_total_oi_diff,
         ),
     )
+    atm_ce_oi_raw = num("atm_ce_oi")
+    atm_pe_oi_raw = num("atm_pe_oi")
+    atm_ratio = (atm_ce_oi_raw / (atm_ce_oi_raw + atm_pe_oi_raw).replace(0.0, np.nan)).where(
+        atm_ce_oi_raw.notna() & atm_pe_oi_raw.notna()
+    )
+    out["atm_oi_ratio"] = num("atm_oi_ratio").where(num("atm_oi_ratio").notna(), atm_ratio)
+    near_ratio = num("near_atm_oi_ratio")
+    out["near_atm_oi_ratio"] = near_ratio.where(near_ratio.notna(), out["atm_oi_ratio"])
     ce_pe_oi_diff = num("opt_flow_ce_pe_oi_diff", "ce_pe_oi_diff")
     ce_pe_vol_diff = num("opt_flow_ce_pe_volume_diff", "ce_pe_volume_diff")
     options_total = num("opt_flow_options_volume_total", "options_volume_total")

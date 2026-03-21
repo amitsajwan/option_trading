@@ -126,6 +126,8 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
         ),
         "chain_aggregates": (
             "pcr",
+            "pcr_change_5m",
+            "pcr_change_15m",
             "pcr_change_30m",
             "max_pain",
             "ce_pe_oi_diff",
@@ -134,6 +136,7 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
         ),
         "ladder_aggregates": (
             "near_atm_pcr",
+            "near_atm_oi_ratio",
             "near_atm_oi_concentration",
             "near_atm_volume_concentration",
             "oi_sum_m3_p3_ce",
@@ -144,6 +147,8 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
         "atm_options": (
             "atm_ce_return_1m",
             "atm_pe_return_1m",
+            "atm_ce_oi",
+            "atm_pe_oi",
             "atm_ce_oi_change_1m",
             "atm_pe_oi_change_1m",
             "atm_ce_oi_change_30m",
@@ -152,6 +157,7 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
             "atm_pe_iv",
             "atm_ce_pe_price_diff",
             "atm_ce_pe_iv_diff",
+            "atm_oi_ratio",
         ),
         "iv_derived": (
             "iv_skew",

@@ -579,6 +579,7 @@ class DeterministicRuleEngine(StrategyEngine):
         )
         self._log.log_position_close(
             exit_signal=exit_signal,
+            position=position,
             entry_premium=position.entry_premium,
             exit_premium=position.current_premium,
             pnl_pct=position.pnl_pct,

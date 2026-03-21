@@ -325,6 +325,28 @@ def _find_recent_history(
     return None
 
 
+def _find_history_n_bars(
+    history: Deque[Dict[str, Any]],
+    current_ts: pd.Timestamp,
+    *,
+    trade_date: str,
+    bars_back: int,
+) -> Optional[Dict[str, Any]]:
+    target_count = max(1, int(bars_back))
+    seen = 0
+    current_day = str(trade_date or "").strip()
+    for item in reversed(history):
+        ts = item.get("timestamp")
+        if not isinstance(ts, pd.Timestamp) or ts >= current_ts:
+            continue
+        if str(item.get("trade_date") or "").strip() != current_day:
+            continue
+        seen += 1
+        if seen >= target_count:
+            return item
+    return None
+
+
 def _history_mean(
     history: Deque[Dict[str, Any]],
     key: str,
@@ -502,6 +524,7 @@ def _ladder_aggregates(
 ) -> Dict[str, Any]:
     out = {
         "near_atm_pcr": None,
+        "near_atm_oi_ratio": None,
         "near_atm_oi_concentration": None,
         "near_atm_volume_concentration": None,
         "oi_sum_m3_p3_ce": None,
@@ -530,14 +553,24 @@ def _ladder_aggregates(
     start = max(0, int(atm_idx - 3))
     end = min(len(ordered), int(atm_idx + 4))
     window = ordered[start:end]
+    near_start = max(0, int(atm_idx - 1))
+    near_end = min(len(ordered), int(atm_idx + 2))
+    near_window = ordered[near_start:near_end]
     ce_oi_sum = float(np.nansum([_safe_float(item.get("ce_oi")) for item in window]))
     pe_oi_sum = float(np.nansum([_safe_float(item.get("pe_oi")) for item in window]))
     ce_vol_sum = float(np.nansum([_safe_float(item.get("ce_volume")) for item in window]))
     pe_vol_sum = float(np.nansum([_safe_float(item.get("pe_volume")) for item in window]))
+    near_ce_oi_sum = float(np.nansum([_safe_float(item.get("ce_oi")) for item in near_window]))
+    near_pe_oi_sum = float(np.nansum([_safe_float(item.get("pe_oi")) for item in near_window]))
 
     near_atm_pcr = None
     if np.isfinite(ce_oi_sum) and ce_oi_sum > 0.0 and np.isfinite(pe_oi_sum):
         near_atm_pcr = float(pe_oi_sum / ce_oi_sum)
+
+    near_atm_oi_ratio = None
+    near_total_oi = near_ce_oi_sum + near_pe_oi_sum
+    if np.isfinite(near_ce_oi_sum) and np.isfinite(near_pe_oi_sum) and near_total_oi > 0.0:
+        near_atm_oi_ratio = float(near_ce_oi_sum / near_total_oi)
 
     oi_concentration = None
     total_oi = (
@@ -560,6 +593,7 @@ def _ladder_aggregates(
     out.update(
         {
             "near_atm_pcr": _nullable_float(near_atm_pcr),
+            "near_atm_oi_ratio": _nullable_float(near_atm_oi_ratio),
             "near_atm_oi_concentration": _nullable_float(oi_concentration),
             "near_atm_volume_concentration": _nullable_float(volume_concentration),
             "oi_sum_m3_p3_ce": _nullable_float(ce_oi_sum),
@@ -1230,7 +1264,20 @@ def build_market_snapshot(
         ce_oi_top_strike = _nullable_int(ce_best.get("strike"))
         pe_oi_top_strike = _nullable_int(pe_best.get("strike"))
 
+    trade_day_key = str(trade_date.date())
+    prev_5 = _find_history_n_bars(state.chain_history, ts, trade_date=trade_day_key, bars_back=5)
+    prev_15 = _find_history_n_bars(state.chain_history, ts, trade_date=trade_day_key, bars_back=15)
     prev_30 = _find_history_30m(state.chain_history, ts, atm_strike=atm_strike)
+    pcr_change_5m = None
+    pcr_change_15m = None
+    if prev_5 is not None:
+        prev_pcr_5 = _safe_float(prev_5.get("pcr"))
+        if np.isfinite(prev_pcr_5) and np.isfinite(pcr):
+            pcr_change_5m = float(pcr - prev_pcr_5)
+    if prev_15 is not None:
+        prev_pcr_15 = _safe_float(prev_15.get("pcr"))
+        if np.isfinite(prev_pcr_15) and np.isfinite(pcr):
+            pcr_change_15m = float(pcr - prev_pcr_15)
     pcr_change_30m = None
     if prev_30 is not None:
         prev_pcr = _safe_float(prev_30.get("pcr"))
@@ -1270,6 +1317,8 @@ def build_market_snapshot(
         "total_ce_volume": _nullable_int(total_ce_volume),
         "total_pe_volume": _nullable_int(total_pe_volume),
         "pcr": _nullable_float(pcr),
+        "pcr_change_5m": _nullable_float(pcr_change_5m),
+        "pcr_change_15m": _nullable_float(pcr_change_15m),
         "pcr_change_30m": _nullable_float(pcr_change_30m),
         "max_pain": max_pain,
         "ce_oi_top_strike": ce_oi_top_strike,
@@ -1355,6 +1404,10 @@ def build_market_snapshot(
         if ce_iv is not None and pe_iv is not None
         else float("nan")
     )
+    atm_oi_ratio = None
+    atm_total_oi = ce_oi + pe_oi
+    if np.isfinite(ce_oi) and np.isfinite(pe_oi) and atm_total_oi > 0.0:
+        atm_oi_ratio = float(ce_oi / atm_total_oi)
 
     mss7 = {
         "atm_ce_strike": _nullable_int(atm_strike),
@@ -1383,6 +1436,7 @@ def build_market_snapshot(
         "atm_pe_vol_ratio": _nullable_float(pe_vol_ratio),
         "atm_ce_pe_price_diff": _nullable_float(atm_ce_pe_price_diff),
         "atm_ce_pe_iv_diff": _nullable_float(atm_ce_pe_iv_diff),
+        "atm_oi_ratio": _nullable_float(atm_oi_ratio),
     }
 
     iv_skew = None

@@ -48,6 +48,7 @@ class PositionContext:
     entry_time: datetime
     entry_snapshot_id: str
     lots: int
+    signal_id: Optional[str] = None
     current_premium: float = 0.0
     pnl_pct: float = 0.0
     mfe_pct: float = 0.0
@@ -80,6 +81,12 @@ class PositionContext:
     entry_strategy: str = ""
     entry_regime: str = ""
     entry_reason: str = ""
+    decision_metrics: dict[str, Any] = field(default_factory=dict)
+    engine_mode: Optional[str] = None
+    decision_mode: Optional[str] = None
+    decision_reason_code: Optional[str] = None
+    strategy_family_version: Optional[str] = None
+    strategy_profile_id: Optional[str] = None
 
 
 @dataclass

@@ -173,6 +173,27 @@ def _build_runtime_policy(summary: Dict[str, Any], *, model_group: str, profile_
     }
 
 
+def _held_publish_summary(*, assessment: Dict[str, Any], model_group: str, profile_id: str) -> Dict[str, Any]:
+    return {
+        "created_at_utc": utc_now(),
+        "publisher": "ml_pipeline_2",
+        "publish_kind": STAGED_RUNTIME_BUNDLE_KIND,
+        "publish_status": "held",
+        "publish_decision": {"decision": str(assessment["decision"])},
+        "run_id": str(assessment["run_id"]),
+        "model_group": str(model_group),
+        "profile_id": str(profile_id),
+        "publish_assessment": {
+            "publishable": bool(assessment["publishable"]),
+            "decision": str(assessment["decision"]),
+            "blocking_reasons": list(assessment["blocking_reasons"]),
+        },
+        "published_paths": {},
+        "active_group_paths": {},
+        "report_paths": {},
+    }
+
+
 def publish_staged_run(
     *,
     run_dir: str | Path,
@@ -299,28 +320,42 @@ def release_staged_run(
     assessment = assess_staged_release_candidate(run_dir=resolved_run_dir)
     release_root = resolved_run_dir / "release"
     assessment_path = _write_json(release_root / "assessment.json", assessment)
-    publish_summary = publish_staged_run(
-        run_dir=resolved_run_dir,
-        model_group=model_group,
-        profile_id=profile_id,
-        root=root,
-    )
-    runtime_env = {
-        "STRATEGY_ENGINE": "ml_pure",
-        "ML_PURE_RUN_ID": str(publish_summary["run_id"]),
-        "ML_PURE_MODEL_GROUP": str(publish_summary["model_group"]),
-    }
-    runtime_env_path = _write_env(release_root / "ml_pure_runtime.env", runtime_env)
+    runtime_env_path: Optional[Path] = None
     gcs_sync = None
-    if normalized_bucket_url:
-        gcs_sync = sync_published_model_group_to_gcs(
-            model_bucket_url=normalized_bucket_url,
-            model_group=str(publish_summary["model_group"]),
+    live_handoff: Optional[Dict[str, Any]] = None
+    if assessment["publishable"]:
+        publish_summary = publish_staged_run(
+            run_dir=resolved_run_dir,
+            model_group=model_group,
+            profile_id=profile_id,
             root=root,
         )
+        runtime_env = {
+            "STRATEGY_ENGINE": "ml_pure",
+            "ML_PURE_RUN_ID": str(publish_summary["run_id"]),
+            "ML_PURE_MODEL_GROUP": str(publish_summary["model_group"]),
+        }
+        runtime_env_path = _write_env(release_root / "ml_pure_runtime.env", runtime_env)
+        live_handoff = {"engine": "ml_pure", "env": runtime_env}
+        if normalized_bucket_url:
+            gcs_sync = sync_published_model_group_to_gcs(
+                model_bucket_url=normalized_bucket_url,
+                model_group=str(publish_summary["model_group"]),
+                root=root,
+            )
+        release_status = "published"
+    else:
+        publish_summary = _held_publish_summary(
+            assessment=assessment,
+            model_group=model_group,
+            profile_id=profile_id,
+        )
+        release_status = "held"
+
     result = {
         "created_at_utc": utc_now(),
         "status": "completed",
+        "release_status": release_status,
         "run_dir": str(resolved_run_dir),
         "run_id": str(publish_summary["run_id"]),
         "model_group": str(publish_summary["model_group"]),
@@ -329,12 +364,13 @@ def release_staged_run(
         "assessment": assessment,
         "publish": publish_summary,
         "gcs_sync": gcs_sync,
-        "live_handoff": {"engine": "ml_pure", "env": runtime_env},
+        "live_handoff": live_handoff,
         "paths": {
             "assessment": str(assessment_path.resolve()),
-            "runtime_env": str(runtime_env_path.resolve()),
         },
     }
+    if runtime_env_path is not None:
+        result["paths"]["runtime_env"] = str(runtime_env_path.resolve())
     summary_path = _write_json(release_root / "release_summary.json", result)
     result["paths"]["release_summary"] = str(summary_path.resolve())
     return result

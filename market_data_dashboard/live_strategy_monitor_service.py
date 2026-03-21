@@ -18,6 +18,7 @@ try:
         _iso_or_none,
         _parse_iso_dt,
         _parse_reason,
+        _resolve_position_signal_id,
         _safe_float,
     )
 except ImportError:
@@ -26,6 +27,7 @@ except ImportError:
         _iso_or_none,
         _parse_iso_dt,
         _parse_reason,
+        _resolve_position_signal_id,
         _safe_float,
     )
 
@@ -201,12 +203,12 @@ class LiveStrategyMonitorService:
     def build_deterministic_diagnostics(self, *, date_ist: str, votes_coll: Any) -> dict[str, Any]:
         return _build_deterministic_diagnostics_module(date_ist=date_ist, votes_coll=votes_coll)
 
-    def build_ml_pure_diagnostics(self, *, date_ist: str, signals_coll: Any) -> dict[str, Any]:
-        return _build_ml_pure_diagnostics_module(date_ist=date_ist, signals_coll=signals_coll)
+    def build_ml_pure_diagnostics(self, *, date_ist: str, signals_coll: Any, positions_coll: Any = None) -> dict[str, Any]:
+        return _build_ml_pure_diagnostics_module(date_ist=date_ist, signals_coll=signals_coll, positions_coll=positions_coll)
 
-    def build_decision_diagnostics(self, *, date_ist: str, votes_coll: Any, signals_coll: Any) -> DecisionDiagnostics:
+    def build_decision_diagnostics(self, *, date_ist: str, votes_coll: Any, signals_coll: Any, positions_coll: Any = None) -> DecisionDiagnostics:
         deterministic = self.build_deterministic_diagnostics(date_ist=date_ist, votes_coll=votes_coll)
-        ml_pure = self.build_ml_pure_diagnostics(date_ist=date_ist, signals_coll=signals_coll)
+        ml_pure = self.build_ml_pure_diagnostics(date_ist=date_ist, signals_coll=signals_coll, positions_coll=positions_coll)
         return {
             "deterministic": deterministic,
             "ml_pure": ml_pure,
@@ -235,7 +237,17 @@ class LiveStrategyMonitorService:
             if not isinstance(open_position, dict) or isinstance(close_position, dict):
                 continue
             latest_manage = docs.get("latest_manage") if isinstance(docs.get("latest_manage"), dict) else {}
-            signal_id = str(open_position.get("signal_id") or "").strip()
+            open_doc = docs.get("open_doc") if isinstance(docs.get("open_doc"), dict) else {}
+            latest_manage_doc = docs.get("latest_manage_doc") if isinstance(docs.get("latest_manage_doc"), dict) else {}
+            signal_id = str(
+                _resolve_position_signal_id(
+                    open_position,
+                    open_doc,
+                    latest_manage,
+                    latest_manage_doc,
+                )
+                or ""
+            ).strip()
             signal_doc = signal_map.get(signal_id, {})
             reason_text = str(signal_doc.get("reason") or open_position.get("reason") or "")
             strategy_from_reason, regime_from_reason = _parse_reason(reason_text)
@@ -637,6 +649,7 @@ class LiveStrategyMonitorService:
             date_ist=date_ist,
             votes_coll=votes_coll,
             signals_coll=signals_coll,
+            positions_coll=coll_map["positions"],
         )
         engine_context = self.infer_engine_context(
             recent_votes=recent_votes,

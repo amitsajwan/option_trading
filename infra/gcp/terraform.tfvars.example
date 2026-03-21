@@ -19,7 +19,9 @@ snapshot_data_bucket_name    = "my-option-trading-snapshots"
 
 runtime_config_sync_source   = "gs://my-option-trading-runtime-config/runtime"
 published_models_sync_source = "gs://my-option-trading-models/published_models"
-data_sync_source             = "gs://option-trading-ml/data"
+# This syncs into /opt/option_trading/.data/ml_pipeline on the VM, so the
+# source prefix should contain parquet_data/ underneath it.
+data_sync_source             = "gs://option-trading-ml/ml_pipeline"
 
 dashboard_port               = 8008
 enable_dashboard_profile     = true

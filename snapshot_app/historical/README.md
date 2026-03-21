@@ -16,7 +16,7 @@ python -m snapshot_app.historical.snapshot_batch_runner
 
 Internally, that runner now uses `snapshot_app.pipeline` for raw normalization and orchestration, so there is no separate "old historical builder" to keep in sync.
 
-For the GCP operator flow that builds final parquet on a high-power VM and uploads it to GCS, see [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](../../docs/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md).
+For the GCP operator flow that builds final parquet on a high-power VM and uploads it to GCS, see [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](../../docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md).
 
 ## What This Produces
 

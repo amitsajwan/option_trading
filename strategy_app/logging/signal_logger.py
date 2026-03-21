@@ -12,6 +12,9 @@ from contracts_app import (
     build_strategy_position_event,
     build_strategy_vote_event,
     build_trade_signal_event,
+    merge_decision_metrics,
+    normalize_decision_mode,
+    normalize_reason_code,
     strategy_position_topic,
     strategy_vote_topic,
     trade_signal_topic,
@@ -83,6 +86,18 @@ class SignalLogger:
 
     def _signal_decision_metrics(self, signal: TradeSignal) -> dict[str, float]:
         return self._resolver.signal_decision_metrics(signal)
+
+    def _position_decision_metrics(
+        self,
+        position: PositionContext,
+        *,
+        signal: Optional[TradeSignal] = None,
+    ) -> Optional[dict[str, float]]:
+        merged = merge_decision_metrics(
+            (position.decision_metrics if isinstance(position.decision_metrics, dict) else {}),
+            (self._signal_decision_metrics(signal) if signal is not None else {}),
+        )
+        return merged or None
 
     def _vote_record(self, vote: StrategyVote) -> dict[str, Any]:
         regime = vote.raw_signals.get("_regime") if isinstance(vote.raw_signals, dict) else None
@@ -189,28 +204,55 @@ class SignalLogger:
             "run_id": self._run_id,
         }
 
-    def _position_contract_fields(self, signal: Optional[TradeSignal] = None) -> dict[str, Any]:
-        engine_mode = self._effective_engine_mode(
-            getattr(signal, "engine_mode", None),
-            source=(getattr(signal, "source", None) if signal is not None else None),
+    def _position_contract_fields(
+        self,
+        signal: Optional[TradeSignal] = None,
+        *,
+        position: Optional[PositionContext] = None,
+    ) -> dict[str, Any]:
+        explicit_engine_mode = (
+            getattr(signal, "engine_mode", None)
+            if signal is not None and str(getattr(signal, "engine_mode", None) or "").strip()
+            else getattr(position, "engine_mode", None)
         )
+        explicit_source = getattr(signal, "source", None) if signal is not None else None
+        engine_mode = self._effective_engine_mode(explicit_engine_mode, source=explicit_source)
         if signal is not None:
             decision_mode = self._resolve_decision_mode_for_signal(signal, engine_mode)
             reason_code = self._resolve_reason_code_for_signal(signal)
+            explicit_family = (
+                getattr(signal, "strategy_family_version", None)
+                if str(getattr(signal, "strategy_family_version", None) or "").strip()
+                else getattr(position, "strategy_family_version", None)
+            )
+            explicit_profile = (
+                getattr(signal, "strategy_profile_id", None)
+                if str(getattr(signal, "strategy_profile_id", None) or "").strip()
+                else getattr(position, "strategy_profile_id", None)
+            )
+        elif position is not None:
+            decision_mode = normalize_decision_mode(position.decision_mode)
+            if decision_mode is None:
+                decision_mode = "ml_staged" if engine_mode == "ml_pure" else "rule_vote"
+            reason_code = normalize_reason_code(position.decision_reason_code)
+            explicit_family = position.strategy_family_version
+            explicit_profile = position.strategy_profile_id
         else:
             decision_mode = "rule_vote"
             reason_code = None
+            explicit_family = None
+            explicit_profile = None
         return {
             "engine_mode": engine_mode,
             "decision_mode": decision_mode,
             "decision_reason_code": reason_code,
             "strategy_family_version": self._resolve_strategy_family_version(
-                explicit=(getattr(signal, "strategy_family_version", None) if signal is not None else None),
+                explicit=explicit_family,
                 engine_mode=engine_mode,
                 decision_mode=decision_mode,
             ),
             "strategy_profile_id": self._resolve_strategy_profile_id(
-                explicit=(getattr(signal, "strategy_profile_id", None) if signal is not None else None),
+                explicit=explicit_profile,
                 engine_mode=engine_mode,
             ),
         }
@@ -240,10 +282,16 @@ class SignalLogger:
         )
 
     def log_position_open(self, signal: TradeSignal, position: PositionContext) -> None:
+        resolved_metrics = self._position_decision_metrics(position, signal=signal)
+        resolved_contract = self._position_contract_fields(signal, position=position)
+        position_signal_id = position.signal_id or (str(signal.signal_id or "").strip() or None)
+        entry_snapshot_id = str(position.entry_snapshot_id or signal.snapshot_id or "").strip() or None
         record = normalize_record_timestamps({
             "event": "POSITION_OPEN",
             "position_id": position.position_id,
-            "signal_id": signal.signal_id,
+            "signal_id": position_signal_id,
+            "snapshot_id": entry_snapshot_id,
+            "entry_snapshot_id": entry_snapshot_id,
             "timestamp": signal.timestamp,
             "direction": position.direction,
             "strike": position.strike,
@@ -276,8 +324,9 @@ class SignalLogger:
             "oi_trail_stop_price": position.oi_trail_stop_price,
             "target_pct": position.target_pct,
             "reason": signal.reason,
+            "decision_metrics": resolved_metrics,
             "run_id": self._run_id,
-            **self._position_contract_fields(signal),
+            **resolved_contract,
         })
         append_jsonl(self._positions_path, record, logger=logger)
         self._publish(
@@ -285,16 +334,23 @@ class SignalLogger:
             build_strategy_position_event(
                 position=record,
                 source="strategy_app",
-                metadata=self._metadata(position_id=position.position_id, signal_id=signal.signal_id),
+                metadata=self._metadata(
+                    position_id=position.position_id,
+                    signal_id=position_signal_id,
+                    snapshot_id=entry_snapshot_id,
+                ),
             ),
         )
 
     def log_position_manage(self, *, position: PositionContext, timestamp: datetime, snapshot_id: str) -> None:
+        entry_snapshot_id = str(position.entry_snapshot_id or "").strip() or None
         record = normalize_record_timestamps({
             "event": "POSITION_MANAGE",
             "position_id": position.position_id,
+            "signal_id": position.signal_id,
             "timestamp": timestamp,
             "snapshot_id": snapshot_id,
+            "entry_snapshot_id": entry_snapshot_id,
             "direction": position.direction,
             "strike": position.strike,
             "current_premium": position.current_premium,
@@ -324,8 +380,9 @@ class SignalLogger:
             "oi_trail_regime_filter": position.oi_trail_regime_filter,
             "oi_trail_active": position.oi_trail_active,
             "oi_trail_stop_price": position.oi_trail_stop_price,
+            "decision_metrics": self._position_decision_metrics(position),
             "run_id": self._run_id,
-            **self._position_contract_fields(),
+            **self._position_contract_fields(position=position),
         })
         append_jsonl(self._positions_path, record, logger=logger)
         self._publish(
@@ -333,7 +390,7 @@ class SignalLogger:
             build_strategy_position_event(
                 position=record,
                 source="strategy_app",
-                metadata=self._metadata(position_id=position.position_id, snapshot_id=snapshot_id),
+                metadata=self._metadata(position_id=position.position_id, signal_id=position.signal_id, snapshot_id=snapshot_id),
             ),
         )
 
@@ -341,6 +398,7 @@ class SignalLogger:
         self,
         *,
         exit_signal: TradeSignal,
+        position: Optional[PositionContext] = None,
         entry_premium: float,
         exit_premium: float,
         pnl_pct: float,
@@ -371,9 +429,19 @@ class SignalLogger:
         oi_trail_active: bool,
         oi_trail_stop_price: Optional[float],
     ) -> None:
+        position_signal_id = position.signal_id if position is not None else exit_signal.signal_id
+        entry_snapshot_id = (
+            str(position.entry_snapshot_id or "").strip() or None
+            if position is not None
+            else None
+        )
+        close_snapshot_id = str(exit_signal.snapshot_id or "").strip() or None
         record = normalize_record_timestamps({
             "event": "POSITION_CLOSE",
             "position_id": exit_signal.position_id,
+            "signal_id": position_signal_id,
+            "snapshot_id": close_snapshot_id,
+            "entry_snapshot_id": entry_snapshot_id,
             "timestamp": exit_signal.timestamp,
             "direction": exit_signal.direction,
             "strike": exit_signal.strike,
@@ -408,8 +476,13 @@ class SignalLogger:
             "oi_trail_stop_price": oi_trail_stop_price,
             "exit_reason": exit_signal.exit_reason.value if exit_signal.exit_reason else None,
             "reason": exit_signal.reason,
+            "decision_metrics": (
+                self._position_decision_metrics(position, signal=exit_signal)
+                if position is not None
+                else (self._signal_decision_metrics(exit_signal) or None)
+            ),
             "run_id": self._run_id,
-            **self._position_contract_fields(exit_signal),
+            **self._position_contract_fields(exit_signal, position=position),
         })
         append_jsonl(self._positions_path, record, logger=logger)
         self._publish(
@@ -417,6 +490,10 @@ class SignalLogger:
             build_strategy_position_event(
                 position=record,
                 source="strategy_app",
-                metadata=self._metadata(position_id=exit_signal.position_id, signal_id=exit_signal.signal_id),
+                metadata=self._metadata(
+                    position_id=exit_signal.position_id,
+                    signal_id=position_signal_id,
+                    snapshot_id=close_snapshot_id,
+                ),
             ),
         )

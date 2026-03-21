@@ -43,6 +43,14 @@ class SnapshotAccessor:
             return None
         return parsed if parsed == parsed else None
 
+    @classmethod
+    def _first_present_float(cls, *values: Any) -> Optional[float]:
+        for value in values:
+            parsed = cls._f(value)
+            if parsed is not None:
+                return parsed
+        return None
+
     @staticmethod
     def _i(value: Any) -> Optional[int]:
         try:
@@ -265,19 +273,30 @@ class SnapshotAccessor:
 
     @property
     def total_ce_oi(self) -> Optional[float]:
-        return self._f(self._ca.get("total_ce_oi")) or self._f(self._payload.get("opt_flow_ce_oi_total"))
+        return self._first_present_float(self._ca.get("total_ce_oi"), self._payload.get("opt_flow_ce_oi_total"))
 
     @property
     def total_pe_oi(self) -> Optional[float]:
-        return self._f(self._ca.get("total_pe_oi")) or self._f(self._payload.get("opt_flow_pe_oi_total"))
+        return self._first_present_float(self._ca.get("total_pe_oi"), self._payload.get("opt_flow_pe_oi_total"))
 
     @property
     def pcr(self) -> Optional[float]:
-        return self._f(self._ca.get("pcr")) or self._f(self._payload.get("opt_flow_pcr_oi"))
+        return self._first_present_float(self._ca.get("pcr"), self._payload.get("opt_flow_pcr_oi"))
+
+    @property
+    def pcr_change_5m(self) -> Optional[float]:
+        value = self._f(self._ca.get("pcr_change_5m"))
+        return value if value is not None else self._f(self._payload.get("pcr_change_5m"))
+
+    @property
+    def pcr_change_15m(self) -> Optional[float]:
+        value = self._f(self._ca.get("pcr_change_15m"))
+        return value if value is not None else self._f(self._payload.get("pcr_change_15m"))
 
     @property
     def pcr_change_30m(self) -> Optional[float]:
-        return self._f(self._ca.get("pcr_change_30m"))
+        value = self._f(self._ca.get("pcr_change_30m"))
+        return value if value is not None else self._f(self._payload.get("pcr_change_30m"))
 
     @property
     def max_pain(self) -> Optional[int]:
@@ -293,7 +312,8 @@ class SnapshotAccessor:
 
     @property
     def atm_ce_close(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_ce_close")) or self._f(self._payload.get("atm_ce_close"))
+        value = self._f(self._atm.get("atm_ce_close"))
+        return value if value is not None else self._f(self._payload.get("atm_ce_close"))
 
     @property
     def atm_ce_open(self) -> Optional[float]:
@@ -309,7 +329,8 @@ class SnapshotAccessor:
 
     @property
     def atm_pe_close(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_pe_close")) or self._f(self._payload.get("atm_pe_close"))
+        value = self._f(self._atm.get("atm_pe_close"))
+        return value if value is not None else self._f(self._payload.get("atm_pe_close"))
 
     @property
     def atm_pe_open(self) -> Optional[float]:
@@ -325,47 +346,68 @@ class SnapshotAccessor:
 
     @property
     def atm_ce_iv(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_ce_iv")) or self._f(self._payload.get("atm_ce_iv"))
+        value = self._f(self._atm.get("atm_ce_iv"))
+        return value if value is not None else self._f(self._payload.get("atm_ce_iv"))
 
     @property
     def atm_pe_iv(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_pe_iv")) or self._f(self._payload.get("atm_pe_iv"))
+        value = self._f(self._atm.get("atm_pe_iv"))
+        return value if value is not None else self._f(self._payload.get("atm_pe_iv"))
 
     @property
     def atm_ce_volume(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_ce_volume")) or self._f(self._payload.get("atm_ce_volume"))
+        value = self._f(self._atm.get("atm_ce_volume"))
+        return value if value is not None else self._f(self._payload.get("atm_ce_volume"))
 
     @property
     def atm_pe_volume(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_pe_volume")) or self._f(self._payload.get("atm_pe_volume"))
+        value = self._f(self._atm.get("atm_pe_volume"))
+        return value if value is not None else self._f(self._payload.get("atm_pe_volume"))
 
     @property
     def atm_ce_oi(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_ce_oi")) or self._f(self._payload.get("atm_ce_oi"))
+        value = self._f(self._atm.get("atm_ce_oi"))
+        return value if value is not None else self._f(self._payload.get("atm_ce_oi"))
 
     @property
     def atm_pe_oi(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_pe_oi")) or self._f(self._payload.get("atm_pe_oi"))
+        value = self._f(self._atm.get("atm_pe_oi"))
+        return value if value is not None else self._f(self._payload.get("atm_pe_oi"))
+
+    @property
+    def atm_oi_ratio(self) -> Optional[float]:
+        value = self._f(self._atm.get("atm_oi_ratio"))
+        return value if value is not None else self._f(self._payload.get("atm_oi_ratio"))
 
     @property
     def atm_ce_oi_change_30m(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_ce_oi_change_30m")) or self._f(self._payload.get("atm_ce_oi_change_30m"))
+        value = self._f(self._atm.get("atm_ce_oi_change_30m"))
+        return value if value is not None else self._f(self._payload.get("atm_ce_oi_change_30m"))
 
     @property
     def atm_pe_oi_change_30m(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_pe_oi_change_30m")) or self._f(self._payload.get("atm_pe_oi_change_30m"))
+        value = self._f(self._atm.get("atm_pe_oi_change_30m"))
+        return value if value is not None else self._f(self._payload.get("atm_pe_oi_change_30m"))
 
     @property
     def atm_ce_vol_ratio(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_ce_vol_ratio")) or self._f(self._payload.get("atm_ce_vol_ratio"))
+        value = self._f(self._atm.get("atm_ce_vol_ratio"))
+        return value if value is not None else self._f(self._payload.get("atm_ce_vol_ratio"))
 
     @property
     def atm_pe_vol_ratio(self) -> Optional[float]:
-        return self._f(self._atm.get("atm_pe_vol_ratio")) or self._f(self._payload.get("atm_pe_vol_ratio"))
+        value = self._f(self._atm.get("atm_pe_vol_ratio"))
+        return value if value is not None else self._f(self._payload.get("atm_pe_vol_ratio"))
 
     @property
     def iv_skew(self) -> Optional[float]:
-        return self._f(self._iv.get("iv_skew")) or self._f(self._payload.get("iv_skew"))
+        return self._first_present_float(self._iv.get("iv_skew"), self._payload.get("iv_skew"))
+
+    @property
+    def near_atm_oi_ratio(self) -> Optional[float]:
+        ladder = self._payload.get("ladder_aggregates") if isinstance(self._payload.get("ladder_aggregates"), dict) else {}
+        value = self._f(ladder.get("near_atm_oi_ratio"))
+        return value if value is not None else self._f(self._payload.get("near_atm_oi_ratio"))
 
     @property
     def iv_skew_dir(self) -> str:
@@ -373,7 +415,7 @@ class SnapshotAccessor:
 
     @property
     def iv_percentile(self) -> Optional[float]:
-        return self._f(self._iv.get("iv_percentile")) or self._f(self._payload.get("iv_percentile"))
+        return self._first_present_float(self._iv.get("iv_percentile"), self._payload.get("iv_percentile"))
 
     @property
     def iv_regime(self) -> str:
@@ -419,7 +461,9 @@ class SnapshotAccessor:
     def atm_premium(self) -> Optional[float]:
         if self.atm_ce_close is not None and self.atm_pe_close is not None:
             return (self.atm_ce_close + self.atm_pe_close) / 2.0
-        return self.atm_ce_close or self.atm_pe_close
+        if self.atm_ce_close is not None:
+            return self.atm_ce_close
+        return self.atm_pe_close
 
     def option_ltp(self, direction: str, strike: Optional[int]) -> Optional[float]:
         strike_key = self._i(strike)

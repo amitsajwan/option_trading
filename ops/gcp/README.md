@@ -32,8 +32,16 @@ Example:
 
 ```bash
 cp ops/gcp/operator.env.example ops/gcp/operator.env
-./ops/gcp/from_scratch_bootstrap.sh
+RUN_RUNTIME_CONFIG_SYNC=0 ./ops/gcp/from_scratch_bootstrap.sh
 ```
+
+Why `RUN_RUNTIME_CONFIG_SYNC=0` on a fresh checkout:
+
+- the helper copies `.env.compose.example` into `.env.compose` if no compose env exists yet
+- `.env.compose.example` is intentionally not launch-ready for live `ml_pure`
+- `publish_runtime_config.sh` rejects that non-live `ml_pure` config by design
+
+After bootstrap, edit `.env.compose` into a valid runtime config and then publish it explicitly.
 
 ### `create_training_vm.sh`
 
@@ -78,12 +86,28 @@ It will:
 Example:
 
 ```bash
-./ops/gcp/run_staged_release_pipeline.sh
+tmux new -s training
 ```
+
+Inside the `tmux` session:
+
+```bash
+./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release.log
+```
+
+For VM execution, run this inside `tmux` so the staged release survives SSH disconnects.
 
 ### `apply_ml_pure_release.sh`
 
-Use this when you already have a `release/ml_pure_runtime.env` file and only want to update `.env.compose`.
+Use this when you already have a `release/ml_pure_runtime.env` file and only want to update the handoff keys in `.env.compose`.
+
+It updates:
+
+- `STRATEGY_ENGINE`
+- `ML_PURE_RUN_ID`
+- `ML_PURE_MODEL_GROUP`
+
+It does not set the capped-live guard file, rollout stage, position-size cap, or monitoring artifact env vars. Those must already be correct in `.env.compose` before `publish_runtime_config.sh` will accept the runtime config.
 
 ### `build_runtime_images.sh`
 
@@ -133,6 +157,17 @@ Important runtime knobs:
 
 Worker defaults auto-detect the machine CPU count and cap parallelism at `16`.
 The current fast path uses chunked snapshot partitions with warmup continuity, not calendar-year-only workers.
+For VM execution, run this inside `tmux` so the build and publish survive SSH disconnects:
+
+```bash
+tmux new -s snapshot
+```
+
+Inside the `tmux` session:
+
+```bash
+./ops/gcp/run_snapshot_parquet_pipeline.sh 2>&1 | tee snapshot-run.log
+```
 
 ### `publish_snapshot_parquet.sh`
 
@@ -141,7 +176,9 @@ Syncs local final parquet outputs to `SNAPSHOT_PARQUET_BUCKET_URL`.
 By default it uploads:
 
 - canonical `snapshots`
+- `market_base`
 - derived `snapshots_ml_flat`
+- stage views
 - snapshot build reports
 
 Optionally it can also upload normalized parquet cache.

@@ -154,6 +154,16 @@ Alert noise tuning env vars:
 
 - `LIVE_STRATEGY_ALERT_POLICY_BLOCK_RATE_WARN` (default `0.80`)
 - `LIVE_STRATEGY_ALERT_ML_PURE_HOLD_RATE_WARN` (default `0.80`)
+- `LIVE_STRATEGY_ALERT_ML_PURE_STAGE1_PRECISION_WARN` (default `0.50`)
+- `LIVE_STRATEGY_ALERT_ML_PURE_PROFIT_FACTOR_WARN` (default `0.90`)
+- `LIVE_STRATEGY_ALERT_ML_PURE_REGIME_DRIFT_INFO` (default `0.20`)
+
+Rolling ML-quality inputs:
+
+- `ML_PURE_THRESHOLD_REPORT` points to the deployed staged threshold artifact used to evaluate live Stage 1 approval precision.
+- `ML_PURE_TRAINING_SUMMARY_PATH` points to the staged `summary.json` used for regime-drift baseline comparison.
+- When `decision_diagnostics.ml_pure.rolling_quality` already includes `thresholds` and `breaches`, alerts prefer that persisted metadata over local env re-derivation.
+- If rolling-quality evaluation is unavailable entirely, the dashboard raises an explicit monitoring-unavailable warning instead of failing silently.
 
 ### Live Monitor Module Map (v2.3 Phase-1)
 

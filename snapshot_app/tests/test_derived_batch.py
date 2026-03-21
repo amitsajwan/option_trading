@@ -63,3 +63,4 @@ def test_run_derived_batch_projects_market_base_to_ml_flat_and_stage_views(tmp_p
     assert stage1_df["view_name"].tolist() == ["stage1_entry_view"]
     assert stage2_df["view_name"].tolist() == ["stage2_direction_view"]
     assert stage3_df["view_name"].tolist() == ["stage3_recipe_view"]
+    assert {"pcr_change_5m", "pcr_change_15m", "atm_ce_oi", "atm_pe_oi", "atm_oi_ratio", "near_atm_oi_ratio"} <= set(stage2_df.columns)

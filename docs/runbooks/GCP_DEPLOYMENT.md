@@ -79,6 +79,14 @@ export RELEASE_ENV_PATH=ml_pipeline_2/artifacts/research/<run_id>/release/ml_pur
 ./ops/gcp/apply_ml_pure_release.sh
 ```
 
+`apply_ml_pure_release.sh` only writes the staged handoff keys:
+
+- `STRATEGY_ENGINE`
+- `ML_PURE_RUN_ID`
+- `ML_PURE_MODEL_GROUP`
+
+It does not make the repo live-ready by itself. Before you publish runtime config, make sure `.env.compose` also contains the live rollout and monitoring prerequisites that the runtime and dashboard expect.
+
 Then verify `.env.compose` contains the supported live settings:
 
 ```env
@@ -88,19 +96,32 @@ ML_PURE_MODEL_GROUP=banknifty_futures/h15_tp_auto
 STRATEGY_ROLLOUT_STAGE=capped_live
 STRATEGY_POSITION_SIZE_MULTIPLIER=0.25
 STRATEGY_ML_RUNTIME_GUARD_FILE=.run/ml_runtime_guard_live.json
+ML_PURE_THRESHOLD_REPORT=ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/threshold_report.json
+ML_PURE_TRAINING_SUMMARY_PATH=ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/training_report.json
 ```
+
+Notes:
+
+- `publish_runtime_config.sh` requires the capped-live fields and the repo-relative guard file before it will publish an `ml_pure` runtime config
+- `ML_PURE_THRESHOLD_REPORT` is optional for run-id model resolution in `strategy_app`, but it is the supported way to anchor rolling Stage 1 precision monitoring to the deployed threshold report
+- `ML_PURE_TRAINING_SUMMARY_PATH` is optional for core trading, but without it the persistence/dashboard regime-drift monitor cannot compare live regime mix against the training baseline
+- use repo-relative paths so the runtime VM can sync them through the runtime-config bundle and local checkout layout
 
 Verify:
 
 ```bash
-grep -E "STRATEGY_ENGINE|ML_PURE_RUN_ID|ML_PURE_MODEL_GROUP|STRATEGY_ROLLOUT_STAGE|STRATEGY_POSITION_SIZE_MULTIPLIER|STRATEGY_ML_RUNTIME_GUARD_FILE" .env.compose
+grep -E "STRATEGY_ENGINE|ML_PURE_RUN_ID|ML_PURE_MODEL_GROUP|STRATEGY_ROLLOUT_STAGE|STRATEGY_POSITION_SIZE_MULTIPLIER|STRATEGY_ML_RUNTIME_GUARD_FILE|ML_PURE_THRESHOLD_REPORT|ML_PURE_TRAINING_SUMMARY_PATH" .env.compose
 test -f .run/ml_runtime_guard_live.json && echo guard_ok
+test -f ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/threshold_report.json && echo threshold_ok
+test -f ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/training_report.json && echo training_report_ok
 ```
 
 Look for:
 
 - all required env keys are present
 - guard file exists locally
+- threshold report exists locally if rolling Stage 1 precision monitoring is expected
+- training summary exists locally if regime-drift monitoring is expected
 
 ## Step 4: Publish Runtime Config
 
@@ -125,6 +146,8 @@ Look for:
 - `.env.compose`
 - `ingestion_app/credentials.json` if used
 - `.run/ml_runtime_guard_live.json` when `ml_pure` is enabled
+- the repo-relative threshold report path referenced by `ML_PURE_THRESHOLD_REPORT`, if configured
+- the repo-relative training summary path referenced by `ML_PURE_TRAINING_SUMMARY_PATH`, if configured
 
 ## Step 5: Start Or Restart The Runtime VM
 

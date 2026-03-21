@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from ml_pipeline_2.contracts.manifests import load_and_resolve_manifest
 from ml_pipeline_2.experiment_control.runner import run_manifest
 from ml_pipeline_2.model_search import search as search_module
+from ml_pipeline_2.staged import pipeline as staged_pipeline
 from ml_pipeline_2.tests.helpers import build_staged_parquet_root, build_staged_smoke_manifest
 
 
@@ -24,6 +26,17 @@ def test_staged_runner_builds_summary_and_stage_artifacts(tmp_path: Path) -> Non
     assert summary["status"] == "completed"
     assert summary["summary_schema_version"] == 2
     assert summary["experiment_kind"] == "staged_dual_recipe_v1"
+    assert summary["completion_mode"] == "completed"
+    assert sorted(summary["cv_prechecks"]) == ["stage1_cv", "stage2_cv", "stage2_signal_check"]
+    assert summary["cv_prechecks"]["stage2_signal_check"]["has_signal"] is True
+    assert summary["cv_prechecks"]["stage1_cv"]["gate_passed"] is True
+    assert summary["cv_prechecks"]["stage2_cv"]["gate_passed"] is True
+    assert isinstance(summary["training_regime_distribution"], dict)
+    assert summary["training_regime_distribution"]
+    assert summary["policy_reports"]["stage1"]["selected_validation_summary"]["rows_total"] == summary["cv_prechecks"]["stage1_cv"]["rows"]
+    assert summary["policy_reports"]["stage2"]["selected_validation_summary"]["rows_total"] == summary["cv_prechecks"]["stage1_cv"]["rows"]
+    assert summary["policy_reports"]["stage3"]["selected_validation_summary"]["rows_total"] == summary["cv_prechecks"]["stage1_cv"]["rows"]
+    assert summary["holdout_reports"]["stage3"]["combined_holdout_summary"]["rows_total"] == summary["holdout_reports"]["stage1"]["rows"]
     assert summary["component_ids"]["stage1"]["view_id"] == "stage1_entry_view_v1"
     assert summary["component_ids"]["stage2"]["trainer_id"] == "binary_catalog_v1"
     assert summary["component_ids"]["stage3"]["policy_id"] == "recipe_top_margin_v1"
@@ -36,6 +49,167 @@ def test_staged_runner_builds_summary_and_stage_artifacts(tmp_path: Path) -> Non
     assert Path(summary["stage_artifacts"]["stage2"]["model_package_path"]).exists()
     assert Path(summary["stage_artifacts"]["stage3"]["training_report_path"]).exists()
     assert sorted(summary["stage_artifacts"]["stage3"]["recipes"]) == ["L0", "L1", "L2", "L3"]
+
+
+def test_staged_runner_early_holds_when_stage2_signal_check_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+
+    monkeypatch.setattr(
+        staged_pipeline,
+        "_check_stage2_signal",
+        lambda _frame: {
+            "has_signal": False,
+            "reason": "max_corr=0.0100<0.05",
+            "samples": 180,
+            "max_correlation": 0.01,
+            "top_features": [{"feature": "pcr_oi", "abs_corr": 0.01}],
+        },
+    )
+
+    summary = run_manifest(
+        manifest_path,
+        run_output_root=Path(resolved["outputs"]["artifacts_root"]) / "staged_signal_hold_run",
+    )
+
+    assert summary["status"] == "completed"
+    assert summary["completion_mode"] == "stage2_signal_check_failed"
+    assert summary["publish_assessment"]["decision"] == "HOLD"
+    assert summary["publish_assessment"]["publishable"] is False
+    assert summary["publish_assessment"]["blocking_reasons"] == ["stage2_signal_check.max_corr=0.0100<0.05"]
+    assert summary["stage_artifacts"] == {}
+    assert summary["cv_prechecks"]["stage2_signal_check"]["has_signal"] is False
+    assert summary["cv_prechecks"]["stage1_cv"] is None
+    assert summary["cv_prechecks"]["stage2_cv"] is None
+    assert "holdout_reports" not in summary
+    assert "policy_reports" not in summary
+    assert "gates" not in summary
+
+
+def test_staged_runner_early_holds_after_stage1_cv_gate_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    original_gate_result = staged_pipeline._stage_gate_result
+
+    def _fake_stage_gate_result(quality: dict[str, object], gates: dict[str, object], *, prefix: str = "") -> tuple[bool, list[str]]:
+        if prefix == "stage1_cv.":
+            return False, ["stage1_cv.roc_auc<0.99"]
+        return original_gate_result(quality, gates, prefix=prefix)
+
+    monkeypatch.setattr(staged_pipeline, "_stage_gate_result", _fake_stage_gate_result)
+
+    summary = run_manifest(
+        manifest_path,
+        run_output_root=Path(resolved["outputs"]["artifacts_root"]) / "staged_stage1_cv_hold_run",
+    )
+
+    assert summary["status"] == "completed"
+    assert summary["completion_mode"] == "stage1_cv_gate_failed"
+    assert sorted(summary["stage_artifacts"]) == ["stage1"]
+    assert summary["publish_assessment"]["blocking_reasons"] == ["stage1_cv.roc_auc<0.99"]
+    assert summary["cv_prechecks"]["stage1_cv"]["gate_passed"] is False
+    assert summary["cv_prechecks"]["stage1_cv"]["reasons"] == ["stage1_cv.roc_auc<0.99"]
+    assert summary["cv_prechecks"]["stage2_cv"] is None
+    assert "holdout_reports" not in summary
+
+
+def test_staged_runner_early_holds_after_stage2_cv_gate_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    original_gate_result = staged_pipeline._stage_gate_result
+
+    def _fake_stage_gate_result(quality: dict[str, object], gates: dict[str, object], *, prefix: str = "") -> tuple[bool, list[str]]:
+        if prefix == "stage2_cv.":
+            return False, ["stage2_cv.brier>0.10"]
+        return original_gate_result(quality, gates, prefix=prefix)
+
+    monkeypatch.setattr(staged_pipeline, "_stage_gate_result", _fake_stage_gate_result)
+
+    summary = run_manifest(
+        manifest_path,
+        run_output_root=Path(resolved["outputs"]["artifacts_root"]) / "staged_stage2_cv_hold_run",
+    )
+
+    assert summary["status"] == "completed"
+    assert summary["completion_mode"] == "stage2_cv_gate_failed"
+    assert sorted(summary["stage_artifacts"]) == ["stage1", "stage2"]
+    assert summary["publish_assessment"]["blocking_reasons"] == ["stage2_cv.brier>0.10"]
+    assert summary["cv_prechecks"]["stage1_cv"]["gate_passed"] is True
+    assert summary["cv_prechecks"]["stage2_cv"]["gate_passed"] is False
+    assert summary["cv_prechecks"]["stage2_cv"]["reasons"] == ["stage2_cv.brier>0.10"]
+    assert "holdout_reports" not in summary
+
+
+def test_staged_runner_early_holds_when_stage1_cv_metrics_are_unavailable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    original_binary_quality = staged_pipeline._binary_quality
+    call_counter = {"count": 0}
+
+    def _fake_binary_quality(labels: pd.Series, probs: pd.Series | pd.DataFrame) -> dict[str, object]:
+        call_counter["count"] += 1
+        if call_counter["count"] == 1:
+            return {
+                "rows": int(len(labels)),
+                "roc_auc": None,
+                "brier": 0.12,
+                "roc_auc_drift_half_split": None,
+            }
+        return original_binary_quality(labels, probs)
+
+    monkeypatch.setattr(staged_pipeline, "_binary_quality", _fake_binary_quality)
+
+    summary = run_manifest(
+        manifest_path,
+        run_output_root=Path(resolved["outputs"]["artifacts_root"]) / "staged_stage1_cv_unavailable_hold_run",
+    )
+
+    assert summary["status"] == "completed"
+    assert summary["completion_mode"] == "stage1_cv_gate_failed"
+    assert summary["publish_assessment"]["blocking_reasons"] == [
+        "stage1_cv.roc_auc_unavailable",
+        "stage1_cv.roc_auc_drift_unavailable",
+    ]
+    assert summary["cv_prechecks"]["stage1_cv"]["gate_passed"] is False
+    assert summary["cv_prechecks"]["stage1_cv"]["reasons"] == [
+        "stage1_cv.roc_auc_unavailable",
+        "stage1_cv.roc_auc_drift_unavailable",
+    ]
+    assert summary["cv_prechecks"]["stage2_cv"] is None
+
+
+def test_staged_runner_keeps_holdout_rows_total_when_stage3_view_is_missing_holdout_rows(tmp_path: Path) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    stage3_path = parquet_root / "stage3_recipe_view" / "year=2024" / "data.parquet"
+    stage3_frame = pd.read_parquet(stage3_path)
+    filtered_stage3 = stage3_frame.loc[
+        ~(
+            (pd.to_datetime(stage3_frame["trade_date"]) >= pd.Timestamp("2024-01-25"))
+            & (stage3_frame["snapshot_id"].astype(str).str[-1:].isin({"1", "3", "5", "7", "9"}))
+        )
+    ].copy()
+    filtered_stage3.to_parquet(stage3_path, index=False)
+    holdout_stage3_rows = int(
+        (
+            (pd.to_datetime(filtered_stage3["trade_date"]) >= pd.Timestamp("2024-01-25"))
+            & (pd.to_datetime(filtered_stage3["trade_date"]) <= pd.Timestamp("2024-01-30"))
+        ).sum()
+    )
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+
+    summary = run_manifest(
+        manifest_path,
+        run_output_root=Path(resolved["outputs"]["artifacts_root"]) / "staged_sparse_stage3_holdout_run",
+    )
+
+    assert summary["status"] == "completed"
+    assert holdout_stage3_rows < summary["holdout_reports"]["stage1"]["rows"]
+    assert summary["holdout_reports"]["stage3"]["combined_holdout_summary"]["rows_total"] == summary["holdout_reports"]["stage1"]["rows"]
 
 
 def test_staged_runner_applies_block_expiry_runtime_filtering_to_training_frames(tmp_path: Path) -> None:

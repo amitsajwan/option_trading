@@ -19,6 +19,7 @@ _RISK_PROFILE_PRESETS: dict[str, dict[str, float | int | str]] = {
         "RISK_LOT_SIZING_MODE": "budget_per_trade",
         "RISK_NOTIONAL_PER_TRADE": 50000.0,
         "RISK_LOT_BUDGET_USES_LOT_SIZE": 1,
+        "RISK_CONFIDENCE_FLOOR": 0.65,
         "RISK_MAX_DAILY_LOSS_PCT": 0.02,
         "RISK_MAX_CONSECUTIVE_LOSSES": 3,
         "RISK_MAX_LOTS_PER_TRADE": 20,
@@ -60,6 +61,7 @@ class RiskManager:
         self._lot_sizing_mode = "risk_based"
         self._notional_per_trade = 0.0
         self._lot_budget_uses_lot_size = True
+        self._confidence_floor = 0.65
         self._load_config()
 
     def _cfg_float(self, key: str, fallback: float) -> float:
@@ -83,6 +85,12 @@ class RiskManager:
         self._lot_sizing_mode = self._cfg_str("RISK_LOT_SIZING_MODE", "risk_based").strip().lower()
         self._notional_per_trade = self._cfg_float("RISK_NOTIONAL_PER_TRADE", 0.0)
         self._lot_budget_uses_lot_size = self._cfg_int("RISK_LOT_BUDGET_USES_LOT_SIZE", 1) != 0
+        self._confidence_floor = min(1.0, max(0.01, self._cfg_float("RISK_CONFIDENCE_FLOOR", 0.65)))
+
+    def _confidence_scale(self, confidence: float) -> float:
+        floor = min(1.0, max(0.01, float(self._confidence_floor)))
+        clamped = min(1.0, max(floor, float(confidence)))
+        return float(clamped)
 
     @property
     def context(self) -> RiskContext:
@@ -186,15 +194,16 @@ class RiskManager:
         ctx = self._context
         if entry_premium <= 0 or ctx.capital_allocated <= 0:
             return 1
-        confidence_scale = min(1.0, max(0.5, float(confidence)))
+        confidence_scale = self._confidence_scale(float(confidence))
         if self._lot_sizing_mode in {"budget_per_trade", "notional_budget"} and self._notional_per_trade > 0:
             lot_cost = float(entry_premium)
             if self._lot_budget_uses_lot_size:
                 lot_cost *= BANKNIFTY_LOT_SIZE
             if lot_cost <= 0:
                 return 1
-            base_lots = int(self._notional_per_trade * confidence_scale / lot_cost)
-            return min(max(1, base_lots), ctx.max_lots_per_trade)
+            base_lots = int(self._notional_per_trade / lot_cost)
+            scaled_lots = max(1, int(base_lots * confidence_scale))
+            return min(scaled_lots, ctx.max_lots_per_trade)
         stop_pct = max(0.0, float(stop_loss_pct))
         if stop_pct <= 0:
             return 1
@@ -203,7 +212,7 @@ class RiskManager:
         if max_loss_per_lot <= 0:
             return 1
         base_lots = int(risk_capital / max_loss_per_lot)
-        scaled = max(1, int(base_lots * min(1.0, max(0.5, confidence))))
+        scaled = max(1, int(base_lots * confidence_scale))
         return min(scaled, ctx.max_lots_per_trade)
 
     def _check_vix_spike(self, snap: SnapshotAccessor) -> None:

@@ -147,6 +147,87 @@ def test_release_staged_run_rejects_non_gcs_bucket_url(tmp_path: Path) -> None:
         )
 
 
+def test_release_staged_run_writes_completed_hold_summary_without_publish(tmp_path: Path) -> None:
+    run_dir = tmp_path / "ml_pipeline_2" / "artifacts" / "research" / "staged_hold_fixture_20260321_010101"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "experiment_kind": "staged_dual_recipe_v1",
+                "run_id": run_dir.name,
+                "publish_assessment": {
+                    "decision": "HOLD",
+                    "publishable": False,
+                    "blocking_reasons": ["stage2.roc_auc<0.55"],
+                },
+                "completion_mode": "completed",
+                "recipe_catalog_id": "fixed_l0_l3_v1",
+                "runtime_prefilter_gate_ids": [],
+                "policy_reports": {},
+                "component_ids": {},
+                "stage_artifacts": {},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = release_staged_run(
+        run_dir=run_dir,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+    )
+
+    assert payload["status"] == "completed"
+    assert payload["release_status"] == "held"
+    assert payload["assessment"]["publishable"] is False
+    assert payload["publish"]["publish_status"] == "held"
+    assert payload["publish"]["publish_assessment"]["blocking_reasons"] == ["stage2.roc_auc<0.55"]
+    assert payload["live_handoff"] is None
+    assert payload["gcs_sync"] is None
+    assert "runtime_env" not in payload["paths"]
+    assert Path(payload["paths"]["assessment"]).exists()
+    assert Path(payload["paths"]["release_summary"]).exists()
+
+    written = json.loads(Path(payload["paths"]["release_summary"]).read_text(encoding="utf-8"))
+    assert written["release_status"] == "held"
+    assert written["publish"]["publish_status"] == "held"
+    assert written["paths"]["assessment"].endswith("assessment.json")
+
+
+def test_publish_staged_run_still_rejects_non_publishable_run(tmp_path: Path) -> None:
+    run_dir = tmp_path / "ml_pipeline_2" / "artifacts" / "research" / "staged_hold_fixture_20260321_020202"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "experiment_kind": "staged_dual_recipe_v1",
+                "run_id": run_dir.name,
+                "publish_assessment": {
+                    "decision": "HOLD",
+                    "publishable": False,
+                    "blocking_reasons": ["combined.trades<50"],
+                },
+                "recipe_catalog_id": "fixed_l0_l3_v1",
+                "policy_reports": {},
+                "component_ids": {},
+                "stage_artifacts": {},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="staged run is not publishable"):
+        publish_staged_run(
+            run_dir=run_dir,
+            model_group="banknifty_futures/h15_tp_auto",
+            profile_id="openfe_v9_dual",
+        )
+
+
 def test_load_staged_runtime_policy_defaults_block_expiry_false(tmp_path: Path) -> None:
     policy_path = tmp_path / "thresholds.json"
     policy_path.write_text(

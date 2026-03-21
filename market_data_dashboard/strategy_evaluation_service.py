@@ -49,6 +49,16 @@ def _parse_reason(reason: str) -> tuple[Optional[str], Optional[str]]:
     return strategy, regime
 
 
+def _resolve_position_signal_id(*docs: Any) -> Optional[str]:
+    for doc in docs:
+        if not isinstance(doc, dict):
+            continue
+        text = str(doc.get("signal_id") or "").strip()
+        if text:
+            return text
+    return None
+
+
 def _iso_or_none(value: Any) -> Optional[str]:
     if isinstance(value, datetime):
         return isoformat_ist(value, naive_mode=TimestampSourceMode.LEGACY_MONGO_UTC)
@@ -356,6 +366,7 @@ class StrategyEvaluationService:
         projection = {
             "_id": 0,
             "position_id": 1,
+            "signal_id": 1,
             "event": 1,
             "timestamp": 1,
             "trade_date_ist": 1,
@@ -394,7 +405,9 @@ class StrategyEvaluationService:
         if not isinstance(open_position, dict) or not isinstance(close_position, dict):
             return None
 
-        signal_id = str(open_position.get("signal_id") or "").strip()
+        open_doc = docs.get("open_doc") if isinstance(docs.get("open_doc"), dict) else {}
+        close_doc = docs.get("close_doc") if isinstance(docs.get("close_doc"), dict) else {}
+        signal_id = str(_resolve_position_signal_id(open_position, open_doc, close_position, close_doc) or "").strip()
         signal_doc = signal_map.get(signal_id, {})
         reason_text = str(signal_doc.get("reason") or open_position.get("reason") or "")
         strategy_from_reason, regime_from_reason = _parse_reason(reason_text)
