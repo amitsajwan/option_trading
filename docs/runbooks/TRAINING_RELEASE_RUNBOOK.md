@@ -37,8 +37,24 @@ You need at least these values in `ops/gcp/operator.env`:
 - `MODEL_GROUP`
 - `PROFILE_ID`
 - `STAGED_CONFIG`
+- `RAW_ARCHIVE_BUCKET_URL`
+- `SNAPSHOT_PARQUET_BUCKET_URL`
 
-`DATA_SYNC_SOURCE` should point at the parent prefix that syncs into `.data/ml_pipeline` on the VM and already contains `parquet_data/` underneath it. After startup, the expected local path is `/opt/option_trading/.data/ml_pipeline/parquet_data`.
+`DATA_SYNC_SOURCE` should point at the parent prefix that syncs into `.data/ml_pipeline` on the VM and already contains `parquet_data/` underneath it. After startup, the expected local path is `${REPO_ROOT}/.data/ml_pipeline/parquet_data` when `REPO_ROOT` is set in `ops/gcp/operator.env`, otherwise `/opt/option_trading/.data/ml_pipeline/parquet_data`.
+
+The one-command snapshot flow must already have published the following before training starts:
+
+- `snapshots_ml_flat`
+- `stage1_entry_view`
+- `stage2_direction_view`
+- `stage3_recipe_view`
+
+The training VM should also have these OS packages available:
+
+- `git`
+- `python3-venv`
+- `tmux`
+- `libgomp1`
 
 Verify:
 
@@ -86,7 +102,7 @@ On the VM:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y tmux
+sudo apt-get install -y git python3-venv tmux libgomp1
 cd /opt/option_trading
 git rev-parse --short HEAD
 find .data/ml_pipeline/parquet_data -maxdepth 2 -type d | sort
@@ -103,6 +119,29 @@ Look for:
   - `stage1_entry_view`
   - `stage2_direction_view`
   - `stage3_recipe_view`
+
+Before training, verify the Stage 2 schema guard locally. If the required columns are missing, stop and rerun the snapshot workflow first.
+
+```bash
+python - <<'PY'
+from pathlib import Path
+import pandas as pd
+
+root = Path("/opt/option_trading/.data/ml_pipeline/parquet_data/stage2_direction_view")
+sample = next(root.rglob("*.parquet"))
+required = [
+    "pcr_change_5m",
+    "pcr_change_15m",
+    "atm_oi_ratio",
+    "near_atm_oi_ratio",
+    "atm_ce_oi",
+    "atm_pe_oi",
+]
+df = pd.read_parquet(sample, columns=required)
+print(sample)
+print(df.notna().mean().to_string())
+PY
+```
 
 If those datasets are missing, stop here and complete the snapshot workflow first.
 
@@ -141,11 +180,20 @@ Verify:
 
 - command exits successfully
 - output includes `Staged release pipeline complete`
-- output prints the `runtime handoff` path
+- output prints `release status`
+- when `release status` is `published`, output also prints the `runtime handoff` path
 - follow live progress from another SSH session with `tail -f /opt/option_trading/training-release.log`
 - if you disconnect, reconnect and run `tmux attach -t training`
 
-Also verify the latest local release handoff:
+The staged release wrapper is HOLD-safe. If the research run fails a gate, it still writes `summary.json`, `release/assessment.json`, and `release/release_summary.json` with `release_status: held`. In that case, do not expect `release/ml_pure_runtime.env` or runtime-config publish output. Inspect the blocking reasons and rerun only after fixing the upstream issue.
+
+Also verify the latest local release payload:
+
+```bash
+ls -lh /opt/option_trading/training-release.json
+```
+
+For `PUBLISH`, also verify the latest local release handoff:
 
 ```bash
 find /opt/option_trading/ml_pipeline_2/artifacts/research -path "*/release/ml_pure_runtime.env" | sort | tail -n 1
@@ -169,6 +217,7 @@ Interpretation:
 - active process found: training is still running; reattach with `tmux attach -t training`
 - no active process and `Staged release pipeline complete` is present: proceed to publish verification
 - no active process and the wrapper exited without the completion marker: do not assume interruption only; inspect the latest staged artifacts first
+- no active process and `training-release.json` exists with `release_status: held`: the wrapper completed correctly and rejected publish
 
 When the wrapper exits without the completion marker, inspect the newest staged run directory before rerunning anything:
 

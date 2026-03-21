@@ -627,6 +627,13 @@ def main() -> int:
             force=bool(args.force_normalize),
         )
         print(json.dumps({"normalization": normalization}, indent=2, default=str))
+        normalization_status = str(normalization.get("status") or "").strip().lower()
+        if normalization_status not in {"complete", "already_complete"}:
+            print(
+                f"ERROR: normalization finished with non-publishable status={normalization_status or 'unknown'}",
+                file=sys.stderr,
+            )
+            return 2
         if args.normalize_only:
             return 0
 

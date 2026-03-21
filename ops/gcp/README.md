@@ -78,10 +78,15 @@ Use this on the training VM or a repo checkout that has the training data and ru
 It will:
 
 1. ensure the virtualenv exists
-2. install `ml_pipeline_2`
-3. run the staged 1/2/3 release flow
-4. apply the generated `ML_PURE_*` handoff into `.env.compose`
-5. republish the runtime config bundle
+2. install `ml_pipeline_2` and the required LightGBM / XGBoost Python packages
+3. auto-install `libgomp1` on Ubuntu when `AUTO_INSTALL_SYSTEM_PACKAGES=1` and LightGBM is present but not runnable
+4. verify the local `stage2_direction_view` schema before any training run
+5. run the staged 1/2/3 release flow
+6. if the release is `PUBLISH`, apply the generated `ML_PURE_*` handoff into `.env.compose`
+7. if the release is `PUBLISH`, republish the runtime config bundle
+8. if the release is `HOLD`, exit cleanly and print the blocking reasons
+
+The wrapper is HOLD-safe: if the staged run fails a gate, it still writes the staged summary and release assessment artifacts, exits cleanly, and does not create `release/ml_pure_runtime.env`. That is the expected outcome for a valid HOLD.
 
 Example:
 
@@ -145,6 +150,8 @@ It will:
 9. publish final parquet and reports to `SNAPSHOT_PARQUET_BUCKET_URL`
 10. verify the published GCS layout
 
+If normalization fails partway through, the supported recovery path is to delete the local parquet cache, rerun with low worker counts, and let the wrapper rebuild from the canonical raw archive. A practical first retry is `NO_RESUME=1 NORMALIZE_JOBS=1 SNAPSHOT_JOBS=2`; if that still fails, drop both worker counts to `1`.
+
 Important runtime knobs:
 
 - `LOCAL_RAW_ARCHIVE_ROOT`
@@ -152,11 +159,13 @@ Important runtime knobs:
 - `SNAPSHOT_PARQUET_BUCKET_URL`
 - `NORMALIZE_JOBS`
 - `SNAPSHOT_JOBS`
+- `STAGE2_REQUIRED_COLUMNS`
 - `SNAPSHOT_SLICE_MONTHS`
 - `SNAPSHOT_SLICE_WARMUP_DAYS`
 
-Worker defaults auto-detect the machine CPU count and cap parallelism at `16`.
+Worker defaults are conservative by design: `NORMALIZE_JOBS=1`, `SNAPSHOT_JOBS=2`.
 The current fast path uses chunked snapshot partitions with warmup continuity, not calendar-year-only workers.
+The derived Stage 2 view must contain `pcr_change_5m`, `pcr_change_15m`, `atm_oi_ratio`, `near_atm_oi_ratio`, `atm_ce_oi`, and `atm_pe_oi` before training starts.
 For VM execution, run this inside `tmux` so the build and publish survive SSH disconnects:
 
 ```bash

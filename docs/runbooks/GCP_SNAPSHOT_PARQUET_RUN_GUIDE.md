@@ -70,7 +70,7 @@ Look for:
 ## Step 3: Create The Snapshot Build VM
 
 Create a disposable high-power VM.
-Use a machine with at least `16` vCPU so the pipeline can use up to `16` worker processes by default.
+Use a machine with enough local disk for the raw cache plus parquet outputs. `8` to `16` vCPU with `16GB+` RAM is a practical range, but the wrapper now defaults to low worker counts for reliability.
 
 Example:
 
@@ -131,6 +131,18 @@ Set at least these values in `ops/gcp/operator.env`:
 Optional but recommended when the raw archive already exists on the VM:
 
 - `LOCAL_RAW_ARCHIVE_ROOT`
+
+Required for the one-command snapshot flow:
+
+- `RAW_ARCHIVE_BUCKET_URL`
+- `SNAPSHOT_PARQUET_BUCKET_URL`
+- `REPO_ROOT` should point at the checkout on this VM when it is not `/opt/option_trading`
+
+Recommended worker defaults for recovery:
+
+- `NORMALIZE_JOBS=1` for a clean retry after a partial normalize error
+- `SNAPSHOT_JOBS=2` for the first replay after normalization succeeds
+- `NO_RESUME=1` only when you have deleted the local parquet tree and need a clean rebuild
 
 The expected raw archive layout is:
 
@@ -198,11 +210,20 @@ What the script does:
 
 Notes:
 
-- worker defaults auto-detect CPU and cap at `16`
+- worker defaults are intentionally conservative: `NORMALIZE_JOBS=1`, `SNAPSHOT_JOBS=2`
 - rerunning the same command resumes from the existing local parquet state
 - the script publishes only after the local build and validation state is publishable, unless `ALLOW_PARTIAL_PUBLISH=1` is set explicitly
+- the wrapper fails before publish if normalization returns `partial_error`
+- the wrapper fails before publish if `stage2_direction_view` is missing any columns from `STAGE2_REQUIRED_COLUMNS`
 - follow live progress from another SSH session with `tail -f ~/option_trading/snapshot-run.log`
 - if you disconnect, reconnect and run `tmux attach -t snapshot`
+
+If normalization reports `partial_error` or leaves a corrupt parquet partition behind:
+
+1. stop the wrapper
+2. delete the local parquet cache under `"$REPO_ROOT/.data/ml_pipeline/parquet_data"`
+3. rerun with `NO_RESUME=1 NORMALIZE_JOBS=1 SNAPSHOT_JOBS=2`
+4. verify the local tree again before publishing anything
 
 Verify:
 
@@ -252,6 +273,32 @@ Look for:
 
 - one `data.parquet` per expected published chunk
 - no duplicate old and new chunk layouts for the same date range
+
+Before training, confirm the rebuilt Stage 2 view exposes the new direction features:
+
+```bash
+python - <<'PY'
+import os
+from pathlib import Path
+import pandas as pd
+
+root = Path(os.environ["REPO_ROOT"]) / ".data/ml_pipeline/parquet_data/stage2_direction_view"
+sample = next(root.rglob("*.parquet"))
+required = [
+    "pcr_change_5m",
+    "pcr_change_15m",
+    "atm_oi_ratio",
+    "near_atm_oi_ratio",
+    "atm_ce_oi",
+    "atm_pe_oi",
+]
+df = pd.read_parquet(sample, columns=required)
+print(sample)
+print(df.notna().mean().to_string())
+PY
+```
+
+If any required column is missing, rerun the snapshot wrapper instead of starting training.
 
 ## Troubleshooting Appendix
 

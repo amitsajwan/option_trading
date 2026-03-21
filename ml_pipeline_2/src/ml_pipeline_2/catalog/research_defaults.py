@@ -32,9 +32,9 @@ def default_staged_manifest_payload() -> Dict[str, Any]:
         },
         "catalog": {
             "models_by_stage": {
-                "stage1": ["xgb_shallow", "lgbm_dart", "logreg_balanced"],
-                "stage2": ["xgb_shallow", "lgbm_dart", "logreg_balanced"],
-                "stage3": ["xgb_shallow", "lgbm_dart", "logreg_balanced"],
+                "stage1": ["xgb_shallow", "xgb_balanced", "xgb_regularized", "lgbm_dart", "lgbm_large_v1", "logreg_balanced"],
+                "stage2": ["xgb_shallow", "xgb_balanced", "xgb_regularized", "lgbm_dart", "lgbm_large_v1", "lgbm_large_dart_v1", "logreg_balanced"],
+                "stage3": ["xgb_shallow", "xgb_balanced", "lgbm_dart", "lgbm_large_v1", "logreg_balanced"],
             },
             "feature_sets_by_stage": {
                 "stage1": ["fo_expiry_aware_v2"],
@@ -81,7 +81,7 @@ def default_staged_manifest_payload() -> Dict[str, Any]:
                 "stage3": "brier",
             },
             "random_state": 42,
-            "runtime": {"model_n_jobs": 4},
+            "runtime": {"model_n_jobs": 8},
             "cost_per_trade": 0.0006,
         },
         "policy": {

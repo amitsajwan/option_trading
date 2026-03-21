@@ -21,7 +21,7 @@ require_command() {
   fi
 }
 
-default_worker_jobs() {
+cpu_count() {
   local cpu_count
   if command -v nproc >/dev/null 2>&1; then
     cpu_count="$(nproc)"
@@ -36,10 +36,20 @@ PY
   if [ "${cpu_count}" -lt 1 ]; then
     cpu_count=1
   fi
-  if [ "${cpu_count}" -gt 16 ]; then
-    cpu_count=16
-  fi
   printf '%s\n' "${cpu_count}"
+}
+
+default_normalize_jobs() {
+  printf '1\n'
+}
+
+default_snapshot_jobs() {
+  local count
+  count="$(cpu_count)"
+  if [ "${count}" -gt 2 ]; then
+    count=2
+  fi
+  printf '%s\n' "${count}"
 }
 
 ensure_raw_archive_layout() {
@@ -77,6 +87,65 @@ if isinstance(value, bool):
     print("true" if value else "false")
 else:
     print(value)
+PY
+}
+
+verify_stage2_required_columns() {
+  local stage2_root="$1"
+  local required_csv="$2"
+  python - <<'PY' "${stage2_root}" "${required_csv}"
+import json
+import sys
+from pathlib import Path
+
+import pyarrow.parquet as pq
+
+root = Path(sys.argv[1])
+required = [item.strip() for item in str(sys.argv[2]).split(",") if item.strip()]
+if not required:
+    print(json.dumps({"status": "skipped", "reason": "no_required_columns"}))
+    raise SystemExit(0)
+if not root.exists():
+    print(f"stage2 dataset path not found: {root}", file=sys.stderr)
+    raise SystemExit(1)
+
+files = sorted(root.rglob("*.parquet"))
+if not files:
+    print(f"no parquet files found under stage2 dataset path: {root}", file=sys.stderr)
+    raise SystemExit(1)
+
+missing = []
+for path in files:
+    names = set(pq.ParquetFile(path).schema_arrow.names)
+    absent = [name for name in required if name not in names]
+    if absent:
+        missing.append({"path": str(path), "missing_columns": absent})
+
+if missing:
+    print(
+        json.dumps(
+            {
+                "status": "failed",
+                "checked_files": len(files),
+                "required_columns": required,
+                "missing_files": missing[:10],
+            },
+            indent=2,
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+print(
+    json.dumps(
+        {
+            "status": "ok",
+            "checked_files": len(files),
+            "required_columns": required,
+        },
+        indent=2,
+    )
+)
 PY
 }
 
@@ -231,15 +300,17 @@ VALIDATE_ONLY="${VALIDATE_ONLY:-0}"
 NORMALIZE_ONLY="${NORMALIZE_ONLY:-0}"
 SNAPSHOT_SLICE_MONTHS="${SNAPSHOT_SLICE_MONTHS:-6}"
 SNAPSHOT_SLICE_WARMUP_DAYS="${SNAPSHOT_SLICE_WARMUP_DAYS:-90}"
-AUTO_WORKER_JOBS="$(default_worker_jobs)"
-NORMALIZE_JOBS="${NORMALIZE_JOBS:-${AUTO_WORKER_JOBS}}"
-SNAPSHOT_JOBS="${SNAPSHOT_JOBS:-${AUTO_WORKER_JOBS}}"
+AUTO_NORMALIZE_JOBS="$(default_normalize_jobs)"
+AUTO_SNAPSHOT_JOBS="$(default_snapshot_jobs)"
+NORMALIZE_JOBS="${NORMALIZE_JOBS:-${AUTO_NORMALIZE_JOBS}}"
+SNAPSHOT_JOBS="${SNAPSHOT_JOBS:-${AUTO_SNAPSHOT_JOBS}}"
 RUN_ID="${RUN_ID:-${BUILD_RUN_ID:-snapshot_parquet_$(date -u +%Y%m%dT%H%M%SZ)}}"
 BUILD_RUN_ID="${BUILD_RUN_ID:-${RUN_ID}}"
 REPORT_ROOT="${REPORT_ROOT:-${MANIFEST_ROOT:-${REPO_ROOT}/.run/snapshot_parquet/${BUILD_RUN_ID}}}"
 AUDIT_PATH="${REPORT_ROOT}/coverage_audit.json"
 RAW_ARCHIVE_BUCKET_URL="${RAW_ARCHIVE_BUCKET_URL:?set RAW_ARCHIVE_BUCKET_URL in operator.env}"
 SNAPSHOT_PARQUET_BUCKET_URL="${SNAPSHOT_PARQUET_BUCKET_URL:?set SNAPSHOT_PARQUET_BUCKET_URL in operator.env}"
+STAGE2_REQUIRED_COLUMNS="${STAGE2_REQUIRED_COLUMNS:-pcr_change_5m,pcr_change_15m,atm_oi_ratio,near_atm_oi_ratio,atm_ce_oi,atm_pe_oi}"
 
 ensure_file "${REPO_ROOT}/ops/gcp/publish_snapshot_parquet.sh"
 require_command python3
@@ -376,6 +447,12 @@ SOURCE_MISSING_COUNT="$(json_get "${AUDIT_PATH}" "source_missing_count")"
 if [ "${SOURCE_MISSING_COUNT}" != "0" ] || [ "${BUILDABLE_MISSING_COUNT}" != "0" ]; then
   echo "Build did not close the requested window. Refusing to publish." >&2
   exit 3
+fi
+
+if [ "${BUILD_STAGE}" != "snapshots" ]; then
+  echo
+  echo "== Step 7b: Verify local Stage 2 schema =="
+  verify_stage2_required_columns "${PARQUET_BASE}/stage2_direction_view" "${STAGE2_REQUIRED_COLUMNS}"
 fi
 
 if [ "${VALIDATE_ONLY}" = "1" ]; then
