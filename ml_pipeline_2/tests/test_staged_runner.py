@@ -301,6 +301,40 @@ def test_staged_runner_supports_stage1_hpo_search_options(tmp_path: Path) -> Non
     assert search_report["search_space"]["candidate_models_total"] == 3
 
 
+def test_staged_runner_supports_stage2_hpo_search_options(tmp_path: Path) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["training"]["search_options_by_stage"] = {
+        "stage2": {
+            "hpo": {
+                "enabled": True,
+                "strategy": "random",
+                "trials_per_model": 3,
+                "sampler_seed": 456,
+            }
+        }
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+
+    summary = run_manifest(
+        manifest_path,
+        run_output_root=Path(resolved["outputs"]["artifacts_root"]) / "staged_stage2_hpo_run",
+    )
+
+    assert summary["status"] == "completed"
+    search_report_path = Path(summary["stage_artifacts"]["stage2"]["model_package_path"]).parent / "search_report.json"
+    search_report = json.loads(search_report_path.read_text(encoding="utf-8"))
+    assert search_report["search_space"]["hpo"] == {
+        "enabled": True,
+        "strategy": "random",
+        "trials_per_model": 3,
+        "sampler_seed": 456,
+    }
+    assert search_report["search_space"]["candidate_models_total"] == 3
+
+
 def test_staged_runner_validate_only_fails_fast_when_stage_has_no_runnable_models(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     parquet_root = build_staged_parquet_root(tmp_path)
     manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)

@@ -178,7 +178,7 @@ tmux new -s training
 Inside the `tmux` session:
 
 ```bash
-./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release.log
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release.log
 ```
 
 Research-only variants:
@@ -193,7 +193,7 @@ APPLY_RUNTIME_HANDOFF=0 \
 PUBLISH_RUNTIME_CONFIG=0 \
 MODEL_GROUP="banknifty_futures/h15_tp_auto_hpo" \
 STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_hpo.json" \
-./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-hpo.log
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-hpo.log
 ```
 
 Deeper Stage 1 search:
@@ -203,7 +203,19 @@ APPLY_RUNTIME_HANDOFF=0 \
 PUBLISH_RUNTIME_CONFIG=0 \
 MODEL_GROUP="banknifty_futures/h15_tp_auto_deep" \
 STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.deep_search.json" \
-./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-deep.log
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-deep.log
+```
+
+Stage 2 HPO search:
+
+Use this after a deep-search run clears Stage 1 and then holds on `stage2_cv`.
+
+```bash
+APPLY_RUNTIME_HANDOFF=0 \
+PUBLISH_RUNTIME_CONFIG=0 \
+MODEL_GROUP="banknifty_futures/h15_tp_auto_stage2_hpo" \
+STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage2_hpo.json" \
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-stage2-hpo.log
 ```
 
 Stage 1 diagnostic gates:
@@ -213,7 +225,7 @@ APPLY_RUNTIME_HANDOFF=0 \
 PUBLISH_RUNTIME_CONFIG=0 \
 MODEL_GROUP="banknifty_futures/h15_tp_auto_diag" \
 STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnostic.json" \
-./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-diag.log
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-diag.log
 ```
 
 Verify:
@@ -227,12 +239,13 @@ Verify:
 
 The staged release wrapper is HOLD-safe. If the research run fails a gate, it still writes `summary.json`, `release/assessment.json`, and `release/release_summary.json` with `release_status: held`. In that case, do not expect `release/ml_pure_runtime.env` or runtime-config publish output. Inspect the blocking reasons and rerun only after fixing the upstream issue.
 
-Recommended order when the default manifest holds at Stage 1:
+Recommended research order after the default manifest holds:
 
-1. Run the deep-search manifest first if you want a broader fixed search with predictable runtime.
-2. Run the Stage 1 HPO manifest when you want actual parameter tuning instead of only fixed presets.
-3. If Stage 1 still fails, run the diagnostic manifest to confirm whether the current Stage 1 gates are only narrowly too strict.
-4. Only after those runs decide whether to change the default manifest or the underlying feature/label design.
+1. Run the deep-search manifest first. It tells you whether Stage 1 or Stage 2 is actually the bottleneck.
+2. If `completion_mode=stage1_cv_gate_failed`, run the Stage 1 HPO manifest.
+3. If `completion_mode=stage2_cv_gate_failed`, run the Stage 2 HPO manifest.
+4. If Stage 1 still only narrowly fails after the search runs, use the diagnostic manifest to measure gate sensitivity.
+5. Only after those runs decide whether to change the default manifest or the underlying feature/label design.
 
 Also verify the latest local release payload:
 

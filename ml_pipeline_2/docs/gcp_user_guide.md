@@ -162,6 +162,10 @@ Additional checked-in research manifests:
   - keeps the staged release flow unchanged
   - adds Stage 1-only random-search HPO over the requested base models
   - use this when you want actual parameter tuning rather than only more fixed presets
+- `ml_pipeline_2/configs/research/staged_dual_recipe.stage2_hpo.json`
+  - keeps the broader Stage 1 search from `deep_search`
+  - adds Stage 2-only random-search HPO over the requested base models
+  - use this when `deep_search` already clears Stage 1 and then holds at `stage2_cv`
 - `ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnostic.json`
   - keeps the default search space
   - relaxes only the Stage 1 hard gates slightly for diagnosis
@@ -174,7 +178,7 @@ APPLY_RUNTIME_HANDOFF=0 \
 PUBLISH_RUNTIME_CONFIG=0 \
 MODEL_GROUP="banknifty_futures/h15_tp_auto_hpo" \
 STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_hpo.json" \
-./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-hpo.log
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-hpo.log
 ```
 
 ```bash
@@ -182,7 +186,15 @@ APPLY_RUNTIME_HANDOFF=0 \
 PUBLISH_RUNTIME_CONFIG=0 \
 MODEL_GROUP="banknifty_futures/h15_tp_auto_deep" \
 STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.deep_search.json" \
-./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-deep.log
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-deep.log
+```
+
+```bash
+APPLY_RUNTIME_HANDOFF=0 \
+PUBLISH_RUNTIME_CONFIG=0 \
+MODEL_GROUP="banknifty_futures/h15_tp_auto_stage2_hpo" \
+STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage2_hpo.json" \
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-stage2-hpo.log
 ```
 
 ```bash
@@ -190,7 +202,7 @@ APPLY_RUNTIME_HANDOFF=0 \
 PUBLISH_RUNTIME_CONFIG=0 \
 MODEL_GROUP="banknifty_futures/h15_tp_auto_diag" \
 STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnostic.json" \
-./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-diag.log
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-diag.log
 ```
 
 ### 6. Publish an Existing Completed Run
@@ -260,7 +272,7 @@ tmux new -s training
 Inside the `tmux` session:
 
 ```bash
-./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release.log
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release.log
 ```
 
 Run it from `/opt/option_trading`, or export `REPO_ROOT=/opt/option_trading` before invoking it.
