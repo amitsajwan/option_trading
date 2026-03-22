@@ -153,6 +153,34 @@ This flow:
 8. writes `release/assessment.json` and `release/release_summary.json`
 9. publishes the staged runtime bundle and writes `release/ml_pure_runtime.env` only on `PUBLISH`
 
+Additional checked-in research manifests:
+
+- `ml_pipeline_2/configs/research/staged_dual_recipe.deep_search.json`
+  - broader Stage 1 feature-set and model search
+  - use this first when the default manifest holds at Stage 1 and you want a deeper search before changing production thresholds
+- `ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnostic.json`
+  - keeps the default search space
+  - relaxes only the Stage 1 hard gates slightly for diagnosis
+  - use this only to learn whether the default Stage 1 gates are narrowly too strict
+
+For managed VM wrapper runs, prefer these research-only commands so the runtime is never changed during investigation:
+
+```bash
+APPLY_RUNTIME_HANDOFF=0 \
+PUBLISH_RUNTIME_CONFIG=0 \
+MODEL_GROUP="banknifty_futures/h15_tp_auto_deep" \
+STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.deep_search.json" \
+./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-deep.log
+```
+
+```bash
+APPLY_RUNTIME_HANDOFF=0 \
+PUBLISH_RUNTIME_CONFIG=0 \
+MODEL_GROUP="banknifty_futures/h15_tp_auto_diag" \
+STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnostic.json" \
+./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-diag.log
+```
+
 ### 6. Publish an Existing Completed Run
 
 ```bash

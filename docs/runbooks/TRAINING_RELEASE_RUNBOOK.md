@@ -181,6 +181,31 @@ Inside the `tmux` session:
 ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release.log
 ```
 
+Research-only variants:
+
+Use these when the default manifest holds too early and you want more evidence before changing the production manifest.
+Both commands disable runtime handoff and runtime-config publish, and they write into separate model groups.
+
+Deeper Stage 1 search:
+
+```bash
+APPLY_RUNTIME_HANDOFF=0 \
+PUBLISH_RUNTIME_CONFIG=0 \
+MODEL_GROUP="banknifty_futures/h15_tp_auto_deep" \
+STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.deep_search.json" \
+./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-deep.log
+```
+
+Stage 1 diagnostic gates:
+
+```bash
+APPLY_RUNTIME_HANDOFF=0 \
+PUBLISH_RUNTIME_CONFIG=0 \
+MODEL_GROUP="banknifty_futures/h15_tp_auto_diag" \
+STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnostic.json" \
+./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-diag.log
+```
+
 Verify:
 
 - command exits successfully
@@ -191,6 +216,12 @@ Verify:
 - if you disconnect, reconnect and run `tmux attach -t training`
 
 The staged release wrapper is HOLD-safe. If the research run fails a gate, it still writes `summary.json`, `release/assessment.json`, and `release/release_summary.json` with `release_status: held`. In that case, do not expect `release/ml_pure_runtime.env` or runtime-config publish output. Inspect the blocking reasons and rerun only after fixing the upstream issue.
+
+Recommended order when the default manifest holds at Stage 1:
+
+1. Run the deep-search manifest first.
+2. If Stage 1 still fails, run the diagnostic manifest to confirm whether the current Stage 1 gates are only narrowly too strict.
+3. Only after those two runs decide whether to change the default manifest or the underlying feature/label design.
 
 Also verify the latest local release payload:
 
