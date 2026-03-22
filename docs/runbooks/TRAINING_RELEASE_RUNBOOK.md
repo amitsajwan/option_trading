@@ -186,6 +186,16 @@ Research-only variants:
 Use these when the default manifest holds too early and you want more evidence before changing the production manifest.
 Both commands disable runtime handoff and runtime-config publish, and they write into separate model groups.
 
+Stage 1 HPO search:
+
+```bash
+APPLY_RUNTIME_HANDOFF=0 \
+PUBLISH_RUNTIME_CONFIG=0 \
+MODEL_GROUP="banknifty_futures/h15_tp_auto_hpo" \
+STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_hpo.json" \
+./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-hpo.log
+```
+
 Deeper Stage 1 search:
 
 ```bash
@@ -219,9 +229,10 @@ The staged release wrapper is HOLD-safe. If the research run fails a gate, it st
 
 Recommended order when the default manifest holds at Stage 1:
 
-1. Run the deep-search manifest first.
-2. If Stage 1 still fails, run the diagnostic manifest to confirm whether the current Stage 1 gates are only narrowly too strict.
-3. Only after those two runs decide whether to change the default manifest or the underlying feature/label design.
+1. Run the deep-search manifest first if you want a broader fixed search with predictable runtime.
+2. Run the Stage 1 HPO manifest when you want actual parameter tuning instead of only fixed presets.
+3. If Stage 1 still fails, run the diagnostic manifest to confirm whether the current Stage 1 gates are only narrowly too strict.
+4. Only after those runs decide whether to change the default manifest or the underlying feature/label design.
 
 Also verify the latest local release payload:
 

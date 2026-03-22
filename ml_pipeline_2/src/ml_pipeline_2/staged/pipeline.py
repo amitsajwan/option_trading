@@ -424,6 +424,8 @@ def _training_call(
     cv_config: Dict[str, Any],
     random_state: int,
     model_n_jobs: int,
+    model_specs_override: Optional[Sequence[Dict[str, Any]]] = None,
+    search_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return run_training_cycle_catalog(
         labeled_df=frame,
@@ -445,15 +447,21 @@ def _training_call(
         feature_set_whitelist=list(feature_sets),
         fit_all_final_models=False,
         model_n_jobs=int(model_n_jobs),
+        model_specs_override=model_specs_override,
+        search_options=search_options,
     )
 
 
-def _selected_model_name(search_payload: Dict[str, Any]) -> str:
+def _selected_model_spec_payload(search_payload: Dict[str, Any]) -> Dict[str, Any]:
     best = dict(search_payload["report"]["best_experiment"])
     model_meta = best.get("model")
     if not isinstance(model_meta, dict):
         raise ValueError("best_experiment missing model metadata")
-    return str(model_meta.get("name") or "").strip()
+    return {
+        "name": str(model_meta.get("name") or "").strip(),
+        "family": str(model_meta.get("family") or "").strip(),
+        "params": dict(model_meta.get("params") or {}),
+    }
 
 
 def train_binary_catalog_stage(
@@ -478,6 +486,7 @@ def train_binary_catalog_stage(
     label_col = "entry_label" if label_mode == "entry" else "direction_label"
     objective = str(training_cfg["objectives_by_stage"][stage_name])
     label_target = "move_barrier_hit" if label_mode == "entry" else "move_direction_up"
+    stage_search_options = dict((training_cfg.get("search_options_by_stage") or {}).get(stage_name) or {})
     stage_root = output_root / stage_name
     stage_root.mkdir(parents=True, exist_ok=True)
 
@@ -491,19 +500,21 @@ def train_binary_catalog_stage(
         cv_config=dict(training_cfg["cv_config"]),
         random_state=int(training_cfg["random_state"]),
         model_n_jobs=int(training_cfg["runtime"]["model_n_jobs"]),
+        search_options=stage_search_options,
     )
     best_feature_set = str(search_payload["report"]["best_experiment"]["feature_set"])
-    best_model_name = _selected_model_name(search_payload)
+    best_model_spec = _selected_model_spec_payload(search_payload)
     final_payload = _training_call(
         _stage_binary_frame(full_model_frame, mode=label_mode, label_col=label_col, positive_value=positive_value),
         objective=objective,
         label_target=label_target,
-        models=[best_model_name],
+        models=[],
         feature_sets=[best_feature_set],
         preprocess=preprocess,
         cv_config=dict(training_cfg["cv_config"]),
         random_state=int(training_cfg["random_state"]),
         model_n_jobs=int(training_cfg["runtime"]["model_n_jobs"]),
+        model_specs_override=[best_model_spec],
     )
 
     search_package = dict(search_payload["model_package"])
@@ -608,6 +619,7 @@ def train_recipe_ovr_stage(
     preprocess = PreprocessConfig(**dict(training_cfg["preprocess"]))
     objective = str(training_cfg["objectives_by_stage"][stage_name])
     recipe_ids = [recipe.recipe_id for recipe in get_recipe_catalog(str(manifest["catalog"]["recipe_catalog_id"]))]
+    stage_search_options = dict((training_cfg.get("search_options_by_stage") or {}).get(stage_name) or {})
     stage_root = output_root / stage_name
     stage_root.mkdir(parents=True, exist_ok=True)
     outer_n_jobs = max(1, min(len(recipe_ids), int(joblib.cpu_count() or 1)))
@@ -635,19 +647,21 @@ def train_recipe_ovr_stage(
             cv_config=dict(training_cfg["cv_config"]),
             random_state=int(training_cfg["random_state"]),
             model_n_jobs=inner_model_n_jobs,
+            search_options=stage_search_options,
         )
         best_feature_set = str(search_payload["report"]["best_experiment"]["feature_set"])
-        best_model_name = _selected_model_name(search_payload)
+        best_model_spec = _selected_model_spec_payload(search_payload)
         final_payload = _training_call(
             _stage_binary_frame(full_model_frame, mode="recipe", label_col="recipe_label", positive_value=recipe_id),
             objective=objective,
             label_target="move_barrier_hit",
-            models=[best_model_name],
+            models=[],
             feature_sets=[best_feature_set],
             preprocess=preprocess,
             cv_config=dict(training_cfg["cv_config"]),
             random_state=int(training_cfg["random_state"]),
             model_n_jobs=inner_model_n_jobs,
+            model_specs_override=[best_model_spec],
         )
         search_package = dict(search_payload["model_package"])
         final_package = dict(final_payload["model_package"])

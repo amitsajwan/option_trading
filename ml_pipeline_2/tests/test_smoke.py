@@ -193,3 +193,109 @@ def test_training_cycle_errors_when_all_requested_models_are_unavailable(tmp_pat
             feature_set_whitelist=["fo_expiry_aware_v2"],
             fit_all_final_models=False,
         )
+
+
+def test_training_cycle_supports_custom_model_spec_override(tmp_path: Path) -> None:
+    labeled = _build_training_cycle_smoke_frame(tmp_path)
+
+    result = run_training_cycle_catalog(
+        labeled_df=labeled,
+        feature_profile="all",
+        objective="trade_utility",
+        train_days=4,
+        valid_days=2,
+        test_days=2,
+        step_days=2,
+        purge_days=0,
+        embargo_days=0,
+        purge_mode="days",
+        embargo_rows=0,
+        event_end_col=None,
+        random_state=42,
+        max_experiments=1,
+        preprocess_cfg=PreprocessConfig(),
+        label_target="path_tp_sl_resolved_only",
+        utility_cfg=TradingObjectiveConfig(
+            ce_threshold=0.50,
+            pe_threshold=0.50,
+            min_profit_factor=0.50,
+            max_equity_drawdown_pct=0.50,
+            min_trades=1,
+            take_profit_pct=0.0010,
+            stop_loss_pct=0.0005,
+        ),
+        model_specs_override=[
+            {
+                "name": "logreg_balanced__manual_trial",
+                "family": "logreg",
+                "params": {
+                    "c": 0.75,
+                    "class_weight": "balanced",
+                    "max_iter": 1000,
+                },
+            }
+        ],
+        feature_set_whitelist=["fo_expiry_aware_v2"],
+        fit_all_final_models=False,
+    )
+
+    assert result["report"]["best_experiment"]["model"]["name"] == "logreg_balanced__manual_trial"
+    assert result["model_package"]["selected_model"]["name"] == "logreg_balanced__manual_trial"
+    assert result["report"]["search_space"]["candidate_models_total"] == 1
+
+
+def test_training_cycle_hpo_random_search_is_deterministic(tmp_path: Path) -> None:
+    labeled = _build_training_cycle_smoke_frame(tmp_path)
+
+    def _run_once() -> dict[str, object]:
+        return run_training_cycle_catalog(
+            labeled_df=labeled,
+            feature_profile="all",
+            objective="trade_utility",
+            train_days=4,
+            valid_days=2,
+            test_days=2,
+            step_days=2,
+            purge_days=0,
+            embargo_days=0,
+            purge_mode="days",
+            embargo_rows=0,
+            event_end_col=None,
+            random_state=42,
+            preprocess_cfg=PreprocessConfig(),
+            label_target="path_tp_sl_resolved_only",
+            utility_cfg=TradingObjectiveConfig(
+                ce_threshold=0.50,
+                pe_threshold=0.50,
+                min_profit_factor=0.50,
+                max_equity_drawdown_pct=0.50,
+                min_trades=1,
+                take_profit_pct=0.0010,
+                stop_loss_pct=0.0005,
+            ),
+            model_whitelist=["logreg_balanced"],
+            feature_set_whitelist=["fo_expiry_aware_v2"],
+            fit_all_final_models=False,
+            search_options={
+                "hpo": {
+                    "enabled": True,
+                    "strategy": "random",
+                    "trials_per_model": 3,
+                    "sampler_seed": 123,
+                }
+            },
+        )
+
+    run_a = _run_once()
+    run_b = _run_once()
+
+    assert run_a["report"]["experiments_total"] == 3
+    assert run_a["report"]["search_space"]["candidate_models_total"] == 3
+    assert run_a["report"]["search_space"]["hpo"] == {
+        "enabled": True,
+        "strategy": "random",
+        "trials_per_model": 3,
+        "sampler_seed": 123,
+    }
+    assert any(row["search_origin"] == "hpo_random" for row in run_a["report"]["leaderboard"])
+    assert run_a["report"]["leaderboard"] == run_b["report"]["leaderboard"]

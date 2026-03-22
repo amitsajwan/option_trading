@@ -208,6 +208,35 @@ def _validate_staged_training(payload: Dict[str, Any], errors: List[str]) -> Non
     except Exception:
         errors.append("training.runtime.model_n_jobs must be an integer > 0")
 
+    search_options_by_stage = payload.get("search_options_by_stage") or {}
+    if search_options_by_stage and not isinstance(search_options_by_stage, dict):
+        errors.append("training.search_options_by_stage must be an object")
+        search_options_by_stage = {}
+    for stage_name in ("stage1", "stage2", "stage3"):
+        stage_options = search_options_by_stage.get(stage_name) or {}
+        if stage_options and not isinstance(stage_options, dict):
+            errors.append(f"training.search_options_by_stage.{stage_name} must be an object")
+            continue
+        hpo = stage_options.get("hpo") or {}
+        if hpo and not isinstance(hpo, dict):
+            errors.append(f"training.search_options_by_stage.{stage_name}.hpo must be an object")
+            continue
+        if not hpo:
+            continue
+        strategy = str(hpo.get("strategy", "random")).strip().lower()
+        if strategy not in {"random"}:
+            errors.append(f"training.search_options_by_stage.{stage_name}.hpo.strategy must be 'random'")
+        try:
+            if int(hpo.get("trials_per_model", 0)) <= 0:
+                raise ValueError
+        except Exception:
+            errors.append(f"training.search_options_by_stage.{stage_name}.hpo.trials_per_model must be an integer > 0")
+        if "sampler_seed" in hpo:
+            try:
+                int(hpo.get("sampler_seed"))
+            except Exception:
+                errors.append(f"training.search_options_by_stage.{stage_name}.hpo.sampler_seed must be an integer")
+
     try:
         if float(payload.get("cost_per_trade")) < 0.0:
             raise ValueError

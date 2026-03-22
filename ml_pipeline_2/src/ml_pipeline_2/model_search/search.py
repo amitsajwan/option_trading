@@ -270,6 +270,281 @@ def ensure_requested_models_runnable(model_names: Sequence[str], *, context: str
     raise RuntimeError(f"{context}: {_format_unavailable_models_error(resolution['unavailable_models'])}")
 
 
+def _coerce_model_spec(payload: Any) -> ModelSpec:
+    if isinstance(payload, ModelSpec):
+        return payload
+    if not isinstance(payload, dict):
+        raise TypeError(f"model spec override must be a dict or ModelSpec, got {type(payload)!r}")
+    return ModelSpec(
+        name=str(payload.get("name") or "").strip(),
+        family=str(payload.get("family") or "").strip(),
+        params=dict(payload.get("params") or {}),
+    )
+
+
+def _filter_runnable_model_specs(model_specs: Sequence[ModelSpec]) -> Tuple[List[ModelSpec], List[Dict[str, str]]]:
+    runnable: List[ModelSpec] = []
+    unavailable: List[Dict[str, str]] = []
+    for model_spec in model_specs:
+        missing_dependency = _missing_model_family_dependency(model_spec.family)
+        if missing_dependency is None:
+            runnable.append(model_spec)
+            continue
+        unavailable.append(
+            {
+                "model_name": str(model_spec.name),
+                "model_family": str(model_spec.family),
+                "missing_dependency": str(missing_dependency),
+                "reason": f"requires optional dependency '{missing_dependency}'",
+            }
+        )
+    return runnable, unavailable
+
+
+def _model_meta(
+    model_spec: ModelSpec,
+    *,
+    base_model_name: Optional[str] = None,
+    search_origin: str = "preset",
+    trial_index: int = 0,
+) -> Dict[str, object]:
+    return {
+        **model_spec.to_dict(),
+        "base_model_name": str(base_model_name or model_spec.name),
+        "search_origin": str(search_origin),
+        "trial_index": int(trial_index),
+    }
+
+
+def _sample_loguniform(rng: np.random.Generator, *, low: float, high: float) -> float:
+    lo = max(float(low), 1e-8)
+    hi = max(float(high), lo)
+    return float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
+
+
+def _sample_nonnegative_regularization(
+    rng: np.random.Generator,
+    *,
+    base_value: float,
+    high: float,
+    zero_probability: float = 0.20,
+) -> float:
+    if float(base_value) <= 0.0 and float(rng.uniform(0.0, 1.0)) < float(zero_probability):
+        return 0.0
+    return _sample_loguniform(rng, low=1e-3, high=max(float(high), 1e-3))
+
+
+def _sample_xgb_params(base_params: Dict[str, Any], rng: np.random.Generator) -> Dict[str, Any]:
+    base_depth = int(base_params.get("max_depth", 4))
+    base_estimators = int(base_params.get("n_estimators", 300))
+    base_learning_rate = float(base_params.get("learning_rate", 0.03))
+    base_subsample = float(base_params.get("subsample", 0.9))
+    base_colsample = float(base_params.get("colsample_bytree", 0.9))
+    base_reg_alpha = float(base_params.get("reg_alpha", 0.0))
+    base_reg_lambda = float(base_params.get("reg_lambda", 1.0))
+    return {
+        "max_depth": int(rng.integers(max(2, base_depth - 2), min(9, base_depth + 3))),
+        "n_estimators": int(rng.integers(max(150, int(base_estimators * 0.6)), min(1401, int(base_estimators * 1.8) + 1))),
+        "learning_rate": round(
+            _sample_loguniform(
+                rng,
+                low=max(0.008, base_learning_rate * 0.55),
+                high=min(0.12, max(base_learning_rate * 1.75, 0.012)),
+            ),
+            5,
+        ),
+        "subsample": round(float(rng.uniform(max(0.65, base_subsample - 0.15), min(1.0, base_subsample + 0.10))), 4),
+        "colsample_bytree": round(float(rng.uniform(max(0.65, base_colsample - 0.15), min(1.0, base_colsample + 0.10))), 4),
+        "reg_alpha": round(
+            _sample_nonnegative_regularization(
+                rng,
+                base_value=base_reg_alpha,
+                high=max(6.0, max(base_reg_alpha, 1.0) * 4.0),
+            ),
+            5,
+        ),
+        "reg_lambda": round(
+            _sample_loguniform(
+                rng,
+                low=max(0.5, max(base_reg_lambda, 1.0) * 0.5),
+                high=max(10.0, max(base_reg_lambda, 1.0) * 4.0),
+            ),
+            5,
+        ),
+    }
+
+
+def _sample_lgbm_params(base_params: Dict[str, Any], rng: np.random.Generator) -> Dict[str, Any]:
+    base_num_leaves = int(base_params.get("num_leaves", 31))
+    base_depth = int(base_params.get("max_depth", -1))
+    base_estimators = int(base_params.get("n_estimators", 300))
+    base_learning_rate = float(base_params.get("learning_rate", 0.03))
+    base_subsample = float(base_params.get("subsample", 0.9))
+    base_colsample = float(base_params.get("colsample_bytree", 0.9))
+    base_reg_alpha = float(base_params.get("reg_alpha", 0.0))
+    base_reg_lambda = float(base_params.get("reg_lambda", 0.0))
+    base_min_child_samples = int(base_params.get("min_child_samples", 20))
+    max_depth_choices = [-1, 4, 5, 6, 7, 8, 10] if base_depth < 0 else list(range(max(3, base_depth - 2), min(11, base_depth + 3)))
+    params = {
+        "boosting_type": str(base_params.get("boosting_type", "gbdt")),
+        "num_leaves": int(rng.integers(max(15, int(base_num_leaves * 0.6)), min(128, int(base_num_leaves * 1.8) + 1))),
+        "max_depth": int(max_depth_choices[int(rng.integers(0, len(max_depth_choices)))]),
+        "n_estimators": int(rng.integers(max(180, int(base_estimators * 0.6)), min(1401, int(base_estimators * 1.8) + 1))),
+        "learning_rate": round(
+            _sample_loguniform(
+                rng,
+                low=max(0.008, base_learning_rate * 0.55),
+                high=min(0.12, max(base_learning_rate * 1.75, 0.012)),
+            ),
+            5,
+        ),
+        "subsample": round(float(rng.uniform(max(0.65, base_subsample - 0.15), min(1.0, base_subsample + 0.10))), 4),
+        "colsample_bytree": round(float(rng.uniform(max(0.65, base_colsample - 0.15), min(1.0, base_colsample + 0.10))), 4),
+        "reg_alpha": round(
+            _sample_nonnegative_regularization(
+                rng,
+                base_value=base_reg_alpha,
+                high=max(6.0, max(base_reg_alpha, 1.0) * 4.0),
+            ),
+            5,
+        ),
+        "reg_lambda": round(
+            _sample_nonnegative_regularization(
+                rng,
+                base_value=base_reg_lambda,
+                high=max(8.0, max(base_reg_lambda, 1.0) * 4.0),
+                zero_probability=0.10,
+            ),
+            5,
+        ),
+        "min_child_samples": int(rng.integers(max(10, base_min_child_samples - 12), min(81, base_min_child_samples + 21))),
+    }
+    if "class_weight" in base_params:
+        params["class_weight"] = base_params.get("class_weight")
+    return params
+
+
+def _sample_logreg_params(base_params: Dict[str, Any], rng: np.random.Generator) -> Dict[str, Any]:
+    base_c = float(base_params.get("c", 1.0))
+    params = {
+        "c": round(
+            _sample_loguniform(
+                rng,
+                low=max(0.01, base_c / 8.0),
+                high=max(0.05, min(25.0, base_c * 8.0)),
+            ),
+            6,
+        ),
+        "max_iter": int(base_params.get("max_iter", 1000)),
+        "solver": str(base_params.get("solver", "lbfgs")),
+    }
+    if "class_weight" in base_params:
+        params["class_weight"] = base_params.get("class_weight")
+    return params
+
+
+def _sample_model_params(model_spec: ModelSpec, rng: np.random.Generator) -> Dict[str, Any]:
+    family = str(model_spec.family).strip().lower()
+    base_params = dict(model_spec.params or {})
+    if family == "xgb":
+        return _sample_xgb_params(base_params, rng)
+    if family == "lgbm":
+        return _sample_lgbm_params(base_params, rng)
+    if family == "logreg":
+        return _sample_logreg_params(base_params, rng)
+    raise ValueError(f"HPO sampling not supported for model family: {model_spec.family}")
+
+
+def _normalize_hpo_config(hpo_config: Optional[Dict[str, Any]], *, random_state: int) -> Dict[str, Any]:
+    raw = dict(hpo_config or {})
+    enabled = bool(raw.get("enabled", False))
+    strategy = str(raw.get("strategy", "random")).strip().lower()
+    if strategy not in {"random"}:
+        raise ValueError(f"unsupported HPO strategy: {strategy}")
+    trials_per_model = max(1, int(raw.get("trials_per_model", 1)))
+    sampler_seed = int(raw.get("sampler_seed", random_state))
+    return {
+        "enabled": enabled,
+        "strategy": strategy,
+        "trials_per_model": int(trials_per_model),
+        "sampler_seed": int(sampler_seed),
+    }
+
+
+def _build_candidate_model_entries(
+    *,
+    model_whitelist: Optional[Sequence[str]],
+    model_specs_override: Optional[Sequence[Any]],
+    hpo_config: Optional[Dict[str, Any]],
+    random_state: int,
+) -> Dict[str, object]:
+    normalized_hpo = _normalize_hpo_config(hpo_config, random_state=random_state)
+    if model_specs_override:
+        requested_specs = [_coerce_model_spec(payload) for payload in model_specs_override]
+        runnable_specs, unavailable_models = _filter_runnable_model_specs(requested_specs)
+        if not runnable_specs:
+            raise RuntimeError(f"requested model search space: {_format_unavailable_models_error(unavailable_models)}")
+        candidate_entries = [
+            {
+                "spec": model_spec,
+                "meta": _model_meta(model_spec, base_model_name=model_spec.name, search_origin="override", trial_index=0),
+            }
+            for model_spec in runnable_specs
+        ]
+        return {
+            "requested_models": [str(spec.name) for spec in requested_specs],
+            "runnable_models": [str(spec.name) for spec in runnable_specs],
+            "unavailable_models": unavailable_models,
+            "candidate_entries": candidate_entries,
+            "hpo": {**normalized_hpo, "enabled": False},
+        }
+
+    candidate_model_names = [spec.name for spec in DEFAULT_MODEL_SPECS]
+    if model_whitelist:
+        unknown = sorted(set(model_whitelist) - set(candidate_model_names))
+        if unknown:
+            raise ValueError(f"unknown model: {unknown}; valid options: {sorted(candidate_model_names)}")
+        candidate_model_names = [name for name in candidate_model_names if name in set(model_whitelist)]
+    model_runtime = ensure_requested_models_runnable(candidate_model_names, context="requested model search space")
+    runnable_model_names = list(model_runtime["runnable_models"])
+    unavailable_models = list(model_runtime["unavailable_models"])
+    base_specs = [model_specs_by_name()[name] for name in runnable_model_names]
+    candidate_entries: List[Dict[str, object]] = [
+        {
+            "spec": model_spec,
+            "meta": _model_meta(model_spec, base_model_name=model_spec.name, search_origin="preset", trial_index=0),
+        }
+        for model_spec in base_specs
+    ]
+    if normalized_hpo["enabled"]:
+        rng = np.random.default_rng(int(normalized_hpo["sampler_seed"]))
+        for model_spec in base_specs:
+            for trial_index in range(1, int(normalized_hpo["trials_per_model"])):
+                sampled_spec = ModelSpec(
+                    name=f"{model_spec.name}__hpo_t{trial_index:03d}",
+                    family=str(model_spec.family),
+                    params=_sample_model_params(model_spec, rng),
+                )
+                candidate_entries.append(
+                    {
+                        "spec": sampled_spec,
+                        "meta": _model_meta(
+                            sampled_spec,
+                            base_model_name=model_spec.name,
+                            search_origin="hpo_random",
+                            trial_index=trial_index,
+                        ),
+                    }
+                )
+    return {
+        "requested_models": list(model_runtime["requested_models"]),
+        "runnable_models": runnable_model_names,
+        "unavailable_models": unavailable_models,
+        "candidate_entries": candidate_entries,
+        "hpo": normalized_hpo,
+    }
+
+
 def _build_model(model_spec: ModelSpec, random_state: int, preprocess_cfg: PreprocessConfig, model_n_jobs: int = 1) -> Pipeline:
     family = str(model_spec.family).strip().lower()
     params = dict(model_spec.params or {})
@@ -617,12 +892,29 @@ def _build_leaderboard(experiments: Sequence[Dict[str, object]], objective: str)
     for experiment in experiments:
         result = experiment["result"]
         utility = result.get("trading_utility") or {}
-        rows.append({"experiment_id": experiment["experiment_id"], "feature_set": experiment["feature_set"], "model_name": experiment["model"]["name"], "model_family": experiment["model"]["family"], "feature_count": int(experiment["feature_count"]), "objective": str(objective), "objective_value": experiment.get("objective_value"), "utility_net_return_sum": utility.get("net_return_sum"), "utility_profit_factor": utility.get("profit_factor"), "utility_trades_total": utility.get("trades_total"), "utility_constraints_pass": utility.get("constraints_pass")})
+        rows.append(
+            {
+                "experiment_id": experiment["experiment_id"],
+                "feature_set": experiment["feature_set"],
+                "model_name": experiment["model"]["name"],
+                "base_model_name": experiment["model"].get("base_model_name"),
+                "model_family": experiment["model"]["family"],
+                "search_origin": experiment["model"].get("search_origin", "preset"),
+                "trial_index": int(experiment["model"].get("trial_index", 0)),
+                "feature_count": int(experiment["feature_count"]),
+                "objective": str(objective),
+                "objective_value": experiment.get("objective_value"),
+                "utility_net_return_sum": utility.get("net_return_sum"),
+                "utility_profit_factor": utility.get("profit_factor"),
+                "utility_trades_total": utility.get("trades_total"),
+                "utility_constraints_pass": utility.get("constraints_pass"),
+            }
+        )
     minimize = str(objective).strip().lower() in {"rmse", "brier"}
     return sorted(rows, key=lambda row: ((float("inf") if row["objective_value"] is None else float(row["objective_value"])) if minimize else -(float("-inf") if row["objective_value"] is None else float(row["objective_value"])), int(row["feature_count"]), str(row["experiment_id"])))
 
 
-def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str = "all", objective: str = "trade_utility", random_state: int = 42, max_experiments: Optional[int] = None, preprocess_cfg: Optional[PreprocessConfig] = None, label_target: str = LABEL_TARGET_BASE, utility_cfg: Optional[TradingObjectiveConfig] = None, model_whitelist: Optional[Sequence[str]] = None, feature_set_whitelist: Optional[Sequence[str]] = None, progress_callback: Optional[Callable[[Dict[str, object]], None]] = None, retain_utility_score_payload: bool = False, fit_all_final_models: bool = False, model_n_jobs: int = 1, **cv_kwargs: Any) -> Dict[str, object]:
+def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str = "all", objective: str = "trade_utility", random_state: int = 42, max_experiments: Optional[int] = None, preprocess_cfg: Optional[PreprocessConfig] = None, label_target: str = LABEL_TARGET_BASE, utility_cfg: Optional[TradingObjectiveConfig] = None, model_whitelist: Optional[Sequence[str]] = None, feature_set_whitelist: Optional[Sequence[str]] = None, progress_callback: Optional[Callable[[Dict[str, object]], None]] = None, retain_utility_score_payload: bool = False, fit_all_final_models: bool = False, model_n_jobs: int = 1, model_specs_override: Optional[Sequence[Any]] = None, search_options: Optional[Dict[str, Any]] = None, **cv_kwargs: Any) -> Dict[str, object]:
     frame = _ensure_sorted(labeled_df)
     if str(label_target).strip().lower() not in LABEL_TARGET_CHOICES:
         raise ValueError(f"unsupported label_target: {label_target}")
@@ -638,20 +930,22 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
     if not base_features:
         raise ValueError("all features dropped by preprocessing missing-rate gate")
     feature_names = [spec.name for spec in DEFAULT_FEATURE_SET_SPECS]
-    candidate_model_names = [spec.name for spec in DEFAULT_MODEL_SPECS]
     if feature_set_whitelist:
         unknown = sorted(set(feature_set_whitelist) - set(feature_names))
         if unknown:
             raise ValueError(f"unknown feature_set: {unknown}; valid options: {sorted(feature_names)}")
         feature_names = [name for name in feature_names if name in set(feature_set_whitelist)]
-    if model_whitelist:
-        unknown = sorted(set(model_whitelist) - set(candidate_model_names))
-        if unknown:
-            raise ValueError(f"unknown model: {unknown}; valid options: {sorted(candidate_model_names)}")
-        candidate_model_names = [name for name in candidate_model_names if name in set(model_whitelist)]
-    model_runtime = ensure_requested_models_runnable(candidate_model_names, context="requested model search space")
-    candidate_model_names = list(model_runtime["runnable_models"])
-    unavailable_models = list(model_runtime["unavailable_models"])
+    resolved_model_space = _build_candidate_model_entries(
+        model_whitelist=model_whitelist,
+        model_specs_override=model_specs_override,
+        hpo_config=dict((search_options or {}).get("hpo") or {}),
+        random_state=int(random_state),
+    )
+    requested_model_names = list(resolved_model_space["requested_models"])
+    runnable_model_names = list(resolved_model_space["runnable_models"])
+    unavailable_models = list(resolved_model_space["unavailable_models"])
+    candidate_model_entries = list(resolved_model_space["candidate_entries"])
+    resolved_hpo = dict(resolved_model_space["hpo"])
     cv_config = {"train_days": int(cv_kwargs.get("train_days")), "valid_days": int(cv_kwargs.get("valid_days")), "test_days": int(cv_kwargs.get("test_days")), "step_days": int(cv_kwargs.get("step_days")), "purge_days": int(cv_kwargs.get("purge_days", 0)), "embargo_days": int(cv_kwargs.get("embargo_days", 0)), "purge_mode": normalize_purge_mode(cv_kwargs.get("purge_mode", PURGE_MODE_DAYS)), "embargo_rows": int(cv_kwargs.get("embargo_rows", 0)), "event_end_col": cv_kwargs.get("event_end_col")}
     preprocessing = {"max_missing_rate": float(effective_preprocess.max_missing_rate), "clip_lower_q": float(effective_preprocess.clip_lower_q), "clip_upper_q": float(effective_preprocess.clip_upper_q), "dropped_features_by_missing_rate": dropped_by_missing, "features_after_preprocess_gate": int(len(base_features))}
     runtime_config = {"model_n_jobs": int(effective_model_n_jobs)}
@@ -681,7 +975,18 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
             f"embargo_days={cv_config.get('embargo_days', 0)}"
         )
     if callable(progress_callback):
-        progress_callback({"phase": "training_cycle", "event": "search_space", "feature_sets": feature_names, "models": candidate_model_names, "experiments_total": int(min(len(feature_names) * len(candidate_model_names), max_experiments) if max_experiments is not None else len(feature_names) * len(candidate_model_names))})
+        progress_callback(
+            {
+                "phase": "training_cycle",
+                "event": "search_space",
+                "feature_sets": feature_names,
+                "models": runnable_model_names,
+                "requested_models": requested_model_names,
+                "candidate_models_total": int(len(candidate_model_entries)),
+                "experiments_total": int(min(len(feature_names) * len(candidate_model_entries), max_experiments) if max_experiments is not None else len(feature_names) * len(candidate_model_entries)),
+                "hpo": dict(resolved_hpo),
+            }
+        )
     experiments: List[Dict[str, object]] = []
     experiment_counter = 0
     max_exp = int(max_experiments) if max_experiments is not None else None
@@ -689,16 +994,28 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
         selected_features = _apply_feature_set(base_features, feature_set_name)
         if not selected_features:
             continue
-        for model_name in candidate_model_names:
+        for candidate_entry in candidate_model_entries:
             experiment_counter += 1
             if max_exp is not None and experiment_counter > max_exp:
                 break
-            model_spec = model_specs_by_name()[model_name]
-            experiment_id = f"{feature_set_name}__{model_name}"
+            model_spec = candidate_entry["spec"]
+            model_meta = dict(candidate_entry["meta"])
+            experiment_id = f"{feature_set_name}__{model_spec.name}"
             if callable(progress_callback):
-                progress_callback({"phase": "training_cycle", "event": "experiment_start", "experiment_index": int(experiment_counter), "experiment_id": experiment_id, "feature_set": feature_set_name, "model": model_name})
+                progress_callback(
+                    {
+                        "phase": "training_cycle",
+                        "event": "experiment_start",
+                        "experiment_index": int(experiment_counter),
+                        "experiment_id": experiment_id,
+                        "feature_set": feature_set_name,
+                        "model": str(model_spec.name),
+                        "base_model_name": model_meta.get("base_model_name"),
+                        "search_origin": model_meta.get("search_origin", "preset"),
+                    }
+                )
             result, utility_score_payload = _evaluate_experiment(frame, selected_features, model_spec, cv_config, random_state, effective_preprocess, label_target, effective_utility, effective_model_n_jobs, return_utility_score_payload=retain_utility_score_payload)
-            experiments.append({"experiment_id": experiment_id, "feature_set": feature_set_name, "model": model_spec.to_dict(), "feature_count": int(len(selected_features)), "selected_features": list(selected_features), "result": result, "objective_value": _objective_value(result, objective), "fallback_objective_value": _fallback_objective_value(result, objective), "utility_score_payload": utility_score_payload})
+            experiments.append({"experiment_id": experiment_id, "feature_set": feature_set_name, "model": model_meta, "model_spec": model_spec, "feature_count": int(len(selected_features)), "selected_features": list(selected_features), "result": result, "objective_value": _objective_value(result, objective), "fallback_objective_value": _fallback_objective_value(result, objective), "utility_score_payload": utility_score_payload})
         if max_exp is not None and experiment_counter >= max_exp:
             break
     if not experiments:
@@ -710,7 +1027,7 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
             best = experiment
     if best.get("objective_value") is None:
         best = {**best, "selected_by_fallback": True}
-    selected_model_spec = model_specs_by_name()[best["model"]["name"]]
+    selected_model_spec = best["model_spec"]
     created_at_utc = datetime.now(timezone.utc).isoformat()
     best_package = _build_model_package(created_at_utc, feature_profile, objective, label_target, best["selected_features"], best["feature_set"], best["model"], cv_config, preprocessing, runtime_config, effective_utility.to_dict(), _fit_final_models(frame, best["selected_features"], selected_model_spec, random_state, effective_preprocess, label_target, effective_model_n_jobs))
     bundles = [{"experiment_id": best["experiment_id"], "model_package": best_package, "training_result": best["result"], "utility_score_payload": best.get("utility_score_payload")}]
@@ -718,8 +1035,8 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
         for experiment in experiments:
             if experiment["experiment_id"] == best["experiment_id"]:
                 continue
-            model_spec = model_specs_by_name()[experiment["model"]["name"]]
+            model_spec = experiment["model_spec"]
             package = _build_model_package(created_at_utc, feature_profile, objective, label_target, experiment["selected_features"], experiment["feature_set"], experiment["model"], cv_config, preprocessing, runtime_config, effective_utility.to_dict(), _fit_final_models(frame, experiment["selected_features"], model_spec, random_state, effective_preprocess, label_target, effective_model_n_jobs))
             bundles.append({"experiment_id": experiment["experiment_id"], "model_package": package, "training_result": experiment["result"], "utility_score_payload": experiment.get("utility_score_payload")})
-    report = {"created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "rows_total": int(len(frame)), "days_total": int(frame["trade_date"].nunique()), "experiments_total": int(len(experiments)), "search_space": {"runnable_models": list(candidate_model_names), "unavailable_models": unavailable_models}, "best_experiment": {"experiment_id": best["experiment_id"], "feature_set": best["feature_set"], "feature_count": int(best["feature_count"]), "model": best["model"], "objective_value": best.get("objective_value"), "fallback_objective_value": best.get("fallback_objective_value"), "selected_by_fallback": bool(best.get("selected_by_fallback", False))}, "leaderboard": _build_leaderboard(experiments, objective), "preprocessing": preprocessing, "runtime": runtime_config, "cv_config": cv_config, "trading_utility_config": effective_utility.to_dict()}
+    report = {"created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "rows_total": int(len(frame)), "days_total": int(frame["trade_date"].nunique()), "experiments_total": int(len(experiments)), "search_space": {"requested_models": requested_model_names, "runnable_models": runnable_model_names, "candidate_models_total": int(len(candidate_model_entries)), "unavailable_models": unavailable_models, "hpo": resolved_hpo}, "best_experiment": {"experiment_id": best["experiment_id"], "feature_set": best["feature_set"], "feature_count": int(best["feature_count"]), "model": best["model"], "objective_value": best.get("objective_value"), "fallback_objective_value": best.get("fallback_objective_value"), "selected_by_fallback": bool(best.get("selected_by_fallback", False))}, "leaderboard": _build_leaderboard(experiments, objective), "preprocessing": preprocessing, "runtime": runtime_config, "cv_config": cv_config, "trading_utility_config": effective_utility.to_dict()}
     return {"report": report, "model_package": best_package, "experiment_bundles": bundles}
