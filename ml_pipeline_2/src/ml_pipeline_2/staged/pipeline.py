@@ -66,6 +66,7 @@ def _apply_runtime_filters(
     *,
     block_expiry: bool,
     context: str,
+    support_context: Optional[pd.DataFrame] = None,
 ) -> tuple[pd.DataFrame, Dict[str, Any]]:
     out = frame.copy()
     meta: Dict[str, Any] = {
@@ -76,12 +77,38 @@ def _apply_runtime_filters(
     }
     if not block_expiry:
         return out, meta
+    if support_context is not None and len(support_context) > 0:
+        context_columns = [
+            column
+            for column in support_context.columns
+            if column not in KEY_COLUMNS and column not in out.columns
+        ]
+        if context_columns:
+            support_lookup = support_context.loc[:, KEY_COLUMNS + context_columns].drop_duplicates(subset=KEY_COLUMNS)
+            out = out.merge(support_lookup, on=KEY_COLUMNS, how="left")
     expiry_mask, signal_column = _expiry_day_mask(out, context=context)
     meta["signal_column"] = signal_column
     meta["expiry_rows_dropped"] = int(expiry_mask.sum())
     out = out.loc[~expiry_mask].copy().sort_values("timestamp").reset_index(drop=True)
     meta["rows_after"] = int(len(out))
     return out, meta
+
+
+def _attach_support_context(frame: pd.DataFrame, support_context: Optional[pd.DataFrame]) -> pd.DataFrame:
+    if support_context is None or len(frame) == 0 or len(support_context) == 0:
+        return frame
+    context_columns = [
+        column
+        for column in support_context.columns
+        if column not in KEY_COLUMNS and column not in frame.columns
+    ]
+    if not context_columns:
+        return frame
+    support_lookup = support_context.loc[:, KEY_COLUMNS + context_columns].drop_duplicates(subset=KEY_COLUMNS)
+    merged = frame.merge(support_lookup, on=KEY_COLUMNS, how="left")
+    if len(merged) != len(frame):
+        raise ValueError("support context join mismatch")
+    return merged
 
 
 def _recipe_cfg(recipe: LabelRecipe) -> EffectiveLabelConfig:
@@ -1550,12 +1577,20 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     support_dataset = str(manifest["inputs"]["support_dataset"])
     runtime_block_expiry = bool(manifest["runtime"].get("block_expiry", False))
     recipe_catalog = get_recipe_catalog(str(manifest["catalog"]["recipe_catalog_id"]))
+    support_raw = _load_dataset(parquet_root, support_dataset)
+    support_context = support_raw.loc[:, ~support_raw.columns.duplicated()].copy()
     support, support_filter_meta = _apply_runtime_filters(
-        _load_dataset(parquet_root, support_dataset),
+        support_raw,
         block_expiry=runtime_block_expiry,
         context=f"staged support dataset {support_dataset}",
     )
     oracle, utility = _build_oracle_targets(support, recipe_catalog, cost_per_trade=float(manifest["training"]["cost_per_trade"]))
+    support_windows = {
+        "research_train": _window(support, manifest["windows"]["research_train"]),
+        "research_valid": _window(support, manifest["windows"]["research_valid"]),
+        "full_model": _window(support, manifest["windows"]["full_model"]),
+        "final_holdout": _window(support, manifest["windows"]["final_holdout"]),
+    }
     runtime_filtering: Dict[str, Any] = {
         "block_expiry": {
             "enabled": runtime_block_expiry,
@@ -1579,6 +1614,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             _load_dataset(parquet_root, dataset_name),
             block_expiry=runtime_block_expiry,
             context=f"staged {stage_name} dataset {dataset_name}",
+            support_context=support_context,
         )
         runtime_filtering["block_expiry"]["stages"][stage_name] = {
             "dataset_name": dataset_name,
@@ -1602,7 +1638,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         }
 
     coverage_scenario_reports = _scenario_reports(
-        base_frame=stage_frames["stage3"]["final_holdout"],
+        base_frame=support_windows["final_holdout"],
         trade_rows=None,
         evaluation_mode="coverage_only",
     )
@@ -1856,13 +1892,10 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         recipe_margin_min=float(stage3_policy["selected_margin_min"]),
         recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
     )
-    training_regime_distribution = _distribution_from_series(
-        _regime_label_series(
-            combined_trade_rows
-        )
-    )
+    combined_trade_rows = _attach_support_context(combined_trade_rows, support_windows["final_holdout"])
+    training_regime_distribution = _distribution_from_series(_regime_label_series(combined_trade_rows))
     scenario_reports = _scenario_reports(
-        base_frame=stage_frames["stage3"]["final_holdout"],
+        base_frame=support_windows["final_holdout"],
         trade_rows=combined_trade_rows,
         evaluation_mode="combined_policy_holdout",
     )
