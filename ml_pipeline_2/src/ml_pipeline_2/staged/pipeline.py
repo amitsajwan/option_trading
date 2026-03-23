@@ -308,13 +308,16 @@ def _build_oracle_targets(
     fallback_best_net = _numeric_array(utility["best_available_net_return_after_cost"], fillna=np.nan)
     best_ce_after_cost = _numeric_array(utility["best_ce_net_return_after_cost"], fillna=0.0)
     best_pe_after_cost = _numeric_array(utility["best_pe_net_return_after_cost"], fillna=0.0)
-    direction_up_values = np.empty(row_count, dtype=object)
-    direction_up_values[:] = None
-    direction_up_values[best_valid] = best_direction_up[best_valid].astype(int)
     oracle = support.loc[:, KEY_COLUMNS].copy()
     oracle["entry_label"] = best_valid.astype(int)
     oracle["direction_label"] = np.where(best_valid, best_side, None)
-    oracle["direction_up"] = direction_up_values
+    if bool(best_valid.all()):
+        oracle["direction_up"] = best_direction_up.astype(np.int64, copy=False)
+    else:
+        direction_up_values = pd.Series(pd.array([pd.NA] * row_count, dtype="Int64"))
+        if bool(best_valid.any()):
+            direction_up_values.loc[best_valid] = best_direction_up[best_valid].astype(np.int64, copy=False)
+        oracle["direction_up"] = direction_up_values
     oracle["recipe_label"] = np.where(best_valid, best_recipe, None)
     oracle["best_net_return_after_cost"] = np.where(best_valid, best_net, fallback_best_net)
     oracle["best_ce_net_return_after_cost"] = utility["best_ce_net_return_after_cost"].to_numpy(copy=False)
