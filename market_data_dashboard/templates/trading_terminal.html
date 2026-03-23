@@ -429,6 +429,63 @@
             border-radius: 3px;
             display: inline-block;
         }
+        .notice-banner {
+            padding: 14px 16px;
+            border-radius: 12px;
+            border: 1px solid #f1d7a5;
+            background: #fff7e8;
+            color: #5a3b08;
+            display: grid;
+            gap: 8px;
+        }
+        .notice-banner strong {
+            color: #3f2a06;
+        }
+        .notice-links {
+            display: inline-flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .notice-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 32px;
+            padding: 0 10px;
+            border-radius: 999px;
+            border: 1px solid #dfbf82;
+            background: #fffdf8;
+            color: #5a3b08;
+            text-decoration: none;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .catalog-summary {
+            grid-column: 1 / -1;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+            padding: 10px 12px;
+            border: 1px solid #d9e5eb;
+            border-radius: 10px;
+            background: #fffef8;
+            font-size: 12px;
+        }
+        .catalog-summary.warning {
+            border-color: #f1d7a5;
+            background: #fff7e8;
+            color: #5a3b08;
+        }
+        .catalog-summary.ok {
+            border-color: #bfe5d5;
+            background: #f4fbf7;
+            color: #16533f;
+        }
+        .catalog-summary strong {
+            font-weight: 700;
+        }
 
         @media (max-width: 1200px) {
             .header {
@@ -476,17 +533,33 @@
             </div>
         </section>
 
+        <section class="panel notice-banner">
+            <div><strong>Archived paper-trading UI only.</strong> This page exists only for older paper/backtest workflows that are outside the supported production runtime.</div>
+            <div>It is <strong>not</strong> the live registry-backed ML deployment UI. The current live ML deployment runs inside `strategy_app`, not from this page.</div>
+            <div><strong>Default branch behavior:</strong> this launcher is disabled unless `{{ legacy_trading_runtime.env_var }}` is set explicitly on the dashboard process.</div>
+            <div>Use the main dashboard plus `strategy_app` logs and `.run/strategy_app/*.jsonl` files to monitor the live stack.</div>
+            <div class="notice-links">
+                <a class="notice-link" href="/" target="_blank" rel="noopener">main dashboard</a>
+                <a class="notice-link" href="/trading/models" target="_blank" rel="noopener">legacy model catalog</a>
+            </div>
+        </section>
+
         <section class="panel">
             <div class="controls">
                 <div class="control-heading">
                     <div>
                         <div class="control-title">Primary Run Controls</div>
-                        <div class="control-note">Set instrument/date/model first, then start live trading or run date backtest.</div>
+                        <div class="control-note">Set instrument/date/model first, then start the archived paper runner or run a date backtest.</div>
                     </div>
                     <div class="control-links">
                         <a class="control-link" href="/trading/models" target="_blank" rel="noopener">model catalog</a>
                         <a class="control-link" href="/trading" target="_blank" rel="noopener">terminal home</a>
                     </div>
+                </div>
+                <div id="legacyCatalogSummary" class="catalog-summary warning">
+                    <strong>Legacy catalog:</strong>
+                    <span id="legacyCatalogCounts">Catalog models: -- | Runnable legacy models: --</span>
+                    <span id="legacyCatalogStatus">Checking model catalog...</span>
                 </div>
                 <div class="primary-run">
                     <div class="field">
@@ -542,7 +615,7 @@
                 </div>
                 <div class="field">
                     <label>Redis Port</label>
-                    <input id="redisPort" type="number" value="6380" />
+                    <input id="redisPort" type="number" value="6379" />
                 </div>
                 <div class="field">
                     <label>Fee (bps)</label>
@@ -698,11 +771,11 @@
                 </div>
                 <div class="field">
                     <label>Model Package</label>
-                    <input id="modelPackage" value="ml_pipeline/artifacts/models/by_features/core_v2/h5_ts0_lgbm_regime/model/model.joblib" />
+                    <input id="modelPackage" value="" />
                 </div>
                 <div class="field">
                     <label>Threshold Report</label>
-                    <input id="thresholdReport" value="ml_pipeline/artifacts/models/by_features/core_v2/h5_ts0_lgbm_regime/config/profiles/openfe_v9_dual/threshold_report.json" />
+                    <input id="thresholdReport" value="" />
                 </div>
                 <div class="field">
                     <label>CE Threshold Override</label>
@@ -718,7 +791,7 @@
                 </div>
                 <div class="field">
                     <label>Training Report Path</label>
-                    <input id="trainingReportPath" value="ml_pipeline/artifacts/models/by_features/core_v2/h5_ts0_lgbm_regime/reports/training/openfe_v9_dual_modeling_report.json" />
+                    <input id="trainingReportPath" value="" />
                 </div>
                 <div class="field">
                     <label>Replay Coverage Guard</label>
@@ -729,7 +802,7 @@
                 </div>
                 <div class="field">
                     <label>Output JSONL</label>
-                    <input id="outputJsonl" value="ml_pipeline/artifacts/t33_paper_capital_events_actual.jsonl" />
+                    <input id="outputJsonl" value=".run/dashboard_state/t33_paper_capital_events_actual.jsonl" />
                 </div>
                 <div class="actions legacy-hidden">
                     <button class="btn-start" id="btnStart">Start Trading</button>
@@ -1210,6 +1283,7 @@
         const URL_PARAMS = new URLSearchParams(window.location.search);
         const MODEL_PAGE_KEY = String(URL_PARAMS.get("model") || "default").trim();
         const TRADING_INSTANCE = MODEL_PAGE_KEY || "default";
+        const LEGACY_TRADING_RUNTIME = {{ legacy_trading_runtime | tojson }};
         const QUERY_INSTRUMENT = String(
             URL_PARAMS.get("instrument")
             || URL_PARAMS.get("instrument_symbol")
@@ -1232,10 +1306,14 @@
         };
         const MODEL_PROFILES = {};
         const CATALOG_MODEL_PROFILES = {};
+        let legacyCatalogAvailable = false;
+        let legacyCatalogCount = 0;
+        let legacyCatalogReadyCount = 0;
+        let legacyRunnerRunning = false;
         const terminalSub = document.getElementById("terminalSub");
         if (terminalSub) {
             const suffix = QUERY_INSTRUMENT ? ` | instrument=${QUERY_INSTRUMENT}` : "";
-            terminalSub.textContent = `Operator console for model-driven CE/PE execution simulation | instance=${TRADING_INSTANCE}${suffix}`;
+            terminalSub.textContent = `Legacy paper-trading console for older CE/PE simulation workflows | instance=${TRADING_INSTANCE}${suffix}`;
         }
         function setActiveModelLink(profileKey) {
             const defaultLink = document.getElementById("linkModelDefault");
@@ -1249,13 +1327,27 @@
         function _parseCatalogGrouping(modelPackagePath, thresholdPath, profileKey) {
             const pkg = String(modelPackagePath || "");
             const thr = String(thresholdPath || "");
-            const byFeaturesRe = /artifacts\/models\/by_features\/([^/]+)\/([^/]+)\/model\/model\.joblib$/i;
-            const profileRe = /artifacts\/models\/by_features\/[^/]+\/[^/]+\/config\/profiles\/([^/]+)\/threshold_report\.json$/i;
-            const mPkg = pkg.match(byFeaturesRe);
-            const mThr = thr.match(profileRe);
+            const oldPkgRe = /artifacts\/models\/by_features\/([^/]+)\/([^/]+)\/model\/model\.joblib$/i;
+            const newPkgRe = /ml_pipeline_2\/artifacts\/published_models\/(.+)\/model\/model\.joblib$/i;
+            const oldProfileRe = /artifacts\/models\/by_features\/[^/]+\/[^/]+\/config\/profiles\/([^/]+)\/threshold_report\.json$/i;
+            const newProfileRe = /ml_pipeline_2\/artifacts\/published_models\/.+\/config\/profiles\/([^/]+)\/threshold_report\.json$/i;
+            const mPkgOld = pkg.match(oldPkgRe);
+            const mPkgNew = pkg.match(newPkgRe);
+            const mThr = thr.match(oldProfileRe) || thr.match(newProfileRe);
+            let featureProfile = "unknown";
+            let horizonGroup = "unknown";
+            if (mPkgOld) {
+                featureProfile = String(mPkgOld[1] || "unknown");
+                horizonGroup = String(mPkgOld[2] || "unknown");
+            } else if (mPkgNew) {
+                const group = String(mPkgNew[1] || "");
+                const parts = group.split("/").filter(Boolean);
+                featureProfile = parts[0] || "unknown";
+                horizonGroup = parts.slice(1).join("/") || parts[0] || "unknown";
+            }
             return {
-                feature_profile: mPkg ? String(mPkg[1]) : "unknown",
-                horizon_group: mPkg ? String(mPkg[2]) : "unknown",
+                feature_profile: featureProfile,
+                horizon_group: horizonGroup,
                 profile_config: mThr ? String(mThr[1]) : (String(profileKey || "").trim() || "default"),
             };
         }
@@ -1314,6 +1406,73 @@
             el.style.backgroundColor = good ? "#eaf9f2" : "#ffe9e7";
             setTimeout(() => { el.style.backgroundColor = original || "#fbfdff"; }, 900);
         }
+        function hasCompleteCustomLegacyPaths() {
+            const modelPackage = String(document.getElementById("modelPackage")?.value || "").trim();
+            const thresholdReport = String(document.getElementById("thresholdReport")?.value || "").trim();
+            return Boolean(modelPackage && thresholdReport);
+        }
+        function selectedLegacyProfileKey() {
+            return String(document.getElementById("modelProfile")?.value || "custom").trim() || "custom";
+        }
+        function selectedLegacyProfileReady() {
+            const key = selectedLegacyProfileKey();
+            if (key === "custom") {
+                return hasCompleteCustomLegacyPaths();
+            }
+            const profile = MODEL_PROFILES[key] || CATALOG_MODEL_PROFILES[key];
+            return Boolean(profile && profile.ready_to_run);
+        }
+        function updateLegacyCatalogSummary() {
+            const summary = document.getElementById("legacyCatalogSummary");
+            const counts = document.getElementById("legacyCatalogCounts");
+            const status = document.getElementById("legacyCatalogStatus");
+            if (!summary || !counts || !status) return;
+            counts.textContent = `Catalog models: ${legacyCatalogCount} | Runnable legacy models: ${legacyCatalogReadyCount}`;
+            summary.classList.remove("warning", "ok");
+            if (!LEGACY_TRADING_RUNTIME.enabled) {
+                summary.classList.add("warning");
+                status.textContent = String(LEGACY_TRADING_RUNTIME.detail || "Legacy trading runtime unavailable.");
+            } else if (legacyCatalogReadyCount > 0) {
+                summary.classList.add("ok");
+                status.textContent = "Archived paper runner can use only catalog entries marked runnable, or custom legacy paths.";
+            } else if (legacyCatalogAvailable) {
+                summary.classList.add("warning");
+                status.textContent = "No runnable legacy paper-trading model is configured in the catalog.";
+            } else {
+                summary.classList.add("warning");
+                status.textContent = "Legacy model catalog unavailable. This page is not the live registry-backed ML deployment UI.";
+            }
+        }
+        function updateLegacyStartControls() {
+            const btnStart = document.getElementById("btnStart");
+            const btnQuickStart = document.getElementById("btnQuickStart");
+            const btnStop = document.getElementById("btnStop");
+            const btnQuickStop = document.getElementById("btnQuickStop");
+            const key = selectedLegacyProfileKey();
+            const canStart = Boolean(LEGACY_TRADING_RUNTIME.enabled && selectedLegacyProfileReady());
+            const startBlocked = !legacyRunnerRunning && !canStart;
+            let blockedMessage = "";
+            if (btnStart) btnStart.disabled = legacyRunnerRunning || !canStart;
+            if (btnQuickStart) btnQuickStart.disabled = legacyRunnerRunning || !canStart;
+            if (btnStop) btnStop.disabled = !legacyRunnerRunning;
+            if (btnQuickStop) btnQuickStop.disabled = !legacyRunnerRunning;
+            if (startBlocked) {
+                if (!LEGACY_TRADING_RUNTIME.enabled) {
+                    blockedMessage = String(LEGACY_TRADING_RUNTIME.detail || "Archived paper runner is disabled.");
+                } else if (key === "custom" && !hasCompleteCustomLegacyPaths()) {
+                    blockedMessage = `Archived paper runner start disabled: custom mode requires both model_package and threshold_report paths | instance=${TRADING_INSTANCE}`;
+                } else if (legacyCatalogReadyCount === 0) {
+                    blockedMessage = `No runnable legacy paper-trading model is configured in the catalog | instance=${TRADING_INSTANCE}`;
+                } else {
+                    blockedMessage = `Selected legacy model profile is not runnable | instance=${TRADING_INSTANCE}`;
+                }
+            }
+            const currentStatus = String(document.getElementById("modelProfileStatus")?.value || "");
+            if (blockedMessage && currentStatus !== blockedMessage) {
+                setModelStatus(blockedMessage);
+            }
+            updateLegacyCatalogSummary();
+        }
         function shortPathName(pathValue) {
             const text = String(pathValue || "").trim();
             if (!text) return "--";
@@ -1368,9 +1527,9 @@
                 .replace(/[^a-z0-9_-]/g, "_")
                 .replace(/^_+|_+$/g, "") || "default";
             if (safe === "default") {
-                return "ml_pipeline/artifacts/t33_paper_capital_events_actual.jsonl";
+                return ".run/dashboard_state/t33_paper_capital_events_actual.jsonl";
             }
-            return `ml_pipeline/artifacts/t33_paper_capital_events_${safe}.jsonl`;
+            return `.run/dashboard_state/t33_paper_capital_events_${safe}.jsonl`;
         }
         function defaultOutputPathForModelProfile(profileKey) {
             const safe = String(profileKey || "default")
@@ -1396,11 +1555,13 @@
             if (key === "custom") {
                 setModelStatus(`Custom model profile selected for instance=${TRADING_INSTANCE} (no auto changes)`);
                 updateRunnerOutputPreview();
+                updateLegacyStartControls();
                 return;
             }
             const profile = MODEL_PROFILES[key] || CATALOG_MODEL_PROFILES[key];
             if (!profile) {
                 setModelStatus(`Unknown model profile: ${key}`);
+                updateLegacyStartControls();
                 return;
             }
             document.getElementById("modelPackage").value = profile.model_package;
@@ -1413,6 +1574,7 @@
             setModelStatus(`${profile.label} | instance=${TRADING_INSTANCE}`);
             updateRunnerOutputPreview();
             refreshModelEvaluation();
+            updateLegacyStartControls();
         }
         function _upsertSelectOption(selectEl, value, label) {
             if (!selectEl) return;
@@ -1427,6 +1589,9 @@
             try {
                 const catalog = await api("/api/trading/models");
                 const models = Array.isArray(catalog?.models) ? catalog.models : [];
+                legacyCatalogAvailable = true;
+                legacyCatalogCount = Number(catalog?.count || models.length || 0);
+                legacyCatalogReadyCount = Number(catalog?.ready_count || 0);
                 const mainSel = document.getElementById("modelProfile");
                 const quickSel = document.getElementById("quickModelProfile");
                 if (mainSel) mainSel.innerHTML = "";
@@ -1454,6 +1619,8 @@
                         threshold_report: thresholdReport,
                         eval_summary_path: evalSummaryPath,
                         training_report_path: trainingReportPath,
+                        ready_to_run: Boolean(m?.ready_to_run),
+                        missing_required: Array.isArray(m?.missing_required) ? m.missing_required : [],
                         feature_profile: grp.feature_profile,
                         horizon_group: grp.horizon_group,
                         profile_config: grp.profile_config,
@@ -1465,12 +1632,16 @@
                 _upsertSelectOption(mainSel, "custom", "custom");
                 _upsertSelectOption(quickSel, "custom", "custom");
             } catch (_) {
+                legacyCatalogAvailable = false;
+                legacyCatalogCount = 0;
+                legacyCatalogReadyCount = 0;
                 // Non-blocking: retain built-in static profiles if catalog API fails.
                 const mainSel = document.getElementById("modelProfile");
                 const quickSel = document.getElementById("quickModelProfile");
                 if (mainSel && !mainSel.options.length) _upsertSelectOption(mainSel, "custom", "custom");
                 if (quickSel && !quickSel.options.length) _upsertSelectOption(quickSel, "custom", "custom");
             }
+            updateLegacyStartControls();
         }
         async function applyQueryModelOverrides() {
             const applied = [];
@@ -1506,6 +1677,7 @@
                 document.getElementById("modelProfile").value = "custom";
                 setModelStatus(`Applied URL overrides: ${applied.join(", ")} | instance=${TRADING_INSTANCE}`);
                 refreshModelEvaluation();
+                updateLegacyStartControls();
                 return;
             }
 
@@ -1530,6 +1702,7 @@
                         document.getElementById("modelProfile").value = "custom";
                         setModelStatus(`Resolved model config from catalog | instance=${TRADING_INSTANCE}`);
                         refreshModelEvaluation();
+                        updateLegacyStartControls();
                     }
                 } catch (_) {
                     // Non-blocking: keep current values if catalog API is unavailable.
@@ -1676,8 +1849,8 @@
                 if (runner.config.quality_skip_weekdays !== undefined) document.getElementById("qualitySkipWeekdays").value = String(runner.config.quality_skip_weekdays ?? "");
             }
 
-            document.getElementById("btnStart").disabled = running;
-            document.getElementById("btnStop").disabled = !running;
+            legacyRunnerRunning = running;
+            updateLegacyStartControls();
 
             document.getElementById("kTotalCapital").textContent = money(summary.final_total_capital);
             const profitEl = document.getElementById("kProfit");
@@ -1821,6 +1994,16 @@
         async function startTrading() {
             ACTIVE_VIEW_MODE = "live";
             BACKTEST_UI_STATE = null;
+            if (!LEGACY_TRADING_RUNTIME.enabled) {
+                alert(String(LEGACY_TRADING_RUNTIME.detail || "Archived paper runner is disabled."));
+                updateLegacyStartControls();
+                return;
+            }
+            if (!selectedLegacyProfileReady()) {
+                alert("Archived paper runner start is disabled. Use a runnable legacy catalog model or provide both custom legacy artifact paths.");
+                updateLegacyStartControls();
+                return;
+            }
             if (modelCoverageStart && modelCoverageEnd) {
                 try {
                     const modePayload = await api("/api/v1/system/mode");
@@ -1841,7 +2024,7 @@
             const instrumentInput = String(document.getElementById("instrument").value || "").trim().toUpperCase();
             const payload = {
                 mode: document.getElementById("mode").value,
-                redis_port: Number(document.getElementById("redisPort").value || 6380),
+                redis_port: Number(document.getElementById("redisPort").value || 6379),
                 fee_bps: Number(document.getElementById("feeBps").value || 5),
                 initial_ce_capital: Number.isFinite(ce) ? ce : 1000,
                 initial_pe_capital: Number.isFinite(pe) ? pe : 1000,
@@ -1913,6 +2096,11 @@
         }
 
         async function runDateBacktest(triggerButtonId = "btnRunBacktest") {
+            if (!LEGACY_TRADING_RUNTIME.enabled) {
+                alert(String(LEGACY_TRADING_RUNTIME.detail || "Legacy backtest runner is disabled."));
+                updateLegacyStartControls();
+                return;
+            }
             const btn = document.getElementById(triggerButtonId) || document.getElementById("btnRunBacktest");
             const quickBtn = document.getElementById("btnQuickBacktest");
             const legacyBtn = document.getElementById("btnRunBacktest");
@@ -2018,6 +2206,8 @@
         document.getElementById("modelProfile").addEventListener("change", () => { applyModelProfile(); syncMainToQuick(); });
         document.getElementById("quickModelProfile").addEventListener("change", () => { syncQuickToMain(); applyModelProfile(); syncMainToQuick(); });
         document.getElementById("outputJsonl").addEventListener("input", updateRunnerOutputPreview);
+        document.getElementById("modelPackage").addEventListener("input", updateLegacyStartControls);
+        document.getElementById("thresholdReport").addEventListener("input", updateLegacyStartControls);
         document.getElementById("quickInstrument").addEventListener("change", syncQuickToMain);
         document.getElementById("quickBacktestDate").addEventListener("change", syncQuickToMain);
         document.getElementById("quickBacktestSource").addEventListener("change", syncQuickToMain);
@@ -2068,6 +2258,7 @@
             await applyQueryModelOverrides();
             applyQualityPreset();
             syncMainToQuick();
+            updateLegacyStartControls();
             try {
                 const wantedInstance = String(localStorage.getItem("trading:last_backtest_instance") || "").trim().toLowerCase();
                 if (wantedInstance && wantedInstance === String(TRADING_INSTANCE || "").trim().toLowerCase()) {

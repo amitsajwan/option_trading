@@ -7,3 +7,4 @@ numpy>=1.26,<3
 kiteconnect>=4,<5
 duckdb>=1,<2
 pyarrow>=14,<21
+PyYAML>=6,<7

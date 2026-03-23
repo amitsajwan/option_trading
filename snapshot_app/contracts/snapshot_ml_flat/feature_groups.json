@@ -1,0 +1,115 @@
+{
+  "contract_id": "snapshot_ml_flat",
+  "schema_version": "3.0",
+  "groups": {
+    "px": {
+      "label": "Price OHLC",
+      "columns": [
+        "px_fut_open",
+        "px_fut_high",
+        "px_fut_low",
+        "px_fut_close",
+        "px_spot_open",
+        "px_spot_high",
+        "px_spot_low",
+        "px_spot_close"
+      ]
+    },
+    "ret": {
+      "label": "Returns Momentum",
+      "columns": ["ret_1m", "ret_3m", "ret_5m"]
+    },
+    "ema": {
+      "label": "EMA Trend",
+      "columns": [
+        "ema_9",
+        "ema_21",
+        "ema_50",
+        "ema_9_21_spread",
+        "ema_9_slope",
+        "ema_21_slope",
+        "ema_50_slope"
+      ]
+    },
+    "osc": {
+      "label": "Oscillators Volatility",
+      "columns": [
+        "osc_rsi_14",
+        "osc_atr_14",
+        "osc_atr_ratio",
+        "osc_atr_percentile",
+        "osc_atr_daily_percentile"
+      ]
+    },
+    "vwap": {
+      "label": "VWAP",
+      "columns": ["vwap_fut", "vwap_distance"]
+    },
+    "dist": {
+      "label": "Distance Basis",
+      "columns": [
+        "dist_from_day_high",
+        "dist_from_day_low",
+        "dist_basis",
+        "dist_basis_change_1m"
+      ]
+    },
+    "fut_flow": {
+      "label": "Futures Flow",
+      "columns": [
+        "fut_flow_volume",
+        "fut_flow_oi",
+        "fut_flow_rel_volume_20",
+        "fut_flow_volume_accel_1m",
+        "fut_flow_oi_change_1m",
+        "fut_flow_oi_change_5m",
+        "fut_flow_oi_rel_20",
+        "fut_flow_oi_zscore_20"
+      ]
+    },
+    "opt_flow": {
+      "label": "Options Flow",
+      "columns": [
+        "opt_flow_atm_strike",
+        "opt_flow_rows",
+        "opt_flow_ce_oi_total",
+        "opt_flow_pe_oi_total",
+        "opt_flow_ce_volume_total",
+        "opt_flow_pe_volume_total",
+        "opt_flow_pcr_oi",
+        "pcr_change_5m",
+        "pcr_change_15m",
+        "opt_flow_atm_call_return_1m",
+        "opt_flow_atm_put_return_1m",
+        "opt_flow_atm_oi_change_1m",
+        "atm_oi_ratio",
+        "near_atm_oi_ratio",
+        "opt_flow_ce_pe_oi_diff",
+        "opt_flow_ce_pe_volume_diff",
+        "opt_flow_options_volume_total",
+        "opt_flow_rel_volume_20"
+      ]
+    },
+    "time": {
+      "label": "Time Session",
+      "columns": ["time_minute_of_day", "time_day_of_week", "time_minute_index"]
+    },
+    "ctx": {
+      "label": "Context Regime",
+      "columns": [
+        "ctx_opening_range_ready",
+        "ctx_opening_range_breakout_up",
+        "ctx_opening_range_breakout_down",
+        "ctx_dte_days",
+        "ctx_is_expiry_day",
+        "ctx_is_near_expiry",
+        "ctx_is_high_vix_day",
+        "ctx_regime_atr_high",
+        "ctx_regime_atr_low",
+        "ctx_regime_trend_up",
+        "ctx_regime_trend_down",
+        "ctx_regime_expiry_near"
+      ]
+    }
+  }
+}

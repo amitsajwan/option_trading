@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec > >(tee -a /var/log/option-trading-training-startup.log) 2>&1
+
+REPO_DIR="/opt/option_trading"
+
+apt-get update
+apt-get install -y apt-transport-https ca-certificates curl git python3-venv python3-pip gcc g++ libgomp1
+
+if ! command -v gcloud >/dev/null 2>&1; then
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /etc/apt/keyrings/google-cloud.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/google-cloud.gpg] https://packages.cloud.google.com/apt cloud-sdk main" >/etc/apt/sources.list.d/google-cloud-sdk.list
+  apt-get update
+  apt-get install -y google-cloud-cli
+fi
+
+mkdir -p /opt
+
+if [ ! -d "$${REPO_DIR}/.git" ]; then
+  git clone "${repo_clone_url}" "$${REPO_DIR}"
+fi
+
+cd "$${REPO_DIR}"
+git fetch --all --tags
+git checkout "${repo_ref}"
+if git show-ref --verify --quiet "refs/remotes/origin/${repo_ref}"; then
+  git reset --hard "origin/${repo_ref}"
+fi
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ./ml_pipeline_2
+
+mkdir -p "$${REPO_DIR}/.data/ml_pipeline"
+if [ -n "${data_sync_source}" ]; then
+  gcloud storage rsync "${data_sync_source}" "$${REPO_DIR}/.data/ml_pipeline" --recursive --project "${project_id}"
+fi
+
+chown -R ${runtime_os_user}:${runtime_os_user} "$${REPO_DIR}"

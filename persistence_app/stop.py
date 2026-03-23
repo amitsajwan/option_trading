@@ -21,7 +21,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     result = terminate_matching_processes(
-        tokens=["-m persistence_app.main_snapshot_consumer"],
+        tokens=["-m persistence_app.main_snapshot_consumer", "-m persistence_app.main_strategy_consumer"],
         timeout_seconds=max(0.5, float(args.timeout_seconds)),
         force_after_timeout=(not bool(args.no_force)),
     )

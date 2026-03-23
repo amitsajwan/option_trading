@@ -1,21 +1,26 @@
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
+    g++ \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
 COPY market_data_dashboard/requirements.txt /tmp/requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install --no-cache-dir --no-deps xgboost==2.1.4
 
 # Copy application code + shared packages used by dashboard
 COPY market_data_dashboard /app/market_data_dashboard
 COPY contracts_app /app/contracts_app
 COPY ingestion_app /app/ingestion_app
-COPY redis_key_manager.py /app/redis_key_manager.py
+COPY snapshot_app /app/snapshot_app
+COPY ml_pipeline_2 /app/ml_pipeline_2
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app \

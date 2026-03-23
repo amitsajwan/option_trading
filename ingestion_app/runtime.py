@@ -212,7 +212,7 @@ async def monitor_for_ticks(redis_client, timeout: int = 60, interval: int = 1) 
     prefixed_pattern = None
     exec_mode = (os.getenv("EXECUTION_MODE") or "").strip().lower()
     try:
-        from redis_key_manager import get_redis_pattern
+        from contracts_app import get_redis_pattern
 
         prefixed_pattern = get_redis_pattern("websocket:tick:*:latest")
     except Exception:

@@ -1,0 +1,120 @@
+legacy_name,new_name,is_removed,notes
+trade_date,trade_date,false,metadata retained
+year,year,false,metadata retained
+instrument,instrument,false,metadata retained
+timestamp,timestamp,false,metadata retained
+snapshot_id,snapshot_id,false,metadata retained
+schema_name,schema_name,false,metadata retained
+schema_version,schema_version,false,metadata retained
+build_source,build_source,false,new metadata in v1
+build_run_id,build_run_id,false,new metadata in v1
+fut_open,px_fut_open,false,price namespace
+fut_high,px_fut_high,false,price namespace
+fut_low,px_fut_low,false,price namespace
+fut_close,px_fut_close,false,price namespace
+spot_open,px_spot_open,false,price namespace
+spot_high,px_spot_high,false,price namespace
+spot_low,px_spot_low,false,price namespace
+spot_close,px_spot_close,false,price namespace
+ret_1m,ret_1m,false,stable namespace
+ret_3m,ret_3m,false,stable namespace
+ret_5m,ret_5m,false,stable namespace
+ema_9,ema_9,false,stable namespace
+ema_21,ema_21,false,stable namespace
+ema_50,ema_50,false,stable namespace
+ema_9_21_spread,ema_9_21_spread,false,stable namespace
+ema_9_slope,ema_9_slope,false,stable namespace
+ema_21_slope,ema_21_slope,false,stable namespace
+ema_50_slope,ema_50_slope,false,stable namespace
+rsi_14,osc_rsi_14,false,oscillator namespace
+atr_14,osc_atr_14,false,oscillator namespace
+atr_ratio,osc_atr_ratio,false,oscillator namespace
+atr_percentile,osc_atr_percentile,false,oscillator namespace
+atr_daily_percentile,osc_atr_daily_percentile,false,oscillator namespace
+fut_vwap,vwap_fut,false,vwap namespace
+vwap_distance,vwap_distance,false,vwap namespace
+distance_from_day_high,dist_from_day_high,false,distance namespace
+distance_from_day_low,dist_from_day_low,false,distance namespace
+basis,dist_basis,false,basis moved to dist namespace
+basis_change_1m,dist_basis_change_1m,false,basis moved to dist namespace
+fut_volume,fut_flow_volume,false,futures flow namespace
+fut_oi,fut_flow_oi,false,futures flow namespace
+fut_rel_volume_20,fut_flow_rel_volume_20,false,futures flow namespace
+fut_volume_accel_1m,fut_flow_volume_accel_1m,false,futures flow namespace
+fut_oi_change_1m,fut_flow_oi_change_1m,false,futures flow namespace
+fut_oi_change_5m,fut_flow_oi_change_5m,false,futures flow namespace
+fut_oi_rel_20,fut_flow_oi_rel_20,false,futures flow namespace
+fut_oi_zscore_20,fut_flow_oi_zscore_20,false,futures flow namespace
+atm_strike,opt_flow_atm_strike,false,options flow namespace
+options_rows,opt_flow_rows,false,options flow namespace
+ce_oi_total,opt_flow_ce_oi_total,false,options flow namespace
+pe_oi_total,opt_flow_pe_oi_total,false,options flow namespace
+ce_volume_total,opt_flow_ce_volume_total,false,options flow namespace
+pe_volume_total,opt_flow_pe_volume_total,false,options flow namespace
+pcr_oi,opt_flow_pcr_oi,false,options flow namespace
+pcr_change_5m,pcr_change_5m,false,options flow namespace
+pcr_change_15m,pcr_change_15m,false,options flow namespace
+atm_call_return_1m,opt_flow_atm_call_return_1m,false,options flow namespace
+atm_put_return_1m,opt_flow_atm_put_return_1m,false,options flow namespace
+atm_oi_change_1m,opt_flow_atm_oi_change_1m,false,options flow namespace
+atm_oi_ratio,atm_oi_ratio,false,options flow namespace
+near_atm_oi_ratio,near_atm_oi_ratio,false,options flow namespace
+ce_pe_oi_diff,opt_flow_ce_pe_oi_diff,false,options flow namespace
+ce_pe_volume_diff,opt_flow_ce_pe_volume_diff,false,options flow namespace
+options_volume_total,opt_flow_options_volume_total,false,options flow namespace
+options_rel_volume_20,opt_flow_rel_volume_20,false,options flow namespace
+minute_of_day,time_minute_of_day,false,time namespace
+day_of_week,time_day_of_week,false,time namespace
+minute_index,time_minute_index,false,time namespace
+opening_range_ready,ctx_opening_range_ready,false,context namespace
+opening_range_breakout_up,ctx_opening_range_breakout_up,false,context namespace
+opening_range_breakout_down,ctx_opening_range_breakout_down,false,context namespace
+dte_days,ctx_dte_days,false,context namespace
+is_expiry_day,ctx_is_expiry_day,false,context namespace
+is_near_expiry,ctx_is_near_expiry,false,context namespace
+is_high_vix_day,ctx_is_high_vix_day,false,context namespace
+regime_atr_high,ctx_regime_atr_high,false,context namespace
+regime_atr_low,ctx_regime_atr_low,false,context namespace
+regime_trend_up,ctx_regime_trend_up,false,context namespace
+regime_trend_down,ctx_regime_trend_down,false,context namespace
+regime_expiry_near,ctx_regime_expiry_near,false,context namespace
+snapshot_raw_json,,true,explicitly removed in v1
+strike_m1,,true,strike ladder removed
+strike_0,,true,strike ladder removed
+strike_p1,,true,strike ladder removed
+opt_m1_ce_open,,true,option ladder removed
+opt_m1_ce_high,,true,option ladder removed
+opt_m1_ce_low,,true,option ladder removed
+opt_m1_ce_close,,true,option ladder removed
+opt_m1_ce_oi,,true,option ladder removed
+opt_m1_ce_volume,,true,option ladder removed
+opt_m1_pe_open,,true,option ladder removed
+opt_m1_pe_high,,true,option ladder removed
+opt_m1_pe_low,,true,option ladder removed
+opt_m1_pe_close,,true,option ladder removed
+opt_m1_pe_oi,,true,option ladder removed
+opt_m1_pe_volume,,true,option ladder removed
+opt_0_ce_open,,true,option ladder removed
+opt_0_ce_high,,true,option ladder removed
+opt_0_ce_low,,true,option ladder removed
+opt_0_ce_close,,true,option ladder removed
+opt_0_ce_oi,,true,option ladder removed
+opt_0_ce_volume,,true,option ladder removed
+opt_0_pe_open,,true,option ladder removed
+opt_0_pe_high,,true,option ladder removed
+opt_0_pe_low,,true,option ladder removed
+opt_0_pe_close,,true,option ladder removed
+opt_0_pe_oi,,true,option ladder removed
+opt_0_pe_volume,,true,option ladder removed
+opt_p1_ce_open,,true,option ladder removed
+opt_p1_ce_high,,true,option ladder removed
+opt_p1_ce_low,,true,option ladder removed
+opt_p1_ce_close,,true,option ladder removed
+opt_p1_ce_oi,,true,option ladder removed
+opt_p1_ce_volume,,true,option ladder removed
+opt_p1_pe_open,,true,option ladder removed
+opt_p1_pe_high,,true,option ladder removed
+opt_p1_pe_low,,true,option ladder removed
+opt_p1_pe_close,,true,option ladder removed
+opt_p1_pe_oi,,true,option ladder removed
+opt_p1_pe_volume,,true,option ladder removed

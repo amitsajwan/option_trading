@@ -57,3 +57,19 @@ Process that starts live ingestion API/runtime with session-aware supervision.
 - Credentials are read from `KITE_CREDENTIALS_PATH` (compose default `/app/secrets/credentials.json`).
 - If token is missing/expired at open, live ingestion subprocess is not started (no synthetic fallback).
 - Update `credentials.json` from host after manual login; wrapper auto-retries and starts when credentials become valid.
+
+### Manual token refresh helper
+
+Run this on the host to refresh the Zerodha access token into `ingestion_app/credentials.json`:
+
+```powershell
+python -m ingestion_app.kite_auth --force
+```
+
+Verification only:
+
+```powershell
+python -m ingestion_app.kite_auth --verify
+```
+
+This helper is intentionally manual. The live runtime does not trigger an interactive browser login on its own.

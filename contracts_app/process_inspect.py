@@ -41,14 +41,17 @@ def _windows_process_list() -> List[Tuple[int, str]]:
 
 
 def _posix_process_list() -> List[Tuple[int, str]]:
-    proc = subprocess.run(
-        ["ps", "-eo", "pid,args", "--no-headers"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            ["ps", "-eo", "pid,args", "--no-headers"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return _procfs_process_list()
     if proc.returncode != 0:
-        return []
+        return _procfs_process_list()
     out: List[Tuple[int, str]] = []
     for line in (proc.stdout or "").splitlines():
         text = line.strip()
@@ -62,6 +65,32 @@ def _posix_process_list() -> List[Tuple[int, str]]:
         except Exception:
             continue
         out.append((pid, parts[1]))
+    return out
+
+
+def _procfs_process_list() -> List[Tuple[int, str]]:
+    out: List[Tuple[int, str]] = []
+    proc_dir = "/proc"
+    try:
+        entries = os.listdir(proc_dir)
+    except Exception:
+        return out
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        cmdline_path = os.path.join(proc_dir, entry, "cmdline")
+        try:
+            with open(cmdline_path, "rb") as handle:
+                raw = handle.read()
+        except Exception:
+            continue
+        if not raw:
+            continue
+        parts = [p.decode("utf-8", errors="replace") for p in raw.split(b"\x00") if p]
+        if not parts:
+            continue
+        out.append((pid, " ".join(parts)))
     return out
 
 
@@ -88,7 +117,9 @@ def _is_python_cmdline(cmdline: str) -> bool:
     if not text:
         return False
     first = text.split(" ", 1)[0].strip().strip('"').strip("'")
-    return first.endswith("python.exe") or first.endswith("\\python") or first == "python" or first == "python.exe"
+    normalized = first.replace("\\", "/")
+    executable = normalized.rsplit("/", 1)[-1]
+    return executable.startswith("python")
 
 
 def find_matching_python_processes(tokens: Iterable[str]) -> List[Tuple[int, str]]:

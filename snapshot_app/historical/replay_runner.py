@@ -12,14 +12,21 @@ from typing import Iterable, Optional
 import pandas as pd
 
 from contracts_app import build_snapshot_event, historical_snapshot_topic
+from snapshot_app.core.market_snapshot_contract import validate_market_snapshot
 from snapshot_app.redis_publisher import RedisEventPublisher
 
 from .parquet_store import ParquetStore
+from .snapshot_access import (
+    DEFAULT_HISTORICAL_PARQUET_BASE,
+    SNAPSHOT_DATASET_CANONICAL,
+    SNAPSHOT_INPUT_MODE_CANONICAL,
+    require_snapshot_access,
+)
 
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_PARQUET_BASE = Path(r"C:\code\market\ml_pipeline\artifacts\data\parquet_data")
+DEFAULT_PARQUET_BASE = DEFAULT_HISTORICAL_PARQUET_BASE
 
 
 def _load_snapshots(
@@ -66,7 +73,14 @@ def replay_snapshots(
     max_events: int = 0,
 ) -> dict:
     """Replay snapshots from parquet to redis topic."""
-    store = ParquetStore(parquet_base)
+    snapshot_access = require_snapshot_access(
+        mode=SNAPSHOT_INPUT_MODE_CANONICAL,
+        context="historical.replay_runner",
+        parquet_base=Path(parquet_base),
+        min_day=start_date,
+        max_day=end_date,
+    )
+    store = ParquetStore(parquet_base, snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
     publisher = RedisEventPublisher()
     out_path = Path(emit_jsonl).resolve() if emit_jsonl else None
     if out_path is not None:
@@ -91,6 +105,7 @@ def replay_snapshots(
                 "start_date": start_date,
                 "end_date": end_date,
                 "events_emitted": emitted,
+                **snapshot_access.to_metadata(),
             }
 
         cycles += 1
@@ -103,11 +118,13 @@ def replay_snapshots(
                     "events_emitted": emitted,
                     "cycles": cycles,
                     "elapsed_sec": elapsed,
+                    **snapshot_access.to_metadata(),
                 }
 
             snapshot = _snapshot_from_row(row)
             if snapshot is None:
                 continue
+            validate_market_snapshot(snapshot, raise_on_error=True)
 
             event = build_snapshot_event(
                 snapshot=snapshot,
@@ -140,6 +157,7 @@ def replay_snapshots(
         "events_emitted": emitted,
         "cycles": cycles,
         "elapsed_sec": elapsed,
+        **snapshot_access.to_metadata(),
     }
 
 
@@ -155,16 +173,19 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--max-events", type=int, default=0, help="Stop after N emitted events (0 = no limit)")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    result = replay_snapshots(
-        parquet_base=args.base,
-        topic=args.topic,
-        start_date=args.start_date,
-        end_date=args.end_date,
-        speed=float(args.speed),
-        loop=bool(args.loop),
-        emit_jsonl=args.emit_jsonl,
-        max_events=int(args.max_events),
-    )
+    try:
+        result = replay_snapshots(
+            parquet_base=args.base,
+            topic=args.topic,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            speed=float(args.speed),
+            loop=bool(args.loop),
+            emit_jsonl=args.emit_jsonl,
+            max_events=int(args.max_events),
+        )
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc))
     print(json.dumps(result, indent=2, default=str))
     return 0 if str(result.get("status")) in {"complete", "no_snapshots"} else 1
 

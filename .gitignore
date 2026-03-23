@@ -109,6 +109,9 @@ dmypy.json
 # IDE
 .vscode/
 .idea/
+!.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
 
 # Logs
 logs/
@@ -120,17 +123,33 @@ logs/
 # Temporary files
 temp_*
 *.tmp
+.tmp_test/
 credentials.json.backup
 credentials*.backup
 
 # Repo-specific exclusions for filtered architecture repo
 market_data/
-scripts/
 artifacts/
 data/
+.data/
+node_modules/
+*.tsbuildinfo
 *.parquet
 *.feather
 *.csv
+!snapshot_app/contracts/snapshot_ml_flat/legacy_to_flat.csv
+ingestion_app/credentials.json
+ops/gcp/operator.env
+.tmp_pip_probe/
+.tmp_pip_probe312/
+strategy_eval_ui/vite.config.js
+strategy_eval_ui/vite.config.d.ts
+
+# Infrastructure state
+.terraform/
+*.tfstate
+*.tfstate.*
+*.auto.tfvars
 
 # OS
 .DS_Store

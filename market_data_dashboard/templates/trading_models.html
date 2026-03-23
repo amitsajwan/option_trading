@@ -88,7 +88,7 @@
         .summary {
             padding: 0 20px 18px;
             display: grid;
-            grid-template-columns: repeat(3, minmax(120px, 1fr));
+            grid-template-columns: repeat(4, minmax(120px, 1fr));
             gap: 10px;
         }
         .stat {
@@ -256,19 +256,21 @@
                 <div class="hero-links">
                     <a href="/">Dashboard</a>
                     <a href="/trading">Trading Terminal</a>
+                    <a href="/trading/research">Research Explorer</a>
                     <a href="/api/trading/models" target="_blank" rel="noopener">Catalog API</a>
                 </div>
             </div>
             <div class="summary">
                 <div class="stat"><div class="k">Total Models</div><div class="v">{{ summary.total }}</div></div>
                 <div class="stat"><div class="k">Ready To Run</div><div class="v">{{ summary.ready }}</div></div>
+                <div class="stat"><div class="k">Research Models</div><div class="v">{{ summary.research }}</div></div>
                 <div class="stat"><div class="k">Recommended</div><div class="v">{{ summary.recommended }}</div></div>
             </div>
         </section>
 
         <section class="grid">
             {% for model in models %}
-            <article class="panel card {% if model.ready_to_run %}ready{% else %}warn{% endif %}">
+            <article class="panel card {{ model.card_tone or ('ready' if model.ready_to_run else 'warn') }}">
                 <div class="head">
                     <div>
                         <h2 class="title">{{ model.title }}</h2>
@@ -277,80 +279,31 @@
                     </div>
                     <div class="chips">
                         <span class="chip key">{{ model.instance_key }}</span>
-                        <span class="chip src">{{ model.source }}</span>
+                        <span class="chip src">{{ model.source_label or model.source }}</span>
                         {% if model.recommended %}<span class="chip rec">recommended</span>{% endif %}
-                        {% if model.ready_to_run %}
-                        <span class="chip good">ready</span>
-                        {% else %}
-                        <span class="chip bad">needs setup</span>
-                        {% endif %}
+                        <span class="chip {{ model.status_chip_class or ('good' if model.ready_to_run else 'bad') }}">{{ model.status_label or ('ready' if model.ready_to_run else 'needs setup') }}</span>
                     </div>
                 </div>
 
                 <div class="metric-grid">
+                    {% for metric in model.metric_cards %}
                     <div class="metric">
-                        <div class="k">Coverage</div>
-                        <div class="v">
-                            {{ model.metrics.training_coverage_start or "--" }}
-                            to
-                            {{ model.metrics.training_coverage_end or "--" }}
-                        </div>
+                        <div class="k">{{ metric.label }}</div>
+                        <div class="v">{{ metric.value }}</div>
                     </div>
-                    <div class="metric">
-                        <div class="k">Full OOS Win %</div>
-                        <div class="v">
-                            {% if model.metrics.full_oos_win_rate is not none %}{{ "%.2f"|format(model.metrics.full_oos_win_rate) }}%{% else %}--{% endif %}
-                        </div>
-                    </div>
-                    <div class="metric">
-                        <div class="k">Latest Slice Win %</div>
-                        <div class="v">
-                            {% if model.metrics.latest_oos_win_rate is not none %}{{ "%.2f"|format(model.metrics.latest_oos_win_rate) }}%{% else %}--{% endif %}
-                        </div>
-                    </div>
-                    <div class="metric">
-                        <div class="k">CE Threshold</div>
-                        <div class="v">{% if model.metrics.ce_threshold is not none %}{{ "%.3f"|format(model.metrics.ce_threshold) }}{% else %}--{% endif %}</div>
-                    </div>
-                    <div class="metric">
-                        <div class="k">PE Threshold</div>
-                        <div class="v">{% if model.metrics.pe_threshold is not none %}{{ "%.3f"|format(model.metrics.pe_threshold) }}{% else %}--{% endif %}</div>
-                    </div>
-                    <div class="metric">
-                        <div class="k">Policy Mode</div>
-                        <div class="v">{{ model.metrics.policy_mode or "--" }}</div>
-                    </div>
+                    {% endfor %}
                 </div>
 
                 <div class="paths">
+                    {% for path_row in model.path_rows %}
                     <div class="path-row">
-                        <span>Model Package</span>
-                        <code>{{ model.model_package or "--" }}</code>
-                        <span class="{% if model.exists.model_package %}ok{% else %}miss{% endif %}">
-                            {% if model.exists.model_package %}found{% else %}missing{% endif %}
+                        <span>{{ path_row.label }}</span>
+                        <code>{{ path_row.path or "--" }}</code>
+                        <span class="{% if path_row.exists %}ok{% else %}miss{% endif %}">
+                            {% if path_row.exists %}found{% else %}missing{% endif %}
                         </span>
                     </div>
-                    <div class="path-row">
-                        <span>Threshold Report</span>
-                        <code>{{ model.threshold_report or "--" }}</code>
-                        <span class="{% if model.exists.threshold_report %}ok{% else %}miss{% endif %}">
-                            {% if model.exists.threshold_report %}found{% else %}missing{% endif %}
-                        </span>
-                    </div>
-                    <div class="path-row">
-                        <span>Eval Summary</span>
-                        <code>{{ model.eval_summary_path or "--" }}</code>
-                        <span class="{% if model.exists.eval_summary_path %}ok{% else %}miss{% endif %}">
-                            {% if model.exists.eval_summary_path %}found{% else %}missing{% endif %}
-                        </span>
-                    </div>
-                    <div class="path-row">
-                        <span>Training Report</span>
-                        <code>{{ model.training_report_path or "--" }}</code>
-                        <span class="{% if model.exists.training_report_path %}ok{% else %}miss{% endif %}">
-                            {% if model.exists.training_report_path %}found{% else %}missing{% endif %}
-                        </span>
-                    </div>
+                    {% endfor %}
                 </div>
 
                 <div class="desc"><strong>Runner compatibility:</strong> {{ model.compatibility_note or "No compatibility note." }}</div>
@@ -360,11 +313,9 @@
                 {% endif %}
 
                 <div class="actions">
-                    <a class="a-primary" href="{{ model.prefill_url }}" target="_blank" rel="noopener">Open Prefilled Terminal</a>
-                    <a class="a-secondary" href="{{ model.launch_url }}" target="_blank" rel="noopener">Open By Instance</a>
-                    {% if model.evaluation_api_url %}
-                    <a class="a-secondary" href="{{ model.evaluation_api_url }}" target="_blank" rel="noopener">Open Eval JSON</a>
-                    {% endif %}
+                    {% for action in model.actions %}
+                    <a class="{% if action.primary %}a-primary{% else %}a-secondary{% endif %}" href="{{ action.url }}" target="_blank" rel="noopener">{{ action.label }}</a>
+                    {% endfor %}
                 </div>
             </article>
             {% endfor %}

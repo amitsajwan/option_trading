@@ -1,23 +1,30 @@
 # snapshot_app
 
-Builds and publishes canonical `MarketSnapshot` (MSS.1-MSS.9) events.
+Builds and publishes the canonical live `MarketSnapshot` contract and the historical snapshot datasets used by research and staged ML.
 
 ## Ownership
 - Owns snapshot assembly runtime and publishing.
-- Canonical builder lives in `snapshot_app/market_snapshot.py`.
+- Historical `MarketSnapshot` builder lives in `snapshot_app/core/market_snapshot.py`.
+- Historical raw-to-snapshot orchestration lives in `snapshot_app/pipeline/`.
+- Derived flat ML projection lives in `snapshot_app/core/live_ml_flat.py` and `snapshot_app/historical/snapshot_batch.py`.
+- Stage-view projections live in `snapshot_app/core/stage_views.py`.
 - `main_live.py` emits one event per new `snapshot_id`.
 
 ## Entrypoint
 - `python -m snapshot_app.main_live --instrument BANKNIFTY26MARFUT` (non-blocking launcher; logs in `.run/snapshot_app/`)
 - `python -m snapshot_app.main_live --instrument BANKNIFTY26MARFUT --foreground` (blocking/foreground)
 - Health: `python -m snapshot_app.health --events-path .run/snapshot_app/events.jsonl`
-- Live snapshot quality check: `python -m snapshot_app.live_validate --events-path .run/snapshot_app/events.jsonl --tail 500`
+- Live canonical contract validation: `python -m snapshot_app.live_validate --events-path .run/snapshot_app/events.jsonl --tail 500`
 - Stop: `python -m snapshot_app.stop`
 
 ## Historical Snapshot Build
 - Historical Layer-2 builder: `python -m snapshot_app.historical.snapshot_batch_runner`
 - Full user guide: `snapshot_app/historical/README.md`
-- This path reuses `snapshot_app/market_snapshot.py` to build MSS.1-MSS.9 from parquet Layer-1 input.
+- This is the single historical code path.
+- It can start either from raw CSV root (`--raw-root C:\code\banknifty_data`) or from an existing parquet cache.
+- It writes canonical `snapshots`, derived `snapshots_ml_flat`, and staged parquet views from the same run.
+- It reuses `snapshot_app/core/market_snapshot.py` for canonical snapshot logic and `snapshot_app.pipeline` for raw normalization/orchestration.
+- Parallel historical builds now use chunked calendar partitions with warmup continuity.
 
 ## Data and Time Convention
 - Session/business timestamps are IST-focused.

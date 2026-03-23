@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 from zoneinfo import ZoneInfo
 
-from contracts_app import is_market_open_ist, is_trading_day_ist, load_holidays, seconds_until_next_open_ist
+from contracts_app import configure_ist_logging, is_market_open_ist, is_trading_day_ist, load_holidays, seconds_until_next_open_ist
 
 from .runtime import check_zerodha_credentials, kite_startup_preflight
 
@@ -61,6 +61,7 @@ def _state_payload(
     *,
     cfg: RunnerConfig,
     status: str,
+    api_proc: Optional[subprocess.Popen],
     child_proc: Optional[subprocess.Popen],
     market_open: bool,
     trading_day: bool,
@@ -74,6 +75,7 @@ def _state_payload(
         "market_open": bool(market_open),
         "trading_day": bool(trading_day),
         "idle_reason": reason,
+        "api_pid": int(api_proc.pid) if api_proc is not None and api_proc.poll() is None else None,
         "collector_pid": int(child_proc.pid) if child_proc is not None and child_proc.poll() is None else None,
         "market_session_enabled": cfg.session_enabled,
         "timezone": cfg.timezone_name,
@@ -102,10 +104,16 @@ def _stop_child(child_proc: Optional[subprocess.Popen]) -> None:
 
 
 def _start_child(cfg: RunnerConfig) -> subprocess.Popen:
-    cmd = [sys.executable, "-m", "ingestion_app.runner", "--mode", cfg.mode, "--start-collectors"]
+    cmd = [sys.executable, "-m", "ingestion_app.runner", "--mode", cfg.mode, "--start-collectors", "--no-server"]
     if cfg.skip_validation:
         cmd.append("--skip-validation")
     logger.info("starting ingestion runner command=%s", cmd)
+    return subprocess.Popen(cmd, env=None, stdin=subprocess.DEVNULL)
+
+
+def _start_api_server() -> subprocess.Popen:
+    cmd = [sys.executable, "-m", "ingestion_app.api_service"]
+    logger.info("starting ingestion api command=%s", cmd)
     return subprocess.Popen(cmd, env=None, stdin=subprocess.DEVNULL)
 
 
@@ -144,6 +152,7 @@ def _run_healthcheck(*, state_file: Path, max_stale_seconds: float) -> int:
 
 def _loop(cfg: RunnerConfig) -> int:
     shutdown_requested = False
+    api_proc: Optional[subprocess.Popen] = None
     child_proc: Optional[subprocess.Popen] = None
 
     def _handle_signal(signum: int, _frame: object) -> None:
@@ -155,6 +164,14 @@ def _loop(cfg: RunnerConfig) -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
 
     while not shutdown_requested:
+        if api_proc is None or api_proc.poll() is not None:
+            try:
+                api_proc = _start_api_server()
+            except Exception as exc:
+                logger.warning("api_server_start_failed: %s", exc)
+                time.sleep(max(5, int(cfg.open_retry_seconds)))
+                continue
+
         now = _now_ist(cfg.timezone_name)
         holidays = load_holidays(cfg.holidays_file)
         if cfg.session_enabled:
@@ -193,6 +210,7 @@ def _loop(cfg: RunnerConfig) -> int:
             _state_payload(
                 cfg=cfg,
                 status=status,
+                api_proc=api_proc,
                 child_proc=child_proc,
                 market_open=market_open,
                 trading_day=trading_day,
@@ -216,6 +234,7 @@ def _loop(cfg: RunnerConfig) -> int:
         time.sleep(sleep_for)
 
     _stop_child(child_proc)
+    _stop_child(api_proc)
     return 0
 
 
@@ -255,5 +274,5 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+    configure_ist_logging(level=logging.INFO)
     raise SystemExit(run_cli())

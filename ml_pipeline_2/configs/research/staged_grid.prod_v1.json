@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.deep_search.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_prod_v1"
+  },
+  "selection": {
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.54,
+      "brier_max": 0.225
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "deep_search_baseline",
+        "model_group_suffix": "_grid_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_dual_recipe_grid_deep_search_baseline"
+          }
+        }
+      },
+      {
+        "run_id": "stage2_edge_0006",
+        "model_group_suffix": "_grid_edge_0006",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_dual_recipe_grid_stage2_edge_0006"
+          },
+          "training": {
+            "stage2_label_filter": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0006
+            }
+          }
+        }
+      },
+      {
+        "run_id": "stage2_edge_0010",
+        "model_group_suffix": "_grid_edge_0010",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_dual_recipe_grid_stage2_edge_0010"
+          },
+          "training": {
+            "stage2_label_filter": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.001
+            }
+          }
+        }
+      },
+      {
+        "run_id": "stage2_edge_0014",
+        "model_group_suffix": "_grid_edge_0014",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_dual_recipe_grid_stage2_edge_0014"
+          },
+          "training": {
+            "stage2_label_filter": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0014
+            }
+          }
+        }
+      },
+      {
+        "run_id": "best_edge_block_expiry",
+        "model_group_suffix": "_grid_best_edge_block_expiry",
+        "inherit_best_from": [
+          "stage2_edge_0006",
+          "stage2_edge_0010",
+          "stage2_edge_0014"
+        ],
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_dual_recipe_grid_best_edge_block_expiry"
+          },
+          "runtime": {
+            "block_expiry": true
+          }
+        }
+      },
+      {
+        "run_id": "best_edge_time_focus",
+        "model_group_suffix": "_grid_best_edge_time_focus",
+        "inherit_best_from": [
+          "stage2_edge_0006",
+          "stage2_edge_0010",
+          "stage2_edge_0014"
+        ],
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_dual_recipe_grid_best_edge_time_focus"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": [
+                "fo_expiry_aware_v3",
+                "fo_no_time_context",
+                "fo_no_opening_range"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

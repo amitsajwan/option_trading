@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Research Scenario Explorer</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg0: #f2f6f3;
+            --bg1: #ddebe5;
+            --card: #ffffff;
+            --ink: #152129;
+            --muted: #61717d;
+            --line: #d5dee5;
+            --accent: #0d6b57;
+            --accent2: #1f5d86;
+            --good: #0f9d7a;
+            --bad: #bf4b36;
+            --warn: #c37b19;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            color: var(--ink);
+            font-family: "Space Grotesk", sans-serif;
+            background:
+                radial-gradient(circle at 8% 12%, #ecf8ef 0%, rgba(236, 248, 239, 0) 34%),
+                radial-gradient(circle at 92% 84%, #dfeaff 0%, rgba(223, 234, 255, 0) 42%),
+                linear-gradient(170deg, var(--bg0), var(--bg1));
+            min-height: 100vh;
+        }
+
+        .page {
+            max-width: 1480px;
+            margin: 0 auto;
+            padding: 22px;
+            display: grid;
+            gap: 14px;
+        }
+
+        .panel {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            box-shadow: 0 12px 28px rgba(23, 35, 49, 0.07);
+        }
+
+        .hero {
+            padding: 18px 20px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .hero h1 {
+            margin: 0;
+            font-size: 31px;
+        }
+
+        .sub {
+            margin-top: 6px;
+            color: var(--muted);
+            max-width: 880px;
+            font-size: 14px;
+        }
+
+        .hero-links {
+            display: inline-flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .hero-links a, button {
+            font: inherit;
+        }
+
+        .hero-links a {
+            text-decoration: none;
+            height: 36px;
+            padding: 0 12px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            color: var(--ink);
+            background: #f7fafc;
+            display: inline-flex;
+            align-items: center;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .controls {
+            padding: 18px 20px;
+            display: grid;
+            gap: 14px;
+        }
+
+        .control-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        label {
+            display: grid;
+            gap: 6px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        select, input, button.action {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 10px 12px;
+            background: #fbfdff;
+            color: var(--ink);
+            min-height: 42px;
+        }
+
+        button.action {
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            color: #fff;
+            border: 0;
+            font-weight: 700;
+            cursor: pointer;
+            align-self: end;
+        }
+
+        .hint {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .banner {
+            display: none;
+            padding: 12px 14px;
+            border-radius: 14px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .banner.show { display: block; }
+        .banner.error { background: #fff0ee; border: 1px solid #f0c2bb; color: #8e2f21; }
+        .banner.warn { background: #fff8eb; border: 1px solid #eed8b2; color: #8b5b10; }
+        .banner.info { background: #eef7ff; border: 1px solid #cfe1f4; color: #21567d; }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .stat {
+            padding: 14px;
+        }
+
+        .stat .k {
+            color: var(--muted);
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .stat .v {
+            margin-top: 4px;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 23px;
+            font-weight: 600;
+        }
+
+        .meta {
+            padding: 16px 20px;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .meta-item {
+            border: 1px dashed var(--line);
+            border-radius: 12px;
+            padding: 12px;
+        }
+
+        .meta-item .k {
+            color: var(--muted);
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .meta-item .v {
+            margin-top: 5px;
+            font-size: 14px;
+            font-weight: 600;
+            overflow-wrap: anywhere;
+        }
+
+        .chart-grid {
+            display: grid;
+            grid-template-columns: 1.6fr 1fr;
+            gap: 12px;
+        }
+
+        .chart-panel {
+            padding: 14px;
+        }
+
+        .chart-title {
+            margin: 0 0 8px;
+            font-size: 18px;
+        }
+
+        .chart {
+            height: 420px;
+        }
+
+        .table-panel {
+            padding: 14px;
+        }
+
+        .table-wrap {
+            overflow: auto;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th, td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #e9eef2;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            background: #f8fbfd;
+            z-index: 1;
+        }
+
+        code {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 12px;
+        }
+
+        .empty {
+            color: var(--muted);
+            padding: 16px;
+        }
+
+        @media (max-width: 1100px) {
+            .control-grid, .summary-grid, .meta, .chart-grid { grid-template-columns: 1fr 1fr; }
+        }
+
+        @media (max-width: 760px) {
+            .control-grid, .summary-grid, .meta, .chart-grid { grid-template-columns: 1fr; }
+            .page { padding: 14px; }
+            .chart { height: 320px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <section class="panel">
+            <div class="hero">
+                <div>
+                    <h1>Research Scenario Explorer</h1>
+                    <div class="sub">
+                        Review completed `ml_pipeline_2` recovery scenarios, rerun them on a chosen out-of-sample date range, and inspect
+                        the futures chart with entry and exit markers plus the CE/PE probability path that drove the decision.
+                    </div>
+                </div>
+                <div class="hero-links">
+                    <a href="/">Dashboard</a>
+                    <a href="/trading/models">Model Catalog</a>
+                    <a href="/trading">Trading Terminal</a>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel controls">
+            <div id="banner" class="banner"></div>
+            <div class="control-grid">
+                <label>
+                    Scenario
+                    <select id="scenarioSelect"></select>
+                </label>
+                <label>
+                    Recipe
+                    <select id="recipeSelect"></select>
+                </label>
+                <label>
+                    Date From
+                    <input id="dateFrom" type="date">
+                </label>
+                <label>
+                    Date To
+                    <input id="dateTo" type="date">
+                </label>
+                <label>
+                    Threshold
+                    <input id="thresholdInput" type="number" min="0" max="1" step="0.01" placeholder="use scenario default">
+                </label>
+            </div>
+            <div class="control-grid">
+                <div class="hint" id="rangeHint"></div>
+                <div class="hint" id="recipeHint"></div>
+                <div></div>
+                <div></div>
+                <button class="action" id="loadBtn">Load Evaluation</button>
+            </div>
+        </section>
+
+        <section class="summary-grid" id="summaryGrid"></section>
+        <section class="panel meta" id="metaGrid"></section>
+
+        <section class="chart-grid">
+            <div class="panel chart-panel">
+                <h3 class="chart-title">Futures Price With Entry / Exit Markers</h3>
+                <div id="priceChart" class="chart"></div>
+            </div>
+            <div class="panel chart-panel">
+                <h3 class="chart-title">CE / PE Probabilities</h3>
+                <div id="probChart" class="chart"></div>
+            </div>
+        </section>
+
+        <section class="panel table-panel">
+            <h3 class="chart-title">Daily Breakdown</h3>
+            <div id="dailyWrap" class="table-wrap"></div>
+        </section>
+
+        <section class="panel table-panel">
+            <h3 class="chart-title">Trades</h3>
+            <div id="tradeWrap" class="table-wrap"></div>
+        </section>
+    </div>
+
+    <script>
+        const state = {
+            scenarios: [],
+            priceChart: null,
+            probChart: null,
+            initialSelectionApplied: false,
+        };
+        const pageParams = new URLSearchParams(window.location.search);
+        const initialSelection = {
+            scenarioKey: (pageParams.get("scenario_key") || "").trim(),
+            recipeId: (pageParams.get("recipe_id") || "").trim(),
+            dateFrom: (pageParams.get("date_from") || "").trim(),
+            dateTo: (pageParams.get("date_to") || "").trim(),
+            threshold: (pageParams.get("threshold") || "").trim(),
+        };
+
+        const qs = (selector) => document.querySelector(selector);
+        const scenarioSelect = qs("#scenarioSelect");
+        const recipeSelect = qs("#recipeSelect");
+        const dateFromInput = qs("#dateFrom");
+        const dateToInput = qs("#dateTo");
+        const thresholdInput = qs("#thresholdInput");
+        const rangeHint = qs("#rangeHint");
+        const recipeHint = qs("#recipeHint");
+        const summaryGrid = qs("#summaryGrid");
+        const metaGrid = qs("#metaGrid");
+        const dailyWrap = qs("#dailyWrap");
+        const tradeWrap = qs("#tradeWrap");
+        const banner = qs("#banner");
+
+        function showBanner(kind, message) {
+            banner.className = `banner show ${kind}`;
+            banner.textContent = message;
+        }
+
+        function clearBanner() {
+            banner.className = "banner";
+            banner.textContent = "";
+        }
+
+        function fmtNumber(value, digits = 2) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+            return Number(value).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
+        }
+
+        function fmtPct(value, digits = 2) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+            return `${(Number(value) * 100).toFixed(digits)}%`;
+        }
+
+        function activeScenario() {
+            return state.scenarios.find((item) => item.scenario_key === scenarioSelect.value) || null;
+        }
+
+        function activeRecipeMeta() {
+            const scenario = activeScenario();
+            if (!scenario) return null;
+            return (scenario.recipes || []).find((item) => item.recipe_id === recipeSelect.value) || null;
+        }
+
+        function fillScenarioControls() {
+            const scenario = activeScenario();
+            if (!scenario) return;
+            const recipes = scenario.recipes || [];
+            recipeSelect.innerHTML = recipes.map((recipe) => `<option value="${recipe.recipe_id}">${recipe.recipe_id}</option>`).join("");
+            recipeSelect.value = scenario.default_recipe_id || (recipes[0] && recipes[0].recipe_id) || "";
+            const windowMeta = scenario.eval_window || {};
+            dateFromInput.min = windowMeta.allowed_start || "";
+            dateFromInput.max = windowMeta.allowed_end || "";
+            dateToInput.min = windowMeta.allowed_start || "";
+            dateToInput.max = windowMeta.allowed_end || "";
+            dateFromInput.value = windowMeta.default_start || windowMeta.allowed_start || "";
+            dateToInput.value = windowMeta.default_end || windowMeta.allowed_end || "";
+            const recipe = activeRecipeMeta();
+            thresholdInput.value = recipe && recipe.recommended_threshold !== null && recipe.recommended_threshold !== undefined
+                ? String(recipe.recommended_threshold)
+                : "";
+            rangeHint.innerHTML = `Allowed out-of-sample range: <code>${windowMeta.allowed_start || "--"}</code> to <code>${windowMeta.allowed_end || "--"}</code>`;
+            renderScenarioMeta();
+        }
+
+        function applyInitialSelection() {
+            if (state.initialSelectionApplied) return;
+            const scenario = activeScenario();
+            if (!scenario) return;
+            const recipes = scenario.recipes || [];
+            if (initialSelection.recipeId && recipes.some((item) => item.recipe_id === initialSelection.recipeId)) {
+                recipeSelect.value = initialSelection.recipeId;
+            }
+            if (initialSelection.dateFrom) dateFromInput.value = initialSelection.dateFrom;
+            if (initialSelection.dateTo) dateToInput.value = initialSelection.dateTo;
+            if (initialSelection.threshold) thresholdInput.value = initialSelection.threshold;
+            state.initialSelectionApplied = true;
+            renderScenarioMeta();
+        }
+
+        function renderScenarioMeta() {
+            const scenario = activeScenario();
+            const recipe = activeRecipeMeta();
+            if (!scenario) {
+                metaGrid.innerHTML = "";
+                return;
+            }
+            recipeHint.textContent = recipe
+                ? `Recipe horizon ${recipe.horizon_minutes || "--"}m, TP ${fmtPct(recipe.take_profit_pct)} , SL ${fmtPct(recipe.stop_loss_pct)}`
+                : "";
+            const fullModel = scenario.windows?.full_model || {};
+            const holdout = scenario.windows?.final_holdout || {};
+            metaGrid.innerHTML = [
+                ["Run", scenario.run_name || "--"],
+                ["Primary Model", scenario.primary_model || "--"],
+                ["Feature Sets", (scenario.feature_sets || []).join(", ") || "--"],
+                ["Model Window", `${fullModel.start || "--"} to ${fullModel.end || "--"}`],
+                ["Original Holdout", `${holdout.start || "--"} to ${holdout.end || "--"}`],
+                ["Recipe", recipe ? recipe.recipe_id : "--"],
+                ["Barrier Mode", recipe?.barrier_mode || "--"],
+                ["Scenario Key", scenario.scenario_key || "--"],
+            ].map(([k, v]) => `<div class="meta-item"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+        }
+
+        function renderSummary(summary) {
+            const items = [
+                ["Rows", fmtNumber(summary.rows_total, 0)],
+                ["Trades", fmtNumber(summary.trades, 0)],
+                ["Trade Rate", fmtPct(summary.trade_rate)],
+                ["Win Rate", fmtPct(summary.win_rate)],
+                ["Net Return", fmtPct(summary.net_return_sum)],
+                ["Profit Factor", fmtNumber(summary.profit_factor)],
+            ];
+            summaryGrid.innerHTML = items.map(([k, v]) => `<div class="panel stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+        }
+
+        function renderDaily(rows) {
+            if (!rows || !rows.length) {
+                dailyWrap.innerHTML = `<div class="empty">No daily aggregates for this selection.</div>`;
+                return;
+            }
+            dailyWrap.innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Trades</th>
+                            <th>Win Rate</th>
+                            <th>Net Return</th>
+                            <th>Profit Factor</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows.map((row) => `
+                            <tr>
+                                <td>${row.trade_date || "--"}</td>
+                                <td>${fmtNumber(row.trades, 0)}</td>
+                                <td>${fmtPct(row.win_rate)}</td>
+                                <td>${fmtPct(row.net_return_sum)}</td>
+                                <td>${fmtNumber(row.profit_factor)}</td>
+                            </tr>
+                        `).join("")}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        function renderTrades(rows) {
+            if (!rows || !rows.length) {
+                tradeWrap.innerHTML = `<div class="empty">No trades were taken for the chosen threshold and range.</div>`;
+                return;
+            }
+            tradeWrap.innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Trade</th>
+                            <th>Date</th>
+                            <th>Side</th>
+                            <th>Entry</th>
+                            <th>Exit</th>
+                            <th>Chosen Prob</th>
+                            <th>CE Prob</th>
+                            <th>PE Prob</th>
+                            <th>Exit Reason</th>
+                            <th>Entry Fut Px</th>
+                            <th>Exit Fut Px</th>
+                            <th>Net Return</th>
+                            <th>Outcome</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows.map((row) => `
+                            <tr>
+                                <td>${row.trade_id || "--"}</td>
+                                <td>${row.trade_date || "--"}</td>
+                                <td>${row.chosen_side || "--"}</td>
+                                <td>${row.entry_ts || "--"}</td>
+                                <td>${row.exit_ts || "--"}</td>
+                                <td>${fmtNumber(row.chosen_prob, 3)}</td>
+                                <td>${fmtNumber(row.ce_prob, 3)}</td>
+                                <td>${fmtNumber(row.pe_prob, 3)}</td>
+                                <td>${row.exit_reason || "--"}</td>
+                                <td>${fmtNumber(row.entry_fut_price)}</td>
+                                <td>${fmtNumber(row.exit_fut_price)}</td>
+                                <td>${fmtPct(row.net_return_after_cost)}</td>
+                                <td>${row.net_outcome || "--"}</td>
+                            </tr>
+                        `).join("")}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        function ensureCharts() {
+            if (!state.priceChart) state.priceChart = echarts.init(qs("#priceChart"));
+            if (!state.probChart) state.probChart = echarts.init(qs("#probChart"));
+        }
+
+        function renderCharts(chart) {
+            ensureCharts();
+            const bars = chart.bars || [];
+            const categories = bars.map((item) => item.ts);
+            const candleValues = bars.map((item) => [item.open, item.close, item.low, item.high]);
+            const entryMarkers = (chart.entry_markers || []).filter((item) => item.ts && Number.isFinite(Number(item.price)));
+            const exitMarkers = (chart.exit_markers || []).filter((item) => item.ts && Number.isFinite(Number(item.price)));
+            state.priceChart.setOption({
+                animation: false,
+                grid: { left: 46, right: 20, top: 30, bottom: 70 },
+                tooltip: { trigger: "axis" },
+                dataZoom: [{ type: "inside" }, { type: "slider", bottom: 18 }],
+                xAxis: { type: "category", data: categories, scale: true, boundaryGap: false },
+                yAxis: { scale: true },
+                series: [
+                    {
+                        name: "Futures",
+                        type: "candlestick",
+                        data: candleValues,
+                        itemStyle: {
+                            color: "#149c77",
+                            color0: "#d45745",
+                            borderColor: "#149c77",
+                            borderColor0: "#d45745",
+                        },
+                    },
+                    {
+                        name: "Entries",
+                        type: "scatter",
+                        symbolSize: 14,
+                        data: entryMarkers.map((item) => ({
+                            value: [item.ts, item.price],
+                            itemStyle: { color: item.side === "CE" ? "#0f9d7a" : "#2f7fe2" },
+                            tradeId: item.trade_id,
+                            side: item.side,
+                            prob: item.prob,
+                        })),
+                        tooltip: {
+                            formatter: (params) => `${params.data.tradeId}<br/>${params.data.side} entry<br/>Prob ${fmtNumber(params.data.prob, 3)}`
+                        }
+                    },
+                    {
+                        name: "Exits",
+                        type: "scatter",
+                        symbol: "diamond",
+                        symbolSize: 12,
+                        data: exitMarkers.map((item) => ({
+                            value: [item.ts, item.price],
+                            itemStyle: { color: Number(item.net_return_after_cost) >= 0 ? "#0f9d58" : "#c2410c" },
+                            tradeId: item.trade_id,
+                            reason: item.exit_reason,
+                        })),
+                        tooltip: {
+                            formatter: (params) => `${params.data.tradeId}<br/>Exit ${params.data.reason || "--"}`
+                        }
+                    }
+                ]
+            }, true);
+
+            const probabilities = chart.probabilities || [];
+            state.probChart.setOption({
+                animation: false,
+                grid: { left: 46, right: 20, top: 30, bottom: 70 },
+                tooltip: { trigger: "axis" },
+                legend: { top: 0, data: ["CE", "PE", "Threshold"] },
+                dataZoom: [{ type: "inside" }, { type: "slider", bottom: 18 }],
+                xAxis: { type: "category", data: probabilities.map((item) => item.ts), boundaryGap: false },
+                yAxis: { type: "value", min: 0, max: 1 },
+                series: [
+                    { name: "CE", type: "line", showSymbol: false, data: probabilities.map((item) => item.ce_prob), lineStyle: { color: "#0f9d7a", width: 2 } },
+                    { name: "PE", type: "line", showSymbol: false, data: probabilities.map((item) => item.pe_prob), lineStyle: { color: "#2f7fe2", width: 2 } },
+                    { name: "Threshold", type: "line", showSymbol: false, data: probabilities.map(() => chart.threshold), lineStyle: { type: "dashed", color: "#c37b19", width: 2 } }
+                ]
+            }, true);
+        }
+
+        async function loadScenarios() {
+            const response = await fetch("/api/trading/research/scenarios");
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+            state.scenarios = payload.scenarios || [];
+            scenarioSelect.innerHTML = state.scenarios.map((item) => `<option value="${item.scenario_key}">${item.run_name}</option>`).join("");
+            if (!state.scenarios.length) {
+                showBanner("warn", "No completed recovery scenarios were discovered.");
+                return;
+            }
+            if (initialSelection.scenarioKey && state.scenarios.some((item) => item.scenario_key === initialSelection.scenarioKey)) {
+                scenarioSelect.value = initialSelection.scenarioKey;
+            } else {
+                scenarioSelect.value = state.scenarios[0].scenario_key;
+                if (initialSelection.scenarioKey) {
+                    showBanner("warn", `Requested scenario was not found; showing latest available scenario instead.`);
+                }
+            }
+            fillScenarioControls();
+            applyInitialSelection();
+        }
+
+        async function loadEvaluation() {
+            const scenario = activeScenario();
+            if (!scenario) return;
+            clearBanner();
+            const params = new URLSearchParams({
+                scenario_key: scenario.scenario_key,
+                date_from: dateFromInput.value,
+                date_to: dateToInput.value,
+                recipe_id: recipeSelect.value,
+            });
+            if (thresholdInput.value.trim()) params.set("threshold", thresholdInput.value.trim());
+            const response = await fetch(`/api/trading/research/evaluation?${params.toString()}`);
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+            if (payload.status === "no_data") {
+                showBanner("info", payload.message || "No rows found for the selected range.");
+            }
+            renderScenarioMeta();
+            renderSummary(payload.summary || {});
+            renderDaily(payload.daily || []);
+            renderTrades(payload.trades || []);
+            renderCharts(payload.chart || {});
+        }
+
+        scenarioSelect.addEventListener("change", () => {
+            fillScenarioControls();
+            loadEvaluation().catch((err) => showBanner("error", err.message || String(err)));
+        });
+        recipeSelect.addEventListener("change", () => {
+            const recipe = activeRecipeMeta();
+            thresholdInput.value = recipe && recipe.recommended_threshold !== null && recipe.recommended_threshold !== undefined
+                ? String(recipe.recommended_threshold)
+                : "";
+            renderScenarioMeta();
+        });
+        qs("#loadBtn").addEventListener("click", () => loadEvaluation().catch((err) => showBanner("error", err.message || String(err))));
+        window.addEventListener("resize", () => {
+            if (state.priceChart) state.priceChart.resize();
+            if (state.probChart) state.probChart.resize();
+        });
+
+        loadScenarios()
+            .then(() => loadEvaluation())
+            .catch((err) => showBanner("error", err.message || String(err)));
+    </script>
+</body>
+</html>

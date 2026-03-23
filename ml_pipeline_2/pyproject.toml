@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ml-pipeline-2"
+version = "0.1.0"
+description = "Research-only ML package for manifest-driven option trading experiments."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "joblib",
+  "lightgbm",
+  "numpy",
+  "pandas",
+  "pyarrow",
+  "scikit-learn",
+  "xgboost",
+]
+
+[project.scripts]
+ml-pipeline-research = "ml_pipeline_2.run_research:main"
+ml-pipeline-staged-release = "ml_pipeline_2.run_staged_release:main"
+ml-pipeline-staged-grid = "ml_pipeline_2.run_staged_grid:main"
+ml-pipeline-background-job = "ml_pipeline_2.run_background_job:main"
+ml-pipeline-publish-model = "ml_pipeline_2.run_publish_model:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

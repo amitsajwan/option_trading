@@ -35,6 +35,8 @@ def run_cli() -> int:
     components = [
         _stop_component("snapshot_app", ["-m snapshot_app.main_live"], timeout_seconds, force_after_timeout),
         _stop_component("persistence_app", ["-m persistence_app.main_snapshot_consumer"], timeout_seconds, force_after_timeout),
+        _stop_component("strategy_persistence_app", ["-m persistence_app.main_strategy_consumer"], timeout_seconds, force_after_timeout),
+        _stop_component("strategy_app", ["-m strategy_app.main"], timeout_seconds, force_after_timeout),
         _stop_component("ingestion_app", ["-m ingestion_app.main_live", "-m ingestion_app.runner"], timeout_seconds, force_after_timeout),
     ]
     if bool(args.include_dashboard):

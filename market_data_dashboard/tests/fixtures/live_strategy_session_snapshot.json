@@ -1,0 +1,116 @@
+{
+  "status": "ok",
+  "session": {
+    "date_ist": "2026-03-02",
+    "instrument": "BANKNIFTY26MARFUT",
+    "timezone": "Asia/Kolkata",
+    "latest_event_time": "2026-03-02T12:47:00+05:30",
+    "market_session_open": true,
+    "data_freshness": {
+      "votes_fresh": true,
+      "signals_fresh": true,
+      "positions_fresh": true,
+      "latest_vote_age_sec": 10
+    }
+  },
+  "capital": {
+    "configured_capital": 500000.0,
+    "realized_pnl_amount": 270.0,
+    "realized_pnl_pct": 0.00054
+  },
+  "engine_context": {
+    "active_engine_mode": "ml_pure",
+    "strategy_family_version": "ML_PURE_STAGED_V1",
+    "strategy_profile_id": "ml_pure_staged_v1"
+  },
+  "promotion_lane": "ml_pure",
+  "counts": {
+    "votes": 47,
+    "signals": 2,
+    "position_events": 4,
+    "closed_trades": 1,
+    "open_positions": 0
+  },
+  "warnings": [],
+  "current_position": null,
+  "current_positions": [],
+  "latest_closed_trade": {
+    "position_id": "fa27d563",
+    "entry_time": "2026-03-02T12:45:00+05:30",
+    "exit_time": "2026-03-02T12:47:00+05:30",
+    "capital_at_risk": 13830.0
+  },
+  "today_summary": {
+    "overall": {},
+    "equity": {},
+    "by_strategy": [],
+    "by_regime": [],
+    "exit_reasons": []
+  },
+  "recent_trades": [
+    {
+      "position_id": "fa27d563",
+      "entry_time": "2026-03-02T12:45:00+05:30",
+      "exit_time": "2026-03-02T12:47:00+05:30",
+      "capital_at_risk": 13830.0
+    }
+  ],
+  "recent_signals": [],
+  "recent_votes": [],
+  "decision_diagnostics": {
+    "ml_pure": {
+      "status": "ML_PURE_ACTIVE_TODAY"
+    },
+    "deterministic": {
+      "status": "POLICY_ACTIVE_TODAY"
+    }
+  },
+  "ops_state": {
+    "market_state": "open",
+    "engine_state": "ml_pure_active",
+    "risk_state": "normal",
+    "data_health_state": "ok",
+    "active_blocker": null
+  },
+  "active_alerts": [
+    {
+      "id": "warmup_blocks_present",
+      "severity": "info",
+      "title": "Warmup Blocks Observed",
+      "detail": "Warmup blocked 1 candidate(s) today.",
+      "first_seen_ist": "2026-03-02T12:40:00+05:30",
+      "last_seen_ist": "2026-03-02T12:47:00+05:30",
+      "occurrences": 1,
+      "source": "decision_diagnostics.deterministic",
+      "operator_next_step": "No action unless warmup extends beyond expected window."
+    }
+  ],
+  "decision_explainability": {
+    "latest_decision": {
+      "id": "signal:s1",
+      "ts": "2026-03-02T07:17:00Z",
+      "engine_mode": "ml_pure",
+      "decision_mode": "ml_staged",
+      "action": "HOLD",
+      "reason_code": "low_edge_conflict",
+      "explanation": "Edge is insufficient.",
+      "operator_hint": "Wait for stronger edge.",
+      "metrics": {
+        "edge": 0.01,
+        "confidence": 0.62
+      },
+      "source_ref": "signal:s1",
+      "gate_path": "Candidate -> ML Staged -> Risk/Phase -> HOLD"
+    },
+    "timeline": [],
+    "gate_funnel": {},
+    "reason_playbook_summary": []
+  },
+  "ui_hints": {
+    "active_engine_panel": "ml_pure",
+    "recommended_focus_panel": "decision_timeline",
+    "degraded_mode": false,
+    "debug_view": false
+  },
+  "chart_markers": []
+}
