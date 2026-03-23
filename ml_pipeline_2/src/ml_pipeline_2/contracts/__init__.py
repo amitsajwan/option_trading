@@ -1,6 +1,7 @@
 from .manifests import (
     MANIFEST_KINDS,
     STAGED_KIND,
+    STAGED_GRID_KIND,
     ManifestValidationError,
     load_and_resolve_manifest,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "ModelSpec",
     "PreprocessConfig",
     "STAGED_KIND",
+    "STAGED_GRID_KIND",
     "TradingObjectiveConfig",
     "load_and_resolve_manifest",
 ]

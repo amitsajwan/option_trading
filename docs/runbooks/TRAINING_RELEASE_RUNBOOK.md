@@ -241,6 +241,36 @@ STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnost
 bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-diag.log
 ```
 
+Training Grid V1:
+
+Use this when you want one deterministic research sweep across the baseline, three Stage 2 edge thresholds, the best-threshold expiry-block lane, and the best-threshold time-focus lane.
+The grid runner is research-only by default. It writes generated per-run manifests plus a single `grid_summary.json`, and it does not publish runtime config or hand off a live runtime bundle unless you explicitly rerun the selected winner through the normal release flow later.
+The checked-in `prod_v1` grid sets `grid.max_parallel_runs=2`. With the current deep-search base manifest using `training.runtime.model_n_jobs=8`, that maps cleanly onto a 16-core VM: two independent lanes at a time, eight model threads each.
+
+```bash
+python -m ml_pipeline_2.run_staged_grid \
+  --config ml_pipeline_2/configs/research/staged_grid.prod_v1.json \
+  --model-group banknifty_futures/h15_tp_auto \
+  --profile-id openfe_v9_dual
+```
+
+Look for:
+
+- a new `ml_pipeline_2/artifacts/research/staged_grid_prod_v1_<timestamp>/grid_summary.json`
+- generated per-run manifests under `.../manifests`
+- one run directory per lane under `.../runs`
+- `execution.max_parallel_runs=2` in `grid_summary.json`
+- `stage2_hpo_escalation.eligible=true|false` in `grid_summary.json`
+- `winner.grid_run_id` and `winner.publishable` in `grid_summary.json`
+
+To reuse the same grid for another instrument:
+
+1. create or copy an instrument-specific staged base manifest
+2. point `inputs.base_manifest_path` in the grid config to that base manifest
+3. keep the grid runner command the same, but change `--model-group` to the new instrument namespace
+
+The grid runner is intentionally loosely coupled to instrument choice. Instrument-specific parquet roots, windows, label settings, and per-stage search defaults stay in the base staged manifest. The grid config only layers run-to-run overrides such as Stage 2 edge filters, Stage 2 feature-set variants, and expiry blocking.
+
 Verify:
 
 - command exits successfully

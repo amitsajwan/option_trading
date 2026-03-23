@@ -24,7 +24,7 @@ def test_staged_runner_builds_summary_and_stage_artifacts(tmp_path: Path) -> Non
     )
 
     assert summary["status"] == "completed"
-    assert summary["summary_schema_version"] == 2
+    assert summary["summary_schema_version"] == 3
     assert summary["experiment_kind"] == "staged_dual_recipe_v1"
     assert summary["completion_mode"] == "completed"
     assert sorted(summary["cv_prechecks"]) == ["stage1_cv", "stage2_cv", "stage2_signal_check"]
@@ -42,6 +42,27 @@ def test_staged_runner_builds_summary_and_stage_artifacts(tmp_path: Path) -> Non
     assert summary["component_ids"]["stage3"]["policy_id"] == "recipe_top_margin_v1"
     assert "publish_assessment" in summary
     assert summary["training_environment"]["stage1"]["runnable_models"] == ["logreg_balanced"]
+    assert summary["scenario_reports"]["evaluation_mode"] == "combined_policy_holdout"
+    assert summary["scenario_reports"]["regime"]["segment_order"] == [
+        "TRENDING",
+        "SIDEWAYS",
+        "VOLATILE",
+        "PRE_EXPIRY",
+        "UNKNOWN",
+    ]
+    assert summary["scenario_reports"]["expiry"]["segment_order"] == [
+        "EXPIRY_DAY",
+        "NEAR_EXPIRY",
+        "REGULAR",
+    ]
+    assert summary["scenario_reports"]["session"]["segment_order"] == [
+        "FIRST_HOUR",
+        "MID_SESSION",
+        "LAST_HOUR",
+    ]
+    assert summary["scenario_reports"]["expiry"]["segments"]["EXPIRY_DAY"]["rows_total"] >= 0
+    assert summary["scenario_reports"]["session"]["segments"]["FIRST_HOUR"]["rows_total"] > 0
+    assert summary["scenario_reports"]["regime"]["segments"]["PRE_EXPIRY"]["rows_total"] > 0
     assert sorted(summary["stage_artifacts"]) == ["stage1", "stage2", "stage3"]
     assert summary["stage_artifacts"]["stage1"]["started_at_utc"]
     assert summary["stage_artifacts"]["stage1"]["completed_at_utc"]
@@ -82,6 +103,7 @@ def test_staged_runner_early_holds_when_stage2_signal_check_fails(tmp_path: Path
     assert summary["cv_prechecks"]["stage2_signal_check"]["has_signal"] is False
     assert summary["cv_prechecks"]["stage1_cv"] is None
     assert summary["cv_prechecks"]["stage2_cv"] is None
+    assert summary["scenario_reports"]["evaluation_mode"] == "coverage_only"
     assert "holdout_reports" not in summary
     assert "policy_reports" not in summary
     assert "gates" not in summary

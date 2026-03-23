@@ -21,7 +21,7 @@ from .registries import resolve_labeler, resolve_policy, resolve_trainer, view_r
 
 KEY_COLUMNS = ["trade_date", "timestamp", "snapshot_id"]
 STAGE_ORDER = ("stage1", "stage2", "stage3")
-SUMMARY_SCHEMA_VERSION = 2
+SUMMARY_SCHEMA_VERSION = 3
 
 
 def _normalize_timestamp_series(values: pd.Series) -> pd.Series:
@@ -868,6 +868,127 @@ def _distribution_from_series(values: pd.Series) -> Optional[dict[str, float]]:
     return {str(key): float(value / total) for key, value in counts.items()}
 
 
+def _expiry_segment_series(frame: pd.DataFrame) -> pd.Series:
+    if len(frame) == 0:
+        return pd.Series(dtype=object)
+
+    out = pd.Series("REGULAR", index=frame.index, dtype=object)
+    expiry_day = pd.Series(False, index=frame.index, dtype=bool)
+    if "ctx_is_expiry_day" in frame.columns:
+        expiry_day = pd.to_numeric(frame["ctx_is_expiry_day"], errors="coerce").fillna(0.0) == 1.0
+    elif "ctx_dte_days" in frame.columns:
+        expiry_day = pd.to_numeric(frame["ctx_dte_days"], errors="coerce").fillna(np.nan) == 0.0
+
+    near_expiry = pd.Series(False, index=frame.index, dtype=bool)
+    for column in ("ctx_is_near_expiry", "ctx_regime_expiry_near", "regime_expiry_near"):
+        if column in frame.columns:
+            near_expiry = pd.to_numeric(frame[column], errors="coerce").fillna(0.0) == 1.0
+            break
+    else:
+        if "ctx_dte_days" in frame.columns:
+            dte_days = pd.to_numeric(frame["ctx_dte_days"], errors="coerce")
+            near_expiry = ((dte_days >= 0.0) & (dte_days <= 1.0)).fillna(False)
+
+    out.loc[near_expiry] = "NEAR_EXPIRY"
+    out.loc[expiry_day] = "EXPIRY_DAY"
+    return out
+
+
+def _session_segment_series(frame: pd.DataFrame) -> pd.Series:
+    if len(frame) == 0:
+        return pd.Series(dtype=object)
+
+    minutes_since_open = pd.Series(np.nan, index=frame.index, dtype=float)
+    if "minutes_since_open" in frame.columns:
+        minutes_since_open = pd.to_numeric(frame["minutes_since_open"], errors="coerce")
+    elif "minute_of_day" in frame.columns:
+        minutes_since_open = pd.to_numeric(frame["minute_of_day"], errors="coerce") - float((9 * 60) + 15)
+    elif "time_minute_of_day" in frame.columns:
+        minutes_since_open = pd.to_numeric(frame["time_minute_of_day"], errors="coerce") - float((9 * 60) + 15)
+    elif "timestamp" in frame.columns:
+        timestamp = _normalize_timestamp_series(frame["timestamp"])
+        minutes_since_open = (
+            pd.to_numeric(timestamp.dt.hour, errors="coerce") * 60.0
+            + pd.to_numeric(timestamp.dt.minute, errors="coerce")
+            - float((9 * 60) + 15)
+        )
+
+    out = pd.Series("MID_SESSION", index=frame.index, dtype=object)
+    out.loc[minutes_since_open < 60.0] = "FIRST_HOUR"
+    out.loc[minutes_since_open >= 315.0] = "LAST_HOUR"
+    return out
+
+
+def _scenario_bucket_summary(
+    base_frame: pd.DataFrame,
+    trade_rows: pd.DataFrame,
+    segment_labels: pd.Series,
+    *,
+    segment_order: Sequence[str],
+) -> dict[str, Any]:
+    base = base_frame.loc[:, KEY_COLUMNS].copy()
+    base["__segment"] = segment_labels.astype(str).fillna("UNKNOWN")
+
+    trade = pd.DataFrame(columns=KEY_COLUMNS + ["selected_return", "selected_side", "selected_recipe", "__segment"])
+    if len(trade_rows) > 0:
+        trade = trade_rows.loc[:, KEY_COLUMNS + ["selected_return", "selected_side", "selected_recipe"]].merge(
+            base,
+            on=KEY_COLUMNS,
+            how="left",
+        )
+        trade["__segment"] = trade["__segment"].fillna("UNKNOWN")
+
+    rows_total = int(len(base))
+    segments: dict[str, Any] = {}
+    for segment_name in segment_order:
+        base_mask = base["__segment"] == str(segment_name)
+        trade_mask = trade["__segment"] == str(segment_name)
+        summary = _summarize_returns(
+            trade.loc[trade_mask, "selected_return"].tolist(),
+            rows_total=int(base_mask.sum()),
+            sides=trade.loc[trade_mask, "selected_side"].tolist(),
+            selected_recipes=trade.loc[trade_mask, "selected_recipe"].tolist(),
+        )
+        summary["rows_share"] = float(summary["rows_total"] / rows_total) if rows_total > 0 else 0.0
+        segments[str(segment_name)] = summary
+    return {
+        "segment_order": list(segment_order),
+        "segments": segments,
+    }
+
+
+def _scenario_reports(
+    *,
+    base_frame: pd.DataFrame,
+    trade_rows: Optional[pd.DataFrame],
+    evaluation_mode: str,
+) -> dict[str, Any]:
+    trade_frame = trade_rows if trade_rows is not None else pd.DataFrame(columns=KEY_COLUMNS + ["selected_return", "selected_side", "selected_recipe"])
+    return {
+        "evaluation_mode": str(evaluation_mode),
+        "base_rows_total": int(len(base_frame)),
+        "trade_rows_total": int(len(trade_frame)),
+        "regime": _scenario_bucket_summary(
+            base_frame,
+            trade_frame,
+            _regime_label_series(base_frame),
+            segment_order=["TRENDING", "SIDEWAYS", "VOLATILE", "PRE_EXPIRY", "UNKNOWN"],
+        ),
+        "expiry": _scenario_bucket_summary(
+            base_frame,
+            trade_frame,
+            _expiry_segment_series(base_frame),
+            segment_order=["EXPIRY_DAY", "NEAR_EXPIRY", "REGULAR"],
+        ),
+        "session": _scenario_bucket_summary(
+            base_frame,
+            trade_frame,
+            _session_segment_series(base_frame),
+            segment_order=["FIRST_HOUR", "MID_SESSION", "LAST_HOUR"],
+        ),
+    }
+
+
 def _merge_policy_inputs(base_frame: pd.DataFrame, *frames: pd.DataFrame) -> pd.DataFrame:
     out = base_frame.copy()
     for frame in frames:
@@ -1327,6 +1448,7 @@ def _early_hold_summary(
     runtime_block_expiry: bool,
     runtime_filtering: dict[str, Any],
     label_filtering: dict[str, Any],
+    scenario_reports: dict[str, Any],
     training_environment: dict[str, Any],
 ) -> dict[str, Any]:
     summary = {
@@ -1350,6 +1472,7 @@ def _early_hold_summary(
         "runtime_block_expiry": bool(runtime_block_expiry),
         "runtime_filtering": runtime_filtering,
         "label_filtering": label_filtering,
+        "scenario_reports": scenario_reports,
         "training_environment": dict(training_environment),
         "stage_artifacts": completed_stage_artifacts,
     }
@@ -1472,6 +1595,12 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             "final_holdout": _window(labeled, manifest["windows"]["final_holdout"]),
         }
 
+    coverage_scenario_reports = _scenario_reports(
+        base_frame=stage_frames["stage3"]["final_holdout"],
+        trade_rows=None,
+        evaluation_mode="coverage_only",
+    )
+
     cv_prechecks: dict[str, Any] = {
         "stage2_signal_check": _check_stage2_signal(labeled_frames["stage2"]["full_model"]),
         "stage1_cv": None,
@@ -1492,6 +1621,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             runtime_block_expiry=runtime_block_expiry,
             runtime_filtering=runtime_filtering,
             label_filtering=label_filtering,
+            scenario_reports=coverage_scenario_reports,
             training_environment=dict(training_environment["stages"]),
         )
 
@@ -1549,6 +1679,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             runtime_block_expiry=runtime_block_expiry,
             runtime_filtering=runtime_filtering,
             label_filtering=label_filtering,
+            scenario_reports=coverage_scenario_reports,
             training_environment=dict(training_environment["stages"]),
         )
 
@@ -1610,6 +1741,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             runtime_block_expiry=runtime_block_expiry,
             runtime_filtering=runtime_filtering,
             label_filtering=label_filtering,
+            scenario_reports=coverage_scenario_reports,
             training_environment=dict(training_environment["stages"]),
         )
 
@@ -1704,23 +1836,29 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         recipe_margin_min=float(stage3_policy["selected_margin_min"]),
         recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
     )
+    combined_trade_rows = _combined_policy_trade_rows(
+        stage_frames["stage3"]["final_holdout"],
+        utility_holdout,
+        stage1_policy_scores_holdout,
+        stage2_policy_scores_holdout,
+        stage3_policy_scores_holdout,
+        stage1_threshold=float(stage1_policy["selected_threshold"]),
+        ce_threshold=float(stage2_policy["selected_ce_threshold"]),
+        pe_threshold=float(stage2_policy["selected_pe_threshold"]),
+        min_edge=float(stage2_policy["selected_min_edge"]),
+        recipe_threshold=float(stage3_policy["selected_threshold"]),
+        recipe_margin_min=float(stage3_policy["selected_margin_min"]),
+        recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
+    )
     training_regime_distribution = _distribution_from_series(
         _regime_label_series(
-            _combined_policy_trade_rows(
-                stage_frames["stage3"]["final_holdout"],
-                utility_holdout,
-                stage1_policy_scores_holdout,
-                stage2_policy_scores_holdout,
-                stage3_policy_scores_holdout,
-                stage1_threshold=float(stage1_policy["selected_threshold"]),
-                ce_threshold=float(stage2_policy["selected_ce_threshold"]),
-                pe_threshold=float(stage2_policy["selected_pe_threshold"]),
-                min_edge=float(stage2_policy["selected_min_edge"]),
-                recipe_threshold=float(stage3_policy["selected_threshold"]),
-                recipe_margin_min=float(stage3_policy["selected_margin_min"]),
-                recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
-            )
+            combined_trade_rows
         )
+    )
+    scenario_reports = _scenario_reports(
+        base_frame=stage_frames["stage3"]["final_holdout"],
+        trade_rows=combined_trade_rows,
+        evaluation_mode="combined_policy_holdout",
     )
     fixed_recipe_baselines = [
         _fixed_recipe_baseline(
@@ -1779,6 +1917,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "runtime_block_expiry": runtime_block_expiry,
         "runtime_filtering": runtime_filtering,
         "label_filtering": label_filtering,
+        "scenario_reports": scenario_reports,
         "training_environment": dict(training_environment["stages"]),
         "stage_artifacts": stage_artifacts,
     }

@@ -217,6 +217,27 @@ STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnost
 bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-diag.log
 ```
 
+For a single research sweep across the baseline plus the Stage 2 scenario lanes, use the grid runner:
+
+```bash
+python -m ml_pipeline_2.run_staged_grid \
+  --config ml_pipeline_2/configs/research/staged_grid.prod_v1.json \
+  --model-group banknifty_futures/h15_tp_auto \
+  --profile-id openfe_v9_dual
+```
+
+That command is research-only by default. It does not publish runtime config or write a live handoff file. Instead it writes one `grid_summary.json` plus generated per-run manifests under a grid output root in `ml_pipeline_2/artifacts/research`.
+Use `grid_summary.json` to decide whether the best candidate is publishable, whether Stage 2 HPO is close enough to justify, or whether the next change should be Stage 2 label/view redesign.
+The checked-in `staged_grid.prod_v1.json` uses `grid.max_parallel_runs=2`. With the current deep-search base manifest at `training.runtime.model_n_jobs=8`, that is the intended shape for a 16-core CPU VM.
+
+The grid runner is not tied to BankNifty specifically. To use it for another instrument or a similar staged research problem:
+
+1. prepare an instrument-specific staged base manifest with the correct parquet root, windows, and stage defaults
+2. point `inputs.base_manifest_path` in the grid config to that base manifest
+3. keep the same grid runner command shape and only change `--model-group` to the new instrument group
+
+The grid config stays focused on comparative scenario lanes. Instrument-specific training semantics stay in the base staged manifest so the pipeline remains loosely coupled.
+
 ### 6. Publish an Existing Completed Run
 
 ```bash

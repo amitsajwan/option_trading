@@ -329,3 +329,82 @@ def build_staged_smoke_manifest(root: Path, parquet_root: Path) -> Path:
         },
     }
     return write_json(root / "staged_smoke.json", payload)
+
+
+def build_staged_grid_manifest(root: Path, base_manifest_path: Path) -> Path:
+    payload = {
+        "schema_version": 1,
+        "experiment_kind": "staged_training_grid_v1",
+        "inputs": {
+            "base_manifest_path": str(base_manifest_path),
+        },
+        "outputs": {
+            "artifacts_root": str(root / "grid_artifacts"),
+            "run_name": "staged_grid_smoke",
+        },
+        "selection": {
+            "stage2_hpo_escalation": {
+                "roc_auc_min": 0.54,
+                "brier_max": 0.225,
+            }
+        },
+        "grid": {
+            "research_only": True,
+            "max_parallel_runs": 2,
+            "runs": [
+                {
+                    "run_id": "baseline",
+                    "model_group_suffix": "_baseline",
+                    "overrides": {
+                        "outputs": {
+                            "run_name": "staged_grid_baseline",
+                        }
+                    },
+                },
+                {
+                    "run_id": "edge_0006",
+                    "model_group_suffix": "_edge_0006",
+                    "overrides": {
+                        "outputs": {
+                            "run_name": "staged_grid_edge_0006",
+                        },
+                        "training": {
+                            "stage2_label_filter": {
+                                "enabled": True,
+                                "min_directional_edge_after_cost": 0.0006,
+                            }
+                        },
+                    },
+                },
+                {
+                    "run_id": "edge_0010",
+                    "model_group_suffix": "_edge_0010",
+                    "overrides": {
+                        "outputs": {
+                            "run_name": "staged_grid_edge_0010",
+                        },
+                        "training": {
+                            "stage2_label_filter": {
+                                "enabled": True,
+                                "min_directional_edge_after_cost": 0.001,
+                            }
+                        },
+                    },
+                },
+                {
+                    "run_id": "best_edge_block_expiry",
+                    "model_group_suffix": "_best_edge_block_expiry",
+                    "inherit_best_from": ["edge_0006", "edge_0010"],
+                    "overrides": {
+                        "outputs": {
+                            "run_name": "staged_grid_best_edge_block_expiry",
+                        },
+                        "runtime": {
+                            "block_expiry": True,
+                        },
+                    },
+                },
+            ],
+        },
+    }
+    return write_json(root / "staged_grid_smoke.json", payload)

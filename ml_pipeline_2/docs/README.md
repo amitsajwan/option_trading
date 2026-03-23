@@ -16,6 +16,9 @@ Use these files as the source of truth:
 Supported staged manifest:
 
 - [`../configs/research/staged_dual_recipe.default.json`](../configs/research/staged_dual_recipe.default.json)
+- [`../configs/research/staged_grid.prod_v1.json`](../configs/research/staged_grid.prod_v1.json)
+  - production-oriented research grid for the staged pipeline
+  - base-manifest driven, so the same grid runner can be reused for other instruments by swapping `inputs.base_manifest_path`
 
 Repo-level documents that remain outside this module because they are cross-system:
 

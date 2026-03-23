@@ -255,3 +255,148 @@ def test_staged_manifest_requires_explicit_hard_gate_fields(tmp_path: Path) -> N
     with pytest.raises(ManifestValidationError, match="hard_gates.stage1.roc_auc_drift_half_split_max_abs must be set"):
         resolve_manifest(payload, manifest_path=tmp_path / "staged_missing_gate.json", validate_paths=False)
 
+
+def test_grid_manifest_validates_with_supported_override_contract(tmp_path: Path) -> None:
+    base_payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    base_path = tmp_path / "base_manifest.json"
+    base_path.write_text(json.dumps(base_payload, indent=2), encoding="utf-8")
+
+    payload = {
+        "schema_version": 1,
+        "experiment_kind": "staged_training_grid_v1",
+        "inputs": {
+            "base_manifest_path": str(base_path),
+        },
+        "outputs": {
+            "artifacts_root": str(tmp_path / "grid_artifacts"),
+            "run_name": "staged_grid_prod_v1",
+        },
+        "selection": {
+            "stage2_hpo_escalation": {
+                "roc_auc_min": 0.54,
+                "brier_max": 0.225,
+            }
+        },
+        "grid": {
+            "research_only": True,
+            "max_parallel_runs": 2,
+            "runs": [
+                {
+                    "run_id": "baseline",
+                    "model_group_suffix": "_baseline",
+                    "overrides": {
+                        "outputs": {"run_name": "staged_grid_baseline"},
+                    },
+                },
+                {
+                    "run_id": "edge_0010",
+                    "model_group_suffix": "_edge_0010",
+                    "overrides": {
+                        "training": {
+                            "stage2_label_filter": {
+                                "enabled": True,
+                                "min_directional_edge_after_cost": 0.001,
+                            }
+                        }
+                    },
+                },
+                {
+                    "run_id": "best_edge_block_expiry",
+                    "model_group_suffix": "_best_edge_block_expiry",
+                    "inherit_best_from": ["edge_0010"],
+                    "overrides": {
+                        "runtime": {"block_expiry": True},
+                        "catalog": {
+                            "feature_sets_by_stage": {
+                                "stage2": ["fo_expiry_aware_v3", "fo_no_time_context"],
+                            }
+                        },
+                    },
+                },
+            ],
+        },
+    }
+
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_grid.json", validate_paths=False)
+
+    assert resolved["experiment_kind"] == "staged_training_grid_v1"
+    assert resolved["grid"]["max_parallel_runs"] == 2
+    assert resolved["grid"]["runs"][1]["overrides"]["training"]["stage2_label_filter"]["min_directional_edge_after_cost"] == 0.001
+    assert resolved["base_resolved_manifest"]["experiment_kind"] == "staged_dual_recipe_v1"
+
+
+def test_grid_manifest_rejects_unsupported_override_paths(tmp_path: Path) -> None:
+    base_payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    base_path = tmp_path / "base_manifest.json"
+    base_path.write_text(json.dumps(base_payload, indent=2), encoding="utf-8")
+    payload = {
+        "schema_version": 1,
+        "experiment_kind": "staged_training_grid_v1",
+        "inputs": {
+            "base_manifest_path": str(base_path),
+        },
+        "outputs": {
+            "artifacts_root": str(tmp_path / "grid_artifacts"),
+            "run_name": "staged_grid_prod_v1",
+        },
+        "selection": {
+            "stage2_hpo_escalation": {
+                "roc_auc_min": 0.54,
+                "brier_max": 0.225,
+            }
+        },
+        "grid": {
+            "research_only": True,
+            "max_parallel_runs": 2,
+            "runs": [
+                {
+                    "run_id": "bad_override",
+                    "overrides": {
+                        "catalog": {"models_by_stage": {"stage1": ["logreg_balanced"]}},
+                    },
+                }
+            ],
+        },
+    }
+
+    with pytest.raises(ManifestValidationError, match="supports only feature_sets_by_stage"):
+        resolve_manifest(payload, manifest_path=tmp_path / "staged_grid_invalid.json", validate_paths=False)
+
+
+def test_grid_manifest_rejects_non_positive_parallelism(tmp_path: Path) -> None:
+    base_payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    base_path = tmp_path / "base_manifest.json"
+    base_path.write_text(json.dumps(base_payload, indent=2), encoding="utf-8")
+    payload = {
+        "schema_version": 1,
+        "experiment_kind": "staged_training_grid_v1",
+        "inputs": {
+            "base_manifest_path": str(base_path),
+        },
+        "outputs": {
+            "artifacts_root": str(tmp_path / "grid_artifacts"),
+            "run_name": "staged_grid_prod_v1",
+        },
+        "selection": {
+            "stage2_hpo_escalation": {
+                "roc_auc_min": 0.54,
+                "brier_max": 0.225,
+            }
+        },
+        "grid": {
+            "research_only": True,
+            "max_parallel_runs": 0,
+            "runs": [
+                {
+                    "run_id": "baseline",
+                    "overrides": {
+                        "outputs": {"run_name": "staged_grid_baseline"},
+                    },
+                }
+            ],
+        },
+    }
+
+    with pytest.raises(ManifestValidationError, match="grid.max_parallel_runs must be an integer > 0"):
+        resolve_manifest(payload, manifest_path=tmp_path / "staged_grid_bad_parallelism.json", validate_paths=False)
+
