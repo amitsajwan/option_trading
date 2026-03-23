@@ -335,6 +335,72 @@ def test_staged_runner_supports_stage2_hpo_search_options(tmp_path: Path) -> Non
     assert search_report["search_space"]["candidate_models_total"] == 3
 
 
+def test_stage2_label_filter_drops_low_edge_rows() -> None:
+    stage_frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-02", "2024-01-02", "2024-01-02"],
+            "timestamp": pd.to_datetime(
+                ["2024-01-02 09:16:00", "2024-01-02 09:17:00", "2024-01-02 09:18:00"]
+            ),
+            "snapshot_id": ["s1", "s2", "s3"],
+        }
+    )
+    oracle = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-02", "2024-01-02", "2024-01-02"],
+            "timestamp": pd.to_datetime(
+                ["2024-01-02 09:16:00", "2024-01-02 09:17:00", "2024-01-02 09:18:00"]
+            ),
+            "snapshot_id": ["s1", "s2", "s3"],
+            "entry_label": [1, 1, 1],
+            "direction_label": ["CE", "PE", "CE"],
+            "direction_up": [1, 0, 1],
+            "recipe_label": ["L0", "L1", "L2"],
+            "best_net_return_after_cost": [0.0015, 0.0016, 0.0018],
+            "best_ce_net_return_after_cost": [0.0015, 0.0007, 0.0018],
+            "best_pe_net_return_after_cost": [0.0009, 0.0016, 0.0006],
+            "direction_return_edge_after_cost": [0.0006, 0.0009, 0.0012],
+        }
+    )
+
+    labeled = staged_pipeline.build_stage2_labels(stage_frame, oracle)
+    filtered, meta = staged_pipeline._apply_stage2_label_filter(
+        labeled,
+        {
+            "training": {
+                "stage2_label_filter": {
+                    "enabled": True,
+                    "min_directional_edge_after_cost": 0.001,
+                }
+            }
+        },
+    )
+
+    assert filtered["snapshot_id"].tolist() == ["s3"]
+    assert meta["rows_before"] == 3
+    assert meta["rows_after"] == 1
+    assert meta["rows_dropped"] == 2
+    assert meta["min_directional_edge_after_cost"] == 0.001
+
+
+def test_manifest_accepts_stage2_label_filter(tmp_path: Path) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["training"]["stage2_label_filter"] = {
+        "enabled": True,
+        "min_directional_edge_after_cost": 0.001,
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+
+    assert resolved["training"]["stage2_label_filter"] == {
+        "enabled": True,
+        "min_directional_edge_after_cost": 0.001,
+    }
+
+
 def test_staged_runner_validate_only_fails_fast_when_stage_has_no_runnable_models(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     parquet_root = build_staged_parquet_root(tmp_path)
     manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)

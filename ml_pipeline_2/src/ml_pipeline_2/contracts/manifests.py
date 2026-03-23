@@ -208,6 +208,22 @@ def _validate_staged_training(payload: Dict[str, Any], errors: List[str]) -> Non
     except Exception:
         errors.append("training.runtime.model_n_jobs must be an integer > 0")
 
+    stage2_label_filter = payload.get("stage2_label_filter") or {}
+    if stage2_label_filter and not isinstance(stage2_label_filter, dict):
+        errors.append("training.stage2_label_filter must be an object")
+        stage2_label_filter = {}
+    if stage2_label_filter:
+        if "enabled" in stage2_label_filter and not isinstance(stage2_label_filter.get("enabled"), bool):
+            errors.append("training.stage2_label_filter.enabled must be boolean")
+        if "min_directional_edge_after_cost" in stage2_label_filter:
+            try:
+                if float(stage2_label_filter.get("min_directional_edge_after_cost")) < 0.0:
+                    raise ValueError
+            except Exception:
+                errors.append(
+                    "training.stage2_label_filter.min_directional_edge_after_cost must be a number >= 0"
+                )
+
     search_options_by_stage = payload.get("search_options_by_stage") or {}
     if search_options_by_stage and not isinstance(search_options_by_stage, dict):
         errors.append("training.search_options_by_stage must be an object")

@@ -218,6 +218,19 @@ STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage2_hpo.json
 bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-stage2-hpo.log
 ```
 
+Stage 2 edge-filter search:
+
+Use this after both `deep_search` and `stage2_hpo` hold at `stage2_cv` with nearly identical metrics.
+It tightens the Stage 2 label set before the signal check and Stage 2 CV gate.
+
+```bash
+APPLY_RUNTIME_HANDOFF=0 \
+PUBLISH_RUNTIME_CONFIG=0 \
+MODEL_GROUP="banknifty_futures/h15_tp_auto_stage2_edge" \
+STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage2_edge_filter.json" \
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-stage2-edge.log
+```
+
 Stage 1 diagnostic gates:
 
 ```bash
@@ -243,9 +256,10 @@ Recommended research order after the default manifest holds:
 
 1. Run the deep-search manifest first. It tells you whether Stage 1 or Stage 2 is actually the bottleneck.
 2. If `completion_mode=stage1_cv_gate_failed`, run the Stage 1 HPO manifest.
-3. If `completion_mode=stage2_cv_gate_failed`, run the Stage 2 HPO manifest.
-4. If Stage 1 still only narrowly fails after the search runs, use the diagnostic manifest to measure gate sensitivity.
-5. Only after those runs decide whether to change the default manifest or the underlying feature/label design.
+3. If `completion_mode=stage2_cv_gate_failed`, try the Stage 2 HPO manifest once.
+4. If Stage 2 still holds with nearly unchanged metrics, run the Stage 2 edge-filter manifest next.
+5. If Stage 1 still only narrowly fails after the search runs, use the diagnostic manifest to measure gate sensitivity.
+6. Only after those runs decide whether to change the default manifest or the underlying feature/label design.
 
 Also verify the latest local release payload:
 

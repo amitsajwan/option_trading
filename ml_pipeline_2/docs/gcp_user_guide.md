@@ -166,6 +166,10 @@ Additional checked-in research manifests:
   - keeps the broader Stage 1 search from `deep_search`
   - adds Stage 2-only random-search HPO over the requested base models
   - use this when `deep_search` already clears Stage 1 and then holds at `stage2_cv`
+- `ml_pipeline_2/configs/research/staged_dual_recipe.stage2_edge_filter.json`
+  - keeps the broad `deep_search` search space
+  - filters Stage 2 labels by minimum CE/PE return edge after cost before Stage 2 signal check and CV
+  - use this when Stage 2 HPO does not materially improve the Stage 2 gate metrics
 - `ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnostic.json`
   - keeps the default search space
   - relaxes only the Stage 1 hard gates slightly for diagnosis
@@ -195,6 +199,14 @@ PUBLISH_RUNTIME_CONFIG=0 \
 MODEL_GROUP="banknifty_futures/h15_tp_auto_stage2_hpo" \
 STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage2_hpo.json" \
 bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-stage2-hpo.log
+```
+
+```bash
+APPLY_RUNTIME_HANDOFF=0 \
+PUBLISH_RUNTIME_CONFIG=0 \
+MODEL_GROUP="banknifty_futures/h15_tp_auto_stage2_edge" \
+STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage2_edge_filter.json" \
+bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-stage2-edge.log
 ```
 
 ```bash

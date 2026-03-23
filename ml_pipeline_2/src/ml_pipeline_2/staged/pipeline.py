@@ -306,12 +306,17 @@ def _build_oracle_targets(
     ].max(axis=1)
 
     fallback_best_net = _numeric_array(utility["best_available_net_return_after_cost"], fillna=np.nan)
+    best_ce_after_cost = _numeric_array(utility["best_ce_net_return_after_cost"], fillna=0.0)
+    best_pe_after_cost = _numeric_array(utility["best_pe_net_return_after_cost"], fillna=0.0)
     oracle = support.loc[:, KEY_COLUMNS].copy()
     oracle["entry_label"] = best_valid.astype(int)
     oracle["direction_label"] = np.where(best_valid, best_side, None)
     oracle["direction_up"] = np.where(best_valid, best_direction_up.astype(object), None)
     oracle["recipe_label"] = np.where(best_valid, best_recipe, None)
     oracle["best_net_return_after_cost"] = np.where(best_valid, best_net, fallback_best_net)
+    oracle["best_ce_net_return_after_cost"] = utility["best_ce_net_return_after_cost"].to_numpy(copy=False)
+    oracle["best_pe_net_return_after_cost"] = utility["best_pe_net_return_after_cost"].to_numpy(copy=False)
+    oracle["direction_return_edge_after_cost"] = np.abs(best_ce_after_cost - best_pe_after_cost)
     return oracle, utility
 
 
@@ -343,6 +348,68 @@ def build_stage2_labels(stage_frame: pd.DataFrame, oracle: pd.DataFrame, *_: Any
         "down",
     )
     return labeled.sort_values("timestamp").reset_index(drop=True)
+
+
+def _normalize_stage2_label_filter(manifest: dict[str, Any]) -> dict[str, Any]:
+    raw = dict((manifest.get("training") or {}).get("stage2_label_filter") or {})
+    enabled = bool(raw.get("enabled", False))
+    try:
+        min_edge = float(raw.get("min_directional_edge_after_cost", 0.0))
+    except Exception:
+        min_edge = 0.0
+    return {
+        "enabled": enabled,
+        "min_directional_edge_after_cost": max(0.0, float(min_edge)),
+    }
+
+
+def _apply_stage2_label_filter(stage2_frame: pd.DataFrame, manifest: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
+    cfg = _normalize_stage2_label_filter(manifest)
+    if "direction_return_edge_after_cost" in stage2_frame.columns:
+        edge_series = pd.to_numeric(stage2_frame["direction_return_edge_after_cost"], errors="coerce")
+    else:
+        edge_series = pd.Series(np.nan, index=stage2_frame.index, dtype=float)
+    meta = {
+        **cfg,
+        "rows_before": int(len(stage2_frame)),
+        "rows_after": int(len(stage2_frame)),
+        "rows_dropped": 0,
+        "kept_share": 1.0 if len(stage2_frame) else 0.0,
+        "edge_mean_before": (
+            float(edge_series.dropna().mean()) if bool(edge_series.notna().any()) else None
+        ),
+        "edge_mean_after": (
+            float(edge_series.dropna().mean()) if bool(edge_series.notna().any()) else None
+        ),
+    }
+    if not cfg["enabled"]:
+        return stage2_frame.sort_values("timestamp").reset_index(drop=True), meta
+
+    required = [
+        "best_ce_net_return_after_cost",
+        "best_pe_net_return_after_cost",
+    ]
+    missing = [column for column in required if column not in stage2_frame.columns]
+    if missing:
+        raise ValueError(f"stage2 label filter requires columns: {missing}")
+
+    ce_returns = pd.to_numeric(stage2_frame["best_ce_net_return_after_cost"], errors="coerce").fillna(0.0)
+    pe_returns = pd.to_numeric(stage2_frame["best_pe_net_return_after_cost"], errors="coerce").fillna(0.0)
+    edge_series = (ce_returns - pe_returns).abs()
+    keep_mask = edge_series >= float(cfg["min_directional_edge_after_cost"])
+    filtered = stage2_frame.loc[keep_mask].copy().sort_values("timestamp").reset_index(drop=True)
+    filtered["direction_return_edge_after_cost"] = edge_series.loc[keep_mask].to_numpy(copy=False)
+    meta.update(
+        {
+            "rows_after": int(len(filtered)),
+            "rows_dropped": int((~keep_mask).sum()),
+            "kept_share": float(keep_mask.mean()) if len(keep_mask) else 0.0,
+            "edge_mean_after": (
+                float(edge_series.loc[keep_mask].mean()) if bool(keep_mask.any()) else None
+            ),
+        }
+    )
+    return filtered, meta
 
 
 def build_stage3_labels(stage_frame: pd.DataFrame, oracle: pd.DataFrame, *_: Any, **__: Any) -> pd.DataFrame:
@@ -1212,6 +1279,9 @@ def _check_stage2_signal(stage2_frame: pd.DataFrame) -> dict[str, Any]:
         "direction_up",
         "recipe_label",
         "best_net_return_after_cost",
+        "best_ce_net_return_after_cost",
+        "best_pe_net_return_after_cost",
+        "direction_return_edge_after_cost",
         "move_label",
         "move_label_valid",
         "move_first_hit_side",
@@ -1256,6 +1326,7 @@ def _early_hold_summary(
     support_dataset: str,
     runtime_block_expiry: bool,
     runtime_filtering: dict[str, Any],
+    label_filtering: dict[str, Any],
     training_environment: dict[str, Any],
 ) -> dict[str, Any]:
     summary = {
@@ -1278,6 +1349,7 @@ def _early_hold_summary(
         "runtime_prefilter_gate_ids": list(manifest["runtime"]["prefilter_gate_ids"]),
         "runtime_block_expiry": bool(runtime_block_expiry),
         "runtime_filtering": runtime_filtering,
+        "label_filtering": label_filtering,
         "training_environment": dict(training_environment),
         "stage_artifacts": completed_stage_artifacts,
     }
@@ -1365,6 +1437,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             "stages": {},
         }
     }
+    label_filtering: Dict[str, Any] = {}
 
     components: dict[str, dict[str, str]] = {}
     stage_frames: dict[str, dict[str, pd.DataFrame]] = {}
@@ -1384,6 +1457,8 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         }
         labeler = resolve_labeler(component_ids["labeler_id"])
         labeled = labeler(stage_frame, oracle)
+        if stage_name == "stage2":
+            labeled, label_filtering[stage_name] = _apply_stage2_label_filter(labeled, manifest)
         stage_frames[stage_name] = {
             "research_train": _window(stage_frame, manifest["windows"]["research_train"]),
             "research_valid": _window(stage_frame, manifest["windows"]["research_valid"]),
@@ -1416,6 +1491,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             support_dataset=support_dataset,
             runtime_block_expiry=runtime_block_expiry,
             runtime_filtering=runtime_filtering,
+            label_filtering=label_filtering,
             training_environment=dict(training_environment["stages"]),
         )
 
@@ -1472,6 +1548,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             support_dataset=support_dataset,
             runtime_block_expiry=runtime_block_expiry,
             runtime_filtering=runtime_filtering,
+            label_filtering=label_filtering,
             training_environment=dict(training_environment["stages"]),
         )
 
@@ -1532,6 +1609,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             support_dataset=support_dataset,
             runtime_block_expiry=runtime_block_expiry,
             runtime_filtering=runtime_filtering,
+            label_filtering=label_filtering,
             training_environment=dict(training_environment["stages"]),
         )
 
@@ -1700,6 +1778,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "runtime_prefilter_gate_ids": list(manifest["runtime"]["prefilter_gate_ids"]),
         "runtime_block_expiry": runtime_block_expiry,
         "runtime_filtering": runtime_filtering,
+        "label_filtering": label_filtering,
         "training_environment": dict(training_environment["stages"]),
         "stage_artifacts": stage_artifacts,
     }

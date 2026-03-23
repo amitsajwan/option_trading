@@ -28,6 +28,7 @@ LABEL_COLUMNS: Tuple[str, ...] = (
     "best_ce_net_return_after_cost",
     "best_pe_net_return_after_cost",
     "best_available_net_return_after_cost",
+    "direction_return_edge_after_cost",
     "label_horizon_minutes",
     "label_return_threshold",
     "ce_entry_price",
