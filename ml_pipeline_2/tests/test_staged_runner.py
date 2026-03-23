@@ -239,6 +239,14 @@ def test_staged_runner_applies_block_expiry_runtime_filtering_to_training_frames
     manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["runtime"]["block_expiry"] = True
+    payload["training"]["cv_config"].update(
+        {
+            "train_days": 6,
+            "valid_days": 3,
+            "test_days": 3,
+            "step_days": 3,
+        }
+    )
     manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
 
