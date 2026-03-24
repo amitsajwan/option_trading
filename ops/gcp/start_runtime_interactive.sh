@@ -55,14 +55,14 @@ echo "Runtime deploy interactive setup"
 echo "Press Enter to accept defaults shown in [brackets]."
 echo
 
-prompt_var PROJECT_ID "GCP project id" "${PROJECT_ID:-}"
+prompt_var PROJECT_ID "GCP project id" "${PROJECT_ID:-gen-lang-client-0909109011}"
 prompt_var REGION "GCP region" "${REGION:-asia-south1}"
 prompt_var ZONE "GCP zone" "${ZONE:-asia-south1-b}"
 prompt_var RUNTIME_NAME "Runtime VM name" "${RUNTIME_NAME:-option-trading-runtime-01}"
 prompt_var RUNTIME_CONFIG_BUCKET_URL "Runtime config bucket URL (gs://.../runtime)" "${RUNTIME_CONFIG_BUCKET_URL:-}"
 prompt_var GHCR_IMAGE_PREFIX "GHCR image prefix" "${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
 prompt_var APP_IMAGE_TAG "Runtime image tag" "${APP_IMAGE_TAG:-latest}"
-prompt_var ML_PURE_RUN_ID "ML pure run id" "${ML_PURE_RUN_ID:-}"
+prompt_var ML_PURE_RUN_ID "ML pure run id" "${ML_PURE_RUN_ID:-staged_dual_recipe_quick_publish_smoke_20260324_043508}"
 prompt_var ML_PURE_MODEL_GROUP "ML pure model group" "${ML_PURE_MODEL_GROUP:-banknifty_futures/h15_tp_smoke_test}"
 
 set_env_key "${ENV_COMPOSE}" "STRATEGY_ENGINE" "ml_pure"
