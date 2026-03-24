@@ -174,6 +174,16 @@ echo "Derived:"
 echo "  MODEL_BUCKET_URL=${MODEL_BUCKET_URL}"
 echo "  RUNTIME_CONFIG_BUCKET_URL=${RUNTIME_CONFIG_BUCKET_URL}"
 
+PY_BIN="$(command -v python3 || command -v python || true)"
+if [ -n "${PY_BIN}" ]; then
+  echo
+  echo "Running infra preflight..."
+  "${PY_BIN}" "${REPO_ROOT}/ops/gcp/operator_preflight.py" \
+    --mode infra \
+    --repo-root "${REPO_ROOT}" \
+    --operator-env-file "${OPERATOR_ENV_FILE}"
+fi
+
 if prompt_yes_no "Run full bootstrap now (terraform + runtime VM provisioning)?"; then
   read -r -p "Build runtime images now? [y/N]: " run_image_build || true
   run_image_build="${run_image_build:-N}"

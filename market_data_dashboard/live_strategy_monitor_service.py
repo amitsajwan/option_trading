@@ -172,9 +172,26 @@ def _distribution(values: list[float]) -> dict[str, Any]:
 
 
 class LiveStrategyMonitorService:
-    def __init__(self, evaluation_service: Optional[StrategyEvaluationService] = None) -> None:
+    def __init__(
+        self,
+        evaluation_service: Optional[StrategyEvaluationService] = None,
+        *,
+        dataset: str = "live",
+        snapshot_collection_env: str = "MONGO_COLL_SNAPSHOTS",
+        default_snapshot_collection: str = "phase1_market_snapshots",
+    ) -> None:
         self._evaluation_service = evaluation_service or StrategyEvaluationService()
-        self._repo = LiveStrategyRepository(self._evaluation_service)
+        self._dataset = str(dataset or "live").strip().lower() or "live"
+        self._snapshot_collection_env = str(snapshot_collection_env or "MONGO_COLL_SNAPSHOTS").strip() or "MONGO_COLL_SNAPSHOTS"
+        self._default_snapshot_collection = (
+            str(default_snapshot_collection or "phase1_market_snapshots").strip() or "phase1_market_snapshots"
+        )
+        self._repo = LiveStrategyRepository(
+            self._evaluation_service,
+            dataset=self._dataset,
+            snapshot_collection_env=self._snapshot_collection_env,
+            default_snapshot_collection=self._default_snapshot_collection,
+        )
         self._holiday_cache: Optional[set[Any]] = None
         self._last_engine_mode: Optional[str] = None
 
@@ -614,6 +631,12 @@ class LiveStrategyMonitorService:
 
     def get_live_strategy_session(
         self,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self.get_strategy_session(**kwargs)
+
+    def get_strategy_session(
+        self,
         *,
         date: Optional[str] = None,
         instrument: Optional[str] = None,
@@ -668,7 +691,7 @@ class LiveStrategyMonitorService:
         )
 
         trades_payload = self._evaluation_service.compute_trades(
-            dataset="live",
+            dataset=self._dataset,
             date_from=date_ist,
             date_to=date_ist,
             strategies=[],
@@ -686,7 +709,7 @@ class LiveStrategyMonitorService:
             latest_closed_trade = recent_trades[0]
 
         summary = self._evaluation_service.compute_summary(
-            dataset="live",
+            dataset=self._dataset,
             date_from=date_ist,
             date_to=date_ist,
             strategies=[],
@@ -785,6 +808,7 @@ class LiveStrategyMonitorService:
                 "latest_event_time": latest_event_time,
                 "market_session_open": market_session_open,
                 "data_freshness": freshness_payload,
+                "dataset": self._dataset,
             },
             engine_context=engine_context,
             promotion_lane=promotion_lane,
@@ -826,8 +850,7 @@ class LiveStrategyMonitorService:
         )
 
     def load_session_underlying_chart(self, *, date_ist: str, instrument: Optional[str]) -> Optional[dict[str, Any]]:
-        coll_name = str(os.getenv("MONGO_COLL_SNAPSHOTS") or "phase1_market_snapshots").strip() or "phase1_market_snapshots"
-        coll = self._evaluation_service._db()[coll_name]
+        coll = self._repo.snapshot_collection()
         query: dict[str, Any] = {"trade_date_ist": str(date_ist)}
         if instrument:
             query["instrument"] = str(instrument)

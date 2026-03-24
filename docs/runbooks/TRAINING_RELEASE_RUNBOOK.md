@@ -21,7 +21,7 @@ You can also enter through the shared lifecycle menu:
 
 ```bash
 bash ./ops/gcp/runtime_lifecycle_interactive.sh
-# choose action 5
+# choose action 6
 ```
 
 Session safety:
@@ -65,6 +65,8 @@ Decision rule:
 - for `PUBLISH`, published model artifacts in the model bucket
 - for `PUBLISH`, updated runtime config bundle in the runtime-config bucket
 - for `PUBLISH`, `release/ml_pure_runtime.env`
+- for `PUBLISH`, `release/runtime_release_manifest.json`
+- for `PUBLISH`, refreshed current approved release artifacts under `.run/gcp_release/`
 - for `HOLD`, `summary.json`, `release/assessment.json`, and `release/release_summary.json`
 
 ## Step 1: Prepare Shared GCP Resources
@@ -347,6 +349,9 @@ Useful artifact meanings:
 - `release/assessment.json`: publishability decision for the completed staged run
 - `release/release_summary.json`: final publish and handoff result for the completed staged release; this exists for both `PUBLISH` and `HOLD`
 - `release/ml_pure_runtime.env`: runtime handoff for deployment; this exists only after a successful publish
+- `release/runtime_release_manifest.json`: machine-readable live deploy manifest for the published release
+- `.run/gcp_release/current_runtime_release.json`: current approved release cache used by the live interactive deploy flow
+- `.run/gcp_release/current_runtime_release_pointer.json`: current approved release pointer metadata
 
 If the staged release returns `HOLD`, stop and investigate the gates before live deployment. A HOLD result is a valid completed run, not a launcher failure.
 

@@ -402,9 +402,7 @@ class DashboardLegacyTradingRouter:
         return safe_payload
 
     async def start_trading_runner(self, request: Request) -> dict[str, Any]:
-        self._require_enabled(
-            "Legacy paper trading runner is not part of the supported Live+Dashboard profile. Use strategy_app deterministic/ml_pure runtime instead."
-        )
+        self._require_enabled()
         payload = await self._read_request_payload(request)
         instance = self._normalize_trading_instance(payload.get("instance"))
 

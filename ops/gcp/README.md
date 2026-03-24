@@ -18,7 +18,36 @@ This file is a script index, not the primary operator runbook. For step-by-step 
 - [../../docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](../../docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
 - [../../docs/runbooks/CLEANUP_ROLLBACK_RUNBOOK.md](../../docs/runbooks/CLEANUP_ROLLBACK_RUNBOOK.md)
 
-## Current Entry Points
+GCP historical replay uses the same GHCR image tags and Compose overlays as the live runtime, but it is a separate operator lane. Build and publish parquet first with the snapshot runbook, then sync parquet onto the replay VM or runtime VM before starting the `historical` and `historical_replay` Compose profiles.
+
+Preferred operator shape:
+
+0. `Infra`
+1. `Live`
+2. `Historical`
+
+Use the interactive lifecycle menu as the primary entrypoint for that sequence.
+
+## Recommended Operator Flow
+
+Use this menu first:
+
+```bash
+bash ./ops/gcp/runtime_lifecycle_interactive.sh
+```
+
+That is the primary operator path for:
+
+0. `Infra`
+1. `Live`
+2. `Historical` preparation
+
+Important boundary:
+
+- the menu is the preferred path for infra, live runtime work, and historical replay
+- the live and historical branches remain separate inside that menu because they prepare different runtime inputs
+
+## Script Entry Points
 
 Primary menu:
 
@@ -30,6 +59,7 @@ Direct entrypoints:
 
 - `bash ./ops/gcp/bootstrap_runtime_interactive.sh`
 - `bash ./ops/gcp/start_runtime_interactive.sh`
+- `bash ./ops/gcp/start_historical_interactive.sh`
 - `bash ./ops/gcp/start_training_interactive.sh`
 - `bash ./ops/gcp/run_snapshot_parquet_pipeline.sh`
 
@@ -53,9 +83,10 @@ Single menu-driven entrypoint for daily operations:
 
 1. bootstrap infra
 2. start or restart runtime deploy
-3. stop runtime VM
-4. destroy infra and preserve data
-5. start training
+3. historical replay
+4. stop runtime VM
+5. destroy infra and preserve data
+6. start training
 
 The menu invokes sub-scripts via `bash`, so it works even if execute bits are missing after clone.
 
@@ -80,7 +111,13 @@ Use `RUN_RUNTIME_CONFIG_SYNC=0` on a fresh checkout when `.env.compose` is still
 
 Interactive runtime deploy helper.
 
-It validates runtime inputs, optionally runs Kite browser auth, updates `.env.compose`, publishes runtime config, and then prompts for a VM start or restart action.
+It auto-fetches the current approved runtime release artifacts from the runtime-config bucket, applies the runtime handoff into `.env.compose`, shows Kite credential state, runs shared live preflight, publishes runtime config, and then prompts for a VM start or restart action.
+
+### `start_historical_interactive.sh`
+
+Interactive historical replay helper.
+
+It defaults to the runtime VM, uses the current approved image tag when available, runs local and remote historical preflight, then can optionally publish the current runtime config bundle, sync parquet, start historical services, and run one-shot replay.
 
 ### `create_training_vm.sh`
 
@@ -102,15 +139,27 @@ It writes logs and release payloads under:
 
 Low-level staged release wrapper used by manual and interactive training flows.
 
-It is HOLD-safe and writes release assessment artifacts even when the candidate is rejected.
+It is HOLD-safe and writes release assessment artifacts even when the candidate is rejected. On `PUBLISH`, it also writes the runtime release manifest/current-pointer artifacts used by the live deploy flow.
+
+### `operator_preflight.py`
+
+Shared preflight validator for `infra`, `live`, and `historical` operator lanes.
+
+### `runtime_release_manifest.py`
+
+Runtime release manifest writer used by the training publish lane and consumed by live deploy.
 
 ### `run_snapshot_parquet_pipeline.sh`
 
 Supported operator entrypoint for historical parquet creation and publish.
 
+This is the upstream artifact-build step for GCP historical simulation. It does not start replay services on the runtime VM.
+
 ### `publish_runtime_config.sh`
 
 Upload `.env.compose`, optional ingestion credentials, runtime guard, and referenced runtime artifacts to the runtime config bucket prefix.
+
+Keep this bundle small. Do not use it to ship historical parquet datasets.
 
 ### `apply_ml_pure_release.sh`
 

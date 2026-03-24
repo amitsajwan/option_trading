@@ -14,11 +14,18 @@ That menu is the supported operator entrypoint for:
 
 1. infra bootstrap
 2. runtime deploy and restart
-3. runtime stop
-4. preserve-data teardown
-5. interactive training launch
+3. historical replay
+4. runtime stop
+5. preserve-data teardown
+6. interactive training launch
 
 Use the runbooks below when you need the detailed step-by-step flow, validation steps, or recovery guidance behind that menu.
+
+For release management, treat the GCP deployment flow as:
+
+0. `Infra`
+1. `Live`
+2. `Historical`
 
 ## Primary Runbooks
 
@@ -27,7 +34,7 @@ Use the runbooks below when you need the detailed step-by-step flow, validation 
 2. [TRAINING_RELEASE_RUNBOOK.md](TRAINING_RELEASE_RUNBOOK.md)
    Staged ML training, research sequencing, publish, and runtime handoff generation.
 3. [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md)
-   Live runtime deployment, runtime config publish, VM restart, validation, and rollback.
+   Release-manager runbook for `0. Infra`, `1. Live`, and `2. Historical`, centered on the interactive GCP operator flow, shared preflight, and current approved runtime release artifacts.
 
 ## Supporting Runbook
 

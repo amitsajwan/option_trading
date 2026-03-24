@@ -37,17 +37,36 @@ def _coerce_bool(raw: Any) -> bool | None:
 
 
 class LiveStrategyRepository:
-    def __init__(self, evaluation_service: Any) -> None:
+    def __init__(
+        self,
+        evaluation_service: Any,
+        *,
+        dataset: str = "live",
+        snapshot_collection_env: str = "MONGO_COLL_SNAPSHOTS",
+        default_snapshot_collection: str = "phase1_market_snapshots",
+    ) -> None:
         self._evaluation_service = evaluation_service
+        self._dataset = str(dataset or "live").strip().lower() or "live"
+        self._snapshot_collection_env = str(snapshot_collection_env or "MONGO_COLL_SNAPSHOTS").strip() or "MONGO_COLL_SNAPSHOTS"
+        self._default_snapshot_collection = (
+            str(default_snapshot_collection or "phase1_market_snapshots").strip() or "phase1_market_snapshots"
+        )
 
     def collections(self) -> dict[str, Any]:
-        names = self._evaluation_service._collection_names("live")
+        names = self._evaluation_service._collection_names(self._dataset)
         db = self._evaluation_service._db()
         return {
             "votes": db[names["votes"]],
             "signals": db[names["signals"]],
             "positions": db[names["positions"]],
         }
+
+    def snapshot_collection(self) -> Any:
+        import os
+
+        coll_name = str(os.getenv(self._snapshot_collection_env) or self._default_snapshot_collection).strip()
+        coll_name = coll_name or self._default_snapshot_collection
+        return self._evaluation_service._db()[coll_name]
 
     def load_recent_votes(self, date_ist: str, limit: int) -> list[dict[str, Any]]:
         coll = self.collections()["votes"]
@@ -201,6 +220,21 @@ class LiveStrategyRepository:
                 slot["latest_manage"] = payload_position
                 slot["latest_manage_doc"] = doc
         return out
+
+    def latest_trade_date(self) -> str | None:
+        coll_map = self.collections()
+        for key in ("positions", "signals", "votes"):
+            coll = coll_map[key]
+            doc = coll.find_one(
+                {"trade_date_ist": {"$exists": True, "$ne": ""}},
+                {"_id": 0, "trade_date_ist": 1, "timestamp": 1},
+                sort=[("timestamp", -1)],
+            )
+            if isinstance(doc, dict):
+                value = str(doc.get("trade_date_ist") or "").strip()
+                if value:
+                    return value
+        return None
 
 
 __all__ = [

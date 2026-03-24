@@ -40,6 +40,16 @@ docker compose --env-file .env.compose --profile historical up -d redis mongo pe
 docker compose --env-file .env.compose --profile historical_replay up historical_replay
 ```
 
+### Safe historical UI recipe
+
+```powershell
+docker compose --env-file .env.compose --profile historical up -d redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical
+docker compose --env-file .env.compose --profile ui up -d dashboard
+docker compose --env-file .env.compose --profile historical_replay run --rm historical_replay --start-date 2026-03-06 --end-date 2026-03-06 --speed 0
+```
+
+Use `/historical/replay` for the replay-first operator page. Keep the archived `/trading` launcher out of this flow.
+
 ### Stop
 
 ```powershell

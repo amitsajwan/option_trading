@@ -4,6 +4,9 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 OPERATOR_ENV_FILE="${OPERATOR_ENV_FILE:-${REPO_ROOT}/ops/gcp/operator.env}"
 ENV_COMPOSE="${REPO_ROOT}/.env.compose"
+CURRENT_RELEASE_DIR="${REPO_ROOT}/.run/gcp_release"
+CURRENT_MANIFEST_PATH="${CURRENT_RELEASE_DIR}/current_runtime_release.json"
+CURRENT_RUNTIME_ENV_PATH="${CURRENT_RELEASE_DIR}/current_ml_pure_runtime.env"
 
 if [ ! -f "${OPERATOR_ENV_FILE}" ]; then
   echo "Missing ${OPERATOR_ENV_FILE}. Copy ops/gcp/operator.env.example first." >&2
@@ -19,10 +22,8 @@ if [ ! -f "${ENV_COMPOSE}" ]; then
   exit 1
 fi
 
-if [ -f "${OPERATOR_ENV_FILE}" ]; then
-  # shellcheck disable=SC1090
-  source "${OPERATOR_ENV_FILE}"
-fi
+# shellcheck disable=SC1090
+source "${OPERATOR_ENV_FILE}"
 
 prompt_var() {
   local var_name="$1"
@@ -40,17 +41,6 @@ prompt_var() {
     exit 1
   fi
   printf -v "${var_name}" '%s' "${entered}"
-}
-
-set_env_key() {
-  local file_path="$1"
-  local key="$2"
-  local value="$3"
-  if grep -q "^${key}=" "${file_path}"; then
-    sed -i "s|^${key}=.*|${key}=${value}|" "${file_path}"
-  else
-    echo "${key}=${value}" >> "${file_path}"
-  fi
 }
 
 prompt_yes_no() {
@@ -78,6 +68,17 @@ prompt_secret() {
   return 0
 }
 
+set_env_key() {
+  local file_path="$1"
+  local key="$2"
+  local value="$3"
+  if grep -q "^${key}=" "${file_path}"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "${file_path}"
+  else
+    echo "${key}=${value}" >> "${file_path}"
+  fi
+}
+
 detect_default_project() {
   gcloud config get-value project 2>/dev/null | tr -d '\r'
 }
@@ -93,6 +94,10 @@ require_command() {
 find_python_bin() {
   if [ -x "${REPO_ROOT}/.venv/bin/python" ]; then
     printf '%s\n' "${REPO_ROOT}/.venv/bin/python"
+    return 0
+  fi
+  if [ -x "${REPO_ROOT}/.venv/Scripts/python.exe" ]; then
+    printf '%s\n' "${REPO_ROOT}/.venv/Scripts/python.exe"
     return 0
   fi
   command -v python3 || command -v python || true
@@ -150,30 +155,9 @@ run_kite_auth() {
   )
 }
 
-verify_ghcr_images() {
-  local prefix="$1"
-  local tag="$2"
-  local missing=0
-  local svc=""
-  for svc in ingestion_app snapshot_app persistence_app strategy_app market_data_dashboard strategy_eval_orchestrator strategy_eval_ui; do
-    if docker manifest inspect "${prefix}/${svc}:${tag}" >/dev/null 2>&1; then
-      echo "ok: ${svc}:${tag}"
-    else
-      echo "missing: ${svc}:${tag}"
-      missing=1
-    fi
-  done
-  return "${missing}"
-}
-
 sync_kite_env_from_credentials() {
   local credentials_path="${REPO_ROOT}/ingestion_app/credentials.json"
-  local py_bin
-  py_bin="$(command -v python3 || command -v python || true)"
-  if [ -z "${py_bin}" ]; then
-    echo "Python is required to parse ingestion_app/credentials.json" >&2
-    return 1
-  fi
+  local py_bin="$1"
   if [ ! -f "${credentials_path}" ]; then
     echo "Missing ${credentials_path}" >&2
     return 1
@@ -210,10 +194,55 @@ PY
   return 0
 }
 
+download_current_release() {
+  mkdir -p "${CURRENT_RELEASE_DIR}"
+  gcloud storage cp "${RUNTIME_CONFIG_BUCKET_URL%/}/release/current_runtime_release.json" "${CURRENT_MANIFEST_PATH}" >/dev/null 2>&1 || return 1
+  gcloud storage cp "${RUNTIME_CONFIG_BUCKET_URL%/}/release/current_ml_pure_runtime.env" "${CURRENT_RUNTIME_ENV_PATH}" >/dev/null 2>&1 || return 1
+  return 0
+}
+
+manifest_field() {
+  local manifest_path="$1"
+  local field_name="$2"
+  "${PY_BIN}" - "${manifest_path}" "${field_name}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = payload
+for part in sys.argv[2].split("."):
+    value = value.get(part) if isinstance(value, dict) else None
+print("" if value is None else str(value))
+PY
+}
+
+kite_status() {
+  "${PY_BIN}" - "${REPO_ROOT}/ingestion_app/credentials.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    print("missing")
+    raise SystemExit(0)
+try:
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+except Exception:
+    print("stale_or_unreadable")
+    raise SystemExit(0)
+
+api_key = str(payload.get("api_key") or "").strip()
+access_token = str(payload.get("access_token") or "").strip()
+print("present" if api_key and access_token else "stale_or_unreadable")
+PY
+}
+
 require_command gcloud
 PY_BIN="$(find_python_bin)"
 if [ -z "${PY_BIN}" ]; then
-  echo "Python is required for runtime validation and Kite credential parsing." >&2
+  echo "Python is required for runtime validation, release loading, and Kite credential parsing." >&2
   exit 1
 fi
 
@@ -230,53 +259,88 @@ prompt_var ZONE "GCP zone" "${ZONE:-asia-south1-b}"
 prompt_var RUNTIME_NAME "Runtime VM name" "${RUNTIME_NAME:-option-trading-runtime-01}"
 prompt_var RUNTIME_CONFIG_BUCKET_URL "Runtime config bucket URL (gs://.../runtime)" "${default_runtime_config_url}"
 prompt_var GHCR_IMAGE_PREFIX "GHCR image prefix" "${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
-prompt_var APP_IMAGE_TAG "Runtime image tag" "${APP_IMAGE_TAG:-latest}"
-prompt_var ML_PURE_RUN_ID "ML pure run id" "${ML_PURE_RUN_ID:-}"
-prompt_var ML_PURE_MODEL_GROUP "ML pure model group" "${ML_PURE_MODEL_GROUP:-}"
 
-echo
-echo "Verifying GHCR image availability for ${APP_IMAGE_TAG}..."
-if command -v docker >/dev/null 2>&1; then
-  if ! verify_ghcr_images "${GHCR_IMAGE_PREFIX}" "${APP_IMAGE_TAG}"; then
-    echo "One or more required images are missing for tag ${APP_IMAGE_TAG}. Aborting." >&2
+RELEASE_MANIFEST_PATH=""
+RELEASE_ENV_PATH=""
+
+if download_current_release; then
+  CURRENT_APP_IMAGE_TAG="$(manifest_field "${CURRENT_MANIFEST_PATH}" "app_image_tag")"
+  CURRENT_RUN_ID="$(manifest_field "${CURRENT_MANIFEST_PATH}" "run_id")"
+  CURRENT_MODEL_GROUP="$(manifest_field "${CURRENT_MANIFEST_PATH}" "model_group")"
+  echo "Latest approved release found in runtime-config bucket:"
+  echo "  run_id: ${CURRENT_RUN_ID}"
+  echo "  model_group: ${CURRENT_MODEL_GROUP}"
+  echo "  app_image_tag: ${CURRENT_APP_IMAGE_TAG}"
+  echo
+  if prompt_yes_no "Use latest approved release from runtime-config bucket?" "Y"; then
+    RELEASE_MANIFEST_PATH="${CURRENT_MANIFEST_PATH}"
+    RELEASE_ENV_PATH="${CURRENT_RUNTIME_ENV_PATH}"
+    APP_IMAGE_TAG="${CURRENT_APP_IMAGE_TAG}"
+  fi
+fi
+
+if [ -z "${RELEASE_MANIFEST_PATH}" ]; then
+  prompt_var RELEASE_MANIFEST_PATH "Runtime release manifest path" "${RELEASE_MANIFEST_PATH:-}"
+  APP_IMAGE_TAG="$(manifest_field "${RELEASE_MANIFEST_PATH}" "app_image_tag")"
+  RELEASE_ENV_RAW="$(manifest_field "${RELEASE_MANIFEST_PATH}" "runtime_env_path")"
+  if [ -z "${RELEASE_ENV_RAW}" ]; then
+    echo "runtime_env_path missing from ${RELEASE_MANIFEST_PATH}" >&2
     exit 1
   fi
-else
-  echo "docker not found on operator host; skipping GHCR manifest preflight."
+  RELEASE_ENV_PATH="${REPO_ROOT}/${RELEASE_ENV_RAW}"
 fi
+
+if [ ! -f "${RELEASE_MANIFEST_PATH}" ]; then
+  echo "Release manifest not found: ${RELEASE_MANIFEST_PATH}" >&2
+  exit 1
+fi
+if [ ! -f "${RELEASE_ENV_PATH}" ]; then
+  echo "Runtime env file not found: ${RELEASE_ENV_PATH}" >&2
+  exit 1
+fi
+
+export RELEASE_ENV_PATH
+"${REPO_ROOT}/ops/gcp/apply_ml_pure_release.sh"
+
+THRESHOLD_REPORT_PATH="$(manifest_field "${RELEASE_MANIFEST_PATH}" "threshold_report")"
+TRAINING_SUMMARY_PATH="$(manifest_field "${RELEASE_MANIFEST_PATH}" "training_summary")"
+RUNTIME_GUARD_PATH="$(manifest_field "${RELEASE_MANIFEST_PATH}" "runtime_guard_path")"
 
 set_env_key "${ENV_COMPOSE}" "STRATEGY_ENGINE" "ml_pure"
 set_env_key "${ENV_COMPOSE}" "STRATEGY_ROLLOUT_STAGE" "capped_live"
 set_env_key "${ENV_COMPOSE}" "STRATEGY_POSITION_SIZE_MULTIPLIER" "0.25"
-set_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE" ".run/ml_runtime_guard_live.json"
+set_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE" "${RUNTIME_GUARD_PATH:-.run/ml_runtime_guard_live.json}"
 set_env_key "${ENV_COMPOSE}" "GHCR_IMAGE_PREFIX" "${GHCR_IMAGE_PREFIX}"
 set_env_key "${ENV_COMPOSE}" "APP_IMAGE_TAG" "${APP_IMAGE_TAG}"
-set_env_key "${ENV_COMPOSE}" "ML_PURE_RUN_ID" "${ML_PURE_RUN_ID}"
-set_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_GROUP" "${ML_PURE_MODEL_GROUP}"
 set_env_key "${ENV_COMPOSE}" "INGESTION_COLLECTORS_ENABLED" "1"
+if [ -n "${THRESHOLD_REPORT_PATH}" ]; then
+  set_env_key "${ENV_COMPOSE}" "ML_PURE_THRESHOLD_REPORT" "${THRESHOLD_REPORT_PATH}"
+fi
+if [ -n "${TRAINING_SUMMARY_PATH}" ]; then
+  set_env_key "${ENV_COMPOSE}" "ML_PURE_TRAINING_SUMMARY_PATH" "${TRAINING_SUMMARY_PATH}"
+fi
 
-if prompt_yes_no "Run Kite browser auth now (refresh credentials + write KITE_* envs)?" "Y"; then
-  if run_kite_auth "${PY_BIN}"; then
-    sync_kite_env_from_credentials || {
-      echo "Warning: could not sync KITE_* env from credentials.json; continuing with existing .env.compose values." >&2
-    }
+KITE_STATE="$(kite_status)"
+echo
+echo "Kite credentials status: ${KITE_STATE}"
+if [ "${KITE_STATE}" = "present" ]; then
+  if prompt_yes_no "Refresh Kite browser auth now?" "N"; then
+    run_kite_auth "${PY_BIN}"
+    sync_kite_env_from_credentials "${PY_BIN}"
   else
-    if [ -f "${REPO_ROOT}/ingestion_app/credentials.json" ]; then
-      echo "Kite auth did not complete. Using existing credentials.json."
-      sync_kite_env_from_credentials || true
-      prompt_yes_no "Continue with existing credentials?" "Y" || exit 1
-    else
-      echo "No credentials.json available. ingestion_app will fail closed without Kite credentials." >&2
-      prompt_yes_no "Continue without Kite credentials?" "N" || exit 1
-    fi
+    sync_kite_env_from_credentials "${PY_BIN}" || true
   fi
+else
+  echo "Live deploy requires valid Kite credentials."
+  run_kite_auth "${PY_BIN}"
+  sync_kite_env_from_credentials "${PY_BIN}"
 fi
 
 mkdir -p "${REPO_ROOT}/.run"
-if [ ! -f "${REPO_ROOT}/.run/ml_runtime_guard_live.json" ]; then
+if [ ! -f "${REPO_ROOT}/.run/ml_runtime_guard_live.json" ] && [ "${RUNTIME_GUARD_PATH:-}" = ".run/ml_runtime_guard_live.json" ]; then
   read -r -p ".run/ml_runtime_guard_live.json missing. Create smoke guard now? [y/N]: " create_guard || true
   if [[ ! "${create_guard:-N}" =~ ^[Yy]$ ]]; then
-    echo "Missing guard file. Create it manually or run with an existing approved guard." >&2
+    echo "Missing guard file. Create it manually or use an existing approved guard." >&2
     exit 1
   fi
   cat > "${REPO_ROOT}/.run/ml_runtime_guard_live.json" <<'EOF'
@@ -288,6 +352,21 @@ if [ ! -f "${REPO_ROOT}/.run/ml_runtime_guard_live.json" ]; then
 }
 EOF
 fi
+
+echo
+echo "Running live preflight..."
+PREFLIGHT_OUTPUT="$("${PY_BIN}" "${REPO_ROOT}/ops/gcp/operator_preflight.py" \
+  --mode live \
+  --repo-root "${REPO_ROOT}" \
+  --env-file "${ENV_COMPOSE}" \
+  --release-manifest-path "${RELEASE_MANIFEST_PATH}" \
+  --ghcr-image-prefix "${GHCR_IMAGE_PREFIX}" \
+  --credentials-path "${REPO_ROOT}/ingestion_app/credentials.json")" || {
+    echo "${PREFLIGHT_OUTPUT}"
+    echo "Live preflight failed. Resolve the blockers above before deploy." >&2
+    exit 1
+  }
+echo "${PREFLIGHT_OUTPUT}"
 
 echo
 echo "Publishing runtime bootstrap bundle..."

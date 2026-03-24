@@ -45,6 +45,14 @@ except ImportError:
         LiveStrategyMonitorService = None
 
 try:
+    from .historical_replay_monitor_service import HistoricalReplayMonitorService
+except ImportError:
+    try:
+        from historical_replay_monitor_service import HistoricalReplayMonitorService  # type: ignore
+    except ImportError:
+        HistoricalReplayMonitorService = None
+
+try:
     from .strategy_evaluation_service import StrategyEvaluationService
 except ImportError:
     try:
@@ -65,6 +73,11 @@ try:
     from .operator_routes import DashboardOperatorRouter
 except ImportError:
     from operator_routes import DashboardOperatorRouter  # type: ignore
+
+try:
+    from .historical_replay_routes import DashboardHistoricalReplayRouter
+except ImportError:
+    from historical_replay_routes import DashboardHistoricalReplayRouter  # type: ignore
 
 try:
     from .strategy_evaluation_routes import DashboardStrategyEvaluationRouter
@@ -160,7 +173,7 @@ _default_instrument_raw = (
     or os.getenv("INSTRUMENT_KEY", "").strip()
 )
 DEFAULT_INSTRUMENT = "" if _default_instrument_raw == "INSTRUMENT_NOT_SET" else _default_instrument_raw
-_PLACEHOLDER_INSTRUMENTS = {"FALLBACK_TEST"}
+_PLACEHOLDER_INSTRUMENTS = {"", "FALLBACK_TEST", "SELECT_INSTRUMENT", "INSTRUMENT_NOT_SET"}
 
 
 def _is_placeholder_instrument(value: Any) -> bool:
@@ -1446,6 +1459,11 @@ _strategy_eval_service = StrategyEvaluationService() if StrategyEvaluationServic
 _live_strategy_monitor_service = (
     LiveStrategyMonitorService(_strategy_eval_service)
     if (LiveStrategyMonitorService is not None and _strategy_eval_service is not None)
+    else None
+)
+_historical_replay_monitor_service = (
+    HistoricalReplayMonitorService(_strategy_eval_service)
+    if (HistoricalReplayMonitorService is not None and _strategy_eval_service is not None)
     else None
 )
 
@@ -3629,6 +3647,14 @@ _operator_routes = DashboardOperatorRouter(
 )
 app.include_router(_operator_routes.router)
 
+_historical_replay_routes = DashboardHistoricalReplayRouter(
+    templates=templates,
+    templates_dir=templates_dir,
+    get_historical_replay_service=lambda: _historical_replay_monitor_service,
+    now_iso_ist=_now_iso_ist,
+)
+app.include_router(_historical_replay_routes.router)
+
 _strategy_evaluation_routes = DashboardStrategyEvaluationRouter(
     get_strategy_eval_service=lambda: _strategy_eval_service,
     normalize_timestamp_fields=_normalize_timestamp_fields,
@@ -3668,6 +3694,15 @@ app.include_router(_research_routes.router)
 
 async def _unbound_public_contract_market_data_handler(*args: Any, **kwargs: Any) -> Any:
     raise RuntimeError("public contract market-data handlers are not bound")
+
+
+def _require_debug_routes_enabled() -> None:
+    enabled = str(os.getenv("DASHBOARD_ENABLE_DEBUG_ROUTES") or "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        raise HTTPException(
+            status_code=404,
+            detail="debug routes are disabled; set DASHBOARD_ENABLE_DEBUG_ROUTES=1 to enable",
+        )
 
 _public_contract_routes = DashboardPublicContractRouter(
     now_iso_ist=_now_iso_ist,
@@ -3746,6 +3781,10 @@ get_live_strategy_session = _operator_routes.get_live_strategy_session
 health = _operator_routes.health
 market_data_health = _operator_routes.market_data_health
 get_system_mode = _operator_routes.get_system_mode
+historical_replay = _historical_replay_routes.historical_replay
+get_historical_strategy_session = _historical_replay_routes.get_historical_strategy_session
+get_historical_replay_status = _historical_replay_routes.get_historical_replay_status
+replay_health = _historical_replay_routes.replay_health
 get_strategy_evaluation_summary = _strategy_evaluation_routes.get_strategy_evaluation_summary
 get_strategy_evaluation_equity = _strategy_evaluation_routes.get_strategy_evaluation_equity
 get_strategy_evaluation_days = _strategy_evaluation_routes.get_strategy_evaluation_days
@@ -4208,14 +4247,6 @@ def _build_trading_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "recent_events": list(reversed(recent_events)),
         "signal_series": signal_series,
     }
-
-
-_DEBUG_ROUTES_ENV = "DASHBOARD_ENABLE_DEBUG_ROUTES"
-
-
-def _require_debug_routes_enabled() -> None:
-    if not _truthy(os.getenv(_DEBUG_ROUTES_ENV), default=False):
-        raise HTTPException(status_code=404, detail="Not found")
 
 
 def _canonical_contract_timeframe(value: Optional[str]) -> str:

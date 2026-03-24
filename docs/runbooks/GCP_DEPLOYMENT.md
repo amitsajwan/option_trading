@@ -1,67 +1,86 @@
-# Live Runtime Runbook
+# GCP Deployment Runbook
 
-Use this runbook to deploy the live runtime on GCP, publish runtime config, restart the runtime VM, validate the live stack, and roll back if needed.
+Use this runbook as the release-manager source of truth for GCP runtime operations.
 
-This workflow is self-contained. It includes the GCP setup it needs.
-
-## Fast Path (Interactive)
-
-Use the supported operator flow:
+There is one preferred operator path:
 
 ```bash
 bash ./ops/gcp/runtime_lifecycle_interactive.sh
 ```
 
-Recommended order:
+This runbook is organized around that path. Direct scripts and raw `gcloud` commands are included only as supporting references.
 
-1. choose `1` once per environment to write `ops/gcp/operator.env` and optionally bootstrap infra
-2. choose `2` for each runtime deploy or restart
-3. choose `3` at end of day to stop compute
+Important scope rule:
 
-Direct entrypoints:
+- `runtime_lifecycle_interactive.sh` is the preferred operator path for `Infra`, `Live`, and `Historical`
+- `Historical` now has its own interactive branch in that same menu and is not driven by `start_runtime_interactive.sh`
+- successful training `PUBLISH` writes the current approved runtime release artifacts that `Live` auto-loads by default
 
-```bash
-bash ./ops/gcp/bootstrap_runtime_interactive.sh
-bash ./ops/gcp/start_runtime_interactive.sh
-```
+## Operating Model
 
-The runtime deploy helper prompts for:
+Use the same release-manager structure every time:
 
-- project, region, zone, and runtime VM name
-- runtime-config bucket URL
-- `GHCR_IMAGE_PREFIX` and image tag
-- `ML_PURE_RUN_ID` and `ML_PURE_MODEL_GROUP`
+0. `Infra`
+1. `Live`
+2. `Historical`
 
-`start_runtime_interactive.sh` also supports:
+The intent is simple:
 
-- optional Kite browser auth (`python -m ingestion_app.kite_auth --force`)
-- prompts for `KITE_API_KEY` and hidden `KITE_API_SECRET` during auth when not already exported
-- automatic sync of `KITE_API_KEY` and `KITE_ACCESS_TOKEN` from `ingestion_app/credentials.json` into `.env.compose`
-- automatic `INGESTION_COLLECTORS_ENABLED=1`
-- prompt-driven install of Kite auth dependencies on the operator host when missing
-- GHCR image existence preflight when Docker is available on the operator host
-- prompt-driven `start`, `restart`, or `skip` VM action after runtime config publish
+- `Infra` creates and validates the shared GCP foundation
+- `Live` deploys or updates the always-on runtime
+- `Historical` replays old dates without disturbing the live lane
 
-Bootstrap note:
+For a first-time setup, do `0. Infra` first, then `1. Live`. Run `2. Historical` only when you need replay.
 
-- if `.env.compose` was auto-created from `.env.compose.example`, bootstrap skips runtime-config publish automatically and prints the follow-up command
+Use this decision rule:
 
-## What This Produces
+- run `0. Infra` once per environment, or again only when infra changes
+- run `1. Live` for normal runtime deploys and restarts
+- run `2. Historical` only for replay analysis; it does not require rerunning infra unless you need a separate replay VM
 
-- runtime images in GHCR
-- runtime config bundle in the runtime-config bucket
-- a live runtime VM running the Compose stack
+## First-Time Operator Checklist
 
-## Step 1: Prepare Shared GCP Resources
+Before starting:
 
-If the runtime VM and buckets do not exist yet:
+- work from Ubuntu, WSL, or Cloud Shell
+- run from the repo root
+- ensure `gcloud`, `terraform`, `docker`, and `bash` are available
+- ensure `ops/gcp/operator.env` exists
+- ensure `.env.compose` contains the intended live runtime values before you deploy
+
+If `ops/gcp/operator.env` does not exist yet:
 
 ```bash
 cp ops/gcp/operator.env.example ops/gcp/operator.env
-RUN_RUNTIME_CONFIG_SYNC=0 ./ops/gcp/from_scratch_bootstrap.sh
 ```
 
-You need at least these values in `ops/gcp/operator.env`:
+If `.env.compose` does not exist yet:
+
+```bash
+cp .env.compose.example .env.compose
+```
+
+## 0. Infra
+
+Use this section when the environment is new or when you need to confirm the shared GCP foundation is still healthy.
+
+### Preferred Path
+
+Run:
+
+```bash
+bash ./ops/gcp/runtime_lifecycle_interactive.sh
+```
+
+Choose:
+
+1. `Bootstrap infra`
+
+That flow writes `ops/gcp/operator.env`, derives bucket URLs, and can run the bootstrap immediately.
+
+### Required Operator Values
+
+These fields must be correct in `ops/gcp/operator.env`:
 
 - `PROJECT_ID`
 - `REGION`
@@ -72,14 +91,26 @@ You need at least these values in `ops/gcp/operator.env`:
 - `MODEL_BUCKET_NAME`
 - `RUNTIME_CONFIG_BUCKET_NAME`
 
-`MODEL_BUCKET_URL` and `RUNTIME_CONFIG_BUCKET_URL` are optional. Current bootstrap derives them as:
+Current conventions:
 
-- `MODEL_BUCKET_URL=gs://<MODEL_BUCKET_NAME>/published_models`
-- `RUNTIME_CONFIG_BUCKET_URL=gs://<RUNTIME_CONFIG_BUCKET_NAME>/runtime`
+- runtime images come from GHCR
+- `REPOSITORY` still exists only for Terraform and bootstrap compatibility
+- `MODEL_BUCKET_URL` defaults to `gs://<MODEL_BUCKET_NAME>/published_models`
+- `RUNTIME_CONFIG_BUCKET_URL` defaults to `gs://<RUNTIME_CONFIG_BUCKET_NAME>/runtime`
 
-`REPOSITORY` still exists in `operator.env` and Terraform variables for infra compatibility, but the live runtime path now uses GHCR images rather than Artifact Registry images.
+### First-Time Bootstrap Reference
 
-Verify:
+If you need the non-menu path:
+
+```bash
+RUN_RUNTIME_CONFIG_SYNC=0 ./ops/gcp/from_scratch_bootstrap.sh
+```
+
+Use `RUN_RUNTIME_CONFIG_SYNC=0` on a fresh checkout when `.env.compose` is still a template and should not be published yet.
+
+### Infra Verification
+
+Run:
 
 ```bash
 cd infra/gcp
@@ -89,171 +120,132 @@ gcloud storage ls "gs://${MODEL_BUCKET_NAME}"
 gcloud storage ls "gs://${RUNTIME_CONFIG_BUCKET_NAME}"
 ```
 
-Look for:
+You should see:
 
 - Terraform outputs succeed
-- runtime VM exists
-- model and runtime-config buckets exist
+- the runtime VM exists
+- the model bucket exists
+- the runtime-config bucket exists
 
-## Step 2: Select GHCR Image Tag
+## 1. Live
 
-Live runtime images are expected in GHCR.
+Use this section for the always-on production runtime.
 
-Set these values in `ops/gcp/operator.env` and `.env.compose`:
+This is the only supported lane for live market deployment. Historical replay is separate.
+
+### Preferred Path
+
+Run:
+
+```bash
+bash ./ops/gcp/runtime_lifecycle_interactive.sh
+```
+
+Choose:
+
+2. `Start or restart runtime deploy`
+
+This is the best path because it keeps the operator on the supported sequence:
+
+1. fetch the current approved runtime release manifest and runtime env from the runtime-config bucket
+2. apply the runtime handoff into `.env.compose`
+3. show Kite credential state and fail closed until it is valid
+4. run shared live preflight
+5. publish runtime config
+6. start or restart the runtime VM
+
+### Live Deployment Inputs
+
+The interactive deploy helper expects:
+
+- project, region, zone, and runtime VM name
+- runtime-config bucket URL
+- `GHCR_IMAGE_PREFIX`
+- release manifest path only when overriding the current approved release
+
+The helper also supports:
+
+- auto-download of:
+  - `release/current_runtime_release.json`
+  - `release/current_ml_pure_runtime.env`
+- optional override to a different runtime release manifest
+- Kite browser auth through `python -m ingestion_app.kite_auth --force`
+- prompting for `KITE_API_KEY` and hidden `KITE_API_SECRET` when needed
+- syncing `KITE_API_KEY` and `KITE_ACCESS_TOKEN` from `ingestion_app/credentials.json` into `.env.compose`
+- automatic `INGESTION_COLLECTORS_ENABLED=1`
+- shared preflight for release manifest, runtime bundle, GHCR image tag, and Kite state
+
+### Live Runtime Contract
+
+Before deploying, `.env.compose` must contain a coherent live runtime config.
+
+Required live settings:
 
 ```env
 GHCR_IMAGE_PREFIX=ghcr.io/amitsajwan
 APP_IMAGE_TAG=latest
-```
-
-Minimum image set for the full runtime stack:
-
-- `ingestion_app`
-- `snapshot_app`
-- `persistence_app`
-- `strategy_app`
-- `market_data_dashboard`
-- `strategy_eval_orchestrator`
-- `strategy_eval_ui`
-
-Verify the pinned tag exists for all required images:
-
-```bash
-export GHCR_IMAGE_PREFIX APP_IMAGE_TAG
-for svc in ingestion_app snapshot_app persistence_app strategy_app market_data_dashboard strategy_eval_orchestrator strategy_eval_ui; do
-  docker manifest inspect "${GHCR_IMAGE_PREFIX}/${svc}:${APP_IMAGE_TAG}" >/dev/null 2>&1 \
-    && echo "ok: ${svc}:${APP_IMAGE_TAG}" \
-    || echo "missing: ${svc}:${APP_IMAGE_TAG}"
-done
-```
-
-Look for:
-
-- `ok:` for every required service
-- no `missing:` lines before runtime restart
-
-If you are using `start_runtime_interactive.sh`, this check is already built in when Docker is available.
-
-## Step 3: Prepare Runtime Config
-
-If training just produced a publishable release handoff:
-
-```bash
-export RELEASE_ENV_PATH=ml_pipeline_2/artifacts/research/<run_id>/release/ml_pure_runtime.env
-./ops/gcp/apply_ml_pure_release.sh
-```
-
-`apply_ml_pure_release.sh` only writes the staged handoff keys:
-
-- `STRATEGY_ENGINE`
-- `ML_PURE_RUN_ID`
-- `ML_PURE_MODEL_GROUP`
-
-It does not make the repo live-ready by itself. Before publishing runtime config, `.env.compose` must also contain the live rollout and monitoring prerequisites that the runtime and dashboard expect.
-
-Supported live settings:
-
-```env
 STRATEGY_ENGINE=ml_pure
 ML_PURE_RUN_ID=<published_run_id>
 ML_PURE_MODEL_GROUP=banknifty_futures/h15_tp_auto
 STRATEGY_ROLLOUT_STAGE=capped_live
 STRATEGY_POSITION_SIZE_MULTIPLIER=0.25
 STRATEGY_ML_RUNTIME_GUARD_FILE=.run/ml_runtime_guard_live.json
+```
+
+Supported monitoring inputs:
+
+```env
 ML_PURE_THRESHOLD_REPORT=ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/threshold_report.json
 ML_PURE_TRAINING_SUMMARY_PATH=ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/training_report.json
 ```
 
 Notes:
 
-- `publish_runtime_config.sh` requires the capped-live fields and the repo-relative guard file before it will publish an `ml_pure` runtime config
-- `docker-compose.gcp.yml` requires `GHCR_IMAGE_PREFIX` and `APP_IMAGE_TAG` in `.env.compose`
-- `ML_PURE_THRESHOLD_REPORT` is optional for run-id model resolution in `strategy_app`, but it is the supported way to anchor rolling Stage 1 precision monitoring to the deployed threshold report
-- `ML_PURE_TRAINING_SUMMARY_PATH` is optional for core trading, but without it the persistence/dashboard regime-drift monitor cannot compare live regime mix against the training baseline
-- use repo-relative paths so the runtime VM can sync them through the runtime-config bundle and local checkout layout
+- `publish_runtime_config.sh` validates the capped-live fields and the guard file before publishing an `ml_pure` runtime config
+- `docker-compose.gcp.yml` expects `GHCR_IMAGE_PREFIX` and `APP_IMAGE_TAG`
+- use repo-relative artifact paths so the runtime VM can sync them through the runtime-config bundle
+- the current approved release manifest provides:
+  - `APP_IMAGE_TAG`
+  - `ML_PURE_RUN_ID`
+  - `ML_PURE_MODEL_GROUP`
+  - `ML_PURE_THRESHOLD_REPORT`
+  - `ML_PURE_TRAINING_SUMMARY_PATH`
+  - `STRATEGY_ML_RUNTIME_GUARD_FILE`
 
-Verify:
+### Current Approved Release Artifacts
 
-```bash
-grep -E "STRATEGY_ENGINE|ML_PURE_RUN_ID|ML_PURE_MODEL_GROUP|STRATEGY_ROLLOUT_STAGE|STRATEGY_POSITION_SIZE_MULTIPLIER|STRATEGY_ML_RUNTIME_GUARD_FILE|ML_PURE_THRESHOLD_REPORT|ML_PURE_TRAINING_SUMMARY_PATH" .env.compose
-grep -E "GHCR_IMAGE_PREFIX|APP_IMAGE_TAG" .env.compose
-test -f .run/ml_runtime_guard_live.json && echo guard_ok
-```
+Successful training `PUBLISH` now writes:
 
-Look for:
+- run-local manifest: `release/runtime_release_manifest.json`
+- repo-local current manifest cache: `.run/gcp_release/current_runtime_release.json`
+- repo-local current pointer: `.run/gcp_release/current_runtime_release_pointer.json`
+- repo-local current runtime env copy: `.run/gcp_release/current_ml_pure_runtime.env`
 
-- all required env keys are present
-- GHCR image prefix and tag are present
-- guard file exists locally
+It also uploads the current artifacts to the runtime-config bucket under:
 
-## Step 4: Publish Runtime Config
+- `release/current_runtime_release.json`
+- `release/current_runtime_release_pointer.json`
+- `release/current_ml_pure_runtime.env`
 
-```bash
-export RUNTIME_CONFIG_BUCKET_URL
-./ops/gcp/publish_runtime_config.sh
-```
+`Live` auto-picks these files by default, so the operator does not need to type run-id or model-group manually for the normal deploy path.
 
-Verify:
+### Live Verification
 
-- command exits successfully
-- the helper does not reject `.env.compose`
+After the interactive deploy completes, verify the runtime from the VM.
 
-Also verify the bucket:
-
-```bash
-gcloud storage ls "${RUNTIME_CONFIG_BUCKET_URL}"
-```
-
-Look for:
-
-- `.env.compose`
-- `ingestion_app/credentials.json` if used
-- `.run/ml_runtime_guard_live.json` when `ml_pure` is enabled
-- the repo-relative threshold report path referenced by `ML_PURE_THRESHOLD_REPORT`, if configured
-- the repo-relative training summary path referenced by `ML_PURE_TRAINING_SUMMARY_PATH`, if configured
-
-## Step 5: Start Or Restart The Runtime VM
-
-```bash
-gcloud compute instances stop "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}"
-gcloud compute instances start "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}"
-```
-
-If you are using the interactive deploy flow, this restart is already prompted for and performed by `start_runtime_interactive.sh`.
-
-Verify:
-
-```bash
-gcloud compute instances describe "${RUNTIME_NAME}" \
-  --project "${PROJECT_ID}" \
-  --zone "${ZONE}" \
-  --format="value(status)"
-```
-
-Look for:
-
-- `RUNNING`
-
-Notes:
-
-- restarting the VM is the supported rollout path because startup syncs runtime config and published model artifacts, validates runtime bundle inputs, and then pulls and starts the pinned-tag images
-- the runtime startup stack includes `redis`, `mongo`, `ingestion_app`, `snapshot_app`, `persistence_app`, `strategy_app`, and `strategy_persistence_app` plus `dashboard` when the UI profile is enabled
-
-## Step 6: Verify Runtime Startup And Containers
-
-Inspect startup logs:
+Startup log:
 
 ```bash
 gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "sudo tail -n 200 /var/log/option-trading-runtime-startup.log"
 ```
 
-Check Compose services:
+Compose status:
 
 ```bash
 gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "cd /opt/option_trading && sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml ps"
 ```
 
-Check runtime logs and data files:
+Key service logs:
 
 ```bash
 gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "cd /opt/option_trading && sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml logs --tail 120 strategy_app"
@@ -268,25 +260,23 @@ Optional dashboard health:
 gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "curl -fsS http://127.0.0.1:8008/api/health"
 ```
 
-Look for:
+You should see:
 
+- the VM is `RUNNING`
 - `strategy_app` starts with `engine=ml_pure`
-- resolved run-id or artifact paths are present
-- snapshot events continue to advance
-- signals file exists and updates when snapshots arrive
-- dashboard health succeeds if the dashboard profile is enabled
+- snapshots continue to advance
+- strategy signals update when snapshots arrive
+- dashboard health succeeds if the UI profile is enabled
 
-If `snapshot_app` is unhealthy and logs show repeated market-data or auth failures, verify Kite credentials were refreshed and published. The supported recovery path is to rerun `start_runtime_interactive.sh` with Kite browser auth enabled, then restart the VM again.
+### Live Rollback
 
-## Step 7: Rollback
+If a live deploy is bad:
 
-If the new deploy is bad:
-
-1. restore the previous runtime handoff or previous `.env.compose`
+1. restore the previous `.env.compose` or release handoff
 2. republish runtime config
 3. restart the runtime VM
 
-Commands:
+Reference commands:
 
 ```bash
 ./ops/gcp/publish_runtime_config.sh
@@ -294,7 +284,201 @@ gcloud compute instances stop "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone
 gcloud compute instances start "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}"
 ```
 
-Verify:
+## 2. Historical
 
-- runtime returns to the previous known-good run-id or config
-- service logs stop showing the new failure mode
+Use this section for old-date simulation through the supported snapshot replay stack.
+
+Historical replay is a separate operator lane. It is not a live cutover path and it must not be mixed into the live stack by accident.
+
+Do not use `start_runtime_interactive.sh` as the main entrypoint for historical replay. That flow is live-opinionated and can push live settings such as `STRATEGY_ROLLOUT_STAGE=capped_live`, `INGESTION_COLLECTORS_ENABLED=1`, and Kite auth prompts that are not part of replay execution.
+
+Use the same lifecycle menu instead:
+
+```bash
+bash ./ops/gcp/runtime_lifecycle_interactive.sh
+```
+
+Choose:
+
+3. `Historical replay`
+
+### Historical Rules
+
+Keep these boundaries hard:
+
+- use the same pinned GHCR image tags as live
+- use only the `historical` and `historical_replay` Compose profiles
+- replay only from stored historical snapshots
+- never publish replay data to live Redis topics
+- never write replay data into live Mongo collections
+- do not use the archived dashboard backtest flow as the GCP historical path
+- once historical snapshots already exist, replay does not require Kite auth or `ingestion_app/credentials.json`
+
+### Preferred Operating Shape
+
+Default:
+
+- use the runtime VM, but start only the historical profiles and keep the live lane untouched
+
+Optional:
+
+- use a separate replay VM with the same repo checkout and compose files when you want stronger isolation
+
+Do not use the snapshot-build VM as the default replay target unless you are intentionally combining build and replay for one-off analysis.
+
+### Upstream Artifact Build
+
+Historical parquet is a separate runtime input artifact. It is not part of the normal runtime-config bundle.
+
+Build and publish parquet first by following [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md) and using:
+
+```bash
+./ops/gcp/run_snapshot_parquet_pipeline.sh
+```
+
+Do not use `publish_runtime_config.sh` to ship parquet datasets. Keep that bundle limited to `.env.compose`, optional credentials, runtime guards, and small referenced runtime artifacts.
+
+Do not upload historical parquet into the runtime-config bucket.
+
+### Canonical Historical Sequence
+
+Use this exact sequence:
+
+1. build and publish historical parquet to GCS
+2. sync the required parquet subset onto the target VM under `/opt/option_trading/.data/ml_pipeline/parquet_data`
+3. start the historical consumers
+4. run the one-shot replay job for the target date or date range
+5. inspect historical outputs in Redis, Mongo, and the dashboard
+
+The interactive historical branch performs this sequence by prompting for:
+
+- replay VM name
+- GHCR image prefix and tag
+- snapshot parquet bucket URL
+- replay start date and end date
+- replay speed
+- local historical preflight before any remote work
+- remote historical preflight after parquet sync
+- whether to publish the current runtime config bundle first
+- whether to sync parquet now
+- whether to run the replay job now
+
+If you only remember one thing for replay, remember this:
+
+1. parquet already published
+2. parquet synced onto the replay VM
+3. only historical profiles started
+4. one-shot replay run
+5. historical outputs verified
+
+### Historical Preflight
+
+Do not start replay until all of these are true:
+
+- target parquet is present under `/opt/option_trading/.data/ml_pipeline/parquet_data`
+- target date is present in the synced dataset
+- replay topic resolves to `market:snapshot:v1:historical`
+- historical Mongo collection env vars are in effect
+- you will use `--profile historical` and `--profile historical_replay`
+- no one is planning to restart the live VM just to run replay
+
+### Stop Conditions
+
+Stop immediately and do not continue if any of these are true:
+
+- replay topic resolves to the live snapshot topic
+- historical collections are not configured
+- parquet sync is incomplete or the target date is absent
+- replay is being attempted on the live runtime VM during active market hours without explicit approval
+
+### Historical Sync And Replay Reference
+
+Sync parquet onto the target VM:
+
+```bash
+gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "
+  sudo mkdir -p /opt/option_trading/.data/ml_pipeline/parquet_data &&
+  sudo gcloud storage rsync '${SNAPSHOT_PARQUET_BUCKET_URL%/}' '/opt/option_trading/.data/ml_pipeline/parquet_data' --recursive
+"
+```
+
+Start historical consumers:
+
+```bash
+gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "
+  cd /opt/option_trading &&
+  sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml --profile historical up -d redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical
+"
+```
+
+Run one-shot replay:
+
+```bash
+gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "
+  cd /opt/option_trading &&
+  sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml --profile historical_replay run --rm historical_replay --start-date 2026-03-06 --end-date 2026-03-06 --speed 0
+"
+```
+
+Verify replay services:
+
+```bash
+gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "
+  cd /opt/option_trading &&
+  sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml ps &&
+  sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml logs --tail 120 strategy_app_historical &&
+  sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml logs --tail 120 strategy_persistence_app_historical
+"
+```
+
+Optional replay dashboard checks:
+
+```bash
+gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "curl -fsS http://127.0.0.1:8008/api/health/replay"
+gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "curl -fsS http://127.0.0.1:8008/api/historical/replay/status"
+```
+
+You should see:
+
+- replay emits only to `market:snapshot:v1:historical`
+- `strategy_app_historical` consumes historical snapshots only
+- historical strategy outputs stay on `*:historical` topics
+- historical persistence writes only to historical collections
+- live services remain unaffected when historical profiles are not started
+
+Dashboard note:
+
+- dashboard market-data and replay pages are usable for historical analysis
+- some views remain live-oriented
+- replay mode is not broker-faithful live emulation
+
+## Direct Script Reference
+
+Use these only when you explicitly need a lower-level entrypoint.
+
+Interactive scripts:
+
+- `bash ./ops/gcp/runtime_lifecycle_interactive.sh`
+- `bash ./ops/gcp/bootstrap_runtime_interactive.sh`
+- `bash ./ops/gcp/start_runtime_interactive.sh`
+- `bash ./ops/gcp/start_training_interactive.sh`
+- `bash ./ops/gcp/run_snapshot_parquet_pipeline.sh`
+
+Support scripts:
+
+- `./ops/gcp/from_scratch_bootstrap.sh`
+- `./ops/gcp/publish_runtime_config.sh`
+- `./ops/gcp/apply_ml_pure_release.sh`
+- `./ops/gcp/stop_runtime.sh`
+- `./ops/gcp/destroy_infra_preserve_data.sh`
+
+## Clean Daily Pattern
+
+For normal release management, keep the workflow stable:
+
+1. run `0. Infra` only when the environment is new or changed
+2. run `1. Live` for the always-on deployment
+3. run `2. Historical` only when you need replay
+4. keep live and historical operationally separate even when they share the same image tag and repo checkout
+
+If you follow that pattern, a first-time operator can get the environment working without inventing alternate deployment paths.

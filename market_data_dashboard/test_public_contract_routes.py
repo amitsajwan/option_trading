@@ -47,8 +47,8 @@ class PublicContractRouteTests(unittest.TestCase):
 
     def test_get_public_topic_example_mode_alias_uses_system_mode(self) -> None:
         with patch.object(dashboard_app, "_load_runtime_instruments", new=AsyncMock(return_value=[])), patch.object(
-            dashboard_app,
-            "get_system_mode",
+            dashboard_app._public_contract_routes,
+            "_get_system_mode",
             new=AsyncMock(return_value={"status": "ok", "mode": "replay"}),
         ), patch.object(
             dashboard_app,

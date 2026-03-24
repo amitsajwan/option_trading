@@ -39,6 +39,8 @@ class ValidateRuntimeBundleTests(unittest.TestCase):
             _write_env(
                 env_file,
                 {
+                    "GHCR_IMAGE_PREFIX": "ghcr.io/amitsajwan",
+                    "APP_IMAGE_TAG": "20260324-a1b2c3d",
                     "STRATEGY_ENGINE": "ml_pure",
                     "STRATEGY_ROLLOUT_STAGE": "capped_live",
                     "STRATEGY_POSITION_SIZE_MULTIPLIER": "0.25",
@@ -65,6 +67,8 @@ class ValidateRuntimeBundleTests(unittest.TestCase):
             _write_env(
                 env_file,
                 {
+                    "GHCR_IMAGE_PREFIX": "ghcr.io/amitsajwan",
+                    "APP_IMAGE_TAG": "20260324-a1b2c3d",
                     "STRATEGY_ENGINE": "ml_pure",
                     "STRATEGY_ROLLOUT_STAGE": "capped_live",
                     "STRATEGY_POSITION_SIZE_MULTIPLIER": "0",

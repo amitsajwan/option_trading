@@ -40,6 +40,7 @@ class DashboardOperatorRouter:
         router.add_api_route("/live/strategy", self.live_strategy, methods=["GET"], response_class=HTMLResponse)
         router.add_api_route("/api/live/strategy/session", self.get_live_strategy_session, methods=["GET"])
         router.add_api_route("/api/health", self.health, methods=["GET"])
+        router.add_api_route("/api/health/live", self.health, methods=["GET"])
         router.add_api_route("/api/market-data/health", self.market_data_health, methods=["GET"])
         router.add_api_route("/api/v1/system/mode", self.get_system_mode, methods=["GET"])
         self.router = router

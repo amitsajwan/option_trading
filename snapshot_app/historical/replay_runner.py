@@ -6,12 +6,14 @@ import argparse
 import json
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
 import pandas as pd
+import redis
 
-from contracts_app import build_snapshot_event, historical_snapshot_topic
+from contracts_app import build_snapshot_event, historical_snapshot_topic, redis_connection_kwargs
 from snapshot_app.core.market_snapshot_contract import validate_market_snapshot
 from snapshot_app.redis_publisher import RedisEventPublisher
 
@@ -27,6 +29,46 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_PARQUET_BASE = DEFAULT_HISTORICAL_PARQUET_BASE
+REPLAY_STATUS_KEY = "system:historical:replay_status"
+HISTORICAL_READY_KEY = "system:historical:data_ready"
+VIRTUAL_TIME_ENABLED_KEY = "system:virtual_time:enabled"
+VIRTUAL_TIME_CURRENT_KEY = "system:virtual_time:current"
+
+
+def _redis_client() -> redis.Redis:
+    return redis.Redis(**redis_connection_kwargs(decode_responses=True))
+
+
+def _now_iso() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _snapshot_timestamp(snapshot: dict) -> Optional[str]:
+    session = snapshot.get("session_context") if isinstance(snapshot.get("session_context"), dict) else {}
+    for key in ("timestamp",):
+        text = str(session.get(key) or snapshot.get(key) or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _snapshot_trade_date(snapshot: dict) -> Optional[str]:
+    session = snapshot.get("session_context") if isinstance(snapshot.get("session_context"), dict) else {}
+    for raw in (session.get("date"), snapshot.get("trade_date"), _snapshot_timestamp(snapshot)):
+        text = str(raw or "").strip()
+        if len(text) >= 10:
+            return text[:10]
+    return None
+
+
+def _write_replay_status(client: redis.Redis, payload: dict) -> None:
+    client.set(REPLAY_STATUS_KEY, json.dumps(payload, ensure_ascii=False, default=str))
+    client.set(HISTORICAL_READY_KEY, "1" if payload.get("data_ready") else "0")
+    client.set(VIRTUAL_TIME_ENABLED_KEY, "1" if payload.get("virtual_time_enabled") else "0")
+    if payload.get("virtual_time_current"):
+        client.set(VIRTUAL_TIME_CURRENT_KEY, str(payload.get("virtual_time_current")))
+    else:
+        client.delete(VIRTUAL_TIME_CURRENT_KEY)
 
 
 def _load_snapshots(
@@ -95,70 +137,156 @@ def replay_snapshots(
     cycles = 0
     started_at = time.time()
     sleep_sec = 0.0 if float(speed) <= 0 else (60.0 / float(speed))
+    status_client = _redis_client()
+    base_status = {
+        "status": "running",
+        "topic": resolved_topic,
+        "start_date": start_date,
+        "end_date": end_date,
+        "speed": float(speed),
+        "loop": bool(loop),
+        "max_events": events_limit,
+        "events_emitted": 0,
+        "cycles": 0,
+        "current_replay_timestamp": None,
+        "current_trade_date": start_date,
+        "started_at": _now_iso(),
+        "finished_at": None,
+        "data_ready": False,
+        "virtual_time_enabled": False,
+        "virtual_time_current": None,
+    }
+    _write_replay_status(status_client, base_status)
 
-    while True:
-        frame = _load_snapshots(store=store, start_date=start_date, end_date=end_date)
-        if len(frame) == 0:
-            return {
-                "status": "no_snapshots",
-                "topic": resolved_topic,
-                "start_date": start_date,
-                "end_date": end_date,
-                "events_emitted": emitted,
-                **snapshot_access.to_metadata(),
-            }
-
-        cycles += 1
-        for _, row in frame.iterrows():
-            if events_limit > 0 and emitted >= events_limit:
-                elapsed = round(time.time() - started_at, 2)
-                return {
-                    "status": "complete",
+    try:
+        while True:
+            frame = _load_snapshots(store=store, start_date=start_date, end_date=end_date)
+            if len(frame) == 0:
+                result = {
+                    "status": "no_snapshots",
                     "topic": resolved_topic,
+                    "start_date": start_date,
+                    "end_date": end_date,
                     "events_emitted": emitted,
-                    "cycles": cycles,
-                    "elapsed_sec": elapsed,
                     **snapshot_access.to_metadata(),
                 }
+                _write_replay_status(
+                    status_client,
+                    {
+                        **base_status,
+                        "status": "no_snapshots",
+                        "events_emitted": emitted,
+                        "cycles": cycles,
+                        "finished_at": _now_iso(),
+                    },
+                )
+                return result
 
-            snapshot = _snapshot_from_row(row)
-            if snapshot is None:
-                continue
-            validate_market_snapshot(snapshot, raise_on_error=True)
+            cycles += 1
+            for _, row in frame.iterrows():
+                if events_limit > 0 and emitted >= events_limit:
+                    elapsed = round(time.time() - started_at, 2)
+                    result = {
+                        "status": "complete",
+                        "topic": resolved_topic,
+                        "events_emitted": emitted,
+                        "cycles": cycles,
+                        "elapsed_sec": elapsed,
+                        **snapshot_access.to_metadata(),
+                    }
+                    _write_replay_status(
+                        status_client,
+                        {
+                            **base_status,
+                            "status": "complete",
+                            "events_emitted": emitted,
+                            "cycles": cycles,
+                            "finished_at": _now_iso(),
+                            "data_ready": emitted > 0,
+                        },
+                    )
+                    return result
 
-            event = build_snapshot_event(
-                snapshot=snapshot,
-                source="snapshot_historical_replay",
-                metadata={
-                    "replay": True,
-                    "session_timezone": "IST",
-                    "topic": resolved_topic,
-                },
-            )
-            publisher.publish(topic=resolved_topic, payload=event)
-            emitted += 1
+                snapshot = _snapshot_from_row(row)
+                if snapshot is None:
+                    continue
+                validate_market_snapshot(snapshot, raise_on_error=True)
 
-            if out_path is not None:
-                with out_path.open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+                event = build_snapshot_event(
+                    snapshot=snapshot,
+                    source="snapshot_historical_replay",
+                    metadata={
+                        "replay": True,
+                        "session_timezone": "IST",
+                        "topic": resolved_topic,
+                    },
+                )
+                publisher.publish(topic=resolved_topic, payload=event)
+                emitted += 1
+                replay_ts = _snapshot_timestamp(snapshot)
+                trade_date = _snapshot_trade_date(snapshot) or start_date
+                if emitted == 1 or emitted % 25 == 0:
+                    _write_replay_status(
+                        status_client,
+                        {
+                            **base_status,
+                            "status": "running",
+                            "events_emitted": emitted,
+                            "cycles": cycles,
+                            "current_replay_timestamp": replay_ts,
+                            "current_trade_date": trade_date,
+                            "virtual_time_current": replay_ts,
+                            "data_ready": True,
+                            "virtual_time_enabled": True,
+                        },
+                    )
 
-            if emitted % 500 == 0:
-                logger.info("historical replay emitted=%s topic=%s", emitted, resolved_topic)
-            if sleep_sec > 0.0:
-                time.sleep(sleep_sec)
+                if out_path is not None:
+                    with out_path.open("a", encoding="utf-8") as handle:
+                        handle.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
 
-        if not loop:
-            break
+                if emitted % 500 == 0:
+                    logger.info("historical replay emitted=%s topic=%s", emitted, resolved_topic)
+                if sleep_sec > 0.0:
+                    time.sleep(sleep_sec)
 
-    elapsed = round(time.time() - started_at, 2)
-    return {
-        "status": "complete",
-        "topic": resolved_topic,
-        "events_emitted": emitted,
-        "cycles": cycles,
-        "elapsed_sec": elapsed,
-        **snapshot_access.to_metadata(),
-    }
+            if not loop:
+                break
+
+        elapsed = round(time.time() - started_at, 2)
+        result = {
+            "status": "complete",
+            "topic": resolved_topic,
+            "events_emitted": emitted,
+            "cycles": cycles,
+            "elapsed_sec": elapsed,
+            **snapshot_access.to_metadata(),
+        }
+        _write_replay_status(
+            status_client,
+            {
+                **base_status,
+                "status": "complete",
+                "events_emitted": emitted,
+                "cycles": cycles,
+                "finished_at": _now_iso(),
+                "data_ready": emitted > 0,
+            },
+        )
+        return result
+    except Exception:
+        _write_replay_status(
+            status_client,
+            {
+                **base_status,
+                "status": "failed",
+                "events_emitted": emitted,
+                "cycles": cycles,
+                "finished_at": _now_iso(),
+                "data_ready": emitted > 0,
+            },
+        )
+        raise
 
 
 def run_cli(argv: Optional[Iterable[str]] = None) -> int:
