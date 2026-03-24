@@ -544,6 +544,11 @@ services:
       LIVE_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
       HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
       SNAPSHOT_V1_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+      ML_PIPELINE_2_REPO_ROOT: "/app"
+      ML_PURE_RUN_ID: "${ML_PURE_RUN_ID:-}"
+      ML_PURE_MODEL_GROUP: "${ML_PURE_MODEL_GROUP:-}"
+      ML_PURE_MODEL_PACKAGE: "${ML_PURE_MODEL_PACKAGE:-}"
+      ML_PURE_THRESHOLD_REPORT: "${ML_PURE_THRESHOLD_REPORT:-}"
       RISK_PROFILE: "${RISK_PROFILE:-}"
       RISK_LOT_SIZING_MODE: "${RISK_LOT_SIZING_MODE:-risk_based}"
       RISK_NOTIONAL_PER_TRADE: "${RISK_NOTIONAL_PER_TRADE:-0}"
@@ -578,15 +583,24 @@ services:
         "--run-dir",
         "/app/.run/strategy_app_historical",
         "--rollout-stage",
-        "${STRATEGY_ROLLOUT_STAGE:-paper}",
+        "${STRATEGY_ROLLOUT_STAGE_HISTORICAL:-paper}",
         "--position-size-multiplier",
-        "${STRATEGY_POSITION_SIZE_MULTIPLIER:-1.0}",
+        "${STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL:-1.0}",
         "--ml-runtime-guard-file",
-        "${STRATEGY_ML_RUNTIME_GUARD_FILE:-}",
+        "${STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL:-}",
+        "--ml-pure-run-id",
+        "${ML_PURE_RUN_ID:-}",
+        "--ml-pure-model-group",
+        "${ML_PURE_MODEL_GROUP:-}",
+        "--ml-pure-model-package",
+        "${ML_PURE_MODEL_PACKAGE:-}",
+        "--ml-pure-threshold-report",
+        "${ML_PURE_THRESHOLD_REPORT:-}",
       ]
     volumes:
       - ./.run:/app/.run
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
     healthcheck:
       test: ["CMD", "python", "-m", "strategy_app.health"]
       interval: 60s

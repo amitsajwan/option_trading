@@ -173,6 +173,53 @@ class OperatorPreflightTests(unittest.TestCase):
             self.assertEqual(result.status, "blocked")
             self.assertIn("historical replay date missing from parquet", result.blockers[0])
 
+    @mock.patch.dict("sys.modules", {"pandas": None}, clear=False)
+    def test_historical_preflight_uses_coverage_report_when_parquet_store_deps_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            env_file = repo_root / ".env.compose"
+            parquet_base = repo_root / ".data" / "ml_pipeline" / "parquet_data"
+            reports_root = parquet_base / "reports"
+            reports_root.mkdir(parents=True, exist_ok=True)
+            (reports_root / "coverage_audit.json").write_text(
+                json.dumps(
+                    {
+                        "built_days": {"min": "2024-01-01", "max": "2024-10-31"},
+                        "buildable_missing_count": 0,
+                        "source_missing_count": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            _write_env(
+                env_file,
+                {
+                    "LIVE_TOPIC": "market:snapshot:v1",
+                    "HISTORICAL_TOPIC": "market:snapshot:v1:historical",
+                    "MONGO_COLL_SNAPSHOTS": "snapshots_live",
+                    "MONGO_COLL_SNAPSHOTS_HISTORICAL": "snapshots_hist",
+                    "MONGO_COLL_STRATEGY_VOTES": "votes_live",
+                    "MONGO_COLL_STRATEGY_VOTES_HISTORICAL": "votes_hist",
+                    "MONGO_COLL_TRADE_SIGNALS": "signals_live",
+                    "MONGO_COLL_TRADE_SIGNALS_HISTORICAL": "signals_hist",
+                    "MONGO_COLL_STRATEGY_POSITIONS": "positions_live",
+                    "MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL": "positions_hist",
+                },
+            )
+
+            result = validate_operator_preflight(
+                mode="historical",
+                repo_root=repo_root,
+                env_file=env_file,
+                snapshot_parquet_bucket_url="gs://snapshot-data/parquet_data",
+                start_date="2024-10-31",
+                end_date="2024-10-31",
+                parquet_base=parquet_base,
+            )
+
+            self.assertEqual(result.status, "ready")
+            self.assertIn("historical replay dates covered by parquet reports", result.checks)
+
 
 if __name__ == "__main__":
     unittest.main()

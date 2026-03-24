@@ -117,7 +117,7 @@ It auto-fetches the current approved runtime release artifacts from the runtime-
 
 Interactive historical replay helper.
 
-It defaults to the runtime VM, uses the current approved image tag when available, runs local and remote historical preflight, then can optionally publish the current runtime config bundle, sync parquet, start historical services, and run one-shot replay.
+It defaults to the runtime VM, uses the current approved image tag when available, detects the repo checkout path and Compose implementation on the target VM, syncs the runtime bundle when needed, runs local and remote historical preflight, then can optionally sync parquet, start historical services, and run one-shot replay.
 
 ### `create_training_vm.sh`
 

@@ -88,7 +88,7 @@ class MongoWriterTests(unittest.TestCase):
                 [("snapshot_id", 1)],
                 {
                     "unique": True,
-                    "partialFilterExpression": {"snapshot_id": {"$type": "string", "$ne": ""}},
+                    "partialFilterExpression": {"snapshot_id": {"$exists": True, "$type": "string"}},
                 },
             ),
             indexes,
@@ -98,7 +98,7 @@ class MongoWriterTests(unittest.TestCase):
                 [("event_id", 1)],
                 {
                     "unique": True,
-                    "partialFilterExpression": {"event_id": {"$type": "string", "$ne": ""}},
+                    "partialFilterExpression": {"event_id": {"$exists": True, "$type": "string"}},
                 },
             ),
             indexes,
@@ -375,9 +375,9 @@ class MongoWriterTests(unittest.TestCase):
                 {
                     "unique": True,
                     "partialFilterExpression": {
-                        "snapshot_id": {"$type": "string", "$ne": ""},
-                        "strategy": {"$type": "string", "$ne": ""},
-                        "trade_date_ist": {"$type": "string", "$ne": ""},
+                        "snapshot_id": {"$exists": True, "$type": "string"},
+                        "strategy": {"$exists": True, "$type": "string"},
+                        "trade_date_ist": {"$exists": True, "$type": "string"},
                     },
                 },
             ),
@@ -388,7 +388,7 @@ class MongoWriterTests(unittest.TestCase):
                 [("event_id", 1)],
                 {
                     "unique": True,
-                    "partialFilterExpression": {"event_id": {"$type": "string", "$ne": ""}},
+                    "partialFilterExpression": {"event_id": {"$exists": True, "$type": "string"}},
                 },
             ),
             vote_indexes,
@@ -398,7 +398,7 @@ class MongoWriterTests(unittest.TestCase):
                 [("signal_id", 1)],
                 {
                     "unique": True,
-                    "partialFilterExpression": {"signal_id": {"$type": "string", "$ne": ""}},
+                    "partialFilterExpression": {"signal_id": {"$exists": True, "$type": "string"}},
                 },
             ),
             signal_indexes,
@@ -408,7 +408,7 @@ class MongoWriterTests(unittest.TestCase):
                 [("event_id", 1)],
                 {
                     "unique": True,
-                    "partialFilterExpression": {"event_id": {"$type": "string", "$ne": ""}},
+                    "partialFilterExpression": {"event_id": {"$exists": True, "$type": "string"}},
                 },
             ),
             signal_indexes,
@@ -419,9 +419,9 @@ class MongoWriterTests(unittest.TestCase):
                 {
                     "unique": True,
                     "partialFilterExpression": {
-                        "position_id": {"$type": "string", "$ne": ""},
-                        "event": {"$type": "string", "$ne": ""},
-                        "timestamp": {"$type": "string", "$ne": ""},
+                        "position_id": {"$exists": True, "$type": "string"},
+                        "event": {"$exists": True, "$type": "string"},
+                        "timestamp": {"$exists": True, "$type": "string"},
                     },
                 },
             ),
@@ -432,7 +432,7 @@ class MongoWriterTests(unittest.TestCase):
                 [("event_id", 1)],
                 {
                     "unique": True,
-                    "partialFilterExpression": {"event_id": {"$type": "string", "$ne": ""}},
+                    "partialFilterExpression": {"event_id": {"$exists": True, "$type": "string"}},
                 },
             ),
             position_indexes,

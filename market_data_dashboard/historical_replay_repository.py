@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from .live_strategy_repository import LiveStrategyRepository
+try:
+    from .live_strategy_repository import LiveStrategyRepository
+except ImportError:
+    from live_strategy_repository import LiveStrategyRepository  # type: ignore
 
 
 class HistoricalReplayRepository(LiveStrategyRepository):

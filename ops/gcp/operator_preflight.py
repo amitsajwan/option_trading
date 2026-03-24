@@ -11,6 +11,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+if __package__ in {None, ""}:
+    _THIS_FILE = Path(__file__).resolve()
+    _REPO_ROOT = _THIS_FILE.parents[2]
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+
 from ops.gcp.runtime_release_manifest import MANIFEST_KIND
 from ops.gcp.validate_runtime_bundle import ValidationError, validate_runtime_bundle
 
@@ -102,6 +108,42 @@ def _check_ghcr_images(prefix: str, tag: str, *, services: list[str]) -> tuple[b
         else:
             missing.append(svc)
     return not missing, ok, missing
+
+
+def _historical_dates_available_from_reports(
+    *, parquet_base: Path, start_date: str, end_date: str
+) -> tuple[bool, str]:
+    reports_root = parquet_base / "reports"
+    coverage_audit_path = reports_root / "coverage_audit.json"
+    if coverage_audit_path.is_file():
+        payload = _load_json(coverage_audit_path)
+        built_days = payload.get("built_days")
+        if isinstance(built_days, dict):
+            min_day = str(built_days.get("min") or "").strip()
+            max_day = str(built_days.get("max") or "").strip()
+            buildable_missing_count = int(payload.get("buildable_missing_count") or 0)
+            source_missing_count = int(payload.get("source_missing_count") or 0)
+            if (
+                min_day
+                and max_day
+                and start_date >= min_day
+                and end_date <= max_day
+                and buildable_missing_count == 0
+                and source_missing_count == 0
+            ):
+                return True, "historical replay dates covered by coverage_audit.json"
+            return False, "requested dates fall outside built_days coverage or coverage audit reports gaps"
+
+    window_manifest_path = reports_root / "window_manifest_latest.json"
+    if window_manifest_path.is_file():
+        payload = _load_json(window_manifest_path)
+        window_start = str(payload.get("window_start") or "").strip()
+        window_end = str(payload.get("window_end") or "").strip()
+        if window_start and window_end and start_date >= window_start and end_date <= window_end:
+            return True, "historical replay dates covered by window_manifest_latest.json"
+        return False, "requested dates fall outside window_manifest_latest.json coverage"
+
+    return False, "no coverage report available for historical date validation"
 
 
 def _validate_infra_mode(*, operator_env_file: Path) -> PreflightResult:
@@ -236,18 +278,40 @@ def _validate_historical_mode(
         result.checks.append("snapshot parquet bucket configured")
 
     if parquet_base is not None:
-        from snapshot_app.historical.parquet_store import ParquetStore
+        try:
+            from snapshot_app.historical.parquet_store import ParquetStore
 
-        store = ParquetStore(parquet_base, snapshots_dataset="snapshots")
-        available_days = set(store.available_snapshot_days(min_day=start_date, max_day=end_date))
-        requested_days = {start_date, end_date}
-        if requested_days - available_days:
-            result.status = "blocked"
-            result.blockers.append(
-                f"historical replay date missing from parquet: {', '.join(sorted(requested_days - available_days))}"
+            store = ParquetStore(parquet_base, snapshots_dataset="snapshots")
+            available_days = set(store.available_snapshot_days(min_day=start_date, max_day=end_date))
+            requested_days = {start_date, end_date}
+            if requested_days - available_days:
+                ok, detail = _historical_dates_available_from_reports(
+                    parquet_base=parquet_base,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                if ok:
+                    result.checks.append("historical replay dates covered by parquet reports")
+                    result.details["parquet_date_check"] = detail
+                else:
+                    result.status = "blocked"
+                    result.blockers.append(
+                        f"historical replay date missing from parquet: {', '.join(sorted(requested_days - available_days))}"
+                    )
+            else:
+                result.checks.append("historical replay dates available in parquet")
+        except (ImportError, ModuleNotFoundError, RuntimeError):
+            ok, detail = _historical_dates_available_from_reports(
+                parquet_base=parquet_base,
+                start_date=start_date,
+                end_date=end_date,
             )
-        else:
-            result.checks.append("historical replay dates available in parquet")
+            if ok:
+                result.checks.append("historical replay dates covered by parquet reports")
+                result.details["parquet_date_check"] = detail
+            else:
+                result.status = "blocked"
+                result.blockers.append(f"historical replay date missing from parquet: {detail}")
     else:
         result.details["parquet_date_check"] = "skipped"
     return result

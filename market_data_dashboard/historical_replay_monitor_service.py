@@ -7,8 +7,12 @@ import redis
 
 from contracts_app import historical_snapshot_topic, redis_connection_kwargs
 
-from .historical_replay_repository import HistoricalReplayRepository
-from .live_strategy_monitor_service import LiveStrategyMonitorService, _parse_date_yyyy_mm_dd
+try:
+    from .historical_replay_repository import HistoricalReplayRepository
+    from .live_strategy_monitor_service import LiveStrategyMonitorService, _parse_date_yyyy_mm_dd
+except ImportError:
+    from historical_replay_repository import HistoricalReplayRepository  # type: ignore
+    from live_strategy_monitor_service import LiveStrategyMonitorService, _parse_date_yyyy_mm_dd  # type: ignore
 
 
 class HistoricalReplayMonitorService(LiveStrategyMonitorService):

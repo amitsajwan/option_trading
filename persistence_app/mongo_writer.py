@@ -145,7 +145,7 @@ def _upsert_doc(collection: Any, *, identity: Optional[dict[str, Any]], doc: dic
 
 def _partial_non_empty_strings(*fields: str) -> dict[str, Any]:
     return {
-        str(field): {"$type": "string", "$ne": ""}
+        str(field): {"$exists": True, "$type": "string"}
         for field in fields
         if str(field).strip()
     }

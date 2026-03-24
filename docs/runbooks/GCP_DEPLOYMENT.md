@@ -47,6 +47,7 @@ Before starting:
 - ensure `gcloud`, `terraform`, `docker`, and `bash` are available
 - ensure `ops/gcp/operator.env` exists
 - ensure `.env.compose` contains the intended live runtime values before you deploy
+- for historical replay, ensure the target VM already has a repo checkout; the interactive helper auto-detects `/opt/option_trading` and `~/option_trading`
 
 If `ops/gcp/operator.env` does not exist yet:
 
@@ -345,31 +346,44 @@ Do not upload historical parquet into the runtime-config bucket.
 Use this exact sequence:
 
 1. build and publish historical parquet to GCS
-2. sync the required parquet subset onto the target VM under `/opt/option_trading/.data/ml_pipeline/parquet_data`
-3. start the historical consumers
-4. run the one-shot replay job for the target date or date range
-5. inspect historical outputs in Redis, Mongo, and the dashboard
+2. if replaying `STRATEGY_ENGINE=ml_pure`, sync the published model artifacts for `ML_PURE_MODEL_GROUP` onto the target VM under `ml_pipeline_2/artifacts/published_models/<model_group>`
+3. sync the required parquet subset onto the target VM under `/opt/option_trading/.data/ml_pipeline/parquet_data`
+4. start the historical consumers
+5. run the one-shot replay job for the target date or date range
+6. inspect historical outputs in Redis, Mongo, and the dashboard
 
 The interactive historical branch performs this sequence by prompting for:
 
 - replay VM name
+- remote repo checkout path on that VM
 - GHCR image prefix and tag
 - snapshot parquet bucket URL
 - replay start date and end date
 - replay speed
 - local historical preflight before any remote work
-- remote historical preflight after parquet sync
+- remote host preflight after parquet sync
+- model artifact sync when `.env.compose` is using `STRATEGY_ENGINE=ml_pure`
 - whether to publish the current runtime config bundle first
 - whether to sync parquet now
 - whether to run the replay job now
 
+Compatibility notes:
+
+- the helper auto-detects `sudo docker compose` first and falls back to `sudo docker-compose` on older VMs
+- the helper auto-detects a checkout under `/opt/option_trading`, `~/option_trading`, or `~/option_trading_repo`
+- the helper syncs the runtime bundle into that checkout when `.env.compose` is missing
+- the helper runs remote preflight on the host Python environment, not inside the `historical_replay` container
+- the helper invokes replay with `--entrypoint python` so both Compose v2 and `docker-compose` v1 handle the extra replay flags correctly
+- when `.env.compose` is using `STRATEGY_ENGINE=ml_pure`, the helper seeds `STRATEGY_ROLLOUT_STAGE_HISTORICAL=capped_live`, `STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL=0.25`, and `STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL` from the live guard file unless you already overrode them
+
 If you only remember one thing for replay, remember this:
 
 1. parquet already published
-2. parquet synced onto the replay VM
-3. only historical profiles started
-4. one-shot replay run
-5. historical outputs verified
+2. model artifacts synced too when replaying `ml_pure`
+3. parquet synced onto the replay VM
+4. only historical profiles started
+5. one-shot replay run
+6. historical outputs verified
 
 ### Historical Preflight
 
@@ -397,8 +411,21 @@ Sync parquet onto the target VM:
 
 ```bash
 gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "
-  sudo mkdir -p /opt/option_trading/.data/ml_pipeline/parquet_data &&
-  sudo gcloud storage rsync '${SNAPSHOT_PARQUET_BUCKET_URL%/}' '/opt/option_trading/.data/ml_pipeline/parquet_data' --recursive
+  GCLOUD_BIN=\$(command -v gcloud || true) &&
+  if [ -z \"\${GCLOUD_BIN}\" ] && [ -x /snap/bin/gcloud ]; then GCLOUD_BIN=/snap/bin/gcloud; fi &&
+  mkdir -p /opt/option_trading/.data/ml_pipeline/parquet_data &&
+  \"\${GCLOUD_BIN}\" storage rsync '${SNAPSHOT_PARQUET_BUCKET_URL%/}' '/opt/option_trading/.data/ml_pipeline/parquet_data' --recursive
+"
+```
+
+If the repo checkout lives under `~/option_trading` instead of `/opt/option_trading`, replace that path consistently in the raw commands below. The interactive helper detects this automatically.
+
+If the replay lane uses `STRATEGY_ENGINE=ml_pure`, sync the published model artifacts too:
+
+```bash
+gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "
+  sudo mkdir -p /opt/option_trading/ml_pipeline_2/artifacts/published_models/banknifty_futures &&
+  sudo gcloud storage rsync 'gs://<model-bucket>/published_models/banknifty_futures/<model_group>' '/opt/option_trading/ml_pipeline_2/artifacts/published_models/banknifty_futures/<model_group>' --recursive
 "
 ```
 
@@ -411,12 +438,14 @@ gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" 
 "
 ```
 
+On older VMs that only have `docker-compose` v1, replace `sudo docker compose` with `sudo docker-compose`.
+
 Run one-shot replay:
 
 ```bash
 gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" --command "
   cd /opt/option_trading &&
-  sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml --profile historical_replay run --rm historical_replay --start-date 2026-03-06 --end-date 2026-03-06 --speed 0
+  sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml --profile historical_replay run --rm --entrypoint python historical_replay -m snapshot_app.historical.replay_runner --base /app/.data/ml_pipeline/parquet_data --topic market:snapshot:v1:historical --start-date 2026-03-06 --end-date 2026-03-06 --speed 0
 "
 ```
 

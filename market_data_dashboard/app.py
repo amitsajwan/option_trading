@@ -48,7 +48,7 @@ try:
     from .historical_replay_monitor_service import HistoricalReplayMonitorService
 except ImportError:
     try:
-        from historical_replay_monitor_service import HistoricalReplayMonitorService  # type: ignore
+        from market_data_dashboard.historical_replay_monitor_service import HistoricalReplayMonitorService  # type: ignore
     except ImportError:
         HistoricalReplayMonitorService = None
 
@@ -77,7 +77,7 @@ except ImportError:
 try:
     from .historical_replay_routes import DashboardHistoricalReplayRouter
 except ImportError:
-    from historical_replay_routes import DashboardHistoricalReplayRouter  # type: ignore
+    from market_data_dashboard.historical_replay_routes import DashboardHistoricalReplayRouter  # type: ignore
 
 try:
     from .strategy_evaluation_routes import DashboardStrategyEvaluationRouter
@@ -1463,7 +1463,7 @@ _live_strategy_monitor_service = (
 )
 _historical_replay_monitor_service = (
     HistoricalReplayMonitorService(_strategy_eval_service)
-    if (HistoricalReplayMonitorService is not None and _strategy_eval_service is not None)
+    if HistoricalReplayMonitorService is not None
     else None
 )
 
