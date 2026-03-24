@@ -1,30 +1,37 @@
 # Training Release Runbook
 
-Use this runbook to train, publish, and generate the staged `ml_pure` runtime handoff.
+Use this runbook to train staged ML candidates, run research lanes without collisions, publish a winner, and generate the `ml_pure` runtime handoff.
 
 This workflow is self-contained. It includes the GCP setup it needs.
 
 Host note:
 
-- runtime and training execution are container/VM-first
-- local Python on Windows is only needed for VS Code features, host-side tests, or running helper scripts directly from the repo
+- runtime and training execution are container and VM first
+- local Python on Windows is only needed for editor features, host-side tests, or helper scripts
 
 ## Fast Path (Interactive)
 
-Use the interactive launcher when you want mode-based training with predictable output paths:
+Use the supported launcher:
 
 ```bash
 bash ./ops/gcp/start_training_interactive.sh
 ```
 
+You can also enter through the shared lifecycle menu:
+
+```bash
+bash ./ops/gcp/runtime_lifecycle_interactive.sh
+# choose action 5
+```
+
 Session safety:
 
-- when launched from a plain SSH shell, it auto-starts inside a new `tmux` session and exits
+- when launched from a plain SSH shell, the launcher auto-starts inside a new `tmux` session and exits
 - reconnect with the printed command, for example `tmux attach -t training_20260324_123000`
 
 Supported modes:
 
-- full publish (non-smoke)
+- full publish
 - quick test
 - stage1 HPO
 - deep search
@@ -37,25 +44,32 @@ Path pattern for every launched run:
 
 - `ml_pipeline_2/artifacts/training_launches/<utc_stamp>_<nonce>_<mode>_<lane_tag>_<model_group>_<profile_id>/`
   - `training.log`
-  - `training-release.json` (non-grid modes)
+  - `training-release.json` for non-grid modes
 
 Parallel safety:
 
-- launcher asks for `lane_tag` and uses it in run folder naming
+- the launcher asks for `lane_tag` and uses it in run folder naming
 - non-publish modes automatically publish to `base_model_group_<lane_tag>` so concurrent research runs do not collide
-- publish mode defaults to the base model group (production lane), but you can opt into `base_model_group_<lane_tag>`
+- publish mode defaults to the base model group, but you can opt into `base_model_group_<lane_tag>`
+
+Decision rule:
+
+- `publish_full` is the production promotion path
+- all other modes are research lanes
+- when the baseline run holds, choose the next research mode based on the blocked stage instead of rerunning the same config blindly
 
 ## What This Produces
 
 - one disposable training VM
 - a completed staged research run
-- published staged model artifacts in the model bucket
-- updated runtime config bundle in the runtime-config bucket
-- `release/ml_pure_runtime.env`
+- for `PUBLISH`, published model artifacts in the model bucket
+- for `PUBLISH`, updated runtime config bundle in the runtime-config bucket
+- for `PUBLISH`, `release/ml_pure_runtime.env`
+- for `HOLD`, `summary.json`, `release/assessment.json`, and `release/release_summary.json`
 
 ## Step 1: Prepare Shared GCP Resources
 
-If the shared training/runtime resources do not exist yet, create them first:
+If the shared training and runtime resources do not exist yet, create them first:
 
 ```bash
 cp ops/gcp/operator.env.example ops/gcp/operator.env
@@ -71,19 +85,21 @@ You need at least these values in `ops/gcp/operator.env`:
 - `REPO_REF`
 - `MODEL_BUCKET_NAME`
 - `RUNTIME_CONFIG_BUCKET_NAME`
-- `MODEL_BUCKET_URL`
-- `RUNTIME_CONFIG_BUCKET_URL`
-- `DATA_SYNC_SOURCE`
 - `TRAINING_VM_NAME`
 - `MODEL_GROUP`
 - `PROFILE_ID`
 - `STAGED_CONFIG`
-- `RAW_ARCHIVE_BUCKET_URL`
-- `SNAPSHOT_PARQUET_BUCKET_URL`
 
-`DATA_SYNC_SOURCE` should point at the parent prefix that syncs into `.data/ml_pipeline` on the VM and already contains `parquet_data/` underneath it. After startup, the expected local path is `${REPO_ROOT}/.data/ml_pipeline/parquet_data` when `REPO_ROOT` is set in `ops/gcp/operator.env`, otherwise `/opt/option_trading/.data/ml_pipeline/parquet_data`.
+Current bootstrap derives:
 
-The one-command snapshot flow must already have published the following before training starts:
+- `MODEL_BUCKET_URL=gs://<MODEL_BUCKET_NAME>/published_models`
+- `RUNTIME_CONFIG_BUCKET_URL=gs://<RUNTIME_CONFIG_BUCKET_NAME>/runtime`
+
+`DATA_SYNC_SOURCE` is optional, but when it is used it should point at the parent prefix that syncs into `.data/ml_pipeline` on the VM and already contains `parquet_data/` underneath it.
+
+After startup, the expected local path is `${REPO_ROOT}/.data/ml_pipeline/parquet_data` when `REPO_ROOT` is set in `ops/gcp/operator.env`, otherwise `/opt/option_trading/.data/ml_pipeline/parquet_data`.
+
+The snapshot flow must already have published these datasets before training starts:
 
 - `snapshots_ml_flat`
 - `stage1_entry_view`
@@ -149,8 +165,6 @@ git rev-parse --short HEAD
 find .data/ml_pipeline/parquet_data -maxdepth 2 -type d | sort
 ```
 
-Verify:
-
 Look for:
 
 - repo checkout exists under `/opt/option_trading`
@@ -184,10 +198,7 @@ print(df.notna().mean().to_string())
 PY
 ```
 
-If those datasets are missing, stop here and complete the snapshot workflow first.
-
-For long-running staged training, always use `tmux`.
-If the SSH session drops while the training job is running in a plain foreground shell, the training process usually stops with the shell.
+For long-running training, always use `tmux`.
 
 Basic `tmux` commands:
 
@@ -197,32 +208,32 @@ tmux attach -t training
 tmux ls
 ```
 
-Detach from `tmux` without stopping the run:
+## Step 4: Run Training
 
-- press `Ctrl+b`
-- then press `d`
+Supported operator path:
 
-## Step 4: Run The Staged Release Pipeline
+```bash
+bash ./ops/gcp/start_training_interactive.sh
+```
 
-On the training VM:
+This launcher:
+
+- prompts for mode, base model group, profile, config, and lane tag
+- writes logs and release payloads under `ml_pipeline_2/artifacts/training_launches/...`
+- routes research lanes into collision-safe model groups
+- uses the same underlying staged release wrapper as the manual commands below
+
+Manual path:
 
 ```bash
 cd /opt/option_trading
 tmux new -s training
-```
-
-Inside the `tmux` session:
-
-```bash
 bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release.log
 ```
 
 Research-only variants:
 
-Use these when the default manifest holds too early and you want more evidence before changing the production manifest.
-Both commands disable runtime handoff and runtime-config publish, and they write into separate model groups.
-
-Stage 1 HPO search:
+- Stage 1 HPO:
 
 ```bash
 APPLY_RUNTIME_HANDOFF=0 \
@@ -232,7 +243,7 @@ STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_hpo.json
 bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-hpo.log
 ```
 
-Deeper Stage 1 search:
+- Deep search:
 
 ```bash
 APPLY_RUNTIME_HANDOFF=0 \
@@ -242,9 +253,7 @@ STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.deep_search.jso
 bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-deep.log
 ```
 
-Stage 2 HPO search:
-
-Use this after a deep-search run clears Stage 1 and then holds on `stage2_cv`.
+- Stage 2 HPO:
 
 ```bash
 APPLY_RUNTIME_HANDOFF=0 \
@@ -254,10 +263,7 @@ STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage2_hpo.json
 bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-stage2-hpo.log
 ```
 
-Stage 2 edge-filter search:
-
-Use this after both `deep_search` and `stage2_hpo` hold at `stage2_cv` with nearly identical metrics.
-It tightens the Stage 2 label set before the signal check and Stage 2 CV gate.
+- Stage 2 edge filter:
 
 ```bash
 APPLY_RUNTIME_HANDOFF=0 \
@@ -267,7 +273,7 @@ STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage2_edge_fil
 bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-stage2-edge.log
 ```
 
-Stage 1 diagnostic gates:
+- Stage 1 diagnostic:
 
 ```bash
 APPLY_RUNTIME_HANDOFF=0 \
@@ -277,11 +283,7 @@ STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnost
 bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-diag.log
 ```
 
-Training Grid V1:
-
-Use this when you want one deterministic research sweep across the baseline, three Stage 2 edge thresholds, the best-threshold expiry-block lane, and the best-threshold time-focus lane.
-The grid runner is research-only by default. It writes generated per-run manifests plus a single `grid_summary.json`, and it does not publish runtime config or hand off a live runtime bundle unless you explicitly rerun the selected winner through the normal release flow later.
-The checked-in `prod_v1` grid sets `grid.max_parallel_runs=2`. With the current deep-search base manifest using `training.runtime.model_n_jobs=8`, that maps cleanly onto a 16-core VM: two independent lanes at a time, eight model threads each.
+- Grid prod v1:
 
 ```bash
 python -m ml_pipeline_2.run_staged_grid \
@@ -290,91 +292,23 @@ python -m ml_pipeline_2.run_staged_grid \
   --profile-id openfe_v9_dual
 ```
 
-Look for:
-
-- a new `ml_pipeline_2/artifacts/research/staged_grid_prod_v1_<timestamp>/grid_summary.json`
-- generated per-run manifests under `.../manifests`
-- one run directory per lane under `.../runs`
-- `execution.max_parallel_runs=2` in `grid_summary.json`
-- `stage2_hpo_escalation.eligible=true|false` in `grid_summary.json`
-- `winner.grid_run_id` and `winner.publishable` in `grid_summary.json`
-
-To reuse the same grid for another instrument:
-
-1. create or copy an instrument-specific staged base manifest
-2. point `inputs.base_manifest_path` in the grid config to that base manifest
-3. keep the grid runner command the same, but change `--model-group` to the new instrument namespace
-
-The grid runner is intentionally loosely coupled to instrument choice. Instrument-specific parquet roots, windows, label settings, and per-stage search defaults stay in the base staged manifest. The grid config only layers run-to-run overrides such as Stage 2 edge filters, Stage 2 feature-set variants, and expiry blocking.
-
-Verify:
-
-- command exits successfully
-- output includes `Staged release pipeline complete`
-- output prints `release status`
-- when `release status` is `published`, output also prints the `runtime handoff` path
-- follow live progress from another SSH session with `tail -f /opt/option_trading/training-release.log`
-- if you disconnect, reconnect and run `tmux attach -t training`
-
-The staged release wrapper is HOLD-safe. If the research run fails a gate, it still writes `summary.json`, `release/assessment.json`, and `release/release_summary.json` with `release_status: held`. In that case, do not expect `release/ml_pure_runtime.env` or runtime-config publish output. Inspect the blocking reasons and rerun only after fixing the upstream issue.
+The staged release wrapper is HOLD-safe. If the run fails a gate, it still writes `summary.json`, `release/assessment.json`, and `release/release_summary.json` with `release_status: held`. In that case, do not expect `release/ml_pure_runtime.env` or runtime-config publish output.
 
 Recommended research order after the default manifest holds:
 
-1. Run the deep-search manifest first. It tells you whether Stage 1 or Stage 2 is actually the bottleneck.
-2. If `completion_mode=stage1_cv_gate_failed`, run the Stage 1 HPO manifest.
-3. If `completion_mode=stage2_cv_gate_failed`, try the Stage 2 HPO manifest once.
-4. If Stage 2 still holds with nearly unchanged metrics, run the Stage 2 edge-filter manifest next.
-5. If Stage 1 still only narrowly fails after the search runs, use the diagnostic manifest to measure gate sensitivity.
-6. Only after those runs decide whether to change the default manifest or the underlying feature/label design.
+1. Run `deep_search` first. It tells you whether Stage 1 or Stage 2 is actually the bottleneck.
+2. If the baseline run holds on Stage 1, use `stage1_hpo` or `stage1_diag` based on how close the metrics are.
+3. If `deep_search` clears Stage 1 and then holds on Stage 2, run `stage2_hpo`.
+4. If `stage2_hpo` still holds with nearly unchanged Stage 2 metrics, run `stage2_edge`.
+5. Publish only after one of those lanes becomes clearly publishable.
 
-Also verify the latest local release payload:
+Practical interpretation:
 
-```bash
-ls -lh /opt/option_trading/training-release.json
-```
+- baseline `publish_full` holds on Stage 1: go to `deep_search`
+- `deep_search` holds on Stage 2: go to `stage2_hpo`
+- `stage2_hpo` still holds on Stage 2 with similar metrics: go to `stage2_edge`
 
-For `PUBLISH`, also verify the latest local release handoff:
-
-```bash
-find /opt/option_trading/ml_pipeline_2/artifacts/research -path "*/release/ml_pure_runtime.env" | sort | tail -n 1
-```
-
-Look for:
-
-- a concrete `release/ml_pure_runtime.env` path
-
-If you were disconnected and are not sure whether the job finished:
-
-```bash
-cd /opt/option_trading
-pgrep -af "run_staged_release_pipeline.sh|ml_pipeline_2.run_staged_release"
-tail -n 50 training-release.log
-find /opt/option_trading/ml_pipeline_2/artifacts/research -path "*/release/ml_pure_runtime.env" | sort | tail -n 1
-```
-
-Interpretation:
-
-- active process found: training is still running; reattach with `tmux attach -t training`
-- no active process and `Staged release pipeline complete` is present: proceed to publish verification
-- no active process and the wrapper exited without the completion marker: do not assume interruption only; inspect the latest staged artifacts first
-- no active process and `training-release.json` exists with `release_status: held`: the wrapper completed correctly and rejected publish
-
-When the wrapper exits without the completion marker, inspect the newest staged run directory before rerunning anything:
-
-```bash
-cd /opt/option_trading
-LATEST_RUN="$(ls -1dt ml_pipeline_2/artifacts/research/* 2>/dev/null | head -n 1)"
-echo "${LATEST_RUN}"
-find "${LATEST_RUN}" -maxdepth 2 \( -name summary.json -o -name assessment.json -o -name release_summary.json \) | sort
-```
-
-Interpret those artifacts before deciding what to do:
-
-- `summary.json` exists and `publish_assessment.decision` is `HOLD`: the staged run completed enough to reject publish; investigate blocking reasons instead of rerunning blindly
-- `release/assessment.json` exists but `release/ml_pure_runtime.env` does not: the release step reached publish assessment and rejected the candidate as non-publishable
-- no staged summary artifacts exist for the latest run: the wrapper likely stopped before the research run completed; rerun the wrapper from the top
-
-## Step 5: Verify Publish Results
+## Step 5: Verify Results
 
 Verify:
 
@@ -397,27 +331,28 @@ gcloud storage ls "${RUNTIME_CONFIG_BUCKET_URL}"
 
 Look for:
 
-- the published model group under the model bucket
-- runtime config bundle files under the runtime-config bucket
+- for `PUBLISH`, the published model group under the model bucket
+- for `PUBLISH`, runtime config bundle files under the runtime-config bucket
+- for `HOLD`, no new production publish output is expected
 
 What to inspect in the run summary:
 
-- `publish_assessment.decision` should be `PUBLISH`
-- `publish_assessment.publishable` should be `true`
-- `blocking_reasons` should be empty
+- `publish_assessment.decision`
+- `publish_assessment.publishable`
+- `blocking_reasons`
 
 Useful artifact meanings:
 
-- `summary.json`: staged research summary, including `publish_assessment`, stage artifacts, CV prechecks, and any early-hold outcome
+- `summary.json`: staged research summary, including `publish_assessment`, stage artifacts, CV prechecks, and early-hold outcomes
 - `release/assessment.json`: publishability decision for the completed staged run
-- `release/release_summary.json`: final publish and handoff result for the completed staged release; this exists for both `PUBLISH` and `HOLD` outcomes
+- `release/release_summary.json`: final publish and handoff result for the completed staged release; this exists for both `PUBLISH` and `HOLD`
 - `release/ml_pure_runtime.env`: runtime handoff for deployment; this exists only after a successful publish
 
-If the staged release returns `HOLD`, stop and investigate the holdout gates before live deployment.
+If the staged release returns `HOLD`, stop and investigate the gates before live deployment. A HOLD result is a valid completed run, not a launcher failure.
 
 ## Step 6: Delete Temporary Training Infra
 
-Delete the disposable training VM after publish is complete:
+Delete the disposable training VM after training is complete:
 
 ```bash
 ./ops/gcp/delete_training_vm.sh
@@ -440,5 +375,4 @@ Keep these shared resources if live runtime still needs them:
 
 - model bucket
 - runtime-config bucket
-- Artifact Registry
 - runtime VM

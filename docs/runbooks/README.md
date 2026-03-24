@@ -1,26 +1,43 @@
 # Runbooks Index
 
-Start here if you are acting as release manager or operator.
+Start here if you are operating the current GCP workflow.
 
-There are three main workflow docs:
+## Current Operator Entry Point
+
+For day-to-day runtime and training operations, start with:
+
+```bash
+bash ./ops/gcp/runtime_lifecycle_interactive.sh
+```
+
+That menu is the supported operator entrypoint for:
+
+1. infra bootstrap
+2. runtime deploy and restart
+3. runtime stop
+4. preserve-data teardown
+5. interactive training launch
+
+Use the runbooks below when you need the detailed step-by-step flow, validation steps, or recovery guidance behind that menu.
+
+## Primary Runbooks
 
 1. [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
-   Use this for historical snapshot and parquet creation.
+   Historical snapshot and parquet creation.
 2. [TRAINING_RELEASE_RUNBOOK.md](TRAINING_RELEASE_RUNBOOK.md)
-   Use this for staged ML training, publish, and runtime handoff generation.
+   Staged ML training, research sequencing, publish, and runtime handoff generation.
 3. [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md)
-   Use this for live runtime image build, config publish, container startup, validation, and rollback.
-   Includes interactive helper `./ops/gcp/start_runtime_interactive.sh` for guided runtime startup inputs.
+   Live runtime deployment, runtime config publish, VM restart, validation, and rollback.
 
-Each workflow doc is self-contained:
-
-- GCP setup needed for that workflow is included inside the same file
-- every step has a `Verify:` section
-- every verification block says what to look for before moving on
-
-Supporting runbook:
+## Supporting Runbook
 
 4. [CLEANUP_ROLLBACK_RUNBOOK.md](CLEANUP_ROLLBACK_RUNBOOK.md)
-   Use this to stop spend, remove temporary compute, or roll back runtime config.
+   Stop spend, remove temporary compute, or roll back runtime config.
 
-Read [../SYSTEM_SOURCE_OF_TRUTH.md](../SYSTEM_SOURCE_OF_TRUTH.md) first if you need the non-negotiable current runtime and training rules.
+## Scope Notes
+
+- Runtime deployment currently uses GHCR-published images for the live stack.
+- Training and runtime both depend on `ops/gcp/operator.env`.
+- Artifact Registry still exists in Terraform and bootstrap flows for infra compatibility, but it is not the primary runtime image source.
+
+Read [../SYSTEM_SOURCE_OF_TRUTH.md](../SYSTEM_SOURCE_OF_TRUTH.md) first if you need the current non-negotiable runtime and training rules.

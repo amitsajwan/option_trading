@@ -1,28 +1,36 @@
 # Live Runtime Runbook
 
-Use this runbook to build images, publish runtime config, start the live containers on GCP, validate them, and roll back if needed.
+Use this runbook to deploy the live runtime on GCP, publish runtime config, restart the runtime VM, validate the live stack, and roll back if needed.
 
 This workflow is self-contained. It includes the GCP setup it needs.
 
 ## Fast Path (Interactive)
 
-If you want a guided prompt that asks for all required runtime values and runs publish + optional VM restart:
+Use the supported operator flow:
 
 ```bash
-./ops/gcp/runtime_lifecycle_interactive.sh
-# or directly:
-./ops/gcp/bootstrap_runtime_interactive.sh
-./ops/gcp/start_runtime_interactive.sh
+bash ./ops/gcp/runtime_lifecycle_interactive.sh
 ```
 
-It prompts for:
+Recommended order:
 
-- project/region/zone/runtime VM name
+1. choose `1` once per environment to write `ops/gcp/operator.env` and optionally bootstrap infra
+2. choose `2` for each runtime deploy or restart
+3. choose `3` at end of day to stop compute
+
+Direct entrypoints:
+
+```bash
+bash ./ops/gcp/bootstrap_runtime_interactive.sh
+bash ./ops/gcp/start_runtime_interactive.sh
+```
+
+The runtime deploy helper prompts for:
+
+- project, region, zone, and runtime VM name
 - runtime-config bucket URL
-- `GHCR_IMAGE_PREFIX`
-- `APP_IMAGE_TAG`
-- `ML_PURE_RUN_ID`
-- `ML_PURE_MODEL_GROUP`
+- `GHCR_IMAGE_PREFIX` and image tag
+- `ML_PURE_RUN_ID` and `ML_PURE_MODEL_GROUP`
 
 `start_runtime_interactive.sh` also supports:
 
@@ -30,23 +38,19 @@ It prompts for:
 - prompts for `KITE_API_KEY` and hidden `KITE_API_SECRET` during auth when not already exported
 - automatic sync of `KITE_API_KEY` and `KITE_ACCESS_TOKEN` from `ingestion_app/credentials.json` into `.env.compose`
 - automatic `INGESTION_COLLECTORS_ENABLED=1`
-- prompt-driven install of Kite auth dependencies on operator host (`python-dotenv`, `kiteconnect`) when missing
-
-Recommended order:
-
-1. `bootstrap_runtime_interactive.sh` once per environment (writes `ops/gcp/operator.env`, optional infra bootstrap)
-2. `start_runtime_interactive.sh` for each deploy (sets runtime `.env.compose`, publishes runtime config, optional VM restart)
-3. `stop_runtime.sh` at end of day to pause compute cost
+- prompt-driven install of Kite auth dependencies on the operator host when missing
+- GHCR image existence preflight when Docker is available on the operator host
+- prompt-driven `start`, `restart`, or `skip` VM action after runtime config publish
 
 Bootstrap note:
 
-- if `.env.compose` was auto-created from `.env.compose.example`, bootstrap skips runtime-config publish automatically and prints the follow-up command.
+- if `.env.compose` was auto-created from `.env.compose.example`, bootstrap skips runtime-config publish automatically and prints the follow-up command
 
 ## What This Produces
 
-- runtime images in GHCR (published by GitHub Actions)
+- runtime images in GHCR
 - runtime config bundle in the runtime-config bucket
-- live runtime VM running the Compose stack
+- a live runtime VM running the Compose stack
 
 ## Step 1: Prepare Shared GCP Resources
 
@@ -68,10 +72,12 @@ You need at least these values in `ops/gcp/operator.env`:
 - `MODEL_BUCKET_NAME`
 - `RUNTIME_CONFIG_BUCKET_NAME`
 
-`MODEL_BUCKET_URL` and `RUNTIME_CONFIG_BUCKET_URL` are optional; bootstrap derives them as:
+`MODEL_BUCKET_URL` and `RUNTIME_CONFIG_BUCKET_URL` are optional. Current bootstrap derives them as:
 
 - `MODEL_BUCKET_URL=gs://<MODEL_BUCKET_NAME>/published_models`
 - `RUNTIME_CONFIG_BUCKET_URL=gs://<RUNTIME_CONFIG_BUCKET_NAME>/runtime`
+
+`REPOSITORY` still exists in `operator.env` and Terraform variables for infra compatibility, but the live runtime path now uses GHCR images rather than Artifact Registry images.
 
 Verify:
 
@@ -91,10 +97,7 @@ Look for:
 
 ## Step 2: Select GHCR Image Tag
 
-Images are published by `.github/workflows/build-images.yml` to:
-
-- `ghcr.io/<owner>/<service>:latest` on `main`
-- `ghcr.io/<owner>/<service>:<short_sha>` on each push
+Live runtime images are expected in GHCR.
 
 Set these values in `ops/gcp/operator.env` and `.env.compose`:
 
@@ -103,14 +106,7 @@ GHCR_IMAGE_PREFIX=ghcr.io/amitsajwan
 APP_IMAGE_TAG=latest
 ```
 
-If packages are private, also set in `.env.compose`:
-
-```env
-GHCR_USERNAME=<github-user>
-GHCR_TOKEN=<github-read-packages-token>
-```
-
-Minimum image set for full runtime stack:
+Minimum image set for the full runtime stack:
 
 - `ingestion_app`
 - `snapshot_app`
@@ -136,9 +132,11 @@ Look for:
 - `ok:` for every required service
 - no `missing:` lines before runtime restart
 
+If you are using `start_runtime_interactive.sh`, this check is already built in when Docker is available.
+
 ## Step 3: Prepare Runtime Config
 
-If training just produced a new release handoff:
+If training just produced a publishable release handoff:
 
 ```bash
 export RELEASE_ENV_PATH=ml_pipeline_2/artifacts/research/<run_id>/release/ml_pure_runtime.env
@@ -151,9 +149,9 @@ export RELEASE_ENV_PATH=ml_pipeline_2/artifacts/research/<run_id>/release/ml_pur
 - `ML_PURE_RUN_ID`
 - `ML_PURE_MODEL_GROUP`
 
-It does not make the repo live-ready by itself. Before you publish runtime config, make sure `.env.compose` also contains the live rollout and monitoring prerequisites that the runtime and dashboard expect.
+It does not make the repo live-ready by itself. Before publishing runtime config, `.env.compose` must also contain the live rollout and monitoring prerequisites that the runtime and dashboard expect.
 
-Then verify `.env.compose` contains the supported live settings:
+Supported live settings:
 
 ```env
 STRATEGY_ENGINE=ml_pure
@@ -180,8 +178,6 @@ Verify:
 grep -E "STRATEGY_ENGINE|ML_PURE_RUN_ID|ML_PURE_MODEL_GROUP|STRATEGY_ROLLOUT_STAGE|STRATEGY_POSITION_SIZE_MULTIPLIER|STRATEGY_ML_RUNTIME_GUARD_FILE|ML_PURE_THRESHOLD_REPORT|ML_PURE_TRAINING_SUMMARY_PATH" .env.compose
 grep -E "GHCR_IMAGE_PREFIX|APP_IMAGE_TAG" .env.compose
 test -f .run/ml_runtime_guard_live.json && echo guard_ok
-test -f ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/threshold_report.json && echo threshold_ok
-test -f ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/training_report.json && echo training_report_ok
 ```
 
 Look for:
@@ -189,8 +185,6 @@ Look for:
 - all required env keys are present
 - GHCR image prefix and tag are present
 - guard file exists locally
-- threshold report exists locally if rolling Stage 1 precision monitoring is expected
-- training summary exists locally if regime-drift monitoring is expected
 
 ## Step 4: Publish Runtime Config
 
@@ -225,6 +219,8 @@ gcloud compute instances stop "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone
 gcloud compute instances start "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}"
 ```
 
+If you are using the interactive deploy flow, this restart is already prompted for and performed by `start_runtime_interactive.sh`.
+
 Verify:
 
 ```bash
@@ -240,12 +236,10 @@ Look for:
 
 Notes:
 
-- Restarting the VM is the supported rollout path because startup syncs runtime config and published model artifacts, validates runtime bundle inputs, and then pulls/starts the pinned-tag images.
-- The runtime startup stack includes `redis`, `mongo`, `ingestion_app`, `snapshot_app`, `persistence_app`, `strategy_app`, and `strategy_persistence_app` (plus `dashboard` when UI profile is enabled).
+- restarting the VM is the supported rollout path because startup syncs runtime config and published model artifacts, validates runtime bundle inputs, and then pulls and starts the pinned-tag images
+- the runtime startup stack includes `redis`, `mongo`, `ingestion_app`, `snapshot_app`, `persistence_app`, `strategy_app`, and `strategy_persistence_app` plus `dashboard` when the UI profile is enabled
 
 ## Step 6: Verify Runtime Startup And Containers
-
-Verify:
 
 Inspect startup logs:
 
@@ -281,6 +275,8 @@ Look for:
 - snapshot events continue to advance
 - signals file exists and updates when snapshots arrive
 - dashboard health succeeds if the dashboard profile is enabled
+
+If `snapshot_app` is unhealthy and logs show repeated market-data or auth failures, verify Kite credentials were refreshed and published. The supported recovery path is to rerun `start_runtime_interactive.sh` with Kite browser auth enabled, then restart the VM again.
 
 ## Step 7: Rollback
 
