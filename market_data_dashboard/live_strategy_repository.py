@@ -236,6 +236,29 @@ class LiveStrategyRepository:
                     return value
         return None
 
+    def snapshot_has_data(self, date_ist: str, instrument: str) -> bool:
+        symbol = str(instrument or "").strip()
+        if not symbol:
+            return False
+        coll = self.snapshot_collection()
+        return bool(coll.count_documents({"trade_date_ist": str(date_ist), "instrument": symbol}, limit=1))
+
+    def latest_snapshot_instrument(self, date_ist: str) -> str | None:
+        coll = self.snapshot_collection()
+        doc = coll.find_one(
+            {
+                "trade_date_ist": str(date_ist),
+                "instrument": {"$exists": True, "$nin": ["", None]},
+            },
+            {"_id": 0, "instrument": 1, "timestamp": 1},
+            sort=[("timestamp", -1)],
+        )
+        if isinstance(doc, dict):
+            value = str(doc.get("instrument") or "").strip()
+            if value:
+                return value
+        return None
+
 
 __all__ = [
     "LiveStrategyRepository",

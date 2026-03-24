@@ -202,6 +202,7 @@ default_project="${PROJECT_ID:-$(detect_default_project)}"
 default_project="${default_project:-gen-lang-client-0909109011}"
 default_snapshot_bucket="${SNAPSHOT_PARQUET_BUCKET_URL:-}"
 default_vm_name="${RUNTIME_NAME:-option-trading-runtime-01}"
+default_image_source="${IMAGE_SOURCE:-ghcr}"
 default_app_image_tag="${APP_IMAGE_TAG:-${TAG:-latest}}"
 
 prompt_var PROJECT_ID "GCP project id" "${default_project}"
@@ -209,13 +210,27 @@ prompt_var REGION "GCP region" "${REGION:-asia-south1}"
 prompt_var ZONE "GCP zone" "${ZONE:-asia-south1-b}"
 prompt_var TARGET_VM_NAME "Replay VM name" "${default_vm_name}"
 prompt_var RUNTIME_CONFIG_BUCKET_URL "Runtime config bucket URL (gs://.../runtime)" "${RUNTIME_CONFIG_BUCKET_URL:-gs://${default_project}-option-trading-runtime-config/runtime}"
-prompt_var GHCR_IMAGE_PREFIX "GHCR image prefix" "${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
+prompt_var IMAGE_SOURCE "Image source (ghcr/local_build)" "${default_image_source}"
+IMAGE_SOURCE="${IMAGE_SOURCE,,}"
+if [[ "${IMAGE_SOURCE}" != "ghcr" && "${IMAGE_SOURCE}" != "local_build" ]]; then
+  echo "Unsupported IMAGE_SOURCE=${IMAGE_SOURCE}. Use ghcr or local_build." >&2
+  exit 1
+fi
+if [ "${IMAGE_SOURCE}" = "ghcr" ]; then
+  prompt_var GHCR_IMAGE_PREFIX "GHCR image prefix" "${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
+else
+  GHCR_IMAGE_PREFIX="${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
+fi
 
 if download_current_release; then
   default_app_image_tag="$(manifest_field "${CURRENT_MANIFEST_PATH}" "app_image_tag")"
 fi
 
-prompt_var APP_IMAGE_TAG "Runtime image tag" "${default_app_image_tag:-latest}"
+if [ "${IMAGE_SOURCE}" = "ghcr" ]; then
+  prompt_var APP_IMAGE_TAG "Runtime image tag" "${default_app_image_tag:-latest}"
+else
+  APP_IMAGE_TAG="${default_app_image_tag:-latest}"
+fi
 prompt_var SNAPSHOT_PARQUET_BUCKET_URL "Snapshot parquet bucket URL (gs://.../parquet_data)" "${default_snapshot_bucket}"
 prompt_var REPLAY_START_DATE "Replay start date (YYYY-MM-DD)" "${REPLAY_START_DATE:-}"
 prompt_var REPLAY_END_DATE "Replay end date (YYYY-MM-DD)" "${REPLAY_END_DATE:-${REPLAY_START_DATE}}"
@@ -254,14 +269,16 @@ if [ -z "${runtime_status}" ]; then
   exit 1
 fi
 
-if command -v docker >/dev/null 2>&1; then
+if [ "${IMAGE_SOURCE}" = "ghcr" ] && command -v docker >/dev/null 2>&1; then
   echo "Verifying GHCR image availability for ${APP_IMAGE_TAG}..."
   if ! verify_ghcr_images "${GHCR_IMAGE_PREFIX}" "${APP_IMAGE_TAG}"; then
     echo "One or more historical services are missing for tag ${APP_IMAGE_TAG}. Aborting." >&2
     exit 1
   fi
-else
+elif [ "${IMAGE_SOURCE}" = "ghcr" ]; then
   echo "docker not found on operator host; skipping GHCR manifest preflight."
+else
+  echo "IMAGE_SOURCE=local_build selected; historical services will build from the repo checkout on ${TARGET_VM_NAME}."
 fi
 
 if [ "${runtime_status}" != "RUNNING" ]; then
@@ -291,6 +308,7 @@ fi
 
 set_env_key "${ENV_COMPOSE}" "GHCR_IMAGE_PREFIX" "${GHCR_IMAGE_PREFIX}"
 set_env_key "${ENV_COMPOSE}" "APP_IMAGE_TAG" "${APP_IMAGE_TAG}"
+set_env_key "${ENV_COMPOSE}" "IMAGE_SOURCE" "${IMAGE_SOURCE}"
 set_env_key "${ENV_COMPOSE}" "HISTORICAL_TOPIC" "market:snapshot:v1:historical"
 
 CURRENT_STRATEGY_ENGINE="$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ENGINE")"
@@ -363,22 +381,33 @@ echo "Running remote historical preflight on ${TARGET_VM_NAME}..."
 REMOTE_PREFLIGHT_CMD="cd '${REMOTE_REPO_ROOT}' && '${REMOTE_PYTHON_BIN}' ops/gcp/operator_preflight.py --mode historical --repo-root '${REMOTE_REPO_ROOT}' --env-file '${REMOTE_REPO_ROOT}/.env.compose' --snapshot-parquet-bucket-url '${SNAPSHOT_PARQUET_BUCKET_URL}' --start-date '${REPLAY_START_DATE}' --end-date '${REPLAY_END_DATE}' --parquet-base '${REMOTE_REPO_ROOT}/.data/ml_pipeline/parquet_data'"
 remote_gcloud "${REMOTE_PREFLIGHT_CMD}"
 
+REMOTE_COMPOSE_FILES="-f docker-compose.yml -f docker-compose.gcp.yml"
+if [ "${IMAGE_SOURCE}" = "local_build" ]; then
+  REMOTE_COMPOSE_FILES="-f docker-compose.yml"
+  if prompt_yes_no "Build required historical images from the repo checkout on ${TARGET_VM_NAME} now?" "Y"; then
+    remote_gcloud "
+      cd '${REMOTE_REPO_ROOT}' &&
+      ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} build snapshot_app persistence_app strategy_app dashboard
+    "
+  fi
+fi
+
 echo
 echo "Starting historical consumers on ${TARGET_VM_NAME}..."
 remote_gcloud "
   cd '${REMOTE_REPO_ROOT}' &&
-  ${REMOTE_COMPOSE_CMD} --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml --profile historical up -d redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical dashboard
+  ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} --profile historical up -d redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical dashboard
 "
 
 if prompt_yes_no "Run one-shot replay for ${REPLAY_START_DATE} to ${REPLAY_END_DATE} now?" "Y"; then
   remote_gcloud "
     cd '${REMOTE_REPO_ROOT}' &&
-    ${REMOTE_COMPOSE_CMD} --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml --profile historical_replay run --rm --entrypoint python historical_replay -m snapshot_app.historical.replay_runner --base /app/.data/ml_pipeline/parquet_data --topic market:snapshot:v1:historical --start-date ${REPLAY_START_DATE} --end-date ${REPLAY_END_DATE} --speed ${REPLAY_SPEED}
+    ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} --profile historical_replay run --rm --entrypoint python historical_replay -m snapshot_app.historical.replay_runner --base /app/.data/ml_pipeline/parquet_data --topic market:snapshot:v1:historical --start-date ${REPLAY_START_DATE} --end-date ${REPLAY_END_DATE} --speed ${REPLAY_SPEED}
   "
 fi
 
 echo
 echo "Suggested verification commands:"
-echo "  gcloud compute ssh ${TARGET_VM_NAME} --project ${PROJECT_ID} --zone ${ZONE} --command \"cd '${REMOTE_REPO_ROOT}' && ${REMOTE_COMPOSE_CMD} --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml ps\""
+echo "  gcloud compute ssh ${TARGET_VM_NAME} --project ${PROJECT_ID} --zone ${ZONE} --command \"cd '${REMOTE_REPO_ROOT}' && ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} ps\""
 echo "  gcloud compute ssh ${TARGET_VM_NAME} --project ${PROJECT_ID} --zone ${ZONE} --command \"curl -fsS http://127.0.0.1:8008/api/health/replay\""
 echo "  gcloud compute ssh ${TARGET_VM_NAME} --project ${PROJECT_ID} --zone ${ZONE} --command \"curl -fsS http://127.0.0.1:8008/api/historical/replay/status\""

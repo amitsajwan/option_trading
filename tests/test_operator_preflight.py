@@ -132,6 +132,53 @@ class OperatorPreflightTests(unittest.TestCase):
             self.assertEqual(result.status, "blocked")
             self.assertIn("kite credentials missing", result.blockers[0])
 
+    @mock.patch("ops.gcp.operator_preflight.shutil_which", return_value="docker")
+    def test_live_preflight_local_build_skips_ghcr_validation(self, _which: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            env_file = repo_root / ".env.compose"
+            manifest_path = repo_root / "runtime_release_manifest.json"
+            guard_path = repo_root / "guards" / "runtime_guard.json"
+            threshold_report = repo_root / "reports" / "thresholds.json"
+            training_report = repo_root / "reports" / "training.json"
+            credentials_path = repo_root / "ingestion_app" / "credentials.json"
+            credentials_path.parent.mkdir(parents=True, exist_ok=True)
+            credentials_path.write_text(json.dumps({"api_key": "key", "access_token": "token"}), encoding="utf-8")
+            _write_guard(guard_path)
+            threshold_report.parent.mkdir(parents=True, exist_ok=True)
+            threshold_report.write_text("{}", encoding="utf-8")
+            training_report.write_text("{}", encoding="utf-8")
+            _write_manifest(manifest_path, repo_root=repo_root)
+            _write_env(
+                env_file,
+                {
+                    "IMAGE_SOURCE": "local_build",
+                    "GHCR_IMAGE_PREFIX": "ghcr.io/amitsajwan",
+                    "APP_IMAGE_TAG": "20260324-a1b2c3d",
+                    "STRATEGY_ENGINE": "ml_pure",
+                    "STRATEGY_ROLLOUT_STAGE": "capped_live",
+                    "STRATEGY_POSITION_SIZE_MULTIPLIER": "0.25",
+                    "STRATEGY_ML_RUNTIME_GUARD_FILE": "guards/runtime_guard.json",
+                    "ML_PURE_RUN_ID": "run_20260324_120000",
+                    "ML_PURE_MODEL_GROUP": "banknifty_futures/h15_tp_auto",
+                    "ML_PURE_THRESHOLD_REPORT": "reports/thresholds.json",
+                    "ML_PURE_TRAINING_SUMMARY_PATH": "reports/training.json",
+                },
+            )
+
+            result = validate_operator_preflight(
+                mode="live",
+                repo_root=repo_root,
+                env_file=env_file,
+                release_manifest_path=manifest_path,
+                image_source="local_build",
+                ghcr_image_prefix="",
+                credentials_path=credentials_path,
+            )
+
+            self.assertEqual(result.status, "ready")
+            self.assertIn("image source local_build selected", result.checks)
+
     def test_historical_preflight_blocks_when_requested_date_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo_root = Path(tmpdir)

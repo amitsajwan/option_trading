@@ -21,11 +21,17 @@ That menu is the supported operator entrypoint for:
 
 Use the runbooks below when you need the detailed step-by-step flow, validation steps, or recovery guidance behind that menu.
 
-For release management, treat the GCP deployment flow as:
+For release management, treat the GCP deployment flow in this conceptual order:
 
-0. `Infra`
-1. `Live`
-2. `Historical`
+- `Infra`
+- `Live`
+- `Historical`
+
+In the actual lifecycle menu these map to:
+
+- menu item `1`: infra bootstrap
+- menu item `2`: live deploy/restart
+- menu item `3`: historical replay
 
 ## Primary Runbooks
 
@@ -43,7 +49,7 @@ For release management, treat the GCP deployment flow as:
 
 ## Scope Notes
 
-- Runtime deployment currently uses GHCR-published images for the live stack.
+- Runtime deployment defaults to GHCR-published images, with `IMAGE_SOURCE=local_build` available for faster code-to-runtime iteration.
 - Training and runtime both depend on `ops/gcp/operator.env`.
 - Artifact Registry still exists in Terraform and bootstrap flows for infra compatibility, but it is not the primary runtime image source.
 

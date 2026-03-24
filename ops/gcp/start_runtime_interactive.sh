@@ -253,12 +253,23 @@ echo
 default_project="${PROJECT_ID:-$(detect_default_project)}"
 default_project="${default_project:-gen-lang-client-0909109011}"
 default_runtime_config_url="${RUNTIME_CONFIG_BUCKET_URL:-gs://${default_project}-option-trading-runtime-config/runtime}"
+default_image_source="${IMAGE_SOURCE:-ghcr}"
 prompt_var PROJECT_ID "GCP project id" "${default_project}"
 prompt_var REGION "GCP region" "${REGION:-asia-south1}"
 prompt_var ZONE "GCP zone" "${ZONE:-asia-south1-b}"
 prompt_var RUNTIME_NAME "Runtime VM name" "${RUNTIME_NAME:-option-trading-runtime-01}"
 prompt_var RUNTIME_CONFIG_BUCKET_URL "Runtime config bucket URL (gs://.../runtime)" "${default_runtime_config_url}"
-prompt_var GHCR_IMAGE_PREFIX "GHCR image prefix" "${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
+prompt_var IMAGE_SOURCE "Image source (ghcr/local_build)" "${default_image_source}"
+IMAGE_SOURCE="${IMAGE_SOURCE,,}"
+if [[ "${IMAGE_SOURCE}" != "ghcr" && "${IMAGE_SOURCE}" != "local_build" ]]; then
+  echo "Unsupported IMAGE_SOURCE=${IMAGE_SOURCE}. Use ghcr or local_build." >&2
+  exit 1
+fi
+if [ "${IMAGE_SOURCE}" = "ghcr" ]; then
+  prompt_var GHCR_IMAGE_PREFIX "GHCR image prefix" "${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
+else
+  GHCR_IMAGE_PREFIX="${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
+fi
 
 RELEASE_MANIFEST_PATH=""
 RELEASE_ENV_PATH=""
@@ -310,6 +321,7 @@ set_env_key "${ENV_COMPOSE}" "STRATEGY_ENGINE" "ml_pure"
 set_env_key "${ENV_COMPOSE}" "STRATEGY_ROLLOUT_STAGE" "capped_live"
 set_env_key "${ENV_COMPOSE}" "STRATEGY_POSITION_SIZE_MULTIPLIER" "0.25"
 set_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE" "${RUNTIME_GUARD_PATH:-.run/ml_runtime_guard_live.json}"
+set_env_key "${ENV_COMPOSE}" "IMAGE_SOURCE" "${IMAGE_SOURCE}"
 set_env_key "${ENV_COMPOSE}" "GHCR_IMAGE_PREFIX" "${GHCR_IMAGE_PREFIX}"
 set_env_key "${ENV_COMPOSE}" "APP_IMAGE_TAG" "${APP_IMAGE_TAG}"
 set_env_key "${ENV_COMPOSE}" "INGESTION_COLLECTORS_ENABLED" "1"
@@ -360,6 +372,7 @@ PREFLIGHT_OUTPUT="$("${PY_BIN}" "${REPO_ROOT}/ops/gcp/operator_preflight.py" \
   --repo-root "${REPO_ROOT}" \
   --env-file "${ENV_COMPOSE}" \
   --release-manifest-path "${RELEASE_MANIFEST_PATH}" \
+  --image-source "${IMAGE_SOURCE}" \
   --ghcr-image-prefix "${GHCR_IMAGE_PREFIX}" \
   --credentials-path "${REPO_ROOT}/ingestion_app/credentials.json")" || {
     echo "${PREFLIGHT_OUTPUT}"

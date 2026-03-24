@@ -20,9 +20,15 @@ Important scope rule:
 
 Use the same release-manager structure every time:
 
-0. `Infra`
-1. `Live`
-2. `Historical`
+- `Infra`
+- `Live`
+- `Historical`
+
+In the lifecycle menu those are:
+
+- menu item `1`: `Bootstrap infra`
+- menu item `2`: `Start/restart runtime`
+- menu item `3`: `Historical replay`
 
 The intent is simple:
 
@@ -30,13 +36,13 @@ The intent is simple:
 - `Live` deploys or updates the always-on runtime
 - `Historical` replays old dates without disturbing the live lane
 
-For a first-time setup, do `0. Infra` first, then `1. Live`. Run `2. Historical` only when you need replay.
+For a first-time setup, do `Infra` first, then `Live`. Run `Historical` only when you need replay.
 
 Use this decision rule:
 
-- run `0. Infra` once per environment, or again only when infra changes
-- run `1. Live` for normal runtime deploys and restarts
-- run `2. Historical` only for replay analysis; it does not require rerunning infra unless you need a separate replay VM
+- run `Infra` once per environment, or again only when infra changes
+- run `Live` for normal runtime deploys and restarts
+- run `Historical` only for replay analysis; it does not require rerunning infra unless you need a separate replay VM
 
 ## First-Time Operator Checklist
 
@@ -48,6 +54,13 @@ Before starting:
 - ensure `ops/gcp/operator.env` exists
 - ensure `.env.compose` contains the intended live runtime values before you deploy
 - for historical replay, ensure the target VM already has a repo checkout; the interactive helper auto-detects `/opt/option_trading` and `~/option_trading`
+
+Image source modes:
+
+- `IMAGE_SOURCE=ghcr`: use published images from GHCR
+- `IMAGE_SOURCE=local_build`: build directly from the repo checkout on the VM and run those images
+
+If you want the fastest code-to-runtime loop while iterating on this branch, use `IMAGE_SOURCE=local_build`.
 
 If `ops/gcp/operator.env` does not exist yet:
 
@@ -94,7 +107,8 @@ These fields must be correct in `ops/gcp/operator.env`:
 
 Current conventions:
 
-- runtime images come from GHCR
+- runtime images can come from GHCR or can be built directly from the VM checkout
+- `IMAGE_SOURCE` defaults to `ghcr`
 - `REPOSITORY` still exists only for Terraform and bootstrap compatibility
 - `MODEL_BUCKET_URL` defaults to `gs://<MODEL_BUCKET_NAME>/published_models`
 - `RUNTIME_CONFIG_BUCKET_URL` defaults to `gs://<RUNTIME_CONFIG_BUCKET_NAME>/runtime`
@@ -154,6 +168,11 @@ This is the best path because it keeps the operator on the supported sequence:
 4. run shared live preflight
 5. publish runtime config
 6. start or restart the runtime VM
+
+Live image source behavior:
+
+- with `IMAGE_SOURCE=ghcr`, startup pulls published images using `docker-compose.gcp.yml`
+- with `IMAGE_SOURCE=local_build`, startup builds `ingestion_app`, `snapshot_app`, `persistence_app`, `strategy_app`, and optionally `dashboard` directly from the repo checkout using `docker-compose.yml`
 
 ### Live Deployment Inputs
 
@@ -374,6 +393,7 @@ Compatibility notes:
 - the helper syncs the runtime bundle into that checkout when `.env.compose` is missing
 - the helper runs remote preflight on the host Python environment, not inside the `historical_replay` container
 - the helper invokes replay with `--entrypoint python` so both Compose v2 and `docker-compose` v1 handle the extra replay flags correctly
+- with `IMAGE_SOURCE=local_build`, the helper builds the required historical services directly from the remote repo checkout before startup
 - when `.env.compose` is using `STRATEGY_ENGINE=ml_pure`, the helper seeds `STRATEGY_ROLLOUT_STAGE_HISTORICAL=capped_live`, `STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL=0.25`, and `STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL` from the live guard file unless you already overrode them
 
 If you only remember one thing for replay, remember this:
@@ -483,7 +503,7 @@ Dashboard note:
 
 ## Direct Script Reference
 
-Use these only when you explicitly need a lower-level entrypoint.
+Use these only when you explicitly need a lower-level or troubleshooting entrypoint. First-time and normal daily operation should start from `bash ./ops/gcp/runtime_lifecycle_interactive.sh`.
 
 Interactive scripts:
 
@@ -505,9 +525,9 @@ Support scripts:
 
 For normal release management, keep the workflow stable:
 
-1. run `0. Infra` only when the environment is new or changed
-2. run `1. Live` for the always-on deployment
-3. run `2. Historical` only when you need replay
+1. run `Infra` only when the environment is new or changed
+2. run `Live` for the always-on deployment
+3. run `Historical` only when you need replay
 4. keep live and historical operationally separate even when they share the same image tag and repo checkout
 
 If you follow that pattern, a first-time operator can get the environment working without inventing alternate deployment paths.

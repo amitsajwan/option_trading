@@ -3,6 +3,8 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import market_data_dashboard.app as dashboard_app
 
@@ -100,6 +102,172 @@ class HistoricalReplayAppTests(unittest.TestCase):
             self.skipTest("HistoricalReplayMonitorService unavailable in this environment")
         service = dashboard_app.HistoricalReplayMonitorService(None)
         self.assertIsNotNone(service)
+
+    def test_historical_monitor_service_degrades_without_eval_runs(self) -> None:
+        if dashboard_app.HistoricalReplayMonitorService is None:
+            self.skipTest("HistoricalReplayMonitorService unavailable in this environment")
+
+        class _EvalStub:
+            def _load_signal_map(self, **kwargs: object) -> dict:
+                return {}
+
+            def compute_trades(self, **kwargs: object) -> dict:
+                raise ValueError("no completed historical evaluation runs found")
+
+            def compute_summary(self, **kwargs: object) -> dict:
+                raise ValueError("no completed historical evaluation runs found")
+
+        class _RepoStub:
+            def collections(self) -> dict:
+                marker = object()
+                return {"votes": marker, "signals": marker, "positions": marker}
+
+            def snapshot_has_data(self, date_ist, instrument):
+                return False
+
+            def latest_snapshot_instrument(self, date_ist):
+                return None
+
+        service = dashboard_app.HistoricalReplayMonitorService(None)
+        service._evaluation_service = _EvalStub()
+        service._repo = _RepoStub()
+        service.load_position_map = lambda date_ist: {}  # type: ignore[method-assign]
+        service.load_recent_votes = lambda date_ist, limit: []  # type: ignore[method-assign]
+        service.load_recent_signals = lambda date_ist, limit: []  # type: ignore[method-assign]
+        service.build_decision_diagnostics = lambda **kwargs: {}  # type: ignore[method-assign]
+        service.infer_engine_context = lambda **kwargs: {"active_engine_mode": None}  # type: ignore[method-assign]
+        service.promotion_lane_from_engine = lambda active_engine_mode: "deterministic"  # type: ignore[method-assign]
+        service.build_current_open_positions = lambda *args, **kwargs: []  # type: ignore[method-assign]
+        service.build_latest_closed_trade = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        service.partition_open_positions = lambda **kwargs: ([], [])  # type: ignore[method-assign]
+        service.build_recent_activity = lambda **kwargs: []  # type: ignore[method-assign]
+        service.build_freshness = lambda *args: {}  # type: ignore[method-assign]
+        service.load_session_underlying_chart = lambda **kwargs: None  # type: ignore[method-assign]
+        service.build_chart_markers = lambda *args, **kwargs: []  # type: ignore[method-assign]
+        service._is_market_session_open = lambda: False  # type: ignore[method-assign]
+
+        with patch.dict("os.environ", {"LIVE_STRATEGY_UX_V1": "0"}, clear=False):
+            payload = service.get_strategy_session(date="2024-10-31")
+
+        self.assertEqual(payload["session"]["date_ist"], "2024-10-31")
+        self.assertEqual(payload["capital"]["realized_pnl_amount"], 0.0)
+        self.assertEqual(payload["today_summary"]["equity"]["net_return_pct"], 0.0)
+        self.assertEqual(payload["recent_trades"], [])
+
+    def test_historical_monitor_service_falls_back_to_snapshot_instrument_for_chart(self) -> None:
+        if dashboard_app.HistoricalReplayMonitorService is None:
+            self.skipTest("HistoricalReplayMonitorService unavailable in this environment")
+
+        class _Cursor:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def sort(self, *args, **kwargs):
+                return self
+
+            def limit(self, count):
+                return _Cursor(self._docs[:count])
+
+            def __iter__(self):
+                return iter(self._docs)
+
+        class _Collection:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def find(self, query, projection=None):
+                docs = []
+                for doc in self._docs:
+                    if str(query.get("trade_date_ist")) != str(doc.get("trade_date_ist")):
+                        continue
+                    instrument = query.get("instrument")
+                    if instrument and str(doc.get("instrument") or "") != str(instrument):
+                        continue
+                    docs.append(doc)
+                return _Cursor(docs)
+
+            def find_one(self, query, projection=None, sort=None):
+                docs = list(self.find(query, projection))
+                return docs[-1] if docs else None
+
+            def count_documents(self, query, limit=0):
+                docs = list(self.find(query))
+                return len(docs[:limit or None])
+
+        class _RepoStub:
+            def __init__(self):
+                self._snapshots = _Collection(
+                    [
+                        {
+                            "trade_date_ist": "2024-10-31",
+                            "instrument": "BANKNIFTY-I",
+                            "timestamp": "2024-10-31T09:15:00+05:30",
+                            "payload": {
+                                "snapshot": {
+                                    "session_context": {
+                                        "timestamp": "2024-10-31T09:15:00+05:30",
+                                        "time": "09:15",
+                                    },
+                                    "futures_bar": {"fut_close": 50200.0},
+                                }
+                            },
+                        }
+                    ]
+                )
+
+            def collections(self):
+                marker = SimpleNamespace(find=lambda *args, **kwargs: _Cursor([]))
+                return {"votes": marker, "signals": marker, "positions": marker}
+
+            def snapshot_collection(self):
+                return self._snapshots
+
+            def snapshot_has_data(self, date_ist, instrument):
+                return False
+
+            def latest_snapshot_instrument(self, date_ist):
+                return "BANKNIFTY-I"
+
+        class _EvalStub:
+            def _load_signal_map(self, **kwargs: object) -> dict:
+                return {}
+
+            def compute_trades(self, **kwargs: object) -> dict:
+                return {"rows": []}
+
+            def compute_summary(self, **kwargs: object) -> dict:
+                return {
+                    "overall": {"trade_count": 0},
+                    "equity": {"start_capital": 500000.0, "end_capital": 500000.0, "net_return_pct": 0.0},
+                    "by_strategy": [],
+                    "by_regime": [],
+                    "exit_reasons": [],
+                    "streaks": {},
+                    "counts": {"signals": 0, "positions": 0, "trades": 0},
+                }
+
+        service = dashboard_app.HistoricalReplayMonitorService(None)
+        service._evaluation_service = _EvalStub()
+        service._repo = _RepoStub()
+        service.load_position_map = lambda date_ist: {}  # type: ignore[method-assign]
+        service.load_recent_votes = lambda date_ist, limit: []  # type: ignore[method-assign]
+        service.load_recent_signals = lambda date_ist, limit: []  # type: ignore[method-assign]
+        service.build_decision_diagnostics = lambda **kwargs: {}  # type: ignore[method-assign]
+        service.infer_engine_context = lambda **kwargs: {"active_engine_mode": None}  # type: ignore[method-assign]
+        service.promotion_lane_from_engine = lambda active_engine_mode: "deterministic"  # type: ignore[method-assign]
+        service.build_current_open_positions = lambda *args, **kwargs: []  # type: ignore[method-assign]
+        service.build_latest_closed_trade = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        service.partition_open_positions = lambda **kwargs: ([], [])  # type: ignore[method-assign]
+        service.build_recent_activity = lambda **kwargs: []  # type: ignore[method-assign]
+        service.build_freshness = lambda *args: {}  # type: ignore[method-assign]
+        service.build_chart_markers = lambda *args, **kwargs: []  # type: ignore[method-assign]
+        service._is_market_session_open = lambda: False  # type: ignore[method-assign]
+
+        with patch.dict("os.environ", {"LIVE_STRATEGY_UX_V1": "0"}, clear=False):
+            payload = service.get_strategy_session(date="2024-10-31", instrument="BANKNIFTY26MARFUT")
+
+        self.assertEqual(payload["session"]["instrument"], "BANKNIFTY-I")
+        self.assertEqual(payload["session_chart"]["prices"], [50200.0])
 
     def test_top_level_app_import_exposes_historical_monitor_service(self) -> None:
         app_path = Path(dashboard_app.__file__).resolve()

@@ -336,7 +336,10 @@
                 </div>
             </div>
             <div class="panel">
-                <h3>Recent Votes</h3>
+                <h3 id="votesHeading">Recent Votes</h3>
+                <div class="note" id="votesNote" style="margin-bottom:12px;">
+                    Vote rows appear when the runtime emits StrategyVote events.
+                </div>
                 <div class="table-wrap">
                     <table>
                         <thead><tr><th>Time</th><th>Engine</th><th>Decision</th><th>Reason</th></tr></thead>
@@ -437,17 +440,20 @@
         async function refresh() {
             const params = new URLSearchParams(window.location.search);
             const date = params.get("date") || "";
-            const instrument = params.get("instrument") || "";
+            const requestedInstrument = params.get("instrument") || "";
             const qs = new URLSearchParams();
             if (date) qs.set("date", date);
-            if (instrument) qs.set("instrument", instrument);
+            if (requestedInstrument) qs.set("instrument", requestedInstrument);
 
             const suffix = qs.toString() ? `?${qs.toString()}` : "";
-            const [session, replay, options, depth] = await Promise.all([
+            const [session, replay] = await Promise.all([
                 fetchJson(`/api/historical/replay/session${suffix}`),
                 fetchJson(`/api/historical/replay/status${suffix}`),
-                fetchJson(`/api/market-data/options/${encodeURIComponent(instrument || "BANKNIFTY26MARFUT")}`).catch(() => ({ status: "unavailable" })),
-                fetchJson(`/api/market-data/depth/${encodeURIComponent(instrument || "BANKNIFTY26MARFUT")}`).catch(() => ({ status: "unavailable" })),
+            ]);
+            const effectiveInstrument = requestedInstrument || session?.session?.instrument || "BANKNIFTY-I";
+            const [options, depth] = await Promise.all([
+                fetchJson(`/api/market-data/options/${encodeURIComponent(effectiveInstrument)}`).catch(() => ({ status: "unavailable" })),
+                fetchJson(`/api/market-data/depth/${encodeURIComponent(effectiveInstrument)}`).catch(() => ({ status: "unavailable" })),
             ]);
 
             document.getElementById("lastRefreshChip").textContent = `Last refresh: ${new Date().toLocaleTimeString()}`;
@@ -459,7 +465,7 @@
             document.getElementById("kpiEvents").textContent = formatNumber(replay.events_emitted);
             document.getElementById("kpiOpen").textContent = formatNumber(session?.counts?.open_positions);
             document.getElementById("kpiTrades").textContent = formatNumber(session?.counts?.closed_trades);
-            document.getElementById("kpiInstrument").textContent = safeText(session?.session?.instrument);
+            document.getElementById("kpiInstrument").textContent = safeText(session?.session?.instrument || effectiveInstrument);
             document.getElementById("kpiPnl").textContent = `Realized ${formatPct(session?.capital?.realized_pnl_pct)}`;
 
             setTaggedValue("replayStatus", replay.status);
@@ -507,14 +513,36 @@
                 </tr>
             `), 4);
 
-            renderRows("votesBody", (session?.recent_votes || []).slice(0, 20).map((row) => `
-                <tr>
-                    <td>${safeText(row.timestamp)}</td>
-                    <td>${safeText(row.engine_mode)}</td>
-                    <td>${safeText(row.decision_mode)}</td>
-                    <td>${safeText(row.decision_reason_code || row.reason)}</td>
-                </tr>
-            `), 4);
+            const activeEngineMode = String(session?.engine_context?.active_engine_mode || "").toLowerCase();
+            const recentVotes = Array.isArray(session?.recent_votes) ? session.recent_votes : [];
+            const votesHeading = document.getElementById("votesHeading");
+            const votesNote = document.getElementById("votesNote");
+            if (activeEngineMode === "ml_pure") {
+                if (votesHeading) votesHeading.textContent = "Recent Votes (deterministic-only)";
+                if (votesNote) votesNote.textContent = recentVotes.length
+                    ? "Deterministic-style vote rows are present for this replay."
+                    : "This ml_pure replay emitted trade signals but no StrategyVote rows, so this table is expected to be empty.";
+            } else {
+                if (votesHeading) votesHeading.textContent = "Recent Votes";
+                if (votesNote) votesNote.textContent = "Vote rows appear when the runtime emits StrategyVote events.";
+            }
+
+            if (recentVotes.length > 0) {
+                renderRows("votesBody", recentVotes.slice(0, 20).map((row) => `
+                    <tr>
+                        <td>${safeText(row.timestamp)}</td>
+                        <td>${safeText(row.engine_mode)}</td>
+                        <td>${safeText(row.decision_mode)}</td>
+                        <td>${safeText(row.decision_reason_code || row.reason)}</td>
+                    </tr>
+                `), 4);
+            } else if (activeEngineMode === "ml_pure") {
+                renderRows("votesBody", [
+                    `<tr><td colspan="4">No StrategyVote rows for this ml_pure replay. Inspect Recent Signals for HOLD/ENTRY decisions.</td></tr>`
+                ], 4);
+            } else {
+                renderRows("votesBody", [], 4);
+            }
         }
 
         document.getElementById("refreshBtn").addEventListener("click", () => {

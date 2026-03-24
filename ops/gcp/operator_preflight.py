@@ -174,6 +174,7 @@ def _validate_live_mode(
     repo_root: Path,
     env_file: Path,
     manifest_path: Path,
+    image_source: str,
     ghcr_image_prefix: str,
     credentials_path: Path,
 ) -> PreflightResult:
@@ -196,6 +197,20 @@ def _validate_live_mode(
         result.blockers.append(f"kite credentials {kite_status}: {kite_detail}")
     else:
         result.checks.append("kite credentials present")
+
+    normalized_image_source = str(image_source or "ghcr").strip().lower() or "ghcr"
+    result.details["image_source"] = normalized_image_source
+    if normalized_image_source not in {"ghcr", "local_build"}:
+        result.status = "blocked"
+        result.blockers.append(f"unsupported image source: {normalized_image_source}")
+        return result
+
+    if normalized_image_source == "local_build":
+        result.checks.append("image source local_build selected")
+        if shutil_which("docker") is None:
+            result.status = "blocked"
+            result.blockers.append("docker not found on operator host; local-build deploy expects Docker tooling")
+        return result
 
     if not str(ghcr_image_prefix or "").strip():
         result.status = "blocked"
@@ -330,6 +345,7 @@ def validate_operator_preflight(
     env_file: Path | None = None,
     operator_env_file: Path | None = None,
     release_manifest_path: Path | None = None,
+    image_source: str = "ghcr",
     ghcr_image_prefix: str = "",
     credentials_path: Path | None = None,
     snapshot_parquet_bucket_url: str = "",
@@ -349,6 +365,7 @@ def validate_operator_preflight(
             repo_root=repo_root,
             env_file=env_file,
             manifest_path=release_manifest_path,
+            image_source=image_source,
             ghcr_image_prefix=ghcr_image_prefix,
             credentials_path=credentials_path,
         )
@@ -372,6 +389,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--env-file", default=None)
     parser.add_argument("--operator-env-file", default=None)
     parser.add_argument("--release-manifest-path", default=None)
+    parser.add_argument("--image-source", default="ghcr")
     parser.add_argument("--ghcr-image-prefix", default="")
     parser.add_argument("--credentials-path", default=None)
     parser.add_argument("--snapshot-parquet-bucket-url", default="")
@@ -387,6 +405,7 @@ def run_cli(argv: list[str] | None = None) -> int:
             env_file=Path(args.env_file).resolve() if args.env_file else None,
             operator_env_file=Path(args.operator_env_file).resolve() if args.operator_env_file else None,
             release_manifest_path=Path(args.release_manifest_path).resolve() if args.release_manifest_path else None,
+            image_source=str(args.image_source or "ghcr"),
             ghcr_image_prefix=str(args.ghcr_image_prefix or ""),
             credentials_path=Path(args.credentials_path).resolve() if args.credentials_path else None,
             snapshot_parquet_bucket_url=str(args.snapshot_parquet_bucket_url or ""),

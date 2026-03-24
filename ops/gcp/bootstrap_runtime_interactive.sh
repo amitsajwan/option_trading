@@ -89,6 +89,7 @@ existing_runtime_machine_type="${RUNTIME_MACHINE_TYPE:-e2-standard-4}"
 existing_training_machine_type="${TRAINING_MACHINE_TYPE:-n2-highcpu-16}"
 existing_repo_clone_url="${REPO_CLONE_URL:-${detected_repo_url:-https://github.com/amitsajwan/option_trading.git}}"
 existing_repo_ref="${REPO_REF:-${detected_repo_ref:-main}}"
+existing_image_source="${IMAGE_SOURCE:-ghcr}"
 existing_ghcr_prefix="${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
 existing_tag="${TAG:-latest}"
 existing_repository="${REPOSITORY:-option-trading-runtime}"
@@ -108,6 +109,7 @@ prompt_var REGION "Region" "${existing_region}"
 prompt_var ZONE "Zone" "${existing_zone}"
 prompt_var REPO_CLONE_URL "Repository clone URL" "${existing_repo_clone_url}"
 prompt_var REPO_REF "Repository ref/branch" "${existing_repo_ref}"
+prompt_var IMAGE_SOURCE "Image source (ghcr/local_build)" "${existing_image_source}"
 prompt_var RUNTIME_NAME "Runtime VM name" "${existing_runtime_name}"
 prompt_var RUNTIME_MACHINE_TYPE "Runtime machine type" "${existing_runtime_machine_type}"
 prompt_var TRAINING_MACHINE_TYPE "Training machine type" "${existing_training_machine_type}"
@@ -125,6 +127,12 @@ prompt_var MODEL_GROUP "Training default model group" "${existing_model_group}"
 prompt_var PROFILE_ID "Training default profile id" "${existing_profile_id}"
 prompt_var STAGED_CONFIG "Training default staged config path" "${existing_staged_config}"
 
+IMAGE_SOURCE="${IMAGE_SOURCE,,}"
+if [[ "${IMAGE_SOURCE}" != "ghcr" && "${IMAGE_SOURCE}" != "local_build" ]]; then
+  echo "Unsupported IMAGE_SOURCE=${IMAGE_SOURCE}. Use ghcr or local_build." >&2
+  exit 1
+fi
+
 MODEL_BUCKET_URL="gs://${MODEL_BUCKET_NAME}/published_models"
 RUNTIME_CONFIG_BUCKET_URL="gs://${RUNTIME_CONFIG_BUCKET_NAME}/runtime"
 
@@ -141,6 +149,7 @@ RUNTIME_NAME="${RUNTIME_NAME}"
 RUNTIME_MACHINE_TYPE="${RUNTIME_MACHINE_TYPE}"
 TRAINING_MACHINE_TYPE="${TRAINING_MACHINE_TYPE}"
 
+IMAGE_SOURCE="${IMAGE_SOURCE}"
 GHCR_IMAGE_PREFIX="${GHCR_IMAGE_PREFIX}"
 TAG="${TAG}"
 REPOSITORY="${REPOSITORY}"

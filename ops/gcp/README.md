@@ -22,9 +22,14 @@ GCP historical replay uses the same GHCR image tags and Compose overlays as the 
 
 Preferred operator shape:
 
-0. `Infra`
-1. `Live`
-2. `Historical`
+- `Infra`
+- `Live`
+- `Historical`
+
+Image source modes:
+
+- `IMAGE_SOURCE=ghcr` uses published GHCR images through `docker-compose.gcp.yml`
+- `IMAGE_SOURCE=local_build` builds from the repo checkout on the VM with `docker-compose.yml`
 
 Use the interactive lifecycle menu as the primary entrypoint for that sequence.
 
@@ -38,9 +43,9 @@ bash ./ops/gcp/runtime_lifecycle_interactive.sh
 
 That is the primary operator path for:
 
-0. `Infra`
-1. `Live`
-2. `Historical` preparation
+- menu item `1`: `Infra`
+- menu item `2`: `Live`
+- menu item `3`: `Historical replay`
 
 Important boundary:
 
@@ -48,6 +53,8 @@ Important boundary:
 - the live and historical branches remain separate inside that menu because they prepare different runtime inputs
 
 ## Script Entry Points
+
+Use direct entrypoints only when you intentionally need a lower-level or troubleshooting path. The lifecycle menu remains the supported operator entrypoint for first-time and daily use.
 
 Primary menu:
 
@@ -73,7 +80,7 @@ Current bootstrap derives:
 - `MODEL_BUCKET_URL=gs://<MODEL_BUCKET_NAME>/published_models`
 - `RUNTIME_CONFIG_BUCKET_URL=gs://<RUNTIME_CONFIG_BUCKET_NAME>/runtime`
 
-Runtime deployments currently use GHCR-published images. `REPOSITORY` remains in `operator.env` because the Terraform and bootstrap layer still carries Artifact Registry compatibility.
+Runtime deployments default to GHCR-published images, but both live and historical helpers now also support `IMAGE_SOURCE=local_build`. `REPOSITORY` remains in `operator.env` because the Terraform and bootstrap layer still carries Artifact Registry compatibility.
 
 ## Script Index
 
@@ -111,13 +118,13 @@ Use `RUN_RUNTIME_CONFIG_SYNC=0` on a fresh checkout when `.env.compose` is still
 
 Interactive runtime deploy helper.
 
-It auto-fetches the current approved runtime release artifacts from the runtime-config bucket, applies the runtime handoff into `.env.compose`, shows Kite credential state, runs shared live preflight, publishes runtime config, and then prompts for a VM start or restart action.
+It auto-fetches the current approved runtime release artifacts from the runtime-config bucket, applies the runtime handoff into `.env.compose`, prompts for `IMAGE_SOURCE`, shows Kite credential state, runs shared live preflight, publishes runtime config, and then prompts for a VM start or restart action.
 
 ### `start_historical_interactive.sh`
 
 Interactive historical replay helper.
 
-It defaults to the runtime VM, uses the current approved image tag when available, detects the repo checkout path and Compose implementation on the target VM, syncs the runtime bundle when needed, runs local and remote historical preflight, then can optionally sync parquet, start historical services, and run one-shot replay.
+It defaults to the runtime VM, prompts for `IMAGE_SOURCE`, uses the current approved image tag when GHCR is selected, detects the repo checkout path and Compose implementation on the target VM, syncs the runtime bundle when needed, runs local and remote historical preflight, then can optionally sync parquet, build historical services from code, start historical services, and run one-shot replay.
 
 ### `create_training_vm.sh`
 

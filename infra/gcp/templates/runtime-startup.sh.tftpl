@@ -80,19 +80,32 @@ fi
   --env-file "$${REPO_DIR}/.env.compose"
 
 DEFAULT_APP_IMAGE_TAG="${app_image_tag}"
+IMAGE_SOURCE="$${IMAGE_SOURCE:-ghcr}"
 export APP_IMAGE_TAG="$${APP_IMAGE_TAG:-$${DEFAULT_APP_IMAGE_TAG}}"
 export DASHBOARD_PORT="${dashboard_port}"
 
-if [ -n "$${GHCR_USERNAME:-}" ] && [ -n "$${GHCR_TOKEN:-}" ]; then
-  echo "$${GHCR_TOKEN}" | docker login ghcr.io --username "$${GHCR_USERNAME}" --password-stdin
+if [ "$${IMAGE_SOURCE}" = "ghcr" ]; then
+  if [ -n "$${GHCR_USERNAME:-}" ] && [ -n "$${GHCR_TOKEN:-}" ]; then
+    echo "$${GHCR_TOKEN}" | docker login ghcr.io --username "$${GHCR_USERNAME}" --password-stdin
+  fi
+  COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.gcp.yml)
+else
+  COMPOSE_ARGS=(-f docker-compose.yml)
 fi
 
-COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.gcp.yml)
 if [ -f "$${REPO_DIR}/.env.compose" ]; then
   COMPOSE_ARGS=(--env-file "$${REPO_DIR}/.env.compose" "$${COMPOSE_ARGS[@]}")
 fi
 
-docker compose "$${COMPOSE_ARGS[@]}" pull
+if [ "$${IMAGE_SOURCE}" = "ghcr" ]; then
+  docker compose "$${COMPOSE_ARGS[@]}" pull
+else
+  docker compose "$${COMPOSE_ARGS[@]}" build ingestion_app snapshot_app persistence_app strategy_app
+  if [ "${enable_dashboard_profile}" = "true" ]; then
+    docker compose "$${COMPOSE_ARGS[@]}" build dashboard
+  fi
+fi
+
 docker compose "$${COMPOSE_ARGS[@]}" up -d redis mongo ingestion_app snapshot_app persistence_app strategy_app strategy_persistence_app
 
 if [ "${enable_dashboard_profile}" = "true" ]; then
