@@ -9,6 +9,31 @@ Host note:
 - runtime and training execution are container/VM-first
 - local Python on Windows is only needed for VS Code features, host-side tests, or running helper scripts directly from the repo
 
+## Fast Path (Interactive)
+
+Use the interactive launcher when you want mode-based training with predictable output paths:
+
+```bash
+bash ./ops/gcp/start_training_interactive.sh
+```
+
+Supported modes:
+
+- full publish (non-smoke)
+- quick test
+- stage1 HPO
+- deep search
+- stage2 HPO
+- stage2 edge filter
+- stage1 diagnostic
+- grid prod v1
+
+Path pattern for every launched run:
+
+- `ml_pipeline_2/artifacts/training_launches/<utc_stamp>_<mode>_<model_group>_<profile_id>/`
+  - `training.log`
+  - `training-release.json` (non-grid modes)
+
 ## What This Produces
 
 - one disposable training VM

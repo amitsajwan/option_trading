@@ -8,8 +8,9 @@ echo "1) Bootstrap infra (create/update VM + buckets + config)"
 echo "2) Start/restart runtime (interactive deploy + optional Kite auth)"
 echo "3) Stop runtime VM"
 echo "4) Destroy infra (preserve data buckets + images)"
+echo "5) Start training (interactive full/test/HPO/grid modes)"
 echo
-read -r -p "Choose action [1-4]: " action || true
+read -r -p "Choose action [1-5]: " action || true
 
 case "${action}" in
   1)
@@ -23,6 +24,9 @@ case "${action}" in
     ;;
   4)
     bash "${REPO_ROOT}/ops/gcp/destroy_infra_preserve_data.sh"
+    ;;
+  5)
+    bash "${REPO_ROOT}/ops/gcp/start_training_interactive.sh"
     ;;
   *)
     echo "Invalid action: ${action}" >&2

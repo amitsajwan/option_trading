@@ -120,6 +120,29 @@ Inside the `tmux` session:
 
 For VM execution, run this inside `tmux` so the staged release survives SSH disconnects.
 
+### `start_training_interactive.sh`
+
+Interactive training launcher for:
+
+1. full publish run (non-smoke)
+2. quick test run
+3. Stage 1 HPO
+4. deep search
+5. Stage 2 HPO
+6. Stage 2 edge filter
+7. Stage 1 diagnostic
+8. grid prod v1
+
+It prints an ETA hint, writes logs and release payloads under a predictable path pattern:
+
+- `ml_pipeline_2/artifacts/training_launches/<utc_stamp>_<mode>_<model_group>_<profile_id>/`
+
+Example:
+
+```bash
+./ops/gcp/start_training_interactive.sh
+```
+
 ### `apply_ml_pure_release.sh`
 
 Use this when you already have a `release/ml_pure_runtime.env` file and only want to update the handoff keys in `.env.compose`.
