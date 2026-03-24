@@ -148,6 +148,8 @@ Example:
 ./ops/gcp/start_training_interactive.sh
 ```
 
+If launched outside `tmux`, the script auto-creates a tmux session and prints the attach command.
+
 ### `apply_ml_pure_release.sh`
 
 Use this when you already have a `release/ml_pure_runtime.env` file and only want to update the handoff keys in `.env.compose`.

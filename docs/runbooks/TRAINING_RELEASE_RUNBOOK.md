@@ -17,6 +17,11 @@ Use the interactive launcher when you want mode-based training with predictable 
 bash ./ops/gcp/start_training_interactive.sh
 ```
 
+Session safety:
+
+- when launched from a plain SSH shell, it auto-starts inside a new `tmux` session and exits
+- reconnect with the printed command, for example `tmux attach -t training_20260324_123000`
+
 Supported modes:
 
 - full publish (non-smoke)

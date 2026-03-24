@@ -3,6 +3,8 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 OPERATOR_ENV_FILE="${OPERATOR_ENV_FILE:-${REPO_ROOT}/ops/gcp/operator.env}"
+TRAINING_TMUX_SESSION_NAME="${TRAINING_TMUX_SESSION_NAME:-}"
+TRAINING_INTERACTIVE_IN_TMUX="${TRAINING_INTERACTIVE_IN_TMUX:-0}"
 
 if [ ! -f "${OPERATOR_ENV_FILE}" ]; then
   echo "Missing ${OPERATOR_ENV_FILE}. Run bootstrap_runtime_interactive.sh first." >&2
@@ -11,6 +13,18 @@ fi
 
 # shellcheck disable=SC1090
 source "${OPERATOR_ENV_FILE}"
+
+if [ -z "${TMUX:-}" ] && [ "${TRAINING_INTERACTIVE_IN_TMUX}" != "1" ]; then
+  if command -v tmux >/dev/null 2>&1; then
+    session_name="${TRAINING_TMUX_SESSION_NAME:-training_$(date -u +%Y%m%d_%H%M%S)}"
+    script_path="${REPO_ROOT}/ops/gcp/start_training_interactive.sh"
+    tmux new-session -d -s "${session_name}" "cd \"${REPO_ROOT}\" && TRAINING_INTERACTIVE_IN_TMUX=1 bash \"${script_path}\""
+    echo "Started interactive training launcher in tmux session: ${session_name}"
+    echo "Attach with: tmux attach -t ${session_name}"
+    exit 0
+  fi
+  echo "tmux not found; continuing in foreground. SSH disconnect can interrupt training." >&2
+fi
 
 prompt_var() {
   local var_name="$1"
