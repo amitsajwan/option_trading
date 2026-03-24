@@ -160,6 +160,8 @@ def _validate_staged_components(payload: Dict[str, Any], errors: List[str]) -> N
     publisher_id = str(publish.get("publisher_id") or "").strip()
     if publisher_id not in valid_publishers:
         errors.append(f"publish.publisher_id must be one of {sorted(valid_publishers)}")
+    if "smoke_allow_non_publishable" in publish and not isinstance(publish.get("smoke_allow_non_publishable"), bool):
+        errors.append("publish.smoke_allow_non_publishable must be boolean")
 
 
 def _validate_staged_runtime(payload: Dict[str, Any], errors: List[str]) -> None:

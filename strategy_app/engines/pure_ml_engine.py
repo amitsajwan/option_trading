@@ -6,15 +6,20 @@ import logging
 import os
 import time as wall_time
 import uuid
+from dataclasses import asdict
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
+
+from contracts_app import isoformat_ist
 
 from ..contracts import ExitReason, PositionContext, SignalType, SnapshotPayload, StrategyEngine, TradeSignal
 from ..logging.signal_logger import SignalLogger
 from ..position.tracker import PositionTracker
 from ..risk.manager import RiskManager
+from .runtime_artifacts import RuntimeArtifactStore, build_runtime_state_payload
 from .decision_annotation import annotate_signal_contract as apply_signal_contract
 from .pure_ml_staged_runtime import PureMLRuntimeControls, StagedRuntimeDecision, load_staged_model_package, load_staged_policy, predict_staged
 from .rolling_feature_state import RollingFeatureState
@@ -40,6 +45,7 @@ class PureMLEngine(StrategyEngine):
         stop_loss_pct: float = 0.05,
         target_pct: float = 0.20,
         signal_logger: Optional[SignalLogger] = None,
+        runtime_artifact_dir: Optional[Path | str] = None,
         strategy_profile_id: Optional[str] = None,
     ) -> None:
         self._model_package = load_staged_model_package(model_package_path)
@@ -54,6 +60,7 @@ class PureMLEngine(StrategyEngine):
         self._tracker = PositionTracker()
         self._risk = RiskManager()
         self._log = signal_logger or SignalLogger()
+        self._runtime_artifacts = RuntimeArtifactStore(runtime_artifact_dir)
         self._max_feature_age_sec = max(0, int(max_feature_age_sec))
         self._max_nan_features = max(0, int(max_nan_features))
         self._max_hold_bars = max(1, int(max_hold_bars))
@@ -65,6 +72,18 @@ class PureMLEngine(StrategyEngine):
         self._startup_warmup_events = max(0, int(os.getenv("STRATEGY_STARTUP_WARMUP_EVENTS", "0") or 0))
         self._session_start_monotonic: Optional[float] = None
         self._session_event_count = 0
+        self._bars_evaluated = 0
+        self._entry_count = 0
+        self._last_entry_at: Optional[str] = None
+        self._last_event: Optional[dict[str, Any]] = None
+        self._last_decision: Optional[dict[str, Any]] = None
+        self._session_trade_date: Optional[str] = None
+        self._session_started_at_ist: Optional[str] = None
+        self._session_updated_at_ist: Optional[str] = None
+        self._hold_counts: dict[str, int] = {}
+        self._run_id: Optional[str] = None
+        self._model_run_id: Optional[str] = None
+        self._model_group: Optional[str] = None
         self._engine_mode = "ml_pure"
         self._strategy_family_version = "ML_PURE_STAGED_V1"
         default_profile_id = "ml_pure_staged_v1"
@@ -78,16 +97,33 @@ class PureMLEngine(StrategyEngine):
             self._min_volume,
             str(self._runtime_controls.block_expiry).lower(),
         )
+        self._write_runtime_state(last_event={"event": "engine_init"})
 
     def set_run_context(self, run_id: Optional[str], metadata: Optional[dict[str, Any]] = None) -> None:
+        self._run_id = str(run_id or "").strip() or None
         if isinstance(metadata, dict):
             profile = str(metadata.get("strategy_profile_id") or "").strip()
             if profile:
                 self._strategy_profile_id = profile
+            model_run_id = str(metadata.get("model_run_id") or metadata.get("ml_pure_run_id") or "").strip()
+            if model_run_id:
+                self._model_run_id = model_run_id
+            model_group = str(metadata.get("model_group") or "").strip()
+            if model_group:
+                self._model_group = model_group
             regime_payload = metadata.get("regime_config")
             if isinstance(regime_payload, dict):
                 self._regime.configure(regime_payload)
         self._set_logger_context(run_id)
+        self._write_runtime_state(
+            last_event={
+                "event": "run_context",
+                "run_id": self._run_id,
+                "model_run_id": self._model_run_id,
+                "model_group": self._model_group,
+                "strategy_profile_id": self._strategy_profile_id,
+            }
+        )
 
     def _set_logger_context(self, run_id: Optional[str]) -> None:
         payload = {
@@ -103,9 +139,26 @@ class PureMLEngine(StrategyEngine):
     def on_session_start(self, trade_date: date) -> None:
         self._session_start_monotonic = wall_time.monotonic()
         self._session_event_count = 0
+        self._bars_evaluated = 0
+        self._entry_count = 0
+        self._last_entry_at = None
+        self._last_event = {"event": "session_start", "trade_date": trade_date.isoformat()}
+        self._last_decision = None
+        self._session_trade_date = trade_date.isoformat()
+        self._session_started_at_ist = isoformat_ist(datetime.now(timezone.utc))
+        self._session_updated_at_ist = self._session_started_at_ist
+        self._hold_counts = {}
         self._feature_state.on_session_start(trade_date)
         self._tracker.on_session_start(trade_date)
         self._risk.on_session_start(trade_date)
+        self._write_runtime_state()
+        self._append_runtime_metric(
+            {
+                "event": "session_start",
+                "trade_date": trade_date.isoformat(),
+                "bar": self._bars_evaluated,
+            }
+        )
         logger.info("pure ml engine session started: %s", trade_date.isoformat())
 
     def on_session_end(self, trade_date: date) -> None:
@@ -120,14 +173,48 @@ class PureMLEngine(StrategyEngine):
                 )
                 self._log.log_signal(exit_signal, acted_on=True)
                 self._handle_position_closed(exit_signal, position)
+                self._last_event = {
+                    "event": "session_end_exit",
+                    "trade_date": trade_date.isoformat(),
+                    "exit_reason": exit_signal.exit_reason.value if exit_signal.exit_reason else None,
+                    "position_id": exit_signal.position_id,
+                }
+                self._last_decision = {
+                    "event": "exit",
+                    "reason": exit_signal.exit_reason.value if exit_signal.exit_reason else None,
+                    "signal_id": exit_signal.signal_id,
+                }
+                self._session_updated_at_ist = isoformat_ist(datetime.now(timezone.utc))
+                self._write_runtime_state()
+                self._append_runtime_metric(
+                    {
+                        "event": "exit",
+                        "ts": exit_signal.timestamp.isoformat(),
+                        "bar": self._bars_evaluated,
+                        "snapshot_id": exit_signal.snapshot_id,
+                        "signal_id": exit_signal.signal_id,
+                        "position_id": exit_signal.position_id,
+                        "reason": exit_signal.exit_reason.value if exit_signal.exit_reason else None,
+                    }
+                )
         self._feature_state.on_session_end()
         self._risk.on_session_end(trade_date)
         self._session_start_monotonic = None
-        self._session_event_count = 0
+        self._last_event = {"event": "session_end", "trade_date": trade_date.isoformat()}
+        self._session_updated_at_ist = isoformat_ist(datetime.now(timezone.utc))
+        self._write_runtime_state()
+        self._append_runtime_metric(
+            {
+                "event": "session_end",
+                "trade_date": trade_date.isoformat(),
+                "bar": self._bars_evaluated,
+            }
+        )
         logger.info("pure ml engine session ended: %s", trade_date.isoformat())
 
     def evaluate(self, snapshot: SnapshotPayload) -> Optional[TradeSignal]:
         self._session_event_count += 1
+        self._bars_evaluated += 1
         snap = SnapshotAccessor(snapshot)
         rolling_features = self._feature_state.update(snap)
         position = self._tracker.current_position
@@ -144,6 +231,34 @@ class PureMLEngine(StrategyEngine):
                 )
                 self._log.log_signal(system_exit, acted_on=True)
                 self._handle_position_closed(system_exit, position)
+                self._last_event = {
+                    "event": "exit",
+                    "snapshot_id": snap.snapshot_id,
+                    "signal_id": system_exit.signal_id,
+                    "position_id": system_exit.position_id,
+                    "reason": system_exit.exit_reason.value if system_exit.exit_reason else None,
+                }
+                self._last_decision = {
+                    "event": "exit",
+                    "reason": system_exit.exit_reason.value if system_exit.exit_reason else None,
+                    "confidence": float(system_exit.confidence or 0.0),
+                }
+                self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+                self._write_runtime_state()
+                self._append_runtime_metric(
+                    {
+                        "event": "exit",
+                        "ts": isoformat_ist(snap.timestamp_or_now),
+                        "bar": self._bars_evaluated,
+                        "snapshot_id": snap.snapshot_id,
+                        "signal_id": system_exit.signal_id,
+                        "position_id": system_exit.position_id,
+                        "direction": system_exit.direction,
+                        "strike": system_exit.strike,
+                        "reason": system_exit.exit_reason.value if system_exit.exit_reason else None,
+                        "confidence": float(system_exit.confidence or 0.0),
+                    }
+                )
                 return system_exit
             refreshed = self._tracker.current_position
             if refreshed is not None:
@@ -151,6 +266,27 @@ class PureMLEngine(StrategyEngine):
                     position=refreshed,
                     timestamp=snap.timestamp_or_now,
                     snapshot_id=snap.snapshot_id,
+                )
+                self._last_event = {
+                    "event": "position_manage",
+                    "snapshot_id": snap.snapshot_id,
+                    "position_id": refreshed.position_id,
+                }
+                self._last_decision = None
+                self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+                self._write_runtime_state()
+                self._append_runtime_metric(
+                    {
+                        "event": "position_manage",
+                        "ts": isoformat_ist(snap.timestamp_or_now),
+                        "bar": self._bars_evaluated,
+                        "snapshot_id": snap.snapshot_id,
+                        "position_id": refreshed.position_id,
+                        "direction": refreshed.direction,
+                        "strike": refreshed.strike,
+                        "bars_held": refreshed.bars_held,
+                        "pnl_pct": refreshed.pnl_pct,
+                    }
                 )
             return None
 
@@ -161,18 +297,40 @@ class PureMLEngine(StrategyEngine):
             bundle=self._model_package,
             policy=self._staged_runtime_policy,
         )
+        self._last_decision = self._staged_decision_summary(decision)
         if decision.action == "HOLD":
             self._log_hold(str(decision.reason), snap, staged_decision=decision)
+            self._last_event = {
+                "event": "hold",
+                "snapshot_id": snap.snapshot_id,
+                "reason": str(decision.reason),
+            }
+            self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+            self._write_runtime_state()
             return None
 
         direction = "CE" if decision.action == "BUY_CE" else "PE"
         strike = snap.atm_strike
         if strike is None or int(strike) <= 0:
             self._log_hold("missing_atm_strike", snap, staged_decision=decision)
+            self._last_event = {
+                "event": "hold",
+                "snapshot_id": snap.snapshot_id,
+                "reason": "missing_atm_strike",
+            }
+            self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+            self._write_runtime_state()
             return None
         premium = snap.option_ltp(direction, int(strike))
         if premium is None or premium <= 0:
             self._log_hold("missing_option_premium", snap, staged_decision=decision)
+            self._last_event = {
+                "event": "hold",
+                "snapshot_id": snap.snapshot_id,
+                "reason": "missing_option_premium",
+            }
+            self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+            self._write_runtime_state()
             return None
 
         stop_loss_pct = float(decision.stop_loss_pct or self._stop_loss_pct)
@@ -214,6 +372,40 @@ class PureMLEngine(StrategyEngine):
         opened = self._tracker.open_position(signal, snap)
         self._log.log_signal(signal, acted_on=True)
         self._log.log_position_open(signal, opened)
+        self._entry_count += 1
+        self._last_entry_at = isoformat_ist(snap.timestamp_or_now)
+        self._last_event = {
+            "event": "entry",
+            "snapshot_id": snap.snapshot_id,
+            "signal_id": signal.signal_id,
+            "position_id": opened.position_id,
+            "direction": signal.direction,
+            "strike": signal.strike,
+        }
+        self._session_updated_at_ist = self._last_entry_at
+        self._write_runtime_state()
+        self._append_runtime_metric(
+            {
+                "event": "entry",
+                "ts": isoformat_ist(snap.timestamp_or_now),
+                "bar": self._bars_evaluated,
+                "snapshot_id": snap.snapshot_id,
+                "signal_id": signal.signal_id,
+                "position_id": opened.position_id,
+                "direction": signal.direction,
+                "strike": signal.strike,
+                "entry_premium": signal.entry_premium,
+                "max_lots": signal.max_lots,
+                "confidence": signal.confidence,
+                "entry_prob": decision.entry_prob,
+                "direction_up_prob": decision.direction_up_prob,
+                "ce_prob": decision.ce_prob,
+                "pe_prob": decision.pe_prob,
+                "recipe_id": decision.recipe_id,
+                "recipe_prob": decision.recipe_prob,
+                "recipe_margin": decision.recipe_margin,
+            }
+        )
         return signal
 
     def _liquidity_ok(self, *, snap: SnapshotAccessor, direction: str, strike: int) -> bool:
@@ -273,6 +465,77 @@ class PureMLEngine(StrategyEngine):
             "recipe_margin": float(decision.recipe_margin),
         }
 
+    def _staged_decision_summary(self, decision: StagedRuntimeDecision) -> dict[str, Any]:
+        summary = asdict(decision)
+        summary["action"] = str(summary.get("action") or "")
+        summary["reason"] = str(summary.get("reason") or "")
+        return summary
+
+    def _warmup_state(self) -> dict[str, Any]:
+        elapsed_minutes = 0.0
+        if self._session_start_monotonic is not None:
+            elapsed_minutes = max(0.0, (wall_time.monotonic() - self._session_start_monotonic) / 60.0)
+        return {
+            "events_seen": int(self._session_event_count),
+            "minutes_elapsed": float(elapsed_minutes),
+            "min_events": int(self._startup_warmup_events),
+            "min_minutes": float(self._startup_warmup_minutes),
+        }
+
+    def _runtime_state_payload(self) -> dict[str, Any]:
+        current_position = self._tracker.current_position
+        return build_runtime_state_payload(
+            engine=self._engine_mode,
+            strategy_profile_id=self._strategy_profile_id,
+            runtime_artifact_dir=self._runtime_artifacts.paths.root,
+            run_id=self._model_run_id or self._run_id,
+            model_group=self._model_group,
+            block_expiry=self._runtime_controls.block_expiry,
+            max_feature_age_sec=self._max_feature_age_sec,
+            max_nan_features=self._max_nan_features,
+            max_hold_bars=self._max_hold_bars,
+            min_oi=self._min_oi,
+            min_volume=self._min_volume,
+            session_trade_date=self._session_trade_date,
+            session_started_at_ist=self._session_started_at_ist,
+            session_updated_at_ist=self._session_updated_at_ist,
+            bars_evaluated=self._bars_evaluated,
+            entries_taken=self._entry_count,
+            last_entry_at=self._last_entry_at,
+            hold_counts=self._hold_counts,
+            is_halted=self._risk.is_halted,
+            is_paused=getattr(self._risk, "is_paused", False),
+            session_pnl_pct=getattr(self._risk, "session_pnl_pct", None),
+            consecutive_losses=getattr(self._risk, "consecutive_losses", 0),
+            has_position=self._tracker.has_position,
+            current_position=asdict(current_position) if current_position is not None else None,
+            last_event=self._last_event,
+            last_decision=self._last_decision,
+            warmup=self._warmup_state(),
+        )
+
+    def _write_runtime_state(
+        self,
+        *,
+        last_event: Optional[dict[str, Any]] = None,
+        last_decision: Optional[dict[str, Any]] = None,
+    ) -> None:
+        if last_event is not None:
+            self._last_event = dict(last_event)
+        if last_decision is not None:
+            self._last_decision = dict(last_decision)
+        self._runtime_artifacts.write_state(self._runtime_state_payload())
+
+    def _append_runtime_metric(self, payload: dict[str, Any]) -> None:
+        metric = dict(payload)
+        metric.setdefault("engine", self._engine_mode)
+        metric.setdefault("strategy_profile_id", self._strategy_profile_id)
+        metric.setdefault("run_id", self._model_run_id or self._run_id)
+        metric.setdefault("model_group", self._model_group)
+        metric.setdefault("session_trade_date", self._session_trade_date)
+        metric.setdefault("bar", self._bars_evaluated)
+        self._runtime_artifacts.append_metric(metric)
+
     def _log_hold(
         self,
         reason: str,
@@ -299,6 +562,32 @@ class PureMLEngine(StrategyEngine):
             decision_metrics=(self._staged_decision_metrics(staged_decision) if staged_decision is not None else None),
         )
         self._log.log_signal(hold_signal, acted_on=False)
+        hold_reason = str(reason).strip().lower()
+        self._hold_counts[hold_reason] = int(self._hold_counts.get(hold_reason, 0)) + 1
+        self._last_event = {
+            "event": "hold",
+            "snapshot_id": snap.snapshot_id,
+            "reason": hold_reason,
+        }
+        self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+        self._append_runtime_metric(
+            {
+                "event": "hold",
+                "ts": isoformat_ist(snap.timestamp_or_now),
+                "bar": self._bars_evaluated,
+                "snapshot_id": snap.snapshot_id,
+                "reason": hold_reason,
+                "confidence": hold_signal.confidence,
+                "entry_prob": (staged_decision.entry_prob if staged_decision is not None else None),
+                "direction_up_prob": (staged_decision.direction_up_prob if staged_decision is not None else None),
+                "ce_prob": (staged_decision.ce_prob if staged_decision is not None else None),
+                "pe_prob": (staged_decision.pe_prob if staged_decision is not None else None),
+                "recipe_id": (staged_decision.recipe_id if staged_decision is not None else None),
+                "recipe_prob": (staged_decision.recipe_prob if staged_decision is not None else None),
+                "recipe_margin": (staged_decision.recipe_margin if staged_decision is not None else None),
+            }
+        )
+        self._write_runtime_state()
         logger.debug("ml_pure hold reason=%s snapshot_id=%s", reason, snap.snapshot_id)
 
     @staticmethod

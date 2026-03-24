@@ -391,6 +391,7 @@ services:
       - "${DASHBOARD_PORT:-8008}:8008"
     volumes:
       - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
+      - ./.run:/app/.run:ro
       - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
 
   strategy_eval_orchestrator:

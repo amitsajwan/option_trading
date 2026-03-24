@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Iterable, Optional
 from zoneinfo import ZoneInfo
@@ -26,11 +26,11 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _zone_or_ist(name: str) -> ZoneInfo:
+def _zone_or_ist(name: str) -> tzinfo:
     try:
         return ZoneInfo(name)
     except Exception:
-        return ZoneInfo(DEFAULT_MARKET_TZ)
+        return IST
 
 
 def _ist_now_iso() -> str:

@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 
-IST_ZONE = ZoneInfo("Asia/Kolkata")
+def _resolve_ist_zone():
+    try:
+        return ZoneInfo("Asia/Kolkata")
+    except Exception:
+        return timezone(timedelta(hours=5, minutes=30))
+
+
+IST_ZONE = _resolve_ist_zone()
 UTC_ZONE = timezone.utc
 
 

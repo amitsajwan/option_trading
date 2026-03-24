@@ -9,6 +9,7 @@ import joblib
 
 from strategy_app.contracts import SignalType
 from strategy_app.engines.pure_ml_engine import PureMLEngine
+from strategy_app.engines.runtime_artifacts import RuntimeArtifactStore
 from strategy_app.engines.pure_ml_staged_runtime import StagedRuntimeDecision
 from strategy_app.logging.signal_logger import SignalLogger
 
@@ -147,11 +148,12 @@ class PureMLEngineTests(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
-    def _build_engine(self, root: Path) -> PureMLEngine:
+    def _build_engine(self, root: Path, *, runtime_artifact_dir: Path | None = None) -> PureMLEngine:
         return PureMLEngine(
             model_package_path=str(self._write_model_bundle(root)),
             threshold_report_path=str(self._write_threshold_report(root)),
             signal_logger=SignalLogger(root),
+            runtime_artifact_dir=runtime_artifact_dir,
         )
 
     def test_staged_buy_ce_emits_entry_signal(self) -> None:
@@ -230,6 +232,58 @@ class PureMLEngineTests(unittest.TestCase):
                 signal = engine.evaluate(_snapshot(snapshot_id="snap-1", ts="2026-03-02T09:32:00+05:30"))
 
             self.assertIsNone(signal)
+
+    def test_runtime_artifacts_capture_session_state_and_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            artifacts_dir = root / "artifacts"
+            engine = self._build_engine(root, runtime_artifact_dir=artifacts_dir)
+            engine.set_run_context("runtime-test", {"strategy_profile_id": "ml_pure_staged_v1"})
+            engine.on_session_start(date(2026, 3, 2))
+
+            hold = StagedRuntimeDecision(action="HOLD", reason="entry_below_threshold", entry_prob=0.41, direction_up_prob=0.39, ce_prob=0.38, pe_prob=0.37, recipe_id="base", recipe_prob=0.52, recipe_margin=0.10)
+            entry = StagedRuntimeDecision(action="BUY_CE", reason="recipe_selected", entry_prob=0.84, direction_up_prob=0.79, ce_prob=0.79, pe_prob=0.21, recipe_id="base", recipe_prob=0.92, recipe_margin=0.30, horizon_minutes=12, stop_loss_pct=0.04, target_pct=0.18)
+
+            with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=hold):
+                self.assertIsNone(engine.evaluate(_snapshot(snapshot_id="snap-hold", ts="2026-03-02T09:30:00+05:30")))
+            with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=entry):
+                signal = engine.evaluate(_snapshot(snapshot_id="snap-entry", ts="2026-03-02T09:31:00+05:30"))
+
+            self.assertIsNotNone(signal)
+            store = RuntimeArtifactStore(artifacts_dir)
+            state = store.read_state()
+            metrics = store.read_metrics(tail_lines=5)
+
+            self.assertTrue(state["exists"])
+            self.assertTrue(metrics["exists"])
+            self.assertEqual(state["payload"]["session"]["bars_evaluated"], 2)
+            self.assertEqual(state["payload"]["session"]["entries_taken"], 1)
+            self.assertEqual(state["payload"]["session"]["hold_counts"]["entry_below_threshold"], 1)
+            self.assertTrue(state["payload"]["position"]["has_position"])
+            self.assertGreaterEqual(metrics["line_count"], 3)
+            self.assertEqual(metrics["latest"]["event"], "entry")
+
+    def test_session_start_resets_runtime_counters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            artifacts_dir = root / "artifacts"
+            engine = self._build_engine(root, runtime_artifact_dir=artifacts_dir)
+            engine.set_run_context("runtime-test", {"strategy_profile_id": "ml_pure_staged_v1"})
+            engine.on_session_start(date(2026, 3, 2))
+
+            hold = StagedRuntimeDecision(action="HOLD", reason="feature_stale")
+            with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=hold):
+                self.assertIsNone(engine.evaluate(_snapshot(snapshot_id="snap-hold", ts="2026-03-02T09:30:00+05:30")))
+
+            engine.on_session_start(date(2026, 3, 3))
+
+            state = RuntimeArtifactStore(artifacts_dir).read_state()
+            self.assertTrue(state["exists"])
+            self.assertEqual(state["payload"]["session"]["trade_date"], "2026-03-03")
+            self.assertEqual(state["payload"]["session"]["bars_evaluated"], 0)
+            self.assertEqual(state["payload"]["session"]["entries_taken"], 0)
+            self.assertEqual(state["payload"]["session"]["hold_counts"], {})
+            self.assertIsNone(state["payload"]["session"]["last_entry_at"])
 
 
 if __name__ == "__main__":

@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional, Set
 from zoneinfo import ZoneInfo
 
 
-IST_ZONE = ZoneInfo("Asia/Kolkata")
+def _resolve_ist_zone():
+    try:
+        return ZoneInfo("Asia/Kolkata")
+    except Exception:
+        return timezone(timedelta(hours=5, minutes=30))
+
+
+IST_ZONE = _resolve_ist_zone()
 
 
 def _coerce_ist(now_ist: datetime) -> datetime:

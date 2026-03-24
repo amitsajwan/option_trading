@@ -7,6 +7,7 @@ from unittest.mock import patch
 import joblib
 
 from strategy_app.engines.pure_ml_engine import PureMLEngine
+from strategy_app.engines.runtime_artifacts import RuntimeArtifactStore
 from strategy_app.logging.signal_logger import SignalLogger
 from strategy_app.main import (
     _resolve_ml_pure_float,
@@ -17,6 +18,7 @@ from strategy_app.main import (
     _resolve_ml_pure_switch_paths,
     _resolve_ml_pure_threshold_report,
     build_engine,
+    run_cli,
 )
 
 
@@ -198,6 +200,50 @@ class PureMLConfigTests(unittest.TestCase):
         self.assertEqual(model_path, "x.joblib")
         self.assertEqual(threshold_path, "y.json")
         self.assertIsNone(meta)
+
+    def test_run_cli_writes_runtime_config_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            runtime_dir = root / "runtime"
+            model_bundle = self._write_model_bundle(root)
+            threshold_report = self._write_threshold_report(root)
+
+            with patch("strategy_app.main._enforce_ml_runtime_guard", return_value=None), patch(
+                "strategy_app.main.RedisSnapshotConsumer.start",
+                return_value=0,
+            ):
+                exit_code = run_cli(
+                    [
+                        "--engine",
+                        "ml_pure",
+                        "--topic",
+                        "market:snapshot:v1",
+                        "--run-dir",
+                        str(runtime_dir),
+                        "--rollout-stage",
+                        "paper",
+                        "--ml-pure-model-package",
+                        str(model_bundle),
+                        "--ml-pure-threshold-report",
+                        str(threshold_report),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            config = RuntimeArtifactStore(runtime_dir).read_config()
+            self.assertTrue(config["exists"])
+            payload = config["payload"]
+            self.assertEqual(payload["engine"], "ml_pure")
+            self.assertEqual(payload["topic"], "market:snapshot:v1")
+            self.assertEqual(payload["strategy_profile_id"], "ml_pure_staged_v1")
+            self.assertEqual(payload["rollout"]["stage"], "paper")
+            self.assertEqual(payload["launch"]["rollout_stage"], "paper")
+            self.assertEqual(payload["model"]["model_package_path"], str(model_bundle))
+            self.assertEqual(payload["model"]["threshold_report_path"], str(threshold_report))
+            self.assertTrue(payload["model"]["block_expiry"])
+            self.assertTrue(payload["ml_pure"]["block_expiry"])
+            self.assertEqual(Path(payload["runtime_artifact_dir"]), runtime_dir.resolve())
+            self.assertEqual(Path(payload["signal_run_dir"]), runtime_dir.resolve())
 
 
 if __name__ == "__main__":

@@ -109,6 +109,14 @@ except ImportError:
     load_legacy_mapping = None  # type: ignore
 
 try:
+    from .runtime_artifacts import load_strategy_runtime_observability
+except ImportError:
+    try:
+        from runtime_artifacts import load_strategy_runtime_observability  # type: ignore
+    except ImportError:
+        load_strategy_runtime_observability = None  # type: ignore
+
+try:
     from contracts_app.options_math import black_scholes_price, calculate_option_greeks, estimate_risk_free_rate
 except ImportError:
     black_scholes_price = None
@@ -5153,6 +5161,53 @@ async def market_data_status():
     status["status"] = str(status["data_validation"].get("overall_status") or "unknown")
 
     return _normalize_timestamp_fields(status)
+
+
+def _strategy_runtime_metrics_tail_limit() -> int:
+    raw_value = os.getenv("DASHBOARD_STRATEGY_RUNTIME_METRICS_TAIL", "25")
+    try:
+        return max(1, int(raw_value))
+    except Exception:
+        return 25
+
+
+async def _load_strategy_runtime_observability() -> Dict[str, Any]:
+    if load_strategy_runtime_observability is None:
+        return {
+            "status": "unavailable",
+            "checked_at_ist": _now_iso_ist(),
+            "service": "market-data-dashboard",
+            "error": "strategy runtime observability helper unavailable",
+        }
+
+    try:
+        payload = await asyncio.to_thread(
+            load_strategy_runtime_observability,
+            repo_root=REPO_ROOT,
+            metrics_tail_limit=_strategy_runtime_metrics_tail_limit(),
+        )
+        if isinstance(payload, dict):
+            return _normalize_timestamp_fields(payload)
+        return {
+            "status": "error",
+            "checked_at_ist": _now_iso_ist(),
+            "service": "market-data-dashboard",
+            "error": "strategy runtime observability returned non-object payload",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "checked_at_ist": _now_iso_ist(),
+            "service": "market-data-dashboard",
+            "error": str(exc),
+        }
+
+
+@app.get("/api/health/strategy-runtime")
+async def strategy_runtime_health():
+    """Operator-facing view of strategy runtime artifacts published under .run."""
+    return await _load_strategy_runtime_observability()
+
 
 def validate_data_availability(status: Dict[str, Any]) -> Dict[str, Any]:
     """Validate data availability and freshness"""

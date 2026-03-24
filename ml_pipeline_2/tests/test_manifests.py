@@ -125,6 +125,20 @@ def test_staged_manifest_rejects_profit_factor_floor_below_one(tmp_path: Path) -
         resolve_manifest(payload, manifest_path=tmp_path / "staged_bad_profit_factor.json", validate_paths=False)
 
 
+def test_staged_manifest_accepts_publish_smoke_allow_non_publishable_bool(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["publish"]["smoke_allow_non_publishable"] = True
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_publish_smoke_bool_ok.json", validate_paths=False)
+    assert resolved["publish"]["smoke_allow_non_publishable"] is True
+
+
+def test_staged_manifest_rejects_publish_smoke_allow_non_publishable_non_bool(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["publish"]["smoke_allow_non_publishable"] = "true"
+    with pytest.raises(ManifestValidationError, match="publish.smoke_allow_non_publishable must be boolean"):
+        resolve_manifest(payload, manifest_path=tmp_path / "staged_publish_smoke_bool_bad.json", validate_paths=False)
+
+
 def test_staged_manifest_validate_paths_requires_stage_view_datasets(tmp_path: Path) -> None:
     parquet_root = tmp_path / "parquet"
     (parquet_root / "snapshots_ml_flat").mkdir(parents=True, exist_ok=True)
