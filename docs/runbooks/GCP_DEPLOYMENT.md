@@ -9,6 +9,7 @@ This workflow is self-contained. It includes the GCP setup it needs.
 If you want a guided prompt that asks for all required runtime values and runs publish + optional VM restart:
 
 ```bash
+./ops/gcp/bootstrap_runtime_interactive.sh
 ./ops/gcp/start_runtime_interactive.sh
 ```
 
@@ -20,6 +21,11 @@ It prompts for:
 - `APP_IMAGE_TAG`
 - `ML_PURE_RUN_ID`
 - `ML_PURE_MODEL_GROUP`
+
+Recommended order:
+
+1. `bootstrap_runtime_interactive.sh` once per environment (writes `ops/gcp/operator.env`, optional infra bootstrap)
+2. `start_runtime_interactive.sh` for each deploy (sets runtime `.env.compose`, publishes runtime config, optional VM restart)
 
 ## What This Produces
 
