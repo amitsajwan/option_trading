@@ -38,12 +38,17 @@ require_var REPOSITORY
 require_var TAG
 require_var MODEL_BUCKET_NAME
 require_var RUNTIME_CONFIG_BUCKET_NAME
-require_var MODEL_BUCKET_URL
-require_var RUNTIME_CONFIG_BUCKET_URL
-require_var DATA_SYNC_SOURCE
 require_var DASHBOARD_PORT
 require_var SSH_SOURCE_RANGES
 require_var DASHBOARD_SOURCE_RANGES
+
+if [ -z "${MODEL_BUCKET_URL:-}" ]; then
+  MODEL_BUCKET_URL="gs://${MODEL_BUCKET_NAME}/published_models"
+fi
+
+if [ -z "${RUNTIME_CONFIG_BUCKET_URL:-}" ]; then
+  RUNTIME_CONFIG_BUCKET_URL="gs://${RUNTIME_CONFIG_BUCKET_NAME}/runtime"
+fi
 
 mkdir -p "${TF_DIR}"
 

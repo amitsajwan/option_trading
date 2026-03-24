@@ -9,6 +9,8 @@ This workflow is self-contained. It includes the GCP setup it needs.
 If you want a guided prompt that asks for all required runtime values and runs publish + optional VM restart:
 
 ```bash
+./ops/gcp/runtime_lifecycle_interactive.sh
+# or directly:
 ./ops/gcp/bootstrap_runtime_interactive.sh
 ./ops/gcp/start_runtime_interactive.sh
 ```
@@ -22,10 +24,17 @@ It prompts for:
 - `ML_PURE_RUN_ID`
 - `ML_PURE_MODEL_GROUP`
 
+`start_runtime_interactive.sh` also supports:
+
+- optional Kite browser auth (`python -m ingestion_app.kite_auth --force`)
+- automatic sync of `KITE_API_KEY` and `KITE_ACCESS_TOKEN` from `ingestion_app/credentials.json` into `.env.compose`
+- automatic `INGESTION_COLLECTORS_ENABLED=1`
+
 Recommended order:
 
 1. `bootstrap_runtime_interactive.sh` once per environment (writes `ops/gcp/operator.env`, optional infra bootstrap)
 2. `start_runtime_interactive.sh` for each deploy (sets runtime `.env.compose`, publishes runtime config, optional VM restart)
+3. `stop_runtime.sh` at end of day to pause compute cost
 
 ## What This Produces
 
@@ -52,8 +61,11 @@ You need at least these values in `ops/gcp/operator.env`:
 - `GHCR_IMAGE_PREFIX`
 - `MODEL_BUCKET_NAME`
 - `RUNTIME_CONFIG_BUCKET_NAME`
-- `MODEL_BUCKET_URL`
-- `RUNTIME_CONFIG_BUCKET_URL`
+
+`MODEL_BUCKET_URL` and `RUNTIME_CONFIG_BUCKET_URL` are optional; bootstrap derives them as:
+
+- `MODEL_BUCKET_URL=gs://<MODEL_BUCKET_NAME>/published_models`
+- `RUNTIME_CONFIG_BUCKET_URL=gs://<RUNTIME_CONFIG_BUCKET_NAME>/runtime`
 
 Verify:
 

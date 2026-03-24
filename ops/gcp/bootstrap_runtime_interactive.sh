@@ -12,6 +12,11 @@ fi
 
 mkdir -p "$(dirname "${OPERATOR_ENV_FILE}")"
 
+if [ -f "${OPERATOR_ENV_FILE}" ]; then
+  # shellcheck disable=SC1090
+  source "${OPERATOR_ENV_FILE}"
+fi
+
 prompt_var() {
   local var_name="$1"
   local prompt_text="$2"
@@ -42,23 +47,53 @@ prompt_yes_no() {
   return 1
 }
 
+prompt_optional() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local default_value="${3:-}"
+  local entered=""
+  if [ -n "${default_value}" ]; then
+    read -r -p "${prompt_text} [${default_value}]: " entered || true
+    entered="${entered:-${default_value}}"
+  else
+    read -r -p "${prompt_text} (optional): " entered || true
+  fi
+  printf -v "${var_name}" '%s' "${entered}"
+}
+
+detect_default_project() {
+  gcloud config get-value project 2>/dev/null | tr -d '\r'
+}
+
+detect_default_repo_url() {
+  git -C "${REPO_ROOT}" config --get remote.origin.url 2>/dev/null || true
+}
+
+detect_default_repo_ref() {
+  git -C "${REPO_ROOT}" branch --show-current 2>/dev/null || true
+}
+
 echo "GCP runtime bootstrap (interactive)"
 echo "This will ask for changing values and write ${OPERATOR_ENV_FILE}."
 echo
 
-existing_project_id="${PROJECT_ID:-gen-lang-client-0909109011}"
+detected_project_id="$(detect_default_project)"
+detected_repo_url="$(detect_default_repo_url)"
+detected_repo_ref="$(detect_default_repo_ref)"
+
+existing_project_id="${PROJECT_ID:-${detected_project_id:-gen-lang-client-0909109011}}"
 existing_region="${REGION:-asia-south1}"
 existing_zone="${ZONE:-asia-south1-b}"
 existing_runtime_name="${RUNTIME_NAME:-option-trading-runtime-01}"
 existing_runtime_machine_type="${RUNTIME_MACHINE_TYPE:-e2-standard-4}"
 existing_training_machine_type="${TRAINING_MACHINE_TYPE:-n2-highcpu-16}"
-existing_repo_clone_url="${REPO_CLONE_URL:-https://github.com/amitsajwan/option_trading.git}"
-existing_repo_ref="${REPO_REF:-chore/ml-pipeline-ubuntu-gcp-runbook}"
+existing_repo_clone_url="${REPO_CLONE_URL:-${detected_repo_url:-https://github.com/amitsajwan/option_trading.git}}"
+existing_repo_ref="${REPO_REF:-${detected_repo_ref:-main}}"
 existing_ghcr_prefix="${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
 existing_tag="${TAG:-latest}"
 existing_repository="${REPOSITORY:-option-trading-runtime}"
-existing_model_bucket_name="${MODEL_BUCKET_NAME:-gen-lang-client-0909109011-option-trading-models}"
-existing_runtime_config_bucket_name="${RUNTIME_CONFIG_BUCKET_NAME:-gen-lang-client-0909109011-option-trading-runtime-config}"
+existing_model_bucket_name="${MODEL_BUCKET_NAME:-${existing_project_id}-option-trading-models}"
+existing_runtime_config_bucket_name="${RUNTIME_CONFIG_BUCKET_NAME:-${existing_project_id}-option-trading-runtime-config}"
 existing_data_sync_source="${DATA_SYNC_SOURCE:-}"
 existing_model_group="${MODEL_GROUP:-banknifty_futures/h15_tp_auto}"
 existing_profile_id="${PROFILE_ID:-openfe_v9_dual}"
@@ -81,7 +116,7 @@ prompt_var TAG "Image tag" "${existing_tag}"
 prompt_var REPOSITORY "Artifact Registry repository id (infra compatibility)" "${existing_repository}"
 prompt_var MODEL_BUCKET_NAME "Model bucket name (without gs://)" "${existing_model_bucket_name}"
 prompt_var RUNTIME_CONFIG_BUCKET_NAME "Runtime config bucket name (without gs://)" "${existing_runtime_config_bucket_name}"
-prompt_var DATA_SYNC_SOURCE "Data sync source (gs://.../ml_pipeline)" "${existing_data_sync_source}"
+prompt_optional DATA_SYNC_SOURCE "Data sync source (gs://.../ml_pipeline)" "${existing_data_sync_source}"
 prompt_var DASHBOARD_PORT "Dashboard port" "${existing_dashboard_port}"
 prompt_var ENABLE_DASHBOARD_PROFILE "Enable dashboard profile (true/false)" "${existing_enable_dashboard_profile}"
 prompt_var SSH_SOURCE_RANGES "SSH source ranges (CIDR)" "${existing_ssh_source_ranges}"
@@ -140,10 +175,16 @@ echo "  MODEL_BUCKET_URL=${MODEL_BUCKET_URL}"
 echo "  RUNTIME_CONFIG_BUCKET_URL=${RUNTIME_CONFIG_BUCKET_URL}"
 
 if prompt_yes_no "Run full bootstrap now (terraform + runtime VM provisioning)?"; then
+  read -r -p "Build runtime images now? [y/N]: " run_image_build || true
+  run_image_build="${run_image_build:-N}"
+  run_image_build_flag="0"
+  if [[ "${run_image_build}" =~ ^[Yy]$ ]]; then
+    run_image_build_flag="1"
+  fi
   echo
   echo "Running bootstrap..."
   source "${OPERATOR_ENV_FILE}"
-  RUN_IMAGE_BUILD=0 "${REPO_ROOT}/ops/gcp/from_scratch_bootstrap.sh"
+  RUN_IMAGE_BUILD="${run_image_build_flag}" "${REPO_ROOT}/ops/gcp/from_scratch_bootstrap.sh"
 fi
 
 echo

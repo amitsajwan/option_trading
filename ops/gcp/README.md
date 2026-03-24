@@ -19,6 +19,21 @@ These scripts are also the intended execution layer for future GitHub Actions wo
 
 ## Main Scripts
 
+### `runtime_lifecycle_interactive.sh`
+
+Single menu-driven entrypoint for daily operations:
+
+1. bootstrap infra
+2. start/restart runtime deploy
+3. stop runtime VM
+4. destroy infra (preserve data)
+
+Example:
+
+```bash
+./ops/gcp/runtime_lifecycle_interactive.sh
+```
+
 ### `from_scratch_bootstrap.sh`
 
 Use this from a fresh operator machine or repo checkout to:
@@ -40,6 +55,7 @@ Why `RUN_RUNTIME_CONFIG_SYNC=0` on a fresh checkout:
 - the helper copies `.env.compose.example` into `.env.compose` if no compose env exists yet
 - `.env.compose.example` is intentionally not launch-ready for live `ml_pure`
 - `publish_runtime_config.sh` rejects that non-live `ml_pure` config by design
+- `DATA_SYNC_SOURCE` is optional for runtime-only deploys (needed mainly for local parquet/training data sync)
 
 After bootstrap, edit `.env.compose` into a valid runtime config and then publish it explicitly.
 
