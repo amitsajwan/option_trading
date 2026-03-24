@@ -135,7 +135,12 @@ Interactive training launcher for:
 
 It prints an ETA hint, writes logs and release payloads under a predictable path pattern:
 
-- `ml_pipeline_2/artifacts/training_launches/<utc_stamp>_<mode>_<model_group>_<profile_id>/`
+- `ml_pipeline_2/artifacts/training_launches/<utc_stamp>_<nonce>_<mode>_<lane_tag>_<model_group>_<profile_id>/`
+
+Parallel-safe behavior:
+
+- non-publish modes auto-suffix model group with lane tag (`<base_group>_<lane_tag>`)
+- publish mode keeps base model group by default, with optional lane suffix
 
 Example:
 

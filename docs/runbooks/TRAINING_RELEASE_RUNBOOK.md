@@ -30,9 +30,15 @@ Supported modes:
 
 Path pattern for every launched run:
 
-- `ml_pipeline_2/artifacts/training_launches/<utc_stamp>_<mode>_<model_group>_<profile_id>/`
+- `ml_pipeline_2/artifacts/training_launches/<utc_stamp>_<nonce>_<mode>_<lane_tag>_<model_group>_<profile_id>/`
   - `training.log`
   - `training-release.json` (non-grid modes)
+
+Parallel safety:
+
+- launcher asks for `lane_tag` and uses it in run folder naming
+- non-publish modes automatically publish to `base_model_group_<lane_tag>` so concurrent research runs do not collide
+- publish mode defaults to the base model group (production lane), but you can opt into `base_model_group_<lane_tag>`
 
 ## What This Produces
 

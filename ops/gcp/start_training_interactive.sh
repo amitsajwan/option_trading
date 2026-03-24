@@ -42,6 +42,22 @@ prompt_yes_no() {
   return 1
 }
 
+sanitize_tag() {
+  local raw="$1"
+  local lowered
+  lowered="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+  lowered="${lowered// /_}"
+  lowered="${lowered//\//_}"
+  lowered="${lowered//:/_}"
+  lowered="${lowered//[^a-z0-9_.-]/_}"
+  lowered="${lowered##_}"
+  lowered="${lowered%%_}"
+  if [ -z "${lowered}" ]; then
+    lowered="run"
+  fi
+  printf '%s\n' "${lowered}"
+}
+
 mode_eta_hint() {
   local mode="$1"
   case "${mode}" in
@@ -57,16 +73,31 @@ mode_eta_hint() {
   esac
 }
 
+mode_plan_hint() {
+  local mode="$1"
+  case "${mode}" in
+    publish_full) echo "Plan: Stage1 + Stage2 + Stage3, strict publish gates, runtime handoff + runtime config publish." ;;
+    test_quick) echo "Plan: Stage1 + Stage2 + Stage3 with test model-group lane, no runtime handoff/publish." ;;
+    stage1_hpo) echo "Plan: full staged pipeline using Stage1 HPO manifest; research lane only." ;;
+    deep_search) echo "Plan: full staged pipeline using deep-search manifest; research lane only." ;;
+    stage2_hpo) echo "Plan: full staged pipeline with expanded Stage2 search; Stage1/3 still run." ;;
+    stage2_edge) echo "Plan: full staged pipeline with Stage2 label-edge filtering; Stage1/3 still run." ;;
+    stage1_diag) echo "Plan: full staged pipeline with Stage1 diagnostic gates; research lane only." ;;
+    grid_prod) echo "Plan: multi-lane grid (prod_v1), rank winner, optional winner publish." ;;
+    *) echo "Plan: unknown mode." ;;
+  esac
+}
+
 print_mode_menu() {
   echo "Training mode:"
-  echo "1) publish_full  - full training + publish/runtime handoff (no smoke)"
-  echo "2) test_quick    - quick test run, no handoff/publish"
-  echo "3) stage1_hpo    - Stage 1 HPO research, no handoff/publish"
-  echo "4) deep_search   - deep search research, no handoff/publish"
-  echo "5) stage2_hpo    - Stage 2 HPO research, no handoff/publish"
-  echo "6) stage2_edge   - Stage 2 edge-filter research, no handoff/publish"
-  echo "7) stage1_diag   - Stage 1 diagnostic gates, no handoff/publish"
-  echo "8) grid_prod     - grid sweep (prod_v1), optional winner publish"
+  echo "1) publish_full  - full staged run (S1+S2+S3), publish + handoff (non-smoke)"
+  echo "2) test_quick    - full staged run (S1+S2+S3) in test lane, no publish/handoff"
+  echo "3) stage1_hpo    - full staged run with Stage1 HPO-focused manifest"
+  echo "4) deep_search   - full staged run with deep-search manifest"
+  echo "5) stage2_hpo    - full staged run with Stage2 HPO-focused manifest"
+  echo "6) stage2_edge   - full staged run with Stage2 edge-filter manifest"
+  echo "7) stage1_diag   - full staged run with Stage1 diagnostic manifest"
+  echo "8) grid_prod     - staged grid prod v1, optional winner publish"
 }
 
 echo "Staged training interactive launcher"
@@ -138,19 +169,30 @@ esac
 
 echo
 echo "$(mode_eta_hint "${MODE_ID}")"
+echo "$(mode_plan_hint "${MODE_ID}")"
 echo
 
 default_group="${MODEL_GROUP:-banknifty_futures/h15_tp_auto}"
-if [ "${MODE_ID}" = "test_quick" ]; then
-  default_group="${default_group}_test"
-fi
-if [ "${MODE_ID}" != "publish_full" ] && [ "${MODE_ID}" != "test_quick" ]; then
-  default_group="${default_group}_${MODE_LABEL}"
+default_lane="${MODE_LABEL}"
+if [ "${MODE_ID}" = "publish_full" ]; then
+  default_lane="prod"
 fi
 
-prompt_var MODEL_GROUP_VALUE "Model group" "${default_group}"
+prompt_var MODEL_GROUP_BASE_VALUE "Base model group" "${default_group}"
 prompt_var PROFILE_ID_VALUE "Profile id" "${PROFILE_ID:-openfe_v9_dual}"
 prompt_var CONFIG_PATH_VALUE "Config path" "${STAGED_CONFIG_VALUE}"
+prompt_var LANE_TAG_RAW "Parallel lane tag (used for collision-safe naming)" "${default_lane}"
+
+LANE_TAG_VALUE="$(sanitize_tag "${LANE_TAG_RAW}")"
+MODEL_GROUP_VALUE="${MODEL_GROUP_BASE_VALUE}"
+
+if [ "${MODE_ID}" = "publish_full" ]; then
+  if ! prompt_yes_no "Use base model group exactly for publish lane?" "Y"; then
+    MODEL_GROUP_VALUE="${MODEL_GROUP_BASE_VALUE}_${LANE_TAG_VALUE}"
+  fi
+else
+  MODEL_GROUP_VALUE="${MODEL_GROUP_BASE_VALUE}_${LANE_TAG_VALUE}"
+fi
 
 if [[ "${MODE_ID}" == "publish_full" ]] && [[ "${CONFIG_PATH_VALUE}" =~ smoke|test ]]; then
   echo "publish_full mode cannot use smoke/test config: ${CONFIG_PATH_VALUE}" >&2
@@ -164,8 +206,13 @@ if [ "${RUN_GRID}" = "1" ]; then
 fi
 
 RUN_STAMP="$(date -u +%Y%m%d_%H%M%S)"
+RUN_NONCE="$(python3 - <<'PY'
+import uuid
+print(uuid.uuid4().hex[:8])
+PY
+)"
 SAFE_GROUP="${MODEL_GROUP_VALUE//\//__}"
-RUN_ROOT="${REPO_ROOT}/ml_pipeline_2/artifacts/training_launches/${RUN_STAMP}_${MODE_LABEL}_${SAFE_GROUP}_${PROFILE_ID_VALUE}"
+RUN_ROOT="${REPO_ROOT}/ml_pipeline_2/artifacts/training_launches/${RUN_STAMP}_${RUN_NONCE}_${MODE_LABEL}_${LANE_TAG_VALUE}_${SAFE_GROUP}_${PROFILE_ID_VALUE}"
 mkdir -p "${RUN_ROOT}"
 LOG_PATH="${RUN_ROOT}/training.log"
 TRAINING_RELEASE_JSON_PATH="${RUN_ROOT}/training-release.json"
@@ -173,9 +220,12 @@ TRAINING_RELEASE_JSON_PATH="${RUN_ROOT}/training-release.json"
 echo
 echo "Run plan:"
 echo "  mode: ${MODE_ID}"
+echo "  lane_tag: ${LANE_TAG_VALUE}"
+echo "  base_model_group: ${MODEL_GROUP_BASE_VALUE}"
 echo "  model_group: ${MODEL_GROUP_VALUE}"
 echo "  profile_id: ${PROFILE_ID_VALUE}"
 echo "  config: ${CONFIG_PATH_VALUE}"
+echo "  launch_root: ${RUN_ROOT}"
 echo "  log: ${LOG_PATH}"
 if [ "${RUN_GRID}" = "0" ]; then
   echo "  release_json: ${TRAINING_RELEASE_JSON_PATH}"
