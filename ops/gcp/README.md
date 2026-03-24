@@ -34,6 +34,8 @@ Example:
 ./ops/gcp/runtime_lifecycle_interactive.sh
 ```
 
+The menu invokes sub-scripts via `bash`, so it works even if execute bits are missing after clone.
+
 ### `from_scratch_bootstrap.sh`
 
 Use this from a fresh operator machine or repo checkout to:

@@ -29,12 +29,17 @@ It prompts for:
 - optional Kite browser auth (`python -m ingestion_app.kite_auth --force`)
 - automatic sync of `KITE_API_KEY` and `KITE_ACCESS_TOKEN` from `ingestion_app/credentials.json` into `.env.compose`
 - automatic `INGESTION_COLLECTORS_ENABLED=1`
+- prompt-driven install of Kite auth dependencies on operator host (`python-dotenv`, `kiteconnect`) when missing
 
 Recommended order:
 
 1. `bootstrap_runtime_interactive.sh` once per environment (writes `ops/gcp/operator.env`, optional infra bootstrap)
 2. `start_runtime_interactive.sh` for each deploy (sets runtime `.env.compose`, publishes runtime config, optional VM restart)
 3. `stop_runtime.sh` at end of day to pause compute cost
+
+Bootstrap note:
+
+- if `.env.compose` was auto-created from `.env.compose.example`, bootstrap skips runtime-config publish automatically and prints the follow-up command.
 
 ## What This Produces
 

@@ -69,6 +69,78 @@ detect_default_project() {
   gcloud config get-value project 2>/dev/null | tr -d '\r'
 }
 
+require_command() {
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "Missing required command: ${cmd}" >&2
+    exit 1
+  fi
+}
+
+find_python_bin() {
+  if [ -x "${REPO_ROOT}/.venv/bin/python" ]; then
+    printf '%s\n' "${REPO_ROOT}/.venv/bin/python"
+    return 0
+  fi
+  command -v python3 || command -v python || true
+}
+
+check_python_modules() {
+  local py_bin="$1"
+  shift
+  "${py_bin}" - "$@" <<'PY'
+import importlib.util
+import sys
+
+missing = [name for name in sys.argv[1:] if importlib.util.find_spec(name) is None]
+if missing:
+    print("\n".join(missing))
+    raise SystemExit(1)
+PY
+}
+
+ensure_kite_auth_dependencies() {
+  local py_bin="$1"
+  local missing_modules=""
+  missing_modules="$(check_python_modules "${py_bin}" dotenv kiteconnect urllib3 2>/dev/null)" && return 0
+  echo "Missing Kite auth Python modules on this operator machine."
+  if [ -n "${missing_modules}" ]; then
+    echo "Missing: ${missing_modules}"
+  fi
+  if ! prompt_yes_no "Install required modules now (${py_bin} -m pip install python-dotenv kiteconnect)?" "Y"; then
+    return 1
+  fi
+  "${py_bin}" -m pip install --user python-dotenv kiteconnect
+  check_python_modules "${py_bin}" dotenv kiteconnect urllib3 >/dev/null
+}
+
+run_kite_auth() {
+  local py_bin="$1"
+  if ! ensure_kite_auth_dependencies "${py_bin}"; then
+    return 1
+  fi
+  (
+    cd "${REPO_ROOT}"
+    "${py_bin}" -m ingestion_app.kite_auth --force
+  )
+}
+
+verify_ghcr_images() {
+  local prefix="$1"
+  local tag="$2"
+  local missing=0
+  local svc=""
+  for svc in ingestion_app snapshot_app persistence_app strategy_app market_data_dashboard strategy_eval_orchestrator strategy_eval_ui; do
+    if docker manifest inspect "${prefix}/${svc}:${tag}" >/dev/null 2>&1; then
+      echo "ok: ${svc}:${tag}"
+    else
+      echo "missing: ${svc}:${tag}"
+      missing=1
+    fi
+  done
+  return "${missing}"
+}
+
 sync_kite_env_from_credentials() {
   local credentials_path="${REPO_ROOT}/ingestion_app/credentials.json"
   local py_bin
@@ -113,6 +185,13 @@ PY
   return 0
 }
 
+require_command gcloud
+PY_BIN="$(find_python_bin)"
+if [ -z "${PY_BIN}" ]; then
+  echo "Python is required for runtime validation and Kite credential parsing." >&2
+  exit 1
+fi
+
 echo "Runtime deploy interactive setup"
 echo "Press Enter to accept defaults shown in [brackets]."
 echo
@@ -127,8 +206,19 @@ prompt_var RUNTIME_NAME "Runtime VM name" "${RUNTIME_NAME:-option-trading-runtim
 prompt_var RUNTIME_CONFIG_BUCKET_URL "Runtime config bucket URL (gs://.../runtime)" "${default_runtime_config_url}"
 prompt_var GHCR_IMAGE_PREFIX "GHCR image prefix" "${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
 prompt_var APP_IMAGE_TAG "Runtime image tag" "${APP_IMAGE_TAG:-latest}"
-prompt_var ML_PURE_RUN_ID "ML pure run id" "${ML_PURE_RUN_ID:-staged_dual_recipe_quick_publish_smoke_20260324_043508}"
-prompt_var ML_PURE_MODEL_GROUP "ML pure model group" "${ML_PURE_MODEL_GROUP:-banknifty_futures/h15_tp_smoke_test}"
+prompt_var ML_PURE_RUN_ID "ML pure run id" "${ML_PURE_RUN_ID:-}"
+prompt_var ML_PURE_MODEL_GROUP "ML pure model group" "${ML_PURE_MODEL_GROUP:-}"
+
+echo
+echo "Verifying GHCR image availability for ${APP_IMAGE_TAG}..."
+if command -v docker >/dev/null 2>&1; then
+  if ! verify_ghcr_images "${GHCR_IMAGE_PREFIX}" "${APP_IMAGE_TAG}"; then
+    echo "One or more required images are missing for tag ${APP_IMAGE_TAG}. Aborting." >&2
+    exit 1
+  fi
+else
+  echo "docker not found on operator host; skipping GHCR manifest preflight."
+fi
 
 set_env_key "${ENV_COMPOSE}" "STRATEGY_ENGINE" "ml_pure"
 set_env_key "${ENV_COMPOSE}" "STRATEGY_ROLLOUT_STAGE" "capped_live"
@@ -141,15 +231,19 @@ set_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_GROUP" "${ML_PURE_MODEL_GROUP}"
 set_env_key "${ENV_COMPOSE}" "INGESTION_COLLECTORS_ENABLED" "1"
 
 if prompt_yes_no "Run Kite browser auth now (refresh credentials + write KITE_* envs)?" "Y"; then
-  py_bin="$(command -v python3 || command -v python || true)"
-  if [ -z "${py_bin}" ]; then
-    echo "Python not found. Skipping Kite auth." >&2
+  if run_kite_auth "${PY_BIN}"; then
+    sync_kite_env_from_credentials || {
+      echo "Warning: could not sync KITE_* env from credentials.json; continuing with existing .env.compose values." >&2
+    }
   else
-    (
-      cd "${REPO_ROOT}"
-      "${py_bin}" -m ingestion_app.kite_auth --force
-    )
-    sync_kite_env_from_credentials
+    if [ -f "${REPO_ROOT}/ingestion_app/credentials.json" ]; then
+      echo "Kite auth did not complete. Using existing credentials.json."
+      sync_kite_env_from_credentials || true
+      prompt_yes_no "Continue with existing credentials?" "Y" || exit 1
+    else
+      echo "No credentials.json available. ingestion_app will fail closed without Kite credentials." >&2
+      prompt_yes_no "Continue without Kite credentials?" "N" || exit 1
+    fi
   fi
 fi
 
