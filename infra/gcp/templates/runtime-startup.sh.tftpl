@@ -79,7 +79,8 @@ fi
   --repo-root "$${REPO_DIR}" \
   --env-file "$${REPO_DIR}/.env.compose"
 
-export APP_IMAGE_TAG="${APP_IMAGE_TAG:-${app_image_tag}}"
+DEFAULT_APP_IMAGE_TAG="${app_image_tag}"
+export APP_IMAGE_TAG="$${APP_IMAGE_TAG:-$${DEFAULT_APP_IMAGE_TAG}}"
 export DASHBOARD_PORT="${dashboard_port}"
 
 if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
