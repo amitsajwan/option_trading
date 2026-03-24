@@ -4,15 +4,32 @@ Use this runbook to build images, publish runtime config, start the live contain
 
 This workflow is self-contained. It includes the GCP setup it needs.
 
+## Fast Path (Interactive)
+
+If you want a guided prompt that asks for all required runtime values and runs publish + optional VM restart:
+
+```bash
+./ops/gcp/start_runtime_interactive.sh
+```
+
+It prompts for:
+
+- project/region/zone/runtime VM name
+- runtime-config bucket URL
+- `GHCR_IMAGE_PREFIX`
+- `APP_IMAGE_TAG`
+- `ML_PURE_RUN_ID`
+- `ML_PURE_MODEL_GROUP`
+
 ## What This Produces
 
-- runtime images in Artifact Registry
+- runtime images in GHCR (published by GitHub Actions)
 - runtime config bundle in the runtime-config bucket
 - live runtime VM running the Compose stack
 
 ## Step 1: Prepare Shared GCP Resources
 
-If the runtime VM, buckets, or Artifact Registry do not exist yet:
+If the runtime VM and buckets do not exist yet:
 
 ```bash
 cp ops/gcp/operator.env.example ops/gcp/operator.env
@@ -25,8 +42,8 @@ You need at least these values in `ops/gcp/operator.env`:
 - `REGION`
 - `ZONE`
 - `RUNTIME_NAME`
-- `REPOSITORY`
 - `TAG`
+- `GHCR_IMAGE_PREFIX`
 - `MODEL_BUCKET_NAME`
 - `RUNTIME_CONFIG_BUCKET_NAME`
 - `MODEL_BUCKET_URL`
@@ -48,27 +65,52 @@ Look for:
 - runtime VM exists
 - model and runtime-config buckets exist
 
-## Step 2: Build And Push Runtime Images
+## Step 2: Select GHCR Image Tag
 
-```bash
-export PROJECT_ID REGION REPOSITORY TAG
-./ops/gcp/build_runtime_images.sh
+Images are published by `.github/workflows/build-images.yml` to:
+
+- `ghcr.io/<owner>/<service>:latest` on `main`
+- `ghcr.io/<owner>/<service>:<short_sha>` on each push
+
+Set these values in `ops/gcp/operator.env` and `.env.compose`:
+
+```env
+GHCR_IMAGE_PREFIX=ghcr.io/amitsajwan
+APP_IMAGE_TAG=latest
 ```
 
-Verify:
+If packages are private, also set in `.env.compose`:
 
-- the command exits successfully
-- Cloud Build shows successful image builds for the selected services
+```env
+GHCR_USERNAME=<github-user>
+GHCR_TOKEN=<github-read-packages-token>
+```
 
-Optional verification:
+Minimum image set for full runtime stack:
+
+- `ingestion_app`
+- `snapshot_app`
+- `persistence_app`
+- `strategy_app`
+- `market_data_dashboard`
+- `strategy_eval_orchestrator`
+- `strategy_eval_ui`
+
+Verify the pinned tag exists for all required images:
 
 ```bash
-gcloud artifacts docker images list "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}"
+export GHCR_IMAGE_PREFIX APP_IMAGE_TAG
+for svc in ingestion_app snapshot_app persistence_app strategy_app market_data_dashboard strategy_eval_orchestrator strategy_eval_ui; do
+  docker manifest inspect "${GHCR_IMAGE_PREFIX}/${svc}:${APP_IMAGE_TAG}" >/dev/null 2>&1 \
+    && echo "ok: ${svc}:${APP_IMAGE_TAG}" \
+    || echo "missing: ${svc}:${APP_IMAGE_TAG}"
+done
 ```
 
 Look for:
 
-- the expected services under the chosen tag
+- `ok:` for every required service
+- no `missing:` lines before runtime restart
 
 ## Step 3: Prepare Runtime Config
 
@@ -103,6 +145,7 @@ ML_PURE_TRAINING_SUMMARY_PATH=ml_pipeline_2/artifacts/published_models/banknifty
 Notes:
 
 - `publish_runtime_config.sh` requires the capped-live fields and the repo-relative guard file before it will publish an `ml_pure` runtime config
+- `docker-compose.gcp.yml` requires `GHCR_IMAGE_PREFIX` and `APP_IMAGE_TAG` in `.env.compose`
 - `ML_PURE_THRESHOLD_REPORT` is optional for run-id model resolution in `strategy_app`, but it is the supported way to anchor rolling Stage 1 precision monitoring to the deployed threshold report
 - `ML_PURE_TRAINING_SUMMARY_PATH` is optional for core trading, but without it the persistence/dashboard regime-drift monitor cannot compare live regime mix against the training baseline
 - use repo-relative paths so the runtime VM can sync them through the runtime-config bundle and local checkout layout
@@ -111,6 +154,7 @@ Verify:
 
 ```bash
 grep -E "STRATEGY_ENGINE|ML_PURE_RUN_ID|ML_PURE_MODEL_GROUP|STRATEGY_ROLLOUT_STAGE|STRATEGY_POSITION_SIZE_MULTIPLIER|STRATEGY_ML_RUNTIME_GUARD_FILE|ML_PURE_THRESHOLD_REPORT|ML_PURE_TRAINING_SUMMARY_PATH" .env.compose
+grep -E "GHCR_IMAGE_PREFIX|APP_IMAGE_TAG" .env.compose
 test -f .run/ml_runtime_guard_live.json && echo guard_ok
 test -f ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/threshold_report.json && echo threshold_ok
 test -f ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/config/profiles/openfe_v9_dual/training_report.json && echo training_report_ok
@@ -119,6 +163,7 @@ test -f ml_pipeline_2/artifacts/published_models/banknifty_futures/h15_tp_auto/c
 Look for:
 
 - all required env keys are present
+- GHCR image prefix and tag are present
 - guard file exists locally
 - threshold report exists locally if rolling Stage 1 precision monitoring is expected
 - training summary exists locally if regime-drift monitoring is expected
@@ -168,6 +213,11 @@ gcloud compute instances describe "${RUNTIME_NAME}" \
 Look for:
 
 - `RUNNING`
+
+Notes:
+
+- Restarting the VM is the supported rollout path because startup syncs runtime config and published model artifacts, validates runtime bundle inputs, and then pulls/starts the pinned-tag images.
+- The runtime startup stack includes `redis`, `mongo`, `ingestion_app`, `snapshot_app`, `persistence_app`, `strategy_app`, and `strategy_persistence_app` (plus `dashboard` when UI profile is enabled).
 
 ## Step 6: Verify Runtime Startup And Containers
 

@@ -1,48 +1,48 @@
 services:
   ingestion_app:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/ingestion_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/ingestion_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
   snapshot_app:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/snapshot_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/snapshot_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
   persistence_app:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/persistence_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/persistence_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
   strategy_persistence_app:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/persistence_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/persistence_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
   strategy_app:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/strategy_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/strategy_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
   dashboard:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/market_data_dashboard:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/market_data_dashboard:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
   strategy_eval_orchestrator:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/strategy_eval_orchestrator:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/strategy_eval_orchestrator:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
   strategy_eval_ui:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/strategy_eval_ui:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/strategy_eval_ui:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
   historical_replay:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/snapshot_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/snapshot_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
   persistence_app_historical:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/persistence_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/persistence_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
   strategy_app_historical:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/strategy_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/strategy_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
   strategy_persistence_app_historical:
-    image: ${ARTIFACT_REGISTRY_HOST:?set ARTIFACT_REGISTRY_HOST}/${GCP_PROJECT_ID:?set GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY:?set ARTIFACT_REGISTRY_REPOSITORY}/persistence_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/persistence_app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always

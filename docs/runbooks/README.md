@@ -10,6 +10,7 @@ There are three main workflow docs:
    Use this for staged ML training, publish, and runtime handoff generation.
 3. [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md)
    Use this for live runtime image build, config publish, container startup, validation, and rollback.
+   Includes interactive helper `./ops/gcp/start_runtime_interactive.sh` for guided runtime startup inputs.
 
 Each workflow doc is self-contained:
 
