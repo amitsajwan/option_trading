@@ -81,8 +81,9 @@ class DashboardPublicContractRouter:
                 "schema_url": f"/api/schema/{topic}",
                 "example_url": f"/api/examples/{topic}",
             }
-            for topic in self._public_topics
+            for topic in schemas.keys()
             if topic in schemas
+            if topic in self._public_topics
         ]
         return self._normalize_timestamp_fields(
             {

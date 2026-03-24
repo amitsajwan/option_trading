@@ -236,6 +236,31 @@ def test_staged_runner_keeps_holdout_rows_total_when_stage3_view_is_missing_hold
 
 def test_staged_runner_applies_block_expiry_runtime_filtering_to_training_frames(tmp_path: Path) -> None:
     parquet_root = build_staged_parquet_root(tmp_path)
+    for dataset_name in ("stage1_entry_view", "stage2_direction_view", "stage3_recipe_view"):
+        dataset_path = parquet_root / dataset_name / "year=2024" / "data.parquet"
+        frame = pd.read_parquet(dataset_path)
+        drop_columns = [
+            column
+            for column in (
+                "ctx_is_expiry_day",
+                "ctx_dte_days",
+                "ctx_is_near_expiry",
+                "ctx_regime_expiry_near",
+                "ctx_regime_trend_up",
+                "ctx_regime_trend_down",
+                "ctx_regime_atr_high",
+                "ctx_regime_atr_low",
+                "regime_expiry_near",
+                "regime_trend_up",
+                "regime_trend_down",
+                "regime_atr_high",
+                "regime_atr_low",
+                "regime_vol_high",
+            )
+            if column in frame.columns
+        ]
+        frame.drop(columns=drop_columns).to_parquet(dataset_path, index=False)
+
     manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["runtime"]["block_expiry"] = True

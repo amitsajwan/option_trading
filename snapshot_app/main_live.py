@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.error import URLError
@@ -39,6 +39,7 @@ DEFAULT_MARKET_TZ = "Asia/Kolkata"
 DEFAULT_MARKET_OPEN = "09:15"
 DEFAULT_MARKET_CLOSE = "15:30"
 DEFAULT_IDLE_SLEEP_SECONDS = 60
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _resolve_instrument(value: Optional[str]) -> str:
@@ -55,11 +56,11 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _zone_or_default(name: str) -> ZoneInfo:
+def _zone_or_default(name: str) -> tzinfo:
     try:
         return ZoneInfo(name)
     except Exception:
-        return ZoneInfo(DEFAULT_MARKET_TZ)
+        return IST
 
 
 def _market_api_healthy(*, base_url: str, timeout_seconds: float) -> bool:
@@ -89,7 +90,7 @@ def _ist_now_iso() -> str:
 
 
 def _build_run_id() -> str:
-    stamp = datetime.now(tz=ZoneInfo(DEFAULT_MARKET_TZ)).strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(tz=_zone_or_default(DEFAULT_MARKET_TZ)).strftime("%Y%m%d_%H%M%S")
     return f"live_{stamp}_{uuid4().hex[:8]}"
 
 

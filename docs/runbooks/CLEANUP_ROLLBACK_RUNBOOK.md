@@ -23,7 +23,7 @@ Commands:
 
 Preserved:
 
-- Artifact Registry images
+- GHCR-published runtime images
 - model bucket
 - runtime config bucket
 - runtime VM definition
@@ -32,7 +32,7 @@ Preserved:
 
 ### Preserve-Data Teardown
 
-Use this when you want to remove most cost-bearing infra but keep deployable state in GCS and Artifact Registry.
+Use this when you want to remove most cost-bearing infra but keep deployable state in GCS.
 
 Command:
 
@@ -42,10 +42,10 @@ AUTO_APPROVE=1 ./ops/gcp/destroy_infra_preserve_data.sh
 
 Preserved:
 
-- Artifact Registry repository
-- published model bucket
+- model bucket
 - runtime config bucket
 - optional snapshot data bucket
+- any GHCR images already published outside GCP
 
 Destroyed:
 
@@ -84,7 +84,7 @@ gcloud compute instances stop "${RUNTIME_NAME}" --zone "${ZONE}"
 gcloud compute instances start "${RUNTIME_NAME}" --zone "${ZONE}"
 ```
 
-If the problem is image-related, rebuild or republish the known-good image tag and repeat the restart.
+If the problem is image-related, redeploy the known-good GHCR image tag and repeat the restart.
 
 ## Resume Later
 

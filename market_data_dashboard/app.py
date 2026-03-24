@@ -45,6 +45,14 @@ except ImportError:
         LiveStrategyMonitorService = None
 
 try:
+    from .historical_replay_monitor_service import HistoricalReplayMonitorService
+except ImportError:
+    try:
+        from market_data_dashboard.historical_replay_monitor_service import HistoricalReplayMonitorService  # type: ignore
+    except ImportError:
+        HistoricalReplayMonitorService = None
+
+try:
     from .strategy_evaluation_service import StrategyEvaluationService
 except ImportError:
     try:
@@ -65,6 +73,11 @@ try:
     from .operator_routes import DashboardOperatorRouter
 except ImportError:
     from operator_routes import DashboardOperatorRouter  # type: ignore
+
+try:
+    from .historical_replay_routes import DashboardHistoricalReplayRouter
+except ImportError:
+    from market_data_dashboard.historical_replay_routes import DashboardHistoricalReplayRouter  # type: ignore
 
 try:
     from .strategy_evaluation_routes import DashboardStrategyEvaluationRouter
@@ -107,6 +120,14 @@ except ImportError:
     load_contract_schema = None  # type: ignore
     load_feature_groups = None  # type: ignore
     load_legacy_mapping = None  # type: ignore
+
+try:
+    from .runtime_artifacts import load_strategy_runtime_observability
+except ImportError:
+    try:
+        from runtime_artifacts import load_strategy_runtime_observability  # type: ignore
+    except ImportError:
+        load_strategy_runtime_observability = None  # type: ignore
 
 try:
     from contracts_app.options_math import black_scholes_price, calculate_option_greeks, estimate_risk_free_rate
@@ -152,7 +173,7 @@ _default_instrument_raw = (
     or os.getenv("INSTRUMENT_KEY", "").strip()
 )
 DEFAULT_INSTRUMENT = "" if _default_instrument_raw == "INSTRUMENT_NOT_SET" else _default_instrument_raw
-_PLACEHOLDER_INSTRUMENTS = {"FALLBACK_TEST"}
+_PLACEHOLDER_INSTRUMENTS = {"", "FALLBACK_TEST", "SELECT_INSTRUMENT", "INSTRUMENT_NOT_SET"}
 
 
 def _is_placeholder_instrument(value: Any) -> bool:
@@ -1306,6 +1327,91 @@ def _load_latest_snapshot_from_mongo(instrument: str) -> Optional[Dict[str, Any]
         return None
 
 
+def _load_latest_historical_snapshot_from_mongo(instrument: str) -> Optional[Dict[str, Any]]:
+    if _strategy_eval_service is None:
+        return None
+    try:
+        coll_name = (
+            str(os.getenv("MONGO_COLL_SNAPSHOTS_HISTORICAL") or "phase1_market_snapshots_historical").strip()
+            or "phase1_market_snapshots_historical"
+        )
+        coll = _strategy_eval_service._db()[coll_name]
+        query: Dict[str, Any] = {}
+        symbol = str(instrument or "").strip()
+        if symbol:
+            query["instrument"] = symbol
+        vt = get_virtual_time_info()
+        current_time = vt.get("current_time") if isinstance(vt, dict) else None
+        if current_time is not None:
+            query["timestamp"] = {"$lte": _normalize_timestamp_string(current_time)}
+            query["trade_date_ist"] = current_time.astimezone(IST_ZONE).date().isoformat()
+        projection = {
+            "_id": 0,
+            "instrument": 1,
+            "timestamp": 1,
+            "trade_date_ist": 1,
+            "payload.snapshot": 1,
+        }
+        doc = coll.find_one(
+            query,
+            projection=projection,
+            sort=[("trade_date_ist", -1), ("timestamp", -1)],
+        )
+        if not isinstance(doc, dict) and symbol:
+            query.pop("instrument", None)
+            doc = coll.find_one(
+                query,
+                projection=projection,
+                sort=[("trade_date_ist", -1), ("timestamp", -1)],
+            )
+        if not isinstance(doc, dict):
+            return None
+        payload = doc.get("payload") if isinstance(doc.get("payload"), dict) else {}
+        snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
+        if not snapshot:
+            return None
+        return {
+            "instrument": str(doc.get("instrument") or snapshot.get("instrument") or "").strip() or None,
+            "snapshot": snapshot,
+            "snapshot_timestamp": _normalize_timestamp_string(doc.get("timestamp")),
+            "trade_date_ist": doc.get("trade_date_ist"),
+            "source": "mongo_snapshots_historical",
+        }
+    except Exception:
+        return None
+
+
+def _historical_options_payload_from_snapshot(instrument: str) -> Optional[Dict[str, Any]]:
+    selected_snapshot = _load_latest_historical_snapshot_from_mongo(instrument)
+    snapshot = (
+        selected_snapshot.get("snapshot")
+        if isinstance(selected_snapshot, dict) and isinstance(selected_snapshot.get("snapshot"), dict)
+        else {}
+    )
+    if not snapshot:
+        return None
+    strikes = snapshot.get("strikes")
+    if not isinstance(strikes, list) or not strikes:
+        return None
+    chain_aggregates = snapshot.get("chain_aggregates") if isinstance(snapshot.get("chain_aggregates"), dict) else {}
+    futures_bar = snapshot.get("futures_bar") if isinstance(snapshot.get("futures_bar"), dict) else {}
+    timestamp = _extract_snapshot_timestamp(snapshot, fallback_ts=(selected_snapshot or {}).get("snapshot_timestamp"))
+    return {
+        "instrument": str((selected_snapshot or {}).get("instrument") or snapshot.get("instrument") or instrument).strip() or instrument,
+        "timestamp": timestamp or _now_iso_ist(),
+        "source": "mongo_snapshots_historical",
+        "mode_hint": "historical",
+        "status": "ok",
+        "strikes": _json_safe_value(strikes),
+        "futures_price": _coerce_float(futures_bar.get("fut_close")),
+        "underlying_price": _coerce_float(futures_bar.get("fut_close")),
+        "pcr": _coerce_float(chain_aggregates.get("pcr")),
+        "max_pain": chain_aggregates.get("max_pain"),
+        "chain_aggregates": _json_safe_value(chain_aggregates),
+        "atm_options": _json_safe_value(snapshot.get("atm_options")),
+    }
+
+
 def _redis_get_first_value(
     r: redis.Redis,
     keys: Sequence[str],
@@ -1438,6 +1544,11 @@ _strategy_eval_service = StrategyEvaluationService() if StrategyEvaluationServic
 _live_strategy_monitor_service = (
     LiveStrategyMonitorService(_strategy_eval_service)
     if (LiveStrategyMonitorService is not None and _strategy_eval_service is not None)
+    else None
+)
+_historical_replay_monitor_service = (
+    HistoricalReplayMonitorService(_strategy_eval_service)
+    if HistoricalReplayMonitorService is not None
     else None
 )
 
@@ -2779,7 +2890,28 @@ def _get_current_mode_hint(timeout_seconds: float = 1.5) -> Optional[str]:
         if mode in {"live", "historical", "paper"}:
             return mode
     except Exception:
-        return None
+        pass
+    try:
+        r = _redis_sync_client()
+        virtual_time_enabled = str(r.get("system:virtual_time:enabled") or "").strip().lower() in {"1", "true", "yes", "on"}
+        historical_ready = str(r.get("system:historical:data_ready") or "").strip().lower() in {"1", "true", "yes", "on"}
+        replay_status_raw = r.get("system:historical:replay_status")
+        replay_status = {}
+        if isinstance(replay_status_raw, str) and replay_status_raw.strip():
+            try:
+                loaded = json.loads(replay_status_raw)
+                if isinstance(loaded, dict):
+                    replay_status = loaded
+            except Exception:
+                replay_status = {}
+        replay_mode = str(replay_status.get("mode") or "").strip().lower()
+        replay_status_text = str(replay_status.get("status") or "").strip().lower()
+        if replay_mode == "historical":
+            return "historical"
+        if historical_ready or virtual_time_enabled or replay_status_text in {"ready", "running", "complete", "completed"}:
+            return "historical"
+    except Exception:
+        pass
     return None
 
 
@@ -3621,6 +3753,14 @@ _operator_routes = DashboardOperatorRouter(
 )
 app.include_router(_operator_routes.router)
 
+_historical_replay_routes = DashboardHistoricalReplayRouter(
+    templates=templates,
+    templates_dir=templates_dir,
+    get_historical_replay_service=lambda: _historical_replay_monitor_service,
+    now_iso_ist=_now_iso_ist,
+)
+app.include_router(_historical_replay_routes.router)
+
 _strategy_evaluation_routes = DashboardStrategyEvaluationRouter(
     get_strategy_eval_service=lambda: _strategy_eval_service,
     normalize_timestamp_fields=_normalize_timestamp_fields,
@@ -3660,6 +3800,15 @@ app.include_router(_research_routes.router)
 
 async def _unbound_public_contract_market_data_handler(*args: Any, **kwargs: Any) -> Any:
     raise RuntimeError("public contract market-data handlers are not bound")
+
+
+def _require_debug_routes_enabled() -> None:
+    enabled = str(os.getenv("DASHBOARD_ENABLE_DEBUG_ROUTES") or "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        raise HTTPException(
+            status_code=404,
+            detail="debug routes are disabled; set DASHBOARD_ENABLE_DEBUG_ROUTES=1 to enable",
+        )
 
 _public_contract_routes = DashboardPublicContractRouter(
     now_iso_ist=_now_iso_ist,
@@ -3738,6 +3887,10 @@ get_live_strategy_session = _operator_routes.get_live_strategy_session
 health = _operator_routes.health
 market_data_health = _operator_routes.market_data_health
 get_system_mode = _operator_routes.get_system_mode
+historical_replay = _historical_replay_routes.historical_replay
+get_historical_strategy_session = _historical_replay_routes.get_historical_strategy_session
+get_historical_replay_status = _historical_replay_routes.get_historical_replay_status
+replay_health = _historical_replay_routes.replay_health
 get_strategy_evaluation_summary = _strategy_evaluation_routes.get_strategy_evaluation_summary
 get_strategy_evaluation_equity = _strategy_evaluation_routes.get_strategy_evaluation_equity
 get_strategy_evaluation_days = _strategy_evaluation_routes.get_strategy_evaluation_days
@@ -4200,14 +4353,6 @@ def _build_trading_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "recent_events": list(reversed(recent_events)),
         "signal_series": signal_series,
     }
-
-
-_DEBUG_ROUTES_ENV = "DASHBOARD_ENABLE_DEBUG_ROUTES"
-
-
-def _require_debug_routes_enabled() -> None:
-    if not _truthy(os.getenv(_DEBUG_ROUTES_ENV), default=False):
-        raise HTTPException(status_code=404, detail="Not found")
 
 
 def _canonical_contract_timeframe(value: Optional[str]) -> str:
@@ -5154,6 +5299,53 @@ async def market_data_status():
 
     return _normalize_timestamp_fields(status)
 
+
+def _strategy_runtime_metrics_tail_limit() -> int:
+    raw_value = os.getenv("DASHBOARD_STRATEGY_RUNTIME_METRICS_TAIL", "25")
+    try:
+        return max(1, int(raw_value))
+    except Exception:
+        return 25
+
+
+async def _load_strategy_runtime_observability() -> Dict[str, Any]:
+    if load_strategy_runtime_observability is None:
+        return {
+            "status": "unavailable",
+            "checked_at_ist": _now_iso_ist(),
+            "service": "market-data-dashboard",
+            "error": "strategy runtime observability helper unavailable",
+        }
+
+    try:
+        payload = await asyncio.to_thread(
+            load_strategy_runtime_observability,
+            repo_root=REPO_ROOT,
+            metrics_tail_limit=_strategy_runtime_metrics_tail_limit(),
+        )
+        if isinstance(payload, dict):
+            return _normalize_timestamp_fields(payload)
+        return {
+            "status": "error",
+            "checked_at_ist": _now_iso_ist(),
+            "service": "market-data-dashboard",
+            "error": "strategy runtime observability returned non-object payload",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "checked_at_ist": _now_iso_ist(),
+            "service": "market-data-dashboard",
+            "error": str(exc),
+        }
+
+
+@app.get("/api/health/strategy-runtime")
+async def strategy_runtime_health():
+    """Operator-facing view of strategy runtime artifacts published under .run."""
+    return await _load_strategy_runtime_observability()
+
+
 def validate_data_availability(status: Dict[str, Any]) -> Dict[str, Any]:
     """Validate data availability and freshness"""
     validation = {
@@ -5464,26 +5656,27 @@ async def get_market_depth(instrument: str):
     upstream_error: Optional[str] = None
     mode_hint = _get_current_mode_hint()
     try:
-        # First try the Market Data API
-        try:
-            response = requests.get(
-                f"{MARKET_DATA_API_URL}/api/v1/market/depth/{instrument}",
-                timeout=(1.5, 3)
-            )
-            if response.status_code == 200:
-                payload = _normalize_depth_contract(
-                    instrument,
-                    _normalize_timestamp_fields(response.json()),
-                    mode_hint=mode_hint,
-                    default_status="ok",
+        if mode_hint != "historical":
+            # First try the Market Data API outside replay mode.
+            try:
+                response = requests.get(
+                    f"{MARKET_DATA_API_URL}/api/v1/market/depth/{instrument}",
+                    timeout=(1.5, 3)
                 )
-                if isinstance(payload, dict):
-                    payload.setdefault("status", "ok")
-                    _LAST_GOOD_DEPTH[cache_key] = payload
-                return payload
-            upstream_error = f"Upstream depth API returned {response.status_code}"
-        except Exception as api_err:
-            upstream_error = str(api_err)
+                if response.status_code == 200:
+                    payload = _normalize_depth_contract(
+                        instrument,
+                        _normalize_timestamp_fields(response.json()),
+                        mode_hint=mode_hint,
+                        default_status="ok",
+                    )
+                    if isinstance(payload, dict):
+                        payload.setdefault("status", "ok")
+                        _LAST_GOOD_DEPTH[cache_key] = payload
+                    return payload
+                upstream_error = f"Upstream depth API returned {response.status_code}"
+            except Exception as api_err:
+                upstream_error = str(api_err)
         
         # If API doesn't have endpoint, read directly from Redis
         r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
@@ -5511,7 +5704,7 @@ async def get_market_depth(instrument: str):
                 "sell": [],
                 "timestamp": _normalize_timestamp_string(timestamp) or _now_iso_ist(),
                 "status": "no_data",
-                "warning": upstream_error,
+                "warning": (None if mode_hint == "historical" else upstream_error),
             }, mode_hint=mode_hint, default_status="no_data")
         
         buy_levels = json.loads(buy_data)
@@ -5562,80 +5755,81 @@ async def get_options_chain(instrument: str, expiry: str = None):
     upstream_error: Optional[str] = None
     mode_hint = _get_current_mode_hint()
     try:
-        # First try the Market Data API
+        # First try the Market Data API outside replay mode.
         params = {"expiry": expiry} if expiry else {}
-        try:
-            response = requests.get(
-                f"{MARKET_DATA_API_URL}/api/v1/options/chain/{instrument}",
-                params=params,
-                timeout=(2, 25)
-            )
-            if response.status_code == 200:
-                payload = _normalize_options_contract(
-                    instrument,
-                    _normalize_timestamp_fields(response.json()),
-                    expiry=expiry,
-                    mode_hint=mode_hint,
-                    default_status="ok",
+        if mode_hint != "historical":
+            try:
+                response = requests.get(
+                    f"{MARKET_DATA_API_URL}/api/v1/options/chain/{instrument}",
+                    params=params,
+                    timeout=(2, 25)
                 )
-                if isinstance(payload, dict):
-                    payload_strikes = payload.get("strikes")
-                    has_strikes = bool(payload_strikes)
-                    mode_hint = str(payload.get("mode_hint") or mode_hint or "").lower()
-                    non_informative_historical = (
-                        mode_hint == "historical"
-                        and has_strikes
-                        and not _options_chain_has_liquidity(payload_strikes)
+                if response.status_code == 200:
+                    payload = _normalize_options_contract(
+                        instrument,
+                        _normalize_timestamp_fields(response.json()),
+                        expiry=expiry,
+                        mode_hint=mode_hint,
+                        default_status="ok",
                     )
-
-                    if (not has_strikes) or non_informative_historical:
+                    if isinstance(payload, dict):
+                        payload_strikes = payload.get("strikes")
+                        has_strikes = bool(payload_strikes)
                         mode_hint = str(payload.get("mode_hint") or mode_hint or "").lower()
-                        synthetic_chain = None
-                        if _allow_synthetic_fallback(mode_hint):
-                            synthetic_chain = _build_synthetic_options_chain_black_scholes(instrument, mode_hint=mode_hint)
-                        if synthetic_chain:
-                            if non_informative_historical:
-                                synthetic_chain["warning"] = "Historical options chain had zero OI/volume; showing synthetic fallback."
-                            else:
-                                synthetic_chain["warning"] = "Upstream options chain was empty; showing synthetic fallback."
-                            synthetic_chain = _normalize_options_contract(
+                        non_informative_historical = (
+                            mode_hint == "historical"
+                            and has_strikes
+                            and not _options_chain_has_liquidity(payload_strikes)
+                        )
+
+                        if (not has_strikes) or non_informative_historical:
+                            mode_hint = str(payload.get("mode_hint") or mode_hint or "").lower()
+                            synthetic_chain = None
+                            if _allow_synthetic_fallback(mode_hint):
+                                synthetic_chain = _build_synthetic_options_chain_black_scholes(instrument, mode_hint=mode_hint)
+                            if synthetic_chain:
+                                if non_informative_historical:
+                                    synthetic_chain["warning"] = "Historical options chain had zero OI/volume; showing synthetic fallback."
+                                else:
+                                    synthetic_chain["warning"] = "Upstream options chain was empty; showing synthetic fallback."
+                                synthetic_chain = _normalize_options_contract(
+                                    instrument,
+                                    synthetic_chain,
+                                    expiry=expiry,
+                                    mode_hint=mode_hint,
+                                    default_status="synthetic",
+                                )
+                                _LAST_GOOD_OPTIONS[cache_key] = synthetic_chain
+                                return synthetic_chain
+
+                            payload["status"] = "no_data"
+                            payload["mode_hint"] = mode_hint or "unknown"
+                            payload.setdefault(
+                                "message",
+                                f"Options chain data is currently unavailable in {(mode_hint or 'unknown').upper()} mode for this instrument."
+                            )
+                            payload["warning"] = payload.get("warning") or "Upstream options API returned empty options chain."
+                            return _normalize_options_contract(
                                 instrument,
-                                synthetic_chain,
+                                payload,
                                 expiry=expiry,
                                 mode_hint=mode_hint,
-                                default_status="synthetic",
+                                default_status="no_data",
                             )
-                            _LAST_GOOD_OPTIONS[cache_key] = synthetic_chain
-                            return synthetic_chain
 
-                        payload["status"] = "no_data"
-                        payload["mode_hint"] = mode_hint or "unknown"
-                        payload.setdefault(
-                            "message",
-                            f"Options chain data is currently unavailable in {(mode_hint or 'unknown').upper()} mode for this instrument."
-                        )
-                        payload["warning"] = payload.get("warning") or "Upstream options API returned empty options chain."
-                        return _normalize_options_contract(
-                            instrument,
-                            payload,
-                            expiry=expiry,
-                            mode_hint=mode_hint,
-                            default_status="no_data",
-                        )
-
-                    payload.setdefault("status", "ok")
-                    _LAST_GOOD_OPTIONS[cache_key] = payload
-                return payload
-            upstream_error = f"Upstream options API returned {response.status_code}"
-            try:
-                payload = response.json()
-                detail = payload.get("detail") if isinstance(payload, dict) else None
-                if detail:
-                    upstream_error = f"{upstream_error}: {detail}"
-            except Exception:
-                pass
-        except Exception as api_err:
-            upstream_error = str(api_err)
+                        payload.setdefault("status", "ok")
+                        _LAST_GOOD_OPTIONS[cache_key] = payload
+                    return payload
+                upstream_error = f"Upstream options API returned {response.status_code}"
+                try:
+                    payload = response.json()
+                    detail = payload.get("detail") if isinstance(payload, dict) else None
+                    if detail:
+                        upstream_error = f"{upstream_error}: {detail}"
+                except Exception:
+                    pass
+            except Exception as api_err:
+                upstream_error = str(api_err)
         
         # If API doesn't have endpoint, read directly from Redis
         r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
@@ -5685,6 +5879,19 @@ async def get_options_chain(instrument: str, expiry: str = None):
                     default_status="stale",
                 )
 
+            if mode_hint == "historical":
+                snapshot_payload = _historical_options_payload_from_snapshot(instrument)
+                if snapshot_payload:
+                    snapshot_payload = _normalize_options_contract(
+                        instrument,
+                        snapshot_payload,
+                        expiry=expiry,
+                        mode_hint=mode_hint,
+                        default_status="ok",
+                    )
+                    _LAST_GOOD_OPTIONS[cache_key] = snapshot_payload
+                    return snapshot_payload
+
             synthetic_chain = None
             if _allow_synthetic_fallback(mode_hint):
                 synthetic_chain = _build_synthetic_options_chain_black_scholes(instrument, mode_hint=mode_hint)
@@ -5717,7 +5924,7 @@ async def get_options_chain(instrument: str, expiry: str = None):
                 "status": "no_data",
                 "mode_hint": mode_hint,
                 "message": message,
-                "warning": upstream_error,
+                "warning": (None if mode_hint == "historical" else upstream_error),
             }, expiry=expiry, mode_hint=mode_hint, default_status="no_data")
         
         out = _normalize_options_contract(

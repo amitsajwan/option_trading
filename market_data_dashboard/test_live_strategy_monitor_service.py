@@ -343,6 +343,7 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
             def count_documents(self, query):
                 if query.get("signal_type") == "ENTRY" and query.get("direction") == {"$in": ["CE", "PE"]}:
                     return 9
+                if query.get("payload.vote.raw_signals._policy_reason") == {"$exists": True}:
                     return 10
                 if query.get("payload.vote.raw_signals._policy_allowed") is True:
                     return 6

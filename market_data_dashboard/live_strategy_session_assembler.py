@@ -4,14 +4,24 @@ from typing import Any, Optional
 
 from contracts_app.strategy_decision_contract import normalize_engine_mode
 
-from .strategy_monitor_contracts import (
-    AlertItem,
-    DecisionExplainability,
-    EngineContext,
-    LiveStrategySessionPayload,
-    OpsState,
-    UiHints,
-)
+try:
+    from .strategy_monitor_contracts import (
+        AlertItem,
+        DecisionExplainability,
+        EngineContext,
+        LiveStrategySessionPayload,
+        OpsState,
+        UiHints,
+    )
+except ImportError:
+    from strategy_monitor_contracts import (  # type: ignore
+        AlertItem,
+        DecisionExplainability,
+        EngineContext,
+        LiveStrategySessionPayload,
+        OpsState,
+        UiHints,
+    )
 
 
 def infer_engine_context(

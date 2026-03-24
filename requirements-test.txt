@@ -1,0 +1,5 @@
+-r strategy_app/requirements.txt
+-r snapshot_app/requirements.txt
+-r market_data_dashboard/requirements.txt
+-e ./ml_pipeline_2
+pytest>=8,<9

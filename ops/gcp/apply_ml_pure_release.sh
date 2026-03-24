@@ -5,6 +5,7 @@ REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 ENV_FILE="${ENV_FILE:-${REPO_ROOT}/.env.compose}"
 RELEASE_ENV_PATH="${RELEASE_ENV_PATH:-}"
 AUTO_PUBLISH_RUNTIME_CONFIG="${AUTO_PUBLISH_RUNTIME_CONFIG:-0}"
+PYTHON_BIN="${PYTHON_BIN:-}"
 
 if [ -z "${RELEASE_ENV_PATH}" ]; then
   echo "Set RELEASE_ENV_PATH to the release/ml_pure_runtime.env file from the staged or recovery release flow." >&2
@@ -21,10 +22,25 @@ if [ ! -f "${ENV_FILE}" ]; then
   exit 1
 fi
 
+if [ -z "${PYTHON_BIN}" ]; then
+  PYTHON_BIN="$(command -v python3 || command -v python || true)"
+fi
+
+if [ -z "${PYTHON_BIN}" ]; then
+  echo "Python 3 is required to run runtime preflight validation." >&2
+  exit 1
+fi
+
+"${PYTHON_BIN}" "${REPO_ROOT}/ops/gcp/validate_runtime_bundle.py" \
+  --mode handoff \
+  --repo-root "${REPO_ROOT}" \
+  --env-file "${ENV_FILE}" \
+  --release-env-path "${RELEASE_ENV_PATH}"
+
 export RELEASE_ENV_PATH
 export ENV_FILE
 
-python - <<'PY'
+"${PYTHON_BIN}" - <<'PY'
 from pathlib import Path
 import os
 
@@ -44,7 +60,6 @@ missing = [key for key in required if not release_values.get(key)]
 if missing:
     raise SystemExit(f"release env missing keys: {', '.join(missing)}")
 
-env_values = {}
 env_lines = []
 for raw_line in env_file.read_text(encoding="utf-8").splitlines():
     line = raw_line.rstrip("\n")
@@ -52,15 +67,12 @@ for raw_line in env_file.read_text(encoding="utf-8").splitlines():
     stripped = line.strip()
     if not stripped or stripped.startswith("#") or "=" not in stripped:
         continue
-    key, value = stripped.split("=", 1)
-    env_values[key.strip()] = value
 
 updates = {
     "STRATEGY_ENGINE": release_values["STRATEGY_ENGINE"],
     "ML_PURE_RUN_ID": release_values["ML_PURE_RUN_ID"],
     "ML_PURE_MODEL_GROUP": release_values["ML_PURE_MODEL_GROUP"],
     "ML_PURE_MODEL_PACKAGE": "",
-    "ML_PURE_THRESHOLD_REPORT": "",
 }
 
 seen = set()
@@ -85,6 +97,7 @@ print(f"Updated {env_file}")
 print(f"  STRATEGY_ENGINE={updates['STRATEGY_ENGINE']}")
 print(f"  ML_PURE_RUN_ID={updates['ML_PURE_RUN_ID']}")
 print(f"  ML_PURE_MODEL_GROUP={updates['ML_PURE_MODEL_GROUP']}")
+print("  ML_PURE_THRESHOLD_REPORT preserved from existing compose env (if set)")
 PY
 
 if [ "${AUTO_PUBLISH_RUNTIME_CONFIG}" = "1" ]; then

@@ -3,10 +3,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from market_data_dashboard import app as dashboard_app
 from ml_pipeline_2.contracts.manifests import load_and_resolve_manifest
 from ml_pipeline_2.experiment_control.runner import run_research
-from ml_pipeline_2.tests.helpers import build_recovery_smoke_manifest, build_synthetic_feature_frames
+helpers = pytest.importorskip("ml_pipeline_2.tests.helpers", exc_type=ImportError)
+if not hasattr(helpers, "build_recovery_smoke_manifest"):
+    pytest.skip("recovery helpers unavailable on current staged-only branch", allow_module_level=True)
+build_recovery_smoke_manifest = helpers.build_recovery_smoke_manifest
+build_synthetic_feature_frames = helpers.build_synthetic_feature_frames
 
 
 def test_artifact_discovery_includes_ml_pipeline_2_published_models(tmp_path: Path, monkeypatch) -> None:

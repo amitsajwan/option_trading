@@ -104,6 +104,32 @@ def _safe_limit(raw: Any, *, default: int, maximum: int) -> int:
     return min(maximum, value)
 
 
+def _empty_summary_payload(initial_capital: float) -> dict[str, Any]:
+    return {
+        "overall": {
+            "trade_count": 0,
+            "win_rate": None,
+            "avg_return_pct": None,
+            "median_return_pct": None,
+        },
+        "equity": {
+            "start_capital": float(initial_capital),
+            "end_capital": float(initial_capital),
+            "net_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+        },
+        "by_strategy": [],
+        "by_regime": [],
+        "exit_reasons": [],
+        "streaks": {"max_win_streak": 0, "max_loss_streak": 0},
+        "counts": {
+            "signals": 0,
+            "positions": 0,
+            "trades": 0,
+        },
+    }
+
+
 def _coerce_bool(raw: Any) -> Optional[bool]:
     if raw is None:
         return None
@@ -172,9 +198,26 @@ def _distribution(values: list[float]) -> dict[str, Any]:
 
 
 class LiveStrategyMonitorService:
-    def __init__(self, evaluation_service: Optional[StrategyEvaluationService] = None) -> None:
+    def __init__(
+        self,
+        evaluation_service: Optional[StrategyEvaluationService] = None,
+        *,
+        dataset: str = "live",
+        snapshot_collection_env: str = "MONGO_COLL_SNAPSHOTS",
+        default_snapshot_collection: str = "phase1_market_snapshots",
+    ) -> None:
         self._evaluation_service = evaluation_service or StrategyEvaluationService()
-        self._repo = LiveStrategyRepository(self._evaluation_service)
+        self._dataset = str(dataset or "live").strip().lower() or "live"
+        self._snapshot_collection_env = str(snapshot_collection_env or "MONGO_COLL_SNAPSHOTS").strip() or "MONGO_COLL_SNAPSHOTS"
+        self._default_snapshot_collection = (
+            str(default_snapshot_collection or "phase1_market_snapshots").strip() or "phase1_market_snapshots"
+        )
+        self._repo = LiveStrategyRepository(
+            self._evaluation_service,
+            dataset=self._dataset,
+            snapshot_collection_env=self._snapshot_collection_env,
+            default_snapshot_collection=self._default_snapshot_collection,
+        )
         self._holiday_cache: Optional[set[Any]] = None
         self._last_engine_mode: Optional[str] = None
 
@@ -183,6 +226,13 @@ class LiveStrategyMonitorService:
         if parsed:
             return parsed
         return datetime.now(tz=IST_ZONE).date().isoformat()
+
+    def resolve_session_instrument(self, *, date_ist: str, requested_instrument: Optional[str]) -> Optional[str]:
+        instrument_name = str(requested_instrument or "").strip() or None
+        if instrument_name and self._repo.snapshot_has_data(date_ist, instrument_name):
+            return instrument_name
+        fallback = self._repo.latest_snapshot_instrument(date_ist)
+        return fallback or instrument_name
 
     def resolve_live_capital(self, explicit_capital: Optional[float] = None) -> float:
         if explicit_capital is not None:
@@ -614,6 +664,12 @@ class LiveStrategyMonitorService:
 
     def get_live_strategy_session(
         self,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self.get_strategy_session(**kwargs)
+
+    def get_strategy_session(
+        self,
         *,
         date: Optional[str] = None,
         instrument: Optional[str] = None,
@@ -625,7 +681,8 @@ class LiveStrategyMonitorService:
         debug_view: Any = None,
     ) -> dict[str, Any]:
         date_ist = self.get_session_date_ist(date)
-        instrument_name = str(instrument or os.getenv("INSTRUMENT_SYMBOL") or "").strip() or None
+        requested_instrument = str(instrument or os.getenv("INSTRUMENT_SYMBOL") or "").strip() or None
+        instrument_name = self.resolve_session_instrument(date_ist=date_ist, requested_instrument=requested_instrument)
         vote_limit = _safe_limit(limit_votes, default=25, maximum=100)
         signal_limit = _safe_limit(limit_signals, default=25, maximum=100)
         trade_limit = _safe_limit(limit_trades, default=20, maximum=100)
@@ -667,34 +724,47 @@ class LiveStrategyMonitorService:
             initial_capital=resolved_capital,
         )
 
-        trades_payload = self._evaluation_service.compute_trades(
-            dataset="live",
-            date_from=date_ist,
-            date_to=date_ist,
-            strategies=[],
-            regimes=[],
-            initial_capital=resolved_capital,
-            cost_bps=0.0,
-            page=1,
-            page_size=trade_limit,
-            sort_by="exit_time",
-            sort_dir="desc",
-            run_id=None,
-        )
-        recent_trades = list(trades_payload.get("rows") or [])
+        try:
+            trades_payload = self._evaluation_service.compute_trades(
+                dataset=self._dataset,
+                date_from=date_ist,
+                date_to=date_ist,
+                strategies=[],
+                regimes=[],
+                initial_capital=resolved_capital,
+                cost_bps=0.0,
+                page=1,
+                page_size=trade_limit,
+                sort_by="exit_time",
+                sort_dir="desc",
+                run_id=None,
+            )
+            recent_trades = list(trades_payload.get("rows") or [])
+        except ValueError as exc:
+            if self._dataset == "historical" and "no completed historical evaluation runs found" in str(exc):
+                trades_payload = {"rows": []}
+                recent_trades = []
+            else:
+                raise
         if latest_closed_trade is None and recent_trades:
             latest_closed_trade = recent_trades[0]
 
-        summary = self._evaluation_service.compute_summary(
-            dataset="live",
-            date_from=date_ist,
-            date_to=date_ist,
-            strategies=[],
-            regimes=[],
-            initial_capital=resolved_capital,
-            cost_bps=0.0,
-            run_id=None,
-        )
+        try:
+            summary = self._evaluation_service.compute_summary(
+                dataset=self._dataset,
+                date_from=date_ist,
+                date_to=date_ist,
+                strategies=[],
+                regimes=[],
+                initial_capital=resolved_capital,
+                cost_bps=0.0,
+                run_id=None,
+            )
+        except ValueError as exc:
+            if self._dataset == "historical" and "no completed historical evaluation runs found" in str(exc):
+                summary = _empty_summary_payload(resolved_capital)
+            else:
+                raise
 
         latest_vote_ts = recent_votes[0]["timestamp"] if recent_votes else None
         latest_signal_ts = recent_signals[0]["timestamp"] if recent_signals else None
@@ -785,6 +855,7 @@ class LiveStrategyMonitorService:
                 "latest_event_time": latest_event_time,
                 "market_session_open": market_session_open,
                 "data_freshness": freshness_payload,
+                "dataset": self._dataset,
             },
             engine_context=engine_context,
             promotion_lane=promotion_lane,
@@ -826,46 +897,59 @@ class LiveStrategyMonitorService:
         )
 
     def load_session_underlying_chart(self, *, date_ist: str, instrument: Optional[str]) -> Optional[dict[str, Any]]:
-        coll_name = str(os.getenv("MONGO_COLL_SNAPSHOTS") or "phase1_market_snapshots").strip() or "phase1_market_snapshots"
-        coll = self._evaluation_service._db()[coll_name]
-        query: dict[str, Any] = {"trade_date_ist": str(date_ist)}
-        if instrument:
-            query["instrument"] = str(instrument)
+        coll = self._repo.snapshot_collection()
         projection = {
             "_id": 0,
+            "instrument": 1,
             "timestamp": 1,
             "payload.snapshot.session_context.timestamp": 1,
             "payload.snapshot.session_context.time": 1,
             "payload.snapshot.futures_bar.fut_close": 1,
         }
-        timestamps: list[str] = []
-        labels: list[str] = []
-        prices: list[float] = []
-        for doc in coll.find(query, projection).sort("timestamp", 1):
-            payload = (doc.get("payload") or {}) if isinstance(doc.get("payload"), dict) else {}
-            snapshot = (payload.get("snapshot") or {}) if isinstance(payload.get("snapshot"), dict) else {}
-            session_context = (snapshot.get("session_context") or {}) if isinstance(snapshot.get("session_context"), dict) else {}
-            futures_bar = (snapshot.get("futures_bar") or {}) if isinstance(snapshot.get("futures_bar"), dict) else {}
-            price = _safe_float(futures_bar.get("fut_close"))
-            if price is None:
-                continue
-            ts = _iso_or_none(doc.get("timestamp")) or _iso_or_none(session_context.get("timestamp"))
-            if ts is None:
-                continue
-            label = str(session_context.get("time") or "").strip()
-            if not label:
-                parsed = _parse_iso_dt(session_context.get("timestamp") or doc.get("timestamp"))
-                label = parsed.astimezone(IST_ZONE).strftime("%H:%M") if parsed is not None else str(ts)[11:16]
-            timestamps.append(ts)
-            labels.append(label)
-            prices.append(price)
+        def _collect(query: dict[str, Any]) -> tuple[list[str], list[str], list[float], Optional[str]]:
+            timestamps: list[str] = []
+            labels: list[str] = []
+            prices: list[float] = []
+            resolved_instrument: Optional[str] = None
+            for doc in coll.find(query, projection).sort("timestamp", 1):
+                payload = (doc.get("payload") or {}) if isinstance(doc.get("payload"), dict) else {}
+                snapshot = (payload.get("snapshot") or {}) if isinstance(payload.get("snapshot"), dict) else {}
+                session_context = (snapshot.get("session_context") or {}) if isinstance(snapshot.get("session_context"), dict) else {}
+                futures_bar = (snapshot.get("futures_bar") or {}) if isinstance(snapshot.get("futures_bar"), dict) else {}
+                price = _safe_float(futures_bar.get("fut_close"))
+                if price is None:
+                    continue
+                ts = _iso_or_none(doc.get("timestamp")) or _iso_or_none(session_context.get("timestamp"))
+                if ts is None:
+                    continue
+                if resolved_instrument is None:
+                    value = str(doc.get("instrument") or "").strip()
+                    resolved_instrument = value or None
+                label = str(session_context.get("time") or "").strip()
+                if not label:
+                    parsed = _parse_iso_dt(session_context.get("timestamp") or doc.get("timestamp"))
+                    label = parsed.astimezone(IST_ZONE).strftime("%H:%M") if parsed is not None else str(ts)[11:16]
+                timestamps.append(ts)
+                labels.append(label)
+                prices.append(price)
+            return timestamps, labels, prices, resolved_instrument
+
+        query: dict[str, Any] = {"trade_date_ist": str(date_ist)}
+        if instrument:
+            query["instrument"] = str(instrument)
+        timestamps, labels, prices, resolved_instrument = _collect(query)
+        source = "mongo_snapshots"
+        if not timestamps and instrument:
+            timestamps, labels, prices, resolved_instrument = _collect({"trade_date_ist": str(date_ist)})
+            source = "mongo_snapshots:fallback_instrument"
         if not timestamps:
             return None
         return {
             "timestamps": timestamps,
             "labels": labels,
             "prices": prices,
-            "source": "mongo_snapshots",
+            "instrument": resolved_instrument or instrument,
+            "source": source,
         }
 
     def _holidays(self) -> set[Any]:

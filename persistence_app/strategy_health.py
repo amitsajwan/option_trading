@@ -113,13 +113,24 @@ def _mongo_latest() -> tuple[bool, dict[str, Any], Optional[str]]:
             coll = db[coll_name]
             count = int(coll.count_documents({}))
             collection_counts[label] = count
-            doc = coll.find_one({}, projection, sort=[("timestamp", -1)])
+            doc = coll.find_one(
+                {},
+                projection,
+                sort=[("trade_date_ist", -1), ("market_time_ist", -1), ("timestamp", -1)],
+            )
             if not isinstance(doc, dict):
                 continue
-            doc_ts = doc.get("timestamp")
-            if not isinstance(doc_ts, datetime):
-                continue
-            if latest_ts is None or doc_ts > latest_ts:
+            trade_date_ist = str(doc.get("trade_date_ist") or "").strip()
+            market_time_ist = str(doc.get("market_time_ist") or "").strip()
+            doc_ts: Optional[datetime] = None
+            if trade_date_ist and market_time_ist:
+                try:
+                    doc_ts = datetime.fromisoformat(f"{trade_date_ist}T{market_time_ist}").replace(tzinfo=IST)
+                except Exception:
+                    doc_ts = None
+            if doc_ts is None:
+                doc_ts = parse_timestamp_to_ist(doc.get("timestamp"))
+            if latest_doc is None or (doc_ts is not None and (latest_ts is None or doc_ts > latest_ts)):
                 latest_ts = doc_ts
                 latest_doc = doc
                 latest_collection = coll_name
@@ -183,8 +194,8 @@ def evaluate(*, max_age_seconds: float) -> tuple[dict[str, Any], int]:
             status = "degraded" if total_docs > 0 else "unhealthy"
             code = 1 if total_docs > 0 else 2
         elif latest is None:
-            status = "degraded"
-            code = 1
+            status = "healthy" if total_docs > 0 else "degraded"
+            code = 0 if total_docs > 0 else 1
         else:
             status = "healthy"
             code = 0

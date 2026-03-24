@@ -6,7 +6,10 @@ from typing import Any, Optional
 
 from contracts_app.market_session import IST_ZONE
 
-from ..strategy_monitor_contracts import AlertItem
+try:
+    from ..strategy_monitor_contracts import AlertItem
+except ImportError:
+    from strategy_monitor_contracts import AlertItem  # type: ignore
 
 _SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2}
 

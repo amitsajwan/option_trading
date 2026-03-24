@@ -82,7 +82,7 @@ def _load_stage_model(path_value: str) -> Dict[str, Any]:
     return payload
 
 
-def assess_staged_release_candidate(*, run_dir: str | Path) -> Dict[str, Any]:
+def assess_staged_release_candidate(*, run_dir: str | Path, force_publish_nonpublishable: bool = False) -> Dict[str, Any]:
     source_run_dir = Path(run_dir).resolve()
     summary_path = source_run_dir / "summary.json"
     if not summary_path.exists():
@@ -90,13 +90,19 @@ def assess_staged_release_candidate(*, run_dir: str | Path) -> Dict[str, Any]:
     summary = _load_json(summary_path)
     publish_assessment = dict(summary.get("publish_assessment") or {})
     decision = str(publish_assessment.get("decision") or "HOLD").strip().upper()
+    publishable = decision == "PUBLISH" and bool(publish_assessment.get("publishable", False))
+    blocking_reasons = list(publish_assessment.get("blocking_reasons") or [])
+    if force_publish_nonpublishable and not publishable:
+        publishable = True
+        decision = "PUBLISH"
     return {
         "created_at_utc": utc_now(),
         "run_dir": str(source_run_dir),
         "run_id": str(source_run_dir.name),
-        "publishable": decision == "PUBLISH" and bool(publish_assessment.get("publishable", False)),
+        "publishable": publishable,
         "decision": decision,
-        "blocking_reasons": list(publish_assessment.get("blocking_reasons") or []),
+        "blocking_reasons": blocking_reasons,
+        "force_publish_nonpublishable": bool(force_publish_nonpublishable),
         "summary_path": str(summary_path),
         "summary": summary,
     }
@@ -200,9 +206,13 @@ def publish_staged_run(
     model_group: str,
     profile_id: str,
     root: Optional[Path] = None,
+    force_publish_nonpublishable: bool = False,
 ) -> Dict[str, Any]:
     publish_root = repo_root(root)
-    assessment = assess_staged_release_candidate(run_dir=run_dir)
+    assessment = assess_staged_release_candidate(
+        run_dir=run_dir,
+        force_publish_nonpublishable=force_publish_nonpublishable,
+    )
     if not assessment["publishable"]:
         raise ValueError(
             "staged run is not publishable: " + ", ".join(str(item) for item in list(assessment["blocking_reasons"]))
@@ -306,9 +316,11 @@ def release_staged_run(
     if normalized_bucket_url is not None and not normalized_bucket_url.startswith("gs://"):
         raise ValueError("model_bucket_url must start with gs://")
     research_summary: Optional[Dict[str, Any]] = None
+    force_publish_nonpublishable = False
     if config is not None:
         manifest_path = Path(config).resolve()
         resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+        force_publish_nonpublishable = bool((dict(resolved.get("publish") or {})).get("smoke_allow_non_publishable", False))
         research_summary = run_research(
             resolved,
             run_output_root=(Path(run_output_root).resolve() if run_output_root is not None else None),
@@ -317,7 +329,10 @@ def release_staged_run(
     else:
         resolved_run_dir = Path(str(run_dir)).resolve()
 
-    assessment = assess_staged_release_candidate(run_dir=resolved_run_dir)
+    assessment = assess_staged_release_candidate(
+        run_dir=resolved_run_dir,
+        force_publish_nonpublishable=force_publish_nonpublishable,
+    )
     release_root = resolved_run_dir / "release"
     assessment_path = _write_json(release_root / "assessment.json", assessment)
     runtime_env_path: Optional[Path] = None
@@ -329,6 +344,7 @@ def release_staged_run(
             model_group=model_group,
             profile_id=profile_id,
             root=root,
+            force_publish_nonpublishable=force_publish_nonpublishable,
         )
         runtime_env = {
             "STRATEGY_ENGINE": "ml_pure",

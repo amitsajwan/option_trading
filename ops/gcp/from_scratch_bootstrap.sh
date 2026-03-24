@@ -8,6 +8,7 @@ RUN_TERRAFORM="${RUN_TERRAFORM:-1}"
 RUN_IMAGE_BUILD="${RUN_IMAGE_BUILD:-1}"
 RUN_RUNTIME_CONFIG_SYNC="${RUN_RUNTIME_CONFIG_SYNC:-1}"
 TERRAFORM_AUTO_APPROVE="${TERRAFORM_AUTO_APPROVE:-0}"
+AUTO_COPIED_ENV_COMPOSE=0
 
 if [ ! -f "${OPERATOR_ENV_FILE}" ]; then
   echo "Operator env file not found: ${OPERATOR_ENV_FILE}" >&2
@@ -38,18 +39,30 @@ require_var REPOSITORY
 require_var TAG
 require_var MODEL_BUCKET_NAME
 require_var RUNTIME_CONFIG_BUCKET_NAME
-require_var MODEL_BUCKET_URL
-require_var RUNTIME_CONFIG_BUCKET_URL
-require_var DATA_SYNC_SOURCE
 require_var DASHBOARD_PORT
 require_var SSH_SOURCE_RANGES
 require_var DASHBOARD_SOURCE_RANGES
+
+if [ -z "${MODEL_BUCKET_URL:-}" ]; then
+  MODEL_BUCKET_URL="gs://${MODEL_BUCKET_NAME}/published_models"
+fi
+
+if [ -z "${RUNTIME_CONFIG_BUCKET_URL:-}" ]; then
+  RUNTIME_CONFIG_BUCKET_URL="gs://${RUNTIME_CONFIG_BUCKET_NAME}/runtime"
+fi
 
 mkdir -p "${TF_DIR}"
 
 if [ ! -f "${REPO_ROOT}/.env.compose" ] && [ -f "${REPO_ROOT}/.env.compose.example" ]; then
   cp "${REPO_ROOT}/.env.compose.example" "${REPO_ROOT}/.env.compose"
   echo "Created ${REPO_ROOT}/.env.compose from .env.compose.example"
+  AUTO_COPIED_ENV_COMPOSE=1
+fi
+
+if [ "${AUTO_COPIED_ENV_COMPOSE}" = "1" ] && [ "${RUN_RUNTIME_CONFIG_SYNC}" = "1" ]; then
+  echo "Auto-copied .env.compose is a template; skipping runtime config sync in this run."
+  echo "After setting live runtime keys, run: ./ops/gcp/publish_runtime_config.sh"
+  RUN_RUNTIME_CONFIG_SYNC=0
 fi
 
 cat > "${TF_DIR}/terraform.tfvars" <<EOF

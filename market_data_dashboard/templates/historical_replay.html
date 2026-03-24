@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Historical Replay Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg: #f6f1e8;
+            --surface: rgba(255, 252, 246, 0.94);
+            --surface-strong: #fffdf8;
+            --ink: #15263a;
+            --muted: #627485;
+            --line: rgba(21, 38, 58, 0.12);
+            --accent: #0d6a78;
+            --accent-2: #99582a;
+            --good: #18794e;
+            --warn: #a16207;
+            --bad: #b42318;
+            --shadow: 0 24px 48px rgba(21, 38, 58, 0.12);
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: "Manrope", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top left, rgba(13, 106, 120, 0.14), transparent 32%),
+                radial-gradient(circle at top right, rgba(153, 88, 42, 0.14), transparent 30%),
+                var(--bg);
+        }
+
+        .page {
+            width: min(1480px, calc(100vw - 24px));
+            margin: 0 auto;
+            padding: 16px 0 28px;
+        }
+
+        .header, .panel {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            box-shadow: var(--shadow);
+        }
+
+        .header {
+            padding: 20px 22px;
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 14px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-family: "Space Grotesk", sans-serif;
+            font-size: clamp(32px, 4vw, 48px);
+            line-height: 0.96;
+            letter-spacing: -0.04em;
+        }
+
+        .header p {
+            margin: 10px 0 0;
+            color: var(--muted);
+            max-width: 880px;
+            line-height: 1.6;
+        }
+
+        .header-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: flex-start;
+            justify-content: flex-end;
+        }
+
+        .chip, .btn, .link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 40px;
+            padding: 10px 14px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.82);
+            color: var(--ink);
+            text-decoration: none;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .btn.primary, .link.primary {
+            color: #fff;
+            border-color: transparent;
+            background: linear-gradient(135deg, var(--accent), #0b4f60);
+        }
+
+        .banner {
+            margin-bottom: 14px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.78);
+        }
+
+        .banner strong {
+            display: block;
+            margin-bottom: 6px;
+        }
+
+        .banner-grid, .kpis, .grid-2, .grid-3 {
+            display: grid;
+            gap: 14px;
+        }
+
+        .banner-grid { grid-template-columns: 1.6fr 1fr; }
+        .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); margin-bottom: 14px; }
+        .grid-2 { grid-template-columns: 1.2fr 0.8fr; margin-bottom: 14px; }
+        .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 14px; }
+
+        .panel { padding: 18px; }
+
+        .panel h2, .panel h3 {
+            margin: 0 0 12px;
+            font-size: 18px;
+        }
+
+        .kpi {
+            padding: 16px;
+        }
+
+        .label {
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .value {
+            margin-top: 8px;
+            font-size: 24px;
+            font-weight: 800;
+        }
+
+        .sub {
+            margin-top: 6px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .kv-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .kv {
+            padding: 12px;
+            border-radius: 14px;
+            border: 1px solid #e8eef3;
+            background: rgba(255, 255, 255, 0.82);
+        }
+
+        .chart-wrap {
+            height: 360px;
+        }
+
+        .table-wrap {
+            overflow: auto;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.84);
+            max-height: 330px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        th, td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #eef3f7;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            background: #f4f8fb;
+            z-index: 1;
+        }
+
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .tag.good { background: #eaf8ef; color: var(--good); }
+        .tag.warn { background: #fff8eb; color: var(--warn); }
+        .tag.bad { background: #fff0ea; color: var(--bad); }
+        .tag.info { background: #edf6ff; color: var(--accent); }
+
+        .note {
+            padding: 12px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid #e8eef3;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        @media (max-width: 1280px) {
+            .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .banner-grid, .grid-2, .grid-3 { grid-template-columns: 1fr; }
+        }
+
+        @media (max-width: 760px) {
+            .page { width: calc(100vw - 16px); }
+            .header { flex-direction: column; }
+            .header-actions { justify-content: flex-start; }
+            .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .kv-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <section class="header">
+            <div>
+                <h1>Historical Replay Monitor</h1>
+                <p>Replay-first operator surface for historical strategy sessions. This page treats old-date simulation as its own mode, not as a degraded live run.</p>
+            </div>
+            <div class="header-actions">
+                <div class="chip" id="modeChip">Mode: historical</div>
+                <div class="chip" id="virtualTimeChip">Virtual time: --</div>
+                <div class="chip" id="replayStateChip">Replay: --</div>
+                <div class="chip" id="lastRefreshChip">Last refresh: --</div>
+                <button class="btn" id="refreshBtn" type="button">Refresh Now</button>
+                <a class="link primary" href="/">Main Dashboard</a>
+                <a class="link" href="/live/strategy">Live Monitor</a>
+                <a class="link" href="/api/historical/replay/session" target="_blank" rel="noopener">Replay API</a>
+            </div>
+        </section>
+
+        <section class="banner banner-grid">
+            <div>
+                <strong>Replay Mode Banner</strong>
+                <div id="modeBannerText">Historical replay data loads from historical Redis topics and historical Mongo collections. This page does not require live Kite or live ingestion once snapshots exist.</div>
+            </div>
+            <div>
+                <strong>Evaluation Shortcuts</strong>
+                <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+                    <a class="link" id="evalLatestRunLink" href="/api/strategy/evaluation/runs/latest?dataset=historical" target="_blank" rel="noopener">Latest Run JSON</a>
+                    <a class="link" id="evalSummaryLink" href="/api/strategy/evaluation/summary?dataset=historical" target="_blank" rel="noopener">Summary API</a>
+                    <a class="link" id="evalTradesLink" href="/api/strategy/evaluation/trades?dataset=historical" target="_blank" rel="noopener">Trades API</a>
+                </div>
+            </div>
+        </section>
+
+        <section class="kpis">
+            <div class="panel kpi"><div class="label">Replay Topic</div><div class="value" id="kpiTopic">--</div><div class="sub">Historical snapshot topic</div></div>
+            <div class="panel kpi"><div class="label">Replay Date</div><div class="value" id="kpiDate">--</div><div class="sub" id="kpiDateSub">--</div></div>
+            <div class="panel kpi"><div class="label">Events Emitted</div><div class="value" id="kpiEvents">--</div><div class="sub">Replay progress contract</div></div>
+            <div class="panel kpi"><div class="label">Open Positions</div><div class="value" id="kpiOpen">--</div><div class="sub">Historical current exposure</div></div>
+            <div class="panel kpi"><div class="label">Trades</div><div class="value" id="kpiTrades">--</div><div class="sub">Historical closed trades</div></div>
+            <div class="panel kpi"><div class="label">Instrument</div><div class="value" id="kpiInstrument">--</div><div class="sub" id="kpiPnl">--</div></div>
+        </section>
+
+        <section class="grid-2">
+            <div class="panel">
+                <h2>Replay Status</h2>
+                <div class="kv-grid">
+                    <div class="kv"><div class="label">State</div><div class="value" id="replayStatus">--</div></div>
+                    <div class="kv"><div class="label">Speed</div><div class="value" id="replaySpeed">--</div></div>
+                    <div class="kv"><div class="label">Start</div><div class="value" id="replayStart">--</div></div>
+                    <div class="kv"><div class="label">End</div><div class="value" id="replayEnd">--</div></div>
+                    <div class="kv"><div class="label">Current Replay Timestamp</div><div class="value" id="replayCurrentTs">--</div></div>
+                    <div class="kv"><div class="label">Collection Counts</div><div class="value" id="replayCounts">--</div></div>
+                </div>
+                <div class="note" style="margin-top:12px;">
+                    Historical replay health is based on historical topic flow and historical collections. Live ingestion and Kite auth are not prerequisites for this page.
+                </div>
+            </div>
+            <div class="panel">
+                <h2>Market Data Realism</h2>
+                <div class="kv-grid">
+                    <div class="kv"><div class="label">Options Status</div><div class="value" id="optionsStatus">--</div></div>
+                    <div class="kv"><div class="label">Depth Status</div><div class="value" id="depthStatus">--</div></div>
+                </div>
+                <div class="note" id="realismNote" style="margin-top:12px;">
+                    Options and depth status will explain when historical mode is using synthetic chain data or has no published depth.
+                </div>
+            </div>
+        </section>
+
+        <section class="panel" style="margin-bottom:14px;">
+            <h2>Underlying Session Chart</h2>
+            <div class="chart-wrap">
+                <canvas id="priceChart"></canvas>
+            </div>
+        </section>
+
+        <section class="grid-3">
+            <div class="panel">
+                <h3>Recent Trades</h3>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Exit</th><th>Strategy</th><th>Direction</th><th>PnL</th></tr></thead>
+                        <tbody id="tradesBody"><tr><td colspan="4">Loading...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="panel">
+                <h3>Recent Signals</h3>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Time</th><th>Type</th><th>Direction</th><th>Strategy</th></tr></thead>
+                        <tbody id="signalsBody"><tr><td colspan="4">Loading...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="panel">
+                <h3 id="votesHeading">Recent Votes</h3>
+                <div class="note" id="votesNote" style="margin-bottom:12px;">
+                    Vote rows appear when the runtime emits StrategyVote events.
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Time</th><th>Engine</th><th>Decision</th><th>Reason</th></tr></thead>
+                        <tbody id="votesBody"><tr><td colspan="4">Loading...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        let priceChart = null;
+
+        function safeText(value, fallback = "--") {
+            if (value === null || value === undefined || value === "") return fallback;
+            return String(value);
+        }
+
+        function formatNumber(value) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+            return Number(value).toLocaleString();
+        }
+
+        function formatPct(value) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+            return `${(Number(value) * 100).toFixed(2)}%`;
+        }
+
+        function toneTag(value) {
+            const text = String(value || "").toLowerCase();
+            if (["healthy", "ready", "complete", "completed", "ok", "synthetic"].includes(text)) return "good";
+            if (["degraded", "warning", "warn", "stale", "idle", "no_data"].includes(text)) return "warn";
+            if (["unhealthy", "error", "failed", "critical"].includes(text)) return "bad";
+            return "info";
+        }
+
+        async function fetchJson(url) {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+            return res.json();
+        }
+
+        function setTaggedValue(id, value) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const text = safeText(value);
+            el.innerHTML = `<span class="tag ${toneTag(text)}">${text}</span>`;
+        }
+
+        function renderRows(id, rows, cols) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (!Array.isArray(rows) || rows.length === 0) {
+                el.innerHTML = `<tr><td colspan="${cols}">No rows</td></tr>`;
+                return;
+            }
+            el.innerHTML = rows.join("");
+        }
+
+        function renderChart(chart) {
+            const canvas = document.getElementById("priceChart");
+            if (!canvas) return;
+            const labels = Array.isArray(chart?.labels) ? chart.labels : [];
+            const prices = Array.isArray(chart?.prices) ? chart.prices : [];
+            if (!priceChart) {
+                priceChart = new Chart(canvas.getContext("2d"), {
+                    type: "line",
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: "Underlying",
+                            data: prices,
+                            borderColor: "#0d6a78",
+                            backgroundColor: "rgba(13,106,120,0.12)",
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.2,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { ticks: { maxTicksLimit: 12 } },
+                            y: { ticks: { callback: (value) => Number(value).toLocaleString() } }
+                        }
+                    }
+                });
+                return;
+            }
+            priceChart.data.labels = labels;
+            priceChart.data.datasets[0].data = prices;
+            priceChart.update();
+        }
+
+        async function refresh() {
+            const params = new URLSearchParams(window.location.search);
+            const date = params.get("date") || "";
+            const requestedInstrument = params.get("instrument") || "";
+            const qs = new URLSearchParams();
+            if (date) qs.set("date", date);
+            if (requestedInstrument) qs.set("instrument", requestedInstrument);
+
+            const suffix = qs.toString() ? `?${qs.toString()}` : "";
+            const [session, replay] = await Promise.all([
+                fetchJson(`/api/historical/replay/session${suffix}`),
+                fetchJson(`/api/historical/replay/status${suffix}`),
+            ]);
+            const effectiveInstrument = requestedInstrument || session?.session?.instrument || "BANKNIFTY-I";
+            const [options, depth] = await Promise.all([
+                fetchJson(`/api/market-data/options/${encodeURIComponent(effectiveInstrument)}`).catch(() => ({ status: "unavailable" })),
+                fetchJson(`/api/market-data/depth/${encodeURIComponent(effectiveInstrument)}`).catch(() => ({ status: "unavailable" })),
+            ]);
+
+            document.getElementById("lastRefreshChip").textContent = `Last refresh: ${new Date().toLocaleTimeString()}`;
+            document.getElementById("virtualTimeChip").textContent = `Virtual time: ${safeText(replay.virtual_time_current)}`;
+            document.getElementById("replayStateChip").textContent = `Replay: ${safeText(replay.status)}`;
+            document.getElementById("kpiTopic").textContent = safeText(replay.topic);
+            document.getElementById("kpiDate").textContent = safeText(session?.session?.date_ist || replay.date_ist);
+            document.getElementById("kpiDateSub").textContent = safeText(replay.current_replay_timestamp);
+            document.getElementById("kpiEvents").textContent = formatNumber(replay.events_emitted);
+            document.getElementById("kpiOpen").textContent = formatNumber(session?.counts?.open_positions);
+            document.getElementById("kpiTrades").textContent = formatNumber(session?.counts?.closed_trades);
+            document.getElementById("kpiInstrument").textContent = safeText(session?.session?.instrument || effectiveInstrument);
+            document.getElementById("kpiPnl").textContent = `Realized ${formatPct(session?.capital?.realized_pnl_pct)}`;
+
+            setTaggedValue("replayStatus", replay.status);
+            document.getElementById("replaySpeed").textContent = safeText(replay.speed, "max");
+            document.getElementById("replayStart").textContent = safeText(replay.start_date);
+            document.getElementById("replayEnd").textContent = safeText(replay.end_date);
+            document.getElementById("replayCurrentTs").textContent = safeText(replay.current_replay_timestamp);
+            const counts = replay.collection_counts || {};
+            document.getElementById("replayCounts").textContent = `votes=${formatNumber(counts.votes)} signals=${formatNumber(counts.signals)} positions=${formatNumber(counts.positions)}`;
+
+            setTaggedValue("optionsStatus", options.status);
+            setTaggedValue("depthStatus", depth.status);
+            const realismParts = [];
+            if (String(options.status || "").toLowerCase() === "synthetic") {
+                realismParts.push("Options chain is synthetic in this replay view.");
+            }
+            if (String(depth.status || "").toLowerCase() === "no_data") {
+                realismParts.push("Published market depth is unavailable for this replay window.");
+            }
+            if (options.warning) realismParts.push(String(options.warning));
+            if (depth.warning) realismParts.push(String(depth.warning));
+            document.getElementById("realismNote").textContent = realismParts.join(" ") || "Replay is using the best available historical market-data shape for this instrument.";
+
+            const summaryDate = encodeURIComponent(session?.session?.date_ist || replay.date_ist || "");
+            document.getElementById("evalSummaryLink").href = `/api/strategy/evaluation/summary?dataset=historical&date_from=${summaryDate}&date_to=${summaryDate}`;
+            document.getElementById("evalTradesLink").href = `/api/strategy/evaluation/trades?dataset=historical&date_from=${summaryDate}&date_to=${summaryDate}`;
+
+            renderChart(session?.session_chart || {});
+
+            renderRows("tradesBody", (session?.recent_trades || []).slice(0, 15).map((row) => `
+                <tr>
+                    <td>${safeText(row.exit_time || row.entry_time)}</td>
+                    <td>${safeText(row.strategy)}</td>
+                    <td>${safeText(row.direction)}</td>
+                    <td>${formatPct(row.net_return_pct)}</td>
+                </tr>
+            `), 4);
+
+            renderRows("signalsBody", (session?.recent_signals || []).slice(0, 20).map((row) => `
+                <tr>
+                    <td>${safeText(row.timestamp)}</td>
+                    <td>${safeText(row.signal_type)}</td>
+                    <td>${safeText(row.direction)}</td>
+                    <td>${safeText(row.strategy)}</td>
+                </tr>
+            `), 4);
+
+            const activeEngineMode = String(session?.engine_context?.active_engine_mode || "").toLowerCase();
+            const recentVotes = Array.isArray(session?.recent_votes) ? session.recent_votes : [];
+            const votesHeading = document.getElementById("votesHeading");
+            const votesNote = document.getElementById("votesNote");
+            if (activeEngineMode === "ml_pure") {
+                if (votesHeading) votesHeading.textContent = "Recent Votes (deterministic-only)";
+                if (votesNote) votesNote.textContent = recentVotes.length
+                    ? "Deterministic-style vote rows are present for this replay."
+                    : "This ml_pure replay emitted trade signals but no StrategyVote rows, so this table is expected to be empty.";
+            } else {
+                if (votesHeading) votesHeading.textContent = "Recent Votes";
+                if (votesNote) votesNote.textContent = "Vote rows appear when the runtime emits StrategyVote events.";
+            }
+
+            if (recentVotes.length > 0) {
+                renderRows("votesBody", recentVotes.slice(0, 20).map((row) => `
+                    <tr>
+                        <td>${safeText(row.timestamp)}</td>
+                        <td>${safeText(row.engine_mode)}</td>
+                        <td>${safeText(row.decision_mode)}</td>
+                        <td>${safeText(row.decision_reason_code || row.reason)}</td>
+                    </tr>
+                `), 4);
+            } else if (activeEngineMode === "ml_pure") {
+                renderRows("votesBody", [
+                    `<tr><td colspan="4">No StrategyVote rows for this ml_pure replay. Inspect Recent Signals for HOLD/ENTRY decisions.</td></tr>`
+                ], 4);
+            } else {
+                renderRows("votesBody", [], 4);
+            }
+        }
+
+        document.getElementById("refreshBtn").addEventListener("click", () => {
+            refresh().catch((err) => {
+                document.getElementById("modeBannerText").textContent = `Refresh failed: ${err}`;
+            });
+        });
+
+        refresh().catch((err) => {
+            document.getElementById("modeBannerText").textContent = `Initial load failed: ${err}`;
+        });
+        setInterval(() => {
+            refresh().catch(() => {});
+        }, 15000);
+    </script>
+</body>
+</html>

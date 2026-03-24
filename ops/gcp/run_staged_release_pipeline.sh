@@ -250,6 +250,69 @@ if [ "${PUBLISH_RUNTIME_CONFIG}" = "1" ]; then
   "${REPO_ROOT}/ops/gcp/publish_runtime_config.sh"
 fi
 
+APP_IMAGE_TAG_VALUE="${APP_IMAGE_TAG:-${TAG:-}}"
+if [ -z "${APP_IMAGE_TAG_VALUE}" ] && [ -f "${REPO_ROOT}/.env.compose" ]; then
+  APP_IMAGE_TAG_VALUE="$(
+    python - <<'PY' "${REPO_ROOT}/.env.compose"
+import sys
+from pathlib import Path
+
+for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    if key.strip() == "APP_IMAGE_TAG":
+        print(value.strip())
+        break
+PY
+  )"
+fi
+RUNTIME_GUARD_PATH_VALUE=".run/ml_runtime_guard_live.json"
+if [ -f "${REPO_ROOT}/.env.compose" ]; then
+  guard_from_env="$(
+    python - <<'PY' "${REPO_ROOT}/.env.compose"
+import sys
+from pathlib import Path
+
+for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    if key.strip() == "STRATEGY_ML_RUNTIME_GUARD_FILE":
+        print(value.strip())
+        break
+PY
+  )"
+  if [ -n "${guard_from_env}" ]; then
+    RUNTIME_GUARD_PATH_VALUE="${guard_from_env}"
+  fi
+fi
+
+MANIFEST_WRITE_OUTPUT="$(
+  python "${REPO_ROOT}/ops/gcp/runtime_release_manifest.py" \
+    --repo-root "${REPO_ROOT}" \
+    --training-release-json "${TRAINING_RELEASE_JSON}" \
+    --app-image-tag "${APP_IMAGE_TAG_VALUE:?set APP_IMAGE_TAG or TAG before publishing runtime release manifest}" \
+    --runtime-guard-path "${RUNTIME_GUARD_PATH_VALUE}" \
+    --runtime-config-bucket-url "${RUNTIME_CONFIG_BUCKET_URL:-}"
+)"
+echo "${MANIFEST_WRITE_OUTPUT}"
+
+CURRENT_RELEASE_DIR="${REPO_ROOT}/.run/gcp_release"
+CURRENT_MANIFEST_PATH="${CURRENT_RELEASE_DIR}/current_runtime_release.json"
+CURRENT_POINTER_PATH="${CURRENT_RELEASE_DIR}/current_runtime_release_pointer.json"
+CURRENT_RUNTIME_ENV_PATH="${CURRENT_RELEASE_DIR}/current_ml_pure_runtime.env"
+
+if [ -n "${RUNTIME_CONFIG_BUCKET_URL:-}" ]; then
+  echo "Uploading current runtime release artifacts to ${RUNTIME_CONFIG_BUCKET_URL%/}/release"
+  gcloud storage cp "${CURRENT_MANIFEST_PATH}" "${RUNTIME_CONFIG_BUCKET_URL%/}/release/current_runtime_release.json"
+  gcloud storage cp "${CURRENT_POINTER_PATH}" "${RUNTIME_CONFIG_BUCKET_URL%/}/release/current_runtime_release_pointer.json"
+  gcloud storage cp "${CURRENT_RUNTIME_ENV_PATH}" "${RUNTIME_CONFIG_BUCKET_URL%/}/release/current_ml_pure_runtime.env"
+fi
+
 echo
 echo "Staged release pipeline complete."
 echo "  runtime handoff: ${RELEASE_ENV_PATH}"
+echo "  current runtime release manifest: ${CURRENT_MANIFEST_PATH}"

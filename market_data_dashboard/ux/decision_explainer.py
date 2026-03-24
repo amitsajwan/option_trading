@@ -6,7 +6,10 @@ from typing import Any, Optional
 
 from contracts_app.strategy_decision_contract import normalize_decision_mode, normalize_engine_mode, normalize_reason_code
 
-from ..strategy_monitor_contracts import DecisionExplainability, DecisionTimelineItem
+try:
+    from ..strategy_monitor_contracts import DecisionExplainability, DecisionTimelineItem
+except ImportError:
+    from strategy_monitor_contracts import DecisionExplainability, DecisionTimelineItem  # type: ignore
 
 _REASON_PLAYBOOK: dict[str, tuple[str, str]] = {
     "below_threshold": (

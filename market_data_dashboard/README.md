@@ -19,12 +19,12 @@ Supported profile for this milestone:
 
 - live monitoring pages and APIs
 - live strategy session/diagnostics
+- historical replay operator page and replay-health APIs
 - `ml_pipeline_2` published-model discovery
 
 Legacy / not part of the supported Live+Dashboard target:
 
-- paper trading terminal and legacy paper runner launch flow
-- historical replay/eval operator flows
+- paper trading terminal and archived legacy launcher flows
 
 Legacy launcher note:
 
@@ -51,6 +51,16 @@ From `requirements.txt`:
 
 - `python market_data_dashboard/start_dashboard.py`
 
+### Historical replay with dashboard
+
+```bash
+docker compose --env-file .env.compose --profile historical up -d redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical
+docker compose --env-file .env.compose --profile ui up -d dashboard
+docker compose --env-file .env.compose --profile historical_replay run --rm historical_replay --start-date 2026-03-06 --end-date 2026-03-06 --speed 0
+```
+
+Open `/historical/replay` for replay-first operator monitoring. This flow does not require live Kite or the archived `/trading` launcher once historical snapshots already exist.
+
 Environment used by dashboard:
 
 - `DASHBOARD_HOST` (default `0.0.0.0`)
@@ -69,11 +79,14 @@ Port behavior note:
 
 - `GET /` -> dashboard page
 - `GET /live/strategy` -> live operator monitor for `strategy_app`
+- `GET /historical/replay` -> historical replay operator monitor
 - `GET /trading` -> legacy paper trading terminal page (opt-in launcher)
 - `GET /trading/models` -> model catalog page (profiles + artifact health + launch links)
 - `GET /trading?model=a|b|...` -> model-scoped terminal tab (separate runner instance)
 - `GET /trading/model/{model_key}` -> redirect to `/trading?model={model_key}`
 - `GET /api/health` -> dashboard health
+- `GET /api/health/live` -> live-operator health view
+- `GET /api/health/replay` -> replay-oriented health view
 - `GET /api/market-data/status` -> merged status view
 - `GET /api/market-data/ohlc/{instrument}`
 - `GET /api/market-data/indicators/{instrument}`
@@ -82,6 +95,8 @@ Port behavior note:
 - `GET /api/market-data/instruments`
 - `GET /api/market-data/sync-lag?instrument=...` -> Redis vs Mongo lag monitor by domain
 - `GET /api/live/strategy/session` -> live operator session payload from Mongo-backed strategy state
+- `GET /api/historical/replay/session` -> historical operator session payload from historical Mongo-backed strategy state
+- `GET /api/historical/replay/status` -> replay topic/state/progress payload
 - `GET /api/trading/state?instance={key}` -> per-instance paper runner status + positions/trades/capital
 - `GET /api/trading/models` -> machine-readable model catalog for UI/automation
 - `POST /api/trading/start` -> start legacy paper trading runner (payload supports `instance`)

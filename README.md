@@ -115,14 +115,14 @@ On this Windows workspace, VS Code will not recognize Python until Python itself
 Recommended Windows bootstrap:
 
 ```powershell
-winget install -e --id Python.Python.3.11
-py -3.11 -m venv .venv
+& "C:\Users\amits\AppData\Local\Programs\Python\Python312\python.exe" -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r market_data_dashboard\requirements.txt
 python -m pip install -r persistence_app\requirements.txt
 python -m pip install -r snapshot_app\requirements.txt
 python -m pip install -r strategy_app\requirements.txt
+python -m pip install pytest
 ```
 
 This repo now includes `.vscode/settings.json` with:
@@ -130,7 +130,17 @@ This repo now includes `.vscode/settings.json` with:
 - interpreter path: `.venv\\Scripts\\python.exe`
 - pytest discovery enabled
 
-After creating `.venv`, run `Python: Select Interpreter` in VS Code once if it does not pick it up automatically.
+VS Code requirements on Windows:
+
+- install the `Python` extension by Microsoft
+- install `Pylance`
+- if `Python: Select Interpreter` does not appear, reload VS Code after opening a `.py` file
+
+After creating `.venv`, VS Code should pick up `.venv\\Scripts\\python.exe` automatically from workspace settings. If it still does not, you can run tests directly from the terminal:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest market_data_dashboard\test_historical_replay_app.py -q
+```
 
 ## GCP Deployment
 

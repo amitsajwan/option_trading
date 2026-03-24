@@ -228,6 +228,72 @@ def test_publish_staged_run_still_rejects_non_publishable_run(tmp_path: Path) ->
         )
 
 
+def test_publish_staged_run_can_force_publish_for_smoke_only(tmp_path: Path, monkeypatch) -> None:
+    run_dir = tmp_path / "ml_pipeline_2" / "artifacts" / "research" / "staged_smoke_hold_fixture_20260324_020202"
+    stage1_root = run_dir / "stages" / "stage1"
+    stage2_root = run_dir / "stages" / "stage2"
+    stage3_root = run_dir / "stages" / "stage3" / "recipes"
+    detached_reports_root = run_dir / "stage3_reports"
+    stage1_root.mkdir(parents=True, exist_ok=True)
+    stage2_root.mkdir(parents=True, exist_ok=True)
+    (run_dir / "stages" / "stage3").mkdir(parents=True, exist_ok=True)
+    detached_reports_root.mkdir(parents=True, exist_ok=True)
+    joblib.dump(_single_target_package(prob=0.8, model_key="move", prob_col="move_prob"), stage1_root / "model.joblib")
+    joblib.dump(_single_target_package(prob=0.7, model_key="direction", prob_col="direction_up_prob"), stage2_root / "model.joblib")
+    for recipe_id, prob in {"L0": 0.75, "L1": 0.40}.items():
+        recipe_root = stage3_root / recipe_id
+        recipe_root.mkdir(parents=True, exist_ok=True)
+        joblib.dump(_single_target_package(prob=prob, model_key="move", prob_col="move_prob"), recipe_root / "model.joblib")
+
+    summary = {
+        "status": "completed",
+        "experiment_kind": "staged_dual_recipe_v1",
+        "run_id": run_dir.name,
+        "recipe_catalog_id": "fixed_l0_l3_v1",
+        "publish_assessment": {
+            "decision": "HOLD",
+            "publishable": False,
+            "blocking_reasons": ["stage3.non_inferior_to_fixed_recipe_baseline_failed", "profit_factor<1.0"],
+        },
+        "runtime_prefilter_gate_ids": ["rollout_guard_v1"],
+        "runtime_block_expiry": False,
+        "policy_reports": {
+            "stage1": {"policy_id": "entry_threshold_v1", "selected_threshold": 0.55},
+            "stage2": {"policy_id": "direction_dual_threshold_v1", "selected_ce_threshold": 0.60, "selected_pe_threshold": 0.60, "selected_min_edge": 0.10},
+            "stage3": {"policy_id": "recipe_top_margin_v1", "selected_threshold": 0.60, "selected_margin_min": 0.10},
+        },
+        "component_ids": {
+            "stage1": {"view_id": "stage1_entry_view_v1"},
+            "stage2": {"view_id": "stage2_direction_view_v1"},
+            "stage3": {"view_id": "stage3_recipe_view_v1"},
+        },
+        "stage_artifacts": {
+            "stage1": {"model_package_path": str((stage1_root / "model.joblib").resolve())},
+            "stage2": {"model_package_path": str((stage2_root / "model.joblib").resolve())},
+            "stage3": {
+                "training_report_path": str((detached_reports_root / "training_report.json").resolve()),
+                "recipes": ["L0", "L1"],
+                "recipe_artifacts": {
+                    "L0": {"model_package_path": str((stage3_root / "L0" / "model.joblib").resolve())},
+                    "L1": {"model_package_path": str((stage3_root / "L1" / "model.joblib").resolve())},
+                },
+            },
+        },
+    }
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    monkeypatch.setenv("MODEL_SWITCH_REPO_ROOT", str(tmp_path))
+
+    payload = publish_staged_run(
+        run_dir=run_dir,
+        model_group="banknifty_futures/h15_tp_smoke_test",
+        profile_id="openfe_v9_dual_smoke",
+        force_publish_nonpublishable=True,
+    )
+
+    assert payload["publish_status"] == "published"
+    assert payload["publish_assessment"]["publishable"] is True
+
+
 def test_load_staged_runtime_policy_defaults_block_expiry_false(tmp_path: Path) -> None:
     policy_path = tmp_path / "thresholds.json"
     policy_path.write_text(

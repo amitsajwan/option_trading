@@ -14,6 +14,11 @@ from contracts_app import configure_ist_logging, snapshot_topic
 
 from .contracts import SignalType, TradeSignal
 from .engines import DeterministicRuleEngine, PureMLEngine
+from .engines.runtime_artifacts import (
+    RuntimeArtifactStore,
+    build_runtime_config_payload,
+    resolve_runtime_artifact_paths,
+)
 from .logging.signal_logger import SignalLogger
 from .runtime import RedisSnapshotConsumer
 
@@ -228,6 +233,7 @@ def build_engine(
     ml_pure_max_hold_bars: int = 15,
     ml_pure_min_oi: float = 50000.0,
     ml_pure_min_volume: float = 15000.0,
+    runtime_artifact_dir: Optional[Path | str] = None,
     strategy_profile_id: Optional[str] = None,
 ):
     engine_key = str(engine_name or "").strip().lower()
@@ -247,6 +253,7 @@ def build_engine(
             min_oi=float(ml_pure_min_oi),
             min_volume=float(ml_pure_min_volume),
             signal_logger=signal_logger,
+            runtime_artifact_dir=runtime_artifact_dir,
             strategy_profile_id=strategy_profile_id,
         )
 
@@ -308,13 +315,14 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         strategy_profile_id = None if engine_key == "ml_pure" else "det_core_v1"
     ml_runtime_guard_file = _resolve_ml_runtime_guard_file(args.ml_runtime_guard_file)
     runtime_ml_enabled = engine_key == "ml_pure" and bool(ml_pure_model_package)
+    runtime_artifact_paths = resolve_runtime_artifact_paths(Path(args.run_dir) if args.run_dir else None)
     _enforce_ml_runtime_guard(
         rollout_stage=str(args.rollout_stage),
         position_size_multiplier=float(args.position_size_multiplier),
         guard_file=ml_runtime_guard_file,
         runtime_enabled=runtime_ml_enabled,
     )
-    signal_logger = SignalLogger(Path(args.run_dir) if args.run_dir else None)
+    signal_logger = SignalLogger(runtime_artifact_paths.root)
     engine = build_engine(
         engine_name=str(args.engine),
         min_confidence=float(args.min_confidence),
@@ -326,6 +334,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         ml_pure_max_hold_bars=ml_pure_max_hold_bars,
         ml_pure_min_oi=ml_pure_min_oi,
         ml_pure_min_volume=ml_pure_min_volume,
+        runtime_artifact_dir=runtime_artifact_paths.root,
         strategy_profile_id=strategy_profile_id,
     )
     if str(args.rollout_stage) == "capped_live" and float(args.position_size_multiplier) > 0.25:
@@ -340,11 +349,38 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
                     "halt_consecutive_losses": int(args.halt_consecutive_losses),
                     "halt_daily_dd_pct": float(args.halt_daily_dd_pct),
                 },
+                "model_run_id": (ml_pure_switch_meta or {}).get("run_id"),
                 "strategy_profile_id": strategy_profile_id,
+                "model_group": (ml_pure_switch_meta or {}).get("model_group"),
             },
         )
-
     topic = str(args.topic or snapshot_topic()).strip() or snapshot_topic()
+    runtime_store = RuntimeArtifactStore(runtime_artifact_paths.root)
+    runtime_store.write_config(
+        build_runtime_config_payload(
+            engine=str(args.engine),
+            topic=topic,
+            strategy_profile_id=str(getattr(engine, "_strategy_profile_id", strategy_profile_id) or ""),
+            runtime_artifact_dir=runtime_artifact_paths.root,
+            signal_run_dir=runtime_artifact_paths.root,
+            min_confidence=float(args.min_confidence),
+            rollout_stage=str(args.rollout_stage),
+            position_size_multiplier=float(args.position_size_multiplier),
+            halt_consecutive_losses=int(args.halt_consecutive_losses),
+            halt_daily_dd_pct=float(args.halt_daily_dd_pct),
+            run_id=(ml_pure_switch_meta or {}).get("run_id"),
+            model_group=(ml_pure_switch_meta or {}).get("model_group"),
+            model_package_path=ml_pure_model_package,
+            threshold_report_path=ml_pure_threshold_report,
+            guard_file=ml_runtime_guard_file,
+            block_expiry=bool(getattr(getattr(engine, "_runtime_controls", None), "block_expiry", False)),
+            ml_pure_max_feature_age_sec=ml_pure_max_feature_age_sec,
+            ml_pure_max_nan_features=ml_pure_max_nan_features,
+            ml_pure_max_hold_bars=ml_pure_max_hold_bars,
+            ml_pure_min_oi=ml_pure_min_oi,
+            ml_pure_min_volume=ml_pure_min_volume,
+        )
+    )
     consumer = RedisSnapshotConsumer(
         engine=engine,
         topic=topic,
