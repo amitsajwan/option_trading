@@ -83,8 +83,8 @@ DEFAULT_APP_IMAGE_TAG="${app_image_tag}"
 export APP_IMAGE_TAG="$${APP_IMAGE_TAG:-$${DEFAULT_APP_IMAGE_TAG}}"
 export DASHBOARD_PORT="${dashboard_port}"
 
-if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
-  echo "${GHCR_TOKEN}" | docker login ghcr.io --username "${GHCR_USERNAME}" --password-stdin
+if [ -n "$${GHCR_USERNAME:-}" ] && [ -n "$${GHCR_TOKEN:-}" ]; then
+  echo "$${GHCR_TOKEN}" | docker login ghcr.io --username "$${GHCR_USERNAME}" --password-stdin
 fi
 
 COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.gcp.yml)
