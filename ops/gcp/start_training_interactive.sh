@@ -5,6 +5,7 @@ REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 OPERATOR_ENV_FILE="${OPERATOR_ENV_FILE:-${REPO_ROOT}/ops/gcp/operator.env}"
 TRAINING_TMUX_SESSION_NAME="${TRAINING_TMUX_SESSION_NAME:-}"
 TRAINING_INTERACTIVE_IN_TMUX="${TRAINING_INTERACTIVE_IN_TMUX:-0}"
+PYTHON_BIN="${PYTHON_BIN:-}"
 
 if [ ! -f "${OPERATOR_ENV_FILE}" ]; then
   echo "Missing ${OPERATOR_ENV_FILE}. Run bootstrap_runtime_interactive.sh first." >&2
@@ -13,6 +14,14 @@ fi
 
 # shellcheck disable=SC1090
 source "${OPERATOR_ENV_FILE}"
+
+if [ -z "${PYTHON_BIN}" ]; then
+  PYTHON_BIN="$(command -v python3 || command -v python || true)"
+fi
+if [ -z "${PYTHON_BIN}" ]; then
+  echo "Python is required for training launcher summary/report handling." >&2
+  exit 1
+fi
 
 if [ -z "${TMUX:-}" ] && [ "${TRAINING_INTERACTIVE_IN_TMUX}" != "1" ]; then
   if command -v tmux >/dev/null 2>&1; then
@@ -220,7 +229,7 @@ if [ "${RUN_GRID}" = "1" ]; then
 fi
 
 RUN_STAMP="$(date -u +%Y%m%d_%H%M%S)"
-RUN_NONCE="$(python3 - <<'PY'
+RUN_NONCE="$("${PYTHON_BIN}" - <<'PY'
 import uuid
 print(uuid.uuid4().hex[:8])
 PY
@@ -274,7 +283,7 @@ STAGED_CONFIG="${CONFIG_PATH_VALUE}" \
 TRAINING_RELEASE_JSON="${TRAINING_RELEASE_JSON_PATH}" \
 bash "${REPO_ROOT}/ops/gcp/run_staged_release_pipeline.sh" 2>&1 | tee "${LOG_PATH}"
 
-python - <<'PY' "${TRAINING_RELEASE_JSON_PATH}" "${MODEL_BUCKET_URL}" "${MODEL_GROUP_VALUE}" "${PROFILE_ID_VALUE}"
+"${PYTHON_BIN}" - <<'PY' "${TRAINING_RELEASE_JSON_PATH}" "${MODEL_BUCKET_URL}" "${MODEL_GROUP_VALUE}" "${PROFILE_ID_VALUE}"
 import json
 import sys
 from pathlib import Path
