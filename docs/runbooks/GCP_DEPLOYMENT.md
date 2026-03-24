@@ -27,6 +27,7 @@ It prompts for:
 `start_runtime_interactive.sh` also supports:
 
 - optional Kite browser auth (`python -m ingestion_app.kite_auth --force`)
+- prompts for `KITE_API_KEY` and hidden `KITE_API_SECRET` during auth when not already exported
 - automatic sync of `KITE_API_KEY` and `KITE_ACCESS_TOKEN` from `ingestion_app/credentials.json` into `.env.compose`
 - automatic `INGESTION_COLLECTORS_ENABLED=1`
 - prompt-driven install of Kite auth dependencies on operator host (`python-dotenv`, `kiteconnect`) when missing

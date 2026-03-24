@@ -65,6 +65,19 @@ prompt_yes_no() {
   return 1
 }
 
+prompt_secret() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local entered=""
+  read -r -s -p "${prompt_text}: " entered || true
+  echo
+  if [ -z "${entered}" ]; then
+    return 1
+  fi
+  printf -v "${var_name}" '%s' "${entered}"
+  return 0
+}
+
 detect_default_project() {
   gcloud config get-value project 2>/dev/null | tr -d '\r'
 }
@@ -116,12 +129,24 @@ ensure_kite_auth_dependencies() {
 
 run_kite_auth() {
   local py_bin="$1"
+  local kite_api_key="${KITE_API_KEY:-}"
+  local kite_api_secret="${KITE_API_SECRET:-}"
   if ! ensure_kite_auth_dependencies "${py_bin}"; then
+    return 1
+  fi
+  if [ -z "${kite_api_key}" ]; then
+    read -r -p "KITE_API_KEY (required for browser auth): " kite_api_key || true
+  fi
+  if [ -z "${kite_api_secret}" ]; then
+    prompt_secret kite_api_secret "KITE_API_SECRET (required for browser auth)" || true
+  fi
+  if [ -z "${kite_api_key}" ] || [ -z "${kite_api_secret}" ]; then
+    echo "Kite browser auth requires KITE_API_KEY and KITE_API_SECRET." >&2
     return 1
   fi
   (
     cd "${REPO_ROOT}"
-    "${py_bin}" -m ingestion_app.kite_auth --force
+    KITE_API_KEY="${kite_api_key}" KITE_API_SECRET="${kite_api_secret}" "${py_bin}" -m ingestion_app.kite_auth --force
   )
 }
 
