@@ -597,7 +597,7 @@ services:
         "--ml-pure-threshold-report",
         "${ML_PURE_THRESHOLD_REPORT:-}",
         "--ml-pure-max-feature-age-sec",
-        "${ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL:-${ML_PURE_MAX_FEATURE_AGE_SEC:-90}}",
+        "${ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL:-0}",
       ]
     volumes:
       - ./.run:/app/.run
