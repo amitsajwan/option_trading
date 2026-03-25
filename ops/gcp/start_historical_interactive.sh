@@ -452,7 +452,7 @@ remote_gcloud "
 "
 
 echo "Waiting for historical consumers to subscribe before replay..."
-remote_gcloud "
+if ! remote_gcloud "
   set -e
   cd '${REMOTE_REPO_ROOT}' &&
   python3 - <<'PY'
@@ -487,6 +487,29 @@ while time.time() < deadline:
 raise SystemExit('historical consumers did not become ready before replay')
 PY
 "
+then
+  echo "Historical consumers failed readiness. Recent logs:"
+  remote_gcloud "
+    set -e
+    cd '${REMOTE_REPO_ROOT}' &&
+    ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} ps &&
+    printf '\n--- strategy_app_historical readiness logs ---\n' &&
+    ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} logs --tail 80 strategy_app_historical || true
+  "
+  remote_gcloud "
+    set -e
+    cd '${REMOTE_REPO_ROOT}' &&
+    printf '\n--- strategy_persistence_app_historical readiness logs ---\n' &&
+    ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} logs --tail 80 strategy_persistence_app_historical || true
+  "
+  remote_gcloud "
+    set -e
+    cd '${REMOTE_REPO_ROOT}' &&
+    printf '\n--- persistence_app_historical readiness logs ---\n' &&
+    ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} logs --tail 80 persistence_app_historical || true
+  "
+  exit 1
+fi
 
 if prompt_yes_no "Run one-shot replay for ${REPLAY_START_DATE} to ${REPLAY_END_DATE} now?" "Y"; then
   remote_gcloud "

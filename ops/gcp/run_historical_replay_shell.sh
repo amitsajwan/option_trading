@@ -140,7 +140,7 @@ remote_gcloud "
   \"\${GCLOUD_BIN}\" storage rsync '${MODEL_BUCKET_URL%/}/${ML_PURE_MODEL_GROUP}' '${TARGET_REPO_ROOT}/ml_pipeline_2/artifacts/published_models/${ML_PURE_MODEL_GROUP}' --recursive
 "
 
-remote_gcloud "
+if ! remote_gcloud "
   set -e
   cd '${TARGET_REPO_ROOT}'
   export GHCR_IMAGE_PREFIX='${GHCR_IMAGE_PREFIX}'
@@ -187,6 +187,22 @@ while time.time() < deadline:
 raise SystemExit('historical consumers did not become ready before replay')
 PY
 "
+then
+  remote_gcloud "
+  set -e
+  cd '${TARGET_REPO_ROOT}'
+  export GHCR_IMAGE_PREFIX='${GHCR_IMAGE_PREFIX}'
+  export APP_IMAGE_TAG='${APP_IMAGE_TAG}'
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml ps
+  printf '\n--- strategy_app_historical readiness logs ---\n'
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml logs --tail 80 strategy_app_historical || true
+  printf '\n--- strategy_persistence_app_historical readiness logs ---\n'
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml logs --tail 80 strategy_persistence_app_historical || true
+  printf '\n--- persistence_app_historical readiness logs ---\n'
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml logs --tail 80 persistence_app_historical || true
+"
+  exit 1
+fi
 
 remote_gcloud "
   set -e
