@@ -30,6 +30,7 @@ fi
 source "${REPO_ROOT}/.env.compose"
 
 guard_file="${STRATEGY_ML_RUNTIME_GUARD_FILE:-}"
+historical_guard_file="${STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL:-}"
 
 mkdir -p "${STAGE_DIR}/ingestion_app"
 cp "${REPO_ROOT}/.env.compose" "${STAGE_DIR}/.env.compose"
@@ -41,6 +42,11 @@ fi
 if [ -n "${guard_file}" ]; then
   mkdir -p "${STAGE_DIR}/$(dirname "${guard_file}")"
   cp "${REPO_ROOT}/${guard_file}" "${STAGE_DIR}/${guard_file}"
+fi
+
+if [ -n "${historical_guard_file}" ] && [ "${historical_guard_file}" != "${guard_file}" ]; then
+  mkdir -p "${STAGE_DIR}/$(dirname "${historical_guard_file}")"
+  cp "${REPO_ROOT}/${historical_guard_file}" "${STAGE_DIR}/${historical_guard_file}"
 fi
 
 echo "Syncing runtime bootstrap bundle to ${RUNTIME_CONFIG_BUCKET_URL}"
