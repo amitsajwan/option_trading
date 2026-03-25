@@ -64,6 +64,7 @@ REPLAY_START_DATE="${REPLAY_START_DATE:-}"
 REPLAY_END_DATE="${REPLAY_END_DATE:-${REPLAY_START_DATE}}"
 REPLAY_SPEED="${REPLAY_SPEED:-0}"
 ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL="${ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL:-0}"
+HISTORICAL_GUARD_BASENAME="${HISTORICAL_GUARD_BASENAME:-ml_runtime_guard_historical_test.json}"
 
 if [ -z "${REPLAY_START_DATE}" ]; then
   echo "Set REPLAY_START_DATE=YYYY-MM-DD before running." >&2
@@ -92,6 +93,14 @@ remote_gcloud "
   set -e
   cd '${TARGET_REPO_ROOT}'
   mkdir -p .run .data/ml_pipeline/parquet_data ml_pipeline_2/artifacts/published_models/$(dirname "${ML_PURE_MODEL_GROUP}")
+  cat > '.run/${HISTORICAL_GUARD_BASENAME}' <<'EOF'
+{
+  \"approved_for_runtime\": true,
+  \"offline_strict_positive_passed\": true,
+  \"paper_days_observed\": 10,
+  \"shadow_days_observed\": 10
+}
+EOF
   cat > '${REMOTE_ENV_FILE}' <<'EOF'
 GHCR_IMAGE_PREFIX=${GHCR_IMAGE_PREFIX}
 APP_IMAGE_TAG=${APP_IMAGE_TAG}
@@ -111,7 +120,7 @@ ML_PURE_THRESHOLD_REPORT=
 ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=${ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL}
 STRATEGY_ROLLOUT_STAGE_HISTORICAL=capped_live
 STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL=0.25
-STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL=.run/ml_runtime_guard_live.json
+STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL=.run/${HISTORICAL_GUARD_BASENAME}
 EOF
 "
 

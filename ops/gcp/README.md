@@ -130,12 +130,13 @@ For `ml_pure` replay it now also:
 
 - clears explicit model-package / threshold-path conflicts when run-id mode is active
 - defaults `ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=0` so historical timestamps are not treated as stale against wall clock
+- uses a dedicated historical test guard at `.run/ml_runtime_guard_historical_test.json` instead of reusing the live runtime guard
 
 ### `run_historical_replay_shell.sh`
 
 Non-interactive shell runner for historical replay.
 
-Use this when you already know the target VM, replay dates, parquet bucket, and model switch inputs. It enforces the remote historical `ml_pure` env, syncs parquet and published model artifacts, restarts the historical services, and runs one-shot replay in one shell command flow.
+Use this when you already know the target VM, replay dates, parquet bucket, and model switch inputs. It enforces the remote historical `ml_pure` env, writes a dedicated historical test guard on the target VM, syncs parquet and published model artifacts, restarts the historical services, and runs one-shot replay in one shell command flow.
 
 ### `create_training_vm.sh`
 

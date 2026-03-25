@@ -394,7 +394,7 @@ Compatibility notes:
 - the helper runs remote preflight on the host Python environment, not inside the `historical_replay` container
 - the helper invokes replay with `--entrypoint python` so both Compose v2 and `docker-compose` v1 handle the extra replay flags correctly
 - with `IMAGE_SOURCE=local_build`, the helper builds the required historical services directly from the remote repo checkout before startup
-- when `.env.compose` is using `STRATEGY_ENGINE=ml_pure`, the helper seeds `STRATEGY_ROLLOUT_STAGE_HISTORICAL=capped_live`, `STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL=0.25`, and `STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL` from the live guard file unless you already overrode them
+- when `.env.compose` is using `STRATEGY_ENGINE=ml_pure`, the helper seeds `STRATEGY_ROLLOUT_STAGE_HISTORICAL=capped_live`, `STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL=0.25`, and a dedicated historical guard at `.run/ml_runtime_guard_historical_test.json`
 
 If you only remember one thing for replay, remember this:
 
@@ -465,6 +465,7 @@ Historical `ml_pure` note:
 - replay snapshots carry historical timestamps, so wall-clock freshness checks will falsely block entries
 - set `ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=0` for historical replay
 - `docker-compose.yml` now passes that historical-only override to `strategy_app_historical`
+- historical replay should use `STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL=.run/ml_runtime_guard_historical_test.json`, not the live guard file
 
 Run one-shot replay:
 

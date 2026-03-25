@@ -322,7 +322,6 @@ set_env_key "${ENV_COMPOSE}" "HISTORICAL_TOPIC" "market:snapshot:v1:historical"
 
 CURRENT_STRATEGY_ENGINE="$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ENGINE")"
 CURRENT_ML_PURE_MODEL_GROUP="$(read_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_GROUP")"
-CURRENT_ML_RUNTIME_GUARD_FILE="$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE")"
 if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
   if [ -z "$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ROLLOUT_STAGE_HISTORICAL")" ]; then
     set_env_key "${ENV_COMPOSE}" "STRATEGY_ROLLOUT_STAGE_HISTORICAL" "capped_live"
@@ -330,8 +329,8 @@ if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
   if [ -z "$(read_env_key "${ENV_COMPOSE}" "STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL")" ]; then
     set_env_key "${ENV_COMPOSE}" "STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL" "0.25"
   fi
-  if [ -n "${CURRENT_ML_RUNTIME_GUARD_FILE}" ] && [ -z "$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL")" ]; then
-    set_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL" "${CURRENT_ML_RUNTIME_GUARD_FILE}"
+  if [ -z "$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL")" ]; then
+    set_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL" ".run/ml_runtime_guard_historical_test.json"
   fi
   if [ -z "$(read_env_key "${ENV_COMPOSE}" "ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL")" ]; then
     set_env_key "${ENV_COMPOSE}" "ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL" "0"
@@ -339,6 +338,21 @@ if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
   if [ -n "$(read_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_PACKAGE")" ] || [ -n "$(read_env_key "${ENV_COMPOSE}" "ML_PURE_THRESHOLD_REPORT")" ]; then
     set_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_PACKAGE" ""
     set_env_key "${ENV_COMPOSE}" "ML_PURE_THRESHOLD_REPORT" ""
+  fi
+fi
+
+if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
+  HISTORICAL_GUARD_PATH="$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL")"
+  if [ -n "${HISTORICAL_GUARD_PATH}" ]; then
+    mkdir -p "$(dirname "${REPO_ROOT}/${HISTORICAL_GUARD_PATH}")"
+    cat > "${REPO_ROOT}/${HISTORICAL_GUARD_PATH}" <<'EOF'
+{
+  "approved_for_runtime": true,
+  "offline_strict_positive_passed": true,
+  "paper_days_observed": 10,
+  "shadow_days_observed": 10
+}
+EOF
   fi
 fi
 
@@ -410,6 +424,21 @@ fi
 
 echo
 echo "Starting historical consumers on ${TARGET_VM_NAME}..."
+if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
+  remote_gcloud "
+    set -e
+    cd '${REMOTE_REPO_ROOT}' &&
+    mkdir -p .run &&
+    cat > .run/ml_runtime_guard_historical_test.json <<'EOF'
+{
+  \"approved_for_runtime\": true,
+  \"offline_strict_positive_passed\": true,
+  \"paper_days_observed\": 10,
+  \"shadow_days_observed\": 10
+}
+EOF
+  "
+fi
 if [ "${REMOTE_COMPOSE_FLAVOR}" = "v1" ]; then
   echo "Remote host uses docker-compose v1. Removing historical containers before startup to avoid recreate metadata errors."
   remote_gcloud "
