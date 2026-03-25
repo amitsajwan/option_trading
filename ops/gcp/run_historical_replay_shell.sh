@@ -155,6 +155,44 @@ remote_gcloud "
   cd '${TARGET_REPO_ROOT}'
   export GHCR_IMAGE_PREFIX='${GHCR_IMAGE_PREFIX}'
   export APP_IMAGE_TAG='${APP_IMAGE_TAG}'
+  python3 - <<'PY'
+import subprocess
+import time
+
+compose_cmd = \"${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml\"
+deadline = time.time() + 180
+needles = {
+    'strategy_app_historical': 'strategy consumer subscribed topic=market:snapshot:v1:historical',
+    'strategy_persistence_app_historical': 'strategy persistence subscribed topics=',
+}
+
+while time.time() < deadline:
+    ready = True
+    for service, needle in needles.items():
+        proc = subprocess.run(
+            f\"{compose_cmd} logs --tail 80 {service}\",
+            shell=True,
+            text=True,
+            capture_output=True,
+        )
+        text = (proc.stdout or '') + (proc.stderr or '')
+        if needle not in text:
+            ready = False
+            break
+    if ready:
+        print('historical consumers ready')
+        raise SystemExit(0)
+    time.sleep(3)
+
+raise SystemExit('historical consumers did not become ready before replay')
+PY
+"
+
+remote_gcloud "
+  set -e
+  cd '${TARGET_REPO_ROOT}'
+  export GHCR_IMAGE_PREFIX='${GHCR_IMAGE_PREFIX}'
+  export APP_IMAGE_TAG='${APP_IMAGE_TAG}'
   ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml --profile historical_replay run --rm --entrypoint python historical_replay -m snapshot_app.historical.replay_runner --base /app/.data/ml_pipeline/parquet_data --topic market:snapshot:v1:historical --start-date ${REPLAY_START_DATE} --end-date ${REPLAY_END_DATE} --speed ${REPLAY_SPEED}
 "
 

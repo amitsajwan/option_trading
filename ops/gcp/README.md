@@ -139,6 +139,8 @@ Non-interactive shell runner for historical replay.
 
 Use this when you already know the target VM, replay dates, parquet bucket, and model switch inputs. It enforces the remote historical `ml_pure` env, writes a dedicated historical test guard on the target VM, syncs parquet and published model artifacts, restarts the historical services, and runs one-shot replay in one shell command flow.
 
+It waits for `strategy_app_historical` and `strategy_persistence_app_historical` to subscribe before the replay run starts, so fast one-shot replays do not outrun the consumers.
+
 ### `create_training_vm.sh`
 
 Create a disposable training VM from the Terraform output instance template.

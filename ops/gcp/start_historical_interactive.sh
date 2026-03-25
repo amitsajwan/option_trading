@@ -451,6 +451,43 @@ remote_gcloud "
   ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} --profile historical up -d redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical dashboard
 "
 
+echo "Waiting for historical consumers to subscribe before replay..."
+remote_gcloud "
+  set -e
+  cd '${REMOTE_REPO_ROOT}' &&
+  python3 - <<'PY'
+import subprocess
+import time
+
+compose_cmd = \"${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES}\"
+deadline = time.time() + 180
+needles = {
+    'strategy_app_historical': 'strategy consumer subscribed topic=market:snapshot:v1:historical',
+    'strategy_persistence_app_historical': 'strategy persistence subscribed topics=',
+}
+
+while time.time() < deadline:
+    ready = True
+    for service, needle in needles.items():
+        proc = subprocess.run(
+            f\"{compose_cmd} logs --tail 80 {service}\",
+            shell=True,
+            text=True,
+            capture_output=True,
+        )
+        text = (proc.stdout or '') + (proc.stderr or '')
+        if needle not in text:
+            ready = False
+            break
+    if ready:
+        print('historical consumers ready')
+        raise SystemExit(0)
+    time.sleep(3)
+
+raise SystemExit('historical consumers did not become ready before replay')
+PY
+"
+
 if prompt_yes_no "Run one-shot replay for ${REPLAY_START_DATE} to ${REPLAY_END_DATE} now?" "Y"; then
   remote_gcloud "
     cd '${REMOTE_REPO_ROOT}' &&
