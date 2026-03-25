@@ -333,6 +333,13 @@ if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
   if [ -n "${CURRENT_ML_RUNTIME_GUARD_FILE}" ] && [ -z "$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL")" ]; then
     set_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL" "${CURRENT_ML_RUNTIME_GUARD_FILE}"
   fi
+  if [ -z "$(read_env_key "${ENV_COMPOSE}" "ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL")" ]; then
+    set_env_key "${ENV_COMPOSE}" "ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL" "0"
+  fi
+  if [ -n "$(read_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_PACKAGE")" ] || [ -n "$(read_env_key "${ENV_COMPOSE}" "ML_PURE_THRESHOLD_REPORT")" ]; then
+    set_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_PACKAGE" ""
+    set_env_key "${ENV_COMPOSE}" "ML_PURE_THRESHOLD_REPORT" ""
+  fi
 fi
 
 if prompt_yes_no "Publish the current runtime config bundle before replay startup?" "N"; then

@@ -460,6 +460,12 @@ gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" 
 
 On older VMs that only have `docker-compose` v1, replace `sudo docker compose` with `sudo docker-compose`.
 
+Historical `ml_pure` note:
+
+- replay snapshots carry historical timestamps, so wall-clock freshness checks will falsely block entries
+- set `ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=0` for historical replay
+- `docker-compose.yml` now passes that historical-only override to `strategy_app_historical`
+
 Run one-shot replay:
 
 ```bash
@@ -510,8 +516,10 @@ Interactive scripts:
 - `bash ./ops/gcp/runtime_lifecycle_interactive.sh`
 - `bash ./ops/gcp/bootstrap_runtime_interactive.sh`
 - `bash ./ops/gcp/start_runtime_interactive.sh`
+- `bash ./ops/gcp/start_historical_interactive.sh`
 - `bash ./ops/gcp/start_training_interactive.sh`
 - `bash ./ops/gcp/run_snapshot_parquet_pipeline.sh`
+- `bash ./ops/gcp/run_historical_replay_shell.sh`
 
 Support scripts:
 

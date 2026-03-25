@@ -126,6 +126,17 @@ Interactive historical replay helper.
 
 It defaults to the runtime VM, prompts for `IMAGE_SOURCE`, uses the current approved image tag when GHCR is selected, detects the repo checkout path and Compose implementation on the target VM, syncs the runtime bundle when needed, runs local and remote historical preflight, then can optionally sync parquet, build historical services from code, start historical services, and run one-shot replay.
 
+For `ml_pure` replay it now also:
+
+- clears explicit model-package / threshold-path conflicts when run-id mode is active
+- defaults `ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=0` so historical timestamps are not treated as stale against wall clock
+
+### `run_historical_replay_shell.sh`
+
+Non-interactive shell runner for historical replay.
+
+Use this when you already know the target VM, replay dates, parquet bucket, and model switch inputs. It enforces the remote historical `ml_pure` env, syncs parquet and published model artifacts, restarts the historical services, and runs one-shot replay in one shell command flow.
+
 ### `create_training_vm.sh`
 
 Create a disposable training VM from the Terraform output instance template.
