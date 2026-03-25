@@ -150,6 +150,10 @@ detect_remote_compose_cmd() {
   remote_gcloud "if sudo docker compose version >/dev/null 2>&1; then printf '%s\n' 'sudo docker compose'; elif command -v docker-compose >/dev/null 2>&1; then printf '%s\n' 'sudo docker-compose'; else exit 1; fi" 2>/dev/null | trim_cr || true
 }
 
+detect_remote_compose_flavor() {
+  remote_gcloud "if sudo docker compose version >/dev/null 2>&1; then printf '%s\n' 'v2'; elif command -v docker-compose >/dev/null 2>&1; then printf '%s\n' 'v1'; else exit 1; fi" 2>/dev/null | trim_cr || true
+}
+
 sync_remote_runtime_bundle() {
   remote_gcloud "
     GCLOUD_BIN=\$(command -v gcloud || true)
@@ -305,6 +309,11 @@ if [ -z "${REMOTE_COMPOSE_CMD}" ]; then
   echo "Could not detect docker compose support on ${TARGET_VM_NAME}. Install Docker Compose v2 or docker-compose v1 first." >&2
   exit 1
 fi
+REMOTE_COMPOSE_FLAVOR="$(detect_remote_compose_flavor)"
+if [ -z "${REMOTE_COMPOSE_FLAVOR}" ]; then
+  echo "Could not determine Compose flavor on ${TARGET_VM_NAME}." >&2
+  exit 1
+fi
 
 set_env_key "${ENV_COMPOSE}" "GHCR_IMAGE_PREFIX" "${GHCR_IMAGE_PREFIX}"
 set_env_key "${ENV_COMPOSE}" "APP_IMAGE_TAG" "${APP_IMAGE_TAG}"
@@ -394,6 +403,13 @@ fi
 
 echo
 echo "Starting historical consumers on ${TARGET_VM_NAME}..."
+if [ "${REMOTE_COMPOSE_FLAVOR}" = "v1" ]; then
+  echo "Remote host uses docker-compose v1. Removing historical containers before startup to avoid recreate metadata errors."
+  remote_gcloud "
+    cd '${REMOTE_REPO_ROOT}' &&
+    ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} rm -fsv dashboard persistence_app_historical strategy_app_historical strategy_persistence_app_historical || true
+  "
+fi
 remote_gcloud "
   cd '${REMOTE_REPO_ROOT}' &&
   ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} --profile historical up -d redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical dashboard
