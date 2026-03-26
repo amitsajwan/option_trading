@@ -321,27 +321,21 @@ set_env_key "${ENV_COMPOSE}" "IMAGE_SOURCE" "${IMAGE_SOURCE}"
 set_env_key "${ENV_COMPOSE}" "HISTORICAL_TOPIC" "market:snapshot:v1:historical"
 
 CURRENT_STRATEGY_ENGINE="$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ENGINE")"
+CURRENT_ML_PURE_RUN_ID="$(read_env_key "${ENV_COMPOSE}" "ML_PURE_RUN_ID")"
 CURRENT_ML_PURE_MODEL_GROUP="$(read_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_GROUP")"
-if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
-  if [ -z "$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ROLLOUT_STAGE_HISTORICAL")" ]; then
-    set_env_key "${ENV_COMPOSE}" "STRATEGY_ROLLOUT_STAGE_HISTORICAL" "capped_live"
-  fi
-  if [ -z "$(read_env_key "${ENV_COMPOSE}" "STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL")" ]; then
-    set_env_key "${ENV_COMPOSE}" "STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL" "0.25"
-  fi
-  if [ -z "$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL")" ]; then
-    set_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL" ".run/ml_runtime_guard_historical_test.json"
-  fi
-  if [ -z "$(read_env_key "${ENV_COMPOSE}" "ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL")" ]; then
-    set_env_key "${ENV_COMPOSE}" "ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL" "0"
-  fi
-  if [ -n "$(read_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_PACKAGE")" ] || [ -n "$(read_env_key "${ENV_COMPOSE}" "ML_PURE_THRESHOLD_REPORT")" ]; then
-    set_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_PACKAGE" ""
-    set_env_key "${ENV_COMPOSE}" "ML_PURE_THRESHOLD_REPORT" ""
-  fi
+HISTORICAL_USES_ML_PURE=0
+if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ] || [ -n "${CURRENT_ML_PURE_RUN_ID}" ] || [ -n "${CURRENT_ML_PURE_MODEL_GROUP}" ]; then
+  HISTORICAL_USES_ML_PURE=1
+  set_env_key "${ENV_COMPOSE}" "STRATEGY_ENGINE" "ml_pure"
+  set_env_key "${ENV_COMPOSE}" "STRATEGY_ROLLOUT_STAGE_HISTORICAL" "capped_live"
+  set_env_key "${ENV_COMPOSE}" "STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL" "0.25"
+  set_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL" ".run/ml_runtime_guard_historical_test.json"
+  set_env_key "${ENV_COMPOSE}" "ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL" "0"
+  set_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_PACKAGE" ""
+  set_env_key "${ENV_COMPOSE}" "ML_PURE_THRESHOLD_REPORT" ""
 fi
 
-if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
+if [ "${HISTORICAL_USES_ML_PURE}" = "1" ]; then
   HISTORICAL_GUARD_PATH="$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL")"
   if [ -n "${HISTORICAL_GUARD_PATH}" ]; then
     mkdir -p "$(dirname "${REPO_ROOT}/${HISTORICAL_GUARD_PATH}")"
@@ -399,7 +393,7 @@ if prompt_yes_no "Sync parquet from GCS onto ${TARGET_VM_NAME}?" "Y"; then
   "
 fi
 
-if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ] && [ -n "${CURRENT_ML_PURE_MODEL_GROUP}" ] && [ -n "${MODEL_BUCKET_URL:-}" ]; then
+if [ "${HISTORICAL_USES_ML_PURE}" = "1" ] && [ -n "${CURRENT_ML_PURE_MODEL_GROUP}" ] && [ -n "${MODEL_BUCKET_URL:-}" ]; then
   if prompt_yes_no "Sync published model artifacts for ${CURRENT_ML_PURE_MODEL_GROUP} onto ${TARGET_VM_NAME}?" "Y"; then
     remote_gcloud "
       GCLOUD_BIN=\$(command -v gcloud || true)
@@ -434,7 +428,7 @@ fi
 
 echo
 echo "Starting historical consumers on ${TARGET_VM_NAME}..."
-if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
+if [ "${HISTORICAL_USES_ML_PURE}" = "1" ]; then
   remote_gcloud "
     set -e
     cd '${REMOTE_REPO_ROOT}' &&

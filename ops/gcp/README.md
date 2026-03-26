@@ -129,7 +129,7 @@ It defaults to the runtime VM, prompts for `IMAGE_SOURCE`, uses the current appr
 For `ml_pure` replay it now also:
 
 - clears explicit model-package / threshold-path conflicts when run-id mode is active
-- defaults `ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=0` so historical timestamps are not treated as stale against wall clock
+- force-writes the historical `ml_pure` overrides on each run: `STRATEGY_ROLLOUT_STAGE_HISTORICAL=capped_live`, `STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL=0.25`, and `ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=0`
 - uses a dedicated historical test guard at `.run/ml_runtime_guard_historical_test.json` instead of reusing the live runtime guard
 - requires a `strategy_app` image built with `scikit-learn==1.7.2` for the current staged smoke bundles
 
