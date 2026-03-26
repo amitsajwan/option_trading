@@ -421,9 +421,9 @@ if [ "${IMAGE_SOURCE}" = "local_build" ]; then
   if prompt_yes_no "Build required historical images from the repo checkout on ${TARGET_VM_NAME} now?" "Y"; then
     remote_gcloud "
       cd '${REMOTE_REPO_ROOT}' &&
-      ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} build snapshot_app persistence_app dashboard &&
-      ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} build --no-cache strategy_app &&
-      sudo docker run --rm option_trading_strategy_app:latest python -c 'import sklearn; print(sklearn.__version__)'
+      ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} build historical_replay persistence_app_historical strategy_persistence_app_historical dashboard &&
+      ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} build --no-cache strategy_app_historical &&
+      sudo docker run --rm option_trading_strategy_app_historical:latest python -c 'import sklearn; print(sklearn.__version__)'
     "
   fi
 fi
