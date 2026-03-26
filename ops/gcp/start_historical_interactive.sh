@@ -345,14 +345,24 @@ if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
   HISTORICAL_GUARD_PATH="$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL")"
   if [ -n "${HISTORICAL_GUARD_PATH}" ]; then
     mkdir -p "$(dirname "${REPO_ROOT}/${HISTORICAL_GUARD_PATH}")"
-    cat > "${REPO_ROOT}/${HISTORICAL_GUARD_PATH}" <<'EOF'
-{
-  "approved_for_runtime": true,
-  "offline_strict_positive_passed": true,
-  "paper_days_observed": 10,
-  "shadow_days_observed": 10
-}
-EOF
+    "${PY_BIN}" - "${REPO_ROOT}/${HISTORICAL_GUARD_PATH}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(
+    json.dumps(
+        {
+            "approved_for_runtime": True,
+            "offline_strict_positive_passed": True,
+            "paper_days_observed": 10,
+            "shadow_days_observed": 10,
+        },
+        indent=2,
+    ) + "\n",
+    encoding="utf-8",
+)
+PY
   fi
 fi
 
@@ -429,14 +439,23 @@ if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
     set -e
     cd '${REMOTE_REPO_ROOT}' &&
     mkdir -p .run &&
-    cat > .run/ml_runtime_guard_historical_test.json <<'EOF'
-{
-  \"approved_for_runtime\": true,
-  \"offline_strict_positive_passed\": true,
-  \"paper_days_observed\": 10,
-  \"shadow_days_observed\": 10
-}
-EOF
+    python3 - <<'PY'
+import json
+from pathlib import Path
+
+Path('.run/ml_runtime_guard_historical_test.json').write_text(
+    json.dumps(
+        {
+            'approved_for_runtime': True,
+            'offline_strict_positive_passed': True,
+            'paper_days_observed': 10,
+            'shadow_days_observed': 10,
+        },
+        indent=2,
+    ) + '\n',
+    encoding='utf-8',
+)
+PY
   "
 fi
 if [ "${REMOTE_COMPOSE_FLAVOR}" = "v1" ]; then

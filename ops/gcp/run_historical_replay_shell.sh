@@ -93,14 +93,23 @@ remote_gcloud "
   set -e
   cd '${TARGET_REPO_ROOT}'
   mkdir -p .run .data/ml_pipeline/parquet_data ml_pipeline_2/artifacts/published_models/$(dirname "${ML_PURE_MODEL_GROUP}")
-  cat > '.run/${HISTORICAL_GUARD_BASENAME}' <<'EOF'
-{
-  \"approved_for_runtime\": true,
-  \"offline_strict_positive_passed\": true,
-  \"paper_days_observed\": 10,
-  \"shadow_days_observed\": 10
-}
-EOF
+  python3 - <<'PY'
+import json
+from pathlib import Path
+
+Path('.run/${HISTORICAL_GUARD_BASENAME}').write_text(
+    json.dumps(
+        {
+            'approved_for_runtime': True,
+            'offline_strict_positive_passed': True,
+            'paper_days_observed': 10,
+            'shadow_days_observed': 10,
+        },
+        indent=2,
+    ) + '\n',
+    encoding='utf-8',
+)
+PY
   cat > '${REMOTE_ENV_FILE}' <<'EOF'
 GHCR_IMAGE_PREFIX=${GHCR_IMAGE_PREFIX}
 APP_IMAGE_TAG=${APP_IMAGE_TAG}
