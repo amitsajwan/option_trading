@@ -108,6 +108,28 @@ def _backfill_stage_row(view_row: dict[str, object], rolling_features: dict[str,
     return out
 
 
+def _inject_runtime_snapshot_fields(feature_row: dict[str, object], snap: Any) -> dict[str, object]:
+    out = dict(feature_row)
+    ts = snap.timestamp_or_now
+    if _is_missing_value(out.get("trade_date")):
+        trade_date = str(getattr(snap, "trade_date", "") or "").strip()
+        out["trade_date"] = trade_date or ts.date().isoformat()
+    if _is_missing_value(out.get("year")):
+        out["year"] = int(ts.year)
+    if _is_missing_value(out.get("timestamp")):
+        out["timestamp"] = ts.isoformat()
+    if _is_missing_value(out.get("snapshot_id")):
+        snapshot_id = str(getattr(snap, "snapshot_id", "") or "").strip()
+        if snapshot_id:
+            out["snapshot_id"] = snapshot_id
+    raw_payload = getattr(snap, "raw_payload", {}) if hasattr(snap, "raw_payload") else {}
+    if _is_missing_value(out.get("instrument")) and isinstance(raw_payload, dict):
+        instrument = str(raw_payload.get("instrument") or "").strip().upper()
+        if instrument:
+            out["instrument"] = instrument
+    return out
+
+
 def _score_prob(package: dict[str, Any], feature_row: dict[str, object], *, default_prob_col: str) -> float:
     feature_frame = pd.DataFrame([feature_row])
     # The "error" policy here only guards against structurally absent columns.
@@ -186,7 +208,10 @@ def predict_staged(
     stage3_packages = dict(((bundle.get("stages") or {}).get("stage3") or {}).get("recipe_packages") or {})
     recipe_catalog = list(policy.get("recipe_catalog") or [])
 
-    stage1_row = _backfill_stage_row(engine._merge_feature_rows(stage_views["stage1_entry_view"], rolling_features), rolling_features)
+    stage1_row = _inject_runtime_snapshot_fields(
+        _backfill_stage_row(engine._merge_feature_rows(stage_views["stage1_entry_view"], rolling_features), rolling_features),
+        snap,
+    )
     gate_reason, _ = _run_prefilter_chain(engine, snap, stage1_row, gate_ids)
     if gate_reason is not None:
         return StagedRuntimeDecision(action="HOLD", reason=gate_reason)
@@ -200,7 +225,10 @@ def predict_staged(
     if float(entry_prob) < entry_threshold:
         return StagedRuntimeDecision(action="HOLD", reason="entry_below_threshold", entry_prob=float(entry_prob))
 
-    stage2_row = _backfill_stage_row(engine._merge_feature_rows(stage_views["stage2_direction_view"], rolling_features), rolling_features)
+    stage2_row = _inject_runtime_snapshot_fields(
+        _backfill_stage_row(engine._merge_feature_rows(stage_views["stage2_direction_view"], rolling_features), rolling_features),
+        snap,
+    )
     if "feature_completeness_v1" in gate_ids:
         incomplete_reason = _feature_completeness_reason(stage2_row, stage2_package, max_nan_features=engine._max_nan_features)
         if incomplete_reason is not None:
@@ -231,7 +259,10 @@ def predict_staged(
     if "liquidity_gate_v1" in gate_ids and not engine._liquidity_ok(snap=snap, direction=direction, strike=int(strike)):
         return StagedRuntimeDecision(action="HOLD", reason="liquidity_gate_block", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
 
-    stage3_row = _backfill_stage_row(engine._merge_feature_rows(stage_views["stage3_recipe_view"], rolling_features), rolling_features)
+    stage3_row = _inject_runtime_snapshot_fields(
+        _backfill_stage_row(engine._merge_feature_rows(stage_views["stage3_recipe_view"], rolling_features), rolling_features),
+        snap,
+    )
     stage3_row["stage1_entry_prob"] = float(entry_prob)
     stage3_row["stage2_direction_up_prob"] = float(direction_up_prob)
     stage3_row["stage2_direction_down_prob"] = float(1.0 - direction_up_prob)

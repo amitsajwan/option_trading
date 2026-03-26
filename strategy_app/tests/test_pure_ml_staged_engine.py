@@ -218,25 +218,27 @@ class PureMLStagedEngineTests(unittest.TestCase):
             engine.on_session_start(date(2026, 3, 18))
 
             signal = None
-            for idx, close in enumerate((50000.0, 50010.0, 50020.0, 50030.0, 50040.0, 50060.0), start=15):
-                snap = _snapshot(f"2026-03-18T09:{idx:02d}:00+05:30")
-                snap["futures_bar"] = {
-                    "fut_open": close - 5.0,
-                    "fut_high": close + 10.0,
-                    "fut_low": close - 10.0,
-                    "fut_close": close,
-                    "fut_volume": 10_000.0 + idx * 100.0,
-                    "fut_oi": 100_000.0 + idx * 10.0,
-                }
-                snap["futures_derived"] = {
-                    "fut_return_15m": 0.020,
-                    "realized_vol_30m": 0.010,
-                    "vol_ratio": 1.2,
-                    "price_vs_vwap": 0.001,
-                }
-                signal = engine.evaluate(snap)
 
+    def test_staged_bundle_backfills_snapshot_year_for_stage3(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            model_path, threshold_path = self._write_bundle(
+                root,
+                recipe_probs={"L0": 0.82, "L1": 0.55},
+                runtime_gate_ids=["rollout_guard_v1", "feature_freshness_v1", "liquidity_gate_v1"],
+                stage3_feature_columns=["year", "stage1_entry_prob", "stage2_direction_up_prob"],
+            )
+            engine = PureMLEngine(
+                model_package_path=str(model_path),
+                threshold_report_path=str(threshold_path),
+                signal_logger=SignalLogger(root),
+                max_feature_age_sec=10_000_000,
+            )
+            engine.on_session_start(date(2026, 3, 18))
+            signal = engine.evaluate(_snapshot("2026-03-18T09:30:00+05:30"))
             self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertEqual(signal.signal_type, SignalType.ENTRY)
             assert signal is not None
             self.assertEqual(signal.signal_type, SignalType.ENTRY)
             self.assertEqual(signal.direction, "CE")
