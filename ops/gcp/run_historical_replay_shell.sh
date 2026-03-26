@@ -63,6 +63,7 @@ ML_PURE_MODEL_GROUP="${ML_PURE_MODEL_GROUP:-banknifty_futures/h15_tp_smoke_test}
 REPLAY_START_DATE="${REPLAY_START_DATE:-}"
 REPLAY_END_DATE="${REPLAY_END_DATE:-${REPLAY_START_DATE}}"
 REPLAY_SPEED="${REPLAY_SPEED:-0}"
+IMAGE_SOURCE="${IMAGE_SOURCE:-ghcr}"
 ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL="${ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL:-0}"
 HISTORICAL_GUARD_BASENAME="${HISTORICAL_GUARD_BASENAME:-ml_runtime_guard_historical_test.json}"
 
@@ -76,12 +77,26 @@ if [ -z "${MODEL_BUCKET_URL:-}" ]; then
   exit 1
 fi
 
+if [[ "${IMAGE_SOURCE}" != "ghcr" && "${IMAGE_SOURCE}" != "local_build" ]]; then
+  echo "Unsupported IMAGE_SOURCE=${IMAGE_SOURCE}. Use ghcr or local_build." >&2
+  exit 1
+fi
+
+REMOTE_COMPOSE_FILES="-f docker-compose.yml -f docker-compose.gcp.yml"
+if [ "${IMAGE_SOURCE}" = "local_build" ]; then
+  REMOTE_COMPOSE_FILES="-f docker-compose.yml"
+fi
+
 echo "Historical replay shell runner"
 echo "  project: ${PROJECT_ID}"
 echo "  zone: ${ZONE}"
 echo "  vm: ${TARGET_VM_NAME}"
 echo "  repo: ${TARGET_REPO_ROOT}"
-echo "  image: ${GHCR_IMAGE_PREFIX}/*:${APP_IMAGE_TAG}"
+if [ "${IMAGE_SOURCE}" = "ghcr" ]; then
+  echo "  image: ${GHCR_IMAGE_PREFIX}/*:${APP_IMAGE_TAG}"
+else
+  echo "  image: local_build from ${TARGET_REPO_ROOT}"
+fi
 echo "  model: ${ML_PURE_MODEL_GROUP}"
 echo "  run_id: ${ML_PURE_RUN_ID}"
 echo "  parquet: ${SNAPSHOT_PARQUET_BUCKET_URL}"
@@ -133,6 +148,16 @@ STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL=.run/${HISTORICAL_GUARD_BASENAME}
 EOF
 "
 
+if [ "${IMAGE_SOURCE}" = "local_build" ]; then
+  remote_gcloud "
+    set -e
+    cd '${TARGET_REPO_ROOT}'
+    ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES} build snapshot_app persistence_app dashboard
+    ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES} build --no-cache strategy_app
+    sudo docker run --rm option_trading_strategy_app:latest python -c 'import sklearn; print(sklearn.__version__)'
+  "
+fi
+
 remote_gcloud "
   set -e
   GCLOUD_BIN=\$(command -v gcloud || true)
@@ -155,8 +180,8 @@ if ! remote_gcloud "
   export GHCR_IMAGE_PREFIX='${GHCR_IMAGE_PREFIX}'
   export APP_IMAGE_TAG='${APP_IMAGE_TAG}'
   sudo docker exec option_trading_redis_1 redis-cli DEL 'strategy_app:consumer_lock:market:snapshot:v1:historical' >/dev/null 2>&1 || true
-  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml rm -fsv dashboard persistence_app_historical strategy_app_historical strategy_persistence_app_historical || true
-  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml --profile historical up -d redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical dashboard
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES} rm -fsv dashboard persistence_app_historical strategy_app_historical strategy_persistence_app_historical || true
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES} --profile historical up -d redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical dashboard
 "
 
 remote_gcloud "
@@ -168,7 +193,7 @@ remote_gcloud "
 import subprocess
 import time
 
-compose_cmd = \"${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml\"
+compose_cmd = \"${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES}\"
 deadline = time.time() + 180
 needles = {
     'strategy_app_historical': 'strategy consumer subscribed topic=market:snapshot:v1:historical',
@@ -202,13 +227,13 @@ then
   cd '${TARGET_REPO_ROOT}'
   export GHCR_IMAGE_PREFIX='${GHCR_IMAGE_PREFIX}'
   export APP_IMAGE_TAG='${APP_IMAGE_TAG}'
-  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml ps
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES} ps
   printf '\n--- strategy_app_historical readiness logs ---\n'
-  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml logs --tail 80 strategy_app_historical || true
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES} logs --tail 80 strategy_app_historical || true
   printf '\n--- strategy_persistence_app_historical readiness logs ---\n'
-  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml logs --tail 80 strategy_persistence_app_historical || true
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES} logs --tail 80 strategy_persistence_app_historical || true
   printf '\n--- persistence_app_historical readiness logs ---\n'
-  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml logs --tail 80 persistence_app_historical || true
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES} logs --tail 80 persistence_app_historical || true
 "
   exit 1
 fi
@@ -218,7 +243,7 @@ remote_gcloud "
   cd '${TARGET_REPO_ROOT}'
   export GHCR_IMAGE_PREFIX='${GHCR_IMAGE_PREFIX}'
   export APP_IMAGE_TAG='${APP_IMAGE_TAG}'
-  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml --profile historical_replay run --rm --entrypoint python historical_replay -m snapshot_app.historical.replay_runner --base /app/.data/ml_pipeline/parquet_data --topic market:snapshot:v1:historical --start-date ${REPLAY_START_DATE} --end-date ${REPLAY_END_DATE} --speed ${REPLAY_SPEED}
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES} --profile historical_replay run --rm --entrypoint python historical_replay -m snapshot_app.historical.replay_runner --base /app/.data/ml_pipeline/parquet_data --topic market:snapshot:v1:historical --start-date ${REPLAY_START_DATE} --end-date ${REPLAY_END_DATE} --speed ${REPLAY_SPEED}
 "
 
 echo
@@ -228,9 +253,9 @@ remote_gcloud "
   cd '${TARGET_REPO_ROOT}'
   export GHCR_IMAGE_PREFIX='${GHCR_IMAGE_PREFIX}'
   export APP_IMAGE_TAG='${APP_IMAGE_TAG}'
-  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml ps
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES} ps
   printf '\n--- strategy_app_historical ---\n'
-  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} -f docker-compose.yml -f docker-compose.gcp.yml logs --tail 60 strategy_app_historical
+  ${REMOTE_COMPOSE_CMD} --env-file ${REMOTE_ENV_FILE} ${REMOTE_COMPOSE_FILES} logs --tail 60 strategy_app_historical
   printf '\n--- replay status ---\n'
   curl -fsS http://127.0.0.1:8008/api/historical/replay/status
 "
