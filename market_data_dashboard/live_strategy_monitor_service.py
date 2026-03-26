@@ -197,6 +197,16 @@ def _distribution(values: list[float]) -> dict[str, Any]:
     }
 
 
+def _safe_count_documents(coll: Any, query: dict[str, Any]) -> int:
+    counter = getattr(coll, "count_documents", None)
+    if not callable(counter):
+        return 0
+    try:
+        return int(counter(query))
+    except Exception:
+        return 0
+
+
 class LiveStrategyMonitorService:
     def __init__(
         self,
@@ -694,6 +704,7 @@ class LiveStrategyMonitorService:
         coll_map = self._repo.collections()
         votes_coll = coll_map["votes"]
         signals_coll = coll_map["signals"]
+        positions_coll = coll_map["positions"]
         date_match = {"trade_date_ist": str(date_ist)}
         signal_map = self._evaluation_service._load_signal_map(
             signals_coll=signals_coll,
@@ -706,7 +717,7 @@ class LiveStrategyMonitorService:
             date_ist=date_ist,
             votes_coll=votes_coll,
             signals_coll=signals_coll,
-            positions_coll=coll_map["positions"],
+            positions_coll=positions_coll,
         )
         engine_context = self.infer_engine_context(
             recent_votes=recent_votes,
@@ -798,11 +809,26 @@ class LiveStrategyMonitorService:
         )
 
         freshness_payload = self.build_freshness(latest_vote_ts, latest_signal_ts, latest_position_ts)
+        raw_signal_count = _safe_count_documents(signals_coll, date_match)
+        raw_vote_count = _safe_count_documents(votes_coll, date_match)
+        raw_position_count = _safe_count_documents(positions_coll, date_match)
         counts_payload = {
             **dict(summary.get("counts") or {}),
             "open_positions": len(active_positions),
             "stale_open_positions": len(stale_positions),
         }
+        if self._dataset == "historical":
+            # Historical replays can legitimately populate raw collections before any
+            # evaluation summary exists. Prefer the observed collection counts so the
+            # session API reflects replay activity instead of summary fallback zeros.
+            counts_payload["votes"] = max(int(counts_payload.get("votes") or 0), raw_vote_count)
+            counts_payload["signals"] = max(int(counts_payload.get("signals") or 0), raw_signal_count)
+            counts_payload["positions"] = max(int(counts_payload.get("positions") or 0), raw_position_count)
+            counts_payload["closed_trades"] = max(
+                int(counts_payload.get("closed_trades") or 0),
+                int(counts_payload.get("trades") or 0),
+                len(recent_trades),
+            )
 
         ops_state: Optional[OpsState] = None
         active_alerts: Optional[list[AlertItem]] = None
