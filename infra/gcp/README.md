@@ -44,6 +44,20 @@ terraform plan
 terraform apply
 ```
 
+For a brand-new GCP project, enable the required APIs first:
+
+```bash
+gcloud services enable \
+  compute.googleapis.com \
+  storage.googleapis.com \
+  artifactregistry.googleapis.com \
+  iam.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  serviceusage.googleapis.com \
+  iamcredentials.googleapis.com \
+  --project "${PROJECT_ID}"
+```
+
 ## Expected Workflow
 
 1. Apply Terraform once for the base infra.

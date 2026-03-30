@@ -51,6 +51,7 @@ Before starting:
 - work from Ubuntu, WSL, or Cloud Shell
 - run from the repo root
 - ensure `gcloud`, `terraform`, `docker`, and `bash` are available
+- ensure `gcloud auth application-default login` has been run on the operator machine
 - ensure `ops/gcp/operator.env` exists
 - ensure `.env.compose` contains the intended live runtime values before you deploy
 - for historical replay, ensure the target VM already has a repo checkout; the interactive helper auto-detects `/opt/option_trading` and `~/option_trading`
@@ -92,6 +93,30 @@ Choose:
 
 That flow writes `ops/gcp/operator.env`, derives bucket URLs, and can run the bootstrap immediately.
 
+### Brand-New Project APIs
+
+On a brand-new GCP project, enable the required APIs before the first Terraform apply:
+
+```bash
+gcloud services enable \
+  compute.googleapis.com \
+  storage.googleapis.com \
+  artifactregistry.googleapis.com \
+  iam.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  serviceusage.googleapis.com \
+  iamcredentials.googleapis.com \
+  --project "${PROJECT_ID}"
+```
+
+If Terraform previously failed because these APIs were disabled, enable them, wait a minute, then rerun:
+
+```bash
+cd infra/gcp
+terraform init
+terraform apply
+```
+
 ### Required Operator Values
 
 These fields must be correct in `ops/gcp/operator.env`:
@@ -112,6 +137,7 @@ Current conventions:
 - `REPOSITORY` still exists only for Terraform and bootstrap compatibility
 - `MODEL_BUCKET_URL` defaults to `gs://<MODEL_BUCKET_NAME>/published_models`
 - `RUNTIME_CONFIG_BUCKET_URL` defaults to `gs://<RUNTIME_CONFIG_BUCKET_NAME>/runtime`
+- `DATA_SYNC_SOURCE` should point at the shared `ml_pipeline` parent prefix, not directly at `parquet_data/`
 
 ### First-Time Bootstrap Reference
 

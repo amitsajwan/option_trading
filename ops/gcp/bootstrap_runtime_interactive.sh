@@ -65,6 +65,10 @@ detect_default_project() {
   gcloud config get-value project 2>/dev/null | tr -d '\r'
 }
 
+detect_default_zone() {
+  gcloud config get-value compute/zone 2>/dev/null | tr -d '\r'
+}
+
 detect_default_repo_url() {
   git -C "${REPO_ROOT}" config --get remote.origin.url 2>/dev/null || true
 }
@@ -78,12 +82,13 @@ echo "This will ask for changing values and write ${OPERATOR_ENV_FILE}."
 echo
 
 detected_project_id="$(detect_default_project)"
+detected_zone="$(detect_default_zone)"
 detected_repo_url="$(detect_default_repo_url)"
 detected_repo_ref="$(detect_default_repo_ref)"
 
-existing_project_id="${PROJECT_ID:-${detected_project_id:-gen-lang-client-0909109011}}"
+existing_project_id="${PROJECT_ID:-${detected_project_id:-my-gcp-project}}"
 existing_region="${REGION:-asia-south1}"
-existing_zone="${ZONE:-asia-south1-b}"
+existing_zone="${ZONE:-${detected_zone:-asia-south1-b}}"
 existing_runtime_name="${RUNTIME_NAME:-option-trading-runtime-01}"
 existing_runtime_machine_type="${RUNTIME_MACHINE_TYPE:-e2-standard-4}"
 existing_training_machine_type="${TRAINING_MACHINE_TYPE:-n2-highcpu-16}"

@@ -53,19 +53,29 @@ if [ -z "${REMOTE_COMPOSE_CMD}" ]; then
   exit 1
 fi
 
-PROJECT_ID="${PROJECT_ID:-gen-lang-client-0909109011}"
-ZONE="${ZONE:-asia-south1-b}"
+PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null | tr -d '\r')}"
+ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null | tr -d '\r')}"
 GHCR_IMAGE_PREFIX="${GHCR_IMAGE_PREFIX:-ghcr.io/amitsajwan}"
 APP_IMAGE_TAG="${APP_IMAGE_TAG:-${TAG:-latest}}"
-SNAPSHOT_PARQUET_BUCKET_URL="${SNAPSHOT_PARQUET_BUCKET_URL:-gs://gen-lang-client-0909109011-option-trading-snapshots/parquet_data}"
-ML_PURE_RUN_ID="${ML_PURE_RUN_ID:-staged_dual_recipe_quick_publish_smoke_20260324_043508}"
-ML_PURE_MODEL_GROUP="${ML_PURE_MODEL_GROUP:-banknifty_futures/h15_tp_smoke_test}"
+SNAPSHOT_PARQUET_BUCKET_URL="${SNAPSHOT_PARQUET_BUCKET_URL:-}"
+ML_PURE_RUN_ID="${ML_PURE_RUN_ID:-}"
+ML_PURE_MODEL_GROUP="${ML_PURE_MODEL_GROUP:-}"
 REPLAY_START_DATE="${REPLAY_START_DATE:-}"
 REPLAY_END_DATE="${REPLAY_END_DATE:-${REPLAY_START_DATE}}"
 REPLAY_SPEED="${REPLAY_SPEED:-0}"
 IMAGE_SOURCE="${IMAGE_SOURCE:-ghcr}"
 ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL="${ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL:-0}"
 HISTORICAL_GUARD_BASENAME="${HISTORICAL_GUARD_BASENAME:-ml_runtime_guard_historical_test.json}"
+
+if [ -z "${PROJECT_ID}" ]; then
+  echo "PROJECT_ID is not set and gcloud has no active project. Set PROJECT_ID or run gcloud config set project <project>." >&2
+  exit 1
+fi
+
+if [ -z "${ZONE}" ]; then
+  echo "ZONE is not set and gcloud has no active compute zone. Set ZONE or run gcloud config set compute/zone <zone>." >&2
+  exit 1
+fi
 
 if [ -z "${REPLAY_START_DATE}" ]; then
   echo "Set REPLAY_START_DATE=YYYY-MM-DD before running." >&2
@@ -74,6 +84,16 @@ fi
 
 if [ -z "${MODEL_BUCKET_URL:-}" ]; then
   echo "MODEL_BUCKET_URL is missing from operator env." >&2
+  exit 1
+fi
+
+if [ -z "${SNAPSHOT_PARQUET_BUCKET_URL}" ]; then
+  echo "SNAPSHOT_PARQUET_BUCKET_URL is required. Point it at gs://.../parquet_data before running historical replay." >&2
+  exit 1
+fi
+
+if [ -z "${ML_PURE_RUN_ID}" ] || [ -z "${ML_PURE_MODEL_GROUP}" ]; then
+  echo "ML_PURE_RUN_ID and ML_PURE_MODEL_GROUP are required for historical ml_pure replay. Export both before running." >&2
   exit 1
 fi
 
