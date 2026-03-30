@@ -15,6 +15,8 @@ Host rule:
 - use Linux only for `run_snapshot_parquet_pipeline.sh`
 - supported hosts are Ubuntu, Cloud Shell, and WSL
 - do not run the full parquet wrapper from Windows Git Bash; use Windows only to seed the raw archive into GCS
+- Cloud Shell is suitable for orchestration, but not for the full parquet build when local disk is small
+- prefer a dedicated Linux VM with `150GB+` free disk, ideally a `300GB` boot disk for full rebuilds
 
 ## What This Produces
 
@@ -84,7 +86,12 @@ Look for:
 ## Step 3: Create The Snapshot Build VM
 
 Create a disposable high-power VM.
-Use a machine with enough local disk for the raw cache plus parquet outputs. `8` to `16` vCPU with `16GB+` RAM is a practical range, but the wrapper now defaults to low worker counts for reliability.
+Use a machine with enough local disk for the raw cache plus parquet outputs. `8` to `16` vCPU with `16GB+` RAM is a practical range, but disk is the first constraint here.
+
+Minimum recommendation:
+
+- `150GB+` free disk before the run starts
+- `300GB` boot disk for a full rebuild
 
 Example:
 
@@ -112,6 +119,15 @@ gcloud compute instances describe option-trading-snapshot-build-01 \
 Look for:
 
 - `RUNNING`
+- enough free disk for the build
+
+Also verify free disk immediately after SSH:
+
+```bash
+df -h /
+```
+
+If free disk is under `150G`, stop and resize or switch hosts before running the wrapper.
 
 ## Step 4: Prepare The VM
 

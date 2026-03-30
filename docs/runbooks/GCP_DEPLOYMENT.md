@@ -66,6 +66,12 @@ Before starting:
 - ensure `.env.compose` contains the intended live runtime values before you deploy
 - for historical replay, ensure the target VM already has a repo checkout; the interactive helper auto-detects `/opt/option_trading` and `~/option_trading`
 
+Host rule:
+
+- Cloud Shell is fine for `gcloud`, Terraform, bucket setup, and VM orchestration
+- do not use Cloud Shell as the full snapshot/parquet build host when disk is limited
+- use a large-disk Linux VM for snapshot/parquet builds
+
 Image source modes:
 
 - `IMAGE_SOURCE=ghcr`: use published images from GHCR

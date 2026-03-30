@@ -47,6 +47,37 @@ EOF
   esac
 }
 
+available_gb() {
+  local target="$1"
+  local kb
+  kb="$(df -Pk "${target}" | awk 'NR==2 {print $4}')"
+  if [ -z "${kb}" ]; then
+    echo "Unable to determine free disk space for ${target}" >&2
+    exit 1
+  fi
+  printf '%s\n' "$((kb / 1024 / 1024))"
+}
+
+ensure_free_disk_gb() {
+  local target="$1"
+  local minimum_gb="$2"
+  local free_gb
+  free_gb="$(available_gb "${target}")"
+  if [ "${free_gb}" -lt "${minimum_gb}" ]; then
+    cat >&2 <<EOF
+Not enough free disk space for snapshot/parquet build.
+
+Path checked: ${target}
+Free space: ${free_gb}G
+Required minimum: ${minimum_gb}G
+
+Use a large-disk Linux VM for this workflow.
+Cloud Shell is suitable for orchestration, not full parquet builds.
+EOF
+    exit 1
+  fi
+}
+
 cpu_count() {
   local cpu_count
   if command -v nproc >/dev/null 2>&1; then
@@ -338,10 +369,12 @@ AUDIT_PATH="${REPORT_ROOT}/coverage_audit.json"
 RAW_ARCHIVE_BUCKET_URL="${RAW_ARCHIVE_BUCKET_URL:?set RAW_ARCHIVE_BUCKET_URL in operator.env}"
 SNAPSHOT_PARQUET_BUCKET_URL="${SNAPSHOT_PARQUET_BUCKET_URL:?set SNAPSHOT_PARQUET_BUCKET_URL in operator.env}"
 STAGE2_REQUIRED_COLUMNS="${STAGE2_REQUIRED_COLUMNS:-pcr_change_5m,pcr_change_15m,atm_oi_ratio,near_atm_oi_ratio,atm_ce_oi,atm_pe_oi}"
+MIN_FREE_DISK_GB="${MIN_FREE_DISK_GB:-150}"
 
 ensure_file "${REPO_ROOT}/ops/gcp/publish_snapshot_parquet.sh"
 require_command python3
 require_command gcloud
+ensure_free_disk_gb "${REPO_ROOT}" "${MIN_FREE_DISK_GB}"
 
 if [ -n "${LOCAL_RAW_ARCHIVE_ROOT}" ]; then
   if [ ! -d "${LOCAL_RAW_ARCHIVE_ROOT}" ]; then

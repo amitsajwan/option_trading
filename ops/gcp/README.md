@@ -14,6 +14,8 @@ Important host rule:
 
 - `run_snapshot_parquet_pipeline.sh` is Linux-only
 - use Windows only for raw archive upload via `publish_raw_market_data.sh`
+- use Cloud Shell for orchestration, not as the default full parquet build host
+- use a large-disk Linux VM for snapshot/parquet builds
 
 This file is a script index, not the primary operator runbook. For step-by-step procedures, use:
 
