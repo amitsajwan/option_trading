@@ -242,7 +242,8 @@ What the script does:
 
 Notes:
 
-- worker defaults are intentionally conservative: `NORMALIZE_JOBS=1`, `SNAPSHOT_JOBS=2`
+- worker defaults are now host-aware and scale up on dedicated Linux build VMs
+- you can still override them explicitly, for example `NORMALIZE_JOBS=8 SNAPSHOT_JOBS=4`
 - rerunning the same command resumes from the existing local parquet state
 - the script publishes only after the local build and validation state is publishable, unless `ALLOW_PARTIAL_PUBLISH=1` is set explicitly
 - the wrapper fails before publish if normalization returns `partial_error`

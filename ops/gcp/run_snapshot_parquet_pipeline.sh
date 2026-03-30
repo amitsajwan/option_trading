@@ -97,13 +97,31 @@ PY
 }
 
 default_normalize_jobs() {
-  printf '1\n'
+  local count
+  count="$(cpu_count)"
+  if [ "${count}" -le 4 ]; then
+    printf '1\n'
+    return
+  fi
+  count="$((count - 2))"
+  if [ "${count}" -gt 12 ]; then
+    count=12
+  fi
+  printf '%s\n' "${count}"
 }
 
 default_snapshot_jobs() {
   local count
   count="$(cpu_count)"
-  if [ "${count}" -gt 2 ]; then
+  if [ "${count}" -le 4 ]; then
+    printf '2\n'
+    return
+  fi
+  count="$((count - 2))"
+  if [ "${count}" -gt 6 ]; then
+    count=6
+  fi
+  if [ "${count}" -lt 2 ]; then
     count=2
   fi
   printf '%s\n' "${count}"

@@ -40,7 +40,16 @@ CHAIN_HISTORY_MAXLEN = 4_000
 OPTION_PRICE_HISTORY_MAXLEN = 4_000
 DAY_PROGRESS_EVERY_MINUTES = 120
 
-_EMPTY_CHAIN: dict[str, Any] = {"expiry": None, "pcr": None, "max_pain": None, "strikes": []}
+_EMPTY_CHAIN: dict[str, Any] = {
+    "expiry": None,
+    "pcr": None,
+    "max_pain": None,
+    "strikes": [],
+    "strike_index": {},
+    "ce_volume_total": float("nan"),
+    "pe_volume_total": float("nan"),
+    "options_rows": float("nan"),
+}
 OUTPUT_DATASET_SNAPSHOTS = "snapshots"
 OUTPUT_DATASET_MARKET_BASE = "market_base"
 OUTPUT_DATASET_ML_FLAT = "snapshots_ml_flat"
@@ -218,6 +227,11 @@ def _find_atm_row(chain: dict[str, Any], atm_strike: Any) -> Optional[dict[str, 
     atm = pd.to_numeric(atm_strike, errors="coerce")
     if pd.isna(atm):
         return None
+    strike_index = chain.get("strike_index")
+    if isinstance(strike_index, dict):
+        cached = strike_index.get(int(round(float(atm))))
+        if isinstance(cached, dict):
+            return cached
     strikes = chain.get("strikes")
     if not isinstance(strikes, list):
         return None
@@ -403,11 +417,30 @@ def _build_all_chains(options_day: pd.DataFrame) -> dict[str, dict[str, Any]]:
             for row in grp.itertuples(index=False)
         ]
 
-        out[ts] = {"expiry": expiry_map.get(ts), "pcr": pcr, "max_pain": max_pain, "strikes": strikes}
+        strike_index = {
+            int(round(float(row["strike"]))): row
+            for row in strikes
+            if pd.notna(pd.to_numeric(row.get("strike"), errors="coerce"))
+        }
+        out[ts] = {
+            "expiry": expiry_map.get(ts),
+            "pcr": pcr,
+            "max_pain": max_pain,
+            "strikes": strikes,
+            "strike_index": strike_index,
+            "ce_volume_total": float(grp["ce_volume"].sum()),
+            "pe_volume_total": float(grp["pe_volume"].sum()),
+            "options_rows": float(len(strikes)),
+        }
     return out
 
 
 def _chain_totals(chain: dict[str, Any]) -> tuple[float, float, float]:
+    cached_ce = pd.to_numeric(chain.get("ce_volume_total"), errors="coerce")
+    cached_pe = pd.to_numeric(chain.get("pe_volume_total"), errors="coerce")
+    cached_rows = pd.to_numeric(chain.get("options_rows"), errors="coerce")
+    if pd.notna(cached_ce) and pd.notna(cached_pe) and pd.notna(cached_rows):
+        return float(cached_ce), float(cached_pe), float(cached_rows)
     strikes = chain.get("strikes")
     if not isinstance(strikes, list) or not strikes:
         return float("nan"), float("nan"), float("nan")
@@ -527,6 +560,38 @@ def _compute_daily_atr_percentile(fut_window: pd.DataFrame, trade_date: str) -> 
         return float("nan")
     value = pd.to_numeric(current.iloc[-1], errors="coerce")
     return float(value) if pd.notna(value) else float("nan")
+
+
+def _preload_futures_windows(
+    *,
+    store: ParquetStore,
+    history_calendar_days: list[str],
+    execution_days: list[str],
+    futures_window_days_by_day: dict[str, list[str]],
+) -> dict[str, pd.DataFrame]:
+    required_days: set[str] = set()
+    for day in execution_days:
+        required_days.update(futures_window_days_by_day.get(str(day), []))
+    ordered_required_days = [str(day) for day in history_calendar_days if str(day) in required_days]
+    if not ordered_required_days:
+        return {}
+
+    full_futures = store.futures_window_for_days(ordered_required_days)
+    if len(full_futures) == 0:
+        return {}
+
+    by_day = {
+        str(trade_date): frame.sort_values("timestamp").reset_index(drop=True)
+        for trade_date, frame in full_futures.groupby("trade_date", sort=False)
+    }
+    window_cache: dict[str, pd.DataFrame] = {}
+    for day in execution_days:
+        window_days = futures_window_days_by_day.get(str(day), [])
+        frames = [by_day[current] for current in window_days if current in by_day]
+        if not frames:
+            continue
+        window_cache[str(day)] = pd.concat(frames, axis=0, ignore_index=True)
+    return window_cache
 
 
 def _project_rows_to_ml_flat(
@@ -978,11 +1043,14 @@ def process_day(
     validate_ml_flat_contract: bool = False,
     emit_outputs: bool = True,
     futures_window_days: list[str] | None = None,
+    preloaded_fut_window: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Build one day's minute-level snapshots from Layer-1 parquet inputs."""
     day_started_at = time.perf_counter()
     resolved_build_run_id = str(build_run_id or _default_build_run_id())
-    if futures_window_days:
+    if preloaded_fut_window is not None:
+        fut_window = preloaded_fut_window.copy()
+    elif futures_window_days:
         fut_window = store.futures_window_for_days(futures_window_days)
     else:
         fut_window = store.futures_window(trade_date, lookback_days=lookback_days)
@@ -1283,6 +1351,12 @@ def run_snapshot_batch(
             continue
         start_idx = max(0, int(idx) - max(0, int(lookback_days)))
         futures_window_days_by_day[str(day)] = [str(value) for value in history_calendar_days[start_idx : idx + 1]]
+    futures_window_cache = _preload_futures_windows(
+        store=store,
+        history_calendar_days=history_calendar_days,
+        execution_days=execution_days,
+        futures_window_days_by_day=futures_window_days_by_day,
+    )
 
     already_done = (
         _completed_output_days(
@@ -1421,6 +1495,7 @@ def run_snapshot_batch(
                 validate_ml_flat_contract=False,
                 emit_outputs=emit_output_day,
                 futures_window_days=futures_window_days_by_day.get(str(day)),
+                preloaded_fut_window=futures_window_cache.get(str(day)),
             )
             if not emit_output_day:
                 warmup_days_processed += 1
