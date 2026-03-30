@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from snapshot_app.historical.snapshot_batch import (
     _build_all_chains,
@@ -11,6 +12,7 @@ from snapshot_app.historical.snapshot_batch import (
     _find_atm_row,
     _project_rows_to_ml_flat,
     run_snapshot_batch,
+    write_days_to_parquet,
 )
 
 
@@ -129,6 +131,8 @@ def test_run_snapshot_batch_flushes_canonical_and_market_base(monkeypatch, tmp_p
     assert result["total_market_base_rows"] == 1
     assert snapshots_path.exists()
     assert market_base_path.exists()
+    assert not list((snapshots_path.parent).glob("data.tmp_*.parquet"))
+    assert not list((market_base_path.parent).glob("data.tmp_*.parquet"))
 
     snapshots_df = pd.read_parquet(snapshots_path)
     market_base_df = pd.read_parquet(market_base_path)
@@ -217,6 +221,63 @@ def test_run_snapshot_batch_marks_missing_input_days_as_partial_incomplete(monke
     assert result["days_processed"] == 1
     assert result["days_skipped_missing_inputs"] == 1
     assert result["missing_input_days"] == ["2020-01-30"]
+
+
+def test_write_days_to_parquet_preserves_existing_file_when_atomic_replace_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    partition_key = "202001_202001_m1"
+    out_path = tmp_path / "snapshots" / "year=2020" / f"chunk={partition_key}" / "data.parquet"
+    initial_rows = [
+        {
+            "trade_date": "2020-01-29",
+            "timestamp": "2020-01-29 09:15:00",
+            "snapshot_id": "20200129_0915",
+            "snapshot_raw_json": "{}",
+        }
+    ]
+    replacement_rows = [
+        {
+            "trade_date": "2020-01-30",
+            "timestamp": "2020-01-30 09:15:00",
+            "snapshot_id": "20200130_0915",
+            "snapshot_raw_json": "{}",
+        }
+    ]
+
+    write_days_to_parquet(
+        initial_rows,
+        out_base=tmp_path,
+        year=2020,
+        output_dataset="snapshots",
+        replace_trade_dates={"2020-01-29"},
+        partition_key=partition_key,
+    )
+    original = pd.read_parquet(out_path)
+    original_to_parquet = pd.DataFrame.to_parquet
+
+    def _failing_to_parquet(self, path, *args, **kwargs):
+        candidate = Path(path)
+        if candidate.parent == out_path.parent and candidate.name.startswith("data.tmp_"):
+            candidate.write_bytes(b"partial parquet temp")
+            raise RuntimeError("simulated parquet write failure")
+        return original_to_parquet(self, path, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _failing_to_parquet)
+
+    with pytest.raises(RuntimeError, match="simulated parquet write failure"):
+        write_days_to_parquet(
+            replacement_rows,
+            out_base=tmp_path,
+            year=2020,
+            output_dataset="snapshots",
+            replace_trade_dates={"2020-01-30"},
+            partition_key=partition_key,
+        )
+
+    pd.testing.assert_frame_equal(pd.read_parquet(out_path), original)
+    assert not list(out_path.parent.glob("data.tmp_*.parquet"))
 
 
 def test_project_rows_to_ml_flat_prefers_canonical_same_strike_atm_fields() -> None:

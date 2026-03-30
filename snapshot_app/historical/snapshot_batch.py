@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -180,6 +182,18 @@ def _new_iv_diag() -> dict[str, int]:
         "pe_iv_solver_failed": 0,
         "ce_iv_unexpected_missing": 0,
         "pe_iv_unexpected_missing": 0,
+    }
+
+
+def _canonical_contract_validation_metadata(validate_ml_flat_contract: bool) -> dict[str, Any]:
+    return {
+        "contract_validation_requested": bool(validate_ml_flat_contract),
+        "contract_validation_enabled": False,
+        "contract_validation_scope": "canonical_market_snapshot_only",
+        "contract_validation_note": (
+            "Canonical MarketSnapshot validation is always enforced during snapshot builds. "
+            "validate_ml_flat_contract only applies once derived SnapshotMLFlat rows are built."
+        ),
     }
 
 
@@ -1161,6 +1175,23 @@ def process_day(
     }
 
 
+def _write_parquet_atomic(frame: pd.DataFrame, out_path: Path) -> None:
+    """Write parquet via a same-directory temp file so failed writes leave the prior file intact."""
+    temp_path = out_path.with_name(
+        f"{out_path.stem}.tmp_{os.getpid()}_{uuid.uuid4().hex}{out_path.suffix}"
+    )
+    try:
+        frame.to_parquet(temp_path, index=False, compression="snappy")
+        temp_path.replace(out_path)
+    except Exception:
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except Exception:
+            logger.warning("failed to remove temp parquet after write error path=%s", temp_path, exc_info=True)
+        raise
+
+
 def write_days_to_parquet(
     rows: list[dict[str, Any]],
     *,
@@ -1227,7 +1258,7 @@ def write_days_to_parquet(
     if "snapshot_id" in combined.columns:
         sort_cols.append("snapshot_id")
     combined = combined.sort_values(sort_cols).drop(columns=["_sort_timestamp"]).reset_index(drop=True)
-    combined.to_parquet(out_path, index=False, compression="snappy")
+    _write_parquet_atomic(combined, out_path)
     return len(new_df)
 
 
@@ -1339,6 +1370,7 @@ def run_snapshot_batch(
         return {
             "status": "no_days",
             "output_dataset": OUTPUT_DATASET_SNAPSHOTS,
+            **_canonical_contract_validation_metadata(validate_ml_flat_contract),
             "days_available": 0,
         }
 
@@ -1403,6 +1435,7 @@ def run_snapshot_batch(
         return {
             "status": "dry_run",
             "output_dataset": OUTPUT_DATASET_SNAPSHOTS,
+            **_canonical_contract_validation_metadata(validate_ml_flat_contract),
             "days_available": len(output_days),
             "days_pending": len(pending_output_days),
             "days_ready": len(dry_ready),
@@ -1417,6 +1450,7 @@ def run_snapshot_batch(
         return {
             "status": "already_complete",
             "output_dataset": OUTPUT_DATASET_SNAPSHOTS,
+            **_canonical_contract_validation_metadata(validate_ml_flat_contract),
             "days_available": len(output_days),
             "days_skipped_existing": len(already_done),
             "days_pending": 0,
@@ -1560,7 +1594,7 @@ def run_snapshot_batch(
         "build_source": build_source,
         "build_run_id": resolved_build_run_id,
         "partition_key": str(partition_key or ""),
-        "contract_validation_enabled": False,
+        **_canonical_contract_validation_metadata(validate_ml_flat_contract),
         "days_available": len(output_days),
         "days_pending": len(pending_output_days),
         "days_processed": days_done,

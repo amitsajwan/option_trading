@@ -135,11 +135,16 @@ python -m snapshot_app.historical.snapshot_batch_runner --validate-only --valida
 python -m snapshot_app.historical.snapshot_batch_runner
 ```
 
+Direct CLI builds keep derived `SnapshotMLFlat` contract validation off by default for compatibility.
+Use `--validate-ml-flat-contract` for `--build-stage derived` or `--build-stage all` when you want build-time contract enforcement.
+
 5. Build canonical snapshots plus market_base only:
 
 ```powershell
 python -m snapshot_app.historical.snapshot_batch_runner --build-stage snapshots
 ```
+
+`--validate-ml-flat-contract` does not change the canonical snapshots stage. That stage always enforces the nested `MarketSnapshot` contract, while derived `SnapshotMLFlat` validation happens only after `market_base` rows are projected.
 
 6. Build derived ML-flat plus stage views from existing market_base:
 

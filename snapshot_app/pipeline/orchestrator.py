@@ -151,6 +151,36 @@ def _merge_iv_diagnostics(rows: Sequence[dict[str, Any]]) -> dict[str, int]:
     return merged
 
 
+def _contract_validation_metadata(*, build_stage: str, validate_ml_flat_contract: bool) -> dict[str, Any]:
+    resolved_stage = _normalize_build_stage(build_stage)
+    requested = bool(validate_ml_flat_contract)
+    if resolved_stage == "snapshots":
+        return {
+            "contract_validation_requested": requested,
+            "contract_validation_enabled": False,
+            "contract_validation_scope": "canonical_market_snapshot_only",
+            "contract_validation_note": (
+                "Canonical MarketSnapshot validation is always enforced during snapshot builds. "
+                "validate_ml_flat_contract only applies once derived SnapshotMLFlat rows are built."
+            ),
+        }
+    if resolved_stage == "all":
+        return {
+            "contract_validation_requested": requested,
+            "contract_validation_enabled": requested,
+            "contract_validation_scope": "derived_snapshot_ml_flat",
+            "contract_validation_note": (
+                "For build_stage=all, validate_ml_flat_contract applies to the derived stage. "
+                "The canonical snapshots stage still enforces MarketSnapshot validation separately."
+            ),
+        }
+    return {
+        "contract_validation_requested": requested,
+        "contract_validation_enabled": requested,
+        "contract_validation_scope": "derived_snapshot_ml_flat",
+    }
+
+
 def _build_slice_entry(payload: dict[str, Any]) -> dict[str, Any]:
     work = dict(payload)
     stage = _normalize_build_stage(str(work.pop("build_stage", None) or DEFAULT_BUILD_STAGE))
@@ -246,7 +276,10 @@ def run_snapshot_builds(
             "output_dataset": OUTPUT_DATASET_ML_FLAT,
             "build_source": build_source,
             "build_run_id": build_run_id,
-            "contract_validation_enabled": bool(validate_ml_flat_contract),
+            **_contract_validation_metadata(
+                build_stage=resolved_build_stage,
+                validate_ml_flat_contract=validate_ml_flat_contract,
+            ),
             "days_available": int(max(int(snapshots_result.get("days_available") or 0), int(derived_result.get("days_available") or 0))),
             "days_pending": int(max(int(snapshots_result.get("days_pending") or 0), int(derived_result.get("days_pending") or 0))),
             "days_processed": int(max(int(snapshots_result.get("days_processed") or 0), int(derived_result.get("days_processed") or 0))),
@@ -295,6 +328,10 @@ def run_snapshot_builds(
             "status": "no_days",
             "output_dataset": output_dataset,
             "build_stage": resolved_build_stage,
+            **_contract_validation_metadata(
+                build_stage=resolved_build_stage,
+                validate_ml_flat_contract=validate_ml_flat_contract,
+            ),
             "days_available": 0,
         }
 
@@ -315,6 +352,10 @@ def run_snapshot_builds(
             "status": "already_complete",
             "output_dataset": output_dataset,
             "build_stage": resolved_build_stage,
+            **_contract_validation_metadata(
+                build_stage=resolved_build_stage,
+                validate_ml_flat_contract=validate_ml_flat_contract,
+            ),
             "days_available": len(target_days),
             "days_skipped_existing": len(completed_days),
             "days_pending": 0,
@@ -437,6 +478,10 @@ def run_snapshot_builds(
             "build_stage": resolved_build_stage,
             "build_source": build_source,
             "build_run_id": build_run_id,
+            **_contract_validation_metadata(
+                build_stage=resolved_build_stage,
+                validate_ml_flat_contract=validate_ml_flat_contract,
+            ),
             "parallel_slices": len(payloads),
             "parallel_slice_months": int(slice_months),
             "parallel_slice_warmup_days": int(effective_warmup_days),
@@ -463,7 +508,10 @@ def run_snapshot_builds(
         "build_stage": resolved_build_stage,
         "build_source": build_source,
         "build_run_id": build_run_id,
-        "contract_validation_enabled": bool(validate_ml_flat_contract),
+        **_contract_validation_metadata(
+            build_stage=resolved_build_stage,
+            validate_ml_flat_contract=validate_ml_flat_contract,
+        ),
         "parallel_slices": len(payloads),
         "parallel_slice_months": int(slice_months),
         "parallel_slice_warmup_days": int(effective_warmup_days),

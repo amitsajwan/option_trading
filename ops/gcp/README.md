@@ -38,7 +38,15 @@ Image source modes:
 - `IMAGE_SOURCE=ghcr` uses published GHCR images through `docker-compose.gcp.yml`
 - `IMAGE_SOURCE=local_build` builds from the repo checkout on the VM with `docker-compose.yml`
 
-Use the interactive lifecycle menu as the primary entrypoint for that sequence.
+Use the interactive lifecycle menu as the primary entrypoint for `Infra`, `Live`, and `Historical replay`.
+
+Snapshot/parquet build is separate. Its supported entrypoint is:
+
+```bash
+bash ./ops/gcp/run_snapshot_parquet_pipeline.sh
+```
+
+Run that wrapper on a dedicated Linux snapshot-build host with large local disk.
 
 ## Recommended Operator Flow
 
@@ -61,7 +69,7 @@ Important boundary:
 
 ## Script Entry Points
 
-Use direct entrypoints only when you intentionally need a lower-level or troubleshooting path. The lifecycle menu remains the supported operator entrypoint for first-time and daily use.
+Use direct entrypoints only when you intentionally need a lower-level or troubleshooting path. The lifecycle menu remains the supported operator entrypoint for first-time and daily use across `Infra`, `Live`, and `Historical replay`; snapshot/parquet build remains a separate supported wrapper.
 
 Primary menu:
 
@@ -182,7 +190,21 @@ Runtime release manifest writer used by the training publish lane and consumed b
 
 Supported operator entrypoint for historical parquet creation and publish.
 
-This is the upstream artifact-build step for GCP historical simulation. It does not start replay services on the runtime VM.
+This is the upstream artifact-build step for both training and GCP historical simulation. It does not start replay services on the runtime VM.
+
+Use it for:
+
+- fresh raw-to-parquet rebuilds
+- resumable reruns on the snapshot-build host
+- targeted year or date-window rebuilds
+- publish of the canonical parquet artifact set consumed by training and historical replay
+
+Operational rules:
+
+- Linux only
+- prefer a dedicated build VM over Cloud Shell or the runtime VM
+- start with its host-aware worker defaults before overriding `NORMALIZE_JOBS` or `SNAPSHOT_JOBS`
+- run it inside `tmux` and treat rerunning the same command as the normal restart path
 
 ### `publish_runtime_config.sh`
 

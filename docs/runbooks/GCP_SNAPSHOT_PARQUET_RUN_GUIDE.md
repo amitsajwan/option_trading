@@ -1,27 +1,24 @@
-# Snapshot Creation Runbook
+# Snapshot/Parquet Build Runbook
 
-Use this runbook to build historical parquet on GCP and publish it for later training or replay use.
+Use this runbook when you need to build or rebuild historical parquet on GCP and publish it for:
 
-This runbook is centered on one supported operator command:
+- staged ML training
+- historical replay
+- downstream snapshot-derived research datasets
+
+This runbook is intentionally separate from the runtime lifecycle menu. The supported operator entrypoint for snapshot/parquet build is:
 
 ```bash
-./ops/gcp/run_snapshot_parquet_pipeline.sh
+bash ./ops/gcp/run_snapshot_parquet_pipeline.sh
 ```
 
-The script can take a local raw `banknifty_data` archive all the way to final GCS publish in one run.
+Do not use `runtime_lifecycle_interactive.sh` as the main entrypoint for parquet creation. That menu covers `Infra`, `Live`, and `Historical replay`, but the parquet artifact build itself is a separate wrapper with its own host and disk requirements.
 
-Host rule:
+## What The Wrapper Produces
 
-- use Linux only for `run_snapshot_parquet_pipeline.sh`
-- supported hosts are Ubuntu, Cloud Shell, and WSL
-- do not run the full parquet wrapper from Windows Git Bash; use Windows only to seed the raw archive into GCS
-- Cloud Shell is suitable for orchestration, but not for the full parquet build when local disk is small
-- prefer a dedicated Linux VM with `150GB+` free disk, ideally a `300GB` boot disk for full rebuilds
+The wrapper builds and publishes:
 
-## What This Produces
-
-- raw archive in GCS
-- canonical historical `snapshots`
+- canonical `snapshots`
 - `market_base`
 - `snapshots_ml_flat`
 - `stage1_entry_view`
@@ -32,7 +29,46 @@ Host rule:
 - `reports/window_manifest_latest.json`
 - `reports/coverage_audit.json`
 
-## Step 1: Prepare GCP For Snapshot Build
+It also fails closed before publish when:
+
+- raw/options source coverage is incomplete for the requested window
+- the local build does not close the requested window
+- the local build manifest is not publishable
+- `stage2_direction_view` is missing any column from `STAGE2_REQUIRED_COLUMNS`
+
+## Host Constraints
+
+Use these rules as hard constraints:
+
+- run `run_snapshot_parquet_pipeline.sh` from Linux only
+- supported hosts are Ubuntu, GCP VM Linux shells, Cloud Shell, and WSL
+- do not run the full wrapper from Windows Git Bash
+- use Windows only for raw archive seeding via `publish_raw_market_data.sh`
+- do not use Cloud Shell as the full build host when disk is limited
+- prefer a dedicated snapshot-build VM instead of the runtime VM
+
+Practical build-host minimums:
+
+- `150G+` free disk before the run starts
+- `300G` boot disk for a fresh full rebuild
+- `8-16` vCPU and `16G+` RAM is a practical range
+
+Cloud Shell is fine for:
+
+- bucket setup
+- `gcloud` orchestration
+- raw archive upload to GCS
+
+Cloud Shell is not the default host for:
+
+- full raw-to-parquet rebuild
+- long-running `tmux`-based publish runs
+
+## Fresh Rebuild Flow
+
+Use this as the current recommended path for a new environment or a clean historical rebuild.
+
+### Step 1: Prepare GCP And Buckets
 
 From Cloud Shell, Ubuntu, or WSL:
 
@@ -45,16 +81,7 @@ gcloud services enable \
   cloudresourcemanager.googleapis.com
 ```
 
-Verify:
-
-- `gcloud config get-value project` returns the expected project
-- the `gcloud services enable` command exits without error
-
-## Step 2: Create Or Confirm The Snapshot Bucket
-
-Choose a bucket for raw archive and final parquet.
-
-Example:
+Create or confirm the snapshot bucket:
 
 ```bash
 gcloud storage buckets create \
@@ -63,37 +90,18 @@ gcloud storage buckets create \
   --uniform-bucket-level-access
 ```
 
-If the bucket already exists, continue.
-
-If your raw archive currently lives on a Windows machine, seed it into GCS from Windows first:
+If the raw archive currently lives on another machine, pre-stage it into GCS first:
 
 ```bash
-RAW_ARCHIVE_BUCKET_URL="gs://${SNAPSHOT_DATA_BUCKET_NAME}/banknifty_data" ./ops/gcp/publish_raw_market_data.sh /path/to/banknifty_data
+RAW_ARCHIVE_BUCKET_URL="gs://${SNAPSHOT_DATA_BUCKET_NAME}/banknifty_data" \
+bash ./ops/gcp/publish_raw_market_data.sh /path/to/banknifty_data
 ```
 
-Then switch to the Linux snapshot-build host for the remaining steps.
+Then move to the dedicated Linux snapshot-build host for the actual parquet build.
 
-Verify:
+### Step 2: Create Or Choose The Snapshot-Build Host
 
-```bash
-gcloud storage ls "gs://${SNAPSHOT_DATA_BUCKET_NAME}"
-```
-
-Look for:
-
-- the bucket is listed
-
-## Step 3: Create The Snapshot Build VM
-
-Create a disposable high-power VM.
-Use a machine with enough local disk for the raw cache plus parquet outputs. `8` to `16` vCPU with `16GB+` RAM is a practical range, but disk is the first constraint here.
-
-Minimum recommendation:
-
-- `150GB+` free disk before the run starts
-- `300GB` boot disk for a full rebuild
-
-Example:
+Recommended disposable VM shape:
 
 ```bash
 gcloud compute instances create option-trading-snapshot-build-01 \
@@ -107,37 +115,17 @@ gcloud compute instances create option-trading-snapshot-build-01 \
   --scopes "https://www.googleapis.com/auth/cloud-platform"
 ```
 
-Verify:
-
-```bash
-gcloud compute instances describe option-trading-snapshot-build-01 \
-  --project "${PROJECT_ID}" \
-  --zone "${ZONE}" \
-  --format="value(status)"
-```
-
-Look for:
-
-- `RUNNING`
-- enough free disk for the build
-
-Also verify free disk immediately after SSH:
+Verify after SSH:
 
 ```bash
 df -h /
 ```
 
-If free disk is under `150G`, stop and resize or switch hosts before running the wrapper.
+Stop and resize or switch hosts if free disk is under `150G`.
 
-## Step 4: Prepare The VM
+### Step 3: Prepare The Repo Checkout And `operator.env`
 
-SSH to the VM:
-
-```bash
-gcloud compute ssh option-trading-snapshot-build-01 --zone "${ZONE}"
-```
-
-On the VM:
+On the snapshot-build host:
 
 ```bash
 sudo apt-get update
@@ -149,70 +137,34 @@ git pull --ff-only
 cp ops/gcp/operator.env.example ops/gcp/operator.env
 ```
 
-Set at least these values in `ops/gcp/operator.env`:
+For the snapshot wrapper, make these values explicit in `ops/gcp/operator.env`:
 
 - `PROJECT_ID`
 - `REGION`
 - `ZONE`
 - `RAW_ARCHIVE_BUCKET_URL`
 - `SNAPSHOT_PARQUET_BUCKET_URL`
-- `SNAPSHOT_DATA_BUCKET_NAME`
 
-Optional but recommended when the raw archive already exists on the VM:
+Recommended values:
 
-- `LOCAL_RAW_ARCHIVE_ROOT`
+- `LOCAL_RAW_ARCHIVE_ROOT` if the raw archive already exists on this VM
+- `NORMALIZE_JOBS`, `SNAPSHOT_JOBS`, `SNAPSHOT_SLICE_MONTHS`, `SNAPSHOT_SLICE_WARMUP_DAYS` only after a clean first run
+- `STAGE2_REQUIRED_COLUMNS` when the training contract changes
 
-If the raw archive was already seeded into GCS from another machine, leave `LOCAL_RAW_ARCHIVE_ROOT` empty on the snapshot-build VM. The wrapper will use `RAW_ARCHIVE_BUCKET_URL` as the canonical source and sync it into the local cache.
+If the raw archive was already uploaded to GCS from another machine:
 
-Required for the one-command snapshot flow:
+- leave `LOCAL_RAW_ARCHIVE_ROOT` empty
+- let the wrapper sync from `RAW_ARCHIVE_BUCKET_URL` into the local cache
 
-- `RAW_ARCHIVE_BUCKET_URL`
-- `SNAPSHOT_PARQUET_BUCKET_URL`
-- `REPO_ROOT` should point at the checkout on this VM when it is not `/opt/option_trading`
+If this is a fresh rebuild from raw files already on the VM:
 
-Recommended worker defaults for recovery:
+- set `LOCAL_RAW_ARCHIVE_ROOT`
+- the wrapper will upload that tree to `RAW_ARCHIVE_BUCKET_URL` first
+- then it will sync back from GCS so the build always runs against the canonical bucket source
 
-- `NORMALIZE_JOBS=1` for a clean retry after a partial normalize error
-- `SNAPSHOT_JOBS=2` for the first replay after normalization succeeds
-- `NO_RESUME=1` only when you have deleted the local parquet tree and need a clean rebuild
+### Step 4: Start The Wrapper In `tmux`
 
-The expected raw archive layout is:
-
-- `banknifty_fut`
-- `banknifty_options`
-- `banknifty_spot`
-- `VIX` or `vix`
-
-Verify:
-
-```bash
-grep -E "RAW_ARCHIVE_BUCKET_URL|SNAPSHOT_PARQUET_BUCKET_URL|SNAPSHOT_DATA_BUCKET_NAME|LOCAL_RAW_ARCHIVE_ROOT" ops/gcp/operator.env
-```
-
-Look for:
-
-- bucket URLs are present and non-empty
-- `LOCAL_RAW_ARCHIVE_ROOT` is set only if the raw archive is already on this VM
-
-For long-running snapshot builds, always use `tmux`.
-If the SSH session drops while the script is running in a plain foreground shell, the build usually stops with the shell.
-
-Basic `tmux` commands:
-
-```bash
-tmux new -s snapshot
-tmux attach -t snapshot
-tmux ls
-```
-
-Detach from `tmux` without stopping the build:
-
-- press `Ctrl+b`
-- then press `d`
-
-## Step 5: Run The Single Snapshot Build And Publish Script
-
-On the snapshot VM:
+On the snapshot-build host:
 
 ```bash
 cd ~/option_trading
@@ -222,59 +174,61 @@ tmux new -s snapshot
 Inside the `tmux` session:
 
 ```bash
-./ops/gcp/run_snapshot_parquet_pipeline.sh 2>&1 | tee snapshot-run.log
+bash ./ops/gcp/run_snapshot_parquet_pipeline.sh 2>&1 | tee snapshot-run.log
 ```
 
-What the script does:
+Detach without stopping the build:
 
-1. uploads `LOCAL_RAW_ARCHIVE_ROOT` to `RAW_ARCHIVE_BUCKET_URL` when `LOCAL_RAW_ARCHIVE_ROOT` is set
-2. syncs `RAW_ARCHIVE_BUCKET_URL` into the VM cache under `.cache/banknifty_data`
+- `Ctrl+b`
+- `d`
+
+Reattach later:
+
+```bash
+tmux attach -t snapshot
+```
+
+### What The Wrapper Does
+
+In order, the wrapper:
+
+1. uploads `LOCAL_RAW_ARCHIVE_ROOT` into `RAW_ARCHIVE_BUCKET_URL` when `LOCAL_RAW_ARCHIVE_ROOT` is set
+2. syncs `RAW_ARCHIVE_BUCKET_URL` into the local raw cache under `.cache/banknifty_data`
 3. creates or reuses `.venv`
-4. installs `snapshot_app` requirements if needed
+4. installs `snapshot_app` requirements only when they changed
 5. normalizes raw futures, options, spot, and VIX into `.data/ml_pipeline/parquet_data`
-6. audits source coverage vs built coverage and writes `coverage_audit.json`
-7. fails closed if source options coverage is missing
-8. builds only pending snapshot and derived days with resume enabled by default
-9. regenerates manifest and validation reports even when the local parquet tree is already complete
-10. cleans remote GCS prefixes by default
-11. publishes datasets and reports to `SNAPSHOT_PARQUET_BUCKET_URL`
-12. verifies the published GCS layout
+6. writes `coverage_audit.json` before build
+7. refuses to continue if options/source coverage is incomplete
+8. builds only pending days by default with resume enabled
+9. writes `build_manifest.json`, `validation_report.json`, and `window_manifest_latest.json`
+10. re-audits coverage after build
+11. refuses to publish if the requested window is still not closed
+12. verifies the Stage 2 schema locally
+13. cleans the remote published parquet prefixes by default
+14. publishes datasets and reports to `SNAPSHOT_PARQUET_BUCKET_URL`
+15. verifies the published layout in GCS
 
-Notes:
+The wrapper writes run artifacts under:
 
-- worker defaults are now host-aware and scale up on dedicated Linux build VMs
-- you can still override them explicitly, for example `NORMALIZE_JOBS=8 SNAPSHOT_JOBS=4`
-- rerunning the same command resumes from the existing local parquet state
-- the script publishes only after the local build and validation state is publishable, unless `ALLOW_PARTIAL_PUBLISH=1` is set explicitly
-- the wrapper fails before publish if normalization returns `partial_error`
-- the wrapper fails before publish if `stage2_direction_view` is missing any columns from `STAGE2_REQUIRED_COLUMNS`
-- follow live progress from another SSH session with `tail -f ~/option_trading/snapshot-run.log`
-- if you disconnect, reconnect and run `tmux attach -t snapshot`
+```bash
+.run/snapshot_parquet/${BUILD_RUN_ID}/
+```
 
-If normalization reports `partial_error` or leaves a corrupt parquet partition behind:
+### Step 5: Verify Local And Published Outputs
 
-1. stop the wrapper
-2. delete the local parquet cache under `"$REPO_ROOT/.data/ml_pipeline/parquet_data"`
-3. rerun with `NO_RESUME=1 NORMALIZE_JOBS=1 SNAPSHOT_JOBS=2`
-4. verify the local tree again before publishing anything
+The run is healthy when the final output includes:
 
-Verify:
+- `Snapshot parquet pipeline complete.`
+- `build run id`
+- `parquet base`
+- `report root`
+- `raw source gcs`
+- `raw cache`
+- `normalize jobs`
+- `snapshot jobs`
+- `publish root`
 
-- command exits successfully
-- final output includes `Snapshot parquet pipeline complete.`
-- final output prints:
-  - `build run id`
-  - `parquet base`
-  - `report root`
-  - `raw source gcs`
-  - `raw cache`
-  - `normalize jobs`
-  - `snapshot jobs`
-  - `publish root`
-
-## Step 6: Verify Published GCS Outputs
-
-Verify:
+Verify the published GCS layout:
 
 ```bash
 gcloud storage ls "${SNAPSHOT_PARQUET_BUCKET_URL}/**"
@@ -293,7 +247,7 @@ Look for:
 - `reports/window_manifest_latest.json`
 - `reports/coverage_audit.json`
 
-Also verify that each published dataset only contains the expected chunk files:
+Also verify only the expected chunk files exist:
 
 ```bash
 for ds in snapshots market_base snapshots_ml_flat stage1_entry_view stage2_direction_view stage3_recipe_view; do
@@ -302,12 +256,7 @@ for ds in snapshots market_base snapshots_ml_flat stage1_entry_view stage2_direc
 done
 ```
 
-Look for:
-
-- one `data.parquet` per expected published chunk
-- no duplicate old and new chunk layouts for the same date range
-
-Before training, confirm the rebuilt Stage 2 view exposes the new direction features:
+Before training, confirm the rebuilt Stage 2 view exposes the expected direction features:
 
 ```bash
 python - <<'PY'
@@ -315,7 +264,7 @@ import os
 from pathlib import Path
 import pandas as pd
 
-root = Path(os.environ["REPO_ROOT"]) / ".data/ml_pipeline/parquet_data/stage2_direction_view"
+root = Path(os.environ.get("REPO_ROOT", ".")) / ".data/ml_pipeline/parquet_data/stage2_direction_view"
 sample = next(root.rglob("*.parquet"))
 required = [
     "pcr_change_5m",
@@ -331,53 +280,97 @@ print(df.notna().mean().to_string())
 PY
 ```
 
-If any required column is missing, rerun the snapshot wrapper instead of starting training.
+If any required Stage 2 column is missing, rerun the snapshot wrapper instead of starting training.
 
-## Troubleshooting Appendix
+### Step 6: Hand Off To The Next Lane
 
-Use these only when the one-shot script failed and you need a more direct diagnostic or recovery path.
+After parquet is published:
 
-### Check Coverage Directly
+- use [TRAINING_RELEASE_RUNBOOK.md](TRAINING_RELEASE_RUNBOOK.md) for smoke or production training
+- use [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md) for historical replay against the published parquet
+
+Do not upload historical parquet into the runtime-config bucket. Parquet stays under `SNAPSHOT_PARQUET_BUCKET_URL`.
+
+### Step 7: Delete The Temporary Build Host
+
+After publish succeeds:
+
+```bash
+gcloud compute instances delete option-trading-snapshot-build-01 --zone "${ZONE}" --quiet
+```
+
+## Worker Tuning
+
+Start with the wrapper defaults on the first clean run. They are host-aware:
+
+- `NORMALIZE_JOBS`
+  - `1` when CPU count is `<= 4`
+  - otherwise `min(cpu - 2, 12)`
+- `SNAPSHOT_JOBS`
+  - `2` when CPU count is `<= 4`
+  - otherwise `min(max(cpu - 2, 2), 6)`
+- `SNAPSHOT_SLICE_MONTHS=6`
+- `SNAPSHOT_SLICE_WARMUP_DAYS=90`
+
+Recommended tuning rules:
+
+- first clean run: do not override anything
+- if the VM is stable and has spare CPU, raise `NORMALIZE_JOBS` first
+- only raise `SNAPSHOT_JOBS` after a clean baseline run, because slice parallelism is the heavier correctness-sensitive part
+- keep `SNAPSHOT_SLICE_MONTHS=6` and `SNAPSHOT_SLICE_WARMUP_DAYS=90` unless you have a measured reason to change them
+- recovery run after suspected bad local cache: `NO_RESUME=1 NORMALIZE_JOBS=1 SNAPSHOT_JOBS=2`
+
+Typical explicit override on a larger host:
+
+```bash
+NORMALIZE_JOBS=8 SNAPSHOT_JOBS=4 bash ./ops/gcp/run_snapshot_parquet_pipeline.sh 2>&1 | tee snapshot-run.log
+```
+
+Targeted rebuild examples:
+
+```bash
+YEAR=2022 bash ./ops/gcp/run_snapshot_parquet_pipeline.sh
+```
+
+```bash
+MIN_DAY=2021-06-01 MAX_DAY=2021-09-30 bash ./ops/gcp/run_snapshot_parquet_pipeline.sh
+```
+
+Use `YEAR` or `MIN_DAY`/`MAX_DAY` only when you intentionally want a narrow rebuild window.
+
+## Restart And Recovery Guidance
+
+### Normal Restart
+
+This is the standard path after SSH disconnect or host session loss:
 
 ```bash
 cd ~/option_trading
-source .venv/bin/activate
-
-python - <<'PY'
-from snapshot_app.historical.parquet_store import ParquetStore
-
-s = ParquetStore(".data/ml_pipeline/parquet_data", snapshots_dataset="snapshots")
-
-futures_days = set(s.available_days())
-option_days = set(s.all_days_with_options())
-built_days = set(s.available_snapshot_days())
-
-buildable_missing = sorted((futures_days & option_days) - built_days)
-source_missing = sorted(futures_days - option_days)
-
-print("futures_days:", len(futures_days), min(futures_days) if futures_days else None, max(futures_days) if futures_days else None)
-print("option_days:", len(option_days), min(option_days) if option_days else None, max(option_days) if option_days else None)
-print("built_days:", len(built_days), min(built_days) if built_days else None, max(built_days) if built_days else None)
-print("buildable_missing_count:", len(buildable_missing))
-print("source_missing_count:", len(source_missing))
-PY
+tmux attach -t snapshot
 ```
 
-Interpretation:
+If no `snapshot` session exists:
 
-- `buildable_missing_count > 0`: inputs exist and rerunning the main script should backfill those days
-- `source_missing_count > 0`: raw or normalized options coverage is missing and must be fixed before publish
+```bash
+cd ~/option_trading
+tmux new -s snapshot
+bash ./ops/gcp/run_snapshot_parquet_pipeline.sh 2>&1 | tee snapshot-run.log
+```
 
-### Recover After SSH Disconnect
+The wrapper is resumable by default. For ordinary restarts:
 
-Check whether the wrapper or publish step is still running:
+- do not set `NO_RESUME=1`
+- rerun the same command
+- let the wrapper detect already-built days and finish the window
+
+### Check Whether The Run Is Still Active
 
 ```bash
 cd ~/option_trading
 pgrep -af "run_snapshot_parquet_pipeline.sh|snapshot_batch_runner|publish_snapshot_parquet.sh"
 ```
 
-Inspect the latest run directory:
+Inspect the latest local run directory:
 
 ```bash
 cd ~/option_trading
@@ -388,62 +381,55 @@ ls -lah "${LATEST}"
 
 Interpretation:
 
-- active process found: the build is still running; reattach with `tmux attach -t snapshot` or watch `tail -f ~/option_trading/snapshot-run.log`
-- no active process and only `coverage_audit.json` exists: the run stopped before build completion; rerun the main script
-- `build_manifest.json` exists locally but GCS is still empty or partial: the run reached local report generation but did not finish publish; rerun the main script
+- active process found: the run is still active; reattach to `tmux` or watch the log
+- only `coverage_audit.json` exists: the run stopped before build completion; rerun the wrapper
+- `build_manifest.json` exists locally but GCS publish is missing or partial: rerun the same wrapper command and let it resume
 
-The main script is resumable by default, so the standard recovery path is:
-
-```bash
-cd ~/option_trading
-tmux attach -t snapshot
-```
-
-If no `snapshot` session exists yet:
+Follow live progress from another SSH session:
 
 ```bash
-cd ~/option_trading
-tmux new -s snapshot
+tail -f ~/option_trading/snapshot-run.log
 ```
 
-Inside the `tmux` session, rerun:
+### When To Use `NO_RESUME=1`
+
+Use `NO_RESUME=1` only when you intentionally want a clean rebuild of the selected local window, for example:
+
+- corrupt local parquet after a failed normalization/build attempt
+- legacy yearly layout mixed with current chunked layout
+- explicit operator decision to discard the local partially built tree
+
+If normalization reports `partial_error` or you suspect a bad local cache:
+
+1. stop the wrapper
+2. delete the affected local parquet outputs
+3. rerun with `NO_RESUME=1 NORMALIZE_JOBS=1 SNAPSHOT_JOBS=2`
+
+Example clean local output reset:
 
 ```bash
-./ops/gcp/run_snapshot_parquet_pipeline.sh 2>&1 | tee snapshot-run.log
+rm -rf .data/ml_pipeline/parquet_data/snapshots \
+       .data/ml_pipeline/parquet_data/market_base \
+       .data/ml_pipeline/parquet_data/snapshots_ml_flat \
+       .data/ml_pipeline/parquet_data/stage1_entry_view \
+       .data/ml_pipeline/parquet_data/stage2_direction_view \
+       .data/ml_pipeline/parquet_data/stage3_recipe_view
 ```
 
-### Rerun One Targeted Year Or Date Window
+Then rerun:
 
 ```bash
-cd ~/option_trading
-export YEAR=2022
-./ops/gcp/run_snapshot_parquet_pipeline.sh
+NO_RESUME=1 NORMALIZE_JOBS=1 SNAPSHOT_JOBS=2 \
+bash ./ops/gcp/run_snapshot_parquet_pipeline.sh 2>&1 | tee snapshot-run.log
 ```
 
-```bash
-cd ~/option_trading
-export MIN_DAY=2021-06-01
-export MAX_DAY=2021-09-30
-./ops/gcp/run_snapshot_parquet_pipeline.sh
-```
+## Manual Recovery Paths
 
-Notes:
-
-- leave resume enabled by default
-- do not set `NO_RESUME=1` for normal recovery
+Use these only when the supported wrapper path has already produced a complete local tree and you intentionally need a lower-level action.
 
 ### Publish Existing Local Parquet Without Rebuild
 
-This is a manual recovery path, not the normal operator path.
-It is not equivalent to `run_snapshot_parquet_pipeline.sh`.
-
-Important differences from the supported wrapper:
-
-- it does not run the wrapper's source-coverage audit gate before publish
-- it does not verify that the requested build window is fully closed before publish
-- it can republish incomplete local parquet if you skip the checks below
-
-Use it only when you have already verified that the local parquet tree is complete and consistent for the intended publish window.
+This is not equivalent to the wrapper. It skips the wrapper's source-coverage and requested-window closure gates.
 
 Minimum checks before manual republish:
 
@@ -455,13 +441,13 @@ test -f "${LATEST_REPORT}/coverage_audit.json" && cat "${LATEST_REPORT}/coverage
 test -f "${LATEST_REPORT}/build_manifest.json" && cat "${LATEST_REPORT}/build_manifest.json"
 ```
 
-Look for:
+Only republish manually when:
 
 - `source_missing_count` is `0`
 - `buildable_missing_count` is `0`
-- `build_manifest.json` reports a publishable local build state
+- `build_manifest.json` describes a publishable local state
 
-Only then use the manual republish sequence below:
+Manual republish sequence:
 
 ```bash
 cd ~/option_trading
@@ -474,56 +460,7 @@ export REPO_ROOT="${REPO_ROOT:-$HOME/option_trading}"
 export PARQUET_BASE="${PARQUET_BASE:-${REPO_ROOT}/.data/ml_pipeline/parquet_data}"
 export REPORT_ROOT="${REPO_ROOT}/.run/snapshot_parquet/snapshot_publish_$(date -u +%Y%m%dT%H%M%SZ)"
 
-python -m snapshot_app.historical.snapshot_batch_runner \
-  --base "${PARQUET_BASE}" \
-  --build-stage all \
-  --build-source historical \
-  --validate-ml-flat-contract \
-  --validate-days 5 \
-  --manifest-out "${REPORT_ROOT}/build_manifest.json" \
-  --validation-report-out "${REPORT_ROOT}/validation_report.json" \
-  --window-manifest-out "${REPORT_ROOT}/window_manifest_latest.json"
-
-for ds in snapshots market_base snapshots_ml_flat stage1_entry_view stage2_direction_view stage3_recipe_view reports; do
-  gcloud storage rm --recursive "${SNAPSHOT_PARQUET_BUCKET_URL}/${ds}" || true
-done
-
-./ops/gcp/publish_snapshot_parquet.sh
+bash ./ops/gcp/publish_snapshot_parquet.sh
 ```
 
-If any of the checks above fail, stop and rerun the supported wrapper instead:
-
-```bash
-./ops/gcp/run_snapshot_parquet_pipeline.sh 2>&1 | tee snapshot-run.log
-```
-
-### Seed GCS Raw Archive Outside The Main Script
-
-If the raw archive lives on another machine and you want to pre-stage it in GCS:
-
-```bash
-export RAW_ARCHIVE_BUCKET_URL="gs://${SNAPSHOT_DATA_BUCKET_NAME}/banknifty_data"
-export RAW_DATA_ROOT="/path/to/banknifty_data"
-./ops/gcp/publish_raw_market_data.sh
-```
-
-## Step 7: Delete Temporary Snapshot Infra
-
-Delete the temporary snapshot VM after publish is complete:
-
-```bash
-gcloud compute instances delete option-trading-snapshot-build-01 --zone "${ZONE}" --quiet
-```
-
-Verify:
-
-```bash
-gcloud compute instances describe option-trading-snapshot-build-01 \
-  --project "${PROJECT_ID}" \
-  --zone "${ZONE}" \
-  --format="value(status)"
-```
-
-Look for:
-
-- instance not found
+If those checks fail, stop and rerun the supported wrapper instead.

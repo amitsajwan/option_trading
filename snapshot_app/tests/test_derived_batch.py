@@ -53,6 +53,10 @@ def test_run_derived_batch_projects_market_base_to_ml_flat_and_stage_views(tmp_p
     assert stage1_path.exists()
     assert stage2_path.exists()
     assert stage3_path.exists()
+    assert not list(ml_flat_path.parent.glob("data.tmp_*.parquet"))
+    assert not list(stage1_path.parent.glob("data.tmp_*.parquet"))
+    assert not list(stage2_path.parent.glob("data.tmp_*.parquet"))
+    assert not list(stage3_path.parent.glob("data.tmp_*.parquet"))
 
     ml_flat_df = pd.read_parquet(ml_flat_path)
     stage1_df = pd.read_parquet(stage1_path)

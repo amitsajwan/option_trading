@@ -4,7 +4,7 @@ Start here if you are operating the current GCP workflow.
 
 ## Current Operator Entry Point
 
-For day-to-day runtime and training operations, start with:
+For day-to-day runtime, historical replay, and training operations, start with:
 
 ```bash
 bash ./ops/gcp/runtime_lifecycle_interactive.sh
@@ -21,13 +21,21 @@ That menu is the supported operator entrypoint for:
 
 Use the runbooks below when you need the detailed step-by-step flow, validation steps, or recovery guidance behind that menu.
 
+Snapshot/parquet build is the one major operator flow that stays outside that menu. Its supported entrypoint is:
+
+```bash
+bash ./ops/gcp/run_snapshot_parquet_pipeline.sh
+```
+
+Run that wrapper on a dedicated Linux snapshot-build host, not on Cloud Shell as the default full-build host.
+
 ## Fresh Rebuild Order
 
 When the project is new or the derived buckets are empty, use this exact sequence:
 
 1. `Infra`
 2. raw archive upload to GCS
-3. snapshot/parquet build and publish
+3. snapshot/parquet build and publish on a dedicated Linux build host
 4. smoke training publish
 5. historical replay validation
 6. production training and publish
@@ -54,7 +62,7 @@ In the actual lifecycle menu these map to:
 ## Primary Runbooks
 
 1. [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
-   Historical snapshot and parquet creation.
+   Historical snapshot/parquet build and publish, including dedicated-host requirements, worker tuning, and restart guidance.
 2. [TRAINING_RELEASE_RUNBOOK.md](TRAINING_RELEASE_RUNBOOK.md)
    Staged ML training, research sequencing, publish, and runtime handoff generation.
 3. [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md)

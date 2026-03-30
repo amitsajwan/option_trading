@@ -318,7 +318,6 @@ snapshot_runner_base_args() {
     --build-stage "${BUILD_STAGE}"
     --build-source "${BUILD_SOURCE}"
     --build-run-id "${BUILD_RUN_ID}"
-    --validate-ml-flat-contract
     --validate-days "${VALIDATE_DAYS}"
     --manifest-out "${REPORT_ROOT}/build_manifest.json"
     --validation-report-out "${REPORT_ROOT}/validation_report.json"
@@ -333,6 +332,10 @@ snapshot_runner_base_args() {
 
   if [ -n "${MAX_DAY}" ]; then
     SNAPSHOT_RUNNER_ARGS+=(--max-day "${MAX_DAY}")
+  fi
+
+  if [ "${VALIDATE_ML_FLAT_CONTRACT}" = "1" ]; then
+    SNAPSHOT_RUNNER_ARGS+=(--validate-ml-flat-contract)
   fi
 
   if [ -n "${YEAR}" ]; then
@@ -365,6 +368,7 @@ VERIFY_PUBLISHED_PREFIXES="${VERIFY_PUBLISHED_PREFIXES:-1}"
 ALLOW_PARTIAL_PUBLISH="${ALLOW_PARTIAL_PUBLISH:-0}"
 BUILD_STAGE="${BUILD_STAGE:-all}"
 VALIDATE_DAYS="${VALIDATE_DAYS:-5}"
+VALIDATE_ML_FLAT_CONTRACT="${VALIDATE_ML_FLAT_CONTRACT:-1}"
 WINDOW_MIN_TRADING_DAYS="${WINDOW_MIN_TRADING_DAYS:-150}"
 WINDOW_MAX_GAP_DAYS="${WINDOW_MAX_GAP_DAYS:-7}"
 BUILD_SOURCE="${BUILD_SOURCE:-historical}"
@@ -506,6 +510,12 @@ fi
 
 echo
 echo "== Step 6: Build snapshots and generate reports =="
+echo "  build stage: ${BUILD_STAGE}"
+if [ "${VALIDATE_ML_FLAT_CONTRACT}" = "1" ]; then
+  echo "  derived SnapshotMLFlat contract validation: enabled"
+else
+  echo "  derived SnapshotMLFlat contract validation: disabled (operator override)"
+fi
 snapshot_runner_base_args
 if [ "${VALIDATE_ONLY}" = "1" ]; then
   SNAPSHOT_RUNNER_ARGS+=(--validate-only)
