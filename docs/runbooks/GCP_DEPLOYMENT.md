@@ -38,6 +38,16 @@ The intent is simple:
 
 For a first-time setup, do `Infra` first, then `Live`. Run `Historical` only when you need replay.
 
+For a fresh rebuild, use this dependency order instead:
+
+1. `Infra`
+2. raw archive upload to GCS
+3. snapshot/parquet build and publish
+4. smoke training publish
+5. `Historical`
+6. production training and publish
+7. `Live`
+
 Use this decision rule:
 
 - run `Infra` once per environment, or again only when infra changes
@@ -74,6 +84,10 @@ If `.env.compose` does not exist yet:
 ```bash
 cp .env.compose.example .env.compose
 ```
+
+Fresh-project rule:
+
+- do not go to `Live` until parquet exists and at least one smoke publish plus one historical replay have succeeded
 
 ## 0. Infra
 

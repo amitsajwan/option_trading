@@ -9,6 +9,11 @@ Host note:
 - runtime and training execution are container and VM first
 - local Python on Windows is only needed for editor features, host-side tests, or helper scripts
 
+Fresh-project rule:
+
+- do not start training until the snapshot/parquet runbook has completed successfully
+- on a rebuilt environment, use one smoke publish to validate the lane before longer production research
+
 ## Fast Path (Interactive)
 
 Use the supported launcher:
@@ -107,6 +112,14 @@ The snapshot flow must already have published these datasets before training sta
 - `stage1_entry_view`
 - `stage2_direction_view`
 - `stage3_recipe_view`
+
+Recommended rebuild order around training:
+
+1. bootstrap infra
+2. rebuild and publish parquet
+3. run one smoke training publish
+4. validate with historical replay
+5. only then run production research lanes
 
 The training VM should also have these OS packages available:
 

@@ -21,6 +21,24 @@ That menu is the supported operator entrypoint for:
 
 Use the runbooks below when you need the detailed step-by-step flow, validation steps, or recovery guidance behind that menu.
 
+## Fresh Rebuild Order
+
+When the project is new or the derived buckets are empty, use this exact sequence:
+
+1. `Infra`
+2. raw archive upload to GCS
+3. snapshot/parquet build and publish
+4. smoke training publish
+5. historical replay validation
+6. production training and publish
+7. `Live`
+
+Keep this dependency rule hard:
+
+- parquet before training
+- smoke publish before production research
+- historical validation before live deploy
+
 For release management, treat the GCP deployment flow in this conceptual order:
 
 - `Infra`
