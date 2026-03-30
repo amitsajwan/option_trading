@@ -10,6 +10,11 @@ Run them from:
 
 They assume a Bash environment.
 
+Important host rule:
+
+- `run_snapshot_parquet_pipeline.sh` is Linux-only
+- use Windows only for raw archive upload via `publish_raw_market_data.sh`
+
 This file is a script index, not the primary operator runbook. For step-by-step procedures, use:
 
 - [../../docs/runbooks/README.md](../../docs/runbooks/README.md)

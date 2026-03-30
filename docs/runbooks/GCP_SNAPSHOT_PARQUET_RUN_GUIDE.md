@@ -10,6 +10,12 @@ This runbook is centered on one supported operator command:
 
 The script can take a local raw `banknifty_data` archive all the way to final GCS publish in one run.
 
+Host rule:
+
+- use Linux only for `run_snapshot_parquet_pipeline.sh`
+- supported hosts are Ubuntu, Cloud Shell, and WSL
+- do not run the full parquet wrapper from Windows Git Bash; use Windows only to seed the raw archive into GCS
+
 ## What This Produces
 
 - raw archive in GCS
@@ -26,7 +32,7 @@ The script can take a local raw `banknifty_data` archive all the way to final GC
 
 ## Step 1: Prepare GCP For Snapshot Build
 
-From Cloud Shell or another machine with `gcloud`:
+From Cloud Shell, Ubuntu, or WSL:
 
 ```bash
 gcloud config set project "${PROJECT_ID}"
@@ -56,6 +62,14 @@ gcloud storage buckets create \
 ```
 
 If the bucket already exists, continue.
+
+If your raw archive currently lives on a Windows machine, seed it into GCS from Windows first:
+
+```bash
+RAW_ARCHIVE_BUCKET_URL="gs://${SNAPSHOT_DATA_BUCKET_NAME}/banknifty_data" ./ops/gcp/publish_raw_market_data.sh /path/to/banknifty_data
+```
+
+Then switch to the Linux snapshot-build host for the remaining steps.
 
 Verify:
 
@@ -131,6 +145,8 @@ Set at least these values in `ops/gcp/operator.env`:
 Optional but recommended when the raw archive already exists on the VM:
 
 - `LOCAL_RAW_ARCHIVE_ROOT`
+
+If the raw archive was already seeded into GCS from another machine, leave `LOCAL_RAW_ARCHIVE_ROOT` empty on the snapshot-build VM. The wrapper will use `RAW_ARCHIVE_BUCKET_URL` as the canonical source and sync it into the local cache.
 
 Required for the one-command snapshot flow:
 

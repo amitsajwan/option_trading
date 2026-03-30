@@ -21,6 +21,32 @@ require_command() {
   fi
 }
 
+ensure_supported_host() {
+  local kernel
+  kernel="$(uname -s 2>/dev/null || printf 'unknown')"
+  case "${kernel}" in
+    Linux)
+      return 0
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      cat >&2 <<'EOF'
+run_snapshot_parquet_pipeline.sh must be run from a Linux host.
+
+Supported operator hosts:
+- Ubuntu
+- Cloud Shell
+- WSL
+
+Windows/Git Bash is supported only for raw archive upload, for example:
+  RAW_ARCHIVE_BUCKET_URL=gs://<snapshot-bucket>/banknifty_data ./ops/gcp/publish_raw_market_data.sh /path/to/banknifty_data
+
+Then run the full parquet pipeline from Linux against the same GCS raw archive.
+EOF
+      exit 1
+      ;;
+  esac
+}
+
 cpu_count() {
   local cpu_count
   if command -v nproc >/dev/null 2>&1; then
@@ -270,6 +296,7 @@ snapshot_runner_base_args() {
 }
 
 ensure_file "${OPERATOR_ENV_FILE}"
+ensure_supported_host
 
 # shellcheck disable=SC1090
 source "${OPERATOR_ENV_FILE}"
