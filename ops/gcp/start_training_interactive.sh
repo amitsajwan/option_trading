@@ -236,6 +236,7 @@ PY
 )"
 SAFE_GROUP="${MODEL_GROUP_VALUE//\//__}"
 RUN_ROOT="${REPO_ROOT}/ml_pipeline_2/artifacts/training_launches/${RUN_STAMP}_${RUN_NONCE}_${MODE_LABEL}_${LANE_TAG_VALUE}_${SAFE_GROUP}_${PROFILE_ID_VALUE}"
+RUN_OUTPUT_ROOT="${RUN_ROOT}/run"
 mkdir -p "${RUN_ROOT}"
 LOG_PATH="${RUN_ROOT}/training.log"
 TRAINING_RELEASE_JSON_PATH="${RUN_ROOT}/training-release.json"
@@ -249,6 +250,7 @@ echo "  model_group: ${MODEL_GROUP_VALUE}"
 echo "  profile_id: ${PROFILE_ID_VALUE}"
 echo "  config: ${CONFIG_PATH_VALUE}"
 echo "  launch_root: ${RUN_ROOT}"
+echo "  run_output_root: ${RUN_OUTPUT_ROOT}"
 echo "  log: ${LOG_PATH}"
 if [ "${RUN_GRID}" = "0" ]; then
   echo "  release_json: ${TRAINING_RELEASE_JSON_PATH}"
@@ -263,6 +265,7 @@ if [ "${RUN_GRID}" = "1" ]; then
   cmd=(
     python -m ml_pipeline_2.run_staged_grid
     --config "${CONFIG_PATH_VALUE}"
+    --run-output-root "${RUN_OUTPUT_ROOT}"
     --model-group "${MODEL_GROUP_VALUE}"
     --profile-id "${PROFILE_ID_VALUE}"
   )
@@ -281,6 +284,7 @@ MODEL_GROUP="${MODEL_GROUP_VALUE}" \
 PROFILE_ID="${PROFILE_ID_VALUE}" \
 STAGED_CONFIG="${CONFIG_PATH_VALUE}" \
 TRAINING_RELEASE_JSON="${TRAINING_RELEASE_JSON_PATH}" \
+RUN_OUTPUT_ROOT="${RUN_OUTPUT_ROOT}" \
 bash "${REPO_ROOT}/ops/gcp/run_staged_release_pipeline.sh" 2>&1 | tee "${LOG_PATH}"
 
 "${PYTHON_BIN}" - <<'PY' "${TRAINING_RELEASE_JSON_PATH}" "${MODEL_BUCKET_URL}" "${MODEL_GROUP_VALUE}" "${PROFILE_ID_VALUE}"

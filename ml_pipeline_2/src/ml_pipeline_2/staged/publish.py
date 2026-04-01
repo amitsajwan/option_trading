@@ -8,7 +8,7 @@ from uuid import uuid4
 import joblib
 
 from ..contracts.manifests import load_and_resolve_manifest
-from ..experiment_control.runner import run_research
+from ..experiment_control.runner import ResearchRunFailed, run_research
 from ..experiment_control.state import utc_now
 from ..publishing.publish import published_models_root, repo_root
 from ..publishing.release import sync_published_model_group_to_gcs
@@ -200,6 +200,44 @@ def _held_publish_summary(*, assessment: Dict[str, Any], model_group: str, profi
     }
 
 
+def _failed_assessment(*, run_dir: Path, error: Exception) -> Dict[str, Any]:
+    reason = f"{type(error).__name__}: {error}"
+    return {
+        "created_at_utc": utc_now(),
+        "run_dir": str(run_dir.resolve()),
+        "run_id": str(run_dir.name),
+        "publishable": False,
+        "decision": "HOLD",
+        "blocking_reasons": [reason],
+        "error": {
+            "type": type(error).__name__,
+            "message": str(error),
+        },
+    }
+
+
+def _failed_publish_summary(*, assessment: Dict[str, Any], model_group: str, profile_id: str) -> Dict[str, Any]:
+    return {
+        "created_at_utc": utc_now(),
+        "publisher": "ml_pipeline_2",
+        "publish_kind": STAGED_RUNTIME_BUNDLE_KIND,
+        "publish_status": "failed",
+        "publish_decision": {"decision": "HOLD"},
+        "run_id": str(assessment["run_id"]),
+        "model_group": str(model_group),
+        "profile_id": str(profile_id),
+        "publish_assessment": {
+            "publishable": False,
+            "decision": "HOLD",
+            "blocking_reasons": list(assessment.get("blocking_reasons") or []),
+        },
+        "published_paths": {},
+        "active_group_paths": {},
+        "report_paths": {},
+        "error": dict(assessment.get("error") or {}),
+    }
+
+
 def publish_staged_run(
     *,
     run_dir: str | Path,
@@ -321,11 +359,42 @@ def release_staged_run(
         manifest_path = Path(config).resolve()
         resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
         force_publish_nonpublishable = bool((dict(resolved.get("publish") or {})).get("smoke_allow_non_publishable", False))
-        research_summary = run_research(
-            resolved,
-            run_output_root=(Path(run_output_root).resolve() if run_output_root is not None else None),
-        )
-        resolved_run_dir = Path(str(research_summary["output_root"])).resolve()
+        try:
+            research_summary = run_research(
+                resolved,
+                run_output_root=(Path(run_output_root).resolve() if run_output_root is not None else None),
+            )
+            resolved_run_dir = Path(str(research_summary["output_root"])).resolve()
+        except ResearchRunFailed as exc:
+            resolved_run_dir = Path(exc.output_root).resolve()
+            assessment = _failed_assessment(run_dir=resolved_run_dir, error=exc.__cause__ or exc)
+            release_root = resolved_run_dir / "release"
+            assessment_path = _write_json(release_root / "assessment.json", assessment)
+            publish_summary = _failed_publish_summary(
+                assessment=assessment,
+                model_group=model_group,
+                profile_id=profile_id,
+            )
+            result = {
+                "created_at_utc": utc_now(),
+                "status": "failed",
+                "release_status": "failed",
+                "run_dir": str(resolved_run_dir),
+                "run_id": str(assessment["run_id"]),
+                "model_group": str(model_group),
+                "profile_id": str(profile_id),
+                "research_summary": None,
+                "assessment": assessment,
+                "publish": publish_summary,
+                "gcs_sync": None,
+                "live_handoff": None,
+                "paths": {
+                    "assessment": str(assessment_path.resolve()),
+                },
+            }
+            summary_path = _write_json(release_root / "release_summary.json", result)
+            result["paths"]["release_summary"] = str(summary_path.resolve())
+            return result
     else:
         resolved_run_dir = Path(str(run_dir)).resolve()
 

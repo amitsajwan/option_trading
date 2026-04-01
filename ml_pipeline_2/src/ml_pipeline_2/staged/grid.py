@@ -168,7 +168,11 @@ def _failed_result_row(
         "grid_run_id": str(run_spec["run_id"]),
         "manifest_path": str(manifest_path.resolve()),
         "run_dir": str(run_output_root.resolve()),
-        "summary_path": None,
+        "summary_path": (
+            str((run_output_root / "summary.json").resolve())
+            if (run_output_root / "summary.json").exists()
+            else None
+        ),
         "release_status": "failed",
         "completion_mode": "failed",
         "publishable": False,
@@ -291,204 +295,229 @@ def run_staged_grid(
     manifests_root.mkdir(parents=True, exist_ok=True)
     runs_root.mkdir(parents=True, exist_ok=True)
 
-    max_parallel_runs = _effective_max_parallel_runs(grid_resolved)
-    run_rows: List[Dict[str, Any]] = []
-    completed_rows: Dict[str, Dict[str, Any]] = {}
-    pending_specs = [
-        {"sequence": int(sequence), "run_spec": dict(run_spec)}
-        for sequence, run_spec in enumerate(list(grid_resolved["grid"]["runs"]), start=1)
-    ]
-    running: Dict[Future[Dict[str, Any]], Dict[str, Any]] = {}
+    summary_path = (grid_root / "grid_summary.json").resolve()
+    try:
+        max_parallel_runs = _effective_max_parallel_runs(grid_resolved)
+        run_rows: List[Dict[str, Any]] = []
+        completed_rows: Dict[str, Dict[str, Any]] = {}
+        pending_specs = [
+            {"sequence": int(sequence), "run_spec": dict(run_spec)}
+            for sequence, run_spec in enumerate(list(grid_resolved["grid"]["runs"]), start=1)
+        ]
+        running: Dict[Future[Dict[str, Any]], Dict[str, Any]] = {}
 
-    with ThreadPoolExecutor(max_workers=max_parallel_runs, thread_name_prefix="staged-grid") as executor:
-        while pending_specs or running:
-            launched = False
-            while len(running) < max_parallel_runs:
-                ready_spec = next(
-                    (
-                        item
-                        for item in pending_specs
-                        if all(str(ref) in completed_rows for ref in list(item["run_spec"].get("inherit_best_from") or []))
-                    ),
-                    None,
-                )
-                if ready_spec is None:
-                    break
-
-                pending_specs.remove(ready_spec)
-                sequence = int(ready_spec["sequence"])
-                run_spec = dict(ready_spec["run_spec"])
-                run_dir = runs_root / f"{sequence:02d}_{run_spec['run_id']}"
-                candidate_model_group = _join_model_group(model_group, str(run_spec.get("model_group_suffix") or ""))
-                manifest_path = manifests_root / f"{sequence:02d}_{run_spec['run_id']}.json"
-                try:
-                    resolved_overrides, inherited_from_run_id = _resolve_run_overrides(
-                        run_spec=run_spec,
-                        completed_rows=completed_rows,
+        with ThreadPoolExecutor(max_workers=max_parallel_runs, thread_name_prefix="staged-grid") as executor:
+            while pending_specs or running:
+                launched = False
+                while len(running) < max_parallel_runs:
+                    ready_spec = next(
+                        (
+                            item
+                            for item in pending_specs
+                            if all(str(ref) in completed_rows for ref in list(item["run_spec"].get("inherit_best_from") or []))
+                        ),
+                        None,
                     )
-                    merged_manifest = _deep_merge(base_raw_manifest, resolved_overrides)
-                    if not str(((merged_manifest.get("outputs") or {}).get("run_name")) or "").strip():
-                        merged_manifest.setdefault("outputs", {})
-                        merged_manifest["outputs"]["run_name"] = f"{base_raw_manifest['outputs']['run_name']}_{run_spec['run_id']}"
-                    lane_resolved_config = _build_lane_resolved_config(
-                        base_resolved_manifest=base_resolved_manifest,
-                        resolved_overrides=resolved_overrides,
-                        merged_manifest=merged_manifest,
-                        manifest_path=manifest_path,
-                    )
-                    _write_json(manifest_path, merged_manifest)
-                except Exception as exc:
-                    row = _failed_result_row(
-                        sequence=sequence,
-                        run_spec=run_spec,
-                        manifest_path=manifest_path,
-                        run_output_root=run_dir,
-                        model_group=candidate_model_group,
-                        profile_id=profile_id,
-                        error=exc,
-                        applied_overrides=dict(run_spec.get("overrides") or {}),
-                        inherited_from_run_id=None,
-                    )
-                    run_rows.append(row)
-                    completed_rows[str(run_spec["run_id"])] = row
-                    continue
+                    if ready_spec is None:
+                        break
 
-                future = executor.submit(_run_lane, lane_resolved_config, run_dir)
-                running[future] = {
-                    "sequence": sequence,
-                    "run_spec": run_spec,
-                    "manifest_path": manifest_path,
-                    "run_output_root": run_dir,
-                    "model_group": candidate_model_group,
-                    "profile_id": profile_id,
-                    "applied_overrides": resolved_overrides,
-                    "inherited_from_run_id": inherited_from_run_id,
-                }
-                launched = True
-
-            if not running:
-                if pending_specs:
-                    for item in pending_specs:
-                        run_spec = dict(item["run_spec"])
-                        manifest_path = manifests_root / f"{int(item['sequence']):02d}_{run_spec['run_id']}.json"
-                        run_dir = runs_root / f"{int(item['sequence']):02d}_{run_spec['run_id']}"
+                    pending_specs.remove(ready_spec)
+                    sequence = int(ready_spec["sequence"])
+                    run_spec = dict(ready_spec["run_spec"])
+                    run_dir = runs_root / f"{sequence:02d}_{run_spec['run_id']}"
+                    candidate_model_group = _join_model_group(model_group, str(run_spec.get("model_group_suffix") or ""))
+                    manifest_path = manifests_root / f"{sequence:02d}_{run_spec['run_id']}.json"
+                    try:
+                        resolved_overrides, inherited_from_run_id = _resolve_run_overrides(
+                            run_spec=run_spec,
+                            completed_rows=completed_rows,
+                        )
+                        merged_manifest = _deep_merge(base_raw_manifest, resolved_overrides)
+                        if not str(((merged_manifest.get("outputs") or {}).get("run_name")) or "").strip():
+                            merged_manifest.setdefault("outputs", {})
+                            merged_manifest["outputs"]["run_name"] = f"{base_raw_manifest['outputs']['run_name']}_{run_spec['run_id']}"
+                        lane_resolved_config = _build_lane_resolved_config(
+                            base_resolved_manifest=base_resolved_manifest,
+                            resolved_overrides=resolved_overrides,
+                            merged_manifest=merged_manifest,
+                            manifest_path=manifest_path,
+                        )
+                        _write_json(manifest_path, merged_manifest)
+                    except Exception as exc:
                         row = _failed_result_row(
-                            sequence=int(item["sequence"]),
+                            sequence=sequence,
                             run_spec=run_spec,
                             manifest_path=manifest_path,
                             run_output_root=run_dir,
-                            model_group=_join_model_group(model_group, str(run_spec.get("model_group_suffix") or "")),
+                            model_group=candidate_model_group,
                             profile_id=profile_id,
-                            error=ValueError(
-                                "unresolved grid dependencies; check inherit_best_from ordering and references"
-                            ),
+                            error=exc,
                             applied_overrides=dict(run_spec.get("overrides") or {}),
                             inherited_from_run_id=None,
                         )
                         run_rows.append(row)
                         completed_rows[str(run_spec["run_id"])] = row
-                    pending_specs = []
-                break
+                        continue
 
-            if launched and len(running) < max_parallel_runs and pending_specs:
-                continue
+                    future = executor.submit(_run_lane, lane_resolved_config, run_dir)
+                    running[future] = {
+                        "sequence": sequence,
+                        "run_spec": run_spec,
+                        "manifest_path": manifest_path,
+                        "run_output_root": run_dir,
+                        "model_group": candidate_model_group,
+                        "profile_id": profile_id,
+                        "applied_overrides": resolved_overrides,
+                        "inherited_from_run_id": inherited_from_run_id,
+                    }
+                    launched = True
 
-            done, _ = wait(tuple(running.keys()), return_when=FIRST_COMPLETED)
-            for future in done:
-                meta = running.pop(future)
-                try:
-                    summary = future.result()
-                    row = _result_row(
-                        sequence=int(meta["sequence"]),
-                        run_spec=dict(meta["run_spec"]),
-                        resolved_manifest_path=Path(meta["manifest_path"]),
-                        run_output_root=Path(meta["run_output_root"]),
-                        model_group=str(meta["model_group"]),
-                        profile_id=str(meta["profile_id"]),
-                        summary=summary,
-                        applied_overrides=dict(meta["applied_overrides"]),
-                        inherited_from_run_id=meta["inherited_from_run_id"],
-                    )
-                except Exception as exc:
-                    row = _failed_result_row(
-                        sequence=int(meta["sequence"]),
-                        run_spec=dict(meta["run_spec"]),
-                        manifest_path=Path(meta["manifest_path"]),
-                        run_output_root=Path(meta["run_output_root"]),
-                        model_group=str(meta["model_group"]),
-                        profile_id=str(meta["profile_id"]),
-                        error=exc,
-                        applied_overrides=dict(meta["applied_overrides"]),
-                        inherited_from_run_id=meta["inherited_from_run_id"],
-                    )
-                run_rows.append(row)
-                completed_rows[str(meta["run_spec"]["run_id"])] = row
+                if not running:
+                    if pending_specs:
+                        for item in pending_specs:
+                            run_spec = dict(item["run_spec"])
+                            manifest_path = manifests_root / f"{int(item['sequence']):02d}_{run_spec['run_id']}.json"
+                            run_dir = runs_root / f"{int(item['sequence']):02d}_{run_spec['run_id']}"
+                            row = _failed_result_row(
+                                sequence=int(item["sequence"]),
+                                run_spec=run_spec,
+                                manifest_path=manifest_path,
+                                run_output_root=run_dir,
+                                model_group=_join_model_group(model_group, str(run_spec.get("model_group_suffix") or "")),
+                                profile_id=profile_id,
+                                error=ValueError(
+                                    "unresolved grid dependencies; check inherit_best_from ordering and references"
+                                ),
+                                applied_overrides=dict(run_spec.get("overrides") or {}),
+                                inherited_from_run_id=None,
+                            )
+                            run_rows.append(row)
+                            completed_rows[str(run_spec["run_id"])] = row
+                        pending_specs = []
+                    break
 
-    run_rows = sorted(run_rows, key=lambda row: int(row.get("sequence", 0)))
-    ranked_rows = _sort_rows(run_rows)
-    for rank, row in enumerate(ranked_rows, start=1):
-        row["rank"] = int(rank)
-    rank_by_run_id = {str(row["grid_run_id"]): int(row["rank"]) for row in ranked_rows}
-    for row in run_rows:
-        row["rank"] = rank_by_run_id[str(row["grid_run_id"])]
+                if launched and len(running) < max_parallel_runs and pending_specs:
+                    continue
 
-    winner = dict(ranked_rows[0]) if ranked_rows else None
-    any_failed = any(str(row.get("release_status")) == "failed" for row in run_rows)
-    stage2_hpo_escalation = _stage2_hpo_escalation(
-        ranked_rows,
-        dict(grid_resolved["selection"]["stage2_hpo_escalation"]),
-    )
-    dominant_failure_reason = None if winner and bool(winner.get("publishable")) else _dominant_failure_reason(ranked_rows)
+                done, _ = wait(tuple(running.keys()), return_when=FIRST_COMPLETED)
+                for future in done:
+                    meta = running.pop(future)
+                    try:
+                        summary = future.result()
+                        row = _result_row(
+                            sequence=int(meta["sequence"]),
+                            run_spec=dict(meta["run_spec"]),
+                            resolved_manifest_path=Path(meta["manifest_path"]),
+                            run_output_root=Path(meta["run_output_root"]),
+                            model_group=str(meta["model_group"]),
+                            profile_id=str(meta["profile_id"]),
+                            summary=summary,
+                            applied_overrides=dict(meta["applied_overrides"]),
+                            inherited_from_run_id=meta["inherited_from_run_id"],
+                        )
+                    except Exception as exc:
+                        row = _failed_result_row(
+                            sequence=int(meta["sequence"]),
+                            run_spec=dict(meta["run_spec"]),
+                            manifest_path=Path(meta["manifest_path"]),
+                            run_output_root=Path(meta["run_output_root"]),
+                            model_group=str(meta["model_group"]),
+                            profile_id=str(meta["profile_id"]),
+                            error=exc,
+                            applied_overrides=dict(meta["applied_overrides"]),
+                            inherited_from_run_id=meta["inherited_from_run_id"],
+                        )
+                    run_rows.append(row)
+                    completed_rows[str(meta["run_spec"]["run_id"])] = row
 
-    winner_release = None
-    if publish_winner and winner and bool(winner.get("publishable")):
-        winner_release = release_staged_run(
-            run_dir=Path(winner["run_dir"]),
-            model_group=str(winner["model_group"]),
-            profile_id=str(profile_id),
-            model_bucket_url=model_bucket_url,
-            root=root,
+        run_rows = sorted(run_rows, key=lambda row: int(row.get("sequence", 0)))
+        ranked_rows = _sort_rows(run_rows)
+        for rank, row in enumerate(ranked_rows, start=1):
+            row["rank"] = int(rank)
+        rank_by_run_id = {str(row["grid_run_id"]): int(row["rank"]) for row in ranked_rows}
+        for row in run_rows:
+            row["rank"] = rank_by_run_id[str(row["grid_run_id"])]
+
+        winner = dict(ranked_rows[0]) if ranked_rows else None
+        any_failed = any(str(row.get("release_status")) == "failed" for row in run_rows)
+        stage2_hpo_escalation = _stage2_hpo_escalation(
+            ranked_rows,
+            dict(grid_resolved["selection"]["stage2_hpo_escalation"]),
         )
+        dominant_failure_reason = None if winner and bool(winner.get("publishable")) else _dominant_failure_reason(ranked_rows)
 
-    payload: Dict[str, Any] = {
-        "created_at_utc": utc_now(),
-        "status": "completed_with_failures" if any_failed else "completed",
-        "experiment_kind": STAGED_GRID_KIND,
-        "grid_run_id": str(grid_root.name),
-        "grid_manifest_path": str(Path(grid_resolved["manifest_path"]).resolve()),
-        "base_manifest_path": str(Path(grid_resolved["inputs"]["base_manifest_path"]).resolve()),
-        "research_only": bool(grid_resolved.get("grid", {}).get("research_only", True)),
-        "model_group": str(model_group),
-        "profile_id": str(profile_id),
-        "execution": {
-            "max_parallel_runs": int(max_parallel_runs),
-            "host_cpu_count": max(1, int(os.cpu_count() or 1)),
-            "base_model_n_jobs": _base_model_n_jobs(grid_resolved),
-        },
-        "runs": run_rows,
-        "ranking": [
-            {
-                "rank": int(row["rank"]),
-                "grid_run_id": str(row["grid_run_id"]),
-                "publishable": bool(row["publishable"]),
-                "release_status": str(row["release_status"]),
-            }
-            for row in ranked_rows
-        ],
-        "winner": winner,
-        "winner_release": winner_release,
-        "dominant_failure_reason": dominant_failure_reason,
-        "stage2_hpo_escalation": stage2_hpo_escalation,
-        "paths": {
-            "grid_root": str(grid_root.resolve()),
-            "manifests_root": str(manifests_root.resolve()),
-            "runs_root": str(runs_root.resolve()),
-        },
-    }
-    summary_path = (grid_root / "grid_summary.json").resolve()
-    payload["paths"]["grid_summary"] = str(summary_path)
-    _write_json(summary_path, payload)
-    return payload
+        winner_release = None
+        if publish_winner and winner and bool(winner.get("publishable")):
+            winner_release = release_staged_run(
+                run_dir=Path(winner["run_dir"]),
+                model_group=str(winner["model_group"]),
+                profile_id=str(profile_id),
+                model_bucket_url=model_bucket_url,
+                root=root,
+            )
+
+        payload: Dict[str, Any] = {
+            "created_at_utc": utc_now(),
+            "status": "completed_with_failures" if any_failed else "completed",
+            "experiment_kind": STAGED_GRID_KIND,
+            "grid_run_id": str(grid_root.name),
+            "grid_manifest_path": str(Path(grid_resolved["manifest_path"]).resolve()),
+            "base_manifest_path": str(Path(grid_resolved["inputs"]["base_manifest_path"]).resolve()),
+            "research_only": bool(grid_resolved.get("grid", {}).get("research_only", True)),
+            "model_group": str(model_group),
+            "profile_id": str(profile_id),
+            "execution": {
+                "max_parallel_runs": int(max_parallel_runs),
+                "host_cpu_count": max(1, int(os.cpu_count() or 1)),
+                "base_model_n_jobs": _base_model_n_jobs(grid_resolved),
+            },
+            "runs": run_rows,
+            "ranking": [
+                {
+                    "rank": int(row["rank"]),
+                    "grid_run_id": str(row["grid_run_id"]),
+                    "publishable": bool(row["publishable"]),
+                    "release_status": str(row["release_status"]),
+                }
+                for row in ranked_rows
+            ],
+            "winner": winner,
+            "winner_release": winner_release,
+            "dominant_failure_reason": dominant_failure_reason,
+            "stage2_hpo_escalation": stage2_hpo_escalation,
+            "paths": {
+                "grid_root": str(grid_root.resolve()),
+                "manifests_root": str(manifests_root.resolve()),
+                "runs_root": str(runs_root.resolve()),
+                "grid_summary": str(summary_path),
+            },
+        }
+        _write_json(summary_path, payload)
+        return payload
+    except Exception as exc:
+        payload = {
+            "created_at_utc": utc_now(),
+            "status": "failed",
+            "experiment_kind": STAGED_GRID_KIND,
+            "grid_run_id": str(grid_root.name),
+            "grid_manifest_path": str(Path(grid_resolved["manifest_path"]).resolve()),
+            "base_manifest_path": str(Path(grid_resolved["inputs"]["base_manifest_path"]).resolve()),
+            "research_only": bool(grid_resolved.get("grid", {}).get("research_only", True)),
+            "model_group": str(model_group),
+            "profile_id": str(profile_id),
+            "error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            },
+            "paths": {
+                "grid_root": str(grid_root.resolve()),
+                "manifests_root": str(manifests_root.resolve()),
+                "runs_root": str(runs_root.resolve()),
+                "grid_summary": str(summary_path),
+            },
+        }
+        _write_json(summary_path, payload)
+        return payload
 
 
 __all__ = ["run_staged_grid"]

@@ -10,6 +10,7 @@ PUBLISH_RUNTIME_CONFIG="${PUBLISH_RUNTIME_CONFIG:-1}"
 AUTO_INSTALL_SYSTEM_PACKAGES="${AUTO_INSTALL_SYSTEM_PACKAGES:-1}"
 PARQUET_BASE="${PARQUET_BASE:-${REPO_ROOT}/.data/ml_pipeline/parquet_data}"
 TRAINING_RELEASE_JSON="${TRAINING_RELEASE_JSON:-${REPO_ROOT}/training-release.json}"
+RUN_OUTPUT_ROOT="${RUN_OUTPUT_ROOT:-$(dirname "${TRAINING_RELEASE_JSON}")/run}"
 STAGE2_REQUIRED_COLUMNS="${STAGE2_REQUIRED_COLUMNS:-pcr_change_5m,pcr_change_15m,atm_oi_ratio,near_atm_oi_ratio,atm_ce_oi,atm_pe_oi}"
 MODEL_GROUP_OVERRIDE="${MODEL_GROUP:-}"
 PROFILE_ID_OVERRIDE="${PROFILE_ID:-}"
@@ -169,6 +170,7 @@ verify_stage2_required_columns "${PARQUET_BASE}/stage2_direction_view" "${STAGE2
 
 python -m ml_pipeline_2.run_staged_release \
   --config "${STAGED_CONFIG}" \
+  --run-output-root "${RUN_OUTPUT_ROOT}" \
   --model-group "${MODEL_GROUP}" \
   --profile-id "${PROFILE_ID}" \
   --model-bucket-url "${MODEL_BUCKET_URL}" > "${TRAINING_RELEASE_JSON}"

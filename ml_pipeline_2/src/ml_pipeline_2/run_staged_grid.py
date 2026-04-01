@@ -35,7 +35,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         model_bucket_url=(str(args.model_bucket_url).strip() if args.model_bucket_url else None),
     )
     print(json.dumps(payload, indent=2, default=str))
-    return 0
+    return 1 if str(payload.get("status") or "").strip().lower() == "failed" else 0
 
 
 if __name__ == "__main__":

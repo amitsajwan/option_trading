@@ -1445,10 +1445,19 @@ def _check_stage2_signal(stage2_frame: pd.DataFrame) -> dict[str, Any]:
 
     correlations: dict[str, float] = {}
     for column in feature_cols:
-        values = pd.to_numeric(labeled[column], errors="coerce").dropna()
-        if len(values) < 50:
+        values = pd.to_numeric(labeled[column], errors="coerce")
+        aligned = pd.concat(
+            [
+                values.rename("feature"),
+                direction_binary.rename("direction"),
+            ],
+            axis=1,
+        ).dropna()
+        if len(aligned) < 50:
             continue
-        corr = abs(float(values.corr(direction_binary.loc[values.index])))
+        if float(aligned["feature"].std(ddof=0)) == 0.0 or float(aligned["direction"].std(ddof=0)) == 0.0:
+            continue
+        corr = abs(float(aligned["feature"].corr(aligned["direction"])))
         if np.isfinite(corr):
             correlations[column] = corr
 

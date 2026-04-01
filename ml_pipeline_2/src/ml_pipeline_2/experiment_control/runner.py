@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..contracts.manifests import STAGED_KIND, load_and_resolve_manifest
-from .state import RunContext
+from .state import RunContext, utc_now
 
 
 def _timestamp_suffix() -> str:
@@ -27,6 +27,27 @@ def _scenario_environment_validator(kind: str):
 
         return validate_staged_research_environment
     raise ValueError(f"unsupported experiment kind: {kind}")
+
+
+class ResearchRunFailed(RuntimeError):
+    def __init__(self, message: str, *, output_root: Path) -> None:
+        super().__init__(message)
+        self.output_root = Path(output_root).resolve()
+
+
+def _failure_summary(resolved_config: Dict[str, Any], *, out_root: Path, error: Exception) -> Dict[str, Any]:
+    return {
+        "summary_schema_version": 3,
+        "created_at_utc": utc_now(),
+        "status": "failed",
+        "experiment_kind": str(resolved_config.get("experiment_kind") or ""),
+        "run_id": str(out_root.name),
+        "completion_mode": "failed",
+        "error": {
+            "type": type(error).__name__,
+            "message": str(error),
+        },
+    }
 
 
 def validate_runtime_environment(resolved_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -50,7 +71,19 @@ def run_research(resolved_config: Dict[str, Any], *, run_output_root: Optional[P
     ctx.write_text("manifest_hash.txt", str(resolved.get("manifest_hash", "")))
     ctx.append_state("job_start", experiment_kind=str(resolved["experiment_kind"]), output_root=str(out_root.resolve()))
     runner = _scenario_runner(str(resolved["experiment_kind"]))
-    summary = runner(ctx)
+    try:
+        summary = runner(ctx)
+    except Exception as exc:
+        summary = _failure_summary(resolved, out_root=out_root, error=exc)
+        summary["output_root"] = str(out_root.resolve())
+        ctx.write_json("summary.json", summary)
+        ctx.append_state(
+            "job_failed",
+            status="failed",
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+        )
+        raise ResearchRunFailed(str(exc), output_root=out_root) from exc
     if isinstance(summary, dict):
         summary["output_root"] = str(out_root.resolve())
     ctx.append_state("job_done", status=str(summary.get("status", "completed")))

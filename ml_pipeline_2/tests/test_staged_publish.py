@@ -10,6 +10,7 @@ import pytest
 
 import ml_pipeline_2.publishing.publish as publish_paths
 from ml_pipeline_2.publishing import resolve_ml_pure_artifacts, validate_switch_strict
+from ml_pipeline_2.experiment_control.runner import ResearchRunFailed
 from ml_pipeline_2.staged.publish import publish_staged_run, release_staged_run
 from ml_pipeline_2.staged.runtime_contract import load_staged_runtime_policy
 
@@ -194,6 +195,57 @@ def test_release_staged_run_writes_completed_hold_summary_without_publish(tmp_pa
     assert written["release_status"] == "held"
     assert written["publish"]["publish_status"] == "held"
     assert written["paths"]["assessment"].endswith("assessment.json")
+
+
+def test_release_staged_run_writes_failed_terminal_artifacts_when_research_crashes(tmp_path: Path, monkeypatch) -> None:
+    run_dir = tmp_path / "artifacts" / "research" / "failed_stage_run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "failed",
+                "run_id": run_dir.name,
+                "completion_mode": "failed",
+                "error": {
+                    "type": "RuntimeError",
+                    "message": "synthetic trainer failure",
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    def _raise_failed_run(*_args, **_kwargs):
+        raise ResearchRunFailed("synthetic trainer failure", output_root=run_dir)
+
+    def _write_json_direct(path: Path, payload: dict) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return path
+
+    monkeypatch.setattr("ml_pipeline_2.staged.publish.run_research", _raise_failed_run)
+    monkeypatch.setattr("ml_pipeline_2.staged.publish._write_json", _write_json_direct)
+    monkeypatch.setattr(
+        "ml_pipeline_2.staged.publish.load_and_resolve_manifest",
+        lambda *_args, **_kwargs: {
+            "publish": {},
+        },
+    )
+
+    payload = release_staged_run(
+        config=tmp_path / "dummy.json",
+        run_output_root=run_dir,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+    )
+
+    assert payload["status"] == "failed"
+    assert payload["release_status"] == "failed"
+    assert payload["assessment"]["publishable"] is False
+    assert payload["publish"]["publish_status"] == "failed"
+    assert Path(payload["paths"]["assessment"]).exists()
+    assert Path(payload["paths"]["release_summary"]).exists()
 
 
 def test_publish_staged_run_still_rejects_non_publishable_run(tmp_path: Path) -> None:

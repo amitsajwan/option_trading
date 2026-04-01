@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -107,6 +108,29 @@ def test_staged_runner_early_holds_when_stage2_signal_check_fails(tmp_path: Path
     assert "holdout_reports" not in summary
     assert "policy_reports" not in summary
     assert "gates" not in summary
+
+
+def test_stage2_signal_check_skips_constant_features_without_runtime_warning() -> None:
+    frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-01"] * 120,
+            "timestamp": pd.date_range("2024-01-01 09:15:00", periods=120, freq="min"),
+            "snapshot_id": [f"snap_{idx:04d}" for idx in range(120)],
+            "entry_label": [1] * 120,
+            "direction_label": ["CE"] * 60 + ["PE"] * 60,
+            "constant_feature": [1.0] * 120,
+            "signal_feature": ([0.0] * 60) + ([1.0] * 60),
+        }
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        report = staged_pipeline._check_stage2_signal(frame)  # type: ignore[attr-defined]
+
+    runtime_warnings = [item for item in caught if issubclass(item.category, RuntimeWarning)]
+    assert runtime_warnings == []
+    assert report["has_signal"] is True
+    assert report["max_correlation"] >= 0.05
 
 
 def test_staged_runner_early_holds_after_stage1_cv_gate_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

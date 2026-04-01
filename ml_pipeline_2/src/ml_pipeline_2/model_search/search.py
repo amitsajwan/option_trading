@@ -78,6 +78,16 @@ class QuantileClipper(BaseEstimator, TransformerMixin):
         return frame
 
 
+def _set_pandas_output(estimator: object) -> object:
+    set_output = getattr(estimator, "set_output", None)
+    if callable(set_output):
+        try:
+            return set_output(transform="pandas")
+        except Exception:
+            return estimator
+    return estimator
+
+
 def _ensure_sorted(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
@@ -549,16 +559,19 @@ def _build_model(model_spec: ModelSpec, random_state: int, preprocess_cfg: Prepr
     family = str(model_spec.family).strip().lower()
     params = dict(model_spec.params or {})
     resolved_n_jobs = max(1, int(model_n_jobs))
+    clipper = _set_pandas_output(QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q))
+    imputer = _set_pandas_output(SimpleImputer(strategy="median"))
     if family == "logreg":
-        return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler(with_mean=True, with_std=True)), ("model", LogisticRegression(C=float(params.get("c", 1.0)), class_weight=params.get("class_weight"), random_state=int(random_state), max_iter=int(params.get("max_iter", 1000)), solver=str(params.get("solver", "lbfgs"))))])
+        scaler = _set_pandas_output(StandardScaler(with_mean=True, with_std=True))
+        return Pipeline(steps=[("clipper", clipper), ("imputer", imputer), ("scaler", scaler), ("model", LogisticRegression(C=float(params.get("c", 1.0)), class_weight=params.get("class_weight"), random_state=int(random_state), max_iter=int(params.get("max_iter", 1000)), solver=str(params.get("solver", "lbfgs"))))])
     if family == "xgb":
         if XGBClassifier is None:
             raise RuntimeError("XGBoost is required for xgb models; install 'xgboost' to enable them")
-        return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("model", XGBClassifier(objective="binary:logistic", eval_metric="logloss", random_state=int(random_state), seed=int(random_state), n_jobs=resolved_n_jobs, tree_method="hist", verbosity=0, max_depth=int(params.get("max_depth", 4)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 1.0))))])
+        return Pipeline(steps=[("clipper", clipper), ("imputer", imputer), ("model", XGBClassifier(objective="binary:logistic", eval_metric="logloss", random_state=int(random_state), seed=int(random_state), n_jobs=resolved_n_jobs, tree_method="hist", verbosity=0, max_depth=int(params.get("max_depth", 4)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 1.0))))])
     if family == "lgbm":
         if LGBMClassifier is None:
             raise RuntimeError("LightGBM is required for lgbm models; install 'lightgbm' to enable them")
-        return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("model", LGBMClassifier(objective="binary", random_state=int(random_state), n_jobs=resolved_n_jobs, verbosity=-1, boosting_type=str(params.get("boosting_type", "gbdt")), num_leaves=int(params.get("num_leaves", 31)), max_depth=int(params.get("max_depth", -1)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 0.0)), min_child_samples=int(params.get("min_child_samples", 20)), class_weight=params.get("class_weight")))])
+        return Pipeline(steps=[("clipper", clipper), ("imputer", imputer), ("model", LGBMClassifier(objective="binary", random_state=int(random_state), n_jobs=resolved_n_jobs, verbosity=-1, boosting_type=str(params.get("boosting_type", "gbdt")), num_leaves=int(params.get("num_leaves", 31)), max_depth=int(params.get("max_depth", -1)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 0.0)), min_child_samples=int(params.get("min_child_samples", 20)), class_weight=params.get("class_weight")))])
     raise ValueError(f"unsupported model family: {model_spec.family}")
 
 
