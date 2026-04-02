@@ -69,8 +69,12 @@ def test_staged_runner_builds_summary_and_stage_artifacts(tmp_path: Path) -> Non
     assert summary["stage_artifacts"]["stage1"]["completed_at_utc"]
     assert Path(summary["stage_artifacts"]["stage1"]["model_package_path"]).exists()
     assert Path(summary["stage_artifacts"]["stage2"]["model_package_path"]).exists()
+    assert Path(summary["stage_artifacts"]["stage2"]["diagnostics_path"]).exists()
     assert Path(summary["stage_artifacts"]["stage3"]["training_report_path"]).exists()
     assert sorted(summary["stage_artifacts"]["stage3"]["recipes"]) == ["L0", "L1", "L2", "L3"]
+    diagnostics = json.loads(Path(summary["stage_artifacts"]["stage2"]["diagnostics_path"]).read_text(encoding="utf-8"))
+    assert sorted(diagnostics["splits"]) == ["final_holdout", "research_train", "research_valid"]
+    assert diagnostics["feature_sets"] == ["fo_expiry_aware_v3"]
 
 
 def test_staged_runner_early_holds_when_stage2_signal_check_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -186,6 +190,7 @@ def test_staged_runner_early_holds_after_stage2_cv_gate_failure(tmp_path: Path, 
     assert summary["cv_prechecks"]["stage1_cv"]["gate_passed"] is True
     assert summary["cv_prechecks"]["stage2_cv"]["gate_passed"] is False
     assert summary["cv_prechecks"]["stage2_cv"]["reasons"] == ["stage2_cv.brier>0.10"]
+    assert Path(summary["stage_artifacts"]["stage2"]["diagnostics_path"]).exists()
     assert "holdout_reports" not in summary
 
 
@@ -469,6 +474,8 @@ def test_manifest_accepts_stage2_label_filter(tmp_path: Path) -> None:
     payload["training"]["stage2_label_filter"] = {
         "enabled": True,
         "min_directional_edge_after_cost": 0.001,
+        "require_positive_winner_after_cost": True,
+        "max_opposing_return_after_cost": 0.0,
     }
     manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -477,6 +484,8 @@ def test_manifest_accepts_stage2_label_filter(tmp_path: Path) -> None:
     assert resolved["training"]["stage2_label_filter"] == {
         "enabled": True,
         "min_directional_edge_after_cost": 0.001,
+        "require_positive_winner_after_cost": True,
+        "max_opposing_return_after_cost": 0.0,
     }
 
 

@@ -11,6 +11,7 @@ from sklearn.metrics import brier_score_loss, roc_auc_score
 
 from ..contracts.types import LabelRecipe, PreprocessConfig
 from ..dataset_windowing import filter_trade_dates, normalize_trade_date
+from ..evaluation.stage_metrics import calibration_error
 from ..experiment_control.state import RunContext, utc_now
 from ..inference_contract.predict import predict_probabilities_from_frame
 from ..labeling import EffectiveLabelConfig, build_labeled_dataset, prepare_snapshot_labeled_frame
@@ -390,9 +391,15 @@ def _normalize_stage2_label_filter(manifest: dict[str, Any]) -> dict[str, Any]:
         min_edge = float(raw.get("min_directional_edge_after_cost", 0.0))
     except Exception:
         min_edge = 0.0
+    try:
+        max_opposing = float(raw.get("max_opposing_return_after_cost", 0.0))
+    except Exception:
+        max_opposing = 0.0
     return {
         "enabled": enabled,
         "min_directional_edge_after_cost": max(0.0, float(min_edge)),
+        "require_positive_winner_after_cost": bool(raw.get("require_positive_winner_after_cost", False)),
+        "max_opposing_return_after_cost": float(max_opposing),
     }
 
 
@@ -408,6 +415,8 @@ def _apply_stage2_label_filter(stage2_frame: pd.DataFrame, manifest: dict[str, A
         "rows_after": int(len(stage2_frame)),
         "rows_dropped": 0,
         "kept_share": 1.0 if len(stage2_frame) else 0.0,
+        "edge_filter_rows_dropped": 0,
+        "valid_winner_rows_dropped": 0,
         "edge_mean_before": (
             float(edge_series.dropna().mean()) if bool(edge_series.notna().any()) else None
         ),
@@ -430,6 +439,18 @@ def _apply_stage2_label_filter(stage2_frame: pd.DataFrame, manifest: dict[str, A
     pe_returns = pd.to_numeric(stage2_frame["best_pe_net_return_after_cost"], errors="coerce").fillna(0.0)
     edge_series = (ce_returns - pe_returns).abs()
     keep_mask = edge_series >= float(cfg["min_directional_edge_after_cost"])
+    edge_keep_mask = keep_mask.copy()
+    valid_winner_keep_mask = pd.Series(True, index=stage2_frame.index, dtype=bool)
+    if cfg["require_positive_winner_after_cost"]:
+        direction = stage2_frame["direction_label"].astype(str).str.upper()
+        winner_returns = np.where(direction == "CE", ce_returns, pe_returns)
+        opposing_returns = np.where(direction == "CE", pe_returns, ce_returns)
+        valid_winner_keep_mask = pd.Series(
+            (winner_returns > 0.0) & (opposing_returns <= float(cfg["max_opposing_return_after_cost"])),
+            index=stage2_frame.index,
+            dtype=bool,
+        )
+        keep_mask = keep_mask & valid_winner_keep_mask
     filtered = stage2_frame.loc[keep_mask].copy().sort_values("timestamp").reset_index(drop=True)
     filtered["direction_return_edge_after_cost"] = edge_series.loc[keep_mask].to_numpy(copy=False)
     meta.update(
@@ -437,12 +458,259 @@ def _apply_stage2_label_filter(stage2_frame: pd.DataFrame, manifest: dict[str, A
             "rows_after": int(len(filtered)),
             "rows_dropped": int((~keep_mask).sum()),
             "kept_share": float(keep_mask.mean()) if len(keep_mask) else 0.0,
+            "edge_filter_rows_dropped": int((~edge_keep_mask).sum()),
+            "valid_winner_rows_dropped": int((edge_keep_mask & (~valid_winner_keep_mask)).sum()),
             "edge_mean_after": (
                 float(edge_series.loc[keep_mask].mean()) if bool(keep_mask.any()) else None
             ),
         }
     )
     return filtered, meta
+
+
+def _stage2_direction_binary(direction_label: pd.Series) -> pd.Series:
+    direction = pd.Series(direction_label).astype(str).str.upper()
+    binary = pd.Series(np.nan, index=direction.index, dtype=float)
+    binary.loc[direction == "CE"] = 1.0
+    binary.loc[direction == "PE"] = 0.0
+    return binary
+
+
+def _stage2_probability_histogram(probabilities: pd.Series, *, bins: int = 10) -> dict[str, Any]:
+    probs = pd.to_numeric(probabilities, errors="coerce").dropna().clip(0.0, 1.0)
+    edges = np.linspace(0.0, 1.0, int(bins) + 1)
+    if len(probs) == 0:
+        return {
+            "bins": [
+                {"lo": round(float(edges[idx]), 4), "hi": round(float(edges[idx + 1]), 4), "count": 0, "share": 0.0}
+                for idx in range(len(edges) - 1)
+            ]
+        }
+    counts, _ = np.histogram(probs.to_numpy(dtype=float), bins=edges)
+    total = float(len(probs))
+    return {
+        "bins": [
+            {
+                "lo": round(float(edges[idx]), 4),
+                "hi": round(float(edges[idx + 1]), 4),
+                "count": int(counts[idx]),
+                "share": float(counts[idx] / total),
+            }
+            for idx in range(len(counts))
+        ]
+    }
+
+
+def _quantile_summary(values: pd.Series) -> dict[str, Any]:
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if len(numeric) == 0:
+        return {"count": 0, "mean": None, "std": None, "min": None, "p25": None, "median": None, "p75": None, "max": None}
+    return {
+        "count": int(len(numeric)),
+        "mean": float(numeric.mean()),
+        "std": float(numeric.std(ddof=0)) if len(numeric) > 1 else 0.0,
+        "min": float(numeric.min()),
+        "p25": float(numeric.quantile(0.25)),
+        "median": float(numeric.quantile(0.5)),
+        "p75": float(numeric.quantile(0.75)),
+        "max": float(numeric.max()),
+    }
+
+
+def _stage2_score_separation(labels: pd.Series, probabilities: pd.Series) -> dict[str, Any]:
+    y = pd.to_numeric(labels, errors="coerce")
+    p = pd.to_numeric(probabilities, errors="coerce")
+    mask = y.notna() & p.notna()
+    y = y.loc[mask].astype(int)
+    p = p.loc[mask].astype(float)
+    pos = p.loc[y == 1]
+    neg = p.loc[y == 0]
+    return {
+        "rows": int(len(p)),
+        "positive_rows": int(len(pos)),
+        "negative_rows": int(len(neg)),
+        "positive_mean_prob": float(pos.mean()) if len(pos) else None,
+        "negative_mean_prob": float(neg.mean()) if len(neg) else None,
+        "positive_median_prob": float(pos.median()) if len(pos) else None,
+        "negative_median_prob": float(neg.median()) if len(neg) else None,
+        "mean_gap": float(pos.mean() - neg.mean()) if len(pos) and len(neg) else None,
+        "median_gap": float(pos.median() - neg.median()) if len(pos) and len(neg) else None,
+    }
+
+
+def _stage2_calibration_profile(labels: pd.Series, probabilities: pd.Series, *, bins: int = 10) -> dict[str, Any]:
+    y = pd.to_numeric(labels, errors="coerce")
+    p = pd.to_numeric(probabilities, errors="coerce")
+    mask = y.notna() & p.notna()
+    y = y.loc[mask].astype(int)
+    p = p.loc[mask].astype(float).clip(0.0, 1.0)
+    if len(y) == 0:
+        return {"calibration_error": None, "deciles": []}
+    if int(p.nunique(dropna=True)) <= 1:
+        avg_pred = float(p.mean())
+        pos_rate = float(y.mean())
+        return {
+            "calibration_error": float(abs(pos_rate - avg_pred)),
+            "deciles": [
+                {
+                    "bucket": 1,
+                    "rows": int(len(y)),
+                    "avg_predicted_prob": avg_pred,
+                    "positive_rate": pos_rate,
+                    "gap_abs": float(abs(pos_rate - avg_pred)),
+                }
+            ],
+        }
+    order = np.argsort(p.to_numpy(dtype=float))
+    y_sorted = y.to_numpy(dtype=float)[order]
+    p_sorted = p.to_numpy(dtype=float)[order]
+    effective_bins = max(1, min(int(bins), int(len(y_sorted))))
+    bucket_edges = np.linspace(0, len(y_sorted), effective_bins + 1, dtype=int)
+    deciles: list[dict[str, Any]] = []
+    for idx in range(effective_bins):
+        lo = int(bucket_edges[idx])
+        hi = int(bucket_edges[idx + 1])
+        if hi <= lo:
+            continue
+        bucket_y = y_sorted[lo:hi]
+        bucket_p = p_sorted[lo:hi]
+        deciles.append(
+            {
+                "bucket": int(idx + 1),
+                "rows": int(len(bucket_y)),
+                "avg_predicted_prob": float(np.mean(bucket_p)),
+                "positive_rate": float(np.mean(bucket_y)),
+                "gap_abs": float(abs(np.mean(bucket_y) - np.mean(bucket_p))),
+            }
+        )
+    return {
+        "calibration_error": calibration_error(y.to_numpy(dtype=float), p.to_numpy(dtype=float), bins=effective_bins),
+        "deciles": deciles,
+    }
+
+
+def _stage2_time_bucket(frame: pd.DataFrame) -> pd.Series:
+    if "timestamp" not in frame.columns:
+        return pd.Series(["UNKNOWN"] * len(frame), index=frame.index, dtype=object)
+    timestamps = _normalize_timestamp_series(frame["timestamp"])
+    minute_of_day = (timestamps.dt.hour * 60) + timestamps.dt.minute
+    bucket = pd.Series("UNKNOWN", index=frame.index, dtype=object)
+    bucket.loc[minute_of_day < (10 * 60)] = "OPENING"
+    bucket.loc[(minute_of_day >= (10 * 60)) & (minute_of_day < (12 * 60))] = "MORNING"
+    bucket.loc[(minute_of_day >= (12 * 60)) & (minute_of_day < (13 * 60 + 30))] = "MIDDAY"
+    bucket.loc[minute_of_day >= (13 * 60 + 30)] = "LATE_SESSION"
+    bucket.loc[timestamps.isna()] = "UNKNOWN"
+    return bucket
+
+
+def _stage2_expiry_regime(frame: pd.DataFrame) -> pd.Series:
+    regime = pd.Series("UNKNOWN", index=frame.index, dtype=object)
+    if "ctx_is_expiry_day" in frame.columns:
+        expiry_day = pd.to_numeric(frame["ctx_is_expiry_day"], errors="coerce").fillna(0.0) == 1.0
+        regime.loc[expiry_day] = "EXPIRY_DAY"
+    else:
+        expiry_day = pd.Series(False, index=frame.index, dtype=bool)
+    near_expiry = pd.Series(False, index=frame.index, dtype=bool)
+    if "ctx_regime_expiry_near" in frame.columns:
+        near_expiry = near_expiry | (pd.to_numeric(frame["ctx_regime_expiry_near"], errors="coerce").fillna(0.0) == 1.0)
+    if "ctx_dte_days" in frame.columns:
+        dte = pd.to_numeric(frame["ctx_dte_days"], errors="coerce")
+        near_expiry = near_expiry | (dte.notna() & (dte <= 1.0))
+        regime.loc[dte.notna()] = "REGULAR"
+    regime.loc[near_expiry & (~expiry_day)] = "NEAR_EXPIRY"
+    regular_mask = (~expiry_day) & (~near_expiry)
+    if regular_mask.any():
+        regime.loc[regular_mask] = "REGULAR"
+    return regime
+
+
+def _quality_by_group(frame: pd.DataFrame, *, label_col: str, prob_col: str, group_col: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if group_col not in frame.columns:
+        return rows
+    for group_name, group in frame.groupby(group_col, dropna=False):
+        labels = pd.to_numeric(group[label_col], errors="coerce")
+        probs = pd.to_numeric(group[prob_col], errors="coerce")
+        quality = _binary_quality(labels, probs)
+        rows.append(
+            {
+                "group": str(group_name),
+                "rows": int(len(group)),
+                "positive_rate": float(labels.dropna().mean()) if bool(labels.notna().any()) else None,
+                "roc_auc": quality["roc_auc"],
+                "brier": quality["brier"],
+            }
+        )
+    return sorted(rows, key=lambda item: item["group"])
+
+
+def _build_stage2_split_diagnostics(frame: pd.DataFrame, scores: pd.DataFrame, *, split_name: str) -> dict[str, Any]:
+    scored = frame.merge(scores, on=KEY_COLUMNS, how="left")
+    labels = _stage2_direction_binary(scored["direction_label"])
+    probs = pd.to_numeric(scored["direction_up_prob"], errors="coerce")
+    scored = scored.assign(
+        _direction_binary=labels,
+        _direction_up_prob=probs,
+        _time_bucket=_stage2_time_bucket(scored),
+        _expiry_regime=_stage2_expiry_regime(scored),
+    )
+    edge_series = pd.to_numeric(scored.get("direction_return_edge_after_cost"), errors="coerce")
+    quality = _binary_quality(scored["_direction_binary"], scored["_direction_up_prob"])
+    calibration = _stage2_calibration_profile(scored["_direction_binary"], scored["_direction_up_prob"])
+    return {
+        "split": split_name,
+        "rows": int(len(scored)),
+        "rows_with_probabilities": int((scored["_direction_up_prob"].notna() & scored["_direction_binary"].notna()).sum()),
+        "positive_rate": float(scored["_direction_binary"].dropna().mean()) if bool(scored["_direction_binary"].notna().any()) else None,
+        "quality": quality,
+        "probability_histogram": _stage2_probability_histogram(scored["_direction_up_prob"]),
+        "score_separation": _stage2_score_separation(scored["_direction_binary"], scored["_direction_up_prob"]),
+        "calibration": calibration,
+        "edge_distribution": _quantile_summary(edge_series),
+        "quality_by_time_bucket": _quality_by_group(scored, label_col="_direction_binary", prob_col="_direction_up_prob", group_col="_time_bucket"),
+        "quality_by_expiry_regime": _quality_by_group(scored, label_col="_direction_binary", prob_col="_direction_up_prob", group_col="_expiry_regime"),
+    }
+
+
+def _build_stage2_diagnostics_report(
+    *,
+    ctx: RunContext,
+    manifest: dict[str, Any],
+    labeled_frames: dict[str, dict[str, pd.DataFrame]],
+    stage2_result: dict[str, Any],
+    label_filter_meta: dict[str, Any],
+) -> dict[str, Any]:
+    train_scores = _score_single_target(
+        labeled_frames["stage2"]["research_train"],
+        stage2_result["search_package"],
+        prob_col="direction_up_prob",
+    )
+    split_reports = {
+        "research_train": _build_stage2_split_diagnostics(
+            labeled_frames["stage2"]["research_train"],
+            train_scores,
+            split_name="research_train",
+        ),
+        "research_valid": _build_stage2_split_diagnostics(
+            labeled_frames["stage2"]["research_valid"],
+            stage2_result["validation_scores"],
+            split_name="research_valid",
+        ),
+        "final_holdout": _build_stage2_split_diagnostics(
+            labeled_frames["stage2"]["final_holdout"],
+            stage2_result["holdout_scores"],
+            split_name="final_holdout",
+        ),
+    }
+    return {
+        "diagnostics_schema_version": 1,
+        "created_at_utc": utc_now(),
+        "run_id": str(ctx.output_root.name),
+        "stage": "stage2",
+        "feature_sets": list(manifest["catalog"]["feature_sets_by_stage"]["stage2"]),
+        "label_filtering": dict(label_filter_meta),
+        "splits": split_reports,
+    }
 
 
 def build_stage3_labels(stage_frame: pd.DataFrame, oracle: pd.DataFrame, *_: Any, **__: Any) -> pd.DataFrame:
@@ -1759,6 +2027,15 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "training_report_path": stage2_result["training_report_path"],
         "feature_contract_path": stage2_result["feature_contract_path"],
     }
+    stage2_diagnostics = _build_stage2_diagnostics_report(
+        ctx=ctx,
+        manifest=manifest,
+        labeled_frames=labeled_frames,
+        stage2_result=stage2_result,
+        label_filter_meta=dict(label_filtering.get("stage2") or {}),
+    )
+    stage2_diagnostics_path = ctx.write_json("stages/stage2/diagnostics.json", stage2_diagnostics)
+    stage_artifacts["stage2"]["diagnostics_path"] = str(stage2_diagnostics_path.resolve())
     stage2_cv_labels = np.where(
         labeled_frames["stage2"]["research_valid"]["direction_label"].astype(str).str.upper() == "CE",
         1,

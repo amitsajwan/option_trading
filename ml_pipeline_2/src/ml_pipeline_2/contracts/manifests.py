@@ -187,6 +187,15 @@ def _validate_stage2_label_filter(payload: Any, errors: List[str], *, field_pref
                 raise ValueError
         except Exception:
             errors.append(f"{field_prefix}.min_directional_edge_after_cost must be a number >= 0")
+    if "require_positive_winner_after_cost" in stage2_label_filter and not isinstance(
+        stage2_label_filter.get("require_positive_winner_after_cost"), bool
+    ):
+        errors.append(f"{field_prefix}.require_positive_winner_after_cost must be boolean")
+    if "max_opposing_return_after_cost" in stage2_label_filter:
+        try:
+            float(stage2_label_filter.get("max_opposing_return_after_cost"))
+        except Exception:
+            errors.append(f"{field_prefix}.max_opposing_return_after_cost must be numeric")
 
 
 def _validate_search_options_by_stage(payload: Any, errors: List[str], *, field_prefix: str) -> None:
