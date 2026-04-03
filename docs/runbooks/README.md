@@ -72,6 +72,8 @@ In the actual lifecycle menu these map to:
 
 4. [CLEANUP_ROLLBACK_RUNBOOK.md](CLEANUP_ROLLBACK_RUNBOOK.md)
    Stop spend, remove temporary compute, or roll back runtime config.
+5. [DETERMINISTIC_HISTORICAL_REPLAY_RUNBOOK.md](DETERMINISTIC_HISTORICAL_REPLAY_RUNBOOK.md)
+   Local/operator runbook for full historical deterministic replay with dashboard, on-demand date windows, and fresh image rebuilds from current code.
 
 ## Scope Notes
 
