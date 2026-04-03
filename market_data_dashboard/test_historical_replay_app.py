@@ -363,6 +363,69 @@ class HistoricalReplayAppTests(unittest.TestCase):
         self.assertEqual(payload["session"]["instrument"], "BANKNIFTY-I")
         self.assertEqual(payload["session_chart"]["prices"], [50200.0])
 
+    def test_historical_replay_status_falls_back_to_latest_completed_run_when_redis_status_is_idle(self) -> None:
+        if dashboard_app.HistoricalReplayMonitorService is None:
+            self.skipTest("HistoricalReplayMonitorService unavailable in this environment")
+
+        class _Collection:
+            def __init__(self, count: int) -> None:
+                self._count = int(count)
+
+            def count_documents(self, query) -> int:  # noqa: ARG002
+                return self._count
+
+        class _SnapshotCollection:
+            def find_one(self, query, projection=None, sort=None):  # noqa: ARG002
+                return {"timestamp": "2024-01-05T15:30:00+05:30"}
+
+        class _RepoStub:
+            def collections(self):
+                return {
+                    "votes": _Collection(5),
+                    "signals": _Collection(2),
+                    "positions": _Collection(247),
+                }
+
+            def snapshot_collection(self):
+                return _SnapshotCollection()
+
+            def latest_trade_date(self):
+                return "2024-01-05"
+
+        class _EvalStub:
+            def get_latest_run(self, *, dataset="historical", status="completed"):
+                self.last_args = {"dataset": dataset, "status": status}
+                return {
+                    "run_id": "run-123",
+                    "status": "completed",
+                    "date_from": "2024-01-02",
+                    "date_to": "2024-01-05",
+                    "started_at": "2024-01-05T10:00:00Z",
+                    "ended_at": "2024-01-05T10:01:00Z",
+                    "message": "Replay finished: emitted=1503",
+                }
+
+        service = dashboard_app.HistoricalReplayMonitorService(None)
+        service._evaluation_service = _EvalStub()
+        service._repo = _RepoStub()
+        service._read_replay_status = lambda: {  # type: ignore[method-assign]
+            "status": "idle",
+            "topic": "market:snapshot:v1:historical",
+            "data_ready": False,
+            "virtual_time_enabled": False,
+            "virtual_time_current": None,
+        }
+
+        payload = service.get_replay_status(date="2024-01-05")
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertTrue(payload["completed"])
+        self.assertTrue(payload["data_ready"])
+        self.assertEqual(payload["start_date"], "2024-01-02")
+        self.assertEqual(payload["end_date"], "2024-01-05")
+        self.assertEqual(payload["events_emitted"], 1503)
+        self.assertEqual(payload["latest_completed_run_id"], "run-123")
+
     def test_top_level_app_import_exposes_historical_monitor_service(self) -> None:
         app_path = Path(dashboard_app.__file__).resolve()
         spec = importlib.util.spec_from_file_location("dashboard_top_level_app", app_path)

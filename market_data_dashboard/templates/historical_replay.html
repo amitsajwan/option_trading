@@ -117,6 +117,17 @@
             margin-bottom: 6px;
         }
 
+        .run-note {
+            margin-top: 12px;
+            padding: 12px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid #e8eef3;
+            color: var(--muted);
+            line-height: 1.55;
+            font-size: 13px;
+        }
+
         .banner-grid, .kpis, .grid-2, .grid-3 {
             display: grid;
             gap: 14px;
@@ -172,6 +183,48 @@
 
         .chart-wrap {
             height: 360px;
+        }
+
+        .chart-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+
+        .chart-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.86);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .legend-swatch {
+            width: 12px;
+            height: 12px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+
+        .chart-note {
+            flex: 1;
+            min-width: 280px;
+            color: var(--muted);
+            line-height: 1.55;
+            font-size: 13px;
         }
 
         .table-wrap {
@@ -270,6 +323,9 @@
                     <a class="link" id="evalSummaryLink" href="/api/strategy/evaluation/summary?dataset=historical" target="_blank" rel="noopener">Summary API</a>
                     <a class="link" id="evalTradesLink" href="/api/strategy/evaluation/trades?dataset=historical" target="_blank" rel="noopener">Trades API</a>
                 </div>
+                <div class="run-note" id="runScopeNote">
+                    Latest completed run: --. The page below is scoped to the selected session date, while the evaluation links follow the latest completed historical run.
+                </div>
             </div>
         </section>
 
@@ -294,7 +350,7 @@
                     <div class="kv"><div class="label">Collection Counts</div><div class="value" id="replayCounts">--</div></div>
                 </div>
                 <div class="note" style="margin-top:12px;">
-                    Historical replay health is based on historical topic flow and historical collections. Live ingestion and Kite auth are not prerequisites for this page.
+                    Historical replay health is based on the selected session day and historical collections. The latest completed multi-day evaluation window is shown in the banner above, and live ingestion is not required for this page.
                 </div>
             </div>
             <div class="panel">
@@ -314,6 +370,16 @@
             <div class="chart-wrap">
                 <canvas id="priceChart"></canvas>
             </div>
+            <div class="chart-footer">
+                <div class="chart-legend">
+                    <span class="legend-item"><span class="legend-swatch" style="background:#0d6a78;"></span>Underlying</span>
+                    <span class="legend-item"><span class="legend-swatch" style="background:#18794e;"></span>Buy markers</span>
+                    <span class="legend-item"><span class="legend-swatch" style="background:#b42318;"></span>Sell markers</span>
+                </div>
+                <div class="chart-note" id="chartMarkerNote">
+                    Entry and exit markers are derived from historical trades and overlaid on the session price chart.
+                </div>
+            </div>
         </section>
 
         <section class="grid-3">
@@ -321,7 +387,7 @@
                 <h3>Recent Trades</h3>
                 <div class="table-wrap">
                     <table>
-                        <thead><tr><th>Exit</th><th>Strategy</th><th>Direction</th><th>PnL</th></tr></thead>
+                        <thead><tr><th>Exit</th><th>Strategy</th><th>Direction</th><th>Capital PnL</th></tr></thead>
                         <tbody id="tradesBody"><tr><td colspan="4">Loading...</td></tr></tbody>
                     </table>
                 </div>
@@ -389,6 +455,77 @@
             el.innerHTML = `<span class="tag ${toneTag(text)}">${text}</span>`;
         }
 
+        function shortTimeToken(value) {
+            const text = safeText(value, "").trim();
+            if (!text) return "";
+            if (text.includes("T")) {
+                return text.slice(11, 16);
+            }
+            const match = text.match(/(\d{2}:\d{2})(?::\d{2})?/);
+            if (match) return match[1];
+            return text.slice(0, 5);
+        }
+
+        function chartToken(value) {
+            return shortTimeToken(value).trim();
+        }
+
+        function findMarkerIndex(labels, timestamp) {
+            const target = chartToken(timestamp);
+            const rawTarget = safeText(timestamp, "").trim();
+            if (!Array.isArray(labels) || !target) return -1;
+            for (let index = 0; index < labels.length; index += 1) {
+                const label = safeText(labels[index], "").trim();
+                if (!label) continue;
+                if (label === rawTarget) return index;
+                if (chartToken(label) === target) return index;
+            }
+            return -1;
+        }
+
+        function buildChartMarkers(chart, markers) {
+            const labels = Array.isArray(chart?.labels) ? chart.labels : [];
+            const prices = Array.isArray(chart?.prices) ? chart.prices : [];
+            const entries = [];
+            const exits = [];
+            (Array.isArray(markers) ? markers : []).forEach((marker) => {
+                const index = findMarkerIndex(labels, marker?.timestamp);
+                if (index < 0 || prices[index] === undefined || prices[index] === null) return;
+                const point = {
+                    x: labels[index],
+                    y: Number(prices[index]),
+                    marker,
+                };
+                if (String(marker?.type || "").toLowerCase() === "exit") {
+                    exits.push(point);
+                } else {
+                    entries.push(point);
+                }
+            });
+            return {
+                entries,
+                exits,
+                count: entries.length + exits.length,
+            };
+        }
+
+        function explainMarketWarning(label, status, warning) {
+            const warningText = safeText(warning, "").trim();
+            const lower = warningText.toLowerCase();
+            if (lower.includes("ingestion_app") || lower.includes("nameresolutionerror")) {
+                return `${label} is unavailable because the live ingestion service is not running in this historical replay stack.`;
+            }
+            if (lower) {
+                return warningText.length > 220 ? `${warningText.slice(0, 217)}...` : warningText;
+            }
+            return "";
+        }
+
+        function formatTradePnL(row) {
+            const value = row?.capital_pnl_pct ?? row?.pnl_pct_net ?? row?.net_return_pct ?? row?.pnl_pct;
+            return formatPct(value);
+        }
+
         function renderRows(id, rows, cols) {
             const el = document.getElementById(id);
             if (!el) return;
@@ -399,11 +536,12 @@
             el.innerHTML = rows.join("");
         }
 
-        function renderChart(chart) {
+        function renderChart(chart, markers) {
             const canvas = document.getElementById("priceChart");
             if (!canvas) return;
             const labels = Array.isArray(chart?.labels) ? chart.labels : [];
             const prices = Array.isArray(chart?.prices) ? chart.prices : [];
+            const markerSeries = buildChartMarkers(chart, markers);
             if (!priceChart) {
                 priceChart = new Chart(canvas.getContext("2d"), {
                     type: "line",
@@ -418,23 +556,82 @@
                             pointRadius: 0,
                             tension: 0.2,
                             fill: true
+                        }, {
+                            label: "Buy markers",
+                            data: markerSeries.entries,
+                            type: "scatter",
+                            showLine: false,
+                            pointStyle: "triangle",
+                            pointRotation: 0,
+                            pointRadius: 7,
+                            pointHoverRadius: 9,
+                            backgroundColor: "#18794e",
+                            borderColor: "#18794e",
+                            borderWidth: 1,
+                            parsing: false
+                        }, {
+                            label: "Sell markers",
+                            data: markerSeries.exits,
+                            type: "scatter",
+                            showLine: false,
+                            pointStyle: "triangle",
+                            pointRotation: 180,
+                            pointRadius: 7,
+                            pointHoverRadius: 9,
+                            backgroundColor: "#b42318",
+                            borderColor: "#b42318",
+                            borderWidth: 1,
+                            parsing: false
                         }]
                     },
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: { legend: { display: false } },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: "bottom",
+                                labels: {
+                                    usePointStyle: true,
+                                    boxWidth: 10,
+                                    color: "#425466",
+                                },
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: (context) => {
+                                        const marker = context.raw?.marker || {};
+                                        if (context.dataset.label === "Underlying") {
+                                            return `Underlying: ${formatNumber(context.parsed.y)}`;
+                                        }
+                                        const direction = String(marker.direction || "").trim();
+                                        const strategy = String(marker.strategy || "").trim();
+                                        const premium = marker.premium !== null && marker.premium !== undefined ? formatNumber(marker.premium) : "--";
+                                        const label = String(marker.label || context.dataset.label || "").trim();
+                                        return `${context.dataset.label}: ${label}${strategy ? ` | ${strategy}` : ""}${direction ? ` | ${direction}` : ""} | Premium ${premium}`;
+                                    },
+                                },
+                            },
+                        },
                         scales: {
                             x: { ticks: { maxTicksLimit: 12 } },
                             y: { ticks: { callback: (value) => Number(value).toLocaleString() } }
                         }
                     }
                 });
+                document.getElementById("chartMarkerNote").textContent = markerSeries.count
+                    ? `${markerSeries.count} marker${markerSeries.count === 1 ? "" : "s"} derived from historical trades are overlaid on the chart.`
+                    : "No entry or exit markers were available for this replay window.";
                 return;
             }
             priceChart.data.labels = labels;
             priceChart.data.datasets[0].data = prices;
+            priceChart.data.datasets[1].data = markerSeries.entries;
+            priceChart.data.datasets[2].data = markerSeries.exits;
             priceChart.update();
+            document.getElementById("chartMarkerNote").textContent = markerSeries.count
+                ? `${markerSeries.count} marker${markerSeries.count === 1 ? "" : "s"} derived from historical trades are overlaid on the chart.`
+                : "No entry or exit markers were available for this replay window.";
         }
 
         async function refresh() {
@@ -446,9 +643,10 @@
             if (requestedInstrument) qs.set("instrument", requestedInstrument);
 
             const suffix = qs.toString() ? `?${qs.toString()}` : "";
-            const [session, replay] = await Promise.all([
+            const [session, replay, latestRun] = await Promise.all([
                 fetchJson(`/api/historical/replay/session${suffix}`),
                 fetchJson(`/api/historical/replay/status${suffix}`),
+                fetchJson(`/api/strategy/evaluation/runs/latest?dataset=historical&status=completed`).catch(() => null),
             ]);
             const effectiveInstrument = requestedInstrument || session?.session?.instrument || "BANKNIFTY-I";
             const [options, depth] = await Promise.all([
@@ -485,22 +683,42 @@
             if (String(depth.status || "").toLowerCase() === "no_data") {
                 realismParts.push("Published market depth is unavailable for this replay window.");
             }
-            if (options.warning) realismParts.push(String(options.warning));
-            if (depth.warning) realismParts.push(String(depth.warning));
+            const optionWarning = explainMarketWarning("Options chain", options.status, options.warning);
+            const depthWarning = explainMarketWarning("Market depth", depth.status, depth.warning);
+            if (optionWarning) realismParts.push(optionWarning);
+            if (depthWarning) realismParts.push(depthWarning);
             document.getElementById("realismNote").textContent = realismParts.join(" ") || "Replay is using the best available historical market-data shape for this instrument.";
 
-            const summaryDate = encodeURIComponent(session?.session?.date_ist || replay.date_ist || "");
-            document.getElementById("evalSummaryLink").href = `/api/strategy/evaluation/summary?dataset=historical&date_from=${summaryDate}&date_to=${summaryDate}`;
-            document.getElementById("evalTradesLink").href = `/api/strategy/evaluation/trades?dataset=historical&date_from=${summaryDate}&date_to=${summaryDate}`;
+            const latestRunId = safeText(latestRun?.run_id, "").trim();
+            const latestRunFrom = safeText(latestRun?.date_from, "").trim();
+            const latestRunTo = safeText(latestRun?.date_to, "").trim();
+            const latestRunStatus = safeText(latestRun?.status, "").trim();
+            const summaryFrom = latestRunFrom || session?.session?.date_ist || replay.date_ist || "";
+            const summaryTo = latestRunTo || session?.session?.date_ist || replay.date_ist || "";
+            const summaryFromEncoded = encodeURIComponent(summaryFrom);
+            const summaryToEncoded = encodeURIComponent(summaryTo);
+            document.getElementById("evalSummaryLink").href = `/api/strategy/evaluation/summary?dataset=historical&date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}`;
+            document.getElementById("evalTradesLink").href = `/api/strategy/evaluation/trades?dataset=historical&date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}`;
+            if (latestRunId) {
+                document.getElementById("evalLatestRunLink").href = `/api/strategy/evaluation/runs/${latestRunId}`;
+            }
+            const runScopeNote = document.getElementById("runScopeNote");
+            if (runScopeNote) {
+                if (latestRunId) {
+                    runScopeNote.textContent = `Latest completed run: ${summaryFrom || "--"} to ${summaryTo || "--"} | status ${latestRunStatus || "unknown"} | run ${latestRunId}. The page below stays scoped to the selected session day ${safeText(session?.session?.date_ist || replay.date_ist)}.`;
+                } else {
+                    runScopeNote.textContent = `No completed historical run was found. The page below stays scoped to the selected session day ${safeText(session?.session?.date_ist || replay.date_ist)}.`;
+                }
+            }
 
-            renderChart(session?.session_chart || {});
+            renderChart(session?.session_chart || {}, session?.chart_markers || []);
 
             renderRows("tradesBody", (session?.recent_trades || []).slice(0, 15).map((row) => `
                 <tr>
                     <td>${safeText(row.exit_time || row.entry_time)}</td>
-                    <td>${safeText(row.strategy)}</td>
+                    <td>${safeText(row.entry_strategy || row.strategy)}</td>
                     <td>${safeText(row.direction)}</td>
-                    <td>${formatPct(row.net_return_pct)}</td>
+                    <td>${formatTradePnL(row)}</td>
                 </tr>
             `), 4);
 
