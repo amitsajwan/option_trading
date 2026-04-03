@@ -3884,6 +3884,8 @@ app.include_router(_legacy_trading_routes.router)
 home = _operator_routes.home
 live_strategy = _operator_routes.live_strategy
 get_live_strategy_session = _operator_routes.get_live_strategy_session
+get_live_strategy_traces = _operator_routes.get_live_strategy_traces
+get_live_strategy_trace_detail = _operator_routes.get_live_strategy_trace_detail
 health = _operator_routes.health
 market_data_health = _operator_routes.market_data_health
 get_system_mode = _operator_routes.get_system_mode

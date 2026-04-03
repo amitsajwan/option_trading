@@ -39,6 +39,8 @@ class DashboardOperatorRouter:
         router.add_api_route("/", self.home, methods=["GET"], response_class=HTMLResponse)
         router.add_api_route("/live/strategy", self.live_strategy, methods=["GET"], response_class=HTMLResponse)
         router.add_api_route("/api/live/strategy/session", self.get_live_strategy_session, methods=["GET"])
+        router.add_api_route("/api/live/strategy/traces", self.get_live_strategy_traces, methods=["GET"])
+        router.add_api_route("/api/live/strategy/traces/{trace_id}", self.get_live_strategy_trace_detail, methods=["GET"])
         router.add_api_route("/api/health", self.health, methods=["GET"])
         router.add_api_route("/api/health/live", self.health, methods=["GET"])
         router.add_api_route("/api/market-data/health", self.market_data_health, methods=["GET"])
@@ -174,6 +176,51 @@ class DashboardOperatorRouter:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to build live strategy session: {exc}")
         return self._normalize_timestamp_fields(payload)
+
+    async def get_live_strategy_traces(
+        self,
+        date: Optional[str] = None,
+        limit: int = 25,
+        outcome: Optional[str] = None,
+        engine_mode: Optional[str] = None,
+        only_blocked: int = 0,
+        snapshot_id: Optional[str] = None,
+        position_id: Optional[str] = None,
+    ) -> Any:
+        service = self._require_live_strategy_monitor_service()
+        try:
+            date_ist = service.get_session_date_ist(date)
+            rows = service.load_recent_trace_digests(
+                date_ist,
+                limit,
+                outcome=outcome,
+                engine_mode=engine_mode,
+                only_blocked=bool(only_blocked),
+                snapshot_id=snapshot_id,
+                position_id=position_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to load live strategy traces: {exc}")
+        return self._normalize_timestamp_fields(
+            {
+                "status": "ok",
+                "date_ist": date_ist,
+                "rows": rows,
+                "count": len(rows),
+            }
+        )
+
+    async def get_live_strategy_trace_detail(self, trace_id: str) -> Any:
+        service = self._require_live_strategy_monitor_service()
+        try:
+            payload = service.get_trace_detail(trace_id)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to load decision trace detail: {exc}")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=404, detail=f"decision trace '{trace_id}' not found")
+        return self._normalize_timestamp_fields({"status": "ok", "trace": payload})
 
     async def health(self) -> dict[str, Any]:
         templates_ready = self._templates_dir.exists() and (self._templates_dir / "index.html").exists()

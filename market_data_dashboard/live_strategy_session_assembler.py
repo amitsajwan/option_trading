@@ -86,8 +86,11 @@ def build_session_payload(
     ops_state: Optional[OpsState] = None,
     active_alerts: Optional[list[AlertItem]] = None,
     decision_explainability: Optional[DecisionExplainability] = None,
+    decision_trace_summary: Optional[dict[str, Any]] = None,
+    latest_trace_digest: Optional[dict[str, Any]] = None,
+    decision_trace_available: Optional[bool] = None,
     ui_hints: Optional[UiHints] = None,
-    chart_markers: list[dict[str, Any]],
+    chart_markers: Optional[list[dict[str, Any]]] = None,
 ) -> LiveStrategySessionPayload:
     payload: LiveStrategySessionPayload = {
         "status": "ok",
@@ -109,7 +112,7 @@ def build_session_payload(
         "recent_signals": recent_signals,
         "recent_votes": recent_votes,
         "decision_diagnostics": decision_diagnostics,
-        "chart_markers": chart_markers,
+        "chart_markers": list(chart_markers or []),
     }
     if ops_state is not None:
         payload["ops_state"] = ops_state
@@ -117,6 +120,12 @@ def build_session_payload(
         payload["active_alerts"] = active_alerts
     if decision_explainability is not None:
         payload["decision_explainability"] = decision_explainability
+    if decision_trace_summary is not None:
+        payload["decision_trace_summary"] = decision_trace_summary
+    if latest_trace_digest is not None:
+        payload["latest_trace_digest"] = latest_trace_digest
+    if decision_trace_available is not None:
+        payload["decision_trace_available"] = bool(decision_trace_available)
     if ui_hints is not None:
         payload["ui_hints"] = ui_hints
     return payload

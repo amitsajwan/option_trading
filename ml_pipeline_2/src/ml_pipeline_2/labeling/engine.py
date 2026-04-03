@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
@@ -382,8 +383,16 @@ def build_labeled_dataset(features: pd.DataFrame, *, cfg: EffectiveLabelConfig) 
     if workers <= 1:
         labeled_parts = [_label_day_frame(day_features, cfg) for day_features in day_frames]
     else:
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            labeled_parts = list(executor.map(_label_day_frame, day_frames, [cfg] * len(day_frames)))
+        try:
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                labeled_parts = list(executor.map(_label_day_frame, day_frames, [cfg] * len(day_frames)))
+        except PermissionError:
+            logger = __import__("logging").getLogger(__name__)
+            logger.warning(
+                "labeling process pool unavailable in this environment; falling back to sequential execution"
+            )
+            time.sleep(0.05)
+            labeled_parts = [_label_day_frame(day_features, cfg) for day_features in day_frames]
     return pd.concat(labeled_parts, ignore_index=True).sort_values("timestamp").reset_index(drop=True) if labeled_parts else pd.DataFrame()
 
 

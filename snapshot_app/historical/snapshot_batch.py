@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import time
 import uuid
 from collections import deque
@@ -852,6 +853,8 @@ def _project_rows_to_ml_flat(
     pcr_diff_15m = out.groupby(trade_date_groups, sort=False)["opt_flow_pcr_oi"].diff(15)
     out["pcr_change_5m"] = pcr_change_5m.where(pcr_change_5m.notna(), pcr_diff_5m)
     out["pcr_change_15m"] = pcr_change_15m.where(pcr_change_15m.notna(), pcr_diff_15m)
+    out["pcr_change_5m"] = out["pcr_change_5m"].round(10)
+    out["pcr_change_15m"] = out["pcr_change_15m"].round(10)
 
     call_ret_canonical = num("atm_ce_return_1m")
     put_ret_canonical = num("atm_pe_return_1m")
@@ -876,6 +879,8 @@ def _project_rows_to_ml_flat(
             atm_pe_close_pct_change,
         ),
     )
+    out["opt_flow_atm_call_return_1m"] = out["opt_flow_atm_call_return_1m"].round(10)
+    out["opt_flow_atm_put_return_1m"] = out["opt_flow_atm_put_return_1m"].round(10)
     atm_oi_change_legacy = num("opt_flow_atm_oi_change_1m", "atm_oi_change_1m")
     atm_ce_oi_change_canonical = num("atm_ce_oi_change_1m")
     atm_pe_oi_change_canonical = num("atm_pe_oi_change_1m")
@@ -893,6 +898,7 @@ def _project_rows_to_ml_flat(
             atm_total_oi_diff,
         ),
     )
+    out["opt_flow_atm_oi_change_1m"] = out["opt_flow_atm_oi_change_1m"].round(10)
     atm_ce_oi_raw = num("atm_ce_oi")
     atm_pe_oi_raw = num("atm_pe_oi")
     atm_ratio = (atm_ce_oi_raw / (atm_ce_oi_raw + atm_pe_oi_raw).replace(0.0, np.nan)).where(
@@ -980,6 +986,7 @@ def _project_rows_to_ml_flat(
         if col not in out.columns:
             out[col] = np.nan
     out = out.loc[:, required_cols].copy()
+    out = out.astype(object).where(out.notna(), None)
     return out.to_dict("records")
 
 
@@ -1178,11 +1185,37 @@ def process_day(
 def _write_parquet_atomic(frame: pd.DataFrame, out_path: Path) -> None:
     """Write parquet via a same-directory temp file so failed writes leave the prior file intact."""
     temp_path = out_path.with_name(
-        f"{out_path.stem}.tmp_{os.getpid()}_{uuid.uuid4().hex}{out_path.suffix}"
+        f"{out_path.stem}.tmp_{os.getpid()}_{uuid.uuid4().hex}.tmp"
     )
     try:
         frame.to_parquet(temp_path, index=False, compression="snappy")
-        temp_path.replace(out_path)
+        replaced = False
+        last_replace_error: Optional[Exception] = None
+        for _ in range(5):
+            try:
+                temp_path.replace(out_path)
+                replaced = True
+                break
+            except PermissionError as exc:
+                last_replace_error = exc
+                time.sleep(0.05)
+        if not replaced:
+            if last_replace_error is not None:
+                try:
+                    shutil.copyfile(temp_path, out_path)
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except Exception:
+                        logger.warning(
+                            "copied parquet into place but failed to remove temp file path=%s",
+                            temp_path,
+                            exc_info=True,
+                        )
+                    replaced = True
+                except Exception:
+                    raise last_replace_error
+            if not replaced:
+                raise last_replace_error or RuntimeError(f"failed to finalize parquet write: {temp_path} -> {out_path}")
     except Exception:
         try:
             if temp_path.exists():

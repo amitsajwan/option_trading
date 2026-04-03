@@ -120,7 +120,60 @@ class _FakeLiveMonitorService:
                 "degraded_mode": False,
                 "debug_view": False,
             },
+            "decision_trace_summary": {
+                "sampled_traces": 1,
+                "blocked_traces": 1,
+                "entry_traces": 0,
+                "exit_traces": 0,
+                "top_blockers": [{"gate": "policy_checks", "count": 1}],
+                "latest_outcome": "blocked",
+            },
+            "latest_trace_digest": {
+                "trace_id": "trace-1",
+                "timestamp": "2026-03-02T07:17:00Z",
+                "final_outcome": "blocked",
+                "primary_blocker_gate": "policy_checks",
+                "selected_strategy_name": None,
+                "candidate_count": 2,
+                "blocked_candidate_count": 2,
+                "summary_metrics": {"candidate_count": 2},
+            },
+            "decision_trace_available": True,
             "chart_markers": [],
+        }
+
+    def get_session_date_ist(self, date_override: object = None) -> str:
+        return str(date_override or "2026-03-02")
+
+    def load_recent_trace_digests(self, date_ist: str, limit: int, **kwargs: object) -> list[dict]:
+        self.last_kwargs = {"date_ist": date_ist, "limit": limit, **dict(kwargs)}
+        return [
+            {
+                "trace_id": "trace-1",
+                "snapshot_id": "snap-1",
+                "timestamp": "2026-03-02T07:17:00Z",
+                "engine_mode": "ml_pure",
+                "decision_mode": "ml_staged",
+                "evaluation_type": "entry",
+                "final_outcome": "blocked",
+                "primary_blocker_gate": "policy_checks",
+                "selected_strategy_name": None,
+                "selected_direction": None,
+                "candidate_count": 2,
+                "blocked_candidate_count": 2,
+                "summary_metrics": {"candidate_count": 2},
+            }
+        ]
+
+    def get_trace_detail(self, trace_id: str) -> dict:
+        return {
+            "trace_id": trace_id,
+            "timestamp": "2026-03-02T07:17:00Z",
+            "engine_mode": "ml_pure",
+            "final_outcome": "blocked",
+            "primary_blocker_gate": "policy_checks",
+            "flow_gates": [{"gate_id": "policy_checks", "status": "blocked"}],
+            "candidates": [{"strategy_name": "ML_PURE_STAGED", "selected": False, "ordered_gates": []}],
         }
 
 
@@ -164,6 +217,20 @@ class LiveStrategyAppTests(unittest.TestCase):
         )
         self.assertEqual(self._fake_live.last_kwargs.get("timeline_limit"), 40)
         self.assertEqual(self._fake_live.last_kwargs.get("debug_view"), 1)
+
+    def test_live_strategy_traces_endpoint_returns_rows(self) -> None:
+        payload = asyncio.run(dashboard_app.get_live_strategy_traces(date="2026-03-02", limit=10, only_blocked=1))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["rows"][0]["trace_id"], "trace-1")
+        self.assertEqual(self._fake_live.last_kwargs.get("only_blocked"), True)
+
+    def test_live_strategy_trace_detail_endpoint_returns_trace(self) -> None:
+        payload = asyncio.run(dashboard_app.get_live_strategy_trace_detail("trace-1"))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["trace"]["trace_id"], "trace-1")
 
     def test_live_strategy_session_matches_snapshot_fixture(self) -> None:
         payload = asyncio.run(dashboard_app.get_live_strategy_session(date="2026-03-02"))

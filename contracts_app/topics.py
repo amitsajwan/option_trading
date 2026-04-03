@@ -36,3 +36,10 @@ def strategy_position_topic() -> str:
         str(os.getenv("STRATEGY_POSITION_TOPIC") or "market:strategy:positions:v1").strip()
         or "market:strategy:positions:v1"
     )
+
+
+def strategy_decision_trace_topic() -> str:
+    return (
+        str(os.getenv("STRATEGY_DECISION_TRACE_TOPIC") or "market:strategy:decision_trace:v1").strip()
+        or "market:strategy:decision_trace:v1"
+    )

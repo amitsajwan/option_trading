@@ -59,6 +59,7 @@ class LiveStrategyRepository:
             "votes": db[names["votes"]],
             "signals": db[names["signals"]],
             "positions": db[names["positions"]],
+            "traces": db[names["traces"]] if "traces" in names else None,
         }
 
     def snapshot_collection(self) -> Any:
@@ -223,8 +224,10 @@ class LiveStrategyRepository:
 
     def latest_trade_date(self) -> str | None:
         coll_map = self.collections()
-        for key in ("positions", "signals", "votes"):
+        for key in ("positions", "signals", "votes", "traces"):
             coll = coll_map[key]
+            if coll is None:
+                continue
             doc = coll.find_one(
                 {"trade_date_ist": {"$exists": True, "$ne": ""}},
                 {"_id": 0, "trade_date_ist": 1, "timestamp": 1},
@@ -258,6 +261,92 @@ class LiveStrategyRepository:
             if value:
                 return value
         return None
+
+    def load_recent_trace_digests(
+        self,
+        date_ist: str,
+        limit: int,
+        *,
+        outcome: str | None = None,
+        engine_mode: str | None = None,
+        only_blocked: bool = False,
+        snapshot_id: str | None = None,
+        position_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        coll = self.collections().get("traces")
+        if coll is None:
+            return []
+        query: dict[str, Any] = {"trade_date_ist": str(date_ist)}
+        outcome_text = str(outcome or "").strip()
+        if outcome_text:
+            query["final_outcome"] = outcome_text
+        engine_text = str(engine_mode or "").strip().lower()
+        if engine_text:
+            query["engine_mode"] = engine_text
+        if bool(only_blocked):
+            query["final_outcome"] = "blocked"
+        snapshot_text = str(snapshot_id or "").strip()
+        if snapshot_text:
+            query["snapshot_id"] = snapshot_text
+        position_text = str(position_id or "").strip()
+        if position_text:
+            query["position_id"] = position_text
+        projection = {
+            "_id": 0,
+            "trace_id": 1,
+            "snapshot_id": 1,
+            "timestamp": 1,
+            "trade_date_ist": 1,
+            "run_id": 1,
+            "engine_mode": 1,
+            "decision_mode": 1,
+            "evaluation_type": 1,
+            "final_outcome": 1,
+            "primary_blocker_gate": 1,
+            "selected_candidate_id": 1,
+            "selected_strategy_name": 1,
+            "selected_direction": 1,
+            "position_id": 1,
+            "candidate_count": 1,
+            "blocked_candidate_count": 1,
+            "summary_metrics": 1,
+        }
+        rows: list[dict[str, Any]] = []
+        for doc in coll.find(query, projection).sort("timestamp", -1).limit(int(limit)):
+            rows.append(
+                {
+                    "trace_id": str(doc.get("trace_id") or "").strip() or None,
+                    "snapshot_id": str(doc.get("snapshot_id") or "").strip() or None,
+                    "timestamp": _iso_or_none(doc.get("timestamp")),
+                    "trade_date_ist": str(doc.get("trade_date_ist") or "").strip() or None,
+                    "run_id": str(doc.get("run_id") or "").strip() or None,
+                    "engine_mode": normalize_engine_mode(doc.get("engine_mode")),
+                    "decision_mode": normalize_decision_mode(doc.get("decision_mode")),
+                    "evaluation_type": str(doc.get("evaluation_type") or "").strip() or None,
+                    "final_outcome": str(doc.get("final_outcome") or "").strip() or None,
+                    "primary_blocker_gate": str(doc.get("primary_blocker_gate") or "").strip() or None,
+                    "selected_candidate_id": str(doc.get("selected_candidate_id") or "").strip() or None,
+                    "selected_strategy_name": str(doc.get("selected_strategy_name") or "").strip() or None,
+                    "selected_direction": str(doc.get("selected_direction") or "").strip() or None,
+                    "position_id": str(doc.get("position_id") or "").strip() or None,
+                    "candidate_count": int(doc.get("candidate_count") or 0),
+                    "blocked_candidate_count": int(doc.get("blocked_candidate_count") or 0),
+                    "summary_metrics": (
+                        doc.get("summary_metrics") if isinstance(doc.get("summary_metrics"), dict) else {}
+                    ),
+                }
+            )
+        return rows
+
+    def load_trace_detail(self, trace_id: str) -> dict[str, Any] | None:
+        coll = self.collections().get("traces")
+        trace_text = str(trace_id or "").strip()
+        if coll is None or not trace_text:
+            return None
+        doc = coll.find_one({"trace_id": trace_text}, {"_id": 0, "payload.trace": 1})
+        payload = ((doc or {}).get("payload") or {}) if isinstance(doc, dict) else {}
+        trace = payload.get("trace") if isinstance(payload, dict) else None
+        return trace if isinstance(trace, dict) else None
 
 
 __all__ = [

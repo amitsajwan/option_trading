@@ -109,6 +109,9 @@ class LiveStrategySessionPayload(TypedDict, total=False):
     ops_state: OpsState
     active_alerts: list[AlertItem]
     decision_explainability: DecisionExplainability
+    decision_trace_summary: dict[str, Any]
+    latest_trace_digest: Optional[dict[str, Any]]
+    decision_trace_available: bool
     ui_hints: UiHints
     chart_markers: list[dict[str, Any]]
 

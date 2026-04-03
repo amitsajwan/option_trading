@@ -1,10 +1,12 @@
 from .config import redis_connection_kwargs
 from .events import (
     build_snapshot_event,
+    build_strategy_decision_trace_event,
     build_strategy_position_event,
     build_strategy_vote_event,
     build_trade_signal_event,
     parse_snapshot_event,
+    parse_strategy_decision_trace_event,
     parse_strategy_position_event,
     parse_strategy_vote_event,
     parse_trade_signal_event,
@@ -24,6 +26,7 @@ from .redis_keys import get_redis_key, get_redis_pattern
 from .topics import (
     historical_snapshot_topic,
     snapshot_topic,
+    strategy_decision_trace_topic,
     strategy_position_topic,
     strategy_vote_topic,
     trade_signal_topic,
@@ -47,6 +50,7 @@ __all__ = [
     "strategy_vote_topic",
     "trade_signal_topic",
     "strategy_position_topic",
+    "strategy_decision_trace_topic",
     "build_snapshot_event",
     "parse_snapshot_event",
     "build_strategy_vote_event",
@@ -55,6 +59,8 @@ __all__ = [
     "parse_trade_signal_event",
     "build_strategy_position_event",
     "parse_strategy_position_event",
+    "build_strategy_decision_trace_event",
+    "parse_strategy_decision_trace_event",
     "ISTFormatter",
     "configure_ist_logging",
     "redis_connection_kwargs",

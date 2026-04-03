@@ -166,11 +166,15 @@ class StrategyEvaluationService:
                 "votes": str(os.getenv("MONGO_COLL_STRATEGY_VOTES_HISTORICAL") or "strategy_votes_historical"),
                 "signals": str(os.getenv("MONGO_COLL_TRADE_SIGNALS_HISTORICAL") or "trade_signals_historical"),
                 "positions": str(os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL") or "strategy_positions_historical"),
+                "traces": str(
+                    os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES_HISTORICAL") or "strategy_decision_traces_historical"
+                ),
             }
         return {
             "votes": str(os.getenv("MONGO_COLL_STRATEGY_VOTES") or "strategy_votes"),
             "signals": str(os.getenv("MONGO_COLL_TRADE_SIGNALS") or "trade_signals"),
             "positions": str(os.getenv("MONGO_COLL_STRATEGY_POSITIONS") or "strategy_positions"),
+            "traces": str(os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES") or "strategy_decision_traces"),
         }
 
     def _runs_collection_name(self) -> str:

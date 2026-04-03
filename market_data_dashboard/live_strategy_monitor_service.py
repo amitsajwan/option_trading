@@ -172,6 +172,11 @@ def _ux_v1_enabled() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def _decision_trace_enabled() -> bool:
+    raw = str(os.getenv("DASHBOARD_ENABLE_DECISION_TRACE", "1")).strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def _normalize_engine_mode(raw: Any) -> Optional[str]:
     return _contract_normalize_engine_mode(raw)
 
@@ -282,6 +287,61 @@ class LiveStrategyMonitorService:
 
     def load_position_map(self, date_ist: str) -> dict[str, dict[str, Any]]:
         return self._repo.load_position_map(date_ist)
+
+    def load_recent_trace_digests(
+        self,
+        date_ist: str,
+        limit: int,
+        *,
+        outcome: Optional[str] = None,
+        engine_mode: Optional[str] = None,
+        only_blocked: bool = False,
+        snapshot_id: Optional[str] = None,
+        position_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        loader = getattr(self._repo, "load_recent_trace_digests", None)
+        if not callable(loader):
+            return []
+        return loader(
+            date_ist,
+            int(limit),
+            outcome=outcome,
+            engine_mode=engine_mode,
+            only_blocked=only_blocked,
+            snapshot_id=snapshot_id,
+            position_id=position_id,
+        )
+
+    def get_trace_detail(self, trace_id: str) -> Optional[dict[str, Any]]:
+        loader = getattr(self._repo, "load_trace_detail", None)
+        if not callable(loader):
+            return None
+        return loader(trace_id)
+
+    def build_decision_trace_summary(self, digests: list[dict[str, Any]]) -> dict[str, Any]:
+        rows = [item for item in digests if isinstance(item, dict)]
+        blocked = sum(1 for item in rows if str(item.get("final_outcome") or "").strip().lower() == "blocked")
+        entries = sum(1 for item in rows if str(item.get("final_outcome") or "").strip().lower() == "entry_taken")
+        exits = sum(1 for item in rows if str(item.get("final_outcome") or "").strip().lower() == "exit_taken")
+        blockers: dict[str, int] = {}
+        for item in rows:
+            gate = str(item.get("primary_blocker_gate") or "").strip()
+            if not gate:
+                continue
+            blockers[gate] = int(blockers.get(gate, 0) + 1)
+        top_blockers = [
+            {"gate": key, "count": value}
+            for key, value in sorted(blockers.items(), key=lambda item: (-item[1], item[0]))[:5]
+        ]
+        latest = rows[0] if rows else None
+        return {
+            "sampled_traces": len(rows),
+            "blocked_traces": blocked,
+            "entry_traces": entries,
+            "exit_traces": exits,
+            "top_blockers": top_blockers,
+            "latest_outcome": str((latest or {}).get("final_outcome") or "").strip() or None,
+        }
 
     def build_current_open_positions(
         self,
@@ -713,6 +773,9 @@ class LiveStrategyMonitorService:
         position_map = self.load_position_map(date_ist)
         recent_votes = self.load_recent_votes(date_ist, vote_limit)
         recent_signals = self.load_recent_signals(date_ist, signal_limit)
+        recent_trace_digests: list[dict[str, Any]] = []
+        if _decision_trace_enabled():
+            recent_trace_digests = self.load_recent_trace_digests(date_ist, resolved_timeline_limit)
         decision_diagnostics = self.build_decision_diagnostics(
             date_ist=date_ist,
             votes_coll=votes_coll,
@@ -919,6 +982,9 @@ class LiveStrategyMonitorService:
             active_alerts=active_alerts,
             decision_explainability=decision_explainability,
             ui_hints=ui_hints,
+            decision_trace_summary=(self.build_decision_trace_summary(recent_trace_digests) if recent_trace_digests else None),
+            latest_trace_digest=(recent_trace_digests[0] if recent_trace_digests else None),
+            decision_trace_available=_decision_trace_enabled(),
             chart_markers=self.build_chart_markers(recent_trades, active_positions),
         )
 

@@ -9,12 +9,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 from contracts_app import (
+    build_strategy_decision_trace_event,
     build_strategy_position_event,
     build_strategy_vote_event,
     build_trade_signal_event,
     merge_decision_metrics,
     normalize_decision_mode,
     normalize_reason_code,
+    strategy_decision_trace_topic,
     strategy_position_topic,
     strategy_vote_topic,
     trade_signal_topic,
@@ -35,9 +37,14 @@ class SignalLogger:
         self._votes_path = base_dir / "votes.jsonl"
         self._signals_path = base_dir / "signals.jsonl"
         self._positions_path = base_dir / "positions.jsonl"
+        self._traces_path = base_dir / "decision_traces.jsonl"
         self._resolver = DecisionFieldResolver()
         self._publisher = RedisEventPublisher(logger=logger)
         self._run_id: Optional[str] = None
+        self._decision_trace_enabled = (
+            str(os.getenv("STRATEGY_DECISION_TRACE_ENABLED") or "1").strip().lower()
+            not in {"0", "false", "no", "off"}
+        )
 
     def set_run_context(self, run_id: Optional[str], metadata: Optional[dict[str, Any]] = None) -> None:
         text = str(run_id or "").strip()
@@ -302,7 +309,7 @@ class SignalLogger:
             "entry_regime": position.entry_regime,
             "stop_loss_pct": position.stop_loss_pct,
             "stop_price": position.stop_price,
-            "high_water_premium": position.high_water_premium,
+            "high_water_premium": position.entry_premium,
             "trailing_enabled": position.trailing_enabled,
             "trailing_activation_pct": position.trailing_activation_pct,
             "trailing_offset_pct": position.trailing_offset_pct,
@@ -494,6 +501,23 @@ class SignalLogger:
                     position_id=exit_signal.position_id,
                     signal_id=position_signal_id,
                     snapshot_id=close_snapshot_id,
+                ),
+            ),
+        )
+
+    def log_decision_trace(self, trace: dict[str, Any]) -> None:
+        if not self._decision_trace_enabled or not isinstance(trace, dict):
+            return
+        record = normalize_record_timestamps(dict(trace))
+        append_jsonl(self._traces_path, record, logger=logger)
+        self._publish(
+            strategy_decision_trace_topic(),
+            build_strategy_decision_trace_event(
+                trace=record,
+                source="strategy_app",
+                metadata=self._metadata(
+                    trace_id=str(record.get("trace_id") or "").strip() or None,
+                    snapshot_id=str(record.get("snapshot_id") or "").strip() or None,
                 ),
             ),
         )

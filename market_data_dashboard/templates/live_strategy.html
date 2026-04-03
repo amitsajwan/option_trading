@@ -762,6 +762,27 @@
             </div>
         </section>
 
+        <section class="panel" id="decisionTracePanel" style="margin-bottom: 14px;">
+            <div class="panel-head">
+                <h2>Decision Trace</h2>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <span class="chip" id="traceSummaryChip">Trace idle</span>
+                    <button class="toggle-btn" id="decisionTraceToggle" data-target="decisionTracePanelBody" type="button">Collapse</button>
+                </div>
+            </div>
+            <div class="collapsible-content" id="decisionTracePanelBody">
+                <div class="view-toggle" style="margin-bottom:10px;">
+                    <div class="timeline-group">
+                        <button class="timeline-btn active" id="traceAllBtn" data-trace-filter="all" type="button">All Traces</button>
+                        <button class="timeline-btn" id="traceBlockedBtn" data-trace-filter="blocked" type="button">Blocked Only</button>
+                    </div>
+                    <div class="muted" id="traceModeNote">List is lightweight; full trace loads on selection.</div>
+                </div>
+                <div id="decisionTraceTable" class="timeline-feed"></div>
+                <div class="detail-card" id="decisionTraceDetail">Select a trace row to inspect full gate order and candidate outcomes.</div>
+            </div>
+        </section>
+
         <section class="layout">
             <div class="stack">
                 <div class="panel">
@@ -946,7 +967,12 @@
             chartInstance: null,
             selectedMarker: null,
             selectedTimelineId: null,
+            selectedTraceId: null,
+            selectedTraceDetail: null,
             previousTimelineIds: new Set(),
+            previousTraceIds: new Set(),
+            traceRows: [],
+            traceOnlyBlocked: false,
             sessionTimer: null,
             chartTimer: null,
             viewMode: "operator",
@@ -1097,10 +1123,12 @@
             if (state.viewMode === "debug") {
                 setPanelCollapsed("mlPure", false);
                 setPanelCollapsed("deterministic", false);
+                setPanelCollapsed("decisionTrace", false);
             } else {
                 const active = String(state.session?.ui_hints?.active_engine_panel || state.session?.engine_context?.active_engine_mode || "deterministic").toLowerCase();
                 setPanelCollapsed("mlPure", active !== "ml_pure");
                 setPanelCollapsed("deterministic", active === "ml_pure");
+                setPanelCollapsed("decisionTrace", true);
             }
             if (forceRefresh) {
                 clearTimeout(state.sessionTimer);
@@ -1177,6 +1205,139 @@
             const selectedItem = timeline.find((item) => String(item.id || `${item.ts || ""}:${item.reason_code || ""}`) === state.selectedTimelineId) || timeline[0];
             renderTimelineDetail(selectedItem);
             state.previousTimelineIds = nextIds;
+        }
+
+        async function loadDecisionTraceDetail(traceId) {
+            const traceText = String(traceId || "");
+            if (!traceText) {
+                state.selectedTraceDetail = null;
+                return;
+            }
+            try {
+                const payload = await fetchJson(`/api/live/strategy/traces/${encodeURIComponent(traceText)}`);
+                state.selectedTraceDetail = payload?.trace || null;
+            } catch (error) {
+                state.selectedTraceDetail = { error: error.message };
+            }
+        }
+
+        function renderDecisionTraceDetail(trace) {
+            const container = qs("#decisionTraceDetail");
+            if (!container) return;
+            if (!trace) {
+                container.textContent = "Select a trace row to inspect full gate order and candidate outcomes.";
+                return;
+            }
+            if (trace.error) {
+                container.innerHTML = `<div class="muted">Trace detail unavailable: ${safe(trace.error)}</div>`;
+                return;
+            }
+            const flow = Array.isArray(trace.flow_gates) ? trace.flow_gates : [];
+            const candidates = Array.isArray(trace.candidates) ? trace.candidates : [];
+            const selected = candidates.find((item) => item && item.selected) || null;
+            const flowHtml = flow.length
+                ? flow.map((gate) => `<div class="metric-pill">${escapeHtml(gate.gate_id || "gate")} ${escapeHtml(gate.status || "--")}${gate.reason_code ? ` â€¢ ${escapeHtml(gate.reason_code)}` : ""}</div>`).join("")
+                : `<span class="metric-pill">no-flow-gates</span>`;
+            const candidateHtml = candidates.length
+                ? candidates.map((candidate) => {
+                    const ordered = Array.isArray(candidate.ordered_gates) ? candidate.ordered_gates : [];
+                    return `
+                        <div class="playbook-item">
+                            <div class="timeline-head">
+                                <div>
+                                    <strong>${safe(candidate.strategy_name || candidate.candidate_type || "candidate")}</strong>
+                                    <div class="muted" style="margin-top:4px;">${safe(candidate.direction || "--")} â€¢ rank ${safe(candidate.rank || "--")} â€¢ ${safe(candidate.terminal_status || "--")}</div>
+                                </div>
+                                <span class="tag ${candidate.selected ? "pass" : "rule"}">${candidate.selected ? "Selected" : "Observed"}</span>
+                            </div>
+                            <div class="metric-pills">${metricsPills(candidate.metrics)}</div>
+                            <div class="muted" style="margin-top:8px;">${safe(candidate.terminal_gate_id || "--")} ${candidate.terminal_reason_code ? `â€¢ ${safe(candidate.terminal_reason_code)}` : ""}</div>
+                            <div class="metric-pills" style="margin-top:8px;">${ordered.length ? ordered.map((gate) => `<span class="metric-pill">${escapeHtml(gate.gate_id || "gate")}=${escapeHtml(gate.status || "--")}</span>`).join("") : `<span class="metric-pill">no-candidate-gates</span>`}</div>
+                        </div>
+                    `;
+                }).join("")
+                : `<div class="empty">No candidates were persisted for this evaluated minute.</div>`;
+            container.innerHTML = `
+                <div class="label">Trace</div>
+                <div style="margin-top:8px; font-weight:700;">${safe(trace.final_outcome)} | ${safe(shortTs(trace.timestamp))} | ${safe(trace.engine_mode)}</div>
+                <div class="muted" style="margin-top:8px;">Primary blocker: ${safe(trace.primary_blocker_gate || "--")} | Selected: ${safe(selected?.strategy_name || "--")}</div>
+                <div class="metric-pills" style="margin-top:10px;">${flowHtml}</div>
+                <div style="margin-top:12px;" class="playbook-list">${candidateHtml}</div>
+            `;
+        }
+
+        function renderDecisionTraceList() {
+            const table = qs("#decisionTraceTable");
+            if (!table) return;
+            const rows = Array.isArray(state.traceRows) ? state.traceRows : [];
+            qs("#traceSummaryChip").textContent = rows.length ? `${rows.length} trace${rows.length === 1 ? "" : "s"}` : "No traces";
+            if (!rows.length) {
+                table.innerHTML = `<div class="empty">No decision traces available for the current session window.</div>`;
+                renderDecisionTraceDetail(null);
+                return;
+            }
+            const prevIds = state.previousTraceIds;
+            const nextIds = new Set();
+            table.innerHTML = rows.map((row) => {
+                const rowId = String(row.trace_id || `${row.timestamp || ""}:${row.snapshot_id || ""}`);
+                nextIds.add(rowId);
+                const selected = rowId === state.selectedTraceId;
+                const changed = !prevIds.has(rowId);
+                const tone = toneForState(row.primary_blocker_gate || row.final_outcome);
+                return `
+                    <article class="timeline-card ${tone === "state-critical" ? "critical" : (tone === "state-warn" ? "warn" : "ok")}${selected ? " selected" : ""}${changed ? " changed" : ""}" data-trace-id="${escapeHtml(rowId)}">
+                        <div class="timeline-head">
+                            <div>
+                                <strong>${safe(row.final_outcome || "trace")}</strong>
+                                <div class="muted" style="margin-top:4px;">${safe(shortTs(row.timestamp))} â€¢ ${safe(row.engine_mode || "--")} â€¢ ${safe(row.evaluation_type || "--")}</div>
+                            </div>
+                            <span class="tag ${String(row.final_outcome || "").toLowerCase() === "entry_taken" ? "entry" : (String(row.final_outcome || "").toLowerCase() === "exit_taken" ? "exit" : "rule")}">${safe(row.primary_blocker_gate || row.selected_strategy_name || "--")}</span>
+                        </div>
+                        <div style="font-size:14px; line-height:1.55;">selected ${safe(row.selected_strategy_name || "--")} â€¢ candidates ${safe(row.candidate_count)} â€¢ blocked ${safe(row.blocked_candidate_count)}</div>
+                        <div class="metric-pills">${metricsPills(row.summary_metrics)}</div>
+                    </article>
+                `;
+            }).join("");
+            if (!state.selectedTraceId || !rows.some((row) => String(row.trace_id || `${row.timestamp || ""}:${row.snapshot_id || ""}`) === state.selectedTraceId)) {
+                state.selectedTraceId = String(rows[0].trace_id || `${rows[0].timestamp || ""}:${rows[0].snapshot_id || ""}`);
+            }
+            table.querySelectorAll("[data-trace-id]").forEach((row) => {
+                row.addEventListener("click", async () => {
+                    state.selectedTraceId = String(row.getAttribute("data-trace-id") || "");
+                    await loadDecisionTraceDetail(state.selectedTraceId);
+                    renderDecisionTraceList();
+                });
+            });
+            renderDecisionTraceDetail(state.selectedTraceDetail);
+            state.previousTraceIds = nextIds;
+        }
+
+        async function refreshDecisionTrace() {
+            const available = state.session?.decision_trace_available !== false;
+            if (!available) {
+                state.traceRows = [];
+                state.selectedTraceDetail = null;
+                renderDecisionTraceList();
+                return;
+            }
+            const params = new URLSearchParams();
+            params.set("limit", String(state.timelineLimit));
+            if (state.traceOnlyBlocked) params.set("only_blocked", "1");
+            const date = state.session?.session?.date_ist;
+            if (date) params.set("date", String(date));
+            const payload = await fetchJson(`/api/live/strategy/traces?${params.toString()}`);
+            state.traceRows = Array.isArray(payload?.rows) ? payload.rows : [];
+            if (!state.traceRows.length) {
+                state.selectedTraceId = null;
+                state.selectedTraceDetail = null;
+                renderDecisionTraceList();
+                return;
+            }
+            if (!state.selectedTraceId || !state.traceRows.some((row) => String(row.trace_id || "") === state.selectedTraceId)) {
+                state.selectedTraceId = String(state.traceRows[0].trace_id || "");
+            }
+            await loadDecisionTraceDetail(state.selectedTraceId);
+            renderDecisionTraceList();
         }
 
         function renderActiveAlerts(session) {
@@ -1744,6 +1905,7 @@
                 renderLatestClosedTrade(data.latest_closed_trade);
                 renderDecisionFunnel(data);
                 renderReasonPlaybook(data);
+                await refreshDecisionTrace();
 
                 const fresh = data.session?.data_freshness || {};
                 const stale = [fresh.votes_fresh, fresh.signals_fresh, fresh.positions_fresh].some((item) => item === false);
@@ -1878,6 +2040,20 @@
         qs("#deterministicToggle")?.addEventListener("click", () => {
             const isCollapsed = qs("#deterministicPanelBody")?.classList.contains("collapsed");
             setPanelCollapsed("deterministic", !isCollapsed);
+        });
+        qs("#decisionTraceToggle")?.addEventListener("click", () => {
+            const isCollapsed = qs("#decisionTracePanelBody")?.classList.contains("collapsed");
+            setPanelCollapsed("decisionTrace", !isCollapsed);
+        });
+        qsa("[data-trace-filter]").forEach((button) => {
+            button.addEventListener("click", async () => {
+                const mode = String(button.getAttribute("data-trace-filter") || "all");
+                state.traceOnlyBlocked = mode === "blocked";
+                qsa("[data-trace-filter]").forEach((item) => {
+                    item.classList.toggle("active", item === button);
+                });
+                await refreshDecisionTrace();
+            });
         });
 
         const initialParams = new URLSearchParams(window.location.search);

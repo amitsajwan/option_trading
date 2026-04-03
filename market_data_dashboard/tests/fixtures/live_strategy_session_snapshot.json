@@ -112,5 +112,31 @@
     "degraded_mode": false,
     "debug_view": false
   },
+  "decision_trace_summary": {
+    "sampled_traces": 1,
+    "blocked_traces": 1,
+    "entry_traces": 0,
+    "exit_traces": 0,
+    "top_blockers": [
+      {
+        "gate": "policy_checks",
+        "count": 1
+      }
+    ],
+    "latest_outcome": "blocked"
+  },
+  "latest_trace_digest": {
+    "trace_id": "trace-1",
+    "timestamp": "2026-03-02T12:47:00+05:30",
+    "final_outcome": "blocked",
+    "primary_blocker_gate": "policy_checks",
+    "selected_strategy_name": null,
+    "candidate_count": 2,
+    "blocked_candidate_count": 2,
+    "summary_metrics": {
+      "candidate_count": 2
+    }
+  },
+  "decision_trace_available": true,
   "chart_markers": []
 }

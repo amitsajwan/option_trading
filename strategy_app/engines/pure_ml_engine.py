@@ -17,6 +17,14 @@ from contracts_app import isoformat_ist
 
 from ..contracts import ExitReason, PositionContext, SignalType, SnapshotPayload, StrategyEngine, TradeSignal
 from ..logging.signal_logger import SignalLogger
+from ..logging.decision_trace import (
+    DecisionTraceBuilder,
+    compact_metrics,
+    position_state_payload,
+    regime_context_payload,
+    risk_state_payload,
+    warmup_context_payload,
+)
 from ..position.tracker import PositionTracker
 from ..risk.manager import RiskManager
 from .runtime_artifacts import RuntimeArtifactStore, build_runtime_state_payload
@@ -42,6 +50,7 @@ class PureMLEngine(StrategyEngine):
         max_hold_bars: int = 15,
         min_oi: float = 50000.0,
         min_volume: float = 15000.0,
+        min_edge: Optional[float] = None,
         stop_loss_pct: float = 0.05,
         target_pct: float = 0.20,
         signal_logger: Optional[SignalLogger] = None,
@@ -68,6 +77,11 @@ class PureMLEngine(StrategyEngine):
         self._min_volume = max(0.0, float(min_volume))
         self._stop_loss_pct = max(0.0, float(stop_loss_pct))
         self._target_pct = max(0.0, float(target_pct))
+        if min_edge is not None:
+            logger.warning(
+                "pure ml staged engine ignores constructor min_edge=%.4f; using staged runtime policy selected_min_edge",
+                float(min_edge),
+            )
         self._startup_warmup_minutes = max(0.0, float(os.getenv("STRATEGY_STARTUP_WARMUP_MINUTES", "0") or 0.0))
         self._startup_warmup_events = max(0, int(os.getenv("STRATEGY_STARTUP_WARMUP_EVENTS", "0") or 0))
         self._session_start_monotonic: Optional[float] = None
@@ -259,6 +273,16 @@ class PureMLEngine(StrategyEngine):
                         "confidence": float(system_exit.confidence or 0.0),
                     }
                 )
+                self._log.log_decision_trace(
+                    self._build_position_trace(
+                        snap=snap,
+                        position=position,
+                        evaluation_type="exit",
+                        final_outcome="exit_taken",
+                        exit_signal=system_exit,
+                        primary_blocker_gate="position_exit",
+                    )
+                )
                 return system_exit
             refreshed = self._tracker.current_position
             if refreshed is not None:
@@ -288,6 +312,15 @@ class PureMLEngine(StrategyEngine):
                         "pnl_pct": refreshed.pnl_pct,
                     }
                 )
+                self._log.log_decision_trace(
+                    self._build_position_trace(
+                        snap=snap,
+                        position=refreshed,
+                        evaluation_type="manage",
+                        final_outcome="manage_only",
+                        primary_blocker_gate=None,
+                    )
+                )
             return None
 
         decision = predict_staged(
@@ -298,6 +331,8 @@ class PureMLEngine(StrategyEngine):
             policy=self._staged_runtime_policy,
         )
         self._last_decision = self._staged_decision_summary(decision)
+        trace_builder = self._build_entry_trace_builder(snap=snap)
+        self._populate_staged_candidate_trace(trace_builder, decision)
         if decision.action == "HOLD":
             self._log_hold(str(decision.reason), snap, staged_decision=decision)
             self._last_event = {
@@ -307,6 +342,14 @@ class PureMLEngine(StrategyEngine):
             }
             self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
             self._write_runtime_state()
+            blocker_gate = self._ml_blocker_gate(str(decision.reason))
+            self._log.log_decision_trace(
+                trace_builder.finalize(
+                    final_outcome=("blocked" if blocker_gate not in {"stage1_threshold", "stage2_direction", "stage3_recipe"} else "hold"),
+                    primary_blocker_gate=blocker_gate,
+                    summary_metrics=self._staged_decision_metrics(decision),
+                )
+            )
             return None
 
         direction = "CE" if decision.action == "BUY_CE" else "PE"
@@ -320,6 +363,13 @@ class PureMLEngine(StrategyEngine):
             }
             self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
             self._write_runtime_state()
+            self._log.log_decision_trace(
+                trace_builder.finalize(
+                    final_outcome="blocked",
+                    primary_blocker_gate="strike_selection",
+                    summary_metrics=self._staged_decision_metrics(decision),
+                )
+            )
             return None
         premium = snap.option_ltp(direction, int(strike))
         if premium is None or premium <= 0:
@@ -331,11 +381,28 @@ class PureMLEngine(StrategyEngine):
             }
             self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
             self._write_runtime_state()
+            self._log.log_decision_trace(
+                trace_builder.finalize(
+                    final_outcome="blocked",
+                    primary_blocker_gate="option_premium",
+                    summary_metrics=self._staged_decision_metrics(decision),
+                )
+            )
             return None
 
         stop_loss_pct = float(decision.stop_loss_pct or self._stop_loss_pct)
         target_pct = float(decision.target_pct or self._target_pct)
         max_hold_bars = int(decision.horizon_minutes or self._max_hold_bars)
+        trace_builder.add_flow_gate(
+            "lot_sizing",
+            gate_group="execution",
+            status="pass",
+            metrics={
+                "stop_loss_pct": stop_loss_pct,
+                "target_pct": target_pct,
+                "max_hold_bars": max_hold_bars,
+            },
+        )
         signal = TradeSignal(
             signal_id=str(uuid.uuid4())[:8],
             timestamp=snap.timestamp_or_now,
@@ -405,6 +472,17 @@ class PureMLEngine(StrategyEngine):
                 "recipe_prob": decision.recipe_prob,
                 "recipe_margin": decision.recipe_margin,
             }
+        )
+        self._log.log_decision_trace(
+            trace_builder.finalize(
+                final_outcome="entry_taken",
+                primary_blocker_gate=None,
+                summary_metrics={
+                    **self._staged_decision_metrics(decision),
+                    "entry_premium": premium,
+                    "max_lots": signal.max_lots,
+                },
+            )
         )
         return signal
 
@@ -589,6 +667,184 @@ class PureMLEngine(StrategyEngine):
         )
         self._write_runtime_state()
         logger.debug("ml_pure hold reason=%s snapshot_id=%s", reason, snap.snapshot_id)
+
+    def _build_entry_trace_builder(self, *, snap: SnapshotAccessor) -> DecisionTraceBuilder:
+        regime_signal = self._regime.classify(snap)
+        builder = DecisionTraceBuilder(
+            snapshot_id=snap.snapshot_id,
+            timestamp=snap.timestamp_or_now,
+            engine_mode=self._engine_mode,
+            decision_mode="ml_staged",
+            evaluation_type="entry",
+            run_id=self._model_run_id or self._run_id,
+        )
+        warmup_blocked, warmup_reason = self._entry_warmup_status()
+        builder.set_context(
+            position_state=position_state_payload(None),
+            risk_state=risk_state_payload(self._risk),
+            regime_context=regime_context_payload(regime_signal),
+            warmup_context=warmup_context_payload(
+                blocked=warmup_blocked,
+                reason=warmup_reason,
+                state=self._warmup_state(),
+            ),
+        )
+        return builder
+
+    def _populate_staged_candidate_trace(
+        self,
+        builder: DecisionTraceBuilder,
+        decision: StagedRuntimeDecision,
+    ) -> None:
+        candidate = builder.add_candidate(
+            strategy_name="ML_PURE_STAGED",
+            candidate_type="staged_runtime",
+            direction=("CE" if decision.action == "BUY_CE" else ("PE" if decision.action == "BUY_PE" else None)),
+            confidence=max(decision.ce_prob, decision.pe_prob, decision.entry_prob, 0.0),
+            rank=1,
+            metrics=self._staged_decision_metrics(decision),
+        )
+        blocker_gate = self._ml_blocker_gate(str(decision.reason))
+        flow = self._ml_trace_flow(str(decision.reason), decision)
+        for gate in flow:
+            builder.add_candidate_gate(candidate, **gate)
+            builder.add_flow_gate(**gate)
+        builder.finalize_candidate(
+            candidate,
+            terminal_status=("passed" if decision.action != "HOLD" else ("blocked" if blocker_gate not in {"stage1_threshold", "stage2_direction", "stage3_recipe"} else "skipped")),
+            terminal_gate_id=(None if decision.action != "HOLD" else blocker_gate),
+            terminal_reason_code=(None if decision.action != "HOLD" else str(decision.reason)),
+            selected=(decision.action != "HOLD"),
+        )
+
+    def _ml_trace_flow(self, reason: str, decision: StagedRuntimeDecision) -> list[dict[str, Any]]:
+        blocker_gate = self._ml_blocker_gate(reason)
+        metrics = self._staged_decision_metrics(decision)
+        flow: list[dict[str, Any]] = []
+        ordered = [
+            ("prefilter", "prefilter"),
+            ("stage1_threshold", "stage1"),
+            ("stage2_direction", "stage2"),
+            ("strike_selection", "execution"),
+            ("liquidity_gate", "execution"),
+            ("stage3_recipe", "stage3"),
+            ("option_premium", "execution"),
+            ("lot_sizing", "execution"),
+        ]
+        for gate_id, gate_group in ordered:
+            if blocker_gate == gate_id:
+                flow.append(
+                    {
+                        "gate_id": gate_id,
+                        "gate_group": gate_group,
+                        "status": "blocked",
+                        "reason_code": reason,
+                        "message": reason,
+                        "metrics": metrics,
+                    }
+                )
+                break
+            flow.append(
+                {
+                    "gate_id": gate_id,
+                    "gate_group": gate_group,
+                    "status": "pass",
+                    "reason_code": None,
+                    "message": None,
+                    "metrics": (metrics if gate_id in {"stage1_threshold", "stage2_direction", "stage3_recipe"} else None),
+                }
+            )
+        return flow
+
+    def _ml_blocker_gate(self, reason: str) -> str:
+        code = str(reason or "").strip().lower()
+        if code in {
+            "risk_halt",
+            "risk_pause",
+            "entry_warmup_block",
+            "feature_stale",
+            "feature_incomplete",
+            "stage2_feature_incomplete",
+            "stage3_feature_incomplete",
+            "regime_sideways",
+            "regime_avoid",
+            "regime_expiry",
+            "regime_low_confidence",
+            "invalid_entry_phase",
+        }:
+            return "prefilter"
+        if code == "entry_below_threshold":
+            return "stage1_threshold"
+        if code in {"direction_below_threshold", "direction_low_edge_conflict"}:
+            return "stage2_direction"
+        if code == "missing_atm_strike":
+            return "strike_selection"
+        if code == "liquidity_gate_block":
+            return "liquidity_gate"
+        if code in {"recipe_below_threshold", "recipe_low_margin", "recipe_scores_missing"}:
+            return "stage3_recipe"
+        if code == "missing_option_premium":
+            return "option_premium"
+        return "prefilter"
+
+    def _build_position_trace(
+        self,
+        *,
+        snap: SnapshotAccessor,
+        position: PositionContext,
+        evaluation_type: str,
+        final_outcome: str,
+        primary_blocker_gate: Optional[str],
+        exit_signal: Optional[TradeSignal] = None,
+    ) -> dict[str, Any]:
+        builder = DecisionTraceBuilder(
+            snapshot_id=snap.snapshot_id,
+            timestamp=snap.timestamp_or_now,
+            engine_mode=self._engine_mode,
+            decision_mode="ml_staged",
+            evaluation_type=evaluation_type,
+            run_id=self._model_run_id or self._run_id,
+        )
+        builder.set_context(
+            position_state=position_state_payload(position),
+            risk_state=risk_state_payload(self._risk),
+            regime_context=regime_context_payload(self._regime.classify(snap)),
+            warmup_context=warmup_context_payload(blocked=False, reason=None, state=self._warmup_state()),
+        )
+        candidate = builder.add_candidate(
+            strategy_name=str(position.entry_strategy or "ML_PURE_STAGED"),
+            candidate_type="position",
+            direction=position.direction,
+            confidence=(exit_signal.confidence if exit_signal is not None else None),
+            rank=1,
+            metrics=compact_metrics(position.decision_metrics if isinstance(position.decision_metrics, dict) else {}),
+        )
+        gate_reason = exit_signal.exit_reason.value.lower() if exit_signal is not None and exit_signal.exit_reason else None
+        builder.add_candidate_gate(
+            candidate,
+            "position_tracker",
+            gate_group="position",
+            status=("pass" if final_outcome in {"manage_only", "exit_taken"} else "blocked"),
+            reason_code=gate_reason,
+            message=(str(exit_signal.reason or "").strip() if exit_signal is not None else None),
+            metrics={"bars_held": position.bars_held, "pnl_pct": position.pnl_pct},
+        )
+        builder.finalize_candidate(
+            candidate,
+            terminal_status=("passed" if final_outcome in {"manage_only", "exit_taken"} else "blocked"),
+            terminal_gate_id=primary_blocker_gate,
+            terminal_reason_code=gate_reason,
+            selected=(final_outcome == "exit_taken"),
+        )
+        return builder.finalize(
+            final_outcome=final_outcome,
+            primary_blocker_gate=primary_blocker_gate,
+            summary_metrics={
+                "bars_held": position.bars_held,
+                "pnl_pct": position.pnl_pct,
+                "current_premium": position.current_premium,
+            },
+        )
 
     @staticmethod
     def _merge_feature_rows(base: dict[str, object], computed: dict[str, object]) -> dict[str, object]:

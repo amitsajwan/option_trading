@@ -18,6 +18,7 @@ from contracts_app import (
     find_matching_python_processes,
     isoformat_ist,
     redis_connection_kwargs,
+    strategy_decision_trace_topic,
     strategy_position_topic,
     strategy_vote_topic,
     trade_signal_topic,
@@ -137,6 +138,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--vote-topic", default=None)
     parser.add_argument("--signal-topic", default=None)
     parser.add_argument("--position-topic", default=None)
+    parser.add_argument("--trace-topic", default=None)
     parser.add_argument("--health-log-interval-sec", type=float, default=30.0)
     parser.add_argument("--foreground", action="store_true")
     parser.add_argument("--run-dir", default=".run/persistence_app_strategy")
@@ -172,6 +174,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         str(args.vote_topic or strategy_vote_topic()).strip() or strategy_vote_topic(),
         str(args.signal_topic or trade_signal_topic()).strip() or trade_signal_topic(),
         str(args.position_topic or strategy_position_topic()).strip() or strategy_position_topic(),
+        str(args.trace_topic or strategy_decision_trace_topic()).strip() or strategy_decision_trace_topic(),
     ]
     return run_loop(topics=topics, health_log_interval_sec=max(0.0, float(args.health_log_interval_sec)))
 

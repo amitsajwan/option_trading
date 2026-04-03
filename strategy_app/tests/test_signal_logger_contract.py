@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from contracts_app import strategy_position_topic
+from contracts_app import strategy_decision_trace_topic, strategy_position_topic
 from strategy_app.contracts import Direction, ExitReason, PositionContext, SignalType, StrategyVote, TradeSignal
 from strategy_app.engines.snapshot_accessor import SnapshotAccessor
 from strategy_app.logging.signal_logger import SignalLogger
@@ -212,6 +212,45 @@ class SignalLoggerContractTests(unittest.TestCase):
             self.assertEqual(position_events[0]["metadata"]["snapshot_id"], "snap-entry-2")
             self.assertEqual(position_events[1]["metadata"]["snapshot_id"], "snap-manage-2")
             self.assertEqual(position_events[2]["metadata"]["snapshot_id"], "snap-exit-2")
+
+    def test_logs_decision_trace_to_jsonl_and_pubsub(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            logger = SignalLogger(root)
+            publisher = _RecordingPublisher()
+            logger._publisher = publisher  # type: ignore[attr-defined]
+            logger.set_run_context("trace-run-1", {"engine_mode": "deterministic"})
+
+            trace = {
+                "trace_id": "trace-1",
+                "snapshot_id": "snap-trace-1",
+                "timestamp": datetime(2026, 3, 7, 9, 35, tzinfo=timezone.utc),
+                "trade_date_ist": "2026-03-07",
+                "run_id": "trace-run-1",
+                "engine_mode": "deterministic",
+                "decision_mode": "rule_vote",
+                "evaluation_type": "entry",
+                "final_outcome": "blocked",
+                "primary_blocker_gate": "policy_checks",
+                "selected_candidate_id": None,
+                "position_state": {"has_position": False},
+                "risk_state": {"is_halted": False},
+                "regime_context": {"regime": "TRENDING"},
+                "warmup_context": {"blocked": False},
+                "summary_metrics": {"candidate_count": 2},
+                "flow_gates": [],
+                "candidates": [],
+            }
+
+            logger.log_decision_trace(trace)
+
+            row = json.loads((root / "decision_traces.jsonl").read_text(encoding="utf-8").strip().splitlines()[0])
+            self.assertEqual(row["trace_id"], "trace-1")
+            self.assertEqual(row["engine_mode"], "deterministic")
+            self.assertEqual(row["primary_blocker_gate"], "policy_checks")
+            trace_events = [event for topic, event in publisher.events if topic == strategy_decision_trace_topic()]
+            self.assertEqual(len(trace_events), 1)
+            self.assertEqual(trace_events[0]["trace"]["trace_id"], "trace-1")
 
 
 if __name__ == "__main__":

@@ -262,6 +262,11 @@ class PureMLEngineTests(unittest.TestCase):
             self.assertTrue(state["payload"]["position"]["has_position"])
             self.assertGreaterEqual(metrics["line_count"], 3)
             self.assertEqual(metrics["latest"]["event"], "entry")
+            trace_lines = (root / "decision_traces.jsonl").read_text(encoding="utf-8").strip().splitlines()
+            self.assertGreaterEqual(len(trace_lines), 2)
+            latest_trace = json.loads(trace_lines[-1])
+            self.assertEqual(latest_trace["final_outcome"], "entry_taken")
+            self.assertEqual(latest_trace["engine_mode"], "ml_pure")
 
     def test_session_start_resets_runtime_counters(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
