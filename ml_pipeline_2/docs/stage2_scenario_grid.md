@@ -60,6 +60,14 @@ The grid summary now includes:
 - scenario-level run ranking
 - per-run Stage 2 robustness probe output for the top candidates
 - the configured probe settings and evaluated run ids
+- orchestration integrity and grid status path
+
+The execution layer now also writes authoritative status artifacts:
+
+- `run_status.json` inside each lane root
+- `grid_status.json` at the grid root
+
+These are the canonical lifecycle files for operator tooling and release safety.
 
 ## How To Reuse For Other Data Or Time Periods
 
@@ -84,3 +92,54 @@ This keeps the scenario program separate from the underlying-specific training d
    - robustness probe gate-pass rate
 4. Only then take one winner into a full staged run.
 5. Keep production blocked until a full staged candidate clears gates.
+
+## Run Safety And Restart Rules
+
+The scenario grid now treats run-root reuse as an explicit operator decision.
+
+- Default mode is `fail_if_exists`.
+  - If the grid root already contains artifacts, the command fails immediately.
+  - This is the safe default for long-running research jobs.
+- `resume` is only for a cleanly completed root.
+  - If `grid_summary.json` already exists, the command returns that summary instead of rerunning.
+  - If a lane root contains partial artifacts without `summary.json`, resume is rejected.
+- `restart` archives the old root before starting again.
+  - The previous root is renamed with an `.abandoned_<timestamp>` suffix.
+  - Use this when a prior run is known to be contaminated or interrupted.
+
+Locks are also enforced:
+
+- one grid lock per grid root
+- one run lock per lane root
+
+This prevents duplicate launches against the same directories and makes operator intent explicit.
+
+Integrity rules:
+
+- lane summaries now carry `execution_integrity`
+- grid summaries now carry `orchestration_integrity`
+- release is blocked if run integrity is not `clean`
+
+### Recommended Commands
+
+Fresh run:
+
+```bash
+python -m ml_pipeline_2.run_staged_grid \
+  --config ml_pipeline_2/configs/research/staged_grid.stage2_scenarios_v1.json \
+  --run-output-root ml_pipeline_2/artifacts/training_launches/stage2_scenarios_v1/run \
+  --run-reuse-mode fail_if_exists \
+  --model-group banknifty_futures/h15_tp_auto \
+  --profile-id openfe_v9_dual
+```
+
+Intentional restart after a contaminated run:
+
+```bash
+python -m ml_pipeline_2.run_staged_grid \
+  --config ml_pipeline_2/configs/research/staged_grid.stage2_scenarios_v1.json \
+  --run-output-root ml_pipeline_2/artifacts/training_launches/stage2_scenarios_v1/run \
+  --run-reuse-mode restart \
+  --model-group banknifty_futures/h15_tp_auto \
+  --profile-id openfe_v9_dual
+```

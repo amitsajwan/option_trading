@@ -13,6 +13,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run ml_pipeline_2 research manifests.")
     parser.add_argument("--config", required=True, help="Path to manifest JSON")
     parser.add_argument("--run-output-root", help="Optional existing or explicit run directory to reuse instead of creating a timestamped directory")
+    parser.add_argument(
+        "--run-reuse-mode",
+        choices=["fail_if_exists", "resume", "restart"],
+        default="fail_if_exists",
+        help="How to treat an explicit run-output-root when it already has artifacts",
+    )
     parser.add_argument("--validate-only", action="store_true", help="Validate the manifest and exit")
     parser.add_argument("--print-resolved-config", action="store_true", help="Print the resolved config JSON and exit")
     return parser
@@ -32,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = run_research(
         resolved,
         run_output_root=(Path(args.run_output_root).resolve() if args.run_output_root else None),
+        run_reuse_mode=str(args.run_reuse_mode),
     )
     print(json.dumps(summary, indent=2, default=str))
     return 0

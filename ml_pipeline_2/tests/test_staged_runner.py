@@ -8,6 +8,8 @@ import pandas as pd
 import pytest
 
 from ml_pipeline_2.contracts.manifests import load_and_resolve_manifest
+from ml_pipeline_2.experiment_control.coordination import CoordinationError
+from ml_pipeline_2.experiment_control import runner as runner_module
 from ml_pipeline_2.experiment_control.runner import run_manifest
 from ml_pipeline_2.model_search import search as search_module
 from ml_pipeline_2.staged import pipeline as staged_pipeline
@@ -495,6 +497,77 @@ def test_manifest_accepts_stage2_label_filter(tmp_path: Path) -> None:
         "require_positive_winner_after_cost": True,
         "max_opposing_return_after_cost": 0.0,
     }
+
+
+def test_staged_runner_fail_if_exists_blocks_reuse_of_existing_run_root(tmp_path: Path) -> None:
+    resolved = {
+        "experiment_kind": "staged_dual_recipe_v1",
+        "outputs": {
+            "artifacts_root": str(tmp_path / "artifacts"),
+            "run_name": "fake_runner",
+        },
+        "manifest_hash": "runner-hash",
+    }
+    run_root = tmp_path / "artifacts" / "staged_reuse_blocked_run"
+
+    original_validator = runner_module.validate_runtime_environment
+    original_runner_factory = runner_module._scenario_runner
+
+    runner_module.validate_runtime_environment = lambda _resolved: {}
+    runner_module._scenario_runner = lambda _kind: (
+        lambda ctx: (
+            ctx.write_json("summary.json", {"status": "completed", "run_id": str(ctx.output_root.name)}),
+            {"status": "completed", "run_id": str(ctx.output_root.name)},
+        )[1]
+    )
+    try:
+        summary = runner_module.run_research(resolved, run_output_root=run_root)
+        assert summary["status"] == "completed"
+        with pytest.raises(CoordinationError, match="already exists and is non-empty"):
+            runner_module.run_research(resolved, run_output_root=run_root)
+    finally:
+        runner_module.validate_runtime_environment = original_validator
+        runner_module._scenario_runner = original_runner_factory
+
+
+def test_staged_runner_resume_returns_existing_summary_without_reentry(tmp_path: Path) -> None:
+    resolved = {
+        "experiment_kind": "staged_dual_recipe_v1",
+        "outputs": {
+            "artifacts_root": str(tmp_path / "artifacts"),
+            "run_name": "fake_runner_resume",
+        },
+        "manifest_hash": "runner-hash",
+    }
+    run_root = Path(resolved["outputs"]["artifacts_root"]) / "staged_reuse_blocked_run"
+    run_root = Path(resolved["outputs"]["artifacts_root"]) / "staged_resume_run"
+
+    original_validator = runner_module.validate_runtime_environment
+    original_runner_factory = runner_module._scenario_runner
+    runner_module.validate_runtime_environment = lambda _resolved: {}
+    runner_module._scenario_runner = lambda _kind: (
+        lambda ctx: (
+            ctx.write_json("summary.json", {"status": "completed", "run_id": str(ctx.output_root.name)}),
+            {"status": "completed", "run_id": str(ctx.output_root.name)},
+        )[1]
+    )
+    try:
+        original = runner_module.run_research(resolved, run_output_root=run_root)
+        resumed = runner_module.run_research(
+            resolved,
+            run_output_root=run_root,
+            run_reuse_mode="resume",
+        )
+    finally:
+        runner_module.validate_runtime_environment = original_validator
+        runner_module._scenario_runner = original_runner_factory
+
+    assert resumed["run_id"] == original["run_id"]
+    state_lines = (run_root / "state.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert sum('"event": "job_start"' in line for line in state_lines) == 1
+    run_status = json.loads((run_root / "run_status.json").read_text(encoding="utf-8"))
+    assert run_status["status"] == "completed"
+    assert run_status["integrity"] == "clean"
 
 
 def test_staged_runner_validate_only_fails_fast_when_stage_has_no_runnable_models(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

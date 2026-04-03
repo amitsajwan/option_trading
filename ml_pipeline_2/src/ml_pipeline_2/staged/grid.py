@@ -11,6 +11,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..contracts.manifests import STAGED_GRID_KIND, manifest_hash
+from ..experiment_control.coordination import (
+    CoordinationError,
+    RunReuseMode,
+    acquire_directory_lock,
+    prepare_output_root,
+)
+from ..experiment_control.registry import finalize_grid_status, initialize_grid_status
 from ..experiment_control.runner import run_research
 from ..experiment_control.state import utc_now
 from .publish import release_staged_run
@@ -35,7 +42,7 @@ def _load_json(path: Path) -> Dict[str, Any]:
 
 
 def _run_lane(resolved_config: Dict[str, Any], run_output_root: Path) -> Dict[str, Any]:
-    return run_research(resolved_config, run_output_root=run_output_root)
+    return run_research(resolved_config, run_output_root=run_output_root, run_reuse_mode="fail_if_exists")
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -118,6 +125,38 @@ def _join_model_group(base_model_group: str, suffix: str) -> str:
     return f"{str(base_model_group).strip()}{str(suffix or '').strip()}"
 
 
+def _existing_lane_row(
+    *,
+    sequence: int,
+    run_spec: Dict[str, Any],
+    manifest_path: Path,
+    run_output_root: Path,
+    model_group: str,
+    profile_id: str,
+    applied_overrides: Dict[str, Any],
+    inherited_from_run_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    summary_path = run_output_root / "summary.json"
+    if summary_path.exists():
+        return _result_row(
+            sequence=sequence,
+            run_spec=run_spec,
+            resolved_manifest_path=manifest_path,
+            run_output_root=run_output_root,
+            model_group=model_group,
+            profile_id=profile_id,
+            summary=_load_json(summary_path),
+            applied_overrides=applied_overrides,
+            inherited_from_run_id=inherited_from_run_id,
+        )
+    if run_output_root.exists() and any(run_output_root.iterdir()):
+        raise CoordinationError(
+            f"lane root contains partial artifacts without summary.json: {run_output_root}. "
+            "Use restart or a fresh grid output root."
+        )
+    return None
+
+
 def _result_row(
     *,
     sequence: int,
@@ -145,6 +184,7 @@ def _result_row(
         "summary_path": str((run_output_root / "summary.json").resolve()),
         "release_status": _run_status_from_summary(summary),
         "completion_mode": str(summary.get("completion_mode") or ""),
+        "execution_integrity": str(summary.get("execution_integrity") or "unknown"),
         "publishable": bool(publish_assessment.get("publishable", False)),
         "publish_decision": str(publish_assessment.get("decision") or "HOLD"),
         "blocking_reasons": blocking_reasons,
@@ -188,6 +228,7 @@ def _failed_result_row(
         ),
         "release_status": "failed",
         "completion_mode": "failed",
+        "execution_integrity": "contaminated",
         "publishable": False,
         "publish_decision": "HOLD",
         "blocking_reasons": [reason],
@@ -343,6 +384,7 @@ def run_staged_grid(
     model_group: str,
     profile_id: str,
     run_output_root: Optional[Path] = None,
+    run_reuse_mode: RunReuseMode = "fail_if_exists",
     publish_winner: bool = False,
     model_bucket_url: Optional[str] = None,
     root: Optional[Path] = None,
@@ -359,11 +401,23 @@ def run_staged_grid(
     if not base_raw_manifest:
         raise ValueError("grid_resolved is missing base_raw_manifest")
 
-    grid_root = (
+    requested_grid_root = (
         Path(run_output_root).resolve()
         if run_output_root is not None
         else Path(grid_resolved["outputs"]["artifacts_root"]) / f"{grid_resolved['outputs']['run_name']}_{_timestamp_suffix()}"
     )
+    prep = prepare_output_root(
+        requested_grid_root,
+        reuse_mode=run_reuse_mode,
+        summary_filename="grid_summary.json",
+        entity_name="staged grid root",
+        lock_filename=".grid.lock",
+    )
+    existing_summary = prep.get("existing_summary")
+    if isinstance(existing_summary, dict):
+        return existing_summary
+    grid_root = Path(prep["output_root"]).resolve()
+    archived_root = str(prep.get("archived_root") or "") or None
     manifests_root = grid_root / "manifests"
     runs_root = grid_root / "runs"
     grid_root.mkdir(parents=True, exist_ok=True)
@@ -372,138 +426,185 @@ def run_staged_grid(
 
     summary_path = (grid_root / "grid_summary.json").resolve()
     try:
-        max_parallel_runs = _effective_max_parallel_runs(grid_resolved)
-        run_rows: List[Dict[str, Any]] = []
-        completed_rows: Dict[str, Dict[str, Any]] = {}
-        pending_specs = [
-            {"sequence": int(sequence), "run_spec": dict(run_spec)}
-            for sequence, run_spec in enumerate(list(grid_resolved["grid"]["runs"]), start=1)
-        ]
-        running: Dict[Future[Dict[str, Any]], Dict[str, Any]] = {}
+        with acquire_directory_lock(
+            grid_root,
+            lock_filename=".grid.lock",
+            entity_name="staged grid",
+            manifest_hash=str(grid_resolved.get("manifest_hash", "")),
+        ):
+            max_parallel_runs = _effective_max_parallel_runs(grid_resolved)
+            initialize_grid_status(
+                grid_root=grid_root,
+                grid_run_id=str(grid_root.name),
+                manifest_hash=str(grid_resolved.get("manifest_hash", "")),
+                run_reuse_mode=str(run_reuse_mode),
+                archived_root=archived_root,
+                max_parallel_runs=max_parallel_runs,
+            )
+            run_rows: List[Dict[str, Any]] = []
+            completed_rows: Dict[str, Dict[str, Any]] = {}
+            pending_specs = [
+                {"sequence": int(sequence), "run_spec": dict(run_spec)}
+                for sequence, run_spec in enumerate(list(grid_resolved["grid"]["runs"]), start=1)
+            ]
+            running: Dict[Future[Dict[str, Any]], Dict[str, Any]] = {}
 
-        with ThreadPoolExecutor(max_workers=max_parallel_runs, thread_name_prefix="staged-grid") as executor:
-            while pending_specs or running:
-                launched = False
-                while len(running) < max_parallel_runs:
-                    ready_spec = next(
-                        (
-                            item
-                            for item in pending_specs
-                            if all(str(ref) in completed_rows for ref in list(item["run_spec"].get("inherit_best_from") or []))
-                        ),
-                        None,
-                    )
-                    if ready_spec is None:
-                        break
-
-                    pending_specs.remove(ready_spec)
-                    sequence = int(ready_spec["sequence"])
-                    run_spec = dict(ready_spec["run_spec"])
-                    run_dir = runs_root / f"{sequence:02d}_{run_spec['run_id']}"
+            while pending_specs:
+                resumed_any = False
+                for item in list(pending_specs):
+                    sequence = int(item["sequence"])
+                    run_spec = dict(item["run_spec"])
+                    if not all(str(ref) in completed_rows for ref in list(run_spec.get("inherit_best_from") or [])):
+                        continue
                     candidate_model_group = _join_model_group(model_group, str(run_spec.get("model_group_suffix") or ""))
                     manifest_path = manifests_root / f"{sequence:02d}_{run_spec['run_id']}.json"
-                    try:
-                        resolved_overrides, inherited_from_run_id = _resolve_run_overrides(
-                            run_spec=run_spec,
-                            completed_rows=completed_rows,
-                        )
-                        merged_manifest = _deep_merge(base_raw_manifest, resolved_overrides)
-                        if not str(((merged_manifest.get("outputs") or {}).get("run_name")) or "").strip():
-                            merged_manifest.setdefault("outputs", {})
-                            merged_manifest["outputs"]["run_name"] = f"{base_raw_manifest['outputs']['run_name']}_{run_spec['run_id']}"
-                        lane_resolved_config = _build_lane_resolved_config(
-                            base_resolved_manifest=base_resolved_manifest,
-                            resolved_overrides=resolved_overrides,
-                            merged_manifest=merged_manifest,
-                            manifest_path=manifest_path,
-                        )
-                        _write_json(manifest_path, merged_manifest)
-                    except Exception as exc:
-                        row = _failed_result_row(
-                            sequence=sequence,
-                            run_spec=run_spec,
-                            manifest_path=manifest_path,
-                            run_output_root=run_dir,
-                            model_group=candidate_model_group,
-                            profile_id=profile_id,
-                            error=exc,
-                            applied_overrides=dict(run_spec.get("overrides") or {}),
-                            inherited_from_run_id=None,
-                        )
-                        run_rows.append(row)
-                        completed_rows[str(run_spec["run_id"])] = row
+                    run_dir = runs_root / f"{sequence:02d}_{run_spec['run_id']}"
+                    resolved_overrides, inherited_from_run_id = _resolve_run_overrides(
+                        run_spec=run_spec,
+                        completed_rows=completed_rows,
+                    )
+                    existing_row = _existing_lane_row(
+                        sequence=sequence,
+                        run_spec=run_spec,
+                        manifest_path=manifest_path,
+                        run_output_root=run_dir,
+                        model_group=candidate_model_group,
+                        profile_id=profile_id,
+                        applied_overrides=resolved_overrides,
+                        inherited_from_run_id=inherited_from_run_id,
+                    )
+                    if existing_row is None:
                         continue
+                    pending_specs.remove(item)
+                    run_rows.append(existing_row)
+                    completed_rows[str(run_spec["run_id"])] = existing_row
+                    resumed_any = True
+                if not resumed_any:
+                    break
 
-                    future = executor.submit(_run_lane, lane_resolved_config, run_dir)
-                    running[future] = {
-                        "sequence": sequence,
-                        "run_spec": run_spec,
-                        "manifest_path": manifest_path,
-                        "run_output_root": run_dir,
-                        "model_group": candidate_model_group,
-                        "profile_id": profile_id,
-                        "applied_overrides": resolved_overrides,
-                        "inherited_from_run_id": inherited_from_run_id,
-                    }
-                    launched = True
+            with ThreadPoolExecutor(max_workers=max_parallel_runs, thread_name_prefix="staged-grid") as executor:
+                while pending_specs or running:
+                    launched = False
+                    while len(running) < max_parallel_runs:
+                        ready_spec = next(
+                            (
+                                item
+                                for item in pending_specs
+                                if all(str(ref) in completed_rows for ref in list(item["run_spec"].get("inherit_best_from") or []))
+                            ),
+                            None,
+                        )
+                        if ready_spec is None:
+                            break
 
-                if not running:
-                    if pending_specs:
-                        for item in pending_specs:
-                            run_spec = dict(item["run_spec"])
-                            manifest_path = manifests_root / f"{int(item['sequence']):02d}_{run_spec['run_id']}.json"
-                            run_dir = runs_root / f"{int(item['sequence']):02d}_{run_spec['run_id']}"
+                        pending_specs.remove(ready_spec)
+                        sequence = int(ready_spec["sequence"])
+                        run_spec = dict(ready_spec["run_spec"])
+                        run_dir = runs_root / f"{sequence:02d}_{run_spec['run_id']}"
+                        candidate_model_group = _join_model_group(model_group, str(run_spec.get("model_group_suffix") or ""))
+                        manifest_path = manifests_root / f"{sequence:02d}_{run_spec['run_id']}.json"
+                        try:
+                            resolved_overrides, inherited_from_run_id = _resolve_run_overrides(
+                                run_spec=run_spec,
+                                completed_rows=completed_rows,
+                            )
+                            merged_manifest = _deep_merge(base_raw_manifest, resolved_overrides)
+                            if not str(((merged_manifest.get("outputs") or {}).get("run_name")) or "").strip():
+                                merged_manifest.setdefault("outputs", {})
+                                merged_manifest["outputs"]["run_name"] = f"{base_raw_manifest['outputs']['run_name']}_{run_spec['run_id']}"
+                            lane_resolved_config = _build_lane_resolved_config(
+                                base_resolved_manifest=base_resolved_manifest,
+                                resolved_overrides=resolved_overrides,
+                                merged_manifest=merged_manifest,
+                                manifest_path=manifest_path,
+                            )
+                            _write_json(manifest_path, merged_manifest)
+                        except Exception as exc:
                             row = _failed_result_row(
-                                sequence=int(item["sequence"]),
+                                sequence=sequence,
                                 run_spec=run_spec,
                                 manifest_path=manifest_path,
                                 run_output_root=run_dir,
-                                model_group=_join_model_group(model_group, str(run_spec.get("model_group_suffix") or "")),
+                                model_group=candidate_model_group,
                                 profile_id=profile_id,
-                                error=ValueError(
-                                    "unresolved grid dependencies; check inherit_best_from ordering and references"
-                                ),
+                                error=exc,
                                 applied_overrides=dict(run_spec.get("overrides") or {}),
                                 inherited_from_run_id=None,
                             )
                             run_rows.append(row)
                             completed_rows[str(run_spec["run_id"])] = row
-                        pending_specs = []
-                    break
+                            continue
 
-                if launched and len(running) < max_parallel_runs and pending_specs:
-                    continue
+                        future = executor.submit(_run_lane, lane_resolved_config, run_dir)
+                        running[future] = {
+                            "sequence": sequence,
+                            "run_spec": run_spec,
+                            "manifest_path": manifest_path,
+                            "run_output_root": run_dir,
+                            "model_group": candidate_model_group,
+                            "profile_id": profile_id,
+                            "applied_overrides": resolved_overrides,
+                            "inherited_from_run_id": inherited_from_run_id,
+                        }
+                        launched = True
 
-                done, _ = wait(tuple(running.keys()), return_when=FIRST_COMPLETED)
-                for future in done:
-                    meta = running.pop(future)
-                    try:
-                        summary = future.result()
-                        row = _result_row(
-                            sequence=int(meta["sequence"]),
-                            run_spec=dict(meta["run_spec"]),
-                            resolved_manifest_path=Path(meta["manifest_path"]),
-                            run_output_root=Path(meta["run_output_root"]),
-                            model_group=str(meta["model_group"]),
-                            profile_id=str(meta["profile_id"]),
-                            summary=summary,
-                            applied_overrides=dict(meta["applied_overrides"]),
-                            inherited_from_run_id=meta["inherited_from_run_id"],
-                        )
-                    except Exception as exc:
-                        row = _failed_result_row(
-                            sequence=int(meta["sequence"]),
-                            run_spec=dict(meta["run_spec"]),
-                            manifest_path=Path(meta["manifest_path"]),
-                            run_output_root=Path(meta["run_output_root"]),
-                            model_group=str(meta["model_group"]),
-                            profile_id=str(meta["profile_id"]),
-                            error=exc,
-                            applied_overrides=dict(meta["applied_overrides"]),
-                            inherited_from_run_id=meta["inherited_from_run_id"],
-                        )
-                    run_rows.append(row)
-                    completed_rows[str(meta["run_spec"]["run_id"])] = row
+                    if not running:
+                        if pending_specs:
+                            for item in pending_specs:
+                                run_spec = dict(item["run_spec"])
+                                manifest_path = manifests_root / f"{int(item['sequence']):02d}_{run_spec['run_id']}.json"
+                                run_dir = runs_root / f"{int(item['sequence']):02d}_{run_spec['run_id']}"
+                                row = _failed_result_row(
+                                    sequence=int(item["sequence"]),
+                                    run_spec=run_spec,
+                                    manifest_path=manifest_path,
+                                    run_output_root=run_dir,
+                                    model_group=_join_model_group(model_group, str(run_spec.get("model_group_suffix") or "")),
+                                    profile_id=profile_id,
+                                    error=ValueError(
+                                        "unresolved grid dependencies; check inherit_best_from ordering and references"
+                                    ),
+                                    applied_overrides=dict(run_spec.get("overrides") or {}),
+                                    inherited_from_run_id=None,
+                                )
+                                run_rows.append(row)
+                                completed_rows[str(run_spec["run_id"])] = row
+                            pending_specs = []
+                        break
+
+                    if launched and len(running) < max_parallel_runs and pending_specs:
+                        continue
+
+                    done, _ = wait(tuple(running.keys()), return_when=FIRST_COMPLETED)
+                    for future in done:
+                        meta = running.pop(future)
+                        try:
+                            summary = future.result()
+                            row = _result_row(
+                                sequence=int(meta["sequence"]),
+                                run_spec=dict(meta["run_spec"]),
+                                resolved_manifest_path=Path(meta["manifest_path"]),
+                                run_output_root=Path(meta["run_output_root"]),
+                                model_group=str(meta["model_group"]),
+                                profile_id=str(meta["profile_id"]),
+                                summary=summary,
+                                applied_overrides=dict(meta["applied_overrides"]),
+                                inherited_from_run_id=meta["inherited_from_run_id"],
+                            )
+                        except Exception as exc:
+                            row = _failed_result_row(
+                                sequence=int(meta["sequence"]),
+                                run_spec=dict(meta["run_spec"]),
+                                manifest_path=Path(meta["manifest_path"]),
+                                run_output_root=Path(meta["run_output_root"]),
+                                model_group=str(meta["model_group"]),
+                                profile_id=str(meta["profile_id"]),
+                                error=exc,
+                                applied_overrides=dict(meta["applied_overrides"]),
+                                inherited_from_run_id=meta["inherited_from_run_id"],
+                            )
+                        run_rows.append(row)
+                        completed_rows[str(meta["run_spec"]["run_id"])] = row
 
         run_rows = sorted(run_rows, key=lambda row: int(row.get("sequence", 0)))
         ranked_rows = _sort_rows(run_rows)
@@ -548,6 +649,7 @@ def run_staged_grid(
             "status": "completed_with_failures" if any_failed else "completed",
             "experiment_kind": STAGED_GRID_KIND,
             "grid_run_id": str(grid_root.name),
+            "orchestration_integrity": "clean",
             "grid_manifest_path": str(Path(grid_resolved["manifest_path"]).resolve()),
             "base_manifest_path": str(Path(grid_resolved["inputs"]["base_manifest_path"]).resolve()),
             "research_only": bool(grid_resolved.get("grid", {}).get("research_only", True)),
@@ -557,6 +659,7 @@ def run_staged_grid(
                 "max_parallel_runs": int(max_parallel_runs),
                 "host_cpu_count": max(1, int(os.cpu_count() or 1)),
                 "base_model_n_jobs": _base_model_n_jobs(grid_resolved),
+                "run_reuse_mode": str(run_reuse_mode),
             },
             "runs": run_rows,
             "ranking": [
@@ -578,8 +681,20 @@ def run_staged_grid(
                 "manifests_root": str(manifests_root.resolve()),
                 "runs_root": str(runs_root.resolve()),
                 "grid_summary": str(summary_path),
+                "grid_status": str((grid_root / "grid_status.json").resolve()),
+                "archived_root": prep.get("archived_root"),
             },
         }
+        finalize_grid_status(
+            grid_root=grid_root,
+            grid_run_id=str(grid_root.name),
+            manifest_hash=str(grid_resolved.get("manifest_hash", "")),
+            run_reuse_mode=str(run_reuse_mode),
+            archived_root=archived_root,
+            lifecycle_status=("failed" if payload["status"] == "failed" else "completed"),
+            dominant_failure_reason=dominant_failure_reason,
+            winner_run_id=(None if winner is None else str(winner.get("grid_run_id"))),
+        )
         _write_json(summary_path, payload)
         return payload
     except Exception as exc:
@@ -588,6 +703,7 @@ def run_staged_grid(
             "status": "failed",
             "experiment_kind": STAGED_GRID_KIND,
             "grid_run_id": str(grid_root.name),
+            "orchestration_integrity": "contaminated",
             "grid_manifest_path": str(Path(grid_resolved["manifest_path"]).resolve()),
             "base_manifest_path": str(Path(grid_resolved["inputs"]["base_manifest_path"]).resolve()),
             "research_only": bool(grid_resolved.get("grid", {}).get("research_only", True)),
@@ -602,8 +718,20 @@ def run_staged_grid(
                 "manifests_root": str(manifests_root.resolve()),
                 "runs_root": str(runs_root.resolve()),
                 "grid_summary": str(summary_path),
+                "grid_status": str((grid_root / "grid_status.json").resolve()),
+                "archived_root": prep.get("archived_root"),
             },
         }
+        finalize_grid_status(
+            grid_root=grid_root,
+            grid_run_id=str(grid_root.name),
+            manifest_hash=str(grid_resolved.get("manifest_hash", "")),
+            run_reuse_mode=str(run_reuse_mode),
+            archived_root=archived_root,
+            lifecycle_status="failed",
+            dominant_failure_reason=str(exc),
+            winner_run_id=None,
+        )
         _write_json(summary_path, payload)
         return payload
 

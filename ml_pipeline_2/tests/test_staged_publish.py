@@ -280,6 +280,42 @@ def test_publish_staged_run_still_rejects_non_publishable_run(tmp_path: Path) ->
         )
 
 
+def test_release_assessment_rejects_contaminated_execution_integrity(tmp_path: Path) -> None:
+    run_dir = tmp_path / "ml_pipeline_2" / "artifacts" / "research" / "staged_contaminated_fixture_20260403_010101"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "experiment_kind": "staged_dual_recipe_v1",
+                "run_id": run_dir.name,
+                "execution_integrity": "contaminated",
+                "publish_assessment": {
+                    "decision": "PUBLISH",
+                    "publishable": True,
+                    "blocking_reasons": [],
+                },
+                "recipe_catalog_id": "fixed_l0_l3_v1",
+                "policy_reports": {},
+                "component_ids": {},
+                "stage_artifacts": {},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = release_staged_run(
+        run_dir=run_dir,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+    )
+
+    assert payload["release_status"] == "held"
+    assert payload["assessment"]["publishable"] is False
+    assert "execution_integrity=contaminated" in payload["assessment"]["blocking_reasons"]
+
+
 def test_publish_staged_run_can_force_publish_for_smoke_only(tmp_path: Path, monkeypatch) -> None:
     run_dir = tmp_path / "ml_pipeline_2" / "artifacts" / "research" / "staged_smoke_hold_fixture_20260324_020202"
     stage1_root = run_dir / "stages" / "stage1"

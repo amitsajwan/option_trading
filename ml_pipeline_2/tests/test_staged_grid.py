@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from ml_pipeline_2.contracts.manifests import load_and_resolve_manifest
+from ml_pipeline_2.experiment_control.coordination import CoordinationError
 from ml_pipeline_2.staged import grid as grid_module
 from ml_pipeline_2.tests.helpers import (
     build_staged_grid_manifest,
@@ -131,7 +132,7 @@ def test_staged_grid_runner_ranks_runs_and_keeps_execution_research_only(
         ),
     }
 
-    def _fake_run_research(resolved_config, *, run_output_root=None):
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
         output_root = Path(run_output_root).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         run_name = str(resolved_config["outputs"]["run_name"])
@@ -154,9 +155,13 @@ def test_staged_grid_runner_ranks_runs_and_keeps_execution_research_only(
     assert payload["execution"]["base_model_n_jobs"] == 1
     assert payload["winner"]["grid_run_id"] == "best_edge_block_expiry"
     assert payload["winner_release"] is None
+    assert payload["orchestration_integrity"] == "clean"
     assert payload["stage2_hpo_escalation"]["eligible"] is True
     assert payload["stage2_hpo_escalation"]["best_run_id"] == "best_edge_block_expiry"
     assert Path(payload["paths"]["grid_summary"]).exists()
+    grid_status = json.loads(Path(payload["paths"]["grid_status"]).read_text(encoding="utf-8"))
+    assert grid_status["status"] == "completed"
+    assert grid_status["integrity"] == "clean"
 
     run_rows = {row["grid_run_id"]: row for row in payload["runs"]}
     assert run_rows["best_edge_block_expiry"]["rank"] == 1
@@ -233,7 +238,7 @@ def test_staged_grid_runner_writes_time_focus_override_from_grid_catalog(tmp_pat
     )
     resolved = load_and_resolve_manifest(grid_manifest_path, validate_paths=True)
 
-    def _fake_run_research(resolved_config, *, run_output_root=None):
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
         output_root = Path(run_output_root).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         summary = _mock_summary(
@@ -299,7 +304,7 @@ def test_staged_grid_runner_attaches_stage2_robustness_probe(tmp_path: Path, mon
     grid_manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     resolved = load_and_resolve_manifest(grid_manifest_path, validate_paths=True)
 
-    def _fake_run_research(resolved_config, *, run_output_root=None):
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
         output_root = Path(run_output_root).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         run_name = str(resolved_config["outputs"]["run_name"])
@@ -390,3 +395,89 @@ def test_grid_dependency_inheritance_requires_successful_prior_runs(tmp_path: Pa
     assert run_rows["edge_0010"]["release_status"] == "failed"
     assert run_rows["best_edge_block_expiry"]["release_status"] == "failed"
     assert "no successful prior runs" in str(run_rows["best_edge_block_expiry"]["blocking_reasons"][0])
+
+
+def test_staged_grid_fail_if_exists_blocks_reuse_of_existing_grid_root(tmp_path: Path, monkeypatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    grid_manifest_path = build_staged_grid_manifest(tmp_path, base_manifest_path)
+    resolved = load_and_resolve_manifest(grid_manifest_path, validate_paths=True)
+    grid_root = tmp_path / "grid_root_blocked"
+
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
+        output_root = Path(run_output_root).resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        summary = _mock_summary(
+            run_name=str(resolved_config["outputs"]["run_name"]),
+            publishable=False,
+            stage2_auc=0.52,
+            stage2_brier=0.25,
+            profit_factor=1.05,
+            net_return_sum=0.01,
+            max_drawdown_pct=0.09,
+        )
+        summary["output_root"] = str(output_root)
+        (output_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        return summary
+
+    monkeypatch.setattr(grid_module, "run_research", _fake_run_research)
+    grid_module.run_staged_grid(
+        resolved,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+        run_output_root=grid_root,
+    )
+
+    with pytest.raises(CoordinationError, match="already exists and is non-empty"):
+        grid_module.run_staged_grid(
+            resolved,
+            model_group="banknifty_futures/h15_tp_auto",
+            profile_id="openfe_v9_dual",
+            run_output_root=grid_root,
+        )
+
+
+def test_staged_grid_resume_reuses_completed_lane_summaries(tmp_path: Path, monkeypatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    grid_manifest_path = build_staged_grid_manifest(tmp_path, base_manifest_path)
+    resolved = load_and_resolve_manifest(grid_manifest_path, validate_paths=True)
+    grid_root = tmp_path / "grid_root_resume"
+    calls: list[str] = []
+
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
+        output_root = Path(run_output_root).resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        run_name = str(resolved_config["outputs"]["run_name"])
+        calls.append(run_name)
+        summary = _mock_summary(
+            run_name=run_name,
+            publishable=False,
+            stage2_auc=0.52,
+            stage2_brier=0.25,
+            profit_factor=1.05,
+            net_return_sum=0.01,
+            max_drawdown_pct=0.09,
+        )
+        summary["output_root"] = str(output_root)
+        (output_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        return summary
+
+    monkeypatch.setattr(grid_module, "run_research", _fake_run_research)
+    first = grid_module.run_staged_grid(
+        resolved,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+        run_output_root=grid_root,
+    )
+    calls_after_first = list(calls)
+    resumed = grid_module.run_staged_grid(
+        resolved,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+        run_output_root=grid_root,
+        run_reuse_mode="resume",
+    )
+
+    assert resumed["grid_run_id"] == first["grid_run_id"]
+    assert calls == calls_after_first

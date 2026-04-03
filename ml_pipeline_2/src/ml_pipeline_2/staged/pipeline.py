@@ -1149,9 +1149,12 @@ def train_recipe_ovr_stage(
             },
         }
 
-    recipe_results = joblib.Parallel(n_jobs=outer_n_jobs, prefer="threads")(
-        joblib.delayed(_train_one_recipe)(recipe_id) for recipe_id in recipe_ids
-    )
+    try:
+        recipe_results = joblib.Parallel(n_jobs=outer_n_jobs, prefer="threads")(
+            joblib.delayed(_train_one_recipe)(recipe_id) for recipe_id in recipe_ids
+        )
+    except PermissionError:
+        recipe_results = [_train_one_recipe(recipe_id) for recipe_id in recipe_ids]
     for recipe_result in recipe_results:
         recipe_id = str(recipe_result["recipe_id"])
         selection_recipe_packages[recipe_id] = dict(recipe_result["selection_package"])
@@ -1869,6 +1872,12 @@ def _early_hold_summary(
         "stage_artifacts": completed_stage_artifacts,
     }
     ctx.write_json("summary.json", summary)
+    ctx.append_state(
+        "job_hold",
+        status="completed",
+        completion_mode=str(completion_mode),
+        blocking_reasons=list(blocking_reasons),
+    )
     return summary
 
 
@@ -2033,6 +2042,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
 
     stage_artifacts: dict[str, Any] = {}
     stage1_started_at = utc_now()
+    ctx.append_state("stage_start", stage="stage1", started_at_utc=stage1_started_at)
     stage1_result = resolve_trainer(components["stage1"]["trainer_id"])(
         stage_name="stage1",
         train_frame=labeled_frames["stage1"]["research_train"],
@@ -2057,6 +2067,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "training_report_path": stage1_result["training_report_path"],
         "feature_contract_path": stage1_result["feature_contract_path"],
     }
+    ctx.append_state("stage_done", stage="stage1", completed_at_utc=stage1_completed_at)
     stage1_cv_quality = _binary_quality(
         labeled_frames["stage1"]["research_valid"]["move_label"],
         stage1_result["validation_scores"]["entry_prob"],
@@ -2090,6 +2101,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         )
 
     stage2_started_at = utc_now()
+    ctx.append_state("stage_start", stage="stage2", started_at_utc=stage2_started_at)
     stage2_result = resolve_trainer(components["stage2"]["trainer_id"])(
         stage_name="stage2",
         train_frame=labeled_frames["stage2"]["research_train"],
@@ -2114,6 +2126,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "training_report_path": stage2_result["training_report_path"],
         "feature_contract_path": stage2_result["feature_contract_path"],
     }
+    ctx.append_state("stage_done", stage="stage2", completed_at_utc=stage2_completed_at)
     stage2_diagnostics = _build_stage2_diagnostics_report(
         ctx=ctx,
         manifest=manifest,
@@ -2162,6 +2175,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         )
 
     stage3_started_at = utc_now()
+    ctx.append_state("stage_start", stage="stage3", started_at_utc=stage3_started_at)
     stage3_result = resolve_trainer(components["stage3"]["trainer_id"])(
         stage_name="stage3",
         train_frame=_add_upstream_probs(
@@ -2205,6 +2219,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "recipes": sorted(stage3_result["recipe_packages"].keys()),
         "recipe_artifacts": dict(stage3_result["recipe_artifacts"]),
     }
+    ctx.append_state("stage_done", stage="stage3", completed_at_utc=stage3_completed_at)
 
     utility_valid = _window(utility, manifest["windows"]["research_valid"])
     utility_holdout = _window(utility, manifest["windows"]["final_holdout"])
