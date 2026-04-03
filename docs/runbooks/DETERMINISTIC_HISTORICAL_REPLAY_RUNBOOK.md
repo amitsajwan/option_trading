@@ -31,7 +31,9 @@ Before starting:
 
 1. historical snapshot parquet must already exist under `./.data/ml_pipeline/parquet_data`
 2. run from repo root
-3. do not run live Compose services and this historical stack at the same time
+3. Docker must be installed on the target host
+4. if the host only has `docker-compose` v1, avoid `--force-recreate` because older Compose can fail with a `ContainerConfig` recreate error against newer Docker engines
+5. do not run live Compose services and this historical stack at the same time
 
 Expected repo root in this workspace:
 
@@ -56,6 +58,12 @@ MARKET_SESSION_ENABLED=0
 HISTORICAL_TOPIC=market:snapshot:v1:historical
 ```
 
+Historical replay also needs this parquet base:
+
+```dotenv
+SNAPSHOT_PARQUET_BASE=/app/.data/ml_pipeline/parquet_data
+```
+
 Recommended historical-safe values already exist in the compose example:
 
 - `ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=0`
@@ -75,6 +83,8 @@ docker compose --env-file .env.compose build --no-cache `
   dashboard strategy_eval_orchestrator
 ```
 
+If `strategy_eval_orchestrator` fails on startup with `ModuleNotFoundError: No module named 'requests'`, the image is stale. Pull the repo fix and rebuild that image again.
+
 If you also changed shared dependencies or want a full fresh stack, include infra-adjacent services too:
 
 ```powershell
@@ -88,15 +98,26 @@ docker compose --env-file .env.compose build --no-cache `
 Start the historical consumers first:
 
 ```powershell
-docker compose --env-file .env.compose --profile historical up -d --force-recreate `
+docker compose --env-file .env.compose --profile historical up -d `
   redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical
 ```
 
 Start the UI and replay orchestrator:
 
 ```powershell
-docker compose --env-file .env.compose --profile ui up -d --force-recreate `
+docker compose --env-file .env.compose --profile ui up -d `
   dashboard strategy_eval_orchestrator
+```
+
+If you are on an older host with `docker-compose` v1, use `docker-compose` instead of `docker compose`.
+
+If Compose recreate is already broken on that host, use this recovery pattern instead of retrying `--force-recreate`:
+
+```powershell
+docker rm -f option_trading_dashboard_1 option_trading_strategy_eval_orchestrator_1
+docker-compose --env-file .env.compose --profile ui up -d --no-deps dashboard strategy_eval_orchestrator
+docker-compose --env-file .env.compose --profile historical up -d --no-deps `
+  redis mongo strategy_app_historical persistence_app_historical strategy_persistence_app_historical
 ```
 
 Why this shape:
@@ -233,6 +254,17 @@ If replay queues but no results appear:
 2. check `strategy_app_historical` logs for snapshot consumption
 3. check `strategy_persistence_app_historical` logs for Mongo writes
 4. verify parquet exists under `./.data/ml_pipeline/parquet_data`
+
+Specific failures seen on GCP:
+
+1. `ModuleNotFoundError: No module named 'requests'`
+   This means `strategy_eval_orchestrator` was built from an older checkout. Rebuild `strategy_eval_orchestrator` from the current repo.
+2. replay fails saying canonical `snapshots` parquet was not found
+   Confirm `SNAPSHOT_PARQUET_BASE=/app/.data/ml_pipeline/parquet_data`.
+3. browser cannot reach `:8008` even though `curl http://127.0.0.1:8008/...` works on the VM
+   Confirm the VM has the `option-trading-runtime` network tag so the existing firewall rule for TCP `8008` applies.
+4. `ingestion_app` name resolution errors in the Market Data Realism card
+   Expected for historical-only replay when live ingestion is not running. This does not block replay or strategy evaluation.
 
 Helpful commands:
 

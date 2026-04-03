@@ -392,6 +392,13 @@ Optional:
 
 Do not use the snapshot-build VM as the default replay target unless you are intentionally combining build and replay for one-off analysis.
 
+If you do reuse the snapshot-build VM for one-off replay, treat it as an exception path:
+
+- install Docker first if the host is build-only
+- expect older Ubuntu images to have `docker-compose` v1 instead of `docker compose`
+- avoid `--force-recreate` on `docker-compose` v1 because it can fail with `ContainerConfig` during container recreation
+- make sure the VM has the `option-trading-runtime` network tag if you want external access to dashboard port `8008`
+
 ### Upstream Artifact Build
 
 Historical parquet is a separate runtime input artifact. It is not part of the normal runtime-config bundle.
@@ -458,6 +465,7 @@ Do not start replay until all of these are true:
 
 - target parquet is present under `/opt/option_trading/.data/ml_pipeline/parquet_data`
 - target date is present in the synced dataset
+- `SNAPSHOT_PARQUET_BASE=/app/.data/ml_pipeline/parquet_data`
 - replay topic resolves to `market:snapshot:v1:historical`
 - historical Mongo collection env vars are in effect
 - you will use `--profile historical` and `--profile historical_replay`
@@ -514,6 +522,11 @@ Historical `ml_pure` note:
 - `docker-compose.yml` now passes that historical-only override to `strategy_app_historical`
 - historical replay should use `STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL=.run/ml_runtime_guard_historical_test.json`, not the live guard file
 - the `strategy_app` image must use the same major/minor `scikit-learn` version as the published model bundle; current staged smoke models require `scikit-learn==1.7.2`
+
+Historical infrastructure note:
+
+- `strategy_eval_orchestrator` imports `snapshot_app`, so its image also needs `requests`
+- if startup fails with `ModuleNotFoundError: No module named 'requests'`, rebuild `strategy_eval_orchestrator` from the current repo checkout before retrying replay
 
 Run one-shot replay:
 
