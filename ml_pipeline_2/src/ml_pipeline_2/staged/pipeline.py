@@ -23,6 +23,7 @@ from .registries import resolve_labeler, resolve_policy, resolve_trainer, view_r
 KEY_COLUMNS = ["trade_date", "timestamp", "snapshot_id"]
 STAGE_ORDER = ("stage1", "stage2", "stage3")
 SUMMARY_SCHEMA_VERSION = 3
+STAGE2_SESSION_BUCKETS = ("OPENING", "MORNING", "MIDDAY", "LATE_SESSION")
 
 
 def _normalize_timestamp_series(values: pd.Series) -> pd.Series:
@@ -403,6 +404,19 @@ def _normalize_stage2_label_filter(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_stage2_session_filter(manifest: dict[str, Any]) -> dict[str, Any]:
+    raw = dict((manifest.get("training") or {}).get("stage2_session_filter") or {})
+    include_buckets = []
+    for item in list(raw.get("include_buckets") or []):
+        bucket = str(item).strip().upper()
+        if bucket and bucket not in include_buckets:
+            include_buckets.append(bucket)
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "include_buckets": include_buckets,
+    }
+
+
 def _apply_stage2_label_filter(stage2_frame: pd.DataFrame, manifest: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
     cfg = _normalize_stage2_label_filter(manifest)
     if "direction_return_edge_after_cost" in stage2_frame.columns:
@@ -463,6 +477,39 @@ def _apply_stage2_label_filter(stage2_frame: pd.DataFrame, manifest: dict[str, A
             "edge_mean_after": (
                 float(edge_series.loc[keep_mask].mean()) if bool(keep_mask.any()) else None
             ),
+        }
+    )
+    return filtered, meta
+
+
+def _apply_stage2_session_filter(stage2_frame: pd.DataFrame, manifest: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
+    cfg = _normalize_stage2_session_filter(manifest)
+    session_bucket = _stage2_time_bucket(stage2_frame)
+    observed_before = sorted(str(item) for item in session_bucket.dropna().astype(str).unique().tolist())
+    meta = {
+        **cfg,
+        "rows_before": int(len(stage2_frame)),
+        "rows_after": int(len(stage2_frame)),
+        "rows_dropped": 0,
+        "kept_share": 1.0 if len(stage2_frame) else 0.0,
+        "observed_buckets_before": observed_before,
+        "observed_buckets_after": observed_before,
+    }
+    if not cfg["enabled"] or not cfg["include_buckets"]:
+        return stage2_frame.sort_values("timestamp").reset_index(drop=True), meta
+    include_buckets = set(str(item).strip().upper() for item in cfg["include_buckets"])
+    keep_mask = session_bucket.isin(include_buckets)
+    filtered = stage2_frame.loc[keep_mask].copy().sort_values("timestamp").reset_index(drop=True)
+    observed_after = sorted(
+        str(item)
+        for item in _stage2_time_bucket(filtered).dropna().astype(str).unique().tolist()
+    )
+    meta.update(
+        {
+            "rows_after": int(len(filtered)),
+            "rows_dropped": int((~keep_mask).sum()),
+            "kept_share": float(keep_mask.mean()) if len(keep_mask) else 0.0,
+            "observed_buckets_after": observed_after,
         }
     )
     return filtered, meta
@@ -644,31 +691,43 @@ def _quality_by_group(frame: pd.DataFrame, *, label_col: str, prob_col: str, gro
     return sorted(rows, key=lambda item: item["group"])
 
 
-def _build_stage2_split_diagnostics(frame: pd.DataFrame, scores: pd.DataFrame, *, split_name: str) -> dict[str, Any]:
+def _stage2_scored_frame(frame: pd.DataFrame, scores: pd.DataFrame) -> pd.DataFrame:
     scored = frame.merge(scores, on=KEY_COLUMNS, how="left")
-    labels = _stage2_direction_binary(scored["direction_label"])
-    probs = pd.to_numeric(scored["direction_up_prob"], errors="coerce")
-    scored = scored.assign(
-        _direction_binary=labels,
-        _direction_up_prob=probs,
-        _time_bucket=_stage2_time_bucket(scored),
-        _expiry_regime=_stage2_expiry_regime(scored),
+    out = scored.assign(
+        direction_binary=_stage2_direction_binary(scored["direction_label"]),
+        direction_up_prob=pd.to_numeric(scored["direction_up_prob"], errors="coerce"),
+        session_bucket=_stage2_time_bucket(scored),
+        expiry_regime=_stage2_expiry_regime(scored),
     )
+    ordered_columns = [
+        *KEY_COLUMNS,
+        "direction_label",
+        "direction_binary",
+        "direction_up_prob",
+        "direction_return_edge_after_cost",
+        "session_bucket",
+        "expiry_regime",
+    ]
+    return out.loc[:, [column for column in ordered_columns if column in out.columns]].copy()
+
+
+def _build_stage2_split_diagnostics(frame: pd.DataFrame, scores: pd.DataFrame, *, split_name: str) -> dict[str, Any]:
+    scored = _stage2_scored_frame(frame, scores)
     edge_series = pd.to_numeric(scored.get("direction_return_edge_after_cost"), errors="coerce")
-    quality = _binary_quality(scored["_direction_binary"], scored["_direction_up_prob"])
-    calibration = _stage2_calibration_profile(scored["_direction_binary"], scored["_direction_up_prob"])
+    quality = _binary_quality(scored["direction_binary"], scored["direction_up_prob"])
+    calibration = _stage2_calibration_profile(scored["direction_binary"], scored["direction_up_prob"])
     return {
         "split": split_name,
         "rows": int(len(scored)),
-        "rows_with_probabilities": int((scored["_direction_up_prob"].notna() & scored["_direction_binary"].notna()).sum()),
-        "positive_rate": float(scored["_direction_binary"].dropna().mean()) if bool(scored["_direction_binary"].notna().any()) else None,
+        "rows_with_probabilities": int((scored["direction_up_prob"].notna() & scored["direction_binary"].notna()).sum()),
+        "positive_rate": float(scored["direction_binary"].dropna().mean()) if bool(scored["direction_binary"].notna().any()) else None,
         "quality": quality,
-        "probability_histogram": _stage2_probability_histogram(scored["_direction_up_prob"]),
-        "score_separation": _stage2_score_separation(scored["_direction_binary"], scored["_direction_up_prob"]),
+        "probability_histogram": _stage2_probability_histogram(scored["direction_up_prob"]),
+        "score_separation": _stage2_score_separation(scored["direction_binary"], scored["direction_up_prob"]),
         "calibration": calibration,
         "edge_distribution": _quantile_summary(edge_series),
-        "quality_by_time_bucket": _quality_by_group(scored, label_col="_direction_binary", prob_col="_direction_up_prob", group_col="_time_bucket"),
-        "quality_by_expiry_regime": _quality_by_group(scored, label_col="_direction_binary", prob_col="_direction_up_prob", group_col="_expiry_regime"),
+        "quality_by_time_bucket": _quality_by_group(scored, label_col="direction_binary", prob_col="direction_up_prob", group_col="session_bucket"),
+        "quality_by_expiry_regime": _quality_by_group(scored, label_col="direction_binary", prob_col="direction_up_prob", group_col="expiry_regime"),
     }
 
 
@@ -685,22 +744,37 @@ def _build_stage2_diagnostics_report(
         stage2_result["search_package"],
         prob_col="direction_up_prob",
     )
-    split_reports = {
-        "research_train": _build_stage2_split_diagnostics(
+    score_frames = {
+        "research_train": _stage2_scored_frame(
             labeled_frames["stage2"]["research_train"],
             train_scores,
-            split_name="research_train",
         ),
-        "research_valid": _build_stage2_split_diagnostics(
+        "research_valid": _stage2_scored_frame(
             labeled_frames["stage2"]["research_valid"],
             stage2_result["validation_scores"],
-            split_name="research_valid",
         ),
-        "final_holdout": _build_stage2_split_diagnostics(
+        "final_holdout": _stage2_scored_frame(
             labeled_frames["stage2"]["final_holdout"],
             stage2_result["holdout_scores"],
-            split_name="final_holdout",
         ),
+    }
+    score_paths: dict[str, str] = {}
+    scores_root = ctx.output_root / "stages" / "stage2" / "diagnostics_scores"
+    scores_root.mkdir(parents=True, exist_ok=True)
+    for split_name, score_frame in score_frames.items():
+        score_path = scores_root / f"{split_name}.parquet"
+        score_frame.to_parquet(score_path, index=False)
+        score_paths[split_name] = str(score_path.resolve())
+    split_reports = {
+        split_name: {
+            **_build_stage2_split_diagnostics(
+                score_frame.loc[:, [column for column in score_frame.columns if column != "direction_up_prob"]],
+                score_frame.loc[:, KEY_COLUMNS + ["direction_up_prob"]],
+                split_name=split_name,
+            ),
+            "score_path": score_paths[split_name],
+        }
+        for split_name, score_frame in score_frames.items()
     }
     return {
         "diagnostics_schema_version": 1,
@@ -708,7 +782,15 @@ def _build_stage2_diagnostics_report(
         "run_id": str(ctx.output_root.name),
         "stage": "stage2",
         "feature_sets": list(manifest["catalog"]["feature_sets_by_stage"]["stage2"]),
+        "scenario": {
+            "feature_set_candidates": list(manifest["catalog"]["feature_sets_by_stage"]["stage2"]),
+            "selected_feature_set": str((((stage2_result.get("search_payload") or {}).get("report") or {}).get("best_experiment") or {}).get("feature_set") or ""),
+            "selected_model": dict((((stage2_result.get("search_payload") or {}).get("report") or {}).get("best_experiment") or {}).get("model") or {}),
+            "label_filtering": dict(label_filter_meta),
+            "session_filter": _normalize_stage2_session_filter(manifest),
+        },
         "label_filtering": dict(label_filter_meta),
+        "score_paths": score_paths,
         "splits": split_reports,
     }
 
@@ -1900,7 +1982,12 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         labeler = resolve_labeler(component_ids["labeler_id"])
         labeled = labeler(stage_frame, oracle)
         if stage_name == "stage2":
-            labeled, label_filtering[stage_name] = _apply_stage2_label_filter(labeled, manifest)
+            labeled, direction_filter_meta = _apply_stage2_label_filter(labeled, manifest)
+            labeled, session_filter_meta = _apply_stage2_session_filter(labeled, manifest)
+            label_filtering[stage_name] = {
+                "direction_label_filter": direction_filter_meta,
+                "session_filter": session_filter_meta,
+            }
         stage_frames[stage_name] = {
             "research_train": _window(stage_frame, manifest["windows"]["research_train"]),
             "research_valid": _window(stage_frame, manifest["windows"]["research_valid"]),
@@ -2036,6 +2123,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     )
     stage2_diagnostics_path = ctx.write_json("stages/stage2/diagnostics.json", stage2_diagnostics)
     stage_artifacts["stage2"]["diagnostics_path"] = str(stage2_diagnostics_path.resolve())
+    stage_artifacts["stage2"]["diagnostics_score_paths"] = dict(stage2_diagnostics.get("score_paths") or {})
     stage2_cv_labels = np.where(
         labeled_frames["stage2"]["research_valid"]["direction_label"].astype(str).str.upper() == "CE",
         1,

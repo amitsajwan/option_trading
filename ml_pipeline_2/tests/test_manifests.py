@@ -139,6 +139,19 @@ def test_staged_manifest_rejects_publish_smoke_allow_non_publishable_non_bool(tm
         resolve_manifest(payload, manifest_path=tmp_path / "staged_publish_smoke_bool_bad.json", validate_paths=False)
 
 
+def test_staged_manifest_accepts_stage2_session_filter(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["training"]["stage2_session_filter"] = {
+        "enabled": True,
+        "include_buckets": ["MIDDAY", "MORNING"],
+    }
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_stage2_session_filter_ok.json", validate_paths=False)
+    assert resolved["training"]["stage2_session_filter"] == {
+        "enabled": True,
+        "include_buckets": ["MIDDAY", "MORNING"],
+    }
+
+
 def test_staged_manifest_validate_paths_requires_stage_view_datasets(tmp_path: Path) -> None:
     parquet_root = tmp_path / "parquet"
     (parquet_root / "snapshots_ml_flat").mkdir(parents=True, exist_ok=True)
@@ -289,7 +302,15 @@ def test_grid_manifest_validates_with_supported_override_contract(tmp_path: Path
             "stage2_hpo_escalation": {
                 "roc_auc_min": 0.54,
                 "brier_max": 0.225,
-            }
+            },
+            "robustness_probe": {
+                "enabled": True,
+                "top_k": 2,
+                "iterations": 50,
+                "random_seed": 7,
+                "splits": ["research_valid", "final_holdout"],
+                "resample_unit": "trade_date",
+            },
         },
         "grid": {
             "research_only": True,
@@ -310,7 +331,11 @@ def test_grid_manifest_validates_with_supported_override_contract(tmp_path: Path
                             "stage2_label_filter": {
                                 "enabled": True,
                                 "min_directional_edge_after_cost": 0.001,
-                            }
+                            },
+                            "stage2_session_filter": {
+                                "enabled": True,
+                                "include_buckets": ["MIDDAY", "MORNING"],
+                            },
                         }
                     },
                 },
@@ -336,6 +361,8 @@ def test_grid_manifest_validates_with_supported_override_contract(tmp_path: Path
     assert resolved["experiment_kind"] == "staged_training_grid_v1"
     assert resolved["grid"]["max_parallel_runs"] == 2
     assert resolved["grid"]["runs"][1]["overrides"]["training"]["stage2_label_filter"]["min_directional_edge_after_cost"] == 0.001
+    assert resolved["grid"]["runs"][1]["overrides"]["training"]["stage2_session_filter"]["include_buckets"] == ["MIDDAY", "MORNING"]
+    assert resolved["selection"]["robustness_probe"]["iterations"] == 50
     assert resolved["base_resolved_manifest"]["experiment_kind"] == "staged_dual_recipe_v1"
 
 

@@ -714,6 +714,42 @@ def test_apply_stage2_label_filter_can_enforce_valid_winner_after_cost() -> None
     assert meta["valid_winner_rows_dropped"] == 2
 
 
+def test_apply_stage2_session_filter_keeps_only_requested_buckets() -> None:
+    stage2_frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-02"] * 4,
+            "timestamp": pd.to_datetime(
+                [
+                    "2024-01-02 09:20:00",
+                    "2024-01-02 10:30:00",
+                    "2024-01-02 12:10:00",
+                    "2024-01-02 14:10:00",
+                ]
+            ),
+            "snapshot_id": ["s1", "s2", "s3", "s4"],
+            "direction_label": ["CE", "PE", "CE", "PE"],
+        }
+    )
+
+    filtered, meta = staged_pipeline._apply_stage2_session_filter(
+        stage2_frame,
+        {
+            "training": {
+                "stage2_session_filter": {
+                    "enabled": True,
+                    "include_buckets": ["MIDDAY", "MORNING"],
+                }
+            }
+        },
+    )
+
+    assert filtered["snapshot_id"].tolist() == ["s2", "s3"]
+    assert meta["rows_before"] == 4
+    assert meta["rows_after"] == 2
+    assert meta["rows_dropped"] == 2
+    assert meta["observed_buckets_after"] == ["MIDDAY", "MORNING"]
+
+
 def test_build_stage2_split_diagnostics_reports_balanced_scores_and_buckets() -> None:
     frame = pd.DataFrame(
         {

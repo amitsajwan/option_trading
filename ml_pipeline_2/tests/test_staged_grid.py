@@ -283,6 +283,90 @@ def test_research_only_grid_rejects_publish_winner(tmp_path: Path) -> None:
         )
 
 
+def test_staged_grid_runner_attaches_stage2_robustness_probe(tmp_path: Path, monkeypatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    grid_manifest_path = build_staged_grid_manifest(tmp_path, base_manifest_path)
+    payload = json.loads(grid_manifest_path.read_text(encoding="utf-8"))
+    payload["selection"]["robustness_probe"] = {
+        "enabled": True,
+        "top_k": 1,
+        "iterations": 25,
+        "random_seed": 9,
+        "splits": ["research_valid", "final_holdout"],
+        "resample_unit": "trade_date",
+    }
+    grid_manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    resolved = load_and_resolve_manifest(grid_manifest_path, validate_paths=True)
+
+    def _fake_run_research(resolved_config, *, run_output_root=None):
+        output_root = Path(run_output_root).resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        run_name = str(resolved_config["outputs"]["run_name"])
+        auc_map = {
+            "staged_grid_baseline": 0.520,
+            "staged_grid_edge_0006": 0.533,
+            "staged_grid_edge_0010": 0.541,
+            "staged_grid_best_edge_block_expiry": 0.530,
+        }
+        brier_map = {
+            "staged_grid_baseline": 0.250,
+            "staged_grid_edge_0006": 0.231,
+            "staged_grid_edge_0010": 0.224,
+            "staged_grid_best_edge_block_expiry": 0.232,
+        }
+        summary = _mock_summary(
+            run_name=run_name,
+            publishable=False,
+            stage2_auc=auc_map[run_name],
+            stage2_brier=brier_map[run_name],
+            profit_factor=1.1,
+            net_return_sum=0.02,
+            max_drawdown_pct=0.08,
+        )
+        summary["stage_artifacts"] = {
+            "stage2": {
+                "diagnostics_score_paths": {
+                    "research_valid": str((output_root / "research_valid.parquet").resolve()),
+                    "final_holdout": str((output_root / "final_holdout.parquet").resolve()),
+                }
+            }
+        }
+        summary["output_root"] = str(output_root)
+        (output_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        return summary
+
+    monkeypatch.setattr(grid_module, "run_research", _fake_run_research)
+    monkeypatch.setattr(
+        grid_module,
+        "bootstrap_stage2_scores_from_parquet",
+        lambda *_args, **_kwargs: {
+            "resample_unit": "trade_date",
+            "iterations": 25,
+            "units_total": 10,
+            "rows_total": 100,
+            "base_quality": {"roc_auc": 0.56, "brier": 0.24},
+            "bootstrap_metrics": {
+                "roc_auc": {"count": 25, "mean": 0.55, "std": 0.01, "min": 0.53, "p05": 0.535, "p50": 0.55, "p95": 0.565, "max": 0.57},
+                "brier": {"count": 25, "mean": 0.24, "std": 0.004, "min": 0.232, "p05": 0.234, "p50": 0.24, "p95": 0.246, "max": 0.248},
+            },
+            "gate_pass_rate": 0.24,
+        },
+    )
+
+    result = grid_module.run_staged_grid(
+        resolved,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+    )
+
+    assert result["robustness_probe"]["enabled"] is True
+    assert result["robustness_probe"]["evaluated_run_ids"] == ["edge_0010"]
+    run_rows = {row["grid_run_id"]: row for row in result["runs"]}
+    assert run_rows["edge_0010"]["stage2_robustness"]["splits"]["research_valid"]["status"] == "computed"
+    assert run_rows["edge_0010"]["stage2_robustness"]["splits"]["research_valid"]["gate_pass_rate"] == 0.24
+
+
 def test_grid_dependency_inheritance_requires_successful_prior_runs(tmp_path: Path, monkeypatch) -> None:
     parquet_root = build_staged_parquet_root(tmp_path)
     base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)

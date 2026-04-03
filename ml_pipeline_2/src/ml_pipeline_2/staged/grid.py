@@ -14,6 +14,7 @@ from ..contracts.manifests import STAGED_GRID_KIND, manifest_hash
 from ..experiment_control.runner import run_research
 from ..experiment_control.state import utc_now
 from .publish import release_staged_run
+from .robustness import bootstrap_stage2_scores_from_parquet
 
 
 def _timestamp_suffix() -> str:
@@ -24,6 +25,13 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
+
+
+def _load_json(path: Path) -> Dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"expected JSON object: {path}")
+    return payload
 
 
 def _run_lane(resolved_config: Dict[str, Any], run_output_root: Path) -> Dict[str, Any]:
@@ -126,6 +134,8 @@ def _result_row(
     stage1_cv = dict(summary.get("cv_prechecks", {}).get("stage1_cv") or {})
     stage2_cv = dict(summary.get("cv_prechecks", {}).get("stage2_cv") or {})
     combined_holdout = dict((((summary.get("holdout_reports") or {}).get("stage3") or {}).get("combined_holdout_summary")) or {})
+    label_filtering = dict((summary.get("label_filtering") or {}).get("stage2") or {})
+    stage2_artifacts = dict((summary.get("stage_artifacts") or {}).get("stage2") or {})
     blocking_reasons = list(publish_assessment.get("blocking_reasons") or [])
     return {
         "sequence": int(sequence),
@@ -145,6 +155,9 @@ def _result_row(
         "stage2_cv": stage2_cv,
         "combined_holdout_summary": combined_holdout,
         "scenario_reports": dict(summary.get("scenario_reports") or {}),
+        "stage2_label_filtering": label_filtering,
+        "stage2_diagnostics_path": stage2_artifacts.get("diagnostics_path"),
+        "stage2_diagnostics_score_paths": dict(stage2_artifacts.get("diagnostics_score_paths") or {}),
         "applied_overrides": applied_overrides,
         "inherited_from_run_id": inherited_from_run_id,
     }
@@ -224,6 +237,68 @@ def _stage2_hpo_escalation(rows: Sequence[Dict[str, Any]], thresholds: Dict[str,
             if eligible
             else "move_to_stage2_label_or_view_redesign"
         ),
+    }
+
+
+def _normalize_robustness_probe(selection: Dict[str, Any]) -> Dict[str, Any]:
+    raw = dict(selection.get("robustness_probe") or {})
+    enabled = bool(raw.get("enabled", False))
+    splits = [str(item).strip() for item in list(raw.get("splits") or ["research_valid", "final_holdout"]) if str(item).strip()]
+    return {
+        "enabled": enabled,
+        "top_k": max(1, int(raw.get("top_k", 3))),
+        "iterations": max(1, int(raw.get("iterations", 200))),
+        "random_seed": max(1, int(raw.get("random_seed", 42))),
+        "resample_unit": str(raw.get("resample_unit") or "trade_date").strip().lower(),
+        "splits": splits,
+    }
+
+
+def _attach_stage2_robustness_probe(
+    rows: List[Dict[str, Any]],
+    *,
+    selection: Dict[str, Any],
+    stage2_gates: Dict[str, Any],
+) -> Dict[str, Any]:
+    probe = _normalize_robustness_probe(selection)
+    if not probe["enabled"]:
+        return {"enabled": False, "evaluated_run_ids": []}
+    evaluated_run_ids: list[str] = []
+    roc_auc_min = _metric_float(stage2_gates.get("roc_auc_min"), default=float("nan"))
+    brier_max = _metric_float(stage2_gates.get("brier_max"), default=float("nan"))
+    row_by_id = {str(row.get("grid_run_id")): row for row in rows}
+    ranked_candidates = [
+        row
+        for row in _sort_rows(rows)
+        if str(row.get("release_status")) != "failed"
+    ][: int(probe["top_k"])]
+    for ranked_row in ranked_candidates:
+        row = row_by_id[str(ranked_row["grid_run_id"])]
+        score_paths = dict(row.get("stage2_diagnostics_score_paths") or {})
+        robustness: Dict[str, Any] = {
+            "probe_config": dict(probe),
+            "splits": {},
+        }
+        for split_name in list(probe["splits"]):
+            score_path = score_paths.get(split_name)
+            if not score_path:
+                robustness["splits"][split_name] = {"status": "missing_score_path"}
+                continue
+            robustness["splits"][split_name] = {
+                "status": "computed",
+                **bootstrap_stage2_scores_from_parquet(
+                    score_path,
+                    iterations=int(probe["iterations"]),
+                    random_seed=int(probe["random_seed"]),
+                    roc_auc_min=roc_auc_min,
+                    brier_max=brier_max,
+                ),
+            }
+        row["stage2_robustness"] = robustness
+        evaluated_run_ids.append(str(row["grid_run_id"]))
+    return {
+        **probe,
+        "evaluated_run_ids": evaluated_run_ids,
     }
 
 
@@ -438,6 +513,18 @@ def run_staged_grid(
         for row in run_rows:
             row["rank"] = rank_by_run_id[str(row["grid_run_id"])]
 
+        robustness_probe = _attach_stage2_robustness_probe(
+            run_rows,
+            selection=dict(grid_resolved.get("selection") or {}),
+            stage2_gates=dict((base_resolved_manifest.get("hard_gates") or {}).get("stage2") or {}),
+        )
+        ranked_rows = _sort_rows(run_rows)
+        for rank, row in enumerate(ranked_rows, start=1):
+            row["rank"] = int(rank)
+        rank_by_run_id = {str(row["grid_run_id"]): int(row["rank"]) for row in ranked_rows}
+        for row in run_rows:
+            row["rank"] = rank_by_run_id[str(row["grid_run_id"])]
+
         winner = dict(ranked_rows[0]) if ranked_rows else None
         any_failed = any(str(row.get("release_status")) == "failed" for row in run_rows)
         stage2_hpo_escalation = _stage2_hpo_escalation(
@@ -485,6 +572,7 @@ def run_staged_grid(
             "winner_release": winner_release,
             "dominant_failure_reason": dominant_failure_reason,
             "stage2_hpo_escalation": stage2_hpo_escalation,
+            "robustness_probe": robustness_probe,
             "paths": {
                 "grid_root": str(grid_root.resolve()),
                 "manifests_root": str(manifests_root.resolve()),
