@@ -200,13 +200,20 @@ In order, the wrapper:
 6. writes `coverage_audit.json` before build
 7. refuses to continue if options/source coverage is incomplete
 8. builds only pending days by default with resume enabled
-9. writes `build_manifest.json`, `validation_report.json`, and `window_manifest_latest.json`
-10. re-audits coverage after build
-11. refuses to publish if the requested window is still not closed
-12. verifies the Stage 2 schema locally
-13. cleans the remote published parquet prefixes by default
-14. publishes datasets and reports to `SNAPSHOT_PARQUET_BUCKET_URL`
-15. verifies the published layout in GCS
+9. runs derived `SnapshotMLFlat` contract validation during build unless `VALIDATE_ML_FLAT_CONTRACT=0` is set
+10. writes `build_manifest.json`, `validation_report.json`, and `window_manifest_latest.json`
+11. re-audits coverage after build
+12. refuses to publish if the requested window is still not closed
+13. verifies the Stage 2 schema locally
+14. cleans the remote published parquet prefixes by default
+15. publishes datasets and reports to `SNAPSHOT_PARQUET_BUCKET_URL`
+16. verifies the published layout in GCS
+
+Validation mode:
+
+- `run_snapshot_parquet_pipeline.sh` enables derived `SnapshotMLFlat` contract validation by default
+- direct `python -m snapshot_app.historical.snapshot_batch_runner ...` usage keeps `--validate-ml-flat-contract` off by default for compatibility
+- `--build-stage snapshots` still enforces canonical `MarketSnapshot` validation, but it does not run derived `SnapshotMLFlat` validation because no derived rows are built in that stage
 
 The wrapper writes run artifacts under:
 

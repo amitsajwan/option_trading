@@ -124,6 +124,9 @@ def test_run_snapshot_batch_flushes_canonical_and_market_base(monkeypatch, tmp_p
     market_base_path = tmp_path / "market_base" / "year=2020" / "chunk=202001_202001_m1" / "data.parquet"
 
     assert result["status"] == "complete"
+    assert result["contract_validation_requested"] is False
+    assert result["contract_validation_enabled"] is False
+    assert result["contract_validation_scope"] == "canonical_market_snapshot_only"
     assert result["days_processed"] == 1
     assert result["warmup_days_processed"] == 1
     assert result["total_snapshot_rows"] == 1
@@ -221,6 +224,25 @@ def test_run_snapshot_batch_marks_missing_input_days_as_partial_incomplete(monke
     assert result["days_processed"] == 1
     assert result["days_skipped_missing_inputs"] == 1
     assert result["missing_input_days"] == ["2020-01-30"]
+
+
+def test_run_snapshot_batch_reports_ml_flat_validation_as_not_applicable(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("snapshot_app.historical.snapshot_batch.ParquetStore", _FakeParquetStore)
+
+    result = run_snapshot_batch(
+        parquet_base=tmp_path,
+        instrument="BANKNIFTY-I",
+        min_day="2020-01-29",
+        max_day="2020-01-30",
+        resume=False,
+        dry_run=True,
+        validate_ml_flat_contract=True,
+    )
+
+    assert result["status"] == "dry_run"
+    assert result["contract_validation_requested"] is True
+    assert result["contract_validation_enabled"] is False
+    assert result["contract_validation_scope"] == "canonical_market_snapshot_only"
 
 
 def test_write_days_to_parquet_preserves_existing_file_when_atomic_replace_fails(
