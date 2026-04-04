@@ -78,7 +78,9 @@ class HistoricalReplayAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Historical Replay Monitor", response.body)
         self.assertIn(b"Replay Controls", response.body)
-        self.assertIn(b"Range Trades", response.body)
+        self.assertIn(b"How To Use This Page", response.body)
+        self.assertIn(b"All Trades In Selected Run Range", response.body)
+        self.assertIn(b"Run Source", response.body)
         self.assertIn(b"Operator Playbook", response.body)
         self.assertIn(b"Evaluation Compare", response.body)
 

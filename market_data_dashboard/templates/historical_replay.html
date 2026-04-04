@@ -427,6 +427,29 @@
         </section>
 
         <section class="panel" style="margin-bottom:14px;">
+            <h2>How To Use This Page</h2>
+            <div class="grid-4">
+                <div class="playbook-card">
+                    <strong>1. Check Run Scope</strong>
+                    Use `Pinned Run` and `Latest Run Status` first. `Pinned Run` means you are reviewing a specific replay run, not automatically switching to the newest run.
+                </div>
+                <div class="playbook-card">
+                    <strong>2. Read The Chart Correctly</strong>
+                    `Underlying Session Chart` is always one selected session day only. It is not a whole-range chart.
+                </div>
+                <div class="playbook-card">
+                    <strong>3. Read All Trades</strong>
+                    `All Trades In Selected Run Range` is the multi-day table for the full replay window, such as `2024-01-02` to `2024-01-31`.
+                </div>
+                <div class="playbook-card">
+                    <strong>4. Move To Compare</strong>
+                    Use `Evaluation Compare` when you want the run-level result, equity, deltas, and baseline comparison across the whole range.
+                </div>
+            </div>
+            <div class="note" id="pageGuideNote">If replay is still running, expect partial trades, partial signals, and incomplete chart markers until the run reaches `completed`.</div>
+        </section>
+
+        <section class="panel" style="margin-bottom:14px;">
             <h2>Operator Playbook</h2>
             <div class="grid-4">
                 <div class="playbook-card">
@@ -477,7 +500,8 @@
             <div class="panel">
                 <h2>Run Details</h2>
                 <div class="detail-grid">
-                    <div class="kv"><div class="label">Latest Run ID</div><div class="value" id="runIdValue">--</div></div>
+                    <div class="kv"><div class="label">Active Run ID</div><div class="value" id="runIdValue">--</div></div>
+                    <div class="kv"><div class="label">Run Source</div><div class="value" id="runSourceValue">--</div></div>
                     <div class="kv"><div class="label">Latest Run Status</div><div class="value" id="runStatusValue">--</div></div>
                     <div class="kv"><div class="label">Selected Range</div><div class="value" id="selectedRangeValue">--</div></div>
                     <div class="kv"><div class="label">Range Trades</div><div class="value" id="rangeTradeCountValue">--</div></div>
@@ -487,10 +511,10 @@
 
         <section class="kpis">
             <div class="panel kpi"><div class="label">Replay Topic</div><div class="value" id="kpiTopic">--</div><div class="sub">Historical snapshot topic</div></div>
-            <div class="panel kpi"><div class="label">Replay Date</div><div class="value" id="kpiDate">--</div><div class="sub" id="kpiDateSub">--</div></div>
+            <div class="panel kpi"><div class="label">Selected Session Day</div><div class="value" id="kpiDate">--</div><div class="sub" id="kpiDateSub">--</div></div>
             <div class="panel kpi"><div class="label">Events Emitted</div><div class="value" id="kpiEvents">--</div><div class="sub">Replay progress contract</div></div>
             <div class="panel kpi"><div class="label">Open Positions</div><div class="value" id="kpiOpen">--</div><div class="sub">Historical current exposure</div></div>
-            <div class="panel kpi"><div class="label">Trades</div><div class="value" id="kpiTrades">--</div><div class="sub">Historical closed trades</div></div>
+            <div class="panel kpi"><div class="label">Session-Day Trades</div><div class="value" id="kpiTrades">--</div><div class="sub">Closed trades on the selected session day</div></div>
             <div class="panel kpi"><div class="label">Instrument</div><div class="value" id="kpiInstrument">--</div><div class="sub" id="kpiPnl">--</div></div>
         </section>
 
@@ -548,7 +572,7 @@
 
         <section class="grid-3">
             <div class="panel">
-                <h3>Range Trades</h3>
+                <h3>All Trades In Selected Run Range</h3>
                 <div class="note" id="tradePanelNote" style="margin-bottom:12px;">
                     Trades below follow the selected replay range, not only the currently selected session day.
                 </div>
@@ -938,8 +962,12 @@
                 latestRunState = run;
                 document.getElementById("runIdValue").textContent = safeText(run.run_id);
                 document.getElementById("runStatusValue").innerHTML = `<span class="tag ${toneTag(run.status)}">${safeText(run.status)}</span>`;
+                document.getElementById("runSourceValue").textContent = "Pinned run in progress";
                 if (actionNote) {
-                    actionNote.textContent = `${safeText(run.message)}${run.error ? ` | ${run.error}` : ""}`;
+                    const progressText = run.progress_pct !== null && run.progress_pct !== undefined
+                        ? ` | progress ${Number(run.progress_pct).toFixed(0)}%`
+                        : "";
+                    actionNote.textContent = `${safeText(run.message)}${progressText}${run.error ? ` | ${run.error}` : ""}`;
                 }
                 const status = String(run.status || "").toLowerCase();
                 if (["completed", "failed", "cancelled"].includes(status)) {
@@ -1033,6 +1061,7 @@
             const latestRunFrom = safeText(latestRun?.date_from, "").trim();
             const latestRunTo = safeText(latestRun?.date_to, "").trim();
             const latestRunStatus = safeText(latestRun?.status, "").trim();
+            const pinnedRunId = safeText(params.get("run_id"), "").trim();
             const summaryFrom = latestRunFrom || session?.session?.date_ist || replay.date_ist || "";
             const summaryTo = latestRunTo || session?.session?.date_ist || replay.date_ist || "";
             const summaryFromEncoded = encodeURIComponent(summaryFrom);
@@ -1045,6 +1074,9 @@
                 document.getElementById("evalLatestRunLink").href = `/api/strategy/evaluation/runs/${latestRunId}`;
             }
             document.getElementById("runIdValue").textContent = activeRunId || latestRunId || "--";
+            document.getElementById("runSourceValue").textContent = pinnedRunId
+                ? `Pinned run ${activeRunId === latestRunId ? "(also latest completed)" : ""}`.trim()
+                : (latestRunId ? "Latest completed run" : "No completed run");
             document.getElementById("runStatusValue").innerHTML = `<span class="tag ${toneTag(latestRunStatus || replay.status)}">${safeText(latestRunStatus || replay.status)}</span>`;
             document.getElementById("selectedRangeValue").textContent = `${safeText(summaryFrom)} to ${safeText(summaryTo)}`;
             const dateFromInput = document.getElementById("dateFromInput");
@@ -1057,9 +1089,18 @@
                     const votesHint = Number(counts.votes || 0) === 0 && Number(counts.signals || 0) > 0
                         ? " Vote rows were not persisted for this session day, so treat the Signals and Range Trades panels as the source of truth for this replay."
                         : "";
-                    runScopeNote.textContent = `Latest completed run: ${summaryFrom || "--"} to ${summaryTo || "--"} | status ${latestRunStatus || "unknown"} | run ${activeRunId || latestRunId}. The page below is scoped to the selected session day ${safeText(session?.session?.date_ist || replay.date_ist)} and the active replay run.${votesHint}`;
+                    runScopeNote.textContent = `Run view: ${pinnedRunId ? "pinned run" : "latest completed run"} | range ${summaryFrom || "--"} to ${summaryTo || "--"} | status ${latestRunStatus || "unknown"} | run ${activeRunId || latestRunId}. The page below is scoped to the selected session day ${safeText(session?.session?.date_ist || replay.date_ist)} and the active replay run.${votesHint}`;
                 } else {
                     runScopeNote.textContent = `No completed historical run was found. The page below stays scoped to the selected session day ${safeText(session?.session?.date_ist || replay.date_ist)}.`;
+                }
+            }
+            const pageGuideNote = document.getElementById("pageGuideNote");
+            if (pageGuideNote) {
+                const replayStatus = String(latestRunStatus || replay.status || "").toLowerCase();
+                if (["queued", "running", "in_progress"].includes(replayStatus)) {
+                    pageGuideNote.textContent = `Replay is still running for ${summaryFrom || "--"} to ${summaryTo || "--"}. Expect partial trades, partial signals, and incomplete session markers until the run reaches completed.`;
+                } else {
+                    pageGuideNote.textContent = `Use this page to inspect one selected session day plus the full run-range trade table. Open Evaluation Compare for multi-day run analysis and baseline comparison.`;
                 }
             }
 
@@ -1068,7 +1109,7 @@
             const tradesPayload = await fetchTradesForRange({
                 dateFrom: summaryFrom,
                 dateTo: summaryTo,
-                runId: latestRunId || null,
+                runId: activeRunId || latestRunId || null,
             }).catch(() => null);
             renderTradesTable(tradesPayload || { rows: [], counts: { closed_trades: 0 } }, summaryFrom, summaryTo);
 
@@ -1122,7 +1163,9 @@
         document.getElementById("loadRangeBtn").addEventListener("click", async () => {
             const dateFrom = document.getElementById("dateFromInput").value;
             const dateTo = document.getElementById("dateToInput").value;
-            const payload = await fetchTradesForRange({ dateFrom, dateTo, runId: latestRunState?.run_id || null }).catch(() => null);
+            const params = new URLSearchParams(window.location.search);
+            const activeRunId = params.get("run_id") || latestRunState?.run_id || null;
+            const payload = await fetchTradesForRange({ dateFrom, dateTo, runId: activeRunId }).catch(() => null);
             renderTradesTable(payload || { rows: [], counts: { closed_trades: 0 } }, dateFrom, dateTo);
         });
 
