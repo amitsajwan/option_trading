@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strategy Evaluation Compare</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap">
+    <style>
+        :root {
+            --bg: #f4efe7;
+            --surface: rgba(255, 252, 247, 0.95);
+            --ink: #16293a;
+            --muted: #627485;
+            --line: rgba(22, 41, 58, 0.12);
+            --accent: #0d6a78;
+            --accent2: #8c5a2b;
+            --good: #18794e;
+            --warn: #a16207;
+            --bad: #b42318;
+            --shadow: 0 22px 44px rgba(22, 41, 58, 0.12);
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            color: var(--ink);
+            font-family: "Manrope", sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(13, 106, 120, 0.14), transparent 32%),
+                radial-gradient(circle at top right, rgba(140, 90, 43, 0.14), transparent 30%),
+                var(--bg);
+        }
+
+        .page {
+            width: min(1460px, calc(100vw - 24px));
+            margin: 0 auto;
+            padding: 18px 0 28px;
+            display: grid;
+            gap: 14px;
+        }
+
+        .panel {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            box-shadow: var(--shadow);
+            padding: 18px;
+        }
+
+        .hero {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .hero h1 {
+            margin: 0;
+            font-family: "Space Grotesk", sans-serif;
+            font-size: clamp(30px, 4vw, 46px);
+            line-height: 0.98;
+            letter-spacing: -0.04em;
+        }
+
+        .hero p {
+            margin: 10px 0 0;
+            color: var(--muted);
+            max-width: 900px;
+            line-height: 1.6;
+        }
+
+        .hero-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: flex-start;
+        }
+
+        .link, .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 40px;
+            padding: 10px 14px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: rgba(255,255,255,0.84);
+            color: var(--ink);
+            text-decoration: none;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .btn.primary, .link.primary {
+            color: #fff;
+            border-color: transparent;
+            background: linear-gradient(135deg, var(--accent), #0b4f60);
+        }
+
+        .grid-2, .grid-3, .kpis {
+            display: grid;
+            gap: 14px;
+        }
+
+        .grid-2 { grid-template-columns: 1.15fr 0.85fr; }
+        .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .label {
+            color: var(--muted);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .field input {
+            min-height: 42px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: rgba(255,255,255,0.92);
+            color: var(--ink);
+            font: inherit;
+        }
+
+        .note {
+            margin-top: 12px;
+            padding: 12px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.8);
+            border: 1px solid #e8eef3;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        .metric {
+            padding: 16px;
+        }
+
+        .metric .value {
+            margin-top: 8px;
+            font-size: 24px;
+            font-weight: 800;
+        }
+
+        .metric .sub {
+            margin-top: 6px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .compare-card {
+            padding: 16px;
+            border-radius: 16px;
+            border: 1px solid #e8eef3;
+            background: rgba(255,255,255,0.82);
+        }
+
+        .compare-card h3 {
+            margin: 0 0 10px;
+            font-size: 18px;
+        }
+
+        .compare-kv {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #eef3f7;
+            font-size: 13px;
+        }
+
+        .compare-kv:last-child { border-bottom: 0; }
+
+        .decision {
+            border-left: 4px solid var(--accent2);
+        }
+
+        .decision-chip {
+            display: inline-flex;
+            align-items: center;
+            min-height: 32px;
+            padding: 0 10px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: #f7fafc;
+        }
+
+        .decision-chip.good { color: var(--good); border-color: rgba(24,121,78,0.3); background: rgba(24,121,78,0.08); }
+        .decision-chip.warn { color: var(--warn); border-color: rgba(161,98,7,0.3); background: rgba(161,98,7,0.08); }
+        .decision-chip.bad { color: var(--bad); border-color: rgba(180,35,24,0.3); background: rgba(180,35,24,0.08); }
+        .decision-chip.info { color: var(--accent); border-color: rgba(13,106,120,0.3); background: rgba(13,106,120,0.08); }
+
+        .decision-title {
+            margin-top: 10px;
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .decision-text, .decision-list {
+            margin-top: 10px;
+            color: var(--muted);
+            line-height: 1.65;
+        }
+
+        .decision-list { display: grid; gap: 8px; font-size: 13px; }
+
+        .table-wrap {
+            overflow: auto;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            background: rgba(255,255,255,0.84);
+            max-height: 420px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        th, td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #eef3f7;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            background: #f4f8fb;
+            z-index: 1;
+        }
+
+        @media (max-width: 1180px) {
+            .grid-2, .grid-3, .kpis, .form-grid { grid-template-columns: 1fr 1fr; }
+        }
+
+        @media (max-width: 760px) {
+            .page { width: calc(100vw - 16px); }
+            .grid-2, .grid-3, .kpis, .form-grid { grid-template-columns: 1fr; }
+            .hero { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <section class="panel hero">
+            <div>
+                <h1>Strategy Evaluation Compare</h1>
+                <p>Run-scoped comparison surface for deterministic research and replay review. Use this page to compare a current run against a baseline run without stitching summary and trades JSON by hand.</p>
+            </div>
+            <div class="hero-links">
+                <a class="link primary" href="/historical/replay">Replay Monitor</a>
+                <a class="link" href="/trading/research">Research Explorer</a>
+                <a class="link" href="/live/strategy">Live Monitor</a>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="form-grid">
+                <label class="field">
+                    <span class="label">Date From</span>
+                    <input id="dateFrom" type="date">
+                </label>
+                <label class="field">
+                    <span class="label">Date To</span>
+                    <input id="dateTo" type="date">
+                </label>
+                <label class="field">
+                    <span class="label">Current Run ID</span>
+                    <input id="currentRunId" type="text" placeholder="Latest completed run will auto-fill">
+                </label>
+                <label class="field">
+                    <span class="label">Baseline Run ID</span>
+                    <input id="baselineRunId" type="text" placeholder="Optional comparison run">
+                </label>
+            </div>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+                <button class="btn primary" id="loadCompareBtn" type="button">Load Comparison</button>
+                <a class="link" id="currentSummaryLink" href="/api/strategy/evaluation/summary?dataset=historical" target="_blank" rel="noopener">Current Summary API</a>
+                <a class="link" id="baselineSummaryLink" href="/api/strategy/evaluation/summary?dataset=historical" target="_blank" rel="noopener">Baseline Summary API</a>
+            </div>
+            <div class="note" id="compareNote">
+                Load the latest run by default, then optionally add a baseline `run_id` to compare product-level outcomes.
+            </div>
+        </section>
+
+        <section class="kpis">
+            <div class="panel metric"><div class="label">Current Trades</div><div class="value" id="kpiCurrentTrades">--</div><div class="sub">Closed trades in current run</div></div>
+            <div class="panel metric"><div class="label">Current Net Return</div><div class="value" id="kpiCurrentReturn">--</div><div class="sub">Capital-weighted run return</div></div>
+            <div class="panel metric"><div class="label">Baseline Net Return</div><div class="value" id="kpiBaselineReturn">--</div><div class="sub">Comparison run return</div></div>
+            <div class="panel metric"><div class="label">Return Delta</div><div class="value" id="kpiDeltaReturn">--</div><div class="sub">Current minus baseline</div></div>
+            <div class="panel metric"><div class="label">Win Rate Delta</div><div class="value" id="kpiDeltaWinRate">--</div><div class="sub">Current minus baseline</div></div>
+        </section>
+
+        <section class="grid-2">
+            <div class="panel compare-card">
+                <h3>Run Comparison</h3>
+                <div class="compare-kv"><span>Current run</span><strong id="currentRunLabel">--</strong></div>
+                <div class="compare-kv"><span>Baseline run</span><strong id="baselineRunLabel">--</strong></div>
+                <div class="compare-kv"><span>Current profit factor</span><strong id="currentPf">--</strong></div>
+                <div class="compare-kv"><span>Baseline profit factor</span><strong id="baselinePf">--</strong></div>
+                <div class="compare-kv"><span>Current max drawdown</span><strong id="currentDd">--</strong></div>
+                <div class="compare-kv"><span>Baseline max drawdown</span><strong id="baselineDd">--</strong></div>
+                <div class="compare-kv"><span>Current top strategy</span><strong id="currentTopStrategy">--</strong></div>
+                <div class="compare-kv"><span>Baseline top strategy</span><strong id="baselineTopStrategy">--</strong></div>
+            </div>
+            <div class="panel decision">
+                <div class="decision-chip info" id="decisionChip">Awaiting Comparison</div>
+                <div class="decision-title" id="decisionTitle">Load current and baseline runs.</div>
+                <div class="decision-text" id="decisionText">
+                    This panel converts the run comparison into a product decision recommendation so you can decide whether the current profile is improving, drifting, or failing.
+                </div>
+                <div class="decision-list" id="decisionList"></div>
+            </div>
+        </section>
+
+        <section class="grid-3">
+            <div class="panel">
+                <h3 style="margin-top:0;">Current By Strategy</h3>
+                <div class="table-wrap"><table><thead><tr><th>Strategy</th><th>Trades</th><th>Total Cap PnL %</th><th>Win Rate</th></tr></thead><tbody id="currentStrategyBody"><tr><td colspan="4">Load a run.</td></tr></tbody></table></div>
+            </div>
+            <div class="panel">
+                <h3 style="margin-top:0;">Baseline By Strategy</h3>
+                <div class="table-wrap"><table><thead><tr><th>Strategy</th><th>Trades</th><th>Total Cap PnL %</th><th>Win Rate</th></tr></thead><tbody id="baselineStrategyBody"><tr><td colspan="4">Optional.</td></tr></tbody></table></div>
+            </div>
+            <div class="panel">
+                <h3 style="margin-top:0;">Current Trades</h3>
+                <div class="table-wrap"><table><thead><tr><th>Date</th><th>Strategy</th><th>Direction</th><th>Exit</th><th>Cap PnL</th></tr></thead><tbody id="tradeBody"><tr><td colspan="5">Load a run.</td></tr></tbody></table></div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const dateFromInput = document.getElementById("dateFrom");
+        const dateToInput = document.getElementById("dateTo");
+        const currentRunIdInput = document.getElementById("currentRunId");
+        const baselineRunIdInput = document.getElementById("baselineRunId");
+        const compareNote = document.getElementById("compareNote");
+
+        function safeText(value, fallback = "--") {
+            const text = String(value ?? "").trim();
+            return text || fallback;
+        }
+
+        function formatNumber(value, digits = 2) {
+            const num = Number(value);
+            if (!Number.isFinite(num)) return "--";
+            return num.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+        }
+
+        function formatPct(value) {
+            const num = Number(value);
+            if (!Number.isFinite(num)) return "--";
+            return `${(num * 100).toFixed(2)}%`;
+        }
+
+        function formatDelta(value) {
+            const num = Number(value);
+            if (!Number.isFinite(num)) return "--";
+            const sign = num > 0 ? "+" : "";
+            return `${sign}${(num * 100).toFixed(2)}%`;
+        }
+
+        async function fetchJson(url) {
+            const response = await fetch(url);
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload.detail || `${response.status} ${response.statusText}`);
+            return payload;
+        }
+
+        function classifyComparison(currentSummary, baselineSummary) {
+            const currentReturn = Number(currentSummary?.equity?.net_return_pct || 0);
+            const baselineReturn = Number(baselineSummary?.equity?.net_return_pct || 0);
+            const currentPf = Number(currentSummary?.overall?.profit_factor || 0);
+            const baselinePf = Number(baselineSummary?.overall?.profit_factor || 0);
+            const currentTrades = Number(currentSummary?.overall?.trades || 0);
+            const deltaReturn = currentReturn - baselineReturn;
+
+            if (!baselineSummary) {
+                return {
+                    tone: currentReturn > 0 ? "info" : "warn",
+                    chip: "Single-Run Review",
+                    title: "Current run loaded without a baseline.",
+                    text: "This is enough to review current behavior, but not enough to call it an improvement or regression.",
+                    bullets: [
+                        `Current return ${formatPct(currentReturn)} across ${formatNumber(currentTrades, 0)} trades.`,
+                        "Add a baseline run to convert this into a promotion or regression decision.",
+                    ],
+                };
+            }
+
+            if (deltaReturn > 0.01 && currentPf >= baselinePf) {
+                return {
+                    tone: "good",
+                    chip: "Improving",
+                    title: "Current run is outperforming the baseline.",
+                    text: "The current profile is producing better return while holding or improving quality metrics.",
+                    bullets: [
+                        `Return delta ${formatDelta(deltaReturn)} versus baseline.`,
+                        `Profit factor ${formatNumber(currentPf)} versus ${formatNumber(baselinePf)}.`,
+                    ],
+                };
+            }
+
+            if (deltaReturn >= 0 || currentPf >= baselinePf) {
+                return {
+                    tone: "warn",
+                    chip: "Mixed Change",
+                    title: "Current run is mixed against the baseline.",
+                    text: "One quality dimension improved, but the overall result is not clean enough to call it a straight promotion.",
+                    bullets: [
+                        `Return delta ${formatDelta(deltaReturn)}.`,
+                        "Inspect strategy contribution and trade count before deciding keep versus tune.",
+                    ],
+                };
+            }
+
+            return {
+                tone: "bad",
+                chip: "Regression",
+                title: "Current run is weaker than the baseline.",
+                text: "The current profile does not justify promotion over the comparison run from the metrics loaded here.",
+                bullets: [
+                    `Return delta ${formatDelta(deltaReturn)} and profit factor drift are both unfavorable.`,
+                    "Treat this as a tune-or-reject case until a wider replay says otherwise.",
+                ],
+            };
+        }
+
+        function renderDecision(currentSummary, baselineSummary) {
+            const decision = classifyComparison(currentSummary, baselineSummary);
+            const chip = document.getElementById("decisionChip");
+            chip.className = `decision-chip ${decision.tone}`;
+            chip.textContent = decision.chip;
+            document.getElementById("decisionTitle").textContent = decision.title;
+            document.getElementById("decisionText").textContent = decision.text;
+            document.getElementById("decisionList").innerHTML = (decision.bullets || []).map((item) => `<div>${item}</div>`).join("");
+        }
+
+        function renderStrategyTable(targetId, rows) {
+            const target = document.getElementById(targetId);
+            if (!rows || !rows.length) {
+                target.innerHTML = `<tr><td colspan="4">No rows.</td></tr>`;
+                return;
+            }
+            target.innerHTML = rows.slice(0, 8).map((row) => `
+                <tr>
+                    <td>${safeText(row.entry_strategy)}</td>
+                    <td>${formatNumber(row.trades, 0)}</td>
+                    <td>${formatPct(row.total_capital_pnl_pct)}</td>
+                    <td>${formatPct(row.win_rate)}</td>
+                </tr>
+            `).join("");
+        }
+
+        function renderTrades(rows) {
+            const target = document.getElementById("tradeBody");
+            if (!rows || !rows.length) {
+                target.innerHTML = `<tr><td colspan="5">No trades.</td></tr>`;
+                return;
+            }
+            target.innerHTML = rows.slice(0, 12).map((row) => `
+                <tr>
+                    <td>${safeText(row.trade_date_ist)}</td>
+                    <td>${safeText(row.entry_strategy)}</td>
+                    <td>${safeText(row.direction)}</td>
+                    <td>${safeText(row.exit_reason)}</td>
+                    <td>${formatPct(row.capital_pnl_pct)}</td>
+                </tr>
+            `).join("");
+        }
+
+        function topStrategy(summary) {
+            const rows = Array.isArray(summary?.by_strategy) ? summary.by_strategy : [];
+            return rows.length ? safeText(rows[0].entry_strategy) : "--";
+        }
+
+        function updateSummaryLinks(dateFrom, dateTo, currentRunId, baselineRunId) {
+            const current = `/api/strategy/evaluation/summary?dataset=historical&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}${currentRunId ? `&run_id=${encodeURIComponent(currentRunId)}` : ""}`;
+            const baseline = `/api/strategy/evaluation/summary?dataset=historical&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}${baselineRunId ? `&run_id=${encodeURIComponent(baselineRunId)}` : ""}`;
+            document.getElementById("currentSummaryLink").href = current;
+            document.getElementById("baselineSummaryLink").href = baseline;
+        }
+
+        async function loadComparison() {
+            const dateFrom = dateFromInput.value;
+            const dateTo = dateToInput.value;
+            const currentRunId = currentRunIdInput.value.trim();
+            const baselineRunId = baselineRunIdInput.value.trim();
+            updateSummaryLinks(dateFrom, dateTo, currentRunId, baselineRunId);
+
+            const currentSummary = await fetchJson(`/api/strategy/evaluation/summary?dataset=historical&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}${currentRunId ? `&run_id=${encodeURIComponent(currentRunId)}` : ""}`);
+            const currentTrades = await fetchJson(`/api/strategy/evaluation/trades?dataset=historical&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}${currentRunId ? `&run_id=${encodeURIComponent(currentRunId)}` : ""}&page_size=20`);
+            const baselineSummary = baselineRunId
+                ? await fetchJson(`/api/strategy/evaluation/summary?dataset=historical&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}&run_id=${encodeURIComponent(baselineRunId)}`)
+                : null;
+
+            document.getElementById("kpiCurrentTrades").textContent = formatNumber(currentSummary?.overall?.trades, 0);
+            document.getElementById("kpiCurrentReturn").textContent = formatPct(currentSummary?.equity?.net_return_pct);
+            document.getElementById("kpiBaselineReturn").textContent = baselineSummary ? formatPct(baselineSummary?.equity?.net_return_pct) : "--";
+            document.getElementById("kpiDeltaReturn").textContent = baselineSummary ? formatDelta(Number(currentSummary?.equity?.net_return_pct || 0) - Number(baselineSummary?.equity?.net_return_pct || 0)) : "--";
+            document.getElementById("kpiDeltaWinRate").textContent = baselineSummary ? formatDelta(Number(currentSummary?.overall?.win_rate || 0) - Number(baselineSummary?.overall?.win_rate || 0)) : "--";
+
+            document.getElementById("currentRunLabel").textContent = safeText(currentSummary?.resolved_run_id || currentRunId);
+            document.getElementById("baselineRunLabel").textContent = baselineSummary ? safeText(baselineSummary?.resolved_run_id || baselineRunId) : "--";
+            document.getElementById("currentPf").textContent = formatNumber(currentSummary?.overall?.profit_factor);
+            document.getElementById("baselinePf").textContent = baselineSummary ? formatNumber(baselineSummary?.overall?.profit_factor) : "--";
+            document.getElementById("currentDd").textContent = formatPct(currentSummary?.equity?.max_drawdown_pct);
+            document.getElementById("baselineDd").textContent = baselineSummary ? formatPct(baselineSummary?.equity?.max_drawdown_pct) : "--";
+            document.getElementById("currentTopStrategy").textContent = topStrategy(currentSummary);
+            document.getElementById("baselineTopStrategy").textContent = topStrategy(baselineSummary);
+
+            renderStrategyTable("currentStrategyBody", currentSummary?.by_strategy || []);
+            renderStrategyTable("baselineStrategyBody", baselineSummary?.by_strategy || []);
+            renderTrades(currentTrades?.rows || []);
+            renderDecision(currentSummary, baselineSummary);
+            compareNote.textContent = baselineSummary
+                ? `Comparing current run ${safeText(currentSummary?.resolved_run_id)} against baseline ${safeText(baselineSummary?.resolved_run_id)} for ${dateFrom} to ${dateTo}.`
+                : `Loaded current run ${safeText(currentSummary?.resolved_run_id)} for ${dateFrom} to ${dateTo}. Add a baseline run for a promotion decision.`;
+        }
+
+        async function bootstrap() {
+            const latest = await fetchJson("/api/strategy/evaluation/runs/latest?dataset=historical&status=completed").catch(() => null);
+            const dateFrom = params.get("date_from") || latest?.date_from || "";
+            const dateTo = params.get("date_to") || latest?.date_to || "";
+            const currentRunId = params.get("run_id") || latest?.run_id || "";
+            const baselineRunId = params.get("baseline_run_id") || "";
+            dateFromInput.value = dateFrom;
+            dateToInput.value = dateTo;
+            currentRunIdInput.value = currentRunId;
+            baselineRunIdInput.value = baselineRunId;
+            updateSummaryLinks(dateFrom, dateTo, currentRunId, baselineRunId);
+            if (dateFrom && dateTo) {
+                await loadComparison().catch((err) => {
+                    compareNote.textContent = `Comparison load failed: ${err}`;
+                });
+            }
+        }
+
+        document.getElementById("loadCompareBtn").addEventListener("click", () => {
+            loadComparison().catch((err) => {
+                compareNote.textContent = `Comparison load failed: ${err}`;
+            });
+        });
+
+        bootstrap();
+    </script>
+</body>
+</html>

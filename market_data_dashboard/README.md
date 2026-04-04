@@ -85,6 +85,7 @@ Port behavior note:
 - `GET /` -> dashboard page
 - `GET /live/strategy` -> live operator monitor for `strategy_app`
 - `GET /historical/replay` -> historical replay operator monitor
+- `GET /strategy/evaluation` -> run-scoped evaluation compare page
 - `GET /trading` -> legacy paper trading terminal page (opt-in launcher)
 - `GET /trading/models` -> model catalog page (profiles + artifact health + launch links)
 - `GET /trading?model=a|b|...` -> model-scoped terminal tab (separate runner instance)

@@ -3,19 +3,24 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 
 
 class DashboardStrategyEvaluationRouter:
     def __init__(
         self,
         *,
+        templates: Jinja2Templates,
         get_strategy_eval_service: Callable[[], Any],
         normalize_timestamp_fields: Callable[[Any], Any],
     ) -> None:
+        self._templates = templates
         self._get_strategy_eval_service = get_strategy_eval_service
         self._normalize_timestamp_fields = normalize_timestamp_fields
 
         router = APIRouter(tags=["strategy-evaluation"])
+        router.add_api_route("/strategy/evaluation", self.strategy_evaluation_page, methods=["GET"], response_class=HTMLResponse)
         router.add_api_route("/api/strategy/evaluation/summary", self.get_strategy_evaluation_summary, methods=["GET"])
         router.add_api_route("/api/strategy/evaluation/equity", self.get_strategy_evaluation_equity, methods=["GET"])
         router.add_api_route("/api/strategy/evaluation/days", self.get_strategy_evaluation_days, methods=["GET"])
@@ -24,6 +29,15 @@ class DashboardStrategyEvaluationRouter:
         router.add_api_route("/api/strategy/evaluation/runs/latest", self.get_latest_strategy_evaluation_run, methods=["GET"])
         router.add_api_route("/api/strategy/evaluation/runs/{run_id}", self.get_strategy_evaluation_run, methods=["GET"])
         self.router = router
+
+    async def strategy_evaluation_page(self, request: Request) -> HTMLResponse:
+        self._require_strategy_eval_service()
+        return self._templates.TemplateResponse(
+            "strategy_evaluation.html",
+            {
+                "request": request,
+            },
+        )
 
     def _require_strategy_eval_service(self) -> Any:
         service = self._get_strategy_eval_service()

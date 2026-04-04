@@ -3762,6 +3762,7 @@ _historical_replay_routes = DashboardHistoricalReplayRouter(
 app.include_router(_historical_replay_routes.router)
 
 _strategy_evaluation_routes = DashboardStrategyEvaluationRouter(
+    templates=templates,
     get_strategy_eval_service=lambda: _strategy_eval_service,
     normalize_timestamp_fields=_normalize_timestamp_fields,
 )
@@ -3893,6 +3894,7 @@ historical_replay = _historical_replay_routes.historical_replay
 get_historical_strategy_session = _historical_replay_routes.get_historical_strategy_session
 get_historical_replay_status = _historical_replay_routes.get_historical_replay_status
 replay_health = _historical_replay_routes.replay_health
+strategy_evaluation_page = _strategy_evaluation_routes.strategy_evaluation_page
 get_strategy_evaluation_summary = _strategy_evaluation_routes.get_strategy_evaluation_summary
 get_strategy_evaluation_equity = _strategy_evaluation_routes.get_strategy_evaluation_equity
 get_strategy_evaluation_days = _strategy_evaluation_routes.get_strategy_evaluation_days
