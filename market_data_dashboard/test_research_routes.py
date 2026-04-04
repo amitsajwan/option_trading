@@ -17,6 +17,8 @@ class ResearchRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Research", response.body)
+        self.assertIn(b"Research Decision Guide", response.body)
+        self.assertIn(b"Awaiting Evaluation", response.body)
 
     def test_research_scenarios_alias_delegates(self) -> None:
         captured = {}

@@ -95,6 +95,94 @@
             font-size: 13px;
         }
 
+        .playbook-grid {
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr;
+            gap: 12px;
+        }
+
+        .playbook-panel {
+            padding: 18px 20px;
+        }
+
+        .playbook-panel h2 {
+            margin: 0 0 8px;
+            font-size: 20px;
+        }
+
+        .playbook-copy {
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.65;
+        }
+
+        .playbook-cards {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .playbook-card {
+            padding: 14px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: #fbfdff;
+        }
+
+        .playbook-card strong {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .decision-card {
+            padding: 18px 20px;
+            border-left: 4px solid var(--accent2);
+        }
+
+        .decision-chip {
+            display: inline-flex;
+            align-items: center;
+            min-height: 32px;
+            padding: 0 10px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: #f7fafc;
+        }
+
+        .decision-chip.good { color: var(--good); border-color: rgba(15, 157, 122, 0.3); background: rgba(15, 157, 122, 0.08); }
+        .decision-chip.warn { color: var(--warn); border-color: rgba(195, 123, 25, 0.3); background: rgba(195, 123, 25, 0.08); }
+        .decision-chip.bad { color: var(--bad); border-color: rgba(191, 75, 54, 0.3); background: rgba(191, 75, 54, 0.08); }
+        .decision-chip.info { color: var(--accent2); border-color: rgba(31, 93, 134, 0.3); background: rgba(31, 93, 134, 0.08); }
+
+        .decision-title {
+            margin-top: 10px;
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .decision-text {
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.65;
+        }
+
+        .decision-list {
+            margin-top: 12px;
+            display: grid;
+            gap: 8px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
         .controls {
             padding: 18px 20px;
             display: grid;
@@ -260,11 +348,12 @@
         }
 
         @media (max-width: 1100px) {
-            .control-grid, .summary-grid, .meta, .chart-grid { grid-template-columns: 1fr 1fr; }
+            .control-grid, .summary-grid, .meta, .chart-grid, .playbook-grid { grid-template-columns: 1fr 1fr; }
+            .playbook-cards { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 760px) {
-            .control-grid, .summary-grid, .meta, .chart-grid { grid-template-columns: 1fr; }
+            .control-grid, .summary-grid, .meta, .chart-grid, .playbook-grid { grid-template-columns: 1fr; }
             .page { padding: 14px; }
             .chart { height: 320px; }
         }
@@ -283,9 +372,47 @@
                 </div>
                 <div class="hero-links">
                     <a href="/">Dashboard</a>
+                    <a href="/historical/replay">Replay Monitor</a>
                     <a href="/trading/models">Model Catalog</a>
                     <a href="/trading">Trading Terminal</a>
                 </div>
+            </div>
+        </section>
+
+        <section class="playbook-grid">
+            <div class="panel playbook-panel">
+                <h2>Research Decision Guide</h2>
+                <div class="playbook-copy">
+                    Use this page to decide whether a scenario is worth keeping, tuning, quarantining, or rejecting. Treat this as a product decision surface, not just a chart viewer.
+                </div>
+                <div class="playbook-cards">
+                    <div class="playbook-card">
+                        <strong>Outcome First</strong>
+                        Read net return, profit factor, and trade count before drilling into individual trades.
+                    </div>
+                    <div class="playbook-card">
+                        <strong>Sample Discipline</strong>
+                        A positive run with weak trade count is a watchlist signal, not a production verdict.
+                    </div>
+                    <div class="playbook-card">
+                        <strong>Action Standard</strong>
+                        Every scenario should end in one of four outcomes: keep, tune, watch, or reject.
+                    </div>
+                </div>
+                <div class="playbook-copy" style="margin-top:14px;">
+                    Supporting docs:
+                    <code>strategy_app/docs/PRODUCT_CLOSURE_PROGRAM.md</code>,
+                    <code>strategy_app/docs/OPERATOR_PLAYBOOK.md</code>,
+                    <code>strategy_app/docs/RELEASE_READINESS_CHECKLIST.md</code>
+                </div>
+            </div>
+            <div class="panel decision-card">
+                <div class="decision-chip info" id="decisionChip">Awaiting Evaluation</div>
+                <div class="decision-title" id="decisionTitle">Load a scenario to classify it.</div>
+                <div class="decision-text" id="decisionText">
+                    The explorer will convert the summary metrics into a decision recommendation so traders and reviewers can decide quickly whether the scenario deserves promotion, tuning, or rejection.
+                </div>
+                <div class="decision-list" id="decisionList"></div>
             </div>
         </section>
 
@@ -376,6 +503,10 @@
         const dailyWrap = qs("#dailyWrap");
         const tradeWrap = qs("#tradeWrap");
         const banner = qs("#banner");
+        const decisionChip = qs("#decisionChip");
+        const decisionTitle = qs("#decisionTitle");
+        const decisionText = qs("#decisionText");
+        const decisionList = qs("#decisionList");
 
         function showBanner(kind, message) {
             banner.className = `banner show ${kind}`;
@@ -477,6 +608,86 @@
                 ["Profit Factor", fmtNumber(summary.profit_factor)],
             ];
             summaryGrid.innerHTML = items.map(([k, v]) => `<div class="panel stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+        }
+
+        function classifyScenario(summary) {
+            const trades = Number(summary?.trades || 0);
+            const pf = Number(summary?.profit_factor || 0);
+            const netReturn = Number(summary?.net_return_sum || 0);
+            const winRate = Number(summary?.win_rate || 0);
+
+            if (!trades) {
+                return {
+                    tone: "warn",
+                    chip: "No Evidence",
+                    title: "No trades were produced for this selection.",
+                    text: "This scenario cannot be promoted or rejected from this slice alone because there is no realized trade evidence.",
+                    bullets: [
+                        "Verify the selected date range and threshold before drawing conclusions.",
+                        "Treat this as a coverage gap, not a positive result.",
+                    ],
+                };
+            }
+
+            if (netReturn > 0.03 && pf >= 1.2 && trades >= 20) {
+                return {
+                    tone: "good",
+                    chip: "Keep Candidate",
+                    title: "This scenario looks strong enough to keep in active consideration.",
+                    text: "Returns, profit factor, and sample size are all in a range that justifies deeper review rather than immediate quarantine.",
+                    bullets: [
+                        `Net return ${fmtPct(netReturn)} with profit factor ${fmtNumber(pf)}.`,
+                        `Trade count ${fmtNumber(trades, 0)} is large enough to treat this as evidence, not noise.`,
+                        "Next step: compare against the current baseline and inspect regime concentration before promotion.",
+                    ],
+                };
+            }
+
+            if (netReturn > 0 && pf >= 1 && trades < 20) {
+                return {
+                    tone: "info",
+                    chip: "Watch Candidate",
+                    title: "The scenario is promising, but the sample is still thin.",
+                    text: "Positive output exists, but this is not enough evidence to call it production-worthy on its own.",
+                    bullets: [
+                        `Net return ${fmtPct(netReturn)} with ${fmtNumber(trades, 0)} trades.`,
+                        "Treat this as a watchlist result until the scenario survives a wider window.",
+                    ],
+                };
+            }
+
+            if (netReturn > 0 || pf >= 1 || winRate >= 0.5) {
+                return {
+                    tone: "warn",
+                    chip: "Tune Candidate",
+                    title: "The scenario is mixed and needs tuning, not promotion.",
+                    text: "There is some signal here, but the result is not clean enough to keep unchanged.",
+                    bullets: [
+                        `Net return ${fmtPct(netReturn)}, profit factor ${fmtNumber(pf)}, win rate ${fmtPct(winRate)}.`,
+                        "Use the trade table to inspect whether one side, one weekday, or one exit reason is carrying the result.",
+                    ],
+                };
+            }
+
+            return {
+                tone: "bad",
+                chip: "Reject Candidate",
+                title: "This scenario is weak enough to reject or quarantine.",
+                text: "The summary does not justify keeping this configuration in a serious default stack without a strong thesis for why the result should recover.",
+                bullets: [
+                    `Net return ${fmtPct(netReturn)} and profit factor ${fmtNumber(pf)} are below acceptable levels.`,
+                    "Next step: quarantine it, or rerun only if there is a concrete architecture or thesis change.",
+                ],
+            };
+        }
+
+        function renderDecision(summary) {
+            const decision = classifyScenario(summary || {});
+            decisionChip.className = `decision-chip ${decision.tone}`;
+            decisionChip.textContent = decision.chip;
+            decisionTitle.textContent = decision.title;
+            decisionText.textContent = decision.text;
+            decisionList.innerHTML = (decision.bullets || []).map((item) => `<div>${item}</div>`).join("");
         }
 
         function renderDaily(rows) {
@@ -679,6 +890,7 @@
             }
             renderScenarioMeta();
             renderSummary(payload.summary || {});
+            renderDecision(payload.summary || {});
             renderDaily(payload.daily || []);
             renderTrades(payload.trades || []);
             renderCharts(payload.chart || {});
