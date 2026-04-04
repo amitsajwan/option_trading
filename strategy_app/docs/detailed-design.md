@@ -165,7 +165,7 @@ Both modes continue to produce standard `TradeSignal` objects with risk-aware lo
   - `EMA_CROSSOVER`
   - `VWAP_RECLAIM`
   - `EXPIRY_MAX_PAIN`
-  - `PREVIOUS_DAY_LEVEL`
+  - `PREV_DAY_LEVEL`
 
 ## 10) Risk Model and Safety State
 

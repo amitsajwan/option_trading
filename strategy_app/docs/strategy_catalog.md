@@ -12,17 +12,16 @@ Primary code:
 
 From `StrategyRouter._entry_sets`:
 
-- `TRENDING`: `IV_FILTER`, `ORB`, `EMA_CROSSOVER`, `OI_BUILDUP`, `PREV_DAY_LEVEL`
+- `TRENDING`: `IV_FILTER`, `ORB`, `OI_BUILDUP`, `PREV_DAY_LEVEL`
 - `SIDEWAYS`: `IV_FILTER`, `VWAP_RECLAIM`, `OI_BUILDUP`
 - `EXPIRY`: `IV_FILTER`, `VWAP_RECLAIM`
 - `PRE_EXPIRY`: `IV_FILTER`, `ORB`, `OI_BUILDUP`
 - `HIGH_VOL`: `IV_FILTER`, `HIGH_VOL_ORB`
 - `AVOID`: no entries
 
-Exit vote candidates come from the shared exit strategy set:
+Fallback exit candidates come from the shared exit strategy set:
 
 - `ORB`
-- `EMA_CROSSOVER`
 - `VWAP_RECLAIM`
 - `OI_BUILDUP`
 
@@ -30,7 +29,7 @@ Selection is owner-first:
 
 - owner strategy exit wins when present
 - configured helper exits are allowed for specific owner/regime pairs
-- non-owner exits require high confidence
+- fallback shared exits are only used when no owner/helper route is available
 
 Helper exit override currently configured:
 
@@ -78,7 +77,7 @@ Helper exit override currently configured:
 
 - role: previous-day high or low breakout continuation
 - entry: CE above `prev_day_high`, PE below `prev_day_low`
-- exit: no explicit local exit; lifecycle exits are handled by system and helper votes
+- exit: prior-day level re-entry with a small buffer and minimum hold bars
 
 ## 3. Not Routed By Default
 
@@ -95,7 +94,7 @@ Helper exit override currently configured:
 - exit priority is:
   1. owner exit vote
   2. configured helper exit
-  3. high-confidence non-owner exit
+  3. fallback shared exits only when owner/helper routes are unavailable
   4. system stops from `PositionTracker` and `RiskManager`
 
 ## 5. Related Docs

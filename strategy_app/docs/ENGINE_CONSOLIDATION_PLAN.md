@@ -12,7 +12,7 @@ This plan is no longer a proposal. Most structural consolidation work is already
 - Legacy wrapper modules are removed from the active runtime path.
 - Compose/runtime handoff is centered on `ml_pure`.
 - Default deterministic routing already excludes `EXPIRY_MAX_PAIN`.
-- Deterministic exit handling is owner-first with helper and high-confidence non-owner fallback.
+- Deterministic exit handling is owner-first with explicit helper exits and tracker-owned universal mechanics.
 
 Use `strategy_app/docs/CURRENT_TREE_VALIDATION.md` for the code-verified status check behind these statements.
 

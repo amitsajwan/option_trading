@@ -46,7 +46,6 @@ class StrategyRouter:
             Regime.TRENDING: [
                 self._iv_filter,
                 self._orb,
-                self._ema,
                 self._oi,
                 self._prev_day,
             ],
@@ -72,19 +71,37 @@ class StrategyRouter:
         }
         self._exit_strategies: list[BaseStrategy] = [
             self._orb,
-            self._ema,
             self._vwap,
             self._oi,
         ]
         self._cross_exit_helpers: dict[tuple[str, str], set[str]] = {
             ("PRE_EXPIRY", "OI_BUILDUP"): {"ORB"},
         }
-        self._default_profile_id = "det_core_v1"
+        self._default_profile_id = "det_core_v2"
         self._strategy_profile_id = self._default_profile_id
         self._log_configuration()
 
     def get_strategies(self, regime: Regime, position: Optional[PositionContext]) -> list[BaseStrategy]:
-        if position is not None:
+        if isinstance(position, PositionContext):
+            owner_name = str(position.entry_strategy or "").strip().upper()
+            owner = self._strategy_registry.get(owner_name)
+            helper_names = self._cross_exit_helpers.get(
+                (str(position.entry_regime or "").strip().upper(), owner_name),
+                set(),
+            )
+            ordered: list[BaseStrategy] = []
+            seen: set[str] = set()
+            for strategy in [owner] if owner is not None else []:
+                if strategy.name not in seen:
+                    ordered.append(strategy)
+                    seen.add(strategy.name)
+            for helper_name in helper_names:
+                helper = self._strategy_registry.get(helper_name)
+                if helper is not None and helper.name not in seen:
+                    ordered.append(helper)
+                    seen.add(helper.name)
+            if ordered:
+                return ordered
             return self._exit_strategies
         return self._entry_sets.get(regime, [])
 
@@ -167,14 +184,14 @@ class StrategyRouter:
         if profile_id:
             self._strategy_profile_id = profile_id
         default_entry = {
-            Regime.TRENDING: [self._iv_filter.name, self._orb.name, self._ema.name, self._oi.name, self._prev_day.name],
+            Regime.TRENDING: [self._iv_filter.name, self._orb.name, self._oi.name, self._prev_day.name],
             Regime.SIDEWAYS: [self._iv_filter.name, self._vwap.name, self._oi.name],
             Regime.EXPIRY: [self._iv_filter.name, self._vwap.name],
             Regime.PRE_EXPIRY: [self._iv_filter.name, self._orb.name, self._oi.name],
             Regime.HIGH_VOL: [self._iv_filter.name, self._high_vol_orb.name],
             Regime.AVOID: [],
         }
-        default_exit = [self._orb.name, self._ema.name, self._vwap.name, self._oi.name]
+        default_exit = [self._orb.name, self._vwap.name, self._oi.name]
         iv_filter_payload = payload.get("iv_filter_config")
         if isinstance(iv_filter_payload, dict):
             self._iv_filter.configure(iv_filter_payload)

@@ -1,6 +1,6 @@
 # Current Tree Validation
 
-As-of date: `2026-03-20`
+As-of date: `2026-04-04`
 
 This document records the current code-verified state for the active runtime and training contracts.
 
@@ -36,10 +36,11 @@ Verified against these code paths:
 
 ## Confirmed Deterministic Runtime Facts
 
-- deterministic exits are owner-first, with helper and high-confidence non-owner fallback
+- deterministic exits are owner-first, with explicit helper exits and tracker-owned universal mechanics
 - default router facts currently include:
   - `HIGH_VOL` routes `IV_FILTER` and `HIGH_VOL_ORB`
   - `EXPIRY` routes `IV_FILTER` and `VWAP_RECLAIM`
+  - `TRENDING` routes `IV_FILTER`, `ORB`, `OI_BUILDUP`, `PREV_DAY_LEVEL`
   - `EXPIRY_MAX_PAIN` is not in the default router
 
 ## Confirmed Staged Training Facts

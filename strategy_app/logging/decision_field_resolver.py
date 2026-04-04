@@ -139,7 +139,7 @@ class DecisionFieldResolver:
             return "ml_pure_staged_v1"
         if engine_mode == "ml_pure":
             return "ml_pure_staged_v1"
-        return "det_core_v1"
+        return "det_core_v2"
 
     def vote_decision_metrics(self, vote: StrategyVote) -> dict[str, float]:
         raw_signals = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}

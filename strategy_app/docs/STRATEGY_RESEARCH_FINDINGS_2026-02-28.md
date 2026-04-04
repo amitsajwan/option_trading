@@ -1,5 +1,13 @@
 # Strategy Research Findings (2026-02-28)
 
+> Historical note: this document captures findings from an older deterministic baseline. The current default router/profile has changed since this report:
+> - `EXPIRY_MAX_PAIN` is not in the default router
+> - `EMA_CROSSOVER` is no longer in the default `TRENDING` entry set
+> - default deterministic profile is now `det_core_v2`
+> - exit handling is more owner-centric than the baseline described below
+>
+> Treat this file as historical research context, not as the current source of truth for the active default stack.
+
 ## Scope
 
 - Dataset analyzed: current historical snapshot parquet only

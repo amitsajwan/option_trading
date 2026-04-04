@@ -262,7 +262,7 @@ def build_engine(
             min_confidence=float(min_confidence),
             signal_logger=signal_logger,
             engine_mode="deterministic",
-            strategy_profile_id=(strategy_profile_id or "det_core_v1"),
+            strategy_profile_id=(strategy_profile_id or "det_core_v2"),
         )
     raise ValueError(f"unsupported engine: {engine_name}")
 
@@ -312,7 +312,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     )
     strategy_profile_id = _resolve_strategy_profile_id(args.strategy_profile_id)
     if strategy_profile_id is None:
-        strategy_profile_id = None if engine_key == "ml_pure" else "det_core_v1"
+        strategy_profile_id = None if engine_key == "ml_pure" else "det_core_v2"
     ml_runtime_guard_file = _resolve_ml_runtime_guard_file(args.ml_runtime_guard_file)
     runtime_ml_enabled = engine_key == "ml_pure" and bool(ml_pure_model_package)
     runtime_artifact_paths = resolve_runtime_artifact_paths(Path(args.run_dir) if args.run_dir else None)

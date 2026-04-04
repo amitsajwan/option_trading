@@ -24,7 +24,7 @@ class SignalLoggerParitySnapshotTests(unittest.TestCase):
                 {
                     "engine_mode": "deterministic",
                     "strategy_family_version": "DET_V1",
-                    "strategy_profile_id": "det_core_v1",
+                    "strategy_profile_id": "det_core_v2",
                 },
             )
             vote = StrategyVote(

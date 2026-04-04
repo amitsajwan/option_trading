@@ -18,7 +18,7 @@ Layer-4 strategy consumer runtime for snapshot events.
 - `ml_pure` is the supported live lane.
 - Legacy transitional runtime wrapper is removed from the CLI and runtime factory.
 - Default `EXPIRY` routing is `IV_FILTER + VWAP_RECLAIM`; `EXPIRY_MAX_PAIN` is not enabled by default.
-- Deterministic exits are owner-first, with helper and high-confidence non-owner fallback.
+- Deterministic exits are owner-first, with explicit helper exits and tracker-owned universal mechanics.
 
 Current code-verified status for this package lives at `strategy_app/docs/CURRENT_TREE_VALIDATION.md`.
 
@@ -153,7 +153,7 @@ python -m strategy_app.main --engine deterministic --max-events 100
 - `HIGH_VOL`: elevated realized vol plus elevated VIX. Routes to `IV_FILTER + HIGH_VOL_ORB`.
 - `EXPIRY`: expiry-day routing, currently `IV_FILTER + VWAP_RECLAIM`.
 - `PRE_EXPIRY`: conservative ORB + OI routing one day before expiry.
-- `TRENDING`: ORB, EMA alignment, OI buildup, previous-day level breakout.
+- `TRENDING`: ORB, OI buildup, previous-day level breakout.
 - `SIDEWAYS`: VWAP reclaim/rejection and OI buildup.
 
 The deterministic engine logs regime metadata on every vote and signal so Mongo/backtests can slice results by regime.
@@ -164,9 +164,9 @@ When a position is open, the deterministic engine evaluates hard exits before st
 
 1. owner strategy exit
 2. configured helper exit
-3. high-confidence non-owner exit
+3. tracker/risk universal mechanics when strategy logic does not close the trade
 
-The default universal exit candidate set is `ORB`, `EMA_CROSSOVER`, `VWAP_RECLAIM`, and `OI_BUILDUP`, but selection is not "first exit wins" anymore.
+The default fallback exit candidate set is `ORB`, `VWAP_RECLAIM`, and `OI_BUILDUP`, but the default runtime path is now owner-centric and no longer evaluates `EMA_CROSSOVER` as a universal exit candidate.
 
 ## Engine-Aware Event Metadata
 
@@ -177,7 +177,7 @@ Vote/signal records now include additive engine-aware fields for replay comparab
 - `decision_reason_code`: normalized decision code (`below_threshold`, `low_edge_conflict`, `feature_stale`, etc.)
 - `decision_metrics`: optional metrics payload (`ce_prob`, `pe_prob`, thresholds, edge, confidence)
 - `strategy_family_version`: `DET_V1|ML_PURE_STAGED_V1`
-- `strategy_profile_id`: versioned strategy set identifier (default deterministic profile: `det_core_v1`)
+- `strategy_profile_id`: versioned strategy set identifier (default deterministic profile: `det_core_v2`)
 
 For non-default deterministic router configurations, set `strategy_profile_id` in run metadata (or `--strategy-profile-id`) so comparisons remain lane/profile-consistent.
 

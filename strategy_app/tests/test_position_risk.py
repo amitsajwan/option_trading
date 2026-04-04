@@ -1148,5 +1148,43 @@ class PositionRiskTests(unittest.TestCase):
         self.assertIsNone(signal)
         self.assertEqual(called["force_exit"], 0)
 
+    def test_prev_day_level_exit_is_strategy_owned(self) -> None:
+        engine = DeterministicRuleEngine(router=StrategyRouter())
+        position = PositionContext(
+            position_id="p8",
+            direction="CE",
+            strike=50000,
+            expiry=None,
+            entry_premium=100.0,
+            entry_time=datetime(2026, 2, 28, 9, 30, tzinfo=timezone.utc),
+            entry_snapshot_id="snap-open",
+            lots=1,
+            entry_strategy="PREV_DAY_LEVEL",
+            entry_regime="TRENDING",
+            bars_held=3,
+        )
+        snapshot = {
+            "snapshot_id": "snap-prev-day",
+            "session_context": {
+                "snapshot_id": "snap-prev-day",
+                "timestamp": "2026-02-28T10:00:00+00:00",
+                "date": "2026-02-28",
+                "session_phase": "ACTIVE",
+                "days_to_expiry": 1,
+            },
+            "futures_bar": {
+                "fut_close": 49890.0,
+            },
+            "session_levels": {
+                "prev_day_high": 50000.0,
+                "prev_day_low": 49700.0,
+            },
+        }
+        strategies = engine._router.get_strategies(Regime.TRENDING, position)
+        votes = [vote for strategy in strategies if (vote := strategy.evaluate(snapshot, position, RiskContext())) is not None]
+        vote_names = [vote.strategy_name for vote in votes]
+        self.assertEqual(vote_names, ["PREV_DAY_LEVEL"])
+        self.assertEqual(votes[0].exit_reason, ExitReason.STRATEGY_EXIT)
+
 if __name__ == "__main__":
     unittest.main()

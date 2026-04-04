@@ -109,7 +109,7 @@ Current priority is:
 1. hard/system exits from tracker and risk controls
 2. owner strategy exit
 3. configured helper exit
-4. high-confidence non-owner exit
+4. fallback shared exits only when owner/helper routes are unavailable
 
 Default helper override:
 

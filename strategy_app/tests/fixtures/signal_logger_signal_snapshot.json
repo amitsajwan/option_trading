@@ -41,7 +41,7 @@
     "confidence": 0.62
   },
   "strategy_family_version": "DET_V1",
-  "strategy_profile_id": "det_core_v1",
+  "strategy_profile_id": "det_core_v2",
   "acted_on": false,
   "contributing_strategies": [],
   "run_id": "run-parity"

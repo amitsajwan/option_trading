@@ -42,5 +42,5 @@
   "decision_mode": "rule_vote",
   "decision_reason_code": null,
   "strategy_family_version": "DET_V1",
-  "strategy_profile_id": "det_core_v1"
+  "strategy_profile_id": "det_core_v2"
 }

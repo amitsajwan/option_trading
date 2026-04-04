@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 MIN_ENTRY_CONFIDENCE = 0.65
 EXIT_CONFIDENCE = 0.65
-DEFAULT_STRATEGY_PROFILE_ID = "det_core_v1"
+DEFAULT_STRATEGY_PROFILE_ID = "det_core_v2"
 
 
 class DeterministicRuleEngine(StrategyEngine):

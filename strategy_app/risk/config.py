@@ -84,8 +84,8 @@ class PositionRiskConfig:
     oi_trail: StrategyTrailConfig = field(
         default_factory=lambda: StrategyTrailConfig(regime_filter="PRE_EXPIRY")
     )
-    regime_shift_confirm_bars: int = 1
-    regime_shift_min_profit_hold_pct: Optional[float] = None
+    regime_shift_confirm_bars: int = 2
+    regime_shift_min_profit_hold_pct: Optional[float] = 0.08
 
     @classmethod
     def from_payload(cls, payload: Any) -> "PositionRiskConfig":
@@ -103,7 +103,7 @@ class PositionRiskConfig:
             trailing_lock_breakeven=_as_bool(payload.get("trailing_lock_breakeven"), default=True),
             orb_trail=StrategyTrailConfig.from_payload(payload.get("orb_trail")),
             oi_trail=StrategyTrailConfig.from_payload(payload.get("oi_trail")),
-            regime_shift_confirm_bars=_as_positive_int(payload.get("regime_shift_confirm_bars"), default=1),
+            regime_shift_confirm_bars=_as_positive_int(payload.get("regime_shift_confirm_bars"), default=2),
             regime_shift_min_profit_hold_pct=regime_shift_hold,
         )
 

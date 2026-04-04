@@ -30,12 +30,14 @@ class ORBStrategy(BaseStrategy):
         pcr_bear_max: float = 1.10,
         max_entry_minute: int = 135,
         confidence_base: float = 0.75,
+        exit_buffer_pct: float = 0.002,
     ) -> None:
         self._vol_ratio_min = vol_ratio_min
         self._pcr_bull_min = pcr_bull_min
         self._pcr_bear_max = pcr_bear_max
         self._max_entry_minute = max_entry_minute
         self._confidence_base = confidence_base
+        self._exit_buffer_pct = max(0.0, float(exit_buffer_pct))
 
     def evaluate(
         self,
@@ -110,19 +112,21 @@ class ORBStrategy(BaseStrategy):
     def _check_exit(self, snap: SnapshotAccessor, position: PositionContext) -> Optional[StrategyVote]:
         if not snap.or_ready or snap.fut_close is None or snap.orh is None or snap.orl is None:
             return None
-        if position.direction == "CE" and snap.fut_close < snap.orh:
+        ce_exit_level = snap.orh * (1.0 - self._exit_buffer_pct)
+        pe_exit_level = snap.orl * (1.0 + self._exit_buffer_pct)
+        if position.direction == "CE" and snap.fut_close < ce_exit_level:
             return self._exit_vote(
                 snap,
-                f"ORB_REGIME_SHIFT: close={snap.fut_close:.0f}<orh={snap.orh:.0f}",
+                f"ORB_REGIME_SHIFT: close={snap.fut_close:.0f}<orh_buffer={ce_exit_level:.0f}",
                 ExitReason.REGIME_SHIFT,
-                {"close": snap.fut_close, "orh": snap.orh, "orl": snap.orl},
+                {"close": snap.fut_close, "orh": snap.orh, "orl": snap.orl, "exit_buffer_pct": self._exit_buffer_pct},
             )
-        if position.direction == "PE" and snap.fut_close > snap.orl:
+        if position.direction == "PE" and snap.fut_close > pe_exit_level:
             return self._exit_vote(
                 snap,
-                f"ORB_REGIME_SHIFT: close={snap.fut_close:.0f}>orl={snap.orl:.0f}",
+                f"ORB_REGIME_SHIFT: close={snap.fut_close:.0f}>orl_buffer={pe_exit_level:.0f}",
                 ExitReason.REGIME_SHIFT,
-                {"close": snap.fut_close, "orh": snap.orh, "orl": snap.orl},
+                {"close": snap.fut_close, "orh": snap.orh, "orl": snap.orl, "exit_buffer_pct": self._exit_buffer_pct},
             )
         return None
 
@@ -196,8 +200,8 @@ class OIBuildupStrategy(BaseStrategy):
         *,
         oi_change_threshold: float = 0.02,
         confidence_base: float = 0.70,
-        exit_r5m_threshold: float = 0.0,
-        min_exit_hold_bars: int = 1,
+        exit_r5m_threshold: float = 0.0003,
+        min_exit_hold_bars: int = 3,
     ) -> None:
         self._oi_change_threshold = oi_change_threshold
         self._confidence_base = confidence_base
@@ -870,10 +874,20 @@ class PrevDayLevelBreakout(BaseStrategy):
 
     name = "PREV_DAY_LEVEL"
 
-    def __init__(self, *, vol_ratio_min: float = 1.8, confidence_base: float = 0.72, max_entry_minute: int = 195) -> None:
+    def __init__(
+        self,
+        *,
+        vol_ratio_min: float = 1.8,
+        confidence_base: float = 0.72,
+        max_entry_minute: int = 195,
+        exit_reentry_buffer_pct: float = 0.0015,
+        min_exit_hold_bars: int = 2,
+    ) -> None:
         self._vol_ratio_min = vol_ratio_min
         self._confidence_base = confidence_base
         self._max_entry_minute = max_entry_minute
+        self._exit_reentry_buffer_pct = max(0.0, float(exit_reentry_buffer_pct))
+        self._min_exit_hold_bars = max(0, int(min_exit_hold_bars))
 
     def evaluate(
         self,
@@ -884,7 +898,7 @@ class PrevDayLevelBreakout(BaseStrategy):
         del risk
         snap = SnapshotAccessor(snapshot)
         if position is not None:
-            return None
+            return self._check_exit(snap, position)
         if not snap.is_valid_entry_phase or snap.minutes > self._max_entry_minute:
             return None
         if (
@@ -931,6 +945,59 @@ class PrevDayLevelBreakout(BaseStrategy):
                 proposed_strike=snap.atm_strike,
                 proposed_entry_premium=snap.atm_pe_close,
             )
+        return None
+
+    def _check_exit(self, snap: SnapshotAccessor, position: PositionContext) -> Optional[StrategyVote]:
+        if position.bars_held < self._min_exit_hold_bars or snap.fut_close is None:
+            return None
+        if position.direction == "CE" and snap.prev_day_high is not None:
+            reclaim_level = snap.prev_day_high * (1.0 - self._exit_reentry_buffer_pct)
+            if snap.fut_close < reclaim_level:
+                return StrategyVote(
+                    strategy_name=self.name,
+                    snapshot_id=snap.snapshot_id,
+                    timestamp=snap.timestamp_or_now,
+                    trade_date=snap.trade_date,
+                    signal_type=SignalType.EXIT,
+                    direction=Direction.EXIT,
+                    confidence=0.78,
+                    reason=(
+                        f"PDH_REENTRY: close={snap.fut_close:.0f}<pdh_buffer={reclaim_level:.0f} "
+                        f"min_hold={self._min_exit_hold_bars}"
+                    ),
+                    raw_signals={
+                        "close": snap.fut_close,
+                        "pdh": snap.prev_day_high,
+                        "pdl": snap.prev_day_low,
+                        "exit_reentry_buffer_pct": self._exit_reentry_buffer_pct,
+                        "bars_held": position.bars_held,
+                    },
+                    exit_reason=ExitReason.STRATEGY_EXIT,
+                )
+        if position.direction == "PE" and snap.prev_day_low is not None:
+            reclaim_level = snap.prev_day_low * (1.0 + self._exit_reentry_buffer_pct)
+            if snap.fut_close > reclaim_level:
+                return StrategyVote(
+                    strategy_name=self.name,
+                    snapshot_id=snap.snapshot_id,
+                    timestamp=snap.timestamp_or_now,
+                    trade_date=snap.trade_date,
+                    signal_type=SignalType.EXIT,
+                    direction=Direction.EXIT,
+                    confidence=0.78,
+                    reason=(
+                        f"PDL_REENTRY: close={snap.fut_close:.0f}>pdl_buffer={reclaim_level:.0f} "
+                        f"min_hold={self._min_exit_hold_bars}"
+                    ),
+                    raw_signals={
+                        "close": snap.fut_close,
+                        "pdh": snap.prev_day_high,
+                        "pdl": snap.prev_day_low,
+                        "exit_reentry_buffer_pct": self._exit_reentry_buffer_pct,
+                        "bars_held": position.bars_held,
+                    },
+                    exit_reason=ExitReason.STRATEGY_EXIT,
+                )
         return None
 
 
