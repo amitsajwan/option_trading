@@ -192,6 +192,9 @@ class LiveStrategyAppTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Live Strategy Monitor", response.body)
+        self.assertIn(b"Live Drilldown", response.body)
+        self.assertIn(b"Evaluation Compare", response.body)
+        self.assertIn(b"Research Explorer", response.body)
 
     def test_live_strategy_session_endpoint_returns_payload(self) -> None:
         payload = asyncio.run(dashboard_app.get_live_strategy_session(date="2026-03-02"))

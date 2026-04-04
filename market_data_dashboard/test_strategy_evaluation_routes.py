@@ -82,6 +82,8 @@ class StrategyEvaluationRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Strategy Evaluation Compare", response.body)
         self.assertIn(b"Awaiting Comparison", response.body)
+        self.assertIn(b"Compare Runs", response.body)
+        self.assertIn(b"Open Dashboard", response.body)
 
     def test_summary_alias_delegates_and_normalizes_timestamps(self) -> None:
         payload = asyncio.run(

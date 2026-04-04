@@ -172,6 +172,49 @@
         .banner.error { background: #fff1f2; border-color: #fecdd3; color: #9f1239; }
         .banner.warn { background: #fff8eb; border-color: #f5deb3; color: #8a5c00; }
 
+        .product-map {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .route-card {
+            padding: 16px;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            background: linear-gradient(180deg, rgba(255,255,255,0.82), rgba(255,255,255,0.68));
+            display: grid;
+            gap: 10px;
+        }
+
+        .route-card.current {
+            border-color: rgba(20, 92, 139, 0.22);
+            box-shadow: inset 0 0 0 1px rgba(20, 92, 139, 0.08);
+        }
+
+        .route-kicker {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .route-title {
+            font-family: "Space Grotesk", "Manrope", sans-serif;
+            font-size: 22px;
+            line-height: 1;
+            letter-spacing: -0.03em;
+        }
+
+        .route-copy {
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
         .view-toggle {
             margin-bottom: 14px;
             display: flex;
@@ -648,6 +691,7 @@
             .tables, .diag { grid-template-columns: 1fr; }
             .now-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .command-grid { grid-template-columns: 1fr; }
+            .product-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .rail-panel { position: static; }
         }
 
@@ -658,6 +702,7 @@
             .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .grid-2 { grid-template-columns: 1fr; }
             .chart-wrap { height: 340px; }
+            .product-map { grid-template-columns: 1fr; }
             .now-grid { grid-template-columns: 1fr; }
             .view-toggle { flex-direction: column; align-items: stretch; }
             .funnel-grid { grid-template-columns: 1fr; }
@@ -686,12 +731,41 @@
                 <button class="action-btn" id="pauseLiveBtn" type="button">Pause Live</button>
                 <a class="nav-link primary" href="/">Main Dashboard</a>
                 <a class="nav-link" href="/historical/replay">Historical Replay</a>
+                <a class="nav-link" href="/strategy/evaluation">Evaluation Compare</a>
+                <a class="nav-link" href="/trading/research">Research Explorer</a>
                 <a class="nav-link" href="/api/live/strategy/session" target="_blank" rel="noopener">Session API</a>
             </div>
         </section>
 
         <div class="banner" id="errorBanner"></div>
         <div class="banner" id="warnBanner"></div>
+
+        <section class="product-map">
+            <div class="route-card current">
+                <div class="route-kicker">Live Now</div>
+                <div class="route-title">Live Drilldown</div>
+                <div class="route-copy">Stay here for current engine state, active alerts, decision feed, trace review, and live session trade context.</div>
+                <a class="nav-link primary" href="#nowBarPanel">Inspect Live State</a>
+            </div>
+            <div class="route-card">
+                <div class="route-kicker">After Market Close</div>
+                <div class="route-title">Historical Replay</div>
+                <div class="route-copy">Use replay for one session-day chart plus pinned historical run scope and all trades across a replay range.</div>
+                <a class="nav-link" href="/historical/replay">Open Replay</a>
+            </div>
+            <div class="route-card">
+                <div class="route-kicker">Run Verdict</div>
+                <div class="route-title">Evaluation Compare</div>
+                <div class="route-copy">Use compare for run-level return, equity, strategy split, and baseline-vs-current decisions across a full window.</div>
+                <a class="nav-link" href="/strategy/evaluation">Open Evaluation</a>
+            </div>
+            <div class="route-card">
+                <div class="route-kicker">Research Layer</div>
+                <div class="route-title">Research Explorer</div>
+                <div class="route-copy">Use research views to inspect scenario-level chart behavior, outcome classification, and out-of-sample experiments.</div>
+                <a class="nav-link" href="/trading/research">Open Research</a>
+            </div>
+        </section>
 
         <section class="panel view-toggle">
             <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">

@@ -102,7 +102,7 @@
             background: linear-gradient(135deg, var(--accent), #0b4f60);
         }
 
-        .grid-2, .grid-3, .kpis {
+        .grid-2, .grid-3, .kpis, .route-grid {
             display: grid;
             gap: 14px;
         }
@@ -110,6 +110,7 @@
         .grid-2 { grid-template-columns: 1.15fr 0.85fr; }
         .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+        .route-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
         .form-grid {
             display: grid;
@@ -226,6 +227,42 @@
 
         .decision-list { display: grid; gap: 8px; font-size: 13px; }
 
+        .route-card {
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.76);
+            display: grid;
+            gap: 10px;
+        }
+
+        .route-card.current {
+            border-color: rgba(13,106,120,0.22);
+            box-shadow: inset 0 0 0 1px rgba(13,106,120,0.08);
+        }
+
+        .route-kicker {
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            font-family: "IBM Plex Mono", monospace;
+            font-weight: 700;
+        }
+
+        .route-title {
+            font-family: "Space Grotesk", sans-serif;
+            font-size: 22px;
+            line-height: 1;
+            letter-spacing: -0.03em;
+        }
+
+        .route-copy {
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
         .table-wrap {
             overflow: auto;
             border-radius: 16px;
@@ -255,12 +292,12 @@
         }
 
         @media (max-width: 1180px) {
-            .grid-2, .grid-3, .kpis, .form-grid { grid-template-columns: 1fr 1fr; }
+            .grid-2, .grid-3, .kpis, .form-grid, .route-grid { grid-template-columns: 1fr 1fr; }
         }
 
         @media (max-width: 760px) {
             .page { width: calc(100vw - 16px); }
-            .grid-2, .grid-3, .kpis, .form-grid { grid-template-columns: 1fr; }
+            .grid-2, .grid-3, .kpis, .form-grid, .route-grid { grid-template-columns: 1fr; }
             .hero { flex-direction: column; }
         }
     </style>
@@ -273,9 +310,37 @@
                 <p>Run-scoped comparison surface for deterministic research and replay review. Use this page to compare a current run against a baseline run without stitching summary and trades JSON by hand.</p>
             </div>
             <div class="hero-links">
+                <a class="link" href="/">Dashboard</a>
                 <a class="link primary" href="/historical/replay">Replay Monitor</a>
                 <a class="link" href="/trading/research">Research Explorer</a>
                 <a class="link" href="/live/strategy">Live Monitor</a>
+            </div>
+        </section>
+
+        <section class="route-grid">
+            <div class="route-card">
+                <div class="route-kicker">Operator Home</div>
+                <div class="route-title">Dashboard</div>
+                <div class="route-copy">Use the main dashboard for top-level system state and the product-wide entry points before drilling into run evidence.</div>
+                <a class="link" href="/">Open Dashboard</a>
+            </div>
+            <div class="route-card">
+                <div class="route-kicker">Session Analysis</div>
+                <div class="route-title">Replay Monitor</div>
+                <div class="route-copy">Go back to replay when you need one selected day, marker overlays, and a pinned historical run with all trades in range.</div>
+                <a class="link" href="/historical/replay">Open Replay</a>
+            </div>
+            <div class="route-card current">
+                <div class="route-kicker">Run Verdict</div>
+                <div class="route-title">Compare Runs</div>
+                <div class="route-copy">Stay here for whole-range metrics, equity, strategy contribution, and current-vs-baseline product decisions.</div>
+                <a class="link primary" href="#loadCompareBtn">Load Comparison</a>
+            </div>
+            <div class="route-card">
+                <div class="route-kicker">Research Layer</div>
+                <div class="route-title">Research Explorer</div>
+                <div class="route-copy">Move to research when you want scenario-driven chart review, model experiments, and out-of-sample inspection.</div>
+                <a class="link" href="/trading/research">Open Research</a>
             </div>
         </section>
 
