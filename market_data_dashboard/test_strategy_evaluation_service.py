@@ -45,8 +45,98 @@ class StrategyEvaluationServiceTests(unittest.TestCase):
         self.assertAlmostEqual(summary["avg_trade_pnl_pct"], 0.025, places=6)
 
         equity = self.service._build_equity(trades=enriched, initial_capital=1000.0)
-        self.assertAlmostEqual(equity["end_capital"], 977.5, places=6)
-        self.assertAlmostEqual(equity["net_return_pct"], -0.0225, places=6)
+        self.assertAlmostEqual(equity["end_capital"], 1000.0, places=6)
+        self.assertAlmostEqual(equity["net_return_pct"], 0.0, places=6)
+
+    def test_build_equity_uses_additive_capital_pnl_amounts_for_levered_trade_series(self) -> None:
+        trades = [
+            {
+                "position_id": "w1",
+                "trade_date_ist": "2024-01-04",
+                "exit_dt": None,
+                "exit_time": "2024-01-04T11:21:00+05:30",
+                "capital_pnl_amount": 867.0,
+                "capital_pnl_pct": 0.867,
+            },
+            {
+                "position_id": "w2",
+                "trade_date_ist": "2024-01-05",
+                "exit_dt": None,
+                "exit_time": "2024-01-05T11:23:00+05:30",
+                "capital_pnl_amount": 739.5,
+                "capital_pnl_pct": 0.7395,
+            },
+            {
+                "position_id": "l1",
+                "trade_date_ist": "2024-01-08",
+                "exit_dt": None,
+                "exit_time": "2024-01-08T10:37:00+05:30",
+                "capital_pnl_amount": -1413.75,
+                "capital_pnl_pct": -1.41375,
+            },
+            {
+                "position_id": "w3",
+                "trade_date_ist": "2024-01-08",
+                "exit_dt": None,
+                "exit_time": "2024-01-08T11:17:00+05:30",
+                "capital_pnl_amount": 687.75,
+                "capital_pnl_pct": 0.68775,
+            },
+            {
+                "position_id": "w4",
+                "trade_date_ist": "2024-01-08",
+                "exit_dt": None,
+                "exit_time": "2024-01-08T12:08:00+05:30",
+                "capital_pnl_amount": 284.25,
+                "capital_pnl_pct": 0.28425,
+            },
+        ]
+
+        equity = self.service._build_equity(trades=trades, initial_capital=1000.0)
+
+        self.assertAlmostEqual(equity["end_capital"], 2164.75, places=6)
+        self.assertAlmostEqual(equity["net_return_pct"], 1.16475, places=6)
+        self.assertGreaterEqual(equity["max_drawdown_pct"], -1.0)
+        self.assertEqual(len(equity["days"]), 3)
+
+    def test_build_equity_daily_rows_use_additive_day_pnl(self) -> None:
+        trades = [
+            {
+                "position_id": "d1",
+                "trade_date_ist": "2024-01-01",
+                "exit_dt": None,
+                "exit_time": "2024-01-01T10:00:00+05:30",
+                "capital_pnl_amount": 200.0,
+                "capital_pnl_pct": 0.2,
+            },
+            {
+                "position_id": "d2",
+                "trade_date_ist": "2024-01-01",
+                "exit_dt": None,
+                "exit_time": "2024-01-01T11:00:00+05:30",
+                "capital_pnl_amount": -50.0,
+                "capital_pnl_pct": -0.05,
+            },
+            {
+                "position_id": "d3",
+                "trade_date_ist": "2024-01-02",
+                "exit_dt": None,
+                "exit_time": "2024-01-02T10:00:00+05:30",
+                "capital_pnl_amount": 100.0,
+                "capital_pnl_pct": 0.1,
+            },
+        ]
+
+        equity = self.service._build_equity(trades=trades, initial_capital=1000.0)
+        day_rows = {row["date"]: row for row in equity["days"]}
+
+        self.assertAlmostEqual(day_rows["2024-01-01"]["equity_start"], 1000.0, places=6)
+        self.assertAlmostEqual(day_rows["2024-01-01"]["equity_end"], 1150.0, places=6)
+        self.assertAlmostEqual(day_rows["2024-01-01"]["day_pnl_amount"], 150.0, places=6)
+        self.assertAlmostEqual(day_rows["2024-01-01"]["day_return_pct"], 0.15, places=6)
+        self.assertAlmostEqual(day_rows["2024-01-02"]["equity_start"], 1150.0, places=6)
+        self.assertAlmostEqual(day_rows["2024-01-02"]["equity_end"], 1250.0, places=6)
+        self.assertAlmostEqual(day_rows["2024-01-02"]["day_return_pct"], 100.0 / 1150.0, places=6)
 
     def test_stop_analysis_reports_trailing_and_stop_metrics(self) -> None:
         trades = [

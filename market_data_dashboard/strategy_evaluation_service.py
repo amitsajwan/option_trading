@@ -688,7 +688,7 @@ class StrategyEvaluationService:
 
     def _build_equity(self, *, trades: list[dict[str, Any]], initial_capital: float) -> dict[str, Any]:
         ordered = sorted(
-            [trade for trade in trades if trade.get("capital_pnl_pct") is not None],
+            [trade for trade in trades if trade.get("capital_pnl_amount") is not None],
             key=lambda item: ((item.get("exit_dt") or datetime.min.replace(tzinfo=IST_ZONE)), str(item.get("position_id") or "")),
         )
         equity = float(initial_capital)
@@ -700,14 +700,16 @@ class StrategyEvaluationService:
         by_day: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
         for trade in ordered:
-            capital_pnl_pct = float(trade["capital_pnl_pct"])
-            trade_signs.append(1 if capital_pnl_pct > 0 else (-1 if capital_pnl_pct < 0 else 0))
+            capital_pnl_amount = float(trade["capital_pnl_amount"])
+            capital_pnl_pct = _safe_float(trade.get("capital_pnl_pct"))
+            trade_signs.append(1 if capital_pnl_amount > 0 else (-1 if capital_pnl_amount < 0 else 0))
             day = str(trade.get("trade_date_ist") or "")
             if day:
                 by_day[day].append(trade)
-            equity = equity * (1.0 + capital_pnl_pct)
+            equity += capital_pnl_amount
             peak = max(peak, equity)
             drawdown = (equity / peak) - 1.0 if peak > 0 else 0.0
+            drawdown = max(-1.0, drawdown)
             max_drawdown_pct = min(max_drawdown_pct, drawdown)
             date_key = day or (str(trade.get("exit_time") or "")[:10] if trade.get("exit_time") else "")
             equity_curve.append(
@@ -735,23 +737,26 @@ class StrategyEvaluationService:
             day_best: Optional[float] = None
             day_worst: Optional[float] = None
             for trade in day_trades:
-                val = _safe_float(trade.get("capital_pnl_pct"))
-                if val is None:
+                pnl_amount = _safe_float(trade.get("capital_pnl_amount"))
+                if pnl_amount is None:
                     continue
-                day_equity = day_equity * (1.0 + val)
-                if val > 0:
+                val = _safe_float(trade.get("capital_pnl_pct"))
+                day_equity += pnl_amount
+                if pnl_amount > 0:
                     day_wins += 1
-                elif val < 0:
+                elif pnl_amount < 0:
                     day_losses += 1
-                if day_best is None or val > day_best:
-                    day_best = val
-                if day_worst is None or val < day_worst:
-                    day_worst = val
+                if val is not None:
+                    if day_best is None or val > day_best:
+                        day_best = val
+                    if day_worst is None or val < day_worst:
+                        day_worst = val
             equity_end = day_equity
-            day_return_pct = ((equity_end / equity_start) - 1.0) if equity_start > 0 else None
             day_pnl_amount = equity_end - equity_start
+            day_return_pct = (day_pnl_amount / equity_start) if equity_start > 0 else None
             day_peak = max(day_peak, equity_end)
             drawdown_eod = (equity_end / day_peak) - 1.0 if day_peak > 0 else 0.0
+            drawdown_eod = max(-1.0, drawdown_eod)
             if day_return_pct is not None:
                 day_signs.append(1 if day_return_pct > 0 else (-1 if day_return_pct < 0 else 0))
             day_rows.append(
