@@ -110,6 +110,18 @@ def _safe_ratio(numerator: float, denominator: int) -> Optional[float]:
     return float(numerator) / float(denominator)
 
 
+def _resolve_trail_mechanism(*, exit_reason: Any, trailing_active: Any, orb_trail_active: Any, oi_trail_active: Any) -> Optional[str]:
+    if str(exit_reason or "").strip().upper() != "TRAILING_STOP":
+        return None
+    if bool(orb_trail_active):
+        return "ORB_TRAIL"
+    if bool(oi_trail_active):
+        return "OI_TRAIL"
+    if bool(trailing_active):
+        return "GENERIC_TRAIL"
+    return "TRAILING_STOP"
+
+
 class StrategyEvaluationService:
     def __init__(self) -> None:
         self._mongo_client: Optional[MongoClient] = None
@@ -428,6 +440,10 @@ class StrategyEvaluationService:
         entry_dt = _parse_iso_dt(open_position.get("timestamp"))
         exit_dt = _parse_iso_dt(close_position.get("timestamp"))
         bars_held = int(float(close_position.get("bars_held") or 0))
+        trailing_active = bool(close_position.get("trailing_active")) if close_position.get("trailing_active") is not None else None
+        orb_trail_active = bool(close_position.get("orb_trail_active")) if close_position.get("orb_trail_active") is not None else None
+        oi_trail_active = bool(close_position.get("oi_trail_active")) if close_position.get("oi_trail_active") is not None else None
+        exit_reason = str(close_position.get("exit_reason") or "").strip() or None
         result = "UNKNOWN"
         if pnl_pct_net is not None:
             if pnl_pct_net > 0:
@@ -479,9 +495,19 @@ class StrategyEvaluationService:
                 if open_position.get("trailing_lock_breakeven") is not None
                 else None
             ),
-            "trailing_active": bool(close_position.get("trailing_active")) if close_position.get("trailing_active") is not None else None,
+            "trailing_active": trailing_active,
+            "orb_trail_active": orb_trail_active,
+            "orb_trail_stop_price": _safe_float(close_position.get("orb_trail_stop_price")),
+            "oi_trail_active": oi_trail_active,
+            "oi_trail_stop_price": _safe_float(close_position.get("oi_trail_stop_price")),
             "signal_confidence": _safe_float(signal_doc.get("confidence")),
-            "exit_reason": str(close_position.get("exit_reason") or "").strip() or None,
+            "exit_reason": exit_reason,
+            "exit_mechanism": _resolve_trail_mechanism(
+                exit_reason=exit_reason,
+                trailing_active=trailing_active,
+                orb_trail_active=orb_trail_active,
+                oi_trail_active=oi_trail_active,
+            ),
             "result": result,
             "entry_reason": str(open_position.get("reason") or "").strip() or None,
         }
@@ -572,7 +598,14 @@ class StrategyEvaluationService:
         total = len(trades)
         trailing_stop_trades = [trade for trade in trades if str(trade.get("exit_reason") or "").upper() == "TRAILING_STOP"]
         hard_stop_trades = [trade for trade in trades if str(trade.get("exit_reason") or "").upper() == "STOP_LOSS"]
-        trailing_active_trades = [trade for trade in trades if bool(trade.get("trailing_active"))]
+        generic_trailing_active_trades = [trade for trade in trades if bool(trade.get("trailing_active"))]
+        orb_trailing_active_trades = [trade for trade in trades if bool(trade.get("orb_trail_active"))]
+        oi_trailing_active_trades = [trade for trade in trades if bool(trade.get("oi_trail_active"))]
+        trailing_active_trades = [
+            trade
+            for trade in trades
+            if bool(trade.get("trailing_active")) or bool(trade.get("orb_trail_active")) or bool(trade.get("oi_trail_active"))
+        ]
         locked_gain_pcts: list[float] = []
         trailing_captured_pcts: list[float] = []
 
@@ -600,6 +633,12 @@ class StrategyEvaluationService:
             "trailing_stop_exit_pct": _safe_ratio(len(trailing_stop_trades), total),
             "trailing_active_trades": len(trailing_active_trades),
             "trailing_active_trade_pct": _safe_ratio(len(trailing_active_trades), total),
+            "generic_trailing_active_trades": len(generic_trailing_active_trades),
+            "generic_trailing_active_trade_pct": _safe_ratio(len(generic_trailing_active_trades), total),
+            "orb_trailing_active_trades": len(orb_trailing_active_trades),
+            "orb_trailing_active_trade_pct": _safe_ratio(len(orb_trailing_active_trades), total),
+            "oi_trailing_active_trades": len(oi_trailing_active_trades),
+            "oi_trailing_active_trade_pct": _safe_ratio(len(oi_trailing_active_trades), total),
             "avg_locked_gain_pct_before_trailing_exit": (
                 sum(locked_gain_pcts) / len(locked_gain_pcts) if locked_gain_pcts else None
             ),

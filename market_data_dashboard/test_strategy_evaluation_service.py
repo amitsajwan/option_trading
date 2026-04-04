@@ -57,7 +57,9 @@ class StrategyEvaluationServiceTests(unittest.TestCase):
                 "high_water_premium": 125.0,
                 "stop_loss_pct": 0.10,
                 "target_pct": 0.30,
-                "trailing_active": True,
+                "trailing_active": False,
+                "orb_trail_active": True,
+                "oi_trail_active": False,
             },
             {
                 "exit_reason": "STOP_LOSS",
@@ -67,6 +69,8 @@ class StrategyEvaluationServiceTests(unittest.TestCase):
                 "stop_loss_pct": 0.20,
                 "target_pct": 0.40,
                 "trailing_active": False,
+                "orb_trail_active": False,
+                "oi_trail_active": False,
             },
             {
                 "exit_reason": "TARGET_HIT",
@@ -75,7 +79,9 @@ class StrategyEvaluationServiceTests(unittest.TestCase):
                 "high_water_premium": 135.0,
                 "stop_loss_pct": 0.15,
                 "target_pct": 0.50,
-                "trailing_active": True,
+                "trailing_active": False,
+                "orb_trail_active": False,
+                "oi_trail_active": True,
             },
         ]
 
@@ -87,10 +93,62 @@ class StrategyEvaluationServiceTests(unittest.TestCase):
         self.assertAlmostEqual(summary["trailing_stop_exit_pct"], 1.0 / 3.0, places=6)
         self.assertEqual(summary["trailing_active_trades"], 2)
         self.assertAlmostEqual(summary["trailing_active_trade_pct"], 2.0 / 3.0, places=6)
+        self.assertEqual(summary["generic_trailing_active_trades"], 0)
+        self.assertEqual(summary["orb_trailing_active_trades"], 1)
+        self.assertEqual(summary["oi_trailing_active_trades"], 1)
         self.assertAlmostEqual(summary["avg_locked_gain_pct_before_trailing_exit"], 0.15, places=6)
         self.assertAlmostEqual(summary["avg_trailing_profit_capture_pct"], 0.60, places=6)
         self.assertAlmostEqual(summary["avg_configured_stop_loss_pct"], 0.15, places=6)
         self.assertAlmostEqual(summary["avg_configured_target_pct"], 0.40, places=6)
+
+    def test_trade_from_docs_marks_strategy_specific_trail_mechanism(self) -> None:
+        trade = self.service._trade_from_docs(
+            position_id="p1",
+            docs={
+                "open": {
+                    "timestamp": "2024-01-05T10:46:00+05:30",
+                    "direction": "PE",
+                    "strike": 48400,
+                    "entry_premium": 415.55,
+                    "lots": 1,
+                    "lot_size": 15,
+                    "stop_loss_pct": 0.4,
+                    "target_pct": 0.8,
+                    "trailing_enabled": False,
+                    "reason": "[TRENDING] ORB: ORB_DOWN",
+                },
+                "close": {
+                    "timestamp": "2024-01-05T11:23:00+05:30",
+                    "exit_premium": 464.85,
+                    "pnl_pct": 0.11863794970520998,
+                    "bars_held": 37,
+                    "mfe_pct": 0.22,
+                    "mae_pct": -0.01,
+                    "trailing_active": False,
+                    "orb_trail_active": True,
+                    "oi_trail_active": False,
+                    "exit_reason": "TRAILING_STOP",
+                    "stop_price": 467.36,
+                    "high_water_premium": 508.0,
+                },
+                "open_doc": {"trade_date_ist": "2024-01-05"},
+                "close_doc": {"trade_date_ist": "2024-01-05"},
+            },
+            signal_map={
+                "sig-1": {
+                    "signal_id": "sig-1",
+                    "regime": "TRENDING",
+                    "confidence": 0.38,
+                    "reason": "[TRENDING] ORB: ORB_DOWN",
+                    "contributing_strategies": ["ORB"],
+                }
+            },
+            cost_bps=0.0,
+        )
+
+        self.assertIsNotNone(trade)
+        self.assertEqual(trade["exit_reason"], "TRAILING_STOP")
+        self.assertEqual(trade["exit_mechanism"], "ORB_TRAIL")
 
     def test_exit_reason_breakdown_groups_and_sorts(self) -> None:
         trades = [

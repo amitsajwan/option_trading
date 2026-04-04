@@ -560,6 +560,22 @@
             return `${(Number(value) * 100).toFixed(2)}%`;
         }
 
+        function formatExitMechanism(row) {
+            const mechanism = String(row?.exit_mechanism || "").trim().toUpperCase();
+            if (mechanism === "ORB_TRAIL") return "ORB Trail";
+            if (mechanism === "OI_TRAIL") return "OI Trail";
+            if (mechanism === "GENERIC_TRAIL") return "Generic Trail";
+            if (mechanism === "TRAILING_STOP") return "Trail Stop";
+            return "";
+        }
+
+        function formatExitLabel(row) {
+            const reason = safeText(row?.exit_reason);
+            const mechanism = formatExitMechanism(row);
+            if (!mechanism || mechanism === reason) return reason;
+            return `${reason} (${mechanism})`;
+        }
+
         function formatMoney(value) {
             if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
             return Number(value).toFixed(2);
@@ -860,7 +876,7 @@
                     <td>${tradeExitLabel(row)} @ ${formatMoney(row.exit_premium)}</td>
                     <td>${formatMoney(row.capital_pnl_amount)}</td>
                     <td>${formatTradePnL(row)}</td>
-                    <td>${safeText(row.exit_reason)}</td>
+                    <td>${formatExitLabel(row)}</td>
                 </tr>
             `), 8);
         }
@@ -978,7 +994,10 @@
             const runScopeNote = document.getElementById("runScopeNote");
             if (runScopeNote) {
                 if (latestRunId) {
-                    runScopeNote.textContent = `Latest completed run: ${summaryFrom || "--"} to ${summaryTo || "--"} | status ${latestRunStatus || "unknown"} | run ${latestRunId}. The page below stays scoped to the selected session day ${safeText(session?.session?.date_ist || replay.date_ist)}.`;
+                    const votesHint = Number(counts.votes || 0) === 0 && Number(counts.signals || 0) > 0
+                        ? " Vote rows were not persisted for this session day, so treat the Signals and Range Trades panels as the source of truth for this replay."
+                        : "";
+                    runScopeNote.textContent = `Latest completed run: ${summaryFrom || "--"} to ${summaryTo || "--"} | status ${latestRunStatus || "unknown"} | run ${latestRunId}. The page below stays scoped to the selected session day ${safeText(session?.session?.date_ist || replay.date_ist)}.${votesHint}`;
                 } else {
                     runScopeNote.textContent = `No completed historical run was found. The page below stays scoped to the selected session day ${safeText(session?.session?.date_ist || replay.date_ist)}.`;
                 }
