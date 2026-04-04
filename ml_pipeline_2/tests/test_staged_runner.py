@@ -84,6 +84,12 @@ def test_staged_runner_builds_summary_and_stage_artifacts(tmp_path: Path) -> Non
     assert sorted(diagnostics["splits"]) == ["final_holdout", "research_train", "research_valid"]
     assert diagnostics["feature_sets"] == ["fo_expiry_aware_v3"]
     assert diagnostics["scenario"]["selected_feature_set"]
+    state_lines = (Path(summary["output_root"]) / "state.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any('"event": "search_space"' in line and '"stage": "stage1"' in line for line in state_lines)
+    assert any('"event": "experiment_start"' in line and '"stage": "stage1"' in line for line in state_lines)
+    assert any('"event": "experiment_done"' in line and '"stage": "stage1"' in line for line in state_lines)
+    run_status = json.loads((Path(summary["output_root"]) / "run_status.json").read_text(encoding="utf-8"))
+    assert run_status["status"] == "completed"
 
 
 def test_staged_runner_early_holds_when_stage2_signal_check_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -393,6 +399,73 @@ def test_staged_runner_supports_stage1_hpo_search_options(tmp_path: Path) -> Non
         "sampler_seed": 123,
     }
     assert search_report["search_space"]["candidate_models_total"] == 3
+
+
+def test_staged_runner_supports_stage_search_budgets(tmp_path: Path) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["catalog"]["models_by_stage"]["stage1"] = ["logreg_balanced", "logreg_c1"]
+    payload["catalog"]["feature_sets_by_stage"]["stage1"] = ["fo_expiry_aware_v2", "fo_expiry_aware_v3"]
+    payload["training"]["search_options_by_stage"] = {
+        "stage1": {
+            "max_experiments": 1,
+            "max_elapsed_seconds": 60,
+        }
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+
+    summary = run_manifest(
+        manifest_path,
+        run_output_root=Path(resolved["outputs"]["artifacts_root"]) / "staged_stage1_budgeted_run",
+    )
+
+    assert summary["status"] == "completed"
+    search_report_path = Path(summary["stage_artifacts"]["stage1"]["model_package_path"]).parent / "search_report.json"
+    search_report = json.loads(search_report_path.read_text(encoding="utf-8"))
+    assert search_report["experiments_total"] == 1
+    assert search_report["search_budget"]["max_experiments"] == 1
+    assert search_report["search_budget"]["max_elapsed_seconds"] == 60.0
+
+
+def test_staged_runner_can_reuse_stage1_from_prior_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    source_resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    source_summary = runner_module.run_research(
+        source_resolved,
+        run_output_root=Path(source_resolved["outputs"]["artifacts_root"]) / "staged_stage1_reuse_source",
+    )
+
+    target_resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    target_resolved["_execution_hints"] = {
+        "stage1_reuse": {
+            "source_run_id": "baseline",
+            "source_run_dir": str(Path(source_summary["output_root"]).resolve()),
+            "source_summary_path": str((Path(source_summary["output_root"]) / "summary.json").resolve()),
+        }
+    }
+
+    original_binary_trainer = staged_pipeline.train_binary_catalog_stage
+
+    def _guarded_binary_trainer(*args, **kwargs):
+        if kwargs.get("stage_name") == "stage1":
+            raise AssertionError("stage1 trainer should not be called when reuse is configured")
+        return original_binary_trainer(*args, **kwargs)
+
+    monkeypatch.setattr(staged_pipeline, "train_binary_catalog_stage", _guarded_binary_trainer)
+
+    summary = runner_module.run_research(
+        target_resolved,
+        run_output_root=Path(target_resolved["outputs"]["artifacts_root"]) / "staged_stage1_reuse_target",
+    )
+
+    assert summary["status"] == "completed"
+    assert summary["stage_artifacts"]["stage1"]["reused_from_run_id"] == "baseline"
+    assert Path(summary["stage_artifacts"]["stage1"]["selection_model_path"]).exists()
+    state_lines = (Path(summary["output_root"]) / "state.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any('"event": "stage_reuse"' in line and '"stage": "stage1"' in line for line in state_lines)
 
 
 def test_staged_runner_supports_stage2_hpo_search_options(tmp_path: Path) -> None:

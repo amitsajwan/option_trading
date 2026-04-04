@@ -372,6 +372,84 @@ def test_staged_grid_runner_attaches_stage2_robustness_probe(tmp_path: Path, mon
     assert run_rows["edge_0010"]["stage2_robustness"]["splits"]["research_valid"]["gate_pass_rate"] == 0.24
 
 
+def test_staged_grid_runner_passes_stage1_reuse_execution_hint(tmp_path: Path, monkeypatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    grid_manifest_path = tmp_path / "staged_grid_stage1_reuse.json"
+    grid_manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                    "experiment_kind": "staged_training_grid_v1",
+                    "inputs": {"base_manifest_path": str(base_manifest_path)},
+                    "outputs": {"artifacts_root": str(tmp_path / "grid_artifacts"), "run_name": "staged_grid_stage1_reuse"},
+                    "selection": {"stage2_hpo_escalation": {"roc_auc_min": 0.54, "brier_max": 0.225}},
+                    "grid": {
+                    "research_only": True,
+                    "max_parallel_runs": 1,
+                    "runs": [
+                        {
+                            "run_id": "baseline",
+                            "model_group_suffix": "_baseline",
+                            "overrides": {"outputs": {"run_name": "grid_reuse_baseline"}},
+                        },
+                        {
+                            "run_id": "midday_variant",
+                            "model_group_suffix": "_midday_variant",
+                            "reuse_stage1_from": "baseline",
+                            "overrides": {
+                                "outputs": {"run_name": "grid_reuse_midday_variant"},
+                                "training": {
+                                    "stage2_session_filter": {
+                                        "enabled": True,
+                                        "include_buckets": ["MIDDAY"],
+                                    }
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    resolved = load_and_resolve_manifest(grid_manifest_path, validate_paths=True)
+    seen_hints: dict[str, object] = {}
+
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
+        output_root = Path(run_output_root).resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        run_name = str(resolved_config["outputs"]["run_name"])
+        if run_name == "grid_reuse_midday_variant":
+            seen_hints["value"] = dict(resolved_config.get("_execution_hints") or {})
+        summary = _mock_summary(
+            run_name=run_name,
+            publishable=False,
+            stage2_auc=0.53,
+            stage2_brier=0.24,
+            profit_factor=1.1,
+            net_return_sum=0.02,
+            max_drawdown_pct=0.08,
+        )
+        summary["output_root"] = str(output_root)
+        (output_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        return summary
+
+    monkeypatch.setattr(grid_module, "run_research", _fake_run_research)
+
+    grid_module.run_staged_grid(
+        resolved,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+    )
+
+    hint = dict(seen_hints["value"])["stage1_reuse"]
+    assert hint["source_run_id"] == "baseline"
+    assert str(hint["source_run_dir"]).endswith("01_baseline")
+    assert str(hint["source_summary_path"]).endswith("01_baseline\\summary.json") or str(hint["source_summary_path"]).endswith("01_baseline/summary.json")
+
+
 def test_grid_dependency_inheritance_requires_successful_prior_runs(tmp_path: Path, monkeypatch) -> None:
     parquet_root = build_staged_parquet_root(tmp_path)
     base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)

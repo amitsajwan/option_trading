@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence
 
 import joblib
 import numpy as np
@@ -12,6 +12,7 @@ from sklearn.metrics import brier_score_loss, roc_auc_score
 from ..contracts.types import LabelRecipe, PreprocessConfig
 from ..dataset_windowing import filter_trade_dates, normalize_trade_date
 from ..evaluation.stage_metrics import calibration_error
+from ..experiment_control.registry import update_run_status
 from ..experiment_control.state import RunContext, utc_now
 from ..inference_contract.predict import predict_probabilities_from_frame
 from ..labeling import EffectiveLabelConfig, build_labeled_dataset, prepare_snapshot_labeled_frame
@@ -876,6 +877,7 @@ def _training_call(
     model_n_jobs: int,
     model_specs_override: Optional[Sequence[Dict[str, Any]]] = None,
     search_options: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[Callable[[Dict[str, object]], None]] = None,
 ) -> Dict[str, Any]:
     return run_training_cycle_catalog(
         labeled_df=frame,
@@ -899,7 +901,39 @@ def _training_call(
         model_n_jobs=int(model_n_jobs),
         model_specs_override=model_specs_override,
         search_options=search_options,
+        progress_callback=progress_callback,
     )
+
+
+def _final_fit_search_options(search_options: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not search_options:
+        return None
+    filtered = {key: value for key, value in dict(search_options).items() if key not in {"max_experiments", "max_elapsed_seconds"}}
+    return filtered or None
+
+
+def _stage_progress_callback(ctx: RunContext, *, stage_name: str) -> Callable[[Dict[str, object]], None]:
+    def _callback(payload: Dict[str, object]) -> None:
+        event = str(payload.get("event") or "progress")
+        phase = str(payload.get("phase") or "")
+        event_payload = {
+            "stage": str(stage_name),
+            "phase": phase,
+            **{key: value for key, value in payload.items() if key not in {"phase", "event"}},
+        }
+        ctx.append_state(event, **event_payload)
+        update_run_status(
+            ctx,
+            lifecycle_status="running",
+            extra={
+                "active_stage": str(stage_name),
+                "last_progress_event": event,
+                "last_progress_at_utc": utc_now(),
+                "last_progress_payload": event_payload,
+            },
+        )
+
+    return _callback
 
 
 def _selected_model_spec_payload(search_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -930,6 +964,7 @@ def train_binary_catalog_stage(
     prob_col: str,
     policy_valid_frame: Optional[pd.DataFrame] = None,
     policy_holdout_frame: Optional[pd.DataFrame] = None,
+    progress_callback: Optional[Callable[[Dict[str, object]], None]] = None,
 ) -> dict[str, Any]:
     training_cfg = dict(manifest["training"])
     preprocess = PreprocessConfig(**dict(training_cfg["preprocess"]))
@@ -951,6 +986,7 @@ def train_binary_catalog_stage(
         random_state=int(training_cfg["random_state"]),
         model_n_jobs=int(training_cfg["runtime"]["model_n_jobs"]),
         search_options=stage_search_options,
+        progress_callback=progress_callback,
     )
     best_feature_set = str(search_payload["report"]["best_experiment"]["feature_set"])
     best_model_spec = _selected_model_spec_payload(search_payload)
@@ -965,6 +1001,8 @@ def train_binary_catalog_stage(
         random_state=int(training_cfg["random_state"]),
         model_n_jobs=int(training_cfg["runtime"]["model_n_jobs"]),
         model_specs_override=[best_model_spec],
+        search_options=_final_fit_search_options(stage_search_options),
+        progress_callback=progress_callback,
     )
 
     search_package = dict(search_payload["model_package"])
@@ -996,13 +1034,132 @@ def train_binary_catalog_stage(
         "final_payload": final_payload,
         "search_package": search_package,
         "model_package": final_package,
+        "selection_model_path": str((stage_root / "selection_model.joblib").resolve()),
         "model_package_path": str((stage_root / "model.joblib").resolve()),
+        "search_report_path": str((stage_root / "search_report.json").resolve()),
         "training_report_path": str((stage_root / "training_report.json").resolve()),
         "feature_contract_path": str((stage_root / "feature_contract.json").resolve()),
         "validation_scores": valid_scores,
         "holdout_scores": holdout_scores,
         "validation_policy_scores": policy_validation_scores,
         "holdout_policy_scores": policy_holdout_scores,
+    }
+
+
+def _stage1_reuse_relevant_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "inputs": {
+            "parquet_root": str((manifest.get("inputs") or {}).get("parquet_root") or ""),
+            "support_dataset": str((manifest.get("inputs") or {}).get("support_dataset") or ""),
+        },
+        "catalog": {
+            "models_by_stage": {
+                "stage1": list(((manifest.get("catalog") or {}).get("models_by_stage") or {}).get("stage1") or []),
+            },
+            "feature_sets_by_stage": {
+                "stage1": list(((manifest.get("catalog") or {}).get("feature_sets_by_stage") or {}).get("stage1") or []),
+            },
+        },
+        "windows": dict(manifest.get("windows") or {}),
+        "views": {
+            "stage1_view_id": str((manifest.get("views") or {}).get("stage1_view_id") or ""),
+        },
+        "labels": {
+            "stage1_labeler_id": str((manifest.get("labels") or {}).get("stage1_labeler_id") or ""),
+        },
+        "training": {
+            "stage1_trainer_id": str((manifest.get("training") or {}).get("stage1_trainer_id") or ""),
+            "preprocess": dict(((manifest.get("training") or {}).get("preprocess") or {})),
+            "cv_config": dict(((manifest.get("training") or {}).get("cv_config") or {})),
+            "objectives_by_stage": {
+                "stage1": str((((manifest.get("training") or {}).get("objectives_by_stage") or {}).get("stage1") or "")),
+            },
+            "random_state": (manifest.get("training") or {}).get("random_state"),
+            "runtime": {
+                "model_n_jobs": (((manifest.get("training") or {}).get("runtime") or {}).get("model_n_jobs")),
+            },
+            "search_options_by_stage": {
+                "stage1": dict((((manifest.get("training") or {}).get("search_options_by_stage") or {}).get("stage1") or {})),
+            },
+            "cost_per_trade": (manifest.get("training") or {}).get("cost_per_trade"),
+        },
+        "runtime": {
+            "block_expiry": bool((manifest.get("runtime") or {}).get("block_expiry", False)),
+        },
+    }
+
+
+def _load_reused_stage1_result(
+    *,
+    ctx: RunContext,
+    manifest: Dict[str, Any],
+    valid_frame: pd.DataFrame,
+    holdout_frame: pd.DataFrame,
+    policy_valid_frame: Optional[pd.DataFrame],
+    policy_holdout_frame: Optional[pd.DataFrame],
+    prob_col: str,
+) -> Optional[Dict[str, Any]]:
+    execution_hints = dict(ctx.resolved_config.get("_execution_hints") or {})
+    stage1_hint = dict(execution_hints.get("stage1_reuse") or {})
+    source_run_dir = str(stage1_hint.get("source_run_dir") or "").strip()
+    if not source_run_dir:
+        return None
+    source_root = Path(source_run_dir).resolve()
+    source_summary_path = source_root / "summary.json"
+    source_resolved_path = source_root / "resolved_config.json"
+    if not source_summary_path.exists() or not source_resolved_path.exists():
+        raise FileNotFoundError(f"stage1 reuse source is missing required artifacts: {source_root}")
+    source_summary = json.loads(source_summary_path.read_text(encoding="utf-8"))
+    source_manifest = json.loads(source_resolved_path.read_text(encoding="utf-8"))
+    if _stage1_reuse_relevant_manifest(source_manifest) != _stage1_reuse_relevant_manifest(manifest):
+        raise ValueError(f"stage1 reuse source is not compatible with current manifest: {source_root}")
+    source_stage1 = dict((source_summary.get("stage_artifacts") or {}).get("stage1") or {})
+    stage1_root = Path(str(source_stage1.get("model_package_path") or "")).resolve().parent
+    selection_model_path = stage1_root / "selection_model.joblib"
+    model_package_path = stage1_root / "model.joblib"
+    search_report_path = stage1_root / "search_report.json"
+    training_report_path = stage1_root / "training_report.json"
+    feature_contract_path = stage1_root / "feature_contract.json"
+    if not selection_model_path.exists() or not model_package_path.exists():
+        raise FileNotFoundError(f"stage1 reuse source is missing model packages: {stage1_root}")
+    search_package = joblib.load(selection_model_path)
+    final_package = joblib.load(model_package_path)
+    valid_scores = _score_single_target(valid_frame, search_package, prob_col=prob_col)
+    holdout_scores = _score_single_target(holdout_frame, final_package, prob_col=prob_col)
+    policy_validation_scores = valid_scores if policy_valid_frame is None else _score_single_target(policy_valid_frame, search_package, prob_col=prob_col)
+    policy_holdout_scores = holdout_scores if policy_holdout_frame is None else _score_single_target(policy_holdout_frame, final_package, prob_col=prob_col)
+    ctx.append_state(
+        "stage_reuse",
+        stage="stage1",
+        source_run_id=str(stage1_hint.get("source_run_id") or ""),
+        source_run_dir=str(source_root),
+    )
+    update_run_status(
+        ctx,
+        lifecycle_status="running",
+        extra={
+            "active_stage": "stage1",
+            "last_progress_event": "stage_reuse",
+            "last_progress_at_utc": utc_now(),
+        },
+    )
+    return {
+        "stage_name": "stage1",
+        "search_payload": {"report": json.loads(search_report_path.read_text(encoding="utf-8")) if search_report_path.exists() else {}},
+        "final_payload": {"report": json.loads(training_report_path.read_text(encoding="utf-8")) if training_report_path.exists() else {}},
+        "search_package": search_package,
+        "model_package": final_package,
+        "selection_model_path": str(selection_model_path.resolve()),
+        "model_package_path": str(model_package_path.resolve()),
+        "search_report_path": str(search_report_path.resolve()),
+        "training_report_path": str(training_report_path.resolve()),
+        "feature_contract_path": str(feature_contract_path.resolve()),
+        "validation_scores": valid_scores,
+        "holdout_scores": holdout_scores,
+        "validation_policy_scores": policy_validation_scores,
+        "holdout_policy_scores": policy_holdout_scores,
+        "reused_from_run_id": str(stage1_hint.get("source_run_id") or ""),
+        "reused_from_run_dir": str(source_root),
     }
 
 
@@ -1064,6 +1221,7 @@ def train_recipe_ovr_stage(
     output_root: Path,
     policy_valid_frame: Optional[pd.DataFrame] = None,
     policy_holdout_frame: Optional[pd.DataFrame] = None,
+    progress_callback: Optional[Callable[[Dict[str, object]], None]] = None,
 ) -> dict[str, Any]:
     training_cfg = dict(manifest["training"])
     preprocess = PreprocessConfig(**dict(training_cfg["preprocess"]))
@@ -1098,6 +1256,7 @@ def train_recipe_ovr_stage(
             random_state=int(training_cfg["random_state"]),
             model_n_jobs=inner_model_n_jobs,
             search_options=stage_search_options,
+            progress_callback=progress_callback,
         )
         best_feature_set = str(search_payload["report"]["best_experiment"]["feature_set"])
         best_model_spec = _selected_model_spec_payload(search_payload)
@@ -1112,6 +1271,8 @@ def train_recipe_ovr_stage(
             random_state=int(training_cfg["random_state"]),
             model_n_jobs=inner_model_n_jobs,
             model_specs_override=[best_model_spec],
+            search_options=_final_fit_search_options(stage_search_options),
+            progress_callback=progress_callback,
         )
         search_package = dict(search_payload["model_package"])
         final_package = dict(final_payload["model_package"])
@@ -1869,6 +2030,7 @@ def _early_hold_summary(
         "label_filtering": label_filtering,
         "scenario_reports": scenario_reports,
         "training_environment": dict(training_environment),
+        "execution_hints": dict(ctx.resolved_config.get("_execution_hints") or {}),
         "stage_artifacts": completed_stage_artifacts,
     }
     ctx.write_json("summary.json", summary)
@@ -2043,30 +2205,51 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     stage_artifacts: dict[str, Any] = {}
     stage1_started_at = utc_now()
     ctx.append_state("stage_start", stage="stage1", started_at_utc=stage1_started_at)
-    stage1_result = resolve_trainer(components["stage1"]["trainer_id"])(
-        stage_name="stage1",
-        train_frame=labeled_frames["stage1"]["research_train"],
+    update_run_status(
+        ctx,
+        lifecycle_status="running",
+        extra={"active_stage": "stage1", "last_progress_event": "stage_start", "last_progress_at_utc": stage1_started_at},
+    )
+    stage1_result = _load_reused_stage1_result(
+        ctx=ctx,
+        manifest=manifest,
         valid_frame=labeled_frames["stage1"]["research_valid"],
-        full_model_frame=labeled_frames["stage1"]["full_model"],
         holdout_frame=labeled_frames["stage1"]["final_holdout"],
         policy_valid_frame=stage_frames["stage1"]["research_valid"],
         policy_holdout_frame=stage_frames["stage1"]["final_holdout"],
-        manifest=manifest,
-        models=list(manifest["catalog"]["models_by_stage"]["stage1"]),
-        feature_sets=list(manifest["catalog"]["feature_sets_by_stage"]["stage1"]),
-        label_mode="entry",
-        positive_value=1,
-        output_root=ctx.output_root / "stages",
         prob_col="entry_prob",
     )
+    if stage1_result is None:
+        stage1_result = resolve_trainer(components["stage1"]["trainer_id"])(
+            stage_name="stage1",
+            train_frame=labeled_frames["stage1"]["research_train"],
+            valid_frame=labeled_frames["stage1"]["research_valid"],
+            full_model_frame=labeled_frames["stage1"]["full_model"],
+            holdout_frame=labeled_frames["stage1"]["final_holdout"],
+            policy_valid_frame=stage_frames["stage1"]["research_valid"],
+            policy_holdout_frame=stage_frames["stage1"]["final_holdout"],
+            manifest=manifest,
+            models=list(manifest["catalog"]["models_by_stage"]["stage1"]),
+            feature_sets=list(manifest["catalog"]["feature_sets_by_stage"]["stage1"]),
+            label_mode="entry",
+            positive_value=1,
+            output_root=ctx.output_root / "stages",
+            prob_col="entry_prob",
+            progress_callback=_stage_progress_callback(ctx, stage_name="stage1"),
+        )
     stage1_completed_at = utc_now()
     stage_artifacts["stage1"] = {
         "started_at_utc": stage1_started_at,
         "completed_at_utc": stage1_completed_at,
+        "selection_model_path": stage1_result["selection_model_path"],
         "model_package_path": stage1_result["model_package_path"],
+        "search_report_path": stage1_result["search_report_path"],
         "training_report_path": stage1_result["training_report_path"],
         "feature_contract_path": stage1_result["feature_contract_path"],
     }
+    if stage1_result.get("reused_from_run_id"):
+        stage_artifacts["stage1"]["reused_from_run_id"] = str(stage1_result["reused_from_run_id"])
+        stage_artifacts["stage1"]["reused_from_run_dir"] = str(stage1_result["reused_from_run_dir"])
     ctx.append_state("stage_done", stage="stage1", completed_at_utc=stage1_completed_at)
     stage1_cv_quality = _binary_quality(
         labeled_frames["stage1"]["research_valid"]["move_label"],
@@ -2102,6 +2285,11 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
 
     stage2_started_at = utc_now()
     ctx.append_state("stage_start", stage="stage2", started_at_utc=stage2_started_at)
+    update_run_status(
+        ctx,
+        lifecycle_status="running",
+        extra={"active_stage": "stage2", "last_progress_event": "stage_start", "last_progress_at_utc": stage2_started_at},
+    )
     stage2_result = resolve_trainer(components["stage2"]["trainer_id"])(
         stage_name="stage2",
         train_frame=labeled_frames["stage2"]["research_train"],
@@ -2117,6 +2305,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         positive_value="CE",
         output_root=ctx.output_root / "stages",
         prob_col="direction_up_prob",
+        progress_callback=_stage_progress_callback(ctx, stage_name="stage2"),
     )
     stage2_completed_at = utc_now()
     stage_artifacts["stage2"] = {
@@ -2176,6 +2365,11 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
 
     stage3_started_at = utc_now()
     ctx.append_state("stage_start", stage="stage3", started_at_utc=stage3_started_at)
+    update_run_status(
+        ctx,
+        lifecycle_status="running",
+        extra={"active_stage": "stage3", "last_progress_event": "stage_start", "last_progress_at_utc": stage3_started_at},
+    )
     stage3_result = resolve_trainer(components["stage3"]["trainer_id"])(
         stage_name="stage3",
         train_frame=_add_upstream_probs(
@@ -2210,6 +2404,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         models=list(manifest["catalog"]["models_by_stage"]["stage3"]),
         feature_sets=list(manifest["catalog"]["feature_sets_by_stage"]["stage3"]),
         output_root=ctx.output_root / "stages",
+        progress_callback=_stage_progress_callback(ctx, stage_name="stage3"),
     )
     stage3_completed_at = utc_now()
     stage_artifacts["stage3"] = {
@@ -2347,6 +2542,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "label_filtering": label_filtering,
         "scenario_reports": scenario_reports,
         "training_environment": dict(training_environment["stages"]),
+        "execution_hints": dict(ctx.resolved_config.get("_execution_hints") or {}),
         "stage_artifacts": stage_artifacts,
     }
     ctx.write_json("summary.json", summary)

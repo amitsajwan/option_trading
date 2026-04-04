@@ -279,6 +279,18 @@ def _validate_search_options_by_stage(payload: Any, errors: List[str], *, field_
         if stage_options and not isinstance(stage_options, dict):
             errors.append(f"{field_prefix}.{stage_name} must be an object")
             continue
+        if "max_experiments" in stage_options:
+            try:
+                if int(stage_options.get("max_experiments", 0)) <= 0:
+                    raise ValueError
+            except Exception:
+                errors.append(f"{field_prefix}.{stage_name}.max_experiments must be an integer > 0")
+        if "max_elapsed_seconds" in stage_options:
+            try:
+                if float(stage_options.get("max_elapsed_seconds", 0.0)) <= 0.0:
+                    raise ValueError
+            except Exception:
+                errors.append(f"{field_prefix}.{stage_name}.max_elapsed_seconds must be numeric and > 0")
         hpo = stage_options.get("hpo") or {}
         if hpo and not isinstance(hpo, dict):
             errors.append(f"{field_prefix}.{stage_name}.hpo must be an object")
@@ -628,6 +640,14 @@ def _validate_grid_manifest(payload: Dict[str, Any], *, manifest_path: Path, val
                 errors.append(
                     f"{field_prefix}.inherit_best_from must reference earlier run_id values; unknown refs: {unknown_refs}"
                 )
+        reuse_stage1_from = run_payload.get("reuse_stage1_from")
+        if reuse_stage1_from is not None and not isinstance(reuse_stage1_from, str):
+            errors.append(f"{field_prefix}.reuse_stage1_from must be a string when provided")
+        elif isinstance(reuse_stage1_from, str) and reuse_stage1_from.strip():
+            if reuse_stage1_from.strip() not in seen_run_ids:
+                errors.append(
+                    f"{field_prefix}.reuse_stage1_from must reference an earlier run_id; unknown ref: {reuse_stage1_from.strip()}"
+                )
 
         _validate_grid_run_overrides(
             run_payload.get("overrides"),
@@ -654,6 +674,7 @@ def _validate_grid_manifest(payload: Dict[str, Any], *, manifest_path: Path, val
                 "run_id": str(run_payload.get("run_id") or "").strip(),
                 "model_group_suffix": str(run_payload.get("model_group_suffix") or ""),
                 "inherit_best_from": [str(item) for item in list(run_payload.get("inherit_best_from") or [])],
+                "reuse_stage1_from": str(run_payload.get("reuse_stage1_from") or "").strip() or None,
                 "overrides": dict(run_payload.get("overrides") or {}),
             }
         )

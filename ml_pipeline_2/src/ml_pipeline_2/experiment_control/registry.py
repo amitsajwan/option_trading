@@ -61,6 +61,39 @@ def initialize_run_status(
     return payload
 
 
+def update_run_status(
+    ctx: RunContext,
+    *,
+    lifecycle_status: Optional[RunLifecycleStatus] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any]
+    if ctx.run_status_path.exists():
+        try:
+            payload = json.loads(ctx.run_status_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+    else:
+        payload = {}
+    if not payload:
+        payload = _status_payload(
+            entity_kind="research_run",
+            entity_id=str(ctx.output_root.name),
+            output_root=ctx.output_root,
+            manifest_hash=str(ctx.resolved_config.get("manifest_hash", "")),
+            lifecycle_status="running",
+            integrity="unknown",
+            reuse_mode="fail_if_exists",
+        )
+    if lifecycle_status is not None:
+        payload["status"] = str(lifecycle_status)
+    payload["updated_at_utc"] = utc_now()
+    if extra:
+        payload.update(extra)
+    ctx.write_json("run_status.json", payload)
+    return payload
+
+
 def finalize_run_status(
     ctx: RunContext,
     *,
@@ -149,4 +182,5 @@ __all__ = [
     "finalize_run_status",
     "initialize_grid_status",
     "initialize_run_status",
+    "update_run_status",
 ]

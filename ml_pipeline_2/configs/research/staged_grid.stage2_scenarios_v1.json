@@ -41,6 +41,7 @@
       {
         "run_id": "opening_only",
         "model_group_suffix": "_scenario_opening_only",
+        "reuse_stage1_from": "all_day_focus_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_stage2_scenario_opening_only"
@@ -58,6 +59,7 @@
       {
         "run_id": "morning_only",
         "model_group_suffix": "_scenario_morning_only",
+        "reuse_stage1_from": "all_day_focus_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_stage2_scenario_morning_only"
@@ -75,6 +77,7 @@
       {
         "run_id": "midday_only",
         "model_group_suffix": "_scenario_midday_only",
+        "reuse_stage1_from": "all_day_focus_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_stage2_scenario_midday_only"
@@ -92,6 +95,7 @@
       {
         "run_id": "late_session_only",
         "model_group_suffix": "_scenario_late_session_only",
+        "reuse_stage1_from": "all_day_focus_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_stage2_scenario_late_session_only"
@@ -109,6 +113,7 @@
       {
         "run_id": "morning_midday",
         "model_group_suffix": "_scenario_morning_midday",
+        "reuse_stage1_from": "all_day_focus_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_stage2_scenario_morning_midday"
@@ -130,6 +135,7 @@
         "inherit_best_from": [
           "midday_only"
         ],
+        "reuse_stage1_from": "all_day_focus_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_stage2_scenario_midday_strict_winner"
@@ -147,6 +153,7 @@
       {
         "run_id": "all_day_time_aware_pool",
         "model_group_suffix": "_scenario_all_day_time_aware_pool",
+        "reuse_stage1_from": "all_day_focus_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_stage2_scenario_all_day_time_aware_pool"
@@ -167,6 +174,7 @@
         "inherit_best_from": [
           "midday_only"
         ],
+        "reuse_stage1_from": "all_day_focus_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_stage2_scenario_midday_time_aware_pool"
@@ -184,6 +192,7 @@
       {
         "run_id": "all_day_iv_oi_pool",
         "model_group_suffix": "_scenario_all_day_iv_oi_pool",
+        "reuse_stage1_from": "all_day_focus_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_stage2_scenario_all_day_iv_oi_pool"
@@ -205,6 +214,7 @@
         "inherit_best_from": [
           "midday_only"
         ],
+        "reuse_stage1_from": "all_day_focus_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_stage2_scenario_midday_iv_oi_pool"
@@ -226,6 +236,7 @@
         "inherit_best_from": [
           "morning_midday"
         ],
+        "reuse_stage1_from": "all_day_focus_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_stage2_scenario_morning_midday_strict_winner"

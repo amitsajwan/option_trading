@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -702,6 +703,8 @@ def _evaluate_move_experiment(
     label_target: str,
     model_n_jobs: int,
     return_utility_score_payload: bool = False,
+    progress_callback: Optional[Callable[[Dict[str, object]], None]] = None,
+    experiment_id: Optional[str] = None,
 ) -> Tuple[Dict[str, object], Optional[Dict[str, object]]]:
     days = sorted(df["trade_date"].astype(str).unique().tolist())
     folds = build_day_folds(
@@ -755,6 +758,18 @@ def _evaluate_move_experiment(
             }
         )
         combined_fold_rows.append({"rmse": test_metrics.get("rmse"), "brier": test_metrics.get("brier")})
+        if callable(progress_callback):
+            progress_callback(
+                {
+                    "phase": "training_cycle",
+                    "event": "fold_done",
+                    "experiment_id": experiment_id,
+                    "fold_index": int(fold_idx),
+                    "label_target": str(label_target),
+                    "rows": {"train": int(len(train_df)), "valid": int(len(valid_df)), "test": int(len(test_df))},
+                    "fold_ok": True,
+                }
+            )
     result = {
         "prediction_mode": meta["prediction_mode"],
         "fold_count": int(len(folds)),
@@ -774,7 +789,7 @@ def _evaluate_move_experiment(
     return result, payload
 
 
-def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model_spec: ModelSpec, cv_config: Dict[str, Any], random_state: int, preprocess_cfg: PreprocessConfig, label_target: str, utility_cfg: TradingObjectiveConfig, model_n_jobs: int, return_utility_score_payload: bool = False) -> Tuple[Dict[str, object], Optional[Dict[str, object]]]:
+def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model_spec: ModelSpec, cv_config: Dict[str, Any], random_state: int, preprocess_cfg: PreprocessConfig, label_target: str, utility_cfg: TradingObjectiveConfig, model_n_jobs: int, return_utility_score_payload: bool = False, progress_callback: Optional[Callable[[Dict[str, object]], None]] = None, experiment_id: Optional[str] = None) -> Tuple[Dict[str, object], Optional[Dict[str, object]]]:
     if _is_move_label_target(label_target):
         return _evaluate_move_experiment(
             df,
@@ -786,6 +801,8 @@ def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model
             label_target,
             model_n_jobs,
             return_utility_score_payload=return_utility_score_payload,
+            progress_callback=progress_callback,
+            experiment_id=experiment_id,
         )
     days = sorted(df["trade_date"].astype(str).unique().tolist())
     folds = build_day_folds(days=days, train_days=int(cv_config["train_days"]), valid_days=int(cv_config["valid_days"]), test_days=int(cv_config["test_days"]), step_days=int(cv_config["step_days"]), purge_days=int(cv_config.get("purge_days", 0)), embargo_days=int(cv_config.get("embargo_days", 0)))
@@ -826,6 +843,19 @@ def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model
             test_metrics_rows.append(test_metrics)
             fold_details.append({"fold_ok": True, "days": fold, "rows": {"train": int(len(train_df)), "valid": int(len(valid_df)), "test": int(len(test_df))}, "metrics": {"valid": valid_metrics, "test": test_metrics}})
             combined_fold_rows.append({"rmse": test_metrics.get("rmse"), "brier": test_metrics.get("brier")})
+            if callable(progress_callback):
+                progress_callback(
+                    {
+                        "phase": "training_cycle",
+                        "event": "fold_done",
+                        "experiment_id": experiment_id,
+                        "fold_index": int(fold_idx),
+                        "side": str(side),
+                        "label_target": str(label_target),
+                        "rows": {"train": int(len(train_df)), "valid": int(len(valid_df)), "test": int(len(test_df))},
+                        "fold_ok": True,
+                    }
+                )
         side_reports[side] = {"fold_count": int(len(folds)), "fold_ok_count": int(sum(1 for row in fold_details if row.get("fold_ok"))), "folds": fold_details, "aggregate": {"valid": _aggregate_metric_rows(valid_metrics_rows), "test": _aggregate_metric_rows(test_metrics_rows)}}
     utility_summary = _evaluate_trade_utility(df, folds, ce_scores, pe_scores, utility_cfg)
     result = {"fold_count": int(len(folds)), "ce": side_reports["ce"], "pe": side_reports["pe"], "combined_test": _aggregate_metric_rows(combined_fold_rows), "trading_utility": utility_summary}
@@ -959,6 +989,10 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
     unavailable_models = list(resolved_model_space["unavailable_models"])
     candidate_model_entries = list(resolved_model_space["candidate_entries"])
     resolved_hpo = dict(resolved_model_space["hpo"])
+    if max_experiments is None and (search_options or {}).get("max_experiments") is not None:
+        max_experiments = int((search_options or {}).get("max_experiments"))
+    raw_max_elapsed_seconds = (search_options or {}).get("max_elapsed_seconds")
+    max_elapsed_seconds = float(raw_max_elapsed_seconds) if raw_max_elapsed_seconds is not None else None
     cv_config = {"train_days": int(cv_kwargs.get("train_days")), "valid_days": int(cv_kwargs.get("valid_days")), "test_days": int(cv_kwargs.get("test_days")), "step_days": int(cv_kwargs.get("step_days")), "purge_days": int(cv_kwargs.get("purge_days", 0)), "embargo_days": int(cv_kwargs.get("embargo_days", 0)), "purge_mode": normalize_purge_mode(cv_kwargs.get("purge_mode", PURGE_MODE_DAYS)), "embargo_rows": int(cv_kwargs.get("embargo_rows", 0)), "event_end_col": cv_kwargs.get("event_end_col")}
     preprocessing = {"max_missing_rate": float(effective_preprocess.max_missing_rate), "clip_lower_q": float(effective_preprocess.clip_lower_q), "clip_upper_q": float(effective_preprocess.clip_upper_q), "dropped_features_by_missing_rate": dropped_by_missing, "features_after_preprocess_gate": int(len(base_features))}
     runtime_config = {"model_n_jobs": int(effective_model_n_jobs)}
@@ -1003,13 +1037,30 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
     experiments: List[Dict[str, object]] = []
     experiment_counter = 0
     max_exp = int(max_experiments) if max_experiments is not None else None
+    search_started_monotonic = time.monotonic()
+    search_stop_reason: Optional[str] = None
     for feature_set_name in feature_names:
         selected_features = _apply_feature_set(base_features, feature_set_name)
         if not selected_features:
             continue
         for candidate_entry in candidate_model_entries:
+            if max_elapsed_seconds is not None and (time.monotonic() - search_started_monotonic) >= float(max_elapsed_seconds):
+                search_stop_reason = "max_elapsed_seconds_reached"
+                if callable(progress_callback):
+                    progress_callback(
+                        {
+                            "phase": "training_cycle",
+                            "event": "search_budget_reached",
+                            "reason": search_stop_reason,
+                            "elapsed_seconds": float(time.monotonic() - search_started_monotonic),
+                            "max_elapsed_seconds": float(max_elapsed_seconds),
+                            "experiments_completed": int(len(experiments)),
+                        }
+                    )
+                break
             experiment_counter += 1
             if max_exp is not None and experiment_counter > max_exp:
+                search_stop_reason = "max_experiments_reached"
                 break
             model_spec = candidate_entry["spec"]
             model_meta = dict(candidate_entry["meta"])
@@ -1027,9 +1078,38 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
                         "search_origin": model_meta.get("search_origin", "preset"),
                     }
                 )
-            result, utility_score_payload = _evaluate_experiment(frame, selected_features, model_spec, cv_config, random_state, effective_preprocess, label_target, effective_utility, effective_model_n_jobs, return_utility_score_payload=retain_utility_score_payload)
+            result, utility_score_payload = _evaluate_experiment(
+                frame,
+                selected_features,
+                model_spec,
+                cv_config,
+                random_state,
+                effective_preprocess,
+                label_target,
+                effective_utility,
+                effective_model_n_jobs,
+                return_utility_score_payload=retain_utility_score_payload,
+                progress_callback=progress_callback,
+                experiment_id=experiment_id,
+            )
+            if callable(progress_callback):
+                progress_callback(
+                    {
+                        "phase": "training_cycle",
+                        "event": "experiment_done",
+                        "experiment_index": int(experiment_counter),
+                        "experiment_id": experiment_id,
+                        "feature_set": feature_set_name,
+                        "model": str(model_spec.name),
+                        "objective_value": _objective_value(result, objective),
+                        "fallback_objective_value": _fallback_objective_value(result, objective),
+                        "fold_count": int(result.get("fold_count", 0)),
+                    }
+                )
             experiments.append({"experiment_id": experiment_id, "feature_set": feature_set_name, "model": model_meta, "model_spec": model_spec, "feature_count": int(len(selected_features)), "selected_features": list(selected_features), "result": result, "objective_value": _objective_value(result, objective), "fallback_objective_value": _fallback_objective_value(result, objective), "utility_score_payload": utility_score_payload})
         if max_exp is not None and experiment_counter >= max_exp:
+            break
+        if search_stop_reason is not None:
             break
     if not experiments:
         raise ValueError("no experiments evaluated")
@@ -1051,5 +1131,5 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
             model_spec = experiment["model_spec"]
             package = _build_model_package(created_at_utc, feature_profile, objective, label_target, experiment["selected_features"], experiment["feature_set"], experiment["model"], cv_config, preprocessing, runtime_config, effective_utility.to_dict(), _fit_final_models(frame, experiment["selected_features"], model_spec, random_state, effective_preprocess, label_target, effective_model_n_jobs))
             bundles.append({"experiment_id": experiment["experiment_id"], "model_package": package, "training_result": experiment["result"], "utility_score_payload": experiment.get("utility_score_payload")})
-    report = {"created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "rows_total": int(len(frame)), "days_total": int(frame["trade_date"].nunique()), "experiments_total": int(len(experiments)), "search_space": {"requested_models": requested_model_names, "runnable_models": runnable_model_names, "candidate_models_total": int(len(candidate_model_entries)), "unavailable_models": unavailable_models, "hpo": resolved_hpo}, "best_experiment": {"experiment_id": best["experiment_id"], "feature_set": best["feature_set"], "feature_count": int(best["feature_count"]), "model": best["model"], "objective_value": best.get("objective_value"), "fallback_objective_value": best.get("fallback_objective_value"), "selected_by_fallback": bool(best.get("selected_by_fallback", False))}, "leaderboard": _build_leaderboard(experiments, objective), "preprocessing": preprocessing, "runtime": runtime_config, "cv_config": cv_config, "trading_utility_config": effective_utility.to_dict()}
+    report = {"created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "rows_total": int(len(frame)), "days_total": int(frame["trade_date"].nunique()), "experiments_total": int(len(experiments)), "search_space": {"requested_models": requested_model_names, "runnable_models": runnable_model_names, "candidate_models_total": int(len(candidate_model_entries)), "unavailable_models": unavailable_models, "hpo": resolved_hpo}, "search_budget": {"max_experiments": int(max_exp) if max_exp is not None else None, "max_elapsed_seconds": float(max_elapsed_seconds) if max_elapsed_seconds is not None else None, "elapsed_seconds": float(time.monotonic() - search_started_monotonic), "stop_reason": search_stop_reason}, "best_experiment": {"experiment_id": best["experiment_id"], "feature_set": best["feature_set"], "feature_count": int(best["feature_count"]), "model": best["model"], "objective_value": best.get("objective_value"), "fallback_objective_value": best.get("fallback_objective_value"), "selected_by_fallback": bool(best.get("selected_by_fallback", False))}, "leaderboard": _build_leaderboard(experiments, objective), "preprocessing": preprocessing, "runtime": runtime_config, "cv_config": cv_config, "trading_utility_config": effective_utility.to_dict()}
     return {"report": report, "model_package": best_package, "experiment_bundles": bundles}

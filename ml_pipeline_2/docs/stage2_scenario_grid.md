@@ -30,6 +30,21 @@ The current scenario grid explores three controlled axes around the `best_edge_t
 
 This is intentionally not a blind search. Every scenario is interpretable and tied back to a concrete hypothesis.
 
+## Stage 1 Reuse
+
+Most Stage 2 scenario lanes do not change Stage 1 at all. To avoid retraining the same Stage 1 search repeatedly, grid runs can declare:
+
+- `reuse_stage1_from`
+
+This references an earlier successful `run_id` in the same grid and tells the execution layer to:
+
+1. load the prior lane's Stage 1 selection and final packages
+2. verify Stage 1 compatibility against the current manifest
+3. rescore the current lane's validation and holdout frames with those packages
+4. skip fresh Stage 1 training for that lane
+
+This is the main runtime-saving mechanism for session-filter and Stage 2-only feature-pool variants.
+
 ## Robustness Probe
 
 The grid supports a `selection.robustness_probe` block. After lane execution completes, the grid:

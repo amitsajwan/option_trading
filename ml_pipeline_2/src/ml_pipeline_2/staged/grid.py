@@ -116,6 +116,35 @@ def _resolve_run_overrides(
     return applied_overrides, inherited_from_run_id
 
 
+def _run_dependencies(run_spec: Dict[str, Any]) -> List[str]:
+    dependencies = [str(ref) for ref in list(run_spec.get("inherit_best_from") or [])]
+    reuse_stage1_from = str(run_spec.get("reuse_stage1_from") or "").strip()
+    if reuse_stage1_from:
+        dependencies.append(reuse_stage1_from)
+    return dependencies
+
+
+def _resolve_execution_hints(
+    *,
+    run_spec: Dict[str, Any],
+    completed_rows: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    hints: Dict[str, Any] = {}
+    reuse_stage1_from = str(run_spec.get("reuse_stage1_from") or "").strip()
+    if reuse_stage1_from:
+        source_row = dict(completed_rows.get(reuse_stage1_from) or {})
+        if not source_row:
+            raise ValueError(f"reuse_stage1_from has no completed prior run: {reuse_stage1_from}")
+        if str(source_row.get("release_status")) == "failed":
+            raise ValueError(f"reuse_stage1_from references failed prior run: {reuse_stage1_from}")
+        hints["stage1_reuse"] = {
+            "source_run_id": reuse_stage1_from,
+            "source_run_dir": str(source_row["run_dir"]),
+            "source_summary_path": str(source_row["summary_path"]),
+        }
+    return hints
+
+
 def _run_status_from_summary(summary: Dict[str, Any]) -> str:
     publishable = bool(((summary.get("publish_assessment") or {}).get("publishable")))
     return "publishable_candidate" if publishable else "held"
@@ -200,6 +229,7 @@ def _result_row(
         "stage2_diagnostics_score_paths": dict(stage2_artifacts.get("diagnostics_score_paths") or {}),
         "applied_overrides": applied_overrides,
         "inherited_from_run_id": inherited_from_run_id,
+        "reused_stage1_from_run_id": str(((summary.get("execution_hints") or {}).get("stage1_reuse") or {}).get("source_run_id") or "") or None,
     }
 
 
@@ -241,6 +271,7 @@ def _failed_result_row(
         "scenario_reports": {},
         "applied_overrides": applied_overrides,
         "inherited_from_run_id": inherited_from_run_id,
+        "reused_stage1_from_run_id": None,
     }
 
 
@@ -367,6 +398,7 @@ def _build_lane_resolved_config(
     resolved_overrides: Dict[str, Any],
     merged_manifest: Dict[str, Any],
     manifest_path: Path,
+    execution_hints: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     resolved_config = _deep_merge(base_resolved_manifest, resolved_overrides)
     if not str(((resolved_config.get("outputs") or {}).get("run_name")) or "").strip():
@@ -375,6 +407,8 @@ def _build_lane_resolved_config(
     resolved_config["manifest_path"] = str(manifest_path.resolve())
     resolved_config["manifest_hash"] = manifest_hash(merged_manifest)
     resolved_config["raw_manifest"] = deepcopy(merged_manifest)
+    if execution_hints:
+        resolved_config["_execution_hints"] = deepcopy(execution_hints)
     return resolved_config
 
 
@@ -454,7 +488,7 @@ def run_staged_grid(
                 for item in list(pending_specs):
                     sequence = int(item["sequence"])
                     run_spec = dict(item["run_spec"])
-                    if not all(str(ref) in completed_rows for ref in list(run_spec.get("inherit_best_from") or [])):
+                    if not all(str(ref) in completed_rows for ref in _run_dependencies(run_spec)):
                         continue
                     candidate_model_group = _join_model_group(model_group, str(run_spec.get("model_group_suffix") or ""))
                     manifest_path = manifests_root / f"{sequence:02d}_{run_spec['run_id']}.json"
@@ -463,6 +497,7 @@ def run_staged_grid(
                         run_spec=run_spec,
                         completed_rows=completed_rows,
                     )
+                    _resolve_execution_hints(run_spec=run_spec, completed_rows=completed_rows)
                     existing_row = _existing_lane_row(
                         sequence=sequence,
                         run_spec=run_spec,
@@ -490,7 +525,7 @@ def run_staged_grid(
                             (
                                 item
                                 for item in pending_specs
-                                if all(str(ref) in completed_rows for ref in list(item["run_spec"].get("inherit_best_from") or []))
+                                if all(str(ref) in completed_rows for ref in _run_dependencies(item["run_spec"]))
                             ),
                             None,
                         )
@@ -508,6 +543,10 @@ def run_staged_grid(
                                 run_spec=run_spec,
                                 completed_rows=completed_rows,
                             )
+                            execution_hints = _resolve_execution_hints(
+                                run_spec=run_spec,
+                                completed_rows=completed_rows,
+                            )
                             merged_manifest = _deep_merge(base_raw_manifest, resolved_overrides)
                             if not str(((merged_manifest.get("outputs") or {}).get("run_name")) or "").strip():
                                 merged_manifest.setdefault("outputs", {})
@@ -517,6 +556,7 @@ def run_staged_grid(
                                 resolved_overrides=resolved_overrides,
                                 merged_manifest=merged_manifest,
                                 manifest_path=manifest_path,
+                                execution_hints=execution_hints,
                             )
                             _write_json(manifest_path, merged_manifest)
                         except Exception as exc:
