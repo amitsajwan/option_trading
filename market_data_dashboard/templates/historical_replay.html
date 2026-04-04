@@ -1011,12 +1011,17 @@
         let latestRunState = null;
         let replayPoller = null;
 
-        function navigateToReplayDay(tradeDate) {
+        async function navigateToReplayDay(tradeDate) {
             const day = safeText(tradeDate, "").trim();
             if (!day) return;
             const params = new URLSearchParams(window.location.search);
             params.set("date", day);
-            window.location.assign(`${window.location.pathname}?${params.toString()}`);
+            window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
+            const dateFromInput = document.getElementById("dateFromInput");
+            const dateToInput = document.getElementById("dateToInput");
+            if (dateFromInput && !dateFromInput.value) dateFromInput.value = day;
+            if (dateToInput && !dateToInput.value) dateToInput.value = day;
+            await refresh();
         }
 
         function renderTradeDayNavigator(selectedDate) {
@@ -1041,7 +1046,11 @@
                 ? `Selected chart day ${selectedDate} has trades in this run. Click another trade date to move the session chart.`
                 : `Selected chart day ${selectedDate || "--"} has no trade markers, but this run has ${uniqueDates.length} trade day${uniqueDates.length === 1 ? "" : "s"}. Pick one below to inspect markers on-chart.`;
             chips.querySelectorAll("[data-trade-day]").forEach((button) => {
-                button.addEventListener("click", () => navigateToReplayDay(button.getAttribute("data-trade-day")));
+                button.addEventListener("click", () => {
+                    navigateToReplayDay(button.getAttribute("data-trade-day")).catch((err) => {
+                        document.getElementById("modeBannerText").textContent = `Trade-day navigation failed: ${err}`;
+                    });
+                });
             });
         }
 
@@ -1416,7 +1425,11 @@
                 ? `${safeText(topTrade.trade_date_ist)} | ${safeText(topTrade.entry_strategy)} | ${formatMoney(topTrade.capital_pnl_amount)}`
                 : "No closed trade leader yet.";
             document.querySelectorAll("#tradesBody [data-trade-day]").forEach((button) => {
-                button.addEventListener("click", () => navigateToReplayDay(button.getAttribute("data-trade-day")));
+                button.addEventListener("click", () => {
+                    navigateToReplayDay(button.getAttribute("data-trade-day")).catch((err) => {
+                        document.getElementById("modeBannerText").textContent = `Trade-row navigation failed: ${err}`;
+                    });
+                });
             });
             const params = new URLSearchParams(window.location.search);
             renderTradeDayNavigator(safeText(params.get("date"), ""));
@@ -1656,7 +1669,9 @@
 
         document.getElementById("openTradeDayBtn").addEventListener("click", () => {
             const selected = document.getElementById("tradeDaySelect").value;
-            navigateToReplayDay(selected);
+            navigateToReplayDay(selected).catch((err) => {
+                document.getElementById("modeBannerText").textContent = `Trade-day navigation failed: ${err}`;
+            });
         });
 
         document.getElementById("loadRangeBtn").addEventListener("click", async () => {
