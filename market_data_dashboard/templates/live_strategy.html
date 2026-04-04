@@ -322,6 +322,92 @@
             margin: 0;
         }
 
+        .chart-shell {
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.65fr);
+            gap: 14px;
+            align-items: start;
+        }
+
+        .chart-main {
+            min-width: 0;
+        }
+
+        .context-strip {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .context-tile {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(246,249,252,0.82));
+            padding: 10px 12px;
+        }
+
+        .context-label {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .context-value {
+            margin-top: 6px;
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .chart-side {
+            display: grid;
+            gap: 12px;
+        }
+
+        .side-card {
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: linear-gradient(180deg, rgba(252,253,255,0.96), rgba(244,248,252,0.86));
+            padding: 14px;
+        }
+
+        .side-card h3 {
+            margin: 0 0 10px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .watch-grid {
+            display: grid;
+            gap: 8px;
+        }
+
+        .watch-item {
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 10px 11px;
+            background: rgba(248,250,252,0.92);
+        }
+
+        .watch-label {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .watch-value {
+            margin-top: 5px;
+            font-size: 13px;
+            line-height: 1.55;
+        }
+
         .toggle-btn {
             border: 1px solid var(--line);
             background: #f8fbfd;
@@ -732,6 +818,8 @@
             .product-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .status-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .rail-panel { position: static; }
+            .chart-shell { grid-template-columns: 1fr; }
+            .context-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
 
         @media (max-width: 760px) {
@@ -751,6 +839,7 @@
                 top: 8px;
                 z-index: 9;
             }
+            .context-strip { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -938,17 +1027,62 @@
             </div>
 
             <div class="panel">
-                <div class="panel-head">
-                    <h2>Underlying Chart</h2>
-                    <span class="chip" id="chartModeChip">Live chart</span>
-                </div>
-                <div class="hero-note" style="margin-bottom:10px;">
-                    <strong>Chart Frame</strong>
-                    <div class="muted" id="chartFrameNote">Use this chart for live marker placement and immediate entry/exit context. For full-session reconstruction, move to Historical Replay.</div>
-                </div>
-                <div class="chart-wrap" id="underlyingChart"></div>
-                <div class="detail-card" id="markerDetail">
-                    Select a marker to inspect the exact entry/exit context.
+                <div class="chart-shell">
+                    <div class="chart-main">
+                        <div class="panel-head">
+                            <h2>Underlying Chart</h2>
+                            <span class="chip" id="chartModeChip">Live chart</span>
+                        </div>
+                        <div class="hero-note" style="margin-bottom:10px;">
+                            <strong>Chart Frame</strong>
+                            <div class="muted" id="chartFrameNote">Use this chart for live marker placement and immediate entry/exit context. For full-session reconstruction, move to Historical Replay.</div>
+                        </div>
+                        <div class="context-strip">
+                            <div class="context-tile">
+                                <div class="context-label">Session Trades</div>
+                                <div class="context-value" id="chartStripTrades">--</div>
+                            </div>
+                            <div class="context-tile">
+                                <div class="context-label">Realized PnL</div>
+                                <div class="context-value" id="chartStripPnl">--</div>
+                            </div>
+                            <div class="context-tile">
+                                <div class="context-label">Open Positions</div>
+                                <div class="context-value" id="chartStripOpen">--</div>
+                            </div>
+                            <div class="context-tile">
+                                <div class="context-label">Markers</div>
+                                <div class="context-value" id="chartMarkerCountChip">0 markers</div>
+                            </div>
+                        </div>
+                        <div class="chart-wrap" id="underlyingChart"></div>
+                        <div class="detail-card" id="markerDetail">
+                            Select a marker to inspect the exact entry/exit context.
+                        </div>
+                    </div>
+                    <div class="chart-side">
+                        <div class="side-card">
+                            <h3>Live Watchlist</h3>
+                            <div class="watch-grid">
+                                <div class="watch-item">
+                                    <div class="watch-label">Decision Feed</div>
+                                    <div class="watch-value" id="liveWatchDecision">--</div>
+                                </div>
+                                <div class="watch-item">
+                                    <div class="watch-label">Position Watch</div>
+                                    <div class="watch-value" id="liveWatchPosition">--</div>
+                                </div>
+                                <div class="watch-item">
+                                    <div class="watch-label">Alert Watch</div>
+                                    <div class="watch-value" id="liveWatchAlert">--</div>
+                                </div>
+                                <div class="watch-item">
+                                    <div class="watch-label">Next Drilldown</div>
+                                    <div class="watch-value" id="liveWatchDrilldown">Replay for session reconstruction. Compare for multi-day verdict.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -1496,6 +1630,9 @@
             });
             qs("#alertCountChip").textContent = `${alerts.length} alert${alerts.length === 1 ? "" : "s"}`;
             qs("#missionFocus").textContent = alerts[0]?.operator_next_step || "No active intervention required.";
+            if (qs("#liveWatchAlert")) qs("#liveWatchAlert").textContent = alerts[0]
+                ? `${safe(alerts[0].severity)} | ${safe(alerts[0].title)}`
+                : "No active alert pressure.";
             if (!alerts.length) {
                 container.innerHTML = `<div class="empty">No active alerts. The live session is quiet from an incident perspective.</div>`;
                 return;
@@ -1878,6 +2015,12 @@
             if (qs("#railSessionValue")) qs("#railSessionValue").textContent = allFresh ? "Fresh" : "Degraded";
             if (qs("#chartModeChip")) qs("#chartModeChip").textContent = `Live chart | ${text(session.session?.instrument)}`;
             if (qs("#chartFrameNote")) qs("#chartFrameNote").textContent = `Use this chart for live marker placement and current-session context on ${text(session.session?.date_ist)}. Move to Historical Replay for session reconstruction and Evaluation Compare for multi-day verdicts.`;
+            if (qs("#chartStripTrades")) qs("#chartStripTrades").textContent = text(session.counts?.closed_trades);
+            if (qs("#chartStripPnl")) qs("#chartStripPnl").textContent = pct(session.capital?.realized_pnl_pct);
+            if (qs("#chartStripOpen")) qs("#chartStripOpen").textContent = text(session.counts?.open_positions);
+            if (qs("#liveWatchPosition")) qs("#liveWatchPosition").textContent = session.current_position
+                ? `${text(session.current_position.strategy)} | ${text(session.current_position.direction)} ${text(session.current_position.strike)}`
+                : "No active live position.";
         }
 
         function buildMarkerDetail(marker) {
@@ -1892,7 +2035,9 @@
                 <span class="muted">Regime:</span> ${safe(marker.regime)} |
                 <span class="muted">Direction:</span> ${safe(marker.direction)} |
                 <span class="muted">Strike:</span> ${safe(marker.strike)} |
-                <span class="muted">Premium:</span> ${money(marker.premium)}
+                <span class="muted">Premium:</span> ${money(marker.premium)} |
+                <span class="muted">Exit:</span> ${safe(marker.exit_reason || "--")} |
+                <span class="muted">Result:</span> ${safe(marker.result || "--")}
             `;
         }
 
@@ -1952,6 +2097,10 @@
                 tooltip: {
                     trigger: "axis",
                     axisPointer: { type: "cross" },
+                    backgroundColor: "rgba(14, 20, 28, 0.96)",
+                    borderColor: "rgba(96, 126, 146, 0.48)",
+                    borderWidth: 1,
+                    textStyle: { color: "#e8eef3", fontFamily: "IBM Plex Mono, monospace" },
                 },
                 xAxis: {
                     type: "category",
@@ -1998,7 +2147,7 @@
                         tooltip: {
                             formatter: (params) => {
                                 const marker = params?.data?.marker || {};
-                                return `BUY<br>${marker.label || "Entry"}<br>${shortTs(marker.timestamp)}<br>Premium: ${money(marker.premium)}`;
+                                return `BUY<br>${marker.label || "Entry"}<br>${shortTs(marker.timestamp)}<br>${safe(marker.strategy)} ${safe(marker.direction)} ${safe(marker.strike)}<br>Premium: ${money(marker.premium)}<br>Result: ${safe(marker.result || "--")}`;
                             },
                         },
                     },
@@ -2022,7 +2171,7 @@
                         tooltip: {
                             formatter: (params) => {
                                 const marker = params?.data?.marker || {};
-                                return `SELL<br>${marker.label || "Exit"}<br>${shortTs(marker.timestamp)}<br>Premium: ${money(marker.premium)}`;
+                                return `SELL<br>${marker.label || "Exit"}<br>${shortTs(marker.timestamp)}<br>${safe(marker.strategy)} ${safe(marker.direction)} ${safe(marker.strike)}<br>Premium: ${money(marker.premium)}<br>Exit: ${safe(marker.exit_reason || "--")}`;
                             },
                         },
                     },
@@ -2032,6 +2181,9 @@
                 state.selectedMarker = markers[markers.length - 1];
             }
             buildMarkerDetail(state.selectedMarker);
+            if (qs("#liveWatchDecision")) qs("#liveWatchDecision").textContent = markers.length
+                ? `${safe(markers[markers.length - 1]?.type || "--")} | ${safe(markers[markers.length - 1]?.strategy || "--")} | ${safe(shortTs(markers[markers.length - 1]?.timestamp))}`
+                : "No chart markers in current sample.";
         }
 
         async function refreshSession() {

@@ -194,6 +194,8 @@ class LiveStrategyAppTests(unittest.TestCase):
         self.assertIn(b"Live Strategy Monitor", response.body)
         self.assertIn(b"Live Drilldown", response.body)
         self.assertIn(b"Mode Rail", response.body)
+        self.assertIn(b"Live Watchlist", response.body)
+        self.assertIn(b"Session Trades", response.body)
         self.assertIn(b"Evaluation Compare", response.body)
         self.assertIn(b"Research Explorer", response.body)
 

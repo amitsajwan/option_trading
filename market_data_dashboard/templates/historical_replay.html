@@ -396,6 +396,40 @@
             flex-wrap: wrap;
         }
 
+        .terminal-copy {
+            font-family: "IBM Plex Mono", monospace;
+            letter-spacing: 0.01em;
+        }
+
+        .context-strip {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin: 2px 0 0;
+        }
+
+        .context-tile {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(244,248,251,0.82));
+            padding: 10px 12px;
+        }
+
+        .context-label {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .context-value {
+            margin-top: 6px;
+            font-size: 18px;
+            font-weight: 700;
+        }
+
         .chart-side {
             display: grid;
             gap: 12px;
@@ -422,6 +456,34 @@
         .side-card ul {
             margin: 0;
             padding-left: 18px;
+        }
+
+        .watch-grid {
+            display: grid;
+            gap: 8px;
+        }
+
+        .watch-item {
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 10px 11px;
+            background: rgba(246, 249, 252, 0.92);
+        }
+
+        .watch-label {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .watch-value {
+            margin-top: 5px;
+            font-size: 13px;
+            line-height: 1.55;
+            color: var(--ink);
         }
 
         .detail-grid {
@@ -510,6 +572,7 @@
             .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .status-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .chart-shell { grid-template-columns: 1fr; }
+            .context-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
 
         @media (max-width: 760px) {
@@ -522,6 +585,7 @@
             .detail-grid { grid-template-columns: 1fr; }
             .grid-4 { grid-template-columns: 1fr; }
             .status-rail { grid-template-columns: 1fr; }
+            .context-strip { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -743,12 +807,30 @@
                     <div class="chart-header">
                         <div>
                             <h2>Underlying Session Chart</h2>
-                            <div class="chart-header-copy">Trading-software session view for one selected day. Use the markers for entry and exit placement, then switch to range trades or compare view for whole-window conclusions.</div>
+                            <div class="chart-header-copy terminal-copy">Trading-software session view for one selected day. Use the markers for entry and exit placement, then switch to range trades or compare view for whole-window conclusions.</div>
                         </div>
                         <div class="chart-chip-row">
                             <span class="legend-item">Mode: Replay</span>
                             <span class="legend-item" id="chartScopeChip">Run scope: --</span>
                             <span class="legend-item" id="chartDateChip">Day: --</span>
+                        </div>
+                    </div>
+                    <div class="context-strip">
+                        <div class="context-tile">
+                            <div class="context-label">Session Trades</div>
+                            <div class="context-value" id="sessionStripTrades">--</div>
+                        </div>
+                        <div class="context-tile">
+                            <div class="context-label">Session PnL</div>
+                            <div class="context-value" id="sessionStripPnl">--</div>
+                        </div>
+                        <div class="context-tile">
+                            <div class="context-label">Markers On Chart</div>
+                            <div class="context-value" id="sessionStripMarkers">--</div>
+                        </div>
+                        <div class="context-tile">
+                            <div class="context-label">Signal Rows</div>
+                            <div class="context-value" id="sessionStripSignals">--</div>
                         </div>
                     </div>
                     <div class="chart-wrap">
@@ -776,11 +858,24 @@
                 <div class="chart-side">
                     <div class="side-card">
                         <h3>Drilldown Sidebar</h3>
-                        <ul>
-                            <li>Use this chart for one-day timing and marker placement.</li>
-                            <li>Use `All Trades In Selected Run Range` for every closed trade in the replay window.</li>
-                            <li>Use `Evaluation Compare` for full-range return, equity, and baseline review.</li>
-                        </ul>
+                        <div class="watch-grid">
+                            <div class="watch-item">
+                                <div class="watch-label">Run Status</div>
+                                <div class="watch-value" id="sideRunStatus">--</div>
+                            </div>
+                            <div class="watch-item">
+                                <div class="watch-label">Latest Closed Trade</div>
+                                <div class="watch-value" id="sideLatestTrade">--</div>
+                            </div>
+                            <div class="watch-item">
+                                <div class="watch-label">Latest Exit Read</div>
+                                <div class="watch-value" id="sideLatestExit">--</div>
+                            </div>
+                            <div class="watch-item">
+                                <div class="watch-label">Range Leader</div>
+                                <div class="watch-value" id="sideRangeLeader">--</div>
+                            </div>
+                        </div>
                     </div>
                     <div class="side-card">
                         <h3>Chart Read</h3>
@@ -1088,6 +1183,10 @@
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
+                        interaction: {
+                            mode: "nearest",
+                            intersect: false,
+                        },
                         plugins: {
                             legend: {
                                 display: true,
@@ -1099,7 +1198,22 @@
                                 },
                             },
                             tooltip: {
+                                displayColors: false,
+                                backgroundColor: "rgba(15, 23, 31, 0.96)",
+                                borderColor: "rgba(117, 140, 158, 0.48)",
+                                borderWidth: 1,
+                                titleColor: "#f4f8fb",
+                                bodyColor: "#d9e4ec",
+                                footerColor: "#91a4b2",
+                                titleFont: { family: "IBM Plex Mono, monospace", weight: "700" },
+                                bodyFont: { family: "IBM Plex Mono, monospace" },
                                 callbacks: {
+                                    title: (items) => {
+                                        const raw = items?.[0]?.raw || {};
+                                        const marker = raw.marker || {};
+                                        if (marker.timestamp) return safeText(marker.timestamp);
+                                        return items?.[0]?.label ? `Session ${items[0].label}` : "Replay";
+                                    },
                                     label: (context) => {
                                         const marker = context.raw?.marker || {};
                                         if (context.dataset.label === "Underlying") {
@@ -1107,9 +1221,22 @@
                                         }
                                         const direction = String(marker.direction || "").trim();
                                         const strategy = String(marker.strategy || "").trim();
-                                        const premium = marker.premium !== null && marker.premium !== undefined ? formatNumber(marker.premium) : "--";
                                         const label = String(marker.label || context.dataset.label || "").trim();
-                                        return `${context.dataset.label}: ${label}${strategy ? ` | ${strategy}` : ""}${direction ? ` | ${direction}` : ""} | Premium ${premium}`;
+                                        return `${context.dataset.label}: ${label}${strategy ? ` | ${strategy}` : ""}${direction ? ` | ${direction}` : ""}`;
+                                    },
+                                    afterLabel: (context) => {
+                                        const marker = context.raw?.marker || {};
+                                        if (context.dataset.label === "Underlying") return "";
+                                        const parts = [];
+                                        if (marker.strike !== null && marker.strike !== undefined) parts.push(`Strike ${safeText(marker.strike)}`);
+                                        parts.push(`Premium ${marker.premium !== null && marker.premium !== undefined ? formatNumber(marker.premium) : "--"}`);
+                                        if (marker.result) parts.push(`Result ${safeText(marker.result)}`);
+                                        if (marker.exit_reason) parts.push(`Exit ${safeText(marker.exit_reason)}`);
+                                        return parts.join(" | ");
+                                    },
+                                    footer: (items) => {
+                                        const marker = items?.[0]?.raw?.marker || {};
+                                        return marker?.position_id ? `Position ${safeText(marker.position_id)}` : "";
                                     },
                                 },
                             },
@@ -1169,6 +1296,10 @@
                     <td>${formatExitLabel(row)}</td>
                 </tr>
             `), 8);
+            const topTrade = currentTrades.slice().sort((a, b) => Number(b?.capital_pnl_amount || 0) - Number(a?.capital_pnl_amount || 0))[0];
+            document.getElementById("sideRangeLeader").textContent = topTrade
+                ? `${safeText(topTrade.trade_date_ist)} | ${safeText(topTrade.entry_strategy)} | ${formatMoney(topTrade.capital_pnl_amount)}`
+                : "No closed trade leader yet.";
         }
 
         async function pollRun(runId, dateFrom, dateTo) {
@@ -1303,7 +1434,12 @@
             document.getElementById("railRangeScope").textContent = `${safeText(summaryFrom)} to ${safeText(summaryTo)}`;
             document.getElementById("chartScopeChip").textContent = `Run scope: ${pinnedRunId ? "Pinned" : "Latest"}`;
             document.getElementById("chartDateChip").textContent = `Day: ${safeText(session?.session?.date_ist || replay.date_ist)}`;
+            document.getElementById("sessionStripTrades").textContent = formatNumber(session?.today_summary?.overall?.trades ?? session?.counts?.closed_trades);
+            document.getElementById("sessionStripPnl").textContent = formatPct(session?.capital?.realized_pnl_pct);
+            document.getElementById("sessionStripMarkers").textContent = formatNumber((session?.chart_markers || []).length, 0);
+            document.getElementById("sessionStripSignals").textContent = formatNumber((session?.recent_signals || []).length, 0);
             document.getElementById("runStatusValue").innerHTML = `<span class="tag ${toneTag(latestRunStatus || replay.status)}">${safeText(latestRunStatus || replay.status)}</span>`;
+            document.getElementById("sideRunStatus").textContent = `${safeText(latestRunStatus || replay.status)} | ${safeText(replay.message || latestRun?.message)}`;
             document.getElementById("selectedRangeValue").textContent = `${safeText(summaryFrom)} to ${safeText(summaryTo)}`;
             const dateFromInput = document.getElementById("dateFromInput");
             const dateToInput = document.getElementById("dateToInput");
@@ -1314,6 +1450,13 @@
             document.getElementById("compareNavMeta").textContent = activeRunId
                 ? `Compare page opens with pinned run ${safeText(activeRunId)}`
                 : "Compare page opens with latest completed run";
+            const latestClosed = session?.latest_closed_trade || null;
+            document.getElementById("sideLatestTrade").textContent = latestClosed
+                ? `${safeText(latestClosed.trade_date_ist)} | ${safeText(latestClosed.entry_strategy)} ${safeText(latestClosed.direction)} ${safeText(latestClosed.strike)}`
+                : "No latest closed trade yet.";
+            document.getElementById("sideLatestExit").textContent = latestClosed
+                ? `${formatExitLabel(latestClosed)} | ${formatMoney(latestClosed.capital_pnl_amount)} | ${formatPct(latestClosed.capital_pnl_pct)}`
+                : "No exit read yet.";
             const runScopeNote = document.getElementById("runScopeNote");
             if (runScopeNote) {
                 if (latestRunId) {

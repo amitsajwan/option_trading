@@ -364,6 +364,36 @@
             font-size: 12px;
             font-weight: 700;
             color: var(--ink);
+            font-family: "IBM Plex Mono", monospace;
+        }
+
+        .context-strip {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin: 10px 0 14px;
+        }
+
+        .context-tile {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(244,248,251,0.84));
+            padding: 10px 12px;
+        }
+
+        .context-label {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .context-value {
+            margin-top: 6px;
+            font-size: 18px;
+            font-weight: 700;
         }
 
         .sidebar-panel {
@@ -441,11 +471,13 @@
 
         @media (max-width: 1100px) {
             .control-grid, .summary-grid, .meta, .chart-grid, .playbook-grid, .status-rail { grid-template-columns: 1fr 1fr; }
+            .context-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .playbook-cards { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 760px) {
             .control-grid, .summary-grid, .meta, .chart-grid, .playbook-grid, .status-rail { grid-template-columns: 1fr; }
+            .context-strip { grid-template-columns: 1fr; }
             .page { padding: 14px; }
             .chart { height: 320px; }
         }
@@ -577,6 +609,24 @@
                     <span class="chart-chip" id="priceChartModeChip">Research chart</span>
                     <span class="chart-chip" id="priceChartWindowChip">Window: --</span>
                 </div>
+                <div class="context-strip">
+                    <div class="context-tile">
+                        <div class="context-label">Trades</div>
+                        <div class="context-value" id="researchStripTrades">--</div>
+                    </div>
+                    <div class="context-tile">
+                        <div class="context-label">Net Return</div>
+                        <div class="context-value" id="researchStripReturn">--</div>
+                    </div>
+                    <div class="context-tile">
+                        <div class="context-label">Profit Factor</div>
+                        <div class="context-value" id="researchStripPf">--</div>
+                    </div>
+                    <div class="context-tile">
+                        <div class="context-label">Window</div>
+                        <div class="context-value" id="researchStripWindow">--</div>
+                    </div>
+                </div>
                 <div id="priceChart" class="chart"></div>
             </div>
             <div class="panel chart-panel">
@@ -600,7 +650,17 @@
                 </div>
                 <div class="sidebar-card">
                     <h3>Research Read</h3>
-                    <p>Positive outcome with weak trade count is not a production verdict. Use this page to classify scenarios, then promote them only after compare-page validation.</p>
+                    <p id="researchSidebarRead">Positive outcome with weak trade count is not a production verdict. Use this page to classify scenarios, then promote them only after compare-page validation.</p>
+                    <div style="display:grid; gap:8px; margin-top:12px;">
+                        <div class="sidebar-card" style="padding:10px 12px;">
+                            <h3 style="margin-bottom:6px;">Scenario Watch</h3>
+                            <p id="researchSidebarScenario">--</p>
+                        </div>
+                        <div class="sidebar-card" style="padding:10px 12px;">
+                            <h3 style="margin-bottom:6px;">Top Exit</h3>
+                            <p id="researchSidebarExit">--</p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -725,6 +785,8 @@
                 qs("#railWindow").textContent = `${dateFromInput.value || "--"} to ${dateToInput.value || "--"}`;
                 qs("#priceChartWindowChip").textContent = `Window: ${dateFromInput.value || "--"} to ${dateToInput.value || "--"}`;
                 qs("#probChartScenarioChip").textContent = "Scenario: --";
+                qs("#researchStripWindow").textContent = `${dateFromInput.value || "--"} to ${dateToInput.value || "--"}`;
+                qs("#researchSidebarScenario").textContent = "--";
                 return;
             }
             recipeHint.textContent = recipe
@@ -746,6 +808,8 @@
             qs("#railWindow").textContent = `${dateFromInput.value || "--"} to ${dateToInput.value || "--"}`;
             qs("#priceChartWindowChip").textContent = `Window: ${dateFromInput.value || "--"} to ${dateToInput.value || "--"}`;
             qs("#probChartScenarioChip").textContent = `Scenario: ${scenario.run_name || "--"}`;
+            qs("#researchStripWindow").textContent = `${dateFromInput.value || "--"} to ${dateToInput.value || "--"}`;
+            qs("#researchSidebarScenario").textContent = `${scenario.run_name || "--"} | ${recipe ? recipe.recipe_id : "--"}`;
         }
 
         function renderSummary(summary) {
@@ -758,6 +822,9 @@
                 ["Profit Factor", fmtNumber(summary.profit_factor)],
             ];
             summaryGrid.innerHTML = items.map(([k, v]) => `<div class="panel stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+            qs("#researchStripTrades").textContent = fmtNumber(summary.trades, 0);
+            qs("#researchStripReturn").textContent = fmtPct(summary.net_return_sum);
+            qs("#researchStripPf").textContent = fmtNumber(summary.profit_factor);
         }
 
         function classifyScenario(summary) {
@@ -874,8 +941,16 @@
         function renderTrades(rows) {
             if (!rows || !rows.length) {
                 tradeWrap.innerHTML = `<div class="empty">No trades were taken for the chosen threshold and range.</div>`;
+                qs("#researchSidebarExit").textContent = "No exits for this slice.";
                 return;
             }
+            const topExit = rows.reduce((best, row) => {
+                if (!best) return row;
+                return Math.abs(Number(row.net_return_after_cost || 0)) > Math.abs(Number(best.net_return_after_cost || 0)) ? row : best;
+            }, null);
+            qs("#researchSidebarExit").textContent = topExit
+                ? `${topExit.exit_reason || "--"} | ${fmtPct(topExit.net_return_after_cost)} | ${topExit.trade_date || "--"}`
+                : "No exits for this slice.";
             tradeWrap.innerHTML = `
                 <table>
                     <thead>
@@ -933,7 +1008,14 @@
             state.priceChart.setOption({
                 animation: false,
                 grid: { left: 46, right: 20, top: 30, bottom: 70 },
-                tooltip: { trigger: "axis" },
+                tooltip: {
+                    trigger: "axis",
+                    axisPointer: { type: "cross" },
+                    backgroundColor: "rgba(14, 20, 28, 0.96)",
+                    borderColor: "rgba(96, 126, 146, 0.48)",
+                    borderWidth: 1,
+                    textStyle: { color: "#e8eef3", fontFamily: "IBM Plex Mono, monospace" },
+                },
                 dataZoom: [{ type: "inside" }, { type: "slider", bottom: 18 }],
                 xAxis: { type: "category", data: categories, scale: true, boundaryGap: false },
                 yAxis: { scale: true },
@@ -959,9 +1041,11 @@
                             tradeId: item.trade_id,
                             side: item.side,
                             prob: item.prob,
+                            entryPrice: item.entry_fut_price,
+                            netReturn: item.net_return_after_cost,
                         })),
                         tooltip: {
-                            formatter: (params) => `${params.data.tradeId}<br/>${params.data.side} entry<br/>Prob ${fmtNumber(params.data.prob, 3)}`
+                            formatter: (params) => `${params.data.tradeId}<br/>${params.data.side} entry<br/>Prob ${fmtNumber(params.data.prob, 3)}<br/>Entry Fut ${fmtNumber(params.data.entryPrice)}<br/>Net ${fmtPct(params.data.netReturn)}`
                         }
                     },
                     {
@@ -974,9 +1058,11 @@
                             itemStyle: { color: Number(item.net_return_after_cost) >= 0 ? "#0f9d58" : "#c2410c" },
                             tradeId: item.trade_id,
                             reason: item.exit_reason,
+                            exitPrice: item.exit_fut_price,
+                            netReturn: item.net_return_after_cost,
                         })),
                         tooltip: {
-                            formatter: (params) => `${params.data.tradeId}<br/>Exit ${params.data.reason || "--"}`
+                            formatter: (params) => `${params.data.tradeId}<br/>Exit ${params.data.reason || "--"}<br/>Exit Fut ${fmtNumber(params.data.exitPrice)}<br/>Net ${fmtPct(params.data.netReturn)}`
                         }
                     }
                 ]
@@ -986,7 +1072,14 @@
             state.probChart.setOption({
                 animation: false,
                 grid: { left: 46, right: 20, top: 30, bottom: 70 },
-                tooltip: { trigger: "axis" },
+                tooltip: {
+                    trigger: "axis",
+                    axisPointer: { type: "cross" },
+                    backgroundColor: "rgba(14, 20, 28, 0.96)",
+                    borderColor: "rgba(96, 126, 146, 0.48)",
+                    borderWidth: 1,
+                    textStyle: { color: "#e8eef3", fontFamily: "IBM Plex Mono, monospace" },
+                },
                 legend: { top: 0, data: ["CE", "PE", "Threshold"] },
                 dataZoom: [{ type: "inside" }, { type: "slider", bottom: 18 }],
                 xAxis: { type: "category", data: probabilities.map((item) => item.ts), boundaryGap: false },

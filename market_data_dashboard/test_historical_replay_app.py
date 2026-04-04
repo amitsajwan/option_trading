@@ -84,6 +84,8 @@ class HistoricalReplayAppTests(unittest.TestCase):
         self.assertIn(b"How To Use This Page", response.body)
         self.assertIn(b"Mode Rail", response.body)
         self.assertIn(b"Drilldown Sidebar", response.body)
+        self.assertIn(b"Session Trades", response.body)
+        self.assertIn(b"Range Leader", response.body)
         self.assertIn(b"All Trades In Selected Run Range", response.body)
         self.assertIn(b"Run Source", response.body)
         self.assertIn(b"Operator Playbook", response.body)
