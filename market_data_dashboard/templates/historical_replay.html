@@ -133,6 +133,7 @@
             gap: 14px;
         }
 
+        .control-grid { grid-template-columns: 1.2fr 0.8fr; margin-bottom: 14px; }
         .banner-grid { grid-template-columns: 1.6fr 1fr; }
         .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); margin-bottom: 14px; }
         .grid-2 { grid-template-columns: 1.2fr 0.8fr; margin-bottom: 14px; }
@@ -174,6 +175,35 @@
             gap: 10px;
         }
 
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .field input {
+            min-height: 42px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.92);
+            color: var(--ink);
+            font: inherit;
+        }
+
+        .field-actions {
+            display: flex;
+            align-items: flex-end;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
         .kv {
             padding: 12px;
             border-radius: 14px;
@@ -183,6 +213,10 @@
 
         .chart-wrap {
             height: 360px;
+        }
+
+        .chart-wrap.fullscreen {
+            height: calc(100vh - 180px);
         }
 
         .chart-footer {
@@ -225,6 +259,42 @@
             color: var(--muted);
             line-height: 1.55;
             font-size: 13px;
+        }
+
+        .chart-toolbar {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            margin: 12px 0 0;
+        }
+
+        .chart-window {
+            display: flex;
+            flex: 1;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .chart-window label {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .chart-window input[type="range"] {
+            width: min(240px, 42vw);
+        }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .detail-grid .kv {
+            min-height: 76px;
         }
 
         .table-wrap {
@@ -279,8 +349,10 @@
         }
 
         @media (max-width: 1280px) {
+            .control-grid,
             .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .banner-grid, .grid-2, .grid-3 { grid-template-columns: 1fr; }
+            .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
 
         @media (max-width: 760px) {
@@ -289,6 +361,8 @@
             .header-actions { justify-content: flex-start; }
             .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .kv-grid { grid-template-columns: 1fr; }
+            .form-grid { grid-template-columns: 1fr; }
+            .detail-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -325,6 +399,42 @@
                 </div>
                 <div class="run-note" id="runScopeNote">
                     Latest completed run: --. The page below is scoped to the selected session date, while the evaluation links follow the latest completed historical run.
+                </div>
+            </div>
+        </section>
+
+        <section class="grid-2 control-grid">
+            <div class="panel">
+                <h2>Replay Controls</h2>
+                <div class="form-grid">
+                    <label class="field">
+                        <span class="label">Start Date</span>
+                        <input id="dateFromInput" type="date">
+                    </label>
+                    <label class="field">
+                        <span class="label">End Date</span>
+                        <input id="dateToInput" type="date">
+                    </label>
+                    <label class="field">
+                        <span class="label">Replay Speed</span>
+                        <input id="speedInput" type="number" min="0" step="1" value="0">
+                    </label>
+                    <div class="field field-actions">
+                        <button class="btn primary" id="runReplayBtn" type="button">Run Replay</button>
+                        <button class="btn" id="loadRangeBtn" type="button">Load Range Trades</button>
+                    </div>
+                </div>
+                <div class="note" id="runActionNote" style="margin-top:12px;">
+                    Pick a historical date range, launch replay, then inspect trades and chart markers without leaving the page.
+                </div>
+            </div>
+            <div class="panel">
+                <h2>Run Details</h2>
+                <div class="detail-grid">
+                    <div class="kv"><div class="label">Latest Run ID</div><div class="value" id="runIdValue">--</div></div>
+                    <div class="kv"><div class="label">Latest Run Status</div><div class="value" id="runStatusValue">--</div></div>
+                    <div class="kv"><div class="label">Selected Range</div><div class="value" id="selectedRangeValue">--</div></div>
+                    <div class="kv"><div class="label">Range Trades</div><div class="value" id="rangeTradeCountValue">--</div></div>
                 </div>
             </div>
         </section>
@@ -370,6 +480,14 @@
             <div class="chart-wrap">
                 <canvas id="priceChart"></canvas>
             </div>
+            <div class="chart-toolbar">
+                <div class="chart-window">
+                    <label>Window start <input id="chartStartRange" type="range" min="0" max="0" value="0"></label>
+                    <label>Window end <input id="chartEndRange" type="range" min="0" max="0" value="0"></label>
+                    <button class="btn" id="fitChartBtn" type="button">Fit Session</button>
+                    <button class="btn" id="fullscreenChartBtn" type="button">Expand Chart</button>
+                </div>
+            </div>
             <div class="chart-footer">
                 <div class="chart-legend">
                     <span class="legend-item"><span class="legend-swatch" style="background:#0d6a78;"></span>Underlying</span>
@@ -384,11 +502,14 @@
 
         <section class="grid-3">
             <div class="panel">
-                <h3>Recent Trades</h3>
+                <h3>Range Trades</h3>
+                <div class="note" id="tradePanelNote" style="margin-bottom:12px;">
+                    Trades below follow the selected replay range, not only the currently selected session day.
+                </div>
                 <div class="table-wrap">
                     <table>
-                        <thead><tr><th>Exit</th><th>Strategy</th><th>Direction</th><th>Capital PnL</th></tr></thead>
-                        <tbody id="tradesBody"><tr><td colspan="4">Loading...</td></tr></tbody>
+                        <thead><tr><th>Trade Date</th><th>Contract</th><th>Strategy</th><th>Bought</th><th>Sold</th><th>PnL Amt</th><th>PnL %</th><th>Exit</th></tr></thead>
+                        <tbody id="tradesBody"><tr><td colspan="8">Loading...</td></tr></tbody>
                     </table>
                 </div>
             </div>
@@ -418,6 +539,11 @@
 
     <script>
         let priceChart = null;
+        let fullChart = { labels: [], prices: [] };
+        let fullMarkers = [];
+        let currentTrades = [];
+        let latestRunState = null;
+        let replayPoller = null;
 
         function safeText(value, fallback = "--") {
             if (value === null || value === undefined || value === "") return fallback;
@@ -432,6 +558,11 @@
         function formatPct(value) {
             if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
             return `${(Number(value) * 100).toFixed(2)}%`;
+        }
+
+        function formatMoney(value) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+            return Number(value).toFixed(2);
         }
 
         function toneTag(value) {
@@ -526,6 +657,22 @@
             return formatPct(value);
         }
 
+        function formatContract(row) {
+            const direction = safeText(row?.direction);
+            const strike = safeText(row?.strike);
+            return `${direction} ${strike}`;
+        }
+
+        function tradeActionLabel(row) {
+            const direction = String(row?.direction || "").toUpperCase();
+            return direction ? `Buy ${direction}` : "Buy";
+        }
+
+        function tradeExitLabel(row) {
+            const direction = String(row?.direction || "").toUpperCase();
+            return direction ? `Sell ${direction}` : "Sell";
+        }
+
         function renderRows(id, rows, cols) {
             const el = document.getElementById(id);
             if (!el) return;
@@ -536,20 +683,68 @@
             el.innerHTML = rows.join("");
         }
 
+        function currentChartSlice() {
+            const labels = Array.isArray(fullChart?.labels) ? fullChart.labels : [];
+            const prices = Array.isArray(fullChart?.prices) ? fullChart.prices : [];
+            if (!labels.length || labels.length !== prices.length) {
+                return { labels: [], prices: [] };
+            }
+            const startInput = document.getElementById("chartStartRange");
+            const endInput = document.getElementById("chartEndRange");
+            const maxIndex = labels.length - 1;
+            let start = Math.max(0, Number(startInput?.value ?? 0));
+            let end = Math.min(maxIndex, Number(endInput?.value ?? maxIndex));
+            if (Number.isNaN(start)) start = 0;
+            if (Number.isNaN(end)) end = maxIndex;
+            if (start > end) [start, end] = [end, start];
+            return {
+                labels: labels.slice(start, end + 1),
+                prices: prices.slice(start, end + 1),
+            };
+        }
+
+        function updateChartWindowControls() {
+            const labels = Array.isArray(fullChart?.labels) ? fullChart.labels : [];
+            const maxIndex = Math.max(labels.length - 1, 0);
+            const startInput = document.getElementById("chartStartRange");
+            const endInput = document.getElementById("chartEndRange");
+            if (!startInput || !endInput) return;
+            startInput.max = String(maxIndex);
+            endInput.max = String(maxIndex);
+            if (!labels.length) {
+                startInput.value = "0";
+                endInput.value = "0";
+                return;
+            }
+            if (Number(startInput.value) > maxIndex || startInput.dataset.initialized !== "true") {
+                startInput.value = "0";
+            }
+            if (Number(endInput.value) > maxIndex || endInput.dataset.initialized !== "true") {
+                endInput.value = String(maxIndex);
+            }
+            startInput.dataset.initialized = "true";
+            endInput.dataset.initialized = "true";
+        }
+
         function renderChart(chart, markers) {
             const canvas = document.getElementById("priceChart");
             if (!canvas) return;
-            const labels = Array.isArray(chart?.labels) ? chart.labels : [];
-            const prices = Array.isArray(chart?.prices) ? chart.prices : [];
-            const markerSeries = buildChartMarkers(chart, markers);
+            fullChart = {
+                labels: Array.isArray(chart?.labels) ? chart.labels : [],
+                prices: Array.isArray(chart?.prices) ? chart.prices : [],
+            };
+            fullMarkers = Array.isArray(markers) ? markers : [];
+            updateChartWindowControls();
+            const visibleChart = currentChartSlice();
+            const markerSeries = buildChartMarkers(visibleChart, fullMarkers);
             if (!priceChart) {
                 priceChart = new Chart(canvas.getContext("2d"), {
                     type: "line",
                     data: {
-                        labels,
+                        labels: visibleChart.labels,
                         datasets: [{
                             label: "Underlying",
-                            data: prices,
+                            data: visibleChart.prices,
                             borderColor: "#0d6a78",
                             backgroundColor: "rgba(13,106,120,0.12)",
                             borderWidth: 2,
@@ -624,14 +819,84 @@
                     : "No entry or exit markers were available for this replay window.";
                 return;
             }
-            priceChart.data.labels = labels;
-            priceChart.data.datasets[0].data = prices;
+            priceChart.data.labels = visibleChart.labels;
+            priceChart.data.datasets[0].data = visibleChart.prices;
             priceChart.data.datasets[1].data = markerSeries.entries;
             priceChart.data.datasets[2].data = markerSeries.exits;
             priceChart.update();
             document.getElementById("chartMarkerNote").textContent = markerSeries.count
                 ? `${markerSeries.count} marker${markerSeries.count === 1 ? "" : "s"} derived from historical trades are overlaid on the chart.`
                 : "No entry or exit markers were available for this replay window.";
+        }
+
+        async function fetchTradesForRange({ dateFrom, dateTo, runId }) {
+            if (!dateFrom || !dateTo) return null;
+            const qs = new URLSearchParams({
+                dataset: "historical",
+                date_from: dateFrom,
+                date_to: dateTo,
+                page_size: "100",
+            });
+            if (runId) qs.set("run_id", runId);
+            return fetchJson(`/api/strategy/evaluation/trades?${qs.toString()}`);
+        }
+
+        function renderTradesTable(payload, dateFrom, dateTo) {
+            currentTrades = Array.isArray(payload?.rows) ? payload.rows : [];
+            document.getElementById("rangeTradeCountValue").textContent = formatNumber(payload?.counts?.closed_trades ?? currentTrades.length);
+            document.getElementById("selectedRangeValue").textContent = `${safeText(dateFrom)} to ${safeText(dateTo)}`;
+            const note = document.getElementById("tradePanelNote");
+            if (note) {
+                note.textContent = currentTrades.length
+                    ? `Showing ${currentTrades.length} closed trade${currentTrades.length === 1 ? "" : "s"} for the selected replay range ${dateFrom} to ${dateTo}.`
+                    : `No closed trades were found for the selected replay range ${dateFrom} to ${dateTo}.`;
+            }
+            renderRows("tradesBody", currentTrades.slice(0, 100).map((row) => `
+                <tr>
+                    <td>${safeText(row.trade_date_ist)}</td>
+                    <td>${formatContract(row)}</td>
+                    <td>${safeText(row.entry_strategy)}</td>
+                    <td>${tradeActionLabel(row)} @ ${formatMoney(row.entry_premium)}</td>
+                    <td>${tradeExitLabel(row)} @ ${formatMoney(row.exit_premium)}</td>
+                    <td>${formatMoney(row.capital_pnl_amount)}</td>
+                    <td>${formatTradePnL(row)}</td>
+                    <td>${safeText(row.exit_reason)}</td>
+                </tr>
+            `), 8);
+        }
+
+        async function pollRun(runId, dateFrom, dateTo) {
+            if (replayPoller) {
+                window.clearInterval(replayPoller);
+                replayPoller = null;
+            }
+            const actionNote = document.getElementById("runActionNote");
+            const refreshRun = async () => {
+                const run = await fetchJson(`/api/strategy/evaluation/runs/${encodeURIComponent(runId)}`);
+                latestRunState = run;
+                document.getElementById("runIdValue").textContent = safeText(run.run_id);
+                document.getElementById("runStatusValue").innerHTML = `<span class="tag ${toneTag(run.status)}">${safeText(run.status)}</span>`;
+                if (actionNote) {
+                    actionNote.textContent = `${safeText(run.message)}${run.error ? ` | ${run.error}` : ""}`;
+                }
+                const status = String(run.status || "").toLowerCase();
+                if (["completed", "failed", "cancelled"].includes(status)) {
+                    if (replayPoller) {
+                        window.clearInterval(replayPoller);
+                        replayPoller = null;
+                    }
+                    if (status === "completed") {
+                        const params = new URLSearchParams(window.location.search);
+                        params.set("date", dateTo);
+                        window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
+                        await refresh();
+                    }
+                }
+            };
+            await refreshRun();
+            replayPoller = window.setInterval(() => {
+                refreshRun().catch(() => {});
+            }, 3000);
         }
 
         async function refresh() {
@@ -648,6 +913,7 @@
                 fetchJson(`/api/historical/replay/status${suffix}`),
                 fetchJson(`/api/strategy/evaluation/runs/latest?dataset=historical&status=completed`).catch(() => null),
             ]);
+            latestRunState = latestRun;
             const effectiveInstrument = requestedInstrument || session?.session?.instrument || "BANKNIFTY-I";
             const [options, depth] = await Promise.all([
                 fetchJson(`/api/market-data/options/${encodeURIComponent(effectiveInstrument)}`).catch(() => ({ status: "unavailable" })),
@@ -702,6 +968,13 @@
             if (latestRunId) {
                 document.getElementById("evalLatestRunLink").href = `/api/strategy/evaluation/runs/${latestRunId}`;
             }
+            document.getElementById("runIdValue").textContent = latestRunId || "--";
+            document.getElementById("runStatusValue").innerHTML = `<span class="tag ${toneTag(latestRunStatus || replay.status)}">${safeText(latestRunStatus || replay.status)}</span>`;
+            document.getElementById("selectedRangeValue").textContent = `${safeText(summaryFrom)} to ${safeText(summaryTo)}`;
+            const dateFromInput = document.getElementById("dateFromInput");
+            const dateToInput = document.getElementById("dateToInput");
+            if (dateFromInput && !dateFromInput.value) dateFromInput.value = summaryFrom;
+            if (dateToInput && !dateToInput.value) dateToInput.value = summaryTo;
             const runScopeNote = document.getElementById("runScopeNote");
             if (runScopeNote) {
                 if (latestRunId) {
@@ -713,14 +986,12 @@
 
             renderChart(session?.session_chart || {}, session?.chart_markers || []);
 
-            renderRows("tradesBody", (session?.recent_trades || []).slice(0, 15).map((row) => `
-                <tr>
-                    <td>${safeText(row.exit_time || row.entry_time)}</td>
-                    <td>${safeText(row.entry_strategy || row.strategy)}</td>
-                    <td>${safeText(row.direction)}</td>
-                    <td>${formatTradePnL(row)}</td>
-                </tr>
-            `), 4);
+            const tradesPayload = await fetchTradesForRange({
+                dateFrom: summaryFrom,
+                dateTo: summaryTo,
+                runId: latestRunId || null,
+            }).catch(() => null);
+            renderTradesTable(tradesPayload || { rows: [], counts: { closed_trades: 0 } }, summaryFrom, summaryTo);
 
             renderRows("signalsBody", (session?.recent_signals || []).slice(0, 20).map((row) => `
                 <tr>
@@ -767,6 +1038,73 @@
             refresh().catch((err) => {
                 document.getElementById("modeBannerText").textContent = `Refresh failed: ${err}`;
             });
+        });
+
+        document.getElementById("loadRangeBtn").addEventListener("click", async () => {
+            const dateFrom = document.getElementById("dateFromInput").value;
+            const dateTo = document.getElementById("dateToInput").value;
+            const payload = await fetchTradesForRange({ dateFrom, dateTo, runId: latestRunState?.run_id || null }).catch(() => null);
+            renderTradesTable(payload || { rows: [], counts: { closed_trades: 0 } }, dateFrom, dateTo);
+        });
+
+        document.getElementById("runReplayBtn").addEventListener("click", async () => {
+            const dateFrom = document.getElementById("dateFromInput").value;
+            const dateTo = document.getElementById("dateToInput").value;
+            const speed = Number(document.getElementById("speedInput").value || 0);
+            const actionNote = document.getElementById("runActionNote");
+            if (!dateFrom || !dateTo) {
+                if (actionNote) actionNote.textContent = "Select both start and end dates before launching replay.";
+                return;
+            }
+            try {
+                if (actionNote) actionNote.textContent = `Queueing replay for ${dateFrom} to ${dateTo}...`;
+                const res = await fetch("/api/strategy/evaluation/runs", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        dataset: "historical",
+                        date_from: dateFrom,
+                        date_to: dateTo,
+                        speed,
+                    }),
+                });
+                if (!res.ok) {
+                    throw new Error(`${res.status} ${res.statusText}`);
+                }
+                const payload = await res.json();
+                document.getElementById("runIdValue").textContent = safeText(payload.run_id);
+                document.getElementById("runStatusValue").innerHTML = `<span class="tag ${toneTag(payload.status)}">${safeText(payload.status)}</span>`;
+                await pollRun(payload.run_id, dateFrom, dateTo);
+            } catch (err) {
+                if (actionNote) actionNote.textContent = `Replay launch failed: ${err}`;
+            }
+        });
+
+        document.getElementById("chartStartRange").addEventListener("input", () => renderChart(fullChart, fullMarkers));
+        document.getElementById("chartEndRange").addEventListener("input", () => renderChart(fullChart, fullMarkers));
+        document.getElementById("fitChartBtn").addEventListener("click", () => {
+            const startInput = document.getElementById("chartStartRange");
+            const endInput = document.getElementById("chartEndRange");
+            const maxIndex = Math.max((Array.isArray(fullChart?.labels) ? fullChart.labels.length : 0) - 1, 0);
+            startInput.value = "0";
+            endInput.value = String(maxIndex);
+            renderChart(fullChart, fullMarkers);
+        });
+        document.getElementById("fullscreenChartBtn").addEventListener("click", async () => {
+            const panel = document.querySelector(".chart-wrap");
+            if (!panel) return;
+            if (document.fullscreenElement) {
+                await document.exitFullscreen();
+                panel.classList.remove("fullscreen");
+            } else {
+                panel.classList.add("fullscreen");
+                await panel.requestFullscreen().catch(() => {
+                    panel.classList.remove("fullscreen");
+                });
+            }
+            if (priceChart) {
+                priceChart.resize();
+            }
         });
 
         refresh().catch((err) => {
