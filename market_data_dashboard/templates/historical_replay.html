@@ -139,6 +139,7 @@
         .grid-2 { grid-template-columns: 1.2fr 0.8fr; margin-bottom: 14px; }
         .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 14px; }
         .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+        .nav-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
 
         .panel { padding: 18px; }
 
@@ -210,6 +211,48 @@
             border-radius: 14px;
             border: 1px solid #e8eef3;
             background: rgba(255, 255, 255, 0.82);
+        }
+
+        .nav-card {
+            padding: 18px;
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,255,255,0.72));
+            display: grid;
+            gap: 10px;
+        }
+
+        .nav-card.current {
+            border-color: rgba(13, 106, 120, 0.24);
+            box-shadow: inset 0 0 0 1px rgba(13, 106, 120, 0.08);
+        }
+
+        .nav-kicker {
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            font-weight: 800;
+        }
+
+        .nav-title {
+            font-family: "Space Grotesk", sans-serif;
+            font-size: 22px;
+            line-height: 1;
+            letter-spacing: -0.03em;
+        }
+
+        .nav-text {
+            color: var(--muted);
+            line-height: 1.6;
+            font-size: 14px;
+        }
+
+        .nav-meta {
+            color: var(--ink);
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 12px;
+            line-height: 1.6;
         }
 
         .chart-wrap {
@@ -426,6 +469,35 @@
             </div>
         </section>
 
+        <section class="nav-grid">
+            <div class="nav-card current">
+                <div class="nav-kicker">Stay Here</div>
+                <div class="nav-title">Session Day Replay</div>
+                <div class="nav-text">
+                    Use this page when you want to inspect one selected trading day, its session chart, and the exact entries and exits drawn on that chart.
+                </div>
+                <div class="nav-meta" id="sessionNavMeta">Session day -- | active run --</div>
+            </div>
+            <div class="nav-card">
+                <div class="nav-kicker">Range Review</div>
+                <div class="nav-title">All Trades In Range</div>
+                <div class="nav-text">
+                    Scroll to the trade table below when you want every closed trade across the selected replay window, not just the visible day on the chart.
+                </div>
+                <div class="nav-meta" id="rangeNavMeta">Range --</div>
+                <a class="link" href="#range-trades-panel">Jump To Range Trades</a>
+            </div>
+            <div class="nav-card">
+                <div class="nav-kicker">Compare Runs</div>
+                <div class="nav-title">Evaluation Compare</div>
+                <div class="nav-text">
+                    Open the compare page when you want whole-range metrics, equity, strategy split, and baseline-vs-current decisions.
+                </div>
+                <div class="nav-meta" id="compareNavMeta">Latest compare link uses current run scope</div>
+                <a class="link primary" id="navCompareLink" href="/strategy/evaluation">Open Compare Page</a>
+            </div>
+        </section>
+
         <section class="panel" style="margin-bottom:14px;">
             <h2>How To Use This Page</h2>
             <div class="grid-4">
@@ -571,7 +643,7 @@
         </section>
 
         <section class="grid-3">
-            <div class="panel">
+            <div class="panel" id="range-trades-panel">
                 <h3>All Trades In Selected Run Range</h3>
                 <div class="note" id="tradePanelNote" style="margin-bottom:12px;">
                     Trades below follow the selected replay range, not only the currently selected session day.
@@ -1070,6 +1142,7 @@
             document.getElementById("evalSummaryLink").href = `/api/strategy/evaluation/summary?dataset=historical&date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}${summaryRunSuffix}`;
             document.getElementById("evalTradesLink").href = `/api/strategy/evaluation/trades?dataset=historical&date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}${summaryRunSuffix}`;
             document.getElementById("evalComparePageLink").href = `/strategy/evaluation?date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}${activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : ""}`;
+            document.getElementById("navCompareLink").href = `/strategy/evaluation?date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}${activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : ""}`;
             if (latestRunId) {
                 document.getElementById("evalLatestRunLink").href = `/api/strategy/evaluation/runs/${latestRunId}`;
             }
@@ -1083,6 +1156,11 @@
             const dateToInput = document.getElementById("dateToInput");
             if (dateFromInput && !dateFromInput.value) dateFromInput.value = summaryFrom;
             if (dateToInput && !dateToInput.value) dateToInput.value = summaryTo;
+            document.getElementById("sessionNavMeta").textContent = `Session day ${safeText(session?.session?.date_ist || replay.date_ist)} | active run ${safeText(activeRunId || latestRunId)}`;
+            document.getElementById("rangeNavMeta").textContent = `Range ${safeText(summaryFrom)} to ${safeText(summaryTo)} | ${formatNumber(session?.counts?.closed_trades)} trades on selected day`;
+            document.getElementById("compareNavMeta").textContent = activeRunId
+                ? `Compare page opens with pinned run ${safeText(activeRunId)}`
+                : "Compare page opens with latest completed run";
             const runScopeNote = document.getElementById("runScopeNote");
             if (runScopeNote) {
                 if (latestRunId) {
