@@ -9,6 +9,20 @@ This grid is the supported next-step research program when Stage 2 shows weak gl
 
 The implementation is reusable for other underlyings and alternative time windows because the grid is built on top of a normal staged base manifest.
 
+## Current Status
+
+The original broad scenario grid has now served its purpose.
+
+The latest completed run established:
+
+- `MIDDAY` is the only viable Stage 2 regime
+- `OPENING` and `MORNING` fail the Stage 2 signal check
+- `LATE_SESSION` trains but fails Stage 2 quality badly
+- `midday_strict_winner` is the best current Stage 2 baseline
+- the remaining blocker is `stage2_cv.brier>0.22`, not Stage 2 ROC-AUC
+
+That means this document now describes the discovery phase. The next recommended manifest is the trimmed `MIDDAY`-only grid documented in [stage2_midday_grid.md](/c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage2_midday_grid.md).
+
 ## Scenario Axes
 
 The current scenario grid explores three controlled axes around the `best_edge_time_focus` branch:
