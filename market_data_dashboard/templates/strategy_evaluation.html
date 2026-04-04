@@ -112,6 +112,11 @@
         .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
         .route-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
         .status-rail { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .workflow-inline {
+            display: grid;
+            grid-template-columns: 1.3fr 1fr 1fr 1fr;
+            gap: 14px;
+        }
 
         .form-grid {
             display: grid;
@@ -153,12 +158,12 @@
         }
 
         .metric {
-            padding: 16px;
+            padding: 12px 14px;
         }
 
         .metric .value {
             margin-top: 8px;
-            font-size: 24px;
+            font-size: 21px;
             font-weight: 800;
         }
 
@@ -169,7 +174,7 @@
         }
 
         .compare-card {
-            padding: 16px;
+            padding: 14px;
             border-radius: 16px;
             border: 1px solid #e8eef3;
             background: rgba(255,255,255,0.82);
@@ -184,7 +189,7 @@
             display: grid;
             grid-template-columns: 1fr auto;
             gap: 10px;
-            padding: 8px 0;
+            padding: 7px 0;
             border-bottom: 1px solid #eef3f7;
             font-size: 13px;
         }
@@ -300,7 +305,7 @@
             border-radius: 16px;
             border: 1px solid var(--line);
             background: rgba(255,255,255,0.84);
-            max-height: 420px;
+            max-height: 450px;
         }
 
         table {
@@ -310,7 +315,7 @@
         }
 
         th, td {
-            padding: 10px 12px;
+            padding: 8px 10px;
             border-bottom: 1px solid #eef3f7;
             text-align: left;
             white-space: nowrap;
@@ -324,12 +329,12 @@
         }
 
         @media (max-width: 1180px) {
-            .grid-2, .grid-3, .kpis, .form-grid, .route-grid, .status-rail { grid-template-columns: 1fr 1fr; }
+            .grid-2, .grid-3, .kpis, .form-grid, .route-grid, .status-rail, .workflow-inline { grid-template-columns: 1fr 1fr; }
         }
 
         @media (max-width: 760px) {
             .page { width: calc(100vw - 16px); }
-            .grid-2, .grid-3, .kpis, .form-grid, .route-grid, .status-rail { grid-template-columns: 1fr; }
+            .grid-2, .grid-3, .kpis, .form-grid, .route-grid, .status-rail, .workflow-inline { grid-template-columns: 1fr; }
             .hero { flex-direction: column; }
         }
     </style>
@@ -349,19 +354,7 @@
             </div>
         </section>
 
-        <section class="route-grid">
-            <div class="route-card">
-                <div class="route-kicker">Operator Home</div>
-                <div class="route-title">Dashboard</div>
-                <div class="route-copy">Use the main dashboard for top-level system state and the product-wide entry points before drilling into run evidence.</div>
-                <a class="link" href="/">Open Dashboard</a>
-            </div>
-            <div class="route-card">
-                <div class="route-kicker">Session Analysis</div>
-                <div class="route-title">Replay Monitor</div>
-                <div class="route-copy">Go back to replay when you need one selected day, marker overlays, and a pinned historical run with all trades in range.</div>
-                <a class="link" href="/historical/replay">Open Replay</a>
-            </div>
+        <section class="workflow-inline">
             <div class="route-card current">
                 <div class="route-kicker">Run Verdict</div>
                 <div class="route-title">Compare Runs</div>
@@ -369,10 +362,22 @@
                 <a class="link primary" href="#loadCompareBtn">Load Comparison</a>
             </div>
             <div class="route-card">
+                <div class="route-kicker">Session Analysis</div>
+                <div class="route-title">Replay Monitor</div>
+                <div class="route-copy">Go back to replay when you need one selected day and marker overlays.</div>
+                <a class="link" href="/historical/replay">Open Replay</a>
+            </div>
+            <div class="route-card">
                 <div class="route-kicker">Research Layer</div>
                 <div class="route-title">Research Explorer</div>
-                <div class="route-copy">Move to research when you want scenario-driven chart review, model experiments, and out-of-sample inspection.</div>
+                <div class="route-copy">Move to research when you want scenario and model inspection.</div>
                 <a class="link" href="/trading/research">Open Research</a>
+            </div>
+            <div class="route-card">
+                <div class="route-kicker">Operator Home</div>
+                <div class="route-title">Dashboard</div>
+                <div class="route-copy">Use the main dashboard for top-level system state.</div>
+                <a class="link" href="/">Open Dashboard</a>
             </div>
         </section>
 

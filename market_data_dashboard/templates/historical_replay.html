@@ -141,16 +141,48 @@
         .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
         .nav-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
         .status-rail { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+        .workspace-grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; align-items: start; }
+        .mini-map { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+        .mini-card {
+            border: 1px solid #d7e3eb;
+            border-radius: 14px;
+            background: #f8fbfd;
+            padding: 12px 14px;
+        }
+        .mini-card strong { display: block; margin-bottom: 6px; color: #14324a; }
+        .mini-meta { font-size: 12px; color: #587086; margin: 6px 0 10px; }
+        .guide-stack { display: grid; gap: 10px; }
+        .details-card {
+            border: 1px solid #d7e3eb;
+            border-radius: 14px;
+            background: #fbfdfe;
+            overflow: hidden;
+        }
+        .details-card summary {
+            list-style: none;
+            cursor: pointer;
+            padding: 12px 14px;
+            font-weight: 700;
+            color: #16324a;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+        .details-card summary::-webkit-details-marker { display: none; }
+        .details-card[open] summary { border-bottom: 1px solid #d7e3eb; }
+        .details-body { padding: 12px 14px 14px; }
+        .details-list { display: grid; gap: 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }
 
-        .panel { padding: 18px; }
+        .panel { padding: 16px; }
 
         .panel h2, .panel h3 {
-            margin: 0 0 12px;
-            font-size: 18px;
+            margin: 0 0 10px;
+            font-size: 17px;
         }
 
         .kpi {
-            padding: 16px;
+            padding: 12px 14px;
         }
 
         .label {
@@ -162,7 +194,7 @@
 
         .value {
             margin-top: 8px;
-            font-size: 24px;
+            font-size: 21px;
             font-weight: 800;
         }
 
@@ -288,7 +320,7 @@
         }
 
         .chart-wrap {
-            height: 360px;
+            height: 430px;
         }
 
         .chart-wrap.fullscreen {
@@ -365,7 +397,7 @@
 
         .chart-shell {
             display: grid;
-            grid-template-columns: 1.45fr 0.55fr;
+            grid-template-columns: minmax(0, 1.58fr) minmax(250px, 0.42fr);
             gap: 14px;
             align-items: start;
         }
@@ -404,7 +436,7 @@
         .context-strip {
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 10px;
+            gap: 8px;
             margin: 2px 0 0;
         }
 
@@ -412,7 +444,7 @@
             border: 1px solid var(--line);
             border-radius: 12px;
             background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(244,248,251,0.82));
-            padding: 10px 12px;
+            padding: 9px 11px;
         }
 
         .context-label {
@@ -426,7 +458,7 @@
 
         .context-value {
             margin-top: 6px;
-            font-size: 18px;
+            font-size: 17px;
             font-weight: 700;
         }
 
@@ -436,7 +468,7 @@
         }
 
         .side-card {
-            padding: 16px;
+            padding: 12px;
             border-radius: 18px;
             border: 1px solid var(--line);
             background: rgba(255,255,255,0.84);
@@ -460,13 +492,13 @@
 
         .watch-grid {
             display: grid;
-            gap: 8px;
+            gap: 6px;
         }
 
         .watch-item {
             border: 1px solid var(--line);
             border-radius: 10px;
-            padding: 10px 11px;
+            padding: 8px 10px;
             background: rgba(246, 249, 252, 0.92);
         }
 
@@ -481,7 +513,7 @@
 
         .watch-value {
             margin-top: 5px;
-            font-size: 13px;
+            font-size: 12px;
             line-height: 1.55;
             color: var(--ink);
         }
@@ -555,7 +587,7 @@
         }
 
         .detail-grid .kv {
-            min-height: 76px;
+            min-height: 68px;
         }
 
         .table-wrap {
@@ -563,7 +595,7 @@
             border-radius: 16px;
             border: 1px solid var(--line);
             background: rgba(255, 255, 255, 0.84);
-            max-height: 330px;
+            max-height: 360px;
         }
 
         table {
@@ -573,7 +605,7 @@
         }
 
         th, td {
-            padding: 10px 12px;
+            padding: 8px 10px;
             border-bottom: 1px solid #eef3f7;
             text-align: left;
             white-space: nowrap;
@@ -630,12 +662,13 @@
         @media (max-width: 1280px) {
             .control-grid,
             .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-            .banner-grid, .grid-2, .grid-3 { grid-template-columns: 1fr; }
+            .banner-grid, .grid-2, .grid-3, .workspace-grid { grid-template-columns: 1fr; }
             .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .status-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .chart-shell { grid-template-columns: 1fr; }
             .context-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .trade-day-grid { grid-template-columns: 1fr; }
+            .mini-map { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 760px) {
@@ -674,98 +707,64 @@
             </div>
         </section>
 
-        <section class="banner banner-grid">
-            <div>
-                <strong>Replay Mode Banner</strong>
-                <div id="modeBannerText">Historical replay data loads from historical Redis topics and historical Mongo collections. This page does not require live Kite or live ingestion once snapshots exist.</div>
-            </div>
-            <div>
-                <strong>Evaluation Shortcuts</strong>
-                <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
-                    <a class="link" id="evalLatestRunLink" href="/api/strategy/evaluation/runs/latest?dataset=historical" target="_blank" rel="noopener">Latest Run JSON</a>
-                    <a class="link" id="evalComparePageLink" href="/strategy/evaluation">Compare Page</a>
-                    <a class="link" id="evalSummaryLink" href="/api/strategy/evaluation/summary?dataset=historical" target="_blank" rel="noopener">Summary API</a>
-                    <a class="link" id="evalTradesLink" href="/api/strategy/evaluation/trades?dataset=historical" target="_blank" rel="noopener">Trades API</a>
-                </div>
-                <div class="run-note" id="runScopeNote">
-                    Latest completed run: --. The page below is scoped to the selected session date, while the evaluation links follow the latest completed historical run.
-                </div>
-            </div>
-        </section>
-
-        <section class="nav-grid">
-            <div class="nav-card current">
-                <div class="nav-kicker">Stay Here</div>
-                <div class="nav-title">Session Day Replay</div>
-                <div class="nav-text">
-                    Use this page when you want to inspect one selected trading day, its session chart, and the exact entries and exits drawn on that chart.
-                </div>
-                <div class="nav-meta" id="sessionNavMeta">Session day -- | active run --</div>
-            </div>
-            <div class="nav-card">
-                <div class="nav-kicker">Range Review</div>
-                <div class="nav-title">All Trades In Range</div>
-                <div class="nav-text">
-                    Scroll to the trade table below when you want every closed trade across the selected replay window, not just the visible day on the chart.
-                </div>
-                <div class="nav-meta" id="rangeNavMeta">Range --</div>
-                <a class="link" href="#range-trades-panel">Jump To Range Trades</a>
-            </div>
-            <div class="nav-card">
-                <div class="nav-kicker">Compare Runs</div>
-                <div class="nav-title">Evaluation Compare</div>
-                <div class="nav-text">
-                    Open the compare page when you want whole-range metrics, equity, strategy split, and baseline-vs-current decisions.
-                </div>
-                <div class="nav-meta" id="compareNavMeta">Latest compare link uses current run scope</div>
-                <a class="link primary" id="navCompareLink" href="/strategy/evaluation">Open Compare Page</a>
-            </div>
-        </section>
-
         <section class="panel" style="margin-bottom:14px;">
-            <h2>How To Use This Page</h2>
-            <div class="grid-4">
-                <div class="playbook-card">
-                    <strong>1. Check Run Scope</strong>
-                    Use `Pinned Run` and `Latest Run Status` first. `Pinned Run` means you are reviewing a specific replay run, not automatically switching to the newest run.
+            <div class="workspace-grid">
+                <div>
+                    <strong>Replay Workspace</strong>
+                    <div id="modeBannerText" style="margin-top:6px;">Historical replay data loads from historical Redis topics and historical Mongo collections. This page does not require live Kite or live ingestion once snapshots exist.</div>
+                    <div class="mini-map">
+                        <div class="mini-card">
+                            <strong>Session Day Replay</strong>
+                            <div>Inspect one selected trading day with exact entries and exits overlaid on-chart.</div>
+                            <div class="mini-meta" id="sessionNavMeta">Session day -- | active run --</div>
+                        </div>
+                        <div class="mini-card">
+                            <strong>All Trades In Range</strong>
+                            <div>Use the range table for every closed trade across the loaded replay window.</div>
+                            <div class="mini-meta" id="rangeNavMeta">Range --</div>
+                            <a class="link" href="#range-trades-panel">Jump To Range Trades</a>
+                        </div>
+                        <div class="mini-card">
+                            <strong>Evaluation Compare</strong>
+                            <div>Open whole-range metrics, equity, strategy split, and baseline comparison.</div>
+                            <div class="mini-meta" id="compareNavMeta">Latest compare link uses current run scope</div>
+                            <a class="link primary" id="navCompareLink" href="/strategy/evaluation">Open Compare Page</a>
+                        </div>
+                    </div>
                 </div>
-                <div class="playbook-card">
-                    <strong>2. Read The Chart Correctly</strong>
-                    `Underlying Session Chart` is always one selected session day only. It is not a whole-range chart.
-                </div>
-                <div class="playbook-card">
-                    <strong>3. Read All Trades</strong>
-                    `All Trades In Selected Run Range` is the multi-day table for the full replay window, such as `2024-01-02` to `2024-01-31`.
-                </div>
-                <div class="playbook-card">
-                    <strong>4. Move To Compare</strong>
-                    Use `Evaluation Compare` when you want the run-level result, equity, deltas, and baseline comparison across the whole range.
+                <div class="guide-stack">
+                    <details class="details-card" open>
+                        <summary><span>How To Use This Page</span><span>Replay Mode Banner</span></summary>
+                        <div class="details-body">
+                            <div class="details-list">
+                                <div>Read the chart as one selected day only. It is never a whole-range chart.</div>
+                                <div>Use the trade table below for all closed trades across the selected run range.</div>
+                                <div>Move to compare view when you want run-level metrics and baseline deltas.</div>
+                            </div>
+                            <div class="note" id="pageGuideNote" style="margin-top:10px;">If replay is still running, expect partial trades, partial signals, and incomplete chart markers until the run reaches `completed`.</div>
+                        </div>
+                    </details>
+                    <details class="details-card">
+                        <summary><span>Operator Playbook</span><span>Evaluation Shortcuts</span></summary>
+                        <div class="details-body">
+                            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+                                <a class="link" id="evalLatestRunLink" href="/api/strategy/evaluation/runs/latest?dataset=historical" target="_blank" rel="noopener">Latest Run JSON</a>
+                                <a class="link" id="evalComparePageLink" href="/strategy/evaluation">Compare Page</a>
+                                <a class="link" id="evalSummaryLink" href="/api/strategy/evaluation/summary?dataset=historical" target="_blank" rel="noopener">Summary API</a>
+                                <a class="link" id="evalTradesLink" href="/api/strategy/evaluation/trades?dataset=historical" target="_blank" rel="noopener">Trades API</a>
+                            </div>
+                            <div class="details-list">
+                                <div>Confirm run scope first, then read range trades before reading votes or signals.</div>
+                                <div>Interpret `TRAILING_STOP` together with `exit_mechanism`.</div>
+                                <div>Treat stale-data warnings as degraded trust, not automatic model failure.</div>
+                            </div>
+                            <div class="run-note" id="runScopeNote" style="margin-top:10px;">
+                                Latest completed run: --. The page below is scoped to the selected session date, while the evaluation links follow the latest completed historical run.
+                            </div>
+                        </div>
+                    </details>
                 </div>
             </div>
-            <div class="note" id="pageGuideNote">If replay is still running, expect partial trades, partial signals, and incomplete chart markers until the run reaches `completed`.</div>
-        </section>
-
-        <section class="panel" style="margin-bottom:14px;">
-            <h2>Operator Playbook</h2>
-            <div class="grid-4">
-                <div class="playbook-card">
-                    <strong>Scope First</strong>
-                    Confirm the active `run_id`, replay status, and selected date range before reading any panel.
-                </div>
-                <div class="playbook-card">
-                    <strong>Outcome First</strong>
-                    Read `Range Trades` and `Latest Closed Trade` before using votes to explain why a run behaved a certain way.
-                </div>
-                <div class="playbook-card">
-                    <strong>Exit Read</strong>
-                    Interpret `TRAILING_STOP` together with `exit_mechanism`. The mechanism is the real owner of the exit.
-                </div>
-                <div class="playbook-card">
-                    <strong>Alert Read</strong>
-                    Treat stale data and monitoring warnings as degraded trust conditions, not automatic model failure.
-                </div>
-            </div>
-            <div class="note">Repo docs: `strategy_app/docs/OPERATOR_PLAYBOOK.md`, `strategy_app/docs/RELEASE_READINESS_CHECKLIST.md`, and `strategy_app/docs/CURRENT_EVALUATION_BASELINE_2026-04-04.md`.</div>
         </section>
 
         <section class="status-rail">

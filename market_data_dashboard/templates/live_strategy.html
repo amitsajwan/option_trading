@@ -178,6 +178,20 @@
             gap: 12px;
             margin-bottom: 14px;
         }
+        .workflow-card {
+            padding: 14px 16px;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            background: linear-gradient(180deg, rgba(255,255,255,0.82), rgba(255,255,255,0.68));
+            display: grid;
+            gap: 8px;
+        }
+        .workflow-card p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.5;
+        }
 
         .route-card {
             padding: 16px;
@@ -324,7 +338,7 @@
 
         .chart-shell {
             display: grid;
-            grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.65fr);
+            grid-template-columns: minmax(0, 1.58fr) minmax(250px, 0.42fr);
             gap: 14px;
             align-items: start;
         }
@@ -336,15 +350,15 @@
         .context-strip {
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 10px;
-            margin-bottom: 12px;
+            gap: 8px;
+            margin-bottom: 10px;
         }
 
         .context-tile {
             border: 1px solid var(--line);
             border-radius: 12px;
             background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(246,249,252,0.82));
-            padding: 10px 12px;
+            padding: 9px 11px;
         }
 
         .context-label {
@@ -358,7 +372,7 @@
 
         .context-value {
             margin-top: 6px;
-            font-size: 18px;
+            font-size: 17px;
             font-weight: 700;
         }
 
@@ -371,7 +385,7 @@
             border: 1px solid var(--line);
             border-radius: 14px;
             background: linear-gradient(180deg, rgba(252,253,255,0.96), rgba(244,248,252,0.86));
-            padding: 14px;
+            padding: 12px;
         }
 
         .side-card h3 {
@@ -383,13 +397,13 @@
 
         .watch-grid {
             display: grid;
-            gap: 8px;
+            gap: 6px;
         }
 
         .watch-item {
             border: 1px solid var(--line);
             border-radius: 10px;
-            padding: 10px 11px;
+            padding: 8px 10px;
             background: rgba(248,250,252,0.92);
         }
 
@@ -404,7 +418,7 @@
 
         .watch-value {
             margin-top: 5px;
-            font-size: 13px;
+            font-size: 12px;
             line-height: 1.55;
         }
 
@@ -488,7 +502,7 @@
         }
 
         .kpi {
-            padding: 16px;
+            padding: 12px 14px;
         }
 
         .kpi .label {
@@ -500,7 +514,7 @@
 
         .kpi .value {
             margin-top: 8px;
-            font-size: 24px;
+            font-size: 22px;
             font-weight: 700;
         }
 
@@ -523,7 +537,7 @@
         }
 
         .panel {
-            padding: 18px;
+            padding: 16px;
         }
 
         .engine-panel {
@@ -537,7 +551,7 @@
 
         .panel h2,
         .panel h3 {
-            margin: 0 0 14px;
+            margin: 0 0 10px;
             font-size: 18px;
         }
 
@@ -578,7 +592,7 @@
         }
 
         .chart-wrap {
-            height: 460px;
+            height: 520px;
             width: 100%;
         }
 
@@ -608,7 +622,7 @@
             border-radius: 14px;
             border: 1px solid var(--line);
             background: #fbfdff;
-            max-height: 350px;
+            max-height: 400px;
         }
 
         table {
@@ -618,7 +632,7 @@
         }
 
         th, td {
-            padding: 10px 12px;
+            padding: 8px 10px;
             border-bottom: 1px solid #edf2f7;
             text-align: left;
             white-space: nowrap;
@@ -870,28 +884,28 @@
         <div class="banner" id="warnBanner"></div>
 
         <section class="product-map">
-            <div class="route-card current">
+            <div class="workflow-card current">
                 <div class="route-kicker">Live Now</div>
                 <div class="route-title">Live Drilldown</div>
-                <div class="route-copy">Stay here for current engine state, active alerts, decision feed, trace review, and live session trade context.</div>
+                <p>Stay here for current engine state, active alerts, decision feed, trace review, and live session trade context.</p>
                 <a class="nav-link primary" href="#nowBarPanel">Inspect Live State</a>
             </div>
-            <div class="route-card">
+            <div class="workflow-card">
                 <div class="route-kicker">After Market Close</div>
                 <div class="route-title">Historical Replay</div>
-                <div class="route-copy">Use replay for one session-day chart plus pinned historical run scope and all trades across a replay range.</div>
+                <p>Use replay for one session-day chart plus pinned historical run scope and all trades across a replay range.</p>
                 <a class="nav-link" href="/historical/replay">Open Replay</a>
             </div>
-            <div class="route-card">
+            <div class="workflow-card">
                 <div class="route-kicker">Run Verdict</div>
                 <div class="route-title">Evaluation Compare</div>
-                <div class="route-copy">Use compare for run-level return, equity, strategy split, and baseline-vs-current decisions across a full window.</div>
+                <p>Use compare for run-level return, equity, strategy split, and baseline-vs-current decisions across a full window.</p>
                 <a class="nav-link" href="/strategy/evaluation">Open Evaluation</a>
             </div>
-            <div class="route-card">
+            <div class="workflow-card">
                 <div class="route-kicker">Research Layer</div>
                 <div class="route-title">Research Explorer</div>
-                <div class="route-copy">Use research views to inspect scenario-level chart behavior, outcome classification, and out-of-sample experiments.</div>
+                <p>Use research views to inspect scenario-level chart behavior, outcome classification, and out-of-sample experiments.</p>
                 <a class="nav-link" href="/trading/research">Open Research</a>
             </div>
         </section>
