@@ -138,6 +138,7 @@
         .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); margin-bottom: 14px; }
         .grid-2 { grid-template-columns: 1.2fr 0.8fr; margin-bottom: 14px; }
         .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 14px; }
+        .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
 
         .panel { padding: 18px; }
 
@@ -348,6 +349,24 @@
             line-height: 1.6;
         }
 
+        .playbook-card {
+            padding: 16px;
+            border-radius: 16px;
+            border: 1px solid #e8eef3;
+            background: rgba(255, 255, 255, 0.82);
+            color: var(--muted);
+            line-height: 1.55;
+        }
+
+        .playbook-card strong {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--ink);
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
         @media (max-width: 1280px) {
             .control-grid,
             .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -363,6 +382,7 @@
             .kv-grid { grid-template-columns: 1fr; }
             .form-grid { grid-template-columns: 1fr; }
             .detail-grid { grid-template-columns: 1fr; }
+            .grid-4 { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -382,6 +402,7 @@
                 <a class="link primary" href="/">Main Dashboard</a>
                 <a class="link" href="/live/strategy">Live Monitor</a>
                 <a class="link" href="/api/historical/replay/session" target="_blank" rel="noopener">Replay API</a>
+                <a class="link" href="/api/health/replay" target="_blank" rel="noopener">Replay Health</a>
             </div>
         </section>
 
@@ -401,6 +422,29 @@
                     Latest completed run: --. The page below is scoped to the selected session date, while the evaluation links follow the latest completed historical run.
                 </div>
             </div>
+        </section>
+
+        <section class="panel" style="margin-bottom:14px;">
+            <h2>Operator Playbook</h2>
+            <div class="grid-4">
+                <div class="playbook-card">
+                    <strong>Scope First</strong>
+                    Confirm the active `run_id`, replay status, and selected date range before reading any panel.
+                </div>
+                <div class="playbook-card">
+                    <strong>Outcome First</strong>
+                    Read `Range Trades` and `Latest Closed Trade` before using votes to explain why a run behaved a certain way.
+                </div>
+                <div class="playbook-card">
+                    <strong>Exit Read</strong>
+                    Interpret `TRAILING_STOP` together with `exit_mechanism`. The mechanism is the real owner of the exit.
+                </div>
+                <div class="playbook-card">
+                    <strong>Alert Read</strong>
+                    Treat stale data and monitoring warnings as degraded trust conditions, not automatic model failure.
+                </div>
+            </div>
+            <div class="note">Repo docs: `strategy_app/docs/OPERATOR_PLAYBOOK.md` and `strategy_app/docs/RELEASE_READINESS_CHECKLIST.md`.</div>
         </section>
 
         <section class="grid-2 control-grid">

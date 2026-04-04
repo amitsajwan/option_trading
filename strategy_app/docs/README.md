@@ -210,6 +210,9 @@ For end-to-end replay and evaluation documentation, see:
 - [strategy_catalog.md](strategy_catalog.md)
 - [CURRENT_TREE_VALIDATION.md](CURRENT_TREE_VALIDATION.md)
 - [ENGINE_CONSOLIDATION_PLAN.md](ENGINE_CONSOLIDATION_PLAN.md)
+- [PRODUCT_CLOSURE_PROGRAM.md](PRODUCT_CLOSURE_PROGRAM.md)
+- [OPERATOR_PLAYBOOK.md](OPERATOR_PLAYBOOK.md)
+- [RELEASE_READINESS_CHECKLIST.md](RELEASE_READINESS_CHECKLIST.md)
 - [../docs/DOCS_CODE_MAP.md](../docs/DOCS_CODE_MAP.md)
 
 ## Container/Compose

@@ -79,6 +79,7 @@ class HistoricalReplayAppTests(unittest.TestCase):
         self.assertIn(b"Historical Replay Monitor", response.body)
         self.assertIn(b"Replay Controls", response.body)
         self.assertIn(b"Range Trades", response.body)
+        self.assertIn(b"Operator Playbook", response.body)
 
     def test_historical_replay_session_endpoint_returns_payload(self) -> None:
         payload = asyncio.run(dashboard_app.get_historical_strategy_session(date="2026-03-06"))

@@ -61,6 +61,11 @@ docker compose --env-file .env.compose --profile historical_replay run --rm hist
 
 Open `/historical/replay` for replay-first operator monitoring. This flow does not require live Kite or the archived `/trading` launcher once historical snapshots already exist.
 
+Operator/release docs for this surface:
+
+- [`../strategy_app/docs/OPERATOR_PLAYBOOK.md`](../strategy_app/docs/OPERATOR_PLAYBOOK.md)
+- [`../strategy_app/docs/RELEASE_READINESS_CHECKLIST.md`](../strategy_app/docs/RELEASE_READINESS_CHECKLIST.md)
+
 Environment used by dashboard:
 
 - `DASHBOARD_HOST` (default `0.0.0.0`)
