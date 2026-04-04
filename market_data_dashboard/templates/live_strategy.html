@@ -215,6 +215,44 @@
             line-height: 1.6;
         }
 
+        .status-rail {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .rail-card {
+            padding: 16px;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            background: linear-gradient(180deg, rgba(255,255,255,0.82), rgba(255,255,255,0.68));
+        }
+
+        .rail-kicker {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .rail-value {
+            margin-top: 8px;
+            font-family: "Space Grotesk", "Manrope", sans-serif;
+            font-size: 24px;
+            line-height: 1;
+            letter-spacing: -0.03em;
+        }
+
+        .rail-copy {
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
         .view-toggle {
             margin-bottom: 14px;
             display: flex;
@@ -692,6 +730,7 @@
             .now-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .command-grid { grid-template-columns: 1fr; }
             .product-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .status-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .rail-panel { position: static; }
         }
 
@@ -703,6 +742,7 @@
             .grid-2 { grid-template-columns: 1fr; }
             .chart-wrap { height: 340px; }
             .product-map { grid-template-columns: 1fr; }
+            .status-rail { grid-template-columns: 1fr; }
             .now-grid { grid-template-columns: 1fr; }
             .view-toggle { flex-direction: column; align-items: stretch; }
             .funnel-grid { grid-template-columns: 1fr; }
@@ -764,6 +804,29 @@
                 <div class="route-title">Research Explorer</div>
                 <div class="route-copy">Use research views to inspect scenario-level chart behavior, outcome classification, and out-of-sample experiments.</div>
                 <a class="nav-link" href="/trading/research">Open Research</a>
+            </div>
+        </section>
+
+        <section class="status-rail">
+            <div class="rail-card">
+                <div class="rail-kicker">Mode Rail</div>
+                <div class="rail-value">Live</div>
+                <div class="rail-copy">Use this surface for current engine state, alerts, traces, and active-session trade supervision.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Promotion Lane</div>
+                <div class="rail-value" id="railLaneValue">--</div>
+                <div class="rail-copy">Current operator lane, updated from live session state.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Session State</div>
+                <div class="rail-value" id="railSessionValue">--</div>
+                <div class="rail-copy">Live session status for the trading day and current market freshness.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Next Drilldown</div>
+                <div class="rail-value">Replay / Compare</div>
+                <div class="rail-copy">Move to replay for historical session reconstruction or evaluation for whole-range verdicts.</div>
             </div>
         </section>
 
@@ -875,7 +938,14 @@
             </div>
 
             <div class="panel">
-                <h2>Underlying Chart</h2>
+                <div class="panel-head">
+                    <h2>Underlying Chart</h2>
+                    <span class="chip" id="chartModeChip">Live chart</span>
+                </div>
+                <div class="hero-note" style="margin-bottom:10px;">
+                    <strong>Chart Frame</strong>
+                    <div class="muted" id="chartFrameNote">Use this chart for live marker placement and immediate entry/exit context. For full-session reconstruction, move to Historical Replay.</div>
+                </div>
                 <div class="chart-wrap" id="underlyingChart"></div>
                 <div class="detail-card" id="markerDetail">
                     Select a marker to inspect the exact entry/exit context.
@@ -1620,6 +1690,7 @@
             qs("#engineFamilyVersion").textContent = text(ctx.strategy_family_version);
             qs("#engineProfileId").textContent = text(ctx.strategy_profile_id);
             if (qs("#engineObservedModes")) qs("#engineObservedModes").textContent = text(observed || ctx.latest_engine_mode || "--");
+            if (qs("#railLaneValue")) qs("#railLaneValue").textContent = text(session?.promotion_lane || ctx.active_engine_mode || "unknown");
             const pureActive = activePanel ? activePanel === "ml_pure" : active === "ml_pure";
             qs("#mlPurePanel").classList.toggle("active", pureActive);
             qs("#deterministicPanel").classList.toggle("active", !pureActive);
@@ -1804,6 +1875,9 @@
             qs("#kpiLatestEvent").textContent = shortTs(session.session?.latest_event_time);
             qs("#kpiInstrument").textContent = text(session.session?.instrument);
             qs("#kpiDate").textContent = `Session ${text(session.session?.date_ist)}`;
+            if (qs("#railSessionValue")) qs("#railSessionValue").textContent = allFresh ? "Fresh" : "Degraded";
+            if (qs("#chartModeChip")) qs("#chartModeChip").textContent = `Live chart | ${text(session.session?.instrument)}`;
+            if (qs("#chartFrameNote")) qs("#chartFrameNote").textContent = `Use this chart for live marker placement and current-session context on ${text(session.session?.date_ist)}. Move to Historical Replay for session reconstruction and Evaluation Compare for multi-day verdicts.`;
         }
 
         function buildMarkerDetail(marker) {

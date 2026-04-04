@@ -101,6 +101,42 @@
             gap: 12px;
         }
 
+        .status-rail {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .rail-card {
+            padding: 16px;
+            border-radius: 16px;
+            border: 1px solid var(--line);
+            background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,255,255,0.72));
+        }
+
+        .rail-kicker {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .rail-value {
+            margin-top: 8px;
+            font-size: 24px;
+            line-height: 1;
+            letter-spacing: -0.03em;
+        }
+
+        .rail-copy {
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
         .playbook-panel {
             padding: 18px 20px;
         }
@@ -290,7 +326,7 @@
 
         .chart-grid {
             display: grid;
-            grid-template-columns: 1.6fr 1fr;
+            grid-template-columns: 1.2fr 0.8fr 0.55fr;
             gap: 12px;
         }
 
@@ -301,6 +337,62 @@
         .chart-title {
             margin: 0 0 8px;
             font-size: 18px;
+        }
+
+        .chart-note {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+            margin-bottom: 10px;
+        }
+
+        .chart-chip-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+
+        .chart-chip {
+            display: inline-flex;
+            align-items: center;
+            min-height: 34px;
+            padding: 0 10px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: #f7fafc;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--ink);
+        }
+
+        .sidebar-panel {
+            padding: 14px;
+            display: grid;
+            gap: 12px;
+        }
+
+        .sidebar-card {
+            padding: 14px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: #fbfdff;
+        }
+
+        .sidebar-card h3 {
+            margin: 0 0 8px;
+            font-size: 16px;
+        }
+
+        .sidebar-card p, .sidebar-card li {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .sidebar-card ul {
+            margin: 0;
+            padding-left: 18px;
         }
 
         .chart {
@@ -348,12 +440,12 @@
         }
 
         @media (max-width: 1100px) {
-            .control-grid, .summary-grid, .meta, .chart-grid, .playbook-grid { grid-template-columns: 1fr 1fr; }
+            .control-grid, .summary-grid, .meta, .chart-grid, .playbook-grid, .status-rail { grid-template-columns: 1fr 1fr; }
             .playbook-cards { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 760px) {
-            .control-grid, .summary-grid, .meta, .chart-grid, .playbook-grid { grid-template-columns: 1fr; }
+            .control-grid, .summary-grid, .meta, .chart-grid, .playbook-grid, .status-rail { grid-template-columns: 1fr; }
             .page { padding: 14px; }
             .chart { height: 320px; }
         }
@@ -418,6 +510,29 @@
             </div>
         </section>
 
+        <section class="status-rail">
+            <div class="rail-card">
+                <div class="rail-kicker">Mode Rail</div>
+                <div class="rail-value">Research</div>
+                <div class="rail-copy">Scenario and model inspection layer for out-of-sample evaluation, not live execution supervision.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Scenario</div>
+                <div class="rail-value" id="railScenario">--</div>
+                <div class="rail-copy">Current scenario selection from completed recovery runs or chosen recipe setup.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Window</div>
+                <div class="rail-value" id="railWindow">--</div>
+                <div class="rail-copy">Research date window feeding the charts, daily table, and trade table below.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Next Drilldown</div>
+                <div class="rail-value">Replay / Compare</div>
+                <div class="rail-copy">Move to replay for one-day chart context or compare for whole-run metrics and baseline decisions.</div>
+            </div>
+        </section>
+
         <section class="panel controls">
             <div id="banner" class="banner"></div>
             <div class="control-grid">
@@ -457,11 +572,36 @@
         <section class="chart-grid">
             <div class="panel chart-panel">
                 <h3 class="chart-title">Futures Price With Entry / Exit Markers</h3>
+                <div class="chart-note">Use this chart for scenario-level path reading and exact entry/exit placement over the evaluated window.</div>
+                <div class="chart-chip-row">
+                    <span class="chart-chip" id="priceChartModeChip">Research chart</span>
+                    <span class="chart-chip" id="priceChartWindowChip">Window: --</span>
+                </div>
                 <div id="priceChart" class="chart"></div>
             </div>
             <div class="panel chart-panel">
                 <h3 class="chart-title">CE / PE Probabilities</h3>
+                <div class="chart-note">Probability path helps explain why a model or scenario entered, held, or exited on the underlying path.</div>
+                <div class="chart-chip-row">
+                    <span class="chart-chip" id="probChartModeChip">Probability path</span>
+                    <span class="chart-chip" id="probChartScenarioChip">Scenario: --</span>
+                </div>
                 <div id="probChart" class="chart"></div>
+            </div>
+            <div class="panel sidebar-panel">
+                <div class="sidebar-card">
+                    <h3>Chart Drilldown</h3>
+                    <ul>
+                        <li>Use the futures chart for path and marker placement.</li>
+                        <li>Use the probability chart for model confidence and side bias.</li>
+                        <li>Use Replay for one-day session reconstruction.</li>
+                        <li>Use Evaluation Compare for run-level decision making.</li>
+                    </ul>
+                </div>
+                <div class="sidebar-card">
+                    <h3>Research Read</h3>
+                    <p>Positive outcome with weak trade count is not a production verdict. Use this page to classify scenarios, then promote them only after compare-page validation.</p>
+                </div>
             </div>
         </section>
 
@@ -581,6 +721,10 @@
             const recipe = activeRecipeMeta();
             if (!scenario) {
                 metaGrid.innerHTML = "";
+                qs("#railScenario").textContent = "--";
+                qs("#railWindow").textContent = `${dateFromInput.value || "--"} to ${dateToInput.value || "--"}`;
+                qs("#priceChartWindowChip").textContent = `Window: ${dateFromInput.value || "--"} to ${dateToInput.value || "--"}`;
+                qs("#probChartScenarioChip").textContent = "Scenario: --";
                 return;
             }
             recipeHint.textContent = recipe
@@ -598,6 +742,10 @@
                 ["Barrier Mode", recipe?.barrier_mode || "--"],
                 ["Scenario Key", scenario.scenario_key || "--"],
             ].map(([k, v]) => `<div class="meta-item"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+            qs("#railScenario").textContent = scenario.run_name || "--";
+            qs("#railWindow").textContent = `${dateFromInput.value || "--"} to ${dateToInput.value || "--"}`;
+            qs("#priceChartWindowChip").textContent = `Window: ${dateFromInput.value || "--"} to ${dateToInput.value || "--"}`;
+            qs("#probChartScenarioChip").textContent = `Scenario: ${scenario.run_name || "--"}`;
         }
 
         function renderSummary(summary) {

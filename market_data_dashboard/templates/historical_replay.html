@@ -140,6 +140,7 @@
         .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 14px; }
         .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
         .nav-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+        .status-rail { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
 
         .panel { padding: 18px; }
 
@@ -255,6 +256,37 @@
             line-height: 1.6;
         }
 
+        .rail-card {
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,255,255,0.72));
+        }
+
+        .rail-kicker {
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            font-family: "IBM Plex Mono", monospace;
+            font-weight: 700;
+        }
+
+        .rail-value {
+            margin-top: 8px;
+            font-family: "Space Grotesk", sans-serif;
+            font-size: 24px;
+            line-height: 1;
+            letter-spacing: -0.03em;
+        }
+
+        .rail-copy {
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
         .chart-wrap {
             height: 360px;
         }
@@ -329,6 +361,67 @@
 
         .chart-window input[type="range"] {
             width: min(240px, 42vw);
+        }
+
+        .chart-shell {
+            display: grid;
+            grid-template-columns: 1.45fr 0.55fr;
+            gap: 14px;
+            align-items: start;
+        }
+
+        .chart-main {
+            display: grid;
+            gap: 12px;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .chart-header-copy {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+            max-width: 720px;
+        }
+
+        .chart-chip-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .chart-side {
+            display: grid;
+            gap: 12px;
+        }
+
+        .side-card {
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: rgba(255,255,255,0.84);
+        }
+
+        .side-card h3 {
+            margin: 0 0 8px;
+            font-size: 16px;
+        }
+
+        .side-card p, .side-card li {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .side-card ul {
+            margin: 0;
+            padding-left: 18px;
         }
 
         .detail-grid {
@@ -415,6 +508,8 @@
             .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .banner-grid, .grid-2, .grid-3 { grid-template-columns: 1fr; }
             .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .status-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .chart-shell { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 760px) {
@@ -426,6 +521,7 @@
             .form-grid { grid-template-columns: 1fr; }
             .detail-grid { grid-template-columns: 1fr; }
             .grid-4 { grid-template-columns: 1fr; }
+            .status-rail { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -545,6 +641,29 @@
             <div class="note">Repo docs: `strategy_app/docs/OPERATOR_PLAYBOOK.md`, `strategy_app/docs/RELEASE_READINESS_CHECKLIST.md`, and `strategy_app/docs/CURRENT_EVALUATION_BASELINE_2026-04-04.md`.</div>
         </section>
 
+        <section class="status-rail">
+            <div class="rail-card">
+                <div class="rail-kicker">Mode Rail</div>
+                <div class="rail-value">Replay</div>
+                <div class="rail-copy">Historical session inspection with one selected day on chart and one active replay run behind the page.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Run Scope</div>
+                <div class="rail-value" id="railRunScope">--</div>
+                <div class="rail-copy">Confirms whether this view is auto-following latest completed run or pinned to a chosen run.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Session Day</div>
+                <div class="rail-value" id="railSessionDay">--</div>
+                <div class="rail-copy">The chart is only for this one trading day, even when the replay range spans multiple days.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Range Scope</div>
+                <div class="rail-value" id="railRangeScope">--</div>
+                <div class="rail-copy">Use range trades below or Evaluation Compare for the full replay window and run-level outcomes.</div>
+            </div>
+        </section>
+
         <section class="grid-2 control-grid">
             <div class="panel">
                 <h2>Replay Controls</h2>
@@ -619,26 +738,54 @@
         </section>
 
         <section class="panel" style="margin-bottom:14px;">
-            <h2>Underlying Session Chart</h2>
-            <div class="chart-wrap">
-                <canvas id="priceChart"></canvas>
-            </div>
-            <div class="chart-toolbar">
-                <div class="chart-window">
-                    <label>Window start <input id="chartStartRange" type="range" min="0" max="0" value="0"></label>
-                    <label>Window end <input id="chartEndRange" type="range" min="0" max="0" value="0"></label>
-                    <button class="btn" id="fitChartBtn" type="button">Fit Session</button>
-                    <button class="btn" id="fullscreenChartBtn" type="button">Expand Chart</button>
+            <div class="chart-shell">
+                <div class="chart-main">
+                    <div class="chart-header">
+                        <div>
+                            <h2>Underlying Session Chart</h2>
+                            <div class="chart-header-copy">Trading-software session view for one selected day. Use the markers for entry and exit placement, then switch to range trades or compare view for whole-window conclusions.</div>
+                        </div>
+                        <div class="chart-chip-row">
+                            <span class="legend-item">Mode: Replay</span>
+                            <span class="legend-item" id="chartScopeChip">Run scope: --</span>
+                            <span class="legend-item" id="chartDateChip">Day: --</span>
+                        </div>
+                    </div>
+                    <div class="chart-wrap">
+                        <canvas id="priceChart"></canvas>
+                    </div>
+                    <div class="chart-toolbar">
+                        <div class="chart-window">
+                            <label>Window start <input id="chartStartRange" type="range" min="0" max="0" value="0"></label>
+                            <label>Window end <input id="chartEndRange" type="range" min="0" max="0" value="0"></label>
+                            <button class="btn" id="fitChartBtn" type="button">Fit Session</button>
+                            <button class="btn" id="fullscreenChartBtn" type="button">Expand Chart</button>
+                        </div>
+                    </div>
+                    <div class="chart-footer">
+                        <div class="chart-legend">
+                            <span class="legend-item"><span class="legend-swatch" style="background:#0d6a78;"></span>Underlying</span>
+                            <span class="legend-item"><span class="legend-swatch" style="background:#18794e;"></span>Buy markers</span>
+                            <span class="legend-item"><span class="legend-swatch" style="background:#b42318;"></span>Sell markers</span>
+                        </div>
+                        <div class="chart-note" id="chartMarkerNote">
+                            Entry and exit markers are derived from historical trades and overlaid on the session price chart.
+                        </div>
+                    </div>
                 </div>
-            </div>
-            <div class="chart-footer">
-                <div class="chart-legend">
-                    <span class="legend-item"><span class="legend-swatch" style="background:#0d6a78;"></span>Underlying</span>
-                    <span class="legend-item"><span class="legend-swatch" style="background:#18794e;"></span>Buy markers</span>
-                    <span class="legend-item"><span class="legend-swatch" style="background:#b42318;"></span>Sell markers</span>
-                </div>
-                <div class="chart-note" id="chartMarkerNote">
-                    Entry and exit markers are derived from historical trades and overlaid on the session price chart.
+                <div class="chart-side">
+                    <div class="side-card">
+                        <h3>Drilldown Sidebar</h3>
+                        <ul>
+                            <li>Use this chart for one-day timing and marker placement.</li>
+                            <li>Use `All Trades In Selected Run Range` for every closed trade in the replay window.</li>
+                            <li>Use `Evaluation Compare` for full-range return, equity, and baseline review.</li>
+                        </ul>
+                    </div>
+                    <div class="side-card">
+                        <h3>Chart Read</h3>
+                        <p>If replay is still running, markers and related signal context may be partial. Wait for `completed` status before treating the chart as final.</p>
+                    </div>
                 </div>
             </div>
         </section>
@@ -1151,6 +1298,11 @@
             document.getElementById("runSourceValue").textContent = pinnedRunId
                 ? `Pinned run ${activeRunId === latestRunId ? "(also latest completed)" : ""}`.trim()
                 : (latestRunId ? "Latest completed run" : "No completed run");
+            document.getElementById("railRunScope").textContent = pinnedRunId ? "Pinned" : (latestRunId ? "Latest" : "--");
+            document.getElementById("railSessionDay").textContent = safeText(session?.session?.date_ist || replay.date_ist);
+            document.getElementById("railRangeScope").textContent = `${safeText(summaryFrom)} to ${safeText(summaryTo)}`;
+            document.getElementById("chartScopeChip").textContent = `Run scope: ${pinnedRunId ? "Pinned" : "Latest"}`;
+            document.getElementById("chartDateChip").textContent = `Day: ${safeText(session?.session?.date_ist || replay.date_ist)}`;
             document.getElementById("runStatusValue").innerHTML = `<span class="tag ${toneTag(latestRunStatus || replay.status)}">${safeText(latestRunStatus || replay.status)}</span>`;
             document.getElementById("selectedRangeValue").textContent = `${safeText(summaryFrom)} to ${safeText(summaryTo)}`;
             const dateFromInput = document.getElementById("dateFromInput");

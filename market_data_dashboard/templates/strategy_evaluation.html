@@ -102,7 +102,7 @@
             background: linear-gradient(135deg, var(--accent), #0b4f60);
         }
 
-        .grid-2, .grid-3, .kpis, .route-grid {
+        .grid-2, .grid-3, .kpis, .route-grid, .status-rail {
             display: grid;
             gap: 14px;
         }
@@ -111,6 +111,7 @@
         .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
         .route-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .status-rail { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
         .form-grid {
             display: grid;
@@ -263,6 +264,37 @@
             line-height: 1.6;
         }
 
+        .rail-card {
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.76);
+        }
+
+        .rail-kicker {
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            font-family: "IBM Plex Mono", monospace;
+            font-weight: 700;
+        }
+
+        .rail-value {
+            margin-top: 8px;
+            font-family: "Space Grotesk", sans-serif;
+            font-size: 24px;
+            line-height: 1;
+            letter-spacing: -0.03em;
+        }
+
+        .rail-copy {
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
         .table-wrap {
             overflow: auto;
             border-radius: 16px;
@@ -292,12 +324,12 @@
         }
 
         @media (max-width: 1180px) {
-            .grid-2, .grid-3, .kpis, .form-grid, .route-grid { grid-template-columns: 1fr 1fr; }
+            .grid-2, .grid-3, .kpis, .form-grid, .route-grid, .status-rail { grid-template-columns: 1fr 1fr; }
         }
 
         @media (max-width: 760px) {
             .page { width: calc(100vw - 16px); }
-            .grid-2, .grid-3, .kpis, .form-grid, .route-grid { grid-template-columns: 1fr; }
+            .grid-2, .grid-3, .kpis, .form-grid, .route-grid, .status-rail { grid-template-columns: 1fr; }
             .hero { flex-direction: column; }
         }
     </style>
@@ -341,6 +373,29 @@
                 <div class="route-title">Research Explorer</div>
                 <div class="route-copy">Move to research when you want scenario-driven chart review, model experiments, and out-of-sample inspection.</div>
                 <a class="link" href="/trading/research">Open Research</a>
+            </div>
+        </section>
+
+        <section class="status-rail">
+            <div class="rail-card">
+                <div class="rail-kicker">Mode Rail</div>
+                <div class="rail-value">Compare</div>
+                <div class="rail-copy">Whole-range run verdict surface for current-vs-baseline decisions.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Current Run</div>
+                <div class="rail-value" id="railCurrentRun">--</div>
+                <div class="rail-copy">The active run being analyzed on this page.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Baseline</div>
+                <div class="rail-value" id="railBaselineRun">--</div>
+                <div class="rail-copy">Optional baseline run for promotion, drift, or regression decisions.</div>
+            </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Window</div>
+                <div class="rail-value" id="railCompareWindow">--</div>
+                <div class="rail-copy">The full date window backing the comparison metrics and trade table.</div>
             </div>
         </section>
 
@@ -593,6 +648,9 @@
 
             document.getElementById("currentRunLabel").textContent = safeText(currentSummary?.resolved_run_id || currentRunId);
             document.getElementById("baselineRunLabel").textContent = baselineSummary ? safeText(baselineSummary?.resolved_run_id || baselineRunId) : "--";
+            document.getElementById("railCurrentRun").textContent = safeText(currentSummary?.resolved_run_id || currentRunId);
+            document.getElementById("railBaselineRun").textContent = baselineSummary ? safeText(baselineSummary?.resolved_run_id || baselineRunId) : "None";
+            document.getElementById("railCompareWindow").textContent = `${dateFrom} to ${dateTo}`;
             document.getElementById("currentPf").textContent = formatNumber(currentSummary?.overall?.profit_factor);
             document.getElementById("baselinePf").textContent = baselineSummary ? formatNumber(baselineSummary?.overall?.profit_factor) : "--";
             document.getElementById("currentDd").textContent = formatPct(currentSummary?.equity?.max_drawdown_pct);
