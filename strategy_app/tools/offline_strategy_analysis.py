@@ -122,6 +122,9 @@ class MemorySignalLogger:
     def log_position_manage(self, *, position: PositionContext, timestamp: datetime, snapshot_id: str) -> None:  # noqa: ARG002
         return
 
+    def log_decision_trace(self, trace: dict[str, Any]) -> None:  # noqa: ARG002
+        return
+
     def log_position_close(
         self,
         *,

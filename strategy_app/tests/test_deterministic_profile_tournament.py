@@ -8,6 +8,7 @@ from strategy_app.tools.deterministic_profile_tournament import (
     build_recommendation,
     default_profile_specs,
 )
+from strategy_app.tools.offline_strategy_analysis import MemorySignalLogger
 
 
 def test_default_profile_specs_are_unique() -> None:
@@ -122,3 +123,15 @@ def test_build_recommendation_returns_top_profile() -> None:
     recommendation = build_recommendation(leaderboard)
     assert recommendation["status"] == "ok"
     assert recommendation["recommended_profile_id"] == "det_orb_oi_combo_v1"
+
+
+def test_memory_signal_logger_accepts_decision_trace_hook() -> None:
+    logger = MemorySignalLogger(capital_allocated=500000.0)
+    logger.log_decision_trace(
+        {
+            "trace_id": "trace-1",
+            "engine_mode": "deterministic",
+            "decision_mode": "rule_vote",
+            "final_outcome": "allowed",
+        }
+    )
