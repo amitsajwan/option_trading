@@ -141,7 +141,7 @@ def _upsert_doc(collection: Any, *, identity: Optional[dict[str, Any]], doc: dic
     if not identity or not hasattr(collection, "update_one"):
         collection.insert_one(payload)
         return
-    collection.update_one(dict(identity), {"$setOnInsert": payload}, upsert=True)
+    collection.update_one(dict(identity), {"$set": payload}, upsert=True)
 
 
 def _partial_non_empty_strings(*fields: str) -> dict[str, Any]:

@@ -34,9 +34,11 @@ class CollectionStub:
     def update_one(self, filter_doc, update_doc, upsert=False):
         for existing in self.docs:
             if all(existing.get(key) == value for key, value in dict(filter_doc).items()):
+                if "$set" in (update_doc or {}):
+                    existing.update(dict(update_doc.get("$set") or {}))
                 return _UpdateResult(matched_count=1, upserted_id=None)
         if bool(upsert):
-            inserted = dict((update_doc or {}).get("$setOnInsert") or {})
+            inserted = dict((update_doc or {}).get("$set") or (update_doc or {}).get("$setOnInsert") or {})
             self.docs.append(inserted)
             return _UpdateResult(matched_count=0, upserted_id="stub")
         return _UpdateResult(matched_count=0, upserted_id=None)
@@ -196,6 +198,52 @@ class MongoWriterTests(unittest.TestCase):
             self.assertTrue(writer.write_strategy_vote_event({}))
 
         self.assertEqual(len(fake_db[writer.vote_collection_name].docs), 1)
+
+    def test_write_strategy_vote_event_refreshes_run_id_for_reruns(self) -> None:
+        writer = StrategyMongoWriter()
+        fake_db = DbStub()
+        writer._db_handle = lambda: fake_db  # type: ignore[method-assign]
+
+        first = {
+            "event_version": "1.0",
+            "source": "strategy_app",
+            "event_id": "evt-vote-r1",
+            "metadata": {"run_id": "run-old"},
+            "vote": {
+                "snapshot_id": "snap-1",
+                "strategy": "ORB",
+                "trade_date": "2026-03-12",
+                "timestamp": "2026-03-12T09:30:00+05:30",
+                "signal_type": "ENTRY",
+                "direction": "CE",
+                "reason": "vote-old",
+            },
+        }
+        rerun = {
+            "event_version": "1.0",
+            "source": "strategy_app",
+            "event_id": "evt-vote-r2",
+            "metadata": {"run_id": "run-new"},
+            "vote": {
+                "snapshot_id": "snap-1",
+                "strategy": "ORB",
+                "trade_date": "2026-03-12",
+                "timestamp": "2026-03-12T09:30:00+05:30",
+                "signal_type": "ENTRY",
+                "direction": "CE",
+                "reason": "vote-new",
+            },
+        }
+
+        with patch("persistence_app.mongo_writer.parse_strategy_vote_event", side_effect=[first, rerun]):
+            self.assertTrue(writer.write_strategy_vote_event({}))
+            self.assertTrue(writer.write_strategy_vote_event({}))
+
+        self.assertEqual(len(fake_db[writer.vote_collection_name].docs), 1)
+        doc = fake_db[writer.vote_collection_name].docs[0]
+        self.assertEqual(doc["run_id"], "run-new")
+        self.assertEqual(doc["reason"], "vote-new")
+        self.assertEqual(doc["event_id"], "evt-vote-r2")
 
     def test_write_strategy_position_event_derives_actual_outcome(self) -> None:
         writer = StrategyMongoWriter()
