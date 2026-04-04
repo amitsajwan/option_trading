@@ -118,6 +118,87 @@ trim_cr() {
   tr -d '\r'
 }
 
+describe_instance_tags() {
+  gcloud compute instances describe "${TARGET_VM_NAME}" \
+    --project "${PROJECT_ID}" \
+    --zone "${ZONE}" \
+    --format='get(tags.items)' 2>/dev/null | trim_cr || true
+}
+
+ensure_runtime_network_tag() {
+  local current_tags=""
+  current_tags="$(describe_instance_tags)"
+  if printf '%s\n' "${current_tags}" | grep -qw 'option-trading-runtime'; then
+    return 0
+  fi
+  echo "VM ${TARGET_VM_NAME} does not have the option-trading-runtime network tag."
+  echo "Without that tag, the existing dashboard firewall rule for port 8008 will not apply."
+  if prompt_yes_no "Add the option-trading-runtime tag to ${TARGET_VM_NAME} now?" "Y"; then
+    gcloud compute instances add-tags "${TARGET_VM_NAME}" \
+      --project "${PROJECT_ID}" \
+      --zone "${ZONE}" \
+      --tags option-trading-runtime >/dev/null
+    echo "Added option-trading-runtime tag to ${TARGET_VM_NAME}."
+  fi
+}
+
+ensure_remote_host_prereqs() {
+  local preflight=""
+  preflight="$(remote_gcloud "
+    set -e
+    python_bin=\$(command -v python3 || command -v python || true)
+    docker_bin=\$(command -v docker || true)
+    if sudo docker compose version >/dev/null 2>&1; then
+      compose_state='v2'
+    elif command -v docker-compose >/dev/null 2>&1; then
+      compose_state='v1'
+    else
+      compose_state='missing'
+    fi
+    printf 'python=%s\ndocker=%s\ncompose=%s\n' \"\${python_bin:-missing}\" \"\${docker_bin:-missing}\" \"\${compose_state}\"
+  " 2>/dev/null | trim_cr || true)"
+  local missing_python=0
+  local missing_docker=0
+  local missing_compose=0
+  if ! printf '%s\n' "${preflight}" | grep -q '^python=' || printf '%s\n' "${preflight}" | grep -q '^python=missing$'; then
+    missing_python=1
+  fi
+  if ! printf '%s\n' "${preflight}" | grep -q '^docker=' || printf '%s\n' "${preflight}" | grep -q '^docker=missing$'; then
+    missing_docker=1
+  fi
+  if ! printf '%s\n' "${preflight}" | grep -q '^compose=' || printf '%s\n' "${preflight}" | grep -q '^compose=missing$'; then
+    missing_compose=1
+  fi
+  if [ "${missing_python}" = "0" ] && [ "${missing_docker}" = "0" ] && [ "${missing_compose}" = "0" ]; then
+    return 0
+  fi
+
+  echo "Remote host ${TARGET_VM_NAME} is missing required tools:"
+  [ "${missing_python}" = "1" ] && echo "  - python3"
+  [ "${missing_docker}" = "1" ] && echo "  - docker"
+  [ "${missing_compose}" = "1" ] && echo "  - docker compose/docker-compose"
+
+  if ! prompt_yes_no "Install the missing host prerequisites on ${TARGET_VM_NAME} now?" "Y"; then
+    echo "Historical replay requires Python, Docker, and Compose on the target VM." >&2
+    exit 1
+  fi
+
+  remote_gcloud "
+    set -e
+    sudo apt-get update
+    if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+      sudo apt-get install -y python3
+    fi
+    if ! command -v docker >/dev/null 2>&1; then
+      sudo apt-get install -y docker.io
+    fi
+    if ! sudo docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
+      sudo apt-get install -y docker-compose
+    fi
+    sudo systemctl enable --now docker
+  "
+}
+
 verify_ghcr_images() {
   local prefix="$1"
   local tag="$2"
@@ -299,6 +380,17 @@ if [ "${runtime_status}" != "RUNNING" ]; then
   fi
 fi
 
+if [[ "${TARGET_VM_NAME}" == *snapshot-build* ]]; then
+  echo "Replay target ${TARGET_VM_NAME} looks like a snapshot-build host, not the default runtime VM."
+  if ! prompt_yes_no "Continue anyway and let this flow prepare that host for replay?" "N"; then
+    echo "Aborting so you can use the intended runtime VM instead." >&2
+    exit 1
+  fi
+fi
+
+ensure_remote_host_prereqs
+ensure_runtime_network_tag
+
 REMOTE_REPO_ROOT_DEFAULT="$(detect_remote_repo_root)"
 REMOTE_REPO_ROOT_DEFAULT="${REMOTE_REPO_ROOT_DEFAULT:-${REMOTE_REPO_ROOT:-/opt/option_trading}}"
 prompt_var REMOTE_REPO_ROOT "Remote repo checkout path on ${TARGET_VM_NAME}" "${REMOTE_REPO_ROOT_DEFAULT}"
@@ -324,6 +416,7 @@ set_env_key "${ENV_COMPOSE}" "GHCR_IMAGE_PREFIX" "${GHCR_IMAGE_PREFIX}"
 set_env_key "${ENV_COMPOSE}" "APP_IMAGE_TAG" "${APP_IMAGE_TAG}"
 set_env_key "${ENV_COMPOSE}" "IMAGE_SOURCE" "${IMAGE_SOURCE}"
 set_env_key "${ENV_COMPOSE}" "HISTORICAL_TOPIC" "market:snapshot:v1:historical"
+set_env_key "${ENV_COMPOSE}" "SNAPSHOT_PARQUET_BASE" "/app/.data/ml_pipeline/parquet_data"
 
 CURRENT_STRATEGY_ENGINE="$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ENGINE")"
 CURRENT_ML_PURE_RUN_ID="$(read_env_key "${ENV_COMPOSE}" "ML_PURE_RUN_ID")"

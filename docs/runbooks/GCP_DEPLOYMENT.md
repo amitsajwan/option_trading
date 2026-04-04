@@ -444,11 +444,13 @@ Compatibility notes:
 - the helper auto-detects `sudo docker compose` first and falls back to `sudo docker-compose` on older VMs
 - the helper auto-detects a checkout under `/opt/option_trading`, `~/option_trading`, or `~/option_trading_repo`
 - the helper syncs the runtime bundle into that checkout when `.env.compose` is missing
+- the helper auto-installs Python, Docker, and Compose on the target VM when they are missing
 - the helper runs remote preflight on the host Python environment, not inside the `historical_replay` container
 - the helper invokes replay with `--entrypoint python` so both Compose v2 and `docker-compose` v1 handle the extra replay flags correctly
 - with `IMAGE_SOURCE=local_build`, the helper builds the required historical services directly from the remote repo checkout before startup
 - when historical replay is using `ml_pure`, the helper now force-writes `STRATEGY_ROLLOUT_STAGE_HISTORICAL=capped_live`, `STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL=0.25`, `ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=0`, and a dedicated historical guard at `.run/ml_runtime_guard_historical_test.json` so stale `paper` overrides cannot survive across reruns
 - the helpers now wait for `strategy_app_historical` and `strategy_persistence_app_historical` to subscribe before launching replay, because Redis Pub/Sub does not retain historical events for late consumers
+- when the target VM is missing the `option-trading-runtime` network tag, the helper now offers to add it so the dashboard firewall rule applies to port `8008`
 
 If you only remember one thing for replay, remember this:
 

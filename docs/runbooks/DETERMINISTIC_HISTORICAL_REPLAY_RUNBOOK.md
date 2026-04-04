@@ -11,6 +11,23 @@ This flow is for:
 
 This is not the live production path. `deterministic` is the replay and research lane only.
 
+Preferred operator path for a clean GCP replay deployment:
+
+```bash
+bash ./ops/gcp/runtime_lifecycle_interactive.sh
+```
+
+Choose `3. Historical replay`.
+
+That interactive path now:
+
+- verifies or installs Python, Docker, and Compose on the target VM
+- auto-detects `docker compose` versus `docker-compose`
+- force-writes the historical parquet base to `/app/.data/ml_pipeline/parquet_data`
+- offers to add the `option-trading-runtime` VM tag so the existing dashboard firewall rule applies to port `8008`
+
+Use the manual steps below when you need lower-level debugging or recovery.
+
 ## Goal
 
 Start these components together:
