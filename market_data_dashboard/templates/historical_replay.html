@@ -540,6 +540,14 @@
             background: linear-gradient(135deg, var(--accent), #0b4f60);
         }
 
+        .trade-row-active td {
+            background: rgba(13, 106, 120, 0.08);
+        }
+
+        .trade-row-active td:first-child {
+            box-shadow: inset 3px 0 0 rgba(13, 106, 120, 0.78);
+        }
+
         .detail-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -882,7 +890,7 @@
             </div>
         </section>
 
-        <section class="panel" style="margin-bottom:14px;">
+        <section class="panel" id="session-chart-panel" style="margin-bottom:14px;">
             <div class="chart-shell">
                 <div class="chart-main">
                     <div class="chart-header">
@@ -1011,6 +1019,12 @@
         let latestRunState = null;
         let replayPoller = null;
 
+        function focusChartPanel() {
+            const panel = document.getElementById("session-chart-panel");
+            if (!panel) return;
+            panel.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+
         async function navigateToReplayDay(tradeDate) {
             const day = safeText(tradeDate, "").trim();
             if (!day) return;
@@ -1022,6 +1036,7 @@
             if (dateFromInput && !dateFromInput.value) dateFromInput.value = day;
             if (dateToInput && !dateToInput.value) dateToInput.value = day;
             await refresh();
+            focusChartPanel();
         }
 
         function renderTradeDayNavigator(selectedDate) {
@@ -1400,6 +1415,8 @@
 
         function renderTradesTable(payload, dateFrom, dateTo) {
             currentTrades = Array.isArray(payload?.rows) ? payload.rows : [];
+            const params = new URLSearchParams(window.location.search);
+            const selectedDate = safeText(params.get("date"), "");
             document.getElementById("rangeTradeCountValue").textContent = formatNumber(payload?.counts?.closed_trades ?? currentTrades.length);
             document.getElementById("selectedRangeValue").textContent = `${safeText(dateFrom)} to ${safeText(dateTo)}`;
             const note = document.getElementById("tradePanelNote");
@@ -1409,8 +1426,8 @@
                     : `No closed trades were found for the selected replay range ${dateFrom} to ${dateTo}.`;
             }
             renderRows("tradesBody", currentTrades.slice(0, 100).map((row) => `
-                <tr>
-                    <td><button class="trade-day-chip" type="button" data-trade-day="${safeText(row.trade_date_ist)}">${safeText(row.trade_date_ist)}</button></td>
+                <tr class="${safeText(row.trade_date_ist) === selectedDate ? "trade-row-active" : ""}">
+                    <td><button class="trade-day-chip ${safeText(row.trade_date_ist) === selectedDate ? "active" : ""}" type="button" data-trade-day="${safeText(row.trade_date_ist)}">${safeText(row.trade_date_ist)}</button></td>
                     <td>${formatContract(row)}</td>
                     <td>${safeText(row.entry_strategy)}</td>
                     <td>${tradeActionLabel(row)} @ ${formatMoney(row.entry_premium)}</td>
@@ -1431,8 +1448,7 @@
                     });
                 });
             });
-            const params = new URLSearchParams(window.location.search);
-            renderTradeDayNavigator(safeText(params.get("date"), ""));
+            renderTradeDayNavigator(selectedDate);
         }
 
         async function pollRun(runId, dateFrom, dateTo) {
