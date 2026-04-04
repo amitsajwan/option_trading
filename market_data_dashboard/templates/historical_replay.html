@@ -486,6 +486,60 @@
             color: var(--ink);
         }
 
+        .trade-day-panel {
+            margin-bottom: 14px;
+        }
+
+        .trade-day-grid {
+            display: grid;
+            grid-template-columns: 0.85fr 1.15fr;
+            gap: 12px;
+        }
+
+        .day-nav-actions {
+            display: grid;
+            gap: 10px;
+        }
+
+        .day-nav-actions select {
+            min-height: 42px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.92);
+            color: var(--ink);
+            font: inherit;
+        }
+
+        .trade-day-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: flex-start;
+        }
+
+        .trade-day-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 34px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.82);
+            color: var(--ink);
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .trade-day-chip.active {
+            color: #fff;
+            border-color: transparent;
+            background: linear-gradient(135deg, var(--accent), #0b4f60);
+        }
+
         .detail-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -573,6 +627,7 @@
             .status-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .chart-shell { grid-template-columns: 1fr; }
             .context-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .trade-day-grid { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 760px) {
@@ -728,6 +783,32 @@
             </div>
         </section>
 
+        <section class="panel trade-day-panel">
+            <h2>Trade Day Navigator</h2>
+            <div class="trade-day-grid">
+                <div class="day-nav-actions">
+                    <div class="note" id="tradeDayGuideNote">
+                        Use this navigator to jump the session chart to a day that actually has trades for the active run. The chart only shows one selected day at a time.
+                    </div>
+                    <label class="field">
+                        <span class="label">Trade Days In Active Run</span>
+                        <select id="tradeDaySelect">
+                            <option value="">No trade days loaded yet</option>
+                        </select>
+                    </label>
+                    <div class="field-actions">
+                        <button class="btn primary" id="openTradeDayBtn" type="button">Open Trade Day</button>
+                    </div>
+                </div>
+                <div>
+                    <div class="label" style="margin-bottom:10px;">Clickable Trade Dates</div>
+                    <div class="trade-day-chips" id="tradeDayChips">
+                        <span class="trade-day-chip">No trade dates loaded yet</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section class="grid-2 control-grid">
             <div class="panel">
                 <h2>Replay Controls</h2>
@@ -783,7 +864,7 @@
                     <div class="kv"><div class="label">Start</div><div class="value" id="replayStart">--</div></div>
                     <div class="kv"><div class="label">End</div><div class="value" id="replayEnd">--</div></div>
                     <div class="kv"><div class="label">Current Replay Timestamp</div><div class="value" id="replayCurrentTs">--</div></div>
-                    <div class="kv"><div class="label">Collection Counts</div><div class="value" id="replayCounts">--</div></div>
+                    <div class="kv"><div class="label">Selected-Day Collection Counts</div><div class="value" id="replayCounts">--</div></div>
                 </div>
                 <div class="note" style="margin-top:12px;">
                     Historical replay health is based on the selected session day and historical collections. The latest completed multi-day evaluation window is shown in the banner above, and live ingestion is not required for this page.
@@ -929,6 +1010,40 @@
         let currentTrades = [];
         let latestRunState = null;
         let replayPoller = null;
+
+        function navigateToReplayDay(tradeDate) {
+            const day = safeText(tradeDate, "").trim();
+            if (!day) return;
+            const params = new URLSearchParams(window.location.search);
+            params.set("date", day);
+            window.location.assign(`${window.location.pathname}?${params.toString()}`);
+        }
+
+        function renderTradeDayNavigator(selectedDate) {
+            const uniqueDates = [...new Set(currentTrades.map((row) => safeText(row.trade_date_ist, "").trim()).filter(Boolean))].sort().reverse();
+            const select = document.getElementById("tradeDaySelect");
+            const chips = document.getElementById("tradeDayChips");
+            const guide = document.getElementById("tradeDayGuideNote");
+            if (!select || !chips || !guide) return;
+            if (!uniqueDates.length) {
+                select.innerHTML = `<option value="">No trade dates in loaded range</option>`;
+                chips.innerHTML = `<span class="trade-day-chip">No trade dates loaded yet</span>`;
+                guide.textContent = "No trade dates are available for the currently loaded run range.";
+                return;
+            }
+            select.innerHTML = uniqueDates.map((day) => `<option value="${day}" ${day === selectedDate ? "selected" : ""}>${day}</option>`).join("");
+            chips.innerHTML = uniqueDates.map((day) => `
+                <button class="trade-day-chip ${day === selectedDate ? "active" : ""}" type="button" data-trade-day="${day}">
+                    ${day}
+                </button>
+            `).join("");
+            guide.textContent = uniqueDates.includes(selectedDate)
+                ? `Selected chart day ${selectedDate} has trades in this run. Click another trade date to move the session chart.`
+                : `Selected chart day ${selectedDate || "--"} has no trade markers, but this run has ${uniqueDates.length} trade day${uniqueDates.length === 1 ? "" : "s"}. Pick one below to inspect markers on-chart.`;
+            chips.querySelectorAll("[data-trade-day]").forEach((button) => {
+                button.addEventListener("click", () => navigateToReplayDay(button.getAttribute("data-trade-day")));
+            });
+        }
 
         function safeText(value, fallback = "--") {
             if (value === null || value === undefined || value === "") return fallback;
@@ -1286,7 +1401,7 @@
             }
             renderRows("tradesBody", currentTrades.slice(0, 100).map((row) => `
                 <tr>
-                    <td>${safeText(row.trade_date_ist)}</td>
+                    <td><button class="trade-day-chip" type="button" data-trade-day="${safeText(row.trade_date_ist)}">${safeText(row.trade_date_ist)}</button></td>
                     <td>${formatContract(row)}</td>
                     <td>${safeText(row.entry_strategy)}</td>
                     <td>${tradeActionLabel(row)} @ ${formatMoney(row.entry_premium)}</td>
@@ -1300,6 +1415,11 @@
             document.getElementById("sideRangeLeader").textContent = topTrade
                 ? `${safeText(topTrade.trade_date_ist)} | ${safeText(topTrade.entry_strategy)} | ${formatMoney(topTrade.capital_pnl_amount)}`
                 : "No closed trade leader yet.";
+            document.querySelectorAll("#tradesBody [data-trade-day]").forEach((button) => {
+                button.addEventListener("click", () => navigateToReplayDay(button.getAttribute("data-trade-day")));
+            });
+            const params = new URLSearchParams(window.location.search);
+            renderTradeDayNavigator(safeText(params.get("date"), ""));
         }
 
         async function pollRun(runId, dateFrom, dateTo) {
@@ -1532,6 +1652,11 @@
             refresh().catch((err) => {
                 document.getElementById("modeBannerText").textContent = `Refresh failed: ${err}`;
             });
+        });
+
+        document.getElementById("openTradeDayBtn").addEventListener("click", () => {
+            const selected = document.getElementById("tradeDaySelect").value;
+            navigateToReplayDay(selected);
         });
 
         document.getElementById("loadRangeBtn").addEventListener("click", async () => {
