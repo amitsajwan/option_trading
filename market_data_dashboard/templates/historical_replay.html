@@ -919,17 +919,29 @@
             const params = new URLSearchParams(window.location.search);
             const date = params.get("date") || "";
             const requestedInstrument = params.get("instrument") || "";
+            const latestRun = await fetchJson(`/api/strategy/evaluation/runs/latest?dataset=historical&status=completed`).catch(() => null);
+            latestRunState = latestRun;
+            const activeRunId = safeText(params.get("run_id"), "").trim() || safeText(latestRun?.run_id, "").trim();
+            if (activeRunId && params.get("run_id") !== activeRunId) {
+                params.set("run_id", activeRunId);
+                window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
+            }
+
             const qs = new URLSearchParams();
             if (date) qs.set("date", date);
             if (requestedInstrument) qs.set("instrument", requestedInstrument);
-
+            if (activeRunId) qs.set("run_id", activeRunId);
             const suffix = qs.toString() ? `?${qs.toString()}` : "";
-            const [session, replay, latestRun] = await Promise.all([
+
+            const replayQs = new URLSearchParams();
+            if (date) replayQs.set("date", date);
+            if (requestedInstrument) replayQs.set("instrument", requestedInstrument);
+            const replaySuffix = replayQs.toString() ? `?${replayQs.toString()}` : "";
+
+            const [session, replay] = await Promise.all([
                 fetchJson(`/api/historical/replay/session${suffix}`),
-                fetchJson(`/api/historical/replay/status${suffix}`),
-                fetchJson(`/api/strategy/evaluation/runs/latest?dataset=historical&status=completed`).catch(() => null),
+                fetchJson(`/api/historical/replay/status${replaySuffix}`),
             ]);
-            latestRunState = latestRun;
             const effectiveInstrument = requestedInstrument || session?.session?.instrument || "BANKNIFTY-I";
             const [options, depth] = await Promise.all([
                 fetchJson(`/api/market-data/options/${encodeURIComponent(effectiveInstrument)}`).catch(() => ({ status: "unavailable" })),
@@ -979,12 +991,13 @@
             const summaryTo = latestRunTo || session?.session?.date_ist || replay.date_ist || "";
             const summaryFromEncoded = encodeURIComponent(summaryFrom);
             const summaryToEncoded = encodeURIComponent(summaryTo);
-            document.getElementById("evalSummaryLink").href = `/api/strategy/evaluation/summary?dataset=historical&date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}`;
-            document.getElementById("evalTradesLink").href = `/api/strategy/evaluation/trades?dataset=historical&date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}`;
+            const summaryRunSuffix = activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : "";
+            document.getElementById("evalSummaryLink").href = `/api/strategy/evaluation/summary?dataset=historical&date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}${summaryRunSuffix}`;
+            document.getElementById("evalTradesLink").href = `/api/strategy/evaluation/trades?dataset=historical&date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}${summaryRunSuffix}`;
             if (latestRunId) {
                 document.getElementById("evalLatestRunLink").href = `/api/strategy/evaluation/runs/${latestRunId}`;
             }
-            document.getElementById("runIdValue").textContent = latestRunId || "--";
+            document.getElementById("runIdValue").textContent = activeRunId || latestRunId || "--";
             document.getElementById("runStatusValue").innerHTML = `<span class="tag ${toneTag(latestRunStatus || replay.status)}">${safeText(latestRunStatus || replay.status)}</span>`;
             document.getElementById("selectedRangeValue").textContent = `${safeText(summaryFrom)} to ${safeText(summaryTo)}`;
             const dateFromInput = document.getElementById("dateFromInput");
@@ -997,7 +1010,7 @@
                     const votesHint = Number(counts.votes || 0) === 0 && Number(counts.signals || 0) > 0
                         ? " Vote rows were not persisted for this session day, so treat the Signals and Range Trades panels as the source of truth for this replay."
                         : "";
-                    runScopeNote.textContent = `Latest completed run: ${summaryFrom || "--"} to ${summaryTo || "--"} | status ${latestRunStatus || "unknown"} | run ${latestRunId}. The page below stays scoped to the selected session day ${safeText(session?.session?.date_ist || replay.date_ist)}.${votesHint}`;
+                    runScopeNote.textContent = `Latest completed run: ${summaryFrom || "--"} to ${summaryTo || "--"} | status ${latestRunStatus || "unknown"} | run ${activeRunId || latestRunId}. The page below is scoped to the selected session day ${safeText(session?.session?.date_ist || replay.date_ist)} and the active replay run.${votesHint}`;
                 } else {
                     runScopeNote.textContent = `No completed historical run was found. The page below stays scoped to the selected session day ${safeText(session?.session?.date_ist || replay.date_ist)}.`;
                 }

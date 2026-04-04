@@ -53,6 +53,7 @@ class DashboardHistoricalReplayRouter:
         self,
         date: Optional[str] = None,
         instrument: Optional[str] = None,
+        run_id: Optional[str] = None,
         limit_votes: int = 25,
         limit_signals: int = 25,
         limit_trades: int = 20,
@@ -65,6 +66,7 @@ class DashboardHistoricalReplayRouter:
             return service.get_historical_strategy_session(
                 date=date,
                 instrument=instrument,
+                run_id=run_id,
                 limit_votes=limit_votes,
                 limit_signals=limit_signals,
                 limit_trades=limit_trades,

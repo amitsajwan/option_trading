@@ -178,8 +178,10 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
         session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
         instrument = session.get("instrument") if isinstance(session, dict) else None
         date_ist = session.get("date_ist") if isinstance(session, dict) else None
+        run_id = str(kwargs.get("run_id") or "").strip() or None
         payload["replay_status"] = self.get_replay_status(date=date_ist, instrument=instrument)
         payload["latest_completed_run"] = self._latest_completed_run()
+        payload["active_run_id"] = run_id
         payload["mode"] = "historical"
         return payload
 

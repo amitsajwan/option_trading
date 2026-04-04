@@ -279,20 +279,21 @@ class LiveStrategyMonitorService:
             "ml_pure": ml_pure,
         }
 
-    def load_recent_votes(self, date_ist: str, limit: int) -> list[dict[str, Any]]:
-        return self._repo.load_recent_votes(date_ist, int(limit))
+    def load_recent_votes(self, date_ist: str, limit: int, run_id: Optional[str] = None) -> list[dict[str, Any]]:
+        return self._repo.load_recent_votes(date_ist, int(limit), run_id)
 
-    def load_recent_signals(self, date_ist: str, limit: int) -> list[dict[str, Any]]:
-        return self._repo.load_recent_signals(date_ist, int(limit))
+    def load_recent_signals(self, date_ist: str, limit: int, run_id: Optional[str] = None) -> list[dict[str, Any]]:
+        return self._repo.load_recent_signals(date_ist, int(limit), run_id)
 
-    def load_position_map(self, date_ist: str) -> dict[str, dict[str, Any]]:
-        return self._repo.load_position_map(date_ist)
+    def load_position_map(self, date_ist: str, run_id: Optional[str] = None) -> dict[str, dict[str, Any]]:
+        return self._repo.load_position_map(date_ist, run_id)
 
     def load_recent_trace_digests(
         self,
         date_ist: str,
         limit: int,
         *,
+        run_id: Optional[str] = None,
         outcome: Optional[str] = None,
         engine_mode: Optional[str] = None,
         only_blocked: bool = False,
@@ -305,6 +306,7 @@ class LiveStrategyMonitorService:
         return loader(
             date_ist,
             int(limit),
+            run_id=run_id,
             outcome=outcome,
             engine_mode=engine_mode,
             only_blocked=only_blocked,
@@ -743,6 +745,7 @@ class LiveStrategyMonitorService:
         *,
         date: Optional[str] = None,
         instrument: Optional[str] = None,
+        run_id: Optional[str] = None,
         limit_votes: Any = None,
         limit_signals: Any = None,
         limit_trades: Any = None,
@@ -760,22 +763,29 @@ class LiveStrategyMonitorService:
         raw_debug_view = _coerce_bool(debug_view)
         resolved_debug_view = bool(raw_debug_view) if raw_debug_view is not None else False
         resolved_capital = self.resolve_live_capital(initial_capital)
+        resolved_run_id = str(run_id or "").strip() or None
 
         coll_map = self._repo.collections()
         votes_coll = coll_map["votes"]
         signals_coll = coll_map["signals"]
         positions_coll = coll_map["positions"]
         date_match = {"trade_date_ist": str(date_ist)}
+        if resolved_run_id:
+            date_match["run_id"] = resolved_run_id
         signal_map = self._evaluation_service._load_signal_map(
             signals_coll=signals_coll,
             date_match=date_match,
         )
-        position_map = self.load_position_map(date_ist)
-        recent_votes = self.load_recent_votes(date_ist, vote_limit)
-        recent_signals = self.load_recent_signals(date_ist, signal_limit)
+        position_map = self.load_position_map(date_ist, resolved_run_id)
+        recent_votes = self.load_recent_votes(date_ist, vote_limit, resolved_run_id)
+        recent_signals = self.load_recent_signals(date_ist, signal_limit, resolved_run_id)
         recent_trace_digests: list[dict[str, Any]] = []
         if _decision_trace_enabled():
-            recent_trace_digests = self.load_recent_trace_digests(date_ist, resolved_timeline_limit)
+            recent_trace_digests = self.load_recent_trace_digests(
+                date_ist,
+                resolved_timeline_limit,
+                run_id=resolved_run_id,
+            )
         decision_diagnostics = self.build_decision_diagnostics(
             date_ist=date_ist,
             votes_coll=votes_coll,
@@ -811,7 +821,7 @@ class LiveStrategyMonitorService:
                 page_size=trade_limit,
                 sort_by="exit_time",
                 sort_dir="desc",
-                run_id=None,
+                run_id=resolved_run_id,
             )
             recent_trades = list(trades_payload.get("rows") or [])
         except ValueError as exc:
@@ -832,7 +842,7 @@ class LiveStrategyMonitorService:
                 regimes=[],
                 initial_capital=resolved_capital,
                 cost_bps=0.0,
-                run_id=None,
+                run_id=resolved_run_id,
             )
         except ValueError as exc:
             if self._dataset == "historical" and "no completed historical evaluation runs found" in str(exc):

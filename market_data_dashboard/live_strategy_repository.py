@@ -69,9 +69,17 @@ class LiveStrategyRepository:
         coll_name = coll_name or self._default_snapshot_collection
         return self._evaluation_service._db()[coll_name]
 
-    def load_recent_votes(self, date_ist: str, limit: int) -> list[dict[str, Any]]:
+    @staticmethod
+    def _date_run_query(date_ist: str, run_id: str | None = None) -> dict[str, Any]:
+        query: dict[str, Any] = {"trade_date_ist": str(date_ist)}
+        run_text = str(run_id or "").strip()
+        if run_text:
+            query["run_id"] = run_text
+        return query
+
+    def load_recent_votes(self, date_ist: str, limit: int, run_id: str | None = None) -> list[dict[str, Any]]:
         coll = self.collections()["votes"]
-        query = {"trade_date_ist": str(date_ist)}
+        query = self._date_run_query(date_ist, run_id)
         projection = {
             "_id": 0,
             "timestamp": 1,
@@ -126,9 +134,9 @@ class LiveStrategyRepository:
             )
         return rows
 
-    def load_recent_signals(self, date_ist: str, limit: int) -> list[dict[str, Any]]:
+    def load_recent_signals(self, date_ist: str, limit: int, run_id: str | None = None) -> list[dict[str, Any]]:
         coll = self.collections()["signals"]
-        query = {"trade_date_ist": str(date_ist)}
+        query = self._date_run_query(date_ist, run_id)
         projection = {
             "_id": 0,
             "signal_id": 1,
@@ -185,9 +193,9 @@ class LiveStrategyRepository:
             )
         return rows
 
-    def load_position_map(self, date_ist: str) -> dict[str, dict[str, Any]]:
+    def load_position_map(self, date_ist: str, run_id: str | None = None) -> dict[str, dict[str, Any]]:
         coll = self.collections()["positions"]
-        query = {"trade_date_ist": str(date_ist)}
+        query = self._date_run_query(date_ist, run_id)
         projection = {
             "_id": 0,
             "position_id": 1,
@@ -267,6 +275,7 @@ class LiveStrategyRepository:
         date_ist: str,
         limit: int,
         *,
+        run_id: str | None = None,
         outcome: str | None = None,
         engine_mode: str | None = None,
         only_blocked: bool = False,
@@ -276,7 +285,7 @@ class LiveStrategyRepository:
         coll = self.collections().get("traces")
         if coll is None:
             return []
-        query: dict[str, Any] = {"trade_date_ist": str(date_ist)}
+        query = self._date_run_query(date_ist, run_id)
         outcome_text = str(outcome or "").strip()
         if outcome_text:
             query["final_outcome"] = outcome_text
