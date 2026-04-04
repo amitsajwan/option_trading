@@ -265,14 +265,28 @@ class LiveStrategyMonitorService:
     def _policy_row_from_vote_doc(self, doc: dict[str, Any]) -> Optional[dict[str, Any]]:
         return _policy_row_from_vote_doc_module(doc)
 
-    def build_deterministic_diagnostics(self, *, date_ist: str, votes_coll: Any) -> dict[str, Any]:
-        return _build_deterministic_diagnostics_module(date_ist=date_ist, votes_coll=votes_coll)
+    def build_deterministic_diagnostics(
+        self,
+        *,
+        date_ist: str,
+        votes_coll: Any,
+        run_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        return _build_deterministic_diagnostics_module(date_ist=date_ist, votes_coll=votes_coll, run_id=run_id)
 
     def build_ml_pure_diagnostics(self, *, date_ist: str, signals_coll: Any, positions_coll: Any = None) -> dict[str, Any]:
         return _build_ml_pure_diagnostics_module(date_ist=date_ist, signals_coll=signals_coll, positions_coll=positions_coll)
 
-    def build_decision_diagnostics(self, *, date_ist: str, votes_coll: Any, signals_coll: Any, positions_coll: Any = None) -> DecisionDiagnostics:
-        deterministic = self.build_deterministic_diagnostics(date_ist=date_ist, votes_coll=votes_coll)
+    def build_decision_diagnostics(
+        self,
+        *,
+        date_ist: str,
+        votes_coll: Any,
+        signals_coll: Any,
+        positions_coll: Any = None,
+        run_id: Optional[str] = None,
+    ) -> DecisionDiagnostics:
+        deterministic = self.build_deterministic_diagnostics(date_ist=date_ist, votes_coll=votes_coll, run_id=run_id)
         ml_pure = self.build_ml_pure_diagnostics(date_ist=date_ist, signals_coll=signals_coll, positions_coll=positions_coll)
         return {
             "deterministic": deterministic,
@@ -791,6 +805,7 @@ class LiveStrategyMonitorService:
             votes_coll=votes_coll,
             signals_coll=signals_coll,
             positions_coll=positions_coll,
+            run_id=resolved_run_id,
         )
         engine_context = self.infer_engine_context(
             recent_votes=recent_votes,
