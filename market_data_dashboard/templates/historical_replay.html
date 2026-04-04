@@ -401,6 +401,7 @@
                 <button class="btn" id="refreshBtn" type="button">Refresh Now</button>
                 <a class="link primary" href="/">Main Dashboard</a>
                 <a class="link" href="/live/strategy">Live Monitor</a>
+                <a class="link" href="/strategy/evaluation">Evaluation Compare</a>
                 <a class="link" href="/api/historical/replay/session" target="_blank" rel="noopener">Replay API</a>
                 <a class="link" href="/api/health/replay" target="_blank" rel="noopener">Replay Health</a>
             </div>
@@ -415,6 +416,7 @@
                 <strong>Evaluation Shortcuts</strong>
                 <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
                     <a class="link" id="evalLatestRunLink" href="/api/strategy/evaluation/runs/latest?dataset=historical" target="_blank" rel="noopener">Latest Run JSON</a>
+                    <a class="link" id="evalComparePageLink" href="/strategy/evaluation">Compare Page</a>
                     <a class="link" id="evalSummaryLink" href="/api/strategy/evaluation/summary?dataset=historical" target="_blank" rel="noopener">Summary API</a>
                     <a class="link" id="evalTradesLink" href="/api/strategy/evaluation/trades?dataset=historical" target="_blank" rel="noopener">Trades API</a>
                 </div>
@@ -444,7 +446,7 @@
                     Treat stale data and monitoring warnings as degraded trust conditions, not automatic model failure.
                 </div>
             </div>
-            <div class="note">Repo docs: `strategy_app/docs/OPERATOR_PLAYBOOK.md` and `strategy_app/docs/RELEASE_READINESS_CHECKLIST.md`.</div>
+            <div class="note">Repo docs: `strategy_app/docs/OPERATOR_PLAYBOOK.md`, `strategy_app/docs/RELEASE_READINESS_CHECKLIST.md`, and `strategy_app/docs/CURRENT_EVALUATION_BASELINE_2026-04-04.md`.</div>
         </section>
 
         <section class="grid-2 control-grid">
@@ -1038,6 +1040,7 @@
             const summaryRunSuffix = activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : "";
             document.getElementById("evalSummaryLink").href = `/api/strategy/evaluation/summary?dataset=historical&date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}${summaryRunSuffix}`;
             document.getElementById("evalTradesLink").href = `/api/strategy/evaluation/trades?dataset=historical&date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}${summaryRunSuffix}`;
+            document.getElementById("evalComparePageLink").href = `/strategy/evaluation?date_from=${summaryFromEncoded}&date_to=${summaryToEncoded}${activeRunId ? `&run_id=${encodeURIComponent(activeRunId)}` : ""}`;
             if (latestRunId) {
                 document.getElementById("evalLatestRunLink").href = `/api/strategy/evaluation/runs/${latestRunId}`;
             }

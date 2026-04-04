@@ -65,6 +65,7 @@ Operator/release docs for this surface:
 
 - [`../strategy_app/docs/OPERATOR_PLAYBOOK.md`](../strategy_app/docs/OPERATOR_PLAYBOOK.md)
 - [`../strategy_app/docs/RELEASE_READINESS_CHECKLIST.md`](../strategy_app/docs/RELEASE_READINESS_CHECKLIST.md)
+- [`../strategy_app/docs/CURRENT_EVALUATION_BASELINE_2026-04-04.md`](../strategy_app/docs/CURRENT_EVALUATION_BASELINE_2026-04-04.md)
 
 Environment used by dashboard:
 
