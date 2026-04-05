@@ -69,11 +69,12 @@ def _ranking_tuple(row: Dict[str, Any]) -> tuple[float, ...]:
     return (
         float(1 if bool(row.get("publishable")) else 0),
         float(1 if bool(stage2_cv.get("gate_passed")) else 0),
-        _metric_float(stage2_cv.get("roc_auc"), default=float("-inf")),
         -_metric_float(stage2_cv.get("brier"), default=float("inf")),
+        _metric_float(stage2_cv.get("roc_auc"), default=float("-inf")),
         _metric_float(combined.get("profit_factor"), default=float("-inf")),
         _metric_float(combined.get("net_return_sum"), default=float("-inf")),
         -_metric_float(combined.get("max_drawdown_pct"), default=float("inf")),
+        -_metric_float(stage2_cv.get("roc_auc_drift_half_split"), default=float("inf")),
     )
 
 

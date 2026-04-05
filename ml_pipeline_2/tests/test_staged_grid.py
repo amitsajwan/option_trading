@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from ml_pipeline_2.catalog import feature_set_specs_by_name
 from ml_pipeline_2.contracts.manifests import load_and_resolve_manifest
 from ml_pipeline_2.experiment_control.coordination import CoordinationError
 from ml_pipeline_2.staged import grid as grid_module
@@ -559,3 +560,32 @@ def test_staged_grid_resume_reuses_completed_lane_summaries(tmp_path: Path, monk
 
     assert resumed["grid_run_id"] == first["grid_run_id"]
     assert calls == calls_after_first
+
+
+def test_midday_redesign_feature_sets_are_registered() -> None:
+    specs = feature_set_specs_by_name()
+    assert "fo_midday_asymmetry" in specs
+    assert "fo_midday_expiry_interactions" in specs
+    assert "fo_midday_time_aware_plus_oi_iv" in specs
+
+
+def test_midday_redesign_grid_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_grid.stage2_midday_redesign_v1.json"),
+        validate_paths=False,
+    )
+
+    assert resolved["outputs"]["run_name"] == "staged_grid_stage2_midday_redesign_v1"
+    assert [run["run_id"] for run in resolved["grid"]["runs"]] == [
+        "midday_time_aware_baseline",
+        "midday_strict_winner_v2",
+        "midday_stricter_abstain",
+        "midday_iv_oi_plus_time",
+        "midday_expiry_interactions",
+        "midday_asymmetry_pool",
+    ]
+    assert resolved["grid"]["runs"][1]["reuse_stage1_from"] == "midday_time_aware_baseline"
+    assert (
+        resolved["grid"]["runs"][3]["overrides"]["catalog"]["feature_sets_by_stage"]["stage2"]
+        == ["fo_midday_time_aware_plus_oi_iv"]
+    )

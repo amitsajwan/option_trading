@@ -960,6 +960,54 @@ def test_combined_policy_evaluation_keeps_full_rows_total_when_stage3_scores_are
     assert selected["snapshot_id"].tolist() == ["snap_a", "snap_b"]
 
 
+def test_apply_stage2_label_filter_stricter_abstain_reduces_rows_deterministically() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:00:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0030,
+                "best_pe_net_return_after_cost": -0.0005,
+                "direction_return_edge_after_cost": 0.0035,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:01:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0020,
+                "best_pe_net_return_after_cost": 0.0001,
+                "direction_return_edge_after_cost": 0.0019,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:02:00"),
+                "direction_label": "PE",
+                "best_ce_net_return_after_cost": 0.0002,
+                "best_pe_net_return_after_cost": 0.0025,
+                "direction_return_edge_after_cost": 0.0023,
+            },
+        ]
+    )
+
+    filtered, meta = staged_pipeline._apply_stage2_label_filter(  # type: ignore[attr-defined]
+        frame,
+        {
+            "training": {
+                "stage2_label_filter": {
+                    "enabled": True,
+                    "min_directional_edge_after_cost": 0.0018,
+                    "require_positive_winner_after_cost": True,
+                    "max_opposing_return_after_cost": -0.0004,
+                }
+            }
+        },
+    )
+
+    assert len(filtered) == 1
+    assert filtered["direction_label"].tolist() == ["CE"]
+    assert meta["rows_before"] == 3
+    assert meta["rows_after"] == 1
+    assert meta["rows_dropped"] == 2
+
+
 def test_vectorized_policy_selection_matches_legacy_loops() -> None:
     utility, stage1_scores, stage2_scores, stage3_scores = _policy_fixture()
     stage1_policy_cfg = {"threshold_grid": [0.45, 0.55, 0.65]}

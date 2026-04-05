@@ -9,11 +9,11 @@ This is the post-discovery Stage 2 grid. It exists because the broader Stage 2 s
 - `LATE_SESSION` trained but failed badly on Stage 2 quality
 - `MIDDAY` was the only regime that cleared Stage 2 ROC-AUC
 
-The current best baseline is `midday_strict_winner`. It still fails publication because of Brier, so the next research cycle should optimize only for `MIDDAY` probability quality.
+The current best baseline from that discovery step is now superseded by `midday_time_aware_pool`. It still fails publication because of Brier, so the next research cycle should optimize only for `MIDDAY` probability quality.
 
 ## Baseline
 
-Use `midday_strict_winner` from the previous grid as the evidence anchor:
+Use the completed `MIDDAY` grid as the evidence anchor:
 
 - validation Stage 2 ROC-AUC: about `0.577`
 - validation Stage 2 Brier: about `0.252`
@@ -60,7 +60,7 @@ Promote only if a run achieves:
 - acceptable drift
 - non-zero robustness gate pass rate
 
-If AUC remains strong but Brier stays around `0.25`, the next move is not more grid search. The next move is a `MIDDAY` Stage 2 label/view redesign.
+If AUC remains strong but Brier stays around `0.25`, the next move is not more broad grid search. The next move is the focused redesign batch documented in [stage2_midday_redesign.md](/c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage2_midday_redesign.md).
 
 ## Recommended Command
 
