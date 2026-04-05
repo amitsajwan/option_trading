@@ -509,8 +509,9 @@ def run_tournament(
         recommendation=recommendation,
     )
 
-    if baseline_trade_frames:
-        baseline_group = _group_table(pd.concat(baseline_trade_frames, ignore_index=True), ["entry_strategy"])
+    non_empty_baseline_frames = [frame for frame in baseline_trade_frames if isinstance(frame, pd.DataFrame) and not frame.empty]
+    if non_empty_baseline_frames:
+        baseline_group = _group_table(pd.concat(non_empty_baseline_frames, ignore_index=True), ["entry_strategy"])
         baseline_group.to_csv(output_dir / "baseline_by_strategy.csv", index=False)
 
     return {
