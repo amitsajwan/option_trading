@@ -6,6 +6,12 @@ import logging
 from typing import Optional
 
 from ..contracts import BaseStrategy, PositionContext
+from .profiles import (
+    PRODUCTION_DEFAULT_PROFILE_ID,
+    get_exit_strategies,
+    get_regime_entry_map,
+    known_profile_ids,
+)
 from .regime import Regime
 from .strategies.all_strategies import (
     EMAcrossoverStrategy,
@@ -41,44 +47,13 @@ class StrategyRouter:
             self._oi.name: self._oi,
             self._prev_day.name: self._prev_day,
         }
-
-        self._entry_sets: dict[Regime, list[BaseStrategy]] = {
-            Regime.TRENDING: [
-                self._iv_filter,
-                self._orb,
-                self._oi,
-                self._prev_day,
-            ],
-            Regime.SIDEWAYS: [
-                self._iv_filter,
-                self._vwap,
-                self._oi,
-            ],
-            Regime.EXPIRY: [
-                self._iv_filter,
-                self._vwap,
-            ],
-            Regime.PRE_EXPIRY: [
-                self._iv_filter,
-                self._orb,
-                self._oi,
-            ],
-            Regime.HIGH_VOL: [
-                self._iv_filter,
-                self._high_vol_orb,
-            ],
-            Regime.AVOID: [],
-        }
-        self._exit_strategies: list[BaseStrategy] = [
-            self._orb,
-            self._vwap,
-            self._oi,
-        ]
         self._cross_exit_helpers: dict[tuple[str, str], set[str]] = {
             ("PRE_EXPIRY", "OI_BUILDUP"): {"ORB"},
         }
-        self._default_profile_id = "det_core_v2"
+        self._default_profile_id = PRODUCTION_DEFAULT_PROFILE_ID
         self._strategy_profile_id = self._default_profile_id
+        self._entry_sets = self._materialize_entry_sets(get_regime_entry_map(self._default_profile_id))
+        self._exit_strategies = self._materialize_exit_strategies(get_exit_strategies(self._default_profile_id))
         self._log_configuration()
 
     def get_strategies(self, regime: Regime, position: Optional[PositionContext]) -> list[BaseStrategy]:
@@ -176,6 +151,19 @@ class StrategyRouter:
     def available_strategy_names(self) -> list[str]:
         return sorted(self._strategy_registry.keys())
 
+    def _materialize_entry_sets(self, regime_entry_map: dict[str, list[str]]) -> dict[Regime, list[BaseStrategy]]:
+        return {
+            regime: [
+                self._strategy_registry[name]
+                for name in regime_entry_map.get(regime.value, [])
+                if name in self._strategy_registry
+            ]
+            for regime in Regime
+        }
+
+    def _materialize_exit_strategies(self, names: list[str]) -> list[BaseStrategy]:
+        return [self._strategy_registry[name] for name in names if name in self._strategy_registry]
+
     def configure(self, payload: Optional[dict[str, object]]) -> None:
         """Apply router overrides from run metadata."""
         if not isinstance(payload, dict):
@@ -183,15 +171,9 @@ class StrategyRouter:
         profile_id = str(payload.get("strategy_profile_id") or "").strip()
         if profile_id:
             self._strategy_profile_id = profile_id
-        default_entry = {
-            Regime.TRENDING: [self._iv_filter.name, self._orb.name, self._oi.name, self._prev_day.name],
-            Regime.SIDEWAYS: [self._iv_filter.name, self._vwap.name, self._oi.name],
-            Regime.EXPIRY: [self._iv_filter.name, self._vwap.name],
-            Regime.PRE_EXPIRY: [self._iv_filter.name, self._orb.name, self._oi.name],
-            Regime.HIGH_VOL: [self._iv_filter.name, self._high_vol_orb.name],
-            Regime.AVOID: [],
-        }
-        default_exit = [self._orb.name, self._vwap.name, self._oi.name]
+        base_profile = profile_id if profile_id in known_profile_ids() else PRODUCTION_DEFAULT_PROFILE_ID
+        default_entry = get_regime_entry_map(base_profile)
+        default_exit = get_exit_strategies(base_profile)
         iv_filter_payload = payload.get("iv_filter_config")
         if isinstance(iv_filter_payload, dict):
             self._iv_filter.configure(iv_filter_payload)
@@ -233,7 +215,7 @@ class StrategyRouter:
 
         new_entry_sets: dict[Regime, list[BaseStrategy]] = {}
         for regime in (Regime.TRENDING, Regime.SIDEWAYS, Regime.EXPIRY, Regime.PRE_EXPIRY, Regime.HIGH_VOL, Regime.AVOID):
-            names = regime_entry_map.get(regime, list(default_entry.get(regime, [])))
+            names = regime_entry_map.get(regime, list(default_entry.get(regime.value, [])))
             if enabled_entry is not None:
                 names = [name for name in names if name in enabled_entry]
             new_entry_sets[regime] = [self._strategy_registry[name] for name in names if name in self._strategy_registry]
@@ -242,5 +224,5 @@ class StrategyRouter:
         if configured_exit:
             self._exit_strategies = [self._strategy_registry[name] for name in configured_exit]
         else:
-            self._exit_strategies = [self._strategy_registry[name] for name in default_exit]
+            self._exit_strategies = [self._strategy_registry[name] for name in default_exit if name in self._strategy_registry]
         self._log_configuration()

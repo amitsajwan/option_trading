@@ -18,6 +18,11 @@ from snapshot_app.historical.snapshot_access import (
     SNAPSHOT_INPUT_MODE_CANONICAL,
     require_snapshot_access,
 )
+from strategy_app.engines.profiles import (
+    PROFILE_DET_CORE_V2,
+    PROFILE_DET_PROD_V1,
+    build_run_metadata,
+)
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
 from strategy_app.tools.offline_strategy_analysis import MemorySignalLogger, _group_table, _summary
 
@@ -57,10 +62,10 @@ def _router_config(
 def default_profile_specs() -> list[DeterministicProfileSpec]:
     return [
         DeterministicProfileSpec(
-            profile_id="det_core_v2",
+            profile_id=PROFILE_DET_CORE_V2,
             label="Core V2 Baseline",
-            description="Current default deterministic profile as the baseline comparator.",
-            metadata={"strategy_profile_id": "det_core_v2"},
+            description="Current internal comparison baseline.",
+            metadata=build_run_metadata(PROFILE_DET_CORE_V2),
         ),
         DeterministicProfileSpec(
             profile_id="det_orb_only_v1",
@@ -123,32 +128,10 @@ def default_profile_specs() -> list[DeterministicProfileSpec]:
             },
         ),
         DeterministicProfileSpec(
-            profile_id="det_orb_oi_safe_v1",
-            label="ORB + OI Safe",
-            description="ORB + OI combo with tighter risk for production stability testing.",
-            metadata={
-                "strategy_profile_id": "det_orb_oi_safe_v1",
-                "router_config": _router_config(
-                    profile_id="det_orb_oi_safe_v1",
-                    regime_entry_map={
-                        "TRENDING": ["IV_FILTER", "ORB", "OI_BUILDUP"],
-                        "SIDEWAYS": ["IV_FILTER", "OI_BUILDUP"],
-                        "EXPIRY": ["IV_FILTER"],
-                        "PRE_EXPIRY": ["IV_FILTER", "ORB", "OI_BUILDUP"],
-                        "HIGH_VOL": ["IV_FILTER", "HIGH_VOL_ORB"],
-                        "AVOID": [],
-                    },
-                    exit_strategies=["ORB", "OI_BUILDUP", "HIGH_VOL_ORB"],
-                ),
-                "risk_config": {
-                    "stop_loss_pct": 0.20,
-                    "target_pct": 0.80,
-                    "trailing_enabled": True,
-                    "trailing_activation_pct": 0.10,
-                    "trailing_offset_pct": 0.05,
-                    "trailing_lock_breakeven": True,
-                },
-            },
+            profile_id=PROFILE_DET_PROD_V1,
+            label="ORB + OI Safe (Production)",
+            description="Promoted production baseline sourced from the shared profile registry.",
+            metadata=build_run_metadata(PROFILE_DET_PROD_V1),
         ),
         DeterministicProfileSpec(
             profile_id="det_ema_legacy_v1",
@@ -295,7 +278,7 @@ def _window_result_rows(
     window_df = pd.DataFrame(rows)
     if window_df.empty:
         return window_df, trade_frames
-    baseline_row = window_df[window_df["profile_id"] == "det_core_v2"]
+    baseline_row = window_df[window_df["profile_id"] == PROFILE_DET_CORE_V2]
     baseline_return = float(baseline_row.iloc[0]["net_capital_return_pct"]) if not baseline_row.empty else 0.0
     baseline_dd = float(baseline_row.iloc[0]["max_drawdown_pct"]) if not baseline_row.empty else 0.0
     window_df["vs_baseline_return_pct"] = window_df["net_capital_return_pct"].astype(float) - baseline_return
@@ -472,7 +455,7 @@ def run_tournament(
         if window_df.empty:
             continue
         all_window_results.append(window_df)
-        baseline_trades = trade_frames.get("det_core_v2")
+        baseline_trades = trade_frames.get(PROFILE_DET_CORE_V2)
         if isinstance(baseline_trades, pd.DataFrame) and not baseline_trades.empty:
             baseline_trade_frames.append(baseline_trades.copy())
         safe_label = window.label.replace(":", "_").replace("/", "_")

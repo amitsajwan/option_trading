@@ -12,6 +12,7 @@ from contracts_app import (
 )
 
 from ..contracts import StrategyVote, TradeSignal
+from ..engines.profiles import PRODUCTION_DEFAULT_PROFILE_ID
 
 
 def _safe_float(value: Any) -> Optional[float]:
@@ -139,7 +140,7 @@ class DecisionFieldResolver:
             return "ml_pure_staged_v1"
         if engine_mode == "ml_pure":
             return "ml_pure_staged_v1"
-        return "det_core_v2"
+        return PRODUCTION_DEFAULT_PROFILE_ID
 
     def vote_decision_metrics(self, vote: StrategyVote) -> dict[str, float]:
         raw_signals = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}

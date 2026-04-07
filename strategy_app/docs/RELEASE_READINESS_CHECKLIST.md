@@ -49,6 +49,7 @@ Minimum release gate for:
 - no duplicate consumer crash loop
 - replay emitted non-zero events
 - persistence wrote votes/signals/positions for the new run
+- expected deterministic `strategy_profile_id` for production freeze: `det_prod_v1`
 
 ## Deployment
 

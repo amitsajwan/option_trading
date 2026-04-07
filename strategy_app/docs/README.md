@@ -177,7 +177,7 @@ Vote/signal records now include additive engine-aware fields for replay comparab
 - `decision_reason_code`: normalized decision code (`below_threshold`, `low_edge_conflict`, `feature_stale`, etc.)
 - `decision_metrics`: optional metrics payload (`ce_prob`, `pe_prob`, thresholds, edge, confidence)
 - `strategy_family_version`: `DET_V1|ML_PURE_STAGED_V1`
-- `strategy_profile_id`: versioned strategy set identifier (default deterministic profile: `det_core_v2`)
+- `strategy_profile_id`: versioned strategy set identifier (default deterministic profile: `det_prod_v1`; comparison baseline: `det_core_v2`)
 
 For non-default deterministic router configurations, set `strategy_profile_id` in run metadata (or `--strategy-profile-id`) so comparisons remain lane/profile-consistent.
 

@@ -22,7 +22,7 @@ The following are now verified on current code:
 - summary, trades, and session are all `run_id` scoped
 - deterministic diagnostics are `run_id` scoped
 - replay UI, operator docs, and evaluation compare UI are now aligned
-- default deterministic profile is `det_core_v2`
+- default deterministic profile is now `det_prod_v1`
 - verified replay/session surfaces no longer mix old `det_core_v1` rows into current `det_core_v2` review
 
 ## Clean Verification Run
@@ -58,6 +58,21 @@ This run is enough to prove:
 - `det_core_v2` emits and persists deterministic votes correctly
 - owner-centric ORB trailing exits are being labeled and surfaced correctly
 - product-facing review can now happen from dashboard UI rather than raw curl output
+
+## Production Freeze Update
+
+Current deterministic production decision:
+
+- tournament winner across quarterly windows: safe `ORB + OI_BUILDUP`
+- risk sensitivity winner: `20%` stop loss + trailing enabled
+- frozen production profile id: `det_prod_v1`
+- retained internal comparison baseline: `det_core_v2`
+
+This means:
+
+- `det_prod_v1` is the deterministic production baseline
+- `det_core_v2` remains available for replay/regression comparison
+- older clean replay verification runs are still valid for plumbing truth, but not the final production default decision
 
 ## What This Does Not Prove
 

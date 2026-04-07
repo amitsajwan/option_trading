@@ -18,6 +18,11 @@ from snapshot_app.historical.snapshot_access import (
     SNAPSHOT_INPUT_MODE_CANONICAL,
     require_snapshot_access,
 )
+from strategy_app.engines.profiles import (
+    PROFILE_DET_PROD_V1,
+    build_router_config,
+    get_regime_entry_map,
+)
 from strategy_app.tools.deterministic_profile_tournament import (
     DEFAULT_CAPITAL,
     DeterministicProfileSpec,
@@ -31,22 +36,11 @@ from strategy_app.tools.offline_strategy_analysis import _group_table
 
 DEFAULT_PARQUET_BASE = DEFAULT_HISTORICAL_PARQUET_BASE
 DEFAULT_OUTPUT_ROOT = Path(".run/deterministic_risk_sensitivity")
-DEFAULT_BASE_PROFILE_ID = "det_orb_oi_safe_v1"
+DEFAULT_BASE_PROFILE_ID = PROFILE_DET_PROD_V1
 
 
 def default_winner_variants() -> list[DeterministicProfileSpec]:
-    base_router = {
-        "strategy_profile_id": "det_orb_oi_safe_v1",
-        "regime_entry_map": {
-            "TRENDING": ["IV_FILTER", "ORB", "OI_BUILDUP"],
-            "SIDEWAYS": ["IV_FILTER", "OI_BUILDUP"],
-            "EXPIRY": ["IV_FILTER"],
-            "PRE_EXPIRY": ["IV_FILTER", "ORB", "OI_BUILDUP"],
-            "HIGH_VOL": ["IV_FILTER", "HIGH_VOL_ORB"],
-            "AVOID": [],
-        },
-        "exit_strategies": ["ORB", "OI_BUILDUP", "HIGH_VOL_ORB"],
-    }
+    base_router = build_router_config(PROFILE_DET_PROD_V1)
     variants: list[DeterministicProfileSpec] = []
     for stop in (0.15, 0.20, 0.25, 0.30):
         stop_text = f"{int(stop * 100):02d}"
@@ -69,7 +63,11 @@ def default_winner_variants() -> list[DeterministicProfileSpec]:
                     description=f"Winner profile sensitivity variant: stop={stop:.0%}, trailing={trailing_enabled}.",
                     metadata={
                         "strategy_profile_id": profile_id,
-                        "router_config": base_router,
+                        "router_config": {
+                            "strategy_profile_id": profile_id,
+                            "regime_entry_map": get_regime_entry_map(PROFILE_DET_PROD_V1),
+                            "exit_strategies": list(base_router["exit_strategies"]),
+                        },
                         "risk_config": risk_config,
                     },
                 )

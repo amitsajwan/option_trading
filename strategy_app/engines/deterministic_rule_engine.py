@@ -40,6 +40,7 @@ from .decision_annotation import (
     derive_reason_code,
 )
 from .entry_policy import EntryPolicy, EntryPolicyDecision, LongOptionEntryPolicy, PolicyConfig
+from .profiles import PRODUCTION_DEFAULT_PROFILE_ID
 from .regime import RegimeClassifier, RegimeSignal
 from .snapshot_accessor import SnapshotAccessor
 from .strategy_router import StrategyRouter
@@ -48,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 MIN_ENTRY_CONFIDENCE = 0.65
 EXIT_CONFIDENCE = 0.65
-DEFAULT_STRATEGY_PROFILE_ID = "det_core_v2"
+DEFAULT_STRATEGY_PROFILE_ID = PRODUCTION_DEFAULT_PROFILE_ID
 
 
 class DeterministicRuleEngine(StrategyEngine):
