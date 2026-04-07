@@ -21,6 +21,7 @@ _RISK_PROFILE_PRESETS: dict[str, dict[str, float | int | str]] = {
         "RISK_LOT_BUDGET_USES_LOT_SIZE": 1,
         "RISK_CONFIDENCE_FLOOR": 0.65,
         "RISK_MAX_DAILY_LOSS_PCT": 0.02,
+        "RISK_MAX_SESSION_TRADES": 6,
         "RISK_MAX_CONSECUTIVE_LOSSES": 3,
         "RISK_MAX_LOTS_PER_TRADE": 20,
         "RISK_PER_TRADE_PCT": 0.005,
@@ -78,6 +79,7 @@ class RiskManager:
 
     def _load_config(self) -> None:
         self._context.max_daily_loss_pct = self._cfg_float("RISK_MAX_DAILY_LOSS_PCT", 0.02)
+        self._context.max_session_trades = self._cfg_int("RISK_MAX_SESSION_TRADES", 6)
         self._context.max_consecutive_losses = self._cfg_int("RISK_MAX_CONSECUTIVE_LOSSES", 3)
         self._context.max_lots_per_trade = self._cfg_int("RISK_MAX_LOTS_PER_TRADE", 5)
         self._context.risk_per_trade_pct = self._cfg_float("RISK_PER_TRADE_PCT", 0.005)
@@ -100,6 +102,7 @@ class RiskManager:
     def is_halted(self) -> bool:
         return bool(
             self._context.daily_loss_breached
+            or self._context.session_trade_cap_breached
             or self._context.weekly_loss_breached
             or self._context.vix_spike_halt
         )
@@ -111,6 +114,25 @@ class RiskManager:
     @property
     def post_halt_resume_boost_available(self) -> bool:
         return bool(self._context.post_halt_resume_boost_available)
+
+    @property
+    def halt_reason(self) -> Optional[str]:
+        ctx = self._context
+        if ctx.daily_loss_breached:
+            return "daily_loss_cap"
+        if ctx.session_trade_cap_breached:
+            return "session_trade_cap"
+        if ctx.weekly_loss_breached:
+            return "weekly_loss_cap"
+        if ctx.vix_spike_halt:
+            return "vix_spike_halt"
+        return None
+
+    @property
+    def pause_reason(self) -> Optional[str]:
+        if self._context.consecutive_loss_limit:
+            return "consecutive_loss_pause"
+        return None
 
     def consume_post_halt_resume_boost(self) -> bool:
         if not self._context.post_halt_resume_boost_available:
@@ -124,6 +146,7 @@ class RiskManager:
         self._context = RiskContext(
             capital_allocated=old.capital_allocated,
             max_daily_loss_pct=old.max_daily_loss_pct,
+            max_session_trades=old.max_session_trades,
             max_consecutive_losses=old.max_consecutive_losses,
             max_lots_per_trade=old.max_lots_per_trade,
             risk_per_trade_pct=old.risk_per_trade_pct,
@@ -160,6 +183,15 @@ class RiskManager:
                 )
             ctx.daily_loss_breached = True
 
+        if ctx.max_session_trades > 0 and ctx.session_trade_count >= ctx.max_session_trades:
+            if not ctx.session_trade_cap_breached:
+                logger.warning(
+                    "session trade cap reached trades=%d limit=%d",
+                    ctx.session_trade_count,
+                    ctx.max_session_trades,
+                )
+            ctx.session_trade_cap_breached = True
+
         if ctx.consecutive_losses >= ctx.max_consecutive_losses:
             if not ctx.consecutive_loss_limit:
                 logger.warning("consecutive loss limit reached count=%d", ctx.consecutive_losses)
@@ -171,6 +203,7 @@ class RiskManager:
         ctx = self._context
         trade_pnl_value = pnl_pct * entry_premium * lots * BANKNIFTY_LOT_SIZE
         pnl_as_capital_pct = (trade_pnl_value / ctx.capital_allocated) if ctx.capital_allocated > 0 else 0.0
+        ctx.session_trade_count += 1
         ctx.session_realised_pnl += pnl_as_capital_pct
 
         if pnl_pct > 0:
@@ -181,13 +214,17 @@ class RiskManager:
             ctx.session_loss_count += 1
             ctx.consecutive_losses += 1
 
+        if ctx.max_session_trades > 0 and ctx.session_trade_count >= ctx.max_session_trades:
+            ctx.session_trade_cap_breached = True
+
         logger.info(
-            "trade result pnl=%.2f%% realized_session=%.2f%% wins=%d losses=%d consec=%d",
+            "trade result pnl=%.2f%% realized_session=%.2f%% wins=%d losses=%d consec=%d trades=%d",
             pnl_pct * 100.0,
             ctx.session_realised_pnl * 100.0,
             ctx.session_win_count,
             ctx.session_loss_count,
             ctx.consecutive_losses,
+            ctx.session_trade_count,
         )
 
     def compute_lots(self, *, entry_premium: float, stop_loss_pct: float = 0.40, confidence: float = 1.0) -> int:

@@ -25,11 +25,13 @@ class ORBStrategy(BaseStrategy):
     def __init__(
         self,
         *,
-        vol_ratio_min: float = 1.5,
-        pcr_bull_min: float = 0.90,
-        pcr_bear_max: float = 1.10,
-        max_entry_minute: int = 135,
-        confidence_base: float = 0.75,
+        vol_ratio_min: float = 1.8,
+        pcr_bull_min: float = 1.00,
+        pcr_bear_max: float = 1.00,
+        max_entry_minute: int = 105,
+        confidence_base: float = 0.78,
+        breakout_buffer_pct: float = 0.0005,
+        min_r5m_confirm: float = 0.0008,
         exit_buffer_pct: float = 0.002,
     ) -> None:
         self._vol_ratio_min = vol_ratio_min
@@ -37,6 +39,8 @@ class ORBStrategy(BaseStrategy):
         self._pcr_bear_max = pcr_bear_max
         self._max_entry_minute = max_entry_minute
         self._confidence_base = confidence_base
+        self._breakout_buffer_pct = max(0.0, float(breakout_buffer_pct))
+        self._min_r5m_confirm = max(0.0, float(min_r5m_confirm))
         self._exit_buffer_pct = max(0.0, float(exit_buffer_pct))
 
     def evaluate(
@@ -57,24 +61,25 @@ class ORBStrategy(BaseStrategy):
         close = snap.fut_close
         vol_ratio = snap.vol_ratio
         pcr = snap.pcr
+        r5m = snap.fut_return_5m
         orh = snap.orh
         orl = snap.orl
-        if close is None or orh is None or orl is None:
+        if close is None or orh is None or orl is None or r5m is None:
             return None
 
-        if snap.orh_broken and close > orh:
+        if snap.orh_broken and close > (orh * (1.0 + self._breakout_buffer_pct)) and r5m >= self._min_r5m_confirm:
+            if vol_ratio is None or vol_ratio < self._vol_ratio_min:
+                return None
+            if pcr is None or pcr < self._pcr_bull_min:
+                return None
             confidence = self._confidence_base
-            reasons = [f"close={close:.0f}>orh={orh:.0f}"]
-            if vol_ratio is not None and vol_ratio >= self._vol_ratio_min:
+            reasons = [f"close={close:.0f}>orh={orh:.0f}", f"r5m={r5m:.4f}"]
+            if vol_ratio >= self._vol_ratio_min:
                 confidence += 0.10
                 reasons.append(f"vol_ratio={vol_ratio:.2f}")
-            else:
-                confidence -= 0.15
-            if pcr is not None and pcr >= self._pcr_bull_min:
+            if pcr >= self._pcr_bull_min:
                 confidence += 0.05
                 reasons.append(f"pcr={pcr:.2f}")
-            else:
-                confidence -= 0.10
             if confidence >= 0.50:
                 return self._entry_vote(
                     snap,
@@ -82,22 +87,22 @@ class ORBStrategy(BaseStrategy):
                     confidence=min(1.0, confidence),
                     reason="ORB_UP: " + ", ".join(reasons),
                     premium=snap.atm_ce_close,
-                    raw_signals={"close": close, "orh": orh, "orl": orl, "vol_ratio": vol_ratio, "pcr": pcr},
+                    raw_signals={"close": close, "orh": orh, "orl": orl, "vol_ratio": vol_ratio, "pcr": pcr, "r5m": r5m},
                 )
 
-        if snap.orl_broken and close < orl:
+        if snap.orl_broken and close < (orl * (1.0 - self._breakout_buffer_pct)) and r5m <= -self._min_r5m_confirm:
+            if vol_ratio is None or vol_ratio < self._vol_ratio_min:
+                return None
+            if pcr is None or pcr > self._pcr_bear_max:
+                return None
             confidence = self._confidence_base
-            reasons = [f"close={close:.0f}<orl={orl:.0f}"]
-            if vol_ratio is not None and vol_ratio >= self._vol_ratio_min:
+            reasons = [f"close={close:.0f}<orl={orl:.0f}", f"r5m={r5m:.4f}"]
+            if vol_ratio >= self._vol_ratio_min:
                 confidence += 0.10
                 reasons.append(f"vol_ratio={vol_ratio:.2f}")
-            else:
-                confidence -= 0.15
-            if pcr is not None and pcr <= self._pcr_bear_max:
+            if pcr <= self._pcr_bear_max:
                 confidence += 0.05
                 reasons.append(f"pcr={pcr:.2f}")
-            else:
-                confidence -= 0.10
             if confidence >= 0.50:
                 return self._entry_vote(
                     snap,
@@ -105,7 +110,7 @@ class ORBStrategy(BaseStrategy):
                     confidence=min(1.0, confidence),
                     reason="ORB_DOWN: " + ", ".join(reasons),
                     premium=snap.atm_pe_close,
-                    raw_signals={"close": close, "orh": orh, "orl": orl, "vol_ratio": vol_ratio, "pcr": pcr},
+                    raw_signals={"close": close, "orh": orh, "orl": orl, "vol_ratio": vol_ratio, "pcr": pcr, "r5m": r5m},
                 )
         return None
 
@@ -198,13 +203,25 @@ class OIBuildupStrategy(BaseStrategy):
     def __init__(
         self,
         *,
-        oi_change_threshold: float = 0.02,
-        confidence_base: float = 0.70,
+        oi_change_threshold: float = 0.03,
+        confidence_base: float = 0.72,
+        min_entry_minute: int = 45,
+        max_entry_minute: int = 210,
+        min_directional_r15m: float = 0.0015,
+        min_vol_ratio: float = 1.35,
+        pcr_bull_min: float = 1.00,
+        pcr_bear_max: float = 1.00,
         exit_r5m_threshold: float = 0.0003,
         min_exit_hold_bars: int = 3,
     ) -> None:
         self._oi_change_threshold = oi_change_threshold
         self._confidence_base = confidence_base
+        self._min_entry_minute = max(0, int(min_entry_minute))
+        self._max_entry_minute = max(self._min_entry_minute, int(max_entry_minute))
+        self._min_directional_r15m = max(0.0, float(min_directional_r15m))
+        self._min_vol_ratio = max(0.0, float(min_vol_ratio))
+        self._pcr_bull_min = float(pcr_bull_min)
+        self._pcr_bear_max = float(pcr_bear_max)
         self._exit_r5m_threshold = float(exit_r5m_threshold)
         self._min_exit_hold_bars = max(0, int(min_exit_hold_bars))
 
@@ -220,7 +237,7 @@ class OIBuildupStrategy(BaseStrategy):
         if position is not None:
             return self._check_exit(snap, position)
 
-        if not snap.is_valid_entry_phase or snap.minutes < 30:
+        if not snap.is_valid_entry_phase or snap.minutes < self._min_entry_minute or snap.minutes > self._max_entry_minute:
             return None
 
         oi_change = snap.fut_oi_change_30m
@@ -233,13 +250,14 @@ class OIBuildupStrategy(BaseStrategy):
         pcr = snap.pcr
         vol_ratio = snap.vol_ratio
         confidence = self._confidence_base
+        if vol_ratio is None or vol_ratio < self._min_vol_ratio:
+            return None
 
-        if oi_change_pct > self._oi_change_threshold and r15m > 0.001:
+        if oi_change_pct > self._oi_change_threshold and r15m > self._min_directional_r15m and pcr is not None and pcr >= self._pcr_bull_min:
             reasons = [f"oi_chg={oi_change_pct:.2%}", f"r15m={r15m:.4f}"]
-            if pcr is not None and pcr > 1.0:
-                confidence += 0.05
-                reasons.append(f"pcr={pcr:.2f}")
-            if vol_ratio is not None and vol_ratio > 1.3:
+            confidence += 0.05
+            reasons.append(f"pcr={pcr:.2f}")
+            if vol_ratio > self._min_vol_ratio:
                 confidence += 0.05
                 reasons.append(f"vol_ratio={vol_ratio:.2f}")
             return StrategyVote(
@@ -256,11 +274,13 @@ class OIBuildupStrategy(BaseStrategy):
                 proposed_entry_premium=snap.atm_ce_close,
             )
 
-        if oi_change_pct > self._oi_change_threshold and r15m < -0.001:
+        if oi_change_pct > self._oi_change_threshold and r15m < -self._min_directional_r15m and pcr is not None and pcr <= self._pcr_bear_max:
             reasons = [f"oi_chg={oi_change_pct:.2%}", f"r15m={r15m:.4f}"]
-            if pcr is not None and pcr < 1.0:
+            confidence += 0.05
+            reasons.append(f"pcr={pcr:.2f}")
+            if vol_ratio > self._min_vol_ratio:
                 confidence += 0.05
-                reasons.append(f"pcr={pcr:.2f}")
+                reasons.append(f"vol_ratio={vol_ratio:.2f}")
             return StrategyVote(
                 strategy_name=self.name,
                 snapshot_id=snap.snapshot_id,

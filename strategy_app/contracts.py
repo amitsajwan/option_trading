@@ -96,12 +96,14 @@ class RiskContext:
     session_realised_pnl: float = 0.0
     session_unrealised_pnl: float = 0.0
     session_pnl_total: float = 0.0
+    session_trade_count: int = 0
     consecutive_losses: int = 0
     session_loss_count: int = 0
     session_win_count: int = 0
     capital_allocated: float = 0.0
     capital_at_risk: float = 0.0
     daily_loss_breached: bool = False
+    session_trade_cap_breached: bool = False
     consecutive_loss_limit: bool = False
     vix_spike_halt: bool = False
     vix_last_halt_at: Optional[datetime] = None
@@ -110,6 +112,7 @@ class RiskContext:
     post_halt_resume_boost_available: bool = False
     weekly_loss_breached: bool = False
     max_daily_loss_pct: float = 0.02
+    max_session_trades: int = 6
     max_consecutive_losses: int = 3
     max_lots_per_trade: int = 5
     risk_per_trade_pct: float = 0.005

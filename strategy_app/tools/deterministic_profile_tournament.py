@@ -24,7 +24,15 @@ from strategy_app.engines.profiles import (
     build_run_metadata,
 )
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
-from strategy_app.tools.offline_strategy_analysis import MemorySignalLogger, _group_table, _summary
+from strategy_app.tools.offline_strategy_analysis import (
+    DEFAULT_BROKERAGE_PER_ORDER,
+    DEFAULT_CHARGES_BPS_PER_SIDE,
+    DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+    MemorySignalLogger,
+    TradingCostModel,
+    _group_table,
+    _summary,
+)
 
 DEFAULT_PARQUET_BASE = DEFAULT_HISTORICAL_PARQUET_BASE
 DEFAULT_OUTPUT_ROOT = Path(".run/deterministic_profile_tournament")
@@ -222,8 +230,9 @@ def _run_profile_window(
     snapshots: pd.DataFrame,
     profile: DeterministicProfileSpec,
     capital_allocated: float,
+    cost_model: Optional[TradingCostModel] = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    logger = MemorySignalLogger(capital_allocated=capital_allocated)
+    logger = MemorySignalLogger(capital_allocated=capital_allocated, cost_model=cost_model)
     engine = DeterministicRuleEngine(signal_logger=logger, strategy_profile_id=profile.profile_id)
     engine.set_run_context(f"tournament-{profile.profile_id}", profile.metadata)
 
@@ -255,6 +264,7 @@ def _window_result_rows(
     profiles: list[DeterministicProfileSpec],
     store: ParquetStore,
     capital_allocated: float,
+    cost_model: Optional[TradingCostModel] = None,
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     snapshots = _load_snapshots(store, date_from=window.date_from, date_to=window.date_to)
     rows: list[dict[str, Any]] = []
@@ -264,6 +274,7 @@ def _window_result_rows(
             snapshots=snapshots,
             profile=profile,
             capital_allocated=float(capital_allocated),
+            cost_model=cost_model,
         )
         row = {
             "window_label": window.label,
@@ -376,6 +387,7 @@ def _write_report(
     date_from: str,
     date_to: str,
     window_mode: str,
+    cost_model: Optional[TradingCostModel],
     leaderboard: pd.DataFrame,
     window_results: pd.DataFrame,
     recommendation: dict[str, Any],
@@ -387,6 +399,12 @@ def _write_report(
         f"- Generated: {datetime.now().isoformat(timespec='seconds')}",
         f"- Range: {date_from} to {date_to}",
         f"- Window mode: {window_mode}",
+        (
+            f"- Costs: brokerage/order={cost_model.brokerage_per_order:.2f}, charges_bps/side={cost_model.charges_bps_per_side:.2f}, "
+            f"slippage_bps/side={cost_model.slippage_bps_per_side:.2f}"
+            if cost_model is not None
+            else "- Costs: default gross-only assumptions"
+        ),
         "",
         "## Recommendation",
         "",
@@ -422,6 +440,7 @@ def run_tournament(
     output_dir: Path,
     profile_spec_path: Optional[str] = None,
     save_top_trade_exports: int = 3,
+    cost_model: Optional[TradingCostModel] = None,
 ) -> dict[str, Any]:
     require_snapshot_access(
         mode=SNAPSHOT_INPUT_MODE_CANONICAL,
@@ -451,6 +470,7 @@ def run_tournament(
             profiles=profiles,
             store=store,
             capital_allocated=float(capital),
+            cost_model=cost_model,
         )
         if window_df.empty:
             continue
@@ -487,6 +507,7 @@ def run_tournament(
         date_from=date_from,
         date_to=date_to,
         window_mode=window_mode,
+        cost_model=cost_model,
         leaderboard=leaderboard,
         window_results=window_results,
         recommendation=recommendation,
@@ -501,6 +522,7 @@ def run_tournament(
         "output_dir": str(output_dir),
         "windows": len(windows),
         "profiles": len(profiles),
+        "cost_model": cost_model.to_metadata() if cost_model is not None else None,
         "recommended_profile_id": recommendation.get("recommended_profile_id"),
         "recommended_label": recommendation.get("recommended_label"),
     }
@@ -516,10 +538,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--profile-spec", default=None, help="Optional JSON file overriding the default profile set.")
     parser.add_argument("--save-top-trade-exports", type=int, default=3)
+    parser.add_argument("--brokerage-per-order", type=float, default=DEFAULT_BROKERAGE_PER_ORDER)
+    parser.add_argument("--charges-bps-per-side", type=float, default=DEFAULT_CHARGES_BPS_PER_SIDE)
+    parser.add_argument("--slippage-bps-per-side", type=float, default=DEFAULT_SLIPPAGE_BPS_PER_SIDE)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_OUTPUT_ROOT / stamp
+    cost_model = TradingCostModel(
+        brokerage_per_order=float(args.brokerage_per_order),
+        charges_bps_per_side=float(args.charges_bps_per_side),
+        slippage_bps_per_side=float(args.slippage_bps_per_side),
+    )
     result = run_tournament(
         parquet_base=str(args.parquet_base),
         date_from=str(args.date_from),
@@ -529,6 +559,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         output_dir=output_dir,
         profile_spec_path=(str(args.profile_spec) if args.profile_spec else None),
         save_top_trade_exports=int(args.save_top_trade_exports),
+        cost_model=cost_model,
     )
     print(json.dumps(result, indent=2))
     return 0

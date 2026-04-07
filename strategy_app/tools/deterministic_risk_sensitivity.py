@@ -33,6 +33,12 @@ from strategy_app.tools.deterministic_profile_tournament import (
     build_calendar_windows,
 )
 from strategy_app.tools.offline_strategy_analysis import _group_table
+from strategy_app.tools.offline_strategy_analysis import (
+    DEFAULT_BROKERAGE_PER_ORDER,
+    DEFAULT_CHARGES_BPS_PER_SIDE,
+    DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+    TradingCostModel,
+)
 
 DEFAULT_PARQUET_BASE = DEFAULT_HISTORICAL_PARQUET_BASE
 DEFAULT_OUTPUT_ROOT = Path(".run/deterministic_risk_sensitivity")
@@ -193,6 +199,7 @@ def _write_report(
     date_to: str,
     window_mode: str,
     baseline_profile_id: str,
+    cost_model: Optional[TradingCostModel],
     leaderboard: pd.DataFrame,
     window_results: pd.DataFrame,
     recommendation: dict[str, Any],
@@ -204,6 +211,12 @@ def _write_report(
         f"- Range: {date_from} to {date_to}",
         f"- Window mode: {window_mode}",
         f"- Baseline variant: {baseline_profile_id}",
+        (
+            f"- Costs: brokerage/order={cost_model.brokerage_per_order:.2f}, charges_bps/side={cost_model.charges_bps_per_side:.2f}, "
+            f"slippage_bps/side={cost_model.slippage_bps_per_side:.2f}"
+            if cost_model is not None
+            else "- Costs: default gross-only assumptions"
+        ),
         "",
         "## Recommendation",
         "",
@@ -232,6 +245,7 @@ def run_sensitivity(
     window_mode: str,
     output_dir: Path,
     baseline_profile_id: str = "det_orb_oi_safe_sl20_trail",
+    cost_model: Optional[TradingCostModel] = None,
 ) -> dict[str, Any]:
     require_snapshot_access(
         mode=SNAPSHOT_INPUT_MODE_CANONICAL,
@@ -263,6 +277,7 @@ def run_sensitivity(
             store=store,
             capital_allocated=float(capital),
             baseline_profile_id=baseline_profile_id,
+            cost_model=cost_model,
         )
         if window_df.empty:
             continue
@@ -289,6 +304,7 @@ def run_sensitivity(
         date_to=date_to,
         window_mode=window_mode,
         baseline_profile_id=baseline_profile_id,
+        cost_model=cost_model,
         leaderboard=leaderboard,
         window_results=window_results,
         recommendation=recommendation,
@@ -304,6 +320,7 @@ def run_sensitivity(
         "windows": len(windows),
         "variants": len(profiles),
         "baseline_profile_id": baseline_profile_id,
+        "cost_model": cost_model.to_metadata() if cost_model is not None else None,
         "recommended_variant_id": recommendation.get("recommended_variant_id"),
         "recommended_label": recommendation.get("recommended_label"),
     }
@@ -318,10 +335,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--window-mode", choices=["full", "monthly", "quarterly", "yearly"], default="quarterly")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--baseline-profile-id", default="det_orb_oi_safe_sl20_trail")
+    parser.add_argument("--brokerage-per-order", type=float, default=DEFAULT_BROKERAGE_PER_ORDER)
+    parser.add_argument("--charges-bps-per-side", type=float, default=DEFAULT_CHARGES_BPS_PER_SIDE)
+    parser.add_argument("--slippage-bps-per-side", type=float, default=DEFAULT_SLIPPAGE_BPS_PER_SIDE)
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_OUTPUT_ROOT / stamp
+    cost_model = TradingCostModel(
+        brokerage_per_order=float(args.brokerage_per_order),
+        charges_bps_per_side=float(args.charges_bps_per_side),
+        slippage_bps_per_side=float(args.slippage_bps_per_side),
+    )
     result = run_sensitivity(
         parquet_base=str(args.parquet_base),
         date_from=str(args.date_from),
@@ -330,6 +355,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         window_mode=str(args.window_mode),
         output_dir=output_dir,
         baseline_profile_id=str(args.baseline_profile_id),
+        cost_model=cost_model,
     )
     print(json.dumps(result, indent=2))
     return 0

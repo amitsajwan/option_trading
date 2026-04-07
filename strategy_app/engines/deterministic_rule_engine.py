@@ -312,7 +312,9 @@ class DeterministicRuleEngine(StrategyEngine):
                     trace_blocker = self._derive_entry_blocker(votes=votes, snap=snap, regime_signal=regime_signal)
         elif position is None:
             if self._risk.is_halted:
-                trace_blocker = "risk_halt"
+                trace_blocker = self._risk.halt_reason or "risk_halt"
+            elif self._risk.is_paused:
+                trace_blocker = self._risk.pause_reason or "risk_pause"
             elif self._router.regime_allows_entry(regime_signal.regime) is False:
                 trace_blocker = "router_regime_block"
 
