@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from ...contracts import (
     BaseStrategy,
@@ -15,6 +15,69 @@ from ...contracts import (
     StrategyVote,
 )
 from ..snapshot_accessor import SnapshotAccessor
+
+
+class _TraderSetupStrategy(BaseStrategy):
+    """Shared helpers for setup-style option entries."""
+
+    @staticmethod
+    def _option_liquidity_ratio(snap: SnapshotAccessor, direction: Direction) -> Optional[float]:
+        return snap.atm_ce_vol_ratio if direction == Direction.CE else snap.atm_pe_vol_ratio
+
+    @staticmethod
+    def _directional_premium(snap: SnapshotAccessor, direction: Direction) -> Optional[float]:
+        return snap.atm_ce_close if direction == Direction.CE else snap.atm_pe_close
+
+    @staticmethod
+    def _oi_change_pct(snap: SnapshotAccessor) -> Optional[float]:
+        if snap.fut_oi_change_30m is None or snap.fut_oi is None or snap.fut_oi <= 0:
+            return None
+        return snap.fut_oi_change_30m / snap.fut_oi
+
+    def _entry_vote(
+        self,
+        snap: SnapshotAccessor,
+        *,
+        direction: Direction,
+        confidence: float,
+        reason: str,
+        raw_signals: dict[str, Any],
+    ) -> StrategyVote:
+        return StrategyVote(
+            strategy_name=self.name,
+            snapshot_id=snap.snapshot_id,
+            timestamp=snap.timestamp_or_now,
+            trade_date=snap.trade_date,
+            signal_type=SignalType.ENTRY,
+            direction=direction,
+            confidence=round(min(1.0, confidence), 2),
+            reason=reason,
+            raw_signals=raw_signals,
+            proposed_strike=snap.atm_strike,
+            proposed_entry_premium=self._directional_premium(snap, direction),
+        )
+
+    def _exit_vote(
+        self,
+        snap: SnapshotAccessor,
+        *,
+        confidence: float,
+        reason: str,
+        raw_signals: dict[str, Any],
+        exit_reason: ExitReason = ExitReason.REGIME_SHIFT,
+    ) -> StrategyVote:
+        return StrategyVote(
+            strategy_name=self.name,
+            snapshot_id=snap.snapshot_id,
+            timestamp=snap.timestamp_or_now,
+            trade_date=snap.trade_date,
+            signal_type=SignalType.EXIT,
+            direction=Direction.EXIT,
+            confidence=round(min(1.0, confidence), 2),
+            reason=reason,
+            raw_signals=raw_signals,
+            exit_reason=exit_reason,
+        )
 
 
 class ORBStrategy(BaseStrategy):
@@ -619,6 +682,578 @@ class VWAPReclaimStrategy(BaseStrategy):
                 confidence=0.70,
                 reason=f"VWAP_REJECTION_EXIT: close={close:.0f}>vwap={vwap:.0f}",
                 exit_reason=ExitReason.REGIME_SHIFT,
+            )
+        return None
+
+
+class ORBRetestContinuationStrategy(_TraderSetupStrategy):
+    """Trade only after the OR break retests and re-accepts."""
+
+    name = "ORB_RETEST_CONTINUATION"
+
+    def __init__(
+        self,
+        *,
+        breakout_buffer_pct: float = 0.0006,
+        retest_tolerance_pct: float = 0.0008,
+        invalidation_buffer_pct: float = 0.0012,
+        resume_buffer_pct: float = 0.0007,
+        breakout_r5m_min: float = 0.0010,
+        resume_r5m_min: float = 0.0009,
+        min_r15m_confirm: float = 0.0010,
+        min_vol_ratio: float = 1.45,
+        min_option_vol_ratio: float = 1.35,
+        min_oi_change_pct: float = 0.01,
+        pcr_bull_min: float = 1.00,
+        pcr_bear_max: float = 1.00,
+        max_entry_minute: int = 120,
+        max_setup_age_minutes: int = 35,
+        exit_buffer_pct: float = 0.0012,
+    ) -> None:
+        self._breakout_buffer_pct = float(breakout_buffer_pct)
+        self._retest_tolerance_pct = float(retest_tolerance_pct)
+        self._invalidation_buffer_pct = float(invalidation_buffer_pct)
+        self._resume_buffer_pct = float(resume_buffer_pct)
+        self._breakout_r5m_min = float(breakout_r5m_min)
+        self._resume_r5m_min = float(resume_r5m_min)
+        self._min_r15m_confirm = float(min_r15m_confirm)
+        self._min_vol_ratio = float(min_vol_ratio)
+        self._min_option_vol_ratio = float(min_option_vol_ratio)
+        self._min_oi_change_pct = float(min_oi_change_pct)
+        self._pcr_bull_min = float(pcr_bull_min)
+        self._pcr_bear_max = float(pcr_bear_max)
+        self._max_entry_minute = int(max_entry_minute)
+        self._max_setup_age_minutes = int(max_setup_age_minutes)
+        self._exit_buffer_pct = float(exit_buffer_pct)
+        self._active_setup: Optional[dict[str, Any]] = None
+        self._entry_fired = False
+        self._trade_date: Optional[str] = None
+
+    def on_session_start(self, trade_date) -> None:
+        self._trade_date = str(trade_date)
+        self._active_setup = None
+        self._entry_fired = False
+
+    def on_session_end(self, trade_date) -> None:
+        self.on_session_start(trade_date)
+
+    def _ensure_session(self, snap: SnapshotAccessor) -> None:
+        if self._trade_date != snap.trade_date:
+            self.on_session_start(snap.trade_date)
+
+    def evaluate(
+        self,
+        snapshot: SnapshotPayload,
+        position: Optional[PositionContext],
+        risk: RiskContext,
+    ) -> Optional[StrategyVote]:
+        del risk
+        snap = SnapshotAccessor(snapshot)
+        self._ensure_session(snap)
+
+        if position is not None:
+            return self._check_exit(snap, position)
+        if self._entry_fired or not snap.is_valid_entry_phase or not snap.or_ready or snap.minutes > self._max_entry_minute:
+            return None
+
+        close = snap.fut_close
+        r5m = snap.fut_return_5m
+        r15m = snap.fut_return_15m
+        vol_ratio = snap.vol_ratio
+        if close is None or r5m is None or r15m is None or vol_ratio is None:
+            return None
+
+        self._update_breakout_state(snap, close, r5m, vol_ratio)
+        setup = self._active_setup
+        if not setup:
+            return None
+        if snap.minutes - int(setup["breakout_minute"]) > self._max_setup_age_minutes:
+            self._active_setup = None
+            return None
+
+        direction = setup["direction"]
+        level = float(setup["level"])
+        oi_change_pct = self._oi_change_pct(snap) or 0.0
+        if direction == Direction.CE:
+            if close < level * (1.0 - self._invalidation_buffer_pct):
+                self._active_setup = None
+                return None
+            if not setup["retest_seen"] and abs(close - level) / level <= self._retest_tolerance_pct and r5m > -self._resume_r5m_min:
+                setup["retest_seen"] = True
+                setup["retest_minute"] = snap.minutes
+                return None
+            if (
+                setup["retest_seen"]
+                and snap.minutes > int(setup.get("retest_minute") or setup["breakout_minute"])
+                and close > level * (1.0 + self._resume_buffer_pct)
+                and r5m >= self._resume_r5m_min
+                and r15m >= self._min_r15m_confirm
+                and vol_ratio >= self._min_vol_ratio
+                and (snap.pcr is None or snap.pcr >= self._pcr_bull_min)
+                and (self._option_liquidity_ratio(snap, Direction.CE) or 0.0) >= self._min_option_vol_ratio
+                and oi_change_pct >= self._min_oi_change_pct
+            ):
+                self._entry_fired = True
+                return self._entry_vote(
+                    snap,
+                    direction=Direction.CE,
+                    confidence=0.86,
+                    reason=f"ORB_RETEST_LONG: break={level:.0f} r5m={r5m:.4f} r15m={r15m:.4f}",
+                    raw_signals={
+                        "level": level,
+                        "breakout_minute": setup["breakout_minute"],
+                        "retest_minute": setup.get("retest_minute"),
+                        "close": close,
+                        "r5m": r5m,
+                        "r15m": r15m,
+                        "vol_ratio": vol_ratio,
+                        "pcr": snap.pcr,
+                        "oi_change_pct": oi_change_pct,
+                        "option_vol_ratio": self._option_liquidity_ratio(snap, Direction.CE),
+                    },
+                )
+            return None
+
+        if close > level * (1.0 + self._invalidation_buffer_pct):
+            self._active_setup = None
+            return None
+        if not setup["retest_seen"] and abs(close - level) / level <= self._retest_tolerance_pct and r5m < self._resume_r5m_min:
+            setup["retest_seen"] = True
+            setup["retest_minute"] = snap.minutes
+            return None
+        if (
+            setup["retest_seen"]
+            and snap.minutes > int(setup.get("retest_minute") or setup["breakout_minute"])
+            and close < level * (1.0 - self._resume_buffer_pct)
+            and r5m <= -self._resume_r5m_min
+            and r15m <= -self._min_r15m_confirm
+            and vol_ratio >= self._min_vol_ratio
+            and (snap.pcr is None or snap.pcr <= self._pcr_bear_max)
+            and (self._option_liquidity_ratio(snap, Direction.PE) or 0.0) >= self._min_option_vol_ratio
+            and oi_change_pct >= self._min_oi_change_pct
+        ):
+            self._entry_fired = True
+            return self._entry_vote(
+                snap,
+                direction=Direction.PE,
+                confidence=0.86,
+                reason=f"ORB_RETEST_SHORT: break={level:.0f} r5m={r5m:.4f} r15m={r15m:.4f}",
+                raw_signals={
+                    "level": level,
+                    "breakout_minute": setup["breakout_minute"],
+                    "retest_minute": setup.get("retest_minute"),
+                    "close": close,
+                    "r5m": r5m,
+                    "r15m": r15m,
+                    "vol_ratio": vol_ratio,
+                    "pcr": snap.pcr,
+                    "oi_change_pct": oi_change_pct,
+                    "option_vol_ratio": self._option_liquidity_ratio(snap, Direction.PE),
+                },
+            )
+        return None
+
+    def _update_breakout_state(self, snap: SnapshotAccessor, close: float, r5m: float, vol_ratio: float) -> None:
+        if self._active_setup is not None:
+            return
+        if vol_ratio < self._min_vol_ratio:
+            return
+        if snap.orh is not None and snap.orh_broken and close > snap.orh * (1.0 + self._breakout_buffer_pct) and r5m >= self._breakout_r5m_min:
+            self._active_setup = {"direction": Direction.CE, "level": snap.orh, "breakout_minute": snap.minutes, "retest_seen": False}
+            return
+        if snap.orl is not None and snap.orl_broken and close < snap.orl * (1.0 - self._breakout_buffer_pct) and r5m <= -self._breakout_r5m_min:
+            self._active_setup = {"direction": Direction.PE, "level": snap.orl, "breakout_minute": snap.minutes, "retest_seen": False}
+
+    def _check_exit(self, snap: SnapshotAccessor, position: PositionContext) -> Optional[StrategyVote]:
+        if not snap.or_ready or snap.fut_close is None or snap.orh is None or snap.orl is None:
+            return None
+        if position.direction == "CE" and snap.fut_close < snap.orh * (1.0 - self._exit_buffer_pct):
+            return self._exit_vote(
+                snap,
+                confidence=0.82,
+                reason=f"ORB_RETEST_EXIT_LONG: close={snap.fut_close:.0f}<orh={snap.orh:.0f}",
+                raw_signals={"close": snap.fut_close, "orh": snap.orh},
+            )
+        if position.direction == "PE" and snap.fut_close > snap.orl * (1.0 + self._exit_buffer_pct):
+            return self._exit_vote(
+                snap,
+                confidence=0.82,
+                reason=f"ORB_RETEST_EXIT_SHORT: close={snap.fut_close:.0f}>orl={snap.orl:.0f}",
+                raw_signals={"close": snap.fut_close, "orl": snap.orl},
+            )
+        return None
+
+
+class VWAPPullbackContinuationStrategy(_TraderSetupStrategy):
+    """Trade trend continuation only after a pullback toward VWAP."""
+
+    name = "VWAP_PULLBACK_CONTINUATION"
+
+    def __init__(
+        self,
+        *,
+        min_entry_minute: int = 50,
+        max_entry_minute: int = 210,
+        trend_r15m_min: float = 0.0012,
+        trend_r30m_min: float = 0.0020,
+        pullback_distance_pct: float = 0.0012,
+        resume_distance_pct: float = 0.0007,
+        resume_r5m_min: float = 0.0008,
+        min_vol_ratio: float = 1.30,
+        min_option_vol_ratio: float = 1.30,
+        min_oi_change_pct: float = 0.008,
+        pcr_bull_min: float = 1.00,
+        pcr_bear_max: float = 1.00,
+        max_setup_age_minutes: int = 75,
+        exit_buffer_pct: float = 0.0008,
+    ) -> None:
+        self._min_entry_minute = int(min_entry_minute)
+        self._max_entry_minute = int(max_entry_minute)
+        self._trend_r15m_min = float(trend_r15m_min)
+        self._trend_r30m_min = float(trend_r30m_min)
+        self._pullback_distance_pct = float(pullback_distance_pct)
+        self._resume_distance_pct = float(resume_distance_pct)
+        self._resume_r5m_min = float(resume_r5m_min)
+        self._min_vol_ratio = float(min_vol_ratio)
+        self._min_option_vol_ratio = float(min_option_vol_ratio)
+        self._min_oi_change_pct = float(min_oi_change_pct)
+        self._pcr_bull_min = float(pcr_bull_min)
+        self._pcr_bear_max = float(pcr_bear_max)
+        self._max_setup_age_minutes = int(max_setup_age_minutes)
+        self._exit_buffer_pct = float(exit_buffer_pct)
+        self._active_setup: Optional[dict[str, Any]] = None
+        self._entry_fired = False
+        self._trade_date: Optional[str] = None
+
+    def on_session_start(self, trade_date) -> None:
+        self._trade_date = str(trade_date)
+        self._active_setup = None
+        self._entry_fired = False
+
+    def on_session_end(self, trade_date) -> None:
+        self.on_session_start(trade_date)
+
+    def _ensure_session(self, snap: SnapshotAccessor) -> None:
+        if self._trade_date != snap.trade_date:
+            self.on_session_start(snap.trade_date)
+
+    def evaluate(
+        self,
+        snapshot: SnapshotPayload,
+        position: Optional[PositionContext],
+        risk: RiskContext,
+    ) -> Optional[StrategyVote]:
+        del risk
+        snap = SnapshotAccessor(snapshot)
+        self._ensure_session(snap)
+
+        if position is not None:
+            return self._check_exit(snap, position)
+        if self._entry_fired or not snap.is_valid_entry_phase or snap.minutes < self._min_entry_minute or snap.minutes > self._max_entry_minute:
+            return None
+
+        close = snap.fut_close
+        vwap = snap.vwap
+        price_vs_vwap = snap.price_vs_vwap
+        r5m = snap.fut_return_5m
+        r15m = snap.fut_return_15m
+        r30m = snap.fut_return_30m
+        vol_ratio = snap.vol_ratio
+        if None in (close, vwap, price_vs_vwap, r5m, r15m, r30m, vol_ratio):
+            return None
+
+        self._update_bias_state(snap, close, vwap, r15m, r30m, vol_ratio)
+        setup = self._active_setup
+        if not setup:
+            return None
+        if snap.minutes - int(setup["bias_minute"]) > self._max_setup_age_minutes:
+            self._active_setup = None
+            return None
+
+        oi_change_pct = self._oi_change_pct(snap) or 0.0
+        if setup["direction"] == Direction.CE:
+            if close < vwap * (1.0 - self._pullback_distance_pct):
+                self._active_setup = None
+                return None
+            if not setup["pullback_seen"] and price_vs_vwap <= self._pullback_distance_pct and r5m <= 0.0:
+                setup["pullback_seen"] = True
+                setup["pullback_minute"] = snap.minutes
+                return None
+            if (
+                setup["pullback_seen"]
+                and close > vwap * (1.0 + self._resume_distance_pct)
+                and r5m >= self._resume_r5m_min
+                and r15m >= self._trend_r15m_min
+                and vol_ratio >= self._min_vol_ratio
+                and (snap.pcr is None or snap.pcr >= self._pcr_bull_min)
+                and (self._option_liquidity_ratio(snap, Direction.CE) or 0.0) >= self._min_option_vol_ratio
+                and oi_change_pct >= self._min_oi_change_pct
+            ):
+                self._entry_fired = True
+                return self._entry_vote(
+                    snap,
+                    direction=Direction.CE,
+                    confidence=0.83,
+                    reason=f"VWAP_PULLBACK_LONG: vwap={vwap:.0f} close={close:.0f} r5m={r5m:.4f}",
+                    raw_signals={
+                        "bias_minute": setup["bias_minute"],
+                        "pullback_minute": setup.get("pullback_minute"),
+                        "vwap": vwap,
+                        "close": close,
+                        "price_vs_vwap": price_vs_vwap,
+                        "r5m": r5m,
+                        "r15m": r15m,
+                        "r30m": r30m,
+                        "vol_ratio": vol_ratio,
+                        "pcr": snap.pcr,
+                        "oi_change_pct": oi_change_pct,
+                        "option_vol_ratio": self._option_liquidity_ratio(snap, Direction.CE),
+                    },
+                )
+            return None
+
+        if close > vwap * (1.0 + self._pullback_distance_pct):
+            self._active_setup = None
+            return None
+        if not setup["pullback_seen"] and price_vs_vwap >= -self._pullback_distance_pct and r5m >= 0.0:
+            setup["pullback_seen"] = True
+            setup["pullback_minute"] = snap.minutes
+            return None
+        if (
+            setup["pullback_seen"]
+            and close < vwap * (1.0 - self._resume_distance_pct)
+            and r5m <= -self._resume_r5m_min
+            and r15m <= -self._trend_r15m_min
+            and vol_ratio >= self._min_vol_ratio
+            and (snap.pcr is None or snap.pcr <= self._pcr_bear_max)
+            and (self._option_liquidity_ratio(snap, Direction.PE) or 0.0) >= self._min_option_vol_ratio
+            and oi_change_pct >= self._min_oi_change_pct
+        ):
+            self._entry_fired = True
+            return self._entry_vote(
+                snap,
+                direction=Direction.PE,
+                confidence=0.83,
+                reason=f"VWAP_PULLBACK_SHORT: vwap={vwap:.0f} close={close:.0f} r5m={r5m:.4f}",
+                raw_signals={
+                    "bias_minute": setup["bias_minute"],
+                    "pullback_minute": setup.get("pullback_minute"),
+                    "vwap": vwap,
+                    "close": close,
+                    "price_vs_vwap": price_vs_vwap,
+                    "r5m": r5m,
+                    "r15m": r15m,
+                    "r30m": r30m,
+                    "vol_ratio": vol_ratio,
+                    "pcr": snap.pcr,
+                    "oi_change_pct": oi_change_pct,
+                    "option_vol_ratio": self._option_liquidity_ratio(snap, Direction.PE),
+                },
+            )
+        return None
+
+    def _update_bias_state(self, snap: SnapshotAccessor, close: float, vwap: float, r15m: float, r30m: float, vol_ratio: float) -> None:
+        if self._active_setup is not None:
+            return
+        if vol_ratio < self._min_vol_ratio:
+            return
+        if close > vwap and r15m >= self._trend_r15m_min and r30m >= self._trend_r30m_min:
+            self._active_setup = {"direction": Direction.CE, "bias_minute": snap.minutes, "pullback_seen": False}
+            return
+        if close < vwap and r15m <= -self._trend_r15m_min and r30m <= -self._trend_r30m_min:
+            self._active_setup = {"direction": Direction.PE, "bias_minute": snap.minutes, "pullback_seen": False}
+
+    def _check_exit(self, snap: SnapshotAccessor, position: PositionContext) -> Optional[StrategyVote]:
+        if snap.fut_close is None or snap.vwap is None:
+            return None
+        if position.direction == "CE" and snap.fut_close < snap.vwap * (1.0 - self._exit_buffer_pct):
+            return self._exit_vote(
+                snap,
+                confidence=0.78,
+                reason=f"VWAP_PULLBACK_EXIT_LONG: close={snap.fut_close:.0f}<vwap={snap.vwap:.0f}",
+                raw_signals={"close": snap.fut_close, "vwap": snap.vwap},
+            )
+        if position.direction == "PE" and snap.fut_close > snap.vwap * (1.0 + self._exit_buffer_pct):
+            return self._exit_vote(
+                snap,
+                confidence=0.78,
+                reason=f"VWAP_PULLBACK_EXIT_SHORT: close={snap.fut_close:.0f}>vwap={snap.vwap:.0f}",
+                raw_signals={"close": snap.fut_close, "vwap": snap.vwap},
+            )
+        return None
+
+
+class FailedBreakoutReversalStrategy(_TraderSetupStrategy):
+    """Fade a failed OR break only after price re-enters structure."""
+
+    name = "FAILED_BREAKOUT_REVERSAL"
+
+    def __init__(
+        self,
+        *,
+        min_entry_minute: int = 35,
+        max_entry_minute: int = 160,
+        breakout_buffer_pct: float = 0.0007,
+        reentry_buffer_pct: float = 0.0004,
+        continuation_invalidation_pct: float = 0.0018,
+        reversal_r5m_min: float = 0.0008,
+        min_vol_ratio: float = 1.25,
+        min_option_vol_ratio: float = 1.25,
+        pcr_bull_min: float = 1.00,
+        pcr_bear_max: float = 1.00,
+        max_setup_age_minutes: int = 30,
+        exit_buffer_pct: float = 0.0012,
+    ) -> None:
+        self._min_entry_minute = int(min_entry_minute)
+        self._max_entry_minute = int(max_entry_minute)
+        self._breakout_buffer_pct = float(breakout_buffer_pct)
+        self._reentry_buffer_pct = float(reentry_buffer_pct)
+        self._continuation_invalidation_pct = float(continuation_invalidation_pct)
+        self._reversal_r5m_min = float(reversal_r5m_min)
+        self._min_vol_ratio = float(min_vol_ratio)
+        self._min_option_vol_ratio = float(min_option_vol_ratio)
+        self._pcr_bull_min = float(pcr_bull_min)
+        self._pcr_bear_max = float(pcr_bear_max)
+        self._max_setup_age_minutes = int(max_setup_age_minutes)
+        self._exit_buffer_pct = float(exit_buffer_pct)
+        self._failed_break: Optional[dict[str, Any]] = None
+        self._entry_fired = False
+        self._trade_date: Optional[str] = None
+
+    def on_session_start(self, trade_date) -> None:
+        self._trade_date = str(trade_date)
+        self._failed_break = None
+        self._entry_fired = False
+
+    def on_session_end(self, trade_date) -> None:
+        self.on_session_start(trade_date)
+
+    def _ensure_session(self, snap: SnapshotAccessor) -> None:
+        if self._trade_date != snap.trade_date:
+            self.on_session_start(snap.trade_date)
+
+    def evaluate(
+        self,
+        snapshot: SnapshotPayload,
+        position: Optional[PositionContext],
+        risk: RiskContext,
+    ) -> Optional[StrategyVote]:
+        del risk
+        snap = SnapshotAccessor(snapshot)
+        self._ensure_session(snap)
+
+        if position is not None:
+            return self._check_exit(snap, position)
+        if (
+            self._entry_fired
+            or not snap.is_valid_entry_phase
+            or not snap.or_ready
+            or snap.minutes < self._min_entry_minute
+            or snap.minutes > self._max_entry_minute
+        ):
+            return None
+
+        close = snap.fut_close
+        r5m = snap.fut_return_5m
+        vol_ratio = snap.vol_ratio
+        if close is None or r5m is None or vol_ratio is None:
+            return None
+
+        self._update_failed_break_state(snap, close, r5m, vol_ratio)
+        state = self._failed_break
+        if not state:
+            return None
+        if snap.minutes - int(state["break_minute"]) > self._max_setup_age_minutes:
+            self._failed_break = None
+            return None
+
+        level = float(state["level"])
+        if state["failed_direction"] == "UP":
+            if close > level * (1.0 + self._continuation_invalidation_pct):
+                self._failed_break = None
+                return None
+            if (
+                close < level * (1.0 - self._reentry_buffer_pct)
+                and r5m <= -self._reversal_r5m_min
+                and vol_ratio >= self._min_vol_ratio
+                and (snap.pcr is None or snap.pcr <= self._pcr_bear_max)
+                and (self._option_liquidity_ratio(snap, Direction.PE) or 0.0) >= self._min_option_vol_ratio
+            ):
+                self._entry_fired = True
+                return self._entry_vote(
+                    snap,
+                    direction=Direction.PE,
+                    confidence=0.80,
+                    reason=f"FAILED_BREAKOUT_SHORT: reentered_below_orh={level:.0f} r5m={r5m:.4f}",
+                    raw_signals={
+                        "failed_break": "UP",
+                        "break_minute": state["break_minute"],
+                        "close": close,
+                        "level": level,
+                        "r5m": r5m,
+                        "vol_ratio": vol_ratio,
+                        "pcr": snap.pcr,
+                        "option_vol_ratio": self._option_liquidity_ratio(snap, Direction.PE),
+                    },
+                )
+            return None
+
+        if close < level * (1.0 - self._continuation_invalidation_pct):
+            self._failed_break = None
+            return None
+        if (
+            close > level * (1.0 + self._reentry_buffer_pct)
+            and r5m >= self._reversal_r5m_min
+            and vol_ratio >= self._min_vol_ratio
+            and (snap.pcr is None or snap.pcr >= self._pcr_bull_min)
+            and (self._option_liquidity_ratio(snap, Direction.CE) or 0.0) >= self._min_option_vol_ratio
+        ):
+            self._entry_fired = True
+            return self._entry_vote(
+                snap,
+                direction=Direction.CE,
+                confidence=0.80,
+                reason=f"FAILED_BREAKOUT_LONG: reentered_above_orl={level:.0f} r5m={r5m:.4f}",
+                raw_signals={
+                    "failed_break": "DOWN",
+                    "break_minute": state["break_minute"],
+                    "close": close,
+                    "level": level,
+                    "r5m": r5m,
+                    "vol_ratio": vol_ratio,
+                    "pcr": snap.pcr,
+                    "option_vol_ratio": self._option_liquidity_ratio(snap, Direction.CE),
+                },
+            )
+        return None
+
+    def _update_failed_break_state(self, snap: SnapshotAccessor, close: float, r5m: float, vol_ratio: float) -> None:
+        if self._failed_break is not None:
+            return
+        if vol_ratio < self._min_vol_ratio:
+            return
+        if snap.orh is not None and snap.orh_broken and close > snap.orh * (1.0 + self._breakout_buffer_pct) and r5m >= self._reversal_r5m_min:
+            self._failed_break = {"failed_direction": "UP", "level": snap.orh, "break_minute": snap.minutes}
+            return
+        if snap.orl is not None and snap.orl_broken and close < snap.orl * (1.0 - self._breakout_buffer_pct) and r5m <= -self._reversal_r5m_min:
+            self._failed_break = {"failed_direction": "DOWN", "level": snap.orl, "break_minute": snap.minutes}
+
+    def _check_exit(self, snap: SnapshotAccessor, position: PositionContext) -> Optional[StrategyVote]:
+        if snap.fut_close is None or snap.orh is None or snap.orl is None:
+            return None
+        if position.direction == "CE" and snap.fut_close < snap.orl * (1.0 - self._exit_buffer_pct):
+            return self._exit_vote(
+                snap,
+                confidence=0.77,
+                reason=f"FAILED_BREAKOUT_EXIT_LONG: close={snap.fut_close:.0f}<orl={snap.orl:.0f}",
+                raw_signals={"close": snap.fut_close, "orl": snap.orl},
+            )
+        if position.direction == "PE" and snap.fut_close > snap.orh * (1.0 + self._exit_buffer_pct):
+            return self._exit_vote(
+                snap,
+                confidence=0.77,
+                reason=f"FAILED_BREAKOUT_EXIT_SHORT: close={snap.fut_close:.0f}>orh={snap.orh:.0f}",
+                raw_signals={"close": snap.fut_close, "orh": snap.orh},
             )
         return None
 

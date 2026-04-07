@@ -21,6 +21,7 @@ from snapshot_app.historical.snapshot_access import (
 from strategy_app.engines.profiles import (
     PROFILE_DET_CORE_V2,
     PROFILE_DET_PROD_V1,
+    PROFILE_DET_SETUP_V1,
     build_run_metadata,
 )
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
@@ -140,6 +141,12 @@ def default_profile_specs() -> list[DeterministicProfileSpec]:
             label="ORB + OI Safe (Production)",
             description="Promoted production baseline sourced from the shared profile registry.",
             metadata=build_run_metadata(PROFILE_DET_PROD_V1),
+        ),
+        DeterministicProfileSpec(
+            profile_id=PROFILE_DET_SETUP_V1,
+            label="Trader Setup v1",
+            description="Experimental trader-style setup profile using retests, pullbacks, and failed-break reversals.",
+            metadata=build_run_metadata(PROFILE_DET_SETUP_V1),
         ),
         DeterministicProfileSpec(
             profile_id="det_ema_legacy_v1",

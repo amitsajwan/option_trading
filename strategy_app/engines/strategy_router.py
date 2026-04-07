@@ -15,11 +15,14 @@ from .profiles import (
 from .regime import Regime
 from .strategies.all_strategies import (
     EMAcrossoverStrategy,
+    FailedBreakoutReversalStrategy,
     HighVolORBStrategy,
     IVRegimeFilter,
     OIBuildupStrategy,
+    ORBRetestContinuationStrategy,
     ORBStrategy,
     PrevDayLevelBreakout,
+    VWAPPullbackContinuationStrategy,
     VWAPReclaimStrategy,
 )
 
@@ -32,9 +35,12 @@ class StrategyRouter:
 
     def __init__(self) -> None:
         self._orb = ORBStrategy()
+        self._orb_retest = ORBRetestContinuationStrategy()
         self._ema = EMAcrossoverStrategy()
         self._vwap = VWAPReclaimStrategy()
+        self._vwap_pullback = VWAPPullbackContinuationStrategy()
         self._oi = OIBuildupStrategy()
+        self._failed_breakout = FailedBreakoutReversalStrategy()
         self._iv_filter = IVRegimeFilter()
         self._high_vol_orb = HighVolORBStrategy()
         self._prev_day = PrevDayLevelBreakout()
@@ -42,9 +48,12 @@ class StrategyRouter:
             self._iv_filter.name: self._iv_filter,
             self._high_vol_orb.name: self._high_vol_orb,
             self._orb.name: self._orb,
+            self._orb_retest.name: self._orb_retest,
             self._ema.name: self._ema,
             self._vwap.name: self._vwap,
+            self._vwap_pullback.name: self._vwap_pullback,
             self._oi.name: self._oi,
+            self._failed_breakout.name: self._failed_breakout,
             self._prev_day.name: self._prev_day,
         }
         self._cross_exit_helpers: dict[tuple[str, str], set[str]] = {
