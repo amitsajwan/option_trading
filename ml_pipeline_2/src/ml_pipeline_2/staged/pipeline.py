@@ -386,6 +386,80 @@ def build_stage2_labels(stage_frame: pd.DataFrame, oracle: pd.DataFrame, *_: Any
     return labeled.sort_values("timestamp").reset_index(drop=True)
 
 
+def _normalize_stage2_target_redesign(manifest: dict[str, Any]) -> dict[str, Any]:
+    raw = dict((manifest.get("training") or {}).get("stage2_target_redesign") or {})
+    enabled = bool(raw.get("enabled", False))
+    try:
+        min_edge = float(raw.get("min_directional_edge_after_cost", 0.0))
+    except Exception:
+        min_edge = 0.0
+    try:
+        min_winner = float(raw.get("min_winner_return_after_cost", 0.0))
+    except Exception:
+        min_winner = 0.0
+    try:
+        max_opposing = float(raw.get("max_opposing_return_after_cost", 0.0))
+    except Exception:
+        max_opposing = 0.0
+    return {
+        "enabled": enabled,
+        "min_directional_edge_after_cost": max(0.0, float(min_edge)),
+        "min_winner_return_after_cost": max(0.0, float(min_winner)),
+        "max_opposing_return_after_cost": float(max_opposing),
+    }
+
+
+def _apply_stage2_target_redesign(stage2_frame: pd.DataFrame, manifest: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
+    cfg = _normalize_stage2_target_redesign(manifest)
+    meta = {
+        **cfg,
+        "rows_before": int(len(stage2_frame)),
+        "rows_after": int(len(stage2_frame)),
+        "rows_dropped": 0,
+        "kept_share": 1.0 if len(stage2_frame) else 0.0,
+        "edge_filter_rows_dropped": 0,
+        "winner_threshold_rows_dropped": 0,
+        "opposing_threshold_rows_dropped": 0,
+    }
+    if not cfg["enabled"]:
+        return stage2_frame.sort_values("timestamp").reset_index(drop=True), meta
+
+    required = [
+        "best_ce_net_return_after_cost",
+        "best_pe_net_return_after_cost",
+        "direction_label",
+    ]
+    missing = [column for column in required if column not in stage2_frame.columns]
+    if missing:
+        raise ValueError(f"stage2 target redesign requires columns: {missing}")
+
+    ce_returns = pd.to_numeric(stage2_frame["best_ce_net_return_after_cost"], errors="coerce").fillna(0.0)
+    pe_returns = pd.to_numeric(stage2_frame["best_pe_net_return_after_cost"], errors="coerce").fillna(0.0)
+    direction = stage2_frame["direction_label"].astype(str).str.upper()
+    edge_series = (ce_returns - pe_returns).abs()
+    winner_returns = pd.Series(np.where(direction == "CE", ce_returns, pe_returns), index=stage2_frame.index, dtype=float)
+    opposing_returns = pd.Series(np.where(direction == "CE", pe_returns, ce_returns), index=stage2_frame.index, dtype=float)
+
+    edge_keep_mask = edge_series >= float(cfg["min_directional_edge_after_cost"])
+    winner_keep_mask = winner_returns >= float(cfg["min_winner_return_after_cost"])
+    opposing_keep_mask = opposing_returns <= float(cfg["max_opposing_return_after_cost"])
+    keep_mask = edge_keep_mask & winner_keep_mask & opposing_keep_mask
+
+    filtered = stage2_frame.loc[keep_mask].copy().sort_values("timestamp").reset_index(drop=True)
+    filtered["direction_return_edge_after_cost"] = edge_series.loc[keep_mask].to_numpy(copy=False)
+    meta.update(
+        {
+            "rows_after": int(len(filtered)),
+            "rows_dropped": int((~keep_mask).sum()),
+            "kept_share": float(keep_mask.mean()) if len(keep_mask) else 0.0,
+            "edge_filter_rows_dropped": int((~edge_keep_mask).sum()),
+            "winner_threshold_rows_dropped": int((edge_keep_mask & (~winner_keep_mask)).sum()),
+            "opposing_threshold_rows_dropped": int((edge_keep_mask & winner_keep_mask & (~opposing_keep_mask)).sum()),
+        }
+    )
+    return filtered, meta
+
+
 def _normalize_stage2_label_filter(manifest: dict[str, Any]) -> dict[str, Any]:
     raw = dict((manifest.get("training") or {}).get("stage2_label_filter") or {})
     enabled = bool(raw.get("enabled", False))
@@ -2153,9 +2227,11 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         labeler = resolve_labeler(component_ids["labeler_id"])
         labeled = labeler(stage_frame, oracle)
         if stage_name == "stage2":
+            labeled, target_redesign_meta = _apply_stage2_target_redesign(labeled, manifest)
             labeled, direction_filter_meta = _apply_stage2_label_filter(labeled, manifest)
             labeled, session_filter_meta = _apply_stage2_session_filter(labeled, manifest)
             label_filtering[stage_name] = {
+                "direction_target_redesign": target_redesign_meta,
                 "direction_label_filter": direction_filter_meta,
                 "session_filter": session_filter_meta,
             }

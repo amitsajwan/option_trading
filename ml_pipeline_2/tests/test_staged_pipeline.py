@@ -1008,6 +1008,51 @@ def test_apply_stage2_label_filter_stricter_abstain_reduces_rows_deterministical
     assert meta["rows_dropped"] == 2
 
 
+def test_apply_stage2_target_redesign_reduces_ambiguous_rows() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:00:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0030,
+                "best_pe_net_return_after_cost": -0.0003,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:01:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0011,
+                "best_pe_net_return_after_cost": 0.0002,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:02:00"),
+                "direction_label": "PE",
+                "best_ce_net_return_after_cost": -0.0003,
+                "best_pe_net_return_after_cost": 0.0022,
+            },
+        ]
+    )
+
+    filtered, meta = staged_pipeline._apply_stage2_target_redesign(  # type: ignore[attr-defined]
+        frame,
+        {
+            "training": {
+                "stage2_target_redesign": {
+                    "enabled": True,
+                    "min_directional_edge_after_cost": 0.0018,
+                    "min_winner_return_after_cost": 0.0010,
+                    "max_opposing_return_after_cost": -0.0002,
+                }
+            }
+        },
+    )
+
+    assert len(filtered) == 2
+    assert filtered["direction_label"].tolist() == ["CE", "PE"]
+    assert meta["rows_before"] == 3
+    assert meta["rows_after"] == 2
+    assert meta["rows_dropped"] == 1
+
+
 def test_vectorized_policy_selection_matches_legacy_loops() -> None:
     utility, stage1_scores, stage2_scores, stage3_scores = _policy_fixture()
     stage1_policy_cfg = {"threshold_grid": [0.45, 0.55, 0.65]}

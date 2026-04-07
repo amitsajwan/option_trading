@@ -228,6 +228,39 @@ def _validate_stage2_session_filter(payload: Any, errors: List[str], *, field_pr
         )
 
 
+def _validate_stage2_target_redesign(payload: Any, errors: List[str], *, field_prefix: str) -> None:
+    stage2_target_redesign = payload or {}
+    if stage2_target_redesign and not isinstance(stage2_target_redesign, dict):
+        errors.append(f"{field_prefix} must be an object")
+        return
+    if not stage2_target_redesign:
+        return
+    if "enabled" in stage2_target_redesign and not isinstance(stage2_target_redesign.get("enabled"), bool):
+        errors.append(f"{field_prefix}.enabled must be boolean")
+    for numeric_field in (
+        "min_directional_edge_after_cost",
+        "min_winner_return_after_cost",
+        "max_opposing_return_after_cost",
+    ):
+        if numeric_field in stage2_target_redesign:
+            try:
+                float(stage2_target_redesign.get(numeric_field))
+            except Exception:
+                errors.append(f"{field_prefix}.{numeric_field} must be numeric")
+    if "min_directional_edge_after_cost" in stage2_target_redesign:
+        try:
+            if float(stage2_target_redesign.get("min_directional_edge_after_cost", 0.0)) < 0.0:
+                raise ValueError
+        except Exception:
+            errors.append(f"{field_prefix}.min_directional_edge_after_cost must be a number >= 0")
+    if "min_winner_return_after_cost" in stage2_target_redesign:
+        try:
+            if float(stage2_target_redesign.get("min_winner_return_after_cost", 0.0)) < 0.0:
+                raise ValueError
+        except Exception:
+            errors.append(f"{field_prefix}.min_winner_return_after_cost must be a number >= 0")
+
+
 def _validate_grid_robustness_probe(payload: Any, errors: List[str], *, field_prefix: str) -> None:
     robustness_probe = payload or {}
     if robustness_probe and not isinstance(robustness_probe, dict):
@@ -357,6 +390,11 @@ def _validate_staged_training(payload: Dict[str, Any], errors: List[str]) -> Non
         payload.get("stage2_session_filter"),
         errors,
         field_prefix="training.stage2_session_filter",
+    )
+    _validate_stage2_target_redesign(
+        payload.get("stage2_target_redesign"),
+        errors,
+        field_prefix="training.stage2_target_redesign",
     )
     _validate_search_options_by_stage(
         payload.get("search_options_by_stage"),
@@ -496,11 +534,12 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
             errors.append(f"{field_prefix}.training must be an object")
         else:
             unknown_training = sorted(
-                set(str(key) for key in training.keys()) - {"search_options_by_stage", "stage2_label_filter", "stage2_session_filter"}
+                set(str(key) for key in training.keys())
+                - {"search_options_by_stage", "stage2_label_filter", "stage2_session_filter", "stage2_target_redesign"}
             )
             if unknown_training:
                 errors.append(
-                    f"{field_prefix}.training supports only search_options_by_stage, stage2_label_filter, and stage2_session_filter; "
+                    f"{field_prefix}.training supports only search_options_by_stage, stage2_label_filter, stage2_session_filter, and stage2_target_redesign; "
                     f"got unsupported keys: {unknown_training}"
                 )
             _validate_stage2_label_filter(
@@ -512,6 +551,11 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
                 training.get("stage2_session_filter"),
                 errors,
                 field_prefix=f"{field_prefix}.training.stage2_session_filter",
+            )
+            _validate_stage2_target_redesign(
+                training.get("stage2_target_redesign"),
+                errors,
+                field_prefix=f"{field_prefix}.training.stage2_target_redesign",
             )
             _validate_search_options_by_stage(
                 training.get("search_options_by_stage"),

@@ -152,6 +152,18 @@ def test_staged_manifest_accepts_stage2_session_filter(tmp_path: Path) -> None:
     }
 
 
+def test_staged_manifest_accepts_stage2_target_redesign(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["training"]["stage2_target_redesign"] = {
+        "enabled": True,
+        "min_directional_edge_after_cost": 0.0018,
+        "min_winner_return_after_cost": 0.0010,
+        "max_opposing_return_after_cost": -0.0002,
+    }
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_stage2_target_redesign_ok.json", validate_paths=False)
+    assert resolved["training"]["stage2_target_redesign"]["enabled"] is True
+
+
 def test_staged_manifest_validate_paths_requires_stage_view_datasets(tmp_path: Path) -> None:
     parquet_root = tmp_path / "parquet"
     (parquet_root / "snapshots_ml_flat").mkdir(parents=True, exist_ok=True)

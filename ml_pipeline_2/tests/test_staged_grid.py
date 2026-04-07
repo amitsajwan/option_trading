@@ -589,3 +589,17 @@ def test_midday_redesign_grid_manifest_resolves() -> None:
         resolved["grid"]["runs"][3]["overrides"]["catalog"]["feature_sets_by_stage"]["stage2"]
         == ["fo_midday_time_aware_plus_oi_iv"]
     )
+
+
+def test_midday_target_redesign_grid_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_grid.stage2_midday_target_redesign_v1.json"),
+        validate_paths=False,
+    )
+    assert resolved["outputs"]["run_name"] == "staged_grid_stage2_midday_target_redesign_v1"
+    assert [run["run_id"] for run in resolved["grid"]["runs"]] == [
+        "midday_asymmetry_target_baseline",
+        "midday_asymmetry_target_strict",
+        "midday_oi_iv_target_baseline",
+        "midday_expiry_target_baseline",
+    ]
