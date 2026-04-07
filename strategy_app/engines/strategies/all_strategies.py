@@ -34,6 +34,10 @@ class _TraderSetupStrategy(BaseStrategy):
             return None
         return snap.fut_oi_change_30m / snap.fut_oi
 
+    @staticmethod
+    def _oi_confirms(oi_change_pct: Optional[float], threshold: float) -> bool:
+        return oi_change_pct is None or oi_change_pct >= threshold
+
     def _entry_vote(
         self,
         snap: SnapshotAccessor,
@@ -698,16 +702,16 @@ class ORBRetestContinuationStrategy(_TraderSetupStrategy):
         retest_tolerance_pct: float = 0.0008,
         invalidation_buffer_pct: float = 0.0012,
         resume_buffer_pct: float = 0.0007,
-        breakout_r5m_min: float = 0.0010,
-        resume_r5m_min: float = 0.0009,
-        min_r15m_confirm: float = 0.0010,
-        min_vol_ratio: float = 1.45,
-        min_option_vol_ratio: float = 1.35,
-        min_oi_change_pct: float = 0.01,
-        pcr_bull_min: float = 1.00,
-        pcr_bear_max: float = 1.00,
-        max_entry_minute: int = 120,
-        max_setup_age_minutes: int = 35,
+        breakout_r5m_min: float = 0.0008,
+        resume_r5m_min: float = 0.0006,
+        min_r15m_confirm: float = 0.0006,
+        min_vol_ratio: float = 1.20,
+        min_option_vol_ratio: float = 1.10,
+        min_oi_change_pct: float = 0.003,
+        pcr_bull_min: float = 0.95,
+        pcr_bear_max: float = 1.05,
+        max_entry_minute: int = 150,
+        max_setup_age_minutes: int = 55,
         exit_buffer_pct: float = 0.0012,
     ) -> None:
         self._breakout_buffer_pct = float(breakout_buffer_pct)
@@ -773,7 +777,7 @@ class ORBRetestContinuationStrategy(_TraderSetupStrategy):
 
         direction = setup["direction"]
         level = float(setup["level"])
-        oi_change_pct = self._oi_change_pct(snap) or 0.0
+        oi_change_pct = self._oi_change_pct(snap)
         if direction == Direction.CE:
             if close < level * (1.0 - self._invalidation_buffer_pct):
                 self._active_setup = None
@@ -791,7 +795,7 @@ class ORBRetestContinuationStrategy(_TraderSetupStrategy):
                 and vol_ratio >= self._min_vol_ratio
                 and (snap.pcr is None or snap.pcr >= self._pcr_bull_min)
                 and (self._option_liquidity_ratio(snap, Direction.CE) or 0.0) >= self._min_option_vol_ratio
-                and oi_change_pct >= self._min_oi_change_pct
+                and self._oi_confirms(oi_change_pct, self._min_oi_change_pct)
             ):
                 self._entry_fired = True
                 return self._entry_vote(
@@ -830,7 +834,7 @@ class ORBRetestContinuationStrategy(_TraderSetupStrategy):
             and vol_ratio >= self._min_vol_ratio
             and (snap.pcr is None or snap.pcr <= self._pcr_bear_max)
             and (self._option_liquidity_ratio(snap, Direction.PE) or 0.0) >= self._min_option_vol_ratio
-            and oi_change_pct >= self._min_oi_change_pct
+            and self._oi_confirms(oi_change_pct, self._min_oi_change_pct)
         ):
             self._entry_fired = True
             return self._entry_vote(
@@ -894,16 +898,16 @@ class VWAPPullbackContinuationStrategy(_TraderSetupStrategy):
         *,
         min_entry_minute: int = 50,
         max_entry_minute: int = 210,
-        trend_r15m_min: float = 0.0012,
-        trend_r30m_min: float = 0.0020,
-        pullback_distance_pct: float = 0.0012,
-        resume_distance_pct: float = 0.0007,
-        resume_r5m_min: float = 0.0008,
-        min_vol_ratio: float = 1.30,
-        min_option_vol_ratio: float = 1.30,
-        min_oi_change_pct: float = 0.008,
-        pcr_bull_min: float = 1.00,
-        pcr_bear_max: float = 1.00,
+        trend_r15m_min: float = 0.0007,
+        trend_r30m_min: float = 0.0012,
+        pullback_distance_pct: float = 0.0018,
+        resume_distance_pct: float = 0.0005,
+        resume_r5m_min: float = 0.0006,
+        min_vol_ratio: float = 1.15,
+        min_option_vol_ratio: float = 1.05,
+        min_oi_change_pct: float = 0.002,
+        pcr_bull_min: float = 0.95,
+        pcr_bear_max: float = 1.05,
         max_setup_age_minutes: int = 75,
         exit_buffer_pct: float = 0.0008,
     ) -> None:
@@ -970,7 +974,7 @@ class VWAPPullbackContinuationStrategy(_TraderSetupStrategy):
             self._active_setup = None
             return None
 
-        oi_change_pct = self._oi_change_pct(snap) or 0.0
+        oi_change_pct = self._oi_change_pct(snap)
         if setup["direction"] == Direction.CE:
             if close < vwap * (1.0 - self._pullback_distance_pct):
                 self._active_setup = None
@@ -987,7 +991,7 @@ class VWAPPullbackContinuationStrategy(_TraderSetupStrategy):
                 and vol_ratio >= self._min_vol_ratio
                 and (snap.pcr is None or snap.pcr >= self._pcr_bull_min)
                 and (self._option_liquidity_ratio(snap, Direction.CE) or 0.0) >= self._min_option_vol_ratio
-                and oi_change_pct >= self._min_oi_change_pct
+                and self._oi_confirms(oi_change_pct, self._min_oi_change_pct)
             ):
                 self._entry_fired = True
                 return self._entry_vote(
@@ -1027,7 +1031,7 @@ class VWAPPullbackContinuationStrategy(_TraderSetupStrategy):
             and vol_ratio >= self._min_vol_ratio
             and (snap.pcr is None or snap.pcr <= self._pcr_bear_max)
             and (self._option_liquidity_ratio(snap, Direction.PE) or 0.0) >= self._min_option_vol_ratio
-            and oi_change_pct >= self._min_oi_change_pct
+            and self._oi_confirms(oi_change_pct, self._min_oi_change_pct)
         ):
             self._entry_fired = True
             return self._entry_vote(
@@ -1094,14 +1098,14 @@ class FailedBreakoutReversalStrategy(_TraderSetupStrategy):
         min_entry_minute: int = 35,
         max_entry_minute: int = 160,
         breakout_buffer_pct: float = 0.0007,
-        reentry_buffer_pct: float = 0.0004,
+        reentry_buffer_pct: float = 0.0002,
         continuation_invalidation_pct: float = 0.0018,
-        reversal_r5m_min: float = 0.0008,
-        min_vol_ratio: float = 1.25,
-        min_option_vol_ratio: float = 1.25,
-        pcr_bull_min: float = 1.00,
-        pcr_bear_max: float = 1.00,
-        max_setup_age_minutes: int = 30,
+        reversal_r5m_min: float = 0.0006,
+        min_vol_ratio: float = 1.10,
+        min_option_vol_ratio: float = 1.05,
+        pcr_bull_min: float = 0.93,
+        pcr_bear_max: float = 1.07,
+        max_setup_age_minutes: int = 45,
         exit_buffer_pct: float = 0.0012,
     ) -> None:
         self._min_entry_minute = int(min_entry_minute)
