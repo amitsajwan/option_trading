@@ -41,13 +41,23 @@ Supported conviction scores:
 
 ## Batch Design
 
-This grid is intentionally small:
+`v1` proved that the idea can over-prune the validation folds. The corrective `v2` batch keeps the same architecture but widens the kept share and relaxes the hard thresholds enough to preserve evaluable CV.
+
+This grid family is intentionally small:
 
 - `midday_asymmetry_high_conviction_baseline`
 - `midday_asymmetry_high_conviction_strict`
 - `midday_oi_iv_high_conviction`
 - `midday_expiry_high_conviction`
 - `midday_asymmetry_ultra_selective`
+
+The recommended rerun is `v2`:
+
+- `midday_asymmetry_high_conviction_baseline_v2`
+- `midday_asymmetry_high_conviction_strict_v2`
+- `midday_oi_iv_high_conviction_v2`
+- `midday_expiry_high_conviction_v2`
+- `midday_asymmetry_selective_v2`
 
 Rules:
 
@@ -64,14 +74,14 @@ Promote only if the winner improves all three:
 - Stage 2 ROC-AUC still at or above `0.55`
 - robustness gate-pass rate is no longer effectively zero
 
-If the high-conviction batch still leaves Brier far above `0.22`, the next step is a true `direction-or-no-trade` Stage 2 formulation.
+If the corrected high-conviction batch still leaves Brier far above `0.22`, the next step is a true `direction-or-no-trade` Stage 2 formulation.
 
 ## Recommended Command
 
 ```bash
 python -m ml_pipeline_2.run_staged_grid \
-  --config ml_pipeline_2/configs/research/staged_grid.stage2_midday_high_conviction_v1.json \
-  --run-output-root ml_pipeline_2/artifacts/training_launches/stage2_midday_high_conviction_v1/run \
+  --config ml_pipeline_2/configs/research/staged_grid.stage2_midday_high_conviction_v2.json \
+  --run-output-root ml_pipeline_2/artifacts/training_launches/stage2_midday_high_conviction_v2/run \
   --run-reuse-mode fail_if_exists \
   --model-group banknifty_futures/h15_tp_auto \
   --profile-id openfe_v9_dual
