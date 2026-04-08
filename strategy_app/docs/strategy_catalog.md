@@ -102,6 +102,29 @@ Helper exit override currently configured:
   - routed by experimental profile `det_setup_v1`
   - not part of the default production profile
 
+### `TRADER_V3_COMPOSITE`
+
+- role: trader-grade intraday options composite for the `det_v3_v1` profile
+- architecture:
+  - internal options-state builder
+  - internal trader regime classifier
+  - explicit playbook selection
+  - delta-targeted strike selection
+  - trader-style participation governor
+- supported internal playbooks:
+  - trend pullback long / short
+  - failed breakout reversal long / short
+  - expiry momentum break
+  - expiry pin reversal
+- key inputs:
+  - futures returns, VWAP, opening range
+  - IV percentile and skew
+  - available strikes with per-strike IV and optional Greeks
+  - max pain and expiry context
+- active usage:
+  - routed by experimental profile `det_v3_v1`
+  - benchmarked against `det_prod_v1`, not part of the default production profile
+
 ### `ORB_RETEST_CONTINUATION`
 
 - role: research-only setup primitive

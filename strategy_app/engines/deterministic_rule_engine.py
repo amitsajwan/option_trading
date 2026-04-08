@@ -468,7 +468,7 @@ class DeterministicRuleEngine(StrategyEngine):
             scored_candidates: list[tuple[StrategyVote, EntryPolicyDecision]] = []
             for candidate in ranked_entry_votes:
                 self._apply_strike_selection(candidate, snap)
-                policy_decision = self._entry_policy.evaluate(snap, candidate, regime_signal, risk)
+                policy_decision = self._evaluate_entry_policy(candidate, snap, regime_signal, risk)
                 self._annotate_policy(candidate, policy_decision)
                 self._annotate_vote_contract(candidate)
                 scored_candidates.append((candidate, policy_decision))
@@ -498,7 +498,7 @@ class DeterministicRuleEngine(StrategyEngine):
 
         for candidate in ranked_entry_votes:
             self._apply_strike_selection(candidate, snap)
-            policy_decision = self._entry_policy.evaluate(snap, candidate, regime_signal, risk)
+            policy_decision = self._evaluate_entry_policy(candidate, snap, regime_signal, risk)
             self._annotate_policy(candidate, policy_decision)
             self._annotate_vote_contract(candidate)
             if candidate.confidence < self._min_confidence:
@@ -682,6 +682,27 @@ class DeterministicRuleEngine(StrategyEngine):
         if "target_pct" in adjustments and cfg.target_pct is None:
             target_pct = float(adjustments["target_pct"])
         return max(0.0, float(stop_loss_pct)), max(0.0, float(target_pct)), cfg
+
+    def _evaluate_entry_policy(
+        self,
+        vote: StrategyVote,
+        snap: SnapshotAccessor,
+        regime_signal: RegimeSignal,
+        risk: RiskContext,
+    ) -> EntryPolicyDecision:
+        mode = str(vote.raw_signals.get("_entry_policy_mode") or "").strip().lower()
+        if mode == "bypass":
+            checks = {"mode": "bypass", "strategy": vote.strategy_name}
+            return EntryPolicyDecision.allow("bypass:strategy_owned", score=1.0, checks=checks)
+        if mode == "advisory":
+            decision = self._entry_policy.evaluate(snap, vote, regime_signal, risk)
+            return EntryPolicyDecision.allow(
+                f"advisory:{decision.reason}",
+                score=max(0.75, float(decision.score)),
+                checks={**decision.checks, "mode": "advisory"},
+                adjustments=decision.adjustments,
+            )
+        return self._entry_policy.evaluate(snap, vote, regime_signal, risk)
 
     def _annotate_policy(self, vote: StrategyVote, decision: EntryPolicyDecision) -> None:
         vote.raw_signals["_policy_allowed"] = decision.allowed
@@ -1216,6 +1237,8 @@ class DeterministicRuleEngine(StrategyEngine):
         )
 
     def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor) -> None:
+        if bool(vote.raw_signals.get("_lock_strike_selection")):
+            return
         if self._strike_policy != "oi_volume_ranked":
             return
         direction = vote.direction

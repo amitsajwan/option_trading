@@ -22,6 +22,7 @@ from strategy_app.engines.profiles import (
     PROFILE_DET_CORE_V2,
     PROFILE_DET_PROD_V1,
     PROFILE_DET_SETUP_V1,
+    PROFILE_DET_V3_V1,
     build_run_metadata,
 )
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
@@ -147,6 +148,12 @@ def default_profile_specs() -> list[DeterministicProfileSpec]:
             label="Trader Setup v1",
             description="Experimental trader-style setup profile using retests, pullbacks, and failed-break reversals.",
             metadata=build_run_metadata(PROFILE_DET_SETUP_V1),
+        ),
+        DeterministicProfileSpec(
+            profile_id=PROFILE_DET_V3_V1,
+            label="Trader V3 v1",
+            description="Trader-grade intraday options composite using internal regime, playbook, and delta-based strike selection.",
+            metadata=build_run_metadata(PROFILE_DET_V3_V1),
         ),
         DeterministicProfileSpec(
             profile_id="det_ema_legacy_v1",

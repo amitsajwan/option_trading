@@ -18,6 +18,7 @@ def test_default_profile_specs_are_unique() -> None:
     assert len(ids) == len(set(ids))
     assert "det_core_v2" in ids
     assert "det_prod_v1" in ids
+    assert "det_v3_v1" in ids
 
 
 def test_build_calendar_windows_monthly() -> None:

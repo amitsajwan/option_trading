@@ -26,6 +26,7 @@ from ..trader_judgement import (
     TraderSetupState,
     TraderSetupType,
 )
+from ..trader_v3 import TraderV3CompositeStrategy
 
 
 class _TraderSetupStrategy(BaseStrategy):
@@ -1911,4 +1912,5 @@ def build_default_strategy_set() -> list[BaseStrategy]:
         VWAPReclaimStrategy(),
         PrevDayLevelBreakout(),
         TraderCompositeStrategy(),
+        TraderV3CompositeStrategy(),
     ]

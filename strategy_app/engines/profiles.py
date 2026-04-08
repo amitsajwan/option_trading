@@ -7,6 +7,7 @@ from typing import Any
 PROFILE_DET_PROD_V1 = "det_prod_v1"
 PROFILE_DET_CORE_V2 = "det_core_v2"
 PROFILE_DET_SETUP_V1 = "det_setup_v1"
+PROFILE_DET_V3_V1 = "det_v3_v1"
 
 PRODUCTION_DEFAULT_PROFILE_ID = PROFILE_DET_PROD_V1
 
@@ -61,21 +62,44 @@ _DET_SETUP_V1_RISK_CONFIG: dict[str, Any] = {
     "trailing_lock_breakeven": True,
 }
 
+_DET_V3_V1_REGIME_ENTRY_MAP: dict[str, list[str]] = {
+    "TRENDING": ["IV_FILTER", "TRADER_V3_COMPOSITE"],
+    "SIDEWAYS": ["IV_FILTER", "TRADER_V3_COMPOSITE"],
+    "EXPIRY": ["IV_FILTER", "TRADER_V3_COMPOSITE"],
+    "PRE_EXPIRY": ["IV_FILTER", "TRADER_V3_COMPOSITE"],
+    "HIGH_VOL": ["IV_FILTER", "TRADER_V3_COMPOSITE"],
+    "AVOID": [],
+}
+
+_DET_V3_V1_EXIT_STRATEGIES: list[str] = ["TRADER_V3_COMPOSITE"]
+
+_DET_V3_V1_RISK_CONFIG: dict[str, Any] = {
+    "stop_loss_pct": 0.18,
+    "target_pct": 0.65,
+    "trailing_enabled": True,
+    "trailing_activation_pct": 0.08,
+    "trailing_offset_pct": 0.04,
+    "trailing_lock_breakeven": True,
+}
+
 _PROFILE_REGIME_ENTRY_MAPS: dict[str, dict[str, list[str]]] = {
     PROFILE_DET_PROD_V1: _DET_PROD_V1_REGIME_ENTRY_MAP,
     PROFILE_DET_CORE_V2: _DET_CORE_V2_REGIME_ENTRY_MAP,
     PROFILE_DET_SETUP_V1: _DET_SETUP_V1_REGIME_ENTRY_MAP,
+    PROFILE_DET_V3_V1: _DET_V3_V1_REGIME_ENTRY_MAP,
 }
 
 _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
     PROFILE_DET_PROD_V1: _DET_PROD_V1_EXIT_STRATEGIES,
     PROFILE_DET_CORE_V2: _DET_CORE_V2_EXIT_STRATEGIES,
     PROFILE_DET_SETUP_V1: _DET_SETUP_V1_EXIT_STRATEGIES,
+    PROFILE_DET_V3_V1: _DET_V3_V1_EXIT_STRATEGIES,
 }
 
 _PROFILE_RISK_CONFIGS: dict[str, dict[str, Any]] = {
     PROFILE_DET_PROD_V1: _DET_PROD_V1_RISK_CONFIG,
     PROFILE_DET_SETUP_V1: _DET_SETUP_V1_RISK_CONFIG,
+    PROFILE_DET_V3_V1: _DET_V3_V1_RISK_CONFIG,
 }
 
 
@@ -119,6 +143,7 @@ __all__ = [
     "PROFILE_DET_CORE_V2",
     "PROFILE_DET_PROD_V1",
     "PROFILE_DET_SETUP_V1",
+    "PROFILE_DET_V3_V1",
     "build_router_config",
     "build_run_metadata",
     "get_exit_strategies",
