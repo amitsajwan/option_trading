@@ -241,6 +241,7 @@ def _validate_stage2_target_redesign(payload: Any, errors: List[str], *, field_p
         "min_directional_edge_after_cost",
         "min_winner_return_after_cost",
         "max_opposing_return_after_cost",
+        "max_kept_fraction",
     ):
         if numeric_field in stage2_target_redesign:
             try:
@@ -259,6 +260,21 @@ def _validate_stage2_target_redesign(payload: Any, errors: List[str], *, field_p
                 raise ValueError
         except Exception:
             errors.append(f"{field_prefix}.min_winner_return_after_cost must be a number >= 0")
+    if "max_kept_fraction" in stage2_target_redesign:
+        try:
+            max_kept_fraction = float(stage2_target_redesign.get("max_kept_fraction", 1.0))
+            if max_kept_fraction <= 0.0 or max_kept_fraction > 1.0:
+                raise ValueError
+        except Exception:
+            errors.append(f"{field_prefix}.max_kept_fraction must be a number in (0, 1]")
+    if "conviction_score" in stage2_target_redesign:
+        conviction_score = str(stage2_target_redesign.get("conviction_score") or "").strip().lower()
+        valid_scores = {"edge", "winner_return", "edge_winner_min"}
+        if conviction_score not in valid_scores:
+            errors.append(
+                f"{field_prefix}.conviction_score has unknown value '{conviction_score}'; "
+                f"valid options: {sorted(valid_scores)}"
+            )
 
 
 def _validate_grid_robustness_probe(payload: Any, errors: List[str], *, field_prefix: str) -> None:

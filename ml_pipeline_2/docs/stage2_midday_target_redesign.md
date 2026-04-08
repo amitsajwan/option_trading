@@ -31,12 +31,24 @@ Use `training.stage2_target_redesign`:
 - `min_directional_edge_after_cost`
 - `min_winner_return_after_cost`
 - `max_opposing_return_after_cost`
+- `max_kept_fraction`
+- `conviction_score`
 
 This is independent from the older Stage 2 label filter. The redesign acts first; the legacy label filter can still be used afterward for additional pruning if needed.
+
+Supported conviction scores:
+
+- `edge`
+- `winner_return`
+- `edge_winner_min`
+
+Use `max_kept_fraction < 1.0` only when the goal is to keep the highest-conviction tail of already-valid rows. `edge_winner_min` is the most conservative choice because it favors rows that are strong on both separation and winner quality.
 
 ## Baseline
 
 Use `midday_asymmetry_pool` as the last pre-redesign evidence anchor.
+
+For the narrower follow-up batch, see `stage2_midday_high_conviction.md`.
 
 ## Recommended Command
 

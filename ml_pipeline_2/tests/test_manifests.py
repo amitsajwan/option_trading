@@ -159,9 +159,12 @@ def test_staged_manifest_accepts_stage2_target_redesign(tmp_path: Path) -> None:
         "min_directional_edge_after_cost": 0.0018,
         "min_winner_return_after_cost": 0.0010,
         "max_opposing_return_after_cost": -0.0002,
+        "max_kept_fraction": 0.4,
+        "conviction_score": "edge_winner_min",
     }
     resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_stage2_target_redesign_ok.json", validate_paths=False)
     assert resolved["training"]["stage2_target_redesign"]["enabled"] is True
+    assert resolved["training"]["stage2_target_redesign"]["max_kept_fraction"] == 0.4
 
 
 def test_staged_manifest_validate_paths_requires_stage_view_datasets(tmp_path: Path) -> None:

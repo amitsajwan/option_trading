@@ -1053,6 +1053,66 @@ def test_apply_stage2_target_redesign_reduces_ambiguous_rows() -> None:
     assert meta["rows_dropped"] == 1
 
 
+def test_apply_stage2_target_redesign_can_keep_only_high_conviction_fraction() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:00:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0040,
+                "best_pe_net_return_after_cost": -0.0004,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:01:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0032,
+                "best_pe_net_return_after_cost": -0.0001,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:02:00"),
+                "direction_label": "PE",
+                "best_ce_net_return_after_cost": -0.0002,
+                "best_pe_net_return_after_cost": 0.0028,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:03:00"),
+                "direction_label": "PE",
+                "best_ce_net_return_after_cost": 0.0001,
+                "best_pe_net_return_after_cost": 0.0022,
+            },
+        ]
+    )
+
+    filtered, meta = staged_pipeline._apply_stage2_target_redesign(  # type: ignore[attr-defined]
+        frame,
+        {
+            "training": {
+                "stage2_target_redesign": {
+                    "enabled": True,
+                    "min_directional_edge_after_cost": 0.0018,
+                    "min_winner_return_after_cost": 0.0010,
+                    "max_opposing_return_after_cost": 0.0001,
+                    "max_kept_fraction": 0.5,
+                    "conviction_score": "edge_winner_min",
+                }
+            }
+        },
+    )
+
+    assert len(filtered) == 2
+    assert filtered["timestamp"].tolist() == [
+        pd.Timestamp("2024-01-01 12:00:00"),
+        pd.Timestamp("2024-01-01 12:01:00"),
+    ]
+    assert "direction_winner_return_after_cost" in filtered.columns
+    assert "direction_target_conviction_score" in filtered.columns
+    assert meta["post_threshold_rows"] == 4
+    assert meta["rows_after"] == 2
+    assert meta["conviction_rank_rows_dropped"] == 2
+    assert meta["conviction_keep_count"] == 2
+    assert meta["conviction_score_floor"] is not None
+
+
 def test_vectorized_policy_selection_matches_legacy_loops() -> None:
     utility, stage1_scores, stage2_scores, stage3_scores = _policy_fixture()
     stage1_policy_cfg = {"threshold_grid": [0.45, 0.55, 0.65]}

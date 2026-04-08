@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence
 
@@ -401,11 +402,20 @@ def _normalize_stage2_target_redesign(manifest: dict[str, Any]) -> dict[str, Any
         max_opposing = float(raw.get("max_opposing_return_after_cost", 0.0))
     except Exception:
         max_opposing = 0.0
+    try:
+        max_kept_fraction = float(raw.get("max_kept_fraction", 1.0))
+    except Exception:
+        max_kept_fraction = 1.0
+    conviction_score = str(raw.get("conviction_score") or "edge_winner_min").strip().lower()
+    if conviction_score not in {"edge", "winner_return", "edge_winner_min"}:
+        conviction_score = "edge_winner_min"
     return {
         "enabled": enabled,
         "min_directional_edge_after_cost": max(0.0, float(min_edge)),
         "min_winner_return_after_cost": max(0.0, float(min_winner)),
         "max_opposing_return_after_cost": float(max_opposing),
+        "max_kept_fraction": min(1.0, max(0.0, float(max_kept_fraction))),
+        "conviction_score": conviction_score,
     }
 
 
@@ -420,6 +430,11 @@ def _apply_stage2_target_redesign(stage2_frame: pd.DataFrame, manifest: dict[str
         "edge_filter_rows_dropped": 0,
         "winner_threshold_rows_dropped": 0,
         "opposing_threshold_rows_dropped": 0,
+        "conviction_rank_rows_dropped": 0,
+        "post_threshold_rows": int(len(stage2_frame)),
+        "post_threshold_kept_share": 1.0 if len(stage2_frame) else 0.0,
+        "conviction_keep_count": int(len(stage2_frame)),
+        "conviction_score_floor": None,
     }
     if not cfg["enabled"]:
         return stage2_frame.sort_values("timestamp").reset_index(drop=True), meta
@@ -443,18 +458,58 @@ def _apply_stage2_target_redesign(stage2_frame: pd.DataFrame, manifest: dict[str
     edge_keep_mask = edge_series >= float(cfg["min_directional_edge_after_cost"])
     winner_keep_mask = winner_returns >= float(cfg["min_winner_return_after_cost"])
     opposing_keep_mask = opposing_returns <= float(cfg["max_opposing_return_after_cost"])
-    keep_mask = edge_keep_mask & winner_keep_mask & opposing_keep_mask
+    threshold_keep_mask = edge_keep_mask & winner_keep_mask & opposing_keep_mask
+    keep_mask = threshold_keep_mask.copy()
+
+    conviction_rank_rows_dropped = 0
+    if bool(keep_mask.any()) and float(cfg["max_kept_fraction"]) < 1.0:
+        filtered_index = stage2_frame.index[keep_mask]
+        filtered_edge = edge_series.loc[filtered_index]
+        filtered_winner = winner_returns.loc[filtered_index]
+        if str(cfg["conviction_score"]) == "winner_return":
+            conviction_score = filtered_winner
+        elif str(cfg["conviction_score"]) == "edge":
+            conviction_score = filtered_edge
+        else:
+            conviction_score = np.minimum(filtered_edge.to_numpy(copy=False), filtered_winner.to_numpy(copy=False))
+            conviction_score = pd.Series(conviction_score, index=filtered_index, dtype=float)
+        keep_count = max(1, int(math.ceil(len(filtered_index) * float(cfg["max_kept_fraction"]))))
+        top_index = conviction_score.sort_values(kind="stable", ascending=False).iloc[:keep_count].index
+        kept_conviction_score = conviction_score.loc[top_index]
+        ranked_keep_mask = pd.Series(False, index=stage2_frame.index, dtype=bool)
+        ranked_keep_mask.loc[top_index] = True
+        keep_mask = threshold_keep_mask & ranked_keep_mask
+        conviction_rank_rows_dropped = int((threshold_keep_mask & (~ranked_keep_mask)).sum())
+        meta["conviction_keep_count"] = keep_count
+        meta["conviction_score_floor"] = float(kept_conviction_score.min()) if len(kept_conviction_score) else None
+    elif bool(keep_mask.any()):
+        meta["conviction_keep_count"] = int(keep_mask.sum())
 
     filtered = stage2_frame.loc[keep_mask].copy().sort_values("timestamp").reset_index(drop=True)
     filtered["direction_return_edge_after_cost"] = edge_series.loc[keep_mask].to_numpy(copy=False)
+    filtered["direction_winner_return_after_cost"] = winner_returns.loc[keep_mask].to_numpy(copy=False)
+    if len(filtered):
+        kept_index = stage2_frame.index[keep_mask]
+        if str(cfg["conviction_score"]) == "winner_return":
+            filtered["direction_target_conviction_score"] = winner_returns.loc[kept_index].to_numpy(copy=False)
+        elif str(cfg["conviction_score"]) == "edge":
+            filtered["direction_target_conviction_score"] = edge_series.loc[kept_index].to_numpy(copy=False)
+        else:
+            filtered["direction_target_conviction_score"] = np.minimum(
+                edge_series.loc[kept_index].to_numpy(copy=False),
+                winner_returns.loc[kept_index].to_numpy(copy=False),
+            )
     meta.update(
         {
             "rows_after": int(len(filtered)),
             "rows_dropped": int((~keep_mask).sum()),
             "kept_share": float(keep_mask.mean()) if len(keep_mask) else 0.0,
+            "post_threshold_rows": int(threshold_keep_mask.sum()),
+            "post_threshold_kept_share": float(threshold_keep_mask.mean()) if len(threshold_keep_mask) else 0.0,
             "edge_filter_rows_dropped": int((~edge_keep_mask).sum()),
             "winner_threshold_rows_dropped": int((edge_keep_mask & (~winner_keep_mask)).sum()),
             "opposing_threshold_rows_dropped": int((edge_keep_mask & winner_keep_mask & (~opposing_keep_mask)).sum()),
+            "conviction_rank_rows_dropped": conviction_rank_rows_dropped,
         }
     )
     return filtered, meta
