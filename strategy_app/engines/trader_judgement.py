@@ -136,6 +136,11 @@ class DayClassifierConfig:
     min_trend_vol_ratio: float = 1.10
     no_trade_iv_percentile: float = 97.0
     reversal_reentry_buffer_pct: float = 0.0002
+    midday_no_trade_start_minute: int = 135
+    midday_no_trade_end_minute: int = 255
+    max_midday_abs_r15m: float = 0.0006
+    max_midday_abs_price_vs_vwap: float = 0.0008
+    max_midday_vol_ratio: float = 1.00
 
 
 @dataclass(frozen=True)
@@ -166,6 +171,26 @@ class OptionScorerConfig:
     max_iv_percentile: float = 96.0
 
 
+@dataclass(frozen=True)
+class TradeGovernorConfig:
+    trend_day_max_entries: int = 2
+    reversal_day_max_entries: int = 1
+    balanced_day_max_entries: int = 0
+    no_trade_day_max_entries: int = 0
+    min_total_score_trend: float = 0.76
+    min_total_score_reversal: float = 0.82
+    min_total_score_balanced: float = 0.88
+    min_option_score: float = 0.62
+    min_setup_score: float = 0.78
+
+
+@dataclass(frozen=True)
+class TradeGovernorDecision:
+    allowed: bool
+    reason: str
+    max_entries: int
+
+
 class TraderDayClassifier:
     def __init__(self, config: Optional[DayClassifierConfig] = None) -> None:
         self._config = config or DayClassifierConfig()
@@ -182,7 +207,15 @@ class TraderDayClassifier:
         vwap = snap.vwap
         r15m = snap.fut_return_15m or 0.0
         r30m = snap.fut_return_30m or 0.0
+        price_vs_vwap = snap.price_vs_vwap or 0.0
         vol_ratio = snap.vol_ratio or 0.0
+        if (
+            self._config.midday_no_trade_start_minute <= snap.minutes <= self._config.midday_no_trade_end_minute
+            and abs(r15m) <= self._config.max_midday_abs_r15m
+            and abs(price_vs_vwap) <= self._config.max_midday_abs_price_vs_vwap
+            and vol_ratio <= self._config.max_midday_vol_ratio
+        ):
+            return DayAssessment(TraderDayType.NO_TRADE, None, 0.10, ("midday_low_energy",))
         if close is not None and vwap is not None and vol_ratio >= self._config.min_trend_vol_ratio:
             if close > vwap and r15m >= self._config.min_trend_r15m and r30m >= self._config.min_trend_r30m:
                 return DayAssessment(TraderDayType.TREND, Direction.CE, 0.82, ("trend_up",))
@@ -412,6 +445,58 @@ class OptionTradabilityScorer:
         return OptionAssessment(tradable, min(score, 0.95), tuple(reasons), premium, liquidity_ratio)
 
 
+class TradeGovernor:
+    def __init__(self, config: Optional[TradeGovernorConfig] = None) -> None:
+        self._config = config or TradeGovernorConfig()
+
+    def evaluate(
+        self,
+        *,
+        day: DayAssessment,
+        setup: SetupAssessment,
+        option: OptionAssessment,
+        entries_taken: int,
+    ) -> TradeGovernorDecision:
+        max_entries = self._max_entries_for_day(day.day_type)
+        if day.day_type == TraderDayType.NO_TRADE:
+            return TradeGovernorDecision(False, "no_trade_day", max_entries)
+        if day.day_type == TraderDayType.BALANCED:
+            return TradeGovernorDecision(False, "balanced_day_skip", max_entries)
+        if entries_taken >= max_entries:
+            return TradeGovernorDecision(False, "session_entry_cap", max_entries)
+        if option.score < self._config.min_option_score:
+            return TradeGovernorDecision(False, "option_score_too_low", max_entries)
+        if setup.score < self._config.min_setup_score:
+            return TradeGovernorDecision(False, "setup_score_too_low", max_entries)
+        total_score = (0.35 * day.score) + (0.45 * setup.score) + (0.20 * option.score)
+        if day.day_type == TraderDayType.TREND:
+            if setup.setup_type == TraderSetupType.FAILED_BREAKOUT:
+                return TradeGovernorDecision(False, "trend_day_reversal_block", max_entries)
+            if day.directional_bias is not None and setup.direction != day.directional_bias:
+                return TradeGovernorDecision(False, "trend_bias_mismatch", max_entries)
+            if total_score < self._config.min_total_score_trend:
+                return TradeGovernorDecision(False, "trend_score_too_low", max_entries)
+            return TradeGovernorDecision(True, "trend_setup_allowed", max_entries)
+        if day.day_type == TraderDayType.REVERSAL:
+            if setup.setup_type != TraderSetupType.FAILED_BREAKOUT:
+                return TradeGovernorDecision(False, "reversal_requires_failed_breakout", max_entries)
+            if total_score < self._config.min_total_score_reversal:
+                return TradeGovernorDecision(False, "reversal_score_too_low", max_entries)
+            return TradeGovernorDecision(True, "reversal_setup_allowed", max_entries)
+        if total_score < self._config.min_total_score_balanced:
+            return TradeGovernorDecision(False, "balanced_score_too_low", max_entries)
+        return TradeGovernorDecision(False, "balanced_day_skip", max_entries)
+
+    def _max_entries_for_day(self, day_type: TraderDayType) -> int:
+        if day_type == TraderDayType.TREND:
+            return self._config.trend_day_max_entries
+        if day_type == TraderDayType.REVERSAL:
+            return self._config.reversal_day_max_entries
+        if day_type == TraderDayType.BALANCED:
+            return self._config.balanced_day_max_entries
+        return self._config.no_trade_day_max_entries
+
+
 __all__ = [
     "BreakoutCandidate",
     "DayAssessment",
@@ -419,6 +504,9 @@ __all__ = [
     "FailedBreakoutCandidate",
     "OptionAssessment",
     "OptionScorerConfig",
+    "TradeGovernor",
+    "TradeGovernorConfig",
+    "TradeGovernorDecision",
     "PullbackCandidate",
     "SetupAssessment",
     "SetupScorerConfig",

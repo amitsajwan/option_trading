@@ -17,6 +17,7 @@ from ...contracts import (
 from ..snapshot_accessor import SnapshotAccessor
 from ..trader_judgement import (
     OptionTradabilityScorer,
+    TradeGovernor,
     TraderAction,
     TraderAnnotationRecord,
     TraderDayClassifier,
@@ -103,14 +104,15 @@ class TraderCompositeStrategy(_TraderSetupStrategy):
         self._day_classifier = TraderDayClassifier()
         self._setup_scorer = TraderSetupScorer()
         self._option_scorer = OptionTradabilityScorer()
+        self._trade_governor = TradeGovernor()
         self._state = TraderSetupState()
-        self._entry_fired = False
+        self._entries_taken = 0
         self._trade_date: Optional[str] = None
 
     def on_session_start(self, trade_date) -> None:
         self._trade_date = str(trade_date)
         self._state = TraderSetupState()
-        self._entry_fired = False
+        self._entries_taken = 0
 
     def on_session_end(self, trade_date) -> None:
         self.on_session_start(trade_date)
@@ -131,7 +133,7 @@ class TraderCompositeStrategy(_TraderSetupStrategy):
 
         if position is not None:
             return self._check_exit(snap, position)
-        if self._entry_fired or not snap.is_valid_entry_phase:
+        if not snap.is_valid_entry_phase:
             return None
 
         day = self._day_classifier.assess(snap)
@@ -164,6 +166,47 @@ class TraderCompositeStrategy(_TraderSetupStrategy):
         option = self._option_scorer.assess(snap, setup.direction, expected_move_pct=setup.expected_move_pct)
         if not option.tradable:
             return None
+        governor = self._trade_governor.evaluate(
+            day=day,
+            setup=setup,
+            option=option,
+            entries_taken=self._entries_taken,
+        )
+        if not governor.allowed:
+            if governor.reason in {"no_trade_day", "balanced_day_skip"}:
+                annotation = TraderAnnotationRecord(
+                    snapshot_id=snap.snapshot_id,
+                    trade_date=snap.trade_date,
+                    day_type=day.day_type.value,
+                    setup_type=setup.setup_type.value,
+                    action=TraderAction.SKIP.value,
+                    direction=setup.direction.value if setup.direction is not None else None,
+                    option_plan="ATM",
+                    invalidation_reference=setup.invalidation_reference,
+                    notes=f"governor={governor.reason}",
+                )
+                return StrategyVote(
+                    strategy_name=self.name,
+                    snapshot_id=snap.snapshot_id,
+                    timestamp=snap.timestamp_or_now,
+                    trade_date=snap.trade_date,
+                    signal_type=SignalType.SKIP,
+                    direction=Direction.AVOID,
+                    confidence=round(max(day.score, setup.score), 2),
+                    reason=f"TRADER_SKIP: {governor.reason}",
+                    raw_signals={
+                        "day_type": day.day_type.value,
+                        "day_score": day.score,
+                        "setup_type": setup.setup_type.value,
+                        "setup_score": setup.score,
+                        "option_score": option.score,
+                        "governor_reason": governor.reason,
+                        "entries_taken": self._entries_taken,
+                        "max_entries": governor.max_entries,
+                        "annotation": annotation.to_payload(),
+                    },
+                )
+            return None
 
         confidence = min(0.96, (0.35 * day.score) + (0.45 * setup.score) + (0.20 * option.score))
         annotation = TraderAnnotationRecord(
@@ -177,7 +220,8 @@ class TraderCompositeStrategy(_TraderSetupStrategy):
             invalidation_reference=setup.invalidation_reference,
             notes="composite trader-style judgement",
         )
-        self._entry_fired = True
+        self._entries_taken += 1
+        self._state = TraderSetupState()
         return self._entry_vote(
             snap,
             direction=setup.direction,
@@ -199,6 +243,9 @@ class TraderCompositeStrategy(_TraderSetupStrategy):
                 "option_reasons": list(option.reasons),
                 "option_premium": option.premium,
                 "option_liquidity_ratio": option.liquidity_ratio,
+                "governor_reason": governor.reason,
+                "entries_taken": self._entries_taken,
+                "max_entries": governor.max_entries,
                 "annotation": annotation.to_payload(),
             },
         )
