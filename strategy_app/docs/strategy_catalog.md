@@ -81,6 +81,42 @@ Helper exit override currently configured:
 
 ## 3. Not Routed By Default
 
+### `TRADER_COMPOSITE`
+
+- role: trader-style composite decision layer
+- architecture:
+  - day classifier
+  - setup scorer
+  - option tradability scorer
+- supported internal setups:
+  - ORB retest continuation
+  - VWAP pullback continuation
+  - failed breakout reversal
+- key inputs:
+  - opening range structure
+  - VWAP acceptance/rejection
+  - futures momentum and volume
+  - OI/PCR as confirmation
+  - ATM option premium and liquidity
+- active usage:
+  - routed by experimental profile `det_setup_v1`
+  - not part of the default production profile
+
+### `ORB_RETEST_CONTINUATION`
+
+- role: research-only setup primitive
+- current status: retained as a standalone experiment, but superseded by `TRADER_COMPOSITE` for `det_setup_v1`
+
+### `VWAP_PULLBACK_CONTINUATION`
+
+- role: research-only setup primitive
+- current status: retained as a standalone experiment, but superseded by `TRADER_COMPOSITE` for `det_setup_v1`
+
+### `FAILED_BREAKOUT_REVERSAL`
+
+- role: research-only setup primitive
+- current status: retained as a standalone experiment, but superseded by `TRADER_COMPOSITE` for `det_setup_v1`
+
 ### `EXPIRY_MAX_PAIN`
 
 - implemented in code

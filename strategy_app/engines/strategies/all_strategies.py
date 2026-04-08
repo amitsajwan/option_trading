@@ -15,6 +15,16 @@ from ...contracts import (
     StrategyVote,
 )
 from ..snapshot_accessor import SnapshotAccessor
+from ..trader_judgement import (
+    OptionTradabilityScorer,
+    TraderAction,
+    TraderAnnotationRecord,
+    TraderDayClassifier,
+    TraderDayType,
+    TraderSetupScorer,
+    TraderSetupState,
+    TraderSetupType,
+)
 
 
 class _TraderSetupStrategy(BaseStrategy):
@@ -82,6 +92,189 @@ class _TraderSetupStrategy(BaseStrategy):
             raw_signals=raw_signals,
             exit_reason=exit_reason,
         )
+
+
+class TraderCompositeStrategy(_TraderSetupStrategy):
+    """Composite trader-style decision layer using day/setup/option scoring."""
+
+    name = "TRADER_COMPOSITE"
+
+    def __init__(self) -> None:
+        self._day_classifier = TraderDayClassifier()
+        self._setup_scorer = TraderSetupScorer()
+        self._option_scorer = OptionTradabilityScorer()
+        self._state = TraderSetupState()
+        self._entry_fired = False
+        self._trade_date: Optional[str] = None
+
+    def on_session_start(self, trade_date) -> None:
+        self._trade_date = str(trade_date)
+        self._state = TraderSetupState()
+        self._entry_fired = False
+
+    def on_session_end(self, trade_date) -> None:
+        self.on_session_start(trade_date)
+
+    def _ensure_session(self, snap: SnapshotAccessor) -> None:
+        if self._trade_date != snap.trade_date:
+            self.on_session_start(snap.trade_date)
+
+    def evaluate(
+        self,
+        snapshot: SnapshotPayload,
+        position: Optional[PositionContext],
+        risk: RiskContext,
+    ) -> Optional[StrategyVote]:
+        del risk
+        snap = SnapshotAccessor(snapshot)
+        self._ensure_session(snap)
+
+        if position is not None:
+            return self._check_exit(snap, position)
+        if self._entry_fired or not snap.is_valid_entry_phase:
+            return None
+
+        day = self._day_classifier.assess(snap)
+        if day.day_type == TraderDayType.NO_TRADE:
+            annotation = TraderAnnotationRecord(
+                snapshot_id=snap.snapshot_id,
+                trade_date=snap.trade_date,
+                day_type=day.day_type.value,
+                setup_type=TraderSetupType.NONE.value,
+                action=TraderAction.SKIP.value,
+                notes="day classifier marked session as no-trade",
+            )
+            return StrategyVote(
+                strategy_name=self.name,
+                snapshot_id=snap.snapshot_id,
+                timestamp=snap.timestamp_or_now,
+                trade_date=snap.trade_date,
+                signal_type=SignalType.SKIP,
+                direction=Direction.AVOID,
+                confidence=round(day.score, 2),
+                reason=f"TRADER_SKIP: day_type={day.day_type.value}",
+                raw_signals={"day_type": day.day_type.value, "day_score": day.score, "annotation": annotation.to_payload()},
+            )
+
+        self._setup_scorer.observe(snap, self._state)
+        setup = self._setup_scorer.best_setup(snap, self._state, day)
+        if not setup.trigger_ready or setup.direction is None:
+            return None
+
+        option = self._option_scorer.assess(snap, setup.direction, expected_move_pct=setup.expected_move_pct)
+        if not option.tradable:
+            return None
+
+        confidence = min(0.96, (0.35 * day.score) + (0.45 * setup.score) + (0.20 * option.score))
+        annotation = TraderAnnotationRecord(
+            snapshot_id=snap.snapshot_id,
+            trade_date=snap.trade_date,
+            day_type=day.day_type.value,
+            setup_type=setup.setup_type.value,
+            action=TraderAction.TAKE.value,
+            direction=setup.direction.value,
+            option_plan="ATM",
+            invalidation_reference=setup.invalidation_reference,
+            notes="composite trader-style judgement",
+        )
+        self._entry_fired = True
+        return self._entry_vote(
+            snap,
+            direction=setup.direction,
+            confidence=confidence,
+            reason=(
+                f"TRADER_{setup.setup_type.value}: day={day.day_type.value} "
+                f"day_score={day.score:.2f} setup_score={setup.score:.2f} option_score={option.score:.2f}"
+            ),
+            raw_signals={
+                "day_type": day.day_type.value,
+                "day_score": day.score,
+                "day_reasons": list(day.reasons),
+                "setup_type": setup.setup_type.value,
+                "setup_score": setup.score,
+                "setup_reasons": list(setup.reasons),
+                "invalidation_reference": setup.invalidation_reference,
+                "expected_move_pct": setup.expected_move_pct,
+                "option_score": option.score,
+                "option_reasons": list(option.reasons),
+                "option_premium": option.premium,
+                "option_liquidity_ratio": option.liquidity_ratio,
+                "annotation": annotation.to_payload(),
+            },
+        )
+
+    def _check_exit(self, snap: SnapshotAccessor, position: PositionContext) -> Optional[StrategyVote]:
+        entry_reason = str(position.entry_reason or "").upper()
+        if "ORB_RETEST" in entry_reason:
+            return self._exit_orb_retest(snap, position)
+        if "VWAP_PULLBACK" in entry_reason:
+            return self._exit_vwap_pullback(snap, position)
+        if "FAILED_BREAKOUT" in entry_reason:
+            return self._exit_failed_breakout(snap, position)
+        return self._exit_vwap_pullback(snap, position)
+
+    def _exit_orb_retest(self, snap: SnapshotAccessor, position: PositionContext) -> Optional[StrategyVote]:
+        if not snap.or_ready or snap.fut_close is None or snap.orh is None or snap.orl is None:
+            return None
+        if position.direction == "CE" and snap.fut_close < snap.orh * 0.9988:
+            return self._exit_vote(
+                snap,
+                confidence=0.82,
+                reason=f"TRADER_EXIT_ORB_RETEST_LONG: close={snap.fut_close:.0f}<orh={snap.orh:.0f}",
+                raw_signals={"close": snap.fut_close, "orh": snap.orh, "setup": "ORB_RETEST"},
+                exit_reason=ExitReason.STRATEGY_EXIT,
+            )
+        if position.direction == "PE" and snap.fut_close > snap.orl * 1.0012:
+            return self._exit_vote(
+                snap,
+                confidence=0.82,
+                reason=f"TRADER_EXIT_ORB_RETEST_SHORT: close={snap.fut_close:.0f}>orl={snap.orl:.0f}",
+                raw_signals={"close": snap.fut_close, "orl": snap.orl, "setup": "ORB_RETEST"},
+                exit_reason=ExitReason.STRATEGY_EXIT,
+            )
+        return None
+
+    def _exit_vwap_pullback(self, snap: SnapshotAccessor, position: PositionContext) -> Optional[StrategyVote]:
+        if snap.fut_close is None or snap.vwap is None:
+            return None
+        if position.direction == "CE" and snap.fut_close < snap.vwap * 0.9992:
+            return self._exit_vote(
+                snap,
+                confidence=0.78,
+                reason=f"TRADER_EXIT_VWAP_LONG: close={snap.fut_close:.0f}<vwap={snap.vwap:.0f}",
+                raw_signals={"close": snap.fut_close, "vwap": snap.vwap, "setup": "VWAP_PULLBACK"},
+                exit_reason=ExitReason.STRATEGY_EXIT,
+            )
+        if position.direction == "PE" and snap.fut_close > snap.vwap * 1.0008:
+            return self._exit_vote(
+                snap,
+                confidence=0.78,
+                reason=f"TRADER_EXIT_VWAP_SHORT: close={snap.fut_close:.0f}>vwap={snap.vwap:.0f}",
+                raw_signals={"close": snap.fut_close, "vwap": snap.vwap, "setup": "VWAP_PULLBACK"},
+                exit_reason=ExitReason.STRATEGY_EXIT,
+            )
+        return None
+
+    def _exit_failed_breakout(self, snap: SnapshotAccessor, position: PositionContext) -> Optional[StrategyVote]:
+        if snap.fut_close is None or snap.orh is None or snap.orl is None:
+            return None
+        if position.direction == "CE" and snap.fut_close < snap.orl * 0.9988:
+            return self._exit_vote(
+                snap,
+                confidence=0.77,
+                reason=f"TRADER_EXIT_FAILED_BREAKOUT_LONG: close={snap.fut_close:.0f}<orl={snap.orl:.0f}",
+                raw_signals={"close": snap.fut_close, "orl": snap.orl, "setup": "FAILED_BREAKOUT"},
+                exit_reason=ExitReason.STRATEGY_EXIT,
+            )
+        if position.direction == "PE" and snap.fut_close > snap.orh * 1.0012:
+            return self._exit_vote(
+                snap,
+                confidence=0.77,
+                reason=f"TRADER_EXIT_FAILED_BREAKOUT_SHORT: close={snap.fut_close:.0f}>orh={snap.orh:.0f}",
+                raw_signals={"close": snap.fut_close, "orh": snap.orh, "setup": "FAILED_BREAKOUT"},
+                exit_reason=ExitReason.STRATEGY_EXIT,
+            )
+        return None
 
 
 class ORBStrategy(BaseStrategy):
@@ -1670,4 +1863,5 @@ def build_default_strategy_set() -> list[BaseStrategy]:
         EMAcrossoverStrategy(),
         VWAPReclaimStrategy(),
         PrevDayLevelBreakout(),
+        TraderCompositeStrategy(),
     ]

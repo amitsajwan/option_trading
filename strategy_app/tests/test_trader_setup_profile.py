@@ -16,18 +16,14 @@ def test_det_setup_v1_is_registered() -> None:
 
 def test_det_setup_v1_routes_to_trader_style_setups() -> None:
     mapping = get_regime_entry_map(PROFILE_DET_SETUP_V1)
-    assert mapping["TRENDING"] == ["IV_FILTER", "ORB_RETEST_CONTINUATION", "VWAP_PULLBACK_CONTINUATION"]
-    assert mapping["SIDEWAYS"] == ["IV_FILTER", "FAILED_BREAKOUT_REVERSAL"]
-    assert mapping["PRE_EXPIRY"] == ["IV_FILTER", "ORB_RETEST_CONTINUATION", "FAILED_BREAKOUT_REVERSAL"]
+    assert mapping["TRENDING"] == ["IV_FILTER", "TRADER_COMPOSITE"]
+    assert mapping["SIDEWAYS"] == ["IV_FILTER", "TRADER_COMPOSITE"]
+    assert mapping["PRE_EXPIRY"] == ["IV_FILTER", "TRADER_COMPOSITE"]
 
 
 def test_det_setup_v1_exit_strategies_are_setup_owned() -> None:
     exits = get_exit_strategies(PROFILE_DET_SETUP_V1)
-    assert set(exits) == {
-        "ORB_RETEST_CONTINUATION",
-        "VWAP_PULLBACK_CONTINUATION",
-        "FAILED_BREAKOUT_REVERSAL",
-    }
+    assert set(exits) == {"TRADER_COMPOSITE"}
 
 
 def test_strategy_router_can_materialize_det_setup_v1() -> None:
@@ -35,8 +31,8 @@ def test_strategy_router_can_materialize_det_setup_v1() -> None:
     router.configure(build_run_metadata(PROFILE_DET_SETUP_V1)["router_config"])
     assert router.strategy_profile_id == PROFILE_DET_SETUP_V1
     summary = router.summary()
-    assert summary["TRENDING"] == ["IV_FILTER", "ORB_RETEST_CONTINUATION", "VWAP_PULLBACK_CONTINUATION"]
-    assert summary["SIDEWAYS"] == ["IV_FILTER", "FAILED_BREAKOUT_REVERSAL"]
+    assert summary["TRENDING"] == ["IV_FILTER", "TRADER_COMPOSITE"]
+    assert summary["SIDEWAYS"] == ["IV_FILTER", "TRADER_COMPOSITE"]
 
 
 def test_tournament_includes_det_setup_v1() -> None:

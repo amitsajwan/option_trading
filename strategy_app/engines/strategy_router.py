@@ -22,6 +22,7 @@ from .strategies.all_strategies import (
     ORBRetestContinuationStrategy,
     ORBStrategy,
     PrevDayLevelBreakout,
+    TraderCompositeStrategy,
     VWAPPullbackContinuationStrategy,
     VWAPReclaimStrategy,
 )
@@ -41,6 +42,7 @@ class StrategyRouter:
         self._vwap_pullback = VWAPPullbackContinuationStrategy()
         self._oi = OIBuildupStrategy()
         self._failed_breakout = FailedBreakoutReversalStrategy()
+        self._trader_composite = TraderCompositeStrategy()
         self._iv_filter = IVRegimeFilter()
         self._high_vol_orb = HighVolORBStrategy()
         self._prev_day = PrevDayLevelBreakout()
@@ -54,6 +56,7 @@ class StrategyRouter:
             self._vwap_pullback.name: self._vwap_pullback,
             self._oi.name: self._oi,
             self._failed_breakout.name: self._failed_breakout,
+            self._trader_composite.name: self._trader_composite,
             self._prev_day.name: self._prev_day,
         }
         self._cross_exit_helpers: dict[tuple[str, str], set[str]] = {
