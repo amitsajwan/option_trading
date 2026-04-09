@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ml_pipeline_2.contracts.manifests import ManifestValidationError, resolve_manifest
+from ml_pipeline_2.contracts.manifests import ManifestValidationError, load_and_resolve_manifest, resolve_manifest
 
 
 def test_staged_manifest_requires_explicit_sections(tmp_path: Path) -> None:
@@ -165,6 +165,16 @@ def test_staged_manifest_accepts_stage2_target_redesign(tmp_path: Path) -> None:
     resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_stage2_target_redesign_ok.json", validate_paths=False)
     assert resolved["training"]["stage2_target_redesign"]["enabled"] is True
     assert resolved["training"]["stage2_target_redesign"]["max_kept_fraction"] == 0.4
+
+
+def test_stage2_direction_or_no_trade_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_dual_recipe.stage2_direction_or_no_trade_v1.json"),
+        validate_paths=False,
+    )
+    assert resolved["labels"]["stage2_labeler_id"] == "direction_or_no_trade_v1"
+    assert resolved["training"]["stage2_trainer_id"] == "gate_direction_catalog_v1"
+    assert resolved["policy"]["stage2_policy_id"] == "direction_gate_threshold_v1"
 
 
 def test_staged_manifest_validate_paths_requires_stage_view_datasets(tmp_path: Path) -> None:

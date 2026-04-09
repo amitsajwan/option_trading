@@ -40,6 +40,16 @@ def _predict_proba(model: object, x: pd.DataFrame) -> np.ndarray:
 
 
 def _empty_probability_frame(model_package: Dict[str, object]) -> pd.DataFrame:
+    prediction_mode = str(model_package.get("prediction_mode") or "").strip().lower()
+    if prediction_mode == "direction_or_no_trade":
+        return pd.DataFrame(
+            {
+                "direction_trade_prob": pd.Series(dtype=float),
+                "direction_up_prob": pd.Series(dtype=float),
+                "ce_prob": pd.Series(dtype=float),
+                "pe_prob": pd.Series(dtype=float),
+            }
+        )
     models = dict(model_package.get("models") or {})
     single_target = model_package.get("single_target") if isinstance(model_package, dict) else None
     if isinstance(single_target, dict):
@@ -55,6 +65,39 @@ def _empty_probability_frame(model_package: Dict[str, object]) -> pd.DataFrame:
 
 
 def predict_probabilities_from_frame(feature_df: pd.DataFrame, model_package: Dict[str, object], *, missing_policy_override: Optional[str] = None, context: str = "predict_probabilities_from_frame") -> Tuple[pd.DataFrame, Dict[str, object]]:
+    prediction_mode = str(model_package.get("prediction_mode") or "").strip().lower()
+    if prediction_mode == "direction_or_no_trade":
+        trade_gate_package = model_package.get("trade_gate_package")
+        direction_package = model_package.get("direction_package")
+        if not isinstance(trade_gate_package, dict) or not isinstance(direction_package, dict):
+            raise ValueError("direction_or_no_trade package requires trade_gate_package and direction_package")
+        trade_probs, trade_validation = predict_probabilities_from_frame(
+            feature_df,
+            trade_gate_package,
+            missing_policy_override=missing_policy_override,
+            context=f"{context}.trade_gate",
+        )
+        direction_probs, _ = predict_probabilities_from_frame(
+            feature_df,
+            direction_package,
+            missing_policy_override=missing_policy_override,
+            context=f"{context}.direction",
+        )
+        trade_col = "move_prob" if "move_prob" in trade_probs.columns else str(trade_probs.columns[0])
+        direction_col = "direction_up_prob" if "direction_up_prob" in direction_probs.columns else str(direction_probs.columns[0])
+        direction_trade_prob = pd.to_numeric(trade_probs[trade_col], errors="coerce")
+        direction_up_prob = pd.to_numeric(direction_probs[direction_col], errors="coerce")
+        return (
+            pd.DataFrame(
+                {
+                    "direction_trade_prob": direction_trade_prob,
+                    "direction_up_prob": direction_up_prob,
+                    "ce_prob": direction_trade_prob * direction_up_prob,
+                    "pe_prob": direction_trade_prob * (1.0 - direction_up_prob),
+                }
+            ),
+            trade_validation,
+        )
     validation = validate_model_input_columns(list(feature_df.columns), model_package, context=context, missing_policy_override=missing_policy_override)
     feature_cols = [str(col) for col in list(model_package["feature_columns"])]
     x = feature_df.copy()

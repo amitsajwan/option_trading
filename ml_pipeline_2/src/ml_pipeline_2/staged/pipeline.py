@@ -387,6 +387,26 @@ def build_stage2_labels(stage_frame: pd.DataFrame, oracle: pd.DataFrame, *_: Any
     return labeled.sort_values("timestamp").reset_index(drop=True)
 
 
+def build_stage2_labels_direction_or_no_trade(
+    stage_frame: pd.DataFrame,
+    oracle: pd.DataFrame,
+    manifest: Optional[dict[str, Any]] = None,
+    *_: Any,
+    **__: Any,
+) -> pd.DataFrame:
+    labeled = _attach_labels(stage_frame, oracle)
+    labeled = labeled[pd.to_numeric(labeled["entry_label"], errors="coerce").fillna(0.0) == 1.0].copy()
+    direction = labeled["direction_label"].astype(str).str.upper()
+    labeled = labeled[direction.isin({"CE", "PE"})].copy()
+    direction = labeled["direction_label"].astype(str).str.upper()
+    keep_mask, meta, _ = _stage2_target_redesign_state(labeled, manifest or {})
+    labeled["move_label_valid"] = 1.0
+    labeled["move_label"] = keep_mask.astype(float)
+    labeled["move_first_hit_side"] = np.where(direction == "CE", "up", "down")
+    labeled.attrs["stage2_direction_or_no_trade_meta"] = meta
+    return labeled.sort_values("timestamp").reset_index(drop=True)
+
+
 def _normalize_stage2_target_redesign(manifest: dict[str, Any]) -> dict[str, Any]:
     raw = dict((manifest.get("training") or {}).get("stage2_target_redesign") or {})
     enabled = bool(raw.get("enabled", False))
@@ -419,7 +439,7 @@ def _normalize_stage2_target_redesign(manifest: dict[str, Any]) -> dict[str, Any
     }
 
 
-def _apply_stage2_target_redesign(stage2_frame: pd.DataFrame, manifest: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
+def _stage2_target_redesign_state(stage2_frame: pd.DataFrame, manifest: dict[str, Any]) -> tuple[pd.Series, dict[str, Any], dict[str, pd.Series]]:
     cfg = _normalize_stage2_target_redesign(manifest)
     meta = {
         **cfg,
@@ -437,7 +457,13 @@ def _apply_stage2_target_redesign(stage2_frame: pd.DataFrame, manifest: dict[str
         "conviction_score_floor": None,
     }
     if not cfg["enabled"]:
-        return stage2_frame.sort_values("timestamp").reset_index(drop=True), meta
+        keep_mask = pd.Series(True, index=stage2_frame.index, dtype=bool)
+        empty = pd.Series(dtype=float)
+        return keep_mask, meta, {
+            "edge_series": empty.reindex(stage2_frame.index, fill_value=np.nan),
+            "winner_returns": empty.reindex(stage2_frame.index, fill_value=np.nan),
+            "opposing_returns": empty.reindex(stage2_frame.index, fill_value=np.nan),
+        }
 
     required = [
         "best_ce_net_return_after_cost",
@@ -512,6 +538,32 @@ def _apply_stage2_target_redesign(stage2_frame: pd.DataFrame, manifest: dict[str
             "conviction_rank_rows_dropped": conviction_rank_rows_dropped,
         }
     )
+    return keep_mask, meta, {
+        "edge_series": edge_series,
+        "winner_returns": winner_returns,
+        "opposing_returns": opposing_returns,
+    }
+
+
+def _apply_stage2_target_redesign(stage2_frame: pd.DataFrame, manifest: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
+    keep_mask, meta, series = _stage2_target_redesign_state(stage2_frame, manifest)
+    filtered = stage2_frame.loc[keep_mask].copy().sort_values("timestamp").reset_index(drop=True)
+    edge_series = series["edge_series"]
+    winner_returns = series["winner_returns"]
+    if len(filtered):
+        kept_index = stage2_frame.index[keep_mask]
+        filtered["direction_return_edge_after_cost"] = edge_series.loc[kept_index].to_numpy(copy=False)
+        filtered["direction_winner_return_after_cost"] = winner_returns.loc[kept_index].to_numpy(copy=False)
+        conviction_score = str(meta.get("conviction_score") or "edge_winner_min")
+        if conviction_score == "winner_return":
+            filtered["direction_target_conviction_score"] = winner_returns.loc[kept_index].to_numpy(copy=False)
+        elif conviction_score == "edge":
+            filtered["direction_target_conviction_score"] = edge_series.loc[kept_index].to_numpy(copy=False)
+        else:
+            filtered["direction_target_conviction_score"] = np.minimum(
+                edge_series.loc[kept_index].to_numpy(copy=False),
+                winner_returns.loc[kept_index].to_numpy(copy=False),
+            )
     return filtered, meta
 
 
@@ -825,6 +877,8 @@ def _stage2_scored_frame(frame: pd.DataFrame, scores: pd.DataFrame) -> pd.DataFr
     scored = frame.merge(scores, on=KEY_COLUMNS, how="left")
     out = scored.assign(
         direction_binary=_stage2_direction_binary(scored["direction_label"]),
+        direction_trade_label=pd.to_numeric(scored.get("move_label"), errors="coerce"),
+        direction_trade_prob=pd.to_numeric(scored.get("direction_trade_prob"), errors="coerce"),
         direction_up_prob=pd.to_numeric(scored["direction_up_prob"], errors="coerce"),
         session_bucket=_stage2_time_bucket(scored),
         expiry_regime=_stage2_expiry_regime(scored),
@@ -833,6 +887,8 @@ def _stage2_scored_frame(frame: pd.DataFrame, scores: pd.DataFrame) -> pd.DataFr
         *KEY_COLUMNS,
         "direction_label",
         "direction_binary",
+        "direction_trade_label",
+        "direction_trade_prob",
         "direction_up_prob",
         "direction_return_edge_after_cost",
         "session_bucket",
@@ -844,20 +900,27 @@ def _stage2_scored_frame(frame: pd.DataFrame, scores: pd.DataFrame) -> pd.DataFr
 def _build_stage2_split_diagnostics(frame: pd.DataFrame, scores: pd.DataFrame, *, split_name: str) -> dict[str, Any]:
     scored = _stage2_scored_frame(frame, scores)
     edge_series = pd.to_numeric(scored.get("direction_return_edge_after_cost"), errors="coerce")
-    quality = _binary_quality(scored["direction_binary"], scored["direction_up_prob"])
-    calibration = _stage2_calibration_profile(scored["direction_binary"], scored["direction_up_prob"])
+    trade_quality = _binary_quality(scored["direction_trade_label"], scored["direction_trade_prob"])
+    actionable_mask = pd.to_numeric(scored["direction_trade_label"], errors="coerce").fillna(0.0) == 1.0
+    directional_scored = scored.loc[actionable_mask].copy()
+    quality = _binary_quality(directional_scored["direction_binary"], directional_scored["direction_up_prob"])
+    calibration = _stage2_calibration_profile(directional_scored["direction_binary"], directional_scored["direction_up_prob"])
     return {
         "split": split_name,
         "rows": int(len(scored)),
         "rows_with_probabilities": int((scored["direction_up_prob"].notna() & scored["direction_binary"].notna()).sum()),
+        "rows_with_trade_probabilities": int((scored["direction_trade_prob"].notna() & scored["direction_trade_label"].notna()).sum()),
         "positive_rate": float(scored["direction_binary"].dropna().mean()) if bool(scored["direction_binary"].notna().any()) else None,
+        "trade_rate": float(scored["direction_trade_label"].dropna().mean()) if bool(scored["direction_trade_label"].notna().any()) else None,
+        "trade_quality": trade_quality,
         "quality": quality,
         "probability_histogram": _stage2_probability_histogram(scored["direction_up_prob"]),
+        "trade_probability_histogram": _stage2_probability_histogram(scored["direction_trade_prob"]),
         "score_separation": _stage2_score_separation(scored["direction_binary"], scored["direction_up_prob"]),
         "calibration": calibration,
         "edge_distribution": _quantile_summary(edge_series),
-        "quality_by_time_bucket": _quality_by_group(scored, label_col="direction_binary", prob_col="direction_up_prob", group_col="session_bucket"),
-        "quality_by_expiry_regime": _quality_by_group(scored, label_col="direction_binary", prob_col="direction_up_prob", group_col="expiry_regime"),
+        "quality_by_time_bucket": _quality_by_group(directional_scored, label_col="direction_binary", prob_col="direction_up_prob", group_col="session_bucket"),
+        "quality_by_expiry_regime": _quality_by_group(directional_scored, label_col="direction_binary", prob_col="direction_up_prob", group_col="expiry_regime"),
     }
 
 
@@ -869,11 +932,24 @@ def _build_stage2_diagnostics_report(
     stage2_result: dict[str, Any],
     label_filter_meta: dict[str, Any],
 ) -> dict[str, Any]:
-    train_scores = _score_single_target(
-        labeled_frames["stage2"]["research_train"],
-        stage2_result["search_package"],
-        prob_col="direction_up_prob",
-    )
+    if str((stage2_result.get("search_package") or {}).get("prediction_mode") or "").strip().lower() == "direction_or_no_trade":
+        train_scores = _score_stage2_direction_or_no_trade(
+            labeled_frames["stage2"]["research_train"],
+            stage2_result["search_package"],
+        )
+        selected_feature_set = str((((stage2_result.get("gate_search_payload") or {}).get("report") or {}).get("best_experiment") or {}).get("feature_set") or "")
+        selected_model = {
+            "trade_gate": dict((((stage2_result.get("gate_search_payload") or {}).get("report") or {}).get("best_experiment") or {}).get("model") or {}),
+            "direction": dict((((stage2_result.get("direction_search_payload") or {}).get("report") or {}).get("best_experiment") or {}).get("model") or {}),
+        }
+    else:
+        train_scores = _score_single_target(
+            labeled_frames["stage2"]["research_train"],
+            stage2_result["search_package"],
+            prob_col="direction_up_prob",
+        )
+        selected_feature_set = str((((stage2_result.get("search_payload") or {}).get("report") or {}).get("best_experiment") or {}).get("feature_set") or "")
+        selected_model = dict((((stage2_result.get("search_payload") or {}).get("report") or {}).get("best_experiment") or {}).get("model") or {})
     score_frames = {
         "research_train": _stage2_scored_frame(
             labeled_frames["stage2"]["research_train"],
@@ -914,8 +990,8 @@ def _build_stage2_diagnostics_report(
         "feature_sets": list(manifest["catalog"]["feature_sets_by_stage"]["stage2"]),
         "scenario": {
             "feature_set_candidates": list(manifest["catalog"]["feature_sets_by_stage"]["stage2"]),
-            "selected_feature_set": str((((stage2_result.get("search_payload") or {}).get("report") or {}).get("best_experiment") or {}).get("feature_set") or ""),
-            "selected_model": dict((((stage2_result.get("search_payload") or {}).get("report") or {}).get("best_experiment") or {}).get("model") or {}),
+            "selected_feature_set": selected_feature_set,
+            "selected_model": selected_model,
             "label_filtering": dict(label_filter_meta),
             "session_filter": _normalize_stage2_session_filter(manifest),
         },
@@ -990,6 +1066,20 @@ def _score_single_target(frame: pd.DataFrame, package: Dict[str, Any], *, prob_c
     else:
         source_col = str(probs.columns[0])
     out[prob_col] = pd.to_numeric(probs[source_col], errors="coerce")
+    return out
+
+
+def _score_stage2_direction_or_no_trade(frame: pd.DataFrame, package: Dict[str, Any]) -> pd.DataFrame:
+    probs, _ = predict_probabilities_from_frame(
+        frame,
+        package,
+        missing_policy_override="error",
+        context="stage2_direction_or_no_trade",
+    )
+    out = frame.loc[:, KEY_COLUMNS].copy()
+    for column in ("direction_trade_prob", "direction_up_prob", "ce_prob", "pe_prob"):
+        if column in probs.columns:
+            out[column] = pd.to_numeric(probs[column], errors="coerce")
     return out
 
 
@@ -1175,6 +1265,180 @@ def train_binary_catalog_stage(
     }
 
 
+def _composite_stage2_feature_contract(*packages: Dict[str, Any]) -> Dict[str, Any]:
+    required: list[str] = []
+    for package in packages:
+        contract = dict(package.get("_model_input_contract") or {})
+        for feature in list(contract.get("required_features") or []):
+            name = str(feature)
+            if name and name not in required:
+                required.append(name)
+    return {
+        "required_features": required,
+        "missing_policy": "error",
+        "source": "composite_stage2_package",
+    }
+
+
+def train_gate_direction_stage(
+    *,
+    stage_name: str,
+    train_frame: pd.DataFrame,
+    valid_frame: pd.DataFrame,
+    full_model_frame: pd.DataFrame,
+    holdout_frame: pd.DataFrame,
+    manifest: Dict[str, Any],
+    models: Sequence[str],
+    feature_sets: Sequence[str],
+    output_root: Path,
+    policy_valid_frame: Optional[pd.DataFrame] = None,
+    policy_holdout_frame: Optional[pd.DataFrame] = None,
+    progress_callback: Optional[Callable[[Dict[str, object]], None]] = None,
+    **_: Any,
+) -> dict[str, Any]:
+    training_cfg = dict(manifest["training"])
+    preprocess = PreprocessConfig(**dict(training_cfg["preprocess"]))
+    objective = str(training_cfg["objectives_by_stage"][stage_name])
+    stage_search_options = dict((training_cfg.get("search_options_by_stage") or {}).get(stage_name) or {})
+    stage_root = output_root / stage_name
+    stage_root.mkdir(parents=True, exist_ok=True)
+
+    gate_search_payload = _training_call(
+        train_frame,
+        objective=objective,
+        label_target="move_barrier_hit",
+        models=models,
+        feature_sets=feature_sets,
+        preprocess=preprocess,
+        cv_config=dict(training_cfg["cv_config"]),
+        random_state=int(training_cfg["random_state"]),
+        model_n_jobs=int(training_cfg["runtime"]["model_n_jobs"]),
+        search_options=stage_search_options,
+        progress_callback=progress_callback,
+    )
+    gate_best_feature_set = str(gate_search_payload["report"]["best_experiment"]["feature_set"])
+    gate_best_model_spec = _selected_model_spec_payload(gate_search_payload)
+    gate_final_payload = _training_call(
+        full_model_frame,
+        objective=objective,
+        label_target="move_barrier_hit",
+        models=[],
+        feature_sets=[gate_best_feature_set],
+        preprocess=preprocess,
+        cv_config=dict(training_cfg["cv_config"]),
+        random_state=int(training_cfg["random_state"]),
+        model_n_jobs=int(training_cfg["runtime"]["model_n_jobs"]),
+        model_specs_override=[gate_best_model_spec],
+        search_options=_final_fit_search_options(stage_search_options),
+        progress_callback=progress_callback,
+    )
+
+    direction_train = train_frame[pd.to_numeric(train_frame.get("move_label"), errors="coerce").fillna(0.0) == 1.0].copy()
+    direction_full = full_model_frame[pd.to_numeric(full_model_frame.get("move_label"), errors="coerce").fillna(0.0) == 1.0].copy()
+    direction_search_payload = _training_call(
+        direction_train,
+        objective=objective,
+        label_target="move_direction_up",
+        models=models,
+        feature_sets=feature_sets,
+        preprocess=preprocess,
+        cv_config=dict(training_cfg["cv_config"]),
+        random_state=int(training_cfg["random_state"]),
+        model_n_jobs=int(training_cfg["runtime"]["model_n_jobs"]),
+        search_options=stage_search_options,
+        progress_callback=progress_callback,
+    )
+    direction_best_feature_set = str(direction_search_payload["report"]["best_experiment"]["feature_set"])
+    direction_best_model_spec = _selected_model_spec_payload(direction_search_payload)
+    direction_final_payload = _training_call(
+        direction_full,
+        objective=objective,
+        label_target="move_direction_up",
+        models=[],
+        feature_sets=[direction_best_feature_set],
+        preprocess=preprocess,
+        cv_config=dict(training_cfg["cv_config"]),
+        random_state=int(training_cfg["random_state"]),
+        model_n_jobs=int(training_cfg["runtime"]["model_n_jobs"]),
+        model_specs_override=[direction_best_model_spec],
+        search_options=_final_fit_search_options(stage_search_options),
+        progress_callback=progress_callback,
+    )
+
+    gate_search_package = dict(gate_search_payload["model_package"])
+    gate_final_package = dict(gate_final_payload["model_package"])
+    direction_search_package = dict(direction_search_payload["model_package"])
+    direction_final_package = dict(direction_final_payload["model_package"])
+    search_package = {
+        "kind": "ml_pipeline_2_stage2_gate_direction_package",
+        "created_at_utc": utc_now(),
+        "prediction_mode": "direction_or_no_trade",
+        "trade_gate_package": gate_search_package,
+        "direction_package": direction_search_package,
+        "_model_input_contract": _composite_stage2_feature_contract(gate_search_package, direction_search_package),
+    }
+    final_package = {
+        "kind": "ml_pipeline_2_stage2_gate_direction_package",
+        "created_at_utc": utc_now(),
+        "prediction_mode": "direction_or_no_trade",
+        "trade_gate_package": gate_final_package,
+        "direction_package": direction_final_package,
+        "_model_input_contract": _composite_stage2_feature_contract(gate_final_package, direction_final_package),
+    }
+    valid_scores = _score_stage2_direction_or_no_trade(valid_frame, search_package)
+    holdout_scores = _score_stage2_direction_or_no_trade(holdout_frame, final_package)
+    policy_validation_scores = (
+        valid_scores
+        if policy_valid_frame is None
+        else _score_stage2_direction_or_no_trade(policy_valid_frame, search_package)
+    )
+    policy_holdout_scores = (
+        holdout_scores
+        if policy_holdout_frame is None
+        else _score_stage2_direction_or_no_trade(policy_holdout_frame, final_package)
+    )
+
+    summary = {
+        "prediction_mode": "direction_or_no_trade",
+        "trade_gate": {
+            "search_report": dict(gate_search_payload["report"]),
+            "training_report": dict(gate_final_payload["report"]),
+        },
+        "direction": {
+            "search_report": dict(direction_search_payload["report"]),
+            "training_report": dict(direction_final_payload["report"]),
+        },
+    }
+    joblib.dump(search_package, stage_root / "selection_model.joblib")
+    joblib.dump(final_package, stage_root / "model.joblib")
+    (stage_root / "search_report.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (stage_root / "training_report.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (stage_root / "feature_contract.json").write_text(
+        json.dumps(dict(final_package.get("_model_input_contract") or {}), indent=2),
+        encoding="utf-8",
+    )
+    return {
+        "stage_name": stage_name,
+        "search_payload": {"report": {"prediction_mode": "direction_or_no_trade"}},
+        "final_payload": {"report": {"prediction_mode": "direction_or_no_trade"}},
+        "gate_search_payload": gate_search_payload,
+        "gate_final_payload": gate_final_payload,
+        "direction_search_payload": direction_search_payload,
+        "direction_final_payload": direction_final_payload,
+        "search_package": search_package,
+        "model_package": final_package,
+        "selection_model_path": str((stage_root / "selection_model.joblib").resolve()),
+        "model_package_path": str((stage_root / "model.joblib").resolve()),
+        "search_report_path": str((stage_root / "search_report.json").resolve()),
+        "training_report_path": str((stage_root / "training_report.json").resolve()),
+        "feature_contract_path": str((stage_root / "feature_contract.json").resolve()),
+        "validation_scores": valid_scores,
+        "holdout_scores": holdout_scores,
+        "validation_policy_scores": policy_validation_scores,
+        "holdout_policy_scores": policy_holdout_scores,
+    }
+
+
 def _stage1_reuse_relevant_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "inputs": {
@@ -1320,7 +1584,19 @@ def _add_upstream_probs(
 ) -> pd.DataFrame:
     out = frame.copy()
     stage1_scores = _score_single_target(stage1_source_frame, stage1_package, prob_col="stage1_entry_prob")
-    stage2_scores = _score_single_target(stage2_source_frame, stage2_package, prob_col="stage2_direction_up_prob")
+    stage2_prediction_mode = str(stage2_package.get("prediction_mode") or "").strip().lower()
+    if stage2_prediction_mode == "direction_or_no_trade":
+        stage2_raw_scores = _score_stage2_direction_or_no_trade(stage2_source_frame, stage2_package)
+        stage2_scores = stage2_raw_scores.rename(
+            columns={
+                "direction_trade_prob": "stage2_direction_trade_prob",
+                "direction_up_prob": "stage2_direction_up_prob",
+                "ce_prob": "stage2_ce_prob",
+                "pe_prob": "stage2_pe_prob",
+            }
+        )
+    else:
+        stage2_scores = _score_single_target(stage2_source_frame, stage2_package, prob_col="stage2_direction_up_prob")
     out = out.merge(stage1_scores, on=KEY_COLUMNS, how="left")
     out = out.merge(stage2_scores, on=KEY_COLUMNS, how="left")
     missing_stage1 = out["stage1_entry_prob"].isna()
@@ -1692,6 +1968,60 @@ def _direction_trade_masks(
     return ce_mask, pe_mask
 
 
+def _direction_trade_masks_with_gate(
+    entry_prob: np.ndarray,
+    direction_trade_prob: np.ndarray,
+    direction_up_prob: np.ndarray,
+    *,
+    entry_threshold: float,
+    trade_threshold: float,
+    ce_threshold: float,
+    pe_threshold: float,
+    min_edge: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    ce_mask, pe_mask = _direction_trade_masks(
+        entry_prob,
+        direction_up_prob,
+        entry_threshold=entry_threshold,
+        ce_threshold=ce_threshold,
+        pe_threshold=pe_threshold,
+        min_edge=min_edge,
+    )
+    trade_mask = direction_trade_prob >= float(trade_threshold)
+    return ce_mask & trade_mask, pe_mask & trade_mask
+
+
+def _stage2_side_masks_from_policy(
+    merged: pd.DataFrame,
+    *,
+    entry_threshold: float,
+    stage2_policy: Dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    policy_id = str(stage2_policy.get("policy_id") or "direction_dual_threshold_v1")
+    entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
+    direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
+    if policy_id == "direction_gate_threshold_v1":
+        direction_trade_prob = _numeric_array(merged["direction_trade_prob"], fillna=0.0)
+        return _direction_trade_masks_with_gate(
+            entry_probs,
+            direction_trade_prob,
+            direction_up_prob,
+            entry_threshold=float(entry_threshold),
+            trade_threshold=float(stage2_policy["selected_trade_threshold"]),
+            ce_threshold=float(stage2_policy["selected_ce_threshold"]),
+            pe_threshold=float(stage2_policy["selected_pe_threshold"]),
+            min_edge=float(stage2_policy["selected_min_edge"]),
+        )
+    return _direction_trade_masks(
+        entry_probs,
+        direction_up_prob,
+        entry_threshold=float(entry_threshold),
+        ce_threshold=float(stage2_policy["selected_ce_threshold"]),
+        pe_threshold=float(stage2_policy["selected_pe_threshold"]),
+        min_edge=float(stage2_policy["selected_min_edge"]),
+    )
+
+
 def select_entry_policy(valid_scores: pd.DataFrame, utility: pd.DataFrame, policy_config: Dict[str, Any]) -> dict[str, Any]:
     merged = _merge_policy_inputs(utility, valid_scores)
     entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
@@ -1789,6 +2119,72 @@ def select_direction_policy(
     }
 
 
+def select_direction_gate_policy(
+    valid_scores: pd.DataFrame,
+    utility: pd.DataFrame,
+    stage1_scores: pd.DataFrame,
+    stage1_policy: Dict[str, Any],
+    policy_config: Dict[str, Any],
+) -> dict[str, Any]:
+    merged = _merge_policy_inputs(utility, stage1_scores, valid_scores)
+    entry_threshold = float(stage1_policy["selected_threshold"])
+    entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
+    direction_trade_prob = _numeric_array(merged["direction_trade_prob"], fillna=0.0)
+    direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
+    ce_returns = _numeric_array(merged["best_ce_net_return_after_cost"], fillna=0.0)
+    pe_returns = _numeric_array(merged["best_pe_net_return_after_cost"], fillna=0.0)
+    rows_total = len(merged)
+    rows = []
+    for trade_threshold in list(policy_config.get("trade_threshold_grid") or []):
+        for ce_threshold in list(policy_config.get("ce_threshold_grid") or []):
+            for pe_threshold in list(policy_config.get("pe_threshold_grid") or []):
+                for min_edge in list(policy_config.get("min_edge_grid") or []):
+                    ce_mask, pe_mask = _direction_trade_masks_with_gate(
+                        entry_probs,
+                        direction_trade_prob,
+                        direction_up_prob,
+                        entry_threshold=entry_threshold,
+                        trade_threshold=float(trade_threshold),
+                        ce_threshold=float(ce_threshold),
+                        pe_threshold=float(pe_threshold),
+                        min_edge=float(min_edge),
+                    )
+                    trade_mask = ce_mask | pe_mask
+                    returns = np.where(ce_mask, ce_returns, pe_returns)[trade_mask].tolist()
+                    sides = np.where(ce_mask[trade_mask], "CE", "PE").tolist()
+                    summary = _summarize_returns(returns, rows_total=rows_total, sides=sides)
+                    summary.update(
+                        {
+                            "trade_threshold": float(trade_threshold),
+                            "ce_threshold": float(ce_threshold),
+                            "pe_threshold": float(pe_threshold),
+                            "min_edge": float(min_edge),
+                        }
+                    )
+                    rows.append(summary)
+    if not rows:
+        raise ValueError("stage2 gate policy grids must not be empty")
+    best = max(
+        rows,
+        key=lambda row: (
+            float(row["net_return_sum"]),
+            float(row["profit_factor"]),
+            int(row["trades"]),
+            -float(row["min_edge"]),
+            -float(row["trade_threshold"]),
+        ),
+    )
+    return {
+        "policy_id": "direction_gate_threshold_v1",
+        "selected_trade_threshold": float(best["trade_threshold"]),
+        "selected_ce_threshold": float(best["ce_threshold"]),
+        "selected_pe_threshold": float(best["pe_threshold"]),
+        "selected_min_edge": float(best["min_edge"]),
+        "validation_rows": rows,
+        "selected_validation_summary": best,
+    }
+
+
 def _choose_recipe(row: dict[str, Any], recipe_ids: Sequence[str], *, threshold: float, margin_min: float) -> Optional[str]:
     ranked = sorted(
         ((recipe_id, _safe_float(row.get(f"recipe_prob_{recipe_id}"), default=float("-inf"))) for recipe_id in recipe_ids),
@@ -1812,9 +2208,7 @@ def _evaluate_combined_policy(
     stage3_scores: pd.DataFrame,
     *,
     stage1_threshold: float,
-    ce_threshold: float,
-    pe_threshold: float,
-    min_edge: float,
+    stage2_policy: Dict[str, Any],
     recipe_threshold: float,
     recipe_margin_min: float,
     recipe_ids: Sequence[str],
@@ -1825,16 +2219,11 @@ def _evaluate_combined_policy(
     if not ordered_recipe_ids:
         raise ValueError("stage3 policy recipe_ids must not be empty")
 
-    entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
     direction_available = pd.to_numeric(merged["direction_up_prob"], errors="coerce").notna().to_numpy(dtype=bool, copy=False)
-    direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
-    ce_mask, pe_mask = _direction_trade_masks(
-        entry_probs,
-        direction_up_prob,
+    ce_mask, pe_mask = _stage2_side_masks_from_policy(
+        merged,
         entry_threshold=float(stage1_threshold),
-        ce_threshold=float(ce_threshold),
-        pe_threshold=float(pe_threshold),
-        min_edge=float(min_edge),
+        stage2_policy=stage2_policy,
     )
     ce_mask = ce_mask & direction_available
     pe_mask = pe_mask & direction_available
@@ -1886,9 +2275,7 @@ def _combined_policy_trade_rows(
     stage3_scores: pd.DataFrame,
     *,
     stage1_threshold: float,
-    ce_threshold: float,
-    pe_threshold: float,
-    min_edge: float,
+    stage2_policy: Dict[str, Any],
     recipe_threshold: float,
     recipe_margin_min: float,
     recipe_ids: Sequence[str],
@@ -1901,16 +2288,11 @@ def _combined_policy_trade_rows(
     if not ordered_recipe_ids:
         raise ValueError("stage3 policy recipe_ids must not be empty")
 
-    entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
     direction_available = pd.to_numeric(merged["direction_up_prob"], errors="coerce").notna().to_numpy(dtype=bool, copy=False)
-    direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
-    ce_mask, pe_mask = _direction_trade_masks(
-        entry_probs,
-        direction_up_prob,
+    ce_mask, pe_mask = _stage2_side_masks_from_policy(
+        merged,
         entry_threshold=float(stage1_threshold),
-        ce_threshold=float(ce_threshold),
-        pe_threshold=float(pe_threshold),
-        min_edge=float(min_edge),
+        stage2_policy=stage2_policy,
     )
     ce_mask = ce_mask & direction_available
     pe_mask = pe_mask & direction_available
@@ -1977,9 +2359,7 @@ def select_recipe_policy(
                 stage2_scores,
                 valid_scores,
                 stage1_threshold=float(stage1_policy["selected_threshold"]),
-                ce_threshold=float(stage2_policy["selected_ce_threshold"]),
-                pe_threshold=float(stage2_policy["selected_pe_threshold"]),
-                min_edge=float(stage2_policy["selected_min_edge"]),
+                stage2_policy=stage2_policy,
                 recipe_threshold=float(threshold),
                 recipe_margin_min=float(margin_min),
                 recipe_ids=recipe_ids,
@@ -2003,24 +2383,17 @@ def _fixed_recipe_baseline(
     stage2_scores: pd.DataFrame,
     *,
     stage1_threshold: float,
-    ce_threshold: float,
-    pe_threshold: float,
-    min_edge: float,
+    stage2_policy: Dict[str, Any],
     recipe_id: str,
 ) -> dict[str, Any]:
     merged = _merge_policy_inputs(utility, stage1_scores, stage2_scores)
-    entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
     direction_available = pd.to_numeric(merged["direction_up_prob"], errors="coerce").notna().to_numpy(dtype=bool, copy=False)
-    direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
     ce_returns = _numeric_array(merged[f"{recipe_id}__ce_net_return"], fillna=0.0)
     pe_returns = _numeric_array(merged[f"{recipe_id}__pe_net_return"], fillna=0.0)
-    ce_mask, pe_mask = _direction_trade_masks(
-        entry_probs,
-        direction_up_prob,
+    ce_mask, pe_mask = _stage2_side_masks_from_policy(
+        merged,
         entry_threshold=float(stage1_threshold),
-        ce_threshold=float(ce_threshold),
-        pe_threshold=float(pe_threshold),
-        min_edge=float(min_edge),
+        stage2_policy=stage2_policy,
     )
     ce_mask = ce_mask & direction_available
     pe_mask = pe_mask & direction_available
@@ -2057,7 +2430,7 @@ def _stage_gate_result(quality: dict[str, Any], gates: dict[str, Any], *, prefix
     return (not reasons), reasons
 
 
-def _check_stage2_signal(stage2_frame: pd.DataFrame) -> dict[str, Any]:
+def _check_stage2_signal(stage2_frame: pd.DataFrame, *, label_mode: str = "direction") -> dict[str, Any]:
     labeled = stage2_frame[pd.to_numeric(stage2_frame["entry_label"], errors="coerce") == 1.0].copy()
     min_samples = 100
     if len(labeled) < min_samples:
@@ -2069,7 +2442,10 @@ def _check_stage2_signal(stage2_frame: pd.DataFrame) -> dict[str, Any]:
             "top_features": [],
         }
 
-    direction_binary = (labeled["direction_label"].astype(str).str.upper() == "CE").astype(int)
+    if str(label_mode).strip().lower() == "trade_gate":
+        direction_binary = pd.to_numeric(labeled.get("move_label"), errors="coerce").fillna(0.0).astype(int)
+    else:
+        direction_binary = (labeled["direction_label"].astype(str).str.upper() == "CE").astype(int)
     exclude = set(KEY_COLUMNS) | {
         "entry_label",
         "direction_label",
@@ -2199,6 +2575,10 @@ def _stage_component_ids(manifest: Dict[str, Any], stage_name: str) -> dict[str,
     }
 
 
+def _is_stage2_direction_or_no_trade(component_ids: Dict[str, str]) -> bool:
+    return str(component_ids.get("trainer_id") or "") == "gate_direction_catalog_v1"
+
+
 def validate_staged_research_environment(manifest: Dict[str, Any]) -> dict[str, Any]:
     catalog = dict(manifest.get("catalog") or {})
     models_by_stage = dict(catalog.get("models_by_stage") or {})
@@ -2280,10 +2660,22 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             **stage_filter_meta,
         }
         labeler = resolve_labeler(component_ids["labeler_id"])
-        labeled = labeler(stage_frame, oracle)
+        labeled = labeler(stage_frame, oracle, manifest)
         if stage_name == "stage2":
-            labeled, target_redesign_meta = _apply_stage2_target_redesign(labeled, manifest)
-            labeled, direction_filter_meta = _apply_stage2_label_filter(labeled, manifest)
+            if _is_stage2_direction_or_no_trade(component_ids):
+                target_redesign_meta = dict(labeled.attrs.get("stage2_direction_or_no_trade_meta") or {})
+                direction_filter_meta = {
+                    "enabled": False,
+                    "skipped": True,
+                    "reason": "handled_by_direction_or_no_trade_labeler",
+                    "rows_before": int(len(labeled)),
+                    "rows_after": int(len(labeled)),
+                    "rows_dropped": 0,
+                    "kept_share": 1.0 if len(labeled) else 0.0,
+                }
+            else:
+                labeled, target_redesign_meta = _apply_stage2_target_redesign(labeled, manifest)
+                labeled, direction_filter_meta = _apply_stage2_label_filter(labeled, manifest)
             labeled, session_filter_meta = _apply_stage2_session_filter(labeled, manifest)
             label_filtering[stage_name] = {
                 "direction_target_redesign": target_redesign_meta,
@@ -2309,8 +2701,12 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         evaluation_mode="coverage_only",
     )
 
+    stage2_is_direction_or_no_trade = _is_stage2_direction_or_no_trade(components["stage2"])
     cv_prechecks: dict[str, Any] = {
-        "stage2_signal_check": _check_stage2_signal(labeled_frames["stage2"]["full_model"]),
+        "stage2_signal_check": _check_stage2_signal(
+            labeled_frames["stage2"]["full_model"],
+            label_mode="trade_gate" if stage2_is_direction_or_no_trade else "direction",
+        ),
         "stage1_cv": None,
         "stage2_cv": None,
     }
@@ -2457,15 +2853,34 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     stage2_diagnostics_path = ctx.write_json("stages/stage2/diagnostics.json", stage2_diagnostics)
     stage_artifacts["stage2"]["diagnostics_path"] = str(stage2_diagnostics_path.resolve())
     stage_artifacts["stage2"]["diagnostics_score_paths"] = dict(stage2_diagnostics.get("score_paths") or {})
-    stage2_cv_labels = np.where(
-        labeled_frames["stage2"]["research_valid"]["direction_label"].astype(str).str.upper() == "CE",
-        1,
-        0,
-    )
-    stage2_cv_quality = _binary_quality(
-        pd.Series(stage2_cv_labels, index=labeled_frames["stage2"]["research_valid"].index),
-        stage2_result["validation_scores"]["direction_up_prob"],
-    )
+    if stage2_is_direction_or_no_trade:
+        stage2_cv_quality = _binary_quality(
+            labeled_frames["stage2"]["research_valid"]["move_label"],
+            stage2_result["validation_scores"]["direction_trade_prob"],
+        )
+        actionable_valid = pd.to_numeric(labeled_frames["stage2"]["research_valid"]["move_label"], errors="coerce").fillna(0.0) == 1.0
+        stage2_direction_cv_quality = _binary_quality(
+            pd.Series(
+                np.where(
+                    labeled_frames["stage2"]["research_valid"].loc[actionable_valid, "direction_label"].astype(str).str.upper() == "CE",
+                    1,
+                    0,
+                ),
+                index=labeled_frames["stage2"]["research_valid"].loc[actionable_valid].index,
+            ),
+            stage2_result["validation_scores"].loc[actionable_valid, "direction_up_prob"],
+        )
+        cv_prechecks["stage2_direction_cv"] = stage2_direction_cv_quality
+    else:
+        stage2_cv_labels = np.where(
+            labeled_frames["stage2"]["research_valid"]["direction_label"].astype(str).str.upper() == "CE",
+            1,
+            0,
+        )
+        stage2_cv_quality = _binary_quality(
+            pd.Series(stage2_cv_labels, index=labeled_frames["stage2"]["research_valid"].index),
+            stage2_result["validation_scores"]["direction_up_prob"],
+        )
     stage2_cv_ok, stage2_cv_reasons = _stage_gate_result(
         stage2_cv_quality,
         dict(manifest["hard_gates"]["stage2"]),
@@ -2579,16 +2994,23 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     )
 
     stage1_holdout_quality = _binary_quality(labeled_frames["stage1"]["final_holdout"]["entry_label"], stage1_result["holdout_scores"]["entry_prob"])
-    stage2_holdout_quality = _binary_quality(np.where(labeled_frames["stage2"]["final_holdout"]["direction_label"].astype(str).str.upper() == "CE", 1, 0), stage2_result["holdout_scores"]["direction_up_prob"])
+    if stage2_is_direction_or_no_trade:
+        stage2_holdout_quality = _binary_quality(
+            labeled_frames["stage2"]["final_holdout"]["move_label"],
+            stage2_result["holdout_scores"]["direction_trade_prob"],
+        )
+    else:
+        stage2_holdout_quality = _binary_quality(
+            np.where(labeled_frames["stage2"]["final_holdout"]["direction_label"].astype(str).str.upper() == "CE", 1, 0),
+            stage2_result["holdout_scores"]["direction_up_prob"],
+        )
     combined_holdout_summary = _evaluate_combined_policy(
         utility_holdout,
         stage1_policy_scores_holdout,
         stage2_policy_scores_holdout,
         stage3_policy_scores_holdout,
         stage1_threshold=float(stage1_policy["selected_threshold"]),
-        ce_threshold=float(stage2_policy["selected_ce_threshold"]),
-        pe_threshold=float(stage2_policy["selected_pe_threshold"]),
-        min_edge=float(stage2_policy["selected_min_edge"]),
+        stage2_policy=stage2_policy,
         recipe_threshold=float(stage3_policy["selected_threshold"]),
         recipe_margin_min=float(stage3_policy["selected_margin_min"]),
         recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
@@ -2600,9 +3022,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         stage2_policy_scores_holdout,
         stage3_policy_scores_holdout,
         stage1_threshold=float(stage1_policy["selected_threshold"]),
-        ce_threshold=float(stage2_policy["selected_ce_threshold"]),
-        pe_threshold=float(stage2_policy["selected_pe_threshold"]),
-        min_edge=float(stage2_policy["selected_min_edge"]),
+        stage2_policy=stage2_policy,
         recipe_threshold=float(stage3_policy["selected_threshold"]),
         recipe_margin_min=float(stage3_policy["selected_margin_min"]),
         recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
@@ -2620,9 +3040,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             stage1_policy_scores_holdout,
             stage2_policy_scores_holdout,
             stage1_threshold=float(stage1_policy["selected_threshold"]),
-            ce_threshold=float(stage2_policy["selected_ce_threshold"]),
-            pe_threshold=float(stage2_policy["selected_pe_threshold"]),
-            min_edge=float(stage2_policy["selected_min_edge"]),
+            stage2_policy=stage2_policy,
             recipe_id=recipe.recipe_id,
         )
         for recipe in recipe_catalog
@@ -2683,12 +3101,15 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
 __all__ = [
     "build_stage1_labels",
     "build_stage2_labels",
+    "build_stage2_labels_direction_or_no_trade",
     "build_stage3_labels",
     "run_staged_research",
+    "select_direction_gate_policy",
     "select_direction_policy",
     "select_entry_policy",
     "select_recipe_policy",
     "train_binary_catalog_stage",
+    "train_gate_direction_stage",
     "train_recipe_ovr_stage",
     "validate_staged_research_environment",
 ]

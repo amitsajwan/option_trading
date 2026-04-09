@@ -637,3 +637,20 @@ def test_midday_high_conviction_v2_grid_manifest_resolves() -> None:
     ]
     assert resolved["grid"]["runs"][1]["reuse_stage1_from"] == "midday_asymmetry_high_conviction_baseline_v2"
     assert resolved["grid"]["runs"][0]["overrides"]["training"]["stage2_target_redesign"]["max_kept_fraction"] == 0.75
+
+
+def test_midday_direction_or_no_trade_grid_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_grid.stage2_midday_direction_or_no_trade_v1.json"),
+        validate_paths=False,
+    )
+    assert resolved["outputs"]["run_name"] == "staged_grid_stage2_midday_direction_or_no_trade_v1"
+    assert [run["run_id"] for run in resolved["grid"]["runs"]] == [
+        "midday_gate_asymmetry_baseline",
+        "midday_gate_asymmetry_strict",
+        "midday_gate_oi_iv",
+        "midday_gate_expiry",
+        "midday_gate_selective",
+    ]
+    assert resolved["grid"]["runs"][1]["reuse_stage1_from"] == "midday_gate_asymmetry_baseline"
+    assert resolved["grid"]["runs"][0]["overrides"]["training"]["stage2_target_redesign"]["max_kept_fraction"] == 0.75

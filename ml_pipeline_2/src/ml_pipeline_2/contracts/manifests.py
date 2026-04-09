@@ -429,8 +429,11 @@ def _validate_staged_policy(payload: Dict[str, Any], errors: List[str]) -> None:
     stage1 = payload.get("stage1") or {}
     stage2 = payload.get("stage2") or {}
     stage3 = payload.get("stage3") or {}
+    stage2_policy_id = str(payload.get("stage2_policy_id") or "").strip()
     if not list(stage1.get("threshold_grid") or []):
         errors.append("policy.stage1.threshold_grid must not be empty")
+    if stage2_policy_id == "direction_gate_threshold_v1" and not list(stage2.get("trade_threshold_grid") or []):
+        errors.append("policy.stage2.trade_threshold_grid must not be empty for direction_gate_threshold_v1")
     if not list(stage2.get("ce_threshold_grid") or []):
         errors.append("policy.stage2.ce_threshold_grid must not be empty")
     if not list(stage2.get("pe_threshold_grid") or []):

@@ -679,6 +679,66 @@ def test_build_stage2_labels_drops_invalid_direction_rows() -> None:
     assert labeled["move_first_hit_side"].tolist() == ["up", "down"]
 
 
+def test_build_stage2_labels_direction_or_no_trade_marks_abstains_from_target_redesign() -> None:
+    stage_frame = pd.DataFrame(
+        [
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:15:00"),
+                "snapshot_id": "snap_a",
+            },
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:16:00"),
+                "snapshot_id": "snap_b",
+            },
+        ]
+    )
+    oracle = pd.DataFrame(
+        [
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:15:00"),
+                "snapshot_id": "snap_a",
+                "entry_label": 1,
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0030,
+                "best_pe_net_return_after_cost": -0.0003,
+            },
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:16:00"),
+                "snapshot_id": "snap_b",
+                "entry_label": 1,
+                "direction_label": "PE",
+                "best_ce_net_return_after_cost": 0.0004,
+                "best_pe_net_return_after_cost": 0.0011,
+            },
+        ]
+    )
+
+    labeled = staged_pipeline.build_stage2_labels_direction_or_no_trade(
+        stage_frame,
+        oracle,
+        {
+            "training": {
+                "stage2_target_redesign": {
+                    "enabled": True,
+                    "min_directional_edge_after_cost": 0.0018,
+                    "min_winner_return_after_cost": 0.0010,
+                    "max_opposing_return_after_cost": -0.0002,
+                    "max_kept_fraction": 1.0,
+                    "conviction_score": "edge_winner_min",
+                }
+            }
+        },
+    )
+
+    assert labeled["snapshot_id"].tolist() == ["snap_a", "snap_b"]
+    assert labeled["move_label"].tolist() == [1.0, 0.0]
+    assert labeled["move_first_hit_side"].tolist() == ["up", "down"]
+
+
 def test_apply_stage2_label_filter_can_enforce_valid_winner_after_cost() -> None:
     stage2_frame = pd.DataFrame(
         {
@@ -1111,6 +1171,29 @@ def test_apply_stage2_target_redesign_can_keep_only_high_conviction_fraction() -
     assert meta["conviction_rank_rows_dropped"] == 2
     assert meta["conviction_keep_count"] == 2
     assert meta["conviction_score_floor"] is not None
+
+
+def test_select_direction_gate_policy_prefers_trade_gate_and_direction_thresholds() -> None:
+    utility, stage1_scores, stage2_scores, _ = _policy_fixture()
+    stage2_scores = stage2_scores.copy()
+    stage2_scores["direction_trade_prob"] = [0.82, 0.76, 0.48, 0.74]
+    stage1_policy = {"selected_threshold": 0.45}
+    policy = staged_pipeline.select_direction_gate_policy(
+        stage2_scores,
+        utility,
+        stage1_scores,
+        stage1_policy,
+        {
+            "trade_threshold_grid": [0.45, 0.60],
+            "ce_threshold_grid": [0.55, 0.60],
+            "pe_threshold_grid": [0.55, 0.60],
+            "min_edge_grid": [0.05, 0.10],
+        },
+    )
+
+    assert policy["policy_id"] == "direction_gate_threshold_v1"
+    assert "selected_trade_threshold" in policy
+    assert policy["selected_trade_threshold"] in {0.45, 0.60}
 
 
 def test_vectorized_policy_selection_matches_legacy_loops() -> None:
