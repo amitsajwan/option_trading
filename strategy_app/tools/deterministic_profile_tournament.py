@@ -444,6 +444,18 @@ def _write_profile_manifest(output_dir: Path, profiles: list[DeterministicProfil
     (output_dir / "profiles.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _normalize_export_profile_trade_ids(values: Optional[Iterable[str]]) -> list[str]:
+    if values is None:
+        return []
+    out: list[str] = []
+    for value in values:
+        for item in str(value or "").split(","):
+            text = str(item or "").strip()
+            if text and text not in out:
+                out.append(text)
+    return out
+
+
 def run_tournament(
     *,
     parquet_base: str,
@@ -454,6 +466,7 @@ def run_tournament(
     output_dir: Path,
     profile_spec_path: Optional[str] = None,
     save_top_trade_exports: int = 3,
+    export_profile_trade_ids: Optional[Iterable[str]] = None,
     cost_model: Optional[TradingCostModel] = None,
 ) -> dict[str, Any]:
     require_snapshot_access(
@@ -474,9 +487,11 @@ def run_tournament(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_profile_manifest(output_dir, profiles)
+    export_trade_ids = _normalize_export_profile_trade_ids(export_profile_trade_ids)
 
     all_window_results: list[pd.DataFrame] = []
     baseline_trade_frames: list[pd.DataFrame] = []
+    exported_trade_frames: dict[str, list[pd.DataFrame]] = {profile_id: [] for profile_id in export_trade_ids}
     saved_trade_exports = 0
     for window in windows:
         window_df, trade_frames = _window_result_rows(
@@ -494,6 +509,13 @@ def run_tournament(
             baseline_trade_frames.append(baseline_trades.copy())
         safe_label = window.label.replace(":", "_").replace("/", "_")
         window_df.to_csv(output_dir / f"window_results_{safe_label}.csv", index=False)
+        for profile_id in export_trade_ids:
+            profile_trades = trade_frames.get(profile_id)
+            if not isinstance(profile_trades, pd.DataFrame) or profile_trades.empty:
+                continue
+            profile_copy = profile_trades.copy()
+            profile_copy.to_csv(output_dir / f"profile_trades_{safe_label}_{profile_id}.csv", index=False)
+            exported_trade_frames.setdefault(profile_id, []).append(profile_copy)
         if saved_trade_exports < int(save_top_trade_exports):
             best_row = window_df.sort_values(
                 ["net_capital_return_pct", "profit_factor"],
@@ -531,6 +553,11 @@ def run_tournament(
     if non_empty_baseline_frames:
         baseline_group = _group_table(pd.concat(non_empty_baseline_frames, ignore_index=True), ["entry_strategy"])
         baseline_group.to_csv(output_dir / "baseline_by_strategy.csv", index=False)
+    for profile_id, frames in exported_trade_frames.items():
+        non_empty_frames = [frame for frame in frames if isinstance(frame, pd.DataFrame) and not frame.empty]
+        if not non_empty_frames:
+            continue
+        pd.concat(non_empty_frames, ignore_index=True).to_csv(output_dir / f"profile_trades_all_{profile_id}.csv", index=False)
 
     return {
         "output_dir": str(output_dir),
@@ -539,6 +566,7 @@ def run_tournament(
         "cost_model": cost_model.to_metadata() if cost_model is not None else None,
         "recommended_profile_id": recommendation.get("recommended_profile_id"),
         "recommended_label": recommendation.get("recommended_label"),
+        "exported_profile_trade_ids": export_trade_ids,
     }
 
 
@@ -552,6 +580,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--profile-spec", default=None, help="Optional JSON file overriding the default profile set.")
     parser.add_argument("--save-top-trade-exports", type=int, default=3)
+    parser.add_argument(
+        "--export-profile-trades",
+        nargs="*",
+        default=None,
+        help="Optional profile ids to export per-window and combined trade CSVs for.",
+    )
     parser.add_argument("--brokerage-per-order", type=float, default=DEFAULT_BROKERAGE_PER_ORDER)
     parser.add_argument("--charges-bps-per-side", type=float, default=DEFAULT_CHARGES_BPS_PER_SIDE)
     parser.add_argument("--slippage-bps-per-side", type=float, default=DEFAULT_SLIPPAGE_BPS_PER_SIDE)
@@ -573,6 +607,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         output_dir=output_dir,
         profile_spec_path=(str(args.profile_spec) if args.profile_spec else None),
         save_top_trade_exports=int(args.save_top_trade_exports),
+        export_profile_trade_ids=args.export_profile_trades,
         cost_model=cost_model,
     )
     print(json.dumps(result, indent=2))
