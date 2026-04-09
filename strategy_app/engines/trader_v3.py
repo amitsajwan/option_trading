@@ -179,29 +179,43 @@ class TradeGovernorV3:
             return GovernorDecisionV3(False, "no_trade_regime")
         if state.bad_session_lockout:
             return GovernorDecisionV3(False, "bad_session_lockout")
+        if playbook_signal.playbook == TraderV3Playbook.EXPIRY_MOMENTUM_BREAK:
+            return GovernorDecisionV3(False, "expiry_momentum_disabled")
+        if playbook_signal.playbook == TraderV3Playbook.FAILED_BREAKOUT_REVERSAL_LONG:
+            return GovernorDecisionV3(False, "failed_breakout_long_disabled")
+        if self._is_pre_expiry(snap) and playbook_signal.playbook in {
+            TraderV3Playbook.TREND_PULLBACK_LONG,
+            TraderV3Playbook.TREND_PULLBACK_SHORT,
+        }:
+            return GovernorDecisionV3(False, "pre_expiry_trend_pullback_disabled")
         if 135 <= snap.minutes <= 255 and regime.label not in {
             TraderRegimeV3Label.EXPIRY_MOMENTUM,
             TraderRegimeV3Label.EXPIRY_PINNING,
         }:
             return GovernorDecisionV3(False, "midday_no_trade")
-        max_entries = 1 if regime.label in {TraderRegimeV3Label.EXPIRY_MOMENTUM, TraderRegimeV3Label.EXPIRY_PINNING} else 2
+        max_entries = 1
         if state.entries_taken >= max_entries:
             return GovernorDecisionV3(False, "session_entry_cap")
         playbook_count = state.playbook_entries.get(playbook_signal.playbook.value, 0)
-        playbook_cap = 1 if "REVERSAL" in playbook_signal.playbook.value or "EXPIRY" in playbook_signal.playbook.value else 2
+        playbook_cap = 1
         if playbook_count >= playbook_cap:
             return GovernorDecisionV3(False, "playbook_entry_cap")
         if strike_selection is None:
             return GovernorDecisionV3(False, "no_acceptable_contract")
-        if playbook_signal.score < 0.72:
+        if playbook_signal.score < 0.78:
             return GovernorDecisionV3(False, "playbook_score_too_low")
-        if strike_selection.option_score < 0.58:
+        if strike_selection.option_score < 0.62:
             return GovernorDecisionV3(False, "tradability_score_too_low")
-        if playbook_signal.expected_move_pct < 0.0015:
+        if playbook_signal.expected_move_pct < 0.0018:
             return GovernorDecisionV3(False, "expected_move_too_small")
         if regime.label == TraderRegimeV3Label.RANGE and "TREND_PULLBACK" in playbook_signal.playbook.value:
             return GovernorDecisionV3(False, "range_blocks_trend_pullback")
         return GovernorDecisionV3(True, "playbook_allowed")
+
+    @staticmethod
+    def _is_pre_expiry(snap: SnapshotAccessor) -> bool:
+        dte = snap.days_to_expiry
+        return (dte == 1) and (not snap.is_expiry_day)
 
 
 class TraderV3CompositeStrategy(BaseStrategy):
@@ -377,8 +391,8 @@ class TraderV3CompositeStrategy(BaseStrategy):
         priority = {
             TraderV3Playbook.TREND_PULLBACK_LONG: 0,
             TraderV3Playbook.TREND_PULLBACK_SHORT: 0,
-            TraderV3Playbook.EXPIRY_MOMENTUM_BREAK: 0,
-            TraderV3Playbook.FAILED_BREAKOUT_REVERSAL_LONG: 1,
+            TraderV3Playbook.EXPIRY_MOMENTUM_BREAK: 2,
+            TraderV3Playbook.FAILED_BREAKOUT_REVERSAL_LONG: 2,
             TraderV3Playbook.FAILED_BREAKOUT_REVERSAL_SHORT: 1,
             TraderV3Playbook.EXPIRY_PIN_REVERSAL: 1,
         }
@@ -393,26 +407,28 @@ class TraderV3CompositeStrategy(BaseStrategy):
         r15m = snap.fut_return_15m or 0.0
         if state is None or close is None or vwap is None:
             return None
+        if self._governor._is_pre_expiry(snap):
+            return None
         if snap.minutes - state.bias_minute > 90:
             self._state.trend_pullback = None
             return None
         if state.direction == Direction.CE and regime.label in {TraderRegimeV3Label.TREND_UP, TraderRegimeV3Label.VOL_EXPANSION} and state.pullback_seen:
-            if close > vwap * 1.0004 and r5m >= 0.0005 and r15m >= 0.0010:
+            if close > vwap * 1.0005 and r5m >= 0.0006 and r15m >= 0.0012:
                 return PlaybookSignal(
                     TraderV3Playbook.TREND_PULLBACK_LONG,
                     Direction.CE,
-                    0.84,
-                    max(abs(r15m) * 1.5, 0.0020),
+                    0.86,
+                    max(abs(r15m) * 1.6, 0.0022),
                     "VWAP",
                     ("trend_pullback_resume_long",),
                 )
         if state.direction == Direction.PE and regime.label in {TraderRegimeV3Label.TREND_DOWN, TraderRegimeV3Label.VOL_EXPANSION} and state.pullback_seen:
-            if close < vwap * 0.9996 and r5m <= -0.0005 and r15m <= -0.0010:
+            if close < vwap * 0.9995 and r5m <= -0.0006 and r15m <= -0.0012:
                 return PlaybookSignal(
                     TraderV3Playbook.TREND_PULLBACK_SHORT,
                     Direction.PE,
-                    0.84,
-                    max(abs(r15m) * 1.5, 0.0020),
+                    0.86,
+                    max(abs(r15m) * 1.6, 0.0022),
                     "VWAP",
                     ("trend_pullback_resume_short",),
                 )
@@ -431,19 +447,10 @@ class TraderV3CompositeStrategy(BaseStrategy):
             return PlaybookSignal(
                 TraderV3Playbook.FAILED_BREAKOUT_REVERSAL_SHORT,
                 Direction.PE,
-                0.79,
-                max(abs(r5m) * 2.0, 0.0018),
+                0.81,
+                max(abs(r5m) * 2.1, 0.0019),
                 "ORH",
                 ("failed_breakout_short",),
-            )
-        if state.failed_direction == "DOWN" and close > state.level * 1.0002 and r5m >= 0.0006:
-            return PlaybookSignal(
-                TraderV3Playbook.FAILED_BREAKOUT_REVERSAL_LONG,
-                Direction.CE,
-                0.79,
-                max(abs(r5m) * 2.0, 0.0018),
-                "ORL",
-                ("failed_breakout_long",),
             )
         return None
 

@@ -96,6 +96,36 @@ def test_trade_governor_v3_blocks_overtrading() -> None:
     assert decision.reason == "session_entry_cap"
 
 
+def test_trade_governor_v3_blocks_disabled_expiry_momentum() -> None:
+    governor = TradeGovernorV3()
+    decision = governor.evaluate(
+        snap=SnapshotAccessor(_payload(minutes=45, expiry=True)),
+        regime=TraderRegimeV3(TraderRegimeV3Label.EXPIRY_MOMENTUM, Direction.CE, 0.88, ("expiry",)),
+        playbook_signal=type("PlaybookSignalObj", (), {"playbook": TraderV3Playbook.EXPIRY_MOMENTUM_BREAK, "score": 0.90, "expected_move_pct": 0.0030})(),
+        strike_selection=type("StrikeSelectionObj", (), {"option_score": 0.80})(),
+        state=type("StateObj", (), {"bad_session_lockout": False, "entries_taken": 0, "playbook_entries": {}})(),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "expiry_momentum_disabled"
+
+
+def test_trade_governor_v3_blocks_pre_expiry_trend_pullback() -> None:
+    governor = TradeGovernorV3()
+    payload = _payload(minutes=60)
+    payload["session_context"]["days_to_expiry"] = 1
+    decision = governor.evaluate(
+        snap=SnapshotAccessor(payload),
+        regime=TraderRegimeV3(TraderRegimeV3Label.TREND_UP, Direction.CE, 0.84, ("trend",)),
+        playbook_signal=type("PlaybookSignalObj", (), {"playbook": TraderV3Playbook.TREND_PULLBACK_LONG, "score": 0.86, "expected_move_pct": 0.0024})(),
+        strike_selection=type("StrikeSelectionObj", (), {"option_score": 0.70})(),
+        state=type("StateObj", (), {"bad_session_lockout": False, "entries_taken": 0, "playbook_entries": {}})(),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "pre_expiry_trend_pullback_disabled"
+
+
 def test_trader_v3_composite_enters_on_trend_pullback() -> None:
     strategy = TraderV3CompositeStrategy()
 
@@ -170,6 +200,24 @@ def test_trader_v3_composite_uses_expiry_pin_playbook() -> None:
     assert vote.signal_type == SignalType.ENTRY
     assert vote.raw_signals["trader_regime_v3"] == TraderRegimeV3Label.EXPIRY_PINNING.value
     assert vote.raw_signals["playbook"] == TraderV3Playbook.EXPIRY_PIN_REVERSAL.value
+
+
+def test_trader_v3_composite_skips_disabled_expiry_momentum() -> None:
+    strategy = TraderV3CompositeStrategy()
+    payload = _payload(minutes=25, expiry=True, close=50120.0)
+    payload["futures_derived"]["fut_return_5m"] = 0.0015
+    payload["futures_derived"]["fut_return_15m"] = 0.0022
+    payload["futures_derived"]["fut_return_30m"] = 0.0030
+    payload["futures_derived"]["realized_vol_30m"] = 0.022
+    payload["futures_derived"]["price_vs_vwap"] = 0.0020
+    payload["opening_range"]["orh_broken"] = True
+    payload["opening_range"]["orl_broken"] = False
+
+    vote = strategy.evaluate(payload, None, RiskContext())
+
+    assert vote is not None
+    assert vote.signal_type == SignalType.SKIP
+    assert vote.raw_signals["governor_reason"] == "expiry_momentum_disabled"
 
 
 def test_engine_does_not_override_locked_v3_strike() -> None:
