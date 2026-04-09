@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.stage3_policy_paths_v1.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_stage3_midday_policy_paths_v1"
+  },
+  "selection": {
+    "ranking_strategy": "stage3_policy_paths_v1",
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.55,
+      "brier_max": 0.22
+    },
+    "robustness_probe": {
+      "enabled": true,
+      "top_k": 3,
+      "iterations": 200,
+      "random_seed": 42,
+      "splits": [
+        "research_valid",
+        "final_holdout"
+      ],
+      "resample_unit": "trade_date"
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "stage3_baseline_dynamic",
+        "model_group_suffix": "_scenario_stage3_baseline_dynamic",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage3_baseline_dynamic"
+          }
+        }
+      },
+      {
+        "run_id": "stage3_balanced_gate_dynamic",
+        "model_group_suffix": "_scenario_stage3_balanced_gate_dynamic",
+        "reuse_stage1_from": "stage3_baseline_dynamic",
+        "reuse_stage2_from": "stage3_baseline_dynamic",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage3_balanced_gate_dynamic"
+          },
+          "policy": {
+            "stage2_policy_id": "direction_gate_economic_balance_v1"
+          }
+        }
+      },
+      {
+        "run_id": "stage3_balanced_gate_fixed_guard",
+        "model_group_suffix": "_scenario_stage3_balanced_gate_fixed_guard",
+        "reuse_stage1_from": "stage3_baseline_dynamic",
+        "reuse_stage2_from": "stage3_baseline_dynamic",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage3_balanced_gate_fixed_guard"
+          },
+          "policy": {
+            "stage2_policy_id": "direction_gate_economic_balance_v1",
+            "stage3_policy_id": "recipe_fixed_baseline_guard_v1"
+          }
+        }
+      },
+      {
+        "run_id": "stage3_expanded_catalog_dynamic",
+        "model_group_suffix": "_scenario_stage3_expanded_catalog_dynamic",
+        "reuse_stage1_from": "stage3_baseline_dynamic",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage3_expanded_catalog_dynamic"
+          },
+          "catalog": {
+            "recipe_catalog_id": "midday_l3_adjacent_v1"
+          },
+          "policy": {
+            "stage2_policy_id": "direction_gate_economic_balance_v1"
+          }
+        }
+      },
+      {
+        "run_id": "stage3_expanded_catalog_fixed_guard",
+        "model_group_suffix": "_scenario_stage3_expanded_catalog_fixed_guard",
+        "reuse_stage1_from": "stage3_baseline_dynamic",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage3_expanded_catalog_fixed_guard"
+          },
+          "catalog": {
+            "recipe_catalog_id": "midday_l3_adjacent_v1"
+          },
+          "policy": {
+            "stage2_policy_id": "direction_gate_economic_balance_v1",
+            "stage3_policy_id": "recipe_fixed_baseline_guard_v1"
+          }
+        }
+      },
+      {
+        "run_id": "stage3_expanded_catalog_relaxed_margin",
+        "model_group_suffix": "_scenario_stage3_expanded_catalog_relaxed_margin",
+        "reuse_stage1_from": "stage3_baseline_dynamic",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage3_expanded_catalog_relaxed_margin"
+          },
+          "catalog": {
+            "recipe_catalog_id": "midday_l3_adjacent_v1"
+          },
+          "policy": {
+            "stage2_policy_id": "direction_gate_economic_balance_v1",
+            "stage3": {
+              "threshold_grid": [
+                0.4,
+                0.45,
+                0.5,
+                0.55,
+                0.6
+              ],
+              "margin_grid": [
+                0.01,
+                0.02,
+                0.05
+              ],
+              "validation_min_trades_soft": 250,
+              "side_share_min": 0.3,
+              "side_share_max": 0.7,
+              "prefer_non_negative_returns": true,
+              "prefer_profit_factor_min": 1.0,
+              "non_inferior_drawdown_slack": 0.01
+            }
+          }
+        }
+      }
+    ]
+  }
+}

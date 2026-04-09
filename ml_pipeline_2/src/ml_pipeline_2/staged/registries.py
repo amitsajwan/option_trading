@@ -49,7 +49,10 @@ def policy_registry() -> dict[str, str]:
         "entry_threshold_v1": "stage1",
         "direction_dual_threshold_v1": "stage2",
         "direction_gate_threshold_v1": "stage2",
+        "direction_gate_economic_balance_v1": "stage2",
         "recipe_top_margin_v1": "stage3",
+        "recipe_economic_balance_v1": "stage3",
+        "recipe_fixed_baseline_guard_v1": "stage3",
     }
 
 
@@ -88,13 +91,24 @@ def resolve_trainer(trainer_id: str) -> Callable[..., Any]:
 
 
 def resolve_policy(policy_id: str) -> Callable[..., Any]:
-    from .pipeline import select_direction_gate_policy, select_direction_policy, select_entry_policy, select_recipe_policy
+    from .pipeline import (
+        select_direction_gate_economic_balance_policy,
+        select_direction_gate_policy,
+        select_direction_policy,
+        select_entry_policy,
+        select_recipe_economic_balance_policy,
+        select_recipe_fixed_baseline_guard_policy,
+        select_recipe_policy,
+    )
 
     registry = {
         "entry_threshold_v1": select_entry_policy,
         "direction_dual_threshold_v1": select_direction_policy,
         "direction_gate_threshold_v1": select_direction_gate_policy,
+        "direction_gate_economic_balance_v1": select_direction_gate_economic_balance_policy,
         "recipe_top_margin_v1": select_recipe_policy,
+        "recipe_economic_balance_v1": select_recipe_economic_balance_policy,
+        "recipe_fixed_baseline_guard_v1": select_recipe_fixed_baseline_guard_policy,
     }
     if policy_id not in registry:
         raise ValueError(f"unknown policy_id: {policy_id}; valid options: {sorted(registry)}")

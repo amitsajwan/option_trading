@@ -404,6 +404,7 @@ def test_load_staged_runtime_policy_defaults_block_expiry_false(tmp_path: Path) 
     payload = load_staged_runtime_policy(policy_path)
 
     assert payload["runtime"]["block_expiry"] is False
+    assert payload["stage3"]["selection_mode"] == "dynamic"
 
 
 def test_load_staged_runtime_policy_rejects_non_bool_block_expiry(tmp_path: Path) -> None:
@@ -426,6 +427,65 @@ def test_load_staged_runtime_policy_rejects_non_bool_block_expiry(tmp_path: Path
     )
 
     with pytest.raises(ValueError, match="runtime.block_expiry must be boolean"):
+        load_staged_runtime_policy(policy_path)
+
+
+def test_load_staged_runtime_policy_accepts_fixed_recipe_stage3_mode(tmp_path: Path) -> None:
+    policy_path = tmp_path / "thresholds.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "kind": "ml_pipeline_2_staged_runtime_policy_v1",
+                "stage1": {"selected_threshold": 0.55},
+                "stage2": {"selected_ce_threshold": 0.60, "selected_pe_threshold": 0.60, "selected_min_edge": 0.10},
+                "stage3": {
+                    "selected_threshold": 0.60,
+                    "selected_margin_min": 0.10,
+                    "selection_mode": "fixed_recipe",
+                    "selected_recipe_id": "L0",
+                },
+                "runtime": {"prefilter_gate_ids": ["rollout_guard_v1"]},
+                "recipe_catalog": [
+                    {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008},
+                    {"recipe_id": "L1", "horizon_minutes": 20, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0010},
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = load_staged_runtime_policy(policy_path)
+
+    assert payload["stage3"]["selection_mode"] == "fixed_recipe"
+    assert payload["stage3"]["selected_recipe_id"] == "L0"
+
+
+def test_load_staged_runtime_policy_rejects_unknown_fixed_recipe_id(tmp_path: Path) -> None:
+    policy_path = tmp_path / "thresholds.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "kind": "ml_pipeline_2_staged_runtime_policy_v1",
+                "stage1": {"selected_threshold": 0.55},
+                "stage2": {"selected_ce_threshold": 0.60, "selected_pe_threshold": 0.60, "selected_min_edge": 0.10},
+                "stage3": {
+                    "selected_threshold": 0.60,
+                    "selected_margin_min": 0.10,
+                    "selection_mode": "fixed_recipe",
+                    "selected_recipe_id": "L9",
+                },
+                "runtime": {"prefilter_gate_ids": ["rollout_guard_v1"]},
+                "recipe_catalog": [
+                    {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008},
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="selected_recipe_id must exist in recipe_catalog"):
         load_staged_runtime_policy(policy_path)
 
 

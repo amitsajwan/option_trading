@@ -432,8 +432,8 @@ def _validate_staged_policy(payload: Dict[str, Any], errors: List[str]) -> None:
     stage2_policy_id = str(payload.get("stage2_policy_id") or "").strip()
     if not list(stage1.get("threshold_grid") or []):
         errors.append("policy.stage1.threshold_grid must not be empty")
-    if stage2_policy_id == "direction_gate_threshold_v1" and not list(stage2.get("trade_threshold_grid") or []):
-        errors.append("policy.stage2.trade_threshold_grid must not be empty for direction_gate_threshold_v1")
+    if stage2_policy_id in {"direction_gate_threshold_v1", "direction_gate_economic_balance_v1"} and not list(stage2.get("trade_threshold_grid") or []):
+        errors.append("policy.stage2.trade_threshold_grid must not be empty for gate-based stage2 policies")
     if not list(stage2.get("ce_threshold_grid") or []):
         errors.append("policy.stage2.ce_threshold_grid must not be empty")
     if not list(stage2.get("pe_threshold_grid") or []):
@@ -500,6 +500,9 @@ def _validate_staged_hard_gates(payload: Dict[str, Any], errors: List[str]) -> N
 
 
 def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefix: str) -> None:
+    from ..staged.recipes import recipe_catalog_ids
+    from ..staged.registries import policy_registry
+
     overrides = payload or {}
     if overrides and not isinstance(overrides, dict):
         errors.append(f"{field_prefix} must be an object")
@@ -507,12 +510,12 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
     if not overrides:
         return
 
-    allowed_top_level = {"catalog", "training", "runtime", "outputs"}
+    allowed_top_level = {"catalog", "training", "runtime", "outputs", "policy"}
     unknown_top_level = sorted(set(str(key) for key in overrides.keys()) - allowed_top_level)
     if unknown_top_level:
         errors.append(
             f"{field_prefix} contains unsupported top-level overrides: {unknown_top_level}; "
-            "allowed keys: ['catalog', 'outputs', 'runtime', 'training']"
+            "allowed keys: ['catalog', 'outputs', 'policy', 'runtime', 'training']"
         )
 
     catalog = overrides.get("catalog") or {}
@@ -520,10 +523,15 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
         if not isinstance(catalog, dict):
             errors.append(f"{field_prefix}.catalog must be an object")
         else:
-            unknown_catalog = sorted(set(str(key) for key in catalog.keys()) - {"feature_sets_by_stage"})
+            unknown_catalog = sorted(set(str(key) for key in catalog.keys()) - {"feature_sets_by_stage", "recipe_catalog_id"})
             if unknown_catalog:
                 errors.append(
-                    f"{field_prefix}.catalog supports only feature_sets_by_stage; got unsupported keys: {unknown_catalog}"
+                    f"{field_prefix}.catalog supports only feature_sets_by_stage and recipe_catalog_id; got unsupported keys: {unknown_catalog}"
+                )
+            recipe_catalog_id = str(catalog.get("recipe_catalog_id") or "").strip()
+            if "recipe_catalog_id" in catalog and recipe_catalog_id not in set(recipe_catalog_ids()):
+                errors.append(
+                    f"{field_prefix}.catalog.recipe_catalog_id must be one of {recipe_catalog_ids()}"
                 )
             feature_sets_by_stage = catalog.get("feature_sets_by_stage") or {}
             if feature_sets_by_stage and not isinstance(feature_sets_by_stage, dict):
@@ -581,6 +589,27 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
                 errors,
                 field_prefix=f"{field_prefix}.training.search_options_by_stage",
             )
+
+    policy = overrides.get("policy") or {}
+    if policy:
+        if not isinstance(policy, dict):
+            errors.append(f"{field_prefix}.policy must be an object")
+        else:
+            unknown_policy = sorted(set(str(key) for key in policy.keys()) - {"stage2_policy_id", "stage3_policy_id", "stage2", "stage3"})
+            if unknown_policy:
+                errors.append(
+                    f"{field_prefix}.policy supports only stage2_policy_id, stage3_policy_id, stage2, and stage3; got unsupported keys: {unknown_policy}"
+                )
+            valid_policies = set(policy_registry())
+            for key in ("stage2_policy_id", "stage3_policy_id"):
+                if key in policy and str(policy.get(key) or "").strip() not in valid_policies:
+                    errors.append(f"{field_prefix}.policy.{key} must be one of {sorted(valid_policies)}")
+            stage2_policy = policy.get("stage2") or {}
+            stage3_policy = policy.get("stage3") or {}
+            if stage2_policy and not isinstance(stage2_policy, dict):
+                errors.append(f"{field_prefix}.policy.stage2 must be an object")
+            if stage3_policy and not isinstance(stage3_policy, dict):
+                errors.append(f"{field_prefix}.policy.stage3 must be an object")
 
     runtime = overrides.get("runtime") or {}
     if runtime:
@@ -650,6 +679,9 @@ def _validate_grid_manifest(payload: Dict[str, Any], *, manifest_path: Path, val
         errors,
         field_prefix="selection.robustness_probe",
     )
+    ranking_strategy = str(selection_payload.get("ranking_strategy") or "default").strip().lower()
+    if ranking_strategy not in {"default", "stage3_policy_paths_v1"}:
+        errors.append("selection.ranking_strategy must be one of ['default', 'stage3_policy_paths_v1']")
 
     if grid_payload and not isinstance(grid_payload, dict):
         errors.append("grid must be an object")
@@ -711,6 +743,14 @@ def _validate_grid_manifest(payload: Dict[str, Any], *, manifest_path: Path, val
                 errors.append(
                     f"{field_prefix}.reuse_stage1_from must reference an earlier run_id; unknown ref: {reuse_stage1_from.strip()}"
                 )
+        reuse_stage2_from = run_payload.get("reuse_stage2_from")
+        if reuse_stage2_from is not None and not isinstance(reuse_stage2_from, str):
+            errors.append(f"{field_prefix}.reuse_stage2_from must be a string when provided")
+        elif isinstance(reuse_stage2_from, str) and reuse_stage2_from.strip():
+            if reuse_stage2_from.strip() not in seen_run_ids:
+                errors.append(
+                    f"{field_prefix}.reuse_stage2_from must reference an earlier run_id; unknown ref: {reuse_stage2_from.strip()}"
+                )
 
         _validate_grid_run_overrides(
             run_payload.get("overrides"),
@@ -738,6 +778,7 @@ def _validate_grid_manifest(payload: Dict[str, Any], *, manifest_path: Path, val
                 "model_group_suffix": str(run_payload.get("model_group_suffix") or ""),
                 "inherit_best_from": [str(item) for item in list(run_payload.get("inherit_best_from") or [])],
                 "reuse_stage1_from": str(run_payload.get("reuse_stage1_from") or "").strip() or None,
+                "reuse_stage2_from": str(run_payload.get("reuse_stage2_from") or "").strip() or None,
                 "overrides": dict(run_payload.get("overrides") or {}),
             }
         )
@@ -756,6 +797,7 @@ def _validate_grid_manifest(payload: Dict[str, Any], *, manifest_path: Path, val
         "selection": {
             "stage2_hpo_escalation": stage2_hpo_escalation,
             "robustness_probe": robustness_probe,
+            "ranking_strategy": ranking_strategy,
         },
         "grid": {
             "research_only": bool(research_only),

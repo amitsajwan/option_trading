@@ -28,6 +28,13 @@ def _require_bool(value: object, *, field_name: str) -> bool:
     raise ValueError(f"{field_name} must be boolean")
 
 
+def _require_stage3_selection_mode(value: object) -> str:
+    mode = str(value or "dynamic").strip().lower()
+    if mode not in {"dynamic", "fixed_recipe"}:
+        raise ValueError("staged runtime policy stage3.selection_mode must be 'dynamic' or 'fixed_recipe'")
+    return mode
+
+
 def validate_recipe_catalog_payload(recipes: Iterable[Dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -78,6 +85,19 @@ def load_staged_runtime_policy(path: str | Path) -> dict[str, Any]:
                 raise ValueError(f"staged runtime policy {section}.{field} must be numeric") from exc
         payload[section] = block
     payload["recipe_catalog"] = validate_recipe_catalog_payload(payload.get("recipe_catalog") or [])
+    recipe_ids = {str(item["recipe_id"]) for item in payload["recipe_catalog"]}
+    stage3 = dict(payload["stage3"])
+    stage3["selection_mode"] = _require_stage3_selection_mode(stage3.get("selection_mode", "dynamic"))
+    if stage3["selection_mode"] == "fixed_recipe":
+        selected_recipe_id = str(stage3.get("selected_recipe_id") or "").strip()
+        if not selected_recipe_id:
+            raise ValueError("staged runtime policy stage3.selected_recipe_id must be set for fixed_recipe mode")
+        if selected_recipe_id not in recipe_ids:
+            raise ValueError(
+                f"staged runtime policy stage3.selected_recipe_id must exist in recipe_catalog: {selected_recipe_id}"
+            )
+        stage3["selected_recipe_id"] = selected_recipe_id
+    payload["stage3"] = stage3
     runtime = dict(payload["runtime"])
     gate_ids = list(runtime.get("prefilter_gate_ids") or [])
     if not gate_ids:

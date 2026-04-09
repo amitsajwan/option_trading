@@ -1083,6 +1083,13 @@ def _score_stage2_direction_or_no_trade(frame: pd.DataFrame, package: Dict[str, 
     return out
 
 
+def _score_stage2_package(frame: pd.DataFrame, package: Dict[str, Any], *, prob_col: str = "direction_up_prob") -> pd.DataFrame:
+    prediction_mode = str(package.get("prediction_mode") or "").strip().lower()
+    if prediction_mode == "direction_or_no_trade":
+        return _score_stage2_direction_or_no_trade(frame, package)
+    return _score_single_target(frame, package, prob_col=prob_col)
+
+
 def _training_call(
     frame: pd.DataFrame,
     *,
@@ -1482,6 +1489,53 @@ def _stage1_reuse_relevant_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _stage2_reuse_relevant_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "inputs": {
+            "parquet_root": str((manifest.get("inputs") or {}).get("parquet_root") or ""),
+            "support_dataset": str((manifest.get("inputs") or {}).get("support_dataset") or ""),
+        },
+        "catalog": {
+            "models_by_stage": {
+                "stage2": list(((manifest.get("catalog") or {}).get("models_by_stage") or {}).get("stage2") or []),
+            },
+            "feature_sets_by_stage": {
+                "stage2": list(((manifest.get("catalog") or {}).get("feature_sets_by_stage") or {}).get("stage2") or []),
+            },
+            "recipe_catalog_id": str((manifest.get("catalog") or {}).get("recipe_catalog_id") or ""),
+        },
+        "windows": dict(manifest.get("windows") or {}),
+        "views": {
+            "stage2_view_id": str((manifest.get("views") or {}).get("stage2_view_id") or ""),
+        },
+        "labels": {
+            "stage2_labeler_id": str((manifest.get("labels") or {}).get("stage2_labeler_id") or ""),
+        },
+        "training": {
+            "stage2_trainer_id": str((manifest.get("training") or {}).get("stage2_trainer_id") or ""),
+            "preprocess": dict(((manifest.get("training") or {}).get("preprocess") or {})),
+            "cv_config": dict(((manifest.get("training") or {}).get("cv_config") or {})),
+            "objectives_by_stage": {
+                "stage2": str((((manifest.get("training") or {}).get("objectives_by_stage") or {}).get("stage2") or "")),
+            },
+            "random_state": (manifest.get("training") or {}).get("random_state"),
+            "runtime": {
+                "model_n_jobs": (((manifest.get("training") or {}).get("runtime") or {}).get("model_n_jobs")),
+            },
+            "search_options_by_stage": {
+                "stage2": dict((((manifest.get("training") or {}).get("search_options_by_stage") or {}).get("stage2") or {})),
+            },
+            "stage2_label_filter": dict(((manifest.get("training") or {}).get("stage2_label_filter") or {})),
+            "stage2_session_filter": dict(((manifest.get("training") or {}).get("stage2_session_filter") or {})),
+            "stage2_target_redesign": dict(((manifest.get("training") or {}).get("stage2_target_redesign") or {})),
+            "cost_per_trade": (manifest.get("training") or {}).get("cost_per_trade"),
+        },
+        "runtime": {
+            "block_expiry": bool((manifest.get("runtime") or {}).get("block_expiry", False)),
+        },
+    }
+
+
 def _load_reused_stage1_result(
     *,
     ctx: RunContext,
@@ -1556,6 +1610,79 @@ def _load_reused_stage1_result(
     }
 
 
+def _load_reused_stage2_result(
+    *,
+    ctx: RunContext,
+    manifest: Dict[str, Any],
+    valid_frame: pd.DataFrame,
+    holdout_frame: pd.DataFrame,
+    policy_valid_frame: pd.DataFrame,
+    policy_holdout_frame: pd.DataFrame,
+) -> Optional[Dict[str, Any]]:
+    execution_hints = dict(ctx.resolved_config.get("_execution_hints") or {})
+    stage2_hint = dict(execution_hints.get("stage2_reuse") or {})
+    source_run_dir = str(stage2_hint.get("source_run_dir") or "").strip()
+    if not source_run_dir:
+        return None
+    source_root = Path(source_run_dir).resolve()
+    source_summary_path = source_root / "summary.json"
+    source_resolved_path = source_root / "resolved_config.json"
+    if not source_summary_path.exists() or not source_resolved_path.exists():
+        raise FileNotFoundError(f"stage2 reuse source is missing required artifacts: {source_root}")
+    source_summary = json.loads(source_summary_path.read_text(encoding="utf-8"))
+    source_manifest = json.loads(source_resolved_path.read_text(encoding="utf-8"))
+    if _stage2_reuse_relevant_manifest(source_manifest) != _stage2_reuse_relevant_manifest(manifest):
+        raise ValueError(f"stage2 reuse source is not compatible with current manifest: {source_root}")
+    source_stage2 = dict((source_summary.get("stage_artifacts") or {}).get("stage2") or {})
+    stage2_root = Path(str(source_stage2.get("model_package_path") or "")).resolve().parent
+    selection_model_path = stage2_root / "selection_model.joblib"
+    model_package_path = stage2_root / "model.joblib"
+    search_report_path = stage2_root / "search_report.json"
+    training_report_path = stage2_root / "training_report.json"
+    feature_contract_path = stage2_root / "feature_contract.json"
+    if not selection_model_path.exists() or not model_package_path.exists():
+        raise FileNotFoundError(f"stage2 reuse source is missing model packages: {stage2_root}")
+    search_package = joblib.load(selection_model_path)
+    final_package = joblib.load(model_package_path)
+    valid_scores = _score_stage2_package(valid_frame, search_package)
+    holdout_scores = _score_stage2_package(holdout_frame, final_package)
+    policy_validation_scores = _score_stage2_package(policy_valid_frame, search_package)
+    policy_holdout_scores = _score_stage2_package(policy_holdout_frame, final_package)
+    ctx.append_state(
+        "stage_reuse",
+        stage="stage2",
+        source_run_id=str(stage2_hint.get("source_run_id") or ""),
+        source_run_dir=str(source_root),
+    )
+    update_run_status(
+        ctx,
+        lifecycle_status="running",
+        extra={
+            "active_stage": "stage2",
+            "last_progress_event": "stage_reuse",
+            "last_progress_at_utc": utc_now(),
+        },
+    )
+    return {
+        "stage_name": "stage2",
+        "search_payload": {"report": json.loads(search_report_path.read_text(encoding="utf-8")) if search_report_path.exists() else {}},
+        "final_payload": {"report": json.loads(training_report_path.read_text(encoding="utf-8")) if training_report_path.exists() else {}},
+        "search_package": search_package,
+        "model_package": final_package,
+        "selection_model_path": str(selection_model_path.resolve()),
+        "model_package_path": str(model_package_path.resolve()),
+        "search_report_path": str(search_report_path.resolve()),
+        "training_report_path": str(training_report_path.resolve()),
+        "feature_contract_path": str(feature_contract_path.resolve()),
+        "validation_scores": valid_scores,
+        "holdout_scores": holdout_scores,
+        "validation_policy_scores": policy_validation_scores,
+        "holdout_policy_scores": policy_holdout_scores,
+        "reused_from_run_id": str(stage2_hint.get("source_run_id") or ""),
+        "reused_from_run_dir": str(source_root),
+    }
+
+
 def _merge_score_frames(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame(columns=KEY_COLUMNS)
@@ -1584,19 +1711,15 @@ def _add_upstream_probs(
 ) -> pd.DataFrame:
     out = frame.copy()
     stage1_scores = _score_single_target(stage1_source_frame, stage1_package, prob_col="stage1_entry_prob")
-    stage2_prediction_mode = str(stage2_package.get("prediction_mode") or "").strip().lower()
-    if stage2_prediction_mode == "direction_or_no_trade":
-        stage2_raw_scores = _score_stage2_direction_or_no_trade(stage2_source_frame, stage2_package)
-        stage2_scores = stage2_raw_scores.rename(
-            columns={
-                "direction_trade_prob": "stage2_direction_trade_prob",
-                "direction_up_prob": "stage2_direction_up_prob",
-                "ce_prob": "stage2_ce_prob",
-                "pe_prob": "stage2_pe_prob",
-            }
-        )
-    else:
-        stage2_scores = _score_single_target(stage2_source_frame, stage2_package, prob_col="stage2_direction_up_prob")
+    stage2_raw_scores = _score_stage2_package(stage2_source_frame, stage2_package, prob_col="stage2_direction_up_prob")
+    stage2_scores = stage2_raw_scores.rename(
+        columns={
+            "direction_trade_prob": "stage2_direction_trade_prob",
+            "direction_up_prob": "stage2_direction_up_prob",
+            "ce_prob": "stage2_ce_prob",
+            "pe_prob": "stage2_pe_prob",
+        }
+    )
     out = out.merge(stage1_scores, on=KEY_COLUMNS, how="left")
     out = out.merge(stage2_scores, on=KEY_COLUMNS, how="left")
     missing_stage1 = out["stage1_entry_prob"].isna()
@@ -2000,7 +2123,7 @@ def _stage2_side_masks_from_policy(
     policy_id = str(stage2_policy.get("policy_id") or "direction_dual_threshold_v1")
     entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
     direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
-    if policy_id == "direction_gate_threshold_v1":
+    if policy_id in {"direction_gate_threshold_v1", "direction_gate_economic_balance_v1"}:
         direction_trade_prob = _numeric_array(merged["direction_trade_prob"], fillna=0.0)
         return _direction_trade_masks_with_gate(
             entry_probs,
@@ -2019,6 +2142,63 @@ def _stage2_side_masks_from_policy(
         ce_threshold=float(stage2_policy["selected_ce_threshold"]),
         pe_threshold=float(stage2_policy["selected_pe_threshold"]),
         min_edge=float(stage2_policy["selected_min_edge"]),
+    )
+
+
+def _policy_side_band(policy_config: Dict[str, Any], *, default_min: float = 0.30, default_max: float = 0.70) -> tuple[float, float]:
+    side_share_min = _safe_float(policy_config.get("side_share_min"), default=default_min)
+    side_share_max = _safe_float(policy_config.get("side_share_max"), default=default_max)
+    if side_share_min > side_share_max:
+        side_share_min, side_share_max = side_share_max, side_share_min
+    return float(side_share_min), float(side_share_max)
+
+
+def _apply_policy_soft_preferences(summary: Dict[str, Any], policy_config: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(summary)
+    trades = int(out.get("trades") or 0)
+    long_share = _safe_float(out.get("long_share"), default=0.0)
+    side_share_min, side_share_max = _policy_side_band(policy_config)
+    out["side_share_in_band"] = bool(side_share_min <= long_share <= side_share_max) if trades else False
+    out["validation_min_trades_soft"] = int(policy_config.get("validation_min_trades_soft", 0) or 0)
+    out["prefer_non_negative_returns"] = bool(policy_config.get("prefer_non_negative_returns", True))
+    out["prefer_profit_factor_min"] = _safe_float(policy_config.get("prefer_profit_factor_min"), default=1.0)
+    out["side_share_min"] = float(side_share_min)
+    out["side_share_max"] = float(side_share_max)
+    return out
+
+
+def _economic_balance_rank(summary: Dict[str, Any], policy_config: Dict[str, Any], *tie_breakers: float) -> tuple[float, ...]:
+    net_return_sum = _safe_float(summary.get("net_return_sum"), default=float("-inf"))
+    profit_factor_value = _safe_float(summary.get("profit_factor"), default=float("-inf"))
+    trades = int(summary.get("trades") or 0)
+    prefer_non_negative = bool(policy_config.get("prefer_non_negative_returns", True))
+    prefer_profit_factor_min = _safe_float(policy_config.get("prefer_profit_factor_min"), default=1.0)
+    validation_min_trades_soft = int(policy_config.get("validation_min_trades_soft", 0) or 0)
+    non_negative_ok = 1.0 if (not prefer_non_negative or net_return_sum >= 0.0) else 0.0
+    profit_factor_ok = 1.0 if profit_factor_value >= prefer_profit_factor_min else 0.0
+    side_share_ok = 1.0 if bool(summary.get("side_share_in_band")) else 0.0
+    trades_ok = 1.0 if trades >= validation_min_trades_soft else 0.0
+    return (
+        non_negative_ok,
+        profit_factor_ok,
+        side_share_ok,
+        trades_ok,
+        net_return_sum,
+        profit_factor_value,
+        float(trades),
+        *tie_breakers,
+    )
+
+
+def _stage3_non_inferior_to_fixed(dynamic_summary: Dict[str, Any], fixed_summary: Dict[str, Any], policy_config: Dict[str, Any]) -> bool:
+    drawdown_slack = _safe_float(policy_config.get("non_inferior_drawdown_slack"), default=0.01)
+    return (
+        _safe_float(dynamic_summary.get("net_return_sum"), default=float("-inf"))
+        >= _safe_float(fixed_summary.get("net_return_sum"), default=float("-inf"))
+        and _safe_float(dynamic_summary.get("profit_factor"), default=float("-inf"))
+        >= _safe_float(fixed_summary.get("profit_factor"), default=float("-inf"))
+        and _safe_float(dynamic_summary.get("max_drawdown_pct"), default=float("inf"))
+        <= _safe_float(fixed_summary.get("max_drawdown_pct"), default=float("inf")) + drawdown_slack
     )
 
 
@@ -2185,6 +2365,73 @@ def select_direction_gate_policy(
     }
 
 
+def select_direction_gate_economic_balance_policy(
+    valid_scores: pd.DataFrame,
+    utility: pd.DataFrame,
+    stage1_scores: pd.DataFrame,
+    stage1_policy: Dict[str, Any],
+    policy_config: Dict[str, Any],
+) -> dict[str, Any]:
+    merged = _merge_policy_inputs(utility, stage1_scores, valid_scores)
+    entry_threshold = float(stage1_policy["selected_threshold"])
+    entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
+    direction_trade_prob = _numeric_array(merged["direction_trade_prob"], fillna=0.0)
+    direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
+    ce_returns = _numeric_array(merged["best_ce_net_return_after_cost"], fillna=0.0)
+    pe_returns = _numeric_array(merged["best_pe_net_return_after_cost"], fillna=0.0)
+    rows_total = len(merged)
+    rows = []
+    for trade_threshold in list(policy_config.get("trade_threshold_grid") or []):
+        for ce_threshold in list(policy_config.get("ce_threshold_grid") or []):
+            for pe_threshold in list(policy_config.get("pe_threshold_grid") or []):
+                for min_edge in list(policy_config.get("min_edge_grid") or []):
+                    ce_mask, pe_mask = _direction_trade_masks_with_gate(
+                        entry_probs,
+                        direction_trade_prob,
+                        direction_up_prob,
+                        entry_threshold=entry_threshold,
+                        trade_threshold=float(trade_threshold),
+                        ce_threshold=float(ce_threshold),
+                        pe_threshold=float(pe_threshold),
+                        min_edge=float(min_edge),
+                    )
+                    trade_mask = ce_mask | pe_mask
+                    returns = np.where(ce_mask, ce_returns, pe_returns)[trade_mask].tolist()
+                    sides = np.where(ce_mask[trade_mask], "CE", "PE").tolist()
+                    summary = _apply_policy_soft_preferences(
+                        _summarize_returns(returns, rows_total=rows_total, sides=sides),
+                        policy_config,
+                    )
+                    summary.update(
+                        {
+                            "trade_threshold": float(trade_threshold),
+                            "ce_threshold": float(ce_threshold),
+                            "pe_threshold": float(pe_threshold),
+                            "min_edge": float(min_edge),
+                        }
+                    )
+                    rows.append(summary)
+    if not rows:
+        raise ValueError("stage2 gate policy grids must not be empty")
+    best = max(
+        rows,
+        key=lambda row: _economic_balance_rank(
+            row,
+            policy_config,
+            -float(row["trade_threshold"]),
+        ),
+    )
+    return {
+        "policy_id": "direction_gate_economic_balance_v1",
+        "selected_trade_threshold": float(best["trade_threshold"]),
+        "selected_ce_threshold": float(best["ce_threshold"]),
+        "selected_pe_threshold": float(best["pe_threshold"]),
+        "selected_min_edge": float(best["min_edge"]),
+        "validation_rows": rows,
+        "selected_validation_summary": best,
+    }
+
+
 def _choose_recipe(row: dict[str, Any], recipe_ids: Sequence[str], *, threshold: float, margin_min: float) -> Optional[str]:
     ranked = sorted(
         ((recipe_id, _safe_float(row.get(f"recipe_prob_{recipe_id}"), default=float("-inf"))) for recipe_id in recipe_ids),
@@ -2201,6 +2448,53 @@ def _choose_recipe(row: dict[str, Any], recipe_ids: Sequence[str], *, threshold:
     return str(top_id)
 
 
+def _stage3_policy_selection(
+    recipe_prob_matrix: np.ndarray,
+    ordered_recipe_ids: Sequence[str],
+    *,
+    stage3_policy: Optional[Dict[str, Any]] = None,
+    recipe_threshold: Optional[float] = None,
+    recipe_margin_min: Optional[float] = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    rows_total = int(recipe_prob_matrix.shape[0])
+    top_idx = np.argmax(recipe_prob_matrix, axis=1)
+    row_idx = np.arange(rows_total, dtype=int)
+    top_prob = recipe_prob_matrix[row_idx, top_idx]
+    if len(ordered_recipe_ids) > 1:
+        second_prob = np.partition(recipe_prob_matrix, -2, axis=1)[:, -2]
+    else:
+        second_prob = np.zeros(rows_total, dtype=float)
+    chosen_recipes = np.asarray(ordered_recipe_ids, dtype=object)[top_idx]
+
+    selection_mode = str((stage3_policy or {}).get("selection_mode") or "dynamic").strip().lower()
+    if selection_mode == "fixed_recipe":
+        recipe_id = str((stage3_policy or {}).get("selected_recipe_id") or "").strip()
+        if recipe_id not in set(str(item) for item in ordered_recipe_ids):
+            raise ValueError(f"stage3 fixed recipe selection references unknown recipe_id: {recipe_id}")
+        fixed_idx = ordered_recipe_ids.index(recipe_id)
+        fixed_top_idx = np.full(rows_total, fixed_idx, dtype=int)
+        fixed_recipes = np.full(rows_total, recipe_id, dtype=object)
+        recipe_valid = np.ones(rows_total, dtype=bool)
+        return fixed_top_idx, fixed_recipes, recipe_valid
+
+    threshold = float(
+        (stage3_policy or {}).get("selected_threshold")
+        if stage3_policy and "selected_threshold" in stage3_policy
+        else recipe_threshold
+    )
+    margin_min = float(
+        (stage3_policy or {}).get("selected_margin_min")
+        if stage3_policy and "selected_margin_min" in stage3_policy
+        else recipe_margin_min
+    )
+    recipe_valid = (
+        np.isfinite(top_prob)
+        & (top_prob >= threshold)
+        & ((top_prob - second_prob) >= margin_min)
+    )
+    return top_idx, chosen_recipes, recipe_valid
+
+
 def _evaluate_combined_policy(
     utility: pd.DataFrame,
     stage1_scores: pd.DataFrame,
@@ -2209,9 +2503,10 @@ def _evaluate_combined_policy(
     *,
     stage1_threshold: float,
     stage2_policy: Dict[str, Any],
-    recipe_threshold: float,
-    recipe_margin_min: float,
+    recipe_threshold: Optional[float] = None,
+    recipe_margin_min: Optional[float] = None,
     recipe_ids: Sequence[str],
+    stage3_policy: Optional[Dict[str, Any]] = None,
 ) -> dict[str, Any]:
     merged = _merge_policy_inputs(utility, stage1_scores, stage2_scores, stage3_scores)
     rows_total = len(merged)
@@ -2232,19 +2527,14 @@ def _evaluate_combined_policy(
     recipe_prob_matrix = np.column_stack(
         [_numeric_array(merged[f"recipe_prob_{recipe_id}"], fillna=float("-inf")) for recipe_id in ordered_recipe_ids]
     )
-    top_idx = np.argmax(recipe_prob_matrix, axis=1)
-    row_idx = np.arange(rows_total, dtype=int)
-    top_prob = recipe_prob_matrix[row_idx, top_idx]
-    if len(ordered_recipe_ids) > 1:
-        second_prob = np.partition(recipe_prob_matrix, -2, axis=1)[:, -2]
-    else:
-        second_prob = np.zeros(rows_total, dtype=float)
-    recipe_valid = (
-        np.isfinite(top_prob)
-        & (top_prob >= float(recipe_threshold))
-        & ((top_prob - second_prob) >= float(recipe_margin_min))
+    top_idx, chosen_recipes, recipe_valid = _stage3_policy_selection(
+        recipe_prob_matrix,
+        ordered_recipe_ids,
+        stage3_policy=stage3_policy,
+        recipe_threshold=recipe_threshold,
+        recipe_margin_min=recipe_margin_min,
     )
-    chosen_recipes = np.asarray(ordered_recipe_ids, dtype=object)[top_idx]
+    row_idx = np.arange(rows_total, dtype=int)
 
     ce_return_matrix = np.column_stack(
         [_numeric_array(merged[f"{recipe_id}__ce_net_return"], fillna=0.0) for recipe_id in ordered_recipe_ids]
@@ -2262,8 +2552,17 @@ def _evaluate_combined_policy(
     sides = np.where(ce_mask[trade_mask], "CE", "PE").tolist()
     recipes = chosen_recipes[trade_mask].tolist()
     summary = _summarize_returns(returns, rows_total=rows_total, sides=sides, selected_recipes=recipes)
-    summary["recipe_threshold"] = float(recipe_threshold)
-    summary["recipe_margin_min"] = float(recipe_margin_min)
+    summary["recipe_threshold"] = _safe_float(
+        (stage3_policy or {}).get("selected_threshold"),
+        default=float(recipe_threshold or 0.0),
+    )
+    summary["recipe_margin_min"] = _safe_float(
+        (stage3_policy or {}).get("selected_margin_min"),
+        default=float(recipe_margin_min or 0.0),
+    )
+    summary["selection_mode"] = str((stage3_policy or {}).get("selection_mode") or "dynamic")
+    if summary["selection_mode"] == "fixed_recipe":
+        summary["selected_recipe_id"] = str((stage3_policy or {}).get("selected_recipe_id") or "")
     return summary
 
 
@@ -2276,9 +2575,10 @@ def _combined_policy_trade_rows(
     *,
     stage1_threshold: float,
     stage2_policy: Dict[str, Any],
-    recipe_threshold: float,
-    recipe_margin_min: float,
+    recipe_threshold: Optional[float] = None,
+    recipe_margin_min: Optional[float] = None,
     recipe_ids: Sequence[str],
+    stage3_policy: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
     merged = _merge_policy_inputs(base_frame, utility, stage1_scores, stage2_scores, stage3_scores)
     if len(merged) == 0:
@@ -2301,19 +2601,14 @@ def _combined_policy_trade_rows(
     recipe_prob_matrix = np.column_stack(
         [_numeric_array(merged[f"recipe_prob_{recipe_id}"], fillna=float("-inf")) for recipe_id in ordered_recipe_ids]
     )
-    top_idx = np.argmax(recipe_prob_matrix, axis=1)
-    row_idx = np.arange(len(merged), dtype=int)
-    top_prob = recipe_prob_matrix[row_idx, top_idx]
-    if len(ordered_recipe_ids) > 1:
-        second_prob = np.partition(recipe_prob_matrix, -2, axis=1)[:, -2]
-    else:
-        second_prob = np.zeros(len(merged), dtype=float)
-    recipe_valid = (
-        np.isfinite(top_prob)
-        & (top_prob >= float(recipe_threshold))
-        & ((top_prob - second_prob) >= float(recipe_margin_min))
+    top_idx, chosen_recipes, recipe_valid = _stage3_policy_selection(
+        recipe_prob_matrix,
+        ordered_recipe_ids,
+        stage3_policy=stage3_policy,
+        recipe_threshold=recipe_threshold,
+        recipe_margin_min=recipe_margin_min,
     )
-    chosen_recipes = np.asarray(ordered_recipe_ids, dtype=object)[top_idx]
+    row_idx = np.arange(len(merged), dtype=int)
 
     ce_return_matrix = np.column_stack(
         [_numeric_array(merged[f"{recipe_id}__ce_net_return"], fillna=0.0) for recipe_id in ordered_recipe_ids]
@@ -2374,6 +2669,114 @@ def select_recipe_policy(
         "selected_margin_min": float(best["recipe_margin_min"]),
         "validation_rows": rows,
         "selected_validation_summary": best,
+    }
+
+
+def select_recipe_economic_balance_policy(
+    valid_scores: pd.DataFrame,
+    utility: pd.DataFrame,
+    stage1_scores: pd.DataFrame,
+    stage2_scores: pd.DataFrame,
+    stage1_policy: Dict[str, Any],
+    stage2_policy: Dict[str, Any],
+    policy_config: Dict[str, Any],
+    recipe_ids: Sequence[str],
+) -> dict[str, Any]:
+    rows = []
+    for threshold in list(policy_config.get("threshold_grid") or []):
+        for margin_min in list(policy_config.get("margin_grid") or []):
+            summary = _apply_policy_soft_preferences(
+                _evaluate_combined_policy(
+                    utility,
+                    stage1_scores,
+                    stage2_scores,
+                    valid_scores,
+                    stage1_threshold=float(stage1_policy["selected_threshold"]),
+                    stage2_policy=stage2_policy,
+                    recipe_threshold=float(threshold),
+                    recipe_margin_min=float(margin_min),
+                    recipe_ids=recipe_ids,
+                ),
+                policy_config,
+            )
+            rows.append(summary)
+    if not rows:
+        raise ValueError("stage3 policy grids must not be empty")
+    best = max(rows, key=lambda row: _economic_balance_rank(row, policy_config, -float(row["recipe_margin_min"])))
+    return {
+        "policy_id": "recipe_economic_balance_v1",
+        "selected_threshold": float(best["recipe_threshold"]),
+        "selected_margin_min": float(best["recipe_margin_min"]),
+        "selection_mode": "dynamic",
+        "validation_rows": rows,
+        "selected_validation_summary": best,
+    }
+
+
+def select_recipe_fixed_baseline_guard_policy(
+    valid_scores: pd.DataFrame,
+    utility: pd.DataFrame,
+    stage1_scores: pd.DataFrame,
+    stage2_scores: pd.DataFrame,
+    stage1_policy: Dict[str, Any],
+    stage2_policy: Dict[str, Any],
+    policy_config: Dict[str, Any],
+    recipe_ids: Sequence[str],
+) -> dict[str, Any]:
+    dynamic_policy = select_recipe_economic_balance_policy(
+        valid_scores,
+        utility,
+        stage1_scores,
+        stage2_scores,
+        stage1_policy,
+        stage2_policy,
+        policy_config,
+        recipe_ids,
+    )
+    dynamic_rows = list(dynamic_policy["validation_rows"])
+    fixed_rows = [
+        _apply_policy_soft_preferences(
+            _fixed_recipe_baseline(
+                utility,
+                stage1_scores,
+                stage2_scores,
+                stage1_threshold=float(stage1_policy["selected_threshold"]),
+                stage2_policy=stage2_policy,
+                recipe_id=str(recipe_id),
+            ),
+            policy_config,
+        )
+        for recipe_id in recipe_ids
+    ]
+    best_fixed = max(fixed_rows, key=lambda row: _economic_balance_rank(row, policy_config))
+    dynamic_non_inferior = [
+        row for row in dynamic_rows if _stage3_non_inferior_to_fixed(row, best_fixed, policy_config)
+    ]
+    if dynamic_non_inferior:
+        best_dynamic = max(
+            dynamic_non_inferior,
+            key=lambda row: _economic_balance_rank(row, policy_config, -float(row["recipe_margin_min"])),
+        )
+        return {
+            "policy_id": "recipe_fixed_baseline_guard_v1",
+            "selected_threshold": float(best_dynamic["recipe_threshold"]),
+            "selected_margin_min": float(best_dynamic["recipe_margin_min"]),
+            "selection_mode": "dynamic",
+            "validation_rows": dynamic_rows,
+            "fixed_recipe_rows": fixed_rows,
+            "best_fixed_recipe_validation": best_fixed,
+            "selected_validation_summary": best_dynamic,
+        }
+    return {
+        "policy_id": "recipe_fixed_baseline_guard_v1",
+        "selected_threshold": float(dynamic_policy["selected_threshold"]),
+        "selected_margin_min": float(dynamic_policy["selected_margin_min"]),
+        "selection_mode": "fixed_recipe",
+        "selected_recipe_id": str(best_fixed["recipe_id"]),
+        "validation_rows": dynamic_rows,
+        "fixed_recipe_rows": fixed_rows,
+        "best_fixed_recipe_validation": best_fixed,
+        "selected_validation_summary": {**best_fixed, "selection_mode": "fixed_recipe"},
     }
 
 
@@ -2817,23 +3220,32 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         lifecycle_status="running",
         extra={"active_stage": "stage2", "last_progress_event": "stage_start", "last_progress_at_utc": stage2_started_at},
     )
-    stage2_result = resolve_trainer(components["stage2"]["trainer_id"])(
-        stage_name="stage2",
-        train_frame=labeled_frames["stage2"]["research_train"],
+    stage2_result = _load_reused_stage2_result(
+        ctx=ctx,
+        manifest=manifest,
         valid_frame=labeled_frames["stage2"]["research_valid"],
-        full_model_frame=labeled_frames["stage2"]["full_model"],
         holdout_frame=labeled_frames["stage2"]["final_holdout"],
         policy_valid_frame=stage_frames["stage2"]["research_valid"],
         policy_holdout_frame=stage_frames["stage2"]["final_holdout"],
-        manifest=manifest,
-        models=list(manifest["catalog"]["models_by_stage"]["stage2"]),
-        feature_sets=list(manifest["catalog"]["feature_sets_by_stage"]["stage2"]),
-        label_mode="direction",
-        positive_value="CE",
-        output_root=ctx.output_root / "stages",
-        prob_col="direction_up_prob",
-        progress_callback=_stage_progress_callback(ctx, stage_name="stage2"),
     )
+    if stage2_result is None:
+        stage2_result = resolve_trainer(components["stage2"]["trainer_id"])(
+            stage_name="stage2",
+            train_frame=labeled_frames["stage2"]["research_train"],
+            valid_frame=labeled_frames["stage2"]["research_valid"],
+            full_model_frame=labeled_frames["stage2"]["full_model"],
+            holdout_frame=labeled_frames["stage2"]["final_holdout"],
+            policy_valid_frame=stage_frames["stage2"]["research_valid"],
+            policy_holdout_frame=stage_frames["stage2"]["final_holdout"],
+            manifest=manifest,
+            models=list(manifest["catalog"]["models_by_stage"]["stage2"]),
+            feature_sets=list(manifest["catalog"]["feature_sets_by_stage"]["stage2"]),
+            label_mode="direction",
+            positive_value="CE",
+            output_root=ctx.output_root / "stages",
+            prob_col="direction_up_prob",
+            progress_callback=_stage_progress_callback(ctx, stage_name="stage2"),
+        )
     stage2_completed_at = utc_now()
     stage_artifacts["stage2"] = {
         "started_at_utc": stage2_started_at,
@@ -2842,6 +3254,9 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "training_report_path": stage2_result["training_report_path"],
         "feature_contract_path": stage2_result["feature_contract_path"],
     }
+    if stage2_result.get("reused_from_run_id"):
+        stage_artifacts["stage2"]["reused_from_run_id"] = str(stage2_result["reused_from_run_id"])
+        stage_artifacts["stage2"]["reused_from_run_dir"] = str(stage2_result["reused_from_run_dir"])
     ctx.append_state("stage_done", stage="stage2", completed_at_utc=stage2_completed_at)
     stage2_diagnostics = _build_stage2_diagnostics_report(
         ctx=ctx,
@@ -3011,8 +3426,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         stage3_policy_scores_holdout,
         stage1_threshold=float(stage1_policy["selected_threshold"]),
         stage2_policy=stage2_policy,
-        recipe_threshold=float(stage3_policy["selected_threshold"]),
-        recipe_margin_min=float(stage3_policy["selected_margin_min"]),
+        stage3_policy=stage3_policy,
         recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
     )
     combined_trade_rows = _combined_policy_trade_rows(
@@ -3023,8 +3437,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         stage3_policy_scores_holdout,
         stage1_threshold=float(stage1_policy["selected_threshold"]),
         stage2_policy=stage2_policy,
-        recipe_threshold=float(stage3_policy["selected_threshold"]),
-        recipe_margin_min=float(stage3_policy["selected_margin_min"]),
+        stage3_policy=stage3_policy,
         recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
     )
     combined_trade_rows = _attach_support_context(combined_trade_rows, support_windows["final_holdout"])
@@ -3104,9 +3517,12 @@ __all__ = [
     "build_stage2_labels_direction_or_no_trade",
     "build_stage3_labels",
     "run_staged_research",
+    "select_direction_gate_economic_balance_policy",
     "select_direction_gate_policy",
     "select_direction_policy",
     "select_entry_policy",
+    "select_recipe_economic_balance_policy",
+    "select_recipe_fixed_baseline_guard_policy",
     "select_recipe_policy",
     "train_binary_catalog_stage",
     "train_gate_direction_stage",

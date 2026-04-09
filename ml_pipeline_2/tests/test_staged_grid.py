@@ -176,6 +176,35 @@ def test_staged_grid_runner_ranks_runs_and_keeps_execution_research_only(
     assert not any((Path(row["run_dir"]) / "release").exists() for row in payload["runs"])
 
 
+def test_stage3_policy_path_ranking_strategy_prefers_combined_outcome_over_stage2_only() -> None:
+    rows = [
+        {
+            "grid_run_id": "stage2_better",
+            "sequence": 1,
+            "publishable": False,
+            "stage2_cv": {"gate_passed": True, "brier": 0.205, "roc_auc": 0.68, "roc_auc_drift_half_split": 0.02},
+            "combined_holdout_summary": {"net_return_sum": -0.10, "profit_factor": 0.8, "trades": 30, "max_drawdown_pct": 0.08},
+            "stage3_gate_passed": False,
+            "combined_gate_passed": False,
+        },
+        {
+            "grid_run_id": "combined_better",
+            "sequence": 2,
+            "publishable": False,
+            "stage2_cv": {"gate_passed": True, "brier": 0.215, "roc_auc": 0.60, "roc_auc_drift_half_split": 0.03},
+            "combined_holdout_summary": {"net_return_sum": 0.05, "profit_factor": 1.2, "trades": 80, "max_drawdown_pct": 0.05},
+            "stage3_gate_passed": True,
+            "combined_gate_passed": True,
+        },
+    ]
+
+    default_ranked = grid_module._sort_rows(rows)
+    stage3_ranked = grid_module._sort_rows(rows, ranking_strategy="stage3_policy_paths_v1")
+
+    assert default_ranked[0]["grid_run_id"] == "stage2_better"
+    assert stage3_ranked[0]["grid_run_id"] == "combined_better"
+
+
 def test_staged_grid_runner_writes_time_focus_override_from_grid_catalog(tmp_path: Path, monkeypatch) -> None:
     parquet_root = build_staged_parquet_root(tmp_path)
     base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
@@ -654,3 +683,23 @@ def test_midday_direction_or_no_trade_grid_manifest_resolves() -> None:
     ]
     assert resolved["grid"]["runs"][1]["reuse_stage1_from"] == "midday_gate_asymmetry_baseline"
     assert resolved["grid"]["runs"][0]["overrides"]["training"]["stage2_target_redesign"]["max_kept_fraction"] == 0.75
+
+
+def test_stage3_midday_policy_paths_grid_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_grid.stage3_midday_policy_paths_v1.json"),
+        validate_paths=False,
+    )
+    assert resolved["outputs"]["run_name"] == "staged_grid_stage3_midday_policy_paths_v1"
+    assert resolved["selection"]["ranking_strategy"] == "stage3_policy_paths_v1"
+    assert [run["run_id"] for run in resolved["grid"]["runs"]] == [
+        "stage3_baseline_dynamic",
+        "stage3_balanced_gate_dynamic",
+        "stage3_balanced_gate_fixed_guard",
+        "stage3_expanded_catalog_dynamic",
+        "stage3_expanded_catalog_fixed_guard",
+        "stage3_expanded_catalog_relaxed_margin",
+    ]
+    assert resolved["grid"]["runs"][1]["reuse_stage2_from"] == "stage3_baseline_dynamic"
+    assert resolved["grid"]["runs"][3]["reuse_stage2_from"] is None
+    assert resolved["grid"]["runs"][3]["overrides"]["catalog"]["recipe_catalog_id"] == "midday_l3_adjacent_v1"

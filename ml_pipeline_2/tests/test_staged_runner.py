@@ -11,6 +11,7 @@ from ml_pipeline_2.contracts.manifests import load_and_resolve_manifest
 from ml_pipeline_2.experiment_control.coordination import CoordinationError
 from ml_pipeline_2.experiment_control import runner as runner_module
 from ml_pipeline_2.experiment_control.runner import run_manifest
+from ml_pipeline_2.experiment_control.state import RunContext
 from ml_pipeline_2.model_search import search as search_module
 from ml_pipeline_2.staged import pipeline as staged_pipeline
 from ml_pipeline_2.tests.helpers import build_staged_parquet_root, build_staged_smoke_manifest
@@ -466,6 +467,78 @@ def test_staged_runner_can_reuse_stage1_from_prior_run(tmp_path: Path, monkeypat
     assert Path(summary["stage_artifacts"]["stage1"]["selection_model_path"]).exists()
     state_lines = (Path(summary["output_root"]) / "state.jsonl").read_text(encoding="utf-8").splitlines()
     assert any('"event": "stage_reuse"' in line and '"stage": "stage1"' in line for line in state_lines)
+
+
+def test_staged_runner_can_reuse_stage2_from_prior_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    source_resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    source_summary = runner_module.run_research(
+        source_resolved,
+        run_output_root=Path(source_resolved["outputs"]["artifacts_root"]) / "staged_stage2_reuse_source",
+    )
+
+    target_resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    target_resolved["_execution_hints"] = {
+        "stage2_reuse": {
+            "source_run_id": "baseline_stage2",
+            "source_run_dir": str(Path(source_summary["output_root"]).resolve()),
+            "source_summary_path": str((Path(source_summary["output_root"]) / "summary.json").resolve()),
+        }
+    }
+
+    original_binary_trainer = staged_pipeline.train_binary_catalog_stage
+
+    def _guarded_binary_trainer(*args, **kwargs):
+        if kwargs.get("stage_name") == "stage2":
+            raise AssertionError("stage2 trainer should not be called when reuse is configured")
+        return original_binary_trainer(*args, **kwargs)
+
+    monkeypatch.setattr(staged_pipeline, "train_binary_catalog_stage", _guarded_binary_trainer)
+
+    summary = runner_module.run_research(
+        target_resolved,
+        run_output_root=Path(target_resolved["outputs"]["artifacts_root"]) / "staged_stage2_reuse_target",
+    )
+
+    assert summary["status"] == "completed"
+    assert summary["stage_artifacts"]["stage2"]["reused_from_run_id"] == "baseline_stage2"
+    assert Path(summary["stage_artifacts"]["stage2"]["model_package_path"]).exists()
+    state_lines = (Path(summary["output_root"]) / "state.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any('"event": "stage_reuse"' in line and '"stage": "stage2"' in line for line in state_lines)
+
+
+def test_staged_runner_rejects_stage2_reuse_when_recipe_catalog_changes(tmp_path: Path) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    source_resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    source_summary = runner_module.run_research(
+        source_resolved,
+        run_output_root=Path(source_resolved["outputs"]["artifacts_root"]) / "staged_stage2_reuse_recipe_source",
+    )
+
+    target_resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    target_resolved["catalog"]["recipe_catalog_id"] = "midday_l3_adjacent_v1"
+    target_resolved["_execution_hints"] = {
+        "stage2_reuse": {
+            "source_run_id": "baseline_stage2",
+            "source_run_dir": str(Path(source_summary["output_root"]).resolve()),
+            "source_summary_path": str((Path(source_summary["output_root"]) / "summary.json").resolve()),
+        }
+    }
+
+    with pytest.raises(ValueError, match="stage2 reuse source is not compatible"):
+        staged_pipeline._load_reused_stage2_result(
+            ctx=RunContext(
+                output_root=Path(target_resolved["outputs"]["artifacts_root"]) / "unused",
+                resolved_config=target_resolved,
+            ),
+            manifest=target_resolved,
+            valid_frame=pd.DataFrame(columns=staged_pipeline.KEY_COLUMNS),
+            holdout_frame=pd.DataFrame(columns=staged_pipeline.KEY_COLUMNS),
+            policy_valid_frame=pd.DataFrame(columns=staged_pipeline.KEY_COLUMNS),
+            policy_holdout_frame=pd.DataFrame(columns=staged_pipeline.KEY_COLUMNS),
+        )
 
 
 def test_staged_runner_supports_stage2_hpo_search_options(tmp_path: Path) -> None:

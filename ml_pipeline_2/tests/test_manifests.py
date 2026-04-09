@@ -429,6 +429,55 @@ def test_grid_manifest_rejects_unsupported_override_paths(tmp_path: Path) -> Non
         resolve_manifest(payload, manifest_path=tmp_path / "staged_grid_invalid.json", validate_paths=False)
 
 
+def test_stage3_policy_paths_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_dual_recipe.stage3_policy_paths_v1.json"),
+        validate_paths=False,
+    )
+
+    assert resolved["policy"]["stage2_policy_id"] == "direction_gate_threshold_v1"
+    assert resolved["policy"]["stage3_policy_id"] == "recipe_economic_balance_v1"
+    assert resolved["catalog"]["recipe_catalog_id"] == "fixed_l0_l3_v1"
+
+
+def test_grid_manifest_rejects_unknown_ranking_strategy(tmp_path: Path) -> None:
+    base_payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    base_path = tmp_path / "base_manifest.json"
+    base_path.write_text(json.dumps(base_payload, indent=2), encoding="utf-8")
+    payload = {
+        "schema_version": 1,
+        "experiment_kind": "staged_training_grid_v1",
+        "inputs": {
+            "base_manifest_path": str(base_path),
+        },
+        "outputs": {
+            "artifacts_root": str(tmp_path / "grid_artifacts"),
+            "run_name": "staged_grid_invalid_rank",
+        },
+        "selection": {
+            "ranking_strategy": "unknown_strategy",
+            "stage2_hpo_escalation": {
+                "roc_auc_min": 0.54,
+                "brier_max": 0.225,
+            },
+        },
+        "grid": {
+            "research_only": True,
+            "runs": [
+                {
+                    "run_id": "baseline",
+                    "overrides": {
+                        "outputs": {"run_name": "staged_grid_baseline"},
+                    },
+                }
+            ],
+        },
+    }
+
+    with pytest.raises(ManifestValidationError, match="selection.ranking_strategy must be one of"):
+        resolve_manifest(payload, manifest_path=tmp_path / "staged_grid_invalid_rank.json", validate_paths=False)
+
+
 def test_grid_manifest_rejects_non_positive_parallelism(tmp_path: Path) -> None:
     base_payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
     base_path = tmp_path / "base_manifest.json"

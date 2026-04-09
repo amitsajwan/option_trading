@@ -63,9 +63,25 @@ def _metric_float(value: Any, *, default: float) -> float:
     return metric if math.isfinite(metric) else float(default)
 
 
-def _ranking_tuple(row: Dict[str, Any]) -> tuple[float, ...]:
+def _ranking_tuple(row: Dict[str, Any], *, ranking_strategy: str = "default") -> tuple[float, ...]:
     stage2_cv = dict(row.get("stage2_cv") or {})
     combined = dict(row.get("combined_holdout_summary") or {})
+    if str(ranking_strategy or "default").strip().lower() == "stage3_policy_paths_v1":
+        stage3_gate_passed = bool(row.get("stage3_gate_passed"))
+        combined_gate_passed = bool(row.get("combined_gate_passed"))
+        return (
+            float(1 if bool(row.get("publishable")) else 0),
+            float(1 if combined_gate_passed else 0),
+            float(1 if stage3_gate_passed else 0),
+            _metric_float(combined.get("net_return_sum"), default=float("-inf")),
+            _metric_float(combined.get("profit_factor"), default=float("-inf")),
+            float(int(combined.get("trades") or 0)),
+            -_metric_float(combined.get("max_drawdown_pct"), default=float("inf")),
+            float(1 if bool(stage2_cv.get("gate_passed")) else 0),
+            -_metric_float(stage2_cv.get("brier"), default=float("inf")),
+            _metric_float(stage2_cv.get("roc_auc"), default=float("-inf")),
+            -_metric_float(stage2_cv.get("roc_auc_drift_half_split"), default=float("inf")),
+        )
     return (
         float(1 if bool(row.get("publishable")) else 0),
         float(1 if bool(stage2_cv.get("gate_passed")) else 0),
@@ -78,10 +94,10 @@ def _ranking_tuple(row: Dict[str, Any]) -> tuple[float, ...]:
     )
 
 
-def _sort_rows(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _sort_rows(rows: Sequence[Dict[str, Any]], *, ranking_strategy: str = "default") -> List[Dict[str, Any]]:
     return sorted(
         [dict(row) for row in rows],
-        key=lambda row: (_ranking_tuple(row), -int(row.get("sequence", 0))),
+        key=lambda row: (_ranking_tuple(row, ranking_strategy=ranking_strategy), -int(row.get("sequence", 0))),
         reverse=True,
     )
 
@@ -90,6 +106,7 @@ def _best_prior_row(
     completed_rows: Dict[str, Dict[str, Any]],
     *,
     inherit_best_from: Sequence[str],
+    ranking_strategy: str = "default",
 ) -> Dict[str, Any]:
     candidate_rows = [
         dict(completed_rows[run_id])
@@ -98,19 +115,24 @@ def _best_prior_row(
     ]
     if not candidate_rows:
         raise ValueError(f"inherit_best_from has no successful prior runs: {list(inherit_best_from)}")
-    return _sort_rows(candidate_rows)[0]
+    return _sort_rows(candidate_rows, ranking_strategy=ranking_strategy)[0]
 
 
 def _resolve_run_overrides(
     *,
     run_spec: Dict[str, Any],
     completed_rows: Dict[str, Dict[str, Any]],
+    ranking_strategy: str = "default",
 ) -> tuple[Dict[str, Any], Optional[str]]:
     applied_overrides: Dict[str, Any] = {}
     inherited_from_run_id: Optional[str] = None
     inherit_best_from = list(run_spec.get("inherit_best_from") or [])
     if inherit_best_from:
-        inherited_row = _best_prior_row(completed_rows, inherit_best_from=inherit_best_from)
+        inherited_row = _best_prior_row(
+            completed_rows,
+            inherit_best_from=inherit_best_from,
+            ranking_strategy=ranking_strategy,
+        )
         applied_overrides = _deep_merge(applied_overrides, dict(inherited_row.get("applied_overrides") or {}))
         inherited_from_run_id = str(inherited_row["grid_run_id"])
     applied_overrides = _deep_merge(applied_overrides, dict(run_spec.get("overrides") or {}))
@@ -122,6 +144,9 @@ def _run_dependencies(run_spec: Dict[str, Any]) -> List[str]:
     reuse_stage1_from = str(run_spec.get("reuse_stage1_from") or "").strip()
     if reuse_stage1_from:
         dependencies.append(reuse_stage1_from)
+    reuse_stage2_from = str(run_spec.get("reuse_stage2_from") or "").strip()
+    if reuse_stage2_from:
+        dependencies.append(reuse_stage2_from)
     return dependencies
 
 
@@ -140,6 +165,18 @@ def _resolve_execution_hints(
             raise ValueError(f"reuse_stage1_from references failed prior run: {reuse_stage1_from}")
         hints["stage1_reuse"] = {
             "source_run_id": reuse_stage1_from,
+            "source_run_dir": str(source_row["run_dir"]),
+            "source_summary_path": str(source_row["summary_path"]),
+        }
+    reuse_stage2_from = str(run_spec.get("reuse_stage2_from") or "").strip()
+    if reuse_stage2_from:
+        source_row = dict(completed_rows.get(reuse_stage2_from) or {})
+        if not source_row:
+            raise ValueError(f"reuse_stage2_from has no completed prior run: {reuse_stage2_from}")
+        if str(source_row.get("release_status")) == "failed":
+            raise ValueError(f"reuse_stage2_from references failed prior run: {reuse_stage2_from}")
+        hints["stage2_reuse"] = {
+            "source_run_id": reuse_stage2_from,
             "source_run_dir": str(source_row["run_dir"]),
             "source_summary_path": str(source_row["summary_path"]),
         }
@@ -206,6 +243,7 @@ def _result_row(
     label_filtering = dict((summary.get("label_filtering") or {}).get("stage2") or {})
     stage2_artifacts = dict((summary.get("stage_artifacts") or {}).get("stage2") or {})
     blocking_reasons = list(publish_assessment.get("blocking_reasons") or [])
+    gates = dict(summary.get("gates") or {})
     return {
         "sequence": int(sequence),
         "grid_run_id": str(run_spec["run_id"]),
@@ -224,6 +262,8 @@ def _result_row(
         "stage1_cv": stage1_cv,
         "stage2_cv": stage2_cv,
         "combined_holdout_summary": combined_holdout,
+        "stage3_gate_passed": bool(((gates.get("stage3") or {}).get("passed"))),
+        "combined_gate_passed": bool(((gates.get("combined") or {}).get("passed"))),
         "scenario_reports": dict(summary.get("scenario_reports") or {}),
         "stage2_label_filtering": label_filtering,
         "stage2_diagnostics_path": stage2_artifacts.get("diagnostics_path"),
@@ -231,6 +271,7 @@ def _result_row(
         "applied_overrides": applied_overrides,
         "inherited_from_run_id": inherited_from_run_id,
         "reused_stage1_from_run_id": str(((summary.get("execution_hints") or {}).get("stage1_reuse") or {}).get("source_run_id") or "") or None,
+        "reused_stage2_from_run_id": str(((summary.get("execution_hints") or {}).get("stage2_reuse") or {}).get("source_run_id") or "") or None,
     }
 
 
@@ -269,10 +310,13 @@ def _failed_result_row(
         "stage1_cv": {},
         "stage2_cv": {},
         "combined_holdout_summary": {},
+        "stage3_gate_passed": False,
+        "combined_gate_passed": False,
         "scenario_reports": {},
         "applied_overrides": applied_overrides,
         "inherited_from_run_id": inherited_from_run_id,
         "reused_stage1_from_run_id": None,
+        "reused_stage2_from_run_id": None,
     }
 
 
@@ -428,6 +472,7 @@ def run_staged_grid(
         raise ValueError(f"grid_resolved must be {STAGED_GRID_KIND}")
     if bool(grid_resolved.get("grid", {}).get("research_only", True)) and publish_winner:
         raise ValueError("grid manifest is research_only; rerun the selected winner through the normal release flow instead")
+    ranking_strategy = str(((grid_resolved.get("selection") or {}).get("ranking_strategy")) or "default").strip().lower()
 
     base_resolved_manifest = dict(grid_resolved.get("base_resolved_manifest") or {})
     if not base_resolved_manifest:
@@ -497,6 +542,7 @@ def run_staged_grid(
                     resolved_overrides, inherited_from_run_id = _resolve_run_overrides(
                         run_spec=run_spec,
                         completed_rows=completed_rows,
+                        ranking_strategy=ranking_strategy,
                     )
                     _resolve_execution_hints(run_spec=run_spec, completed_rows=completed_rows)
                     existing_row = _existing_lane_row(
@@ -543,6 +589,7 @@ def run_staged_grid(
                             resolved_overrides, inherited_from_run_id = _resolve_run_overrides(
                                 run_spec=run_spec,
                                 completed_rows=completed_rows,
+                                ranking_strategy=ranking_strategy,
                             )
                             execution_hints = _resolve_execution_hints(
                                 run_spec=run_spec,
@@ -648,7 +695,7 @@ def run_staged_grid(
                         completed_rows[str(meta["run_spec"]["run_id"])] = row
 
         run_rows = sorted(run_rows, key=lambda row: int(row.get("sequence", 0)))
-        ranked_rows = _sort_rows(run_rows)
+        ranked_rows = _sort_rows(run_rows, ranking_strategy=ranking_strategy)
         for rank, row in enumerate(ranked_rows, start=1):
             row["rank"] = int(rank)
         rank_by_run_id = {str(row["grid_run_id"]): int(row["rank"]) for row in ranked_rows}
@@ -660,7 +707,7 @@ def run_staged_grid(
             selection=dict(grid_resolved.get("selection") or {}),
             stage2_gates=dict((base_resolved_manifest.get("hard_gates") or {}).get("stage2") or {}),
         )
-        ranked_rows = _sort_rows(run_rows)
+        ranked_rows = _sort_rows(run_rows, ranking_strategy=ranking_strategy)
         for rank, row in enumerate(ranked_rows, start=1):
             row["rank"] = int(rank)
         rank_by_run_id = {str(row["grid_run_id"]): int(row["rank"]) for row in ranked_rows}
@@ -717,6 +764,9 @@ def run_staged_grid(
             "dominant_failure_reason": dominant_failure_reason,
             "stage2_hpo_escalation": stage2_hpo_escalation,
             "robustness_probe": robustness_probe,
+            "selection_strategy": {
+                "ranking_strategy": ranking_strategy,
+            },
             "paths": {
                 "grid_root": str(grid_root.resolve()),
                 "manifests_root": str(manifests_root.resolve()),
