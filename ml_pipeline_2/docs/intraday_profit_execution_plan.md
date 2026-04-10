@@ -45,14 +45,24 @@ These points are now established from completed runs.
 - Stage 12 confidence-selection policy
 
 2. The market itself is not the main source of skew in the current MIDDAY wedge.
-- raw oracle direction mix is roughly balanced
-- Stage 1 also remains roughly balanced
+- raw oracle direction mix is roughly balanced in both windows: ~51% CE validation, ~48% CE holdout
+- Stage 1 also remains roughly balanced: ~51% CE validation, ~48% CE holdout
 
-3. The main distortion appears in Stage 2.
-- holdout direction mix becomes heavily PE-skewed after Stage 2 filtering
-- ranking amplifies that later, but ranking is secondary
+3. Stage 2 is the distortion source — and the distortion is regime amplification, not just CE failure.
+- In validation (May-Jul 2024): Stage 2 actionable was 65% CE on a ~51% CE oracle
+- In holdout (Aug-Oct 2024): Stage 2 actionable was 17% CE on a ~48% CE oracle
+- Stage 2 amplified CE in validation and amplified PE in holdout
+- The oracle was roughly balanced both times
+- This is not a model that detects direction — it is a model that follows the dominant regime in its training window and projects it forward
 
-4. The following work has already been tried and should not be treated as open questions anymore.
+4. PE-only is a research benchmark, not a release candidate.
+- The top-25% PE-heavy holdout subsets produce PF > 2 with positive net return
+- This is a real signal: PE-side Stage 2 pattern has genuine edge on this historical period
+- It is not a product: a PE-only book has no protection against regime change
+- The team should not treat PE holdout economics as a success criterion for release
+- PE-only may be approved under a narrow, separately scoped mandate only — it is not in scope here
+
+5. The following work has already been tried and should not be treated as open questions anymore.
 - broad Stage 3 policy-path search
 - Stage1+Stage2 counterfactual analysis
 - confidence-execution fraction selection
@@ -60,25 +70,40 @@ These points are now established from completed runs.
 - symmetric Stage 2 threshold sweeps
 - dual-side CE/PE fraction selection
 - asymmetric Stage 2 threshold sweeps
+- manual Stage 2 override through full confidence-selection stack
 
-5. None of the above has yet produced a stable publishable candidate.
+6. None of the above has produced a stable publishable candidate.
 
 ## Working interpretation
 
-The current working hypothesis is:
+The current working interpretation, updated after Story 1 closed:
 
-- the MIDDAY wedge is being blocked mainly by Stage 2 directional behavior, especially CE-side quality and CE/PE transfer stability
+Stage 2 is not simply "bad at CE."
+Stage 2 is a regime amplifier.
 
-This is now the only hypothesis worth spending meaningful engineering effort on in this workstream.
+It learned the directional dominance of its training window and projects it forward. When validation was CE-heavy it amplified CE. When holdout was PE-heavy it amplified PE. Because the oracle was ~50/50 both times, neither outcome reflects genuine directional intelligence.
+
+A regime amplifier will:
+- look good in any single historical backtest where the regime is stable
+- fail when the regime changes
+- cannot be fixed by adjusting thresholds, side caps, or fractions
+
+The correct standard for a directional product is:
+- not "was PE profitable in Aug-Oct 2024?"
+- but "does the system have direction intelligence that adapts correctly when future conditions differ from training?"
+
+This is now the only hypothesis worth spending engineering effort on in this workstream.
 
 ## Delivery rule
 
-From this point onward, work is allowed only if it reduces one of these uncertainties:
+From this point onward, work is allowed only if it reduces one of these two uncertainties:
 
-- can Stage 2 be redesigned so validation and holdout both support a profitable downstream policy?
-- if not, is the MIDDAY wedge commercially non-viable and ready to stop?
+- can Stage 2 be redesigned to produce regime-robust directional selection — meaning its CE/PE output tracks the oracle distribution across changing conditions, not amplifies the training regime?
+- if not, is this workstream commercially non-viable and ready to stop?
 
 If a task does not answer one of those questions, it is out of scope.
+
+Specifically: tasks that improve PE-only economics, reduce PE threshold, or optimize single-window backtest performance are out of scope unless separately approved.
 
 ## Success criteria
 
@@ -175,67 +200,88 @@ Status: `TODO`
 
 Goal:
 
-- define one focused Stage 2 redesign path instead of multiple open-ended branches
+- define one focused Stage 2 redesign path whose explicit objective is **directional robustness under regime change** — not CE repair in isolation
+
+The redesign brief must answer all of the following before Story 3 starts:
+
+- why does current Stage 2 behave as a regime amplifier rather than a direction detector?
+- what structural change will produce a model whose CE/PE output tracks oracle distribution across regime shifts rather than amplifying the training-window regime?
+- how will we test for regime robustness, not just single-window performance?
+- what are pass/fail criteria that are independent of which regime happens to dominate a given test window?
 
 Allowed redesign directions:
 
-- CE/PE-specific calibration redesign
-- CE/PE-specific target redesign
-- side-specific confidence modeling inside Stage 2
+- regime-conditional Stage 2 features: add regime-state inputs so the model predicts direction conditional on current market state, not just the historical dominant pattern
+- multi-window training and validation: train and validate Stage 2 across 3+ distinct windows so that a regime-overfit model is detectable and rejectable before holdout
+- directional abstention inside Stage 2: allow Stage 2 to abstain from direction assignment on low-confidence rows instead of defaulting to the currently dominant side
 
-Not allowed in this story:
+Not approved in this story:
 
+- CE repair that does not simultaneously test PE behavior across regime shifts
 - new Stage 3 redesign branch
 - full all-session expansion
-- broad feature churn without a testable hypothesis
+- optimization of PE-only or single-window metrics
 
 Required tasks:
 
-- write the redesign hypothesis
-- state why current Stage 2 fails
-- define exactly what changes in Stage 2
-- define how success will be measured
+- write the redesign hypothesis in one paragraph: what is the root cause and what structural change addresses it?
+- state the test that would have caught the current regime amplifier before it reached holdout
+- define success criteria that are regime-robust (see below)
+- select one option and name one owner
+- produce one bounded run plan for Story 3
 
 Done means:
 
-- there is one approved redesign brief with one owner and one bounded run plan
+- one approved redesign brief exists with a named option and named owner
+- the success criteria explicitly include regime-robustness checks
 
-Draft redesign brief (to be reviewed and approved before Story 3 starts):
+**Draft redesign brief (PM approval required before Story 3 starts):**
 
-**Why current Stage 2 fails:**
+Root cause:
 
-The current Stage 2 trains one shared direction model (`CE vs PE`) on the full actionable set. The model has learned PE patterns that generalize to holdout, but CE patterns that do not. Evidence:
+Stage 2 trains a shared direction model on one training window and learns the directional dominance of that window. When the market regime shifts, Stage 2 inverts its output — not because it detected the shift, but because it lost its training pattern and defaulted to the new dominant pattern. This is regime amplification, not directional intelligence.
 
-- CE precision on holdout: 15–19% across all threshold configurations tested (random baseline on 48% CE oracle is ~48%)
-- Stage 2 direction agreement vs oracle is 37–38% on validation, ~46–50% on holdout — both near or below random
-- PE precision on holdout is 55–76%, i.e. PE signal is real; CE signal is noise
-- The problem is not thresholds — it is the model itself
+Evidence:
 
-This is consistent with one or both of:
+- validation oracle 51% CE → Stage 2 actionable 65% CE — amplified CE by 14pp in a balanced oracle
+- holdout oracle 48% CE → Stage 2 actionable 17% CE — amplified PE by 31pp in a balanced oracle
+- direction agreement vs oracle: 37–38% on validation, ~48% on holdout — both near or below random
+- CE precision holdout: 15–19% on a 48% CE base rate (random = 48%)
+- PE precision holdout: 55–76% — PE signal is real but regime-specific, not regime-robust
 
-- CE and PE having structurally different feature patterns that a shared model cannot capture simultaneously
-- CE-side training signal being too weak or too sparse to produce a useful direction model on this dataset
+The model did not learn direction. It learned "which side is currently winning" and projects it forward.
 
-**What should change:**
+Proposed options (PM selects one):
 
-One of the following, in order of implementation cost:
+Option A — Regime-conditioned Stage 2 features:
+- Add explicit regime-state inputs to Stage 2 training: e.g. rolling directional win rate, recent CE/PE outcome balance, trend strength, volatility regime indicator
+- These features give the model information about current regime so it can condition its direction output on state rather than fitting one historical pattern
+- Test: on a held-out window, does Stage 2 CE/PE proportion stay within ±15pp of oracle proportion? If regime features are working, direction output should track oracle mix, not amplify one side
 
-Option A — Side-specific Stage 2 scoring: train two Stage 2 models, one CE-specific and one PE-specific, each predicting "is this a good trade for this side?" rather than "which side is better?". Stage 2 policy then uses CE-model score to gate CE entries and PE-model score to gate PE entries independently.
+Option B — Multi-window cross-validation for regime robustness:
+- Validate Stage 2 across 3+ non-overlapping windows during training
+- Reject any model where CE/PE gap vs oracle exceeds 20pp on any single window
+- This makes regime overfit detectable before holdout rather than discovered after
+- Does not require new features — requires a stricter evaluation contract
 
-Option B — CE/PE-specific calibration with separate isotonic layers: keep the shared model but fit separate calibration layers per side using platt or isotonic regression, then use side-specific thresholds with these recalibrated scores.
+Option C — Directional abstention in Stage 2:
+- Currently Stage 2 always assigns CE or PE when the trade gate fires
+- Add an explicit low-confidence abstention class: the model can output "trade, direction unknown"
+- Abstained rows are excluded from the direction-sensitive book, reducing regime amplification without requiring regime features
+- Test: abstention rate ≥ 30% on ambiguous rows; directional accuracy on non-abstained rows ≥ 55% across both windows
 
-Option C — CE target redesign only: keep PE model fixed (it works), redesign the CE Stage 2 target to include CE-specific features or a stronger CE signal. Only rebuild the CE half.
+**Regime-robust success criteria (apply to all options, not negotiable):**
 
-**How success is measured:**
+A redesigned Stage 2 passes Story 2 only if on a fresh run with the same windows ALL hold:
 
-A redesigned Stage 2 is viable if, on a fresh research run with the same windows:
+- CE/PE gap vs oracle ≤ 15pp on holdout (current: 31pp)
+- CE/PE gap vs oracle ≤ 15pp on validation (current: 14pp)
+- Direction agreement vs oracle ≥ 50% on holdout (current: ~48%)
+- CE precision on holdout Stage 1-positive: ≥ 40% (current: 15–19%)
+- PE precision on holdout: ≥ 50% (must not degrade)
+- All criteria must hold without PE-only subsetting, side caps, or post-hoc threshold tuning
 
-- CE precision on holdout Stage 1-positive subset: ≥ 40%
-- PE precision on holdout: does not degrade below current 55%
-- Stage 1+2 actionable holdout book: ≥ 50 trades at long_share ≥ 0.25
-- Validation economics for the confidence-selected book: net_return ≥ 0 at some fraction ≥ top-25%
-
-These targets are intentionally conservative — they do not require publishability, only that the CE signal has become real enough to warrant a full execution policy test.
+Economics are explicitly excluded from Stage 2 pass/fail. Stage 2 success means directional robustness. Economics are evaluated separately in Story 3 post-run diagnostics.
 
 ### Story 3: Execute one final Stage 2 redesign cycle
 
@@ -315,7 +361,7 @@ No new parallel research branch should be opened before Story 1 is closed.
 | --- | --- | --- | --- |
 | S0 | Freeze the operating baseline | DONE | Current facts frozen |
 | S1 | Verify Stage 12 under manual Stage 2 overrides | DONE | Both candidates failed — threshold tuning closed |
-| S2 | Design the Stage 2 redesign brief | TODO | One approved redesign brief |
+| S2 | Design the Stage 2 redesign brief | TODO | One approved regime-robustness redesign brief |
 | S3 | Execute one final Stage 2 redesign cycle | TODO | One redesign batch result |
 | S4 | Final proof assessment | TODO | Go/no-go memo |
 | S5 | Product decision | TODO | Publish, stop, or restart decision |
@@ -348,10 +394,14 @@ Use:
 
 ## Immediate next action
 
-Story 1 is closed. Both override candidates failed.
+Story 1 is closed. Both override candidates failed. Threshold tuning is formally exhausted.
+
+The root cause has been updated: Stage 2 is a **regime amplifier**, not a direction detector. The objective for redesign is now directional robustness, not CE repair.
 
 The immediate next action is:
 
-- review and approve the Stage 2 redesign brief in Story 2
-- select one redesign option (A, B, or C) with one owner
-- do not start Story 3 until the brief is signed off
+- PM reviews the three redesign options in Story 2 and selects one
+- PM names one owner for Story 3
+- do not start Story 3 until the brief is approved and the regime-robust success criteria are accepted
+
+The three options differ in implementation cost but share the same regime-robustness success criteria. Option B (multi-window validation) is the lowest implementation cost and would have caught the current regime amplifier before holdout if it had been applied earlier.
