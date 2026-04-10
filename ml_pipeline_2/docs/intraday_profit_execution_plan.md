@@ -241,7 +241,7 @@ Story 3 path: this NO result means vanilla retraining is not justified. However,
 
 ### Story 3: Feature brief and one bounded redesign cycle
 
-Status: `TODO` | Owner: `CORE` (feature brief + review) + `TEAM` (implementation + run)
+Status: `IN_PROGRESS` | Owner: `CORE` (feature brief + review) + `TEAM` (implementation + run)
 
 Unblocked by: Story 2 returning NO — this does not skip to Story 5. It redirects Story 3 to a feature redesign brief first.
 
@@ -255,24 +255,101 @@ Weak signal anchors from S2 (these exist but are insufficient alone):
 - `near_atm_oi_ratio`, `atm_oi_ratio` — consistent direction, moderate holdout effect, mild validation effect
 - `vix_current` — consistent direction, strengthens on holdout
 
-Feature redesign brief (CORE writes and approves this before TEAM implements):
+#### Feature brief (APPROVED — CORE)
 
-The brief must answer:
-- what regime-state features will be added to give the model context about current market conditions rather than fitting historical patterns? Candidates: rolling N-day CE win rate, rolling directional consistency score, trend regime indicator, recent intraday drift signal
-- which current features should be dropped because they are confirmed regime-followers that flip sign? Candidates from S2: `pcr`, `atm_pe_iv`, `iv_skew`, `iv_percentile`, `dist_from_day_high`
-- what is the expected mechanism: why would the new features produce stable directional signal rather than regime amplification?
+**Mechanism**: Stage 2 was amplifying regime because it had no memory of recent directional outcomes. Rolling oracle win-rate features give Stage 2 explicit context: "in the last 5–10 days, CE-optimal trades outnumbered PE-optimal trades X% of the time." A model that sees this context can predict direction conditionally on recent regime rather than projecting the training-window regime blindly.
+
+**DROP** (confirmed regime-followers — flip sign between windows):
+- `pcr`, `pcr_change_5m`, `pcr_change_15m`, `pcr_oi`, `opt_flow_pcr_oi`
+- `iv_skew`, `atm_pe_iv`, `iv_percentile`
+- `dist_from_day_*`, `atm_ce_iv`
+- `ce_pe_oi_diff`, `opt_flow_ce_pe_oi_diff`
+
+**KEEP** (weak anchors — consistent sign, small but non-zero d):
+- `ema_21_slope`, `ema_50_slope`
+- `near_atm_oi_ratio`, `atm_oi_ratio`
+- `vix_current`
+
+**ADD** (new feature class — rolling oracle win-rates):
+- `oracle_rolling_ce_win_rate_5d` — share of CE entries in prior 5 trade-days
+- `oracle_rolling_pe_win_rate_5d` — share of PE entries in prior 5 trade-days
+- `ce_pe_win_rate_diff_5d` — CE minus PE (positive = CE-dominant regime last 5d)
+- `oracle_rolling_ce_win_rate_10d` — same over 10 trade-days
+- `oracle_rolling_pe_win_rate_10d`
+- `ce_pe_win_rate_diff_10d`
+
+**ADD** (regime binary flags — already computed, add to Stage 2 input):
+- `ctx_regime_atr_high`, `ctx_regime_atr_low`, `ctx_regime_trend_up`, `ctx_regime_trend_down`
+- `ctx_is_high_vix_day`, `regime_vol_high`, `regime_vol_low`, `regime_trend_up`, `regime_trend_down`
+
+New feature set name: `fo_midday_direction_regime_v1`
+
+#### Implementation status
+
+Code complete — all three changes committed to branch `chore/ml-pipeline-ubuntu-gcp-runbook`:
+
+| Change | File | Status |
+|--------|------|--------|
+| `compute_rolling_oracle_stats()` function | `staged/pipeline.py` | DONE |
+| Stage 2 frame enrichment (inject rolling stats before labeler) | `staged/pipeline.py` | DONE |
+| `fo_midday_direction_regime_v1` feature set registration | `catalog/feature_sets.py` | DONE |
+| New grid config with Stage 1 frozen | `configs/research/staged_grid.stage3_direction_regime_v1.json` | DONE |
+| Pre-flight gate script | `scripts/run_s3_preflight_gate.py` | DONE |
+
+#### GCP runbook (`TEAM` — run in this order)
+
+**Step 1 — Pull latest code on GCP**
+```bash
+git pull origin chore/ml-pipeline-ubuntu-gcp-runbook
+pip install -e ml_pipeline_2/  # if package not yet installed
+```
+
+**Step 2 — Run pre-flight gate (fast, ~5 min)**
+```bash
+cd /path/to/repo
+python ml_pipeline_2/scripts/run_s3_preflight_gate.py
+```
+- Exit 0 = PASS — proceed to Step 3
+- Exit 1 = FAIL — stop, report back to CORE with output
+
+**Step 3 — Run full S3 grid (only if Step 2 passes)**
+```bash
+python -m ml_pipeline_2.run_staged_grid \
+  ml_pipeline_2/configs/research/staged_grid.stage3_direction_regime_v1.json
+```
+Artifacts land in: `ml_pipeline_2/artifacts/research/staged_grid_stage3_direction_regime_v1/`
+
+**Step 4 — Run S2 feature signal diagnostic on the new run**
+```bash
+python -m ml_pipeline_2.staged.stage2_feature_signal \
+  --run-dir ml_pipeline_2/artifacts/research/staged_grid_stage3_direction_regime_v1/runs/01_s3_regime_baseline \
+  --output /tmp/s3_feature_signal.json
+cat /tmp/s3_feature_signal.json | python -c "import json,sys; d=json.load(sys.stdin); print('STABLE:', d['n_cross_window_stable_features'], '/', len(d['cross_window_stability'])); print('VERDICT:', d['verdict'])"
+```
+
+**Step 5 — Run S2 skew diagnostic**
+```bash
+python -m ml_pipeline_2.staged.stage2_calibration_diagnostic \
+  --run-dir ml_pipeline_2/artifacts/research/staged_grid_stage3_direction_regime_v1/runs/01_s3_regime_baseline
+```
+
+**Step 6 — Run confidence execution policy**
+```bash
+python -m ml_pipeline_2.run_stage12_confidence_execution_policy \
+  --run-dir ml_pipeline_2/artifacts/research/staged_grid_stage3_direction_regime_v1/runs/01_s3_regime_baseline
+```
+
+**Step 7 — Deliver results to CORE**
+Paste stdout from Steps 4–6 into the team channel. CORE (Amit) assesses against publish gates.
 
 Required tasks (`CORE`):
 
-- write the feature brief: additions, removals, and mechanism explanation
-- get PM sign-off on the brief before implementation starts
 - review redesign results against regime-robust success criteria
+- write S4 decision memo
 
 Required tasks (`TEAM`):
 
-- implement the feature brief exactly as specified, no scope expansion
-- run the new staged batch on GCP
-- run the full diagnostic suite: `run_stage2_feature_signal_diagnostic`, `run_stage12_skew_diagnostic`, `run_stage12_confidence_execution_policy`
+- run Steps 1–7 of the GCP runbook above
 - deliver raw results and auto-generated memos back to CORE
 
 Success criteria (regime-robust, non-negotiable):
@@ -284,10 +361,13 @@ Success criteria (regime-robust, non-negotiable):
 - CE precision on holdout ≥ 40% (current: 15–19%)
 - All criteria without side caps or post-hoc threshold tuning
 
+⚠️ **Known deferred scope (S4 dependency)**: `oracle_rolling_*` features are training-time features computed from historical oracle. For live `ml_pure` inference, a daily lookup table of rolling oracle stats must be pre-computed and supplied. This is out of scope for S3. It must be resolved before production hand-off.
+
 Done means:
 
-- one feature brief exists and is PM-approved
-- one redesign run completes with full diagnostics
+- feature brief is approved (DONE — above)
+- implementation is committed (DONE — above)
+- GCP run completes with full diagnostics (TEAM — pending)
 - CORE reviews results against all regime-robust criteria and makes a keep/reject call
 
 ---

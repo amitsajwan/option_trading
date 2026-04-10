@@ -481,19 +481,48 @@ These are the real unresolved items.
 
 ## Recommended next work
 
-Wrapper-level and execution-level approaches are now exhausted. Refer to the execution plan for the approved story sequence:
+Wrapper-level and execution-level approaches are now exhausted. Story 0, 1, 2 are all closed. Story 3 is in progress.
+
+Refer to the execution plan for full story tracking:
 
 - [`intraday_profit_execution_plan.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/intraday_profit_execution_plan.md)
 
-The approved next step is Story 2: design one focused Stage 2 redesign brief.
+### Current work: Story 3 — S3 feature redesign and retrain
 
-Three options are defined in that brief. In order of implementation cost:
+The S2 feature signal gate returned NO (0 of 24 features cross-window stable). Stage 2 is a regime amplifier, not a direction detector. The fix is a feature redesign, not more tuning.
 
-1. Side-specific Stage 2 models (CE model + PE model, trained independently)
-2. Side-specific calibration layers on top of the shared model
-3. CE-only target redesign (PE model kept fixed)
+The feature brief is written and approved. Code is implemented. The TEAM's next action is to run the GCP runbook in Story 3 of the execution plan.
 
-Do not start a new run before the brief is approved.
+Short version:
+
+```bash
+# 1. Pre-flight gate (fast, run first)
+python ml_pipeline_2/scripts/run_s3_preflight_gate.py
+
+# 2. Full S3 training grid (only if pre-flight passes)
+python -m ml_pipeline_2.run_staged_grid \
+  ml_pipeline_2/configs/research/staged_grid.stage3_direction_regime_v1.json
+
+# 3. Feature signal diagnostic on new run
+python -m ml_pipeline_2.staged.stage2_feature_signal \
+  --run-dir ml_pipeline_2/artifacts/research/staged_grid_stage3_direction_regime_v1/runs/01_s3_regime_baseline \
+  --output /tmp/s3_feature_signal.json
+
+# 4. Skew diagnostic + confidence execution policy (same run dir)
+python -m ml_pipeline_2.staged.stage2_calibration_diagnostic --run-dir <above>
+python -m ml_pipeline_2.run_stage12_confidence_execution_policy --run-dir <above>
+```
+
+### ⚠️ Live inference gap (S4 dependency — do not block S3 on this)
+
+The new `oracle_rolling_*` features (rolling CE/PE oracle win-rates) are training-time features. They are computed from the historical oracle inside `pipeline.py` by `compute_rolling_oracle_stats()` and merged into the Stage 2 frame before training.
+
+For live `ml_pure` inference, these features cannot be re-derived from snapshots alone — they require a pre-computed daily lookup table of rolling oracle outcomes. Before any production hand-off, a serving-time adapter must:
+
+1. Maintain a rolling oracle outcomes table (updated daily after market close)
+2. Supply the current day's row to Stage 2 inference as feature values
+
+This is explicitly deferred to Story 4. Do not block Story 3 on this. Document it in the S4 decision memo.
 
 ## Related docs
 

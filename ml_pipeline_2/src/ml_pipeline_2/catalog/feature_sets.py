@@ -323,6 +323,40 @@ DEFAULT_FEATURE_SET_SPECS: List[FeatureSetSpec] = [
             r"^time_day_of_week$",
         ),
     ),
+    # S3: regime-aware direction feature set.
+    # Drops confirmed regime-followers (pcr, iv_skew, atm_pe_iv, iv_percentile, dist_from_day_*).
+    # Keeps weak anchors (ema slopes, atm_oi_ratio, vix_current).
+    # Adds rolling oracle CE/PE win-rate features (computed by compute_rolling_oracle_stats in pipeline.py).
+    FeatureSetSpec(
+        name="fo_midday_direction_regime_v1",
+        include_regex=(
+            # Weak anchors: cross-window consistent CE/PE separation (small d, same sign)
+            r"^ema_",
+            r"^near_atm_oi_ratio$",
+            r"^atm_oi_ratio$",
+            r"^vix_current$",
+            # Regime binary flags (computed in labeling/regime.py via attach_regime_features)
+            r"^ctx_regime_atr_high$",
+            r"^ctx_regime_atr_low$",
+            r"^ctx_regime_trend_up$",
+            r"^ctx_regime_trend_down$",
+            r"^ctx_is_high_vix_day$",
+            r"^regime_vol_high$",
+            r"^regime_vol_low$",
+            r"^regime_trend_up$",
+            r"^regime_trend_down$",
+            # Rolling oracle win-rate features (injected by compute_rolling_oracle_stats)
+            r"^oracle_rolling_ce_win_rate_",
+            r"^oracle_rolling_pe_win_rate_",
+            r"^ce_pe_win_rate_diff_",
+            # Intraday / expiry context
+            r"^minute_of_day$",
+            r"^time_minute_of_day$",
+            r"^ctx_dte_days$",
+            r"^ctx_is_expiry_day$",
+            r"^ctx_is_near_expiry$",
+        ),
+    ),
 ]
 
 

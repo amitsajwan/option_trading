@@ -357,6 +357,47 @@ def _build_oracle_targets(
     return oracle, utility
 
 
+def compute_rolling_oracle_stats(
+    oracle: pd.DataFrame,
+    windows: tuple[int, ...] = (5, 10),
+) -> pd.DataFrame:
+    """
+    Compute rolling CE/PE oracle win-rate features per trade_date.
+
+    Uses shift(1) to prevent lookahead — each day sees only prior days' outcomes.
+
+    Returns one row per trade_date with columns:
+        oracle_rolling_ce_win_rate_{w}d   — share of CE entries in prior w days
+        oracle_rolling_pe_win_rate_{w}d   — share of PE entries in prior w days
+        ce_pe_win_rate_diff_{w}d          — CE rate minus PE rate (positive = CE-dominant regime)
+    """
+    entry_mask = pd.to_numeric(oracle.get("entry_label", pd.Series(dtype=float)), errors="coerce").fillna(0.0) == 1.0
+    positives = oracle[entry_mask].copy()
+    if positives.empty:
+        return pd.DataFrame(columns=["trade_date"])
+    daily = (
+        positives.groupby("trade_date")
+        .agg(
+            ce_count=("direction_label", lambda s: (s.astype(str).str.upper() == "CE").sum()),
+            pe_count=("direction_label", lambda s: (s.astype(str).str.upper() == "PE").sum()),
+        )
+        .reset_index()
+        .sort_values("trade_date")
+    )
+    out = daily[["trade_date"]].copy()
+    for w in windows:
+        # shift(1): window looks at w days ending yesterday — no lookahead
+        roll_ce = daily["ce_count"].shift(1).rolling(w, min_periods=max(1, w // 2)).sum()
+        roll_pe = daily["pe_count"].shift(1).rolling(w, min_periods=max(1, w // 2)).sum()
+        roll_tot = (roll_ce + roll_pe).replace(0, np.nan)
+        out[f"oracle_rolling_ce_win_rate_{w}d"] = (roll_ce / roll_tot).values
+        out[f"oracle_rolling_pe_win_rate_{w}d"] = (roll_pe / roll_tot).values
+        out[f"ce_pe_win_rate_diff_{w}d"] = (
+            out[f"oracle_rolling_ce_win_rate_{w}d"] - out[f"oracle_rolling_pe_win_rate_{w}d"]
+        )
+    return out
+
+
 def _attach_labels(stage_frame: pd.DataFrame, oracle: pd.DataFrame) -> pd.DataFrame:
     joined = stage_frame.merge(oracle, on=KEY_COLUMNS, how="inner")
     if len(joined) != len(stage_frame):
@@ -3027,6 +3068,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         context=f"staged support dataset {support_dataset}",
     )
     oracle, utility = _build_oracle_targets(support, recipe_catalog, cost_per_trade=float(manifest["training"]["cost_per_trade"]))
+    oracle_rolling = compute_rolling_oracle_stats(oracle)
     support_windows = {
         "research_train": _window(support, manifest["windows"]["research_train"]),
         "research_valid": _window(support, manifest["windows"]["research_valid"]),
@@ -3062,6 +3104,8 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             "dataset_name": dataset_name,
             **stage_filter_meta,
         }
+        if stage_name == "stage2" and oracle_rolling is not None and len(oracle_rolling) > 0:
+            stage_frame = stage_frame.merge(oracle_rolling, on="trade_date", how="left")
         labeler = resolve_labeler(component_ids["labeler_id"])
         labeled = labeler(stage_frame, oracle, manifest)
         if stage_name == "stage2":
