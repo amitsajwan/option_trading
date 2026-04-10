@@ -4,6 +4,12 @@ This directory contains the maintained module documentation for `ml_pipeline_2`.
 
 Use these files as the source of truth:
 
+- [intraday_profit_execution_plan.md](intraday_profit_execution_plan.md)
+  - product-facing execution plan for the BankNifty intraday trading-system effort
+  - use this for goal, current status, story tracking, and go/no-go decisions
+- [stage2_feature_signal_memo_template.md](stage2_feature_signal_memo_template.md)
+  - one-page memo template for closing `S2`
+  - use this for the binary retrain / stop decision artifact
 - [midday_recovery_handover.md](midday_recovery_handover.md)
   - newcomer-oriented handover for the MIDDAY staged-model recovery track
   - best first document for engineers taking over this workstream
