@@ -104,6 +104,7 @@ def run_stage12_confidence_execution_policy(
     fixed_recipe_ids: Sequence[str] = DEFAULT_CONFIDENCE_EXECUTION_POLICY_FIXED_RECIPE_IDS,
     side_cap_grid: Sequence[float] = DEFAULT_CONFIDENCE_EXECUTION_POLICY_SIDE_CAPS,
     validation_policy: Dict[str, Any] | None = None,
+    stage2_policy_override: Dict[str, Any] | None = None,
     output_root: str | Path | None = None,
 ) -> Dict[str, Any]:
     source_run_dir = Path(run_dir).resolve()
@@ -121,6 +122,19 @@ def run_stage12_confidence_execution_policy(
         **DEFAULT_CONFIDENCE_EXECUTION_POLICY_CONFIG,
         **dict(validation_policy or {}),
     }
+
+    # Apply Stage 2 policy override — patches in-memory summary only, does not modify run artefacts.
+    # Recognised keys: selected_trade_threshold, selected_ce_threshold, selected_pe_threshold, selected_min_edge.
+    normalized_stage2_override: Dict[str, Any] | None = None
+    if stage2_policy_override:
+        _allowed = {"selected_trade_threshold", "selected_ce_threshold", "selected_pe_threshold", "selected_min_edge"}
+        _bad = set(stage2_policy_override) - _allowed
+        if _bad:
+            raise ValueError(f"stage2_policy_override contains unknown keys: {sorted(_bad)}")
+        existing_s2 = dict((summary.get("policy_reports") or {}).get("stage2") or {})
+        patched_s2 = {**existing_s2, **{k: float(v) for k, v in stage2_policy_override.items()}}
+        summary = {**summary, "policy_reports": {**(summary.get("policy_reports") or {}), "stage2": patched_s2}}
+        normalized_stage2_override = {k: float(v) for k, v in stage2_policy_override.items()}
 
     parquet_root = Path(str((resolved_config.get("inputs") or {}).get("parquet_root") or "")).resolve()
     support_dataset = str((resolved_config.get("inputs") or {}).get("support_dataset") or "")
@@ -236,7 +250,12 @@ def run_stage12_confidence_execution_policy(
         ),
     )
 
-    analysis_root = Path(output_root).resolve() if output_root is not None else (source_run_dir / "analysis" / "stage12_confidence_execution_policy")
+    if output_root is not None:
+        analysis_root = Path(output_root).resolve()
+    elif normalized_stage2_override:
+        analysis_root = source_run_dir / "analysis" / "stage12_confidence_execution_policy_override"
+    else:
+        analysis_root = source_run_dir / "analysis" / "stage12_confidence_execution_policy"
     analysis_root.mkdir(parents=True, exist_ok=True)
     summary_output_path = analysis_root / "execution_policy_summary.json"
 
@@ -245,6 +264,7 @@ def run_stage12_confidence_execution_policy(
         "created_at_utc": utc_now(),
         "source_run_dir": str(source_run_dir),
         "source_run_id": str(summary.get("run_id") or source_run_dir.name),
+        "stage2_policy_override": normalized_stage2_override,
         "ranking": {
             "score_id": "entry_prob_x_trade_gate_prob_x_selected_side_prob_v1",
             "top_fractions": normalized_fractions,

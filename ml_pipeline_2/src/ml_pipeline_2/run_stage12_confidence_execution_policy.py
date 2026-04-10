@@ -47,11 +47,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output-root",
         help="Optional explicit analysis output directory; defaults to <run-dir>/analysis/stage12_confidence_execution_policy",
     )
+    # Stage 2 policy override — injects custom thresholds without rerunning training.
+    # Results go to a separate _override subdirectory to avoid clobbering the original.
+    parser.add_argument("--override-trade-threshold", type=float, default=None, help="Override Stage2 selected_trade_threshold")
+    parser.add_argument("--override-ce-threshold", type=float, default=None, help="Override Stage2 selected_ce_threshold")
+    parser.add_argument("--override-pe-threshold", type=float, default=None, help="Override Stage2 selected_pe_threshold")
+    parser.add_argument("--override-min-edge", type=float, default=None, help="Override Stage2 selected_min_edge")
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
+    stage2_override: dict[str, float] = {}
+    if args.override_trade_threshold is not None:
+        stage2_override["selected_trade_threshold"] = float(args.override_trade_threshold)
+    if args.override_ce_threshold is not None:
+        stage2_override["selected_ce_threshold"] = float(args.override_ce_threshold)
+    if args.override_pe_threshold is not None:
+        stage2_override["selected_pe_threshold"] = float(args.override_pe_threshold)
+    if args.override_min_edge is not None:
+        stage2_override["selected_min_edge"] = float(args.override_min_edge)
     payload = run_stage12_confidence_execution_policy(
         run_dir=Path(args.run_dir).resolve(),
         top_fractions=list(args.top_fractions),
@@ -64,6 +79,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "prefer_profit_factor_min": float(args.prefer_profit_factor_min),
             "prefer_non_negative_returns": True,
         },
+        stage2_policy_override=stage2_override or None,
         output_root=(Path(args.output_root).resolve() if args.output_root else None),
     )
     print(json.dumps(payload, indent=2, default=str))
