@@ -36,6 +36,11 @@ Recover a publishable staged model by:
 - Purpose: freeze the proven Stage 2 setup and search downstream policy and recipe-selection paths
 - Current active batch
 
+6. Stage1+Stage2 counterfactual analysis
+- Doc: `ml_pipeline_2/docs/stage12_counterfactual.md`
+- Purpose: test whether top-confidence Stage1+Stage2 trades already contain usable economic edge before another Stage 3 redesign
+- Use after a completed Stage 3 policy-path run when the winner still fails economics
+
 ## Current batch
 
 Config files:
@@ -119,7 +124,9 @@ The current batch is acceptable only if the winner:
 
 If all policy paths still fail:
 - stop policy-only iteration
-- move to Stage 3 label/view redesign
+- run the Stage1+Stage2 counterfactual analysis
+- if oracle or fixed-recipe subsets improve materially, move to Stage 3 label/view redesign
+- if they do not, question the upstream economic edge before opening another Stage 3 batch
 
 ## Minimal restart checklist
 
