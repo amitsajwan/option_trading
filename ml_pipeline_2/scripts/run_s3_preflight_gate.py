@@ -67,7 +67,9 @@ def main() -> int:
     print(f"Support rows: {len(sup_df)}")
 
     # Build oracle using pipeline
-    sys.path.insert(0, "ml_pipeline_2/src")
+    # contracts_app lives at repo root — must be on path before any pipeline import
+    sys.path.insert(0, str(Path(".").resolve()))
+    sys.path.insert(0, str(Path("ml_pipeline_2/src").resolve()))
     from ml_pipeline_2.staged.pipeline import (
         _build_oracle_targets,
         compute_rolling_oracle_stats,
