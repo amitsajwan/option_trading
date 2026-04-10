@@ -46,6 +46,11 @@ Recover a publishable staged model by:
 - Purpose: choose a confidence cutoff and fixed recipe on validation, then apply the same selected fraction to holdout
 - Use after the counterfactual confirms that tighter Stage1+Stage2 subsets contain real edge
 
+8. Stage1+Stage2 confidence execution policy
+- Doc: `ml_pipeline_2/docs/stage12_confidence_execution_policy.md`
+- Purpose: search fixed `L3` / `L6` execution policies over tighter fractions with optional side caps
+- Use after confidence execution confirms that tighter subsets help but side concentration still blocks release
+
 ## Current batch
 
 Config files:
