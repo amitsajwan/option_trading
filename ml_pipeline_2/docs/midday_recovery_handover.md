@@ -92,6 +92,8 @@ Post-run analysis tools added during recovery:
 - [`confidence_execution.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/confidence_execution.py)
 - [`run_stage12_confidence_execution_policy.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage12_confidence_execution_policy.py)
 - [`confidence_execution_policy.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/confidence_execution_policy.py)
+- [`run_stage12_skew_diagnostic.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage12_skew_diagnostic.py)
+- [`skew_diagnostic.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/skew_diagnostic.py)
 
 Current research configs:
 
