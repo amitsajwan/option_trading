@@ -72,10 +72,14 @@ def test_stage12_skew_diagnostic_merges_oracle_labels_into_all_levels(
 
     stage1_scores = support.loc[:, ["trade_date", "timestamp", "snapshot_id"]].copy()
     stage1_scores["entry_prob"] = [0.90, 0.70, 0.95, 0.65]
+    stage1_scores["entry_label"] = [999, 999, 999, 999]
+    stage1_scores["direction_label"] = ["BAD", "BAD", "BAD", "BAD"]
 
     stage2_scores = support.loc[:, ["trade_date", "timestamp", "snapshot_id"]].copy()
     stage2_scores["direction_trade_prob"] = [0.90, 0.80, 0.90, 0.80]
     stage2_scores["direction_up_prob"] = [0.80, 0.20, 0.80, 0.20]
+    stage2_scores["entry_label"] = [888, 888, 888, 888]
+    stage2_scores["direction_label"] = ["WORSE", "WORSE", "WORSE", "WORSE"]
 
     oracle = support.loc[:, ["trade_date", "timestamp", "snapshot_id", "split"]].copy()
     oracle["entry_label"] = [1, 1, 1, 1]

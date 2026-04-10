@@ -29,6 +29,7 @@ from ..experiment_control.state import utc_now
 from .confidence_execution import _top_fraction_subset
 from .counterfactual import _load_json, _normalize_top_fractions, _resolve_recipe_universe
 from .pipeline import (
+    KEY_COLUMNS,
     _apply_runtime_filters,
     _build_oracle_targets,
     _load_dataset,
@@ -88,6 +89,14 @@ def _prob_by_side(df: pd.DataFrame, prob_col: str, side_col: str = "selected_sid
         "ce_mean": round(float(pd.to_numeric(ce[prob_col], errors="coerce").mean()), 4) if len(ce) else None,
         "pe_mean": round(float(pd.to_numeric(pe[prob_col], errors="coerce").mean()), 4) if len(pe) else None,
     }
+
+
+def _drop_base_overlap(frame: pd.DataFrame, base_columns: Sequence[str]) -> pd.DataFrame:
+    if len(frame.columns) == 0:
+        return frame.copy()
+    overlap = set(base_columns)
+    keep_cols = [col for col in frame.columns if col in KEY_COLUMNS or col not in overlap]
+    return frame.loc[:, keep_cols].copy()
 
 
 def _oracle_level_summary(df: pd.DataFrame, rows_total: int) -> Dict[str, Any]:
@@ -287,8 +296,14 @@ def run_stage12_skew_diagnostic(
 
         s1_win = _window(s1_filtered, window_cfg)
         s2_win = _window(s2_filtered, window_cfg)
-        s1_scores = _score_single_target(s1_win, stage1_package, prob_col="entry_prob")
-        s2_scores = _score_stage2_package(s2_win, stage2_package)
+        s1_scores = _drop_base_overlap(
+            _score_single_target(s1_win, stage1_package, prob_col="entry_prob"),
+            diagnostic_window.columns,
+        )
+        s2_scores = _drop_base_overlap(
+            _score_stage2_package(s2_win, stage2_package),
+            diagnostic_window.columns,
+        )
         merged = _merge_policy_inputs(diagnostic_window, s1_scores, s2_scores)
 
         # Level 1: raw oracle
