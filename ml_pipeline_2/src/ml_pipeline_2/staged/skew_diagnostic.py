@@ -239,7 +239,11 @@ def run_stage12_skew_diagnostic(
         recipe_universe,
         cost_per_trade=float(((resolved_config.get("training") or {}).get("cost_per_trade") or 0.0)),
     )
-    diagnostic_base = _merge_policy_inputs(oracle, utility)
+    # utility carries best_ce/pe_net_return_after_cost as well; oracle already has them.
+    # Drop from utility before merging to avoid _x/_y suffixes on those columns.
+    _dupe = [c for c in utility.columns if c in set(oracle.columns) - set(["trade_date", "timestamp", "snapshot_id"])]
+    utility_base = utility.drop(columns=_dupe) if _dupe else utility
+    diagnostic_base = _merge_policy_inputs(oracle, utility_base)
     diagnostic_valid = _window(diagnostic_base, dict((resolved_config.get("windows") or {}).get("research_valid") or {}))
     diagnostic_holdout = _window(
         diagnostic_base,
