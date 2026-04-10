@@ -33,6 +33,7 @@ sup_df = pd.concat([pd.read_parquet(f) for f in sup_files], ignore_index=True)
 print(f"Stage2: {len(s2_df)} rows   Support: {len(sup_df)} rows")
 
 sys.path.insert(0, "ml_pipeline_2/src")
+sys.path.insert(0, ".")   # for contracts_app at repo root
 from ml_pipeline_2.staged.pipeline import _build_oracle_targets
 from ml_pipeline_2.staged.counterfactual import _resolve_recipe_universe
 
