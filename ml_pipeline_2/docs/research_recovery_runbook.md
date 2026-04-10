@@ -43,7 +43,7 @@ Recover a publishable staged model by:
 
 7. Stage1+Stage2 confidence execution
 - Doc: `ml_pipeline_2/docs/stage12_confidence_execution.md`
-- Purpose: choose a confidence cutoff and fixed recipe on validation, then apply the same score floor to holdout
+- Purpose: choose a confidence cutoff and fixed recipe on validation, then apply the same selected fraction to holdout
 - Use after the counterfactual confirms that tighter Stage1+Stage2 subsets contain real edge
 
 ## Current batch

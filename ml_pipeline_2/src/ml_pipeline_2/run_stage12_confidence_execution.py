@@ -9,6 +9,7 @@ from typing import Optional, Sequence
 from .staged.confidence_execution import (
     DEFAULT_CONFIDENCE_EXECUTION_FIXED_RECIPE_IDS,
     DEFAULT_CONFIDENCE_EXECUTION_TOP_FRACTIONS,
+    DEFAULT_CONFIDENCE_EXECUTION_TRANSFER_MODE,
     run_stage12_confidence_execution,
 )
 
@@ -31,6 +32,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=list(DEFAULT_CONFIDENCE_EXECUTION_FIXED_RECIPE_IDS),
         help="Fixed recipe ids to compare, e.g. L3 L6",
     )
+    parser.add_argument(
+        "--transfer-mode",
+        default=DEFAULT_CONFIDENCE_EXECUTION_TRANSFER_MODE,
+        choices=("fraction", "raw_score_floor"),
+        help="How to transfer the validation-selected cutoff to holdout.",
+    )
     parser.add_argument("--validation-min-trades-soft", type=int, default=50, help="Soft minimum validation trade count for ranking")
     parser.add_argument("--side-share-min", type=float, default=0.30, help="Soft minimum long-share for ranking")
     parser.add_argument("--side-share-max", type=float, default=0.70, help="Soft maximum long-share for ranking")
@@ -48,6 +55,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         run_dir=Path(args.run_dir).resolve(),
         top_fractions=list(args.top_fractions),
         fixed_recipe_ids=list(args.fixed_recipes),
+        transfer_mode=str(args.transfer_mode),
         validation_policy={
             "validation_min_trades_soft": int(args.validation_min_trades_soft),
             "side_share_min": float(args.side_share_min),

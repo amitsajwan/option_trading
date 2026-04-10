@@ -6,10 +6,10 @@ It turns the counterfactual into a proper research selector:
 
 - choose a confidence cutoff on `research_valid`
 - choose a fixed recipe on `research_valid`
-- apply the same validation-derived score floor to `final_holdout`
+- apply the same validation-selected fraction to `final_holdout`
 - report the holdout result
 
-This avoids picking the top fraction directly on holdout.
+This avoids picking the top fraction directly on holdout while also avoiding raw-score calibration drift between validation and holdout.
 
 ## What it does
 
@@ -29,7 +29,7 @@ For one completed staged run it:
   - profit factor
   - side balance
   - enough trades
-- then evaluates the chosen candidate on holdout using the same validation score floor
+- then evaluates the chosen candidate on holdout using the same validation-selected fraction
 
 ## Why this exists
 
@@ -53,6 +53,7 @@ python -m ml_pipeline_2.run_stage12_confidence_execution \
   --run-dir ml_pipeline_2/artifacts/training_launches/stage3_midday_policy_paths_v1/run/runs/03_stage3_balanced_gate_fixed_guard \
   --top-fractions 1.0 0.5 0.33 0.25 0.1 \
   --fixed-recipes L3 L6 \
+  --transfer-mode fraction \
   --validation-min-trades-soft 50 \
   --side-share-min 0.30 \
   --side-share-max 0.70 \
@@ -82,7 +83,7 @@ Good sign:
 Bad sign:
 
 - only ultra-small fractions work
-- holdout collapses after applying the validation score floor
+- holdout still fails after applying the same validation-selected fraction
 - side balance remains structurally broken
 
 If this still fails, the next step is not another confidence-gating tweak.

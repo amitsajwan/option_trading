@@ -30,6 +30,7 @@ from .registries import view_registry
 
 DEFAULT_CONFIDENCE_EXECUTION_TOP_FRACTIONS: tuple[float, ...] = (1.0, 0.5, 1.0 / 3.0, 0.25, 0.10)
 DEFAULT_CONFIDENCE_EXECUTION_FIXED_RECIPE_IDS: tuple[str, ...] = ("L3", "L6")
+DEFAULT_CONFIDENCE_EXECUTION_TRANSFER_MODE = "fraction"
 DEFAULT_CONFIDENCE_EXECUTION_POLICY: dict[str, Any] = {
     "validation_min_trades_soft": 50,
     "side_share_min": 0.30,
@@ -45,6 +46,15 @@ def _candidate_keep_count(total: int, fraction: float) -> int:
     if float(fraction) >= 1.0:
         return int(total)
     return max(1, int(math.ceil(total * float(fraction))))
+
+
+def _top_fraction_subset(frame: pd.DataFrame, fraction: float) -> tuple[pd.DataFrame, int, float]:
+    if len(frame) == 0:
+        return frame.iloc[0:0].copy(), 0, float("-inf")
+    keep_count = _candidate_keep_count(len(frame), fraction)
+    subset = frame.iloc[:keep_count].copy()
+    score_floor = _safe_float(subset["ranking_score"].iloc[-1], default=float("-inf"))
+    return subset, keep_count, score_floor
 
 
 def _selected_stage12_trades_for_window(
@@ -154,14 +164,12 @@ def _attach_recipe_selected_returns(frame: pd.DataFrame, recipes: Sequence[Label
 
 
 def _candidate_summary(
-    frame: pd.DataFrame,
+    subset: pd.DataFrame,
     *,
     rows_total: int,
     recipe_id: str,
-    score_floor: float,
     fraction: float,
 ) -> dict[str, Any]:
-    subset = frame.loc[pd.to_numeric(frame["ranking_score"], errors="coerce").fillna(float("-inf")) >= float(score_floor)].copy()
     sides = subset["selected_side"].astype(str).tolist() if len(subset) else []
     return_col = f"{recipe_id}__selected_return"
     if return_col not in subset.columns:
@@ -173,12 +181,10 @@ def _candidate_summary(
         recipe_id=recipe_id,
     )
     summary["fraction"] = float(fraction)
-    summary["score_floor"] = float(score_floor)
     return summary
 
 
-def _oracle_summary(frame: pd.DataFrame, *, rows_total: int, score_floor: float, fraction: float) -> dict[str, Any]:
-    subset = frame.loc[pd.to_numeric(frame["ranking_score"], errors="coerce").fillna(float("-inf")) >= float(score_floor)].copy()
+def _oracle_summary(subset: pd.DataFrame, *, rows_total: int, fraction: float) -> dict[str, Any]:
     sides = subset["selected_side"].astype(str).tolist() if len(subset) else []
     summary = _summary_with_recipe(
         subset["oracle_selected_side_return"].astype(float).tolist() if len(subset) else [],
@@ -187,7 +193,6 @@ def _oracle_summary(frame: pd.DataFrame, *, rows_total: int, score_floor: float,
         recipe_id="ORACLE_SELECTED_SIDE",
     )
     summary["fraction"] = float(fraction)
-    summary["score_floor"] = float(score_floor)
     return summary
 
 
@@ -196,6 +201,7 @@ def run_stage12_confidence_execution(
     run_dir: str | Path,
     top_fractions: Sequence[float] = DEFAULT_CONFIDENCE_EXECUTION_TOP_FRACTIONS,
     fixed_recipe_ids: Sequence[str] = DEFAULT_CONFIDENCE_EXECUTION_FIXED_RECIPE_IDS,
+    transfer_mode: str = DEFAULT_CONFIDENCE_EXECUTION_TRANSFER_MODE,
     validation_policy: Dict[str, Any] | None = None,
     output_root: str | Path | None = None,
 ) -> Dict[str, Any]:
@@ -209,6 +215,9 @@ def run_stage12_confidence_execution(
     normalized_fixed_recipe_ids = [str(recipe_id).strip() for recipe_id in fixed_recipe_ids if str(recipe_id).strip()]
     if not normalized_fixed_recipe_ids:
         raise ValueError("fixed_recipe_ids must not be empty")
+    normalized_transfer_mode = str(transfer_mode or DEFAULT_CONFIDENCE_EXECUTION_TRANSFER_MODE).strip().lower()
+    if normalized_transfer_mode not in {"fraction", "raw_score_floor"}:
+        raise ValueError("transfer_mode must be one of: fraction, raw_score_floor")
     policy_config = {
         **DEFAULT_CONFIDENCE_EXECUTION_POLICY,
         **dict(validation_policy or {}),
@@ -278,27 +287,32 @@ def run_stage12_confidence_execution(
     valid_rows_total = int(len(utility_valid))
     holdout_rows_total = int(len(utility_holdout))
     for fraction in normalized_fractions:
-        keep_count = _candidate_keep_count(len(selected_valid), fraction)
-        score_floor = _safe_float(selected_valid["ranking_score"].iloc[keep_count - 1], default=float("-inf"))
-        oracle_valid = _oracle_summary(selected_valid, rows_total=valid_rows_total, score_floor=score_floor, fraction=fraction)
-        oracle_holdout = _oracle_summary(selected_holdout, rows_total=holdout_rows_total, score_floor=score_floor, fraction=fraction)
+        valid_subset, valid_keep_count, validation_score_floor = _top_fraction_subset(selected_valid, fraction)
+        if normalized_transfer_mode == "fraction":
+            holdout_subset, holdout_keep_count, holdout_score_floor = _top_fraction_subset(selected_holdout, fraction)
+        else:
+            holdout_score_floor = float(validation_score_floor)
+            holdout_subset = selected_holdout.loc[
+                pd.to_numeric(selected_holdout["ranking_score"], errors="coerce").fillna(float("-inf")) >= holdout_score_floor
+            ].copy()
+            holdout_keep_count = int(len(holdout_subset))
+        oracle_valid = _oracle_summary(valid_subset, rows_total=valid_rows_total, fraction=fraction)
+        oracle_holdout = _oracle_summary(holdout_subset, rows_total=holdout_rows_total, fraction=fraction)
         for recipe_id in normalized_fixed_recipe_ids:
             valid_summary = _apply_policy_soft_preferences(
                 _candidate_summary(
-                    selected_valid,
+                    valid_subset,
                     rows_total=valid_rows_total,
                     recipe_id=recipe_id,
-                    score_floor=score_floor,
                     fraction=fraction,
                 ),
                 policy_config,
             )
             holdout_summary = _apply_policy_soft_preferences(
                 _candidate_summary(
-                    selected_holdout,
+                    holdout_subset,
                     rows_total=holdout_rows_total,
                     recipe_id=recipe_id,
-                    score_floor=score_floor,
                     fraction=fraction,
                 ),
                 policy_config,
@@ -307,7 +321,11 @@ def run_stage12_confidence_execution(
                 {
                     "recipe_id": str(recipe_id),
                     "fraction": float(fraction),
-                    "score_floor": float(score_floor),
+                    "transfer_mode": normalized_transfer_mode,
+                    "validation_keep_count": int(valid_keep_count),
+                    "holdout_keep_count": int(holdout_keep_count),
+                    "validation_score_floor": float(validation_score_floor),
+                    "holdout_score_floor": float(holdout_score_floor),
                     "validation": valid_summary,
                     "holdout": holdout_summary,
                     "oracle_validation": oracle_valid,
@@ -349,13 +367,14 @@ def run_stage12_confidence_execution(
     selected_holdout.loc[:, [column for column in preview_columns if column in selected_holdout.columns]].to_parquet(holdout_ranked_path, index=False)
 
     payload = {
-        "analysis_kind": "stage12_confidence_execution_v1",
+        "analysis_kind": "stage12_confidence_execution_v2",
         "created_at_utc": utc_now(),
         "source_run_dir": str(source_run_dir),
         "source_run_id": str(summary.get("run_id") or source_run_dir.name),
         "ranking": {
             "score_id": "entry_prob_x_trade_gate_prob_x_selected_side_prob_v1",
             "top_fractions": normalized_fractions,
+            "transfer_mode": normalized_transfer_mode,
         },
         "validation_policy": dict(policy_config),
         "selected_trade_count": {
@@ -381,5 +400,6 @@ __all__ = [
     "DEFAULT_CONFIDENCE_EXECUTION_FIXED_RECIPE_IDS",
     "DEFAULT_CONFIDENCE_EXECUTION_POLICY",
     "DEFAULT_CONFIDENCE_EXECUTION_TOP_FRACTIONS",
+    "DEFAULT_CONFIDENCE_EXECUTION_TRANSFER_MODE",
     "run_stage12_confidence_execution",
 ]

@@ -220,13 +220,17 @@ def test_stage12_confidence_execution_selects_validation_winner_and_writes_outpu
         run_dir=run_dir,
         top_fractions=(1.0, 0.5),
         fixed_recipe_ids=("L3", "L6"),
+        transfer_mode="fraction",
         validation_policy={"validation_min_trades_soft": 1},
     )
 
-    assert payload["analysis_kind"] == "stage12_confidence_execution_v1"
+    assert payload["analysis_kind"] == "stage12_confidence_execution_v2"
     assert payload["source_run_id"] == "confidence_exec_smoke"
     assert payload["winner"]["recipe_id"] == "L6"
     assert payload["winner"]["fraction"] == 0.5
+    assert payload["ranking"]["transfer_mode"] == "fraction"
+    assert payload["winner"]["holdout_keep_count"] == 2
+    assert payload["winner"]["holdout"]["trades"] == 2
     assert len(payload["rows"]) == 4
     assert payload["selected_trade_count"]["research_valid"] == 4
     assert payload["selected_trade_count"]["final_holdout"] == 4
