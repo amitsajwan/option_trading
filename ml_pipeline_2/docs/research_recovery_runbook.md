@@ -2,6 +2,10 @@
 
 This runbook is the top-level reconstruction guide for the MIDDAY staged-model recovery work.
 
+Start here if you are new to this track:
+
+- [`midday_recovery_handover.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/midday_recovery_handover.md)
+
 ## Goal
 
 Recover a publishable staged model by:

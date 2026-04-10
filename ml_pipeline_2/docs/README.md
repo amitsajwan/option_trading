@@ -4,6 +4,9 @@ This directory contains the maintained module documentation for `ml_pipeline_2`.
 
 Use these files as the source of truth:
 
+- [midday_recovery_handover.md](midday_recovery_handover.md)
+  - newcomer-oriented handover for the MIDDAY staged-model recovery track
+  - best first document for engineers taking over this workstream
 - [architecture.md](architecture.md)
   - package boundary, supported staged flow, artifact model, and design rules
 - [detailed_design.md](detailed_design.md)
