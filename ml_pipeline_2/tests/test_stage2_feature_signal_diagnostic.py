@@ -109,7 +109,7 @@ def test_stage2_feature_signal_diagnostic_writes_summary_and_memo(
                     break
         return frame.loc[frame[split_col].eq(str(window["name"]))].reset_index(drop=True)
 
-    def fake_build_window_frame(**kwargs) -> pd.DataFrame:
+    def fake_build_feature_window_frame(**kwargs) -> pd.DataFrame:
         diagnostic_window = kwargs["diagnostic_window"]
         return s2f._merge_policy_inputs(  # type: ignore[attr-defined]
             diagnostic_window,
@@ -122,7 +122,7 @@ def test_stage2_feature_signal_diagnostic_writes_summary_and_memo(
     monkeypatch.setattr(s2f, "_resolve_recipe_universe", lambda **kwargs: ["L3", "L6"])
     monkeypatch.setattr(s2f, "_build_oracle_targets", lambda *args, **kwargs: (oracle.copy(), utility.copy()))
     monkeypatch.setattr(s2f, "_window", fake_window)
-    monkeypatch.setattr(s2f, "_build_window_frame", fake_build_window_frame)
+    monkeypatch.setattr(s2f, "_build_feature_window_frame", fake_build_feature_window_frame)
 
     payload = s2f.run_stage2_feature_signal_diagnostic(
         run_dir=run_dir,

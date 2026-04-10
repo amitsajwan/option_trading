@@ -12,13 +12,17 @@ from scipy import stats
 from ..experiment_control.state import utc_now
 from .counterfactual import _load_json, _resolve_recipe_universe
 from .pipeline import (
+    KEY_COLUMNS,
     _apply_runtime_filters,
     _build_oracle_targets,
     _load_dataset,
     _merge_policy_inputs,
+    _score_single_target,
+    _score_stage2_package,
     _window,
 )
-from .stage2_calibration import _build_window_frame
+from .registries import view_registry
+from .skew_diagnostic import _drop_base_overlap
 
 DEFAULT_STAGE2_FEATURE_SIGNAL_FIXED_RECIPE_IDS: tuple[str, ...] = ("L3", "L6")
 
@@ -88,6 +92,58 @@ def _direction_oracle_frame(
         entry_prob = pd.to_numeric(out["entry_prob"], errors="coerce").fillna(0.0)
         out = out.loc[entry_prob >= float(entry_threshold)].copy()
     return out.reset_index(drop=True)
+
+
+def _build_feature_window_frame(
+    *,
+    resolved_config: Dict[str, Any],
+    summary: Dict[str, Any],
+    window_name: str,
+    diagnostic_window: pd.DataFrame,
+    support_context: pd.DataFrame,
+    parquet_root: Path,
+    runtime_block_expiry: bool,
+    stage1_package: Dict[str, Any],
+    stage2_package: Dict[str, Any],
+    direction_feature_columns: Sequence[str],
+) -> pd.DataFrame:
+    component_ids = dict(summary.get("component_ids") or {})
+    stage1_view_id = str(((component_ids.get("stage1") or {}).get("view_id")) or "")
+    stage2_view_id = str(((component_ids.get("stage2") or {}).get("view_id")) or "")
+    stage1_dataset = view_registry()[stage1_view_id].dataset_name
+    stage2_dataset = view_registry()[stage2_view_id].dataset_name
+
+    stage1_raw = _load_dataset(parquet_root, stage1_dataset)
+    stage2_raw = _load_dataset(parquet_root, stage2_dataset)
+    stage1_filtered, _ = _apply_runtime_filters(
+        stage1_raw,
+        block_expiry=runtime_block_expiry,
+        support_context=support_context,
+        context=f"stage2 feature signal {window_name} stage1",
+    )
+    stage2_filtered, _ = _apply_runtime_filters(
+        stage2_raw,
+        block_expiry=runtime_block_expiry,
+        support_context=support_context,
+        context=f"stage2 feature signal {window_name} stage2",
+    )
+    window_cfg = dict((resolved_config.get("windows") or {}).get(window_name) or {})
+    stage1_window = _window(stage1_filtered, window_cfg)
+    stage2_window = _window(stage2_filtered, window_cfg)
+    stage1_scores = _drop_base_overlap(
+        _score_single_target(stage1_window, stage1_package, prob_col="entry_prob"),
+        diagnostic_window.columns,
+    )
+    stage2_scores = _drop_base_overlap(
+        _score_stage2_package(stage2_window, stage2_package),
+        diagnostic_window.columns,
+    )
+    feature_cols_present = [str(col) for col in direction_feature_columns if str(col) in stage2_window.columns]
+    stage2_features = _drop_base_overlap(
+        stage2_window.loc[:, KEY_COLUMNS + feature_cols_present] if feature_cols_present else stage2_window.loc[:, KEY_COLUMNS],
+        list(diagnostic_window.columns) + list(stage1_scores.columns) + list(stage2_scores.columns),
+    )
+    return _merge_policy_inputs(diagnostic_window, stage1_scores, stage2_scores, stage2_features)
 
 
 def _cohens_d(ce_values: np.ndarray, pe_values: np.ndarray) -> float | None:
@@ -326,7 +382,7 @@ def run_stage2_feature_signal_diagnostic(
     stage2_package = joblib.load(str(((stage_artifacts.get("stage2") or {}).get("model_package_path")) or ""))
     direction_model_report = _extract_weighted_features(stage2_package)
 
-    merged_valid = _build_window_frame(
+    merged_valid = _build_feature_window_frame(
         resolved_config=resolved_config,
         summary=summary,
         window_name="research_valid",
@@ -336,8 +392,9 @@ def run_stage2_feature_signal_diagnostic(
         runtime_block_expiry=runtime_block_expiry,
         stage1_package=stage1_package,
         stage2_package=stage2_package,
+        direction_feature_columns=list(direction_model_report.get("feature_columns") or []),
     )
-    merged_holdout = _build_window_frame(
+    merged_holdout = _build_feature_window_frame(
         resolved_config=resolved_config,
         summary=summary,
         window_name="final_holdout",
@@ -347,6 +404,7 @@ def run_stage2_feature_signal_diagnostic(
         runtime_block_expiry=runtime_block_expiry,
         stage1_package=stage1_package,
         stage2_package=stage2_package,
+        direction_feature_columns=list(direction_model_report.get("feature_columns") or []),
     )
 
     stage1_policy = dict((summary.get("policy_reports") or {}).get("stage1") or {})
