@@ -130,49 +130,43 @@ This workstream should stop if any of the following becomes true:
 
 Status summary:
 
-- upstream edge exists
-- broad execution remains weak
-- Stage 2 is the main bottleneck
-- threshold and wrapper work are now mostly exhausted
-- next work must be Stage 2 redesign, not more wrapper tuning
+- upstream edge exists: PE signal confirmed real, holdout PF > 2 on top subsets
+- Stage 2 is confirmed as the bottleneck and the root cause is now understood: regime amplification
+- all threshold and wrapper approaches are exhausted and closed
+- next work is a feature analysis gate, then a bounded Stage 2 retrain if the gate passes
+- Stage 1 and execution infrastructure are stable and do not need to be touched
 
 ## Story tracker
 
-Status values:
+Status values: `TODO` / `IN_PROGRESS` / `DONE` / `STOPPED`
 
-- `TODO`
-- `IN_PROGRESS`
-- `DONE`
-- `STOPPED`
+Team assignments:
+- `CORE` — us: architecture decisions, feature analysis, Stage 2 redesign, final assessment
+- `TEAM` — delegated: data prep, infrastructure, run execution support, report formatting
+
+---
 
 ### Story 0: Freeze the operating baseline
 
-Status: `DONE`
+Status: `DONE` | Owner: `CORE`
 
-Goal:
+Goal: freeze facts already learned so the team stops reopening solved questions.
 
-- freeze the facts already learned so the team stops reopening solved questions
+Outputs delivered:
 
-Required outputs:
+- handover document updated
+- skew diagnostic: Stage 2 confirmed as skew source
+- Stage 2 calibration diagnostic: symmetric thresholds exhausted
+- dual-side policy diagnostic: side-separated fractions do not fix upstream CE weakness
+- Stage 2 side-rebalance diagnostic: asymmetric thresholds do not fix CE precision
 
-- completed handover document
-- completed skew diagnostic
-- completed Stage 2 calibration diagnostic
-- completed dual-side policy diagnostic
-- completed Stage 2 side-rebalance diagnostic
-
-Done means:
-
-- the team agrees that Stage 2 is the current bottleneck
-- no new work is proposed on Stage 3-first or side-cap-first redesign unless new evidence appears
+---
 
 ### Story 1: Verify Stage 12 under manual Stage 2 overrides
 
-Status: `DONE`
+Status: `DONE` | Owner: `CORE`
 
-Goal:
-
-- test the two best asymmetric Stage 2 candidates through the full Stage 12 confidence-policy stack
+Goal: test the two best asymmetric Stage 2 candidates through the full Stage 12 confidence-policy stack.
 
 Candidates tested:
 
@@ -182,17 +176,134 @@ Candidates tested:
 Results:
 
 - holdout top-fraction subsets: PF 2.0–2.4, but `long_share = 0.0` (pure PE)
-- CE precision on holdout across all candidates: 15–19% (below 50/50 random baseline)
-- when side cap is applied to force balance: book collapses to near-zero trades
+- CE precision on holdout: 15–19% against a 48% CE random baseline
+- side cap applied: book collapses to near-zero trades
 - validation economics: negative across all configurations
-- no configuration passed hard gates on both windows simultaneously
+- no configuration passed hard gates on both windows
 
-Outcome: `FAILED`
+Outcome: `FAILED` — threshold tuning is formally closed.
 
-Threshold tuning is formally closed.
-The shared Stage 2 direction model has no CE predictive power on holdout regardless of threshold choice.
+Key finding: Stage 2 is a regime amplifier. It learned the dominant side of the training window and projects it forward. This is not a threshold problem. The features themselves may not contain regime-agnostic direction signal.
 
-The PE book has genuine edge (holdout PF > 2). The CE book is noise at the current Stage 2 model level.
+---
+
+### Story 2: Stage 2 feature signal analysis
+
+Status: `TODO` | Owner: `CORE`
+
+This is a **gate story**. No retraining starts until this is done.
+
+Goal: answer one question before spending compute on a retrain — do the current Stage 2 features contain any regime-agnostic directional signal?
+
+This is a 2–4 hour EDA task, not a training run.
+
+Required tasks (`CORE`):
+
+- pull Stage 2 feature matrix from the existing run artifacts
+- split rows by oracle direction label (CE rows vs PE rows)
+- for each feature, test separation between CE-oracle and PE-oracle rows — on validation window, on holdout window, and combined
+- check: do any features that separate CE/PE on validation still separate on holdout?
+- check: is the current Stage 2 target label (best-net-return side) correlated with any features across both windows, or orthogonal?
+- check: what are the top-5 Stage 2 feature importances and what do they represent (momentum, regime proxy, fundamental direction)?
+
+Required output:
+
+- one short decision memo: YES signal exists / NO signal does not exist
+- if YES: list the features with cross-window separation and characterise what they measure
+- if NO: state clearly that the current feature set cannot support a directional product on this data
+
+Done means:
+
+- one signed-off memo with a binary answer
+- if NO: Story 3 and Story 4 are immediately closed and we move to Story 5
+- if YES: Story 3 starts with a specific feature brief, not an open-ended search
+
+Infrastructure support (`TEAM`):
+
+- ensure run artifacts and feature matrices are accessible for EDA
+- provide any additional data export tooling if needed
+
+---
+
+### Story 3: Execute one bounded Stage 2 redesign cycle
+
+Status: `TODO` | Owner: `CORE` (design) + `TEAM` (run execution)
+
+Blocked on: Story 2 returning YES.
+
+Goal: run one bounded redesign cycle using the feature signal identified in Story 2, targeting directional robustness across regime shifts.
+
+Redesign direction (approved in Story 2, one of):
+
+- Option A: add regime-state features to existing Stage 2 training
+- Option B: enforce multi-window direction balance as a training-time validation gate
+- Option C: directional abstention for low-confidence rows
+
+Core tasks (`CORE`):
+
+- define the exact feature change or training contract change based on Story 2 findings
+- write the redesign spec: what changes, what stays the same, what the pass criteria are
+- review results against regime-robust success criteria (see Story 2 brief)
+
+Delegated tasks (`TEAM`):
+
+- implement feature additions or training contract change per spec
+- run the new staged batch on GCP
+- run post-run diagnostics: skew diagnostic, confidence execution, confidence execution policy
+- deliver raw results back to CORE for assessment
+
+Success criteria (non-negotiable, set in Story 2):
+
+- CE/PE gap vs oracle ≤ 15pp on holdout
+- CE/PE gap vs oracle ≤ 15pp on validation
+- direction agreement vs oracle ≥ 50% on holdout
+- CE precision on holdout Stage 1-positive ≥ 40%
+- PE precision on holdout ≥ 50%
+- all criteria without PE-only subsetting, side caps, or post-hoc threshold tuning
+
+Done means:
+
+- one fresh redesign result exists with diagnostics run
+- CORE has reviewed against regime-robust criteria and made a keep/reject call
+
+---
+
+### Story 4: Final proof assessment
+
+Status: `TODO` | Owner: `CORE`
+
+Blocked on: Story 3.
+
+Goal: decide whether the redesigned system is publishable.
+
+Tasks (`CORE`):
+
+- compare redesigned candidate against the frozen baseline on all standard metrics
+- check regime-robust criteria from Story 2
+- run full confidence execution policy on the redesigned candidate
+- write one decision memo: `GO` / `NO_GO` / `STOP`
+
+A GO requires: positive on both windows, minimum profit factor, minimum trade count, acceptable drawdown, side balance within gates, no fragile post-hoc tuning.
+
+A STOP is issued if: direction balance criteria still fail, or the team cannot explain the model's direction logic in plain language.
+
+Done means: one signed decision memo exists.
+
+---
+
+### Story 5: Product decision
+
+Status: `TODO` | Owner: `PM + CORE`
+
+Goal: close the workstream with a business decision.
+
+Possible outcomes:
+
+- `PUBLISH`: candidate meets all criteria, hand off to release pipeline
+- `STOP MIDDAY`: archive this wedge with full documentation, no further research spend
+- `RESTART BROADER`: stop MIDDAY, restart under a wider intraday mandate with more data, more regimes, fresh scope
+
+Done means: no "keep researching for now" state remains. A decision is recorded and acted on.
 
 ### Story 2: Design the Stage 2 redesign brief
 
@@ -345,63 +456,58 @@ Done means:
 
 ## Execution order
 
-The stories must be closed in this order:
+Stories must close in this sequence. No skipping, no parallel research branches.
 
-1. Story 1
-2. Story 2
-3. Story 3
-4. Story 4
-5. Story 5
+1. S0 — done
+2. S1 — done
+3. S2 — feature signal analysis gate (CORE, ~2-4 hours)
+4. S3 — bounded redesign cycle (CORE spec + TEAM execution), only if S2 returns YES
+5. S4 — final proof assessment (CORE)
+6. S5 — product decision (PM + CORE)
 
-No new parallel research branch should be opened before Story 1 is closed.
+If S2 returns NO signal: skip S3 and S4 entirely, go directly to S5 with a STOP recommendation.
 
 ## Story board
 
-| Story | Title | Status | Primary output |
-| --- | --- | --- | --- |
-| S0 | Freeze the operating baseline | DONE | Current facts frozen |
-| S1 | Verify Stage 12 under manual Stage 2 overrides | DONE | Both candidates failed — threshold tuning closed |
-| S2 | Design the Stage 2 redesign brief | TODO | One approved regime-robustness redesign brief |
-| S3 | Execute one final Stage 2 redesign cycle | TODO | One redesign batch result |
-| S4 | Final proof assessment | TODO | Go/no-go memo |
-| S5 | Product decision | TODO | Publish, stop, or restart decision |
+| Story | Title | Status | Owner | Gate |
+| --- | --- | --- | --- | --- |
+| S0 | Freeze the operating baseline | DONE | CORE | — |
+| S1 | Verify Stage 12 under manual Stage 2 overrides | DONE | CORE | — |
+| S2 | Stage 2 feature signal analysis | TODO | CORE | Blocks S3 |
+| S3 | Execute one bounded Stage 2 redesign cycle | TODO | CORE+TEAM | Needs S2=YES |
+| S4 | Final proof assessment | TODO | CORE | Needs S3 |
+| S5 | Product decision | TODO | PM+CORE | Needs S4 |
 
 ## Team instructions
 
-From now on, team members should follow these rules.
+**For CORE team:**
 
-1. Do not present MIDDAY as the business goal.
-- MIDDAY is the current narrow wedge only.
+1. Own S2 directly. Do not delegate the feature analysis. The decision on whether to retrain at all depends on what you find there.
+2. If S2 returns YES, write a tight spec for TEAM before handing off S3 execution. TEAM should not be deciding what to change — only implementing what is specified.
+3. Every story update must state: hypothesis tested, result, and confidence in shipping increased or decreased.
+4. Every story ends with one word: `done`, `failed`, `blocked`, or `stopped`. No vague progress language.
 
-2. Do not open new branches of work unless they directly test the Stage 2 bottleneck.
+**For TEAM:**
 
-3. Every update must answer:
-- what hypothesis was tested
-- what changed
-- whether confidence in shipping increased or decreased
+1. S2 is CORE-only. Your job in S2 is to ensure data and artifact access.
+2. In S3 your job is implementation and run execution per the CORE spec. Do not extend the scope — implement exactly what is specified.
+3. Do not open new feature branches or model variants without CORE sign-off.
+4. Deliver raw results and diagnostics. Do not interpret or make keep/reject calls. That is CORE's job.
 
-4. Every run must end with one of:
-- keep candidate
-- reject candidate
-- stop branch
+**For everyone:**
 
-5. Do not use vague progress language.
-Use:
-- `done`
-- `failed`
-- `blocked`
-- `replaced`
+- MIDDAY is a research wedge, not the product mission
+- PE-only results are diagnostic benchmarks, not release candidates
+- do not present single-window improvements as progress unless regime-robust criteria also pass
 
 ## Immediate next action
 
-Story 1 is closed. Both override candidates failed. Threshold tuning is formally exhausted.
+S0 and S1 are closed.
 
-The root cause has been updated: Stage 2 is a **regime amplifier**, not a direction detector. The objective for redesign is now directional robustness, not CE repair.
+**CORE starts S2 now.**
 
-The immediate next action is:
+Pull Stage 2 feature matrix from current run artifacts. Split by oracle direction label. Run feature separation analysis across both windows. Write a one-page memo: YES signal exists or NO it does not.
 
-- PM reviews the three redesign options in Story 2 and selects one
-- PM names one owner for Story 3
-- do not start Story 3 until the brief is approved and the regime-robust success criteria are accepted
+That memo is the gate. Everything else waits for it.
 
-The three options differ in implementation cost but share the same regime-robustness success criteria. Option B (multi-window validation) is the lowest implementation cost and would have caught the current regime amplifier before holdout if it had been applied earlier.
+Estimated time: 2–4 hours. Not a training run. Not a code change. Analysis only.
