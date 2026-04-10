@@ -130,11 +130,14 @@ This workstream should stop if any of the following becomes true:
 
 Status summary:
 
-- upstream edge exists: PE signal confirmed real, holdout PF > 2 on top subsets
-- Stage 2 is confirmed as the bottleneck and the root cause is now understood: regime amplification
-- all threshold and wrapper approaches are exhausted and closed
-- next work is a feature analysis gate, then a bounded Stage 2 retrain if the gate passes
-- Stage 1 and execution infrastructure are stable and do not need to be touched
+- S0, S1, S2 are all closed
+- PE-side edge is confirmed real: holdout PF > 2 on top subsets
+- Stage 2 is confirmed as the bottleneck: regime amplifier, not a direction detector
+- S2 feature signal analysis returned NO: 0 cross-window stable features at d≥0.10 out of 24
+- Several top features flip sign between windows — they track regime dominance, not direction
+- Weak consistent signal exists in ema slopes and OI ratio features, but insufficient alone
+- All threshold and wrapper approaches are exhausted
+- Next work is a feature brief for S3 — not a retrain, not more tuning
 
 ## Story tracker
 
@@ -189,9 +192,9 @@ Key finding: Stage 2 is a regime amplifier. It learned the dominant side of the 
 
 ### Story 2: Stage 2 feature signal analysis
 
-Status: `TODO` | Owner: `CORE`
+Status: `DONE` | Owner: `CORE`
 
-This is a **gate story**. No retraining starts until this is done.
+This was the gate story. It is now closed.
 
 Goal: answer one question before spending compute on a retrain — do the current Stage 2 features contain any regime-agnostic directional signal?
 
@@ -212,59 +215,80 @@ Required output:
 - if YES: list the features with cross-window separation and characterise what they measure
 - if NO: state clearly that the current feature set cannot support a directional product on this data
 
-Done means:
+Result: **NO**
 
-- one signed-off memo with a binary answer
-- if NO: Story 3 and Story 4 are immediately closed and we move to Story 5
-- if YES: Story 3 starts with a specific feature brief, not an open-ended search
+Memo: `analysis/stage2_feature_signal_diagnostic/stage2_feature_signal_memo.md` on the run dir.
 
-Infrastructure support (`TEAM`):
+Key findings from the memo:
 
-- ensure run artifacts and feature matrices are accessible for EDA
-- provide any additional data export tooling if needed
+- Direction model: LogisticRegression, 24 features
+- Comparison set: 16,074 validation oracle-positive rows, 15,209 holdout oracle-positive rows
+- Cross-window stable features at Cohen's d ≥ 0.10 both windows, same sign: **0 out of 24**
+- Weak consistent signal exists in a small cluster at d ≈ 0.03–0.08: `ema_21_slope`, `ema_50_slope`, `near_atm_oi_ratio`, `atm_oi_ratio`, `vix_current` — but effect sizes are too small to build a reliable direction model on
+- Several top-weighted features **flip sign** across windows: `pcr`, `atm_pe_oi`, `iv_skew`, `atm_pe_iv`, `iv_percentile`, `dist_from_day_high` — these are regime followers, not direction predictors
+- Heavy regime drift confirmed in `atm_ce_iv`, `near_atm_oi_ratio`, `atm_oi_ratio`, `vix_current` — the features themselves shift significantly between windows
+
+What this means:
+
+- The current 24-feature set is predominantly composed of regime-correlated inputs, not stable directional predictors
+- Retraining the same model on the same features will reproduce regime amplification
+- The weak signal cluster (ema slopes, OI ratios) is a starting anchor — it is not zero signal, but it is insufficient alone
+- The fix requires **new features**, not new model parameters
+
+Story 3 path: this NO result means vanilla retraining is not justified. However, it does NOT mean the direction prediction problem is unsolvable. It means the feature brief must change before a new training cycle starts. Story 3 is now redesigned around a feature brief, not a model brief.
 
 ---
 
-### Story 3: Execute one bounded Stage 2 redesign cycle
+### Story 3: Feature brief and one bounded redesign cycle
 
-Status: `TODO` | Owner: `CORE` (design) + `TEAM` (run execution)
+Status: `TODO` | Owner: `CORE` (feature brief + review) + `TEAM` (implementation + run)
 
-Blocked on: Story 2 returning YES.
+Unblocked by: Story 2 returning NO — this does not skip to Story 5. It redirects Story 3 to a feature redesign brief first.
 
-Goal: run one bounded redesign cycle using the feature signal identified in Story 2, targeting directional robustness across regime shifts.
+Background from S2:
 
-Redesign direction (approved in Story 2, one of):
+The current 24-feature set has 0 cross-window stable directional features at d≥0.10. Several features flip sign between windows. This means a new training cycle on the same features will fail for the same reason. The fix must start with the features, not the model.
 
-- Option A: add regime-state features to existing Stage 2 training
-- Option B: enforce multi-window direction balance as a training-time validation gate
-- Option C: directional abstention for low-confidence rows
+Weak signal anchors from S2 (these exist but are insufficient alone):
 
-Core tasks (`CORE`):
+- `ema_21_slope`, `ema_50_slope` — consistent direction across windows, small effect
+- `near_atm_oi_ratio`, `atm_oi_ratio` — consistent direction, moderate holdout effect, mild validation effect
+- `vix_current` — consistent direction, strengthens on holdout
 
-- define the exact feature change or training contract change based on Story 2 findings
-- write the redesign spec: what changes, what stays the same, what the pass criteria are
-- review results against regime-robust success criteria (see Story 2 brief)
+Feature redesign brief (CORE writes and approves this before TEAM implements):
 
-Delegated tasks (`TEAM`):
+The brief must answer:
+- what regime-state features will be added to give the model context about current market conditions rather than fitting historical patterns? Candidates: rolling N-day CE win rate, rolling directional consistency score, trend regime indicator, recent intraday drift signal
+- which current features should be dropped because they are confirmed regime-followers that flip sign? Candidates from S2: `pcr`, `atm_pe_iv`, `iv_skew`, `iv_percentile`, `dist_from_day_high`
+- what is the expected mechanism: why would the new features produce stable directional signal rather than regime amplification?
 
-- implement feature additions or training contract change per spec
+Required tasks (`CORE`):
+
+- write the feature brief: additions, removals, and mechanism explanation
+- get PM sign-off on the brief before implementation starts
+- review redesign results against regime-robust success criteria
+
+Required tasks (`TEAM`):
+
+- implement the feature brief exactly as specified, no scope expansion
 - run the new staged batch on GCP
-- run post-run diagnostics: skew diagnostic, confidence execution, confidence execution policy
-- deliver raw results back to CORE for assessment
+- run the full diagnostic suite: `run_stage2_feature_signal_diagnostic`, `run_stage12_skew_diagnostic`, `run_stage12_confidence_execution_policy`
+- deliver raw results and auto-generated memos back to CORE
 
-Success criteria (non-negotiable, set in Story 2):
+Success criteria (regime-robust, non-negotiable):
 
-- CE/PE gap vs oracle ≤ 15pp on holdout
-- CE/PE gap vs oracle ≤ 15pp on validation
-- direction agreement vs oracle ≥ 50% on holdout
-- CE precision on holdout Stage 1-positive ≥ 40%
-- PE precision on holdout ≥ 50%
-- all criteria without PE-only subsetting, side caps, or post-hoc threshold tuning
+- Cross-window stable directional features: ≥ 3 at d ≥ 0.10 both windows (upgrades S2 memo from 0)
+- CE/PE gap vs oracle ≤ 15pp on holdout (current: 31pp)
+- CE/PE gap vs oracle ≤ 15pp on validation (current: 14pp)
+- Direction agreement vs oracle ≥ 50% on holdout (current: ~48%)
+- CE precision on holdout ≥ 40% (current: 15–19%)
+- All criteria without side caps or post-hoc threshold tuning
 
 Done means:
 
-- one fresh redesign result exists with diagnostics run
-- CORE has reviewed against regime-robust criteria and made a keep/reject call
+- one feature brief exists and is PM-approved
+- one redesign run completes with full diagnostics
+- CORE reviews results against all regime-robust criteria and makes a keep/reject call
 
 ---
 
@@ -473,8 +497,8 @@ If S2 returns NO signal: skip S3 and S4 entirely, go directly to S5 with a STOP 
 | --- | --- | --- | --- | --- |
 | S0 | Freeze the operating baseline | DONE | CORE | — |
 | S1 | Verify Stage 12 under manual Stage 2 overrides | DONE | CORE | — |
-| S2 | Stage 2 feature signal analysis | TODO | CORE | Blocks S3 |
-| S3 | Execute one bounded Stage 2 redesign cycle | TODO | CORE+TEAM | Needs S2=YES |
+| S2 | Stage 2 feature signal analysis | DONE | CORE | Result: NO — 0 stable features, feature brief required |
+| S3 | Feature brief + one bounded redesign cycle | TODO | CORE+TEAM | Needs PM-approved feature brief |
 | S4 | Final proof assessment | TODO | CORE | Needs S3 |
 | S5 | Product decision | TODO | PM+CORE | Needs S4 |
 
@@ -502,12 +526,18 @@ If S2 returns NO signal: skip S3 and S4 entirely, go directly to S5 with a STOP 
 
 ## Immediate next action
 
-S0 and S1 are closed.
+S0, S1, and S2 are closed.
 
-**CORE starts S2 now.**
+S2 returned **NO**: 0 cross-window stable directional features. Vanilla retraining is not justified.
 
-Pull Stage 2 feature matrix from current run artifacts. Split by oracle direction label. Run feature separation analysis across both windows. Write a one-page memo: YES signal exists or NO it does not.
+**The immediate next action is: CORE writes the feature brief for S3.**
 
-That memo is the gate. Everything else waits for it.
+The brief must specify:
+- which regime-state features to add (candidates: rolling CE win rate, directional consistency score, trend regime indicator, recent intraday drift)
+- which confirmed regime-follower features to remove (candidates: `pcr`, `atm_pe_iv`, `iv_skew`, `iv_percentile`, `dist_from_day_high`)
+- the mechanism: why the new features will produce stable direction signal rather than regime following
+- PM sign-off before TEAM implementation starts
 
-Estimated time: 2–4 hours. Not a training run. Not a code change. Analysis only.
+The weak signal anchors confirmed in S2 — `ema_21_slope`, `ema_50_slope`, `near_atm_oi_ratio`, `atm_oi_ratio`, `vix_current` — should be kept and supplemented, not discarded.
+
+This is a CORE design task. It is not an implementation task. It should take half a day, not a week.
