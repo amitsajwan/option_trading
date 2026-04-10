@@ -234,14 +234,17 @@ def run_stage12_skew_diagnostic(
         run_recipe_catalog_id=str(summary.get("recipe_catalog_id") or ""),
         fixed_recipe_ids=normalized_recipe_ids,
     )
-    _, utility = _build_oracle_targets(
+    oracle, utility = _build_oracle_targets(
         support_filtered,
         recipe_universe,
         cost_per_trade=float(((resolved_config.get("training") or {}).get("cost_per_trade") or 0.0)),
     )
-
-    utility_valid = _window(utility, dict((resolved_config.get("windows") or {}).get("research_valid") or {}))
-    utility_holdout = _window(utility, dict((resolved_config.get("windows") or {}).get("final_holdout") or {}))
+    diagnostic_base = _merge_policy_inputs(oracle, utility)
+    diagnostic_valid = _window(diagnostic_base, dict((resolved_config.get("windows") or {}).get("research_valid") or {}))
+    diagnostic_holdout = _window(
+        diagnostic_base,
+        dict((resolved_config.get("windows") or {}).get("final_holdout") or {}),
+    )
 
     stage_artifacts = dict(summary.get("stage_artifacts") or {})
     stage1_package = joblib.load(str(((stage_artifacts.get("stage1") or {}).get("model_package_path")) or ""))
@@ -274,18 +277,18 @@ def run_stage12_skew_diagnostic(
         raise ValueError("stage1 selected_threshold missing from summary.policy_reports")
     entry_threshold = float(stage1_policy["selected_threshold"])
 
-    def _report_for_window(window_name: str, utility_window: pd.DataFrame) -> Dict[str, Any]:
-        rows_total = int(len(utility_window))
+    def _report_for_window(window_name: str, diagnostic_window: pd.DataFrame) -> Dict[str, Any]:
+        rows_total = int(len(diagnostic_window))
         window_cfg = dict((resolved_config.get("windows") or {}).get(window_name) or {})
 
         s1_win = _window(s1_filtered, window_cfg)
         s2_win = _window(s2_filtered, window_cfg)
         s1_scores = _score_single_target(s1_win, stage1_package, prob_col="entry_prob")
         s2_scores = _score_stage2_package(s2_win, stage2_package)
-        merged = _merge_policy_inputs(utility_window, s1_scores, s2_scores)
+        merged = _merge_policy_inputs(diagnostic_window, s1_scores, s2_scores)
 
         # Level 1: raw oracle
-        l1 = _oracle_level_summary(utility_window, rows_total)
+        l1 = _oracle_level_summary(diagnostic_window, rows_total)
 
         # Level 2: Stage 1 positive (entry_prob >= threshold, oracle direction)
         entry_prob_arr = pd.to_numeric(
@@ -348,8 +351,8 @@ def run_stage12_skew_diagnostic(
             "top_fractions": fraction_reports,
         }
 
-    valid_report = _report_for_window("research_valid", utility_valid)
-    holdout_report = _report_for_window("final_holdout", utility_holdout)
+    valid_report = _report_for_window("research_valid", diagnostic_valid)
+    holdout_report = _report_for_window("final_holdout", diagnostic_holdout)
 
     interpretation = {
         "research_valid": _interpret_window(valid_report),
