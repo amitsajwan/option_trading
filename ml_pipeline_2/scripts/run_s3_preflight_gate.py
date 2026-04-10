@@ -18,7 +18,6 @@ Writes verdict to stdout and exits 0 (pass) or 1 (fail).
 """
 from __future__ import annotations
 
-import glob
 import json
 import sys
 from pathlib import Path
@@ -56,25 +55,21 @@ def main() -> int:
     support_dataset = resolved["inputs"]["support_dataset"]
     windows_cfg = resolved["windows"]
 
-    # Load support dataset
-    sup_files = sorted(glob.glob(
-        str(parquet_root / support_dataset / "**" / "*.parquet"), recursive=True))
-    if not sup_files:
-        print(f"ERROR: no parquet files found under {parquet_root / support_dataset}")
-        return 1
-    print(f"Loading {len(sup_files)} support parquet files...")
-    sup_df = pd.concat([pd.read_parquet(f) for f in sup_files], ignore_index=True)
-    print(f"Support rows: {len(sup_df)}")
-
     # Build oracle using pipeline
     # contracts_app lives at repo root — must be on path before any pipeline import
     sys.path.insert(0, str(Path(".").resolve()))
     sys.path.insert(0, str(Path("ml_pipeline_2/src").resolve()))
     from ml_pipeline_2.staged.pipeline import (
         _build_oracle_targets,
+        _load_dataset,
         compute_rolling_oracle_stats,
     )
     from ml_pipeline_2.staged.counterfactual import _resolve_recipe_universe
+
+    # Use _load_dataset to handle timestamp dtype normalisation across parquet files
+    print(f"Loading support dataset: {support_dataset}")
+    sup_df = _load_dataset(parquet_root, support_dataset)
+    print(f"Support rows: {len(sup_df)}")
 
     recipe_universe = _resolve_recipe_universe(
         run_recipe_catalog_id=str(resolved.get("catalog", {}).get("recipe_catalog_id") or ""),
