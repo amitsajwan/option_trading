@@ -14,6 +14,10 @@ It is written for a new engineer or researcher who needs to understand:
 Use this document first.
 Then read the linked stage-specific docs only for the area you need to work on.
 
+For the current product goal, execution order, and story tracking, also use:
+
+- [`intraday_profit_execution_plan.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/intraday_profit_execution_plan.md)
+
 ## Problem statement
 
 The target system is a staged options-trading model for the `ml_pure` lane.
@@ -94,6 +98,12 @@ Post-run analysis tools added during recovery:
 - [`confidence_execution_policy.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/confidence_execution_policy.py)
 - [`run_stage12_skew_diagnostic.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage12_skew_diagnostic.py)
 - [`skew_diagnostic.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/skew_diagnostic.py)
+- [`run_stage2_calibration_diagnostic.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage2_calibration_diagnostic.py)
+- [`stage2_calibration.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/stage2_calibration.py)
+- [`run_stage12_dual_side_policy.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage12_dual_side_policy.py)
+- [`dual_side_policy.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/dual_side_policy.py)
+- [`run_stage2_side_rebalance_diagnostic.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage2_side_rebalance_diagnostic.py)
+- [`stage2_side_rebalance.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/stage2_side_rebalance.py)
 
 Current research configs:
 
@@ -296,26 +306,29 @@ What this batch is for:
 What is solved:
 
 - Stage 1 is acceptable enough to keep fixed during this track
-- Stage 2 is materially improved and no longer the main blocker
-- the stack has real directional edge on tighter subsets
-- fixed execution with tighter subsets can produce positive holdout behavior
+- Stage 2 PE-side signal is real — holdout PE precision is 55–76%, holdout PF > 2 on top subsets
+- the skew source is identified: Stage 2 converts a roughly balanced oracle into a PE-dominated actionable book on holdout
+- fixed execution with tighter subsets can produce positive holdout behavior on PE
+- all wrapper-level approaches have been tested and closed: side caps, symmetric threshold sweeps, asymmetric threshold sweeps, dual-side fraction selection, manual Stage 2 overrides
 
 What is not solved:
 
-- broad execution still fails economics
-- validation-side selection is still weaker than holdout-side behavior
-- side balance is still poor, especially on good PE-heavy subsets
-- a fully publishable, stable, automatically selected policy is not yet demonstrated
+- Stage 2 CE signal on holdout is noise: CE precision 15–19% vs 48% random baseline
+- Stage 2 direction agreement vs oracle is near-random on validation (~38%)
+- no configuration passes hard gates on both windows simultaneously
+- a publishable candidate has not been demonstrated
 
 ## Current best interpretation
 
-The cleanest current interpretation is:
+The PE book has genuine edge that the model correctly identifies.
+The CE book is not a working signal at the current Stage 2 model level.
 
-- the model works on the stronger slice
-- the current release blocker is execution-policy stability and side concentration
-- not basic Stage 2 quality
+The release blocker is now specifically:
 
-That means the work is now in refinement territory, not rescue territory.
+- Stage 2 cannot produce reliable CE direction prediction on holdout
+- this is a model quality problem, not a threshold or policy shape problem
+
+That means the work is in model redesign territory, not wrapper or execution tuning.
 
 ## What a new joiner should do first
 
@@ -468,15 +481,19 @@ These are the real unresolved items.
 
 ## Recommended next work
 
-The current recommended order is:
+Wrapper-level and execution-level approaches are now exhausted. Refer to the execution plan for the approved story sequence:
 
-1. Finish evaluating the fixed-execution policy batch on the current winner run.
-2. If side-capped fixed execution improves validation without killing holdout:
-- productize that as the next research candidate
-3. If side caps do not solve the instability:
-- move to explicit side-aware execution logic
-4. If that still fails:
-- redesign Stage 3 target/view rather than reopening Stage 2
+- [`intraday_profit_execution_plan.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/intraday_profit_execution_plan.md)
+
+The approved next step is Story 2: design one focused Stage 2 redesign brief.
+
+Three options are defined in that brief. In order of implementation cost:
+
+1. Side-specific Stage 2 models (CE model + PE model, trained independently)
+2. Side-specific calibration layers on top of the shared model
+3. CE-only target redesign (PE model kept fixed)
+
+Do not start a new run before the brief is approved.
 
 ## Related docs
 
