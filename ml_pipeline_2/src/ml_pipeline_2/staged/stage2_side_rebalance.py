@@ -5,31 +5,23 @@ from itertools import product
 from pathlib import Path
 from typing import Any, Dict, Iterable, Sequence
 
-import joblib
 import numpy as np
 import pandas as pd
 
 from ..experiment_control.state import utc_now
-from .counterfactual import _load_json, _resolve_recipe_universe
 from .pipeline import _economic_balance_rank
-from .skew_diagnostic import _dir_counts, _drop_base_overlap, _oracle_level_summary
-from .stage2_calibration import (
+from .skew_diagnostic import _dir_counts, _oracle_level_summary
+from .stage2_policy_core import (
     DEFAULT_STAGE2_CALIBRATION_FIXED_RECIPE_IDS,
     DEFAULT_STAGE2_CALIBRATION_POLICY,
     _best_recipe_id,
-    _build_window_frame,
     _candidate_stage2_policy,
     _evaluate_window,
+    _is_current_stage2_policy,
     _normalize_grid,
     _stage2_selected_frame,
 )
-from .pipeline import (
-    _apply_runtime_filters,
-    _build_oracle_targets,
-    _load_dataset,
-    _merge_policy_inputs,
-    _window,
-)
+from .stage2_diagnostic_common import build_stage2_scored_window_frame, load_stage2_diagnostic_context
 
 
 def _expanded_grid(
@@ -183,72 +175,21 @@ def run_stage2_side_rebalance_diagnostic(
     validation_policy: Dict[str, Any] | None = None,
     output_root: str | Path | None = None,
 ) -> Dict[str, Any]:
-    source_run_dir = Path(run_dir).resolve()
-    summary = _load_json(source_run_dir / "summary.json")
-    resolved_config = _load_json(source_run_dir / "resolved_config.json")
-    if str(summary.get("status") or "").strip().lower() != "completed":
-        raise ValueError(f"run is not completed: {source_run_dir}")
-
     policy_config = {**DEFAULT_STAGE2_CALIBRATION_POLICY, **dict(validation_policy or {})}
-    normalized_fixed_recipe_ids = [str(recipe_id).strip() for recipe_id in fixed_recipe_ids if str(recipe_id).strip()]
-    if not normalized_fixed_recipe_ids:
-        raise ValueError("fixed_recipe_ids must not be empty")
-
-    parquet_root = Path(str((resolved_config.get("inputs") or {}).get("parquet_root") or "")).resolve()
-    support_dataset = str((resolved_config.get("inputs") or {}).get("support_dataset") or "")
-    runtime_block_expiry = bool((resolved_config.get("runtime") or {}).get("block_expiry", False))
-    support_raw = _load_dataset(parquet_root, support_dataset)
-    support_context = support_raw.loc[:, ~support_raw.columns.duplicated()].copy()
-    support_filtered, _ = _apply_runtime_filters(
-        support_raw,
-        block_expiry=runtime_block_expiry,
-        context=f"stage2 side rebalance support dataset {support_dataset}",
+    context = load_stage2_diagnostic_context(
+        run_dir=run_dir,
+        fixed_recipe_ids=fixed_recipe_ids,
+        context_label="stage2 side rebalance",
     )
+    source_run_dir = context.source_run_dir
+    recipe_universe = context.recipe_universe
+    diagnostic_valid = context.diagnostic_windows["research_valid"]
+    diagnostic_holdout = context.diagnostic_windows["final_holdout"]
+    merged_valid = build_stage2_scored_window_frame(context, window_name="research_valid")
+    merged_holdout = build_stage2_scored_window_frame(context, window_name="final_holdout")
 
-    recipe_universe = _resolve_recipe_universe(
-        run_recipe_catalog_id=str(summary.get("recipe_catalog_id") or ""),
-        fixed_recipe_ids=normalized_fixed_recipe_ids,
-    )
-    oracle, utility = _build_oracle_targets(
-        support_filtered,
-        recipe_universe,
-        cost_per_trade=float(((resolved_config.get("training") or {}).get("cost_per_trade") or 0.0)),
-    )
-    utility_dupes = [c for c in utility.columns if c in set(oracle.columns) - {"trade_date", "timestamp", "snapshot_id"}]
-    utility_base = utility.drop(columns=utility_dupes) if utility_dupes else utility
-    diagnostic_base = _merge_policy_inputs(oracle, utility_base)
-    diagnostic_valid = _window(diagnostic_base, dict((resolved_config.get("windows") or {}).get("research_valid") or {}))
-    diagnostic_holdout = _window(diagnostic_base, dict((resolved_config.get("windows") or {}).get("final_holdout") or {}))
-
-    stage_artifacts = dict(summary.get("stage_artifacts") or {})
-    stage1_package = joblib.load(str(((stage_artifacts.get("stage1") or {}).get("model_package_path")) or ""))
-    stage2_package = joblib.load(str(((stage_artifacts.get("stage2") or {}).get("model_package_path")) or ""))
-
-    merged_valid = _build_window_frame(
-        resolved_config=resolved_config,
-        summary=summary,
-        window_name="research_valid",
-        diagnostic_window=diagnostic_valid,
-        support_context=support_context,
-        parquet_root=parquet_root,
-        runtime_block_expiry=runtime_block_expiry,
-        stage1_package=stage1_package,
-        stage2_package=stage2_package,
-    )
-    merged_holdout = _build_window_frame(
-        resolved_config=resolved_config,
-        summary=summary,
-        window_name="final_holdout",
-        diagnostic_window=diagnostic_holdout,
-        support_context=support_context,
-        parquet_root=parquet_root,
-        runtime_block_expiry=runtime_block_expiry,
-        stage1_package=stage1_package,
-        stage2_package=stage2_package,
-    )
-
-    stage1_policy = dict((summary.get("policy_reports") or {}).get("stage1") or {})
-    stage2_policy = dict((summary.get("policy_reports") or {}).get("stage2") or {})
+    stage1_policy = context.stage1_policy
+    stage2_policy = context.stage2_policy
     current_policy_id = str(stage2_policy.get("policy_id") or "direction_gate_threshold_v1")
     entry_threshold = float(stage1_policy["selected_threshold"])
 
@@ -306,13 +247,13 @@ def run_stage2_side_rebalance_diagnostic(
         validation_eval = _evaluate_window(
             selected_valid,
             rows_total=int(len(diagnostic_valid)),
-            fixed_recipe_ids=normalized_fixed_recipe_ids,
+            fixed_recipe_ids=context.fixed_recipe_ids,
             policy_config=policy_config,
         )
         holdout_eval = _evaluate_window(
             selected_holdout,
             rows_total=int(len(diagnostic_holdout)),
-            fixed_recipe_ids=normalized_fixed_recipe_ids,
+            fixed_recipe_ids=context.fixed_recipe_ids,
             policy_config=policy_config,
         )
         validation_capture = _stage2_capture_summary(selected_valid, valid_stage1_oracle)
@@ -329,11 +270,13 @@ def run_stage2_side_rebalance_diagnostic(
                 "pe_threshold": float(pe_threshold),
                 "min_edge": float(min_edge),
                 "threshold_gap_pe_minus_ce": round(float(pe_threshold) - float(ce_threshold), 4),
-                "is_current_policy": (
-                    abs(float(stage2_policy.get("selected_trade_threshold", -1.0)) - float(trade_threshold)) < 1e-9
-                    and abs(float(stage2_policy.get("selected_ce_threshold", -1.0)) - float(ce_threshold)) < 1e-9
-                    and abs(float(stage2_policy.get("selected_pe_threshold", -1.0)) - float(pe_threshold)) < 1e-9
-                    and abs(float(stage2_policy.get("selected_min_edge", -1.0)) - float(min_edge)) < 1e-9
+                "is_current_policy": _is_current_stage2_policy(
+                    stage2_policy,
+                    uses_trade_gate=True,
+                    trade_threshold=trade_threshold,
+                    ce_threshold=ce_threshold,
+                    pe_threshold=pe_threshold,
+                    min_edge=min_edge,
                 ),
                 "validation_selected_recipe_id": str(validation_recipe_id),
                 "holdout_selected_recipe_id": str(holdout_recipe_id),
@@ -355,7 +298,7 @@ def run_stage2_side_rebalance_diagnostic(
         "analysis_kind": "stage2_side_rebalance_diagnostic_v1",
         "created_at_utc": utc_now(),
         "source_run_dir": str(source_run_dir),
-        "source_run_id": str(summary.get("run_id") or source_run_dir.name),
+        "source_run_id": context.source_run_id,
         "stage1_entry_threshold": entry_threshold,
         "current_stage2_policy": dict(stage2_policy),
         "grid": {
@@ -366,7 +309,7 @@ def run_stage2_side_rebalance_diagnostic(
             "min_edge_grid": edge_grid,
         },
         "validation_policy": dict(policy_config),
-        "fixed_recipe_ids": normalized_fixed_recipe_ids,
+        "fixed_recipe_ids": list(context.fixed_recipe_ids),
         "recipe_universe_recipe_ids": [str(recipe.recipe_id) for recipe in recipe_universe],
         "stage1_oracle_baseline": baseline,
         "current_policy_row": current_row,

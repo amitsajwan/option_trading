@@ -7,7 +7,9 @@ import joblib
 import pandas as pd
 
 from ml_pipeline_2.contracts.types import LabelRecipe
+from ml_pipeline_2.staged.pipeline import _merge_policy_inputs
 from ml_pipeline_2.staged import stage2_side_rebalance as s2r
+from ml_pipeline_2.staged.stage2_diagnostic_common import Stage2DiagnosticContext
 
 
 def test_stage2_side_rebalance_diagnostic_writes_summary_and_improves_alignment(
@@ -22,44 +24,6 @@ def test_stage2_side_rebalance_diagnostic_writes_summary_and_improves_alignment(
     stage2_package_path = model_dir / "stage2.joblib"
     joblib.dump({"kind": "stage1"}, stage1_package_path)
     joblib.dump({"kind": "stage2"}, stage2_package_path)
-
-    summary = {
-        "status": "completed",
-        "run_id": "stage2_side_rebalance_smoke",
-        "recipe_catalog_id": "midday_l3_adjacent_v1",
-        "stage_artifacts": {
-            "stage1": {"model_package_path": str(stage1_package_path)},
-            "stage2": {"model_package_path": str(stage2_package_path)},
-        },
-        "component_ids": {
-            "stage1": {"view_id": "stage1_view"},
-            "stage2": {"view_id": "stage2_view"},
-        },
-        "policy_reports": {
-            "stage1": {"selected_threshold": 0.50},
-            "stage2": {
-                "policy_id": "direction_gate_threshold_v1",
-                "selected_trade_threshold": 0.50,
-                "selected_ce_threshold": 0.60,
-                "selected_pe_threshold": 0.60,
-                "selected_min_edge": 0.0,
-            },
-        },
-    }
-    resolved_config = {
-        "inputs": {
-            "parquet_root": str(tmp_path / "parquet_root"),
-            "support_dataset": "support",
-        },
-        "runtime": {"block_expiry": False},
-        "training": {"cost_per_trade": 0.0},
-        "windows": {
-            "research_valid": {"name": "research_valid"},
-            "final_holdout": {"name": "final_holdout"},
-        },
-    }
-    (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
-    (run_dir / "resolved_config.json").write_text(json.dumps(resolved_config), encoding="utf-8")
 
     support = pd.DataFrame(
         {
@@ -88,6 +52,7 @@ def test_stage2_side_rebalance_diagnostic_writes_summary_and_improves_alignment(
     utility["best_ce_net_return_after_cost"] = oracle["best_ce_net_return_after_cost"]
     utility["best_pe_net_return_after_cost"] = oracle["best_pe_net_return_after_cost"]
     utility["best_available_net_return_after_cost"] = oracle["best_net_return_after_cost"]
+    utility_base = utility.drop(columns=["best_ce_net_return_after_cost", "best_pe_net_return_after_cost"])
 
     stage1_scores = support.loc[:, ["trade_date", "timestamp", "snapshot_id"]].copy()
     stage1_scores["entry_prob"] = [0.8] * 8
@@ -100,14 +65,6 @@ def test_stage2_side_rebalance_diagnostic_writes_summary_and_improves_alignment(
         LabelRecipe(recipe_id="L3", horizon_minutes=20, take_profit_pct=0.0025, stop_loss_pct=0.0010),
         LabelRecipe(recipe_id="L6", horizon_minutes=25, take_profit_pct=0.0025, stop_loss_pct=0.0010),
     ]
-
-    def fake_load_dataset(parquet_root: Path, dataset_name: str) -> pd.DataFrame:
-        if dataset_name in {"support", "stage1_ds", "stage2_ds"}:
-            return support.copy()
-        raise AssertionError(dataset_name)
-
-    def fake_apply_runtime_filters(frame: pd.DataFrame, **kwargs):
-        return frame.copy(), {}
 
     def fake_window(frame: pd.DataFrame, window: dict) -> pd.DataFrame:
         split_col = "split"
@@ -124,16 +81,51 @@ def test_stage2_side_rebalance_diagnostic_writes_summary_and_improves_alignment(
     def fake_score_stage2_package(frame: pd.DataFrame, package) -> pd.DataFrame:
         return stage2_scores.loc[stage2_scores["snapshot_id"].isin(frame["snapshot_id"])].reset_index(drop=True)
 
-    monkeypatch.setattr(s2r, "_load_dataset", fake_load_dataset)
-    monkeypatch.setattr(s2r, "_apply_runtime_filters", fake_apply_runtime_filters)
-    monkeypatch.setattr(s2r, "_window", fake_window)
-    monkeypatch.setattr(s2r, "_build_oracle_targets", lambda *args, **kwargs: (oracle.copy(), utility.copy()))
-    monkeypatch.setattr(s2r, "_resolve_recipe_universe", lambda **kwargs: recipes)
-    monkeypatch.setattr(s2r, "_build_window_frame", lambda **kwargs: s2r._merge_policy_inputs(  # type: ignore[attr-defined]
-        kwargs["diagnostic_window"],
-        s2r._drop_base_overlap(fake_score_single_target(kwargs["diagnostic_window"], None, prob_col="entry_prob"), kwargs["diagnostic_window"].columns),
-        s2r._drop_base_overlap(fake_score_stage2_package(kwargs["diagnostic_window"], None), kwargs["diagnostic_window"].columns),
-    ))
+    summary = {
+        "policy_reports": {
+            "stage1": {"selected_threshold": 0.50},
+            "stage2": {
+                "policy_id": "direction_gate_threshold_v1",
+                "selected_trade_threshold": 0.50,
+                "selected_ce_threshold": 0.60,
+                "selected_pe_threshold": 0.60,
+                "selected_min_edge": 0.0,
+            },
+        }
+    }
+    resolved_config = {"windows": {"research_valid": {"name": "research_valid"}, "final_holdout": {"name": "final_holdout"}}}
+    ctx = Stage2DiagnosticContext(
+        source_run_dir=run_dir,
+        source_run_id="stage2_side_rebalance_smoke",
+        summary=summary,
+        resolved_config=resolved_config,
+        fixed_recipe_ids=("L3", "L6"),
+        recipe_universe=recipes,
+        parquet_root=tmp_path,
+        support_context=support.copy(),
+        runtime_block_expiry=False,
+        diagnostic_windows={
+            "research_valid": fake_window(_merge_policy_inputs(oracle.copy(), utility_base.copy()), {"name": "research_valid"}),
+            "final_holdout": fake_window(_merge_policy_inputs(oracle.copy(), utility_base.copy()), {"name": "final_holdout"}),
+        },
+        stage1_package={"kind": "stage1"},
+        stage2_package={"kind": "stage2"},
+        stage1_policy=summary["policy_reports"]["stage1"],
+        stage2_policy=summary["policy_reports"]["stage2"],
+        stage1_filtered=support.copy(),
+        stage2_filtered=support.copy(),
+    )
+
+    def fake_build_stage2_scored_window_frame(context: Stage2DiagnosticContext, *, window_name: str, include_stage2_feature_columns=None) -> pd.DataFrame:
+        diagnostic_window = context.diagnostic_windows[window_name]
+        return _merge_policy_inputs(
+            diagnostic_window,
+            fake_score_single_target(diagnostic_window, None, prob_col="entry_prob"),
+            fake_score_stage2_package(diagnostic_window, None),
+        )
+
+    monkeypatch.setattr(s2r, "load_stage2_diagnostic_context", lambda **kwargs: ctx)
+    monkeypatch.setattr(s2r, "build_stage2_scored_window_frame", fake_build_stage2_scored_window_frame)
 
     payload = s2r.run_stage2_side_rebalance_diagnostic(
         run_dir=run_dir,

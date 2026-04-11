@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from ml_pipeline_2.staged import stage2_feature_signal as s2f
+from ml_pipeline_2.staged.pipeline import _merge_policy_inputs
+from ml_pipeline_2.staged.stage2_diagnostic_common import Stage2DiagnosticContext
 
 
 class _DummyEstimator:
@@ -25,37 +26,6 @@ def test_stage2_feature_signal_diagnostic_writes_summary_and_memo(
 ) -> None:
     run_dir = tmp_path / "completed_run"
     run_dir.mkdir(parents=True)
-
-    summary = {
-        "status": "completed",
-        "run_id": "stage2_feature_signal_smoke",
-        "recipe_catalog_id": "midday_l3_adjacent_v1",
-        "stage_artifacts": {
-            "stage1": {"model_package_path": str(run_dir / "stage1.joblib")},
-            "stage2": {"model_package_path": str(run_dir / "stage2.joblib")},
-        },
-        "component_ids": {
-            "stage1": {"view_id": "stage1_view"},
-            "stage2": {"view_id": "stage2_view"},
-        },
-        "policy_reports": {
-            "stage1": {"selected_threshold": 0.50},
-        },
-    }
-    resolved_config = {
-        "inputs": {
-            "parquet_root": str(tmp_path / "parquet_root"),
-            "support_dataset": "support",
-        },
-        "runtime": {"block_expiry": False},
-        "training": {"cost_per_trade": 0.0},
-        "windows": {
-            "research_valid": {"name": "research_valid"},
-            "final_holdout": {"name": "final_holdout"},
-        },
-    }
-    (run_dir / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
-    (run_dir / "resolved_config.json").write_text(json.dumps(resolved_config), encoding="utf-8")
 
     support = pd.DataFrame(
         {
@@ -87,19 +57,6 @@ def test_stage2_feature_signal_diagnostic_writes_summary_and_memo(
         }
     }
 
-    def fake_joblib_load(path: str):
-        if str(path).endswith("stage2.joblib"):
-            return stage2_package
-        return {"kind": "stage1"}
-
-    def fake_load_dataset(parquet_root: Path, dataset_name: str) -> pd.DataFrame:
-        if dataset_name == "support":
-            return support.copy()
-        raise AssertionError(dataset_name)
-
-    def fake_apply_runtime_filters(frame: pd.DataFrame, **kwargs):
-        return frame.copy(), {}
-
     def fake_window(frame: pd.DataFrame, window: dict) -> pd.DataFrame:
         split_col = "split"
         if split_col not in frame.columns:
@@ -109,20 +66,40 @@ def test_stage2_feature_signal_diagnostic_writes_summary_and_memo(
                     break
         return frame.loc[frame[split_col].eq(str(window["name"]))].reset_index(drop=True)
 
-    def fake_build_feature_window_frame(**kwargs) -> pd.DataFrame:
-        diagnostic_window = kwargs["diagnostic_window"]
-        return s2f._merge_policy_inputs(  # type: ignore[attr-defined]
+    summary = {"policy_reports": {"stage1": {"selected_threshold": 0.50}}}
+    resolved_config = {"windows": {"research_valid": {"name": "research_valid"}, "final_holdout": {"name": "final_holdout"}}}
+    diagnostic_base = _merge_policy_inputs(oracle.copy(), utility.copy())
+    ctx = Stage2DiagnosticContext(
+        source_run_dir=run_dir,
+        source_run_id="stage2_feature_signal_smoke",
+        summary=summary,
+        resolved_config=resolved_config,
+        fixed_recipe_ids=("L3", "L6"),
+        recipe_universe=["L3", "L6"],
+        parquet_root=tmp_path,
+        support_context=support.copy(),
+        runtime_block_expiry=False,
+        diagnostic_windows={
+            "research_valid": fake_window(diagnostic_base, {"name": "research_valid"}),
+            "final_holdout": fake_window(diagnostic_base, {"name": "final_holdout"}),
+        },
+        stage1_package={"kind": "stage1"},
+        stage2_package=stage2_package,
+        stage1_policy=summary["policy_reports"]["stage1"],
+        stage2_policy={},
+        stage1_filtered=support.copy(),
+        stage2_filtered=support.copy(),
+    )
+
+    def fake_build_stage2_scored_window_frame(context: Stage2DiagnosticContext, *, window_name: str, include_stage2_feature_columns=None) -> pd.DataFrame:
+        diagnostic_window = context.diagnostic_windows[window_name]
+        return _merge_policy_inputs(
             diagnostic_window,
             merged_features.loc[merged_features["snapshot_id"].isin(diagnostic_window["snapshot_id"])].reset_index(drop=True),
         )
 
-    monkeypatch.setattr(s2f.joblib, "load", fake_joblib_load)
-    monkeypatch.setattr(s2f, "_load_dataset", fake_load_dataset)
-    monkeypatch.setattr(s2f, "_apply_runtime_filters", fake_apply_runtime_filters)
-    monkeypatch.setattr(s2f, "_resolve_recipe_universe", lambda **kwargs: ["L3", "L6"])
-    monkeypatch.setattr(s2f, "_build_oracle_targets", lambda *args, **kwargs: (oracle.copy(), utility.copy()))
-    monkeypatch.setattr(s2f, "_window", fake_window)
-    monkeypatch.setattr(s2f, "_build_feature_window_frame", fake_build_feature_window_frame)
+    monkeypatch.setattr(s2f, "load_stage2_diagnostic_context", lambda **kwargs: ctx)
+    monkeypatch.setattr(s2f, "build_stage2_scored_window_frame", fake_build_stage2_scored_window_frame)
 
     payload = s2f.run_stage2_feature_signal_diagnostic(
         run_dir=run_dir,

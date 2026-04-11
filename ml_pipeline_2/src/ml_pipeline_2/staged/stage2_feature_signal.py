@@ -4,25 +4,12 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, Sequence
 
-import joblib
 import numpy as np
 import pandas as pd
 from scipy import stats
 
 from ..experiment_control.state import utc_now
-from .counterfactual import _load_json, _resolve_recipe_universe
-from .pipeline import (
-    KEY_COLUMNS,
-    _apply_runtime_filters,
-    _build_oracle_targets,
-    _load_dataset,
-    _merge_policy_inputs,
-    _score_single_target,
-    _score_stage2_package,
-    _window,
-)
-from .registries import view_registry
-from .skew_diagnostic import _drop_base_overlap
+from .stage2_diagnostic_common import build_stage2_scored_window_frame, load_stage2_diagnostic_context
 
 DEFAULT_STAGE2_FEATURE_SIGNAL_FIXED_RECIPE_IDS: tuple[str, ...] = ("L3", "L6")
 
@@ -92,58 +79,6 @@ def _direction_oracle_frame(
         entry_prob = pd.to_numeric(out["entry_prob"], errors="coerce").fillna(0.0)
         out = out.loc[entry_prob >= float(entry_threshold)].copy()
     return out.reset_index(drop=True)
-
-
-def _build_feature_window_frame(
-    *,
-    resolved_config: Dict[str, Any],
-    summary: Dict[str, Any],
-    window_name: str,
-    diagnostic_window: pd.DataFrame,
-    support_context: pd.DataFrame,
-    parquet_root: Path,
-    runtime_block_expiry: bool,
-    stage1_package: Dict[str, Any],
-    stage2_package: Dict[str, Any],
-    direction_feature_columns: Sequence[str],
-) -> pd.DataFrame:
-    component_ids = dict(summary.get("component_ids") or {})
-    stage1_view_id = str(((component_ids.get("stage1") or {}).get("view_id")) or "")
-    stage2_view_id = str(((component_ids.get("stage2") or {}).get("view_id")) or "")
-    stage1_dataset = view_registry()[stage1_view_id].dataset_name
-    stage2_dataset = view_registry()[stage2_view_id].dataset_name
-
-    stage1_raw = _load_dataset(parquet_root, stage1_dataset)
-    stage2_raw = _load_dataset(parquet_root, stage2_dataset)
-    stage1_filtered, _ = _apply_runtime_filters(
-        stage1_raw,
-        block_expiry=runtime_block_expiry,
-        support_context=support_context,
-        context=f"stage2 feature signal {window_name} stage1",
-    )
-    stage2_filtered, _ = _apply_runtime_filters(
-        stage2_raw,
-        block_expiry=runtime_block_expiry,
-        support_context=support_context,
-        context=f"stage2 feature signal {window_name} stage2",
-    )
-    window_cfg = dict((resolved_config.get("windows") or {}).get(window_name) or {})
-    stage1_window = _window(stage1_filtered, window_cfg)
-    stage2_window = _window(stage2_filtered, window_cfg)
-    stage1_scores = _drop_base_overlap(
-        _score_single_target(stage1_window, stage1_package, prob_col="entry_prob"),
-        diagnostic_window.columns,
-    )
-    stage2_scores = _drop_base_overlap(
-        _score_stage2_package(stage2_window, stage2_package),
-        diagnostic_window.columns,
-    )
-    feature_cols_present = [str(col) for col in direction_feature_columns if str(col) in stage2_window.columns]
-    stage2_features = _drop_base_overlap(
-        stage2_window.loc[:, KEY_COLUMNS + feature_cols_present] if feature_cols_present else stage2_window.loc[:, KEY_COLUMNS],
-        list(diagnostic_window.columns) + list(stage1_scores.columns) + list(stage2_scores.columns),
-    )
-    return _merge_policy_inputs(diagnostic_window, stage1_scores, stage2_scores, stage2_features)
 
 
 def _cohens_d(ce_values: np.ndarray, pe_values: np.ndarray) -> float | None:
@@ -340,74 +275,27 @@ def run_stage2_feature_signal_diagnostic(
     min_stable_features: int = 3,
     stage1_positive_only: bool = False,
 ) -> Dict[str, Any]:
-    source_run_dir = Path(run_dir).resolve()
-    summary = _load_json(source_run_dir / "summary.json")
-    resolved_config = _load_json(source_run_dir / "resolved_config.json")
-    if str(summary.get("status") or "").strip().lower() != "completed":
-        raise ValueError(f"run is not completed: {source_run_dir}")
-
-    normalized_fixed_recipe_ids = [str(recipe_id).strip() for recipe_id in fixed_recipe_ids if str(recipe_id).strip()]
-    if not normalized_fixed_recipe_ids:
-        raise ValueError("fixed_recipe_ids must not be empty")
-
-    parquet_root = Path(str((resolved_config.get("inputs") or {}).get("parquet_root") or "")).resolve()
-    support_dataset = str((resolved_config.get("inputs") or {}).get("support_dataset") or "")
-    runtime_block_expiry = bool((resolved_config.get("runtime") or {}).get("block_expiry", False))
-
-    support_raw = _load_dataset(parquet_root, support_dataset)
-    support_context = support_raw.loc[:, ~support_raw.columns.duplicated()].copy()
-    support_filtered, _ = _apply_runtime_filters(
-        support_raw,
-        block_expiry=runtime_block_expiry,
-        context=f"stage2 feature signal support dataset {support_dataset}",
+    context = load_stage2_diagnostic_context(
+        run_dir=run_dir,
+        fixed_recipe_ids=fixed_recipe_ids,
+        context_label="stage2 feature signal",
     )
+    source_run_dir = context.source_run_dir
+    direction_model_report = _extract_weighted_features(context.stage2_package)
+    feature_columns = list(direction_model_report.get("feature_columns") or [])
 
-    recipe_universe = _resolve_recipe_universe(
-        run_recipe_catalog_id=str(summary.get("recipe_catalog_id") or ""),
-        fixed_recipe_ids=normalized_fixed_recipe_ids,
-    )
-    oracle, utility = _build_oracle_targets(
-        support_filtered,
-        recipe_universe,
-        cost_per_trade=float(((resolved_config.get("training") or {}).get("cost_per_trade") or 0.0)),
-    )
-    utility_dupes = [c for c in utility.columns if c in set(oracle.columns) - {"trade_date", "timestamp", "snapshot_id"}]
-    utility_base = utility.drop(columns=utility_dupes) if utility_dupes else utility
-    diagnostic_base = _merge_policy_inputs(oracle, utility_base)
-    diagnostic_valid = _window(diagnostic_base, dict((resolved_config.get("windows") or {}).get("research_valid") or {}))
-    diagnostic_holdout = _window(diagnostic_base, dict((resolved_config.get("windows") or {}).get("final_holdout") or {}))
-
-    stage_artifacts = dict(summary.get("stage_artifacts") or {})
-    stage1_package = joblib.load(str(((stage_artifacts.get("stage1") or {}).get("model_package_path")) or ""))
-    stage2_package = joblib.load(str(((stage_artifacts.get("stage2") or {}).get("model_package_path")) or ""))
-    direction_model_report = _extract_weighted_features(stage2_package)
-
-    merged_valid = _build_feature_window_frame(
-        resolved_config=resolved_config,
-        summary=summary,
+    merged_valid = build_stage2_scored_window_frame(
+        context,
         window_name="research_valid",
-        diagnostic_window=diagnostic_valid,
-        support_context=support_context,
-        parquet_root=parquet_root,
-        runtime_block_expiry=runtime_block_expiry,
-        stage1_package=stage1_package,
-        stage2_package=stage2_package,
-        direction_feature_columns=list(direction_model_report.get("feature_columns") or []),
+        include_stage2_feature_columns=feature_columns,
     )
-    merged_holdout = _build_feature_window_frame(
-        resolved_config=resolved_config,
-        summary=summary,
+    merged_holdout = build_stage2_scored_window_frame(
+        context,
         window_name="final_holdout",
-        diagnostic_window=diagnostic_holdout,
-        support_context=support_context,
-        parquet_root=parquet_root,
-        runtime_block_expiry=runtime_block_expiry,
-        stage1_package=stage1_package,
-        stage2_package=stage2_package,
-        direction_feature_columns=list(direction_model_report.get("feature_columns") or []),
+        include_stage2_feature_columns=feature_columns,
     )
 
-    stage1_policy = dict((summary.get("policy_reports") or {}).get("stage1") or {})
+    stage1_policy = context.stage1_policy
     entry_threshold = _safe_float(stage1_policy.get("selected_threshold"))
     direction_valid = _direction_oracle_frame(
         merged_valid,
@@ -421,7 +309,6 @@ def run_stage2_feature_signal_diagnostic(
     )
     direction_combined = pd.concat([direction_valid, direction_holdout], ignore_index=True)
 
-    feature_columns = list(direction_model_report.get("feature_columns") or [])
     validation_separation = _feature_separation(direction_valid, feature_columns)
     holdout_separation = _feature_separation(direction_holdout, feature_columns)
     combined_separation = _feature_separation(direction_combined, feature_columns)
@@ -444,7 +331,7 @@ def run_stage2_feature_signal_diagnostic(
         "analysis_kind": "stage2_feature_signal_diagnostic_v1",
         "created_at_utc": utc_now(),
         "source_run_dir": str(source_run_dir),
-        "source_run_id": str(summary.get("run_id") or source_run_dir.name),
+        "source_run_id": context.source_run_id,
         "analysis_scope": ("stage1_positive_oracle" if stage1_positive_only else "oracle_positive"),
         "entry_threshold": entry_threshold,
         "criteria": {
