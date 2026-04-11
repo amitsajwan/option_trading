@@ -279,9 +279,12 @@ def _validate_family_payload(axis: str, target: str, payload: Dict[str, Any], *,
         models_by_stage = payload.get("models_by_stage")
         if not isinstance(models_by_stage, dict):
             raise ValueError(f"{field}.models_by_stage must be an object")
-        for stage_name in ("stage1", "stage2", "stage3"):
-            models = list((models_by_stage or {}).get(stage_name) or [])
-            if not models:
+        if not models_by_stage:
+            raise ValueError(f"{field}.models_by_stage must specify at least one stage")
+        for stage_name, models in models_by_stage.items():
+            if stage_name not in ("stage1", "stage2", "stage3"):
+                raise ValueError(f"{field}.models_by_stage has unknown stage '{stage_name}'")
+            if not list(models or []):
                 raise ValueError(f"{field}.models_by_stage.{stage_name} must not be empty")
         return
 

@@ -176,7 +176,11 @@ class CampaignGenerator:
 
     def _apply_base_family(self, staged_manifest: Dict[str, Any], axis: str, family: FamilySpec) -> None:
         if axis == "model_family":
-            staged_manifest.setdefault("catalog", {})["models_by_stage"] = deepcopy(family.payload["models_by_stage"])
+            catalog = staged_manifest.setdefault("catalog", {})
+            existing = dict(catalog.get("models_by_stage") or {})
+            for stage_name, models in family.payload["models_by_stage"].items():
+                existing[stage_name] = list(models)
+            catalog["models_by_stage"] = existing
             return
         if axis == "stage2_feature_family":
             catalog = staged_manifest.setdefault("catalog", {})

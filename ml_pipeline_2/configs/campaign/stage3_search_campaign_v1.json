@@ -38,12 +38,9 @@
   },
   "families": {
     "model_families": {
-      "logreg_balanced_only": {
+      "logreg_s2_s3": {
         "target": "base_manifest",
         "models_by_stage": {
-          "stage1": [
-            "logreg_balanced"
-          ],
           "stage2": [
             "logreg_balanced"
           ],
@@ -116,7 +113,7 @@
         "canonical_4y"
       ],
       "model_families": [
-        "logreg_balanced_only"
+        "logreg_s2_s3"
       ],
       "stage2_feature_families": [
         "midday_direction_regime_v1"
@@ -137,7 +134,7 @@
         "canonical_4y"
       ],
       "model_families": [
-        "logreg_balanced_only"
+        "logreg_s2_s3"
       ],
       "stage2_feature_families": [
         "midday_direction_regime_v1"

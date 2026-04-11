@@ -38,10 +38,9 @@
   },
   "families": {
     "model_families": {
-      "logreg_balanced_only": {
+      "logreg_s2_s3": {
         "target": "base_manifest",
         "models_by_stage": {
-          "stage1": ["logreg_balanced"],
           "stage2": ["logreg_balanced"],
           "stage3": ["logreg_balanced"]
         }
@@ -66,7 +65,7 @@
       "template_id": "smoke_direction_regime",
       "base_grid_path": "../research/staged_grid.stage3_direction_regime_v1.json",
       "window_profiles": ["smoke_2023"],
-      "model_families": ["logreg_balanced_only"],
+      "model_families": ["logreg_s2_s3"],
       "stage2_feature_families": ["midday_direction_regime_v1"],
       "stage2_policy_families": ["baseline_only"],
       "max_generated_lanes": 1,
