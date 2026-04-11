@@ -1,5 +1,7 @@
 # Stage 2 MIDDAY Grid
 
+> Historical research note. Not the current operating instruction. Use `intraday_profit_execution_plan.md` and `midday_recovery_handover.md` for current status and next steps.
+
 ## Purpose
 
 This is the post-discovery Stage 2 grid. It exists because the broader Stage 2 scenario program already answered the regime question:

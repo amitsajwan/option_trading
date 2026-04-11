@@ -1,5 +1,7 @@
 # Research Recovery Runbook
 
+> Historical research note. Not the current operating instruction. Use `intraday_profit_execution_plan.md` and `midday_recovery_handover.md` for current status and next steps.
+
 This runbook is the top-level reconstruction guide for the MIDDAY staged-model recovery work.
 
 Start here if you are new to this track:

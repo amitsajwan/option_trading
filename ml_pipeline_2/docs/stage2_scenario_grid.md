@@ -1,5 +1,7 @@
 # Stage 2 Scenario Grid
 
+> Historical research note. Not the current operating instruction. Use `intraday_profit_execution_plan.md` and `midday_recovery_handover.md` for current status and next steps.
+
 ## Purpose
 
 This grid is the supported next-step research program when Stage 2 shows weak global validation quality but meaningful regime-local signal. It is designed to answer two questions in one run set:

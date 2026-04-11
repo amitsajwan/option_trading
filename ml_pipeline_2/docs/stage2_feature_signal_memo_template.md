@@ -1,6 +1,8 @@
 # Stage 2 Feature Signal Memo Template
 
-Use this memo to close `S2`.
+> Historical research note. `S2` is closed. Do not use this as the current operating instruction. Use `intraday_profit_execution_plan.md` for current status.
+
+This was the memo template used to close `S2`.
 
 This is a gate memo, not a research note.
 It must end with one binary decision:

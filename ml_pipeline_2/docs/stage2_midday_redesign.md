@@ -1,5 +1,7 @@
 # Stage 2 MIDDAY Redesign
 
+> Historical research note. Not the current operating instruction. Use `intraday_profit_execution_plan.md` and `midday_recovery_handover.md` for current status and next steps.
+
 ## Purpose
 
 This is the first focused redesign batch after the `MIDDAY`-only grid.

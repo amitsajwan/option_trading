@@ -1,5 +1,7 @@
 # Stage 2 Recovery Review
 
+> Historical research note. Not the current operating instruction. Use `intraday_profit_execution_plan.md` and `midday_recovery_handover.md` for current status and next steps.
+
 ## Why This Batch Is Diagnosis-First
 
 The completed grid already tested the nearest label-filter lever. Moving `min_directional_edge_after_cost` from `0.0010` to `0.0014` reduced rows slightly but did not produce a meaningful lift in Stage 2 quality. The best branch, `best_edge_time_focus`, improved drift and ranking modestly, but it still failed both hard gates. That is enough evidence to stop broad search and inspect signal quality directly.

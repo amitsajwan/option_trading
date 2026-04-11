@@ -1,545 +1,150 @@
 # MIDDAY Recovery Handover
 
-This is the onboarding and handover document for the staged MIDDAY recovery work in `ml_pipeline_2`.
+This is the onboarding and takeover document for the staged MIDDAY recovery track in `ml_pipeline_2`.
 
-It is written for a new engineer or researcher who needs to understand:
+Use this document to understand:
 
-- the problem statement
-- the staged architecture we are using
-- the recovery path we followed
-- what is solved
-- what is still unsolved
-- how to restart the work from scratch without replaying every dead end
+- what this track tried to solve
+- what has already been learned
+- what is currently running
+- what should not be reopened
 
-Use this document first.
-Then read the linked stage-specific docs only for the area you need to work on.
+For the active control flow, story status, and operator instructions, use [intraday_profit_execution_plan.md](intraday_profit_execution_plan.md).
 
-For the current product goal, execution order, and story tracking, also use:
+## What this track is
 
-- [`intraday_profit_execution_plan.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/intraday_profit_execution_plan.md)
+This recovery line focused on the `MIDDAY` slice as a bounded research wedge for a larger intraday trading product.
 
-## Problem statement
+The key practical question was:
 
-The target system is a staged options-trading model for the `ml_pure` lane.
+- can the staged stack produce a publishable directional system that remains economically positive after cost?
 
-In this recovery track we focused on the `MIDDAY` slice and tried to answer one practical question:
+The stack under study is:
 
-- can we build a publishable staged model that:
-  - chooses tradable MIDDAY opportunities
-  - picks the correct direction
-  - chooses an execution recipe
-  - remains economically positive on holdout after costs
+1. Stage 1 - entry gate
+2. Stage 2 - direction gate
+3. Stage 3 - execution recipe / policy behavior
 
-Publishability here is not just model accuracy.
-The staged stack must also clear downstream trade and risk gates such as:
+## What is now settled
 
-- positive `net_return_sum`
-- adequate `profit_factor`
-- enough trades
-- acceptable drawdown
-- acceptable side balance
+These conclusions should be treated as closed unless new evidence contradicts them:
 
-The core lesson from this track is:
-
-- Stage 2 probability quality was a real blocker first
-- after fixing that, the remaining blocker moved downstream into execution economics and side concentration
-
-## Short architecture
-
-This recovery work uses the staged pipeline in `ml_pipeline_2`.
-
-Very short version:
-
-1. Stage 1
-- broad entry gate
-- "should this row even be considered?"
-
-2. Stage 2
-- directional decision inside Stage 1 positives
-- after redesign, this became hierarchical:
-  - trade vs no-trade
-  - then `CE vs PE`
-
-3. Stage 3
-- execution recipe selection
-- horizon / TP / SL style choice
-- in practice this controls how directional edge is monetized
-
-Downstream evaluation then checks:
-
-- combined holdout economics
-- publish gates
-- robustness and selection behavior
-
-## Code map
-
-These are the main files a new joiner should know.
-
-Core staged runtime and research logic:
-
-- [`pipeline.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/pipeline.py)
-- [`grid.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/grid.py)
-- [`registries.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/registries.py)
-- [`recipes.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/recipes.py)
-- [`runtime_contract.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/runtime_contract.py)
-
-Entry points:
-
-- [`run_staged_grid.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_staged_grid.py)
-- [`run_staged_release.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_staged_release.py)
-
-Post-run analysis tools added during recovery:
-
-- [`run_stage12_counterfactual.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage12_counterfactual.py)
-- [`counterfactual.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/counterfactual.py)
-- [`run_stage12_confidence_execution.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage12_confidence_execution.py)
-- [`confidence_execution.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/confidence_execution.py)
-- [`run_stage12_confidence_execution_policy.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage12_confidence_execution_policy.py)
-- [`confidence_execution_policy.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/confidence_execution_policy.py)
-- [`run_stage12_skew_diagnostic.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage12_skew_diagnostic.py)
-- [`skew_diagnostic.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/skew_diagnostic.py)
-- [`run_stage2_calibration_diagnostic.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage2_calibration_diagnostic.py)
-- [`stage2_calibration.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/stage2_calibration.py)
-- [`run_stage12_dual_side_policy.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage12_dual_side_policy.py)
-- [`dual_side_policy.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/dual_side_policy.py)
-- [`run_stage2_side_rebalance_diagnostic.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/run_stage2_side_rebalance_diagnostic.py)
-- [`stage2_side_rebalance.py`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/src/ml_pipeline_2/staged/stage2_side_rebalance.py)
-
-Current research configs:
-
-- [`staged_dual_recipe.stage3_policy_paths_v1.json`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/configs/research/staged_dual_recipe.stage3_policy_paths_v1.json)
-- [`staged_grid.stage3_midday_policy_paths_v1.json`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/configs/research/staged_grid.stage3_midday_policy_paths_v1.json)
-
-## Recovery path we followed
-
-This is the useful sequence.
-It intentionally omits low-value churn and keeps only the steps that changed the diagnosis.
-
-### 1. Stage 2 MIDDAY redesign
-
-Doc:
-
-- [`stage2_midday_redesign.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage2_midday_redesign.md)
-
-Why we did it:
-
-- the original Stage 2 problem was noisy and not stable enough
-- MIDDAY looked like the most promising slice to simplify
-
-What it gave us:
-
-- a cleaner Stage 2 problem boundary
-- a tighter research focus
-
-### 2. Stage 2 target redesign
-
-Doc:
-
-- [`stage2_midday_target_redesign.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage2_midday_target_redesign.md)
-
-Why we did it:
-
-- many rows were ambiguous for directional learning
-- forcing them into a binary direction label hurt calibration
-
-What it gave us:
-
-- cleaner directional labels
-- better control over what Stage 2 should learn
-
-### 3. Stage 2 high-conviction attempts
-
-Doc:
-
-- [`stage2_midday_high_conviction.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage2_midday_high_conviction.md)
-
-Why we did it:
-
-- to check whether simple threshold tightening was enough
-
-What we learned:
-
-- useful negative evidence
-- threshold tuning alone was not enough
-- the Stage 2 formulation itself needed to change
-
-### 4. Stage 2 direction-or-no-trade redesign
-
-Doc:
-
-- [`stage2_midday_direction_or_no_trade.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage2_midday_direction_or_no_trade.md)
-
-Why we did it:
-
-- old Stage 2 forced `CE vs PE`
-- that overloaded direction with abstention logic
-
-What changed:
-
-- Stage 2 became hierarchical:
-  - `trade_gate`
-  - conditional direction
-
-What we gained:
-
-- Stage 2 CV became genuinely strong again
-- representative winning Stage 2 metrics:
-  - `roc_auc ~= 0.68`
-  - `brier ~= 0.205`
-
-This is the main upstream success of the recovery work.
-
-### 5. Stage 3 policy-path recovery
-
-Doc:
-
-- [`stage3_midday_policy_paths.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage3_midday_policy_paths.md)
-
-Why we did it:
-
-- after Stage 2 was fixed, the blocker moved downstream
-- the question became whether Stage 3 selection and policy logic were the main reason for bad holdout economics
-
-What changed:
-
-- Stage 2 reuse support
-- fixed-recipe fallback support
-- broader Stage 3 policy-path search
-- modest recipe expansion
-
-What we learned:
-
-- dynamic Stage 3 selection was weak
-- fixed fallback behaved more sensibly
-- the best fallback recipe was still not publishable on the broad trade set
-
-Representative result:
-
-- winning broad fixed fallback:
-  - `285` trades
-  - `net_return_sum ~= -0.072`
-  - `profit_factor ~= 0.706`
-
-So Stage 3 policy logic improved, but broad execution economics still failed.
-
-### 6. Stage1+Stage2 counterfactual analysis
-
-Doc:
-
-- [`stage12_counterfactual.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage12_counterfactual.md)
-
-Why we did it:
-
-- to separate two hypotheses:
-  - "the upstream model has no edge"
-  - "the upstream model has edge, but execution is leaking it"
-
-What we learned:
-
-- Stage 1 + Stage 2 do contain real edge
-- broad execution is too weak
-- higher-confidence subsets improve sharply
-
-Representative holdout results:
-
-- full set `285` trades:
-  - fixed `L3`: negative
-  - fixed `L6`: negative
-  - oracle selected-side: slightly positive
-- top `50%`, `143` trades:
-  - fixed `L3`: positive
-  - fixed `L6`: positive
-- top `33%`, `95` trades:
-  - fixed `L3`: positive
-  - fixed `L6`: positive
-- top `25%`, `72` trades:
-  - fixed `L3`: positive
-  - fixed `L6`: positive
-
-This was the second major recovery result:
-
-- the model is not dead
-- the broad book is too loose
-
-### 7. Confidence execution
-
-Docs:
-
-- [`stage12_confidence_execution.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage12_confidence_execution.md)
-
-Why we did it:
-
-- to convert the counterfactual into a validation-driven selector
-
-Important lesson:
-
-- the first version used raw validation score-floor transfer and failed because score scales did not transfer
-- the second version fixed this by transferring the selected fraction, not the raw score threshold
-
-What we learned:
-
-- fraction-based transfer reproduces the positive holdout subsets
-- but validation itself is still weak, so automated selection is not yet stable enough for release
-
-### 8. Confidence execution policy
-
-Doc:
-
-- [`stage12_confidence_execution_policy.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage12_confidence_execution_policy.md)
-
-Why we did it:
-
-- the remaining structural issue was heavy one-sided exposure, especially PE-heavy books
-
-What changed:
-
-- fixed `L3` / `L6` only
-- tighter fractions only
-- optional side caps after confidence ranking
-
-What this batch is for:
-
-- testing whether a side-aware fixed execution policy can turn the promising subset behavior into something closer to a releaseable policy
-
-## Current state
-
-What is solved:
-
-- Stage 1 is acceptable enough to keep fixed during this track
-- Stage 2 PE-side signal is real — holdout PE precision is 55–76%, holdout PF > 2 on top subsets
-- the skew source is identified: Stage 2 converts a roughly balanced oracle into a PE-dominated actionable book on holdout
-- fixed execution with tighter subsets can produce positive holdout behavior on PE
-- all wrapper-level approaches have been tested and closed: side caps, symmetric threshold sweeps, asymmetric threshold sweeps, dual-side fraction selection, manual Stage 2 overrides
-
-What is not solved:
-
-- Stage 2 CE signal on holdout is noise: CE precision 15–19% vs 48% random baseline
-- Stage 2 direction agreement vs oracle is near-random on validation (~38%)
-- no configuration passes hard gates on both windows simultaneously
-- a publishable candidate has not been demonstrated
+- Stage 1 is not the main bottleneck in this track.
+- The raw oracle is not the main source of skew.
+- Stage 2 is the main distortion source.
+- Threshold and wrapper approaches are exhausted:
+  - symmetric thresholds
+  - asymmetric thresholds
+  - dual-side fractions
+  - side caps
+  - manual Stage 2 overrides
+- `S2` feature-signal analysis is closed with a `NO` result for retraining as-is.
 
 ## Current best interpretation
 
-The PE book has genuine edge that the model correctly identifies.
-The CE book is not a working signal at the current Stage 2 model level.
+Stage 2 behaves like a regime amplifier rather than a robust direction detector.
 
-The release blocker is now specifically:
+What that means:
 
-- Stage 2 cannot produce reliable CE direction prediction on holdout
-- this is a model quality problem, not a threshold or policy shape problem
+- it can overfit the directional dominance of one window
+- it does not hold stable CE/PE separation across windows
+- retraining the same feature set is not justified
 
-That means the work is in model redesign territory, not wrapper or execution tuning.
+That is why the work moved into `S3` feature redesign.
 
-## What a new joiner should do first
+## Current active work
 
-If you are taking over this track, do this in order.
+Current as of `2026-04-11`:
 
-1. Read this document.
-2. Read the top-level recovery sequence:
-- [`research_recovery_runbook.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/research_recovery_runbook.md)
-3. Read only these stage docs next:
-- [`stage2_midday_direction_or_no_trade.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage2_midday_direction_or_no_trade.md)
-- [`stage3_midday_policy_paths.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage3_midday_policy_paths.md)
-- [`stage12_counterfactual.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage12_counterfactual.md)
-- [`stage12_confidence_execution.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage12_confidence_execution.md)
-- [`stage12_confidence_execution_policy.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage12_confidence_execution_policy.md)
-4. Open the core code files listed in the code map.
-5. Inspect the latest winning run artifacts before changing code.
+- `S0 DONE`
+- `S1 DONE`
+- `S2 DONE`
+- `S3 IN_PROGRESS`
+- `S4/S5 PENDING`
 
-## From-scratch restart process
+### Active S3 run
 
-This is the shortest useful restart path.
+The active GCP run root is:
 
-### A. Environment and branch
-
-```bash
-cd ~/option_trading
-git fetch origin
-git checkout chore/ml-pipeline-ubuntu-gcp-runbook
-git pull --ff-only origin chore/ml-pipeline-ubuntu-gcp-runbook
-git log --oneline -n 10
+```text
+ml_pipeline_2/artifacts/training_launches/stage3_direction_regime_v1/run/
 ```
 
-Activate the environment:
+Baseline run:
 
-```bash
-. .venv/bin/activate
+```text
+ml_pipeline_2/artifacts/training_launches/stage3_direction_regime_v1/run/runs/01_s3_regime_baseline
 ```
 
-### B. Confirm required code paths exist
+Current grid behavior:
 
-```bash
-ls -la ml_pipeline_2/src/ml_pipeline_2/staged/pipeline.py
-ls -la ml_pipeline_2/src/ml_pipeline_2/staged/counterfactual.py
-ls -la ml_pipeline_2/src/ml_pipeline_2/staged/confidence_execution.py
-ls -la ml_pipeline_2/src/ml_pipeline_2/staged/confidence_execution_policy.py
-```
+- `s3_regime_baseline` trains Stage 1 fresh
+- `s3_regime_balanced` reuses Stage 1 from baseline
 
-### C. Run the current main research batch
+This supersedes the older `stage3_midday_policy_paths_v1` path as the active workstream.
 
-This is still the base staged research run for this recovery track:
+## What changed in S3
 
-```bash
-python -m ml_pipeline_2.run_staged_grid \
-  --config ml_pipeline_2/configs/research/staged_grid.stage3_midday_policy_paths_v1.json \
-  --run-output-root ml_pipeline_2/artifacts/training_launches/stage3_midday_policy_paths_v1/run \
-  --run-reuse-mode fail_if_exists \
-  --model-group banknifty_futures/h15_tp_auto \
-  --profile-id openfe_v9_dual
-```
+The approved redesign adds regime-context features to Stage 2.
 
-### D. Inspect the winner
+Implemented changes:
 
-At minimum inspect:
+- `compute_rolling_oracle_stats()` in `staged/pipeline.py`
+- Stage 2 frame enrichment with `oracle_rolling_*`
+- `fo_midday_direction_regime_v1` in `catalog/feature_sets.py`
+- `staged_grid.stage3_direction_regime_v1.json`
 
-- `grid_summary.json`
-- winner `summary.json`
-- `policy_reports`
-- `combined_holdout_summary`
+The purpose is to test whether recent oracle regime context helps Stage 2 stop projecting one window's dominance into the next.
 
-### E. Run post-run analysis
+## What not to reopen
 
-Counterfactual:
+Do not restart these as primary solution paths:
 
-```bash
-python -m ml_pipeline_2.run_stage12_counterfactual \
-  --run-dir ml_pipeline_2/artifacts/training_launches/stage3_midday_policy_paths_v1/run/runs/03_stage3_balanced_gate_fixed_guard \
-  --top-fractions 1.0 0.5 0.33 0.25 0.1 \
-  --fixed-recipes L3 L6
-```
+- threshold-only tuning
+- side-cap tuning
+- PE-only subset framing as product evidence
+- generic wrapper experimentation without changing Stage 2 signal
 
-Confidence execution:
+Those paths are now historical evidence, not active direction.
 
-```bash
-python -m ml_pipeline_2.run_stage12_confidence_execution \
-  --run-dir ml_pipeline_2/artifacts/training_launches/stage3_midday_policy_paths_v1/run/runs/03_stage3_balanced_gate_fixed_guard \
-  --top-fractions 1.0 0.5 0.33 0.25 0.1 \
-  --fixed-recipes L3 L6 \
-  --transfer-mode fraction \
-  --validation-min-trades-soft 50 \
-  --side-share-min 0.30 \
-  --side-share-max 0.70 \
-  --prefer-profit-factor-min 1.0
-```
+## Morning checklist for a new engineer
 
-Confidence execution policy:
+1. Read [intraday_profit_execution_plan.md](intraday_profit_execution_plan.md).
+2. Check the active `S3` run status under:
+   - `ml_pipeline_2/artifacts/training_launches/stage3_direction_regime_v1/run/`
+3. If baseline run completed, run:
+   - `run_stage2_feature_signal_diagnostic`
+   - `run_stage12_skew_diagnostic`
+   - `run_stage12_confidence_execution_policy`
+4. Deliver raw outputs to `CORE`.
+5. Do not improvise new model branches until `CORE` reviews the results.
 
-```bash
-python -m ml_pipeline_2.run_stage12_confidence_execution_policy \
-  --run-dir ml_pipeline_2/artifacts/training_launches/stage3_midday_policy_paths_v1/run/runs/03_stage3_balanced_gate_fixed_guard \
-  --top-fractions 0.5 0.33 0.25 \
-  --fixed-recipes L3 L6 \
-  --side-cap-grid 1.0 0.85 0.75 0.70 \
-  --validation-min-trades-soft 50 \
-  --side-share-min 0.30 \
-  --side-share-max 0.70 \
-  --prefer-profit-factor-min 1.0
-```
+## Live inference gap
 
-## How to interpret the current evidence
+Known `S4` dependency:
 
-Use this logic.
+- `oracle_rolling_*` is a training-time feature family derived from historical oracle outcomes
+- live `ml_pure` inference will need a serving-time lookup/input path for those values
 
-If broad Stage 3 winner is still negative:
+This is deferred to `S4`.
+It should not block the active `S3` run.
 
-- do not reopen Stage 2 by default
-- inspect counterfactual first
+## Historical references
 
-If counterfactual says higher-confidence subsets improve:
+These documents are still useful for background, but they are not the active control docs:
 
-- the upstream edge is real
-- continue with fixed execution analysis or side-aware execution policy
+- [research_recovery_runbook.md](research_recovery_runbook.md)
+- [stage2_midday_redesign.md](stage2_midday_redesign.md)
+- [stage2_midday_target_redesign.md](stage2_midday_target_redesign.md)
+- [stage2_midday_high_conviction.md](stage2_midday_high_conviction.md)
+- [stage2_midday_direction_or_no_trade.md](stage2_midday_direction_or_no_trade.md)
+- [stage3_midday_policy_paths.md](stage3_midday_policy_paths.md)
 
-If confidence execution works only on holdout but not validation:
+Reference docs for architecture and tooling:
 
-- the model may still be useful
-- but automated release selection is not stable enough yet
-
-If side-aware execution policy still cannot make validation and holdout agree:
-
-- move to explicit side-aware execution logic
-- or Stage 3 target/view redesign
-
-## What we gained
-
-These are the durable gains from this track.
-
-- Stage 2 is no longer the main bottleneck
-- a hierarchical Stage 2 is better than forced binary direction
-- tighter confidence slices carry real economic edge
-- fixed `L3` / `L6` controls are useful and should remain in future analysis
-- validation-to-holdout transport by fraction is better than raw score-floor transfer
-
-## What is still missing
-
-These are the real unresolved items.
-
-- a validation-selected policy that is both positive enough and stable enough
-- acceptable side balance on the stronger subsets
-- a clear release-quality execution policy that does not depend on hindsight-style diagnosis
-- if side-aware policy still fails, a cleaner Stage 3 target/view formulation
-
-## Recommended next work
-
-Wrapper-level and execution-level approaches are now exhausted. Story 0, 1, 2 are all closed. Story 3 is in progress.
-
-Refer to the execution plan for full story tracking:
-
-- [`intraday_profit_execution_plan.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/intraday_profit_execution_plan.md)
-
-### Current work: Story 3 — S3 feature redesign and retrain
-
-The S2 feature signal gate returned NO (0 of 24 features cross-window stable). Stage 2 is a regime amplifier, not a direction detector. The fix is a feature redesign, not more tuning.
-
-The feature brief is written and approved. Code is implemented. The TEAM's next action is to run the GCP runbook in Story 3 of the execution plan.
-
-Short version:
-
-```bash
-# 1. Pre-flight gate (fast, run first)
-python ml_pipeline_2/scripts/run_s3_preflight_gate.py
-
-# 2. Full S3 training grid (only if pre-flight passes)
-python -m ml_pipeline_2.run_staged_grid \
-  ml_pipeline_2/configs/research/staged_grid.stage3_direction_regime_v1.json
-
-# 3. Feature signal diagnostic on new run
-python -m ml_pipeline_2.staged.stage2_feature_signal \
-  --run-dir ml_pipeline_2/artifacts/research/staged_grid_stage3_direction_regime_v1/runs/01_s3_regime_baseline \
-  --output /tmp/s3_feature_signal.json
-
-# 4. Skew diagnostic + confidence execution policy (same run dir)
-python -m ml_pipeline_2.staged.stage2_calibration_diagnostic --run-dir <above>
-python -m ml_pipeline_2.run_stage12_confidence_execution_policy --run-dir <above>
-```
-
-### ⚠️ Live inference gap (S4 dependency — do not block S3 on this)
-
-The new `oracle_rolling_*` features (rolling CE/PE oracle win-rates) are training-time features. They are computed from the historical oracle inside `pipeline.py` by `compute_rolling_oracle_stats()` and merged into the Stage 2 frame before training.
-
-For live `ml_pure` inference, these features cannot be re-derived from snapshots alone — they require a pre-computed daily lookup table of rolling oracle outcomes. Before any production hand-off, a serving-time adapter must:
-
-1. Maintain a rolling oracle outcomes table (updated daily after market close)
-2. Supply the current day's row to Stage 2 inference as feature values
-
-This is explicitly deferred to Story 4. Do not block Story 3 on this. Document it in the S4 decision memo.
-
-## Related docs
-
-Core architecture:
-
-- [`README.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/README.md)
-- [`architecture.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/architecture.md)
-- [`detailed_design.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/detailed_design.md)
-
-Recovery sequence:
-
-- [`research_recovery_runbook.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/research_recovery_runbook.md)
-- [`stage2_midday_redesign.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage2_midday_redesign.md)
-- [`stage2_midday_target_redesign.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage2_midday_target_redesign.md)
-- [`stage2_midday_high_conviction.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage2_midday_high_conviction.md)
-- [`stage2_midday_direction_or_no_trade.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage2_midday_direction_or_no_trade.md)
-- [`stage3_midday_policy_paths.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage3_midday_policy_paths.md)
-- [`stage12_counterfactual.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage12_counterfactual.md)
-- [`stage12_confidence_execution.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage12_confidence_execution.md)
-- [`stage12_confidence_execution_policy.md`](c:/code/option_trading/option_trading_repo/ml_pipeline_2/docs/stage12_confidence_execution_policy.md)
+- [architecture.md](architecture.md)
+- [detailed_design.md](detailed_design.md)
+- [gcp_user_guide.md](gcp_user_guide.md)
+- [stage12_counterfactual.md](stage12_counterfactual.md)
+- [stage12_confidence_execution.md](stage12_confidence_execution.md)
+- [stage12_confidence_execution_policy.md](stage12_confidence_execution_policy.md)

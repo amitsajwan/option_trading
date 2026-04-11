@@ -1,5 +1,7 @@
 # Stage3 MIDDAY Policy Paths
 
+> Historical research note. Not the current operating instruction. Use `intraday_profit_execution_plan.md` and `midday_recovery_handover.md` for current status and next steps.
+
 This batch freezes the hierarchical MIDDAY Stage 2 setup and moves the search to Stage 3 policy and recipe selection.
 
 Base manifest:
