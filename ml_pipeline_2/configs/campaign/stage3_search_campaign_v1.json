@@ -57,17 +57,6 @@
         "target": "grid_runs",
         "run_id_selectors": ["s3_regime_balanced"],
         "stage2_policy_id": "direction_gate_economic_balance_v1"
-      },
-      "economic_balance_gate_paths": {
-        "target": "grid_runs",
-        "run_id_selectors": [
-          "stage3_balanced_gate_dynamic",
-          "stage3_balanced_gate_fixed_guard",
-          "stage3_expanded_catalog_dynamic",
-          "stage3_expanded_catalog_fixed_guard",
-          "stage3_expanded_catalog_relaxed_margin"
-        ],
-        "stage2_policy_id": "direction_gate_economic_balance_v1"
       }
     },
     "stage3_policy_families": {
@@ -123,7 +112,6 @@
       "window_profiles": ["canonical_4y"],
       "model_families": ["logreg_s2_s3"],
       "stage2_feature_families": ["midday_direction_regime_v1"],
-      "stage2_policy_families": ["economic_balance_gate_paths"],
       "stage3_policy_families": ["fixed_guard"],
       "recipe_catalog_families": ["midday_l3_adjacent"],
       "runtime_families": ["block_expiry"],
