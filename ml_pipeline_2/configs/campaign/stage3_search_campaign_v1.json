@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "factory_campaign_v1",
+  "campaign_id": "stage3_search_campaign_v1",
+  "inputs": {
+    "parquet_root": "../../../.data/ml_pipeline/parquet_data",
+    "support_dataset": "snapshots_ml_flat"
+  },
+  "execution_defaults": {
+    "poll_interval_seconds": 30,
+    "infra_max_attempts": 2,
+    "total_cores": 32,
+    "total_memory_gb": 220,
+    "ranking_strategy": "publishable_economics_v1",
+    "stop_on_first_publishable": false,
+    "model_group": "banknifty_futures/h15_tp_auto",
+    "profile_id": "openfe_v9_dual"
+  },
+  "window_profiles": {
+    "canonical_4y": {
+      "research_train": {
+        "start": "2020-08-03",
+        "end": "2024-04-30"
+      },
+      "research_valid": {
+        "start": "2024-05-01",
+        "end": "2024-07-31"
+      },
+      "full_model": {
+        "start": "2020-08-03",
+        "end": "2024-07-31"
+      },
+      "final_holdout": {
+        "start": "2024-08-01",
+        "end": "2024-10-31"
+      }
+    }
+  },
+  "families": {
+    "model_families": {
+      "logreg_balanced_only": {
+        "target": "base_manifest",
+        "models_by_stage": {
+          "stage1": [
+            "logreg_balanced"
+          ],
+          "stage2": [
+            "logreg_balanced"
+          ],
+          "stage3": [
+            "logreg_balanced"
+          ]
+        }
+      }
+    },
+    "stage2_feature_families": {
+      "midday_direction_regime_v1": {
+        "target": "base_manifest",
+        "feature_sets": [
+          "fo_midday_direction_regime_v1"
+        ]
+      }
+    },
+    "stage2_policy_families": {
+      "economic_balance_gate": {
+        "target": "grid_runs",
+        "run_id_selectors": [
+          "s3_regime_balanced",
+          "stage3_balanced_gate_dynamic",
+          "stage3_balanced_gate_fixed_guard",
+          "stage3_expanded_catalog_dynamic",
+          "stage3_expanded_catalog_fixed_guard",
+          "stage3_expanded_catalog_relaxed_margin"
+        ],
+        "stage2_policy_id": "direction_gate_economic_balance_v1"
+      }
+    },
+    "stage3_policy_families": {
+      "fixed_guard": {
+        "target": "grid_runs",
+        "run_id_selectors": [
+          "stage3_balanced_gate_fixed_guard",
+          "stage3_expanded_catalog_fixed_guard"
+        ],
+        "stage3_policy_id": "recipe_fixed_baseline_guard_v1"
+      }
+    },
+    "recipe_catalog_families": {
+      "midday_l3_adjacent": {
+        "target": "grid_runs",
+        "run_id_selectors": [
+          "stage3_expanded_catalog_dynamic",
+          "stage3_expanded_catalog_fixed_guard",
+          "stage3_expanded_catalog_relaxed_margin"
+        ],
+        "recipe_catalog_id": "midday_l3_adjacent_v1"
+      }
+    },
+    "runtime_families": {
+      "block_expiry": {
+        "target": "grid_runs",
+        "run_id_selectors": [
+          "stage3_baseline_dynamic",
+          "stage3_balanced_gate_dynamic",
+          "stage3_balanced_gate_fixed_guard"
+        ],
+        "block_expiry": true
+      }
+    }
+  },
+  "lane_templates": [
+    {
+      "template_id": "direction_regime_search",
+      "base_grid_path": "../research/staged_grid.stage3_direction_regime_v1.json",
+      "window_profiles": [
+        "canonical_4y"
+      ],
+      "model_families": [
+        "logreg_balanced_only"
+      ],
+      "stage2_feature_families": [
+        "midday_direction_regime_v1"
+      ],
+      "stage2_policy_families": [
+        "economic_balance_gate"
+      ],
+      "max_generated_lanes": 1,
+      "resource": {
+        "cores": 8,
+        "memory_gb": 20
+      }
+    },
+    {
+      "template_id": "stage3_policy_paths_search",
+      "base_grid_path": "../research/staged_grid.stage3_midday_policy_paths_v1.json",
+      "window_profiles": [
+        "canonical_4y"
+      ],
+      "model_families": [
+        "logreg_balanced_only"
+      ],
+      "stage2_feature_families": [
+        "midday_direction_regime_v1"
+      ],
+      "stage2_policy_families": [
+        "economic_balance_gate"
+      ],
+      "stage3_policy_families": [
+        "fixed_guard"
+      ],
+      "recipe_catalog_families": [
+        "midday_l3_adjacent"
+      ],
+      "runtime_families": [
+        "block_expiry"
+      ],
+      "depends_on_templates": [
+        "direction_regime_search"
+      ],
+      "max_generated_lanes": 1,
+      "resource": {
+        "cores": 8,
+        "memory_gb": 20
+      }
+    }
+  ],
+  "campaign_max_lanes": 2
+}
