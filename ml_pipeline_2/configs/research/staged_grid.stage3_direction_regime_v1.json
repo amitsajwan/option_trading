@@ -33,7 +33,6 @@
       {
         "run_id": "s3_regime_baseline",
         "model_group_suffix": "_s3_regime_baseline",
-        "reuse_stage1_from": "stage3_baseline_dynamic",
         "overrides": {
           "outputs": {
             "run_name": "staged_s3_regime_baseline"
@@ -48,7 +47,7 @@
       {
         "run_id": "s3_regime_balanced",
         "model_group_suffix": "_s3_regime_balanced",
-        "reuse_stage1_from": "stage3_baseline_dynamic",
+        "reuse_stage1_from": "s3_regime_baseline",
         "overrides": {
           "outputs": {
             "run_name": "staged_s3_regime_balanced"
