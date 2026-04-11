@@ -10,7 +10,7 @@
     "poll_interval_seconds": 15,
     "infra_max_attempts": 1,
     "total_cores": 8,
-    "total_memory_gb": 60,
+    "total_memory_gb": 64,
     "ranking_strategy": "publishable_economics_v1",
     "stop_on_first_publishable": false,
     "model_group": "banknifty_futures/h15_tp_auto",
@@ -72,7 +72,7 @@
       "max_generated_lanes": 1,
       "resource": {
         "cores": 8,
-        "memory_gb": 60
+        "memory_gb": 54
       }
     }
   ],
