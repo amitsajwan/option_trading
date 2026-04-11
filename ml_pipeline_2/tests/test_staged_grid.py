@@ -596,6 +596,9 @@ def test_midday_redesign_feature_sets_are_registered() -> None:
     assert "fo_midday_asymmetry" in specs
     assert "fo_midday_expiry_interactions" in specs
     assert "fo_midday_time_aware_plus_oi_iv" in specs
+    assert "fo_midday_direction_regime_v1" in specs
+    assert "fo_midday_direction_regime_v2" in specs
+    assert "fo_midday_direction_regime_v3" in specs
 
 
 def test_midday_redesign_grid_manifest_resolves() -> None:

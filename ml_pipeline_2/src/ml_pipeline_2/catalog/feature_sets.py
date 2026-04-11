@@ -357,6 +357,62 @@ DEFAULT_FEATURE_SET_SPECS: List[FeatureSetSpec] = [
             r"^ctx_is_near_expiry$",
         ),
     ),
+    # S3+: short-horizon regime variant.
+    # Keeps the same weak anchors and regime flags as v1, but only the 5d oracle regime memory.
+    # Goal: test whether the signal is more reactive and less diluted than the mixed 5d/10d pool.
+    FeatureSetSpec(
+        name="fo_midday_direction_regime_v2",
+        include_regex=(
+            r"^ema_",
+            r"^near_atm_oi_ratio$",
+            r"^atm_oi_ratio$",
+            r"^vix_current$",
+            r"^ctx_regime_atr_high$",
+            r"^ctx_regime_atr_low$",
+            r"^ctx_regime_trend_up$",
+            r"^ctx_regime_trend_down$",
+            r"^ctx_is_high_vix_day$",
+            r"^regime_vol_high$",
+            r"^regime_vol_low$",
+            r"^regime_trend_up$",
+            r"^regime_trend_down$",
+            r"^oracle_rolling_ce_win_rate_5d$",
+            r"^oracle_rolling_pe_win_rate_5d$",
+            r"^ce_pe_win_rate_diff_5d$",
+            r"^minute_of_day$",
+            r"^time_minute_of_day$",
+            r"^ctx_dte_days$",
+            r"^ctx_is_expiry_day$",
+            r"^ctx_is_near_expiry$",
+        ),
+    ),
+    # S3+: slower regime confirmation variant.
+    # Uses only the 10d oracle regime features and drops minute-level context to reduce intraday overfit.
+    # Goal: test whether a calmer, lower-variance directional signal generalizes better across windows.
+    FeatureSetSpec(
+        name="fo_midday_direction_regime_v3",
+        include_regex=(
+            r"^ema_",
+            r"^near_atm_oi_ratio$",
+            r"^atm_oi_ratio$",
+            r"^vix_current$",
+            r"^ctx_regime_atr_high$",
+            r"^ctx_regime_atr_low$",
+            r"^ctx_regime_trend_up$",
+            r"^ctx_regime_trend_down$",
+            r"^ctx_is_high_vix_day$",
+            r"^regime_vol_high$",
+            r"^regime_vol_low$",
+            r"^regime_trend_up$",
+            r"^regime_trend_down$",
+            r"^oracle_rolling_ce_win_rate_10d$",
+            r"^oracle_rolling_pe_win_rate_10d$",
+            r"^ce_pe_win_rate_diff_10d$",
+            r"^ctx_dte_days$",
+            r"^ctx_is_expiry_day$",
+            r"^ctx_is_near_expiry$",
+        ),
+    ),
 ]
 
 
