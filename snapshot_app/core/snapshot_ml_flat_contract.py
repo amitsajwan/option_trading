@@ -9,11 +9,18 @@ import numpy as np
 import pandas as pd
 
 from .market_snapshot_contract import SCHEMA_VERSION as FINAL_SNAPSHOT_SCHEMA_VERSION
+from .velocity_features import VELOCITY_COLUMNS, VELOCITY_INTEGER_COLUMNS
 
 CONTRACT_ID = "snapshot_ml_flat"
 CONTRACT_FILES_DIR = "snapshot_ml_flat"
 SCHEMA_NAME = "SnapshotMLFlat"
 SCHEMA_VERSION = FINAL_SNAPSHOT_SCHEMA_VERSION
+
+# V2 schema version — used by the enrichment pipeline (snapshots_ml_flat_v2).
+# The 11:30 row in v2 gets this version stamp; other rows retain SCHEMA_VERSION.
+SCHEMA_VERSION_V2 = "4.0"
+SCHEMA_NAME_V2 = "SnapshotMLFlatV2"
+
 PRIMARY_KEY = ["trade_date", "timestamp", "snapshot_id"]
 REQUIRED_COLUMNS = [
     "trade_date",
@@ -96,6 +103,11 @@ REQUIRED_COLUMNS = [
     "ctx_regime_trend_down",
     "ctx_regime_expiry_near",
 ]
+# ── V2: velocity columns added by the enrichment sprint ───────────────────────
+# These are additive — never modify REQUIRED_COLUMNS (that breaks V1 validation).
+# V2 required columns = REQUIRED_COLUMNS + VELOCITY_COLUMNS.
+REQUIRED_COLUMNS_V2: List[str] = list(REQUIRED_COLUMNS) + list(VELOCITY_COLUMNS)
+
 _STRING_FIELDS = {"trade_date", "instrument", "snapshot_id", "schema_name", "schema_version", "build_source", "build_run_id"}
 _INTEGER_FIELDS = {
     "year",
@@ -126,6 +138,21 @@ FIELD_TYPES = {
         else "number"
     )
     for col in REQUIRED_COLUMNS
+}
+
+# V2 field types — extends V1 with velocity column types
+_V2_INTEGER_FIELDS: frozenset[str] = _INTEGER_FIELDS | VELOCITY_INTEGER_COLUMNS
+FIELD_TYPES_V2: Dict[str, str] = {
+    col: (
+        "datetime"
+        if col == "timestamp"
+        else "string"
+        if col in _STRING_FIELDS
+        else "integer"
+        if col in _V2_INTEGER_FIELDS
+        else "number"
+    )
+    for col in REQUIRED_COLUMNS_V2
 }
 
 
@@ -400,13 +427,107 @@ def validate_snapshot_ml_flat_rows(
     return validate_snapshot_ml_flat_frame(pd.DataFrame(rows), contract_dir=contract_dir, raise_on_error=raise_on_error)
 
 
+# ── V2 contract helpers ────────────────────────────────────────────────────────
+
+def load_contract_schema_v2(contract_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """Return the V2 schema descriptor (includes velocity columns)."""
+    _ = Path(contract_dir) if contract_dir is not None else _default_contract_dir()
+    return {
+        "contract_id": CONTRACT_ID,
+        "schema_name": SCHEMA_NAME_V2,
+        "schema_version": SCHEMA_VERSION_V2,
+        "primary_key": list(PRIMARY_KEY),
+        "required_columns": list(REQUIRED_COLUMNS_V2),
+        "field_types": dict(FIELD_TYPES_V2),
+        "fields": [
+            {"name": col, "type": FIELD_TYPES_V2[col], "nullable": col in VELOCITY_COLUMNS}
+            for col in REQUIRED_COLUMNS_V2
+        ],
+    }
+
+
+def validate_enriched_snapshot_ml_flat_frame(
+    frame: pd.DataFrame,
+    *,
+    contract_dir: Optional[Path] = None,
+    raise_on_error: bool = True,
+) -> Dict[str, Any]:
+    """
+    Validate a V2 enriched snapshot_ml_flat DataFrame.
+
+    Key differences from V1:
+    - Checks for REQUIRED_COLUMNS_V2 (includes velocity columns).
+    - Velocity columns are nullable (allowed to be NaN on non-11:30 rows).
+    - schema_version=4.0 is accepted on enriched rows; 3.0 on non-enriched rows.
+    """
+    if frame is None or len(frame) == 0:
+        return {"ok": True, "rows": 0, "errors": []}
+
+    work = frame.copy()
+    if "trade_date" in work.columns:
+        work["trade_date"] = work["trade_date"].astype(str)
+
+    errors: List[str] = []
+
+    # base V1 columns must all be present
+    missing_v1 = [c for c in REQUIRED_COLUMNS if c not in work.columns]
+    if missing_v1:
+        errors.append(f"missing V1 required columns: {','.join(missing_v1)}")
+
+    # velocity columns must all be present (even if NaN)
+    missing_vel = [c for c in VELOCITY_COLUMNS if c not in work.columns]
+    if missing_vel:
+        errors.append(f"missing velocity columns: {','.join(missing_vel)}")
+
+    # schema_version must be either 3.0 (legacy rows) or 4.0 (enriched 11:30 rows)
+    if "schema_version" in work.columns:
+        allowed = {str(SCHEMA_VERSION), str(SCHEMA_VERSION_V2)}
+        bad = ~work["schema_version"].astype(str).isin(allowed)
+        if bool(bad.any()):
+            errors.append(
+                f"schema_version invalid rows: {int(bad.sum())} "
+                f"(allowed: {sorted(allowed)})"
+            )
+
+    # primary key uniqueness
+    errors.extend(_check_primary_key(work, list(PRIMARY_KEY)))
+
+    # tier0 cols must be non-null and finite (same as V1)
+    rules = load_validation_rules(contract_dir=contract_dir)
+    errors.extend(_check_tier0(work, rules))
+
+    report: Dict[str, Any] = {
+        "ok": len(errors) == 0,
+        "rows": int(len(work)),
+        "error_count": int(len(errors)),
+        "errors": errors,
+        "schema_name": SCHEMA_NAME_V2,
+        "schema_version": SCHEMA_VERSION_V2,
+    }
+    if errors and raise_on_error:
+        preview = "; ".join(errors[:5])
+        more = "" if len(errors) <= 5 else f"; ... (+{len(errors) - 5} more)"
+        raise ValueError(f"enriched snapshot_ml_flat V2 validation failed: {preview}{more}")
+    return report
+
+
 __all__ = [
     "CONTRACT_ID",
     "CONTRACT_FILES_DIR",
+    "SCHEMA_VERSION",
+    "SCHEMA_VERSION_V2",
+    "SCHEMA_NAME_V2",
+    "REQUIRED_COLUMNS",
+    "REQUIRED_COLUMNS_V2",
+    "VELOCITY_COLUMNS",
+    "FIELD_TYPES",
+    "FIELD_TYPES_V2",
     "load_contract_schema",
+    "load_contract_schema_v2",
     "load_feature_groups",
     "load_validation_rules",
     "load_legacy_mapping",
     "validate_snapshot_ml_flat_frame",
     "validate_snapshot_ml_flat_rows",
+    "validate_enriched_snapshot_ml_flat_frame",
 ]
