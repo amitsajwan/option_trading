@@ -65,6 +65,17 @@ class LaneLauncher:
                 args.extend(["--model-bucket-url", str(lane.model_bucket_url)])
         return args
 
+    def _build_env(self) -> dict[str, str]:
+        # Ensure the repo root (parent of ml_pipeline_2/) is on PYTHONPATH so
+        # packages like contracts_app that live at the repo root are importable
+        # in subprocess lanes without requiring a pip install or PYTHONPATH export.
+        # launcher.py is at {repo_root}/ml_pipeline_2/src/ml_pipeline_2/factory/launcher.py
+        repo_root = str(Path(__file__).resolve().parents[4])
+        env = os.environ.copy()
+        current = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{repo_root}:{current}" if current else repo_root
+        return env
+
     def launch(self, lane: LaneSpec, *, lane_root: Path) -> LaunchResult:
         lane_root = Path(lane_root).resolve()
         lane_root.mkdir(parents=True, exist_ok=True)
@@ -75,6 +86,7 @@ class LaneLauncher:
             process = subprocess.Popen(  # noqa: S603
                 args,
                 cwd=str(Path.cwd()),
+                env=self._build_env(),
                 stdout=handle,
                 stderr=subprocess.STDOUT,
                 text=True,
