@@ -12,7 +12,10 @@
   `/home/.data/ml_pipeline/parquet_data/snapshots_ml_flat_v2/`  
 - Existing Stage 1 artifact (ROC 0.619) is **invalidated** — retrain from scratch with new features  
 - Velocity columns: `vel_ce_oi_delta_*`, `vel_pcr_*`, `vel_price_*`, `vel_iv_*`, `vel_volume_*`, `ctx_am_*` (36 total)  
-- HPO: random search, enabled for all stages, `trials_per_model: 30` (up from current `trials: 1`)  
+- HPO strategy by phase:
+  - **Screen** (`velocity_screen_v1`): `trials=5, strategy=random` — enough to avoid false eliminations, cheap for 12 lanes
+  - **HPO run** (`velocity_hpo_v1`): `trials=30, strategy=optuna` — TPE Bayesian search on top-3 survivors
+  - **Final model**: `trials=50, strategy=optuna` — full squeeze on single winner  
 - New features to add: ADX, volume spike ratio, gap flag  
 
 ---

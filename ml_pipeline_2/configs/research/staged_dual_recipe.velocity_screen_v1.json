@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_dual_recipe_v1",
+  "inputs": {
+    "parquet_root": "../../../.data/ml_pipeline/parquet_data",
+    "support_dataset": "snapshots_ml_flat"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_dual_recipe_velocity_screen_v1"
+  },
+  "catalog": {
+    "models_by_stage": {
+      "stage1": [
+        "xgb_shallow",
+        "xgb_balanced",
+        "xgb_regularized",
+        "xgb_deep_v1",
+        "xgb_deep_slow_v1",
+        "lgbm_fast",
+        "lgbm_dart",
+        "lgbm_large_v1",
+        "logreg_balanced",
+        "logreg_c1",
+        "logreg_c01"
+      ],
+      "stage2": [
+        "xgb_shallow",
+        "xgb_balanced",
+        "xgb_regularized",
+        "xgb_deep_v1",
+        "lgbm_fast",
+        "lgbm_dart",
+        "lgbm_large_v1",
+        "logreg_balanced",
+        "logreg_c01"
+      ],
+      "stage3": [
+        "xgb_shallow",
+        "xgb_balanced",
+        "xgb_regularized",
+        "xgb_deep_v1",
+        "lgbm_dart",
+        "lgbm_large_v1",
+        "logreg_balanced"
+      ]
+    },
+    "feature_sets_by_stage": {
+      "stage1": [
+        "fo_velocity_v1",
+        "fo_expiry_aware_v3",
+        "fo_full",
+        "fo_no_opening_range",
+        "fo_oi_pcr_momentum"
+      ],
+      "stage2": [
+        "fo_midday_direction_regime_v1",
+        "fo_velocity_v1",
+        "fo_oi_pcr_momentum"
+      ],
+      "stage3": [
+        "fo_velocity_v1",
+        "fo_expiry_aware_v3",
+        "fo_full"
+      ]
+    },
+    "recipe_catalog_id": "midday_l3_adjacent_v1"
+  },
+  "windows": {
+    "research_train": {
+      "start": "2020-08-03",
+      "end": "2024-04-30"
+    },
+    "research_valid": {
+      "start": "2024-05-01",
+      "end": "2024-07-31"
+    },
+    "full_model": {
+      "start": "2020-08-03",
+      "end": "2024-07-31"
+    },
+    "final_holdout": {
+      "start": "2024-08-01",
+      "end": "2024-10-31"
+    }
+  },
+  "views": {
+    "stage1_view_id": "stage1_entry_view_v1",
+    "stage2_view_id": "stage2_direction_view_v1",
+    "stage3_view_id": "stage3_recipe_view_v1"
+  },
+  "labels": {
+    "stage1_labeler_id": "entry_best_recipe_v1",
+    "stage2_labeler_id": "direction_best_recipe_v1",
+    "stage3_labeler_id": "recipe_best_positive_v1"
+  },
+  "training": {
+    "stage1_trainer_id": "binary_catalog_v1",
+    "stage2_trainer_id": "binary_catalog_v1",
+    "stage3_trainer_id": "ovr_recipe_catalog_v1",
+    "preprocess": {
+      "max_missing_rate": 0.35,
+      "clip_lower_q": 0.01,
+      "clip_upper_q": 0.99
+    },
+    "cv_config": {
+      "train_days": 84,
+      "valid_days": 21,
+      "test_days": 21,
+      "step_days": 21,
+      "purge_days": 0,
+      "embargo_days": 0,
+      "purge_mode": "days",
+      "embargo_rows": 0,
+      "event_end_col": null
+    },
+    "objectives_by_stage": {
+      "stage1": "brier",
+      "stage2": "brier",
+      "stage3": "brier"
+    },
+    "random_state": 42,
+    "runtime": {
+      "model_n_jobs": 8
+    },
+    "search_options_by_stage": {
+      "stage1": {
+        "hpo": {
+          "enabled": true,
+          "strategy": "random",
+          "trials_per_model": 5,
+          "sampler_seed": 42
+        }
+      },
+      "stage2": {
+        "hpo": {
+          "enabled": true,
+          "strategy": "random",
+          "trials_per_model": 5,
+          "sampler_seed": 42
+        }
+      },
+      "stage3": {
+        "hpo": {
+          "enabled": true,
+          "strategy": "random",
+          "trials_per_model": 5,
+          "sampler_seed": 42
+        }
+      }
+    },
+    "cost_per_trade": 0.0006
+  },
+  "policy": {
+    "stage1_policy_id": "entry_threshold_v1",
+    "stage2_policy_id": "direction_gate_economic_balance_v1",
+    "stage3_policy_id": "recipe_fixed_baseline_guard_v1",
+    "stage1": {
+      "threshold_grid": [0.45, 0.5, 0.55, 0.6]
+    },
+    "stage2": {
+      "ce_threshold_grid": [0.55, 0.6, 0.65],
+      "pe_threshold_grid": [0.55, 0.6, 0.65],
+      "min_edge_grid": [0.05, 0.1, 0.15]
+    },
+    "stage3": {
+      "threshold_grid": [0.45, 0.5, 0.55, 0.6]
+    }
+  }
+}
