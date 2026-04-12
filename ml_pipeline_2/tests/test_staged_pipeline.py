@@ -831,6 +831,8 @@ def test_build_stage2_split_diagnostics_reports_balanced_scores_and_buckets() ->
             "direction_return_edge_after_cost": [0.0010, 0.0011, 0.0012, 0.0013, 0.0014, 0.0015, 0.0016, 0.0017],
             "ctx_is_expiry_day": [1, 1, 0, 0, 0, 0, 0, 0],
             "ctx_regime_expiry_near": [0, 0, 1, 1, 0, 0, 0, 0],
+            # move_label=1 marks rows as actionable trades so calibration is computed
+            "move_label": [1, 1, 1, 1, 1, 1, 1, 1],
         }
     )
     scores = frame.loc[:, staged_pipeline.KEY_COLUMNS].copy()

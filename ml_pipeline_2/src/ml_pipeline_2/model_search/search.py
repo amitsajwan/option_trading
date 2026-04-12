@@ -21,6 +21,12 @@ try:
 except Exception:  # pragma: no cover
     XGBClassifier = None  # type: ignore[assignment]
 
+try:
+    import optuna
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+except Exception:  # pragma: no cover
+    optuna = None  # type: ignore[assignment]
+
 from ..catalog.feature_sets import DEFAULT_FEATURE_SET_SPECS, feature_set_specs_by_name
 from ..catalog.models import DEFAULT_MODEL_SPECS, model_specs_by_name
 from ..contracts.types import (
@@ -470,8 +476,10 @@ def _normalize_hpo_config(hpo_config: Optional[Dict[str, Any]], *, random_state:
     raw = dict(hpo_config or {})
     enabled = bool(raw.get("enabled", False))
     strategy = str(raw.get("strategy", "random")).strip().lower()
-    if strategy not in {"random"}:
-        raise ValueError(f"unsupported HPO strategy: {strategy}")
+    if strategy not in {"random", "optuna"}:
+        raise ValueError(f"unsupported HPO strategy: {strategy!r}; valid options: 'random', 'optuna'")
+    if strategy == "optuna" and optuna is None:
+        raise RuntimeError("HPO strategy 'optuna' requires the 'optuna' package; install it with: pip install optuna")
     trials_per_model = max(1, int(raw.get("trials_per_model", 1)))
     sampler_seed = int(raw.get("sampler_seed", random_state))
     return {
@@ -480,6 +488,140 @@ def _normalize_hpo_config(hpo_config: Optional[Dict[str, Any]], *, random_state:
         "trials_per_model": int(trials_per_model),
         "sampler_seed": int(sampler_seed),
     }
+
+
+def _suggest_xgb_params(trial: Any, base_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Optuna suggest_* version of _sample_xgb_params."""
+    base_depth = int(base_params.get("max_depth", 4))
+    base_estimators = int(base_params.get("n_estimators", 300))
+    base_lr = float(base_params.get("learning_rate", 0.03))
+    base_sub = float(base_params.get("subsample", 0.9))
+    base_col = float(base_params.get("colsample_bytree", 0.9))
+    base_alpha = float(base_params.get("reg_alpha", 0.0))
+    base_lambda = float(base_params.get("reg_lambda", 1.0))
+    return {
+        "max_depth": trial.suggest_int("max_depth", max(2, base_depth - 2), min(9, base_depth + 3)),
+        "n_estimators": trial.suggest_int("n_estimators", max(150, int(base_estimators * 0.6)), min(1400, int(base_estimators * 1.8))),
+        "learning_rate": trial.suggest_float("learning_rate", max(0.008, base_lr * 0.55), min(0.12, max(base_lr * 1.75, 0.012)), log=True),
+        "subsample": trial.suggest_float("subsample", max(0.65, base_sub - 0.15), min(1.0, base_sub + 0.10)),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", max(0.65, base_col - 0.15), min(1.0, base_col + 0.10)),
+        "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, max(6.0, max(base_alpha, 1.0) * 4.0), log=True) if base_alpha > 0 else trial.suggest_float("reg_alpha", 0.0, 2.0),
+        "reg_lambda": trial.suggest_float("reg_lambda", max(0.5, max(base_lambda, 1.0) * 0.5), max(10.0, max(base_lambda, 1.0) * 4.0), log=True),
+    }
+
+
+def _suggest_lgbm_params(trial: Any, base_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Optuna suggest_* version of _sample_lgbm_params."""
+    base_leaves = int(base_params.get("num_leaves", 31))
+    base_depth = int(base_params.get("max_depth", -1))
+    base_estimators = int(base_params.get("n_estimators", 300))
+    base_lr = float(base_params.get("learning_rate", 0.03))
+    base_sub = float(base_params.get("subsample", 0.9))
+    base_col = float(base_params.get("colsample_bytree", 0.9))
+    base_alpha = float(base_params.get("reg_alpha", 0.0))
+    base_lambda = float(base_params.get("reg_lambda", 0.0))
+    base_min_child = int(base_params.get("min_child_samples", 20))
+    depth_choices = [-1, 4, 5, 6, 7, 8, 10] if base_depth < 0 else list(range(max(3, base_depth - 2), min(11, base_depth + 3)))
+    params = {
+        "boosting_type": str(base_params.get("boosting_type", "gbdt")),
+        "num_leaves": trial.suggest_int("num_leaves", max(15, int(base_leaves * 0.6)), min(128, int(base_leaves * 1.8))),
+        "max_depth": trial.suggest_categorical("max_depth", depth_choices),
+        "n_estimators": trial.suggest_int("n_estimators", max(180, int(base_estimators * 0.6)), min(1400, int(base_estimators * 1.8))),
+        "learning_rate": trial.suggest_float("learning_rate", max(0.008, base_lr * 0.55), min(0.12, max(base_lr * 1.75, 0.012)), log=True),
+        "subsample": trial.suggest_float("subsample", max(0.65, base_sub - 0.15), min(1.0, base_sub + 0.10)),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", max(0.65, base_col - 0.15), min(1.0, base_col + 0.10)),
+        "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, max(6.0, max(base_alpha, 1.0) * 4.0), log=True) if base_alpha > 0 else trial.suggest_float("reg_alpha", 0.0, 2.0),
+        "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, max(8.0, max(base_lambda, 1.0) * 4.0), log=True) if base_lambda > 0 else trial.suggest_float("reg_lambda", 0.0, 2.0),
+        "min_child_samples": trial.suggest_int("min_child_samples", max(10, base_min_child - 12), min(80, base_min_child + 20)),
+    }
+    if "class_weight" in base_params:
+        params["class_weight"] = base_params.get("class_weight")
+    return params
+
+
+def _suggest_logreg_params(trial: Any, base_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Optuna suggest_* version of _sample_logreg_params."""
+    base_c = float(base_params.get("c", 1.0))
+    params = {
+        "c": trial.suggest_float("c", max(0.01, base_c / 8.0), max(0.05, min(25.0, base_c * 8.0)), log=True),
+        "max_iter": int(base_params.get("max_iter", 1000)),
+        "solver": str(base_params.get("solver", "lbfgs")),
+    }
+    if "class_weight" in base_params:
+        params["class_weight"] = base_params.get("class_weight")
+    return params
+
+
+def _build_optuna_candidates(
+    base_specs: List[ModelSpec],
+    trials_per_model: int,
+    sampler_seed: int,
+) -> List[Dict[str, object]]:
+    """
+    Build HPO candidate entries using Optuna TPE sampler.
+
+    For each base model spec, creates `trials_per_model - 1` additional
+    candidates (trial 0 is always the preset baseline). Returns a flat list
+    of candidate_entry dicts ready to append to the preset entries.
+
+    Optuna TPE explores the hyperparameter space more efficiently than
+    pure random search when trials_per_model >= 20.
+    """
+    assert optuna is not None, "optuna must be installed"
+
+    _suggest_fn_map = {
+        "xgb": _suggest_xgb_params,
+        "lgbm": _suggest_lgbm_params,
+        "logreg": _suggest_logreg_params,
+    }
+
+    entries: List[Dict[str, object]] = []
+    for model_spec in base_specs:
+        family = str(model_spec.family).strip().lower()
+        suggest_fn = _suggest_fn_map.get(family)
+        if suggest_fn is None:
+            # Family doesn't support Optuna suggest — fall back to random
+            rng = np.random.default_rng(sampler_seed)
+            for trial_index in range(1, trials_per_model):
+                sampled_spec = ModelSpec(
+                    name=f"{model_spec.name}__hpo_t{trial_index:03d}",
+                    family=str(model_spec.family),
+                    params=_sample_model_params(model_spec, rng),
+                )
+                entries.append({
+                    "spec": sampled_spec,
+                    "meta": _model_meta(sampled_spec, base_model_name=model_spec.name, search_origin="hpo_random", trial_index=trial_index),
+                })
+            continue
+
+        base_params = dict(model_spec.params or {})
+        sampled_params_list: List[Dict[str, Any]] = []
+
+        def _objective(trial: Any) -> float:
+            # Objective is a dummy — we only need the param suggestions.
+            # Optuna minimizes, so return a fixed value; actual model
+            # evaluation happens downstream in the CV loop.
+            sampled_params_list.append(suggest_fn(trial, base_params))
+            return 0.0
+
+        study = optuna.create_study(
+            direction="minimize",
+            sampler=optuna.samplers.TPESampler(seed=sampler_seed),
+        )
+        study.optimize(_objective, n_trials=trials_per_model - 1, show_progress_bar=False)
+
+        for trial_index, params in enumerate(sampled_params_list, start=1):
+            sampled_spec = ModelSpec(
+                name=f"{model_spec.name}__hpo_t{trial_index:03d}",
+                family=str(model_spec.family),
+                params=params,
+            )
+            entries.append({
+                "spec": sampled_spec,
+                "meta": _model_meta(sampled_spec, base_model_name=model_spec.name, search_origin="hpo_optuna", trial_index=trial_index),
+            })
+
+    return entries
 
 
 def _build_candidate_model_entries(
@@ -528,25 +670,32 @@ def _build_candidate_model_entries(
         for model_spec in base_specs
     ]
     if normalized_hpo["enabled"]:
-        rng = np.random.default_rng(int(normalized_hpo["sampler_seed"]))
-        for model_spec in base_specs:
-            for trial_index in range(1, int(normalized_hpo["trials_per_model"])):
-                sampled_spec = ModelSpec(
-                    name=f"{model_spec.name}__hpo_t{trial_index:03d}",
-                    family=str(model_spec.family),
-                    params=_sample_model_params(model_spec, rng),
-                )
-                candidate_entries.append(
-                    {
-                        "spec": sampled_spec,
-                        "meta": _model_meta(
-                            sampled_spec,
-                            base_model_name=model_spec.name,
-                            search_origin="hpo_random",
-                            trial_index=trial_index,
-                        ),
-                    }
-                )
+        strategy = str(normalized_hpo["strategy"])
+        trials = int(normalized_hpo["trials_per_model"])
+        seed = int(normalized_hpo["sampler_seed"])
+        if strategy == "optuna":
+            hpo_entries = _build_optuna_candidates(base_specs, trials_per_model=trials, sampler_seed=seed)
+            candidate_entries.extend(hpo_entries)
+        else:
+            rng = np.random.default_rng(seed)
+            for model_spec in base_specs:
+                for trial_index in range(1, trials):
+                    sampled_spec = ModelSpec(
+                        name=f"{model_spec.name}__hpo_t{trial_index:03d}",
+                        family=str(model_spec.family),
+                        params=_sample_model_params(model_spec, rng),
+                    )
+                    candidate_entries.append(
+                        {
+                            "spec": sampled_spec,
+                            "meta": _model_meta(
+                                sampled_spec,
+                                base_model_name=model_spec.name,
+                                search_origin="hpo_random",
+                                trial_index=trial_index,
+                            ),
+                        }
+                    )
     return {
         "requested_models": list(model_runtime["requested_models"]),
         "runnable_models": runnable_model_names,

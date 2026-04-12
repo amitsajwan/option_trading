@@ -347,8 +347,8 @@ def _validate_search_options_by_stage(payload: Any, errors: List[str], *, field_
         if not hpo:
             continue
         strategy = str(hpo.get("strategy", "random")).strip().lower()
-        if strategy not in {"random"}:
-            errors.append(f"{field_prefix}.{stage_name}.hpo.strategy must be 'random'")
+        if strategy not in {"random", "optuna"}:
+            errors.append(f"{field_prefix}.{stage_name}.hpo.strategy must be 'random' or 'optuna'")
         try:
             if int(hpo.get("trials_per_model", 0)) <= 0:
                 raise ValueError
