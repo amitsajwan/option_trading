@@ -28,22 +28,18 @@
     "max_parallel_runs": 2,
     "runs": [
       {
-        "run_id": "vel_all_day_full",
-        "model_group_suffix": "_vel_all_day_full",
+        "run_id": "all_day",
+        "model_group_suffix": "_vel_all_day",
         "overrides": {
-          "outputs": { "run_name": "vel_all_day_full" },
-          "training": {
-            "stage2_feature_set": "fo_velocity_v1"
-          }
+          "outputs": { "run_name": "vel_all_day" }
         }
       },
       {
-        "run_id": "vel_midday_only",
-        "model_group_suffix": "_vel_midday_only",
+        "run_id": "midday_only",
+        "model_group_suffix": "_vel_midday",
         "overrides": {
-          "outputs": { "run_name": "vel_midday_only" },
+          "outputs": { "run_name": "vel_midday" },
           "training": {
-            "stage2_feature_set": "fo_velocity_v1",
             "stage2_session_filter": {
               "enabled": true,
               "include_buckets": ["MIDDAY"]
@@ -52,74 +48,11 @@
         }
       },
       {
-        "run_id": "vel_regime_v1_all_day",
-        "model_group_suffix": "_vel_regime_v1_all_day",
+        "run_id": "midday_late",
+        "model_group_suffix": "_vel_midday_late",
         "overrides": {
-          "outputs": { "run_name": "vel_regime_v1_all_day" },
+          "outputs": { "run_name": "vel_midday_late" },
           "training": {
-            "stage2_feature_set": "fo_midday_direction_regime_v1"
-          }
-        }
-      },
-      {
-        "run_id": "vel_regime_v1_midday",
-        "model_group_suffix": "_vel_regime_v1_midday",
-        "overrides": {
-          "outputs": { "run_name": "vel_regime_v1_midday" },
-          "training": {
-            "stage2_feature_set": "fo_midday_direction_regime_v1",
-            "stage2_session_filter": {
-              "enabled": true,
-              "include_buckets": ["MIDDAY"]
-            }
-          }
-        }
-      },
-      {
-        "run_id": "vel_oi_pcr_all_day",
-        "model_group_suffix": "_vel_oi_pcr_all_day",
-        "overrides": {
-          "outputs": { "run_name": "vel_oi_pcr_all_day" },
-          "training": {
-            "stage2_feature_set": "fo_oi_pcr_momentum"
-          }
-        }
-      },
-      {
-        "run_id": "vel_oi_pcr_midday",
-        "model_group_suffix": "_vel_oi_pcr_midday",
-        "overrides": {
-          "outputs": { "run_name": "vel_oi_pcr_midday" },
-          "training": {
-            "stage2_feature_set": "fo_oi_pcr_momentum",
-            "stage2_session_filter": {
-              "enabled": true,
-              "include_buckets": ["MIDDAY"]
-            }
-          }
-        }
-      },
-      {
-        "run_id": "vel_expiry_aware_midday",
-        "model_group_suffix": "_vel_expiry_aware_midday",
-        "overrides": {
-          "outputs": { "run_name": "vel_expiry_aware_midday" },
-          "training": {
-            "stage2_feature_set": "fo_expiry_aware_v3",
-            "stage2_session_filter": {
-              "enabled": true,
-              "include_buckets": ["MIDDAY"]
-            }
-          }
-        }
-      },
-      {
-        "run_id": "vel_all_day_late_session",
-        "model_group_suffix": "_vel_all_day_late_session",
-        "overrides": {
-          "outputs": { "run_name": "vel_all_day_late_session" },
-          "training": {
-            "stage2_feature_set": "fo_velocity_v1",
             "stage2_session_filter": {
               "enabled": true,
               "include_buckets": ["MIDDAY", "LATE_SESSION"]
