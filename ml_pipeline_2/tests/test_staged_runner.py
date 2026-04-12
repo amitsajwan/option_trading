@@ -341,6 +341,27 @@ def test_staged_runner_applies_block_expiry_runtime_filtering_to_training_frames
         assert stage_meta["signal_column"] in {"ctx_is_expiry_day", "ctx_dte_days"}
 
 
+def test_load_dataset_supports_day_file_year_partitions(tmp_path: Path) -> None:
+    parquet_root = tmp_path / "parquet"
+    dataset_dir = parquet_root / "snapshots_ml_flat_v2" / "year=2024"
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-02", "2024-01-03"],
+            "timestamp": pd.to_datetime(["2024-01-02 12:30:00", "2024-01-03 12:30:00"]),
+            "snapshot_id": ["snap_1", "snap_2"],
+            "feature_a": [1.0, 2.0],
+        }
+    )
+    frame.iloc[[0]].to_parquet(dataset_dir / "2024-01-02.parquet", index=False)
+    frame.iloc[[1]].to_parquet(dataset_dir / "2024-01-03.parquet", index=False)
+
+    loaded = staged_pipeline._load_dataset(parquet_root, "snapshots_ml_flat_v2")  # type: ignore[attr-defined]
+
+    assert loaded["snapshot_id"].tolist() == ["snap_1", "snap_2"]
+    assert loaded["trade_date"].astype(str).tolist() == ["2024-01-02", "2024-01-03"]
+
+
 def test_staged_runner_validate_only_reports_pruned_training_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     parquet_root = build_staged_parquet_root(tmp_path)
     manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
