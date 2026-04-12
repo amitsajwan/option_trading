@@ -43,6 +43,10 @@ def _load_dataset(parquet_root: Path, dataset_name: str) -> pd.DataFrame:
     if not files:
         files = sorted(dataset_dir.glob("year=*/chunk=*/data.parquet"))
     if not files:
+        # Some datasets are stored as one parquet file per trade date directly
+        # under each year partition, e.g. year=2024/2024-01-02.parquet.
+        files = sorted(dataset_dir.glob("year=*/*.parquet"))
+    if not files:
         raise FileNotFoundError(f"dataset has no year partitions: {dataset_dir}")
     frame = pd.concat([pd.read_parquet(path) for path in files], ignore_index=True)
     frame["timestamp"] = _normalize_timestamp_series(frame["timestamp"])
