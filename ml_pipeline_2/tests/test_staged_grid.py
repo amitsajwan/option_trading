@@ -599,6 +599,10 @@ def test_midday_redesign_feature_sets_are_registered() -> None:
     assert "fo_midday_direction_regime_v1" in specs
     assert "fo_midday_direction_regime_v2" in specs
     assert "fo_midday_direction_regime_v3" in specs
+    assert "fo_velocity_v1" in specs
+    v1_patterns = specs["fo_midday_direction_regime_v1"].include_regex
+    assert any("vel_" in p for p in v1_patterns), "fo_midday_direction_regime_v1 must include vel_ patterns"
+    assert any("ctx_am_" in p for p in v1_patterns), "fo_midday_direction_regime_v1 must include ctx_am_ patterns"
 
 
 def test_midday_redesign_grid_manifest_resolves() -> None:
