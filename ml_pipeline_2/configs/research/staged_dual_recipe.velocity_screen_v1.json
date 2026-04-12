@@ -85,9 +85,9 @@
     }
   },
   "views": {
-    "stage1_view_id": "stage1_entry_view_v1",
-    "stage2_view_id": "stage2_direction_view_v1",
-    "stage3_view_id": "stage3_recipe_view_v1"
+    "stage1_view_id": "stage1_entry_view_v2",
+    "stage2_view_id": "stage2_direction_view_v2",
+    "stage3_view_id": "stage3_recipe_view_v2"
   },
   "labels": {
     "stage1_labeler_id": "entry_best_recipe_v1",

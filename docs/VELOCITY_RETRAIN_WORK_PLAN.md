@@ -4,6 +4,11 @@
 > **Trigger**: `snapshots_ml_flat_v2` enrichment complete (36 velocity + morning context features added)  
 > **Goal**: Full 3-stage retrain on enriched dataset, HPO enabled, CE-only shadow deployed in parallel  
 
+> **Gate 0 override**: This work plan is downstream of
+> [VELOCITY_DATA_READINESS_AND_LAUNCH.md](./VELOCITY_DATA_READINESS_AND_LAUNCH.md).
+> Do not launch velocity training until the `snapshots_ml_flat_v2` + `*_view_v2`
+> contract passes preflight and smoke.
+
 ---
 
 ## Assumptions

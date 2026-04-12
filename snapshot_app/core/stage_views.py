@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .velocity_features import VELOCITY_COLUMNS
+
 
 _COMMON_TOP_LEVEL_FIELDS: tuple[str, ...] = (
     "snapshot_id",
@@ -22,6 +24,15 @@ _COMMON_SESSION_FIELDS: tuple[str, ...] = (
     "is_first_hour",
     "is_last_hour",
 )
+
+_V2_ADDITIONAL_ENRICHMENT_FIELDS: tuple[str, ...] = (
+    "adx_14",
+    "vol_spike_ratio",
+    "ctx_gap_pct",
+    "ctx_gap_up",
+    "ctx_gap_down",
+)
+_V2_ENRICHMENT_FIELDS: tuple[str, ...] = tuple((*VELOCITY_COLUMNS, *_V2_ADDITIONAL_ENRICHMENT_FIELDS))
 
 _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
     "stage1_entry_view": {
@@ -235,6 +246,22 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
 }
 
 
+def _extend_spec_with_v2_enrichment(view_name: str) -> dict[str | None, tuple[str, ...]]:
+    base_spec = _STAGE_FIELD_SPECS[view_name]
+    extended = {block_name: tuple(field_names) for block_name, field_names in base_spec.items()}
+    extended["velocity_enrichment"] = _V2_ENRICHMENT_FIELDS
+    return extended
+
+
+_STAGE_FIELD_SPECS.update(
+    {
+        "stage1_entry_view_v2": _extend_spec_with_v2_enrichment("stage1_entry_view"),
+        "stage2_direction_view_v2": _extend_spec_with_v2_enrichment("stage2_direction_view"),
+        "stage3_recipe_view_v2": _extend_spec_with_v2_enrichment("stage3_recipe_view"),
+    }
+)
+
+
 def _project_view(snapshot: dict[str, Any], view_name: str) -> dict[str, Any]:
     work = snapshot if isinstance(snapshot, dict) else {}
     spec = _STAGE_FIELD_SPECS[view_name]
@@ -288,6 +315,26 @@ def project_stage_views(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def project_stage1_entry_view_v2(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return _project_view(snapshot, "stage1_entry_view_v2")
+
+
+def project_stage2_direction_view_v2(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return _project_view(snapshot, "stage2_direction_view_v2")
+
+
+def project_stage3_recipe_view_v2(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return _project_view(snapshot, "stage3_recipe_view_v2")
+
+
+def project_stage_views_v2(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        "stage1_entry_view_v2": project_stage1_entry_view_v2(snapshot),
+        "stage2_direction_view_v2": project_stage2_direction_view_v2(snapshot),
+        "stage3_recipe_view_v2": project_stage3_recipe_view_v2(snapshot),
+    }
+
+
 def project_stage1_entry_view_from_flat_row(row: dict[str, Any]) -> dict[str, Any]:
     return _project_view_from_flat_row(row, "stage1_entry_view")
 
@@ -308,13 +355,41 @@ def project_stage_views_from_flat_row(row: dict[str, Any]) -> dict[str, dict[str
     }
 
 
+def project_stage1_entry_view_v2_from_flat_row(row: dict[str, Any]) -> dict[str, Any]:
+    return _project_view_from_flat_row(row, "stage1_entry_view_v2")
+
+
+def project_stage2_direction_view_v2_from_flat_row(row: dict[str, Any]) -> dict[str, Any]:
+    return _project_view_from_flat_row(row, "stage2_direction_view_v2")
+
+
+def project_stage3_recipe_view_v2_from_flat_row(row: dict[str, Any]) -> dict[str, Any]:
+    return _project_view_from_flat_row(row, "stage3_recipe_view_v2")
+
+
+def project_stage_views_v2_from_flat_row(row: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        "stage1_entry_view_v2": project_stage1_entry_view_v2_from_flat_row(row),
+        "stage2_direction_view_v2": project_stage2_direction_view_v2_from_flat_row(row),
+        "stage3_recipe_view_v2": project_stage3_recipe_view_v2_from_flat_row(row),
+    }
+
+
 __all__ = [
     "project_stage1_entry_view",
     "project_stage2_direction_view",
     "project_stage3_recipe_view",
     "project_stage_views",
+    "project_stage1_entry_view_v2",
+    "project_stage2_direction_view_v2",
+    "project_stage3_recipe_view_v2",
+    "project_stage_views_v2",
     "project_stage1_entry_view_from_flat_row",
     "project_stage2_direction_view_from_flat_row",
     "project_stage3_recipe_view_from_flat_row",
     "project_stage_views_from_flat_row",
+    "project_stage1_entry_view_v2_from_flat_row",
+    "project_stage2_direction_view_v2_from_flat_row",
+    "project_stage3_recipe_view_v2_from_flat_row",
+    "project_stage_views_v2_from_flat_row",
 ]

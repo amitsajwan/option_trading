@@ -350,20 +350,16 @@ DEFAULT_FEATURE_SET_SPECS: List[FeatureSetSpec] = [
             r"^oracle_rolling_pe_win_rate_",
             r"^ce_pe_win_rate_diff_",
             # Velocity features (present in snapshots_ml_flat_v2 onwards; silently absent in v1)
-            r"^vel_ce_oi_delta_",
-            r"^vel_pe_oi_delta_",
-            r"^vel_oi_imbalance_",
-            r"^vel_pcr_delta_",
-            r"^vel_pcr_acceleration$",
-            r"^vel_price_momentum_",
-            r"^vel_iv_compression_",
-            r"^ctx_am_trend$",
-            r"^ctx_am_price_position$",
-            r"^ctx_am_oi_build_",
-            r"^ctx_am_gap_",
+            r"^vel_",
+            r"^ctx_am_",
+            r"^adx_14$",
+            r"^vol_spike_ratio$",
+            r"^ctx_gap_",
             # Intraday / expiry context
             r"^minute_of_day$",
             r"^time_minute_of_day$",
+            r"^minutes_since_open$",
+            r"^day_of_week$",
             r"^ctx_dte_days$",
             r"^ctx_is_expiry_day$",
             r"^ctx_is_near_expiry$",
@@ -405,29 +401,18 @@ DEFAULT_FEATURE_SET_SPECS: List[FeatureSetSpec] = [
     FeatureSetSpec(
         name="fo_velocity_v1",
         include_regex=(
-            # Velocity features (computed by compute_velocity_features)
-            r"^vel_ce_oi_delta_",       # CE OI velocity (open, 30m)
-            r"^vel_pe_oi_delta_",       # PE OI velocity
-            r"^vel_ce_oi_build_rate$",  # CE OI build rate (delta/min)
-            r"^vel_pe_oi_build_rate$",
-            r"^vel_oi_imbalance_",      # OI imbalance shift
-            r"^vel_pcr_delta_",         # PCR velocity
-            r"^vel_pcr_acceleration$",  # PCR acceleration (2nd derivative)
-            r"^vel_price_momentum_",    # Price momentum (5m, 15m, 30m)
-            r"^vel_price_acceleration$",
-            r"^vel_iv_compression_",    # IV compression rate
-            r"^vel_volume_ratio$",      # Current vol / rolling 20d avg
-            r"^vel_volume_spike$",      # Bool: volume spike flag
-            # Morning session summary (10:00-11:30 window)
-            r"^ctx_am_trend$",          # Morning trend: +1 UP, 0 FLAT, -1 DOWN
-            r"^ctx_am_price_position$", # Where price sits vs AM range (0-1)
-            r"^ctx_am_oi_build_",       # AM OI build direction
-            r"^ctx_am_volume_",         # AM volume profile
-            r"^ctx_am_gap_",            # Gap from yesterday's close
+            r"^vel_",
+            r"^ctx_am_",
+            r"^adx_14$",
+            r"^vol_spike_ratio$",
+            r"^ctx_gap_",
             # Proven anchors from prior experiments
-            r"^ema_",                   # EMA slopes (ema_21_slope, ema_50_slope)
+            r"^ema_",
+            r"^price_vs_vwap$",
             r"^vwap_distance$",
+            r"^rsi_14_",
             r"^osc_rsi_14$",
+            r"^atr_14_",
             r"^osc_atr_",
             r"^near_atm_oi_ratio$",
             r"^atm_oi_ratio$",
@@ -448,6 +433,8 @@ DEFAULT_FEATURE_SET_SPECS: List[FeatureSetSpec] = [
             r"^ctx_is_near_expiry$",
             r"^minute_of_day$",
             r"^time_minute_of_day$",
+            r"^minutes_since_open$",
+            r"^day_of_week$",
         ),
     ),
     # S3+: slower regime confirmation variant.
