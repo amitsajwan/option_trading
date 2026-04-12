@@ -188,7 +188,11 @@ def _enrich_with_iv(ml_flat_df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFr
         if pd.isna(ts) or not isinstance(raw_json, str):
             continue
         iv_vals = _extract_iv_from_raw_json(raw_json)
-        iv_records.append({"_ts_key": pd.Timestamp(ts).floor("min"), **iv_vals})
+        # normalise to timezone-naive UTC (strip tz so merge keys are compatible)
+        ts_norm = pd.Timestamp(ts)
+        if ts_norm.tzinfo is not None:
+            ts_norm = ts_norm.tz_convert("UTC").tz_localize(None)
+        iv_records.append({"_ts_key": ts_norm.floor("min"), **iv_vals})
 
     if not iv_records:
         return ml_flat_df
@@ -196,8 +200,11 @@ def _enrich_with_iv(ml_flat_df: pd.DataFrame, raw_df: pd.DataFrame) -> pd.DataFr
     iv_df = pd.DataFrame(iv_records).dropna(subset=["_ts_key"])
     iv_df = iv_df.drop_duplicates(subset=["_ts_key"], keep="last")
 
-    # join onto ml_flat by floored timestamp
-    ml_flat_df["_ts_key"] = pd.to_datetime(ml_flat_df["timestamp"], errors="coerce").dt.floor("min")
+    # join onto ml_flat by floored timestamp (timezone-naive)
+    ml_flat_ts = pd.to_datetime(ml_flat_df["timestamp"], errors="coerce", utc=False)
+    if ml_flat_ts.dt.tz is not None:
+        ml_flat_ts = ml_flat_ts.dt.tz_convert("UTC").dt.tz_localize(None)
+    ml_flat_df["_ts_key"] = ml_flat_ts.dt.floor("min")
     merged = ml_flat_df.merge(
         iv_df.rename(columns={
             _ATM_CE_IV: "_iv_ce",
