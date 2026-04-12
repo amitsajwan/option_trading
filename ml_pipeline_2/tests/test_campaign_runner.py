@@ -77,6 +77,31 @@ def test_campaign_runner_generate_only_writes_artifacts(tmp_path: Path) -> None:
     assert payload["factory_result"] is None
 
 
+def test_campaign_runner_fresh_clears_previous_result(monkeypatch, tmp_path: Path) -> None:
+    spec = load_campaign_spec(_write_campaign(tmp_path / "campaign.json", _campaign_payload(tmp_path)))
+    campaign_root = resolve_campaign_root(spec, tmp_path / "out")
+    campaign_root.mkdir(parents=True, exist_ok=True)
+    stale_path = campaign_root / "stale.txt"
+    stale_path.write_text("old", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "ml_pipeline_2.campaign.runner.WorkflowRunner.run",
+        lambda self: {
+            "workflow_id": self.spec.workflow_id,
+            "status": "no_publishable_candidate",
+            "held_candidates": [],
+            "failed_lanes": [],
+            "lane_summary": [],
+        },
+    )
+
+    payload = CampaignRunner(spec, campaign_root).run(generate_only=False, fresh=True)
+
+    assert payload["status"] == "no_publishable_candidate"
+    assert not stale_path.exists()
+    assert (campaign_root / "generated_workflow.json").exists()
+
+
 def test_campaign_runner_wraps_factory_result(monkeypatch, tmp_path: Path) -> None:
     spec = load_campaign_spec(_write_campaign(tmp_path / "campaign.json", _campaign_payload(tmp_path)))
     campaign_root = resolve_campaign_root(spec, tmp_path / "out")

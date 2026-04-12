@@ -15,6 +15,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--spec", required=True, help="Path to a campaign JSON spec")
     parser.add_argument("--output-root", help="Optional parent directory for the campaign run root")
     parser.add_argument("--generate-only", action="store_true", help="Generate campaign artifacts without running the factory")
+    parser.add_argument("--fresh", action="store_true", help="Delete any existing campaign run root before generating/running")
     return parser
 
 
@@ -22,7 +23,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     spec = load_campaign_spec(Path(args.spec))
     campaign_root = resolve_campaign_root(spec, (Path(args.output_root).resolve() if args.output_root else None))
-    payload = CampaignRunner(spec, campaign_root).run(generate_only=bool(args.generate_only))
+    payload = CampaignRunner(spec, campaign_root).run(
+        generate_only=bool(args.generate_only),
+        fresh=bool(args.fresh),
+    )
     print(json.dumps(payload, indent=2, default=str))
     if args.generate_only:
         return 0

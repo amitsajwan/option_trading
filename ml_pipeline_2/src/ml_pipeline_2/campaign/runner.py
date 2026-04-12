@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -119,10 +120,16 @@ class CampaignRunner:
         result_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return payload
 
+    def _reset_campaign_root(self) -> None:
+        if self.campaign_root.exists():
+            shutil.rmtree(self.campaign_root)
+
     def generate(self) -> CampaignExpansion:
         return CampaignGenerator(self.spec, self.campaign_root).generate()
 
-    def run(self, *, generate_only: bool = False) -> Dict[str, Any]:
+    def run(self, *, generate_only: bool = False, fresh: bool = False) -> Dict[str, Any]:
+        if fresh:
+            self._reset_campaign_root()
         expansion = self.generate()
         if generate_only:
             return self._write_campaign_result(expansion=expansion, workflow_result=None, generated_only=True)
