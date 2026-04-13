@@ -48,6 +48,10 @@
       }
     },
     "stage2_feature_families": {
+      "midday_time_aware": {
+        "target": "base_manifest",
+        "feature_sets": ["fo_midday_time_aware_plus_oi_iv"]
+      },
       "velocity_v1": {
         "target": "base_manifest",
         "feature_sets": ["fo_velocity_v1"]
@@ -79,18 +83,19 @@
       "window_profiles": ["canonical_4y"],
       "model_families": ["full_catalog"],
       "stage2_feature_families": [
+        "midday_time_aware",
         "velocity_v1",
         "regime_v1",
         "oi_pcr_momentum",
         "expiry_aware_v3"
       ],
       "stage2_policy_families": ["economic_balance_gate"],
-      "max_generated_lanes": 16,
+      "max_generated_lanes": 20,
       "resource": {
         "cores": 8,
         "memory_gb": 54
       }
     }
   ],
-  "campaign_max_lanes": 16
+  "campaign_max_lanes": 20
 }

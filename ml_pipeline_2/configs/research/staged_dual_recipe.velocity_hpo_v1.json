@@ -57,6 +57,7 @@
         "fo_iv_skew_only"
       ],
       "stage2": [
+        "fo_midday_time_aware_plus_oi_iv",
         "fo_midday_direction_regime_v1",
         "fo_velocity_v1",
         "fo_oi_pcr_momentum"
@@ -64,7 +65,8 @@
       "stage3": [
         "fo_velocity_v1",
         "fo_expiry_aware_v3",
-        "fo_full"
+        "fo_full",
+        "fo_no_time_context"
       ]
     },
     "recipe_catalog_id": "midday_l3_adjacent_v1"
