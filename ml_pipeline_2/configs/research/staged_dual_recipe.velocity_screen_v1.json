@@ -49,9 +49,12 @@
       "stage1": [
         "fo_velocity_v1",
         "fo_expiry_aware_v3",
+        "fo_expiry_aware_v2",
         "fo_full",
         "fo_no_opening_range",
-        "fo_oi_pcr_momentum"
+        "fo_no_time_context",
+        "fo_oi_pcr_momentum",
+        "fo_iv_skew_only"
       ],
       "stage2": [
         "fo_midday_direction_regime_v1",
