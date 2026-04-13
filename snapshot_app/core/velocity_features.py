@@ -109,6 +109,8 @@ def compute_velocity_features(
     *,
     midday_snapshot: pd.Series,
     prev_day_close: Optional[float] = None,
+    prev_day_midday_option_volume: Optional[float] = None,
+    avg_20d_midday_option_volume: Optional[float] = None,
 ) -> Dict[str, float]:
     """
     Compute all velocity/delta features from morning session data.
@@ -120,9 +122,14 @@ def compute_velocity_features(
                           — caller merges these from raw JSON before calling.
         midday_snapshot:  The 11:30 ml_flat row (single pd.Series or one-row DataFrame
                           squeezed to Series).  Used for "current" value reads.
-        prev_day_close:   Previous day's futures closing price.  Required only for
-                          ctx_am_gap_from_yday and ctx_am_gap_filled.  Pass None to
-                          leave those two columns NaN.
+        prev_day_close:   Previous day's futures closing price. Required for gap
+                          features.
+        prev_day_midday_option_volume:
+                          Previous trading day's 11:30 total options volume.
+                          Used for ctx_am_vol_vs_yday.
+        avg_20d_midday_option_volume:
+                          Rolling average of prior 20 trading days' 11:30 total
+                          options volume. Used for vol_spike_ratio.
 
     Returns:
         Dict[str, float] — all columns in _ALL_OUTPUT_COLUMNS.
@@ -266,6 +273,14 @@ def compute_velocity_features(
     if prev_day_close is not None and math.isfinite(prev_day_close) and price_open is not None:
         gap = price_open - prev_day_close
         out["ctx_am_gap_from_yday"] = float(gap)
+        gap_pct = gap / prev_day_close if prev_day_close != 0.0 else float("nan")
+        out["ctx_gap_pct"] = float(gap_pct) if math.isfinite(gap_pct) else float("nan")
+        if math.isfinite(out["ctx_gap_pct"]):
+            out["ctx_gap_up"] = float(1 if out["ctx_gap_pct"] > 0.003 else 0)
+            out["ctx_gap_down"] = float(1 if out["ctx_gap_pct"] < -0.003 else 0)
+        else:
+            out["ctx_gap_up"] = float("nan")
+            out["ctx_gap_down"] = float("nan")
         # gap filled = price crossed back through prev_day_close by 11:30
         if gap > 0.0:
             # gap up — filled if close dropped back to <= prev_day_close
@@ -278,6 +293,9 @@ def compute_velocity_features(
     else:
         out["ctx_am_gap_from_yday"] = float("nan")
         out["ctx_am_gap_filled"] = float("nan")
+        out["ctx_gap_pct"] = float("nan")
+        out["ctx_gap_up"] = float("nan")
+        out["ctx_gap_down"] = float("nan")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # GROUP 4 — IV Velocity  (NaN when IV columns absent from morning_df)
@@ -331,9 +349,58 @@ def compute_velocity_features(
     out["vel_options_vol_acceleration"] = _vol_accel(
         ce_vol_prev_30m_start, ce_vol_30m_ago, ce_vol_mid
     )
-    # ctx_am_vol_vs_yday is computed outside this function (requires yesterday's data)
-    # caller sets it; default NaN
-    out["ctx_am_vol_vs_yday"] = float("nan")
+    current_midday_option_volume = mid("opt_flow_options_volume_total")
+    if current_midday_option_volume is None:
+        if ce_vol_mid is not None and pe_vol_mid is not None:
+            current_midday_option_volume = ce_vol_mid + pe_vol_mid
+
+    if (
+        current_midday_option_volume is not None
+        and prev_day_midday_option_volume is not None
+        and math.isfinite(current_midday_option_volume)
+        and math.isfinite(prev_day_midday_option_volume)
+        and prev_day_midday_option_volume > 0.0
+    ):
+        out["ctx_am_vol_vs_yday"] = float(current_midday_option_volume / prev_day_midday_option_volume)
+    else:
+        out["ctx_am_vol_vs_yday"] = float("nan")
+
+    if (
+        current_midday_option_volume is not None
+        and avg_20d_midday_option_volume is not None
+        and math.isfinite(current_midday_option_volume)
+        and math.isfinite(avg_20d_midday_option_volume)
+        and avg_20d_midday_option_volume > 0.0
+    ):
+        out["vol_spike_ratio"] = float(current_midday_option_volume / avg_20d_midday_option_volume)
+    else:
+        out["vol_spike_ratio"] = float("nan")
+
+    # ADX(14) over the morning window using available bars with Wilder smoothing.
+    highs = fut_high.astype(float)
+    lows = fut_low.astype(float)
+    closes = fut_close.astype(float)
+    prev_close_series = closes.shift(1)
+    up_move = highs.diff()
+    down_move = -lows.diff()
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0.0), 0.0).fillna(0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0.0), 0.0).fillna(0.0)
+    tr_components = pd.concat(
+        [
+            (highs - lows).abs(),
+            (highs - prev_close_series).abs(),
+            (lows - prev_close_series).abs(),
+        ],
+        axis=1,
+    )
+    true_range = tr_components.max(axis=1).fillna(0.0)
+    atr = true_range.ewm(alpha=1 / 14, adjust=False, min_periods=1).mean()
+    plus_di = 100.0 * plus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=1).mean() / atr.replace(0.0, np.nan)
+    minus_di = 100.0 * minus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=1).mean() / atr.replace(0.0, np.nan)
+    dx = (100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0.0, np.nan)).replace([np.inf, -np.inf], np.nan)
+    adx = dx.ewm(alpha=1 / 14, adjust=False, min_periods=1).mean()
+    last_adx = pd.to_numeric(adx, errors="coerce").dropna()
+    out["adx_14"] = float(last_adx.iloc[-1]) if len(last_adx) > 0 else float("nan")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # GROUP 6 — Morning Session Summary
@@ -433,6 +500,8 @@ _ALL_OUTPUT_COLUMNS: list[str] = [
     "vel_pe_vol_delta_30m",
     "vel_options_vol_acceleration",
     "ctx_am_vol_vs_yday",
+    "adx_14",
+    "vol_spike_ratio",
     # Group 6 — Morning Session Summary
     "ctx_am_trend",
     "ctx_am_trend_strength",
@@ -440,12 +509,17 @@ _ALL_OUTPUT_COLUMNS: list[str] = [
     "ctx_am_oi_direction",
     "ctx_am_vwap_side",
     "ctx_am_breakout_confirmed",
+    "ctx_gap_pct",
+    "ctx_gap_up",
+    "ctx_gap_down",
 ]
 
 # columns that are integer-typed (-1/0/1 or 0/1) in the contract
 VELOCITY_INTEGER_COLUMNS: frozenset[str] = frozenset({
     "vel_pcr_trend_direction",
     "ctx_am_gap_filled",
+    "ctx_gap_up",
+    "ctx_gap_down",
     "ctx_am_trend",
     "ctx_am_reversal",
     "ctx_am_oi_direction",

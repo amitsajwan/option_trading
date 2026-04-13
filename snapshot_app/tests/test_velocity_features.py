@@ -59,6 +59,7 @@ def _make_morning_df(
             "px_fut_low": price_start + i * price_step - 20.0,
             "opt_flow_ce_volume_total": 50_000.0 + i * 2_000.0,
             "opt_flow_pe_volume_total": 40_000.0 + i * 1_500.0,
+            "opt_flow_options_volume_total": 90_000.0 + i * 3_500.0,
             "vwap_fut": price_start + price_step * n_rows / 2.0,
             "pcr_change_15m": pcr_step,
             "ctx_opening_range_breakout_up": 0,
@@ -82,7 +83,13 @@ def test_velocity_features_normal_day() -> None:
     """All columns present and non-NaN for a standard 7-row morning."""
     morning = _make_morning_df(n_rows=7)
     midday = _make_midday(morning)
-    result = compute_velocity_features(morning, midday_snapshot=midday, prev_day_close=43_900.0)
+    result = compute_velocity_features(
+        morning,
+        midday_snapshot=midday,
+        prev_day_close=43_900.0,
+        prev_day_midday_option_volume=80_000.0,
+        avg_20d_midday_option_volume=70_000.0,
+    )
 
     # every output column must be present
     for col in VELOCITY_COLUMNS:
@@ -105,6 +112,12 @@ def test_velocity_features_normal_day() -> None:
     # build rates finite
     assert math.isfinite(result["vel_ce_oi_build_rate"])
     assert math.isfinite(result["vel_pe_oi_build_rate"])
+    assert math.isfinite(result["adx_14"])
+    assert math.isfinite(result["vol_spike_ratio"])
+    assert math.isfinite(result["ctx_gap_pct"])
+    assert result["ctx_gap_up"] in {0.0, 1.0}
+    assert result["ctx_gap_down"] in {0.0, 1.0}
+    assert math.isfinite(result["ctx_am_vol_vs_yday"])
 
 
 # ── test: fewer than 3 morning snapshots → all NaN ────────────────────────────
@@ -177,6 +190,9 @@ def test_velocity_features_no_prev_day_close() -> None:
 
     assert math.isnan(result["ctx_am_gap_from_yday"]), "gap_from_yday should be NaN without prev_close"
     assert math.isnan(result["ctx_am_gap_filled"]), "gap_filled should be NaN without prev_close"
+    assert math.isnan(result["ctx_gap_pct"]), "gap_pct should be NaN without prev_close"
+    assert math.isnan(result["ctx_gap_up"]), "gap_up should be NaN without prev_close"
+    assert math.isnan(result["ctx_gap_down"]), "gap_down should be NaN without prev_close"
 
     # all other non-gap columns should still compute normally
     assert math.isfinite(result["vel_ce_oi_delta_open"])

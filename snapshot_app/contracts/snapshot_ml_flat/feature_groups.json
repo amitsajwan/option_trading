@@ -157,7 +157,8 @@
         "vel_ce_vol_delta_30m",
         "vel_pe_vol_delta_30m",
         "vel_options_vol_acceleration",
-        "ctx_am_vol_vs_yday"
+        "ctx_am_vol_vs_yday",
+        "vol_spike_ratio"
       ]
     },
     "morning_context": {
@@ -169,6 +170,10 @@
         "ctx_am_price_position",
         "ctx_am_gap_from_yday",
         "ctx_am_gap_filled",
+        "ctx_gap_pct",
+        "ctx_gap_up",
+        "ctx_gap_down",
+        "adx_14",
         "ctx_am_trend",
         "ctx_am_trend_strength",
         "ctx_am_reversal",

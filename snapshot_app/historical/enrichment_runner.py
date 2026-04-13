@@ -188,6 +188,67 @@ def _get_prev_day_close(
     return float(val) if pd.notna(val) else None
 
 
+def _load_midday_option_volume_lookup(ml_flat_root: Path) -> Dict[str, float]:
+    """Return trade_date -> 11:30 total options volume from the source ml_flat dataset."""
+    try:
+        import duckdb
+    except ImportError:
+        logger.error("duckdb not installed")
+        return {}
+
+    glob_pattern = (ml_flat_root / "**" / "*.parquet").as_posix()
+    try:
+        con = duckdb.connect(":memory:")
+        df: pd.DataFrame = con.execute(
+            f"""
+            SELECT trade_date, opt_flow_options_volume_total
+            FROM read_parquet('{glob_pattern}', hive_partitioning=false, union_by_name=true)
+            WHERE EXTRACT(hour FROM timestamp) = 11
+              AND EXTRACT(minute FROM timestamp) = 30
+            ORDER BY trade_date ASC
+            """
+        ).df()
+        con.close()
+    except Exception as exc:
+        logger.warning("midday option volume lookup load failed: %s", exc)
+        return {}
+
+    if len(df) == 0:
+        return {}
+
+    lookup: Dict[str, float] = {}
+    for _, row in df.iterrows():
+        value = pd.to_numeric(row.get("opt_flow_options_volume_total"), errors="coerce")
+        if pd.notna(value):
+            lookup[str(row["trade_date"])] = float(value)
+    return lookup
+
+
+def _compute_volume_context(
+    trade_date: str,
+    all_dates_sorted: List[str],
+    midday_option_volume_by_date: Dict[str, float],
+) -> Tuple[Optional[float], Optional[float]]:
+    """Return (previous_day_midday_volume, trailing_20d_midday_volume_avg)."""
+    if trade_date not in all_dates_sorted:
+        return None, None
+    idx = all_dates_sorted.index(trade_date)
+    if idx <= 0:
+        return None, None
+
+    previous_days = all_dates_sorted[:idx]
+    prev_day = previous_days[-1]
+    prev_value = midday_option_volume_by_date.get(prev_day)
+
+    trailing_values = [
+        float(midday_option_volume_by_date[day])
+        for day in previous_days[-20:]
+        if day in midday_option_volume_by_date and pd.notna(midday_option_volume_by_date[day])
+    ]
+    avg_20d = float(sum(trailing_values) / len(trailing_values)) if trailing_values else None
+    return prev_value, avg_20d
+
+
 def _attach_velocity_to_day(
     full_day_df: pd.DataFrame,
     velocity: Dict[str, float],
@@ -290,6 +351,7 @@ def _process_one_date(
     all_dates_sorted: List[str],
     dry_run: bool,
     already_processed: Set[str],
+    midday_option_volume_by_date: Optional[Dict[str, float]] = None,
 ) -> EnrichmentResult:
     """Process a single trade_date end-to-end.  Returns EnrichmentResult."""
 
@@ -321,6 +383,11 @@ def _process_one_date(
 
     # ── 4. get previous day close (for gap features) ───────────────────────────
     prev_close = _get_prev_day_close(trade_date, all_dates_sorted, ml_flat_root)
+    prev_day_midday_option_volume, avg_20d_midday_option_volume = _compute_volume_context(
+        trade_date,
+        all_dates_sorted,
+        midday_option_volume_by_date or {},
+    )
 
     # ── 5. compute velocity features ──────────────────────────────────────────
     try:
@@ -328,6 +395,8 @@ def _process_one_date(
             morning_df,
             midday_snapshot=midday_row,
             prev_day_close=prev_close,
+            prev_day_midday_option_volume=prev_day_midday_option_volume,
+            avg_20d_midday_option_volume=avg_20d_midday_option_volume,
         )
     except Exception as exc:
         logger.error("velocity computation failed for %s: %s", trade_date, exc)
@@ -419,6 +488,7 @@ class EnrichmentBatchRunner:
             return summary
         summary.total_dates = len(all_dates)
         logger.info("Found %d source dates", len(all_dates))
+        midday_option_volume_by_date = _load_midday_option_volume_lookup(self.ml_flat_root)
 
         # ── resume: find already-processed dates ───────────────────────────────
         already_processed: Set[str] = set()
@@ -447,6 +517,7 @@ class EnrichmentBatchRunner:
             ml_flat_dataset=self.ml_flat_dataset,
             raw_dataset=self.raw_dataset,
             all_dates_sorted=all_dates,
+            midday_option_volume_by_date=midday_option_volume_by_date,
             dry_run=self.dry_run,
             already_processed=already_processed,
         )

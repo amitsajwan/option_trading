@@ -150,6 +150,8 @@ allowed_build_sources:
 #   ctx_am_price_position                                 : [0.0, 1.0]
 #   ctx_am_gap_from_yday                                  : any finite float (signed)
 #   ctx_am_gap_filled                                     : {0, 1} or NaN
+#   ctx_gap_pct                                            : any finite float (signed) or NaN
+#   ctx_gap_up / ctx_gap_down                              : {0, 1} or NaN
 #   ctx_am_trend                                          : {-1, 0, 1}
 #   ctx_am_trend_strength                                 : >= 0
 #   ctx_am_reversal                                       : {0, 1}
@@ -157,6 +159,8 @@ allowed_build_sources:
 #   ctx_am_vwap_side                                      : {-1, 0, 1}
 #   ctx_am_breakout_confirmed                             : {0, 1}
 #   ctx_am_vol_vs_yday                                    : > 0 (ratio) or NaN
+#   adx_14                                                : [0, 100] or NaN
+#   vol_spike_ratio                                       : >= 0 or NaN
 
 velocity_columns_v1:
   nullable: true
@@ -184,6 +188,9 @@ velocity_columns_v1:
     - ctx_am_price_position
     - ctx_am_gap_from_yday
     - ctx_am_gap_filled
+    - ctx_gap_pct
+    - ctx_gap_up
+    - ctx_gap_down
     - vel_atm_ce_iv_delta_open
     - vel_atm_pe_iv_delta_open
     - vel_iv_skew_delta_open
@@ -192,6 +199,8 @@ velocity_columns_v1:
     - vel_pe_vol_delta_30m
     - vel_options_vol_acceleration
     - ctx_am_vol_vs_yday
+    - adx_14
+    - vol_spike_ratio
     - ctx_am_trend
     - ctx_am_trend_strength
     - ctx_am_reversal
