@@ -216,3 +216,14 @@ def test_velocity_features_no_iv_columns() -> None:
     # price and OI features must still compute
     assert math.isfinite(result["vel_price_delta_open"])
     assert math.isfinite(result["vel_ce_oi_delta_open"])
+
+
+def test_velocity_features_iv_falls_back_to_morning_frame_when_midday_snapshot_lacks_iv() -> None:
+    morning = _make_morning_df(n_rows=7)
+    midday = _make_midday(morning).drop(labels=["atm_ce_iv", "atm_pe_iv", "iv_skew"])
+
+    result = compute_velocity_features(morning, midday_snapshot=midday)
+
+    assert math.isfinite(result["vel_atm_ce_iv_delta_open"])
+    assert math.isfinite(result["vel_atm_pe_iv_delta_open"])
+    assert math.isfinite(result["vel_iv_compression_rate"])

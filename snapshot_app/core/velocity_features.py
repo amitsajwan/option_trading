@@ -161,12 +161,12 @@ def compute_velocity_features(
             midday_snapshot[name] if name in midday_snapshot.index else None
         )
         if val is None or (isinstance(val, float) and math.isnan(val)):
-            return None
+            return _last(col(name))
         try:
             f = float(val)
             return f if math.isfinite(f) else None
         except (TypeError, ValueError):
-            return None
+            return _last(col(name))
 
     out: Dict[str, float] = {}
 
