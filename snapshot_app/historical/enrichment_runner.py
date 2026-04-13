@@ -203,8 +203,8 @@ def _load_midday_option_volume_lookup(ml_flat_root: Path) -> Dict[str, float]:
             f"""
             SELECT trade_date, opt_flow_options_volume_total
             FROM read_parquet('{glob_pattern}', hive_partitioning=false, union_by_name=true)
-            WHERE EXTRACT(hour FROM timestamp) = 11
-              AND EXTRACT(minute FROM timestamp) = 30
+            WHERE EXTRACT(hour FROM TRY_CAST(timestamp AS TIMESTAMP)) = 11
+              AND EXTRACT(minute FROM TRY_CAST(timestamp AS TIMESTAMP)) = 30
             ORDER BY trade_date ASC
             """
         ).df()
