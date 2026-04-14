@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover
 
 
 DEFAULT_SOURCE_DATASET = "snapshots_ml_flat_v2"
+DEFAULT_BASE_DATASET = "market_base"
 DEFAULT_STAGE1_DATASET = "stage1_entry_view_v2"
 DEFAULT_STAGE2_DATASET = "stage2_direction_view_v2"
 DEFAULT_STAGE3_DATASET = "stage3_recipe_view_v2"
@@ -93,6 +94,43 @@ def _write_day_frame(frame: pd.DataFrame, dataset_root: Path, trade_date: str) -
     return int(len(frame))
 
 
+def _merge_base_with_flat(
+    base_frame: pd.DataFrame,
+    flat_frame: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Merge market_base (v1 features) with snapshots_ml_flat_v2 (velocity columns).
+
+    Strategy:
+    - Use market_base as the primary/left frame — it has all 44 v1 computed features.
+    - Left-join velocity/enrichment columns from flat_frame by snapshot_id.
+    - Columns that already exist in base_frame are NOT overwritten.
+    - New columns from flat_frame (vel_*, ctx_am_*, adx_14, vol_spike_ratio, etc.) are added.
+    """
+    if flat_frame is None or len(flat_frame) == 0:
+        return base_frame
+
+    # Identify columns to pull from flat that don't already exist in base
+    base_cols = set(base_frame.columns)
+    flat_only_cols = [c for c in flat_frame.columns if c not in base_cols]
+
+    if not flat_only_cols:
+        return base_frame
+
+    if "snapshot_id" not in flat_frame.columns or "snapshot_id" not in base_frame.columns:
+        # Fallback: join by timestamp if snapshot_id is missing
+        if "timestamp" in base_frame.columns and "timestamp" in flat_frame.columns:
+            flat_subset = flat_frame[["timestamp"] + flat_only_cols].copy()
+            merged = base_frame.merge(flat_subset, on="timestamp", how="left")
+        else:
+            return base_frame
+    else:
+        flat_subset = flat_frame[["snapshot_id"] + flat_only_cols].copy()
+        merged = base_frame.merge(flat_subset, on="snapshot_id", how="left")
+
+    return merged
+
+
 def _project_day_rows(
     day_frame: pd.DataFrame,
     *,
@@ -131,6 +169,7 @@ def rebuild_stage_views_from_flat(
     *,
     parquet_root: str | Path,
     source_flat_dataset: str = DEFAULT_SOURCE_DATASET,
+    base_dataset: str | None = DEFAULT_BASE_DATASET,
     output_stage1_dataset: str = DEFAULT_STAGE1_DATASET,
     output_stage2_dataset: str = DEFAULT_STAGE2_DATASET,
     output_stage3_dataset: str = DEFAULT_STAGE3_DATASET,
@@ -143,10 +182,24 @@ def rebuild_stage_views_from_flat(
 ) -> dict[str, Any]:
     parquet_base = Path(parquet_root)
     source_root = parquet_base / source_flat_dataset
-    if not source_root.exists():
-        raise FileNotFoundError(f"source flat dataset not found: {source_root}")
 
-    all_dates = _enumerate_trade_dates(source_root, start_date=start_date, end_date=end_date)
+    # Determine primary source: use base_dataset if it exists, else fall back to flat
+    use_base = False
+    if base_dataset:
+        base_root = parquet_base / base_dataset
+        if base_root.exists():
+            use_base = True
+            primary_root = base_root
+        else:
+            print(f"[rebuild] base_dataset '{base_dataset}' not found at {base_root}, falling back to flat dataset")
+            primary_root = source_root
+    else:
+        primary_root = source_root
+
+    if not primary_root.exists():
+        raise FileNotFoundError(f"primary dataset not found: {primary_root}")
+
+    all_dates = _enumerate_trade_dates(primary_root, start_date=start_date, end_date=end_date)
     output_roots = {
         output_stage1_dataset: parquet_base / output_stage1_dataset,
         output_stage2_dataset: parquet_base / output_stage2_dataset,
@@ -162,7 +215,10 @@ def rebuild_stage_views_from_flat(
     summary: dict[str, Any] = {
         "status": "dry_run" if dry_run else "complete",
         "parquet_root": str(parquet_base.resolve()),
+        "primary_dataset": str(primary_root.name),
         "source_flat_dataset": str(source_flat_dataset),
+        "base_dataset": str(base_dataset) if base_dataset else None,
+        "use_base_for_v1_fields": use_base,
         "output_stage_datasets": {
             "stage1": str(output_stage1_dataset),
             "stage2": str(output_stage2_dataset),
@@ -182,9 +238,18 @@ def rebuild_stage_views_from_flat(
         return summary
 
     for trade_date in pending_dates:
-        day_frame = _load_day_frame(source_root, trade_date)
-        if len(day_frame) == 0:
+        # Load primary frame (market_base if available, else flat)
+        primary_frame = _load_day_frame(primary_root, trade_date)
+        if len(primary_frame) == 0:
             continue
+
+        # If using base, merge velocity columns from flat dataset
+        if use_base and source_root.exists():
+            flat_frame = _load_day_frame(source_root, trade_date)
+            day_frame = _merge_base_with_flat(primary_frame, flat_frame)
+        else:
+            day_frame = primary_frame
+
         projected = _project_day_rows(
             day_frame,
             build_source=build_source,
@@ -204,6 +269,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Rebuild versioned stage views from an existing flat parquet dataset.")
     parser.add_argument("--parquet-root", required=True, help="Base parquet root")
     parser.add_argument("--source-flat-dataset", default=DEFAULT_SOURCE_DATASET)
+    parser.add_argument(
+        "--base-dataset",
+        default=DEFAULT_BASE_DATASET,
+        help=(
+            "Dataset with v1 computed features (e.g. market_base). "
+            "Used as the primary source; velocity columns from --source-flat-dataset are merged in by snapshot_id. "
+            "Set to empty string to disable and use only the flat dataset."
+        ),
+    )
     parser.add_argument("--output-stage1-dataset", default=DEFAULT_STAGE1_DATASET)
     parser.add_argument("--output-stage2-dataset", default=DEFAULT_STAGE2_DATASET)
     parser.add_argument("--output-stage3-dataset", default=DEFAULT_STAGE3_DATASET)
@@ -218,9 +292,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    base_dataset: str | None = args.base_dataset if args.base_dataset else None
     summary = rebuild_stage_views_from_flat(
         parquet_root=args.parquet_root,
         source_flat_dataset=args.source_flat_dataset,
+        base_dataset=base_dataset,
         output_stage1_dataset=args.output_stage1_dataset,
         output_stage2_dataset=args.output_stage2_dataset,
         output_stage3_dataset=args.output_stage3_dataset,
