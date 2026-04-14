@@ -94,40 +94,39 @@ def _write_day_frame(frame: pd.DataFrame, dataset_root: Path, trade_date: str) -
     return int(len(frame))
 
 
-def _merge_base_with_flat(
-    base_frame: pd.DataFrame,
+def _merge_flat_with_base(
     flat_frame: pd.DataFrame,
+    base_frame: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Merge market_base (v1 features) with snapshots_ml_flat_v2 (velocity columns).
+    Enrich flat_frame (snapshots_ml_flat_v2) with v1 computed fields from base_frame (market_base).
 
     Strategy:
-    - Use market_base as the primary/left frame — it has all 44 v1 computed features.
-    - Left-join velocity/enrichment columns from flat_frame by snapshot_id.
-    - Columns that already exist in base_frame are NOT overwritten.
-    - New columns from flat_frame (vel_*, ctx_am_*, adx_14, vol_spike_ratio, etc.) are added.
+    - flat_frame is the primary/left frame — its snapshot_ids match the oracle exactly.
+    - base_frame supplies v1 fields (pcr, realized_vol_30m, vix_current, etc.) that flat lacks.
+    - Only columns NOT already in flat_frame are pulled from base_frame.
+    - Result has exactly the same rows as flat_frame (left join).
     """
-    if flat_frame is None or len(flat_frame) == 0:
-        return base_frame
+    if base_frame is None or len(base_frame) == 0:
+        return flat_frame
 
-    # Identify columns to pull from flat that don't already exist in base
-    base_cols = set(base_frame.columns)
-    flat_only_cols = [c for c in flat_frame.columns if c not in base_cols]
+    flat_cols = set(flat_frame.columns)
+    base_only_cols = [c for c in base_frame.columns if c not in flat_cols]
 
-    if not flat_only_cols:
-        return base_frame
+    if not base_only_cols:
+        return flat_frame
 
-    if "snapshot_id" not in flat_frame.columns or "snapshot_id" not in base_frame.columns:
-        # Fallback: join by timestamp if snapshot_id is missing
-        if "timestamp" in base_frame.columns and "timestamp" in flat_frame.columns:
-            flat_subset = flat_frame[["timestamp"] + flat_only_cols].copy()
-            merged = base_frame.merge(flat_subset, on="timestamp", how="left")
-        else:
-            return base_frame
-    else:
-        flat_subset = flat_frame[["snapshot_id"] + flat_only_cols].copy()
-        merged = base_frame.merge(flat_subset, on="snapshot_id", how="left")
+    join_key = None
+    if "snapshot_id" in flat_frame.columns and "snapshot_id" in base_frame.columns:
+        join_key = "snapshot_id"
+    elif "timestamp" in flat_frame.columns and "timestamp" in base_frame.columns:
+        join_key = "timestamp"
 
+    if join_key is None:
+        return flat_frame
+
+    base_subset = base_frame[[join_key] + base_only_cols].copy()
+    merged = flat_frame.merge(base_subset, on=join_key, how="left")
     return merged
 
 
@@ -183,21 +182,20 @@ def rebuild_stage_views_from_flat(
     parquet_base = Path(parquet_root)
     source_root = parquet_base / source_flat_dataset
 
-    # Determine primary source: use base_dataset if it exists, else fall back to flat
+    # Primary source is ALWAYS the flat dataset (snapshots_ml_flat_v2) so that
+    # snapshot_ids exactly match the oracle (which is also built from flat).
+    # base_dataset (market_base) supplies the v1 computed fields that flat lacks.
+    primary_root = source_root
+    if not primary_root.exists():
+        raise FileNotFoundError(f"primary dataset not found: {primary_root}")
+
     use_base = False
     if base_dataset:
         base_root = parquet_base / base_dataset
         if base_root.exists():
             use_base = True
-            primary_root = base_root
         else:
-            print(f"[rebuild] base_dataset '{base_dataset}' not found at {base_root}, falling back to flat dataset")
-            primary_root = source_root
-    else:
-        primary_root = source_root
-
-    if not primary_root.exists():
-        raise FileNotFoundError(f"primary dataset not found: {primary_root}")
+            print(f"[rebuild] base_dataset '{base_dataset}' not found at {base_root}, v1 fields will be NaN")
 
     all_dates = _enumerate_trade_dates(primary_root, start_date=start_date, end_date=end_date)
     output_roots = {
@@ -215,7 +213,7 @@ def rebuild_stage_views_from_flat(
     summary: dict[str, Any] = {
         "status": "dry_run" if dry_run else "complete",
         "parquet_root": str(parquet_base.resolve()),
-        "primary_dataset": str(primary_root.name),
+        "primary_dataset": str(source_flat_dataset),
         "source_flat_dataset": str(source_flat_dataset),
         "base_dataset": str(base_dataset) if base_dataset else None,
         "use_base_for_v1_fields": use_base,
@@ -243,10 +241,10 @@ def rebuild_stage_views_from_flat(
         if len(primary_frame) == 0:
             continue
 
-        # If using base, merge velocity columns from flat dataset
-        if use_base and source_root.exists():
-            flat_frame = _load_day_frame(source_root, trade_date)
-            day_frame = _merge_base_with_flat(primary_frame, flat_frame)
+        # Enrich flat frame with v1 fields from base dataset (market_base)
+        if use_base:
+            base_frame = _load_day_frame(base_root, trade_date)
+            day_frame = _merge_flat_with_base(primary_frame, base_frame)
         else:
             day_frame = primary_frame
 
