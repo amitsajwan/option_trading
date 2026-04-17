@@ -45,6 +45,14 @@
             "xgb_deep_v1", "lgbm_dart", "lgbm_large_v1", "logreg_balanced"
           ]
         }
+      },
+      "screen_fast": {
+        "target": "base_manifest",
+        "models_by_stage": {
+          "stage1": ["xgb_shallow", "xgb_balanced", "lgbm_fast", "lgbm_dart", "logreg_balanced"],
+          "stage2": ["xgb_shallow", "xgb_balanced", "lgbm_fast", "logreg_balanced"],
+          "stage3": ["xgb_shallow", "xgb_balanced", "lgbm_dart", "logreg_balanced"]
+        }
       }
     },
     "stage2_feature_families": {
@@ -79,9 +87,9 @@
   "lane_templates": [
     {
       "template_id": "velocity_screen",
-      "base_grid_path": "../research/staged_grid.velocity_screen_v1.json",
+      "base_grid_path": "../research/staged_grid.velocity_screen_fast_v1.json",
       "window_profiles": ["canonical_4y"],
-      "model_families": ["full_catalog"],
+      "model_families": ["screen_fast"],
       "stage2_feature_families": [
         "midday_time_aware",
         "velocity_v1",
