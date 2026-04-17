@@ -135,6 +135,18 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
             "vix_intraday_chg",
             "vix_regime",
         ),
+        # Regime flags — valid on ALL rows (daily regime, not time-of-day dependent).
+        # Present in snapshots_ml_flat_v2 at 0% missing rate.
+        # NOTE: for live inference via _project_view(snapshot), verify the snapshot
+        # block key that carries these fields before enabling in production.
+        "regime_context": (
+            "ctx_regime_atr_high",
+            "ctx_regime_atr_low",
+            "ctx_regime_trend_up",
+            "ctx_regime_trend_down",
+            "ctx_regime_expiry_near",
+            "ctx_is_high_vix_day",
+        ),
         "chain_aggregates": (
             "pcr",
             "pcr_change_5m",

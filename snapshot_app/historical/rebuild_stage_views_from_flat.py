@@ -15,6 +15,12 @@ except ImportError:  # pragma: no cover
     duckdb = None  # type: ignore[assignment]
 
 
+# Prefixes for morning-context and velocity columns.
+# These are computed once per trade_date on the ~11:30 snapshot and must be
+# forward-filled to later snapshots of the same day so that MIDDAY/LATE rows
+# can use them. Pre-11:30 rows remain null — forward-fill never backfills.
+_VELOCITY_FILL_PREFIXES: tuple[str, ...] = ("vel_", "ctx_am_")
+
 DEFAULT_SOURCE_DATASET = "snapshots_ml_flat_v2"
 DEFAULT_BASE_DATASET = "market_base"
 DEFAULT_STAGE1_DATASET = "stage1_entry_view_v2"
@@ -83,6 +89,30 @@ def _existing_output_dates(dataset_root: Path) -> set[str]:
         if path.stem:
             dates.add(str(path.stem))
     return dates
+
+
+def _forward_fill_velocity_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Forward-fill vel_* and ctx_am_* columns within a single trade_date frame.
+
+    These features are computed on the ~11:30 morning snapshot only.
+    Forward-fill propagates those values to later snapshots of the same day
+    so MIDDAY and LATE_SESSION rows can use them.
+
+    Rules:
+    - Frame must be sorted by timestamp ascending before calling.
+    - Only forward-fill (ffill). Never backfill.
+    - Pre-11:30 rows stay null — they precede the computation and must not see it.
+    - Never cross trade_date boundaries (caller is responsible: one day at a time).
+    """
+    fill_cols = [
+        c for c in frame.columns
+        if any(c.startswith(prefix) for prefix in _VELOCITY_FILL_PREFIXES)
+    ]
+    if not fill_cols:
+        return frame
+    frame = frame.copy()
+    frame[fill_cols] = frame[fill_cols].ffill()
+    return frame
 
 
 def _write_day_frame(frame: pd.DataFrame, dataset_root: Path, trade_date: str) -> int:
@@ -161,7 +191,14 @@ def _project_day_rows(
             stage_row["build_source"] = str(row.get("build_source") or build_source)
             stage_row["build_run_id"] = str(row.get("build_run_id") or build_run_id)
             projected[dataset_name].append(stage_row)
-    return {dataset_name: pd.DataFrame(items) for dataset_name, items in projected.items()}
+    result: dict[str, pd.DataFrame] = {}
+    for dataset_name, items in projected.items():
+        df = pd.DataFrame(items)
+        if len(df) and "timestamp" in df.columns:
+            df = df.sort_values("timestamp", kind="stable").reset_index(drop=True)
+            df = _forward_fill_velocity_columns(df)
+        result[dataset_name] = df
+    return result
 
 
 def rebuild_stage_views_from_flat(

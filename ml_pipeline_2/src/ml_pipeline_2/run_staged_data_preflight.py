@@ -166,6 +166,110 @@ def _resolve_feature_columns(base_columns: list[str], feature_set_name: str) -> 
     return columns
 
 
+def _check_feature_set_missing_rates(
+    dataset_root: Path,
+    feature_set_name: str,
+    resolved_columns: list[str],
+    *,
+    start_date: str,
+    end_date: str,
+    missing_rate_max: float = 0.35,
+) -> list[str]:
+    """Return error strings for any resolved column exceeding missing_rate_max."""
+    if not resolved_columns:
+        return []
+    counts = _non_null_counts(dataset_root, resolved_columns, start_date=start_date, end_date=end_date)
+    summary_row = _query_one(
+        f"SELECT COUNT(*) AS total FROM read_parquet('{_dataset_glob(dataset_root)}', "
+        f"hive_partitioning=false, union_by_name=true) WHERE trade_date BETWEEN ? AND ?",
+        [start_date, end_date],
+    )
+    total = int(summary_row.get("total") or 0)
+    if total == 0:
+        return []
+    errors = []
+    for col in resolved_columns:
+        nn = counts.get(col, 0)
+        missing_rate = 1.0 - (nn / total)
+        if missing_rate > missing_rate_max:
+            errors.append(
+                f"feature_set {feature_set_name}: column '{col}' has {missing_rate:.1%} missing "
+                f"(threshold {missing_rate_max:.0%})"
+            )
+    return errors
+
+
+def _check_velocity_session_validity(
+    dataset_root: Path,
+    *,
+    start_date: str,
+    end_date: str,
+) -> list[str]:
+    """Session-aware validity check for velocity/morning-context columns.
+
+    Contract:
+    - On MIDDAY/LATE_SESSION rows: vel_* and ctx_am_* must be mostly populated (<5% missing).
+    - On pre-MIDDAY rows: vel_* and ctx_am_* must remain null (>95% missing).
+
+    Violations indicate either missing forward-fill (first case) or temporal leakage (second case).
+    """
+    probe_col = "ctx_am_vwap_side"
+    glob = _dataset_glob(dataset_root)
+    all_cols_df = _query_df(
+        f"DESCRIBE SELECT * FROM read_parquet('{glob}', hive_partitioning=false, union_by_name=true)"
+    )
+    if probe_col not in all_cols_df.get("column_name", []).tolist():
+        return [f"velocity session check skipped: '{probe_col}' not in dataset columns"]
+
+    errors: list[str] = []
+
+    # MIDDAY + LATE_SESSION rows: velocity must be populated
+    midday_row = _query_one(
+        f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN {probe_col} IS NOT NULL THEN 1 ELSE 0 END) AS nn
+        FROM read_parquet('{glob}', hive_partitioning=false, union_by_name=true)
+        WHERE trade_date BETWEEN ? AND ?
+          AND session_phase IN ('MIDDAY', 'LATE_SESSION')
+        """,
+        [start_date, end_date],
+    )
+    midday_total = int(midday_row.get("total") or 0)
+    midday_nn = int(midday_row.get("nn") or 0)
+    if midday_total > 0:
+        midday_missing = 1.0 - (midday_nn / midday_total)
+        if midday_missing > 0.05:
+            errors.append(
+                f"velocity session check FAIL: '{probe_col}' is {midday_missing:.1%} missing on "
+                f"MIDDAY/LATE_SESSION rows (expected <5%%). Forward-fill may not have run."
+            )
+
+    # Pre-MIDDAY rows: velocity must stay null (no leakage)
+    early_row = _query_one(
+        f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN {probe_col} IS NOT NULL THEN 1 ELSE 0 END) AS nn
+        FROM read_parquet('{glob}', hive_partitioning=false, union_by_name=true)
+        WHERE trade_date BETWEEN ? AND ?
+          AND session_phase NOT IN ('MIDDAY', 'LATE_SESSION')
+        """,
+        [start_date, end_date],
+    )
+    early_total = int(early_row.get("total") or 0)
+    early_nn = int(early_row.get("nn") or 0)
+    if early_total > 0:
+        early_populated = early_nn / early_total
+        if early_populated > 0.05:
+            errors.append(
+                f"velocity session check FAIL: '{probe_col}' is populated on {early_populated:.1%} of "
+                f"pre-MIDDAY rows (expected <5%%). This is temporal leakage — backfill must not be used."
+            )
+
+    return errors
+
+
 def run_staged_data_preflight(manifest_path: Path) -> dict[str, Any]:
     resolved = load_and_resolve_manifest(Path(manifest_path), validate_paths=True)
     parquet_root = Path(resolved["inputs"]["parquet_root"]).resolve()
@@ -233,11 +337,21 @@ def run_staged_data_preflight(manifest_path: Path) -> dict[str, Any]:
         feature_sets_report: list[dict[str, Any]] = []
         for feature_set_name in resolved["catalog"]["feature_sets_by_stage"][stage_name]:
             resolved_columns = _resolve_feature_columns(numeric_columns, feature_set_name)
+            # Per-feature-set missing rate check: fail if any resolved column exceeds threshold.
+            fs_missing_errors = _check_feature_set_missing_rates(
+                dataset_root,
+                feature_set_name,
+                resolved_columns,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            errors.extend(fs_missing_errors)
             feature_sets_report.append(
                 {
                     "feature_set": feature_set_name,
                     "resolved_column_count": int(len(resolved_columns)),
                     "sample_columns": list(resolved_columns[:20]),
+                    "missing_rate_errors": fs_missing_errors,
                 }
             )
             if not resolved_columns:
@@ -251,6 +365,12 @@ def run_staged_data_preflight(manifest_path: Path) -> dict[str, Any]:
                 for column in resolved_columns
             ):
                 errors.append(f"{stage_name} feature set fo_velocity_v1 resolved without any velocity/enrichment columns in {dataset_name}")
+
+        # Session-aware velocity validity check for v2 views.
+        if view_id.endswith("_v2"):
+            errors.extend(
+                _check_velocity_session_validity(dataset_root, start_date=start_date, end_date=end_date)
+            )
 
         planned_view_present = [column for column in _PLANNED_V2_ENRICHMENT_COLUMNS if column in dataset_columns]
         planned_view_counts = _non_null_counts(dataset_root, planned_view_present, start_date=start_date, end_date=end_date)
