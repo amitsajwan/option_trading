@@ -174,9 +174,17 @@ def _check_feature_set_missing_rates(
     *,
     start_date: str,
     end_date: str,
-    missing_rate_max: float = 0.35,
+    missing_rate_max: float = 0.40,
 ) -> list[str]:
-    """Return error strings for any resolved column exceeding missing_rate_max."""
+    """Return error strings for any resolved column exceeding missing_rate_max.
+
+    Threshold is 0.40 (not the training preprocessor's 0.35) to accommodate the
+    structurally-expected pre-computation nulls: velocity/ctx_am columns are only
+    populated after the ~11:30 AM snapshot. On a 9:15–15:30 trading day that is
+    135/375 = 36% of rows — just above 0.35. The training preprocessor will drop
+    these columns from full-day stages (Stage 1) as intended; the preflight should
+    not fail on a known, correct null pattern.
+    """
     if not resolved_columns:
         return []
     counts = _non_null_counts(dataset_root, resolved_columns, start_date=start_date, end_date=end_date)
