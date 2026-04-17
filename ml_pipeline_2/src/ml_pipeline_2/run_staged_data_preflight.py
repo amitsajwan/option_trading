@@ -174,16 +174,23 @@ def _check_feature_set_missing_rates(
     *,
     start_date: str,
     end_date: str,
-    missing_rate_max: float = 0.40,
+    missing_rate_max: float = 0.50,
 ) -> list[str]:
     """Return error strings for any resolved column exceeding missing_rate_max.
 
-    Threshold is 0.40 (not the training preprocessor's 0.35) to accommodate the
-    structurally-expected pre-computation nulls: velocity/ctx_am columns are only
-    populated after the ~11:30 AM snapshot. On a 9:15–15:30 trading day that is
-    135/375 = 36% of rows — just above 0.35. The training preprocessor will drop
-    these columns from full-day stages (Stage 1) as intended; the preflight should
-    not fail on a known, correct null pattern.
+    Threshold is 0.50 (not the training preprocessor's 0.35) because several
+    column families are structurally sparse and the training preprocessor handles
+    column-level dropping correctly:
+
+    - vel_*/ctx_am_* columns: null before the ~11:30 AM computation snapshot.
+      On a 9:15–15:30 day that is 135/375 = 36% of rows — the preprocessor
+      drops these from full-day Stage 1 training as intended.
+    - bars_since_or_break_up/down: null until an opening-range breakout occurs
+      in that direction (not every session), naturally 45–50% missing.
+
+    The specific velocity temporal check (_check_velocity_session_validity)
+    catches the real forward-fill failure (100% missing in post-computation rows).
+    This threshold catches only catastrophically broken columns (>50% missing).
     """
     if not resolved_columns:
         return []
