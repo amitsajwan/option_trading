@@ -208,63 +208,85 @@ def _check_velocity_session_validity(
     """Session-aware validity check for velocity/morning-context columns.
 
     Contract:
-    - On MIDDAY/LATE_SESSION rows: vel_* and ctx_am_* must be mostly populated (<5% missing).
-    - On pre-MIDDAY rows: vel_* and ctx_am_* must remain null (>95% missing).
+    - On post-computation rows (minutes_since_open >= 135, i.e. >= ~11:30 AM on a 9:15 open):
+        vel_* and ctx_am_* must be mostly populated (<5% missing).
+    - On pre-computation rows (minutes_since_open < 135):
+        vel_* and ctx_am_* must remain null (>95% missing).
 
-    Violations indicate either missing forward-fill (first case) or temporal leakage (second case).
+    Uses minutes_since_open threshold rather than session_phase names because the
+    parquet stores raw values (ACTIVE, PRE_CLOSE, DISCOVERY, CLOSED) that do not
+    match the training pipeline bucket labels (MIDDAY, LATE_SESSION).
+
+    Violations indicate either missing forward-fill (first case) or temporal leakage
+    (second case — backfill must never be applied).
     """
+    # ~11:30 AM on a 9:15 AM market open = 135 minutes since open.
+    # Velocity/morning-context features are computed at the ~11:30 snapshot.
+    # Forward-fill propagates them to all later snapshots of the same trade_date.
+    POST_COMPUTATION_MINUTES = 135
+
     probe_col = "ctx_am_vwap_side"
     glob = _dataset_glob(dataset_root)
     all_cols_df = _query_df(
         f"DESCRIBE SELECT * FROM read_parquet('{glob}', hive_partitioning=false, union_by_name=true)"
     )
-    if probe_col not in all_cols_df.get("column_name", []).tolist():
+    col_names = all_cols_df.get("column_name", []).tolist() if "column_name" in all_cols_df.columns else []
+    if probe_col not in col_names:
         return [f"velocity session check skipped: '{probe_col}' not in dataset columns"]
+    if "minutes_since_open" not in col_names:
+        return [f"velocity session check skipped: 'minutes_since_open' not in dataset columns"]
 
     errors: list[str] = []
 
-    # MIDDAY + LATE_SESSION rows: velocity must be populated
-    midday_row = _query_one(
+    # Post-computation rows (>= ~11:30): velocity must be populated
+    post_row = _query_one(
         f"""
         SELECT
             COUNT(*) AS total,
             SUM(CASE WHEN {probe_col} IS NOT NULL THEN 1 ELSE 0 END) AS nn
         FROM read_parquet('{glob}', hive_partitioning=false, union_by_name=true)
         WHERE trade_date BETWEEN ? AND ?
-          AND session_phase IN ('MIDDAY', 'LATE_SESSION')
+          AND minutes_since_open >= {POST_COMPUTATION_MINUTES}
         """,
         [start_date, end_date],
     )
-    midday_total = int(midday_row.get("total") or 0)
-    midday_nn = int(midday_row.get("nn") or 0)
-    if midday_total > 0:
-        midday_missing = 1.0 - (midday_nn / midday_total)
-        if midday_missing > 0.05:
+    post_total = int(post_row.get("total") or 0)
+    post_nn = int(post_row.get("nn") or 0)
+    if post_total > 0:
+        post_missing = 1.0 - (post_nn / post_total)
+        if post_missing > 0.05:
             errors.append(
-                f"velocity session check FAIL: '{probe_col}' is {midday_missing:.1%} missing on "
-                f"MIDDAY/LATE_SESSION rows (expected <5%%). Forward-fill may not have run."
+                f"velocity session check FAIL: '{probe_col}' is {post_missing:.1%} missing on "
+                f"post-computation rows (minutes_since_open >= {POST_COMPUTATION_MINUTES}, expected <5%). "
+                f"Forward-fill may not have run. ({post_nn}/{post_total} populated)"
             )
+    else:
+        errors.append(
+            f"velocity session check WARN: no post-computation rows found "
+            f"(minutes_since_open >= {POST_COMPUTATION_MINUTES}) in date range {start_date}..{end_date}"
+        )
 
-    # Pre-MIDDAY rows: velocity must stay null (no leakage)
-    early_row = _query_one(
+    # Pre-computation rows (< ~11:30): velocity must stay null (no temporal leakage)
+    pre_row = _query_one(
         f"""
         SELECT
             COUNT(*) AS total,
             SUM(CASE WHEN {probe_col} IS NOT NULL THEN 1 ELSE 0 END) AS nn
         FROM read_parquet('{glob}', hive_partitioning=false, union_by_name=true)
         WHERE trade_date BETWEEN ? AND ?
-          AND session_phase NOT IN ('MIDDAY', 'LATE_SESSION')
+          AND minutes_since_open < {POST_COMPUTATION_MINUTES}
         """,
         [start_date, end_date],
     )
-    early_total = int(early_row.get("total") or 0)
-    early_nn = int(early_row.get("nn") or 0)
-    if early_total > 0:
-        early_populated = early_nn / early_total
-        if early_populated > 0.05:
+    pre_total = int(pre_row.get("total") or 0)
+    pre_nn = int(pre_row.get("nn") or 0)
+    if pre_total > 0:
+        pre_populated = pre_nn / pre_total
+        if pre_populated > 0.05:
             errors.append(
-                f"velocity session check FAIL: '{probe_col}' is populated on {early_populated:.1%} of "
-                f"pre-MIDDAY rows (expected <5%%). This is temporal leakage — backfill must not be used."
+                f"velocity session check FAIL: '{probe_col}' is populated on {pre_populated:.1%} of "
+                f"pre-computation rows (minutes_since_open < {POST_COMPUTATION_MINUTES}, expected <5%). "
+                f"This is temporal leakage — backfill must not be used. ({pre_nn}/{pre_total} populated)"
             )
 
     return errors
