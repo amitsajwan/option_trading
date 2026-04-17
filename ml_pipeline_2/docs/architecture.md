@@ -49,6 +49,10 @@ Primary entrypoints:
 - `src/ml_pipeline_2/run_research.py`
 - `src/ml_pipeline_2/run_staged_release.py`
 - `src/ml_pipeline_2/run_publish_model.py`
+- `src/ml_pipeline_2/run_staged_grid.py`
+- `src/ml_pipeline_2/run_training_campaign.py`
+- `src/ml_pipeline_2/run_training_factory.py`
+- `src/ml_pipeline_2/run_staged_data_preflight.py`
 
 ## Data Contract
 
@@ -61,6 +65,13 @@ The supported staged flow expects local parquet datasets under `.data/ml_pipelin
 - `stage3_recipe_view`
 
 The staged manifest binds those datasets through view IDs, labeler IDs, trainer IDs, policy IDs, runtime gate IDs, windows, and hard gates.
+
+Current staged manifests may also include stage-scoped controls such as:
+
+- `training.stage1_session_filter`
+- `training.stage2_session_filter`
+- `training.stage2_label_filter`
+- `training.stage2_target_redesign`
 
 Direct `gs://` manifest input paths are intentionally unsupported. Inputs are synced locally first, then trained.
 
@@ -174,6 +185,8 @@ A successful staged release produces two artifact layers.
 
 Research-run artifacts under `ml_pipeline_2/artifacts/research/<run_id>`:
 - resolved manifest
+- `run_status.json`
+- `state.jsonl`
 - staged model packages
 - training reports
 - `summary.json`
@@ -209,6 +222,7 @@ Current design rules for the package:
 - direct dependencies on the old `ml_pipeline` package are not allowed
 - staged publish is gated by holdout and combined hard-gate checks
 - staged research may complete early with `completion_mode=stage2_signal_check_failed|stage1_cv_gate_failed|stage2_cv_gate_failed`; those summaries still write `publish_assessment=HOLD`, `cv_prechecks`, and partial `stage_artifacts`
+- setup work is treated as first-class run state; staged runs emit `prep_start` / `prep_done` events for support load, oracle build, and stage preparation before stage training begins
 - runtime handoff uses run ID and model group, not ad hoc local model paths
 - if `runtime.block_expiry=true`, staged training filters expiry-day rows before oracle construction and stage labeling so training and runtime semantics stay aligned
 

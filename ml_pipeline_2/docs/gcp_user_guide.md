@@ -1,63 +1,244 @@
 # ml_pipeline_2 GCP and User Guide
 
-This is the detailed module guide for `ml_pipeline_2` on local Ubuntu and disposable GCP training VMs.
+This is the package-level operator guide for `ml_pipeline_2`.
 
-The primary operator entrypoint for this workflow is `docs/runbooks/TRAINING_RELEASE_RUNBOOK.md`.
-Use this file when you need package-specific detail behind that runbook.
+Use it for:
 
-It covers:
-- local Ubuntu execution
-- disposable GCP training-VM execution
-- staged training, publish, and runtime handoff
+- local or GCP research execution
+- staged single-run, grid, campaign, and factory entrypoints
+- preflight and failure checks
+- publish and handoff expectations
 
-It does not cover:
-- raw historical snapshot rebuild from archive
-- first-time GCP bootstrap
-- runtime VM deployment or cutover
+Use repo-level runbooks for VM bootstrap, parquet rebuild, and deployment outside this package.
 
-For those external lanes, use:
+## What This Package Owns
+
+`ml_pipeline_2` trains and evaluates staged models against local parquet inputs and can publish a runtime bundle for the `ml_pure` strategy lane.
+
+Primary entrypoints:
+
+- `python -m ml_pipeline_2.run_research`
+- `python -m ml_pipeline_2.run_staged_release`
+- `python -m ml_pipeline_2.run_staged_grid`
+- `python -m ml_pipeline_2.run_training_campaign`
+- `python -m ml_pipeline_2.run_training_factory`
+- `python -m ml_pipeline_2.run_staged_data_preflight`
+- `python -m ml_pipeline_2.run_publish_model`
+
+## What This Guide Does Not Cover
+
+- first-time GCP project bootstrap
+- raw archive upload
+- full historical snapshot rebuild policy
+- runtime VM cutover
+
+For those, use:
+
 - `docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`
 - `docs/runbooks/TRAINING_RELEASE_RUNBOOK.md`
 - `docs/runbooks/GCP_DEPLOYMENT.md`
 
-## Supported Operator Path
-
-The supported path for this branch is the staged 1 / 2 / 3 release lane:
-
-1. make sure staged parquet inputs already exist
-2. sync them locally if needed
-3. validate `configs/research/staged_dual_recipe.default.json`
-4. run `ml_pipeline_2.run_staged_release`
-5. inspect `summary.json` and publish outputs
-6. apply `release/ml_pure_runtime.env`
-7. continue with runtime deployment outside this package
-
-Retired paths such as open-search rebaseline and the removed legacy `ml_pipeline` package are not part of the supported operator flow.
-
-On the current branch there is no separate "champion selection" operator step for ML releases.
-The staged flow writes `summary.json` with `publish_assessment.decision = PUBLISH|HOLD`.
-`run_staged_release` always writes `release/assessment.json` and `release/release_summary.json`, and publishes the runtime bundle only when that staged run is publishable.
-
-## Required Inputs
+## Required Local Inputs
 
 Local cache root:
+
 - `.data/ml_pipeline`
 
-Required datasets:
-- `.data/ml_pipeline/parquet_data/snapshots/year=YYYY/data.parquet`
-- `.data/ml_pipeline/parquet_data/snapshots_ml_flat/year=YYYY/data.parquet`
-- `.data/ml_pipeline/parquet_data/stage1_entry_view/year=YYYY/data.parquet`
-- `.data/ml_pipeline/parquet_data/stage2_direction_view/year=YYYY/data.parquet`
-- `.data/ml_pipeline/parquet_data/stage3_recipe_view/year=YYYY/data.parquet`
+Expected staged parquet root:
 
-Supported manifest:
-- `ml_pipeline_2/configs/research/staged_dual_recipe.default.json`
+- `.data/ml_pipeline/parquet_data`
 
-## Lane A: Local Ubuntu or Existing GCP VM
+Typical datasets:
 
-Use this lane when you already have a machine and only need to run the training package itself.
+- `snapshots`
+- `snapshots_ml_flat`
+- `snapshots_ml_flat_v2`
+- `stage1_entry_view`
+- `stage1_entry_view_v2`
+- `stage2_direction_view`
+- `stage2_direction_view_v2`
+- `stage3_recipe_view`
+- `stage3_recipe_view_v2`
 
-### 1. Clone and Install
+Candidate datasets such as `*_v3_candidate` are valid research inputs when the manifest points to the matching view IDs and the staged registries support them.
+
+Direct `gs://` manifest input paths are intentionally unsupported. Sync or build inputs locally first.
+
+## Supported Workflow Shapes
+
+### 1. Single Research Run
+
+Use when you want one resolved staged manifest executed into one run root.
+
+```bash
+python -m ml_pipeline_2.run_research \
+  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json
+```
+
+This writes under:
+
+- `ml_pipeline_2/artifacts/research/<run_id>/`
+
+### 2. Staged Release
+
+Use when you want training plus publish assessment and optional published bundle output.
+
+```bash
+python -m ml_pipeline_2.run_staged_release \
+  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json \
+  --model-group banknifty_futures/h15_tp_auto \
+  --profile-id openfe_v9_dual \
+  --model-bucket-url gs://<model-bucket>/published_models
+```
+
+### 3. Research Grid
+
+Use when you want one base staged manifest expanded into multiple comparable runs.
+
+```bash
+python -m ml_pipeline_2.run_staged_grid \
+  --config ml_pipeline_2/configs/research/staged_grid.prod_v1.json \
+  --model-group banknifty_futures/h15_tp_auto \
+  --profile-id openfe_v9_dual
+```
+
+Grid outputs live under:
+
+- `ml_pipeline_2/artifacts/research/<grid_run_id>/`
+
+with:
+
+- `grid_status.json`
+- `grid_summary.json`
+- `manifests/`
+- `runs/`
+
+### 4. Campaign
+
+Use when you want a higher-level lane generator over one or more grid/research templates.
+
+```bash
+python -m ml_pipeline_2.run_training_campaign \
+  --spec ml_pipeline_2/configs/campaign/velocity_screen_campaign_v1.json
+```
+
+Campaign outputs live under:
+
+- `ml_pipeline_2/artifacts/campaign_runs/<campaign_id>/`
+
+with lane-level roots containing:
+
+- `workflow_status.json`
+- `lanes/<lane_id>/runner_output/...`
+
+### 5. Factory
+
+Use when you want a multi-spec orchestration layer above campaigns.
+
+```bash
+python -m ml_pipeline_2.run_training_factory \
+  --spec <factory_spec.json>
+```
+
+## Validate Before Running
+
+### Manifest Validation
+
+```bash
+python -m ml_pipeline_2.run_research \
+  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json \
+  --validate-only
+```
+
+`--validate-only` checks manifest resolution and runtime dependency availability.
+It does not prove that the available date window is large enough to produce walk-forward folds for the chosen CV geometry.
+
+This matters especially for:
+
+- narrow historical slices
+- session-filtered Stage 1 or Stage 2 runs
+- direction-only or other heavily filtered Stage 2 research lanes
+
+### Data Preflight
+
+Use preflight when you need dataset/view parity, feature coverage, and temporal-validity checks before a real run:
+
+```bash
+python -m ml_pipeline_2.run_staged_data_preflight \
+  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json
+```
+
+The current preflight checks:
+
+- support/view key parity
+- feature-set resolution
+- Stage 2 temporal validity for `ctx_am_*` and `vel_*`
+- missing-rate enforcement for resolved feature columns
+
+The velocity temporal-validity check is intended for Stage 2-style views, not as a blanket requirement for every staged dataset.
+
+## Current Training Knobs That Matter
+
+The manifest contract now supports several stage-scoped filters and redesign controls that older docs did not mention:
+
+- `training.stage1_session_filter`
+- `training.stage2_session_filter`
+- `training.stage2_label_filter`
+- `training.stage2_target_redesign`
+
+These are validated in `contracts/manifests.py` and applied inside `staged/pipeline.py`.
+
+Practical implication:
+
+- filtered Stage 1 or Stage 2 lanes can be valid research tools
+- they also reduce the available day count and can break walk-forward fold construction if CV windows stay too large
+
+If a filtered run fails with `no walk-forward folds produced`, the fix is usually to shrink the CV geometry for that specific manifest rather than widening the operator guide or bypassing validation.
+
+## Current Stage 2 Variants
+
+The codebase currently supports more than one Stage 2 problem shape.
+
+Examples in checked-in configs include:
+
+- ordinary direction classification
+- direction-or-no-trade labeling
+- target-redesigned and high-conviction Stage 2 lanes
+- session-filtered MIDDAY and MIDDAY+LATE_SESSION lanes
+
+Do not assume every Stage 2 run is the same direction-only baseline.
+Read the manifest being launched.
+
+## Long-Running Run Observability
+
+Every long run should be read from persisted status artifacts, not from shell assumptions.
+
+Single-run artifacts:
+
+- `run_status.json`
+- `state.jsonl`
+- `summary.json`
+
+Grid artifacts:
+
+- `grid_status.json`
+- `grid_summary.json`
+
+Campaign artifacts:
+
+- `workflow_status.json`
+- lane `runner_output/...` status files
+
+Current staged runs also emit setup progress events before stage training begins.
+Look for `prep_start` and `prep_done` events in `state.jsonl` for:
+
+- `support_load`
+- `oracle_build`
+- `stage_prepare`
+
+This matters because a run can spend substantial time in setup before the first `stage_start` event.
+
+## Typical Local / Existing VM Setup
 
 ```bash
 git clone <repo-url>
@@ -68,7 +249,7 @@ python -m pip install --upgrade pip
 python -m pip install -e ./ml_pipeline_2
 ```
 
-Windows PowerShell equivalent:
+Windows PowerShell:
 
 ```powershell
 py -3.11 -m venv .venv
@@ -77,351 +258,85 @@ python -m pip install --upgrade pip
 python -m pip install -e .\ml_pipeline_2
 ```
 
-### 2. Sync Or Build Inputs
+## Disposable GCP VM Notes
 
-If final staged parquet already exists in GCS, sync it into the local cache root:
+Use `tmux` for long runs on a disposable VM.
 
-```bash
-mkdir -p .data/ml_pipeline/parquet_data
-gcloud storage rsync \
-  "gs://<snapshot-data-bucket>/parquet_data" \
-  ".data/ml_pipeline/parquet_data" \
-  --recursive
-```
+Typical flow:
 
-If local `market_base` already exists but the staged derived datasets are missing, rebuild them locally:
-
-```bash
-python -m snapshot_app.historical.snapshot_batch_runner \
-  --build-stage derived \
-  --validate-ml-flat-contract
-```
-
-There is no repo-wide default training bucket. The old `gs://option-trading-ml/data` example is retired.
-
-Direct `gs://` manifest paths are intentionally unsupported. Sync or build the datasets locally first.
-
-### 3. Validate the Manifest
-
-```bash
-python -m ml_pipeline_2.run_research \
-  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json \
-  --validate-only
-```
-
-`--validate-only` checks manifest resolution and runtime dependencies, including staged model backend availability.
-It does not prove that the available parquet window is large enough to produce walk-forward folds for the chosen manifest.
-If you only built a narrow historical slice, use a matching research manifest instead of `staged_dual_recipe.default.json`.
-
-Optional resolved-config print:
-
-```bash
-ml-pipeline-research \
-  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json \
-  --print-resolved-config
-```
-
-### 4. Run Research Only
-
-```bash
-python -m ml_pipeline_2.run_research \
-  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json
-```
-
-This writes a run directory under:
-
-- `ml_pipeline_2/artifacts/research/staged_dual_recipe_<timestamp>/`
-
-### 5. Run the Supported Staged Release Flow
-
-```bash
-python -m ml_pipeline_2.run_staged_release \
-  --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json \
-  --model-group banknifty_futures/h15_tp_auto \
-  --profile-id openfe_v9_dual \
-  --model-bucket-url gs://<model-bucket>/published_models
-```
-
-This flow:
-1. validates the manifest
-2. runs the Stage 2 signal precheck on the labeled `full_model` window
-3. trains Stage 1 and applies the Stage 1 CV precheck
-4. trains Stage 2 and applies the Stage 2 CV precheck
-5. trains Stage 3 and selects policy on `research_valid` only if the earlier prechecks passed
-6. scores `final_holdout` once
-7. applies hard gates and computes `publish_assessment`
-8. writes `release/assessment.json` and `release/release_summary.json`
-9. publishes the staged runtime bundle and writes `release/ml_pure_runtime.env` only on `PUBLISH`
-
-Additional checked-in research manifests:
-
-- `ml_pipeline_2/configs/research/staged_dual_recipe.deep_search.json`
-  - broader Stage 1 feature-set and model search
-  - use this first when the default manifest holds at Stage 1 and you want a deeper search before changing production thresholds
-- `ml_pipeline_2/configs/research/staged_dual_recipe.stage1_hpo.json`
-  - keeps the staged release flow unchanged
-  - adds Stage 1-only random-search HPO over the requested base models
-  - use this when you want actual parameter tuning rather than only more fixed presets
-- `ml_pipeline_2/configs/research/staged_dual_recipe.stage2_hpo.json`
-  - keeps the broader Stage 1 search from `deep_search`
-  - adds Stage 2-only random-search HPO over the requested base models
-  - use this when `deep_search` already clears Stage 1 and then holds at `stage2_cv`
-- `ml_pipeline_2/configs/research/staged_dual_recipe.stage2_edge_filter.json`
-  - keeps the broad `deep_search` search space
-  - filters Stage 2 labels by minimum CE/PE return edge after cost before Stage 2 signal check and CV
-  - use this when Stage 2 HPO does not materially improve the Stage 2 gate metrics
-- `ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnostic.json`
-  - keeps the default search space
-  - relaxes only the Stage 1 hard gates slightly for diagnosis
-  - use this only to learn whether the default Stage 1 gates are narrowly too strict
-
-For managed VM wrapper runs, prefer these research-only commands so the runtime is never changed during investigation:
-
-```bash
-APPLY_RUNTIME_HANDOFF=0 \
-PUBLISH_RUNTIME_CONFIG=0 \
-MODEL_GROUP="banknifty_futures/h15_tp_auto_hpo" \
-STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_hpo.json" \
-bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-hpo.log
-```
-
-```bash
-APPLY_RUNTIME_HANDOFF=0 \
-PUBLISH_RUNTIME_CONFIG=0 \
-MODEL_GROUP="banknifty_futures/h15_tp_auto_deep" \
-STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.deep_search.json" \
-bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-deep.log
-```
-
-```bash
-APPLY_RUNTIME_HANDOFF=0 \
-PUBLISH_RUNTIME_CONFIG=0 \
-MODEL_GROUP="banknifty_futures/h15_tp_auto_stage2_hpo" \
-STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage2_hpo.json" \
-bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-stage2-hpo.log
-```
-
-```bash
-APPLY_RUNTIME_HANDOFF=0 \
-PUBLISH_RUNTIME_CONFIG=0 \
-MODEL_GROUP="banknifty_futures/h15_tp_auto_stage2_edge" \
-STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage2_edge_filter.json" \
-bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-stage2-edge.log
-```
-
-```bash
-APPLY_RUNTIME_HANDOFF=0 \
-PUBLISH_RUNTIME_CONFIG=0 \
-MODEL_GROUP="banknifty_futures/h15_tp_auto_diag" \
-STAGED_CONFIG="ml_pipeline_2/configs/research/staged_dual_recipe.stage1_diagnostic.json" \
-bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-diag.log
-```
-
-For a single research sweep across the baseline plus the Stage 2 scenario lanes, use the grid runner:
-
-```bash
-python -m ml_pipeline_2.run_staged_grid \
-  --config ml_pipeline_2/configs/research/staged_grid.prod_v1.json \
-  --model-group banknifty_futures/h15_tp_auto \
-  --profile-id openfe_v9_dual
-```
-
-That command is research-only by default. It does not publish runtime config or write a live handoff file. Instead it writes one `grid_summary.json` plus generated per-run manifests under a grid output root in `ml_pipeline_2/artifacts/research`.
-Use `grid_summary.json` to decide whether the best candidate is publishable, whether Stage 2 HPO is close enough to justify, or whether the next change should be Stage 2 label/view redesign.
-The checked-in `staged_grid.prod_v1.json` uses `grid.max_parallel_runs=2`. With the current deep-search base manifest at `training.runtime.model_n_jobs=8`, that is the intended shape for a 16-core CPU VM.
-
-The grid runner is not tied to BankNifty specifically. To use it for another instrument or a similar staged research problem:
-
-1. prepare an instrument-specific staged base manifest with the correct parquet root, windows, and stage defaults
-2. point `inputs.base_manifest_path` in the grid config to that base manifest
-3. keep the same grid runner command shape and only change `--model-group` to the new instrument group
-
-The grid config stays focused on comparative scenario lanes. Instrument-specific training semantics stay in the base staged manifest so the pipeline remains loosely coupled.
-
-### 6. Publish an Existing Completed Run
-
-```bash
-python -m ml_pipeline_2.run_publish_model \
-  --run-dir ml_pipeline_2/artifacts/research/<run_id> \
-  --model-group banknifty_futures/h15_tp_auto \
-  --profile-id openfe_v9_dual
-```
-
-Use this when training already finished and you only need publish.
-
-## Lane B: Disposable GCP Training VM
-
-Use this lane when the repo's `ops/gcp` helpers manage the machine lifecycle for you.
-
-### Preconditions
-
-- base GCP bootstrap is already complete
-- parquet data already exists
-- `ops/gcp/operator.env` is current
-- the intended repo ref is available
-
-Values to verify in `ops/gcp/operator.env`:
-- `PROJECT_ID`
-- `ZONE`
-- `TRAINING_VM_NAME`
-- `DATA_SYNC_SOURCE`
-- `MODEL_GROUP`
-- `PROFILE_ID`
-- `STAGED_CONFIG`
-- `MODEL_BUCKET_URL`
-- `RUNTIME_CONFIG_BUCKET_URL`
-
-`DATA_SYNC_SOURCE` must materialize local `.data/ml_pipeline/*` on the VM. It is not a built-in shared bucket name.
-
-### 1. Create the VM
-
-```bash
-./ops/gcp/create_training_vm.sh
-```
-
-### 2. Connect
-
-```bash
-gcloud compute ssh "${TRAINING_VM_NAME}" --zone "${ZONE}"
-```
-
-On the VM:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y tmux
-cd /opt/option_trading
-git fetch --all --tags
-git checkout "${REPO_REF}"
-git pull --ff-only
-```
-
-### 3. Run the Training Pipeline Script
-
-```bash
-tmux new -s training
-```
-
-Inside the `tmux` session:
-
-```bash
-bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release.log
-```
-
-Run it from `/opt/option_trading`, or export `REPO_ROOT=/opt/option_trading` before invoking it.
-
-That script is the managed wrapper around the staged release lane. It installs the package, runs `ml_pipeline_2.run_staged_release`, applies the generated ML runtime env, and republishes runtime config.
-
-For GCP VM execution, prefer `tmux` for every long training run.
-If the SSH session drops while the command is running in a plain foreground shell, the staged release usually stops with that shell.
+1. create or start the VM outside this package
+2. sync repo and parquet inputs
+3. activate the repo venv
+4. run the desired `ml_pipeline_2` CLI inside `tmux`
+5. inspect persisted status files, not only stdout
 
 Useful commands:
 
 ```bash
+tmux new -s training
 tmux attach -t training
 tmux ls
-tail -f /opt/option_trading/training-release.log
-```
-
-### 4. Inspect Results
-
-Model bucket:
-
-```bash
-gcloud storage ls "${MODEL_BUCKET_URL}"
-```
-
-Runtime config bucket:
-
-```bash
-gcloud storage ls "${RUNTIME_CONFIG_BUCKET_URL}"
-```
-
-Latest local env handoff on the VM:
-
-```bash
-find /opt/option_trading/ml_pipeline_2/artifacts/research -path "*/release/ml_pure_runtime.env" | sort | tail -n 1
-```
-
-### 5. Delete the VM When Finished
-
-```bash
-./ops/gcp/delete_training_vm.sh
 ```
 
 ## What a Successful Staged Release Produces
 
 Within the run directory:
+
 - `summary.json`
 - `resolved_config.json`
-- `stages/stage1/model.joblib`
-- `stages/stage2/model.joblib`
-- `stages/stage3/recipes/<recipe_id>/model.joblib`
 - stage training reports
-- `release/release_summary.json`
+- staged model packages
 - `release/assessment.json`
+- `release/release_summary.json`
 - `release/ml_pure_runtime.env` on `PUBLISH` only
 
 Within the published model group:
+
 - `model/model.joblib`
 - `config/profiles/<profile_id>/threshold_report.json`
 - `config/profiles/<profile_id>/training_report.json`
 
-## Champion Terminology
+## Current Release Decision Path
 
-Older repo history used "champion" language for the removed `ml_pipeline` and open-search flows.
+Older repo history used "champion" language for removed legacy flows.
+That is not the current release contract for the supported staged lane.
 
-That is not the release contract for the supported staged lane.
+Current decision path:
 
-For staged `ml_pipeline_2`, the decision path is:
+1. resolve and validate the staged manifest
+2. run data and stage preparation
+3. run the Stage 2 signal precheck
+4. train Stage 1 and apply Stage 1 CV gates
+5. train Stage 2 and apply Stage 2 CV gates
+6. train Stage 3 and score holdout when earlier gates pass
+7. compute `publish_assessment`
+8. write release artifacts either way
+9. publish the runtime bundle only on `PUBLISH`
 
-1. run the Stage 2 signal precheck and Stage 1 / 2 CV prechecks
-2. if those pass, train all three stages and score `final_holdout`
-3. compute `publish_assessment`
-4. write `release/assessment.json` and `release/release_summary.json`
-5. if `publish_assessment.decision=PUBLISH`, write published artifacts and `release/ml_pure_runtime.env`
-6. if `publish_assessment.decision=HOLD`, do not publish and do not write `release/ml_pure_runtime.env`
+Common `completion_mode` values include:
 
-Use `summary.json`, `release/assessment.json`, and `release/release_summary.json` as the current release records, not a champion registry.
-
-`summary.json` can complete in one of four modes:
 - `completed`
 - `stage2_signal_check_failed`
 - `stage1_cv_gate_failed`
 - `stage2_cv_gate_failed`
 
-Every `summary.json` includes `completion_mode` and `cv_prechecks`.
-Early-HOLD summaries intentionally omit downstream sections that were not computed, such as `holdout_reports`, `policy_reports`, and `gates`.
-
-## Runtime Handoff
-
-The staged release writes:
-
-- `STRATEGY_ENGINE=ml_pure`
-- `ML_PURE_RUN_ID=<published_run_id>`
-- `ML_PURE_MODEL_GROUP=<model_group>`
-
-Apply it with:
-
-```bash
-export RELEASE_ENV_PATH=ml_pipeline_2/artifacts/research/<run_id>/release/ml_pure_runtime.env
-./ops/gcp/apply_ml_pure_release.sh
-```
-
-Live runtime deployment still happens outside this package.
-
 ## Failure Signals
 
 Stop and investigate if:
+
 - manifest validation fails
-- staged release returns `HOLD`
-- `summary.json` is missing `publish_assessment`, `completion_mode`, or `cv_prechecks`
-- the model bucket does not receive published artifacts
-- `release/assessment.json` or `release/release_summary.json` is missing
-- `publish_assessment.decision=PUBLISH` but the runtime handoff file is missing or incomplete
+- preflight fails
+- the run emits `prep_start` but never reaches matching `prep_done` for a long interval
+- the run root remains at bare `job_start` with no setup progress on newer code
+- `summary.json` is missing after the run reports completion
+- a filtered run fails with `no walk-forward folds produced`
+- publish assessment is `HOLD` when you expected a release
 
 ## Related Docs
 
-- `ml_pipeline_2/docs/ubuntu_gcp_runbook.md`
+- [README.md](README.md)
+- [architecture.md](architecture.md)
+- [detailed_design.md](detailed_design.md)
+- [execution_architecture.md](execution_architecture.md)
 - `docs/runbooks/README.md`
 - `docs/runbooks/GCP_DEPLOYMENT.md`

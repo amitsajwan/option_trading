@@ -2,29 +2,27 @@
 
 This directory contains the maintained module documentation for `ml_pipeline_2`.
 
-Use this index to choose the right document category first.
+The current docs set is reference-first. Active execution state should come from:
 
-## Active
+- the checked-in config being run
+- the run root under `ml_pipeline_2/artifacts/...`
+- persisted status artifacts such as `run_status.json`, `grid_status.json`, `state.jsonl`, and `summary.json`
 
-- [intraday_profit_execution_plan.md](intraday_profit_execution_plan.md)
-  - use this for current status, active run roots, story tracking, and go/no-go decisions
-- [midday_recovery_handover.md](midday_recovery_handover.md)
-  - use this first when a new engineer takes over the current staged recovery line
+There is no single "active control document" in this folder anymore.
 
-Only these two docs should contain active next-step instructions.
-
-## Reference
+## Current Reference Docs
 
 - [architecture.md](architecture.md)
-  - package boundary, staged flow, artifact model, and design rules
+  - package boundary, staged flow, artifact model, and current design rules
 - [detailed_design.md](detailed_design.md)
   - file-by-file design map for `src/ml_pipeline_2`
 - [execution_architecture.md](execution_architecture.md)
-  - supplemental execution-path design notes
+  - execution-state, reuse, and long-running job architecture
 - [gcp_user_guide.md](gcp_user_guide.md)
-  - module-level training, release, and publish handoff notes
-- [ubuntu_gcp_runbook.md](ubuntu_gcp_runbook.md)
-  - Ubuntu/GCP environment notes
+  - operator guide for local/GCP research, grid, campaign, publish, and failure handling
+
+## Current Analysis / Tooling Docs
+
 - [stage12_counterfactual.md](stage12_counterfactual.md)
   - reference note for the Stage 1+2 counterfactual diagnostic
 - [stage12_confidence_execution.md](stage12_confidence_execution.md)
@@ -32,22 +30,30 @@ Only these two docs should contain active next-step instructions.
 - [stage12_confidence_execution_policy.md](stage12_confidence_execution_policy.md)
   - reference note for confidence execution policy analysis
 
-Supported staged manifest:
+## Current Code Entry Points
 
-- [`../configs/research/staged_dual_recipe.default.json`](../configs/research/staged_dual_recipe.default.json)
-- [`../configs/research/staged_grid.prod_v1.json`](../configs/research/staged_grid.prod_v1.json)
-  - production-oriented research grid for the staged pipeline
-  - base-manifest driven, so the same grid runner can be reused for other instruments by swapping `inputs.base_manifest_path`
+Primary CLIs owned by this package:
 
-Repo-level documents that remain outside this module because they are cross-system:
+- `python -m ml_pipeline_2.run_research`
+- `python -m ml_pipeline_2.run_staged_release`
+- `python -m ml_pipeline_2.run_staged_grid`
+- `python -m ml_pipeline_2.run_training_campaign`
+- `python -m ml_pipeline_2.run_training_factory`
+- `python -m ml_pipeline_2.run_staged_data_preflight`
+- `python -m ml_pipeline_2.run_publish_model`
 
-- [`../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md`](../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md)
-- [`../../docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`](../../docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
-- [`../../docs/runbooks/GCP_DEPLOYMENT.md`](../../docs/runbooks/GCP_DEPLOYMENT.md)
-- [`../../docs/runbooks/README.md`](../../docs/runbooks/README.md)
+Key checked-in config families:
 
-## Historical
+- `ml_pipeline_2/configs/research/staged_dual_recipe.*.json`
+- `ml_pipeline_2/configs/research/staged_grid.*.json`
+- `ml_pipeline_2/configs/campaign/*.json`
 
+## Historical Research Notes
+
+These files are retained for context and evidence. They are not the current operating instruction:
+
+- [intraday_profit_execution_plan.md](intraday_profit_execution_plan.md)
+- [midday_recovery_handover.md](midday_recovery_handover.md)
 - [research_recovery_runbook.md](research_recovery_runbook.md)
 - [stage2_feature_signal_memo_template.md](stage2_feature_signal_memo_template.md)
 - [stage2_midday_redesign.md](stage2_midday_redesign.md)
@@ -59,7 +65,13 @@ Repo-level documents that remain outside this module because they are cross-syst
 - [stage2_scenario_grid.md](stage2_scenario_grid.md)
 - [stage3_midday_policy_paths.md](stage3_midday_policy_paths.md)
 
-Historical docs are retained for evidence and context.
-They are not the current operating instruction.
+## Repo-Level Runbooks
+
+Cross-system runbooks remain outside this module because they cover more than `ml_pipeline_2`:
+
+- [`../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md`](../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md)
+- [`../../docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`](../../docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
+- [`../../docs/runbooks/GCP_DEPLOYMENT.md`](../../docs/runbooks/GCP_DEPLOYMENT.md)
+- [`../../docs/runbooks/README.md`](../../docs/runbooks/README.md)
 
 Do not add maintained architecture or design docs at the `ml_pipeline_2` module root.

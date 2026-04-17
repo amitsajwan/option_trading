@@ -10,6 +10,8 @@ The staged training system is split into five layers:
 4. orchestration and ranking
 5. release and publish
 
+Campaign and factory execution sit above the orchestration layer and reuse the same lower-level run and status machinery.
+
 This document describes the execution-facing architecture that keeps long-running research jobs safe, auditable, and reusable across underlyings and date windows.
 
 ## Layers
@@ -62,6 +64,8 @@ This layer must stay independent of root-reuse, lock, and release policy.
 ### Orchestration Layer
 
 - `ml_pipeline_2/src/ml_pipeline_2/staged/grid.py`
+- `ml_pipeline_2/src/ml_pipeline_2/campaign/runner.py`
+- `ml_pipeline_2/src/ml_pipeline_2/factory/runner.py`
 
 Responsibilities:
 
@@ -71,6 +75,7 @@ Responsibilities:
 - result collation
 - ranking
 - robustness attachment
+- workflow-level status collation for campaigns and factories
 
 ### Release Layer
 
@@ -96,6 +101,11 @@ Each lane root writes:
 - `summary.json`
 
 `run_status.json` is the authoritative lifecycle file.
+
+Long-running staged runs may also emit setup lifecycle events before any `stage_start` event:
+
+- `prep_start`
+- `prep_done`
 
 ### Grid
 
