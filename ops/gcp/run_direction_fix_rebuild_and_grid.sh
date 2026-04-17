@@ -4,15 +4,32 @@
 # Complete direction-fix pipeline: pull latest code, rebuild v3_candidate parquet
 # across all years, run preflight gate, then launch the direction_fix grid.
 #
-# Run as savitasajwan03 on the GCP training VM:
-#   bash /home/savitasajwan03/option_trading/ops/gcp/run_direction_fix_rebuild_and_grid.sh
+# Runs inside tmux automatically — safe to disconnect and reattach.
 #
-# Or from local via gcloud:
-#   gcloud compute ssh option-trading-ml-01 --zone=asia-south1-b \
-#     --project=gen-lang-client-0909109011 \
-#     --command="sudo -u savitasajwan03 bash /home/savitasajwan03/option_trading/ops/gcp/run_direction_fix_rebuild_and_grid.sh"
+# Usage:
+#   cd /home/savitasajwan03/option_trading
+#   bash ops/gcp/run_direction_fix_rebuild_and_grid.sh
+#
+# To reattach after disconnect:
+#   tmux attach -t direction_fix
 
 set -euo pipefail
+
+# ── tmux guard: re-launch inside a named session if not already inside one ────
+SESSION_NAME="direction_fix"
+if [ -z "${TMUX:-}" ]; then
+    if tmux has-session -t "${SESSION_NAME}" 2>/dev/null; then
+        echo "Session '${SESSION_NAME}' already exists."
+        echo "Attach with: tmux attach -t ${SESSION_NAME}"
+        exit 0
+    fi
+    # Pass _INSIDE_TMUX=1 so the re-spawned process skips this block
+    tmux new-session -d -s "${SESSION_NAME}" \
+        "cd \"$(pwd)\" && _INSIDE_TMUX=1 bash \"${BASH_SOURCE[0]}\"; echo '--- press Enter to close ---'; read"
+    echo "Started in tmux session '${SESSION_NAME}'."
+    echo "Attach with: tmux attach -t ${SESSION_NAME}"
+    exit 0
+fi
 
 REPO_ROOT="/home/savitasajwan03/option_trading"
 VENV_PYTHON="${REPO_ROOT}/.venv/bin/python3"
