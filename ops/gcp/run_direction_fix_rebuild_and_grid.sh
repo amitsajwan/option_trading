@@ -61,14 +61,13 @@ echo "HEAD: $(git log --oneline -1)"
 
 # ── Step 2: rebuild v3_candidate parquet (all years, no-resume) ───────────────
 echo
-echo "── Step 2: rebuild v3_candidate (full 2020-2024, this takes ~20-40 min) ──"
+echo "── Step 2: rebuild v3_candidate (resume mode — skips already-built days) ──"
 REBUILD_LOG="${LOG_DIR}/rebuild.log"
 "${VENV_PYTHON}" -m snapshot_app.historical.rebuild_stage_views_from_flat \
     --parquet-root "${PARQUET_ROOT}" \
     --output-stage1-dataset stage1_entry_view_v3_candidate \
     --output-stage2-dataset stage2_direction_view_v3_candidate \
     --output-stage3-dataset stage3_recipe_view_v3_candidate \
-    --no-resume \
     2>&1 | tee "${REBUILD_LOG}"
 
 # quick sanity: confirm we got more than 2021 data
