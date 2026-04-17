@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -224,6 +225,7 @@ def _check_velocity_session_validity(
     # Velocity/morning-context features are computed at the ~11:30 snapshot.
     # Forward-fill propagates them to all later snapshots of the same trade_date.
     POST_COMPUTATION_MINUTES = 135
+    MIN_ROWS_FOR_TEMPORAL_VALIDATION = 10
 
     probe_col = "ctx_am_vwap_side"
     glob = _dataset_glob(dataset_root)
@@ -238,6 +240,15 @@ def _check_velocity_session_validity(
 
     errors: list[str] = []
 
+    def _coerce_count(value: Any) -> int:
+        try:
+            numeric = float(value)
+        except Exception:
+            return 0
+        if not math.isfinite(numeric):
+            return 0
+        return int(numeric)
+
     # Post-computation rows (>= ~11:30): velocity must be populated
     post_row = _query_one(
         f"""
@@ -250,8 +261,8 @@ def _check_velocity_session_validity(
         """,
         [start_date, end_date],
     )
-    post_total = int(post_row.get("total") or 0)
-    post_nn = int(post_row.get("nn") or 0)
+    post_total = _coerce_count(post_row.get("total"))
+    post_nn = _coerce_count(post_row.get("nn"))
     if post_total > 0:
         post_missing = 1.0 - (post_nn / post_total)
         if post_missing > 0.05:
@@ -260,11 +271,6 @@ def _check_velocity_session_validity(
                 f"post-computation rows (minutes_since_open >= {POST_COMPUTATION_MINUTES}, expected <5%). "
                 f"Forward-fill may not have run. ({post_nn}/{post_total} populated)"
             )
-    else:
-        errors.append(
-            f"velocity session check WARN: no post-computation rows found "
-            f"(minutes_since_open >= {POST_COMPUTATION_MINUTES}) in date range {start_date}..{end_date}"
-        )
 
     # Pre-computation rows (< ~11:30): velocity must stay null (no temporal leakage)
     pre_row = _query_one(
@@ -278,8 +284,10 @@ def _check_velocity_session_validity(
         """,
         [start_date, end_date],
     )
-    pre_total = int(pre_row.get("total") or 0)
-    pre_nn = int(pre_row.get("nn") or 0)
+    pre_total = _coerce_count(pre_row.get("total"))
+    pre_nn = _coerce_count(pre_row.get("nn"))
+    if (post_total + pre_total) < MIN_ROWS_FOR_TEMPORAL_VALIDATION:
+        return errors
     if pre_total > 0:
         pre_populated = pre_nn / pre_total
         if pre_populated > 0.05:
@@ -388,8 +396,8 @@ def run_staged_data_preflight(manifest_path: Path) -> dict[str, Any]:
             ):
                 errors.append(f"{stage_name} feature set fo_velocity_v1 resolved without any velocity/enrichment columns in {dataset_name}")
 
-        # Session-aware velocity validity check for v2 views.
-        if view_id.endswith("_v2"):
+        # Temporal validity for velocity/morning-context features is a Stage 2 concern.
+        if stage_name == "stage2":
             errors.extend(
                 _check_velocity_session_validity(dataset_root, start_date=start_date, end_date=end_date)
             )

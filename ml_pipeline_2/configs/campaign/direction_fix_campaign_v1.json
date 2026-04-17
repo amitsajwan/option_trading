@@ -36,18 +36,48 @@
       }
     }
   },
-  "families": {},
+  "families": {
+    "model_families": {
+      "screen_fast": {
+        "target": "base_manifest",
+        "models_by_stage": {
+          "stage1": ["xgb_shallow", "xgb_balanced", "lgbm_fast", "lgbm_dart", "logreg_balanced"],
+          "stage2": ["xgb_shallow", "xgb_balanced", "lgbm_fast", "logreg_balanced"],
+          "stage3": ["xgb_shallow", "xgb_balanced", "lgbm_dart", "logreg_balanced"]
+        }
+      }
+    },
+    "stage2_feature_families": {
+      "regime_v1": {
+        "target": "base_manifest",
+        "feature_sets": ["fo_midday_direction_regime_v1"]
+      },
+      "velocity_v1": {
+        "target": "base_manifest",
+        "feature_sets": ["fo_velocity_v1"]
+      }
+    },
+    "stage2_policy_families": {
+      "economic_balance_gate": {
+        "target": "base_manifest",
+        "stage2_policy_id": "direction_gate_economic_balance_v1"
+      }
+    }
+  },
   "lane_templates": [
     {
       "template_id": "direction_fix",
       "base_grid_path": "../research/staged_grid.direction_fix_v1.json",
       "window_profiles": ["canonical_4y"],
-      "max_generated_lanes": 1,
+      "model_families": ["screen_fast"],
+      "stage2_feature_families": ["regime_v1", "velocity_v1"],
+      "stage2_policy_families": ["economic_balance_gate"],
+      "max_generated_lanes": 10,
       "resource": {
         "cores": 8,
         "memory_gb": 54
       }
     }
   ],
-  "campaign_max_lanes": 1
+  "campaign_max_lanes": 10
 }
