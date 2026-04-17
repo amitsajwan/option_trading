@@ -37,6 +37,7 @@
       {
         "run_id": "midday_only",
         "model_group_suffix": "_vel_midday",
+        "reuse_stage1_from": "all_day",
         "overrides": {
           "outputs": { "run_name": "vel_midday" },
           "training": {
@@ -50,6 +51,7 @@
       {
         "run_id": "midday_late",
         "model_group_suffix": "_vel_midday_late",
+        "reuse_stage1_from": "all_day",
         "overrides": {
           "outputs": { "run_name": "vel_midday_late" },
           "training": {
