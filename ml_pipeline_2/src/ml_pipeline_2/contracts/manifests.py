@@ -257,6 +257,33 @@ def _validate_stage1_session_filter(payload: Any, errors: List[str], *, field_pr
         )
 
 
+def _validate_stage1_reuse(
+    payload: Any,
+    errors: List[str],
+    *,
+    field_prefix: str,
+    manifest_dir: Path,
+    validate_paths: bool,
+) -> Optional[Dict[str, Any]]:
+    stage1_reuse = payload or {}
+    if stage1_reuse and not isinstance(stage1_reuse, dict):
+        errors.append(f"{field_prefix} must be an object")
+        return None
+    if not stage1_reuse:
+        return None
+
+    source_run_dir = _normalize_path(stage1_reuse.get("source_run_dir"), manifest_dir=manifest_dir)
+    if source_run_dir is None:
+        errors.append(f"{field_prefix}.source_run_dir must be set")
+    elif validate_paths and not source_run_dir.exists():
+        errors.append(f"{field_prefix}.source_run_dir not found: {source_run_dir}")
+
+    return {
+        "source_run_dir": source_run_dir,
+        "source_run_id": str(stage1_reuse.get("source_run_id") or "").strip(),
+    }
+
+
 def _validate_stage2_target_redesign(payload: Any, errors: List[str], *, field_prefix: str) -> None:
     stage2_target_redesign = payload or {}
     if stage2_target_redesign and not isinstance(stage2_target_redesign, dict):
@@ -390,7 +417,7 @@ def _validate_search_options_by_stage(payload: Any, errors: List[str], *, field_
                 errors.append(f"{field_prefix}.{stage_name}.hpo.sampler_seed must be an integer")
 
 
-def _validate_staged_training(payload: Dict[str, Any], errors: List[str]) -> None:
+def _validate_staged_training(payload: Dict[str, Any], errors: List[str], *, manifest_dir: Path, validate_paths: bool) -> None:
     preprocess = payload.get("preprocess")
     if not isinstance(preprocess, dict):
         errors.append("training.preprocess must be an object")
@@ -435,6 +462,15 @@ def _validate_staged_training(payload: Dict[str, Any], errors: List[str]) -> Non
         errors,
         field_prefix="training.stage1_session_filter",
     )
+    stage1_reuse = _validate_stage1_reuse(
+        payload.get("stage1_reuse"),
+        errors,
+        field_prefix="training.stage1_reuse",
+        manifest_dir=manifest_dir,
+        validate_paths=validate_paths,
+    )
+    if stage1_reuse is not None:
+        payload["stage1_reuse"] = stage1_reuse
     _validate_stage2_label_filter(payload.get("stage2_label_filter"), errors, field_prefix="training.stage2_label_filter")
     _validate_stage2_session_filter(
         payload.get("stage2_session_filter"),
@@ -533,7 +569,14 @@ def _validate_staged_hard_gates(payload: Dict[str, Any], errors: List[str]) -> N
                 pass
 
 
-def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefix: str) -> None:
+def _validate_grid_run_overrides(
+    payload: Any,
+    errors: List[str],
+    *,
+    field_prefix: str,
+    manifest_dir: Path,
+    validate_paths: bool,
+) -> None:
     from ..staged.recipes import recipe_catalog_ids
     from ..staged.registries import policy_registry
 
@@ -598,6 +641,7 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
                 set(str(key) for key in training.keys())
                 - {
                     "search_options_by_stage",
+                    "stage1_reuse",
                     "stage1_session_filter",
                     "stage2_label_filter",
                     "stage2_session_filter",
@@ -606,9 +650,18 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
             )
             if unknown_training:
                 errors.append(
-                    f"{field_prefix}.training supports only search_options_by_stage, stage1_session_filter, stage2_label_filter, stage2_session_filter, and stage2_target_redesign; "
+                    f"{field_prefix}.training supports only search_options_by_stage, stage1_reuse, stage1_session_filter, stage2_label_filter, stage2_session_filter, and stage2_target_redesign; "
                     f"got unsupported keys: {unknown_training}"
                 )
+            stage1_reuse = _validate_stage1_reuse(
+                training.get("stage1_reuse"),
+                errors,
+                field_prefix=f"{field_prefix}.training.stage1_reuse",
+                manifest_dir=manifest_dir,
+                validate_paths=validate_paths,
+            )
+            if stage1_reuse is not None:
+                training["stage1_reuse"] = stage1_reuse
             _validate_stage1_session_filter(
                 training.get("stage1_session_filter"),
                 errors,
@@ -801,6 +854,8 @@ def _validate_grid_manifest(payload: Dict[str, Any], *, manifest_path: Path, val
             run_payload.get("overrides"),
             errors,
             field_prefix=f"{field_prefix}.overrides",
+            manifest_dir=manifest_path.resolve().parent,
+            validate_paths=validate_paths,
         )
 
     base_resolved: Optional[Dict[str, Any]] = None
@@ -950,7 +1005,7 @@ def resolve_manifest(payload: Dict[str, Any], *, manifest_path: Path, validate_p
 
     _validate_staged_catalog(catalog_payload, errors)
     _validate_staged_components(payload, errors)
-    _validate_staged_training(training_payload, errors)
+    _validate_staged_training(training_payload, errors, manifest_dir=manifest_dir, validate_paths=validate_paths)
     _validate_staged_runtime(dict(payload.get("runtime") or {}), errors)
     _validate_staged_policy(dict(payload.get("policy") or {}), errors)
     _validate_staged_hard_gates(dict(payload.get("hard_gates") or {}), errors)

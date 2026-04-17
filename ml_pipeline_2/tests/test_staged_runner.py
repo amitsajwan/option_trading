@@ -490,6 +490,43 @@ def test_staged_runner_can_reuse_stage1_from_prior_run(tmp_path: Path, monkeypat
     assert any('"event": "stage_reuse"' in line and '"stage": "stage1"' in line for line in state_lines)
 
 
+def test_staged_runner_can_reuse_stage1_from_manifest_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    source_resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    source_summary = runner_module.run_research(
+        source_resolved,
+        run_output_root=Path(source_resolved["outputs"]["artifacts_root"]) / "staged_stage1_reuse_manifest_source",
+    )
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload.setdefault("training", {})["stage1_reuse"] = {
+        "source_run_id": "baseline_manifest",
+        "source_run_dir": str(Path(source_summary["output_root"]).resolve()),
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    target_resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+
+    original_binary_trainer = staged_pipeline.train_binary_catalog_stage
+
+    def _guarded_binary_trainer(*args, **kwargs):
+        if kwargs.get("stage_name") == "stage1":
+            raise AssertionError("stage1 trainer should not be called when manifest-level reuse is configured")
+        return original_binary_trainer(*args, **kwargs)
+
+    monkeypatch.setattr(staged_pipeline, "train_binary_catalog_stage", _guarded_binary_trainer)
+
+    summary = runner_module.run_research(
+        target_resolved,
+        run_output_root=Path(target_resolved["outputs"]["artifacts_root"]) / "staged_stage1_reuse_manifest_target",
+    )
+
+    assert summary["status"] == "completed"
+    assert summary["stage_artifacts"]["stage1"]["reused_from_run_id"] == "baseline_manifest"
+    state_lines = (Path(summary["output_root"]) / "state.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any('"event": "stage_reuse"' in line and '"stage": "stage1"' in line for line in state_lines)
+
+
 def test_staged_runner_can_reuse_stage2_from_prior_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     parquet_root = build_staged_parquet_root(tmp_path)
     manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
@@ -735,6 +772,43 @@ def test_staged_runner_resume_returns_existing_summary_without_reentry(tmp_path:
     run_status = json.loads((run_root / "run_status.json").read_text(encoding="utf-8"))
     assert run_status["status"] == "completed"
     assert run_status["integrity"] == "clean"
+
+
+def test_staged_runner_emits_prep_progress_events(tmp_path: Path) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+
+    summary = run_manifest(
+        manifest_path,
+        run_output_root=Path(resolved["outputs"]["artifacts_root"]) / "staged_prep_progress_run",
+    )
+
+    state_events = [
+        json.loads(line)
+        for line in (Path(summary["output_root"]) / "state.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert any(event["event"] == "prep_done" and event["prep_step"] == "support_load" for event in state_events)
+    assert any(event["event"] == "prep_done" and event["prep_step"] == "oracle_build" for event in state_events)
+    assert any(
+        event["event"] == "prep_done"
+        and event["prep_step"] == "stage_prepare"
+        and event.get("prep_stage") == "stage1"
+        for event in state_events
+    )
+    assert any(
+        event["event"] == "prep_done"
+        and event["prep_step"] == "stage_prepare"
+        and event.get("prep_stage") == "stage2"
+        for event in state_events
+    )
+    assert any(
+        event["event"] == "prep_done"
+        and event["prep_step"] == "stage_prepare"
+        and event.get("prep_stage") == "stage3"
+        for event in state_events
+    )
 
 
 def test_staged_runner_validate_only_fails_fast_when_stage_has_no_runnable_models(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

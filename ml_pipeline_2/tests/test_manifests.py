@@ -152,6 +152,19 @@ def test_staged_manifest_accepts_stage2_session_filter(tmp_path: Path) -> None:
     }
 
 
+def test_staged_manifest_accepts_stage1_reuse(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    source_run_dir = tmp_path / "source_run"
+    source_run_dir.mkdir(parents=True, exist_ok=True)
+    payload["training"]["stage1_reuse"] = {
+        "source_run_id": "baseline_stage1",
+        "source_run_dir": str(source_run_dir),
+    }
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_stage1_reuse_ok.json", validate_paths=False)
+    assert resolved["training"]["stage1_reuse"]["source_run_id"] == "baseline_stage1"
+    assert resolved["training"]["stage1_reuse"]["source_run_dir"] == source_run_dir.resolve()
+
+
 def test_staged_manifest_accepts_stage2_target_redesign(tmp_path: Path) -> None:
     payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
     payload["training"]["stage2_target_redesign"] = {

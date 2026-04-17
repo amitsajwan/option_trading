@@ -962,7 +962,11 @@ def _build_stage2_split_diagnostics(frame: pd.DataFrame, scores: pd.DataFrame, *
     scored = _stage2_scored_frame(frame, scores)
     edge_series = pd.to_numeric(scored.get("direction_return_edge_after_cost"), errors="coerce")
     trade_quality = _binary_quality(scored["direction_trade_label"], scored["direction_trade_prob"])
-    actionable_mask = pd.to_numeric(scored["direction_trade_label"], errors="coerce").fillna(0.0) == 1.0
+    trade_labels = pd.to_numeric(scored["direction_trade_label"], errors="coerce")
+    has_trade_gate_labels = bool(trade_labels.notna().any())
+    actionable_mask = trade_labels.fillna(0.0) == 1.0
+    if not has_trade_gate_labels:
+        actionable_mask = scored["direction_binary"].notna() & scored["direction_up_prob"].notna()
     directional_scored = scored.loc[actionable_mask].copy()
     quality = _binary_quality(directional_scored["direction_binary"], directional_scored["direction_up_prob"])
     calibration = _stage2_calibration_profile(directional_scored["direction_binary"], directional_scored["direction_up_prob"])
@@ -1221,6 +1225,31 @@ def _stage_progress_callback(ctx: RunContext, *, stage_name: str) -> Callable[[D
         )
 
     return _callback
+
+
+def _prep_progress(
+    ctx: RunContext,
+    *,
+    status: str,
+    prep_step: str,
+    **payload: Any,
+) -> None:
+    event = f"prep_{str(status).strip().lower()}"
+    event_payload = {
+        "prep_step": str(prep_step),
+        **payload,
+    }
+    ctx.append_state(event, **event_payload)
+    update_run_status(
+        ctx,
+        lifecycle_status="running",
+        extra={
+            "active_stage": "setup",
+            "last_progress_event": event,
+            "last_progress_at_utc": utc_now(),
+            "last_progress_payload": event_payload,
+        },
+    )
 
 
 def _selected_model_spec_payload(search_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1531,7 +1560,6 @@ def _stage1_reuse_relevant_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
         "training": {
             "stage1_trainer_id": str((manifest.get("training") or {}).get("stage1_trainer_id") or ""),
             "preprocess": dict(((manifest.get("training") or {}).get("preprocess") or {})),
-            "cv_config": dict(((manifest.get("training") or {}).get("cv_config") or {})),
             "objectives_by_stage": {
                 "stage1": str((((manifest.get("training") or {}).get("objectives_by_stage") or {}).get("stage1") or "")),
             },
@@ -1608,7 +1636,8 @@ def _load_reused_stage1_result(
     prob_col: str,
 ) -> Optional[Dict[str, Any]]:
     execution_hints = dict(ctx.resolved_config.get("_execution_hints") or {})
-    stage1_hint = dict(execution_hints.get("stage1_reuse") or {})
+    stage1_hint = dict(((manifest.get("training") or {}).get("stage1_reuse") or {}))
+    stage1_hint.update(dict(execution_hints.get("stage1_reuse") or {}))
     source_run_dir = str(stage1_hint.get("source_run_dir") or "").strip()
     if not source_run_dir:
         return None
@@ -2180,7 +2209,7 @@ def _stage2_side_masks_from_policy(
     *,
     entry_threshold: float,
     stage2_policy: Dict[str, Any],
-) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
     policy_id = str(stage2_policy.get("policy_id") or "direction_dual_threshold_v1")
     entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
     direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
@@ -2204,6 +2233,25 @@ def _stage2_side_masks_from_policy(
         pe_threshold=float(stage2_policy["selected_pe_threshold"]),
         min_edge=float(stage2_policy["selected_min_edge"]),
     )
+
+
+def _coerce_stage2_policy(
+    *,
+    stage2_policy: Optional[Dict[str, Any]] = None,
+    ce_threshold: Optional[float] = None,
+    pe_threshold: Optional[float] = None,
+    min_edge: Optional[float] = None,
+) -> Dict[str, Any]:
+    if stage2_policy is not None:
+        return dict(stage2_policy)
+    if ce_threshold is None or pe_threshold is None or min_edge is None:
+        raise TypeError("stage2_policy or ce_threshold/pe_threshold/min_edge must be provided")
+    return {
+        "policy_id": "direction_dual_threshold_v1",
+        "selected_ce_threshold": float(ce_threshold),
+        "selected_pe_threshold": float(pe_threshold),
+        "selected_min_edge": float(min_edge),
+    }
 
 
 def _policy_side_band(policy_config: Dict[str, Any], *, default_min: float = 0.30, default_max: float = 0.70) -> tuple[float, float]:
@@ -2563,12 +2611,21 @@ def _evaluate_combined_policy(
     stage3_scores: pd.DataFrame,
     *,
     stage1_threshold: float,
-    stage2_policy: Dict[str, Any],
+    stage2_policy: Optional[Dict[str, Any]] = None,
+    ce_threshold: Optional[float] = None,
+    pe_threshold: Optional[float] = None,
+    min_edge: Optional[float] = None,
     recipe_threshold: Optional[float] = None,
     recipe_margin_min: Optional[float] = None,
     recipe_ids: Sequence[str],
     stage3_policy: Optional[Dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    resolved_stage2_policy = _coerce_stage2_policy(
+        stage2_policy=stage2_policy,
+        ce_threshold=ce_threshold,
+        pe_threshold=pe_threshold,
+        min_edge=min_edge,
+    )
     merged = _merge_policy_inputs(utility, stage1_scores, stage2_scores, stage3_scores)
     rows_total = len(merged)
     ordered_recipe_ids = sorted(str(recipe_id) for recipe_id in recipe_ids)
@@ -2579,7 +2636,7 @@ def _evaluate_combined_policy(
     ce_mask, pe_mask = _stage2_side_masks_from_policy(
         merged,
         entry_threshold=float(stage1_threshold),
-        stage2_policy=stage2_policy,
+        stage2_policy=resolved_stage2_policy,
     )
     ce_mask = ce_mask & direction_available
     pe_mask = pe_mask & direction_available
@@ -2621,8 +2678,9 @@ def _evaluate_combined_policy(
         (stage3_policy or {}).get("selected_margin_min"),
         default=float(recipe_margin_min or 0.0),
     )
-    summary["selection_mode"] = str((stage3_policy or {}).get("selection_mode") or "dynamic")
-    if summary["selection_mode"] == "fixed_recipe":
+    if stage3_policy is not None:
+        summary["selection_mode"] = str((stage3_policy or {}).get("selection_mode") or "dynamic")
+    if summary.get("selection_mode") == "fixed_recipe":
         summary["selected_recipe_id"] = str((stage3_policy or {}).get("selected_recipe_id") or "")
     return summary
 
@@ -2635,12 +2693,21 @@ def _combined_policy_trade_rows(
     stage3_scores: pd.DataFrame,
     *,
     stage1_threshold: float,
-    stage2_policy: Dict[str, Any],
+    stage2_policy: Optional[Dict[str, Any]] = None,
+    ce_threshold: Optional[float] = None,
+    pe_threshold: Optional[float] = None,
+    min_edge: Optional[float] = None,
     recipe_threshold: Optional[float] = None,
     recipe_margin_min: Optional[float] = None,
     recipe_ids: Sequence[str],
     stage3_policy: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
+    resolved_stage2_policy = _coerce_stage2_policy(
+        stage2_policy=stage2_policy,
+        ce_threshold=ce_threshold,
+        pe_threshold=pe_threshold,
+        min_edge=min_edge,
+    )
     merged = _merge_policy_inputs(base_frame, utility, stage1_scores, stage2_scores, stage3_scores)
     if len(merged) == 0:
         return merged
@@ -2653,7 +2720,7 @@ def _combined_policy_trade_rows(
     ce_mask, pe_mask = _stage2_side_masks_from_policy(
         merged,
         entry_threshold=float(stage1_threshold),
-        stage2_policy=stage2_policy,
+        stage2_policy=resolved_stage2_policy,
     )
     ce_mask = ce_mask & direction_available
     pe_mask = pe_mask & direction_available
@@ -2847,9 +2914,18 @@ def _fixed_recipe_baseline(
     stage2_scores: pd.DataFrame,
     *,
     stage1_threshold: float,
-    stage2_policy: Dict[str, Any],
+    stage2_policy: Optional[Dict[str, Any]] = None,
+    ce_threshold: Optional[float] = None,
+    pe_threshold: Optional[float] = None,
+    min_edge: Optional[float] = None,
     recipe_id: str,
 ) -> dict[str, Any]:
+    resolved_stage2_policy = _coerce_stage2_policy(
+        stage2_policy=stage2_policy,
+        ce_threshold=ce_threshold,
+        pe_threshold=pe_threshold,
+        min_edge=min_edge,
+    )
     merged = _merge_policy_inputs(utility, stage1_scores, stage2_scores)
     direction_available = pd.to_numeric(merged["direction_up_prob"], errors="coerce").notna().to_numpy(dtype=bool, copy=False)
     ce_returns = _numeric_array(merged[f"{recipe_id}__ce_net_return"], fillna=0.0)
@@ -2857,7 +2933,7 @@ def _fixed_recipe_baseline(
     ce_mask, pe_mask = _stage2_side_masks_from_policy(
         merged,
         entry_threshold=float(stage1_threshold),
-        stage2_policy=stage2_policy,
+        stage2_policy=resolved_stage2_policy,
     )
     ce_mask = ce_mask & direction_available
     pe_mask = pe_mask & direction_available
@@ -3080,15 +3156,44 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     support_dataset = str(manifest["inputs"]["support_dataset"])
     runtime_block_expiry = bool(manifest["runtime"].get("block_expiry", False))
     recipe_catalog = get_recipe_catalog(str(manifest["catalog"]["recipe_catalog_id"]))
+    _prep_progress(
+        ctx,
+        status="start",
+        prep_step="support_load",
+        dataset_name=support_dataset,
+    )
     support_raw = _load_dataset(parquet_root, support_dataset)
+    _prep_progress(
+        ctx,
+        status="done",
+        prep_step="support_load",
+        dataset_name=support_dataset,
+        rows=int(len(support_raw)),
+        column_count=int(len(support_raw.columns)),
+    )
     support_context = support_raw.loc[:, ~support_raw.columns.duplicated()].copy()
     support, support_filter_meta = _apply_runtime_filters(
         support_raw,
         block_expiry=runtime_block_expiry,
         context=f"staged support dataset {support_dataset}",
     )
+    _prep_progress(
+        ctx,
+        status="start",
+        prep_step="oracle_build",
+        support_rows=int(len(support)),
+        recipe_count=int(len(recipe_catalog)),
+    )
     oracle, utility = _build_oracle_targets(support, recipe_catalog, cost_per_trade=float(manifest["training"]["cost_per_trade"]))
     oracle_rolling = compute_rolling_oracle_stats(oracle)
+    _prep_progress(
+        ctx,
+        status="done",
+        prep_step="oracle_build",
+        oracle_rows=int(len(oracle)),
+        utility_rows=int(len(utility)),
+        rolling_rows=int(len(oracle_rolling)),
+    )
     support_windows = {
         "research_train": _window(support, manifest["windows"]["research_train"]),
         "research_valid": _window(support, manifest["windows"]["research_valid"]),
@@ -3114,6 +3219,13 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         component_ids = _stage_component_ids(manifest, stage_name)
         components[stage_name] = component_ids
         dataset_name = view_registry()[component_ids["view_id"]].dataset_name
+        _prep_progress(
+            ctx,
+            status="start",
+            prep_step="stage_prepare",
+            prep_stage=stage_name,
+            dataset_name=dataset_name,
+        )
         stage_frame, stage_filter_meta = _apply_runtime_filters(
             _load_dataset(parquet_root, dataset_name),
             block_expiry=runtime_block_expiry,
@@ -3166,6 +3278,19 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             "full_model": _window(labeled, manifest["windows"]["full_model"]),
             "final_holdout": _window(labeled, manifest["windows"]["final_holdout"]),
         }
+        _prep_progress(
+            ctx,
+            status="done",
+            prep_step="stage_prepare",
+            prep_stage=stage_name,
+            dataset_name=dataset_name,
+            stage_rows=int(len(stage_frame)),
+            labeled_rows=int(len(labeled)),
+            research_train_rows=int(len(labeled_frames[stage_name]["research_train"])),
+            research_valid_rows=int(len(labeled_frames[stage_name]["research_valid"])),
+            full_model_rows=int(len(labeled_frames[stage_name]["full_model"])),
+            final_holdout_rows=int(len(labeled_frames[stage_name]["final_holdout"])),
+        )
 
     coverage_scenario_reports = _scenario_reports(
         base_frame=support_windows["final_holdout"],

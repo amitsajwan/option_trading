@@ -7,7 +7,7 @@
   },
   "outputs": {
     "artifacts_root": "../../artifacts/research",
-    "run_name": "staged_dual_recipe_stage2_velocity_reuse_midday_late_v1"
+    "run_name": "stage2_velocity_reuse_midday_late_v3"
   },
   "catalog": {
     "models_by_stage": {
@@ -132,6 +132,10 @@
           "sampler_seed": 42
         }
       }
+    },
+    "stage1_reuse": {
+      "source_run_id": "velocity_screen_lane02_all_day",
+      "source_run_dir": "../../artifacts/campaign_runs/velocity_screen_campaign_v1/lanes/02_velocity_screen__wp_canonical_4y__mf_screen_fast__s2f_velocity_v1__s2p_economic_balance_gate/runner_output/runs/01_all_day"
     },
     "stage2_session_filter": {
       "enabled": true,
