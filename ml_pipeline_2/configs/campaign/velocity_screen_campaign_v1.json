@@ -91,11 +91,8 @@
       "window_profiles": ["canonical_4y"],
       "model_families": ["screen_fast"],
       "stage2_feature_families": [
-        "midday_time_aware",
-        "velocity_v1",
         "regime_v1",
-        "oi_pcr_momentum",
-        "expiry_aware_v3"
+        "velocity_v1"
       ],
       "stage2_policy_families": ["economic_balance_gate"],
       "max_generated_lanes": 20,
