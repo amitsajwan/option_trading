@@ -33,6 +33,7 @@
     },
     "feature_sets_by_stage": {
       "stage1": [
+        "fo_full",
         "fo_velocity_v1"
       ],
       "stage2": [
