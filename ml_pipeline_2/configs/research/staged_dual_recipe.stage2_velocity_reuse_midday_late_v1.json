@@ -88,10 +88,10 @@
       "clip_upper_q": 0.99
     },
     "cv_config": {
-      "train_days": 84,
-      "valid_days": 21,
-      "test_days": 21,
-      "step_days": 21,
+      "train_days": 42,
+      "valid_days": 7,
+      "test_days": 7,
+      "step_days": 7,
       "purge_days": 0,
       "embargo_days": 0,
       "purge_mode": "days",
