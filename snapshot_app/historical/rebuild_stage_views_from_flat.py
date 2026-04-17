@@ -15,11 +15,15 @@ except ImportError:  # pragma: no cover
     duckdb = None  # type: ignore[assignment]
 
 
-# Prefixes for morning-context and velocity columns.
-# These are computed once per trade_date on the ~11:30 snapshot and must be
-# forward-filled to later snapshots of the same day so that MIDDAY/LATE rows
-# can use them. Pre-11:30 rows remain null — forward-fill never backfills.
-_VELOCITY_FILL_PREFIXES: tuple[str, ...] = ("vel_", "ctx_am_")
+# Prefixes and exact names for velocity/morning-context enrichment columns.
+# All of these are computed once per trade_date on the ~11:30 morning snapshot
+# and must be forward-filled to later snapshots of the same day so that
+# MIDDAY/LATE rows can use them. Pre-11:30 rows remain null — never backfill.
+#
+# _VELOCITY_FILL_PREFIXES: prefix-matched columns (vel_*, ctx_am_*, ctx_gap_*)
+# _VELOCITY_FILL_EXACT: exact-name columns that share no common prefix
+_VELOCITY_FILL_PREFIXES: tuple[str, ...] = ("vel_", "ctx_am_", "ctx_gap_")
+_VELOCITY_FILL_EXACT: frozenset[str] = frozenset(("adx_14", "vol_spike_ratio"))
 
 DEFAULT_SOURCE_DATASET = "snapshots_ml_flat_v2"
 DEFAULT_BASE_DATASET = "market_base"
@@ -92,11 +96,15 @@ def _existing_output_dates(dataset_root: Path) -> set[str]:
 
 
 def _forward_fill_velocity_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    """Forward-fill vel_* and ctx_am_* columns within a single trade_date frame.
+    """Forward-fill velocity/morning-context enrichment columns within a single trade_date frame.
 
     These features are computed on the ~11:30 morning snapshot only.
     Forward-fill propagates those values to later snapshots of the same day
     so MIDDAY and LATE_SESSION rows can use them.
+
+    Covered columns:
+    - Prefix-matched: vel_*, ctx_am_*, ctx_gap_*
+    - Exact-matched: adx_14, vol_spike_ratio
 
     Rules:
     - Frame must be sorted by timestamp ascending before calling.
@@ -107,6 +115,7 @@ def _forward_fill_velocity_columns(frame: pd.DataFrame) -> pd.DataFrame:
     fill_cols = [
         c for c in frame.columns
         if any(c.startswith(prefix) for prefix in _VELOCITY_FILL_PREFIXES)
+        or c in _VELOCITY_FILL_EXACT
     ]
     if not fill_cols:
         return frame
