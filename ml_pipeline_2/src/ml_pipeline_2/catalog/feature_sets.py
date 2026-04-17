@@ -340,6 +340,7 @@ DEFAULT_FEATURE_SET_SPECS: List[FeatureSetSpec] = [
             r"^ctx_regime_atr_low$",
             r"^ctx_regime_trend_up$",
             r"^ctx_regime_trend_down$",
+            r"^ctx_regime_expiry_near$",
             r"^ctx_is_high_vix_day$",
             r"^regime_vol_high$",
             r"^regime_vol_low$",
