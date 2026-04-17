@@ -405,9 +405,10 @@ def run_staged_data_preflight(manifest_path: Path) -> dict[str, Any]:
         planned_view_present = [column for column in _PLANNED_V2_ENRICHMENT_COLUMNS if column in dataset_columns]
         planned_view_counts = _non_null_counts(dataset_root, planned_view_present, start_date=start_date, end_date=end_date)
         empty_view_columns = [column for column in _PLANNED_V2_ENRICHMENT_COLUMNS if column not in dataset_columns or planned_view_counts.get(column, 0) <= 0]
-        if view_id.endswith("_v2") and empty_view_columns:
+        _ENRICHMENT_CHECKED_VIEW_SUFFIXES = ("_v2", "_v3_candidate")
+        if any(view_id.endswith(suffix) for suffix in _ENRICHMENT_CHECKED_VIEW_SUFFIXES) and empty_view_columns:
             errors.append(
-                f"{stage_name} v2 view dataset {dataset_name} is missing planned enrichment coverage for columns: "
+                f"{stage_name} view dataset {dataset_name} is missing planned enrichment coverage for columns: "
                 + ", ".join(empty_view_columns)
             )
         if view_missing_from_support > 0 or support_missing_from_view > 0:
