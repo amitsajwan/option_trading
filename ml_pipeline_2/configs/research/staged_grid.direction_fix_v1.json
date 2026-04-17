@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.direction_fix_v1.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_direction_fix_v1"
+  },
+  "selection": {
+    "ranking_strategy": "stage3_policy_paths_v1",
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.55,
+      "brier_max": 0.22
+    },
+    "robustness_probe": {
+      "enabled": true,
+      "top_k": 3,
+      "iterations": 200,
+      "random_seed": 42,
+      "splits": ["research_valid", "final_holdout"],
+      "resample_unit": "trade_date"
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "regime_midday",
+        "model_group_suffix": "_dfx_regime_midday",
+        "overrides": {
+          "outputs": { "run_name": "dfx_regime_midday" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_midday_direction_regime_v1"]
+            }
+          },
+          "training": {
+            "stage1_session_filter": {
+              "enabled": true,
+              "include_buckets": ["MIDDAY", "LATE_SESSION"]
+            },
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": ["MIDDAY"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "velocity_midday",
+        "model_group_suffix": "_dfx_velocity_midday",
+        "reuse_stage1_from": "regime_midday",
+        "overrides": {
+          "outputs": { "run_name": "dfx_velocity_midday" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_velocity_v1"]
+            }
+          },
+          "training": {
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": ["MIDDAY"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "velocity_midday_late",
+        "model_group_suffix": "_dfx_velocity_midday_late",
+        "reuse_stage1_from": "regime_midday",
+        "overrides": {
+          "outputs": { "run_name": "dfx_velocity_midday_late" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_velocity_v1"]
+            }
+          },
+          "training": {
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": ["MIDDAY", "LATE_SESSION"]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

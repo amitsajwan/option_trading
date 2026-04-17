@@ -631,8 +631,7 @@ def _normalize_stage2_label_filter(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _normalize_stage2_session_filter(manifest: dict[str, Any]) -> dict[str, Any]:
-    raw = dict((manifest.get("training") or {}).get("stage2_session_filter") or {})
+def _normalize_session_filter(raw: dict[str, Any]) -> dict[str, Any]:
     include_buckets = []
     for item in list(raw.get("include_buckets") or []):
         bucket = str(item).strip().upper()
@@ -642,6 +641,52 @@ def _normalize_stage2_session_filter(manifest: dict[str, Any]) -> dict[str, Any]
         "enabled": bool(raw.get("enabled", False)),
         "include_buckets": include_buckets,
     }
+
+
+def _normalize_stage1_session_filter(manifest: dict[str, Any]) -> dict[str, Any]:
+    raw = dict((manifest.get("training") or {}).get("stage1_session_filter") or {})
+    return _normalize_session_filter(raw)
+
+
+def _normalize_stage2_session_filter(manifest: dict[str, Any]) -> dict[str, Any]:
+    raw = dict((manifest.get("training") or {}).get("stage2_session_filter") or {})
+    return _normalize_session_filter(raw)
+
+
+def _apply_time_bucket_session_filter(frame: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
+    session_bucket = _stage2_time_bucket(frame)
+    observed_before = sorted(str(item) for item in session_bucket.dropna().astype(str).unique().tolist())
+    meta = {
+        **cfg,
+        "rows_before": int(len(frame)),
+        "rows_after": int(len(frame)),
+        "rows_dropped": 0,
+        "kept_share": 1.0 if len(frame) else 0.0,
+        "observed_buckets_before": observed_before,
+        "observed_buckets_after": observed_before,
+    }
+    if not cfg["enabled"] or not cfg["include_buckets"]:
+        return frame.sort_values("timestamp").reset_index(drop=True), meta
+    include_buckets = set(str(item).strip().upper() for item in cfg["include_buckets"])
+    keep_mask = session_bucket.isin(include_buckets)
+    filtered = frame.loc[keep_mask].copy().sort_values("timestamp").reset_index(drop=True)
+    observed_after = sorted(
+        str(item)
+        for item in _stage2_time_bucket(filtered).dropna().astype(str).unique().tolist()
+    )
+    meta.update(
+        {
+            "rows_after": int(len(filtered)),
+            "rows_dropped": int((~keep_mask).sum()),
+            "kept_share": float(keep_mask.mean()) if len(keep_mask) else 0.0,
+            "observed_buckets_after": observed_after,
+        }
+    )
+    return filtered, meta
+
+
+def _apply_stage1_session_filter(stage1_frame: pd.DataFrame, manifest: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
+    return _apply_time_bucket_session_filter(stage1_frame, _normalize_stage1_session_filter(manifest))
 
 
 def _apply_stage2_label_filter(stage2_frame: pd.DataFrame, manifest: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
@@ -710,36 +755,7 @@ def _apply_stage2_label_filter(stage2_frame: pd.DataFrame, manifest: dict[str, A
 
 
 def _apply_stage2_session_filter(stage2_frame: pd.DataFrame, manifest: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
-    cfg = _normalize_stage2_session_filter(manifest)
-    session_bucket = _stage2_time_bucket(stage2_frame)
-    observed_before = sorted(str(item) for item in session_bucket.dropna().astype(str).unique().tolist())
-    meta = {
-        **cfg,
-        "rows_before": int(len(stage2_frame)),
-        "rows_after": int(len(stage2_frame)),
-        "rows_dropped": 0,
-        "kept_share": 1.0 if len(stage2_frame) else 0.0,
-        "observed_buckets_before": observed_before,
-        "observed_buckets_after": observed_before,
-    }
-    if not cfg["enabled"] or not cfg["include_buckets"]:
-        return stage2_frame.sort_values("timestamp").reset_index(drop=True), meta
-    include_buckets = set(str(item).strip().upper() for item in cfg["include_buckets"])
-    keep_mask = session_bucket.isin(include_buckets)
-    filtered = stage2_frame.loc[keep_mask].copy().sort_values("timestamp").reset_index(drop=True)
-    observed_after = sorted(
-        str(item)
-        for item in _stage2_time_bucket(filtered).dropna().astype(str).unique().tolist()
-    )
-    meta.update(
-        {
-            "rows_after": int(len(filtered)),
-            "rows_dropped": int((~keep_mask).sum()),
-            "kept_share": float(keep_mask.mean()) if len(keep_mask) else 0.0,
-            "observed_buckets_after": observed_after,
-        }
-    )
-    return filtered, meta
+    return _apply_time_bucket_session_filter(stage2_frame, _normalize_stage2_session_filter(manifest))
 
 
 def _stage2_direction_binary(direction_label: pd.Series) -> pd.Series:
@@ -3110,6 +3126,11 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         }
         if stage_name == "stage2" and oracle_rolling is not None and len(oracle_rolling) > 0:
             stage_frame = stage_frame.merge(oracle_rolling, on="trade_date", how="left")
+        if stage_name == "stage1":
+            stage_frame, stage1_session_filter_meta = _apply_stage1_session_filter(stage_frame, manifest)
+            label_filtering[stage_name] = {
+                "session_filter": stage1_session_filter_meta,
+            }
         labeler = resolve_labeler(component_ids["labeler_id"])
         labeled = labeler(stage_frame, oracle, manifest)
         if stage_name == "stage2":

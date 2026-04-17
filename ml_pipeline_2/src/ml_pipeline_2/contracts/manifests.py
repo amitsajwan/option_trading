@@ -228,6 +228,35 @@ def _validate_stage2_session_filter(payload: Any, errors: List[str], *, field_pr
         )
 
 
+def _validate_stage1_session_filter(payload: Any, errors: List[str], *, field_prefix: str) -> None:
+    stage1_session_filter = payload or {}
+    if stage1_session_filter and not isinstance(stage1_session_filter, dict):
+        errors.append(f"{field_prefix} must be an object")
+        return
+    if not stage1_session_filter:
+        return
+    if "enabled" in stage1_session_filter and not isinstance(stage1_session_filter.get("enabled"), bool):
+        errors.append(f"{field_prefix}.enabled must be boolean")
+    include_buckets = stage1_session_filter.get("include_buckets")
+    if include_buckets is None:
+        return
+    if not isinstance(include_buckets, list):
+        errors.append(f"{field_prefix}.include_buckets must be a list")
+        return
+    if not include_buckets:
+        errors.append(f"{field_prefix}.include_buckets must not be empty")
+        return
+    normalized = [str(item).strip().upper() for item in include_buckets]
+    if len(normalized) != len(set(normalized)):
+        errors.append(f"{field_prefix}.include_buckets must not contain duplicates")
+    unknown = sorted(set(normalized) - set(_STAGE2_SESSION_BUCKETS))
+    if unknown:
+        errors.append(
+            f"{field_prefix}.include_buckets has unknown buckets: {unknown}; "
+            f"valid options: {list(_STAGE2_SESSION_BUCKETS)}"
+        )
+
+
 def _validate_stage2_target_redesign(payload: Any, errors: List[str], *, field_prefix: str) -> None:
     stage2_target_redesign = payload or {}
     if stage2_target_redesign and not isinstance(stage2_target_redesign, dict):
@@ -401,6 +430,11 @@ def _validate_staged_training(payload: Dict[str, Any], errors: List[str]) -> Non
     except Exception:
         errors.append("training.runtime.model_n_jobs must be an integer > 0")
 
+    _validate_stage1_session_filter(
+        payload.get("stage1_session_filter"),
+        errors,
+        field_prefix="training.stage1_session_filter",
+    )
     _validate_stage2_label_filter(payload.get("stage2_label_filter"), errors, field_prefix="training.stage2_label_filter")
     _validate_stage2_session_filter(
         payload.get("stage2_session_filter"),
@@ -562,13 +596,24 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
         else:
             unknown_training = sorted(
                 set(str(key) for key in training.keys())
-                - {"search_options_by_stage", "stage2_label_filter", "stage2_session_filter", "stage2_target_redesign"}
+                - {
+                    "search_options_by_stage",
+                    "stage1_session_filter",
+                    "stage2_label_filter",
+                    "stage2_session_filter",
+                    "stage2_target_redesign",
+                }
             )
             if unknown_training:
                 errors.append(
-                    f"{field_prefix}.training supports only search_options_by_stage, stage2_label_filter, stage2_session_filter, and stage2_target_redesign; "
+                    f"{field_prefix}.training supports only search_options_by_stage, stage1_session_filter, stage2_label_filter, stage2_session_filter, and stage2_target_redesign; "
                     f"got unsupported keys: {unknown_training}"
                 )
+            _validate_stage1_session_filter(
+                training.get("stage1_session_filter"),
+                errors,
+                field_prefix=f"{field_prefix}.training.stage1_session_filter",
+            )
             _validate_stage2_label_filter(
                 training.get("stage2_label_filter"),
                 errors,

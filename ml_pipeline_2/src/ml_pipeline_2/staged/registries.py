@@ -24,6 +24,24 @@ def view_registry() -> Dict[str, ViewSpec]:
         "stage1_entry_view_v2": ViewSpec("stage1_entry_view_v2", "stage1_entry_view_v2", "stage1"),
         "stage2_direction_view_v2": ViewSpec("stage2_direction_view_v2", "stage2_direction_view_v2", "stage2"),
         "stage3_recipe_view_v2": ViewSpec("stage3_recipe_view_v2", "stage3_recipe_view_v2", "stage3"),
+        "stage1_entry_view_v3": ViewSpec("stage1_entry_view_v3", "stage1_entry_view_v3", "stage1"),
+        "stage2_direction_view_v3": ViewSpec("stage2_direction_view_v3", "stage2_direction_view_v3", "stage2"),
+        "stage3_recipe_view_v3": ViewSpec("stage3_recipe_view_v3", "stage3_recipe_view_v3", "stage3"),
+        "stage1_entry_view_v3_candidate": ViewSpec(
+            "stage1_entry_view_v3_candidate",
+            "stage1_entry_view_v3_candidate",
+            "stage1",
+        ),
+        "stage2_direction_view_v3_candidate": ViewSpec(
+            "stage2_direction_view_v3_candidate",
+            "stage2_direction_view_v3_candidate",
+            "stage2",
+        ),
+        "stage3_recipe_view_v3_candidate": ViewSpec(
+            "stage3_recipe_view_v3_candidate",
+            "stage3_recipe_view_v3_candidate",
+            "stage3",
+        ),
     }
 
 
