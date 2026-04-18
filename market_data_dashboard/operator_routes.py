@@ -48,10 +48,13 @@ class DashboardOperatorRouter:
         self.router = router
 
     async def home(self, request: Request) -> HTMLResponse:
-        return self._templates.TemplateResponse("index.html", {"request": request})
+        return self._templates.TemplateResponse("dashboard.html", {"request": request, "initial_page": "index"})
 
     async def live_strategy(self, request: Request) -> HTMLResponse:
-        return self._templates.TemplateResponse("live_strategy.html", {"request": request})
+        return self._templates.TemplateResponse(
+            "dashboard.html",
+            {"request": request, "initial_page": "live_strategy"},
+        )
 
     def _require_live_strategy_monitor_service(self) -> Any:
         service = self._get_live_strategy_monitor_service()
@@ -223,6 +226,7 @@ class DashboardOperatorRouter:
         return self._normalize_timestamp_fields({"status": "ok", "trace": payload})
 
     async def health(self) -> dict[str, Any]:
+        dashboard_page_ready = self._templates_dir.exists() and (self._templates_dir / "dashboard.html").exists()
         templates_ready = self._templates_dir.exists() and (self._templates_dir / "index.html").exists()
         live_strategy_page_ready = (self._templates_dir / "live_strategy.html").exists()
         strategy_eval_ready = self._get_strategy_eval_service() is not None
@@ -232,8 +236,7 @@ class DashboardOperatorRouter:
 
         ready = all(
             [
-                templates_ready,
-                live_strategy_page_ready,
+                dashboard_page_ready,
                 strategy_eval_ready,
                 live_strategy_ready,
                 market_data["status"] == "healthy",
@@ -241,7 +244,7 @@ class DashboardOperatorRouter:
             ]
         )
         status = "healthy" if ready else "degraded"
-        if not templates_ready:
+        if not dashboard_page_ready:
             status = "unhealthy"
 
         return {
@@ -250,6 +253,7 @@ class DashboardOperatorRouter:
             "service": "market-data-dashboard",
             "timestamp": self._now_iso_ist(),
             "checks": {
+                "templates_dashboard": bool(dashboard_page_ready),
                 "templates_index": bool(templates_ready),
                 "templates_live_strategy": bool(live_strategy_page_ready),
                 "strategy_evaluation_service": bool(strategy_eval_ready),

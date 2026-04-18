@@ -36,7 +36,10 @@ class DashboardHistoricalReplayRouter:
         return service
 
     async def historical_replay(self, request: Request) -> HTMLResponse:
-        return self._templates.TemplateResponse("historical_replay.html", {"request": request})
+        return self._templates.TemplateResponse(
+            "dashboard.html",
+            {"request": request, "initial_page": "historical_replay"},
+        )
 
     async def get_historical_replay_status(
         self,

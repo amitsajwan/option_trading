@@ -17,7 +17,7 @@ import json
 import csv
 import asyncio
 import math
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 import os
 import logging
 import re
@@ -113,6 +113,22 @@ try:
     from .legacy_trading_runtime_routes import DashboardLegacyTradingRouter
 except ImportError:
     from legacy_trading_runtime_routes import DashboardLegacyTradingRouter  # type: ignore
+
+try:
+    from .velocity_testing_routes import DashboardVelocityTestingRouter
+except ImportError:
+    try:
+        from velocity_testing_routes import DashboardVelocityTestingRouter  # type: ignore
+    except ImportError:
+        DashboardVelocityTestingRouter = None  # type: ignore
+
+try:
+    from .velocity_testing_service import VelocityTestingService
+except ImportError:
+    try:
+        from velocity_testing_service import VelocityTestingService  # type: ignore
+    except ImportError:
+        VelocityTestingService = None  # type: ignore
 
 try:
     from snapshot_app.core.snapshot_ml_flat_contract import load_contract_schema, load_feature_groups, load_legacy_mapping
@@ -1552,13 +1568,207 @@ _historical_replay_monitor_service = (
     else None
 )
 
-# Mount static files (optional - create directory if needed)
-import os
-if os.path.exists("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Setup templates
-templates_dir = Path(__file__).parent / "templates"
+class _MongoVelocitySnapshotProvider:
+    """Loads persisted snapshots for the dashboard velocity testing service."""
+
+    def get_snapshots_for_date_range(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+        mongo_rows = self._load_mongo_snapshots(start_date, end_date)
+        if any(isinstance(row.get("velocity_enrichment"), dict) and row.get("velocity_enrichment") for row in mongo_rows):
+            return mongo_rows
+        parquet_rows = self._load_parquet_velocity_snapshots(start_date, end_date)
+        return parquet_rows or mongo_rows
+
+    def _load_mongo_snapshots(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+        if _strategy_eval_service is None:
+            return []
+
+        dataset = str(os.getenv("VELOCITY_TESTING_DATASET") or "historical").strip().lower()
+        if dataset == "live":
+            coll_name = str(os.getenv("MONGO_COLL_SNAPSHOTS") or "phase1_market_snapshots").strip()
+        else:
+            coll_name = (
+                str(os.getenv("MONGO_COLL_SNAPSHOTS_HISTORICAL") or "phase1_market_snapshots_historical").strip()
+                or "phase1_market_snapshots_historical"
+            )
+
+        max_rows = max(1, int(os.getenv("VELOCITY_TESTING_MAX_SNAPSHOTS") or "5000"))
+        query = {
+            "trade_date_ist": {
+                "$gte": start_date.isoformat(),
+                "$lte": end_date.isoformat(),
+            }
+        }
+        projection = {
+            "_id": 1,
+            "instrument": 1,
+            "timestamp": 1,
+            "trade_date_ist": 1,
+            "payload.snapshot": 1,
+        }
+        coll = _strategy_eval_service._db()[coll_name]
+        docs = coll.find(
+            query,
+            projection=projection,
+            sort=[("trade_date_ist", 1), ("timestamp", 1)],
+            limit=max_rows,
+        )
+
+        snapshots: List[Dict[str, Any]] = []
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            payload = doc.get("payload") if isinstance(doc.get("payload"), dict) else {}
+            snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
+            if not snapshot:
+                continue
+            row = dict(snapshot)
+            row.setdefault("snapshot_id", str(doc.get("_id") or row.get("snapshot_id") or ""))
+            row.setdefault("timestamp", _normalize_timestamp_string(doc.get("timestamp")) or doc.get("timestamp"))
+            row.setdefault("trade_date", str(doc.get("trade_date_ist") or ""))
+            row.setdefault("instrument", str(doc.get("instrument") or row.get("instrument") or "").strip())
+            snapshots.append(row)
+        return snapshots
+
+    def _load_parquet_velocity_snapshots(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+        parquet_base = Path(
+            os.getenv("SNAPSHOT_PARQUET_BASE")
+            or os.getenv("VELOCITY_TESTING_PARQUET_BASE")
+            or "/app/.data/ml_pipeline/parquet_data"
+        )
+        market_base_dir = parquet_base / "market_base"
+        stage2_dir = parquet_base / "stage2_direction_view_v3_candidate"
+        if not market_base_dir.exists() or not stage2_dir.exists():
+            return []
+
+        max_rows = max(1, int(os.getenv("VELOCITY_TESTING_MAX_SNAPSHOTS") or "5000"))
+        merged_frames: List[pd.DataFrame] = []
+        for year in range(start_date.year, end_date.year + 1):
+            market_base_file = next((market_base_dir / f"year={year}").glob("chunk=*/data.parquet"), None)
+            if market_base_file is None or not market_base_file.exists():
+                continue
+            market_df = pd.read_parquet(market_base_file)
+            if market_df.empty or "trade_date" not in market_df.columns:
+                continue
+            market_df["trade_date"] = market_df["trade_date"].astype(str)
+            market_df = market_df[
+                (market_df["trade_date"] >= start_date.isoformat()) & (market_df["trade_date"] <= end_date.isoformat())
+            ]
+            if market_df.empty or "snapshot_id" not in market_df.columns:
+                continue
+
+            stage_frames: List[pd.DataFrame] = []
+            for single_day in pd.date_range(start_date, end_date, freq="D"):
+                if int(single_day.year) != year:
+                    continue
+                stage_file = stage2_dir / f"year={year}" / f"{single_day.date().isoformat()}.parquet"
+                if not stage_file.exists():
+                    continue
+                stage_df = pd.read_parquet(stage_file)
+                if stage_df.empty or "snapshot_id" not in stage_df.columns:
+                    continue
+                stage_frames.append(stage_df)
+            if not stage_frames:
+                continue
+
+            stage2_df = pd.concat(stage_frames, ignore_index=True, copy=False)
+            stage2_cols = [c for c in stage2_df.columns if c != "snapshot_id"]
+            merged = market_df.merge(
+                stage2_df[["snapshot_id", *stage2_cols]],
+                on="snapshot_id",
+                how="inner",
+                suffixes=("", "_stage2"),
+            )
+            if merged.empty:
+                continue
+            merged_frames.append(merged)
+
+        if not merged_frames:
+            return []
+
+        frame = pd.concat(merged_frames, ignore_index=True, copy=False)
+        if "timestamp" in frame.columns:
+            frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+            frame = frame.sort_values("timestamp", kind="stable")
+        rows: List[Dict[str, Any]] = []
+        for _, series in frame.head(max_rows).iterrows():
+            row = {k: v for k, v in series.to_dict().items() if pd.notna(v)}
+            rows.append(self._build_velocity_snapshot(row))
+        return rows
+
+    @staticmethod
+    def _build_velocity_snapshot(row: Dict[str, Any]) -> Dict[str, Any]:
+        velocity = {
+            key: value
+            for key, value in row.items()
+            if (key.startswith("vel_") or key.startswith("ctx_am_") or key in {"vol_spike_ratio"})
+        }
+        return {
+            "snapshot_id": str(row.get("snapshot_id") or ""),
+            "instrument": str(row.get("instrument") or ""),
+            "trade_date": str(row.get("trade_date") or ""),
+            "timestamp": row.get("timestamp"),
+            "minutes_since_open": row.get("minutes_since_open"),
+            "atm_ce_vol_ratio": row.get("atm_ce_vol_ratio"),
+            "atm_pe_vol_ratio": row.get("atm_pe_vol_ratio"),
+            "iv_percentile": row.get("iv_percentile"),
+            "session_context": {
+                "timestamp": row.get("timestamp"),
+                "date": row.get("trade_date"),
+                "minutes_since_open": row.get("minutes_since_open"),
+                "day_of_week": row.get("day_of_week"),
+                "days_to_expiry": row.get("days_to_expiry"),
+                "is_expiry_day": row.get("is_expiry_day"),
+                "session_phase": row.get("session_phase"),
+            },
+            "futures_bar": {
+                "fut_close": row.get("fut_close"),
+                "fut_oi": row.get("fut_oi"),
+            },
+            "futures_derived": {
+                "fut_return_5m": row.get("fut_return_5m"),
+                "fut_return_15m": row.get("fut_return_15m"),
+                "fut_return_30m": row.get("fut_return_30m"),
+                "realized_vol_30m": row.get("realized_vol_30m"),
+                "vol_ratio": row.get("vol_ratio"),
+                "fut_oi_change_30m": row.get("fut_oi_change_30m"),
+            },
+            "opening_range": {
+                "or_width": row.get("or_width"),
+                "orh_broken": row.get("orh_broken"),
+                "orl_broken": row.get("orl_broken"),
+            },
+            "vix_context": {
+                "vix_current": row.get("vix_current"),
+                "vix_intraday_chg": row.get("vix_intraday_chg"),
+                "vix_regime": row.get("vix_regime"),
+                "vix_spike_flag": row.get("vix_spike_flag"),
+            },
+            "chain_aggregates": {
+                "pcr": row.get("pcr"),
+                "max_pain": row.get("max_pain"),
+            },
+            "iv_derived": {
+                "iv_percentile": row.get("iv_percentile"),
+                "iv_regime": row.get("iv_regime"),
+            },
+            "velocity_enrichment": velocity,
+        }
+
+
+_velocity_testing_service = (
+    VelocityTestingService(data_provider=_MongoVelocitySnapshotProvider())
+    if (VelocityTestingService is not None and _strategy_eval_service is not None)
+    else None
+)
+
+# Setup dashboard UI assets and templates.
+dashboard_root = Path(__file__).resolve().parent
+static_dir = dashboard_root / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+templates_dir = dashboard_root / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 
 # Market Data API configuration
@@ -3768,6 +3978,16 @@ _strategy_evaluation_routes = DashboardStrategyEvaluationRouter(
 )
 app.include_router(_strategy_evaluation_routes.router)
 
+_velocity_testing_routes = None
+if DashboardVelocityTestingRouter is not None:
+    _velocity_testing_routes = DashboardVelocityTestingRouter(
+        templates=templates,
+        test_policies_fn=lambda **kwargs: _velocity_testing_service.test_policies_for_date_range(**kwargs),
+        get_heatmap_fn=lambda **kwargs: _velocity_testing_service.get_velocity_heatmap(**kwargs),
+        velocity_testing_available=lambda: _velocity_testing_service is not None,
+    )
+    app.include_router(_velocity_testing_routes.router)
+
 _model_catalog_routes = DashboardModelCatalogRouter(
     templates=templates,
     build_trading_model_catalog=lambda: _build_trading_model_catalog(),
@@ -3902,6 +4122,10 @@ get_strategy_evaluation_trades = _strategy_evaluation_routes.get_strategy_evalua
 create_strategy_evaluation_run = _strategy_evaluation_routes.create_strategy_evaluation_run
 get_latest_strategy_evaluation_run = _strategy_evaluation_routes.get_latest_strategy_evaluation_run
 get_strategy_evaluation_run = _strategy_evaluation_routes.get_strategy_evaluation_run
+if _velocity_testing_routes is not None:
+    velocity_testing_page = _velocity_testing_routes.velocity_testing_page
+    test_velocity_policies = _velocity_testing_routes.test_velocity_policies
+    get_velocity_heatmap = _velocity_testing_routes.get_velocity_heatmap
 trading_models_page = _model_catalog_routes.trading_models_page
 get_trading_models = _model_catalog_routes.get_trading_models
 trading_terminal_model = _model_catalog_routes.trading_terminal_model

@@ -191,13 +191,9 @@ class LiveStrategyAppTests(unittest.TestCase):
         response = asyncio.run(dashboard_app.live_strategy(request))
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Live Strategy Monitor", response.body)
-        self.assertIn(b"Live Drilldown", response.body)
-        self.assertIn(b"Mode Rail", response.body)
-        self.assertIn(b"Live Watchlist", response.body)
-        self.assertIn(b"Session Trades", response.body)
-        self.assertIn(b"Evaluation Compare", response.body)
-        self.assertIn(b"Research Explorer", response.body)
+        self.assertIn(b"trading.ops", response.body)
+        self.assertIn(b"/static/redesign/pages/live_strategy.js", response.body)
+        self.assertIn(b'const routeStart = "live_strategy";', response.body)
 
     def test_live_strategy_session_endpoint_returns_payload(self) -> None:
         payload = asyncio.run(dashboard_app.get_live_strategy_session(date="2026-03-02"))

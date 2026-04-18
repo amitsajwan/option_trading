@@ -44,6 +44,8 @@ from .profiles import PRODUCTION_DEFAULT_PROFILE_ID
 from .regime import RegimeClassifier, RegimeSignal
 from .snapshot_accessor import SnapshotAccessor
 from .strategy_router import StrategyRouter
+from .velocity_entry_policy import VelocityEnhancedEntryPolicy
+from .velocity_regime_classifier import VelocityEnhancedRegimeClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +71,12 @@ class DeterministicRuleEngine(StrategyEngine):
         strategy_family_version: Optional[str] = None,
         strategy_profile_id: str = DEFAULT_STRATEGY_PROFILE_ID,
     ) -> None:
-        self._regime = RegimeClassifier(model_path=model_path)
+        self._velocity_enhanced = _as_bool(os.getenv("STRATEGY_ENHANCED_VELOCITY"))
+        self._regime = (
+            VelocityEnhancedRegimeClassifier(model_path=model_path)
+            if self._velocity_enhanced
+            else RegimeClassifier(model_path=model_path)
+        )
         self._router = router or StrategyRouter()
         self._tracker = PositionTracker()
         self._risk = RiskManager()
@@ -79,7 +86,7 @@ class DeterministicRuleEngine(StrategyEngine):
         self._run_risk_config = self._default_risk_config
         self._default_policy_config = policy_config or PolicyConfig()
         self._injected_entry_policy = entry_policy
-        self._entry_policy: EntryPolicy = entry_policy or LongOptionEntryPolicy(config=self._default_policy_config)
+        self._entry_policy: EntryPolicy = entry_policy or self._build_entry_policy(self._default_policy_config)
         self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
         self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)
         self._startup_warmup_minutes = max(0.0, float(os.getenv("STRATEGY_STARTUP_WARMUP_MINUTES", "0") or 0.0))
@@ -101,7 +108,16 @@ class DeterministicRuleEngine(StrategyEngine):
         self._strategy_profile_id = str(strategy_profile_id or DEFAULT_STRATEGY_PROFILE_ID).strip() or DEFAULT_STRATEGY_PROFILE_ID
         self._run_id: Optional[str] = None
         self._set_logger_context(None)
-        logger.info("deterministic engine initialized min_confidence=%.2f", self._min_confidence)
+        logger.info(
+            "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s",
+            self._min_confidence,
+            self._velocity_enhanced,
+        )
+
+    def _build_entry_policy(self, config: PolicyConfig) -> EntryPolicy:
+        if self._velocity_enhanced:
+            return VelocityEnhancedEntryPolicy(config=config)
+        return LongOptionEntryPolicy(config=config)
 
     def set_run_context(self, run_id: Optional[str], metadata: Optional[dict[str, Any]] = None) -> None:
         self._run_id = str(run_id or "").strip() or None
@@ -126,7 +142,7 @@ class DeterministicRuleEngine(StrategyEngine):
         )
         if isinstance(policy_payload, dict):
             policy_cfg = PolicyConfig.from_payload(policy_payload)
-            self._entry_policy = LongOptionEntryPolicy(config=policy_cfg)
+            self._entry_policy = self._build_entry_policy(policy_cfg)
             self._post_halt_resume_boost_enabled = bool(policy_cfg.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(policy_cfg.post_halt_resume_boost_score)
         elif self._injected_entry_policy is not None:
@@ -134,7 +150,7 @@ class DeterministicRuleEngine(StrategyEngine):
             self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)
         else:
-            self._entry_policy = LongOptionEntryPolicy(config=self._default_policy_config)
+            self._entry_policy = self._build_entry_policy(self._default_policy_config)
             self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)
         if isinstance(regime_payload, dict):

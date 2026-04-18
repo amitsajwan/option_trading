@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="theme-color" content="#F6F4EF">
+<title>Trading Dashboard — Redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/static/redesign/tokens.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>trading.ops</span></div>
+    <nav class="tabs" role="tablist" aria-label="Dashboard pages">
+      <button class="tab" role="tab" data-page="live_strategy" aria-selected="true"><span class="dot live"></span>Live strategy</button>
+      <button class="tab" role="tab" data-page="index"><span class="dot"></span>Market data</button>
+      <button class="tab" role="tab" data-page="historical_replay"><span class="dot"></span>Historical replay</button>
+      <button class="tab" role="tab" data-page="strategy_evaluation"><span class="dot warn"></span>Evaluation</button>
+    </nav>
+    <div class="topright">
+      <span class="ws hide-mobile"><span class="dot"></span>ws · connected</span>
+      <span class="sep hide-mobile"></span>
+      <span class="clock" id="clock">14:02:11 IST</span>
+      <span class="sep hide-mobile"></span>
+      <span class="kbd hide-mobile">⌘K</span>
+    </div>
+  </header>
+  <main id="page" class="page"></main>
+</div>
+
+<script src="/static/redesign/charts.js"></script>
+<script src="/static/redesign/interactive_chart.js"></script>
+<script src="/static/redesign/mock.js"></script>
+<script src="/static/redesign/api.js"></script>
+<script src="/static/redesign/pages/live_strategy.js"></script>
+<script src="/static/redesign/pages/index.js"></script>
+<script src="/static/redesign/pages/historical_replay.js"></script>
+<script src="/static/redesign/pages/strategy_evaluation.js"></script>
+<script>
+  const page = document.getElementById('page');
+  const tabs = document.querySelectorAll('.tab');
+  function go(name) {
+    const renderer = (window.PAGES || {})[name];
+    if (!renderer) return;
+    window.__opCurrentPage = name;
+    page.innerHTML = renderer();
+    tabs.forEach(t => t.setAttribute('aria-selected', t.dataset.page === name ? 'true' : 'false'));
+    const mount = (window.PAGE_MOUNTS || {})[name];
+    if (mount) {
+      // mount synchronously; also retry once on next frame in case of zero-size layout
+      try { mount(); } catch (e) { console.error(e); }
+      requestAnimationFrame(() => { try { mount(); } catch (e) {} });
+    }
+    try { localStorage.setItem('op.page', name); } catch (e) {}
+    window.scrollTo(0, 0);
+  }
+  tabs.forEach(t => t.addEventListener('click', () => go(t.dataset.page)));
+  const routeStart = {{ (initial_page or 'live_strategy') | tojson }};
+  const start = routeStart || (() => { try { return localStorage.getItem('op.page'); } catch (e) {} })() || 'live_strategy';
+  go(start);
+
+  // animated clock
+  const clockEl = document.getElementById('clock');
+  function tick() {
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    clockEl.textContent = `${hh}:${mm}:${ss} IST`;
+  }
+  tick(); setInterval(tick, 1000);
+</script>
+</body>
+</html>

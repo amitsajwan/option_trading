@@ -80,11 +80,9 @@ class StrategyEvaluationRouteTests(unittest.TestCase):
         response = asyncio.run(dashboard_app.strategy_evaluation_page(request))
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Strategy Evaluation Compare", response.body)
-        self.assertIn(b"Awaiting Comparison", response.body)
-        self.assertIn(b"Compare Runs", response.body)
-        self.assertIn(b"Mode Rail", response.body)
-        self.assertIn(b"Open Dashboard", response.body)
+        self.assertIn(b"trading.ops", response.body)
+        self.assertIn(b"/static/redesign/pages/strategy_evaluation.js", response.body)
+        self.assertIn(b'const routeStart = "strategy_evaluation";', response.body)
 
     def test_summary_alias_delegates_and_normalizes_timestamps(self) -> None:
         payload = asyncio.run(

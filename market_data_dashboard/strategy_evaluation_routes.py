@@ -33,9 +33,10 @@ class DashboardStrategyEvaluationRouter:
     async def strategy_evaluation_page(self, request: Request) -> HTMLResponse:
         self._require_strategy_eval_service()
         return self._templates.TemplateResponse(
-            "strategy_evaluation.html",
+            "dashboard.html",
             {
                 "request": request,
+                "initial_page": "strategy_evaluation",
             },
         )
 
