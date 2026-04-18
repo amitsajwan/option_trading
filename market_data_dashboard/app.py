@@ -1644,10 +1644,11 @@ class _MongoVelocitySnapshotProvider:
         max_rows = max(1, int(os.getenv("VELOCITY_TESTING_MAX_SNAPSHOTS") or "5000"))
         merged_frames: List[pd.DataFrame] = []
         for year in range(start_date.year, end_date.year + 1):
-            market_base_file = next((market_base_dir / f"year={year}").glob("chunk=*/data.parquet"), None)
-            if market_base_file is None or not market_base_file.exists():
+            chunk_files = sorted((market_base_dir / f"year={year}").glob("chunk=*/data.parquet"))
+            if not chunk_files:
                 continue
-            market_df = pd.read_parquet(market_base_file)
+            year_frames = [pd.read_parquet(f) for f in chunk_files]
+            market_df = pd.concat(year_frames, ignore_index=True, copy=False)
             if market_df.empty or "trade_date" not in market_df.columns:
                 continue
             market_df["trade_date"] = market_df["trade_date"].astype(str)
