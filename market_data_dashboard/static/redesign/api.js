@@ -377,8 +377,22 @@
     return response.json();
   }
 
+  async function post(path, body) {
+    var response = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    if (!response.ok) {
+      var text = await response.text().catch(function () { return response.statusText; });
+      throw new Error(response.status + ' ' + text + ' (' + path + ')');
+    }
+    return response.json();
+  }
+
   global.DashAPI = {
     get: get,
+    post: post,
     fetchLiveSession: function (params) { return get('/api/live/strategy/session', params); },
     fetchLiveTraces: function (params) { return get('/api/live/strategy/traces', params); },
     fetchHistoricalSession: function (params) { return get('/api/historical/replay/session', params); },

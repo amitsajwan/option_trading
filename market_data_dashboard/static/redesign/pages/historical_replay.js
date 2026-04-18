@@ -146,14 +146,15 @@
           '<div class="page-actions">' +
             '<div class="field" style="flex-direction:row;align-items:center;gap:6px">' +
               '<span class="field-label">From</span>' +
-              '<input class="inp" type="date" value="' + esc(replay.start_date || data.session.date_ist || '') + '" style="width:130px">' +
+              '<input id="replay-from" class="inp" type="date" value="' + esc(replay.start_date || data.session.date_ist || '') + '" style="width:130px">' +
               '<span class="field-label">To</span>' +
-              '<input class="inp" type="date" value="' + esc(replay.end_date || data.session.date_ist || '') + '" style="width:130px">' +
+              '<input id="replay-to" class="inp" type="date" value="' + esc(replay.end_date || data.session.date_ist || '') + '" style="width:130px">' +
               '<span class="field-label">Speed</span>' +
-              '<input class="inp" type="number" value="' + esc(replay.speed != null ? replay.speed : 0) + '" style="width:60px">' +
+              '<input id="replay-speed" class="inp" type="number" value="' + esc(replay.speed != null ? replay.speed : 0) + '" style="width:60px">' +
             '</div>' +
-            '<button class="btn">Load range</button>' +
-            '<button class="btn primary">Run replay</button>' +
+            '<button id="btn-load-range" class="btn">Load range</button>' +
+            '<button id="btn-run-replay" class="btn primary">Run replay</button>' +
+            '<span id="replay-run-status" style="font-size:12px;color:var(--ink-3);align-self:center"></span>' +
           '</div>' +
         '</div>' +
 
@@ -232,7 +233,7 @@
       '</div>';
   }
 
-  async function loadData() {
+  async function loadData(dateFrom, dateTo) {
     if (!window.DashAPI) throw new Error('DashAPI is not loaded');
     var replayStatus = await window.DashAPI.fetchHistoricalStatus({});
     var sessionParams = {
@@ -242,8 +243,8 @@
       limit_trades: 12,
       limit_signals: 12,
     };
-    var rangeFrom = replayStatus.start_date || replayStatus.date_ist;
-    var rangeTo = replayStatus.end_date || replayStatus.date_ist;
+    var rangeFrom = dateFrom || replayStatus.start_date || replayStatus.date_ist;
+    var rangeTo = dateTo || replayStatus.end_date || replayStatus.date_ist;
     var results = await Promise.all([
       window.DashAPI.fetchHistoricalSession(sessionParams),
       window.DashAPI.fetchEvalDays({
@@ -253,13 +254,92 @@
         run_id: replayStatus.latest_completed_run_id || undefined,
         page: 1,
         page_size: 8,
-      }),
+      }).catch(function () { return { rows: [], total: 0, no_runs: true }; }),
     ]);
     var pageData = window.DashAPI.sessionToPageData(results[0]);
     pageData.replayStatus = replayStatus;
     pageData.days = (results[1].rows || []).map(window.DashAPI.mapSessionDay);
     pageData.source = 'api';
     return pageData;
+  }
+
+  function attachHandlers() {
+    var btnRun = document.getElementById('btn-run-replay');
+    var btnLoad = document.getElementById('btn-load-range');
+    var statusEl = document.getElementById('replay-run-status');
+
+    function getInputs() {
+      return {
+        dateFrom: (document.getElementById('replay-from') || {}).value || '',
+        dateTo: (document.getElementById('replay-to') || {}).value || '',
+        speed: parseFloat((document.getElementById('replay-speed') || {}).value || '0') || 0,
+      };
+    }
+
+    if (btnLoad) {
+      btnLoad.addEventListener('click', function () {
+        var inp = getInputs();
+        if (!inp.dateFrom || !inp.dateTo) { alert('Set From and To dates first.'); return; }
+        cache = null;
+        pending = loadData(inp.dateFrom, inp.dateTo)
+          .then(function (data) {
+            cache = data;
+            var root = document.getElementById('page');
+            if (root) { root.innerHTML = render(data); attachHandlers(); }
+          })
+          .catch(function (err) { console.error('Load range failed:', err); })
+          .finally(function () { pending = null; });
+      });
+    }
+
+    if (btnRun) {
+      btnRun.addEventListener('click', function () {
+        var inp = getInputs();
+        if (!inp.dateFrom || !inp.dateTo) { alert('Set From and To dates first.'); return; }
+        btnRun.disabled = true;
+        btnRun.textContent = 'Queuing…';
+        if (statusEl) statusEl.textContent = '';
+
+        window.DashAPI.post('/api/strategy/evaluation/runs', {
+          dataset: 'historical',
+          date_from: inp.dateFrom,
+          date_to: inp.dateTo,
+          speed: inp.speed,
+        }).then(function (resp) {
+          var runId = resp.run_id;
+          if (statusEl) statusEl.textContent = 'Run ' + runId.slice(0, 8) + '… queued';
+          btnRun.textContent = 'Running…';
+          pollRun(runId, statusEl, btnRun, inp.dateFrom, inp.dateTo);
+        }).catch(function (err) {
+          btnRun.disabled = false;
+          btnRun.textContent = 'Run replay';
+          if (statusEl) statusEl.textContent = 'Error: ' + String(err);
+        });
+      });
+    }
+  }
+
+  function pollRun(runId, statusEl, btnRun, dateFrom, dateTo) {
+    var interval = setInterval(function () {
+      window.DashAPI.fetchEvalRun(runId).then(function (run) {
+        var st = run.status || 'unknown';
+        var pct = Number(run.progress_pct || 0).toFixed(0);
+        if (statusEl) statusEl.textContent = st + ' ' + pct + '% — ' + (run.message || '');
+        if (st === 'completed' || st === 'failed' || st === 'error') {
+          clearInterval(interval);
+          btnRun.disabled = false;
+          btnRun.textContent = 'Run replay';
+          if (st === 'completed') {
+            cache = null;
+            loadData(dateFrom, dateTo).then(function (data) {
+              cache = data;
+              var root = document.getElementById('page');
+              if (root) { root.innerHTML = render(data); attachHandlers(); }
+            }).catch(function (err) { console.error('Refresh after run failed:', err); });
+          }
+        }
+      }).catch(function () { /* ignore poll errors */ });
+    }, 2000);
   }
 
   function mount() {
@@ -270,6 +350,7 @@
       var currentView = document.getElementById('historical-replay-view');
       if (!currentView || currentView.getAttribute('data-source') !== 'api') {
         page.innerHTML = render(cache);
+        attachHandlers();
       }
       return;
     }
@@ -280,7 +361,7 @@
         cache = data;
         if (window.__opCurrentPage !== PAGE) return;
         var root = document.getElementById('page');
-        if (root) root.innerHTML = render(data);
+        if (root) { root.innerHTML = render(data); attachHandlers(); }
       })
       .catch(function (err) {
         console.error('Failed to hydrate historical replay page:', err);
