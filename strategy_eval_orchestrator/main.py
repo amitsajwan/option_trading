@@ -196,6 +196,7 @@ def _replay_and_publish(
                 "topic": topic,
                 "risk_config": dict(risk_config or {}),
                 "rollout_context": dict(rollout_context or {}),
+                "policy_config": {"iv_pct_hard_max": 100.5},
             },
         )
         redis_client.publish(topic, json.dumps(event, ensure_ascii=False, default=str))
