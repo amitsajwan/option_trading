@@ -30,6 +30,9 @@ class SnapshotAccessor:
             if strike is None:
                 continue
             self._strike_index[int(strike)] = row
+        # velocity_enrichment: populated from 11:30 IST onwards by LiveVelocityAccumulator.
+        # Key matches the canonical block name used by stage_views._project_view().
+        self._vel = payload.get("velocity_enrichment") if isinstance(payload.get("velocity_enrichment"), dict) else {}
 
     @property
     def raw_payload(self) -> dict[str, Any]:
@@ -546,3 +549,21 @@ class SnapshotAccessor:
                 "close": self._f(row.get("pe_ltp")),
             }
         return None
+
+    # ------------------------------------------------------------------
+    # velocity_features — populated from 11:30 IST by LiveVelocityAccumulator
+    # ------------------------------------------------------------------
+
+    @property
+    def has_velocity(self) -> bool:
+        """True if velocity features were computed for this tick (post-11:30 IST)."""
+        return bool(self._vel)
+
+    def vel(self, name: str) -> Optional[float]:
+        """Return a single velocity feature by name, or None if missing/NaN."""
+        return self._f(self._vel.get(name))
+
+    @property
+    def velocity_features(self) -> dict[str, Any]:
+        """Full velocity feature dict (may be empty before 11:30 IST)."""
+        return self._vel

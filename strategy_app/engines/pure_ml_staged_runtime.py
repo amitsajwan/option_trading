@@ -8,7 +8,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from snapshot_app.core.stage_views import project_stage_views
+from snapshot_app.core.stage_views import project_stage_views, project_stage_views_v2
 
 from ml_pipeline_2.inference_contract.predict import predict_probabilities_from_frame
 from ml_pipeline_2.staged.runtime_contract import STAGED_RUNTIME_BUNDLE_KIND, load_staged_runtime_policy
@@ -193,6 +193,20 @@ def _run_prefilter_chain(engine: Any, snap: Any, stage1_row: dict[str, object], 
     return None, regime_signal
 
 
+def _is_v2_bundle(bundle: dict[str, Any]) -> bool:
+    """Return True when the staged bundle was trained on V2 (velocity-enriched) features.
+
+    Detected by explicit ``runtime.view_version = "v2"`` in the bundle, or by the
+    presence of a velocity column name (prefix ``vel_`` or ``ctx_am_``) in stage1's
+    feature_columns list.
+    """
+    runtime = bundle.get("runtime") or {}
+    if str(runtime.get("view_version") or "").lower() == "v2":
+        return True
+    stage1_cols = list((((bundle.get("stages") or {}).get("stage1") or {}).get("model_package") or {}).get("feature_columns") or [])
+    return any(str(c).startswith(("vel_", "ctx_am_", "ctx_gap_")) for c in stage1_cols)
+
+
 def predict_staged(
     *,
     engine: Any,
@@ -202,7 +216,16 @@ def predict_staged(
     policy: dict[str, Any],
 ) -> StagedRuntimeDecision:
     gate_ids = list(((bundle.get("runtime") or {}).get("prefilter_gate_ids") or (policy.get("runtime") or {}).get("prefilter_gate_ids") or []))
-    stage_views = project_stage_views(snap.raw_payload)
+    use_v2 = _is_v2_bundle(bundle)
+    if use_v2:
+        raw_views = project_stage_views_v2(snap.raw_payload)
+        stage_views = {
+            "stage1_entry_view": raw_views["stage1_entry_view_v2"],
+            "stage2_direction_view": raw_views["stage2_direction_view_v2"],
+            "stage3_recipe_view": raw_views["stage3_recipe_view_v2"],
+        }
+    else:
+        stage_views = project_stage_views(snap.raw_payload)
     stage1_package = dict(((bundle.get("stages") or {}).get("stage1") or {}).get("model_package") or {})
     stage2_package = dict(((bundle.get("stages") or {}).get("stage2") or {}).get("model_package") or {})
     stage3_packages = dict(((bundle.get("stages") or {}).get("stage3") or {}).get("recipe_packages") or {})

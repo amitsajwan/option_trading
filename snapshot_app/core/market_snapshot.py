@@ -19,6 +19,11 @@ try:
 except Exception:  # pragma: no cover - runtime dependency
     GreeksCalculator = None
 
+try:
+    from .live_velocity_state import LiveVelocityAccumulator as _LiveVelocityAccumulator
+except Exception:  # pragma: no cover - optional dependency
+    _LiveVelocityAccumulator = None  # type: ignore[assignment,misc]
+
 
 IST = timezone(timedelta(hours=5, minutes=30))
 SESSION_OPEN_MINUTE = 9 * 60 + 15
@@ -1582,6 +1587,7 @@ class LiveMarketSnapshotBuilder:
         risk_free_rate_default: float = 0.065,
         enable_kite_backfill: bool = True,
         kite_history_days: int = 12,
+        parquet_root: Optional[str] = None,
     ):
         self.instrument = str(instrument or "").strip().upper()
         if not self.instrument:
@@ -1601,6 +1607,17 @@ class LiveMarketSnapshotBuilder:
         self._kite_history_cache_end_date: Optional[datetime.date] = None
         # VIX for live snapshots is sourced strictly from market API stream/tick endpoints.
         self.vix_daily = pd.DataFrame()
+        # Velocity feature accumulator: computes vel_*/ctx_am_*/ctx_gap_* at 11:30 IST
+        # and injects them into every post-11:30 snapshot for the same trade_date.
+        # parquet_root enables context lookup (prev_day_close, vol averages) so that
+        # ctx_gap_* / vol_spike_ratio match the training-data values.
+        self._velocity_acc = (
+            _LiveVelocityAccumulator(
+                parquet_root=Path(parquet_root) if parquet_root else None,
+            )
+            if _LiveVelocityAccumulator is not None
+            else None
+        )
 
     def _get_json(self, url: str, params: Optional[Dict[str, Any]] = None) -> Any:
         response = requests.get(
@@ -1809,7 +1826,7 @@ class LiveMarketSnapshotBuilder:
         ohlc = self._augment_ohlc_with_kite_history(ohlc=ohlc)
         chain = self.fetch_options_chain()
         vix_live = self.fetch_live_vix()
-        return build_market_snapshot(
+        snapshot = build_market_snapshot(
             instrument=self.instrument,
             ohlc=ohlc,
             chain=chain,
@@ -1819,6 +1836,9 @@ class LiveMarketSnapshotBuilder:
             prev_session_chain_baseline=prev_session_chain_baseline,
             risk_free_rate_default=self.risk_free_rate_default,
         )
+        if self._velocity_acc is not None:
+            snapshot = self._velocity_acc.process(snapshot)
+        return snapshot
 
 
 def run_cli(argv: Optional[Iterable[str]] = None) -> int:
@@ -1831,6 +1851,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--out-jsonl", default=None, help="Optional output JSONL path")
     parser.add_argument("--disable-kite-backfill", action="store_true", help="Disable automatic Zerodha history backfill")
     parser.add_argument("--kite-history-days", type=int, default=12, help="Trading-history lookback target used for Kite backfill")
+    parser.add_argument("--parquet-root", default=None, help="Path to parquet data root; enables prev-day context lookup for velocity features")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     builder = LiveMarketSnapshotBuilder(
@@ -1840,6 +1861,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         timeout_seconds=float(args.timeout_seconds),
         enable_kite_backfill=(not bool(args.disable_kite_backfill)),
         kite_history_days=int(args.kite_history_days),
+        parquet_root=args.parquet_root,
     )
 
     snap = builder.build_snapshot(ohlc_limit=int(args.ohlc_limit))

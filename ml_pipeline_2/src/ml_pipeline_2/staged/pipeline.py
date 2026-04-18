@@ -2214,7 +2214,11 @@ def _stage2_side_masks_from_policy(
     entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
     direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
     if policy_id in {"direction_gate_threshold_v1", "direction_gate_economic_balance_v1"}:
-        direction_trade_prob = _numeric_array(merged["direction_trade_prob"], fillna=0.0)
+        direction_trade_prob = _numeric_array(
+            merged["direction_trade_prob"] if "direction_trade_prob" in merged.columns
+            else pd.Series(np.ones(len(merged)), index=merged.index),
+            fillna=1.0,
+        )
         return _direction_trade_masks_with_gate(
             entry_probs,
             direction_trade_prob,
@@ -2418,7 +2422,11 @@ def select_direction_gate_policy(
     merged = _merge_policy_inputs(utility, stage1_scores, valid_scores)
     entry_threshold = float(stage1_policy["selected_threshold"])
     entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
-    direction_trade_prob = _numeric_array(merged["direction_trade_prob"], fillna=0.0)
+    direction_trade_prob = _numeric_array(
+        merged["direction_trade_prob"] if "direction_trade_prob" in merged.columns
+        else pd.Series(np.ones(len(merged)), index=merged.index),
+        fillna=1.0,
+    )
     direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
     ce_returns = _numeric_array(merged["best_ce_net_return_after_cost"], fillna=0.0)
     pe_returns = _numeric_array(merged["best_pe_net_return_after_cost"], fillna=0.0)
@@ -2484,7 +2492,11 @@ def select_direction_gate_economic_balance_policy(
     merged = _merge_policy_inputs(utility, stage1_scores, valid_scores)
     entry_threshold = float(stage1_policy["selected_threshold"])
     entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
-    direction_trade_prob = _numeric_array(merged["direction_trade_prob"], fillna=0.0)
+    direction_trade_prob = _numeric_array(
+        merged["direction_trade_prob"] if "direction_trade_prob" in merged.columns
+        else pd.Series(np.ones(len(merged)), index=merged.index),
+        fillna=1.0,
+    )
     direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
     ce_returns = _numeric_array(merged["best_ce_net_return_after_cost"], fillna=0.0)
     pe_returns = _numeric_array(merged["best_pe_net_return_after_cost"], fillna=0.0)
