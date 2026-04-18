@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from ..contracts import BaseStrategy, PositionContext
@@ -45,7 +46,8 @@ class StrategyRouter:
         self._failed_breakout = FailedBreakoutReversalStrategy()
         self._trader_composite = TraderCompositeStrategy()
         self._trader_v3_composite = TraderV3CompositeStrategy()
-        self._iv_filter = IVRegimeFilter()
+        _extreme_iv = float(os.getenv("STRATEGY_IV_EXTREME_PERCENTILE") or "95.0")
+        self._iv_filter = IVRegimeFilter(extreme_iv_percentile=_extreme_iv)
         self._high_vol_orb = HighVolORBStrategy()
         self._prev_day = PrevDayLevelBreakout()
         self._strategy_registry: dict[str, BaseStrategy] = {
