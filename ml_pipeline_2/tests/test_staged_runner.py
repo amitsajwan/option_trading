@@ -101,7 +101,7 @@ def test_staged_runner_early_holds_when_stage2_signal_check_fails(tmp_path: Path
     monkeypatch.setattr(
         staged_pipeline,
         "_check_stage2_signal",
-        lambda _frame: {
+        lambda _frame, **_kw: {
             "has_signal": False,
             "reason": "max_corr=0.0100<0.05",
             "samples": 180,
@@ -209,6 +209,44 @@ def test_staged_runner_early_holds_after_stage2_cv_gate_failure(tmp_path: Path, 
     assert Path(summary["stage_artifacts"]["stage2"]["diagnostics_path"]).exists()
     assert all(Path(path).exists() for path in summary["stage_artifacts"]["stage2"]["diagnostics_score_paths"].values())
     assert "holdout_reports" not in summary
+
+
+def test_staged_runner_records_stage2_cv_failure_and_continues_when_configured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    payload = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    payload["runtime"]["stage2_cv_gate_mode"] = "record_only"
+    Path(manifest_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
+    original_gate_result = staged_pipeline._stage_gate_result
+
+    def _fake_stage_gate_result(quality: dict[str, object], gates: dict[str, object], *, prefix: str = "") -> tuple[bool, list[str]]:
+        if prefix == "stage2_cv.":
+            return False, ["stage2_cv.brier>0.10"]
+        return original_gate_result(quality, gates, prefix=prefix)
+
+    monkeypatch.setattr(staged_pipeline, "_stage_gate_result", _fake_stage_gate_result)
+
+    summary = run_manifest(
+        manifest_path,
+        run_output_root=Path(resolved["outputs"]["artifacts_root"]) / "staged_stage2_cv_record_only_run",
+    )
+
+    assert summary["status"] == "completed"
+    assert summary["completion_mode"] == "completed"
+    assert summary["runtime_stage2_cv_gate_mode"] == "record_only"
+    assert summary["cv_prechecks"]["stage2_cv"]["gate_passed"] is False
+    assert summary["cv_prechecks"]["stage2_cv"]["reasons"] == ["stage2_cv.brier>0.10"]
+    assert summary["cv_prechecks"]["stage2_cv"]["gate_mode"] == "record_only"
+    assert summary["cv_prechecks"]["stage2_cv"]["continued_after_failure"] is True
+    assert sorted(summary["stage_artifacts"]) == ["stage1", "stage2", "stage3"]
+    assert "holdout_reports" in summary
+    assert "gates" in summary
+    state_lines = (Path(summary["output_root"]) / "state.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any('"event": "gate_bypassed"' in line and '"stage": "stage2"' in line for line in state_lines)
 
 
 def test_staged_runner_early_holds_when_stage1_cv_metrics_are_unavailable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

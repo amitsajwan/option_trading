@@ -171,6 +171,10 @@ def _validate_staged_runtime(payload: Dict[str, Any], errors: List[str]) -> None
         errors.append("runtime.prefilter_gate_ids must not be empty")
     if "block_expiry" in payload and not isinstance(payload.get("block_expiry"), bool):
         errors.append("runtime.block_expiry must be boolean")
+    if "stage2_cv_gate_mode" in payload:
+        mode = str(payload.get("stage2_cv_gate_mode") or "").strip().lower()
+        if mode not in {"hard", "record_only"}:
+            errors.append("runtime.stage2_cv_gate_mode must be one of ['hard', 'record_only']")
 
 
 def _validate_stage2_label_filter(payload: Any, errors: List[str], *, field_prefix: str) -> None:
@@ -714,13 +718,19 @@ def _validate_grid_run_overrides(
         if not isinstance(runtime, dict):
             errors.append(f"{field_prefix}.runtime must be an object")
         else:
-            unknown_runtime = sorted(set(str(key) for key in runtime.keys()) - {"block_expiry"})
+            unknown_runtime = sorted(set(str(key) for key in runtime.keys()) - {"block_expiry", "stage2_cv_gate_mode"})
             if unknown_runtime:
                 errors.append(
-                    f"{field_prefix}.runtime supports only block_expiry; got unsupported keys: {unknown_runtime}"
+                    f"{field_prefix}.runtime supports only block_expiry and stage2_cv_gate_mode; got unsupported keys: {unknown_runtime}"
                 )
             if "block_expiry" in runtime and not isinstance(runtime.get("block_expiry"), bool):
                 errors.append(f"{field_prefix}.runtime.block_expiry must be boolean")
+            if "stage2_cv_gate_mode" in runtime:
+                mode = str(runtime.get("stage2_cv_gate_mode") or "").strip().lower()
+                if mode not in {"hard", "record_only"}:
+                    errors.append(
+                        f"{field_prefix}.runtime.stage2_cv_gate_mode must be one of ['hard', 'record_only']"
+                    )
 
     outputs = overrides.get("outputs") or {}
     if outputs:

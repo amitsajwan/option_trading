@@ -111,11 +111,25 @@ def test_staged_manifest_accepts_runtime_block_expiry_bool(tmp_path: Path) -> No
     assert resolved["runtime"]["block_expiry"] is True
 
 
+def test_staged_manifest_accepts_runtime_stage2_cv_gate_mode_record_only(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["runtime"]["stage2_cv_gate_mode"] = "record_only"
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_stage2_cv_gate_record_only.json", validate_paths=False)
+    assert resolved["runtime"]["stage2_cv_gate_mode"] == "record_only"
+
+
 def test_staged_manifest_rejects_runtime_block_expiry_non_bool(tmp_path: Path) -> None:
     payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
     payload["runtime"]["block_expiry"] = "true"
     with pytest.raises(ManifestValidationError, match="runtime.block_expiry must be boolean"):
         resolve_manifest(payload, manifest_path=tmp_path / "staged_block_expiry_invalid.json", validate_paths=False)
+
+
+def test_staged_manifest_rejects_runtime_stage2_cv_gate_mode_unknown(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["runtime"]["stage2_cv_gate_mode"] = "skip"
+    with pytest.raises(ManifestValidationError, match="runtime.stage2_cv_gate_mode must be one of"):
+        resolve_manifest(payload, manifest_path=tmp_path / "staged_stage2_cv_gate_invalid.json", validate_paths=False)
 
 
 def test_staged_manifest_rejects_profit_factor_floor_below_one(tmp_path: Path) -> None:

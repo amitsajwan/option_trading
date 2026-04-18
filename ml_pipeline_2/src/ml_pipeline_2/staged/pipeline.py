@@ -3155,6 +3155,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     parquet_root = Path(manifest["inputs"]["parquet_root"]).resolve()
     support_dataset = str(manifest["inputs"]["support_dataset"])
     runtime_block_expiry = bool(manifest["runtime"].get("block_expiry", False))
+    stage2_cv_gate_mode = str(manifest["runtime"].get("stage2_cv_gate_mode") or "hard").strip().lower()
     recipe_catalog = get_recipe_catalog(str(manifest["catalog"]["recipe_catalog_id"]))
     _prep_progress(
         ctx,
@@ -3499,23 +3500,33 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         **stage2_cv_quality,
         "gate_passed": stage2_cv_ok,
         "reasons": stage2_cv_reasons,
+        "gate_mode": stage2_cv_gate_mode,
     }
     if not stage2_cv_ok:
-        return _early_hold_summary(
-            ctx,
-            manifest,
-            components,
-            blocking_reasons=stage2_cv_reasons,
-            completed_stage_artifacts=stage_artifacts,
-            cv_prechecks=cv_prechecks,
-            completion_mode="stage2_cv_gate_failed",
-            parquet_root=parquet_root,
-            support_dataset=support_dataset,
-            runtime_block_expiry=runtime_block_expiry,
-            runtime_filtering=runtime_filtering,
-            label_filtering=label_filtering,
-            scenario_reports=coverage_scenario_reports,
-            training_environment=dict(training_environment["stages"]),
+        if stage2_cv_gate_mode == "hard":
+            return _early_hold_summary(
+                ctx,
+                manifest,
+                components,
+                blocking_reasons=stage2_cv_reasons,
+                completed_stage_artifacts=stage_artifacts,
+                cv_prechecks=cv_prechecks,
+                completion_mode="stage2_cv_gate_failed",
+                parquet_root=parquet_root,
+                support_dataset=support_dataset,
+                runtime_block_expiry=runtime_block_expiry,
+                runtime_filtering=runtime_filtering,
+                label_filtering=label_filtering,
+                scenario_reports=coverage_scenario_reports,
+                training_environment=dict(training_environment["stages"]),
+            )
+        cv_prechecks["stage2_cv"]["continued_after_failure"] = True
+        ctx.append_state(
+            "gate_bypassed",
+            stage="stage2",
+            gate="cv_precheck",
+            gate_mode=stage2_cv_gate_mode,
+            reasons=stage2_cv_reasons,
         )
 
     stage3_started_at = utc_now()
@@ -3694,6 +3705,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "publish_assessment": publish_assessment,
         "runtime_prefilter_gate_ids": list(manifest["runtime"]["prefilter_gate_ids"]),
         "runtime_block_expiry": runtime_block_expiry,
+        "runtime_stage2_cv_gate_mode": stage2_cv_gate_mode,
         "runtime_filtering": runtime_filtering,
         "label_filtering": label_filtering,
         "scenario_reports": scenario_reports,
