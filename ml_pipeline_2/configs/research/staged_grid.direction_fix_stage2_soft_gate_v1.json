@@ -38,10 +38,6 @@
             }
           },
           "training": {
-            "stage1_session_filter": {
-              "enabled": true,
-              "include_buckets": ["MIDDAY", "LATE_SESSION"]
-            },
             "stage2_session_filter": {
               "enabled": true,
               "include_buckets": ["MIDDAY"]
