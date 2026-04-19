@@ -30,6 +30,10 @@
             }
           },
           "training": {
+            "stage1_reuse": {
+              "source_run_id": "vel_s2_midday",
+              "source_run_dir": "/home/savitasajwan03/option_trading/ml_pipeline_2/artifacts/training_launches/vel_dir_grid_20260419_092647/run/runs/01_vel_s2_midday"
+            },
             "stage2_session_filter": {
               "enabled": true,
               "include_buckets": ["MIDDAY"]
