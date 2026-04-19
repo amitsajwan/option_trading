@@ -283,7 +283,7 @@ def _validate_stage1_reuse(
         errors.append(f"{field_prefix}.source_run_dir not found: {source_run_dir}")
 
     return {
-        "source_run_dir": source_run_dir,
+        "source_run_dir": str(source_run_dir) if source_run_dir is not None else None,
         "source_run_id": str(stage1_reuse.get("source_run_id") or "").strip(),
     }
 
