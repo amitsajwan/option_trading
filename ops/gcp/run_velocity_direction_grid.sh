@@ -71,7 +71,7 @@ echo "── Step 2: verify velocity columns in v3_candidate data ──"
 import sys, duckdb, pathlib
 
 dataset_root = sys.argv[1]
-glob = str(pathlib.Path(dataset_root) / "*.parquet")
+glob = str(pathlib.Path(dataset_root) / "**" / "*.parquet")
 con = duckdb.connect()
 
 # Column inventory
