@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.velocity_direction_v1.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_velocity_direction_v1"
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "vel_s2_midday",
+        "model_group_suffix": "_vd_vel_s2",
+        "overrides": {
+          "outputs": { "run_name": "vd_vel_s2_midday" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_velocity_v1"]
+            }
+          },
+          "training": {
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": ["MIDDAY"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "expiry_s2_midday",
+        "model_group_suffix": "_vd_expiry_s2",
+        "reuse_stage1_from": "vel_s2_midday",
+        "overrides": {
+          "outputs": { "run_name": "vd_expiry_s2_midday" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_expiry_aware_v3"]
+            }
+          },
+          "training": {
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": ["MIDDAY"]
+            }
+          }
+        }
+      }
+    ]
+  }
+}
