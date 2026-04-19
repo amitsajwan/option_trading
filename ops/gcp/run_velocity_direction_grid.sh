@@ -85,19 +85,20 @@ print(f"Velocity/momentum columns ({len(vel_cols)}):")
 for c in vel_cols:
     print(f"  {c}")
 
-# Population in MIDDAY window (research_valid: 2024-05 to 2024-07)
+# Population check — post-computation rows (time_minute_of_day >= 690 = 11:30 AM IST)
+# Market opens 9:15 AM = 555 min from midnight; 11:30 AM = 690 min from midnight.
 row = con.execute(f"""
     SELECT
         COUNT(*) AS total,
         SUM(CASE WHEN ctx_am_vwap_side IS NOT NULL THEN 1 ELSE 0 END) AS vel_populated
     FROM read_parquet('{glob}', hive_partitioning=false, union_by_name=true)
     WHERE trade_date BETWEEN '2024-05-01' AND '2024-07-31'
-      AND minutes_since_open >= 135
+      AND time_minute_of_day >= 690
 """).df()
 total = int(row["total"].iloc[0])
 populated = int(row["vel_populated"].iloc[0])
 pct = 100.0 * populated / total if total > 0 else 0
-print(f"\nMIDDAY rows (valid window, minutes_since_open >= 135): {total:,}")
+print(f"\nPost-11:30AM rows (valid window, time_minute_of_day >= 690): {total:,}")
 print(f"  ctx_am_vwap_side populated: {populated:,} ({pct:.1f}%)")
 if pct >= 95:
     print("  DATA CHECK PASS: velocity columns correctly populated for MIDDAY rows")
