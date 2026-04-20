@@ -336,7 +336,7 @@ services:
         "--topic",
         "${LIVE_TOPIC:-market:snapshot:v1}",
         "--rollout-stage",
-        "${STRATEGY_ROLLOUT_STAGE:-paper}",
+        "${STRATEGY_ROLLOUT_STAGE:-capped_live}",
         "--position-size-multiplier",
         "${STRATEGY_POSITION_SIZE_MULTIPLIER:-1.0}",
         "--ml-runtime-guard-file",
