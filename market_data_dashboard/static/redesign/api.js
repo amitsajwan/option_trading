@@ -103,7 +103,9 @@
   }
 
   function mapTrade(row) {
-    var pnlRatio = row && row.pnl_pct_net != null ? toNum(row.pnl_pct_net) : toNum(row && row.capital_pnl_pct);
+    var rawPnlRatio = toNum(row && row.pnl_pct_net);
+    var capitalPnlRatio = toNum(row && row.capital_pnl_pct);
+    var pnlRatio = capitalPnlRatio != null ? capitalPnlRatio : rawPnlRatio;
     var entry = toNum(row && row.entry_premium);
     var exit = toNum(row && row.exit_premium);
     return {
@@ -113,6 +115,8 @@
       qty: row && row.lots != null ? row.lots : '--',
       entry: entry,
       exit: exit,
+      rawPnlPct: rawPnlRatio != null ? rawPnlRatio * 100 : null,
+      capitalPnlPct: capitalPnlRatio != null ? capitalPnlRatio * 100 : null,
       pnl: pnlRatio != null ? pnlRatio * 100 : null,
       pnlPct: pnlRatio != null ? pnlRatio * 100 : null,
       hold: fmtHold(row && row.entry_time, row && row.exit_time),
