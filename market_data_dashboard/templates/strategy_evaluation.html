@@ -111,7 +111,7 @@
         .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
         .route-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-        .status-rail { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .status-rail { grid-template-columns: repeat(5, minmax(0, 1fr)); }
         .workflow-inline {
             display: grid;
             grid-template-columns: 1.3fr 1fr 1fr 1fr;
@@ -402,6 +402,11 @@
                 <div class="rail-value" id="railCompareWindow">--</div>
                 <div class="rail-copy">The full date window backing the comparison metrics and trade table.</div>
             </div>
+            <div class="rail-card">
+                <div class="rail-kicker">Run Sanity</div>
+                <div class="rail-value" id="railRunSanity">T -- | S -- | V --</div>
+                <div class="rail-copy">Quick count check for trades, signals, and votes on selected day.</div>
+            </div>
         </section>
 
         <section class="panel">
@@ -439,6 +444,48 @@
             <div class="panel metric"><div class="label">Baseline Net Return</div><div class="value" id="kpiBaselineReturn">--</div><div class="sub">Comparison run return</div></div>
             <div class="panel metric"><div class="label">Return Delta</div><div class="value" id="kpiDeltaReturn">--</div><div class="sub">Current minus baseline</div></div>
             <div class="panel metric"><div class="label">Win Rate Delta</div><div class="value" id="kpiDeltaWinRate">--</div><div class="sub">Current minus baseline</div></div>
+        </section>
+
+        <section class="grid-2">
+            <div class="panel">
+                <h3 style="margin-top:0;">Run Days</h3>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Date</th><th>Trades</th><th>Win Rate</th><th>Day Return</th></tr></thead>
+                        <tbody id="dayBody"><tr><td colspan="4">Load a run.</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="panel">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <h3 style="margin:0;">Decision Visibility</h3>
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <label class="label" for="decisionDate" style="margin:0;">Session Date</label>
+                        <input id="decisionDate" type="date" style="min-height:36px; padding:7px 10px; border-radius:10px; border:1px solid var(--line); background:#fff;">
+                        <button class="btn" id="loadDecisionBtn" type="button">Load Decisions</button>
+                    </div>
+                </div>
+                <div class="kpis" style="grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:10px;">
+                    <div class="metric" style="padding:8px 10px; border:1px solid #eef3f7; border-radius:12px;">
+                        <div class="label">Signals</div><div class="value" id="decisionSignalCount" style="font-size:18px;">--</div>
+                    </div>
+                    <div class="metric" style="padding:8px 10px; border:1px solid #eef3f7; border-radius:12px;">
+                        <div class="label">Entry Signals</div><div class="value" id="decisionEntryCount" style="font-size:18px;">--</div>
+                    </div>
+                    <div class="metric" style="padding:8px 10px; border:1px solid #eef3f7; border-radius:12px;">
+                        <div class="label">Hold/Rejections</div><div class="value" id="decisionHoldCount" style="font-size:18px;">--</div>
+                    </div>
+                    <div class="metric" style="padding:8px 10px; border:1px solid #eef3f7; border-radius:12px;">
+                        <div class="label">Top Reason</div><div class="value" id="decisionTopReason" style="font-size:18px;">--</div>
+                    </div>
+                </div>
+                <div class="table-wrap" style="margin-top:10px;">
+                    <table>
+                        <thead><tr><th>Time</th><th>Type</th><th>Direction</th><th>Reason</th><th>Entry Prob</th><th>Direction Prob</th><th>Recipe</th></tr></thead>
+                        <tbody id="decisionBody"><tr><td colspan="7">Load a run and date.</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
         </section>
 
         <section class="grid-2">
@@ -485,6 +532,7 @@
         const dateToInput = document.getElementById("dateTo");
         const currentRunIdInput = document.getElementById("currentRunId");
         const baselineRunIdInput = document.getElementById("baselineRunId");
+        const decisionDateInput = document.getElementById("decisionDate");
         const compareNote = document.getElementById("compareNote");
 
         function safeText(value, fallback = "--") {
@@ -509,6 +557,12 @@
             if (!Number.isFinite(num)) return "--";
             const sign = num > 0 ? "+" : "";
             return `${sign}${(num * 100).toFixed(2)}%`;
+        }
+
+        function formatProb(value) {
+            const num = Number(value);
+            if (!Number.isFinite(num)) return "--";
+            return `${(num * 100).toFixed(1)}%`;
         }
 
         async function fetchJson(url) {
@@ -620,6 +674,78 @@
             `).join("");
         }
 
+        function renderDays(rows) {
+            const target = document.getElementById("dayBody");
+            if (!rows || !rows.length) {
+                target.innerHTML = `<tr><td colspan="4">No days.</td></tr>`;
+                return;
+            }
+            target.innerHTML = rows.slice(0, 31).map((row) => `
+                <tr>
+                    <td>${safeText(row.date_ist || row.date)}</td>
+                    <td>${formatNumber(row.trades, 0)}</td>
+                    <td>${formatPct(row.win_rate)}</td>
+                    <td>${formatPct(row.day_return_pct)}</td>
+                </tr>
+            `).join("");
+        }
+
+        function renderDecisionRows(rows) {
+            const target = document.getElementById("decisionBody");
+            if (!rows || !rows.length) {
+                target.innerHTML = `<tr><td colspan="7">No decisions found for this date.</td></tr>`;
+                return;
+            }
+            target.innerHTML = rows.slice(0, 25).map((row) => {
+                const metrics = row?.decision_metrics || {};
+                return `
+                    <tr>
+                        <td>${safeText(row.timestamp_ist || row.timestamp)}</td>
+                        <td>${safeText(row.signal_type)}</td>
+                        <td>${safeText(row.direction)}</td>
+                        <td>${safeText(row.decision_reason_code || row.reason_code)}</td>
+                        <td>${formatProb(metrics.entry_prob)}</td>
+                        <td>${formatProb(metrics.direction_up_prob)}</td>
+                        <td>${safeText(metrics.recipe_prob != null ? formatProb(metrics.recipe_prob) : "--")}</td>
+                    </tr>
+                `;
+            }).join("");
+        }
+
+        function summarizeDecisionSignals(rows) {
+            const entries = [];
+            const holds = [];
+            const reasonCount = {};
+            (rows || []).forEach((row) => {
+                const type = String(row?.signal_type || "").toUpperCase();
+                const reason = safeText(row?.decision_reason_code || row?.reason_code, "unknown").toLowerCase();
+                reasonCount[reason] = (reasonCount[reason] || 0) + 1;
+                if (type === "ENTRY") entries.push(row);
+                else holds.push(row);
+            });
+            const topReason = Object.entries(reasonCount).sort((a, b) => b[1] - a[1])[0];
+            return {
+                signalCount: (rows || []).length,
+                entryCount: entries.length,
+                holdCount: holds.length,
+                topReason: topReason ? `${topReason[0]} (${topReason[1]})` : "--",
+            };
+        }
+
+        async function loadDecisionSession(runId, tradeDate) {
+            if (!runId || !tradeDate) return;
+            const payload = await fetchJson(`/api/historical/replay/session?dataset=historical&trade_date=${encodeURIComponent(tradeDate)}&run_id=${encodeURIComponent(runId)}`);
+            const signalRows = Array.isArray(payload?.recent_signals) ? payload.recent_signals : [];
+            const metrics = summarizeDecisionSignals(signalRows);
+            const counts = payload?.counts || {};
+            document.getElementById("railRunSanity").textContent = `T ${formatNumber(counts.trades ?? counts.closed_trades ?? 0, 0)} | S ${formatNumber(counts.signals ?? metrics.signalCount, 0)} | V ${formatNumber(counts.votes ?? 0, 0)}`;
+            document.getElementById("decisionSignalCount").textContent = formatNumber(metrics.signalCount, 0);
+            document.getElementById("decisionEntryCount").textContent = formatNumber(metrics.entryCount, 0);
+            document.getElementById("decisionHoldCount").textContent = formatNumber(metrics.holdCount, 0);
+            document.getElementById("decisionTopReason").textContent = safeText(metrics.topReason);
+            renderDecisionRows(signalRows);
+        }
+
         function topStrategy(summary) {
             const rows = Array.isArray(summary?.by_strategy) ? summary.by_strategy : [];
             return rows.length ? safeText(rows[0].entry_strategy) : "--";
@@ -641,9 +767,11 @@
 
             const currentSummary = await fetchJson(`/api/strategy/evaluation/summary?dataset=historical&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}${currentRunId ? `&run_id=${encodeURIComponent(currentRunId)}` : ""}`);
             const currentTrades = await fetchJson(`/api/strategy/evaluation/trades?dataset=historical&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}${currentRunId ? `&run_id=${encodeURIComponent(currentRunId)}` : ""}&page_size=20`);
+            const currentDays = await fetchJson(`/api/strategy/evaluation/days?dataset=historical&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}${currentRunId ? `&run_id=${encodeURIComponent(currentRunId)}` : ""}&page_size=40`);
             const baselineSummary = baselineRunId
                 ? await fetchJson(`/api/strategy/evaluation/summary?dataset=historical&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}&run_id=${encodeURIComponent(baselineRunId)}`)
                 : null;
+            const resolvedCurrentRunId = (currentSummary?.resolved_run_id || currentRunId || "").trim();
 
             document.getElementById("kpiCurrentTrades").textContent = formatNumber(currentSummary?.overall?.trades, 0);
             document.getElementById("kpiCurrentReturn").textContent = formatPct(currentSummary?.equity?.net_return_pct);
@@ -651,9 +779,9 @@
             document.getElementById("kpiDeltaReturn").textContent = baselineSummary ? formatDelta(Number(currentSummary?.equity?.net_return_pct || 0) - Number(baselineSummary?.equity?.net_return_pct || 0)) : "--";
             document.getElementById("kpiDeltaWinRate").textContent = baselineSummary ? formatDelta(Number(currentSummary?.overall?.win_rate || 0) - Number(baselineSummary?.overall?.win_rate || 0)) : "--";
 
-            document.getElementById("currentRunLabel").textContent = safeText(currentSummary?.resolved_run_id || currentRunId);
+            document.getElementById("currentRunLabel").textContent = safeText(resolvedCurrentRunId);
             document.getElementById("baselineRunLabel").textContent = baselineSummary ? safeText(baselineSummary?.resolved_run_id || baselineRunId) : "--";
-            document.getElementById("railCurrentRun").textContent = safeText(currentSummary?.resolved_run_id || currentRunId);
+            document.getElementById("railCurrentRun").textContent = safeText(resolvedCurrentRunId);
             document.getElementById("railBaselineRun").textContent = baselineSummary ? safeText(baselineSummary?.resolved_run_id || baselineRunId) : "None";
             document.getElementById("railCompareWindow").textContent = `${dateFrom} to ${dateTo}`;
             document.getElementById("currentPf").textContent = formatNumber(currentSummary?.overall?.profit_factor);
@@ -666,7 +794,17 @@
             renderStrategyTable("currentStrategyBody", currentSummary?.by_strategy || []);
             renderStrategyTable("baselineStrategyBody", baselineSummary?.by_strategy || []);
             renderTrades(currentTrades?.rows || []);
+            renderDays(currentDays?.rows || []);
             renderDecision(currentSummary, baselineSummary);
+
+            const firstActiveDate = decisionDateInput.value || currentDays?.rows?.[0]?.date_ist || currentTrades?.rows?.[0]?.trade_date_ist || dateFrom;
+            decisionDateInput.value = firstActiveDate || "";
+            if (resolvedCurrentRunId && firstActiveDate) {
+                await loadDecisionSession(resolvedCurrentRunId, firstActiveDate).catch((err) => {
+                    document.getElementById("decisionBody").innerHTML = `<tr><td colspan="7">Decision load failed: ${safeText(err?.message || err)}</td></tr>`;
+                });
+            }
+
             compareNote.textContent = baselineSummary
                 ? `Comparing current run ${safeText(currentSummary?.resolved_run_id)} against baseline ${safeText(baselineSummary?.resolved_run_id)} for ${dateFrom} to ${dateTo}.`
                 : `Loaded current run ${safeText(currentSummary?.resolved_run_id)} for ${dateFrom} to ${dateTo}. Add a baseline run for a promotion decision.`;
@@ -693,6 +831,22 @@
         document.getElementById("loadCompareBtn").addEventListener("click", () => {
             loadComparison().catch((err) => {
                 compareNote.textContent = `Comparison load failed: ${err}`;
+            });
+        });
+
+        document.getElementById("loadDecisionBtn").addEventListener("click", async () => {
+            const runId = (document.getElementById("railCurrentRun").textContent || "").trim();
+            const date = (decisionDateInput.value || "").trim();
+            if (!runId || runId === "--") {
+                compareNote.textContent = "Load comparison first to resolve current run id.";
+                return;
+            }
+            if (!date) {
+                compareNote.textContent = "Select a session date to load decisions.";
+                return;
+            }
+            await loadDecisionSession(runId, date).catch((err) => {
+                compareNote.textContent = `Decision load failed: ${err}`;
             });
         });
 
