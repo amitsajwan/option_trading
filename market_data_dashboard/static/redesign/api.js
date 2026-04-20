@@ -102,6 +102,17 @@
     };
   }
 
+  function mapSignal(row) {
+    return {
+      t: fmtTime(row && row.timestamp),
+      strat: row && row.strategy ? String(row.strategy) : '',
+      dir: normDir(row && row.direction),
+      conf: toNum(row && row.confidence) || 0,
+      fired: !!(row && row.acted_on === true),
+      meta: row || {},
+    };
+  }
+
   function mapTrade(row) {
     var rawPnlRatio = toNum(row && row.pnl_pct_net);
     var capitalPnlRatio = toNum(row && row.capital_pnl_pct);
@@ -258,6 +269,8 @@
     var candles = buildSyntheticCandles(p.session_chart);
     var trades = (p.recent_trades || []).map(mapTrade);
     var votes = (p.recent_votes || []).map(mapVote);
+    var signals = (p.recent_signals || []).map(mapSignal);
+    var decisions = votes.length ? votes : signals;
     var alerts = (p.active_alerts || []).map(mapAlert);
     var strategyReturns = (today.by_strategy || [])
       .map(function (row) {
@@ -300,7 +313,8 @@
         winRate: toNum(overall.win_rate),
         profitFactor: toNum(overall.profit_factor),
       },
-      votes: votes,
+      votes: decisions,
+      signals: signals,
       trades: trades,
       alerts: alerts,
       strategyReturns: strategyReturns,
@@ -442,6 +456,7 @@
     evalToPageData: evalToPageData,
     healthToPageData: healthToPageData,
     mapVote: mapVote,
+    mapSignal: mapSignal,
     mapTrade: mapTrade,
     mapAlert: mapAlert,
     mapSessionDay: mapSessionDay,

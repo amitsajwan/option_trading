@@ -385,14 +385,13 @@
   function chartHoverTooltip(ctx) {
     var candle = ctx && ctx.candle ? ctx.candle : null;
     if (!candle) return '';
-    var prev = ctx && ctx.prev ? ctx.prev : null;
-    var chg = prev && Number.isFinite(Number(prev.c)) ? Number(candle.c) - Number(prev.c) : 0;
-    var chgPct = prev && Number.isFinite(Number(prev.c)) && Number(prev.c) !== 0 ? (chg / Number(prev.c)) * 100 : 0;
-    var chgColor = chg >= 0 ? '#7AD4A8' : '#E89389';
     return '<div style="font-weight:600; color:#fff">' + C.esc(candle.label || '--') + '</div>' +
       '<div style="display:grid; grid-template-columns:auto auto; gap:2px 10px; margin-top:4px; color:#B9C2CC">' +
-        '<span>Price</span><span style="color:#fff; text-align:right">' + C.esc(Number(candle.c).toFixed(2)) + '</span>' +
-        '<span>Delta</span><span style="color:' + chgColor + '; text-align:right">' + C.esc((chg >= 0 ? '+' : '') + chg.toFixed(2) + ' (' + (chg >= 0 ? '+' : '') + chgPct.toFixed(2) + '%)') + '</span>' +
+        '<span>fut_open</span><span style="color:#fff; text-align:right">' + C.esc(Number(candle.o).toFixed(2)) + '</span>' +
+        '<span>fut_high</span><span style="color:#fff; text-align:right">' + C.esc(Number(candle.h).toFixed(2)) + '</span>' +
+        '<span>fut_low</span><span style="color:#fff; text-align:right">' + C.esc(Number(candle.l).toFixed(2)) + '</span>' +
+        '<span>fut_close</span><span style="color:#fff; text-align:right">' + C.esc(Number(candle.c).toFixed(2)) + '</span>' +
+        '<span>fut_volume</span><span style="color:#fff; text-align:right">' + C.esc(String(Number(candle.v).toLocaleString())) + '</span>' +
       '</div>';
   }
 

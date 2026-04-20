@@ -135,14 +135,17 @@
     if (!votes || !votes.length) return emptyRow(5, 'No signals in this session.');
     return votes.map(function (vote) {
       var dirCls = vote.dir === 'LONG' ? 'pos' : (vote.dir === 'SHORT' ? 'neg' : '');
+      var stateHtml = vote.fired
+        ? '<span class="chip pos"><span class="dot"></span>fired</span>'
+        : ((vote.meta && vote.meta.acted_on === false)
+          ? '<span class="chip neg"><span class="dot"></span>rejected</span>'
+          : '<span class="chip"><span class="dot"></span>held</span>');
       return '<tr>' +
         '<td class="muted">' + esc(vote.t) + '</td>' +
         '<td>' + esc(vote.strat) + '</td>' +
         '<td><span class="chip ' + dirCls + '">' + esc(vote.dir) + '</span></td>' +
         '<td class="r">' + Number(vote.conf || 0).toFixed(2) + '</td>' +
-        '<td>' + (vote.fired
-          ? '<span class="chip pos"><span class="dot"></span>fired</span>'
-          : '<span class="chip"><span class="dot"></span>held</span>') + '</td>' +
+        '<td>' + stateHtml + '</td>' +
       '</tr>';
     }).join('');
   }
