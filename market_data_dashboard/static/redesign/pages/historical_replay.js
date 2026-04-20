@@ -198,13 +198,22 @@
 
   function mountChart(data) {
     var el = document.getElementById('historical-price-chart');
-    if (!el || !window.InteractiveChart) return;
+    if (!el) return;
     if (el.__chart) {
       try { el.__chart.destroy(); } catch (err) {}
+      el.__chart = null;
     }
     var d = data || getFallbackData();
+    var candles = (d.chart && d.chart.candles && d.chart.candles.length) ? d.chart.candles : null;
+    if (!candles) {
+      el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;' +
+        'color:var(--ink-3);font-size:13px;font-family:var(--f-mono)">' +
+        'No session chart data — select a date range and run replay</div>';
+      return;
+    }
+    if (!window.InteractiveChart) return;
     el.__chart = window.InteractiveChart.mount(el, {
-      candles: (d.chart && d.chart.candles && d.chart.candles.length) ? d.chart.candles : [],
+      candles: candles,
       markers: (d.chart && d.chart.markers) || [],
     });
   }
@@ -213,17 +222,22 @@
     if (!window.DashAPI) throw new Error('DashAPI is not loaded');
     var replayStatus = await window.DashAPI.fetchHistoricalStatus({});
     var resolvedRunId = runId || replayStatus.latest_completed_run_id || undefined;
-    var sessionParams = {
-      date: replayStatus.date_ist,
-      run_id: resolvedRunId,
-      limit_votes: 12,
-      limit_trades: 12,
-      limit_signals: 12,
-    };
     var rangeFrom = dateFrom || replayStatus.start_date || replayStatus.date_ist;
-    var rangeTo = dateTo || replayStatus.end_date || replayStatus.date_ist;
+    var rangeTo   = dateTo   || replayStatus.end_date   || replayStatus.date_ist;
+
+    // Use the run's actual end date for the session chart query.
+    // replayStatus.date_ist is the default snapshot date (today or latest snapshot)
+    // which would return no candles when querying historical snapshot collection.
+    var sessionDate = rangeTo || replayStatus.date_ist;
+
     var results = await Promise.all([
-      window.DashAPI.fetchHistoricalSession(sessionParams),
+      window.DashAPI.fetchHistoricalSession({
+        date: sessionDate,
+        run_id: resolvedRunId,
+        limit_votes: 12,
+        limit_trades: 0,     // fetch trades via eval API instead (more reliable)
+        limit_signals: 12,
+      }),
       window.DashAPI.fetchEvalDays({
         dataset: 'historical',
         date_from: rangeFrom,
@@ -232,10 +246,39 @@
         page: 1,
         page_size: 8,
       }).catch(function () { return { rows: [], total: 0, no_runs: true }; }),
+      window.DashAPI.fetchEvalTrades({
+        dataset: 'historical',
+        date_from: rangeFrom,
+        date_to: rangeTo,
+        run_id: resolvedRunId,
+        page: 1,
+        page_size: 50,
+      }).catch(function () { return { rows: [] }; }),
     ]);
+
     var pageData = window.DashAPI.sessionToPageData(results[0]);
     pageData.replayStatus = replayStatus;
     pageData.days = (results[1].rows || []).map(window.DashAPI.mapSessionDay);
+
+    // Use eval trades as the authoritative source for the historical run.
+    var evalTradeRows = results[2].rows || [];
+    var evalTrades = evalTradeRows.map(window.DashAPI.mapTrade);
+    if (evalTrades.length > 0) {
+      pageData.trades = evalTrades;
+    }
+
+    // Build chart markers from eval trades when session has none.
+    var candles = pageData.chart && pageData.chart.candles;
+    var hasMarkers = pageData.chart && pageData.chart.markers && pageData.chart.markers.length;
+    if (!hasMarkers && evalTradeRows.length && candles && candles.length) {
+      var rawMarkers = [];
+      evalTradeRows.forEach(function (row) {
+        if (row.entry_time) rawMarkers.push({ timestamp: row.entry_time, type: 'entry', label: row.direction || '' });
+        if (row.exit_time)  rawMarkers.push({ timestamp: row.exit_time,  type: 'exit',  label: '' });
+      });
+      pageData.chart.markers = window.DashAPI.buildChartMarkers(rawMarkers, candles);
+    }
+
     pageData.source = 'api';
     return pageData;
   }
