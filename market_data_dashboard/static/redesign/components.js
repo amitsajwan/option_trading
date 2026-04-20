@@ -21,6 +21,12 @@
     return '<tr><td colspan="' + colspan + '" class="muted" style="text-align:center;padding:18px">' + esc(text) + '</td></tr>';
   }
 
+  function fmtProbCell(value) {
+    var num = Number(value);
+    if (!Number.isFinite(num)) return '--';
+    return (num * 100).toFixed(1) + '%';
+  }
+
   // ── Engine mode badge ─────────────────────────────────────────────────────
   //
   // mode: raw string from API — 'ML PURE', 'ml_pure', 'DETERMINISTIC', 'HYBRID', etc.
@@ -155,6 +161,36 @@
     '<th class="r">Conf</th><th>State</th>' +
   '</tr></thead>';
 
+  function decisionGridRows(votes) {
+    if (!votes || !votes.length) return emptyRow(10, 'No decisions in this session.');
+    return votes.map(function (vote) {
+      var dirCls = vote.dir === 'LONG' ? 'pos' : (vote.dir === 'SHORT' ? 'neg' : '');
+      var meta = vote.meta || {};
+      var metrics = meta.decision_metrics && typeof meta.decision_metrics === 'object' ? meta.decision_metrics : {};
+      var stateText = vote.fired ? 'fired' : (meta.acted_on === false ? 'rejected' : 'held');
+      var stateCls = vote.fired ? 'pos' : (meta.acted_on === false ? 'neg' : '');
+      var reason = meta.decision_reason_code || meta.policy_reason || meta.reason || '--';
+      return '<tr>' +
+        '<td class="muted">' + esc(vote.t) + '</td>' +
+        '<td>' + esc(vote.strat || '--') + '</td>' +
+        '<td><span class="chip ' + dirCls + '">' + esc(vote.dir) + '</span></td>' +
+        '<td class="r">' + Number(vote.conf || 0).toFixed(2) + '</td>' +
+        '<td class="r">' + fmtProbCell(metrics.entry_prob) + '</td>' +
+        '<td class="r">' + fmtProbCell(metrics.direction_trade_prob) + '</td>' +
+        '<td class="r">' + fmtProbCell(metrics.ce_prob) + '</td>' +
+        '<td class="r">' + fmtProbCell(metrics.pe_prob) + '</td>' +
+        '<td><span class="chip ' + stateCls + '">' + esc(stateText) + '</span></td>' +
+        '<td>' + esc(reason) + '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  var DECISION_GRID_HEADER = '<thead><tr>' +
+    '<th>Time</th><th>Strategy</th><th>Dir</th>' +
+    '<th class="r">Conf</th><th class="r">Entry</th><th class="r">Trade</th>' +
+    '<th class="r">CE</th><th class="r">PE</th><th>State</th><th>Reason</th>' +
+  '</tr></thead>';
+
   // ── Export ────────────────────────────────────────────────────────────────
 
   global.QComponents = {
@@ -167,5 +203,7 @@
     TRADE_TABLE_HEADER: TRADE_TABLE_HEADER,
     voteTableRows: voteTableRows,
     VOTE_TABLE_HEADER: VOTE_TABLE_HEADER,
+    decisionGridRows: decisionGridRows,
+    DECISION_GRID_HEADER: DECISION_GRID_HEADER,
   };
 })(window);

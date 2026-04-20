@@ -77,9 +77,26 @@ class LiveStrategyRepository:
             query["run_id"] = run_text
         return query
 
+    def _load_recent_docs(
+        self,
+        coll: Any,
+        *,
+        date_ist: str,
+        limit: int,
+        run_id: str | None,
+        projection: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        query = self._date_run_query(date_ist, run_id)
+        docs = list(coll.find(query, projection).sort("timestamp", -1).limit(int(limit)))
+        if docs or not str(run_id or "").strip() or self._dataset != "historical":
+            return docs
+        # Historical raw collections can contain replay rows without the evaluation run_id.
+        # Fall back to the date-scoped slice so replay diagnostics stay visible on no-trade days.
+        fallback_query = self._date_run_query(date_ist, None)
+        return list(coll.find(fallback_query, projection).sort("timestamp", -1).limit(int(limit)))
+
     def load_recent_votes(self, date_ist: str, limit: int, run_id: str | None = None) -> list[dict[str, Any]]:
         coll = self.collections()["votes"]
-        query = self._date_run_query(date_ist, run_id)
         projection = {
             "_id": 0,
             "timestamp": 1,
@@ -98,7 +115,13 @@ class LiveStrategyRepository:
             "payload.vote": 1,
         }
         rows: list[dict[str, Any]] = []
-        for doc in coll.find(query, projection).sort("timestamp", -1).limit(int(limit)):
+        for doc in self._load_recent_docs(
+            coll,
+            date_ist=date_ist,
+            limit=limit,
+            run_id=run_id,
+            projection=projection,
+        ):
             vote = ((doc.get("payload") or {}).get("vote")) if isinstance(doc.get("payload"), dict) else {}
             vote = vote if isinstance(vote, dict) else {}
             raw_signals = vote.get("raw_signals") if isinstance(vote.get("raw_signals"), dict) else {}
@@ -136,7 +159,6 @@ class LiveStrategyRepository:
 
     def load_recent_signals(self, date_ist: str, limit: int, run_id: str | None = None) -> list[dict[str, Any]]:
         coll = self.collections()["signals"]
-        query = self._date_run_query(date_ist, run_id)
         projection = {
             "_id": 0,
             "signal_id": 1,
@@ -155,7 +177,13 @@ class LiveStrategyRepository:
             "payload.signal": 1,
         }
         rows: list[dict[str, Any]] = []
-        for doc in coll.find(query, projection).sort("timestamp", -1).limit(int(limit)):
+        for doc in self._load_recent_docs(
+            coll,
+            date_ist=date_ist,
+            limit=limit,
+            run_id=run_id,
+            projection=projection,
+        ):
             signal = ((doc.get("payload") or {}).get("signal")) if isinstance(doc.get("payload"), dict) else {}
             signal = signal if isinstance(signal, dict) else {}
             contributing = signal.get("contributing_strategies") if isinstance(signal.get("contributing_strategies"), list) else []

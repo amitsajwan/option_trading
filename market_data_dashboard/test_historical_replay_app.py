@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import market_data_dashboard.app as dashboard_app
+from market_data_dashboard.historical_replay_repository import HistoricalReplayRepository
 
 
 class _FakeHistoricalReplayService:
@@ -535,6 +536,86 @@ class HistoricalReplayAppTests(unittest.TestCase):
         self.assertIn(("votes", "2024-01-05", 25, "run-123"), repo_stub.calls)
         self.assertIn(("signals", "2024-01-05", 25, "run-123"), repo_stub.calls)
         self.assertIn(("positions", "2024-01-05", "run-123"), repo_stub.calls)
+
+    def test_historical_replay_repository_falls_back_to_date_only_for_recent_signals(self) -> None:
+        case = self
+
+        class _Cursor:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def sort(self, *_args, **_kwargs):
+                return self
+
+            def limit(self, count):
+                return _Cursor(self._docs[: int(count)])
+
+            def __iter__(self):
+                return iter(self._docs)
+
+        class _Collection:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def find(self, query, projection=None):  # noqa: ARG002
+                rows = []
+                for doc in self._docs:
+                    if str(doc.get("trade_date_ist") or "") != str(query.get("trade_date_ist") or ""):
+                        continue
+                    run_id = str(query.get("run_id") or "").strip()
+                    if run_id and str(doc.get("run_id") or "").strip() != run_id:
+                        continue
+                    rows.append(doc)
+                return _Cursor(rows)
+
+        class _EvalStub:
+            def __init__(self) -> None:
+                self._collections = {
+                    "historical_votes": _Collection([]),
+                    "historical_signals": _Collection(
+                        [
+                            {
+                                "trade_date_ist": "2024-09-03",
+                                "timestamp": "2024-09-03T10:11:00+05:30",
+                                "signal_id": "sig-1",
+                                "direction": "CE",
+                                "confidence": 0.82,
+                                "decision_reason_code": "low_edge_conflict",
+                                "decision_metrics": {"entry_prob": 0.82, "ce_prob": 0.77},
+                                "payload": {
+                                    "signal": {
+                                        "timestamp": "2024-09-03T10:11:00+05:30",
+                                        "direction": "CE",
+                                        "acted_on": False,
+                                        "decision_metrics": {"entry_prob": 0.82, "ce_prob": 0.77},
+                                    }
+                                },
+                            }
+                        ]
+                    ),
+                    "historical_positions": _Collection([]),
+                    "historical_traces": _Collection([]),
+                }
+
+            def _collection_names(self, dataset):
+                case.assertEqual(dataset, "historical")
+                return {
+                    "votes": "historical_votes",
+                    "signals": "historical_signals",
+                    "positions": "historical_positions",
+                    "traces": "historical_traces",
+                }
+
+            def _db(self):
+                return self._collections
+
+        repo = HistoricalReplayRepository(_EvalStub())
+        rows = repo.load_recent_signals("2024-09-03", 5, run_id="run-missing")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["signal_id"], "sig-1")
+        self.assertEqual(rows[0]["acted_on"], False)
+        self.assertEqual(rows[0]["decision_metrics"]["entry_prob"], 0.82)
 
     def test_top_level_app_import_exposes_historical_monitor_service(self) -> None:
         app_path = Path(dashboard_app.__file__).resolve()

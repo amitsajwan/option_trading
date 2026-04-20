@@ -770,9 +770,12 @@ class LiveStrategyMonitorService:
         date_ist = self.get_session_date_ist(date)
         requested_instrument = str(instrument or os.getenv("INSTRUMENT_SYMBOL") or "").strip() or None
         instrument_name = self.resolve_session_instrument(date_ist=date_ist, requested_instrument=requested_instrument)
-        vote_limit = _safe_limit(limit_votes, default=25, maximum=100)
-        signal_limit = _safe_limit(limit_signals, default=25, maximum=100)
-        trade_limit = _safe_limit(limit_trades, default=20, maximum=100)
+        vote_limit_max = 2000 if self._dataset == "historical" else 100
+        signal_limit_max = 5000 if self._dataset == "historical" else 100
+        trade_limit_max = 500 if self._dataset == "historical" else 100
+        vote_limit = _safe_limit(limit_votes, default=25, maximum=vote_limit_max)
+        signal_limit = _safe_limit(limit_signals, default=25, maximum=signal_limit_max)
+        trade_limit = _safe_limit(limit_trades, default=20, maximum=trade_limit_max)
         resolved_timeline_limit = _safe_limit(timeline_limit, default=25, maximum=100)
         raw_debug_view = _coerce_bool(debug_view)
         resolved_debug_view = bool(raw_debug_view) if raw_debug_view is not None else False

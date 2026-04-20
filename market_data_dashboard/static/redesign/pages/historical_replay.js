@@ -413,6 +413,12 @@
       row.style.cursor = trade ? 'pointer' : '';
       row.style.background = active ? 'rgba(17,24,39,0.04)' : '';
     });
+    document.querySelectorAll('#hr-decisions-body tr').forEach(function (row, index) {
+      var vote = currentVotes[index];
+      var active = vote && selected && selected.kind === 'vote' && voteKey(vote) === selected.key;
+      row.style.cursor = vote ? 'pointer' : '';
+      row.style.background = active ? 'rgba(17,24,39,0.04)' : '';
+    });
     var panel = document.getElementById('hr-trade-decision-body');
     if (panel) panel.innerHTML = renderDecisionPanel(selected);
   }
@@ -424,6 +430,13 @@
       var trade = currentTrades[index];
       row.onclick = trade ? function () {
         selectedAnalysis = { kind: 'trade', key: tradeKey(trade) };
+        paintDecisionSelection();
+      } : null;
+    });
+    document.querySelectorAll('#hr-decisions-body tr').forEach(function (row, index) {
+      var vote = currentVotes[index];
+      row.onclick = vote ? function () {
+        selectedAnalysis = { kind: 'vote', key: voteKey(vote) };
         paintDecisionSelection();
       } : null;
     });
@@ -544,7 +557,7 @@
       '</div>' +
 
       '<div class="g3">' +
-        '<div class="panel" style="grid-column:span 2">' +
+        '<div class="panel" style="grid-column:span 3">' +
           '<div class="panel-head"><div class="panel-title">Trades - <span id="hr-trades-label">' + C.esc(activeDate) + '</span> <span id="hr-trades-count" class="count">' + data.trades.length + '</span></div></div>' +
           '<div class="panel-body flush">' +
             '<table class="tbl">' +
@@ -553,12 +566,12 @@
             '</table>' +
           '</div>' +
         '</div>' +
-        '<div class="panel">' +
-          '<div class="panel-head"><div class="panel-title">Signals - recent <span id="hr-signals-count" class="count">' + data.votes.length + '</span></div></div>' +
-          '<div class="panel-body flush">' +
+        '<div class="panel" style="grid-column:span 3">' +
+          '<div class="panel-head"><div class="panel-title">Decision Grid - <span id="hr-decisions-label">' + C.esc(activeDate) + '</span> <span id="hr-decisions-count" class="count">' + data.votes.length + '</span></div></div>' +
+          '<div class="panel-body flush" style="max-height:340px;overflow:auto">' +
             '<table class="tbl">' +
-              C.VOTE_TABLE_HEADER +
-              '<tbody id="hr-signals-body">' + C.voteTableRows(data.votes) + '</tbody>' +
+              C.DECISION_GRID_HEADER +
+              '<tbody id="hr-decisions-body">' + C.decisionGridRows(data.votes) + '</tbody>' +
             '</table>' +
           '</div>' +
         '</div>' +
@@ -615,8 +628,8 @@
       window.DashAPI.fetchHistoricalSession({
         date: sessionDate,
         run_id: resolvedRunId,
-        limit_votes: 12,
-        limit_signals: 12,
+        limit_votes: 2000,
+        limit_signals: 5000,
         // omit limit_trades — fetching from eval API below, session trades overridden
       }),
       window.DashAPI.fetchEvalDays({
@@ -680,8 +693,9 @@
     var tradesBody = document.getElementById('hr-trades-body');
     var tradesLabel = document.getElementById('hr-trades-label');
     var tradesCount = document.getElementById('hr-trades-count');
-    var signalsBody = document.getElementById('hr-signals-body');
-    var signalsCount = document.getElementById('hr-signals-count');
+    var decisionsBody = document.getElementById('hr-decisions-body');
+    var decisionsCount = document.getElementById('hr-decisions-count');
+    var decisionsLabel = document.getElementById('hr-decisions-label');
     var sessionDate = document.getElementById('historical-replay-session-date');
 
     // Highlight the clicked chip, dim others.
@@ -698,8 +712,8 @@
       window.DashAPI.fetchHistoricalSession({
         date: date,
         run_id: runId || undefined,
-        limit_votes: 12,
-        limit_signals: 12,
+        limit_votes: 2000,
+        limit_signals: 5000,
       }),
       window.DashAPI.fetchEvalTrades({
         dataset: 'historical',
@@ -718,8 +732,9 @@
       if (tradesBody)  tradesBody.innerHTML  = C.tradeTableRows(trades);
       if (tradesLabel) tradesLabel.textContent = date;
       if (tradesCount) tradesCount.textContent = trades.length;
-      if (signalsBody) signalsBody.innerHTML  = C.voteTableRows(sessionData.votes);
-      if (signalsCount) signalsCount.textContent = sessionData.votes.length;
+      if (decisionsBody) decisionsBody.innerHTML  = C.decisionGridRows(sessionData.votes);
+      if (decisionsCount) decisionsCount.textContent = sessionData.votes.length;
+      if (decisionsLabel) decisionsLabel.textContent = date;
       if (sessionDate) sessionDate.textContent = date;
       bindTradeHandlers(trades, sessionData.votes);
 
