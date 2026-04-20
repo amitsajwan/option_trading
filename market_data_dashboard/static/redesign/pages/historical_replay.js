@@ -71,6 +71,37 @@
     ];
   }
 
+  function tradeDate(trade) {
+    var meta = (trade && trade.meta) || {};
+    var candidates = [
+      meta.trade_date_ist,
+      meta.date_ist,
+      meta.date,
+      meta.entry_time,
+      meta.exit_time,
+    ];
+    for (var i = 0; i < candidates.length; i += 1) {
+      var value = candidates[i];
+      if (!value) continue;
+      var text = String(value).trim();
+      if (!text) continue;
+      return text.length >= 10 ? text.slice(0, 10) : text;
+    }
+    return '';
+  }
+
+  function filterTradesForDate(trades, date) {
+    var items = Array.isArray(trades) ? trades : [];
+    if (!date || !items.length) return items;
+    var hasAnyTradeDate = false;
+    var filtered = items.filter(function (trade) {
+      var current = tradeDate(trade);
+      if (current) hasAnyTradeDate = true;
+      return current === date;
+    });
+    return filtered.length || hasAnyTradeDate ? filtered : items;
+  }
+
   function renderDayChips(days, activeDateArg) {
     if (!days.length) return '<div class="muted">No replay days available for the resolved run.</div>';
     var activeDate = activeDateArg || (days[0] && days[0].d);
@@ -91,6 +122,7 @@
   function render(model) {
     var data = model || getFallbackData();
     var replay = data.replayStatus || {};
+    var activeDate = data.activeDate || data.session.date_ist || '--';
     var rangeText = C.esc(replay.start_date || data.session.date_ist || '--') + ' -> ' + C.esc(replay.end_date || data.session.date_ist || '--');
     var runId = data.currentRunId || (data.latestCompletedRun && data.latestCompletedRun.run_id) || '--';
     var engBadge = C.engineModeBadge(data.kpis && data.kpis.engineMode, runId);
@@ -127,14 +159,14 @@
           '<div class="panel-title">Session days <span class="count">evaluation</span></div>' +
           '<div class="row gap-s"><button class="btn sm ghost">Prev</button><button class="btn sm ghost">Next</button></div>' +
         '</div>' +
-        '<div class="panel-body" style="padding:12px">' + renderDayChips(data.days || []) + '</div>' +
+        '<div class="panel-body" style="padding:12px">' + renderDayChips(data.days || [], activeDate) + '</div>' +
       '</div>' +
 
       '<div class="g-main-side">' +
         '<div class="panel">' +
           '<div class="panel-head">' +
             '<div class="row gap-m">' +
-              '<div class="panel-title">' + C.esc(data.session.instrument || 'Underlying') + ' - replay day ' + C.esc(data.session.date_ist || '--') + '</div>' +
+              '<div class="panel-title">' + C.esc(data.session.instrument || 'Underlying') + ' - replay day <span id="historical-replay-session-date">' + C.esc(activeDate) + '</span></div>' +
               '<span class="chip info"><span class="dot"></span>historical</span>' +
               '<span class="chip">Range ' + rangeText + '</span>' +
             '</div>' +
@@ -176,7 +208,7 @@
 
       '<div class="g3">' +
         '<div class="panel" style="grid-column:span 2">' +
-          '<div class="panel-head"><div class="panel-title">Trades - session day <span id="hr-trades-count" class="count">' + data.trades.length + '</span></div></div>' +
+          '<div class="panel-head"><div class="panel-title">Trades - <span id="hr-trades-label">' + C.esc(activeDate) + '</span> <span id="hr-trades-count" class="count">' + data.trades.length + '</span></div></div>' +
           '<div class="panel-body flush">' +
             '<table class="tbl">' +
               C.TRADE_TABLE_HEADER +
@@ -260,12 +292,13 @@
     var pageData = window.DashAPI.sessionToPageData(results[0]);
     pageData.replayStatus = replayStatus;
     pageData.days = (results[1].rows || []).map(window.DashAPI.mapSessionDay);
+    pageData.activeDate = pageData.session.date_ist || sessionDate;
 
     // Use eval trades as the authoritative source for the historical run.
     var evalTradeRows = results[2].rows || [];
     var evalTrades = evalTradeRows.map(window.DashAPI.mapTrade);
     if (evalTrades.length > 0) {
-      pageData.trades = evalTrades;
+      pageData.trades = filterTradesForDate(evalTrades, pageData.activeDate);
     }
 
     // Build chart markers from eval trades when session has none.
@@ -287,9 +320,11 @@
   function loadDay(date, runId) {
     // Update chart + trades in-place for a single clicked day — no full re-render.
     var tradesBody = document.getElementById('hr-trades-body');
+    var tradesLabel = document.getElementById('hr-trades-label');
     var tradesCount = document.getElementById('hr-trades-count');
     var signalsBody = document.getElementById('hr-signals-body');
     var signalsCount = document.getElementById('hr-signals-count');
+    var sessionDate = document.getElementById('historical-replay-session-date');
 
     // Highlight the clicked chip, dim others.
     document.querySelectorAll('.day-chip').forEach(function (chip) {
@@ -320,12 +355,14 @@
       var sessionData = window.DashAPI.sessionToPageData(results[0]);
       var evalTradeRows = results[1].rows || [];
       var evalTrades = evalTradeRows.map(window.DashAPI.mapTrade);
-      var trades = evalTrades.length ? evalTrades : sessionData.trades;
+      var trades = evalTrades.length ? filterTradesForDate(evalTrades, date) : filterTradesForDate(sessionData.trades, date);
 
       if (tradesBody)  tradesBody.innerHTML  = C.tradeTableRows(trades);
+      if (tradesLabel) tradesLabel.textContent = date;
       if (tradesCount) tradesCount.textContent = trades.length;
       if (signalsBody) signalsBody.innerHTML  = C.voteTableRows(sessionData.votes);
       if (signalsCount) signalsCount.textContent = sessionData.votes.length;
+      if (sessionDate) sessionDate.textContent = date;
 
       // Rebuild chart for this day.
       var candles = sessionData.chart && sessionData.chart.candles;
@@ -438,13 +475,13 @@
     if (!page) return;
 
     // Wire buttons immediately so Run/Load work even if loadData fails.
-    attachHandlers(data);
+    attachHandlers(null);
 
     if (cache) {
       var currentView = document.getElementById('historical-replay-view');
       if (!currentView || currentView.getAttribute('data-source') !== 'api') {
         page.innerHTML = render(cache);
-        attachHandlers(data);
+        attachHandlers(cache);
       }
       mountChart(cache);
       return;
