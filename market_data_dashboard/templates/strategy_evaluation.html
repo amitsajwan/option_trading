@@ -219,6 +219,46 @@
         .decision-chip.bad { color: var(--bad); border-color: rgba(180,35,24,0.3); background: rgba(180,35,24,0.08); }
         .decision-chip.info { color: var(--accent); border-color: rgba(13,106,120,0.3); background: rgba(13,106,120,0.08); }
 
+        .reason-chip {
+            display: inline-flex;
+            align-items: center;
+            min-height: 28px;
+            padding: 4px 10px;
+            margin: 2px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: #f7fafc;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .reason-chip:hover {
+            border-color: var(--accent);
+            background: rgba(13,106,120,0.08);
+        }
+
+        .reason-chip.active {
+            color: var(--accent);
+            border-color: var(--accent);
+            background: rgba(13,106,120,0.12);
+            font-weight: 700;
+        }
+
+        .reason-chips-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin: 8px 0;
+            padding: 8px;
+            background: rgba(255,255,255,0.6);
+            border-radius: 12px;
+            border: 1px solid #eef3f7;
+        }
+
         .decision-title {
             margin-top: 10px;
             font-size: 24px;
@@ -458,31 +498,52 @@
             </div>
             <div class="panel">
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
-                    <h3 style="margin:0;">Decision Visibility</h3>
+                    <h3 style="margin:0;">Trade Blocking Analysis</h3>
                     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                         <label class="label" for="decisionDate" style="margin:0;">Session Date</label>
                         <input id="decisionDate" type="date" style="min-height:36px; padding:7px 10px; border-radius:10px; border:1px solid var(--line); background:#fff;">
-                        <button class="btn" id="loadDecisionBtn" type="button">Load Decisions</button>
+                        <button class="btn" id="loadDecisionBtn" type="button">Load Analysis</button>
                     </div>
                 </div>
+                
+                <!-- Blocking Summary -->
+                <div class="panel" style="margin-top:10px; background:rgba(180,35,24,0.08); border:1px solid rgba(180,35,24,0.2);" id="blockingSummaryPanel" style="display:none;">
+                    <h4 style="margin:0 0 8px; color:var(--bad); font-size:14px; text-transform:uppercase; letter-spacing:0.08em;">Blocking Summary</h4>
+                    <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; font-size:12px;">
+                        <div><strong>Signal → Trade Rate:</strong> <span id="signalToTradeRate">--</span></div>
+                        <div><strong>Primary Blocker:</strong> <span id="primaryBlocker">--</span></div>
+                        <div><strong>Block %:</strong> <span id="blockPercentage">--</span></div>
+                    </div>
+                </div>
+                
                 <div class="kpis" style="grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:10px;">
                     <div class="metric" style="padding:8px 10px; border:1px solid #eef3f7; border-radius:12px;">
-                        <div class="label">Signals</div><div class="value" id="decisionSignalCount" style="font-size:18px;">--</div>
+                        <div class="label">Total Signals</div><div class="value" id="decisionSignalCount" style="font-size:18px;">--</div>
                     </div>
                     <div class="metric" style="padding:8px 10px; border:1px solid #eef3f7; border-radius:12px;">
                         <div class="label">Entry Signals</div><div class="value" id="decisionEntryCount" style="font-size:18px;">--</div>
                     </div>
                     <div class="metric" style="padding:8px 10px; border:1px solid #eef3f7; border-radius:12px;">
-                        <div class="label">Hold/Rejections</div><div class="value" id="decisionHoldCount" style="font-size:18px;">--</div>
+                        <div class="label">Blocked Trades</div><div class="value" id="decisionHoldCount" style="font-size:18px;">--</div>
                     </div>
                     <div class="metric" style="padding:8px 10px; border:1px solid #eef3f7; border-radius:12px;">
-                        <div class="label">Top Reason</div><div class="value" id="decisionTopReason" style="font-size:18px;">--</div>
+                        <div class="label">Actual Trades</div><div class="value" id="actualTradeCount" style="font-size:18px;">--</div>
                     </div>
                 </div>
+                <div class="reason-chips-container" id="reasonChipsContainer" style="display:none;">
+                    <div class="reason-chip active" data-reason="all">All Reasons</div>
+                </div>
+                
+                <!-- Blocking Reasons Breakdown -->
+                <div class="panel" style="margin-top:10px; background:rgba(255,255,255,0.8); border:1px solid #eef3f7;" id="blockingBreakdownPanel" style="display:none;">
+                    <h4 style="margin:0 0 8px; font-size:14px; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;">Blocking Reasons Breakdown</h4>
+                    <div id="blockingReasonsGrid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:8px; font-size:11px;"></div>
+                </div>
+                
                 <div class="table-wrap" style="margin-top:10px;">
                     <table>
-                        <thead><tr><th>Time</th><th>Type</th><th>Direction</th><th>Reason</th><th>Entry Prob</th><th>Direction Prob</th><th>Recipe</th></tr></thead>
-                        <tbody id="decisionBody"><tr><td colspan="7">Load a run and date.</td></tr></tbody>
+                        <thead><tr><th>Time</th><th>Type</th><th>Direction</th><th>Block Reason</th><th>Entry Prob</th><th>Direction Prob</th><th>Recipe</th><th>Action</th></tr></thead>
+                        <tbody id="decisionBody"><tr><td colspan="8">Load a run and date to analyze blocking reasons.</td></tr></tbody>
                     </table>
                 </div>
             </div>
@@ -690,26 +751,135 @@
             `).join("");
         }
 
-        function renderDecisionRows(rows) {
+        let allDecisionRows = [];
+        let activeReasonFilter = 'all';
+
+        function renderDecisionRows(rows, filterReason = 'all') {
             const target = document.getElementById("decisionBody");
-            if (!rows || !rows.length) {
-                target.innerHTML = `<tr><td colspan="7">No decisions found for this date.</td></tr>`;
+            allDecisionRows = rows || [];
+            activeReasonFilter = filterReason;
+            
+            if (!allDecisionRows.length) {
+                target.innerHTML = `<tr><td colspan="8">No decisions found for this date.</td></tr>`;
                 return;
             }
-            target.innerHTML = rows.slice(0, 25).map((row) => {
+            
+            const filteredRows = filterReason === 'all' 
+                ? allDecisionRows 
+                : allDecisionRows.filter(row => {
+                    const reason = safeText(row?.decision_reason_code || row?.reason_code, "unknown").toLowerCase();
+                    return reason === filterReason;
+                });
+            
+            target.innerHTML = filteredRows.slice(0, 25).map((row) => {
                 const metrics = row?.decision_metrics || {};
+                const reason = safeText(row?.decision_reason_code || row?.reason_code);
+                const isBlocked = reason && reason !== 'executed' && reason !== 'filled';
+                const actionText = isBlocked ? 'BLOCKED' : 'TRADED';
+                const actionClass = isBlocked ? 'bad' : 'good';
+                
                 return `
                     <tr>
                         <td>${safeText(row.timestamp_ist || row.timestamp)}</td>
                         <td>${safeText(row.signal_type)}</td>
                         <td>${safeText(row.direction)}</td>
-                        <td>${safeText(row.decision_reason_code || row.reason_code)}</td>
+                        <td><span class="decision-chip ${isBlocked ? 'bad' : 'good'}" style="font-size:10px; padding:2px 6px;">${reason}</span></td>
                         <td>${formatProb(metrics.entry_prob)}</td>
                         <td>${formatProb(metrics.direction_up_prob)}</td>
                         <td>${safeText(metrics.recipe_prob != null ? formatProb(metrics.recipe_prob) : "--")}</td>
+                        <td><span class="decision-chip ${actionClass}" style="font-size:10px; padding:2px 6px;">${actionText}</span></td>
                     </tr>
                 `;
             }).join("");
+        }
+
+        function renderBlockingAnalysis(rows, actualTradesCount) {
+            if (!rows || !rows.length) {
+                document.getElementById('blockingSummaryPanel').style.display = 'none';
+                document.getElementById('blockingBreakdownPanel').style.display = 'none';
+                return;
+            }
+            
+            const totalSignals = rows.length;
+            const blockedCount = rows.filter(row => {
+                const reason = safeText(row?.decision_reason_code || row?.reason_code);
+                return reason && reason !== 'executed' && reason !== 'filled';
+            }).length;
+            
+            const tradeRate = totalSignals > 0 ? (actualTradesCount / totalSignals * 100).toFixed(1) : '0.0';
+            const blockRate = totalSignals > 0 ? (blockedCount / totalSignals * 100).toFixed(1) : '0.0';
+            
+            // Count reasons
+            const reasonCount = {};
+            rows.forEach(row => {
+                const reason = safeText(row?.decision_reason_code || row?.reason_code, 'unknown').toLowerCase();
+                if (reason && reason !== 'executed' && reason !== 'filled') {
+                    reasonCount[reason] = (reasonCount[reason] || 0) + 1;
+                }
+            });
+            
+            const topReason = Object.entries(reasonCount).sort((a, b) => b[1] - a[1])[0];
+            const primaryBlocker = topReason ? `${topReason[0].replace(/_/g, ' ')} (${topReason[1]})` : 'None';
+            
+            // Update blocking summary
+            document.getElementById('blockingSummaryPanel').style.display = 'block';
+            document.getElementById('signalToTradeRate').textContent = `${tradeRate}%`;
+            document.getElementById('primaryBlocker').textContent = primaryBlocker;
+            document.getElementById('blockPercentage').textContent = `${blockRate}%`;
+            
+            // Update blocking breakdown
+            const sortedReasons = Object.entries(reasonCount).sort((a, b) => b[1] - a[1]);
+            let breakdownHTML = '';
+            sortedReasons.forEach(([reason, count]) => {
+                const percentage = (count / totalSignals * 100).toFixed(1);
+                const displayName = reason.replace(/_/g, ' ');
+                const severity = count > totalSignals * 0.3 ? 'bad' : count > totalSignals * 0.1 ? 'warn' : 'info';
+                breakdownHTML += `
+                    <div style="padding:6px; border-radius:6px; background:rgba(${severity === 'bad' ? '180,35,24' : severity === 'warn' ? '161,98,7' : '13,106,120'},0.08); border:1px solid rgba(${severity === 'bad' ? '180,35,24' : severity === 'warn' ? '161,98,7' : '13,106,120'},0.2);">
+                        <div style="font-weight:600; color:var(--${severity});">${displayName}</div>
+                        <div style="margin-top:2px;">${count} signals (${percentage}%)</div>
+                    </div>
+                `;
+            });
+            
+            document.getElementById('blockingBreakdownPanel').style.display = 'block';
+            document.getElementById('blockingReasonsGrid').innerHTML = breakdownHTML || '<div style="color:var(--muted);">No blocking reasons found.</div>';
+        }
+
+        function renderReasonChips(rows) {
+            const container = document.getElementById('reasonChipsContainer');
+            if (!rows || !rows.length) {
+                container.style.display = 'none';
+                return;
+            }
+            
+            const reasonCount = {};
+            rows.forEach(row => {
+                const reason = safeText(row?.decision_reason_code || row?.reason_code, 'unknown').toLowerCase();
+                reasonCount[reason] = (reasonCount[reason] || 0) + 1;
+            });
+            
+            const sortedReasons = Object.entries(reasonCount)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 8);
+            
+            let chipsHTML = '<div class="reason-chip active" data-reason="all">All Reasons</div>';
+            sortedReasons.forEach(([reason, count]) => {
+                const displayName = reason.replace(/_/g, ' ');
+                chipsHTML += `<div class="reason-chip" data-reason="${reason}">${displayName} (${count})</div>`;
+            });
+            
+            container.innerHTML = chipsHTML;
+            container.style.display = 'flex';
+            
+            container.querySelectorAll('.reason-chip').forEach(chip => {
+                chip.addEventListener('click', () => {
+                    container.querySelectorAll('.reason-chip').forEach(c => c.classList.remove('active'));
+                    chip.classList.add('active');
+                    const selectedReason = chip.dataset.reason;
+                    renderDecisionRows(allDecisionRows, selectedReason);
+                });
+            });
         }
 
         function summarizeDecisionSignals(rows) {
@@ -742,7 +912,9 @@
             document.getElementById("decisionSignalCount").textContent = formatNumber(metrics.signalCount, 0);
             document.getElementById("decisionEntryCount").textContent = formatNumber(metrics.entryCount, 0);
             document.getElementById("decisionHoldCount").textContent = formatNumber(metrics.holdCount, 0);
-            document.getElementById("decisionTopReason").textContent = safeText(metrics.topReason);
+            document.getElementById("actualTradeCount").textContent = formatNumber(counts.trades ?? counts.closed_trades ?? 0, 0);
+            renderBlockingAnalysis(signalRows, counts.trades ?? counts.closed_trades ?? 0);
+            renderReasonChips(signalRows);
             renderDecisionRows(signalRows);
         }
 
