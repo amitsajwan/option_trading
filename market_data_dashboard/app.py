@@ -1735,7 +1735,11 @@ class _MongoVelocitySnapshotProvider:
                 "fut_oi_change_30m": row.get("fut_oi_change_30m"),
             },
             "opening_range": {
+                "orh": row.get("orh"),
+                "orl": row.get("orl"),
                 "or_width": row.get("or_width"),
+                "price_vs_orh": row.get("price_vs_orh"),
+                "price_vs_orl": row.get("price_vs_orl"),
                 "orh_broken": row.get("orh_broken"),
                 "orl_broken": row.get("orl_broken"),
             },

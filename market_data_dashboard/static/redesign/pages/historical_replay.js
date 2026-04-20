@@ -4,21 +4,7 @@
   var cache = null;
   var pending = null;
 
-  function esc(value) {
-    return String(value == null ? '' : value).replace(/[&<>]/g, function (ch) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch];
-    });
-  }
-
-  function fmtSigned(value, digits, suffix) {
-    var num = Number(value);
-    if (!Number.isFinite(num)) return '--';
-    return (num >= 0 ? '+' : '') + num.toFixed(digits == null ? 2 : digits) + (suffix || '');
-  }
-
-  function emptyRow(colspan, text) {
-    return '<tr><td colspan="' + colspan + '" class="muted" style="text-align:center;padding:18px">' + esc(text) + '</td></tr>';
-  }
+  var C = window.QComponents;
 
   function getFallbackData() {
     var mock = window.MOCK || {};
@@ -45,6 +31,9 @@
       latestCompletedRun: {
         run_id: 'mock_historical_run',
       },
+      kpis: {
+        engineMode: 'UNKNOWN',
+      },
       overall: {
         trade_count: (mock.closedTrades || []).length,
         win_rate: 0.71,
@@ -63,7 +52,7 @@
     };
   }
 
-  function renderKpis(model) {
+  function buildKpiItems(model) {
     var replay = model.replayStatus || {};
     var dash = window.DashAPI;
     var trades = model.overall && model.overall.trade_count != null ? model.overall.trade_count : model.trades.length;
@@ -72,173 +61,161 @@
       : '--';
     var netValue = model.equity && model.equity.net_return_pct != null ? Number(model.equity.net_return_pct) : null;
     var netCls = Number.isFinite(netValue) ? (netValue >= 0 ? 'pos' : 'neg') : '';
-    var items = [
-      { label: 'REPLAY STATE', value: String(replay.status || 'unknown').toUpperCase(), cls: 'pos', sub: 'Run ' + esc(model.currentRunId || '--') },
-      { label: 'VIRTUAL TIME', value: dash.fmtTime(replay.current_replay_timestamp || replay.virtual_time_current).slice(0, 8) || '--', sub: esc(replay.current_trade_date || model.session.date_ist || '--') },
-      { label: 'EVENTS EMITTED', value: dash.fmtCompactInt(replay.events_emitted), sub: 'votes ' + Number((replay.collection_counts || {}).votes || 0) + ' - signals ' + Number((replay.collection_counts || {}).signals || 0) },
-      { label: 'SPEED', value: replay.speed != null ? String(replay.speed) + 'x' : '--', sub: 'Replay controller' },
-      { label: 'SESSION TRADES', value: String(trades), sub: Number.isFinite(Number(model.overall && model.overall.win_rate)) ? ((model.overall.win_rate * 100).toFixed(1) + '% WR') : 'Session summary' },
-      { label: 'NET PNL', value: netPnl, cls: netCls, sub: 'Capital weighted' },
+    return [
+      { label: 'REPLAY STATE',   value: C.esc(String(replay.status || 'unknown').toUpperCase()), cls: 'pos', sub: 'Run ' + C.esc(model.currentRunId || '--') },
+      { label: 'VIRTUAL TIME',   value: C.esc(dash.fmtTime(replay.current_replay_timestamp || replay.virtual_time_current).slice(0, 8) || '--'), sub: C.esc(replay.current_trade_date || model.session.date_ist || '--') },
+      { label: 'EVENTS EMITTED', value: C.esc(dash.fmtCompactInt(replay.events_emitted)), sub: 'votes ' + Number((replay.collection_counts || {}).votes || 0) + ' - signals ' + Number((replay.collection_counts || {}).signals || 0) },
+      { label: 'SPEED',          value: C.esc(replay.speed != null ? String(replay.speed) + 'x' : '--'), sub: 'Replay controller' },
+      { label: 'SESSION TRADES', value: C.esc(String(trades)), sub: Number.isFinite(Number(model.overall && model.overall.win_rate)) ? ((model.overall.win_rate * 100).toFixed(1) + '% WR') : 'Session summary' },
+      { label: 'NET PNL',        value: C.esc(netPnl), cls: netCls, sub: 'Capital weighted' },
     ];
-    return '<div class="kpi-strip" style="--cols:6">' + items.map(function (item) {
-      return '<div class="kpi"><div class="kpi-label">' + item.label + '</div><div class="kpi-value ' + (item.cls || '') + '">' + item.value + '</div><div class="kpi-sub">' + item.sub + '</div></div>';
-    }).join('') + '</div>';
   }
 
   function renderDayChips(days) {
     if (!days.length) return '<div class="muted">No replay days available for the resolved run.</div>';
     return '<div style="display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px">' + days.map(function (day, index) {
       var active = index === 0;
-      return '' +
-        '<button class="panel" style="padding:10px 12px; text-align:left; border:1px solid ' + (active ? 'var(--ink)' : 'var(--line-1)') + '; background:' + (active ? 'var(--ink)' : 'var(--paper)') + '; color:' + (active ? 'var(--paper)' : 'var(--ink)') + '; cursor:pointer">' +
-          '<div class="mono tiny" style="opacity:0.7">' + esc(day.d) + '</div>' +
-          '<div style="margin-top:4px; font-size:14px; font-weight:600" class="mono">' + fmtSigned(day.net, 2, '%') + '</div>' +
-          '<div class="mono tiny" style="opacity:0.7; margin-top:2px">' + Number(day.trades || 0) + ' trades</div>' +
-        '</button>';
+      return '<button class="panel" style="' +
+          'padding:10px 12px; text-align:left; cursor:pointer;' +
+          'border:1px solid ' + (active ? 'var(--ink)' : 'var(--line-1)') + ';' +
+          'background:' + (active ? 'var(--ink)' : 'var(--paper)') + ';' +
+          'color:' + (active ? 'var(--paper)' : 'var(--ink)') + '">' +
+        '<div class="mono tiny" style="opacity:0.7">' + C.esc(day.d) + '</div>' +
+        '<div style="margin-top:4px; font-size:14px; font-weight:600" class="mono">' + C.fmtSigned(day.net, 2, '%') + '</div>' +
+        '<div class="mono tiny" style="opacity:0.7; margin-top:2px">' + Number(day.trades || 0) + ' trades</div>' +
+      '</button>';
     }).join('') + '</div>';
-  }
-
-  function renderTradeRows(trades) {
-    if (!trades.length) return emptyRow(6, 'No replay trades returned.');
-    return trades.map(function (trade) {
-      var dirCls = trade.dir === 'LONG' ? 'pos' : (trade.dir === 'SHORT' ? 'neg' : '');
-      var pnlCls = Number(trade.pnlPct) >= 0 ? 'pos' : 'neg';
-      return '<tr>' +
-        '<td class="muted">' + esc(trade.t) + '</td>' +
-        '<td>' + esc(trade.strat) + '</td>' +
-        '<td><span class="chip ' + dirCls + '">' + esc(trade.dir) + '</span></td>' +
-        '<td class="r">' + (Number.isFinite(Number(trade.entry)) ? Number(trade.entry).toFixed(2) : '--') + '</td>' +
-        '<td class="r">' + (Number.isFinite(Number(trade.exit)) ? Number(trade.exit).toFixed(2) : '--') + '</td>' +
-        '<td class="r ' + pnlCls + '">' + fmtSigned(trade.pnlPct || 0, 2, '%') + '</td>' +
-      '</tr>';
-    }).join('');
-  }
-
-  function renderVoteRows(votes) {
-    if (!votes.length) return emptyRow(4, 'No replay signals returned.');
-    return votes.map(function (vote) {
-      var dirCls = vote.dir === 'LONG' ? 'pos' : (vote.dir === 'SHORT' ? 'neg' : '');
-      return '<tr>' +
-        '<td class="muted">' + esc(vote.t) + '</td>' +
-        '<td>' + esc(vote.strat) + '</td>' +
-        '<td><span class="chip ' + dirCls + '">' + esc(vote.dir) + '</span></td>' +
-        '<td class="r">' + Number(vote.conf || 0).toFixed(2) + '</td>' +
-      '</tr>';
-    }).join('');
   }
 
   function render(model) {
     var data = model || getFallbackData();
-    var charts = window.QCharts;
-    var chartHtml = charts.priceChart(data.chart.candles, data.chart.markers, { w: 1100, h: 340 });
     var replay = data.replayStatus || {};
-    var rangeText = esc(replay.start_date || data.session.date_ist || '--') + ' -> ' + esc(replay.end_date || data.session.date_ist || '--');
+    var rangeText = C.esc(replay.start_date || data.session.date_ist || '--') + ' -> ' + C.esc(replay.end_date || data.session.date_ist || '--');
     var runId = data.currentRunId || (data.latestCompletedRun && data.latestCompletedRun.run_id) || '--';
+    var engBadge = C.engineModeBadge(data.kpis && data.kpis.engineMode, runId);
 
-    return '' +
-      '<div id="historical-replay-view" data-source="' + esc(data.source || 'mock') + '">' +
-        '<div class="page-head">' +
-          '<div>' +
-            '<div class="page-crumbs">Operator - Historical</div>' +
-            '<h1 class="page-title">Historical Replay Monitor</h1>' +
-            '<p class="page-sub">Replay-first operator view using the dashboard historical session API and evaluation summaries.</p>' +
+    return '<div id="historical-replay-view" data-source="' + C.esc(data.source || 'mock') + '">' +
+      '<div class="page-head">' +
+        '<div>' +
+          '<div class="page-crumbs">Operator - Historical</div>' +
+          '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
+            '<h1 class="page-title" style="margin:0">Historical Replay Monitor</h1>' +
+            engBadge +
           '</div>' +
-          '<div class="page-actions">' +
-            '<div class="field" style="flex-direction:row;align-items:center;gap:6px">' +
-              '<span class="field-label">From</span>' +
-              '<input id="replay-from" class="inp" type="date" value="' + esc(replay.start_date || data.session.date_ist || '') + '" style="width:130px">' +
-              '<span class="field-label">To</span>' +
-              '<input id="replay-to" class="inp" type="date" value="' + esc(replay.end_date || data.session.date_ist || '') + '" style="width:130px">' +
-              '<span class="field-label">Speed</span>' +
-              '<input id="replay-speed" class="inp" type="number" value="' + esc(replay.speed != null ? replay.speed : 0) + '" style="width:60px">' +
-            '</div>' +
-            '<button id="btn-load-range" class="btn">Load range</button>' +
-            '<button id="btn-run-replay" class="btn primary">Run replay</button>' +
-            '<span id="replay-run-status" style="font-size:12px;color:var(--ink-3);align-self:center"></span>' +
-          '</div>' +
+          '<p class="page-sub">Replay-first operator view using the dashboard historical session API and evaluation summaries.</p>' +
         '</div>' +
+        '<div class="page-actions">' +
+          '<div class="field" style="flex-direction:row;align-items:center;gap:6px">' +
+            '<span class="field-label">From</span>' +
+            '<input id="replay-from" class="inp" type="date" value="' + C.esc(replay.start_date || data.session.date_ist || '') + '" style="width:130px">' +
+            '<span class="field-label">To</span>' +
+            '<input id="replay-to" class="inp" type="date" value="' + C.esc(replay.end_date || data.session.date_ist || '') + '" style="width:130px">' +
+            '<span class="field-label">Speed</span>' +
+            '<input id="replay-speed" class="inp" type="number" value="' + C.esc(replay.speed != null ? replay.speed : 0) + '" style="width:60px">' +
+          '</div>' +
+          '<button id="btn-load-range" class="btn">Load range</button>' +
+          '<button id="btn-run-replay" class="btn primary">Run replay</button>' +
+          '<span id="replay-run-status" style="font-size:12px;color:var(--ink-3);align-self:center"></span>' +
+        '</div>' +
+      '</div>' +
 
-        renderKpis(data) +
+      C.kpiStrip(buildKpiItems(data), 6) +
 
+      '<div class="panel">' +
+        '<div class="panel-head">' +
+          '<div class="panel-title">Session days <span class="count">evaluation</span></div>' +
+          '<div class="row gap-s"><button class="btn sm ghost">Prev</button><button class="btn sm ghost">Next</button></div>' +
+        '</div>' +
+        '<div class="panel-body" style="padding:12px">' + renderDayChips(data.days || []) + '</div>' +
+      '</div>' +
+
+      '<div class="g-main-side">' +
         '<div class="panel">' +
           '<div class="panel-head">' +
-            '<div class="panel-title">Session days <span class="count">evaluation</span></div>' +
-            '<div class="row gap-s"><button class="btn sm ghost">Prev</button><button class="btn sm ghost">Next</button></div>' +
+            '<div class="row gap-m">' +
+              '<div class="panel-title">' + C.esc(data.session.instrument || 'Underlying') + ' - replay day ' + C.esc(data.session.date_ist || '--') + '</div>' +
+              '<span class="chip info"><span class="dot"></span>historical</span>' +
+              '<span class="chip">Range ' + rangeText + '</span>' +
+            '</div>' +
+            '<div class="row gap-s"><button class="btn sm ghost">Fit</button><button class="btn sm ghost">Expand</button></div>' +
           '</div>' +
-          '<div class="panel-body" style="padding:12px">' + renderDayChips(data.days || []) + '</div>' +
+          '<div class="panel-body flush" style="padding:10px 8px 0">' +
+            '<div id="historical-price-chart" style="width:100%; height:380px; position:relative"></div>' +
+            '<div style="display:flex;gap:16px;padding:8px 12px 12px;font-size:11px;color:var(--ink-3);font-family:var(--f-mono)">' +
+              '<span><span style="display:inline-block;width:10px;height:2px;background:var(--ink);vertical-align:middle"></span> Session close</span>' +
+              '<span style="color:var(--pos)">Entry marker</span>' +
+              '<span style="color:var(--neg)">Exit marker</span>' +
+              '<span>' + Number((data.overall && data.overall.trade_count) || data.trades.length || 0) + ' trades - run <span class="mono">' + C.esc(runId) + '</span></span>' +
+            '</div>' +
+          '</div>' +
         '</div>' +
 
-        '<div class="g-main-side">' +
+        '<div style="display:grid;gap:14px">' +
           '<div class="panel">' +
-            '<div class="panel-head">' +
-              '<div class="row gap-m">' +
-                '<div class="panel-title">' + esc(data.session.instrument || 'Underlying') + ' - replay day ' + esc(data.session.date_ist || '--') + '</div>' +
-                '<span class="chip info"><span class="dot"></span>historical</span>' +
-                '<span class="chip">Range ' + rangeText + '</span>' +
-              '</div>' +
-              '<div class="row gap-s"><button class="btn sm ghost">Fit</button><button class="btn sm ghost">Expand</button></div>' +
-            '</div>' +
-            '<div class="panel-body flush" style="padding:10px 8px 0">' +
-              chartHtml +
-              '<div style="display:flex;gap:16px;padding:8px 12px 12px;font-size:11px;color:var(--ink-3);font-family:var(--f-mono)">' +
-                '<span>' + Number((data.overall && data.overall.trade_count) || data.trades.length || 0) + ' trades</span>' +
-                '<span>run <span class="mono">' + esc(runId) + '</span></span>' +
-              '</div>' +
-            '</div>' +
-          '</div>' +
-
-          '<div style="display:grid;gap:14px">' +
-            '<div class="panel">' +
-              '<div class="panel-head"><div class="panel-title">Run details</div><span class="chip pos"><span class="dot"></span>' + esc(String(replay.status || 'unknown')) + '</span></div>' +
-              '<div class="panel-body">' +
-                '<div class="kv"><span class="k">Run ID</span><span class="v">' + esc(runId) + '</span></div>' +
-                '<div class="kv"><span class="k">Dataset</span><span class="v">historical</span></div>' +
-                '<div class="kv"><span class="k">Range</span><span class="v">' + rangeText + '</span></div>' +
-                '<div class="kv"><span class="k">Events emitted</span><span class="v">' + esc(window.DashAPI.fmtCompactInt(replay.events_emitted)) + '</span></div>' +
-                '<div class="kv"><span class="k">Votes</span><span class="v">' + Number((replay.collection_counts || {}).votes || 0) + '</span></div>' +
-                '<div class="kv"><span class="k">Signals</span><span class="v">' + Number((replay.collection_counts || {}).signals || 0) + '</span></div>' +
-              '</div>' +
-            '</div>' +
-            '<div class="panel">' +
-              '<div class="panel-head"><div class="panel-title">Compare</div></div>' +
-              '<div class="panel-body" style="display:grid;gap:8px">' +
-                '<button class="btn" style="justify-content:space-between">Open compare page <span class="muted mono tiny">-></span></button>' +
-                '<button class="btn" style="justify-content:space-between">Latest run JSON <span class="muted mono tiny">-></span></button>' +
-                '<button class="btn" style="justify-content:space-between">Trades API <span class="muted mono tiny">-></span></button>' +
-              '</div>' +
-            '</div>' +
-          '</div>' +
-        '</div>' +
-
-        '<div class="g3">' +
-          '<div class="panel" style="grid-column:span 2">' +
-            '<div class="panel-head"><div class="panel-title">Trades - session day <span class="count">' + data.trades.length + '</span></div></div>' +
-            '<div class="panel-body flush">' +
-              '<table class="tbl">' +
-                '<thead><tr><th>Time</th><th>Strategy</th><th>Dir</th><th class="r">Entry</th><th class="r">Exit</th><th class="r">PnL</th></tr></thead>' +
-                '<tbody>' + renderTradeRows(data.trades) + '</tbody>' +
-              '</table>' +
+            '<div class="panel-head"><div class="panel-title">Run details</div><span class="chip pos"><span class="dot"></span>' + C.esc(String(replay.status || 'unknown')) + '</span></div>' +
+            '<div class="panel-body">' +
+              '<div class="kv"><span class="k">Run ID</span><span class="v">' + C.esc(runId) + '</span></div>' +
+              '<div class="kv"><span class="k">Dataset</span><span class="v">historical</span></div>' +
+              '<div class="kv"><span class="k">Range</span><span class="v">' + rangeText + '</span></div>' +
+              '<div class="kv"><span class="k">Events emitted</span><span class="v">' + C.esc(window.DashAPI.fmtCompactInt(replay.events_emitted)) + '</span></div>' +
+              '<div class="kv"><span class="k">Votes</span><span class="v">' + Number((replay.collection_counts || {}).votes || 0) + '</span></div>' +
+              '<div class="kv"><span class="k">Signals</span><span class="v">' + Number((replay.collection_counts || {}).signals || 0) + '</span></div>' +
             '</div>' +
           '</div>' +
           '<div class="panel">' +
-            '<div class="panel-head"><div class="panel-title">Signals - recent</div></div>' +
-            '<div class="panel-body flush">' +
-              '<table class="tbl">' +
-                '<thead><tr><th>Time</th><th>Strategy</th><th>Dir</th><th class="r">Conf</th></tr></thead>' +
-                '<tbody>' + renderVoteRows(data.votes) + '</tbody>' +
-              '</table>' +
+            '<div class="panel-head"><div class="panel-title">Compare</div></div>' +
+            '<div class="panel-body" style="display:grid;gap:8px">' +
+              '<button class="btn" style="justify-content:space-between">Open compare page <span class="muted mono tiny">-></span></button>' +
+              '<button class="btn" style="justify-content:space-between">Latest run JSON <span class="muted mono tiny">-></span></button>' +
+              '<button class="btn" style="justify-content:space-between">Trades API <span class="muted mono tiny">-></span></button>' +
             '</div>' +
           '</div>' +
         '</div>' +
-      '</div>';
+      '</div>' +
+
+      '<div class="g3">' +
+        '<div class="panel" style="grid-column:span 2">' +
+          '<div class="panel-head"><div class="panel-title">Trades - session day <span class="count">' + data.trades.length + '</span></div></div>' +
+          '<div class="panel-body flush">' +
+            '<table class="tbl">' +
+              C.TRADE_TABLE_HEADER +
+              '<tbody>' + C.tradeTableRows(data.trades) + '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>' +
+        '<div class="panel">' +
+          '<div class="panel-head"><div class="panel-title">Signals - recent <span class="count">' + data.votes.length + '</span></div></div>' +
+          '<div class="panel-body flush">' +
+            '<table class="tbl">' +
+              C.VOTE_TABLE_HEADER +
+              '<tbody>' + C.voteTableRows(data.votes) + '</tbody>' +
+            '</table>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
   }
 
-  async function loadData(dateFrom, dateTo) {
+  function mountChart(data) {
+    var el = document.getElementById('historical-price-chart');
+    if (!el || !window.InteractiveChart) return;
+    if (el.__chart) {
+      try { el.__chart.destroy(); } catch (err) {}
+    }
+    var d = data || getFallbackData();
+    el.__chart = window.InteractiveChart.mount(el, {
+      candles: (d.chart && d.chart.candles && d.chart.candles.length) ? d.chart.candles : [],
+      markers: (d.chart && d.chart.markers) || [],
+    });
+  }
+
+  async function loadData(dateFrom, dateTo, runId) {
     if (!window.DashAPI) throw new Error('DashAPI is not loaded');
     var replayStatus = await window.DashAPI.fetchHistoricalStatus({});
+    var resolvedRunId = runId || replayStatus.latest_completed_run_id || undefined;
     var sessionParams = {
       date: replayStatus.date_ist,
-      run_id: replayStatus.latest_completed_run_id || undefined,
+      run_id: resolvedRunId,
       limit_votes: 12,
       limit_trades: 12,
       limit_signals: 12,
@@ -251,7 +228,7 @@
         dataset: 'historical',
         date_from: rangeFrom,
         date_to: rangeTo,
-        run_id: replayStatus.latest_completed_run_id || undefined,
+        run_id: resolvedRunId,
         page: 1,
         page_size: 8,
       }).catch(function () { return { rows: [], total: 0, no_runs: true }; }),
@@ -285,7 +262,7 @@
           .then(function (data) {
             cache = data;
             var root = document.getElementById('page');
-            if (root) { root.innerHTML = render(data); attachHandlers(); }
+            if (root) { root.innerHTML = render(data); attachHandlers(); mountChart(data); }
           })
           .catch(function (err) { console.error('Load range failed:', err); })
           .finally(function () { pending = null; });
@@ -331,10 +308,10 @@
           btnRun.textContent = 'Run replay';
           if (st === 'completed') {
             cache = null;
-            loadData(dateFrom, dateTo).then(function (data) {
+            loadData(dateFrom, dateTo, runId).then(function (data) {
               cache = data;
               var root = document.getElementById('page');
-              if (root) { root.innerHTML = render(data); attachHandlers(); }
+              if (root) { root.innerHTML = render(data); attachHandlers(); mountChart(data); }
             }).catch(function (err) { console.error('Refresh after run failed:', err); });
           }
         }
@@ -352,6 +329,7 @@
         page.innerHTML = render(cache);
         attachHandlers();
       }
+      mountChart(cache);
       return;
     }
 
@@ -361,7 +339,7 @@
         cache = data;
         if (window.__opCurrentPage !== PAGE) return;
         var root = document.getElementById('page');
-        if (root) { root.innerHTML = render(data); attachHandlers(); }
+        if (root) { root.innerHTML = render(data); attachHandlers(); mountChart(data); }
       })
       .catch(function (err) {
         console.error('Failed to hydrate historical replay page:', err);
