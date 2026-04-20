@@ -49,6 +49,7 @@ class StagedRuntimeDecision:
 @dataclass(frozen=True)
 class PureMLRuntimeControls:
     block_expiry: bool = False
+    bypass_deterministic_gates: bool = False
 
 
 def is_staged_runtime_bundle(bundle: dict[str, object]) -> bool:
@@ -216,6 +217,7 @@ def predict_staged(
     policy: dict[str, Any],
 ) -> StagedRuntimeDecision:
     gate_ids = list(((bundle.get("runtime") or {}).get("prefilter_gate_ids") or (policy.get("runtime") or {}).get("prefilter_gate_ids") or []))
+    bypass_deterministic_gates = bool(getattr(engine._runtime_controls, "bypass_deterministic_gates", False))
     use_v2 = _is_v2_bundle(bundle)
     if use_v2:
         raw_views = project_stage_views_v2(snap.raw_payload)
@@ -235,9 +237,10 @@ def predict_staged(
         _backfill_stage_row(engine._merge_feature_rows(stage_views["stage1_entry_view"], rolling_features), rolling_features),
         snap,
     )
-    gate_reason, _ = _run_prefilter_chain(engine, snap, stage1_row, gate_ids)
-    if gate_reason is not None:
-        return StagedRuntimeDecision(action="HOLD", reason=gate_reason)
+    if not bypass_deterministic_gates:
+        gate_reason, _ = _run_prefilter_chain(engine, snap, stage1_row, gate_ids)
+        if gate_reason is not None:
+            return StagedRuntimeDecision(action="HOLD", reason=gate_reason)
     if "feature_completeness_v1" in gate_ids:
         incomplete_reason = _feature_completeness_reason(stage1_row, stage1_package, max_nan_features=engine._max_nan_features)
         if incomplete_reason is not None:
@@ -245,7 +248,7 @@ def predict_staged(
 
     entry_prob = _score_prob(stage1_package, stage1_row, default_prob_col="move_prob")
     entry_threshold = float(dict(policy["stage1"])["selected_threshold"])
-    if float(entry_prob) < entry_threshold:
+    if (not bypass_deterministic_gates) and float(entry_prob) < entry_threshold:
         return StagedRuntimeDecision(action="HOLD", reason="entry_below_threshold", entry_prob=float(entry_prob))
 
     stage2_row = _inject_runtime_snapshot_fields(
@@ -265,7 +268,9 @@ def predict_staged(
     min_edge = float(stage2_policy["selected_min_edge"])
     ce_ok = ce_prob >= ce_threshold
     pe_ok = pe_prob >= pe_threshold
-    if ce_ok and pe_ok:
+    if bypass_deterministic_gates:
+        direction = "CE" if ce_prob >= pe_prob else "PE"
+    elif ce_ok and pe_ok:
         if abs(ce_prob - pe_prob) < min_edge:
             return StagedRuntimeDecision(action="HOLD", reason="direction_low_edge_conflict", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
         direction = "CE" if ce_prob >= pe_prob else "PE"
@@ -279,7 +284,7 @@ def predict_staged(
     strike = snap.atm_strike
     if strike is None or int(strike) <= 0:
         return StagedRuntimeDecision(action="HOLD", reason="missing_atm_strike", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
-    if "liquidity_gate_v1" in gate_ids and not engine._liquidity_ok(snap=snap, direction=direction, strike=int(strike)):
+    if (not bypass_deterministic_gates) and "liquidity_gate_v1" in gate_ids and not engine._liquidity_ok(snap=snap, direction=direction, strike=int(strike)):
         return StagedRuntimeDecision(action="HOLD", reason="liquidity_gate_block", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
 
     stage3_row = _inject_runtime_snapshot_fields(
@@ -304,9 +309,9 @@ def predict_staged(
     stage3_policy = dict(policy["stage3"])
     recipe_threshold = float(stage3_policy["selected_threshold"])
     recipe_margin_min = float(stage3_policy["selected_margin_min"])
-    if float(top_prob) < recipe_threshold:
+    if (not bypass_deterministic_gates) and float(top_prob) < recipe_threshold:
         return StagedRuntimeDecision(action="HOLD", reason="recipe_below_threshold", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, recipe_id=str(top_recipe), recipe_prob=float(top_prob))
-    if float(top_prob - second_prob) < recipe_margin_min:
+    if (not bypass_deterministic_gates) and float(top_prob - second_prob) < recipe_margin_min:
         return StagedRuntimeDecision(action="HOLD", reason="recipe_low_margin", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, recipe_id=str(top_recipe), recipe_prob=float(top_prob), recipe_margin=float(top_prob - second_prob))
 
     recipe_meta = next((dict(item) for item in recipe_catalog if str(item.get("recipe_id") or "") == str(top_recipe)), {})

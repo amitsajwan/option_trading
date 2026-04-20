@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 import joblib
 import numpy as np
@@ -181,6 +183,23 @@ class PureMLStagedEngineTests(unittest.TestCase):
             engine.on_session_start(date(2026, 3, 18))
             signal = engine.evaluate(_snapshot("2026-03-18T09:30:00+05:30"))
             self.assertIsNone(signal)
+
+    def test_staged_bundle_bypass_gates_allows_entry_on_low_recipe_margin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            model_path, threshold_path = self._write_bundle(root, recipe_probs={"L0": 0.71, "L1": 0.66})
+            with patch.dict(os.environ, {"STRATEGY_ML_PURE_BYPASS_GATES": "1"}, clear=False):
+                engine = PureMLEngine(
+                    model_package_path=str(model_path),
+                    threshold_report_path=str(threshold_path),
+                    signal_logger=SignalLogger(root),
+                    max_feature_age_sec=10_000_000,
+                )
+                engine.on_session_start(date(2026, 3, 18))
+                signal = engine.evaluate(_snapshot("2026-03-18T09:30:00+05:30"))
+                self.assertIsNotNone(signal)
+                assert signal is not None
+                self.assertEqual(signal.signal_type, SignalType.ENTRY)
 
     def test_staged_bundle_requires_explicit_policy_thresholds(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

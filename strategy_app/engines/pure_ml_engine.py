@@ -37,6 +37,13 @@ from .snapshot_accessor import SnapshotAccessor
 logger = logging.getLogger(__name__)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 class PureMLEngine(StrategyEngine):
     """Pure-ML entry runtime with hard operational gates and staged inference."""
 
@@ -61,8 +68,13 @@ class PureMLEngine(StrategyEngine):
         self._staged_runtime_policy: dict[str, Any] = load_staged_policy(threshold_report_path)
         runtime_payload = dict(self._staged_runtime_policy.get("runtime") or {})
         bundle_runtime_payload = dict(self._model_package.get("runtime") or {})
+        bypass_deterministic_gates = _env_bool(
+            "STRATEGY_ML_PURE_BYPASS_GATES",
+            bool(runtime_payload.get("bypass_deterministic_gates", bundle_runtime_payload.get("bypass_deterministic_gates", False))),
+        )
         self._runtime_controls = PureMLRuntimeControls(
             block_expiry=bool(runtime_payload.get("block_expiry", bundle_runtime_payload.get("block_expiry", False))),
+            bypass_deterministic_gates=bypass_deterministic_gates,
         )
         self._regime = RegimeClassifier()
         self._feature_state = RollingFeatureState()
@@ -104,12 +116,13 @@ class PureMLEngine(StrategyEngine):
         self._strategy_profile_id = str(strategy_profile_id or default_profile_id).strip() or default_profile_id
         self._set_logger_context(None)
         logger.info(
-            "pure ml staged engine initialized max_feature_age_sec=%d max_nan_features=%d min_oi=%.0f min_volume=%.0f block_expiry=%s",
+            "pure ml staged engine initialized max_feature_age_sec=%d max_nan_features=%d min_oi=%.0f min_volume=%.0f block_expiry=%s bypass_deterministic_gates=%s",
             self._max_feature_age_sec,
             self._max_nan_features,
             self._min_oi,
             self._min_volume,
             str(self._runtime_controls.block_expiry).lower(),
+            str(self._runtime_controls.bypass_deterministic_gates).lower(),
         )
         self._write_runtime_state(last_event={"event": "engine_init"})
 
