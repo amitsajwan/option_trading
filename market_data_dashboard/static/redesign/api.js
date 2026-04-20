@@ -108,6 +108,8 @@
     var pnlRatio = capitalPnlRatio != null ? capitalPnlRatio : rawPnlRatio;
     var entry = toNum(row && row.entry_premium);
     var exit = toNum(row && row.exit_premium);
+    var decisionMetrics = row && row.signal_decision_metrics;
+    if (!decisionMetrics || typeof decisionMetrics !== 'object') decisionMetrics = row && row.decision_metrics;
     return {
       t: fmtTime(row && (row.entry_time || row.exit_time)),
       strat: row && (row.entry_strategy || row.strategy) ? String(row.entry_strategy || row.strategy) : '',
@@ -115,6 +117,12 @@
       qty: row && row.lots != null ? row.lots : '--',
       entry: entry,
       exit: exit,
+      signalId: row && row.signal_id ? String(row.signal_id) : '',
+      signalConfidence: toNum(row && row.signal_confidence),
+      decisionReasonCode: row && (row.signal_decision_reason_code || row.decision_reason_code)
+        ? String(row.signal_decision_reason_code || row.decision_reason_code)
+        : '',
+      decisionMetrics: decisionMetrics && typeof decisionMetrics === 'object' ? decisionMetrics : {},
       rawPnlPct: rawPnlRatio != null ? rawPnlRatio * 100 : null,
       capitalPnlPct: capitalPnlRatio != null ? capitalPnlRatio * 100 : null,
       pnl: pnlRatio != null ? pnlRatio * 100 : null,
@@ -206,8 +214,8 @@
       return {
         t: index,
         price: candle ? candle.c : 0,
-        side: type === 'exit' ? 'sell' : 'buy',
-        shape: 'triangle',
+        side: row && row.side ? String(row.side) : (type === 'exit' ? 'sell' : 'buy'),
+        shape: row && row.shape ? String(row.shape) : 'triangle',
         label: row && row.label ? String(row.label) : '',
         meta: row || {},
       };

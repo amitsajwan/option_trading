@@ -347,6 +347,8 @@ class StrategyEvaluationService:
             "regime": 1,
             "confidence": 1,
             "reason": 1,
+            "decision_metrics": 1,
+            "decision_reason_code": 1,
             "payload.signal": 1,
             "trade_date_ist": 1,
         }
@@ -360,6 +362,9 @@ class StrategyEvaluationService:
             ) or {}
             if not isinstance(payload_signal, dict):
                 payload_signal = {}
+            decision_metrics = doc.get("decision_metrics") if isinstance(doc.get("decision_metrics"), dict) else None
+            if decision_metrics is None and isinstance(payload_signal.get("decision_metrics"), dict):
+                decision_metrics = dict(payload_signal.get("decision_metrics") or {})
             out[signal_id] = {
                 "signal_id": signal_id,
                 "regime": str(doc.get("regime") or payload_signal.get("regime") or "").strip() or None,
@@ -367,6 +372,11 @@ class StrategyEvaluationService:
                     doc.get("confidence") if doc.get("confidence") is not None else payload_signal.get("confidence")
                 ),
                 "reason": str(doc.get("reason") or payload_signal.get("reason") or "").strip(),
+                "decision_metrics": dict(decision_metrics or {}),
+                "decision_reason_code": str(
+                    doc.get("decision_reason_code") or payload_signal.get("decision_reason_code") or ""
+                ).strip()
+                or None,
                 "contributing_strategies": list(payload_signal.get("contributing_strategies") or []),
                 "timestamp": _iso_or_none(payload_signal.get("timestamp") or doc.get("timestamp")),
                 "trade_date_ist": str(doc.get("trade_date_ist") or "").strip() or None,
@@ -501,6 +511,12 @@ class StrategyEvaluationService:
             "oi_trail_active": oi_trail_active,
             "oi_trail_stop_price": _safe_float(close_position.get("oi_trail_stop_price")),
             "signal_confidence": _safe_float(signal_doc.get("confidence")),
+            "signal_decision_metrics": (
+                dict(signal_doc.get("decision_metrics") or {})
+                if isinstance(signal_doc.get("decision_metrics"), dict)
+                else {}
+            ),
+            "signal_decision_reason_code": str(signal_doc.get("decision_reason_code") or "").strip() or None,
             "exit_reason": exit_reason,
             "exit_mechanism": _resolve_trail_mechanism(
                 exit_reason=exit_reason,

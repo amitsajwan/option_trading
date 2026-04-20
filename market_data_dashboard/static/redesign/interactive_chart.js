@@ -14,15 +14,22 @@
 
   function ns(tag) { return document.createElementNS('http://www.w3.org/2000/svg', tag); }
   function fmt(n, d = 2) { return n.toFixed(d); }
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
+  }
 
   function mount(container, opts) {
     const candles = opts.candles.slice();
     const markers = (opts.markers || []).slice();
+    const onMarkerSelect = typeof opts.onMarkerSelect === 'function' ? opts.onMarkerSelect : null;
+    const formatMarkerTooltip = typeof opts.formatMarkerTooltip === 'function' ? opts.formatMarkerTooltip : null;
+    const formatHoverTooltip = typeof opts.formatHoverTooltip === 'function' ? opts.formatHoverTooltip : null;
     const state = {
       // visible window as candle-index range [i0, i1]
       i0: 0,
       i1: candles.length - 1,
       hover: null,
+      markerHover: null,
       dragging: false,
       dragStartX: 0,
       dragStartI: [0, 0],
@@ -238,11 +245,35 @@
         const mx2 = x(m.t), my = y(m.price);
         const color = m.side === 'buy' ? POS : m.side === 'sell' ? NEG : '#B97405';
         const sz = 5;
-        const dir = m.side === 'buy' ? 1 : -1;
-        const tri = ns('path');
-        tri.setAttribute('d', `M ${mx2} ${my + dir * sz} L ${mx2 - sz} ${my - dir * sz} L ${mx2 + sz} ${my - dir * sz} Z`);
-        tri.setAttribute('fill', color); tri.setAttribute('stroke', INK); tri.setAttribute('stroke-width', 0.5);
-        svg.appendChild(tri);
+        const group = ns('g');
+        const shape = String(m.shape || 'triangle').toLowerCase();
+        if (shape === 'circle') {
+          const dot = ns('circle');
+          dot.setAttribute('cx', mx2); dot.setAttribute('cy', my);
+          dot.setAttribute('r', 4.5);
+          dot.setAttribute('fill', color); dot.setAttribute('stroke', INK); dot.setAttribute('stroke-width', 0.5);
+          group.appendChild(dot);
+        } else {
+          const dir = m.side === 'buy' ? 1 : -1;
+          const tri = ns('path');
+          tri.setAttribute('d', `M ${mx2} ${my + dir * sz} L ${mx2 - sz} ${my - dir * sz} L ${mx2 + sz} ${my - dir * sz} Z`);
+          tri.setAttribute('fill', color); tri.setAttribute('stroke', INK); tri.setAttribute('stroke-width', 0.5);
+          group.appendChild(tri);
+        }
+        const hit = ns('circle');
+        hit.setAttribute('cx', mx2); hit.setAttribute('cy', my);
+        hit.setAttribute('r', 10);
+        hit.setAttribute('fill', 'transparent');
+        hit.style.cursor = 'pointer';
+        hit.addEventListener('mouseenter', () => { state.markerHover = m; drawHover(); });
+        hit.addEventListener('mouseleave', () => { if (state.markerHover === m) { state.markerHover = null; drawHover(); } });
+        hit.addEventListener('click', evt => {
+          evt.preventDefault();
+          evt.stopPropagation();
+          if (onMarkerSelect) onMarkerSelect(m);
+        });
+        group.appendChild(hit);
+        svg.appendChild(group);
         if (m.label) {
           const t = ns('text');
           t.setAttribute('x', mx2 + 6); t.setAttribute('y', my - 6);
@@ -280,8 +311,33 @@
       drawHover();
     }
 
+    function defaultMarkerTooltip(marker) {
+      const meta = marker && marker.meta ? marker.meta : {};
+      const timestamp = meta.timestamp || '';
+      const title = meta.analysisLabel || meta.label || marker.label || meta.type || 'Marker';
+      const subtitle = timestamp ? '<div style="color:#B9C2CC">' + esc(String(timestamp).slice(11, 19)) + '</div>' : '';
+      return '<div style="font-weight:600; color:#fff">' + esc(title) + '</div>' + subtitle;
+    }
+
     function drawHover() {
       crosshair.innerHTML = '';
+      if (state.markerHover) {
+        const marker = state.markerHover;
+        const xx = state._x(marker.t);
+        const yy = state._y(marker.price);
+        const html = formatMarkerTooltip ? formatMarkerTooltip(marker) : defaultMarkerTooltip(marker);
+        tip.innerHTML = html || '';
+        if (!tip.innerHTML) { tip.style.display = 'none'; return; }
+        tip.style.display = 'block';
+        const { w } = getSize();
+        const tipW = tip.offsetWidth || 180;
+        let px = xx;
+        if (px < tipW / 2 + 4) px = tipW / 2 + 4;
+        if (px > w - tipW / 2 - 4) px = w - tipW / 2 - 4;
+        tip.style.left = px + 'px';
+        tip.style.top = Math.max(40, yy - 18) + 'px';
+        return;
+      }
       if (!state.hover) { tip.style.display = 'none'; return; }
       const { w, h } = getSize();
       const padR = 58, padT = 10, padB = 22;
@@ -296,6 +352,24 @@
         <div style="position:absolute; left:0; top:${yy}px; width:${w - padR}px; height:1px; border-top:1px dashed var(--ink-3); opacity:0.5"></div>
         <div style="position:absolute; left:${xx - 3}px; top:${yy - 3}px; width:6px; height:6px; border-radius:50%; background:var(--ink); box-shadow:0 0 0 2px var(--paper)"></div>
       `;
+
+      if (formatHoverTooltip) {
+        tip.innerHTML = formatHoverTooltip({
+          candle: c,
+          index: i,
+          prev: i > 0 ? candles[i - 1] : null,
+          candles: candles,
+        }) || '';
+        if (!tip.innerHTML) { tip.style.display = 'none'; return; }
+        tip.style.display = 'block';
+        const tipW2 = tip.offsetWidth || 160;
+        let px2 = xx;
+        if (px2 < tipW2 / 2 + 4) px2 = tipW2 / 2 + 4;
+        if (px2 > w - tipW2 / 2 - 4) px2 = w - tipW2 / 2 - 4;
+        tip.style.left = px2 + 'px';
+        tip.style.top = Math.max(40, yy - 14) + 'px';
+        return;
+      }
 
       const chg = i > 0 ? c.c - candles[i - 1].c : 0;
       const chgPct = i > 0 ? (chg / candles[i - 1].c) * 100 : 0;
@@ -352,8 +426,9 @@
       state.hover = { i: ptToCandleIndex(e) };
       drawHover();
     }
-    function onLeave() { state.hover = null; drawHover(); }
+    function onLeave() { state.hover = null; state.markerHover = null; drawHover(); }
     function onDown(e) {
+      state.markerHover = null;
       state.dragging = true;
       const r = container.getBoundingClientRect();
       state.dragStartX = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;

@@ -196,6 +196,7 @@ class StrategyEvaluationServiceTests(unittest.TestCase):
             position_id="p1",
             docs={
                 "open": {
+                    "signal_id": "sig-1",
                     "timestamp": "2024-01-05T10:46:00+05:30",
                     "direction": "PE",
                     "strike": 48400,
@@ -230,6 +231,14 @@ class StrategyEvaluationServiceTests(unittest.TestCase):
                     "regime": "TRENDING",
                     "confidence": 0.38,
                     "reason": "[TRENDING] ORB: ORB_DOWN",
+                    "decision_metrics": {
+                        "entry_prob": 0.81,
+                        "direction_trade_prob": 0.74,
+                        "ce_prob": 0.22,
+                        "pe_prob": 0.78,
+                        "recipe_prob": 0.66,
+                    },
+                    "decision_reason_code": "pe_above_threshold",
                     "contributing_strategies": ["ORB"],
                 }
             },
@@ -239,6 +248,9 @@ class StrategyEvaluationServiceTests(unittest.TestCase):
         self.assertIsNotNone(trade)
         self.assertEqual(trade["exit_reason"], "TRAILING_STOP")
         self.assertEqual(trade["exit_mechanism"], "ORB_TRAIL")
+        self.assertEqual(trade["signal_decision_reason_code"], "pe_above_threshold")
+        self.assertAlmostEqual(trade["signal_decision_metrics"]["entry_prob"], 0.81, places=6)
+        self.assertAlmostEqual(trade["signal_decision_metrics"]["recipe_prob"], 0.66, places=6)
 
     def test_exit_reason_breakdown_groups_and_sorts(self) -> None:
         trades = [

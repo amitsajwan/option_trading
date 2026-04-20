@@ -3,6 +3,11 @@
   var PAGE = 'historical_replay';
   var cache = null;
   var pending = null;
+  var currentTrades = [];
+  var currentVotes = [];
+  var selectedAnalysis = null;
+  var currentDayPage = 0;
+  var DAY_PAGE_SIZE = 8;
 
   var C = window.QComponents;
 
@@ -102,10 +107,335 @@
     return filtered.length || hasAnyTradeDate ? filtered : items;
   }
 
+  function isoDateParts(value) {
+    var text = String(value || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+    var parts = text.split('-');
+    return { y: Number(parts[0]), m: Number(parts[1]), d: Number(parts[2]) };
+  }
+
+  function addDays(value, delta) {
+    var parts = isoDateParts(value);
+    if (!parts) return '';
+    var dt = new Date(Date.UTC(parts.y, parts.m - 1, parts.d));
+    dt.setUTCDate(dt.getUTCDate() + Number(delta || 0));
+    return dt.toISOString().slice(0, 10);
+  }
+
+  function enumerateDates(start, end) {
+    if (!start || !end || start > end) return [];
+    var out = [];
+    var day = start;
+    while (day && day <= end) {
+      out.push(day);
+      if (day === end) break;
+      day = addDays(day, 1);
+    }
+    return out;
+  }
+
+  function mergeEvalDaysWithRange(rangeFrom, rangeTo, days) {
+    var rows = Array.isArray(days) ? days : [];
+    var byDate = {};
+    rows.forEach(function (day) {
+      if (day && day.d) byDate[String(day.d)] = day;
+    });
+    var allDates = enumerateDates(rangeFrom, rangeTo);
+    if (!allDates.length) return rows;
+    return allDates.map(function (date) {
+      return byDate[date] || { d: date, trades: 0, net: 0, status: 'completed', meta: {} };
+    });
+  }
+
+  function pageForDate(days, date) {
+    var items = Array.isArray(days) ? days : [];
+    for (var i = 0; i < items.length; i += 1) {
+      if (items[i] && items[i].d === date) return Math.floor(i / DAY_PAGE_SIZE);
+    }
+    return 0;
+  }
+
+  function visibleDays(days) {
+    var items = Array.isArray(days) ? days : [];
+    var totalPages = Math.max(1, Math.ceil(items.length / DAY_PAGE_SIZE));
+    if (currentDayPage < 0) currentDayPage = 0;
+    if (currentDayPage > totalPages - 1) currentDayPage = totalPages - 1;
+    var start = currentDayPage * DAY_PAGE_SIZE;
+    return {
+      rows: items.slice(start, start + DAY_PAGE_SIZE),
+      totalPages: totalPages,
+      page: currentDayPage,
+    };
+  }
+
+  function tradeKey(trade) {
+    var meta = (trade && trade.meta) || {};
+    return String(
+      (trade && trade.signalId)
+      || meta.signal_id
+      || meta.position_id
+      || [trade && trade.t, trade && trade.entry, trade && trade.exit].join('|')
+    );
+  }
+
+  function voteKey(vote) {
+    var meta = (vote && vote.meta) || {};
+    return String(
+      meta.signal_id
+      || meta.snapshot_id
+      || [meta.timestamp || vote.t, vote.strat, vote.dir, meta.signal_type || '', meta.decision_reason_code || ''].join('|')
+    );
+  }
+
+  function findTradeByKey(trades, key) {
+    var items = Array.isArray(trades) ? trades : [];
+    for (var i = 0; i < items.length; i += 1) {
+      if (tradeKey(items[i]) === key) return items[i];
+    }
+    return null;
+  }
+
+  function findVoteByKey(votes, key) {
+    var items = Array.isArray(votes) ? votes : [];
+    for (var i = 0; i < items.length; i += 1) {
+      if (voteKey(items[i]) === key) return items[i];
+    }
+    return null;
+  }
+
+  function resolveSelectedAnalysis() {
+    if (selectedAnalysis && selectedAnalysis.kind === 'trade') {
+      var selectedTrade = findTradeByKey(currentTrades, selectedAnalysis.key);
+      if (selectedTrade) return { kind: 'trade', key: tradeKey(selectedTrade), item: selectedTrade };
+    }
+    if (selectedAnalysis && selectedAnalysis.kind === 'vote') {
+      var selectedVote = findVoteByKey(currentVotes, selectedAnalysis.key);
+      if (selectedVote) return { kind: 'vote', key: voteKey(selectedVote), item: selectedVote };
+    }
+    if (currentTrades.length) return { kind: 'trade', key: tradeKey(currentTrades[0]), item: currentTrades[0] };
+    if (currentVotes.length) return { kind: 'vote', key: voteKey(currentVotes[0]), item: currentVotes[0] };
+    return null;
+  }
+
+  function fmtProb(value, digits) {
+    var num = Number(value);
+    if (!Number.isFinite(num)) return '--';
+    return (num * 100).toFixed(digits == null ? 1 : digits) + '%';
+  }
+
+  function renderDecisionKv(label, value) {
+    return '<div class="kv"><span class="k">' + C.esc(label) + '</span><span class="v">' + value + '</span></div>';
+  }
+
+  function renderTradeDecisionPanel(trade) {
+    var meta = trade.meta || {};
+    var metrics = trade.decisionMetrics && typeof trade.decisionMetrics === 'object'
+      ? trade.decisionMetrics
+      : (meta.signal_decision_metrics && typeof meta.signal_decision_metrics === 'object' ? meta.signal_decision_metrics : {});
+    var confidence = Number.isFinite(Number(metrics.confidence)) ? Number(metrics.confidence) : Number(trade.signalConfidence);
+    var summary = [
+      trade.t || '--',
+      trade.dir || '--',
+      Number.isFinite(Number(trade.entry)) ? Number(trade.entry).toFixed(2) : '--',
+      Number.isFinite(Number(trade.exit)) ? Number(trade.exit).toFixed(2) : '--'
+    ];
+    var items = [
+      renderDecisionKv('Signal ID', '<span class="mono">' + C.esc(trade.signalId || meta.signal_id || '--') + '</span>'),
+      renderDecisionKv('Reason', C.esc(trade.decisionReasonCode || meta.signal_decision_reason_code || '--')),
+      renderDecisionKv('Entry prob', '<span class="mono">' + C.esc(fmtProb(metrics.entry_prob, 1)) + '</span>'),
+      renderDecisionKv('Trade prob', '<span class="mono">' + C.esc(fmtProb(metrics.direction_trade_prob, 1)) + '</span>'),
+      renderDecisionKv('Up prob', '<span class="mono">' + C.esc(fmtProb(metrics.direction_up_prob, 1)) + '</span>'),
+      renderDecisionKv('CE prob', '<span class="mono">' + C.esc(fmtProb(metrics.ce_prob, 1)) + '</span>'),
+      renderDecisionKv('PE prob', '<span class="mono">' + C.esc(fmtProb(metrics.pe_prob, 1)) + '</span>'),
+      renderDecisionKv('Recipe prob', '<span class="mono">' + C.esc(fmtProb(metrics.recipe_prob, 1)) + '</span>'),
+      renderDecisionKv('Recipe margin', '<span class="mono">' + C.esc(fmtProb(metrics.recipe_margin, 1)) + '</span>'),
+      renderDecisionKv('Confidence', '<span class="mono">' + C.esc(fmtProb(confidence, 1)) + '</span>'),
+    ];
+    var hasDetailedMetrics = Object.keys(metrics).length > 0 || Number.isFinite(confidence);
+    return '<div class="mono tiny" style="margin-bottom:10px;color:var(--ink-3)">' +
+      C.esc(summary[0] + '  ' + summary[1] + '  ' + summary[2] + ' -> ' + summary[3]) +
+    '</div>' +
+    (hasDetailedMetrics
+      ? '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px">' + items.join('') + '</div>'
+      : '<div class="muted">No staged decision metrics were stored on the linked signal for this trade.</div>');
+  }
+
+  function renderVoteDecisionPanel(vote) {
+    var meta = vote.meta || {};
+    var metrics = meta.decision_metrics && typeof meta.decision_metrics === 'object' ? meta.decision_metrics : {};
+    var action = String(meta.signal_type || (vote.fired ? 'ENTRY' : 'HOLD') || '').toUpperCase() || '--';
+    var items = [
+      renderDecisionKv('Action', C.esc(action)),
+      renderDecisionKv('Strategy', C.esc(vote.strat || '--')),
+      renderDecisionKv('Direction', C.esc(vote.dir || '--')),
+      renderDecisionKv('Reason', C.esc(meta.decision_reason_code || meta.policy_reason || '--')),
+      renderDecisionKv('Confidence', '<span class="mono">' + C.esc(fmtProb(vote.conf, 1)) + '</span>'),
+      renderDecisionKv('Policy', C.esc(meta.policy_allowed === true ? 'allowed' : (meta.policy_allowed === false ? 'blocked' : '--'))),
+      renderDecisionKv('Entry prob', '<span class="mono">' + C.esc(fmtProb(metrics.entry_prob, 1)) + '</span>'),
+      renderDecisionKv('Trade prob', '<span class="mono">' + C.esc(fmtProb(metrics.direction_trade_prob, 1)) + '</span>'),
+      renderDecisionKv('Up prob', '<span class="mono">' + C.esc(fmtProb(metrics.direction_up_prob, 1)) + '</span>'),
+      renderDecisionKv('CE prob', '<span class="mono">' + C.esc(fmtProb(metrics.ce_prob, 1)) + '</span>'),
+      renderDecisionKv('PE prob', '<span class="mono">' + C.esc(fmtProb(metrics.pe_prob, 1)) + '</span>'),
+      renderDecisionKv('Recipe prob', '<span class="mono">' + C.esc(fmtProb(metrics.recipe_prob, 1)) + '</span>'),
+    ];
+    return '<div class="mono tiny" style="margin-bottom:10px;color:var(--ink-3)">' +
+      C.esc((vote.t || '--') + '  ' + action + '  ' + (vote.dir || '--')) +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px">' + items.join('') + '</div>';
+  }
+
+  function renderDecisionPanel(selected) {
+    if (!selected || !selected.item) {
+      return '<div class="muted">Click a trade row or chart marker to inspect why a trade was taken or rejected.</div>';
+    }
+    return selected.kind === 'vote'
+      ? renderVoteDecisionPanel(selected.item)
+      : renderTradeDecisionPanel(selected.item);
+  }
+
+  function buildTradeMarkers(trades, candles) {
+    var items = Array.isArray(trades) ? trades : [];
+    if (!candles || !candles.length || !items.length) return [];
+    var rows = [];
+    items.forEach(function (trade) {
+      var meta = trade.meta || {};
+      if (meta.entry_time) {
+        rows.push({
+          timestamp: meta.entry_time,
+          type: 'entry',
+          side: 'buy',
+          label: trade.dir || '',
+          analysisKind: 'trade',
+          analysisRole: 'entry',
+          analysisItem: trade,
+          analysisLabel: 'Trade entry',
+        });
+      }
+      if (meta.exit_time) {
+        rows.push({
+          timestamp: meta.exit_time,
+          type: 'exit',
+          side: 'sell',
+          label: '',
+          analysisKind: 'trade',
+          analysisRole: 'exit',
+          analysisItem: trade,
+          analysisLabel: 'Trade exit',
+        });
+      }
+    });
+    return window.DashAPI.buildChartMarkers(rows, candles);
+  }
+
+  function buildVoteMarkers(votes, candles) {
+    var items = Array.isArray(votes) ? votes : [];
+    if (!candles || !candles.length || !items.length) return [];
+    var rows = items
+      .filter(function (vote) { return vote && vote.meta && vote.meta.timestamp; })
+      .map(function (vote) {
+        var meta = vote.meta || {};
+        var action = String(meta.signal_type || (vote.fired ? 'ENTRY' : 'HOLD') || '').toUpperCase() || 'VOTE';
+        return {
+          timestamp: meta.timestamp,
+          type: 'vote',
+          side: 'neutral',
+          shape: 'circle',
+          label: '',
+          analysisKind: 'vote',
+          analysisRole: action.toLowerCase(),
+          analysisItem: vote,
+          analysisLabel: action + ' ' + (vote.dir || ''),
+        };
+      });
+    return window.DashAPI.buildChartMarkers(rows, candles);
+  }
+
+  function buildReplayChartMarkers(trades, votes, candles, fallbackMarkers) {
+    var enriched = [];
+    if (Array.isArray(trades) && trades.length) enriched = enriched.concat(buildTradeMarkers(trades, candles));
+    else if (Array.isArray(fallbackMarkers) && fallbackMarkers.length) enriched = enriched.concat(fallbackMarkers);
+    if (Array.isArray(votes) && votes.length) enriched = enriched.concat(buildVoteMarkers(votes, candles));
+    return enriched;
+  }
+
+  function chartMarkerTooltip(marker) {
+    var meta = marker && marker.meta ? marker.meta : {};
+    var item = meta.analysisItem;
+    if (!item) return '';
+    if (meta.analysisKind === 'vote') {
+      var voteMeta = item.meta || {};
+      var action = String(voteMeta.signal_type || (item.fired ? 'ENTRY' : 'HOLD') || '').toUpperCase() || 'VOTE';
+      return '<div style="font-weight:600; color:#fff">' + C.esc(action + ' ' + (item.dir || '')) + '</div>' +
+        '<div style="display:grid; grid-template-columns:auto auto; gap:2px 10px; margin-top:4px; color:#B9C2CC">' +
+          '<span>Time</span><span style="color:#fff; text-align:right">' + C.esc(item.t || '--') + '</span>' +
+          '<span>Conf</span><span style="color:#fff; text-align:right">' + C.esc(fmtProb(item.conf, 1)) + '</span>' +
+          '<span>Why</span><span style="color:#fff; text-align:right">' + C.esc(voteMeta.decision_reason_code || voteMeta.policy_reason || '--') + '</span>' +
+        '</div>';
+    }
+    var tradeMeta = item.meta || {};
+    var tradeMetrics = item.decisionMetrics && typeof item.decisionMetrics === 'object' ? item.decisionMetrics : {};
+    return '<div style="font-weight:600; color:#fff">' + C.esc((meta.analysisRole === 'exit' ? 'EXIT' : 'ENTRY') + ' ' + (item.dir || '')) + '</div>' +
+      '<div style="display:grid; grid-template-columns:auto auto; gap:2px 10px; margin-top:4px; color:#B9C2CC">' +
+        '<span>Time</span><span style="color:#fff; text-align:right">' + C.esc(item.t || '--') + '</span>' +
+        '<span>Conf</span><span style="color:#fff; text-align:right">' + C.esc(fmtProb(item.signalConfidence != null ? item.signalConfidence : tradeMetrics.confidence, 1)) + '</span>' +
+        '<span>Why</span><span style="color:#fff; text-align:right">' + C.esc(item.decisionReasonCode || tradeMeta.signal_decision_reason_code || '--') + '</span>' +
+      '</div>';
+  }
+
+  function chartHoverTooltip(ctx) {
+    var candle = ctx && ctx.candle ? ctx.candle : null;
+    if (!candle) return '';
+    var prev = ctx && ctx.prev ? ctx.prev : null;
+    var chg = prev && Number.isFinite(Number(prev.c)) ? Number(candle.c) - Number(prev.c) : 0;
+    var chgPct = prev && Number.isFinite(Number(prev.c)) && Number(prev.c) !== 0 ? (chg / Number(prev.c)) * 100 : 0;
+    var chgColor = chg >= 0 ? '#7AD4A8' : '#E89389';
+    return '<div style="font-weight:600; color:#fff">' + C.esc(candle.label || '--') + '</div>' +
+      '<div style="display:grid; grid-template-columns:auto auto; gap:2px 10px; margin-top:4px; color:#B9C2CC">' +
+        '<span>Price</span><span style="color:#fff; text-align:right">' + C.esc(Number(candle.c).toFixed(2)) + '</span>' +
+        '<span>Delta</span><span style="color:' + chgColor + '; text-align:right">' + C.esc((chg >= 0 ? '+' : '') + chg.toFixed(2) + ' (' + (chg >= 0 ? '+' : '') + chgPct.toFixed(2) + '%)') + '</span>' +
+      '</div>';
+  }
+
+  function selectAnalysisFromMarker(marker) {
+    var meta = marker && marker.meta ? marker.meta : {};
+    var item = meta.analysisItem;
+    if (!item) return;
+    if (meta.analysisKind === 'vote') selectedAnalysis = { kind: 'vote', key: voteKey(item) };
+    else selectedAnalysis = { kind: 'trade', key: tradeKey(item) };
+    paintDecisionSelection();
+  }
+
+  function paintDecisionSelection() {
+    var selected = resolveSelectedAnalysis();
+    selectedAnalysis = selected ? { kind: selected.kind, key: selected.key } : null;
+    document.querySelectorAll('#hr-trades-body tr').forEach(function (row, index) {
+      var trade = currentTrades[index];
+      var active = trade && selected && selected.kind === 'trade' && tradeKey(trade) === selected.key;
+      row.style.cursor = trade ? 'pointer' : '';
+      row.style.background = active ? 'rgba(17,24,39,0.04)' : '';
+    });
+    var panel = document.getElementById('hr-trade-decision-body');
+    if (panel) panel.innerHTML = renderDecisionPanel(selected);
+  }
+
+  function bindTradeHandlers(trades, votes) {
+    currentTrades = Array.isArray(trades) ? trades : [];
+    currentVotes = Array.isArray(votes) ? votes : [];
+    document.querySelectorAll('#hr-trades-body tr').forEach(function (row, index) {
+      var trade = currentTrades[index];
+      row.onclick = trade ? function () {
+        selectedAnalysis = { kind: 'trade', key: tradeKey(trade) };
+        paintDecisionSelection();
+      } : null;
+    });
+    paintDecisionSelection();
+  }
+
   function renderDayChips(days, activeDateArg) {
-    if (!days.length) return '<div class="muted">No replay days available for the resolved run.</div>';
+    if (!days.length) return { html: '<div class="muted">No replay days available for the resolved run.</div>', totalPages: 1, page: 0 };
     var activeDate = activeDateArg || (days[0] && days[0].d);
-    return '<div style="display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px">' + days.map(function (day) {
+    var pageInfo = visibleDays(days);
+    var html = '<div style="display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px">' + pageInfo.rows.map(function (day) {
       var active = day.d === activeDate;
       return '<button class="day-chip panel" data-date="' + C.esc(day.d) + '" style="' +
           'padding:10px 12px; text-align:left; cursor:pointer;' +
@@ -117,15 +447,19 @@
         '<div class="mono tiny" style="opacity:0.7; margin-top:2px">' + Number(day.trades || 0) + ' trades</div>' +
       '</button>';
     }).join('') + '</div>';
+    return { html: html, totalPages: pageInfo.totalPages, page: pageInfo.page };
   }
 
   function render(model) {
     var data = model || getFallbackData();
     var replay = data.replayStatus || {};
     var activeDate = data.activeDate || data.session.date_ist || '--';
-    var rangeText = C.esc(replay.start_date || data.session.date_ist || '--') + ' -> ' + C.esc(replay.end_date || data.session.date_ist || '--');
+    var rangeFrom = data.rangeFrom || replay.start_date || data.session.date_ist || '--';
+    var rangeTo = data.rangeTo || replay.end_date || data.session.date_ist || '--';
+    var rangeText = C.esc(rangeFrom) + ' -> ' + C.esc(rangeTo);
     var runId = data.currentRunId || (data.latestCompletedRun && data.latestCompletedRun.run_id) || '--';
     var engBadge = C.engineModeBadge(data.kpis && data.kpis.engineMode, runId);
+    var dayInfo = renderDayChips(data.days || [], activeDate);
 
     return '<div id="historical-replay-view" data-source="' + C.esc(data.source || 'mock') + '">' +
       '<div class="page-head">' +
@@ -140,9 +474,9 @@
         '<div class="page-actions">' +
           '<div class="field" style="flex-direction:row;align-items:center;gap:6px">' +
             '<span class="field-label">From</span>' +
-            '<input id="replay-from" class="inp" type="date" value="' + C.esc(replay.start_date || data.session.date_ist || '') + '" style="width:130px">' +
+            '<input id="replay-from" class="inp" type="date" value="' + C.esc(rangeFrom || '') + '" style="width:130px">' +
             '<span class="field-label">To</span>' +
-            '<input id="replay-to" class="inp" type="date" value="' + C.esc(replay.end_date || data.session.date_ist || '') + '" style="width:130px">' +
+            '<input id="replay-to" class="inp" type="date" value="' + C.esc(rangeTo || '') + '" style="width:130px">' +
             '<span class="field-label">Speed</span>' +
             '<input id="replay-speed" class="inp" type="number" value="' + C.esc(replay.speed != null ? replay.speed : 0) + '" style="width:60px">' +
           '</div>' +
@@ -157,9 +491,13 @@
       '<div class="panel">' +
         '<div class="panel-head">' +
           '<div class="panel-title">Session days <span class="count">evaluation</span></div>' +
-          '<div class="row gap-s"><button class="btn sm ghost">Prev</button><button class="btn sm ghost">Next</button></div>' +
+          '<div class="row gap-s">' +
+            '<span class="mono tiny muted" style="align-self:center">Page ' + String(dayInfo.page + 1) + '/' + String(dayInfo.totalPages) + '</span>' +
+            '<button id="btn-day-prev" class="btn sm ghost"' + (dayInfo.page <= 0 ? ' disabled' : '') + '>Prev</button>' +
+            '<button id="btn-day-next" class="btn sm ghost"' + (dayInfo.page >= dayInfo.totalPages - 1 ? ' disabled' : '') + '>Next</button>' +
+          '</div>' +
         '</div>' +
-        '<div class="panel-body" style="padding:12px">' + renderDayChips(data.days || [], activeDate) + '</div>' +
+        '<div class="panel-body" style="padding:12px">' + dayInfo.html + '</div>' +
       '</div>' +
 
       '<div class="g-main-side">' +
@@ -226,6 +564,13 @@
           '</div>' +
         '</div>' +
       '</div>' +
+
+      '<div class="panel">' +
+        '<div class="panel-head"><div class="panel-title">Decision analysis</div><span class="count">table or chart</span></div>' +
+        '<div id="hr-trade-decision-body" class="panel-body">' + renderDecisionPanel(
+          data.trades.length ? { kind: 'trade', item: data.trades[0] } : (data.votes.length ? { kind: 'vote', item: data.votes[0] } : null)
+        ) + '</div>' +
+      '</div>' +
     '</div>';
   }
 
@@ -245,9 +590,13 @@
       return;
     }
     if (!window.InteractiveChart) return;
+    var chartMarkers = buildReplayChartMarkers(d.trades, d.votes, candles, (d.chart && d.chart.markers) || []);
     el.__chart = window.InteractiveChart.mount(el, {
       candles: candles,
-      markers: (d.chart && d.chart.markers) || [],
+      markers: chartMarkers,
+      onMarkerSelect: selectAnalysisFromMarker,
+      formatMarkerTooltip: chartMarkerTooltip,
+      formatHoverTooltip: chartHoverTooltip,
     });
   }
 
@@ -277,7 +626,7 @@
         date_to: rangeTo,
         run_id: resolvedRunId,
         page: 1,
-        page_size: 8,
+        page_size: 500,
       }).catch(function () { return { rows: [], total: 0, no_runs: true }; }),
       window.DashAPI.fetchEvalTrades({
         dataset: 'historical',
@@ -291,8 +640,18 @@
 
     var pageData = window.DashAPI.sessionToPageData(results[0]);
     pageData.replayStatus = replayStatus;
-    pageData.days = (results[1].rows || []).map(window.DashAPI.mapSessionDay);
-    pageData.activeDate = pageData.session.date_ist || sessionDate;
+    pageData.rangeFrom = rangeFrom;
+    pageData.rangeTo = rangeTo;
+    pageData.replayStatus = Object.assign({}, replayStatus, {
+      start_date: rangeFrom,
+      end_date: rangeTo,
+    });
+    pageData.days = mergeEvalDaysWithRange(rangeFrom, rangeTo, (results[1].rows || []).map(window.DashAPI.mapSessionDay));
+    pageData.activeDate = sessionDate;
+    pageData.session = Object.assign({}, pageData.session || {}, {
+      date_ist: sessionDate,
+    });
+    currentDayPage = pageForDate(pageData.days, pageData.activeDate);
 
     // Use eval trades as the authoritative source for the historical run.
     var evalTradeRows = results[2].rows || [];
@@ -363,6 +722,7 @@
       if (signalsBody) signalsBody.innerHTML  = C.voteTableRows(sessionData.votes);
       if (signalsCount) signalsCount.textContent = sessionData.votes.length;
       if (sessionDate) sessionDate.textContent = date;
+      bindTradeHandlers(trades, sessionData.votes);
 
       // Rebuild chart for this day.
       var candles = sessionData.chart && sessionData.chart.candles;
@@ -375,16 +735,27 @@
         });
         markers = window.DashAPI.buildChartMarkers(rawM, candles);
       }
-      mountChart({ chart: { candles: candles || [], markers: markers } });
+      if (cache) {
+        cache.activeDate = date;
+        cache.trades = trades;
+        cache.votes = sessionData.votes;
+        cache.chart = { candles: candles || [], markers: markers };
+        cache.session = Object.assign({}, cache.session || {}, sessionData.session || {}, { date_ist: date });
+      }
+      mountChart({ trades: trades, votes: sessionData.votes, chart: { candles: candles || [], markers: markers } });
     }).catch(function (err) {
       console.error('Load day failed:', err);
       if (tradesBody) tradesBody.innerHTML = C.emptyRow(8, 'Failed to load day data.');
+      bindTradeHandlers([], []);
     });
   }
 
   function attachHandlers(data) {
+    var root = document.getElementById('page');
     var btnRun = document.getElementById('btn-run-replay');
     var btnLoad = document.getElementById('btn-load-range');
+    var btnDayPrev = document.getElementById('btn-day-prev');
+    var btnDayNext = document.getElementById('btn-day-next');
     var statusEl = document.getElementById('replay-run-status');
     var runId = data && (data.currentRunId || (data.replayStatus && data.replayStatus.latest_completed_run_id));
 
@@ -395,6 +766,28 @@
         if (date) loadDay(date, runId);
       });
     });
+
+    function rerenderCachedPage() {
+      if (!cache || !root) return;
+      root.innerHTML = render(cache);
+      attachHandlers(cache);
+      mountChart(cache);
+    }
+
+    if (btnDayPrev) {
+      btnDayPrev.addEventListener('click', function () {
+        if (currentDayPage <= 0) return;
+        currentDayPage -= 1;
+        rerenderCachedPage();
+      });
+    }
+
+    if (btnDayNext) {
+      btnDayNext.addEventListener('click', function () {
+        currentDayPage += 1;
+        rerenderCachedPage();
+      });
+    }
 
     function getInputs() {
       return {
@@ -412,7 +805,6 @@
         pending = loadData(inp.dateFrom, inp.dateTo)
           .then(function (data) {
             cache = data;
-            var root = document.getElementById('page');
             if (root) { root.innerHTML = render(data); attachHandlers(data); mountChart(data); }
           })
           .catch(function (err) { console.error('Load range failed:', err); })
@@ -445,6 +837,8 @@
         });
       });
     }
+
+    bindTradeHandlers((data && data.trades) || [], (data && data.votes) || []);
   }
 
   function pollRun(runId, statusEl, btnRun, dateFrom, dateTo) {
@@ -458,10 +852,10 @@
           btnRun.disabled = false;
           btnRun.textContent = 'Run replay';
           if (st === 'completed') {
+            var root = document.getElementById('page');
             cache = null;
             loadData(dateFrom, dateTo, runId).then(function (data) {
               cache = data;
-              var root = document.getElementById('page');
               if (root) { root.innerHTML = render(data); attachHandlers(data); mountChart(data); }
             }).catch(function (err) { console.error('Refresh after run failed:', err); });
           }
