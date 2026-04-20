@@ -114,7 +114,10 @@ class PureMLEngine(StrategyEngine):
         self._write_runtime_state(last_event={"event": "engine_init"})
 
     def set_run_context(self, run_id: Optional[str], metadata: Optional[dict[str, Any]] = None) -> None:
-        self._run_id = str(run_id or "").strip() or None
+        new_run_id = str(run_id or "").strip() or None
+        if new_run_id and new_run_id != self._run_id:
+            self._feature_state.reset()
+        self._run_id = new_run_id
         if isinstance(metadata, dict):
             profile = str(metadata.get("strategy_profile_id") or "").strip()
             if profile:
