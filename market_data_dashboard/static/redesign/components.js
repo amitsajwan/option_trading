@@ -102,7 +102,7 @@
       var exit  = Number.isFinite(Number(trade.exit))  ? Number(trade.exit).toFixed(2)  : '--';
       return '<tr>' +
         '<td class="muted">' + esc(trade.t) + '</td>' +
-        '<td>' + esc(trade.strat) + '</td>' +
+        '<td>' + (trade.strat ? esc(trade.strat) : '<span class="muted">--</span>') + '</td>' +
         '<td><span class="chip ' + dirCls + '">' + esc(trade.dir) + '</span></td>' +
         '<td class="r mobile-hide">' + esc(String(trade.qty != null ? trade.qty : '--')) + '</td>' +
         '<td class="r mobile-hide">' + entry + '</td>' +

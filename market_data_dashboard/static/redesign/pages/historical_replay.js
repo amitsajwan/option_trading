@@ -71,11 +71,12 @@
     ];
   }
 
-  function renderDayChips(days) {
+  function renderDayChips(days, activeDateArg) {
     if (!days.length) return '<div class="muted">No replay days available for the resolved run.</div>';
-    return '<div style="display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px">' + days.map(function (day, index) {
-      var active = index === 0;
-      return '<button class="panel" style="' +
+    var activeDate = activeDateArg || (days[0] && days[0].d);
+    return '<div style="display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px">' + days.map(function (day) {
+      var active = day.d === activeDate;
+      return '<button class="day-chip panel" data-date="' + C.esc(day.d) + '" style="' +
           'padding:10px 12px; text-align:left; cursor:pointer;' +
           'border:1px solid ' + (active ? 'var(--ink)' : 'var(--line-1)') + ';' +
           'background:' + (active ? 'var(--ink)' : 'var(--paper)') + ';' +
@@ -175,20 +176,20 @@
 
       '<div class="g3">' +
         '<div class="panel" style="grid-column:span 2">' +
-          '<div class="panel-head"><div class="panel-title">Trades - session day <span class="count">' + data.trades.length + '</span></div></div>' +
+          '<div class="panel-head"><div class="panel-title">Trades - session day <span id="hr-trades-count" class="count">' + data.trades.length + '</span></div></div>' +
           '<div class="panel-body flush">' +
             '<table class="tbl">' +
               C.TRADE_TABLE_HEADER +
-              '<tbody>' + C.tradeTableRows(data.trades) + '</tbody>' +
+              '<tbody id="hr-trades-body">' + C.tradeTableRows(data.trades) + '</tbody>' +
             '</table>' +
           '</div>' +
         '</div>' +
         '<div class="panel">' +
-          '<div class="panel-head"><div class="panel-title">Signals - recent <span class="count">' + data.votes.length + '</span></div></div>' +
+          '<div class="panel-head"><div class="panel-title">Signals - recent <span id="hr-signals-count" class="count">' + data.votes.length + '</span></div></div>' +
           '<div class="panel-body flush">' +
             '<table class="tbl">' +
               C.VOTE_TABLE_HEADER +
-              '<tbody>' + C.voteTableRows(data.votes) + '</tbody>' +
+              '<tbody id="hr-signals-body">' + C.voteTableRows(data.votes) + '</tbody>' +
             '</table>' +
           '</div>' +
         '</div>' +
@@ -283,10 +284,80 @@
     return pageData;
   }
 
-  function attachHandlers() {
+  function loadDay(date, runId) {
+    // Update chart + trades in-place for a single clicked day — no full re-render.
+    var tradesBody = document.getElementById('hr-trades-body');
+    var tradesCount = document.getElementById('hr-trades-count');
+    var signalsBody = document.getElementById('hr-signals-body');
+    var signalsCount = document.getElementById('hr-signals-count');
+
+    // Highlight the clicked chip, dim others.
+    document.querySelectorAll('.day-chip').forEach(function (chip) {
+      var active = chip.getAttribute('data-date') === date;
+      chip.style.background = active ? 'var(--ink)' : 'var(--paper)';
+      chip.style.color = active ? 'var(--paper)' : 'var(--ink)';
+      chip.style.border = '1px solid ' + (active ? 'var(--ink)' : 'var(--line-1)');
+    });
+
+    if (tradesBody) tradesBody.innerHTML = '<tr><td colspan="8" class="muted" style="text-align:center;padding:18px">Loading…</td></tr>';
+
+    Promise.all([
+      window.DashAPI.fetchHistoricalSession({
+        date: date,
+        run_id: runId || undefined,
+        limit_votes: 12,
+        limit_signals: 12,
+      }),
+      window.DashAPI.fetchEvalTrades({
+        dataset: 'historical',
+        date_from: date,
+        date_to: date,
+        run_id: runId || undefined,
+        page: 1,
+        page_size: 50,
+      }).catch(function () { return { rows: [] }; }),
+    ]).then(function (results) {
+      var sessionData = window.DashAPI.sessionToPageData(results[0]);
+      var evalTradeRows = results[1].rows || [];
+      var evalTrades = evalTradeRows.map(window.DashAPI.mapTrade);
+      var trades = evalTrades.length ? evalTrades : sessionData.trades;
+
+      if (tradesBody)  tradesBody.innerHTML  = C.tradeTableRows(trades);
+      if (tradesCount) tradesCount.textContent = trades.length;
+      if (signalsBody) signalsBody.innerHTML  = C.voteTableRows(sessionData.votes);
+      if (signalsCount) signalsCount.textContent = sessionData.votes.length;
+
+      // Rebuild chart for this day.
+      var candles = sessionData.chart && sessionData.chart.candles;
+      var markers = (sessionData.chart && sessionData.chart.markers) || [];
+      if (!markers.length && evalTradeRows.length && candles && candles.length) {
+        var rawM = [];
+        evalTradeRows.forEach(function (row) {
+          if (row.entry_time) rawM.push({ timestamp: row.entry_time, type: 'entry', label: row.direction || '' });
+          if (row.exit_time)  rawM.push({ timestamp: row.exit_time,  type: 'exit',  label: '' });
+        });
+        markers = window.DashAPI.buildChartMarkers(rawM, candles);
+      }
+      mountChart({ chart: { candles: candles || [], markers: markers } });
+    }).catch(function (err) {
+      console.error('Load day failed:', err);
+      if (tradesBody) tradesBody.innerHTML = C.emptyRow(8, 'Failed to load day data.');
+    });
+  }
+
+  function attachHandlers(data) {
     var btnRun = document.getElementById('btn-run-replay');
     var btnLoad = document.getElementById('btn-load-range');
     var statusEl = document.getElementById('replay-run-status');
+    var runId = data && (data.currentRunId || (data.replayStatus && data.replayStatus.latest_completed_run_id));
+
+    // Day chip clicks — filter table + chart to that specific day.
+    document.querySelectorAll('.day-chip').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        var date = chip.getAttribute('data-date');
+        if (date) loadDay(date, runId);
+      });
+    });
 
     function getInputs() {
       return {
@@ -305,7 +376,7 @@
           .then(function (data) {
             cache = data;
             var root = document.getElementById('page');
-            if (root) { root.innerHTML = render(data); attachHandlers(); mountChart(data); }
+            if (root) { root.innerHTML = render(data); attachHandlers(data); mountChart(data); }
           })
           .catch(function (err) { console.error('Load range failed:', err); })
           .finally(function () { pending = null; });
@@ -354,7 +425,7 @@
             loadData(dateFrom, dateTo, runId).then(function (data) {
               cache = data;
               var root = document.getElementById('page');
-              if (root) { root.innerHTML = render(data); attachHandlers(); mountChart(data); }
+              if (root) { root.innerHTML = render(data); attachHandlers(data); mountChart(data); }
             }).catch(function (err) { console.error('Refresh after run failed:', err); });
           }
         }
@@ -367,13 +438,13 @@
     if (!page) return;
 
     // Wire buttons immediately so Run/Load work even if loadData fails.
-    attachHandlers();
+    attachHandlers(data);
 
     if (cache) {
       var currentView = document.getElementById('historical-replay-view');
       if (!currentView || currentView.getAttribute('data-source') !== 'api') {
         page.innerHTML = render(cache);
-        attachHandlers();
+        attachHandlers(data);
       }
       mountChart(cache);
       return;
@@ -385,7 +456,7 @@
         cache = data;
         if (window.__opCurrentPage !== PAGE) return;
         var root = document.getElementById('page');
-        if (root) { root.innerHTML = render(data); attachHandlers(); mountChart(data); }
+        if (root) { root.innerHTML = render(data); attachHandlers(data); mountChart(data); }
       })
       .catch(function (err) {
         console.error('Failed to hydrate historical replay page:', err);
