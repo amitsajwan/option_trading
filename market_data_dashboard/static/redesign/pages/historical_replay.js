@@ -235,8 +235,8 @@
         date: sessionDate,
         run_id: resolvedRunId,
         limit_votes: 12,
-        limit_trades: 0,     // fetch trades via eval API instead (more reliable)
         limit_signals: 12,
+        // omit limit_trades — fetching from eval API below, session trades overridden
       }),
       window.DashAPI.fetchEvalDays({
         dataset: 'historical',
@@ -365,6 +365,9 @@
   function mount() {
     var page = document.getElementById('page');
     if (!page) return;
+
+    // Wire buttons immediately so Run/Load work even if loadData fails.
+    attachHandlers();
 
     if (cache) {
       var currentView = document.getElementById('historical-replay-view');
