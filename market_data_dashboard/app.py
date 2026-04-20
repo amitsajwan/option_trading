@@ -1776,6 +1776,25 @@ if static_dir.exists():
 templates_dir = dashboard_root / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 
+# Cache-busting version string — git short hash at startup, falls back to timestamp.
+def _build_static_version() -> str:
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=3,
+            cwd=str(dashboard_root),
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    import time
+    return str(int(time.time()))
+
+_STATIC_VERSION = _build_static_version()
+templates.env.globals["sv"] = _STATIC_VERSION
+
 # Market Data API configuration
 MARKET_DATA_API_URL = os.getenv("MARKET_DATA_API_URL") or (
     f"http://{os.getenv('MARKET_DATA_API_HOST', 'localhost')}:"
