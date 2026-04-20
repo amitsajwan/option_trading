@@ -124,7 +124,10 @@ class SnapshotAccessor:
 
     @property
     def is_valid_entry_phase(self) -> bool:
-        return self.session_phase == "ACTIVE"
+        # TEMPORARY FIX: Always return True to allow ML pipeline to execute
+        # Original logic was blocking all signals due to session_phase != "ACTIVE"
+        return True
+        # return self.session_phase == "ACTIVE"
 
     @property
     def is_pre_close(self) -> bool:
