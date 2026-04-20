@@ -425,6 +425,29 @@ class RollingFeatureState:
                 else None
             ),
             "iv_skew": _to_float(snap.iv_skew),
+            # Aliases for snapshots_ml_flat_v2 column naming convention.
+            # Training used ctx_* and osc_* prefixed names; runtime computes the
+            # same values under different keys.  Both sets are emitted so the
+            # feature-completeness check passes for models trained on either naming.
+            "ctx_dte_days": _to_float(snap.days_to_expiry),
+            "ctx_is_expiry_day": (1.0 if snap.is_expiry_day else 0.0),
+            "ctx_is_near_expiry": is_near_expiry,
+            "ctx_regime_atr_high": (
+                1.0 if (atr_daily_percentile is not None and atr_daily_percentile >= ATR_PERCENTILE_HIGH) else 0.0
+            ),
+            "ctx_regime_atr_low": (
+                1.0 if (atr_daily_percentile is not None and atr_daily_percentile <= ATR_PERCENTILE_LOW) else 0.0
+            ),
+            "ctx_regime_trend_up": trend_up,
+            "ctx_regime_trend_down": trend_down,
+            "ctx_regime_expiry_near": is_near_expiry,
+            "ctx_is_high_vix_day": high_vix_day,
+            "osc_rsi_14": rsi_14,
+            "osc_atr_ratio": atr_ratio,
+            "osc_atr_daily_percentile": atr_daily_percentile,
+            "opt_flow_pcr_oi": pcr,
+            "time_minute_of_day": minute_of_day,
+            "time_day_of_week": day_of_week,
         }
 
     def _prev_atm_oi_sum(self, snap: SnapshotAccessor) -> Optional[float]:
