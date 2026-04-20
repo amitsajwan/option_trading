@@ -158,30 +158,48 @@
 
   function buildSyntheticCandles(sessionChart) {
     var chart = sessionChart || {};
+    var opens = Array.isArray(chart.opens) ? chart.opens : [];
+    var highs = Array.isArray(chart.highs) ? chart.highs : [];
+    var lows = Array.isArray(chart.lows) ? chart.lows : [];
+    var closes = Array.isArray(chart.closes) ? chart.closes : [];
+    var volumes = Array.isArray(chart.volumes) ? chart.volumes : [];
     var prices = Array.isArray(chart.prices) ? chart.prices : [];
     var labels = Array.isArray(chart.labels) ? chart.labels : [];
     var timestamps = Array.isArray(chart.timestamps) ? chart.timestamps : [];
     var candles = [];
-    var prevClose = null;
+    var hasOhlcv = closes.length || opens.length || highs.length || lows.length || volumes.length;
+    var total = Math.max(
+      closes.length,
+      opens.length,
+      highs.length,
+      lows.length,
+      volumes.length,
+      labels.length,
+      timestamps.length,
+      prices.length
+    );
 
-    prices.forEach(function (rawPrice, index) {
-      var close = toNum(rawPrice);
-      if (close == null) return;
-      var open = prevClose == null ? close : prevClose;
-      var high = Math.max(open, close);
-      var low = Math.min(open, close);
+    for (var index = 0; index < total; index += 1) {
+      var close = toNum(hasOhlcv ? closes[index] : prices[index]);
+      if (close == null) continue;
+      var open = toNum(opens[index]);
+      if (open == null) open = close;
+      var high = toNum(highs[index]);
+      if (high == null) high = Math.max(open, close);
+      var low = toNum(lows[index]);
+      if (low == null) low = Math.min(open, close);
+      var volume = toNum(volumes[index]);
       candles.push({
         t: candles.length,
         o: open,
         h: high,
         l: low,
         c: close,
-        v: 0,
+        v: volume == null ? 0 : volume,
         label: labels[index] || fmtShortTime(timestamps[index]) || String(index),
         timestamp: timestamps[index] || null,
       });
-      prevClose = close;
-    });
+    }
 
     return candles;
   }

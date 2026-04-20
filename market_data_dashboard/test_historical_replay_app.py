@@ -36,7 +36,15 @@ class _FakeHistoricalReplayService:
             "recent_trades": [],
             "recent_signals": [],
             "recent_votes": [],
-            "session_chart": {"labels": ["09:15"], "prices": [50200.0]},
+            "session_chart": {
+                "labels": ["09:15"],
+                "opens": [50180.0],
+                "highs": [50240.0],
+                "lows": [50150.0],
+                "closes": [50200.0],
+                "volumes": [987.0],
+                "prices": [50200.0],
+            },
             "replay_status": self.get_replay_status(),
         }
 
@@ -367,7 +375,8 @@ class HistoricalReplayAppTests(unittest.TestCase):
             payload = service.get_strategy_session(date="2024-10-31", instrument="BANKNIFTY26MARFUT")
 
         self.assertEqual(payload["session"]["instrument"], "BANKNIFTY-I")
-        self.assertEqual(payload["session_chart"]["prices"], [50200.0])
+        self.assertEqual(payload["session_chart"]["closes"], [50200.0])
+        self.assertEqual(payload["session_chart"]["volumes"], [0.0])
 
     def test_historical_replay_status_falls_back_to_latest_completed_run_when_redis_status_is_idle(self) -> None:
         if dashboard_app.HistoricalReplayMonitorService is None:

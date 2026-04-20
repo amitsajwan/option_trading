@@ -300,7 +300,13 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
                                         "timestamp": "2026-03-02T12:45:00",
                                         "time": "12:45:00",
                                     },
-                                    "futures_bar": {"fut_close": 60025.0},
+                                    "futures_bar": {
+                                        "fut_open": 60000.0,
+                                        "fut_high": 60040.0,
+                                        "fut_low": 59980.0,
+                                        "fut_close": 60025.0,
+                                        "fut_volume": 1234.0,
+                                    },
                                 }
                             },
                         }
@@ -315,6 +321,11 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
         self.assertIsNotNone(chart)
         self.assertEqual(chart["labels"], ["12:45:00"])
         self.assertEqual(chart["timestamps"], ["2026-03-02T07:15:00Z"])
+        self.assertEqual(chart["opens"], [60000.0])
+        self.assertEqual(chart["highs"], [60040.0])
+        self.assertEqual(chart["lows"], [59980.0])
+        self.assertEqual(chart["closes"], [60025.0])
+        self.assertEqual(chart["volumes"], [1234.0])
 
     def test_build_deterministic_diagnostics_exposes_policy_effectiveness_ratios(self) -> None:
         class CursorStub:

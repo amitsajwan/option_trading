@@ -1021,21 +1021,41 @@ class LiveStrategyMonitorService:
             "timestamp": 1,
             "payload.snapshot.session_context.timestamp": 1,
             "payload.snapshot.session_context.time": 1,
+            "payload.snapshot.futures_bar.fut_open": 1,
+            "payload.snapshot.futures_bar.fut_high": 1,
+            "payload.snapshot.futures_bar.fut_low": 1,
             "payload.snapshot.futures_bar.fut_close": 1,
+            "payload.snapshot.futures_bar.fut_volume": 1,
         }
-        def _collect(query: dict[str, Any]) -> tuple[list[str], list[str], list[float], Optional[str]]:
+        def _collect(query: dict[str, Any]) -> tuple[
+            list[str], list[str], list[float], list[float], list[float], list[float], list[float], Optional[str]
+        ]:
             timestamps: list[str] = []
             labels: list[str] = []
-            prices: list[float] = []
+            opens: list[float] = []
+            highs: list[float] = []
+            lows: list[float] = []
+            closes: list[float] = []
+            volumes: list[float] = []
             resolved_instrument: Optional[str] = None
             for doc in coll.find(query, projection).sort("timestamp", 1):
                 payload = (doc.get("payload") or {}) if isinstance(doc.get("payload"), dict) else {}
                 snapshot = (payload.get("snapshot") or {}) if isinstance(payload.get("snapshot"), dict) else {}
                 session_context = (snapshot.get("session_context") or {}) if isinstance(snapshot.get("session_context"), dict) else {}
                 futures_bar = (snapshot.get("futures_bar") or {}) if isinstance(snapshot.get("futures_bar"), dict) else {}
-                price = _safe_float(futures_bar.get("fut_close"))
-                if price is None:
+                close = _safe_float(futures_bar.get("fut_close"))
+                if close is None:
                     continue
+                open_ = _safe_float(futures_bar.get("fut_open"))
+                high = _safe_float(futures_bar.get("fut_high"))
+                low = _safe_float(futures_bar.get("fut_low"))
+                volume = _safe_float(futures_bar.get("fut_volume"))
+                if open_ is None:
+                    open_ = close
+                if high is None:
+                    high = max(open_, close)
+                if low is None:
+                    low = min(open_, close)
                 ts = _iso_or_none(doc.get("timestamp")) or _iso_or_none(session_context.get("timestamp"))
                 if ts is None:
                     continue
@@ -1048,23 +1068,34 @@ class LiveStrategyMonitorService:
                     label = parsed.astimezone(IST_ZONE).strftime("%H:%M") if parsed is not None else str(ts)[11:16]
                 timestamps.append(ts)
                 labels.append(label)
-                prices.append(price)
-            return timestamps, labels, prices, resolved_instrument
+                opens.append(float(open_))
+                highs.append(float(high))
+                lows.append(float(low))
+                closes.append(float(close))
+                volumes.append(float(volume or 0.0))
+            return timestamps, labels, opens, highs, lows, closes, volumes, resolved_instrument
 
         query: dict[str, Any] = {"trade_date_ist": str(date_ist)}
         if instrument:
             query["instrument"] = str(instrument)
-        timestamps, labels, prices, resolved_instrument = _collect(query)
+        timestamps, labels, opens, highs, lows, closes, volumes, resolved_instrument = _collect(query)
         source = "mongo_snapshots"
         if not timestamps and instrument:
-            timestamps, labels, prices, resolved_instrument = _collect({"trade_date_ist": str(date_ist)})
+            timestamps, labels, opens, highs, lows, closes, volumes, resolved_instrument = _collect(
+                {"trade_date_ist": str(date_ist)}
+            )
             source = "mongo_snapshots:fallback_instrument"
         if not timestamps:
             return None
         return {
             "timestamps": timestamps,
             "labels": labels,
-            "prices": prices,
+            "opens": opens,
+            "highs": highs,
+            "lows": lows,
+            "closes": closes,
+            "volumes": volumes,
+            "prices": closes,
             "instrument": resolved_instrument or instrument,
             "source": source,
         }
