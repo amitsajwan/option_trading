@@ -8,6 +8,7 @@
   var selectedAnalysis = null;
   var currentDayPage = 0;
   var DAY_PAGE_SIZE = 8;
+  var pageData = getFallbackData(); // Initialize with fallback data
 
   var C = window.QComponents;
 
@@ -717,12 +718,20 @@
 
   async function loadData(dateFrom, dateTo, runId) {
     if (!window.DashAPI) throw new Error('DashAPI is not loaded');
+
+    // Get date from URL params if available
+    var urlParams = new URLSearchParams(window.location.search);
+    var urlDate = urlParams.get('date');
+
     var replayStatus = await window.DashAPI.fetchHistoricalStatus({});
     var resolvedRunId = runId || replayStatus.latest_completed_run_id || undefined;
 
-    var sessionDate = pageData.activeDate;
-    var rangeFrom = dateFrom || pageData.rangeFrom || '';
-    var rangeTo = dateTo || pageData.rangeTo || '';
+    // Use URL date, then pageData, then latest run start_date, then fallback
+    var latestRun = replayStatus.latest_completed_run || {};
+    var latestRunDate = latestRun.date_from || latestRun.start_date;
+    var sessionDate = urlDate || pageData.activeDate || latestRunDate || '2024-07-01';
+    var rangeFrom = dateFrom || pageData.rangeFrom || latestRunDate || '';
+    var rangeTo = dateTo || pageData.rangeTo || latestRunDate || '';
 
     // Fetch recent runs to populate the Runs table
     var runsPromise = window.DashAPI.fetchEvalRuns({ dataset: 'historical', status: 'completed', limit: 20, include_counts: '1' }).catch(function () { return { rows: [] }; });
