@@ -28,10 +28,10 @@ def fix_evaluation_dates():
     db = client[os.getenv("MONGO_DB_NAME", "option_trading")]
     
     collections_to_fix = [
-        "strategy_evaluation_days_historical",
-        "strategy_evaluation_summary_historical",
-        "strategy_evaluation_equity_historical",
-        "strategy_evaluation_trades_historical",
+        "strategy_votes_historical",
+        "trade_signals_historical",
+        "strategy_positions_historical",
+        "strategy_decision_traces_historical",
     ]
     
     total_updated = 0
@@ -44,40 +44,15 @@ def fix_evaluation_dates():
         collection = db[coll_name]
         bulk_ops = []
         
-        # Find all documents with date_ist or date containing 2026
+        # Find all documents with trade_date_ist containing 2026
         cursor = collection.find({
-            "$or": [
-                {"date_ist": {"$regex": "^2026-"}},
-                {"date": {"$regex": "^2026-"}},
-                {"date_from": {"$regex": "^2026-"}},
-                {"date_to": {"$regex": "^2026-"}},
-            ]
+            "trade_date_ist": {"$regex": "^2026-"}
         })
         
         for doc in cursor:
             updates = {}
             
-            # Fix date_ist
-            if doc.get("date_ist") and str(doc["date_ist"]).startswith("2026-"):
-                new_date = str(doc["date_ist"]).replace("2026-", "2024-", 1)
-                updates["date_ist"] = new_date
-                
-            # Fix date
-            if doc.get("date") and str(doc["date"]).startswith("2026-"):
-                new_date = str(doc["date"]).replace("2026-", "2024-", 1)
-                updates["date"] = new_date
-                
-            # Fix date_from
-            if doc.get("date_from") and str(doc["date_from"]).startswith("2026-"):
-                new_date = str(doc["date_from"]).replace("2026-", "2024-", 1)
-                updates["date_from"] = new_date
-                
-            # Fix date_to
-            if doc.get("date_to") and str(doc["date_to"]).startswith("2026-"):
-                new_date = str(doc["date_to"]).replace("2026-", "2024-", 1)
-                updates["date_to"] = new_date
-            
-            # Also fix trade_date_ist if present
+            # Fix trade_date_ist (primary date field for raw collections)
             if doc.get("trade_date_ist") and str(doc["trade_date_ist"]).startswith("2026-"):
                 new_date = str(doc["trade_date_ist"]).replace("2026-", "2024-", 1)
                 updates["trade_date_ist"] = new_date
@@ -109,8 +84,9 @@ def fix_evaluation_dates():
                 print(f"Bulk write error in {coll_name}: {e.details}")
     
     # Also fix the runs collection
-    if "strategy_evaluation_runs" in db.list_collection_names():
-        runs_coll = db["strategy_evaluation_runs"]
+    runs_coll_name = str(os.getenv("MONGO_COLL_STRATEGY_EVAL_RUNS") or "strategy_eval_runs")
+    if runs_coll_name in db.list_collection_names():
+        runs_coll = db[runs_coll_name]
         bulk_ops = []
         
         cursor = runs_coll.find({
