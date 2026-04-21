@@ -165,7 +165,7 @@
             '<button class="btn" aria-pressed="false">1d</button>' +
           '</div>' +
           '<button class="btn">Pause feed</button>' +
-          '<button class="btn primary">Halt all strategies</button>' +
+          '<button id="btn-halt-strategies" class="btn danger">Halt all strategies</button>' +
         '</div>' +
       '</div>' +
 
@@ -320,6 +320,7 @@
         page.innerHTML = render(cache);
       }
       mountChart(cache);
+      wireHandlers(cache);
       return;
     }
 
@@ -334,13 +335,36 @@
         if (!root) return;
         root.innerHTML = render(data);
         mountChart(data);
+        wireHandlers(data);
       })
       .catch(function (err) {
         console.error('Failed to hydrate live strategy page:', err);
+        C.showToast({ type: 'error', message: 'Failed to load live session data', action: { label: 'Retry', onClick: function () { cache = null; mount(); } } });
       })
       .finally(function () {
         pending = null;
       });
+  }
+
+  function wireHandlers(data) {
+    var btnHalt = document.getElementById('btn-halt-strategies');
+    if (btnHalt && !btnHalt.__wired) {
+      btnHalt.__wired = true;
+      btnHalt.addEventListener('click', function () {
+        C.confirm({
+          title: 'Halt All Strategies',
+          message: 'This will immediately stop all live trading strategies. This action cannot be undone.',
+          confirmText: 'Halt strategies',
+          cancelText: 'Cancel',
+          danger: true,
+          requireType: 'HALT'
+        }).then(function (confirmed) {
+          if (!confirmed) return;
+          // TODO: Call halt API when available
+          C.showToast({ type: 'warn', message: 'Halt command sent — strategies stopping' });
+        });
+      });
+    }
   }
 
   window.PAGES = window.PAGES || {};

@@ -95,6 +95,47 @@
     return '';
   }
 
+  function renderRunsTable(runs, activeRunId) {
+    var items = Array.isArray(runs) ? runs : [];
+    if (!items.length) {
+      return '<div class="muted">No completed evaluation runs found. Run a replay to populate the registry.</div>';
+    }
+    var rows = items.map(function (run) {
+      var rid = String(run.run_id || '').trim() || '--';
+      var isActive = activeRunId && rid.startsWith(activeRunId);
+      var dateFrom = String(run.date_from || '').slice(0, 10);
+      var dateTo = String(run.date_to || '').slice(0, 10);
+      var statusTag = String(run.status || '').toLowerCase();
+      var statusCls = statusTag === 'completed' ? 'pos' : (statusTag === 'running' || statusTag === 'queued' ? 'warn' : 'neg');
+      var trades = Number(run.trade_count != null ? run.trade_count : 0);
+      var signals = Number(run.signal_count != null ? run.signal_count : 0);
+      var badge = isActive ? '<span class="chip pos" style="margin-left:6px">Active</span>' : '';
+      var rowClick = 'onclick="window.__selectRun && window.__selectRun(' + C.esc(JSON.stringify(rid)) + ', ' + C.esc(JSON.stringify(dateFrom)) + ', ' + C.esc(JSON.stringify(dateTo)) + ')"';
+      return '<tr style="cursor:pointer" ' + rowClick + '>' +
+        '<td class="mono">' + C.esc(rid.slice(0, 14)) + '…' + badge + '</td>' +
+        '<td>' + C.esc(dateFrom) + ' → ' + C.esc(dateTo) + '</td>' +
+        '<td><span class="tag ' + statusCls + '">' + C.esc(statusTag.toUpperCase()) + '</span></td>' +
+        '<td class="mono">' + Number(trades).toLocaleString() + ' trades / ' + Number(signals).toLocaleString() + ' signals</td>' +
+      '</tr>';
+    });
+    return '<table class="tbl">' +
+      '<thead>' +
+        '<tr>' +
+          '<th>Run ID</th>' +
+          '<th>Date Range</th>' +
+          '<th>Status</th>' +
+          '<th>Counts</th>' +
+        '</tr>' +
+      '</thead>' +
+      '<tbody>' + rows.join('') + '</tbody>' +
+    '</table>';
+  }
+
+  function formatRunShortId(runId) {
+    if (!runId) return '--';
+    return String(runId).slice(0, 18) + '…';
+  }
+
   function filterTradesForDate(trades, date) {
     var items = Array.isArray(trades) ? trades : [];
     if (!date || !items.length) return items;
@@ -527,14 +568,16 @@
     return '<div id="historical-replay-view" data-source="' + C.esc(data.source || 'mock') + '">' +
       '<div class="page-head">' +
         '<div>' +
-          '<div class="page-crumbs">Operator - Historical</div>' +
-          '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
-            '<h1 class="page-title" style="margin:0">Historical Replay Monitor</h1>' +
-            engBadge +
-          '</div>' +
-          '<p class="page-sub">Replay-first operator view using the dashboard historical session API and evaluation summaries.</p>' +
+          '<div class="page-crumbs">Operator - Research</div>' +
+          '<h1 class="page-title">Historical Replay Monitor</h1>' +
+          '<p class="page-sub">Inspect replayed sessions and compare signal/trade alignment.</p>' +
         '</div>' +
-        '<div class="page-actions">' +
+        '<div style="display:flex;align-items:center;gap:10px;">' +
+          C.dataSourceBadge({ source: data.source || 'mock', updatedAt: data._fetchedAt }) +
+          engBadge +
+        '</div>' +
+      '</div>' +
+      '<div class="page-actions">' +
           '<div class="field" style="flex-direction:row;align-items:center;gap:6px">' +
             '<span class="field-label">From</span>' +
             '<input id="replay-from" class="inp" type="date" value="' + C.esc(rangeFrom || '') + '" style="width:130px">' +
@@ -545,6 +588,7 @@
           '</div>' +
           '<button id="btn-load-range" class="btn">Load range</button>' +
           '<button id="btn-run-replay" class="btn primary">Run replay</button>' +
+          '<button id="btn-share-view" class="btn">Share view</button>' +
           '<span id="replay-run-status" style="font-size:12px;color:var(--ink-3);align-self:center"></span>' +
         '</div>' +
       '</div>' +
@@ -594,6 +638,14 @@
               '<div class="kv"><span class="k">Events emitted</span><span class="v">' + C.esc(window.DashAPI.fmtCompactInt(replay.events_emitted)) + '</span></div>' +
               '<div class="kv"><span class="k">Votes</span><span class="v">' + Number((replay.collection_counts || {}).votes || 0) + '</span></div>' +
               '<div class="kv"><span class="k">Signals</span><span class="v">' + Number((replay.collection_counts || {}).signals || 0) + '</span></div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="panel">' +
+            '<div class="panel-head"><div class="panel-title">Recent Runs</div><span class="count">select to inspect</span></div>' +
+            '<div class="panel-body" id="hr-runs-table-body">' + renderRunsTable(data.runs, runId) + '</div>' +
+            '<div class="panel-foot" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-top:1px solid var(--line-1)">' +
+              '<span class="muted tiny">Click a row to pin that run and load its trades</span>' +
+              '<button class="btn sm" id="btn-refresh-runs">Refresh list</button>' +
             '</div>' +
           '</div>' +
           '<div class="panel">' +
@@ -667,13 +719,13 @@
     if (!window.DashAPI) throw new Error('DashAPI is not loaded');
     var replayStatus = await window.DashAPI.fetchHistoricalStatus({});
     var resolvedRunId = runId || replayStatus.latest_completed_run_id || undefined;
-    var rangeFrom = dateFrom || replayStatus.start_date || replayStatus.date_ist;
-    var rangeTo   = dateTo   || replayStatus.end_date   || replayStatus.date_ist;
 
-    // Use the run's actual end date for the session chart query.
-    // replayStatus.date_ist is the default snapshot date (today or latest snapshot)
-    // which would return no candles when querying historical snapshot collection.
-    var sessionDate = rangeTo || replayStatus.date_ist;
+    var sessionDate = pageData.activeDate;
+    var rangeFrom = dateFrom || pageData.rangeFrom || '';
+    var rangeTo = dateTo || pageData.rangeTo || '';
+
+    // Fetch recent runs to populate the Runs table
+    var runsPromise = window.DashAPI.fetchEvalRuns({ dataset: 'historical', status: 'completed', limit: 20, include_counts: '1' }).catch(function () { return { rows: [] }; });
 
     var results = await Promise.all([
       window.DashAPI.fetchHistoricalSession({
@@ -699,9 +751,14 @@
         page: 1,
         page_size: 50,
       }).catch(function () { return { rows: [] }; }),
+      runsPromise,
     ]);
 
-    var pageData = window.DashAPI.sessionToPageData(results[0]);
+    var session = results[0] || {};
+    var runsRes = results[3] || { rows: [] };
+    pageData = window.DashAPI.sessionToPageData(session);
+    pageData.runs = Array.isArray(runsRes.rows) ? runsRes.rows : [];
+    pageData._runsTotal = runsRes.total || 0;
     pageData.replayStatus = replayStatus;
     pageData.rangeFrom = rangeFrom;
     pageData.rangeTo = rangeTo;
@@ -736,7 +793,12 @@
     }
 
     pageData.source = 'api';
+    pageData._fetchedAt = new Date().toISOString();
     return pageData;
+  }
+
+  function onLoadError(err) {
+    C.showToast({ type: 'error', message: 'Failed to load historical data: ' + String(err && err.message ? err.message : err).slice(0, 60), action: { label: 'Retry', onClick: function () { cache = null; pending = null; loadData(pageData.rangeFrom, pageData.rangeTo).then(function (d) { cache = d; var r = document.getElementById('page'); if (r) { r.innerHTML = render(d); attachHandlers(d); mountChart(d); } }); } } });
   }
 
   function loadDay(date, runId) {
@@ -862,10 +924,25 @@
       };
     }
 
+    function validateDateRange(dateFrom, dateTo) {
+      var errors = [];
+      if (!dateFrom || !dateTo) { errors.push('Both From and To dates are required'); }
+      if (dateFrom && dateTo && dateFrom > dateTo) { errors.push('From date must be before To date'); }
+      var today = new Date().toISOString().slice(0, 10);
+      if (dateFrom > today) { errors.push('From date cannot be in the future'); }
+      if (dateTo > today) { errors.push('To date cannot be in the future'); }
+      return errors;
+    }
+
+    function showValidationErrors(errors) {
+      C.showToast({ type: 'warn', message: errors.join(' • ') });
+    }
+
     if (btnLoad) {
       btnLoad.addEventListener('click', function () {
         var inp = getInputs();
-        if (!inp.dateFrom || !inp.dateTo) { alert('Set From and To dates first.'); return; }
+        var validationErrors = validateDateRange(inp.dateFrom, inp.dateTo);
+        if (validationErrors.length) { showValidationErrors(validationErrors); return; }
         cache = null;
         pending = loadData(inp.dateFrom, inp.dateTo)
           .then(function (data) {
@@ -880,7 +957,8 @@
     if (btnRun) {
       btnRun.addEventListener('click', function () {
         var inp = getInputs();
-        if (!inp.dateFrom || !inp.dateTo) { alert('Set From and To dates first.'); return; }
+        var validationErrors = validateDateRange(inp.dateFrom, inp.dateTo);
+        if (validationErrors.length) { showValidationErrors(validationErrors); return; }
         btnRun.disabled = true;
         btnRun.textContent = 'Queuing…';
         if (statusEl) statusEl.textContent = '';
@@ -903,8 +981,63 @@
       });
     }
 
+    var btnRefreshRuns = document.getElementById('btn-refresh-runs');
+    if (btnRefreshRuns) {
+      btnRefreshRuns.addEventListener('click', function () {
+        var inp = getInputs();
+        window.DashAPI.fetchEvalRuns({ dataset: 'historical', status: 'completed', limit: 20, include_counts: '1' }).then(function (res) {
+          var rows = res && res.rows ? res.rows : [];
+          pageData.runs = rows;
+          pageData._runsTotal = res && res.total ? res.total : 0;
+          var tbody = document.getElementById('hr-runs-table-body');
+          var currentRunId = (data && (data.currentRunId || (data.replayStatus && data.replayStatus.latest_completed_run_id))) || '';
+          if (tbody) { tbody.innerHTML = renderRunsTable(rows, currentRunId); }
+        }).catch(function (err) { console.error('Refresh runs failed:', err); });
+      });
+    }
+
+    var btnShare = document.getElementById('btn-share-view');
+    if (btnShare && !btnShare.__wired) {
+      btnShare.__wired = true;
+      btnShare.addEventListener('click', function () {
+        var inp = getInputs();
+        var runId = data && (data.currentRunId || (data.replayStatus && data.replayStatus.latest_completed_run_id)) || '';
+        var qs = new URLSearchParams();
+        qs.set('date_from', inp.dateFrom || '');
+        qs.set('date_to', inp.dateTo || '');
+        qs.set('run_id', runId);
+        qs.set('date', pageData.activeDate || inp.dateFrom || '');
+        var shareUrl = window.location.origin + window.location.pathname + '?' + qs.toString();
+        navigator.clipboard.writeText(shareUrl).then(function () {
+          C.showToast({ type: 'success', message: 'URL copied to clipboard' });
+        }).catch(function () {
+          // Fallback for browsers without clipboard API
+          window.prompt('Copy this URL:', shareUrl);
+        });
+      });
+    }
+
     bindTradeHandlers((data && data.trades) || [], (data && data.votes) || []);
   }
+
+  function selectRunAndReload(runId, dateFrom, dateTo) {
+    // Update URL and reload to switch to selected run
+    var qs = new URLSearchParams(window.location.search);
+    qs.set('run_id', runId);
+    qs.set('date_from', dateFrom || '');
+    qs.set('date_to', dateTo || '');
+    qs.set('date', pageData && pageData.activeDate ? pageData.activeDate : (dateFrom || ''));
+    window.history.replaceState({}, '', window.location.pathname + '?' + qs.toString());
+    cache = null;
+    pending = loadData(dateFrom, dateTo, runId).then(function (data) {
+      cache = data;
+      if (window.__opCurrentPage !== PAGE) return;
+      var root = document.getElementById('page');
+      if (root) { root.innerHTML = render(data); attachHandlers(data); mountChart(data); }
+    }).catch(function (err) { console.error('Select run failed:', err); })
+    .finally(function () { pending = null; });
+  }
+  window.__selectRun = selectRunAndReload;
 
   function pollRun(runId, statusEl, btnRun, dateFrom, dateTo) {
     var interval = setInterval(function () {
@@ -956,6 +1089,7 @@
       })
       .catch(function (err) {
         console.error('Failed to hydrate historical replay page:', err);
+        onLoadError(err);
       })
       .finally(function () {
         pending = null;

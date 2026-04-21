@@ -315,6 +315,71 @@ class StrategyEvaluationService:
         )
         return doc if isinstance(doc, dict) else None
 
+    def list_runs(
+        self,
+        *,
+        dataset: str = "historical",
+        status: Optional[str] = None,
+        limit: int = 20,
+        include_counts: bool = True,
+    ) -> dict[str, Any]:
+        """Return recent evaluation runs so the UI can show a picker.
+
+        When ``include_counts`` is true (default), the returned rows are
+        enriched with ``trade_count`` / ``signal_count`` / ``vote_count``
+        computed from the corresponding persistence collections, so operators
+        can see at a glance whether a run actually produced trades.
+        """
+        mode = str(dataset or "historical").strip().lower()
+        if mode not in {"historical", "live"}:
+            raise ValueError(f"unsupported dataset '{dataset}'")
+        capped_limit = max(1, min(int(limit or 20), 200))
+        query: dict[str, Any] = {"dataset": mode}
+        state = str(status or "").strip().lower()
+        if state:
+            query["status"] = state
+        db = self._db()
+        cursor = db[self._runs_collection_name()].find(
+            query,
+            {"_id": 0},
+            sort=[("submitted_at", DESCENDING)],
+        ).limit(capped_limit)
+        rows: list[dict[str, Any]] = [dict(doc) for doc in cursor if isinstance(doc, dict)]
+
+        if include_counts and rows and mode == "historical":
+            run_ids = [str(row.get("run_id") or "").strip() for row in rows if str(row.get("run_id") or "").strip()]
+            if run_ids:
+                names = self._collection_names(mode)
+                positions_coll = db[names["positions"]]
+                signals_coll = db[names["signals"]]
+                votes_coll = db[names["votes"]]
+                pipeline = [
+                    {"$match": {"run_id": {"$in": run_ids}}},
+                    {"$group": {"_id": "$run_id", "n": {"$sum": 1}}},
+                ]
+                def _group_counts(coll: Any) -> dict[str, int]:
+                    try:
+                        agg = coll.aggregate(pipeline, allowDiskUse=True)
+                        return {str(r.get("_id") or ""): int(r.get("n") or 0) for r in agg}
+                    except Exception:
+                        return {}
+                trade_counts = _group_counts(positions_coll)
+                signal_counts = _group_counts(signals_coll)
+                vote_counts = _group_counts(votes_coll)
+                for row in rows:
+                    rid = str(row.get("run_id") or "").strip()
+                    row["trade_count"] = int(trade_counts.get(rid, 0))
+                    row["signal_count"] = int(signal_counts.get(rid, 0))
+                    row["vote_count"] = int(vote_counts.get(rid, 0))
+
+        return {
+            "rows": rows,
+            "total": len(rows),
+            "dataset": mode,
+            "status": state or None,
+            "limit": capped_limit,
+        }
+
     def _resolve_run_scope(self, *, dataset: str, run_id: Optional[str]) -> tuple[Optional[str], Optional[dict[str, Any]]]:
         mode = str(dataset or "historical").strip().lower()
         if mode != "historical":

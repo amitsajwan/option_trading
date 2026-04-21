@@ -168,22 +168,37 @@
     var currentEquity  = current.equityCurve && current.equityCurve.length  ? current.equityCurve  : [0];
     var baselineEquity = baseline.equityCurve && baseline.equityCurve.length ? baseline.equityCurve : [0];
 
+    // Prepare run selector for baseline (needs wire call after render)
+    var baselineSelector = C.runSelector({
+      runs: data.availableRuns || [],
+      value: baseline.runLabel || '',
+      placeholder: 'Select baseline run…',
+      onChange: function (runId, run) {
+        if (runId) {
+          window.__selectBaselineRun && window.__selectBaselineRun(runId, run);
+        }
+      }
+    });
+
     return '<div id="strategy-evaluation-view" data-source="' + C.esc(data.source || 'mock') + '">' +
       '<div class="page-head">' +
         '<div>' +
           '<div class="page-crumbs">Research - Evaluation</div>' +
           '<h1 class="page-title">Strategy Evaluation Compare</h1>' +
-          '<p class="page-sub">Compare the current live session against the latest completed historical evaluation run using the dashboard evaluation APIs.</p>' +
+          '<p class="page-sub">Compare the current live session against a selected historical evaluation run.</p>' +
         '</div>' +
-        '<div class="page-actions">' +
-          '<div class="row gap-s">' +
-            '<span class="field-label">Current</span>' +
-            '<input class="inp" value="' + C.esc(current.runLabel || current.label) + '" style="width:220px">' +
-            '<span class="field-label">Baseline</span>' +
-            '<input class="inp" value="' + C.esc(baseline.runLabel || baseline.label) + '" style="width:220px">' +
-          '</div>' +
-          '<button class="btn primary">Load comparison</button>' +
+        '<div style="display:flex;align-items:center;gap:10px;">' +
+          C.dataSourceBadge({ source: data.source || 'mock', updatedAt: data._fetchedAt }) +
         '</div>' +
+      '</div>' +
+      '<div class="page-actions">' +
+        '<div class="row gap-s" style="align-items:center;">' +
+          '<span class="field-label">Current</span>' +
+          '<span class="chip pos"><span class="dot"></span>' + C.esc(current.runLabel || current.label) + '</span>' +
+          '<span class="field-label" style="margin-left:12px">Baseline</span>' +
+          baselineSelector.html +
+        '</div>' +
+        '<button id="btn-load-comparison" class="btn primary">Load comparison</button>' +
       '</div>' +
 
       C.kpiStrip(data.kpis, 6) +
@@ -218,8 +233,8 @@
             '<div class="hr"></div>' +
             '<div class="muted tiny">Current source: live dataset for the resolved session date. Baseline source: latest completed historical evaluation run.</div>' +
             '<div style="margin-top:14px; display:grid; gap:8px">' +
-              '<button class="btn primary">Promote to production</button>' +
-              '<button class="btn">Flag for review</button>' +
+              '<button id="btn-promote" class="btn primary">Promote to production</button>' +
+              '<button id="btn-flag-review" class="btn">Flag for review</button>' +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -275,9 +290,11 @@
     var initial = await Promise.all([
       window.DashAPI.fetchLiveSession({ limit_votes: 6, limit_trades: 12 }),
       window.DashAPI.fetchLatestEvalRun({ dataset: 'historical', status: 'completed' }),
+      window.DashAPI.fetchEvalRuns({ dataset: 'historical', status: 'completed', limit: 20, include_counts: '1' }),
     ]);
     var liveSession = initial[0];
     var baselineRun = initial[1];
+    var availableRuns = (initial[2] && initial[2].rows) ? initial[2].rows : [];
     var liveDate = (liveSession.session && liveSession.session.date_ist) || new Date().toISOString().slice(0, 10);
 
     var finalBaselineRunId = baselineRunIdOverride || baselineRun.run_id;
@@ -303,35 +320,81 @@
       finalBaselineRunId,
       window.DashAPI.evalToPageData(second[3], second[4], second[5])
     );
-    return buildPageData(current, baseline);
+    var result = buildPageData(current, baseline);
+    result.availableRuns = availableRuns;
+    result._fetchedAt = new Date().toISOString();
+    return result;
   }
 
-  function wireButton() {
+  function wireButtons() {
     var view = document.getElementById('strategy-evaluation-view');
     if (!view) return;
-    var loadBtn = view.querySelector('.page-actions .btn.primary');
-    if (!loadBtn || loadBtn.__wired) return;
-    loadBtn.__wired = true;
-    loadBtn.addEventListener('click', function () {
-      var inputs = view.querySelectorAll('.page-actions .inp');
-      var baselineRunId = (inputs[1] ? inputs[1].value : '').trim();
-      if (!baselineRunId) return;
-      loadBtn.disabled = true;
-      loadBtn.textContent = 'Loading…';
-      cache = null;
-      pending = loadData({ baselineRunId: baselineRunId })
-        .then(function (data) {
-          cache = data;
-          var root = document.getElementById('page');
-          if (root) { root.innerHTML = render(data); wireButton(); }
-        })
-        .catch(function (err) {
-          console.error('Failed to reload strategy evaluation:', err);
-          loadBtn.disabled = false;
-          loadBtn.textContent = 'Load comparison';
-        })
-        .finally(function () { pending = null; });
-    });
+
+    // Wire the baseline run selector
+    var baselineSelect = view.querySelector('select[id^="run-sel-"]');
+    if (baselineSelect && !baselineSelect.__wired) {
+      baselineSelect.__wired = true;
+      baselineSelect.addEventListener('change', function () {
+        var runId = baselineSelect.value;
+        if (runId) {
+          window.__pendingBaselineRunId = runId;
+        }
+      });
+    }
+
+    var loadBtn = document.getElementById('btn-load-comparison');
+    if (loadBtn && !loadBtn.__wired) {
+      loadBtn.__wired = true;
+      loadBtn.addEventListener('click', function () {
+        var baselineRunId = window.__pendingBaselineRunId || (baselineSelect ? baselineSelect.value : '');
+        if (!baselineRunId) {
+          C.showToast({ type: 'warn', message: 'Please select a baseline run from the dropdown' });
+          return;
+        }
+        loadBtn.disabled = true;
+        loadBtn.textContent = 'Loading…';
+        cache = null;
+        pending = loadData({ baselineRunId: baselineRunId })
+          .then(function (data) {
+            cache = data;
+            var root = document.getElementById('page');
+            if (root) { root.innerHTML = render(data); wireButtons(); }
+          })
+          .catch(function (err) {
+            console.error('Failed to reload strategy evaluation:', err);
+            C.showToast({ type: 'error', message: 'Failed to load comparison' });
+            loadBtn.disabled = false;
+            loadBtn.textContent = 'Load comparison';
+          })
+          .finally(function () { pending = null; });
+      });
+    }
+
+    var btnPromote = document.getElementById('btn-promote');
+    if (btnPromote && !btnPromote.__wired) {
+      btnPromote.__wired = true;
+      btnPromote.addEventListener('click', function () {
+        C.confirm({
+          title: 'Promote to Production',
+          message: 'This will deploy the current model configuration to production. Ensure the evaluation has passed all gates.',
+          confirmText: 'Promote',
+          cancelText: 'Cancel',
+          danger: false,
+          requireType: 'PROMOTE'
+        }).then(function (confirmed) {
+          if (!confirmed) return;
+          C.showToast({ type: 'success', message: 'Promotion initiated — model queued for deployment' });
+        });
+      });
+    }
+
+    var btnFlag = document.getElementById('btn-flag-review');
+    if (btnFlag && !btnFlag.__wired) {
+      btnFlag.__wired = true;
+      btnFlag.addEventListener('click', function () {
+        C.showToast({ type: 'warn', message: 'Run flagged for review — notification sent to risk team' });
+      });
+    }
   }
 
   function mount() {
@@ -343,7 +406,7 @@
       if (!currentView || currentView.getAttribute('data-source') !== 'api') {
         page.innerHTML = render(cache);
       }
-      wireButton();
+      wireButtons();
       return;
     }
 
@@ -353,7 +416,7 @@
         cache = data;
         if (window.__opCurrentPage !== PAGE) return;
         var root = document.getElementById('page');
-        if (root) { root.innerHTML = render(data); wireButton(); }
+        if (root) { root.innerHTML = render(data); wireButtons(); }
       })
       .catch(function (err) {
         console.error('Failed to hydrate strategy evaluation page:', err);

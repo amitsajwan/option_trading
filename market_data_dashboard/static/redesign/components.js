@@ -129,6 +129,234 @@
     '<th class="r mobile-hide">Hold</th>' +
   '</tr></thead>';
 
+  // ── Toast notifications ───────────────────────────────────────────────────
+  //
+  // Simple toast stack for errors, warnings, success messages.
+  // Usage: QComponents.showToast({ type: 'error', message: 'Failed to load', action: { label: 'Retry', onClick: fn } })
+
+  var toastContainer = null;
+  function ensureToastContainer() {
+    if (toastContainer) return toastContainer;
+    toastContainer = document.createElement('div');
+    toastContainer.id = 'toast-container';
+    toastContainer.style.cssText = 'position:fixed;top:12px;right:12px;z-index:1000;display:flex;flex-direction:column;gap:8px;';
+    document.body.appendChild(toastContainer);
+    return toastContainer;
+  }
+
+  function showToast(opts) {
+    opts = opts || {};
+    var type = opts.type || 'info'; // info, success, warn, error
+    var message = opts.message || '';
+    var duration = opts.duration || (type === 'error' ? 0 : 4000);
+    var action = opts.action;
+
+    var el = document.createElement('div');
+    var colors = {
+      info:  { bg: 'var(--info-wash)',  border: 'var(--info)',  icon: 'ℹ' },
+      success:{ bg: 'var(--pos-wash)',   border: 'var(--pos)',   icon: '✓' },
+      warn:  { bg: 'var(--warn-wash)',  border: 'var(--warn)',  icon: '!' },
+      error: { bg: 'rgba(194,62,47,0.12)', border: 'var(--neg)', icon: '✕' },
+    }[type] || colors.info;
+
+    el.style.cssText = 'background:' + colors.bg + ';border-left:3px solid ' + colors.border + ';padding:10px 14px;border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,0.08);min-width:260px;max-width:400px;font-size:12px;color:var(--ink-2);';
+
+    var html = '<div style="display:flex;align-items:flex-start;gap:8px">' +
+      '<span style="font-weight:700;color:' + colors.border + '">' + esc(colors.icon) + '</span>' +
+      '<div style="flex:1">' + esc(message) + '</div>';
+
+    if (action && action.label) {
+      html += '<button class="btn sm" style="margin-left:8px">' + esc(action.label) + '</button>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+
+    if (action && action.label && action.onClick) {
+      el.querySelector('button').addEventListener('click', function () {
+        try { action.onClick(); } catch (e) {}
+        if (el.parentNode) el.parentNode.removeChild(el);
+      });
+    }
+
+    var closeBtn = document.createElement('button');
+    closeBtn.textContent = '×';
+    closeBtn.style.cssText = 'position:absolute;top:4px;right:6px;background:none;border:none;color:var(--ink-3);cursor:pointer;font-size:14px;line-height:1;';
+    closeBtn.onclick = function () { if (el.parentNode) el.parentNode.removeChild(el); };
+    el.style.position = 'relative';
+    el.appendChild(closeBtn);
+
+    ensureToastContainer().appendChild(el);
+
+    if (duration > 0) {
+      setTimeout(function () {
+        if (el.parentNode) el.parentNode.removeChild(el);
+      }, duration);
+    }
+    return el;
+  }
+
+  // ── Modal dialogs ─────────────────────────────────────────────────────────
+  //
+  // Confirmation modals for destructive actions.
+  // Usage: QComponents.confirm({ title, message, confirmText, danger }).then(ok => { if (ok) doIt(); });
+
+  var activeModal = null;
+  function confirmModal(opts) {
+    opts = opts || {};
+    var title = opts.title || 'Confirm';
+    var message = opts.message || '';
+    var confirmText = opts.confirmText || 'Confirm';
+    var cancelText = opts.cancelText || 'Cancel';
+    var danger = !!opts.danger;
+    var requireType = opts.requireType || ''; // e.g., "HALT" — user must type this
+
+    return new Promise(function (resolve) {
+      if (activeModal) { resolve(false); return; }
+
+      var overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(11,15,20,0.45);z-index:999;display:flex;align-items:center;justify-content:center;';
+
+      var box = document.createElement('div');
+      box.style.cssText = 'background:var(--paper);border:1px solid var(--line-2);border-radius:6px;padding:18px 20px;min-width:320px;max-width:460px;box-shadow:0 10px 40px rgba(0,0,0,0.15);';
+
+      var html = '<div style="font-weight:600;font-size:14px;margin-bottom:8px;color:var(--ink);">' + esc(title) + '</div>' +
+        '<div style="font-size:12px;line-height:1.5;color:var(--ink-2);margin-bottom:14px;">' + esc(message) + '</div>';
+
+      if (requireType) {
+        html += '<div style="margin-bottom:12px;">' +
+          '<div style="font-size:11px;color:var(--ink-3);margin-bottom:4px;">Type <b>' + esc(requireType) + '</b> to confirm</div>' +
+          '<input id="modal-confirm-input" class="inp" style="width:100%" placeholder="' + esc(requireType) + '">' +
+        '</div>';
+      }
+
+      html += '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
+        '<button id="modal-cancel" class="btn">' + esc(cancelText) + '</button>' +
+        '<button id="modal-confirm" class="btn ' + (danger ? 'danger' : 'primary') + '" ' + (requireType ? 'disabled' : '') + '>' + esc(confirmText) + '</button>' +
+      '</div>';
+
+      box.innerHTML = html;
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      activeModal = overlay;
+
+      var input = requireType ? box.querySelector('#modal-confirm-input') : null;
+      var confirmBtn = box.querySelector('#modal-confirm');
+
+      function close(result) {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        activeModal = null;
+        resolve(result);
+      }
+
+      if (input) {
+        input.addEventListener('input', function () {
+          confirmBtn.disabled = input.value.trim() !== requireType;
+        });
+        input.focus();
+      }
+
+      box.querySelector('#modal-cancel').addEventListener('click', function () { close(false); });
+      confirmBtn.addEventListener('click', function () { close(true); });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) close(false); });
+    });
+  }
+
+  // ── Skeleton loading ────────────────────────────────────────────────────────
+  //
+  // Shimmer placeholder for loading states.
+
+  function skeleton(width, height) {
+    var w = width || '100%';
+    var h = height || '20px';
+    return '<div style="width:' + w + ';height:' + h + ';background:var(--paper-3);border-radius:4px;position:relative;overflow:hidden;">' +
+      '<div style="position:absolute;inset:0;background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,0.4) 50%,transparent 100%);animation:shimmer 1.5s infinite;"></div>' +
+    '</div>';
+  }
+
+  // ── Data source badge ──────────────────────────────────────────────────────
+  //
+  // Indicates mock vs live vs cached vs stale
+
+  function dataSourceBadge(opts) {
+    opts = opts || {};
+    var source = opts.source || 'mock'; // mock, live, cached, error
+    var updatedAt = opts.updatedAt; // ISO timestamp or null
+    var error = opts.error;
+
+    var labels = { mock: 'Mock', live: 'Live', cached: 'Cached', error: 'Error', stale: 'Stale' };
+    var colors = {
+      mock:  { bg: 'var(--line-2)',      fg: 'var(--ink-3)' },
+      live:  { bg: 'var(--pos-wash)',    fg: 'var(--pos)' },
+      cached:{ bg: 'var(--info-wash)',  fg: 'var(--info)' },
+      stale: { bg: 'var(--warn-wash)',   fg: 'var(--warn)' },
+      error: { bg: 'rgba(194,62,47,0.15)', fg: 'var(--neg)' },
+    };
+
+    var label = error ? (labels.error + ': ' + String(error).slice(0, 30)) : labels[source];
+    var c = colors[source] || colors.mock;
+
+    var timeText = '';
+    if (updatedAt && source !== 'mock' && source !== 'error') {
+      var age = Date.now() - new Date(updatedAt).getTime();
+      var mins = Math.floor(age / 60000);
+      timeText = mins < 1 ? 'just now' : mins + 'm ago';
+    }
+
+    return '<span style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:500;background:' + c.bg + ';color:' + c.fg + ';">' +
+      '<span style="width:6px;height:6px;border-radius:50%;background:currentColor;opacity:0.8;"></span>' +
+      esc(label) + (timeText ? ' · ' + timeText : '') +
+    '</span>';
+  }
+
+  // ── Run selector component ─────────────────────────────────────────────────
+  //
+  // Dropdown for selecting runs with metadata display.
+
+  function runSelector(opts) {
+    opts = opts || {};
+    var runs = opts.runs || [];
+    var value = opts.value || '';
+    var onChange = opts.onChange;
+    var placeholder = opts.placeholder || 'Select a run…';
+
+    var id = 'run-sel-' + Math.random().toString(36).slice(2, 8);
+
+    var itemsHtml = runs.map(function (run) {
+      var rid = String(run.run_id || '').trim();
+      var shortId = rid.slice(0, 14) + (rid.length > 14 ? '…' : '');
+      var dateFrom = String(run.date_from || '').slice(0, 10);
+      var dateTo = String(run.date_to || '').slice(0, 10);
+      var status = String(run.status || '').toLowerCase();
+      var trades = Number(run.trade_count || 0);
+      var selected = rid === value ? 'selected' : '';
+      return '<option value="' + esc(rid) + '" ' + selected + '>' +
+        esc(shortId) + ' | ' + esc(dateFrom) + '→' + esc(dateTo) + ' | ' + esc(status) + ' | ' + trades + ' trades' +
+      '</option>';
+    }).join('');
+
+    if (!runs.length) {
+      itemsHtml = '<option disabled>No runs available</option>';
+    }
+
+    var html = '<select id="' + id + '" class="inp" style="min-width:280px;max-width:400px;">' +
+      '<option value="" disabled ' + (value ? '' : 'selected') + '>' + esc(placeholder) + '</option>' +
+      itemsHtml +
+    '</select>';
+
+    // Return HTML and a wire function to attach events after insertion
+    return {
+      html: html,
+      wire: function () {
+        var el = document.getElementById(id);
+        if (!el || !onChange) return;
+        el.addEventListener('change', function () {
+          var selected = runs.find(function (r) { return String(r.run_id) === String(el.value); });
+          onChange(el.value, selected);
+        });
+      }
+    };
+  }
+
   // ── Vote / signal table rows ──────────────────────────────────────────────
   //
   // 5-column layout:
@@ -205,5 +433,10 @@
     VOTE_TABLE_HEADER: VOTE_TABLE_HEADER,
     decisionGridRows: decisionGridRows,
     DECISION_GRID_HEADER: DECISION_GRID_HEADER,
+    showToast: showToast,
+    confirm: confirmModal,
+    skeleton: skeleton,
+    dataSourceBadge: dataSourceBadge,
+    runSelector: runSelector,
   };
 })(window);

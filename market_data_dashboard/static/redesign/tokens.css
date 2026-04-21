@@ -61,6 +61,20 @@ table { border-collapse: collapse; width: 100%; }
 .mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
 .num  { font-family: var(--f-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 
+/* ---------- animations ---------- */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* ---------- button variants ---------- */
+.btn.danger {
+  background: var(--neg);
+  color: #fff;
+  border-color: var(--neg);
+}
+.btn.danger:hover { background: #a83224; }
+
 /* ---------- app shell ---------- */
 .app {
   min-height: 100vh;

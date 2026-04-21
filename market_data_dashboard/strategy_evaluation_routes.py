@@ -26,6 +26,7 @@ class DashboardStrategyEvaluationRouter:
         router.add_api_route("/api/strategy/evaluation/days", self.get_strategy_evaluation_days, methods=["GET"])
         router.add_api_route("/api/strategy/evaluation/trades", self.get_strategy_evaluation_trades, methods=["GET"])
         router.add_api_route("/api/strategy/evaluation/runs", self.create_strategy_evaluation_run, methods=["POST"])
+        router.add_api_route("/api/strategy/evaluation/runs", self.list_strategy_evaluation_runs, methods=["GET"])
         router.add_api_route("/api/strategy/evaluation/runs/latest", self.get_latest_strategy_evaluation_run, methods=["GET"])
         router.add_api_route("/api/strategy/evaluation/runs/{run_id}", self.get_strategy_evaluation_run, methods=["GET"])
         self.router = router
@@ -311,6 +312,39 @@ class DashboardStrategyEvaluationRouter:
                 detail=f"no run found for dataset='{dataset}' status='{status}'",
             )
         return self._normalize_timestamp_fields(item)
+
+    async def list_strategy_evaluation_runs(
+        self,
+        dataset: str = "historical",
+        status: Optional[str] = None,
+        limit: int = 20,
+        include_counts: Optional[str] = "1",
+    ) -> Any:
+        """List recent evaluation runs for the UI run picker.
+
+        Query parameters:
+        - dataset: "historical" or "live" (default: historical)
+        - status: filter by status e.g. "completed", "running", "failed" (optional)
+        - limit: max results 1-200 (default: 20)
+        - include_counts: "1" or "0" (default: "1"). When enabled, the response
+          includes per-run trade_count / signal_count / vote_count.
+        """
+        service = self._require_strategy_eval_service()
+        try:
+            payload = service.list_runs(
+                dataset=str(dataset or "historical").strip().lower(),
+                status=str(status or "").strip() or None,
+                limit=int(limit or 20),
+                include_counts=str(include_counts or "1") not in {"0", "false", "no"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to list runs: {exc}")
+        # Normalize timestamp fields for JSON serialization.
+        for row in payload.get("rows") or []:
+            self._normalize_timestamp_fields(row)
+        return payload
 
     async def get_strategy_evaluation_run(self, run_id: str) -> Any:
         service = self._require_strategy_eval_service()

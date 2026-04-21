@@ -447,6 +447,7 @@
     fetchEvalDays: function (params) { return get('/api/strategy/evaluation/days', params); },
     fetchLatestEvalRun: function (params) { return get('/api/strategy/evaluation/runs/latest', params); },
     fetchEvalRun: function (runId) { return get('/api/strategy/evaluation/runs/' + encodeURIComponent(runId), {}); },
+    fetchEvalRuns: function (params) { return get('/api/strategy/evaluation/runs', params || {}); },
     fetchDashHealth: function () { return get('/api/health', {}); },
     fetchMarketDataHealth: function () { return get('/api/market-data/health', {}); },
     fetchSystemMode: function () { return get('/api/v1/system/mode', {}); },
