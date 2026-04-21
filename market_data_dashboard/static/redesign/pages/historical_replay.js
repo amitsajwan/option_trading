@@ -719,22 +719,40 @@
   async function loadData(dateFrom, dateTo, runId) {
     if (!window.DashAPI) throw new Error('DashAPI is not loaded');
 
-    // Get date from URL params if available
+    // Get date and run_id from URL params if available
     var urlParams = new URLSearchParams(window.location.search);
     var urlDate = urlParams.get('date');
+    var urlRunId = urlParams.get('run_id');
 
     var replayStatus = await window.DashAPI.fetchHistoricalStatus({});
-    var resolvedRunId = runId || replayStatus.latest_completed_run_id || undefined;
+    var latestRunId = replayStatus.latest_completed_run_id;
 
-    // Use URL date, then pageData, then latest run start_date, then fallback
-    var latestRun = replayStatus.latest_completed_run || {};
-    var latestRunDate = latestRun.date_from || latestRun.start_date;
-    var sessionDate = urlDate || pageData.activeDate || latestRunDate || '2024-07-01';
-    var rangeFrom = dateFrom || pageData.rangeFrom || latestRunDate || '';
-    var rangeTo = dateTo || pageData.rangeTo || latestRunDate || '';
+    // Fetch available runs to validate the URL run_id
+    var runsRes = await window.DashAPI.fetchEvalRuns({ dataset: 'historical', status: 'completed', limit: 20 }).catch(function () { return { rows: [] }; });
+    var availableRunIds = (runsRes.rows || []).map(function (r) { return r.run_id; });
 
-    // Fetch recent runs to populate the Runs table
-    var runsPromise = window.DashAPI.fetchEvalRuns({ dataset: 'historical', status: 'completed', limit: 20, include_counts: '1' }).catch(function () { return { rows: [] }; });
+    // Validate run_id: use provided, then URL, then latest - but only if valid
+    var requestedRunId = runId || urlRunId;
+    var resolvedRunId;
+    if (requestedRunId && availableRunIds.indexOf(requestedRunId) >= 0) {
+      resolvedRunId = requestedRunId;
+    } else if (latestRunId && availableRunIds.indexOf(latestRunId) >= 0) {
+      resolvedRunId = latestRunId;
+    } else if (availableRunIds.length > 0) {
+      resolvedRunId = availableRunIds[0];
+    } else {
+      resolvedRunId = requestedRunId || latestRunId || undefined;
+    }
+
+    // Use URL date, then pageData, then resolved run's start_date, then fallback
+    var resolvedRun = (runsRes.rows || []).find(function (r) { return r.run_id === resolvedRunId; }) || {};
+    var runDate = resolvedRun.date_from || resolvedRun.start_date;
+    var sessionDate = urlDate || pageData.activeDate || runDate || '2024-07-01';
+    var rangeFrom = dateFrom || pageData.rangeFrom || runDate || '';
+    var rangeTo = dateTo || pageData.rangeTo || runDate || '';
+
+    // Use already-fetched runs for the table
+    var runsPromise = Promise.resolve(runsRes);
 
     var results = await Promise.all([
       window.DashAPI.fetchHistoricalSession({
