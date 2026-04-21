@@ -87,6 +87,9 @@ class PositionContext:
     decision_reason_code: Optional[str] = None
     strategy_family_version: Optional[str] = None
     strategy_profile_id: Optional[str] = None
+    entry_futures_price: Optional[float] = None
+    underlying_stop_pct: Optional[float] = None
+    underlying_target_pct: Optional[float] = None
 
 
 @dataclass
@@ -188,6 +191,8 @@ class TradeSignal:
     decision_metrics: dict[str, Any] = field(default_factory=dict)
     strategy_family_version: Optional[str] = None
     strategy_profile_id: Optional[str] = None
+    underlying_stop_pct: Optional[float] = None
+    underlying_target_pct: Optional[float] = None
 
 
 class StrategyEngine(ABC):

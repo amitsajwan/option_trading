@@ -44,6 +44,16 @@ def _env_bool(name: str, default: bool) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _env_float(name: str, default: Optional[float]) -> Optional[float]:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return default
+
+
 class PureMLEngine(StrategyEngine):
     """Pure-ML entry runtime with hard operational gates and staged inference."""
 
@@ -63,6 +73,9 @@ class PureMLEngine(StrategyEngine):
         signal_logger: Optional[SignalLogger] = None,
         runtime_artifact_dir: Optional[Path | str] = None,
         strategy_profile_id: Optional[str] = None,
+        underlying_stop_pct: Optional[float] = None,
+        underlying_target_pct: Optional[float] = None,
+        post_stop_cooldown_bars: int = 0,
     ) -> None:
         self._model_package = load_staged_model_package(model_package_path)
         self._staged_runtime_policy: dict[str, Any] = load_staged_policy(threshold_report_path)
@@ -89,6 +102,12 @@ class PureMLEngine(StrategyEngine):
         self._min_volume = max(0.0, float(min_volume))
         self._stop_loss_pct = max(0.0, float(stop_loss_pct))
         self._target_pct = max(0.0, float(target_pct))
+        _raw_udl_stop = underlying_stop_pct if underlying_stop_pct is not None else _env_float("ML_PURE_UNDERLYING_STOP_PCT", None)
+        _raw_udl_target = underlying_target_pct if underlying_target_pct is not None else _env_float("ML_PURE_UNDERLYING_TARGET_PCT", None)
+        self._underlying_stop_pct: Optional[float] = (max(0.0, float(_raw_udl_stop)) if _raw_udl_stop is not None else None)
+        self._underlying_target_pct: Optional[float] = (max(0.0, float(_raw_udl_target)) if _raw_udl_target is not None else None)
+        self._post_stop_cooldown_bars: int = max(0, int(os.getenv("ML_PURE_POST_STOP_COOLDOWN_BARS", str(post_stop_cooldown_bars)) or 0))
+        self._cooldown_bars_remaining: int = 0
         if min_edge is not None:
             logger.warning(
                 "pure ml staged engine ignores constructor min_edge=%.4f; using staged runtime policy selected_min_edge",
@@ -100,6 +119,13 @@ class PureMLEngine(StrategyEngine):
         self._session_event_count = 0
         self._bars_evaluated = 0
         self._entry_count = 0
+        if self._underlying_stop_pct is not None or self._underlying_target_pct is not None or self._post_stop_cooldown_bars > 0:
+            logger.info(
+                "pure ml engine risk overrides: underlying_stop_pct=%s underlying_target_pct=%s post_stop_cooldown_bars=%d",
+                f"{self._underlying_stop_pct:.4f}" if self._underlying_stop_pct is not None else "None",
+                f"{self._underlying_target_pct:.4f}" if self._underlying_target_pct is not None else "None",
+                self._post_stop_cooldown_bars,
+            )
         self._last_entry_at: Optional[str] = None
         self._last_event: Optional[dict[str, Any]] = None
         self._last_decision: Optional[dict[str, Any]] = None
@@ -178,6 +204,7 @@ class PureMLEngine(StrategyEngine):
         self._session_started_at_ist = isoformat_ist(datetime.now(timezone.utc))
         self._session_updated_at_ist = self._session_started_at_ist
         self._hold_counts = {}
+        self._cooldown_bars_remaining = 0
         self._feature_state.on_session_start(trade_date)
         self._tracker.on_session_start(trade_date)
         self._risk.on_session_start(trade_date)
@@ -261,6 +288,8 @@ class PureMLEngine(StrategyEngine):
                 )
                 self._log.log_signal(system_exit, acted_on=True)
                 self._handle_position_closed(system_exit, position)
+                if system_exit.exit_reason in (ExitReason.STOP_LOSS, ExitReason.TRAILING_STOP) and self._post_stop_cooldown_bars > 0:
+                    self._cooldown_bars_remaining = self._post_stop_cooldown_bars
                 self._last_event = {
                     "event": "exit",
                     "snapshot_id": snap.snapshot_id,
@@ -337,6 +366,14 @@ class PureMLEngine(StrategyEngine):
                         primary_blocker_gate=None,
                     )
                 )
+            return None
+
+        if self._cooldown_bars_remaining > 0:
+            self._cooldown_bars_remaining -= 1
+            self._log_hold("post_stop_cooldown", snap)
+            self._last_event = {"event": "hold", "snapshot_id": snap.snapshot_id, "reason": "post_stop_cooldown"}
+            self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+            self._write_runtime_state()
             return None
 
         decision = predict_staged(
@@ -430,6 +467,8 @@ class PureMLEngine(StrategyEngine):
             max_hold_bars=max_hold_bars,
             stop_loss_pct=stop_loss_pct,
             target_pct=target_pct,
+            underlying_stop_pct=self._underlying_stop_pct,
+            underlying_target_pct=self._underlying_target_pct,
             max_lots=self._risk.compute_lots(
                 entry_premium=float(premium),
                 stop_loss_pct=stop_loss_pct,

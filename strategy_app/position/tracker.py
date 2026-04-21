@@ -62,6 +62,15 @@ class PositionTracker:
 
         engine_mode = self._resolver.effective_engine_mode(signal.engine_mode, source=signal.source)
         decision_mode = self._resolver.resolve_decision_mode_for_signal(signal, engine_mode)
+        entry_futures_price = snap.fut_close
+        underlying_stop_pct = float(signal.underlying_stop_pct) if signal.underlying_stop_pct is not None else None
+        underlying_target_pct = float(signal.underlying_target_pct) if signal.underlying_target_pct is not None else None
+        premium_stop_pct = float(signal.stop_loss_pct)
+        stop_price = (
+            None
+            if underlying_stop_pct is not None
+            else self._hard_stop_price(premium, premium_stop_pct)
+        )
         self._position = PositionContext(
             position_id=str(uuid.uuid4())[:8],
             direction=signal.direction or "",
@@ -75,7 +84,10 @@ class PositionTracker:
             max_hold_bars=(max(1, int(signal.max_hold_bars)) if signal.max_hold_bars is not None else None),
             current_premium=premium,
             stop_loss_pct=float(signal.stop_loss_pct),
-            stop_price=self._hard_stop_price(premium, float(signal.stop_loss_pct)),
+            stop_price=stop_price,
+            entry_futures_price=entry_futures_price,
+            underlying_stop_pct=underlying_stop_pct,
+            underlying_target_pct=underlying_target_pct,
             high_water_premium=premium,
             target_pct=float(signal.target_pct),
             trailing_enabled=bool(signal.trailing_enabled),
@@ -153,6 +165,8 @@ class PositionTracker:
         self._apply_oi_premium_trail(position)
         position.bars_held += 1
 
+        current_futures_price = snap.fut_close
+
         exit_reason: Optional[ExitReason] = None
         if forced_exit_reason is not None:
             exit_reason = forced_exit_reason
@@ -160,9 +174,13 @@ class PositionTracker:
             exit_reason = ExitReason.RISK_BREACH
         elif self._minute_of_day(snap) >= HARD_CLOSE_MINUTE:
             exit_reason = ExitReason.TIME_STOP
-        elif self._is_stop_hit(position, current_premium):
+        elif position.underlying_stop_pct is not None and self._is_underlying_stop_hit(position, current_futures_price):
+            exit_reason = ExitReason.STOP_LOSS
+        elif position.underlying_stop_pct is None and self._is_stop_hit(position, current_premium):
             exit_reason = self._resolve_stop_exit_reason(position)
-        elif position.pnl_pct >= position.target_pct:
+        elif position.underlying_target_pct is not None and self._is_underlying_target_hit(position, current_futures_price):
+            exit_reason = ExitReason.TARGET_HIT
+        elif position.underlying_target_pct is None and position.pnl_pct >= position.target_pct:
             exit_reason = ExitReason.TARGET_HIT
         elif position.max_hold_bars is not None and position.bars_held >= int(position.max_hold_bars):
             exit_reason = ExitReason.TIME_STOP
@@ -200,6 +218,34 @@ class PositionTracker:
         if ts is None:
             return 0
         return ts.hour * 60 + ts.minute
+
+    def _is_underlying_stop_hit(self, position: PositionContext, current_futures_price: Optional[float]) -> bool:
+        if current_futures_price is None or current_futures_price <= 0:
+            return False
+        if position.entry_futures_price is None or position.entry_futures_price <= 0:
+            return False
+        stop_pct = float(position.underlying_stop_pct or 0.0)
+        if stop_pct <= 0:
+            return False
+        if position.direction == "CE":
+            return current_futures_price <= position.entry_futures_price * (1.0 - stop_pct)
+        if position.direction == "PE":
+            return current_futures_price >= position.entry_futures_price * (1.0 + stop_pct)
+        return False
+
+    def _is_underlying_target_hit(self, position: PositionContext, current_futures_price: Optional[float]) -> bool:
+        if current_futures_price is None or current_futures_price <= 0:
+            return False
+        if position.entry_futures_price is None or position.entry_futures_price <= 0:
+            return False
+        target_pct = float(position.underlying_target_pct or 0.0)
+        if target_pct <= 0:
+            return False
+        if position.direction == "CE":
+            return current_futures_price >= position.entry_futures_price * (1.0 + target_pct)
+        if position.direction == "PE":
+            return current_futures_price <= position.entry_futures_price * (1.0 - target_pct)
+        return False
 
     def _hard_stop_price(self, entry_premium: float, stop_loss_pct: float) -> Optional[float]:
         if entry_premium <= 0 or stop_loss_pct <= 0:
