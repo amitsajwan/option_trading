@@ -25,7 +25,7 @@ def get_mongo_client():
 def fix_evaluation_dates():
     """Fix dates in evaluation collections - subtract 2 years from 2026 dates."""
     client = get_mongo_client()
-    db = client[os.getenv("MONGO_DB_NAME", "option_trading")]
+    db = client[os.getenv("MONGO_DB", "trading_ai")]
     
     collections_to_fix = [
         "strategy_votes_historical",
