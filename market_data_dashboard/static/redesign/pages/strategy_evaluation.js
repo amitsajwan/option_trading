@@ -264,7 +264,13 @@
     '</div>';
   }
 
-  async function loadData() {
+  async function loadData(opts) {
+    opts = opts || {};
+    var urlParams = new URLSearchParams(window.location.search);
+    var baselineRunIdOverride = opts.baselineRunId || urlParams.get('baseline_run_id') || null;
+    var dateFromOverride = opts.dateFrom || urlParams.get('date_from') || null;
+    var dateToOverride = opts.dateTo || urlParams.get('date_to') || null;
+
     if (!window.DashAPI) throw new Error('DashAPI is not loaded');
     var initial = await Promise.all([
       window.DashAPI.fetchLiveSession({ limit_votes: 6, limit_trades: 12 }),
@@ -274,13 +280,17 @@
     var baselineRun = initial[1];
     var liveDate = (liveSession.session && liveSession.session.date_ist) || new Date().toISOString().slice(0, 10);
 
+    var finalBaselineRunId = baselineRunIdOverride || baselineRun.run_id;
+    var finalDateFrom = dateFromOverride || baselineRun.date_from || '';
+    var finalDateTo = dateToOverride || baselineRun.date_to || '';
+
     var second = await Promise.all([
       window.DashAPI.fetchEvalSummary({ dataset: 'live', date_from: liveDate, date_to: liveDate }),
       window.DashAPI.fetchEvalEquity({ dataset: 'live', date_from: liveDate, date_to: liveDate }),
       window.DashAPI.fetchEvalTrades({ dataset: 'live', date_from: liveDate, date_to: liveDate, page: 1, page_size: 100 }),
-      window.DashAPI.fetchEvalSummary({ dataset: 'historical', date_from: baselineRun.date_from, date_to: baselineRun.date_to, run_id: baselineRun.run_id }),
-      window.DashAPI.fetchEvalEquity({ dataset: 'historical', date_from: baselineRun.date_from, date_to: baselineRun.date_to, run_id: baselineRun.run_id }),
-      window.DashAPI.fetchEvalTrades({ dataset: 'historical', date_from: baselineRun.date_from, date_to: baselineRun.date_to, run_id: baselineRun.run_id, page: 1, page_size: 100 }),
+      window.DashAPI.fetchEvalSummary({ dataset: 'historical', date_from: finalDateFrom, date_to: finalDateTo, run_id: finalBaselineRunId }),
+      window.DashAPI.fetchEvalEquity({ dataset: 'historical', date_from: finalDateFrom, date_to: finalDateTo, run_id: finalBaselineRunId }),
+      window.DashAPI.fetchEvalTrades({ dataset: 'historical', date_from: finalDateFrom, date_to: finalDateTo, run_id: finalBaselineRunId, page: 1, page_size: 100 }),
     ]);
 
     var current = buildScenario(
@@ -289,11 +299,39 @@
       window.DashAPI.evalToPageData(second[0], second[1], second[2])
     );
     var baseline = buildScenario(
-      'Historical ' + baselineRun.date_from + ' -> ' + baselineRun.date_to,
-      baselineRun.run_id,
+      'Historical ' + finalDateFrom + ' -> ' + finalDateTo,
+      finalBaselineRunId,
       window.DashAPI.evalToPageData(second[3], second[4], second[5])
     );
     return buildPageData(current, baseline);
+  }
+
+  function wireButton() {
+    var view = document.getElementById('strategy-evaluation-view');
+    if (!view) return;
+    var loadBtn = view.querySelector('.page-actions .btn.primary');
+    if (!loadBtn || loadBtn.__wired) return;
+    loadBtn.__wired = true;
+    loadBtn.addEventListener('click', function () {
+      var inputs = view.querySelectorAll('.page-actions .inp');
+      var baselineRunId = (inputs[1] ? inputs[1].value : '').trim();
+      if (!baselineRunId) return;
+      loadBtn.disabled = true;
+      loadBtn.textContent = 'Loading…';
+      cache = null;
+      pending = loadData({ baselineRunId: baselineRunId })
+        .then(function (data) {
+          cache = data;
+          var root = document.getElementById('page');
+          if (root) { root.innerHTML = render(data); wireButton(); }
+        })
+        .catch(function (err) {
+          console.error('Failed to reload strategy evaluation:', err);
+          loadBtn.disabled = false;
+          loadBtn.textContent = 'Load comparison';
+        })
+        .finally(function () { pending = null; });
+    });
   }
 
   function mount() {
@@ -305,6 +343,7 @@
       if (!currentView || currentView.getAttribute('data-source') !== 'api') {
         page.innerHTML = render(cache);
       }
+      wireButton();
       return;
     }
 
@@ -314,7 +353,7 @@
         cache = data;
         if (window.__opCurrentPage !== PAGE) return;
         var root = document.getElementById('page');
-        if (root) root.innerHTML = render(data);
+        if (root) { root.innerHTML = render(data); wireButton(); }
       })
       .catch(function (err) {
         console.error('Failed to hydrate strategy evaluation page:', err);

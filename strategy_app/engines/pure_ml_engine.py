@@ -864,19 +864,38 @@ class PureMLEngine(StrategyEngine):
 
     @staticmethod
     def _merge_feature_rows(base: dict[str, object], computed: dict[str, object]) -> dict[str, object]:
+        """Merge runtime-computed rolling features onto a stage-view row.
+
+        Snapshot-priority semantics: when the stage-view row already has a
+        finite numeric value for a given key (meaning the training-time feature
+        arrived intact in the snapshot payload), keep it. Rolling state only
+        fills keys that are missing or NaN in the snapshot. This prevents
+        runtime-only derivations (e.g., rolling's simple-delta ema_9_slope,
+        rolling's atr_ratio normalization, etc.) from silently overriding the
+        training-matched snapshot values for shared feature names.
+        """
         if not computed:
             return base
         out = dict(base)
         for key, value in computed.items():
+            key_str = str(key)
+            existing = out.get(key_str)
+            if existing is not None:
+                try:
+                    if np.isfinite(float(existing)):
+                        continue  # snapshot has a valid value; preserve it
+                except (TypeError, ValueError):
+                    # Non-numeric but present snapshot value: leave untouched.
+                    continue
             if value is None:
                 continue
             try:
                 f = float(value)
             except Exception:
-                out[str(key)] = value
+                out[key_str] = value
                 continue
             if np.isfinite(f):
-                out[str(key)] = float(f)
+                out[key_str] = float(f)
         return out
 
     def _handle_position_closed(self, exit_signal: TradeSignal, position: PositionContext) -> None:

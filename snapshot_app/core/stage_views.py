@@ -137,8 +137,10 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
         ),
         # Regime flags — valid on ALL rows (daily regime, not time-of-day dependent).
         # Present in snapshots_ml_flat_v2 at 0% missing rate.
-        # NOTE: for live inference via _project_view(snapshot), verify the snapshot
-        # block key that carries these fields before enabling in production.
+        # At live/replay inference the market snapshot payload does NOT carry a
+        # "regime_context" block; these fields are populated by the strategy
+        # engine's RollingFeatureState (identical keys) and merged onto the
+        # stage-view row via pure_ml_engine._merge_feature_rows before scoring.
         "regime_context": (
             "ctx_regime_atr_high",
             "ctx_regime_atr_low",

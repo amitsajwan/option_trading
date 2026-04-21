@@ -120,14 +120,37 @@ class SnapshotAccessor:
 
     @property
     def session_phase(self) -> str:
-        return str(self._sc.get("session_phase") or self._payload.get("session_phase") or "")
+        phase = str(self._sc.get("session_phase") or self._payload.get("session_phase") or "").strip()
+        if phase:
+            return phase
+        # Fallback: derive session phase from timestamp (IST) when the snapshot
+        # producer omitted the session_context.session_phase field. Historical
+        # snapshots captured before this field was added will hit this path.
+        ts = self.timestamp
+        if ts is None:
+            return ""
+        minute_of_day = int(ts.hour) * 60 + int(ts.minute)
+        # Boundaries mirror snapshot_app.core.market_snapshot._session_phase.
+        if 9 * 60 + 15 <= minute_of_day < 9 * 60 + 45:
+            return "DISCOVERY"
+        if 9 * 60 + 45 <= minute_of_day < 14 * 60 + 30:
+            return "ACTIVE"
+        if 14 * 60 + 30 <= minute_of_day <= 15 * 60 + 30:
+            return "PRE_CLOSE"
+        return "CLOSED"
 
     @property
     def is_valid_entry_phase(self) -> bool:
-        # TEMPORARY FIX: Always return True to allow ML pipeline to execute
-        # Original logic was blocking all signals due to session_phase != "ACTIVE"
-        return True
-        # return self.session_phase == "ACTIVE"
+        # The staged runtime's valid_entry_phase_v1 gate must mirror the training
+        # distribution: training data was captured during the normal intraday
+        # session (09:45 - 14:30 IST = "ACTIVE"). Non-ACTIVE ticks (DISCOVERY,
+        # PRE_CLOSE, CLOSED) were excluded at training time.
+        #
+        # For V2 (velocity-enriched) bundles, a further implicit restriction to
+        # the 11:30 IST midday row is enforced downstream by the
+        # feature_completeness_v1 gate: non-11:30 ticks carry NaN for all 30
+        # velocity features and are rejected there.
+        return self.session_phase == "ACTIVE"
 
     @property
     def is_pre_close(self) -> bool:

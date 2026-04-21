@@ -19,6 +19,16 @@ from pymongo import ASCENDING, MongoClient
 from contracts_app import historical_snapshot_topic, parse_snapshot_event, snapshot_topic
 from snapshot_app.redis_publisher import RedisEventPublisher
 
+try:
+    from snapshot_app.core.live_velocity_state import LiveVelocityAccumulator
+except Exception:  # pragma: no cover - defensive, velocity module is optional
+    LiveVelocityAccumulator = None  # type: ignore[assignment,misc]
+
+try:
+    from snapshot_app.historical.snapshot_access import DEFAULT_HISTORICAL_PARQUET_BASE as _DEFAULT_PARQUET_ROOT
+except Exception:  # pragma: no cover
+    _DEFAULT_PARQUET_ROOT = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -240,6 +250,28 @@ def replay_from_mongo(
         sleep_sec = 0.0 if float(speed) <= 0 else (60.0 / float(speed))
         publisher = RedisEventPublisher() if not bool(dry_run) else None
 
+        # Velocity enrichment: replayed envelopes captured before the live
+        # builder injected `velocity_enrichment` will be missing the 30 V2
+        # features. Re-inject here to preserve training/inference parity for
+        # V2 staged bundles. Mongo replay runs one date at a time in timestamp
+        # order, so a fresh accumulator per invocation is correct.
+        velocity_parquet_root_raw = str(os.getenv("SNAPSHOT_PARQUET_ROOT") or "").strip()
+        velocity_parquet_root: Optional[Path] = None
+        if velocity_parquet_root_raw and Path(velocity_parquet_root_raw).exists():
+            velocity_parquet_root = Path(velocity_parquet_root_raw)
+        elif _DEFAULT_PARQUET_ROOT is not None and Path(_DEFAULT_PARQUET_ROOT).exists():
+            velocity_parquet_root = Path(_DEFAULT_PARQUET_ROOT)
+        velocity_acc = (
+            LiveVelocityAccumulator(parquet_root=velocity_parquet_root)
+            if LiveVelocityAccumulator is not None
+            else None
+        )
+        if velocity_acc is None:
+            logger.warning(
+                "mongo replay: LiveVelocityAccumulator unavailable; "
+                "velocity_enrichment will NOT be injected into replayed snapshots",
+            )
+
         emitted = 0
         skipped = 0
         seen_snapshot_ids: set[str] = set()
@@ -270,6 +302,25 @@ def replay_from_mongo(
             seen_snapshot_ids.add(snapshot_id)
 
             event = copy.deepcopy(valid_event)
+
+            # Inject velocity_enrichment before publishing so downstream V2
+            # staged-runtime consumers see the same snapshot shape as live
+            # inference. If the envelope already carries velocity_enrichment
+            # (captured by a live builder with the accumulator wired in), the
+            # accumulator's `process()` is idempotent and will recompute /
+            # overwrite with the identical values once 11:30 is reached.
+            if velocity_acc is not None:
+                inner = event.get("snapshot")
+                if isinstance(inner, dict):
+                    try:
+                        event["snapshot"] = velocity_acc.process(inner)
+                    except Exception:
+                        logger.exception(
+                            "mongo replay: velocity accumulator failed for snapshot_id=%s; "
+                            "publishing without velocity_enrichment",
+                            snapshot_id,
+                        )
+
             metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
             metadata = dict(metadata)
             metadata["run_id"] = resolved_run_id

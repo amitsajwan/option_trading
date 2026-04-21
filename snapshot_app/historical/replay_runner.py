@@ -17,6 +17,11 @@ from contracts_app import build_snapshot_event, historical_snapshot_topic, redis
 from snapshot_app.core.market_snapshot_contract import validate_market_snapshot
 from snapshot_app.redis_publisher import RedisEventPublisher
 
+try:
+    from snapshot_app.core.live_velocity_state import LiveVelocityAccumulator
+except Exception:  # pragma: no cover - defensive, velocity module is optional
+    LiveVelocityAccumulator = None  # type: ignore[assignment,misc]
+
 from .parquet_store import ParquetStore
 from .snapshot_access import (
     DEFAULT_HISTORICAL_PARQUET_BASE,
@@ -124,6 +129,23 @@ def replay_snapshots(
     )
     store = ParquetStore(parquet_base, snapshots_dataset=SNAPSHOT_DATASET_CANONICAL)
     publisher = RedisEventPublisher()
+
+    # Velocity enrichment: inject the same `velocity_enrichment` block that the
+    # live snapshot builder emits at 11:30 IST, so V2 staged bundles receive
+    # features consistent with their training distribution (snapshots_ml_flat_v2).
+    # Without this, replayed raw snapshots lack velocity features and every V2
+    # model tick is rejected by the feature_completeness_v1 gate.
+    velocity_acc = (
+        LiveVelocityAccumulator(parquet_root=Path(parquet_base))
+        if LiveVelocityAccumulator is not None
+        else None
+    )
+    if velocity_acc is None:
+        logger.warning(
+            "historical replay: LiveVelocityAccumulator unavailable; "
+            "velocity_enrichment block will NOT be injected into replayed snapshots",
+        )
+
     out_path = Path(emit_jsonl).resolve() if emit_jsonl else None
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -210,6 +232,17 @@ def replay_snapshots(
                 snapshot = _snapshot_from_row(row)
                 if snapshot is None:
                     continue
+                # Inject velocity_enrichment before validation / publishing so
+                # downstream consumers (strategy_app V2 staged runtime) see the
+                # same snapshot shape as live inference.
+                if velocity_acc is not None:
+                    try:
+                        snapshot = velocity_acc.process(snapshot)
+                    except Exception:
+                        logger.exception(
+                            "historical replay: velocity accumulator failed; "
+                            "publishing snapshot without velocity_enrichment",
+                        )
                 validate_market_snapshot(snapshot, raise_on_error=True)
 
                 event = build_snapshot_event(
