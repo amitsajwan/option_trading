@@ -50,39 +50,34 @@ def test_memory_signal_logger_applies_round_trip_costs() -> None:
         position_id="pos-1",
         reason="close",
     )
-    logger.log_position_close(
-        exit_signal=exit_signal,
-        position=position,
-        entry_premium=100.0,
-        exit_premium=120.0,
-        pnl_pct=0.20,
-        mfe_pct=0.25,
-        mae_pct=-0.03,
-        bars_held=5,
-        stop_loss_pct=0.20,
-        stop_price=80.0,
-        high_water_premium=125.0,
-        target_pct=0.80,
-        trailing_enabled=True,
-        trailing_activation_pct=0.10,
-        trailing_offset_pct=0.05,
-        trailing_lock_breakeven=True,
-        trailing_active=True,
-        orb_trail_activation_mfe=0.15,
-        orb_trail_offset_pct=0.08,
-        orb_trail_min_lock_pct=0.05,
-        orb_trail_priority_over_regime=True,
-        orb_trail_regime_filter=None,
-        orb_trail_active=True,
-        orb_trail_stop_price=115.0,
-        oi_trail_activation_mfe=0.15,
-        oi_trail_offset_pct=0.08,
-        oi_trail_min_lock_pct=0.05,
-        oi_trail_priority_over_regime=True,
-        oi_trail_regime_filter=None,
-        oi_trail_active=False,
-        oi_trail_stop_price=None,
-    )
+    position.current_premium = 120.0
+    position.pnl_pct = 0.20
+    position.mfe_pct = 0.25
+    position.mae_pct = -0.03
+    position.bars_held = 5
+    position.stop_price = 80.0
+    position.high_water_premium = 125.0
+    position.target_pct = 0.80
+    position.trailing_enabled = True
+    position.trailing_activation_pct = 0.10
+    position.trailing_offset_pct = 0.05
+    position.trailing_lock_breakeven = True
+    position.trailing_active = True
+    position.orb_trail_activation_mfe = 0.15
+    position.orb_trail_offset_pct = 0.08
+    position.orb_trail_min_lock_pct = 0.05
+    position.orb_trail_priority_over_regime = True
+    position.orb_trail_regime_filter = None
+    position.orb_trail_active = True
+    position.orb_trail_stop_price = 115.0
+    position.oi_trail_activation_mfe = 0.15
+    position.oi_trail_offset_pct = 0.08
+    position.oi_trail_min_lock_pct = 0.05
+    position.oi_trail_priority_over_regime = True
+    position.oi_trail_regime_filter = None
+    position.oi_trail_active = False
+    position.oi_trail_stop_price = None
+    logger.log_position_close(exit_signal=exit_signal, position=position)
 
     row = logger.trades[0]
     assert row["total_cost_amount"] > 0.0

@@ -10,6 +10,14 @@ from strategy_app.logging.signal_logger import SignalLogger
 from strategy_app.position.tracker import PositionTracker
 
 
+class _RecordingPublisher:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def publish(self, topic: str, event: dict) -> None:
+        self.events.append((topic, event))
+
+
 class SignalLoggerParitySnapshotTests(unittest.TestCase):
     def _fixture(self, name: str) -> dict:
         path = Path(__file__).resolve().parent / "fixtures" / name
@@ -19,6 +27,7 @@ class SignalLoggerParitySnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)
             logger = SignalLogger(run_dir)
+            logger._publisher = _RecordingPublisher()  # type: ignore[attr-defined]
             logger.set_run_context(
                 "run-parity",
                 {
@@ -97,6 +106,7 @@ class SignalLoggerParitySnapshotTests(unittest.TestCase):
                 timestamp=datetime(2026, 3, 7, 9, 33, tzinfo=timezone.utc),
                 snapshot_id="snap-103",
             )
+            position.bars_held = 2
             logger.log_position_close(
                 exit_signal=TradeSignal(
                     signal_id="sig-exit-1",
@@ -111,35 +121,6 @@ class SignalLoggerParitySnapshotTests(unittest.TestCase):
                     exit_reason=ExitReason.TIME_STOP,
                 ),
                 position=position,
-                entry_premium=120.0,
-                exit_premium=114.0,
-                pnl_pct=-0.05,
-                mfe_pct=0.01,
-                mae_pct=-0.05,
-                bars_held=2,
-                stop_loss_pct=0.05,
-                stop_price=114.0,
-                high_water_premium=121.0,
-                target_pct=0.2,
-                trailing_enabled=False,
-                trailing_activation_pct=0.10,
-                trailing_offset_pct=0.05,
-                trailing_lock_breakeven=True,
-                trailing_active=False,
-                orb_trail_activation_mfe=0.15,
-                orb_trail_offset_pct=0.08,
-                orb_trail_min_lock_pct=0.05,
-                orb_trail_priority_over_regime=True,
-                orb_trail_regime_filter=None,
-                orb_trail_active=False,
-                orb_trail_stop_price=None,
-                oi_trail_activation_mfe=0.15,
-                oi_trail_offset_pct=0.08,
-                oi_trail_min_lock_pct=0.05,
-                oi_trail_priority_over_regime=True,
-                oi_trail_regime_filter=None,
-                oi_trail_active=False,
-                oi_trail_stop_price=None,
             )
 
             vote_row = json.loads((run_dir / "votes.jsonl").read_text(encoding="utf-8").splitlines()[0])

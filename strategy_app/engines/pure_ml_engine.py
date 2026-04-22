@@ -376,6 +376,14 @@ class PureMLEngine(StrategyEngine):
             self._write_runtime_state()
             return None
 
+        _ts = snap.timestamp
+        if _ts is not None and (_ts.hour * 60 + _ts.minute) >= 15 * 60:
+            self._log_hold("soft_close_no_entry", snap)
+            self._last_event = {"event": "hold", "snapshot_id": snap.snapshot_id, "reason": "soft_close_no_entry"}
+            self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+            self._write_runtime_state()
+            return None
+
         decision = predict_staged(
             engine=self,
             snap=snap,
@@ -943,39 +951,7 @@ class PureMLEngine(StrategyEngine):
             lots=position.lots,
             entry_premium=position.entry_premium,
         )
-        self._log.log_position_close(
-            exit_signal=exit_signal,
-            position=position,
-            entry_premium=position.entry_premium,
-            exit_premium=position.current_premium,
-            pnl_pct=position.pnl_pct,
-            mfe_pct=position.mfe_pct,
-            mae_pct=position.mae_pct,
-            bars_held=position.bars_held,
-            stop_loss_pct=position.stop_loss_pct,
-            stop_price=position.stop_price,
-            high_water_premium=position.high_water_premium,
-            target_pct=position.target_pct,
-            trailing_enabled=position.trailing_enabled,
-            trailing_activation_pct=position.trailing_activation_pct,
-            trailing_offset_pct=position.trailing_offset_pct,
-            trailing_lock_breakeven=position.trailing_lock_breakeven,
-            trailing_active=position.trailing_active,
-            orb_trail_activation_mfe=position.orb_trail_activation_mfe,
-            orb_trail_offset_pct=position.orb_trail_offset_pct,
-            orb_trail_min_lock_pct=position.orb_trail_min_lock_pct,
-            orb_trail_priority_over_regime=position.orb_trail_priority_over_regime,
-            orb_trail_regime_filter=position.orb_trail_regime_filter,
-            orb_trail_active=position.orb_trail_active,
-            orb_trail_stop_price=position.orb_trail_stop_price,
-            oi_trail_activation_mfe=position.oi_trail_activation_mfe,
-            oi_trail_offset_pct=position.oi_trail_offset_pct,
-            oi_trail_min_lock_pct=position.oi_trail_min_lock_pct,
-            oi_trail_priority_over_regime=position.oi_trail_priority_over_regime,
-            oi_trail_regime_filter=position.oi_trail_regime_filter,
-            oi_trail_active=position.oi_trail_active,
-            oi_trail_stop_price=position.oi_trail_stop_price,
-        )
+        self._log.log_position_close(exit_signal=exit_signal, position=position)
 
 
 def _session_end_snapshot(trade_date: date) -> SnapshotAccessor:

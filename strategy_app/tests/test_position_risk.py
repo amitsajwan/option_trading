@@ -24,6 +24,7 @@ def _snapshot(
     pe_price: float = 100.0,
     atm_strike: int = 50000,
     strikes: list[dict[str, float]] | None = None,
+    fut_close: float | None = None,
 ) -> SnapshotAccessor:
     strike_rows = strikes or [
         {
@@ -32,27 +33,28 @@ def _snapshot(
             "pe_ltp": float(pe_price),
         }
     ]
-    return SnapshotAccessor(
-        {
+    payload: dict[str, object] = {
+        "snapshot_id": snapshot_id,
+        "session_context": {
             "snapshot_id": snapshot_id,
-            "session_context": {
-                "snapshot_id": snapshot_id,
-                "timestamp": ts,
-                "date": ts[:10],
-                "session_phase": "ACTIVE",
-                "days_to_expiry": 1,
-            },
-            "chain_aggregates": {
-                "atm_strike": atm_strike,
-                "strike_count": len(strike_rows),
-            },
-            "atm_options": {
-                "atm_ce_close": ce_price,
-                "atm_pe_close": pe_price,
-            },
-            "strikes": strike_rows,
-        }
-    )
+            "timestamp": ts,
+            "date": ts[:10],
+            "session_phase": "ACTIVE",
+            "days_to_expiry": 1,
+        },
+        "chain_aggregates": {
+            "atm_strike": atm_strike,
+            "strike_count": len(strike_rows),
+        },
+        "atm_options": {
+            "atm_ce_close": ce_price,
+            "atm_pe_close": pe_price,
+        },
+        "strikes": strike_rows,
+    }
+    if fut_close is not None:
+        payload["futures_bar"] = {"fut_close": fut_close}
+    return SnapshotAccessor(payload)
 
 
 class PositionRiskTests(unittest.TestCase):
@@ -1185,6 +1187,93 @@ class PositionRiskTests(unittest.TestCase):
         vote_names = [vote.strategy_name for vote in votes]
         self.assertEqual(vote_names, ["PREV_DAY_LEVEL"])
         self.assertEqual(votes[0].exit_reason, ExitReason.STRATEGY_EXIT)
+
+    def test_underlying_stop_hit_for_ce(self) -> None:
+        tracker = PositionTracker()
+        tracker.on_session_start(date(2026, 2, 28))
+        ts = datetime(2026, 2, 28, 9, 30, tzinfo=IST_ZONE)
+        signal = TradeSignal(
+            signal_id="sig-u-stop",
+            timestamp=ts,
+            snapshot_id="snap-open",
+            signal_type=SignalType.ENTRY,
+            direction="CE",
+            strike=50000,
+            entry_premium=100.0,
+            stop_loss_pct=0.10,
+            target_pct=0.50,
+            underlying_stop_pct=0.001,
+        )
+        tracker.open_position(
+            signal,
+            _snapshot(snapshot_id="snap-open", ts=ts.isoformat(), ce_price=100.0, fut_close=50000.0),
+        )
+
+        exit_signal = tracker.update(
+            _snapshot(snapshot_id="snap-stop", ts="2026-02-28T09:35:00+05:30", ce_price=89.0, fut_close=49949.0),
+            RiskContext(),
+        )
+
+        self.assertIsNotNone(exit_signal)
+        self.assertEqual(exit_signal.exit_reason, ExitReason.STOP_LOSS)
+
+    def test_underlying_target_hit_for_ce(self) -> None:
+        tracker = PositionTracker()
+        tracker.on_session_start(date(2026, 2, 28))
+        ts = datetime(2026, 2, 28, 9, 30, tzinfo=IST_ZONE)
+        signal = TradeSignal(
+            signal_id="sig-u-target",
+            timestamp=ts,
+            snapshot_id="snap-open",
+            signal_type=SignalType.ENTRY,
+            direction="CE",
+            strike=50000,
+            entry_premium=100.0,
+            stop_loss_pct=0.10,
+            target_pct=0.50,
+            underlying_target_pct=0.001,
+        )
+        tracker.open_position(
+            signal,
+            _snapshot(snapshot_id="snap-open", ts=ts.isoformat(), ce_price=100.0, fut_close=50000.0),
+        )
+
+        exit_signal = tracker.update(
+            _snapshot(snapshot_id="snap-target", ts="2026-02-28T09:35:00+05:30", ce_price=110.0, fut_close=50051.0),
+            RiskContext(),
+        )
+
+        self.assertIsNotNone(exit_signal)
+        self.assertEqual(exit_signal.exit_reason, ExitReason.TARGET_HIT)
+
+    def test_underlying_stop_hit_for_pe(self) -> None:
+        tracker = PositionTracker()
+        tracker.on_session_start(date(2026, 2, 28))
+        ts = datetime(2026, 2, 28, 9, 30, tzinfo=IST_ZONE)
+        signal = TradeSignal(
+            signal_id="sig-u-stop-pe",
+            timestamp=ts,
+            snapshot_id="snap-open",
+            signal_type=SignalType.ENTRY,
+            direction="PE",
+            strike=50000,
+            entry_premium=100.0,
+            stop_loss_pct=0.10,
+            target_pct=0.50,
+            underlying_stop_pct=0.001,
+        )
+        tracker.open_position(
+            signal,
+            _snapshot(snapshot_id="snap-open", ts=ts.isoformat(), ce_price=100.0, fut_close=50000.0),
+        )
+
+        exit_signal = tracker.update(
+            _snapshot(snapshot_id="snap-stop-pe", ts="2026-02-28T09:35:00+05:30", ce_price=89.0, fut_close=50051.0),
+            RiskContext(),
+        )
+
+        self.assertIsNotNone(exit_signal)
+        self.assertEqual(exit_signal.exit_reason, ExitReason.STOP_LOSS)
 
 if __name__ == "__main__":
     unittest.main()

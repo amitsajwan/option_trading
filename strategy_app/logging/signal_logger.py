@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -264,6 +265,31 @@ class SignalLogger:
             ),
         }
 
+    def _position_event_base(
+        self,
+        position: PositionContext,
+        *,
+        event: str,
+        snapshot_id: str,
+        timestamp: datetime,
+        signal: Optional[TradeSignal] = None,
+    ) -> dict[str, Any]:
+        """Build the base dict for a position event record.
+
+        Starts from ``asdict(position)`` so new dataclass fields are included
+        automatically. Event metadata and contract-resolver fields are layered
+        on top. When *signal* is provided it is passed to the contract resolver
+        as the source of truth for engine_mode / decision_mode / reason_code.
+        """
+        record = asdict(position)
+        record["event"] = event
+        record["snapshot_id"] = snapshot_id
+        record["timestamp"] = timestamp
+        record["run_id"] = self._run_id
+        # Contract resolver fields override raw position fields (source of truth)
+        record.update(self._position_contract_fields(signal, position=position))
+        return record
+
     def log_vote(self, vote: StrategyVote) -> None:
         record = normalize_record_timestamps(self._vote_record(vote))
         append_jsonl(self._votes_path, record, logger=logger)
@@ -289,52 +315,21 @@ class SignalLogger:
         )
 
     def log_position_open(self, signal: TradeSignal, position: PositionContext) -> None:
-        resolved_metrics = self._position_decision_metrics(position, signal=signal)
-        resolved_contract = self._position_contract_fields(signal, position=position)
-        position_signal_id = position.signal_id or (str(signal.signal_id or "").strip() or None)
         entry_snapshot_id = str(position.entry_snapshot_id or signal.snapshot_id or "").strip() or None
-        record = normalize_record_timestamps({
-            "event": "POSITION_OPEN",
-            "position_id": position.position_id,
-            "signal_id": position_signal_id,
-            "snapshot_id": entry_snapshot_id,
-            "entry_snapshot_id": entry_snapshot_id,
-            "timestamp": signal.timestamp,
-            "direction": position.direction,
-            "strike": position.strike,
-            "entry_premium": position.entry_premium,
-            "lots": position.lots,
-            "max_hold_bars": position.max_hold_bars,
-            "entry_strategy": position.entry_strategy,
-            "entry_regime": position.entry_regime,
-            "stop_loss_pct": position.stop_loss_pct,
-            "stop_price": position.stop_price,
-            "high_water_premium": position.entry_premium,
-            "trailing_enabled": position.trailing_enabled,
-            "trailing_activation_pct": position.trailing_activation_pct,
-            "trailing_offset_pct": position.trailing_offset_pct,
-            "trailing_lock_breakeven": position.trailing_lock_breakeven,
-            "trailing_active": position.trailing_active,
-            "orb_trail_activation_mfe": position.orb_trail_activation_mfe,
-            "orb_trail_offset_pct": position.orb_trail_offset_pct,
-            "orb_trail_min_lock_pct": position.orb_trail_min_lock_pct,
-            "orb_trail_priority_over_regime": position.orb_trail_priority_over_regime,
-            "orb_trail_regime_filter": position.orb_trail_regime_filter,
-            "orb_trail_active": position.orb_trail_active,
-            "orb_trail_stop_price": position.orb_trail_stop_price,
-            "oi_trail_activation_mfe": position.oi_trail_activation_mfe,
-            "oi_trail_offset_pct": position.oi_trail_offset_pct,
-            "oi_trail_min_lock_pct": position.oi_trail_min_lock_pct,
-            "oi_trail_priority_over_regime": position.oi_trail_priority_over_regime,
-            "oi_trail_regime_filter": position.oi_trail_regime_filter,
-            "oi_trail_active": position.oi_trail_active,
-            "oi_trail_stop_price": position.oi_trail_stop_price,
-            "target_pct": position.target_pct,
-            "reason": signal.reason,
-            "decision_metrics": resolved_metrics,
-            "run_id": self._run_id,
-            **resolved_contract,
-        })
+        position_signal_id = position.signal_id or (str(signal.signal_id or "").strip() or None)
+        record = self._position_event_base(
+            position,
+            event="POSITION_OPEN",
+            snapshot_id=entry_snapshot_id,
+            timestamp=signal.timestamp,
+            signal=signal,
+        )
+        record["signal_id"] = position_signal_id
+        record["entry_snapshot_id"] = entry_snapshot_id
+        record["high_water_premium"] = position.entry_premium
+        record["reason"] = signal.reason
+        record["decision_metrics"] = self._position_decision_metrics(position, signal=signal)
+        record = normalize_record_timestamps(record)
         append_jsonl(self._positions_path, record, logger=logger)
         self._publish(
             strategy_position_topic(),
@@ -350,47 +345,15 @@ class SignalLogger:
         )
 
     def log_position_manage(self, *, position: PositionContext, timestamp: datetime, snapshot_id: str) -> None:
-        entry_snapshot_id = str(position.entry_snapshot_id or "").strip() or None
-        record = normalize_record_timestamps({
-            "event": "POSITION_MANAGE",
-            "position_id": position.position_id,
-            "signal_id": position.signal_id,
-            "timestamp": timestamp,
-            "snapshot_id": snapshot_id,
-            "entry_snapshot_id": entry_snapshot_id,
-            "direction": position.direction,
-            "strike": position.strike,
-            "current_premium": position.current_premium,
-            "pnl_pct": position.pnl_pct,
-            "bars_held": position.bars_held,
-            "max_hold_bars": position.max_hold_bars,
-            "stop_loss_pct": position.stop_loss_pct,
-            "stop_price": position.stop_price,
-            "high_water_premium": position.high_water_premium,
-            "target_pct": position.target_pct,
-            "trailing_enabled": position.trailing_enabled,
-            "trailing_activation_pct": position.trailing_activation_pct,
-            "trailing_offset_pct": position.trailing_offset_pct,
-            "trailing_lock_breakeven": position.trailing_lock_breakeven,
-            "trailing_active": position.trailing_active,
-            "orb_trail_activation_mfe": position.orb_trail_activation_mfe,
-            "orb_trail_offset_pct": position.orb_trail_offset_pct,
-            "orb_trail_min_lock_pct": position.orb_trail_min_lock_pct,
-            "orb_trail_priority_over_regime": position.orb_trail_priority_over_regime,
-            "orb_trail_regime_filter": position.orb_trail_regime_filter,
-            "orb_trail_active": position.orb_trail_active,
-            "orb_trail_stop_price": position.orb_trail_stop_price,
-            "oi_trail_activation_mfe": position.oi_trail_activation_mfe,
-            "oi_trail_offset_pct": position.oi_trail_offset_pct,
-            "oi_trail_min_lock_pct": position.oi_trail_min_lock_pct,
-            "oi_trail_priority_over_regime": position.oi_trail_priority_over_regime,
-            "oi_trail_regime_filter": position.oi_trail_regime_filter,
-            "oi_trail_active": position.oi_trail_active,
-            "oi_trail_stop_price": position.oi_trail_stop_price,
-            "decision_metrics": self._position_decision_metrics(position),
-            "run_id": self._run_id,
-            **self._position_contract_fields(position=position),
-        })
+        record = self._position_event_base(
+            position,
+            event="POSITION_MANAGE",
+            snapshot_id=snapshot_id,
+            timestamp=timestamp,
+        )
+        record["entry_snapshot_id"] = str(position.entry_snapshot_id or "").strip() or None
+        record["decision_metrics"] = self._position_decision_metrics(position)
+        record = normalize_record_timestamps(record)
         append_jsonl(self._positions_path, record, logger=logger)
         self._publish(
             strategy_position_topic(),
@@ -405,92 +368,23 @@ class SignalLogger:
         self,
         *,
         exit_signal: TradeSignal,
-        position: Optional[PositionContext] = None,
-        entry_premium: float,
-        exit_premium: float,
-        pnl_pct: float,
-        mfe_pct: float,
-        mae_pct: float,
-        bars_held: int,
-        stop_loss_pct: float,
-        stop_price: Optional[float],
-        high_water_premium: float,
-        target_pct: float,
-        trailing_enabled: bool,
-        trailing_activation_pct: float,
-        trailing_offset_pct: float,
-        trailing_lock_breakeven: bool,
-        trailing_active: bool,
-        orb_trail_activation_mfe: float,
-        orb_trail_offset_pct: float,
-        orb_trail_min_lock_pct: float,
-        orb_trail_priority_over_regime: bool,
-        orb_trail_regime_filter: Optional[str],
-        orb_trail_active: bool,
-        orb_trail_stop_price: Optional[float],
-        oi_trail_activation_mfe: float,
-        oi_trail_offset_pct: float,
-        oi_trail_min_lock_pct: float,
-        oi_trail_priority_over_regime: bool,
-        oi_trail_regime_filter: Optional[str],
-        oi_trail_active: bool,
-        oi_trail_stop_price: Optional[float],
+        position: PositionContext,
     ) -> None:
-        position_signal_id = position.signal_id if position is not None else exit_signal.signal_id
-        entry_snapshot_id = (
-            str(position.entry_snapshot_id or "").strip() or None
-            if position is not None
-            else None
-        )
         close_snapshot_id = str(exit_signal.snapshot_id or "").strip() or None
-        record = normalize_record_timestamps({
-            "event": "POSITION_CLOSE",
-            "position_id": exit_signal.position_id,
-            "signal_id": position_signal_id,
-            "snapshot_id": close_snapshot_id,
-            "entry_snapshot_id": entry_snapshot_id,
-            "timestamp": exit_signal.timestamp,
-            "direction": exit_signal.direction,
-            "strike": exit_signal.strike,
-            "entry_premium": entry_premium,
-            "exit_premium": exit_premium,
-            "pnl_pct": pnl_pct,
-            "mfe_pct": mfe_pct,
-            "mae_pct": mae_pct,
-            "bars_held": bars_held,
-            "stop_loss_pct": stop_loss_pct,
-            "stop_price": stop_price,
-            "high_water_premium": high_water_premium,
-            "target_pct": target_pct,
-            "trailing_enabled": trailing_enabled,
-            "trailing_activation_pct": trailing_activation_pct,
-            "trailing_offset_pct": trailing_offset_pct,
-            "trailing_lock_breakeven": trailing_lock_breakeven,
-            "trailing_active": trailing_active,
-            "orb_trail_activation_mfe": orb_trail_activation_mfe,
-            "orb_trail_offset_pct": orb_trail_offset_pct,
-            "orb_trail_min_lock_pct": orb_trail_min_lock_pct,
-            "orb_trail_priority_over_regime": orb_trail_priority_over_regime,
-            "orb_trail_regime_filter": orb_trail_regime_filter,
-            "orb_trail_active": orb_trail_active,
-            "orb_trail_stop_price": orb_trail_stop_price,
-            "oi_trail_activation_mfe": oi_trail_activation_mfe,
-            "oi_trail_offset_pct": oi_trail_offset_pct,
-            "oi_trail_min_lock_pct": oi_trail_min_lock_pct,
-            "oi_trail_priority_over_regime": oi_trail_priority_over_regime,
-            "oi_trail_regime_filter": oi_trail_regime_filter,
-            "oi_trail_active": oi_trail_active,
-            "oi_trail_stop_price": oi_trail_stop_price,
-            "exit_reason": exit_signal.exit_reason.value if exit_signal.exit_reason else None,
-            "reason": exit_signal.reason,
-            "decision_metrics": (
-                self._position_decision_metrics(position, signal=exit_signal)
-                if position is not None
-                else (self._signal_decision_metrics(exit_signal) or None)
-            ),
-            "run_id": self._run_id,
-            **self._position_contract_fields(exit_signal, position=position),
-        })
+        record = self._position_event_base(
+            position,
+            event="POSITION_CLOSE",
+            snapshot_id=close_snapshot_id,
+            timestamp=exit_signal.timestamp,
+            signal=exit_signal,
+        )
+        record["signal_id"] = position.signal_id or str(exit_signal.signal_id or "").strip() or None
+        record["entry_snapshot_id"] = str(position.entry_snapshot_id or "").strip() or None
+        record["exit_premium"] = position.current_premium
+        record["exit_reason"] = exit_signal.exit_reason.value if exit_signal.exit_reason else None
+        record["reason"] = exit_signal.reason
+        record["decision_metrics"] = self._position_decision_metrics(position, signal=exit_signal)
+        record = normalize_record_timestamps(record)
         append_jsonl(self._positions_path, record, logger=logger)
         self._publish(
             strategy_position_topic(),
@@ -499,7 +393,7 @@ class SignalLogger:
                 source="strategy_app",
                 metadata=self._metadata(
                     position_id=exit_signal.position_id,
-                    signal_id=position_signal_id,
+                    signal_id=record["signal_id"],
                     snapshot_id=close_snapshot_id,
                 ),
             ),

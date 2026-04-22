@@ -291,5 +291,44 @@ class PureMLEngineTests(unittest.TestCase):
             self.assertIsNone(state["payload"]["session"]["last_entry_at"])
 
 
+    def test_soft_close_blocks_new_entries_after_1500(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            engine = self._build_engine(root)
+            engine.on_session_start(date(2026, 3, 2))
+            entry = StagedRuntimeDecision(
+                action="BUY_CE",
+                reason="recipe_selected",
+                entry_prob=0.84,
+                direction_up_prob=0.79,
+                ce_prob=0.79,
+                pe_prob=0.21,
+                recipe_id="base",
+                recipe_prob=0.92,
+                recipe_margin=0.30,
+                horizon_minutes=1,  # close after 1 bar so we can test re-entry gate
+                stop_loss_pct=0.04,
+                target_pct=0.18,
+            )
+            # Before 15:00 entry is allowed
+            with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=entry):
+                signal = engine.evaluate(_snapshot(snapshot_id="snap-1", ts="2026-03-02T14:59:00+05:30"))
+            self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertEqual(signal.signal_type, SignalType.ENTRY)
+
+            # At 15:00 position hits TIME_STOP (max_hold_bars=1), not a new entry
+            with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=entry):
+                signal = engine.evaluate(_snapshot(snapshot_id="snap-2", ts="2026-03-02T15:00:00+05:30"))
+            self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertEqual(signal.signal_type, SignalType.EXIT)
+
+            # After 15:00 soft-close gate blocks new entry
+            with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=entry):
+                signal = engine.evaluate(_snapshot(snapshot_id="snap-3", ts="2026-03-02T15:01:00+05:30"))
+            self.assertIsNone(signal)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -314,18 +314,22 @@ class DeterministicRuleEngine(StrategyEngine):
             signal = self._process_exit_votes(votes, snap, position)
 
         if signal is None and position is None and not self._risk.is_halted and self._router.regime_allows_entry(regime_signal.regime):
-            warmup_blocked, warmup_reason = self._entry_warmup_status()
-            if warmup_blocked:
-                trace_blocker = "warmup"
-                for vote in votes:
-                    if vote.signal_type == SignalType.ENTRY and vote.direction in (Direction.CE, Direction.PE):
-                        vote.raw_signals["_entry_warmup_blocked"] = True
-                        vote.raw_signals["_entry_warmup_reason"] = warmup_reason
-                        self._annotate_vote_contract(vote)
+            _ts = snap.timestamp
+            if _ts is not None and (_ts.hour * 60 + _ts.minute) >= 15 * 60:
+                trace_blocker = "soft_close_no_entry"
             else:
-                signal = self._process_entry_votes(votes, snap, risk, regime_signal)
-                if signal is None:
-                    trace_blocker = self._derive_entry_blocker(votes=votes, snap=snap, regime_signal=regime_signal)
+                warmup_blocked, warmup_reason = self._entry_warmup_status()
+                if warmup_blocked:
+                    trace_blocker = "warmup"
+                    for vote in votes:
+                        if vote.signal_type == SignalType.ENTRY and vote.direction in (Direction.CE, Direction.PE):
+                            vote.raw_signals["_entry_warmup_blocked"] = True
+                            vote.raw_signals["_entry_warmup_reason"] = warmup_reason
+                            self._annotate_vote_contract(vote)
+                else:
+                    signal = self._process_entry_votes(votes, snap, risk, regime_signal)
+                    if signal is None:
+                        trace_blocker = self._derive_entry_blocker(votes=votes, snap=snap, regime_signal=regime_signal)
         elif position is None:
             if self._risk.is_halted:
                 trace_blocker = self._risk.halt_reason or "risk_halt"
@@ -650,39 +654,7 @@ class DeterministicRuleEngine(StrategyEngine):
             lots=position.lots,
             entry_premium=position.entry_premium,
         )
-        self._log.log_position_close(
-            exit_signal=exit_signal,
-            position=position,
-            entry_premium=position.entry_premium,
-            exit_premium=position.current_premium,
-            pnl_pct=position.pnl_pct,
-            mfe_pct=position.mfe_pct,
-            mae_pct=position.mae_pct,
-            bars_held=position.bars_held,
-            stop_loss_pct=position.stop_loss_pct,
-            stop_price=position.stop_price,
-            high_water_premium=position.high_water_premium,
-            target_pct=position.target_pct,
-            trailing_enabled=position.trailing_enabled,
-            trailing_activation_pct=position.trailing_activation_pct,
-            trailing_offset_pct=position.trailing_offset_pct,
-            trailing_lock_breakeven=position.trailing_lock_breakeven,
-            trailing_active=position.trailing_active,
-            orb_trail_activation_mfe=position.orb_trail_activation_mfe,
-            orb_trail_offset_pct=position.orb_trail_offset_pct,
-            orb_trail_min_lock_pct=position.orb_trail_min_lock_pct,
-            orb_trail_priority_over_regime=position.orb_trail_priority_over_regime,
-            orb_trail_regime_filter=position.orb_trail_regime_filter,
-            orb_trail_active=position.orb_trail_active,
-            orb_trail_stop_price=position.orb_trail_stop_price,
-            oi_trail_activation_mfe=position.oi_trail_activation_mfe,
-            oi_trail_offset_pct=position.oi_trail_offset_pct,
-            oi_trail_min_lock_pct=position.oi_trail_min_lock_pct,
-            oi_trail_priority_over_regime=position.oi_trail_priority_over_regime,
-            oi_trail_regime_filter=position.oi_trail_regime_filter,
-            oi_trail_active=position.oi_trail_active,
-            oi_trail_stop_price=position.oi_trail_stop_price,
-        )
+        self._log.log_position_close(exit_signal=exit_signal, position=position)
 
     def _resolve_entry_risk(
         self,

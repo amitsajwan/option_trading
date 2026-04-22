@@ -79,7 +79,7 @@ class DecisionTraceTests(unittest.TestCase):
             engine._router.get_strategies = lambda regime, position: [_StaticEntryStrategy("ORB")]  # type: ignore[method-assign]
             engine._router.regime_allows_entry = lambda regime: True  # type: ignore[method-assign]
 
-            signal = engine.evaluate(_snapshot("snap-1", "2026-03-07T09:30:00+00:00"))
+            signal = engine.evaluate(_snapshot("snap-1", "2026-03-07T09:00:00+00:00"))
 
             self.assertIsNotNone(signal)
             rows = [json.loads(line) for line in (Path(tmpdir) / "decision_traces.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -96,12 +96,29 @@ class DecisionTraceTests(unittest.TestCase):
             engine._router.get_strategies = lambda regime, position: [_StaticEntryStrategy("ORB")]  # type: ignore[method-assign]
             engine._router.regime_allows_entry = lambda regime: True  # type: ignore[method-assign]
 
-            signal = engine.evaluate(_snapshot("snap-2", "2026-03-07T09:31:00+00:00"))
+            signal = engine.evaluate(_snapshot("snap-1", "2026-03-07T09:01:00+00:00"))
 
             self.assertIsNone(signal)
             rows = [json.loads(line) for line in (Path(tmpdir) / "decision_traces.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertEqual(rows[-1]["final_outcome"], "blocked")
             self.assertEqual(rows[-1]["primary_blocker_gate"], "policy_gate")
+
+    def test_deterministic_engine_soft_close_blocks_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            logger = SignalLogger(Path(tmpdir))
+            engine = DeterministicRuleEngine(signal_logger=logger, entry_policy=_AllowPolicy())
+            engine.on_session_start(date(2026, 3, 7))
+            engine._regime.classify = lambda snap: RegimeSignal(regime=Regime.TRENDING, confidence=0.9, reason="test", evidence={})  # type: ignore[method-assign]
+            engine._router.get_strategies = lambda regime, position: [_StaticEntryStrategy("ORB")]  # type: ignore[method-assign]
+            engine._router.regime_allows_entry = lambda regime: True  # type: ignore[method-assign]
+
+            # 09:30 UTC == 15:00 IST → soft close gate active
+            signal = engine.evaluate(_snapshot("snap-late", "2026-03-07T09:30:00+00:00"))
+
+            self.assertIsNone(signal)
+            rows = [json.loads(line) for line in (Path(tmpdir) / "decision_traces.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(rows[-1]["final_outcome"], "blocked")
+            self.assertEqual(rows[-1]["primary_blocker_gate"], "soft_close_no_entry")
 
 
 if __name__ == "__main__":
