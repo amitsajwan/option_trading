@@ -195,10 +195,7 @@ class StrategyEvaluationService:
     def _date_match(self, *, date_from: str, date_to: str, run_id: Optional[str]) -> dict[str, Any]:
         query: dict[str, Any] = {"trade_date_ist": {"$gte": str(date_from), "$lte": str(date_to)}}
         text = str(run_id or "").strip()
-        if text == "ungrouped":
-            # Backward compat: old tmux replays written before run_id injection was added.
-            query["$or"] = [{"run_id": {"$exists": False}}, {"run_id": None}]
-        elif text:
+        if text:
             query["run_id"] = text
         return query
 
@@ -358,7 +355,7 @@ class StrategyEvaluationService:
                 # Group by run_id, counting only POSITION_CLOSE events as completed trades.
                 # {run_id: {$ne: ""}} matches null, missing, and non-empty string run_ids.
                 discover_pipeline: list[dict[str, Any]] = [
-                    {"$match": {"run_id": {"$ne": ""}}},
+                    {"$match": {"run_id": {"$nin": [None, ""]}}},  
                     {
                         "$group": {
                             "_id": "$run_id",
@@ -374,8 +371,7 @@ class StrategyEvaluationService:
                     {"$limit": capped_limit * 2},
                 ]
                 for d in db[names["positions"]].aggregate(discover_pipeline, allowDiskUse=True):
-                    raw_id = d.get("_id")
-                    rid = str(raw_id or "").strip() if raw_id is not None else "ungrouped"
+                    rid = str(d.get("_id") or "").strip()
                     if not rid or rid in known_ids:
                         continue
                     rows.append(
@@ -403,40 +399,17 @@ class StrategyEvaluationService:
                 positions_coll = db[names["positions"]]
                 signals_coll = db[names["signals"]]
                 votes_coll = db[names["votes"]]
-                named_ids = [r for r in run_ids if r != "ungrouped"]
-                has_ungrouped = "ungrouped" in run_ids
-
                 def _group_counts(coll: Any, positions_only: bool = False) -> dict[str, int]:
                     out: dict[str, int] = {}
                     try:
-                        if named_ids:
-                            match_stage: dict[str, Any] = {"run_id": {"$in": named_ids}}
-                            if positions_only:
-                                match_stage["event"] = "POSITION_CLOSE"
-                            for r in coll.aggregate([
-                                {"$match": match_stage},
-                                {"$group": {"_id": "$run_id", "n": {"$sum": 1}}},
-                            ], allowDiskUse=True):
-                                out[str(r.get("_id") or "")] = int(r.get("n") or 0)
-                    except Exception:
-                        pass
-                    try:
-                        if has_ungrouped:
-                            run_id_cond: list[dict[str, Any]] = [
-                                {"run_id": {"$exists": False}},
-                                {"run_id": None},
-                            ]
-                            if positions_only:
-                                ungrouped_match: dict[str, Any] = {
-                                    "$and": [{"$or": run_id_cond}, {"event": "POSITION_CLOSE"}]
-                                }
-                            else:
-                                ungrouped_match = {"$or": run_id_cond}
-                            for r in coll.aggregate([
-                                {"$match": ungrouped_match},
-                                {"$group": {"_id": "ungrouped", "n": {"$sum": 1}}},
-                            ], allowDiskUse=True):
-                                out["ungrouped"] = int(r.get("n") or 0)
+                        match_stage: dict[str, Any] = {"run_id": {"$in": run_ids}}
+                        if positions_only:
+                            match_stage["event"] = "POSITION_CLOSE"
+                        for r in coll.aggregate([
+                            {"$match": match_stage},
+                            {"$group": {"_id": "$run_id", "n": {"$sum": 1}}},
+                        ], allowDiskUse=True):
+                            out[str(r.get("_id") or "")] = int(r.get("n") or 0)
                     except Exception:
                         pass
                     return out
@@ -467,11 +440,7 @@ class StrategyEvaluationService:
             return None, None
         requested = str(run_id or "").strip()
         if requested:
-            # Build match for data collection lookup — handles both UUID and backward-compat ungrouped.
-            if requested == "ungrouped":
-                data_match: dict[str, Any] = {"$or": [{"run_id": {"$exists": False}}, {"run_id": None}]}
-            else:
-                data_match = {"run_id": requested}
+            data_match: dict[str, Any] = {"run_id": requested}
             # Check data collections directly — works for registered and tmux/discovered runs.
             names = self._collection_names(mode)
             db = self._db()

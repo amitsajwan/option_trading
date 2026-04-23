@@ -37,9 +37,6 @@
           positions: 16,
         },
       },
-      latestCompletedRun: {
-        run_id: 'mock_historical_run',
-      },
       kpis: {
         engineMode: 'UNKNOWN',
       },
@@ -565,7 +562,7 @@
     var rangeFrom = data.rangeFrom || replay.start_date || data.session.date_ist || '--';
     var rangeTo = data.rangeTo || replay.end_date || data.session.date_ist || '--';
     var rangeText = C.esc(rangeFrom) + ' -> ' + C.esc(rangeTo);
-    var runId = data.currentRunId || (data.latestCompletedRun && data.latestCompletedRun.run_id) || '--';
+    var runId = data.currentRunId || '--';
     var engBadge = C.engineModeBadge(data.kpis && data.kpis.engineMode, runId);
     var dayInfo = renderDayChips(data.days || [], activeDate);
 
@@ -780,8 +777,7 @@
     var urlRunId = urlParams.get('run_id');
 
     var replayStatus = await window.DashAPI.fetchHistoricalStatus({});
-    // active_run_id: UUID injected by replay_runner (new); latest_completed_run_id: fallback for old registered runs.
-    var activeRunId = replayStatus.active_run_id || replayStatus.latest_completed_run_id;
+    var activeRunId = replayStatus.active_run_id;
 
     // Fetch available runs (no status filter — discovers UUID runs from positions collection)
     var runsRes = await window.DashAPI.fetchEvalRuns({ dataset: 'historical', limit: 20, include_counts: '1' }).catch(function () { return { rows: [] }; });
@@ -977,7 +973,7 @@
     var btnDayPrev = document.getElementById('btn-day-prev');
     var btnDayNext = document.getElementById('btn-day-next');
     var statusEl = document.getElementById('replay-run-status');
-    var runId = data && (data.currentRunId || (data.replayStatus && data.replayStatus.latest_completed_run_id));
+    var runId = data && data.currentRunId;
 
     // Day chip clicks — filter table + chart to that specific day.
     document.querySelectorAll('.day-chip').forEach(function (chip) {
@@ -1083,7 +1079,7 @@
           pageData.runs = rows;
           pageData._runsTotal = res && res.total ? res.total : 0;
           var tbody = document.getElementById('hr-runs-table-body');
-          var currentRunId = (data && (data.currentRunId || (data.replayStatus && data.replayStatus.latest_completed_run_id))) || '';
+          var currentRunId = (data && data.currentRunId) || '';
           if (tbody) { tbody.innerHTML = renderRunsTable(rows, currentRunId); }
         }).catch(function (err) { console.error('Refresh runs failed:', err); });
       });
@@ -1094,7 +1090,7 @@
       btnShare.__wired = true;
       btnShare.addEventListener('click', function () {
         var inp = getInputs();
-        var runId = data && (data.currentRunId || (data.replayStatus && data.replayStatus.latest_completed_run_id)) || '';
+        var runId = data && data.currentRunId || '';
         var qs = new URLSearchParams();
         qs.set('date_from', inp.dateFrom || '');
         qs.set('date_to', inp.dateTo || '');

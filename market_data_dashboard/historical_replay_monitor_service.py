@@ -34,16 +34,6 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
     def _redis_client(self) -> redis.Redis:
         return redis.Redis(**redis_connection_kwargs(decode_responses=True))
 
-    def _latest_completed_run(self) -> Optional[dict[str, Any]]:
-        service = getattr(self, "_evaluation_service", None)
-        if service is None or not hasattr(service, "get_latest_run"):
-            return None
-        try:
-            item = service.get_latest_run(dataset="historical", status="completed")
-        except Exception:
-            return None
-        return item if isinstance(item, dict) else None
-
     @staticmethod
     def _events_emitted_from_message(message: Any) -> int:
         text = str(message or "").strip()
@@ -94,11 +84,6 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             parsed = _parse_date_yyyy_mm_dd(replay.get(key))
             if parsed:
                 return parsed
-        latest_run = self._latest_completed_run()
-        if isinstance(latest_run, dict):
-            parsed = _parse_date_yyyy_mm_dd(latest_run.get("date_to"))
-            if parsed:
-                return parsed
         return self._repo.latest_trade_date()
 
     def get_session_date_ist(self, date_override: Optional[str] = None) -> str:
@@ -113,7 +98,6 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
     def get_replay_status(self, *, date: Optional[str] = None, instrument: Optional[str] = None) -> dict[str, Any]:
         date_ist = self.get_session_date_ist(date)
         replay = self._read_replay_status()
-        latest_run = self._latest_completed_run()
         coll_map = self._repo.collections()
         counts = {
             "votes": int(coll_map["votes"].count_documents({"trade_date_ist": date_ist})),
@@ -140,17 +124,6 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
         started_at = replay.get("started_at")
         finished_at = replay.get("finished_at")
         completed = replay_status in {"complete", "completed", "no_snapshots"}
-        if replay_status in {"", "idle", "ready", "unavailable"} and isinstance(latest_run, dict):
-            start_date = latest_run.get("date_from") or start_date
-            end_date = latest_run.get("date_to") or end_date
-            started_at = latest_run.get("started_at") or started_at
-            finished_at = latest_run.get("ended_at") or finished_at
-            events_emitted = max(events_emitted, self._events_emitted_from_message(latest_run.get("message")))
-            completed = str(latest_run.get("status") or "").strip().lower() == "completed"
-            if completed:
-                replay_status = "completed"
-        # active_run_id: the UUID injected by replay_runner into Redis status.
-        # This is the canonical run_id for the current (or most recent) replay.
         active_run_id = str(replay.get("run_id") or "").strip() or None
         return {
             "mode": "historical",
@@ -174,7 +147,6 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             "latest_snapshot_timestamp": latest_snapshot,
             "collection_counts": counts,
             "active_run_id": active_run_id,
-            "latest_completed_run_id": (latest_run or {}).get("run_id") if isinstance(latest_run, dict) else None,
         }
 
     def get_historical_strategy_session(self, **kwargs: Any) -> dict[str, Any]:
@@ -184,7 +156,6 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
         date_ist = session.get("date_ist") if isinstance(session, dict) else None
         run_id = str(kwargs.get("run_id") or "").strip() or None
         payload["replay_status"] = self.get_replay_status(date=date_ist, instrument=instrument)
-        payload["latest_completed_run"] = self._latest_completed_run()
         payload["active_run_id"] = run_id
         payload["mode"] = "historical"
         return payload

@@ -293,7 +293,6 @@
       ops: ops,
       engineContext: engineContext,
       replayStatus: p.replay_status || null,
-      latestCompletedRun: p.latest_completed_run || null,
       currentRunId: p.active_run_id || session.run_id || null,
       freshness: freshness,
       oldestAgeSec: oldestAgeSec,
