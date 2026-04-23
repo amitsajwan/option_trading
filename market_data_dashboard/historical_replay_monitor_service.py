@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import glob as _glob
 import json
+import logging
+import os
 import re
+from datetime import timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 import redis
 
 from contracts_app import historical_snapshot_topic, redis_connection_kwargs
+
+logger = logging.getLogger(__name__)
 
 try:
     from .historical_replay_repository import HistoricalReplayRepository
@@ -148,6 +155,126 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             "collection_counts": counts,
             "active_run_id": active_run_id,
         }
+
+    @staticmethod
+    def _load_chart_from_parquet(date_ist: str, instrument: Optional[str] = None) -> Optional[dict[str, Any]]:
+        """Load per-minute OHLC from Parquet futures dataset via pyarrow.
+
+        Returns a session_chart dict in the same format as load_session_underlying_chart,
+        or None if pyarrow / the dataset is unavailable.
+        """
+        try:
+            import pyarrow.parquet as pq  # noqa: PLC0415
+        except ImportError:
+            return None
+
+        parquet_base = Path(os.getenv("HISTORICAL_PARQUET_BASE", "/app/.data/ml_pipeline/parquet_data"))
+        futures_root = parquet_base / "futures"
+        if not futures_root.exists():
+            return None
+
+        year = str(date_ist)[:4]
+        year_dir = futures_root / f"year={year}"
+        search_root = year_dir if year_dir.exists() else futures_root
+        parquet_files = sorted(_glob.glob(str(search_root / "**" / "*.parquet"), recursive=True))
+        if not parquet_files:
+            return None
+
+        try:
+            table = pq.read_table(
+                parquet_files,
+                columns=["timestamp", "trade_date", "symbol", "open", "high", "low", "close", "volume"],
+                filters=[("trade_date", "=", date_ist)],
+            )
+        except Exception:
+            logger.exception("historical replay: failed to read futures parquet for %s", date_ist)
+            return None
+
+        if len(table) == 0:
+            return None
+
+        table = table.sort_by([("timestamp", "ascending")])
+        df = table.to_pandas()
+
+        import pandas as pd  # noqa: PLC0415
+
+        def _fval(v: Any, default: float) -> float:
+            try:
+                if v is None or pd.isna(v):
+                    return default
+                return float(v)
+            except Exception:
+                return default
+
+        IST = timezone(timedelta(hours=5, minutes=30))
+        timestamps: list[str] = []
+        labels: list[str] = []
+        opens_list: list[float] = []
+        highs_list: list[float] = []
+        lows_list: list[float] = []
+        closes_list: list[float] = []
+        volumes_list: list[float] = []
+        resolved_instrument: Optional[str] = None
+
+        for _, row in df.iterrows():
+            ts = row.get("timestamp")
+            if ts is None or (not isinstance(ts, str) and pd.isna(ts)):
+                continue
+
+            close_val = row.get("close")
+            if close_val is None or pd.isna(close_val):
+                continue
+            close_f = float(close_val)
+
+            try:
+                ts_dt = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+                if ts_dt.tzinfo is None:
+                    ts_ist = ts_dt.replace(tzinfo=IST)
+                else:
+                    ts_ist = ts_dt.astimezone(IST)
+                ts_str = ts_ist.isoformat()
+                label = ts_ist.strftime("%H:%M")
+            except Exception:
+                ts_str = str(ts)
+                label = ""
+
+            timestamps.append(ts_str)
+            labels.append(label)
+            opens_list.append(_fval(row.get("open"), close_f))
+            highs_list.append(_fval(row.get("high"), close_f))
+            lows_list.append(_fval(row.get("low"), close_f))
+            closes_list.append(close_f)
+            volumes_list.append(_fval(row.get("volume"), 0.0))
+
+            if resolved_instrument is None:
+                sym = str(row.get("symbol") or "").strip()
+                if sym:
+                    resolved_instrument = sym
+
+        if not timestamps:
+            return None
+
+        return {
+            "timestamps": timestamps,
+            "labels": labels,
+            "opens": opens_list,
+            "highs": highs_list,
+            "lows": lows_list,
+            "closes": closes_list,
+            "volumes": volumes_list,
+            "prices": closes_list,
+            "instrument": resolved_instrument or instrument,
+            "source": "parquet_futures",
+        }
+
+    def load_session_underlying_chart(
+        self, *, date_ist: str, instrument: Optional[str]
+    ) -> Optional[dict[str, Any]]:
+        """Return per-minute OHLC for historical replay, preferring Parquet over MongoDB."""
+        chart = self._load_chart_from_parquet(date_ist=date_ist, instrument=instrument)
+        if chart is not None:
+            return chart
+        return super().load_session_underlying_chart(date_ist=date_ist, instrument=instrument)
 
     def get_historical_strategy_session(self, **kwargs: Any) -> dict[str, Any]:
         payload = self.get_strategy_session(**kwargs)
