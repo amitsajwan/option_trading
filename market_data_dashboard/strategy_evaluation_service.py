@@ -196,6 +196,7 @@ class StrategyEvaluationService:
         query: dict[str, Any] = {"trade_date_ist": {"$gte": str(date_from), "$lte": str(date_to)}}
         text = str(run_id or "").strip()
         if text == "ungrouped":
+            # Backward compat: old tmux replays written before run_id injection was added.
             query["$or"] = [{"run_id": {"$exists": False}}, {"run_id": None}]
         elif text:
             query["run_id"] = text
@@ -466,40 +467,45 @@ class StrategyEvaluationService:
             return None, None
         requested = str(run_id or "").strip()
         if requested:
-            item = self.get_run(requested)
-            if not isinstance(item, dict):
-                # Fallback: check data collections for tmux-launched (discovered) runs.
-                names = self._collection_names(mode)
-                db = self._db()
-                if requested == "ungrouped":
-                    # Verify ungrouped (null/missing run_id) data exists.
-                    for coll_name in (names["positions"], names["signals"]):
-                        try:
-                            if db[coll_name].count_documents({"$or": [{"run_id": {"$exists": False}}, {"run_id": None}]}, limit=1):
-                                item = {"run_id": requested, "dataset": mode, "status": "completed", "discovered": True}
-                                break
-                        except Exception:
-                            pass
-                else:
-                    for coll_name in (names["positions"], names["signals"]):
-                        try:
-                            if db[coll_name].count_documents({"run_id": requested}, limit=1):
-                                item = {"run_id": requested, "dataset": mode, "status": "completed", "discovered": True}
-                                break
-                        except Exception:
-                            pass
-            if not isinstance(item, dict):
-                raise ValueError(f"run_id '{requested}' not found")
-            if str(item.get("dataset") or "").strip().lower() != "historical":
-                raise ValueError(f"run_id '{requested}' is not a historical run")
+            # Build match for data collection lookup — handles both UUID and backward-compat ungrouped.
+            if requested == "ungrouped":
+                data_match: dict[str, Any] = {"$or": [{"run_id": {"$exists": False}}, {"run_id": None}]}
+            else:
+                data_match = {"run_id": requested}
+            # Check data collections directly — works for registered and tmux/discovered runs.
+            names = self._collection_names(mode)
+            db = self._db()
+            found = False
+            for coll_name in (names["positions"], names["signals"]):
+                try:
+                    if db[coll_name].count_documents(data_match, limit=1):
+                        found = True
+                        break
+                except Exception:
+                    pass
+            if not found:
+                raise ValueError(f"run_id '{requested}' not found in data collections")
+            item: dict[str, Any] = {"run_id": requested, "dataset": mode, "status": "completed", "discovered": True}
+            # Enrich with registered run metadata if available.
+            registered = self.get_run(requested)
+            if isinstance(registered, dict) and str(registered.get("dataset") or "").lower() == "historical":
+                item = registered
             return requested, item
-        latest = self.get_latest_run(dataset="historical", status="completed")
-        if not isinstance(latest, dict):
-            raise ValueError("no completed historical evaluation runs found")
-        resolved = str(latest.get("run_id") or "").strip()
-        if not resolved:
-            raise ValueError("latest run has no run_id")
-        return resolved, latest
+        # No run_id specified — find the most recent run from data collections.
+        names = self._collection_names(mode)
+        db = self._db()
+        try:
+            doc = db[names["positions"]].find_one(
+                {"run_id": {"$nin": [None, ""]}},
+                {"run_id": 1},
+                sort=[("trade_date_ist", DESCENDING)],
+            )
+            if isinstance(doc, dict) and doc.get("run_id"):
+                resolved = str(doc["run_id"]).strip()
+                return resolved, {"run_id": resolved, "dataset": mode, "status": "completed", "discovered": True}
+        except Exception:
+            pass
+        raise ValueError("no historical replay data found")
 
     def _load_signal_map(
         self,

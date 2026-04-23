@@ -9,6 +9,9 @@
   var currentDayPage = 0;
   var DAY_PAGE_SIZE = 8;
   var pageData = getFallbackData(); // Initialize with fallback data
+  var _livePollingInterval = null;
+  var _liveLastDate = null;
+  var _liveRunId = null;
 
   var C = window.QComponents;
 
@@ -716,6 +719,58 @@
     });
   }
 
+  function stopLivePolling() {
+    if (_livePollingInterval) {
+      clearInterval(_livePollingInterval);
+      _livePollingInterval = null;
+    }
+    _liveLastDate = null;
+    _liveRunId = null;
+  }
+
+  function startLivePolling(runId, dateFrom) {
+    stopLivePolling();
+    _liveRunId = runId;
+    _liveLastDate = null;
+
+    _livePollingInterval = setInterval(function () {
+      window.DashAPI.fetchHistoricalStatus({}).then(function (status) {
+        var isRunning = status.status === 'running';
+        var isDone = status.status === 'complete' || status.status === 'completed';
+
+        // Update live status indicator
+        var statusEl = document.getElementById('replay-run-status');
+        if (statusEl) {
+          if (isRunning) {
+            statusEl.textContent = 'LIVE ● ' + (status.current_trade_date || '') + '  |  ' + (status.events_emitted || 0) + ' events';
+            statusEl.style.color = 'var(--pos)';
+          } else if (isDone) {
+            statusEl.textContent = 'Replay complete — ' + (status.events_emitted || 0) + ' events';
+            statusEl.style.color = '';
+          }
+        }
+
+        // Advance to the current replay date whenever it changes
+        var currentDate = status.current_trade_date;
+        if (currentDate && currentDate !== _liveLastDate) {
+          _liveLastDate = currentDate;
+          loadDay(currentDate, runId);
+        }
+
+        if (isDone) {
+          stopLivePolling();
+          // Final full reload to show complete picture
+          cache = null;
+          loadData(dateFrom, status.end_date || pageData.rangeTo, runId).then(function (data) {
+            cache = data;
+            var root = document.getElementById('page');
+            if (root) { root.innerHTML = render(data); attachHandlers(data); mountChart(data); }
+          }).catch(function (err) { console.error('Final reload after replay:', err); });
+        }
+      }).catch(function () { /* ignore transient errors */ });
+    }, 5000);
+  }
+
   async function loadData(dateFrom, dateTo, runId) {
     if (!window.DashAPI) throw new Error('DashAPI is not loaded');
 
@@ -725,23 +780,24 @@
     var urlRunId = urlParams.get('run_id');
 
     var replayStatus = await window.DashAPI.fetchHistoricalStatus({});
-    var latestRunId = replayStatus.latest_completed_run_id;
+    // active_run_id: UUID injected by replay_runner (new); latest_completed_run_id: fallback for old registered runs.
+    var activeRunId = replayStatus.active_run_id || replayStatus.latest_completed_run_id;
 
-    // Fetch available runs to validate the URL run_id
-    var runsRes = await window.DashAPI.fetchEvalRuns({ dataset: 'historical', status: 'completed', limit: 20 }).catch(function () { return { rows: [] }; });
+    // Fetch available runs (no status filter — discovers UUID runs from positions collection)
+    var runsRes = await window.DashAPI.fetchEvalRuns({ dataset: 'historical', limit: 20, include_counts: '1' }).catch(function () { return { rows: [] }; });
     var availableRunIds = (runsRes.rows || []).map(function (r) { return r.run_id; });
 
-    // Validate run_id: use provided, then URL, then latest - but only if valid
+    // Priority: explicit arg > URL param > active run from Redis status > first available
     var requestedRunId = runId || urlRunId;
     var resolvedRunId;
-    if (requestedRunId && availableRunIds.indexOf(requestedRunId) >= 0) {
-      resolvedRunId = requestedRunId;
-    } else if (latestRunId && availableRunIds.indexOf(latestRunId) >= 0) {
-      resolvedRunId = latestRunId;
+    if (requestedRunId) {
+      resolvedRunId = requestedRunId;  // trust explicit selection
+    } else if (activeRunId) {
+      resolvedRunId = activeRunId;     // prefer the run currently in Redis status
     } else if (availableRunIds.length > 0) {
       resolvedRunId = availableRunIds[0];
     } else {
-      resolvedRunId = requestedRunId || latestRunId || undefined;
+      resolvedRunId = undefined;
     }
 
     // Use URL date, then pageData, then resolved run's start_date, then fallback
@@ -821,6 +877,16 @@
 
     pageData.source = 'api';
     pageData._fetchedAt = new Date().toISOString();
+
+    // Auto-start live polling when replay is actively running.
+    var replayIsRunning = replayStatus.status === 'running';
+    if (replayIsRunning && resolvedRunId && resolvedRunId !== _liveRunId) {
+      var liveFrom = replayStatus.start_date || rangeFrom;
+      startLivePolling(resolvedRunId, liveFrom);
+    } else if (!replayIsRunning) {
+      stopLivePolling();
+    }
+
     return pageData;
   }
 
@@ -1127,4 +1193,6 @@
   window.PAGES.historical_replay = render;
   window.PAGE_MOUNTS = window.PAGE_MOUNTS || {};
   window.PAGE_MOUNTS.historical_replay = mount;
+  window.PAGE_UNMOUNTS = window.PAGE_UNMOUNTS || {};
+  window.PAGE_UNMOUNTS.historical_replay = stopLivePolling;
 })();

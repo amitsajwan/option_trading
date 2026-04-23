@@ -149,6 +149,9 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             completed = str(latest_run.get("status") or "").strip().lower() == "completed"
             if completed:
                 replay_status = "completed"
+        # active_run_id: the UUID injected by replay_runner into Redis status.
+        # This is the canonical run_id for the current (or most recent) replay.
+        active_run_id = str(replay.get("run_id") or "").strip() or None
         return {
             "mode": "historical",
             "dataset": "historical",
@@ -170,6 +173,7 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             "finished_at": finished_at,
             "latest_snapshot_timestamp": latest_snapshot,
             "collection_counts": counts,
+            "active_run_id": active_run_id,
             "latest_completed_run_id": (latest_run or {}).get("run_id") if isinstance(latest_run, dict) else None,
         }
 

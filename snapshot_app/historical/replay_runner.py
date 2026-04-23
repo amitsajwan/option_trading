@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
@@ -154,6 +155,7 @@ def replay_snapshots(
     if not resolved_topic:
         resolved_topic = historical_snapshot_topic()
 
+    run_id = str(uuid.uuid4())
     events_limit = max(0, int(max_events))
     emitted = 0
     cycles = 0
@@ -162,6 +164,7 @@ def replay_snapshots(
     status_client = _redis_client()
     base_status = {
         "status": "running",
+        "run_id": run_id,
         "topic": resolved_topic,
         "start_date": start_date,
         "end_date": end_date,
@@ -249,6 +252,7 @@ def replay_snapshots(
                     snapshot=snapshot,
                     source="snapshot_historical_replay",
                     metadata={
+                        "run_id": run_id,
                         "replay": True,
                         "session_timezone": "IST",
                         "topic": resolved_topic,
