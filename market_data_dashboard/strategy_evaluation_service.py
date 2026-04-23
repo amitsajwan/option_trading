@@ -354,22 +354,26 @@ class StrategyEvaluationService:
             known_ids = {str(r.get("run_id") or "").strip() for r in rows if str(r.get("run_id") or "").strip()}
             names = self._collection_names(mode)
             try:
+                # Group by run_id, counting only POSITION_CLOSE events as completed trades.
+                # {run_id: {$ne: ""}} matches null, missing, and non-empty string run_ids.
                 discover_pipeline: list[dict[str, Any]] = [
-                    {"$match": {"run_id": {"$exists": True, "$ne": ""}}},
+                    {"$match": {"run_id": {"$ne": ""}}},
                     {
                         "$group": {
                             "_id": "$run_id",
                             "min_date": {"$min": "$trade_date_ist"},
                             "max_date": {"$max": "$trade_date_ist"},
-                            "count": {"$sum": 1},
+                            "count": {
+                                "$sum": {"$cond": [{"$eq": ["$event", "POSITION_CLOSE"]}, 1, 0]}
+                            },
                         }
                     },
+                    {"$match": {"count": {"$gt": 0}}},
                     {"$sort": {"max_date": DESCENDING}},
                     {"$limit": capped_limit * 2},
                 ]
                 for d in db[names["positions"]].aggregate(discover_pipeline, allowDiskUse=True):
                     raw_id = d.get("_id")
-                    # MongoDB $group on null run_id yields _id=null; treat as a single ungrouped run.
                     rid = str(raw_id or "").strip() if raw_id is not None else "ungrouped"
                     if not rid or rid in known_ids:
                         continue
@@ -401,31 +405,42 @@ class StrategyEvaluationService:
                 named_ids = [r for r in run_ids if r != "ungrouped"]
                 has_ungrouped = "ungrouped" in run_ids
 
-                def _group_counts(coll: Any) -> dict[str, int]:
+                def _group_counts(coll: Any, positions_only: bool = False) -> dict[str, int]:
                     out: dict[str, int] = {}
                     try:
                         if named_ids:
-                            named_pipeline = [
-                                {"$match": {"run_id": {"$in": named_ids}}},
+                            match_stage: dict[str, Any] = {"run_id": {"$in": named_ids}}
+                            if positions_only:
+                                match_stage["event"] = "POSITION_CLOSE"
+                            for r in coll.aggregate([
+                                {"$match": match_stage},
                                 {"$group": {"_id": "$run_id", "n": {"$sum": 1}}},
-                            ]
-                            for r in coll.aggregate(named_pipeline, allowDiskUse=True):
+                            ], allowDiskUse=True):
                                 out[str(r.get("_id") or "")] = int(r.get("n") or 0)
                     except Exception:
                         pass
                     try:
                         if has_ungrouped:
-                            ungrouped_pipeline = [
-                                {"$match": {"$or": [{"run_id": {"$exists": False}}, {"run_id": None}]}},
-                                {"$group": {"_id": "ungrouped", "n": {"$sum": 1}}},
+                            run_id_cond: list[dict[str, Any]] = [
+                                {"run_id": {"$exists": False}},
+                                {"run_id": None},
                             ]
-                            for r in coll.aggregate(ungrouped_pipeline, allowDiskUse=True):
-                                out[str(r.get("_id") or "")] = int(r.get("n") or 0)
+                            if positions_only:
+                                ungrouped_match: dict[str, Any] = {
+                                    "$and": [{"$or": run_id_cond}, {"event": "POSITION_CLOSE"}]
+                                }
+                            else:
+                                ungrouped_match = {"$or": run_id_cond}
+                            for r in coll.aggregate([
+                                {"$match": ungrouped_match},
+                                {"$group": {"_id": "ungrouped", "n": {"$sum": 1}}},
+                            ], allowDiskUse=True):
+                                out["ungrouped"] = int(r.get("n") or 0)
                     except Exception:
                         pass
                     return out
 
-                trade_counts = _group_counts(positions_coll)
+                trade_counts = _group_counts(positions_coll, positions_only=True)
                 signal_counts = _group_counts(signals_coll)
                 vote_counts = _group_counts(votes_coll)
                 for row in rows:

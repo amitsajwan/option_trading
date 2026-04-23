@@ -115,6 +115,7 @@
 
   function mapTrade(row) {
     var rawPnlRatio = toNum(row && row.pnl_pct_net);
+    if (rawPnlRatio == null) rawPnlRatio = toNum(row && row.pnl_pct);
     var capitalPnlRatio = toNum(row && row.capital_pnl_pct);
     var pnlRatio = capitalPnlRatio != null ? capitalPnlRatio : rawPnlRatio;
     var entry = toNum(row && row.entry_premium);
@@ -122,7 +123,7 @@
     var decisionMetrics = row && row.signal_decision_metrics;
     if (!decisionMetrics || typeof decisionMetrics !== 'object') decisionMetrics = row && row.decision_metrics;
     return {
-      t: fmtTime(row && (row.entry_time || row.exit_time)),
+      t: fmtTime(row && (row.entry_time || row.exit_time || row.timestamp)),
       strat: row && (row.entry_strategy || row.strategy) ? String(row.entry_strategy || row.strategy) : '',
       dir: normDir(row && row.direction),
       qty: row && row.lots != null ? row.lots : '--',
