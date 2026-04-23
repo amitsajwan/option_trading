@@ -169,6 +169,24 @@ class PureMLStagedEngineTests(unittest.TestCase):
             self.assertEqual(signal.max_hold_bars, 15)
             self.assertAlmostEqual(signal.stop_loss_pct, 0.0008, places=6)
             self.assertAlmostEqual(signal.target_pct, 0.0025, places=6)
+            self.assertTrue(signal.trailing_enabled)
+
+    def test_staged_bundle_disables_trailing_when_env_opts_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            model_path, threshold_path = self._write_bundle(root, recipe_probs={"L0": 0.82, "L1": 0.55})
+            with patch.dict(os.environ, {"ML_PURE_TRAILING_ENABLED": "false"}):
+                engine = PureMLEngine(
+                    model_package_path=str(model_path),
+                    threshold_report_path=str(threshold_path),
+                    signal_logger=SignalLogger(root),
+                    max_feature_age_sec=10_000_000,
+                )
+            engine.on_session_start(date(2026, 3, 18))
+            signal = engine.evaluate(_snapshot("2026-03-18T09:30:00+05:30"))
+            self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertFalse(signal.trailing_enabled)
 
     def test_staged_bundle_holds_on_low_recipe_margin(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

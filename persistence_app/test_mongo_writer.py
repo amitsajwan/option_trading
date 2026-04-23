@@ -354,6 +354,9 @@ class MongoWriterTests(unittest.TestCase):
                     decision_mode="ml_staged",
                     strategy_family_version="ML_PURE_STAGED_V1",
                     strategy_profile_id="ml_pure_staged_v1",
+                    entry_futures_price=60250.0,
+                    underlying_stop_pct=0.0008,
+                    underlying_target_pct=0.0015,
                 )
 
                 logger.log_position_open(signal, position)
@@ -374,6 +377,9 @@ class MongoWriterTests(unittest.TestCase):
         self.assertAlmostEqual(float(doc["ml_pe_prob"]), 0.27, places=6)
         self.assertAlmostEqual(float(doc["ml_recipe_prob"]), 0.81, places=6)
         self.assertAlmostEqual(float(doc["ml_recipe_margin"]), 0.09, places=6)
+        self.assertAlmostEqual(float(doc["entry_futures_price"]), 60250.0, places=6)
+        self.assertAlmostEqual(float(doc["underlying_stop_pct"]), 0.0008, places=6)
+        self.assertAlmostEqual(float(doc["underlying_target_pct"]), 0.0015, places=6)
 
     def test_write_strategy_position_event_is_idempotent_by_position_event_and_timestamp(self) -> None:
         writer = StrategyMongoWriter()

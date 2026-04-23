@@ -66,11 +66,8 @@ class PositionTracker:
         underlying_stop_pct = float(signal.underlying_stop_pct) if signal.underlying_stop_pct is not None else None
         underlying_target_pct = float(signal.underlying_target_pct) if signal.underlying_target_pct is not None else None
         premium_stop_pct = float(signal.stop_loss_pct)
-        stop_price = (
-            None
-            if underlying_stop_pct is not None
-            else self._hard_stop_price(premium, premium_stop_pct)
-        )
+        # Always seed premium-based hard stop so it can layer with the underlying stop.
+        stop_price = self._hard_stop_price(premium, premium_stop_pct)
         self._position = PositionContext(
             position_id=str(uuid.uuid4())[:8],
             direction=signal.direction or "",
@@ -176,11 +173,11 @@ class PositionTracker:
             exit_reason = ExitReason.TIME_STOP
         elif position.underlying_stop_pct is not None and self._is_underlying_stop_hit(position, current_futures_price):
             exit_reason = ExitReason.STOP_LOSS
-        elif position.underlying_stop_pct is None and self._is_stop_hit(position, current_premium):
+        elif self._is_stop_hit(position, current_premium):
             exit_reason = self._resolve_stop_exit_reason(position)
         elif position.underlying_target_pct is not None and self._is_underlying_target_hit(position, current_futures_price):
             exit_reason = ExitReason.TARGET_HIT
-        elif position.underlying_target_pct is None and position.pnl_pct >= position.target_pct:
+        elif position.target_pct > 0 and position.pnl_pct >= position.target_pct:
             exit_reason = ExitReason.TARGET_HIT
         elif position.max_hold_bars is not None and position.bars_held >= int(position.max_hold_bars):
             exit_reason = ExitReason.TIME_STOP

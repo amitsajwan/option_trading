@@ -1275,5 +1275,67 @@ class PositionRiskTests(unittest.TestCase):
         self.assertIsNotNone(exit_signal)
         self.assertEqual(exit_signal.exit_reason, ExitReason.STOP_LOSS)
 
+    def test_premium_stop_still_fires_when_underlying_stop_set_but_not_hit(self) -> None:
+        # Aug 2024 scenario: option premium collapses while futures barely move.
+        # With underlying_stop_pct=0.5% set, futures move <0.5% so underlying stop
+        # does not trigger, but premium already drops past the 40% hard stop.
+        tracker = PositionTracker()
+        tracker.on_session_start(date(2026, 2, 28))
+        ts = datetime(2026, 2, 28, 9, 30, tzinfo=IST_ZONE)
+        signal = TradeSignal(
+            signal_id="sig-layered-stop",
+            timestamp=ts,
+            snapshot_id="snap-open",
+            signal_type=SignalType.ENTRY,
+            direction="CE",
+            strike=50000,
+            entry_premium=100.0,
+            stop_loss_pct=0.40,
+            target_pct=0.80,
+            underlying_stop_pct=0.005,
+            underlying_target_pct=0.01,
+        )
+        tracker.open_position(
+            signal,
+            _snapshot(snapshot_id="snap-open", ts=ts.isoformat(), ce_price=100.0, fut_close=50000.0),
+        )
+        # Futures only moves -0.2% (not -0.5%), premium crashes -50% (past -40%).
+        exit_signal = tracker.update(
+            _snapshot(snapshot_id="snap-prem-stop", ts="2026-02-28T09:35:00+05:30", ce_price=50.0, fut_close=49900.0),
+            RiskContext(),
+        )
+        self.assertIsNotNone(exit_signal)
+        self.assertEqual(exit_signal.exit_reason, ExitReason.STOP_LOSS)
+
+    def test_premium_target_still_fires_when_underlying_target_set_but_not_hit(self) -> None:
+        tracker = PositionTracker()
+        tracker.on_session_start(date(2026, 2, 28))
+        ts = datetime(2026, 2, 28, 9, 30, tzinfo=IST_ZONE)
+        signal = TradeSignal(
+            signal_id="sig-layered-target",
+            timestamp=ts,
+            snapshot_id="snap-open",
+            signal_type=SignalType.ENTRY,
+            direction="CE",
+            strike=50000,
+            entry_premium=100.0,
+            stop_loss_pct=0.40,
+            target_pct=0.80,
+            underlying_stop_pct=0.005,
+            underlying_target_pct=0.01,
+        )
+        tracker.open_position(
+            signal,
+            _snapshot(snapshot_id="snap-open", ts=ts.isoformat(), ce_price=100.0, fut_close=50000.0),
+        )
+        # Futures only +0.2% (below 1%), premium +90% (past +80%).
+        exit_signal = tracker.update(
+            _snapshot(snapshot_id="snap-prem-target", ts="2026-02-28T09:35:00+05:30", ce_price=190.0, fut_close=50100.0),
+            RiskContext(),
+        )
+        self.assertIsNotNone(exit_signal)
+        self.assertEqual(exit_signal.exit_reason, ExitReason.TARGET_HIT)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -108,6 +108,7 @@ class PureMLEngine(StrategyEngine):
         self._underlying_target_pct: Optional[float] = (max(0.0, float(_raw_udl_target)) if _raw_udl_target is not None else None)
         self._post_stop_cooldown_bars: int = max(0, int(os.getenv("ML_PURE_POST_STOP_COOLDOWN_BARS", str(post_stop_cooldown_bars)) or 0))
         self._cooldown_bars_remaining: int = 0
+        self._trailing_enabled: bool = _env_bool("ML_PURE_TRAILING_ENABLED", True)
         if min_edge is not None:
             logger.warning(
                 "pure ml staged engine ignores constructor min_edge=%.4f; using staged runtime policy selected_min_edge",
@@ -121,10 +122,11 @@ class PureMLEngine(StrategyEngine):
         self._entry_count = 0
         if self._underlying_stop_pct is not None or self._underlying_target_pct is not None or self._post_stop_cooldown_bars > 0:
             logger.info(
-                "pure ml engine risk overrides: underlying_stop_pct=%s underlying_target_pct=%s post_stop_cooldown_bars=%d",
+                "pure ml engine risk overrides: underlying_stop_pct=%s underlying_target_pct=%s post_stop_cooldown_bars=%d trailing_enabled=%s",
                 f"{self._underlying_stop_pct:.4f}" if self._underlying_stop_pct is not None else "None",
                 f"{self._underlying_target_pct:.4f}" if self._underlying_target_pct is not None else "None",
                 self._post_stop_cooldown_bars,
+                self._trailing_enabled,
             )
         self._last_entry_at: Optional[str] = None
         self._last_event: Optional[dict[str, Any]] = None
@@ -477,6 +479,7 @@ class PureMLEngine(StrategyEngine):
             target_pct=target_pct,
             underlying_stop_pct=self._underlying_stop_pct,
             underlying_target_pct=self._underlying_target_pct,
+            trailing_enabled=self._trailing_enabled,
             max_lots=self._risk.compute_lots(
                 entry_premium=float(premium),
                 stop_loss_pct=stop_loss_pct,
