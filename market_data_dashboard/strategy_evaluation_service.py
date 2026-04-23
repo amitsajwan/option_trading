@@ -195,7 +195,9 @@ class StrategyEvaluationService:
     def _date_match(self, *, date_from: str, date_to: str, run_id: Optional[str]) -> dict[str, Any]:
         query: dict[str, Any] = {"trade_date_ist": {"$gte": str(date_from), "$lte": str(date_to)}}
         text = str(run_id or "").strip()
-        if text:
+        if text == "ungrouped":
+            query["$or"] = [{"run_id": {"$exists": False}}, {"run_id": None}]
+        elif text:
             query["run_id"] = text
         return query
 
@@ -366,7 +368,9 @@ class StrategyEvaluationService:
                     {"$limit": capped_limit * 2},
                 ]
                 for d in db[names["positions"]].aggregate(discover_pipeline, allowDiskUse=True):
-                    rid = str(d.get("_id") or "").strip()
+                    raw_id = d.get("_id")
+                    # MongoDB $group on null run_id yields _id=null; treat as a single ungrouped run.
+                    rid = str(raw_id or "").strip() if raw_id is not None else "ungrouped"
                     if not rid or rid in known_ids:
                         continue
                     rows.append(
@@ -394,16 +398,33 @@ class StrategyEvaluationService:
                 positions_coll = db[names["positions"]]
                 signals_coll = db[names["signals"]]
                 votes_coll = db[names["votes"]]
-                pipeline = [
-                    {"$match": {"run_id": {"$in": run_ids}}},
-                    {"$group": {"_id": "$run_id", "n": {"$sum": 1}}},
-                ]
+                named_ids = [r for r in run_ids if r != "ungrouped"]
+                has_ungrouped = "ungrouped" in run_ids
+
                 def _group_counts(coll: Any) -> dict[str, int]:
+                    out: dict[str, int] = {}
                     try:
-                        agg = coll.aggregate(pipeline, allowDiskUse=True)
-                        return {str(r.get("_id") or ""): int(r.get("n") or 0) for r in agg}
+                        if named_ids:
+                            named_pipeline = [
+                                {"$match": {"run_id": {"$in": named_ids}}},
+                                {"$group": {"_id": "$run_id", "n": {"$sum": 1}}},
+                            ]
+                            for r in coll.aggregate(named_pipeline, allowDiskUse=True):
+                                out[str(r.get("_id") or "")] = int(r.get("n") or 0)
                     except Exception:
-                        return {}
+                        pass
+                    try:
+                        if has_ungrouped:
+                            ungrouped_pipeline = [
+                                {"$match": {"$or": [{"run_id": {"$exists": False}}, {"run_id": None}]}},
+                                {"$group": {"_id": "ungrouped", "n": {"$sum": 1}}},
+                            ]
+                            for r in coll.aggregate(ungrouped_pipeline, allowDiskUse=True):
+                                out[str(r.get("_id") or "")] = int(r.get("n") or 0)
+                    except Exception:
+                        pass
+                    return out
+
                 trade_counts = _group_counts(positions_coll)
                 signal_counts = _group_counts(signals_coll)
                 vote_counts = _group_counts(votes_coll)
@@ -435,13 +456,23 @@ class StrategyEvaluationService:
                 # Fallback: check data collections for tmux-launched (discovered) runs.
                 names = self._collection_names(mode)
                 db = self._db()
-                for coll_name in (names["positions"], names["signals"]):
-                    try:
-                        if db[coll_name].count_documents({"run_id": requested}, limit=1):
-                            item = {"run_id": requested, "dataset": mode, "status": "completed", "discovered": True}
-                            break
-                    except Exception:
-                        pass
+                if requested == "ungrouped":
+                    # Verify ungrouped (null/missing run_id) data exists.
+                    for coll_name in (names["positions"], names["signals"]):
+                        try:
+                            if db[coll_name].count_documents({"$or": [{"run_id": {"$exists": False}}, {"run_id": None}]}, limit=1):
+                                item = {"run_id": requested, "dataset": mode, "status": "completed", "discovered": True}
+                                break
+                        except Exception:
+                            pass
+                else:
+                    for coll_name in (names["positions"], names["signals"]):
+                        try:
+                            if db[coll_name].count_documents({"run_id": requested}, limit=1):
+                                item = {"run_id": requested, "dataset": mode, "status": "completed", "discovered": True}
+                                break
+                        except Exception:
+                            pass
             if not isinstance(item, dict):
                 raise ValueError(f"run_id '{requested}' not found")
             if str(item.get("dataset") or "").strip().lower() != "historical":
