@@ -259,7 +259,10 @@ class DashboardStrategyEvaluationRouter:
                 run_id=filt["run_id"],
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            msg = str(exc)
+            if "not found" in msg.lower() or "no completed" in msg:
+                return {"rows": [], "total": 0, "page": page, "page_size": page_size, "detail": msg}
+            raise HTTPException(status_code=400, detail=msg)
         return self._normalize_timestamp_fields(payload)
 
     async def create_strategy_evaluation_run(self, request: Request) -> Any:

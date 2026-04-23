@@ -440,8 +440,12 @@ class StrategyEvaluationService:
             return None, None
         requested = str(run_id or "").strip()
         if requested:
+            # Registered run check first — valid for queued/running/completed states.
+            registered = self.get_run(requested)
+            if isinstance(registered, dict) and str(registered.get("dataset") or "").lower() == "historical":
+                return requested, registered
+            # Fall back to data-collection scan for tmux/unregistered runs.
             data_match: dict[str, Any] = {"run_id": requested}
-            # Check data collections directly — works for registered and tmux/discovered runs.
             names = self._collection_names(mode)
             db = self._db()
             found = False
@@ -454,12 +458,7 @@ class StrategyEvaluationService:
                     pass
             if not found:
                 raise ValueError(f"run_id '{requested}' not found in data collections")
-            item: dict[str, Any] = {"run_id": requested, "dataset": mode, "status": "completed", "discovered": True}
-            # Enrich with registered run metadata if available.
-            registered = self.get_run(requested)
-            if isinstance(registered, dict) and str(registered.get("dataset") or "").lower() == "historical":
-                item = registered
-            return requested, item
+            return requested, {"run_id": requested, "dataset": mode, "status": "completed", "discovered": True}
         # No run_id specified — find the most recent run from data collections.
         names = self._collection_names(mode)
         db = self._db()

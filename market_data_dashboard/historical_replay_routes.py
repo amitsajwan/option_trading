@@ -78,7 +78,10 @@ class DashboardHistoricalReplayRouter:
                 debug_view=debug_view,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            msg = str(exc)
+            if "not found" in msg.lower() or "no completed" in msg:
+                return {"session": {"date_ist": date, "run_id": run_id}, "mode": "historical", "active_run_id": run_id, "detail": msg, "no_data": True}
+            raise HTTPException(status_code=400, detail=msg)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to build historical replay session: {exc}")
 
