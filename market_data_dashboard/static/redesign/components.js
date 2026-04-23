@@ -6,8 +6,8 @@
   // ── Utilities ─────────────────────────────────────────────────────────────
 
   function esc(value) {
-    return String(value == null ? '' : value).replace(/[&<>]/g, function (ch) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch];
+    return String(value == null ? '' : value).replace(/[&<>"]/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch];
     });
   }
 

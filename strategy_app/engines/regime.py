@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from .snapshot_accessor import SnapshotAccessor
+from ..utils.env import env_float
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +32,6 @@ class RegimeSignal:
         self.evidence = dict(evidence)
 
 
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
 class RegimeClassifier:
     """Phase-1 rule classifier with optional Phase-3 model fallback."""
 
@@ -45,10 +39,10 @@ class RegimeClassifier:
         self._model = None
         self._use_model = False
         self._model_confidence_threshold = float(model_confidence_threshold)
-        self._trend_return_min = _env_float("REGIME_TREND_RETURN_MIN", 0.0010)
-        self._trend_vol_ratio_min = _env_float("REGIME_TREND_VOL_RATIO_MIN", 1.30)
-        self._high_vol_vix_min = _env_float("REGIME_HIGH_VOL_VIX_MIN", 22.0)
-        self._high_vol_rvol_min = _env_float("REGIME_HIGH_VOL_RVOL_MIN", 0.015)
+        self._trend_return_min = env_float("REGIME_TREND_RETURN_MIN", 0.0010) or 0.0010
+        self._trend_vol_ratio_min = env_float("REGIME_TREND_VOL_RATIO_MIN", 1.30) or 1.30
+        self._high_vol_vix_min = env_float("REGIME_HIGH_VOL_VIX_MIN", 22.0) or 22.0
+        self._high_vol_rvol_min = env_float("REGIME_HIGH_VOL_RVOL_MIN", 0.015) or 0.015
         if model_path:
             self._load_model(model_path)
 

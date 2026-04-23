@@ -12,38 +12,36 @@ from ..engines.snapshot_accessor import SnapshotAccessor
 
 logger = logging.getLogger(__name__)
 
-BANKNIFTY_LOT_SIZE = 15
-RISK_PROFILE_AGGRESSIVE_SAFE_V1 = "aggressive_safe_v1"
+from ..constants import (
+    BANKNIFTY_LOT_SIZE,
+    DEFAULT_CAPITAL_ALLOCATED,
+    DEFAULT_MAX_CONSECUTIVE_LOSSES,
+    DEFAULT_MAX_DAILY_LOSS_PCT,
+    DEFAULT_MAX_LOTS_PER_TRADE,
+    DEFAULT_MAX_SESSION_TRADES,
+    DEFAULT_RISK_PER_TRADE_PCT,
+    RISK_PROFILE_AGGRESSIVE_SAFE_V1,
+)
+from ..utils.env import env_float, env_int
+
 _RISK_PROFILE_PRESETS: dict[str, dict[str, float | int | str]] = {
     RISK_PROFILE_AGGRESSIVE_SAFE_V1: {
         "RISK_LOT_SIZING_MODE": "budget_per_trade",
         "RISK_NOTIONAL_PER_TRADE": 50000.0,
         "RISK_LOT_BUDGET_USES_LOT_SIZE": 1,
         "RISK_CONFIDENCE_FLOOR": 0.65,
-        "RISK_MAX_DAILY_LOSS_PCT": 0.02,
-        "RISK_MAX_SESSION_TRADES": 6,
-        "RISK_MAX_CONSECUTIVE_LOSSES": 3,
+        "RISK_MAX_DAILY_LOSS_PCT": DEFAULT_MAX_DAILY_LOSS_PCT,
+        "RISK_MAX_SESSION_TRADES": DEFAULT_MAX_SESSION_TRADES,
+        "RISK_MAX_CONSECUTIVE_LOSSES": DEFAULT_MAX_CONSECUTIVE_LOSSES,
         "RISK_MAX_LOTS_PER_TRADE": 20,
-        "RISK_PER_TRADE_PCT": 0.005,
-        "RISK_CAPITAL_ALLOCATED": 500000.0,
+        "RISK_PER_TRADE_PCT": DEFAULT_RISK_PER_TRADE_PCT,
+        "RISK_CAPITAL_ALLOCATED": DEFAULT_CAPITAL_ALLOCATED,
         "RISK_VIX_HALT_THRESHOLD": 15.0,
         "RISK_VIX_RESUME_THRESHOLD": 8.0,
     }
 }
 
 
-def _env_float(key: str, default: float) -> float:
-    try:
-        return float(os.getenv(key, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-def _env_int(key: str, default: int) -> int:
-    try:
-        return int(os.getenv(key, str(default)))
-    except (TypeError, ValueError):
-        return default
 
 
 class RiskManager:
@@ -67,23 +65,23 @@ class RiskManager:
 
     def _cfg_float(self, key: str, fallback: float) -> float:
         default = float(self._profile_defaults.get(key, fallback))
-        return _env_float(key, default)
+        return env_float(key, default) if env_float(key, default) is not None else default
 
     def _cfg_int(self, key: str, fallback: int) -> int:
         default = int(self._profile_defaults.get(key, fallback))
-        return _env_int(key, default)
+        return env_int(key, default) if env_int(key, default) is not None else default
 
     def _cfg_str(self, key: str, fallback: str) -> str:
         default = str(self._profile_defaults.get(key, fallback))
         return str(os.getenv(key, default) or default)
 
     def _load_config(self) -> None:
-        self._context.max_daily_loss_pct = self._cfg_float("RISK_MAX_DAILY_LOSS_PCT", 0.02)
-        self._context.max_session_trades = self._cfg_int("RISK_MAX_SESSION_TRADES", 6)
-        self._context.max_consecutive_losses = self._cfg_int("RISK_MAX_CONSECUTIVE_LOSSES", 3)
-        self._context.max_lots_per_trade = self._cfg_int("RISK_MAX_LOTS_PER_TRADE", 5)
-        self._context.risk_per_trade_pct = self._cfg_float("RISK_PER_TRADE_PCT", 0.005)
-        self._context.capital_allocated = self._cfg_float("RISK_CAPITAL_ALLOCATED", 500000.0)
+        self._context.max_daily_loss_pct = self._cfg_float("RISK_MAX_DAILY_LOSS_PCT", DEFAULT_MAX_DAILY_LOSS_PCT)
+        self._context.max_session_trades = self._cfg_int("RISK_MAX_SESSION_TRADES", DEFAULT_MAX_SESSION_TRADES)
+        self._context.max_consecutive_losses = self._cfg_int("RISK_MAX_CONSECUTIVE_LOSSES", DEFAULT_MAX_CONSECUTIVE_LOSSES)
+        self._context.max_lots_per_trade = self._cfg_int("RISK_MAX_LOTS_PER_TRADE", DEFAULT_MAX_LOTS_PER_TRADE)
+        self._context.risk_per_trade_pct = self._cfg_float("RISK_PER_TRADE_PCT", DEFAULT_RISK_PER_TRADE_PCT)
+        self._context.capital_allocated = self._cfg_float("RISK_CAPITAL_ALLOCATED", DEFAULT_CAPITAL_ALLOCATED)
         self._lot_sizing_mode = self._cfg_str("RISK_LOT_SIZING_MODE", "risk_based").strip().lower()
         self._notional_per_trade = self._cfg_float("RISK_NOTIONAL_PER_TRADE", 0.0)
         self._lot_budget_uses_lot_size = self._cfg_int("RISK_LOT_BUDGET_USES_LOT_SIZE", 1) != 0

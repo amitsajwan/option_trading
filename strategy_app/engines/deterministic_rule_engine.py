@@ -46,11 +46,11 @@ from .snapshot_accessor import SnapshotAccessor
 from .strategy_router import StrategyRouter
 from .velocity_entry_policy import VelocityEnhancedEntryPolicy
 from .velocity_regime_classifier import VelocityEnhancedRegimeClassifier
+from ..constants import EXIT_CONFIDENCE, MIN_ENTRY_CONFIDENCE, SOFT_CLOSE_MINUTE
+from ..utils.env import as_bool
 
 logger = logging.getLogger(__name__)
 
-MIN_ENTRY_CONFIDENCE = 0.65
-EXIT_CONFIDENCE = 0.65
 DEFAULT_STRATEGY_PROFILE_ID = PRODUCTION_DEFAULT_PROFILE_ID
 
 
@@ -71,7 +71,7 @@ class DeterministicRuleEngine(StrategyEngine):
         strategy_family_version: Optional[str] = None,
         strategy_profile_id: str = DEFAULT_STRATEGY_PROFILE_ID,
     ) -> None:
-        self._velocity_enhanced = _as_bool(os.getenv("STRATEGY_ENHANCED_VELOCITY"))
+        self._velocity_enhanced = as_bool(os.getenv("STRATEGY_ENHANCED_VELOCITY"))
         self._regime = (
             VelocityEnhancedRegimeClassifier(model_path=model_path)
             if self._velocity_enhanced
@@ -162,7 +162,7 @@ class DeterministicRuleEngine(StrategyEngine):
         elif isinstance(router_payload, dict):
             self._strategy_profile_id = self._router.strategy_profile_id
         self._ml_score_all_snapshots = (
-            _as_bool(metadata.get("ml_score_all_snapshots")) if isinstance(metadata, dict) else False
+            as_bool(metadata.get("ml_score_all_snapshots")) if isinstance(metadata, dict) else False
         )
         self._set_logger_context(run_id)
 
@@ -253,28 +253,9 @@ class DeterministicRuleEngine(StrategyEngine):
         self._risk.update(snap, position)
 
         if position is not None:
-            system_exit = self._tracker.update(snap, risk)
+            system_exit = self._manage_open_position(snap, position, risk)
             if system_exit is not None:
-                self._annotate_signal_contract(system_exit, decision_mode="rule_vote")
-                self._log.log_signal(system_exit, acted_on=True)
-                self._handle_position_closed(system_exit, position)
-                self._log.log_decision_trace(
-                    self._build_position_trace(
-                        snap=snap,
-                        position=position,
-                        votes=[],
-                        signal=system_exit,
-                        final_outcome="exit_taken",
-                    )
-                )
                 return system_exit
-            refreshed_position = self._tracker.current_position
-            if refreshed_position is not None:
-                self._log.log_position_manage(
-                    position=refreshed_position,
-                    timestamp=snap.timestamp_or_now,
-                    snapshot_id=snap.snapshot_id,
-                )
 
         regime_signal = self._regime.classify(snap)
         logger.debug(
@@ -286,27 +267,8 @@ class DeterministicRuleEngine(StrategyEngine):
             regime_signal.reason,
         )
         shadow_vote = self._build_ml_shadow_vote(snap=snap, regime_signal=regime_signal)
-
-        strategies = self._router.get_strategies(regime_signal.regime, position)
-        votes: list[StrategyVote] = []
-        for strategy in strategies:
-            try:
-                vote = strategy.evaluate(snapshot, position, risk)
-            except Exception:
-                logger.exception("strategy failed strategy=%s", strategy.name)
-                continue
-            if vote is None:
-                continue
-            vote.raw_signals["_regime"] = regime_signal.regime.value
-            vote.raw_signals["_regime_conf"] = round(regime_signal.confidence, 3)
-            vote.raw_signals["_regime_reason"] = regime_signal.reason
-            self._annotate_vote_contract(vote)
-            votes.append(vote)
-
+        votes = self._collect_votes(snapshot, snap, regime_signal, position, risk, shadow_vote)
         if not votes:
-            if shadow_vote is not None:
-                self._annotate_vote_contract(shadow_vote)
-                self._log.log_vote(shadow_vote)
             return None
 
         signal: Optional[TradeSignal] = None
@@ -315,7 +277,7 @@ class DeterministicRuleEngine(StrategyEngine):
 
         if signal is None and position is None and not self._risk.is_halted and self._router.regime_allows_entry(regime_signal.regime):
             _ts = snap.timestamp
-            if _ts is not None and (_ts.hour * 60 + _ts.minute) >= 15 * 60:
+            if _ts is not None and (_ts.hour * 60 + _ts.minute) >= SOFT_CLOSE_MINUTE:
                 trace_blocker = "soft_close_no_entry"
             else:
                 warmup_blocked, warmup_reason = self._entry_warmup_status()
@@ -369,6 +331,68 @@ class DeterministicRuleEngine(StrategyEngine):
             )
 
         return signal
+
+    def _manage_open_position(
+        self,
+        snap: SnapshotAccessor,
+        position: PositionContext,
+        risk: RiskContext,
+    ) -> Optional[TradeSignal]:
+        """Check for system exits (stop, target, time) and log manage events."""
+        system_exit = self._tracker.update(snap, risk)
+        if system_exit is not None:
+            self._annotate_signal_contract(system_exit, decision_mode="rule_vote")
+            self._log.log_signal(system_exit, acted_on=True)
+            self._handle_position_closed(system_exit, position)
+            self._log.log_decision_trace(
+                self._build_position_trace(
+                    snap=snap,
+                    position=position,
+                    votes=[],
+                    signal=system_exit,
+                    final_outcome="exit_taken",
+                )
+            )
+            return system_exit
+        refreshed_position = self._tracker.current_position
+        if refreshed_position is not None:
+            self._log.log_position_manage(
+                position=refreshed_position,
+                timestamp=snap.timestamp_or_now,
+                snapshot_id=snap.snapshot_id,
+            )
+        return None
+
+    def _collect_votes(
+        self,
+        snapshot: SnapshotPayload,
+        snap: SnapshotAccessor,
+        regime_signal: RegimeSignal,
+        position: Optional[PositionContext],
+        risk: RiskContext,
+        shadow_vote: Optional[StrategyVote],
+    ) -> list[StrategyVote]:
+        """Route to active strategies and collect votes; log shadow vote if no real votes."""
+        strategies = self._router.get_strategies(regime_signal.regime, position)
+        votes: list[StrategyVote] = []
+        for strategy in strategies:
+            try:
+                vote = strategy.evaluate(snapshot, position, risk)
+            except Exception:
+                logger.exception("strategy failed strategy=%s", strategy.name)
+                continue
+            if vote is None:
+                continue
+            vote.raw_signals["_regime"] = regime_signal.regime.value
+            vote.raw_signals["_regime_conf"] = round(regime_signal.confidence, 3)
+            vote.raw_signals["_regime_reason"] = regime_signal.reason
+            self._annotate_vote_contract(vote)
+            votes.append(vote)
+
+        if not votes and shadow_vote is not None:
+            self._annotate_vote_contract(shadow_vote)
+            self._log.log_vote(shadow_vote)
+        return votes
 
     def _process_exit_votes(
         self,
@@ -1316,12 +1340,6 @@ class _SessionEndSnapshot(SnapshotAccessor):
 
 def _session_end_snapshot(trade_date: date) -> _SessionEndSnapshot:
     return _SessionEndSnapshot(trade_date)
-
-
-def _as_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _safe_float(value: object) -> Optional[float]:

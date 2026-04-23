@@ -346,6 +346,47 @@ class StrategyEvaluationService:
         ).limit(capped_limit)
         rows: list[dict[str, Any]] = [dict(doc) for doc in cursor if isinstance(doc, dict)]
 
+        # Discover runs written directly to data collections (e.g. tmux-launched replays
+        # that never registered an eval-run record).
+        if mode == "historical":
+            known_ids = {str(r.get("run_id") or "").strip() for r in rows if str(r.get("run_id") or "").strip()}
+            names = self._collection_names(mode)
+            try:
+                discover_pipeline: list[dict[str, Any]] = [
+                    {"$match": {"run_id": {"$exists": True, "$ne": ""}}},
+                    {
+                        "$group": {
+                            "_id": "$run_id",
+                            "min_date": {"$min": "$trade_date_ist"},
+                            "max_date": {"$max": "$trade_date_ist"},
+                            "count": {"$sum": 1},
+                        }
+                    },
+                    {"$sort": {"max_date": DESCENDING}},
+                    {"$limit": capped_limit * 2},
+                ]
+                for d in db[names["positions"]].aggregate(discover_pipeline, allowDiskUse=True):
+                    rid = str(d.get("_id") or "").strip()
+                    if not rid or rid in known_ids:
+                        continue
+                    rows.append(
+                        {
+                            "run_id": rid,
+                            "dataset": mode,
+                            "status": "completed",
+                            "date_from": str(d.get("min_date") or ""),
+                            "date_to": str(d.get("max_date") or ""),
+                            "trade_count": int(d.get("count") or 0),
+                            "signal_count": 0,
+                            "vote_count": 0,
+                            "submitted_at": None,
+                            "discovered": True,
+                        }
+                    )
+                    known_ids.add(rid)
+            except Exception:
+                pass
+
         if include_counts and rows and mode == "historical":
             run_ids = [str(row.get("run_id") or "").strip() for row in rows if str(row.get("run_id") or "").strip()]
             if run_ids:
@@ -372,6 +413,9 @@ class StrategyEvaluationService:
                     row["signal_count"] = int(signal_counts.get(rid, 0))
                     row["vote_count"] = int(vote_counts.get(rid, 0))
 
+        # Push most-recent runs (by end date) to the top regardless of source.
+        rows.sort(key=lambda r: r.get("date_to") or "", reverse=True)
+
         return {
             "rows": rows,
             "total": len(rows),
@@ -388,6 +432,17 @@ class StrategyEvaluationService:
         if requested:
             item = self.get_run(requested)
             if not isinstance(item, dict):
+                # Fallback: check data collections for tmux-launched (discovered) runs.
+                names = self._collection_names(mode)
+                db = self._db()
+                for coll_name in (names["positions"], names["signals"]):
+                    try:
+                        if db[coll_name].count_documents({"run_id": requested}, limit=1):
+                            item = {"run_id": requested, "dataset": mode, "status": "completed", "discovered": True}
+                            break
+                    except Exception:
+                        pass
+            if not isinstance(item, dict):
                 raise ValueError(f"run_id '{requested}' not found")
             if str(item.get("dataset") or "").strip().lower() != "historical":
                 raise ValueError(f"run_id '{requested}' is not a historical run")
@@ -397,7 +452,7 @@ class StrategyEvaluationService:
             raise ValueError("no completed historical evaluation runs found")
         resolved = str(latest.get("run_id") or "").strip()
         if not resolved:
-            raise ValueError("latest completed historical run is missing run_id")
+            raise ValueError("latest run has no run_id")
         return resolved, latest
 
     def _load_signal_map(

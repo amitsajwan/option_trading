@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_dual_recipe_v1",
+  "inputs": {
+    "parquet_root": "C:\\code\\option_trading\\option_trading_repo\\staged-preflight-fail-jxd0gm4x\\parquet",
+    "support_dataset": "snapshots_ml_flat_v2"
+  },
+  "outputs": {
+    "artifacts_root": "C:\\code\\option_trading\\option_trading_repo\\staged-preflight-fail-jxd0gm4x\\parquet\\artifacts",
+    "run_name": "v3_preflight_smoke"
+  },
+  "catalog": {
+    "models_by_stage": {
+      "stage1": [
+        "logreg_balanced"
+      ],
+      "stage2": [
+        "logreg_balanced"
+      ],
+      "stage3": [
+        "logreg_balanced"
+      ]
+    },
+    "feature_sets_by_stage": {
+      "stage1": [
+        "fo_velocity_v1"
+      ],
+      "stage2": [
+        "fo_velocity_v1"
+      ],
+      "stage3": [
+        "fo_velocity_v1"
+      ]
+    },
+    "recipe_catalog_id": "fixed_l0_l3_v1"
+  },
+  "windows": {
+    "research_train": {
+      "start": "2024-08-01",
+      "end": "2024-08-01"
+    },
+    "research_valid": {
+      "start": "2024-08-02",
+      "end": "2024-08-02"
+    },
+    "full_model": {
+      "start": "2024-08-01",
+      "end": "2024-08-02"
+    },
+    "final_holdout": {
+      "start": "2024-08-03",
+      "end": "2024-08-03"
+    }
+  },
+  "views": {
+    "stage1_view_id": "stage1_entry_view_v3_candidate",
+    "stage2_view_id": "stage2_direction_view_v3_candidate",
+    "stage3_view_id": "stage3_recipe_view_v3_candidate"
+  },
+  "labels": {
+    "stage1_labeler_id": "entry_best_recipe_v1",
+    "stage2_labeler_id": "direction_best_recipe_v1",
+    "stage3_labeler_id": "recipe_best_positive_v1"
+  },
+  "training": {
+    "stage1_trainer_id": "binary_catalog_v1",
+    "stage2_trainer_id": "binary_catalog_v1",
+    "stage3_trainer_id": "ovr_recipe_catalog_v1",
+    "preprocess": {
+      "max_missing_rate": 0.35,
+      "clip_lower_q": 0.01,
+      "clip_upper_q": 0.99
+    },
+    "cv_config": {
+      "train_days": 1,
+      "valid_days": 1,
+      "test_days": 1,
+      "step_days": 1,
+      "purge_days": 0,
+      "embargo_days": 0,
+      "purge_mode": "days",
+      "embargo_rows": 0,
+      "event_end_col": null
+    },
+    "objectives_by_stage": {
+      "stage1": "brier",
+      "stage2": "brier",
+      "stage3": "brier"
+    },
+    "random_state": 42,
+    "runtime": {
+      "model_n_jobs": 1
+    },
+    "cost_per_trade": 0.0006
+  },
+  "policy": {
+    "stage1_policy_id": "entry_threshold_v1",
+    "stage2_policy_id": "direction_dual_threshold_v1",
+    "stage3_policy_id": "recipe_top_margin_v1",
+    "stage1": {
+      "threshold_grid": [
+        0.45
+      ]
+    },
+    "stage2": {
+      "ce_threshold_grid": [
+        0.55
+      ],
+      "pe_threshold_grid": [
+        0.55
+      ],
+      "min_edge_grid": [
+        0.05
+      ]
+    },
+    "stage3": {
+      "threshold_grid": [
+        0.45
+      ],
+      "margin_grid": [
+        0.02
+      ]
+    }
+  },
+  "runtime": {
+    "prefilter_gate_ids": [
+      "rollout_guard_v1",
+      "feature_freshness_v1"
+    ]
+  },
+  "publish": {
+    "publisher_id": "staged_bundle_v1"
+  },
+  "hard_gates": {
+    "stage1": {
+      "roc_auc_min": 0.55,
+      "brier_max": 0.22,
+      "roc_auc_drift_half_split_max_abs": 0.05
+    },
+    "stage2": {
+      "roc_auc_min": 0.55,
+      "brier_max": 0.22
+    },
+    "stage3": {
+      "max_drawdown_slack": 0.01
+    },
+    "combined": {
+      "profit_factor_min": 1.1,
+      "max_drawdown_pct_max": 0.25,
+      "trades_min": 1,
+      "net_return_sum_min": 0.0,
+      "side_share_min": 0.0,
+      "side_share_max": 1.0,
+      "block_rate_min": 0.0
+    }
+  }
+}

@@ -36,22 +36,7 @@ from .snapshot_accessor import SnapshotAccessor
 
 logger = logging.getLogger(__name__)
 
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _env_float(name: str, default: Optional[float]) -> Optional[float]:
-    raw = os.getenv(name)
-    if raw is None or str(raw).strip() == "":
-        return default
-    try:
-        return float(raw)
-    except (ValueError, TypeError):
-        return default
+from ..utils.env import env_bool, env_float
 
 
 class PureMLEngine(StrategyEngine):
@@ -81,7 +66,7 @@ class PureMLEngine(StrategyEngine):
         self._staged_runtime_policy: dict[str, Any] = load_staged_policy(threshold_report_path)
         runtime_payload = dict(self._staged_runtime_policy.get("runtime") or {})
         bundle_runtime_payload = dict(self._model_package.get("runtime") or {})
-        bypass_deterministic_gates = _env_bool(
+        bypass_deterministic_gates = env_bool(
             "STRATEGY_ML_PURE_BYPASS_GATES",
             bool(runtime_payload.get("bypass_deterministic_gates", bundle_runtime_payload.get("bypass_deterministic_gates", False))),
         )
@@ -102,13 +87,13 @@ class PureMLEngine(StrategyEngine):
         self._min_volume = max(0.0, float(min_volume))
         self._stop_loss_pct = max(0.0, float(stop_loss_pct))
         self._target_pct = max(0.0, float(target_pct))
-        _raw_udl_stop = underlying_stop_pct if underlying_stop_pct is not None else _env_float("ML_PURE_UNDERLYING_STOP_PCT", None)
-        _raw_udl_target = underlying_target_pct if underlying_target_pct is not None else _env_float("ML_PURE_UNDERLYING_TARGET_PCT", None)
+        _raw_udl_stop = underlying_stop_pct if underlying_stop_pct is not None else env_float("ML_PURE_UNDERLYING_STOP_PCT", None)
+        _raw_udl_target = underlying_target_pct if underlying_target_pct is not None else env_float("ML_PURE_UNDERLYING_TARGET_PCT", None)
         self._underlying_stop_pct: Optional[float] = (max(0.0, float(_raw_udl_stop)) if _raw_udl_stop is not None else None)
         self._underlying_target_pct: Optional[float] = (max(0.0, float(_raw_udl_target)) if _raw_udl_target is not None else None)
         self._post_stop_cooldown_bars: int = max(0, int(os.getenv("ML_PURE_POST_STOP_COOLDOWN_BARS", str(post_stop_cooldown_bars)) or 0))
         self._cooldown_bars_remaining: int = 0
-        self._trailing_enabled: bool = _env_bool("ML_PURE_TRAILING_ENABLED", True)
+        self._trailing_enabled: bool = env_bool("ML_PURE_TRAILING_ENABLED", True)
         if min_edge is not None:
             logger.warning(
                 "pure ml staged engine ignores constructor min_edge=%.4f; using staged runtime policy selected_min_edge",
@@ -466,36 +451,14 @@ class PureMLEngine(StrategyEngine):
                 "max_hold_bars": max_hold_bars,
             },
         )
-        signal = TradeSignal(
-            signal_id=str(uuid.uuid4())[:8],
-            timestamp=snap.timestamp_or_now,
-            snapshot_id=snap.snapshot_id,
-            signal_type=SignalType.ENTRY,
-            direction=direction,
-            strike=int(strike),
-            entry_premium=float(premium),
-            max_hold_bars=max_hold_bars,
-            stop_loss_pct=stop_loss_pct,
-            target_pct=target_pct,
+        from .trade_signal_builder import build_ml_entry_signal
+        signal = build_ml_entry_signal(
+            snap=snap,
+            decision=decision,
             underlying_stop_pct=self._underlying_stop_pct,
             underlying_target_pct=self._underlying_target_pct,
             trailing_enabled=self._trailing_enabled,
-            max_lots=self._risk.compute_lots(
-                entry_premium=float(premium),
-                stop_loss_pct=stop_loss_pct,
-                confidence=float(max(decision.ce_prob, decision.pe_prob)),
-            ),
-            entry_strategy_name="ML_PURE_STAGED",
-            entry_regime_name="staged_ml",
-            source="ML_PURE",
-            confidence=float(max(decision.ce_prob, decision.pe_prob)),
-            reason=(
-                f"ml_pure_staged: action={decision.action} entry_prob={decision.entry_prob:.4f} "
-                f"dir_up_prob={decision.direction_up_prob:.4f} recipe={decision.recipe_id} "
-                f"recipe_prob={decision.recipe_prob:.4f} recipe_margin={decision.recipe_margin:.4f} "
-                f"reason={decision.reason}"
-            ),
-            votes=[],
+            risk_manager=self._risk,
         )
         self._annotate_signal_contract(
             signal,

@@ -1149,6 +1149,13 @@ def _score_stage2_direction_or_no_trade(frame: pd.DataFrame, package: Dict[str, 
 
 
 def _score_stage2_package(frame: pd.DataFrame, package: Dict[str, Any], *, prob_col: str = "direction_up_prob") -> pd.DataFrame:
+    if isinstance(package, dict) and package.get("_bypass_stage2"):
+        out = frame.loc[:, KEY_COLUMNS].copy()
+        out["direction_up_prob"] = 0.5
+        out["direction_trade_prob"] = 1.0
+        out["ce_prob"] = 0.5
+        out["pe_prob"] = 0.5
+        return out
     prediction_mode = str(package.get("prediction_mode") or "").strip().lower()
     if prediction_mode == "direction_or_no_trade":
         return _score_stage2_direction_or_no_trade(frame, package)
@@ -1801,15 +1808,22 @@ def _add_upstream_probs(
 ) -> pd.DataFrame:
     out = frame.copy()
     stage1_scores = _score_single_target(stage1_source_frame, stage1_package, prob_col="stage1_entry_prob")
-    stage2_raw_scores = _score_stage2_package(stage2_source_frame, stage2_package, prob_col="stage2_direction_up_prob")
-    stage2_scores = stage2_raw_scores.rename(
-        columns={
-            "direction_trade_prob": "stage2_direction_trade_prob",
-            "direction_up_prob": "stage2_direction_up_prob",
-            "ce_prob": "stage2_ce_prob",
-            "pe_prob": "stage2_pe_prob",
-        }
-    )
+    if isinstance(stage2_package, dict) and stage2_package.get("_bypass_stage2"):
+        stage2_scores = frame.loc[:, KEY_COLUMNS].copy()
+        stage2_scores["stage2_direction_up_prob"] = 0.5
+        stage2_scores["stage2_direction_trade_prob"] = 1.0
+        stage2_scores["stage2_ce_prob"] = 0.5
+        stage2_scores["stage2_pe_prob"] = 0.5
+    else:
+        stage2_raw_scores = _score_stage2_package(stage2_source_frame, stage2_package, prob_col="stage2_direction_up_prob")
+        stage2_scores = stage2_raw_scores.rename(
+            columns={
+                "direction_trade_prob": "stage2_direction_trade_prob",
+                "direction_up_prob": "stage2_direction_up_prob",
+                "ce_prob": "stage2_ce_prob",
+                "pe_prob": "stage2_pe_prob",
+            }
+        )
     out = out.merge(stage1_scores, on=KEY_COLUMNS, how="left")
     out = out.merge(stage2_scores, on=KEY_COLUMNS, how="left")
     missing_stage1 = out["stage1_entry_prob"].isna()
@@ -2213,6 +2227,21 @@ def _stage2_side_masks_from_policy(
     policy_id = str(stage2_policy.get("policy_id") or "direction_dual_threshold_v1")
     entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
     direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
+
+    # Detect bypass_stage2 dummy data: neutral probabilities should not be gated
+    if (
+        "direction_up_prob" in merged.columns
+        and np.allclose(direction_up_prob, 0.5, atol=1e-6)
+        and (
+            "direction_trade_prob" not in merged.columns
+            or np.allclose(
+                _numeric_array(merged["direction_trade_prob"], fillna=1.0), 1.0, atol=1e-6
+            )
+        )
+    ):
+        entry_mask = entry_probs >= float(entry_threshold)
+        return entry_mask, entry_mask
+
     if policy_id in {"direction_gate_threshold_v1", "direction_gate_economic_balance_v1"}:
         direction_trade_prob = _numeric_array(
             merged["direction_trade_prob"] if "direction_trade_prob" in merged.columns
@@ -2631,6 +2660,7 @@ def _evaluate_combined_policy(
     recipe_margin_min: Optional[float] = None,
     recipe_ids: Sequence[str],
     stage3_policy: Optional[Dict[str, Any]] = None,
+    dual_side_mode: bool = False,
 ) -> dict[str, Any]:
     resolved_stage2_policy = _coerce_stage2_policy(
         stage2_policy=stage2_policy,
@@ -2672,16 +2702,26 @@ def _evaluate_combined_policy(
     pe_return_matrix = np.column_stack(
         [_numeric_array(merged[f"{recipe_id}__pe_net_return"], fillna=0.0) for recipe_id in ordered_recipe_ids]
     )
-    selected_returns = np.where(
-        ce_mask,
-        ce_return_matrix[row_idx, top_idx],
-        pe_return_matrix[row_idx, top_idx],
-    )
-    trade_mask = side_mask & recipe_valid
-    returns = selected_returns[trade_mask].tolist()
-    sides = np.where(ce_mask[trade_mask], "CE", "PE").tolist()
-    recipes = chosen_recipes[trade_mask].tolist()
-    summary = _summarize_returns(returns, rows_total=rows_total, sides=sides, selected_recipes=recipes)
+    if dual_side_mode:
+        ce_trade_mask = ce_mask & recipe_valid
+        pe_trade_mask = pe_mask & recipe_valid
+        ce_returns = ce_return_matrix[row_idx, top_idx][ce_trade_mask].tolist()
+        pe_returns = pe_return_matrix[row_idx, top_idx][pe_trade_mask].tolist()
+        returns = ce_returns + pe_returns
+        sides = ["CE"] * len(ce_returns) + ["PE"] * len(pe_returns)
+        recipes = list(chosen_recipes[ce_trade_mask]) + list(chosen_recipes[pe_trade_mask])
+        summary = _summarize_returns(returns, rows_total=rows_total, sides=sides, selected_recipes=recipes)
+    else:
+        selected_returns = np.where(
+            ce_mask,
+            ce_return_matrix[row_idx, top_idx],
+            pe_return_matrix[row_idx, top_idx],
+        )
+        trade_mask = side_mask & recipe_valid
+        returns = selected_returns[trade_mask].tolist()
+        sides = np.where(ce_mask[trade_mask], "CE", "PE").tolist()
+        recipes = chosen_recipes[trade_mask].tolist()
+        summary = _summarize_returns(returns, rows_total=rows_total, sides=sides, selected_recipes=recipes)
     summary["recipe_threshold"] = _safe_float(
         (stage3_policy or {}).get("selected_threshold"),
         default=float(recipe_threshold or 0.0),
@@ -2713,6 +2753,7 @@ def _combined_policy_trade_rows(
     recipe_margin_min: Optional[float] = None,
     recipe_ids: Sequence[str],
     stage3_policy: Optional[Dict[str, Any]] = None,
+    dual_side_mode: bool = False,
 ) -> pd.DataFrame:
     resolved_stage2_policy = _coerce_stage2_policy(
         stage2_policy=stage2_policy,
@@ -2756,23 +2797,44 @@ def _combined_policy_trade_rows(
     pe_return_matrix = np.column_stack(
         [_numeric_array(merged[f"{recipe_id}__pe_net_return"], fillna=0.0) for recipe_id in ordered_recipe_ids]
     )
-    selected_returns = np.where(
-        ce_mask,
-        ce_return_matrix[row_idx, top_idx],
-        pe_return_matrix[row_idx, top_idx],
-    )
-    trade_mask = side_mask & recipe_valid
-    selected = merged.loc[trade_mask].copy()
-    if len(selected) == 0:
-        selected["selected_side"] = pd.Series(dtype=object)
-        selected["selected_recipe"] = pd.Series(dtype=object)
-        selected["selected_return"] = pd.Series(dtype=float)
-        return selected
+    if dual_side_mode:
+        ce_trade_mask = ce_mask & recipe_valid
+        pe_trade_mask = pe_mask & recipe_valid
+        ce_selected = merged.loc[ce_trade_mask].copy() if ce_trade_mask.any() else pd.DataFrame()
+        pe_selected = merged.loc[pe_trade_mask].copy() if pe_trade_mask.any() else pd.DataFrame()
+        if len(ce_selected) == 0 and len(pe_selected) == 0:
+            empty = merged.loc[[]].copy()
+            empty["selected_side"] = pd.Series(dtype=object)
+            empty["selected_recipe"] = pd.Series(dtype=object)
+            empty["selected_return"] = pd.Series(dtype=float)
+            return empty
+        if len(ce_selected):
+            ce_selected["selected_side"] = "CE"
+            ce_selected["selected_recipe"] = chosen_recipes[ce_trade_mask]
+            ce_selected["selected_return"] = ce_return_matrix[row_idx, top_idx][ce_trade_mask]
+        if len(pe_selected):
+            pe_selected["selected_side"] = "PE"
+            pe_selected["selected_recipe"] = chosen_recipes[pe_trade_mask]
+            pe_selected["selected_return"] = pe_return_matrix[row_idx, top_idx][pe_trade_mask]
+        return pd.concat([ce_selected, pe_selected], ignore_index=True)
+    else:
+        selected_returns = np.where(
+            ce_mask,
+            ce_return_matrix[row_idx, top_idx],
+            pe_return_matrix[row_idx, top_idx],
+        )
+        trade_mask = side_mask & recipe_valid
+        selected = merged.loc[trade_mask].copy()
+        if len(selected) == 0:
+            selected["selected_side"] = pd.Series(dtype=object)
+            selected["selected_recipe"] = pd.Series(dtype=object)
+            selected["selected_return"] = pd.Series(dtype=float)
+            return selected
 
-    selected["selected_side"] = np.where(ce_mask[trade_mask], "CE", "PE")
-    selected["selected_recipe"] = chosen_recipes[trade_mask]
-    selected["selected_return"] = selected_returns[trade_mask]
-    return selected
+        selected["selected_side"] = np.where(ce_mask[trade_mask], "CE", "PE")
+        selected["selected_recipe"] = chosen_recipes[trade_mask]
+        selected["selected_return"] = selected_returns[trade_mask]
+        return selected
 
 
 def select_recipe_policy(
@@ -2784,6 +2846,8 @@ def select_recipe_policy(
     stage2_policy: Dict[str, Any],
     policy_config: Dict[str, Any],
     recipe_ids: Sequence[str],
+    *,
+    dual_side_mode: bool = False,
 ) -> dict[str, Any]:
     rows = []
     for threshold in list(policy_config.get("threshold_grid") or []):
@@ -2798,6 +2862,7 @@ def select_recipe_policy(
                 recipe_threshold=float(threshold),
                 recipe_margin_min=float(margin_min),
                 recipe_ids=recipe_ids,
+                dual_side_mode=dual_side_mode,
             )
             rows.append(summary)
     if not rows:
@@ -2821,6 +2886,8 @@ def select_recipe_economic_balance_policy(
     stage2_policy: Dict[str, Any],
     policy_config: Dict[str, Any],
     recipe_ids: Sequence[str],
+    *,
+    dual_side_mode: bool = False,
 ) -> dict[str, Any]:
     rows = []
     for threshold in list(policy_config.get("threshold_grid") or []):
@@ -2836,6 +2903,7 @@ def select_recipe_economic_balance_policy(
                     recipe_threshold=float(threshold),
                     recipe_margin_min=float(margin_min),
                     recipe_ids=recipe_ids,
+                    dual_side_mode=dual_side_mode,
                 ),
                 policy_config,
             )
@@ -2862,6 +2930,8 @@ def select_recipe_fixed_baseline_guard_policy(
     stage2_policy: Dict[str, Any],
     policy_config: Dict[str, Any],
     recipe_ids: Sequence[str],
+    *,
+    dual_side_mode: bool = False,
 ) -> dict[str, Any]:
     dynamic_policy = select_recipe_economic_balance_policy(
         valid_scores,
@@ -2872,6 +2942,7 @@ def select_recipe_fixed_baseline_guard_policy(
         stage2_policy,
         policy_config,
         recipe_ids,
+        dual_side_mode=dual_side_mode,
     )
     dynamic_rows = list(dynamic_policy["validation_rows"])
     fixed_rows = [
@@ -2883,6 +2954,7 @@ def select_recipe_fixed_baseline_guard_policy(
                 stage1_threshold=float(stage1_policy["selected_threshold"]),
                 stage2_policy=stage2_policy,
                 recipe_id=str(recipe_id),
+                dual_side_mode=dual_side_mode,
             ),
             policy_config,
         )
@@ -2931,6 +3003,7 @@ def _fixed_recipe_baseline(
     pe_threshold: Optional[float] = None,
     min_edge: Optional[float] = None,
     recipe_id: str,
+    dual_side_mode: bool = False,
 ) -> dict[str, Any]:
     resolved_stage2_policy = _coerce_stage2_policy(
         stage2_policy=stage2_policy,
@@ -2950,8 +3023,14 @@ def _fixed_recipe_baseline(
     ce_mask = ce_mask & direction_available
     pe_mask = pe_mask & direction_available
     trade_mask = ce_mask | pe_mask
-    returns = np.where(ce_mask, ce_returns, pe_returns)[trade_mask].tolist()
-    sides = np.where(ce_mask[trade_mask], "CE", "PE").tolist()
+    if dual_side_mode:
+        ce_returns_selected = ce_returns[ce_mask & trade_mask].tolist()
+        pe_returns_selected = pe_returns[pe_mask & trade_mask].tolist()
+        returns = ce_returns_selected + pe_returns_selected
+        sides = ["CE"] * len(ce_returns_selected) + ["PE"] * len(pe_returns_selected)
+    else:
+        returns = np.where(ce_mask, ce_returns, pe_returns)[trade_mask].tolist()
+        sides = np.where(ce_mask[trade_mask], "CE", "PE").tolist()
     summary = _summarize_returns(
         returns,
         rows_total=len(merged),
@@ -3116,6 +3195,34 @@ def _combined_gate_result(summary: dict[str, Any], gates: dict[str, Any]) -> tup
     if float(summary.get("block_rate", 0.0)) < float(gates.get("block_rate_min", 0.0)):
         reasons.append(f"block_rate<{gates.get('block_rate_min')}")
     return (not reasons), reasons
+
+
+def _create_bypass_stage2_result(ctx: Any, stage_frames: dict[str, dict[str, pd.DataFrame]]) -> dict[str, Any]:
+    """Create a minimal stage2_result dict that signals bypass mode downstream."""
+    bypass_package = {"_bypass_stage2": True, "prediction_mode": "direction", "feature_columns": [], "models": {}}
+    dummy_path = str(ctx.output_root / "stages" / "stage2" / "bypass_placeholder.json")
+    ctx.write_json("stages/stage2/bypass_placeholder.json", {"bypass_stage2": True})
+
+    def _make_dummy_scores(frame: pd.DataFrame) -> pd.DataFrame:
+        out = frame.loc[:, KEY_COLUMNS].copy() if all(c in frame.columns for c in KEY_COLUMNS) else frame.iloc[:, :0].copy()
+        for col in KEY_COLUMNS:
+            if col not in out.columns:
+                out[col] = frame[col]
+        out["direction_up_prob"] = 0.5
+        out["direction_trade_prob"] = 1.0
+        return out
+
+    return {
+        "model_package_path": dummy_path,
+        "training_report_path": dummy_path,
+        "feature_contract_path": dummy_path,
+        "search_package": dict(bypass_package),
+        "model_package": dict(bypass_package),
+        "validation_scores": _make_dummy_scores(stage_frames["stage2"]["research_valid"]),
+        "holdout_scores": _make_dummy_scores(stage_frames["stage2"]["final_holdout"]),
+        "validation_policy_scores": _make_dummy_scores(stage_frames["stage2"]["research_valid"]),
+        "holdout_policy_scores": _make_dummy_scores(stage_frames["stage2"]["final_holdout"]),
+    }
 
 
 def _stage_component_ids(manifest: Dict[str, Any], stage_name: str) -> dict[str, str]:
@@ -3311,15 +3418,29 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         evaluation_mode="coverage_only",
     )
 
+    bypass_stage2 = bool(dict(manifest.get("training") or {}).get("bypass_stage2", False))
     stage2_is_direction_or_no_trade = _is_stage2_direction_or_no_trade(components["stage2"])
-    cv_prechecks: dict[str, Any] = {
-        "stage2_signal_check": _check_stage2_signal(
-            labeled_frames["stage2"]["full_model"],
-            label_mode="trade_gate" if stage2_is_direction_or_no_trade else "direction",
-        ),
-        "stage1_cv": None,
-        "stage2_cv": None,
-    }
+    if bypass_stage2:
+        cv_prechecks: dict[str, Any] = {
+            "stage2_signal_check": {
+                "has_signal": True,
+                "reason": "bypass_stage2",
+                "samples": int(len(labeled_frames["stage2"]["full_model"])),
+                "max_correlation": None,
+                "top_features": [],
+            },
+            "stage1_cv": None,
+            "stage2_cv": None,
+        }
+    else:
+        cv_prechecks: dict[str, Any] = {
+            "stage2_signal_check": _check_stage2_signal(
+                labeled_frames["stage2"]["full_model"],
+                label_mode="trade_gate" if stage2_is_direction_or_no_trade else "direction",
+            ),
+            "stage1_cv": None,
+            "stage2_cv": None,
+        }
     if not bool(cv_prechecks["stage2_signal_check"]["has_signal"]):
         signal_reason = str(cv_prechecks["stage2_signal_check"].get("reason") or "signal_absent")
         return _early_hold_summary(
@@ -3427,6 +3548,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         lifecycle_status="running",
         extra={"active_stage": "stage2", "last_progress_event": "stage_start", "last_progress_at_utc": stage2_started_at},
     )
+    bypass_stage2 = bool(dict(manifest.get("training") or {}).get("bypass_stage2", False))
     stage2_result = _load_reused_stage2_result(
         ctx=ctx,
         manifest=manifest,
@@ -3435,6 +3557,8 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         policy_valid_frame=stage_frames["stage2"]["research_valid"],
         policy_holdout_frame=stage_frames["stage2"]["final_holdout"],
     )
+    if stage2_result is None and bypass_stage2:
+        stage2_result = _create_bypass_stage2_result(ctx, stage_frames)
     if stage2_result is None:
         stage2_result = resolve_trainer(components["stage2"]["trainer_id"])(
             stage_name="stage2",
@@ -3465,49 +3589,57 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         stage_artifacts["stage2"]["reused_from_run_id"] = str(stage2_result["reused_from_run_id"])
         stage_artifacts["stage2"]["reused_from_run_dir"] = str(stage2_result["reused_from_run_dir"])
     ctx.append_state("stage_done", stage="stage2", completed_at_utc=stage2_completed_at)
-    stage2_diagnostics = _build_stage2_diagnostics_report(
-        ctx=ctx,
-        manifest=manifest,
-        labeled_frames=labeled_frames,
-        stage2_result=stage2_result,
-        label_filter_meta=dict(label_filtering.get("stage2") or {}),
-    )
+    if bypass_stage2:
+        stage2_diagnostics: dict[str, Any] = {"bypass_stage2": True}
+        stage2_cv_quality = {"bypass_stage2": True, "roc_auc": 0.5, "brier": 0.25}
+        stage2_direction_cv_quality = {"bypass_stage2": True, "roc_auc": 0.5, "brier": 0.25}
+    else:
+        stage2_diagnostics = _build_stage2_diagnostics_report(
+            ctx=ctx,
+            manifest=manifest,
+            labeled_frames=labeled_frames,
+            stage2_result=stage2_result,
+            label_filter_meta=dict(label_filtering.get("stage2") or {}),
+        )
+        if stage2_is_direction_or_no_trade:
+            stage2_cv_quality = _binary_quality(
+                labeled_frames["stage2"]["research_valid"]["move_label"],
+                stage2_result["validation_scores"]["direction_trade_prob"],
+            )
+            actionable_valid = pd.to_numeric(labeled_frames["stage2"]["research_valid"]["move_label"], errors="coerce").fillna(0.0) == 1.0
+            stage2_direction_cv_quality = _binary_quality(
+                pd.Series(
+                    np.where(
+                        labeled_frames["stage2"]["research_valid"].loc[actionable_valid, "direction_label"].astype(str).str.upper() == "CE",
+                        1,
+                        0,
+                    ),
+                    index=labeled_frames["stage2"]["research_valid"].loc[actionable_valid].index,
+                ),
+                stage2_result["validation_scores"].loc[actionable_valid, "direction_up_prob"],
+            )
+            cv_prechecks["stage2_direction_cv"] = stage2_direction_cv_quality
+        else:
+            stage2_cv_labels = np.where(
+                labeled_frames["stage2"]["research_valid"]["direction_label"].astype(str).str.upper() == "CE",
+                1,
+                0,
+            )
+            stage2_cv_quality = _binary_quality(
+                pd.Series(stage2_cv_labels, index=labeled_frames["stage2"]["research_valid"].index),
+                stage2_result["validation_scores"]["direction_up_prob"],
+            )
     stage2_diagnostics_path = ctx.write_json("stages/stage2/diagnostics.json", stage2_diagnostics)
     stage_artifacts["stage2"]["diagnostics_path"] = str(stage2_diagnostics_path.resolve())
     stage_artifacts["stage2"]["diagnostics_score_paths"] = dict(stage2_diagnostics.get("score_paths") or {})
-    if stage2_is_direction_or_no_trade:
-        stage2_cv_quality = _binary_quality(
-            labeled_frames["stage2"]["research_valid"]["move_label"],
-            stage2_result["validation_scores"]["direction_trade_prob"],
-        )
-        actionable_valid = pd.to_numeric(labeled_frames["stage2"]["research_valid"]["move_label"], errors="coerce").fillna(0.0) == 1.0
-        stage2_direction_cv_quality = _binary_quality(
-            pd.Series(
-                np.where(
-                    labeled_frames["stage2"]["research_valid"].loc[actionable_valid, "direction_label"].astype(str).str.upper() == "CE",
-                    1,
-                    0,
-                ),
-                index=labeled_frames["stage2"]["research_valid"].loc[actionable_valid].index,
-            ),
-            stage2_result["validation_scores"].loc[actionable_valid, "direction_up_prob"],
-        )
-        cv_prechecks["stage2_direction_cv"] = stage2_direction_cv_quality
+    if bypass_stage2:
+        stage2_cv_ok, stage2_cv_reasons = True, []
     else:
-        stage2_cv_labels = np.where(
-            labeled_frames["stage2"]["research_valid"]["direction_label"].astype(str).str.upper() == "CE",
-            1,
-            0,
+        stage2_cv_ok, stage2_cv_reasons = _stage_gate_result(
+            stage2_cv_quality,
+            dict(manifest["hard_gates"]["stage2"]),
+            prefix="stage2_cv.",
         )
-        stage2_cv_quality = _binary_quality(
-            pd.Series(stage2_cv_labels, index=labeled_frames["stage2"]["research_valid"].index),
-            stage2_result["validation_scores"]["direction_up_prob"],
-        )
-    stage2_cv_ok, stage2_cv_reasons = _stage_gate_result(
-        stage2_cv_quality,
-        dict(manifest["hard_gates"]["stage2"]),
-        prefix="stage2_cv.",
-    )
     cv_prechecks["stage2_cv"] = {
         **stage2_cv_quality,
         "gate_passed": stage2_cv_ok,
@@ -3623,10 +3755,13 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         stage2_policy,
         dict(manifest["policy"]["stage3"]),
         [recipe.recipe_id for recipe in recipe_catalog],
+        dual_side_mode=bypass_stage2,
     )
 
     stage1_holdout_quality = _binary_quality(labeled_frames["stage1"]["final_holdout"]["entry_label"], stage1_result["holdout_scores"]["entry_prob"])
-    if stage2_is_direction_or_no_trade:
+    if bypass_stage2:
+        stage2_holdout_quality = {"bypass_stage2": True, "roc_auc": 0.5, "brier": 0.25}
+    elif stage2_is_direction_or_no_trade:
         stage2_holdout_quality = _binary_quality(
             labeled_frames["stage2"]["final_holdout"]["move_label"],
             stage2_result["holdout_scores"]["direction_trade_prob"],
@@ -3645,6 +3780,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         stage2_policy=stage2_policy,
         stage3_policy=stage3_policy,
         recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
+        dual_side_mode=bypass_stage2,
     )
     combined_trade_rows = _combined_policy_trade_rows(
         stage_frames["stage3"]["final_holdout"],
@@ -3656,6 +3792,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         stage2_policy=stage2_policy,
         stage3_policy=stage3_policy,
         recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
+        dual_side_mode=bypass_stage2,
     )
     combined_trade_rows = _attach_support_context(combined_trade_rows, support_windows["final_holdout"])
     training_regime_distribution = _distribution_from_series(_regime_label_series(combined_trade_rows))
@@ -3672,6 +3809,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             stage1_threshold=float(stage1_policy["selected_threshold"]),
             stage2_policy=stage2_policy,
             recipe_id=recipe.recipe_id,
+            dual_side_mode=bypass_stage2,
         )
         for recipe in recipe_catalog
     ]

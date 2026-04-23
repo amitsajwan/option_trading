@@ -261,6 +261,29 @@ def _validate_stage1_session_filter(payload: Any, errors: List[str], *, field_pr
         )
 
 
+def _search_for_run_dir(source_run_id: str, manifest_dir: Path) -> Optional[Path]:
+    if not source_run_id:
+        return None
+    search_roots = [
+        manifest_dir / ".." / ".." / "artifacts" / "training_launches",
+        manifest_dir / ".." / ".." / "artifacts" / "research",
+    ]
+    for root in search_roots:
+        resolved = root.resolve()
+        if not resolved.exists():
+            continue
+        for child in resolved.iterdir():
+            candidate = child / "run" / "runs" / source_run_id
+            if candidate.exists():
+                return candidate
+            if child.is_dir():
+                for grandchild in child.iterdir():
+                    candidate = grandchild / "run" / "runs" / source_run_id
+                    if candidate.exists():
+                        return candidate
+    return None
+
+
 def _validate_stage1_reuse(
     payload: Any,
     errors: List[str],
@@ -276,15 +299,20 @@ def _validate_stage1_reuse(
     if not stage1_reuse:
         return None
 
+    source_run_id = str(stage1_reuse.get("source_run_id") or "").strip()
     source_run_dir = _normalize_path(stage1_reuse.get("source_run_dir"), manifest_dir=manifest_dir)
     if source_run_dir is None:
         errors.append(f"{field_prefix}.source_run_dir must be set")
     elif validate_paths and not source_run_dir.exists():
-        errors.append(f"{field_prefix}.source_run_dir not found: {source_run_dir}")
+        fallback = _search_for_run_dir(source_run_id, manifest_dir)
+        if fallback is not None:
+            source_run_dir = fallback
+        else:
+            errors.append(f"{field_prefix}.source_run_dir not found: {source_run_dir}")
 
     return {
-        "source_run_dir": str(source_run_dir) if source_run_dir is not None else None,
-        "source_run_id": str(stage1_reuse.get("source_run_id") or "").strip(),
+        "source_run_dir": source_run_dir if source_run_dir is not None else None,
+        "source_run_id": source_run_id,
     }
 
 
@@ -650,11 +678,12 @@ def _validate_grid_run_overrides(
                     "stage2_label_filter",
                     "stage2_session_filter",
                     "stage2_target_redesign",
+                    "bypass_stage2",
                 }
             )
             if unknown_training:
                 errors.append(
-                    f"{field_prefix}.training supports only search_options_by_stage, stage1_reuse, stage1_session_filter, stage2_label_filter, stage2_session_filter, and stage2_target_redesign; "
+                    f"{field_prefix}.training supports only search_options_by_stage, stage1_reuse, stage1_session_filter, stage2_label_filter, stage2_session_filter, stage2_target_redesign, and bypass_stage2; "
                     f"got unsupported keys: {unknown_training}"
                 )
             stage1_reuse = _validate_stage1_reuse(

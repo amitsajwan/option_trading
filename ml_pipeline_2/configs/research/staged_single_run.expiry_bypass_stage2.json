@@ -7,7 +7,7 @@
   },
   "outputs": {
     "artifacts_root": "../../artifacts/research",
-    "run_name": "staged_dual_recipe_expiry_direction_v1"
+    "run_name": "expiry_bypass_stage2_test_v1"
   },
   "catalog": {
     "models_by_stage": {
@@ -18,14 +18,7 @@
         "logreg_balanced"
       ],
       "stage2": [
-        "xgb_shallow",
-        "xgb_balanced",
-        "xgb_regularized",
-        "lgbm_fast",
-        "lgbm_dart",
-        "logreg_balanced",
-        "logreg_c1",
-        "logreg_c01"
+        "xgb_shallow"
       ],
       "stage3": [
         "xgb_shallow",
@@ -116,9 +109,9 @@
       },
       "stage2": {
         "hpo": {
-          "enabled": true,
+          "enabled": false,
           "strategy": "random",
-          "trials_per_model": 5,
+          "trials_per_model": 1,
           "sampler_seed": 42
         }
       },
@@ -132,7 +125,7 @@
       }
     },
     "cost_per_trade": 0.0006,
-    "bypass_stage2": false
+    "bypass_stage2": true
   },
   "policy": {
     "stage1_policy_id": "entry_threshold_v1",

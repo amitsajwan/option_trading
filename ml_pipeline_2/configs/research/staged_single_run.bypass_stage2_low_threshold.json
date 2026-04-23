@@ -7,7 +7,7 @@
   },
   "outputs": {
     "artifacts_root": "../../artifacts/research",
-    "run_name": "staged_dual_recipe_expiry_direction_v1"
+    "run_name": "expiry_bypass_stage2_low_threshold_v1"
   },
   "catalog": {
     "models_by_stage": {
@@ -18,14 +18,7 @@
         "logreg_balanced"
       ],
       "stage2": [
-        "xgb_shallow",
-        "xgb_balanced",
-        "xgb_regularized",
-        "lgbm_fast",
-        "lgbm_dart",
-        "logreg_balanced",
-        "logreg_c1",
-        "logreg_c01"
+        "xgb_shallow"
       ],
       "stage3": [
         "xgb_shallow",
@@ -116,9 +109,9 @@
       },
       "stage2": {
         "hpo": {
-          "enabled": true,
+          "enabled": false,
           "strategy": "random",
-          "trials_per_model": 5,
+          "trials_per_model": 1,
           "sampler_seed": 42
         }
       },
@@ -132,24 +125,58 @@
       }
     },
     "cost_per_trade": 0.0006,
-    "bypass_stage2": false
+    "bypass_stage2": true
   },
   "policy": {
     "stage1_policy_id": "entry_threshold_v1",
     "stage2_policy_id": "direction_gate_economic_balance_v1",
     "stage3_policy_id": "recipe_economic_balance_v1",
     "stage1": {
-      "threshold_grid": [0.45, 0.5, 0.55, 0.6]
+      "threshold_grid": [
+        0.45,
+        0.5,
+        0.55,
+        0.6
+      ]
     },
     "stage2": {
-      "trade_threshold_grid": [0.45, 0.5, 0.55, 0.6],
-      "ce_threshold_grid": [0.55, 0.6, 0.65],
-      "pe_threshold_grid": [0.55, 0.6, 0.65],
-      "min_edge_grid": [0.05, 0.1, 0.15]
+      "trade_threshold_grid": [
+        0.45,
+        0.5,
+        0.55,
+        0.6
+      ],
+      "ce_threshold_grid": [
+        0.55,
+        0.6,
+        0.65
+      ],
+      "pe_threshold_grid": [
+        0.55,
+        0.6,
+        0.65
+      ],
+      "min_edge_grid": [
+        0.05,
+        0.1,
+        0.15
+      ]
     },
     "stage3": {
-      "threshold_grid": [0.45, 0.5, 0.55, 0.6],
-      "margin_grid": [0.02, 0.05, 0.1],
+      "threshold_grid": [
+        0.2,
+        0.25,
+        0.3,
+        0.35,
+        0.4,
+        0.45
+      ],
+      "margin_grid": [
+        0.0,
+        0.01,
+        0.02,
+        0.05
+      ],
       "validation_min_trades_soft": 250,
       "side_share_min": 0.3,
       "side_share_max": 0.7,

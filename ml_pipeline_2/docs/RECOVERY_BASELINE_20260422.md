@@ -71,16 +71,50 @@ The expiry grid config hardcodes:
 ```
 This is an absolute path tied to a specific run. If that run is cleaned up, the config breaks.
 
+## Implemented Changes
+
+### 1. bypass_stage2 Pipeline Support
+
+Added a `bypass_stage2` flag in `manifest.training.bypass_stage2`. When enabled:
+- **Skips Stage 2 direction model training entirely**
+- Injects neutral dummy probabilities (`direction_up_prob=0.5`, `direction_trade_prob=1.0`)
+- **Evaluates both CE and PE trades independently** for every Stage 1 entry signal (dual-side execution)
+- Stage 3 recipe selection still runs on top of the combined trades
+- Auto-passes Stage 2 CV gate
+
+Modified files:
+- `ml_pipeline_2/src/ml_pipeline_2/staged/pipeline.py`
+  - `_score_stage2_package`: recognizes `_bypass_stage2` sentinel package
+  - `_add_upstream_probs`: injects dummy Stage 2 columns when bypassed
+  - `_evaluate_combined_policy` / `_combined_policy_trade_rows`: new `dual_side_mode` parameter that generates two trades per entry (CE + PE) instead of picking one side
+  - `select_recipe_policy` / `select_recipe_economic_balance_policy` / `select_recipe_fixed_baseline_guard_policy` / `_fixed_recipe_baseline`: threaded `dual_side_mode` through all policy evaluation paths
+  - `_create_bypass_stage2_result`: helper that builds a minimal dummy Stage 2 result with bypass-sentinel packages and dummy score DataFrames
+  - `run_staged_research`: reads `bypass_stage2` from manifest, creates dummy result when set, skips diagnostics/gates, and passes `dual_side_mode` to combined policy evaluation
+
+- `ml_pipeline_2/src/ml_pipeline_2/contracts/manifests.py`
+  - Added `bypass_stage2` to the allowed `training` keys list
+  - Added `_search_for_run_dir` helper that searches `artifacts/training_launches/*/*/run/runs/{source_run_id}` when an absolute `source_run_dir` doesn't exist, making `stage1_reuse` configs portable across machines
+
+- `ml_pipeline_2/configs/research/staged_dual_recipe.expiry_direction_v1.json`
+  - Added `"bypass_stage2": false` to make the option discoverable
+
+### 2. Config Pathing Fix
+
+`_validate_stage1_reuse` now falls back to a filesystem search under `artifacts/training_launches/` and `artifacts/research/` when the explicit `source_run_dir` is missing. This means grid configs with hardcoded absolute paths (e.g., `/home/savitasajwan03/...`) will still resolve if the run exists under the current workspace's artifact roots.
+
+## How to Test bypass_stage2
+
+Add `"bypass_stage2": true` to the `training` section of any staged manifest and launch a grid or single run. The summary will show:
+- `stage_artifacts.stage2` with `bypass_stage2: true` in diagnostics
+- Combined holdout summary with roughly 50/50 CE/PE side share (instead of degenerating to one side)
+- Trades count roughly doubles compared to single-side execution
+
 ## Next Steps
 
-1. **Run diagnostics** on `01_expiry_s2_midday`:
-   - `run_stage12_counterfactual`
-   - `run_stage12_confidence_execution`
-   - `run_stage12_confidence_execution_policy`
-   - `run_stage12_dual_side_policy`
-
-2. **Evaluate `bypass_stage2` branch.** The 3-stage stack is not adding value. Consider:
-   - Stage 1 entry → fixed recipe (e.g., L3) with dual-side execution
-   - Or Stage 1 entry → direct recipe selection without direction gating
-
-3. **Fix config pathing.** Replace absolute `source_run_dir` with relative or registry-based lookup.
+1. **Run a new grid with `bypass_stage2: true`** on the expiry or velocity manifests to see if dual-side execution passes the combined holdout gate.
+2. **If it passes**, promote `bypass_stage2` as the default for the next training campaign.
+3. **If it still fails**, the issue is either:
+   - Stage 1 entry signal is not selective enough (threshold too low)
+   - Stage 3 recipe model has no predictive power (all recipes lose money)
+   - Market regime in Aug-Oct 2024 is genuinely unfavorable
+4. Continue investigating with counterfactual / confidence-execution diagnostics on the VM once they complete.

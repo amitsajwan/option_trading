@@ -16,7 +16,7 @@ class SnapshotAccessor:
         self._sc = payload.get("session_context") if isinstance(payload.get("session_context"), dict) else {}
         self._fb = payload.get("futures_bar") if isinstance(payload.get("futures_bar"), dict) else {}
         self._fd = payload.get("futures_derived") if isinstance(payload.get("futures_derived"), dict) else {}
-        self._or = payload.get("opening_range") if isinstance(payload.get("opening_range"), dict) else {}
+        self._opening_range = payload.get("opening_range") if isinstance(payload.get("opening_range"), dict) else {}
         self._vix = payload.get("vix_context") if isinstance(payload.get("vix_context"), dict) else {}
         self._ca = payload.get("chain_aggregates") if isinstance(payload.get("chain_aggregates"), dict) else {}
         self._atm = payload.get("atm_options") if isinstance(payload.get("atm_options"), dict) else {}
@@ -230,31 +230,31 @@ class SnapshotAccessor:
 
     @property
     def orh(self) -> Optional[float]:
-        return self._f(self._or.get("orh"))
+        return self._f(self._opening_range.get("orh"))
 
     @property
     def orl(self) -> Optional[float]:
-        return self._f(self._or.get("orl"))
+        return self._f(self._opening_range.get("orl"))
 
     @property
     def or_width(self) -> Optional[float]:
-        return self._f(self._or.get("or_width"))
+        return self._f(self._opening_range.get("or_width"))
 
     @property
     def price_vs_orh(self) -> Optional[float]:
-        return self._f(self._or.get("price_vs_orh"))
+        return self._f(self._opening_range.get("price_vs_orh"))
 
     @property
     def price_vs_orl(self) -> Optional[float]:
-        return self._f(self._or.get("price_vs_orl"))
+        return self._f(self._opening_range.get("price_vs_orl"))
 
     @property
     def orh_broken(self) -> bool:
-        return self._b(self._or.get("orh_broken"))
+        return self._b(self._opening_range.get("orh_broken"))
 
     @property
     def orl_broken(self) -> bool:
-        return self._b(self._or.get("orl_broken"))
+        return self._b(self._opening_range.get("orl_broken"))
 
     @property
     def or_ready(self) -> bool:
