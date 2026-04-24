@@ -886,10 +886,21 @@
     var evalTrades = evalTradeRows.map(window.DashAPI.mapTrade);
     if (evalTrades.length > 0) {
       pageData.trades = filterTradesForDate(evalTrades, pageData.activeDate);
-      // If session summary has no trades (MongoDB snapshots incomplete), override with
-      // eval trade count so the SESSION TRADES KPI reflects reality.
       if (!pageData.overall) pageData.overall = {};
       if (!pageData.overall.trade_count) pageData.overall.trade_count = evalTrades.length;
+      // Compute win rate from eval trades if session summary doesn't have it.
+      if (pageData.overall.win_rate == null) {
+        var winners = evalTrades.filter(function (t) { return t.pnl != null && t.pnl > 0; }).length;
+        pageData.overall.win_rate = evalTrades.length > 0 ? winners / evalTrades.length : 0;
+      }
+      // Compute net PnL ratio from eval trades when session equity is absent.
+      if (!pageData.equity || pageData.equity.net_return_pct == null) {
+        var totalPnlRatio = evalTrades.reduce(function (sum, t) {
+          return sum + (t.pnl != null ? t.pnl / 100 : 0);
+        }, 0);
+        if (!pageData.equity) pageData.equity = {};
+        pageData.equity.net_return_pct = totalPnlRatio;
+      }
     }
 
     // Build chart markers from eval trades when session has none.

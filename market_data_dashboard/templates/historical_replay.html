@@ -683,6 +683,121 @@
             .status-rail { grid-template-columns: 1fr; }
             .context-strip { grid-template-columns: 1fr; }
         }
+
+        /* ── Active-run progress banner ── */
+        .run-progress-banner {
+            display: none;
+            margin-top: 14px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, rgba(13,106,120,0.09), rgba(13,106,120,0.03));
+            border: 1px solid rgba(13,106,120,0.22);
+        }
+        .run-progress-banner.visible { display: block; }
+        .run-progress-title {
+            font-weight: 800;
+            font-size: 13px;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .spinner {
+            width: 14px; height: 14px;
+            border: 2px solid rgba(13,106,120,0.25);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            flex-shrink: 0;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .run-id-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .run-id-mono {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent);
+            background: rgba(13,106,120,0.07);
+            border: 1px solid rgba(13,106,120,0.15);
+            border-radius: 8px;
+            padding: 5px 10px;
+            word-break: break-all;
+            flex: 1;
+        }
+        .copy-btn {
+            flex-shrink: 0;
+            height: 30px;
+            padding: 0 10px;
+            border-radius: 8px;
+            border: 1px solid var(--line);
+            background: rgba(255,255,255,0.8);
+            color: var(--ink);
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .copy-btn:active { opacity: 0.7; }
+        .progress-track {
+            height: 7px;
+            border-radius: 999px;
+            background: rgba(0,0,0,0.08);
+            overflow: hidden;
+            margin-bottom: 6px;
+        }
+        .progress-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--accent), #0b4f60);
+            transition: width 0.6s ease;
+            min-width: 4px;
+        }
+        .progress-meta {
+            font-size: 12px;
+            color: var(--muted);
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* ── Recent-runs table ── */
+        .runs-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .runs-table th {
+            text-align: left;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+            padding: 6px 10px;
+            font-weight: 700;
+            border-bottom: 1px solid var(--line);
+        }
+        .runs-table td {
+            padding: 9px 10px;
+            border-bottom: 1px solid rgba(21,38,58,0.05);
+            vertical-align: middle;
+        }
+        .runs-table tr.run-row { cursor: pointer; }
+        .runs-table tr.run-row:hover td { background: rgba(13,106,120,0.05); }
+        .runs-table tr.run-row.pinned td { background: rgba(13,106,120,0.09); font-weight: 600; }
+        .rid-mono {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 11px;
+            color: var(--muted);
+        }
     </style>
 </head>
 <body>

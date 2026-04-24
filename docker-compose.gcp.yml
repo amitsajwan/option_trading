@@ -30,6 +30,8 @@ services:
       MONGO_HOST: mongo
     volumes:
       - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
+      - ./market_data_dashboard/static:/app/market_data_dashboard/static:ro
+      - ./market_data_dashboard/templates:/app/market_data_dashboard/templates:ro
 
   strategy_eval_orchestrator:
     image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/strategy_eval_orchestrator:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
