@@ -110,6 +110,7 @@ class LabelRecipe:
     horizon_minutes: int
     take_profit_pct: float
     stop_loss_pct: float
+    risk_basis: str = "underlying"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -117,4 +118,5 @@ class LabelRecipe:
             "horizon_minutes": int(self.horizon_minutes),
             "take_profit_pct": float(self.take_profit_pct),
             "stop_loss_pct": float(self.stop_loss_pct),
+            "risk_basis": str(self.risk_basis),
         }

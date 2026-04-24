@@ -80,6 +80,7 @@ class PureMLConfigTests(unittest.TestCase):
                     "horizon_minutes": 15,
                     "take_profit_pct": 0.20,
                     "stop_loss_pct": 0.05,
+                    "risk_basis": "option_premium",
                 }
             ],
         }

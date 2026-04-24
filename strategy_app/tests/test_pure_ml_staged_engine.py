@@ -138,8 +138,8 @@ class PureMLStagedEngineTests(unittest.TestCase):
             "stage3": {"selected_threshold": 0.60, "selected_margin_min": 0.10},
             "runtime": {"prefilter_gate_ids": gate_ids, "block_expiry": runtime_block_expiry},
             "recipe_catalog": [
-                {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008},
-                {"recipe_id": "L1", "horizon_minutes": 15, "take_profit_pct": 0.0020, "stop_loss_pct": 0.0008},
+                {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008, "risk_basis": "underlying"},
+                {"recipe_id": "L1", "horizon_minutes": 15, "take_profit_pct": 0.0020, "stop_loss_pct": 0.0008, "risk_basis": "underlying"},
             ],
         }
         joblib.dump(bundle, model_path)
@@ -167,8 +167,10 @@ class PureMLStagedEngineTests(unittest.TestCase):
             self.assertEqual(signal.strategy_family_version, "ML_PURE_STAGED_V1")
             self.assertEqual(signal.strategy_profile_id, "ml_pure_staged_v1")
             self.assertEqual(signal.max_hold_bars, 15)
-            self.assertAlmostEqual(signal.stop_loss_pct, 0.0008, places=6)
-            self.assertAlmostEqual(signal.target_pct, 0.0025, places=6)
+            self.assertAlmostEqual(signal.stop_loss_pct, 0.0, places=6)
+            self.assertAlmostEqual(signal.target_pct, 0.0, places=6)
+            self.assertAlmostEqual(signal.underlying_stop_pct or 0.0, 0.0008, places=6)
+            self.assertAlmostEqual(signal.underlying_target_pct or 0.0, 0.0025, places=6)
             self.assertTrue(signal.trailing_enabled)
 
     def test_staged_bundle_disables_trailing_when_env_opts_out(self) -> None:

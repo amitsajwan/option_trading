@@ -44,6 +44,7 @@ class StagedRuntimeDecision:
     horizon_minutes: Optional[int] = None
     stop_loss_pct: Optional[float] = None
     target_pct: Optional[float] = None
+    risk_basis: str = "option_premium"
 
 
 @dataclass(frozen=True)
@@ -328,4 +329,5 @@ def predict_staged(
         horizon_minutes=int(recipe_meta.get("horizon_minutes")) if recipe_meta else None,
         stop_loss_pct=float(recipe_meta.get("stop_loss_pct")) if recipe_meta else None,
         target_pct=float(recipe_meta.get("take_profit_pct")) if recipe_meta else None,
+        risk_basis=str(recipe_meta.get("risk_basis") or "option_premium"),
     )

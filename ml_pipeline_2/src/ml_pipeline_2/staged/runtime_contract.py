@@ -13,6 +13,7 @@ _RECIPE_REQUIRED_FIELDS = (
     "horizon_minutes",
     "take_profit_pct",
     "stop_loss_pct",
+    "risk_basis",
 )
 
 _STAGE_POLICY_REQUIRED_FIELDS = {
@@ -35,6 +36,31 @@ def _require_stage3_selection_mode(value: object) -> str:
     return mode
 
 
+def _normalize_risk_basis(value: object, *, take_profit_pct: float, stop_loss_pct: float) -> str:
+    text = str(value or "").strip().lower()
+    if text:
+        if text not in {"underlying", "option_premium"}:
+            raise ValueError("recipe catalog risk_basis must be 'underlying' or 'option_premium'")
+        return text
+    # Backward compatibility for legacy runtime policies that omitted risk_basis.
+    if max(abs(float(take_profit_pct)), abs(float(stop_loss_pct))) <= 0.01:
+        return "underlying"
+    return "option_premium"
+
+
+def _validate_recipe_risk(row: dict[str, Any], *, idx: int) -> None:
+    risk_basis = str(row["risk_basis"])
+    take_profit_pct = float(row["take_profit_pct"])
+    stop_loss_pct = float(row["stop_loss_pct"])
+    if take_profit_pct <= 0 or stop_loss_pct <= 0:
+        raise ValueError(f"recipe catalog row[{idx}] take_profit_pct and stop_loss_pct must be > 0")
+    if risk_basis == "option_premium" and min(take_profit_pct, stop_loss_pct) < 0.01:
+        raise ValueError(
+            f"recipe catalog row[{idx}] option_premium risk_basis requires stop/take-profit >= 0.01; "
+            "use risk_basis='underlying' for base-instrument thresholds"
+        )
+
+
 def validate_recipe_catalog_payload(recipes: Iterable[Dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -42,7 +68,7 @@ def validate_recipe_catalog_payload(recipes: Iterable[Dict[str, Any]]) -> list[d
         if not isinstance(item, dict):
             raise ValueError(f"recipe catalog row[{idx}] must be an object")
         row = dict(item)
-        for field in _RECIPE_REQUIRED_FIELDS:
+        for field in _RECIPE_REQUIRED_FIELDS[:-1]:
             if field not in row:
                 raise ValueError(f"recipe catalog row[{idx}] missing {field}")
         recipe_id = str(row.get("recipe_id") or "").strip()
@@ -51,14 +77,19 @@ def validate_recipe_catalog_payload(recipes: Iterable[Dict[str, Any]]) -> list[d
         if recipe_id in seen:
             raise ValueError(f"duplicate recipe_id in recipe catalog: {recipe_id}")
         seen.add(recipe_id)
-        out.append(
-            {
-                "recipe_id": recipe_id,
-                "horizon_minutes": int(row["horizon_minutes"]),
-                "take_profit_pct": float(row["take_profit_pct"]),
-                "stop_loss_pct": float(row["stop_loss_pct"]),
-            }
+        normalized = {
+            "recipe_id": recipe_id,
+            "horizon_minutes": int(row["horizon_minutes"]),
+            "take_profit_pct": float(row["take_profit_pct"]),
+            "stop_loss_pct": float(row["stop_loss_pct"]),
+        }
+        normalized["risk_basis"] = _normalize_risk_basis(
+            row.get("risk_basis"),
+            take_profit_pct=normalized["take_profit_pct"],
+            stop_loss_pct=normalized["stop_loss_pct"],
         )
+        _validate_recipe_risk(normalized, idx=idx)
+        out.append(normalized)
     if not out:
         raise ValueError("recipe catalog must not be empty")
     return out

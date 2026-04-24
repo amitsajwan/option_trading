@@ -457,6 +457,7 @@ class PureMLEngine(StrategyEngine):
             decision=decision,
             underlying_stop_pct=self._underlying_stop_pct,
             underlying_target_pct=self._underlying_target_pct,
+            premium_risk_fallback_pct=self._stop_loss_pct,
             trailing_enabled=self._trailing_enabled,
             risk_manager=self._risk,
         )
