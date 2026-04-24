@@ -497,7 +497,16 @@ def make_mongo_db(
     uri: Optional[str] = None,
     db_name: Optional[str] = None,
 ) -> Any:
-    mongo_uri = uri or os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or "mongodb://localhost:27017"
-    db = db_name or os.getenv("MONGO_DB") or os.getenv("MONGODB_DB") or "market_data"
+    if uri:
+        mongo_uri = uri
+    elif os.getenv("MONGO_URI"):
+        mongo_uri = os.environ["MONGO_URI"]
+    elif os.getenv("MONGODB_URI"):
+        mongo_uri = os.environ["MONGODB_URI"]
+    else:
+        host = os.getenv("MONGO_HOST", "localhost")
+        port = os.getenv("MONGO_PORT", "27017")
+        mongo_uri = f"mongodb://{host}:{port}"
+    db = db_name or os.getenv("MONGO_DB") or os.getenv("MONGODB_DB") or "trading_ai"
     client: MongoClient = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
     return client[db]
