@@ -423,14 +423,12 @@
     return window.DashAPI.buildChartMarkers(rows, candles);
   }
 
-  function buildReplayChartMarkers(trades, votes, candles, fallbackMarkers) {
+  function buildReplayChartMarkers(trades, votes, candles) {
+    // Only show actual trade entry/exit markers — never signal/vote dots as fallback.
+    // Thousands of vote markers make the chart unreadable; keep the chart clean until
+    // real trade data exists.
     var enriched = [];
     if (Array.isArray(trades) && trades.length) enriched = enriched.concat(buildTradeMarkers(trades, candles));
-    else if (Array.isArray(fallbackMarkers) && fallbackMarkers.length) enriched = enriched.concat(fallbackMarkers);
-    // Only overlay vote/signal dots when there are few enough not to drown out trade markers.
-    // With thousands of signals the chart becomes unreadable; show trades-only in that case.
-    var cappedVotes = Array.isArray(votes) && votes.length <= 60 ? votes : [];
-    if (cappedVotes.length) enriched = enriched.concat(buildVoteMarkers(cappedVotes, candles));
     return enriched;
   }
 
@@ -709,7 +707,7 @@
       return;
     }
     if (!window.InteractiveChart) return;
-    var chartMarkers = buildReplayChartMarkers(d.trades, d.votes, candles, (d.chart && d.chart.markers) || []);
+    var chartMarkers = buildReplayChartMarkers(d.trades, d.votes, candles);
     el.__chart = window.InteractiveChart.mount(el, {
       candles: candles,
       markers: chartMarkers,
@@ -728,6 +726,28 @@
     _liveRunId = null;
   }
 
+  function updateLiveKpis(status, runId) {
+    // Re-render just the kpi-strip in-place so virtual time / events tick live.
+    var strip = document.querySelector('.kpi-strip');
+    if (!strip) return;
+    var liveModel = Object.assign({}, pageData, {
+      replayStatus: status,
+      currentRunId: runId || (pageData && pageData.currentRunId),
+    });
+    strip.outerHTML = C.kpiStrip(buildKpiItems(liveModel), 6);
+
+    // Highlight the day card matching current replay date.
+    var currentDate = status.current_trade_date;
+    if (currentDate) {
+      document.querySelectorAll('.day-chip').forEach(function (chip) {
+        var isActive = chip.getAttribute('data-date') === currentDate;
+        chip.style.background = isActive ? 'var(--ink)' : '';
+        chip.style.color = isActive ? 'var(--paper)' : '';
+        chip.style.border = '1px solid ' + (isActive ? 'var(--ink)' : 'var(--line-1)');
+      });
+    }
+  }
+
   function startLivePolling(runId, dateFrom) {
     stopLivePolling();
     _liveRunId = runId;
@@ -738,7 +758,10 @@
         var isRunning = status.status === 'running';
         var isDone = status.status === 'complete' || status.status === 'completed';
 
-        // Update live status indicator
+        // Tick the KPI strip so virtual time and events update every poll.
+        updateLiveKpis(status, runId);
+
+        // Update the text status badge next to the Run button.
         var statusEl = document.getElementById('replay-run-status');
         if (statusEl) {
           if (isRunning) {
@@ -750,7 +773,7 @@
           }
         }
 
-        // Advance to the current replay date whenever it changes
+        // Advance chart + trades to the current replay date whenever it changes.
         var currentDate = status.current_trade_date;
         if (currentDate && currentDate !== _liveLastDate) {
           _liveLastDate = currentDate;
@@ -759,7 +782,7 @@
 
         if (isDone) {
           stopLivePolling();
-          // Final full reload to show complete picture
+          // Final full reload to show complete picture.
           cache = null;
           loadData(dateFrom, status.end_date || pageData.rangeTo, runId).then(function (data) {
             cache = data;
@@ -768,7 +791,7 @@
           }).catch(function (err) { console.error('Final reload after replay:', err); });
         }
       }).catch(function () { /* ignore transient errors */ });
-    }, 5000);
+    }, 3000);
   }
 
   async function loadData(dateFrom, dateTo, runId) {
@@ -1071,6 +1094,8 @@
           var runId = resp.run_id;
           if (statusEl) statusEl.textContent = 'Run ' + runId.slice(0, 8) + '… queued';
           btnRun.textContent = 'Running…';
+          // Start live KPI + chart updates immediately — don't wait for loadData.
+          startLivePolling(runId, inp.dateFrom);
           pollRun(runId, statusEl, btnRun, inp.dateFrom, inp.dateTo);
         }).catch(function (err) {
           btnRun.disabled = false;
