@@ -3,86 +3,54 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import random
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 try:
     from .schemas.monitor import (
-        MonitorCandle,
         MonitorKpiItem,
         MonitorSession,
         MonitorSnapshot,
-        MonitorTrade,
     )
-    from .monitor_source import MockSource
-    from .real_source import MongoSource, make_mongo_db
+    from .real_source import LiveMongoSource, MongoSource, make_mongo_db
 except ImportError:
     from schemas.monitor import (  # type: ignore
-        MonitorCandle,
         MonitorKpiItem,
         MonitorSession,
         MonitorSnapshot,
-        MonitorTrade,
     )
-    from monitor_source import MockSource  # type: ignore
-    from real_source import MongoSource, make_mongo_db  # type: ignore
+    from real_source import LiveMongoSource, MongoSource, make_mongo_db  # type: ignore
 
 logger = logging.getLogger(__name__)
 
-_USE_REAL_DATA = os.getenv("MONITOR_USE_REAL_DATA", "1").strip().lower() not in ("0", "false", "no")
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 
-def _make_source(mode: str, date: str) -> Any:
-    """Return a session source — MongoSource for replay when real data is enabled, else MockSource."""
-    if mode == "replay" and _USE_REAL_DATA:
-        try:
-            db = make_mongo_db()
-            source = MongoSource(db=db, trade_date=date)
-            source.get_session()  # validate eagerly; raises if no data
-            return source
-        except Exception as exc:
-            logger.warning("MongoSource unavailable for %s (%s) — falling back to MockSource", date, exc)
-    seed = 42 if mode == "live" else 7
-    return MockSource(seed=seed, date=date)
+def _now_iso_ist() -> str:
+    return datetime.now(tz=_IST).isoformat()
 
+
+def _make_db() -> Any:
+    try:
+        return make_mongo_db()
+    except Exception as exc:
+        raise RuntimeError(f"MongoDB unavailable: {exc}") from exc
+
+
+# ── Session states ─────────────────────────────────────────────────────────────
 
 class _LiveSessionState:
-    """Server-side state for an active live-monitor WebSocket session."""
-
-    def __init__(self, source: MockSource) -> None:
+    def __init__(self, source: LiveMongoSource) -> None:
         self.source = source
         self.session = source.get_session()
-        self.current_idx = int(len(self.session.candles) * 0.72)
-        self.last_price = self.session.candles[self.current_idx].c
+        self.current_idx, self.last_price = source.get_latest_tick()
         self._alive = True
-        self._tick_count = 0
 
-    def tick(self) -> Dict[str, Any]:
-        self._tick_count += 1
-        if self._tick_count % 27 == 0:
-            self.advance_minute()
-        candle = self.session.candles[self.current_idx]
-        drift = (random.random() - 0.48) * 3
-        self.last_price += drift
-        candle.c = round(self.last_price, 2)
-        if self.last_price > candle.h:
-            candle.h = round(self.last_price, 2)
-        if self.last_price < candle.l:
-            candle.l = round(self.last_price, 2)
-        return {
-            "idx": self.current_idx,
-            "price": round(self.last_price, 2),
-        }
-
-    def advance_minute(self) -> None:
-        if self.current_idx < len(self.session.candles) - 1:
-            self.current_idx += 1
-            self.last_price = self.session.candles[self.current_idx].o
+    def tick(self) -> None:
+        self.current_idx, self.last_price = self.source.get_latest_tick()
 
     @property
     def alive(self) -> bool:
@@ -93,9 +61,7 @@ class _LiveSessionState:
 
 
 class _ReplaySessionState:
-    """Server-side state for an active replay-monitor WebSocket session."""
-
-    def __init__(self, source: MockSource, up_to_idx: Optional[int] = None) -> None:
+    def __init__(self, source: MongoSource, up_to_idx: Optional[int] = None) -> None:
         self.source = source
         self.session = source.get_session()
         self.up_to_idx = int(len(self.session.candles) * 0.55) if up_to_idx is None else up_to_idx
@@ -103,10 +69,9 @@ class _ReplaySessionState:
         self.speed = 4
         self._alive = True
 
-    def step(self) -> Dict[str, Any]:
+    def step(self) -> None:
         if self.is_playing and self.up_to_idx < len(self.session.candles) - 1:
             self.up_to_idx = min(len(self.session.candles) - 1, self.up_to_idx + self.speed)
-        return {"up_to_idx": self.up_to_idx}
 
     @property
     def alive(self) -> bool:
@@ -116,29 +81,33 @@ class _ReplaySessionState:
         self._alive = False
 
 
+# ── KPI builders ───────────────────────────────────────────────────────────────
+
 def _build_kpi_live(state: _LiveSessionState) -> List[MonitorKpiItem]:
     session = state.session
     visible = [t for t in session.trades if t.exitIdx <= state.current_idx]
     total_pnl = sum(t.pnlPct for t in visible)
     wins = sum(1 for t in visible if t.pnlPct > 0)
-    wr = (wins / len(visible) * 100) if visible else 0
+    wr = (wins / len(visible) * 100) if visible else 0.0
     return [
-        MonitorKpiItem(label="ENGINE", value="ML_PURE_V3", sub="stage-1 · stage-2 · policy", cls=""),
-        MonitorKpiItem(label="MARKET", value="OPEN", cls="pos", sub="regime · TREND_UP"),
+        MonitorKpiItem(label="ENGINE", value="ML_PURE_V3", sub="stage-1 · stage-2 · policy"),
+        MonitorKpiItem(label="INSTRUMENT", value=session.instrument, cls="pos", sub="live · BANKNIFTY"),
         MonitorKpiItem(
             label="SESSION P&L",
             value=f"{total_pnl:+.2f}%",
             cls="pos" if total_pnl >= 0 else "neg",
             sub=f"{len(visible)} trades · {wr:.0f}% WR",
         ),
-        MonitorKpiItem(label="OPEN", value="0", sub="positions"),
-        MonitorKpiItem(label="DATA", value="120ms", cls="pos", sub="fut · opt · vol"),
+        MonitorKpiItem(label="PRICE", value=f"{state.last_price:.2f}", sub="futures last"),
         MonitorKpiItem(
             label="CLOCK",
-            value=datetime.now(
-                tz=timezone(timedelta(hours=5, minutes=30))
-            ).strftime("%H:%M:%S IST"),
+            value=datetime.now(tz=_IST).strftime("%H:%M:%S"),
             sub="IST · Asia/Kolkata",
+        ),
+        MonitorKpiItem(
+            label="BAR",
+            value=str(state.current_idx + 1),
+            sub=f"of {len(session.candles)}",
         ),
     ]
 
@@ -148,11 +117,11 @@ def _build_kpi_replay(state: _ReplaySessionState) -> List[MonitorKpiItem]:
     visible = [t for t in session.trades if t.exitIdx <= state.up_to_idx]
     total_pnl = sum(t.pnlPct for t in visible)
     wins = sum(1 for t in visible if t.pnlPct > 0)
-    wr = (wins / len(visible) * 100) if visible else 0
+    wr = (wins / len(visible) * 100) if visible else 0.0
     pct = (state.up_to_idx + 1) / len(session.candles)
     vt_label = session.candles[state.up_to_idx].label if state.up_to_idx < len(session.candles) else "09:15"
     return [
-        MonitorKpiItem(label="VIRTUAL TIME", value=vt_label, sub=session.date, cls=""),
+        MonitorKpiItem(label="VIRTUAL TIME", value=vt_label, sub=session.date),
         MonitorKpiItem(
             label="REPLAY",
             value="RUNNING" if state.is_playing else "PAUSED",
@@ -175,16 +144,14 @@ def _build_kpi_replay(state: _ReplaySessionState) -> List[MonitorKpiItem]:
             value=f"{pct * 100:.0f}%",
             sub=f"{state.up_to_idx + 1}/{len(session.candles)} bars",
         ),
-        MonitorKpiItem(label="ENGINE", value="ML_PURE_V3", sub="run r-2026-0416-ml3"),
+        MonitorKpiItem(label="INSTRUMENT", value=session.instrument, sub=session.date),
     ]
 
 
-def _now_iso_ist() -> str:
-    return datetime.now(tz=timezone(timedelta(hours=5, minutes=30))).isoformat()
-
+# ── Router ─────────────────────────────────────────────────────────────────────
 
 class DashboardMonitorRouter:
-    """Router for the redesigned Strategy Monitor SPA."""
+    """Router for the Strategy Monitor SPA."""
 
     def __init__(self) -> None:
         router = APIRouter(tags=["monitor"])
@@ -196,34 +163,35 @@ class DashboardMonitorRouter:
         self,
         mode: str = Query("live", description="live or replay"),
         date: Optional[str] = Query(None, description="Replay date YYYY-MM-DD"),
-        up_to_idx: Optional[int] = Query(None, description="Replay position"),
+        up_to_idx: Optional[int] = Query(None, description="Replay bar index"),
     ) -> JSONResponse:
-        resolved_date = date or "2026-04-16"
-        source = _make_source(mode, resolved_date)
-        session = source.get_session()
-
+        db = _make_db()
         if mode == "live":
-            state = _LiveSessionState(source)
-            live_idx = state.current_idx
-            live_price = state.last_price
+            source = LiveMongoSource(db=db, trade_date=date)
+            state: Any = _LiveSessionState(source)
             kpi = _build_kpi_live(state)
-            up_idx = state.current_idx
+            snap = MonitorSnapshot(
+                mode="live",
+                session=state.session,
+                up_to_idx=state.current_idx,
+                live_idx=state.current_idx,
+                live_price=round(state.last_price, 2),
+                kpi_items=kpi,
+                timestamp=_now_iso_ist(),
+            )
         else:
+            source = MongoSource(db=db, trade_date=date or "2026-04-16")
             state = _ReplaySessionState(source, up_to_idx=up_to_idx)
-            live_idx = None
-            live_price = None
             kpi = _build_kpi_replay(state)
-            up_idx = state.up_to_idx
-
-        snap = MonitorSnapshot(
-            mode=mode,
-            session=session,
-            up_to_idx=up_idx,
-            live_idx=live_idx,
-            live_price=live_price,
-            kpi_items=kpi,
-            timestamp=_now_iso_ist(),
-        )
+            snap = MonitorSnapshot(
+                mode="replay",
+                session=state.session,
+                up_to_idx=state.up_to_idx,
+                live_idx=None,
+                live_price=None,
+                kpi_items=kpi,
+                timestamp=_now_iso_ist(),
+            )
         return JSONResponse(content=snap.model_dump(mode="json"))
 
     async def websocket_monitor(self, ws: WebSocket) -> None:
@@ -232,36 +200,29 @@ class DashboardMonitorRouter:
         task: Optional[asyncio.Task] = None
 
         async def _loop() -> None:
-            nonlocal state
             if state is None:
                 return
             try:
                 while state.alive:
                     if isinstance(state, _LiveSessionState):
                         state.tick()
-                        # Also advance minute every 6s of wall time (6 iterations at 1s)
-                        # We use a simple counter inside the state or just send ticks fast
-                        await ws.send_json(
-                            {
-                                "type": "tick",
-                                "mode": "live",
-                                "up_to_idx": state.current_idx,
-                                "live_idx": state.current_idx,
-                                "live_price": round(state.last_price, 2),
-                                "timestamp": _now_iso_ist(),
-                            }
-                        )
-                        await asyncio.sleep(0.22)
+                        await ws.send_json({
+                            "type": "tick",
+                            "mode": "live",
+                            "up_to_idx": state.current_idx,
+                            "live_idx": state.current_idx,
+                            "live_price": round(state.last_price, 2),
+                            "timestamp": _now_iso_ist(),
+                        })
+                        await asyncio.sleep(1.0)
                     elif isinstance(state, _ReplaySessionState):
                         state.step()
-                        await ws.send_json(
-                            {
-                                "type": "tick",
-                                "mode": "replay",
-                                "up_to_idx": state.up_to_idx,
-                                "timestamp": _now_iso_ist(),
-                            }
-                        )
+                        await ws.send_json({
+                            "type": "tick",
+                            "mode": "replay",
+                            "up_to_idx": state.up_to_idx,
+                            "timestamp": _now_iso_ist(),
+                        })
                         await asyncio.sleep(0.2)
             except Exception as exc:
                 logger.debug("Monitor WS loop ended: %s", exc)
@@ -278,8 +239,8 @@ class DashboardMonitorRouter:
                     continue
 
                 action = str(msg.get("action") or "").strip().lower()
+
                 if action == "subscribe":
-                    # Cancel prior task
                     if task is not None and not task.done():
                         task.cancel()
                         try:
@@ -288,19 +249,24 @@ class DashboardMonitorRouter:
                             pass
 
                     mode = str(msg.get("mode") or "live").strip().lower()
-                    date = str(msg.get("date") or "").strip() or None
-                    source = _make_source(mode, date or "2026-04-16")
+                    date_str = str(msg.get("date") or "").strip() or None
 
-                    if mode == "live":
-                        state = _LiveSessionState(source)
-                        kpi = _build_kpi_live(state)
-                    else:
-                        up_to = msg.get("up_to_idx")
-                        up_to_int = int(up_to) if up_to is not None else None
-                        state = _ReplaySessionState(source, up_to_idx=up_to_int)
-                        state.is_playing = bool(msg.get("playing", False))
-                        state.speed = max(1, int(msg.get("speed", 4)))
-                        kpi = _build_kpi_replay(state)
+                    try:
+                        db = _make_db()
+                        if mode == "live":
+                            src = LiveMongoSource(db=db, trade_date=date_str)
+                            state = _LiveSessionState(src)
+                            kpi = _build_kpi_live(state)
+                        else:
+                            src = MongoSource(db=db, trade_date=date_str or "2026-04-16")
+                            up_to = msg.get("up_to_idx")
+                            state = _ReplaySessionState(src, up_to_idx=int(up_to) if up_to is not None else None)
+                            state.is_playing = bool(msg.get("playing", False))
+                            state.speed = max(1, int(msg.get("speed", 4)))
+                            kpi = _build_kpi_replay(state)
+                    except Exception as exc:
+                        await ws.send_json({"type": "error", "message": str(exc)})
+                        continue
 
                     snap = MonitorSnapshot(
                         mode=mode,
@@ -322,16 +288,14 @@ class DashboardMonitorRouter:
                         state.speed = max(1, int(msg["speed"]))
                     if "seek" in msg:
                         state.up_to_idx = max(0, min(len(state.session.candles) - 1, int(msg["seek"])))
-                    await ws.send_json(
-                        {
-                            "type": "state",
-                            "mode": "replay",
-                            "up_to_idx": state.up_to_idx,
-                            "is_playing": state.is_playing,
-                            "speed": state.speed,
-                            "timestamp": _now_iso_ist(),
-                        }
-                    )
+                    await ws.send_json({
+                        "type": "state",
+                        "mode": "replay",
+                        "up_to_idx": state.up_to_idx,
+                        "is_playing": state.is_playing,
+                        "speed": state.speed,
+                        "timestamp": _now_iso_ist(),
+                    })
                     continue
 
                 if action == "ping":
