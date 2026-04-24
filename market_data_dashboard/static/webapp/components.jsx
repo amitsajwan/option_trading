@@ -261,7 +261,7 @@ function DecisionGrid({ signals, selectedId, onSelect }) {
 }
 
 // ── DECISION DETAIL (probabilities) ──────────────────────────────────────
-function DecisionDetail({ sig, onClose, expanded, setExpanded }) {
+function DecisionDetail({ trade, sig, onClose, expanded, setExpanded }) {
   if (!sig) {
     return (
       <div className="muted" style={{ padding: '22px 14px', textAlign: 'center', fontSize: 12 }}>
@@ -278,6 +278,12 @@ function DecisionDetail({ sig, onClose, expanded, setExpanded }) {
     { k: 'recipe_prob', v: m.recipe_prob, cls: '' },
     { k: 'recipe_margin', v: m.recipe_margin, cls: '' },
   ];
+  const riskRows = trade ? [
+    { k: 'stop_loss_pct', v: trade.stopLossPct },
+    { k: 'target_pct', v: trade.targetPct },
+    { k: 'max_hold_bars', v: trade.maxHoldBars },
+    { k: 'stop_price', v: trade.stopPrice },
+  ].filter(x => x.v != null && x.v !== '') : [];
   return (
     <>
       <div className="decision-head">
@@ -296,6 +302,42 @@ function DecisionDetail({ sig, onClose, expanded, setExpanded }) {
         </button>
       </div>
       <div className="panel-body">
+        {trade && (
+          <>
+            <div className="rowx" style={{ marginBottom: 8 }}>
+              <span className="muted tiny">Entry logic</span>
+              <span className="mono tiny" style={{ color: 'var(--ink)' }}>{trade.entryReason || sig.reason}</span>
+            </div>
+            {(trade.entryDetail || sig.detail) && (
+              <div className="mono tiny" style={{ color: 'var(--ink-3)', marginBottom: 10, lineHeight: 1.5 }}>
+                {trade.entryDetail || sig.detail}
+              </div>
+            )}
+            <div className="rowx" style={{ marginBottom: 8 }}>
+              <span className="muted tiny">Exit logic</span>
+              <span className="mono tiny" style={{ color: trade.exitReason === 'TARGET_HIT' ? 'var(--pos)' : 'var(--neg)' }}>
+                {trade.exitReason || '--'}
+              </span>
+            </div>
+            {trade.exitDetail && (
+              <div className="mono tiny" style={{ color: 'var(--ink-3)', marginBottom: 10, lineHeight: 1.5 }}>
+                {trade.exitDetail}
+              </div>
+            )}
+            {!!riskRows.length && (
+              <div style={{ marginBottom: 12 }}>
+                {riskRows.map(r => (
+                  <div className="rowx" key={r.k} style={{ marginBottom: 4 }}>
+                    <span className="muted tiny">{r.k}</span>
+                    <span className="mono tiny" style={{ color: 'var(--ink)' }}>
+                      {typeof r.v === 'number' && r.k.indexOf('_pct') >= 0 ? (r.v * 100).toFixed(2) + '%' : String(r.v)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
         <div className="rowx" style={{ marginBottom: 10 }}>
           <span className="muted tiny">Confidence</span>
           <span className="mono" style={{ fontSize: 15, color: 'var(--ink)' }}>{(sig.conf * 100).toFixed(1)}%</span>
@@ -303,6 +345,11 @@ function DecisionDetail({ sig, onClose, expanded, setExpanded }) {
         <div className="prob-bar" style={{ marginBottom: 14 }}>
           <span style={{ width: (sig.conf * 100) + '%' }} />
         </div>
+        {!trade && sig.detail && (
+          <div className="mono tiny" style={{ color: 'var(--ink-3)', marginBottom: 14, lineHeight: 1.5 }}>
+            {sig.detail}
+          </div>
+        )}
         {expanded && probs.map(p => (
           <div className="prob-row" key={p.k}>
             <span className="k">{p.k}</span>

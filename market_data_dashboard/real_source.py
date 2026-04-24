@@ -156,6 +156,10 @@ def _option_dir_to_bias(raw: str) -> str:
     return "LONG"
 
 
+def _doc_reason_detail(doc: Dict[str, Any], payload_signal: Dict[str, Any]) -> str:
+    return str(doc.get("reason") or payload_signal.get("reason") or "").strip()
+
+
 def _vote_to_signal(
     doc: Dict[str, Any],
     candle_ts_sorted: List[int],
@@ -224,7 +228,76 @@ def _vote_to_signal(
         conf=round(conf, 4),
         fired=fired,
         reason=reason_code or "UNKNOWN",
+        detail=_doc_reason_detail(doc, payload_signal),
         metrics=metrics,
+        regime=regime or "UNKNOWN",
+    )
+
+
+def _trade_signal_to_signal(
+    doc: Dict[str, Any],
+    candle_ts_sorted: List[int],
+) -> Optional[MonitorSignal]:
+    payload = doc.get("payload") or {}
+    payload_signal = (payload.get("signal") or {}) if isinstance(payload, dict) else {}
+    if not isinstance(payload_signal, dict):
+        payload_signal = {}
+
+    signal_type = str(doc.get("signal_type") or payload_signal.get("signal_type") or "").strip().upper()
+    raw_dir = str(doc.get("direction") or payload_signal.get("direction") or "").strip().upper()
+    if signal_type == "EXIT" or raw_dir in ("", "AVOID", "EXIT"):
+        return None
+
+    raw_ts = doc.get("timestamp") or payload_signal.get("timestamp")
+    ts = _ts_ms(raw_ts)
+    if ts is None:
+        return None
+
+    idx = _nearest_candle_idx(candle_ts_sorted, ts)
+    direction = _option_dir_to_bias(raw_dir)
+    regime = str(doc.get("regime") or payload_signal.get("regime") or "UNKNOWN").strip()
+    conf = max(0.0, min(1.0, _safe_float(
+        doc.get("confidence") if doc.get("confidence") is not None else payload_signal.get("confidence"),
+        fallback=0.5,
+    ) or 0.5))
+    reason_code = str(
+        doc.get("decision_reason_code") or payload_signal.get("decision_reason_code") or signal_type or "UNKNOWN"
+    ).strip()
+    strat = str(
+        doc.get("entry_strategy_name")
+        or payload_signal.get("entry_strategy_name")
+        or doc.get("strategy")
+        or payload_signal.get("strategy")
+        or "unknown"
+    ).strip()
+
+    def _p(key: str, default: float = 0.5) -> float:
+        v = _safe_float(doc.get(key) if doc.get(key) is not None else (
+            (doc.get("decision_metrics") or {}).get(key) if isinstance(doc.get("decision_metrics"), dict) else None
+        ), default)
+        return max(0.0, min(1.0, v or default))
+
+    return MonitorSignal(
+        t=ts,
+        idx=idx,
+        strat=strat or "unknown",
+        dir=direction,
+        conf=round(conf, 4),
+        fired=signal_type == "ENTRY",
+        reason=reason_code or "UNKNOWN",
+        detail=_doc_reason_detail(doc, payload_signal),
+        metrics=MonitorSignalMetrics(
+            entry_prob=_p("ml_entry_prob"),
+            trade_prob=_p("ml_entry_prob"),
+            up_prob=_p("ml_direction_up_prob"),
+            ce_prob=_p("ml_ce_prob"),
+            pe_prob=_p("ml_pe_prob"),
+            recipe_prob=_p("ml_recipe_prob"),
+            recipe_margin=max(0.0, min(1.0, _safe_float(
+                doc.get("ml_recipe_margin") if doc.get("ml_recipe_margin") is not None else
+                (doc.get("decision_metrics") or {}).get("ml_recipe_margin"), 0.0
+            ) or 0.0)),
+        ),
         regime=regime or "UNKNOWN",
     )
 
@@ -266,6 +339,7 @@ def _position_to_trade(
         signal = MonitorSignal(
             t=entry_ts, idx=entry_idx, strat=strat or "unknown", dir=direction,
             conf=0.5, fired=True, reason="ENTRY_MET",
+            detail="Synthetic fallback built from position lifecycle because no entry vote/signal row was linked.",
             metrics=MonitorSignalMetrics(
                 entry_prob=0.5, trade_prob=0.5, up_prob=0.5,
                 ce_prob=0.5, pe_prob=0.5, recipe_prob=0.5, recipe_margin=0.0,
@@ -287,6 +361,14 @@ def _position_to_trade(
         pnlPct=round(pnl_pct, 2),
         hold=_fmt_hold(entry_ts, exit_ts),
         signal=signal,
+        entryReason=signal.reason,
+        entryDetail=signal.detail,
+        exitReason=str(close_pos.get("exit_reason") or close_doc.get("exit_reason") or "").strip(),
+        exitDetail=str(close_pos.get("reason") or close_doc.get("reason") or "").strip(),
+        stopLossPct=_safe_float(open_pos.get("stop_loss_pct"), fallback=None),
+        targetPct=_safe_float(open_pos.get("target_pct"), fallback=None),
+        maxHoldBars=int(open_pos.get("max_hold_bars")) if open_pos.get("max_hold_bars") is not None else None,
+        stopPrice=_safe_float(close_pos.get("stop_price"), fallback=_safe_float(open_pos.get("stop_price"), fallback=None)),
     )
 
 
@@ -297,6 +379,7 @@ def _build_session(
     trade_date: str,
     coll_snapshots: str,
     coll_votes: str,
+    coll_signals: str,
     coll_positions: str,
 ) -> MonitorSession:
     date_q: Dict[str, Any] = {"trade_date_ist": trade_date}
@@ -354,6 +437,36 @@ def _build_session(
         sid = str(doc.get("signal_id") or "").strip()
         if sid:
             signal_by_id[sid] = sig
+
+    if not signals and coll_signals in db.list_collection_names():
+        signal_proj = {
+            "_id": 0,
+            "signal_id": 1,
+            "timestamp": 1,
+            "signal_type": 1,
+            "direction": 1,
+            "confidence": 1,
+            "regime": 1,
+            "reason": 1,
+            "decision_reason_code": 1,
+            "decision_metrics": 1,
+            "ml_entry_prob": 1,
+            "ml_direction_up_prob": 1,
+            "ml_ce_prob": 1,
+            "ml_pe_prob": 1,
+            "ml_recipe_prob": 1,
+            "ml_recipe_margin": 1,
+            "entry_strategy_name": 1,
+            "payload.signal": 1,
+        }
+        for doc in db[coll_signals].find(date_q, signal_proj).sort("timestamp", ASCENDING):
+            sig = _trade_signal_to_signal(doc, candle_ts_sorted)
+            if sig is None:
+                continue
+            signals.append(sig)
+            sid = str(doc.get("signal_id") or ((doc.get("payload") or {}).get("signal") or {}).get("signal_id") or "").strip()
+            if sid:
+                signal_by_id[sid] = sig
 
     pos_proj = {
         "_id": 0,
@@ -436,6 +549,7 @@ class MongoSource:
 
     COLL_SNAPSHOTS = os.getenv("MONGO_COLL_SNAPSHOTS_HISTORICAL", "phase1_market_snapshots_historical")
     COLL_VOTES = os.getenv("MONGO_COLL_STRATEGY_VOTES_HISTORICAL", "strategy_votes_historical")
+    COLL_SIGNALS = os.getenv("MONGO_COLL_TRADE_SIGNALS_HISTORICAL", "trade_signals_historical")
     COLL_POSITIONS = os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL", "strategy_positions_historical")
 
     def __init__(self, db: Any, trade_date: str) -> None:
@@ -447,7 +561,7 @@ class MongoSource:
         if self._session is None:
             self._session = _build_session(
                 self._db, self._trade_date,
-                self.COLL_SNAPSHOTS, self.COLL_VOTES, self.COLL_POSITIONS,
+                self.COLL_SNAPSHOTS, self.COLL_VOTES, self.COLL_SIGNALS, self.COLL_POSITIONS,
             )
         return self._session
 
@@ -457,6 +571,7 @@ class LiveMongoSource:
 
     COLL_SNAPSHOTS = os.getenv("MONGO_COLL_SNAPSHOTS", "phase1_market_snapshots")
     COLL_VOTES = os.getenv("MONGO_COLL_STRATEGY_VOTES", "strategy_votes")
+    COLL_SIGNALS = os.getenv("MONGO_COLL_TRADE_SIGNALS", "trade_signals")
     COLL_POSITIONS = os.getenv("MONGO_COLL_STRATEGY_POSITIONS", "strategy_positions")
 
     def __init__(self, db: Any, trade_date: Optional[str] = None) -> None:
@@ -469,7 +584,7 @@ class LiveMongoSource:
         if self._session is None:
             self._session = _build_session(
                 self._db, self._trade_date,
-                self.COLL_SNAPSHOTS, self.COLL_VOTES, self.COLL_POSITIONS,
+                self.COLL_SNAPSHOTS, self.COLL_VOTES, self.COLL_SIGNALS, self.COLL_POSITIONS,
             )
             self._candle_ts_sorted = [c.t for c in self._session.candles]
         return self._session

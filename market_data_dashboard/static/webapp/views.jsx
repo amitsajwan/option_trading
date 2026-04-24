@@ -76,7 +76,7 @@ function StrategyMonitor(props) {
             <div className="panel-title">Decision</div>
             <span className="count">{signals.length} signals</span>
           </div>
-          <DecisionDetail sig={activeSignal} expanded={detailExpanded} setExpanded={setDetailExpanded} />
+          <DecisionDetail trade={selectedTrade} sig={activeSignal} expanded={detailExpanded} setExpanded={setDetailExpanded} />
         </div>
       </div>
 

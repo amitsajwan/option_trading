@@ -22,6 +22,7 @@ class MonitorSignal(BaseModel):
     conf: float = Field(..., ge=0.0, le=1.0)
     fired: bool
     reason: str
+    detail: str = ""
     metrics: MonitorSignalMetrics
     regime: str
 
@@ -40,6 +41,14 @@ class MonitorTrade(BaseModel):
     pnlPct: float
     hold: str
     signal: MonitorSignal
+    entryReason: str = ""
+    entryDetail: str = ""
+    exitReason: str = ""
+    exitDetail: str = ""
+    stopLossPct: Optional[float] = None
+    targetPct: Optional[float] = None
+    maxHoldBars: Optional[int] = None
+    stopPrice: Optional[float] = None
 
 
 class MonitorAlert(BaseModel):
