@@ -310,6 +310,11 @@ def predict_staged(
     stage3_policy = dict(policy["stage3"])
     recipe_threshold = float(stage3_policy["selected_threshold"])
     recipe_margin_min = float(stage3_policy["selected_margin_min"])
+    logger.warning(
+        f"[RECIPE_SELECTION] top={top_recipe} prob={top_prob:.4f} margin={top_prob - second_prob:.4f} "
+        f"threshold={recipe_threshold:.4f} margin_min={recipe_margin_min:.4f} "
+        f"all_scores={[(r, round(p, 4)) for r, p in recipe_scores]}"
+    )
     if (not bypass_deterministic_gates) and float(top_prob) < recipe_threshold:
         return StagedRuntimeDecision(action="HOLD", reason="recipe_below_threshold", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, recipe_id=str(top_recipe), recipe_prob=float(top_prob))
     if (not bypass_deterministic_gates) and float(top_prob - second_prob) < recipe_margin_min:
