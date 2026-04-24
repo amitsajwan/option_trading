@@ -1562,11 +1562,18 @@ _live_strategy_monitor_service = (
     if (LiveStrategyMonitorService is not None and _strategy_eval_service is not None)
     else None
 )
-_historical_replay_monitor_service = (
-    HistoricalReplayMonitorService(_strategy_eval_service)
-    if HistoricalReplayMonitorService is not None
-    else None
-)
+try:
+    _historical_replay_monitor_service = (
+        HistoricalReplayMonitorService(_strategy_eval_service)
+        if HistoricalReplayMonitorService is not None
+        else None
+    )
+except Exception as _exc:
+    import logging as _logging
+    _logging.getLogger(__name__).exception(
+        "Failed to initialise HistoricalReplayMonitorService — historical replay will be unavailable: %s", _exc
+    )
+    _historical_replay_monitor_service = None
 
 
 class _MongoVelocitySnapshotProvider:

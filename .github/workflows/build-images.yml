@@ -2,7 +2,7 @@ name: Build and push images
 
 on:
   push:
-    branches: [main]
+    branches: [main, chore/ml-pipeline-ubuntu-gcp-runbook]
     tags: ["v*"]
   pull_request:
     branches: [main]   # build only, no push on PRs
@@ -107,8 +107,9 @@ jobs:
 
           TAGS="${REPO}/${SERVICE}:${SHORT_SHA}"
 
+          DEFAULT_BRANCHES="main chore/ml-pipeline-ubuntu-gcp-runbook"
           if [ "${EVENT}" = "push" ]; then
-            if [ "${REF_TYPE}" = "branch" ] && [ "${REF_NAME}" = "main" ]; then
+            if [ "${REF_TYPE}" = "branch" ] && echo "${DEFAULT_BRANCHES}" | grep -qw "${REF_NAME}"; then
               TAGS="${TAGS},${REPO}/${SERVICE}:latest"
             fi
             if [ "${REF_TYPE}" = "tag" ]; then

@@ -277,11 +277,14 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
         return super().load_session_underlying_chart(date_ist=date_ist, instrument=instrument)
 
     def get_historical_strategy_session(self, **kwargs: Any) -> dict[str, Any]:
-        payload = self.get_strategy_session(**kwargs)
+        run_id = str(kwargs.get("run_id") or "").strip() or None
+        # The parent get_strategy_session may be from an older image that
+        # does not accept run_id, so we filter it out before calling.
+        session_kwargs = {k: v for k, v in kwargs.items() if k != "run_id"}
+        payload = self.get_strategy_session(**session_kwargs)
         session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
         instrument = session.get("instrument") if isinstance(session, dict) else None
         date_ist = session.get("date_ist") if isinstance(session, dict) else None
-        run_id = str(kwargs.get("run_id") or "").strip() or None
         payload["replay_status"] = self.get_replay_status(date=date_ist, instrument=instrument)
         payload["active_run_id"] = run_id
         payload["mode"] = "historical"
