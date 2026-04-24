@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 from typing import Any, Optional
@@ -9,6 +10,8 @@ from typing import Any, Optional
 from strategy_app.contracts import Direction, SignalType, TradeSignal
 from strategy_app.engines.snapshot_accessor import SnapshotAccessor
 from strategy_app.risk.manager import RiskManager
+
+logger = logging.getLogger(__name__)
 
 
 def build_ml_entry_signal(
@@ -45,6 +48,14 @@ def build_ml_entry_signal(
         signal_stop_loss_pct = raw_stop_loss_pct or 0.20
         signal_target_pct = raw_target_pct or 0.80
         sizing_stop_loss_pct = signal_stop_loss_pct
+    # INVESTIGATION LOG: Trace L6 signal creation
+    if str(decision.recipe_id) == "L6":
+        logger.warning(
+            f"[SIGNAL_BUILDER_TRACE] recipe=L6 risk_basis={risk_basis!r} "
+            f"signal_stop_loss_pct={signal_stop_loss_pct:.6f} signal_target_pct={signal_target_pct:.6f} "
+            f"underlying_stop_pct={underlying_stop_pct} underlying_target_pct={underlying_target_pct} "
+            f"premium={premium:.2f}"
+        )
     max_hold_bars = int(decision.horizon_minutes or 15)
     confidence = float(max(decision.ce_prob, decision.pe_prob))
     lots = risk_manager.compute_lots(

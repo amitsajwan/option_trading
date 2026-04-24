@@ -326,6 +326,13 @@ def predict_staged(
         risk_basis = "underlying"
     else:
         risk_basis = "option_premium"
+    # INVESTIGATION LOG: Trace L6 decision creation
+    if str(top_recipe) == "L6":
+        logger.warning(
+            f"[RISK_BASIS_TRACE] recipe=L6 raw_stop={raw_stop:.6f} raw_target={raw_target:.6f} "
+            f"explicit_basis={explicit_basis!r} risk_basis={risk_basis!r} "
+            f"recipe_meta_keys={list(recipe_meta.keys())}"
+        )
     return StagedRuntimeDecision(
         action=("BUY_CE" if direction == "CE" else "BUY_PE"),
         reason="staged_entry_ready",

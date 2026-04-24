@@ -87,24 +87,44 @@ class PositionTracker:
         current_futures_price = snap.fut_close
 
         exit_reason: Optional[ExitReason] = None
+        exit_trigger = None
         if forced_exit_reason is not None:
             exit_reason = forced_exit_reason
+            exit_trigger = "forced"
         elif risk.daily_loss_breached or risk.weekly_loss_breached:
             exit_reason = ExitReason.RISK_BREACH
+            exit_trigger = "risk_breach"
         elif self._minute_of_day(snap) >= HARD_CLOSE_MINUTE:
             exit_reason = ExitReason.TIME_STOP
+            exit_trigger = "hard_close"
         elif position.underlying_stop_pct is not None and self._is_underlying_stop_hit(position, current_futures_price):
             exit_reason = ExitReason.STOP_LOSS
+            exit_trigger = "underlying_stop"
         elif self._is_stop_hit(position, current_premium):
             exit_reason = self._resolve_stop_exit_reason(position)
+            exit_trigger = "premium_stop"
         elif position.underlying_target_pct is not None and self._is_underlying_target_hit(position, current_futures_price):
             exit_reason = ExitReason.TARGET_HIT
+            exit_trigger = "underlying_target"
         elif position.target_pct > 0 and position.pnl_pct >= position.target_pct:
             exit_reason = ExitReason.TARGET_HIT
+            exit_trigger = "premium_target"
         elif position.max_hold_bars is not None and position.bars_held >= int(position.max_hold_bars):
             exit_reason = ExitReason.TIME_STOP
+            exit_trigger = "max_hold"
         elif self._minute_of_day(snap) >= SOFT_CLOSE_MINUTE:
             exit_reason = ExitReason.TIME_STOP
+            exit_trigger = "soft_close"
+
+        # INVESTIGATION LOG: Trace L6 exits
+        if exit_reason is not None and position.underlying_stop_pct is not None:
+            logger.warning(
+                f"[TRACKER_EXIT_TRACE] exit_trigger={exit_trigger} exit_reason={exit_reason.value} "
+                f"bars_held={position.bars_held} pnl_pct={position.pnl_pct:.4f} "
+                f"underlying_stop_pct={position.underlying_stop_pct} entry_futures_price={position.entry_futures_price} "
+                f"current_futures_price={current_futures_price} current_premium={current_premium} "
+                f"stop_price={position.stop_price}"
+            )
 
         if exit_reason is None:
             return None
