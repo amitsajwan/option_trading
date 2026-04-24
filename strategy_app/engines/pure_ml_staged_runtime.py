@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -7,6 +8,8 @@ from typing import Any, Optional
 import joblib
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from snapshot_app.core.stage_views import project_stage_views, project_stage_views_v2
 
