@@ -460,34 +460,14 @@
   function chartHoverTooltip(ctx) {
     var candle = ctx && ctx.candle ? ctx.candle : null;
     if (!candle) return '';
-    var nearestVote = nearestVoteForTimestamp(candle.timestamp);
-    var decisionBlock = '';
-    if (nearestVote) {
-      var meta = nearestVote.meta || {};
-      var metrics = meta.decision_metrics && typeof meta.decision_metrics === 'object' ? meta.decision_metrics : {};
-      var action = String(meta.signal_type || (nearestVote.fired ? 'ENTRY' : 'HOLD') || '').toUpperCase() || '--';
-      var state = nearestVote.fired ? 'fired' : (meta.acted_on === false ? 'rejected' : 'held');
-      decisionBlock =
-        '<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(185,194,204,0.25)">' +
-          '<div style="font-weight:600;color:#fff">Decision @ ' + C.esc(nearestVote.t || '--') + '</div>' +
-          '<div style="display:grid; grid-template-columns:auto auto; gap:2px 10px; margin-top:4px; color:#B9C2CC">' +
-            '<span>Action</span><span style="color:#fff; text-align:right">' + C.esc(action + ' ' + (nearestVote.dir || '')) + '</span>' +
-            '<span>State</span><span style="color:#fff; text-align:right">' + C.esc(state) + '</span>' +
-            '<span>Reason</span><span style="color:#fff; text-align:right">' + C.esc(meta.decision_reason_code || meta.policy_reason || '--') + '</span>' +
-            '<span>Regime</span><span style="color:#fff; text-align:right">' + C.esc(meta.regime || '--') + '</span>' +
-            '<span>Entry prob</span><span style="color:#fff; text-align:right">' + C.esc(fmtProb(metrics.entry_prob, 1)) + '</span>' +
-            '<span>Trade prob</span><span style="color:#fff; text-align:right">' + C.esc(fmtProb(metrics.direction_trade_prob, 1)) + '</span>' +
-          '</div>' +
-        '</div>';
-    }
     return '<div style="font-weight:600; color:#fff">' + C.esc(candle.label || '--') + '</div>' +
       '<div style="display:grid; grid-template-columns:auto auto; gap:2px 10px; margin-top:4px; color:#B9C2CC">' +
-        '<span>fut_open</span><span style="color:#fff; text-align:right">' + C.esc(Number(candle.o).toFixed(2)) + '</span>' +
-        '<span>fut_high</span><span style="color:#fff; text-align:right">' + C.esc(Number(candle.h).toFixed(2)) + '</span>' +
-        '<span>fut_low</span><span style="color:#fff; text-align:right">' + C.esc(Number(candle.l).toFixed(2)) + '</span>' +
-        '<span>fut_close</span><span style="color:#fff; text-align:right">' + C.esc(Number(candle.c).toFixed(2)) + '</span>' +
-        '<span>fut_volume</span><span style="color:#fff; text-align:right">' + C.esc(String(Number(candle.v).toLocaleString())) + '</span>' +
-      '</div>' + decisionBlock;
+        '<span>open</span><span style="color:#fff; text-align:right">'   + C.esc(Number(candle.o).toFixed(2)) + '</span>' +
+        '<span>high</span><span style="color:#fff; text-align:right">'   + C.esc(Number(candle.h).toFixed(2)) + '</span>' +
+        '<span>low</span><span style="color:#fff; text-align:right">'    + C.esc(Number(candle.l).toFixed(2)) + '</span>' +
+        '<span>close</span><span style="color:#fff; text-align:right">'  + C.esc(Number(candle.c).toFixed(2)) + '</span>' +
+        '<span>volume</span><span style="color:#fff; text-align:right">' + C.esc(String(Number(candle.v).toLocaleString())) + '</span>' +
+      '</div>';
   }
 
   function selectAnalysisFromMarker(marker) {
@@ -626,7 +606,7 @@
               '<span><span style="display:inline-block;width:10px;height:2px;background:var(--ink);vertical-align:middle"></span> Session close</span>' +
               '<span style="color:var(--pos)">Entry marker</span>' +
               '<span style="color:var(--neg)">Exit marker</span>' +
-              '<span>' + Number((data.overall && data.overall.trade_count) || data.trades.length || 0) + ' trades - run <span class="mono">' + C.esc(runId) + '</span></span>' +
+              '<span><span id="hr-chart-trade-count">' + Number((data.overall && data.overall.trade_count) || data.trades.length || 0) + '</span> trades - run <span class="mono">' + C.esc(runId) + '</span></span>' +
             '</div>' +
           '</div>' +
         '</div>' +

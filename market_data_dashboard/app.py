@@ -8,7 +8,7 @@ completely decoupled from engine/trading functionality.
 
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
@@ -121,6 +121,11 @@ except ImportError:
         from velocity_testing_routes import DashboardVelocityTestingRouter  # type: ignore
     except ImportError:
         DashboardVelocityTestingRouter = None  # type: ignore
+
+try:
+    from .monitor_ws import DashboardMonitorRouter
+except ImportError:
+    from monitor_ws import DashboardMonitorRouter  # type: ignore
 
 try:
     from .velocity_testing_service import VelocityTestingService
@@ -1779,6 +1784,10 @@ dashboard_root = Path(__file__).resolve().parent
 static_dir = dashboard_root / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+webapp_dir = dashboard_root / "static" / "webapp"
+if webapp_dir.exists():
+    app.mount("/app", StaticFiles(directory=str(webapp_dir), html=True), name="webapp")
 
 templates_dir = dashboard_root / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
@@ -3993,6 +4002,9 @@ _operator_routes = DashboardOperatorRouter(
     now_iso_ist=_now_iso_ist,
 )
 app.include_router(_operator_routes.router)
+
+_monitor_routes = DashboardMonitorRouter()
+app.include_router(_monitor_routes.router)
 
 _historical_replay_routes = DashboardHistoricalReplayRouter(
     templates=templates,
