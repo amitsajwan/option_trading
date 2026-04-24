@@ -427,7 +427,10 @@
     var enriched = [];
     if (Array.isArray(trades) && trades.length) enriched = enriched.concat(buildTradeMarkers(trades, candles));
     else if (Array.isArray(fallbackMarkers) && fallbackMarkers.length) enriched = enriched.concat(fallbackMarkers);
-    if (Array.isArray(votes) && votes.length) enriched = enriched.concat(buildVoteMarkers(votes, candles));
+    // Only overlay vote/signal dots when there are few enough not to drown out trade markers.
+    // With thousands of signals the chart becomes unreadable; show trades-only in that case.
+    var cappedVotes = Array.isArray(votes) && votes.length <= 60 ? votes : [];
+    if (cappedVotes.length) enriched = enriched.concat(buildVoteMarkers(cappedVotes, candles));
     return enriched;
   }
 
@@ -841,6 +844,9 @@
     pageData.replayStatus = replayStatus;
     pageData.rangeFrom = rangeFrom;
     pageData.rangeTo = rangeTo;
+    // Ensure currentRunId is always set — sessionToPageData sets it from active_run_id
+    // but resolvedRunId (chosen above) is authoritative when the session field is missing.
+    if (!pageData.currentRunId && resolvedRunId) pageData.currentRunId = resolvedRunId;
     pageData.replayStatus = Object.assign({}, replayStatus, {
       start_date: rangeFrom,
       end_date: rangeTo,
@@ -857,6 +863,10 @@
     var evalTrades = evalTradeRows.map(window.DashAPI.mapTrade);
     if (evalTrades.length > 0) {
       pageData.trades = filterTradesForDate(evalTrades, pageData.activeDate);
+      // If session summary has no trades (MongoDB snapshots incomplete), override with
+      // eval trade count so the SESSION TRADES KPI reflects reality.
+      if (!pageData.overall) pageData.overall = {};
+      if (!pageData.overall.trade_count) pageData.overall.trade_count = evalTrades.length;
     }
 
     // Build chart markers from eval trades when session has none.

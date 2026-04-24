@@ -67,7 +67,12 @@
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return '--';
     var seconds = Math.max(0, Math.round((end.getTime() - start.getTime()) / 1000));
     if (seconds < 60) return seconds + 's';
-    if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
+    var mins = Math.floor(seconds / 60);
+    if (seconds < 3600) {
+      // One candle boundary (60 s) is the minimum replay resolution —
+      // label it "1 bar" so it's clear this is a single-candle trade.
+      return mins === 1 ? '1 bar' : mins + 'm';
+    }
     return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm';
   }
 
@@ -124,7 +129,9 @@
     if (!decisionMetrics || typeof decisionMetrics !== 'object') decisionMetrics = row && row.decision_metrics;
     return {
       t: fmtTime(row && (row.entry_time || row.exit_time || row.timestamp)),
-      strat: row && (row.entry_strategy || row.strategy) ? String(row.entry_strategy || row.strategy) : '',
+      strat: row && (row.entry_strategy || row.strategy || row.engine_mode || row.active_engine_mode)
+        ? String(row.entry_strategy || row.strategy || row.engine_mode || row.active_engine_mode)
+        : '',
       dir: normDir(row && row.direction),
       qty: row && row.lots != null ? row.lots : '--',
       entry: entry,
