@@ -5,14 +5,24 @@ import random
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Any, Optional
 
-from .schemas.monitor import (
-    MonitorAlert,
-    MonitorCandle,
-    MonitorSession,
-    MonitorSignal,
-    MonitorSignalMetrics,
-    MonitorTrade,
-)
+try:
+    from .schemas.monitor import (
+        MonitorAlert,
+        MonitorCandle,
+        MonitorSession,
+        MonitorSignal,
+        MonitorSignalMetrics,
+        MonitorTrade,
+    )
+except ImportError:
+    from schemas.monitor import (  # type: ignore
+        MonitorAlert,
+        MonitorCandle,
+        MonitorSession,
+        MonitorSignal,
+        MonitorSignalMetrics,
+        MonitorTrade,
+    )
 
 
 def _fmt_time(ts_ms: int) -> str:

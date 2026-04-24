@@ -11,14 +11,24 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
-from .schemas.monitor import (
-    MonitorCandle,
-    MonitorKpiItem,
-    MonitorSession,
-    MonitorSnapshot,
-    MonitorTrade,
-)
-from .monitor_source import MockSource
+try:
+    from .schemas.monitor import (
+        MonitorCandle,
+        MonitorKpiItem,
+        MonitorSession,
+        MonitorSnapshot,
+        MonitorTrade,
+    )
+    from .monitor_source import MockSource
+except ImportError:
+    from schemas.monitor import (  # type: ignore
+        MonitorCandle,
+        MonitorKpiItem,
+        MonitorSession,
+        MonitorSnapshot,
+        MonitorTrade,
+    )
+    from monitor_source import MockSource  # type: ignore
 
 logger = logging.getLogger(__name__)
 
