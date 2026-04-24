@@ -495,6 +495,18 @@ class LiveMongoSource:
             return fallback_idx, fallback_price
 
 
+def latest_available_date(db: Any, coll_snapshots: str) -> str:
+    """Return the most recent trade_date_ist that has snapshot data."""
+    doc = db[coll_snapshots].find_one(
+        {"trade_date_ist": {"$exists": True}},
+        {"_id": 0, "trade_date_ist": 1},
+        sort=[("trade_date_ist", -1)],
+    )
+    if doc and doc.get("trade_date_ist"):
+        return str(doc["trade_date_ist"])
+    raise ValueError(f"No trade dates found in {coll_snapshots}")
+
+
 # ── MongoDB connection ─────────────────────────────────────────────────────────
 
 def make_mongo_db(

@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -15,14 +15,14 @@ try:
         MonitorSession,
         MonitorSnapshot,
     )
-    from .real_source import LiveMongoSource, MongoSource, make_mongo_db
+    from .real_source import LiveMongoSource, MongoSource, latest_available_date, make_mongo_db
 except ImportError:
     from schemas.monitor import (  # type: ignore
         MonitorKpiItem,
         MonitorSession,
         MonitorSnapshot,
     )
-    from real_source import LiveMongoSource, MongoSource, make_mongo_db  # type: ignore
+    from real_source import LiveMongoSource, MongoSource, latest_available_date, make_mongo_db  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,12 @@ def _make_db() -> Any:
         return make_mongo_db()
     except Exception as exc:
         raise RuntimeError(f"MongoDB unavailable: {exc}") from exc
+
+
+def _resolve_date(db: Any, requested: Optional[str]) -> str:
+    if requested:
+        return requested
+    return latest_available_date(db, MongoSource.COLL_SNAPSHOTS)
 
 
 # ── Session states ─────────────────────────────────────────────────────────────
@@ -180,7 +186,7 @@ class DashboardMonitorRouter:
                 timestamp=_now_iso_ist(),
             )
         else:
-            source = MongoSource(db=db, trade_date=date or "2026-04-16")
+            source = MongoSource(db=db, trade_date=_resolve_date(db, date))
             state = _ReplaySessionState(source, up_to_idx=up_to_idx)
             kpi = _build_kpi_replay(state)
             snap = MonitorSnapshot(
@@ -258,7 +264,7 @@ class DashboardMonitorRouter:
                             state = _LiveSessionState(src)
                             kpi = _build_kpi_live(state)
                         else:
-                            src = MongoSource(db=db, trade_date=date_str or "2026-04-16")
+                            src = MongoSource(db=db, trade_date=_resolve_date(db, date_str))
                             up_to = msg.get("up_to_idx")
                             state = _ReplaySessionState(src, up_to_idx=int(up_to) if up_to is not None else None)
                             state.is_playing = bool(msg.get("playing", False))

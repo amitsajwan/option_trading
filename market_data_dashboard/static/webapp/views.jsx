@@ -288,7 +288,7 @@ function ReplayMonitor({ onModeSwitch }) {
   const [upToIdx,        setUpToIdx]        = _useState(0);
   const [isPlaying,      setIsPlaying]      = _useState(false);
   const [speed,          setSpeed]          = _useState(4);
-  const [replayDate,     setReplayDate]     = _useState('2026-04-16');
+  const [replayDate,     setReplayDate]     = _useState('');
   const [wsStatus,       setWsStatus]       = _useState('connecting');
   const [selectedTrade,  setSelectedTrade]  = _useState(null);
   const [selectedSignal, setSelectedSignal] = _useState(null);
@@ -296,7 +296,7 @@ function ReplayMonitor({ onModeSwitch }) {
   const wsRef         = _useRef(null);
   const upToIdxRef    = _useRef(0);
   const speedRef      = _useRef(4);
-  const replayDateRef = _useRef('2026-04-16');
+  const replayDateRef = _useRef('');
 
   _useEffect(() => { upToIdxRef.current    = upToIdx;    }, [upToIdx]);
   _useEffect(() => { speedRef.current      = speed;      }, [speed]);
