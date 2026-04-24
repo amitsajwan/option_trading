@@ -316,6 +316,16 @@ def predict_staged(
         return StagedRuntimeDecision(action="HOLD", reason="recipe_low_margin", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, recipe_id=str(top_recipe), recipe_prob=float(top_prob), recipe_margin=float(top_prob - second_prob))
 
     recipe_meta = next((dict(item) for item in recipe_catalog if str(item.get("recipe_id") or "") == str(top_recipe)), {})
+    raw_stop = float(recipe_meta.get("stop_loss_pct") or 0.0)
+    raw_target = float(recipe_meta.get("take_profit_pct") or 0.0)
+    # Legacy recipes with tiny percentages (<=1%) are underlying-scale, not premium-scale.
+    explicit_basis = str(recipe_meta.get("risk_basis") or "").strip().lower()
+    if explicit_basis in ("underlying", "option_premium"):
+        risk_basis = explicit_basis
+    elif max(abs(raw_stop), abs(raw_target)) <= 0.01:
+        risk_basis = "underlying"
+    else:
+        risk_basis = "option_premium"
     return StagedRuntimeDecision(
         action=("BUY_CE" if direction == "CE" else "BUY_PE"),
         reason="staged_entry_ready",
@@ -327,7 +337,7 @@ def predict_staged(
         recipe_prob=float(top_prob),
         recipe_margin=float(top_prob - second_prob),
         horizon_minutes=int(recipe_meta.get("horizon_minutes")) if recipe_meta else None,
-        stop_loss_pct=float(recipe_meta.get("stop_loss_pct")) if recipe_meta else None,
-        target_pct=float(recipe_meta.get("take_profit_pct")) if recipe_meta else None,
-        risk_basis=str(recipe_meta.get("risk_basis") or "option_premium"),
+        stop_loss_pct=raw_stop if raw_stop > 0 else None,
+        target_pct=raw_target if raw_target > 0 else None,
+        risk_basis=risk_basis,
     )

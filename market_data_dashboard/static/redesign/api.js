@@ -147,6 +147,7 @@
       pnl: pnlRatio != null ? pnlRatio * 100 : null,
       pnlPct: pnlRatio != null ? pnlRatio * 100 : null,
       hold: fmtHold(row && row.entry_time, row && row.exit_time),
+      exitReason: row && row.exit_reason ? String(row.exit_reason) : '',
       meta: row || {},
     };
   }

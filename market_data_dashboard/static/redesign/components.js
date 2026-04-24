@@ -100,12 +100,13 @@
   //       <th class="r mobile-hide">Hold</th></tr>
 
   function tradeTableRows(trades) {
-    if (!trades || !trades.length) return emptyRow(8, 'No trades in this session.');
+    if (!trades || !trades.length) return emptyRow(9, 'No trades in this session.');
     return trades.map(function (trade) {
       var dirCls = trade.dir === 'LONG' ? 'pos' : (trade.dir === 'SHORT' ? 'neg' : '');
       var pnlCls = Number(trade.pnlPct) >= 0 ? 'pos' : 'neg';
       var entry = Number.isFinite(Number(trade.entry)) ? Number(trade.entry).toFixed(2) : '--';
       var exit  = Number.isFinite(Number(trade.exit))  ? Number(trade.exit).toFixed(2)  : '--';
+      var exitReason = trade.exitReason || trade.exit_reason || '--';
       return '<tr>' +
         '<td class="muted">' + esc(trade.t) + '</td>' +
         '<td>' + (trade.strat ? esc(trade.strat) : '<span class="muted">--</span>') + '</td>' +
@@ -115,11 +116,12 @@
         '<td class="r mobile-hide">' + exit + '</td>' +
         '<td class="r ' + pnlCls + '">' + fmtSigned(trade.pnlPct != null ? trade.pnlPct : 0, 2, '%') + '</td>' +
         '<td class="r mobile-hide">' + esc(trade.hold || '--') + '</td>' +
+        '<td class="r mobile-hide"><span class="muted">' + esc(exitReason) + '</span></td>' +
       '</tr>';
     }).join('');
   }
 
-  // Canonical thead for the 8-col trade table.
+  // Canonical thead for the 9-col trade table (added Exit Reason).
   var TRADE_TABLE_HEADER = '<thead><tr>' +
     '<th>Time</th><th>Strategy</th><th>Dir</th>' +
     '<th class="r mobile-hide">Qty</th>' +
@@ -127,6 +129,7 @@
     '<th class="r mobile-hide">Exit</th>' +
     '<th class="r">PnL</th>' +
     '<th class="r mobile-hide">Hold</th>' +
+    '<th class="r mobile-hide">Exit Reason</th>' +
   '</tr></thead>';
 
   // ── Toast notifications ───────────────────────────────────────────────────
