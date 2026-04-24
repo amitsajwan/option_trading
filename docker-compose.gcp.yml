@@ -22,6 +22,8 @@ services:
   dashboard:
     image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/market_data_dashboard:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
+    ports:
+      - "8008:8008"
     environment:
       TZ: "Asia/Kolkata"
       REDIS_HOST: redis
