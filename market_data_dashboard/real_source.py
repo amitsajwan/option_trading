@@ -144,6 +144,18 @@ def _snapshot_to_candle(doc: Dict[str, Any], idx: int) -> Optional[MonitorCandle
     )
 
 
+def _option_dir_to_bias(raw: str) -> str:
+    """Map options direction (PE/CE/AVOID) to chart bias (SHORT/LONG/LONG)."""
+    v = str(raw or "").strip().upper()
+    if v == "PE":
+        return "SHORT"
+    if v == "CE":
+        return "LONG"
+    if v in ("LONG", "SHORT"):
+        return v
+    return "LONG"
+
+
 def _vote_to_signal(
     doc: Dict[str, Any],
     candle_ts_sorted: List[int],
@@ -153,24 +165,18 @@ def _vote_to_signal(
     if not isinstance(payload_signal, dict):
         payload_signal = {}
 
-    signal_type = str(
-        doc.get("signal_type") or payload_signal.get("signal_type") or ""
-    ).strip().upper()
-    if signal_type and signal_type != "ENTRY":
-        return None
-
     raw_ts = doc.get("timestamp") or payload_signal.get("timestamp")
     ts = _ts_ms(raw_ts)
     if ts is None:
         return None
 
-    idx = _nearest_candle_idx(candle_ts_sorted, ts)
+    # Skip AVOID direction — no trade bias
+    raw_dir = str(doc.get("direction") or payload_signal.get("direction") or "").strip().upper()
+    if raw_dir == "AVOID":
+        return None
 
-    direction = str(
-        doc.get("direction") or payload_signal.get("direction") or "LONG"
-    ).strip().upper()
-    if direction not in ("LONG", "SHORT"):
-        direction = "LONG"
+    idx = _nearest_candle_idx(candle_ts_sorted, ts)
+    direction = _option_dir_to_bias(raw_dir)
 
     conf = max(0.0, min(1.0, _safe_float(
         doc.get("confidence") if doc.get("confidence") is not None else payload_signal.get("confidence"),
@@ -179,25 +185,23 @@ def _vote_to_signal(
 
     regime = str(doc.get("regime") or payload_signal.get("regime") or "UNKNOWN").strip()
 
-    dm = doc.get("decision_metrics")
-    if not isinstance(dm, dict):
-        dm = payload_signal.get("decision_metrics") or {}
-    if not isinstance(dm, dict):
-        dm = {}
-
+    signal_type = str(
+        doc.get("signal_type") or payload_signal.get("signal_type") or ""
+    ).strip().upper()
     reason_code = str(
-        doc.get("decision_reason_code") or payload_signal.get("decision_reason_code") or "UNKNOWN"
+        doc.get("decision_reason_code") or payload_signal.get("decision_reason_code") or ""
     ).strip()
-    fired = reason_code == "ENTRY_MET" or (conf > 0.65 and not reason_code)
+    # fired = engine decided to enter; SKIP = evaluated but not fired
+    fired = signal_type == "ENTRY" and reason_code in ("policy_allowed", "ENTRY_MET", "")
 
-    contrib = payload_signal.get("contributing_strategies")
-    if isinstance(contrib, list) and contrib:
-        strat = str(contrib[0] or "unknown").strip()
-    else:
-        strat = str(doc.get("strategy") or payload_signal.get("strategy") or "unknown").strip()
+    strat = str(doc.get("strategy") or payload_signal.get("strategy") or "unknown").strip()
 
+    # ML metrics are top-level fields in the document (not nested in decision_metrics)
     def _p(key: str, default: float = 0.5) -> float:
-        return max(0.0, min(1.0, _safe_float(dm.get(key), default) or default))
+        v = _safe_float(doc.get(key) if doc.get(key) is not None else (
+            (doc.get("decision_metrics") or {}).get(key) if isinstance(doc.get("decision_metrics"), dict) else None
+        ), default)
+        return max(0.0, min(1.0, v or default))
 
     metrics = MonitorSignalMetrics(
         entry_prob=_p("ml_entry_prob"),
@@ -206,7 +210,10 @@ def _vote_to_signal(
         ce_prob=_p("ml_ce_prob"),
         pe_prob=_p("ml_pe_prob"),
         recipe_prob=_p("ml_recipe_prob"),
-        recipe_margin=max(0.0, min(1.0, _safe_float(dm.get("ml_recipe_margin"), 0.0) or 0.0)),
+        recipe_margin=max(0.0, min(1.0, _safe_float(
+            doc.get("ml_recipe_margin") if doc.get("ml_recipe_margin") is not None else
+            (doc.get("decision_metrics") or {}).get("ml_recipe_margin"), 0.0
+        ) or 0.0)),
     )
 
     return MonitorSignal(
@@ -247,9 +254,7 @@ def _position_to_trade(
 
     pnl_pct = float(_safe_float(close_pos.get("pnl_pct"), fallback=0.0) or 0.0)
 
-    direction = str(open_pos.get("direction") or "LONG").strip().upper()
-    if direction not in ("LONG", "SHORT"):
-        direction = "LONG"
+    direction = _option_dir_to_bias(str(open_pos.get("direction") or "LONG"))
 
     contrib = open_pos.get("contributing_strategies")
     if isinstance(contrib, list) and contrib:
