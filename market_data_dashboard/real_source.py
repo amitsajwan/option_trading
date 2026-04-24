@@ -524,15 +524,26 @@ def latest_replay_date(
     coll_votes: str,
     coll_positions: str,
 ) -> str:
-    """Prefer the latest date with evaluations or trades; fall back to latest snapshot date."""
-    snapshot_dates = set(d for d in db[coll_snapshots].distinct("trade_date_ist") if d)
-    activity_dates = sorted(
-        set(d for d in db[coll_votes].distinct("trade_date_ist") if d)
-        | set(d for d in db[coll_positions].distinct("trade_date_ist") if d)
+    """Prefer a date with completed trades, then visible signals, else latest snapshot date."""
+    latest_close = db[coll_positions].find_one(
+        {"trade_date_ist": {"$exists": True}, "event": "POSITION_CLOSE"},
+        {"_id": 0, "trade_date_ist": 1},
+        sort=[("trade_date_ist", -1)],
     )
-    for trade_date in reversed(activity_dates):
-        if trade_date in snapshot_dates:
-            return str(trade_date)
+    if latest_close and latest_close.get("trade_date_ist"):
+        return str(latest_close["trade_date_ist"])
+
+    latest_signal = db[coll_votes].find_one(
+        {
+            "trade_date_ist": {"$exists": True},
+            "direction": {"$in": ["PE", "CE", "LONG", "SHORT"]},
+        },
+        {"_id": 0, "trade_date_ist": 1},
+        sort=[("trade_date_ist", -1)],
+    )
+    if latest_signal and latest_signal.get("trade_date_ist"):
+        return str(latest_signal["trade_date_ist"])
+
     return latest_available_date(db, coll_snapshots)
 
 
