@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 
@@ -26,6 +28,7 @@ class DashboardHistoricalReplayRouter:
         router.add_api_route("/historical/replay", self.historical_replay, methods=["GET"], response_class=HTMLResponse)
         router.add_api_route("/api/historical/replay/session", self.get_historical_strategy_session, methods=["GET"])
         router.add_api_route("/api/historical/replay/status", self.get_historical_replay_status, methods=["GET"])
+        router.add_api_route("/api/historical/replay/stream", self.stream_replay_status, methods=["GET"])
         router.add_api_route("/api/health/replay", self.replay_health, methods=["GET"])
         self.router = router
 
@@ -84,6 +87,27 @@ class DashboardHistoricalReplayRouter:
             raise HTTPException(status_code=400, detail=msg)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to build historical replay session: {exc}")
+
+    async def stream_replay_status(self, request: Request) -> StreamingResponse:
+        service = self._require_service()
+
+        async def _generate():
+            try:
+                while not await request.is_disconnected():
+                    try:
+                        status = service.get_replay_status_fast()
+                        yield f"data: {json.dumps(status)}\n\n"
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                pass
+
+        return StreamingResponse(
+            _generate(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     async def replay_health(self, date: Optional[str] = None, instrument: Optional[str] = None) -> Any:
         service = self._require_service()

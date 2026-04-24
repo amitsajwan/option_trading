@@ -10,6 +10,7 @@
   var DAY_PAGE_SIZE = 8;
   var pageData = getFallbackData(); // Initialize with fallback data
   var _livePollingInterval = null;
+  var _liveEventSource = null;
   var _liveLastDate = null;
   var _liveRunId = null;
 
@@ -23,7 +24,7 @@
         date_ist: '2026-04-16',
         instrument: 'NIFTY 50',
       },
-      currentRunId: 'mock_historical_run',
+      currentRunId: null,
       replayStatus: {
         status: 'completed',
         current_replay_timestamp: '2026-04-16T15:30:00+05:30',
@@ -722,6 +723,10 @@
       clearInterval(_livePollingInterval);
       _livePollingInterval = null;
     }
+    if (_liveEventSource) {
+      _liveEventSource.close();
+      _liveEventSource = null;
+    }
     _liveLastDate = null;
     _liveRunId = null;
   }
@@ -753,45 +758,64 @@
     _liveRunId = runId;
     _liveLastDate = null;
 
-    _livePollingInterval = setInterval(function () {
-      window.DashAPI.fetchHistoricalStatus({}).then(function (status) {
-        var isRunning = status.status === 'running';
-        var isDone = status.status === 'complete' || status.status === 'completed';
+    function handleStatus(status) {
+      var isRunning = status.status === 'running';
+      var isDone = status.status === 'complete' || status.status === 'completed';
 
-        // Tick the KPI strip so virtual time and events update every poll.
-        updateLiveKpis(status, runId);
+      updateLiveKpis(status, runId);
 
-        // Update the text status badge next to the Run button.
-        var statusEl = document.getElementById('replay-run-status');
-        if (statusEl) {
-          if (isRunning) {
-            statusEl.textContent = 'LIVE ● ' + (status.current_trade_date || '') + '  |  ' + (status.events_emitted || 0) + ' events';
-            statusEl.style.color = 'var(--pos)';
-          } else if (isDone) {
-            statusEl.textContent = 'Replay complete — ' + (status.events_emitted || 0) + ' events';
-            statusEl.style.color = '';
-          }
+      var statusEl = document.getElementById('replay-run-status');
+      if (statusEl) {
+        if (isRunning) {
+          statusEl.textContent = 'LIVE ● ' + (status.current_trade_date || '') + '  |  ' + (status.events_emitted || 0) + ' events';
+          statusEl.style.color = 'var(--pos)';
+        } else if (isDone) {
+          statusEl.textContent = 'Replay complete — ' + (status.events_emitted || 0) + ' events';
+          statusEl.style.color = '';
         }
+      }
 
-        // Advance chart + trades to the current replay date whenever it changes.
-        var currentDate = status.current_trade_date;
-        if (currentDate && currentDate !== _liveLastDate) {
-          _liveLastDate = currentDate;
-          loadDay(currentDate, runId);
-        }
+      var currentDate = status.current_trade_date;
+      if (currentDate && currentDate !== _liveLastDate) {
+        _liveLastDate = currentDate;
+        loadDay(currentDate, runId);
+      }
 
-        if (isDone) {
-          stopLivePolling();
-          // Final full reload to show complete picture.
-          cache = null;
-          loadData(dateFrom, status.end_date || pageData.rangeTo, runId).then(function (data) {
-            cache = data;
-            var root = document.getElementById('page');
-            if (root) { root.innerHTML = render(data); attachHandlers(data); mountChart(data); }
-          }).catch(function (err) { console.error('Final reload after replay:', err); });
+      if (isDone) {
+        stopLivePolling();
+        cache = null;
+        loadData(dateFrom, status.end_date || pageData.rangeTo, runId).then(function (data) {
+          cache = data;
+          var root = document.getElementById('page');
+          if (root) { root.innerHTML = render(data); attachHandlers(data); mountChart(data); }
+        }).catch(function (err) { console.error('Final reload after replay:', err); });
+      }
+    }
+
+    if (typeof EventSource !== 'undefined') {
+      var es = new EventSource('/api/historical/replay/stream');
+      _liveEventSource = es;
+      var _sseErrorCount = 0;
+      es.onmessage = function (evt) {
+        _sseErrorCount = 0;
+        try { handleStatus(JSON.parse(evt.data)); } catch (e) {}
+      };
+      es.onerror = function () {
+        _sseErrorCount += 1;
+        // After 3 consecutive errors, fall back to polling (SSE stream down)
+        if (_sseErrorCount >= 3 && !_livePollingInterval) {
+          es.close();
+          _liveEventSource = null;
+          _livePollingInterval = setInterval(function () {
+            window.DashAPI.fetchHistoricalStatus({}).then(handleStatus).catch(function () {});
+          }, 3000);
         }
-      }).catch(function () { /* ignore transient errors */ });
-    }, 3000);
+      };
+    } else {
+      _livePollingInterval = setInterval(function () {
+        window.DashAPI.fetchHistoricalStatus({}).then(handleStatus).catch(function () {});
+      }, 3000);
+    }
   }
 
   async function loadData(dateFrom, dateTo, runId) {

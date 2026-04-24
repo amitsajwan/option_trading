@@ -156,6 +156,30 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             "active_run_id": active_run_id,
         }
 
+    def get_replay_status_fast(self) -> dict[str, Any]:
+        """Redis-only read — no Mongo queries. Used by the SSE stream endpoint."""
+        replay = self._read_replay_status()
+        replay_status = str(replay.get("status") or "").strip().lower()
+        active_run_id = str(replay.get("run_id") or "").strip() or None
+        completed = replay_status in {"complete", "completed", "no_snapshots"}
+        return {
+            "mode": "historical",
+            "status": replay_status or ("ready" if replay.get("data_ready") else "idle"),
+            "active_run_id": active_run_id,
+            "run_id": active_run_id,
+            "events_emitted": int(replay.get("events_emitted") or 0),
+            "cycles": int(replay.get("cycles") or 0),
+            "current_replay_timestamp": (
+                replay.get("current_replay_timestamp") or replay.get("virtual_time_current")
+            ),
+            "current_trade_date": replay.get("current_trade_date"),
+            "speed": replay.get("speed"),
+            "start_date": replay.get("start_date"),
+            "end_date": replay.get("end_date"),
+            "completed": completed,
+            "collection_counts": {},
+        }
+
     @staticmethod
     def _load_chart_from_parquet(date_ist: str, instrument: Optional[str] = None) -> Optional[dict[str, Any]]:
         """Load per-minute OHLC from Parquet futures dataset via pyarrow.
