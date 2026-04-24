@@ -194,6 +194,15 @@ function LiveMonitor({ onModeSwitch, onKillClick }) {
     return () => ws.close();
   }, []);
 
+  const visibleTrades = _useMemo(
+    () => session ? session.trades.filter(tr => tr.exitIdx <= upToIdx).reverse() : [],
+    [session, upToIdx]
+  );
+  const visibleSignals = _useMemo(
+    () => session ? session.signals.filter(s => s.idx <= upToIdx).slice(-60).reverse() : [],
+    [session, upToIdx]
+  );
+
   if (!session) {
     return (
       <div className="loading-shell">
@@ -205,14 +214,6 @@ function LiveMonitor({ onModeSwitch, onKillClick }) {
     );
   }
 
-  const visibleTrades = _useMemo(
-    () => session.trades.filter(tr => tr.exitIdx <= upToIdx).reverse(),
-    [session, upToIdx]
-  );
-  const visibleSignals = _useMemo(
-    () => session.signals.filter(s => s.idx <= upToIdx).slice(-60).reverse(),
-    [session, upToIdx]
-  );
   const totalPnl  = visibleTrades.reduce((a, t) => a + t.pnlPct, 0);
   const wins      = visibleTrades.filter(t => t.pnlPct > 0).length;
   const winRate   = visibleTrades.length ? wins / visibleTrades.length : 0;
@@ -362,6 +363,15 @@ function ReplayMonitor({ onModeSwitch }) {
     });
   }
 
+  const visibleTrades = _useMemo(
+    () => session ? session.trades.filter(tr => tr.exitIdx <= upToIdx).reverse() : [],
+    [session, upToIdx]
+  );
+  const visibleSignals = _useMemo(
+    () => session ? session.signals.filter(s => s.idx <= upToIdx).slice(-120).reverse() : [],
+    [session, upToIdx]
+  );
+
   if (!session) {
     return (
       <div className="loading-shell">
@@ -373,14 +383,6 @@ function ReplayMonitor({ onModeSwitch }) {
     );
   }
 
-  const visibleTrades = _useMemo(
-    () => session.trades.filter(tr => tr.exitIdx <= upToIdx).reverse(),
-    [session, upToIdx]
-  );
-  const visibleSignals = _useMemo(
-    () => session.signals.filter(s => s.idx <= upToIdx).slice(-120).reverse(),
-    [session, upToIdx]
-  );
   const totalPnl = visibleTrades.reduce((a, t) => a + t.pnlPct, 0);
   const wins     = visibleTrades.filter(t => t.pnlPct > 0).length;
   const winRate  = visibleTrades.length ? wins / visibleTrades.length : 0;
