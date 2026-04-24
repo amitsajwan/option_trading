@@ -289,6 +289,7 @@ function ReplayMonitor({ onModeSwitch }) {
   const [isPlaying,      setIsPlaying]      = _useState(false);
   const [speed,          setSpeed]          = _useState(4);
   const [replayDate,     setReplayDate]     = _useState('');
+  const [replayError,    setReplayError]    = _useState('');
   const [wsStatus,       setWsStatus]       = _useState('connecting');
   const [selectedTrade,  setSelectedTrade]  = _useState(null);
   const [selectedSignal, setSelectedSignal] = _useState(null);
@@ -318,12 +319,18 @@ function ReplayMonitor({ onModeSwitch }) {
             setSession(msg.session);
             setUpToIdx(msg.up_to_idx);
             setIsPlaying(false);
+            setReplayDate(msg.session.date || '');
+            replayDateRef.current = msg.session.date || '';
+            setReplayError('');
           } else if (msg.type === 'tick') {
             setUpToIdx(msg.up_to_idx);
           } else if (msg.type === 'state') {
             setUpToIdx(msg.up_to_idx);
             setIsPlaying(msg.is_playing);
             setSpeed(msg.speed);
+          } else if (msg.type === 'error') {
+            setReplayError(msg.message || 'Replay date load failed.');
+            setIsPlaying(false);
           }
         },
       }
@@ -353,9 +360,7 @@ function ReplayMonitor({ onModeSwitch }) {
   function handleDateChange(newDate) {
     setReplayDate(newDate);
     replayDateRef.current = newDate;
-    setSession(null);
-    setUpToIdx(0);
-    upToIdxRef.current = 0;
+    setReplayError('');
     setIsPlaying(false);
     wsRef.current && wsRef.current.send({
       action: 'subscribe', mode: 'replay',
@@ -438,6 +443,13 @@ function ReplayMonitor({ onModeSwitch }) {
 
   return (
     <div>
+      {replayError && (
+        <div className="panel" style={{ marginBottom: 12 }}>
+          <div className="panel-body" style={{ color: 'var(--neg)', fontSize: 12 }}>
+            {replayError}
+          </div>
+        </div>
+      )}
       <StrategyMonitor
         mode="replay"
         session={session}

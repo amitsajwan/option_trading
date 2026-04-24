@@ -15,14 +15,14 @@ try:
         MonitorSession,
         MonitorSnapshot,
     )
-    from .real_source import LiveMongoSource, MongoSource, latest_available_date, make_mongo_db
+    from .real_source import LiveMongoSource, MongoSource, latest_replay_date, make_mongo_db
 except ImportError:
     from schemas.monitor import (  # type: ignore
         MonitorKpiItem,
         MonitorSession,
         MonitorSnapshot,
     )
-    from real_source import LiveMongoSource, MongoSource, latest_available_date, make_mongo_db  # type: ignore
+    from real_source import LiveMongoSource, MongoSource, latest_replay_date, make_mongo_db  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,12 @@ def _make_db() -> Any:
 def _resolve_date(db: Any, requested: Optional[str]) -> str:
     if requested:
         return requested
-    return latest_available_date(db, MongoSource.COLL_SNAPSHOTS)
+    return latest_replay_date(
+        db,
+        MongoSource.COLL_SNAPSHOTS,
+        MongoSource.COLL_VOTES,
+        MongoSource.COLL_POSITIONS,
+    )
 
 
 # ── Session states ─────────────────────────────────────────────────────────────

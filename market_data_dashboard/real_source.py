@@ -403,17 +403,28 @@ def _build_session(
 
     trades.sort(key=lambda t: t.entryIdx)
 
+    alerts = [MonitorAlert(
+        level="info", t="09:15",
+        msg=f"<strong>Session loaded</strong> — {trade_date}",
+        tms=int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+    )]
+    if not signals and not trades:
+        alerts.append(MonitorAlert(
+            level="warn", t="09:15",
+            msg=(
+                "Candles loaded, but no vote or position records exist for this date. "
+                "Try a replay date with evaluations such as <strong>2024-01-23</strong>."
+            ),
+            tms=int(datetime.now(tz=timezone.utc).timestamp() * 1000) + 1,
+        ))
+
     return MonitorSession(
         date=trade_date,
         instrument=instrument,
         candles=candles,
         signals=signals,
         trades=trades,
-        alerts=[MonitorAlert(
-            level="info", t="09:15",
-            msg=f"<strong>Session loaded</strong> — {trade_date}",
-            tms=int(datetime.now(tz=timezone.utc).timestamp() * 1000),
-        )],
+        alerts=alerts,
         basePrice=candles[0].c,
     )
 
@@ -505,6 +516,24 @@ def latest_available_date(db: Any, coll_snapshots: str) -> str:
     if doc and doc.get("trade_date_ist"):
         return str(doc["trade_date_ist"])
     raise ValueError(f"No trade dates found in {coll_snapshots}")
+
+
+def latest_replay_date(
+    db: Any,
+    coll_snapshots: str,
+    coll_votes: str,
+    coll_positions: str,
+) -> str:
+    """Prefer the latest date with evaluations or trades; fall back to latest snapshot date."""
+    snapshot_dates = set(d for d in db[coll_snapshots].distinct("trade_date_ist") if d)
+    activity_dates = sorted(
+        set(d for d in db[coll_votes].distinct("trade_date_ist") if d)
+        | set(d for d in db[coll_positions].distinct("trade_date_ist") if d)
+    )
+    for trade_date in reversed(activity_dates):
+        if trade_date in snapshot_dates:
+            return str(trade_date)
+    return latest_available_date(db, coll_snapshots)
 
 
 # ── MongoDB connection ─────────────────────────────────────────────────────────
