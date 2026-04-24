@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
+import os
 import random
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
@@ -20,6 +20,7 @@ try:
         MonitorTrade,
     )
     from .monitor_source import MockSource
+    from .real_source import MongoSource, make_mongo_db
 except ImportError:
     from schemas.monitor import (  # type: ignore
         MonitorCandle,
@@ -29,8 +30,25 @@ except ImportError:
         MonitorTrade,
     )
     from monitor_source import MockSource  # type: ignore
+    from real_source import MongoSource, make_mongo_db  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+_USE_REAL_DATA = os.getenv("MONITOR_USE_REAL_DATA", "1").strip().lower() not in ("0", "false", "no")
+
+
+def _make_source(mode: str, date: str) -> Any:
+    """Return a session source — MongoSource for replay when real data is enabled, else MockSource."""
+    if mode == "replay" and _USE_REAL_DATA:
+        try:
+            db = make_mongo_db()
+            source = MongoSource(db=db, trade_date=date)
+            source.get_session()  # validate eagerly; raises if no data
+            return source
+        except Exception as exc:
+            logger.warning("MongoSource unavailable for %s (%s) — falling back to MockSource", date, exc)
+    seed = 42 if mode == "live" else 7
+    return MockSource(seed=seed, date=date)
 
 
 class _LiveSessionState:
@@ -180,8 +198,8 @@ class DashboardMonitorRouter:
         date: Optional[str] = Query(None, description="Replay date YYYY-MM-DD"),
         up_to_idx: Optional[int] = Query(None, description="Replay position"),
     ) -> JSONResponse:
-        seed = 42 if mode == "live" else 7
-        source = MockSource(seed=seed, date=date or "2026-04-16")
+        resolved_date = date or "2026-04-16"
+        source = _make_source(mode, resolved_date)
         session = source.get_session()
 
         if mode == "live":
@@ -271,8 +289,7 @@ class DashboardMonitorRouter:
 
                     mode = str(msg.get("mode") or "live").strip().lower()
                     date = str(msg.get("date") or "").strip() or None
-                    seed = 42 if mode == "live" else 7
-                    source = MockSource(seed=seed, date=date or "2026-04-16")
+                    source = _make_source(mode, date or "2026-04-16")
 
                     if mode == "live":
                         state = _LiveSessionState(source)
