@@ -6,7 +6,6 @@ position-state management.
 
 from __future__ import annotations
 
-import logging
 import uuid
 from typing import Optional
 
@@ -14,8 +13,6 @@ from ..contracts import PositionContext, TradeSignal
 from ..engines.snapshot_accessor import SnapshotAccessor
 from ..logging.decision_field_resolver import DecisionFieldResolver
 from .trailing_manager import TrailingStopManager
-
-logger = logging.getLogger(__name__)
 
 
 class PositionFactory:
@@ -48,17 +45,6 @@ class PositionFactory:
         underlying_stop_pct = float(signal.underlying_stop_pct) if signal.underlying_stop_pct is not None else None
         underlying_target_pct = float(signal.underlying_target_pct) if signal.underlying_target_pct is not None else None
         stop_price = TrailingStopManager._hard_stop_price(premium, float(signal.stop_loss_pct))
-
-        # INVESTIGATION LOG: Trace L6 position creation
-        is_l6 = signal.reason and "L6" in str(signal.reason)
-        if is_l6:
-            logger.warning(
-                f"[POSITION_FACTORY_TRACE] recipe=L6 entry_strategy={signal.entry_strategy_name} "
-                f"premium={premium:.2f} stop_price={stop_price} "
-                f"signal_stop_loss_pct={signal.stop_loss_pct} signal_target_pct={signal.target_pct} "
-                f"signal_underlying_stop_pct={signal.underlying_stop_pct} signal_underlying_target_pct={signal.underlying_target_pct} "
-                f"position_underlying_stop_pct={underlying_stop_pct} entry_futures_price={entry_futures_price}"
-            )
 
         return PositionContext(
             position_id=str(uuid.uuid4())[:8],

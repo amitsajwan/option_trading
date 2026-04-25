@@ -326,21 +326,9 @@ def predict_staged(
     recipe_meta = next((dict(item) for item in recipe_catalog if str(item.get("recipe_id") or "") == str(top_recipe)), {})
     raw_stop = float(recipe_meta.get("stop_loss_pct") or 0.0)
     raw_target = float(recipe_meta.get("take_profit_pct") or 0.0)
-    # Legacy recipes with tiny percentages (<=1%) are underlying-scale, not premium-scale.
-    explicit_basis = str(recipe_meta.get("risk_basis") or "").strip().lower()
-    if explicit_basis in ("underlying", "option_premium"):
-        risk_basis = explicit_basis
-    elif max(abs(raw_stop), abs(raw_target)) <= 0.01:
-        risk_basis = "underlying"
-    else:
+    risk_basis = str(recipe_meta.get("risk_basis") or "option_premium").strip().lower()
+    if risk_basis not in ("underlying", "option_premium"):
         risk_basis = "option_premium"
-    # INVESTIGATION LOG: Trace L6 decision creation
-    if str(top_recipe) == "L6":
-        logger.warning(
-            f"[RISK_BASIS_TRACE] recipe=L6 raw_stop={raw_stop:.6f} raw_target={raw_target:.6f} "
-            f"explicit_basis={explicit_basis!r} risk_basis={risk_basis!r} "
-            f"recipe_meta_keys={list(recipe_meta.keys())}"
-        )
     return StagedRuntimeDecision(
         action=("BUY_CE" if direction == "CE" else "BUY_PE"),
         reason="staged_entry_ready",

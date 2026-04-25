@@ -116,15 +116,6 @@ class PositionTracker:
             exit_reason = ExitReason.TIME_STOP
             exit_trigger = "soft_close"
 
-        # INVESTIGATION LOG: Trace L6 exits
-        if exit_reason is not None and position.underlying_stop_pct is not None:
-            logger.warning(
-                f"[TRACKER_EXIT_TRACE] exit_trigger={exit_trigger} exit_reason={exit_reason.value} "
-                f"bars_held={position.bars_held} pnl_pct={position.pnl_pct:.4f} "
-                f"underlying_stop_pct={position.underlying_stop_pct} entry_futures_price={position.entry_futures_price} "
-                f"current_futures_price={current_futures_price} current_premium={current_premium} "
-                f"stop_price={position.stop_price}"
-            )
 
         if exit_reason is None:
             return None

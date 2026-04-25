@@ -302,6 +302,20 @@ def _trade_signal_to_signal(
     )
 
 
+def _underlying_stop_level(open_pos: Dict[str, Any]) -> Optional[float]:
+    """Compute the underlying futures stop price for display when no premium stop_price is set."""
+    underlying_stop_pct = _safe_float(open_pos.get("underlying_stop_pct"), fallback=None)
+    entry_futures = _safe_float(open_pos.get("entry_futures_price"), fallback=None)
+    if underlying_stop_pct is None or entry_futures is None or underlying_stop_pct <= 0:
+        return None
+    direction = str(open_pos.get("direction") or "").strip().upper()
+    if direction in ("CE", "LONG"):
+        return round(entry_futures * (1.0 - underlying_stop_pct), 2)
+    if direction in ("PE", "SHORT"):
+        return round(entry_futures * (1.0 + underlying_stop_pct), 2)
+    return None
+
+
 def _position_to_trade(
     position_id: str,
     open_pos: Dict[str, Any],
@@ -365,10 +379,10 @@ def _position_to_trade(
         entryDetail=signal.detail,
         exitReason=str(close_pos.get("exit_reason") or close_doc.get("exit_reason") or "").strip(),
         exitDetail=str(close_pos.get("reason") or close_doc.get("reason") or "").strip(),
-        stopLossPct=_safe_float(open_pos.get("stop_loss_pct"), fallback=None),
-        targetPct=_safe_float(open_pos.get("target_pct"), fallback=None),
+        stopLossPct=_safe_float(open_pos.get("underlying_stop_pct") or open_pos.get("stop_loss_pct"), fallback=None),
+        targetPct=_safe_float(open_pos.get("underlying_target_pct") or open_pos.get("target_pct"), fallback=None),
         maxHoldBars=int(open_pos.get("max_hold_bars")) if open_pos.get("max_hold_bars") is not None else None,
-        stopPrice=_safe_float(close_pos.get("stop_price"), fallback=_safe_float(open_pos.get("stop_price"), fallback=None)),
+        stopPrice=_safe_float(close_pos.get("stop_price"), fallback=_safe_float(open_pos.get("stop_price"), fallback=_underlying_stop_level(open_pos))),
     )
 
 
