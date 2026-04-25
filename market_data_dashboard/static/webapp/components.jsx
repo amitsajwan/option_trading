@@ -68,19 +68,22 @@ function PriceChart({ candles, upToIdx, trades, selectedTradeId, onSelectTrade, 
   }
   function handleLeave() { setHover(null); }
 
-  // Trade markers
+  // Trade markers — y-position uses the candle's close price (futures chart scale),
+  // not the option premium which is on a completely different scale.
   const markers = useMemo(() => {
     const mk = [];
     (trades || []).forEach(tr => {
       if (tr.entryIdx != null && tr.entryIdx < visibleCount) {
-        mk.push({ id: tr.id + '-e', role: 'entry', dir: tr.dir, idx: tr.entryIdx, price: tr.entry, trade: tr });
+        const candlePrice = visible[tr.entryIdx]?.c ?? tr.entry;
+        mk.push({ id: tr.id + '-e', role: 'entry', dir: tr.dir, idx: tr.entryIdx, price: candlePrice, trade: tr });
       }
       if (tr.exitIdx != null && tr.exitIdx < visibleCount) {
-        mk.push({ id: tr.id + '-x', role: 'exit', dir: tr.dir, idx: tr.exitIdx, price: tr.exit, trade: tr });
+        const candlePrice = visible[tr.exitIdx]?.c ?? tr.exit;
+        mk.push({ id: tr.id + '-x', role: 'exit', dir: tr.dir, idx: tr.exitIdx, price: candlePrice, trade: tr });
       }
     });
     return mk;
-  }, [trades, visibleCount]);
+  }, [trades, visibleCount, visible]);
 
   // Y-axis gridlines
   const yTicks = useMemo(() => {
