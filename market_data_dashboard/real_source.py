@@ -475,8 +475,10 @@ def _build_session(
         "event": 1,
         "timestamp": 1,
         "payload.position": 1,
+        "run_id": 1,
     }
     position_map: Dict[str, Dict[str, Any]] = {}
+    detected_run_id: Optional[str] = None
     for doc in db[coll_positions].find(date_q, pos_proj).sort("timestamp", ASCENDING):
         pid = str(doc.get("position_id") or "").strip()
         if not pid:
@@ -495,6 +497,8 @@ def _build_session(
             slot["close_doc"] = doc
             if not slot.get("signal_id"):
                 slot["signal_id"] = str(doc.get("signal_id") or payload_pos.get("signal_id") or "").strip()
+            if detected_run_id is None:
+                detected_run_id = str(doc.get("run_id") or "").strip() or None
 
     trades: List[MonitorTrade] = []
     for pid, docs in position_map.items():
@@ -539,6 +543,7 @@ def _build_session(
         trades=trades,
         alerts=alerts,
         basePrice=candles[0].c,
+        runId=detected_run_id,
     )
 
 

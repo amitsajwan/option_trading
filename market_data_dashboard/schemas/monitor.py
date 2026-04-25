@@ -77,6 +77,7 @@ class MonitorSession(BaseModel):
     trades: List[MonitorTrade]
     alerts: List[MonitorAlert]
     basePrice: float
+    runId: Optional[str] = None
 
 
 class MonitorKpiItem(BaseModel):
