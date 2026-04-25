@@ -302,6 +302,7 @@
       engineContext: engineContext,
       replayStatus: p.replay_status || null,
       currentRunId: p.active_run_id || session.run_id || null,
+      activeDate: session.date_ist || session.trade_date || null,
       freshness: freshness,
       oldestAgeSec: oldestAgeSec,
       chart: {

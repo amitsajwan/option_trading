@@ -70,11 +70,14 @@
     var k = data.kpis || {};
     var winRateText = Number.isFinite(Number(k.winRate)) ? (k.winRate * 100).toFixed(1) + '% WR' : 'Summary live';
     var pfText = Number.isFinite(Number(k.profitFactor)) ? 'PF ' + Number(k.profitFactor).toFixed(2) : 'PF --';
+    var activeDate = data.activeDate || 'N/A';
+    var runIdShort = data.currentRunId ? String(data.currentRunId).slice(0, 8) + '...' : 'LIVE';
+    var dateLabel = activeDate !== 'N/A' ? 'TRADES ' + activeDate : 'TRADES TODAY';
     return [
       { label: 'RUN STATUS',     value: C.esc(k.runStatus || 'UNKNOWN'), cls: 'pos', sub: '<span class="chip pos"><span class="dot"></span>' + C.esc(k.marketState || 'UNKNOWN') + '</span>' },
       { label: 'SESSION PNL',    value: C.esc(k.sessionPnl || '--'), cls: k.sessionPnlCls || '', sub: 'Net capital return' },
       { label: 'OPEN POSITIONS', value: C.esc(String(k.openPositions != null ? k.openPositions : '--')), sub: 'Active position ledger' },
-      { label: 'TRADES TODAY',   value: C.esc(String(k.tradesToday != null ? k.tradesToday : '--')), sub: winRateText + ' - ' + pfText },
+      { label: C.esc(dateLabel),   value: C.esc(String(k.tradesToday != null ? k.tradesToday : '--')), sub: winRateText + ' - ' + pfText + ' | Run: ' + runIdShort },
       { label: 'DATA FRESHNESS', value: C.esc(k.dataFreshness || '--'), cls: k.dataFreshnessCls || '', sub: 'Oldest session feed age' },
     ];
   }
