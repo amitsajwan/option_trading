@@ -7,7 +7,7 @@ from typing import Any, Callable, Optional
 import redis
 import requests
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 
@@ -47,14 +47,11 @@ class DashboardOperatorRouter:
         router.add_api_route("/api/v1/system/mode", self.get_system_mode, methods=["GET"])
         self.router = router
 
-    async def home(self, request: Request) -> HTMLResponse:
-        return self._templates.TemplateResponse("dashboard.html", {"request": request, "initial_page": "index"})
+    async def home(self, request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/app", status_code=302)
 
-    async def live_strategy(self, request: Request) -> HTMLResponse:
-        return self._templates.TemplateResponse(
-            "dashboard.html",
-            {"request": request, "initial_page": "live_strategy"},
-        )
+    async def live_strategy(self, request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/app?mode=live", status_code=302)
 
     def _require_live_strategy_monitor_service(self) -> Any:
         service = self._get_live_strategy_monitor_service()

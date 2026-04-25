@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 
@@ -31,15 +31,8 @@ class DashboardStrategyEvaluationRouter:
         router.add_api_route("/api/strategy/evaluation/runs/{run_id}", self.get_strategy_evaluation_run, methods=["GET"])
         self.router = router
 
-    async def strategy_evaluation_page(self, request: Request) -> HTMLResponse:
-        self._require_strategy_eval_service()
-        return self._templates.TemplateResponse(
-            "dashboard.html",
-            {
-                "request": request,
-                "initial_page": "strategy_evaluation",
-            },
-        )
+    async def strategy_evaluation_page(self, request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/app?tab=evaluation", status_code=302)
 
     def _require_strategy_eval_service(self) -> Any:
         service = self._get_strategy_eval_service()

@@ -44,23 +44,8 @@ class DashboardModelCatalogRouter:
         router.add_api_route("/api/trading/feature-intelligence", self.get_trading_feature_intelligence, methods=["GET"])
         self.router = router
 
-    async def trading_models_page(self, request: Request) -> HTMLResponse:
-        models = self._build_trading_model_catalog()
-        legacy_trading_runtime = self._legacy_trading_runtime_status()
-        return self._templates.TemplateResponse(
-            "trading_models.html",
-            {
-                "request": request,
-                "models": models,
-                "legacy_trading_runtime": legacy_trading_runtime,
-                "summary": {
-                    "total": len(models),
-                    "ready": sum(1 for m in models if m.get("ready_to_run")),
-                    "research": sum(1 for m in models if str(m.get("catalog_kind") or "") == "recovery"),
-                    "recommended": sum(1 for m in models if m.get("recommended")),
-                },
-            },
-        )
+    async def trading_models_page(self, request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/app?tab=models", status_code=302)
 
     async def get_trading_models(self) -> dict[str, Any]:
         models = self._build_trading_model_catalog()

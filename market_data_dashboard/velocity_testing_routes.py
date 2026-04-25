@@ -10,7 +10,7 @@ Provides endpoints for:
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 
@@ -56,15 +56,9 @@ class DashboardVelocityTestingRouter:
                 detail="velocity testing service unavailable - ensure data provider is configured",
             )
 
-    async def velocity_testing_page(self, request: Request) -> HTMLResponse:
-        """Render velocity testing UI page."""
-        self._require_velocity_testing_service()
-        return self._templates.TemplateResponse(
-            "velocity_testing.html",
-            {
-                "request": request,
-            },
-        )
+    async def velocity_testing_page(self, request: Request) -> RedirectResponse:
+        """Redirect to modern /app UI."""
+        return RedirectResponse(url="/app?tab=velocity", status_code=302)
 
     async def test_velocity_policies(
         self,

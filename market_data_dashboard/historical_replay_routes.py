@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 
@@ -38,11 +38,8 @@ class DashboardHistoricalReplayRouter:
             raise HTTPException(status_code=500, detail="historical replay service unavailable")
         return service
 
-    async def historical_replay(self, request: Request) -> HTMLResponse:
-        return self._templates.TemplateResponse(
-            "dashboard.html",
-            {"request": request, "initial_page": "historical_replay"},
-        )
+    async def historical_replay(self, request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/app?mode=replay", status_code=302)
 
     async def get_historical_replay_status(
         self,
