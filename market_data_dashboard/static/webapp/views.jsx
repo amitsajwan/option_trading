@@ -95,7 +95,7 @@ function StrategyMonitor(props) {
       <div className="g-tables">
         <div className={`panel ${tab !== 'trades' ? 'mobile-hide' : ''}`}>
           <div className="panel-head">
-            <div className="panel-title">Trades today <span className="count">{trades.length}</span></div>
+            <div className="panel-title">Trades · {session.date} <span className="count">{trades.length}</span> {session.runId && <span className="mono tiny muted" style={{marginLeft: 8}}>run {String(session.runId).slice(0,8)}…</span>}</div>
             <div className="row gap-s mobile-hide"><button className="btn sm ghost">Export CSV</button></div>
           </div>
           <div className="panel-body flush" style={{ maxHeight: 340, overflow: 'auto' }}>
@@ -408,7 +408,7 @@ function ReplayMonitor({ onModeSwitch }) {
       sub: `${visibleSignals.filter(s => s.fired).length} fired` },
     { label: 'PROGRESS',     value: (pct * 100).toFixed(0) + '%',
       sub: `${upToIdx + 1}/${session.candles.length} bars` },
-    { label: 'ENGINE',       value: 'ML_PURE_V3', sub: 'run r-2026-0416-ml3' },
+    { label: 'ENGINE',       value: 'ML_PURE_V3', sub: session.runId ? 'run ' + String(session.runId).slice(0,12) : 'staged' },
   ];
 
   const topBar = (
