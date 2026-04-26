@@ -302,10 +302,13 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
 
     def get_historical_strategy_session(self, **kwargs: Any) -> dict[str, Any]:
         run_id = str(kwargs.get("run_id") or "").strip() or None
-        # The parent get_strategy_session may be from an older image that
-        # does not accept run_id, so we filter it out before calling.
-        session_kwargs = {k: v for k, v in kwargs.items() if k != "run_id"}
-        payload = self.get_strategy_session(**session_kwargs)
+        try:
+            payload = self.get_strategy_session(**kwargs)
+        except TypeError:
+            # Defensive fallback for older images that predate run-scoped
+            # historical sessions.
+            session_kwargs = {k: v for k, v in kwargs.items() if k != "run_id"}
+            payload = self.get_strategy_session(**session_kwargs)
         session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
         instrument = session.get("instrument") if isinstance(session, dict) else None
         date_ist = session.get("date_ist") if isinstance(session, dict) else None

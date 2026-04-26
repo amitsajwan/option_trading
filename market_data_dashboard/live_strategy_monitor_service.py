@@ -293,11 +293,41 @@ class LiveStrategyMonitorService:
             "ml_pure": ml_pure,
         }
 
-    def load_recent_votes(self, date_ist: str, limit: int, run_id: Optional[str] = None) -> list[dict[str, Any]]:
-        return self._repo.load_recent_votes(date_ist, int(limit), run_id)
+    def load_recent_votes(
+        self,
+        date_ist: str,
+        limit: int,
+        run_id: Optional[str] = None,
+        *,
+        allow_historical_run_fallback: bool = True,
+    ) -> list[dict[str, Any]]:
+        try:
+            return self._repo.load_recent_votes(
+                date_ist,
+                int(limit),
+                run_id,
+                allow_historical_run_fallback=allow_historical_run_fallback,
+            )
+        except TypeError:
+            return self._repo.load_recent_votes(date_ist, int(limit), run_id)
 
-    def load_recent_signals(self, date_ist: str, limit: int, run_id: Optional[str] = None) -> list[dict[str, Any]]:
-        return self._repo.load_recent_signals(date_ist, int(limit), run_id)
+    def load_recent_signals(
+        self,
+        date_ist: str,
+        limit: int,
+        run_id: Optional[str] = None,
+        *,
+        allow_historical_run_fallback: bool = True,
+    ) -> list[dict[str, Any]]:
+        try:
+            return self._repo.load_recent_signals(
+                date_ist,
+                int(limit),
+                run_id,
+                allow_historical_run_fallback=allow_historical_run_fallback,
+            )
+        except TypeError:
+            return self._repo.load_recent_signals(date_ist, int(limit), run_id)
 
     def load_position_map(self, date_ist: str, run_id: Optional[str] = None) -> dict[str, dict[str, Any]]:
         return self._repo.load_position_map(date_ist, run_id)
@@ -308,6 +338,7 @@ class LiveStrategyMonitorService:
         limit: int,
         *,
         run_id: Optional[str] = None,
+        allow_historical_run_fallback: bool = True,
         outcome: Optional[str] = None,
         engine_mode: Optional[str] = None,
         only_blocked: bool = False,
@@ -317,16 +348,29 @@ class LiveStrategyMonitorService:
         loader = getattr(self._repo, "load_recent_trace_digests", None)
         if not callable(loader):
             return []
-        return loader(
-            date_ist,
-            int(limit),
-            run_id=run_id,
-            outcome=outcome,
-            engine_mode=engine_mode,
-            only_blocked=only_blocked,
-            snapshot_id=snapshot_id,
-            position_id=position_id,
-        )
+        try:
+            return loader(
+                date_ist,
+                int(limit),
+                run_id=run_id,
+                allow_historical_run_fallback=allow_historical_run_fallback,
+                outcome=outcome,
+                engine_mode=engine_mode,
+                only_blocked=only_blocked,
+                snapshot_id=snapshot_id,
+                position_id=position_id,
+            )
+        except TypeError:
+            return loader(
+                date_ist,
+                int(limit),
+                run_id=run_id,
+                outcome=outcome,
+                engine_mode=engine_mode,
+                only_blocked=only_blocked,
+                snapshot_id=snapshot_id,
+                position_id=position_id,
+            )
 
     def get_trace_detail(self, trace_id: str) -> Optional[dict[str, Any]]:
         loader = getattr(self._repo, "load_trace_detail", None)
@@ -781,6 +825,7 @@ class LiveStrategyMonitorService:
         resolved_debug_view = bool(raw_debug_view) if raw_debug_view is not None else False
         resolved_capital = self.resolve_live_capital(initial_capital)
         resolved_run_id = str(run_id or "").strip() or None
+        allow_historical_run_fallback = not (self._dataset == "historical" and resolved_run_id)
 
         coll_map = self._repo.collections()
         votes_coll = coll_map["votes"]
@@ -794,15 +839,39 @@ class LiveStrategyMonitorService:
             date_match=date_match,
         )
         position_map = self.load_position_map(date_ist, resolved_run_id)
-        recent_votes = self.load_recent_votes(date_ist, vote_limit, resolved_run_id)
-        recent_signals = self.load_recent_signals(date_ist, signal_limit, resolved_run_id)
+        try:
+            recent_votes = self.load_recent_votes(
+                date_ist,
+                vote_limit,
+                resolved_run_id,
+                allow_historical_run_fallback=allow_historical_run_fallback,
+            )
+        except TypeError:
+            recent_votes = self.load_recent_votes(date_ist, vote_limit, resolved_run_id)
+        try:
+            recent_signals = self.load_recent_signals(
+                date_ist,
+                signal_limit,
+                resolved_run_id,
+                allow_historical_run_fallback=allow_historical_run_fallback,
+            )
+        except TypeError:
+            recent_signals = self.load_recent_signals(date_ist, signal_limit, resolved_run_id)
         recent_trace_digests: list[dict[str, Any]] = []
         if _decision_trace_enabled():
-            recent_trace_digests = self.load_recent_trace_digests(
-                date_ist,
-                resolved_timeline_limit,
-                run_id=resolved_run_id,
-            )
+            try:
+                recent_trace_digests = self.load_recent_trace_digests(
+                    date_ist,
+                    resolved_timeline_limit,
+                    run_id=resolved_run_id,
+                    allow_historical_run_fallback=allow_historical_run_fallback,
+                )
+            except TypeError:
+                recent_trace_digests = self.load_recent_trace_digests(
+                    date_ist,
+                    resolved_timeline_limit,
+                    run_id=resolved_run_id,
+                )
         decision_diagnostics = self.build_decision_diagnostics(
             date_ist=date_ist,
             votes_coll=votes_coll,

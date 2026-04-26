@@ -85,17 +85,30 @@ class LiveStrategyRepository:
         limit: int,
         run_id: str | None,
         projection: dict[str, Any],
+        allow_historical_run_fallback: bool = True,
     ) -> list[dict[str, Any]]:
         query = self._date_run_query(date_ist, run_id)
         docs = list(coll.find(query, projection).sort("timestamp", -1).limit(int(limit)))
-        if docs or not str(run_id or "").strip() or self._dataset != "historical":
+        if (
+            docs
+            or not allow_historical_run_fallback
+            or not str(run_id or "").strip()
+            or self._dataset != "historical"
+        ):
             return docs
         # Historical raw collections can contain replay rows without the evaluation run_id.
         # Fall back to the date-scoped slice so replay diagnostics stay visible on no-trade days.
         fallback_query = self._date_run_query(date_ist, None)
         return list(coll.find(fallback_query, projection).sort("timestamp", -1).limit(int(limit)))
 
-    def load_recent_votes(self, date_ist: str, limit: int, run_id: str | None = None) -> list[dict[str, Any]]:
+    def load_recent_votes(
+        self,
+        date_ist: str,
+        limit: int,
+        run_id: str | None = None,
+        *,
+        allow_historical_run_fallback: bool = True,
+    ) -> list[dict[str, Any]]:
         coll = self.collections()["votes"]
         projection = {
             "_id": 0,
@@ -121,6 +134,7 @@ class LiveStrategyRepository:
             limit=limit,
             run_id=run_id,
             projection=projection,
+            allow_historical_run_fallback=allow_historical_run_fallback,
         ):
             vote = ((doc.get("payload") or {}).get("vote")) if isinstance(doc.get("payload"), dict) else {}
             vote = vote if isinstance(vote, dict) else {}
@@ -157,7 +171,14 @@ class LiveStrategyRepository:
             )
         return rows
 
-    def load_recent_signals(self, date_ist: str, limit: int, run_id: str | None = None) -> list[dict[str, Any]]:
+    def load_recent_signals(
+        self,
+        date_ist: str,
+        limit: int,
+        run_id: str | None = None,
+        *,
+        allow_historical_run_fallback: bool = True,
+    ) -> list[dict[str, Any]]:
         coll = self.collections()["signals"]
         projection = {
             "_id": 0,
@@ -183,6 +204,7 @@ class LiveStrategyRepository:
             limit=limit,
             run_id=run_id,
             projection=projection,
+            allow_historical_run_fallback=allow_historical_run_fallback,
         ):
             signal = ((doc.get("payload") or {}).get("signal")) if isinstance(doc.get("payload"), dict) else {}
             signal = signal if isinstance(signal, dict) else {}
@@ -304,6 +326,7 @@ class LiveStrategyRepository:
         limit: int,
         *,
         run_id: str | None = None,
+        allow_historical_run_fallback: bool = True,
         outcome: str | None = None,
         engine_mode: str | None = None,
         only_blocked: bool = False,
@@ -348,8 +371,23 @@ class LiveStrategyRepository:
             "blocked_candidate_count": 1,
             "summary_metrics": 1,
         }
+        if (
+            allow_historical_run_fallback
+            and self._dataset == "historical"
+            and str(run_id or "").strip()
+        ):
+            docs = self._load_recent_docs(
+                coll,
+                date_ist=date_ist,
+                limit=limit,
+                run_id=run_id,
+                projection=projection,
+                allow_historical_run_fallback=True,
+            )
+        else:
+            docs = list(coll.find(query, projection).sort("timestamp", -1).limit(int(limit)))
         rows: list[dict[str, Any]] = []
-        for doc in coll.find(query, projection).sort("timestamp", -1).limit(int(limit)):
+        for doc in docs:
             rows.append(
                 {
                     "trace_id": str(doc.get("trace_id") or "").strip() or None,
