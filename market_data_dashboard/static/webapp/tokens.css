@@ -442,6 +442,37 @@ table { border-collapse: collapse; width: 100%; }
 .chart-tip-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; }
 .chart-tip-row .k { color: #8A94A1; }
 
+/* ============ Chart panel fullscreen expand ============ */
+.chart-panel-expanded {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 200;
+  border-radius: 0 !important;
+  margin: 0 !important;
+}
+.chart-panel-expanded .panel-head {
+  border-radius: 0;
+}
+.chart-expand-btn {
+  font-size: 16px; line-height: 1;
+  padding: 0 7px; height: 26px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-2);
+  background: transparent; cursor: pointer; color: var(--ink-3);
+}
+.chart-expand-btn:hover { background: var(--paper-2); color: var(--ink); }
+.chart-fit-btn {
+  font-size: 11px;
+  padding: 0 8px; height: 26px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-2);
+  background: transparent; cursor: pointer; color: var(--ink-3);
+  font-family: var(--f-mono);
+}
+.chart-fit-btn:hover { background: var(--paper-2); color: var(--ink); }
+/* Hide decision panel when chart is fullscreen — chart fills all available space */
+.hide-when-expanded { visibility: hidden; pointer-events: none; }
+
 /* ============ Sparkline / strategy bars ============ */
 .sbar-row {
   display: grid; grid-template-columns: 140px 1fr auto;

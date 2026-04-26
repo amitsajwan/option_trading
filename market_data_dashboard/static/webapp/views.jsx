@@ -13,8 +13,18 @@ function StrategyMonitor(props) {
   } = props;
 
   const [detailExpanded, setDetailExpanded] = _useState(true);
-  const [tab, setTab] = _useState('trades');
+  const [tab,           setTab]           = _useState('trades');
+  const [chartExpanded, setChartExpanded] = _useState(false);
+  const chartFitRef = _useRef(null);
+
   const strategyRows = _useMemo(() => TradingCore.strategyContribution(trades), [trades]);
+
+  // All fired signals up to current bar — not sliced to display limit, used for chart markers
+  const chartSignals = _useMemo(
+    () => (session.signals || []).filter(s => s.fired && s.idx <= upToIdx),
+    [session.signals, upToIdx],
+  );
+
   const activeSignal =
     selectedSignal ? selectedSignal :
     selectedTrade  ? selectedTrade.signal :
@@ -43,7 +53,7 @@ function StrategyMonitor(props) {
       <KpiStrip items={kpiItems} cols={kpiItems.length} />
 
       <div className="g-chart-side">
-        <div className="panel">
+        <div className={`panel${chartExpanded ? ' chart-panel-expanded' : ''}`}>
           <div className="panel-head">
             <div className="row gap-m" style={{ minWidth: 0 }}>
               <div className="panel-title">
@@ -56,22 +66,38 @@ function StrategyMonitor(props) {
               <span className="mono" style={{ fontWeight: 600 }}>
                 {(livePrice != null ? livePrice : session.candles[upToIdx]?.c || 0).toFixed(2)}
               </span>
+              <button className="chart-fit-btn" title="Fit all bars"
+                onClick={() => chartFitRef.current && chartFitRef.current()}>
+                fit
+              </button>
+              <button className="chart-expand-btn"
+                title={chartExpanded ? 'Collapse (Esc)' : 'Expand chart'}
+                onClick={() => setChartExpanded(e => !e)}>
+                {chartExpanded ? '\u292C' : '\u2922'}
+              </button>
             </div>
           </div>
-          <div className="panel-body flush" style={{ padding: '6px 4px 0' }}>
-            <PriceChart
+          <div className="panel-body flush"
+            style={{ height: chartExpanded ? 'calc(100vh - 45px)' : 'auto', padding: 0 }}>
+            <LWChart
               candles={session.candles}
               upToIdx={upToIdx}
               trades={trades}
-              selectedTradeId={selectedTrade ? selectedTrade.id : null}
+              signals={chartSignals}
+              selectedTrade={selectedTrade}
+              selectedSignal={selectedSignal}
               onSelectTrade={onSelectTrade}
+              onSelectSignal={onSelectSignal}
               height={340}
               liveIdx={mode === 'live' ? liveIdx : null}
+              expanded={chartExpanded}
+              onExpandChange={setChartExpanded}
+              fitRef={chartFitRef}
             />
           </div>
         </div>
 
-        <div className="panel decision-panel">
+        <div className={`panel decision-panel${chartExpanded ? ' hide-when-expanded' : ''}`}>
           <div className="panel-head">
             <div className="panel-title">Decision</div>
             <span className="count">{signals.length} signals</span>

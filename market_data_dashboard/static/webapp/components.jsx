@@ -21,162 +21,219 @@ function KpiStrip({ items, cols }) {
   );
 }
 
-// ── PRICE CHART ──────────────────────────────────────────────────────────
-// SVG candlestick with trade markers and crosshair tooltip.
-function PriceChart({ candles, upToIdx, trades, selectedTradeId, onSelectTrade, height, liveIdx }) {
-  const [hover, setHover] = useState(null);
-  const wrapRef = useRef(null);
-  const [width, setWidth] = useState(800);
-  const H = height || 340;
-  const PAD = { t: 16, r: 48, b: 28, l: 10 };
+// ── LW CHART (Lightweight Charts v4) ─────────────────────────────────────
+// Zoom/pan natively, click row→navigate, fullscreen expand, IST time axis.
+function LWChart({
+  candles, upToIdx, trades, signals,
+  selectedTrade, selectedSignal,
+  onSelectTrade, onSelectSignal,
+  height, liveIdx, expanded, onExpandChange,
+  fitRef,   // optional: caller passes a ref; we store fitContent fn on it
+}) {
+  const containerRef = useRef(null);
+  const chartRef     = useRef(null);
+  const seriesRef    = useRef(null);
+  const prevUpToRef  = useRef(-1);
+  const prevCandRef  = useRef(null);
+  // stable refs so click handler isn't a stale closure
+  const tradesRef    = useRef(trades);
+  const candlesRef   = useRef(candles);
+  useEffect(() => { tradesRef.current  = trades;  }, [trades]);
+  useEffect(() => { candlesRef.current = candles; }, [candles]);
 
+  const toLW = (c) => ({ time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c });
+
+  // ── Create chart once ──────────────────────────────────────────────────
   useEffect(() => {
-    function measure() {
-      if (wrapRef.current) setWidth(wrapRef.current.clientWidth);
-    }
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, []);
+    const LC = window.LightweightCharts;
+    if (!containerRef.current || !LC) return;
 
-  const visibleCount = (upToIdx == null ? candles.length : Math.min(upToIdx + 1, candles.length));
-  const visible = candles.slice(0, visibleCount);
-  const { min, max } = useMemo(() => {
-    if (!visible.length) return { min: 0, max: 1 };
-    let mn = Infinity, mx = -Infinity;
-    visible.forEach(c => { if (c.l < mn) mn = c.l; if (c.h > mx) mx = c.h; });
-    const pad = (mx - mn) * 0.05;
-    return { min: mn - pad, max: mx + pad };
-  }, [visible, visibleCount]);
+    const chart = LC.createChart(containerRef.current, {
+      layout: {
+        background: { color: '#F6F4EF' },
+        textColor: '#5A6674',
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: 'rgba(11,15,20,0.05)' },
+        horzLines: { color: 'rgba(11,15,20,0.05)' },
+      },
+      crosshair: { mode: 1 },   // 1 = Normal
+      rightPriceScale: { borderColor: 'rgba(11,15,20,0.12)' },
+      timeScale: {
+        borderColor: 'rgba(11,15,20,0.12)',
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (ts) => {
+          const d = new Date(ts * 1000);
+          const hh = String(d.getUTCHours() + 5).padStart(2, '0');
+          const raw = d.getUTCMinutes() + 30;
+          const mm  = String(raw >= 60 ? raw - 60 : raw).padStart(2, '0');
+          const hAdj = raw >= 60 ? String(d.getUTCHours() + 6).padStart(2, '0') : hh;
+          return `${hAdj}:${mm}`;
+        },
+      },
+      localization: {
+        timeFormatter: (ts) => {
+          const d = new Date(ts * 1000);
+          return d.toLocaleTimeString('en-IN', {
+            timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
+          });
+        },
+      },
+    });
 
-  // Always render full-session x domain so live feels like it's filling up.
-  const W = width;
-  const xInner = W - PAD.l - PAD.r;
-  const yInner = H - PAD.t - PAD.b;
-  const step = xInner / Math.max(1, candles.length);
-  const xOf = (i) => PAD.l + i * step + step / 2;
-  const yOf = (p) => PAD.t + yInner - ((p - min) / (max - min)) * yInner;
-  const cw = Math.max(1.2, step * 0.7);
+    const series = chart.addCandlestickSeries({
+      upColor:        '#0A8F5C',
+      downColor:      '#C23E2F',
+      borderUpColor:  '#0A8F5C',
+      borderDownColor:'#C23E2F',
+      wickUpColor:    '#0A8F5C',
+      wickDownColor:  '#C23E2F',
+      priceLineVisible: false,
+    });
 
-  function handleMove(e) {
-    const r = wrapRef.current.getBoundingClientRect();
-    const x = e.clientX - r.left;
-    const rawIdx = Math.round((x - PAD.l) / step);
-    const idx = Math.max(0, Math.min(visible.length - 1, rawIdx));
-    if (!visible[idx]) return;
-    setHover({ idx: idx, x: xOf(idx), candle: visible[idx] });
-  }
-  function handleLeave() { setHover(null); }
-
-  // Trade markers — y-position uses the candle's close price (futures chart scale),
-  // not the option premium which is on a completely different scale.
-  const markers = useMemo(() => {
-    const mk = [];
-    (trades || []).forEach(tr => {
-      if (tr.entryIdx != null && tr.entryIdx < visibleCount) {
-        const candlePrice = visible[tr.entryIdx]?.c ?? tr.entry;
-        mk.push({ id: tr.id + '-e', role: 'entry', dir: tr.dir, idx: tr.entryIdx, price: candlePrice, trade: tr });
+    // Click on chart → select nearest trade
+    chart.subscribeClick((param) => {
+      if (!param.time) return;
+      const clickMs = param.time * 1000;
+      const allTrades  = tradesRef.current  || [];
+      const allCandles = candlesRef.current || [];
+      let best = null, bestDist = Infinity;
+      for (const tr of allTrades) {
+        const de = Math.abs(tr.t - clickMs);
+        if (de < bestDist && de < 90000) { best = tr; bestDist = de; }
+        const exitC = allCandles[tr.exitIdx];
+        if (exitC) {
+          const dx = Math.abs(exitC.t - clickMs);
+          if (dx < bestDist && dx < 90000) { best = tr; bestDist = dx; }
+        }
       }
-      if (tr.exitIdx != null && tr.exitIdx < visibleCount) {
-        const candlePrice = visible[tr.exitIdx]?.c ?? tr.exit;
-        mk.push({ id: tr.id + '-x', role: 'exit', dir: tr.dir, idx: tr.exitIdx, price: candlePrice, trade: tr });
+      if (best) onSelectTrade && onSelectTrade(best);
+    });
+
+    // Auto-resize when container changes size
+    const ro = new ResizeObserver(() => {
+      if (!containerRef.current || !chartRef.current) return;
+      chartRef.current.resize(
+        containerRef.current.clientWidth,
+        containerRef.current.clientHeight || (height || 340),
+      );
+    });
+    ro.observe(containerRef.current);
+
+    chartRef.current  = chart;
+    seriesRef.current = series;
+    if (fitRef) fitRef.current = () => chart.timeScale().fitContent();
+    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; seriesRef.current = null; };
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Feed candle data ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!seriesRef.current || !candles.length) return;
+    const idx = upToIdx == null ? candles.length - 1 : Math.min(upToIdx, candles.length - 1);
+    const sameSession = prevCandRef.current === candles;
+
+    if (sameSession && idx === prevUpToRef.current + 1 && prevUpToRef.current >= 0) {
+      // single-bar replay increment → fast path
+      seriesRef.current.update(toLW(candles[idx]));
+    } else {
+      // session change or jump → full reset
+      const saved = sameSession && chartRef.current
+        ? chartRef.current.timeScale().getVisibleRange() : null;
+      seriesRef.current.setData(candles.slice(0, idx + 1).map(toLW));
+      if (saved) {
+        try { chartRef.current.timeScale().setVisibleRange(saved); } catch (_) {
+          chartRef.current.timeScale().fitContent();
+        }
+      } else {
+        chartRef.current.timeScale().fitContent();
+      }
+    }
+    prevUpToRef.current = idx;
+    prevCandRef.current = candles;
+  }, [candles, upToIdx]);
+
+  // ── Rebuild markers ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    const visIdx = upToIdx == null ? Infinity : upToIdx;
+    const markers = [];
+
+    // Signal dots — fired only, caller already filters to upToIdx + fired
+    (signals || []).forEach(sig => {
+      const isSel = selectedSignal && selectedSignal === sig;
+      markers.push({
+        time:     Math.floor(sig.t / 1000),
+        position: 'belowBar',
+        color:    sig.traded ? '#0A8F5C' : '#B97405',
+        shape:    'circle',
+        text:     '',
+        size:     isSel ? 2 : 0.7,
+      });
+    });
+
+    // Trade entry / exit arrows
+    (trades || []).forEach(tr => {
+      if (tr.entryIdx > visIdx) return;
+      const isSel      = selectedTrade && tr.id === selectedTrade.id;
+      const entryColor = tr.dir === 'LONG' ? '#0A8F5C' : '#C23E2F';
+      const pnlColor   = tr.pnlPct >= 0   ? '#0A8F5C' : '#C23E2F';
+      markers.push({
+        time:     Math.floor(tr.t / 1000),
+        position: 'belowBar',
+        color:    entryColor,
+        shape:    'arrowUp',
+        text:     isSel ? tr.dir : '',
+        size:     isSel ? 2 : 1,
+      });
+      if (tr.exitIdx <= visIdx && candles[tr.exitIdx]) {
+        markers.push({
+          time:     Math.floor(candles[tr.exitIdx].t / 1000),
+          position: 'aboveBar',
+          color:    pnlColor,
+          shape:    'arrowDown',
+          text:     isSel ? ((tr.pnlPct >= 0 ? '+' : '') + tr.pnlPct.toFixed(2) + '%') : '',
+          size:     isSel ? 2 : 1,
+        });
       }
     });
-    return mk;
-  }, [trades, visibleCount, visible]);
 
-  // Y-axis gridlines
-  const yTicks = useMemo(() => {
-    const arr = [];
-    const n = 4;
-    for (let i = 0; i <= n; i++) arr.push(min + (max - min) * (i / n));
-    return arr;
-  }, [min, max]);
+    markers.sort((a, b) => a.time - b.time);
+    seriesRef.current.setMarkers(markers);
+  }, [trades, signals, selectedTrade, selectedSignal, upToIdx, candles]);
 
-  // Find last tick time for label
-  const lastCandle = visible[visible.length - 1];
+  // ── Navigate when selection changes ───────────────────────────────────
+  useEffect(() => {
+    if (!chartRef.current) return;
+    if (selectedTrade) {
+      const entryTs = Math.floor(selectedTrade.t / 1000);
+      const exitC   = candles[selectedTrade.exitIdx];
+      const exitTs  = exitC ? Math.floor(exitC.t / 1000) : entryTs + 1800;
+      const span    = Math.max(exitTs - entryTs, 300);
+      const buf     = Math.round(span * 0.5);
+      try { chartRef.current.timeScale().setVisibleRange({ from: entryTs - buf, to: exitTs + buf }); } catch (_) {}
+    } else if (selectedSignal) {
+      const ts = Math.floor(selectedSignal.t / 1000);
+      try { chartRef.current.timeScale().setVisibleRange({ from: ts - 600, to: ts + 900 }); } catch (_) {}
+    }
+  }, [selectedTrade, selectedSignal]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  return (
-    <div ref={wrapRef} className="chart-wrap" style={{ height: H, userSelect: 'none' }}>
-      <svg width={W} height={H} onMouseMove={handleMove} onMouseLeave={handleLeave}>
-        {/* Y gridlines */}
-        {yTicks.map((p, i) => (
-          <g key={`y${i}`}>
-            <line x1={PAD.l} x2={W - PAD.r} y1={yOf(p)} y2={yOf(p)}
-              stroke="rgba(11,15,20,0.05)" strokeDasharray="2 4" />
-            <text x={W - PAD.r + 6} y={yOf(p) + 3} fontSize="10"
-              fontFamily="var(--f-mono)" fill="var(--ink-3)">{p.toFixed(0)}</text>
-          </g>
-        ))}
-        {/* Candles */}
-        {visible.map((c, i) => {
-          const up = c.c >= c.o;
-          const color = up ? 'var(--pos)' : 'var(--neg)';
-          return (
-            <g key={i}>
-              <line x1={xOf(i)} x2={xOf(i)} y1={yOf(c.h)} y2={yOf(c.l)} stroke={color} strokeWidth="1" />
-              <rect
-                x={xOf(i) - cw/2} y={yOf(Math.max(c.o, c.c))}
-                width={cw} height={Math.max(1, Math.abs(yOf(c.o) - yOf(c.c)))}
-                fill={up ? color : color} opacity={up ? 0.85 : 1}
-              />
-            </g>
-          );
-        })}
-        {/* Live marker */}
-        {liveIdx != null && visible[liveIdx] && (
-          <g>
-            <circle cx={xOf(liveIdx)} cy={yOf(visible[liveIdx].c)} r="4" fill="var(--pos)" opacity="0.9" />
-            <circle cx={xOf(liveIdx)} cy={yOf(visible[liveIdx].c)} r="9" fill="none" stroke="var(--pos)" strokeOpacity="0.3">
-              <animate attributeName="r" from="4" to="14" dur="1.5s" repeatCount="indefinite" />
-              <animate attributeName="stroke-opacity" from="0.4" to="0" dur="1.5s" repeatCount="indefinite" />
-            </circle>
-          </g>
-        )}
-        {/* Trade markers */}
-        {markers.map(m => {
-          const y = yOf(m.price);
-          const x = xOf(m.idx);
-          const isEntry = m.role === 'entry';
-          const isLong = m.dir === 'LONG';
-          const color = isLong ? 'var(--pos)' : 'var(--neg)';
-          const selected = selectedTradeId && m.trade.id === selectedTradeId;
-          if (isEntry) {
-            const dy = isLong ? 10 : -10;
-            return (
-              <g key={m.id} style={{ cursor: 'pointer' }} onClick={() => onSelectTrade && onSelectTrade(m.trade)}>
-                <polygon points={`${x},${y + dy * 0.2} ${x-5},${y + dy} ${x+5},${y + dy}`}
-                  fill={color} stroke={selected ? 'var(--ink)' : 'none'} strokeWidth="1.5" />
-              </g>
-            );
-          }
-          return (
-            <g key={m.id} style={{ cursor: 'pointer' }} onClick={() => onSelectTrade && onSelectTrade(m.trade)}>
-              <circle cx={x} cy={y} r="4" fill="var(--paper)" stroke={color} strokeWidth="2" />
-              {selected && <circle cx={x} cy={y} r="7" fill="none" stroke="var(--ink)" />}
-            </g>
-          );
-        })}
-      </svg>
-      {/* Crosshair */}
-      {hover && (
-        <>
-          <div className="chart-crosshair-v"
-            style={{ left: hover.x, opacity: 1 }} />
-          <div className={`chart-tip show`}
-            style={{ left: Math.min(hover.x + 14, W - 170), top: 16 }}>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>{hover.candle.label}</div>
-            <div className="chart-tip-row"><span className="k">O</span><span>{hover.candle.o.toFixed(2)}</span></div>
-            <div className="chart-tip-row"><span className="k">H</span><span>{hover.candle.h.toFixed(2)}</span></div>
-            <div className="chart-tip-row"><span className="k">L</span><span>{hover.candle.l.toFixed(2)}</span></div>
-            <div className="chart-tip-row"><span className="k">C</span><span>{hover.candle.c.toFixed(2)}</span></div>
-            <div className="chart-tip-row"><span className="k">Vol</span><span>{TC.fmtCompact(hover.candle.v)}</span></div>
-          </div>
-        </>
-      )}
-    </div>
-  );
+  // ── Escape key to exit fullscreen ──────────────────────────────────────
+  useEffect(() => {
+    if (!expanded) return;
+    const fn = (e) => { if (e.key === 'Escape') onExpandChange && onExpandChange(false); };
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, [expanded, onExpandChange]);
+
+  const h = expanded ? '100%' : (height || 340);
+  return <div ref={containerRef} style={{ width: '100%', height: h, minHeight: 200 }} />;
 }
+
+// Keep alias so any code that still references PriceChart doesn't break.
+const PriceChart = LWChart;
 
 // ── TRADE TABLE ──────────────────────────────────────────────────────────
 function TradeTable({ trades, selectedId, onSelect, flashId }) {
