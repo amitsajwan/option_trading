@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "_comment": "Proper full-pipeline grid. 5 runs: baseline + 4 Stage 2 feature set variants. All reuse Stage 1 from run 1. Goal: find the Stage 2 feature set that yields best direction signal end-to-end.",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.proper_full_v1.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_proper_full_v1"
+  },
+  "selection": {
+    "ranking_strategy": "stage3_policy_paths_v1",
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.55,
+      "brier_max": 0.26
+    },
+    "robustness_probe": {
+      "enabled": true,
+      "top_k": 3,
+      "iterations": 200,
+      "random_seed": 42,
+      "splits": ["research_valid", "final_holdout"],
+      "resample_unit": "trade_date"
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "proper_s2_midday_time_aware",
+        "model_group_suffix": "_proper_s2_midday_time_aware",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_proper_s2_midday_time_aware"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_midday_time_aware_plus_oi_iv"]
+            }
+          },
+          "training": {
+            "stage2_target_redesign": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0019,
+              "min_winner_return_after_cost": 0.001,
+              "max_opposing_return_after_cost": -0.0002,
+              "max_kept_fraction": 0.75,
+              "conviction_score": "edge_winner_min"
+            }
+          }
+        }
+      },
+      {
+        "run_id": "proper_s2_direction_regime_v3",
+        "model_group_suffix": "_proper_s2_direction_regime_v3",
+        "reuse_stage1_from": "proper_s2_midday_time_aware",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_proper_s2_direction_regime_v3"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_midday_direction_regime_v3"]
+            }
+          },
+          "training": {
+            "stage2_target_redesign": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0019,
+              "min_winner_return_after_cost": 0.001,
+              "max_opposing_return_after_cost": -0.0002,
+              "max_kept_fraction": 0.75,
+              "conviction_score": "edge_winner_min"
+            }
+          }
+        }
+      },
+      {
+        "run_id": "proper_s2_asymmetry_expiry",
+        "model_group_suffix": "_proper_s2_asymmetry_expiry",
+        "reuse_stage1_from": "proper_s2_midday_time_aware",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_proper_s2_asymmetry_expiry"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": [
+                "fo_midday_asymmetry",
+                "fo_midday_expiry_interactions"
+              ]
+            }
+          },
+          "training": {
+            "stage2_target_redesign": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0019,
+              "min_winner_return_after_cost": 0.001,
+              "max_opposing_return_after_cost": -0.0002,
+              "max_kept_fraction": 0.75,
+              "conviction_score": "edge_winner_min"
+            }
+          }
+        }
+      },
+      {
+        "run_id": "proper_s2_expiry_aware_simple",
+        "model_group_suffix": "_proper_s2_expiry_aware_simple",
+        "reuse_stage1_from": "proper_s2_midday_time_aware",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_proper_s2_expiry_aware_simple"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_expiry_aware_v3"]
+            }
+          },
+          "labels": {
+            "stage2_labeler_id": "direction_best_recipe_v1"
+          },
+          "training": {
+            "stage2_trainer_id": "binary_catalog_v1",
+            "stage2_session_filter": {
+              "enabled": false
+            },
+            "stage2_target_redesign": {
+              "enabled": false
+            }
+          },
+          "policy": {
+            "stage2_policy_id": "direction_gate_economic_balance_v1"
+          }
+        }
+      },
+      {
+        "run_id": "proper_s2_strict_target",
+        "model_group_suffix": "_proper_s2_strict_target",
+        "reuse_stage1_from": "proper_s2_midday_time_aware",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_proper_s2_strict_target"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_midday_time_aware_plus_oi_iv"]
+            }
+          },
+          "training": {
+            "stage2_target_redesign": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0022,
+              "min_winner_return_after_cost": 0.0012,
+              "max_opposing_return_after_cost": -0.0004,
+              "max_kept_fraction": 0.60,
+              "conviction_score": "edge_winner_min"
+            }
+          }
+        }
+      }
+    ]
+  }
+}
