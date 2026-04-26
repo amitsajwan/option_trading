@@ -560,7 +560,7 @@ def _build_session(
 
     def _dedup_signal_key(doc: Dict[str, Any], sig: MonitorSignal) -> str:
         sid = str(doc.get("signal_id") or ((doc.get("payload") or {}).get("signal") or {}).get("signal_id") or "").strip()
-        return sid if sid else f"{sig.idx}:{sig.dir}:{sig.strat}:{sig.conf:.3f}"
+        return sid if sid else f"{sig.idx}:{sig.dir}:{sig.strat}"
 
     def _extract_sid(doc: Dict[str, Any]) -> str:
         return str(doc.get("signal_id") or ((doc.get("payload") or {}).get("signal") or {}).get("signal_id") or "").strip()

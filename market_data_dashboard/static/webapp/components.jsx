@@ -178,8 +178,9 @@ function LWChart({
     const visIdx = upToIdx == null ? Infinity : upToIdx;
     const markers = [];
 
-    // Signal dots — fired only, caller already filters to upToIdx + fired
+    // Signal dots — only traded signals (skipped signals are table-only; every-bar dots add noise)
     (signals || []).forEach(sig => {
+      if (!sig.traded && !(selectedSignal && selectedSignal === sig)) return;
       const isSel = selectedSignal && selectedSignal === sig;
       markers.push({
         time:     Math.floor(sig.t / 1000),
@@ -187,7 +188,7 @@ function LWChart({
         color:    sig.traded ? '#0A8F5C' : '#B97405',
         shape:    'circle',
         text:     '',
-        size:     isSel ? 2 : 0.4,
+        size:     isSel ? 2 : 0.5,
       });
     });
 
