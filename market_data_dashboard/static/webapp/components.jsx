@@ -238,6 +238,7 @@ function DecisionGrid({ signals, selectedId, onSelect }) {
           <th>Dir</th>
           <th className="r">Conf</th>
           <th>State</th>
+          <th>Outcome</th>
           <th className="mobile-hide">Reason</th>
         </tr>
       </thead>
@@ -254,6 +255,13 @@ function DecisionGrid({ signals, selectedId, onSelect }) {
               {sig.fired
                 ? <span className="chip pos"><span className="dot"></span>fired</span>
                 : <span className="chip"><span className="dot"></span>held</span>}
+            </td>
+            <td>
+              {sig.fired
+                ? (sig.traded
+                    ? <span className="chip pos" style={{ fontSize: 10 }}>&#x2192; trade</span>
+                    : <span className="chip" style={{ fontSize: 10, opacity: 0.6 }}>&#x2192; skipped</span>)
+                : <span className="muted" style={{ fontSize: 10 }}>—</span>}
             </td>
             <td className="mobile-hide muted">{sig.reason}</td>
           </tr>
@@ -320,6 +328,13 @@ function DecisionDetail({ trade, sig, onClose, expanded, setExpanded }) {
           <div className="mono tiny" style={{ color: 'var(--ink-3)', marginTop: 2 }}>
             {sig.fired ? 'FIRED' : 'HELD'} · {sig.reason} · regime {sig.regime}
           </div>
+          {sig.fired && (
+            <div className="mono tiny" style={{ marginTop: 3, color: sig.traded ? 'var(--pos)' : 'var(--ink-3)' }}>
+              {sig.traded
+                ? 'Execution: position opened \u2192 trade recorded'
+                : 'Execution: signal skipped \u2014 no position opened by runtime'}
+            </div>
+          )}
         </div>
         <button className="btn sm ghost" onClick={() => setExpanded(!expanded)}>
           {expanded ? 'Collapse' : 'Expand'}

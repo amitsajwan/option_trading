@@ -500,6 +500,47 @@ def _build_session(
 
     candle_ts_sorted = [c.t for c in candles]
 
+    # ── Read positions first so we know which signal_ids became trades ─────────
+    pos_proj = {
+        "_id": 0,
+        "position_id": 1,
+        "signal_id": 1,
+        "event": 1,
+        "timestamp": 1,
+        "payload.position": 1,
+        "run_id": 1,
+    }
+    position_map: Dict[str, Dict[str, Any]] = {}
+    detected_run_id: Optional[str] = None
+    for doc in db[coll_positions].find(date_q, pos_proj).sort("timestamp", ASCENDING):
+        pid = str(doc.get("position_id") or "").strip()
+        if not pid:
+            continue
+        payload_pos = ((doc.get("payload") or {}).get("position") or {})
+        if not isinstance(payload_pos, dict):
+            payload_pos = {}
+        event = str(doc.get("event") or payload_pos.get("event") or "").strip().upper()
+        slot = position_map.setdefault(pid, {"position_id": pid})
+        if event == "POSITION_OPEN":
+            slot["open"] = payload_pos
+            slot["open_doc"] = doc
+            slot["signal_id"] = str(doc.get("signal_id") or payload_pos.get("signal_id") or "").strip()
+        elif event == "POSITION_CLOSE":
+            slot["close"] = payload_pos
+            slot["close_doc"] = doc
+            if not slot.get("signal_id"):
+                slot["signal_id"] = str(doc.get("signal_id") or payload_pos.get("signal_id") or "").strip()
+            if detected_run_id is None:
+                detected_run_id = str(doc.get("run_id") or "").strip() or None
+
+    # signal_ids that produced a fully closed position
+    traded_signal_ids: set = {
+        docs["signal_id"]
+        for docs in position_map.values()
+        if docs.get("signal_id") and isinstance(docs.get("open"), dict) and isinstance(docs.get("close"), dict)
+    }
+
+    # ── Now build signals, marking each as traded or skipped ─────────────────
     vote_proj = {
         "_id": 0,
         "signal_id": 1,
@@ -521,6 +562,9 @@ def _build_session(
         sid = str(doc.get("signal_id") or ((doc.get("payload") or {}).get("signal") or {}).get("signal_id") or "").strip()
         return sid if sid else f"{sig.idx}:{sig.dir}:{sig.strat}:{sig.conf:.3f}"
 
+    def _extract_sid(doc: Dict[str, Any]) -> str:
+        return str(doc.get("signal_id") or ((doc.get("payload") or {}).get("signal") or {}).get("signal_id") or "").strip()
+
     for doc in db[coll_votes].find(date_q, vote_proj).sort("timestamp", ASCENDING):
         sig = _vote_to_signal(doc, candle_ts_sorted)
         if sig is None:
@@ -529,8 +573,10 @@ def _build_session(
         if key in _seen_signal_keys:
             continue
         _seen_signal_keys.add(key)
+        sid = _extract_sid(doc)
+        if sig.fired and sid:
+            sig = sig.model_copy(update={"traded": sid in traded_signal_ids})
         signals.append(sig)
-        sid = str(doc.get("signal_id") or "").strip()
         if sid:
             signal_by_id[sid] = sig
 
@@ -564,42 +610,12 @@ def _build_session(
             if key in _seen_signal_keys:
                 continue
             _seen_signal_keys.add(key)
+            sid = _extract_sid(doc)
+            if sig.fired and sid:
+                sig = sig.model_copy(update={"traded": sid in traded_signal_ids})
             signals.append(sig)
-            sid = str(doc.get("signal_id") or ((doc.get("payload") or {}).get("signal") or {}).get("signal_id") or "").strip()
             if sid:
                 signal_by_id[sid] = sig
-
-    pos_proj = {
-        "_id": 0,
-        "position_id": 1,
-        "signal_id": 1,
-        "event": 1,
-        "timestamp": 1,
-        "payload.position": 1,
-        "run_id": 1,
-    }
-    position_map: Dict[str, Dict[str, Any]] = {}
-    detected_run_id: Optional[str] = None
-    for doc in db[coll_positions].find(date_q, pos_proj).sort("timestamp", ASCENDING):
-        pid = str(doc.get("position_id") or "").strip()
-        if not pid:
-            continue
-        payload_pos = ((doc.get("payload") or {}).get("position") or {})
-        if not isinstance(payload_pos, dict):
-            payload_pos = {}
-        event = str(doc.get("event") or payload_pos.get("event") or "").strip().upper()
-        slot = position_map.setdefault(pid, {"position_id": pid})
-        if event == "POSITION_OPEN":
-            slot["open"] = payload_pos
-            slot["open_doc"] = doc
-            slot["signal_id"] = str(doc.get("signal_id") or payload_pos.get("signal_id") or "").strip()
-        elif event == "POSITION_CLOSE":
-            slot["close"] = payload_pos
-            slot["close_doc"] = doc
-            if not slot.get("signal_id"):
-                slot["signal_id"] = str(doc.get("signal_id") or payload_pos.get("signal_id") or "").strip()
-            if detected_run_id is None:
-                detected_run_id = str(doc.get("run_id") or "").strip() or None
 
     trades: List[MonitorTrade] = []
     for pid, docs in position_map.items():

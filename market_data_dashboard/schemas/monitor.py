@@ -21,6 +21,7 @@ class MonitorSignal(BaseModel):
     dir: str
     conf: float = Field(..., ge=0.0, le=1.0)
     fired: bool
+    traded: bool = False
     reason: str
     detail: str = ""
     metrics: MonitorSignalMetrics

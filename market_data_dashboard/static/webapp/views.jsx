@@ -426,7 +426,7 @@ function ReplayMonitor({ onModeSwitch }) {
     { label: 'SESSION P&L',  value: TradingCore.fmtSigned(totalPnl, 2, '%'),
       cls: totalPnl >= 0 ? 'pos' : 'neg', sub: `${visibleTrades.length} trades · ${(winRate * 100).toFixed(0)}% WR` },
     { label: 'SIGNALS',      value: String(visibleSignals.length),
-      sub: `${visibleSignals.filter(s => s.fired).length} fired` },
+      sub: `${visibleSignals.filter(s => s.fired).length} fired · ${visibleSignals.filter(s => s.traded).length} executed` },
     { label: 'PROGRESS',     value: (pct * 100).toFixed(0) + '%',
       sub: `${upToIdx + 1}/${session.candles.length} bars` },
     { label: 'ENGINE',       value: 'ML_PURE_V3', sub: session.runId ? 'run ' + String(session.runId).slice(0,12) : 'staged' },
