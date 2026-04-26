@@ -33,6 +33,7 @@ function LWChart({
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const seriesRef    = useRef(null);
+  const volSeriesRef = useRef(null);
   const prevUpToRef  = useRef(-1);
   const prevCandRef  = useRef(null);
   // stable refs so click handler isn't a stale closure
@@ -41,7 +42,8 @@ function LWChart({
   useEffect(() => { tradesRef.current  = trades;  }, [trades]);
   useEffect(() => { candlesRef.current = candles; }, [candles]);
 
-  const toLW = (c) => ({ time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c });
+  const toLW    = (c) => ({ time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c });
+  const toVolLW = (c) => ({ time: Math.floor(c.t / 1000), value: c.v || 0, color: c.c >= c.o ? 'rgba(10,143,92,0.25)' : 'rgba(194,62,47,0.25)' });
 
   // ── Create chart once ──────────────────────────────────────────────────
   useEffect(() => {
@@ -94,6 +96,17 @@ function LWChart({
       priceLineVisible: false,
     });
 
+    const volSeries = chart.addHistogramSeries({
+      priceScaleId: 'vol',
+      priceFormat: { type: 'volume' },
+      color: 'rgba(11,15,20,0.15)',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    chart.priceScale('vol').applyOptions({
+      scaleMargins: { top: 0.82, bottom: 0 },
+    });
+
     // Click on chart → select nearest trade
     chart.subscribeClick((param) => {
       if (!param.time) return;
@@ -123,10 +136,11 @@ function LWChart({
     });
     ro.observe(containerRef.current);
 
-    chartRef.current  = chart;
-    seriesRef.current = series;
+    chartRef.current     = chart;
+    seriesRef.current    = series;
+    volSeriesRef.current = volSeries;
     if (fitRef) fitRef.current = () => chart.timeScale().fitContent();
-    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; seriesRef.current = null; };
+    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; seriesRef.current = null; volSeriesRef.current = null; };
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Feed candle data ───────────────────────────────────────────────────
@@ -138,11 +152,14 @@ function LWChart({
     if (sameSession && idx === prevUpToRef.current + 1 && prevUpToRef.current >= 0) {
       // single-bar replay increment → fast path
       seriesRef.current.update(toLW(candles[idx]));
+      if (volSeriesRef.current) volSeriesRef.current.update(toVolLW(candles[idx]));
     } else {
       // session change or jump → full reset
       const saved = sameSession && chartRef.current
         ? chartRef.current.timeScale().getVisibleRange() : null;
-      seriesRef.current.setData(candles.slice(0, idx + 1).map(toLW));
+      const slice = candles.slice(0, idx + 1);
+      seriesRef.current.setData(slice.map(toLW));
+      if (volSeriesRef.current) volSeriesRef.current.setData(slice.map(toVolLW));
       if (saved) {
         try { chartRef.current.timeScale().setVisibleRange(saved); } catch (_) {
           chartRef.current.timeScale().fitContent();
@@ -170,7 +187,7 @@ function LWChart({
         color:    sig.traded ? '#0A8F5C' : '#B97405',
         shape:    'circle',
         text:     '',
-        size:     isSel ? 2 : 0.7,
+        size:     isSel ? 2 : 0.4,
       });
     });
 
@@ -207,16 +224,22 @@ function LWChart({
   // ── Navigate when selection changes ───────────────────────────────────
   useEffect(() => {
     if (!chartRef.current) return;
+    const firstTs = candles.length ? Math.floor(candles[0].t / 1000) : 0;
+    const lastTs  = candles.length ? Math.floor(candles[Math.min(upToIdx ?? candles.length - 1, candles.length - 1)].t / 1000) : 0;
     if (selectedTrade) {
       const entryTs = Math.floor(selectedTrade.t / 1000);
       const exitC   = candles[selectedTrade.exitIdx];
       const exitTs  = exitC ? Math.floor(exitC.t / 1000) : entryTs + 1800;
       const span    = Math.max(exitTs - entryTs, 300);
       const buf     = Math.round(span * 0.5);
-      try { chartRef.current.timeScale().setVisibleRange({ from: entryTs - buf, to: exitTs + buf }); } catch (_) {}
+      const from    = Math.max(entryTs - buf, firstTs);
+      const to      = Math.min(exitTs + buf, lastTs + 300);
+      try { chartRef.current.timeScale().setVisibleRange({ from, to }); } catch (_) {}
     } else if (selectedSignal) {
-      const ts = Math.floor(selectedSignal.t / 1000);
-      try { chartRef.current.timeScale().setVisibleRange({ from: ts - 600, to: ts + 900 }); } catch (_) {}
+      const ts   = Math.floor(selectedSignal.t / 1000);
+      const from = Math.max(ts - 600, firstTs);
+      const to   = Math.min(ts + 900, lastTs + 300);
+      try { chartRef.current.timeScale().setVisibleRange({ from, to }); } catch (_) {}
     }
   }, [selectedTrade, selectedSignal]);   // eslint-disable-line react-hooks/exhaustive-deps
 
