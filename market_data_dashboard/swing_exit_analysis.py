@@ -80,14 +80,19 @@ def load_trades(db, trade_date: str, run_prefix: str) -> List[Dict]:
         pid  = str(doc.get("position_id") or "").strip()
         if not pid:
             continue
-        pl   = doc.get("payload") or {}
-        evnt = str(doc.get("event") or pl.get("event") or "").upper()
+        pl   = (doc.get("payload") or {}).get("position") or doc.get("payload") or {}
+        evnt = str(doc.get("event") or "").upper()
         slot = pos_map.setdefault(pid, {"position_id": pid})
         if evnt == "POSITION_OPEN":
-            slot["open"] = pl; slot["open_ts"] = doc.get("timestamp")
-            slot["run_id"] = str(pl.get("run_id") or doc.get("run_id") or "")
+            slot["open"] = pl
+            slot["open_ts"] = doc.get("timestamp")
+            slot["run_id"] = str(doc.get("run_id") or pl.get("run_id") or "")
+            slot["open_doc"] = doc
         elif evnt == "POSITION_CLOSE":
-            slot["close"] = pl; slot["close_ts"] = doc.get("timestamp")
+            slot["close"] = pl
+            slot["close_ts"] = doc.get("timestamp")
+            if not slot.get("run_id"):
+                slot["run_id"] = str(doc.get("run_id") or pl.get("run_id") or "")
 
     trades = []
     for pid, slot in pos_map.items():
@@ -97,29 +102,42 @@ def load_trades(db, trade_date: str, run_prefix: str) -> List[Dict]:
         if run_prefix and not run_id.startswith(run_prefix):
             continue
         op = slot["open"]; cl = slot["close"]
-        entry  = float(op.get("entry_price") or op.get("price") or 0)
-        exit_p = float(cl.get("exit_price")  or cl.get("price") or 0)
-        dir_   = str(op.get("direction") or op.get("dir") or "").upper()
-        strat  = str(op.get("strategy") or op.get("strategy_name") or "")
-        pnl_pct = ((exit_p - entry) / entry * 100) if entry else 0
-        if dir_ == "SHORT":
-            pnl_pct = -pnl_pct
-        ots = slot["open_ts"]
-        cts = slot["close_ts"]
+        odoc = slot.get("open_doc", {})
+
+        # Entry price: futures underlying (for swing analysis), fallback to premium
+        entry  = float(odoc.get("entry_futures_price") or op.get("entry_futures_price")
+                       or op.get("entry_premium") or op.get("entry_price") or 0)
+        exit_p = float(cl.get("exit_futures_price") or cl.get("exit_premium")
+                       or cl.get("exit_price") or 0)
+
+        # Direction: CE = bullish (like LONG), PE = bearish (like SHORT)
+        raw_dir = str(odoc.get("direction") or op.get("direction") or "").upper()
+        dir_    = "LONG" if raw_dir == "CE" else ("SHORT" if raw_dir == "PE" else raw_dir)
+
+        strat = str(odoc.get("entry_strategy") or op.get("entry_strategy") or op.get("strategy") or "")
+        dm    = odoc.get("decision_metrics") or {}
+        recipe_margin = float(dm.get("recipe_margin") or op.get("ml_recipe_margin") or 0)
+
+        # P&L based on premium (actual option P&L)
+        entry_prem = float(op.get("entry_premium") or 0)
+        exit_prem  = float(cl.get("exit_premium") or 0)
+        pnl_pct = ((exit_prem - entry_prem) / entry_prem * 100) if entry_prem else 0
+
+        ots = slot["open_ts"]; cts = slot["close_ts"]
         open_ms  = _to_ms(ots)
         close_ms = _to_ms(cts)
         trades.append({
-            "position_id": pid,
-            "run_id": run_id,
-            "dir":   dir_,
-            "strat": strat,
-            "entry": entry,
-            "exit":  exit_p,
-            "pnl_pct": round(pnl_pct, 3),
-            "open_ms":  open_ms,
-            "close_ms": close_ms,
-            "recipe_margin": float(op.get("recipe_margin") or op.get("target_margin") or 0),
-            "stop_margin":   float(op.get("stop_margin") or op.get("sl_margin") or 0),
+            "position_id":    pid,
+            "run_id":         run_id,
+            "dir":            dir_,
+            "strat":          strat,
+            "entry_futures":  entry,          # futures price at entry (for swing calc)
+            "entry_prem":     entry_prem,
+            "exit_prem":      exit_prem,
+            "pnl_pct":        round(pnl_pct, 3),
+            "open_ms":        open_ms,
+            "close_ms":       close_ms,
+            "recipe_margin":  recipe_margin,
         })
     trades.sort(key=lambda t: t["open_ms"])
     return trades
@@ -231,7 +249,8 @@ def nearest_idx(candles: List[Dict], ms: int) -> int:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default="2024-09-25")
-    ap.add_argument("--run",  default="b86ef70e")
+    ap.add_argument("--run",  default="",
+                    help="run_id prefix filter (leave empty to get all trades for the date)")
     ap.add_argument("--lookback", type=int, default=10,
                     help="Bars to look back for swing high/low at entry")
     args = ap.parse_args()
@@ -252,10 +271,7 @@ def main():
     print(f"  Swing lookback: {args.lookback} bars")
     print(f"{'='*72}\n")
 
-    hdr = f"{'#':>2}  {'DIR':5} {'STRAT':20} {'ENTRY':>8} {'RECIPE EXIT':>11} {'RECIPE P%':>9}  "
-    hdr += f"{'SWING STOP':>10} {'SWING TGT':>9} {'SWING EXIT':>10} {'SWING P%':>8}  {'DIFF':>7}  {'REASON'}"
-    print(hdr)
-    print("-" * len(hdr))
+    print()
 
     total_recipe = 0.0
     total_swing  = 0.0
@@ -263,22 +279,34 @@ def main():
     for i, tr in enumerate(trades, 1):
         ei = nearest_idx(candles, tr["open_ms"])
         ci = nearest_idx(candles, tr["close_ms"])
-        sw = simulate_swing_exit(candles, ei, ci, tr["dir"], tr["entry"], args.lookback)
+        # Swing is computed on futures candles; entry_futures is the reference price
+        entry_fut = tr["entry_futures"] or candles[ei]["c"]
+        sw = simulate_swing_exit(candles, ei, ci, tr["dir"], entry_fut, args.lookback)
 
+        # Express swing P&L as % move in futures (apples-to-apples signal quality)
+        # Also note actual option P&L separately
         diff = sw["swing_pnl"] - tr["pnl_pct"]
         total_recipe += tr["pnl_pct"]
         total_swing  += sw["swing_pnl"]
 
+        entry_time = str(tr["open_ms"])  # we'll convert back if needed
         sign = "+" if diff >= 0 else ""
         print(
-            f"{i:>2}  {tr['dir']:5} {tr['strat'][:20]:20} {tr['entry']:>8.1f}"
-            f"  {tr['exit']:>10.1f} {tr['pnl_pct']:>+9.3f}%"
-            f"  {sw['swing_stop']:>10.1f} {sw['swing_target']:>9.1f} {sw['swing_exit']:>10.1f} {sw['swing_pnl']:>+8.3f}%"
-            f"  {sign}{diff:.3f}%  {sw['exit_reason']}"
+            f"{i:>2}  {tr['dir']:5} {tr['strat'][:18]:18} fut={entry_fut:>7.0f}"
+            f"  prem: {tr['entry_prem']:>6.1f}→{tr['exit_prem']:>6.1f} ({tr['pnl_pct']:>+7.2f}%)"
+            f"  |  swing_stop={sw['swing_stop']:>7.0f}  tgt={sw['swing_target']:>7.0f}"
+            f"  fut_exit={sw['swing_exit']:>7.0f} ({sw['swing_pnl']:>+6.2f}%)"
+            f"  diff={sign}{diff:.2f}%  [{sw['exit_reason']}]"
         )
 
-    print("-" * len(hdr))
-    print(f"{'TOTAL':>52} {total_recipe:>+9.3f}%{'':>34} {total_swing:>+8.3f}%  {total_swing - total_recipe:>+7.3f}%")
+    sep = "-" * 110
+    print(sep)
+    print(f"  TOTAL option P&L (actual):  {total_recipe:>+8.2f}%")
+    print(f"  TOTAL swing futures P&L:    {total_swing:>+8.2f}%   (futures % move, not option premium)")
+    print(f"  Delta:                      {total_swing - total_recipe:>+8.2f}%")
+    print()
+    print("  Note: swing P&L is the % move in the FUTURES price between entry and swing exit.")
+    print("  Actual option P&L would be larger (leverage) but exit timing is what matters here.")
     print()
 
 
