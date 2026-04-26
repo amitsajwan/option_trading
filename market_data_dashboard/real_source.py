@@ -196,7 +196,7 @@ def _vote_to_signal(
         doc.get("decision_reason_code") or payload_signal.get("decision_reason_code") or ""
     ).strip()
     # fired = engine decided to enter; SKIP = evaluated but not fired
-    fired = signal_type == "ENTRY" and reason_code in ("policy_allowed", "ENTRY_MET", "")
+    fired = signal_type == "ENTRY"
 
     strat = str(doc.get("strategy") or payload_signal.get("strategy") or "unknown").strip()
 
@@ -209,7 +209,7 @@ def _vote_to_signal(
 
     metrics = MonitorSignalMetrics(
         entry_prob=_p("ml_entry_prob"),
-        trade_prob=_p("ml_entry_prob"),
+        trade_prob=_p("direction_trade_prob", _p("ml_entry_prob")),
         up_prob=_p("ml_direction_up_prob"),
         ce_prob=_p("ml_ce_prob"),
         pe_prob=_p("ml_pe_prob"),
@@ -288,7 +288,7 @@ def _trade_signal_to_signal(
         detail=_doc_reason_detail(doc, payload_signal),
         metrics=MonitorSignalMetrics(
             entry_prob=_p("ml_entry_prob"),
-            trade_prob=_p("ml_entry_prob"),
+            trade_prob=_p("direction_trade_prob", _p("ml_entry_prob")),
             up_prob=_p("ml_direction_up_prob"),
             ce_prob=_p("ml_ce_prob"),
             pe_prob=_p("ml_pe_prob"),
@@ -515,10 +515,20 @@ def _build_session(
     }
     signal_by_id: Dict[str, MonitorSignal] = {}
     signals: List[MonitorSignal] = []
+    _seen_signal_keys: set = set()
+
+    def _dedup_signal_key(doc: Dict[str, Any], sig: MonitorSignal) -> str:
+        sid = str(doc.get("signal_id") or ((doc.get("payload") or {}).get("signal") or {}).get("signal_id") or "").strip()
+        return sid if sid else f"{sig.idx}:{sig.dir}:{sig.strat}:{sig.conf:.3f}"
+
     for doc in db[coll_votes].find(date_q, vote_proj).sort("timestamp", ASCENDING):
         sig = _vote_to_signal(doc, candle_ts_sorted)
         if sig is None:
             continue
+        key = _dedup_signal_key(doc, sig)
+        if key in _seen_signal_keys:
+            continue
+        _seen_signal_keys.add(key)
         signals.append(sig)
         sid = str(doc.get("signal_id") or "").strip()
         if sid:
@@ -542,6 +552,7 @@ def _build_session(
             "ml_pe_prob": 1,
             "ml_recipe_prob": 1,
             "ml_recipe_margin": 1,
+            "direction_trade_prob": 1,
             "entry_strategy_name": 1,
             "payload.signal": 1,
         }
@@ -549,6 +560,10 @@ def _build_session(
             sig = _trade_signal_to_signal(doc, candle_ts_sorted)
             if sig is None:
                 continue
+            key = _dedup_signal_key(doc, sig)
+            if key in _seen_signal_keys:
+                continue
+            _seen_signal_keys.add(key)
             signals.append(sig)
             sid = str(doc.get("signal_id") or ((doc.get("payload") or {}).get("signal") or {}).get("signal_id") or "").strip()
             if sid:
@@ -604,6 +619,15 @@ def _build_session(
         if trade is not None:
             trades.append(trade)
 
+    # Deduplicate trades: identical (entryIdx, exitIdx, dir, strat, entry_px) → keep first occurrence
+    _seen_trade_keys: set = set()
+    deduped_trades: List[MonitorTrade] = []
+    for tr in trades:
+        tk = (tr.entryIdx, tr.exitIdx, tr.dir, tr.strat, tr.entry)
+        if tk not in _seen_trade_keys:
+            _seen_trade_keys.add(tk)
+            deduped_trades.append(tr)
+    trades = deduped_trades
     trades.sort(key=lambda t: t.entryIdx)
 
     alerts = [MonitorAlert(
