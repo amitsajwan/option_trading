@@ -168,12 +168,26 @@ tmux ls   # list sessions
 
 ## 8. Model Publication Record
 
-| Date | Run ID | Model Group | Profile | Published By |
-|------|--------|-------------|---------|-------------|
-| 2026-04-26 | `staged_simple_s2_v1_20260426_110326` | `research/staged_simple_s2_v1` | `ml_pure_staged_v1` | Manual — research checkpoint |
+| Date | Run ID | Model Group | Profile | Published By | GCS Path |
+|------|--------|-------------|---------|-------------|----------|
+| 2026-04-26 | `staged_simple_s2_v1_20260426_110326` | `research/staged_simple_s2_v1` | `ml_pure_staged_v1` | Manual — research checkpoint | `gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1` |
 
 > **Note:** This model is published as a research checkpoint, NOT for production use.
 > All gates failed. Do not route live trades through this model.
+
+### GCS Artifacts
+```
+gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1/
+├── model/model.joblib
+├── model_contract.json
+├── config/profiles/ml_pure_staged_v1/threshold_report.json
+├── config/profiles/ml_pure_staged_v1/training_report.json
+├── reports/training/latest.json
+└── data/training_runs/staged_simple_s2_v1_20260426_110326/
+    ├── model/model.joblib
+    ├── model_contract.json
+    └── config/profiles/ml_pure_staged_v1/{threshold,training}_report.json
+```
 
 ---
 
