@@ -4,8 +4,29 @@ Usage:
     python swing_exit_analysis.py --date 2024-09-25 --run b86ef70e
 """
 import os, sys, argparse
+from datetime import datetime, timezone
 from typing import List, Tuple, Optional, Dict, Any
 from pymongo import MongoClient, ASCENDING
+
+
+def _to_ms(ts) -> int:
+    if ts is None:
+        return 0
+    if isinstance(ts, (int, float)):
+        return int(ts * 1000)
+    if isinstance(ts, datetime):
+        return int(ts.timestamp() * 1000)
+    if isinstance(ts, str):
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return int(datetime.strptime(ts, fmt).replace(tzinfo=timezone.utc).timestamp() * 1000)
+            except ValueError:
+                pass
+        try:
+            return int(float(ts) * 1000)
+        except ValueError:
+            pass
+    return 0
 
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -43,8 +64,7 @@ def load_candles(db, trade_date: str) -> List[Dict]:
         c = fb.get("fut_close") or o
         if not c:
             continue
-        candles.append({"t": int(ts * 1000) if isinstance(ts, float) else int(ts.timestamp() * 1000),
-                        "o": float(o), "h": float(h), "l": float(l), "c": float(c)})
+        candles.append({"t": _to_ms(ts), "o": float(o), "h": float(h), "l": float(l), "c": float(c)})
     return candles
 
 
@@ -86,8 +106,8 @@ def load_trades(db, trade_date: str, run_prefix: str) -> List[Dict]:
             pnl_pct = -pnl_pct
         ots = slot["open_ts"]
         cts = slot["close_ts"]
-        open_ms  = int(ots.timestamp() * 1000) if hasattr(ots, "timestamp") else int(float(ots) * 1000)
-        close_ms = int(cts.timestamp() * 1000) if hasattr(cts, "timestamp") else int(float(cts) * 1000)
+        open_ms  = _to_ms(ots)
+        close_ms = _to_ms(cts)
         trades.append({
             "position_id": pid,
             "run_id": run_id,
