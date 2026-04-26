@@ -18,10 +18,12 @@ class DashboardHistoricalReplayRouter:
         templates_dir: Path,
         get_historical_replay_service: Callable[[], Any],
         now_iso_ist: Callable[[], str],
+        get_strategy_eval_service: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._templates = templates
         self._templates_dir = Path(templates_dir)
         self._get_historical_replay_service = get_historical_replay_service
+        self._get_strategy_eval_service = get_strategy_eval_service
         self._now_iso_ist = now_iso_ist
 
         router = APIRouter(tags=["historical-replay"])
@@ -29,6 +31,7 @@ class DashboardHistoricalReplayRouter:
         router.add_api_route("/api/historical/replay/session", self.get_historical_strategy_session, methods=["GET"])
         router.add_api_route("/api/historical/replay/status", self.get_historical_replay_status, methods=["GET"])
         router.add_api_route("/api/historical/replay/stream", self.stream_replay_status, methods=["GET"])
+        router.add_api_route("/api/historical/replay/generate", self.generate_replay_data, methods=["POST"])
         router.add_api_route("/api/health/replay", self.replay_health, methods=["GET"])
         self.router = router
 
@@ -105,6 +108,31 @@ class DashboardHistoricalReplayRouter:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    async def generate_replay_data(self, request: Request) -> Any:
+        """Trigger full ML pipeline for a historical date via the eval orchestrator."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        trade_date = str(body.get("trade_date") or "").strip()
+        if not trade_date:
+            raise HTTPException(status_code=400, detail="trade_date required (YYYY-MM-DD)")
+        eval_service = self._get_strategy_eval_service() if self._get_strategy_eval_service else None
+        if eval_service is None:
+            raise HTTPException(status_code=503, detail="strategy eval service unavailable")
+        try:
+            result = eval_service.queue_replay_run(
+                dataset="historical",
+                date_from=trade_date,
+                date_to=trade_date,
+                speed=0,
+                base_path=None,
+                risk_config=None,
+            )
+            return {"status": "queued", "run_id": result.get("run_id"), "trade_date": trade_date}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to queue replay: {exc}")
 
     async def replay_health(self, date: Optional[str] = None, instrument: Optional[str] = None) -> Any:
         service = self._require_service()

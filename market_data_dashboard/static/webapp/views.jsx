@@ -294,6 +294,8 @@ function ReplayMonitor({ onModeSwitch }) {
   const [selectedTrade,  setSelectedTrade]  = _useState(null);
   const [selectedSignal, setSelectedSignal] = _useState(null);
   const [scrubHover,     setScrubHover]     = _useState(null);
+  const [generating,     setGenerating]     = _useState(false);
+  const [generateMsg,    setGenerateMsg]    = _useState('');
   const wsRef         = _useRef(null);
   const upToIdxRef    = _useRef(0);
   const speedRef      = _useRef(4);
@@ -361,11 +363,30 @@ function ReplayMonitor({ onModeSwitch }) {
     setReplayDate(newDate);
     replayDateRef.current = newDate;
     setReplayError('');
+    setGenerateMsg('');
     setIsPlaying(false);
     wsRef.current && wsRef.current.send({
       action: 'subscribe', mode: 'replay',
       date: newDate, up_to_idx: 0, playing: false, speed: speedRef.current,
     });
+  }
+
+  async function handleGenerate() {
+    if (!replayDate || generating) return;
+    setGenerating(true);
+    setGenerateMsg('Queuing pipeline run\u2026');
+    try {
+      const result = await TradingCore.generateReplayData(replayDate);
+      setGenerateMsg(`Queued run ${(result.run_id || '').slice(0, 8)} \u2014 processing bars through ML engine. Reload in ~30s.`);
+      setTimeout(() => {
+        setGenerateMsg('');
+        handleDateChange(replayDate);
+      }, 30000);
+    } catch (err) {
+      setGenerateMsg('Error: ' + err.message);
+    } finally {
+      setGenerating(false);
+    }
   }
 
   const visibleTrades = _useMemo(
@@ -441,12 +462,30 @@ function ReplayMonitor({ onModeSwitch }) {
     </>
   );
 
+  const noData = session && session.candles.length > 0 && session.trades.length === 0
+    && session.alerts && session.alerts.some(a => a.level === 'warn');
+
   return (
     <div>
       {replayError && (
         <div className="panel" style={{ marginBottom: 12 }}>
           <div className="panel-body" style={{ color: 'var(--neg)', fontSize: 12 }}>
             {replayError}
+          </div>
+        </div>
+      )}
+      {noData && (
+        <div className="panel" style={{ marginBottom: 12, borderLeft: '3px solid var(--warn)' }}>
+          <div className="panel-body row gap-s" style={{ alignItems: 'center', padding: '10px 16px' }}>
+            <span style={{ fontSize: 12, flex: 1 }}>
+              No strategy data for <strong>{replayDate}</strong>. Run the ML pipeline to generate trades.
+            </span>
+            {generateMsg
+              ? <span className="mono muted" style={{ fontSize: 11 }}>{generateMsg}</span>
+              : <button className="btn primary sm" onClick={handleGenerate} disabled={generating}>
+                  {generating ? 'Queuing\u2026' : '\u25B6 Generate Trades'}
+                </button>
+            }
           </div>
         </div>
       )}

@@ -4011,6 +4011,7 @@ _historical_replay_routes = DashboardHistoricalReplayRouter(
     templates_dir=templates_dir,
     get_historical_replay_service=lambda: _historical_replay_monitor_service,
     now_iso_ist=_now_iso_ist,
+    get_strategy_eval_service=lambda: _strategy_eval_service,
 )
 app.include_router(_historical_replay_routes.router)
 

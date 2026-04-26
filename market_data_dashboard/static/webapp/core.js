@@ -86,8 +86,21 @@
     return { send: send, close: close };
   }
 
+  async function generateReplayData(tradeDate) {
+    const resp = await fetch('/api/historical/replay/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trade_date: tradeDate }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || 'generate failed');
+    }
+    return resp.json();
+  }
+
   global.TradingCore = {
     esc, fmtNum, fmtSigned, fmtPct, fmtCompact, fmtTime, fmtClock, fmtHold,
-    strategyContribution, makeMonitorWS,
+    strategyContribution, makeMonitorWS, generateReplayData,
   };
 })(window);
