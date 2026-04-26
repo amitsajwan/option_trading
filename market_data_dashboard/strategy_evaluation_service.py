@@ -122,6 +122,19 @@ def _resolve_trail_mechanism(*, exit_reason: Any, trailing_active: Any, orb_trai
     return "TRAILING_STOP"
 
 
+def _underlying_stop_level(*, direction: Any, entry_futures_price: Any, underlying_stop_pct: Any) -> Optional[float]:
+    entry_futures = _safe_float(entry_futures_price)
+    stop_pct = _safe_float(underlying_stop_pct)
+    if entry_futures is None or entry_futures <= 0 or stop_pct is None or stop_pct <= 0:
+        return None
+    dir_norm = str(direction or "").strip().upper()
+    if dir_norm == "CE":
+        return round(entry_futures * (1.0 - stop_pct), 2)
+    if dir_norm == "PE":
+        return round(entry_futures * (1.0 + stop_pct), 2)
+    return None
+
+
 class StrategyEvaluationService:
     def __init__(self) -> None:
         self._mongo_client: Optional[MongoClient] = None
@@ -594,6 +607,23 @@ class StrategyEvaluationService:
         orb_trail_active = bool(close_position.get("orb_trail_active")) if close_position.get("orb_trail_active") is not None else None
         oi_trail_active = bool(close_position.get("oi_trail_active")) if close_position.get("oi_trail_active") is not None else None
         exit_reason = str(close_position.get("exit_reason") or "").strip() or None
+        direction = str(open_position.get("direction") or "").strip() or None
+        premium_stop_pct = _safe_float(open_position.get("stop_loss_pct"))
+        underlying_stop_pct = _safe_float(open_position.get("underlying_stop_pct"))
+        entry_futures_price = _safe_float(open_position.get("entry_futures_price"))
+        underlying_stop_price = _underlying_stop_level(
+            direction=direction,
+            entry_futures_price=entry_futures_price,
+            underlying_stop_pct=underlying_stop_pct,
+        )
+        stop_basis = None
+        if underlying_stop_pct is not None and underlying_stop_pct > 0 and entry_futures_price is not None and entry_futures_price > 0:
+            stop_basis = "underlying"
+        elif (
+            (premium_stop_pct is not None and premium_stop_pct > 0)
+            or (_safe_float(open_position.get("stop_price")) is not None)
+        ):
+            stop_basis = "premium"
         result = "UNKNOWN"
         if pnl_pct_net is not None:
             if pnl_pct_net > 0:
@@ -607,7 +637,7 @@ class StrategyEvaluationService:
             "signal_id": signal_id or None,
             "entry_strategy": strategy,
             "regime": regime,
-            "direction": str(open_position.get("direction") or "").strip() or None,
+            "direction": direction,
             "strike": open_position.get("strike") if open_position.get("strike") is not None else close_position.get("strike"),
             "entry_time": _iso_or_none(open_position.get("timestamp")),
             "exit_time": _iso_or_none(close_position.get("timestamp")),
@@ -632,11 +662,16 @@ class StrategyEvaluationService:
                 or _safe_float(close_position.get("lot_size"))
                 or BANKNIFTY_OPTION_LOT_SIZE
             ),
-            "stop_loss_pct": _safe_float(open_position.get("stop_loss_pct")),
+            "stop_loss_pct": premium_stop_pct,
             "entry_stop_price": _safe_float(open_position.get("stop_price")),
             "exit_stop_price": _safe_float(close_position.get("stop_price")),
             "high_water_premium": _safe_float(close_position.get("high_water_premium")),
             "target_pct": _safe_float(open_position.get("target_pct")),
+            "underlying_stop_pct": underlying_stop_pct,
+            "underlying_target_pct": _safe_float(open_position.get("underlying_target_pct")),
+            "entry_futures_price": entry_futures_price,
+            "underlying_stop_price": underlying_stop_price,
+            "stop_basis": stop_basis,
             "trailing_enabled": bool(open_position.get("trailing_enabled")) if open_position.get("trailing_enabled") is not None else None,
             "trailing_activation_pct": _safe_float(open_position.get("trailing_activation_pct")),
             "trailing_offset_pct": _safe_float(open_position.get("trailing_offset_pct")),

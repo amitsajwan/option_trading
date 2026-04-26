@@ -281,12 +281,33 @@ function DecisionDetail({ trade, sig, onClose, expanded, setExpanded }) {
     { k: 'recipe_prob', v: m.recipe_prob, cls: '' },
     { k: 'recipe_margin', v: m.recipe_margin, cls: '' },
   ];
+  const stopBasis = trade?.stopBasis || null;
   const riskRows = trade ? [
-    { k: 'stop_loss_pct', v: trade.stopLossPct },
-    { k: 'target_pct', v: trade.targetPct },
+    { k: 'risk_basis', v: stopBasis },
+    { k: stopBasis === 'underlying' ? 'underlying_stop_pct' : 'stop_loss_pct', v: trade.stopLossPct },
+    { k: stopBasis === 'underlying' ? 'underlying_target_pct' : 'target_pct', v: trade.targetPct },
     { k: 'max_hold_bars', v: trade.maxHoldBars },
-    { k: 'stop_price', v: trade.stopPrice },
+    { k: stopBasis === 'underlying' ? 'entry_futures_price' : 'stop_price', v: stopBasis === 'underlying' ? trade.entryFuturesPrice : trade.stopPrice },
+    { k: stopBasis === 'underlying' ? 'underlying_stop_level' : 'stop_price', v: stopBasis === 'underlying' ? trade.underlyingStopPrice : trade.stopPrice },
+    { k: 'stop_trigger_candle', v: trade.stopTriggerCandle },
   ].filter(x => x.v != null && x.v !== '') : [];
+  const riskLabels = {
+    risk_basis: 'risk_basis',
+    stop_loss_pct: 'stop_loss_pct',
+    underlying_stop_pct: 'stop_loss_pct',
+    target_pct: 'target_pct',
+    underlying_target_pct: 'target_pct',
+    max_hold_bars: 'max_hold_bars',
+    stop_price: 'stop_price',
+    entry_futures_price: 'entry_futures_price',
+    underlying_stop_level: 'stop_level',
+    stop_trigger_candle: 'trigger_candle',
+  };
+  function fmtRiskValue(row) {
+    if (typeof row.v === 'number' && row.k.indexOf('_pct') >= 0) return (row.v * 100).toFixed(2) + '%';
+    if (typeof row.v === 'number' && (row.k.indexOf('price') >= 0 || row.k.indexOf('level') >= 0)) return row.v.toFixed(2);
+    return String(row.v);
+  }
   return (
     <>
       <div className="decision-head">
@@ -327,13 +348,18 @@ function DecisionDetail({ trade, sig, onClose, expanded, setExpanded }) {
                 {trade.exitDetail}
               </div>
             )}
+            {trade.stopTriggerDetail && (
+              <div className="mono tiny" style={{ color: 'var(--ink-3)', marginBottom: 10, lineHeight: 1.5 }}>
+                {trade.stopTriggerDetail}
+              </div>
+            )}
             {!!riskRows.length && (
               <div style={{ marginBottom: 12 }}>
                 {riskRows.map(r => (
                   <div className="rowx" key={r.k} style={{ marginBottom: 4 }}>
-                    <span className="muted tiny">{r.k}</span>
+                    <span className="muted tiny">{riskLabels[r.k] || r.k}</span>
                     <span className="mono tiny" style={{ color: 'var(--ink)' }}>
-                      {typeof r.v === 'number' && r.k.indexOf('_pct') >= 0 ? (r.v * 100).toFixed(2) + '%' : String(r.v)}
+                      {fmtRiskValue(r)}
                     </span>
                   </div>
                 ))}

@@ -316,6 +316,60 @@ def _underlying_stop_level(open_pos: Dict[str, Any]) -> Optional[float]:
     return None
 
 
+def _stop_basis(open_pos: Dict[str, Any]) -> Optional[str]:
+    underlying_stop_pct = _safe_float(open_pos.get("underlying_stop_pct"), fallback=None)
+    entry_futures = _safe_float(open_pos.get("entry_futures_price"), fallback=None)
+    if underlying_stop_pct is not None and underlying_stop_pct > 0 and entry_futures is not None and entry_futures > 0:
+        return "underlying"
+    premium_stop_pct = _safe_float(open_pos.get("stop_loss_pct"), fallback=None)
+    premium_stop_price = _safe_float(open_pos.get("stop_price"), fallback=None)
+    if (premium_stop_pct is not None and premium_stop_pct > 0) or (premium_stop_price is not None and premium_stop_price > 0):
+        return "premium"
+    return None
+
+
+def _find_underlying_stop_trigger(
+    *,
+    direction: str,
+    stop_level: Optional[float],
+    entry_idx: int,
+    exit_idx: int,
+    candles: List[MonitorCandle],
+) -> tuple[Optional[str], str]:
+    if stop_level is None or entry_idx < 0 or exit_idx < entry_idx:
+        return None, ""
+    dir_norm = str(direction or "").strip().upper()
+    intrabar_hit: Optional[MonitorCandle] = None
+    close_hit: Optional[MonitorCandle] = None
+    comparison = "<=" if dir_norm in ("CE", "LONG") else ">="
+    for idx in range(entry_idx, min(exit_idx, len(candles) - 1) + 1):
+        candle = candles[idx]
+        if dir_norm in ("CE", "LONG"):
+            if intrabar_hit is None and candle.l <= stop_level:
+                intrabar_hit = candle
+            if close_hit is None and candle.c <= stop_level:
+                close_hit = candle
+        elif dir_norm in ("PE", "SHORT"):
+            if intrabar_hit is None and candle.h >= stop_level:
+                intrabar_hit = candle
+            if close_hit is None and candle.c >= stop_level:
+                close_hit = candle
+    trigger = close_hit or intrabar_hit
+    trigger_label = trigger.label if trigger is not None else None
+    if close_hit is not None and intrabar_hit is not None and close_hit.i != intrabar_hit.i:
+        detail = (
+            f"underlying stop on close ({comparison} {stop_level:.2f}) at {close_hit.label}; "
+            f"first intrabar breach at {intrabar_hit.label}"
+        )
+    elif close_hit is not None:
+        detail = f"underlying stop on close ({comparison} {stop_level:.2f}) at {close_hit.label}"
+    elif intrabar_hit is not None:
+        detail = f"underlying stop breached intrabar ({comparison} {stop_level:.2f}) at {intrabar_hit.label}"
+    else:
+        detail = f"underlying stop level {comparison} {stop_level:.2f}"
+    return trigger_label, detail
+
+
 def _position_to_trade(
     position_id: str,
     open_pos: Dict[str, Any],
@@ -348,6 +402,19 @@ def _position_to_trade(
         strat = str(contrib[0] or "unknown").strip()
     else:
         strat = str(open_pos.get("entry_strategy") or open_pos.get("strategy") or "unknown").strip()
+    stop_basis = _stop_basis(open_pos)
+    entry_futures_price = _safe_float(open_pos.get("entry_futures_price"), fallback=None)
+    underlying_stop_price = _underlying_stop_level(open_pos)
+    stop_trigger_candle = None
+    stop_trigger_detail = ""
+    if stop_basis == "underlying":
+        stop_trigger_candle, stop_trigger_detail = _find_underlying_stop_trigger(
+            direction=str(open_pos.get("direction") or ""),
+            stop_level=underlying_stop_price,
+            entry_idx=entry_idx,
+            exit_idx=exit_idx,
+            candles=candles,
+        )
 
     if signal is None:
         signal = MonitorSignal(
@@ -383,6 +450,11 @@ def _position_to_trade(
         targetPct=_safe_float(open_pos.get("underlying_target_pct") or open_pos.get("target_pct"), fallback=None),
         maxHoldBars=int(open_pos.get("max_hold_bars")) if open_pos.get("max_hold_bars") is not None else None,
         stopPrice=_safe_float(close_pos.get("stop_price"), fallback=_safe_float(open_pos.get("stop_price"), fallback=_underlying_stop_level(open_pos))),
+        stopBasis=stop_basis,
+        entryFuturesPrice=entry_futures_price,
+        underlyingStopPrice=underlying_stop_price,
+        stopTriggerCandle=stop_trigger_candle,
+        stopTriggerDetail=stop_trigger_detail,
     )
 
 

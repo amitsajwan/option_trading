@@ -252,6 +252,49 @@ class StrategyEvaluationServiceTests(unittest.TestCase):
         self.assertAlmostEqual(trade["signal_decision_metrics"]["entry_prob"], 0.81, places=6)
         self.assertAlmostEqual(trade["signal_decision_metrics"]["recipe_prob"], 0.66, places=6)
 
+    def test_trade_from_docs_exposes_underlying_stop_basis_fields(self) -> None:
+        trade = self.service._trade_from_docs(
+            position_id="p-underlying-stop",
+            docs={
+                "open": {
+                    "signal_id": "sig-u1",
+                    "timestamp": "2024-09-25T09:45:00+05:30",
+                    "direction": "CE",
+                    "strike": 54000,
+                    "entry_premium": 120.95,
+                    "lots": 5,
+                    "lot_size": 15,
+                    "stop_loss_pct": 0.0,
+                    "target_pct": 0.0,
+                    "underlying_stop_pct": 0.001,
+                    "underlying_target_pct": 0.0025,
+                    "entry_futures_price": 54020.0,
+                    "reason": "ml_pure_staged: action=BUY_CE reason=staged_entry_ready",
+                },
+                "close": {
+                    "timestamp": "2024-09-25T10:07:00+05:30",
+                    "exit_premium": 74.85,
+                    "pnl_pct": -0.3811492352,
+                    "bars_held": 22,
+                    "mfe_pct": 0.0789,
+                    "mae_pct": -0.3811,
+                    "exit_reason": "STOP_LOSS",
+                },
+                "open_doc": {"trade_date_ist": "2024-09-25"},
+                "close_doc": {"trade_date_ist": "2024-09-25"},
+            },
+            signal_map={"sig-u1": {"signal_id": "sig-u1", "reason": "ml_pure_staged: action=BUY_CE reason=staged_entry_ready"}},
+            cost_bps=0.0,
+        )
+
+        self.assertIsNotNone(trade)
+        assert trade is not None
+        self.assertEqual(trade["stop_basis"], "underlying")
+        self.assertAlmostEqual(trade["underlying_stop_pct"], 0.001, places=6)
+        self.assertAlmostEqual(trade["underlying_target_pct"], 0.0025, places=6)
+        self.assertAlmostEqual(trade["entry_futures_price"], 54020.0, places=6)
+        self.assertAlmostEqual(trade["underlying_stop_price"], 53965.98, places=6)
+
     def test_exit_reason_breakdown_groups_and_sorts(self) -> None:
         trades = [
             {"exit_reason": "TRAILING_STOP", "pnl_pct_net": 0.15, "capital_pnl_pct": 0.01},

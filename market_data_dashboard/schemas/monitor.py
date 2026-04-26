@@ -49,6 +49,11 @@ class MonitorTrade(BaseModel):
     targetPct: Optional[float] = None
     maxHoldBars: Optional[int] = None
     stopPrice: Optional[float] = None
+    stopBasis: Optional[str] = None
+    entryFuturesPrice: Optional[float] = None
+    underlyingStopPrice: Optional[float] = None
+    stopTriggerCandle: Optional[str] = None
+    stopTriggerDetail: str = ""
 
 
 class MonitorAlert(BaseModel):
