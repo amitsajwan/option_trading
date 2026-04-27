@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "_comment": "Grid B — Feature Set Grid. Tests 5 S2 feature sets on the best label configuration from Grid A. B1 is the control (fo_expiry_aware_v3 baseline). B2-B5 test increasingly direction-oriented feature sets. S1 is reused from Grid A winner (update staged_dual_recipe.label_fix_b_base.json with S1 path first). Only S2 and S3 are retrained per run.",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.label_fix_b_base.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_feature_s2_v1"
+  },
+  "selection": {
+    "ranking_strategy": "stage3_policy_paths_v1",
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.55,
+      "brier_max": 0.26
+    },
+    "robustness_probe": {
+      "enabled": true,
+      "top_k": 3,
+      "iterations": 200,
+      "random_seed": 42,
+      "splits": ["research_valid", "final_holdout"],
+      "resample_unit": "trade_date"
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "feature_s2_b1_expiry_baseline",
+        "_comment": "B1 control: fo_expiry_aware_v3 — proven best throughput from all prior runs.",
+        "model_group_suffix": "_feature_s2_b1_expiry_baseline",
+        "reuse_stage1_from_base": true,
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_feature_s2_b1_expiry_baseline"
+          }
+        }
+      },
+      {
+        "run_id": "feature_s2_b2_full",
+        "_comment": "B2: fo_full — all features; tree models self-select via HPO. Highest chance of finding any latent signal.",
+        "model_group_suffix": "_feature_s2_b2_full",
+        "reuse_stage1_from": "feature_s2_b1_expiry_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_feature_s2_b2_full"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_full"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "feature_s2_b3_midday_asymmetry",
+        "_comment": "B3: fo_midday_asymmetry — CE-PE OI diff, dealer proxy OI imbalance, PCR momentum. Most direct market-direction proxy via order flow.",
+        "model_group_suffix": "_feature_s2_b3_midday_asymmetry",
+        "reuse_stage1_from": "feature_s2_b1_expiry_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_feature_s2_b3_midday_asymmetry"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_midday_asymmetry"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "feature_s2_b4_midday_oi_iv",
+        "_comment": "B4: fo_midday_time_aware_plus_oi_iv — highest throughput in prior grid (113 trades). OI + IV + momentum combined.",
+        "model_group_suffix": "_feature_s2_b4_midday_oi_iv",
+        "reuse_stage1_from": "feature_s2_b1_expiry_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_feature_s2_b4_midday_oi_iv"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_midday_time_aware_plus_oi_iv"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "feature_s2_b5_expiry_interactions",
+        "_comment": "B5: fo_midday_expiry_interactions — IV skew + OI + expiry context. Captures vol-regime directional signals.",
+        "model_group_suffix": "_feature_s2_b5_expiry_interactions",
+        "reuse_stage1_from": "feature_s2_b1_expiry_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_feature_s2_b5_expiry_interactions"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_midday_expiry_interactions"]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

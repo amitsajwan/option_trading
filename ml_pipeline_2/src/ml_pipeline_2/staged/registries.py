@@ -51,6 +51,7 @@ def label_registry() -> dict[str, str]:
         "entry_best_recipe_v1": "stage1",
         "direction_best_recipe_v1": "stage2",
         "direction_or_no_trade_v1": "stage2",
+        "direction_market_up_v1": "stage2",
         "recipe_best_positive_v1": "stage3",
     }
 
@@ -85,12 +86,13 @@ def publish_registry() -> dict[str, str]:
 
 
 def resolve_labeler(labeler_id: str) -> Callable[..., Any]:
-    from .pipeline import build_stage1_labels, build_stage2_labels, build_stage2_labels_direction_or_no_trade, build_stage3_labels
+    from .pipeline import build_stage1_labels, build_stage2_labels, build_stage2_labels_direction_or_no_trade, build_stage2_labels_market_direction, build_stage3_labels
 
     registry = {
         "entry_best_recipe_v1": build_stage1_labels,
         "direction_best_recipe_v1": build_stage2_labels,
         "direction_or_no_trade_v1": build_stage2_labels_direction_or_no_trade,
+        "direction_market_up_v1": build_stage2_labels_market_direction,
         "recipe_best_positive_v1": build_stage3_labels,
     }
     if labeler_id not in registry:

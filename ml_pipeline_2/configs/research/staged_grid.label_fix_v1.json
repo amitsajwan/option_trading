@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "_comment": "Label Fix Grid A. Three independent hypotheses targeting the CE/PE label imbalance root cause. A1: window shift only (config). A2: market direction label only (new labeler, reuses S1). A3: both combined. Each run changes exactly one variable from the prior best run (regime_fix_s2_midday_noconv). Decision: check S2 CV ROC >= 0.55 and long_share 30-70% before proceeding to Grid B.",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.label_fix_base.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_label_fix_v1"
+  },
+  "selection": {
+    "ranking_strategy": "stage3_policy_paths_v1",
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.55,
+      "brier_max": 0.26
+    },
+    "robustness_probe": {
+      "enabled": true,
+      "top_k": 3,
+      "iterations": 200,
+      "random_seed": 42,
+      "splits": ["research_valid", "final_holdout"],
+      "resample_unit": "trade_date"
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "label_fix_a1_window_shift",
+        "_comment": "A1: Window shift only. Training includes Jul-Aug 2024 CE-dominant data. Oracle direction label unchanged. Fresh S1 retrain (window changed). Control for label change.",
+        "model_group_suffix": "_label_fix_a1_window_shift",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_label_fix_a1_window_shift"
+          }
+        }
+      },
+      {
+        "run_id": "label_fix_a2_market_direction",
+        "_comment": "A2: Market direction label only. Uses direction_market_up_v1: label=CE if best_ce_return > best_pe_return, else PE. Structurally ~50/50. Original windows. Reuses proven S1 from staged_proper_full_v1_20260426_051531. Control for window shift.",
+        "model_group_suffix": "_label_fix_a2_market_direction",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_label_fix_a2_market_direction"
+          },
+          "windows": {
+            "research_train": {"start": "2020-08-03", "end": "2024-04-30"},
+            "research_valid": {"start": "2024-05-01", "end": "2024-07-31"},
+            "full_model": {"start": "2020-08-03", "end": "2024-07-31"},
+            "final_holdout": {"start": "2024-08-01", "end": "2024-10-31"}
+          },
+          "labels": {
+            "stage2_labeler_id": "direction_market_up_v1"
+          },
+          "training": {
+            "stage1_reuse": {
+              "source_run_id": "staged_proper_full_v1_20260426_051531",
+              "source_run_dir": "/home/savitasajwan03/option_trading/ml_pipeline_2/artifacts/research/staged_proper_full_v1_20260426_051531"
+            }
+          }
+        }
+      },
+      {
+        "run_id": "label_fix_a3_combined",
+        "_comment": "A3: Combined — shifted windows (A1) + market direction label (A2). Fresh S1 retrain. Only run after A1 and A2 results are understood to avoid confounding.",
+        "model_group_suffix": "_label_fix_a3_combined",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_label_fix_a3_combined"
+          },
+          "labels": {
+            "stage2_labeler_id": "direction_market_up_v1"
+          }
+        }
+      }
+    ]
+  }
+}

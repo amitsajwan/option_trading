@@ -432,6 +432,46 @@ def build_stage2_labels(stage_frame: pd.DataFrame, oracle: pd.DataFrame, *_: Any
     return labeled.sort_values("timestamp").reset_index(drop=True)
 
 
+def build_stage2_labels_market_direction(
+    stage_frame: pd.DataFrame,
+    oracle: pd.DataFrame,
+    manifest: Optional[dict[str, Any]] = None,
+    *_: Any,
+    **__: Any,
+) -> pd.DataFrame:
+    """Stage 2 labeler using returns-based market direction.
+
+    Label = CE (up)  if best_ce_net_return_after_cost > best_pe_net_return_after_cost.
+    Label = PE (down) if best_pe_net_return_after_cost > best_ce_net_return_after_cost.
+    Rows where |ce_ret - pe_ret| < min_edge are excluded as ambiguous (data quality filter).
+
+    Unlike direction_best_recipe_v1 this does NOT require the oracle best recipe to be
+    profitable (entry_label == 1 is still required, oracle valid is not).  The label
+    compares aggregate CE vs PE performance across all recipes — structurally ~50/50
+    regardless of which market regime dominates the training window.
+    """
+    raw_cfg = dict(((manifest or {}).get("training") or {}).get("stage2_decisive_move_filter") or {})
+    min_edge = float(raw_cfg.get("min_ce_pe_edge", 0.002))
+
+    labeled = _attach_labels(stage_frame, oracle)
+    labeled = labeled[pd.to_numeric(labeled["entry_label"], errors="coerce").fillna(0.0) == 1.0].copy()
+
+    ce_ret = pd.to_numeric(labeled["best_ce_net_return_after_cost"], errors="coerce").fillna(0.0)
+    pe_ret = pd.to_numeric(labeled["best_pe_net_return_after_cost"], errors="coerce").fillna(0.0)
+    edge = (ce_ret - pe_ret).abs()
+    labeled = labeled[edge >= min_edge].copy()
+
+    ce_ret = pd.to_numeric(labeled["best_ce_net_return_after_cost"], errors="coerce").fillna(0.0)
+    pe_ret = pd.to_numeric(labeled["best_pe_net_return_after_cost"], errors="coerce").fillna(0.0)
+    market_up = ce_ret > pe_ret
+
+    labeled["direction_label"] = np.where(market_up, "CE", "PE")
+    labeled["move_label_valid"] = 1.0
+    labeled["move_label"] = 1.0
+    labeled["move_first_hit_side"] = np.where(market_up, "up", "down")
+    return labeled.sort_values("timestamp").reset_index(drop=True)
+
+
 def build_stage2_labels_direction_or_no_trade(
     stage_frame: pd.DataFrame,
     oracle: pd.DataFrame,
@@ -3871,6 +3911,7 @@ __all__ = [
     "build_stage1_labels",
     "build_stage2_labels",
     "build_stage2_labels_direction_or_no_trade",
+    "build_stage2_labels_market_direction",
     "build_stage3_labels",
     "run_staged_research",
     "select_direction_gate_economic_balance_policy",

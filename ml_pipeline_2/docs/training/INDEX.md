@@ -13,6 +13,7 @@ Start a new session doc when beginning a new research iteration with a distinct 
 | 2026-04-23 | — | bypass_stage2=true to increase throughput | PF=0.41, 1,764 trades | ❌ Bypass is scientifically invalid — random direction guarantees loss |
 | 2026-04-26 | [MODEL_STATE_20260426.md](MODEL_STATE_20260426.md) | Staged pipeline: proper S1+S2+S3 with HPO | 27 trades, PF=0.627 (27 trades only) | ⚠️ Stage 1 signal confirmed (ROC 0.683). S2 direction signal exists but CE/PE regime bias blocks holdout |
 | 2026-04-27 | [MODEL_STATE_20260426.md](MODEL_STATE_20260426.md) | Fix CE/PE regime bias via feature engineering (oracle rolling win rates, MIDDAY+OI/IV) | 113 trades, PF=0.352, 93.8% CE | ❌ Feature engineering cannot fix label imbalance. Bias is structural in training data |
+| 2026-04-28 | [MODEL_STATE_20260428.md](MODEL_STATE_20260428.md) | Attack label root cause: (A1) window shift, (A2) market direction label `direction_market_up_v1`, (A3) combined. Then feature grid (B) + deep HPO (C). | In progress | 🔄 Grid A launched |
 
 ---
 
@@ -35,13 +36,18 @@ Oracle direction labels (2020–2024) are PE-dominant because 2020–2024 Indian
 
 ---
 
-## Next Session
+## Current Session (2026-04-28)
 
-| Priority | Action | Expected Effect |
-|----------|--------|----------------|
-| 1 | **Shift training windows** — include Jul–Aug 2024 CE data in training | Model sees CE-dominant examples; long_share should move toward 50% |
-| 2 | **Change Stage 2 label** — use Nifty market direction (up/down) instead of oracle best-recipe direction | Structurally balanced labels (~50/50 by definition) |
-| 3 | **Runtime regime gate** — condition trade side on rolling CE/PE win rates at inference time | Works with existing model; doesn't fix root cause |
+Three grids planned. See [MODEL_STATE_20260428.md](MODEL_STATE_20260428.md) for full detail.
+
+| Grid | Runs | Hypothesis | Status |
+|------|------|-----------|--------|
+| **Grid A** `staged_grid.label_fix_v1.json` | A1 window shift, A2 market direction label, A3 combined | Attack label root cause directly | 🔄 Ready to launch |
+| **Grid B** `staged_grid.feature_s2_v1.json` | B1–B5 S2 feature set variants | Find best feature set for new label | ⏳ After Grid A |
+| **Grid C** `staged_grid.deep_hpo_v1.json` | C1 deep HPO, C2 long train window, C3 long valid window | Squeeze max signal from best config | ⏳ After Grid B |
+
+**Before launching Grid B:** update `staging_dual_recipe.label_fix_b_base.json` — set `training.stage1_reuse.source_run_id` and `source_run_dir` to the winning Grid A run.
+**Before launching Grid C:** update `staged_dual_recipe.deep_hpo_base.json` — set `catalog.feature_sets_by_stage.stage2` and `training.stage1_reuse` to winning Grid B values.
 
 ---
 
