@@ -78,6 +78,9 @@
 | 2026-04-23 | `expiry_bypass_stage2_combined_v1` | bypass combined | 0.500 | 30,812 | 0.29 | ❌ confirmed bypass is wrong approach |
 | 2026-04-26 | `staged_proper_full_v1_20260426_051531` | MIDDAY+conviction, full HPO | **0.675** | **0** | 0.0 | ❌ conviction filter kills throughput |
 | 2026-04-26 | `staged_simple_s2_v1_20260426_110326` | No filter, simple direction | **0.568** | **27** | 0.627 | ⚠️ progressing, regime bias |
+| 2026-04-27 | `regime_fix_s2_expiry_baseline` (grid run 1) | `recipe_fixed_baseline_guard_v1`, `fo_expiry_aware_v3` | **0.568** | **97** | 0.354 | ⚠️ trade count fixed, CE bias 94.8% persists |
+| 2026-04-27 | `regime_fix_s2_regime_v3` (grid run 2) | `fo_midday_direction_regime_v3` (oracle CE/PE rolling win rates) | — | — | — | 🔄 running |
+| 2026-04-27 | `regime_fix_s2_midday_noconv` (grid run 3) | `fo_midday_time_aware_plus_oi_iv`, no conviction filter | — | — | — | 🔄 running |
 
 ---
 
@@ -95,46 +98,44 @@
 3. **Brier gate 0.22:** Too tight for Stage 2. Relaxed to 0.26 — this fix was correct
 
 ### ⚠️ Unresolved Issues
-1. **CE/PE regime shift:** Training 2020-2024 is PE-dominant (oracle long_share≈0%). Holdout Aug-Oct 2024 is CE-dominant (88.9% CE). Model direction bias doesn't generalize across regimes.
-2. **Stage 3 adds noise:** Recipe models have no predictive power. PF=0.955 on validation, 0.627 on holdout.
-3. **Only 27 holdout trades:** Far below the 50-trade minimum gate. Policy is too restrictive.
+1. **CE/PE regime shift:** Training 2020-2024 is PE-dominant (oracle long_share≈0%). Holdout Aug-Oct 2024 is CE-dominant (94.8% CE in regime_fix run 1). Model direction bias doesn't generalize across regimes even with `recipe_fixed_baseline_guard_v1` policy.
+2. **Stage 3 adds noise:** `recipe_fixed_baseline_guard_v1` fell back to fixed L3 (dynamic worse than fixed). Still no Stage 3 signal.
+3. **Trade count improved:** 97 holdout trades in regime_fix run 1 (up from 27) — `recipe_fixed_baseline_guard_v1` with lower thresholds let more trades through.
+4. **Runs 2+3 in progress (2026-04-27):** `fo_midday_direction_regime_v3` (oracle CE/PE rolling win rates) and `fo_midday_time_aware_plus_oi_iv` (MIDDAY features, no conviction) — estimated completion ~17:00 UTC.
 
 ---
 
 ## 5. What To Do Next (Priority Order)
 
-### Priority 1 — Fix Regime Bias (HIGH IMPACT)
-The training period is PE-dominant, holdout is CE-dominant. Two approaches:
+> **2026-04-27 update:** Grid run 1 baseline (`fo_expiry_aware_v3`) confirmed: 97 holdout trades (good throughput) but PF=0.354 and 94.8% CE bias. Regime bias is structural — the model learned PE direction from PE-dominant training data. Runs 2+3 testing regime features are in progress.
 
-**A. Extend the training window** — include 2024 Q3/Q4 data so the model sees CE-dominant periods:
+### Priority 1 — Await regime_fix grid Runs 2+3 results (IN PROGRESS)
+- Run 2: `fo_midday_direction_regime_v3` — uses `oracle_rolling_ce_win_rate_10d`, `ce_pe_win_rate_diff_10d`. If model learns "follow recent winning side," holdout CE bias should drop.
+- Run 3: `fo_midday_time_aware_plus_oi_iv` — MIDDAY features with OI/IV signal, no conviction filter.
+- **Decision point:** If either run has long_share 30-70% on holdout, it solves the regime bias.
+
+### Priority 2 — If regime features don't fix bias: Shift Training Windows
+Data only goes to Oct 2024. To include CE-dominant data in training, shift windows:
 ```json
 "windows": {
-  "research_train": {"start": "2020-08-03", "end": "2024-10-31"},
-  "research_valid": {"start": "2024-11-01", "end": "2025-01-31"},
-  "full_model":     {"start": "2020-08-03", "end": "2025-01-31"},
-  "final_holdout":  {"start": "2025-02-01", "end": "2025-04-30"}
+  "research_train": {"start": "2020-08-03", "end": "2024-06-30"},
+  "research_valid": {"start": "2024-07-01", "end": "2024-08-31"},
+  "full_model":     {"start": "2020-08-03", "end": "2024-08-31"},
+  "final_holdout":  {"start": "2024-09-01", "end": "2024-10-31"}
 }
 ```
+This puts early CE-dominant data (Jul-Aug 2024) in validation so policy selection sees the regime.
 
-**B. Add regime-conditioning features** — use `fo_midday_direction_regime_v3` for Stage 2, which includes CE/PE regime indicators
+### Priority 3 — Stage 2 Direction Definition Change (STRUCTURAL)
+The oracle labels are PE-dominant because 2020-2024 market was PE-dominant — not a model flaw but a data flaw. Options:
+- **Use market direction (Nifty up/down) as Stage 2 label** instead of best-recipe direction. Market direction is balanced by definition (~50/50 up/down days).
+- **Class-weight balancing:** `class_weight="balanced"` in Stage 2 already used (logreg_balanced selected), but fundamental label imbalance remains.
 
-### Priority 2 — Drop Stage 3, Test Stage 1+2 Only (QUICK TEST)
-Stage 3 recipe models add noise. Test the pipeline with Stage 2 direction signal only, fixed to best recipe (L3):
-```json
-"policy": {
-  "stage3_policy_id": "recipe_fixed_v1",
-  "stage3": {"selected_recipe_id": "L3", "selection_mode": "fixed"}
-}
-```
-This eliminates Stage 3 model uncertainty and tests whether Stage 1+2 alone can be profitable.
-
-### Priority 3 — Stage 2 Direction Balance Fix (STRUCTURAL)
-The direction oracle labels are ~100% PE in 2020-2024. This means the model only learns "predict PE". Options:
-- **Rebalance labels:** Sample equal CE/PE from oracle, or use class_weight="balanced" in Stage 2
-- **Change direction definition:** Instead of best-recipe direction, use market direction (Nifty up/down)
-
-### Priority 4 — Grid Search with Updated Windows
-Once windows are updated, run `staged_grid.proper_full_v1.json` with the new time windows to find the best Stage 2 feature set on recent data.
+### Priority 4 — Accept regime sensitivity, add live regime gate
+If Stage 2 can't generalize across CE/PE regimes, add a runtime regime gate:
+- When oracle rolling win rates show CE regime → CE-only trades allowed
+- When PE regime → PE-only trades allowed
+- This is post-model regime conditioning, not model retraining
 
 ---
 
@@ -143,8 +144,19 @@ Once windows are updated, run `staged_grid.proper_full_v1.json` with the new tim
 | File | Purpose | Status |
 |------|---------|--------|
 | `configs/research/staged_dual_recipe.proper_full_v1.json` | Base manifest (all stages, MIDDAY filter) | Produced 0 trades |
-| `configs/research/staged_dual_recipe.simple_s2_v1.json` | Simple S2, no filter — **current best** | 27 holdout trades |
+| `configs/research/staged_dual_recipe.simple_s2_v1.json` | Simple S2, no filter | 27 holdout trades (prior best) |
 | `configs/research/staged_grid.proper_full_v1.json` | 5-run grid for S2 feature variants | Not yet run |
+| `configs/research/staged_dual_recipe.regime_fix_v1.json` | Base for regime fix grid (`recipe_fixed_baseline_guard_v1`) | **Active base** |
+| `configs/research/staged_grid.regime_fix_v1.json` | 3-run grid: baseline, regime features, MIDDAY no-conv | **Running (2026-04-27)** |
+
+### regime_fix_v1 Grid — Active Grid Dir
+`/home/savitasajwan03/option_trading/ml_pipeline_2/artifacts/research/staged_grid_regime_fix_v1_20260427T080148Z`
+
+| Run | S2 Features | S2 Holdout ROC | Holdout Trades | PF | long_share | Status |
+|-----|-------------|----------------|----------------|----|------------|--------|
+| `regime_fix_s2_expiry_baseline` | `fo_expiry_aware_v3` | 0.568 | 97 | 0.354 | 94.8% CE | ✅ Complete |
+| `regime_fix_s2_regime_v3` | `fo_midday_direction_regime_v3` | — | — | — | — | 🔄 Running |
+| `regime_fix_s2_midday_noconv` | `fo_midday_time_aware_plus_oi_iv` | — | — | — | — | 🔄 Running |
 
 ---
 
