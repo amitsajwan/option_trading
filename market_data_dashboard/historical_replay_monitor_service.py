@@ -300,8 +300,36 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             return chart
         return super().load_session_underlying_chart(date_ist=date_ist, instrument=instrument)
 
+    def _resolve_latest_run_id_for_date(self, date_ist: Optional[str]) -> Optional[str]:
+        """Return the run_id of the most recently submitted completed eval run for date_ist."""
+        if not date_ist:
+            return None
+        try:
+            db = self._repo._evaluation_service._db()
+            runs_coll_name = str(os.getenv("MONGO_COLL_STRATEGY_EVAL_RUNS") or "strategy_eval_runs")
+            doc = db[runs_coll_name].find_one(
+                {
+                    "status": "completed",
+                    "date_from": {"$lte": str(date_ist)},
+                    "date_to": {"$gte": str(date_ist)},
+                },
+                {"run_id": 1},
+                sort=[("_id", -1)],
+            )
+            if doc:
+                return str(doc["run_id"]).strip() or None
+        except Exception:
+            pass
+        return None
+
     def get_historical_strategy_session(self, **kwargs: Any) -> dict[str, Any]:
         run_id = str(kwargs.get("run_id") or "").strip() or None
+        date_arg = str(kwargs.get("date") or "").strip() or None
+        if not run_id:
+            # Always show the most recently submitted run — never leak stale data from an older run.
+            run_id = self._resolve_latest_run_id_for_date(date_arg)
+            if run_id:
+                kwargs = {**kwargs, "run_id": run_id}
         try:
             payload = self.get_strategy_session(**kwargs)
         except TypeError:
