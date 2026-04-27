@@ -1,16 +1,28 @@
 """
 update_grid_manifest.py — Automation helper.
 
-Reads a completed grid's grid_summary.json, picks the best run based on a
-decision metric, and patches the next grid's base manifest so the experiment
-chain can continue without manual intervention.
+Reads completed run summaries, picks the best run, and patches the next
+grid's base manifest so the experiment chain continues without manual work.
 
-Usage:
-    python tools/update_grid_manifest.py \\
-        --grid-summary  <path-to-grid_summary.json> \\
-        --base-manifest <path-to-next-base-manifest.json> \\
-        --grid-kind     {label_fix|feature_s2|deep_hpo} \\
-        [--dry-run]
+Two modes:
+
+1. Individual summaries (Grid A → Grid B):
+   Reads 3 standalone summary.json files and picks the best one.
+
+   python tools/update_grid_manifest.py \\
+       --run-summaries  path/a1/summary.json path/a2/summary.json path/a3/summary.json \\
+       --base-manifest  configs/research/staged_dual_recipe.label_fix_b_base.json \\
+       --grid-kind      label_fix \\
+       [--dry-run]
+
+2. Grid summary (Grid B → Grid C):
+   Reads a grid_summary.json produced by run_staged_grid.
+
+   python tools/update_grid_manifest.py \\
+       --grid-summary   path/to/grid_summary.json \\
+       --base-manifest  configs/research/staged_dual_recipe.deep_hpo_base.json \\
+       --grid-kind      feature_s2 \\
+       [--dry-run]
 """
 from __future__ import annotations
 
@@ -235,44 +247,75 @@ _PATCHERS = {
 # Main
 # ---------------------------------------------------------------------------
 
+def _runs_from_individual_summaries(summary_paths: List[str]) -> List[Dict[str, Any]]:
+    """Build pseudo run-rows from individual summary.json files (Grid A mode)."""
+    rows = []
+    for sp in summary_paths:
+        p = Path(sp)
+        if not p.exists():
+            print(f"WARNING: summary not found, skipping: {p}", file=sys.stderr)
+            continue
+        summary = _load(p)
+        run_dir = str(p.parent.resolve())
+        run_id = str(summary.get("run_name") or p.parent.name)
+        rows.append({
+            "grid_run_id": run_id,
+            "run_dir": run_dir,
+            "summary_path": str(p.resolve()),
+            "release_status": "completed" if summary.get("completion_mode") else "unknown",
+        })
+    return rows
+
+
+def _runs_from_grid_summary(grid_summary_path: Path) -> List[Dict[str, Any]]:
+    """Extract run rows from a grid_summary.json (Grid B/C mode)."""
+    grid_summary = _load(grid_summary_path)
+    return list(grid_summary.get("runs") or [])
+
+
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Update next-grid base manifest from prior grid winner.")
-    parser.add_argument("--grid-summary", required=True, help="Path to completed grid_summary.json")
-    parser.add_argument("--base-manifest", required=True, help="Path to next grid's base manifest to update in-place")
+    parser = argparse.ArgumentParser(description="Update next-grid base manifest from prior run winner.")
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--grid-summary", help="Path to completed grid_summary.json (Grid B/C mode)")
+    src.add_argument("--run-summaries", nargs="+", help="Paths to individual summary.json files (Grid A mode)")
+    parser.add_argument("--base-manifest", required=True, help="Path to next grid's base manifest to patch in-place")
     parser.add_argument(
         "--grid-kind",
         required=True,
         choices=list(_SCORERS),
-        help="Which grid just completed (drives the scoring and patching logic)",
+        help="Which grid just completed (drives scoring and patching logic)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print result without writing")
     args = parser.parse_args(argv)
 
-    grid_summary_path = Path(args.grid_summary)
     base_manifest_path = Path(args.base_manifest)
     grid_kind = args.grid_kind
 
-    if not grid_summary_path.exists():
-        print(f"ERROR: grid summary not found: {grid_summary_path}", file=sys.stderr)
-        return 1
     if not base_manifest_path.exists():
         print(f"ERROR: base manifest not found: {base_manifest_path}", file=sys.stderr)
         return 1
 
-    grid_summary = _load(grid_summary_path)
-    runs = list(grid_summary.get("runs") or [])
+    if args.grid_summary:
+        grid_summary_path = Path(args.grid_summary)
+        if not grid_summary_path.exists():
+            print(f"ERROR: grid summary not found: {grid_summary_path}", file=sys.stderr)
+            return 1
+        runs = _runs_from_grid_summary(grid_summary_path)
+    else:
+        runs = _runs_from_individual_summaries(args.run_summaries)
+
     if not runs:
-        print("ERROR: grid_summary has no runs", file=sys.stderr)
+        print("ERROR: no runs found to pick a winner from", file=sys.stderr)
         return 1
 
-    scorer = _scorers = _SCORERS[grid_kind]
+    scorer = _SCORERS[grid_kind]
     winner_row = _pick_winner(runs, scorer)
     if winner_row is None:
         print("ERROR: all runs failed — no winner can be selected", file=sys.stderr)
         return 1
 
     print(f"Grid kind : {grid_kind}")
-    print(f"Winner run: {winner_row.get('grid_run_id')}  (run_dir: {winner_row.get('run_dir')})")
+    print(f"Winner    : {winner_row.get('grid_run_id')}  (run_dir: {winner_row.get('run_dir')})")
     print(f"Score     : {scorer(winner_row)}")
 
     try:
