@@ -460,6 +460,26 @@ def _position_to_trade(
 
 # ── Shared build logic ─────────────────────────────────────────────────────────
 
+def _latest_run_id_for_date(db: Any, trade_date: str) -> Optional[str]:
+    """Return the run_id of the most recently submitted completed eval run for trade_date."""
+    runs_coll = str(os.getenv("MONGO_COLL_STRATEGY_EVAL_RUNS") or "strategy_eval_runs")
+    try:
+        doc = db[runs_coll].find_one(
+            {
+                "status": "completed",
+                "date_from": {"$lte": trade_date},
+                "date_to": {"$gte": trade_date},
+            },
+            {"run_id": 1},
+            sort=[("_id", -1)],
+        )
+        if doc and doc.get("run_id"):
+            return str(doc["run_id"]).strip() or None
+    except Exception:
+        pass
+    return None
+
+
 def _build_session(
     db: Any,
     trade_date: str,
@@ -467,8 +487,13 @@ def _build_session(
     coll_votes: str,
     coll_signals: str,
     coll_positions: str,
+    run_id: Optional[str] = None,
 ) -> MonitorSession:
+    latest_run_id = run_id or _latest_run_id_for_date(db, trade_date)
     date_q: Dict[str, Any] = {"trade_date_ist": trade_date}
+    run_date_q: Dict[str, Any] = {"trade_date_ist": trade_date}
+    if latest_run_id:
+        run_date_q["run_id"] = latest_run_id
 
     snap_proj = {
         "_id": 0,
@@ -511,8 +536,8 @@ def _build_session(
         "run_id": 1,
     }
     position_map: Dict[str, Dict[str, Any]] = {}
-    detected_run_id: Optional[str] = None
-    for doc in db[coll_positions].find(date_q, pos_proj).sort("timestamp", ASCENDING):
+    detected_run_id: Optional[str] = latest_run_id
+    for doc in db[coll_positions].find(run_date_q, pos_proj).sort("timestamp", ASCENDING):
         pid = str(doc.get("position_id") or "").strip()
         if not pid:
             continue
@@ -565,7 +590,7 @@ def _build_session(
     def _extract_sid(doc: Dict[str, Any]) -> str:
         return str(doc.get("signal_id") or ((doc.get("payload") or {}).get("signal") or {}).get("signal_id") or "").strip()
 
-    for doc in db[coll_votes].find(date_q, vote_proj).sort("timestamp", ASCENDING):
+    for doc in db[coll_votes].find(run_date_q, vote_proj).sort("timestamp", ASCENDING):
         sig = _vote_to_signal(doc, candle_ts_sorted)
         if sig is None:
             continue
@@ -602,7 +627,7 @@ def _build_session(
             "entry_strategy_name": 1,
             "payload.signal": 1,
         }
-        for doc in db[coll_signals].find(date_q, signal_proj).sort("timestamp", ASCENDING):
+        for doc in db[coll_signals].find(run_date_q, signal_proj).sort("timestamp", ASCENDING):
             sig = _trade_signal_to_signal(doc, candle_ts_sorted)
             if sig is None:
                 continue
