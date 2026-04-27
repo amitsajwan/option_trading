@@ -37,6 +37,7 @@ Legacy launcher note:
 From `requirements.txt`:
 
 - `fastapi`, `uvicorn`, `jinja2`, `requests`, `redis`, `python-dotenv`
+- GCS model catalog discovery (`GCS_MODEL_ROOTS`) requires `strategy_app` to be importable and `google-cloud-storage` to be installed (used via `strategy_app.utils.gcs_artifact`). If either is missing, GCS catalog entries are silently skipped.
 
 ## Run
 
@@ -75,6 +76,16 @@ Environment used by dashboard:
 - `REDIS_HOST`, `REDIS_PORT`
 - `DASHBOARD_ENABLE_DEBUG_ROUTES` (default disabled; required for `/test*` and `/simple*`)
 - `DASHBOARD_LEGACY_BACKTEST_TIMEOUT_SECONDS` (default `1800`)
+- `GCS_MODEL_ROOTS` — comma-separated `gs://` model directory URLs to include in the model catalog. Each URL must point to a published model directory containing `reports/training/latest.json`. Example:
+  ```
+  GCS_MODEL_ROOTS=gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1
+  ```
+  Multiple models:
+  ```
+  GCS_MODEL_ROOTS=gs://bucket/published_models/research/model_a,gs://bucket/published_models/research/model_b
+  ```
+  Requires `google-cloud-storage` and GCP credentials (consumed via `strategy_app.utils.gcs_artifact`). GCS entries appear in the model catalog (`/app?tab=models`) as research-grade entries (`card_tone=warn`, `status_label="research (gcs)"`).
+- `GCS_ARTIFACT_CACHE_DIR` — local cache directory for GCS metadata files downloaded during catalog discovery (default `~/.cache/option_trading_models/`)
 
 Port behavior note:
 
@@ -83,38 +94,104 @@ Port behavior note:
 
 ## Main endpoints
 
-- `GET /` -> dashboard page
-- `GET /live/strategy` -> live operator monitor for `strategy_app`
+### UI pages
+
+- `GET /` -> redirects to `/app` (302) — main SPA entry
+- `GET /live/strategy` -> redirects to `/app?mode=live` (302)
 - `GET /historical/replay` -> historical replay operator monitor
 - `GET /strategy/evaluation` -> run-scoped evaluation compare page
-- `GET /trading` -> legacy paper trading terminal page (opt-in launcher)
-- `GET /trading/models` -> model catalog page (profiles + artifact health + launch links)
-- `GET /trading?model=a|b|...` -> model-scoped terminal tab (separate runner instance)
-- `GET /trading/model/{model_key}` -> redirect to `/trading?model={model_key}`
-- `GET /api/health` -> dashboard health
-- `GET /api/health/live` -> live-operator health view
+- `GET /trading` -> legacy paper trading terminal page (opt-in; requires `ENABLE_LEGACY_TRADING_UI=1`)
+- `GET /trading/models` -> redirects to `/app?tab=models` (302) — model catalog
+- `GET /trading/research` -> research scenario evaluation page
+- `GET /trading/velocity-testing` -> velocity policy testing page
+- `GET /trading?model=a|b|...` -> model-scoped terminal tab (legacy launcher)
+- `GET /trading/model/{model_key}` -> redirects to model `prefill_url` or `/trading?model={model_key}` (307)
+
+### Health
+
+- `GET /api/health` -> dashboard health (includes `ready` flag and dependency state)
+- `GET /api/health/live` -> alias for `/api/health`
 - `GET /api/health/replay` -> replay-oriented health view
+- `GET /api/health/strategy-runtime` -> strategy runtime artifact observability (`.run/` published state)
+- `GET /api/market-data/health` -> market-data API reachability check
+
+### Market data
+
 - `GET /api/market-data/status` -> merged status view
 - `GET /api/market-data/ohlc/{instrument}`
+- `GET /api/market-data/charts/{instrument}` -> chart-optimized OHLC payload
 - `GET /api/market-data/indicators/{instrument}`
 - `GET /api/market-data/depth/{instrument}`
 - `GET /api/market-data/options/{instrument}`
 - `GET /api/market-data/instruments`
 - `GET /api/market-data/sync-lag?instrument=...` -> Redis vs Mongo lag monitor by domain
-- `GET /api/live/strategy/session` -> live operator session payload from Mongo-backed strategy state
-- `GET /api/historical/replay/session` -> historical operator session payload from historical Mongo-backed strategy state
+
+### Live strategy
+
+- `GET /api/live/strategy/session` -> live operator session payload
+- `GET /api/live/strategy/traces` -> decision trace list
+- `GET /api/live/strategy/traces/{trace_id}` -> single trace detail
+
+### Historical replay
+
+- `GET /api/historical/replay/session` -> historical operator session payload
 - `GET /api/historical/replay/status` -> replay topic/state/progress payload
-- `GET /api/trading/state?instance={key}` -> per-instance paper runner status + positions/trades/capital
-- `GET /api/trading/models` -> machine-readable model catalog for UI/automation
-- `POST /api/trading/start` -> start legacy paper trading runner (payload supports `instance`)
-- `POST /api/trading/backtest/run` -> run legacy one-date backtest launcher
-- `POST /api/trading/stop?instance={key}` -> stop paper trading runner for that instance
+- `GET /api/historical/replay/stream` -> SSE stream of replay status updates
+- `POST /api/historical/replay/generate` -> trigger replay data generation
+
+### Strategy evaluation
+
+- `GET /api/strategy/evaluation/summary`
+- `GET /api/strategy/evaluation/equity`
+- `GET /api/strategy/evaluation/days`
+- `GET /api/strategy/evaluation/trades`
+- `GET /api/strategy/evaluation/runs` -> list runs
+- `POST /api/strategy/evaluation/runs` -> create run
+- `GET /api/strategy/evaluation/runs/latest`
+- `GET /api/strategy/evaluation/runs/{run_id}`
+
+### Model catalog (always-on; legacy launcher state is separate)
+
+- `GET /api/trading/models` -> machine-readable model catalog (includes GCS research entries)
+- `GET /api/trading/model-evaluation` -> model eval snapshot (summary + training + policy reports)
+- `GET /api/trading/feature-intelligence` -> feature importance / intelligence snapshot
+
+### Legacy paper trading (opt-in; requires `ENABLE_LEGACY_TRADING_UI=1`)
+
+- `GET /api/trading/state?instance={key}` -> per-instance runner status + positions/trades/capital
+- `POST /api/trading/start` -> start paper trading runner
+- `POST /api/trading/stop?instance={key}` -> stop runner
+- `POST /api/trading/backtest/run` -> run one-date backtest
+- `GET /api/trading/backtest/latest` -> latest backtest state
+
+### Research
+
+- `GET /api/trading/research/scenarios` -> list recovery/research scenarios
+- `GET /api/trading/research/evaluation` -> evaluate a research scenario
+
+### Velocity testing
+
+- `GET /api/trading/velocity-testing/test` -> run velocity policy test over a date range
+- `GET /api/trading/velocity-testing/heatmap` -> velocity metrics heatmap
+
+### Public contract / schema
+
+- `GET /api/schema` -> public topic schema index
+- `GET /api/schema/{topic}` -> schema for a specific topic
+- `GET /api/capabilities` -> declared runtime capabilities
+- `GET /api/catalog` -> runtime instrument catalog
+- `GET /api/examples/{topic}` -> live example payload for a topic (ohlc, indicators, depth, options)
+- `GET /api/v1/system/mode` -> current system mode
+- `GET /api/v1/monitor/snapshot` -> monitor snapshot
+
+### WebSocket
+
 - `WS /ws` -> STOMP + legacy JSON websocket
 
-Debug-only endpoints:
+### Debug-only endpoints
 
 - `/test*` and `/simple*` are disabled by default in production.
-- set `DASHBOARD_ENABLE_DEBUG_ROUTES=1` only for controlled debugging sessions.
+- Set `DASHBOARD_ENABLE_DEBUG_ROUTES=1` only for controlled debugging sessions.
 
 ### Endpoint behavior notes
 
@@ -252,7 +329,7 @@ Before calling the dashboard slice production-ready, verify:
 2. `GET /api/live/strategy/session` returns a valid session payload for the active instrument/date.
 3. `GET /api/market-data/status`, `GET /api/market-data/sync-lag`, `GET /api/market-data/instruments`, `GET /api/market-data/ohlc/{instrument}`, `GET /api/market-data/indicators/{instrument}`, `GET /api/market-data/depth/{instrument}`, and `GET /api/market-data/options/{instrument}` all return the documented top-level contract shape.
 4. `GET /api/examples/ohlc`, `GET /api/examples/indicators`, `GET /api/examples/depth`, and `GET /api/examples/options` succeed, proving the public-contract router remains bound to live market-data handlers.
-5. `/live/strategy` and `/` render without console errors and recover cleanly after Redis or upstream market-data restarts.
+5. `/` and `/live/strategy` redirect correctly (to `/app` and `/app?mode=live` respectively) and the SPA loads without console errors; verify it recovers cleanly after Redis or upstream market-data restarts.
 6. Debug-only endpoints remain hidden unless `DASHBOARD_ENABLE_DEBUG_ROUTES=1`.
 7. If `ENABLE_LEGACY_TRADING_UI=1` is enabled intentionally, `/trading` and the legacy launcher paths are exercised separately and treated as non-core flows.
 
@@ -277,4 +354,4 @@ Check:
 
 ---
 
-Last updated: 2026-03-06
+Last updated: 2026-04-27

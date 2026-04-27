@@ -1,10 +1,12 @@
 # Strategy + ML Flow
 
+As-of: `2026-04-27`
+
 How a single market snapshot moves through `strategy_app` and becomes a trade decision.
 
 ---
 
-## 1. Full pipeline - one snapshot, one decision
+## 1. Full pipeline — one snapshot, one decision
 
 ```mermaid
 flowchart TD
@@ -63,7 +65,7 @@ sequenceDiagram
 
 ---
 
-## 3. Regime -> strategy routing
+## 3. Regime → strategy routing
 
 ```mermaid
 flowchart LR
@@ -84,7 +86,7 @@ flowchart LR
         PDL[PREV_DAY_LEVEL]
         IV[IV_FILTER]
         HVO[HIGH_VOL_ORB]
-        EMP[EXPIRY_MAX_PAIN\nremoved from default]
+        EMP[EXPIRY_MAX_PAIN\nnot in default routing]
     end
 
     T --> ORB
@@ -97,28 +99,21 @@ flowchart LR
     PE --> OI
     EX --> IV
     EX --> VW
-    EX -.->|default routing removed| EMP
+    EX -.->|disabled by default| EMP
     HV --> HVO
     AV --> |no entry| X2(( ))
 ```
 
 ---
 
-## 4. Exit routing - before and after B1
+## 4. Exit routing
 
 ```mermaid
 flowchart TD
-    subgraph Current["Historical problem"]
-        P1[Open position\nowned by OI_BUILDUP]
-        EX1[Universal exit pool\nORB + EMA + VWAP + OI]
-        P1 --> EX1
-        EX1 -->|first passing vote wins| C1([Close - any strategy])
-    end
-
-    subgraph Fixed["Current runtime"]
+    subgraph Current["Current runtime"]
         P2[Open position\nowned by OI_BUILDUP]
         OWN[Owned exits\nOI_BUILDUP only]
-        SHARED[Shared exits\nORB + EMA + VWAP]
+        SHARED[Shared exits\nORB + VWAP_RECLAIM]
         HARD[Hard exits\nstop / trail / time / risk]
         P2 --> HARD
         HARD -->|fires first, always| C2([Close])
@@ -129,32 +124,59 @@ flowchart TD
     end
 ```
 
+EMA_CROSSOVER is not in the default universal exit candidate set.
+
 ---
 
-## 5. Current engine lanes
+## 5. Engine lanes
 
 ```mermaid
 flowchart LR
-    subgraph DET["deterministic - research only"]
+    subgraph DET["deterministic - research/replay"]
         D1[Regime] --> D2[Strategy votes] --> D3[Lot sizing] --> D4[TradeSignal]
     end
 
-    subgraph PURE["ml_pure - live production lane"]
-        P1[Regime] --> P2[Stage 1\nEnter?]
-        P2 -->|No| P6([HOLD])
-        P2 -->|Yes| P3[Stage 2\nCE or PE?]
-        P3 --> P4[Stage 3\nRecipe]
-        P4 -->|sets stop% target%\nmax_hold_bars| P5[Lot sizing] --> P7[TradeSignal]
+    subgraph PURE["ml_pure - live production"]
+        P1[Regime + prefilter gates] --> P2[Stage 1\nEntry gate]
+        P2 -->|below threshold| P6([HOLD])
+        P2 -->|pass| P3[Stage 2\nCE or PE?]
+        P3 -->|below threshold or low edge| P6
+        P3 -->|pass| P4[Stage 3\nRecipe selection]
+        P4 -->|below threshold or low margin| P6
+        P4 -->|pass — sets stop%\ntarget% max_hold_bars| P5[Lot sizing] --> P7[TradeSignal]
     end
 ```
 
-Legacy `ml` wrapper and registry-backed `ml_entry` overlay have been removed from the runtime path.
+The legacy `ml` wrapper has been removed. Only `deterministic` and `ml_pure` are supported.
 
 ---
 
-## 6. ML training pipeline (offline)
+## 6. ml_pure staged inference detail
 
-`ml_pipeline_2` runs offline. It produces the `.joblib` bundle that `strategy_app` loads at startup.
+`predict_staged()` in `pure_ml_staged_runtime.py` runs this sequence on each snapshot:
+
+1. **Prefilter chain** — gates from `bundle.runtime.prefilter_gate_ids`:
+   - `risk_halt_pause_v1`: halt if risk manager is halted or paused
+   - `valid_entry_phase_v1`: block if outside valid session phase
+   - `startup_warmup_v1`: block during warmup window
+   - `feature_freshness_v1`: block if snapshot age exceeds `max_feature_age_sec`
+   - `regime_gate_v1` / `regime_confidence_gate_v1`: block on `AVOID`, `SIDEWAYS`, low-confidence regime, or `EXPIRY` when `block_expiry=true`
+   - `feature_completeness_v1`: block if NaN count in required features exceeds `max_nan_features`
+   - `liquidity_gate_v1`: block if OI or volume below minimums
+
+2. **Stage 1** — score `entry_prob` against `stage1.selected_threshold`. HOLD if below.
+
+3. **Stage 2** — score `direction_up_prob`. Apply per-direction thresholds and `min_edge`. HOLD on conflict or both below threshold.
+
+4. **Stage 3** — score all recipe models; select top recipe. HOLD if `top_prob < selected_threshold` or `margin < selected_margin_min`. Recipe metadata sets `stop_loss_pct`, `target_pct`, `horizon_minutes`.
+
+`STRATEGY_ML_PURE_BYPASS_GATES=true` skips all prefilter and threshold gates (research use only).
+
+---
+
+## 7. ML training pipeline (offline)
+
+`ml_pipeline_2` runs offline and produces the `.joblib` bundle that `strategy_app` loads at startup.
 
 ```mermaid
 flowchart TD
@@ -166,14 +188,30 @@ flowchart TD
     D & E & F --> G[Policy selection\non research_valid window]
     G --> H[Score final_holdout\nonce only]
     H --> I{Hard gates pass?}
-    I -->|No| Z([HOLD - do not publish])
+    I -->|No| Z([Do not publish])
     I -->|Yes| J[Publish bundle\nmodel.joblib + threshold_report.json]
-    J --> K([strategy_app loads via\nML_PURE_RUN_ID + ML_PURE_MODEL_GROUP])
+    J --> K1[Local path\nML_PURE_RUN_ID + ML_PURE_MODEL_GROUP]
+    J --> K2[GCS path\ngs://bucket/published_models/group/\nML_PURE_MODEL_PACKAGE or ML_PURE_THRESHOLD_REPORT]
+    K1 & K2 --> L([strategy_app loads\nauto-downloads GCS to local cache])
 ```
+
+Current published model: `gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1/`
 
 ---
 
-## 7. ML <-> strategy integration gaps
+## 8. GCS artifact loading
+
+`strategy_app/utils/gcs_artifact.py` provides transparent `gs://` resolution:
+
+- `resolve_artifact_path(path)` — pass-through for local paths; downloads and caches for `gs://` paths
+- `download_gcs_file(gcs_url)` — downloads to `GCS_ARTIFACT_CACHE_DIR` (default `~/.cache/option_trading_models/`)
+- Cache key is a SHA-256 slug of the full URL; existing cache entries are reused without re-download
+
+`load_staged_model_package()` and `load_staged_policy()` both call `resolve_artifact_path` internally, so `gs://` paths work transparently with no caller changes.
+
+---
+
+## 9. ML ↔ strategy integration gaps
 
 ```mermaid
 flowchart TD
@@ -193,19 +231,19 @@ flowchart TD
 
     T3 -->|published bundle\nrun_id + model_group| L3
 
-    G1["Gap 1\nFeature drift - two separate\ncodepaths compute same features.\nNo runtime parity check in production."]
-    G2["Gap 2\nLabels are synthetic forward-path labels,\nnot realized option lifecycle outcomes.\nDeterministic exit patches do not relabel this pipeline."]
-    G3["Gap 3\nNo feedback loop.\nLive outcomes do not automatically\ntrigger retraining."]
+    G1["Gap 1\nFeature drift — two separate codepaths\ncompute the same features.\nNo runtime parity check in production."]
+    G2["Gap 2\nLabels are synthetic forward-path labels,\nnot realized option lifecycle outcomes."]
+    G3["Gap 3\nNo feedback loop.\nLive outcomes do not trigger retraining."]
 
-    T2 -.- G2
     T1 -.- G1
     L2 -.- G1
+    T2 -.- G2
     L3 -.- G3
 ```
 
 ---
 
-## 8. Correct order of operations
+## 10. Correct order of operations
 
 ```mermaid
 flowchart TD
@@ -213,7 +251,7 @@ flowchart TD
     S2["Phase 2\nKeep feature parity and session/risk tests green"]
     S3["Phase 3\nRebuild stage views only when data,\nview schema, or label recipe changes"]
     S4["Phase 4\nRetrain ml_pipeline_2\nPublish new bundle"]
-    S5["Phase 5\nSwitch runtime by run_id + model_group"]
+    S5["Phase 5\nSwitch runtime by run_id + model_group\nor explicit GCS path"]
     S6["Phase 6\nDeploy ml_pure"]
 
     S1 --> S2 --> S3 --> S4 --> S5 --> S6
@@ -225,12 +263,13 @@ flowchart TD
 
 | File | Purpose |
 |---|---|
-| `strategy_app/engines/deterministic_rule_engine.py` | Core decision loop |
-| `strategy_app/engines/strategy_router.py` | Regime -> strategy mapping |
-| `strategy_app/engines/strategies/all_strategies.py` | All strategy implementations |
+| `strategy_app/engines/deterministic_rule_engine.py` | Core deterministic decision loop |
+| `strategy_app/engines/pure_ml_engine.py` | ml_pure engine |
+| `strategy_app/engines/pure_ml_staged_runtime.py` | Staged inference: `predict_staged()`, loaders |
+| `strategy_app/engines/strategy_router.py` | Regime → strategy mapping |
 | `strategy_app/risk/manager.py` | Lot sizing, halts, drawdown |
 | `strategy_app/position/tracker.py` | Position state, hard exits |
 | `strategy_app/runtime/redis_snapshot_consumer.py` | Snapshot intake, session lifecycle |
+| `strategy_app/utils/gcs_artifact.py` | GCS download/cache — resolves `gs://` paths |
 | `ml_pipeline_2/staged/pipeline.py` | ML training orchestration |
-| `ml_pipeline_2/staged/publish.py` | Bundle publish and env handoff |
-| `strategy_app/docs/ENGINE_CONSOLIDATION_PLAN.md` | Consolidation and handoff status |
+| `ml_pipeline_2/publishing/release.py` | GCS sync |

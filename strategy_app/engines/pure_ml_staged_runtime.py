@@ -61,11 +61,14 @@ def is_staged_runtime_bundle(bundle: dict[str, object]) -> bool:
 
 
 def load_staged_policy(path: str) -> dict[str, Any]:
-    return load_staged_runtime_policy(path)
+    from ..utils.gcs_artifact import resolve_artifact_path
+    return load_staged_runtime_policy(resolve_artifact_path(str(path)))
 
 
 def load_staged_model_package(path: str | Path) -> dict[str, object]:
-    package = joblib.load(Path(path))
+    from ..utils.gcs_artifact import resolve_artifact_path
+    resolved = resolve_artifact_path(str(path))
+    package = joblib.load(Path(resolved))
     if not isinstance(package, dict):
         raise ValueError("pure ml model package must be dict")
     if not is_staged_runtime_bundle(package):

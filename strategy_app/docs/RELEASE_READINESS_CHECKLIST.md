@@ -1,8 +1,6 @@
 # Release Readiness Checklist
 
-As-of date: `2026-04-04`
-
-## Purpose
+As-of: `2026-04-27`
 
 Minimum release gate for:
 
@@ -12,26 +10,22 @@ Minimum release gate for:
 
 ## Before Release
 
-- identify branch and commit ids
-- identify release owner
-- identify rollback owner
-- identify target VM/environment
-- identify whether this is dashboard-only, runtime-only, or full-stack
+- Identify branch and commit IDs
+- Identify release owner and rollback owner
+- Identify target VM/environment
+- Identify scope: dashboard-only, runtime-only, or full-stack
 
 ## Code Health
 
-- touched-module tests pass
-- replay/session tests pass for dashboard changes
-- docs match current runtime behavior
+- Touched-module tests pass
+- Replay/session tests pass for dashboard changes
+- Docs match current runtime behavior
 
 ## Replay Truth
 
-- rerun a known historical window
-- verify same `run_id` across:
-  - summary
-  - trades
-  - session
-- verify no mixed-run leakage in signals/votes/diagnostics
+- Rerun a known historical window
+- Verify same `run_id` across: summary, trades, session
+- Verify no mixed-run leakage in signals/votes/diagnostics
 
 ## Dashboard Verification
 
@@ -45,11 +39,20 @@ Minimum release gate for:
 
 ## Runtime Verification
 
-- strategy consumer lock acquired cleanly
-- no duplicate consumer crash loop
-- replay emitted non-zero events
-- persistence wrote votes/signals/positions for the new run
-- expected deterministic `strategy_profile_id` for production freeze: `det_prod_v1`
+- Strategy consumer lock acquired cleanly
+- No duplicate consumer crash loop
+- Replay emitted non-zero events
+- Persistence wrote votes/signals/positions for the new run
+- Expected `strategy_profile_id`:
+  - Deterministic production freeze: `det_prod_v1`
+  - ml_pure: `ml_pure_staged_v1`
+
+## ml_pure Additional Checks
+
+- Confirm `ml_pure_model_package` and `ml_pure_threshold_report` in `runtime_config.json`
+- Confirm paths resolve (local files exist, or GCS URLs are reachable)
+- Confirm `GCS_ARTIFACT_CACHE_DIR` is set or the default `~/.cache/option_trading_models/` is writable
+- For `capped_live` rollout: guard file present and valid, `position_size_multiplier <= 0.25`
 
 ## Deployment
 
@@ -105,10 +108,10 @@ curl -s "http://127.0.0.1:8008/api/historical/replay/session?date=2024-01-05&run
 
 ## Rollback
 
-1. identify last known good commit
-2. rebuild only affected container
-3. restart only affected container
-4. rerun the same smoke checks
+1. Identify last known good commit
+2. Rebuild only the affected container
+3. Restart only the affected container
+4. Rerun the same smoke checks
 
 ## Sign-Off
 

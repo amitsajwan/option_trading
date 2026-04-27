@@ -1,5 +1,7 @@
 # Deterministic V2 Architecture
 
+Last reviewed: 2026-04-27
+
 ## Goal
 
 Keep the deterministic engine trader-like in behavior while preserving clean system boundaries.
@@ -17,13 +19,26 @@ The design principle is:
 
 ### Entry Ownership
 
-Each entry comes from one named strategy:
+Each entry comes from one named strategy. Strategies present in the codebase:
 
 - `ORB`
 - `OI_BUILDUP`
 - `VWAP_RECLAIM`
 - `PREV_DAY_LEVEL`
 - `HIGH_VOL_ORB`
+
+The **production default profile** (`det_prod_v1`) uses a narrower set:
+
+| Regime | Strategies |
+|---|---|
+| `TRENDING` | `IV_FILTER`, `ORB`, `OI_BUILDUP` |
+| `SIDEWAYS` | `IV_FILTER`, `OI_BUILDUP` |
+| `EXPIRY` | `IV_FILTER` |
+| `PRE_EXPIRY` | `IV_FILTER`, `ORB`, `OI_BUILDUP` |
+| `HIGH_VOL` | `IV_FILTER`, `HIGH_VOL_ORB` |
+| `AVOID` | — |
+
+`VWAP_RECLAIM` and `PREV_DAY_LEVEL` are available but are not in `det_prod_v1`. They appear in `det_core_v2` (research/comparison profile).
 
 The default router no longer allocates new `TRENDING` entries to `EMA_CROSSOVER`.
 
@@ -90,9 +105,9 @@ When reviewing deterministic strategies, ask:
 ## Next Refactor Targets
 
 1. Re-run research on the current router and current defaults.
-2. Decide whether `VWAP_RECLAIM` stays in the default stack or moves to watchlist.
-3. Consider a dedicated profile system for:
-   - conservative core
-   - pre-expiry specialist
-   - research-only experimental sets
+2. `VWAP_RECLAIM` is not in the production default (`det_prod_v1`); it remains in `det_core_v2` for research comparison. Decide whether it warrants its own profile entry or stays research-only.
+3. A profile system already exists (`det_prod_v1`, `det_core_v2`, `det_setup_v1`, `det_v3_v1`). Consider formalizing profile purpose documentation:
+   - `det_prod_v1`: conservative core (production)
+   - `det_core_v2`: broader research/comparison
+   - `det_setup_v1`, `det_v3_v1`: trader composite variants
 4. Move evaluation dashboards to capital-weighted defaults.

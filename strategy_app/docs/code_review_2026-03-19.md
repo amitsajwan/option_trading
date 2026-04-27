@@ -1,4 +1,6 @@
-﻿# Strategy App Full Code Review - March 19, 2026
+﻿> **Historical record — 2026-03-19 code review. Not maintained.**
+
+# Strategy App Full Code Review - March 19, 2026
 
 Status: Completed implementation with active fixes now tracked in code.
 Scope: `deterministic_rule_engine.py`, `all_strategies.py`, `manager.py`, `redis_snapshot_consumer.py`, `strategy_router.py`.

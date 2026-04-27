@@ -1,3 +1,5 @@
+> **Historical record — 2026-03-19 code review. Not maintained.**
+
 # STRATEGY APP
 ## Technical Briefing & Code Review
 

@@ -12,3 +12,4 @@ numpy
 pandas
 pyarrow
 scikit-learn
+google-cloud-storage>=2.0,<3

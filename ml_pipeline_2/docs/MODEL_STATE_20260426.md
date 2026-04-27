@@ -1,5 +1,7 @@
 # ML Model State — 2026-04-26
 
+> **GCS publication:** Model artifacts are also accessible from GCS at the path listed in section 8. Use `GCS_MODEL_ROOTS` env var in the dashboard or `--ml-pure-model-package gs://...` in strategy_app to load directly.
+
 > **Canonical snapshot.** This doc is the single source of truth for the current model state.
 > When resuming research, start here. Update this doc after every meaningful run.
 

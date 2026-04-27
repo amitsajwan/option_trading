@@ -1,5 +1,7 @@
 # UX Improvements Summary — Trading Dashboard
 
+> Historical record — see README.md for current state.
+
 ## Implemented P0 Critical Improvements
 
 ### 1. Confirmation Dialogs for Destructive Actions

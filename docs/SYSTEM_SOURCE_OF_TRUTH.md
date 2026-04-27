@@ -1,6 +1,6 @@
 # BankNifty System Source Of Truth
 
-As-of date: `2026-03-20`
+As-of date: `2026-04-27`
 
 If active docs conflict with code, code wins. If active docs conflict with each other, this file wins.
 
@@ -15,9 +15,17 @@ If active docs conflict with code, code wins. If active docs conflict with each 
 ## 2. ML Artifact Contract
 
 - Runtime artifact selection is by `ML_PURE_RUN_ID` + `ML_PURE_MODEL_GROUP`, or explicit package/report paths.
+- Explicit paths (`ML_PURE_MODEL_PACKAGE`, `ML_PURE_THRESHOLD_REPORT`) accept local file paths or `gs://` GCS URLs. GCS files are downloaded to local cache on first use (`GCS_ARTIFACT_CACHE_DIR`, default `~/.cache/option_trading_models/`).
 - In run-id mode, startup is blocked unless publish validation passes and both resolved artifact paths exist.
 - `runtime.block_expiry` must stay aligned between training and live runtime policy.
 - Active staged label generation is built from forward futures-path barrier labeling in `ml_pipeline_2/labeling/engine.py`, not from deterministic strategy replay exits.
+
+**Current research model (not production-ready):**
+
+- Run: `staged_simple_s2_v1_20260426_110326`
+- GCS root: `gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1/`
+- Status: research checkpoint — all production gates failed — `paper` rollout stage only
+- Details: `ml_pipeline_2/docs/MODEL_STATE_20260426.md`
 
 ## 3. Runtime Guard Contract
 
@@ -56,9 +64,19 @@ When live ML is enabled:
 
 ## 6. Last Verified Commands
 
-```powershell
+```bash
 python -m snapshot_app.historical.snapshot_batch_runner --validate-only --base .data/ml_pipeline/parquet_data --window-manifest-out .run/window_manifest_latest.json
 python -m ml_pipeline_2.run_research --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json --validate-only
 python -m strategy_app.main --engine deterministic --topic market:snapshot:v1:historical
 python -m strategy_app.main --engine ml_pure --ml-pure-run-id <run_id> --ml-pure-model-group banknifty_futures/h15_tp_auto
+# GCS explicit path mode (new as of 2026-04-27):
+python -m strategy_app.main --engine ml_pure \
+  --ml-pure-model-package gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1/model/model.joblib \
+  --ml-pure-threshold-report gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1/config/profiles/ml_pure_staged_v1/threshold_report.json
+```
+
+**GCP deploy:**
+```bash
+gcloud compute ssh savitasajwan03@option-trading-runtime-01 --zone asia-south1-b --project amittrading-493606
+cd /opt/option_trading && bash ./ops/gcp/runtime_lifecycle_interactive.sh
 ```

@@ -1,23 +1,13 @@
 # Operator Playbook
 
-As-of date: `2026-04-04`
-
-## Purpose
-
-This playbook explains how to read the replay and monitoring product surfaces without inspecting code first.
-
-Use this with:
-
-- [PRODUCT_CLOSURE_PROGRAM.md](PRODUCT_CLOSURE_PROGRAM.md)
-- [CURRENT_TREE_VALIDATION.md](CURRENT_TREE_VALIDATION.md)
-- [DETERMINISTIC_V2_ARCHITECTURE.md](DETERMINISTIC_V2_ARCHITECTURE.md)
+As-of: `2026-04-27`
 
 ## Core Rules
 
 1. Trust `run_id`-scoped views over date-only views.
-2. Trust `Range Trades` and summary before votes.
+2. Read `Range Trades` and summary before individual votes.
 3. Read `exit_reason` together with `exit_mechanism`.
-4. Treat stale data alerts as monitoring degradation, not automatic strategy failure.
+4. Treat stale-data alerts as monitoring degradation, not automatic strategy failure.
 
 ## Historical Replay Workflow
 
@@ -26,19 +16,19 @@ Use this with:
 Check:
 
 - `Latest Run ID`
-- selected date range
-- run note on the replay page
+- Selected date range
+- Run note on the replay page
 
-If the run is wrong, every downstream interpretation is wrong.
+If the run ID is wrong, every downstream interpretation is wrong.
 
 ### Step 2: Confirm replay health
 
 Check:
 
-- replay status
-- emitted event count
-- collection counts
-- whether the page is bound to the intended `run_id`
+- Replay status
+- Emitted event count
+- Collection counts
+- Whether the page is bound to the intended `run_id`
 
 ### Step 3: Read the product in this order
 
@@ -48,15 +38,13 @@ Check:
 4. `Recent Votes`
 5. `Decision Diagnostics`
 
-That keeps realized behavior ahead of candidate noise.
+Reading in this order keeps realized behavior ahead of candidate noise.
 
-## How To Read Exits
+## How to Read Exits
 
 ### `TRAILING_STOP`
 
-This is only the top-level reason. Use `exit_mechanism` to know the real trail owner.
-
-Possible mechanisms:
+Use `exit_mechanism` to identify the actual trail owner:
 
 - `GENERIC_TRAIL`
 - `ORB_TRAIL`
@@ -64,71 +52,78 @@ Possible mechanisms:
 
 ### `REGIME_SHIFT`
 
-Interpret as:
+Possible causes:
 
-- thesis cracked
-- exit logic too sensitive
-- or regime confirmation too weak
+- Thesis cracked
+- Exit logic too sensitive
+- Regime confirmation too weak
 
 ### `TIME_STOP`
 
-Interpret as:
-
-- trade did not finish naturally within allowed time
+Trade did not close naturally within the allowed hold window.
 
 ### `STOP_LOSS`
 
-Interpret as:
+Hard protection activated. Inspect:
 
-- hard protection activated
+- Stop placement
+- Lot sizing
+- Clustering by strategy and regime
 
-Then inspect:
-
-- stop placement
-- lot sizing
-- clustering by strategy/regime
-
-## How To Read Alerts
+## How to Read Alerts
 
 ### `data_stale`
 
-Meaning:
-
-- current monitoring freshness is degraded
-
-Operator response:
-
-- do not trust fresh operational inference until stream health is checked
+Monitoring freshness is degraded. Do not trust fresh operational inference until stream health is confirmed.
 
 ### `ml_pure_monitoring_unavailable`
 
-Meaning:
-
-- ML monitoring inputs are incomplete
-
-Operator response:
-
-- do not treat it as a model failure
-- do treat it as a monitoring gap
+ML monitoring inputs are incomplete. Treat as a monitoring gap, not a model failure.
 
 ### `risk_halt` / `risk_pause`
 
-Meaning:
-
-- risk layer is controlling participation
-
-Operator response:
-
-- inspect drawdown and risk limits before any override decision
+Risk layer is controlling participation. Inspect drawdown and risk limits before any override decision.
 
 ## Minimum Clean-Run Checklist
 
-- correct `run_id`
-- correct date range
-- non-zero emitted events
-- summary/trades/session agreement
-- no mixed profile leakage
-- readable exit mechanism
-- understandable strategy/regime contribution
+- Correct `run_id`
+- Correct date range
+- Non-zero emitted events
+- Summary, trades, and session are in agreement
+- No mixed-profile leakage
+- Readable `exit_mechanism` on each closed trade
+- Explainable strategy and regime contribution
 
-If any of these fail, the run is not clean enough for decision-making.
+If any item fails, the run is not clean enough for decision-making.
+
+## ml_pure Runtime Checks
+
+Before switching to a new model bundle, confirm:
+
+- `publish_decision.decision == PUBLISH` or `publish_status == published` in the run report
+- `published_paths.model_package` and `published_paths.threshold_report` both exist
+- Guard file (for `capped_live`): `approved_for_runtime=true`, `offline_strict_positive_passed=true`, `paper_days_observed >= 10`, `shadow_days_observed >= 10`
+
+After switching:
+
+- Confirm `ml_pure_model_package` and `ml_pure_threshold_report` in `runtime_config.json` match the intended paths
+- Confirm `strategy_profile_id = ml_pure_staged_v1` in live signal records
+- Watch `decision_reason_code` distribution for unexpected spikes in `feature_stale`, `feature_incomplete`, or `risk_halt`
+
+## Key Decision Reason Codes (ml_pure)
+
+| Code | Meaning |
+|---|---|
+| `entry_below_threshold` | Stage 1 gate rejected |
+| `direction_below_threshold` | Stage 2 neither CE nor PE cleared threshold |
+| `direction_low_edge_conflict` | Both CE and PE cleared but margin too small |
+| `recipe_below_threshold` | Stage 3 top recipe below threshold |
+| `recipe_low_margin` | Stage 3 top recipe margin too small |
+| `feature_stale` | Snapshot older than `max_feature_age_sec` |
+| `feature_incomplete` | Too many NaN required features |
+| `risk_halt` | Session risk manager halted |
+| `risk_pause` | Session risk manager paused |
+| `regime_avoid` | Regime classified as AVOID |
+| `regime_sideways` | Regime classified as SIDEWAYS (blocked by gate) |
+| `regime_expiry` | Expiry regime blocked when `block_expiry=true` |
+| `liquidity_gate_block` | OI or volume below minimums |

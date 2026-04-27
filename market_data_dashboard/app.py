@@ -2484,10 +2484,89 @@ def _build_recovery_catalog_entries() -> List[Dict[str, Any]]:
     return entries
 
 
+def _build_gcs_catalog_entries() -> List[Dict[str, Any]]:
+    """Build catalog entries from GCS_MODEL_ROOTS env var (comma-separated gs:// model dir URLs).
+
+    Each entry points at a published model directory in GCS. The model_contract.json and
+    reports/training/latest.json are downloaded to derive metadata; model files are only
+    fetched when actually loaded by the strategy_app.
+
+    Example:
+        GCS_MODEL_ROOTS=gs://bucket/published_models/research/staged_simple_s2_v1
+    """
+    raw_roots = str(os.getenv("GCS_MODEL_ROOTS") or "").strip()
+    if not raw_roots:
+        return []
+    roots = [r.strip().rstrip("/") for r in raw_roots.split(",") if r.strip().startswith("gs://")]
+    if not roots:
+        return []
+    try:
+        from strategy_app.utils.gcs_artifact import fetch_gcs_json
+    except ImportError:
+        logger.debug("strategy_app.utils.gcs_artifact not importable; skipping GCS catalog")
+        return []
+
+    entries: List[Dict[str, Any]] = []
+    for gcs_root in roots:
+        try:
+            latest = fetch_gcs_json(f"{gcs_root}/reports/training/latest.json") or {}
+            model_group = str(latest.get("model_group") or gcs_root.rsplit("/", 1)[-1]).strip()
+            profile_id = str(latest.get("profile_id") or "").strip()
+            run_id = str(latest.get("run_id") or "").strip()
+
+            published = latest.get("published_paths") or {}
+            model_package_url = str(
+                published.get("model_package") or f"{gcs_root}/model/model.joblib"
+            )
+            threshold_url = str(
+                published.get("threshold_report")
+                or (
+                    f"{gcs_root}/config/profiles/{profile_id}/threshold_report.json"
+                    if profile_id
+                    else f"{gcs_root}/threshold_report.json"
+                )
+            )
+            training_report_url = str(
+                published.get("training_report")
+                or (
+                    f"{gcs_root}/config/profiles/{profile_id}/training_report.json"
+                    if profile_id
+                    else ""
+                )
+            )
+
+            raw_entry = {
+                "instance_key": _normalize_trading_instance(model_group.replace("/", "_")),
+                "profile_key": profile_id or _normalize_trading_instance(model_group),
+                "title": _humanize_model_catalog_title(model_group, profile_id),
+                "summary": f"GCS research checkpoint: {gcs_root}",
+                "description": f"run={run_id or '--'} profile={profile_id or '--'}",
+                "recommended": False,
+                "model_group": model_group,
+                "profile_id": profile_id,
+                "run_id": run_id,
+                "model_package": model_package_url,
+                "threshold_report": threshold_url,
+                "training_report_path": training_report_url,
+                "gcs_root": gcs_root,
+                "source": "gcs",
+                "source_label": "gcs",
+                "status_label": "research (gcs)",
+                "card_tone": "warn",
+                "status_chip_class": "bad",
+                "_sort_group": 2,
+            }
+            entries.append(_build_catalog_entry(raw_entry, source="gcs", load_eval_snapshot=False))
+        except Exception as exc:
+            logger.debug("Failed to build GCS catalog entry for %s: %s", gcs_root, exc)
+    return entries
+
+
 def _build_artifact_discovery_entries() -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
     entries.extend(_discover_published_model_roots(ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR, source_label="artifact_discovery_ml_pipeline_2"))
     entries.extend(_build_recovery_catalog_entries())
+    entries.extend(_build_gcs_catalog_entries())
     return entries
 
 
@@ -2594,10 +2673,16 @@ def _build_model_eval_snapshot(
     }
 
 
+def _is_gcs_url(s: Any) -> bool:
+    return str(s or "").strip().startswith("gs://")
+
+
 def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval_snapshot: bool = True) -> Dict[str, Any]:
     instance_key = _normalize_trading_instance(raw.get("instance_key") or raw.get("profile_key") or "model")
     model_path = _resolve_repo_path(raw.get("model_package"))
+    model_gcs = _is_gcs_url(raw.get("model_package"))
     threshold_path = _resolve_repo_path(raw.get("threshold_report"))
+    threshold_gcs = _is_gcs_url(raw.get("threshold_report"))
     summary_path = _resolve_repo_path(raw.get("eval_summary_path"))
     training_path = _resolve_repo_path(raw.get("training_report_path"))
     model_contract_path = _resolve_repo_path(raw.get("model_contract"))
@@ -2620,8 +2705,8 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
     training = eval_snapshot.get("training", {}) if isinstance(eval_snapshot, dict) else {}
 
     existence = {
-        "model_package": bool(model_path and model_path.exists()),
-        "threshold_report": bool(threshold_path and threshold_path.exists()),
+        "model_package": bool(model_path and model_path.exists()) or model_gcs,
+        "threshold_report": bool(threshold_path and threshold_path.exists()) or threshold_gcs,
         "eval_summary_path": bool(summary_path and summary_path.exists()),
         "training_report_path": bool(training_path and training_path.exists()),
         "model_contract": bool(model_contract_path and model_contract_path.exists()),
@@ -2650,8 +2735,12 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
     query_values = {"model": instance_key}
     if model_path:
         query_values["model_package"] = _path_text(model_path)
+    elif model_gcs:
+        query_values["model_package"] = str(raw.get("model_package"))
     if threshold_path:
         query_values["threshold_report"] = _path_text(threshold_path)
+    elif threshold_gcs:
+        query_values["threshold_report"] = str(raw.get("threshold_report"))
     if summary_path:
         query_values["eval_summary_path"] = _path_text(summary_path)
     if training_path:
@@ -2708,8 +2797,8 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
         "summary": str(raw.get("summary") or ""),
         "description": str(raw.get("description") or ""),
         "recommended": bool(raw.get("recommended")),
-        "model_package": _path_text(model_path),
-        "threshold_report": _path_text(threshold_path),
+        "model_package": _path_text(model_path) or (str(raw.get("model_package")) if model_gcs else ""),
+        "threshold_report": _path_text(threshold_path) or (str(raw.get("threshold_report")) if threshold_gcs else ""),
         "eval_summary_path": _path_text(summary_path),
         "training_report_path": _path_text(training_path),
         "model_contract": _path_text(model_contract_path),

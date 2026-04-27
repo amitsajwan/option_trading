@@ -1,5 +1,7 @@
 # Trading Dashboard UX Evaluation
 
+> Historical record — see README.md for current state.
+
 ## Executive Summary
 
 The dashboard has a solid design foundation (Quiet Operator design system) but has several UX gaps that create confusion, errors, and operational risk.

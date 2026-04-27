@@ -1,3 +1,5 @@
+> **Archived baseline — 2026-04-04. Do not update this file. See MODEL_STATE_20260426.md for the current model state.**
+
 # Current Evaluation Baseline (2026-04-04)
 
 As-of date: `2026-04-04`

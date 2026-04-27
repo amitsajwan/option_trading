@@ -1,5 +1,7 @@
 # Engine Consolidation Plan
 
+> **Status as of 2026-04-27: Complete.** This document records the consolidation that was carried out. See `strategy_app/docs/README.md` for the current engine state.
+
 **Date:** 2026-03-19
 **Goal:** Keep one research lane (`deterministic`) and one live lane (`ml_pure`), with no runtime ML wrapper layered on top of deterministic rule votes.
 

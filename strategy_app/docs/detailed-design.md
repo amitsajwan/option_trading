@@ -149,6 +149,18 @@ Primary runtime modules and ownership:
 
 Both modes continue to produce standard `TradeSignal` objects with risk-aware lot sizing.
 
+## 8) GCS Model Loading
+
+As of 2026-04-27, `--ml-pure-model-package` and `--ml-pure-threshold-report` accept `gs://` paths in addition to local paths.
+
+Resolution is handled by `strategy_app/utils/gcs_artifact.py` (`resolve_artifact_path`). When a `gs://` path is supplied:
+
+- the file is downloaded to a local cache directory (default: `~/.cache/option_trading_models/`, overridable via `GCS_ARTIFACT_CACHE_DIR`)
+- subsequent invocations with the same URL hit the local cache unless `force=True`
+- `google-cloud-storage` must be installed; loading fails with a clear error if it is absent
+
+The `GCS_MODEL_ROOTS` env var is read by the dashboard to advertise the published model root path.
+
 ## 9) Strategy and Regime Subsystem
 
 - Regime values include `TRENDING`, `SIDEWAYS`, `HIGH_VOL`, `AVOID`, `PRE_EXPIRY`, `EXPIRY`.
@@ -161,11 +173,17 @@ Both modes continue to produce standard `TradeSignal` objects with risk-aware lo
 - Strategy catalog in `all_strategies.py`:
   - `IV_FILTER`
   - `ORB`
+  - `HIGH_VOL_ORB`
   - `OI_BUILDUP`
   - `EMA_CROSSOVER`
   - `VWAP_RECLAIM`
-  - `EXPIRY_MAX_PAIN`
   - `PREV_DAY_LEVEL`
+  - `EXPIRY_MAX_PAIN`
+  - `ORB_RETEST_CONTINUATION`
+  - `VWAP_PULLBACK_CONTINUATION`
+  - `FAILED_BREAKOUT_REVERSAL`
+  - `TRADER_COMPOSITE`
+  - `TRADER_V3_COMPOSITE`
 
 ## 10) Risk Model and Safety State
 

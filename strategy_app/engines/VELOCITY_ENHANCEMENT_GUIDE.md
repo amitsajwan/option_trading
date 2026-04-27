@@ -1,5 +1,7 @@
 """Integration guide: Using velocity features to clean up deterministic strategy logic.
 
+Last reviewed: 2026-04-27
+
 Quick Summary:
   Velocity features capture the morning session (10:00-11:30) as a deterministic
   fingerprint. We can use these pre-computed features to:
@@ -15,7 +17,7 @@ Architecture:
     10:00-11:30 → accumulate data (unused for entries)
     12:00 → check 5m/15m returns, regime, liquidity → decide
 
-  After (Planned):
+  After (Implemented — opt-in via STRATEGY_ENHANCED_VELOCITY=1):
     10:00-11:30 → compute velocity features
     11:30 → inject velocity into snapshot
     12:00 → use velocity context to gate entry confidence upfront
@@ -180,15 +182,16 @@ Phase 4 (Capped Live):
   • Compare to past deterministic-only performance
 
 
-FILES MODIFIED
-==============
+FILES
+=====
 
-New files (add to strategy_app package):
+These files exist in the package:
   • strategy_app/engines/velocity_regime_classifier.py
   • strategy_app/engines/velocity_entry_policy.py
 
-To integrate:
-  • Update strategy_app/engines/__init__.py to export them
-  • Optionally add STRATEGY_ENHANCED_VELOCITY env var to main.py
-  • Wire into DeterministicRuleEngine instantiation
+Integration is complete:
+  • DeterministicRuleEngine reads STRATEGY_ENHANCED_VELOCITY at startup
+  • When set to 1, VelocityEnhancedRegimeClassifier and VelocityEnhancedEntryPolicy
+    are used in place of the plain RegimeClassifier and LongOptionEntryPolicy
+  • No code changes needed to activate — set the env var and restart
 """
