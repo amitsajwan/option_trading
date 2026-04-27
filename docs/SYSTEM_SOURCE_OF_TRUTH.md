@@ -29,16 +29,17 @@ If active docs conflict with code, code wins. If active docs conflict with each 
 
 ## 3. Runtime Guard Contract
 
-When live ML is enabled:
+When `engine=ml_pure` with a model package set (`runtime_ml_enabled=true`):
 
-- rollout stage must be `capped_live`
-- `position_size_multiplier <= 0.25`
-- guard file approval is mandatory
-- guard file must confirm:
-  - `approved_for_runtime=true`
-  - `offline_strict_positive_passed=true`
-  - `paper_days_observed>=10`
-  - `shadow_days_observed>=10`
+- `paper` and `shadow` stages: allowed without guard file — no real capital is sized.
+- `capped_live` stage: full guard required:
+  - `position_size_multiplier <= 0.25`
+  - guard file (`STRATEGY_ML_RUNTIME_GUARD_FILE`) must confirm:
+    - `approved_for_runtime=true`
+    - `offline_strict_positive_passed=true`
+    - `paper_days_observed>=10`
+    - `shadow_days_observed>=10`
+- Any other stage value raises a startup error.
 
 ## 4. Current Research + Replay Contract
 

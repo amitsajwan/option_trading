@@ -135,8 +135,16 @@ def _enforce_ml_runtime_guard(
     if not enabled:
         return
     stage = str(rollout_stage or "").strip().lower()
+    # paper and shadow stages are allowed for research/paper-trading runs without guard file
+    if stage in ("paper", "shadow"):
+        logger.warning(
+            "ml_pure running in %s stage — no live positions will be sized for real capital", stage
+        )
+        return
     if stage != "capped_live":
-        raise ValueError("ml runtime is allowed only in capped_live stage after paper/shadow completion")
+        raise ValueError(
+            f"ml runtime stage '{stage}' is not supported; use paper, shadow, or capped_live"
+        )
     if float(position_size_multiplier) > MAX_CAPPED_LIVE_SIZE_MULTIPLIER:
         raise ValueError(f"capped_live ml runtime requires position_size_multiplier <= {MAX_CAPPED_LIVE_SIZE_MULTIPLIER}")
     if not guard_file:
