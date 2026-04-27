@@ -48,6 +48,13 @@ Key checked-in config families:
 - `ml_pipeline_2/configs/research/staged_grid.*.json`
 - `ml_pipeline_2/configs/campaign/*.json`
 
+## Training Research Journal
+
+Dated research session logs live in [`training/`](training/). Each file covers one research iteration (hypothesis → runs → findings). Start here when resuming model work.
+
+- [training/INDEX.md](training/INDEX.md) — quick-reference table of all sessions and key findings
+- [training/MODEL_STATE_20260426.md](training/MODEL_STATE_20260426.md) — session: staged pipeline + regime_fix grid (2026-04-26/27)
+
 ## Historical Research Notes
 
 These files are retained for context and evidence. They are not the current operating instruction:
