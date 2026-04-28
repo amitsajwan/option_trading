@@ -67,44 +67,67 @@ def _deep_set(d: Dict[str, Any], keys: List[str], value: Any) -> None:
 # Run scoring
 # ---------------------------------------------------------------------------
 
+def _extract_summary_metrics(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract key metrics from the actual summary.json structure."""
+    # S2 CV ROC is in cv_prechecks.stage2_cv.roc_auc
+    cv = dict(summary.get("cv_prechecks") or {})
+    s2cv = dict(cv.get("stage2_cv") or {})
+    s2_roc = _safe_float(s2cv.get("roc_auc"), default=0.0)
+
+    # Holdout metrics live in scenario_reports.regime.segments (aggregated)
+    sr = dict(summary.get("scenario_reports") or {})
+    regime = dict(sr.get("regime") or {})
+    segments = dict(regime.get("segments") or {})
+    total_trades = sum(int(v.get("trades") or 0) for v in segments.values())
+    total_net = sum(_safe_float(v.get("net_return_sum")) for v in segments.values())
+    ce_trades = sum(
+        _safe_float(v.get("trades")) * _safe_float(v.get("long_share"))
+        for v in segments.values()
+    )
+    long_share = (ce_trades / total_trades) if total_trades > 0 else 0.5
+
+    # Signal check failed = run aborted early, no holdout
+    signal_failed = str(summary.get("completion_mode") or "") == "stage2_signal_check_failed"
+
+    return {
+        "s2_roc": s2_roc,
+        "trades": total_trades,
+        "net_return": total_net,
+        "long_share": long_share,
+        "signal_failed": signal_failed,
+    }
+
+
 def _score_for_label_fix(run: Dict[str, Any]) -> tuple[float, ...]:
     """
     Grid A scorer: prefer runs where:
-    1. S2 CV ROC >= 0.55 (hard minimum)
-    2. long_share is closest to 0.5 (bias fix)
-    3. PF is highest (secondary)
+    1. Signal check passed (did not abort early)
+    2. S2 CV ROC is highest
+    3. long_share is closest to 0.5 (bias fix)
+    4. highest net return (secondary)
     """
     summary_path = run.get("summary_path")
     if not summary_path or not Path(summary_path).exists():
-        return (-1.0, float("inf"), float("-inf"))
+        return (-1.0, 0.0, float("-inf"), float("-inf"))
     summary = _load(Path(summary_path))
-    combined = dict(summary.get("combined_holdout") or {})
-    stage_quality = dict(summary.get("stage_quality") or {})
-    s2_quality = dict(stage_quality.get("stage2") or {})
-    s2_roc = _safe_float(s2_quality.get("roc_auc"), default=0.0)
-    long_share = _safe_float(combined.get("long_share"), default=0.5)
-    pf = _safe_float(combined.get("profit_factor"), default=0.0)
-    roc_ok = 1.0 if s2_roc >= 0.55 else 0.0
-    bias_distance = abs(long_share - 0.5)
-    return (roc_ok, -bias_distance, pf)
+    m = _extract_summary_metrics(summary)
+    signal_ok = 0.0 if m["signal_failed"] else 1.0
+    bias_distance = abs(m["long_share"] - 0.5)
+    return (signal_ok, m["s2_roc"], -bias_distance, m["net_return"])
 
 
 def _score_for_feature_s2(run: Dict[str, Any]) -> tuple[float, ...]:
     """
-    Grid B scorer: best feature set = highest holdout PF with trades >= 50
-    and long_share in 30-70%.
+    Grid B scorer: best feature set = signal passed + highest S2 ROC + most trades + best net return.
     """
     summary_path = run.get("summary_path")
     if not summary_path or not Path(summary_path).exists():
-        return (float("-inf"), float("-inf"), float("-inf"))
+        return (-1.0, 0.0, float("-inf"), float("-inf"))
     summary = _load(Path(summary_path))
-    combined = dict(summary.get("combined_holdout") or {})
-    trades = int(combined.get("trades") or 0)
-    long_share = _safe_float(combined.get("long_share"), default=0.5)
-    pf = _safe_float(combined.get("profit_factor"), default=0.0)
-    trades_ok = 1.0 if trades >= 50 else 0.0
-    side_ok = 1.0 if 0.30 <= long_share <= 0.70 else 0.0
-    return (trades_ok, side_ok, pf, float(trades))
+    m = _extract_summary_metrics(summary)
+    signal_ok = 0.0 if m["signal_failed"] else 1.0
+    trades_ok = 1.0 if m["trades"] >= 50 else 0.0
+    return (signal_ok, trades_ok, m["s2_roc"], m["net_return"])
 
 
 def _score_for_deep_hpo(run: Dict[str, Any]) -> tuple[float, ...]:
