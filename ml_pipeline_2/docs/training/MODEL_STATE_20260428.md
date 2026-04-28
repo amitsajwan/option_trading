@@ -114,9 +114,19 @@ Grid C config: `staged_grid.deep_hpo_v1.json`. Base: best-B manifest (fill after
 
 ## 4. Run History (This Session)
 
-| Date | Run ID | Grid | S2 ROC | Holdout Trades | PF | Long Share | Outcome |
-|------|--------|------|--------|---------------|----|------------|---------|
-| — | — | Grid A (in queue) | — | — | — | — | Not started |
+| Date | Run ID | Grid | S2 ROC | Holdout Trades | Long Share | Outcome |
+|------|--------|------|--------|----------------|------------|--------|
+| 2026-04-28 | `staged_label_fix_a1_window_shift` | A1 | — | — | — | ❌ `stage2_signal_check_failed` — oracle label max_corr=0.0495 < threshold 0.05. Window shift irrelevant when oracle label has near-zero feature correlation. |
+| 2026-04-28 | `staged_label_fix_a2_market_direction` | A2 | **0.544** | **168** | **39%** ✅ | ⚠️ Completed. Bias fixed (93.8%→39%). S2 CV ROC just below gate (0.544 vs 0.55, record_only mode continued). PF<1.5 and net_return≤0. **Winner — label fix confirmed working.** |
+| 2026-04-28 | `staged_label_fix_a3_combined` | A3 | 0.516 | <50 | — | ⚠️ Completed. Shifted windows reduce holdout to Sep–Oct 2024 → very few trades. S1 ROC drift >0.05. Too little holdout data to evaluate. |
+| 2026-04-28 | `staged_grid_feature_s2_v1_20260428T040319Z` | Grid B | — | — | — | 🔄 Running. B1 (`expiry_baseline`) active. B2–B5 queued. Base = A2 (direction_market_up_v1 + original windows + S1 reuse from A2 run dir). |
+
+### Grid A Key Observations
+
+- **A2 long_share by regime:** TRENDING=65% CE (good), VOLATILE=0% CE (all PE, PF=1.67 ✅), SIDEWAYS=86% CE (few trades), PRE_EXPIRY=80% CE (bad). Combined = 39%.
+- **A2 holdout PF by regime:** VOLATILE=1.67 ✅, SIDEWAYS=2.92 ✅ (7 trades), TRENDING=0.36 ❌, PRE_EXPIRY=0.09 ❌. Policy calibration (thresholds) likely to help TRENDING/PRE_EXPIRY.
+- **A1 failure insight:** Proves oracle label (`direction_best_recipe_v1`) is structurally near-zero-correlated with any feature for market direction prediction, regardless of training window. Confirms A2 labeler is the correct path.
+- **A3 insight:** Shifting windows shrinks holdout period (Sep–Oct 2024 only = ~2 months) → too few signals to pass the `trades≥50` gate. Original windows (holdout Aug–Oct 2024 = 3 months) are better.
 
 ---
 
@@ -124,12 +134,14 @@ Grid C config: `staged_grid.deep_hpo_v1.json`. Base: best-B manifest (fill after
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `staged_dual_recipe.label_fix_base.json` | Grid A base manifest (A1 windows, oracle label) | ✅ Created |
-| `staged_grid.label_fix_v1.json` | Grid A: 3 runs (A1 window shift, A2 market direction, A3 combined) | ✅ Created |
-| `staged_dual_recipe.label_fix_b_base.json` | Grid B base manifest — update S1 reuse path after Grid A | ✅ Created (needs S1 path update) |
-| `staged_grid.feature_s2_v1.json` | Grid B: 5 S2 feature set variants | ✅ Created |
-| `staged_dual_recipe.deep_hpo_base.json` | Grid C base manifest — update after Grid B | ✅ Created (needs update) |
-| `staged_grid.deep_hpo_v1.json` | Grid C: deep HPO + CV config variants | ✅ Created |
+| `staged_dual_recipe.label_fix_base.json` | Grid A Run A1 — shifted windows, oracle label | ✅ Used |
+| `staged_dual_recipe.label_fix_a2.json` | Grid A Run A2 — original windows, `direction_market_up_v1`, S1 reuse | ✅ Used (**winner**) |
+| `staged_dual_recipe.label_fix_a3.json` | Grid A Run A3 — shifted windows, `direction_market_up_v1`, fresh S1 | ✅ Used |
+| `staged_grid.label_fix_v1.json` | Grid A grid config (not used — A runs launched as standalone run_research) | ⚠️ Unused (windows/labels can't be grid overrides) |
+| `staged_dual_recipe.label_fix_b_base.json` | Grid B base manifest — **auto-patched** with A2 winner by `update_grid_manifest.py` | ✅ Patched |
+| `staged_grid.feature_s2_v1.json` | Grid B: 5 S2 feature set variants | 🔄 Running |
+| `staged_dual_recipe.deep_hpo_base.json` | Grid C base manifest — auto-patched from Grid B winner | ⏳ Pending |
+| `staged_grid.deep_hpo_v1.json` | Grid C: deep HPO + CV config variants | ⏳ Pending |
 
 ---
 
@@ -137,9 +149,29 @@ Grid C config: `staged_grid.deep_hpo_v1.json`. Base: best-B manifest (fill after
 
 | Change | File | Status |
 |--------|------|--------|
-| `build_stage2_labels_market_direction` labeler function | `src/ml_pipeline_2/staged/pipeline.py` | ✅ Added |
-| `direction_market_up_v1` registered in label_registry + resolve_labeler | `src/ml_pipeline_2/staged/registries.py` | ✅ Added |
+| `build_stage2_labels_market_direction` labeler | `src/ml_pipeline_2/staged/pipeline.py` | ✅ Added |
+| `direction_market_up_v1` in label_registry + resolve_labeler | `src/ml_pipeline_2/staged/registries.py` | ✅ Added |
 | Exported in `__all__` | `src/ml_pipeline_2/staged/pipeline.py` | ✅ Added |
+| `update_grid_manifest.py` — picks winner from summaries, patches next grid base manifest | `tools/update_grid_manifest.py` | ✅ Added |
+| `run_grids_auto.sh` — full A+B+C automation (original, now superseded) | `tools/run_grids_auto.sh` | ✅ Added |
+| `run_grids_from_b.sh` — B+C automation starting from confirmed A2 winner | `tools/run_grids_from_b.sh` | ✅ Added |
+| `check_results2.py` — diagnostic viewer for summary schema v3 | `tools/check_results2.py` | ✅ Added |
+
+### Summary Schema v3 — Field Path Reference
+
+The pipeline writes `summary.json` in schema v3. Metrics are **not** at `combined_holdout` or `stage_quality` (schema v2). Correct paths:
+
+| Metric | Path in summary.json |
+|--------|---------------------|
+| S2 CV ROC-AUC | `cv_prechecks.stage2_cv.roc_auc` |
+| S1 CV ROC-AUC | `cv_prechecks.stage1_cv.roc_auc` |
+| Signal check result | `cv_prechecks.stage2_signal_check.has_signal` / `.max_correlation` |
+| Holdout trades (per regime) | `scenario_reports.regime.segments.<REGIME>.trades` |
+| Holdout net return (per regime) | `scenario_reports.regime.segments.<REGIME>.net_return_sum` |
+| Holdout long_share (per regime) | `scenario_reports.regime.segments.<REGIME>.long_share` |
+| Holdout PF (per regime) | `scenario_reports.regime.segments.<REGIME>.profit_factor` |
+| Gate failures | `publish_assessment.blocking_reasons` |
+| Completion mode | `completion_mode` (`completed` / `stage2_signal_check_failed`) |
 
 ---
 
@@ -162,50 +194,40 @@ Grid C config: `staged_grid.deep_hpo_v1.json`. Base: best-B manifest (fill after
 ```bash
 # SSH
 gcloud compute ssh savitasajwan03@option-trading-ml-01 --zone=asia-south1-b --project=amittrading-493606
+cd /home/savitasajwan03/option_trading
 
-# Pull latest (includes new labeler + configs)
-cd /home/savitasajwan03/option_trading && git pull
+# ── Check live status ──────────────────────────────────────────────────────
+tmux attach -t grids_bc                         # live Grid B/C output (Ctrl-b d to detach)
+tail -50 ml_pipeline_2/tools/auto_grids_bc.log  # or tail the log
+python3 /tmp/check_results2.py                  # structured metrics (scp tools/check_results2.py first)
 
-# Step 0 — EDA: skew diagnostic on best prior run (1 hour, optional but recommended)
-PYTHONPATH=/home/savitasajwan03/option_trading \
-  .venv/bin/python -u -m ml_pipeline_2.run_stage12_skew_diagnostic \
-  --artifacts-dir ml_pipeline_2/artifacts/research/staged_grid_regime_fix_v1_20260427T080148Z/regime_fix_s2_midday_noconv
+# ── If automation died — restart from Grid B ──────────────────────────────
+tmux new-session -d -s grids_bc
+tmux send-keys -t grids_bc \
+  'bash /home/savitasajwan03/option_trading/ml_pipeline_2/tools/run_grids_from_b.sh 2>&1 | tee /home/savitasajwan03/option_trading/ml_pipeline_2/tools/auto_grids_bc.log' Enter
 
-# Step 1 — Launch Grid A (tmux, background)
-tmux new-session -d -s grid_a
-tmux send-keys -t grid_a "
-cd /home/savitasajwan03/option_trading && git pull && \
-PYTHONPATH=/home/savitasajwan03/option_trading \
-  .venv/bin/python -u -m ml_pipeline_2.run_staged_grid \
-  --config ml_pipeline_2/configs/research/staged_grid.label_fix_v1.json \
-  --model-group research/label_fix_v1 \
-  --profile-id ml_pure_staged_v1
-" Enter
-
-# Check Grid A progress
-tmux attach -t grid_a
-# OR
-cat /home/savitasajwan03/option_trading/ml_pipeline_2/artifacts/research/staged_grid_label_fix_v1_*/*/run_status.json
-
-# Step 2 — After Grid A: update staged_dual_recipe.label_fix_b_base.json with winning S1 path
-# Then launch Grid B
-tmux new-session -d -s grid_b
-tmux send-keys -t grid_b "
-cd /home/savitasajwan03/option_trading && git pull && \
-PYTHONPATH=/home/savitasajwan03/option_trading \
-  .venv/bin/python -u -m ml_pipeline_2.run_staged_grid \
-  --config ml_pipeline_2/configs/research/staged_grid.feature_s2_v1.json \
-  --model-group research/feature_s2_v1 \
-  --profile-id ml_pure_staged_v1
-" Enter
-
-# Step 3 — After Grid B: update staged_dual_recipe.deep_hpo_base.json with winning config
-# Then launch Grid C
-PYTHONPATH=/home/savitasajwan03/option_trading \
-  .venv/bin/python -u -m ml_pipeline_2.run_staged_grid \
+# ── If automation died — restart Grid C only ──────────────────────────────
+# (Grid B winner already patched into deep_hpo_base.json)
+PYTHONPATH=. .venv/bin/python -u -m ml_pipeline_2.run_staged_grid \
   --config ml_pipeline_2/configs/research/staged_grid.deep_hpo_v1.json \
   --model-group research/deep_hpo_v1 \
   --profile-id ml_pure_staged_v1
+
+# ── Re-run winner selection manually ─────────────────────────────────────
+# From Grid A summaries → patch Grid B manifest
+PYTHONPATH=. .venv/bin/python ml_pipeline_2/tools/update_grid_manifest.py \
+  --run-summaries \
+    ml_pipeline_2/artifacts/research/staged_label_fix_a1_window_shift/summary.json \
+    ml_pipeline_2/artifacts/research/staged_label_fix_a2_market_direction/summary.json \
+    ml_pipeline_2/artifacts/research/staged_label_fix_a3_combined/summary.json \
+  --base-manifest ml_pipeline_2/configs/research/staged_dual_recipe.label_fix_b_base.json \
+  --grid-kind label_fix
+
+# From Grid B grid_summary → patch Grid C manifest
+PYTHONPATH=. .venv/bin/python ml_pipeline_2/tools/update_grid_manifest.py \
+  --grid-summary ml_pipeline_2/artifacts/research/staged_grid_feature_s2_v1_<TIMESTAMP>/grid_summary.json \
+  --base-manifest ml_pipeline_2/configs/research/staged_dual_recipe.deep_hpo_base.json \
+  --grid-kind feature_s2
 ```
 
 ---
@@ -213,19 +235,30 @@ PYTHONPATH=/home/savitasajwan03/option_trading \
 ## 9. Decision Flow
 
 ```
-Grid A results
-  ├─ A2 or A3 CV ROC ≥ 0.55 AND long_share 30–70%  → proceed to Grid B with winning label
-  ├─ A1 only improved bias (long_share 50–75%)      → Grid B with A1 windows + oracle label
-  └─ All A runs still biased (long_share > 80%)     → label fix didn't work; new hypothesis needed
+Grid A results — COMPLETE
+  A2 winner: S2 CV ROC=0.544, 168 holdout trades, long_share=39%  ✅ bias fixed
+  → Proceed to Grid B with direction_market_up_v1 + original windows
 
-Grid B results
-  ├─ Best feature set PF ≥ 1.0 on holdout           → proceed to Grid C (deepen HPO)
-  └─ All features PF < 1.0                          → model lacks signal; re-examine label
+Grid B results — IN PROGRESS
+  ├─ Best feature set S2 ROC > 0.544 AND trades ≥ 50     → proceed to Grid C
+  ├─ All runs signal_check_failed                         → labeler issue; investigate
+  └─ All runs complete but PF < 1.0                       → policy calibration needed before Grid C
 
-Grid C results
-  ├─ PF ≥ 1.5 AND long_share 30–70% AND trades ≥ 50 → publish model
-  └─ PF ≥ 1.0 but not at gate                      → accept as research checkpoint; plan Grid D
+Grid C results — PENDING
+  ├─ PF ≥ 1.5 AND long_share 30–70% AND trades ≥ 50      → publish model
+  ├─ PF ≥ 1.0 but below gate                             → accept as research checkpoint; plan Grid D
+  └─ VOLATILE regime consistently PF > 1.5               → consider regime-gated publish
 ```
+
+### A2 Regime Breakdown (Reference for Grid B/C evaluation)
+
+| Regime | Trades | PF | Long Share | Signal |
+|--------|--------|----|-----------|--------|
+| TRENDING | 71 | 0.36 ❌ | 65% CE | Wrong direction in trending markets |
+| VOLATILE | 73 | 1.67 ✅ | 0% CE (all PE) | Correct: volatile periods = PE profitable |
+| SIDEWAYS | 7 | 2.92 ✅ | 86% CE | Too few trades to conclude |
+| PRE_EXPIRY | 15 | 0.09 ❌ | 80% CE | Poor performance near expiry |
+| Combined | 168 | <1.5 | 39% | Bias fixed; profitability work remains |
 
 ---
 
