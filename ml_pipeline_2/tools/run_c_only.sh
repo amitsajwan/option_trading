@@ -45,7 +45,7 @@ log "================================================================="
 
 C1_START=$(date '+%Y-%m-%d %H:%M:%S')
 PYTHONPATH="${REPO_ROOT}" "${PYTHON}" -u -m ml_pipeline_2.run_research \
-    --manifest "${C1_MANIFEST}" \
+    --config "${C1_MANIFEST}" \
     2>&1 | tee -a "${LOG_FILE}" \
     || fail "C1 failed"
 
@@ -69,13 +69,13 @@ log "C2: cv train=180d  |  C3: cv valid=42d"
 log "================================================================="
 
 PYTHONPATH="${REPO_ROOT}" "${PYTHON}" -u -m ml_pipeline_2.run_research \
-    --manifest "${C2_MANIFEST}" \
+    --config "${C2_MANIFEST}" \
     > "${C2_LOG}" 2>&1 &
 C2_PID=$!
 log "C2 launched (PID ${C2_PID}) — log: ${C2_LOG}"
 
 PYTHONPATH="${REPO_ROOT}" "${PYTHON}" -u -m ml_pipeline_2.run_research \
-    --manifest "${C3_MANIFEST}" \
+    --config "${C3_MANIFEST}" \
     > "${C3_LOG}" 2>&1 &
 C3_PID=$!
 log "C3 launched (PID ${C3_PID}) — log: ${C3_LOG}"
