@@ -51,8 +51,9 @@ PYTHONPATH="${REPO_ROOT}" "${PYTHON}" -u -m ml_pipeline_2.run_research \
 
 ok "C1 complete. Started: ${C1_START}  Finished: $(date '+%Y-%m-%d %H:%M:%S')"
 
-[ -d "${C1_RUN_DIR}" ] || fail "C1 artifact dir not found: ${C1_RUN_DIR}"
-log "C1 artifacts: ${C1_RUN_DIR}"
+C1_RUN_DIR_ACTUAL=$(ls -dt "${ARTIFACTS}"/staged_deep_hpo_c1_base* 2>/dev/null | head -1)
+[ -n "${C1_RUN_DIR_ACTUAL}" ] || fail "C1 artifact dir not found (glob staged_deep_hpo_c1_base*)"
+log "C1 artifacts: ${C1_RUN_DIR_ACTUAL}"
 
 # =============================================================================
 # C2 and C3 — run in parallel, both reuse S1 from C1

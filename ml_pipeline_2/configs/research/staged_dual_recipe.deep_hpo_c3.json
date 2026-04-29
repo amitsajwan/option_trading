@@ -134,7 +134,7 @@
     },
     "stage1_reuse": {
       "source_run_id": "staged_deep_hpo_c1_base",
-      "source_run_dir": "/home/savitasajwan03/option_trading/ml_pipeline_2/artifacts/research/staged_deep_hpo_c1_base"
+      "source_run_dir": "/home/savitasajwan03/option_trading/ml_pipeline_2/artifacts/research/staged_deep_hpo_c1_base_20260429_040848"
     },
     "search_options_by_stage": {
       "stage1": {
