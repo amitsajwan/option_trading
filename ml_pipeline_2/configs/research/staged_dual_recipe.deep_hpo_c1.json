@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "experiment_kind": "staged_dual_recipe_v1",
-  "_comment": "Grid C base manifest — Deep HPO + CV Config Grid. Update stage1_reuse and feature_sets_by_stage.stage2 with the winning Grid B run values before launching. This manifest inherits all settings from the best Grid B run and deepens S2 HPO search (12 trials/model, 80 max experiments, 4h budget).",
+  "_comment": "Grid C Run C1 — Deep HPO baseline. Standard CV config (120-day train, 21-day valid). S2 feature=fo_midday_time_aware_plus_oi_iv (B4 winner). Label=direction_market_up_v1. S1 reused from B4. HPO: 12 trials/model, 80 max experiments, 4h budget.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
     "support_dataset": "snapshots_ml_flat"
   },
   "outputs": {
     "artifacts_root": "../../artifacts/research",
-    "run_name": "staged_deep_hpo_base"
+    "run_name": "staged_deep_hpo_c1_base"
   },
   "catalog": {
     "models_by_stage": {
@@ -172,38 +172,13 @@
     "stage2_policy_id": "direction_gate_economic_balance_v1",
     "stage3_policy_id": "recipe_fixed_baseline_guard_v1",
     "stage1": {
-      "threshold_grid": [
-        0.45,
-        0.5,
-        0.55,
-        0.6
-      ]
+      "threshold_grid": [0.45, 0.5, 0.55, 0.6]
     },
     "stage2": {
-      "trade_threshold_grid": [
-        0.45,
-        0.5,
-        0.55,
-        0.6
-      ],
-      "ce_threshold_grid": [
-        0.5,
-        0.55,
-        0.6,
-        0.65
-      ],
-      "pe_threshold_grid": [
-        0.5,
-        0.55,
-        0.6,
-        0.65
-      ],
-      "min_edge_grid": [
-        0.03,
-        0.05,
-        0.1,
-        0.15
-      ],
+      "trade_threshold_grid": [0.45, 0.5, 0.55, 0.6],
+      "ce_threshold_grid": [0.5, 0.55, 0.6, 0.65],
+      "pe_threshold_grid": [0.5, 0.55, 0.6, 0.65],
+      "min_edge_grid": [0.03, 0.05, 0.1, 0.15],
       "validation_min_trades_soft": 500,
       "side_share_min": 0.3,
       "side_share_max": 0.7,
@@ -211,17 +186,8 @@
       "prefer_profit_factor_min": 1.0
     },
     "stage3": {
-      "threshold_grid": [
-        0.45,
-        0.5,
-        0.55,
-        0.6
-      ],
-      "margin_grid": [
-        0.02,
-        0.05,
-        0.1
-      ],
+      "threshold_grid": [0.45, 0.5, 0.55, 0.6],
+      "margin_grid": [0.02, 0.05, 0.1],
       "validation_min_trades_soft": 250,
       "side_share_min": 0.3,
       "side_share_max": 0.7,

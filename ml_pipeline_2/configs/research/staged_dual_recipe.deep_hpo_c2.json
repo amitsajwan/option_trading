@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "experiment_kind": "staged_dual_recipe_v1",
-  "_comment": "Grid C base manifest — Deep HPO + CV Config Grid. Update stage1_reuse and feature_sets_by_stage.stage2 with the winning Grid B run values before launching. This manifest inherits all settings from the best Grid B run and deepens S2 HPO search (12 trials/model, 80 max experiments, 4h budget).",
+  "_comment": "Grid C Run C2 — Long CV train window (180 days / 6 months per fold). Tests whether more temporal context per fold improves S2 direction signal stability. S1 reused from C1 (staged_deep_hpo_c1_base). Everything else identical to C1.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
     "support_dataset": "snapshots_ml_flat"
   },
   "outputs": {
     "artifacts_root": "../../artifacts/research",
-    "run_name": "staged_deep_hpo_base"
+    "run_name": "staged_deep_hpo_c2_long_train"
   },
   "catalog": {
     "models_by_stage": {
@@ -103,7 +103,7 @@
       "clip_upper_q": 0.99
     },
     "cv_config": {
-      "train_days": 120,
+      "train_days": 180,
       "valid_days": 21,
       "test_days": 21,
       "step_days": 21,
@@ -133,8 +133,8 @@
       "min_ce_pe_edge": 0.002
     },
     "stage1_reuse": {
-      "source_run_id": "feature_s2_b4_midday_oi_iv",
-      "source_run_dir": "/home/savitasajwan03/option_trading/ml_pipeline_2/artifacts/research/staged_grid_feature_s2_v1_20260428T040319Z/runs/04_feature_s2_b4_midday_oi_iv"
+      "source_run_id": "staged_deep_hpo_c1_base",
+      "source_run_dir": "/home/savitasajwan03/option_trading/ml_pipeline_2/artifacts/research/staged_deep_hpo_c1_base"
     },
     "search_options_by_stage": {
       "stage1": {
@@ -172,38 +172,13 @@
     "stage2_policy_id": "direction_gate_economic_balance_v1",
     "stage3_policy_id": "recipe_fixed_baseline_guard_v1",
     "stage1": {
-      "threshold_grid": [
-        0.45,
-        0.5,
-        0.55,
-        0.6
-      ]
+      "threshold_grid": [0.45, 0.5, 0.55, 0.6]
     },
     "stage2": {
-      "trade_threshold_grid": [
-        0.45,
-        0.5,
-        0.55,
-        0.6
-      ],
-      "ce_threshold_grid": [
-        0.5,
-        0.55,
-        0.6,
-        0.65
-      ],
-      "pe_threshold_grid": [
-        0.5,
-        0.55,
-        0.6,
-        0.65
-      ],
-      "min_edge_grid": [
-        0.03,
-        0.05,
-        0.1,
-        0.15
-      ],
+      "trade_threshold_grid": [0.45, 0.5, 0.55, 0.6],
+      "ce_threshold_grid": [0.5, 0.55, 0.6, 0.65],
+      "pe_threshold_grid": [0.5, 0.55, 0.6, 0.65],
+      "min_edge_grid": [0.03, 0.05, 0.1, 0.15],
       "validation_min_trades_soft": 500,
       "side_share_min": 0.3,
       "side_share_max": 0.7,
@@ -211,17 +186,8 @@
       "prefer_profit_factor_min": 1.0
     },
     "stage3": {
-      "threshold_grid": [
-        0.45,
-        0.5,
-        0.55,
-        0.6
-      ],
-      "margin_grid": [
-        0.02,
-        0.05,
-        0.1
-      ],
+      "threshold_grid": [0.45, 0.5, 0.55, 0.6],
+      "margin_grid": [0.02, 0.05, 0.1],
       "validation_min_trades_soft": 250,
       "side_share_min": 0.3,
       "side_share_max": 0.7,
