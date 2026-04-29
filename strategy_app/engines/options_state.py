@@ -8,6 +8,7 @@ from typing import Optional
 from contracts_app.options_math import calculate_option_greeks, estimate_risk_free_rate
 
 from ..contracts import Direction
+from ..utils.env import safe_float as _safe_float
 from .snapshot_accessor import SnapshotAccessor
 
 
@@ -169,14 +170,6 @@ class OptionsStateBuilder:
         if delta is None:
             return None, "missing"
         return delta, "estimated"
-
-
-def _safe_float(value: object) -> Optional[float]:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed == parsed else None
 
 
 def _safe_int(value: object) -> Optional[int]:

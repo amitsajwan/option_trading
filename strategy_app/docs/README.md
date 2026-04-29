@@ -256,11 +256,44 @@ Health check:
 python -m strategy_app.health
 ```
 
+## Tests
+
+All tests live in `strategy_app/tests/`. Run with:
+
+```bash
+pytest strategy_app/tests/
+```
+
+Key test modules:
+
+| File | Coverage |
+|---|---|
+| `test_pure_ml_engine.py` | PureMLEngine entry/exit/hold lifecycle |
+| `test_pure_ml_staged_engine.py` | Staged runtime decision logic |
+| `test_risk_manager.py` | Portfolio risk controls |
+| `test_position_risk.py` | Stop/trail/time-stop mechanics |
+| `test_signal_logger_contract.py` | Signal logger field contracts |
+| `test_decision_trace.py` | Decision trace builder |
+| `test_velocity_policies.py` | Velocity-enhanced regime + entry policy |
+| `test_trader_v3_strategy.py` | Trader-V3 composite strategy |
+| `test_feature_parity_batch_vs_stream.py` | Feature parity across batch and stream |
+| `test_rolling_feature_state.py` | Rolling intraday feature completion |
+
+Shared fixtures are in `strategy_app/tests/fixtures.py` (`make_snapshot`, `make_trade_signal`, `make_position`, `make_risk_context`).
+
 ## Related Docs
 
-- [STRATEGY_ML_FLOW.md](STRATEGY_ML_FLOW.md)
-- [OPERATOR_PLAYBOOK.md](OPERATOR_PLAYBOOK.md)
-- [RELEASE_READINESS_CHECKLIST.md](RELEASE_READINESS_CHECKLIST.md)
-- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)
-- [strategy_catalog.md](strategy_catalog.md)
-- [ENGINE_CONSOLIDATION_PLAN.md](ENGINE_CONSOLIDATION_PLAN.md)
+| File | Topic |
+|---|---|
+| [STRATEGY_ML_FLOW.md](STRATEGY_ML_FLOW.md) | End-to-end ML inference flow |
+| [OPERATOR_PLAYBOOK.md](OPERATOR_PLAYBOOK.md) | Runbook for live operations |
+| [RELEASE_READINESS_CHECKLIST.md](RELEASE_READINESS_CHECKLIST.md) | Go-live gate checklist |
+| [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) | Feature completion status |
+| [strategy_catalog.md](strategy_catalog.md) | All registered strategy names and their roles |
+| [ENGINE_CONSOLIDATION_PLAN.md](ENGINE_CONSOLIDATION_PLAN.md) | Engine consolidation design |
+| [DETERMINISTIC_V2_ARCHITECTURE.md](DETERMINISTIC_V2_ARCHITECTURE.md) | Deterministic V2 architecture |
+| [STRATEGY_RESEARCH_FINDINGS_2026-02-28.md](STRATEGY_RESEARCH_FINDINGS_2026-02-28.md) | Research findings (historical) |
+| [CURRENT_EVALUATION_BASELINE_2026-04-04.md](CURRENT_EVALUATION_BASELINE_2026-04-04.md) | Current evaluation baseline |
+| [PRODUCT_CLOSURE_PROGRAM.md](PRODUCT_CLOSURE_PROGRAM.md) | Product closure and wind-down plan |
+| [detailed-design.md](detailed-design.md) | Detailed component design |
+| [code_review_2026-03-19.md](code_review_2026-03-19.md) | Code review findings (historical) |

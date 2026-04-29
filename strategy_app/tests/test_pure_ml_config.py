@@ -12,11 +12,8 @@ from strategy_app.logging.signal_logger import SignalLogger
 from strategy_app.main import (
     _resolve_ml_pure_float,
     _resolve_ml_pure_int,
-    _resolve_ml_pure_model_group,
-    _resolve_ml_pure_model_package,
-    _resolve_ml_pure_run_id,
     _resolve_ml_pure_switch_paths,
-    _resolve_ml_pure_threshold_report,
+    _resolve_optional_str,
     build_engine,
     run_cli,
 )
@@ -96,8 +93,8 @@ class PureMLConfigTests(unittest.TestCase):
             },
             clear=False,
         ):
-            self.assertEqual(_resolve_ml_pure_model_package("cli-model.joblib"), "cli-model.joblib")
-            self.assertEqual(_resolve_ml_pure_threshold_report("cli-thresholds.json"), "cli-thresholds.json")
+            self.assertEqual(_resolve_optional_str("cli-model.joblib", "ML_PURE_MODEL_PACKAGE"), "cli-model.joblib")
+            self.assertEqual(_resolve_optional_str("cli-thresholds.json", "ML_PURE_THRESHOLD_REPORT"), "cli-thresholds.json")
 
     def test_resolve_ml_pure_paths_uses_env_when_cli_missing(self) -> None:
         with patch.dict(
@@ -108,8 +105,8 @@ class PureMLConfigTests(unittest.TestCase):
             },
             clear=False,
         ):
-            self.assertEqual(_resolve_ml_pure_model_package(None), "env-model.joblib")
-            self.assertEqual(_resolve_ml_pure_threshold_report(None), "env-thresholds.json")
+            self.assertEqual(_resolve_optional_str(None, "ML_PURE_MODEL_PACKAGE"), "env-model.joblib")
+            self.assertEqual(_resolve_optional_str(None, "ML_PURE_THRESHOLD_REPORT"), "env-thresholds.json")
 
     def test_resolve_ml_pure_run_selector_from_env(self) -> None:
         with patch.dict(
@@ -117,8 +114,8 @@ class PureMLConfigTests(unittest.TestCase):
             {"ML_PURE_RUN_ID": "20260308_164057", "ML_PURE_MODEL_GROUP": "banknifty_futures/h15_tp_auto"},
             clear=False,
         ):
-            self.assertEqual(_resolve_ml_pure_run_id(None), "20260308_164057")
-            self.assertEqual(_resolve_ml_pure_model_group(None), "banknifty_futures/h15_tp_auto")
+            self.assertEqual(_resolve_optional_str(None, "ML_PURE_RUN_ID"), "20260308_164057")
+            self.assertEqual(_resolve_optional_str(None, "ML_PURE_MODEL_GROUP"), "banknifty_futures/h15_tp_auto")
 
     def test_resolve_ml_pure_numeric_values_use_default_when_unset(self) -> None:
         with patch.dict("os.environ", {}, clear=True):

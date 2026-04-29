@@ -79,3 +79,14 @@ def as_positive_int(value: Any, *, default: int = 1) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, parsed)
+
+
+def safe_float(value: Any) -> Optional[float]:
+    """Convert *value* to float, returning None for None/NaN/infinity/errors."""
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if parsed != parsed or parsed in {float("inf"), float("-inf")}:
+        return None
+    return parsed

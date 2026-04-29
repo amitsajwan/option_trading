@@ -6,15 +6,7 @@ from typing import Any, Optional
 
 from contracts_app import isoformat_ist, normalize_reason_code
 
-
-def _safe_float(value: Any) -> Optional[float]:
-    try:
-        parsed = float(value)
-    except Exception:
-        return None
-    if parsed != parsed or parsed in {float("inf"), float("-inf")}:
-        return None
-    return float(parsed)
+from ..utils.env import safe_float as _safe_float
 
 
 def compact_metrics(metrics: Optional[dict[str, Any]]) -> dict[str, float]:

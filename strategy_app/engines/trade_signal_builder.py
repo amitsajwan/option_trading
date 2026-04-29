@@ -5,9 +5,9 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
-from strategy_app.contracts import Direction, SignalType, TradeSignal
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
-from strategy_app.risk.manager import RiskManager
+from ..contracts import Direction, SignalType, TradeSignal
+from ..risk.manager import RiskManager
+from .snapshot_accessor import SnapshotAccessor
 
 
 def build_ml_entry_signal(

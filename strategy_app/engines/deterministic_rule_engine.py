@@ -51,8 +51,6 @@ from ..utils.env import as_bool
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_STRATEGY_PROFILE_ID = PRODUCTION_DEFAULT_PROFILE_ID
-
 
 class DeterministicRuleEngine(StrategyEngine):
     """Runs the regime layer, routes strategies, and emits one action."""
@@ -69,7 +67,7 @@ class DeterministicRuleEngine(StrategyEngine):
         policy_config: Optional[PolicyConfig] = None,
         engine_mode: str = "deterministic",
         strategy_family_version: Optional[str] = None,
-        strategy_profile_id: str = DEFAULT_STRATEGY_PROFILE_ID,
+        strategy_profile_id: str = PRODUCTION_DEFAULT_PROFILE_ID,
     ) -> None:
         self._velocity_enhanced = as_bool(os.getenv("STRATEGY_ENHANCED_VELOCITY"))
         self._regime = (
@@ -105,7 +103,7 @@ class DeterministicRuleEngine(StrategyEngine):
         self._ml_score_all_snapshots = False
         self._engine_mode = "deterministic"
         self._strategy_family_version = str(strategy_family_version or "DET_V1").strip() or "DET_V1"
-        self._strategy_profile_id = str(strategy_profile_id or DEFAULT_STRATEGY_PROFILE_ID).strip() or DEFAULT_STRATEGY_PROFILE_ID
+        self._strategy_profile_id = str(strategy_profile_id or PRODUCTION_DEFAULT_PROFILE_ID).strip() or PRODUCTION_DEFAULT_PROFILE_ID
         self._run_id: Optional[str] = None
         self._set_logger_context(None)
         logger.info(
@@ -1342,11 +1340,3 @@ def _session_end_snapshot(trade_date: date) -> _SessionEndSnapshot:
     return _SessionEndSnapshot(trade_date)
 
 
-def _safe_float(value: object) -> Optional[float]:
-    try:
-        parsed = float(value)
-    except Exception:
-        return None
-    if parsed != parsed:
-        return None
-    return float(parsed)
