@@ -27,8 +27,9 @@ function LWChart({
   candles, upToIdx, trades, signals,
   selectedTrade, selectedSignal,
   onSelectTrade, onSelectSignal,
-  height, liveIdx, expanded, onExpandChange,
+  height, expanded, onExpandChange,
   fitRef,   // optional: caller passes a ref; we store fitContent fn on it
+  isPlaying,
 }) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
@@ -36,11 +37,13 @@ function LWChart({
   const volSeriesRef = useRef(null);
   const prevUpToRef  = useRef(-1);
   const prevCandRef  = useRef(null);
+  const isPlayingRef = useRef(isPlaying);
   // stable refs so click handler isn't a stale closure
   const tradesRef    = useRef(trades);
   const candlesRef   = useRef(candles);
-  useEffect(() => { tradesRef.current  = trades;  }, [trades]);
-  useEffect(() => { candlesRef.current = candles; }, [candles]);
+  useEffect(() => { tradesRef.current  = trades;    }, [trades]);
+  useEffect(() => { candlesRef.current = candles;   }, [candles]);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
   const toLW    = (c) => ({ time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c });
   const toVolLW = (c) => ({ time: Math.floor(c.t / 1000), value: c.v || 0, color: c.c >= c.o ? 'rgba(10,143,92,0.25)' : 'rgba(194,62,47,0.25)' });
@@ -155,7 +158,8 @@ function LWChart({
       if (volSeriesRef.current) volSeriesRef.current.update(toVolLW(candles[idx]));
     } else {
       // session change or jump → full reset
-      const saved = sameSession && chartRef.current
+      // Only preserve visible range when NOT playing (seek, scrub, session load)
+      const saved = (!isPlayingRef.current && sameSession && chartRef.current)
         ? chartRef.current.timeScale().getVisibleRange() : null;
       const slice = candles.slice(0, idx + 1);
       seriesRef.current.setData(slice.map(toLW));
@@ -164,10 +168,25 @@ function LWChart({
         try { chartRef.current.timeScale().setVisibleRange(saved); } catch (_) {
           chartRef.current.timeScale().fitContent();
         }
-      } else {
+      } else if (!isPlayingRef.current) {
         chartRef.current.timeScale().fitContent();
       }
     }
+
+    // Follow latest bar whenever playing — applies to both fast and slow paths
+    if (isPlayingRef.current && chartRef.current) {
+      try {
+        const ts = chartRef.current.timeScale();
+        const vr = ts.getVisibleLogicalRange();
+        if (vr !== null) {
+          const span = vr.to - vr.from;
+          ts.setVisibleLogicalRange({ from: idx - span + 1, to: idx + 1 });
+        } else {
+          chartRef.current.timeScale().fitContent();
+        }
+      } catch (_) {}
+    }
+
     prevUpToRef.current = idx;
     prevCandRef.current = candles;
   }, [candles, upToIdx]);

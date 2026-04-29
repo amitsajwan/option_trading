@@ -10,6 +10,7 @@ function StrategyMonitor(props) {
     onSelectTrade, onSelectSignal, selectedTrade, selectedSignal,
     livePrice, liveIdx, flashTradeId, kpiItems,
     topBar, leftControls, statusBit,
+    isPlaying,
   } = props;
 
   const [detailExpanded, setDetailExpanded] = _useState(true);
@@ -93,6 +94,7 @@ function StrategyMonitor(props) {
               expanded={chartExpanded}
               onExpandChange={setChartExpanded}
               fitRef={chartFitRef}
+              isPlaying={isPlaying}
             />
           </div>
         </div>
@@ -297,6 +299,7 @@ function LiveMonitor({ onModeSwitch, onKillClick }) {
       topBar={topBar}
       leftControls={leftControls}
       statusBit={statusBit}
+      isPlaying={isPlaying}
     />
   );
 }
@@ -319,7 +322,6 @@ function ReplayMonitor({ onModeSwitch }) {
   const [wsStatus,       setWsStatus]       = _useState('connecting');
   const [selectedTrade,  setSelectedTrade]  = _useState(null);
   const [selectedSignal, setSelectedSignal] = _useState(null);
-  const [scrubHover,     setScrubHover]     = _useState(null);
   const [generating,     setGenerating]     = _useState(false);
   const [generateMsg,    setGenerateMsg]    = _useState('');
   const wsRef         = _useRef(null);
@@ -530,6 +532,7 @@ function ReplayMonitor({ onModeSwitch }) {
         topBar={topBar}
         leftControls={leftControls}
         statusBit={statusBit}
+        isPlaying={isPlaying}
       />
       <div className="scrubber-wrap">
         <ReplayScrubber
@@ -539,8 +542,6 @@ function ReplayMonitor({ onModeSwitch }) {
           onScrub={handleScrub}
           onScrubEnd={handleScrubEnd}
           vtLabel={vtLabel}
-          hover={scrubHover}
-          onHover={setScrubHover}
         />
       </div>
     </div>
@@ -550,9 +551,10 @@ function ReplayMonitor({ onModeSwitch }) {
 // ── REPLAY SCRUBBER ────────────────────────────────────────────────────────
 // onScrub: called on every drag move (local visual update only)
 // onScrubEnd: called once on mouseup/touchend (sends seek to server)
-function ReplayScrubber({ candles, trades, upToIdx, onScrub, onScrubEnd, vtLabel, hover, onHover }) {
+function ReplayScrubber({ candles, trades, upToIdx, onScrub, onScrubEnd, vtLabel }) {
   const ref = _useRef(null);
   const [width, setWidth] = _useState(800);
+  const [hover, setHover] = _useState(null);
   const H = 64;
 
   _useEffect(() => {
@@ -576,7 +578,7 @@ function ReplayScrubber({ candles, trades, upToIdx, onScrub, onScrubEnd, vtLabel
     for (let i = 0; i < candles.length; i++)
       d += (i === 0 ? 'M' : 'L') + xOf(i).toFixed(1) + ' ' + yOf(candles[i].c).toFixed(1) + ' ';
     return d;
-  }, [candles, width]);
+  }, [candles, width, min, max]);
 
   const areaPast = _useMemo(() => {
     let d = 'M0 ' + H + ' ';
@@ -585,7 +587,15 @@ function ReplayScrubber({ candles, trades, upToIdx, onScrub, onScrubEnd, vtLabel
       d += 'L' + xOf(i).toFixed(1) + ' ' + yOf(candles[i].c).toFixed(1) + ' ';
     d += 'L' + xOf(upto).toFixed(1) + ' ' + H + ' Z';
     return d;
-  }, [candles, upToIdx, width]);
+  }, [candles, upToIdx, width, min, max]);
+
+  const pastPathD = _useMemo(() => {
+    let d = '';
+    const upto = Math.min(upToIdx, candles.length - 1);
+    for (let i = 0; i <= upto; i++)
+      d += (i === 0 ? 'M' : 'L') + xOf(i).toFixed(1) + ' ' + yOf(candles[i].c).toFixed(1) + ' ';
+    return d;
+  }, [candles, upToIdx, width, min, max]);
 
   const ticks = _useMemo(() => {
     const out = [];
@@ -627,7 +637,7 @@ function ReplayScrubber({ candles, trades, upToIdx, onScrub, onScrubEnd, vtLabel
     const r   = ref.current.getBoundingClientRect();
     const x   = e.clientX - r.left;
     const idx = Math.max(0, Math.min(candles.length - 1, Math.round((x / width) * (candles.length - 1))));
-    onHover({ idx, x: xOf(idx) });
+    setHover({ idx, x: xOf(idx) });
   }
 
   return (
@@ -648,12 +658,11 @@ function ReplayScrubber({ candles, trades, upToIdx, onScrub, onScrubEnd, vtLabel
         onMouseDown={startDrag}
         onTouchStart={startDrag}
         onMouseMove={handleHover}
-        onMouseLeave={() => onHover(null)}>
+        onMouseLeave={() => setHover(null)}>
         <svg width={width} height={H}>
           <path d={pathD} stroke="var(--ink-3)" strokeWidth="1" fill="none" opacity="0.5" />
           <path d={areaPast} fill="var(--ink)" opacity="0.08" />
-          <path d={areaPast.replace(/M0 \d+ /, 'M' + xOf(0) + ' ' + yOf(candles[0].c) + ' ').replace(/ Z$/, '')
-            .replace(/L([\d.]+) 64\s*$/, '')} stroke="var(--ink)" strokeWidth="1.4" fill="none" />
+          <path d={pastPathD} stroke="var(--ink)" strokeWidth="1.4" fill="none" />
           {tradeDots.map(d => (
             <circle key={d.id} cx={d.x} cy={d.y} r="2"
               fill={d.pos ? 'var(--pos)' : 'var(--neg)'}

@@ -8,13 +8,14 @@
   function fmtSigned(v,d,suf) { var n=Number(v); if(!Number.isFinite(n))return '--'; return(n>=0?'+':'')+n.toFixed(d==null?2:d)+(suf||''); }
   function fmtPct(v,d) { return fmtSigned(v*100,d==null?2:d,'%'); }
   function fmtCompact(v) { var n=Number(v); if(!Number.isFinite(n))return '--'; if(Math.abs(n)>=1e6)return(n/1e6).toFixed(1)+'M'; if(Math.abs(n)>=1e3)return(n/1e3).toFixed(1)+'k'; return String(Math.round(n)); }
+  var _istFmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   function fmtTime(d) {
     if (!(d instanceof Date)) d = new Date(d);
-    return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2,'0')).join(':');
+    return _istFmt.format(d);
   }
   function fmtClock(d) {
     if (!(d instanceof Date)) d = new Date(d);
-    return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2,'0')).join(':') + ' IST';
+    return _istFmt.format(d) + ' IST';
   }
   function fmtHold(entryMs, exitMs) {
     var s = Math.max(0, Math.round((exitMs - entryMs) / 1000));
