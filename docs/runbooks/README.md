@@ -1,6 +1,13 @@
 # Runbooks Index
 
-Start here if you are operating the current GCP workflow.
+## Start Here
+
+**First time or rebuilding from scratch?** Read this first:
+
+- [LIVE_SETUP_GUIDE.md](LIVE_SETUP_GUIDE.md) — Complete zero-to-live sequential guide.
+  Covers prerequisites, environment files, infra bootstrap, parquet build, smoke training, historical replay, production training, Kite auth, live deploy, daily operations, and rollback. All phases in dependency order.
+
+---
 
 ## Current Operator Entry Point
 
@@ -61,18 +68,20 @@ In the actual lifecycle menu these map to:
 
 ## Primary Runbooks
 
-1. [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
+1. [LIVE_SETUP_GUIDE.md](LIVE_SETUP_GUIDE.md)
+   Zero-to-live sequential guide. Read this first on a new setup.
+2. [GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
    Historical snapshot/parquet build and publish, including dedicated-host requirements, worker tuning, and restart guidance.
-2. [TRAINING_RELEASE_RUNBOOK.md](TRAINING_RELEASE_RUNBOOK.md)
+3. [TRAINING_RELEASE_RUNBOOK.md](TRAINING_RELEASE_RUNBOOK.md)
    Staged ML training, research sequencing, publish, and runtime handoff generation.
-3. [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md)
+4. [GCP_DEPLOYMENT.md](GCP_DEPLOYMENT.md)
    Release-manager runbook for `0. Infra`, `1. Live`, and `2. Historical`, centered on the interactive GCP operator flow, shared preflight, and current approved runtime release artifacts.
 
-## Supporting Runbook
+## Supporting Runbooks
 
-4. [CLEANUP_ROLLBACK_RUNBOOK.md](CLEANUP_ROLLBACK_RUNBOOK.md)
+5. [CLEANUP_ROLLBACK_RUNBOOK.md](CLEANUP_ROLLBACK_RUNBOOK.md)
    Stop spend, remove temporary compute, or roll back runtime config.
-5. [DETERMINISTIC_HISTORICAL_REPLAY_RUNBOOK.md](DETERMINISTIC_HISTORICAL_REPLAY_RUNBOOK.md)
+6. [DETERMINISTIC_HISTORICAL_REPLAY_RUNBOOK.md](DETERMINISTIC_HISTORICAL_REPLAY_RUNBOOK.md)
    Local/operator runbook for full historical deterministic replay with dashboard, on-demand date windows, and fresh image rebuilds from current code.
 
 ## Scope Notes

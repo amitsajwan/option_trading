@@ -2,7 +2,11 @@
 
 These scripts are the runnable operator layer over Terraform, GCP, runtime deploy, and staged ML release flows.
 
-Run them from:
+**First time or rebuilding from scratch?** Start with the sequential setup guide, not this index:
+
+- [../../docs/runbooks/LIVE_SETUP_GUIDE.md](../../docs/runbooks/LIVE_SETUP_GUIDE.md) — Zero-to-live guide: prerequisites → infra → parquet → training → live deploy → daily ops.
+
+Run scripts from:
 
 - Ubuntu
 - WSL
@@ -19,6 +23,7 @@ Important host rule:
 
 This file is a script index, not the primary operator runbook. For step-by-step procedures, use:
 
+- [../../docs/runbooks/LIVE_SETUP_GUIDE.md](../../docs/runbooks/LIVE_SETUP_GUIDE.md)
 - [../../docs/runbooks/README.md](../../docs/runbooks/README.md)
 - [../../docs/runbooks/GCP_DEPLOYMENT.md](../../docs/runbooks/GCP_DEPLOYMENT.md)
 - [../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md](../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md)

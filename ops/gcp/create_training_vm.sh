@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="${REPO_ROOT:-$(pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
 OPERATOR_ENV_FILE="${OPERATOR_ENV_FILE:-${REPO_ROOT}/ops/gcp/operator.env}"
 TF_DIR="${TF_DIR:-${REPO_ROOT}/infra/gcp}"
 
 if [ ! -f "${OPERATOR_ENV_FILE}" ]; then
   echo "Operator env file not found: ${OPERATOR_ENV_FILE}" >&2
+  echo "Copy ops/gcp/operator.env.example to ops/gcp/operator.env and fill it in." >&2
   exit 1
 fi
 

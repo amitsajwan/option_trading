@@ -35,6 +35,19 @@ if [ "${status}" = "TERMINATED" ]; then
   exit 0
 fi
 
+SKIP_GRACEFUL_STOP="${SKIP_GRACEFUL_STOP:-0}"
+
+if [ "${SKIP_GRACEFUL_STOP}" != "1" ] && [ "${status}" = "RUNNING" ]; then
+  echo "Gracefully stopping containers on ${RUNTIME_NAME} before VM shutdown..."
+  gcloud compute ssh "${RUNTIME_NAME}" \
+    --project "${PROJECT_ID}" \
+    --zone "${ZONE}" \
+    --quiet \
+    --command 'cd /opt/option_trading && sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml --profile historical --profile dashboard --profile strategy_eval down --timeout 30 2>&1 | tail -5; sudo docker ps -q | xargs -r sudo docker stop 2>/dev/null; echo "containers_drained"' \
+    || echo "Warning: graceful container stop via SSH failed; proceeding with hard VM stop."
+  echo "Container drain complete."
+fi
+
 echo "Stopping runtime VM ${RUNTIME_NAME} in ${ZONE}"
 gcloud compute instances stop "${RUNTIME_NAME}" \
   --project "${PROJECT_ID}" \

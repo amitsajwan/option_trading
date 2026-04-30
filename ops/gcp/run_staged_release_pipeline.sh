@@ -160,7 +160,6 @@ fi
 
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
-python -m pip install --upgrade pip
 python -m pip install -e "${REPO_ROOT}/ml_pipeline_2"
 python -m pip install pyarrow lightgbm xgboost
 ensure_lightgbm_runtime
@@ -178,46 +177,42 @@ python -m ml_pipeline_2.run_staged_release \
 echo "Release payload written to ${TRAINING_RELEASE_JSON}"
 cat "${TRAINING_RELEASE_JSON}"
 
-RELEASE_STATUS="$(
-  python - <<'PY' "${TRAINING_RELEASE_JSON}"
+_release_fields_tmp="$(mktemp)"
+trap 'rm -f "${_release_fields_tmp}"' EXIT
+python - "${TRAINING_RELEASE_JSON}" "${REPO_ROOT}/.env.compose" > "${_release_fields_tmp}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print(payload.get("release_status") or "")
-PY
-)"
-ASSESSMENT_PATH="$(
-  python - <<'PY' "${TRAINING_RELEASE_JSON}"
-import json
-import sys
-from pathlib import Path
+paths = payload.get("paths") or {}
+assessment = payload.get("assessment") or {}
 
-payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print(payload["paths"]["assessment"])
-PY
-)"
-RELEASE_SUMMARY_PATH="$(
-  python - <<'PY' "${TRAINING_RELEASE_JSON}"
-import json
-import sys
-from pathlib import Path
+print(f"RELEASE_STATUS={payload.get('release_status') or ''}")
+print(f"ASSESSMENT_PATH={paths.get('assessment') or ''}")
+print(f"RELEASE_SUMMARY_PATH={paths.get('release_summary') or ''}")
+blocking = ", ".join(str(x) for x in (assessment.get("blocking_reasons") or []))
+print(f"BLOCKING_REASONS={blocking}")
+print(f"RELEASE_ENV_PATH={paths.get('runtime_env') or ''}")
 
-payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print(payload["paths"]["release_summary"])
+app_image_tag = ""
+guard_path = ".run/ml_runtime_guard_live.json"
+compose_file = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+if compose_file and compose_file.is_file():
+    for raw_line in compose_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        if k.strip() == "APP_IMAGE_TAG":
+            app_image_tag = v.strip()
+        elif k.strip() == "STRATEGY_ML_RUNTIME_GUARD_FILE" and v.strip():
+            guard_path = v.strip()
+print(f"APP_IMAGE_TAG_VALUE={app_image_tag}")
+print(f"RUNTIME_GUARD_PATH_VALUE={guard_path}")
 PY
-)"
-BLOCKING_REASONS="$(
-  python - <<'PY' "${TRAINING_RELEASE_JSON}"
-import json
-import sys
-from pathlib import Path
-
-payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print(", ".join(str(item) for item in list((payload.get("assessment") or {}).get("blocking_reasons") or [])))
-PY
-)"
+# shellcheck disable=SC1090
+source "${_release_fields_tmp}"
 
 if [ "${RELEASE_STATUS}" != "published" ]; then
   echo
@@ -230,17 +225,6 @@ if [ "${RELEASE_STATUS}" != "published" ]; then
   exit 0
 fi
 
-RELEASE_ENV_PATH="$(
-  python - <<'PY' "${TRAINING_RELEASE_JSON}"
-import json
-import sys
-from pathlib import Path
-
-payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print(payload["paths"]["runtime_env"])
-PY
-)"
-
 if [ "${APPLY_RUNTIME_HANDOFF}" = "1" ]; then
   export RELEASE_ENV_PATH
   "${REPO_ROOT}/ops/gcp/apply_ml_pure_release.sh"
@@ -252,44 +236,8 @@ if [ "${PUBLISH_RUNTIME_CONFIG}" = "1" ]; then
   "${REPO_ROOT}/ops/gcp/publish_runtime_config.sh"
 fi
 
-APP_IMAGE_TAG_VALUE="${APP_IMAGE_TAG:-${TAG:-}}"
-if [ -z "${APP_IMAGE_TAG_VALUE}" ] && [ -f "${REPO_ROOT}/.env.compose" ]; then
-  APP_IMAGE_TAG_VALUE="$(
-    python - <<'PY' "${REPO_ROOT}/.env.compose"
-import sys
-from pathlib import Path
-
-for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
-    line = raw_line.strip()
-    if not line or line.startswith("#") or "=" not in line:
-        continue
-    key, value = line.split("=", 1)
-    if key.strip() == "APP_IMAGE_TAG":
-        print(value.strip())
-        break
-PY
-  )"
-fi
-RUNTIME_GUARD_PATH_VALUE=".run/ml_runtime_guard_live.json"
-if [ -f "${REPO_ROOT}/.env.compose" ]; then
-  guard_from_env="$(
-    python - <<'PY' "${REPO_ROOT}/.env.compose"
-import sys
-from pathlib import Path
-
-for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
-    line = raw_line.strip()
-    if not line or line.startswith("#") or "=" not in line:
-        continue
-    key, value = line.split("=", 1)
-    if key.strip() == "STRATEGY_ML_RUNTIME_GUARD_FILE":
-        print(value.strip())
-        break
-PY
-  )"
-  if [ -n "${guard_from_env}" ]; then
-    RUNTIME_GUARD_PATH_VALUE="${guard_from_env}"
-  fi
+if [ -n "${APP_IMAGE_TAG:-${TAG:-}}" ]; then
+  APP_IMAGE_TAG_VALUE="${APP_IMAGE_TAG:-${TAG}}"
 fi
 
 MANIFEST_WRITE_OUTPUT="$(

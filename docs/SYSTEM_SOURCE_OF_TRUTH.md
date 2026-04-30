@@ -51,6 +51,7 @@ When `engine=ml_pure` with a model package set (`runtime_ml_enabled=true`):
 
 ## 5. Canonical References
 
+- **Zero-to-live setup:** `docs/runbooks/LIVE_SETUP_GUIDE.md`
 - Runbooks index: `docs/runbooks/README.md`
 - Snapshot workflow: `docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`
 - Training workflow: `docs/runbooks/TRAINING_RELEASE_RUNBOOK.md`

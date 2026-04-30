@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# NOTE: This script builds images to Artifact Registry via Cloud Build.
+# The live runtime uses GHCR-published images (IMAGE_SOURCE=ghcr).
+# Run this only when explicitly targeting the Artifact Registry path for
+# infra-compatibility builds. For the live deploy path, publish images to
+# GHCR through the standard CI/CD workflow instead.
+
 PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
 REGION="${REGION:?set REGION}"
 REPOSITORY="${REPOSITORY:?set REPOSITORY}"

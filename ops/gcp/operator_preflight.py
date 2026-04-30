@@ -34,6 +34,12 @@ class PreflightResult:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+def shutil_which(name: str) -> str | None:
+    from shutil import which
+
+    return which(name)
+
+
 def _load_key_value_file(path: Path) -> dict[str, str]:
     if not path.is_file():
         raise OperatorPreflightError(f"env file not found: {path}")
@@ -330,12 +336,6 @@ def _validate_historical_mode(
     else:
         result.details["parquet_date_check"] = "skipped"
     return result
-
-
-def shutil_which(name: str) -> str | None:
-    from shutil import which
-
-    return which(name)
 
 
 def validate_operator_preflight(
