@@ -4,7 +4,8 @@ from pathlib import Path
 
 BASE = Path("/home/savitasajwan03/option_trading/ml_pipeline_2/artifacts/research")
 
-for prefix in ["staged_deep_hpo_c1_base", "staged_deep_hpo_c2_long_train", "staged_deep_hpo_c3_long_valid"]:
+for prefix in ["staged_deep_hpo_c1_base", "staged_deep_hpo_c2_long_train", "staged_deep_hpo_c3_long_valid",
+               "staged_deep_hpo_d1_zero_cost", "staged_deep_hpo_d2_high_edge"]:
     matches = sorted(BASE.glob(f"{prefix}*"), reverse=True)
     if not matches:
         print(f"[not found] {prefix}")
