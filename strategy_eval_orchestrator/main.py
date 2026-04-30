@@ -1,3 +1,12 @@
+"""Strategy evaluation replay orchestrator.
+
+Listens on a Redis pub/sub command channel for evaluation run requests,
+replays historical snapshot data from Parquet files day-by-day, publishes
+per-run progress events back to Redis, and persists run state to MongoDB.
+
+Entry point: run via ``python -m strategy_eval_orchestrator.main`` or the
+``strategy_eval_orchestrator`` Docker service (profiles: ui, historical).
+"""
 from __future__ import annotations
 
 import argparse
@@ -344,8 +353,22 @@ def _process_command(redis_client: redis.Redis, coll: Any, command: dict[str, An
             started_at=started_at_str,
         )
     except Exception as exc:
-        _update_run(coll, run_id, status="failed", ended_at=_utc_now(), error=str(exc), message="Replay failed")
-        _write_replay_status_key(redis_client, {"status": "failed", "run_id": run_id, "start_date": date_from, "end_date": date_to, "speed": speed, "started_at": started_at_str, "finished_at": _utc_now(), "events_emitted": 0, "data_ready": False})
+        failed_at = _utc_now()
+        _update_run(coll, run_id, status="failed", ended_at=failed_at, error=str(exc), message="Replay failed")
+        _write_replay_status_key(
+            redis_client,
+            {
+                "status": "failed",
+                "run_id": run_id,
+                "start_date": date_from,
+                "end_date": date_to,
+                "speed": speed,
+                "started_at": started_at_str,
+                "finished_at": failed_at,
+                "events_emitted": 0,
+                "data_ready": False,
+            },
+        )
         _publish_run_event(
             redis_client,
             run_id,
@@ -425,6 +448,7 @@ def run_loop() -> int:
 
 
 def run_cli(argv: Optional[Iterable[str]] = None) -> int:
+    """Parse CLI arguments (none defined; rejects unexpected flags) and start the event loop."""
     parser = argparse.ArgumentParser(description="Strategy evaluation replay orchestrator")
     parser.parse_args(list(argv) if argv is not None else None)
     return run_loop()

@@ -1034,42 +1034,15 @@ export default function App() {
         </div>
       </header>
 
-      <section className="panel sticky">
-        <div className="filter-grid">
-          <label>From<input type="date" value={draft.date_from} onChange={(e) => setDraft({ ...draft, date_from: e.target.value })} /></label>
-          <label>To<input type="date" value={draft.date_to} onChange={(e) => setDraft({ ...draft, date_to: e.target.value })} /></label>
-          <label>Strategy<input placeholder="ORB,OI_BUILDUP" value={draft.strategy} onChange={(e) => setDraft({ ...draft, strategy: e.target.value })} /></label>
-          <label>Regime<input placeholder="TRENDING,SIDEWAYS" value={draft.regime} onChange={(e) => setDraft({ ...draft, regime: e.target.value })} /></label>
-          <label>Initial Capital<input type="number" value={draft.initial_capital} onChange={(e) => setDraft({ ...draft, initial_capital: Number(e.target.value || 0) })} /></label>
-          <label>Cost (bps)<input type="number" value={draft.cost_bps} onChange={(e) => setDraft({ ...draft, cost_bps: Number(e.target.value || 0) })} /></label>
-        </div>
-        <div className="section-caption">Replay Risk Config</div>
-        <div className="filter-grid">
-          <label>Stop Loss %<input type="number" value={draft.stop_loss_pct} onChange={(e) => setDraft({ ...draft, stop_loss_pct: Number(e.target.value || 0) })} /></label>
-          <label>Target %<input type="number" value={draft.target_pct} onChange={(e) => setDraft({ ...draft, target_pct: Number(e.target.value || 0) })} /></label>
-          <label>
-            Trailing Enabled
-            <select value={draft.trailing_enabled ? "true" : "false"} onChange={(e) => setDraft({ ...draft, trailing_enabled: e.target.value === "true" })}>
-              <option value="false">Off</option>
-              <option value="true">On</option>
-            </select>
-          </label>
-          <label>Trail Activate %<input type="number" value={draft.trailing_activation_pct} onChange={(e) => setDraft({ ...draft, trailing_activation_pct: Number(e.target.value || 0) })} /></label>
-          <label>Trail Offset %<input type="number" value={draft.trailing_offset_pct} onChange={(e) => setDraft({ ...draft, trailing_offset_pct: Number(e.target.value || 0) })} /></label>
-          <label>
-            Lock Breakeven
-            <select value={draft.trailing_lock_breakeven ? "true" : "false"} onChange={(e) => setDraft({ ...draft, trailing_lock_breakeven: e.target.value === "true" })}>
-              <option value="true">Yes</option>
-              <option value="false">No</option>
-            </select>
-          </label>
-        </div>
-        <div className="actions">
-          <button disabled={!canApply} onClick={onApply}>Apply</button>
-          <button onClick={() => setDraft({ ...filters })}>Reset</button>
-          <button disabled={isRunPending || !canApply} onClick={onRun}>Run Replay + Evaluate</button>
-        </div>
-      </section>
+      <FilterPanel
+        draft={draft}
+        setDraft={setDraft}
+        filters={filters}
+        canApply={canApply}
+        onApply={onApply}
+        onRun={onRun}
+        isRunPending={isRunPending}
+      />
 
       <section className="kpi-grid">
         <Kpi title="Closed Trades" value={summary?.counts?.closed_trades} loading={loading} />
@@ -1209,55 +1182,15 @@ export default function App() {
         </div>
       </section>
 
-      <section className="panel run-panel">
-        <h2>Run Status</h2>
-        <div className="run-meta">
-          <span>Run: {activeRunId || "--"}</span>
-          <span>Range: {activeRunRange ? `${activeRunRange.date_from} to ${activeRunRange.date_to}` : "--"}</span>
-          <span>Status: {runStatus?.status || "--"}</span>
-          <span>Progress: {runStatus?.progress_pct ?? 0}%</span>
-          <span>Message: {runStatus?.message || "--"}</span>
-        </div>
-        <div className="run-meta">
-          <span>Stop Loss: {displayedRunRisk ? `${num(displayedRunRisk.stop_loss_pct)}%` : "--"}</span>
-          <span>Target: {displayedRunRisk ? `${num(displayedRunRisk.target_pct)}%` : "--"}</span>
-          <span>Trailing: {displayedRunRisk ? boolLabel(displayedRunRisk.trailing_enabled) : "--"}</span>
-          <span>Trail Activate: {displayedRunRisk ? `${num(displayedRunRisk.trailing_activation_pct)}%` : "--"}</span>
-          <span>Trail Offset: {displayedRunRisk ? `${num(displayedRunRisk.trailing_offset_pct)}%` : "--"}</span>
-          <span>Lock Breakeven: {displayedRunRisk ? boolLabel(displayedRunRisk.trailing_lock_breakeven) : "--"}</span>
-        </div>
-        <div className="run-meta">
-          <span>Sharable URL: {typeof window !== "undefined" ? window.location.search || "--" : "--"}</span>
-        </div>
-        <div className="run-events">
-          {runEvents.slice(0, 6).map((item, idx) => (
-            <div key={`${item.timestamp}-${idx}`} className="run-event">
-              <strong>{item.event_type}</strong>
-              <span>{item.message || "--"}</span>
-              <span>{item.progress_pct ?? "--"}%</span>
-            </div>
-          ))}
-        </div>
-        {debugEnabled ? (
-          <details className="debug-panel">
-            <summary>UI Debug Log</summary>
-            <div className="run-events">
-              {debugLogs.length ? (
-                debugLogs.map((item, idx) => (
-                  <div key={`${item.timestamp}-${idx}`} className="run-event">
-                    <strong>{item.timestamp}</strong>
-                    <span>{item.message}</span>
-                  </div>
-                ))
-              ) : (
-                <div className="run-event">
-                  <span>No UI logs yet.</span>
-                </div>
-              )}
-            </div>
-          </details>
-        ) : null}
-      </section>
+      <RunStatusPanel
+        activeRunId={activeRunId}
+        activeRunRange={activeRunRange}
+        runStatus={runStatus}
+        displayedRunRisk={displayedRunRisk}
+        runEvents={runEvents}
+        debugEnabled={debugEnabled}
+        debugLogs={debugLogs}
+      />
 
       <section className="panel intelligence-panel">
         <div className="table-head">
@@ -1459,6 +1392,11 @@ export default function App() {
             </table>
           </div>
         )}
+        <div className="pagination">
+          <button disabled={daysPage <= 1} onClick={() => setDaysPage((p) => p - 1)}>← Prev</button>
+          <span>Page {daysPage}</span>
+          <button disabled={(daysQ.data?.rows?.length ?? 0) < 50} onClick={() => setDaysPage((p) => p + 1)}>Next →</button>
+        </div>
       </section>
 
       <section className="panel">
@@ -1522,6 +1460,11 @@ export default function App() {
             </table>
           </div>
         )}
+        <div className="pagination">
+          <button disabled={tradesPage <= 1} onClick={() => setTradesPage((p) => p - 1)}>← Prev</button>
+          <span>Page {tradesPage}</span>
+          <button disabled={(tradesQ.data?.rows?.length ?? 0) < 50} onClick={() => setTradesPage((p) => p + 1)}>Next →</button>
+        </div>
       </section>
     </div>
   );
@@ -1545,4 +1488,150 @@ function FeatureStat({ title, value }: { title: string; value: any }) {
   );
 }
 
+type FilterPanelProps = {
+  draft: EvalFilters;
+  setDraft: (value: EvalFilters) => void;
+  filters: EvalFilters;
+  canApply: boolean;
+  onApply: () => void;
+  onRun: () => void;
+  isRunPending: boolean;
+};
 
+function FilterPanel({ draft, setDraft, filters, canApply, onApply, onRun, isRunPending }: FilterPanelProps) {
+  return (
+    <section className="panel sticky">
+      <div className="filter-grid">
+        <label>
+          Dataset
+          <select value={draft.dataset} onChange={(e) => setDraft({ ...draft, dataset: e.target.value as "historical" | "live" })}>
+            <option value="historical">Historical</option>
+            <option value="live">Live</option>
+          </select>
+        </label>
+        <label>From<input type="date" value={draft.date_from} onChange={(e) => setDraft({ ...draft, date_from: e.target.value })} /></label>
+        <label>To<input type="date" value={draft.date_to} onChange={(e) => setDraft({ ...draft, date_to: e.target.value })} /></label>
+        <label>Strategy<input placeholder="ORB,OI_BUILDUP" value={draft.strategy} onChange={(e) => setDraft({ ...draft, strategy: e.target.value })} /></label>
+        <label>Regime<input placeholder="TRENDING,SIDEWAYS" value={draft.regime} onChange={(e) => setDraft({ ...draft, regime: e.target.value })} /></label>
+        <label>Initial Capital<input type="number" value={draft.initial_capital} onChange={(e) => setDraft({ ...draft, initial_capital: Number(e.target.value || 0) })} /></label>
+        <label>Cost (bps)<input type="number" value={draft.cost_bps} onChange={(e) => setDraft({ ...draft, cost_bps: Number(e.target.value || 0) })} /></label>
+      </div>
+      <div className="section-caption">Replay Risk Config</div>
+      <div className="filter-grid">
+        <label>Stop Loss %<input type="number" value={draft.stop_loss_pct} onChange={(e) => setDraft({ ...draft, stop_loss_pct: Number(e.target.value || 0) })} /></label>
+        <label>Target %<input type="number" value={draft.target_pct} onChange={(e) => setDraft({ ...draft, target_pct: Number(e.target.value || 0) })} /></label>
+        <label>
+          Trailing
+          <select value={draft.trailing_enabled ? "true" : "false"} onChange={(e) => setDraft({ ...draft, trailing_enabled: e.target.value === "true" })}>
+            <option value="false">Off</option>
+            <option value="true">On</option>
+          </select>
+        </label>
+        <label>Trail Activate %<input type="number" value={draft.trailing_activation_pct} onChange={(e) => setDraft({ ...draft, trailing_activation_pct: Number(e.target.value || 0) })} /></label>
+        <label>Trail Offset %<input type="number" value={draft.trailing_offset_pct} onChange={(e) => setDraft({ ...draft, trailing_offset_pct: Number(e.target.value || 0) })} /></label>
+        <label>
+          Lock Breakeven
+          <select value={draft.trailing_lock_breakeven ? "true" : "false"} onChange={(e) => setDraft({ ...draft, trailing_lock_breakeven: e.target.value === "true" })}>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+      </div>
+      <div className="actions">
+        <button disabled={!canApply} onClick={onApply}>Apply</button>
+        <button onClick={() => setDraft({ ...filters })}>Reset</button>
+        <button className="btn-primary" disabled={isRunPending || !canApply} onClick={onRun}>
+          {isRunPending ? "Running..." : "Run Replay + Evaluate"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+type RunStatusPanelProps = {
+  activeRunId: string;
+  activeRunRange: { date_from: string; date_to: string } | null;
+  runStatus: RunStatus | null;
+  displayedRunRisk: EvalFilters | null;
+  runEvents: RunEvent[];
+  debugEnabled: boolean;
+  debugLogs: DebugLogEntry[];
+};
+
+function RunStatusPanel({ activeRunId, activeRunRange, runStatus, displayedRunRisk, runEvents, debugEnabled, debugLogs }: RunStatusPanelProps) {
+  const [copied, setCopied] = useState(false);
+  const progressPct = Math.min(100, Math.max(0, Number(runStatus?.progress_pct ?? 0)));
+  const isActive = runStatus ? !["completed", "failed"].includes(String(runStatus.status || "").toLowerCase()) : false;
+
+  const copyUrl = () => {
+    if (typeof window !== "undefined") {
+      navigator.clipboard.writeText(window.location.href).catch(() => undefined);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  return (
+    <section className="panel run-panel">
+      <h2>Run Status</h2>
+      <div className="run-meta">
+        <span>Run: {activeRunId || "--"}</span>
+        <span>Range: {activeRunRange ? `${activeRunRange.date_from} to ${activeRunRange.date_to}` : "--"}</span>
+        <span>Status: <strong>{runStatus?.status || "--"}</strong></span>
+        <span>Message: {runStatus?.message || "--"}</span>
+        {runStatus?.error && <span className="run-error">Error: {runStatus.error}</span>}
+      </div>
+      {(isActive || progressPct > 0) && (
+        <div className="run-progress-wrap">
+          <div className="run-progress-bar">
+            <div className="run-progress-bar-fill" style={{ width: `${progressPct}%` }} />
+          </div>
+          <div className="run-progress-label">
+            {progressPct}% complete{runStatus?.current_day ? ` · ${runStatus.current_day}` : ""}
+          </div>
+        </div>
+      )}
+      {displayedRunRisk && (
+        <div className="run-meta">
+          <span>Stop: {num(displayedRunRisk.stop_loss_pct)}%</span>
+          <span>Target: {num(displayedRunRisk.target_pct)}%</span>
+          <span>Trailing: {boolLabel(displayedRunRisk.trailing_enabled)}</span>
+          <span>Trail Activate: {num(displayedRunRisk.trailing_activation_pct)}%</span>
+          <span>Trail Offset: {num(displayedRunRisk.trailing_offset_pct)}%</span>
+          <span>Lock Breakeven: {boolLabel(displayedRunRisk.trailing_lock_breakeven)}</span>
+        </div>
+      )}
+      <div className="copy-url-row">
+        <span>URL:</span>
+        <span className="copy-url-text">{typeof window !== "undefined" ? window.location.href : "--"}</span>
+        <button onClick={copyUrl}>{copied ? "Copied!" : "Copy"}</button>
+      </div>
+      <div className="run-events">
+        {runEvents.slice(0, 6).map((item, idx) => (
+          <div key={`${item.timestamp}-${idx}`} className="run-event">
+            <strong>{item.event_type}</strong>
+            <span>{item.message || "--"}</span>
+            <span>{item.progress_pct ?? "--"}%</span>
+          </div>
+        ))}
+      </div>
+      {debugEnabled && (
+        <details className="debug-panel">
+          <summary>UI Debug Log</summary>
+          <div className="run-events">
+            {debugLogs.length ? (
+              debugLogs.map((item, idx) => (
+                <div key={`${item.timestamp}-${idx}`} className="run-event">
+                  <strong>{item.timestamp}</strong>
+                  <span>{item.message}</span>
+                </div>
+              ))
+            ) : (
+              <div className="run-event"><span>No UI logs yet.</span></div>
+            )}
+          </div>
+        </details>
+      )}
+    </section>
+  );
+}
