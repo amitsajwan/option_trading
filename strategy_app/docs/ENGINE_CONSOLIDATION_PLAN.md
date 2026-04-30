@@ -1,5 +1,7 @@
 # Engine Consolidation Plan
 
+> **Status as of 2026-04-27: Complete.** This document records the consolidation that was carried out. See `strategy_app/docs/README.md` for the current engine state.
+
 **Date:** 2026-03-19
 **Goal:** Keep one research lane (`deterministic`) and one live lane (`ml_pure`), with no runtime ML wrapper layered on top of deterministic rule votes.
 
@@ -12,7 +14,7 @@ This plan is no longer a proposal. Most structural consolidation work is already
 - Legacy wrapper modules are removed from the active runtime path.
 - Compose/runtime handoff is centered on `ml_pure`.
 - Default deterministic routing already excludes `EXPIRY_MAX_PAIN`.
-- Deterministic exit handling is owner-first with helper and high-confidence non-owner fallback.
+- Deterministic exit handling is owner-first with explicit helper exits and tracker-owned universal mechanics.
 
 Use `strategy_app/docs/CURRENT_TREE_VALIDATION.md` for the code-verified status check behind these statements.
 

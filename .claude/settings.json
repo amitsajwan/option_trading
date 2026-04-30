@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"C:\\\\Users\\\\amits\\\\AppData\\\\Local\\\\Google\\\\Cloud SDK\\\\google-cloud-sdk\\\\bin\\\\gcloud.cmd\" compute instances list --project=amittrading)",
+      "Bash(\"C:\\\\Users\\\\amits\\\\AppData\\\\Local\\\\Google\\\\Cloud SDK\\\\google-cloud-sdk\\\\bin\\\\gcloud.cmd\" compute ssh savitasajwan03@option-trading-snapshot-build-01 --zone=asia-south1-b --project=amittrading --command=\"cd ~/option_trading_repo && git fetch origin && git status\")",
+      "Bash(cmd /c \"\\\\\"C:\\\\Users\\\\amits\\\\AppData\\\\Local\\\\Google\\\\Cloud SDK\\\\google-cloud-sdk\\\\bin\\\\gcloud.cmd\\\\\" compute ssh savitasajwan03@option-trading-snapshot-build-01 --zone=asia-south1-b --project=amittrading --tunnel-through-iap --command=\\\\\"cd ~/option_trading_repo && git log --oneline -3\\\\\"\")",
+      "Bash(set CLOUDSDK_ROOT_DIR=C:\\\\Users\\\\amits\\\\AppData\\\\Local\\\\Google\\\\Cloud SDK\\\\google-cloud-sdk)",
+      "Bash(\"C:\\\\Users\\\\amits\\\\AppData\\\\Local\\\\Google\\\\Cloud SDK\\\\google-cloud-sdk\\\\bin\\\\gcloud.cmd\" compute ssh savitasajwan03@option-trading-snapshot-build-01 --zone=asia-south1-b --project=amittrading --command=\"cd ~/option_trading_repo && git log --oneline -3\")",
+      "Read(//c/Users/amits/AppData/Local/Google/Cloud SDK/google-cloud-sdk/bin/**)",
+      "Bash(powershell -Command \"& 'C:/Users/amits/AppData/Local/Google/Cloud SDK/google-cloud-sdk/bin/gcloud.cmd' compute ssh savitasajwan03@option-trading-snapshot-build-01 --zone=asia-south1-b --project=amittrading --command='cd ~/option_trading_repo && git log --oneline -3' 2>&1\")",
+      "Bash(powershell -Command \"& 'C:/Users/amits/AppData/Local/Google/Cloud SDK/google-cloud-sdk/bin/gcloud.cmd' compute ssh savitasajwan03@option-trading-snapshot-build-01 --zone=asia-south1-b --project=amittrading --command='find ~ -name run_training_campaign.py 2>/dev/null | head -5; ls ~/' 2>&1\")",
+      "Bash(powershell -Command \"& 'C:/Users/amits/AppData/Local/Google/Cloud SDK/google-cloud-sdk/bin/gcloud.cmd' compute ssh savitasajwan03@option-trading-snapshot-build-01 --zone=asia-south1-b --project=amittrading --command='ls ~/option_trading/' 2>&1\")",
+      "Bash(powershell -Command \"& 'C:/Users/amits/AppData/Local/Google/Cloud SDK/google-cloud-sdk/bin/gcloud.cmd' compute ssh savitasajwan03@option-trading-snapshot-build-01 --zone=asia-south1-b --project=amittrading --command='cd ~/option_trading && git log --oneline -5 && git branch' 2>&1\")",
+      "Bash(powershell -Command \"& 'C:/Users/amits/AppData/Local/Google/Cloud SDK/google-cloud-sdk/bin/gcloud.cmd' compute ssh savitasajwan03@option-trading-snapshot-build-01 --zone=asia-south1-b --project=amittrading --command='cd ~/option_trading && git pull origin chore/ml-pipeline-ubuntu-gcp-runbook 2>&1 | tail -15' 2>&1\")",
+      "Bash(powershell -Command \"& 'C:/Users/amits/AppData/Local/Google\\\\Cloud SDK/google-cloud-sdk/bin/gcloud.cmd' compute ssh savitasajwan03@option-trading-snapshot-build-01 --zone=asia-south1-b --project=amittrading --command='cd ~/option_trading && git diff HEAD -- ml_pipeline_2/src/ml_pipeline_2/factory/runner.py 2>&1 | head -5 && md5sum ml_pipeline_2/src/ml_pipeline_2/factory/runner.py ml_pipeline_2/src/ml_pipeline_2/factory/spec.py' 2>&1\")",
+      "Bash(powershell -Command \"& 'C:/Users/amits/AppData/Local/Google/Cloud SDK/google-cloud-sdk/bin/gcloud.cmd' compute ssh savitasajwan03@option-trading-snapshot-build-01 --zone=asia-south1-b --project=amittrading --command='cd ~/option_trading && git show origin/chore/ml-pipeline-ubuntu-gcp-runbook:ml_pipeline_2/src/ml_pipeline_2/factory/runner.py | md5sum && git show origin/chore/ml-pipeline-ubuntu-gcp-runbook:ml_pipeline_2/src/ml_pipeline_2/factory/spec.py | md5sum' 2>&1\")",
+      "Bash(ssh -i C:/Users/amits/.ssh/google_compute_engine -o StrictHostKeyChecking=no -o BatchMode=yes savitasajwan03@34.100.227.171 ':*)",
+      "Bash(ssh -i:*)",
+      "Bash(./google-cloud-sdk/bin/gcloud compute:*)",
+      "Bash(./google-cloud-sdk/bin/gcloud auth:*)",
+      "Bash(./google-cloud-sdk/bin/gcloud config:*)",
+      "Bash(./google-cloud-sdk/bin/gcloud projects:*)",
+      "Bash(ssh -o StrictHostKeyChecking=no savitasajwan03@34.47.131.234 \"cd ~/option_trading/option_trading_repo && cat /tmp/campaign_velocity.log 2>/dev/null | tail -50\")",
+      "Bash(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no savitasajwan03@34.47.131.234 \"tail -50 /tmp/campaign_velocity.log\")",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(echo \"---EXIT:$?\")",
+      "Bash(ls ml_pipeline_2/src/ml_pipeline_2/run_*.py)",
+      "Bash(python -c \"from snapshot_app.core.stage_views import _STAGE_FIELD_SPECS; spec = _STAGE_FIELD_SPECS['stage2_direction_view']; print\\('regime_context' in spec, spec['regime_context']\\)\")",
+      "Bash(python -c ':*)",
+      "Bash(echo \"exit: $?\")",
+      "Read(//c/Users/amits/AppData/Roaming/.data/**)",
+      "Read(//c/Users/amits/**)"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
+    ]
+  }
+}

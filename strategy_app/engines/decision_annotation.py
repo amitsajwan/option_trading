@@ -5,17 +5,8 @@ from typing import Any, Optional
 from contracts_app import normalize_reason_code
 
 from ..contracts import StrategyVote, TradeSignal
+from ..utils.env import safe_float as _safe_float
 from .entry_policy import EntryPolicyDecision
-
-
-def _safe_float(value: Any) -> Optional[float]:
-    try:
-        parsed = float(value)
-    except Exception:
-        return None
-    if parsed != parsed or parsed in {float("inf"), float("-inf")}:
-        return None
-    return float(parsed)
 
 
 def derive_decision_mode(policy_decision: Optional[EntryPolicyDecision]) -> str:

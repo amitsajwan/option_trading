@@ -1,5 +1,3 @@
-# DEPRECATED
+# Implementation Status
 
-This file is archived as a migration stub. Canonical implementation status is in:
-
-- `strategy_app/docs/IMPLEMENTATION_STATUS.md`
+See **[`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md)** for the current status.

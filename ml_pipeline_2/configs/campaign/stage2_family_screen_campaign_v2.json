@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "factory_campaign_v1",
+  "campaign_id": "stage2_family_screen_campaign_v2",
+  "inputs": {
+    "parquet_root": "../../../.data/ml_pipeline/parquet_data",
+    "support_dataset": "snapshots_ml_flat"
+  },
+  "execution_defaults": {
+    "poll_interval_seconds": 30,
+    "infra_max_attempts": 2,
+    "total_cores": 8,
+    "total_memory_gb": 64,
+    "ranking_strategy": "publishable_economics_v1",
+    "stop_on_first_publishable": false,
+    "model_group": "banknifty_futures/h15_tp_auto",
+    "profile_id": "openfe_v9_dual"
+  },
+  "window_profiles": {
+    "canonical_4y": {
+      "research_train": {
+        "start": "2020-08-03",
+        "end": "2024-04-30"
+      },
+      "research_valid": {
+        "start": "2024-05-01",
+        "end": "2024-07-31"
+      },
+      "full_model": {
+        "start": "2020-08-03",
+        "end": "2024-07-31"
+      },
+      "final_holdout": {
+        "start": "2024-08-01",
+        "end": "2024-10-31"
+      }
+    },
+    "recent_2y": {
+      "research_train": {
+        "start": "2022-08-01",
+        "end": "2024-04-30"
+      },
+      "research_valid": {
+        "start": "2024-05-01",
+        "end": "2024-07-31"
+      },
+      "full_model": {
+        "start": "2022-08-01",
+        "end": "2024-07-31"
+      },
+      "final_holdout": {
+        "start": "2024-08-01",
+        "end": "2024-10-31"
+      }
+    }
+  },
+  "families": {
+    "model_families": {
+      "stage1_full_stage2_logreg_family": {
+        "target": "base_manifest",
+        "models_by_stage": {
+          "stage1": [
+            "xgb_shallow",
+            "xgb_balanced",
+            "xgb_regularized",
+            "xgb_deep_v1",
+            "xgb_deep_slow_v1",
+            "lgbm_fast",
+            "lgbm_dart",
+            "lgbm_large_v1",
+            "logreg_balanced",
+            "logreg_c1",
+            "logreg_c01"
+          ],
+          "stage2": [
+            "logreg_balanced",
+            "logreg_c1",
+            "logreg_c01"
+          ],
+          "stage3": [
+            "logreg_balanced"
+          ]
+        }
+      },
+      "stage1_full_stage2_tree_mix": {
+        "target": "base_manifest",
+        "models_by_stage": {
+          "stage1": [
+            "xgb_shallow",
+            "xgb_balanced",
+            "xgb_regularized",
+            "xgb_deep_v1",
+            "xgb_deep_slow_v1",
+            "lgbm_fast",
+            "lgbm_dart",
+            "lgbm_large_v1",
+            "logreg_balanced",
+            "logreg_c1",
+            "logreg_c01"
+          ],
+          "stage2": [
+            "xgb_shallow",
+            "xgb_balanced",
+            "lgbm_dart",
+            "lgbm_large_v1",
+            "logreg_balanced"
+          ],
+          "stage3": [
+            "logreg_balanced"
+          ]
+        }
+      }
+    },
+    "stage2_feature_families": {
+      "time_context_pool": {
+        "target": "base_manifest",
+        "feature_sets": [
+          "fo_expiry_aware_v3",
+          "fo_no_time_context",
+          "fo_no_opening_range"
+        ]
+      },
+      "regime_v1_only": {
+        "target": "base_manifest",
+        "feature_sets": [
+          "fo_midday_direction_regime_v1"
+        ]
+      },
+      "regime_short_horizon_v2": {
+        "target": "base_manifest",
+        "feature_sets": [
+          "fo_midday_direction_regime_v2"
+        ]
+      },
+      "regime_slow_confirmation_v3": {
+        "target": "base_manifest",
+        "feature_sets": [
+          "fo_midday_direction_regime_v3"
+        ]
+      }
+    },
+    "stage2_policy_families": {
+      "dual_threshold_baseline": {
+        "target": "base_manifest",
+        "stage2_policy_id": "direction_dual_threshold_v1"
+      },
+      "economic_balance_gate": {
+        "target": "base_manifest",
+        "stage2_policy_id": "direction_gate_economic_balance_v1",
+        "stage2": {
+          "trade_threshold_grid": [
+            0.45,
+            0.5,
+            0.55,
+            0.6
+          ]
+        }
+      }
+    }
+  },
+  "lane_templates": [
+    {
+      "template_id": "stage2_family_screen",
+      "base_grid_path": "../research/staged_grid.stage2_scenarios_v1.json",
+      "window_profiles": [
+        "canonical_4y"
+      ],
+      "model_families": [
+        "stage1_full_stage2_logreg_family",
+        "stage1_full_stage2_tree_mix"
+      ],
+      "stage2_feature_families": [
+        "time_context_pool",
+        "regime_v1_only",
+        "regime_short_horizon_v2",
+        "regime_slow_confirmation_v3"
+      ],
+      "stage2_policy_families": [
+        "dual_threshold_baseline",
+        "economic_balance_gate"
+      ],
+      "max_generated_lanes": 16,
+      "resource": {
+        "cores": 8,
+        "memory_gb": 54
+      }
+    }
+  ],
+  "campaign_max_lanes": 16
+}

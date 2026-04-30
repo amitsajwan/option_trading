@@ -75,6 +75,15 @@ class StrategyEvaluationRouteTests(unittest.TestCase):
     def tearDown(self) -> None:
         dashboard_app._strategy_eval_service = self._old_service
 
+    def test_strategy_evaluation_page_renders(self) -> None:
+        request = type("RequestStub", (), {"scope": {"type": "http"}})()
+        response = asyncio.run(dashboard_app.strategy_evaluation_page(request))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"trading.ops", response.body)
+        self.assertIn(b"/static/redesign/pages/strategy_evaluation.js", response.body)
+        self.assertIn(b'const routeStart = "strategy_evaluation";', response.body)
+
     def test_summary_alias_delegates_and_normalizes_timestamps(self) -> None:
         payload = asyncio.run(
             dashboard_app.get_strategy_evaluation_summary(

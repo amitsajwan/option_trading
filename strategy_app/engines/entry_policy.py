@@ -48,15 +48,17 @@ class EntryPolicy(Protocol):
 
 @dataclass(frozen=True)
 class PolicyConfig:
-    vol_ratio_block_min: float = 0.90
-    vol_ratio_warn_min: float = 1.20
-    vol_ratio_strong_min: float = 1.60
-    momentum_5m_min: float = 0.0004
+    vol_ratio_block_min: float = 1.00
+    vol_ratio_warn_min: float = 1.35
+    vol_ratio_strong_min: float = 1.85
+    option_vol_ratio_min: float = 1.00
+    option_vol_ratio_strong: float = 1.40
+    momentum_5m_min: float = 0.0008
     momentum_5m_strong: float = 0.0020
-    momentum_15m_confirm: float = 0.0005
-    late_entry_minute: int = 180
-    hard_cutoff_minute: int = 270
-    late_session_min_conf: float = 0.75
+    momentum_15m_confirm: float = 0.0010
+    late_entry_minute: int = 150
+    hard_cutoff_minute: int = 240
+    late_session_min_conf: float = 0.80
     iv_pct_hard_max: float = 85.0
     iv_pct_soft_max: float = 65.0
     premium_to_or_width_max: float = 1.50
@@ -64,8 +66,8 @@ class PolicyConfig:
     blocked_regimes: tuple[str, ...] = ("EXPIRY", "HIGH_VOL", "AVOID")
     conditional_regimes: tuple[str, ...] = ("SIDEWAYS",)
     allowed_regimes: tuple[str, ...] = ("TRENDING", "PRE_EXPIRY")
-    conditional_min_conf: float = 0.78
-    min_policy_score: float = 0.50
+    conditional_min_conf: float = 0.82
+    min_policy_score: float = 0.58
     enable_post_halt_resume_boost: bool = True
     post_halt_resume_boost_score: float = 0.05
 
@@ -123,6 +125,12 @@ class LongOptionEntryPolicy:
         if volume_result.startswith("BLOCK"):
             return EntryPolicyDecision.block(f"volume: {volume_result}", checks)
         score += volume_delta
+
+        option_liquidity_result, option_liquidity_delta = self._check_option_liquidity(snap, vote)
+        checks["option_liquidity"] = option_liquidity_result
+        if option_liquidity_result.startswith("BLOCK"):
+            return EntryPolicyDecision.block(f"option_liquidity: {option_liquidity_result}", checks)
+        score += option_liquidity_delta
 
         momentum_result, momentum_delta = self._check_momentum(snap, vote)
         checks["momentum"] = momentum_result
@@ -193,6 +201,22 @@ class LongOptionEntryPolicy:
         if directional_r15m < self._cfg.momentum_15m_confirm:
             return f"WARN:r15m_not_confirmed={r15m:.4f}", delta - 0.15
         return f"PASS:r5m={r5m:.4f},r15m={r15m:.4f}", delta
+
+    def _check_option_liquidity(self, snap: SnapshotAccessor, vote: StrategyVote) -> tuple[str, float]:
+        direction = vote.direction
+        if direction == Direction.CE:
+            option_vol_ratio = snap.atm_ce_vol_ratio
+        elif direction == Direction.PE:
+            option_vol_ratio = snap.atm_pe_vol_ratio
+        else:
+            return "PASS:not_directional", 0.0
+        if option_vol_ratio is None:
+            return "PASS:no_option_vol_ratio", 0.0
+        if option_vol_ratio < self._cfg.option_vol_ratio_min:
+            return f"BLOCK:option_vol_ratio={option_vol_ratio:.2f}", 0.0
+        if option_vol_ratio >= self._cfg.option_vol_ratio_strong:
+            return f"PASS:option_vol_ratio={option_vol_ratio:.2f} strong", 0.08
+        return f"PASS:option_vol_ratio={option_vol_ratio:.2f}", 0.0
 
     def _check_timing(self, snap: SnapshotAccessor, vote: StrategyVote) -> tuple[str, float]:
         minutes = snap.minutes

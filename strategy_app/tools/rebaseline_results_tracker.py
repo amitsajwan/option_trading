@@ -9,14 +9,7 @@ from typing import Any, Iterable, Optional
 
 import pandas as pd
 
-
-def _safe_float(value: Any) -> Optional[float]:
-    try:
-        if value is None:
-            return None
-        return float(value)
-    except Exception:
-        return None
+from strategy_app.utils.env import safe_float as _safe_float
 
 
 def _load_json(path: Path) -> dict[str, Any]:

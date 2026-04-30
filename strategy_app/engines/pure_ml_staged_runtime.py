@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -8,7 +9,9 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from snapshot_app.core.stage_views import project_stage_views
+logger = logging.getLogger(__name__)
+
+from snapshot_app.core.stage_views import project_stage_views, project_stage_views_v2
 
 from ml_pipeline_2.inference_contract.predict import predict_probabilities_from_frame
 from ml_pipeline_2.staged.runtime_contract import STAGED_RUNTIME_BUNDLE_KIND, load_staged_runtime_policy
@@ -44,11 +47,13 @@ class StagedRuntimeDecision:
     horizon_minutes: Optional[int] = None
     stop_loss_pct: Optional[float] = None
     target_pct: Optional[float] = None
+    risk_basis: str = "option_premium"
 
 
 @dataclass(frozen=True)
 class PureMLRuntimeControls:
     block_expiry: bool = False
+    bypass_deterministic_gates: bool = False
 
 
 def is_staged_runtime_bundle(bundle: dict[str, object]) -> bool:
@@ -56,11 +61,14 @@ def is_staged_runtime_bundle(bundle: dict[str, object]) -> bool:
 
 
 def load_staged_policy(path: str) -> dict[str, Any]:
-    return load_staged_runtime_policy(path)
+    from ..utils.gcs_artifact import resolve_artifact_path
+    return load_staged_runtime_policy(resolve_artifact_path(str(path)))
 
 
 def load_staged_model_package(path: str | Path) -> dict[str, object]:
-    package = joblib.load(Path(path))
+    from ..utils.gcs_artifact import resolve_artifact_path
+    resolved = resolve_artifact_path(str(path))
+    package = joblib.load(Path(resolved))
     if not isinstance(package, dict):
         raise ValueError("pure ml model package must be dict")
     if not is_staged_runtime_bundle(package):
@@ -105,6 +113,28 @@ def _backfill_stage_row(view_row: dict[str, object], rolling_features: dict[str,
         if _is_missing_value(rolling_value):
             continue
         out[view_key] = rolling_value
+    return out
+
+
+def _inject_runtime_snapshot_fields(feature_row: dict[str, object], snap: Any) -> dict[str, object]:
+    out = dict(feature_row)
+    ts = snap.timestamp_or_now
+    if _is_missing_value(out.get("trade_date")):
+        trade_date = str(getattr(snap, "trade_date", "") or "").strip()
+        out["trade_date"] = trade_date or ts.date().isoformat()
+    if _is_missing_value(out.get("year")):
+        out["year"] = int(ts.year)
+    if _is_missing_value(out.get("timestamp")):
+        out["timestamp"] = ts.isoformat()
+    if _is_missing_value(out.get("snapshot_id")):
+        snapshot_id = str(getattr(snap, "snapshot_id", "") or "").strip()
+        if snapshot_id:
+            out["snapshot_id"] = snapshot_id
+    raw_payload = getattr(snap, "raw_payload", {}) if hasattr(snap, "raw_payload") else {}
+    if _is_missing_value(out.get("instrument")) and isinstance(raw_payload, dict):
+        instrument = str(raw_payload.get("instrument") or "").strip().upper()
+        if instrument:
+            out["instrument"] = instrument
     return out
 
 
@@ -171,6 +201,20 @@ def _run_prefilter_chain(engine: Any, snap: Any, stage1_row: dict[str, object], 
     return None, regime_signal
 
 
+def _is_v2_bundle(bundle: dict[str, Any]) -> bool:
+    """Return True when the staged bundle was trained on V2 (velocity-enriched) features.
+
+    Detected by explicit ``runtime.view_version = "v2"`` in the bundle, or by the
+    presence of a velocity column name (prefix ``vel_`` or ``ctx_am_``) in stage1's
+    feature_columns list.
+    """
+    runtime = bundle.get("runtime") or {}
+    if str(runtime.get("view_version") or "").lower() == "v2":
+        return True
+    stage1_cols = list((((bundle.get("stages") or {}).get("stage1") or {}).get("model_package") or {}).get("feature_columns") or [])
+    return any(str(c).startswith(("vel_", "ctx_am_", "ctx_gap_")) for c in stage1_cols)
+
+
 def predict_staged(
     *,
     engine: Any,
@@ -180,16 +224,30 @@ def predict_staged(
     policy: dict[str, Any],
 ) -> StagedRuntimeDecision:
     gate_ids = list(((bundle.get("runtime") or {}).get("prefilter_gate_ids") or (policy.get("runtime") or {}).get("prefilter_gate_ids") or []))
-    stage_views = project_stage_views(snap.raw_payload)
+    bypass_deterministic_gates = bool(getattr(engine._runtime_controls, "bypass_deterministic_gates", False))
+    use_v2 = _is_v2_bundle(bundle)
+    if use_v2:
+        raw_views = project_stage_views_v2(snap.raw_payload)
+        stage_views = {
+            "stage1_entry_view": raw_views["stage1_entry_view_v2"],
+            "stage2_direction_view": raw_views["stage2_direction_view_v2"],
+            "stage3_recipe_view": raw_views["stage3_recipe_view_v2"],
+        }
+    else:
+        stage_views = project_stage_views(snap.raw_payload)
     stage1_package = dict(((bundle.get("stages") or {}).get("stage1") or {}).get("model_package") or {})
     stage2_package = dict(((bundle.get("stages") or {}).get("stage2") or {}).get("model_package") or {})
     stage3_packages = dict(((bundle.get("stages") or {}).get("stage3") or {}).get("recipe_packages") or {})
     recipe_catalog = list(policy.get("recipe_catalog") or [])
 
-    stage1_row = _backfill_stage_row(engine._merge_feature_rows(stage_views["stage1_entry_view"], rolling_features), rolling_features)
-    gate_reason, _ = _run_prefilter_chain(engine, snap, stage1_row, gate_ids)
-    if gate_reason is not None:
-        return StagedRuntimeDecision(action="HOLD", reason=gate_reason)
+    stage1_row = _inject_runtime_snapshot_fields(
+        _backfill_stage_row(engine._merge_feature_rows(stage_views["stage1_entry_view"], rolling_features), rolling_features),
+        snap,
+    )
+    if not bypass_deterministic_gates:
+        gate_reason, _ = _run_prefilter_chain(engine, snap, stage1_row, gate_ids)
+        if gate_reason is not None:
+            return StagedRuntimeDecision(action="HOLD", reason=gate_reason)
     if "feature_completeness_v1" in gate_ids:
         incomplete_reason = _feature_completeness_reason(stage1_row, stage1_package, max_nan_features=engine._max_nan_features)
         if incomplete_reason is not None:
@@ -197,10 +255,13 @@ def predict_staged(
 
     entry_prob = _score_prob(stage1_package, stage1_row, default_prob_col="move_prob")
     entry_threshold = float(dict(policy["stage1"])["selected_threshold"])
-    if float(entry_prob) < entry_threshold:
+    if (not bypass_deterministic_gates) and float(entry_prob) < entry_threshold:
         return StagedRuntimeDecision(action="HOLD", reason="entry_below_threshold", entry_prob=float(entry_prob))
 
-    stage2_row = _backfill_stage_row(engine._merge_feature_rows(stage_views["stage2_direction_view"], rolling_features), rolling_features)
+    stage2_row = _inject_runtime_snapshot_fields(
+        _backfill_stage_row(engine._merge_feature_rows(stage_views["stage2_direction_view"], rolling_features), rolling_features),
+        snap,
+    )
     if "feature_completeness_v1" in gate_ids:
         incomplete_reason = _feature_completeness_reason(stage2_row, stage2_package, max_nan_features=engine._max_nan_features)
         if incomplete_reason is not None:
@@ -214,7 +275,9 @@ def predict_staged(
     min_edge = float(stage2_policy["selected_min_edge"])
     ce_ok = ce_prob >= ce_threshold
     pe_ok = pe_prob >= pe_threshold
-    if ce_ok and pe_ok:
+    if bypass_deterministic_gates:
+        direction = "CE" if ce_prob >= pe_prob else "PE"
+    elif ce_ok and pe_ok:
         if abs(ce_prob - pe_prob) < min_edge:
             return StagedRuntimeDecision(action="HOLD", reason="direction_low_edge_conflict", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
         direction = "CE" if ce_prob >= pe_prob else "PE"
@@ -228,10 +291,13 @@ def predict_staged(
     strike = snap.atm_strike
     if strike is None or int(strike) <= 0:
         return StagedRuntimeDecision(action="HOLD", reason="missing_atm_strike", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
-    if "liquidity_gate_v1" in gate_ids and not engine._liquidity_ok(snap=snap, direction=direction, strike=int(strike)):
+    if (not bypass_deterministic_gates) and "liquidity_gate_v1" in gate_ids and not engine._liquidity_ok(snap=snap, direction=direction, strike=int(strike)):
         return StagedRuntimeDecision(action="HOLD", reason="liquidity_gate_block", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
 
-    stage3_row = _backfill_stage_row(engine._merge_feature_rows(stage_views["stage3_recipe_view"], rolling_features), rolling_features)
+    stage3_row = _inject_runtime_snapshot_fields(
+        _backfill_stage_row(engine._merge_feature_rows(stage_views["stage3_recipe_view"], rolling_features), rolling_features),
+        snap,
+    )
     stage3_row["stage1_entry_prob"] = float(entry_prob)
     stage3_row["stage2_direction_up_prob"] = float(direction_up_prob)
     stage3_row["stage2_direction_down_prob"] = float(1.0 - direction_up_prob)
@@ -250,12 +316,22 @@ def predict_staged(
     stage3_policy = dict(policy["stage3"])
     recipe_threshold = float(stage3_policy["selected_threshold"])
     recipe_margin_min = float(stage3_policy["selected_margin_min"])
-    if float(top_prob) < recipe_threshold:
+    logger.warning(
+        f"[RECIPE_SELECTION] top={top_recipe} prob={top_prob:.4f} margin={top_prob - second_prob:.4f} "
+        f"threshold={recipe_threshold:.4f} margin_min={recipe_margin_min:.4f} "
+        f"all_scores={[(r, round(p, 4)) for r, p in recipe_scores]}"
+    )
+    if (not bypass_deterministic_gates) and float(top_prob) < recipe_threshold:
         return StagedRuntimeDecision(action="HOLD", reason="recipe_below_threshold", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, recipe_id=str(top_recipe), recipe_prob=float(top_prob))
-    if float(top_prob - second_prob) < recipe_margin_min:
+    if (not bypass_deterministic_gates) and float(top_prob - second_prob) < recipe_margin_min:
         return StagedRuntimeDecision(action="HOLD", reason="recipe_low_margin", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, recipe_id=str(top_recipe), recipe_prob=float(top_prob), recipe_margin=float(top_prob - second_prob))
 
     recipe_meta = next((dict(item) for item in recipe_catalog if str(item.get("recipe_id") or "") == str(top_recipe)), {})
+    raw_stop = float(recipe_meta.get("stop_loss_pct") or 0.0)
+    raw_target = float(recipe_meta.get("take_profit_pct") or 0.0)
+    risk_basis = str(recipe_meta.get("risk_basis") or "option_premium").strip().lower()
+    if risk_basis not in ("underlying", "option_premium"):
+        risk_basis = "option_premium"
     return StagedRuntimeDecision(
         action=("BUY_CE" if direction == "CE" else "BUY_PE"),
         reason="staged_entry_ready",
@@ -267,6 +343,7 @@ def predict_staged(
         recipe_prob=float(top_prob),
         recipe_margin=float(top_prob - second_prob),
         horizon_minutes=int(recipe_meta.get("horizon_minutes")) if recipe_meta else None,
-        stop_loss_pct=float(recipe_meta.get("stop_loss_pct")) if recipe_meta else None,
-        target_pct=float(recipe_meta.get("take_profit_pct")) if recipe_meta else None,
+        stop_loss_pct=raw_stop if raw_stop > 0 else None,
+        target_pct=raw_target if raw_target > 0 else None,
+        risk_basis=risk_basis,
     )

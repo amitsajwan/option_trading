@@ -3,3 +3,4 @@ pymongo>=4.6,<5
 pandas>=2,<3
 pyarrow>=14,<21
 duckdb>=1,<2
+requests>=2.31,<3

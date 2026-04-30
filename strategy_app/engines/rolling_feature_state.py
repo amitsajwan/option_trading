@@ -146,7 +146,8 @@ class RollingFeatureState:
     ) -> None:
         self._max_bars = max(32, int(max_bars))
         self._rel_volume_window = max(2, int(rel_volume_window))
-        self._daily_atr_history: deque[float] = deque(maxlen=max(20, int(daily_atr_history_days)))
+        self._daily_atr_history_days = max(20, int(daily_atr_history_days))
+        self._daily_atr_history: deque[float] = deque(maxlen=self._daily_atr_history_days)
         self._current_day: Optional[str] = None
         self._closes: deque[float] = deque(maxlen=self._max_bars)
         self._highs: deque[float] = deque(maxlen=self._max_bars)
@@ -166,6 +167,29 @@ class RollingFeatureState:
         self._ema_50: Optional[float] = None
         self._last_day_atr: Optional[float] = None
         self._last_atm_oi_sum: Optional[float] = None
+
+    def reset(self) -> None:
+        """Reset all state — call at the start of each new replay run for reproducibility."""
+        self._daily_atr_history = deque(maxlen=self._daily_atr_history_days)
+        self._current_day = None
+        self._closes = deque(maxlen=self._max_bars)
+        self._highs = deque(maxlen=self._max_bars)
+        self._lows = deque(maxlen=self._max_bars)
+        self._volumes = deque(maxlen=self._max_bars)
+        self._fut_ois = deque(maxlen=self._max_bars)
+        self._pcr_values = deque(maxlen=self._max_bars)
+        self._atm_ce_closes = deque(maxlen=self._max_bars)
+        self._atm_pe_closes = deque(maxlen=self._max_bars)
+        self._option_total_volume = deque(maxlen=self._max_bars)
+        self._day_high = None
+        self._day_low = None
+        self._vwap_num = 0.0
+        self._vwap_den = 0.0
+        self._ema_9 = None
+        self._ema_21 = None
+        self._ema_50 = None
+        self._last_day_atr = None
+        self._last_atm_oi_sum = None
 
     def on_session_start(self, trade_date: date) -> None:
         self._roll_day(str(trade_date))
@@ -425,6 +449,29 @@ class RollingFeatureState:
                 else None
             ),
             "iv_skew": _to_float(snap.iv_skew),
+            # Aliases for snapshots_ml_flat_v2 column naming convention.
+            # Training used ctx_* and osc_* prefixed names; runtime computes the
+            # same values under different keys.  Both sets are emitted so the
+            # feature-completeness check passes for models trained on either naming.
+            "ctx_dte_days": _to_float(snap.days_to_expiry),
+            "ctx_is_expiry_day": (1.0 if snap.is_expiry_day else 0.0),
+            "ctx_is_near_expiry": is_near_expiry,
+            "ctx_regime_atr_high": (
+                1.0 if (atr_daily_percentile is not None and atr_daily_percentile >= ATR_PERCENTILE_HIGH) else 0.0
+            ),
+            "ctx_regime_atr_low": (
+                1.0 if (atr_daily_percentile is not None and atr_daily_percentile <= ATR_PERCENTILE_LOW) else 0.0
+            ),
+            "ctx_regime_trend_up": trend_up,
+            "ctx_regime_trend_down": trend_down,
+            "ctx_regime_expiry_near": is_near_expiry,
+            "ctx_is_high_vix_day": high_vix_day,
+            "osc_rsi_14": rsi_14,
+            "osc_atr_ratio": atr_ratio,
+            "osc_atr_daily_percentile": atr_daily_percentile,
+            "opt_flow_pcr_oi": pcr,
+            "time_minute_of_day": minute_of_day,
+            "time_day_of_week": day_of_week,
         }
 
     def _prev_atm_oi_sum(self, snap: SnapshotAccessor) -> Optional[float]:

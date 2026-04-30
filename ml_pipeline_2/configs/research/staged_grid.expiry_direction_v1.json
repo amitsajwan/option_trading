@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.expiry_direction_v1.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_expiry_direction_v1"
+  },
+  "selection": {
+    "ranking_strategy": "stage3_policy_paths_v1",
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.55,
+      "brier_max": 0.26
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 1,
+    "runs": [
+      {
+        "run_id": "expiry_s2_midday",
+        "model_group_suffix": "_ed_expiry_midday",
+        "overrides": {
+          "outputs": { "run_name": "ed_expiry_s2_midday" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_expiry_aware_v3"]
+            }
+          },
+          "training": {
+            "stage1_reuse": {
+              "source_run_id": "vel_s2_midday",
+              "source_run_dir": "/home/savitasajwan03/option_trading/ml_pipeline_2/artifacts/training_launches/vel_dir_grid_20260419_092647/run/runs/01_vel_s2_midday"
+            },
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": ["MIDDAY"]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

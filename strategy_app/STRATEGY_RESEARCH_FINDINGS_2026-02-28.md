@@ -1,5 +1,3 @@
-# DEPRECATED
+# Strategy Research Findings (2026-02-28)
 
-This file is archived as a migration stub. Canonical research notes are in:
-
-- `strategy_app/docs/STRATEGY_RESEARCH_FINDINGS_2026-02-28.md`
+See **[`docs/STRATEGY_RESEARCH_FINDINGS_2026-02-28.md`](docs/STRATEGY_RESEARCH_FINDINGS_2026-02-28.md)** for the full findings.

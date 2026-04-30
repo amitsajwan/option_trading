@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from contracts_app import strategy_position_topic
+from contracts_app import strategy_decision_trace_topic, strategy_position_topic
 from strategy_app.contracts import Direction, ExitReason, PositionContext, SignalType, StrategyVote, TradeSignal
 from strategy_app.engines.snapshot_accessor import SnapshotAccessor
 from strategy_app.logging.signal_logger import SignalLogger
@@ -146,39 +146,8 @@ class SignalLoggerContractTests(unittest.TestCase):
                 reason="exit",
                 exit_reason=ExitReason.TIME_STOP,
             )
-            logger.log_position_close(
-                exit_signal=exit_signal,
-                position=position,
-                entry_premium=120.0,
-                exit_premium=118.0,
-                pnl_pct=-0.0166667,
-                mfe_pct=0.02,
-                mae_pct=-0.03,
-                bars_held=2,
-                stop_loss_pct=0.05,
-                stop_price=114.0,
-                high_water_premium=122.0,
-                target_pct=0.20,
-                trailing_enabled=False,
-                trailing_activation_pct=0.10,
-                trailing_offset_pct=0.05,
-                trailing_lock_breakeven=True,
-                trailing_active=False,
-                orb_trail_activation_mfe=0.15,
-                orb_trail_offset_pct=0.08,
-                orb_trail_min_lock_pct=0.05,
-                orb_trail_priority_over_regime=True,
-                orb_trail_regime_filter=None,
-                orb_trail_active=False,
-                orb_trail_stop_price=None,
-                oi_trail_activation_mfe=0.15,
-                oi_trail_offset_pct=0.08,
-                oi_trail_min_lock_pct=0.05,
-                oi_trail_priority_over_regime=True,
-                oi_trail_regime_filter=None,
-                oi_trail_active=False,
-                oi_trail_stop_price=None,
-            )
+            position.bars_held = 2
+            logger.log_position_close(exit_signal=exit_signal, position=position)
 
             position_rows = [
                 json.loads(line)
@@ -212,6 +181,76 @@ class SignalLoggerContractTests(unittest.TestCase):
             self.assertEqual(position_events[0]["metadata"]["snapshot_id"], "snap-entry-2")
             self.assertEqual(position_events[1]["metadata"]["snapshot_id"], "snap-manage-2")
             self.assertEqual(position_events[2]["metadata"]["snapshot_id"], "snap-exit-2")
+
+    def test_logs_decision_trace_to_jsonl_and_pubsub(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            logger = SignalLogger(root)
+            publisher = _RecordingPublisher()
+            logger._publisher = publisher  # type: ignore[attr-defined]
+            logger.set_run_context("trace-run-1", {"engine_mode": "deterministic"})
+
+            trace = {
+                "trace_id": "trace-1",
+                "snapshot_id": "snap-trace-1",
+                "timestamp": datetime(2026, 3, 7, 9, 35, tzinfo=timezone.utc),
+                "trade_date_ist": "2026-03-07",
+                "run_id": "trace-run-1",
+                "engine_mode": "deterministic",
+                "decision_mode": "rule_vote",
+                "evaluation_type": "entry",
+                "final_outcome": "blocked",
+                "primary_blocker_gate": "policy_checks",
+                "selected_candidate_id": None,
+                "position_state": {"has_position": False},
+                "risk_state": {"is_halted": False},
+                "regime_context": {"regime": "TRENDING"},
+                "warmup_context": {"blocked": False},
+                "summary_metrics": {"candidate_count": 2},
+                "flow_gates": [],
+                "candidates": [],
+            }
+
+            logger.log_decision_trace(trace)
+
+            row = json.loads((root / "decision_traces.jsonl").read_text(encoding="utf-8").strip().splitlines()[0])
+            self.assertEqual(row["trace_id"], "trace-1")
+            self.assertEqual(row["engine_mode"], "deterministic")
+            self.assertEqual(row["primary_blocker_gate"], "policy_checks")
+            trace_events = [event for topic, event in publisher.events if topic == strategy_decision_trace_topic()]
+            self.assertEqual(len(trace_events), 1)
+            self.assertEqual(trace_events[0]["trace"]["trace_id"], "trace-1")
+
+    def test_position_manage_includes_underlying_stop_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            logger = SignalLogger(root)
+            logger.set_run_context("run-3", {})
+            position = PositionContext(
+                position_id="pos-3",
+                direction="CE",
+                strike=50000,
+                expiry=None,
+                entry_premium=100.0,
+                entry_time=datetime(2026, 3, 7, 9, 30, tzinfo=timezone.utc),
+                entry_snapshot_id="snap-3",
+                lots=1,
+                signal_id="sig-3",
+                entry_futures_price=50000.0,
+                underlying_stop_pct=0.0008,
+                underlying_target_pct=0.0015,
+            )
+            logger.log_position_manage(
+                position=position,
+                timestamp=datetime(2026, 3, 7, 9, 31, tzinfo=timezone.utc),
+                snapshot_id="snap-manage-3",
+            )
+            row = json.loads((root / "positions.jsonl").read_text(encoding="utf-8").strip().splitlines()[0])
+            self.assertEqual(row["event"], "POSITION_MANAGE")
+            self.assertEqual(row["entry_futures_price"], 50000.0)
+            self.assertEqual(row["underlying_stop_pct"], 0.0008)
+            self.assertEqual(row["underlying_target_pct"], 0.0015)
+            self.assertEqual(row["snapshot_id"], "snap-manage-3")
 
 
 if __name__ == "__main__":

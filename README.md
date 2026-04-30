@@ -1,225 +1,292 @@
-# BankNifty Options Algo - Repo Guide
+# BankNifty Options Algo — Operations Guide
 
-This repo is a cross-service trading runtime plus staged ML training pipeline.
+**This is the starting point.** Read this first. Everything else is linked from here.
 
-Root `docs/` contains cross-cutting system docs.
-Operator runbooks live under `docs/runbooks/`.
-Package-specific design and runtime notes live under the owning package:
+As-of: `2026-04-27`
 
-- `strategy_app/docs`
-- `ml_pipeline_2/docs`
-- `snapshot_app/historical`
+---
 
-If you are new, read in this order:
+## What This System Is
 
-1. [docs/SYSTEM_SOURCE_OF_TRUTH.md](docs/SYSTEM_SOURCE_OF_TRUTH.md)
-2. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-3. [docs/runbooks/README.md](docs/runbooks/README.md)
-4. [docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md)
-5. [docs/runbooks/TRAINING_RELEASE_RUNBOOK.md](docs/runbooks/TRAINING_RELEASE_RUNBOOK.md)
-6. [docs/runbooks/GCP_DEPLOYMENT.md](docs/runbooks/GCP_DEPLOYMENT.md)
-7. [docs/PROCESS_TOPOLOGY.md](docs/PROCESS_TOPOLOGY.md)
-8. [strategy_app/docs/README.md](strategy_app/docs/README.md)
-9. [ml_pipeline_2/docs/README.md](ml_pipeline_2/docs/README.md)
-10. [snapshot_app/historical/README.md](snapshot_app/historical/README.md)
-11. [docs/DOCS_CODE_MAP.md](docs/DOCS_CODE_MAP.md)
+An end-to-end algorithmic trading runtime for BankNifty options on NSE. It ingests live market data, builds canonical snapshots, runs a 3-stage ML strategy, persists all events to MongoDB, and serves a monitoring dashboard.
 
-Current runtime and training rules:
+The ML pipeline (`ml_pipeline_2`) trains offline and publishes model bundles to GCS. The live runtime loads them at startup.
 
-- supported live runtime lane: `strategy_app --engine ml_pure`
-- deterministic runtime: replay and research only
-- supported ML training and publish lane: staged `ml_pipeline_2`
-- retired `ml_pipeline`, open-search, and champion-registry flows are not part of the current branch
+---
+
+## Live State on GCP (right now)
+
+**VM:** `option-trading-runtime-01` · `asia-south1-b` · project `amittrading-493606`
+
+```bash
+gcloud compute ssh savitasajwan03@option-trading-runtime-01 --zone asia-south1-b --project amittrading-493606
+```
+
+| Container | Status | Port |
+|---|---|---|
+| `strategy_app` | healthy | — |
+| `dashboard` | healthy | 8008 |
+| `ingestion_app` | healthy | 8004 |
+| `snapshot_app` | **unhealthy** — check logs | — |
+| `persistence_app` | healthy | — |
+| `strategy_persistence_app` | healthy | — |
+| `strategy_app_historical` | healthy | — |
+| `strategy_persistence_app_historical` | healthy | — |
+| `strategy_eval_orchestrator` | running | — |
+| `redis` | healthy | 6379 |
+| `mongo` | healthy | 27017 |
+
+**Current engine on live VM:** `deterministic` (ML paths not yet applied — see [Model Switch](#model-switching) below)
+
+**Pending change:** `.env.compose` updated locally to `ml_pure` + `staged_simple_s2_v1` (research/paper). Deploy when ready — see [Deploy](#3-deploy-to-gcp).
+
+**Dashboard:** `http://<vm-external-ip>:8008`
+
+---
 
 ## Services
 
-- `ingestion_app`: market data API + session-aware live runner
-- `snapshot_app`: builds and publishes canonical MarketSnapshot (MSS.1-MSS.9)
-- `persistence_app`: consumes snapshot and strategy events and writes to MongoDB
-- `strategy_app`: consumes snapshots for deterministic/ML strategy logic
-- `market_data_dashboard` (optional): UI + monitoring APIs
-- `contracts_app`: shared contracts (topics/events/session/math)
+| Service | What it does | Dockerfile |
+|---|---|---|
+| `ingestion_app` | Live market data API, Kite session, live snapshot runner | `ingestion_app/Dockerfile` |
+| `snapshot_app` | Builds canonical MarketSnapshot (MSS.1–MSS.9), publishes to Redis | `snapshot_app/Dockerfile` |
+| `persistence_app` | Writes snapshots + strategy events to MongoDB | `persistence_app/Dockerfile` |
+| `strategy_app` | Strategy engine (deterministic or ml_pure), emits TradeSignals | `strategy_app/Dockerfile` |
+| `strategy_persistence_app` | Writes strategy votes/signals/positions to MongoDB | `persistence_app/Dockerfile` |
+| `market_data_dashboard` | UI + monitoring APIs + model catalog | `market_data_dashboard/Dockerfile` |
+| `strategy_eval_orchestrator` | Orchestrates historical evaluation runs | `strategy_eval_orchestrator/` |
+| `redis` | Event bus | upstream image |
+| `mongo` | Persistence store | upstream image |
 
-## Runtime Profiles
+Historical replay uses isolated variants (`*_historical`) that write to separate MongoDB collections and Redis topics — they never touch live data.
 
-- Baseline live stack: `redis`, `mongo`, `ingestion_app`, `snapshot_app`, `persistence_app`, `strategy_app`, `strategy_persistence_app`
-- Optional dashboard profile: `dashboard`
-- Historical replay profile: `persistence_app_historical`, `strategy_app_historical`, `strategy_persistence_app_historical`
-- Manual historical replay profile: `historical_replay`
+---
 
-Supported E2E target for this milestone:
+## Daily Workflow
 
-- `Live+Dashboard` only
-- `strategy_app` engine support:
-  - `deterministic`
-  - `ml_pure`
-- no supported live/runtime service should require `ml_pipeline` on `PYTHONPATH`
-
-## Quick Start (Docker Compose)
+### 1. Local Development
 
 ```bash
-cp .env.compose.example .env.compose
-docker compose --env-file .env.compose up -d --build redis mongo ingestion_app snapshot_app persistence_app strategy_app strategy_persistence_app
+# Create/activate venv (one-time)
+python -m venv .venv
+.venv/Scripts/activate          # Windows
+source .venv/bin/activate       # Linux/Mac
+
+pip install -r strategy_app/requirements.txt
+pip install -r market_data_dashboard/requirements.txt
+pip install pytest
 ```
 
-Compose startup is expected to work from repo root.
-
-The two external prerequisites that commonly block a fully live stack are:
-
-1. `ingestion_app/credentials.json` for live Kite/NSE access
-2. a valid staged `ml_pure` handoff plus runtime guard if `STRATEGY_ENGINE=ml_pure`
-
-To enable `ml_pure` runtime from published `ml_pipeline_2` artifacts, set:
+Run tests before committing:
 
 ```bash
+python -m pytest strategy_app/tests/ -q
+python -m pytest market_data_dashboard/tests/ -q
+```
+
+### 2. Commit and Push
+
+```bash
+git add <files>
+git commit -m "describe what and why"
+git push origin <branch>
+```
+
+For changes that go to production, merge or push to `main`:
+
+```bash
+git checkout main
+git merge --ff-only <branch>
+git push origin main
+```
+
+### 3. Deploy to GCP
+
+**Preferred path — always use the interactive lifecycle script:**
+
+```bash
+# From the repo root on the runtime VM, or via SSH:
+bash ./ops/gcp/runtime_lifecycle_interactive.sh
+```
+
+Choose:
+- `1` → Bootstrap infra (first time only, or after infra changes)
+- `2` → Start or restart runtime (normal deploy)
+- `3` → Historical replay (never use this for live deploys)
+
+**Manual sequence if you need it:**
+
+```bash
+# SSH in
+gcloud compute ssh savitasajwan03@option-trading-runtime-01 --zone asia-south1-b --project amittrading-493606
+
+# On the VM
+cd /opt/option_trading
+git pull --ff-only origin main
+sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml \
+  up -d --build strategy_app dashboard
+```
+
+See [`docs/runbooks/GCP_DEPLOYMENT.md`](docs/runbooks/GCP_DEPLOYMENT.md) for the full runbook.
+
+### 4. Verify After Deploy
+
+```bash
+# Container health
+gcloud compute ssh savitasajwan03@option-trading-runtime-01 --zone asia-south1-b --project amittrading-493606 \
+  --command "sudo docker ps --format 'table {{.Names}}\t{{.Status}}'"
+
+# Dashboard health
+curl -fsS http://<vm-ip>:8008/api/health
+
+# Strategy app logs (confirm engine started)
+gcloud compute ssh savitasajwan03@option-trading-runtime-01 --zone asia-south1-b --project amittrading-493606 \
+  --command "cd /opt/option_trading && sudo docker compose -f docker-compose.yml logs --tail 50 strategy_app"
+```
+
+Confirm in logs:
+- `engine=ml_pure` (or `deterministic`)
+- `model loaded` if ml_pure
+- No `ERROR` at startup
+
+---
+
+## Model Switching
+
+### Current model
+
+`staged_simple_s2_v1` — research checkpoint. **Not production-ready** (all gates failed). Use `paper` rollout stage only.
+
+```
+gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1/
+├── model/model.joblib
+├── config/profiles/ml_pure_staged_v1/threshold_report.json
+└── reports/training/latest.json
+```
+
+### How to switch models
+
+Edit `.env.compose`:
+
+```env
 STRATEGY_ENGINE=ml_pure
-ML_PURE_RUN_ID=<published_run_id>
-ML_PURE_MODEL_GROUP=banknifty_futures/h15_tp_auto
+ML_PURE_MODEL_PACKAGE=gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1/model/model.joblib
+ML_PURE_THRESHOLD_REPORT=gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1/config/profiles/ml_pure_staged_v1/threshold_report.json
+STRATEGY_ROLLOUT_STAGE=paper    # use capped_live only when production guard criteria are met
 ```
 
-Optional explicit-path mode:
+GCS paths are downloaded automatically on first startup. See [`strategy_app/docs/README.md`](strategy_app/docs/README.md) for guard file requirements before using `capped_live`.
+
+To switch back to deterministic:
+```env
+STRATEGY_ENGINE=deterministic
+ML_PURE_MODEL_PACKAGE=
+ML_PURE_THRESHOLD_REPORT=
+```
+
+### Dashboard model catalog
+
+Set `GCS_MODEL_ROOTS` to show GCS-hosted models in the catalog UI:
+
+```env
+GCS_MODEL_ROOTS=gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1
+```
+
+---
+
+## Health Checks
+
+| Check | Command |
+|---|---|
+| Container status | `sudo docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'` |
+| Dashboard health | `curl -fsS http://localhost:8008/api/health` |
+| Replay health | `curl -fsS http://localhost:8008/api/health/replay` |
+| Strategy runtime | `curl -fsS http://localhost:8008/api/health/strategy-runtime` |
+| Market data status | `curl -fsS http://localhost:8008/api/market-data/status` |
+| Model catalog | `curl -fsS http://localhost:8008/api/trading/models` |
+
+**snapshot_app is currently unhealthy.** To diagnose:
 
 ```bash
-ML_PURE_MODEL_PACKAGE=<abs-or-repo-relative-model.joblib>
-ML_PURE_THRESHOLD_REPORT=<abs-or-repo-relative-threshold_report.json>
+gcloud compute ssh savitasajwan03@option-trading-runtime-01 --zone asia-south1-b --project amittrading-493606 \
+  --command "cd /opt/option_trading && sudo docker compose -f docker-compose.yml logs --tail 80 snapshot_app"
 ```
 
-Do not mix run-id mode and explicit-path mode in one launch.
+---
 
-If PowerShell interpolation looks wrong, clear stale shell vars before `docker compose`:
-
-```powershell
-Remove-Item Env:ML_RUNTIME_GUARD_FILE -ErrorAction SilentlyContinue
-Remove-Item Env:ML_PURE_RUN_ID -ErrorAction SilentlyContinue
-Remove-Item Env:ML_PURE_MODEL_GROUP -ErrorAction SilentlyContinue
-Remove-Item Env:ML_PURE_MODEL_PACKAGE -ErrorAction SilentlyContinue
-Remove-Item Env:ML_PURE_THRESHOLD_REPORT -ErrorAction SilentlyContinue
-```
-
-Optional dashboard:
+## Local Start (No Docker)
 
 ```bash
-docker compose --env-file .env.compose --profile ui up -d dashboard
+python -m start_apps --include-dashboard    # start all services
+python -m stop_apps --include-dashboard     # stop all services
 ```
 
-## Local Python For VS Code
-
-The runtime is container-first, but VS Code still needs a local Python interpreter if you want:
-
-- Python language service and imports to resolve locally
-- host-side `pytest` runs
-- host-side helper commands like `python -m start_apps`
-
-On this Windows workspace, VS Code will not recognize Python until Python itself is installed on the host.
-
-Recommended Windows bootstrap:
-
-```powershell
-& "C:\Users\amits\AppData\Local\Programs\Python\Python312\python.exe" -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r market_data_dashboard\requirements.txt
-python -m pip install -r persistence_app\requirements.txt
-python -m pip install -r snapshot_app\requirements.txt
-python -m pip install -r strategy_app\requirements.txt
-python -m pip install pytest
-```
-
-This repo now includes `.vscode/settings.json` with:
-
-- interpreter path: `.venv\\Scripts\\python.exe`
-- pytest discovery enabled
-
-VS Code requirements on Windows:
-
-- install the `Python` extension by Microsoft
-- install `Pylance`
-- if `Python: Select Interpreter` does not appear, reload VS Code after opening a `.py` file
-
-After creating `.venv`, VS Code should pick up `.venv\\Scripts\\python.exe` automatically from workspace settings. If it still does not, you can run tests directly from the terminal:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest market_data_dashboard\test_historical_replay_app.py -q
-```
-
-## GCP Deployment
-
-For repeatable GCP operations, use:
-
-- [docs/runbooks/README.md](docs/runbooks/README.md) for the workflow index
-- [docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md](docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md) for historical parquet creation
-- [docs/runbooks/TRAINING_RELEASE_RUNBOOK.md](docs/runbooks/TRAINING_RELEASE_RUNBOOK.md) for staged training and publish
-- [docs/runbooks/GCP_DEPLOYMENT.md](docs/runbooks/GCP_DEPLOYMENT.md) for runtime deploy/cutover
-- [infra/gcp/README.md](infra/gcp/README.md) for Terraform scaffolding
-- [docker-compose.gcp.yml](docker-compose.gcp.yml) for Artifact Registry-backed service images
-
-Recommended production shape:
-
-- small always-on runtime VM for Live+Dashboard
-- separate disposable high-memory training VM
-- Artifact Registry for application images
-- Cloud Storage for published models and frozen ML inputs
-
-The optional dashboard profile is part of the supported target.
-Historical replay and eval profiles are still legacy and not part of the first supported fresh-machine E2E path.
-
-Optional historical replay:
+Or start strategy_app directly:
 
 ```bash
-docker compose --env-file .env.compose --profile historical up -d redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical
+python -m strategy_app.main --engine deterministic
+python -m strategy_app.main --engine ml_pure \
+  --ml-pure-model-package gs://...model.joblib \
+  --ml-pure-threshold-report gs://...threshold_report.json
 ```
 
-Manual replay job (one-shot):
+---
 
-```bash
-docker compose --env-file .env.compose --profile historical_replay up historical_replay
-```
+## Key Configuration Files
 
-This historical profile uses isolated topics and Mongo collections so replay does not mix with live strategy telemetry.
+| File | Purpose |
+|---|---|
+| `.env.compose` | All runtime env vars — the single source for compose deploys |
+| `.env.compose.example` | Template — copy to `.env.compose` on a fresh checkout |
+| `ops/gcp/operator.env` | GCP project/zone/VM names for ops scripts |
+| `ops/gcp/operator.env.example` | Template for operator.env |
+| `docker-compose.yml` | Base compose config (local build) |
+| `docker-compose.gcp.yml` | GCP overlay (GHCR images, GCP-specific mounts) |
 
-Mongo date-select replay (host command):
+---
 
-```powershell
-python -m snapshot_app.historical.mongo_replay_runner --date 2026-03-06 --mongo-port 27019
-```
+## Doc Index
 
-Evaluate persisted historical strategy results:
+### Start here
+| Doc | What it covers |
+|---|---|
+| **This file** | System overview, daily workflow, deploy, health |
+| [`docs/SYSTEM_SOURCE_OF_TRUTH.md`](docs/SYSTEM_SOURCE_OF_TRUTH.md) | Canonical rules — if docs conflict, this wins |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Component architecture and data flow |
+| [`docs/PROCESS_TOPOLOGY.md`](docs/PROCESS_TOPOLOGY.md) | Service startup order, topic wiring, port map |
 
-```bash
-docker compose --profile historical exec -T strategy_persistence_app_historical python -m persistence_app.strategy_evaluation --date-from 2024-01-01 --date-to 2024-01-31 --limit 20
-```
+### Runbooks (operational steps)
+| Doc | What it covers |
+|---|---|
+| [`docs/runbooks/README.md`](docs/runbooks/README.md) | Runbook index |
+| [`docs/runbooks/GCP_DEPLOYMENT.md`](docs/runbooks/GCP_DEPLOYMENT.md) | **Live deploy and historical replay on GCP** |
+| [`docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`](docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md) | Building parquet datasets for training |
+| [`docs/runbooks/TRAINING_RELEASE_RUNBOOK.md`](docs/runbooks/TRAINING_RELEASE_RUNBOOK.md) | ML training → publish → deploy handoff |
+| [`docs/runbooks/CLEANUP_ROLLBACK_RUNBOOK.md`](docs/runbooks/CLEANUP_ROLLBACK_RUNBOOK.md) | Rollback and environment cleanup |
 
-Save the evaluation JSON on the host:
+### Strategy app
+| Doc | What it covers |
+|---|---|
+| [`strategy_app/docs/README.md`](strategy_app/docs/README.md) | CLI args, env vars, engine modes, GCS model loading |
+| [`strategy_app/docs/STRATEGY_ML_FLOW.md`](strategy_app/docs/STRATEGY_ML_FLOW.md) | Full snapshot → decision pipeline with diagrams |
+| [`strategy_app/docs/OPERATOR_PLAYBOOK.md`](strategy_app/docs/OPERATOR_PLAYBOOK.md) | How to read monitoring output and alerts |
+| [`strategy_app/docs/RELEASE_READINESS_CHECKLIST.md`](strategy_app/docs/RELEASE_READINESS_CHECKLIST.md) | Gate checklist before any production deploy |
+| [`strategy_app/docs/IMPLEMENTATION_STATUS.md`](strategy_app/docs/IMPLEMENTATION_STATUS.md) | What is and isn't implemented |
 
-```bash
-docker compose --profile historical exec -T strategy_persistence_app_historical python -m persistence_app.strategy_evaluation --date-from 2024-01-01 --date-to 2024-01-31 --limit 20 > .run/strategy_evaluation_2024-01.json
-```
+### ML pipeline
+| Doc | What it covers |
+|---|---|
+| [`ml_pipeline_2/docs/README.md`](ml_pipeline_2/docs/README.md) | Training pipeline overview |
+| [`ml_pipeline_2/docs/MODEL_STATE_20260426.md`](ml_pipeline_2/docs/MODEL_STATE_20260426.md) | Current model research state and GCS paths |
 
-## Local Start (No Compose)
+### Dashboard
+| Doc | What it covers |
+|---|---|
+| [`market_data_dashboard/README.md`](market_data_dashboard/README.md) | All endpoints, env vars, model catalog, GCS discovery |
 
-Use one local launcher path:
-
-```bash
-python -m start_apps --include-dashboard
-```
-
-Stop:
-
-```bash
-python -m stop_apps --include-dashboard
-```
-
-## Key Runtime Rules
-
-- Session-gated live processing (IST market hours).
-- Fail-closed token behavior (invalid/missing token keeps ingestion idle).
-- Live and historical topics are isolated.
-- Snapshot builder contract is centralized in `snapshot_app.core.market_snapshot`.
-
-## Service Docs
-
-- [ingestion_app/README.md](ingestion_app/README.md)
-- [snapshot_app/README.md](snapshot_app/README.md)
-- [persistence_app/README.md](persistence_app/README.md)
-- [strategy_app/README.md](strategy_app/README.md)
-- [market_data_dashboard/README.md](market_data_dashboard/README.md)
+### Historical record (do not update)
+| Doc | Note |
+|---|---|
+| `strategy_app/docs/CURRENT_EVALUATION_BASELINE_2026-04-04.md` | Archived baseline |
+| `strategy_app/docs/TECHNICAL_BRIEFING_CODE_REVIEW_2026-03-19.md` | Archived code review |
+| `strategy_app/docs/code_review_2026-03-19.md` | Archived code review |

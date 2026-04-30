@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 from uuid import uuid4
@@ -8,8 +10,10 @@ from uuid import uuid4
 import joblib
 
 from ..contracts.manifests import load_and_resolve_manifest
-from ..experiment_control.runner import run_research
+from ..experiment_control.coordination import RunReuseMode
+from ..experiment_control.runner import ResearchRunFailed, run_research
 from ..experiment_control.state import utc_now
+from ..experiment_control.status import is_publish_integrity_ok, summary_execution_integrity
 from ..publishing.publish import published_models_root, repo_root
 from ..publishing.release import sync_published_model_group_to_gcs
 from .recipes import get_recipe_catalog
@@ -34,10 +38,10 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> Path:
     temp_path = _temp_path(path)
     try:
         temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        temp_path.replace(path)
+        _finalize_temp_path(temp_path, path)
     finally:
         if temp_path.exists():
-            temp_path.unlink()
+            _cleanup_temp_path(temp_path)
     return path
 
 
@@ -49,10 +53,10 @@ def _write_env(path: Path, payload: Dict[str, str]) -> Path:
             "\n".join(f"{key}={value}" for key, value in payload.items()) + "\n",
             encoding="utf-8",
         )
-        temp_path.replace(path)
+        _finalize_temp_path(temp_path, path)
     finally:
         if temp_path.exists():
-            temp_path.unlink()
+            _cleanup_temp_path(temp_path)
     return path
 
 
@@ -61,11 +65,40 @@ def _write_joblib(path: Path, payload: Dict[str, Any]) -> Path:
     temp_path = _temp_path(path)
     try:
         joblib.dump(payload, temp_path)
-        temp_path.replace(path)
+        _finalize_temp_path(temp_path, path)
     finally:
         if temp_path.exists():
-            temp_path.unlink()
+            _cleanup_temp_path(temp_path)
     return path
+
+
+def _cleanup_temp_path(temp_path: Path) -> None:
+    for _ in range(5):
+        try:
+            temp_path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            time.sleep(0.05)
+        except Exception:
+            return
+
+
+def _finalize_temp_path(temp_path: Path, path: Path) -> None:
+    last_replace_error: Optional[Exception] = None
+    for _ in range(5):
+        try:
+            temp_path.replace(path)
+            return
+        except PermissionError as exc:
+            last_replace_error = exc
+            time.sleep(0.05)
+    if last_replace_error is not None:
+        try:
+            shutil.copyfile(temp_path, path)
+            return
+        except Exception:
+            raise last_replace_error
+    raise RuntimeError(f"failed to finalize temp file {temp_path} -> {path}")
 
 
 def _to_rel_repo(path: Path, *, root: Path) -> str:
@@ -92,6 +125,10 @@ def assess_staged_release_candidate(*, run_dir: str | Path, force_publish_nonpub
     decision = str(publish_assessment.get("decision") or "HOLD").strip().upper()
     publishable = decision == "PUBLISH" and bool(publish_assessment.get("publishable", False))
     blocking_reasons = list(publish_assessment.get("blocking_reasons") or [])
+    integrity = summary_execution_integrity(summary)
+    if publishable and not is_publish_integrity_ok(summary):
+        publishable = False
+        blocking_reasons = [*blocking_reasons, f"execution_integrity={integrity}"]
     if force_publish_nonpublishable and not publishable:
         publishable = True
         decision = "PUBLISH"
@@ -102,6 +139,7 @@ def assess_staged_release_candidate(*, run_dir: str | Path, force_publish_nonpub
         "publishable": publishable,
         "decision": decision,
         "blocking_reasons": blocking_reasons,
+        "execution_integrity": integrity,
         "force_publish_nonpublishable": bool(force_publish_nonpublishable),
         "summary_path": str(summary_path),
         "summary": summary,
@@ -197,6 +235,44 @@ def _held_publish_summary(*, assessment: Dict[str, Any], model_group: str, profi
         "published_paths": {},
         "active_group_paths": {},
         "report_paths": {},
+    }
+
+
+def _failed_assessment(*, run_dir: Path, error: Exception) -> Dict[str, Any]:
+    reason = f"{type(error).__name__}: {error}"
+    return {
+        "created_at_utc": utc_now(),
+        "run_dir": str(run_dir.resolve()),
+        "run_id": str(run_dir.name),
+        "publishable": False,
+        "decision": "HOLD",
+        "blocking_reasons": [reason],
+        "error": {
+            "type": type(error).__name__,
+            "message": str(error),
+        },
+    }
+
+
+def _failed_publish_summary(*, assessment: Dict[str, Any], model_group: str, profile_id: str) -> Dict[str, Any]:
+    return {
+        "created_at_utc": utc_now(),
+        "publisher": "ml_pipeline_2",
+        "publish_kind": STAGED_RUNTIME_BUNDLE_KIND,
+        "publish_status": "failed",
+        "publish_decision": {"decision": "HOLD"},
+        "run_id": str(assessment["run_id"]),
+        "model_group": str(model_group),
+        "profile_id": str(profile_id),
+        "publish_assessment": {
+            "publishable": False,
+            "decision": "HOLD",
+            "blocking_reasons": list(assessment.get("blocking_reasons") or []),
+        },
+        "published_paths": {},
+        "active_group_paths": {},
+        "report_paths": {},
+        "error": dict(assessment.get("error") or {}),
     }
 
 
@@ -307,6 +383,7 @@ def release_staged_run(
     model_group: str,
     profile_id: str,
     run_output_root: Optional[Path] = None,
+    run_reuse_mode: RunReuseMode = "fail_if_exists",
     model_bucket_url: Optional[str] = None,
     root: Optional[Path] = None,
 ) -> Dict[str, Any]:
@@ -321,11 +398,43 @@ def release_staged_run(
         manifest_path = Path(config).resolve()
         resolved = load_and_resolve_manifest(manifest_path, validate_paths=True)
         force_publish_nonpublishable = bool((dict(resolved.get("publish") or {})).get("smoke_allow_non_publishable", False))
-        research_summary = run_research(
-            resolved,
-            run_output_root=(Path(run_output_root).resolve() if run_output_root is not None else None),
-        )
-        resolved_run_dir = Path(str(research_summary["output_root"])).resolve()
+        try:
+            research_summary = run_research(
+                resolved,
+                run_output_root=(Path(run_output_root).resolve() if run_output_root is not None else None),
+                run_reuse_mode=run_reuse_mode,
+            )
+            resolved_run_dir = Path(str(research_summary["output_root"])).resolve()
+        except ResearchRunFailed as exc:
+            resolved_run_dir = Path(exc.output_root).resolve()
+            assessment = _failed_assessment(run_dir=resolved_run_dir, error=exc.__cause__ or exc)
+            release_root = resolved_run_dir / "release"
+            assessment_path = _write_json(release_root / "assessment.json", assessment)
+            publish_summary = _failed_publish_summary(
+                assessment=assessment,
+                model_group=model_group,
+                profile_id=profile_id,
+            )
+            result = {
+                "created_at_utc": utc_now(),
+                "status": "failed",
+                "release_status": "failed",
+                "run_dir": str(resolved_run_dir),
+                "run_id": str(assessment["run_id"]),
+                "model_group": str(model_group),
+                "profile_id": str(profile_id),
+                "research_summary": None,
+                "assessment": assessment,
+                "publish": publish_summary,
+                "gcs_sync": None,
+                "live_handoff": None,
+                "paths": {
+                    "assessment": str(assessment_path.resolve()),
+                },
+            }
+            summary_path = _write_json(release_root / "release_summary.json", result)
+            result["paths"]["release_summary"] = str(summary_path.resolve())
+            return result
     else:
         resolved_run_dir = Path(str(run_dir)).resolve()
 

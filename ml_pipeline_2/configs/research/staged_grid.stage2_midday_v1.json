@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.stage2_focus_v1.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_stage2_midday_v1"
+  },
+  "selection": {
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.56,
+      "brier_max": 0.225
+    },
+    "robustness_probe": {
+      "enabled": true,
+      "top_k": 3,
+      "iterations": 200,
+      "random_seed": 42,
+      "splits": [
+        "research_valid",
+        "final_holdout"
+      ],
+      "resample_unit": "trade_date"
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "midday_baseline",
+        "model_group_suffix": "_scenario_midday_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_midday_baseline"
+          },
+          "training": {
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": [
+                "MIDDAY"
+              ]
+            },
+            "search_options_by_stage": {
+              "stage2": {
+                "max_experiments": 10,
+                "max_elapsed_seconds": 3600
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_strict_winner",
+        "model_group_suffix": "_scenario_midday_strict_winner",
+        "inherit_best_from": [
+          "midday_baseline"
+        ],
+        "reuse_stage1_from": "midday_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_midday_strict_winner"
+          },
+          "training": {
+            "stage2_label_filter": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0014,
+              "require_positive_winner_after_cost": true,
+              "max_opposing_return_after_cost": -0.0002
+            },
+            "search_options_by_stage": {
+              "stage2": {
+                "max_experiments": 10,
+                "max_elapsed_seconds": 3600
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_time_aware_pool",
+        "model_group_suffix": "_scenario_midday_time_aware_pool",
+        "inherit_best_from": [
+          "midday_baseline"
+        ],
+        "reuse_stage1_from": "midday_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_midday_time_aware_pool"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": [
+                "fo_expiry_aware_v3",
+                "fo_no_opening_range"
+              ]
+            }
+          },
+          "training": {
+            "search_options_by_stage": {
+              "stage2": {
+                "max_experiments": 10,
+                "max_elapsed_seconds": 3600
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_iv_oi_pool",
+        "model_group_suffix": "_scenario_midday_iv_oi_pool",
+        "inherit_best_from": [
+          "midday_baseline"
+        ],
+        "reuse_stage1_from": "midday_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_midday_iv_oi_pool"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": [
+                "fo_expiry_aware_v3",
+                "fo_oi_pcr_momentum",
+                "fo_iv_skew_only"
+              ]
+            }
+          },
+          "training": {
+            "search_options_by_stage": {
+              "stage2": {
+                "max_experiments": 10,
+                "max_elapsed_seconds": 3600
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_stricter_abstain",
+        "model_group_suffix": "_scenario_midday_stricter_abstain",
+        "inherit_best_from": [
+          "midday_strict_winner"
+        ],
+        "reuse_stage1_from": "midday_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_midday_stricter_abstain"
+          },
+          "training": {
+            "stage2_label_filter": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0018,
+              "require_positive_winner_after_cost": true,
+              "max_opposing_return_after_cost": -0.0004
+            },
+            "search_options_by_stage": {
+              "stage2": {
+                "max_experiments": 10,
+                "max_elapsed_seconds": 3600
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

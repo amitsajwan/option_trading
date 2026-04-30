@@ -679,6 +679,211 @@ def test_build_stage2_labels_drops_invalid_direction_rows() -> None:
     assert labeled["move_first_hit_side"].tolist() == ["up", "down"]
 
 
+def test_build_stage2_labels_direction_or_no_trade_marks_abstains_from_target_redesign() -> None:
+    stage_frame = pd.DataFrame(
+        [
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:15:00"),
+                "snapshot_id": "snap_a",
+            },
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:16:00"),
+                "snapshot_id": "snap_b",
+            },
+        ]
+    )
+    oracle = pd.DataFrame(
+        [
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:15:00"),
+                "snapshot_id": "snap_a",
+                "entry_label": 1,
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0030,
+                "best_pe_net_return_after_cost": -0.0003,
+            },
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:16:00"),
+                "snapshot_id": "snap_b",
+                "entry_label": 1,
+                "direction_label": "PE",
+                "best_ce_net_return_after_cost": 0.0004,
+                "best_pe_net_return_after_cost": 0.0011,
+            },
+        ]
+    )
+
+    labeled = staged_pipeline.build_stage2_labels_direction_or_no_trade(
+        stage_frame,
+        oracle,
+        {
+            "training": {
+                "stage2_target_redesign": {
+                    "enabled": True,
+                    "min_directional_edge_after_cost": 0.0018,
+                    "min_winner_return_after_cost": 0.0010,
+                    "max_opposing_return_after_cost": -0.0002,
+                    "max_kept_fraction": 1.0,
+                    "conviction_score": "edge_winner_min",
+                }
+            }
+        },
+    )
+
+    assert labeled["snapshot_id"].tolist() == ["snap_a", "snap_b"]
+    assert labeled["move_label"].tolist() == [1.0, 0.0]
+    assert labeled["move_first_hit_side"].tolist() == ["up", "down"]
+
+
+def test_apply_stage2_label_filter_can_enforce_valid_winner_after_cost() -> None:
+    stage2_frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-02", "2024-01-02", "2024-01-02"],
+            "timestamp": pd.to_datetime(
+                ["2024-01-02 09:16:00", "2024-01-02 09:17:00", "2024-01-02 09:18:00"]
+            ),
+            "snapshot_id": ["s1", "s2", "s3"],
+            "direction_label": ["CE", "CE", "PE"],
+            "best_ce_net_return_after_cost": [0.0015, 0.0020, -0.0004],
+            "best_pe_net_return_after_cost": [0.0008, 0.0002, 0.0005],
+            "direction_return_edge_after_cost": [0.0007, 0.0018, 0.0009],
+        }
+    )
+
+    filtered, meta = staged_pipeline._apply_stage2_label_filter(
+        stage2_frame,
+        {
+            "training": {
+                "stage2_label_filter": {
+                    "enabled": True,
+                    "min_directional_edge_after_cost": 0.0005,
+                    "require_positive_winner_after_cost": True,
+                    "max_opposing_return_after_cost": 0.0,
+                }
+            }
+        },
+    )
+
+    assert filtered["snapshot_id"].tolist() == ["s3"]
+    assert meta["rows_before"] == 3
+    assert meta["rows_after"] == 1
+    assert meta["valid_winner_rows_dropped"] == 2
+
+
+def test_apply_stage2_session_filter_keeps_only_requested_buckets() -> None:
+    stage2_frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-02"] * 4,
+            "timestamp": pd.to_datetime(
+                [
+                    "2024-01-02 09:20:00",
+                    "2024-01-02 10:30:00",
+                    "2024-01-02 12:10:00",
+                    "2024-01-02 14:10:00",
+                ]
+            ),
+            "snapshot_id": ["s1", "s2", "s3", "s4"],
+            "direction_label": ["CE", "PE", "CE", "PE"],
+        }
+    )
+
+    filtered, meta = staged_pipeline._apply_stage2_session_filter(
+        stage2_frame,
+        {
+            "training": {
+                "stage2_session_filter": {
+                    "enabled": True,
+                    "include_buckets": ["MIDDAY", "MORNING"],
+                }
+            }
+        },
+    )
+
+    assert filtered["snapshot_id"].tolist() == ["s2", "s3"]
+    assert meta["rows_before"] == 4
+    assert meta["rows_after"] == 2
+    assert meta["rows_dropped"] == 2
+    assert meta["observed_buckets_after"] == ["MIDDAY", "MORNING"]
+
+
+def test_build_stage2_split_diagnostics_reports_balanced_scores_and_buckets() -> None:
+    frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-01"] * 8,
+            "timestamp": pd.to_datetime(
+                [
+                    "2024-01-01 09:20:00",
+                    "2024-01-01 09:45:00",
+                    "2024-01-01 10:30:00",
+                    "2024-01-01 11:45:00",
+                    "2024-01-01 12:15:00",
+                    "2024-01-01 13:00:00",
+                    "2024-01-01 14:00:00",
+                    "2024-01-01 14:45:00",
+                ]
+            ),
+            "snapshot_id": [f"s{idx}" for idx in range(8)],
+            "direction_label": ["CE", "PE", "CE", "PE", "CE", "PE", "CE", "PE"],
+            "direction_return_edge_after_cost": [0.0010, 0.0011, 0.0012, 0.0013, 0.0014, 0.0015, 0.0016, 0.0017],
+            "ctx_is_expiry_day": [1, 1, 0, 0, 0, 0, 0, 0],
+            "ctx_regime_expiry_near": [0, 0, 1, 1, 0, 0, 0, 0],
+            # move_label=1 marks rows as actionable trades so calibration is computed
+            "move_label": [1, 1, 1, 1, 1, 1, 1, 1],
+        }
+    )
+    scores = frame.loc[:, staged_pipeline.KEY_COLUMNS].copy()
+    scores["direction_up_prob"] = [0.88, 0.22, 0.76, 0.28, 0.67, 0.31, 0.73, 0.19]
+
+    report = staged_pipeline._build_stage2_split_diagnostics(
+        frame,
+        scores,
+        split_name="research_valid",
+    )
+
+    assert report["split"] == "research_valid"
+    assert report["rows"] == 8
+    assert report["positive_rate"] == 0.5
+    assert len(report["probability_histogram"]["bins"]) == 10
+    assert report["score_separation"]["positive_mean_prob"] > report["score_separation"]["negative_mean_prob"]
+    assert report["calibration"]["calibration_error"] is not None
+    assert {row["group"] for row in report["quality_by_expiry_regime"]} >= {"EXPIRY_DAY", "NEAR_EXPIRY", "REGULAR"}
+    assert {row["group"] for row in report["quality_by_time_bucket"]} >= {"OPENING", "MORNING", "MIDDAY", "LATE_SESSION"}
+
+
+def test_build_stage2_split_diagnostics_handles_near_constant_probs_and_unknown_buckets() -> None:
+    frame = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-01"] * 4,
+            "timestamp": [pd.NaT, pd.NaT, pd.NaT, pd.NaT],
+            "snapshot_id": [f"k{idx}" for idx in range(4)],
+            "direction_label": ["CE", "PE", "CE", "PE"],
+            "direction_return_edge_after_cost": [0.0009, 0.0010, 0.0011, 0.0012],
+        }
+    )
+    scores = frame.loc[:, staged_pipeline.KEY_COLUMNS].copy()
+    scores["direction_up_prob"] = [0.5, 0.5, 0.5, 0.5]
+
+    report = staged_pipeline._build_stage2_split_diagnostics(
+        frame,
+        scores,
+        split_name="final_holdout",
+    )
+
+    assert report["quality"]["brier"] == 0.25
+    assert report["score_separation"]["mean_gap"] == 0.0
+    assert report["calibration"]["calibration_error"] == 0.0
+    assert report["quality_by_time_bucket"] == [
+        {"group": "UNKNOWN", "rows": 4, "positive_rate": 0.5, "roc_auc": 0.5, "brier": 0.25}
+    ]
+    assert report["quality_by_expiry_regime"] == [
+        {"group": "REGULAR", "rows": 4, "positive_rate": 0.5, "roc_auc": 0.5, "brier": 0.25}
+    ]
+
+
 def test_view_registry_is_cached() -> None:
     assert view_registry() is view_registry()
 
@@ -815,6 +1020,394 @@ def test_combined_policy_evaluation_keeps_full_rows_total_when_stage3_scores_are
     assert summary["rows_total"] == len(utility)
     assert summary["trades"] == 2
     assert selected["snapshot_id"].tolist() == ["snap_a", "snap_b"]
+
+
+def test_apply_stage2_label_filter_stricter_abstain_reduces_rows_deterministically() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:00:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0030,
+                "best_pe_net_return_after_cost": -0.0005,
+                "direction_return_edge_after_cost": 0.0035,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:01:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0020,
+                "best_pe_net_return_after_cost": 0.0001,
+                "direction_return_edge_after_cost": 0.0019,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:02:00"),
+                "direction_label": "PE",
+                "best_ce_net_return_after_cost": 0.0002,
+                "best_pe_net_return_after_cost": 0.0025,
+                "direction_return_edge_after_cost": 0.0023,
+            },
+        ]
+    )
+
+    filtered, meta = staged_pipeline._apply_stage2_label_filter(  # type: ignore[attr-defined]
+        frame,
+        {
+            "training": {
+                "stage2_label_filter": {
+                    "enabled": True,
+                    "min_directional_edge_after_cost": 0.0018,
+                    "require_positive_winner_after_cost": True,
+                    "max_opposing_return_after_cost": -0.0004,
+                }
+            }
+        },
+    )
+
+    assert len(filtered) == 1
+    assert filtered["direction_label"].tolist() == ["CE"]
+    assert meta["rows_before"] == 3
+    assert meta["rows_after"] == 1
+    assert meta["rows_dropped"] == 2
+
+
+def test_apply_stage2_target_redesign_reduces_ambiguous_rows() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:00:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0030,
+                "best_pe_net_return_after_cost": -0.0003,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:01:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0011,
+                "best_pe_net_return_after_cost": 0.0002,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:02:00"),
+                "direction_label": "PE",
+                "best_ce_net_return_after_cost": -0.0003,
+                "best_pe_net_return_after_cost": 0.0022,
+            },
+        ]
+    )
+
+    filtered, meta = staged_pipeline._apply_stage2_target_redesign(  # type: ignore[attr-defined]
+        frame,
+        {
+            "training": {
+                "stage2_target_redesign": {
+                    "enabled": True,
+                    "min_directional_edge_after_cost": 0.0018,
+                    "min_winner_return_after_cost": 0.0010,
+                    "max_opposing_return_after_cost": -0.0002,
+                }
+            }
+        },
+    )
+
+    assert len(filtered) == 2
+    assert filtered["direction_label"].tolist() == ["CE", "PE"]
+    assert meta["rows_before"] == 3
+    assert meta["rows_after"] == 2
+    assert meta["rows_dropped"] == 1
+
+
+def test_apply_stage2_target_redesign_can_keep_only_high_conviction_fraction() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:00:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0040,
+                "best_pe_net_return_after_cost": -0.0004,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:01:00"),
+                "direction_label": "CE",
+                "best_ce_net_return_after_cost": 0.0032,
+                "best_pe_net_return_after_cost": -0.0001,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:02:00"),
+                "direction_label": "PE",
+                "best_ce_net_return_after_cost": -0.0002,
+                "best_pe_net_return_after_cost": 0.0028,
+            },
+            {
+                "timestamp": pd.Timestamp("2024-01-01 12:03:00"),
+                "direction_label": "PE",
+                "best_ce_net_return_after_cost": 0.0001,
+                "best_pe_net_return_after_cost": 0.0022,
+            },
+        ]
+    )
+
+    filtered, meta = staged_pipeline._apply_stage2_target_redesign(  # type: ignore[attr-defined]
+        frame,
+        {
+            "training": {
+                "stage2_target_redesign": {
+                    "enabled": True,
+                    "min_directional_edge_after_cost": 0.0018,
+                    "min_winner_return_after_cost": 0.0010,
+                    "max_opposing_return_after_cost": 0.0001,
+                    "max_kept_fraction": 0.5,
+                    "conviction_score": "edge_winner_min",
+                }
+            }
+        },
+    )
+
+    assert len(filtered) == 2
+    assert filtered["timestamp"].tolist() == [
+        pd.Timestamp("2024-01-01 12:00:00"),
+        pd.Timestamp("2024-01-01 12:01:00"),
+    ]
+    assert "direction_winner_return_after_cost" in filtered.columns
+    assert "direction_target_conviction_score" in filtered.columns
+    assert meta["post_threshold_rows"] == 4
+    assert meta["rows_after"] == 2
+    assert meta["conviction_rank_rows_dropped"] == 2
+    assert meta["conviction_keep_count"] == 2
+    assert meta["conviction_score_floor"] is not None
+
+
+def test_select_direction_gate_policy_prefers_trade_gate_and_direction_thresholds() -> None:
+    utility, stage1_scores, stage2_scores, _ = _policy_fixture()
+    stage2_scores = stage2_scores.copy()
+    stage2_scores["direction_trade_prob"] = [0.82, 0.76, 0.48, 0.74]
+    stage1_policy = {"selected_threshold": 0.45}
+    policy = staged_pipeline.select_direction_gate_policy(
+        stage2_scores,
+        utility,
+        stage1_scores,
+        stage1_policy,
+        {
+            "trade_threshold_grid": [0.45, 0.60],
+            "ce_threshold_grid": [0.55, 0.60],
+            "pe_threshold_grid": [0.55, 0.60],
+            "min_edge_grid": [0.05, 0.10],
+        },
+    )
+
+    assert policy["policy_id"] == "direction_gate_threshold_v1"
+    assert "selected_trade_threshold" in policy
+    assert policy["selected_trade_threshold"] in {0.45, 0.60}
+
+
+def test_direction_gate_economic_balance_policy_prefers_balanced_non_negative_candidate() -> None:
+    utility, stage1_scores, stage2_scores, _ = _policy_fixture()
+    utility = utility.copy()
+    utility.loc[utility["snapshot_id"].isin(["snap_c", "snap_d"]), "best_ce_net_return_after_cost"] = [-0.01, -0.01]
+    stage1_scores = stage1_scores.copy()
+    stage1_scores.loc[stage1_scores["snapshot_id"] == "snap_d", "entry_prob"] = 0.48
+    stage2_scores = stage2_scores.copy()
+    stage2_scores["direction_trade_prob"] = [0.8, 0.8, 0.8, 0.8]
+    stage2_scores["direction_up_prob"] = [0.82, 0.20, 0.72, 0.74]
+
+    policy = staged_pipeline.select_direction_gate_economic_balance_policy(
+        stage2_scores,
+        utility,
+        stage1_scores,
+        {"selected_threshold": 0.45},
+        {
+            "trade_threshold_grid": [0.45],
+            "ce_threshold_grid": [0.55, 0.75],
+            "pe_threshold_grid": [0.55],
+            "min_edge_grid": [0.05],
+            "validation_min_trades_soft": 2,
+            "side_share_min": 0.3,
+            "side_share_max": 0.7,
+            "prefer_non_negative_returns": True,
+            "prefer_profit_factor_min": 1.0,
+        },
+    )
+
+    assert policy["policy_id"] == "direction_gate_economic_balance_v1"
+    assert policy["selected_ce_threshold"] == 0.75
+    assert policy["selected_validation_summary"]["side_share_in_band"] is True
+    assert float(policy["selected_validation_summary"]["net_return_sum"]) > 0.0
+
+
+def test_recipe_economic_balance_policy_prefers_non_negative_candidate() -> None:
+    utility = pd.DataFrame(
+        [
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:15:00"),
+                "snapshot_id": "a",
+                "best_available_net_return_after_cost": 0.01,
+                "best_ce_net_return_after_cost": 0.01,
+                "best_pe_net_return_after_cost": -0.01,
+                "L0__ce_net_return": 0.01,
+                "L0__pe_net_return": -0.01,
+                "L1__ce_net_return": -0.02,
+                "L1__pe_net_return": -0.02,
+            },
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:16:00"),
+                "snapshot_id": "b",
+                "best_available_net_return_after_cost": 0.008,
+                "best_ce_net_return_after_cost": -0.01,
+                "best_pe_net_return_after_cost": 0.008,
+                "L0__ce_net_return": -0.01,
+                "L0__pe_net_return": 0.004,
+                "L1__ce_net_return": -0.03,
+                "L1__pe_net_return": -0.03,
+            },
+        ]
+    )
+    stage1_scores = pd.DataFrame(
+        [
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:15:00"), "snapshot_id": "a", "entry_prob": 0.9},
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:16:00"), "snapshot_id": "b", "entry_prob": 0.9},
+        ]
+    )
+    stage2_scores = pd.DataFrame(
+        [
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:15:00"), "snapshot_id": "a", "direction_up_prob": 0.8},
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:16:00"), "snapshot_id": "b", "direction_up_prob": 0.2},
+        ]
+    )
+    stage3_scores = pd.DataFrame(
+        [
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:15:00"), "snapshot_id": "a", "recipe_prob_L0": 0.70, "recipe_prob_L1": 0.55},
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:16:00"), "snapshot_id": "b", "recipe_prob_L0": 0.45, "recipe_prob_L1": 0.50},
+        ]
+    )
+
+    policy = staged_pipeline.select_recipe_economic_balance_policy(
+        stage3_scores,
+        utility,
+        stage1_scores,
+        stage2_scores,
+        {"selected_threshold": 0.45},
+        {"policy_id": "direction_dual_threshold_v1", "selected_ce_threshold": 0.55, "selected_pe_threshold": 0.55, "selected_min_edge": 0.05},
+        {
+            "threshold_grid": [0.45, 0.65],
+            "margin_grid": [0.02],
+            "validation_min_trades_soft": 1,
+            "side_share_min": 0.3,
+            "side_share_max": 0.7,
+            "prefer_non_negative_returns": True,
+            "prefer_profit_factor_min": 1.0,
+        },
+        ["L0", "L1"],
+    )
+
+    assert policy["policy_id"] == "recipe_economic_balance_v1"
+    assert policy["selected_threshold"] == 0.65
+    assert float(policy["selected_validation_summary"]["net_return_sum"]) > 0.0
+
+
+def test_recipe_fixed_baseline_guard_can_select_fixed_recipe_and_combined_policy_honors_it() -> None:
+    utility = pd.DataFrame(
+        [
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:15:00"),
+                "snapshot_id": "a",
+                "best_available_net_return_after_cost": 0.01,
+                "best_ce_net_return_after_cost": 0.01,
+                "best_pe_net_return_after_cost": -0.01,
+                "L0__ce_net_return": 0.01,
+                "L0__pe_net_return": -0.01,
+                "L1__ce_net_return": -0.02,
+                "L1__pe_net_return": -0.02,
+            },
+            {
+                "trade_date": "2024-01-01",
+                "timestamp": pd.Timestamp("2024-01-01 09:16:00"),
+                "snapshot_id": "b",
+                "best_available_net_return_after_cost": 0.008,
+                "best_ce_net_return_after_cost": -0.01,
+                "best_pe_net_return_after_cost": 0.008,
+                "L0__ce_net_return": -0.01,
+                "L0__pe_net_return": 0.008,
+                "L1__ce_net_return": -0.03,
+                "L1__pe_net_return": -0.03,
+            },
+        ]
+    )
+    stage1_scores = pd.DataFrame(
+        [
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:15:00"), "snapshot_id": "a", "entry_prob": 0.9},
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:16:00"), "snapshot_id": "b", "entry_prob": 0.9},
+        ]
+    )
+    stage2_scores = pd.DataFrame(
+        [
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:15:00"), "snapshot_id": "a", "direction_up_prob": 0.8},
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:16:00"), "snapshot_id": "b", "direction_up_prob": 0.2},
+        ]
+    )
+    stage3_scores = pd.DataFrame(
+        [
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:15:00"), "snapshot_id": "a", "recipe_prob_L0": 0.55, "recipe_prob_L1": 0.80},
+            {"trade_date": "2024-01-01", "timestamp": pd.Timestamp("2024-01-01 09:16:00"), "snapshot_id": "b", "recipe_prob_L0": 0.52, "recipe_prob_L1": 0.78},
+        ]
+    )
+    stage2_policy = {
+        "policy_id": "direction_dual_threshold_v1",
+        "selected_ce_threshold": 0.55,
+        "selected_pe_threshold": 0.55,
+        "selected_min_edge": 0.05,
+    }
+    stage1_policy = {"selected_threshold": 0.45}
+    policy_config = {
+        "threshold_grid": [0.5],
+        "margin_grid": [0.02],
+        "validation_min_trades_soft": 1,
+        "side_share_min": 0.3,
+        "side_share_max": 0.7,
+        "prefer_non_negative_returns": True,
+        "prefer_profit_factor_min": 1.0,
+        "non_inferior_drawdown_slack": 0.01,
+    }
+
+    policy = staged_pipeline.select_recipe_fixed_baseline_guard_policy(
+        stage3_scores,
+        utility,
+        stage1_scores,
+        stage2_scores,
+        stage1_policy,
+        stage2_policy,
+        policy_config,
+        ["L0", "L1"],
+    )
+
+    summary = staged_pipeline._evaluate_combined_policy(  # type: ignore[attr-defined]
+        utility,
+        stage1_scores,
+        stage2_scores,
+        stage3_scores,
+        stage1_threshold=float(stage1_policy["selected_threshold"]),
+        stage2_policy=stage2_policy,
+        stage3_policy=policy,
+        recipe_ids=["L0", "L1"],
+    )
+    trade_rows = staged_pipeline._combined_policy_trade_rows(  # type: ignore[attr-defined]
+        stage3_scores.loc[:, staged_pipeline.KEY_COLUMNS].copy(),
+        utility,
+        stage1_scores,
+        stage2_scores,
+        stage3_scores,
+        stage1_threshold=float(stage1_policy["selected_threshold"]),
+        stage2_policy=stage2_policy,
+        stage3_policy=policy,
+        recipe_ids=["L0", "L1"],
+    )
+
+    assert policy["policy_id"] == "recipe_fixed_baseline_guard_v1"
+    assert policy["selection_mode"] == "fixed_recipe"
+    assert policy["selected_recipe_id"] == "L0"
+    assert float(summary["net_return_sum"]) > 0.0
+    assert summary["selected_recipe_id"] == "L0"
+    assert set(trade_rows["selected_recipe"]) == {"L0"}
 
 
 def test_vectorized_policy_selection_matches_legacy_loops() -> None:

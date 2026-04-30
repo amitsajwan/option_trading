@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Strategy Monitor · NIFTY 50</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="tokens.css" />
+
+<template id="__bundler_thumbnail">
+  <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+    <rect width="120" height="120" fill="#F6F4EF"/>
+    <g stroke="#0B0F14" stroke-width="2" fill="none">
+      <path d="M24 78 L38 62 L52 70 L66 48 L80 56 L96 36"/>
+    </g>
+    <circle cx="96" cy="36" r="4" fill="#0A8F5C"/>
+    <rect x="24" y="88" width="72" height="2" fill="#0B0F14" opacity="0.15"/>
+    <rect x="24" y="92" width="48" height="2" fill="#0B0F14" opacity="0.10"/>
+  </svg>
+</template>
+
+<style>
+  #app-shell { min-height: 100vh; display: flex; flex-direction: column; background: var(--paper); }
+  .topnav {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 20px; border-bottom: 1px solid var(--line-1);
+    background: var(--paper); position: sticky; top: 0; z-index: 20;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 8px;
+    font-weight: 600; font-size: 13px; color: var(--ink);
+    font-family: var(--f-mono); letter-spacing: -0.01em;
+  }
+  .brand-mark {
+    width: 20px; height: 20px; border-radius: 4px; background: var(--ink);
+    display: grid; place-items: center; color: var(--paper);
+    font-family: var(--f-mono); font-size: 11px; font-weight: 700;
+  }
+  .mode-seg {
+    display: inline-flex; background: var(--paper-2); border: 1px solid var(--line-1);
+    border-radius: var(--r-3); padding: 3px;
+  }
+  .mode-seg button {
+    background: transparent; border: 0; font: inherit; color: var(--ink-3);
+    padding: 5px 12px; border-radius: var(--r-2); cursor: pointer; font-size: 12px;
+    font-family: var(--f-mono); letter-spacing: 0.02em; display: inline-flex; align-items: center; gap: 5px;
+  }
+  .mode-seg button.active { background: var(--paper); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+  .topnav .spacer { flex: 1; }
+  .topnav .user {
+    display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--ink-3); font-family: var(--f-mono);
+  }
+  .status-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--pos); box-shadow: 0 0 0 3px var(--pos-wash);
+  }
+  .loading-shell {
+    flex: 1; display: grid; place-items: center; color: var(--ink-3);
+    font-family: var(--f-mono); font-size: 12px;
+  }
+  @media (max-width: 900px) {
+    .topnav { padding: 8px 12px; gap: 10px; }
+    .topnav .user { display: none; }
+    .brand span.long { display: none; }
+    .mode-seg button { padding: 4px 8px; font-size: 11px; }
+  }
+
+  /* Tweaks-panel-specific  */
+  .kill-banner {
+    background: var(--neg-wash); color: var(--neg); border: 1px solid rgba(194,62,47,0.3);
+    border-radius: var(--r-3); padding: 10px 14px; margin: 0 16px 10px; display: flex;
+    align-items: center; gap: 10px; font-size: 12px;
+  }
+  .kill-banner strong { color: var(--neg); }
+</style>
+</head>
+<body>
+
+<div id="app-shell">
+  <nav class="topnav">
+    <div class="brand">
+      <span class="brand-mark">Q</span>
+      <span class="long">Quiet Operator</span>
+    </div>
+    <div id="mode-segment" class="mode-seg">
+      <button data-mode="live"><span class="status-dot"></span> Live</button>
+      <button data-mode="replay">◷ Replay</button>
+    </div>
+    <div class="spacer"></div>
+    <span id="kill-indicator" class="chip" style="display:none"><span class="dot"></span>Engine halted</span>
+    <span class="user mobile-hide"><span class="status-dot"></span>ops · amitsajwan</span>
+  </nav>
+
+  <div id="kill-banner-slot"></div>
+  <main id="page" class="page">
+    <div class="loading-shell">loading…</div>
+  </main>
+</div>
+
+<script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="core.js?v=5"></script>
+<script type="text/babel" src="components.jsx?v=5"></script>
+<script type="text/babel" src="tweaks-panel.jsx?v=5"></script>
+<script type="text/babel" src="views.jsx?v=5"></script>
+
+<script type="text/babel">
+  const { useState, useEffect } = React;
+
+  // Persisted tweak defaults
+  const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+    "mode": "replay",
+    "density": "compact",
+    "showAlerts": true,
+    "showStrategyBars": true,
+    "chartHeight": 340,
+    "speedPreset": 8,
+    "replayAuto": true
+  }/*EDITMODE-END*/;
+
+  function App() {
+    const [mode, setMode] = useState(TWEAK_DEFAULTS.mode || 'live');
+    const [killed, setKilled] = useState(false);
+    const [confirmOpen, setConfirmOpen] = useState(false);
+    const [tweaks, setTweaks] = useState(TWEAK_DEFAULTS);
+
+    useEffect(() => {
+      // Sync mode buttons
+      document.querySelectorAll('#mode-segment button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+        btn.onclick = () => setMode(btn.dataset.mode);
+      });
+    }, [mode]);
+
+    useEffect(() => {
+      const ind = document.getElementById('kill-indicator');
+      if (ind) ind.style.display = killed ? 'inline-flex' : 'none';
+      const slot = document.getElementById('kill-banner-slot');
+      if (!slot) return;
+      if (killed) {
+        slot.innerHTML = '<div class="kill-banner">' +
+          '<strong>Engine halted.</strong> New signals are rejected. ' +
+          '<button class="btn sm" style="margin-left:auto">Resume…</button>' +
+          '</div>';
+      } else {
+        slot.innerHTML = '';
+      }
+    }, [killed]);
+
+    // Tweaks are managed by TweaksPanel itself (protocol + open state).
+    // We only need to track mode/density/etc. state here.
+
+    function updateTweak(patch) {
+      setTweaks(prev => {
+        const next = { ...prev, ...patch };
+        try {
+          window.parent.postMessage({ type: '__edit_mode_set_keys', edits: patch }, '*');
+        } catch (err) {}
+        return next;
+      });
+      if (patch.mode) setMode(patch.mode);
+    }
+
+    // apply density to body class
+    useEffect(() => {
+      document.body.dataset.density = tweaks.density || 'comfortable';
+    }, [tweaks.density]);
+
+    const onKillClick = () => setConfirmOpen(true);
+    const onConfirmKill = () => { setKilled(true); setConfirmOpen(false); };
+
+    const monitorEl = mode === 'live'
+      ? <LiveMonitor onModeSwitch={() => setMode('replay')} onKillClick={onKillClick} />
+      : <ReplayMonitor onModeSwitch={() => setMode('live')} />;
+
+    return (
+      <>
+        {monitorEl}
+        <ConfirmModal
+          open={confirmOpen}
+          title="Halt engine?"
+          message="This prevents the engine from acting on new signals. Open positions remain until manually closed or stop-out. Type HALT to confirm."
+          confirmText="Halt engine"
+          requireType="HALT"
+          danger
+          onCancel={() => setConfirmOpen(false)}
+          onConfirm={onConfirmKill}
+        />
+        <TweaksPanel title="Tweaks">
+            <TweakSection label="Mode">
+              <TweakRadio
+                label="View"
+                value={tweaks.mode}
+                options={[{ value: 'live', label: 'Live' }, { value: 'replay', label: 'Replay' }]}
+                onChange={v => updateTweak({ mode: v })}
+              />
+            </TweakSection>
+            <TweakSection label="Layout">
+              <TweakRadio
+                label="Density"
+                value={tweaks.density}
+                options={[
+                  { value: 'compact', label: 'Compact' },
+                  { value: 'comfortable', label: 'Comfortable' },
+                ]}
+                onChange={v => updateTweak({ density: v })}
+              />
+              <TweakSlider
+                label="Chart height"
+                value={tweaks.chartHeight} min={220} max={520} step={10} unit="px"
+                onChange={v => updateTweak({ chartHeight: v })}
+              />
+            </TweakSection>
+            <TweakSection label="Panels">
+              <TweakToggle label="Strategy P&L bars" value={tweaks.showStrategyBars}
+                onChange={v => updateTweak({ showStrategyBars: v })} />
+              <TweakToggle label="Alerts & notes" value={tweaks.showAlerts}
+                onChange={v => updateTweak({ showAlerts: v })} />
+            </TweakSection>
+            {mode === 'replay' && (
+              <TweakSection label="Replay">
+                <TweakRadio
+                  label="Default speed"
+                  value={String(tweaks.speedPreset)}
+                  options={['1', '2', '4', '8', '16'].map(s => ({ value: s, label: s + '×' }))}
+                  onChange={v => updateTweak({ speedPreset: Number(v) })}
+                />
+                <TweakToggle label="Auto-play on load" value={tweaks.replayAuto}
+                  onChange={v => updateTweak({ replayAuto: v })} />
+              </TweakSection>
+            )}
+          </TweaksPanel>
+      </>
+    );
+  }
+
+  const root = ReactDOM.createRoot(document.getElementById('page'));
+  root.render(<App />);
+</script>
+
+</body>
+</html>

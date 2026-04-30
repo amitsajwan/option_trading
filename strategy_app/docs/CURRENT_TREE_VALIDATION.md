@@ -1,6 +1,6 @@
 # Current Tree Validation
 
-As-of date: `2026-03-20`
+As-of date: `2026-04-27`
 
 This document records the current code-verified state for the active runtime and training contracts.
 
@@ -12,6 +12,7 @@ Verified against these code paths:
 - `strategy_app/engines/deterministic_rule_engine.py`
 - `strategy_app/engines/pure_ml_engine.py`
 - `strategy_app/engines/strategy_router.py`
+- `strategy_app/utils/gcs_artifact.py`
 - `ml_pipeline_2/src/ml_pipeline_2/staged/pipeline.py`
 - `ml_pipeline_2/src/ml_pipeline_2/staged/publish.py`
 - `ml_pipeline_2/src/ml_pipeline_2/publishing/resolver.py`
@@ -27,7 +28,8 @@ Verified against these code paths:
 
 - `ml_pure` runtime resolves artifacts by:
   - `ML_PURE_RUN_ID` + `ML_PURE_MODEL_GROUP`
-  - or explicit bundle/report paths
+  - or explicit bundle/report paths (local or `gs://` paths accepted)
+- `gs://` paths are resolved via `strategy_app/utils/gcs_artifact.py` (`resolve_artifact_path`); files are cached locally under `GCS_ARTIFACT_CACHE_DIR` (default `~/.cache/option_trading_models/`)
 - strict run-id switching is enforced by `ml_pipeline_2.publishing.resolver`
 - live `ml_pure` requires:
   - `STRATEGY_ROLLOUT_STAGE=capped_live`
@@ -36,10 +38,11 @@ Verified against these code paths:
 
 ## Confirmed Deterministic Runtime Facts
 
-- deterministic exits are owner-first, with helper and high-confidence non-owner fallback
+- deterministic exits are owner-first, with explicit helper exits and tracker-owned universal mechanics
 - default router facts currently include:
   - `HIGH_VOL` routes `IV_FILTER` and `HIGH_VOL_ORB`
   - `EXPIRY` routes `IV_FILTER` and `VWAP_RECLAIM`
+  - `TRENDING` routes `IV_FILTER`, `ORB`, `OI_BUILDUP`, `PREV_DAY_LEVEL`
   - `EXPIRY_MAX_PAIN` is not in the default router
 
 ## Confirmed Staged Training Facts

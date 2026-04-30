@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 from pathlib import Path
 
-from contracts_app import build_snapshot_event
+from contracts_app import build_snapshot_event, build_strategy_decision_trace_event
 from contracts_app import build_strategy_position_event
 from persistence_app.mongo_writer import SnapshotMongoWriter, StrategyMongoWriter
 from strategy_app.contracts import PositionContext, SignalType, TradeSignal
@@ -34,9 +34,11 @@ class CollectionStub:
     def update_one(self, filter_doc, update_doc, upsert=False):
         for existing in self.docs:
             if all(existing.get(key) == value for key, value in dict(filter_doc).items()):
+                if "$set" in (update_doc or {}):
+                    existing.update(dict(update_doc.get("$set") or {}))
                 return _UpdateResult(matched_count=1, upserted_id=None)
         if bool(upsert):
-            inserted = dict((update_doc or {}).get("$setOnInsert") or {})
+            inserted = dict((update_doc or {}).get("$set") or (update_doc or {}).get("$setOnInsert") or {})
             self.docs.append(inserted)
             return _UpdateResult(matched_count=0, upserted_id="stub")
         return _UpdateResult(matched_count=0, upserted_id=None)
@@ -197,6 +199,52 @@ class MongoWriterTests(unittest.TestCase):
 
         self.assertEqual(len(fake_db[writer.vote_collection_name].docs), 1)
 
+    def test_write_strategy_vote_event_refreshes_run_id_for_reruns(self) -> None:
+        writer = StrategyMongoWriter()
+        fake_db = DbStub()
+        writer._db_handle = lambda: fake_db  # type: ignore[method-assign]
+
+        first = {
+            "event_version": "1.0",
+            "source": "strategy_app",
+            "event_id": "evt-vote-r1",
+            "metadata": {"run_id": "run-old"},
+            "vote": {
+                "snapshot_id": "snap-1",
+                "strategy": "ORB",
+                "trade_date": "2026-03-12",
+                "timestamp": "2026-03-12T09:30:00+05:30",
+                "signal_type": "ENTRY",
+                "direction": "CE",
+                "reason": "vote-old",
+            },
+        }
+        rerun = {
+            "event_version": "1.0",
+            "source": "strategy_app",
+            "event_id": "evt-vote-r2",
+            "metadata": {"run_id": "run-new"},
+            "vote": {
+                "snapshot_id": "snap-1",
+                "strategy": "ORB",
+                "trade_date": "2026-03-12",
+                "timestamp": "2026-03-12T09:30:00+05:30",
+                "signal_type": "ENTRY",
+                "direction": "CE",
+                "reason": "vote-new",
+            },
+        }
+
+        with patch("persistence_app.mongo_writer.parse_strategy_vote_event", side_effect=[first, rerun]):
+            self.assertTrue(writer.write_strategy_vote_event({}))
+            self.assertTrue(writer.write_strategy_vote_event({}))
+
+        self.assertEqual(len(fake_db[writer.vote_collection_name].docs), 1)
+        doc = fake_db[writer.vote_collection_name].docs[0]
+        self.assertEqual(doc["run_id"], "run-new")
+        self.assertEqual(doc["reason"], "vote-new")
+        self.assertEqual(doc["event_id"], "evt-vote-r2")
+
     def test_write_strategy_position_event_derives_actual_outcome(self) -> None:
         writer = StrategyMongoWriter()
         fake_db = DbStub()
@@ -306,6 +354,9 @@ class MongoWriterTests(unittest.TestCase):
                     decision_mode="ml_staged",
                     strategy_family_version="ML_PURE_STAGED_V1",
                     strategy_profile_id="ml_pure_staged_v1",
+                    entry_futures_price=60250.0,
+                    underlying_stop_pct=0.0008,
+                    underlying_target_pct=0.0015,
                 )
 
                 logger.log_position_open(signal, position)
@@ -326,6 +377,9 @@ class MongoWriterTests(unittest.TestCase):
         self.assertAlmostEqual(float(doc["ml_pe_prob"]), 0.27, places=6)
         self.assertAlmostEqual(float(doc["ml_recipe_prob"]), 0.81, places=6)
         self.assertAlmostEqual(float(doc["ml_recipe_margin"]), 0.09, places=6)
+        self.assertAlmostEqual(float(doc["entry_futures_price"]), 60250.0, places=6)
+        self.assertAlmostEqual(float(doc["underlying_stop_pct"]), 0.0008, places=6)
+        self.assertAlmostEqual(float(doc["underlying_target_pct"]), 0.0015, places=6)
 
     def test_write_strategy_position_event_is_idempotent_by_position_event_and_timestamp(self) -> None:
         writer = StrategyMongoWriter()
@@ -358,6 +412,45 @@ class MongoWriterTests(unittest.TestCase):
 
         self.assertEqual(len(fake_db[writer.position_collection_name].docs), 1)
 
+    def test_write_strategy_decision_trace_event_persists_digest_fields(self) -> None:
+        writer = StrategyMongoWriter()
+        fake_db = DbStub()
+        writer._db_handle = lambda: fake_db  # type: ignore[method-assign]
+
+        event = build_strategy_decision_trace_event(
+            trace={
+                "trace_id": "trace-1",
+                "snapshot_id": "snap-1",
+                "timestamp": "2026-03-12T09:42:00+05:30",
+                "trade_date_ist": "2026-03-12",
+                "run_id": "run-1",
+                "engine_mode": "deterministic",
+                "decision_mode": "rule_vote",
+                "evaluation_type": "entry",
+                "final_outcome": "blocked",
+                "primary_blocker_gate": "policy_checks",
+                "selected_candidate_id": None,
+                "position_state": {"position_id": None},
+                "summary_metrics": {"candidate_count": 2},
+                "candidates": [
+                    {"selected": False, "terminal_status": "blocked"},
+                    {"selected": False, "terminal_status": "blocked"},
+                ],
+            },
+            source="strategy_app",
+            metadata={"run_id": "run-1", "trace_id": "trace-1"},
+        )
+
+        written = writer.write_strategy_decision_trace_event(event)
+
+        self.assertTrue(written)
+        doc = fake_db[writer.trace_collection_name].docs[0]
+        self.assertEqual(doc["trace_id"], "trace-1")
+        self.assertEqual(doc["final_outcome"], "blocked")
+        self.assertEqual(doc["primary_blocker_gate"], "policy_checks")
+        self.assertEqual(doc["candidate_count"], 2)
+        self.assertEqual(doc["blocked_candidate_count"], 2)
+
     def test_strategy_writer_creates_unique_identity_indexes(self) -> None:
         writer = StrategyMongoWriter()
         fake_db = DbStub()
@@ -368,6 +461,7 @@ class MongoWriterTests(unittest.TestCase):
         vote_indexes = fake_db[writer.vote_collection_name].indexes
         signal_indexes = fake_db[writer.signal_collection_name].indexes
         position_indexes = fake_db[writer.position_collection_name].indexes
+        trace_indexes = fake_db[writer.trace_collection_name].indexes
 
         self.assertIn(
             (
@@ -426,6 +520,16 @@ class MongoWriterTests(unittest.TestCase):
                 },
             ),
             position_indexes,
+        )
+        self.assertIn(
+            (
+                [("trace_id", 1)],
+                {
+                    "unique": True,
+                    "partialFilterExpression": {"trace_id": {"$exists": True, "$type": "string"}},
+                },
+            ),
+            trace_indexes,
         )
         self.assertIn(
             (

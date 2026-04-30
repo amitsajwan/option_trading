@@ -88,8 +88,11 @@ def policy_row_from_vote_doc(doc: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
-def build_deterministic_diagnostics(*, date_ist: str, votes_coll: Any) -> dict[str, Any]:
+def build_deterministic_diagnostics(*, date_ist: str, votes_coll: Any, run_id: Optional[str] = None) -> dict[str, Any]:
     day_query = {"trade_date_ist": str(date_ist)}
+    run_text = str(run_id or "").strip()
+    if run_text:
+        day_query["run_id"] = run_text
     projection = {
         "_id": 0,
         "timestamp": 1,
@@ -108,21 +111,25 @@ def build_deterministic_diagnostics(*, date_ist: str, votes_coll: Any) -> dict[s
         if row is not None:
             policy_rows.append(row)
 
-    directional_entry_votes_day = votes_coll.count_documents(
-        {"trade_date_ist": str(date_ist), "signal_type": "ENTRY", "direction": {"$in": ["CE", "PE"]}}
-    )
-    policy_evaluated_votes_day = votes_coll.count_documents(
-        {"trade_date_ist": str(date_ist), "payload.vote.raw_signals._policy_reason": {"$exists": True}}
-    )
-    policy_allowed_votes_day = votes_coll.count_documents(
-        {"trade_date_ist": str(date_ist), "payload.vote.raw_signals._policy_allowed": True}
-    )
-    policy_blocked_votes_day = votes_coll.count_documents(
-        {"trade_date_ist": str(date_ist), "payload.vote.raw_signals._policy_allowed": False}
-    )
-    warmup_blocked_votes_day = votes_coll.count_documents(
-        {"trade_date_ist": str(date_ist), "payload.vote.raw_signals._entry_warmup_blocked": True}
-    )
+    directional_query = dict(day_query)
+    directional_query.update({"signal_type": "ENTRY", "direction": {"$in": ["CE", "PE"]}})
+    directional_entry_votes_day = votes_coll.count_documents(directional_query)
+
+    policy_evaluated_query = dict(day_query)
+    policy_evaluated_query["payload.vote.raw_signals._policy_reason"] = {"$exists": True}
+    policy_evaluated_votes_day = votes_coll.count_documents(policy_evaluated_query)
+
+    policy_allowed_query = dict(day_query)
+    policy_allowed_query["payload.vote.raw_signals._policy_allowed"] = True
+    policy_allowed_votes_day = votes_coll.count_documents(policy_allowed_query)
+
+    policy_blocked_query = dict(day_query)
+    policy_blocked_query["payload.vote.raw_signals._policy_allowed"] = False
+    policy_blocked_votes_day = votes_coll.count_documents(policy_blocked_query)
+
+    warmup_query = dict(day_query)
+    warmup_query["payload.vote.raw_signals._entry_warmup_blocked"] = True
+    warmup_blocked_votes_day = votes_coll.count_documents(warmup_query)
     policy_pass_rate_day = _safe_ratio(policy_allowed_votes_day, policy_evaluated_votes_day)
     policy_block_rate_day = _safe_ratio(policy_blocked_votes_day, policy_evaluated_votes_day)
     warmup_block_rate_day = _safe_ratio(warmup_blocked_votes_day, directional_entry_votes_day)

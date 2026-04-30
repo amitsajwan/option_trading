@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ml_pipeline_2.contracts.manifests import ManifestValidationError, resolve_manifest
+from ml_pipeline_2.contracts.manifests import ManifestValidationError, load_and_resolve_manifest, resolve_manifest
 
 
 def test_staged_manifest_requires_explicit_sections(tmp_path: Path) -> None:
@@ -111,11 +111,25 @@ def test_staged_manifest_accepts_runtime_block_expiry_bool(tmp_path: Path) -> No
     assert resolved["runtime"]["block_expiry"] is True
 
 
+def test_staged_manifest_accepts_runtime_stage2_cv_gate_mode_record_only(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["runtime"]["stage2_cv_gate_mode"] = "record_only"
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_stage2_cv_gate_record_only.json", validate_paths=False)
+    assert resolved["runtime"]["stage2_cv_gate_mode"] == "record_only"
+
+
 def test_staged_manifest_rejects_runtime_block_expiry_non_bool(tmp_path: Path) -> None:
     payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
     payload["runtime"]["block_expiry"] = "true"
     with pytest.raises(ManifestValidationError, match="runtime.block_expiry must be boolean"):
         resolve_manifest(payload, manifest_path=tmp_path / "staged_block_expiry_invalid.json", validate_paths=False)
+
+
+def test_staged_manifest_rejects_runtime_stage2_cv_gate_mode_unknown(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["runtime"]["stage2_cv_gate_mode"] = "skip"
+    with pytest.raises(ManifestValidationError, match="runtime.stage2_cv_gate_mode must be one of"):
+        resolve_manifest(payload, manifest_path=tmp_path / "staged_stage2_cv_gate_invalid.json", validate_paths=False)
 
 
 def test_staged_manifest_rejects_profit_factor_floor_below_one(tmp_path: Path) -> None:
@@ -137,6 +151,57 @@ def test_staged_manifest_rejects_publish_smoke_allow_non_publishable_non_bool(tm
     payload["publish"]["smoke_allow_non_publishable"] = "true"
     with pytest.raises(ManifestValidationError, match="publish.smoke_allow_non_publishable must be boolean"):
         resolve_manifest(payload, manifest_path=tmp_path / "staged_publish_smoke_bool_bad.json", validate_paths=False)
+
+
+def test_staged_manifest_accepts_stage2_session_filter(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["training"]["stage2_session_filter"] = {
+        "enabled": True,
+        "include_buckets": ["MIDDAY", "MORNING"],
+    }
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_stage2_session_filter_ok.json", validate_paths=False)
+    assert resolved["training"]["stage2_session_filter"] == {
+        "enabled": True,
+        "include_buckets": ["MIDDAY", "MORNING"],
+    }
+
+
+def test_staged_manifest_accepts_stage1_reuse(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    source_run_dir = tmp_path / "source_run"
+    source_run_dir.mkdir(parents=True, exist_ok=True)
+    payload["training"]["stage1_reuse"] = {
+        "source_run_id": "baseline_stage1",
+        "source_run_dir": str(source_run_dir),
+    }
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_stage1_reuse_ok.json", validate_paths=False)
+    assert resolved["training"]["stage1_reuse"]["source_run_id"] == "baseline_stage1"
+    assert resolved["training"]["stage1_reuse"]["source_run_dir"] == source_run_dir.resolve()
+
+
+def test_staged_manifest_accepts_stage2_target_redesign(tmp_path: Path) -> None:
+    payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    payload["training"]["stage2_target_redesign"] = {
+        "enabled": True,
+        "min_directional_edge_after_cost": 0.0018,
+        "min_winner_return_after_cost": 0.0010,
+        "max_opposing_return_after_cost": -0.0002,
+        "max_kept_fraction": 0.4,
+        "conviction_score": "edge_winner_min",
+    }
+    resolved = resolve_manifest(payload, manifest_path=tmp_path / "staged_stage2_target_redesign_ok.json", validate_paths=False)
+    assert resolved["training"]["stage2_target_redesign"]["enabled"] is True
+    assert resolved["training"]["stage2_target_redesign"]["max_kept_fraction"] == 0.4
+
+
+def test_stage2_direction_or_no_trade_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_dual_recipe.stage2_direction_or_no_trade_v1.json"),
+        validate_paths=False,
+    )
+    assert resolved["labels"]["stage2_labeler_id"] == "direction_or_no_trade_v1"
+    assert resolved["training"]["stage2_trainer_id"] == "gate_direction_catalog_v1"
+    assert resolved["policy"]["stage2_policy_id"] == "direction_gate_threshold_v1"
 
 
 def test_staged_manifest_validate_paths_requires_stage_view_datasets(tmp_path: Path) -> None:
@@ -289,7 +354,15 @@ def test_grid_manifest_validates_with_supported_override_contract(tmp_path: Path
             "stage2_hpo_escalation": {
                 "roc_auc_min": 0.54,
                 "brier_max": 0.225,
-            }
+            },
+            "robustness_probe": {
+                "enabled": True,
+                "top_k": 2,
+                "iterations": 50,
+                "random_seed": 7,
+                "splits": ["research_valid", "final_holdout"],
+                "resample_unit": "trade_date",
+            },
         },
         "grid": {
             "research_only": True,
@@ -310,7 +383,11 @@ def test_grid_manifest_validates_with_supported_override_contract(tmp_path: Path
                             "stage2_label_filter": {
                                 "enabled": True,
                                 "min_directional_edge_after_cost": 0.001,
-                            }
+                            },
+                            "stage2_session_filter": {
+                                "enabled": True,
+                                "include_buckets": ["MIDDAY", "MORNING"],
+                            },
                         }
                     },
                 },
@@ -336,6 +413,8 @@ def test_grid_manifest_validates_with_supported_override_contract(tmp_path: Path
     assert resolved["experiment_kind"] == "staged_training_grid_v1"
     assert resolved["grid"]["max_parallel_runs"] == 2
     assert resolved["grid"]["runs"][1]["overrides"]["training"]["stage2_label_filter"]["min_directional_edge_after_cost"] == 0.001
+    assert resolved["grid"]["runs"][1]["overrides"]["training"]["stage2_session_filter"]["include_buckets"] == ["MIDDAY", "MORNING"]
+    assert resolved["selection"]["robustness_probe"]["iterations"] == 50
     assert resolved["base_resolved_manifest"]["experiment_kind"] == "staged_dual_recipe_v1"
 
 
@@ -375,6 +454,55 @@ def test_grid_manifest_rejects_unsupported_override_paths(tmp_path: Path) -> Non
 
     with pytest.raises(ManifestValidationError, match="supports only feature_sets_by_stage"):
         resolve_manifest(payload, manifest_path=tmp_path / "staged_grid_invalid.json", validate_paths=False)
+
+
+def test_stage3_policy_paths_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_dual_recipe.stage3_policy_paths_v1.json"),
+        validate_paths=False,
+    )
+
+    assert resolved["policy"]["stage2_policy_id"] == "direction_gate_threshold_v1"
+    assert resolved["policy"]["stage3_policy_id"] == "recipe_economic_balance_v1"
+    assert resolved["catalog"]["recipe_catalog_id"] == "fixed_l0_l3_v1"
+
+
+def test_grid_manifest_rejects_unknown_ranking_strategy(tmp_path: Path) -> None:
+    base_payload = json.loads(Path("ml_pipeline_2/configs/research/staged_dual_recipe.default.json").read_text(encoding="utf-8"))
+    base_path = tmp_path / "base_manifest.json"
+    base_path.write_text(json.dumps(base_payload, indent=2), encoding="utf-8")
+    payload = {
+        "schema_version": 1,
+        "experiment_kind": "staged_training_grid_v1",
+        "inputs": {
+            "base_manifest_path": str(base_path),
+        },
+        "outputs": {
+            "artifacts_root": str(tmp_path / "grid_artifacts"),
+            "run_name": "staged_grid_invalid_rank",
+        },
+        "selection": {
+            "ranking_strategy": "unknown_strategy",
+            "stage2_hpo_escalation": {
+                "roc_auc_min": 0.54,
+                "brier_max": 0.225,
+            },
+        },
+        "grid": {
+            "research_only": True,
+            "runs": [
+                {
+                    "run_id": "baseline",
+                    "overrides": {
+                        "outputs": {"run_name": "staged_grid_baseline"},
+                    },
+                }
+            ],
+        },
+    }
+
+    with pytest.raises(ManifestValidationError, match="selection.ranking_strategy must be one of"):
+        resolve_manifest(payload, manifest_path=tmp_path / "staged_grid_invalid_rank.json", validate_paths=False)
 
 
 def test_grid_manifest_rejects_non_positive_parallelism(tmp_path: Path) -> None:

@@ -47,12 +47,19 @@ def test_run_derived_batch_projects_market_base_to_ml_flat_and_stage_views(tmp_p
     stage3_path = tmp_path / "stage3_recipe_view" / "year=2020" / "chunk=202001_202001_m1" / "data.parquet"
 
     assert result["status"] == "complete"
+    assert result["contract_validation_requested"] is False
+    assert result["contract_validation_enabled"] is False
+    assert result["contract_validation_scope"] == "derived_snapshot_ml_flat"
     assert result["days_processed"] == 1
     assert result["total_rows"] == 1
     assert ml_flat_path.exists()
     assert stage1_path.exists()
     assert stage2_path.exists()
     assert stage3_path.exists()
+    assert not list(ml_flat_path.parent.glob("data.tmp_*.parquet"))
+    assert not list(stage1_path.parent.glob("data.tmp_*.parquet"))
+    assert not list(stage2_path.parent.glob("data.tmp_*.parquet"))
+    assert not list(stage3_path.parent.glob("data.tmp_*.parquet"))
 
     ml_flat_df = pd.read_parquet(ml_flat_path)
     stage1_df = pd.read_parquet(stage1_path)

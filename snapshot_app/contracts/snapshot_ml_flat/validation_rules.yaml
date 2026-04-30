@@ -128,3 +128,82 @@ removed_columns_regex:
 allowed_build_sources:
   - historical
   - live
+
+# ── Velocity columns (Sprint v1) ───────────────────────────────────────────────
+# All velocity columns are NULLABLE — they are NaN on non-11:30 rows and on
+# dates where insufficient morning data exists.  The ML training pipeline
+# filters to 11:30 rows before using these features.
+#
+# No tier0/tier1/tier2 rules apply — the enrichment runner validates its own
+# output via validate_enriched_snapshot_ml_flat_frame().
+#
+# Range guidance (informational — not enforced at validation time):
+#   vel_*_delta_open / vel_*_delta_30m / vel_*_delta_60m : any finite float (signed)
+#   vel_*_build_rate                                      : any finite float (signed)
+#   vel_pcr_trend_direction                               : {-1, 0, 1}
+#   vel_pcr_acceleration                                  : any finite float
+#   vel_price_acceleration                                : any finite float
+#   vel_iv_compression_rate                               : any finite float
+#   vel_options_vol_acceleration                          : any finite float
+#   ctx_am_range_high / ctx_am_range_low                 : positive, range_high > range_low
+#   ctx_am_range_size                                     : >= 0
+#   ctx_am_price_position                                 : [0.0, 1.0]
+#   ctx_am_gap_from_yday                                  : any finite float (signed)
+#   ctx_am_gap_filled                                     : {0, 1} or NaN
+#   ctx_gap_pct                                            : any finite float (signed) or NaN
+#   ctx_gap_up / ctx_gap_down                              : {0, 1} or NaN
+#   ctx_am_trend                                          : {-1, 0, 1}
+#   ctx_am_trend_strength                                 : >= 0
+#   ctx_am_reversal                                       : {0, 1}
+#   ctx_am_oi_direction                                   : {-1, 0, 1}
+#   ctx_am_vwap_side                                      : {-1, 0, 1}
+#   ctx_am_breakout_confirmed                             : {0, 1}
+#   ctx_am_vol_vs_yday                                    : > 0 (ratio) or NaN
+#   adx_14                                                : [0, 100] or NaN
+#   vol_spike_ratio                                       : >= 0 or NaN
+
+velocity_columns_v1:
+  nullable: true
+  schema_version: "4.0"
+  columns:
+    - vel_ce_oi_delta_open
+    - vel_pe_oi_delta_open
+    - vel_ce_oi_delta_30m
+    - vel_pe_oi_delta_30m
+    - vel_oi_ratio_delta_open
+    - vel_oi_ratio_delta_30m
+    - vel_ce_oi_build_rate
+    - vel_pe_oi_build_rate
+    - vel_pcr_delta_open
+    - vel_pcr_delta_30m
+    - vel_pcr_acceleration
+    - vel_pcr_trend_direction
+    - vel_price_delta_open
+    - vel_price_delta_30m
+    - vel_price_delta_60m
+    - vel_price_acceleration
+    - ctx_am_range_high
+    - ctx_am_range_low
+    - ctx_am_range_size
+    - ctx_am_price_position
+    - ctx_am_gap_from_yday
+    - ctx_am_gap_filled
+    - ctx_gap_pct
+    - ctx_gap_up
+    - ctx_gap_down
+    - vel_atm_ce_iv_delta_open
+    - vel_atm_pe_iv_delta_open
+    - vel_iv_skew_delta_open
+    - vel_iv_compression_rate
+    - vel_ce_vol_delta_30m
+    - vel_pe_vol_delta_30m
+    - vel_options_vol_acceleration
+    - ctx_am_vol_vs_yday
+    - adx_14
+    - vol_spike_ratio
+    - ctx_am_trend
+    - ctx_am_trend_strength
+    - ctx_am_reversal
+    - ctx_am_oi_direction
+    - ctx_am_vwap_side
+    - ctx_am_breakout_confirmed

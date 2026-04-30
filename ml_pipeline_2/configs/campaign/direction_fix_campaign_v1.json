@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "factory_campaign_v1",
+  "campaign_id": "direction_fix_campaign_v1",
+  "inputs": {
+    "parquet_root": "../../../.data/ml_pipeline/parquet_data",
+    "support_dataset": "snapshots_ml_flat_v2"
+  },
+  "execution_defaults": {
+    "poll_interval_seconds": 30,
+    "infra_max_attempts": 2,
+    "total_cores": 8,
+    "total_memory_gb": 64,
+    "ranking_strategy": "publishable_economics_v1",
+    "stop_on_first_publishable": false,
+    "model_group": "banknifty_futures/h15_tp_auto",
+    "profile_id": "openfe_v9_dual"
+  },
+  "window_profiles": {
+    "canonical_4y": {
+      "research_train": {
+        "start": "2020-08-03",
+        "end": "2024-04-30"
+      },
+      "research_valid": {
+        "start": "2024-05-01",
+        "end": "2024-07-31"
+      },
+      "full_model": {
+        "start": "2020-08-03",
+        "end": "2024-07-31"
+      },
+      "final_holdout": {
+        "start": "2024-08-01",
+        "end": "2024-10-31"
+      }
+    }
+  },
+  "families": {
+    "model_families": {
+      "screen_fast": {
+        "target": "base_manifest",
+        "models_by_stage": {
+          "stage1": ["xgb_shallow", "xgb_balanced", "lgbm_fast", "lgbm_dart", "logreg_balanced"],
+          "stage2": ["xgb_shallow", "xgb_balanced", "lgbm_fast", "logreg_balanced"],
+          "stage3": ["xgb_shallow", "xgb_balanced", "lgbm_dart", "logreg_balanced"]
+        }
+      }
+    },
+    "stage2_feature_families": {
+      "regime_v1": {
+        "target": "base_manifest",
+        "feature_sets": ["fo_midday_direction_regime_v1"]
+      },
+      "velocity_v1": {
+        "target": "base_manifest",
+        "feature_sets": ["fo_velocity_v1"]
+      }
+    },
+    "stage2_policy_families": {
+      "economic_balance_gate": {
+        "target": "base_manifest",
+        "stage2_policy_id": "direction_gate_economic_balance_v1"
+      }
+    }
+  },
+  "lane_templates": [
+    {
+      "template_id": "direction_fix",
+      "base_grid_path": "../research/staged_grid.direction_fix_v1.json",
+      "window_profiles": ["canonical_4y"],
+      "model_families": ["screen_fast"],
+      "stage2_feature_families": ["regime_v1", "velocity_v1"],
+      "stage2_policy_families": ["economic_balance_gate"],
+      "max_generated_lanes": 10,
+      "resource": {
+        "cores": 8,
+        "memory_gb": 54
+      }
+    }
+  ],
+  "campaign_max_lanes": 10
+}

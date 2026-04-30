@@ -20,6 +20,10 @@ class RunContext:
     def state_path(self) -> Path:
         return self.output_root / "state.jsonl"
 
+    @property
+    def run_status_path(self) -> Path:
+        return self.output_root / "run_status.json"
+
     def write_json(self, relative_path: str | Path, payload: Dict[str, Any]) -> Path:
         path = self.output_root / Path(relative_path)
         path.parent.mkdir(parents=True, exist_ok=True)

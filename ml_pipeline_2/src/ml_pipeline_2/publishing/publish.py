@@ -18,10 +18,10 @@ def _validated_repo_root(candidate: Path, *, source: str) -> Path:
 
 def repo_root(explicit_root: Optional[Path] = None) -> Path:
     if explicit_root is not None:
-        return _validated_repo_root(Path(explicit_root), source="explicit root")
+        return Path(explicit_root).resolve()
     env_root = str(os.getenv("MODEL_SWITCH_REPO_ROOT") or os.getenv("ML_PIPELINE_2_REPO_ROOT") or "").strip()
     if env_root:
-        return _validated_repo_root(Path(env_root), source="MODEL_SWITCH_REPO_ROOT/ML_PIPELINE_2_REPO_ROOT")
+        return Path(env_root).resolve()
     cwd = Path.cwd().resolve()
     if _is_repo_root(cwd):
         return cwd

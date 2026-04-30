@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "factory_campaign_v1",
+  "campaign_id": "smoke_test_campaign_v1",
+  "inputs": {
+    "parquet_root": "../../../.data/ml_pipeline/parquet_data",
+    "support_dataset": "snapshots_ml_flat"
+  },
+  "execution_defaults": {
+    "poll_interval_seconds": 15,
+    "infra_max_attempts": 1,
+    "total_cores": 8,
+    "total_memory_gb": 64,
+    "ranking_strategy": "publishable_economics_v1",
+    "stop_on_first_publishable": false,
+    "model_group": "banknifty_futures/h15_tp_auto",
+    "profile_id": "openfe_v9_dual"
+  },
+  "window_profiles": {
+    "smoke_2023": {
+      "research_train": {
+        "start": "2023-01-02",
+        "end": "2023-08-31"
+      },
+      "research_valid": {
+        "start": "2023-09-01",
+        "end": "2023-10-31"
+      },
+      "full_model": {
+        "start": "2023-01-02",
+        "end": "2023-10-31"
+      },
+      "final_holdout": {
+        "start": "2023-11-01",
+        "end": "2023-12-29"
+      }
+    }
+  },
+  "families": {
+    "model_families": {
+      "logreg_s2_s3": {
+        "target": "base_manifest",
+        "models_by_stage": {
+          "stage2": ["logreg_balanced"],
+          "stage3": ["logreg_balanced"]
+        }
+      }
+    },
+    "stage2_feature_families": {
+      "midday_direction_regime_v1": {
+        "target": "base_manifest",
+        "feature_sets": ["fo_midday_direction_regime_v1"]
+      }
+    },
+    "stage2_policy_families": {
+      "baseline_only": {
+        "target": "grid_runs",
+        "run_id_selectors": ["s3_regime_baseline"],
+        "stage2_policy_id": "direction_dual_threshold_v1"
+      }
+    }
+  },
+  "lane_templates": [
+    {
+      "template_id": "smoke_direction_regime",
+      "base_grid_path": "../research/staged_grid.stage3_direction_regime_v1.json",
+      "window_profiles": ["smoke_2023"],
+      "model_families": ["logreg_s2_s3"],
+      "stage2_feature_families": ["midday_direction_regime_v1"],
+      "stage2_policy_families": ["baseline_only"],
+      "max_generated_lanes": 1,
+      "resource": {
+        "cores": 8,
+        "memory_gb": 54
+      }
+    }
+  ],
+  "campaign_max_lanes": 1
+}

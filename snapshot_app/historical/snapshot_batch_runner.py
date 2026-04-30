@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -582,7 +583,11 @@ def main() -> int:
     parser.add_argument(
         "--validate-ml-flat-contract",
         action="store_true",
-        help="Validate each processed day against the derived SnapshotMLFlat contract during build.",
+        help=(
+            "Validate derived SnapshotMLFlat rows during build. "
+            "Direct CLI runs leave this off by default for compatibility. "
+            "The GCP wrapper enables it by default. Ignored for --build-stage snapshots."
+        ),
     )
     parser.add_argument(
         "--manifest-out",

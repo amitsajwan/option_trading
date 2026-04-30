@@ -1,0 +1,46 @@
+{
+  "workflow_id": "snapshot_training_factory_v1",
+  "inputs": {
+    "parquet_root": "../../../.data/ml_pipeline/parquet_data",
+    "support_dataset": "snapshots_ml_flat"
+  },
+  "lanes": [
+    {
+      "lane_id": "stage3_direction_regime_grid",
+      "lane_kind": "staged_grid",
+      "config_path": "../research/staged_grid.stage3_direction_regime_v1.json",
+      "resource": {
+        "cores": 8,
+        "memory_gb": 24
+      },
+      "model_group": "banknifty_futures/h15_tp_auto",
+      "profile_id": "openfe_v9_dual"
+    },
+    {
+      "lane_id": "stage3_policy_paths_grid",
+      "lane_kind": "staged_grid",
+      "config_path": "../research/staged_grid.stage3_midday_policy_paths_v1.json",
+      "depends_on": [
+        "stage3_direction_regime_grid"
+      ],
+      "resource": {
+        "cores": 8,
+        "memory_gb": 24
+      },
+      "model_group": "banknifty_futures/h15_tp_auto",
+      "profile_id": "openfe_v9_dual"
+    }
+  ],
+  "execution": {
+    "poll_interval_seconds": 30,
+    "infra_max_attempts": 2
+  },
+  "resource_budget": {
+    "total_cores": 32,
+    "total_memory_gb": 220
+  },
+  "selection": {
+    "ranking_strategy": "publishable_economics_v1",
+    "stop_on_first_publishable": false
+  }
+}

@@ -110,6 +110,31 @@ def _safe_ratio(numerator: float, denominator: int) -> Optional[float]:
     return float(numerator) / float(denominator)
 
 
+def _resolve_trail_mechanism(*, exit_reason: Any, trailing_active: Any, orb_trail_active: Any, oi_trail_active: Any) -> Optional[str]:
+    if str(exit_reason or "").strip().upper() != "TRAILING_STOP":
+        return None
+    if bool(orb_trail_active):
+        return "ORB_TRAIL"
+    if bool(oi_trail_active):
+        return "OI_TRAIL"
+    if bool(trailing_active):
+        return "GENERIC_TRAIL"
+    return "TRAILING_STOP"
+
+
+def _underlying_stop_level(*, direction: Any, entry_futures_price: Any, underlying_stop_pct: Any) -> Optional[float]:
+    entry_futures = _safe_float(entry_futures_price)
+    stop_pct = _safe_float(underlying_stop_pct)
+    if entry_futures is None or entry_futures <= 0 or stop_pct is None or stop_pct <= 0:
+        return None
+    dir_norm = str(direction or "").strip().upper()
+    if dir_norm == "CE":
+        return round(entry_futures * (1.0 - stop_pct), 2)
+    if dir_norm == "PE":
+        return round(entry_futures * (1.0 + stop_pct), 2)
+    return None
+
+
 class StrategyEvaluationService:
     def __init__(self) -> None:
         self._mongo_client: Optional[MongoClient] = None
@@ -166,11 +191,15 @@ class StrategyEvaluationService:
                 "votes": str(os.getenv("MONGO_COLL_STRATEGY_VOTES_HISTORICAL") or "strategy_votes_historical"),
                 "signals": str(os.getenv("MONGO_COLL_TRADE_SIGNALS_HISTORICAL") or "trade_signals_historical"),
                 "positions": str(os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL") or "strategy_positions_historical"),
+                "traces": str(
+                    os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES_HISTORICAL") or "strategy_decision_traces_historical"
+                ),
             }
         return {
             "votes": str(os.getenv("MONGO_COLL_STRATEGY_VOTES") or "strategy_votes"),
             "signals": str(os.getenv("MONGO_COLL_TRADE_SIGNALS") or "trade_signals"),
             "positions": str(os.getenv("MONGO_COLL_STRATEGY_POSITIONS") or "strategy_positions"),
+            "traces": str(os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES") or "strategy_decision_traces"),
         }
 
     def _runs_collection_name(self) -> str:
@@ -299,25 +328,165 @@ class StrategyEvaluationService:
         )
         return doc if isinstance(doc, dict) else None
 
+    def list_runs(
+        self,
+        *,
+        dataset: str = "historical",
+        status: Optional[str] = None,
+        limit: int = 20,
+        include_counts: bool = True,
+    ) -> dict[str, Any]:
+        """Return recent evaluation runs so the UI can show a picker.
+
+        When ``include_counts`` is true (default), the returned rows are
+        enriched with ``trade_count`` / ``signal_count`` / ``vote_count``
+        computed from the corresponding persistence collections, so operators
+        can see at a glance whether a run actually produced trades.
+        """
+        mode = str(dataset or "historical").strip().lower()
+        if mode not in {"historical", "live"}:
+            raise ValueError(f"unsupported dataset '{dataset}'")
+        capped_limit = max(1, min(int(limit or 20), 200))
+        query: dict[str, Any] = {"dataset": mode}
+        state = str(status or "").strip().lower()
+        if state:
+            query["status"] = state
+        db = self._db()
+        cursor = db[self._runs_collection_name()].find(
+            query,
+            {"_id": 0},
+            sort=[("submitted_at", DESCENDING)],
+        ).limit(capped_limit)
+        rows: list[dict[str, Any]] = [dict(doc) for doc in cursor if isinstance(doc, dict)]
+
+        # Discover runs written directly to data collections (e.g. tmux-launched replays
+        # that never registered an eval-run record).
+        if mode == "historical":
+            known_ids = {str(r.get("run_id") or "").strip() for r in rows if str(r.get("run_id") or "").strip()}
+            names = self._collection_names(mode)
+            try:
+                # Group by run_id, counting only POSITION_CLOSE events as completed trades.
+                # {run_id: {$ne: ""}} matches null, missing, and non-empty string run_ids.
+                discover_pipeline: list[dict[str, Any]] = [
+                    {"$match": {"run_id": {"$nin": [None, ""]}}},  
+                    {
+                        "$group": {
+                            "_id": "$run_id",
+                            "min_date": {"$min": "$trade_date_ist"},
+                            "max_date": {"$max": "$trade_date_ist"},
+                            "count": {
+                                "$sum": {"$cond": [{"$eq": ["$event", "POSITION_CLOSE"]}, 1, 0]}
+                            },
+                        }
+                    },
+                    {"$match": {"count": {"$gt": 0}}},
+                    {"$sort": {"max_date": DESCENDING}},
+                    {"$limit": capped_limit * 2},
+                ]
+                for d in db[names["positions"]].aggregate(discover_pipeline, allowDiskUse=True):
+                    rid = str(d.get("_id") or "").strip()
+                    if not rid or rid in known_ids:
+                        continue
+                    rows.append(
+                        {
+                            "run_id": rid,
+                            "dataset": mode,
+                            "status": "completed",
+                            "date_from": str(d.get("min_date") or ""),
+                            "date_to": str(d.get("max_date") or ""),
+                            "trade_count": int(d.get("count") or 0),
+                            "signal_count": 0,
+                            "vote_count": 0,
+                            "submitted_at": None,
+                            "discovered": True,
+                        }
+                    )
+                    known_ids.add(rid)
+            except Exception:
+                pass
+
+        if include_counts and rows and mode == "historical":
+            run_ids = [str(row.get("run_id") or "").strip() for row in rows if str(row.get("run_id") or "").strip()]
+            if run_ids:
+                names = self._collection_names(mode)
+                positions_coll = db[names["positions"]]
+                signals_coll = db[names["signals"]]
+                votes_coll = db[names["votes"]]
+                def _group_counts(coll: Any, positions_only: bool = False) -> dict[str, int]:
+                    out: dict[str, int] = {}
+                    try:
+                        match_stage: dict[str, Any] = {"run_id": {"$in": run_ids}}
+                        if positions_only:
+                            match_stage["event"] = "POSITION_CLOSE"
+                        for r in coll.aggregate([
+                            {"$match": match_stage},
+                            {"$group": {"_id": "$run_id", "n": {"$sum": 1}}},
+                        ], allowDiskUse=True):
+                            out[str(r.get("_id") or "")] = int(r.get("n") or 0)
+                    except Exception:
+                        pass
+                    return out
+
+                trade_counts = _group_counts(positions_coll, positions_only=True)
+                signal_counts = _group_counts(signals_coll)
+                vote_counts = _group_counts(votes_coll)
+                for row in rows:
+                    rid = str(row.get("run_id") or "").strip()
+                    row["trade_count"] = int(trade_counts.get(rid, 0))
+                    row["signal_count"] = int(signal_counts.get(rid, 0))
+                    row["vote_count"] = int(vote_counts.get(rid, 0))
+
+        # Push most-recent runs (by end date) to the top regardless of source.
+        rows.sort(key=lambda r: r.get("date_to") or "", reverse=True)
+
+        return {
+            "rows": rows,
+            "total": len(rows),
+            "dataset": mode,
+            "status": state or None,
+            "limit": capped_limit,
+        }
+
     def _resolve_run_scope(self, *, dataset: str, run_id: Optional[str]) -> tuple[Optional[str], Optional[dict[str, Any]]]:
         mode = str(dataset or "historical").strip().lower()
         if mode != "historical":
             return None, None
         requested = str(run_id or "").strip()
         if requested:
-            item = self.get_run(requested)
-            if not isinstance(item, dict):
-                raise ValueError(f"run_id '{requested}' not found")
-            if str(item.get("dataset") or "").strip().lower() != "historical":
-                raise ValueError(f"run_id '{requested}' is not a historical run")
-            return requested, item
-        latest = self.get_latest_run(dataset="historical", status="completed")
-        if not isinstance(latest, dict):
-            raise ValueError("no completed historical evaluation runs found")
-        resolved = str(latest.get("run_id") or "").strip()
-        if not resolved:
-            raise ValueError("latest completed historical run is missing run_id")
-        return resolved, latest
+            # Registered run check first — valid for queued/running/completed states.
+            registered = self.get_run(requested)
+            if isinstance(registered, dict) and str(registered.get("dataset") or "").lower() == "historical":
+                return requested, registered
+            # Fall back to data-collection scan for tmux/unregistered runs.
+            data_match: dict[str, Any] = {"run_id": requested}
+            names = self._collection_names(mode)
+            db = self._db()
+            found = False
+            for coll_name in (names["positions"], names["signals"]):
+                try:
+                    if db[coll_name].count_documents(data_match, limit=1):
+                        found = True
+                        break
+                except Exception:
+                    pass
+            if not found:
+                raise ValueError(f"run_id '{requested}' not found in data collections")
+            return requested, {"run_id": requested, "dataset": mode, "status": "completed", "discovered": True}
+        # No run_id specified — find the most recent run from data collections.
+        names = self._collection_names(mode)
+        db = self._db()
+        try:
+            doc = db[names["positions"]].find_one(
+                {"run_id": {"$nin": [None, ""]}},
+                {"run_id": 1},
+                sort=[("trade_date_ist", DESCENDING)],
+            )
+            if isinstance(doc, dict) and doc.get("run_id"):
+                resolved = str(doc["run_id"]).strip()
+                return resolved, {"run_id": resolved, "dataset": mode, "status": "completed", "discovered": True}
+        except Exception:
+            pass
+        raise ValueError("no historical replay data found")
 
     def _load_signal_map(
         self,
@@ -331,6 +500,8 @@ class StrategyEvaluationService:
             "regime": 1,
             "confidence": 1,
             "reason": 1,
+            "decision_metrics": 1,
+            "decision_reason_code": 1,
             "payload.signal": 1,
             "trade_date_ist": 1,
         }
@@ -344,6 +515,9 @@ class StrategyEvaluationService:
             ) or {}
             if not isinstance(payload_signal, dict):
                 payload_signal = {}
+            decision_metrics = doc.get("decision_metrics") if isinstance(doc.get("decision_metrics"), dict) else None
+            if decision_metrics is None and isinstance(payload_signal.get("decision_metrics"), dict):
+                decision_metrics = dict(payload_signal.get("decision_metrics") or {})
             out[signal_id] = {
                 "signal_id": signal_id,
                 "regime": str(doc.get("regime") or payload_signal.get("regime") or "").strip() or None,
@@ -351,6 +525,11 @@ class StrategyEvaluationService:
                     doc.get("confidence") if doc.get("confidence") is not None else payload_signal.get("confidence")
                 ),
                 "reason": str(doc.get("reason") or payload_signal.get("reason") or "").strip(),
+                "decision_metrics": dict(decision_metrics or {}),
+                "decision_reason_code": str(
+                    doc.get("decision_reason_code") or payload_signal.get("decision_reason_code") or ""
+                ).strip()
+                or None,
                 "contributing_strategies": list(payload_signal.get("contributing_strategies") or []),
                 "timestamp": _iso_or_none(payload_signal.get("timestamp") or doc.get("timestamp")),
                 "trade_date_ist": str(doc.get("trade_date_ist") or "").strip() or None,
@@ -424,6 +603,27 @@ class StrategyEvaluationService:
         entry_dt = _parse_iso_dt(open_position.get("timestamp"))
         exit_dt = _parse_iso_dt(close_position.get("timestamp"))
         bars_held = int(float(close_position.get("bars_held") or 0))
+        trailing_active = bool(close_position.get("trailing_active")) if close_position.get("trailing_active") is not None else None
+        orb_trail_active = bool(close_position.get("orb_trail_active")) if close_position.get("orb_trail_active") is not None else None
+        oi_trail_active = bool(close_position.get("oi_trail_active")) if close_position.get("oi_trail_active") is not None else None
+        exit_reason = str(close_position.get("exit_reason") or "").strip() or None
+        direction = str(open_position.get("direction") or "").strip() or None
+        premium_stop_pct = _safe_float(open_position.get("stop_loss_pct"))
+        underlying_stop_pct = _safe_float(open_position.get("underlying_stop_pct"))
+        entry_futures_price = _safe_float(open_position.get("entry_futures_price"))
+        underlying_stop_price = _underlying_stop_level(
+            direction=direction,
+            entry_futures_price=entry_futures_price,
+            underlying_stop_pct=underlying_stop_pct,
+        )
+        stop_basis = None
+        if underlying_stop_pct is not None and underlying_stop_pct > 0 and entry_futures_price is not None and entry_futures_price > 0:
+            stop_basis = "underlying"
+        elif (
+            (premium_stop_pct is not None and premium_stop_pct > 0)
+            or (_safe_float(open_position.get("stop_price")) is not None)
+        ):
+            stop_basis = "premium"
         result = "UNKNOWN"
         if pnl_pct_net is not None:
             if pnl_pct_net > 0:
@@ -437,7 +637,7 @@ class StrategyEvaluationService:
             "signal_id": signal_id or None,
             "entry_strategy": strategy,
             "regime": regime,
-            "direction": str(open_position.get("direction") or "").strip() or None,
+            "direction": direction,
             "strike": open_position.get("strike") if open_position.get("strike") is not None else close_position.get("strike"),
             "entry_time": _iso_or_none(open_position.get("timestamp")),
             "exit_time": _iso_or_none(close_position.get("timestamp")),
@@ -462,11 +662,16 @@ class StrategyEvaluationService:
                 or _safe_float(close_position.get("lot_size"))
                 or BANKNIFTY_OPTION_LOT_SIZE
             ),
-            "stop_loss_pct": _safe_float(open_position.get("stop_loss_pct")),
+            "stop_loss_pct": premium_stop_pct,
             "entry_stop_price": _safe_float(open_position.get("stop_price")),
             "exit_stop_price": _safe_float(close_position.get("stop_price")),
             "high_water_premium": _safe_float(close_position.get("high_water_premium")),
             "target_pct": _safe_float(open_position.get("target_pct")),
+            "underlying_stop_pct": underlying_stop_pct,
+            "underlying_target_pct": _safe_float(open_position.get("underlying_target_pct")),
+            "entry_futures_price": entry_futures_price,
+            "underlying_stop_price": underlying_stop_price,
+            "stop_basis": stop_basis,
             "trailing_enabled": bool(open_position.get("trailing_enabled")) if open_position.get("trailing_enabled") is not None else None,
             "trailing_activation_pct": _safe_float(open_position.get("trailing_activation_pct")),
             "trailing_offset_pct": _safe_float(open_position.get("trailing_offset_pct")),
@@ -475,9 +680,25 @@ class StrategyEvaluationService:
                 if open_position.get("trailing_lock_breakeven") is not None
                 else None
             ),
-            "trailing_active": bool(close_position.get("trailing_active")) if close_position.get("trailing_active") is not None else None,
+            "trailing_active": trailing_active,
+            "orb_trail_active": orb_trail_active,
+            "orb_trail_stop_price": _safe_float(close_position.get("orb_trail_stop_price")),
+            "oi_trail_active": oi_trail_active,
+            "oi_trail_stop_price": _safe_float(close_position.get("oi_trail_stop_price")),
             "signal_confidence": _safe_float(signal_doc.get("confidence")),
-            "exit_reason": str(close_position.get("exit_reason") or "").strip() or None,
+            "signal_decision_metrics": (
+                dict(signal_doc.get("decision_metrics") or {})
+                if isinstance(signal_doc.get("decision_metrics"), dict)
+                else {}
+            ),
+            "signal_decision_reason_code": str(signal_doc.get("decision_reason_code") or "").strip() or None,
+            "exit_reason": exit_reason,
+            "exit_mechanism": _resolve_trail_mechanism(
+                exit_reason=exit_reason,
+                trailing_active=trailing_active,
+                orb_trail_active=orb_trail_active,
+                oi_trail_active=oi_trail_active,
+            ),
             "result": result,
             "entry_reason": str(open_position.get("reason") or "").strip() or None,
         }
@@ -568,7 +789,14 @@ class StrategyEvaluationService:
         total = len(trades)
         trailing_stop_trades = [trade for trade in trades if str(trade.get("exit_reason") or "").upper() == "TRAILING_STOP"]
         hard_stop_trades = [trade for trade in trades if str(trade.get("exit_reason") or "").upper() == "STOP_LOSS"]
-        trailing_active_trades = [trade for trade in trades if bool(trade.get("trailing_active"))]
+        generic_trailing_active_trades = [trade for trade in trades if bool(trade.get("trailing_active"))]
+        orb_trailing_active_trades = [trade for trade in trades if bool(trade.get("orb_trail_active"))]
+        oi_trailing_active_trades = [trade for trade in trades if bool(trade.get("oi_trail_active"))]
+        trailing_active_trades = [
+            trade
+            for trade in trades
+            if bool(trade.get("trailing_active")) or bool(trade.get("orb_trail_active")) or bool(trade.get("oi_trail_active"))
+        ]
         locked_gain_pcts: list[float] = []
         trailing_captured_pcts: list[float] = []
 
@@ -596,6 +824,12 @@ class StrategyEvaluationService:
             "trailing_stop_exit_pct": _safe_ratio(len(trailing_stop_trades), total),
             "trailing_active_trades": len(trailing_active_trades),
             "trailing_active_trade_pct": _safe_ratio(len(trailing_active_trades), total),
+            "generic_trailing_active_trades": len(generic_trailing_active_trades),
+            "generic_trailing_active_trade_pct": _safe_ratio(len(generic_trailing_active_trades), total),
+            "orb_trailing_active_trades": len(orb_trailing_active_trades),
+            "orb_trailing_active_trade_pct": _safe_ratio(len(orb_trailing_active_trades), total),
+            "oi_trailing_active_trades": len(oi_trailing_active_trades),
+            "oi_trailing_active_trade_pct": _safe_ratio(len(oi_trailing_active_trades), total),
             "avg_locked_gain_pct_before_trailing_exit": (
                 sum(locked_gain_pcts) / len(locked_gain_pcts) if locked_gain_pcts else None
             ),
@@ -645,7 +879,7 @@ class StrategyEvaluationService:
 
     def _build_equity(self, *, trades: list[dict[str, Any]], initial_capital: float) -> dict[str, Any]:
         ordered = sorted(
-            [trade for trade in trades if trade.get("capital_pnl_pct") is not None],
+            [trade for trade in trades if trade.get("capital_pnl_amount") is not None],
             key=lambda item: ((item.get("exit_dt") or datetime.min.replace(tzinfo=IST_ZONE)), str(item.get("position_id") or "")),
         )
         equity = float(initial_capital)
@@ -657,14 +891,16 @@ class StrategyEvaluationService:
         by_day: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
         for trade in ordered:
-            capital_pnl_pct = float(trade["capital_pnl_pct"])
-            trade_signs.append(1 if capital_pnl_pct > 0 else (-1 if capital_pnl_pct < 0 else 0))
+            capital_pnl_amount = float(trade["capital_pnl_amount"])
+            capital_pnl_pct = _safe_float(trade.get("capital_pnl_pct"))
+            trade_signs.append(1 if capital_pnl_amount > 0 else (-1 if capital_pnl_amount < 0 else 0))
             day = str(trade.get("trade_date_ist") or "")
             if day:
                 by_day[day].append(trade)
-            equity = equity * (1.0 + capital_pnl_pct)
+            equity += capital_pnl_amount
             peak = max(peak, equity)
             drawdown = (equity / peak) - 1.0 if peak > 0 else 0.0
+            drawdown = max(-1.0, drawdown)
             max_drawdown_pct = min(max_drawdown_pct, drawdown)
             date_key = day or (str(trade.get("exit_time") or "")[:10] if trade.get("exit_time") else "")
             equity_curve.append(
@@ -692,23 +928,26 @@ class StrategyEvaluationService:
             day_best: Optional[float] = None
             day_worst: Optional[float] = None
             for trade in day_trades:
-                val = _safe_float(trade.get("capital_pnl_pct"))
-                if val is None:
+                pnl_amount = _safe_float(trade.get("capital_pnl_amount"))
+                if pnl_amount is None:
                     continue
-                day_equity = day_equity * (1.0 + val)
-                if val > 0:
+                val = _safe_float(trade.get("capital_pnl_pct"))
+                day_equity += pnl_amount
+                if pnl_amount > 0:
                     day_wins += 1
-                elif val < 0:
+                elif pnl_amount < 0:
                     day_losses += 1
-                if day_best is None or val > day_best:
-                    day_best = val
-                if day_worst is None or val < day_worst:
-                    day_worst = val
+                if val is not None:
+                    if day_best is None or val > day_best:
+                        day_best = val
+                    if day_worst is None or val < day_worst:
+                        day_worst = val
             equity_end = day_equity
-            day_return_pct = ((equity_end / equity_start) - 1.0) if equity_start > 0 else None
             day_pnl_amount = equity_end - equity_start
+            day_return_pct = (day_pnl_amount / equity_start) if equity_start > 0 else None
             day_peak = max(day_peak, equity_end)
             drawdown_eod = (equity_end / day_peak) - 1.0 if day_peak > 0 else 0.0
+            drawdown_eod = max(-1.0, drawdown_eod)
             if day_return_pct is not None:
                 day_signs.append(1 if day_return_pct > 0 else (-1 if day_return_pct < 0 else 0))
             day_rows.append(

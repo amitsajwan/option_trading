@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "factory_campaign_v1",
+  "campaign_id": "velocity_smoke_campaign_v1",
+  "inputs": {
+    "parquet_root": "../../../.data/ml_pipeline/parquet_data",
+    "support_dataset": "snapshots_ml_flat_v2"
+  },
+  "execution_defaults": {
+    "poll_interval_seconds": 15,
+    "infra_max_attempts": 1,
+    "total_cores": 8,
+    "total_memory_gb": 64,
+    "ranking_strategy": "publishable_economics_v1",
+    "stop_on_first_publishable": false,
+    "model_group": "banknifty_futures/h15_tp_auto",
+    "profile_id": "openfe_v9_dual"
+  },
+  "window_profiles": {
+    "smoke_2023": {
+      "research_train": { "start": "2023-01-02", "end": "2023-08-31" },
+      "research_valid": { "start": "2023-09-01", "end": "2023-10-31" },
+      "full_model": { "start": "2023-01-02", "end": "2023-10-31" },
+      "final_holdout": { "start": "2023-11-01", "end": "2023-12-29" }
+    }
+  },
+  "families": {
+    "model_families": {
+      "full_catalog": {
+        "target": "base_manifest",
+        "models_by_stage": {
+          "stage1": [
+            "xgb_shallow", "xgb_balanced", "xgb_regularized",
+            "xgb_deep_v1", "xgb_deep_slow_v1",
+            "lgbm_fast", "lgbm_dart", "lgbm_large_v1",
+            "logreg_balanced", "logreg_c1", "logreg_c01"
+          ],
+          "stage2": [
+            "xgb_shallow", "xgb_balanced", "xgb_regularized",
+            "xgb_deep_v1", "lgbm_fast", "lgbm_dart", "lgbm_large_v1",
+            "logreg_balanced", "logreg_c01"
+          ],
+          "stage3": [
+            "xgb_shallow", "xgb_balanced", "xgb_regularized",
+            "xgb_deep_v1", "lgbm_dart", "lgbm_large_v1", "logreg_balanced"
+          ]
+        }
+      }
+    },
+    "stage2_feature_families": {
+      "velocity_v1": {
+        "target": "base_manifest",
+        "feature_sets": ["fo_velocity_v1"]
+      }
+    },
+    "stage2_policy_families": {
+      "economic_balance_gate": {
+        "target": "base_manifest",
+        "stage2_policy_id": "direction_gate_economic_balance_v1"
+      }
+    }
+  },
+  "lane_templates": [
+    {
+      "template_id": "velocity_smoke",
+      "base_grid_path": "../research/staged_grid.velocity_screen_v1.json",
+      "window_profiles": ["smoke_2023"],
+      "model_families": ["full_catalog"],
+      "stage2_feature_families": ["velocity_v1"],
+      "stage2_policy_families": ["economic_balance_gate"],
+      "max_generated_lanes": 1,
+      "resource": {
+        "cores": 8,
+        "memory_gb": 54
+      }
+    }
+  ],
+  "campaign_max_lanes": 1
+}

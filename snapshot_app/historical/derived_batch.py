@@ -24,6 +24,15 @@ from .snapshot_batch import (
 )
 
 
+def _derived_contract_validation_metadata(validate_ml_flat_contract: bool) -> dict[str, Any]:
+    enabled = bool(validate_ml_flat_contract)
+    return {
+        "contract_validation_requested": enabled,
+        "contract_validation_enabled": enabled,
+        "contract_validation_scope": "derived_snapshot_ml_flat",
+    }
+
+
 def _project_stage_rows_from_market_base(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     projected: dict[str, list[dict[str, Any]]] = {name: [] for name in STAGE_OUTPUT_DATASETS}
     for row in rows:
@@ -95,6 +104,7 @@ def run_derived_batch(
             "status": ("partial_incomplete" if missing_input_days else "no_days"),
             "output_dataset": OUTPUT_DATASET_ML_FLAT,
             "source_dataset": OUTPUT_DATASET_MARKET_BASE,
+            **_derived_contract_validation_metadata(validate_ml_flat_contract),
             "days_available": 0,
             "days_skipped_missing_inputs": len(missing_input_days),
             "missing_input_days": missing_input_days[:50],
@@ -131,6 +141,7 @@ def run_derived_batch(
             "status": "dry_run",
             "output_dataset": OUTPUT_DATASET_ML_FLAT,
             "source_dataset": OUTPUT_DATASET_MARKET_BASE,
+            **_derived_contract_validation_metadata(validate_ml_flat_contract),
             "days_available": len(output_days),
             "days_pending": len(pending_output_days),
             "days_ready": len(pending_output_days),
@@ -146,6 +157,7 @@ def run_derived_batch(
             "status": ("partial_incomplete" if missing_input_days else "already_complete"),
             "output_dataset": OUTPUT_DATASET_ML_FLAT,
             "source_dataset": OUTPUT_DATASET_MARKET_BASE,
+            **_derived_contract_validation_metadata(validate_ml_flat_contract),
             "days_available": len(output_days),
             "days_skipped_existing": len(already_done),
             "days_pending": 0,
@@ -159,6 +171,7 @@ def run_derived_batch(
             "status": "partial_incomplete",
             "output_dataset": OUTPUT_DATASET_ML_FLAT,
             "source_dataset": OUTPUT_DATASET_MARKET_BASE,
+            **_derived_contract_validation_metadata(validate_ml_flat_contract),
             "days_available": len(output_days),
             "days_pending": len(pending_output_days),
             "days_skipped_missing_inputs": len(missing_input_days) + len(pending_output_days),
@@ -259,7 +272,7 @@ def run_derived_batch(
         "build_source": build_source,
         "build_run_id": resolved_build_run_id,
         "partition_key": str(partition_key or ""),
-        "contract_validation_enabled": bool(validate_ml_flat_contract),
+        **_derived_contract_validation_metadata(validate_ml_flat_contract),
         "days_available": len(output_days),
         "days_pending": len(pending_output_days),
         "days_processed": days_done,

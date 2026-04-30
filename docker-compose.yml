@@ -2,6 +2,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    command: redis-server --client-output-buffer-limit "normal 0 0 0 slave 268435456 67108864 60 pubsub 0 0 0"
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
@@ -301,6 +302,12 @@ services:
       ML_PURE_MODEL_GROUP: "${ML_PURE_MODEL_GROUP:-}"
       ML_PURE_MODEL_PACKAGE: "${ML_PURE_MODEL_PACKAGE:-}"
       ML_PURE_THRESHOLD_REPORT: "${ML_PURE_THRESHOLD_REPORT:-}"
+      STRATEGY_ML_PURE_BYPASS_GATES: "${STRATEGY_ML_PURE_BYPASS_GATES:-0}"
+      ML_PURE_UNDERLYING_STOP_PCT: "${ML_PURE_UNDERLYING_STOP_PCT:-}"
+      ML_PURE_UNDERLYING_TARGET_PCT: "${ML_PURE_UNDERLYING_TARGET_PCT:-}"
+      ML_PURE_POST_STOP_COOLDOWN_BARS: "${ML_PURE_POST_STOP_COOLDOWN_BARS:-0}"
+      STRATEGY_ENHANCED_VELOCITY: "${STRATEGY_ENHANCED_VELOCITY:-0}"
+      STRATEGY_IV_EXTREME_PERCENTILE: "${STRATEGY_IV_EXTREME_PERCENTILE:-95.0}"
       RISK_PROFILE: "${RISK_PROFILE:-}"
       RISK_LOT_SIZING_MODE: "${RISK_LOT_SIZING_MODE:-risk_based}"
       RISK_NOTIONAL_PER_TRADE: "${RISK_NOTIONAL_PER_TRADE:-0}"
@@ -333,7 +340,7 @@ services:
         "--topic",
         "${LIVE_TOPIC:-market:snapshot:v1}",
         "--rollout-stage",
-        "${STRATEGY_ROLLOUT_STAGE:-paper}",
+        "${STRATEGY_ROLLOUT_STAGE:-capped_live}",
         "--position-size-multiplier",
         "${STRATEGY_POSITION_SIZE_MULTIPLIER:-1.0}",
         "--ml-runtime-guard-file",
@@ -549,6 +556,12 @@ services:
       ML_PURE_MODEL_GROUP: "${ML_PURE_MODEL_GROUP:-}"
       ML_PURE_MODEL_PACKAGE: "${ML_PURE_MODEL_PACKAGE:-}"
       ML_PURE_THRESHOLD_REPORT: "${ML_PURE_THRESHOLD_REPORT:-}"
+      STRATEGY_ML_PURE_BYPASS_GATES: "${STRATEGY_ML_PURE_BYPASS_GATES:-0}"
+      ML_PURE_UNDERLYING_STOP_PCT: "${ML_PURE_UNDERLYING_STOP_PCT:-}"
+      ML_PURE_UNDERLYING_TARGET_PCT: "${ML_PURE_UNDERLYING_TARGET_PCT:-}"
+      ML_PURE_POST_STOP_COOLDOWN_BARS: "${ML_PURE_POST_STOP_COOLDOWN_BARS:-0}"
+      STRATEGY_ENHANCED_VELOCITY: "${STRATEGY_ENHANCED_VELOCITY:-0}"
+      STRATEGY_IV_EXTREME_PERCENTILE: "${STRATEGY_IV_EXTREME_PERCENTILE:-95.0}"
       RISK_PROFILE: "${RISK_PROFILE:-}"
       RISK_LOT_SIZING_MODE: "${RISK_LOT_SIZING_MODE:-risk_based}"
       RISK_NOTIONAL_PER_TRADE: "${RISK_NOTIONAL_PER_TRADE:-0}"
@@ -596,6 +609,8 @@ services:
         "${ML_PURE_MODEL_PACKAGE:-}",
         "--ml-pure-threshold-report",
         "${ML_PURE_THRESHOLD_REPORT:-}",
+        "--ml-pure-max-feature-age-sec",
+        "${ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL:-0}",
       ]
     volumes:
       - ./.run:/app/.run

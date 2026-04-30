@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "_comment": "Regime fix grid. 3 runs targeting the CE/PE regime bias from simple_s2_v1. Run 1 is full pipeline (fresh Stage 1). Runs 2-3 reuse Stage 1. Hypothesis: fo_midday_direction_regime_v3 oracle rolling win-rate features allow the model to adapt to regime shift without CE-dominant training data. Stage 3 uses recipe_fixed_baseline_guard_v1 across all runs (tries dynamic, falls back to best fixed recipe if not non-inferior).",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.regime_fix_v1.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_regime_fix_v1"
+  },
+  "selection": {
+    "ranking_strategy": "stage3_policy_paths_v1",
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.55,
+      "brier_max": 0.26
+    },
+    "robustness_probe": {
+      "enabled": true,
+      "top_k": 3,
+      "iterations": 200,
+      "random_seed": 42,
+      "splits": ["research_valid", "final_holdout"],
+      "resample_unit": "trade_date"
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "regime_fix_s2_expiry_baseline",
+        "model_group_suffix": "_regime_fix_s2_expiry_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_regime_fix_s2_expiry_baseline"
+          }
+        }
+      },
+      {
+        "run_id": "regime_fix_s2_regime_v3",
+        "model_group_suffix": "_regime_fix_s2_regime_v3",
+        "reuse_stage1_from": "regime_fix_s2_expiry_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_regime_fix_s2_regime_v3"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_midday_direction_regime_v3"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "regime_fix_s2_midday_noconv",
+        "model_group_suffix": "_regime_fix_s2_midday_noconv",
+        "reuse_stage1_from": "regime_fix_s2_expiry_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_regime_fix_s2_midday_noconv"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": ["fo_midday_time_aware_plus_oi_iv"]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

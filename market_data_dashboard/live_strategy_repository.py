@@ -59,6 +59,7 @@ class LiveStrategyRepository:
             "votes": db[names["votes"]],
             "signals": db[names["signals"]],
             "positions": db[names["positions"]],
+            "traces": db[names["traces"]] if "traces" in names else None,
         }
 
     def snapshot_collection(self) -> Any:
@@ -68,9 +69,47 @@ class LiveStrategyRepository:
         coll_name = coll_name or self._default_snapshot_collection
         return self._evaluation_service._db()[coll_name]
 
-    def load_recent_votes(self, date_ist: str, limit: int) -> list[dict[str, Any]]:
+    @staticmethod
+    def _date_run_query(date_ist: str, run_id: str | None = None) -> dict[str, Any]:
+        query: dict[str, Any] = {"trade_date_ist": str(date_ist)}
+        run_text = str(run_id or "").strip()
+        if run_text:
+            query["run_id"] = run_text
+        return query
+
+    def _load_recent_docs(
+        self,
+        coll: Any,
+        *,
+        date_ist: str,
+        limit: int,
+        run_id: str | None,
+        projection: dict[str, Any],
+        allow_historical_run_fallback: bool = True,
+    ) -> list[dict[str, Any]]:
+        query = self._date_run_query(date_ist, run_id)
+        docs = list(coll.find(query, projection).sort("timestamp", -1).limit(int(limit)))
+        if (
+            docs
+            or not allow_historical_run_fallback
+            or not str(run_id or "").strip()
+            or self._dataset != "historical"
+        ):
+            return docs
+        # Historical raw collections can contain replay rows without the evaluation run_id.
+        # Fall back to the date-scoped slice so replay diagnostics stay visible on no-trade days.
+        fallback_query = self._date_run_query(date_ist, None)
+        return list(coll.find(fallback_query, projection).sort("timestamp", -1).limit(int(limit)))
+
+    def load_recent_votes(
+        self,
+        date_ist: str,
+        limit: int,
+        run_id: str | None = None,
+        *,
+        allow_historical_run_fallback: bool = True,
+    ) -> list[dict[str, Any]]:
         coll = self.collections()["votes"]
-        query = {"trade_date_ist": str(date_ist)}
         projection = {
             "_id": 0,
             "timestamp": 1,
@@ -89,7 +128,14 @@ class LiveStrategyRepository:
             "payload.vote": 1,
         }
         rows: list[dict[str, Any]] = []
-        for doc in coll.find(query, projection).sort("timestamp", -1).limit(int(limit)):
+        for doc in self._load_recent_docs(
+            coll,
+            date_ist=date_ist,
+            limit=limit,
+            run_id=run_id,
+            projection=projection,
+            allow_historical_run_fallback=allow_historical_run_fallback,
+        ):
             vote = ((doc.get("payload") or {}).get("vote")) if isinstance(doc.get("payload"), dict) else {}
             vote = vote if isinstance(vote, dict) else {}
             raw_signals = vote.get("raw_signals") if isinstance(vote.get("raw_signals"), dict) else {}
@@ -125,9 +171,15 @@ class LiveStrategyRepository:
             )
         return rows
 
-    def load_recent_signals(self, date_ist: str, limit: int) -> list[dict[str, Any]]:
+    def load_recent_signals(
+        self,
+        date_ist: str,
+        limit: int,
+        run_id: str | None = None,
+        *,
+        allow_historical_run_fallback: bool = True,
+    ) -> list[dict[str, Any]]:
         coll = self.collections()["signals"]
-        query = {"trade_date_ist": str(date_ist)}
         projection = {
             "_id": 0,
             "signal_id": 1,
@@ -146,7 +198,14 @@ class LiveStrategyRepository:
             "payload.signal": 1,
         }
         rows: list[dict[str, Any]] = []
-        for doc in coll.find(query, projection).sort("timestamp", -1).limit(int(limit)):
+        for doc in self._load_recent_docs(
+            coll,
+            date_ist=date_ist,
+            limit=limit,
+            run_id=run_id,
+            projection=projection,
+            allow_historical_run_fallback=allow_historical_run_fallback,
+        ):
             signal = ((doc.get("payload") or {}).get("signal")) if isinstance(doc.get("payload"), dict) else {}
             signal = signal if isinstance(signal, dict) else {}
             contributing = signal.get("contributing_strategies") if isinstance(signal.get("contributing_strategies"), list) else []
@@ -184,9 +243,9 @@ class LiveStrategyRepository:
             )
         return rows
 
-    def load_position_map(self, date_ist: str) -> dict[str, dict[str, Any]]:
+    def load_position_map(self, date_ist: str, run_id: str | None = None) -> dict[str, dict[str, Any]]:
         coll = self.collections()["positions"]
-        query = {"trade_date_ist": str(date_ist)}
+        query = self._date_run_query(date_ist, run_id)
         projection = {
             "_id": 0,
             "position_id": 1,
@@ -223,8 +282,10 @@ class LiveStrategyRepository:
 
     def latest_trade_date(self) -> str | None:
         coll_map = self.collections()
-        for key in ("positions", "signals", "votes"):
+        for key in ("positions", "signals", "votes", "traces"):
             coll = coll_map[key]
+            if coll is None:
+                continue
             doc = coll.find_one(
                 {"trade_date_ist": {"$exists": True, "$ne": ""}},
                 {"_id": 0, "trade_date_ist": 1, "timestamp": 1},
@@ -258,6 +319,109 @@ class LiveStrategyRepository:
             if value:
                 return value
         return None
+
+    def load_recent_trace_digests(
+        self,
+        date_ist: str,
+        limit: int,
+        *,
+        run_id: str | None = None,
+        allow_historical_run_fallback: bool = True,
+        outcome: str | None = None,
+        engine_mode: str | None = None,
+        only_blocked: bool = False,
+        snapshot_id: str | None = None,
+        position_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        coll = self.collections().get("traces")
+        if coll is None:
+            return []
+        query = self._date_run_query(date_ist, run_id)
+        outcome_text = str(outcome or "").strip()
+        if outcome_text:
+            query["final_outcome"] = outcome_text
+        engine_text = str(engine_mode or "").strip().lower()
+        if engine_text:
+            query["engine_mode"] = engine_text
+        if bool(only_blocked):
+            query["final_outcome"] = "blocked"
+        snapshot_text = str(snapshot_id or "").strip()
+        if snapshot_text:
+            query["snapshot_id"] = snapshot_text
+        position_text = str(position_id or "").strip()
+        if position_text:
+            query["position_id"] = position_text
+        projection = {
+            "_id": 0,
+            "trace_id": 1,
+            "snapshot_id": 1,
+            "timestamp": 1,
+            "trade_date_ist": 1,
+            "run_id": 1,
+            "engine_mode": 1,
+            "decision_mode": 1,
+            "evaluation_type": 1,
+            "final_outcome": 1,
+            "primary_blocker_gate": 1,
+            "selected_candidate_id": 1,
+            "selected_strategy_name": 1,
+            "selected_direction": 1,
+            "position_id": 1,
+            "candidate_count": 1,
+            "blocked_candidate_count": 1,
+            "summary_metrics": 1,
+        }
+        if (
+            allow_historical_run_fallback
+            and self._dataset == "historical"
+            and str(run_id or "").strip()
+        ):
+            docs = self._load_recent_docs(
+                coll,
+                date_ist=date_ist,
+                limit=limit,
+                run_id=run_id,
+                projection=projection,
+                allow_historical_run_fallback=True,
+            )
+        else:
+            docs = list(coll.find(query, projection).sort("timestamp", -1).limit(int(limit)))
+        rows: list[dict[str, Any]] = []
+        for doc in docs:
+            rows.append(
+                {
+                    "trace_id": str(doc.get("trace_id") or "").strip() or None,
+                    "snapshot_id": str(doc.get("snapshot_id") or "").strip() or None,
+                    "timestamp": _iso_or_none(doc.get("timestamp")),
+                    "trade_date_ist": str(doc.get("trade_date_ist") or "").strip() or None,
+                    "run_id": str(doc.get("run_id") or "").strip() or None,
+                    "engine_mode": normalize_engine_mode(doc.get("engine_mode")),
+                    "decision_mode": normalize_decision_mode(doc.get("decision_mode")),
+                    "evaluation_type": str(doc.get("evaluation_type") or "").strip() or None,
+                    "final_outcome": str(doc.get("final_outcome") or "").strip() or None,
+                    "primary_blocker_gate": str(doc.get("primary_blocker_gate") or "").strip() or None,
+                    "selected_candidate_id": str(doc.get("selected_candidate_id") or "").strip() or None,
+                    "selected_strategy_name": str(doc.get("selected_strategy_name") or "").strip() or None,
+                    "selected_direction": str(doc.get("selected_direction") or "").strip() or None,
+                    "position_id": str(doc.get("position_id") or "").strip() or None,
+                    "candidate_count": int(doc.get("candidate_count") or 0),
+                    "blocked_candidate_count": int(doc.get("blocked_candidate_count") or 0),
+                    "summary_metrics": (
+                        doc.get("summary_metrics") if isinstance(doc.get("summary_metrics"), dict) else {}
+                    ),
+                }
+            )
+        return rows
+
+    def load_trace_detail(self, trace_id: str) -> dict[str, Any] | None:
+        coll = self.collections().get("traces")
+        trace_text = str(trace_id or "").strip()
+        if coll is None or not trace_text:
+            return None
+        doc = coll.find_one({"trace_id": trace_text}, {"_id": 0, "payload.trace": 1})
+        payload = ((doc or {}).get("payload") or {}) if isinstance(doc, dict) else {}
+        trace = payload.get("trace") if isinstance(payload, dict) else None
+        return trace if isinstance(trace, dict) else None
 
 
 __all__ = [

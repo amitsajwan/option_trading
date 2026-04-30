@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 
@@ -16,16 +18,20 @@ class DashboardHistoricalReplayRouter:
         templates_dir: Path,
         get_historical_replay_service: Callable[[], Any],
         now_iso_ist: Callable[[], str],
+        get_strategy_eval_service: Optional[Callable[[], Any]] = None,
     ) -> None:
         self._templates = templates
         self._templates_dir = Path(templates_dir)
         self._get_historical_replay_service = get_historical_replay_service
+        self._get_strategy_eval_service = get_strategy_eval_service
         self._now_iso_ist = now_iso_ist
 
         router = APIRouter(tags=["historical-replay"])
         router.add_api_route("/historical/replay", self.historical_replay, methods=["GET"], response_class=HTMLResponse)
         router.add_api_route("/api/historical/replay/session", self.get_historical_strategy_session, methods=["GET"])
         router.add_api_route("/api/historical/replay/status", self.get_historical_replay_status, methods=["GET"])
+        router.add_api_route("/api/historical/replay/stream", self.stream_replay_status, methods=["GET"])
+        router.add_api_route("/api/historical/replay/generate", self.generate_replay_data, methods=["POST"])
         router.add_api_route("/api/health/replay", self.replay_health, methods=["GET"])
         self.router = router
 
@@ -35,8 +41,8 @@ class DashboardHistoricalReplayRouter:
             raise HTTPException(status_code=500, detail="historical replay service unavailable")
         return service
 
-    async def historical_replay(self, request: Request) -> HTMLResponse:
-        return self._templates.TemplateResponse("historical_replay.html", {"request": request})
+    async def historical_replay(self, request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/app?mode=replay", status_code=302)
 
     async def get_historical_replay_status(
         self,
@@ -53,6 +59,7 @@ class DashboardHistoricalReplayRouter:
         self,
         date: Optional[str] = None,
         instrument: Optional[str] = None,
+        run_id: Optional[str] = None,
         limit_votes: int = 25,
         limit_signals: int = 25,
         limit_trades: int = 20,
@@ -65,6 +72,7 @@ class DashboardHistoricalReplayRouter:
             return service.get_historical_strategy_session(
                 date=date,
                 instrument=instrument,
+                run_id=run_id,
                 limit_votes=limit_votes,
                 limit_signals=limit_signals,
                 limit_trades=limit_trades,
@@ -73,9 +81,58 @@ class DashboardHistoricalReplayRouter:
                 debug_view=debug_view,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            msg = str(exc)
+            if "not found" in msg.lower() or "no completed" in msg:
+                return {"session": {"date_ist": date, "run_id": run_id}, "mode": "historical", "active_run_id": run_id, "detail": msg, "no_data": True}
+            raise HTTPException(status_code=400, detail=msg)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to build historical replay session: {exc}")
+
+    async def stream_replay_status(self, request: Request) -> StreamingResponse:
+        service = self._require_service()
+
+        async def _generate():
+            try:
+                while not await request.is_disconnected():
+                    try:
+                        status = service.get_replay_status_fast()
+                        yield f"data: {json.dumps(status)}\n\n"
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                pass
+
+        return StreamingResponse(
+            _generate(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    async def generate_replay_data(self, request: Request) -> Any:
+        """Trigger full ML pipeline for a historical date via the eval orchestrator."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        trade_date = str(body.get("trade_date") or "").strip()
+        if not trade_date:
+            raise HTTPException(status_code=400, detail="trade_date required (YYYY-MM-DD)")
+        eval_service = self._get_strategy_eval_service() if self._get_strategy_eval_service else None
+        if eval_service is None:
+            raise HTTPException(status_code=503, detail="strategy eval service unavailable")
+        try:
+            result = eval_service.queue_replay_run(
+                dataset="historical",
+                date_from=trade_date,
+                date_to=trade_date,
+                speed=0,
+                base_path=None,
+                risk_config=None,
+            )
+            return {"status": "queued", "run_id": result.get("run_id"), "trade_date": trade_date}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to queue replay: {exc}")
 
     async def replay_health(self, date: Optional[str] = None, instrument: Optional[str] = None) -> Any:
         service = self._require_service()

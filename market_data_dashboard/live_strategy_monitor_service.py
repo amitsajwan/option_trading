@@ -172,6 +172,11 @@ def _ux_v1_enabled() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def _decision_trace_enabled() -> bool:
+    raw = str(os.getenv("DASHBOARD_ENABLE_DECISION_TRACE", "1")).strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def _normalize_engine_mode(raw: Any) -> Optional[str]:
     return _contract_normalize_engine_mode(raw)
 
@@ -195,6 +200,16 @@ def _distribution(values: list[float]) -> dict[str, Any]:
         "max": float(arr[-1]),
         "mean": float(sum(arr) / len(arr)),
     }
+
+
+def _safe_count_documents(coll: Any, query: dict[str, Any]) -> int:
+    counter = getattr(coll, "count_documents", None)
+    if not callable(counter):
+        return 0
+    try:
+        return int(counter(query))
+    except Exception:
+        return 0
 
 
 class LiveStrategyMonitorService:
@@ -250,28 +265,143 @@ class LiveStrategyMonitorService:
     def _policy_row_from_vote_doc(self, doc: dict[str, Any]) -> Optional[dict[str, Any]]:
         return _policy_row_from_vote_doc_module(doc)
 
-    def build_deterministic_diagnostics(self, *, date_ist: str, votes_coll: Any) -> dict[str, Any]:
-        return _build_deterministic_diagnostics_module(date_ist=date_ist, votes_coll=votes_coll)
+    def build_deterministic_diagnostics(
+        self,
+        *,
+        date_ist: str,
+        votes_coll: Any,
+        run_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        return _build_deterministic_diagnostics_module(date_ist=date_ist, votes_coll=votes_coll, run_id=run_id)
 
     def build_ml_pure_diagnostics(self, *, date_ist: str, signals_coll: Any, positions_coll: Any = None) -> dict[str, Any]:
         return _build_ml_pure_diagnostics_module(date_ist=date_ist, signals_coll=signals_coll, positions_coll=positions_coll)
 
-    def build_decision_diagnostics(self, *, date_ist: str, votes_coll: Any, signals_coll: Any, positions_coll: Any = None) -> DecisionDiagnostics:
-        deterministic = self.build_deterministic_diagnostics(date_ist=date_ist, votes_coll=votes_coll)
+    def build_decision_diagnostics(
+        self,
+        *,
+        date_ist: str,
+        votes_coll: Any,
+        signals_coll: Any,
+        positions_coll: Any = None,
+        run_id: Optional[str] = None,
+    ) -> DecisionDiagnostics:
+        deterministic = self.build_deterministic_diagnostics(date_ist=date_ist, votes_coll=votes_coll, run_id=run_id)
         ml_pure = self.build_ml_pure_diagnostics(date_ist=date_ist, signals_coll=signals_coll, positions_coll=positions_coll)
         return {
             "deterministic": deterministic,
             "ml_pure": ml_pure,
         }
 
-    def load_recent_votes(self, date_ist: str, limit: int) -> list[dict[str, Any]]:
-        return self._repo.load_recent_votes(date_ist, int(limit))
+    def load_recent_votes(
+        self,
+        date_ist: str,
+        limit: int,
+        run_id: Optional[str] = None,
+        *,
+        allow_historical_run_fallback: bool = True,
+    ) -> list[dict[str, Any]]:
+        try:
+            return self._repo.load_recent_votes(
+                date_ist,
+                int(limit),
+                run_id,
+                allow_historical_run_fallback=allow_historical_run_fallback,
+            )
+        except TypeError:
+            return self._repo.load_recent_votes(date_ist, int(limit), run_id)
 
-    def load_recent_signals(self, date_ist: str, limit: int) -> list[dict[str, Any]]:
-        return self._repo.load_recent_signals(date_ist, int(limit))
+    def load_recent_signals(
+        self,
+        date_ist: str,
+        limit: int,
+        run_id: Optional[str] = None,
+        *,
+        allow_historical_run_fallback: bool = True,
+    ) -> list[dict[str, Any]]:
+        try:
+            return self._repo.load_recent_signals(
+                date_ist,
+                int(limit),
+                run_id,
+                allow_historical_run_fallback=allow_historical_run_fallback,
+            )
+        except TypeError:
+            return self._repo.load_recent_signals(date_ist, int(limit), run_id)
 
-    def load_position_map(self, date_ist: str) -> dict[str, dict[str, Any]]:
-        return self._repo.load_position_map(date_ist)
+    def load_position_map(self, date_ist: str, run_id: Optional[str] = None) -> dict[str, dict[str, Any]]:
+        return self._repo.load_position_map(date_ist, run_id)
+
+    def load_recent_trace_digests(
+        self,
+        date_ist: str,
+        limit: int,
+        *,
+        run_id: Optional[str] = None,
+        allow_historical_run_fallback: bool = True,
+        outcome: Optional[str] = None,
+        engine_mode: Optional[str] = None,
+        only_blocked: bool = False,
+        snapshot_id: Optional[str] = None,
+        position_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        loader = getattr(self._repo, "load_recent_trace_digests", None)
+        if not callable(loader):
+            return []
+        try:
+            return loader(
+                date_ist,
+                int(limit),
+                run_id=run_id,
+                allow_historical_run_fallback=allow_historical_run_fallback,
+                outcome=outcome,
+                engine_mode=engine_mode,
+                only_blocked=only_blocked,
+                snapshot_id=snapshot_id,
+                position_id=position_id,
+            )
+        except TypeError:
+            return loader(
+                date_ist,
+                int(limit),
+                run_id=run_id,
+                outcome=outcome,
+                engine_mode=engine_mode,
+                only_blocked=only_blocked,
+                snapshot_id=snapshot_id,
+                position_id=position_id,
+            )
+
+    def get_trace_detail(self, trace_id: str) -> Optional[dict[str, Any]]:
+        loader = getattr(self._repo, "load_trace_detail", None)
+        if not callable(loader):
+            return None
+        return loader(trace_id)
+
+    def build_decision_trace_summary(self, digests: list[dict[str, Any]]) -> dict[str, Any]:
+        rows = [item for item in digests if isinstance(item, dict)]
+        blocked = sum(1 for item in rows if str(item.get("final_outcome") or "").strip().lower() == "blocked")
+        entries = sum(1 for item in rows if str(item.get("final_outcome") or "").strip().lower() == "entry_taken")
+        exits = sum(1 for item in rows if str(item.get("final_outcome") or "").strip().lower() == "exit_taken")
+        blockers: dict[str, int] = {}
+        for item in rows:
+            gate = str(item.get("primary_blocker_gate") or "").strip()
+            if not gate:
+                continue
+            blockers[gate] = int(blockers.get(gate, 0) + 1)
+        top_blockers = [
+            {"gate": key, "count": value}
+            for key, value in sorted(blockers.items(), key=lambda item: (-item[1], item[0]))[:5]
+        ]
+        latest = rows[0] if rows else None
+        return {
+            "sampled_traces": len(rows),
+            "blocked_traces": blocked,
+            "entry_traces": entries,
+            "exit_traces": exits,
+            "top_blockers": top_blockers,
+            "latest_outcome": str((latest or {}).get("final_outcome") or "").strip() or None,
+        }
 
     def build_current_open_positions(
         self,
@@ -673,6 +803,7 @@ class LiveStrategyMonitorService:
         *,
         date: Optional[str] = None,
         instrument: Optional[str] = None,
+        run_id: Optional[str] = None,
         limit_votes: Any = None,
         limit_signals: Any = None,
         limit_trades: Any = None,
@@ -683,30 +814,70 @@ class LiveStrategyMonitorService:
         date_ist = self.get_session_date_ist(date)
         requested_instrument = str(instrument or os.getenv("INSTRUMENT_SYMBOL") or "").strip() or None
         instrument_name = self.resolve_session_instrument(date_ist=date_ist, requested_instrument=requested_instrument)
-        vote_limit = _safe_limit(limit_votes, default=25, maximum=100)
-        signal_limit = _safe_limit(limit_signals, default=25, maximum=100)
-        trade_limit = _safe_limit(limit_trades, default=20, maximum=100)
+        vote_limit_max = 2000 if self._dataset == "historical" else 100
+        signal_limit_max = 5000 if self._dataset == "historical" else 100
+        trade_limit_max = 500 if self._dataset == "historical" else 100
+        vote_limit = _safe_limit(limit_votes, default=25, maximum=vote_limit_max)
+        signal_limit = _safe_limit(limit_signals, default=25, maximum=signal_limit_max)
+        trade_limit = _safe_limit(limit_trades, default=20, maximum=trade_limit_max)
         resolved_timeline_limit = _safe_limit(timeline_limit, default=25, maximum=100)
         raw_debug_view = _coerce_bool(debug_view)
         resolved_debug_view = bool(raw_debug_view) if raw_debug_view is not None else False
         resolved_capital = self.resolve_live_capital(initial_capital)
+        resolved_run_id = str(run_id or "").strip() or None
+        allow_historical_run_fallback = not (self._dataset == "historical" and resolved_run_id)
 
         coll_map = self._repo.collections()
         votes_coll = coll_map["votes"]
         signals_coll = coll_map["signals"]
+        positions_coll = coll_map["positions"]
         date_match = {"trade_date_ist": str(date_ist)}
+        if resolved_run_id:
+            date_match["run_id"] = resolved_run_id
         signal_map = self._evaluation_service._load_signal_map(
             signals_coll=signals_coll,
             date_match=date_match,
         )
-        position_map = self.load_position_map(date_ist)
-        recent_votes = self.load_recent_votes(date_ist, vote_limit)
-        recent_signals = self.load_recent_signals(date_ist, signal_limit)
+        position_map = self.load_position_map(date_ist, resolved_run_id)
+        try:
+            recent_votes = self.load_recent_votes(
+                date_ist,
+                vote_limit,
+                resolved_run_id,
+                allow_historical_run_fallback=allow_historical_run_fallback,
+            )
+        except TypeError:
+            recent_votes = self.load_recent_votes(date_ist, vote_limit, resolved_run_id)
+        try:
+            recent_signals = self.load_recent_signals(
+                date_ist,
+                signal_limit,
+                resolved_run_id,
+                allow_historical_run_fallback=allow_historical_run_fallback,
+            )
+        except TypeError:
+            recent_signals = self.load_recent_signals(date_ist, signal_limit, resolved_run_id)
+        recent_trace_digests: list[dict[str, Any]] = []
+        if _decision_trace_enabled():
+            try:
+                recent_trace_digests = self.load_recent_trace_digests(
+                    date_ist,
+                    resolved_timeline_limit,
+                    run_id=resolved_run_id,
+                    allow_historical_run_fallback=allow_historical_run_fallback,
+                )
+            except TypeError:
+                recent_trace_digests = self.load_recent_trace_digests(
+                    date_ist,
+                    resolved_timeline_limit,
+                    run_id=resolved_run_id,
+                )
         decision_diagnostics = self.build_decision_diagnostics(
             date_ist=date_ist,
             votes_coll=votes_coll,
             signals_coll=signals_coll,
-            positions_coll=coll_map["positions"],
+            positions_coll=positions_coll,
+            run_id=resolved_run_id,
         )
         engine_context = self.infer_engine_context(
             recent_votes=recent_votes,
@@ -737,7 +908,7 @@ class LiveStrategyMonitorService:
                 page_size=trade_limit,
                 sort_by="exit_time",
                 sort_dir="desc",
-                run_id=None,
+                run_id=resolved_run_id,
             )
             recent_trades = list(trades_payload.get("rows") or [])
         except ValueError as exc:
@@ -758,7 +929,7 @@ class LiveStrategyMonitorService:
                 regimes=[],
                 initial_capital=resolved_capital,
                 cost_bps=0.0,
-                run_id=None,
+                run_id=resolved_run_id,
             )
         except ValueError as exc:
             if self._dataset == "historical" and "no completed historical evaluation runs found" in str(exc):
@@ -798,11 +969,26 @@ class LiveStrategyMonitorService:
         )
 
         freshness_payload = self.build_freshness(latest_vote_ts, latest_signal_ts, latest_position_ts)
+        raw_signal_count = _safe_count_documents(signals_coll, date_match)
+        raw_vote_count = _safe_count_documents(votes_coll, date_match)
+        raw_position_count = _safe_count_documents(positions_coll, date_match)
         counts_payload = {
             **dict(summary.get("counts") or {}),
             "open_positions": len(active_positions),
             "stale_open_positions": len(stale_positions),
         }
+        if self._dataset == "historical":
+            # Historical replays can legitimately populate raw collections before any
+            # evaluation summary exists. Prefer the observed collection counts so the
+            # session API reflects replay activity instead of summary fallback zeros.
+            counts_payload["votes"] = max(int(counts_payload.get("votes") or 0), raw_vote_count)
+            counts_payload["signals"] = max(int(counts_payload.get("signals") or 0), raw_signal_count)
+            counts_payload["positions"] = max(int(counts_payload.get("positions") or 0), raw_position_count)
+            counts_payload["closed_trades"] = max(
+                int(counts_payload.get("closed_trades") or 0),
+                int(counts_payload.get("trades") or 0),
+                len(recent_trades),
+            )
 
         ops_state: Optional[OpsState] = None
         active_alerts: Optional[list[AlertItem]] = None
@@ -893,6 +1079,9 @@ class LiveStrategyMonitorService:
             active_alerts=active_alerts,
             decision_explainability=decision_explainability,
             ui_hints=ui_hints,
+            decision_trace_summary=(self.build_decision_trace_summary(recent_trace_digests) if recent_trace_digests else None),
+            latest_trace_digest=(recent_trace_digests[0] if recent_trace_digests else None),
+            decision_trace_available=_decision_trace_enabled(),
             chart_markers=self.build_chart_markers(recent_trades, active_positions),
         )
 
@@ -904,21 +1093,41 @@ class LiveStrategyMonitorService:
             "timestamp": 1,
             "payload.snapshot.session_context.timestamp": 1,
             "payload.snapshot.session_context.time": 1,
+            "payload.snapshot.futures_bar.fut_open": 1,
+            "payload.snapshot.futures_bar.fut_high": 1,
+            "payload.snapshot.futures_bar.fut_low": 1,
             "payload.snapshot.futures_bar.fut_close": 1,
+            "payload.snapshot.futures_bar.fut_volume": 1,
         }
-        def _collect(query: dict[str, Any]) -> tuple[list[str], list[str], list[float], Optional[str]]:
+        def _collect(query: dict[str, Any]) -> tuple[
+            list[str], list[str], list[float], list[float], list[float], list[float], list[float], Optional[str]
+        ]:
             timestamps: list[str] = []
             labels: list[str] = []
-            prices: list[float] = []
+            opens: list[float] = []
+            highs: list[float] = []
+            lows: list[float] = []
+            closes: list[float] = []
+            volumes: list[float] = []
             resolved_instrument: Optional[str] = None
             for doc in coll.find(query, projection).sort("timestamp", 1):
                 payload = (doc.get("payload") or {}) if isinstance(doc.get("payload"), dict) else {}
                 snapshot = (payload.get("snapshot") or {}) if isinstance(payload.get("snapshot"), dict) else {}
                 session_context = (snapshot.get("session_context") or {}) if isinstance(snapshot.get("session_context"), dict) else {}
                 futures_bar = (snapshot.get("futures_bar") or {}) if isinstance(snapshot.get("futures_bar"), dict) else {}
-                price = _safe_float(futures_bar.get("fut_close"))
-                if price is None:
+                close = _safe_float(futures_bar.get("fut_close"))
+                if close is None:
                     continue
+                open_ = _safe_float(futures_bar.get("fut_open"))
+                high = _safe_float(futures_bar.get("fut_high"))
+                low = _safe_float(futures_bar.get("fut_low"))
+                volume = _safe_float(futures_bar.get("fut_volume"))
+                if open_ is None:
+                    open_ = close
+                if high is None:
+                    high = max(open_, close)
+                if low is None:
+                    low = min(open_, close)
                 ts = _iso_or_none(doc.get("timestamp")) or _iso_or_none(session_context.get("timestamp"))
                 if ts is None:
                     continue
@@ -931,23 +1140,34 @@ class LiveStrategyMonitorService:
                     label = parsed.astimezone(IST_ZONE).strftime("%H:%M") if parsed is not None else str(ts)[11:16]
                 timestamps.append(ts)
                 labels.append(label)
-                prices.append(price)
-            return timestamps, labels, prices, resolved_instrument
+                opens.append(float(open_))
+                highs.append(float(high))
+                lows.append(float(low))
+                closes.append(float(close))
+                volumes.append(float(volume or 0.0))
+            return timestamps, labels, opens, highs, lows, closes, volumes, resolved_instrument
 
         query: dict[str, Any] = {"trade_date_ist": str(date_ist)}
         if instrument:
             query["instrument"] = str(instrument)
-        timestamps, labels, prices, resolved_instrument = _collect(query)
+        timestamps, labels, opens, highs, lows, closes, volumes, resolved_instrument = _collect(query)
         source = "mongo_snapshots"
         if not timestamps and instrument:
-            timestamps, labels, prices, resolved_instrument = _collect({"trade_date_ist": str(date_ist)})
+            timestamps, labels, opens, highs, lows, closes, volumes, resolved_instrument = _collect(
+                {"trade_date_ist": str(date_ist)}
+            )
             source = "mongo_snapshots:fallback_instrument"
         if not timestamps:
             return None
         return {
             "timestamps": timestamps,
             "labels": labels,
-            "prices": prices,
+            "opens": opens,
+            "highs": highs,
+            "lows": lows,
+            "closes": closes,
+            "volumes": volumes,
+            "prices": closes,
             "instrument": resolved_instrument or instrument,
             "source": source,
         }

@@ -21,6 +21,27 @@ def view_registry() -> Dict[str, ViewSpec]:
         "stage1_entry_view_v1": ViewSpec("stage1_entry_view_v1", "stage1_entry_view", "stage1"),
         "stage2_direction_view_v1": ViewSpec("stage2_direction_view_v1", "stage2_direction_view", "stage2"),
         "stage3_recipe_view_v1": ViewSpec("stage3_recipe_view_v1", "stage3_recipe_view", "stage3"),
+        "stage1_entry_view_v2": ViewSpec("stage1_entry_view_v2", "stage1_entry_view_v2", "stage1"),
+        "stage2_direction_view_v2": ViewSpec("stage2_direction_view_v2", "stage2_direction_view_v2", "stage2"),
+        "stage3_recipe_view_v2": ViewSpec("stage3_recipe_view_v2", "stage3_recipe_view_v2", "stage3"),
+        "stage1_entry_view_v3": ViewSpec("stage1_entry_view_v3", "stage1_entry_view_v3", "stage1"),
+        "stage2_direction_view_v3": ViewSpec("stage2_direction_view_v3", "stage2_direction_view_v3", "stage2"),
+        "stage3_recipe_view_v3": ViewSpec("stage3_recipe_view_v3", "stage3_recipe_view_v3", "stage3"),
+        "stage1_entry_view_v3_candidate": ViewSpec(
+            "stage1_entry_view_v3_candidate",
+            "stage1_entry_view_v3_candidate",
+            "stage1",
+        ),
+        "stage2_direction_view_v3_candidate": ViewSpec(
+            "stage2_direction_view_v3_candidate",
+            "stage2_direction_view_v3_candidate",
+            "stage2",
+        ),
+        "stage3_recipe_view_v3_candidate": ViewSpec(
+            "stage3_recipe_view_v3_candidate",
+            "stage3_recipe_view_v3_candidate",
+            "stage3",
+        ),
     }
 
 
@@ -29,6 +50,8 @@ def label_registry() -> dict[str, str]:
     return {
         "entry_best_recipe_v1": "stage1",
         "direction_best_recipe_v1": "stage2",
+        "direction_or_no_trade_v1": "stage2",
+        "direction_market_up_v1": "stage2",
         "recipe_best_positive_v1": "stage3",
     }
 
@@ -37,6 +60,7 @@ def label_registry() -> dict[str, str]:
 def trainer_registry() -> dict[str, str]:
     return {
         "binary_catalog_v1": "binary_catalog",
+        "gate_direction_catalog_v1": "gate_direction_catalog",
         "ovr_recipe_catalog_v1": "ovr_recipe_catalog",
     }
 
@@ -46,7 +70,11 @@ def policy_registry() -> dict[str, str]:
     return {
         "entry_threshold_v1": "stage1",
         "direction_dual_threshold_v1": "stage2",
+        "direction_gate_threshold_v1": "stage2",
+        "direction_gate_economic_balance_v1": "stage2",
         "recipe_top_margin_v1": "stage3",
+        "recipe_economic_balance_v1": "stage3",
+        "recipe_fixed_baseline_guard_v1": "stage3",
     }
 
 
@@ -58,11 +86,13 @@ def publish_registry() -> dict[str, str]:
 
 
 def resolve_labeler(labeler_id: str) -> Callable[..., Any]:
-    from .pipeline import build_stage1_labels, build_stage2_labels, build_stage3_labels
+    from .pipeline import build_stage1_labels, build_stage2_labels, build_stage2_labels_direction_or_no_trade, build_stage2_labels_market_direction, build_stage3_labels
 
     registry = {
         "entry_best_recipe_v1": build_stage1_labels,
         "direction_best_recipe_v1": build_stage2_labels,
+        "direction_or_no_trade_v1": build_stage2_labels_direction_or_no_trade,
+        "direction_market_up_v1": build_stage2_labels_market_direction,
         "recipe_best_positive_v1": build_stage3_labels,
     }
     if labeler_id not in registry:
@@ -71,10 +101,11 @@ def resolve_labeler(labeler_id: str) -> Callable[..., Any]:
 
 
 def resolve_trainer(trainer_id: str) -> Callable[..., Any]:
-    from .pipeline import train_binary_catalog_stage, train_recipe_ovr_stage
+    from .pipeline import train_binary_catalog_stage, train_gate_direction_stage, train_recipe_ovr_stage
 
     registry = {
         "binary_catalog_v1": train_binary_catalog_stage,
+        "gate_direction_catalog_v1": train_gate_direction_stage,
         "ovr_recipe_catalog_v1": train_recipe_ovr_stage,
     }
     if trainer_id not in registry:
@@ -83,12 +114,24 @@ def resolve_trainer(trainer_id: str) -> Callable[..., Any]:
 
 
 def resolve_policy(policy_id: str) -> Callable[..., Any]:
-    from .pipeline import select_direction_policy, select_entry_policy, select_recipe_policy
+    from .pipeline import (
+        select_direction_gate_economic_balance_policy,
+        select_direction_gate_policy,
+        select_direction_policy,
+        select_entry_policy,
+        select_recipe_economic_balance_policy,
+        select_recipe_fixed_baseline_guard_policy,
+        select_recipe_policy,
+    )
 
     registry = {
         "entry_threshold_v1": select_entry_policy,
         "direction_dual_threshold_v1": select_direction_policy,
+        "direction_gate_threshold_v1": select_direction_gate_policy,
+        "direction_gate_economic_balance_v1": select_direction_gate_economic_balance_policy,
         "recipe_top_margin_v1": select_recipe_policy,
+        "recipe_economic_balance_v1": select_recipe_economic_balance_policy,
+        "recipe_fixed_baseline_guard_v1": select_recipe_fixed_baseline_guard_policy,
     }
     if policy_id not in registry:
         raise ValueError(f"unknown policy_id: {policy_id}; valid options: {sorted(registry)}")

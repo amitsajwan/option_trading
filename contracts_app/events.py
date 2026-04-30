@@ -175,3 +175,27 @@ def build_strategy_position_event(
 
 def parse_strategy_position_event(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
     return _parse_event(payload, event_type="strategy_position", body_key="position")
+
+
+def build_strategy_decision_trace_event(
+    *,
+    trace: dict[str, Any],
+    source: str,
+    event_id: Optional[str] = None,
+    published_at: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    return _build_event(
+        event_type="strategy_decision_trace",
+        event_version="1.0",
+        source=source,
+        body_key="trace",
+        body=trace,
+        event_id=event_id,
+        published_at=published_at,
+        metadata=metadata,
+    )
+
+
+def parse_strategy_decision_trace_event(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    return _parse_event(payload, event_type="strategy_decision_trace", body_key="trace")

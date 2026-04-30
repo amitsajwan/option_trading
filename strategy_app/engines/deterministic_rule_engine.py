@@ -22,6 +22,14 @@ from ..contracts import (
     TradeSignal,
 )
 from ..logging.signal_logger import SignalLogger
+from ..logging.decision_trace import (
+    DecisionTraceBuilder,
+    compact_metrics,
+    position_state_payload,
+    regime_context_payload,
+    risk_state_payload,
+    warmup_context_payload,
+)
 from ..position.tracker import PositionTracker
 from ..risk.config import PositionRiskConfig
 from ..risk.manager import RiskManager
@@ -32,15 +40,16 @@ from .decision_annotation import (
     derive_reason_code,
 )
 from .entry_policy import EntryPolicy, EntryPolicyDecision, LongOptionEntryPolicy, PolicyConfig
+from .profiles import PRODUCTION_DEFAULT_PROFILE_ID
 from .regime import RegimeClassifier, RegimeSignal
 from .snapshot_accessor import SnapshotAccessor
 from .strategy_router import StrategyRouter
+from .velocity_entry_policy import VelocityEnhancedEntryPolicy
+from .velocity_regime_classifier import VelocityEnhancedRegimeClassifier
+from ..constants import EXIT_CONFIDENCE, MIN_ENTRY_CONFIDENCE, SOFT_CLOSE_MINUTE
+from ..utils.env import as_bool
 
 logger = logging.getLogger(__name__)
-
-MIN_ENTRY_CONFIDENCE = 0.65
-EXIT_CONFIDENCE = 0.65
-DEFAULT_STRATEGY_PROFILE_ID = "det_core_v1"
 
 
 class DeterministicRuleEngine(StrategyEngine):
@@ -58,9 +67,14 @@ class DeterministicRuleEngine(StrategyEngine):
         policy_config: Optional[PolicyConfig] = None,
         engine_mode: str = "deterministic",
         strategy_family_version: Optional[str] = None,
-        strategy_profile_id: str = DEFAULT_STRATEGY_PROFILE_ID,
+        strategy_profile_id: str = PRODUCTION_DEFAULT_PROFILE_ID,
     ) -> None:
-        self._regime = RegimeClassifier(model_path=model_path)
+        self._velocity_enhanced = as_bool(os.getenv("STRATEGY_ENHANCED_VELOCITY"))
+        self._regime = (
+            VelocityEnhancedRegimeClassifier(model_path=model_path)
+            if self._velocity_enhanced
+            else RegimeClassifier(model_path=model_path)
+        )
         self._router = router or StrategyRouter()
         self._tracker = PositionTracker()
         self._risk = RiskManager()
@@ -70,7 +84,7 @@ class DeterministicRuleEngine(StrategyEngine):
         self._run_risk_config = self._default_risk_config
         self._default_policy_config = policy_config or PolicyConfig()
         self._injected_entry_policy = entry_policy
-        self._entry_policy: EntryPolicy = entry_policy or LongOptionEntryPolicy(config=self._default_policy_config)
+        self._entry_policy: EntryPolicy = entry_policy or self._build_entry_policy(self._default_policy_config)
         self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
         self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)
         self._startup_warmup_minutes = max(0.0, float(os.getenv("STRATEGY_STARTUP_WARMUP_MINUTES", "0") or 0.0))
@@ -89,11 +103,22 @@ class DeterministicRuleEngine(StrategyEngine):
         self._ml_score_all_snapshots = False
         self._engine_mode = "deterministic"
         self._strategy_family_version = str(strategy_family_version or "DET_V1").strip() or "DET_V1"
-        self._strategy_profile_id = str(strategy_profile_id or DEFAULT_STRATEGY_PROFILE_ID).strip() or DEFAULT_STRATEGY_PROFILE_ID
+        self._strategy_profile_id = str(strategy_profile_id or PRODUCTION_DEFAULT_PROFILE_ID).strip() or PRODUCTION_DEFAULT_PROFILE_ID
+        self._run_id: Optional[str] = None
         self._set_logger_context(None)
-        logger.info("deterministic engine initialized min_confidence=%.2f", self._min_confidence)
+        logger.info(
+            "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s",
+            self._min_confidence,
+            self._velocity_enhanced,
+        )
+
+    def _build_entry_policy(self, config: PolicyConfig) -> EntryPolicy:
+        if self._velocity_enhanced:
+            return VelocityEnhancedEntryPolicy(config=config)
+        return LongOptionEntryPolicy(config=config)
 
     def set_run_context(self, run_id: Optional[str], metadata: Optional[dict[str, Any]] = None) -> None:
+        self._run_id = str(run_id or "").strip() or None
         risk_payload = metadata.get("risk_config") if isinstance(metadata, dict) else None
         policy_payload = metadata.get("policy_config") if isinstance(metadata, dict) else None
         regime_payload = metadata.get("regime_config") if isinstance(metadata, dict) else None
@@ -115,7 +140,7 @@ class DeterministicRuleEngine(StrategyEngine):
         )
         if isinstance(policy_payload, dict):
             policy_cfg = PolicyConfig.from_payload(policy_payload)
-            self._entry_policy = LongOptionEntryPolicy(config=policy_cfg)
+            self._entry_policy = self._build_entry_policy(policy_cfg)
             self._post_halt_resume_boost_enabled = bool(policy_cfg.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(policy_cfg.post_halt_resume_boost_score)
         elif self._injected_entry_policy is not None:
@@ -123,7 +148,7 @@ class DeterministicRuleEngine(StrategyEngine):
             self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)
         else:
-            self._entry_policy = LongOptionEntryPolicy(config=self._default_policy_config)
+            self._entry_policy = self._build_entry_policy(self._default_policy_config)
             self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)
         if isinstance(regime_payload, dict):
@@ -135,7 +160,7 @@ class DeterministicRuleEngine(StrategyEngine):
         elif isinstance(router_payload, dict):
             self._strategy_profile_id = self._router.strategy_profile_id
         self._ml_score_all_snapshots = (
-            _as_bool(metadata.get("ml_score_all_snapshots")) if isinstance(metadata, dict) else False
+            as_bool(metadata.get("ml_score_all_snapshots")) if isinstance(metadata, dict) else False
         )
         self._set_logger_context(run_id)
 
@@ -219,23 +244,16 @@ class DeterministicRuleEngine(StrategyEngine):
         snap = SnapshotAccessor(snapshot)
         position = self._tracker.current_position
         risk = self._risk.context
+        trace_blocker: Optional[str] = None
+        warmup_blocked = False
+        warmup_reason = ""
 
         self._risk.update(snap, position)
 
         if position is not None:
-            system_exit = self._tracker.update(snap, risk)
+            system_exit = self._manage_open_position(snap, position, risk)
             if system_exit is not None:
-                self._annotate_signal_contract(system_exit, decision_mode="rule_vote")
-                self._log.log_signal(system_exit, acted_on=True)
-                self._handle_position_closed(system_exit, position)
                 return system_exit
-            refreshed_position = self._tracker.current_position
-            if refreshed_position is not None:
-                self._log.log_position_manage(
-                    position=refreshed_position,
-                    timestamp=snap.timestamp_or_now,
-                    snapshot_id=snap.snapshot_id,
-                )
 
         regime_signal = self._regime.classify(snap)
         logger.debug(
@@ -247,7 +265,112 @@ class DeterministicRuleEngine(StrategyEngine):
             regime_signal.reason,
         )
         shadow_vote = self._build_ml_shadow_vote(snap=snap, regime_signal=regime_signal)
+        votes = self._collect_votes(snapshot, snap, regime_signal, position, risk, shadow_vote)
+        if not votes:
+            return None
 
+        signal: Optional[TradeSignal] = None
+        if position is not None:
+            signal = self._process_exit_votes(votes, snap, position)
+
+        if signal is None and position is None and not self._risk.is_halted and self._router.regime_allows_entry(regime_signal.regime):
+            _ts = snap.timestamp
+            if _ts is not None and (_ts.hour * 60 + _ts.minute) >= SOFT_CLOSE_MINUTE:
+                trace_blocker = "soft_close_no_entry"
+            else:
+                warmup_blocked, warmup_reason = self._entry_warmup_status()
+                if warmup_blocked:
+                    trace_blocker = "warmup"
+                    for vote in votes:
+                        if vote.signal_type == SignalType.ENTRY and vote.direction in (Direction.CE, Direction.PE):
+                            vote.raw_signals["_entry_warmup_blocked"] = True
+                            vote.raw_signals["_entry_warmup_reason"] = warmup_reason
+                            self._annotate_vote_contract(vote)
+                else:
+                    signal = self._process_entry_votes(votes, snap, risk, regime_signal)
+                    if signal is None:
+                        trace_blocker = self._derive_entry_blocker(votes=votes, snap=snap, regime_signal=regime_signal)
+        elif position is None:
+            if self._risk.is_halted:
+                trace_blocker = self._risk.halt_reason or "risk_halt"
+            elif self._risk.is_paused:
+                trace_blocker = self._risk.pause_reason or "risk_pause"
+            elif self._router.regime_allows_entry(regime_signal.regime) is False:
+                trace_blocker = "router_regime_block"
+
+        for vote in votes:
+            self._log.log_vote(vote)
+        if shadow_vote is not None:
+            self._annotate_vote_contract(shadow_vote)
+            self._log.log_vote(shadow_vote)
+
+        if position is not None:
+            active_position = self._tracker.current_position or position
+            self._log.log_decision_trace(
+                self._build_position_trace(
+                    snap=snap,
+                    position=active_position,
+                    votes=votes,
+                    signal=signal,
+                    final_outcome=("exit_taken" if signal is not None else "manage_only"),
+                )
+            )
+        else:
+            self._log.log_decision_trace(
+                self._build_entry_trace(
+                    snap=snap,
+                    regime_signal=regime_signal,
+                    votes=votes,
+                    signal=signal,
+                    blocker=trace_blocker,
+                    warmup_blocked=warmup_blocked,
+                    warmup_reason=warmup_reason,
+                )
+            )
+
+        return signal
+
+    def _manage_open_position(
+        self,
+        snap: SnapshotAccessor,
+        position: PositionContext,
+        risk: RiskContext,
+    ) -> Optional[TradeSignal]:
+        """Check for system exits (stop, target, time) and log manage events."""
+        system_exit = self._tracker.update(snap, risk)
+        if system_exit is not None:
+            self._annotate_signal_contract(system_exit, decision_mode="rule_vote")
+            self._log.log_signal(system_exit, acted_on=True)
+            self._handle_position_closed(system_exit, position)
+            self._log.log_decision_trace(
+                self._build_position_trace(
+                    snap=snap,
+                    position=position,
+                    votes=[],
+                    signal=system_exit,
+                    final_outcome="exit_taken",
+                )
+            )
+            return system_exit
+        refreshed_position = self._tracker.current_position
+        if refreshed_position is not None:
+            self._log.log_position_manage(
+                position=refreshed_position,
+                timestamp=snap.timestamp_or_now,
+                snapshot_id=snap.snapshot_id,
+            )
+        return None
+
+    def _collect_votes(
+        self,
+        snapshot: SnapshotPayload,
+        snap: SnapshotAccessor,
+        regime_signal: RegimeSignal,
+        position: Optional[PositionContext],
+        risk: RiskContext,
+        shadow_vote: Optional[StrategyVote],
+    ) -> list[StrategyVote]:
+        """Route to active strategies and collect votes; log shadow vote if no real votes."""
         strategies = self._router.get_strategies(regime_signal.regime, position)
         votes: list[StrategyVote] = []
         for strategy in strategies:
@@ -264,34 +387,10 @@ class DeterministicRuleEngine(StrategyEngine):
             self._annotate_vote_contract(vote)
             votes.append(vote)
 
-        if not votes:
-            if shadow_vote is not None:
-                self._annotate_vote_contract(shadow_vote)
-                self._log.log_vote(shadow_vote)
-            return None
-
-        signal: Optional[TradeSignal] = None
-        if position is not None:
-            signal = self._process_exit_votes(votes, snap, position)
-
-        if signal is None and position is None and not self._risk.is_halted and self._router.regime_allows_entry(regime_signal.regime):
-            warmup_blocked, warmup_reason = self._entry_warmup_status()
-            if warmup_blocked:
-                for vote in votes:
-                    if vote.signal_type == SignalType.ENTRY and vote.direction in (Direction.CE, Direction.PE):
-                        vote.raw_signals["_entry_warmup_blocked"] = True
-                        vote.raw_signals["_entry_warmup_reason"] = warmup_reason
-                        self._annotate_vote_contract(vote)
-            else:
-                signal = self._process_entry_votes(votes, snap, risk, regime_signal)
-
-        for vote in votes:
-            self._log.log_vote(vote)
-        if shadow_vote is not None:
+        if not votes and shadow_vote is not None:
             self._annotate_vote_contract(shadow_vote)
             self._log.log_vote(shadow_vote)
-
-        return signal
+        return votes
 
     def _process_exit_votes(
         self,
@@ -411,7 +510,7 @@ class DeterministicRuleEngine(StrategyEngine):
             scored_candidates: list[tuple[StrategyVote, EntryPolicyDecision]] = []
             for candidate in ranked_entry_votes:
                 self._apply_strike_selection(candidate, snap)
-                policy_decision = self._entry_policy.evaluate(snap, candidate, regime_signal, risk)
+                policy_decision = self._evaluate_entry_policy(candidate, snap, regime_signal, risk)
                 self._annotate_policy(candidate, policy_decision)
                 self._annotate_vote_contract(candidate)
                 scored_candidates.append((candidate, policy_decision))
@@ -441,7 +540,7 @@ class DeterministicRuleEngine(StrategyEngine):
 
         for candidate in ranked_entry_votes:
             self._apply_strike_selection(candidate, snap)
-            policy_decision = self._entry_policy.evaluate(snap, candidate, regime_signal, risk)
+            policy_decision = self._evaluate_entry_policy(candidate, snap, regime_signal, risk)
             self._annotate_policy(candidate, policy_decision)
             self._annotate_vote_contract(candidate)
             if candidate.confidence < self._min_confidence:
@@ -577,39 +676,7 @@ class DeterministicRuleEngine(StrategyEngine):
             lots=position.lots,
             entry_premium=position.entry_premium,
         )
-        self._log.log_position_close(
-            exit_signal=exit_signal,
-            position=position,
-            entry_premium=position.entry_premium,
-            exit_premium=position.current_premium,
-            pnl_pct=position.pnl_pct,
-            mfe_pct=position.mfe_pct,
-            mae_pct=position.mae_pct,
-            bars_held=position.bars_held,
-            stop_loss_pct=position.stop_loss_pct,
-            stop_price=position.stop_price,
-            high_water_premium=position.high_water_premium,
-            target_pct=position.target_pct,
-            trailing_enabled=position.trailing_enabled,
-            trailing_activation_pct=position.trailing_activation_pct,
-            trailing_offset_pct=position.trailing_offset_pct,
-            trailing_lock_breakeven=position.trailing_lock_breakeven,
-            trailing_active=position.trailing_active,
-            orb_trail_activation_mfe=position.orb_trail_activation_mfe,
-            orb_trail_offset_pct=position.orb_trail_offset_pct,
-            orb_trail_min_lock_pct=position.orb_trail_min_lock_pct,
-            orb_trail_priority_over_regime=position.orb_trail_priority_over_regime,
-            orb_trail_regime_filter=position.orb_trail_regime_filter,
-            orb_trail_active=position.orb_trail_active,
-            orb_trail_stop_price=position.orb_trail_stop_price,
-            oi_trail_activation_mfe=position.oi_trail_activation_mfe,
-            oi_trail_offset_pct=position.oi_trail_offset_pct,
-            oi_trail_min_lock_pct=position.oi_trail_min_lock_pct,
-            oi_trail_priority_over_regime=position.oi_trail_priority_over_regime,
-            oi_trail_regime_filter=position.oi_trail_regime_filter,
-            oi_trail_active=position.oi_trail_active,
-            oi_trail_stop_price=position.oi_trail_stop_price,
-        )
+        self._log.log_position_close(exit_signal=exit_signal, position=position)
 
     def _resolve_entry_risk(
         self,
@@ -625,6 +692,27 @@ class DeterministicRuleEngine(StrategyEngine):
         if "target_pct" in adjustments and cfg.target_pct is None:
             target_pct = float(adjustments["target_pct"])
         return max(0.0, float(stop_loss_pct)), max(0.0, float(target_pct)), cfg
+
+    def _evaluate_entry_policy(
+        self,
+        vote: StrategyVote,
+        snap: SnapshotAccessor,
+        regime_signal: RegimeSignal,
+        risk: RiskContext,
+    ) -> EntryPolicyDecision:
+        mode = str(vote.raw_signals.get("_entry_policy_mode") or "").strip().lower()
+        if mode == "bypass":
+            checks = {"mode": "bypass", "strategy": vote.strategy_name}
+            return EntryPolicyDecision.allow("bypass:strategy_owned", score=1.0, checks=checks)
+        if mode == "advisory":
+            decision = self._entry_policy.evaluate(snap, vote, regime_signal, risk)
+            return EntryPolicyDecision.allow(
+                f"advisory:{decision.reason}",
+                score=max(0.75, float(decision.score)),
+                checks={**decision.checks, "mode": "advisory"},
+                adjustments=decision.adjustments,
+            )
+        return self._entry_policy.evaluate(snap, vote, regime_signal, risk)
 
     def _annotate_policy(self, vote: StrategyVote, decision: EntryPolicyDecision) -> None:
         vote.raw_signals["_policy_allowed"] = decision.allowed
@@ -758,7 +846,409 @@ class DeterministicRuleEngine(StrategyEngine):
         blocked = bool(reasons)
         return blocked, ",".join(reasons) if blocked else ""
 
+    def _derive_entry_blocker(
+        self,
+        *,
+        votes: list[StrategyVote],
+        snap: SnapshotAccessor,
+        regime_signal: RegimeSignal,
+    ) -> str:
+        avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
+        if avoid_votes:
+            return "avoid_veto"
+        entry_votes = [
+            vote
+            for vote in votes
+            if vote.signal_type == SignalType.ENTRY and vote.direction in (Direction.CE, Direction.PE)
+        ]
+        if not entry_votes:
+            return "no_entry_votes"
+        ce_votes = [vote for vote in entry_votes if vote.direction == Direction.CE]
+        pe_votes = [vote for vote in entry_votes if vote.direction == Direction.PE]
+        if ce_votes and pe_votes and not self._entry_policy_can_resolve_direction_conflict():
+            return "direction_conflict"
+        if regime_signal.confidence < 0.60:
+            return "regime_confidence"
+        if not snap.is_valid_entry_phase:
+            return "entry_phase"
+        if self._risk.is_paused:
+            return "risk_pause"
+        if all(float(vote.confidence) < self._min_confidence for vote in entry_votes):
+            return "confidence_gate"
+        policy_evaluated = False
+        for vote in entry_votes:
+            raw_signals = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
+            if "_policy_allowed" in raw_signals or "_policy_reason" in raw_signals:
+                policy_evaluated = True
+                if bool(raw_signals.get("_policy_allowed")):
+                    return "candidate_ranking"
+        if policy_evaluated:
+            return "policy_gate"
+        return "no_selection"
+
+    def _entry_candidate_gate_rows(
+        self,
+        *,
+        vote: StrategyVote,
+        signal: Optional[TradeSignal],
+        blocker: Optional[str],
+        regime_signal: RegimeSignal,
+        warmup_blocked: bool,
+        warmup_reason: str,
+    ) -> tuple[list[dict[str, Any]], str, Optional[str], bool]:
+        gates: list[dict[str, Any]] = [
+            {
+                "gate_id": "regime_classification",
+                "gate_group": "regime",
+                "status": "pass",
+                "reason_code": None,
+                "message": regime_signal.reason,
+                "metrics": {"regime_confidence": regime_signal.confidence},
+            }
+        ]
+        raw_signals = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
+        selected = bool(
+            signal is not None
+            and signal.entry_strategy_name == vote.strategy_name
+            and str(signal.direction or "").strip().upper() == str(vote.direction.value if vote.direction else "").strip().upper()
+        )
+        if vote.direction == Direction.AVOID:
+            gates.append(
+                {
+                    "gate_id": "avoid_veto",
+                    "gate_group": "router",
+                    "status": "blocked",
+                    "reason_code": "avoid_regime",
+                    "message": vote.reason,
+                    "metrics": {"confidence": vote.confidence},
+                }
+            )
+            return gates, "blocked", "avoid_veto", False
+        if blocker == "risk_halt":
+            gates.append(
+                {
+                    "gate_id": "risk_halt",
+                    "gate_group": "risk",
+                    "status": "blocked",
+                    "reason_code": "risk_halt",
+                    "message": "risk halt prevented entry",
+                    "metrics": {},
+                }
+            )
+            return gates, "blocked", "risk_halt", False
+        if blocker == "router_regime_block":
+            gates.append(
+                {
+                    "gate_id": "router_regime_block",
+                    "gate_group": "router",
+                    "status": "blocked",
+                    "reason_code": "avoid_regime",
+                    "message": "router disabled entries for current regime",
+                    "metrics": {},
+                }
+            )
+            return gates, "blocked", "router_regime_block", False
+        if warmup_blocked:
+            gates.append(
+                {
+                    "gate_id": "warmup",
+                    "gate_group": "warmup",
+                    "status": "blocked",
+                    "reason_code": "entry_warmup_block",
+                    "message": warmup_reason,
+                    "metrics": {},
+                }
+            )
+            return gates, "blocked", "warmup", False
+        if blocker == "direction_conflict":
+            gates.append(
+                {
+                    "gate_id": "direction_conflict",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "direction_conflict",
+                    "message": "entry blocked by unresolved direction conflict",
+                    "metrics": {},
+                }
+            )
+            return gates, "blocked", "direction_conflict", False
+        if blocker == "regime_confidence":
+            gates.append(
+                {
+                    "gate_id": "regime_confidence",
+                    "gate_group": "regime",
+                    "status": "blocked",
+                    "reason_code": "regime_low_confidence",
+                    "message": "regime confidence below threshold",
+                    "metrics": {"regime_confidence": regime_signal.confidence},
+                }
+            )
+            return gates, "blocked", "regime_confidence", False
+        if blocker == "entry_phase":
+            gates.append(
+                {
+                    "gate_id": "entry_phase",
+                    "gate_group": "timing",
+                    "status": "blocked",
+                    "reason_code": "timing_block",
+                    "message": "snapshot is outside valid entry phase",
+                    "metrics": {},
+                }
+            )
+            return gates, "blocked", "entry_phase", False
+        if blocker == "risk_pause":
+            gates.append(
+                {
+                    "gate_id": "risk_pause",
+                    "gate_group": "risk",
+                    "status": "blocked",
+                    "reason_code": "risk_pause",
+                    "message": "risk pause prevented entry",
+                    "metrics": {},
+                }
+            )
+            return gates, "blocked", "risk_pause", False
+        gates.append(
+            {
+                "gate_id": "confidence_gate",
+                "gate_group": "policy",
+                "status": ("pass" if float(vote.confidence) >= self._min_confidence else "blocked"),
+                "reason_code": ("below_min_confidence" if float(vote.confidence) < self._min_confidence else None),
+                "message": None,
+                "metrics": {"confidence": vote.confidence},
+            }
+        )
+        if float(vote.confidence) < self._min_confidence:
+            return gates, "blocked", "confidence_gate", False
+        policy_allowed = raw_signals.get("_policy_allowed")
+        policy_reason = str(raw_signals.get("_policy_reason") or "").strip()
+        gates.append(
+            {
+                "gate_id": "policy_checks",
+                "gate_group": "policy",
+                "status": ("pass" if policy_allowed is True else "blocked"),
+                "reason_code": (vote.decision_reason_code if policy_allowed is not True else "policy_allowed"),
+                "message": policy_reason or None,
+                "metrics": {
+                    "policy_score": raw_signals.get("_policy_score"),
+                },
+            }
+        )
+        if policy_allowed is not True:
+            return gates, "blocked", "policy_checks", False
+        gates.append(
+            {
+                "gate_id": "candidate_ranking",
+                "gate_group": "selection",
+                "status": ("pass" if selected else "skipped"),
+                "reason_code": (None if selected else "policy_allowed"),
+                "message": (None if selected else "candidate passed but another candidate ranked higher"),
+                "metrics": {},
+            }
+        )
+        if selected:
+            gates.append(
+                {
+                    "gate_id": "execution",
+                    "gate_group": "execution",
+                    "status": "pass",
+                    "reason_code": None,
+                    "message": "entry signal emitted",
+                    "metrics": {"max_lots": signal.max_lots if signal is not None else None},
+                }
+            )
+            return gates, "passed", None, True
+        return gates, "skipped", "candidate_ranking", False
+
+    def _build_entry_trace(
+        self,
+        *,
+        snap: SnapshotAccessor,
+        regime_signal: RegimeSignal,
+        votes: list[StrategyVote],
+        signal: Optional[TradeSignal],
+        blocker: Optional[str],
+        warmup_blocked: bool,
+        warmup_reason: str,
+    ) -> dict[str, Any]:
+        builder = DecisionTraceBuilder(
+            snapshot_id=snap.snapshot_id,
+            timestamp=snap.timestamp_or_now,
+            engine_mode=self._engine_mode,
+            decision_mode="rule_vote",
+            evaluation_type="entry",
+            run_id=self._run_id,
+        )
+        builder.set_context(
+            position_state=position_state_payload(None),
+            risk_state=risk_state_payload(self._risk),
+            regime_context=regime_context_payload(regime_signal),
+            warmup_context=warmup_context_payload(
+                blocked=warmup_blocked,
+                reason=warmup_reason,
+                state={
+                    "events_seen": int(self._session_event_count),
+                    "min_events": int(self._startup_warmup_events),
+                    "min_minutes": float(self._startup_warmup_minutes),
+                },
+            ),
+        )
+        builder.add_flow_gate(
+            "regime_classification",
+            gate_group="regime",
+            status="pass",
+            message=regime_signal.reason,
+            metrics={"regime_confidence": regime_signal.confidence},
+        )
+        sorted_votes = sorted(
+            [vote for vote in votes if vote.signal_type == SignalType.ENTRY or vote.direction == Direction.AVOID],
+            key=lambda item: float(item.confidence),
+            reverse=True,
+        )
+        for index, vote in enumerate(sorted_votes, start=1):
+            candidate = builder.add_candidate(
+                strategy_name=vote.strategy_name,
+                candidate_type="strategy_vote",
+                direction=(vote.direction.value if vote.direction is not None else None),
+                confidence=vote.confidence,
+                rank=index,
+                metrics=compact_metrics(vote.decision_metrics),
+            )
+            gates, terminal_status, terminal_gate_id, selected = self._entry_candidate_gate_rows(
+                vote=vote,
+                signal=signal,
+                blocker=blocker,
+                regime_signal=regime_signal,
+                warmup_blocked=warmup_blocked,
+                warmup_reason=warmup_reason,
+            )
+            for gate in gates:
+                builder.add_candidate_gate(candidate, **gate)
+            builder.finalize_candidate(
+                candidate,
+                terminal_status=terminal_status,
+                terminal_gate_id=terminal_gate_id,
+                terminal_reason_code=vote.decision_reason_code,
+                selected=selected,
+                extra_metrics=compact_metrics(vote.decision_metrics),
+            )
+        final_outcome = "entry_taken" if signal is not None else ("blocked" if blocker is not None or warmup_blocked else "hold")
+        return builder.finalize(
+            final_outcome=final_outcome,
+            primary_blocker_gate=("warmup" if warmup_blocked else blocker),
+            summary_metrics={
+                "vote_count": len(votes),
+                "entry_vote_count": len([vote for vote in votes if vote.signal_type == SignalType.ENTRY]),
+            },
+        )
+
+    def _build_position_trace(
+        self,
+        *,
+        snap: SnapshotAccessor,
+        position: PositionContext,
+        votes: list[StrategyVote],
+        signal: Optional[TradeSignal],
+        final_outcome: str,
+    ) -> dict[str, Any]:
+        builder = DecisionTraceBuilder(
+            snapshot_id=snap.snapshot_id,
+            timestamp=snap.timestamp_or_now,
+            engine_mode=self._engine_mode,
+            decision_mode="rule_vote",
+            evaluation_type=("exit" if signal is not None else "manage"),
+            run_id=self._run_id,
+        )
+        regime_signal = self._regime.classify(snap)
+        builder.set_context(
+            position_state=position_state_payload(position),
+            risk_state=risk_state_payload(self._risk),
+            regime_context=regime_context_payload(regime_signal),
+            warmup_context=warmup_context_payload(blocked=False, reason=None, state={}),
+        )
+        exit_votes = [
+            vote
+            for vote in votes
+            if vote.signal_type == SignalType.EXIT and vote.direction == Direction.EXIT
+        ]
+        selected_strategy = None
+        if signal is not None and isinstance(signal.votes, list) and signal.votes:
+            selected_strategy = str(signal.votes[0].strategy_name or "").strip()
+        for index, vote in enumerate(sorted(exit_votes, key=lambda item: float(item.confidence), reverse=True), start=1):
+            candidate = builder.add_candidate(
+                strategy_name=vote.strategy_name,
+                candidate_type="exit_vote",
+                direction=(vote.direction.value if vote.direction is not None else None),
+                confidence=vote.confidence,
+                rank=index,
+                metrics={"confidence": vote.confidence},
+            )
+            builder.add_candidate_gate(
+                candidate,
+                "exit_confidence",
+                gate_group="exit",
+                status=("pass" if float(vote.confidence) >= EXIT_CONFIDENCE else "blocked"),
+                reason_code=(None if float(vote.confidence) >= EXIT_CONFIDENCE else "below_min_confidence"),
+                message=vote.reason,
+                metrics={"confidence": vote.confidence},
+            )
+            if float(vote.confidence) < EXIT_CONFIDENCE:
+                builder.finalize_candidate(
+                    candidate,
+                    terminal_status="blocked",
+                    terminal_gate_id="exit_confidence",
+                    terminal_reason_code=vote.exit_reason.value if vote.exit_reason is not None else vote.decision_reason_code,
+                    selected=False,
+                )
+                continue
+            if signal is not None and selected_strategy == vote.strategy_name:
+                builder.add_candidate_gate(
+                    candidate,
+                    "exit_selection",
+                    gate_group="selection",
+                    status="pass",
+                    reason_code=(vote.exit_reason.value if vote.exit_reason is not None else None),
+                    message="exit signal emitted",
+                    metrics={},
+                )
+                builder.finalize_candidate(
+                    candidate,
+                    terminal_status="passed",
+                    terminal_gate_id=None,
+                    terminal_reason_code=vote.exit_reason.value if vote.exit_reason is not None else vote.decision_reason_code,
+                    selected=True,
+                )
+            else:
+                builder.add_candidate_gate(
+                    candidate,
+                    "exit_selection",
+                    gate_group="selection",
+                    status="skipped",
+                    reason_code=(vote.exit_reason.value if vote.exit_reason is not None else vote.decision_reason_code),
+                    message="candidate evaluated but not selected",
+                    metrics={},
+                )
+                builder.finalize_candidate(
+                    candidate,
+                    terminal_status="skipped",
+                    terminal_gate_id="exit_selection",
+                    terminal_reason_code=vote.exit_reason.value if vote.exit_reason is not None else vote.decision_reason_code,
+                    selected=False,
+                )
+        primary_blocker = None if signal is not None else "no_exit_trigger"
+        return builder.finalize(
+            final_outcome=final_outcome,
+            primary_blocker_gate=primary_blocker,
+            summary_metrics={
+                "exit_vote_count": len(exit_votes),
+                "bars_held": position.bars_held,
+                "pnl_pct": position.pnl_pct,
+            },
+        )
+
     def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor) -> None:
+        if bool(vote.raw_signals.get("_lock_strike_selection")):
+            return
         if self._strike_policy != "oi_volume_ranked":
             return
         direction = vote.direction
@@ -850,17 +1340,3 @@ def _session_end_snapshot(trade_date: date) -> _SessionEndSnapshot:
     return _SessionEndSnapshot(trade_date)
 
 
-def _as_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _safe_float(value: object) -> Optional[float]:
-    try:
-        parsed = float(value)
-    except Exception:
-        return None
-    if parsed != parsed:
-        return None
-    return float(parsed)

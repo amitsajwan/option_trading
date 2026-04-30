@@ -140,10 +140,14 @@ node_modules/
 !snapshot_app/contracts/snapshot_ml_flat/legacy_to_flat.csv
 ingestion_app/credentials.json
 ops/gcp/operator.env
+ops/gcp/operator.local.env
 .tmp_pip_probe/
 .tmp_pip_probe312/
 strategy_eval_ui/vite.config.js
 strategy_eval_ui/vite.config.d.ts
+
+# Runtime artifact sync staging (created by sync_runtime_artifacts.sh)
+.deploy/
 
 # Infrastructure state
 .terraform/

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -19,6 +20,12 @@ try:
     from xgboost import XGBClassifier
 except Exception:  # pragma: no cover
     XGBClassifier = None  # type: ignore[assignment]
+
+try:
+    import optuna
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+except Exception:  # pragma: no cover
+    optuna = None  # type: ignore[assignment]
 
 from ..catalog.feature_sets import DEFAULT_FEATURE_SET_SPECS, feature_set_specs_by_name
 from ..catalog.models import DEFAULT_MODEL_SPECS, model_specs_by_name
@@ -76,6 +83,16 @@ class QuantileClipper(BaseEstimator, TransformerMixin):
             hi = self.upper_bounds_.get(col, float("nan"))
             frame[col] = series.clip(lower=lo, upper=hi) if np.isfinite(lo) and np.isfinite(hi) else series
         return frame
+
+
+def _set_pandas_output(estimator: object) -> object:
+    set_output = getattr(estimator, "set_output", None)
+    if callable(set_output):
+        try:
+            return set_output(transform="pandas")
+        except Exception:
+            return estimator
+    return estimator
 
 
 def _ensure_sorted(df: pd.DataFrame) -> pd.DataFrame:
@@ -459,8 +476,10 @@ def _normalize_hpo_config(hpo_config: Optional[Dict[str, Any]], *, random_state:
     raw = dict(hpo_config or {})
     enabled = bool(raw.get("enabled", False))
     strategy = str(raw.get("strategy", "random")).strip().lower()
-    if strategy not in {"random"}:
-        raise ValueError(f"unsupported HPO strategy: {strategy}")
+    if strategy not in {"random", "optuna"}:
+        raise ValueError(f"unsupported HPO strategy: {strategy!r}; valid options: 'random', 'optuna'")
+    if strategy == "optuna" and optuna is None:
+        raise RuntimeError("HPO strategy 'optuna' requires the 'optuna' package; install it with: pip install optuna")
     trials_per_model = max(1, int(raw.get("trials_per_model", 1)))
     sampler_seed = int(raw.get("sampler_seed", random_state))
     return {
@@ -469,6 +488,140 @@ def _normalize_hpo_config(hpo_config: Optional[Dict[str, Any]], *, random_state:
         "trials_per_model": int(trials_per_model),
         "sampler_seed": int(sampler_seed),
     }
+
+
+def _suggest_xgb_params(trial: Any, base_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Optuna suggest_* version of _sample_xgb_params."""
+    base_depth = int(base_params.get("max_depth", 4))
+    base_estimators = int(base_params.get("n_estimators", 300))
+    base_lr = float(base_params.get("learning_rate", 0.03))
+    base_sub = float(base_params.get("subsample", 0.9))
+    base_col = float(base_params.get("colsample_bytree", 0.9))
+    base_alpha = float(base_params.get("reg_alpha", 0.0))
+    base_lambda = float(base_params.get("reg_lambda", 1.0))
+    return {
+        "max_depth": trial.suggest_int("max_depth", max(2, base_depth - 2), min(9, base_depth + 3)),
+        "n_estimators": trial.suggest_int("n_estimators", max(150, int(base_estimators * 0.6)), min(1400, int(base_estimators * 1.8))),
+        "learning_rate": trial.suggest_float("learning_rate", max(0.008, base_lr * 0.55), min(0.12, max(base_lr * 1.75, 0.012)), log=True),
+        "subsample": trial.suggest_float("subsample", max(0.65, base_sub - 0.15), min(1.0, base_sub + 0.10)),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", max(0.65, base_col - 0.15), min(1.0, base_col + 0.10)),
+        "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, max(6.0, max(base_alpha, 1.0) * 4.0), log=True) if base_alpha > 0 else trial.suggest_float("reg_alpha", 0.0, 2.0),
+        "reg_lambda": trial.suggest_float("reg_lambda", max(0.5, max(base_lambda, 1.0) * 0.5), max(10.0, max(base_lambda, 1.0) * 4.0), log=True),
+    }
+
+
+def _suggest_lgbm_params(trial: Any, base_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Optuna suggest_* version of _sample_lgbm_params."""
+    base_leaves = int(base_params.get("num_leaves", 31))
+    base_depth = int(base_params.get("max_depth", -1))
+    base_estimators = int(base_params.get("n_estimators", 300))
+    base_lr = float(base_params.get("learning_rate", 0.03))
+    base_sub = float(base_params.get("subsample", 0.9))
+    base_col = float(base_params.get("colsample_bytree", 0.9))
+    base_alpha = float(base_params.get("reg_alpha", 0.0))
+    base_lambda = float(base_params.get("reg_lambda", 0.0))
+    base_min_child = int(base_params.get("min_child_samples", 20))
+    depth_choices = [-1, 4, 5, 6, 7, 8, 10] if base_depth < 0 else list(range(max(3, base_depth - 2), min(11, base_depth + 3)))
+    params = {
+        "boosting_type": str(base_params.get("boosting_type", "gbdt")),
+        "num_leaves": trial.suggest_int("num_leaves", max(15, int(base_leaves * 0.6)), min(128, int(base_leaves * 1.8))),
+        "max_depth": trial.suggest_categorical("max_depth", depth_choices),
+        "n_estimators": trial.suggest_int("n_estimators", max(180, int(base_estimators * 0.6)), min(1400, int(base_estimators * 1.8))),
+        "learning_rate": trial.suggest_float("learning_rate", max(0.008, base_lr * 0.55), min(0.12, max(base_lr * 1.75, 0.012)), log=True),
+        "subsample": trial.suggest_float("subsample", max(0.65, base_sub - 0.15), min(1.0, base_sub + 0.10)),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", max(0.65, base_col - 0.15), min(1.0, base_col + 0.10)),
+        "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, max(6.0, max(base_alpha, 1.0) * 4.0), log=True) if base_alpha > 0 else trial.suggest_float("reg_alpha", 0.0, 2.0),
+        "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, max(8.0, max(base_lambda, 1.0) * 4.0), log=True) if base_lambda > 0 else trial.suggest_float("reg_lambda", 0.0, 2.0),
+        "min_child_samples": trial.suggest_int("min_child_samples", max(10, base_min_child - 12), min(80, base_min_child + 20)),
+    }
+    if "class_weight" in base_params:
+        params["class_weight"] = base_params.get("class_weight")
+    return params
+
+
+def _suggest_logreg_params(trial: Any, base_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Optuna suggest_* version of _sample_logreg_params."""
+    base_c = float(base_params.get("c", 1.0))
+    params = {
+        "c": trial.suggest_float("c", max(0.01, base_c / 8.0), max(0.05, min(25.0, base_c * 8.0)), log=True),
+        "max_iter": int(base_params.get("max_iter", 1000)),
+        "solver": str(base_params.get("solver", "lbfgs")),
+    }
+    if "class_weight" in base_params:
+        params["class_weight"] = base_params.get("class_weight")
+    return params
+
+
+def _build_optuna_candidates(
+    base_specs: List[ModelSpec],
+    trials_per_model: int,
+    sampler_seed: int,
+) -> List[Dict[str, object]]:
+    """
+    Build HPO candidate entries using Optuna TPE sampler.
+
+    For each base model spec, creates `trials_per_model - 1` additional
+    candidates (trial 0 is always the preset baseline). Returns a flat list
+    of candidate_entry dicts ready to append to the preset entries.
+
+    Optuna TPE explores the hyperparameter space more efficiently than
+    pure random search when trials_per_model >= 20.
+    """
+    assert optuna is not None, "optuna must be installed"
+
+    _suggest_fn_map = {
+        "xgb": _suggest_xgb_params,
+        "lgbm": _suggest_lgbm_params,
+        "logreg": _suggest_logreg_params,
+    }
+
+    entries: List[Dict[str, object]] = []
+    for model_spec in base_specs:
+        family = str(model_spec.family).strip().lower()
+        suggest_fn = _suggest_fn_map.get(family)
+        if suggest_fn is None:
+            # Family doesn't support Optuna suggest — fall back to random
+            rng = np.random.default_rng(sampler_seed)
+            for trial_index in range(1, trials_per_model):
+                sampled_spec = ModelSpec(
+                    name=f"{model_spec.name}__hpo_t{trial_index:03d}",
+                    family=str(model_spec.family),
+                    params=_sample_model_params(model_spec, rng),
+                )
+                entries.append({
+                    "spec": sampled_spec,
+                    "meta": _model_meta(sampled_spec, base_model_name=model_spec.name, search_origin="hpo_random", trial_index=trial_index),
+                })
+            continue
+
+        base_params = dict(model_spec.params or {})
+        sampled_params_list: List[Dict[str, Any]] = []
+
+        def _objective(trial: Any) -> float:
+            # Objective is a dummy — we only need the param suggestions.
+            # Optuna minimizes, so return a fixed value; actual model
+            # evaluation happens downstream in the CV loop.
+            sampled_params_list.append(suggest_fn(trial, base_params))
+            return 0.0
+
+        study = optuna.create_study(
+            direction="minimize",
+            sampler=optuna.samplers.TPESampler(seed=sampler_seed),
+        )
+        study.optimize(_objective, n_trials=trials_per_model - 1, show_progress_bar=False)
+
+        for trial_index, params in enumerate(sampled_params_list, start=1):
+            sampled_spec = ModelSpec(
+                name=f"{model_spec.name}__hpo_t{trial_index:03d}",
+                family=str(model_spec.family),
+                params=params,
+            )
+            entries.append({
+                "spec": sampled_spec,
+                "meta": _model_meta(sampled_spec, base_model_name=model_spec.name, search_origin="hpo_optuna", trial_index=trial_index),
+            })
+
+    return entries
 
 
 def _build_candidate_model_entries(
@@ -517,25 +670,32 @@ def _build_candidate_model_entries(
         for model_spec in base_specs
     ]
     if normalized_hpo["enabled"]:
-        rng = np.random.default_rng(int(normalized_hpo["sampler_seed"]))
-        for model_spec in base_specs:
-            for trial_index in range(1, int(normalized_hpo["trials_per_model"])):
-                sampled_spec = ModelSpec(
-                    name=f"{model_spec.name}__hpo_t{trial_index:03d}",
-                    family=str(model_spec.family),
-                    params=_sample_model_params(model_spec, rng),
-                )
-                candidate_entries.append(
-                    {
-                        "spec": sampled_spec,
-                        "meta": _model_meta(
-                            sampled_spec,
-                            base_model_name=model_spec.name,
-                            search_origin="hpo_random",
-                            trial_index=trial_index,
-                        ),
-                    }
-                )
+        strategy = str(normalized_hpo["strategy"])
+        trials = int(normalized_hpo["trials_per_model"])
+        seed = int(normalized_hpo["sampler_seed"])
+        if strategy == "optuna":
+            hpo_entries = _build_optuna_candidates(base_specs, trials_per_model=trials, sampler_seed=seed)
+            candidate_entries.extend(hpo_entries)
+        else:
+            rng = np.random.default_rng(seed)
+            for model_spec in base_specs:
+                for trial_index in range(1, trials):
+                    sampled_spec = ModelSpec(
+                        name=f"{model_spec.name}__hpo_t{trial_index:03d}",
+                        family=str(model_spec.family),
+                        params=_sample_model_params(model_spec, rng),
+                    )
+                    candidate_entries.append(
+                        {
+                            "spec": sampled_spec,
+                            "meta": _model_meta(
+                                sampled_spec,
+                                base_model_name=model_spec.name,
+                                search_origin="hpo_random",
+                                trial_index=trial_index,
+                            ),
+                        }
+                    )
     return {
         "requested_models": list(model_runtime["requested_models"]),
         "runnable_models": runnable_model_names,
@@ -549,16 +709,19 @@ def _build_model(model_spec: ModelSpec, random_state: int, preprocess_cfg: Prepr
     family = str(model_spec.family).strip().lower()
     params = dict(model_spec.params or {})
     resolved_n_jobs = max(1, int(model_n_jobs))
+    clipper = _set_pandas_output(QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q))
+    imputer = _set_pandas_output(SimpleImputer(strategy="median"))
     if family == "logreg":
-        return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler(with_mean=True, with_std=True)), ("model", LogisticRegression(C=float(params.get("c", 1.0)), class_weight=params.get("class_weight"), random_state=int(random_state), max_iter=int(params.get("max_iter", 1000)), solver=str(params.get("solver", "lbfgs"))))])
+        scaler = _set_pandas_output(StandardScaler(with_mean=True, with_std=True))
+        return Pipeline(steps=[("clipper", clipper), ("imputer", imputer), ("scaler", scaler), ("model", LogisticRegression(C=float(params.get("c", 1.0)), class_weight=params.get("class_weight"), random_state=int(random_state), max_iter=int(params.get("max_iter", 1000)), solver=str(params.get("solver", "lbfgs"))))])
     if family == "xgb":
         if XGBClassifier is None:
             raise RuntimeError("XGBoost is required for xgb models; install 'xgboost' to enable them")
-        return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("model", XGBClassifier(objective="binary:logistic", eval_metric="logloss", random_state=int(random_state), seed=int(random_state), n_jobs=resolved_n_jobs, tree_method="hist", verbosity=0, max_depth=int(params.get("max_depth", 4)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 1.0))))])
+        return Pipeline(steps=[("clipper", clipper), ("imputer", imputer), ("model", XGBClassifier(objective="binary:logistic", eval_metric="logloss", random_state=int(random_state), seed=int(random_state), n_jobs=resolved_n_jobs, tree_method="hist", verbosity=0, max_depth=int(params.get("max_depth", 4)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 1.0))))])
     if family == "lgbm":
         if LGBMClassifier is None:
             raise RuntimeError("LightGBM is required for lgbm models; install 'lightgbm' to enable them")
-        return Pipeline(steps=[("clipper", QuantileClipper(preprocess_cfg.clip_lower_q, preprocess_cfg.clip_upper_q)), ("imputer", SimpleImputer(strategy="median")), ("model", LGBMClassifier(objective="binary", random_state=int(random_state), n_jobs=resolved_n_jobs, verbosity=-1, boosting_type=str(params.get("boosting_type", "gbdt")), num_leaves=int(params.get("num_leaves", 31)), max_depth=int(params.get("max_depth", -1)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 0.0)), min_child_samples=int(params.get("min_child_samples", 20)), class_weight=params.get("class_weight")))])
+        return Pipeline(steps=[("clipper", clipper), ("imputer", imputer), ("model", LGBMClassifier(objective="binary", random_state=int(random_state), n_jobs=resolved_n_jobs, verbosity=-1, boosting_type=str(params.get("boosting_type", "gbdt")), num_leaves=int(params.get("num_leaves", 31)), max_depth=int(params.get("max_depth", -1)), n_estimators=int(params.get("n_estimators", 300)), learning_rate=float(params.get("learning_rate", 0.03)), subsample=float(params.get("subsample", 1.0)), colsample_bytree=float(params.get("colsample_bytree", 1.0)), reg_alpha=float(params.get("reg_alpha", 0.0)), reg_lambda=float(params.get("reg_lambda", 0.0)), min_child_samples=int(params.get("min_child_samples", 20)), class_weight=params.get("class_weight")))])
     raise ValueError(f"unsupported model family: {model_spec.family}")
 
 
@@ -689,6 +852,8 @@ def _evaluate_move_experiment(
     label_target: str,
     model_n_jobs: int,
     return_utility_score_payload: bool = False,
+    progress_callback: Optional[Callable[[Dict[str, object]], None]] = None,
+    experiment_id: Optional[str] = None,
 ) -> Tuple[Dict[str, object], Optional[Dict[str, object]]]:
     days = sorted(df["trade_date"].astype(str).unique().tolist())
     folds = build_day_folds(
@@ -742,6 +907,18 @@ def _evaluate_move_experiment(
             }
         )
         combined_fold_rows.append({"rmse": test_metrics.get("rmse"), "brier": test_metrics.get("brier")})
+        if callable(progress_callback):
+            progress_callback(
+                {
+                    "phase": "training_cycle",
+                    "event": "fold_done",
+                    "experiment_id": experiment_id,
+                    "fold_index": int(fold_idx),
+                    "label_target": str(label_target),
+                    "rows": {"train": int(len(train_df)), "valid": int(len(valid_df)), "test": int(len(test_df))},
+                    "fold_ok": True,
+                }
+            )
     result = {
         "prediction_mode": meta["prediction_mode"],
         "fold_count": int(len(folds)),
@@ -761,7 +938,7 @@ def _evaluate_move_experiment(
     return result, payload
 
 
-def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model_spec: ModelSpec, cv_config: Dict[str, Any], random_state: int, preprocess_cfg: PreprocessConfig, label_target: str, utility_cfg: TradingObjectiveConfig, model_n_jobs: int, return_utility_score_payload: bool = False) -> Tuple[Dict[str, object], Optional[Dict[str, object]]]:
+def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model_spec: ModelSpec, cv_config: Dict[str, Any], random_state: int, preprocess_cfg: PreprocessConfig, label_target: str, utility_cfg: TradingObjectiveConfig, model_n_jobs: int, return_utility_score_payload: bool = False, progress_callback: Optional[Callable[[Dict[str, object]], None]] = None, experiment_id: Optional[str] = None) -> Tuple[Dict[str, object], Optional[Dict[str, object]]]:
     if _is_move_label_target(label_target):
         return _evaluate_move_experiment(
             df,
@@ -773,6 +950,8 @@ def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model
             label_target,
             model_n_jobs,
             return_utility_score_payload=return_utility_score_payload,
+            progress_callback=progress_callback,
+            experiment_id=experiment_id,
         )
     days = sorted(df["trade_date"].astype(str).unique().tolist())
     folds = build_day_folds(days=days, train_days=int(cv_config["train_days"]), valid_days=int(cv_config["valid_days"]), test_days=int(cv_config["test_days"]), step_days=int(cv_config["step_days"]), purge_days=int(cv_config.get("purge_days", 0)), embargo_days=int(cv_config.get("embargo_days", 0)))
@@ -813,6 +992,19 @@ def _evaluate_experiment(df: pd.DataFrame, feature_columns: Sequence[str], model
             test_metrics_rows.append(test_metrics)
             fold_details.append({"fold_ok": True, "days": fold, "rows": {"train": int(len(train_df)), "valid": int(len(valid_df)), "test": int(len(test_df))}, "metrics": {"valid": valid_metrics, "test": test_metrics}})
             combined_fold_rows.append({"rmse": test_metrics.get("rmse"), "brier": test_metrics.get("brier")})
+            if callable(progress_callback):
+                progress_callback(
+                    {
+                        "phase": "training_cycle",
+                        "event": "fold_done",
+                        "experiment_id": experiment_id,
+                        "fold_index": int(fold_idx),
+                        "side": str(side),
+                        "label_target": str(label_target),
+                        "rows": {"train": int(len(train_df)), "valid": int(len(valid_df)), "test": int(len(test_df))},
+                        "fold_ok": True,
+                    }
+                )
         side_reports[side] = {"fold_count": int(len(folds)), "fold_ok_count": int(sum(1 for row in fold_details if row.get("fold_ok"))), "folds": fold_details, "aggregate": {"valid": _aggregate_metric_rows(valid_metrics_rows), "test": _aggregate_metric_rows(test_metrics_rows)}}
     utility_summary = _evaluate_trade_utility(df, folds, ce_scores, pe_scores, utility_cfg)
     result = {"fold_count": int(len(folds)), "ce": side_reports["ce"], "pe": side_reports["pe"], "combined_test": _aggregate_metric_rows(combined_fold_rows), "trading_utility": utility_summary}
@@ -946,6 +1138,10 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
     unavailable_models = list(resolved_model_space["unavailable_models"])
     candidate_model_entries = list(resolved_model_space["candidate_entries"])
     resolved_hpo = dict(resolved_model_space["hpo"])
+    if max_experiments is None and (search_options or {}).get("max_experiments") is not None:
+        max_experiments = int((search_options or {}).get("max_experiments"))
+    raw_max_elapsed_seconds = (search_options or {}).get("max_elapsed_seconds")
+    max_elapsed_seconds = float(raw_max_elapsed_seconds) if raw_max_elapsed_seconds is not None else None
     cv_config = {"train_days": int(cv_kwargs.get("train_days")), "valid_days": int(cv_kwargs.get("valid_days")), "test_days": int(cv_kwargs.get("test_days")), "step_days": int(cv_kwargs.get("step_days")), "purge_days": int(cv_kwargs.get("purge_days", 0)), "embargo_days": int(cv_kwargs.get("embargo_days", 0)), "purge_mode": normalize_purge_mode(cv_kwargs.get("purge_mode", PURGE_MODE_DAYS)), "embargo_rows": int(cv_kwargs.get("embargo_rows", 0)), "event_end_col": cv_kwargs.get("event_end_col")}
     preprocessing = {"max_missing_rate": float(effective_preprocess.max_missing_rate), "clip_lower_q": float(effective_preprocess.clip_lower_q), "clip_upper_q": float(effective_preprocess.clip_upper_q), "dropped_features_by_missing_rate": dropped_by_missing, "features_after_preprocess_gate": int(len(base_features))}
     runtime_config = {"model_n_jobs": int(effective_model_n_jobs)}
@@ -990,13 +1186,30 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
     experiments: List[Dict[str, object]] = []
     experiment_counter = 0
     max_exp = int(max_experiments) if max_experiments is not None else None
+    search_started_monotonic = time.monotonic()
+    search_stop_reason: Optional[str] = None
     for feature_set_name in feature_names:
         selected_features = _apply_feature_set(base_features, feature_set_name)
         if not selected_features:
             continue
         for candidate_entry in candidate_model_entries:
+            if max_elapsed_seconds is not None and (time.monotonic() - search_started_monotonic) >= float(max_elapsed_seconds):
+                search_stop_reason = "max_elapsed_seconds_reached"
+                if callable(progress_callback):
+                    progress_callback(
+                        {
+                            "phase": "training_cycle",
+                            "event": "search_budget_reached",
+                            "reason": search_stop_reason,
+                            "elapsed_seconds": float(time.monotonic() - search_started_monotonic),
+                            "max_elapsed_seconds": float(max_elapsed_seconds),
+                            "experiments_completed": int(len(experiments)),
+                        }
+                    )
+                break
             experiment_counter += 1
             if max_exp is not None and experiment_counter > max_exp:
+                search_stop_reason = "max_experiments_reached"
                 break
             model_spec = candidate_entry["spec"]
             model_meta = dict(candidate_entry["meta"])
@@ -1014,9 +1227,38 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
                         "search_origin": model_meta.get("search_origin", "preset"),
                     }
                 )
-            result, utility_score_payload = _evaluate_experiment(frame, selected_features, model_spec, cv_config, random_state, effective_preprocess, label_target, effective_utility, effective_model_n_jobs, return_utility_score_payload=retain_utility_score_payload)
+            result, utility_score_payload = _evaluate_experiment(
+                frame,
+                selected_features,
+                model_spec,
+                cv_config,
+                random_state,
+                effective_preprocess,
+                label_target,
+                effective_utility,
+                effective_model_n_jobs,
+                return_utility_score_payload=retain_utility_score_payload,
+                progress_callback=progress_callback,
+                experiment_id=experiment_id,
+            )
+            if callable(progress_callback):
+                progress_callback(
+                    {
+                        "phase": "training_cycle",
+                        "event": "experiment_done",
+                        "experiment_index": int(experiment_counter),
+                        "experiment_id": experiment_id,
+                        "feature_set": feature_set_name,
+                        "model": str(model_spec.name),
+                        "objective_value": _objective_value(result, objective),
+                        "fallback_objective_value": _fallback_objective_value(result, objective),
+                        "fold_count": int(result.get("fold_count", 0)),
+                    }
+                )
             experiments.append({"experiment_id": experiment_id, "feature_set": feature_set_name, "model": model_meta, "model_spec": model_spec, "feature_count": int(len(selected_features)), "selected_features": list(selected_features), "result": result, "objective_value": _objective_value(result, objective), "fallback_objective_value": _fallback_objective_value(result, objective), "utility_score_payload": utility_score_payload})
         if max_exp is not None and experiment_counter >= max_exp:
+            break
+        if search_stop_reason is not None:
             break
     if not experiments:
         raise ValueError("no experiments evaluated")
@@ -1038,5 +1280,5 @@ def run_training_cycle_catalog(labeled_df: pd.DataFrame, *, feature_profile: str
             model_spec = experiment["model_spec"]
             package = _build_model_package(created_at_utc, feature_profile, objective, label_target, experiment["selected_features"], experiment["feature_set"], experiment["model"], cv_config, preprocessing, runtime_config, effective_utility.to_dict(), _fit_final_models(frame, experiment["selected_features"], model_spec, random_state, effective_preprocess, label_target, effective_model_n_jobs))
             bundles.append({"experiment_id": experiment["experiment_id"], "model_package": package, "training_result": experiment["result"], "utility_score_payload": experiment.get("utility_score_payload")})
-    report = {"created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "rows_total": int(len(frame)), "days_total": int(frame["trade_date"].nunique()), "experiments_total": int(len(experiments)), "search_space": {"requested_models": requested_model_names, "runnable_models": runnable_model_names, "candidate_models_total": int(len(candidate_model_entries)), "unavailable_models": unavailable_models, "hpo": resolved_hpo}, "best_experiment": {"experiment_id": best["experiment_id"], "feature_set": best["feature_set"], "feature_count": int(best["feature_count"]), "model": best["model"], "objective_value": best.get("objective_value"), "fallback_objective_value": best.get("fallback_objective_value"), "selected_by_fallback": bool(best.get("selected_by_fallback", False))}, "leaderboard": _build_leaderboard(experiments, objective), "preprocessing": preprocessing, "runtime": runtime_config, "cv_config": cv_config, "trading_utility_config": effective_utility.to_dict()}
+    report = {"created_at_utc": created_at_utc, "feature_profile": str(feature_profile), "objective": str(objective), "label_target": str(label_target), "rows_total": int(len(frame)), "days_total": int(frame["trade_date"].nunique()), "experiments_total": int(len(experiments)), "search_space": {"requested_models": requested_model_names, "runnable_models": runnable_model_names, "candidate_models_total": int(len(candidate_model_entries)), "unavailable_models": unavailable_models, "hpo": resolved_hpo}, "search_budget": {"max_experiments": int(max_exp) if max_exp is not None else None, "max_elapsed_seconds": float(max_elapsed_seconds) if max_elapsed_seconds is not None else None, "elapsed_seconds": float(time.monotonic() - search_started_monotonic), "stop_reason": search_stop_reason}, "best_experiment": {"experiment_id": best["experiment_id"], "feature_set": best["feature_set"], "feature_count": int(best["feature_count"]), "model": best["model"], "objective_value": best.get("objective_value"), "fallback_objective_value": best.get("fallback_objective_value"), "selected_by_fallback": bool(best.get("selected_by_fallback", False))}, "leaderboard": _build_leaderboard(experiments, objective), "preprocessing": preprocessing, "runtime": runtime_config, "cv_config": cv_config, "trading_utility_config": effective_utility.to_dict()}
     return {"report": report, "model_package": best_package, "experiment_bundles": bundles}

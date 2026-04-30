@@ -15,6 +15,7 @@ STAGED_KIND = "staged_dual_recipe_v1"
 STAGED_GRID_KIND = "staged_training_grid_v1"
 MANIFEST_KINDS = (STAGED_KIND, STAGED_GRID_KIND)
 _STAGE_NAMES = ("stage1", "stage2", "stage3")
+_STAGE2_SESSION_BUCKETS = ("OPENING", "MORNING", "MIDDAY", "LATE_SESSION")
 
 
 class ManifestValidationError(ValueError):
@@ -170,6 +171,10 @@ def _validate_staged_runtime(payload: Dict[str, Any], errors: List[str]) -> None
         errors.append("runtime.prefilter_gate_ids must not be empty")
     if "block_expiry" in payload and not isinstance(payload.get("block_expiry"), bool):
         errors.append("runtime.block_expiry must be boolean")
+    if "stage2_cv_gate_mode" in payload:
+        mode = str(payload.get("stage2_cv_gate_mode") or "").strip().lower()
+        if mode not in {"hard", "record_only"}:
+            errors.append("runtime.stage2_cv_gate_mode must be one of ['hard', 'record_only']")
 
 
 def _validate_stage2_label_filter(payload: Any, errors: List[str], *, field_prefix: str) -> None:
@@ -187,6 +192,216 @@ def _validate_stage2_label_filter(payload: Any, errors: List[str], *, field_pref
                 raise ValueError
         except Exception:
             errors.append(f"{field_prefix}.min_directional_edge_after_cost must be a number >= 0")
+    if "require_positive_winner_after_cost" in stage2_label_filter and not isinstance(
+        stage2_label_filter.get("require_positive_winner_after_cost"), bool
+    ):
+        errors.append(f"{field_prefix}.require_positive_winner_after_cost must be boolean")
+    if "max_opposing_return_after_cost" in stage2_label_filter:
+        try:
+            float(stage2_label_filter.get("max_opposing_return_after_cost"))
+        except Exception:
+            errors.append(f"{field_prefix}.max_opposing_return_after_cost must be numeric")
+
+
+def _validate_stage2_session_filter(payload: Any, errors: List[str], *, field_prefix: str) -> None:
+    stage2_session_filter = payload or {}
+    if stage2_session_filter and not isinstance(stage2_session_filter, dict):
+        errors.append(f"{field_prefix} must be an object")
+        return
+    if not stage2_session_filter:
+        return
+    if "enabled" in stage2_session_filter and not isinstance(stage2_session_filter.get("enabled"), bool):
+        errors.append(f"{field_prefix}.enabled must be boolean")
+    include_buckets = stage2_session_filter.get("include_buckets")
+    if include_buckets is None:
+        return
+    if not isinstance(include_buckets, list):
+        errors.append(f"{field_prefix}.include_buckets must be a list")
+        return
+    if not include_buckets:
+        errors.append(f"{field_prefix}.include_buckets must not be empty")
+        return
+    normalized = [str(item).strip().upper() for item in include_buckets]
+    if len(normalized) != len(set(normalized)):
+        errors.append(f"{field_prefix}.include_buckets must not contain duplicates")
+    unknown = sorted(set(normalized) - set(_STAGE2_SESSION_BUCKETS))
+    if unknown:
+        errors.append(
+            f"{field_prefix}.include_buckets has unknown buckets: {unknown}; "
+            f"valid options: {list(_STAGE2_SESSION_BUCKETS)}"
+        )
+
+
+def _validate_stage1_session_filter(payload: Any, errors: List[str], *, field_prefix: str) -> None:
+    stage1_session_filter = payload or {}
+    if stage1_session_filter and not isinstance(stage1_session_filter, dict):
+        errors.append(f"{field_prefix} must be an object")
+        return
+    if not stage1_session_filter:
+        return
+    if "enabled" in stage1_session_filter and not isinstance(stage1_session_filter.get("enabled"), bool):
+        errors.append(f"{field_prefix}.enabled must be boolean")
+    include_buckets = stage1_session_filter.get("include_buckets")
+    if include_buckets is None:
+        return
+    if not isinstance(include_buckets, list):
+        errors.append(f"{field_prefix}.include_buckets must be a list")
+        return
+    if not include_buckets:
+        errors.append(f"{field_prefix}.include_buckets must not be empty")
+        return
+    normalized = [str(item).strip().upper() for item in include_buckets]
+    if len(normalized) != len(set(normalized)):
+        errors.append(f"{field_prefix}.include_buckets must not contain duplicates")
+    unknown = sorted(set(normalized) - set(_STAGE2_SESSION_BUCKETS))
+    if unknown:
+        errors.append(
+            f"{field_prefix}.include_buckets has unknown buckets: {unknown}; "
+            f"valid options: {list(_STAGE2_SESSION_BUCKETS)}"
+        )
+
+
+def _search_for_run_dir(source_run_id: str, manifest_dir: Path) -> Optional[Path]:
+    if not source_run_id:
+        return None
+    search_roots = [
+        manifest_dir / ".." / ".." / "artifacts" / "training_launches",
+        manifest_dir / ".." / ".." / "artifacts" / "research",
+    ]
+    for root in search_roots:
+        resolved = root.resolve()
+        if not resolved.exists():
+            continue
+        for child in resolved.iterdir():
+            candidate = child / "run" / "runs" / source_run_id
+            if candidate.exists():
+                return candidate
+            if child.is_dir():
+                for grandchild in child.iterdir():
+                    candidate = grandchild / "run" / "runs" / source_run_id
+                    if candidate.exists():
+                        return candidate
+    return None
+
+
+def _validate_stage1_reuse(
+    payload: Any,
+    errors: List[str],
+    *,
+    field_prefix: str,
+    manifest_dir: Path,
+    validate_paths: bool,
+) -> Optional[Dict[str, Any]]:
+    stage1_reuse = payload or {}
+    if stage1_reuse and not isinstance(stage1_reuse, dict):
+        errors.append(f"{field_prefix} must be an object")
+        return None
+    if not stage1_reuse:
+        return None
+
+    source_run_id = str(stage1_reuse.get("source_run_id") or "").strip()
+    source_run_dir = _normalize_path(stage1_reuse.get("source_run_dir"), manifest_dir=manifest_dir)
+    if source_run_dir is None:
+        errors.append(f"{field_prefix}.source_run_dir must be set")
+    elif validate_paths and not source_run_dir.exists():
+        fallback = _search_for_run_dir(source_run_id, manifest_dir)
+        if fallback is not None:
+            source_run_dir = fallback
+        else:
+            errors.append(f"{field_prefix}.source_run_dir not found: {source_run_dir}")
+
+    return {
+        "source_run_dir": source_run_dir if source_run_dir is not None else None,
+        "source_run_id": source_run_id,
+    }
+
+
+def _validate_stage2_target_redesign(payload: Any, errors: List[str], *, field_prefix: str) -> None:
+    stage2_target_redesign = payload or {}
+    if stage2_target_redesign and not isinstance(stage2_target_redesign, dict):
+        errors.append(f"{field_prefix} must be an object")
+        return
+    if not stage2_target_redesign:
+        return
+    if "enabled" in stage2_target_redesign and not isinstance(stage2_target_redesign.get("enabled"), bool):
+        errors.append(f"{field_prefix}.enabled must be boolean")
+    for numeric_field in (
+        "min_directional_edge_after_cost",
+        "min_winner_return_after_cost",
+        "max_opposing_return_after_cost",
+        "max_kept_fraction",
+    ):
+        if numeric_field in stage2_target_redesign:
+            try:
+                float(stage2_target_redesign.get(numeric_field))
+            except Exception:
+                errors.append(f"{field_prefix}.{numeric_field} must be numeric")
+    if "min_directional_edge_after_cost" in stage2_target_redesign:
+        try:
+            if float(stage2_target_redesign.get("min_directional_edge_after_cost", 0.0)) < 0.0:
+                raise ValueError
+        except Exception:
+            errors.append(f"{field_prefix}.min_directional_edge_after_cost must be a number >= 0")
+    if "min_winner_return_after_cost" in stage2_target_redesign:
+        try:
+            if float(stage2_target_redesign.get("min_winner_return_after_cost", 0.0)) < 0.0:
+                raise ValueError
+        except Exception:
+            errors.append(f"{field_prefix}.min_winner_return_after_cost must be a number >= 0")
+    if "max_kept_fraction" in stage2_target_redesign:
+        try:
+            max_kept_fraction = float(stage2_target_redesign.get("max_kept_fraction", 1.0))
+            if max_kept_fraction <= 0.0 or max_kept_fraction > 1.0:
+                raise ValueError
+        except Exception:
+            errors.append(f"{field_prefix}.max_kept_fraction must be a number in (0, 1]")
+    if "conviction_score" in stage2_target_redesign:
+        conviction_score = str(stage2_target_redesign.get("conviction_score") or "").strip().lower()
+        valid_scores = {"edge", "winner_return", "edge_winner_min"}
+        if conviction_score not in valid_scores:
+            errors.append(
+                f"{field_prefix}.conviction_score has unknown value '{conviction_score}'; "
+                f"valid options: {sorted(valid_scores)}"
+            )
+
+
+def _validate_grid_robustness_probe(payload: Any, errors: List[str], *, field_prefix: str) -> None:
+    robustness_probe = payload or {}
+    if robustness_probe and not isinstance(robustness_probe, dict):
+        errors.append(f"{field_prefix} must be an object")
+        return
+    if not robustness_probe:
+        return
+    if "enabled" in robustness_probe and not isinstance(robustness_probe.get("enabled"), bool):
+        errors.append(f"{field_prefix}.enabled must be boolean")
+    for key in ("top_k", "iterations", "random_seed"):
+        if key in robustness_probe:
+            try:
+                if int(robustness_probe.get(key)) <= 0:
+                    raise ValueError
+            except Exception:
+                errors.append(f"{field_prefix}.{key} must be an integer > 0")
+    if "resample_unit" in robustness_probe:
+        if str(robustness_probe.get("resample_unit") or "").strip().lower() != "trade_date":
+            errors.append(f"{field_prefix}.resample_unit must be 'trade_date'")
+    if "splits" in robustness_probe:
+        splits = robustness_probe.get("splits")
+        if not isinstance(splits, list):
+            errors.append(f"{field_prefix}.splits must be a list")
+        else:
+            normalized = [str(item).strip() for item in splits]
+            valid = {"research_valid", "final_holdout", "research_train"}
+            if not normalized:
+                errors.append(f"{field_prefix}.splits must not be empty")
+            elif len(normalized) != len(set(normalized)):
+                errors.append(f"{field_prefix}.splits must not contain duplicates")
+            else:
+                unknown = sorted(set(normalized) - valid)
+                if unknown:
+                    errors.append(
+                        f"{field_prefix}.splits has unknown values: {unknown}; "
+                        f"valid options: {sorted(valid)}"
+                    )
 
 
 def _validate_search_options_by_stage(payload: Any, errors: List[str], *, field_prefix: str) -> None:
@@ -201,6 +416,18 @@ def _validate_search_options_by_stage(payload: Any, errors: List[str], *, field_
         if stage_options and not isinstance(stage_options, dict):
             errors.append(f"{field_prefix}.{stage_name} must be an object")
             continue
+        if "max_experiments" in stage_options:
+            try:
+                if int(stage_options.get("max_experiments", 0)) <= 0:
+                    raise ValueError
+            except Exception:
+                errors.append(f"{field_prefix}.{stage_name}.max_experiments must be an integer > 0")
+        if "max_elapsed_seconds" in stage_options:
+            try:
+                if float(stage_options.get("max_elapsed_seconds", 0.0)) <= 0.0:
+                    raise ValueError
+            except Exception:
+                errors.append(f"{field_prefix}.{stage_name}.max_elapsed_seconds must be numeric and > 0")
         hpo = stage_options.get("hpo") or {}
         if hpo and not isinstance(hpo, dict):
             errors.append(f"{field_prefix}.{stage_name}.hpo must be an object")
@@ -208,8 +435,8 @@ def _validate_search_options_by_stage(payload: Any, errors: List[str], *, field_
         if not hpo:
             continue
         strategy = str(hpo.get("strategy", "random")).strip().lower()
-        if strategy not in {"random"}:
-            errors.append(f"{field_prefix}.{stage_name}.hpo.strategy must be 'random'")
+        if strategy not in {"random", "optuna"}:
+            errors.append(f"{field_prefix}.{stage_name}.hpo.strategy must be 'random' or 'optuna'")
         try:
             if int(hpo.get("trials_per_model", 0)) <= 0:
                 raise ValueError
@@ -222,7 +449,7 @@ def _validate_search_options_by_stage(payload: Any, errors: List[str], *, field_
                 errors.append(f"{field_prefix}.{stage_name}.hpo.sampler_seed must be an integer")
 
 
-def _validate_staged_training(payload: Dict[str, Any], errors: List[str]) -> None:
+def _validate_staged_training(payload: Dict[str, Any], errors: List[str], *, manifest_dir: Path, validate_paths: bool) -> None:
     preprocess = payload.get("preprocess")
     if not isinstance(preprocess, dict):
         errors.append("training.preprocess must be an object")
@@ -262,7 +489,31 @@ def _validate_staged_training(payload: Dict[str, Any], errors: List[str]) -> Non
     except Exception:
         errors.append("training.runtime.model_n_jobs must be an integer > 0")
 
+    _validate_stage1_session_filter(
+        payload.get("stage1_session_filter"),
+        errors,
+        field_prefix="training.stage1_session_filter",
+    )
+    stage1_reuse = _validate_stage1_reuse(
+        payload.get("stage1_reuse"),
+        errors,
+        field_prefix="training.stage1_reuse",
+        manifest_dir=manifest_dir,
+        validate_paths=validate_paths,
+    )
+    if stage1_reuse is not None:
+        payload["stage1_reuse"] = stage1_reuse
     _validate_stage2_label_filter(payload.get("stage2_label_filter"), errors, field_prefix="training.stage2_label_filter")
+    _validate_stage2_session_filter(
+        payload.get("stage2_session_filter"),
+        errors,
+        field_prefix="training.stage2_session_filter",
+    )
+    _validate_stage2_target_redesign(
+        payload.get("stage2_target_redesign"),
+        errors,
+        field_prefix="training.stage2_target_redesign",
+    )
     _validate_search_options_by_stage(
         payload.get("search_options_by_stage"),
         errors,
@@ -280,8 +531,11 @@ def _validate_staged_policy(payload: Dict[str, Any], errors: List[str]) -> None:
     stage1 = payload.get("stage1") or {}
     stage2 = payload.get("stage2") or {}
     stage3 = payload.get("stage3") or {}
+    stage2_policy_id = str(payload.get("stage2_policy_id") or "").strip()
     if not list(stage1.get("threshold_grid") or []):
         errors.append("policy.stage1.threshold_grid must not be empty")
+    if stage2_policy_id in {"direction_gate_threshold_v1", "direction_gate_economic_balance_v1"} and not list(stage2.get("trade_threshold_grid") or []):
+        errors.append("policy.stage2.trade_threshold_grid must not be empty for gate-based stage2 policies")
     if not list(stage2.get("ce_threshold_grid") or []):
         errors.append("policy.stage2.ce_threshold_grid must not be empty")
     if not list(stage2.get("pe_threshold_grid") or []):
@@ -347,7 +601,17 @@ def _validate_staged_hard_gates(payload: Dict[str, Any], errors: List[str]) -> N
                 pass
 
 
-def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefix: str) -> None:
+def _validate_grid_run_overrides(
+    payload: Any,
+    errors: List[str],
+    *,
+    field_prefix: str,
+    manifest_dir: Path,
+    validate_paths: bool,
+) -> None:
+    from ..staged.recipes import recipe_catalog_ids
+    from ..staged.registries import policy_registry
+
     overrides = payload or {}
     if overrides and not isinstance(overrides, dict):
         errors.append(f"{field_prefix} must be an object")
@@ -355,12 +619,12 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
     if not overrides:
         return
 
-    allowed_top_level = {"catalog", "training", "runtime", "outputs"}
+    allowed_top_level = {"catalog", "training", "runtime", "outputs", "policy"}
     unknown_top_level = sorted(set(str(key) for key in overrides.keys()) - allowed_top_level)
     if unknown_top_level:
         errors.append(
             f"{field_prefix} contains unsupported top-level overrides: {unknown_top_level}; "
-            "allowed keys: ['catalog', 'outputs', 'runtime', 'training']"
+            "allowed keys: ['catalog', 'outputs', 'policy', 'runtime', 'training']"
         )
 
     catalog = overrides.get("catalog") or {}
@@ -368,10 +632,15 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
         if not isinstance(catalog, dict):
             errors.append(f"{field_prefix}.catalog must be an object")
         else:
-            unknown_catalog = sorted(set(str(key) for key in catalog.keys()) - {"feature_sets_by_stage"})
+            unknown_catalog = sorted(set(str(key) for key in catalog.keys()) - {"feature_sets_by_stage", "recipe_catalog_id"})
             if unknown_catalog:
                 errors.append(
-                    f"{field_prefix}.catalog supports only feature_sets_by_stage; got unsupported keys: {unknown_catalog}"
+                    f"{field_prefix}.catalog supports only feature_sets_by_stage and recipe_catalog_id; got unsupported keys: {unknown_catalog}"
+                )
+            recipe_catalog_id = str(catalog.get("recipe_catalog_id") or "").strip()
+            if "recipe_catalog_id" in catalog and recipe_catalog_id not in set(recipe_catalog_ids()):
+                errors.append(
+                    f"{field_prefix}.catalog.recipe_catalog_id must be one of {recipe_catalog_ids()}"
                 )
             feature_sets_by_stage = catalog.get("feature_sets_by_stage") or {}
             if feature_sets_by_stage and not isinstance(feature_sets_by_stage, dict):
@@ -401,17 +670,50 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
             errors.append(f"{field_prefix}.training must be an object")
         else:
             unknown_training = sorted(
-                set(str(key) for key in training.keys()) - {"search_options_by_stage", "stage2_label_filter"}
+                set(str(key) for key in training.keys())
+                - {
+                    "search_options_by_stage",
+                    "stage1_reuse",
+                    "stage1_session_filter",
+                    "stage2_label_filter",
+                    "stage2_session_filter",
+                    "stage2_target_redesign",
+                    "bypass_stage2",
+                }
             )
             if unknown_training:
                 errors.append(
-                    f"{field_prefix}.training supports only search_options_by_stage and stage2_label_filter; "
+                    f"{field_prefix}.training supports only search_options_by_stage, stage1_reuse, stage1_session_filter, stage2_label_filter, stage2_session_filter, stage2_target_redesign, and bypass_stage2; "
                     f"got unsupported keys: {unknown_training}"
                 )
+            stage1_reuse = _validate_stage1_reuse(
+                training.get("stage1_reuse"),
+                errors,
+                field_prefix=f"{field_prefix}.training.stage1_reuse",
+                manifest_dir=manifest_dir,
+                validate_paths=validate_paths,
+            )
+            if stage1_reuse is not None:
+                training["stage1_reuse"] = stage1_reuse
+            _validate_stage1_session_filter(
+                training.get("stage1_session_filter"),
+                errors,
+                field_prefix=f"{field_prefix}.training.stage1_session_filter",
+            )
             _validate_stage2_label_filter(
                 training.get("stage2_label_filter"),
                 errors,
                 field_prefix=f"{field_prefix}.training.stage2_label_filter",
+            )
+            _validate_stage2_session_filter(
+                training.get("stage2_session_filter"),
+                errors,
+                field_prefix=f"{field_prefix}.training.stage2_session_filter",
+            )
+            _validate_stage2_target_redesign(
+                training.get("stage2_target_redesign"),
+                errors,
+                field_prefix=f"{field_prefix}.training.stage2_target_redesign",
             )
             _validate_search_options_by_stage(
                 training.get("search_options_by_stage"),
@@ -419,18 +721,45 @@ def _validate_grid_run_overrides(payload: Any, errors: List[str], *, field_prefi
                 field_prefix=f"{field_prefix}.training.search_options_by_stage",
             )
 
+    policy = overrides.get("policy") or {}
+    if policy:
+        if not isinstance(policy, dict):
+            errors.append(f"{field_prefix}.policy must be an object")
+        else:
+            unknown_policy = sorted(set(str(key) for key in policy.keys()) - {"stage2_policy_id", "stage3_policy_id", "stage2", "stage3"})
+            if unknown_policy:
+                errors.append(
+                    f"{field_prefix}.policy supports only stage2_policy_id, stage3_policy_id, stage2, and stage3; got unsupported keys: {unknown_policy}"
+                )
+            valid_policies = set(policy_registry())
+            for key in ("stage2_policy_id", "stage3_policy_id"):
+                if key in policy and str(policy.get(key) or "").strip() not in valid_policies:
+                    errors.append(f"{field_prefix}.policy.{key} must be one of {sorted(valid_policies)}")
+            stage2_policy = policy.get("stage2") or {}
+            stage3_policy = policy.get("stage3") or {}
+            if stage2_policy and not isinstance(stage2_policy, dict):
+                errors.append(f"{field_prefix}.policy.stage2 must be an object")
+            if stage3_policy and not isinstance(stage3_policy, dict):
+                errors.append(f"{field_prefix}.policy.stage3 must be an object")
+
     runtime = overrides.get("runtime") or {}
     if runtime:
         if not isinstance(runtime, dict):
             errors.append(f"{field_prefix}.runtime must be an object")
         else:
-            unknown_runtime = sorted(set(str(key) for key in runtime.keys()) - {"block_expiry"})
+            unknown_runtime = sorted(set(str(key) for key in runtime.keys()) - {"block_expiry", "stage2_cv_gate_mode"})
             if unknown_runtime:
                 errors.append(
-                    f"{field_prefix}.runtime supports only block_expiry; got unsupported keys: {unknown_runtime}"
+                    f"{field_prefix}.runtime supports only block_expiry and stage2_cv_gate_mode; got unsupported keys: {unknown_runtime}"
                 )
             if "block_expiry" in runtime and not isinstance(runtime.get("block_expiry"), bool):
                 errors.append(f"{field_prefix}.runtime.block_expiry must be boolean")
+            if "stage2_cv_gate_mode" in runtime:
+                mode = str(runtime.get("stage2_cv_gate_mode") or "").strip().lower()
+                if mode not in {"hard", "record_only"}:
+                    errors.append(
+                        f"{field_prefix}.runtime.stage2_cv_gate_mode must be one of ['hard', 'record_only']"
+                    )
 
     outputs = overrides.get("outputs") or {}
     if outputs:
@@ -481,6 +810,15 @@ def _validate_grid_manifest(payload: Dict[str, Any], *, manifest_path: Path, val
                 float(stage2_hpo_escalation[key])
             except Exception:
                 errors.append(f"selection.stage2_hpo_escalation.{key} must be numeric")
+    robustness_probe = dict(selection_payload.get("robustness_probe") or {})
+    _validate_grid_robustness_probe(
+        robustness_probe,
+        errors,
+        field_prefix="selection.robustness_probe",
+    )
+    ranking_strategy = str(selection_payload.get("ranking_strategy") or "default").strip().lower()
+    if ranking_strategy not in {"default", "stage3_policy_paths_v1"}:
+        errors.append("selection.ranking_strategy must be one of ['default', 'stage3_policy_paths_v1']")
 
     if grid_payload and not isinstance(grid_payload, dict):
         errors.append("grid must be an object")
@@ -534,11 +872,29 @@ def _validate_grid_manifest(payload: Dict[str, Any], *, manifest_path: Path, val
                 errors.append(
                     f"{field_prefix}.inherit_best_from must reference earlier run_id values; unknown refs: {unknown_refs}"
                 )
+        reuse_stage1_from = run_payload.get("reuse_stage1_from")
+        if reuse_stage1_from is not None and not isinstance(reuse_stage1_from, str):
+            errors.append(f"{field_prefix}.reuse_stage1_from must be a string when provided")
+        elif isinstance(reuse_stage1_from, str) and reuse_stage1_from.strip():
+            if reuse_stage1_from.strip() not in seen_run_ids:
+                errors.append(
+                    f"{field_prefix}.reuse_stage1_from must reference an earlier run_id; unknown ref: {reuse_stage1_from.strip()}"
+                )
+        reuse_stage2_from = run_payload.get("reuse_stage2_from")
+        if reuse_stage2_from is not None and not isinstance(reuse_stage2_from, str):
+            errors.append(f"{field_prefix}.reuse_stage2_from must be a string when provided")
+        elif isinstance(reuse_stage2_from, str) and reuse_stage2_from.strip():
+            if reuse_stage2_from.strip() not in seen_run_ids:
+                errors.append(
+                    f"{field_prefix}.reuse_stage2_from must reference an earlier run_id; unknown ref: {reuse_stage2_from.strip()}"
+                )
 
         _validate_grid_run_overrides(
             run_payload.get("overrides"),
             errors,
             field_prefix=f"{field_prefix}.overrides",
+            manifest_dir=manifest_path.resolve().parent,
+            validate_paths=validate_paths,
         )
 
     base_resolved: Optional[Dict[str, Any]] = None
@@ -560,6 +916,8 @@ def _validate_grid_manifest(payload: Dict[str, Any], *, manifest_path: Path, val
                 "run_id": str(run_payload.get("run_id") or "").strip(),
                 "model_group_suffix": str(run_payload.get("model_group_suffix") or ""),
                 "inherit_best_from": [str(item) for item in list(run_payload.get("inherit_best_from") or [])],
+                "reuse_stage1_from": str(run_payload.get("reuse_stage1_from") or "").strip() or None,
+                "reuse_stage2_from": str(run_payload.get("reuse_stage2_from") or "").strip() or None,
                 "overrides": dict(run_payload.get("overrides") or {}),
             }
         )
@@ -577,6 +935,8 @@ def _validate_grid_manifest(payload: Dict[str, Any], *, manifest_path: Path, val
         },
         "selection": {
             "stage2_hpo_escalation": stage2_hpo_escalation,
+            "robustness_probe": robustness_probe,
+            "ranking_strategy": ranking_strategy,
         },
         "grid": {
             "research_only": bool(research_only),
@@ -684,7 +1044,7 @@ def resolve_manifest(payload: Dict[str, Any], *, manifest_path: Path, validate_p
 
     _validate_staged_catalog(catalog_payload, errors)
     _validate_staged_components(payload, errors)
-    _validate_staged_training(training_payload, errors)
+    _validate_staged_training(training_payload, errors, manifest_dir=manifest_dir, validate_paths=validate_paths)
     _validate_staged_runtime(dict(payload.get("runtime") or {}), errors)
     _validate_staged_policy(dict(payload.get("policy") or {}), errors)
     _validate_staged_hard_gates(dict(payload.get("hard_gates") or {}), errors)

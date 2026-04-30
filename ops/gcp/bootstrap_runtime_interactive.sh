@@ -61,8 +61,31 @@ prompt_optional() {
   printf -v "${var_name}" '%s' "${entered}"
 }
 
+prompt_secret_optional() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local default_value="${3:-}"
+  local entered=""
+  local display_default=""
+  if [ -n "${default_value}" ]; then
+    display_default="[set]"
+    read -r -s -p "${prompt_text} ${display_default} (leave blank to keep): " entered || true
+  else
+    read -r -s -p "${prompt_text} (optional, input hidden): " entered || true
+  fi
+  echo
+  if [ -z "${entered}" ] && [ -n "${default_value}" ]; then
+    entered="${default_value}"
+  fi
+  printf -v "${var_name}" '%s' "${entered}"
+}
+
 detect_default_project() {
   gcloud config get-value project 2>/dev/null | tr -d '\r'
+}
+
+detect_default_zone() {
+  gcloud config get-value compute/zone 2>/dev/null | tr -d '\r'
 }
 
 detect_default_repo_url() {
@@ -78,12 +101,13 @@ echo "This will ask for changing values and write ${OPERATOR_ENV_FILE}."
 echo
 
 detected_project_id="$(detect_default_project)"
+detected_zone="$(detect_default_zone)"
 detected_repo_url="$(detect_default_repo_url)"
 detected_repo_ref="$(detect_default_repo_ref)"
 
-existing_project_id="${PROJECT_ID:-${detected_project_id:-gen-lang-client-0909109011}}"
+existing_project_id="${PROJECT_ID:-${detected_project_id:-my-gcp-project}}"
 existing_region="${REGION:-asia-south1}"
-existing_zone="${ZONE:-asia-south1-b}"
+existing_zone="${ZONE:-${detected_zone:-asia-south1-b}}"
 existing_runtime_name="${RUNTIME_NAME:-option-trading-runtime-01}"
 existing_runtime_machine_type="${RUNTIME_MACHINE_TYPE:-e2-standard-4}"
 existing_training_machine_type="${TRAINING_MACHINE_TYPE:-n2-highcpu-16}"
@@ -103,6 +127,8 @@ existing_dashboard_port="${DASHBOARD_PORT:-8008}"
 existing_enable_dashboard_profile="${ENABLE_DASHBOARD_PROFILE:-true}"
 existing_ssh_source_ranges="${SSH_SOURCE_RANGES:-0.0.0.0/0}"
 existing_dashboard_source_ranges="${DASHBOARD_SOURCE_RANGES:-0.0.0.0/0}"
+existing_kite_api_key="${KITE_API_KEY:-}"
+existing_kite_api_secret="${KITE_API_SECRET:-}"
 
 prompt_var PROJECT_ID "Project ID" "${existing_project_id}"
 prompt_var REGION "Region" "${existing_region}"
@@ -126,6 +152,8 @@ prompt_var DASHBOARD_SOURCE_RANGES "Dashboard source ranges (CIDR)" "${existing_
 prompt_var MODEL_GROUP "Training default model group" "${existing_model_group}"
 prompt_var PROFILE_ID "Training default profile id" "${existing_profile_id}"
 prompt_var STAGED_CONFIG "Training default staged config path" "${existing_staged_config}"
+prompt_optional KITE_API_KEY "Kite API key (from developers.kite.trade)" "${existing_kite_api_key}"
+prompt_secret_optional KITE_API_SECRET "Kite API secret" "${existing_kite_api_secret}"
 
 IMAGE_SOURCE="${IMAGE_SOURCE,,}"
 if [[ "${IMAGE_SOURCE}" != "ghcr" && "${IMAGE_SOURCE}" != "local_build" ]]; then
@@ -175,6 +203,9 @@ PROFILE_ID="${PROFILE_ID}"
 STAGED_CONFIG="${STAGED_CONFIG}"
 
 TRAINING_VM_NAME="option-trading-training-01"
+
+KITE_API_KEY="${KITE_API_KEY}"
+KITE_API_SECRET="${KITE_API_SECRET}"
 EOF
 
 echo

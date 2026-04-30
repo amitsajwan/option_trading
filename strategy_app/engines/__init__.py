@@ -12,6 +12,8 @@ __all__ = [
     "LongOptionEntryPolicy",
     "PureMLEngine",
     "PolicyConfig",
+    "VelocityEnhancedRegimeClassifier",
+    "VelocityEnhancedEntryPolicy",
 ]
 
 
@@ -23,4 +25,8 @@ def __getattr__(name: str) -> Any:
     if name in {"EntryPolicy", "EntryPolicyDecision", "LongOptionEntryPolicy", "PolicyConfig"}:
         module = import_module(".entry_policy", __name__)
         return getattr(module, name)
+    if name == "VelocityEnhancedRegimeClassifier":
+        return import_module(".velocity_regime_classifier", __name__).VelocityEnhancedRegimeClassifier
+    if name == "VelocityEnhancedEntryPolicy":
+        return import_module(".velocity_entry_policy", __name__).VelocityEnhancedEntryPolicy
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

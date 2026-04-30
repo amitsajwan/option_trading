@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# NOTE: This is a Terraform templatefile. All $${...} and $$(...) sequences are
+# Terraform-escaped literals that render to ${...} and $(...) in the final script.
+# Single ${...} tokens are Terraform template variables substituted at apply time.
+# If rendering this manually (e.g. via gcloud without terraform), replace ALL
+# occurrences of $$ with $ throughout, then substitute the ${var} placeholders.
 set -euo pipefail
 
 exec > >(tee -a /var/log/option-trading-runtime-startup.log) 2>&1
@@ -7,7 +12,7 @@ REPO_DIR="/opt/option_trading"
 BOOTSTRAP_DIR="$${REPO_DIR}/.deploy/runtime-config"
 
 apt-get update
-apt-get install -y apt-transport-https ca-certificates curl git gnupg lsb-release docker.io docker-compose-plugin
+apt-get install -y apt-transport-https ca-certificates curl git gnupg lsb-release docker.io docker-compose-v2
 
 if ! command -v gcloud >/dev/null 2>&1; then
   install -m 0755 -d /etc/apt/keyrings
@@ -67,11 +72,19 @@ if [ -z "$${PYTHON_BIN}" ]; then
 fi
 
 if [ -n "${published_models_sync_source}" ]; then
-  gcloud storage rsync "${published_models_sync_source}" "$${REPO_DIR}/ml_pipeline_2/artifacts/published_models" --recursive --project "${project_id}"
+  if gcloud storage ls "${published_models_sync_source}" --project "${project_id}" >/dev/null 2>&1; then
+    gcloud storage rsync "${published_models_sync_source}" "$${REPO_DIR}/ml_pipeline_2/artifacts/published_models" --recursive --project "${project_id}"
+  else
+    echo "Published models source not found: ${published_models_sync_source}; skipping sync."
+  fi
 fi
 
 if [ -n "${data_sync_source}" ]; then
-  gcloud storage rsync "${data_sync_source}" "$${REPO_DIR}/.data/ml_pipeline" --recursive --project "${project_id}"
+  if gcloud storage ls "${data_sync_source}" --project "${project_id}" >/dev/null 2>&1; then
+    gcloud storage rsync "${data_sync_source}" "$${REPO_DIR}/.data/ml_pipeline" --recursive --project "${project_id}"
+  else
+    echo "Data sync source not found: ${data_sync_source}; skipping sync."
+  fi
 fi
 
 "$${PYTHON_BIN}" "$${REPO_DIR}/ops/gcp/validate_runtime_bundle.py" \

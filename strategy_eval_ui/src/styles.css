@@ -661,3 +661,77 @@ tbody tr:hover {
     flex-direction: column;
   }
 }
+
+/* Primary action button */
+.btn-primary {
+  background: #1a4d6e;
+  color: #ffffff;
+  border-color: #1a4d6e;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #14405c;
+  border-color: #14405c;
+}
+
+/* Run progress bar */
+.run-progress-wrap {
+  margin: 8px 0 10px;
+}
+
+.run-progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #e4edf3;
+  overflow: hidden;
+}
+
+.run-progress-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3b82c4, #5bb0a0);
+  transition: width 0.4s ease;
+}
+
+.run-progress-label {
+  margin-top: 5px;
+  font-size: 11px;
+  color: #5a6f80;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+/* Sharable URL copy row */
+.copy-url-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.copy-url-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #2563a8;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+}
+
+/* Pagination row */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  border-top: 1px solid #e4edf3;
+  color: #4a6070;
+}
+
+/* Run error inline text */
+.run-error {
+  color: #b02a37;
+  font-weight: 600;
+}

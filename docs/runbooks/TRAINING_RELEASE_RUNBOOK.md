@@ -9,6 +9,11 @@ Host note:
 - runtime and training execution are container and VM first
 - local Python on Windows is only needed for editor features, host-side tests, or helper scripts
 
+Fresh-project rule:
+
+- do not start training until the snapshot/parquet runbook has completed successfully
+- on a rebuilt environment, use one smoke publish to validate the lane before longer production research
+
 ## Fast Path (Interactive)
 
 Use the supported launcher:
@@ -44,6 +49,7 @@ Path pattern for every launched run:
 
 - `ml_pipeline_2/artifacts/training_launches/<utc_stamp>_<nonce>_<mode>_<lane_tag>_<model_group>_<profile_id>/`
   - `training.log`
+  - `run/` for the actual staged or grid run output root
   - `training-release.json` for non-grid modes
 
 Parallel safety:
@@ -68,6 +74,7 @@ Decision rule:
 - for `PUBLISH`, `release/runtime_release_manifest.json`
 - for `PUBLISH`, refreshed current approved release artifacts under `.run/gcp_release/`
 - for `HOLD`, `summary.json`, `release/assessment.json`, and `release/release_summary.json`
+- for unexpected failures, terminal failure artifacts under the run root so the operator can inspect the error without guessing the path
 
 ## Step 1: Prepare Shared GCP Resources
 
@@ -107,6 +114,14 @@ The snapshot flow must already have published these datasets before training sta
 - `stage1_entry_view`
 - `stage2_direction_view`
 - `stage3_recipe_view`
+
+Recommended rebuild order around training:
+
+1. bootstrap infra
+2. rebuild and publish parquet
+3. run one smoke training publish
+4. validate with historical replay
+5. only then run production research lanes
 
 The training VM should also have these OS packages available:
 
@@ -222,6 +237,7 @@ This launcher:
 
 - prompts for mode, base model group, profile, config, and lane tag
 - writes logs and release payloads under `ml_pipeline_2/artifacts/training_launches/...`
+- pins the actual staged or grid run output root to `.../run/` inside that launch folder
 - routes research lanes into collision-safe model groups
 - uses the same underlying staged release wrapper as the manual commands below
 
@@ -290,11 +306,16 @@ bash ./ops/gcp/run_staged_release_pipeline.sh 2>&1 | tee training-release-diag.l
 ```bash
 python -m ml_pipeline_2.run_staged_grid \
   --config ml_pipeline_2/configs/research/staged_grid.prod_v1.json \
+  --run-output-root /opt/option_trading/ml_pipeline_2/artifacts/training_launches/grid_prod_manual/run \
   --model-group banknifty_futures/h15_tp_auto \
   --profile-id openfe_v9_dual
 ```
 
-The staged release wrapper is HOLD-safe. If the run fails a gate, it still writes `summary.json`, `release/assessment.json`, and `release/release_summary.json` with `release_status: held`. In that case, do not expect `release/ml_pure_runtime.env` or runtime-config publish output.
+The staged release wrapper is terminal-artifact safe:
+
+- if the run fails a gate, it still writes `summary.json`, `release/assessment.json`, and `release/release_summary.json` with `release_status: held`
+- if the research job crashes unexpectedly after the run root is created, it now writes terminal failure artifacts so the operator gets a concrete error path instead of an empty run directory
+- in either case, do not expect `release/ml_pure_runtime.env` or runtime-config publish output unless the release was actually published
 
 Recommended research order after the default manifest holds:
 
@@ -315,14 +336,26 @@ Practical interpretation:
 Verify:
 
 ```bash
-find /opt/option_trading/ml_pipeline_2/artifacts/research -name summary.json | sort | tail -n 1
-find /opt/option_trading/ml_pipeline_2/artifacts/research -path "*/release/release_summary.json" | sort | tail -n 1
+find /opt/option_trading/ml_pipeline_2/artifacts/training_launches -name training.log | sort | tail -n 3
+find /opt/option_trading/ml_pipeline_2/artifacts/training_launches -path "*/run/summary.json" | sort | tail -n 3
+find /opt/option_trading/ml_pipeline_2/artifacts/training_launches -path "*/run/release/release_summary.json" | sort | tail -n 3
 ```
 
 Look for:
 
-- a `summary.json`
-- a `release/release_summary.json`
+- the latest launch folder
+- a `run/summary.json`
+- a `run/release/release_summary.json` for staged-release modes
+
+If you launched the job from the interactive menu, prefer the `training_launches/.../run` path over hunting through `ml_pipeline_2/artifacts/research`.
+
+If SSH disconnects mid-run:
+
+- reconnect to the VM
+- reattach to the tmux session with the printed session name
+- if the process is gone, inspect the latest `training_launches/.../training.log`
+- for staged-release modes, inspect `training-release.json` first, then `run/summary.json`, `run/release/assessment.json`, and `run/release/release_summary.json`
+- for grid mode, inspect `run/grid_summary.json`
 
 Check the buckets:
 
@@ -347,13 +380,30 @@ Useful artifact meanings:
 
 - `summary.json`: staged research summary, including `publish_assessment`, stage artifacts, CV prechecks, and early-hold outcomes
 - `release/assessment.json`: publishability decision for the completed staged run
-- `release/release_summary.json`: final publish and handoff result for the completed staged release; this exists for both `PUBLISH` and `HOLD`
+- `release/release_summary.json`: final publish and handoff result for the completed staged release; this exists for `PUBLISH`, `HOLD`, and terminal staged-release failures after run root creation
 - `release/ml_pure_runtime.env`: runtime handoff for deployment; this exists only after a successful publish
 - `release/runtime_release_manifest.json`: machine-readable live deploy manifest for the published release
+- `grid_summary.json`: top-level grid orchestration result; this exists for successful grid runs and for top-level grid failures after grid root creation
 - `.run/gcp_release/current_runtime_release.json`: current approved release cache used by the live interactive deploy flow
 - `.run/gcp_release/current_runtime_release_pointer.json`: current approved release pointer metadata
 
 If the staged release returns `HOLD`, stop and investigate the gates before live deployment. A HOLD result is a valid completed run, not a launcher failure.
+
+For grid runs, a top-level orchestration failure now does both:
+
+- writes `grid_summary.json` with `status: failed`
+- exits the CLI with a non-zero status so unattended shells can detect the failure
+
+Common warning interpretation:
+
+- `X does not have valid feature names, but LGBMClassifier was fitted with feature names`
+  - this is a preprocessing metadata warning
+  - the pipeline now preserves pandas output through the standard preprocessing steps so feature-name drift is easier to avoid
+  - treat repeated warnings as a code-quality issue to fix, not as an automatic model-quality failure signal
+- `RuntimeWarning: invalid value encountered in divide`
+  - this usually comes from correlation checks over constant or near-constant slices
+  - the Stage 2 signal precheck now skips zero-variance aligned slices before computing correlation
+  - if this warning returns, investigate label collapse or feature degeneracy in the affected dataset window instead of relaxing gates blindly
 
 ## Step 6: Delete Temporary Training Infra
 

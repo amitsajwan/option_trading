@@ -171,10 +171,7 @@ class DashboardLegacyTradingRouter:
                 merged["model"] = safe_key
                 if changed or safe_key != model_key_raw:
                     return RedirectResponse(url=f"/trading?{urlencode(merged)}", status_code=307)
-        return self._templates.TemplateResponse(
-            "trading_terminal.html",
-            {"request": request, "legacy_trading_runtime": legacy_trading_runtime},
-        )
+        return RedirectResponse(url="/app?tab=trading", status_code=302)
 
     async def get_latest_backtest_state(self, instance: Optional[str] = None) -> dict[str, Any]:
         self._require_enabled()

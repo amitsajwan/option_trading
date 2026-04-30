@@ -12,16 +12,8 @@ from contracts_app import (
 )
 
 from ..contracts import StrategyVote, TradeSignal
-
-
-def _safe_float(value: Any) -> Optional[float]:
-    try:
-        parsed = float(value)
-    except Exception:
-        return None
-    if parsed != parsed or parsed in {float("inf"), float("-inf")}:
-        return None
-    return float(parsed)
+from ..engines.profiles import PRODUCTION_DEFAULT_PROFILE_ID
+from ..utils.env import safe_float as _safe_float
 
 
 class DecisionFieldResolver:
@@ -139,7 +131,7 @@ class DecisionFieldResolver:
             return "ml_pure_staged_v1"
         if engine_mode == "ml_pure":
             return "ml_pure_staged_v1"
-        return "det_core_v1"
+        return PRODUCTION_DEFAULT_PROFILE_ID
 
     def vote_decision_metrics(self, vote: StrategyVote) -> dict[str, float]:
         raw_signals = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}

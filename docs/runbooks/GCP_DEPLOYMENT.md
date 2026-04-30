@@ -38,6 +38,16 @@ The intent is simple:
 
 For a first-time setup, do `Infra` first, then `Live`. Run `Historical` only when you need replay.
 
+For a fresh rebuild, use this dependency order instead:
+
+1. `Infra`
+2. raw archive upload to GCS
+3. snapshot/parquet build and publish
+4. smoke training publish
+5. `Historical`
+6. production training and publish
+7. `Live`
+
 Use this decision rule:
 
 - run `Infra` once per environment, or again only when infra changes
@@ -51,9 +61,16 @@ Before starting:
 - work from Ubuntu, WSL, or Cloud Shell
 - run from the repo root
 - ensure `gcloud`, `terraform`, `docker`, and `bash` are available
+- ensure `gcloud auth application-default login` has been run on the operator machine
 - ensure `ops/gcp/operator.env` exists
 - ensure `.env.compose` contains the intended live runtime values before you deploy
 - for historical replay, ensure the target VM already has a repo checkout; the interactive helper auto-detects `/opt/option_trading` and `~/option_trading`
+
+Host rule:
+
+- Cloud Shell is fine for `gcloud`, Terraform, bucket setup, and VM orchestration
+- do not use Cloud Shell as the full snapshot/parquet build host when disk is limited
+- use a large-disk Linux VM for snapshot/parquet builds
 
 Image source modes:
 
@@ -74,6 +91,10 @@ If `.env.compose` does not exist yet:
 cp .env.compose.example .env.compose
 ```
 
+Fresh-project rule:
+
+- do not go to `Live` until parquet exists and at least one smoke publish plus one historical replay have succeeded
+
 ## 0. Infra
 
 Use this section when the environment is new or when you need to confirm the shared GCP foundation is still healthy.
@@ -91,6 +112,30 @@ Choose:
 1. `Bootstrap infra`
 
 That flow writes `ops/gcp/operator.env`, derives bucket URLs, and can run the bootstrap immediately.
+
+### Brand-New Project APIs
+
+On a brand-new GCP project, enable the required APIs before the first Terraform apply:
+
+```bash
+gcloud services enable \
+  compute.googleapis.com \
+  storage.googleapis.com \
+  artifactregistry.googleapis.com \
+  iam.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  serviceusage.googleapis.com \
+  iamcredentials.googleapis.com \
+  --project "${PROJECT_ID}"
+```
+
+If Terraform previously failed because these APIs were disabled, enable them, wait a minute, then rerun:
+
+```bash
+cd infra/gcp
+terraform init
+terraform apply
+```
 
 ### Required Operator Values
 
@@ -112,6 +157,7 @@ Current conventions:
 - `REPOSITORY` still exists only for Terraform and bootstrap compatibility
 - `MODEL_BUCKET_URL` defaults to `gs://<MODEL_BUCKET_NAME>/published_models`
 - `RUNTIME_CONFIG_BUCKET_URL` defaults to `gs://<RUNTIME_CONFIG_BUCKET_NAME>/runtime`
+- `DATA_SYNC_SOURCE` should point at the shared `ml_pipeline` parent prefix, not directly at `parquet_data/`
 
 ### First-Time Bootstrap Reference
 
@@ -346,6 +392,13 @@ Optional:
 
 Do not use the snapshot-build VM as the default replay target unless you are intentionally combining build and replay for one-off analysis.
 
+If you do reuse the snapshot-build VM for one-off replay, treat it as an exception path:
+
+- install Docker first if the host is build-only
+- expect older Ubuntu images to have `docker-compose` v1 instead of `docker compose`
+- avoid `--force-recreate` on `docker-compose` v1 because it can fail with `ContainerConfig` during container recreation
+- make sure the VM has the `option-trading-runtime` network tag if you want external access to dashboard port `8008`
+
 ### Upstream Artifact Build
 
 Historical parquet is a separate runtime input artifact. It is not part of the normal runtime-config bundle.
@@ -391,10 +444,13 @@ Compatibility notes:
 - the helper auto-detects `sudo docker compose` first and falls back to `sudo docker-compose` on older VMs
 - the helper auto-detects a checkout under `/opt/option_trading`, `~/option_trading`, or `~/option_trading_repo`
 - the helper syncs the runtime bundle into that checkout when `.env.compose` is missing
+- the helper auto-installs Python, Docker, and Compose on the target VM when they are missing
 - the helper runs remote preflight on the host Python environment, not inside the `historical_replay` container
 - the helper invokes replay with `--entrypoint python` so both Compose v2 and `docker-compose` v1 handle the extra replay flags correctly
 - with `IMAGE_SOURCE=local_build`, the helper builds the required historical services directly from the remote repo checkout before startup
-- when `.env.compose` is using `STRATEGY_ENGINE=ml_pure`, the helper seeds `STRATEGY_ROLLOUT_STAGE_HISTORICAL=capped_live`, `STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL=0.25`, and `STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL` from the live guard file unless you already overrode them
+- when historical replay is using `ml_pure`, the helper now force-writes `STRATEGY_ROLLOUT_STAGE_HISTORICAL=capped_live`, `STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL=0.25`, `ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=0`, and a dedicated historical guard at `.run/ml_runtime_guard_historical_test.json` so stale `paper` overrides cannot survive across reruns
+- the helpers now wait for `strategy_app_historical` and `strategy_persistence_app_historical` to subscribe before launching replay, because Redis Pub/Sub does not retain historical events for late consumers
+- when the target VM is missing the `option-trading-runtime` network tag, the helper now offers to add it so the dashboard firewall rule applies to port `8008`
 
 If you only remember one thing for replay, remember this:
 
@@ -411,6 +467,7 @@ Do not start replay until all of these are true:
 
 - target parquet is present under `/opt/option_trading/.data/ml_pipeline/parquet_data`
 - target date is present in the synced dataset
+- `SNAPSHOT_PARQUET_BASE=/app/.data/ml_pipeline/parquet_data`
 - replay topic resolves to `market:snapshot:v1:historical`
 - historical Mongo collection env vars are in effect
 - you will use `--profile historical` and `--profile historical_replay`
@@ -459,6 +516,19 @@ gcloud compute ssh "${RUNTIME_NAME}" --project "${PROJECT_ID}" --zone "${ZONE}" 
 ```
 
 On older VMs that only have `docker-compose` v1, replace `sudo docker compose` with `sudo docker-compose`.
+
+Historical `ml_pure` note:
+
+- replay snapshots carry historical timestamps, so wall-clock freshness checks will falsely block entries
+- set `ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=0` for historical replay
+- `docker-compose.yml` now passes that historical-only override to `strategy_app_historical`
+- historical replay should use `STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL=.run/ml_runtime_guard_historical_test.json`, not the live guard file
+- the `strategy_app` image must use the same major/minor `scikit-learn` version as the published model bundle; current staged smoke models require `scikit-learn==1.7.2`
+
+Historical infrastructure note:
+
+- `strategy_eval_orchestrator` imports `snapshot_app`, so its image also needs `requests`
+- if startup fails with `ModuleNotFoundError: No module named 'requests'`, rebuild `strategy_eval_orchestrator` from the current repo checkout before retrying replay
 
 Run one-shot replay:
 
@@ -510,8 +580,10 @@ Interactive scripts:
 - `bash ./ops/gcp/runtime_lifecycle_interactive.sh`
 - `bash ./ops/gcp/bootstrap_runtime_interactive.sh`
 - `bash ./ops/gcp/start_runtime_interactive.sh`
+- `bash ./ops/gcp/start_historical_interactive.sh`
 - `bash ./ops/gcp/start_training_interactive.sh`
 - `bash ./ops/gcp/run_snapshot_parquet_pipeline.sh`
+- `bash ./ops/gcp/run_historical_replay_shell.sh`
 
 Support scripts:
 

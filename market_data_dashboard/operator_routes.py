@@ -7,7 +7,7 @@ from typing import Any, Callable, Optional
 import redis
 import requests
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 
@@ -39,17 +39,19 @@ class DashboardOperatorRouter:
         router.add_api_route("/", self.home, methods=["GET"], response_class=HTMLResponse)
         router.add_api_route("/live/strategy", self.live_strategy, methods=["GET"], response_class=HTMLResponse)
         router.add_api_route("/api/live/strategy/session", self.get_live_strategy_session, methods=["GET"])
+        router.add_api_route("/api/live/strategy/traces", self.get_live_strategy_traces, methods=["GET"])
+        router.add_api_route("/api/live/strategy/traces/{trace_id}", self.get_live_strategy_trace_detail, methods=["GET"])
         router.add_api_route("/api/health", self.health, methods=["GET"])
         router.add_api_route("/api/health/live", self.health, methods=["GET"])
         router.add_api_route("/api/market-data/health", self.market_data_health, methods=["GET"])
         router.add_api_route("/api/v1/system/mode", self.get_system_mode, methods=["GET"])
         self.router = router
 
-    async def home(self, request: Request) -> HTMLResponse:
-        return self._templates.TemplateResponse("index.html", {"request": request})
+    async def home(self, request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/app", status_code=302)
 
-    async def live_strategy(self, request: Request) -> HTMLResponse:
-        return self._templates.TemplateResponse("live_strategy.html", {"request": request})
+    async def live_strategy(self, request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/app?mode=live", status_code=302)
 
     def _require_live_strategy_monitor_service(self) -> Any:
         service = self._get_live_strategy_monitor_service()
@@ -175,7 +177,53 @@ class DashboardOperatorRouter:
             raise HTTPException(status_code=500, detail=f"failed to build live strategy session: {exc}")
         return self._normalize_timestamp_fields(payload)
 
+    async def get_live_strategy_traces(
+        self,
+        date: Optional[str] = None,
+        limit: int = 25,
+        outcome: Optional[str] = None,
+        engine_mode: Optional[str] = None,
+        only_blocked: int = 0,
+        snapshot_id: Optional[str] = None,
+        position_id: Optional[str] = None,
+    ) -> Any:
+        service = self._require_live_strategy_monitor_service()
+        try:
+            date_ist = service.get_session_date_ist(date)
+            rows = service.load_recent_trace_digests(
+                date_ist,
+                limit,
+                outcome=outcome,
+                engine_mode=engine_mode,
+                only_blocked=bool(only_blocked),
+                snapshot_id=snapshot_id,
+                position_id=position_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to load live strategy traces: {exc}")
+        return self._normalize_timestamp_fields(
+            {
+                "status": "ok",
+                "date_ist": date_ist,
+                "rows": rows,
+                "count": len(rows),
+            }
+        )
+
+    async def get_live_strategy_trace_detail(self, trace_id: str) -> Any:
+        service = self._require_live_strategy_monitor_service()
+        try:
+            payload = service.get_trace_detail(trace_id)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to load decision trace detail: {exc}")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=404, detail=f"decision trace '{trace_id}' not found")
+        return self._normalize_timestamp_fields({"status": "ok", "trace": payload})
+
     async def health(self) -> dict[str, Any]:
+        dashboard_page_ready = self._templates_dir.exists() and (self._templates_dir / "dashboard.html").exists()
         templates_ready = self._templates_dir.exists() and (self._templates_dir / "index.html").exists()
         live_strategy_page_ready = (self._templates_dir / "live_strategy.html").exists()
         strategy_eval_ready = self._get_strategy_eval_service() is not None
@@ -185,8 +233,7 @@ class DashboardOperatorRouter:
 
         ready = all(
             [
-                templates_ready,
-                live_strategy_page_ready,
+                dashboard_page_ready,
                 strategy_eval_ready,
                 live_strategy_ready,
                 market_data["status"] == "healthy",
@@ -194,7 +241,7 @@ class DashboardOperatorRouter:
             ]
         )
         status = "healthy" if ready else "degraded"
-        if not templates_ready:
+        if not dashboard_page_ready:
             status = "unhealthy"
 
         return {
@@ -203,6 +250,7 @@ class DashboardOperatorRouter:
             "service": "market-data-dashboard",
             "timestamp": self._now_iso_ist(),
             "checks": {
+                "templates_dashboard": bool(dashboard_page_ready),
                 "templates_index": bool(templates_ready),
                 "templates_live_strategy": bool(live_strategy_page_ready),
                 "strategy_evaluation_service": bool(strategy_eval_ready),

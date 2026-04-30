@@ -10,6 +10,7 @@ from contracts_app import (
     normalize_engine_mode,
     normalize_reason_code,
     parse_snapshot_event,
+    parse_strategy_decision_trace_event,
     parse_strategy_position_event,
     parse_strategy_vote_event,
     parse_trade_signal_event,
@@ -140,7 +141,7 @@ def _upsert_doc(collection: Any, *, identity: Optional[dict[str, Any]], doc: dic
     if not identity or not hasattr(collection, "update_one"):
         collection.insert_one(payload)
         return
-    collection.update_one(dict(identity), {"$setOnInsert": payload}, upsert=True)
+    collection.update_one(dict(identity), {"$set": payload}, upsert=True)
 
 
 def _partial_non_empty_strings(*fields: str) -> dict[str, Any]:
@@ -240,6 +241,7 @@ class StrategyMongoWriter:
         self.vote_collection_name = str(os.getenv("MONGO_COLL_STRATEGY_VOTES") or "strategy_votes")
         self.signal_collection_name = str(os.getenv("MONGO_COLL_TRADE_SIGNALS") or "trade_signals")
         self.position_collection_name = str(os.getenv("MONGO_COLL_STRATEGY_POSITIONS") or "strategy_positions")
+        self.trace_collection_name = str(os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES") or "strategy_decision_traces")
         self._client: Optional[Any] = None
         self._db: Optional[Any] = None
         self._indexes_ready = False
@@ -274,6 +276,7 @@ class StrategyMongoWriter:
         vote_coll = self._db[self.vote_collection_name]
         signal_coll = self._db[self.signal_collection_name]
         position_coll = self._db[self.position_collection_name]
+        trace_coll = self._db[self.trace_collection_name]
 
         vote_coll.create_index(
             [("snapshot_id", ASCENDING), ("strategy", ASCENDING), ("trade_date_ist", ASCENDING)],
@@ -314,6 +317,20 @@ class StrategyMongoWriter:
         )
         position_coll.create_index([("trade_date_ist", ASCENDING), ("timestamp", ASCENDING)])
         position_coll.create_index([("run_id", ASCENDING), ("trade_date_ist", ASCENDING), ("timestamp", ASCENDING)])
+        trace_coll.create_index(
+            [("trace_id", ASCENDING)],
+            unique=True,
+            partialFilterExpression=_partial_non_empty_strings("trace_id"),
+        )
+        trace_coll.create_index(
+            [("event_id", ASCENDING)],
+            unique=True,
+            partialFilterExpression=_partial_non_empty_strings("event_id"),
+        )
+        trace_coll.create_index([("trade_date_ist", ASCENDING), ("timestamp", ASCENDING)])
+        trace_coll.create_index([("snapshot_id", ASCENDING)])
+        trace_coll.create_index([("run_id", ASCENDING), ("trade_date_ist", ASCENDING), ("timestamp", ASCENDING)])
+        trace_coll.create_index([("final_outcome", ASCENDING), ("trade_date_ist", ASCENDING), ("timestamp", ASCENDING)])
 
         ttl_days = int(os.getenv("MONGO_PERSIST_TTL_DAYS") or "0")
         if ttl_days > 0:
@@ -321,6 +338,9 @@ class StrategyMongoWriter:
             vote_coll.create_index("received_at_ttl", expireAfterSeconds=ttl_seconds)
             signal_coll.create_index("received_at_ttl", expireAfterSeconds=ttl_seconds)
             position_coll.create_index("received_at_ttl", expireAfterSeconds=ttl_seconds)
+        trace_ttl_days = int(os.getenv("MONGO_STRATEGY_TRACE_TTL_DAYS") or "30")
+        if trace_ttl_days > 0:
+            trace_coll.create_index("received_at_ttl", expireAfterSeconds=int(trace_ttl_days * 24 * 60 * 60))
         self._indexes_ready = True
 
     def write_strategy_event(self, payload: dict[str, Any]) -> bool:
@@ -328,6 +348,7 @@ class StrategyMongoWriter:
             self.write_strategy_vote_event(payload)
             or self.write_trade_signal_event(payload)
             or self.write_strategy_position_event(payload)
+            or self.write_strategy_decision_trace_event(payload)
         )
 
     def write_strategy_vote_event(self, payload: dict[str, Any]) -> bool:
@@ -456,6 +477,25 @@ class StrategyMongoWriter:
             "run_id": run_id,
             "direction": position.get("direction"),
             "strike": position.get("strike"),
+            "entry_premium": _optional_float(position.get("entry_premium")),
+            "current_premium": _optional_float(position.get("current_premium")),
+            "exit_premium": _optional_float(position.get("exit_premium")),
+            "pnl_pct": _optional_float(position.get("pnl_pct")),
+            "mfe_pct": _optional_float(position.get("mfe_pct")),
+            "mae_pct": _optional_float(position.get("mae_pct")),
+            "bars_held": int(float(position.get("bars_held") or 0)) if position.get("bars_held") is not None else None,
+            "lots": int(float(position.get("lots") or 0)) if position.get("lots") is not None else None,
+            "stop_loss_pct": _optional_float(position.get("stop_loss_pct")),
+            "stop_price": _optional_float(position.get("stop_price")),
+            "high_water_premium": _optional_float(position.get("high_water_premium")),
+            "target_pct": _optional_float(position.get("target_pct")),
+            "entry_futures_price": _optional_float(position.get("entry_futures_price")),
+            "underlying_stop_pct": _optional_float(position.get("underlying_stop_pct")),
+            "underlying_target_pct": _optional_float(position.get("underlying_target_pct")),
+            "entry_strategy": _optional_text(position.get("entry_strategy")),
+            "entry_time": _parse_ts(position.get("entry_time")),
+            "exit_time": _parse_ts(position.get("exit_time")),
+            "exit_reason": _optional_text(position.get("exit_reason")),
             "reason": position.get("reason"),
             "engine_mode": _optional_engine_mode(position.get("engine_mode")),
             "decision_mode": _optional_decision_mode(position.get("decision_mode")),
@@ -477,4 +517,59 @@ class StrategyMongoWriter:
             or _identity_candidate(event_id=doc["event_id"])
         )
         _upsert_doc(db[self.position_collection_name], identity=identity, doc=doc)
+        return True
+
+    def write_strategy_decision_trace_event(self, payload: dict[str, Any]) -> bool:
+        event = parse_strategy_decision_trace_event(payload)
+        if event is None:
+            return False
+        db = self._db_handle()
+        if db is None:
+            return False
+
+        trace = event.get("trace") if isinstance(event.get("trace"), dict) else {}
+        run_id = _resolve_run_id(event, trace)
+        ts = _parse_ts(trace.get("timestamp")) or _parse_ts(event.get("published_at")) or datetime.now(tz=IST)
+        ts_ist = to_ist(ts)
+        position_state = trace.get("position_state") if isinstance(trace.get("position_state"), dict) else {}
+        selected_candidate = None
+        candidates = trace.get("candidates") if isinstance(trace.get("candidates"), list) else []
+        for item in candidates:
+            if isinstance(item, dict) and bool(item.get("selected")):
+                selected_candidate = item
+                break
+        summary_metrics = trace.get("summary_metrics") if isinstance(trace.get("summary_metrics"), dict) else {}
+        doc = {
+            "event_type": "strategy_decision_trace",
+            "event_version": str(event.get("event_version") or "1.0"),
+            "source": str(event.get("source") or "strategy_app"),
+            "event_id": str(event.get("event_id") or ""),
+            "trace_id": str(trace.get("trace_id") or "").strip(),
+            "snapshot_id": str(trace.get("snapshot_id") or "").strip(),
+            "timestamp": to_ist_iso(ts_ist),
+            "trade_date_ist": str(trace.get("trade_date_ist") or ts_ist.date().isoformat()).strip() or ts_ist.date().isoformat(),
+            "market_time_ist": ts_ist.strftime("%H:%M:%S"),
+            "received_at_ist": to_ist_iso(datetime.now(tz=IST)),
+            "received_at_ttl": datetime.now(tz=IST),
+            "run_id": run_id,
+            "engine_mode": _optional_engine_mode(trace.get("engine_mode")),
+            "decision_mode": _optional_decision_mode(trace.get("decision_mode")),
+            "evaluation_type": _optional_text(trace.get("evaluation_type")),
+            "final_outcome": _optional_text(trace.get("final_outcome")),
+            "primary_blocker_gate": _optional_text(trace.get("primary_blocker_gate")),
+            "selected_candidate_id": _optional_text(trace.get("selected_candidate_id")),
+            "selected_strategy_name": _optional_text((selected_candidate or {}).get("strategy_name") if isinstance(selected_candidate, dict) else None),
+            "selected_direction": _optional_text((selected_candidate or {}).get("direction") if isinstance(selected_candidate, dict) else None),
+            "position_id": _optional_text(position_state.get("position_id")),
+            "candidate_count": len(candidates),
+            "blocked_candidate_count": sum(
+                1
+                for item in candidates
+                if isinstance(item, dict) and str(item.get("terminal_status") or "").strip().lower() == "blocked"
+            ),
+            "summary_metrics": _optional_metrics(summary_metrics),
+            "payload": event,
+        }
+        identity = _identity_candidate(trace_id=doc["trace_id"]) or _identity_candidate(event_id=doc["event_id"])
+        _upsert_doc(db[self.trace_collection_name], identity=identity, doc=doc)
         return True

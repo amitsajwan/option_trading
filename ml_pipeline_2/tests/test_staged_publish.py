@@ -10,6 +10,7 @@ import pytest
 
 import ml_pipeline_2.publishing.publish as publish_paths
 from ml_pipeline_2.publishing import resolve_ml_pure_artifacts, validate_switch_strict
+from ml_pipeline_2.experiment_control.runner import ResearchRunFailed
 from ml_pipeline_2.staged.publish import publish_staged_run, release_staged_run
 from ml_pipeline_2.staged.runtime_contract import load_staged_runtime_policy
 
@@ -196,6 +197,57 @@ def test_release_staged_run_writes_completed_hold_summary_without_publish(tmp_pa
     assert written["paths"]["assessment"].endswith("assessment.json")
 
 
+def test_release_staged_run_writes_failed_terminal_artifacts_when_research_crashes(tmp_path: Path, monkeypatch) -> None:
+    run_dir = tmp_path / "artifacts" / "research" / "failed_stage_run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "failed",
+                "run_id": run_dir.name,
+                "completion_mode": "failed",
+                "error": {
+                    "type": "RuntimeError",
+                    "message": "synthetic trainer failure",
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    def _raise_failed_run(*_args, **_kwargs):
+        raise ResearchRunFailed("synthetic trainer failure", output_root=run_dir)
+
+    def _write_json_direct(path: Path, payload: dict) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return path
+
+    monkeypatch.setattr("ml_pipeline_2.staged.publish.run_research", _raise_failed_run)
+    monkeypatch.setattr("ml_pipeline_2.staged.publish._write_json", _write_json_direct)
+    monkeypatch.setattr(
+        "ml_pipeline_2.staged.publish.load_and_resolve_manifest",
+        lambda *_args, **_kwargs: {
+            "publish": {},
+        },
+    )
+
+    payload = release_staged_run(
+        config=tmp_path / "dummy.json",
+        run_output_root=run_dir,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+    )
+
+    assert payload["status"] == "failed"
+    assert payload["release_status"] == "failed"
+    assert payload["assessment"]["publishable"] is False
+    assert payload["publish"]["publish_status"] == "failed"
+    assert Path(payload["paths"]["assessment"]).exists()
+    assert Path(payload["paths"]["release_summary"]).exists()
+
+
 def test_publish_staged_run_still_rejects_non_publishable_run(tmp_path: Path) -> None:
     run_dir = tmp_path / "ml_pipeline_2" / "artifacts" / "research" / "staged_hold_fixture_20260321_020202"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -226,6 +278,42 @@ def test_publish_staged_run_still_rejects_non_publishable_run(tmp_path: Path) ->
             model_group="banknifty_futures/h15_tp_auto",
             profile_id="openfe_v9_dual",
         )
+
+
+def test_release_assessment_rejects_contaminated_execution_integrity(tmp_path: Path) -> None:
+    run_dir = tmp_path / "ml_pipeline_2" / "artifacts" / "research" / "staged_contaminated_fixture_20260403_010101"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "experiment_kind": "staged_dual_recipe_v1",
+                "run_id": run_dir.name,
+                "execution_integrity": "contaminated",
+                "publish_assessment": {
+                    "decision": "PUBLISH",
+                    "publishable": True,
+                    "blocking_reasons": [],
+                },
+                "recipe_catalog_id": "fixed_l0_l3_v1",
+                "policy_reports": {},
+                "component_ids": {},
+                "stage_artifacts": {},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = release_staged_run(
+        run_dir=run_dir,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+    )
+
+    assert payload["release_status"] == "held"
+    assert payload["assessment"]["publishable"] is False
+    assert "execution_integrity=contaminated" in payload["assessment"]["blocking_reasons"]
 
 
 def test_publish_staged_run_can_force_publish_for_smoke_only(tmp_path: Path, monkeypatch) -> None:
@@ -305,7 +393,7 @@ def test_load_staged_runtime_policy_defaults_block_expiry_false(tmp_path: Path) 
                 "stage3": {"selected_threshold": 0.60, "selected_margin_min": 0.10},
                 "runtime": {"prefilter_gate_ids": ["rollout_guard_v1"]},
                 "recipe_catalog": [
-                    {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008}
+                    {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008, "risk_basis": "underlying"}
                 ],
             },
             indent=2,
@@ -316,6 +404,8 @@ def test_load_staged_runtime_policy_defaults_block_expiry_false(tmp_path: Path) 
     payload = load_staged_runtime_policy(policy_path)
 
     assert payload["runtime"]["block_expiry"] is False
+    assert payload["stage3"]["selection_mode"] == "dynamic"
+    assert payload["recipe_catalog"][0]["risk_basis"] == "underlying"
 
 
 def test_load_staged_runtime_policy_rejects_non_bool_block_expiry(tmp_path: Path) -> None:
@@ -329,7 +419,7 @@ def test_load_staged_runtime_policy_rejects_non_bool_block_expiry(tmp_path: Path
                 "stage3": {"selected_threshold": 0.60, "selected_margin_min": 0.10},
                 "runtime": {"prefilter_gate_ids": ["rollout_guard_v1"], "block_expiry": "true"},
                 "recipe_catalog": [
-                    {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008}
+                    {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008, "risk_basis": "underlying"}
                 ],
             },
             indent=2,
@@ -338,6 +428,94 @@ def test_load_staged_runtime_policy_rejects_non_bool_block_expiry(tmp_path: Path
     )
 
     with pytest.raises(ValueError, match="runtime.block_expiry must be boolean"):
+        load_staged_runtime_policy(policy_path)
+
+
+def test_load_staged_runtime_policy_accepts_fixed_recipe_stage3_mode(tmp_path: Path) -> None:
+    policy_path = tmp_path / "thresholds.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "kind": "ml_pipeline_2_staged_runtime_policy_v1",
+                "stage1": {"selected_threshold": 0.55},
+                "stage2": {"selected_ce_threshold": 0.60, "selected_pe_threshold": 0.60, "selected_min_edge": 0.10},
+                "stage3": {
+                    "selected_threshold": 0.60,
+                    "selected_margin_min": 0.10,
+                    "selection_mode": "fixed_recipe",
+                    "selected_recipe_id": "L0",
+                },
+                "runtime": {"prefilter_gate_ids": ["rollout_guard_v1"]},
+                "recipe_catalog": [
+                    {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008, "risk_basis": "underlying"},
+                    {"recipe_id": "L1", "horizon_minutes": 20, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0010, "risk_basis": "underlying"},
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = load_staged_runtime_policy(policy_path)
+
+    assert payload["stage3"]["selection_mode"] == "fixed_recipe"
+    assert payload["stage3"]["selected_recipe_id"] == "L0"
+
+
+def test_load_staged_runtime_policy_rejects_unknown_fixed_recipe_id(tmp_path: Path) -> None:
+    policy_path = tmp_path / "thresholds.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "kind": "ml_pipeline_2_staged_runtime_policy_v1",
+                "stage1": {"selected_threshold": 0.55},
+                "stage2": {"selected_ce_threshold": 0.60, "selected_pe_threshold": 0.60, "selected_min_edge": 0.10},
+                "stage3": {
+                    "selected_threshold": 0.60,
+                    "selected_margin_min": 0.10,
+                    "selection_mode": "fixed_recipe",
+                    "selected_recipe_id": "L9",
+                },
+                "runtime": {"prefilter_gate_ids": ["rollout_guard_v1"]},
+                "recipe_catalog": [
+                    {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008, "risk_basis": "underlying"},
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="selected_recipe_id must exist in recipe_catalog"):
+        load_staged_runtime_policy(policy_path)
+
+
+def test_load_staged_runtime_policy_rejects_tiny_option_premium_recipe(tmp_path: Path) -> None:
+    policy_path = tmp_path / "thresholds.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "kind": "ml_pipeline_2_staged_runtime_policy_v1",
+                "stage1": {"selected_threshold": 0.55},
+                "stage2": {"selected_ce_threshold": 0.60, "selected_pe_threshold": 0.60, "selected_min_edge": 0.10},
+                "stage3": {"selected_threshold": 0.60, "selected_margin_min": 0.10},
+                "runtime": {"prefilter_gate_ids": ["rollout_guard_v1"]},
+                "recipe_catalog": [
+                    {
+                        "recipe_id": "L0",
+                        "horizon_minutes": 15,
+                        "take_profit_pct": 0.0025,
+                        "stop_loss_pct": 0.0008,
+                        "risk_basis": "option_premium",
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="option_premium risk_basis requires stop/take-profit >= 0.01"):
         load_staged_runtime_policy(policy_path)
 
 

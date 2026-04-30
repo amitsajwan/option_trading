@@ -1,0 +1,28 @@
+# Normalize line endings to LF in repo; checkout as-is on all platforms
+* text=auto eol=lf
+
+# Explicitly LF for scripts and source
+*.py eol=lf
+*.sh eol=lf
+*.md eol=lf
+*.yml eol=lf
+*.yaml eol=lf
+*.json eol=lf
+*.txt eol=lf
+*.css eol=lf
+*.js eol=lf
+*.html eol=lf
+Dockerfile eol=lf
+*.tftpl eol=lf
+*.env eol=lf
+*.example eol=lf
+
+# Binary - no text processing
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pkl binary
+*.parquet binary
+*.feather binary

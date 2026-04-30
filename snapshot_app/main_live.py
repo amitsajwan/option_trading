@@ -152,13 +152,22 @@ def run_loop(
     holidays_file: Optional[str],
     idle_sleep_seconds: int,
     build_run_id: str,
+    parquet_root: Optional[str] = None,
 ) -> int:
     builder = LiveMarketSnapshotBuilder(
         instrument=instrument,
         market_api_base=market_api_base,
         dashboard_api_base=dashboard_api_base,
         timeout_seconds=timeout_seconds,
+        parquet_root=parquet_root,
     )
+    if parquet_root:
+        logger.info("snapshot_app velocity context parquet_root=%s", parquet_root)
+    else:
+        logger.warning(
+            "snapshot_app velocity context parquet_root not configured; "
+            "ctx_gap_*, ctx_am_vol_vs_yday, vol_spike_ratio will be NaN in live snapshots"
+        )
     last_snapshot_id: Optional[str] = None
 
     logger.info("snapshot_app started instrument=%s topic=%s", instrument, event_topic)
@@ -329,6 +338,18 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     idle_sleep_seconds = max(5, int(os.getenv("IDLE_SLEEP_SECONDS") or DEFAULT_IDLE_SLEEP_SECONDS))
     publisher = RedisEventPublisher()
     build_run_id = str(os.getenv("SNAPSHOT_BUILD_RUN_ID") or "").strip() or _build_run_id()
+    # Velocity feature context: training uses snapshots_ml_flat_v2 under this root.
+    # When present, LiveVelocityAccumulator reads prev_day_close / midday option
+    # volume to populate ctx_gap_* and vol_spike_ratio consistently with training.
+    parquet_root_raw = str(os.getenv("SNAPSHOT_PARQUET_ROOT") or "").strip()
+    parquet_root: Optional[str] = None
+    if parquet_root_raw and Path(parquet_root_raw).exists():
+        parquet_root = parquet_root_raw
+    elif parquet_root_raw:
+        logger.warning(
+            "SNAPSHOT_PARQUET_ROOT=%s does not exist; velocity context will be NaN",
+            parquet_root_raw,
+        )
     return run_loop(
         instrument=instrument,
         market_api_base=str(args.market_api_base),
@@ -347,6 +368,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         holidays_file=holidays_file,
         idle_sleep_seconds=idle_sleep_seconds,
         build_run_id=build_run_id,
+        parquet_root=parquet_root,
     )
 
 

@@ -8,7 +8,7 @@ completely decoupled from engine/trading functionality.
 
 from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
@@ -17,7 +17,7 @@ import json
 import csv
 import asyncio
 import math
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 import os
 import logging
 import re
@@ -113,6 +113,27 @@ try:
     from .legacy_trading_runtime_routes import DashboardLegacyTradingRouter
 except ImportError:
     from legacy_trading_runtime_routes import DashboardLegacyTradingRouter  # type: ignore
+
+try:
+    from .velocity_testing_routes import DashboardVelocityTestingRouter
+except ImportError:
+    try:
+        from velocity_testing_routes import DashboardVelocityTestingRouter  # type: ignore
+    except ImportError:
+        DashboardVelocityTestingRouter = None  # type: ignore
+
+try:
+    from .monitor_ws import DashboardMonitorRouter
+except ImportError:
+    from monitor_ws import DashboardMonitorRouter  # type: ignore
+
+try:
+    from .velocity_testing_service import VelocityTestingService
+except ImportError:
+    try:
+        from velocity_testing_service import VelocityTestingService  # type: ignore
+    except ImportError:
+        VelocityTestingService = None  # type: ignore
 
 try:
     from snapshot_app.core.snapshot_ml_flat_contract import load_contract_schema, load_feature_groups, load_legacy_mapping
@@ -1546,20 +1567,249 @@ _live_strategy_monitor_service = (
     if (LiveStrategyMonitorService is not None and _strategy_eval_service is not None)
     else None
 )
-_historical_replay_monitor_service = (
-    HistoricalReplayMonitorService(_strategy_eval_service)
-    if HistoricalReplayMonitorService is not None
+try:
+    _historical_replay_monitor_service = (
+        HistoricalReplayMonitorService(_strategy_eval_service)
+        if HistoricalReplayMonitorService is not None
+        else None
+    )
+except Exception as _exc:
+    import logging as _logging
+    _logging.getLogger(__name__).exception(
+        "Failed to initialise HistoricalReplayMonitorService — historical replay will be unavailable: %s", _exc
+    )
+    _historical_replay_monitor_service = None
+
+
+class _MongoVelocitySnapshotProvider:
+    """Loads persisted snapshots for the dashboard velocity testing service."""
+
+    def get_snapshots_for_date_range(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+        mongo_rows = self._load_mongo_snapshots(start_date, end_date)
+        if any(isinstance(row.get("velocity_enrichment"), dict) and row.get("velocity_enrichment") for row in mongo_rows):
+            return mongo_rows
+        parquet_rows = self._load_parquet_velocity_snapshots(start_date, end_date)
+        return parquet_rows or mongo_rows
+
+    def _load_mongo_snapshots(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+        if _strategy_eval_service is None:
+            return []
+
+        dataset = str(os.getenv("VELOCITY_TESTING_DATASET") or "historical").strip().lower()
+        if dataset == "live":
+            coll_name = str(os.getenv("MONGO_COLL_SNAPSHOTS") or "phase1_market_snapshots").strip()
+        else:
+            coll_name = (
+                str(os.getenv("MONGO_COLL_SNAPSHOTS_HISTORICAL") or "phase1_market_snapshots_historical").strip()
+                or "phase1_market_snapshots_historical"
+            )
+
+        max_rows = max(1, int(os.getenv("VELOCITY_TESTING_MAX_SNAPSHOTS") or "5000"))
+        query = {
+            "trade_date_ist": {
+                "$gte": start_date.isoformat(),
+                "$lte": end_date.isoformat(),
+            }
+        }
+        projection = {
+            "_id": 1,
+            "instrument": 1,
+            "timestamp": 1,
+            "trade_date_ist": 1,
+            "payload.snapshot": 1,
+        }
+        coll = _strategy_eval_service._db()[coll_name]
+        docs = coll.find(
+            query,
+            projection=projection,
+            sort=[("trade_date_ist", 1), ("timestamp", 1)],
+            limit=max_rows,
+        )
+
+        snapshots: List[Dict[str, Any]] = []
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            payload = doc.get("payload") if isinstance(doc.get("payload"), dict) else {}
+            snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
+            if not snapshot:
+                continue
+            row = dict(snapshot)
+            row.setdefault("snapshot_id", str(doc.get("_id") or row.get("snapshot_id") or ""))
+            row.setdefault("timestamp", _normalize_timestamp_string(doc.get("timestamp")) or doc.get("timestamp"))
+            row.setdefault("trade_date", str(doc.get("trade_date_ist") or ""))
+            row.setdefault("instrument", str(doc.get("instrument") or row.get("instrument") or "").strip())
+            snapshots.append(row)
+        return snapshots
+
+    def _load_parquet_velocity_snapshots(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+        parquet_base = Path(
+            os.getenv("SNAPSHOT_PARQUET_BASE")
+            or os.getenv("VELOCITY_TESTING_PARQUET_BASE")
+            or "/app/.data/ml_pipeline/parquet_data"
+        )
+        market_base_dir = parquet_base / "market_base"
+        stage2_dir = parquet_base / "stage2_direction_view_v3_candidate"
+        if not market_base_dir.exists() or not stage2_dir.exists():
+            return []
+
+        max_rows = max(1, int(os.getenv("VELOCITY_TESTING_MAX_SNAPSHOTS") or "5000"))
+        merged_frames: List[pd.DataFrame] = []
+        for year in range(start_date.year, end_date.year + 1):
+            chunk_files = sorted((market_base_dir / f"year={year}").glob("chunk=*/data.parquet"))
+            if not chunk_files:
+                continue
+            year_frames = [pd.read_parquet(f) for f in chunk_files]
+            market_df = pd.concat(year_frames, ignore_index=True, copy=False)
+            if market_df.empty or "trade_date" not in market_df.columns:
+                continue
+            market_df["trade_date"] = market_df["trade_date"].astype(str)
+            market_df = market_df[
+                (market_df["trade_date"] >= start_date.isoformat()) & (market_df["trade_date"] <= end_date.isoformat())
+            ]
+            if market_df.empty or "snapshot_id" not in market_df.columns:
+                continue
+
+            stage_frames: List[pd.DataFrame] = []
+            for single_day in pd.date_range(start_date, end_date, freq="D"):
+                if int(single_day.year) != year:
+                    continue
+                stage_file = stage2_dir / f"year={year}" / f"{single_day.date().isoformat()}.parquet"
+                if not stage_file.exists():
+                    continue
+                stage_df = pd.read_parquet(stage_file)
+                if stage_df.empty or "snapshot_id" not in stage_df.columns:
+                    continue
+                stage_frames.append(stage_df)
+            if not stage_frames:
+                continue
+
+            stage2_df = pd.concat(stage_frames, ignore_index=True, copy=False)
+            stage2_cols = [c for c in stage2_df.columns if c != "snapshot_id"]
+            merged = market_df.merge(
+                stage2_df[["snapshot_id", *stage2_cols]],
+                on="snapshot_id",
+                how="inner",
+                suffixes=("", "_stage2"),
+            )
+            if merged.empty:
+                continue
+            merged_frames.append(merged)
+
+        if not merged_frames:
+            return []
+
+        frame = pd.concat(merged_frames, ignore_index=True, copy=False)
+        if "timestamp" in frame.columns:
+            frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+            frame = frame.sort_values("timestamp", kind="stable")
+        rows: List[Dict[str, Any]] = []
+        for _, series in frame.head(max_rows).iterrows():
+            row = {k: v for k, v in series.to_dict().items() if pd.notna(v)}
+            rows.append(self._build_velocity_snapshot(row))
+        return rows
+
+    @staticmethod
+    def _build_velocity_snapshot(row: Dict[str, Any]) -> Dict[str, Any]:
+        velocity = {
+            key: value
+            for key, value in row.items()
+            if (key.startswith("vel_") or key.startswith("ctx_am_") or key in {"vol_spike_ratio"})
+        }
+        return {
+            "snapshot_id": str(row.get("snapshot_id") or ""),
+            "instrument": str(row.get("instrument") or ""),
+            "trade_date": str(row.get("trade_date") or ""),
+            "timestamp": row.get("timestamp"),
+            "minutes_since_open": row.get("minutes_since_open"),
+            "atm_ce_vol_ratio": row.get("atm_ce_vol_ratio"),
+            "atm_pe_vol_ratio": row.get("atm_pe_vol_ratio"),
+            "iv_percentile": row.get("iv_percentile"),
+            "session_context": {
+                "timestamp": row.get("timestamp"),
+                "date": row.get("trade_date"),
+                "minutes_since_open": row.get("minutes_since_open"),
+                "day_of_week": row.get("day_of_week"),
+                "days_to_expiry": row.get("days_to_expiry"),
+                "is_expiry_day": row.get("is_expiry_day"),
+                "session_phase": row.get("session_phase"),
+            },
+            "futures_bar": {
+                "fut_close": row.get("fut_close"),
+                "fut_oi": row.get("fut_oi"),
+            },
+            "futures_derived": {
+                "fut_return_5m": row.get("fut_return_5m"),
+                "fut_return_15m": row.get("fut_return_15m"),
+                "fut_return_30m": row.get("fut_return_30m"),
+                "realized_vol_30m": row.get("realized_vol_30m"),
+                "vol_ratio": row.get("vol_ratio"),
+                "fut_oi_change_30m": row.get("fut_oi_change_30m"),
+            },
+            "opening_range": {
+                "orh": row.get("orh"),
+                "orl": row.get("orl"),
+                "or_width": row.get("or_width"),
+                "price_vs_orh": row.get("price_vs_orh"),
+                "price_vs_orl": row.get("price_vs_orl"),
+                "orh_broken": row.get("orh_broken"),
+                "orl_broken": row.get("orl_broken"),
+            },
+            "vix_context": {
+                "vix_current": row.get("vix_current"),
+                "vix_intraday_chg": row.get("vix_intraday_chg"),
+                "vix_regime": row.get("vix_regime"),
+                "vix_spike_flag": row.get("vix_spike_flag"),
+            },
+            "chain_aggregates": {
+                "pcr": row.get("pcr"),
+                "max_pain": row.get("max_pain"),
+            },
+            "iv_derived": {
+                "iv_percentile": row.get("iv_percentile"),
+                "iv_regime": row.get("iv_regime"),
+            },
+            "velocity_enrichment": velocity,
+        }
+
+
+_velocity_testing_service = (
+    VelocityTestingService(data_provider=_MongoVelocitySnapshotProvider())
+    if (VelocityTestingService is not None and _strategy_eval_service is not None)
     else None
 )
 
-# Mount static files (optional - create directory if needed)
-import os
-if os.path.exists("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
+# Setup dashboard UI assets and templates.
+dashboard_root = Path(__file__).resolve().parent
+static_dir = dashboard_root / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-# Setup templates
-templates_dir = Path(__file__).parent / "templates"
+webapp_dir = dashboard_root / "static" / "webapp"
+if webapp_dir.exists():
+    app.mount("/app", StaticFiles(directory=str(webapp_dir), html=True), name="webapp")
+
+templates_dir = dashboard_root / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
+
+# Cache-busting version string — git short hash at startup, falls back to timestamp.
+def _build_static_version() -> str:
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=3,
+            cwd=str(dashboard_root),
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    import time
+    return str(int(time.time()))
+
+_STATIC_VERSION = _build_static_version()
+templates.env.globals["sv"] = _STATIC_VERSION
 
 # Market Data API configuration
 MARKET_DATA_API_URL = os.getenv("MARKET_DATA_API_URL") or (
@@ -2234,10 +2484,89 @@ def _build_recovery_catalog_entries() -> List[Dict[str, Any]]:
     return entries
 
 
+def _build_gcs_catalog_entries() -> List[Dict[str, Any]]:
+    """Build catalog entries from GCS_MODEL_ROOTS env var (comma-separated gs:// model dir URLs).
+
+    Each entry points at a published model directory in GCS. The model_contract.json and
+    reports/training/latest.json are downloaded to derive metadata; model files are only
+    fetched when actually loaded by the strategy_app.
+
+    Example:
+        GCS_MODEL_ROOTS=gs://bucket/published_models/research/staged_simple_s2_v1
+    """
+    raw_roots = str(os.getenv("GCS_MODEL_ROOTS") or "").strip()
+    if not raw_roots:
+        return []
+    roots = [r.strip().rstrip("/") for r in raw_roots.split(",") if r.strip().startswith("gs://")]
+    if not roots:
+        return []
+    try:
+        from strategy_app.utils.gcs_artifact import fetch_gcs_json
+    except ImportError:
+        logger.debug("strategy_app.utils.gcs_artifact not importable; skipping GCS catalog")
+        return []
+
+    entries: List[Dict[str, Any]] = []
+    for gcs_root in roots:
+        try:
+            latest = fetch_gcs_json(f"{gcs_root}/reports/training/latest.json") or {}
+            model_group = str(latest.get("model_group") or gcs_root.rsplit("/", 1)[-1]).strip()
+            profile_id = str(latest.get("profile_id") or "").strip()
+            run_id = str(latest.get("run_id") or "").strip()
+
+            published = latest.get("published_paths") or {}
+            model_package_url = str(
+                published.get("model_package") or f"{gcs_root}/model/model.joblib"
+            )
+            threshold_url = str(
+                published.get("threshold_report")
+                or (
+                    f"{gcs_root}/config/profiles/{profile_id}/threshold_report.json"
+                    if profile_id
+                    else f"{gcs_root}/threshold_report.json"
+                )
+            )
+            training_report_url = str(
+                published.get("training_report")
+                or (
+                    f"{gcs_root}/config/profiles/{profile_id}/training_report.json"
+                    if profile_id
+                    else ""
+                )
+            )
+
+            raw_entry = {
+                "instance_key": _normalize_trading_instance(model_group.replace("/", "_")),
+                "profile_key": profile_id or _normalize_trading_instance(model_group),
+                "title": _humanize_model_catalog_title(model_group, profile_id),
+                "summary": f"GCS research checkpoint: {gcs_root}",
+                "description": f"run={run_id or '--'} profile={profile_id or '--'}",
+                "recommended": False,
+                "model_group": model_group,
+                "profile_id": profile_id,
+                "run_id": run_id,
+                "model_package": model_package_url,
+                "threshold_report": threshold_url,
+                "training_report_path": training_report_url,
+                "gcs_root": gcs_root,
+                "source": "gcs",
+                "source_label": "gcs",
+                "status_label": "research (gcs)",
+                "card_tone": "warn",
+                "status_chip_class": "bad",
+                "_sort_group": 2,
+            }
+            entries.append(_build_catalog_entry(raw_entry, source="gcs", load_eval_snapshot=False))
+        except Exception as exc:
+            logger.debug("Failed to build GCS catalog entry for %s: %s", gcs_root, exc)
+    return entries
+
+
 def _build_artifact_discovery_entries() -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
     entries.extend(_discover_published_model_roots(ML_PIPELINE_2_ARTIFACT_MODEL_CATALOG_DIR, source_label="artifact_discovery_ml_pipeline_2"))
     entries.extend(_build_recovery_catalog_entries())
+    entries.extend(_build_gcs_catalog_entries())
     return entries
 
 
@@ -2344,10 +2673,16 @@ def _build_model_eval_snapshot(
     }
 
 
+def _is_gcs_url(s: Any) -> bool:
+    return str(s or "").strip().startswith("gs://")
+
+
 def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval_snapshot: bool = True) -> Dict[str, Any]:
     instance_key = _normalize_trading_instance(raw.get("instance_key") or raw.get("profile_key") or "model")
     model_path = _resolve_repo_path(raw.get("model_package"))
+    model_gcs = _is_gcs_url(raw.get("model_package"))
     threshold_path = _resolve_repo_path(raw.get("threshold_report"))
+    threshold_gcs = _is_gcs_url(raw.get("threshold_report"))
     summary_path = _resolve_repo_path(raw.get("eval_summary_path"))
     training_path = _resolve_repo_path(raw.get("training_report_path"))
     model_contract_path = _resolve_repo_path(raw.get("model_contract"))
@@ -2370,8 +2705,8 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
     training = eval_snapshot.get("training", {}) if isinstance(eval_snapshot, dict) else {}
 
     existence = {
-        "model_package": bool(model_path and model_path.exists()),
-        "threshold_report": bool(threshold_path and threshold_path.exists()),
+        "model_package": bool(model_path and model_path.exists()) or model_gcs,
+        "threshold_report": bool(threshold_path and threshold_path.exists()) or threshold_gcs,
         "eval_summary_path": bool(summary_path and summary_path.exists()),
         "training_report_path": bool(training_path and training_path.exists()),
         "model_contract": bool(model_contract_path and model_contract_path.exists()),
@@ -2400,8 +2735,12 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
     query_values = {"model": instance_key}
     if model_path:
         query_values["model_package"] = _path_text(model_path)
+    elif model_gcs:
+        query_values["model_package"] = str(raw.get("model_package"))
     if threshold_path:
         query_values["threshold_report"] = _path_text(threshold_path)
+    elif threshold_gcs:
+        query_values["threshold_report"] = str(raw.get("threshold_report"))
     if summary_path:
         query_values["eval_summary_path"] = _path_text(summary_path)
     if training_path:
@@ -2458,8 +2797,8 @@ def _build_catalog_entry(raw: Dict[str, Any], source: str = "curated", load_eval
         "summary": str(raw.get("summary") or ""),
         "description": str(raw.get("description") or ""),
         "recommended": bool(raw.get("recommended")),
-        "model_package": _path_text(model_path),
-        "threshold_report": _path_text(threshold_path),
+        "model_package": _path_text(model_path) or (str(raw.get("model_package")) if model_gcs else ""),
+        "threshold_report": _path_text(threshold_path) or (str(raw.get("threshold_report")) if threshold_gcs else ""),
         "eval_summary_path": _path_text(summary_path),
         "training_report_path": _path_text(training_path),
         "model_contract": _path_text(model_contract_path),
@@ -3753,19 +4092,34 @@ _operator_routes = DashboardOperatorRouter(
 )
 app.include_router(_operator_routes.router)
 
+_monitor_routes = DashboardMonitorRouter()
+app.include_router(_monitor_routes.router)
+
 _historical_replay_routes = DashboardHistoricalReplayRouter(
     templates=templates,
     templates_dir=templates_dir,
     get_historical_replay_service=lambda: _historical_replay_monitor_service,
     now_iso_ist=_now_iso_ist,
+    get_strategy_eval_service=lambda: _strategy_eval_service,
 )
 app.include_router(_historical_replay_routes.router)
 
 _strategy_evaluation_routes = DashboardStrategyEvaluationRouter(
+    templates=templates,
     get_strategy_eval_service=lambda: _strategy_eval_service,
     normalize_timestamp_fields=_normalize_timestamp_fields,
 )
 app.include_router(_strategy_evaluation_routes.router)
+
+_velocity_testing_routes = None
+if DashboardVelocityTestingRouter is not None:
+    _velocity_testing_routes = DashboardVelocityTestingRouter(
+        templates=templates,
+        test_policies_fn=lambda **kwargs: _velocity_testing_service.test_policies_for_date_range(**kwargs),
+        get_heatmap_fn=lambda **kwargs: _velocity_testing_service.get_velocity_heatmap(**kwargs),
+        velocity_testing_available=lambda: _velocity_testing_service is not None,
+    )
+    app.include_router(_velocity_testing_routes.router)
 
 _model_catalog_routes = DashboardModelCatalogRouter(
     templates=templates,
@@ -3884,6 +4238,8 @@ app.include_router(_legacy_trading_routes.router)
 home = _operator_routes.home
 live_strategy = _operator_routes.live_strategy
 get_live_strategy_session = _operator_routes.get_live_strategy_session
+get_live_strategy_traces = _operator_routes.get_live_strategy_traces
+get_live_strategy_trace_detail = _operator_routes.get_live_strategy_trace_detail
 health = _operator_routes.health
 market_data_health = _operator_routes.market_data_health
 get_system_mode = _operator_routes.get_system_mode
@@ -3891,6 +4247,7 @@ historical_replay = _historical_replay_routes.historical_replay
 get_historical_strategy_session = _historical_replay_routes.get_historical_strategy_session
 get_historical_replay_status = _historical_replay_routes.get_historical_replay_status
 replay_health = _historical_replay_routes.replay_health
+strategy_evaluation_page = _strategy_evaluation_routes.strategy_evaluation_page
 get_strategy_evaluation_summary = _strategy_evaluation_routes.get_strategy_evaluation_summary
 get_strategy_evaluation_equity = _strategy_evaluation_routes.get_strategy_evaluation_equity
 get_strategy_evaluation_days = _strategy_evaluation_routes.get_strategy_evaluation_days
@@ -3898,6 +4255,10 @@ get_strategy_evaluation_trades = _strategy_evaluation_routes.get_strategy_evalua
 create_strategy_evaluation_run = _strategy_evaluation_routes.create_strategy_evaluation_run
 get_latest_strategy_evaluation_run = _strategy_evaluation_routes.get_latest_strategy_evaluation_run
 get_strategy_evaluation_run = _strategy_evaluation_routes.get_strategy_evaluation_run
+if _velocity_testing_routes is not None:
+    velocity_testing_page = _velocity_testing_routes.velocity_testing_page
+    test_velocity_policies = _velocity_testing_routes.test_velocity_policies
+    get_velocity_heatmap = _velocity_testing_routes.get_velocity_heatmap
 trading_models_page = _model_catalog_routes.trading_models_page
 get_trading_models = _model_catalog_routes.get_trading_models
 trading_terminal_model = _model_catalog_routes.trading_terminal_model

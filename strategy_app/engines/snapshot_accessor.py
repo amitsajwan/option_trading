@@ -16,7 +16,7 @@ class SnapshotAccessor:
         self._sc = payload.get("session_context") if isinstance(payload.get("session_context"), dict) else {}
         self._fb = payload.get("futures_bar") if isinstance(payload.get("futures_bar"), dict) else {}
         self._fd = payload.get("futures_derived") if isinstance(payload.get("futures_derived"), dict) else {}
-        self._or = payload.get("opening_range") if isinstance(payload.get("opening_range"), dict) else {}
+        self._opening_range = payload.get("opening_range") if isinstance(payload.get("opening_range"), dict) else {}
         self._vix = payload.get("vix_context") if isinstance(payload.get("vix_context"), dict) else {}
         self._ca = payload.get("chain_aggregates") if isinstance(payload.get("chain_aggregates"), dict) else {}
         self._atm = payload.get("atm_options") if isinstance(payload.get("atm_options"), dict) else {}
@@ -30,6 +30,9 @@ class SnapshotAccessor:
             if strike is None:
                 continue
             self._strike_index[int(strike)] = row
+        # velocity_enrichment: populated from 11:30 IST onwards by LiveVelocityAccumulator.
+        # Key matches the canonical block name used by stage_views._project_view().
+        self._vel = payload.get("velocity_enrichment") if isinstance(payload.get("velocity_enrichment"), dict) else {}
 
     @property
     def raw_payload(self) -> dict[str, Any]:
@@ -117,10 +120,36 @@ class SnapshotAccessor:
 
     @property
     def session_phase(self) -> str:
-        return str(self._sc.get("session_phase") or self._payload.get("session_phase") or "")
+        phase = str(self._sc.get("session_phase") or self._payload.get("session_phase") or "").strip()
+        if phase:
+            return phase
+        # Fallback: derive session phase from timestamp (IST) when the snapshot
+        # producer omitted the session_context.session_phase field. Historical
+        # snapshots captured before this field was added will hit this path.
+        ts = self.timestamp
+        if ts is None:
+            return ""
+        minute_of_day = int(ts.hour) * 60 + int(ts.minute)
+        # Boundaries mirror snapshot_app.core.market_snapshot._session_phase.
+        if 9 * 60 + 15 <= minute_of_day < 9 * 60 + 45:
+            return "DISCOVERY"
+        if 9 * 60 + 45 <= minute_of_day < 14 * 60 + 30:
+            return "ACTIVE"
+        if 14 * 60 + 30 <= minute_of_day <= 15 * 60 + 30:
+            return "PRE_CLOSE"
+        return "CLOSED"
 
     @property
     def is_valid_entry_phase(self) -> bool:
+        # The staged runtime's valid_entry_phase_v1 gate must mirror the training
+        # distribution: training data was captured during the normal intraday
+        # session (09:45 - 14:30 IST = "ACTIVE"). Non-ACTIVE ticks (DISCOVERY,
+        # PRE_CLOSE, CLOSED) were excluded at training time.
+        #
+        # For V2 (velocity-enriched) bundles, a further implicit restriction to
+        # the 11:30 IST midday row is enforced downstream by the
+        # feature_completeness_v1 gate: non-11:30 ticks carry NaN for all 30
+        # velocity features and are rejected there.
         return self.session_phase == "ACTIVE"
 
     @property
@@ -201,31 +230,31 @@ class SnapshotAccessor:
 
     @property
     def orh(self) -> Optional[float]:
-        return self._f(self._or.get("orh"))
+        return self._f(self._opening_range.get("orh"))
 
     @property
     def orl(self) -> Optional[float]:
-        return self._f(self._or.get("orl"))
+        return self._f(self._opening_range.get("orl"))
 
     @property
     def or_width(self) -> Optional[float]:
-        return self._f(self._or.get("or_width"))
+        return self._f(self._opening_range.get("or_width"))
 
     @property
     def price_vs_orh(self) -> Optional[float]:
-        return self._f(self._or.get("price_vs_orh"))
+        return self._f(self._opening_range.get("price_vs_orh"))
 
     @property
     def price_vs_orl(self) -> Optional[float]:
-        return self._f(self._or.get("price_vs_orl"))
+        return self._f(self._opening_range.get("price_vs_orl"))
 
     @property
     def orh_broken(self) -> bool:
-        return self._b(self._or.get("orh_broken"))
+        return self._b(self._opening_range.get("orh_broken"))
 
     @property
     def orl_broken(self) -> bool:
-        return self._b(self._or.get("orl_broken"))
+        return self._b(self._opening_range.get("orl_broken"))
 
     @property
     def or_ready(self) -> bool:
@@ -546,3 +575,21 @@ class SnapshotAccessor:
                 "close": self._f(row.get("pe_ltp")),
             }
         return None
+
+    # ------------------------------------------------------------------
+    # velocity_features — populated from 11:30 IST by LiveVelocityAccumulator
+    # ------------------------------------------------------------------
+
+    @property
+    def has_velocity(self) -> bool:
+        """True if velocity features were computed for this tick (post-11:30 IST)."""
+        return bool(self._vel)
+
+    def vel(self, name: str) -> Optional[float]:
+        """Return a single velocity feature by name, or None if missing/NaN."""
+        return self._f(self._vel.get(name))
+
+    @property
+    def velocity_features(self) -> dict[str, Any]:
+        """Full velocity feature dict (may be empty before 11:30 IST)."""
+        return self._vel

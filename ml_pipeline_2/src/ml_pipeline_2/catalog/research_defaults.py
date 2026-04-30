@@ -10,10 +10,10 @@ DEFAULT_STAGED_PARQUET_ROOT = f"{DEFAULT_EXTERNAL_DATA_ROOT}/parquet_data"
 
 
 DEFAULT_STAGED_RECIPES = (
-    LabelRecipe(recipe_id="L0", horizon_minutes=15, take_profit_pct=0.0025, stop_loss_pct=0.0008),
-    LabelRecipe(recipe_id="L1", horizon_minutes=15, take_profit_pct=0.0020, stop_loss_pct=0.0008),
-    LabelRecipe(recipe_id="L2", horizon_minutes=15, take_profit_pct=0.0020, stop_loss_pct=0.0010),
-    LabelRecipe(recipe_id="L3", horizon_minutes=20, take_profit_pct=0.0025, stop_loss_pct=0.0010),
+    LabelRecipe(recipe_id="L0", horizon_minutes=15, take_profit_pct=0.0025, stop_loss_pct=0.0008, risk_basis="underlying"),
+    LabelRecipe(recipe_id="L1", horizon_minutes=15, take_profit_pct=0.0020, stop_loss_pct=0.0008, risk_basis="underlying"),
+    LabelRecipe(recipe_id="L2", horizon_minutes=15, take_profit_pct=0.0020, stop_loss_pct=0.0010, risk_basis="underlying"),
+    LabelRecipe(recipe_id="L3", horizon_minutes=20, take_profit_pct=0.0025, stop_loss_pct=0.0010, risk_basis="underlying"),
 )
 
 

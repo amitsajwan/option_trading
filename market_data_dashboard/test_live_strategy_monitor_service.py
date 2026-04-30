@@ -300,7 +300,13 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
                                         "timestamp": "2026-03-02T12:45:00",
                                         "time": "12:45:00",
                                     },
-                                    "futures_bar": {"fut_close": 60025.0},
+                                    "futures_bar": {
+                                        "fut_open": 60000.0,
+                                        "fut_high": 60040.0,
+                                        "fut_low": 59980.0,
+                                        "fut_close": 60025.0,
+                                        "fut_volume": 1234.0,
+                                    },
                                 }
                             },
                         }
@@ -315,6 +321,11 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
         self.assertIsNotNone(chart)
         self.assertEqual(chart["labels"], ["12:45:00"])
         self.assertEqual(chart["timestamps"], ["2026-03-02T07:15:00Z"])
+        self.assertEqual(chart["opens"], [60000.0])
+        self.assertEqual(chart["highs"], [60040.0])
+        self.assertEqual(chart["lows"], [59980.0])
+        self.assertEqual(chart["closes"], [60025.0])
+        self.assertEqual(chart["volumes"], [1234.0])
 
     def test_build_deterministic_diagnostics_exposes_policy_effectiveness_ratios(self) -> None:
         class CursorStub:
@@ -383,6 +394,99 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
         self.assertAlmostEqual(diagnostics["ratios"]["policy_pass_rate_day"], 0.6, places=6)
         self.assertAlmostEqual(diagnostics["ratios"]["policy_block_rate_day"], 0.4, places=6)
         self.assertAlmostEqual(diagnostics["ratios"]["warmup_block_rate_day"], 1.0 / 9.0, places=6)
+
+    def test_build_deterministic_diagnostics_scopes_votes_by_run_id(self) -> None:
+        class CursorStub:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def sort(self, *_args, **_kwargs):
+                return self
+
+            def limit(self, value):
+                return CursorStub(self._docs[: int(value)])
+
+            def __iter__(self):
+                return iter(self._docs)
+
+        class CollectionStub:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def _filtered(self, query):
+                rows = []
+                for doc in self._docs:
+                    if str(doc.get("trade_date_ist")) != str(query.get("trade_date_ist")):
+                        continue
+                    run_id = str(query.get("run_id") or "").strip()
+                    if run_id and str(doc.get("run_id") or "").strip() != run_id:
+                        continue
+                    if query.get("signal_type") == "ENTRY" and str(doc.get("signal_type")) != "ENTRY":
+                        continue
+                    direction_filter = query.get("direction")
+                    if isinstance(direction_filter, dict) and "$in" in direction_filter:
+                        if str(doc.get("direction")) not in set(direction_filter["$in"]):
+                            continue
+                    allowed_flag = query.get("payload.vote.raw_signals._policy_allowed")
+                    if allowed_flag is True:
+                        allowed = (((doc.get("payload") or {}).get("vote") or {}).get("raw_signals") or {}).get("_policy_allowed")
+                        if allowed is not True:
+                            continue
+                    if allowed_flag is False:
+                        allowed = (((doc.get("payload") or {}).get("vote") or {}).get("raw_signals") or {}).get("_policy_allowed")
+                        if allowed is not False:
+                            continue
+                    if query.get("payload.vote.raw_signals._policy_reason") == {"$exists": True}:
+                        reason = (((doc.get("payload") or {}).get("vote") or {}).get("raw_signals") or {}).get("_policy_reason")
+                        if reason is None:
+                            continue
+                    rows.append(doc)
+                return rows
+
+            def find(self, query, projection=None):  # noqa: ARG002
+                return CursorStub(self._filtered(query))
+
+            def count_documents(self, query):
+                return len(self._filtered(query))
+
+        docs = [
+            {
+                "trade_date_ist": "2024-01-05",
+                "run_id": "run-v1",
+                "timestamp": "2024-01-05T10:46:00+05:30",
+                "snapshot_id": "20240105_1046",
+                "strategy": "EMA_CROSSOVER",
+                "signal_type": "ENTRY",
+                "direction": "PE",
+                "confidence": 0.9,
+                "reason": "EMA_BEAR",
+                "payload": {"vote": {"raw_signals": {"_policy_reason": "allowed", "_policy_allowed": True}}},
+            },
+            {
+                "trade_date_ist": "2024-01-05",
+                "run_id": "run-v2",
+                "timestamp": "2024-01-05T10:46:00+05:30",
+                "snapshot_id": "20240105_1046",
+                "strategy": "ORB",
+                "signal_type": "ENTRY",
+                "direction": "PE",
+                "confidence": 0.65,
+                "reason": "ORB_DOWN",
+                "payload": {"vote": {"raw_signals": {"_policy_reason": "allowed", "_policy_allowed": True}}},
+            },
+        ]
+
+        diagnostics = self.service.build_deterministic_diagnostics(
+            date_ist="2024-01-05",
+            votes_coll=CollectionStub(docs),
+            run_id="run-v2",
+        )
+
+        self.assertEqual(diagnostics["counts"]["sampled_votes"], 1)
+        self.assertEqual(diagnostics["counts"]["sampled_policy_rows"], 1)
+        self.assertEqual(diagnostics["counts"]["policy_allowed_votes_day"], 1)
+        self.assertEqual(diagnostics["latest_policy_decision"]["strategy"], "ORB")
+        self.assertEqual(len(diagnostics["recent_policy_decisions"]), 1)
 
     def test_build_ml_pure_diagnostics_tracks_hold_reasons_and_skew(self) -> None:
         class CursorStub:

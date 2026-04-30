@@ -2,7 +2,11 @@
 
 These scripts are the runnable operator layer over Terraform, GCP, runtime deploy, and staged ML release flows.
 
-Run them from:
+**First time or rebuilding from scratch?** Start with the sequential setup guide, not this index:
+
+- [../../docs/runbooks/LIVE_SETUP_GUIDE.md](../../docs/runbooks/LIVE_SETUP_GUIDE.md) — Zero-to-live guide: prerequisites → infra → parquet → training → live deploy → daily ops.
+
+Run scripts from:
 
 - Ubuntu
 - WSL
@@ -10,8 +14,16 @@ Run them from:
 
 They assume a Bash environment.
 
+Important host rule:
+
+- `run_snapshot_parquet_pipeline.sh` is Linux-only
+- use Windows only for raw archive upload via `publish_raw_market_data.sh`
+- use Cloud Shell for orchestration, not as the default full parquet build host
+- use a large-disk Linux VM for snapshot/parquet builds
+
 This file is a script index, not the primary operator runbook. For step-by-step procedures, use:
 
+- [../../docs/runbooks/LIVE_SETUP_GUIDE.md](../../docs/runbooks/LIVE_SETUP_GUIDE.md)
 - [../../docs/runbooks/README.md](../../docs/runbooks/README.md)
 - [../../docs/runbooks/GCP_DEPLOYMENT.md](../../docs/runbooks/GCP_DEPLOYMENT.md)
 - [../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md](../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md)
@@ -31,7 +43,15 @@ Image source modes:
 - `IMAGE_SOURCE=ghcr` uses published GHCR images through `docker-compose.gcp.yml`
 - `IMAGE_SOURCE=local_build` builds from the repo checkout on the VM with `docker-compose.yml`
 
-Use the interactive lifecycle menu as the primary entrypoint for that sequence.
+Use the interactive lifecycle menu as the primary entrypoint for `Infra`, `Live`, and `Historical replay`.
+
+Snapshot/parquet build is separate. Its supported entrypoint is:
+
+```bash
+bash ./ops/gcp/run_snapshot_parquet_pipeline.sh
+```
+
+Run that wrapper on a dedicated Linux snapshot-build host with large local disk.
 
 ## Recommended Operator Flow
 
@@ -54,7 +74,7 @@ Important boundary:
 
 ## Script Entry Points
 
-Use direct entrypoints only when you intentionally need a lower-level or troubleshooting path. The lifecycle menu remains the supported operator entrypoint for first-time and daily use.
+Use direct entrypoints only when you intentionally need a lower-level or troubleshooting path. The lifecycle menu remains the supported operator entrypoint for first-time and daily use across `Infra`, `Live`, and `Historical replay`; snapshot/parquet build remains a separate supported wrapper.
 
 Primary menu:
 
@@ -126,6 +146,21 @@ Interactive historical replay helper.
 
 It defaults to the runtime VM, prompts for `IMAGE_SOURCE`, uses the current approved image tag when GHCR is selected, detects the repo checkout path and Compose implementation on the target VM, syncs the runtime bundle when needed, runs local and remote historical preflight, then can optionally sync parquet, build historical services from code, start historical services, and run one-shot replay.
 
+For `ml_pure` replay it now also:
+
+- clears explicit model-package / threshold-path conflicts when run-id mode is active
+- force-writes the historical `ml_pure` overrides on each run: `STRATEGY_ROLLOUT_STAGE_HISTORICAL=capped_live`, `STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL=0.25`, and `ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL=0`
+- uses a dedicated historical test guard at `.run/ml_runtime_guard_historical_test.json` instead of reusing the live runtime guard
+- requires a `strategy_app` image built with `scikit-learn==1.7.2` for the current staged smoke bundles
+
+### `run_historical_replay_shell.sh`
+
+Non-interactive shell runner for historical replay.
+
+Use this when you already know the target VM, replay dates, parquet bucket, and model switch inputs. It enforces the remote historical `ml_pure` env, writes a dedicated historical test guard on the target VM, syncs parquet and published model artifacts, restarts the historical services, and runs one-shot replay in one shell command flow.
+
+It waits for `strategy_app_historical` and `strategy_persistence_app_historical` to subscribe before the replay run starts, so fast one-shot replays do not outrun the consumers.
+
 ### `create_training_vm.sh`
 
 Create a disposable training VM from the Terraform output instance template.
@@ -160,7 +195,21 @@ Runtime release manifest writer used by the training publish lane and consumed b
 
 Supported operator entrypoint for historical parquet creation and publish.
 
-This is the upstream artifact-build step for GCP historical simulation. It does not start replay services on the runtime VM.
+This is the upstream artifact-build step for both training and GCP historical simulation. It does not start replay services on the runtime VM.
+
+Use it for:
+
+- fresh raw-to-parquet rebuilds
+- resumable reruns on the snapshot-build host
+- targeted year or date-window rebuilds
+- publish of the canonical parquet artifact set consumed by training and historical replay
+
+Operational rules:
+
+- Linux only
+- prefer a dedicated build VM over Cloud Shell or the runtime VM
+- start with its host-aware worker defaults before overriding `NORMALIZE_JOBS` or `SNAPSHOT_JOBS`
+- run it inside `tmux` and treat rerunning the same command as the normal restart path
 
 ### `publish_runtime_config.sh`
 

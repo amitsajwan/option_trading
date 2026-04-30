@@ -130,7 +130,7 @@ def _candidate_matrix(search_spec: dict[str, Any]) -> list[DeterministicCandidat
                 "risk_config": {},
                 "regime_config": {},
                 "router_config": {},
-                "strategy_profile_id": "det_core_v1",
+                "strategy_profile_id": "det_core_v2",
             },
         )
     ]

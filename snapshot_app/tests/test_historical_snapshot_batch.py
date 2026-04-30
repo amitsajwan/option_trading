@@ -3,8 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
-from snapshot_app.historical.snapshot_batch import _build_spot_map, _project_rows_to_ml_flat, run_snapshot_batch
+from snapshot_app.historical.snapshot_batch import (
+    _build_all_chains,
+    _build_spot_map,
+    _chain_totals,
+    _find_atm_row,
+    _project_rows_to_ml_flat,
+    run_snapshot_batch,
+    write_days_to_parquet,
+)
 
 
 class _FakeParquetStore:
@@ -12,6 +21,7 @@ class _FakeParquetStore:
         self.base_path = Path(base_path)
         self.snapshots_dataset = snapshots_dataset
         self.has_options_calls = 0
+        self.futures_window_for_days_calls: list[list[str]] = []
 
     def available_days(self, min_day: str | None = None, max_day: str | None = None) -> list[str]:
         return ["2020-01-29", "2020-01-30"]
@@ -29,15 +39,37 @@ class _FakeParquetStore:
     def vix(self) -> pd.DataFrame:
         return pd.DataFrame()
 
+    def futures_window_for_days(self, trade_dates: list[str]) -> pd.DataFrame:
+        self.futures_window_for_days_calls.append(list(trade_dates))
+        rows = []
+        for trade_date in trade_dates:
+            rows.append(
+                {
+                    "timestamp": f"{trade_date} 09:15:00",
+                    "trade_date": trade_date,
+                    "symbol": "BANKNIFTY-I",
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 1000.0,
+                    "oi": 2000.0,
+                }
+            )
+        return pd.DataFrame(rows)
+
 
 def test_run_snapshot_batch_flushes_canonical_and_market_base(monkeypatch, tmp_path: Path) -> None:
     emit_calls: list[tuple[str, bool]] = []
     futures_window_calls: list[tuple[str, list[str] | None]] = []
+    preloaded_window_rows: list[tuple[str, int]] = []
 
     def _fake_process_day(**kwargs):
         trade_date = str(kwargs["trade_date"])
         emit_calls.append((trade_date, bool(kwargs.get("emit_outputs", True))))
         futures_window_calls.append((trade_date, list(kwargs.get("futures_window_days") or [])))
+        preloaded_window = kwargs.get("preloaded_fut_window")
+        preloaded_window_rows.append((trade_date, 0 if preloaded_window is None else int(len(preloaded_window))))
         if not bool(kwargs.get("emit_outputs", True)):
             return {
                 "snapshot_rows": [],
@@ -92,6 +124,9 @@ def test_run_snapshot_batch_flushes_canonical_and_market_base(monkeypatch, tmp_p
     market_base_path = tmp_path / "market_base" / "year=2020" / "chunk=202001_202001_m1" / "data.parquet"
 
     assert result["status"] == "complete"
+    assert result["contract_validation_requested"] is False
+    assert result["contract_validation_enabled"] is False
+    assert result["contract_validation_scope"] == "canonical_market_snapshot_only"
     assert result["days_processed"] == 1
     assert result["warmup_days_processed"] == 1
     assert result["total_snapshot_rows"] == 1
@@ -99,6 +134,8 @@ def test_run_snapshot_batch_flushes_canonical_and_market_base(monkeypatch, tmp_p
     assert result["total_market_base_rows"] == 1
     assert snapshots_path.exists()
     assert market_base_path.exists()
+    assert not list((snapshots_path.parent).glob("data.tmp_*.parquet"))
+    assert not list((market_base_path.parent).glob("data.tmp_*.parquet"))
 
     snapshots_df = pd.read_parquet(snapshots_path)
     market_base_df = pd.read_parquet(market_base_path)
@@ -110,6 +147,27 @@ def test_run_snapshot_batch_flushes_canonical_and_market_base(monkeypatch, tmp_p
         ("2020-01-29", ["2020-01-29"]),
         ("2020-01-30", ["2020-01-29", "2020-01-30"]),
     ]
+    assert preloaded_window_rows == [("2020-01-29", 1), ("2020-01-30", 2)]
+
+
+def test_build_all_chains_exposes_cached_lookup_and_totals() -> None:
+    options_day = pd.DataFrame(
+        {
+            "timestamp": ["2020-01-30 09:15:00", "2020-01-30 09:15:00"],
+            "strike": [30000, 30100],
+            "option_type": ["CE", "PE"],
+            "close": [100.0, 90.0],
+            "oi": [1000.0, 900.0],
+            "volume": [10.0, 20.0],
+            "expiry_str": ["30JAN20", "30JAN20"],
+        }
+    )
+
+    chains = _build_all_chains(options_day)
+    chain = chains["2020-01-30 09:15:00"]
+
+    assert _find_atm_row(chain, 30000)["strike"] == 30000.0
+    assert _chain_totals(chain) == (10.0, 20.0, 2.0)
 
 
 def test_run_snapshot_batch_marks_missing_input_days_as_partial_incomplete(monkeypatch, tmp_path: Path) -> None:
@@ -166,6 +224,82 @@ def test_run_snapshot_batch_marks_missing_input_days_as_partial_incomplete(monke
     assert result["days_processed"] == 1
     assert result["days_skipped_missing_inputs"] == 1
     assert result["missing_input_days"] == ["2020-01-30"]
+
+
+def test_run_snapshot_batch_reports_ml_flat_validation_as_not_applicable(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("snapshot_app.historical.snapshot_batch.ParquetStore", _FakeParquetStore)
+
+    result = run_snapshot_batch(
+        parquet_base=tmp_path,
+        instrument="BANKNIFTY-I",
+        min_day="2020-01-29",
+        max_day="2020-01-30",
+        resume=False,
+        dry_run=True,
+        validate_ml_flat_contract=True,
+    )
+
+    assert result["status"] == "dry_run"
+    assert result["contract_validation_requested"] is True
+    assert result["contract_validation_enabled"] is False
+    assert result["contract_validation_scope"] == "canonical_market_snapshot_only"
+
+
+def test_write_days_to_parquet_preserves_existing_file_when_atomic_replace_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    partition_key = "202001_202001_m1"
+    out_path = tmp_path / "snapshots" / "year=2020" / f"chunk={partition_key}" / "data.parquet"
+    initial_rows = [
+        {
+            "trade_date": "2020-01-29",
+            "timestamp": "2020-01-29 09:15:00",
+            "snapshot_id": "20200129_0915",
+            "snapshot_raw_json": "{}",
+        }
+    ]
+    replacement_rows = [
+        {
+            "trade_date": "2020-01-30",
+            "timestamp": "2020-01-30 09:15:00",
+            "snapshot_id": "20200130_0915",
+            "snapshot_raw_json": "{}",
+        }
+    ]
+
+    write_days_to_parquet(
+        initial_rows,
+        out_base=tmp_path,
+        year=2020,
+        output_dataset="snapshots",
+        replace_trade_dates={"2020-01-29"},
+        partition_key=partition_key,
+    )
+    original = pd.read_parquet(out_path)
+    original_to_parquet = pd.DataFrame.to_parquet
+
+    def _failing_to_parquet(self, path, *args, **kwargs):
+        candidate = Path(path)
+        if candidate.parent == out_path.parent and candidate.name.startswith("data.tmp_"):
+            candidate.write_bytes(b"partial parquet temp")
+            raise RuntimeError("simulated parquet write failure")
+        return original_to_parquet(self, path, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _failing_to_parquet)
+
+    with pytest.raises(RuntimeError, match="simulated parquet write failure"):
+        write_days_to_parquet(
+            replacement_rows,
+            out_base=tmp_path,
+            year=2020,
+            output_dataset="snapshots",
+            replace_trade_dates={"2020-01-30"},
+            partition_key=partition_key,
+        )
+
+    pd.testing.assert_frame_equal(pd.read_parquet(out_path), original)
+    assert not list(out_path.parent.glob("data.tmp_*.parquet"))
 
 
 def test_project_rows_to_ml_flat_prefers_canonical_same_strike_atm_fields() -> None:

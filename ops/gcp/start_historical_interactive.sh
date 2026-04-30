@@ -90,6 +90,10 @@ detect_default_project() {
   gcloud config get-value project 2>/dev/null | tr -d '\r'
 }
 
+detect_default_zone() {
+  gcloud config get-value compute/zone 2>/dev/null | tr -d '\r'
+}
+
 require_command() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -112,6 +116,87 @@ find_python_bin() {
 
 trim_cr() {
   tr -d '\r'
+}
+
+describe_instance_tags() {
+  gcloud compute instances describe "${TARGET_VM_NAME}" \
+    --project "${PROJECT_ID}" \
+    --zone "${ZONE}" \
+    --format='get(tags.items)' 2>/dev/null | trim_cr || true
+}
+
+ensure_runtime_network_tag() {
+  local current_tags=""
+  current_tags="$(describe_instance_tags)"
+  if printf '%s\n' "${current_tags}" | grep -qw 'option-trading-runtime'; then
+    return 0
+  fi
+  echo "VM ${TARGET_VM_NAME} does not have the option-trading-runtime network tag."
+  echo "Without that tag, the existing dashboard firewall rule for port 8008 will not apply."
+  if prompt_yes_no "Add the option-trading-runtime tag to ${TARGET_VM_NAME} now?" "Y"; then
+    gcloud compute instances add-tags "${TARGET_VM_NAME}" \
+      --project "${PROJECT_ID}" \
+      --zone "${ZONE}" \
+      --tags option-trading-runtime >/dev/null
+    echo "Added option-trading-runtime tag to ${TARGET_VM_NAME}."
+  fi
+}
+
+ensure_remote_host_prereqs() {
+  local preflight=""
+  preflight="$(remote_gcloud "
+    set -e
+    python_bin=\$(command -v python3 || command -v python || true)
+    docker_bin=\$(command -v docker || true)
+    if sudo docker compose version >/dev/null 2>&1; then
+      compose_state='v2'
+    elif command -v docker-compose >/dev/null 2>&1; then
+      compose_state='v1'
+    else
+      compose_state='missing'
+    fi
+    printf 'python=%s\ndocker=%s\ncompose=%s\n' \"\${python_bin:-missing}\" \"\${docker_bin:-missing}\" \"\${compose_state}\"
+  " 2>/dev/null | trim_cr || true)"
+  local missing_python=0
+  local missing_docker=0
+  local missing_compose=0
+  if ! printf '%s\n' "${preflight}" | grep -q '^python=' || printf '%s\n' "${preflight}" | grep -q '^python=missing$'; then
+    missing_python=1
+  fi
+  if ! printf '%s\n' "${preflight}" | grep -q '^docker=' || printf '%s\n' "${preflight}" | grep -q '^docker=missing$'; then
+    missing_docker=1
+  fi
+  if ! printf '%s\n' "${preflight}" | grep -q '^compose=' || printf '%s\n' "${preflight}" | grep -q '^compose=missing$'; then
+    missing_compose=1
+  fi
+  if [ "${missing_python}" = "0" ] && [ "${missing_docker}" = "0" ] && [ "${missing_compose}" = "0" ]; then
+    return 0
+  fi
+
+  echo "Remote host ${TARGET_VM_NAME} is missing required tools:"
+  [ "${missing_python}" = "1" ] && echo "  - python3"
+  [ "${missing_docker}" = "1" ] && echo "  - docker"
+  [ "${missing_compose}" = "1" ] && echo "  - docker compose/docker-compose"
+
+  if ! prompt_yes_no "Install the missing host prerequisites on ${TARGET_VM_NAME} now?" "Y"; then
+    echo "Historical replay requires Python, Docker, and Compose on the target VM." >&2
+    exit 1
+  fi
+
+  remote_gcloud "
+    set -e
+    sudo apt-get update
+    if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+      sudo apt-get install -y python3
+    fi
+    if ! command -v docker >/dev/null 2>&1; then
+      sudo apt-get install -y docker.io
+    fi
+    if ! sudo docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
+      sudo apt-get install -y docker-compose
+    fi
+    sudo systemctl enable --now docker
+  "
 }
 
 verify_ghcr_images() {
@@ -148,6 +233,10 @@ detect_remote_python_bin() {
 
 detect_remote_compose_cmd() {
   remote_gcloud "if sudo docker compose version >/dev/null 2>&1; then printf '%s\n' 'sudo docker compose'; elif command -v docker-compose >/dev/null 2>&1; then printf '%s\n' 'sudo docker-compose'; else exit 1; fi" 2>/dev/null | trim_cr || true
+}
+
+detect_remote_compose_flavor() {
+  remote_gcloud "if sudo docker compose version >/dev/null 2>&1; then printf '%s\n' 'v2'; elif command -v docker-compose >/dev/null 2>&1; then printf '%s\n' 'v1'; else exit 1; fi" 2>/dev/null | trim_cr || true
 }
 
 sync_remote_runtime_bundle() {
@@ -199,15 +288,16 @@ echo "Press Enter to accept defaults shown in [brackets]."
 echo
 
 default_project="${PROJECT_ID:-$(detect_default_project)}"
-default_project="${default_project:-gen-lang-client-0909109011}"
+default_project="${default_project:-my-gcp-project}"
 default_snapshot_bucket="${SNAPSHOT_PARQUET_BUCKET_URL:-}"
 default_vm_name="${RUNTIME_NAME:-option-trading-runtime-01}"
 default_image_source="${IMAGE_SOURCE:-ghcr}"
 default_app_image_tag="${APP_IMAGE_TAG:-${TAG:-latest}}"
+default_zone="${ZONE:-$(detect_default_zone)}"
 
 prompt_var PROJECT_ID "GCP project id" "${default_project}"
 prompt_var REGION "GCP region" "${REGION:-asia-south1}"
-prompt_var ZONE "GCP zone" "${ZONE:-asia-south1-b}"
+prompt_var ZONE "GCP zone" "${default_zone:-asia-south1-b}"
 prompt_var TARGET_VM_NAME "Replay VM name" "${default_vm_name}"
 prompt_var RUNTIME_CONFIG_BUCKET_URL "Runtime config bucket URL (gs://.../runtime)" "${RUNTIME_CONFIG_BUCKET_URL:-gs://${default_project}-option-trading-runtime-config/runtime}"
 prompt_var IMAGE_SOURCE "Image source (ghcr/local_build)" "${default_image_source}"
@@ -290,6 +380,17 @@ if [ "${runtime_status}" != "RUNNING" ]; then
   fi
 fi
 
+if [[ "${TARGET_VM_NAME}" == *snapshot-build* ]]; then
+  echo "Replay target ${TARGET_VM_NAME} looks like a snapshot-build host, not the default runtime VM."
+  if ! prompt_yes_no "Continue anyway and let this flow prepare that host for replay?" "N"; then
+    echo "Aborting so you can use the intended runtime VM instead." >&2
+    exit 1
+  fi
+fi
+
+ensure_remote_host_prereqs
+ensure_runtime_network_tag
+
 REMOTE_REPO_ROOT_DEFAULT="$(detect_remote_repo_root)"
 REMOTE_REPO_ROOT_DEFAULT="${REMOTE_REPO_ROOT_DEFAULT:-${REMOTE_REPO_ROOT:-/opt/option_trading}}"
 prompt_var REMOTE_REPO_ROOT "Remote repo checkout path on ${TARGET_VM_NAME}" "${REMOTE_REPO_ROOT_DEFAULT}"
@@ -305,24 +406,55 @@ if [ -z "${REMOTE_COMPOSE_CMD}" ]; then
   echo "Could not detect docker compose support on ${TARGET_VM_NAME}. Install Docker Compose v2 or docker-compose v1 first." >&2
   exit 1
 fi
+REMOTE_COMPOSE_FLAVOR="$(detect_remote_compose_flavor)"
+if [ -z "${REMOTE_COMPOSE_FLAVOR}" ]; then
+  echo "Could not determine Compose flavor on ${TARGET_VM_NAME}." >&2
+  exit 1
+fi
 
 set_env_key "${ENV_COMPOSE}" "GHCR_IMAGE_PREFIX" "${GHCR_IMAGE_PREFIX}"
 set_env_key "${ENV_COMPOSE}" "APP_IMAGE_TAG" "${APP_IMAGE_TAG}"
 set_env_key "${ENV_COMPOSE}" "IMAGE_SOURCE" "${IMAGE_SOURCE}"
 set_env_key "${ENV_COMPOSE}" "HISTORICAL_TOPIC" "market:snapshot:v1:historical"
+set_env_key "${ENV_COMPOSE}" "SNAPSHOT_PARQUET_BASE" "/app/.data/ml_pipeline/parquet_data"
 
 CURRENT_STRATEGY_ENGINE="$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ENGINE")"
+CURRENT_ML_PURE_RUN_ID="$(read_env_key "${ENV_COMPOSE}" "ML_PURE_RUN_ID")"
 CURRENT_ML_PURE_MODEL_GROUP="$(read_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_GROUP")"
-CURRENT_ML_RUNTIME_GUARD_FILE="$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE")"
-if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ]; then
-  if [ -z "$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ROLLOUT_STAGE_HISTORICAL")" ]; then
-    set_env_key "${ENV_COMPOSE}" "STRATEGY_ROLLOUT_STAGE_HISTORICAL" "capped_live"
-  fi
-  if [ -z "$(read_env_key "${ENV_COMPOSE}" "STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL")" ]; then
-    set_env_key "${ENV_COMPOSE}" "STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL" "0.25"
-  fi
-  if [ -n "${CURRENT_ML_RUNTIME_GUARD_FILE}" ] && [ -z "$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL")" ]; then
-    set_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL" "${CURRENT_ML_RUNTIME_GUARD_FILE}"
+HISTORICAL_USES_ML_PURE=0
+if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ] || [ -n "${CURRENT_ML_PURE_RUN_ID}" ] || [ -n "${CURRENT_ML_PURE_MODEL_GROUP}" ]; then
+  HISTORICAL_USES_ML_PURE=1
+  set_env_key "${ENV_COMPOSE}" "STRATEGY_ENGINE" "ml_pure"
+  set_env_key "${ENV_COMPOSE}" "STRATEGY_ROLLOUT_STAGE_HISTORICAL" "capped_live"
+  set_env_key "${ENV_COMPOSE}" "STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL" "0.25"
+  set_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL" ".run/ml_runtime_guard_historical_test.json"
+  set_env_key "${ENV_COMPOSE}" "ML_PURE_MAX_FEATURE_AGE_SEC_HISTORICAL" "0"
+  set_env_key "${ENV_COMPOSE}" "ML_PURE_MODEL_PACKAGE" ""
+  set_env_key "${ENV_COMPOSE}" "ML_PURE_THRESHOLD_REPORT" ""
+fi
+
+if [ "${HISTORICAL_USES_ML_PURE}" = "1" ]; then
+  HISTORICAL_GUARD_PATH="$(read_env_key "${ENV_COMPOSE}" "STRATEGY_ML_RUNTIME_GUARD_FILE_HISTORICAL")"
+  if [ -n "${HISTORICAL_GUARD_PATH}" ]; then
+    mkdir -p "$(dirname "${REPO_ROOT}/${HISTORICAL_GUARD_PATH}")"
+    "${PY_BIN}" - "${REPO_ROOT}/${HISTORICAL_GUARD_PATH}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(
+    json.dumps(
+        {
+            "approved_for_runtime": True,
+            "offline_strict_positive_passed": True,
+            "paper_days_observed": 10,
+            "shadow_days_observed": 10,
+        },
+        indent=2,
+    ) + "\n",
+    encoding="utf-8",
+)
+PY
   fi
 fi
 
@@ -359,7 +491,7 @@ if prompt_yes_no "Sync parquet from GCS onto ${TARGET_VM_NAME}?" "Y"; then
   "
 fi
 
-if [ "${CURRENT_STRATEGY_ENGINE}" = "ml_pure" ] && [ -n "${CURRENT_ML_PURE_MODEL_GROUP}" ] && [ -n "${MODEL_BUCKET_URL:-}" ]; then
+if [ "${HISTORICAL_USES_ML_PURE}" = "1" ] && [ -n "${CURRENT_ML_PURE_MODEL_GROUP}" ] && [ -n "${MODEL_BUCKET_URL:-}" ]; then
   if prompt_yes_no "Sync published model artifacts for ${CURRENT_ML_PURE_MODEL_GROUP} onto ${TARGET_VM_NAME}?" "Y"; then
     remote_gcloud "
       GCLOUD_BIN=\$(command -v gcloud || true)
@@ -387,17 +519,110 @@ if [ "${IMAGE_SOURCE}" = "local_build" ]; then
   if prompt_yes_no "Build required historical images from the repo checkout on ${TARGET_VM_NAME} now?" "Y"; then
     remote_gcloud "
       cd '${REMOTE_REPO_ROOT}' &&
-      ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} build snapshot_app persistence_app strategy_app dashboard
+      ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} build historical_replay persistence_app_historical strategy_persistence_app_historical dashboard &&
+      ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} build --no-cache strategy_app_historical &&
+      sudo docker run --rm option_trading_strategy_app_historical:latest python -c 'import sklearn; print(sklearn.__version__)'
     "
   fi
 fi
 
 echo
 echo "Starting historical consumers on ${TARGET_VM_NAME}..."
+if [ "${HISTORICAL_USES_ML_PURE}" = "1" ]; then
+  remote_gcloud "
+    set -e
+    cd '${REMOTE_REPO_ROOT}' &&
+    mkdir -p .run &&
+    python3 - <<'PY'
+import json
+from pathlib import Path
+
+Path('.run/ml_runtime_guard_historical_test.json').write_text(
+    json.dumps(
+        {
+            'approved_for_runtime': True,
+            'offline_strict_positive_passed': True,
+            'paper_days_observed': 10,
+            'shadow_days_observed': 10,
+        },
+        indent=2,
+    ) + '\n',
+    encoding='utf-8',
+)
+PY
+  "
+fi
+if [ "${REMOTE_COMPOSE_FLAVOR}" = "v1" ]; then
+  echo "Remote host uses docker-compose v1. Removing historical containers before startup to avoid recreate metadata errors."
+  remote_gcloud "
+    cd '${REMOTE_REPO_ROOT}' &&
+    ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} rm -fsv dashboard persistence_app_historical strategy_app_historical strategy_persistence_app_historical || true
+  "
+fi
 remote_gcloud "
   cd '${REMOTE_REPO_ROOT}' &&
   ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} --profile historical up -d redis mongo persistence_app_historical strategy_app_historical strategy_persistence_app_historical dashboard
 "
+
+echo "Waiting for historical consumers to subscribe before replay..."
+if ! remote_gcloud "
+  set -e
+  cd '${REMOTE_REPO_ROOT}' &&
+  python3 - <<'PY'
+import subprocess
+import time
+
+compose_cmd = \"${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES}\"
+deadline = time.time() + 180
+needles = {
+    'strategy_app_historical': 'strategy consumer subscribed topic=market:snapshot:v1:historical',
+    'strategy_persistence_app_historical': 'strategy persistence subscribed topics=',
+}
+
+while time.time() < deadline:
+    ready = True
+    for service, needle in needles.items():
+        proc = subprocess.run(
+            f\"{compose_cmd} logs --tail 80 {service}\",
+            shell=True,
+            text=True,
+            capture_output=True,
+        )
+        text = (proc.stdout or '') + (proc.stderr or '')
+        if needle not in text:
+            ready = False
+            break
+    if ready:
+        print('historical consumers ready')
+        raise SystemExit(0)
+    time.sleep(3)
+
+raise SystemExit('historical consumers did not become ready before replay')
+PY
+"
+then
+  echo "Historical consumers failed readiness. Recent logs:"
+  remote_gcloud "
+    set -e
+    cd '${REMOTE_REPO_ROOT}' &&
+    ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} ps &&
+    printf '\n--- strategy_app_historical readiness logs ---\n' &&
+    ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} logs --tail 80 strategy_app_historical || true
+  "
+  remote_gcloud "
+    set -e
+    cd '${REMOTE_REPO_ROOT}' &&
+    printf '\n--- strategy_persistence_app_historical readiness logs ---\n' &&
+    ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} logs --tail 80 strategy_persistence_app_historical || true
+  "
+  remote_gcloud "
+    set -e
+    cd '${REMOTE_REPO_ROOT}' &&
+    printf '\n--- persistence_app_historical readiness logs ---\n' &&
+    ${REMOTE_COMPOSE_CMD} --env-file .env.compose ${REMOTE_COMPOSE_FILES} logs --tail 80 persistence_app_historical || true
+  "
+  exit 1
+fi
 
 if prompt_yes_no "Run one-shot replay for ${REPLAY_START_DATE} to ${REPLAY_END_DATE} now?" "Y"; then
   remote_gcloud "

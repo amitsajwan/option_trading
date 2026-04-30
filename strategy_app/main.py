@@ -14,6 +14,7 @@ from contracts_app import configure_ist_logging, snapshot_topic
 
 from .contracts import SignalType, TradeSignal
 from .engines import DeterministicRuleEngine, PureMLEngine
+from .engines.profiles import PRODUCTION_DEFAULT_PROFILE_ID
 from .engines.runtime_artifacts import (
     RuntimeArtifactStore,
     build_runtime_config_payload,
@@ -63,18 +64,11 @@ def _resolve_ml_runtime_guard_file(cli_guard_file: Optional[str]) -> Optional[st
     return _normalize_optional_str(os.getenv("ML_RUNTIME_GUARD_FILE"))
 
 
-def _resolve_ml_pure_model_package(cli_value: Optional[str]) -> Optional[str]:
+def _resolve_optional_str(cli_value: Optional[str], env_key: str) -> Optional[str]:
     value = _normalize_optional_str(cli_value)
     if value is not None:
         return value
-    return _normalize_optional_str(os.getenv("ML_PURE_MODEL_PACKAGE"))
-
-
-def _resolve_ml_pure_threshold_report(cli_value: Optional[str]) -> Optional[str]:
-    value = _normalize_optional_str(cli_value)
-    if value is not None:
-        return value
-    return _normalize_optional_str(os.getenv("ML_PURE_THRESHOLD_REPORT"))
+    return _normalize_optional_str(os.getenv(env_key))
 
 
 def _resolve_ml_pure_int(cli_value: Optional[int], env_key: str, default: int) -> int:
@@ -95,27 +89,6 @@ def _resolve_ml_pure_float(cli_value: Optional[float], env_key: str, default: fl
     return float(raw)
 
 
-def _resolve_ml_pure_run_id(cli_value: Optional[str]) -> Optional[str]:
-    value = _normalize_optional_str(cli_value)
-    if value is not None:
-        return value
-    return _normalize_optional_str(os.getenv("ML_PURE_RUN_ID"))
-
-
-def _resolve_ml_pure_model_group(cli_value: Optional[str]) -> Optional[str]:
-    value = _normalize_optional_str(cli_value)
-    if value is not None:
-        return value
-    return _normalize_optional_str(os.getenv("ML_PURE_MODEL_GROUP"))
-
-
-def _resolve_strategy_profile_id(cli_value: Optional[str]) -> Optional[str]:
-    value = _normalize_optional_str(cli_value)
-    if value is not None:
-        return value
-    return _normalize_optional_str(os.getenv("STRATEGY_PROFILE_ID"))
-
-
 def _load_json_file(path: str) -> dict:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -134,8 +107,16 @@ def _enforce_ml_runtime_guard(
     if not enabled:
         return
     stage = str(rollout_stage or "").strip().lower()
+    # paper and shadow stages are allowed for research/paper-trading runs without guard file
+    if stage in ("paper", "shadow"):
+        logger.warning(
+            "ml_pure running in %s stage — no live positions will be sized for real capital", stage
+        )
+        return
     if stage != "capped_live":
-        raise ValueError("ml runtime is allowed only in capped_live stage after paper/shadow completion")
+        raise ValueError(
+            f"ml runtime stage '{stage}' is not supported; use paper, shadow, or capped_live"
+        )
     if float(position_size_multiplier) > MAX_CAPPED_LIVE_SIZE_MULTIPLIER:
         raise ValueError(f"capped_live ml runtime requires position_size_multiplier <= {MAX_CAPPED_LIVE_SIZE_MULTIPLIER}")
     if not guard_file:
@@ -262,7 +243,7 @@ def build_engine(
             min_confidence=float(min_confidence),
             signal_logger=signal_logger,
             engine_mode="deterministic",
-            strategy_profile_id=(strategy_profile_id or "det_core_v1"),
+            strategy_profile_id=(strategy_profile_id or PRODUCTION_DEFAULT_PROFILE_ID),
         )
     raise ValueError(f"unsupported engine: {engine_name}")
 
@@ -292,10 +273,10 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--strategy-profile-id", default=None, help="Versioned strategy profile id for replay comparability")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    ml_pure_model_package = _resolve_ml_pure_model_package(args.ml_pure_model_package)
-    ml_pure_threshold_report = _resolve_ml_pure_threshold_report(args.ml_pure_threshold_report)
-    ml_pure_run_id = _resolve_ml_pure_run_id(args.ml_pure_run_id)
-    ml_pure_model_group = _resolve_ml_pure_model_group(args.ml_pure_model_group)
+    ml_pure_model_package = _resolve_optional_str(args.ml_pure_model_package, "ML_PURE_MODEL_PACKAGE")
+    ml_pure_threshold_report = _resolve_optional_str(args.ml_pure_threshold_report, "ML_PURE_THRESHOLD_REPORT")
+    ml_pure_run_id = _resolve_optional_str(args.ml_pure_run_id, "ML_PURE_RUN_ID")
+    ml_pure_model_group = _resolve_optional_str(args.ml_pure_model_group, "ML_PURE_MODEL_GROUP")
     ml_pure_max_feature_age_sec = _resolve_ml_pure_int(args.ml_pure_max_feature_age_sec, "ML_PURE_MAX_FEATURE_AGE_SEC", 90)
     ml_pure_max_nan_features = _resolve_ml_pure_int(args.ml_pure_max_nan_features, "ML_PURE_MAX_NAN_FEATURES", 3)
     ml_pure_max_hold_bars = _resolve_ml_pure_int(args.ml_pure_max_hold_bars, "ML_PURE_MAX_HOLD_BARS", 15)
@@ -310,9 +291,9 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         model_package=ml_pure_model_package,
         threshold_report=ml_pure_threshold_report,
     )
-    strategy_profile_id = _resolve_strategy_profile_id(args.strategy_profile_id)
+    strategy_profile_id = _resolve_optional_str(args.strategy_profile_id, "STRATEGY_PROFILE_ID")
     if strategy_profile_id is None:
-        strategy_profile_id = None if engine_key == "ml_pure" else "det_core_v1"
+        strategy_profile_id = None if engine_key == "ml_pure" else PRODUCTION_DEFAULT_PROFILE_ID
     ml_runtime_guard_file = _resolve_ml_runtime_guard_file(args.ml_runtime_guard_file)
     runtime_ml_enabled = engine_key == "ml_pure" and bool(ml_pure_model_package)
     runtime_artifact_paths = resolve_runtime_artifact_paths(Path(args.run_dir) if args.run_dir else None)

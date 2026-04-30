@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.stage2_focus_v1.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_stage2_scenarios_v1"
+  },
+  "selection": {
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.54,
+      "brier_max": 0.225
+    },
+    "robustness_probe": {
+      "enabled": true,
+      "top_k": 3,
+      "iterations": 200,
+      "random_seed": 42,
+      "splits": [
+        "research_valid",
+        "final_holdout"
+      ],
+      "resample_unit": "trade_date"
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "all_day_focus_baseline",
+        "model_group_suffix": "_scenario_all_day_focus",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_all_day_focus"
+          }
+        }
+      },
+      {
+        "run_id": "opening_only",
+        "model_group_suffix": "_scenario_opening_only",
+        "reuse_stage1_from": "all_day_focus_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_opening_only"
+          },
+          "training": {
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": [
+                "OPENING"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "morning_only",
+        "model_group_suffix": "_scenario_morning_only",
+        "reuse_stage1_from": "all_day_focus_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_morning_only"
+          },
+          "training": {
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": [
+                "MORNING"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_only",
+        "model_group_suffix": "_scenario_midday_only",
+        "reuse_stage1_from": "all_day_focus_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_midday_only"
+          },
+          "training": {
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": [
+                "MIDDAY"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "late_session_only",
+        "model_group_suffix": "_scenario_late_session_only",
+        "reuse_stage1_from": "all_day_focus_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_late_session_only"
+          },
+          "training": {
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": [
+                "LATE_SESSION"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "morning_midday",
+        "model_group_suffix": "_scenario_morning_midday",
+        "reuse_stage1_from": "all_day_focus_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_morning_midday"
+          },
+          "training": {
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": [
+                "MORNING",
+                "MIDDAY"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_strict_winner",
+        "model_group_suffix": "_scenario_midday_strict_winner",
+        "inherit_best_from": [
+          "midday_only"
+        ],
+        "reuse_stage1_from": "all_day_focus_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_midday_strict_winner"
+          },
+          "training": {
+            "stage2_label_filter": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0014,
+              "require_positive_winner_after_cost": true,
+              "max_opposing_return_after_cost": -0.0002
+            }
+          }
+        }
+      },
+      {
+        "run_id": "all_day_time_aware_pool",
+        "model_group_suffix": "_scenario_all_day_time_aware_pool",
+        "reuse_stage1_from": "all_day_focus_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_all_day_time_aware_pool"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": [
+                "fo_expiry_aware_v3",
+                "fo_no_opening_range"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_time_aware_pool",
+        "model_group_suffix": "_scenario_midday_time_aware_pool",
+        "inherit_best_from": [
+          "midday_only"
+        ],
+        "reuse_stage1_from": "all_day_focus_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_midday_time_aware_pool"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": [
+                "fo_expiry_aware_v3",
+                "fo_no_opening_range"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "all_day_iv_oi_pool",
+        "model_group_suffix": "_scenario_all_day_iv_oi_pool",
+        "reuse_stage1_from": "all_day_focus_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_all_day_iv_oi_pool"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": [
+                "fo_expiry_aware_v3",
+                "fo_oi_pcr_momentum",
+                "fo_iv_skew_only"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_iv_oi_pool",
+        "model_group_suffix": "_scenario_midday_iv_oi_pool",
+        "inherit_best_from": [
+          "midday_only"
+        ],
+        "reuse_stage1_from": "all_day_focus_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_midday_iv_oi_pool"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": [
+                "fo_expiry_aware_v3",
+                "fo_oi_pcr_momentum",
+                "fo_iv_skew_only"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "morning_midday_strict_winner",
+        "model_group_suffix": "_scenario_morning_midday_strict_winner",
+        "inherit_best_from": [
+          "morning_midday"
+        ],
+        "reuse_stage1_from": "all_day_focus_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_scenario_morning_midday_strict_winner"
+          },
+          "training": {
+            "stage2_label_filter": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0014,
+              "require_positive_winner_after_cost": true,
+              "max_opposing_return_after_cost": -0.0002
+            }
+          }
+        }
+      }
+    ]
+  }
+}

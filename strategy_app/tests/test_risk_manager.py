@@ -159,6 +159,31 @@ class RiskManagerTests(unittest.TestCase):
         self.assertFalse(mgr.post_halt_resume_boost_available)
         self.assertFalse(mgr.consume_post_halt_resume_boost())
 
+    def test_session_trade_cap_triggers_kill_switch(self) -> None:
+        with mock.patch.dict("os.environ", {"RISK_MAX_SESSION_TRADES": "2"}, clear=False):
+            mgr = RiskManager()
+            mgr.on_session_start(date(2026, 3, 5))
+            mgr.record_trade_result(pnl_pct=0.10, lots=1, entry_premium=100.0)
+            self.assertFalse(mgr.is_halted)
+
+            mgr.record_trade_result(pnl_pct=-0.10, lots=1, entry_premium=100.0)
+
+            self.assertTrue(mgr.is_halted)
+            self.assertEqual(mgr.halt_reason, "session_trade_cap")
+            self.assertEqual(mgr.context.session_trade_count, 2)
+            self.assertTrue(mgr.context.session_trade_cap_breached)
+
+    def test_consecutive_losses_expose_pause_reason(self) -> None:
+        with mock.patch.dict("os.environ", {"RISK_MAX_CONSECUTIVE_LOSSES": "2"}, clear=False):
+            mgr = RiskManager()
+            mgr.on_session_start(date(2026, 3, 5))
+            mgr.record_trade_result(pnl_pct=-0.10, lots=1, entry_premium=100.0)
+            mgr.record_trade_result(pnl_pct=-0.10, lots=1, entry_premium=100.0)
+            mgr.update(_snap(ts="2026-03-05T10:00:00+05:30", vix_intraday_chg=0.0), None)
+
+            self.assertTrue(mgr.is_paused)
+            self.assertEqual(mgr.pause_reason, "consecutive_loss_pause")
+
 
 if __name__ == "__main__":
     unittest.main()

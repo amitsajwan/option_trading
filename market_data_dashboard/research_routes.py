@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 
@@ -31,14 +31,8 @@ class DashboardResearchRouter:
         if not bool(self._research_eval_available()):
             raise HTTPException(status_code=500, detail="research evaluation service unavailable")
 
-    async def trading_research_page(self, request: Request) -> HTMLResponse:
-        self._require_research_eval_service()
-        return self._templates.TemplateResponse(
-            "trading_research.html",
-            {
-                "request": request,
-            },
-        )
+    async def trading_research_page(self, request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/app?tab=research", status_code=302)
 
     async def get_trading_research_scenarios(self) -> Any:
         self._require_research_eval_service()

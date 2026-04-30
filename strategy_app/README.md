@@ -1,5 +1,12 @@
-# DEPRECATED
+# strategy_app
 
-This module documentation has moved. Canonical documentation is now in `strategy_app/docs`.
+Layer-4 strategy consumer runtime. See **[`docs/README.md`](docs/README.md)** for full documentation.
 
-Please use: `strategy_app/docs/README.md`
+Quick start:
+
+```bash
+python -m strategy_app.main --engine deterministic
+python -m strategy_app.main --engine ml_pure --ml-pure-model-package <path> --ml-pure-threshold-report <path>
+```
+
+Tests: `pytest strategy_app/tests/`

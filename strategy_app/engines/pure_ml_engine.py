@@ -17,6 +17,14 @@ from contracts_app import isoformat_ist
 
 from ..contracts import ExitReason, PositionContext, SignalType, SnapshotPayload, StrategyEngine, TradeSignal
 from ..logging.signal_logger import SignalLogger
+from ..logging.decision_trace import (
+    DecisionTraceBuilder,
+    compact_metrics,
+    position_state_payload,
+    regime_context_payload,
+    risk_state_payload,
+    warmup_context_payload,
+)
 from ..position.tracker import PositionTracker
 from ..risk.manager import RiskManager
 from .runtime_artifacts import RuntimeArtifactStore, build_runtime_state_payload
@@ -25,6 +33,7 @@ from .pure_ml_staged_runtime import PureMLRuntimeControls, StagedRuntimeDecision
 from .rolling_feature_state import RollingFeatureState
 from .regime import RegimeClassifier
 from .snapshot_accessor import SnapshotAccessor
+from ..utils.env import env_bool, env_float
 
 logger = logging.getLogger(__name__)
 
@@ -42,18 +51,27 @@ class PureMLEngine(StrategyEngine):
         max_hold_bars: int = 15,
         min_oi: float = 50000.0,
         min_volume: float = 15000.0,
+        min_edge: Optional[float] = None,
         stop_loss_pct: float = 0.05,
         target_pct: float = 0.20,
         signal_logger: Optional[SignalLogger] = None,
         runtime_artifact_dir: Optional[Path | str] = None,
         strategy_profile_id: Optional[str] = None,
+        underlying_stop_pct: Optional[float] = None,
+        underlying_target_pct: Optional[float] = None,
+        post_stop_cooldown_bars: int = 0,
     ) -> None:
         self._model_package = load_staged_model_package(model_package_path)
         self._staged_runtime_policy: dict[str, Any] = load_staged_policy(threshold_report_path)
         runtime_payload = dict(self._staged_runtime_policy.get("runtime") or {})
         bundle_runtime_payload = dict(self._model_package.get("runtime") or {})
+        bypass_deterministic_gates = env_bool(
+            "STRATEGY_ML_PURE_BYPASS_GATES",
+            bool(runtime_payload.get("bypass_deterministic_gates", bundle_runtime_payload.get("bypass_deterministic_gates", False))),
+        )
         self._runtime_controls = PureMLRuntimeControls(
             block_expiry=bool(runtime_payload.get("block_expiry", bundle_runtime_payload.get("block_expiry", False))),
+            bypass_deterministic_gates=bypass_deterministic_gates,
         )
         self._regime = RegimeClassifier()
         self._feature_state = RollingFeatureState()
@@ -68,12 +86,32 @@ class PureMLEngine(StrategyEngine):
         self._min_volume = max(0.0, float(min_volume))
         self._stop_loss_pct = max(0.0, float(stop_loss_pct))
         self._target_pct = max(0.0, float(target_pct))
+        _raw_udl_stop = underlying_stop_pct if underlying_stop_pct is not None else env_float("ML_PURE_UNDERLYING_STOP_PCT", None)
+        _raw_udl_target = underlying_target_pct if underlying_target_pct is not None else env_float("ML_PURE_UNDERLYING_TARGET_PCT", None)
+        self._underlying_stop_pct: Optional[float] = (max(0.0, float(_raw_udl_stop)) if _raw_udl_stop is not None else None)
+        self._underlying_target_pct: Optional[float] = (max(0.0, float(_raw_udl_target)) if _raw_udl_target is not None else None)
+        self._post_stop_cooldown_bars: int = max(0, int(os.getenv("ML_PURE_POST_STOP_COOLDOWN_BARS", str(post_stop_cooldown_bars)) or 0))
+        self._cooldown_bars_remaining: int = 0
+        self._trailing_enabled: bool = env_bool("ML_PURE_TRAILING_ENABLED", True)
+        if min_edge is not None:
+            logger.warning(
+                "pure ml staged engine ignores constructor min_edge=%.4f; using staged runtime policy selected_min_edge",
+                float(min_edge),
+            )
         self._startup_warmup_minutes = max(0.0, float(os.getenv("STRATEGY_STARTUP_WARMUP_MINUTES", "0") or 0.0))
         self._startup_warmup_events = max(0, int(os.getenv("STRATEGY_STARTUP_WARMUP_EVENTS", "0") or 0))
         self._session_start_monotonic: Optional[float] = None
         self._session_event_count = 0
         self._bars_evaluated = 0
         self._entry_count = 0
+        if self._underlying_stop_pct is not None or self._underlying_target_pct is not None or self._post_stop_cooldown_bars > 0:
+            logger.info(
+                "pure ml engine risk overrides: underlying_stop_pct=%s underlying_target_pct=%s post_stop_cooldown_bars=%d trailing_enabled=%s",
+                f"{self._underlying_stop_pct:.4f}" if self._underlying_stop_pct is not None else "None",
+                f"{self._underlying_target_pct:.4f}" if self._underlying_target_pct is not None else "None",
+                self._post_stop_cooldown_bars,
+                self._trailing_enabled,
+            )
         self._last_entry_at: Optional[str] = None
         self._last_event: Optional[dict[str, Any]] = None
         self._last_decision: Optional[dict[str, Any]] = None
@@ -90,17 +128,21 @@ class PureMLEngine(StrategyEngine):
         self._strategy_profile_id = str(strategy_profile_id or default_profile_id).strip() or default_profile_id
         self._set_logger_context(None)
         logger.info(
-            "pure ml staged engine initialized max_feature_age_sec=%d max_nan_features=%d min_oi=%.0f min_volume=%.0f block_expiry=%s",
+            "pure ml staged engine initialized max_feature_age_sec=%d max_nan_features=%d min_oi=%.0f min_volume=%.0f block_expiry=%s bypass_deterministic_gates=%s",
             self._max_feature_age_sec,
             self._max_nan_features,
             self._min_oi,
             self._min_volume,
             str(self._runtime_controls.block_expiry).lower(),
+            str(self._runtime_controls.bypass_deterministic_gates).lower(),
         )
         self._write_runtime_state(last_event={"event": "engine_init"})
 
     def set_run_context(self, run_id: Optional[str], metadata: Optional[dict[str, Any]] = None) -> None:
-        self._run_id = str(run_id or "").strip() or None
+        new_run_id = str(run_id or "").strip() or None
+        if new_run_id and new_run_id != self._run_id:
+            self._feature_state.reset()
+        self._run_id = new_run_id
         if isinstance(metadata, dict):
             profile = str(metadata.get("strategy_profile_id") or "").strip()
             if profile:
@@ -148,6 +190,7 @@ class PureMLEngine(StrategyEngine):
         self._session_started_at_ist = isoformat_ist(datetime.now(timezone.utc))
         self._session_updated_at_ist = self._session_started_at_ist
         self._hold_counts = {}
+        self._cooldown_bars_remaining = 0
         self._feature_state.on_session_start(trade_date)
         self._tracker.on_session_start(trade_date)
         self._risk.on_session_start(trade_date)
@@ -231,6 +274,8 @@ class PureMLEngine(StrategyEngine):
                 )
                 self._log.log_signal(system_exit, acted_on=True)
                 self._handle_position_closed(system_exit, position)
+                if system_exit.exit_reason in (ExitReason.STOP_LOSS, ExitReason.TRAILING_STOP) and self._post_stop_cooldown_bars > 0:
+                    self._cooldown_bars_remaining = self._post_stop_cooldown_bars
                 self._last_event = {
                     "event": "exit",
                     "snapshot_id": snap.snapshot_id,
@@ -258,6 +303,16 @@ class PureMLEngine(StrategyEngine):
                         "reason": system_exit.exit_reason.value if system_exit.exit_reason else None,
                         "confidence": float(system_exit.confidence or 0.0),
                     }
+                )
+                self._log.log_decision_trace(
+                    self._build_position_trace(
+                        snap=snap,
+                        position=position,
+                        evaluation_type="exit",
+                        final_outcome="exit_taken",
+                        exit_signal=system_exit,
+                        primary_blocker_gate="position_exit",
+                    )
                 )
                 return system_exit
             refreshed = self._tracker.current_position
@@ -288,6 +343,31 @@ class PureMLEngine(StrategyEngine):
                         "pnl_pct": refreshed.pnl_pct,
                     }
                 )
+                self._log.log_decision_trace(
+                    self._build_position_trace(
+                        snap=snap,
+                        position=refreshed,
+                        evaluation_type="manage",
+                        final_outcome="manage_only",
+                        primary_blocker_gate=None,
+                    )
+                )
+            return None
+
+        if self._cooldown_bars_remaining > 0:
+            self._cooldown_bars_remaining -= 1
+            self._log_hold("post_stop_cooldown", snap)
+            self._last_event = {"event": "hold", "snapshot_id": snap.snapshot_id, "reason": "post_stop_cooldown"}
+            self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+            self._write_runtime_state()
+            return None
+
+        _ts = snap.timestamp
+        if _ts is not None and (_ts.hour * 60 + _ts.minute) >= 15 * 60:
+            self._log_hold("soft_close_no_entry", snap)
+            self._last_event = {"event": "hold", "snapshot_id": snap.snapshot_id, "reason": "soft_close_no_entry"}
+            self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+            self._write_runtime_state()
             return None
 
         decision = predict_staged(
@@ -298,6 +378,8 @@ class PureMLEngine(StrategyEngine):
             policy=self._staged_runtime_policy,
         )
         self._last_decision = self._staged_decision_summary(decision)
+        trace_builder = self._build_entry_trace_builder(snap=snap)
+        self._populate_staged_candidate_trace(trace_builder, decision)
         if decision.action == "HOLD":
             self._log_hold(str(decision.reason), snap, staged_decision=decision)
             self._last_event = {
@@ -307,6 +389,14 @@ class PureMLEngine(StrategyEngine):
             }
             self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
             self._write_runtime_state()
+            blocker_gate = self._ml_blocker_gate(str(decision.reason))
+            self._log.log_decision_trace(
+                trace_builder.finalize(
+                    final_outcome=("blocked" if blocker_gate not in {"stage1_threshold", "stage2_direction", "stage3_recipe"} else "hold"),
+                    primary_blocker_gate=blocker_gate,
+                    summary_metrics=self._staged_decision_metrics(decision),
+                )
+            )
             return None
 
         direction = "CE" if decision.action == "BUY_CE" else "PE"
@@ -320,6 +410,13 @@ class PureMLEngine(StrategyEngine):
             }
             self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
             self._write_runtime_state()
+            self._log.log_decision_trace(
+                trace_builder.finalize(
+                    final_outcome="blocked",
+                    primary_blocker_gate="strike_selection",
+                    summary_metrics=self._staged_decision_metrics(decision),
+                )
+            )
             return None
         premium = snap.option_ltp(direction, int(strike))
         if premium is None or premium <= 0:
@@ -331,38 +428,37 @@ class PureMLEngine(StrategyEngine):
             }
             self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
             self._write_runtime_state()
+            self._log.log_decision_trace(
+                trace_builder.finalize(
+                    final_outcome="blocked",
+                    primary_blocker_gate="option_premium",
+                    summary_metrics=self._staged_decision_metrics(decision),
+                )
+            )
             return None
 
         stop_loss_pct = float(decision.stop_loss_pct or self._stop_loss_pct)
         target_pct = float(decision.target_pct or self._target_pct)
         max_hold_bars = int(decision.horizon_minutes or self._max_hold_bars)
-        signal = TradeSignal(
-            signal_id=str(uuid.uuid4())[:8],
-            timestamp=snap.timestamp_or_now,
-            snapshot_id=snap.snapshot_id,
-            signal_type=SignalType.ENTRY,
-            direction=direction,
-            strike=int(strike),
-            entry_premium=float(premium),
-            max_hold_bars=max_hold_bars,
-            stop_loss_pct=stop_loss_pct,
-            target_pct=target_pct,
-            max_lots=self._risk.compute_lots(
-                entry_premium=float(premium),
-                stop_loss_pct=stop_loss_pct,
-                confidence=float(max(decision.ce_prob, decision.pe_prob)),
-            ),
-            entry_strategy_name="ML_PURE_STAGED",
-            entry_regime_name="staged_ml",
-            source="ML_PURE",
-            confidence=float(max(decision.ce_prob, decision.pe_prob)),
-            reason=(
-                f"ml_pure_staged: action={decision.action} entry_prob={decision.entry_prob:.4f} "
-                f"dir_up_prob={decision.direction_up_prob:.4f} recipe={decision.recipe_id} "
-                f"recipe_prob={decision.recipe_prob:.4f} recipe_margin={decision.recipe_margin:.4f} "
-                f"reason={decision.reason}"
-            ),
-            votes=[],
+        trace_builder.add_flow_gate(
+            "lot_sizing",
+            gate_group="execution",
+            status="pass",
+            metrics={
+                "stop_loss_pct": stop_loss_pct,
+                "target_pct": target_pct,
+                "max_hold_bars": max_hold_bars,
+            },
+        )
+        from .trade_signal_builder import build_ml_entry_signal
+        signal = build_ml_entry_signal(
+            snap=snap,
+            decision=decision,
+            underlying_stop_pct=self._underlying_stop_pct,
+            underlying_target_pct=self._underlying_target_pct,
+            premium_risk_fallback_pct=self._stop_loss_pct,
+            trailing_enabled=self._trailing_enabled,
+            risk_manager=self._risk,
         )
         self._annotate_signal_contract(
             signal,
@@ -405,6 +501,17 @@ class PureMLEngine(StrategyEngine):
                 "recipe_prob": decision.recipe_prob,
                 "recipe_margin": decision.recipe_margin,
             }
+        )
+        self._log.log_decision_trace(
+            trace_builder.finalize(
+                final_outcome="entry_taken",
+                primary_blocker_gate=None,
+                summary_metrics={
+                    **self._staged_decision_metrics(decision),
+                    "entry_premium": premium,
+                    "max_lots": signal.max_lots,
+                },
+            )
         )
         return signal
 
@@ -590,21 +697,218 @@ class PureMLEngine(StrategyEngine):
         self._write_runtime_state()
         logger.debug("ml_pure hold reason=%s snapshot_id=%s", reason, snap.snapshot_id)
 
+    def _build_entry_trace_builder(self, *, snap: SnapshotAccessor) -> DecisionTraceBuilder:
+        regime_signal = self._regime.classify(snap)
+        builder = DecisionTraceBuilder(
+            snapshot_id=snap.snapshot_id,
+            timestamp=snap.timestamp_or_now,
+            engine_mode=self._engine_mode,
+            decision_mode="ml_staged",
+            evaluation_type="entry",
+            run_id=self._model_run_id or self._run_id,
+        )
+        warmup_blocked, warmup_reason = self._entry_warmup_status()
+        builder.set_context(
+            position_state=position_state_payload(None),
+            risk_state=risk_state_payload(self._risk),
+            regime_context=regime_context_payload(regime_signal),
+            warmup_context=warmup_context_payload(
+                blocked=warmup_blocked,
+                reason=warmup_reason,
+                state=self._warmup_state(),
+            ),
+        )
+        return builder
+
+    def _populate_staged_candidate_trace(
+        self,
+        builder: DecisionTraceBuilder,
+        decision: StagedRuntimeDecision,
+    ) -> None:
+        candidate = builder.add_candidate(
+            strategy_name="ML_PURE_STAGED",
+            candidate_type="staged_runtime",
+            direction=("CE" if decision.action == "BUY_CE" else ("PE" if decision.action == "BUY_PE" else None)),
+            confidence=max(decision.ce_prob, decision.pe_prob, decision.entry_prob, 0.0),
+            rank=1,
+            metrics=self._staged_decision_metrics(decision),
+        )
+        blocker_gate = self._ml_blocker_gate(str(decision.reason))
+        flow = self._ml_trace_flow(str(decision.reason), decision)
+        for gate in flow:
+            builder.add_candidate_gate(candidate, **gate)
+            builder.add_flow_gate(**gate)
+        builder.finalize_candidate(
+            candidate,
+            terminal_status=("passed" if decision.action != "HOLD" else ("blocked" if blocker_gate not in {"stage1_threshold", "stage2_direction", "stage3_recipe"} else "skipped")),
+            terminal_gate_id=(None if decision.action != "HOLD" else blocker_gate),
+            terminal_reason_code=(None if decision.action != "HOLD" else str(decision.reason)),
+            selected=(decision.action != "HOLD"),
+        )
+
+    def _ml_trace_flow(self, reason: str, decision: StagedRuntimeDecision) -> list[dict[str, Any]]:
+        blocker_gate = self._ml_blocker_gate(reason)
+        metrics = self._staged_decision_metrics(decision)
+        flow: list[dict[str, Any]] = []
+        ordered = [
+            ("prefilter", "prefilter"),
+            ("stage1_threshold", "stage1"),
+            ("stage2_direction", "stage2"),
+            ("strike_selection", "execution"),
+            ("liquidity_gate", "execution"),
+            ("stage3_recipe", "stage3"),
+            ("option_premium", "execution"),
+            ("lot_sizing", "execution"),
+        ]
+        for gate_id, gate_group in ordered:
+            if blocker_gate == gate_id:
+                flow.append(
+                    {
+                        "gate_id": gate_id,
+                        "gate_group": gate_group,
+                        "status": "blocked",
+                        "reason_code": reason,
+                        "message": reason,
+                        "metrics": metrics,
+                    }
+                )
+                break
+            flow.append(
+                {
+                    "gate_id": gate_id,
+                    "gate_group": gate_group,
+                    "status": "pass",
+                    "reason_code": None,
+                    "message": None,
+                    "metrics": (metrics if gate_id in {"stage1_threshold", "stage2_direction", "stage3_recipe"} else None),
+                }
+            )
+        return flow
+
+    def _ml_blocker_gate(self, reason: str) -> str:
+        code = str(reason or "").strip().lower()
+        if code in {
+            "risk_halt",
+            "risk_pause",
+            "entry_warmup_block",
+            "feature_stale",
+            "feature_incomplete",
+            "stage2_feature_incomplete",
+            "stage3_feature_incomplete",
+            "regime_sideways",
+            "regime_avoid",
+            "regime_expiry",
+            "regime_low_confidence",
+            "invalid_entry_phase",
+        }:
+            return "prefilter"
+        if code == "entry_below_threshold":
+            return "stage1_threshold"
+        if code in {"direction_below_threshold", "direction_low_edge_conflict"}:
+            return "stage2_direction"
+        if code == "missing_atm_strike":
+            return "strike_selection"
+        if code == "liquidity_gate_block":
+            return "liquidity_gate"
+        if code in {"recipe_below_threshold", "recipe_low_margin", "recipe_scores_missing"}:
+            return "stage3_recipe"
+        if code == "missing_option_premium":
+            return "option_premium"
+        return "prefilter"
+
+    def _build_position_trace(
+        self,
+        *,
+        snap: SnapshotAccessor,
+        position: PositionContext,
+        evaluation_type: str,
+        final_outcome: str,
+        primary_blocker_gate: Optional[str],
+        exit_signal: Optional[TradeSignal] = None,
+    ) -> dict[str, Any]:
+        builder = DecisionTraceBuilder(
+            snapshot_id=snap.snapshot_id,
+            timestamp=snap.timestamp_or_now,
+            engine_mode=self._engine_mode,
+            decision_mode="ml_staged",
+            evaluation_type=evaluation_type,
+            run_id=self._model_run_id or self._run_id,
+        )
+        builder.set_context(
+            position_state=position_state_payload(position),
+            risk_state=risk_state_payload(self._risk),
+            regime_context=regime_context_payload(self._regime.classify(snap)),
+            warmup_context=warmup_context_payload(blocked=False, reason=None, state=self._warmup_state()),
+        )
+        candidate = builder.add_candidate(
+            strategy_name=str(position.entry_strategy or "ML_PURE_STAGED"),
+            candidate_type="position",
+            direction=position.direction,
+            confidence=(exit_signal.confidence if exit_signal is not None else None),
+            rank=1,
+            metrics=compact_metrics(position.decision_metrics if isinstance(position.decision_metrics, dict) else {}),
+        )
+        gate_reason = exit_signal.exit_reason.value.lower() if exit_signal is not None and exit_signal.exit_reason else None
+        builder.add_candidate_gate(
+            candidate,
+            "position_tracker",
+            gate_group="position",
+            status=("pass" if final_outcome in {"manage_only", "exit_taken"} else "blocked"),
+            reason_code=gate_reason,
+            message=(str(exit_signal.reason or "").strip() if exit_signal is not None else None),
+            metrics={"bars_held": position.bars_held, "pnl_pct": position.pnl_pct},
+        )
+        builder.finalize_candidate(
+            candidate,
+            terminal_status=("passed" if final_outcome in {"manage_only", "exit_taken"} else "blocked"),
+            terminal_gate_id=primary_blocker_gate,
+            terminal_reason_code=gate_reason,
+            selected=(final_outcome == "exit_taken"),
+        )
+        return builder.finalize(
+            final_outcome=final_outcome,
+            primary_blocker_gate=primary_blocker_gate,
+            summary_metrics={
+                "bars_held": position.bars_held,
+                "pnl_pct": position.pnl_pct,
+                "current_premium": position.current_premium,
+            },
+        )
+
     @staticmethod
     def _merge_feature_rows(base: dict[str, object], computed: dict[str, object]) -> dict[str, object]:
+        """Merge runtime-computed rolling features onto a stage-view row.
+
+        Snapshot-priority semantics: when the stage-view row already has a
+        finite numeric value for a given key (meaning the training-time feature
+        arrived intact in the snapshot payload), keep it. Rolling state only
+        fills keys that are missing or NaN in the snapshot. This prevents
+        runtime-only derivations (e.g., rolling's simple-delta ema_9_slope,
+        rolling's atr_ratio normalization, etc.) from silently overriding the
+        training-matched snapshot values for shared feature names.
+        """
         if not computed:
             return base
         out = dict(base)
         for key, value in computed.items():
+            key_str = str(key)
+            existing = out.get(key_str)
+            if existing is not None:
+                try:
+                    if np.isfinite(float(existing)):
+                        continue  # snapshot has a valid value; preserve it
+                except (TypeError, ValueError):
+                    # Non-numeric but present snapshot value: leave untouched.
+                    continue
             if value is None:
                 continue
             try:
                 f = float(value)
             except Exception:
-                out[str(key)] = value
+                out[key_str] = value
                 continue
             if np.isfinite(f):
-                out[str(key)] = float(f)
+                out[key_str] = float(f)
         return out
 
     def _handle_position_closed(self, exit_signal: TradeSignal, position: PositionContext) -> None:
@@ -613,39 +917,7 @@ class PureMLEngine(StrategyEngine):
             lots=position.lots,
             entry_premium=position.entry_premium,
         )
-        self._log.log_position_close(
-            exit_signal=exit_signal,
-            position=position,
-            entry_premium=position.entry_premium,
-            exit_premium=position.current_premium,
-            pnl_pct=position.pnl_pct,
-            mfe_pct=position.mfe_pct,
-            mae_pct=position.mae_pct,
-            bars_held=position.bars_held,
-            stop_loss_pct=position.stop_loss_pct,
-            stop_price=position.stop_price,
-            high_water_premium=position.high_water_premium,
-            target_pct=position.target_pct,
-            trailing_enabled=position.trailing_enabled,
-            trailing_activation_pct=position.trailing_activation_pct,
-            trailing_offset_pct=position.trailing_offset_pct,
-            trailing_lock_breakeven=position.trailing_lock_breakeven,
-            trailing_active=position.trailing_active,
-            orb_trail_activation_mfe=position.orb_trail_activation_mfe,
-            orb_trail_offset_pct=position.orb_trail_offset_pct,
-            orb_trail_min_lock_pct=position.orb_trail_min_lock_pct,
-            orb_trail_priority_over_regime=position.orb_trail_priority_over_regime,
-            orb_trail_regime_filter=position.orb_trail_regime_filter,
-            orb_trail_active=position.orb_trail_active,
-            orb_trail_stop_price=position.orb_trail_stop_price,
-            oi_trail_activation_mfe=position.oi_trail_activation_mfe,
-            oi_trail_offset_pct=position.oi_trail_offset_pct,
-            oi_trail_min_lock_pct=position.oi_trail_min_lock_pct,
-            oi_trail_priority_over_regime=position.oi_trail_priority_over_regime,
-            oi_trail_regime_filter=position.oi_trail_regime_filter,
-            oi_trail_active=position.oi_trail_active,
-            oi_trail_stop_price=position.oi_trail_stop_price,
-        )
+        self._log.log_position_close(exit_signal=exit_signal, position=position)
 
 
 def _session_end_snapshot(trade_date: date) -> SnapshotAccessor:

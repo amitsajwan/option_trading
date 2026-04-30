@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 import joblib
 import numpy as np
@@ -136,8 +138,8 @@ class PureMLStagedEngineTests(unittest.TestCase):
             "stage3": {"selected_threshold": 0.60, "selected_margin_min": 0.10},
             "runtime": {"prefilter_gate_ids": gate_ids, "block_expiry": runtime_block_expiry},
             "recipe_catalog": [
-                {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008},
-                {"recipe_id": "L1", "horizon_minutes": 15, "take_profit_pct": 0.0020, "stop_loss_pct": 0.0008},
+                {"recipe_id": "L0", "horizon_minutes": 15, "take_profit_pct": 0.0025, "stop_loss_pct": 0.0008, "risk_basis": "underlying"},
+                {"recipe_id": "L1", "horizon_minutes": 15, "take_profit_pct": 0.0020, "stop_loss_pct": 0.0008, "risk_basis": "underlying"},
             ],
         }
         joblib.dump(bundle, model_path)
@@ -165,8 +167,28 @@ class PureMLStagedEngineTests(unittest.TestCase):
             self.assertEqual(signal.strategy_family_version, "ML_PURE_STAGED_V1")
             self.assertEqual(signal.strategy_profile_id, "ml_pure_staged_v1")
             self.assertEqual(signal.max_hold_bars, 15)
-            self.assertAlmostEqual(signal.stop_loss_pct, 0.0008, places=6)
-            self.assertAlmostEqual(signal.target_pct, 0.0025, places=6)
+            self.assertAlmostEqual(signal.stop_loss_pct, 0.0, places=6)
+            self.assertAlmostEqual(signal.target_pct, 0.0, places=6)
+            self.assertAlmostEqual(signal.underlying_stop_pct or 0.0, 0.0008, places=6)
+            self.assertAlmostEqual(signal.underlying_target_pct or 0.0, 0.0025, places=6)
+            self.assertTrue(signal.trailing_enabled)
+
+    def test_staged_bundle_disables_trailing_when_env_opts_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            model_path, threshold_path = self._write_bundle(root, recipe_probs={"L0": 0.82, "L1": 0.55})
+            with patch.dict(os.environ, {"ML_PURE_TRAILING_ENABLED": "false"}):
+                engine = PureMLEngine(
+                    model_package_path=str(model_path),
+                    threshold_report_path=str(threshold_path),
+                    signal_logger=SignalLogger(root),
+                    max_feature_age_sec=10_000_000,
+                )
+            engine.on_session_start(date(2026, 3, 18))
+            signal = engine.evaluate(_snapshot("2026-03-18T09:30:00+05:30"))
+            self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertFalse(signal.trailing_enabled)
 
     def test_staged_bundle_holds_on_low_recipe_margin(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -181,6 +203,23 @@ class PureMLStagedEngineTests(unittest.TestCase):
             engine.on_session_start(date(2026, 3, 18))
             signal = engine.evaluate(_snapshot("2026-03-18T09:30:00+05:30"))
             self.assertIsNone(signal)
+
+    def test_staged_bundle_bypass_gates_allows_entry_on_low_recipe_margin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            model_path, threshold_path = self._write_bundle(root, recipe_probs={"L0": 0.71, "L1": 0.66})
+            with patch.dict(os.environ, {"STRATEGY_ML_PURE_BYPASS_GATES": "1"}, clear=False):
+                engine = PureMLEngine(
+                    model_package_path=str(model_path),
+                    threshold_report_path=str(threshold_path),
+                    signal_logger=SignalLogger(root),
+                    max_feature_age_sec=10_000_000,
+                )
+                engine.on_session_start(date(2026, 3, 18))
+                signal = engine.evaluate(_snapshot("2026-03-18T09:30:00+05:30"))
+                self.assertIsNotNone(signal)
+                assert signal is not None
+                self.assertEqual(signal.signal_type, SignalType.ENTRY)
 
     def test_staged_bundle_requires_explicit_policy_thresholds(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -218,25 +257,27 @@ class PureMLStagedEngineTests(unittest.TestCase):
             engine.on_session_start(date(2026, 3, 18))
 
             signal = None
-            for idx, close in enumerate((50000.0, 50010.0, 50020.0, 50030.0, 50040.0, 50060.0), start=15):
-                snap = _snapshot(f"2026-03-18T09:{idx:02d}:00+05:30")
-                snap["futures_bar"] = {
-                    "fut_open": close - 5.0,
-                    "fut_high": close + 10.0,
-                    "fut_low": close - 10.0,
-                    "fut_close": close,
-                    "fut_volume": 10_000.0 + idx * 100.0,
-                    "fut_oi": 100_000.0 + idx * 10.0,
-                }
-                snap["futures_derived"] = {
-                    "fut_return_15m": 0.020,
-                    "realized_vol_30m": 0.010,
-                    "vol_ratio": 1.2,
-                    "price_vs_vwap": 0.001,
-                }
-                signal = engine.evaluate(snap)
 
+    def test_staged_bundle_backfills_snapshot_year_for_stage3(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            model_path, threshold_path = self._write_bundle(
+                root,
+                recipe_probs={"L0": 0.82, "L1": 0.55},
+                runtime_gate_ids=["rollout_guard_v1", "feature_freshness_v1", "liquidity_gate_v1"],
+                stage3_feature_columns=["year", "stage1_entry_prob", "stage2_direction_up_prob"],
+            )
+            engine = PureMLEngine(
+                model_package_path=str(model_path),
+                threshold_report_path=str(threshold_path),
+                signal_logger=SignalLogger(root),
+                max_feature_age_sec=10_000_000,
+            )
+            engine.on_session_start(date(2026, 3, 18))
+            signal = engine.evaluate(_snapshot("2026-03-18T09:30:00+05:30"))
             self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertEqual(signal.signal_type, SignalType.ENTRY)
             assert signal is not None
             self.assertEqual(signal.signal_type, SignalType.ENTRY)
             self.assertEqual(signal.direction, "CE")

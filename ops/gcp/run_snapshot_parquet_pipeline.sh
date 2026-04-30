@@ -21,6 +21,63 @@ require_command() {
   fi
 }
 
+ensure_supported_host() {
+  local kernel
+  kernel="$(uname -s 2>/dev/null || printf 'unknown')"
+  case "${kernel}" in
+    Linux)
+      return 0
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      cat >&2 <<'EOF'
+run_snapshot_parquet_pipeline.sh must be run from a Linux host.
+
+Supported operator hosts:
+- Ubuntu
+- Cloud Shell
+- WSL
+
+Windows/Git Bash is supported only for raw archive upload, for example:
+  RAW_ARCHIVE_BUCKET_URL=gs://<snapshot-bucket>/banknifty_data ./ops/gcp/publish_raw_market_data.sh /path/to/banknifty_data
+
+Then run the full parquet pipeline from Linux against the same GCS raw archive.
+EOF
+      exit 1
+      ;;
+  esac
+}
+
+available_gb() {
+  local target="$1"
+  local kb
+  kb="$(df -Pk "${target}" | awk 'NR==2 {print $4}')"
+  if [ -z "${kb}" ]; then
+    echo "Unable to determine free disk space for ${target}" >&2
+    exit 1
+  fi
+  printf '%s\n' "$((kb / 1024 / 1024))"
+}
+
+ensure_free_disk_gb() {
+  local target="$1"
+  local minimum_gb="$2"
+  local free_gb
+  free_gb="$(available_gb "${target}")"
+  if [ "${free_gb}" -lt "${minimum_gb}" ]; then
+    cat >&2 <<EOF
+Not enough free disk space for snapshot/parquet build.
+
+Path checked: ${target}
+Free space: ${free_gb}G
+Required minimum: ${minimum_gb}G
+
+Use a large-disk Linux VM for this workflow.
+Cloud Shell is suitable for orchestration, not full parquet builds.
+EOF
+    exit 1
+  fi
+}
+
 cpu_count() {
   local cpu_count
   if command -v nproc >/dev/null 2>&1; then
@@ -40,13 +97,31 @@ PY
 }
 
 default_normalize_jobs() {
-  printf '1\n'
+  local count
+  count="$(cpu_count)"
+  if [ "${count}" -le 4 ]; then
+    printf '1\n'
+    return
+  fi
+  count="$((count - 2))"
+  if [ "${count}" -gt 12 ]; then
+    count=12
+  fi
+  printf '%s\n' "${count}"
 }
 
 default_snapshot_jobs() {
   local count
   count="$(cpu_count)"
-  if [ "${count}" -gt 2 ]; then
+  if [ "${count}" -le 4 ]; then
+    printf '2\n'
+    return
+  fi
+  count="$((count - 2))"
+  if [ "${count}" -gt 6 ]; then
+    count=6
+  fi
+  if [ "${count}" -lt 2 ]; then
     count=2
   fi
   printf '%s\n' "${count}"
@@ -243,7 +318,6 @@ snapshot_runner_base_args() {
     --build-stage "${BUILD_STAGE}"
     --build-source "${BUILD_SOURCE}"
     --build-run-id "${BUILD_RUN_ID}"
-    --validate-ml-flat-contract
     --validate-days "${VALIDATE_DAYS}"
     --manifest-out "${REPORT_ROOT}/build_manifest.json"
     --validation-report-out "${REPORT_ROOT}/validation_report.json"
@@ -260,6 +334,10 @@ snapshot_runner_base_args() {
     SNAPSHOT_RUNNER_ARGS+=(--max-day "${MAX_DAY}")
   fi
 
+  if [ "${VALIDATE_ML_FLAT_CONTRACT}" = "1" ]; then
+    SNAPSHOT_RUNNER_ARGS+=(--validate-ml-flat-contract)
+  fi
+
   if [ -n "${YEAR}" ]; then
     SNAPSHOT_RUNNER_ARGS+=(--year "${YEAR}")
   fi
@@ -270,6 +348,7 @@ snapshot_runner_base_args() {
 }
 
 ensure_file "${OPERATOR_ENV_FILE}"
+ensure_supported_host
 
 # shellcheck disable=SC1090
 source "${OPERATOR_ENV_FILE}"
@@ -289,6 +368,7 @@ VERIFY_PUBLISHED_PREFIXES="${VERIFY_PUBLISHED_PREFIXES:-1}"
 ALLOW_PARTIAL_PUBLISH="${ALLOW_PARTIAL_PUBLISH:-0}"
 BUILD_STAGE="${BUILD_STAGE:-all}"
 VALIDATE_DAYS="${VALIDATE_DAYS:-5}"
+VALIDATE_ML_FLAT_CONTRACT="${VALIDATE_ML_FLAT_CONTRACT:-1}"
 WINDOW_MIN_TRADING_DAYS="${WINDOW_MIN_TRADING_DAYS:-150}"
 WINDOW_MAX_GAP_DAYS="${WINDOW_MAX_GAP_DAYS:-7}"
 BUILD_SOURCE="${BUILD_SOURCE:-historical}"
@@ -311,10 +391,12 @@ AUDIT_PATH="${REPORT_ROOT}/coverage_audit.json"
 RAW_ARCHIVE_BUCKET_URL="${RAW_ARCHIVE_BUCKET_URL:?set RAW_ARCHIVE_BUCKET_URL in operator.env}"
 SNAPSHOT_PARQUET_BUCKET_URL="${SNAPSHOT_PARQUET_BUCKET_URL:?set SNAPSHOT_PARQUET_BUCKET_URL in operator.env}"
 STAGE2_REQUIRED_COLUMNS="${STAGE2_REQUIRED_COLUMNS:-pcr_change_5m,pcr_change_15m,atm_oi_ratio,near_atm_oi_ratio,atm_ce_oi,atm_pe_oi}"
+MIN_FREE_DISK_GB="${MIN_FREE_DISK_GB:-150}"
 
 ensure_file "${REPO_ROOT}/ops/gcp/publish_snapshot_parquet.sh"
 require_command python3
 require_command gcloud
+ensure_free_disk_gb "${REPO_ROOT}" "${MIN_FREE_DISK_GB}"
 
 if [ -n "${LOCAL_RAW_ARCHIVE_ROOT}" ]; then
   if [ ! -d "${LOCAL_RAW_ARCHIVE_ROOT}" ]; then
@@ -428,6 +510,12 @@ fi
 
 echo
 echo "== Step 6: Build snapshots and generate reports =="
+echo "  build stage: ${BUILD_STAGE}"
+if [ "${VALIDATE_ML_FLAT_CONTRACT}" = "1" ]; then
+  echo "  derived SnapshotMLFlat contract validation: enabled"
+else
+  echo "  derived SnapshotMLFlat contract validation: disabled (operator override)"
+fi
 snapshot_runner_base_args
 if [ "${VALIDATE_ONLY}" = "1" ]; then
   SNAPSHOT_RUNNER_ARGS+=(--validate-only)

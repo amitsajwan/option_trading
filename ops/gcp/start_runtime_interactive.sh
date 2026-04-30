@@ -83,6 +83,10 @@ detect_default_project() {
   gcloud config get-value project 2>/dev/null | tr -d '\r'
 }
 
+detect_default_zone() {
+  gcloud config get-value compute/zone 2>/dev/null | tr -d '\r'
+}
+
 require_command() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -251,12 +255,13 @@ echo "Press Enter to accept defaults shown in [brackets]."
 echo
 
 default_project="${PROJECT_ID:-$(detect_default_project)}"
-default_project="${default_project:-gen-lang-client-0909109011}"
+default_project="${default_project:-my-gcp-project}"
 default_runtime_config_url="${RUNTIME_CONFIG_BUCKET_URL:-gs://${default_project}-option-trading-runtime-config/runtime}"
 default_image_source="${IMAGE_SOURCE:-ghcr}"
+default_zone="${ZONE:-$(detect_default_zone)}"
 prompt_var PROJECT_ID "GCP project id" "${default_project}"
 prompt_var REGION "GCP region" "${REGION:-asia-south1}"
-prompt_var ZONE "GCP zone" "${ZONE:-asia-south1-b}"
+prompt_var ZONE "GCP zone" "${default_zone:-asia-south1-b}"
 prompt_var RUNTIME_NAME "Runtime VM name" "${RUNTIME_NAME:-option-trading-runtime-01}"
 prompt_var RUNTIME_CONFIG_BUCKET_URL "Runtime config bucket URL (gs://.../runtime)" "${default_runtime_config_url}"
 prompt_var IMAGE_SOURCE "Image source (ghcr/local_build)" "${default_image_source}"

@@ -33,6 +33,9 @@ DEFAULT_PARQUET_BASE = DEFAULT_HISTORICAL_PARQUET_BASE
 DEFAULT_OUTPUT_ROOT = Path(".run/strategy_research")
 DEFAULT_CAPITAL = 500000.0
 BANKNIFTY_LOT_SIZE = 15
+DEFAULT_BROKERAGE_PER_ORDER = 20.0
+DEFAULT_CHARGES_BPS_PER_SIDE = 2.5
+DEFAULT_SLIPPAGE_BPS_PER_SIDE = 7.5
 _REASON_RE = re.compile(r"^\[(?P<regime>[^\]]+)\]\s+(?P<strategy>[^:]+):")
 
 
@@ -58,11 +61,42 @@ class Scenario:
     risk_config: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class TradingCostModel:
+    brokerage_per_order: float = DEFAULT_BROKERAGE_PER_ORDER
+    charges_bps_per_side: float = DEFAULT_CHARGES_BPS_PER_SIDE
+    slippage_bps_per_side: float = DEFAULT_SLIPPAGE_BPS_PER_SIDE
+
+    def breakdown(self, *, entry_value: float, exit_value: float) -> dict[str, float]:
+        safe_entry = max(0.0, float(entry_value))
+        safe_exit = max(0.0, float(exit_value))
+        brokerage = 2.0 * max(0.0, float(self.brokerage_per_order))
+        charges_rate = max(0.0, float(self.charges_bps_per_side)) / 10000.0
+        slippage_rate = max(0.0, float(self.slippage_bps_per_side)) / 10000.0
+        charges = (safe_entry + safe_exit) * charges_rate
+        slippage = (safe_entry + safe_exit) * slippage_rate
+        total = brokerage + charges + slippage
+        return {
+            "brokerage_cost_amount": brokerage,
+            "charges_cost_amount": charges,
+            "slippage_cost_amount": slippage,
+            "total_cost_amount": total,
+        }
+
+    def to_metadata(self) -> dict[str, float]:
+        return {
+            "brokerage_per_order": float(self.brokerage_per_order),
+            "charges_bps_per_side": float(self.charges_bps_per_side),
+            "slippage_bps_per_side": float(self.slippage_bps_per_side),
+        }
+
+
 class MemorySignalLogger:
     """In-memory logger used for offline backtest analysis."""
 
-    def __init__(self, *, capital_allocated: float) -> None:
+    def __init__(self, *, capital_allocated: float, cost_model: Optional[TradingCostModel] = None) -> None:
         self._capital_allocated = float(capital_allocated)
+        self._cost_model = cost_model or TradingCostModel()
         self._run_id: Optional[str] = None
         self._open_positions: dict[str, dict[str, Any]] = {}
         self.trades: list[dict[str, Any]] = []
@@ -122,47 +156,28 @@ class MemorySignalLogger:
     def log_position_manage(self, *, position: PositionContext, timestamp: datetime, snapshot_id: str) -> None:  # noqa: ARG002
         return
 
+    def log_decision_trace(self, trace: dict[str, Any]) -> None:  # noqa: ARG002
+        return
+
     def log_position_close(
         self,
         *,
         exit_signal: TradeSignal,
-        position: Optional[PositionContext] = None,  # noqa: ARG002
-        entry_premium: float,
-        exit_premium: float,
-        pnl_pct: float,
-        mfe_pct: float,
-        mae_pct: float,
-        bars_held: int,
-        stop_loss_pct: float,
-        stop_price: Optional[float],
-        high_water_premium: float,
-        target_pct: float,
-        trailing_enabled: bool,
-        trailing_activation_pct: float,
-        trailing_offset_pct: float,
-        trailing_lock_breakeven: bool,
-        trailing_active: bool,
-        orb_trail_activation_mfe: float,
-        orb_trail_offset_pct: float,
-        orb_trail_min_lock_pct: float,
-        orb_trail_priority_over_regime: bool,
-        orb_trail_regime_filter: Optional[str],
-        orb_trail_active: bool,
-        orb_trail_stop_price: Optional[float],
-        oi_trail_activation_mfe: float,
-        oi_trail_offset_pct: float,
-        oi_trail_min_lock_pct: float,
-        oi_trail_priority_over_regime: bool,
-        oi_trail_regime_filter: Optional[str],
-        oi_trail_active: bool,
-        oi_trail_stop_price: Optional[float],
+        position: PositionContext,
     ) -> None:
         row = dict(self._open_positions.pop(str(exit_signal.position_id), {}))
-        capital_pnl = (
-            float(pnl_pct) * float(entry_premium) * int(row.get("lots") or 1) * BANKNIFTY_LOT_SIZE / self._capital_allocated
-            if self._capital_allocated > 0
-            else 0.0
-        )
+        lots = int(row.get("lots") or 1)
+        entry_premium = position.entry_premium
+        exit_premium = position.current_premium
+        entry_value = float(entry_premium) * lots * BANKNIFTY_LOT_SIZE
+        exit_value = float(exit_premium) * lots * BANKNIFTY_LOT_SIZE
+        gross_pnl_amount = float(position.pnl_pct) * float(entry_premium) * lots * BANKNIFTY_LOT_SIZE
+        cost_breakdown = self._cost_model.breakdown(entry_value=entry_value, exit_value=exit_value)
+        total_cost_amount = float(cost_breakdown["total_cost_amount"])
+        net_pnl_amount = gross_pnl_amount - total_cost_amount
+        capital_pnl_gross = (gross_pnl_amount / self._capital_allocated) if self._capital_allocated > 0 else 0.0
+        capital_pnl_net = (net_pnl_amount / self._capital_allocated) if self._capital_allocated > 0 else 0.0
+        pnl_pct_net = (net_pnl_amount / entry_value) if entry_value > 0 else 0.0
         row.update(
             {
                 "exit_time": exit_signal.timestamp,
@@ -170,34 +185,42 @@ class MemorySignalLogger:
                 "exit_reason_detail": exit_signal.reason,
                 "entry_premium": entry_premium,
                 "exit_premium": exit_premium,
-                "pnl_pct": pnl_pct,
-                "capital_pnl_pct": capital_pnl,
-                "mfe_pct": mfe_pct,
-                "mae_pct": mae_pct,
-                "bars_held": bars_held,
-                "stop_loss_pct": stop_loss_pct,
-                "exit_stop_price": stop_price,
-                "high_water_premium": high_water_premium,
-                "target_pct": target_pct,
-                "trailing_enabled": trailing_enabled,
-                "trailing_activation_pct": trailing_activation_pct,
-                "trailing_offset_pct": trailing_offset_pct,
-                "trailing_lock_breakeven": trailing_lock_breakeven,
-                "trailing_active": trailing_active,
-                "orb_trail_activation_mfe": orb_trail_activation_mfe,
-                "orb_trail_offset_pct": orb_trail_offset_pct,
-                "orb_trail_min_lock_pct": orb_trail_min_lock_pct,
-                "orb_trail_priority_over_regime": orb_trail_priority_over_regime,
-                "orb_trail_regime_filter": orb_trail_regime_filter,
-                "orb_trail_active": orb_trail_active,
-                "orb_trail_stop_price": orb_trail_stop_price,
-                "oi_trail_activation_mfe": oi_trail_activation_mfe,
-                "oi_trail_offset_pct": oi_trail_offset_pct,
-                "oi_trail_min_lock_pct": oi_trail_min_lock_pct,
-                "oi_trail_priority_over_regime": oi_trail_priority_over_regime,
-                "oi_trail_regime_filter": oi_trail_regime_filter,
-                "oi_trail_active": oi_trail_active,
-                "oi_trail_stop_price": oi_trail_stop_price,
+                "pnl_pct": position.pnl_pct,
+                "pnl_pct_gross": position.pnl_pct,
+                "pnl_pct_net": pnl_pct_net,
+                "entry_value_amount": entry_value,
+                "exit_value_amount": exit_value,
+                "pnl_amount_gross": gross_pnl_amount,
+                "pnl_amount_net": net_pnl_amount,
+                "capital_pnl_pct_gross": capital_pnl_gross,
+                "capital_pnl_pct": capital_pnl_net,
+                "mfe_pct": position.mfe_pct,
+                "mae_pct": position.mae_pct,
+                "bars_held": position.bars_held,
+                "stop_loss_pct": position.stop_loss_pct,
+                "exit_stop_price": position.stop_price,
+                "high_water_premium": position.high_water_premium,
+                "target_pct": position.target_pct,
+                "trailing_enabled": position.trailing_enabled,
+                "trailing_activation_pct": position.trailing_activation_pct,
+                "trailing_offset_pct": position.trailing_offset_pct,
+                "trailing_lock_breakeven": position.trailing_lock_breakeven,
+                "trailing_active": position.trailing_active,
+                "orb_trail_activation_mfe": position.orb_trail_activation_mfe,
+                "orb_trail_offset_pct": position.orb_trail_offset_pct,
+                "orb_trail_min_lock_pct": position.orb_trail_min_lock_pct,
+                "orb_trail_priority_over_regime": position.orb_trail_priority_over_regime,
+                "orb_trail_regime_filter": position.orb_trail_regime_filter,
+                "orb_trail_active": position.orb_trail_active,
+                "orb_trail_stop_price": position.orb_trail_stop_price,
+                "oi_trail_activation_mfe": position.oi_trail_activation_mfe,
+                "oi_trail_offset_pct": position.oi_trail_offset_pct,
+                "oi_trail_min_lock_pct": position.oi_trail_min_lock_pct,
+                "oi_trail_priority_over_regime": position.oi_trail_priority_over_regime,
+                "oi_trail_regime_filter": position.oi_trail_regime_filter,
+                "oi_trail_active": position.oi_trail_active,
+                "oi_trail_stop_price": position.oi_trail_stop_price,
+                **cost_breakdown,
             }
         )
         self.trades.append(row)
@@ -215,8 +238,9 @@ def _run_scenario(
     scenario: Scenario,
     snapshots: pd.DataFrame,
     capital_allocated: float,
+    cost_model: Optional[TradingCostModel] = None,
 ) -> pd.DataFrame:
-    logger = MemorySignalLogger(capital_allocated=capital_allocated)
+    logger = MemorySignalLogger(capital_allocated=capital_allocated, cost_model=cost_model)
     engine = DeterministicRuleEngine(signal_logger=logger)
     engine.set_run_context(f"offline-{scenario.name}", {"risk_config": scenario.risk_config})
 
@@ -265,7 +289,9 @@ def _summary(df: pd.DataFrame, *, capital_allocated: float) -> dict[str, Any]:
             "net_capital_return_pct": 0.0,
             "max_drawdown_pct": 0.0,
         }
-    pnl = df["pnl_pct"].astype(float)
+    trade_pnl_col = "pnl_pct_net" if "pnl_pct_net" in df.columns else "pnl_pct"
+    pnl = df[trade_pnl_col].astype(float)
+    gross_trade_pnl = df["pnl_pct"].astype(float)
     cap = df["capital_pnl_pct"].astype(float)
     winners = pnl[pnl > 0]
     losers = pnl[pnl < 0]
@@ -279,6 +305,7 @@ def _summary(df: pd.DataFrame, *, capital_allocated: float) -> dict[str, Any]:
         "trades": int(len(df)),
         "win_rate": _safe_ratio(int((pnl > 0).sum()), int(len(df))),
         "avg_trade_pnl_pct": float(pnl.mean()),
+        "avg_trade_pnl_pct_gross": float(gross_trade_pnl.mean()),
         "median_trade_pnl_pct": float(pnl.median()),
         "avg_capital_pnl_pct": float(cap.mean()),
         "profit_factor": (_safe_ratio(gross_profit, gross_loss) if gross_loss > 0 else None),
@@ -286,6 +313,8 @@ def _summary(df: pd.DataFrame, *, capital_allocated: float) -> dict[str, Any]:
         "avg_mae_pct": float(df["mae_pct"].astype(float).mean()),
         "avg_bars_held": float(df["bars_held"].astype(float).mean()),
         "avg_lots": float(df["lots"].astype(float).mean()),
+        "avg_cost_amount": float(df["total_cost_amount"].astype(float).mean()) if "total_cost_amount" in df.columns else 0.0,
+        "total_cost_amount": float(df["total_cost_amount"].astype(float).sum()) if "total_cost_amount" in df.columns else 0.0,
         "end_equity": end_equity,
         "net_capital_return_pct": _safe_ratio(end_equity - capital_allocated, capital_allocated),
         "max_drawdown_pct": max_drawdown,
@@ -302,7 +331,8 @@ def _group_table(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
     for keys, group in df.groupby(group_cols, dropna=False):
         if not isinstance(keys, tuple):
             keys = (keys,)
-        pnl = group["pnl_pct"].astype(float)
+        trade_pnl_col = "pnl_pct_net" if "pnl_pct_net" in group.columns else "pnl_pct"
+        pnl = group[trade_pnl_col].astype(float)
         cap = group["capital_pnl_pct"].astype(float)
         winners = pnl[pnl > 0]
         losers = pnl[pnl < 0]
@@ -321,6 +351,8 @@ def _group_table(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
                 "avg_mae_pct": float(group["mae_pct"].astype(float).mean()),
                 "avg_bars_held": float(group["bars_held"].astype(float).mean()),
                 "avg_lots": float(group["lots"].astype(float).mean()),
+                "avg_cost_amount": float(group["total_cost_amount"].astype(float).mean()) if "total_cost_amount" in group.columns else 0.0,
+                "total_cost_amount": float(group["total_cost_amount"].astype(float).sum()) if "total_cost_amount" in group.columns else 0.0,
             }
         )
         rows.append(row)
@@ -440,6 +472,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--end-date", default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--capital", type=float, default=DEFAULT_CAPITAL)
+    parser.add_argument("--brokerage-per-order", type=float, default=DEFAULT_BROKERAGE_PER_ORDER)
+    parser.add_argument("--charges-bps-per-side", type=float, default=DEFAULT_CHARGES_BPS_PER_SIDE)
+    parser.add_argument("--slippage-bps-per-side", type=float, default=DEFAULT_SLIPPAGE_BPS_PER_SIDE)
     parser.add_argument("--window-manifest", default=None, help="Path to canonical window manifest JSON.")
     parser.add_argument("--formal-run", action="store_true", help="Enforce formal readiness rules from window manifest.")
     parser.add_argument("--manifest-min-trading-days", type=int, default=DEFAULT_MIN_TRADING_DAYS)
@@ -490,6 +525,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(args.output_dir) if args.output_dir else DEFAULT_OUTPUT_ROOT / stamp
     output_dir.mkdir(parents=True, exist_ok=True)
+    cost_model = TradingCostModel(
+        brokerage_per_order=float(args.brokerage_per_order),
+        charges_bps_per_side=float(args.charges_bps_per_side),
+        slippage_bps_per_side=float(args.slippage_bps_per_side),
+    )
 
     scenario_frames: list[pd.DataFrame] = []
     scenario_rows: list[dict[str, Any]] = []
@@ -498,6 +538,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             scenario=scenario,
             snapshots=snapshots,
             capital_allocated=float(args.capital),
+            cost_model=cost_model,
         )
         scenario_frames.append(df)
         summary = _summary(df, capital_allocated=float(args.capital))
@@ -543,6 +584,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"Top baseline strategy by total capital contribution: {top_strategy.get('entry_strategy')} ({top_strategy.get('total_capital_pnl_pct'):.2%})." if top_strategy else "No top strategy available.",
             f"Worst baseline strategy by total capital contribution: {worst_strategy.get('entry_strategy')} ({worst_strategy.get('total_capital_pnl_pct'):.2%})." if worst_strategy else "No worst strategy available.",
             "This report uses capital-weighted returns based on current lot sizing, not the dashboard shortcut that compounds raw option PnL percentages as portfolio equity.",
+            f"Research costs applied: brokerage/order={cost_model.brokerage_per_order:.2f}, charges_bps/side={cost_model.charges_bps_per_side:.2f}, slippage_bps/side={cost_model.slippage_bps_per_side:.2f}.",
             "Legacy ML entry overlay removed. This report evaluates deterministic strategy behavior only.",
         ],
     )
@@ -554,6 +596,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "start_date": start_date,
         "end_date": end_date,
         "rows": int(len(snapshots)),
+        "cost_model": cost_model.to_metadata(),
         **snapshot_access.to_metadata(),
     }
     (output_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")

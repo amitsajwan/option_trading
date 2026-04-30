@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gcloud compute:*)",
+      "Bash(python -m pytest ml_pipeline_2/tests/test_stage12_skew_diagnostic.py ml_pipeline_2/tests/test_stage12_confidence_execution.py ml_pipeline_2/tests/test_stage12_confidence_execution_policy.py -q)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)"
+    ]
+  }
+}

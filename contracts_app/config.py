@@ -79,5 +79,4 @@ def redis_connection_kwargs(
         "decode_responses": bool(decode_responses),
         "socket_connect_timeout": connect_timeout,
         "socket_timeout": socket_timeout,
-        "retry_on_timeout": True,
     }

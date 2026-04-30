@@ -1,3 +1,12 @@
+"""Strategy evaluation replay orchestrator.
+
+Listens on a Redis pub/sub command channel for evaluation run requests,
+replays historical snapshot data from Parquet files day-by-day, publishes
+per-run progress events back to Redis, and persists run state to MongoDB.
+
+Entry point: run via ``python -m strategy_eval_orchestrator.main`` or the
+``strategy_eval_orchestrator`` Docker service (profiles: ui, historical).
+"""
 from __future__ import annotations
 
 import argparse
@@ -24,6 +33,8 @@ from snapshot_app.historical.snapshot_access import (
 
 logger = logging.getLogger(__name__)
 ROLLOUT_STAGES = {"paper", "shadow", "capped_live"}
+REPLAY_STATUS_KEY = "system:historical:replay_status"
+HISTORICAL_READY_KEY = "system:historical:data_ready"
 MIN_PAPER_DAYS = 10
 MIN_SHADOW_DAYS = 10
 DEFAULT_CAPPED_LIVE_SIZE_MULTIPLIER = 0.25
@@ -113,6 +124,14 @@ def _default_snapshot_parquet_base() -> Path:
     return Path(os.getenv("SNAPSHOT_PARQUET_BASE") or DEFAULT_HISTORICAL_PARQUET_BASE)
 
 
+def _write_replay_status_key(redis_client: redis.Redis, payload: dict[str, Any]) -> None:
+    try:
+        redis_client.set(REPLAY_STATUS_KEY, json.dumps(payload, ensure_ascii=False, default=str))
+        redis_client.set(HISTORICAL_READY_KEY, "1" if payload.get("data_ready") else "0")
+    except Exception:
+        pass
+
+
 def _update_run(coll: Any, run_id: str, **fields: Any) -> None:
     fields["updated_at"] = _utc_now()
     coll.update_one({"run_id": str(run_id)}, {"$set": fields}, upsert=False)
@@ -150,6 +169,7 @@ def _replay_and_publish(
     speed: float,
     risk_config: Optional[dict[str, Any]] = None,
     rollout_context: Optional[dict[str, Any]] = None,
+    started_at: str = "",
 ) -> dict[str, Any]:
     topic = _historical_topic()
     snapshot_access = require_snapshot_access(
@@ -169,6 +189,16 @@ def _replay_and_publish(
     sleep_sec = 0.0 if float(speed) <= 0 else (60.0 / float(speed))
     emitted = 0
     last_pct = -1
+    _ts_started = started_at or _utc_now()
+    _base_status: dict[str, Any] = {
+        "run_id": run_id,
+        "start_date": date_from,
+        "end_date": date_to,
+        "speed": speed,
+        "started_at": _ts_started,
+        "finished_at": None,
+    }
+    _write_replay_status_key(redis_client, {**_base_status, "status": "running", "events_emitted": 0, "current_trade_date": date_from, "data_ready": False})
 
     _publish_run_event(
         redis_client,
@@ -196,6 +226,7 @@ def _replay_and_publish(
                 "topic": topic,
                 "risk_config": dict(risk_config or {}),
                 "rollout_context": dict(rollout_context or {}),
+                "policy_config": {"iv_pct_hard_max": 100.5},
             },
         )
         redis_client.publish(topic, json.dumps(event, ensure_ascii=False, default=str))
@@ -215,9 +246,11 @@ def _replay_and_publish(
                     "message": f"Replay progress {pct}%",
                 },
             )
+            _write_replay_status_key(redis_client, {**_base_status, "status": "running", "events_emitted": emitted, "current_trade_date": current_day, "data_ready": True})
         if sleep_sec > 0:
             time.sleep(sleep_sec)
 
+    _write_replay_status_key(redis_client, {**_base_status, "status": "complete", "events_emitted": emitted, "current_trade_date": date_to, "data_ready": emitted > 0, "finished_at": _utc_now()})
     return {"status": "complete", "events_emitted": emitted, **snapshot_access.to_metadata()}
 
 
@@ -297,11 +330,12 @@ def _process_command(redis_client: redis.Redis, coll: Any, command: dict[str, An
         "approved_for_runtime": approved_for_runtime,
     }
 
+    started_at_str = _utc_now()
     _update_run(
         coll,
         run_id,
         status="running",
-        started_at=_utc_now(),
+        started_at=started_at_str,
         error=None,
         message=f"Running replay for {date_from} to {date_to}",
         progress_pct=0.0,
@@ -316,9 +350,25 @@ def _process_command(redis_client: redis.Redis, coll: Any, command: dict[str, An
             speed=float(speed),
             risk_config=risk_config,
             rollout_context=rollout_context,
+            started_at=started_at_str,
         )
     except Exception as exc:
-        _update_run(coll, run_id, status="failed", ended_at=_utc_now(), error=str(exc), message="Replay failed")
+        failed_at = _utc_now()
+        _update_run(coll, run_id, status="failed", ended_at=failed_at, error=str(exc), message="Replay failed")
+        _write_replay_status_key(
+            redis_client,
+            {
+                "status": "failed",
+                "run_id": run_id,
+                "start_date": date_from,
+                "end_date": date_to,
+                "speed": speed,
+                "started_at": started_at_str,
+                "finished_at": failed_at,
+                "events_emitted": 0,
+                "data_ready": False,
+            },
+        )
         _publish_run_event(
             redis_client,
             run_id,
@@ -398,6 +448,7 @@ def run_loop() -> int:
 
 
 def run_cli(argv: Optional[Iterable[str]] = None) -> int:
+    """Parse CLI arguments (none defined; rejects unexpected flags) and start the event loop."""
     parser = argparse.ArgumentParser(description="Strategy evaluation replay orchestrator")
     parser.parse_args(list(argv) if argv is not None else None)
     return run_loop()

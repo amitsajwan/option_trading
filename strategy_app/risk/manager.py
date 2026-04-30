@@ -12,37 +12,36 @@ from ..engines.snapshot_accessor import SnapshotAccessor
 
 logger = logging.getLogger(__name__)
 
-BANKNIFTY_LOT_SIZE = 15
-RISK_PROFILE_AGGRESSIVE_SAFE_V1 = "aggressive_safe_v1"
+from ..constants import (
+    BANKNIFTY_LOT_SIZE,
+    DEFAULT_CAPITAL_ALLOCATED,
+    DEFAULT_MAX_CONSECUTIVE_LOSSES,
+    DEFAULT_MAX_DAILY_LOSS_PCT,
+    DEFAULT_MAX_LOTS_PER_TRADE,
+    DEFAULT_MAX_SESSION_TRADES,
+    DEFAULT_RISK_PER_TRADE_PCT,
+    RISK_PROFILE_AGGRESSIVE_SAFE_V1,
+)
+from ..utils.env import env_float, env_int
+
 _RISK_PROFILE_PRESETS: dict[str, dict[str, float | int | str]] = {
     RISK_PROFILE_AGGRESSIVE_SAFE_V1: {
         "RISK_LOT_SIZING_MODE": "budget_per_trade",
         "RISK_NOTIONAL_PER_TRADE": 50000.0,
         "RISK_LOT_BUDGET_USES_LOT_SIZE": 1,
         "RISK_CONFIDENCE_FLOOR": 0.65,
-        "RISK_MAX_DAILY_LOSS_PCT": 0.02,
-        "RISK_MAX_CONSECUTIVE_LOSSES": 3,
+        "RISK_MAX_DAILY_LOSS_PCT": DEFAULT_MAX_DAILY_LOSS_PCT,
+        "RISK_MAX_SESSION_TRADES": DEFAULT_MAX_SESSION_TRADES,
+        "RISK_MAX_CONSECUTIVE_LOSSES": DEFAULT_MAX_CONSECUTIVE_LOSSES,
         "RISK_MAX_LOTS_PER_TRADE": 20,
-        "RISK_PER_TRADE_PCT": 0.005,
-        "RISK_CAPITAL_ALLOCATED": 500000.0,
+        "RISK_PER_TRADE_PCT": DEFAULT_RISK_PER_TRADE_PCT,
+        "RISK_CAPITAL_ALLOCATED": DEFAULT_CAPITAL_ALLOCATED,
         "RISK_VIX_HALT_THRESHOLD": 15.0,
         "RISK_VIX_RESUME_THRESHOLD": 8.0,
     }
 }
 
 
-def _env_float(key: str, default: float) -> float:
-    try:
-        return float(os.getenv(key, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-def _env_int(key: str, default: int) -> int:
-    try:
-        return int(os.getenv(key, str(default)))
-    except (TypeError, ValueError):
-        return default
 
 
 class RiskManager:
@@ -66,22 +65,23 @@ class RiskManager:
 
     def _cfg_float(self, key: str, fallback: float) -> float:
         default = float(self._profile_defaults.get(key, fallback))
-        return _env_float(key, default)
+        return env_float(key, default) if env_float(key, default) is not None else default
 
     def _cfg_int(self, key: str, fallback: int) -> int:
         default = int(self._profile_defaults.get(key, fallback))
-        return _env_int(key, default)
+        return env_int(key, default) if env_int(key, default) is not None else default
 
     def _cfg_str(self, key: str, fallback: str) -> str:
         default = str(self._profile_defaults.get(key, fallback))
         return str(os.getenv(key, default) or default)
 
     def _load_config(self) -> None:
-        self._context.max_daily_loss_pct = self._cfg_float("RISK_MAX_DAILY_LOSS_PCT", 0.02)
-        self._context.max_consecutive_losses = self._cfg_int("RISK_MAX_CONSECUTIVE_LOSSES", 3)
-        self._context.max_lots_per_trade = self._cfg_int("RISK_MAX_LOTS_PER_TRADE", 5)
-        self._context.risk_per_trade_pct = self._cfg_float("RISK_PER_TRADE_PCT", 0.005)
-        self._context.capital_allocated = self._cfg_float("RISK_CAPITAL_ALLOCATED", 500000.0)
+        self._context.max_daily_loss_pct = self._cfg_float("RISK_MAX_DAILY_LOSS_PCT", DEFAULT_MAX_DAILY_LOSS_PCT)
+        self._context.max_session_trades = self._cfg_int("RISK_MAX_SESSION_TRADES", DEFAULT_MAX_SESSION_TRADES)
+        self._context.max_consecutive_losses = self._cfg_int("RISK_MAX_CONSECUTIVE_LOSSES", DEFAULT_MAX_CONSECUTIVE_LOSSES)
+        self._context.max_lots_per_trade = self._cfg_int("RISK_MAX_LOTS_PER_TRADE", DEFAULT_MAX_LOTS_PER_TRADE)
+        self._context.risk_per_trade_pct = self._cfg_float("RISK_PER_TRADE_PCT", DEFAULT_RISK_PER_TRADE_PCT)
+        self._context.capital_allocated = self._cfg_float("RISK_CAPITAL_ALLOCATED", DEFAULT_CAPITAL_ALLOCATED)
         self._lot_sizing_mode = self._cfg_str("RISK_LOT_SIZING_MODE", "risk_based").strip().lower()
         self._notional_per_trade = self._cfg_float("RISK_NOTIONAL_PER_TRADE", 0.0)
         self._lot_budget_uses_lot_size = self._cfg_int("RISK_LOT_BUDGET_USES_LOT_SIZE", 1) != 0
@@ -100,6 +100,7 @@ class RiskManager:
     def is_halted(self) -> bool:
         return bool(
             self._context.daily_loss_breached
+            or self._context.session_trade_cap_breached
             or self._context.weekly_loss_breached
             or self._context.vix_spike_halt
         )
@@ -111,6 +112,25 @@ class RiskManager:
     @property
     def post_halt_resume_boost_available(self) -> bool:
         return bool(self._context.post_halt_resume_boost_available)
+
+    @property
+    def halt_reason(self) -> Optional[str]:
+        ctx = self._context
+        if ctx.daily_loss_breached:
+            return "daily_loss_cap"
+        if ctx.session_trade_cap_breached:
+            return "session_trade_cap"
+        if ctx.weekly_loss_breached:
+            return "weekly_loss_cap"
+        if ctx.vix_spike_halt:
+            return "vix_spike_halt"
+        return None
+
+    @property
+    def pause_reason(self) -> Optional[str]:
+        if self._context.consecutive_loss_limit:
+            return "consecutive_loss_pause"
+        return None
 
     def consume_post_halt_resume_boost(self) -> bool:
         if not self._context.post_halt_resume_boost_available:
@@ -124,6 +144,7 @@ class RiskManager:
         self._context = RiskContext(
             capital_allocated=old.capital_allocated,
             max_daily_loss_pct=old.max_daily_loss_pct,
+            max_session_trades=old.max_session_trades,
             max_consecutive_losses=old.max_consecutive_losses,
             max_lots_per_trade=old.max_lots_per_trade,
             risk_per_trade_pct=old.risk_per_trade_pct,
@@ -160,6 +181,15 @@ class RiskManager:
                 )
             ctx.daily_loss_breached = True
 
+        if ctx.max_session_trades > 0 and ctx.session_trade_count >= ctx.max_session_trades:
+            if not ctx.session_trade_cap_breached:
+                logger.warning(
+                    "session trade cap reached trades=%d limit=%d",
+                    ctx.session_trade_count,
+                    ctx.max_session_trades,
+                )
+            ctx.session_trade_cap_breached = True
+
         if ctx.consecutive_losses >= ctx.max_consecutive_losses:
             if not ctx.consecutive_loss_limit:
                 logger.warning("consecutive loss limit reached count=%d", ctx.consecutive_losses)
@@ -171,6 +201,7 @@ class RiskManager:
         ctx = self._context
         trade_pnl_value = pnl_pct * entry_premium * lots * BANKNIFTY_LOT_SIZE
         pnl_as_capital_pct = (trade_pnl_value / ctx.capital_allocated) if ctx.capital_allocated > 0 else 0.0
+        ctx.session_trade_count += 1
         ctx.session_realised_pnl += pnl_as_capital_pct
 
         if pnl_pct > 0:
@@ -181,13 +212,17 @@ class RiskManager:
             ctx.session_loss_count += 1
             ctx.consecutive_losses += 1
 
+        if ctx.max_session_trades > 0 and ctx.session_trade_count >= ctx.max_session_trades:
+            ctx.session_trade_cap_breached = True
+
         logger.info(
-            "trade result pnl=%.2f%% realized_session=%.2f%% wins=%d losses=%d consec=%d",
+            "trade result pnl=%.2f%% realized_session=%.2f%% wins=%d losses=%d consec=%d trades=%d",
             pnl_pct * 100.0,
             ctx.session_realised_pnl * 100.0,
             ctx.session_win_count,
             ctx.session_loss_count,
             ctx.consecutive_losses,
+            ctx.session_trade_count,
         )
 
     def compute_lots(self, *, entry_premium: float, stop_loss_pct: float = 0.40, confidence: float = 1.0) -> int:

@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.stage2_focus_v1.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_stage2_midday_high_conviction_v1"
+  },
+  "selection": {
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.55,
+      "brier_max": 0.22
+    },
+    "robustness_probe": {
+      "enabled": true,
+      "top_k": 3,
+      "iterations": 200,
+      "random_seed": 42,
+      "splits": [
+        "research_valid",
+        "final_holdout"
+      ],
+      "resample_unit": "trade_date"
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "midday_asymmetry_high_conviction_baseline",
+        "model_group_suffix": "_scenario_midday_asymmetry_high_conviction_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_midday_asymmetry_high_conviction_baseline"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": [
+                "fo_midday_asymmetry"
+              ]
+            }
+          },
+          "training": {
+            "stage2_session_filter": {
+              "enabled": true,
+              "include_buckets": [
+                "MIDDAY"
+              ]
+            },
+            "stage2_target_redesign": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0022,
+              "min_winner_return_after_cost": 0.0012,
+              "max_opposing_return_after_cost": -0.0004,
+              "max_kept_fraction": 0.45,
+              "conviction_score": "edge_winner_min"
+            },
+            "search_options_by_stage": {
+              "stage2": {
+                "max_experiments": 10,
+                "max_elapsed_seconds": 3600
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_asymmetry_high_conviction_strict",
+        "model_group_suffix": "_scenario_midday_asymmetry_high_conviction_strict",
+        "inherit_best_from": [
+          "midday_asymmetry_high_conviction_baseline"
+        ],
+        "reuse_stage1_from": "midday_asymmetry_high_conviction_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_midday_asymmetry_high_conviction_strict"
+          },
+          "training": {
+            "stage2_target_redesign": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0026,
+              "min_winner_return_after_cost": 0.0015,
+              "max_opposing_return_after_cost": -0.0006,
+              "max_kept_fraction": 0.35,
+              "conviction_score": "edge_winner_min"
+            },
+            "search_options_by_stage": {
+              "stage2": {
+                "max_experiments": 10,
+                "max_elapsed_seconds": 3600
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_oi_iv_high_conviction",
+        "model_group_suffix": "_scenario_midday_oi_iv_high_conviction",
+        "inherit_best_from": [
+          "midday_asymmetry_high_conviction_baseline"
+        ],
+        "reuse_stage1_from": "midday_asymmetry_high_conviction_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_midday_oi_iv_high_conviction"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": [
+                "fo_midday_time_aware_plus_oi_iv"
+              ]
+            }
+          },
+          "training": {
+            "stage2_target_redesign": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0022,
+              "min_winner_return_after_cost": 0.0012,
+              "max_opposing_return_after_cost": -0.0004,
+              "max_kept_fraction": 0.45,
+              "conviction_score": "edge_winner_min"
+            },
+            "search_options_by_stage": {
+              "stage2": {
+                "max_experiments": 10,
+                "max_elapsed_seconds": 3600
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_expiry_high_conviction",
+        "model_group_suffix": "_scenario_midday_expiry_high_conviction",
+        "inherit_best_from": [
+          "midday_asymmetry_high_conviction_baseline"
+        ],
+        "reuse_stage1_from": "midday_asymmetry_high_conviction_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_midday_expiry_high_conviction"
+          },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage2": [
+                "fo_midday_expiry_interactions"
+              ]
+            }
+          },
+          "training": {
+            "stage2_target_redesign": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0022,
+              "min_winner_return_after_cost": 0.0012,
+              "max_opposing_return_after_cost": -0.0004,
+              "max_kept_fraction": 0.45,
+              "conviction_score": "edge_winner_min"
+            },
+            "search_options_by_stage": {
+              "stage2": {
+                "max_experiments": 10,
+                "max_elapsed_seconds": 3600
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "midday_asymmetry_ultra_selective",
+        "model_group_suffix": "_scenario_midday_asymmetry_ultra_selective",
+        "inherit_best_from": [
+          "midday_asymmetry_high_conviction_baseline"
+        ],
+        "reuse_stage1_from": "midday_asymmetry_high_conviction_baseline",
+        "overrides": {
+          "outputs": {
+            "run_name": "staged_stage2_midday_asymmetry_ultra_selective"
+          },
+          "training": {
+            "stage2_target_redesign": {
+              "enabled": true,
+              "min_directional_edge_after_cost": 0.0030,
+              "min_winner_return_after_cost": 0.0018,
+              "max_opposing_return_after_cost": -0.0008,
+              "max_kept_fraction": 0.25,
+              "conviction_score": "edge_winner_min"
+            },
+            "search_options_by_stage": {
+              "stage2": {
+                "max_experiments": 10,
+                "max_elapsed_seconds": 3600
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

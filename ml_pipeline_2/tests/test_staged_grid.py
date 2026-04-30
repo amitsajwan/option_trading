@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from ml_pipeline_2.catalog import feature_set_specs_by_name
 from ml_pipeline_2.contracts.manifests import load_and_resolve_manifest
+from ml_pipeline_2.experiment_control.coordination import CoordinationError
 from ml_pipeline_2.staged import grid as grid_module
 from ml_pipeline_2.tests.helpers import (
     build_staged_grid_manifest,
@@ -131,7 +133,7 @@ def test_staged_grid_runner_ranks_runs_and_keeps_execution_research_only(
         ),
     }
 
-    def _fake_run_research(resolved_config, *, run_output_root=None):
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
         output_root = Path(run_output_root).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         run_name = str(resolved_config["outputs"]["run_name"])
@@ -154,9 +156,13 @@ def test_staged_grid_runner_ranks_runs_and_keeps_execution_research_only(
     assert payload["execution"]["base_model_n_jobs"] == 1
     assert payload["winner"]["grid_run_id"] == "best_edge_block_expiry"
     assert payload["winner_release"] is None
+    assert payload["orchestration_integrity"] == "clean"
     assert payload["stage2_hpo_escalation"]["eligible"] is True
     assert payload["stage2_hpo_escalation"]["best_run_id"] == "best_edge_block_expiry"
     assert Path(payload["paths"]["grid_summary"]).exists()
+    grid_status = json.loads(Path(payload["paths"]["grid_status"]).read_text(encoding="utf-8"))
+    assert grid_status["status"] == "completed"
+    assert grid_status["integrity"] == "clean"
 
     run_rows = {row["grid_run_id"]: row for row in payload["runs"]}
     assert run_rows["best_edge_block_expiry"]["rank"] == 1
@@ -168,6 +174,35 @@ def test_staged_grid_runner_ranks_runs_and_keeps_execution_research_only(
     assert inherited_manifest["runtime"]["block_expiry"] is True
 
     assert not any((Path(row["run_dir"]) / "release").exists() for row in payload["runs"])
+
+
+def test_stage3_policy_path_ranking_strategy_prefers_combined_outcome_over_stage2_only() -> None:
+    rows = [
+        {
+            "grid_run_id": "stage2_better",
+            "sequence": 1,
+            "publishable": False,
+            "stage2_cv": {"gate_passed": True, "brier": 0.205, "roc_auc": 0.68, "roc_auc_drift_half_split": 0.02},
+            "combined_holdout_summary": {"net_return_sum": -0.10, "profit_factor": 0.8, "trades": 30, "max_drawdown_pct": 0.08},
+            "stage3_gate_passed": False,
+            "combined_gate_passed": False,
+        },
+        {
+            "grid_run_id": "combined_better",
+            "sequence": 2,
+            "publishable": False,
+            "stage2_cv": {"gate_passed": True, "brier": 0.215, "roc_auc": 0.60, "roc_auc_drift_half_split": 0.03},
+            "combined_holdout_summary": {"net_return_sum": 0.05, "profit_factor": 1.2, "trades": 80, "max_drawdown_pct": 0.05},
+            "stage3_gate_passed": True,
+            "combined_gate_passed": True,
+        },
+    ]
+
+    default_ranked = grid_module._sort_rows(rows)
+    stage3_ranked = grid_module._sort_rows(rows, ranking_strategy="stage3_policy_paths_v1")
+
+    assert default_ranked[0]["grid_run_id"] == "stage2_better"
+    assert stage3_ranked[0]["grid_run_id"] == "combined_better"
 
 
 def test_staged_grid_runner_writes_time_focus_override_from_grid_catalog(tmp_path: Path, monkeypatch) -> None:
@@ -233,7 +268,7 @@ def test_staged_grid_runner_writes_time_focus_override_from_grid_catalog(tmp_pat
     )
     resolved = load_and_resolve_manifest(grid_manifest_path, validate_paths=True)
 
-    def _fake_run_research(resolved_config, *, run_output_root=None):
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
         output_root = Path(run_output_root).resolve()
         output_root.mkdir(parents=True, exist_ok=True)
         summary = _mock_summary(
@@ -283,6 +318,168 @@ def test_research_only_grid_rejects_publish_winner(tmp_path: Path) -> None:
         )
 
 
+def test_staged_grid_runner_attaches_stage2_robustness_probe(tmp_path: Path, monkeypatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    grid_manifest_path = build_staged_grid_manifest(tmp_path, base_manifest_path)
+    payload = json.loads(grid_manifest_path.read_text(encoding="utf-8"))
+    payload["selection"]["robustness_probe"] = {
+        "enabled": True,
+        "top_k": 1,
+        "iterations": 25,
+        "random_seed": 9,
+        "splits": ["research_valid", "final_holdout"],
+        "resample_unit": "trade_date",
+    }
+    grid_manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    resolved = load_and_resolve_manifest(grid_manifest_path, validate_paths=True)
+
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
+        output_root = Path(run_output_root).resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        run_name = str(resolved_config["outputs"]["run_name"])
+        auc_map = {
+            "staged_grid_baseline": 0.520,
+            "staged_grid_edge_0006": 0.533,
+            "staged_grid_edge_0010": 0.541,
+            "staged_grid_best_edge_block_expiry": 0.530,
+        }
+        brier_map = {
+            "staged_grid_baseline": 0.250,
+            "staged_grid_edge_0006": 0.231,
+            "staged_grid_edge_0010": 0.224,
+            "staged_grid_best_edge_block_expiry": 0.232,
+        }
+        summary = _mock_summary(
+            run_name=run_name,
+            publishable=False,
+            stage2_auc=auc_map[run_name],
+            stage2_brier=brier_map[run_name],
+            profit_factor=1.1,
+            net_return_sum=0.02,
+            max_drawdown_pct=0.08,
+        )
+        summary["stage_artifacts"] = {
+            "stage2": {
+                "diagnostics_score_paths": {
+                    "research_valid": str((output_root / "research_valid.parquet").resolve()),
+                    "final_holdout": str((output_root / "final_holdout.parquet").resolve()),
+                }
+            }
+        }
+        summary["output_root"] = str(output_root)
+        (output_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        return summary
+
+    monkeypatch.setattr(grid_module, "run_research", _fake_run_research)
+    monkeypatch.setattr(
+        grid_module,
+        "bootstrap_stage2_scores_from_parquet",
+        lambda *_args, **_kwargs: {
+            "resample_unit": "trade_date",
+            "iterations": 25,
+            "units_total": 10,
+            "rows_total": 100,
+            "base_quality": {"roc_auc": 0.56, "brier": 0.24},
+            "bootstrap_metrics": {
+                "roc_auc": {"count": 25, "mean": 0.55, "std": 0.01, "min": 0.53, "p05": 0.535, "p50": 0.55, "p95": 0.565, "max": 0.57},
+                "brier": {"count": 25, "mean": 0.24, "std": 0.004, "min": 0.232, "p05": 0.234, "p50": 0.24, "p95": 0.246, "max": 0.248},
+            },
+            "gate_pass_rate": 0.24,
+        },
+    )
+
+    result = grid_module.run_staged_grid(
+        resolved,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+    )
+
+    assert result["robustness_probe"]["enabled"] is True
+    assert result["robustness_probe"]["evaluated_run_ids"] == ["edge_0010"]
+    run_rows = {row["grid_run_id"]: row for row in result["runs"]}
+    assert run_rows["edge_0010"]["stage2_robustness"]["splits"]["research_valid"]["status"] == "computed"
+    assert run_rows["edge_0010"]["stage2_robustness"]["splits"]["research_valid"]["gate_pass_rate"] == 0.24
+
+
+def test_staged_grid_runner_passes_stage1_reuse_execution_hint(tmp_path: Path, monkeypatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    grid_manifest_path = tmp_path / "staged_grid_stage1_reuse.json"
+    grid_manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                    "experiment_kind": "staged_training_grid_v1",
+                    "inputs": {"base_manifest_path": str(base_manifest_path)},
+                    "outputs": {"artifacts_root": str(tmp_path / "grid_artifacts"), "run_name": "staged_grid_stage1_reuse"},
+                    "selection": {"stage2_hpo_escalation": {"roc_auc_min": 0.54, "brier_max": 0.225}},
+                    "grid": {
+                    "research_only": True,
+                    "max_parallel_runs": 1,
+                    "runs": [
+                        {
+                            "run_id": "baseline",
+                            "model_group_suffix": "_baseline",
+                            "overrides": {"outputs": {"run_name": "grid_reuse_baseline"}},
+                        },
+                        {
+                            "run_id": "midday_variant",
+                            "model_group_suffix": "_midday_variant",
+                            "reuse_stage1_from": "baseline",
+                            "overrides": {
+                                "outputs": {"run_name": "grid_reuse_midday_variant"},
+                                "training": {
+                                    "stage2_session_filter": {
+                                        "enabled": True,
+                                        "include_buckets": ["MIDDAY"],
+                                    }
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    resolved = load_and_resolve_manifest(grid_manifest_path, validate_paths=True)
+    seen_hints: dict[str, object] = {}
+
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
+        output_root = Path(run_output_root).resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        run_name = str(resolved_config["outputs"]["run_name"])
+        if run_name == "grid_reuse_midday_variant":
+            seen_hints["value"] = dict(resolved_config.get("_execution_hints") or {})
+        summary = _mock_summary(
+            run_name=run_name,
+            publishable=False,
+            stage2_auc=0.53,
+            stage2_brier=0.24,
+            profit_factor=1.1,
+            net_return_sum=0.02,
+            max_drawdown_pct=0.08,
+        )
+        summary["output_root"] = str(output_root)
+        (output_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        return summary
+
+    monkeypatch.setattr(grid_module, "run_research", _fake_run_research)
+
+    grid_module.run_staged_grid(
+        resolved,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+    )
+
+    hint = dict(seen_hints["value"])["stage1_reuse"]
+    assert hint["source_run_id"] == "baseline"
+    assert str(hint["source_run_dir"]).endswith("01_baseline")
+    assert str(hint["source_summary_path"]).endswith("01_baseline\\summary.json") or str(hint["source_summary_path"]).endswith("01_baseline/summary.json")
+
+
 def test_grid_dependency_inheritance_requires_successful_prior_runs(tmp_path: Path, monkeypatch) -> None:
     parquet_root = build_staged_parquet_root(tmp_path)
     base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
@@ -306,3 +503,210 @@ def test_grid_dependency_inheritance_requires_successful_prior_runs(tmp_path: Pa
     assert run_rows["edge_0010"]["release_status"] == "failed"
     assert run_rows["best_edge_block_expiry"]["release_status"] == "failed"
     assert "no successful prior runs" in str(run_rows["best_edge_block_expiry"]["blocking_reasons"][0])
+
+
+def test_staged_grid_fail_if_exists_blocks_reuse_of_existing_grid_root(tmp_path: Path, monkeypatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    grid_manifest_path = build_staged_grid_manifest(tmp_path, base_manifest_path)
+    resolved = load_and_resolve_manifest(grid_manifest_path, validate_paths=True)
+    grid_root = tmp_path / "grid_root_blocked"
+
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
+        output_root = Path(run_output_root).resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        summary = _mock_summary(
+            run_name=str(resolved_config["outputs"]["run_name"]),
+            publishable=False,
+            stage2_auc=0.52,
+            stage2_brier=0.25,
+            profit_factor=1.05,
+            net_return_sum=0.01,
+            max_drawdown_pct=0.09,
+        )
+        summary["output_root"] = str(output_root)
+        (output_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        return summary
+
+    monkeypatch.setattr(grid_module, "run_research", _fake_run_research)
+    grid_module.run_staged_grid(
+        resolved,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+        run_output_root=grid_root,
+    )
+
+    with pytest.raises(CoordinationError, match="already exists and is non-empty"):
+        grid_module.run_staged_grid(
+            resolved,
+            model_group="banknifty_futures/h15_tp_auto",
+            profile_id="openfe_v9_dual",
+            run_output_root=grid_root,
+        )
+
+
+def test_staged_grid_resume_reuses_completed_lane_summaries(tmp_path: Path, monkeypatch) -> None:
+    parquet_root = build_staged_parquet_root(tmp_path)
+    base_manifest_path = build_staged_smoke_manifest(tmp_path, parquet_root)
+    grid_manifest_path = build_staged_grid_manifest(tmp_path, base_manifest_path)
+    resolved = load_and_resolve_manifest(grid_manifest_path, validate_paths=True)
+    grid_root = tmp_path / "grid_root_resume"
+    calls: list[str] = []
+
+    def _fake_run_research(resolved_config, *, run_output_root=None, run_reuse_mode="fail_if_exists"):
+        output_root = Path(run_output_root).resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
+        run_name = str(resolved_config["outputs"]["run_name"])
+        calls.append(run_name)
+        summary = _mock_summary(
+            run_name=run_name,
+            publishable=False,
+            stage2_auc=0.52,
+            stage2_brier=0.25,
+            profit_factor=1.05,
+            net_return_sum=0.01,
+            max_drawdown_pct=0.09,
+        )
+        summary["output_root"] = str(output_root)
+        (output_root / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        return summary
+
+    monkeypatch.setattr(grid_module, "run_research", _fake_run_research)
+    first = grid_module.run_staged_grid(
+        resolved,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+        run_output_root=grid_root,
+    )
+    calls_after_first = list(calls)
+    resumed = grid_module.run_staged_grid(
+        resolved,
+        model_group="banknifty_futures/h15_tp_auto",
+        profile_id="openfe_v9_dual",
+        run_output_root=grid_root,
+        run_reuse_mode="resume",
+    )
+
+    assert resumed["grid_run_id"] == first["grid_run_id"]
+    assert calls == calls_after_first
+
+
+def test_midday_redesign_feature_sets_are_registered() -> None:
+    specs = feature_set_specs_by_name()
+    assert "fo_midday_asymmetry" in specs
+    assert "fo_midday_expiry_interactions" in specs
+    assert "fo_midday_time_aware_plus_oi_iv" in specs
+    assert "fo_midday_direction_regime_v1" in specs
+    assert "fo_midday_direction_regime_v2" in specs
+    assert "fo_midday_direction_regime_v3" in specs
+    assert "fo_velocity_v1" in specs
+    v1_patterns = specs["fo_midday_direction_regime_v1"].include_regex
+    assert any("vel_" in p for p in v1_patterns), "fo_midday_direction_regime_v1 must include vel_ patterns"
+    assert any("ctx_am_" in p for p in v1_patterns), "fo_midday_direction_regime_v1 must include ctx_am_ patterns"
+
+
+def test_midday_redesign_grid_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_grid.stage2_midday_redesign_v1.json"),
+        validate_paths=False,
+    )
+
+    assert resolved["outputs"]["run_name"] == "staged_grid_stage2_midday_redesign_v1"
+    assert [run["run_id"] for run in resolved["grid"]["runs"]] == [
+        "midday_time_aware_baseline",
+        "midday_strict_winner_v2",
+        "midday_stricter_abstain",
+        "midday_iv_oi_plus_time",
+        "midday_expiry_interactions",
+        "midday_asymmetry_pool",
+    ]
+    assert resolved["grid"]["runs"][1]["reuse_stage1_from"] == "midday_time_aware_baseline"
+    assert (
+        resolved["grid"]["runs"][3]["overrides"]["catalog"]["feature_sets_by_stage"]["stage2"]
+        == ["fo_midday_time_aware_plus_oi_iv"]
+    )
+
+
+def test_midday_target_redesign_grid_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_grid.stage2_midday_target_redesign_v1.json"),
+        validate_paths=False,
+    )
+    assert resolved["outputs"]["run_name"] == "staged_grid_stage2_midday_target_redesign_v1"
+    assert [run["run_id"] for run in resolved["grid"]["runs"]] == [
+        "midday_asymmetry_target_baseline",
+        "midday_asymmetry_target_strict",
+        "midday_oi_iv_target_baseline",
+        "midday_expiry_target_baseline",
+    ]
+
+
+def test_midday_high_conviction_grid_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_grid.stage2_midday_high_conviction_v1.json"),
+        validate_paths=False,
+    )
+    assert resolved["outputs"]["run_name"] == "staged_grid_stage2_midday_high_conviction_v1"
+    assert [run["run_id"] for run in resolved["grid"]["runs"]] == [
+        "midday_asymmetry_high_conviction_baseline",
+        "midday_asymmetry_high_conviction_strict",
+        "midday_oi_iv_high_conviction",
+        "midday_expiry_high_conviction",
+        "midday_asymmetry_ultra_selective",
+    ]
+    assert resolved["grid"]["runs"][1]["reuse_stage1_from"] == "midday_asymmetry_high_conviction_baseline"
+    assert resolved["grid"]["runs"][0]["overrides"]["training"]["stage2_target_redesign"]["max_kept_fraction"] == 0.45
+
+
+def test_midday_high_conviction_v2_grid_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_grid.stage2_midday_high_conviction_v2.json"),
+        validate_paths=False,
+    )
+    assert resolved["outputs"]["run_name"] == "staged_grid_stage2_midday_high_conviction_v2"
+    assert [run["run_id"] for run in resolved["grid"]["runs"]] == [
+        "midday_asymmetry_high_conviction_baseline_v2",
+        "midday_asymmetry_high_conviction_strict_v2",
+        "midday_oi_iv_high_conviction_v2",
+        "midday_expiry_high_conviction_v2",
+        "midday_asymmetry_selective_v2",
+    ]
+    assert resolved["grid"]["runs"][1]["reuse_stage1_from"] == "midday_asymmetry_high_conviction_baseline_v2"
+    assert resolved["grid"]["runs"][0]["overrides"]["training"]["stage2_target_redesign"]["max_kept_fraction"] == 0.75
+
+
+def test_midday_direction_or_no_trade_grid_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_grid.stage2_midday_direction_or_no_trade_v1.json"),
+        validate_paths=False,
+    )
+    assert resolved["outputs"]["run_name"] == "staged_grid_stage2_midday_direction_or_no_trade_v1"
+    assert [run["run_id"] for run in resolved["grid"]["runs"]] == [
+        "midday_gate_asymmetry_baseline",
+        "midday_gate_asymmetry_strict",
+        "midday_gate_oi_iv",
+        "midday_gate_expiry",
+        "midday_gate_selective",
+    ]
+    assert resolved["grid"]["runs"][1]["reuse_stage1_from"] == "midday_gate_asymmetry_baseline"
+    assert resolved["grid"]["runs"][0]["overrides"]["training"]["stage2_target_redesign"]["max_kept_fraction"] == 0.75
+
+
+def test_stage3_midday_policy_paths_grid_manifest_resolves() -> None:
+    resolved = load_and_resolve_manifest(
+        Path("ml_pipeline_2/configs/research/staged_grid.stage3_midday_policy_paths_v1.json"),
+        validate_paths=False,
+    )
+    assert resolved["outputs"]["run_name"] == "staged_grid_stage3_midday_policy_paths_v1"
+    assert resolved["selection"]["ranking_strategy"] == "stage3_policy_paths_v1"
+    assert [run["run_id"] for run in resolved["grid"]["runs"]] == [
+        "stage3_baseline_dynamic",
+        "stage3_balanced_gate_dynamic",
+        "stage3_balanced_gate_fixed_guard",
+        "stage3_expanded_catalog_dynamic",
+        "stage3_expanded_catalog_fixed_guard",
+        "stage3_expanded_catalog_relaxed_margin",
+    ]
+    assert resolved["grid"]["runs"][1]["reuse_stage2_from"] == "stage3_baseline_dynamic"
+    assert resolved["grid"]["runs"][3]["reuse_stage2_from"] is None
+    assert resolved["grid"]["runs"][3]["overrides"]["catalog"]["recipe_catalog_id"] == "midday_l3_adjacent_v1"
