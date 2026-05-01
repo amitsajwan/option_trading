@@ -124,3 +124,13 @@ docker compose "$${COMPOSE_ARGS[@]}" up -d redis mongo ingestion_app snapshot_ap
 if [ "${enable_dashboard_profile}" = "true" ]; then
   docker compose "$${COMPOSE_ARGS[@]}" --profile ui up -d dashboard
 fi
+
+if [ "$${ENABLE_HISTORICAL_PROFILE:-0}" = "1" ]; then
+  echo "Starting historical profile containers..."
+  docker compose "$${COMPOSE_ARGS[@]}" --profile historical up -d
+fi
+
+if [ "$${ENABLE_EVAL_PROFILE:-0}" = "1" ]; then
+  echo "Starting strategy_eval profile containers..."
+  docker compose "$${COMPOSE_ARGS[@]}" --profile strategy_eval up -d
+fi
