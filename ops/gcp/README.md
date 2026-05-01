@@ -217,6 +217,24 @@ Upload `.env.compose`, optional ingestion credentials, runtime guard, and refere
 
 Keep this bundle small. Do not use it to ship historical parquet datasets.
 
+### `force_deploy_research_run.sh`
+
+Force-deploy a completed research run to the live runtime, bypassing automated hard gate failures.
+
+Use when a run returns HOLD due to combined gate failures (e.g. TRENDING regime drag) but has demonstrable edge in specific regimes (e.g. VOLATILE PF > 1.3).
+
+Steps it automates:
+1. Force-publish local model bundle
+2. Write `release/ml_pure_runtime.env`
+3. Build a `force_training_release.json` compatible with `runtime_release_manifest.py`
+4. Write `.run/gcp_release/current_runtime_release.json`
+5. Sync published bundle to GCS model bucket
+6. Publish runtime config bundle to GCS runtime-config bucket
+
+Run on the training VM. Then `start_runtime_interactive.sh` from the operator machine.
+
+See [TRAINING_RELEASE_RUNBOOK.md — Force-Deploying a Research Run](../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md) for full usage and rollback instructions.
+
 ### `apply_ml_pure_release.sh`
 
 Apply the staged release handoff keys into `.env.compose`.
