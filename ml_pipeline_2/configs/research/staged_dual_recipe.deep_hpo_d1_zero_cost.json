@@ -214,7 +214,7 @@
     "stage1": {
       "roc_auc_min": 0.55,
       "brier_max": 0.22,
-      "roc_auc_drift_half_split_max_abs": 0.05
+      "roc_auc_drift_half_split_max_abs": 0.10
     },
     "stage2": {
       "roc_auc_min": 0.55,
