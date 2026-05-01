@@ -159,7 +159,15 @@ All operator scripts expect to run from the repo root.
 cp ops/gcp/operator.env.example ops/gcp/operator.env
 ```
 
-Edit `ops/gcp/operator.env` and fill in all values. Required fields:
+**For the `amittrading-493606` project**, run the patch script to replace all template placeholders automatically:
+
+```bash
+python3 ops/gcp/patch_operator_env.py
+```
+
+This replaces `my-gcp-project`, `my-option-trading-models`, etc. with the real `amittrading-493606` values. Safe to re-run.
+
+For a different project, edit `ops/gcp/operator.env` manually. Required fields:
 
 ```bash
 # GCP project

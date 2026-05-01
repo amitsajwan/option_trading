@@ -172,10 +172,15 @@ if not threshold_report or not training_report:
     print("ERROR: published_paths.json missing threshold_report or training_report", file=sys.stderr)
     sys.exit(1)
 
+from datetime import datetime, timezone
+now_utc = datetime.now(timezone.utc).isoformat()
+
 payload = {
+    "created_at_utc": now_utc,
     "release_status": "published",
     "run_id": run_id,
     "publish": {
+        "created_at_utc": now_utc,
         "run_id": run_id,
         "model_group": model_group,
         "profile_id": profile_id,

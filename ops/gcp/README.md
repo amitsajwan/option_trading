@@ -95,6 +95,17 @@ Direct entrypoints:
 1. Copy [operator.env.example](operator.env.example) to `ops/gcp/operator.env`
 2. Fill in the actual project, bucket, repo, and release values
 
+**Quick setup for the `amittrading-493606` project:**
+
+```bash
+cp ops/gcp/operator.env.example ops/gcp/operator.env
+python3 ops/gcp/patch_operator_env.py
+```
+
+`patch_operator_env.py` replaces all template placeholders (`my-gcp-project`,
+`my-option-trading-models`, etc.) with the real `amittrading-493606` project values.
+Run it once after a fresh clone or VM rebuild. Safe to re-run.
+
 Current bootstrap derives:
 
 - `MODEL_BUCKET_URL=gs://<MODEL_BUCKET_NAME>/published_models`
@@ -216,6 +227,17 @@ Operational rules:
 Upload `.env.compose`, optional ingestion credentials, runtime guard, and referenced runtime artifacts to the runtime config bucket prefix.
 
 Keep this bundle small. Do not use it to ship historical parquet datasets.
+
+### `patch_operator_env.py`
+
+Replace `operator.env` template placeholders with real `amittrading-493606` project values.
+
+Run once after a fresh clone or VM rebuild:
+
+```bash
+cp ops/gcp/operator.env.example ops/gcp/operator.env
+python3 ops/gcp/patch_operator_env.py
+```
 
 ### `force_deploy_research_run.sh`
 
