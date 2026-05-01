@@ -99,11 +99,9 @@ Port behavior note:
 - `GET /` -> redirects to `/app` (302) — main SPA entry
 - `GET /live/strategy` -> redirects to `/app?mode=live` (302)
 - `GET /historical/replay` -> historical replay operator monitor
-- `GET /strategy/evaluation` -> run-scoped evaluation compare page
+- `GET /strategy/evaluation` -> redirects to `/app?mode=eval` (302)
 - `GET /trading` -> legacy paper trading terminal page (opt-in; requires `ENABLE_LEGACY_TRADING_UI=1`)
 - `GET /trading/models` -> redirects to `/app?tab=models` (302) — model catalog
-- `GET /trading/research` -> research scenario evaluation page
-- `GET /trading/velocity-testing` -> velocity policy testing page
 - `GET /trading?model=a|b|...` -> model-scoped terminal tab (legacy launcher)
 - `GET /trading/model/{model_key}` -> redirects to model `prefill_url` or `/trading?model={model_key}` (307)
 
@@ -114,6 +112,12 @@ Port behavior note:
 - `GET /api/health/replay` -> replay-oriented health view
 - `GET /api/health/strategy-runtime` -> strategy runtime artifact observability (`.run/` published state)
 - `GET /api/market-data/health` -> market-data API reachability check
+
+### Operator controls
+
+- `GET /api/operator/halt` -> current operator halt state
+- `POST /api/operator/halt` -> create the shared runtime halt sentinel
+- `DELETE /api/operator/halt` -> clear the shared runtime halt sentinel
 
 ### Market data
 
@@ -163,16 +167,6 @@ Port behavior note:
 - `POST /api/trading/stop?instance={key}` -> stop runner
 - `POST /api/trading/backtest/run` -> run one-date backtest
 - `GET /api/trading/backtest/latest` -> latest backtest state
-
-### Research
-
-- `GET /api/trading/research/scenarios` -> list recovery/research scenarios
-- `GET /api/trading/research/evaluation` -> evaluate a research scenario
-
-### Velocity testing
-
-- `GET /api/trading/velocity-testing/test` -> run velocity policy test over a date range
-- `GET /api/trading/velocity-testing/heatmap` -> velocity metrics heatmap
 
 ### Public contract / schema
 

@@ -89,6 +89,7 @@
     <div id="mode-segment" class="mode-seg">
       <button data-mode="live"><span class="status-dot"></span> Live</button>
       <button data-mode="replay">◷ Replay</button>
+      <button data-mode="eval">⚗ Eval</button>
     </div>
     <div class="spacer"></div>
     <span id="kill-indicator" class="chip" style="display:none"><span class="dot"></span>Engine halted</span>
@@ -104,11 +105,14 @@
 <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/echarts@5.5.1/dist/echarts.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@stomp/stompjs@7.0.0/bundles/stomp.umd.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 <script src="core.js?v=5"></script>
-<script type="text/babel" src="components.jsx?v=5"></script>
+<script type="text/babel" src="components.jsx?v=6"></script>
 <script type="text/babel" src="tweaks-panel.jsx?v=5"></script>
 <script type="text/babel" src="views.jsx?v=5"></script>
+<script type="text/babel" src="eval.jsx?v=2"></script>
 
 <script type="text/babel">
   const { useState, useEffect } = React;
@@ -121,14 +125,45 @@
     "showStrategyBars": true,
     "chartHeight": 340,
     "speedPreset": 8,
-    "replayAuto": true
+    "replayAuto": true,
+    "evalDefaultDataset": "historical",
+    "evalChartHeight": 280,
+    "evalAutoRun": true,
+    "evalFeatureExpanded": false
   }/*EDITMODE-END*/;
 
   function App() {
-    const [mode, setMode] = useState(TWEAK_DEFAULTS.mode || 'live');
+    const initialParams = new URLSearchParams(window.location.search);
+    const initialMode = initialParams.get('mode') || (initialParams.get('tab') === 'evaluation' ? 'eval' : '') || TWEAK_DEFAULTS.mode || 'live';
+    const [mode, setMode] = useState(initialMode);
     const [killed, setKilled] = useState(false);
     const [confirmOpen, setConfirmOpen] = useState(false);
     const [tweaks, setTweaks] = useState(TWEAK_DEFAULTS);
+
+    async function refreshHaltState() {
+      try {
+        const res = await fetch('/api/operator/halt', { method: 'GET' });
+        if (!res.ok) throw new Error(`server returned ${res.status}`);
+        const payload = await res.json();
+        setKilled(Boolean(payload.halted));
+      } catch (err) {
+        console.error('halt status request failed:', err);
+      }
+    }
+
+    async function onResumeClick() {
+      try {
+        const res = await fetch('/api/operator/halt', { method: 'DELETE' });
+        if (!res.ok) throw new Error(`server returned ${res.status}`);
+        setKilled(false);
+      } catch (err) {
+        console.error('halt resume request failed:', err);
+      }
+    }
+
+    useEffect(() => {
+      refreshHaltState();
+    }, []);
 
     useEffect(() => {
       // Sync mode buttons
@@ -148,6 +183,8 @@
           '<strong>Engine halted.</strong> New signals are rejected. ' +
           '<button class="btn sm" style="margin-left:auto">Resume…</button>' +
           '</div>';
+        const resumeBtn = slot.querySelector('button');
+        if (resumeBtn) resumeBtn.onclick = onResumeClick;
       } else {
         slot.innerHTML = '';
       }
@@ -173,11 +210,22 @@
     }, [tweaks.density]);
 
     const onKillClick = () => setConfirmOpen(true);
-    const onConfirmKill = () => { setKilled(true); setConfirmOpen(false); };
+    const onConfirmKill = async () => {
+      try {
+        const res = await fetch('/api/operator/halt', { method: 'POST' });
+        if (!res.ok) throw new Error(`server returned ${res.status}`);
+        setKilled(true);
+      } catch (err) {
+        console.error('halt request failed:', err);
+      }
+      setConfirmOpen(false);
+    };
 
     const monitorEl = mode === 'live'
       ? <LiveMonitor onModeSwitch={() => setMode('replay')} onKillClick={onKillClick} />
-      : <ReplayMonitor onModeSwitch={() => setMode('live')} />;
+      : mode === 'replay'
+        ? <ReplayMonitor onModeSwitch={() => setMode('live')} />
+        : <EvalMonitor tweaks={tweaks} />;
 
     return (
       <>
@@ -197,10 +245,29 @@
               <TweakRadio
                 label="View"
                 value={tweaks.mode}
-                options={[{ value: 'live', label: 'Live' }, { value: 'replay', label: 'Replay' }]}
+                options={[{ value: 'live', label: 'Live' }, { value: 'replay', label: 'Replay' }, { value: 'eval', label: 'Eval' }]}
                 onChange={v => updateTweak({ mode: v })}
               />
             </TweakSection>
+            {mode === 'eval' && (
+              <TweakSection label="Eval">
+                <TweakRadio
+                  label="Default dataset"
+                  value={tweaks.evalDefaultDataset}
+                  options={[{ value: 'historical', label: 'Historical' }, { value: 'live', label: 'Live' }]}
+                  onChange={v => updateTweak({ evalDefaultDataset: v })}
+                />
+                <TweakSlider
+                  label="Chart height"
+                  value={tweaks.evalChartHeight} min={220} max={520} step={10} unit="px"
+                  onChange={v => updateTweak({ evalChartHeight: v })}
+                />
+                <TweakToggle label="Auto-run on load" value={tweaks.evalAutoRun}
+                  onChange={v => updateTweak({ evalAutoRun: v })} />
+                <TweakToggle label="Feature panel expanded" value={tweaks.evalFeatureExpanded}
+                  onChange={v => updateTweak({ evalFeatureExpanded: v })} />
+              </TweakSection>
+            )}
             <TweakSection label="Layout">
               <TweakRadio
                 label="Density"

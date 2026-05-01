@@ -84,10 +84,8 @@ class HistoricalReplayAppTests(unittest.TestCase):
     def test_historical_replay_page_renders(self) -> None:
         request = type("RequestStub", (), {"scope": {"type": "http"}})()
         response = asyncio.run(dashboard_app.historical_replay(request))
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"trading.ops", response.body)
-        self.assertIn(b"/static/redesign/pages/historical_replay.js", response.body)
-        self.assertIn(b'const routeStart = "historical_replay";', response.body)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["location"], "/app?mode=replay")
 
     def test_historical_replay_session_endpoint_returns_payload(self) -> None:
         payload = asyncio.run(dashboard_app.get_historical_strategy_session(date="2026-03-06"))

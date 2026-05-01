@@ -41,6 +41,8 @@ class DashboardDebugRouter:
     async def test_page(self) -> HTMLResponse:
         self._require_debug_routes_enabled()
         test_page_path = self._base_dir / "test_page.html"
+        if not test_page_path.exists():
+            return HTMLResponse("<!doctype html><title>Debug Test Page</title><h1>Debug routes enabled</h1>")
         return HTMLResponse(test_page_path.read_text())
 
     async def test_redis(self) -> dict[str, Any]:

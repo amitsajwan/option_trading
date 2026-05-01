@@ -104,8 +104,9 @@ def test_artifact_discovery_includes_recovery_research_models(tmp_path: Path, mo
     entry = recovery_entries[0]
     assert entry["catalog_kind"] == "recovery"
     assert entry["profile_id"] == recipe_id
-    assert entry["research_url"].startswith("/trading/research?")
-    assert entry["evaluation_api_url"].startswith("/api/trading/research/evaluation?")
+    assert entry["research_url"] == ""
+    assert entry["evaluation_api_url"] == ""
+    assert entry["actions"] == []
     assert entry["metrics"]["trades"] is not None
     assert any(path_row["label"] == "Recipe Summary" for path_row in entry["path_rows"])
     assert recipe_id in entry["title"]

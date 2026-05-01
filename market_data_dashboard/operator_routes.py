@@ -10,6 +10,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from strategy_app.engines.runtime_artifacts import resolve_runtime_artifact_paths
+
 
 class DashboardOperatorRouter:
     def __init__(
@@ -45,6 +47,9 @@ class DashboardOperatorRouter:
         router.add_api_route("/api/health/live", self.health, methods=["GET"])
         router.add_api_route("/api/market-data/health", self.market_data_health, methods=["GET"])
         router.add_api_route("/api/v1/system/mode", self.get_system_mode, methods=["GET"])
+        router.add_api_route("/api/operator/halt", self.post_operator_halt, methods=["POST"])
+        router.add_api_route("/api/operator/halt", self.delete_operator_halt, methods=["DELETE"])
+        router.add_api_route("/api/operator/halt", self.get_operator_halt, methods=["GET"])
         self.router = router
 
     async def home(self, request: Request) -> RedirectResponse:
@@ -300,3 +305,24 @@ class DashboardOperatorRouter:
             "error": result.get("error") or f"API returned status {result.get('status_code')}",
             "timestamp": self._now_iso_ist(),
         }
+
+    async def get_operator_halt(self) -> dict[str, Any]:
+        halt_path = resolve_runtime_artifact_paths().operator_halt_path
+        return {"halted": halt_path.exists(), "path": str(halt_path), "timestamp": self._now_iso_ist()}
+
+    async def post_operator_halt(self) -> dict[str, Any]:
+        halt_path = resolve_runtime_artifact_paths().operator_halt_path
+        try:
+            halt_path.parent.mkdir(parents=True, exist_ok=True)
+            halt_path.touch()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to write operator halt signal: {exc}")
+        return {"halted": True, "path": str(halt_path), "timestamp": self._now_iso_ist()}
+
+    async def delete_operator_halt(self) -> dict[str, Any]:
+        halt_path = resolve_runtime_artifact_paths().operator_halt_path
+        try:
+            halt_path.unlink(missing_ok=True)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to clear operator halt signal: {exc}")
+        return {"halted": False, "path": str(halt_path), "timestamp": self._now_iso_ist()}

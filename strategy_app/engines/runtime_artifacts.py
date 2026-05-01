@@ -42,6 +42,7 @@ class RuntimeArtifactPaths:
     config_path: Path
     state_path: Path
     metrics_path: Path
+    operator_halt_path: Path
 
 
 def resolve_runtime_artifact_paths(artifact_dir: Optional[Path | str] = None) -> RuntimeArtifactPaths:
@@ -59,6 +60,7 @@ def resolve_runtime_artifact_paths(artifact_dir: Optional[Path | str] = None) ->
         config_path=root / "runtime_config.json",
         state_path=root / "runtime_state.json",
         metrics_path=root / "metrics.jsonl",
+        operator_halt_path=root / "operator_halt",
     )
 
 

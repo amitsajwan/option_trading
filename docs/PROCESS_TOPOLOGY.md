@@ -25,7 +25,7 @@ docker compose --env-file .env.compose up -d --build redis mongo ingestion_app s
 ### Optional UI profile
 
 ```powershell
-docker compose --env-file .env.compose --profile ui up -d dashboard strategy_eval_orchestrator strategy_eval_ui
+docker compose --env-file .env.compose --profile ui up -d dashboard strategy_eval_orchestrator
 ```
 
 ### Optional historical profile
@@ -77,14 +77,14 @@ python -m stop_apps --include-dashboard
 3. Snapshot producer: `snapshot_app`
 4. Consumers: `persistence_app`, `strategy_app`
 5. Strategy persistence: `strategy_persistence_app`
-6. Optional UI: `dashboard`, `strategy_eval_ui`, `strategy_eval_orchestrator`
+6. Optional UI: `dashboard`, `strategy_eval_orchestrator`
 
 ## 5. Health Checks and Ports
 
 - Ingestion health: `http://127.0.0.1:8004/health`
 - Dashboard health (compose UI): `http://127.0.0.1:8008/api/health`
 - Dashboard health (local launcher default): `http://127.0.0.1:8002/api/health`
-- Strategy eval UI: `http://127.0.0.1:8011`
+- Strategy evaluation UI: `http://127.0.0.1:8008/app?mode=eval` in the dashboard
 - Redis default port: `6379`
 - Snapshot health command:
 
