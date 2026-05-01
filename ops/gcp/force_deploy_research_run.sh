@@ -37,11 +37,32 @@ REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
 OPERATOR_ENV_FILE="${OPERATOR_ENV_FILE:-${REPO_ROOT}/ops/gcp/operator.env}"
 VENV_DIR="${VENV_DIR:-${REPO_ROOT}/.venv}"
 
+# Capture any values explicitly set by the caller BEFORE sourcing operator.env.
+# operator.env uses plain VAR="value" assignments which would overwrite them.
+# Restoring after source ensures: CLI env vars > operator.env > script defaults.
+_CALLER_RUN_DIR="${RUN_DIR:-}"
+_CALLER_MODEL_GROUP="${MODEL_GROUP:-}"
+_CALLER_PROFILE_ID="${PROFILE_ID:-}"
+_CALLER_APP_IMAGE_TAG="${APP_IMAGE_TAG:-}"
+_CALLER_RUNTIME_GUARD_PATH="${RUNTIME_GUARD_PATH:-}"
+_CALLER_MODEL_BUCKET_URL="${MODEL_BUCKET_URL:-}"
+_CALLER_RUNTIME_CONFIG_BUCKET_URL="${RUNTIME_CONFIG_BUCKET_URL:-}"
+
 if [ -f "${OPERATOR_ENV_FILE}" ]; then
   # shellcheck disable=SC1090
   source "${OPERATOR_ENV_FILE}"
 fi
 
+# Restore caller overrides (they take precedence over operator.env values).
+[ -n "${_CALLER_RUN_DIR}" ]                  && RUN_DIR="${_CALLER_RUN_DIR}"
+[ -n "${_CALLER_MODEL_GROUP}" ]              && MODEL_GROUP="${_CALLER_MODEL_GROUP}"
+[ -n "${_CALLER_PROFILE_ID}" ]               && PROFILE_ID="${_CALLER_PROFILE_ID}"
+[ -n "${_CALLER_APP_IMAGE_TAG}" ]            && APP_IMAGE_TAG="${_CALLER_APP_IMAGE_TAG}"
+[ -n "${_CALLER_RUNTIME_GUARD_PATH}" ]       && RUNTIME_GUARD_PATH="${_CALLER_RUNTIME_GUARD_PATH}"
+[ -n "${_CALLER_MODEL_BUCKET_URL}" ]         && MODEL_BUCKET_URL="${_CALLER_MODEL_BUCKET_URL}"
+[ -n "${_CALLER_RUNTIME_CONFIG_BUCKET_URL}" ] && RUNTIME_CONFIG_BUCKET_URL="${_CALLER_RUNTIME_CONFIG_BUCKET_URL}"
+
+# Remaining defaults (applied only if not set by caller or operator.env)
 RUN_DIR="${RUN_DIR:?Set RUN_DIR to the abs path of the completed research run directory}"
 MODEL_GROUP="${MODEL_GROUP:-banknifty_futures/h15_tp_auto}"
 PROFILE_ID="${PROFILE_ID:-openfe_v9_dual}"
