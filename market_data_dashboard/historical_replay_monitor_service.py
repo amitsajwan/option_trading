@@ -191,7 +191,7 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             "dates": dates,
             "latest": latest,
             "count": len(dates),
-            "collection": self._repo.snapshot_collection_name(),
+            "collection": coll.name,
         }
 
     @staticmethod
