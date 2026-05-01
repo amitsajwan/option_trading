@@ -319,7 +319,7 @@ function ReplayMonitor({ onModeSwitch }) {
   const [speed,          setSpeed]          = _useState(4);
   const [replayDate,     setReplayDate]     = _useState('');
   const [replayError,    setReplayError]    = _useState('');
-  const [wsStatus,       setWsStatus]       = _useState('connecting');
+  const [wsStatus,       setWsStatus]       = _useState('idle');
   const [selectedTrade,  setSelectedTrade]  = _useState(null);
   const [selectedSignal, setSelectedSignal] = _useState(null);
   const [generating,     setGenerating]     = _useState(false);
@@ -333,7 +333,8 @@ function ReplayMonitor({ onModeSwitch }) {
   _useEffect(() => { speedRef.current      = speed;      }, [speed]);
   _useEffect(() => { replayDateRef.current = replayDate; }, [replayDate]);
 
-  _useEffect(() => {
+  function openReplaySocket() {
+    if (wsRef.current) return;
     const ws = TradingCore.makeMonitorWS(
       () => ({
         action: 'subscribe', mode: 'replay',
@@ -366,7 +367,10 @@ function ReplayMonitor({ onModeSwitch }) {
       }
     );
     wsRef.current = ws;
-    return () => ws.close();
+  }
+
+  _useEffect(() => {
+    return () => { if (wsRef.current) wsRef.current.close(); };
   }, []);
 
   function sendControl(patch) {
@@ -393,10 +397,14 @@ function ReplayMonitor({ onModeSwitch }) {
     setReplayError('');
     setGenerateMsg('');
     setIsPlaying(false);
-    wsRef.current && wsRef.current.send({
+    setSession(null);
+    setUpToIdx(0);
+    openReplaySocket();
+    const sent = wsRef.current && wsRef.current.send({
       action: 'subscribe', mode: 'replay',
       date: newDate, up_to_idx: 0, playing: false, speed: speedRef.current,
     });
+    if (!sent) setWsStatus('connecting');
   }
 
   async function handleGenerate() {
@@ -429,10 +437,15 @@ function ReplayMonitor({ onModeSwitch }) {
   if (!session) {
     return (
       <div className="loading-shell">
+        <div className="row gap-s" style={{ justifyContent: 'center', marginBottom: 12 }}>
+          <span className="field-label">Replay date</span>
+          <input className="inp mono" type="date" value={replayDate} style={{ width: 150 }}
+            onChange={e => handleDateChange(e.target.value)} />
+        </div>
         <span className="mono" style={{ fontSize: 12 }}>
           {wsStatus === 'connecting'   ? 'Connecting to server\u2026' :
            wsStatus === 'disconnected' ? 'Reconnecting\u2026'         :
-           replayError                ? replayError                   : 'Loading session\u2026'}
+           replayError                ? replayError                   : 'Select a replay date to load a session.'}
         </span>
         {replayError && (
           <span className="muted" style={{ marginTop: 10, fontSize: 11, display: 'block', textAlign: 'center' }}>
