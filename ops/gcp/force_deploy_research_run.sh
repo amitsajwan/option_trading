@@ -222,7 +222,8 @@ echo "== Step 6: Upload release manifests to GCS runtime-config bucket =="
 # Only upload the release pointer and runtime env — NOT the full compose bundle.
 # .env.compose + Kite credentials are published by start_runtime_interactive.sh
 # on the operator machine which has the full live config.
-GCS_RELEASE_PREFIX="${RUNTIME_CONFIG_BUCKET_URL%/}"
+# start_runtime_interactive.sh reads from runtime/release/ (set by run_staged_release_pipeline.sh)
+GCS_RELEASE_PREFIX="${RUNTIME_CONFIG_BUCKET_URL%/}/release"
 GCLOUD_RELEASE_ROOT="${REPO_ROOT}/.run/gcp_release"
 
 for f in \
