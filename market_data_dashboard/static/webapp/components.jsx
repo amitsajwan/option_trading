@@ -556,7 +556,85 @@ function StrategyBars({ rows }) {
   );
 }
 
-// ── CONFIRM MODAL ─────────────────────────────────────────────────────────
+// ── ECHART PANEL ─────────────────────────────────────────────────────────
+// Thin ECharts wrapper for evaluation charts.
+function EChartPanel({ option, height }) {
+  const ref = useRef(null);
+  const chartRef = useRef(null);
+
+  useEffect(() => {
+    if (!ref.current || !window.echarts) return;
+    const chart = window.echarts.init(ref.current, null, { renderer: 'canvas' });
+    chartRef.current = chart;
+    const onResize = () => chart.resize();
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      chart.dispose();
+      chartRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (chartRef.current && option) chartRef.current.setOption(option, true);
+  }, [option]);
+
+  useEffect(() => {
+    if (chartRef.current) chartRef.current.resize();
+  }, [height]);
+
+  if (!window.echarts) {
+    return <div className="muted tiny" style={{ padding: 18 }}>Chart library unavailable.</div>;
+  }
+  return <div ref={ref} style={{ width: '100%', height: height || 280, minHeight: 180 }} />;
+}
+
+function PaginatedTable({ columns, rows, page, pageSize, onPage, onExportCsv, emptyText, onRowClick, selectedKey }) {
+  const safeRows = rows || [];
+  const safeCols = columns || [];
+  const limit = Number(pageSize || 50);
+  const canPrev = Number(page || 1) > 1;
+  const canNext = safeRows.length >= limit;
+  return (
+    <>
+      <div className="panel-body flush" style={{ overflow: 'auto' }}>
+        {!safeRows.length ? (
+          <div className="muted" style={{ padding: 24, textAlign: 'center', fontSize: 12 }}>
+            {emptyText || 'No rows.'}
+          </div>
+        ) : (
+          <table className="tbl eval-table">
+            <thead>
+              <tr>{safeCols.map(col => <th key={col.key} className={col.cls || ''}>{col.label}</th>)}</tr>
+            </thead>
+            <tbody>
+              {safeRows.map((row, idx) => {
+                const key = row.id || row.trade_id || row.date || idx;
+                const selected = selectedKey && String(selectedKey) === String(row.date || key);
+                return (
+                  <tr key={key} className={selected ? 'selected' : ''} onClick={() => onRowClick && onRowClick(row)}>
+                    {safeCols.map(col => (
+                      <td key={col.key} className={col.cls || ''}>
+                        {col.render ? col.render(row) : (row[col.key] ?? '--')}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div className="eval-pagination">
+        <button className="btn sm" disabled={!canPrev} onClick={() => onPage && onPage(Math.max(1, Number(page || 1) - 1))}>Prev</button>
+        <span className="mono tiny">Page {page || 1}</span>
+        <button className="btn sm" disabled={!canNext} onClick={() => onPage && onPage(Number(page || 1) + 1)}>Next</button>
+        {onExportCsv && <button className="btn sm ghost" onClick={onExportCsv}>Export CSV</button>}
+      </div>
+    </>
+  );
+}
+
 function ConfirmModal({ open, title, message, confirmText, requireType, danger, onCancel, onConfirm }) {
   const [typed, setTyped] = useState('');
   useEffect(() => { if (open) setTyped(''); }, [open]);
@@ -590,5 +668,5 @@ function ConfirmModal({ open, title, message, confirmText, requireType, danger, 
 
 Object.assign(window, {
   KpiStrip, PriceChart, TradeTable, DecisionGrid, DecisionDetail,
-  AlertList, StrategyBars, ConfirmModal,
+  AlertList, StrategyBars, EChartPanel, PaginatedTable, ConfirmModal,
 });

@@ -1,4 +1,5 @@
 import unittest
+from tempfile import TemporaryDirectory
 from datetime import date
 from unittest import mock
 
@@ -24,6 +25,18 @@ def _snap(*, ts: str, vix_intraday_chg: float | None = None, vix_spike_flag: boo
 
 
 class RiskManagerTests(unittest.TestCase):
+    def test_operator_halt_sentinel_triggers_kill_switch(self) -> None:
+        with TemporaryDirectory() as tmp_dir, mock.patch.dict("os.environ", {"STRATEGY_RUN_DIR": tmp_dir}, clear=False):
+            mgr = RiskManager()
+            self.assertFalse(mgr.is_halted)
+
+            halt_path = mgr._operator_halt_path
+            halt_path.parent.mkdir(parents=True, exist_ok=True)
+            halt_path.touch()
+
+            self.assertTrue(mgr.is_halted)
+            self.assertEqual(mgr.halt_reason, "operator_halt")
+
     def test_budget_per_trade_sizing_uses_notional_budget(self) -> None:
         with mock.patch.dict(
             "os.environ",

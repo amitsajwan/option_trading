@@ -101,6 +101,7 @@ Most other containers are expected to start from repo root through Compose witho
 - [runbooks/README.md](runbooks/README.md)
 - [runbooks/GCP_DEPLOYMENT.md](runbooks/GCP_DEPLOYMENT.md)
 - [PROCESS_TOPOLOGY.md](PROCESS_TOPOLOGY.md)
+- [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md)
 - [DOCS_CODE_MAP.md](DOCS_CODE_MAP.md)
 - [../strategy_app/docs/README.md](../strategy_app/docs/README.md)
 - [../ml_pipeline_2/docs/README.md](../ml_pipeline_2/docs/README.md)

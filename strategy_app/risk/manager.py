@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from ..contracts import PositionContext, RiskContext
+from ..engines.runtime_artifacts import resolve_runtime_artifact_paths
 from ..engines.snapshot_accessor import SnapshotAccessor
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class RiskManager:
     def __init__(self) -> None:
         self._context = RiskContext()
         self._trade_date: Optional[date] = None
+        self._operator_halt_path = resolve_runtime_artifact_paths().operator_halt_path
         self._risk_profile = str(os.getenv("RISK_PROFILE", "") or "").strip().lower()
         self._profile_defaults = dict(_RISK_PROFILE_PRESETS.get(self._risk_profile, {}))
         if self._risk_profile and not self._profile_defaults:
@@ -99,7 +101,8 @@ class RiskManager:
     @property
     def is_halted(self) -> bool:
         return bool(
-            self._context.daily_loss_breached
+            self._operator_halt_path.exists()
+            or self._context.daily_loss_breached
             or self._context.session_trade_cap_breached
             or self._context.weekly_loss_breached
             or self._context.vix_spike_halt
@@ -115,6 +118,8 @@ class RiskManager:
 
     @property
     def halt_reason(self) -> Optional[str]:
+        if self._operator_halt_path.exists():
+            return "operator_halt"
         ctx = self._context
         if ctx.daily_loss_breached:
             return "daily_loss_cap"
