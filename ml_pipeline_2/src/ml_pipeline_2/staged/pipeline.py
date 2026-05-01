@@ -452,6 +452,7 @@ def build_stage2_labels_market_direction(
     """
     raw_cfg = dict(((manifest or {}).get("training") or {}).get("stage2_decisive_move_filter") or {})
     min_edge = float(raw_cfg.get("min_ce_pe_edge", 0.002))
+    allowed_regimes: list[str] | None = raw_cfg.get("allowed_regimes") or None
 
     labeled = _attach_labels(stage_frame, oracle)
     labeled = labeled[pd.to_numeric(labeled["entry_label"], errors="coerce").fillna(0.0) == 1.0].copy()
@@ -460,6 +461,10 @@ def build_stage2_labels_market_direction(
     pe_ret = pd.to_numeric(labeled["best_pe_net_return_after_cost"], errors="coerce").fillna(0.0)
     edge = (ce_ret - pe_ret).abs()
     labeled = labeled[edge >= min_edge].copy()
+
+    if allowed_regimes:
+        regime_series = _regime_label_series(labeled)
+        labeled = labeled[regime_series.isin(allowed_regimes)].copy()
 
     ce_ret = pd.to_numeric(labeled["best_ce_net_return_after_cost"], errors="coerce").fillna(0.0)
     pe_ret = pd.to_numeric(labeled["best_pe_net_return_after_cost"], errors="coerce").fillna(0.0)
