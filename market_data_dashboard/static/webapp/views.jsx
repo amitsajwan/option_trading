@@ -320,6 +320,8 @@ function ReplayMonitor({ onModeSwitch }) {
   const [replayDate,     setReplayDate]     = _useState('');
   const [replayError,    setReplayError]    = _useState('');
   const [wsStatus,       setWsStatus]       = _useState('idle');
+  const [availableDates, setAvailableDates] = _useState([]);
+  const [datesLoading,   setDatesLoading]   = _useState(true);
   const [selectedTrade,  setSelectedTrade]  = _useState(null);
   const [selectedSignal, setSelectedSignal] = _useState(null);
   const [generating,     setGenerating]     = _useState(false);
@@ -373,6 +375,26 @@ function ReplayMonitor({ onModeSwitch }) {
     return () => { if (wsRef.current) wsRef.current.close(); };
   }, []);
 
+  _useEffect(() => {
+    let alive = true;
+    fetch('/api/historical/replay/dates?limit=250')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`server returned ${r.status}`)))
+      .then(payload => {
+        if (!alive) return;
+        const dates = Array.isArray(payload.dates) ? payload.dates : [];
+        setAvailableDates(dates);
+        setDatesLoading(false);
+        if (payload.latest) handleDateChange(payload.latest);
+        else setReplayError(`No replay dates found in ${payload.collection || 'historical snapshots'}.`);
+      })
+      .catch(err => {
+        if (!alive) return;
+        setDatesLoading(false);
+        setReplayError('Failed to load replay dates: ' + err.message);
+      });
+    return () => { alive = false; };
+  }, []);
+
   function sendControl(patch) {
     wsRef.current && wsRef.current.send({ action: 'control', ...patch });
   }
@@ -392,6 +414,7 @@ function ReplayMonitor({ onModeSwitch }) {
     sendControl({ seek: 0, play: false });
   }
   function handleDateChange(newDate) {
+    if (!newDate) return;
     setReplayDate(newDate);
     replayDateRef.current = newDate;
     setReplayError('');
@@ -439,11 +462,16 @@ function ReplayMonitor({ onModeSwitch }) {
       <div className="loading-shell">
         <div className="row gap-s" style={{ justifyContent: 'center', marginBottom: 12 }}>
           <span className="field-label">Replay date</span>
-          <input className="inp mono" type="date" value={replayDate} style={{ width: 150 }}
-            onChange={e => handleDateChange(e.target.value)} />
+          <select className="inp mono" value={replayDate} style={{ width: 170 }}
+            disabled={datesLoading || !availableDates.length}
+            onChange={e => handleDateChange(e.target.value)}>
+            {!replayDate && <option value="">{datesLoading ? 'Loading dates…' : 'Select date'}</option>}
+            {availableDates.slice().reverse().map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
         </div>
         <span className="mono" style={{ fontSize: 12 }}>
-          {wsStatus === 'connecting'   ? 'Connecting to server\u2026' :
+          {datesLoading                ? 'Loading available replay dates\u2026' :
+           wsStatus === 'connecting'   ? 'Connecting to server\u2026' :
            wsStatus === 'disconnected' ? 'Reconnecting\u2026'         :
            replayError                ? replayError                   : 'Select a replay date to load a session.'}
         </span>
@@ -503,8 +531,11 @@ function ReplayMonitor({ onModeSwitch }) {
       <div style={{ flex: 1 }} />
       <div className="mobile-hide row gap-s" style={{ alignSelf: 'center' }}>
         <span className="field-label">Date</span>
-        <input className="inp mono" type="date" value={replayDate} style={{ width: 140 }}
-          onChange={e => handleDateChange(e.target.value)} />
+        <select className="inp mono" value={replayDate} style={{ width: 150 }}
+          disabled={datesLoading || !availableDates.length}
+          onChange={e => handleDateChange(e.target.value)}>
+          {availableDates.slice().reverse().map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
       </div>
     </>
   );

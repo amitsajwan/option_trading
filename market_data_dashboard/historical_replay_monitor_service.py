@@ -180,6 +180,20 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             "collection_counts": {},
         }
 
+    def get_available_dates(self, *, limit: int = 250) -> dict[str, Any]:
+        coll = self._repo.snapshot_collection()
+        raw_dates = coll.distinct("trade_date_ist", {"trade_date_ist": {"$exists": True, "$nin": ["", None]}})
+        dates = sorted({str(value).strip() for value in raw_dates if str(value or "").strip()})
+        if limit > 0:
+            dates = dates[-int(limit):]
+        latest = dates[-1] if dates else None
+        return {
+            "dates": dates,
+            "latest": latest,
+            "count": len(dates),
+            "collection": self._repo.snapshot_collection_name(),
+        }
+
     @staticmethod
     def _load_chart_from_parquet(date_ist: str, instrument: Optional[str] = None) -> Optional[dict[str, Any]]:
         """Load per-minute OHLC from Parquet futures dataset via pyarrow.

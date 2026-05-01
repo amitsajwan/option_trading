@@ -29,6 +29,7 @@ class DashboardHistoricalReplayRouter:
         router = APIRouter(tags=["historical-replay"])
         router.add_api_route("/historical/replay", self.historical_replay, methods=["GET"], response_class=HTMLResponse)
         router.add_api_route("/api/historical/replay/session", self.get_historical_strategy_session, methods=["GET"])
+        router.add_api_route("/api/historical/replay/dates", self.get_available_dates, methods=["GET"])
         router.add_api_route("/api/historical/replay/status", self.get_historical_replay_status, methods=["GET"])
         router.add_api_route("/api/historical/replay/stream", self.stream_replay_status, methods=["GET"])
         router.add_api_route("/api/historical/replay/generate", self.generate_replay_data, methods=["POST"])
@@ -43,6 +44,13 @@ class DashboardHistoricalReplayRouter:
 
     async def historical_replay(self, request: Request) -> RedirectResponse:
         return RedirectResponse(url="/app?mode=replay", status_code=302)
+
+    async def get_available_dates(self, limit: int = 250) -> Any:
+        service = self._require_service()
+        try:
+            return service.get_available_dates(limit=limit)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to list replay dates: {exc}")
 
     async def get_historical_replay_status(
         self,
