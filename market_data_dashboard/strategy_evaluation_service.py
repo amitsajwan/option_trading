@@ -486,6 +486,18 @@ class StrategyEvaluationService:
                 return resolved, {"run_id": resolved, "dataset": mode, "status": "completed", "discovered": True}
         except Exception:
             pass
+        # Fallback: resolve from the run registry (covers zero-trade completed runs).
+        try:
+            registered = db[self._runs_collection_name()].find_one(
+                {"status": "completed", "dataset": mode},
+                sort=[("ended_at", -1)],
+            )
+            if isinstance(registered, dict) and registered.get("run_id"):
+                resolved = str(registered["run_id"]).strip()
+                registered.pop("_id", None)
+                return resolved, registered
+        except Exception:
+            pass
         raise ValueError("no historical replay data found")
 
     def _load_signal_map(

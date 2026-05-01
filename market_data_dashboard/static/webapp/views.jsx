@@ -431,8 +431,14 @@ function ReplayMonitor({ onModeSwitch }) {
       <div className="loading-shell">
         <span className="mono" style={{ fontSize: 12 }}>
           {wsStatus === 'connecting'   ? 'Connecting to server\u2026' :
-           wsStatus === 'disconnected' ? 'Reconnecting\u2026'         : 'Loading session\u2026'}
+           wsStatus === 'disconnected' ? 'Reconnecting\u2026'         :
+           replayError                ? replayError                   : 'Loading session\u2026'}
         </span>
+        {replayError && (
+          <span className="muted" style={{ marginTop: 10, fontSize: 11, display: 'block', textAlign: 'center' }}>
+            Try switching to a different date or wait for replay data to be generated.
+          </span>
+        )}
       </div>
     );
   }
