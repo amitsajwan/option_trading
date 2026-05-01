@@ -457,7 +457,12 @@ The script does six steps automatically:
 3. Builds a `force_training_release.json` compatible with the manifest tool
 4. Writes `.run/gcp_release/current_runtime_release.json` (live deploy pointer)
 5. Syncs published bundle to `gs://amittrading-493606-option-trading-models/published_models`
-6. Publishes runtime config bundle to `gs://amittrading-493606-option-trading-runtime-config/runtime`
+6. Uploads release manifests (`current_runtime_release.json`, `current_ml_pure_runtime.env`) to the runtime-config bucket
+
+> **Note on step 6:** Only the release pointer files are uploaded from the training VM. The full
+> runtime config bundle (`.env.compose` + Kite credentials + runtime guard) is published by
+> `start_runtime_interactive.sh` on the operator machine, which is the only place those
+> files live. The training VM does not and should not have live Kite credentials.
 
 ### Step B: Deploy from operator machine
 

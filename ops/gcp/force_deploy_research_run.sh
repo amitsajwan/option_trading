@@ -213,18 +213,38 @@ MODEL_GROUP="${MODEL_GROUP}" \
 bash "${SCRIPT_DIR}/publish_published_models.sh"
 
 echo ""
-echo "== Step 6: Publish runtime config bundle to GCS =="
-REPO_ROOT="${REPO_ROOT}" \
-RUNTIME_CONFIG_BUCKET_URL="${RUNTIME_CONFIG_BUCKET_URL}" \
-bash "${SCRIPT_DIR}/publish_runtime_config.sh"
+echo "== Step 6: Upload release manifests to GCS runtime-config bucket =="
+# Only upload the release pointer and runtime env — NOT the full compose bundle.
+# .env.compose + Kite credentials are published by start_runtime_interactive.sh
+# on the operator machine which has the full live config.
+GCS_RELEASE_PREFIX="${RUNTIME_CONFIG_BUCKET_URL%/}"
+GCLOUD_RELEASE_ROOT="${REPO_ROOT}/.run/gcp_release"
+
+for f in \
+    "current_runtime_release.json" \
+    "current_runtime_release_pointer.json" \
+    "current_ml_pure_runtime.env"
+do
+    if [ -f "${GCLOUD_RELEASE_ROOT}/${f}" ]; then
+        gcloud storage cp "${GCLOUD_RELEASE_ROOT}/${f}" \
+            "${GCS_RELEASE_PREFIX}/${f}" \
+            --quiet
+        echo "  uploaded: ${f} -> ${GCS_RELEASE_PREFIX}/${f}"
+    else
+        echo "  WARNING: ${GCLOUD_RELEASE_ROOT}/${f} not found — skipping"
+    fi
+done
 
 echo ""
 echo "========================================================"
 echo "Force deploy complete."
 echo "  run_id       : ${RUN_ID}"
 echo "  model_group  : ${MODEL_GROUP}"
-echo "  current manifests written to: ${REPO_ROOT}/.run/gcp_release/"
+echo "  model bundle : ${MODEL_BUCKET_URL}/${MODEL_GROUP}/data/training_runs/${RUN_ID}/"
+echo "  manifests in GCS: ${GCS_RELEASE_PREFIX}/current_runtime_release.json"
 echo ""
-echo "To deploy to the live runtime VM, run from your operator machine:"
+echo "Next: deploy to the live runtime VM from your operator machine:"
 echo "  bash ./ops/gcp/start_runtime_interactive.sh"
+echo ""
+echo "It will auto-load the new release and apply ML_PURE_RUN_ID=${RUN_ID}"
 echo "========================================================"
