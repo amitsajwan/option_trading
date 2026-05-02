@@ -13,7 +13,8 @@ Start a new session doc when beginning a new research iteration with a distinct 
 | 2026-04-23 | — | bypass_stage2=true to increase throughput | PF=0.41, 1,764 trades | ❌ Bypass is scientifically invalid — random direction guarantees loss |
 | 2026-04-26 | [MODEL_STATE_20260426.md](MODEL_STATE_20260426.md) | Staged pipeline: proper S1+S2+S3 with HPO | 27 trades, PF=0.627 (27 trades only) | ⚠️ Stage 1 signal confirmed (ROC 0.683). S2 direction signal exists but CE/PE regime bias blocks holdout |
 | 2026-04-27 | [MODEL_STATE_20260426.md](MODEL_STATE_20260426.md) | Fix CE/PE regime bias via feature engineering (oracle rolling win rates, MIDDAY+OI/IV) | 113 trades, PF=0.352, 93.8% CE | ❌ Feature engineering cannot fix label imbalance. Bias is structural in training data |
-| 2026-04-28/29 | [MODEL_STATE_20260428.md](MODEL_STATE_20260428.md) | Attack label root cause (A→B→C grids). A2 fixed bias. B4 best feature set. C = deep HPO running. | A2: S2_ROC=0.544, 39% long. B4: S2_ROC=0.545, 329 trades, 51% long. VOLATILE PF=1.31–1.82 ✅ consistent edge | 🔄 Grid C running (C1 active, C2+C3 queued) |
+| 2026-04-28/29 | [MODEL_STATE_20260428.md](MODEL_STATE_20260428.md) | Attack label root cause (A→B→C grids). A2 fixed bias. B4 best feature set. C = deep HPO. | A2: S2_ROC=0.544, 39% long. B4: S2_ROC=0.545, 329 trades, 51% long. C1: VOLATILE PF=1.314, TRENDING PF=0.306 | ✅ C1 force-deployed with `regime_gate_v1` (VOLATILE+SIDEWAYS only). TRENDING remains unsolved. |
+| 2026-04-30/05-01 | [MODEL_STATE_20260502.md](MODEL_STATE_20260502.md) | Grid D: high-edge HPO to push TRENDING PF ≥ 1.5; Grid E: VOLATILE-only S2 training | D2: S1_ROC=0.855, S2_ROC=0.618, VOLATILE PF=1.452, TRENDING PF=1.195 — combined fails MDD+block_rate | ❌ D2 HELD (PF=1.19, MDD=29.5%, block_rate=3.97%). E1 config bug (0 S2 samples). C1 remains live. |
 
 ---
 
@@ -41,26 +42,35 @@ Oracle direction labels (2020–2024) are PE-dominant because 2020–2024 Indian
 
 **Fix confirmed working (A2):** `direction_market_up_v1` — labels market direction by comparing `best_ce_net_return_after_cost` vs `best_pe_net_return_after_cost`. Produces ~50/50 CE/PE balance. Signal is learnable (S2 CV ROC=0.544). Bias dropped from 93.8% → 39% CE.
 
-### Current Research Bottleneck (as of 2026-04-29)
+### Current Research Bottleneck (as of 2026-05-02)
 
-Label bias is fixed. The remaining problem is the **TRENDING regime**: Aug–Oct 2024 was a bear-trend period (NIFTY peaked Sep 2024, crashed -8% by Oct). The model learned bull-trending = CE wins from 2020–2024 training data, but the holdout TRENDING = bear-trend = PE wins. TRENDING is 57% of B4 holdout trades at PF=0.31.
+Label bias is fixed. C1 is live with `regime_gate_v1` (only VOLATILE+SIDEWAYS trade). The remaining problem is the **combined gate failure pattern** in full-pipeline runs:
 
-**The exploitable edge is VOLATILE regime** (PF=1.31–1.82 consistently). Grid D will focus here.
+- **block_rate too low** — D2 only blocks 3.97% of snapshots (gate requires ≥ 25%). Model is not selective enough. **Root cause confirmed:** block_rate was being measured over ALL holdout sessions, including SIDEWAYS where `regime_gate_v1` already blocks trades at runtime. Fix 2 in pipeline.py now removes SIDEWAYS from holdout evaluation so block_rate is measured only on sessions the ML model actually sees at runtime (~10% reduction in holdout size).
+- **max_drawdown too high** — D2 MDD = 29.5% (gate requires ≤ 10%). PRE_EXPIRY and UNKNOWN regimes have PF < 1.0 and drag MDD up.
+- **profit_factor below gate** — D2 combined PF = 1.194 (gate requires ≥ 1.5). VOLATILE is the only reliable edge (PF=1.452).
+
+**E1 VOLATILE-only S2 training** failed with 0 S2 samples. **Root cause confirmed and fixed:** `stage2_direction_view` lacks `ctx_regime_*` columns that `_regime_label_series()` needs to classify VOLATILE/SIDEWAYS. Without those columns, every row is "UNKNOWN" and the `allowed_regimes` filter drops all rows. Fix 1 in pipeline.py enriches the stage2 frame from `snapshots_ml_flat` via `snapshot_id` join before the labeler runs.
+
+**E2 config is ready.** Two pipeline fixes applied. Pull the branch on the VM and run E2.
 
 ---
 
-## Current Session (2026-04-28)
+## Current Session (2026-05-02)
 
-See [MODEL_STATE_20260428.md](MODEL_STATE_20260428.md) for full detail.
+See [MODEL_STATE_20260502.md](MODEL_STATE_20260502.md) for full detail.
 
 | Grid | Runs | Winner | Status |
 |------|------|--------|--------|
 | **Grid A** | A1 window_shift, A2 market_direction, A3 combined | **A2** — S2_ROC=0.544, 168 trades, long_share=39% | ✅ Complete |
 | **Grid B** `staged_grid.feature_s2_v1.json` | B1–B5 S2 feature sets | **B4** `fo_midday_time_aware_plus_oi_iv` — S2_ROC=0.545, 329 trades, long_share=51% | ✅ Complete |
-| **Grid C** standalone manifests (c1/c2/c3) | C1 deep HPO baseline, C2 cv train=180d, C3 cv valid=42d | TBD | 🔄 C1 running (tmux `grid_c`); C2+C3 queued |
-| **Grid D** (planned) | D1 VOLATILE-gated, D2 threshold tightening, D3 per-regime models | TBD | ⏳ After Grid C |
+| **Grid C** standalone manifests (c1/c2/c3) | C1 deep HPO baseline | **C1** — VOLATILE PF=1.314, TRENDING PF=0.306 | ✅ Complete. C1 force-deployed with `regime_gate_v1`. |
+| **Grid D** high-edge HPO (d2 runs) | D2 runs: 3 attempts | **D2 (20260501_040643)** — S1_ROC=0.855, S2_ROC=0.618, VOLATILE PF=1.452, combined PF=1.194, MDD=29.5% | ❌ HELD — block_rate=3.97% (need ≥25%), MDD too high. PRE_EXPIRY+UNKNOWN drag. |
+| **Grid E** VOLATILE-only S2 training | E1 volatile_only, E2 (ready) | — | E1: ❌ 0 S2 samples (pipeline bug, now fixed). E2: 🔜 ready to run. |
 
-**Key Grid C objective:** Confirm whether VOLATILE PF ≥ 1.5 is achievable with deeper HPO. If yes → regime-gated publish. If no → Grid D1 (VOLATILE-only S2 training).
+**Current live model:** `staged_deep_hpo_c1_base_20260429_040848` with `regime_gate_v1` active (only VOLATILE+SIDEWAYS sessions trade live).
+
+**Next action:** Pull branch on VM → run E2 (`staged_dual_recipe.deep_hpo_e2_volatile_only.json`). Goal: VOLATILE PF ≥ 1.3, combined PF ≥ 1.5, block_rate ≥ 25% (now evaluated on non-SIDEWAYS holdout). Replace C1 if E2 passes gates or force-deploy if VOLATILE PF ≥ 1.3.
 
 ---
 
@@ -71,23 +81,30 @@ See [MODEL_STATE_20260428.md](MODEL_STATE_20260428.md) for full detail.
 gcloud compute ssh savitasajwan03@option-trading-ml-01 --zone=asia-south1-b --project=amittrading-493606
 cd /home/savitasajwan03/option_trading
 
-# ── Grid C is running. Check status ──────────────────────────────────────
-tmux attach -t grid_c                              # live C1 output
-tail -50 ml_pipeline_2/tools/auto_grid_c.log       # automation log
-tail -50 ml_pipeline_2/tools/c2_run.log            # C2 (starts after C1)
-tail -50 ml_pipeline_2/tools/c3_run.log            # C3 (parallel with C2)
-python3 /tmp/check_b_runs.py                       # metrics for completed runs
+# ── Pull pipeline fixes (Fix 1 + Fix 2) and E2 config ─────────────────
+git pull --ff-only   # or: git fetch && git merge origin/<branch>
 
-# ── If Grid C died — restart ───────────────────────────────────────────
-tmux new-session -d -s grid_c
-tmux send-keys -t grid_c \
-  'bash /home/savitasajwan03/option_trading/ml_pipeline_2/tools/run_c_only.sh 2>&1 | tee /home/savitasajwan03/option_trading/ml_pipeline_2/tools/auto_grid_c.log' Enter
+# ── Verify Fix 1 is in place ────────────────────────────────────────────
+grep -n "ctx_regime_" ml_pipeline_2/src/ml_pipeline_2/staged/pipeline.py | head -5
+# should show the enrichment block around line 3406
 
-# ── Deploy updated code ─────────────────────────────────────────────────────
-git checkout -- <conflicting-file> && git pull --ff-only   # reset VM local changes then pull
+# ── Run E2 ──────────────────────────────────────────────────────────────
+tmux new -s e2
+python3 -m ml_pipeline_2.staged.run_research \
+  --config ml_pipeline_2/configs/research/staged_dual_recipe.deep_hpo_e2_volatile_only.json
+
+# ── Check E2 status ─────────────────────────────────────────────────────
+RUN=$(ls ml_pipeline_2/artifacts/research/ | grep e2_volatile | tail -1)
+cat ml_pipeline_2/artifacts/research/$RUN/summary.json | python3 -m json.tool | \
+  grep -E '"status"|"blocking_reasons"|"block_rate"|"profit_factor"|"max_drawdown"'
+
+# ── Inspect a specific run ─────────────────────────────────────────────
+cat ml_pipeline_2/artifacts/research/$RUN/summary.json | python3 -m json.tool | head -80
 
 # ── Summary schema note (v3) ───────────────────────────────────────────────
-# cv_prechecks.stage2_cv.roc_auc             (S2 CV ROC)
+# cv_prechecks.stage2_cv.roc_auc                          (S2 CV ROC)
 # scenario_reports.regime.segments.<R>.trades / .profit_factor / .long_share
+# holdout_reports.stage3.combined_holdout_summary.*       (holdout economics — SIDEWAYS excluded by Fix 2)
 # publish_assessment.blocking_reasons
+# label_filtering.stage2.direction_label_filter.{rows_before,rows_after}  (edge filter)
 ```

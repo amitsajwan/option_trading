@@ -38,7 +38,11 @@ Run that wrapper on a dedicated Linux snapshot-build host, not on Cloud Shell as
 
 ## Fresh Rebuild Order
 
-When the project is new or the derived buckets are empty, use this exact sequence:
+**If you have a local backup** (from `ops/gcp/backup_to_local.sh`, last run 2026-05-02):
+Skip steps 2 and 3. Upload parquet and models from local disk to the new GCS buckets, then continue from step 4.
+See the "Fast Path: Restore from Local Backup" section in [LIVE_SETUP_GUIDE.md](LIVE_SETUP_GUIDE.md).
+
+**Full rebuild from raw data:**
 
 1. `Infra`
 2. raw archive upload to GCS

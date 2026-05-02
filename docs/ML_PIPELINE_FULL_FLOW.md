@@ -2,7 +2,7 @@
 
 > **Purpose**: Reference document for the BankNifty Futures intraday options trading ML pipeline.
 > Covers data → training → campaign orchestration → publish decision.
-> Last updated: 2026-04-11
+> Last updated: 2026-05-02
 
 ---
 
@@ -308,10 +308,10 @@ SOLUTION (S3):
 ## 8. Infrastructure
 
 ```
-TRAINING VM: option-trading-snapshot-build-01
+TRAINING VM: option-trading-ml-01
   Machine:    n2-highmem-8  (8 vCPUs, 64 GB RAM)
   Zone:       asia-south1-b
-  Project:    amittrading
+  Project:    amittrading-493606
   Quota ceiling: 12 CPU total across regions (not adjustable)
 
 DATA LOCATION:
@@ -352,7 +352,10 @@ MONITOR LIVE STATUS:
 | stage2_midday_target_redesign_v1 | S2 target fix | HELD | Stage 1 passes (0.62), Stage 2 still poor |
 | stage3_midday_policy_paths_v1 | S3 policy search | HELD | Best Stage 1 (0.619), Stage 2 ROC ~0.54 |
 | stage3_direction_regime_v1 | S3 feature signal | GATE_FAILED | 0/24 features stable — confirmed regime amplifier |
-| **stage3_search_campaign_v1** | **S3 rolling oracle** | **RUNNING** | **New regime-aware features + full search** |
+| Grid A/B label fix | direction_market_up_v1 | HELD | Label bias fixed (93.8%→51% CE). S2 ROC 0.544–0.545. VOLATILE PF=1.31–1.82 |
+| staged_deep_hpo_c1_base_20260429 | Grid C deep HPO | HELD + **FORCE-DEPLOYED** | S1=0.683, S2=0.591. VOLATILE PF=1.314, TRENDING PF=0.306. Deployed with regime_gate_v1 (VOLATILE+SIDEWAYS only) |
+| staged_deep_hpo_d2_high_edge_20260501 | Grid D high-edge HPO | HELD | S1=0.855, S2=0.618, combined PF=1.194, MDD=29.5%, block_rate=3.97%. PRE_EXPIRY+UNKNOWN drag |
+| staged_deep_hpo_e1_volatile_only_20260501 | Grid E VOLATILE-only S2 | GATE_FAILED | stage2_signal_check 0 samples — session_filter config bug (bucket vs regime column mismatch) |
 
 ---
 

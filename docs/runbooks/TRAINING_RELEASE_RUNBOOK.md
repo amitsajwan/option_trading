@@ -417,10 +417,12 @@ want to deploy it while research continues in parallel.
 - Combined PF = 0.87 net (combined fails gate because TRENDING is 57% of sessions)
 - Deployed with `regime_gate_v1` active — only VOLATILE and SIDEWAYS sessions trade live
 
-**Next candidate:** `staged_deep_hpo_e1_volatile_only` (running)
-- Same as C1 but S2 trained only on VOLATILE+SIDEWAYS sessions
-- Expected: sharper decision boundary for edge-present regimes
-- Replace C1 once E1 completes and shows VOLATILE PF ≥ 1.3
+**Next candidate:** `staged_deep_hpo_e2_volatile_only` (ready to run — pipeline fixed)
+- E1 (`staged_deep_hpo_e1_volatile_only_20260501_170058`) failed: `stage2_direction_view` lacks `ctx_regime_*` columns → `_regime_label_series` returned all UNKNOWN → `allowed_regimes` filter dropped all rows → 0 S2 samples
+- Fix applied in `pipeline.py`: stage2 frame is now enriched with `ctx_regime_*` columns from `snapshots_ml_flat` via `snapshot_id` join before the labeler runs. Holdout evaluation also now excludes SIDEWAYS sessions (regime_gate_v1 parity).
+- E2 config: `ml_pipeline_2/configs/research/staged_dual_recipe.deep_hpo_e2_volatile_only.json` — pull branch on VM and run
+- E2 goal: sharper S2 decision boundary, block_rate ≥ 25%, VOLATILE PF ≥ 1.3
+- Replace C1 once E2 completes and meets criteria
 
 ### Pre-conditions
 
@@ -474,13 +476,13 @@ bash ./ops/gcp/start_runtime_interactive.sh
 
 It auto-loads the manifest from the runtime-config bucket, applies `ML_PURE_RUN_ID` + `ML_PURE_MODEL_GROUP` into `.env.compose`, runs preflight, and starts/restarts the runtime VM.
 
-### Deploying a new research run (replacing C1 with E1)
+### Deploying a new research run (replacing C1 with E2)
 
-When E1 completes and metrics are satisfactory:
+When E2 completes and metrics are satisfactory:
 
 ```bash
 # On training VM
-RUN_DIR=ml_pipeline_2/artifacts/research/staged_deep_hpo_e1_volatile_only_<TIMESTAMP> \
+RUN_DIR=ml_pipeline_2/artifacts/research/staged_deep_hpo_e2_volatile_only_<TIMESTAMP> \
 MODEL_GROUP=banknifty_futures/h15_tp_auto \
 PROFILE_ID=openfe_v9_dual \
 bash ops/gcp/force_deploy_research_run.sh
@@ -493,7 +495,7 @@ The runtime will pick up the new `ML_PURE_RUN_ID` on restart.
 
 ### Rollback to C1
 
-If E1 behaves unexpectedly live, roll back by re-running force_deploy for C1 and restarting:
+If E2 behaves unexpectedly live, roll back by re-running force_deploy for C1 and restarting:
 
 ```bash
 RUN_DIR=ml_pipeline_2/artifacts/research/staged_deep_hpo_c1_base_20260429_040848 \

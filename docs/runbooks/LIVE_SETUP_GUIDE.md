@@ -5,10 +5,97 @@ It is the single sequential document that gets you from zero to a live trading r
 
 **Audience:** first-time operator or anyone rebuilding from scratch.
 **Outcome:** fully running `ml_pure` live trading system on GCP.
-**Estimated time:** 3–8 hours depending on data volume and training run duration.
+**Estimated time:** 3–8 hours (full rebuild) or 45–90 minutes (restore from local backup).
 
 **Read this before any other runbook.**
 For detailed procedures on individual phases, the links below point to the dedicated runbooks.
+
+---
+
+## Fast Path: Restore from Local Backup
+
+> Use this if you have a local backup from `ops/gcp/backup_to_local.sh`.
+> It replaces the 3–4 hour Phase 3+4 with two upload commands (~30 min).
+
+**What you have locally (from the last backup, 2026-05-02):**
+```
+.data/ml_pipeline/parquet_data/   — all training views (v1 + v2 + v3) + intermediate parquet (~3.1 GB)
+ml_pipeline_2/artifacts/published_models/  — C1 model + earlier models (~14 MB)
+.deploy/runtime-config/           — last known .env.compose, release manifest, runtime guards
+```
+
+**Active model:** `staged_deep_hpo_c1_base_20260429_040848` with `regime_gate_v1`
+(VOLATILE + SIDEWAYS only trade live — see TRAINING_RELEASE_RUNBOOK.md for force-deploy details)
+
+### Steps
+
+1. **Complete Phase 0, 1, 2** as normal (new GCP project, clone repo, bootstrap infra).
+
+2. **Upload parquet from local backup** — skip Phase 3 (raw upload) and Phase 4 (parquet build):
+
+```bash
+# Set your new project values
+NEW_SNAPSHOT_BUCKET="<new-project-id>-option-trading-snapshots"
+
+# Upload all training views and intermediate parquet
+gcloud storage rsync .data/ml_pipeline/parquet_data \
+  "gs://${NEW_SNAPSHOT_BUCKET}/ml_pipeline/parquet_data" \
+  --recursive
+
+# Verify the essential views are present
+gcloud storage ls "gs://${NEW_SNAPSHOT_BUCKET}/ml_pipeline/parquet_data/"
+```
+
+3. **Upload published models**:
+
+```bash
+NEW_MODEL_BUCKET="<new-project-id>-option-trading-models"
+
+gcloud storage rsync ml_pipeline_2/artifacts/published_models \
+  "gs://${NEW_MODEL_BUCKET}/published_models" \
+  --recursive
+```
+
+4. **Restore runtime config** (`.env.compose`, guards, release manifest):
+
+```bash
+# The backup is at .deploy/runtime-config/
+# Copy .env.compose back to repo root
+cp .deploy/runtime-config/.env.compose .env.compose
+
+# Update bucket names in .env.compose for the new project
+# Key vars to update:
+#   MODEL_BUCKET_URL, RUNTIME_CONFIG_BUCKET_URL, DATA_SYNC_SOURCE
+
+# Restore runtime guards
+mkdir -p .run
+cp .deploy/runtime-config/.run/ml_runtime_guard_live.json .run/
+cp .deploy/runtime-config/.run/ml_runtime_guard_historical_test.json .run/
+```
+
+5. **Update operator.env for the new project**:
+
+```bash
+# Edit ops/gcp/operator.env — update these fields:
+PROJECT_ID="<new-project-id>"
+MODEL_BUCKET_NAME="<new-project-id>-option-trading-models"
+RUNTIME_CONFIG_BUCKET_NAME="<new-project-id>-option-trading-runtime-config"
+SNAPSHOT_DATA_BUCKET_NAME="<new-project-id>-option-trading-snapshots"
+DATA_SYNC_SOURCE="gs://<new-project-id>-option-trading-snapshots/ml_pipeline"
+MODEL_BUCKET_URL="gs://<new-project-id>-option-trading-models/published_models"
+RUNTIME_CONFIG_BUCKET_URL="gs://<new-project-id>-option-trading-runtime-config/runtime"
+RAW_ARCHIVE_BUCKET_URL="gs://<new-project-id>-option-trading-snapshots/banknifty_data"
+SNAPSHOT_PARQUET_BUCKET_URL="gs://<new-project-id>-option-trading-snapshots/parquet_data"
+```
+
+6. **Run smoke training publish** (Phase 5) to confirm the training pipeline works end-to-end on the restored data.
+
+7. **Run Kite auth + live deploy** (Phase 8 + 9).
+
+> **Note on raw snapshots (3.16 GB):** The raw `snapshots/` parquet was not in the local backup.
+> The training views (`snapshots_ml_flat`, `stage1/2/3_entry_view`) ARE backed up and are
+> sufficient to restart training. If you ever need to rebuild the views from scratch (e.g. schema
+> change), you will need to rebuild from the original raw CSV data first.
 
 ---
 
@@ -21,19 +108,19 @@ Phase 1  Repo + environment files
    ↓
 Phase 2  GCP infrastructure bootstrap
    ↓
-Phase 3  Raw market data upload to GCS   (Windows local machine)
+Phase 3  Raw market data upload to GCS   (Windows local machine) — SKIP if restoring from backup
    ↓
-Phase 4  Snapshot / parquet build         (dedicated Linux build host)
+Phase 4  Snapshot / parquet build        (dedicated Linux build host) — SKIP if restoring from backup
    ↓
-Phase 5  Smoke training publish           (validates the pipeline end-to-end)
+Phase 5  Smoke training publish          (validates the pipeline end-to-end)
    ↓
-Phase 6  Historical replay validation     (smoke check before live)
+Phase 6  Historical replay validation    (smoke check before live)
    ↓
 Phase 7  Production training + publish
    ↓
 Phase 8  Kite API auth
    ↓
-Phase 9  Live deploy                      (runtime VM start)
+Phase 9  Live deploy                     (runtime VM start)
    ↓
 Phase 10 Verify live runtime
    ↓
@@ -43,7 +130,7 @@ Phase 12 Cleanup and rollback  (training VM delete, VM stop, teardown, runtime r
 ```
 
 **Hard rules:**
-- Do not go to Phase 5 until Phase 4 (parquet) is complete.
+- Do not go to Phase 5 until Phase 4 (parquet) is complete — or backup has been uploaded.
 - Do not go to Phase 7 until Phase 5 (smoke publish) succeeds.
 - Do not go to Phase 9 until Phase 6 (historical replay) passes.
 - Do not go to Phase 9 without valid Kite credentials.
@@ -159,13 +246,24 @@ All operator scripts expect to run from the repo root.
 cp ops/gcp/operator.env.example ops/gcp/operator.env
 ```
 
-**For the `amittrading-493606` project**, run the patch script to replace all template placeholders automatically:
+**For the `amittrading-493606` project** (original), run the patch script to replace all template placeholders automatically:
 
 ```bash
 python3 ops/gcp/patch_operator_env.py
 ```
 
 This replaces `my-gcp-project`, `my-option-trading-models`, etc. with the real `amittrading-493606` values. Safe to re-run.
+
+**For a new GCP project** (e.g. after expiry), skip the patch script and edit manually.
+The patch script is hardcoded to `amittrading-493606` and will write the wrong values.
+Use the `sed` one-liner to substitute project IDs in bulk:
+
+```bash
+OLD="amittrading-493606"
+NEW="<your-new-project-id>"
+sed -i "s/${OLD}/${NEW}/g" ops/gcp/operator.env
+# Then update REPO_REF to your current branch, and TRAINING_VM_NAME if needed
+```
 
 For a different project, edit `ops/gcp/operator.env` manually. Required fields:
 
