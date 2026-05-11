@@ -169,7 +169,9 @@ cat ml_pipeline_2/artifacts/research/staged_deep_hpo_e2_volatile_only_*/summary.
 
 # Publish to local artifacts (writes to ml_pipeline_2/artifacts/published_models/)
 PYTHONPATH=. python3 -m ml_pipeline_2.run_staged_release \
-  --run-dir ml_pipeline_2/artifacts/research/staged_deep_hpo_e2_volatile_only_<TIMESTAMP>
+  --run-dir ml_pipeline_2/artifacts/research/staged_deep_hpo_e2_volatile_only_<TIMESTAMP> \
+  --model-group banknifty_futures/h15_tp_auto \
+  --profile-id openfe_v9_dual
 
 # Update .env.compose to point to E2
 sed -i 's/ML_PURE_RUN_ID=.*/ML_PURE_RUN_ID=staged_deep_hpo_e2_volatile_only_<TIMESTAMP>/' .env.compose
