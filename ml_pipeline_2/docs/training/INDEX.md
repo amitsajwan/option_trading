@@ -90,7 +90,7 @@ grep -n "ctx_regime_" ml_pipeline_2/src/ml_pipeline_2/staged/pipeline.py | head 
 
 # ── Run E2 ──────────────────────────────────────────────────────────────
 tmux new -s e2
-python3 -m ml_pipeline_2.staged.run_research \
+python3 -m ml_pipeline_2.run_research \
   --config ml_pipeline_2/configs/research/staged_dual_recipe.deep_hpo_e2_volatile_only.json
 
 # ── Check E2 status ─────────────────────────────────────────────────────

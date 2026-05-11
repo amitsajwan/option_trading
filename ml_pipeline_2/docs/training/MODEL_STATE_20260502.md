@@ -152,7 +152,7 @@ with Fix 2, this is now evaluated on non-SIDEWAYS sessions where it is meaningfu
 1. **Run E2 on training VM** — push code to branch, then:
    ```bash
    cd ~/option_trading && git pull
-   python -m ml_pipeline_2.staged.run_research \
+   python -m ml_pipeline_2.run_research \
      --config ml_pipeline_2/configs/research/staged_dual_recipe.deep_hpo_e2_volatile_only.json
    ```
 2. **E2 success criteria**: VOLATILE PF ≥ 1.3, combined PF ≥ 1.5, block_rate ≥ 25%, MDD ≤ 10%

@@ -18,7 +18,7 @@ Use this when your GCP project has expired, been deleted, or is otherwise unavai
 | All pipeline code | `ml_pipeline_2/` | ✅ E2 fixes committed |
 | Docker Compose stack | `docker-compose.yml` | ✅ Runs fully offline |
 
-**What you cannot do without GCP:** live trading (Kite credential sync), runtime VM hosting.
+**What you cannot do without GCP:** runtime VM hosting (live trading container, market-data ingestion). Kite credentials themselves are NOT in GCP — they live on your operator machine and are pushed up by `start_runtime_interactive.sh`. See "Kite credentials" below.
 
 ---
 
@@ -102,11 +102,14 @@ gcloud storage rsync .deploy/runtime-config \
 ```
 
 **Step 5: Create training VM and run E2 (10 min setup + 4-8h training)**
+
+Before launch: confirm `ops/gcp/operator.env:REPO_REF` points at the branch you intend the VM to clone (currently `chore/ml-pipeline-ubuntu-gcp-runbook` — change to `main` if merged).
+
 ```bash
 bash ops/gcp/create_training_vm.sh
 
-# SSH to VM
-gcloud compute ssh savitasajwan03@option-trading-ml-01 \
+# SSH to VM — replace USER with your gcloud OS Login user (`gcloud auth list`)
+gcloud compute ssh USER@option-trading-ml-01 \
   --zone=asia-south1-b --project=YOUR_PROJECT_ID
 
 # On VM
@@ -115,6 +118,23 @@ tmux new -s e2
 PYTHONPATH=. .venv/bin/python -u -m ml_pipeline_2.run_research \
   --config ml_pipeline_2/configs/research/staged_dual_recipe.deep_hpo_e2_volatile_only.json \
   2>&1 | tee ml_pipeline_2/tools/e2_run.log
+```
+
+**Step 6: Restore Kite credentials (for live trading only)**
+
+Kite credentials are NOT backed up to GCS — they live on your operator machine. After the new project is up:
+
+```bash
+# Fill kite keys in operator.env (api_key + api_secret only, NOT access_token)
+sed -i 's/^KITE_API_KEY=.*/KITE_API_KEY="your_api_key"/' ops/gcp/operator.env
+sed -i 's/^KITE_API_SECRET=.*/KITE_API_SECRET="your_api_secret"/' ops/gcp/operator.env
+
+# Refresh access token via local interactive auth flow (opens Zerodha login in browser)
+python3 -m ingestion_app.kite_auth --force
+
+# Sync credentials.json to runtime VM via start_runtime_interactive.sh, which mounts
+# secrets via the runtime config bucket — see TRAINING_RELEASE_RUNBOOK.md §"Start runtime"
+bash ops/gcp/start_runtime_interactive.sh
 ```
 
 ---
@@ -147,20 +167,29 @@ from `ml_pipeline_2/artifacts/published_models/` — no GCS needed.
 cat ml_pipeline_2/artifacts/research/staged_deep_hpo_e2_volatile_only_*/summary.json \
   | python3 -m json.tool | grep -E '"decision|blocking_reasons|profit_factor|block_rate"'
 
-# Publish to local artifacts
-PYTHONPATH=. python3 -m ml_pipeline_2.staged.publish_research_run \
+# Publish to local artifacts (writes to ml_pipeline_2/artifacts/published_models/)
+PYTHONPATH=. python3 -m ml_pipeline_2.run_staged_release \
   --run-dir ml_pipeline_2/artifacts/research/staged_deep_hpo_e2_volatile_only_<TIMESTAMP>
 
 # Update .env.compose to point to E2
 sed -i 's/ML_PURE_RUN_ID=.*/ML_PURE_RUN_ID=staged_deep_hpo_e2_volatile_only_<TIMESTAMP>/' .env.compose
 ```
 
-### If E2 passes VOLATILE PF ≥ 1.3 but is HELD (force-deploy path)
+**For local Docker / replay only:** publishing is optional — local Docker reads research-run artifacts directly via `ML_PURE_RUN_ID` resolution against `ml_pipeline_2/artifacts/published_models/`. You only need to publish when you intend to deploy to a GCP runtime VM.
+
+### If E2 passes VOLATILE PF ≥ 1.3 but is HELD (force-deploy to GCP runtime)
 ```bash
-# Force-deploy bypasses combined gate — use only when VOLATILE regime edge is confirmed
+# Force-deploy bypasses combined gate — use only when VOLATILE regime edge is confirmed.
+# On a NEW project, you MUST override the bucket URLs (defaults point at the old
+# amittrading-493606 buckets which no longer exist).
+source ops/gcp/operator.env
+
 RUN_DIR=ml_pipeline_2/artifacts/research/staged_deep_hpo_e2_volatile_only_<TIMESTAMP> \
 MODEL_GROUP=banknifty_futures/h15_tp_auto \
 PROFILE_ID=openfe_v9_dual \
+APP_IMAGE_TAG=latest \
+MODEL_BUCKET_URL="gs://${MODEL_BUCKET_NAME}/published_models" \
+RUNTIME_CONFIG_BUCKET_URL="gs://${RUNTIME_CONFIG_BUCKET_NAME}/runtime" \
 bash ops/gcp/force_deploy_research_run.sh
 ```
 
