@@ -149,6 +149,9 @@ strategy_eval_ui/vite.config.d.ts
 # Runtime artifact sync staging (created by sync_runtime_artifacts.sh)
 .deploy/
 
+# Pre-commit hook preflight staging dirs
+staged-preflight-*/
+
 # Infrastructure state
 .terraform/
 *.tfstate
