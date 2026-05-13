@@ -405,6 +405,107 @@ Common warning interpretation:
   - the Stage 2 signal precheck now skips zero-variance aligned slices before computing correlation
   - if this warning returns, investigate label collapse or feature degeneracy in the affected dataset window instead of relaxing gates blindly
 
+## Force-Deploying a Research Run (HOLD Override)
+
+Use this path when a research run has demonstrable regime-specific edge but fails the
+combined hard gates (e.g. `profit_factor < 1.5` due to TRENDING regime drag) and you
+want to deploy it while research continues in parallel.
+
+**Current approved research run:** `staged_deep_hpo_c1_base_20260429_040848`
+- VOLATILE PF = 1.31 net (real edge, survives 0.06% cost)
+- TRENDING PF = 0.31 net (cost destroys thin edge — blocked at runtime by `regime_gate_v1`)
+- Combined PF = 0.87 net (combined fails gate because TRENDING is 57% of sessions)
+- Deployed with `regime_gate_v1` active — only VOLATILE and SIDEWAYS sessions trade live
+
+**Next candidate:** `staged_deep_hpo_e2_volatile_only` (ready to run — pipeline fixed)
+- E1 (`staged_deep_hpo_e1_volatile_only_20260501_170058`) failed: `stage2_direction_view` lacks `ctx_regime_*` columns → `_regime_label_series` returned all UNKNOWN → `allowed_regimes` filter dropped all rows → 0 S2 samples
+- Fix applied in `pipeline.py`: stage2 frame is now enriched with `ctx_regime_*` columns from `snapshots_ml_flat` via `snapshot_id` join before the labeler runs. Holdout evaluation also now excludes SIDEWAYS sessions (regime_gate_v1 parity).
+- E2 config: `ml_pipeline_2/configs/research/staged_dual_recipe.deep_hpo_e2_volatile_only.json` — pull branch on VM and run
+- E2 goal: sharper S2 decision boundary, block_rate ≥ 25%, VOLATILE PF ≥ 1.3
+- Replace C1 once E2 completes and meets criteria
+
+### Pre-conditions
+
+1. Research run is `mode=completed` (not failed)
+2. `operator.env` on the training VM has real GCS bucket values:
+   ```
+   MODEL_BUCKET_URL=gs://amittrading-493606-option-trading-models/published_models
+   RUNTIME_CONFIG_BUCKET_URL=gs://amittrading-493606-option-trading-runtime-config/runtime
+   ```
+3. Runtime guard file exists: `.run/ml_runtime_guard_live.json`
+
+### Step A: Run on the training VM
+
+SSH to the training VM and run the force-deploy script:
+
+```bash
+gcloud compute ssh savitasajwan03@option-trading-ml-01 \
+  --zone=asia-south1-b --project=amittrading-493606
+
+cd /home/savitasajwan03/option_trading
+
+RUN_DIR=ml_pipeline_2/artifacts/research/staged_deep_hpo_c1_base_20260429_040848 \
+MODEL_GROUP=banknifty_futures/h15_tp_auto \
+PROFILE_ID=openfe_v9_dual \
+APP_IMAGE_TAG=latest \
+MODEL_BUCKET_URL=gs://amittrading-493606-option-trading-models/published_models \
+RUNTIME_CONFIG_BUCKET_URL=gs://amittrading-493606-option-trading-runtime-config/runtime \
+bash ops/gcp/force_deploy_research_run.sh
+```
+
+The script does six steps automatically:
+1. Force-publishes the local model bundle (bypasses HOLD gates)
+2. Writes `release/ml_pure_runtime.env` for the run
+3. Builds a `force_training_release.json` compatible with the manifest tool
+4. Writes `.run/gcp_release/current_runtime_release.json` (live deploy pointer)
+5. Syncs published bundle to `gs://amittrading-493606-option-trading-models/published_models`
+6. Uploads release manifests (`current_runtime_release.json`, `current_ml_pure_runtime.env`) to the runtime-config bucket
+
+> **Note on step 6:** Only the release pointer files are uploaded from the training VM. The full
+> runtime config bundle (`.env.compose` + Kite credentials + runtime guard) is published by
+> `start_runtime_interactive.sh` on the operator machine, which is the only place those
+> files live. The training VM does not and should not have live Kite credentials.
+
+### Step B: Deploy from operator machine
+
+After the script completes on the training VM, run the live deploy from your operator machine:
+
+```bash
+bash ./ops/gcp/start_runtime_interactive.sh
+```
+
+It auto-loads the manifest from the runtime-config bucket, applies `ML_PURE_RUN_ID` + `ML_PURE_MODEL_GROUP` into `.env.compose`, runs preflight, and starts/restarts the runtime VM.
+
+### Deploying a new research run (replacing C1 with E2)
+
+When E2 completes and metrics are satisfactory:
+
+```bash
+# On training VM
+RUN_DIR=ml_pipeline_2/artifacts/research/staged_deep_hpo_e2_volatile_only_<TIMESTAMP> \
+MODEL_GROUP=banknifty_futures/h15_tp_auto \
+PROFILE_ID=openfe_v9_dual \
+bash ops/gcp/force_deploy_research_run.sh
+
+# On operator machine
+bash ./ops/gcp/start_runtime_interactive.sh
+```
+
+The runtime will pick up the new `ML_PURE_RUN_ID` on restart.
+
+### Rollback to C1
+
+If E2 behaves unexpectedly live, roll back by re-running force_deploy for C1 and restarting:
+
+```bash
+RUN_DIR=ml_pipeline_2/artifacts/research/staged_deep_hpo_c1_base_20260429_040848 \
+MODEL_GROUP=banknifty_futures/h15_tp_auto \
+PROFILE_ID=openfe_v9_dual \
+bash ops/gcp/force_deploy_research_run.sh
+# then restart runtime
+bash ./ops/gcp/start_runtime_interactive.sh
+```
+
 ## Step 6: Delete Temporary Training Infra
 
 Delete the disposable training VM after training is complete:
