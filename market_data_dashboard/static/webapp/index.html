@@ -7,9 +7,10 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
 <link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="terminal.css?v=2" />
 
 <template id="__bundler_thumbnail">
   <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
@@ -109,10 +110,10 @@
 <script src="https://unpkg.com/@stomp/stompjs@7.0.0/bundles/stomp.umd.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 <script src="core.js?v=5"></script>
-<script type="text/babel" src="components.jsx?v=6"></script>
+<script type="text/babel" src="components.jsx?v=8"></script>
 <script type="text/babel" src="tweaks-panel.jsx?v=5"></script>
-<script type="text/babel" src="views.jsx?v=8"></script>
-<script type="text/babel" src="eval.jsx?v=2"></script>
+<script type="text/babel" src="terminal-live.jsx?v=2"></script>
+<script type="text/babel" src="eval.jsx?v=3"></script>
 
 <script type="text/babel">
   const { useState, useEffect } = React;
@@ -121,9 +122,6 @@
   const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
     "mode": "replay",
     "density": "compact",
-    "showAlerts": true,
-    "showStrategyBars": true,
-    "chartHeight": 340,
     "speedPreset": 8,
     "replayAuto": true,
     "evalDefaultDataset": "historical",
@@ -164,6 +162,12 @@
     useEffect(() => {
       refreshHaltState();
     }, []);
+
+    // Sync body classes synchronously during render so charts see the right
+    // class when their createChart useEffect fires (children mount after parent renders).
+    // live + replay → cockpit shell (live-terminal); eval → dark panel layout (app-dark)
+    document.body.classList.toggle('live-terminal', mode === 'live' || mode === 'replay');
+    document.body.classList.toggle('app-dark', mode === 'eval');
 
     useEffect(() => {
       // Sync mode buttons
@@ -222,9 +226,9 @@
     };
 
     const monitorEl = mode === 'live'
-      ? <LiveMonitor onModeSwitch={() => setMode('replay')} onKillClick={onKillClick} />
+      ? <LiveMonitorDark onModeSwitch={() => setMode('replay')} onKillClick={onKillClick} />
       : mode === 'replay'
-        ? <ReplayMonitor onModeSwitch={() => setMode('live')} />
+        ? <ReplayMonitorDark onModeSwitch={setMode} />
         : <EvalMonitor tweaks={tweaks} />;
 
     return (
@@ -278,17 +282,6 @@
                 ]}
                 onChange={v => updateTweak({ density: v })}
               />
-              <TweakSlider
-                label="Chart height"
-                value={tweaks.chartHeight} min={220} max={520} step={10} unit="px"
-                onChange={v => updateTweak({ chartHeight: v })}
-              />
-            </TweakSection>
-            <TweakSection label="Panels">
-              <TweakToggle label="Strategy P&L bars" value={tweaks.showStrategyBars}
-                onChange={v => updateTweak({ showStrategyBars: v })} />
-              <TweakToggle label="Alerts & notes" value={tweaks.showAlerts}
-                onChange={v => updateTweak({ showAlerts: v })} />
             </TweakSection>
             {mode === 'replay' && (
               <TweakSection label="Replay">

@@ -108,12 +108,17 @@ function normalizeRunEvent(input) {
   };
 }
 
+function _evalGridColor() {
+  return (document.body.classList.contains('app-dark') || document.body.classList.contains('live-terminal'))
+    ? 'rgba(255,255,255,0.07)' : 'rgba(11,15,20,0.07)';
+}
+
 function buildLineOption(points, yKey, name) {
   return {
     grid: { left: 52, right: 18, top: 24, bottom: 40 },
     tooltip: { trigger: 'axis' },
     xAxis: { type: 'category', data: (points || []).map(p => p.date || p.timestamp || '') },
-    yAxis: { type: 'value', splitLine: { lineStyle: { color: 'rgba(11,15,20,0.07)' } } },
+    yAxis: { type: 'value', splitLine: { lineStyle: { color: _evalGridColor() } } },
     series: [{ name, type: 'line', smooth: true, symbol: 'none', data: (points || []).map(p => Array.isArray(yKey) ? yKey.map(k => p[k]).find(v => v !== undefined && v !== null) : p[yKey]) }],
   };
 }
@@ -123,7 +128,7 @@ function buildBarOption(points) {
     grid: { left: 52, right: 18, top: 24, bottom: 40 },
     tooltip: { trigger: 'axis' },
     xAxis: { type: 'category', data: (points || []).map(p => p.date || '') },
-    yAxis: { type: 'value', splitLine: { lineStyle: { color: 'rgba(11,15,20,0.07)' } } },
+    yAxis: { type: 'value', splitLine: { lineStyle: { color: _evalGridColor() } } },
     series: [{ name: 'Daily return', type: 'bar', data: (points || []).map(p => p.return_pct ?? p.day_return_pct ?? p.return) }],
   };
 }

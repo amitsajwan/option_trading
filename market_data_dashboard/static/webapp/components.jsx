@@ -1,7 +1,9 @@
-// Shared components: PriceChart, KpiStrip, TradeTable, DecisionGrid, etc.
+﻿// Shared components: KpiStrip, LWChart, EChartPanel, PaginatedTable, ConfirmModal
 /* global React */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 const TC = window.TradingCore;
+
+const _isDark = () => document.body.classList.contains('app-dark') || document.body.classList.contains('live-terminal');
 
 // ── KPI STRIP ────────────────────────────────────────────────────────────
 function KpiStrip({ items, cols }) {
@@ -53,21 +55,22 @@ function LWChart({
     const LC = window.LightweightCharts;
     if (!containerRef.current || !LC) return;
 
+    const dark = _isDark();
     const chart = LC.createChart(containerRef.current, {
       layout: {
-        background: { color: '#F6F4EF' },
-        textColor: '#5A6674',
+        background: { color: dark ? '#0f1116' : '#F6F4EF' },
+        textColor:  dark ? '#7d8593' : '#5A6674',
         fontFamily: "'JetBrains Mono', ui-monospace, monospace",
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: 'rgba(11,15,20,0.05)' },
-        horzLines: { color: 'rgba(11,15,20,0.05)' },
+        vertLines: { color: dark ? 'rgba(255,255,255,0.04)' : 'rgba(11,15,20,0.05)' },
+        horzLines: { color: dark ? 'rgba(255,255,255,0.04)' : 'rgba(11,15,20,0.05)' },
       },
       crosshair: { mode: 1 },   // 1 = Normal
-      rightPriceScale: { borderColor: 'rgba(11,15,20,0.12)' },
+      rightPriceScale: { borderColor: dark ? 'rgba(255,255,255,0.10)' : 'rgba(11,15,20,0.12)' },
       timeScale: {
-        borderColor: 'rgba(11,15,20,0.12)',
+        borderColor: dark ? 'rgba(255,255,255,0.10)' : 'rgba(11,15,20,0.12)',
         timeVisible: true,
         secondsVisible: false,
         tickMarkFormatter: (ts) => {
@@ -89,13 +92,15 @@ function LWChart({
       },
     });
 
+    const upCol   = dark ? '#19c37d' : '#0A8F5C';
+    const downCol = dark ? '#f23c4a' : '#C23E2F';
     const series = chart.addCandlestickSeries({
-      upColor:        '#0A8F5C',
-      downColor:      '#C23E2F',
-      borderUpColor:  '#0A8F5C',
-      borderDownColor:'#C23E2F',
-      wickUpColor:    '#0A8F5C',
-      wickDownColor:  '#C23E2F',
+      upColor:         upCol,
+      downColor:       downCol,
+      borderUpColor:   upCol,
+      borderDownColor: downCol,
+      wickUpColor:     upCol,
+      wickDownColor:   downCol,
       priceLineVisible: false,
     });
 
@@ -194,6 +199,7 @@ function LWChart({
   // ── Rebuild markers ────────────────────────────────────────────────────
   useEffect(() => {
     if (!seriesRef.current) return;
+    const dark = _isDark();
     const visIdx = upToIdx == null ? Infinity : upToIdx;
     const markers = [];
 
@@ -204,7 +210,7 @@ function LWChart({
       markers.push({
         time:     Math.floor(sig.t / 1000),
         position: 'belowBar',
-        color:    sig.traded ? '#0A8F5C' : '#B97405',
+        color:    sig.traded ? (dark ? '#19c37d' : '#0A8F5C') : (dark ? '#f5a524' : '#B97405'),
         shape:    'circle',
         text:     '',
         size:     isSel ? 2 : 0.5,
@@ -215,8 +221,8 @@ function LWChart({
     (trades || []).forEach(tr => {
       if (tr.entryIdx > visIdx) return;
       const isSel      = selectedTrade && tr.id === selectedTrade.id;
-      const entryColor = tr.dir === 'LONG' ? '#0A8F5C' : '#C23E2F';
-      const pnlColor   = tr.pnlPct >= 0   ? '#0A8F5C' : '#C23E2F';
+      const entryColor = tr.dir === 'LONG' ? (dark ? '#19c37d' : '#0A8F5C') : (dark ? '#f23c4a' : '#C23E2F');
+      const pnlColor   = tr.pnlPct >= 0   ? (dark ? '#19c37d' : '#0A8F5C') : (dark ? '#f23c4a' : '#C23E2F');
       markers.push({
         time:     Math.floor(tr.t / 1000),
         position: 'belowBar',
@@ -275,287 +281,6 @@ function LWChart({
   return <div ref={containerRef} style={{ width: '100%', height: h, minHeight: 200 }} />;
 }
 
-// Keep alias so any code that still references PriceChart doesn't break.
-const PriceChart = LWChart;
-
-// ── TRADE TABLE ──────────────────────────────────────────────────────────
-function TradeTable({ trades, selectedId, onSelect, flashId }) {
-  if (!trades.length) {
-    return (
-      <div className="muted" style={{ padding: 24, textAlign: 'center', fontSize: 12 }}>
-        No trades in this session yet.
-      </div>
-    );
-  }
-  return (
-    <table className="tbl">
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Strategy</th>
-          <th>Dir</th>
-          <th className="r mobile-hide">Qty</th>
-          <th className="r mobile-hide">Entry</th>
-          <th className="r mobile-hide">Exit</th>
-          <th className="r">PnL</th>
-          <th className="r mobile-hide">Hold</th>
-        </tr>
-      </thead>
-      <tbody>
-        {trades.map(tr => (
-          <tr key={tr.id}
-            className={[
-              selectedId === tr.id ? 'selected' : '',
-              flashId === tr.id ? (tr.pnlPct >= 0 ? 'flash-pos' : 'flash-neg') : '',
-            ].filter(Boolean).join(' ')}
-            onClick={() => onSelect && onSelect(tr)}>
-            <td className="muted">{tr.tLabel}</td>
-            <td>{tr.strat}</td>
-            <td><span className={`chip ${tr.dir === 'LONG' ? 'pos' : 'neg'}`}>{tr.dir}</span></td>
-            <td className="r mobile-hide">{tr.qty}</td>
-            <td className="r mobile-hide">{tr.entry.toFixed(2)}</td>
-            <td className="r mobile-hide">{tr.exit.toFixed(2)}</td>
-            <td className={`r ${tr.pnlPct >= 0 ? 'pos' : 'neg'}`}>{TC.fmtSigned(tr.pnlPct, 2, '%')}</td>
-            <td className="r mobile-hide">{tr.hold}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-// ── DECISION GRID (votes / signals) ──────────────────────────────────────
-function DecisionGrid({ signals, selectedId, onSelect }) {
-  if (!signals.length) {
-    return <div className="muted" style={{ padding: 24, textAlign: 'center', fontSize: 12 }}>No signals yet.</div>;
-  }
-  return (
-    <table className="tbl">
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Strategy</th>
-          <th>Dir</th>
-          <th className="r">Conf</th>
-          <th>State</th>
-          <th>Outcome</th>
-          <th className="mobile-hide">Reason</th>
-        </tr>
-      </thead>
-      <tbody>
-        {signals.map((sig, i) => (
-          <tr key={i}
-            className={selectedId === sig ? 'selected' : ''}
-            onClick={() => onSelect && onSelect(sig)}>
-            <td className="muted">{TC.fmtTime(new Date(sig.t))}</td>
-            <td>{sig.strat}</td>
-            <td><span className={`chip ${sig.dir === 'LONG' ? 'pos' : 'neg'}`}>{sig.dir}</span></td>
-            <td className="r">{(sig.conf * 100).toFixed(0)}%</td>
-            <td>
-              {sig.fired
-                ? <span className="chip pos"><span className="dot"></span>fired</span>
-                : <span className="chip"><span className="dot"></span>held</span>}
-            </td>
-            <td>
-              {sig.fired
-                ? (sig.traded
-                    ? <span className="chip pos" style={{ fontSize: 10 }}>&#x2192; trade</span>
-                    : <span className="chip" style={{ fontSize: 10, opacity: 0.6 }}>&#x2192; skipped</span>)
-                : <span className="muted" style={{ fontSize: 10 }}>—</span>}
-            </td>
-            <td className="mobile-hide muted">{sig.reason}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-// ── DECISION DETAIL (probabilities) ──────────────────────────────────────
-function DecisionDetail({ trade, sig, onClose, expanded, setExpanded }) {
-  if (!sig) {
-    return (
-      <div className="muted" style={{ padding: '22px 14px', textAlign: 'center', fontSize: 12 }}>
-        Tap a trade or signal to inspect the decision.
-      </div>
-    );
-  }
-  const m = sig.metrics || {};
-  const probs = [
-    { k: 'entry_prob', v: m.entry_prob, cls: 'info' },
-    { k: 'trade_prob', v: m.trade_prob, cls: 'info' },
-    { k: 'ce_prob', v: m.ce_prob, cls: 'pos' },
-    { k: 'pe_prob', v: m.pe_prob, cls: 'neg' },
-    { k: 'recipe_prob', v: m.recipe_prob, cls: '' },
-    { k: 'recipe_margin', v: m.recipe_margin, cls: '' },
-  ];
-  const stopBasis = trade?.stopBasis || null;
-  const riskRows = trade ? [
-    { k: 'risk_basis', v: stopBasis },
-    { k: stopBasis === 'underlying' ? 'underlying_stop_pct' : 'stop_loss_pct', v: trade.stopLossPct },
-    { k: stopBasis === 'underlying' ? 'underlying_target_pct' : 'target_pct', v: trade.targetPct },
-    { k: 'max_hold_bars', v: trade.maxHoldBars },
-    { k: stopBasis === 'underlying' ? 'entry_futures_price' : 'stop_price', v: stopBasis === 'underlying' ? trade.entryFuturesPrice : trade.stopPrice },
-    { k: stopBasis === 'underlying' ? 'underlying_stop_level' : 'stop_price', v: stopBasis === 'underlying' ? trade.underlyingStopPrice : trade.stopPrice },
-    { k: 'stop_trigger_candle', v: trade.stopTriggerCandle },
-  ].filter(x => x.v != null && x.v !== '') : [];
-  const riskLabels = {
-    risk_basis: 'risk_basis',
-    stop_loss_pct: 'stop_loss_pct',
-    underlying_stop_pct: 'stop_loss_pct',
-    target_pct: 'target_pct',
-    underlying_target_pct: 'target_pct',
-    max_hold_bars: 'max_hold_bars',
-    stop_price: 'stop_price',
-    entry_futures_price: 'entry_futures_price',
-    underlying_stop_level: 'stop_level',
-    stop_trigger_candle: 'trigger_candle',
-  };
-  function fmtRiskValue(row) {
-    if (typeof row.v === 'number' && row.k.indexOf('_pct') >= 0) return (row.v * 100).toFixed(2) + '%';
-    if (typeof row.v === 'number' && (row.k.indexOf('price') >= 0 || row.k.indexOf('level') >= 0)) return row.v.toFixed(2);
-    return String(row.v);
-  }
-  return (
-    <>
-      <div className="decision-head">
-        <span className={`decision-dirbadge ${sig.dir}`}>{sig.dir}</span>
-        <div>
-          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--ink)' }}>
-            {sig.strat}
-            <span className="mono tiny muted" style={{ marginLeft: 8 }}>{TC.fmtTime(new Date(sig.t))}</span>
-          </div>
-          <div className="mono tiny" style={{ color: 'var(--ink-3)', marginTop: 2 }}>
-            {sig.fired ? 'FIRED' : 'HELD'} · {sig.reason} · regime {sig.regime}
-          </div>
-          {sig.fired && (
-            <div className="mono tiny" style={{ marginTop: 3, color: sig.traded ? 'var(--pos)' : 'var(--ink-3)' }}>
-              {sig.traded
-                ? 'Execution: position opened \u2192 trade recorded'
-                : 'Execution: signal skipped \u2014 no position opened by runtime'}
-            </div>
-          )}
-        </div>
-        <button className="btn sm ghost" onClick={() => setExpanded(!expanded)}>
-          {expanded ? 'Collapse' : 'Expand'}
-        </button>
-      </div>
-      <div className="panel-body">
-        {trade && (
-          <>
-            <div className="rowx" style={{ marginBottom: 8 }}>
-              <span className="muted tiny">Entry logic</span>
-              <span className="mono tiny" style={{ color: 'var(--ink)' }}>{trade.entryReason || sig.reason}</span>
-            </div>
-            {(trade.entryDetail || sig.detail) && (
-              <div className="mono tiny" style={{ color: 'var(--ink-3)', marginBottom: 10, lineHeight: 1.5 }}>
-                {trade.entryDetail || sig.detail}
-              </div>
-            )}
-            <div className="rowx" style={{ marginBottom: 8 }}>
-              <span className="muted tiny">Exit logic</span>
-              <span className="mono tiny" style={{ color: trade.exitReason === 'TARGET_HIT' ? 'var(--pos)' : 'var(--neg)' }}>
-                {trade.exitReason || '--'}
-              </span>
-            </div>
-            {trade.exitDetail && (
-              <div className="mono tiny" style={{ color: 'var(--ink-3)', marginBottom: 10, lineHeight: 1.5 }}>
-                {trade.exitDetail}
-              </div>
-            )}
-            {trade.stopTriggerDetail && (
-              <div className="mono tiny" style={{ color: 'var(--ink-3)', marginBottom: 10, lineHeight: 1.5 }}>
-                {trade.stopTriggerDetail}
-              </div>
-            )}
-            {!!riskRows.length && (
-              <div style={{ marginBottom: 12 }}>
-                {riskRows.map(r => (
-                  <div className="rowx" key={r.k} style={{ marginBottom: 4 }}>
-                    <span className="muted tiny">{riskLabels[r.k] || r.k}</span>
-                    <span className="mono tiny" style={{ color: 'var(--ink)' }}>
-                      {fmtRiskValue(r)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-        <div className="rowx" style={{ marginBottom: 10 }}>
-          <span className="muted tiny">Confidence</span>
-          <span className="mono" style={{ fontSize: 15, color: 'var(--ink)' }}>{(sig.conf * 100).toFixed(1)}%</span>
-        </div>
-        <div className="prob-bar" style={{ marginBottom: 14 }}>
-          <span style={{ width: (sig.conf * 100) + '%' }} />
-        </div>
-        {!trade && sig.detail && (
-          <div className="mono tiny" style={{ color: 'var(--ink-3)', marginBottom: 14, lineHeight: 1.5 }}>
-            {sig.detail}
-          </div>
-        )}
-        {expanded && probs.map(p => (
-          <div className="prob-row" key={p.k}>
-            <span className="k">{p.k}</span>
-            <div className={`prob-bar ${p.cls}`}>
-              <span style={{ width: (Math.max(0, Math.min(1, p.v)) * 100) + '%' }} />
-            </div>
-            <span className="v">{(p.v * 100).toFixed(1)}%</span>
-          </div>
-        ))}
-      </div>
-    </>
-  );
-}
-
-// ── ALERTS ────────────────────────────────────────────────────────────────
-function AlertList({ alerts }) {
-  return (
-    <div>
-      {alerts.map((a, i) => (
-        <div className={`alert ${a.level}`} key={i}>
-          <div className="bar"></div>
-          <div className="msg" dangerouslySetInnerHTML={{ __html: a.msg }} />
-          <div className="t">{a.t}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ── STRATEGY CONTRIBUTION BARS ───────────────────────────────────────────
-function StrategyBars({ rows }) {
-  if (!rows.length) return <div className="muted tiny">No contribution data yet.</div>;
-  const max = Math.max.apply(null, rows.map(r => Math.abs(r.value)).concat([0.01]));
-  return (
-    <div>
-      {rows.map((r, i) => {
-        const w = (Math.abs(r.value) / max) * 100;
-        const pos = r.value >= 0;
-        return (
-          <div className="sbar-row" key={i}>
-            <span className="sbar-label">{r.label}</span>
-            <div className="sbar-track">
-              <div className="sbar-fill"
-                style={{
-                  width: w + '%',
-                  left: pos ? '0' : 'auto',
-                  right: pos ? 'auto' : '0',
-                  background: pos ? 'var(--pos)' : 'var(--neg)',
-                  opacity: 0.85,
-                }} />
-            </div>
-            <span className={`sbar-val ${pos ? 'pos' : 'neg'}`}
-              style={{ color: pos ? 'var(--pos)' : 'var(--neg)' }}>
-              {TC.fmtSigned(r.value, 2, '%')}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 // ── ECHART PANEL ─────────────────────────────────────────────────────────
 // Thin ECharts wrapper for evaluation charts.
 function EChartPanel({ option, height }) {
@@ -564,7 +289,7 @@ function EChartPanel({ option, height }) {
 
   useEffect(() => {
     if (!ref.current || !window.echarts) return;
-    const chart = window.echarts.init(ref.current, null, { renderer: 'canvas' });
+    const chart = window.echarts.init(ref.current, _isDark() ? 'dark' : null, { renderer: 'canvas' });
     chartRef.current = chart;
     const onResize = () => chart.resize();
     window.addEventListener('resize', onResize);
@@ -667,6 +392,5 @@ function ConfirmModal({ open, title, message, confirmText, requireType, danger, 
 }
 
 Object.assign(window, {
-  KpiStrip, PriceChart, TradeTable, DecisionGrid, DecisionDetail,
-  AlertList, StrategyBars, EChartPanel, PaginatedTable, ConfirmModal,
+  KpiStrip, LWChart, EChartPanel, PaginatedTable, ConfirmModal,
 });

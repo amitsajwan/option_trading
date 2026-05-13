@@ -1,0 +1,1100 @@
+// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes
+/* global React, TradingCore, LWChart */
+const { useState: _s, useEffect: _e, useMemo: _m, useRef: _r, useCallback: _cb } = React;
+const TC = window.TradingCore;
+
+// ── Data helpers ─────────────────────────────────────────────────────────
+function _barLabel(session, idx) {
+  const c = session?.candles?.[idx];
+  if (!c) return '—';
+  if (c.label) return c.label;
+  return new Date(c.t).toLocaleTimeString('en-IN',
+    { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
+}
+
+// Normalize trade fields — real session may use .entry/.exit instead of .entryPx/.exitPx
+function _bridgeTrade(tr) {
+  const ep = tr.entryPx ?? tr.entry ?? 0;
+  const xp = tr.exitPx  ?? tr.exit  ?? 0;
+  const rng = Math.abs(ep) * 0.002;
+  const dir = tr.dir || tr.direction || 'LONG';
+  return {
+    ...tr, dir,
+    entryPx: ep, exitPx: xp,
+    strat: tr.strat || tr.strategy_name || '—',
+    stopPx:   tr.stopPx   ?? (dir === 'LONG' ? ep - rng : ep + rng),
+    targetPx: tr.targetPx ?? (dir === 'LONG' ? ep + rng * 2 : ep - rng * 2),
+    heldBars: tr.heldBars ?? ((tr.exitIdx ?? 0) - (tr.entryIdx ?? 0)),
+    conf:     tr.conf ?? tr.confidence ?? 0.65,
+    regime:   tr.regime ?? '—',
+    exitReason:  tr.exitReason ?? 'CLOSED',
+    entryDetail: tr.entryDetail ?? `Entry at ${ep.toFixed(2)}`,
+    exitDetail:  tr.exitDetail  ?? `Exit at ${xp.toFixed(2)} · ${tr.exitReason ?? 'closed'}`,
+  };
+}
+
+function _makeStrategies(trades) {
+  const map = {};
+  trades.forEach(tr => {
+    const k = tr.strat || '—';
+    if (!map[k]) map[k] = { id: k, name: k, pnl: 0, trades: 0, wins: 0 };
+    map[k].pnl   += tr.pnlPct || 0;
+    map[k].trades++;
+    if ((tr.pnlPct || 0) > 0) map[k].wins++;
+  });
+  return Object.values(map).map(s => ({
+    ...s,
+    wr:     s.trades ? Math.round(s.wins / s.trades * 100) : 0,
+    weight: 1 / Math.max(1, Object.keys(map).length),
+    status: s.pnl < -0.1 ? 'penalty' : 'armed',
+  })).sort((a, b) => b.pnl - a.pnl);
+}
+
+function _makeQuote(session, upToIdx) {
+  if (!session?.candles?.length) return null;
+  const cands = session.candles;
+  const end   = Math.min(upToIdx, cands.length - 1);
+  const cur   = cands[end];
+  const first = cands[0];
+  return {
+    symbol:    session.instrument || 'BANKNIFTY FUT',
+    spot:      cur.c,
+    spotChg:   cur.c - first.o,
+    spotChgPct: ((cur.c - first.o) / first.o) * 100,
+    dayHigh:   Math.max(...cands.slice(0, end + 1).map(c => c.h)),
+    dayLow:    Math.min(...cands.slice(0, end + 1).map(c => c.l)),
+  };
+}
+
+// ── TickerBar ────────────────────────────────────────────────────────────
+function TickerBar({ quote, instrument }) {
+  const [clock, setClock] = _s(TC.fmtClock(new Date()));
+  _e(() => { const id = setInterval(() => setClock(TC.fmtClock(new Date())), 1000); return () => clearInterval(id); }, []);
+  if (!quote) return <div className="ticker-bar"><div className="t-brand"><span className="t-brand-mark"/><b>QUANT</b><span>OPS</span></div><div className="ticker-clock"><span className="t-live-pulse"/><span>{clock}</span></div></div>;
+  const cls = quote.spotChg >= 0 ? 'pos' : 'neg';
+  return (
+    <div className="ticker-bar">
+      <div className="t-brand">
+        <span className="t-brand-mark"/>
+        <b>QUANT</b><span>OPS</span>
+        <span className="ver">live</span>
+      </div>
+      <div className="ticker-pairs">
+        <div className="t-spot-big">
+          <span className="lbl" style={{fontSize:'9.5px',color:'var(--fg-3)',letterSpacing:'0.10em',textTransform:'uppercase'}}>{quote.symbol}</span>
+          <span className="val">{quote.spot.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+          <span className={`delta ${cls}`}>{TC.fmtSigned(quote.spotChg,2)} ({TC.fmtSigned(quote.spotChgPct,2,'%')})</span>
+        </div>
+        <div className="pair"><span className="lbl">H</span><span className="val">{quote.dayHigh.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+        <div className="pair"><span className="lbl">L</span><span className="val">{quote.dayLow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+      </div>
+      <div className="ticker-clock">
+        <span className="t-live-pulse"/>
+        <span>{clock}</span>
+      </div>
+    </div>
+  );
+}
+
+// ── StatusBar ────────────────────────────────────────────────────────────
+function StatusBar({ sessionPnl, tradesCount, winRate, regime, engine, ws, onModeSwitch, onHaltClick }) {
+  const pnlCls = sessionPnl >= 0 ? 'pos' : 'neg';
+  return (
+    <div className="t-status-bar">
+      <div className="t-mode-toggle">
+        <button className="active"><span className="dot live"/>Live</button>
+        <button onClick={() => onModeSwitch('replay')}><span className="dot replay"/>Replay</button>
+        <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
+      </div>
+      <div className="t-status-cells">
+        <div className="t-scell big"><span className="k">Session P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtSigned(sessionPnl,2,'%')}</span></div>
+        <div className="t-scell"><span className="k">Trades</span><span className="v">{tradesCount}<span className="sub">/ {winRate}% WR</span></span></div>
+        <div className="t-scell"><span className="k">Regime</span><span className="v" style={{color:'var(--info)',fontSize:'11px'}}>{regime || '—'}</span></div>
+        <div className="t-scell"><span className="k">Engine</span><span className="v" style={{fontSize:'11px'}}>{engine || '—'}</span></div>
+        <div className="t-scell"><span className="k">WS</span><span className={`v ${ws === 'connected' ? 'pos' : 'warn'}`} style={{fontSize:'11px'}}>{ws}</span></div>
+      </div>
+      <div className="t-status-actions">
+        <button className="t-btn danger" onClick={onHaltClick}>⏻ Halt <span className="kbd">⌘.</span></button>
+      </div>
+    </div>
+  );
+}
+
+// ── Engine Roster (left rail) ────────────────────────────────────────────
+function EngineRoster({ strategies, dailyRisk }) {
+  const risk = dailyRisk || 0;
+  return (
+    <div className="t-rail">
+      <div className="t-section-head" style={{borderTop:0}}>Strategy Roster</div>
+      <div style={{overflowY:'auto',flexShrink:0}}>
+        {strategies.length === 0
+          ? <div style={{padding:'10px 12px',color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:10}}>No trades yet</div>
+          : strategies.map(s => (
+            <div key={s.id} className="t-strat-row">
+              <div>
+                <div className="t-strat-name">{s.name}</div>
+                <div className="t-strat-meta">
+                  <span>{s.trades}t</span><span>·</span>
+                  <span>{s.wr}%wr</span>
+                </div>
+                <div className={`t-strat-bar ${s.pnl < 0 ? 'neg' : ''}`}>
+                  <span style={{width: Math.min(100, Math.abs(s.pnl) / 0.5 * 100) + '%'}}/>
+                </div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div className={`t-strat-pnl ${s.pnl >= 0 ? 'pos' : 'neg'}`}>{TC.fmtSigned(s.pnl,2,'%')}</div>
+                <div className={`t-strat-status ${s.status}`}>{s.status}</div>
+              </div>
+            </div>
+          ))
+        }
+      </div>
+      <div className="t-section-head">Risk</div>
+      <div style={{flexShrink:0}}>
+        <div className="t-gauge">
+          <span className="lbl">Daily risk used</span>
+          <span className="val">{(risk*100).toFixed(0)}%</span>
+          <div className="track"><span style={{width:Math.min(100,risk*100)+'%'}}/></div>
+        </div>
+      </div>
+      <div style={{flex:1}}/>
+      <div style={{padding:'6px 12px',borderTop:'1px solid var(--line-2)',background:'var(--bg-0)',fontFamily:'var(--f-mono)',fontSize:'9.5px',color:'var(--fg-3)'}}>
+        <div style={{display:'flex',justifyContent:'space-between'}}>
+          <span>OPS · amitsajwan</span>
+          <span style={{color:'var(--pos)'}}>● ACTIVE</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SVG Candlestick Chart ────────────────────────────────────────────────
+function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upToIdx, flashIdx }) {
+  const W = 1000, H = 360;
+  const PAD = { l: 8, r: 60, t: 8, b: 22 };
+  const iW = W - PAD.l - PAD.r, iH = H - PAD.t - PAD.b;
+  const visible = candles.slice(0, upToIdx + 1);
+  const slot = iW / Math.max(1, visible.length);
+  const bodyW = Math.max(2, slot - 1.5);
+
+  const [pMin, pMax] = _m(() => {
+    let lo = Infinity, hi = -Infinity;
+    visible.forEach(c => { lo = Math.min(lo, c.l); hi = Math.max(hi, c.h); });
+    const pad = (hi - lo) * 0.10;
+    return [lo - pad, hi + pad];
+  }, [visible]);
+
+  const xOf = i => PAD.l + i * slot + slot / 2;
+  const yOf = p => PAD.t + (pMax - p) / (pMax - pMin) * iH;
+
+  const vwapPath = _m(() => {
+    let cv = 0, cc = 0;
+    return visible.map((c, i) => {
+      const tp = (c.h + c.l + c.c) / 3;
+      cv += tp * (c.v || 1); cc += (c.v || 1);
+      return `${i === 0 ? 'M' : 'L'} ${xOf(i).toFixed(1)} ${yOf(cv/cc).toFixed(1)}`;
+    }).join(' ');
+  }, [visible, pMin, pMax]);
+
+  const ticks = _m(() => {
+    const out = [];
+    const step = Math.ceil((pMax - pMin) / 6 / 10) * 10 || 10;
+    let p = Math.ceil(pMin / step) * step;
+    while (p < pMax) { out.push(p); p += step; }
+    return out;
+  }, [pMin, pMax]);
+
+  const timeTicks = _m(() => {
+    const out = [];
+    const n = visible.length;
+    const step = Math.max(1, Math.floor(n / 6));
+    for (let i = 0; i < n; i += step) out.push(i);
+    if (n > 0 && out[out.length - 1] !== n - 1) out.push(n - 1);
+    return out;
+  }, [visible.length]);
+
+  const [hover, setHover] = _s(null);
+  const svgRef = _r(null);
+
+  const handleMove = _cb(e => {
+    const r = svgRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const x = (e.clientX - r.left) * (W / r.width);
+    const i = Math.floor((x - PAD.l) / slot);
+    setHover(i >= 0 && i < visible.length ? i : null);
+  }, [visible.length, slot]);
+
+  const curPx = visible[visible.length - 1]?.c || 0;
+  const curY  = yOf(curPx);
+
+  return (
+    <div className="t-chart-area">
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
+           onMouseMove={handleMove} onMouseLeave={() => setHover(null)}>
+        <g className="t-chart-grid">
+          {ticks.map(p => <line key={p} x1={PAD.l} x2={W-PAD.r} y1={yOf(p)} y2={yOf(p)}/>)}
+        </g>
+
+        {selectedTrade && (() => {
+          const t = selectedTrade;
+          const eiN = Math.min(t.entryIdx, visible.length - 1);
+          const exN = Math.min(t.exitIdx,  visible.length - 1);
+          if (eiN < 0) return null;
+          return (
+            <g>
+              <rect x={xOf(eiN)-bodyW/2} y={Math.min(yOf(t.stopPx),yOf(t.targetPx))}
+                width={xOf(exN)-xOf(eiN)+bodyW}
+                height={Math.abs(yOf(t.stopPx)-yOf(t.targetPx))} className="t-chart-trade-band"/>
+              <line x1={PAD.l} x2={W-PAD.r} y1={yOf(t.stopPx)}   y2={yOf(t.stopPx)}   className="t-chart-stop-line"/>
+              <line x1={PAD.l} x2={W-PAD.r} y1={yOf(t.targetPx)} y2={yOf(t.targetPx)} className="t-chart-target-line"/>
+              <text x={W-PAD.r+3} y={yOf(t.stopPx)+3} fill="var(--neg)" fontFamily="var(--f-mono)" fontSize="9">STP {t.stopPx.toFixed(0)}</text>
+              <text x={W-PAD.r+3} y={yOf(t.targetPx)+3} fill="var(--pos)" fontFamily="var(--f-mono)" fontSize="9">TGT {t.targetPx.toFixed(0)}</text>
+            </g>
+          );
+        })()}
+
+        {visible.map((c, i) => {
+          const up = c.c >= c.o;
+          const x = xOf(i);
+          const bTop = yOf(Math.max(c.o, c.c));
+          const bBot = yOf(Math.min(c.o, c.c));
+          const flash = i === flashIdx ? ' flash' : '';
+          return (
+            <g key={i}>
+              <line x1={x} x2={x} y1={yOf(c.h)} y2={yOf(c.l)} className={`t-candle-wick ${up?'up':'down'}`} strokeWidth="1"/>
+              <rect x={x-bodyW/2} y={bTop} width={bodyW} height={Math.max(1,bBot-bTop)}
+                    className={`t-candle-body ${up?'up':'down'}${flash}`} strokeWidth="0.5"/>
+            </g>
+          );
+        })}
+
+        <path d={vwapPath} className="t-chart-vwap"/>
+
+        {trades.filter(t => t.entryIdx < visible.length).map(t => {
+          const isSel = selectedTrade?.id === t.id;
+          const cx = xOf(Math.min(t.entryIdx, visible.length - 1));
+          const cy = yOf(t.entryPx);
+          const color = t.dir === 'LONG' ? 'var(--pos)' : 'var(--neg)';
+          const d = t.dir === 'LONG'
+            ? `M ${cx} ${cy+13} L ${cx-4} ${cy+21} L ${cx+4} ${cy+21} Z`
+            : `M ${cx} ${cy-13} L ${cx-4} ${cy-21} L ${cx+4} ${cy-21} Z`;
+          return (
+            <path key={t.id} d={d} fill={color} fillOpacity={isSel?1:0.55}
+                  stroke={color} strokeWidth="1" className="t-trade-marker"
+                  onClick={() => onSelectTrade(t)}/>
+          );
+        })}
+
+        <g>
+          <line x1={PAD.l} x2={W-PAD.r} y1={curY} y2={curY} stroke="var(--accent)" strokeWidth="1" strokeDasharray="1 2" opacity="0.6"/>
+          <rect x={W-PAD.r+2} y={curY-9} width={54} height={18} fill="var(--accent)" rx="2"/>
+          <text x={W-PAD.r+5} y={curY+4} fill="#1a1100" fontFamily="var(--f-mono)" fontSize="10" fontWeight="700">{curPx.toFixed(0)}</text>
+        </g>
+
+        <g>
+          {ticks.map(p => <text key={p} x={W-PAD.r+3} y={yOf(p)+3} fontFamily="var(--f-mono)" fontSize="9" fill="var(--fg-3)">{p.toFixed(0)}</text>)}
+        </g>
+        <g>
+          {timeTicks.map(i => (
+            <text key={i} x={xOf(i)} y={H-6} fontFamily="var(--f-mono)" fontSize="9" fill="var(--fg-3)" textAnchor="middle">
+              {_barLabel(session, i)}
+            </text>
+          ))}
+        </g>
+
+        {hover != null && (() => {
+          const c = visible[hover];
+          if (!c) return null;
+          const x = xOf(hover);
+          const tipX = hover > visible.length * 0.7 ? x - 170 : x + 8;
+          return (
+            <g>
+              <line x1={x} x2={x} y1={PAD.t} y2={H-PAD.b} className="t-chart-crosshair"/>
+              <rect x={tipX} y={PAD.t+4} width={164} height={80} fill="var(--bg-2)" stroke="var(--line-3)" rx="2"/>
+              <text x={tipX+8} y={PAD.t+18} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-2)">{_barLabel(session,hover)}</text>
+              <text x={tipX+8} y={PAD.t+34} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">O <tspan fill="var(--fg-1)" fontWeight="600">{c.o.toFixed(0)}</tspan></text>
+              <text x={tipX+70} y={PAD.t+34} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">H <tspan fill="var(--pos)" fontWeight="600">{c.h.toFixed(0)}</tspan></text>
+              <text x={tipX+8} y={PAD.t+50} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">L <tspan fill="var(--neg)" fontWeight="600">{c.l.toFixed(0)}</tspan></text>
+              <text x={tipX+70} y={PAD.t+50} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">C <tspan fill={c.c>=c.o?'var(--pos)':'var(--neg)'} fontWeight="600">{c.c.toFixed(0)}</tspan></text>
+            </g>
+          );
+        })()}
+      </svg>
+    </div>
+  );
+}
+
+// ── Tape: unified trades + signals ────────────────────────────────────────
+function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId }) {
+  const [filter, setFilter] = _s('all');
+  const rows = _m(() => {
+    const out = [];
+    if (filter !== 'signals') trades.forEach(t => out.push({ kind: 'trade', sortIdx: t.exitIdx, ...t }));
+    if (filter !== 'trades')  signals.forEach(s => out.push({ kind: 'signal', sortIdx: s.idx, ...s }));
+    return out.sort((a, b) => b.sortIdx - a.sortIdx);
+  }, [trades, signals, filter]);
+
+  return (
+    <div className="t-tape-panel">
+      <div className="t-panel-head" style={{paddingLeft:0}}>
+        <div className="t-tape-tabs">
+          <button className={filter==='all'?'active':''} onClick={()=>setFilter('all')}>Tape <span className="count">{trades.length+signals.length}</span></button>
+          <button className={filter==='trades'?'active':''} onClick={()=>setFilter('trades')}>Trades <span className="count">{trades.length}</span></button>
+          <button className={filter==='signals'?'active':''} onClick={()=>setFilter('signals')}>Signals <span className="count">{signals.length}</span></button>
+        </div>
+      </div>
+      <div className="t-panel-body">
+        <table className="t-tape-table">
+          <thead>
+            <tr>
+              <th style={{width:46}}>Time</th>
+              <th style={{width:36}}>Type</th>
+              <th>Strategy</th>
+              <th style={{width:42}}>Dir</th>
+              <th className="r" style={{width:70}}>Entry</th>
+              <th className="r" style={{width:70}}>Exit</th>
+              <th className="r" style={{width:58}}>P&amp;L</th>
+              <th className="r" style={{width:36}}>Hold</th>
+              <th style={{width:80}}>Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              if (r.kind === 'trade') {
+                const sel = selectedTrade?.id === r.id;
+                return (
+                  <tr key={'t'+r.id} className={`${sel?'selected':''} ${r.id===flashId?'t-tape-flash':''}`}
+                      onClick={() => onSelectTrade(r)}>
+                    <td className="muted">{_barLabel(session, r.exitIdx)}</td>
+                    <td>
+                      <span className={`t-tape-type-dot ${(r.dir||'').toLowerCase()} fired`}/>
+                      <span className="muted" style={{fontSize:'9px'}}>FILL</span>
+                    </td>
+                    <td>{r.strat}</td>
+                    <td><span className={`t-dir ${r.dir}`}>{r.dir}</span></td>
+                    <td className="r">{(r.entryPx||0).toFixed(0)}</td>
+                    <td className="r">{(r.exitPx||0).toFixed(0)}</td>
+                    <td className={`r ${(r.pnlPct||0)>=0?'t-pos':'t-neg'}`}>{TC.fmtSigned(r.pnlPct||0,2,'%')}</td>
+                    <td className="r muted">{r.heldBars ?? '—'}b</td>
+                    <td className="muted" style={{fontSize:'9px'}}>{(r.exitReason||'').replace('_',' ')}</td>
+                  </tr>
+                );
+              }
+              const dir = (r.dir || r.direction || 'LONG').toLowerCase();
+              return (
+                <tr key={'s'+i} className={r.fired?'':'signal-held'}>
+                  <td className="muted">{_barLabel(session, r.idx)}</td>
+                  <td>
+                    <span className={`t-tape-type-dot ${dir} ${r.fired?'fired':'held'}`}/>
+                    <span className="muted" style={{fontSize:'9px',color:r.fired?'var(--fg-2)':'var(--fg-4)'}}>{r.fired?'SIG':'HLD'}</span>
+                  </td>
+                  <td>{r.strat || r.strategy_name || '—'}</td>
+                  <td><span className={`t-dir ${(r.dir||'LONG').toUpperCase()}`}>{(r.dir||'—').toUpperCase()}</span></td>
+                  <td className="r muted">—</td><td className="r muted">—</td><td className="r muted">—</td><td className="r muted">—</td>
+                  <td className="muted" style={{fontSize:'9px'}}>{r.reason || r.hold_reason || '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Trade Inspector ──────────────────────────────────────────────────────
+function TradeInspector({ session, trade }) {
+  if (!trade) {
+    return (
+      <div className="t-inspector">
+        <div style={{padding:'14px 12px',color:'var(--fg-3)',fontFamily:'var(--f-mono)',fontSize:11}}>
+          Click a trade to inspect.
+        </div>
+      </div>
+    );
+  }
+
+  const outCls = trade.exitReason === 'TARGET_HIT' ? 'pos' : trade.exitReason === 'STOP_HIT' ? 'neg' : 'warn';
+  const plannedPct = ((trade.targetPx - trade.entryPx) / trade.entryPx) * 100 * (trade.dir === 'SHORT' ? -1 : 1);
+
+  const probs = trade.probs || {
+    entry_prob:    { v: trade.conf, gate: 0.60, label: 'Entry gate' },
+    trade_prob:    { v: trade.conf * 0.92, gate: 0.55, label: 'Trade gate' },
+    ce_prob:       { v: trade.dir === 'LONG' ? 0.65 : 0.28, label: 'CE bias' },
+    pe_prob:       { v: trade.dir === 'LONG' ? 0.28 : 0.65, label: 'PE bias' },
+    recipe_prob:   { v: trade.conf * 0.94, label: 'Recipe prob' },
+    recipe_margin: { v: trade.conf * 0.42, label: 'Recipe margin' },
+  };
+
+  const confluence = trade.confluence || [];
+  const counterfactuals = trade.counterfactuals || [
+    { label: 'Half size',       delta: -(trade.pnlPct||0)/2, note: 'Linear PnL scaling' },
+    { label: 'Skip this trade', delta: -(trade.pnlPct||0),   note: 'Realized PnL forfeited' },
+  ];
+
+  // synthetic price path for risk envelope
+  const pathPoints = _m(() => {
+    const n = 10; let _s2 = 31;
+    const rnd = () => { _s2 = (_s2*9301+49297)%233280; return _s2/233280; };
+    return Array.from({length: n+1}, (_, i) => {
+      const t = i / n;
+      const u = t*t*(3-2*t);
+      const mid = trade.entryPx + (trade.exitPx - trade.entryPx) * u;
+      const dev = (rnd()-0.5) * Math.abs(trade.stopPx - trade.targetPx) * 0.08;
+      return { x: t, p: mid + dev };
+    });
+  }, [trade]);
+
+  return (
+    <div className="t-inspector">
+      <div className="t-inspector-head">
+        <span className={`t-dir ${trade.dir}`} style={{fontSize:'11px',padding:'3px 8px'}}>{trade.dir}</span>
+        <div>
+          <div className="t-inspector-id">{trade.id} <span style={{color:'var(--fg-3)',fontWeight:400,fontSize:10.5}}>{trade.strat}</span></div>
+          <div className="t-inspector-meta">
+            <span>{_barLabel(session,trade.entryIdx)} → {_barLabel(session,trade.exitIdx)}</span>
+            <span>·</span><span>{trade.heldBars}b</span>
+            <span>·</span><span>{trade.regime}</span>
+          </div>
+        </div>
+        <span className={`t-chip ${outCls}`}>● {(trade.exitReason||'').replace('_',' ')}</span>
+      </div>
+      <div className="t-inspector-body">
+        {/* Outcome */}
+        <div className="t-outcome-grid">
+          <div className="t-outcome-cell big">
+            <div className="k">Realized P&amp;L</div>
+            <div className={`v ${(trade.pnlPct||0)>=0?'pos':'neg'}`}>{TC.fmtSigned(trade.pnlPct||0,2,'%')}</div>
+            {plannedPct !== 0 && <div className="sub">vs planned {TC.fmtSigned(plannedPct,2,'%')} · realized/planned {(Math.abs(trade.pnlPct||0)/Math.abs(plannedPct)).toFixed(2)}×</div>}
+          </div>
+          <div className="t-outcome-cell"><div className="k">Entry</div><div className="v">{(trade.entryPx||0).toFixed(2)}</div></div>
+          <div className="t-outcome-cell"><div className="k">Exit</div><div className="v">{(trade.exitPx||0).toFixed(2)}</div></div>
+          <div className="t-outcome-cell"><div className="k">Conf</div><div className="v">{((trade.conf||0)*100).toFixed(0)}%</div></div>
+        </div>
+
+        {/* Probability stack */}
+        <div className="t-section-head">Why it fired</div>
+        <div className="t-prob-stack">
+          {Object.values(probs).map((p, i) => <ProbRow key={i} {...p} kind={i < 2 ? 'gate' : 'neutral'}/>)}
+        </div>
+
+        {/* Confluence */}
+        {confluence.length > 0 && <>
+          <div className="t-section-head">Confluence</div>
+          <div className="t-confluence-list">
+            {confluence.map((c, i) => <span key={i} className="t-confluence-chip">{c}</span>)}
+          </div>
+        </>}
+
+        {/* Risk envelope */}
+        <div className="t-section-head">Risk envelope</div>
+        <RiskEnvelope trade={trade} path={pathPoints} session={session}/>
+
+        {/* Rationale */}
+        <div className="t-section-head">Entry · Exit rationale</div>
+        <div className="t-rationale">
+          <div className="t-rationale-block entry">
+            <div className="heading"><span style={{color:'var(--pos)'}}>● Entry</span><span style={{color:'var(--fg-3)'}}>{_barLabel(session,trade.entryIdx)}</span></div>
+            <div className="body">{trade.entryDetail}</div>
+          </div>
+          <div className={`t-rationale-block exit ${trade.exitReason==='TARGET_HIT'?'target':''}`}>
+            <div className="heading"><span style={{color:trade.exitReason==='TARGET_HIT'?'var(--pos)':'var(--neg)'}}>● Exit · {(trade.exitReason||'').replace('_',' ')}</span></div>
+            <div className="body">{trade.exitDetail}</div>
+          </div>
+        </div>
+
+        {/* Counterfactuals */}
+        <div className="t-section-head">What-if</div>
+        <div className="t-cf-ribbon">
+          {counterfactuals.map((cf, i) => {
+            const d = typeof cf.delta === 'number' ? cf.delta : 0;
+            const pct = Math.min(100, Math.abs(d) / 0.4 * 50);
+            const cls = d > 0.001 ? 'pos' : d < -0.001 ? 'neg' : 'zero';
+            return (
+              <div key={i} className="t-cf-row">
+                <div className="scen">{cf.label}<span className="note">{cf.note}</span></div>
+                <div className={`delta ${cls}`}>{d===0?'±0.00':TC.fmtSigned(d,2,'%')}</div>
+                <div className="delta-bar">
+                  <span className="zero-mark"/>
+                  <span className={`fill ${cls==='neg'?'neg':''}`} style={{left:d>=0?'50%':(50-pct)+'%',width:pct+'%'}}/>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProbRow({ v, gate, label, kind }) {
+  v = Math.max(0, Math.min(1, v || 0));
+  const cleared = gate != null ? v >= gate : null;
+  const fillCls = kind === 'gate' ? (cleared ? 'pass' : 'fail') : 'neut';
+  const valCls  = fillCls;
+  return (
+    <div className="t-prob-row">
+      <div className="label">
+        {label}
+        {gate != null && <span className="gate">gate {gate.toFixed(2)} · {cleared ? '✓ pass' : '✗ fail'}</span>}
+      </div>
+      <div className="t-prob-bar">
+        <div className={`fill ${fillCls}`} style={{width:(v*100)+'%'}}/>
+        {gate != null && <div className="gate-mark" style={{left:(gate*100)+'%'}}/>}
+      </div>
+      <div className={`val ${valCls}`}>{v.toFixed(2)}</div>
+    </div>
+  );
+}
+
+function RiskEnvelope({ trade, path, session }) {
+  const W = 320, H = 110;
+  const PAD = { l: 8, r: 54, t: 12, b: 18 };
+  const iW = W - PAD.l - PAD.r, iH = H - PAD.t - PAD.b;
+  const prices = [trade.entryPx, trade.stopPx, trade.targetPx, ...path.map(p => p.p)];
+  const lo = Math.min(...prices), hi = Math.max(...prices);
+  const pad = (hi - lo) * 0.15;
+  const pMin = lo - pad, pMax = hi + pad;
+  const yOf = p => PAD.t + (pMax - p) / (pMax - pMin) * iH;
+  const xOf = t => PAD.l + t * iW;
+  const d = path.map((p, i) => `${i===0?'M':'L'} ${xOf(p.x).toFixed(1)} ${yOf(p.p).toFixed(1)}`).join(' ');
+  return (
+    <div className="t-risk-mini">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+        <rect x={PAD.l} y={Math.min(yOf(trade.stopPx),yOf(trade.entryPx))} width={iW} height={Math.abs(yOf(trade.stopPx)-yOf(trade.entryPx))} fill="var(--neg)" fillOpacity="0.05"/>
+        <rect x={PAD.l} y={Math.min(yOf(trade.targetPx),yOf(trade.entryPx))} width={iW} height={Math.abs(yOf(trade.targetPx)-yOf(trade.entryPx))} fill="var(--pos)" fillOpacity="0.05"/>
+        <line x1={PAD.l} x2={W-PAD.r} y1={yOf(trade.stopPx)}   y2={yOf(trade.stopPx)}   className="stop-line"/>
+        <line x1={PAD.l} x2={W-PAD.r} y1={yOf(trade.targetPx)} y2={yOf(trade.targetPx)} className="target-line"/>
+        <line x1={PAD.l} x2={W-PAD.r} y1={yOf(trade.entryPx)}  y2={yOf(trade.entryPx)}  className="entry-line"/>
+        <text x={W-PAD.r+3} y={yOf(trade.stopPx)+3}   className="level-label stop"  >{trade.stopPx.toFixed(0)}</text>
+        <text x={W-PAD.r+3} y={yOf(trade.targetPx)+3} className="level-label target">{trade.targetPx.toFixed(0)}</text>
+        <text x={W-PAD.r+3} y={yOf(trade.entryPx)+3}  className="level-label"       >{trade.entryPx.toFixed(0)}</text>
+        <path d={d} className="price-path"/>
+        <circle cx={xOf(0)} cy={yOf(trade.entryPx)} r="3.5" className="entry-dot"/>
+        <circle cx={xOf(1)} cy={yOf(trade.exitPx)}  r="4"   className="exit-dot"/>
+        <text x={xOf(0)}   y={H-4} fontFamily="var(--f-mono)" fontSize="8" fill="var(--fg-3)" textAnchor="start">{_barLabel(session,trade.entryIdx)}</text>
+        <text x={xOf(0.99)} y={H-4} fontFamily="var(--f-mono)" fontSize="8" fill="var(--fg-3)" textAnchor="end">{_barLabel(session,trade.exitIdx)}</text>
+      </svg>
+    </div>
+  );
+}
+
+// ── Log strip ─────────────────────────────────────────────────────────────
+function LogStrip({ session, alerts, wsStatus }) {
+  const items = (alerts || []).slice(-4);
+  return (
+    <div className="t-log-strip">
+      <span className="t-chip" style={{fontSize:'8.5px'}}>LOG</span>
+      <div className="t-log-feed">
+        {items.length === 0
+          ? <span style={{color:'var(--fg-4)'}}>No alerts</span>
+          : items.map((a, i) => (
+            <span key={i} className="t-log-item">
+              <span className="t">{_barLabel(session, a.idx ?? 0)}</span>
+              <span className={`sev ${a.sev || a.level || 'info'}`}/>
+              <span className="msg">{a.msg || a.message}</span>
+            </span>
+          ))
+        }
+      </div>
+      <div className="t-log-perf">
+        <span><span className="k">ws</span><span className={wsStatus==='connected'?'ok':''}>{wsStatus}</span></span>
+        <span><span className="k">tbl</span><span className="ok">{(alerts||[]).length}</span></span>
+      </div>
+    </div>
+  );
+}
+
+// ── LiveMonitorDark — main component ────────────────────────────────────
+function LiveMonitorDark({ onModeSwitch, onKillClick }) {
+  const [session,       setSession]       = _s(null);
+  const [upToIdx,       setUpToIdx]       = _s(0);
+  const [livePrice,     setLivePrice]     = _s(null);
+  const [wsStatus,      setWsStatus]      = _s('connecting');
+  const [selectedTrade, setSelectedTrade] = _s(null);
+  const [flashId,       setFlashId]       = _s(null);
+  const [flashIdx,      setFlashIdx]      = _s(null);
+  const wsRef         = _r(null);
+  const sessionRef    = _r(null);
+  const prevIdxRef    = _r(null);
+  _e(() => { sessionRef.current = session; }, [session]);
+
+  _e(() => {
+    const ws = TC.makeMonitorWS(
+      () => ({ action: 'subscribe', mode: 'live' }),
+      {
+        onStatus: setWsStatus,
+        onMessage(msg) {
+          if (msg.type === 'snapshot') {
+            setSession(msg.session);
+            setUpToIdx(msg.up_to_idx);
+            if (msg.live_price != null) setLivePrice(msg.live_price);
+            prevIdxRef.current = msg.up_to_idx;
+          } else if (msg.type === 'tick') {
+            const newIdx = msg.up_to_idx;
+            const sess = sessionRef.current;
+            if (sess && prevIdxRef.current !== null && newIdx > prevIdxRef.current) {
+              const filled = sess.trades.find(t => t.exitIdx > prevIdxRef.current && t.exitIdx <= newIdx);
+              if (filled) {
+                const bridged = _bridgeTrade(filled);
+                setFlashId(bridged.id);
+                setFlashIdx(filled.exitIdx);
+                setSelectedTrade(bridged);
+                setTimeout(() => { setFlashId(null); setFlashIdx(null); }, 1400);
+              }
+            }
+            prevIdxRef.current = newIdx;
+            setUpToIdx(newIdx);
+            if (msg.live_price != null) setLivePrice(msg.live_price);
+          }
+        },
+      }
+    );
+    wsRef.current = ws;
+    return () => ws.close();
+  }, []);
+
+  // keyboard nav
+  _e(() => {
+    const trades = session ? session.trades.filter(t => t.exitIdx <= upToIdx).map(_bridgeTrade) : [];
+    const fn = e => {
+      if (e.target.tagName === 'INPUT') return;
+      if (e.key === 'j' || e.key === 'J') {
+        const i = trades.findIndex(t => t.id === selectedTrade?.id);
+        if (i > 0) setSelectedTrade(trades[i - 1]);
+      } else if (e.key === 'k' || e.key === 'K') {
+        const i = trades.findIndex(t => t.id === selectedTrade?.id);
+        if (i >= 0 && i < trades.length - 1) setSelectedTrade(trades[i + 1]);
+      } else if ((e.metaKey || e.ctrlKey) && e.key === '.') {
+        e.preventDefault(); onKillClick();
+      }
+    };
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, [session, upToIdx, selectedTrade, onKillClick]);
+
+  if (!session) {
+    return (
+      <div className="cockpit" style={{gridTemplateRows:'1fr'}}>
+        <div className="t-loading">
+          <span>{wsStatus === 'connecting' ? 'Connecting…' : wsStatus === 'disconnected' ? 'Reconnecting…' : 'Loading session…'}</span>
+        </div>
+      </div>
+    );
+  }
+
+  const candles        = session.candles || [];
+  const rawTrades      = (session.trades || []).filter(t => t.exitIdx <= upToIdx);
+  const trades         = rawTrades.map(_bridgeTrade);
+  const signals        = (session.signals || []).filter(s => s.idx <= upToIdx).slice(-60).reverse();
+  const strategies     = _makeStrategies(trades);
+  const quote          = _makeQuote(session, upToIdx);
+  const sessionPnl     = rawTrades.reduce((a, t) => a + (t.pnlPct || 0), 0);
+  const wins           = rawTrades.filter(t => (t.pnlPct || 0) > 0).length;
+  const winRate        = rawTrades.length ? Math.round(wins / rawTrades.length * 100) : 0;
+  const regime         = session.regime || (trades[0]?.regime) || '—';
+  const engine         = session.engine || 'ML_PURE';
+
+  // Default to latest trade in inspector
+  const displayTrade   = selectedTrade || (trades.length > 0 ? trades[0] : null);
+
+  return (
+    <div className="cockpit">
+      <TickerBar quote={quote} instrument={session.instrument}/>
+      <StatusBar
+        sessionPnl={sessionPnl} tradesCount={trades.length} winRate={winRate}
+        regime={regime} engine={engine} ws={wsStatus}
+        onModeSwitch={onModeSwitch} onHaltClick={onKillClick}
+      />
+      <div className="t-workspace">
+        <EngineRoster strategies={strategies} dailyRisk={sessionPnl < 0 ? Math.abs(sessionPnl)/2 : 0}/>
+
+        <div className="t-center">
+          <div className="t-chart-panel">
+            <div className="t-panel-head">
+              <div className="t-panel-title">
+                {session.instrument} · 1m <span className="count">{Math.min(upToIdx+1,candles.length)}/{candles.length} bars</span>
+              </div>
+              <div className="t-panel-actions">
+                {displayTrade && <span className="t-chip amber">● {displayTrade.id}</span>}
+              </div>
+            </div>
+            <TermChart
+              session={session} candles={candles} trades={trades}
+              selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
+              upToIdx={upToIdx} flashIdx={flashIdx}
+            />
+          </div>
+          <Tape
+            session={session} trades={[...trades].reverse()} signals={signals}
+            selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
+            flashId={flashId}
+          />
+        </div>
+
+        <div className="t-rail right" style={{display:'flex',flexDirection:'column'}}>
+          <div className="t-panel-head">
+            <div className="t-panel-title">Trade Inspector</div>
+            <div className="t-panel-actions">
+              <button className="t-btn ghost sm" title="Prev trade (K)">K ↑</button>
+              <button className="t-btn ghost sm" title="Next trade (J)">↓ J</button>
+            </div>
+          </div>
+          <div style={{flex:1,overflowY:'auto',minHeight:0}}>
+            <TradeInspector session={session} trade={displayTrade}/>
+          </div>
+        </div>
+      </div>
+      <LogStrip session={session} alerts={session.alerts} wsStatus={wsStatus}/>
+    </div>
+  );
+}
+
+// ── Replay Ticker Bar ─────────────────────────────────────────────────────
+function ReplayTickerBar({ date, vtLabel, instrument, isPlaying }) {
+  const [clock, setClock] = _s(TC.fmtClock(new Date()));
+  _e(() => { const id = setInterval(() => setClock(TC.fmtClock(new Date())), 1000); return () => clearInterval(id); }, []);
+  return (
+    <div className="ticker-bar">
+      <div className="t-brand">
+        <span className="t-brand-mark"/>
+        <b>QUANT</b><span>OPS</span>
+        <span className="ver">replay</span>
+      </div>
+      <div className="ticker-pairs">
+        {instrument && <div className="pair"><span className="lbl">{instrument}</span></div>}
+        <div className="pair">
+          <span className="lbl">Date</span>
+          <span className="val">{date || '—'}</span>
+        </div>
+        <div className="pair">
+          <span className="lbl">Time</span>
+          <span className="val" style={{color:'var(--info)'}}>{vtLabel || '—'}</span>
+        </div>
+        <div className="pair">
+          <span className={`val ${isPlaying ? 'pos' : 'warn'}`} style={{fontSize:'10px'}}>
+            {isPlaying ? '▶ PLAYING' : '⏸ PAUSED'}
+          </span>
+        </div>
+      </div>
+      <div className="ticker-clock">
+        <span style={{color:'var(--fg-4)',fontSize:'9px',letterSpacing:'0.10em',textTransform:'uppercase',marginRight:4}}>IST</span>
+        <span>{clock}</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Replay Status Bar ─────────────────────────────────────────────────────
+function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, upToIdx,
+  total, availableDates, replayDate, onPlay, onPause, onSpeed, onScrub, onScrubEnd,
+  onReset, onDateChange, onModeSwitch, ws, datesLoading }) {
+  const pnlCls = sessionPnl >= 0 ? 'pos' : 'neg';
+  const pct = total > 0 ? ((upToIdx + 1) / total * 100).toFixed(0) : 0;
+  const selStyle = { fontFamily:'var(--f-mono)', fontSize:'10px', background:'var(--bg-2)',
+    color:'var(--fg-1)', border:'1px solid var(--line-2)', borderRadius:'var(--r-2)',
+    padding:'0 6px', height:20 };
+  return (
+    <div className="t-status-bar">
+      <div className="t-mode-toggle">
+        <button onClick={() => onModeSwitch('live')}><span className="dot live"/>Live</button>
+        <button className="active"><span className="dot replay"/>Replay</button>
+        <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:5,padding:'0 10px',flex:1,overflow:'hidden',minWidth:0}}>
+        {isPlaying
+          ? <button className="t-btn sm" onClick={onPause}>⏸</button>
+          : <button className="t-btn sm" style={{background:'var(--accent)',color:'#1a1100',borderColor:'var(--accent)'}} onClick={onPlay}>▶</button>
+        }
+        <button className="t-btn sm ghost" onClick={onReset} title="Reset to start">⟲</button>
+        <div style={{display:'flex',gap:2,flexShrink:0}}>
+          {[1,2,4,8,16].map(s => (
+            <button key={s} className="t-btn sm ghost"
+              style={speed===s?{background:'var(--bg-4)',borderColor:'var(--line-3)',color:'var(--fg-1)'}:{}}
+              onClick={() => onSpeed(s)}>{s}×</button>
+          ))}
+        </div>
+        <input type="range" min={0} max={Math.max(0, total - 1)} value={upToIdx}
+          style={{flex:1,height:4,accentColor:'var(--info)',minWidth:60,cursor:'pointer'}}
+          onChange={e => onScrub(Number(e.target.value))}
+          onMouseUp={e => onScrubEnd(Number(e.target.value))}
+          onTouchEnd={e => onScrubEnd(Number(e.target.value))}
+        />
+        <span style={{fontFamily:'var(--f-mono)',fontSize:'9.5px',color:'var(--fg-3)',flexShrink:0}}>{pct}%</span>
+        <select style={selStyle} value={replayDate}
+          disabled={datesLoading || !availableDates.length}
+          onChange={e => onDateChange(e.target.value)}>
+          {availableDates.slice().reverse().map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+      </div>
+      <div className="t-status-cells" style={{flexShrink:0}}>
+        <div className="t-scell big"><span className="k">P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtSigned(sessionPnl,2,'%')}</span></div>
+        <div className="t-scell"><span className="k">Trades</span><span className="v">{tradesCount}<span className="sub"> / {winRate}%wr</span></span></div>
+        <div className="t-scell"><span className="k">WS</span><span className={`v ${ws==='connected'?'pos':'warn'}`} style={{fontSize:'10px'}}>{ws}</span></div>
+      </div>
+    </div>
+  );
+}
+
+// ── ReplayMonitorDark ────────────────────────────────────────────────────
+function ReplayMonitorDark({ onModeSwitch }) {
+  const [session,        setSession]        = _s(null);
+  const [upToIdx,        setUpToIdx]        = _s(0);
+  const [isPlaying,      setIsPlaying]      = _s(false);
+  const [speed,          setSpeed]          = _s(4);
+  const [replayDate,     setReplayDate]     = _s('');
+  const [replayError,    setReplayError]    = _s('');
+  const [wsStatus,       setWsStatus]       = _s('idle');
+  const [availableDates, setAvailableDates] = _s([]);
+  const [datesLoading,   setDatesLoading]   = _s(true);
+  const [selectedTrade,  setSelectedTrade]  = _s(null);
+  const [generating,     setGenerating]     = _s(false);
+  const [generateMsg,    setGenerateMsg]    = _s('');
+  const wsRef         = _r(null);
+  const upToIdxRef    = _r(0);
+  const speedRef      = _r(4);
+  const replayDateRef = _r('');
+  const fitRef        = _r(null);
+
+  _e(() => { upToIdxRef.current    = upToIdx;    }, [upToIdx]);
+  _e(() => { speedRef.current      = speed;      }, [speed]);
+  _e(() => { replayDateRef.current = replayDate; }, [replayDate]);
+
+  function openReplaySocket() {
+    if (wsRef.current) return;
+    wsRef.current = TC.makeMonitorWS(
+      () => ({ action:'subscribe', mode:'replay', date:replayDateRef.current,
+               up_to_idx:upToIdxRef.current, playing:false, speed:speedRef.current }),
+      {
+        onStatus: setWsStatus,
+        onMessage(msg) {
+          if (msg.type === 'snapshot') {
+            setSession(msg.session); setUpToIdx(msg.up_to_idx); setIsPlaying(false);
+            setReplayDate(msg.session.date || ''); replayDateRef.current = msg.session.date || '';
+            setReplayError('');
+          } else if (msg.type === 'tick') {
+            setUpToIdx(msg.up_to_idx);
+          } else if (msg.type === 'state') {
+            setUpToIdx(msg.up_to_idx); setIsPlaying(msg.is_playing); setSpeed(msg.speed);
+          } else if (msg.type === 'error') {
+            setReplayError(msg.message || 'Replay date load failed.'); setIsPlaying(false);
+          }
+        },
+      }
+    );
+  }
+
+  _e(() => { return () => { if (wsRef.current) wsRef.current.close(); }; }, []);
+
+  _e(() => {
+    let alive = true;
+    fetch('/api/historical/replay/dates?limit=250')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(payload => {
+        if (!alive) return;
+        setAvailableDates(Array.isArray(payload.dates) ? payload.dates : []);
+        setDatesLoading(false);
+        if (payload.latest) handleDateChange(payload.latest);
+        else setReplayError('No replay dates found in historical snapshots.');
+      })
+      .catch(err => { if (!alive) return; setDatesLoading(false); setReplayError('Failed to load dates: ' + err.message); });
+    return () => { alive = false; };
+  }, []);
+
+  function sendControl(patch) { wsRef.current && wsRef.current.send({ action:'control', ...patch }); }
+  function handlePlay()    { setIsPlaying(true);  sendControl({ play: true }); }
+  function handlePause()   { setIsPlaying(false); sendControl({ play: false }); }
+  function handleSpeed(s)  { setSpeed(s);          sendControl({ speed: s }); }
+  function handleScrub(idx){ setUpToIdx(idx); }
+  function handleScrubEnd(idx) { setUpToIdx(idx); setIsPlaying(false); sendControl({ seek:idx, play:false }); }
+  function handleReset()   { setUpToIdx(0); setIsPlaying(false); sendControl({ seek:0, play:false }); }
+  function handleDateChange(newDate) {
+    if (!newDate) return;
+    setReplayDate(newDate); replayDateRef.current = newDate;
+    setReplayError(''); setGenerateMsg(''); setIsPlaying(false);
+    setSession(null); setUpToIdx(0);
+    openReplaySocket();
+    const sent = wsRef.current && wsRef.current.send({
+      action:'subscribe', mode:'replay', date:newDate, up_to_idx:0, playing:false, speed:speedRef.current,
+    });
+    if (!sent) setWsStatus('connecting');
+  }
+  async function handleGenerate() {
+    if (!replayDate || generating) return;
+    setGenerating(true); setGenerateMsg('Queuing pipeline run…');
+    try {
+      const r = await TC.generateReplayData(replayDate);
+      setGenerateMsg(`Queued run ${(r.run_id||'').slice(0,8)} — reload in ~30s.`);
+      setTimeout(() => { setGenerateMsg(''); handleDateChange(replayDate); }, 30000);
+    } catch(err) { setGenerateMsg('Error: ' + err.message); }
+    finally { setGenerating(false); }
+  }
+
+  // keyboard nav
+  _e(() => {
+    const fn = e => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if ((e.key === 'j' || e.key === 'J') && session) {
+        const trades = (session.trades||[]).filter(t=>t.exitIdx<=upToIdx).map(_bridgeTrade);
+        const i = trades.findIndex(t => t.id === selectedTrade?.id);
+        if (i > 0) setSelectedTrade(trades[i-1]);
+      } else if ((e.key === 'k' || e.key === 'K') && session) {
+        const trades = (session.trades||[]).filter(t=>t.exitIdx<=upToIdx).map(_bridgeTrade);
+        const i = trades.findIndex(t => t.id === selectedTrade?.id);
+        if (i >= 0 && i < trades.length-1) setSelectedTrade(trades[i+1]);
+      } else if (e.key === ' ' && !e.target.closest('button')) {
+        e.preventDefault();
+        isPlaying ? handlePause() : handlePlay();
+      }
+    };
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, [session, upToIdx, selectedTrade, isPlaying]);
+
+  // Loading state
+  if (!session) {
+    const selStyle = { fontFamily:'var(--f-mono)', fontSize:'10px', background:'var(--bg-2)',
+      color:'var(--fg-1)', border:'1px solid var(--line-2)', borderRadius:'var(--r-2)', padding:'2px 8px' };
+    return (
+      <div className="cockpit">
+        <div className="ticker-bar">
+          <div className="t-brand"><span className="t-brand-mark"/><b>QUANT</b><span>OPS</span><span className="ver">replay</span></div>
+          <div/><div/>
+        </div>
+        <div className="t-status-bar">
+          <div className="t-mode-toggle">
+            <button onClick={() => onModeSwitch('live')}><span className="dot live"/>Live</button>
+            <button className="active"><span className="dot replay"/>Replay</button>
+            <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:8,padding:'0 12px'}}>
+            <span style={{fontFamily:'var(--f-mono)',fontSize:'10px',color:'var(--fg-3)'}}>Date</span>
+            <select style={selStyle} value={replayDate}
+              disabled={datesLoading || !availableDates.length}
+              onChange={e => handleDateChange(e.target.value)}>
+              {!replayDate && <option value="">{datesLoading ? 'Loading…' : 'Select date'}</option>}
+              {availableDates.slice().reverse().map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <div/>
+        </div>
+        <div className="t-loading">
+          <div style={{textAlign:'center'}}>
+            <div style={{color:'var(--fg-2)',marginBottom:8}}>
+              {datesLoading          ? 'Loading replay dates…' :
+               wsStatus==='connecting' ? 'Connecting to server…' :
+               wsStatus==='disconnected' ? 'Reconnecting…' :
+               replayError || 'Select a date above to load a session.'}
+            </div>
+            {replayError && <div style={{fontSize:10,color:'var(--fg-4)'}}>Try a different date or wait for replay data to be generated.</div>}
+          </div>
+        </div>
+        <div className="t-log-strip">
+          <span className="t-chip" style={{fontSize:'8.5px'}}>LOG</span>
+          <div className="t-log-feed"><span style={{color:'var(--fg-4)'}}>Awaiting session</span></div>
+          <div className="t-log-perf"><span><span className="k">ws</span>{wsStatus}</span></div>
+        </div>
+      </div>
+    );
+  }
+
+  const candles     = session.candles || [];
+  const rawTrades   = (session.trades || []).filter(t => t.exitIdx <= upToIdx);
+  const trades      = rawTrades.map(_bridgeTrade);
+  const signals     = (session.signals || []).filter(s => s.idx <= upToIdx).slice(-120).reverse();
+  const strategies  = _makeStrategies(trades);
+  const sessionPnl  = rawTrades.reduce((a,t) => a + (t.pnlPct||0), 0);
+  const wins        = rawTrades.filter(t => (t.pnlPct||0) > 0).length;
+  const winRate     = rawTrades.length ? Math.round(wins/rawTrades.length*100) : 0;
+  const vtLabel     = candles[upToIdx]?.label ||
+    new Date(candles[upToIdx]?.t||0).toLocaleTimeString('en-IN',
+      { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Kolkata' });
+  const displayTrade = selectedTrade || (trades.length > 0 ? trades[0] : null);
+  const noData = candles.length > 0 && session.trades.length === 0
+    && (session.alerts||[]).some(a => a.level === 'warn');
+  const banner = replayError || generateMsg || (noData ? `No strategy data for ${replayDate}. Run ML pipeline to generate trades.` : '');
+
+  return (
+    <div className="cockpit">
+      <ReplayTickerBar date={session.date} vtLabel={vtLabel}
+        instrument={session.instrument} isPlaying={isPlaying}/>
+      <ReplayStatusBar
+        sessionPnl={sessionPnl} tradesCount={trades.length} winRate={winRate}
+        isPlaying={isPlaying} speed={speed} upToIdx={upToIdx} total={candles.length}
+        availableDates={availableDates} replayDate={replayDate}
+        onPlay={handlePlay} onPause={handlePause} onSpeed={handleSpeed}
+        onScrub={handleScrub} onScrubEnd={handleScrubEnd} onReset={handleReset}
+        onDateChange={handleDateChange} onModeSwitch={onModeSwitch}
+        ws={wsStatus} datesLoading={datesLoading}
+      />
+
+      {/* The 1fr workspace row — flex column so optional banner doesn't break the grid */}
+      <div style={{display:'flex',flexDirection:'column',minHeight:0,overflow:'hidden'}}>
+        {banner && (
+          <div style={{background:'var(--warn-wash)',borderBottom:'1px solid rgba(245,165,36,0.25)',
+            padding:'5px 14px',fontFamily:'var(--f-mono)',fontSize:10.5,color:'var(--warn)',
+            display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+            <span style={{flex:1}}>{banner}</span>
+            {noData && !generateMsg && (
+              <button className="t-btn sm" onClick={handleGenerate} disabled={generating}>
+                {generating ? 'Queuing…' : '▶ Generate Trades'}
+              </button>
+            )}
+          </div>
+        )}
+        <div className="t-workspace" style={{flex:1,minHeight:0}}>
+          <EngineRoster strategies={strategies} dailyRisk={sessionPnl<0?Math.abs(sessionPnl)/2:0}/>
+
+          <div className="t-center">
+            <div className="t-chart-panel">
+              <div className="t-panel-head">
+                <div className="t-panel-title">
+                  {session.instrument} · 1m
+                  <span className="count">{Math.min(upToIdx+1,candles.length)}/{candles.length} bars</span>
+                </div>
+                <div className="t-panel-actions">
+                  <button className="t-btn ghost sm" title="Fit chart"
+                    onClick={() => fitRef.current && fitRef.current()}>fit</button>
+                  {displayTrade && <span className="t-chip amber">● {displayTrade.id}</span>}
+                </div>
+              </div>
+              <div style={{flex:1,minHeight:0}}>
+                <LWChart
+                  candles={candles} upToIdx={upToIdx}
+                  trades={trades} signals={signals}
+                  selectedTrade={displayTrade} selectedSignal={null}
+                  onSelectTrade={setSelectedTrade} onSelectSignal={() => {}}
+                  height="100%" isPlaying={isPlaying} fitRef={fitRef}
+                />
+              </div>
+            </div>
+            <Tape
+              session={session} trades={[...trades].reverse()} signals={signals}
+              selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
+              flashId={null}
+            />
+          </div>
+
+          <div className="t-rail right" style={{display:'flex',flexDirection:'column'}}>
+            <div className="t-panel-head">
+              <div className="t-panel-title">Trade Inspector</div>
+              <div className="t-panel-actions">
+                <button className="t-btn ghost sm" title="Prev (K)"
+                  onClick={() => { const i=trades.findIndex(t=>t.id===selectedTrade?.id); if(i>0)setSelectedTrade(trades[i-1]); }}>K↑</button>
+                <button className="t-btn ghost sm" title="Next (J)"
+                  onClick={() => { const i=trades.findIndex(t=>t.id===selectedTrade?.id); if(i<trades.length-1)setSelectedTrade(trades[i+1]); }}>↓J</button>
+              </div>
+            </div>
+            <div style={{flex:1,overflowY:'auto',minHeight:0}}>
+              <TradeInspector session={session} trade={displayTrade}/>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <LogStrip session={session} alerts={session.alerts} wsStatus={wsStatus}/>
+    </div>
+  );
+}
+
+Object.assign(window, { LiveMonitorDark, ReplayMonitorDark });
