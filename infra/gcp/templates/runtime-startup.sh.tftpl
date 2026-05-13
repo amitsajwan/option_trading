@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# NOTE: This is a Terraform templatefile. All $${...} and $$(...) sequences are
-# Terraform-escaped literals that render to ${...} and $(...) in the final script.
-# Single ${...} tokens are Terraform template variables substituted at apply time.
-# If rendering this manually (e.g. via gcloud without terraform), replace ALL
-# occurrences of $$ with $ throughout, then substitute the ${var} placeholders.
+# NOTE: This is a Terraform templatefile (.tftpl).
+# - $${VAR} renders as ${VAR} in the output (escaped dollar)
+# - ${var}  is a Terraform template variable substituted at apply time
+# - To render manually: replace $$ with $ and substitute the named ${var} placeholders.
 set -euo pipefail
 
 exec > >(tee -a /var/log/option-trading-runtime-startup.log) 2>&1

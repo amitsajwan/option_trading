@@ -103,21 +103,43 @@ gcloud storage rsync .deploy/runtime-config \
 
 **Step 5: Create training VM and run E2 (10 min setup + 4-8h training)**
 
-Before launch: confirm `ops/gcp/operator.env:REPO_REF` points at the branch you intend the VM to clone (currently `chore/ml-pipeline-ubuntu-gcp-runbook` — change to `main` if merged).
+`REPO_REF` in `ops/gcp/operator.env` controls which branch the VM clones — confirm it is `"main"`.
+
+`create_training_vm.sh` automatically tries all three zones (`a`, `b`, `c`) in the region if your configured zone is exhausted. No manual intervention needed.
 
 ```bash
 bash ops/gcp/create_training_vm.sh
+```
 
-# SSH to VM — replace USER with your gcloud OS Login user (`gcloud auth list`)
-gcloud compute ssh USER@option-trading-ml-01 \
+The VM startup script clones the repo, sets up the venv, and syncs parquet data from GCS automatically. Wait ~5 minutes for it to finish, then SSH in to start training:
+
+```bash
+# SSH to VM — use your gcloud OS Login account (run `gcloud auth list` to check)
+gcloud compute ssh YOUR_ACCOUNT@option-trading-ml-01 \
   --zone=asia-south1-b --project=YOUR_PROJECT_ID
 
-# On VM
-cd ~/option_trading && git pull
+# On VM: start E2 training in tmux (survives SSH disconnect)
+cd /opt/option_trading
 tmux new -s e2
 PYTHONPATH=. .venv/bin/python -u -m ml_pipeline_2.run_research \
   --config ml_pipeline_2/configs/research/staged_dual_recipe.deep_hpo_e2_volatile_only.json \
   2>&1 | tee ml_pipeline_2/tools/e2_run.log
+
+# Detach from tmux: Ctrl+B then D
+# Re-attach later: tmux attach -t e2
+```
+
+**If the startup script failed** (check `/var/log/option-trading-training-startup.log`), run setup manually:
+```bash
+# On VM
+sudo bash -s << 'EOF'
+git clone https://github.com/amitsajwan/option_trading.git /opt/option_trading
+cd /opt/option_trading && git checkout main
+python3 -m venv .venv && .venv/bin/pip install -e ./ml_pipeline_2 --quiet
+gcloud storage rsync gs://YOUR_PROJECT-option-trading-snapshots/ml_pipeline \
+  /opt/option_trading/.data/ml_pipeline --recursive --project YOUR_PROJECT
+chown -R ubuntu:ubuntu /opt/option_trading
+EOF
 ```
 
 **Step 6: Restore Kite credentials (for live trading only)**

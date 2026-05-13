@@ -1,16 +1,17 @@
 # Terraform state is stored in the runtime-config GCS bucket.
 # This allows infra to be managed from any machine that has gcloud auth.
-# On first use (or after moving from local state), run once:
-#   terraform init -migrate-state
-# The bucket is created by the bootstrap and always exists.
+#
+# BOOTSTRAP NOTE: On a brand-new project the GCS bucket does not exist yet.
+# from_scratch_bootstrap.sh handles this automatically:
+#   1. First apply uses a local backend (no bucket needed)
+#   2. After Terraform creates the bucket, state is migrated to GCS
+# You do not need to manually edit this file.
 
 terraform {
   required_version = ">= 1.6.0"
 
-  backend "gcs" {
-    bucket = "amittrading-493606-option-trading-runtime-config"
-    prefix = "terraform/state"
-  }
+  backend "local" {}
+  # After first apply, from_scratch_bootstrap.sh migrates state to GCS:
 
   required_providers {
     google = {

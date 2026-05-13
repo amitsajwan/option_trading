@@ -106,12 +106,52 @@ echo "Wrote ${TF_DIR}/terraform.tfvars"
 if [ "${RUN_TERRAFORM}" = "1" ]; then
   (
     cd "${TF_DIR}"
-    terraform init
+
+    # Step A: ensure backend is local for bootstrap (GCS bucket may not exist yet)
+    if grep -q 'backend "gcs"' versions.tf 2>/dev/null; then
+      echo "Switching to local backend for bootstrap (GCS bucket not yet created)..."
+      sed -i 's|backend "gcs" {[^}]*}|backend "local" {}|' versions.tf
+      terraform init -reconfigure
+    else
+      terraform init
+    fi
+
     terraform plan
     if [ "${TERRAFORM_AUTO_APPROVE}" = "1" ]; then
       terraform apply -auto-approve
     else
       terraform apply
+    fi
+
+    # Step B: migrate state to GCS now that the bucket exists
+    RUNTIME_CONFIG_BUCKET="${RUNTIME_CONFIG_BUCKET_NAME}"
+    if [ -n "${RUNTIME_CONFIG_BUCKET}" ]; then
+      echo "Migrating Terraform state to GCS bucket gs://${RUNTIME_CONFIG_BUCKET}/terraform/state ..."
+      cat > versions.tf.gcs_backend << TFEOF
+terraform {
+  required_version = ">= 1.6.0"
+  backend "gcs" {
+    bucket = "${RUNTIME_CONFIG_BUCKET}"
+    prefix = "terraform/state"
+  }
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 6.0"
+    }
+  }
+}
+provider "google" {
+  project = var.project_id
+  region  = var.region
+  zone    = var.zone
+}
+TFEOF
+      mv versions.tf versions.tf.local_backup
+      mv versions.tf.gcs_backend versions.tf
+      terraform init -migrate-state -force-copy
+      rm -f versions.tf.local_backup terraform.tfstate terraform.tfstate.backup
+      echo "State migrated to GCS."
     fi
   )
 fi
