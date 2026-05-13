@@ -118,8 +118,20 @@ The VM startup script clones the repo, sets up the venv, and syncs parquet data 
 gcloud compute ssh YOUR_ACCOUNT@option-trading-ml-01 \
   --zone=asia-south1-b --project=YOUR_PROJECT_ID
 
-# On VM: start E2 training in tmux (survives SSH disconnect)
+# On VM: patch C1 resolved_config.json parquet_root to the VM's absolute path.
+# (The compatibility check in stage1_reuse compares parquet_root after resolution,
+#  which absolutizes it — the stored relative path from the old VM won't match.)
 cd /opt/option_trading
+python3 -c "
+import json; from pathlib import Path
+p = Path('ml_pipeline_2/artifacts/research/staged_deep_hpo_c1_base_20260429_040848/resolved_config.json')
+d = json.loads(p.read_text())
+d['inputs']['parquet_root'] = str(Path('/opt/option_trading/.data/ml_pipeline/parquet_data'))
+p.write_text(json.dumps(d, indent=2))
+print('patched:', d['inputs']['parquet_root'])
+"
+
+# Start E2 training in tmux (survives SSH disconnect)
 tmux new -s e2
 PYTHONPATH=. .venv/bin/python -u -m ml_pipeline_2.run_research \
   --config ml_pipeline_2/configs/research/staged_dual_recipe.deep_hpo_e2_volatile_only.json \
