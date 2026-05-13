@@ -3403,6 +3403,19 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         }
         if stage_name == "stage2" and oracle_rolling is not None and len(oracle_rolling) > 0:
             stage_frame = stage_frame.merge(oracle_rolling, on="trade_date", how="left")
+        if stage_name == "stage2" and "snapshot_id" in stage_frame.columns:
+            # stage2_direction_view lacks ctx_regime_* columns; without them _regime_label_series
+            # returns all UNKNOWN and the allowed_regimes filter in the labeler drops all rows.
+            _regime_enrich_cols = [
+                c for c in support_context.columns
+                if c.startswith("ctx_regime_") and c not in stage_frame.columns
+            ]
+            if _regime_enrich_cols:
+                stage_frame = stage_frame.merge(
+                    support_context[["snapshot_id"] + _regime_enrich_cols].drop_duplicates("snapshot_id"),
+                    on="snapshot_id",
+                    how="left",
+                )
         if stage_name == "stage1":
             stage_frame, stage1_session_filter_meta = _apply_stage1_session_filter(stage_frame, manifest)
             label_filtering[stage_name] = {
@@ -3773,6 +3786,22 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
 
     utility_valid = _window(utility, manifest["windows"]["research_valid"])
     utility_holdout = _window(utility, manifest["windows"]["final_holdout"])
+    # Apply regime_gate_v1 filtering to holdout evaluation to match runtime behavior.
+    # At runtime, regime_gate_v1 blocks SIDEWAYS (and AVOID) sessions before ML models run.
+    # Without this filter, holdout block_rate is measured over all sessions including those
+    # the ML model would never see at runtime, making block_rate artificially low.
+    if "regime_gate_v1" in list(manifest["runtime"]["prefilter_gate_ids"]):
+        _holdout_regime = _regime_label_series(support_windows["final_holdout"])
+        _blocked_sids = set(
+            support_windows["final_holdout"].loc[
+                _holdout_regime.isin(["SIDEWAYS", "AVOID"]),
+                "snapshot_id",
+            ].tolist()
+        )
+        if _blocked_sids:
+            utility_holdout = utility_holdout.loc[
+                ~utility_holdout["snapshot_id"].isin(_blocked_sids)
+            ].reset_index(drop=True)
     stage1_policy_scores_valid = stage1_result["validation_policy_scores"]
     stage1_policy_scores_holdout = stage1_result["holdout_policy_scores"]
     stage2_policy_scores_valid = stage2_result["validation_policy_scores"]

@@ -95,6 +95,17 @@ Direct entrypoints:
 1. Copy [operator.env.example](operator.env.example) to `ops/gcp/operator.env`
 2. Fill in the actual project, bucket, repo, and release values
 
+**Quick setup for the `amittrading-493606` project:**
+
+```bash
+cp ops/gcp/operator.env.example ops/gcp/operator.env
+python3 ops/gcp/patch_operator_env.py
+```
+
+`patch_operator_env.py` replaces all template placeholders (`my-gcp-project`,
+`my-option-trading-models`, etc.) with the real `amittrading-493606` project values.
+Run it once after a fresh clone or VM rebuild. Safe to re-run.
+
 Current bootstrap derives:
 
 - `MODEL_BUCKET_URL=gs://<MODEL_BUCKET_NAME>/published_models`
@@ -216,6 +227,35 @@ Operational rules:
 Upload `.env.compose`, optional ingestion credentials, runtime guard, and referenced runtime artifacts to the runtime config bucket prefix.
 
 Keep this bundle small. Do not use it to ship historical parquet datasets.
+
+### `patch_operator_env.py`
+
+Replace `operator.env` template placeholders with real `amittrading-493606` project values.
+
+Run once after a fresh clone or VM rebuild:
+
+```bash
+cp ops/gcp/operator.env.example ops/gcp/operator.env
+python3 ops/gcp/patch_operator_env.py
+```
+
+### `force_deploy_research_run.sh`
+
+Force-deploy a completed research run to the live runtime, bypassing automated hard gate failures.
+
+Use when a run returns HOLD due to combined gate failures (e.g. TRENDING regime drag) but has demonstrable edge in specific regimes (e.g. VOLATILE PF > 1.3).
+
+Steps it automates:
+1. Force-publish local model bundle
+2. Write `release/ml_pure_runtime.env`
+3. Build a `force_training_release.json` compatible with `runtime_release_manifest.py`
+4. Write `.run/gcp_release/current_runtime_release.json`
+5. Sync published bundle to GCS model bucket
+6. Publish runtime config bundle to GCS runtime-config bucket
+
+Run on the training VM. Then `start_runtime_interactive.sh` from the operator machine.
+
+See [TRAINING_RELEASE_RUNBOOK.md — Force-Deploying a Research Run](../../docs/runbooks/TRAINING_RELEASE_RUNBOOK.md) for full usage and rollback instructions.
 
 ### `apply_ml_pure_release.sh`
 
