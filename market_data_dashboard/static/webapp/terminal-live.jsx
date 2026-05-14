@@ -848,8 +848,6 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const [availableDates, setAvailableDates] = _s([]);
   const [datesLoading,   setDatesLoading]   = _s(true);
   const [selectedTrade,  setSelectedTrade]  = _s(null);
-  const [generating,     setGenerating]     = _s(false);
-  const [generateMsg,    setGenerateMsg]    = _s('');
   const wsRef         = _r(null);
   const upToIdxRef    = _r(0);
   const speedRef      = _r(4);
@@ -911,7 +909,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   function handleDateChange(newDate) {
     if (!newDate) return;
     setReplayDate(newDate); replayDateRef.current = newDate;
-    setReplayError(''); setGenerateMsg(''); setIsPlaying(false);
+    setReplayError(''); setIsPlaying(false);
     setSession(null); setUpToIdx(0);
     openReplaySocket();
     const sent = wsRef.current && wsRef.current.send({
@@ -919,17 +917,6 @@ function ReplayMonitorDark({ onModeSwitch }) {
     });
     if (!sent) setWsStatus('connecting');
   }
-  async function handleGenerate() {
-    if (!replayDate || generating) return;
-    setGenerating(true); setGenerateMsg('Queuing pipeline run…');
-    try {
-      const r = await TC.generateReplayData(replayDate);
-      setGenerateMsg(`Queued run ${(r.run_id||'').slice(0,8)} — reload in ~30s.`);
-      setTimeout(() => { setGenerateMsg(''); handleDateChange(replayDate); }, 30000);
-    } catch(err) { setGenerateMsg('Error: ' + err.message); }
-    finally { setGenerating(false); }
-  }
-
   // keyboard nav
   _e(() => {
     const fn = e => {
@@ -1012,7 +999,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const displayTrade = selectedTrade || (trades.length > 0 ? trades[0] : null);
   const noData = candles.length > 0 && session.trades.length === 0
     && (session.alerts||[]).some(a => a.level === 'warn');
-  const banner = replayError || generateMsg || (noData ? `No strategy data for ${replayDate}. Run ML pipeline to generate trades.` : '');
+  const banner = replayError || (noData ? `No high-confidence ML signals on ${replayDate}.` : '');
 
   return (
     <div className="cockpit">
@@ -1035,11 +1022,6 @@ function ReplayMonitorDark({ onModeSwitch }) {
             padding:'5px 14px',fontFamily:'var(--f-mono)',fontSize:10.5,color:'var(--warn)',
             display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
             <span style={{flex:1}}>{banner}</span>
-            {noData && !generateMsg && (
-              <button className="t-btn sm" onClick={handleGenerate} disabled={generating}>
-                {generating ? 'Queuing…' : '▶ Generate Trades'}
-              </button>
-            )}
           </div>
         )}
         <div className="t-workspace" style={{flex:1,minHeight:0}}>
