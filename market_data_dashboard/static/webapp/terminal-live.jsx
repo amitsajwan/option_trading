@@ -347,7 +347,7 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId 
         <table className="t-tape-table">
           <thead>
             <tr>
-              <th style={{width:46}}>Time</th>
+              <th style={{width:58}}>Time</th>
               <th style={{width:36}}>Type</th>
               <th>Strategy</th>
               <th style={{width:42}}>Dir</th>
@@ -365,7 +365,9 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId 
                 return (
                   <tr key={'t'+r.id} className={`${sel?'selected':''} ${r.id===flashId?'t-tape-flash':''}`}
                       onClick={() => onSelectTrade(r)}>
-                    <td className="muted">{_barLabel(session, r.exitIdx)}</td>
+                    <td className="muted" style={{whiteSpace:'nowrap',fontFamily:'var(--f-mono)',fontSize:'9px'}}>
+                      {_barLabel(session, r.entryIdx)}<span style={{opacity:0.4}}> → </span>{_barLabel(session, r.exitIdx)}
+                    </td>
                     <td>
                       <span className={`t-tape-type-dot ${(r.dir||'').toLowerCase()} fired`}/>
                       <span className="muted" style={{fontSize:'9px'}}>FILL</span>

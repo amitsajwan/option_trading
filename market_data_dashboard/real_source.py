@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from pymongo import ASCENDING, MongoClient
+from pymongo import ASCENDING, DESCENDING, MongoClient
 
 try:
     from .schemas.monitor import (
@@ -461,7 +461,13 @@ def _position_to_trade(
 # ── Shared build logic ─────────────────────────────────────────────────────────
 
 def _latest_run_id_for_date(db: Any, trade_date: str) -> Optional[str]:
-    """Return the run_id of the most recently submitted completed eval run for trade_date."""
+    """Return the run_id of the most recent run that produced positions for trade_date.
+
+    First checks the Flow 3 registry (`strategy_eval_runs`) for an on-demand eval
+    orchestrator run. If none matches, falls back to scanning the streaming Flow 2
+    positions collection (`strategy_positions_historical`) so trades produced by
+    `strategy_app_historical` surface in the UI without requiring a Flow 3 re-run.
+    """
     runs_coll = str(os.getenv("MONGO_COLL_STRATEGY_EVAL_RUNS") or "strategy_eval_runs")
     try:
         doc = db[runs_coll].find_one(
@@ -472,6 +478,19 @@ def _latest_run_id_for_date(db: Any, trade_date: str) -> Optional[str]:
             },
             {"run_id": 1},
             sort=[("_id", -1)],
+        )
+        if doc and doc.get("run_id"):
+            return str(doc["run_id"]).strip() or None
+    except Exception:
+        pass
+    positions_coll = str(
+        os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL") or "strategy_positions_historical"
+    )
+    try:
+        doc = db[positions_coll].find_one(
+            {"trade_date_ist": trade_date, "run_id": {"$nin": [None, ""]}},
+            {"run_id": 1},
+            sort=[("timestamp", DESCENDING)],
         )
         if doc and doc.get("run_id"):
             return str(doc["run_id"]).strip() or None

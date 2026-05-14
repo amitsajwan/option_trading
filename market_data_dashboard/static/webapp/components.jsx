@@ -39,6 +39,7 @@ function LWChart({
   const volSeriesRef = useRef(null);
   const prevUpToRef  = useRef(-1);
   const prevCandRef  = useRef(null);
+  const priceLinesRef = useRef([]);
   const isPlayingRef = useRef(isPlaying);
   // stable refs so click handler isn't a stale closure
   const tradesRef    = useRef(trades);
@@ -255,6 +256,48 @@ function LWChart({
     markers.sort((a, b) => a.time - b.time);
     seriesRef.current.setMarkers(markers);
   }, [trades, signals, selectedTrade, selectedSignal, upToIdx, candles]);
+
+  // ── Price lines for selected trade (entry / stop / target) ────────────
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    // Clear previous lines
+    priceLinesRef.current.forEach(l => { try { series.removePriceLine(l); } catch (_) {} });
+    priceLinesRef.current = [];
+    if (!selectedTrade) return;
+
+    const tr = selectedTrade;
+    const dir = tr.dir || tr.direction || 'LONG';
+    const entryPx = tr.entryPx ?? tr.entry ?? null;
+    if (entryPx == null || !isFinite(entryPx)) return;
+
+    let stopPx   = tr.stopPx   ?? tr.stop_price   ?? tr.exit_stop_price ?? null;
+    let targetPx = tr.targetPx ?? tr.target_price ?? null;
+    if (stopPx == null && typeof tr.stop_loss_pct === 'number') {
+      stopPx = dir === 'LONG' ? entryPx * (1 - tr.stop_loss_pct) : entryPx * (1 + tr.stop_loss_pct);
+    }
+    if (targetPx == null && typeof tr.target_pct === 'number') {
+      targetPx = dir === 'LONG' ? entryPx * (1 + tr.target_pct) : entryPx * (1 - tr.target_pct);
+    }
+
+    const mkLine = (price, color, style, title) => {
+      try {
+        const pl = series.createPriceLine({
+          price, color, lineWidth: 1, lineStyle: style,
+          axisLabelVisible: true, title,
+        });
+        priceLinesRef.current.push(pl);
+      } catch (_) {}
+    };
+    mkLine(entryPx, '#ffb000', 0, `Entry ${entryPx.toFixed(2)}`);
+    if (stopPx   != null && isFinite(stopPx))   mkLine(stopPx,   '#f23c4a', 2, `Stop ${stopPx.toFixed(2)}`);
+    if (targetPx != null && isFinite(targetPx)) mkLine(targetPx, '#19c37d', 2, `Target ${targetPx.toFixed(2)}`);
+
+    return () => {
+      priceLinesRef.current.forEach(l => { try { series.removePriceLine(l); } catch (_) {} });
+      priceLinesRef.current = [];
+    };
+  }, [selectedTrade]);
 
   // ── Navigate when selection changes ───────────────────────────────────
   useEffect(() => {
