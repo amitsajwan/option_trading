@@ -15,6 +15,7 @@ Start a new session doc when beginning a new research iteration with a distinct 
 | 2026-04-27 | [MODEL_STATE_20260426.md](MODEL_STATE_20260426.md) | Fix CE/PE regime bias via feature engineering (oracle rolling win rates, MIDDAY+OI/IV) | 113 trades, PF=0.352, 93.8% CE | ❌ Feature engineering cannot fix label imbalance. Bias is structural in training data |
 | 2026-04-28/29 | [MODEL_STATE_20260428.md](MODEL_STATE_20260428.md) | Attack label root cause (A→B→C grids). A2 fixed bias. B4 best feature set. C = deep HPO. | A2: S2_ROC=0.544, 39% long. B4: S2_ROC=0.545, 329 trades, 51% long. C1: VOLATILE PF=1.314, TRENDING PF=0.306 | ✅ C1 force-deployed with `regime_gate_v1` (VOLATILE+SIDEWAYS only). TRENDING remains unsolved. |
 | 2026-04-30/05-01 | [MODEL_STATE_20260502.md](MODEL_STATE_20260502.md) | Grid D: high-edge HPO to push TRENDING PF ≥ 1.5; Grid E: VOLATILE-only S2 training | D2: S1_ROC=0.855, S2_ROC=0.618, VOLATILE PF=1.452, TRENDING PF=1.195 — combined fails MDD+block_rate | ❌ D2 HELD (PF=1.19, MDD=29.5%, block_rate=3.97%). E1 config bug (0 S2 samples). C1 remains live. |
+| 2026-05-14 | [MODEL_STATE_20260514.md](MODEL_STATE_20260514.md) | Resume queued E2 launch after 12-day infra/UI gap. Grid E: VOLATILE-only S2 training with pipeline fixes 1+2 applied. | 🔜 E2 running | — |
 
 ---
 
@@ -56,7 +57,11 @@ Label bias is fixed. C1 is live with `regime_gate_v1` (only VOLATILE+SIDEWAYS tr
 
 ---
 
-## Current Session (2026-05-02)
+## Current Session (2026-05-14)
+
+See [MODEL_STATE_20260514.md](MODEL_STATE_20260514.md) for full detail. Resuming E2 launch queued on 2026-05-02 — intervening gap was GCP migration, snapshot pipeline rebuild on `algo-trading-496203`, runtime VM bootstrap, and webapp refactor. No training was run in the interval. C1 remains live.
+
+## Previous Session (2026-05-02)
 
 See [MODEL_STATE_20260502.md](MODEL_STATE_20260502.md) for full detail.
 
