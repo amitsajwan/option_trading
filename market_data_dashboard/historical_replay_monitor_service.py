@@ -187,11 +187,29 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
         if limit > 0:
             dates = dates[-int(limit):]
         latest = dates[-1] if dates else None
+
+        positions_coll_name = (
+            os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL") or "strategy_positions_historical"
+        )
+        trade_counts: dict[str, int] = {}
+        try:
+            db = self._repo._evaluation_service._db()
+            pipeline = [
+                {"$match": {"event": "POSITION_CLOSE"}},
+                {"$group": {"_id": "$trade_date_ist", "count": {"$sum": 1}}},
+            ]
+            for row in db[positions_coll_name].aggregate(pipeline):
+                if row.get("_id"):
+                    trade_counts[str(row["_id"])] = int(row.get("count") or 0)
+        except Exception:
+            pass
+
         return {
             "dates": dates,
             "latest": latest,
             "count": len(dates),
             "collection": coll.name,
+            "trade_counts": trade_counts,
         }
 
     @staticmethod

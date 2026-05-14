@@ -788,8 +788,14 @@ function ReplayTickerBar({ date, vtLabel, instrument, isPlaying }) {
 }
 
 // ── Replay Status Bar ─────────────────────────────────────────────────────
+function _fmtDateOption(d, tradeCounts) {
+  const n = (tradeCounts && tradeCounts[d]) || 0;
+  if (n > 0) return `${d} · ${String(n).padStart(3,' ')} trades`;
+  return d;
+}
+
 function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, upToIdx,
-  total, availableDates, replayDate, onPlay, onPause, onSpeed, onScrub, onScrubEnd,
+  total, availableDates, tradeCounts, replayDate, onPlay, onPause, onSpeed, onScrub, onScrubEnd,
   onReset, onDateChange, onModeSwitch, ws, datesLoading }) {
   const pnlCls = sessionPnl >= 0 ? 'pos' : 'neg';
   const pct = total > 0 ? ((upToIdx + 1) / total * 100).toFixed(0) : 0;
@@ -826,7 +832,7 @@ function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, u
         <select style={selStyle} value={replayDate}
           disabled={datesLoading || !availableDates.length}
           onChange={e => onDateChange(e.target.value)}>
-          {availableDates.slice().reverse().map(d => <option key={d} value={d}>{d}</option>)}
+          {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts)}</option>)}
         </select>
       </div>
       <div className="t-status-cells" style={{flexShrink:0}}>
@@ -848,6 +854,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const [replayError,    setReplayError]    = _s('');
   const [wsStatus,       setWsStatus]       = _s('idle');
   const [availableDates, setAvailableDates] = _s([]);
+  const [tradeCounts, setTradeCounts] = _s({});
   const [datesLoading,   setDatesLoading]   = _s(true);
   const [selectedTrade,  setSelectedTrade]  = _s(null);
   const wsRef         = _r(null);
@@ -893,6 +900,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
       .then(payload => {
         if (!alive) return;
         setAvailableDates(Array.isArray(payload.dates) ? payload.dates : []);
+        setTradeCounts(payload.trade_counts || {});
         setDatesLoading(false);
         if (payload.latest) handleDateChange(payload.latest);
         else setReplayError('No replay dates found in historical snapshots.');
@@ -962,7 +970,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
               disabled={datesLoading || !availableDates.length}
               onChange={e => handleDateChange(e.target.value)}>
               {!replayDate && <option value="">{datesLoading ? 'Loading…' : 'Select date'}</option>}
-              {availableDates.slice().reverse().map(d => <option key={d} value={d}>{d}</option>)}
+              {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts)}</option>)}
             </select>
           </div>
           <div/>
@@ -1010,7 +1018,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
       <ReplayStatusBar
         sessionPnl={sessionPnl} tradesCount={trades.length} winRate={winRate}
         isPlaying={isPlaying} speed={speed} upToIdx={upToIdx} total={candles.length}
-        availableDates={availableDates} replayDate={replayDate}
+        availableDates={availableDates} tradeCounts={tradeCounts} replayDate={replayDate}
         onPlay={handlePlay} onPause={handlePause} onSpeed={handleSpeed}
         onScrub={handleScrub} onScrubEnd={handleScrubEnd} onReset={handleReset}
         onDateChange={handleDateChange} onModeSwitch={onModeSwitch}

@@ -241,6 +241,11 @@ services:
       MONGO_COLL_STRATEGY_VOTES: "${MONGO_COLL_STRATEGY_VOTES:-strategy_votes}"
       MONGO_COLL_TRADE_SIGNALS: "${MONGO_COLL_TRADE_SIGNALS:-trade_signals}"
       MONGO_COLL_STRATEGY_POSITIONS: "${MONGO_COLL_STRATEGY_POSITIONS:-strategy_positions}"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
     command:
       [
         "python",
@@ -269,6 +274,7 @@ services:
       retries: 3
     volumes:
       - ./.run:/app/.run
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
 
   strategy_app:
     build:
