@@ -130,6 +130,21 @@ def _empty_summary_payload(initial_capital: float) -> dict[str, Any]:
     }
 
 
+def _is_no_replay_data_error(exc: BaseException) -> bool:
+    """Match the no-data sentinels raised by StrategyEvaluationService for historical runs.
+
+    The service raises one of: 'no historical replay data found',
+    'no completed historical evaluation runs found', or 'run_id ... not found'.
+    All map to "show empty session" at this layer; anything else re-raises.
+    """
+    msg = str(exc).lower()
+    return (
+        "no historical replay data found" in msg
+        or "no completed historical evaluation runs found" in msg
+        or "not found in data collections" in msg
+    )
+
+
 def _coerce_bool(raw: Any) -> Optional[bool]:
     if raw is None:
         return None
@@ -912,7 +927,7 @@ class LiveStrategyMonitorService:
             )
             recent_trades = list(trades_payload.get("rows") or [])
         except ValueError as exc:
-            if self._dataset == "historical" and "no completed historical evaluation runs found" in str(exc):
+            if self._dataset == "historical" and _is_no_replay_data_error(exc):
                 trades_payload = {"rows": []}
                 recent_trades = []
             else:
@@ -932,7 +947,7 @@ class LiveStrategyMonitorService:
                 run_id=resolved_run_id,
             )
         except ValueError as exc:
-            if self._dataset == "historical" and "no completed historical evaluation runs found" in str(exc):
+            if self._dataset == "historical" and _is_no_replay_data_error(exc):
                 summary = _empty_summary_payload(resolved_capital)
             else:
                 raise
@@ -1015,6 +1030,19 @@ class LiveStrategyMonitorService:
                 latest_decision=latest_decision if isinstance(latest_decision, dict) else None,
                 previous_engine_mode=self._last_engine_mode,
             )
+            if self._dataset == "historical":
+                # Suppress live-only alerts in historical replay: every bar is from
+                # 2024 so freshness is always 'stale', and rolling quality eval is
+                # a live-monitoring construct that doesn't apply to backtests.
+                _HISTORICAL_SUPPRESSED = {
+                    "data_stale",
+                    "data_stale_with_exposure",
+                    "ml_pure_monitoring_unavailable",
+                }
+                active_alerts = [
+                    a for a in active_alerts
+                    if str(a.get("id") or "") not in _HISTORICAL_SUPPRESSED
+                ]
             ops_state = self.build_ops_state(
                 market_session_open=market_session_open,
                 engine_context=engine_context,
