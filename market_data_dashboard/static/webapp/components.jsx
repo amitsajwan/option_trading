@@ -173,8 +173,14 @@ function LWChart({
         try { chartRef.current.timeScale().setVisibleRange(saved); } catch (_) {
           chartRef.current.timeScale().fitContent();
         }
-      } else if (!isPlayingRef.current) {
-        chartRef.current.timeScale().fitContent();
+      } else {
+        // New session (playing or not): anchor a ~90-bar window from the left
+        // so streaming bars fill the chart instead of being squeezed to the right edge.
+        const SPAN = 90;
+        chartRef.current.timeScale().setVisibleLogicalRange({
+          from: -0.5,
+          to: Math.max(SPAN, idx + 1) - 0.5,
+        });
       }
     }
 
@@ -184,8 +190,11 @@ function LWChart({
         const ts = chartRef.current.timeScale();
         const vr = ts.getVisibleLogicalRange();
         if (vr !== null) {
-          const span = vr.to - vr.from;
-          ts.setVisibleLogicalRange({ from: idx - span + 1, to: idx + 1 });
+          const span = Math.max(1, vr.to - vr.from);
+          // Anchor from at 0 until enough bars have streamed in to fill the window.
+          const from = Math.max(0, idx - span + 1);
+          const to = Math.max(span, idx + 1);
+          ts.setVisibleLogicalRange({ from: from - 0.5, to: to - 0.5 });
         } else {
           chartRef.current.timeScale().fitContent();
         }
