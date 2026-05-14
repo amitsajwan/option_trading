@@ -487,10 +487,13 @@ def _latest_run_id_for_date(db: Any, trade_date: str) -> Optional[str]:
         os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL") or "strategy_positions_historical"
     )
     try:
+        # Sort by _id (ObjectId is monotonic by insertion time) so that when multiple
+        # runs cover the same trade_date, the most recently inserted run wins —
+        # deterministic, unlike sorting on the bar `timestamp` which ties across runs.
         doc = db[positions_coll].find_one(
             {"trade_date_ist": trade_date, "run_id": {"$nin": [None, ""]}},
             {"run_id": 1},
-            sort=[("timestamp", DESCENDING)],
+            sort=[("_id", DESCENDING)],
         )
         if doc and doc.get("run_id"):
             return str(doc["run_id"]).strip() or None
