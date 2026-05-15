@@ -97,9 +97,58 @@ No training was run. The work was operational:
 
 | Date | Run ID | S1 ROC | S2 ROC | Trades | PF | MDD | Block | Outcome |
 |------|--------|--------|--------|--------|----|-----|-------|---------|
-| 2026-05-14 | `staged_deep_hpo_e2_volatile_only_<TS>` | — | — | — | — | — | — | 🔜 running |
+| 2026-05-14 | `staged_deep_hpo_e2_volatile_only_20260514_161109` | 0.619 | **0.535** | 2,496 | **0.263** | **81.1%** | 88.5% | ❌ HELD — gates failed on PF, MDD, S2 ROC, S3 non-inferiority, net_return |
 
-(Update as E2 completes.)
+## 6. E2 Outcome Analysis
+
+**The VOLATILE-only training hypothesis is disproven.** E2 made things *worse* than C1 across the board:
+
+| Metric | C1 (live) | E2 | Δ |
+|---|---|---|---|
+| Stage 2 ROC | 0.591 | 0.535 | **−0.056** (toward random) |
+| Combined holdout PF | 0.614 | 0.263 | **−0.351** |
+| VOLATILE PF | 1.314 | 0.488 | **−0.826** (the regime we restricted to got WORSE) |
+| TRENDING PF | 0.306 | 0.260 | −0.046 |
+| PRE_EXPIRY PF | 0.178 | 0.252 | +0.074 |
+| SIDEWAYS PF | 4.535 | **0.000** (167 trades, 0% wins) | **broken** |
+| Max drawdown | (acceptable) | 81.1% | catastrophic |
+
+**Mechanism (hypothesis):** Restricting Stage 2 training to VOLATILE+SIDEWAYS (~8.9k rows, ~24% of the original 37k) destroyed generalization. The model learned features that are only valid under the regime filter; at inference, the runtime regime label has measurement noise, and any mislabel pushes the input into an unseen region. Result: near-random predictions on the held-out test set. The SIDEWAYS collapse (0% win rate over 167 trades) is the signature of this — Stage 2 produces direction predictions that are reliably *wrong*.
+
+## 7. Decision: NOT Grid F as scoped — Stage-1-only ablation first
+
+The originally-queued Grid F (PRE_EXPIRY-isolated training) would repeat E2's architectural mistake with a different filter and an even smaller sample (~5k rows). The bottleneck is **NOT** Stage 2 sample purity. Filtering harms generalization.
+
+Looking at the full Grid A→E arc, **D2 had the best Stage 2 to date** (ROC 0.618, VOLATILE PF 1.452). D2's failure was the combined cascade — block_rate too low (3.97% vs ≥25% gate) and PRE_EXPIRY+UNKNOWN dragging MDD to 29.5%. **D2 was held for runtime-gating reasons, not training reasons.**
+
+### Next experiment: Stage-1-only ablation (cheap, high-info)
+
+Run a replay over 2024 Jan-Oct with `strategy_app_historical` configured to bypass the Stage 2 directional gate and Stage 3 recipe selection. Use Stage 1 as a pure entry filter with a higher threshold:
+
+```bash
+STRATEGY_ML_PURE_BYPASS_GATES=1
+STRATEGY_MIN_CONFIDENCE=0.55  # ~Stage 1 alone
+```
+
+Stage 1 published metrics are: PF=3.99, win=66.5% on validation (selected_threshold=0.5, 22k trades / 23k rows). The hypothesis: the directional cascade is *value-destructive* — Stage 1 alone with a simple directional heuristic (e.g. session momentum sign, or pure CE-bias since training distribution was PE-dominant) may match or beat the full cascade.
+
+**Why this beats Grid F:**
+- **No retraining cost.** Just a config change + a ~80-minute replay at 1000×.
+- **Tests a fundamental hypothesis:** that the cascade hurts. If proven, every directional-gate experiment to date has been chasing the wrong goal.
+- **Falsifiable in one run:** if PF stays below 1.0 with bypass, the cascade is necessary and we explore D2-revisit (option B below).
+
+### Fallback if Stage-1-only fails: D2-revisit with runtime PRE_EXPIRY block
+
+Take **D2's exact config** (`staged_deep_hpo_d2_high_edge_20260501_040643`) and:
+- Add `PRE_EXPIRY` and `UNKNOWN` to `runtime.prefilter_gate_ids` alongside `regime_gate_v1` 
+- Re-evaluate combined gates on TRENDING+VOLATILE+SIDEWAYS only (Fix 2 pattern — already in place for SIDEWAYS exclusion)
+- Hypothesis: D2's TRENDING (1.195) + VOLATILE (1.452) + SIDEWAYS portion combined PF likely meets the 1.35 gate, and MDD drops below 10% once PRE_EXPIRY's 0.181 PF stops contributing
+
+This avoids retraining on a restricted dataset (the E2 mistake) and instead filters at deployment time — exactly how C1 is currently deployed, just with a broader block list.
+
+### Status
+
+C1 (`staged_deep_hpo_c1_base_20260429_040848`) **remains the live model** with `regime_gate_v1` active. E2 will not be deployed. Stage-1-only ablation is the proposed next action — pending operator approval.
 
 ---
 
