@@ -152,9 +152,14 @@ Each change is behind a feature flag so we can A/B which contributes what.
 **Effort:** Limit orders 2-3 days; wider exits 0.5 day; smart strikes 1.5 days; replay + analysis 1 day = ~5 days total
 
 **Revised tasks (replaces old task list above):**
-- [ ] **1.1 Limit-order execution** — replace market orders with passive limits (`best_bid + 1 tick`), retry logic, fallback after N seconds. Env: `STRATEGY_LIMIT_ORDER_ENABLED=1`. Adds fill-rate + slippage telemetry. **Effect:** 200 bps → ~50 bps round-trip on fills.
-- [ ] **1.2 Wider exits + trailing** — stop 0.001→0.002, target 0.0025→0.005, hold 9→30 bars, trail activate at MFE ≥ 0.3% offset 0.15%.
+
+**Critical finding (2026-05-15):** The codebase has NO broker integration. `strategy_app` publishes POSITION_OPEN/CLOSE to MongoDB using snapshot mid-prices — paper-only. The `capped_live` rollout stage is a safety gate (max 0.25× sizing, guard file required), not a live broker hookup. Phase 1.1 re-scoped accordingly.
+
+- [ ] **1.1 Realistic-cost backtest accounting** — every position close gets `pnl_pct_after_costs = pnl_pct - 0.02` (200 bps round-trip baseline). Phase 1 measurements only count post-cost numbers. Stop-gap: apply in analysis scripts + UI display. Long-term: deduct at position-close emit time so all downstream sees realistic.
+- [ ] **1.2 Wider exits + trailing** — stop 0.001→0.002, target 0.0025→0.005, hold 9→30 bars, trail activate at MFE ≥ 0.3% offset 0.15%. (Plumbing already done in `docker-compose.yml`; just need to apply env values.)
 - [ ] **1.3 Smart strike selection** — widen `Decision` to carry predicted move + confidence; compute IV percentile from rolling snapshots; reject when IV percentile > 0.9; switch to 1-OTM when confidence > 0.75 AND predicted move > 0.5%. Env: `STRATEGY_SMART_STRIKE_ENABLED=1`.
+
+LIVE limit-order execution moves to Phase 4 (Production hardening) — it's part of the Kite broker integration, not a backtest improvement.
 
 ### Phase 2 — Realistic-cost re-validation (1–2 days)
 
@@ -189,11 +194,20 @@ Each change is behind a feature flag so we can A/B which contributes what.
 **Owner:** ML Research workstream (§6.1)
 **Effort:** ~80 hours compute + 2 weeks analysis
 
-### Phase 4 — Production hardening (1 week)
+### Phase 4 — Kite integration + production hardening (1–2 weeks)
 
-**Goal:** Make the system safe to run with real money.
+**Goal:** Make the system safe to run with real money. **Critical:** the codebase currently has NO broker integration; this phase builds it.
 
-**Tasks:**
+**Tasks (Kite integration):**
+- [ ] Broker adapter: `strategy_app/broker/kite.py` with auth, order placement, position polling
+- [ ] Connect strategy_app POSITION_OPEN/CLOSE to broker `kc.place_order` calls
+- [ ] **Order type = LIMIT** (passive limits at best_bid + 1 tick / best_ask − 1 tick)
+- [ ] Retry logic: 3 attempts at increasing aggressiveness, cancel after N seconds
+- [ ] Order-state reconciliation: poll Kite for fills, update Mongo positions
+- [ ] Mode flag `BROKER_MODE = mock | paper | live` so we can wire Kite without sending real orders first
+- [ ] **PAPER mode** = real order objects, real auth, but `dry_run=True` flag prevents actual submission. Validates the integration end-to-end before any real risk.
+
+**Tasks (production hardening):**
 - [ ] Pre-trade risk gate: reject orders that violate `max_daily_loss_pct`, `max_consecutive_losses`, exposure caps
 - [ ] Slippage monitoring: log expected-vs-realized for every fill; alert if median deviation > 50bps
 - [ ] Kill-switch automation: auto-halt on N consecutive losses or X% drawdown
@@ -201,10 +215,10 @@ Each change is behind a feature flag so we can A/B which contributes what.
 - [ ] Capital ramp policy: 0.25× → 0.5× → 1.0× gated by realized 30-day PF
 - [ ] Operator dashboard: P&L attribution by stage, by regime, by strike
 
-**Exit gate:** All risk paths tested with synthetic adverse scenarios. Kill-switch trip verified end-to-end.
+**Exit gate:** Kite integration in PAPER mode for ≥5 trading days, zero discrepancies between intended and recorded fills. All risk paths tested with synthetic adverse scenarios. Kill-switch trip verified end-to-end.
 
 **Owner:** Operations workstream (§6.4) + Risk Management (§6.5)
-**Effort:** 1 week focused
+**Effort:** Kite integration ~1 week, hardening ~1 week, paper validation ≥1 week calendar
 
 ### Phase 5 — Capital deployment ramp (2–4 weeks)
 
