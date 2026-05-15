@@ -46,10 +46,15 @@ print(\"NOT_FOUND\")
   echo "[$(date -u +%FT%TZ)]  F1: $RESULT"
 
   case "$RESULT" in
-    *completed*) echo; echo "F1 COMPLETED — proceeding to launch B1"; break ;;
-    *failed*|*error*) echo; echo "F1 FAILED — NOT launching B1. Operator decision required."; exit 1 ;;
-    *NOT_FOUND*) echo "F1 run not yet started — waiting"; sleep $POLL_INTERVAL_SEC ;;
-    *) sleep $POLL_INTERVAL_SEC ;;
+    # 'completed' = training succeeded AND publish gates passed → terminal success.
+    # 'held'      = training succeeded BUT publish gates failed → terminal but
+    #               unpublishable (e.g., stage1_cv_gate_failed). Free up the VM
+    #               and launch B1 anyway — B1's hypothesis (cost-in-label) is
+    #               independent of F1's publish outcome.
+    *completed*|*held*) echo; echo "F1 TERMINAL ($RESULT) — proceeding to launch B1"; break ;;
+    *failed*|*error*)   echo; echo "F1 FAILED — NOT launching B1. Operator decision required."; exit 1 ;;
+    *NOT_FOUND*)        echo "F1 run not yet started — waiting"; sleep $POLL_INTERVAL_SEC ;;
+    *)                  sleep $POLL_INTERVAL_SEC ;;
   esac
 done
 
