@@ -1,4 +1,4 @@
-// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v7
+// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v8
 /* global React, TradingCore, LWChart */
 const { useState: _s, useEffect: _e, useMemo: _m, useRef: _r, useCallback: _cb } = React;
 const TC = window.TradingCore;
@@ -800,10 +800,34 @@ function ReplayTickerBar({ date, vtLabel, instrument, isPlaying }) {
 }
 
 // ── Replay Status Bar ─────────────────────────────────────────────────────
+//
+// C1 model training windows (per ml_pipeline_2/docs/training/MODEL_STATE_20260514.md):
+//   train:   2020-08-03 → 2024-04-30  — model SAW these dates during training
+//   valid:   2024-05-01 → 2024-07-31  — hyperparameter-tuning data
+//   holdout: 2024-08-01 → 2024-10-31  — truly out-of-sample (never seen)
+//
+// Surfacing these windows in the date picker prevents celebrating in-sample
+// numbers as evidence of edge. See PROJECT_PLAN.md §14.
+const C1_TRAIN_END   = "2024-04-30";
+const C1_VALID_END   = "2024-07-31";
+const C1_HOLDOUT_END = "2024-10-31";
+
+function _windowOf(d) {
+  if (!d) return "?";
+  if (d <= C1_TRAIN_END)   return "train";
+  if (d <= C1_VALID_END)   return "valid";
+  if (d <= C1_HOLDOUT_END) return "OOS";
+  return "post";
+}
+
 function _fmtDateOption(d, tradeCounts) {
   const n = (tradeCounts && tradeCounts[d]) || 0;
-  if (n > 0) return `${d} · ${String(n).padStart(3,' ')} trades`;
-  return d;
+  const win = _windowOf(d);
+  // Mark window so operators can tell at a glance whether they're looking at
+  // in-sample (train), light-contamination (valid), or true out-of-sample (OOS) data.
+  const tag = win === "train" ? "● train" : win === "valid" ? "◐ valid" : win === "OOS" ? "○ OOS  " : "  post ";
+  if (n > 0) return `${tag} · ${d} · ${String(n).padStart(3,' ')} trades`;
+  return `${tag} · ${d}`;
 }
 
 function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, upToIdx,

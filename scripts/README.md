@@ -40,6 +40,24 @@ sudo docker exec option_trading-mongo-1 mongosh trading_ai --quiet --file /tmp/s
 
 The script takes ~3 minutes to complete (4 variants × 107 entries × ~30 snapshot lookups each ≈ 13,000 mongo queries).
 
+## `run_f1_handoff.sh`
+
+Polls the ML VM for walkforward F1 training completion, then dumps the F1 summary and prints the manual next steps (model publish + 2024 replay).
+
+```bash
+bash scripts/run_f1_handoff.sh
+```
+
+Polls every 10 minutes. Idempotent — safe to leave running overnight.
+
+## `ingest_kite_historical.py` (SKELETON)
+
+Skeleton for 2025 BankNifty data ingestion from Kite Connect Historical API. **Not runnable as-is** — needs Kite Historical subscription (~₹2000/month) + filled-in TODOs. Documents the data shape, rate limits, and ingestion approach. Use as the starting point once the subscription is paid.
+
+```bash
+KITE_API_KEY=... KITE_ACCESS_TOKEN=... python3 scripts/ingest_kite_historical.py --from 2025-01-01 --to 2025-12-31 --dry-run
+```
+
 ## Why these live in `scripts/` and not `tools/`
 
 They are operator-side analytical tools, not part of any deployed service. They read JSONL files and run mongo queries from outside the strategy_app codebase. They do not depend on the strategy_app Python package and should not be imported from it.
