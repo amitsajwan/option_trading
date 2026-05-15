@@ -496,6 +496,9 @@ Both are sub-Phase-1 tuning, not fundamental design changes. Phase 1 has clearly
 
 ## 13. Phase 1.2 + 1.3 LIVE replay result — full 2024 (2026-05-15)
 
+> **⚠️ READ §14 FIRST.** The headline numbers in this section are dominated by training-window data. Truly out-of-sample (2024-08 → 2024-10) the same run is NET NEGATIVE. The +271% claim below should be read as in-sample, not as validation evidence.
+
+
 The simulation in §11/§12 used C1's exact 107 entry decisions and counter-factually re-computed exits/strikes. To validate end-to-end at runtime, we executed a fresh historical replay with all three Phase 1.2 flags + smart-strike enabled, on `strategy_app_historical` consuming a live snapshot stream from the replay emitter.
 
 **Critical pre-requisite fix applied earlier this session:** [trade_signal_builder.py](../strategy_app/engines/trade_signal_builder.py) was silently overriding env-derived `underlying_stop_pct` / `underlying_target_pct` / `max_hold_bars` with the recipe's bundled defaults (0.001 / 0.0025 / 20). Inverted precedence so explicit overrides win. 5 new precedence tests in [test_trade_signal_builder.py](../strategy_app/tests/test_trade_signal_builder.py); 24 tests total green on the relevant module set; 214/214 on full strategy_app suite.
@@ -540,7 +543,7 @@ The simulation in §11/§12 used C1's exact 107 entry decisions and counter-fact
 | trades/week | ≥ 3 | 1.29 | ❌ FAIL (entry-volume-bound) |
 | max single-trade loss | ≤ 50% | 54.2% | ❌ FAIL (one outlier 4 pp over) |
 
-**Decision: G1 substantively passes.** The two failing gates are tuning items (lower `STRATEGY_MIN_CONFIDENCE` to lift frequency; tighten `ML_PURE_UNDERLYING_STOP_PCT` to cap max-loss), not architectural failures. The dominant economic metric (net @ 200 bps) is +271% vs C1's −105% — a **376 pp swing**. The model + Phase 1.2 + 1.3 stack is net-profitable in 2024 backtest.
+**Decision: G1 substantively passes** ON THIS HEADLINE NUMBER ALONE. **However, §14 below shows this headline is dominated by training-window contribution (+87% of total gross from dates the model saw during training). See §14 for the honest out-of-sample verdict.**
 
 **Cost-stress sensitivity (per Zerodha real-fee breakdown):**
 
@@ -552,7 +555,92 @@ The simulation in §11/§12 used C1's exact 107 entry decisions and counter-fact
 | Market orders crossing spread (350 bps) | +3.35% | +187.32% |
 | Worst case (550 bps) | +1.35% | +75.32% |
 
-Every cost regime is net-positive. The system clears the gate at any plausible cost assumption.
+Every cost regime is net-positive — **but again, this is in-sample-biased; see §14 for the holdout-only sensitivity which is net-negative at every cost.**
+
+---
+
+## 14. HONEST OOS VERDICT — train/valid/holdout decomposition (2026-05-15)
+
+**This section retracts the §13 headline.** When the same 56 trades are split by whether the model saw the dates during training, the result reverses on truly out-of-sample data.
+
+### C1 model training windows
+
+Per [`ml_pipeline_2/docs/training/MODEL_STATE_20260514.md`](../ml_pipeline_2/docs/training/MODEL_STATE_20260514.md#L78):
+- **train:**   2020-08-03 → 2024-04-30   (model SAW these dates during training)
+- **valid:**   2024-05-01 → 2024-07-31   (model saw for hyperparameter tuning)
+- **holdout:** 2024-08-01 → 2024-10-31   (truly out-of-sample — never seen)
+
+### LIVE Phase 1.2 + 1.3 run split by window
+
+| Window | n | avg gross | net @ 200 bps | PF | win% | verdict |
+|---|---|---|---|---|---|---|
+| **train** (contaminated) | 24 | +13.88% | **+285.14%** | 2.37 | 58.3% | model recognizes patterns |
+| **valid** (light contamination) | 16 | +4.56% | +40.96% | 1.59 | 43.8% | weakly positive |
+| **holdout** (CLEAN OOS) | **16** | **−1.42%** | **−54.78%** | **0.86** | 56.2% | **net negative** |
+| OVERALL | 56 | +6.85% | +271.32% | 1.72 | 53.6% | (in-sample-dominated) |
+
+**Training window contributes +87% of total gross.** The +271% headline is essentially "the model recognizes dates it was trained on" — not evidence of OOS edge.
+
+### Exit-timing sweep — does any hold variant rescue the holdout?
+
+Counterfactual sim on C1's full 107 baseline entries with 4 hold settings. Holdout-only:
+
+| Hold bars | n | avg gross | net @ 200 bps | PF | win% | exit mix |
+|---|---|---|---|---|---|---|
+| 9 (C1 original) | 18 | −2.62% | **−83%** | 0.65 | 33% | TIME_STOP=18 |
+| 15 | 18 | −5.81% | **−141%** | 0.44 | 33% | TIME_STOP=16, STOP_LOSS=2 |
+| 20 | 18 | −5.88% | **−142%** | 0.42 | 28% | TIME_STOP=16, STOP_LOSS=2 |
+| **30 (Phase 1.2)** | 18 | **−3.47%** | **−99%** | **0.65** | **50%** | TIME_STOP=16, STOP_LOSS=2 |
+
+**All four exit configurations are net-negative on holdout.** Phase 1.2's 30-bar is the least-bad (best win rate, tied for best PF) but still loses money. **Exit timing is not the lever** — the directional signal itself has decayed in 2024 H2.
+
+Compare same sweep on training-window-only (sanity, where everything should look good):
+
+| Hold bars | train net @ 200 bps |
+|---|---|
+| 9 | −21% |
+| 15 | +16% |
+| 20 | +318% |
+| 30 | **+448%** |
+
+The **+448% → −99% swing (30-bar variant, training → holdout) is the textbook signature of severe overfit.** Wider exits "work" in-sample because they let winners run on dates the model memorized. They don't generalize.
+
+### Pattern observations
+
+- **All 18 holdout trades exit via TIME_STOP, not target.** The model's entries don't reliably produce 50 bps underlying moves in 30 bars on data it hasn't seen.
+- **Win rates collapse** from 55-60% (in-sample) to 28-50% (holdout). Direction calls are no better than chance on truly fresh data.
+- **Middle holds (15/20-bar) are pathological** — worse than both 9 and 30 bar. No exit-timing fix rescues this.
+- **Sample size warning:** 16-18 holdout trades is statistically thin. Could be H2-2024 regime noise rather than permanent decay. **Cannot conclude definitively without more OOS data (2025).**
+
+### Implications
+
+1. **§13 G1-PASS claim is retracted.** Phase 1.2 + 1.3 is NOT validated as a deployable strategy. The headline +271% net is in-sample.
+2. **Phase 1.2 (wider exits) is not the wrong architectural choice** — on holdout it's still the least-bad of the 4 variants tested. But it's not enough to make the model net-positive OOS.
+3. **Phase 1.3 (smart strike) inconclusive** — OTM branch never fired in the C1 trade set. IV-reject filter removed 11 of 107 trades but they were not all from the holdout window.
+4. **Frequency tune (lowering MIN_CONFIDENCE) is NOT worth running.** More trades with no OOS edge = more losses.
+5. **Stop-tightening (0.002 → 0.0015) is NOT the answer.** Loss size is not the binding constraint — directional accuracy is.
+6. **The C1 model itself may be 2024-fit.** Or H2-2024 may be a one-quarter regime shift that recovers in 2025. We cannot tell with the data we have.
+
+### Next gating action
+
+**Ingest 2025 BankNifty snapshot data into mongo + parquet.** Currently neither exists on the runtime VM. Once available, replay 2025-Q1 (3 months, truly OOS, never trained on) with the same Phase 1.2 + 1.3 config and decompose the same way. Three possible outcomes:
+
+| 2025 Q1 holdout net @ 200 bps | Interpretation | Action |
+|---|---|---|
+| Net positive (≥ +20% over the quarter) | H2-2024 was regime noise; OOS edge real | Proceed to Phase 4 (Kite paper integration) |
+| Marginal (−20% to +20%) | Edge fragile; need more samples | Wait for more 2025 data, do not deploy |
+| Net negative (< −20%) | Model is 2024-fit; OOS edge gone | Either retrain (walk-forward) or shelve the project |
+
+### What the existing infrastructure DOES support
+
+The good news from this session: even though the result is sobering, **the infrastructure to ask honest questions is now in place**:
+- [analyze_jsonl.py](../scripts/analyze_jsonl.py) — auto window-split, run-id filter, sample-size warnings
+- [sim_exit_sweep.js](../scripts/sim_exit_sweep.js) — counterfactual sweep across exit variants with window split
+- JSONL is the canonical source of truth; mongo is best-effort
+- Precedence fix means env-driven config changes actually take effect at runtime
+- Smart-strike module is plumbed and tested even though its OTM branch needs higher-conviction entries to fire
+
+These tools will be just as useful for evaluating any 2025 replay, walk-forward retrained model, or future strategy iteration.
 
 **Caveats:**
 1. **2024 only.** 2025 out-of-sample test is the deciding question for "real product vs overfit." Currently blocked on 2025 data ingestion to mongo/parquet.
