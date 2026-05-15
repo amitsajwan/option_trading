@@ -330,13 +330,71 @@ If a gate fails (G0–G4), **document the failure with numbers** in the relevant
 
 Currently in **Phase 0 — Diagnose existing model**.
 
-Active:
-- [running] s1ablation replay — ~25 min remaining
-- [queued] Random-direction replay — auto-starts after s1ablation finishes
-- [planned] Realistic-cost re-validation — kick off on ML VM after random-direction completes
-- [planned] Futures-counterfactual analysis — small Python script, ~30 min to write + run
+### Phase 0 results so far
 
-When all four are done, evaluate G0 and decide Phase 1 entry.
+**Futures-counterfactual analysis (COMPLETE) — major finding:**
+
+Re-evaluated all 107 C1 baseline closed trades as if they had been executed on BNF futures instead of options (same direction, same entry/exit time, just different instrument):
+
+| Same trades, different instrument | Win rate | PF | Net |
+|---|---|---|---|
+| OPTIONS (as actually traded, 6 bps cost) | 43.9% | 1.22 | +1.09% |
+| FUTURES (counterfactual, 0 cost) | **53.3%** | **2.07** | **+11.81%** |
+
+**Conclusion:** The futures model has **real directional signal** — 53.3% win rate on futures direction is meaningfully above 50%. The options translation eats roughly half the alpha (PF 2.07 → 1.22). G0 PASSES on signal-existence grounds.
+
+**Per-direction breakdown:** CE trades avg +0.132% futures pnl (82 trades); PE trades avg +0.038% (25 trades). Model is much stronger on UP calls than DOWN calls — consistent with PE-dominant training data per `MODEL_STATE_20260428.md`.
+
+**Realistic-cost stress (rough estimates):**
+- OPTIONS @ 200 bps: net −213% — completely unviable at C1's hold duration / trade frequency
+- FUTURES @ 10 bps (BNF liquid mid-day): ~+1.1% net — borderline profitable
+- FUTURES @ 5 bps (best case): ~+6.5% net — clearly profitable
+
+**Implication for Phase 1:** The smart selector alone cannot rescue the options strategy at realistic costs. Three real paths emerged (see Pivot 2026-05-15 below).
+
+### Active
+
+- [running] s1ablation replay — ~10 min remaining
+- [queued] Random-direction replay — auto-starts after s1ablation; **still informative** because it tests whether Stage 2 specifically has direction edge, separate from Stage 1's entry edge
+- [planned] Realistic-cost re-validation — kick off on ML VM
+
+When all four are done, evaluate full G0 + commit to a path from the three below.
+
+---
+
+## Pivot 2026-05-15 — three real paths after futures-counterfactual
+
+The "smart option selector" hypothesis underestimated the size of the options translation tax. Smart selection helps but doesn't bridge a 200 bps gap on a 11 bps gross edge. Real options paths require either bigger directional moves, longer holds, or different instrument.
+
+### Path A — Switch execution to BNF futures
+
+- **What:** Same model, same signals; place orders on `BANKNIFTY26MARFUT` instead of ATM options.
+- **Pros:** P&L matches prediction (no theta, no vega); ~5-10 bps round-trip costs; cleanest implementation; preserves all training work.
+- **Cons:** Margin requirement ~₹4.5L per lot vs option premium ~₹6-15K. **Hard constraint for retail capital.** Forces single-lot positions; smaller % returns despite cleaner math.
+- **When this wins:** If capital allows ≥1 lot, this is the highest-EV path.
+
+### Path B — High-conviction options (reduce frequency, increase predicted move size)
+
+- **What:** Same model, but trade only when Stage 1 + Stage 2 confidence > 0.80 (currently 0.65). Estimate predicted move size from Stage 2 output (requires Decision dataclass widening per original Phase 1). Reject trades unless predicted move > 2× implied breakeven.
+- **Pros:** Keeps options leverage; uses capital efficiently; aligns trade selection with what survives the translation tax.
+- **Cons:** Likely produces 10-20 trades/year instead of 80-100. Statistical noise becomes significant. Requires the magnitude-prediction infrastructure that doesn't exist yet.
+- **When this wins:** If capital is too small for futures and we accept low-frequency, high-conviction trading.
+
+### Path C — Multi-leg structures (spread/calendar)
+
+- **What:** Replace single-leg ATM CE/PE with bull spread (CE buy + further OTM CE sell) or calendar (near + further expiry). Reduces net vega exposure and net theta cost.
+- **Pros:** Could neutralize vega-crush losses we see in the 10% premium-drop trade examples.
+- **Cons:** Spreads cap upside; brokerage doubles; correctness of selection logic gets more complex.
+- **When this wins:** If we want to keep options leverage but manage vega — and have the engineering bandwidth.
+
+### Decision criteria
+
+Before committing to a path, also need:
+- Random-direction replay outcome (still pending) → tells us if Stage 2 specifically has direction edge, or if Stage 1 alone produces the 53.3% futures-win
+- Operator capital constraint check (futures lot ≈ ₹4.5L; do we have it?)
+- Operator risk-frequency preference (more trades vs more conviction)
+
+Path A is mechanically simplest. Path B is most aligned with the original design intent. Path C is most engineering-heavy. **Default recommendation pending random-direction result: Path A if capital allows, else Path B.**
 
 ---
 
