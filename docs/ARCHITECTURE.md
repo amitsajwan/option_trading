@@ -97,6 +97,7 @@ Most other containers are expected to start from repo root through Compose witho
 
 ## 9. Related Docs
 
+- [SYSTEM_FLOW_DIAGRAMS.md](SYSTEM_FLOW_DIAGRAMS.md) — visual flow diagrams (training, live, replay, eval)
 - [SYSTEM_SOURCE_OF_TRUTH.md](SYSTEM_SOURCE_OF_TRUTH.md)
 - [runbooks/README.md](runbooks/README.md)
 - [runbooks/GCP_DEPLOYMENT.md](runbooks/GCP_DEPLOYMENT.md)
