@@ -22,7 +22,7 @@ The North Star, the current state, what we're fixing, in what order, who does wh
 
 ## 2. Current State Snapshot (2026-05-15 evening IST)
 
-**One-line position:** C1 is live in `capped_live` (no real money). Four independent experiments confirm overfit on 2020-2024 data — C1 holdout net-negative, F1 walk-forward held, B1 cost-shift held, and the conviction-filter approach (Path C-1) was already documented as a dead-end in April. **Training is PAUSED.** Gating constraint is now fresh data, not algorithmic. **Do NOT deploy real capital.**
+**One-line position:** C1 is live in `capped_live` (no real money). Four independent experiments confirm overfit on the C1 recipe family using v1 views — C1 holdout net-negative, F1 walk-forward held, B1 cost-shift held, Path C-1 (conviction filter) documented as Apr-26 dead-end. **G4 is now running** to test a structurally different question: does the C1 recipe find generalizable signal when given a richer feature set (`v3_candidate` views, ~50% more columns including `ctx_*` family)? Result by Saturday ~00:30 IST. **Do NOT deploy real capital — applies regardless of G4 outcome.**
 
 | Layer | State |
 |---|---|
@@ -31,21 +31,24 @@ The North Star, the current state, what we're fixing, in what order, who does wh
 | **F1 walk-forward** | **HELD** at `stage1_cv_gate_failed`. C1 recipe trained on pre-2024 → block_rate=1.0. Recipe doesn't generalize across windows. See §15. |
 | **B1 cost-aware label** | **HELD** at `stage2_signal_check_failed`. C1 recipe + `cost_per_trade=0.02` instead of 6 bps → Stage 2 direction signal collapses under realistic-cost labels. See §15. |
 | **Path C-1 (NOT launched)** | Conviction-filter approach (`direction_or_no_trade_v1` + `stage2_target_redesign`) — already tried Apr 26 2026, killed throughput to 0 holdout trades. Replicating it under 200 bps would be even worse. Don't run. |
+| **G4 (RUNNING)** | C1 recipe + `stage{1,2,3}_*_view_v3_candidate` (130 cols vs v1's 83 — ~47 extra `ctx_*` features). Launched 2026-05-15 18:32 UTC, manifest `8a8dd07ad0...`. ETA ~6 hrs. Tests whether richer features rescue the recipe. |
 | **Architecture** | Three lanes (training / live / historical replay) sharing `strategy_app` code + published model artifact. [SYSTEM_FLOW_DIAGRAMS.md](SYSTEM_FLOW_DIAGRAMS.md). |
 | **Data state** | 2020-08 → 2024-10 in mongo + parquet. **2025+ NOT acquired.** All free paths (Kite Historical, NSE bhavcopy, scrapers) inadequate for 1-min option chain. Forward live collection (Kite live credentials → Monday 09:15 IST market open) is the only viable path. |
 | **Known gaps** | (1) `strategy_persistence_app` pubsub hangs after mongo timeout — workaround: JSONL is canonical for backtests. (2) `exit_trigger` not persisted. (3) No broker integration (no real-money orders possible regardless of model). |
 
-**Why training is paused.** Four consistent failure modes on the same dataset say the same thing: there aren't enough genuinely-profitable-after-200-bps trades in 2020-2024 BankNifty data for any C1-derivative recipe to extract a generalizable edge. More HPO iterations on this data won't change that. The honest gating action is fresh data.
+**Pause scope (revised after operator pushback).** The pause applies to **C1 recipe iteration on v1 views** — we've confirmed four ways that doesn't work. The pause does NOT apply to structurally different experiments. Operator (correctly) pointed out that new labels, new features, new HPO, or new model families haven't been tested. **G4** (new features via v3_candidate views) is the first such experiment and is running.
 
 **Next concrete actions (in priority order):**
 
-1. **Monday 2026-05-18, 09:15 IST:** if operator shares Kite live credentials, start forward shadow data collection via `ingestion_app` + `snapshot_app` + `strategy_app` running in shadow mode (real ticks, signals generated, no broker orders). Accumulate 1 trading day of true OOS per real day.
-2. **After 4-6 weeks of forward data (~mid-July 2026 onwards):** design ONE new experiment with the accumulated fresh data. Candidate designs: (a) direct option P&L label, (b) longer prediction horizon, (c) different feature philosophy. See §15 "Next-experiment design note".
-3. **Do NOT iterate on C1 recipe on existing 2020-2024 data.** Even with new label / new HPO, the data ceiling is reached.
+1. **Tonight ~00:30 IST:** read G4 `summary.json`. Two outcomes:
+   - G4 HELD (same as F1/B1): then the data ceiling claim firms up — recipe family genuinely exhausted regardless of feature set. Move to G2 (new labels via direct option-P&L; requires new labeler code) or accept "wait for fresh data" position.
+   - G4 PUBLISHES: feature set was the lever; we have a candidate model worth forward-validating. Wire shadow mode Monday.
+2. **Monday 2026-05-18, 09:15 IST:** if operator shares Kite live credentials, start forward shadow data collection regardless of G4 outcome. Accumulating fresh OOS data has no downside.
+3. **Continue testing untried recipe dimensions** if G4 fails: G2 (direct option-P&L label — needs new labeler code), G3 (different ML model family from the existing trainer catalog).
 
-**Operator decision needed (only one):** share Kite live trading API credentials with the runtime VM so forward shadow can start Monday. This is the single unblocking action.
+**Operator decision needed:** share Kite live trading API credentials with the runtime VM so forward shadow can start Monday. This is the unblocking action for the OOS validation side, independent of training.
 
-**Active running:** Nothing. ML VM is idle. Runtime VM is idle. Training paused.
+**Active running:** G4 training in tmux `pathg4` on `option-trading-ml-01`, manifest `8a8dd07ad0...`, started 2026-05-15 18:32 UTC.
 
 ---
 
