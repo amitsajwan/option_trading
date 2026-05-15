@@ -1,0 +1,349 @@
+# BankNifty Options ML — Project Plan
+
+**Living document.** Updated as phases progress. Last revised: 2026-05-15.
+
+The North Star, the current state, what we're fixing, in what order, who does what, and where we stop. Refer to this until the project is complete or explicitly redirected.
+
+---
+
+## 1. North Star
+
+**Goal:** A profitable, risk-bounded BankNifty options trading system that uses ML signals on futures to drive option contract selection, deployed with realistic cost modeling and progressive capital ramp.
+
+**Non-goals:** Beating institutional HFT. Trading equities or other instruments. Building a research-only system without a deployment path.
+
+**Definition of done:**
+1. The system produces ≥30 live trades in a calendar month
+2. Realized PF over those trades is ≥1.15 net of all real costs
+3. Max drawdown stays within pre-declared risk budget
+4. Promotion from `shadow → paper → capped_live → live` gated by quantitative criteria, not vibes
+
+---
+
+## 2. Current State Snapshot (2026-05-15)
+
+| Layer | State |
+|---|---|
+| **Live model** | C1 (`staged_deep_hpo_c1_base_20260429_040848`), `regime_gate_v1` active, `capped_live` rollout @ 0.25× size |
+| **Live behavior** | ~14% of trading days trade. ~80 trades over 10 months of 2024 replay. Win rate 45.6%. Net P&L +1.09% (gross, 6bps cost assumption). |
+| **Architecture** | Three lanes (training / live / historical replay) sharing same `strategy_app` code and published model artifact. Documented in [SYSTEM_FLOW_DIAGRAMS.md](SYSTEM_FLOW_DIAGRAMS.md). |
+| **Training pipeline** | `ml_pipeline_2` staged HPO (S1 entry · S2 direction · S3 recipe). 5 grids run to date (A, B, C/C1, D/D2, E/E2). C1 force-deployed; D2 held; E2 failed across 5 gates. |
+| **Active experiments** | s1ablation replay (BYPASS_GATES=1) — ~25 min remaining. Random-direction replay queued. |
+| **Known gaps** | (1) futures→options selector is naive, (2) cost model is 30–60× optimistic, (3) ML→selector handoff drops magnitude info, (4) Stage 3 is dead weight, (5) no shadow-vs-paper-vs-live framework. |
+
+---
+
+## 3. Problem Statement (what we learned)
+
+The system has been treated as a **prediction problem** when it is actually a **prediction-plus-translation problem**. The model predicts futures direction; we trade option premiums. The translation between the two is:
+
+```
+option_pnl = delta × futures_move
+           - theta × hold_minutes
+           - vega × Δimplied_vol
+           - slippage (bid/ask + brokerage + STT + GST)
+```
+
+The first term — what the model predicts — is **one of four** terms. Worse, it is the smallest absolute term for short-hold intraday trades. The other three are partly observable (IV is in the snapshot, slippage estimable from spreads) but **none reach the strike-selection layer today**.
+
+Three secondary consequences of this design gap:
+
+1. **Validation cost (6 bps) is unrealistic** for ATM BankNifty option round-trips (realistic 120–320 bps). Published PFs are optimistic.
+2. **Strike selection is `atm + liquidity gates`** — it cannot pick ATM vs OTM based on predicted move size, IV regime, or hold duration.
+3. **Stage 2/3 may have no real direction edge.** Win rate is ~45% with or without the deterministic gates. The gates are filtering for asymmetric-payoff regimes, not improving the predictor.
+
+**The fix is not "throw away the model." The fix is to:**
+- Validate whether the futures model has *any* directional signal (current experiments)
+- Build the option-selection layer that the design always assumed but never implemented
+- Re-validate everything under realistic costs
+- Iterate on training only if signal exists worth iterating on
+
+---
+
+## 4. Target Architecture
+
+End-state shape:
+
+```
+┌────────────────────────┐
+│ Futures snapshot       │
+│ (1m bars, OI, IV, vol) │
+└──────────┬─────────────┘
+           │
+           ▼
+┌────────────────────────────────┐
+│ Stage 1 — futures entry filter │ → produces (pass/block, confidence)
+└──────────┬─────────────────────┘
+           │ if pass
+           ▼
+┌────────────────────────────────┐
+│ Stage 2 — direction signal     │ → produces (CE | PE | undecided,
+│ + magnitude estimate           │              predicted_move_pct,
+└──────────┬─────────────────────┘              confidence)
+           │
+           ▼
+┌─────────────────────────────────────────────┐
+│ OPTION SELECTOR  ← new layer                │
+│ inputs: predicted_move, confidence, hold,   │
+│         current IV, option chain snapshot   │
+│ logic:                                       │
+│   for each candidate strike (ATM, ±1, ±2):  │
+│     compute breakeven, delta-adjusted edge, │
+│     theta bleed, vega exposure, slippage    │
+│   reject if expected_pnl_after_cost < 0     │
+│   else choose best edge/risk ratio          │
+└──────────┬──────────────────────────────────┘
+           │ if any candidate passes
+           ▼
+┌────────────────────────────────┐
+│ Order placement                │
+└────────────────────────────────┘
+```
+
+The **option selector** is the missing piece. Everything else exists.
+
+---
+
+## 5. Phases
+
+Five phases. Each has a gate. Project stops if a phase fails its gate without re-plan.
+
+### Phase 0 — Diagnose existing model (1–2 days)
+
+**Goal:** Determine whether the futures model has any genuine directional signal under realistic conditions.
+
+**Tasks:**
+- [x] s1ablation replay (BYPASS_GATES=1) — measures whether deterministic gates do real work
+- [ ] Random-direction replay (Stage 2 randomized) — measures whether Stage 2 predicts better than chance
+- [ ] Realistic-cost re-validation — re-run C1's exact training manifest with `cost_per_trade=0.025`, compare gates
+- [ ] Futures-counterfactual analysis — recompute C1's 80 trades as if they were futures (not options) trades. P&L using entry/exit futures prices already in Mongo.
+
+**Exit gate (any of these triggers proceed-to-Phase-1):**
+- **Strong signal:** C1 normal wins on both VOLATILE PF and bypass comparisons → proceed
+- **Weak signal:** Random-direction within noise of C1 BUT futures-counterfactual PF > 1.0 → proceed but invest more in selector  
+- **No signal:** Random-direction matches C1 AND futures-counterfactual PF ≤ 1.0 → **PROJECT STOPS**. The model has no edge; trading framework changes won't help.
+
+**Owner:** ML Research workstream (§6.1)
+**Effort:** 4–8 hours of replay + 4 hours of analysis
+
+### Phase 1 — Build the smart option selector (3–5 days)
+
+**Goal:** Replace `atm + liquidity` selection with pricing-aware selection.
+
+**Tasks:**
+- [ ] Widen `Decision` dataclass in `strategy_app.engines.staged.types` to carry `predicted_move_pct`, `confidence_size`, `expected_hold_bars`
+- [ ] Modify `predict_staged` to populate these fields from Stage 2 output
+- [ ] Add IV extraction helper from snapshot payload (already ingested, not currently surfaced to selector)
+- [ ] Build `option_selector.py` module with the breakeven/edge logic from §4
+- [ ] Wire selector into `_select_strike` flow in `pure_ml_engine.py`
+- [ ] Add unit tests for breakeven computation, edge calculation, IV pulldown
+- [ ] Add an env var to switch between legacy ATM and smart selector for A/B testing
+- [ ] Replay C1's 2024 dataset with smart selector; compare PF/win/MDD against legacy ATM selector
+
+**Exit gate:** Smart selector produces ≥ 10% relative improvement in PF on the C1 trade set vs legacy ATM **and** no unit tests regress. If selector underperforms legacy on the same predictions, the selector logic is wrong; iterate.
+
+**Owner:** Selector Engineering workstream (§6.2)
+**Effort:** 2 days code + 1 day tests + 1 day replay comparison
+
+### Phase 2 — Realistic-cost re-validation (1–2 days)
+
+**Goal:** Re-validate the published model under cost assumptions that reflect real BankNifty options.
+
+**Tasks:**
+- [ ] Estimate per-strike round-trip cost from 2024 bid-ask data: `cost(strike) = bid_ask_pct + 20bps_overhead`
+- [ ] Modify training manifest to use this cost function (currently flat 6bps)
+- [ ] Re-run C1's exact training (same config, same data, new cost) → produces C1-realcost
+- [ ] Apply existing publish gates to C1-realcost
+- [ ] Document outcome regardless: does the model survive realistic costs?
+
+**Exit gate:** C1-realcost combined PF ≥ 1.0 in VOLATILE regime after gates. If not, the model needs cost-aware retraining (Phase 3); if yes, the existing model is provisionally OK at realistic cost.
+
+**Owner:** Cost & Validation workstream (§6.3)
+**Effort:** 6 hours compute + 4 hours analysis
+
+### Phase 3 — Cost-aware model iteration (1–2 weeks; conditional)
+
+**Run only if Phases 1+2 reveal the existing model needs retraining.**
+
+**Tasks:**
+- [ ] Reformulate Stage 1 label: barrier-hit threshold accounting for option-translation drag (e.g. `barrier_pct = 2 × delta⁻¹ × cost_pct`)
+- [ ] Or: replace Stage 1 label entirely with "option P&L positive after 9 bars" — predicts the right target directly
+- [ ] Drop Stage 3 (documented as dead weight in MODEL_STATE history)
+- [ ] Re-run staged HPO with realistic cost gate
+- [ ] Walk-forward validation: train on rolling 12-month windows, test on next 1-month, 6 windows minimum
+- [ ] Compare new model against C1-baseline on 2024 holdout
+
+**Exit gate:** New model passes publish gates at realistic cost AND beats C1 on out-of-sample 6-month walk-forward.
+
+**Owner:** ML Research workstream (§6.1)
+**Effort:** ~80 hours compute + 2 weeks analysis
+
+### Phase 4 — Production hardening (1 week)
+
+**Goal:** Make the system safe to run with real money.
+
+**Tasks:**
+- [ ] Pre-trade risk gate: reject orders that violate `max_daily_loss_pct`, `max_consecutive_losses`, exposure caps
+- [ ] Slippage monitoring: log expected-vs-realized for every fill; alert if median deviation > 50bps
+- [ ] Kill-switch automation: auto-halt on N consecutive losses or X% drawdown
+- [ ] Live shadow comparison: every paper trade gets a "what would real broker have filled" simulation; track divergence
+- [ ] Capital ramp policy: 0.25× → 0.5× → 1.0× gated by realized 30-day PF
+- [ ] Operator dashboard: P&L attribution by stage, by regime, by strike
+
+**Exit gate:** All risk paths tested with synthetic adverse scenarios. Kill-switch trip verified end-to-end.
+
+**Owner:** Operations workstream (§6.4) + Risk Management (§6.5)
+**Effort:** 1 week focused
+
+### Phase 5 — Capital deployment ramp (2–4 weeks)
+
+**Goal:** Progressive live deployment with real (small) capital.
+
+**Tasks:**
+- [ ] Week 1: shadow mode (no orders, full pipeline running)
+- [ ] Week 2: paper mode (broker-simulated fills, no real money)
+- [ ] Week 3: capped_live @ 0.25× size, real money, hard daily loss limit ₹5K
+- [ ] Week 4+: ramp to 0.5× then 1.0× contingent on 30-day rolling PF
+
+**Exit gate:** None — this is steady-state operation. Project complete when monthly PF stable above 1.15 for 3 consecutive months.
+
+**Owner:** Operations + Risk
+**Effort:** Calendar 2-4 weeks; ongoing operational load
+
+---
+
+## 6. Workstreams ("teams" — even with one operator)
+
+Each workstream represents a distinct hat. In a single-operator project augmented by AI, hats are switched, not staffed. Documenting them clarifies what mode of thinking is appropriate when.
+
+### 6.1 ML Research
+
+- **Charter:** Training, validation, experiments, label engineering, feature engineering
+- **Decision authority:** Which experiments to queue, training config, gates pass/fail
+- **Deliverables:** `MODEL_STATE_*.md` updates per session, `summary.json` per run, this plan's Phase 0/3 outcomes
+- **Tools:** `ml_pipeline_2`, replay infrastructure, ML VM
+- **Hat to wear when:** designing or running experiments, reading training reports
+
+### 6.2 Selector Engineering
+
+- **Charter:** The option-selection layer — the missing link
+- **Decision authority:** Selector architecture, IV/Greeks computation method, A/B test design
+- **Deliverables:** `option_selector.py`, unit tests, replay comparison reports
+- **Tools:** `strategy_app`, replay infrastructure
+- **Hat to wear when:** writing/testing selector code, debugging trade-by-trade discrepancies
+
+### 6.3 Cost & Validation
+
+- **Charter:** Realistic cost modeling, transaction cost analysis, validation methodology
+- **Decision authority:** What cost numbers go into manifests, what gates count as "passed"
+- **Deliverables:** Per-strike cost model, realistic-cost backtest reports, cost-attribution per trade
+- **Tools:** Mongo (for executed trades), parquet (for historical spreads), `ml_pipeline_2`
+- **Hat to wear when:** challenging published PF numbers, modeling costs, choosing thresholds
+
+### 6.4 Operations
+
+- **Charter:** Deployment, monitoring, healthchecks, image builds, GCP infra
+- **Decision authority:** When to promote between rollout stages, ops alarms
+- **Deliverables:** `docs/SYSTEM_FLOW_DIAGRAMS.md`, runbook updates, alerting setup
+- **Tools:** GCP (compute, storage), Docker, GitHub Actions, gcloud CLI
+- **Hat to wear when:** deploying changes, troubleshooting prod, capacity planning
+
+### 6.5 Risk Management
+
+- **Charter:** Pre-trade and post-trade risk controls, capital sizing, kill criteria
+- **Decision authority:** Max loss limits, halt triggers, ramp pace
+- **Deliverables:** Risk policy doc, kill-switch test reports, weekly P&L review
+- **Tools:** Operator dashboard, `RISK_*` env vars in `strategy_app`
+- **Hat to wear when:** authorizing capital deployment, after losing days
+
+---
+
+## 7. Decision Gates (where we stop or pivot)
+
+| Gate | Condition | Action if FAIL |
+|---|---|---|
+| **G0 — End of Phase 0** | Phase 0 exit gate (§5) | If "no signal": **stop project, write postmortem** |
+| **G1 — End of Phase 1** | Smart selector ≥10% PF improvement on C1 trade set | Iterate on selector logic; do not proceed to Phase 2 until fixed |
+| **G2 — End of Phase 2** | C1-realcost VOLATILE PF ≥ 1.0 after gates | Trigger Phase 3 (cost-aware retraining) |
+| **G3 — End of Phase 3** | New model beats C1 on 6-month walk-forward | Postmortem; either rethink approach or accept C1 as ceiling |
+| **G4 — End of Phase 4** | All risk paths tested, kill-switch verified | No live capital until passes |
+| **G5 — End of Phase 5** | 3 consecutive months of PF ≥ 1.15 | Ongoing; project sustainably running |
+
+Project ends when:
+- G0 fails (model has no signal — frank acceptance)
+- G5 passes (project running steady)
+- Operator decides to stop (any time)
+
+---
+
+## 8. Open Questions / Risks
+
+### Open
+
+- [ ] What's the realistic slippage for a 50-lot BankNifty ATM call entry on a high-VIX day?
+- [ ] Are 2024 BankNifty option bid-ask history readily available, or do we need to estimate?
+- [ ] Does the broker (Kite Connect) provide post-fill slippage data we can use for the comparison loop?
+- [ ] What's the smallest capital that makes this worth running? (need to net more than infrastructure cost)
+- [ ] How to handle option expiry rolls — current code assumes a single contract per snapshot
+
+### Risks
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| Model has no real signal (G0 fails) | Medium | Project ends | Accept finding, don't fight data |
+| Realistic costs eat the edge (G2 fails) | High | Phase 3 required | Re-formulate target as option-pnl-positive |
+| Selector improvement is marginal | Medium | Move to Phase 3 | Smart selector still useful infrastructure |
+| Live behavior diverges from replay | Medium | Halt + investigate | Shadow comparison framework (Phase 4) |
+| Operator burnout from long ramp | Low–Medium | Project paused | Honest weekly review of progress |
+| Regulatory / broker constraint | Low | Adapt | Code is broker-agnostic where possible |
+
+---
+
+## 9. Working Conventions
+
+### How to update this doc
+
+- **One operator can edit anywhere.** No PR ceremony for plan changes.
+- **Phase tasks: tick `[x]` when truly done** (commit landed, gate met). Don't tick aspirations.
+- **Phase exits get a one-paragraph outcome below the phase section** when the gate fires.
+- **When pivoting:** add a `## Pivot YYYY-MM-DD` section, don't delete old plans. Posterity matters.
+- **Session pairings:** every Claude session that touches strategy code should re-read this plan first. The plan supersedes any individual session's enthusiasm.
+
+### How to start a session
+
+```
+1. git pull
+2. Read docs/PROJECT_PLAN.md (this doc) for current phase + last update
+3. Check replay status: curl /api/historical/replay/status
+4. Check training status: gcloud compute ssh option-trading-ml-01 ...
+5. Pick a task from the current phase
+6. Update this doc when the task is done
+```
+
+### How to know when to stop
+
+If a gate fails (G0–G4), **document the failure with numbers** in the relevant phase section, then **stop or pivot**. Don't burn cycles trying to "make it work" past a clear data-backed no.
+
+---
+
+## 10. Right Now (immediate next steps as of 2026-05-15)
+
+Currently in **Phase 0 — Diagnose existing model**.
+
+Active:
+- [running] s1ablation replay — ~25 min remaining
+- [queued] Random-direction replay — auto-starts after s1ablation finishes
+- [planned] Realistic-cost re-validation — kick off on ML VM after random-direction completes
+- [planned] Futures-counterfactual analysis — small Python script, ~30 min to write + run
+
+When all four are done, evaluate G0 and decide Phase 1 entry.
+
+---
+
+## 11. Related Docs
+
+- [SYSTEM_FLOW_DIAGRAMS.md](SYSTEM_FLOW_DIAGRAMS.md) — architecture & flow diagrams
+- [ARCHITECTURE.md](ARCHITECTURE.md) — textual cross-cutting view
+- [../ml_pipeline_2/docs/training/INDEX.md](../ml_pipeline_2/docs/training/INDEX.md) — research history (A→B→C→D→E grids)
+- [../ml_pipeline_2/docs/training/MODEL_STATE_20260514.md](../ml_pipeline_2/docs/training/MODEL_STATE_20260514.md) — last training session state
+- [SYSTEM_SOURCE_OF_TRUTH.md](SYSTEM_SOURCE_OF_TRUTH.md) — contracts, constants
