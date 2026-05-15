@@ -407,13 +407,31 @@ class PureMLEngine(StrategyEngine):
             import hashlib
             _h = int(hashlib.md5(str(snap.snapshot_id).encode("utf-8")).hexdigest()[:8], 16)
             direction = "CE" if (_h % 2 == 0) else "PE"
-        strike = snap.atm_strike
+
+        from .option_selector import select_strike
+        selection = select_strike(snap, direction, decision)
+        strike = selection.strike
         if strike is None or int(strike) <= 0:
-            self._log_hold("missing_atm_strike", snap, staged_decision=decision)
+            hold_metrics = {
+                **self._staged_decision_metrics(decision),
+                **self._smart_strike_metrics(selection=selection),
+            }
+            hold_reason = (
+                "smart_strike_rejected_iv"
+                if selection.mode == "rejected_high_iv"
+                else "missing_atm_strike"
+            )
+            self._log_hold(hold_reason, snap, staged_decision=decision)
             self._last_event = {
                 "event": "hold",
                 "snapshot_id": snap.snapshot_id,
-                "reason": "missing_atm_strike",
+                "reason": hold_reason,
+                "smart_strike": {
+                    "mode": selection.mode,
+                    "reason": selection.reason,
+                    "confidence": selection.confidence,
+                    "iv_percentile": selection.iv_percentile,
+                },
             }
             self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
             self._write_runtime_state()
@@ -421,7 +439,7 @@ class PureMLEngine(StrategyEngine):
                 trace_builder.finalize(
                     final_outcome="blocked",
                     primary_blocker_gate="strike_selection",
-                    summary_metrics=self._staged_decision_metrics(decision),
+                    summary_metrics=hold_metrics,
                 )
             )
             return None
@@ -444,6 +462,14 @@ class PureMLEngine(StrategyEngine):
             )
             return None
 
+        entry_metrics = {
+            **self._staged_decision_metrics(decision),
+            **self._smart_strike_metrics(
+                selection=selection,
+                selected_strike=int(strike),
+                selected_entry_premium=float(premium),
+            ),
+        }
         stop_loss_pct = float(decision.stop_loss_pct or self._stop_loss_pct)
         target_pct = float(decision.target_pct or self._target_pct)
         max_hold_bars = int(decision.horizon_minutes or self._max_hold_bars)
@@ -455,14 +481,29 @@ class PureMLEngine(StrategyEngine):
                 "stop_loss_pct": stop_loss_pct,
                 "target_pct": target_pct,
                 "max_hold_bars": max_hold_bars,
+                "selected_strike": int(strike),
+                "selected_entry_premium": float(premium),
+                "smart_strike_mode_code": entry_metrics.get("smart_strike_mode_code"),
             },
         )
         from .trade_signal_builder import build_ml_entry_signal
         signal = build_ml_entry_signal(
             snap=snap,
             decision=decision,
+            selected_direction=direction,
+            selected_strike=int(strike),
+            selected_entry_premium=float(premium),
+            selector_metadata={
+                "mode": selection.mode,
+                "reason": selection.reason,
+                "confidence": selection.confidence,
+                "iv_percentile": selection.iv_percentile,
+            },
             underlying_stop_pct=self._underlying_stop_pct,
             underlying_target_pct=self._underlying_target_pct,
+            # Only override the recipe's horizon when the operator explicitly set the env var.
+            # Otherwise pass None so the recipe-supplied horizon flows through unchanged.
+            max_hold_bars_override=(int(self._max_hold_bars) if os.getenv("ML_PURE_MAX_HOLD_BARS") else None),
             premium_risk_fallback_pct=self._stop_loss_pct,
             trailing_enabled=self._trailing_enabled,
             risk_manager=self._risk,
@@ -470,7 +511,7 @@ class PureMLEngine(StrategyEngine):
         self._annotate_signal_contract(
             signal,
             decision_reason_code=str(decision.reason),
-            decision_metrics=self._staged_decision_metrics(decision),
+            decision_metrics=entry_metrics,
         )
         opened = self._tracker.open_position(signal, snap)
         self._log.log_signal(signal, acted_on=True)
@@ -507,6 +548,10 @@ class PureMLEngine(StrategyEngine):
                 "recipe_id": decision.recipe_id,
                 "recipe_prob": decision.recipe_prob,
                 "recipe_margin": decision.recipe_margin,
+                "smart_strike_mode": selection.mode,
+                "smart_strike_reason": selection.reason,
+                "smart_strike_confidence": selection.confidence,
+                "smart_strike_iv_percentile": selection.iv_percentile,
             }
         )
         self._log.log_decision_trace(
@@ -514,7 +559,7 @@ class PureMLEngine(StrategyEngine):
                 final_outcome="entry_taken",
                 primary_blocker_gate=None,
                 summary_metrics={
-                    **self._staged_decision_metrics(decision),
+                    **entry_metrics,
                     "entry_premium": premium,
                     "max_lots": signal.max_lots,
                 },
@@ -578,6 +623,33 @@ class PureMLEngine(StrategyEngine):
             "recipe_prob": float(decision.recipe_prob),
             "recipe_margin": float(decision.recipe_margin),
         }
+
+    def _smart_strike_metrics(
+        self,
+        *,
+        selection: Any,
+        selected_strike: Optional[int] = None,
+        selected_entry_premium: Optional[float] = None,
+    ) -> dict[str, float]:
+        mode = str(getattr(selection, "mode", "") or "")
+        mode_code = {
+            "legacy_atm": 0.0,
+            "atm": 1.0,
+            "otm_1": 2.0,
+            "rejected_high_iv": -1.0,
+        }.get(mode, -9.0)
+        metrics: dict[str, float] = {
+            "smart_strike_mode_code": mode_code,
+            "smart_strike_confidence": float(getattr(selection, "confidence", 0.0) or 0.0),
+        }
+        iv_percentile = getattr(selection, "iv_percentile", None)
+        if iv_percentile is not None:
+            metrics["smart_strike_iv_percentile"] = float(iv_percentile)
+        if selected_strike is not None:
+            metrics["smart_strike_selected_strike"] = float(selected_strike)
+        if selected_entry_premium is not None:
+            metrics["smart_strike_selected_entry_premium"] = float(selected_entry_premium)
+        return metrics
 
     def _staged_decision_summary(self, decision: StagedRuntimeDecision) -> dict[str, Any]:
         summary = asdict(decision)
@@ -813,7 +885,7 @@ class PureMLEngine(StrategyEngine):
             return "stage1_threshold"
         if code in {"direction_below_threshold", "direction_low_edge_conflict"}:
             return "stage2_direction"
-        if code == "missing_atm_strike":
+        if code in {"missing_atm_strike", "smart_strike_rejected_iv"}:
             return "strike_selection"
         if code == "liquidity_gate_block":
             return "liquidity_gate"

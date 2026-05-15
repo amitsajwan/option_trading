@@ -1,4 +1,4 @@
-﻿// Shared components: KpiStrip, LWChart, EChartPanel, PaginatedTable, ConfirmModal
+﻿// Shared components: KpiStrip, LWChart, EChartPanel, PaginatedTable, ConfirmModal  v11
 /* global React */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 const TC = window.TradingCore;
@@ -247,7 +247,8 @@ function LWChart({
           position: 'aboveBar',
           color:    pnlColor,
           shape:    'arrowDown',
-          text:     isSel ? ((tr.pnlPct >= 0 ? '+' : '') + tr.pnlPct.toFixed(2) + '%') : '',
+          // tr.pnlPct is a FRACTION (e.g. 0.0738 = +7.38%) — multiply by 100 for display.
+          text:     isSel ? ((tr.pnlPct >= 0 ? '+' : '') + (tr.pnlPct * 100).toFixed(2) + '%') : '',
           size:     isSel ? 2 : 1,
         });
       }

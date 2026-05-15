@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
-from ..contracts import Direction, SignalType, TradeSignal
+from ..contracts import SignalType, TradeSignal
 from ..risk.manager import RiskManager
 from .snapshot_accessor import SnapshotAccessor
 
@@ -14,8 +14,13 @@ def build_ml_entry_signal(
     *,
     snap: SnapshotAccessor,
     decision: Any,
+    selected_direction: Optional[str] = None,
+    selected_strike: Optional[int] = None,
+    selected_entry_premium: Optional[float] = None,
+    selector_metadata: Optional[dict[str, Any]] = None,
     underlying_stop_pct: Optional[float] = None,
     underlying_target_pct: Optional[float] = None,
+    max_hold_bars_override: Optional[int] = None,
     premium_risk_fallback_pct: float = 0.20,
     trailing_enabled: bool = True,
     risk_manager: RiskManager,
@@ -23,12 +28,17 @@ def build_ml_entry_signal(
     """Construct a TradeSignal for ML-pure staged entry.
 
     Collapses ~30 lines of dataclass construction into a single call.
+
+    Precedence for risk parameters (stop, target, hold) — explicit caller override
+    wins over the staged-decision's recipe defaults. This lets Phase 1.2 env-driven
+    wider exits actually apply at runtime instead of being silently masked by the
+    recipe's bundled values.
     """
-    direction = "CE" if decision.action == "BUY_CE" else "PE"
-    strike = int(snap.atm_strike or 0)
+    direction = str(selected_direction or ("CE" if decision.action == "BUY_CE" else "PE")).strip().upper()
+    strike = int(selected_strike if selected_strike is not None else (snap.atm_strike or 0))
     if strike <= 0:
-        raise RuntimeError("build_ml_entry_signal requires a valid atm_strike")
-    premium = float(snap.option_ltp(direction, strike) or 0)
+        raise RuntimeError("build_ml_entry_signal requires a valid strike")
+    premium = float(selected_entry_premium if selected_entry_premium is not None else (snap.option_ltp(direction, strike) or 0))
     if premium <= 0:
         raise RuntimeError("build_ml_entry_signal requires a valid option premium")
     risk_basis = str(getattr(decision, "risk_basis", "option_premium") or "option_premium").strip().lower()
@@ -37,20 +47,29 @@ def build_ml_entry_signal(
     if risk_basis == "underlying":
         signal_stop_loss_pct = 0.0
         signal_target_pct = 0.0
-        underlying_stop_pct = raw_stop_loss_pct if raw_stop_loss_pct > 0 else underlying_stop_pct
-        underlying_target_pct = raw_target_pct if raw_target_pct > 0 else underlying_target_pct
+        # Override wins; fall back to recipe value only when no override supplied.
+        underlying_stop_pct = underlying_stop_pct if underlying_stop_pct is not None else (raw_stop_loss_pct or None)
+        underlying_target_pct = underlying_target_pct if underlying_target_pct is not None else (raw_target_pct or None)
         sizing_stop_loss_pct = max(0.0, float(premium_risk_fallback_pct))
     else:
         signal_stop_loss_pct = raw_stop_loss_pct or 0.20
         signal_target_pct = raw_target_pct or 0.80
         sizing_stop_loss_pct = signal_stop_loss_pct
-    max_hold_bars = int(decision.horizon_minutes or 15)
+    # Override wins; fall back to recipe horizon, then hardcoded 15 as last resort.
+    max_hold_bars = int(max_hold_bars_override if max_hold_bars_override is not None else (decision.horizon_minutes or 15))
     confidence = float(max(decision.ce_prob, decision.pe_prob))
     lots = risk_manager.compute_lots(
         entry_premium=premium,
         stop_loss_pct=sizing_stop_loss_pct,
         confidence=confidence,
     )
+    selector_reason = ""
+    if isinstance(selector_metadata, dict) and selector_metadata:
+        selector_reason = (
+            f" smart_strike_mode={selector_metadata.get('mode')} "
+            f"smart_strike_reason={selector_metadata.get('reason')} "
+            f"selected_strike={strike} selected_premium={premium:.4f}"
+        )
     return TradeSignal(
         signal_id=str(uuid.uuid4())[:8],
         timestamp=snap.timestamp_or_now,
@@ -75,7 +94,7 @@ def build_ml_entry_signal(
             f"dir_up_prob={decision.direction_up_prob:.4f} recipe={decision.recipe_id} "
             f"risk_basis={risk_basis} "
             f"recipe_prob={decision.recipe_prob:.4f} recipe_margin={decision.recipe_margin:.4f} "
-            f"reason={decision.reason}"
+            f"reason={decision.reason}{selector_reason}"
         ),
         votes=[],
     )

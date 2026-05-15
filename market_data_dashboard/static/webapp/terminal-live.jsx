@@ -1,4 +1,4 @@
-// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes
+// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v7
 /* global React, TradingCore, LWChart */
 const { useState: _s, useEffect: _e, useMemo: _m, useRef: _r, useCallback: _cb } = React;
 const TC = window.TradingCore;
@@ -109,7 +109,7 @@ function StatusBar({ sessionPnl, tradesCount, winRate, regime, engine, ws, onMod
         <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
       </div>
       <div className="t-status-cells">
-        <div className="t-scell big"><span className="k">Session P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtSigned(sessionPnl,2,'%')}</span></div>
+        <div className="t-scell big"><span className="k">Session P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
         <div className="t-scell"><span className="k">Trades</span><span className="v">{tradesCount}<span className="sub">/ {winRate}% WR</span></span></div>
         <div className="t-scell"><span className="k">Regime</span><span className="v" style={{color:'var(--info)',fontSize:'11px'}}>{regime || '—'}</span></div>
         <div className="t-scell"><span className="k">Engine</span><span className="v" style={{fontSize:'11px'}}>{engine || '—'}</span></div>
@@ -144,7 +144,7 @@ function EngineRoster({ strategies, dailyRisk }) {
                 </div>
               </div>
               <div style={{textAlign:'right'}}>
-                <div className={`t-strat-pnl ${s.pnl >= 0 ? 'pos' : 'neg'}`}>{TC.fmtSigned(s.pnl,2,'%')}</div>
+                <div className={`t-strat-pnl ${s.pnl >= 0 ? 'pos' : 'neg'}`}>{TC.fmtPct(s.pnl,2)}</div>
                 <div className={`t-strat-status ${s.status}`}>{s.status}</div>
               </div>
             </div>
@@ -385,7 +385,7 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId 
                     </td>
                     <td className="r">{(r.entryPx||0).toFixed(0)}</td>
                     <td className="r">{(r.exitPx||0).toFixed(0)}</td>
-                    <td className={`r ${(r.pnlPct||0)>=0?'t-pos':'t-neg'}`}>{TC.fmtSigned(r.pnlPct||0,2,'%')}</td>
+                    <td className={`r ${(r.pnlPct||0)>=0?'t-pos':'t-neg'}`}>{TC.fmtPct(r.pnlPct||0,2)}</td>
                     <td className="r muted">{r.heldBars ?? '—'}b</td>
                     <td className="muted" style={{fontSize:'9px'}}>{(r.exitReason||'').replace('_',' ')}</td>
                   </tr>
@@ -427,7 +427,9 @@ function TradeInspector({ session, trade }) {
   }
 
   const outCls = trade.exitReason === 'TARGET_HIT' ? 'pos' : trade.exitReason === 'STOP_HIT' ? 'neg' : 'warn';
-  const plannedPct = ((trade.targetPx - trade.entryPx) / trade.entryPx) * 100 * (trade.dir === 'SHORT' ? -1 : 1);
+  // plannedPct is kept as a FRACTION (e.g. 0.05 = +5%) to match trade.pnlPct units;
+  // it's rendered via TC.fmtPct which multiplies by 100 at display time.
+  const plannedPct = ((trade.targetPx - trade.entryPx) / trade.entryPx) * (trade.dir === 'SHORT' ? -1 : 1);
 
   const probs = trade.probs || {
     entry_prob:    { v: trade.conf, gate: 0.60, label: 'Entry gate' },
@@ -476,8 +478,8 @@ function TradeInspector({ session, trade }) {
         <div className="t-outcome-grid">
           <div className="t-outcome-cell big">
             <div className="k">Realized P&amp;L</div>
-            <div className={`v ${(trade.pnlPct||0)>=0?'pos':'neg'}`}>{TC.fmtSigned(trade.pnlPct||0,2,'%')}</div>
-            {plannedPct !== 0 && <div className="sub">vs planned {TC.fmtSigned(plannedPct,2,'%')} · realized/planned {(Math.abs(trade.pnlPct||0)/Math.abs(plannedPct)).toFixed(2)}×</div>}
+            <div className={`v ${(trade.pnlPct||0)>=0?'pos':'neg'}`}>{TC.fmtPct(trade.pnlPct||0,2)}</div>
+            {plannedPct !== 0 && <div className="sub">vs planned {TC.fmtPct(plannedPct,2)} · realized/planned {(Math.abs(trade.pnlPct||0)/Math.abs(plannedPct)).toFixed(2)}×</div>}
           </div>
           <div className="t-outcome-cell"><div className="k">Entry</div><div className="v">{(trade.entryPx||0).toFixed(2)}</div></div>
           <div className="t-outcome-cell"><div className="k">Exit</div><div className="v">{(trade.exitPx||0).toFixed(2)}</div></div>
@@ -525,7 +527,7 @@ function TradeInspector({ session, trade }) {
             return (
               <div key={i} className="t-cf-row">
                 <div className="scen">{cf.label}<span className="note">{cf.note}</span></div>
-                <div className={`delta ${cls}`}>{d===0?'±0.00':TC.fmtSigned(d,2,'%')}</div>
+                <div className={`delta ${cls}`}>{d===0?'±0.00':TC.fmtPct(d,2)}</div>
                 <div className="delta-bar">
                   <span className="zero-mark"/>
                   <span className={`fill ${cls==='neg'?'neg':''}`} style={{left:d>=0?'50%':(50-pct)+'%',width:pct+'%'}}/>
@@ -846,7 +848,7 @@ function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, u
         </select>
       </div>
       <div className="t-status-cells" style={{flexShrink:0}}>
-        <div className="t-scell big"><span className="k">P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtSigned(sessionPnl,2,'%')}</span></div>
+        <div className="t-scell big"><span className="k">P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
         <div className="t-scell"><span className="k">Trades</span><span className="v">{tradesCount}<span className="sub"> / {winRate}%wr</span></span></div>
         <div className="t-scell"><span className="k">WS</span><span className={`v ${ws==='connected'?'pos':'warn'}`} style={{fontSize:'10px'}}>{ws}</span></div>
       </div>

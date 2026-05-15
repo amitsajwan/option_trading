@@ -20,10 +20,13 @@ def _snapshot(
     ts: str,
     ce_ltp: float = 100.0,
     pe_ltp: float = 100.0,
+    ce_otm_ltp: float = 70.0,
+    pe_otm_ltp: float = 72.0,
     ce_oi: float = 120000.0,
     pe_oi: float = 120000.0,
     ce_volume: float = 20000.0,
     pe_volume: float = 20000.0,
+    iv_percentile: float = 50.0,
     is_expiry_day: bool = False,
     days_to_expiry: int = 2,
 ) -> dict[str, object]:
@@ -85,8 +88,17 @@ def _snapshot(
             "atm_ce_oi_change_30m": 8000.0,
             "atm_pe_oi_change_30m": 4000.0,
         },
-        "iv_derived": {"iv_skew": -0.01},
+        "iv_derived": {"iv_skew": -0.01, "iv_percentile": iv_percentile},
         "strikes": [
+            {
+                "strike": 49900.0,
+                "ce_ltp": 130.0,
+                "pe_ltp": pe_otm_ltp,
+                "ce_oi": ce_oi,
+                "pe_oi": pe_oi,
+                "ce_volume": ce_volume,
+                "pe_volume": pe_volume,
+            },
             {
                 "strike": 50000.0,
                 "ce_ltp": ce_ltp,
@@ -95,7 +107,16 @@ def _snapshot(
                 "pe_oi": pe_oi,
                 "ce_volume": ce_volume,
                 "pe_volume": pe_volume,
-            }
+            },
+            {
+                "strike": 50100.0,
+                "ce_ltp": ce_otm_ltp,
+                "pe_ltp": 132.0,
+                "ce_oi": ce_oi,
+                "pe_oi": pe_oi,
+                "ce_volume": ce_volume,
+                "pe_volume": pe_volume,
+            },
         ],
     }
 
@@ -220,6 +241,88 @@ class PureMLEngineTests(unittest.TestCase):
             self.assertEqual(signal.entry_strategy_name, "ML_PURE_STAGED")
             self.assertEqual(signal.max_hold_bars, 10)
             self.assertAlmostEqual(float(signal.confidence or 0.0), 0.82, places=6)
+
+    def test_smart_strike_high_confidence_ce_opens_otm_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            engine = self._build_engine(root)
+            engine.on_session_start(date(2026, 3, 2))
+            staged = StagedRuntimeDecision(
+                action="BUY_CE",
+                reason="recipe_selected",
+                entry_prob=0.86,
+                direction_up_prob=0.86,
+                ce_prob=0.86,
+                pe_prob=0.14,
+                recipe_id="base",
+                recipe_prob=0.92,
+                recipe_margin=0.30,
+                horizon_minutes=12,
+                stop_loss_pct=0.04,
+                target_pct=0.18,
+            )
+
+            with patch.dict("os.environ", {"STRATEGY_SMART_STRIKE_ENABLED": "1"}):
+                with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=staged):
+                    signal = engine.evaluate(
+                        _snapshot(
+                            snapshot_id="snap-smart-ce",
+                            ts="2026-03-02T09:30:00+05:30",
+                            ce_ltp=100.0,
+                            ce_otm_ltp=64.0,
+                            iv_percentile=30.0,
+                        )
+                    )
+
+            self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertEqual(signal.strike, 50100)
+            self.assertAlmostEqual(float(signal.entry_premium or 0.0), 64.0, places=6)
+            self.assertIn("smart_strike_mode=otm_1", signal.reason)
+            self.assertAlmostEqual(float(signal.decision_metrics["smart_strike_selected_strike"]), 50100.0, places=6)
+            self.assertAlmostEqual(float(signal.decision_metrics["smart_strike_selected_entry_premium"]), 64.0, places=6)
+            self.assertAlmostEqual(float(signal.decision_metrics["smart_strike_mode_code"]), 2.0, places=6)
+
+    def test_smart_strike_high_confidence_pe_opens_otm_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            engine = self._build_engine(root)
+            engine.on_session_start(date(2026, 3, 2))
+            staged = StagedRuntimeDecision(
+                action="BUY_PE",
+                reason="recipe_selected",
+                entry_prob=0.87,
+                direction_up_prob=0.13,
+                ce_prob=0.13,
+                pe_prob=0.87,
+                recipe_id="base",
+                recipe_prob=0.90,
+                recipe_margin=0.25,
+                horizon_minutes=10,
+                stop_loss_pct=0.05,
+                target_pct=0.16,
+            )
+
+            with patch.dict("os.environ", {"STRATEGY_SMART_STRIKE_ENABLED": "1"}):
+                with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=staged):
+                    signal = engine.evaluate(
+                        _snapshot(
+                            snapshot_id="snap-smart-pe",
+                            ts="2026-03-02T09:31:00+05:30",
+                            pe_ltp=100.0,
+                            pe_otm_ltp=68.0,
+                            iv_percentile=30.0,
+                        )
+                    )
+
+            self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertEqual(signal.strike, 49900)
+            self.assertAlmostEqual(float(signal.entry_premium or 0.0), 68.0, places=6)
+            self.assertIn("smart_strike_mode=otm_1", signal.reason)
+            self.assertAlmostEqual(float(signal.decision_metrics["smart_strike_selected_strike"]), 49900.0, places=6)
+            self.assertAlmostEqual(float(signal.decision_metrics["smart_strike_selected_entry_premium"]), 68.0, places=6)
+            self.assertAlmostEqual(float(signal.decision_metrics["smart_strike_mode_code"]), 2.0, places=6)
 
     def test_staged_hold_returns_none(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
