@@ -400,6 +400,13 @@ class PureMLEngine(StrategyEngine):
             return None
 
         direction = "CE" if decision.action == "BUY_CE" else "PE"
+        if os.getenv("STRATEGY_ML_PURE_RANDOMIZE_DIRECTION") == "1":
+            # Research ablation: replace Stage-2's direction call with a deterministic
+            # random draw seeded by snapshot_id. Tests whether Stage 2's CE/PE prediction
+            # adds alpha beyond Stage 1's entry filter. NEVER set in live production.
+            import hashlib
+            _h = int(hashlib.md5(str(snap.snapshot_id).encode("utf-8")).hexdigest()[:8], 16)
+            direction = "CE" if (_h % 2 == 0) else "PE"
         strike = snap.atm_strike
         if strike is None or int(strike) <= 0:
             self._log_hold("missing_atm_strike", snap, staged_decision=decision)
