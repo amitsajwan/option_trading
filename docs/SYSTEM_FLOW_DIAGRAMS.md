@@ -4,6 +4,9 @@ End-to-end visual reference for the three lanes — **training**, **live**, and 
 
 Diagrams use Mermaid. Sequence diagrams render top-to-bottom in time order, so reading them feels like watching the flow execute.
 
+> **Viewing tip:** GitHub renders these natively. In VS Code, install the
+> [`bierner.markdown-mermaid`](https://marketplace.visualstudio.com/items?itemName=bierner.markdown-mermaid) extension (already in `.vscode/extensions.json` recommendations) and reload. Without it, you'll see the raw `sequenceDiagram` / `flowchart` source instead of rendered diagrams.
+
 ---
 
 ## 1. Overall Topology
