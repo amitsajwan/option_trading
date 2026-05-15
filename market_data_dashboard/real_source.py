@@ -395,7 +395,17 @@ def _position_to_trade(
 
     pnl_pct = float(_safe_float(close_pos.get("pnl_pct"), fallback=0.0) or 0.0)
 
-    direction = _option_dir_to_bias(str(open_pos.get("direction") or "LONG"))
+    raw_direction = str(open_pos.get("direction") or "LONG").strip().upper()
+    direction = _option_dir_to_bias(raw_direction)
+    if raw_direction in ("CE", "PE"):
+        option_type = raw_direction
+    elif raw_direction == "LONG":
+        option_type = "CE"
+    elif raw_direction == "SHORT":
+        option_type = "PE"
+    else:
+        option_type = None
+    strike_value = _safe_float(open_pos.get("strike"), fallback=None)
 
     contrib = open_pos.get("contributing_strategies")
     if isinstance(contrib, list) and contrib:
@@ -455,6 +465,8 @@ def _position_to_trade(
         underlyingStopPrice=underlying_stop_price,
         stopTriggerCandle=stop_trigger_candle,
         stopTriggerDetail=stop_trigger_detail,
+        strike=float(strike_value) if strike_value is not None else None,
+        optionType=option_type,
     )
 
 

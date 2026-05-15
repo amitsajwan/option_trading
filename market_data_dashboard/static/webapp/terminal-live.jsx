@@ -30,6 +30,8 @@ function _bridgeTrade(tr) {
     exitReason:  tr.exitReason ?? 'CLOSED',
     entryDetail: tr.entryDetail ?? `Entry at ${ep.toFixed(2)}`,
     exitDetail:  tr.exitDetail  ?? `Exit at ${xp.toFixed(2)} · ${tr.exitReason ?? 'closed'}`,
+    strike: tr.strike ?? null,
+    optionType: tr.optionType ?? tr.option_type ?? null,
   };
 }
 
@@ -351,6 +353,7 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId 
               <th style={{width:36}}>Type</th>
               <th>Strategy</th>
               <th style={{width:42}}>Dir</th>
+              <th style={{width:86}}>Contract</th>
               <th className="r" style={{width:70}}>Entry</th>
               <th className="r" style={{width:70}}>Exit</th>
               <th className="r" style={{width:58}}>P&amp;L</th>
@@ -374,6 +377,12 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId 
                     </td>
                     <td>{r.strat}</td>
                     <td><span className={`t-dir ${r.dir}`}>{r.dir}</span></td>
+                    <td style={{fontFamily:'var(--f-mono)',fontSize:'10px',whiteSpace:'nowrap'}}>
+                      {r.strike ? (<>
+                        <span>{Math.round(r.strike)}</span>
+                        {r.optionType && <span className={`t-opt-tag ${r.optionType.toLowerCase()}`} style={{marginLeft:4,padding:'0 4px',borderRadius:2,fontSize:'9px',background:r.optionType==='CE'?'rgba(25,195,125,0.18)':'rgba(242,60,74,0.18)',color:r.optionType==='CE'?'var(--pos)':'var(--neg)'}}>{r.optionType}</span>}
+                      </>) : <span className="muted">—</span>}
+                    </td>
                     <td className="r">{(r.entryPx||0).toFixed(0)}</td>
                     <td className="r">{(r.exitPx||0).toFixed(0)}</td>
                     <td className={`r ${(r.pnlPct||0)>=0?'t-pos':'t-neg'}`}>{TC.fmtSigned(r.pnlPct||0,2,'%')}</td>
@@ -392,6 +401,7 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId 
                   </td>
                   <td>{r.strat || r.strategy_name || '—'}</td>
                   <td><span className={`t-dir ${(r.dir||'LONG').toUpperCase()}`}>{(r.dir||'—').toUpperCase()}</span></td>
+                  <td className="muted">—</td>
                   <td className="r muted">—</td><td className="r muted">—</td><td className="r muted">—</td><td className="r muted">—</td>
                   <td className="muted" style={{fontSize:'9px'}}>{r.reason || r.hold_reason || '—'}</td>
                 </tr>

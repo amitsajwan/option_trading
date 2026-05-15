@@ -55,6 +55,8 @@ class MonitorTrade(BaseModel):
     underlyingStopPrice: Optional[float] = None
     stopTriggerCandle: Optional[str] = None
     stopTriggerDetail: str = ""
+    strike: Optional[float] = None
+    optionType: Optional[str] = None  # "CE" or "PE"
 
 
 class MonitorAlert(BaseModel):
