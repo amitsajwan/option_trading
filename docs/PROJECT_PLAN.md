@@ -140,10 +140,21 @@ Five phases. Each has a gate. Project stops if a phase fails its gate without re
 - [ ] Add an env var to switch between legacy ATM and smart selector for A/B testing
 - [ ] Replay C1's 2024 dataset with smart selector; compare PF/win/MDD against legacy ATM selector
 
-**Exit gate:** Smart selector produces ≥ 10% relative improvement in PF on the C1 trade set vs legacy ATM **and** no unit tests regress. If selector underperforms legacy on the same predictions, the selector logic is wrong; iterate.
+**Exit gate (REVISED 2026-05-15):** Replay 2024 Jan-Oct with all three changes ON. All must pass:
+- Net P&L > 0 at realistic 75 bps round-trip cost
+- Trade frequency ≥ 4/week average
+- Max drawdown < 5% on portfolio  
+- Win rate ≥ 48%
+
+Each change is behind a feature flag so we can A/B which contributes what.
 
 **Owner:** Selector Engineering workstream (§6.2)
-**Effort:** 2 days code + 1 day tests + 1 day replay comparison
+**Effort:** Limit orders 2-3 days; wider exits 0.5 day; smart strikes 1.5 days; replay + analysis 1 day = ~5 days total
+
+**Revised tasks (replaces old task list above):**
+- [ ] **1.1 Limit-order execution** — replace market orders with passive limits (`best_bid + 1 tick`), retry logic, fallback after N seconds. Env: `STRATEGY_LIMIT_ORDER_ENABLED=1`. Adds fill-rate + slippage telemetry. **Effect:** 200 bps → ~50 bps round-trip on fills.
+- [ ] **1.2 Wider exits + trailing** — stop 0.001→0.002, target 0.0025→0.005, hold 9→30 bars, trail activate at MFE ≥ 0.3% offset 0.15%.
+- [ ] **1.3 Smart strike selection** — widen `Decision` to carry predicted move + confidence; compute IV percentile from rolling snapshots; reject when IV percentile > 0.9; switch to 1-OTM when confidence > 0.75 AND predicted move > 0.5%. Env: `STRATEGY_SMART_STRIKE_ENABLED=1`.
 
 ### Phase 2 — Realistic-cost re-validation (1–2 days)
 
@@ -361,6 +372,17 @@ Re-evaluated all 107 C1 baseline closed trades as if they had been executed on B
 When all four are done, evaluate full G0 + commit to a path from the three below.
 
 ---
+
+## Commitment 2026-05-15 — Path B chosen + frequency targets locked
+
+After futures-counterfactual revealed the model has real directional signal but options translation eats the alpha, the operator has chosen **Path B (options-only with magnitude-aware selection)** with these constraints:
+
+- **Instrument:** options only (no futures execution). Capital constraint accepted.
+- **Frequency target:** **5 trades/week** as a *goal*, NOT a hard floor. Slow months down to ~3/week are acceptable. **Frequency is a result of the model, not a target imposed on it.**
+- **Limit orders OK:** unfilled passive limits are acceptable; lower friction beats forced market-order fills.
+- **Wide losers + wider winners:** asymmetric exit logic accepted (0.4-0.5% stops on underlying).
+
+This commitment locks Phase 1's three engineering changes (see below) and supersedes the old "smart selector" framing.
 
 ## Pivot 2026-05-15 — three real paths after futures-counterfactual
 
