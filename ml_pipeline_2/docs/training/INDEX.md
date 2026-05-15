@@ -16,6 +16,7 @@ Start a new session doc when beginning a new research iteration with a distinct 
 | 2026-04-28/29 | [MODEL_STATE_20260428.md](MODEL_STATE_20260428.md) | Attack label root cause (A→B→C grids). A2 fixed bias. B4 best feature set. C = deep HPO. | A2: S2_ROC=0.544, 39% long. B4: S2_ROC=0.545, 329 trades, 51% long. C1: VOLATILE PF=1.314, TRENDING PF=0.306 | ✅ C1 force-deployed with `regime_gate_v1` (VOLATILE+SIDEWAYS only). TRENDING remains unsolved. |
 | 2026-04-30/05-01 | [MODEL_STATE_20260502.md](MODEL_STATE_20260502.md) | Grid D: high-edge HPO to push TRENDING PF ≥ 1.5; Grid E: VOLATILE-only S2 training | D2: S1_ROC=0.855, S2_ROC=0.618, VOLATILE PF=1.452, TRENDING PF=1.195 — combined fails MDD+block_rate | ❌ D2 HELD (PF=1.19, MDD=29.5%, block_rate=3.97%). E1 config bug (0 S2 samples). C1 remains live. |
 | 2026-05-14 | [MODEL_STATE_20260514.md](MODEL_STATE_20260514.md) | Resume queued E2 launch. Grid E: VOLATILE-only S2 training with pipeline fixes 1+2 applied. | S1 ROC=0.619, S2 ROC=0.535, VOLATILE PF=0.488, combined PF=0.263, MDD=81% | ❌ HELD across 5 gates. Hypothesis disproven: training restriction collapsed generalization. C1 remains live. **Next: Stage-1-only ablation via replay (no retrain).** |
+| 2026-05-15 | [MODEL_STATE_20260515.md](MODEL_STATE_20260515.md) | **Two structural tests after honest OOS verdict on C1:** (F1) walk-forward — does recipe survive window shift? (B1) cost-aware label — does it survive `cost_per_trade=0.02`? | F1 S1 ROC=0.642 / block_rate=1.0 (gate-failed). C1 holdout 16-trade net −55% @ 200 bps. B1 running. | ❌ F1 HELD (`stage1_cv_gate_failed`) — recipe doesn't generalize across time. C1's apparent edge is period-specific. **B1 result (cost-in-label) decides whether recipe survives realistic friction or needs fundamental rethink.** |
 
 ---
 
@@ -57,11 +58,15 @@ Label bias is fixed. C1 is live with `regime_gate_v1` (only VOLATILE+SIDEWAYS tr
 
 ---
 
-## Current Session (2026-05-14)
+## Current Session (2026-05-15)
 
-See [MODEL_STATE_20260514.md](MODEL_STATE_20260514.md) for full detail. Resuming E2 launch queued on 2026-05-02 — intervening gap was GCP migration, snapshot pipeline rebuild on `algo-trading-496203`, runtime VM bootstrap, and webapp refactor. No training was run in the interval. C1 remains live.
+See [MODEL_STATE_20260515.md](MODEL_STATE_20260515.md) for full detail. Today's arc: started from a "validated +271%" claim; honest OOS decomposition revealed +87% of that gross came from training-window contribution. C1's true holdout (16 trades) is net −55% at 200 bps. Two structural questions launched into training: **F1** (walk-forward, window-shift) and **B1** (cost-in-label shift). F1 finished and was HELD (block_rate=1.0 — recipe doesn't generalize to a different window). B1 still running, completes Saturday early IST. **C1 remains live but in `capped_live` paper-only mode; no real money. Do not deploy until B1 result lands AND ≥2 weeks of forward shadow data validates OOS edge.**
 
-## Previous Session (2026-05-02)
+## Previous Session (2026-05-14)
+
+See [MODEL_STATE_20260514.md](MODEL_STATE_20260514.md). Resumed E2 launch queued on 2026-05-02. E2 HELD across 5 gates; VOLATILE-only training collapsed generalization.
+
+## Older Session (2026-05-02)
 
 See [MODEL_STATE_20260502.md](MODEL_STATE_20260502.md) for full detail.
 

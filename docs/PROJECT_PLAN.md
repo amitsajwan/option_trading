@@ -20,16 +20,27 @@ The North Star, the current state, what we're fixing, in what order, who does wh
 
 ---
 
-## 2. Current State Snapshot (2026-05-15)
+## 2. Current State Snapshot (2026-05-15 evening IST)
+
+**One-line position:** C1 is the live model (`capped_live` @ 0.25× size, no real money), but its OOS edge is unproven — every clean out-of-sample test we've run is net-negative or fails the publish gates. Path B1 (cost-aware-label retrain) running now; result by Saturday early morning IST. **Do NOT deploy real capital.**
 
 | Layer | State |
 |---|---|
-| **Live model** | C1 (`staged_deep_hpo_c1_base_20260429_040848`), `regime_gate_v1` active, `capped_live` rollout @ 0.25× size |
-| **Live behavior (2024 replay, C1 baseline)** | **107 trades over 29 distinct trading dates** of 2024 replay. Win rate 43.9%. **Legacy 6 bps accounting:** PF 1.22, net +108.85% sum of premium-% (decision basis only). **Realistic 200 bps accounting:** PF ~0.83, net −105.15% sum of premium-% (this is the number Phase 1 must move). See §10 for the three-run comparison numbers. |
-| **Architecture** | Three lanes (training / live / historical replay) sharing same `strategy_app` code and published model artifact. Documented in [SYSTEM_FLOW_DIAGRAMS.md](SYSTEM_FLOW_DIAGRAMS.md). |
-| **Training pipeline** | `ml_pipeline_2` staged HPO (S1 entry · S2 direction · S3 recipe). 5 grids run to date (A, B, C/C1, D/D2, E/E2). C1 force-deployed; D2 held; E2 failed across 5 gates. |
-| **Active experiments** | s1ablation replay (BYPASS_GATES=1) **DONE** — 3298 trades over 59 dates, gross +419.19%, net at 200 bps −6176.81%, PF 1.04 → 0.61, avg gross 0.127%/trade. Random-direction replay **INCOMPLETE** — exited after 1 date (1 trade); needs re-run. |
-| **Known gaps** | (1) futures→options selector is naive, (2) cost model is 30–60× optimistic, (3) ML→selector handoff drops magnitude info, (4) Stage 3 is dead weight, (5) no shadow-vs-paper-vs-live framework. |
+| **Live model** | C1 (`staged_deep_hpo_c1_base_20260429_040848`), `regime_gate_v1` active, `capped_live` rollout @ 0.25× size. **No real-money orders are placed** — broker integration doesn't exist yet (Phase 4). |
+| **OOS verdict (today)** | **C1's holdout (2024-08 → 2024-09, 16 trades) is NET −55% @ 200 bps**, PF 0.86. In-sample dominated by training window (+87% of total gross came from dates the model trained on). Exit-timing sweep (9/15/20/30 bars) shows NO variant rescues the holdout. See §14. |
+| **F1 walk-forward** | **HELD** at `stage1_cv_gate_failed`. F1 = C1 recipe trained on pre-2024 only. block_rate=1.0 — model refuses every entry. Confirms recipe doesn't generalize across windows. |
+| **B1 (cost-aware label)** | **RUNNING** (manifest `79ce021ec4...`, started 2026-05-15 17:46 UTC). C1 recipe + `cost_per_trade = 0.02` (200 bps) in label generation instead of 6 bps. ETA ~6 hrs. See §15. |
+| **Architecture** | Three lanes (training / live / historical replay) sharing `strategy_app` code + published model artifact. [SYSTEM_FLOW_DIAGRAMS.md](SYSTEM_FLOW_DIAGRAMS.md). |
+| **Data state** | 2020-08 → 2024-10 covered in mongo + parquet. **2025+ data NOT acquired.** All free paths (Kite Historical, NSE bhavcopy, scrapers) inadequate for 1-min option chain. Forward live collection is the only path; requires Kite live credentials + Monday 09:15 IST market open. |
+| **Known gaps** | (1) `strategy_persistence_app` pubsub hangs after mongo timeout — workaround: JSONL is canonical for backtests. (2) `exit_trigger` not persisted. (3) No broker integration (no real-money orders possible regardless of model decision). |
+
+**Next concrete actions (in priority order):**
+
+1. **Saturday early morning IST:** look at B1's `summary.json`. Three outcomes, all decision-grade (§15).
+2. **Saturday/Sunday:** if B1 also held → fundamental rethink required (different label / architecture / shelve). If B1 publishes → forward shadow validates it Monday onwards.
+3. **Monday 09:15 IST:** if B1 publishes AND operator shares Kite live credentials → start forward shadow data collection. 2-4 weeks of forward data = first real OOS signal with current architecture.
+
+**Active running:** B1 training in tmux `pathb1` on `option-trading-ml-01`. Polling/handoff: see [scripts/launch_pathb1_when_f1_done.sh](../scripts/launch_pathb1_when_f1_done.sh) (now updated to handle `held` status).
 
 ---
 
@@ -692,10 +703,51 @@ The "smart option selector" hypothesis underestimated the size of the options tr
 
 ---
 
-## 11. Related Docs
+## 15. Factorial experiment — F1 (window-shift) and B1 (cost-in-label) — running 2026-05-15
+
+After today's OOS-failure verdict (§14), two structural questions remained: does C1's recipe survive (a) a different training window, or (b) realistic option cost baked into label generation? Both launched on the ML VM. Same C1 recipe, one variable changed per run:
+
+| Run | Cost in label | Train window end | Status | What it tests |
+|---|---|---|---|---|
+| C1 baseline (live) | 6 bps | 2024-04-30 | shipped | — (control) |
+| **F1** walkforward | 6 bps | **2023-04-30** | ❌ **HELD** (`stage1_cv_gate_failed`, block_rate=1.0) | Time-window generalization |
+| **B1** cost-aware | **0.02 (200 bps)** | 2024-04-30 | 🟡 RUNNING (started 2026-05-15 17:46 UTC, ETA ~6 hrs) | Survival under realistic cost |
+
+### F1 result (held)
+
+F1 finished training in only ~2 hours (smaller dataset). Status: `held`. Completion mode: `stage1_cv_gate_failed`. **All CV folds show `block_rate=1.0`** — i.e., the F1 model would refuse 100% of entry attempts on its validation data. Stage 1 ROC=0.642 (close to C1's 0.683) so the model isn't broken — it just can't find a threshold that produces tradeable entries on pre-2024 data.
+
+This is a real result, not a glitch. **The recipe is highly window-sensitive.** Same hyperparameters, same features, same HPO budget — only the data window changes — and the model collapses to "never trade." Combined with C1's holdout (§14), the conclusion firms up:
+
+> **C1's apparent edge is period-specific.** The model fits 2024 H1 patterns; shift the window and the recipe can't extract a stable signal.
+
+### B1 hypothesis + outcomes to expect
+
+B1 tests whether the recipe (under C1's original window) can survive when label generation uses realistic 200 bps cost instead of 6 bps. Mechanism: in [`ml_pipeline_2/src/ml_pipeline_2/staged/pipeline.py` lines 295-296](../ml_pipeline_2/src/ml_pipeline_2/staged/pipeline.py#L295), the label compares `best_ce_net_return_after_cost` vs `best_pe_net_return_after_cost`, where the cost is `cost_per_trade`. At 6 bps almost every directional move is labeled "profitable side"; at 200 bps the label is only "profitable side" when the move is large enough to clear realistic friction. Model should learn to be naturally more selective.
+
+| B1 outcome | Interpretation | Action |
+|---|---|---|
+| ✅ Publishes (passes gates) | Cost-aware label is the missing piece; recipe works fine with realistic friction. | Replace C1 with B1; forward shadow Monday onwards to validate live. |
+| ❌ Held / gate-fails (any reason) | Recipe doesn't survive cost shift either. Combined with F1, this means the recipe is over-fit to BOTH window and cost. | Fundamental rethink: different label (predict option P&L directly), different feature set, different model family. OR shelve. |
+| 🟡 Marginal (publishes but with thin metrics) | Recipe partially works; cost matters but isn't the only issue. | Use B1 as starting point for next-generation experiments. |
+
+### How to resume on Saturday morning IST
+
+1. Check B1 status:
+   ```
+   gcloud compute ssh option-trading-ml-01 --zone=asia-south1-b --command='sudo cat /opt/option_trading/ml_pipeline_2/artifacts/research/deep_hpo_b1_optcost_200bps_20260515_174558/run_status.json | python3 -m json.tool'
+   ```
+2. If complete or held, look at `summary.json` in the same dir — grep for `"status"`, `"profit_factor"`, `"blocking_reasons"`, `"roc_auc"`.
+3. Decision matrix above tells you the next action.
+
+---
+
+## 16. Related Docs
 
 - [SYSTEM_FLOW_DIAGRAMS.md](SYSTEM_FLOW_DIAGRAMS.md) — architecture & flow diagrams
 - [ARCHITECTURE.md](ARCHITECTURE.md) — textual cross-cutting view
-- [../ml_pipeline_2/docs/training/INDEX.md](../ml_pipeline_2/docs/training/INDEX.md) — research history (A→B→C→D→E grids)
-- [../ml_pipeline_2/docs/training/MODEL_STATE_20260514.md](../ml_pipeline_2/docs/training/MODEL_STATE_20260514.md) — last training session state
+- [../ml_pipeline_2/docs/training/INDEX.md](../ml_pipeline_2/docs/training/INDEX.md) — research history (A→B→C→D→E grids; F1/B1 added 2026-05-15)
+- [../ml_pipeline_2/docs/training/MODEL_STATE_20260515.md](../ml_pipeline_2/docs/training/MODEL_STATE_20260515.md) — **TODAY's session — read this first when resuming**
+- [../ml_pipeline_2/docs/training/MODEL_STATE_20260514.md](../ml_pipeline_2/docs/training/MODEL_STATE_20260514.md) — previous session (E2 / Stage-1 ablation context)
 - [SYSTEM_SOURCE_OF_TRUTH.md](SYSTEM_SOURCE_OF_TRUTH.md) — contracts, constants
+- [../scripts/README.md](../scripts/README.md) — analysis + orchestration scripts (analyze_jsonl, sim_exit_sweep, launchers)
