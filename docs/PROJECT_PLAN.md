@@ -22,25 +22,30 @@ The North Star, the current state, what we're fixing, in what order, who does wh
 
 ## 2. Current State Snapshot (2026-05-15 evening IST)
 
-**One-line position:** C1 is the live model (`capped_live` @ 0.25× size, no real money), but its OOS edge is unproven — every clean out-of-sample test we've run is net-negative or fails the publish gates. Path B1 (cost-aware-label retrain) running now; result by Saturday early morning IST. **Do NOT deploy real capital.**
+**One-line position:** C1 is live in `capped_live` (no real money). Four independent experiments confirm overfit on 2020-2024 data — C1 holdout net-negative, F1 walk-forward held, B1 cost-shift held, and the conviction-filter approach (Path C-1) was already documented as a dead-end in April. **Training is PAUSED.** Gating constraint is now fresh data, not algorithmic. **Do NOT deploy real capital.**
 
 | Layer | State |
 |---|---|
-| **Live model** | C1 (`staged_deep_hpo_c1_base_20260429_040848`), `regime_gate_v1` active, `capped_live` rollout @ 0.25× size. **No real-money orders are placed** — broker integration doesn't exist yet (Phase 4). |
-| **OOS verdict (today)** | **C1's holdout (2024-08 → 2024-09, 16 trades) is NET −55% @ 200 bps**, PF 0.86. In-sample dominated by training window (+87% of total gross came from dates the model trained on). Exit-timing sweep (9/15/20/30 bars) shows NO variant rescues the holdout. See §14. |
-| **F1 walk-forward** | **HELD** at `stage1_cv_gate_failed`. F1 = C1 recipe trained on pre-2024 only. block_rate=1.0 — model refuses every entry. Confirms recipe doesn't generalize across windows. |
-| **B1 (cost-aware label)** | **RUNNING** (manifest `79ce021ec4...`, started 2026-05-15 17:46 UTC). C1 recipe + `cost_per_trade = 0.02` (200 bps) in label generation instead of 6 bps. ETA ~6 hrs. See §15. |
+| **Live model** | C1 (`staged_deep_hpo_c1_base_20260429_040848`), `regime_gate_v1` active, `capped_live` @ 0.25× size. **No real-money orders are placed** — broker integration doesn't exist yet (Phase 4). |
+| **OOS verdict (2026-05-15)** | C1 holdout (2024-08 → 2024-09, 16 trades): **net −55% @ 200 bps**, PF 0.86. Training-window contribution: **+87% of total gross.** Exit-timing sweep (9/15/20/30 bars): all variants net-negative on holdout. See §14. |
+| **F1 walk-forward** | **HELD** at `stage1_cv_gate_failed`. C1 recipe trained on pre-2024 → block_rate=1.0. Recipe doesn't generalize across windows. See §15. |
+| **B1 cost-aware label** | **HELD** at `stage2_signal_check_failed`. C1 recipe + `cost_per_trade=0.02` instead of 6 bps → Stage 2 direction signal collapses under realistic-cost labels. See §15. |
+| **Path C-1 (NOT launched)** | Conviction-filter approach (`direction_or_no_trade_v1` + `stage2_target_redesign`) — already tried Apr 26 2026, killed throughput to 0 holdout trades. Replicating it under 200 bps would be even worse. Don't run. |
 | **Architecture** | Three lanes (training / live / historical replay) sharing `strategy_app` code + published model artifact. [SYSTEM_FLOW_DIAGRAMS.md](SYSTEM_FLOW_DIAGRAMS.md). |
-| **Data state** | 2020-08 → 2024-10 covered in mongo + parquet. **2025+ data NOT acquired.** All free paths (Kite Historical, NSE bhavcopy, scrapers) inadequate for 1-min option chain. Forward live collection is the only path; requires Kite live credentials + Monday 09:15 IST market open. |
-| **Known gaps** | (1) `strategy_persistence_app` pubsub hangs after mongo timeout — workaround: JSONL is canonical for backtests. (2) `exit_trigger` not persisted. (3) No broker integration (no real-money orders possible regardless of model decision). |
+| **Data state** | 2020-08 → 2024-10 in mongo + parquet. **2025+ NOT acquired.** All free paths (Kite Historical, NSE bhavcopy, scrapers) inadequate for 1-min option chain. Forward live collection (Kite live credentials → Monday 09:15 IST market open) is the only viable path. |
+| **Known gaps** | (1) `strategy_persistence_app` pubsub hangs after mongo timeout — workaround: JSONL is canonical for backtests. (2) `exit_trigger` not persisted. (3) No broker integration (no real-money orders possible regardless of model). |
+
+**Why training is paused.** Four consistent failure modes on the same dataset say the same thing: there aren't enough genuinely-profitable-after-200-bps trades in 2020-2024 BankNifty data for any C1-derivative recipe to extract a generalizable edge. More HPO iterations on this data won't change that. The honest gating action is fresh data.
 
 **Next concrete actions (in priority order):**
 
-1. **Saturday early morning IST:** look at B1's `summary.json`. Three outcomes, all decision-grade (§15).
-2. **Saturday/Sunday:** if B1 also held → fundamental rethink required (different label / architecture / shelve). If B1 publishes → forward shadow validates it Monday onwards.
-3. **Monday 09:15 IST:** if B1 publishes AND operator shares Kite live credentials → start forward shadow data collection. 2-4 weeks of forward data = first real OOS signal with current architecture.
+1. **Monday 2026-05-18, 09:15 IST:** if operator shares Kite live credentials, start forward shadow data collection via `ingestion_app` + `snapshot_app` + `strategy_app` running in shadow mode (real ticks, signals generated, no broker orders). Accumulate 1 trading day of true OOS per real day.
+2. **After 4-6 weeks of forward data (~mid-July 2026 onwards):** design ONE new experiment with the accumulated fresh data. Candidate designs: (a) direct option P&L label, (b) longer prediction horizon, (c) different feature philosophy. See §15 "Next-experiment design note".
+3. **Do NOT iterate on C1 recipe on existing 2020-2024 data.** Even with new label / new HPO, the data ceiling is reached.
 
-**Active running:** B1 training in tmux `pathb1` on `option-trading-ml-01`. Polling/handoff: see [scripts/launch_pathb1_when_f1_done.sh](../scripts/launch_pathb1_when_f1_done.sh) (now updated to handle `held` status).
+**Operator decision needed (only one):** share Kite live trading API credentials with the runtime VM so forward shadow can start Monday. This is the single unblocking action.
+
+**Active running:** Nothing. ML VM is idle. Runtime VM is idle. Training paused.
 
 ---
 
@@ -703,42 +708,55 @@ The "smart option selector" hypothesis underestimated the size of the options tr
 
 ---
 
-## 15. Factorial experiment — F1 (window-shift) and B1 (cost-in-label) — running 2026-05-15
+## 15. Factorial experiment — F1 (window-shift) and B1 (cost-in-label) — both held 2026-05-15
 
-After today's OOS-failure verdict (§14), two structural questions remained: does C1's recipe survive (a) a different training window, or (b) realistic option cost baked into label generation? Both launched on the ML VM. Same C1 recipe, one variable changed per run:
+After today's OOS-failure verdict (§14), two structural questions: does C1's recipe survive (a) a different training window, or (b) realistic option cost baked into label generation? Both launched on the ML VM. Both **failed identically — at different gates but same root cause.**
 
-| Run | Cost in label | Train window end | Status | What it tests |
-|---|---|---|---|---|
-| C1 baseline (live) | 6 bps | 2024-04-30 | shipped | — (control) |
-| **F1** walkforward | 6 bps | **2023-04-30** | ❌ **HELD** (`stage1_cv_gate_failed`, block_rate=1.0) | Time-window generalization |
-| **B1** cost-aware | **0.02 (200 bps)** | 2024-04-30 | 🟡 RUNNING (started 2026-05-15 17:46 UTC, ETA ~6 hrs) | Survival under realistic cost |
+### Final factorial result
 
-### F1 result (held)
+| Run | Cost in label | Train window end | Status | Completion mode | Stage 1 ROC | block_rate |
+|---|---|---|---|---|---|---|
+| C1 baseline (live) | 6 bps | 2024-04-30 | shipped | (live; holdout net −55% §14) | 0.683 | gates pass |
+| **F1** walk-forward | 6 bps | **2023-04-30** | ❌ HELD | `stage1_cv_gate_failed` | 0.642 | **1.0** all folds |
+| **B1** cost-aware | **0.02 (200 bps)** | 2024-04-30 | ❌ HELD | `stage2_signal_check_failed` | (reached stage 2) | **1.0** all folds |
 
-F1 finished training in only ~2 hours (smaller dataset). Status: `held`. Completion mode: `stage1_cv_gate_failed`. **All CV folds show `block_rate=1.0`** — i.e., the F1 model would refuse 100% of entry attempts on its validation data. Stage 1 ROC=0.642 (close to C1's 0.683) so the model isn't broken — it just can't find a threshold that produces tradeable entries on pre-2024 data.
+### Reading the result
 
-This is a real result, not a glitch. **The recipe is highly window-sensitive.** Same hyperparameters, same features, same HPO budget — only the data window changes — and the model collapses to "never trade." Combined with C1's holdout (§14), the conclusion firms up:
+The models aren't broken — both F1 and B1 produced trained classifiers with comparable Stage 1 predictive power to C1. **What failed are the gates.** They're protecting us from deploying recipes that don't have a robust edge.
 
-> **C1's apparent edge is period-specific.** The model fits 2024 H1 patterns; shift the window and the recipe can't extract a stable signal.
+The failure modes are mechanistically different but tell the same story:
+- **F1:** trained on pre-2024 data, the calibrated entry threshold finds no positive-EV setups. So `block_rate=1.0` — refuse everything.
+- **B1:** trained on 2024 data with 200 bps cost in the label, the Stage 2 direction signal isn't strong enough to clear the post-cost validation check. So same `block_rate=1.0`.
 
-### B1 hypothesis + outcomes to expect
+Both say: **the recipe's edge is too small to survive structural shifts in the labeling regime** (window or cost). Combined with C1's holdout collapse (§14) and the earlier s1ablation finding (gates ON: PF 1.22; gates OFF: PF 0.92 with avg gross 0.13%/trade), four independent confirmations of the same picture.
 
-B1 tests whether the recipe (under C1's original window) can survive when label generation uses realistic 200 bps cost instead of 6 bps. Mechanism: in [`ml_pipeline_2/src/ml_pipeline_2/staged/pipeline.py` lines 295-296](../ml_pipeline_2/src/ml_pipeline_2/staged/pipeline.py#L295), the label compares `best_ce_net_return_after_cost` vs `best_pe_net_return_after_cost`, where the cost is `cost_per_trade`. At 6 bps almost every directional move is labeled "profitable side"; at 200 bps the label is only "profitable side" when the move is large enough to clear realistic friction. Model should learn to be naturally more selective.
+### Path C-1 was considered and rejected
 
-| B1 outcome | Interpretation | Action |
-|---|---|---|
-| ✅ Publishes (passes gates) | Cost-aware label is the missing piece; recipe works fine with realistic friction. | Replace C1 with B1; forward shadow Monday onwards to validate live. |
-| ❌ Held / gate-fails (any reason) | Recipe doesn't survive cost shift either. Combined with F1, this means the recipe is over-fit to BOTH window and cost. | Fundamental rethink: different label (predict option P&L directly), different feature set, different model family. OR shelve. |
-| 🟡 Marginal (publishes but with thin metrics) | Recipe partially works; cost matters but isn't the only issue. | Use B1 as starting point for next-generation experiments. |
+The natural next move would be conviction-filtered labels: use `direction_or_no_trade_v1` + `stage2_target_redesign.enabled=true` so only the high-conviction historical trades are labeled positive. This is **a known dead-end** per [MODEL_STATE_20260426.md §What Doesn't Work](../ml_pipeline_2/docs/training/MODEL_STATE_20260426.md): the conviction filter reduced Stage 2 rows from ~57k to ~3k → 0 holdout trades at 6 bps cost. Under 200 bps cost the throughput collapse would be worse. **Do not run this.**
 
-### How to resume on Saturday morning IST
+### What this means for the project
 
-1. Check B1 status:
-   ```
-   gcloud compute ssh option-trading-ml-01 --zone=asia-south1-b --command='sudo cat /opt/option_trading/ml_pipeline_2/artifacts/research/deep_hpo_b1_optcost_200bps_20260515_174558/run_status.json | python3 -m json.tool'
-   ```
-2. If complete or held, look at `summary.json` in the same dir — grep for `"status"`, `"profit_factor"`, `"blocking_reasons"`, `"roc_auc"`.
-3. Decision matrix above tells you the next action.
+The C1 recipe's edge depends on a specific combination of (training window × optimistic cost × original label design). Change any single dimension and the recipe collapses. This isn't fixable by more HPO trials — the data ceiling has been reached on 2020-2024 BankNifty.
+
+### Decision: training is paused
+
+Until fresh data (2025+) is available, every new training run on 2020-2024 will be vulnerable to the same data-ceiling issue. **No more training experiments on this dataset.** The unblocking action is forward live shadow data collection.
+
+### Next-experiment design note (for when fresh data exists)
+
+When 4-6 weeks of forward shadow data has accumulated, run ONE carefully-designed experiment. Three candidate designs in order of priority:
+
+1. **Direct option P&L label.** Predict "did this option trade return positive net after 200 bps cost over the next N bars?" — bypass the futures-direction-→-options-translation tax entirely. New labeler needed (similar to `direction_or_no_trade_v1` but binary on net option P&L, not direction).
+2. **Longer prediction horizon.** Same recipe, same labels, but `max_hold_bars` extended (e.g., 60 or 120 bars instead of 9-30) at TRAINING time. Allows underlying move to accumulate to a level where 200 bps cost is small relative to typical option premium move.
+3. **Different feature philosophy.** Stop relying on intraday momentum features; emphasize structural features (IV regime, expiry distance, OI deltas) that may generalize better across regimes.
+
+All three depend on having fresh OOS data to validate against. Don't design or run them until forward shadow has accumulated.
+
+### How to resume next session
+
+1. Check forward shadow collection status (once it's running): `sudo ls /opt/option_trading/.run/strategy_app/positions.jsonl` on runtime VM.
+2. If shadow data is accumulating, count days and trades. Decision point: 30+ trades on fresh data is the minimum sample to make any honest claim.
+3. If shadow ISN'T running yet, the gating action is operator sharing Kite live credentials.
 
 ---
 

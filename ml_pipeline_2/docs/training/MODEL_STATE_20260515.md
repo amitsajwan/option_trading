@@ -1,16 +1,25 @@
-# ML Model State — 2026-05-15
+# ML Model State — 2026-05-15 (final)
 
-> **Read this first when resuming.** Today produced two pieces of overfit evidence and one running experiment (B1, completes Saturday early morning IST).
+> **Read this first when resuming.** Today closed the C1-recipe research arc with four independent overfit/data-ceiling confirmations. **Training is paused.** Next action is forward shadow data collection, gated on operator sharing Kite live credentials.
 
 ---
 
 ## TL;DR
 
-- C1's apparent 2024 edge is **period-specific**. Holdout (16 trades, 2024-08-01 → 2024-09-24) is **net −55% at 200 bps**, PF 0.86.
-- Exit-timing sweep on C1's 107 entries with hold ∈ {9, 15, 20, 30} bars: **all four net-negative on the holdout window**. Exit timing is not the lever.
-- **F1 walk-forward** (C1 recipe, training window shifted 12 months back so 2024 is unseen): trained successfully in ~2 hrs but **HELD** at `stage1_cv_gate_failed` — `block_rate=1.0` on every fold. The model would refuse every entry. Confirms the recipe is highly window-sensitive.
-- **B1 cost-aware label** (C1 recipe + windows, but `cost_per_trade = 0.02` instead of 6 bps): launched 2026-05-15 17:46 UTC, ETA ~6 hrs. Tests whether labels generated against realistic option friction produce a more selective and OOS-stable model.
-- **Operator directive:** do NOT deploy real capital. Wait for B1 result + at least 2 weeks of forward shadow data.
+Four experiments today, all consistent with the same conclusion:
+
+| # | Test | Result |
+|---|---|---|
+| 1 | C1 holdout decomposition (2024-08 → 2024-09, 16 trades) | Net **−55% @ 200 bps**, PF 0.86 |
+| 2 | Exit-timing sweep on C1's 107 entries (9/15/20/30 bars) | All 4 variants net-negative on holdout |
+| 3 | **F1 walk-forward** — C1 recipe, training window shifted to pre-2024 | HELD at `stage1_cv_gate_failed`, block_rate=1.0 |
+| 4 | **B1 cost-aware label** — C1 recipe, `cost_per_trade=0.02` in label | HELD at `stage2_signal_check_failed`, block_rate=1.0 |
+
+Additionally: **Path C-1** (conviction-filtered labels via `direction_or_no_trade_v1` + `stage2_target_redesign`) was considered but rejected — it was already documented as a dead-end in the April 26 session (0 holdout trades at 6 bps cost; would be worse at 200 bps).
+
+**Conclusion:** C1's apparent edge depends on a specific (training window × optimistic cost × original label design) combination. The data ceiling on 2020-2024 BankNifty is reached.
+
+**Decision:** training is PAUSED. Don't iterate on C1 recipe further. Don't deploy real capital. The single unblocking action is forward live shadow data collection — needs operator to share Kite live credentials, starts Monday 2026-05-18 09:15 IST.
 
 ---
 
@@ -67,21 +76,29 @@ The Stage 1 entry filter, trained on pre-2024 data, is so conservative that it w
 
 **Interpretation:** the recipe doesn't generalize across time. Combined with C1's holdout failure, this is two independent signals: the recipe over-fits to its specific training window.
 
-### 2.4 B1 cost-aware label — running
+### 2.4 B1 cost-aware label — HELD
 
-B1 hypothesis: maybe the recipe DOES generalize, but only when labels reflect realistic option cost. C1's labels are generated with `cost_per_trade = 0.0006` (6 bps). At that cost almost every directional move is labeled "profitable side"; the model learns to be permissive. In production we pay 200 bps. The label-train mismatch could explain why the recipe doesn't translate.
+B1 hypothesis: maybe the recipe generalizes when labels reflect realistic option cost. C1's labels use `cost_per_trade = 0.0006` (6 bps); at that level nearly every directional move is "profitable side." In production we pay 200 bps. The label-cost mismatch could be the missing piece.
 
 B1 config: identical to C1 (same window, same features, same HPO) but `cost_per_trade = 0.02` (200 bps).
+
+**Result: HELD at `stage2_signal_check_failed`.** Finished in only ~10 minutes (Stage 2 pre-check fired early). Same `block_rate=1.0` across all CV folds as F1.
 
 | Field | Value |
 |---|---|
 | config | `ml_pipeline_2/configs/research/staged_dual_recipe.deep_hpo_b1_optcost_200bps.json` |
-| outputs.run_name | `deep_hpo_b1_optcost_200bps` |
 | entity_id | `deep_hpo_b1_optcost_200bps_20260515_174558` |
 | manifest_hash | `79ce021ec4da0d18964a853066a69de076b3f773773adfdfb410cfd031e290ac` |
-| Launched | 2026-05-15 17:46 UTC |
-| Tmux session | `pathb1` on `option-trading-ml-01` |
-| ETA | ~6 hrs (Saturday ~00:00 IST = Friday ~18:30 UTC) |
+| status | `held` |
+| completion_mode | `stage2_signal_check_failed` |
+| block_rate (all folds) | **1.0** |
+| Duration | ~10 min (terminated at Stage 2 signal check) |
+
+**Interpretation:** when labels demand 200 bps of clearance, the Stage 2 direction signal isn't strong enough to satisfy the pre-publish validation check. The label distribution becomes too sparse / noisy for the recipe to learn a useful direction call. The model isn't broken — its calibrated signal just can't justify firing entries under the more demanding labeling regime.
+
+### 2.5 Path C-1 considered and rejected
+
+The natural next move would be conviction-filtered labels: use `direction_or_no_trade_v1` + enable `stage2_target_redesign` so only high-conviction historical trades are labeled positive. This was **already tried in the April 26 session** (`staged_proper_full_v1_20260426_051531`) — the conviction filter reduced Stage 2 rows from ~57k to ~3k → 0 holdout trades AT 6 BPS COST. Under 200 bps the throughput collapse would be worse. **This is not a viable next experiment.** See [MODEL_STATE_20260426.md](MODEL_STATE_20260426.md) §"What Doesn't Work".
 
 ### 2.5 Data acquisition — exhausted free paths
 
@@ -125,28 +142,27 @@ In [scripts/](../../../scripts/):
 | c1c77ae | feat(training): Path B1 config — option-aware label (cost_per_trade=0.02) |
 | 48a69a4 | fix(scripts): treat F1 'held' status as terminal — launch B1 anyway |
 
-## 6. Decision matrix — Saturday morning IST
+## 6. Decision taken — training PAUSED
 
-When B1 completes, look at its `summary.json` for the same fields F1 had (`status`, `completion_mode`, `roc_auc`, `block_rate`, `blocking_reasons`).
+With four independent overfit/data-ceiling confirmations (C1 holdout, exit sweep, F1, B1) and Path C-1 known dead-end, **no more training experiments will be run on the 2020-2024 dataset.** The honest reading: the data has been mined for the directional signal the C1 recipe family can extract, and the result doesn't survive structural shifts (window OR cost). More HPO trials = same answer.
 
-| B1 outcome | Combined picture | Next action |
-|---|---|---|
-| ✅ Publishes (passes all gates) | Cost-aware label was the missing piece — recipe works under realistic cost | Replace C1 with B1; start forward shadow Monday to validate live OOS |
-| ❌ Held (any gate) | Recipe is over-fit to BOTH window (F1) and cost (B1) | Fundamental rethink: try direct-option-P&L label, or different feature set, or shelve. NO more HPO tuning on the same recipe. |
-| 🟡 Marginal (publishes with thin gates) | Cost helps but isn't sufficient | Use B1 as starting point for the next experiment (e.g., B2 with `cost_per_trade=0.01`) |
+The unblocking action is **fresh data**, not more algorithm tweaks.
 
 ## 7. What NOT to do next session
 
-- Don't iterate on exit timing, strike selection, or frequency thresholds. Today's data closes those questions.
+- Don't iterate on exit timing, strike selection, or frequency thresholds on C1 recipe.
 - Don't run more HPO trials on C1's recipe with different windows or different costs — F1 and B1 cover both axes.
-- Don't deploy real capital regardless of B1's outcome. Forward shadow is the prerequisite.
+- Don't try conviction-filtered labels (`stage2_target_redesign`) — Apr 26 already proved this dead-ends at 6 bps cost; under 200 bps it'd be worse.
+- Don't deploy real capital. Forward shadow data is the prerequisite for any deployment claim.
 - Don't celebrate in-sample numbers. The UI date-picker now visually marks training vs holdout dates — use it.
 
-## 8. What ARE the open experiments
+## 8. Open paths
 
-- B1 (running) — see §2.4 above. Auto-completes Saturday.
-- Forward shadow collection — blocked on Kite live credentials + Monday market open.
-- Direct-option-P&L label experiment — only worth designing if B1 fails. New label: "did this option trade make profit after 200 bps?" predicted directly, not via futures direction. Would be a new training run, not just a config tweak.
+- **Forward shadow collection** — blocked on operator sharing Kite live credentials. Monday 2026-05-18 09:15 IST is the earliest start. Accumulates 1 trading day of fresh OOS per real day. 4-6 weeks builds the dataset needed for the next experiment.
+- **Next-experiment design** (do not run until fresh data exists) — three candidates documented in [PROJECT_PLAN.md §15](../../../docs/PROJECT_PLAN.md):
+  1. Direct option-P&L label (binary: "did this option trade clear 200 bps?")
+  2. Longer prediction horizon (max_hold 60-120 bars at training time)
+  3. Different feature philosophy (structural rather than intraday momentum)
 
 ## 9. Pipeline file references
 
