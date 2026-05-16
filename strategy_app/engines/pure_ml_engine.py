@@ -395,6 +395,7 @@ class PureMLEngine(StrategyEngine):
                     final_outcome=("blocked" if blocker_gate not in {"stage1_threshold", "stage2_direction", "stage3_recipe"} else "hold"),
                     primary_blocker_gate=blocker_gate,
                     summary_metrics=self._staged_decision_metrics(decision),
+                    model_diagnostics=decision.model_diagnostics,
                 )
             )
             return None
@@ -440,6 +441,7 @@ class PureMLEngine(StrategyEngine):
                     final_outcome="blocked",
                     primary_blocker_gate="strike_selection",
                     summary_metrics=hold_metrics,
+                    model_diagnostics=decision.model_diagnostics,
                 )
             )
             return None
@@ -458,6 +460,7 @@ class PureMLEngine(StrategyEngine):
                     final_outcome="blocked",
                     primary_blocker_gate="option_premium",
                     summary_metrics=self._staged_decision_metrics(decision),
+                    model_diagnostics=decision.model_diagnostics,
                 )
             )
             return None
@@ -563,6 +566,7 @@ class PureMLEngine(StrategyEngine):
                     "entry_premium": premium,
                     "max_lots": signal.max_lots,
                 },
+                model_diagnostics=decision.model_diagnostics,
             )
         )
         return signal

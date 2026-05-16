@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -48,6 +51,7 @@ class StagedRuntimeDecision:
     stop_loss_pct: Optional[float] = None
     target_pct: Optional[float] = None
     risk_basis: str = "option_premium"
+    model_diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -154,6 +158,75 @@ def _score_prob(package: dict[str, Any], feature_row: dict[str, object], *, defa
     return float(pd.to_numeric(probs[first_col], errors="coerce").iloc[0])
 
 
+def _normalise_feature_value(value: object) -> object:
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except Exception:
+        return str(value)
+    if not np.isfinite(f):
+        return None
+    return round(float(f), 10)
+
+
+def _model_input_diagnostics(feature_row: dict[str, object], package: dict[str, Any]) -> dict[str, Any]:
+    feature_cols = [str(col) for col in list(package.get("feature_columns") or [])]
+    values: list[tuple[str, object]] = []
+    missing: list[str] = []
+    non_null = 0
+    for col in feature_cols:
+        if col not in feature_row:
+            missing.append(col)
+            values.append((col, None))
+            continue
+        value = _normalise_feature_value(feature_row.get(col))
+        if value is not None:
+            non_null += 1
+        values.append((col, value))
+    payload = json.dumps(values, sort_keys=False, separators=(",", ":"), default=str)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    out: dict[str, Any] = {
+        "feature_count": len(feature_cols),
+        "non_null_count": int(non_null),
+        "missing_count": int(len(missing)),
+        "input_hash": digest[:16],
+        "input_hash32": int(digest[:8], 16),
+    }
+    if missing:
+        out["missing_features"] = missing[:20]
+    if str(os.getenv("STRATEGY_ML_MODEL_IO_VERBOSE", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        out["features"] = {name: value for name, value in values}
+    return out
+
+
+def _record_stage_output(
+    diagnostics: dict[str, Any],
+    stage: str,
+    *,
+    output_col: str,
+    output_prob: float,
+    reason: Optional[str] = None,
+) -> None:
+    stage_diag = diagnostics.setdefault(stage, {})
+    stage_diag["output_col"] = str(output_col)
+    stage_diag["output_prob"] = float(output_prob)
+    if reason:
+        stage_diag["reason"] = str(reason)
+    if str(os.getenv("STRATEGY_ML_MODEL_IO_LOG", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        logger.info(
+            "ml_model_io stage=%s input_hash=%s features=%s non_null=%s missing=%s output_col=%s output_prob=%.10f reason=%s",
+            stage,
+            stage_diag.get("input_hash"),
+            stage_diag.get("feature_count"),
+            stage_diag.get("non_null_count"),
+            stage_diag.get("missing_count"),
+            output_col,
+            float(output_prob),
+            reason or "",
+        )
+
+
 def _run_prefilter_chain(engine: Any, snap: Any, stage1_row: dict[str, object], gate_ids: list[str]) -> tuple[Optional[str], Any]:
     regime_signal = None
     for gate_id in gate_ids:
@@ -244,29 +317,39 @@ def predict_staged(
         _backfill_stage_row(engine._merge_feature_rows(stage_views["stage1_entry_view"], rolling_features), rolling_features),
         snap,
     )
+    diagnostics: dict[str, Any] = {
+        "stage1": _model_input_diagnostics(stage1_row, stage1_package),
+    }
     if not bypass_deterministic_gates:
         gate_reason, _ = _run_prefilter_chain(engine, snap, stage1_row, gate_ids)
         if gate_reason is not None:
-            return StagedRuntimeDecision(action="HOLD", reason=gate_reason)
+            diagnostics["stage1"]["reason"] = str(gate_reason)
+            return StagedRuntimeDecision(action="HOLD", reason=gate_reason, model_diagnostics=diagnostics)
     if "feature_completeness_v1" in gate_ids:
         incomplete_reason = _feature_completeness_reason(stage1_row, stage1_package, max_nan_features=engine._max_nan_features)
         if incomplete_reason is not None:
-            return StagedRuntimeDecision(action="HOLD", reason=incomplete_reason)
+            diagnostics["stage1"]["reason"] = str(incomplete_reason)
+            return StagedRuntimeDecision(action="HOLD", reason=incomplete_reason, model_diagnostics=diagnostics)
 
     entry_prob = _score_prob(stage1_package, stage1_row, default_prob_col="move_prob")
+    _record_stage_output(diagnostics, "stage1", output_col="entry_prob", output_prob=float(entry_prob))
     entry_threshold = float(dict(policy["stage1"])["selected_threshold"])
     if (not bypass_deterministic_gates) and float(entry_prob) < entry_threshold:
-        return StagedRuntimeDecision(action="HOLD", reason="entry_below_threshold", entry_prob=float(entry_prob))
+        diagnostics["stage1"]["reason"] = "entry_below_threshold"
+        return StagedRuntimeDecision(action="HOLD", reason="entry_below_threshold", entry_prob=float(entry_prob), model_diagnostics=diagnostics)
 
     stage2_row = _inject_runtime_snapshot_fields(
         _backfill_stage_row(engine._merge_feature_rows(stage_views["stage2_direction_view"], rolling_features), rolling_features),
         snap,
     )
+    diagnostics["stage2"] = _model_input_diagnostics(stage2_row, stage2_package)
     if "feature_completeness_v1" in gate_ids:
         incomplete_reason = _feature_completeness_reason(stage2_row, stage2_package, max_nan_features=engine._max_nan_features)
         if incomplete_reason is not None:
-            return StagedRuntimeDecision(action="HOLD", reason="stage2_feature_incomplete", entry_prob=float(entry_prob))
+            diagnostics["stage2"]["reason"] = "stage2_feature_incomplete"
+            return StagedRuntimeDecision(action="HOLD", reason="stage2_feature_incomplete", entry_prob=float(entry_prob), model_diagnostics=diagnostics)
     direction_up_prob = _score_prob(stage2_package, stage2_row, default_prob_col="direction_up_prob")
+    _record_stage_output(diagnostics, "stage2", output_col="direction_up_prob", output_prob=float(direction_up_prob))
     ce_prob = float(direction_up_prob)
     pe_prob = float(1.0 - direction_up_prob)
     stage2_policy = dict(policy["stage2"])
@@ -279,20 +362,22 @@ def predict_staged(
         direction = "CE" if ce_prob >= pe_prob else "PE"
     elif ce_ok and pe_ok:
         if abs(ce_prob - pe_prob) < min_edge:
-            return StagedRuntimeDecision(action="HOLD", reason="direction_low_edge_conflict", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
+            diagnostics["stage2"]["reason"] = "direction_low_edge_conflict"
+            return StagedRuntimeDecision(action="HOLD", reason="direction_low_edge_conflict", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, model_diagnostics=diagnostics)
         direction = "CE" if ce_prob >= pe_prob else "PE"
     elif ce_ok:
         direction = "CE"
     elif pe_ok:
         direction = "PE"
     else:
-        return StagedRuntimeDecision(action="HOLD", reason="direction_below_threshold", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
+        diagnostics["stage2"]["reason"] = "direction_below_threshold"
+        return StagedRuntimeDecision(action="HOLD", reason="direction_below_threshold", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, model_diagnostics=diagnostics)
 
     strike = snap.atm_strike
     if strike is None or int(strike) <= 0:
-        return StagedRuntimeDecision(action="HOLD", reason="missing_atm_strike", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
+        return StagedRuntimeDecision(action="HOLD", reason="missing_atm_strike", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, model_diagnostics=diagnostics)
     if (not bypass_deterministic_gates) and "liquidity_gate_v1" in gate_ids and not engine._liquidity_ok(snap=snap, direction=direction, strike=int(strike)):
-        return StagedRuntimeDecision(action="HOLD", reason="liquidity_gate_block", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
+        return StagedRuntimeDecision(action="HOLD", reason="liquidity_gate_block", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, model_diagnostics=diagnostics)
 
     stage3_row = _inject_runtime_snapshot_fields(
         _backfill_stage_row(engine._merge_feature_rows(stage_views["stage3_recipe_view"], rolling_features), rolling_features),
@@ -301,18 +386,26 @@ def predict_staged(
     stage3_row["stage1_entry_prob"] = float(entry_prob)
     stage3_row["stage2_direction_up_prob"] = float(direction_up_prob)
     stage3_row["stage2_direction_down_prob"] = float(1.0 - direction_up_prob)
+    stage3_diag_package = next(iter(stage3_packages.values()), {}) if stage3_packages else {}
+    diagnostics["stage3"] = _model_input_diagnostics(stage3_row, dict(stage3_diag_package))
+    diagnostics["stage3"]["recipe_outputs"] = {}
     recipe_scores: list[tuple[str, float]] = []
     for recipe_id, package in sorted(stage3_packages.items()):
         if "feature_completeness_v1" in gate_ids:
             incomplete_reason = _feature_completeness_reason(stage3_row, dict(package), max_nan_features=engine._max_nan_features)
             if incomplete_reason is not None:
-                return StagedRuntimeDecision(action="HOLD", reason="stage3_feature_incomplete", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
-        recipe_scores.append((str(recipe_id), _score_prob(dict(package), stage3_row, default_prob_col="move_prob")))
+                diagnostics["stage3"]["reason"] = "stage3_feature_incomplete"
+                return StagedRuntimeDecision(action="HOLD", reason="stage3_feature_incomplete", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, model_diagnostics=diagnostics)
+        recipe_prob = _score_prob(dict(package), stage3_row, default_prob_col="move_prob")
+        diagnostics["stage3"]["recipe_outputs"][str(recipe_id)] = float(recipe_prob)
+        recipe_scores.append((str(recipe_id), recipe_prob))
     recipe_scores.sort(key=lambda item: (-float(item[1]), str(item[0])))
     if not recipe_scores:
-        return StagedRuntimeDecision(action="HOLD", reason="recipe_scores_missing", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob)
+        diagnostics["stage3"]["reason"] = "recipe_scores_missing"
+        return StagedRuntimeDecision(action="HOLD", reason="recipe_scores_missing", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, model_diagnostics=diagnostics)
     top_recipe, top_prob = recipe_scores[0]
     second_prob = recipe_scores[1][1] if len(recipe_scores) > 1 else 0.0
+    _record_stage_output(diagnostics, "stage3", output_col=str(top_recipe), output_prob=float(top_prob))
     stage3_policy = dict(policy["stage3"])
     recipe_threshold = float(stage3_policy["selected_threshold"])
     recipe_margin_min = float(stage3_policy["selected_margin_min"])
@@ -322,9 +415,11 @@ def predict_staged(
         f"all_scores={[(r, round(p, 4)) for r, p in recipe_scores]}"
     )
     if (not bypass_deterministic_gates) and float(top_prob) < recipe_threshold:
-        return StagedRuntimeDecision(action="HOLD", reason="recipe_below_threshold", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, recipe_id=str(top_recipe), recipe_prob=float(top_prob))
+        diagnostics["stage3"]["reason"] = "recipe_below_threshold"
+        return StagedRuntimeDecision(action="HOLD", reason="recipe_below_threshold", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, recipe_id=str(top_recipe), recipe_prob=float(top_prob), model_diagnostics=diagnostics)
     if (not bypass_deterministic_gates) and float(top_prob - second_prob) < recipe_margin_min:
-        return StagedRuntimeDecision(action="HOLD", reason="recipe_low_margin", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, recipe_id=str(top_recipe), recipe_prob=float(top_prob), recipe_margin=float(top_prob - second_prob))
+        diagnostics["stage3"]["reason"] = "recipe_low_margin"
+        return StagedRuntimeDecision(action="HOLD", reason="recipe_low_margin", entry_prob=float(entry_prob), direction_up_prob=float(direction_up_prob), ce_prob=ce_prob, pe_prob=pe_prob, recipe_id=str(top_recipe), recipe_prob=float(top_prob), recipe_margin=float(top_prob - second_prob), model_diagnostics=diagnostics)
 
     recipe_meta = next((dict(item) for item in recipe_catalog if str(item.get("recipe_id") or "") == str(top_recipe)), {})
     raw_stop = float(recipe_meta.get("stop_loss_pct") or 0.0)
@@ -346,4 +441,5 @@ def predict_staged(
         stop_loss_pct=raw_stop if raw_stop > 0 else None,
         target_pct=raw_target if raw_target > 0 else None,
         risk_basis=risk_basis,
+        model_diagnostics=diagnostics,
     )

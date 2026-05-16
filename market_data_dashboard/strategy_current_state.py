@@ -432,6 +432,10 @@ def read_decision_timeline(
             "recipe_margin":  0.0,
             "direction_up_prob": 0.0,
           },
+          "model_diagnostics": {
+            "stage1": {"input_hash": "...", "non_null_count": 42, "output_prob": 0.56},
+            "stage2": {"input_hash": "...", "non_null_count": 67, "output_prob": 0.52},
+          },
         }
 
     Args:
@@ -509,6 +513,7 @@ def read_decision_timeline(
 
             sm = t.get("summary_metrics") or {}
             rc = t.get("regime_context") or {}
+            md = t.get("model_diagnostics") if isinstance(t.get("model_diagnostics"), dict) else {}
             decisions.append({
                 "time": hhmm,
                 "snapshot_id": t.get("snapshot_id"),
@@ -523,6 +528,7 @@ def read_decision_timeline(
                     "recipe_margin": sm.get("recipe_margin"),
                     "direction_up_prob": sm.get("direction_up_prob"),
                 },
+                "model_diagnostics": md,
             })
 
     result["total_for_date"] = total

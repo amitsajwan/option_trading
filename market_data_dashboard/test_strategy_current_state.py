@@ -274,7 +274,11 @@ def test_decision_timeline_returns_per_minute_rows(tmp_path: Path):
                          "reason_code": "regime_sideways", "message": "regime blocked"}],
          "summary_metrics": {"entry_prob": 0.1, "recipe_prob": 0.05, "recipe_margin": 0.0,
                              "direction_up_prob": 0.4},
-         "regime_context": {"regime": "SIDEWAYS"}},
+         "regime_context": {"regime": "SIDEWAYS"},
+         "model_diagnostics": {
+             "stage1": {"input_hash": "abc123", "non_null_count": 42, "output_prob": 0.1},
+             "stage2": {"input_hash": "def456", "non_null_count": 61, "output_prob": 0.4},
+         }},
         {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:16:00+05:30",
          "snapshot_id": "20241007_0916", "final_outcome": "entry_taken",
          "primary_blocker_gate": None, "flow_gates": [],
@@ -292,6 +296,8 @@ def test_decision_timeline_returns_per_minute_rows(tmp_path: Path):
     assert [d["time"] for d in out["decisions"]] == ["09:15", "09:16"]
     assert out["decisions"][0]["reason_code"] == "regime_sideways"
     assert out["decisions"][0]["regime"] == "SIDEWAYS"
+    assert out["decisions"][0]["model_diagnostics"]["stage1"]["input_hash"] == "abc123"
+    assert out["decisions"][0]["model_diagnostics"]["stage2"]["output_prob"] == 0.4
     assert out["decisions"][1]["outcome"] == "entry_taken"
 
 

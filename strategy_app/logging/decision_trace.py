@@ -21,6 +21,40 @@ def compact_metrics(metrics: Optional[dict[str, Any]]) -> dict[str, float]:
     return out
 
 
+def compact_diagnostics(payload: Optional[dict[str, Any]], *, depth: int = 0) -> dict[str, Any]:
+    """Keep model diagnostics JSON-safe and bounded for decision traces."""
+    out: dict[str, Any] = {}
+    if not isinstance(payload, dict) or depth > 3:
+        return out
+    for key, raw in payload.items():
+        key_s = str(key)
+        if isinstance(raw, dict):
+            nested = compact_diagnostics(raw, depth=depth + 1)
+            if nested:
+                out[key_s] = nested
+            continue
+        if isinstance(raw, (list, tuple)):
+            items: list[Any] = []
+            for item in list(raw)[:20]:
+                if isinstance(item, (str, int, float, bool)) or item is None:
+                    items.append(item)
+                else:
+                    items.append(str(item))
+            out[key_s] = items
+            continue
+        if isinstance(raw, bool) or raw is None:
+            out[key_s] = raw
+            continue
+        value = _safe_float(raw)
+        if value is not None:
+            out[key_s] = float(value)
+            continue
+        text = str(raw).strip()
+        if text:
+            out[key_s] = text[:200]
+    return out
+
+
 def normalize_gate(
     gate_id: str,
     *,
@@ -132,6 +166,7 @@ class DecisionTraceBuilder:
             "regime_context": {},
             "warmup_context": {},
             "summary_metrics": {},
+            "model_diagnostics": {},
             "flow_gates": [],
             "candidates": [],
         }
@@ -156,6 +191,9 @@ class DecisionTraceBuilder:
             self._trace["regime_context"] = dict(regime_context)
         if isinstance(warmup_context, dict):
             self._trace["warmup_context"] = dict(warmup_context)
+
+    def set_model_diagnostics(self, diagnostics: Optional[dict[str, Any]]) -> None:
+        self._trace["model_diagnostics"] = compact_diagnostics(diagnostics)
 
     def add_flow_gate(
         self,
@@ -255,6 +293,7 @@ class DecisionTraceBuilder:
         final_outcome: str,
         primary_blocker_gate: Optional[str] = None,
         summary_metrics: Optional[dict[str, Any]] = None,
+        model_diagnostics: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         self._trace["final_outcome"] = str(final_outcome or "").strip() or None
         self._trace["primary_blocker_gate"] = str(primary_blocker_gate or "").strip() or None
@@ -268,6 +307,8 @@ class DecisionTraceBuilder:
         metrics.setdefault("blocked_candidate_count", float(blocked_count))
         metrics.setdefault("selected_candidate_count", float(selected_count))
         self._trace["summary_metrics"] = metrics
+        if isinstance(model_diagnostics, dict):
+            self.set_model_diagnostics(model_diagnostics)
         return dict(self._trace)
 
 
@@ -302,6 +343,7 @@ def build_trace_digest(trace: dict[str, Any]) -> dict[str, Any]:
         "blocked_candidate_count": blocked_count,
         "position_id": str(((trace.get("position_state") or {}) if isinstance(trace.get("position_state"), dict) else {}).get("position_id") or "").strip() or None,
         "summary_metrics": compact_metrics(trace.get("summary_metrics") if isinstance(trace.get("summary_metrics"), dict) else {}),
+        "model_diagnostics": compact_diagnostics(trace.get("model_diagnostics") if isinstance(trace.get("model_diagnostics"), dict) else {}),
     }
 
 
@@ -309,6 +351,7 @@ __all__ = [
     "DecisionTraceBuilder",
     "build_trace_digest",
     "compact_metrics",
+    "compact_diagnostics",
     "normalize_gate",
     "position_state_payload",
     "regime_context_payload",

@@ -172,6 +172,17 @@ class PureMLStagedEngineTests(unittest.TestCase):
             self.assertAlmostEqual(signal.underlying_stop_pct or 0.0, 0.0008, places=6)
             self.assertAlmostEqual(signal.underlying_target_pct or 0.0, 0.0025, places=6)
             self.assertTrue(signal.trailing_enabled)
+            trace = json.loads((root / "decision_traces.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1])
+            diagnostics = trace["model_diagnostics"]
+            self.assertEqual(diagnostics["stage1"]["feature_count"], 2.0)
+            self.assertEqual(diagnostics["stage1"]["missing_count"], 0.0)
+            self.assertEqual(diagnostics["stage1"]["output_col"], "entry_prob")
+            self.assertAlmostEqual(diagnostics["stage1"]["output_prob"], 0.80, places=6)
+            self.assertIn("input_hash", diagnostics["stage1"])
+            self.assertEqual(diagnostics["stage2"]["output_col"], "direction_up_prob")
+            self.assertAlmostEqual(diagnostics["stage2"]["output_prob"], 0.75, places=6)
+            self.assertEqual(diagnostics["stage3"]["output_col"], "L0")
+            self.assertAlmostEqual(diagnostics["stage3"]["recipe_outputs"]["L0"], 0.82, places=6)
 
     def test_staged_bundle_disables_trailing_when_env_opts_out(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
