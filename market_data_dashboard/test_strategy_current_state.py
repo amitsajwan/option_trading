@@ -9,6 +9,8 @@ import pytest
 
 from market_data_dashboard.strategy_current_state import (
     _compute_stats,
+    _list_available_models,
+    _read_runtime_config,
     _tail_lines,
     read_strategy_current_state,
 )
@@ -100,6 +102,91 @@ def test_compute_stats_empty():
     s = _compute_stats([])
     assert s["total_records"] == 0
     assert s["current_run_id"] is None
+
+
+def test_runtime_config_missing_returns_empty(tmp_path: Path):
+    out = _read_runtime_config(tmp_path)
+    assert out == {}
+
+
+def test_runtime_config_extracts_key_fields(tmp_path: Path):
+    cfg = {
+        "engine": "ml_pure",
+        "topic": "market:snapshot:v1:historical",
+        "strategy_profile_id": "ml_pure_staged_v1",
+        "model": {
+            "run_id": "staged_deep_hpo_c1_base_20260429_040848",
+            "model_group": "banknifty_futures/h15_tp_auto",
+            "model_package_path": "/app/...joblib",
+            "block_expiry": False,
+        },
+        "rollout": {
+            "stage": "capped_live",
+            "min_confidence": 0.65,
+            "position_size_multiplier": 0.25,
+            "halt_consecutive_losses": 3,
+            "halt_daily_dd_pct": -0.75,
+        },
+        "checked_at_ist": "2026-05-16T17:23:19+05:30",
+        "noise_field": "should_be_ignored",
+    }
+    (tmp_path / "runtime_config.json").write_text(json.dumps(cfg))
+    out = _read_runtime_config(tmp_path)
+    assert out["engine"] == "ml_pure"
+    assert out["model_run_id"] == "staged_deep_hpo_c1_base_20260429_040848"
+    assert out["model_group"] == "banknifty_futures/h15_tp_auto"
+    assert out["rollout_stage"] == "capped_live"
+    assert out["min_confidence"] == 0.65
+    assert "noise_field" not in out  # confirms we don't leak unfiltered config
+
+
+def test_runtime_config_malformed_returns_error(tmp_path: Path):
+    (tmp_path / "runtime_config.json").write_text("not json {")
+    out = _read_runtime_config(tmp_path)
+    assert out == {"error": "runtime_config.json unreadable"}
+
+
+def test_list_available_models_finds_joblibs(tmp_path: Path):
+    # Build a fake published_models tree matching the real layout:
+    # <root>/<grp_outer>/<grp_inner>/data/training_runs/<RUN_ID>/model/model.joblib
+    base = tmp_path / "published"
+    for run_id in ("staged_deep_hpo_c1_base_20260429_040848", "01_expiry_s2_midday"):
+        d = base / "banknifty_futures" / "h15_tp_auto" / "data" / "training_runs" / run_id / "model"
+        d.mkdir(parents=True)
+        (d / "model.joblib").write_bytes(b"fake")
+    out = _list_available_models(root=base)
+    assert len(out) == 2
+    run_ids = sorted(e["run_id"] for e in out)
+    assert run_ids == ["01_expiry_s2_midday", "staged_deep_hpo_c1_base_20260429_040848"]
+    for e in out:
+        assert e["model_group"] == "banknifty_futures/h15_tp_auto"
+        assert e["model_package_path"].endswith("model.joblib")
+
+
+def test_list_available_models_missing_root(tmp_path: Path):
+    out = _list_available_models(root=tmp_path / "does-not-exist")
+    assert out == []
+
+
+def test_state_includes_runtime_config_and_available_models(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("STRATEGY_RUN_DIR_HISTORICAL", str(tmp_path / "run"))
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "positions.jsonl").write_text("")
+    (tmp_path / "run" / "runtime_config.json").write_text(json.dumps({
+        "engine": "ml_pure",
+        "model": {"run_id": "C1"},
+        "rollout": {"stage": "capped_live"},
+    }))
+    # Empty default published_models — that's fine, list will just be empty
+    monkeypatch.setattr(
+        "market_data_dashboard.strategy_current_state.DEFAULT_PUBLISHED_MODELS_ROOT",
+        tmp_path / "no-models",
+    )
+    out = read_strategy_current_state(mode="replay")
+    assert out["runtime_config"]["engine"] == "ml_pure"
+    assert out["runtime_config"]["model_run_id"] == "C1"
+    assert out["runtime_config"]["rollout_stage"] == "capped_live"
+    assert out["available_models"] == []
 
 
 def test_mode_alias_replay_and_historical_both_map(tmp_path: Path, monkeypatch):

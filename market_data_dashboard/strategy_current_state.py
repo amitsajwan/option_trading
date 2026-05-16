@@ -26,6 +26,7 @@ from typing import Any, Iterable, Optional
 
 DEFAULT_HISTORICAL_RUN_DIR = Path("/app/.run/strategy_app_historical")
 DEFAULT_LIVE_RUN_DIR = Path("/app/.run/strategy_app")
+DEFAULT_PUBLISHED_MODELS_ROOT = Path("/app/ml_pipeline_2/artifacts/published_models")
 
 
 @dataclass
@@ -38,6 +39,12 @@ class _CurrentState:
     health_marker: dict[str, Any]
     stats: dict[str, Any]
     latest_positions: list[dict[str, Any]]
+    # Model + engine the strategy_app self-declared at start. Read from
+    # runtime_config.json. Tells the operator WHAT is producing the events.
+    runtime_config: dict[str, Any]
+    # Other published models available on disk (could be switched to with a
+    # container restart). Tells the operator WHAT ELSE could be loaded.
+    available_models: list[dict[str, Any]]
 
 
 def _resolve_run_dir(mode: str) -> Path:
@@ -95,6 +102,73 @@ def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
                 yield json.loads(line)
             except json.JSONDecodeError:
                 continue
+
+
+def _read_runtime_config(run_dir: Path) -> dict[str, Any]:
+    """Read the strategy_app's self-described runtime_config.json.
+
+    Returns a small dict describing the currently-loaded model + engine
+    (the answer to 'what's actually running right now'). Empty dict if
+    the file doesn't exist or is malformed — caller treats absence as
+    'strategy_app hasn't started yet for this mode'.
+    """
+    path = run_dir / "runtime_config.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"error": "runtime_config.json unreadable"}
+    # Surface a small, stable shape — don't leak the whole config.
+    model = payload.get("model") or {}
+    rollout = payload.get("rollout") or {}
+    return {
+        "engine": payload.get("engine"),
+        "topic": payload.get("topic"),
+        "strategy_profile_id": payload.get("strategy_profile_id"),
+        "model_run_id": model.get("run_id"),
+        "model_group": model.get("model_group"),
+        "model_package_path": model.get("model_package_path"),
+        "rollout_stage": rollout.get("stage"),
+        "min_confidence": rollout.get("min_confidence"),
+        "position_size_multiplier": rollout.get("position_size_multiplier"),
+        "halt_consecutive_losses": rollout.get("halt_consecutive_losses"),
+        "halt_daily_dd_pct": rollout.get("halt_daily_dd_pct"),
+        "block_expiry": model.get("block_expiry"),
+        "checked_at_ist": payload.get("checked_at_ist"),
+    }
+
+
+def _list_available_models(root: Optional[Path] = None) -> list[dict[str, Any]]:
+    """Scan published_models/.../training_runs/<RUN_ID>/model/model.joblib and
+    return one entry per available run_id.
+
+    Output shape per entry:
+        { "run_id": "...", "model_group": "...", "model_package_path": "..." }
+
+    Filesystem-only: no network, no mongo, no strategy_app dependency.
+    """
+    base = root or DEFAULT_PUBLISHED_MODELS_ROOT
+    if not base.exists():
+        return []
+    # Walk: <root>/<group_a>/<group_b>/data/training_runs/<RUN_ID>/model/model.joblib
+    entries: list[dict[str, Any]] = []
+    for joblib_path in base.glob("*/*/data/training_runs/*/model/model.joblib"):
+        try:
+            run_id = joblib_path.parent.parent.name
+            training_runs_dir = joblib_path.parent.parent.parent
+            data_dir = training_runs_dir.parent
+            group_root = data_dir.parent
+            group_inner = group_root.name
+            group_outer = group_root.parent.name
+            entries.append({
+                "run_id": run_id,
+                "model_group": f"{group_outer}/{group_inner}",
+                "model_package_path": str(joblib_path),
+            })
+        except Exception:
+            continue
+    return sorted(entries, key=lambda e: e["run_id"])
 
 
 def _read_health_marker(path: Path) -> dict[str, Any]:
@@ -178,6 +252,8 @@ def read_strategy_current_state(
                 continue
 
     health_marker = _read_health_marker(marker_path)
+    runtime_config = _read_runtime_config(run_dir_path)
+    available_models = _list_available_models()
 
     state = _CurrentState(
         mode=mode.strip().lower(),
@@ -188,6 +264,8 @@ def read_strategy_current_state(
         health_marker=health_marker,
         stats=stats,
         latest_positions=latest_position_records,
+        runtime_config=runtime_config,
+        available_models=available_models,
     )
     return asdict(state)
 
