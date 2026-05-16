@@ -3851,6 +3851,16 @@ _historical_replay_routes = DashboardHistoricalReplayRouter(
 )
 app.include_router(_historical_replay_routes.router)
 
+# JSONL-first current-state endpoint (ARCHITECTURE.md §9). Loosely coupled —
+# does no mongo work, can answer 'what's running right now' even when the
+# mongo persistence path is slow/unavailable.
+try:
+    from .strategy_current_routes import StrategyCurrentRouter
+except ImportError:
+    from market_data_dashboard.strategy_current_routes import StrategyCurrentRouter  # type: ignore
+_strategy_current_routes = StrategyCurrentRouter()
+app.include_router(_strategy_current_routes.router)
+
 _strategy_evaluation_routes = DashboardStrategyEvaluationRouter(
     templates=templates,
     get_strategy_eval_service=lambda: _strategy_eval_service,
