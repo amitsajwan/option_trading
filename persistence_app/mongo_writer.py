@@ -168,14 +168,14 @@ class SnapshotMongoWriter:
         uri = str(os.getenv("MONGODB_URI") or os.getenv("MONGO_URI") or "").strip()
         db_name = str(os.getenv("MONGO_DB") or "trading_ai").strip() or "trading_ai"
         if uri:
-            client = MongoClient(uri, serverSelectionTimeoutMS=2000, connectTimeoutMS=2000, socketTimeoutMS=5000)
+            client = MongoClient(uri, serverSelectionTimeoutMS=int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS") or "5000"), connectTimeoutMS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS") or "5000"), socketTimeoutMS=int(os.getenv("MONGO_SOCKET_TIMEOUT_MS") or "30000"))
         else:
             client = MongoClient(
                 host=str(os.getenv("MONGO_HOST") or "localhost"),
                 port=int(os.getenv("MONGO_PORT") or "27017"),
-                serverSelectionTimeoutMS=2000,
-                connectTimeoutMS=2000,
-                socketTimeoutMS=5000,
+                serverSelectionTimeoutMS=int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS") or "5000"),
+                connectTimeoutMS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS") or "5000"),
+                socketTimeoutMS=int(os.getenv("MONGO_SOCKET_TIMEOUT_MS") or "30000"),
             )
         client.admin.command("ping")
         self._client = client
@@ -255,14 +255,14 @@ class StrategyMongoWriter:
         uri = str(os.getenv("MONGODB_URI") or os.getenv("MONGO_URI") or "").strip()
         db_name = str(os.getenv("MONGO_DB") or "trading_ai").strip() or "trading_ai"
         if uri:
-            client = MongoClient(uri, serverSelectionTimeoutMS=2000, connectTimeoutMS=2000, socketTimeoutMS=5000)
+            client = MongoClient(uri, serverSelectionTimeoutMS=int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS") or "5000"), connectTimeoutMS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS") or "5000"), socketTimeoutMS=int(os.getenv("MONGO_SOCKET_TIMEOUT_MS") or "30000"))
         else:
             client = MongoClient(
                 host=str(os.getenv("MONGO_HOST") or "localhost"),
                 port=int(os.getenv("MONGO_PORT") or "27017"),
-                serverSelectionTimeoutMS=2000,
-                connectTimeoutMS=2000,
-                socketTimeoutMS=5000,
+                serverSelectionTimeoutMS=int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS") or "5000"),
+                connectTimeoutMS=int(os.getenv("MONGO_CONNECT_TIMEOUT_MS") or "5000"),
+                socketTimeoutMS=int(os.getenv("MONGO_SOCKET_TIMEOUT_MS") or "30000"),
             )
         client.admin.command("ping")
         self._client = client

@@ -4,8 +4,10 @@ import argparse
 import json
 import logging
 import os
+import queue
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -74,57 +76,185 @@ def _redis_client() -> redis.Redis:
     return redis.Redis(**redis_connection_kwargs(decode_responses=True, for_pubsub=True))
 
 
-def run_loop(*, topics: list[str], health_log_interval_sec: float) -> int:
+# Sentinel for the writer thread shutdown
+_WRITER_STOP = object()
+
+
+def _writer_thread(
+    *,
+    payload_queue: "queue.Queue[object]",
+    writer: StrategyMongoWriter,
+    metrics: dict,
+    metrics_lock: threading.Lock,
+) -> None:
+    """Drains payload_queue and writes each event to mongo.
+
+    Runs in its own thread so the main pubsub loop is never blocked by a slow
+    mongo write. If mongo throws, the error is logged and counted; the writer
+    keeps consuming so the queue never grows unboundedly.
+    """
+    while True:
+        item = payload_queue.get()
+        if item is _WRITER_STOP:
+            payload_queue.task_done()
+            return
+        try:
+            ok = writer.write_strategy_event(item)
+            with metrics_lock:
+                if ok:
+                    metrics["written"] += 1
+                    metrics["last_flush_success_at"] = time.monotonic()
+                else:
+                    metrics["ignored"] += 1
+        except Exception as exc:
+            with metrics_lock:
+                metrics["errors"] += 1
+                metrics["last_flush_error_at"] = time.monotonic()
+                metrics["last_error_message"] = str(exc)[:200]
+            logger.warning("strategy persistence write failed: %s", exc)
+        finally:
+            payload_queue.task_done()
+
+
+def run_loop(
+    *,
+    topics: list[str],
+    health_log_interval_sec: float,
+    queue_max_size: int = 5000,
+) -> int:
+    """Main pubsub consumer loop with a decoupled writer thread.
+
+    Architecture (ARCHITECTURE.md §9):
+      pubsub.get_message  --enqueue-->  queue  --dequeue-->  writer_thread --> mongo
+              (main thread)                        (background thread)
+
+    The writer never blocks the main pubsub loop. Mongo timeouts add latency
+    to the queue but do not stall pubsub consumption — so we don't lose
+    events to redis pubsub's "no live consumer = message dropped" semantics.
+    """
     writer = StrategyMongoWriter()
-    client = _redis_client()
-    pubsub = client.pubsub(ignore_subscribe_messages=True)
-    pubsub.subscribe(*topics)
-    logger.info("strategy persistence subscribed topics=%s", topics)
-    consumed_count = 0
-    written_count = 0
-    ignored_count = 0
-    error_count = 0
-    last_message_monotonic: Optional[float] = None
+    payload_queue: "queue.Queue[object]" = queue.Queue(maxsize=queue_max_size)
+
+    metrics = {
+        "consumed": 0,
+        "written": 0,
+        "ignored": 0,
+        "errors": 0,
+        "dropped": 0,  # incremented if queue is full
+        "last_message_at": None,
+        "last_flush_success_at": None,
+        "last_flush_error_at": None,
+        "last_error_message": None,
+    }
+    metrics_lock = threading.Lock()
+
+    writer_t = threading.Thread(
+        target=_writer_thread,
+        kwargs={
+            "payload_queue": payload_queue,
+            "writer": writer,
+            "metrics": metrics,
+            "metrics_lock": metrics_lock,
+        },
+        daemon=True,
+        name="strategy-mongo-writer",
+    )
+    writer_t.start()
+
+    def _subscribe():
+        client = _redis_client()
+        pubsub = client.pubsub(ignore_subscribe_messages=True)
+        pubsub.subscribe(*topics)
+        logger.info("strategy persistence subscribed topics=%s", topics)
+        return client, pubsub
+
+    client, pubsub = _subscribe()
     last_health_log_monotonic = time.monotonic()
 
     try:
         while True:
             try:
                 msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-                if not msg:
-                    now_mono = time.monotonic()
-                    if health_log_interval_sec > 0 and (now_mono - last_health_log_monotonic) >= health_log_interval_sec:
-                        last_age = None
-                        if last_message_monotonic is not None:
-                            last_age = round(now_mono - last_message_monotonic, 3)
-                        logger.info(
-                            "strategy persistence health consumed=%s written=%s ignored=%s errors=%s seconds_since_last_message=%s",
-                            consumed_count,
-                            written_count,
-                            ignored_count,
-                            error_count,
-                            last_age,
-                        )
-                        last_health_log_monotonic = now_mono
-                    continue
-                data = msg.get("data")
-                if not isinstance(data, str):
-                    continue
-                consumed_count += 1
-                last_message_monotonic = time.monotonic()
-                payload = json.loads(data)
-                ok = writer.write_strategy_event(payload)
-                if not ok:
-                    ignored_count += 1
-                else:
-                    written_count += 1
             except Exception as exc:
-                error_count += 1
-                logger.warning("strategy persistence message handling error: %s", exc)
-            time.sleep(0.001)
+                # redis-py raises on connection drop. Reconnect; don't let the
+                # loop die or block. This is the defense against the silent-hang
+                # bug documented in PROJECT_PLAN.md (2026-05-15).
+                logger.warning("pubsub.get_message failed; reconnecting: %s", exc)
+                try:
+                    pubsub.close()
+                except Exception:
+                    pass
+                time.sleep(1.0)
+                client, pubsub = _subscribe()
+                continue
+
+            now_mono = time.monotonic()
+            if not msg:
+                if health_log_interval_sec > 0 and (now_mono - last_health_log_monotonic) >= health_log_interval_sec:
+                    with metrics_lock:
+                        snap = dict(metrics)
+                    logger.info(
+                        "strategy persistence health consumed=%s written=%s ignored=%s errors=%s dropped=%s "
+                        "queue_depth=%s last_message_age_s=%s last_flush_success_age_s=%s last_flush_error_age_s=%s",
+                        snap["consumed"],
+                        snap["written"],
+                        snap["ignored"],
+                        snap["errors"],
+                        snap["dropped"],
+                        payload_queue.qsize(),
+                        round(now_mono - snap["last_message_at"], 1) if snap["last_message_at"] else None,
+                        round(now_mono - snap["last_flush_success_at"], 1) if snap["last_flush_success_at"] else None,
+                        round(now_mono - snap["last_flush_error_at"], 1) if snap["last_flush_error_at"] else None,
+                    )
+                    last_health_log_monotonic = now_mono
+                continue
+
+            data = msg.get("data")
+            if not isinstance(data, str):
+                continue
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                with metrics_lock:
+                    metrics["ignored"] += 1
+                continue
+
+            with metrics_lock:
+                metrics["consumed"] += 1
+                metrics["last_message_at"] = now_mono
+
+            try:
+                payload_queue.put_nowait(payload)
+            except queue.Full:
+                # Buffer full — writer is falling behind. Drop oldest by draining
+                # one slot, then enqueue the new event. Logged as a dropped event
+                # so operators see the backpressure happening.
+                try:
+                    payload_queue.get_nowait()
+                    payload_queue.task_done()
+                except queue.Empty:
+                    pass
+                try:
+                    payload_queue.put_nowait(payload)
+                    with metrics_lock:
+                        metrics["dropped"] += 1
+                except queue.Full:
+                    with metrics_lock:
+                        metrics["dropped"] += 1
+                    logger.warning(
+                        "strategy persistence queue overflow (size=%d) — dropping event",
+                        queue_max_size,
+                    )
+
     except KeyboardInterrupt:
-        logger.info("strategy persistence interrupted")
+        logger.info("strategy persistence interrupted; draining queue...")
     finally:
+        # Signal writer to stop and wait briefly for it to drain
+        try:
+            payload_queue.put_nowait(_WRITER_STOP)
+            writer_t.join(timeout=10.0)
+        except Exception:
+            pass
         try:
             pubsub.close()
         except Exception:
@@ -140,6 +270,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--position-topic", default=None)
     parser.add_argument("--trace-topic", default=None)
     parser.add_argument("--health-log-interval-sec", type=float, default=30.0)
+    parser.add_argument("--queue-max-size", type=int, default=int(os.getenv("STRATEGY_PERSISTENCE_QUEUE_MAX", "5000")))
     parser.add_argument("--foreground", action="store_true")
     parser.add_argument("--run-dir", default=".run/persistence_app_strategy")
     args = parser.parse_args(raw_argv)
@@ -176,7 +307,11 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         str(args.position_topic or strategy_position_topic()).strip() or strategy_position_topic(),
         str(args.trace_topic or strategy_decision_trace_topic()).strip() or strategy_decision_trace_topic(),
     ]
-    return run_loop(topics=topics, health_log_interval_sec=max(0.0, float(args.health_log_interval_sec)))
+    return run_loop(
+        topics=topics,
+        health_log_interval_sec=max(0.0, float(args.health_log_interval_sec)),
+        queue_max_size=max(100, int(args.queue_max_size)),
+    )
 
 
 if __name__ == "__main__":
