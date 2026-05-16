@@ -650,8 +650,15 @@ services:
       timeout: 10s
       retries: 3
 
+  # CONTAINMENT (2026-05-16): this consumer is disabled from the default 'historical'
+  # profile because it has a silent-hang bug under replay-burst load (see ARCHITECTURE.md §9).
+  # JSONL is canonical for backtests; mongo persistence is not required for replay analysis.
+  # To re-enable explicitly (e.g., once the consumer is hardened in Stage 3):
+  #   docker compose --profile historical_strategy_persistence up -d
+  # The hardening work is tracked in docs/PROJECT_PLAN.md (Stage 3: bulk write + buffer
+  # + pubsub recovery + health metrics). When that lands, change this back to ["historical"].
   strategy_persistence_app_historical:
-    profiles: ["historical"]
+    profiles: ["historical_strategy_persistence"]
     build:
       context: .
       dockerfile: persistence_app/Dockerfile

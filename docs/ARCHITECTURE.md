@@ -44,8 +44,15 @@ This document is the current cross-cutting system view. Package-specific details
 
 ## 3. Supported Runtime Lanes
 
-- supported live lane: `strategy_app.main --engine ml_pure`
-- replay and research lane: `strategy_app.main --engine deterministic`
+The system has **two orthogonal axes**: data source (live vs replay) and strategy engine (ml_pure vs deterministic). Their combination defines the runtime lane:
+
+| `MODE` | `ENGINE` | Lane name | Purpose |
+|---|---|---|---|
+| `live` | `ml_pure` | **Live (supported)** | Production trading lane with `regime_gate_v1` and `capped_live` rollout |
+| `replay` | `ml_pure` | **Live-equivalence replay** | Tests live strategy behavior on historical data — same strategy code that runs live |
+| `research` | `deterministic` | **Research / inspectable replay** | Deterministic rule engine for hand-traceable replay sessions |
+
+Today, the historical-replay compose service defaults to `ENGINE=deterministic`. **That means today's replay is a test of plumbing, not of live strategy behavior.** Running replay with `STRATEGY_ENGINE=ml_pure` activates the live-equivalence lane and is the recommended mode for any pre-deployment validation.
 
 There is no supported live runtime path where ML is layered on top of deterministic vote outputs.
 
@@ -94,6 +101,63 @@ Most other containers are expected to start from repo root through Compose witho
 - live ML is allowed only in `capped_live` with a guard artifact
 - deterministic remains the inspectable replay lane
 - staged `ml_pipeline_2` is the only supported ML training and publish source
+
+## 9. Storage and Persistence Contract
+
+The system writes strategy events to two stores. They have different durability semantics and different failure modes:
+
+### Storage roles
+
+| Store | Role | Durability | Failure mode handling |
+|---|---|---|---|
+| **JSONL** (`.run/strategy_app/*.jsonl`) | **Canonical event history** for the current run. Append-only, ordered, restartable. | Per-event contract (see below) | If JSONL append fails for a critical event, container health goes red. |
+| **MongoDB** (`strategy_positions*` collections) | **Derived read cache** for cross-day queries (UI, analytics). | Best-effort, eventual consistency from JSONL. | If mongo write fails, system continues. The mongo copy may lag or be incomplete; JSONL is the source of truth. |
+
+### JSONL durability contract (per-event-type policy)
+
+Not all events have the same durability requirements. The signal_logger chooses per event:
+
+| Event type | JSONL policy | Why |
+|---|---|---|
+| `POSITION_OPEN`, `POSITION_CLOSE` | **fsync + fail-health on append error** | These are the system-of-record for trades. Loss is not acceptable. |
+| `POSITION_MANAGE` | Append-only, no fsync, log on error | High volume; loss of an intermediate state is recoverable from the open/close records. |
+| `decision_trace`, `vote`, `signal` | Append-only, no fsync, log on error | Debugging artifacts; loss is non-fatal for trading state. |
+
+The implementation rule: `append_jsonl` returns `bool` (success/failure). The caller (signal_logger) decides what to do with the failure based on the event type. The sink does not know about health or policy — loose coupling.
+
+### Mongo persistence rules
+
+- `persistence_app` and `strategy_persistence_app` are **best-effort consumers** of redis events.
+- They MUST be buffered + bulk_write to handle replay-burst load (~200 events/sec).
+- They MUST recover from mongo timeouts by closing+reopening pubsub (defends against the silent-hang bug we hit 2026-05-15).
+- They MUST surface health metrics: `last_message_at`, `last_flush_success_at`, `last_flush_error_at`, `buffer_depth`, `mongo_write_errors_total`, `events_dropped`.
+- If mongo is unavailable, the system continues. JSONL remains the source of truth. The mongo cache backfills from JSONL on demand (future work).
+
+### Stage 2 containment note (active 2026-05-16)
+
+`strategy_persistence_app_historical` is currently disabled from the default historical compose profile. This is **temporary containment**, not the target architecture:
+
+- The consumer has a documented silent-hang bug under burst load.
+- JSONL captures all events reliably, so replay analysis works without it.
+- Once the consumer is hardened (buffered + bulk_write + recovery + metrics), it will be re-enabled. Replay will then exercise the same persistence consumer as live, making replay a true load test for the live persistence path.
+
+## 10. Replay Equivalence Modes
+
+Two replay modes are conceptually distinct and should be invoked with different env:
+
+### Live-equivalence replay (`MODE=replay ENGINE=ml_pure`)
+
+- Same strategy code as live, same model, same gates.
+- Used for: pre-deployment validation; verifying that a new ML bundle produces expected behavior on historical data; reproducing live incidents on captured snapshots.
+- Result: directly comparable to what live would have done with the same input.
+
+### Research replay (`MODE=research ENGINE=deterministic`)
+
+- Deterministic rule engine, hand-traceable.
+- Used for: inspecting cause-and-effect, debugging strategy logic, comparing rule-based baselines against ML.
+- Result: NOT comparable to live ml_pure behavior. Useful for reasoning about the strategy framework, not for validating production behavior.
+
+**Conflating these is a source of bugs.** A replay run that uses `deterministic` does not prove anything about the live `ml_pure` strategy.
 
 ## 9. Related Docs
 
