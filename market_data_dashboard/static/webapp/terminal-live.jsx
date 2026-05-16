@@ -1,4 +1,4 @@
-// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v9
+// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v10
 /* global React, TradingCore, LWChart */
 const { useState: _s, useEffect: _e, useMemo: _m, useRef: _r, useCallback: _cb } = React;
 const TC = window.TradingCore;
@@ -326,8 +326,96 @@ function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upT
   );
 }
 
+// ── DiagPanel: current model + available models + blocker funnel ─────────
+// Operator answer to "why no trades on this date?" — reads runtime_config +
+// available_models from /api/strategy/current/state and per-date blocker
+// counts from /api/strategy/blocker-funnel.
+function DiagPanel({ diag }) {
+  if (!diag) {
+    return <div style={{padding:'12px',color:'var(--fg-3)',fontFamily:'var(--f-mono)',fontSize:11}}>Diagnostics unavailable in this mode.</div>;
+  }
+  const { runtimeConfig, availableModels, blockerFunnel, loading, error, date, onRefresh } = diag;
+  const rc = runtimeConfig || {};
+  const models = Array.isArray(availableModels) ? availableModels : [];
+  const bf = blockerFunnel || {};
+  const gates = Array.isArray(bf.primary_blocker_gates) ? bf.primary_blocker_gates : [];
+  const reasons = Array.isArray(bf.blocking_reasons) ? bf.blocking_reasons : [];
+  const out = bf.outcomes || {};
+  const outKeys = Object.keys(out);
+  return (
+    <div style={{padding:'10px 12px',fontFamily:'var(--f-mono)',fontSize:10.5,color:'var(--fg-2)',overflowY:'auto',maxHeight:'100%'}}>
+      {error && <div style={{color:'var(--neg)',marginBottom:8}}>error: {error}</div>}
+      {loading && <div style={{color:'var(--fg-3)',marginBottom:8}}>loading…</div>}
+
+      <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'2px 0 4px'}}>Current model</div>
+      <div style={{lineHeight:1.7}}>
+        <div><span style={{color:'var(--fg-4)'}}>engine</span> <span style={{color:'var(--accent)'}}>{rc.engine || '—'}</span></div>
+        <div><span style={{color:'var(--fg-4)'}}>model_run_id</span> {rc.model_run_id || '—'}</div>
+        <div><span style={{color:'var(--fg-4)'}}>regime</span> {rc.regime_strategy || '—'}</div>
+        <div><span style={{color:'var(--fg-4)'}}>rollout</span> {rc.rollout_stage || '—'}</div>
+      </div>
+
+      <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'14px 0 4px'}}>
+        Available models <span style={{color:'var(--fg-4)'}}>({models.length})</span>
+      </div>
+      {models.length === 0 ? (
+        <div style={{color:'var(--fg-4)'}}>no published models found</div>
+      ) : (
+        <div style={{maxHeight:120,overflowY:'auto',border:'1px solid var(--line-3)',borderRadius:2,padding:'4px 6px'}}>
+          {models.slice(0,30).map((m,i) => {
+            const active = m.run_id && rc.model_run_id && m.run_id === rc.model_run_id;
+            return (
+              <div key={i} style={{padding:'2px 0',color:active?'var(--accent)':'var(--fg-2)'}}>
+                {active ? '●' : '○'} <span>{m.run_id || '?'}</span>
+                {m.model_group && <span style={{color:'var(--fg-4)',marginLeft:6}}>{m.model_group}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',margin:'14px 0 4px'}}>
+        <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase'}}>
+          Blocker funnel <span style={{color:'var(--fg-4)'}}>{date || '—'}</span>
+        </div>
+        {onRefresh && <button className="t-btn ghost sm" onClick={onRefresh} title="Reload diagnostics">refresh</button>}
+      </div>
+      {!bf.narrative ? (
+        <div style={{color:'var(--fg-4)'}}>no decision traces loaded — pick a date</div>
+      ) : (
+        <>
+          <div style={{color:'var(--fg-1)',marginBottom:8,lineHeight:1.5}}>{bf.narrative}</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+            <div>
+              <div style={{color:'var(--fg-4)',fontSize:9,marginBottom:2}}>outcomes</div>
+              {outKeys.length === 0 ? <div style={{color:'var(--fg-4)'}}>—</div> :
+                outKeys.map(k => (
+                  <div key={k}><span style={{color:'var(--fg-4)'}}>{k}</span> <span style={{color:'var(--fg-1)'}}>{out[k]}</span></div>
+                ))}
+            </div>
+            <div>
+              <div style={{color:'var(--fg-4)',fontSize:9,marginBottom:2}}>primary blocker gates</div>
+              {gates.length === 0 ? <div style={{color:'var(--fg-4)'}}>—</div> :
+                gates.map((g,i) => (
+                  <div key={i}><span style={{color:'var(--fg-4)'}}>{g.gate}</span> <span style={{color:'var(--fg-1)'}}>{g.count}</span></div>
+                ))}
+            </div>
+          </div>
+          <div style={{marginTop:10}}>
+            <div style={{color:'var(--fg-4)',fontSize:9,marginBottom:2}}>top reason codes (first non-pass gate)</div>
+            {reasons.length === 0 ? <div style={{color:'var(--fg-4)'}}>—</div> :
+              reasons.map((r,i) => (
+                <div key={i}><span style={{color:'var(--fg-4)'}}>{r.reason_code}</span> <span style={{color:'var(--fg-1)'}}>{r.count}</span></div>
+              ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Tape: unified trades + signals ────────────────────────────────────────
-function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId }) {
+function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId, diag }) {
   const [filter, setFilter] = _s('all');
   const rows = _m(() => {
     const out = [];
@@ -343,8 +431,12 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId 
           <button className={filter==='all'?'active':''} onClick={()=>setFilter('all')}>Tape <span className="count">{trades.length+signals.length}</span></button>
           <button className={filter==='trades'?'active':''} onClick={()=>setFilter('trades')}>Trades <span className="count">{trades.length}</span></button>
           <button className={filter==='signals'?'active':''} onClick={()=>setFilter('signals')}>Signals <span className="count">{signals.length}</span></button>
+          {diag && <button className={filter==='diag'?'active':''} onClick={()=>setFilter('diag')}>Diag</button>}
         </div>
       </div>
+      {filter === 'diag' ? (
+        <div className="t-panel-body" style={{padding:0}}><DiagPanel diag={diag}/></div>
+      ) : (
       <div className="t-panel-body">
         <table className="t-tape-table">
           <thead>
@@ -410,6 +502,7 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId 
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }
@@ -628,10 +721,23 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   const [selectedTrade, setSelectedTrade] = _s(null);
   const [flashId,       setFlashId]       = _s(null);
   const [flashIdx,      setFlashIdx]      = _s(null);
+  const [runtimeConfig, setRuntimeConfig] = _s(null);
+  const [availableModels, setAvailableModels] = _s([]);
   const wsRef         = _r(null);
   const sessionRef    = _r(null);
   const prevIdxRef    = _r(null);
   _e(() => { sessionRef.current = session; }, [session]);
+
+  // Diagnostics: in live mode we surface current model + available models.
+  // Blocker funnel needs a date and is replay-only.
+  _e(() => {
+    let alive = true;
+    fetch('/api/strategy/current/state?mode=live&latest_n=0')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`state HTTP ${r.status}`)))
+      .then(s => { if (!alive) return; setRuntimeConfig(s?.runtime_config || null); setAvailableModels(Array.isArray(s?.available_models) ? s.available_models : []); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   _e(() => {
     const ws = TC.makeMonitorWS(
@@ -743,6 +849,8 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
             session={session} trades={[...trades].reverse()} signals={signals}
             selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
             flashId={flashId}
+            diag={{ runtimeConfig, availableModels, blockerFunnel: null,
+                    loading: false, error: '', date: null, onRefresh: null }}
           />
         </div>
 
@@ -895,11 +1003,39 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const [tradeCounts, setTradeCounts] = _s({});
   const [datesLoading,   setDatesLoading]   = _s(true);
   const [selectedTrade,  setSelectedTrade]  = _s(null);
+  const [runtimeConfig,  setRuntimeConfig]  = _s(null);
+  const [availableModels,setAvailableModels]= _s([]);
+  const [blockerFunnel,  setBlockerFunnel]  = _s(null);
+  const [diagLoading,    setDiagLoading]    = _s(false);
+  const [diagError,      setDiagError]      = _s('');
   const wsRef         = _r(null);
   const upToIdxRef    = _r(0);
   const speedRef      = _r(4);
   const replayDateRef = _r('');
   const fitRef        = _r(null);
+
+  // Diagnostics: load current model + available models once, blocker funnel per date.
+  // Fires whenever replayDate changes so the Diag tab always reflects the visible date.
+  const fetchDiag = _cb(() => {
+    const date = replayDateRef.current;
+    setDiagLoading(true); setDiagError('');
+    const stateP = fetch('/api/strategy/current/state?mode=replay&latest_n=0')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`state HTTP ${r.status}`)));
+    const funnelP = date
+      ? fetch(`/api/strategy/blocker-funnel?mode=replay&date=${encodeURIComponent(date)}`)
+          .then(r => r.ok ? r.json() : Promise.reject(new Error(`funnel HTTP ${r.status}`)))
+      : Promise.resolve(null);
+    Promise.all([stateP, funnelP])
+      .then(([state, funnel]) => {
+        setRuntimeConfig(state?.runtime_config || null);
+        setAvailableModels(Array.isArray(state?.available_models) ? state.available_models : []);
+        setBlockerFunnel(funnel);
+        setDiagLoading(false);
+      })
+      .catch(err => { setDiagError(err.message || String(err)); setDiagLoading(false); });
+  }, []);
+
+  _e(() => { fetchDiag(); /* refetch on date change */ }, [replayDate]);
 
   _e(() => { upToIdxRef.current    = upToIdx;    }, [upToIdx]);
   _e(() => { speedRef.current      = speed;      }, [speed]);
@@ -1102,6 +1238,9 @@ function ReplayMonitorDark({ onModeSwitch }) {
               session={session} trades={[...trades].reverse()} signals={signals}
               selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
               flashId={null}
+              diag={{ runtimeConfig, availableModels, blockerFunnel,
+                      loading: diagLoading, error: diagError,
+                      date: replayDate, onRefresh: fetchDiag }}
             />
           </div>
 
