@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
-from .strategy_current_state import read_strategy_current_state
+from .strategy_current_state import read_blocker_funnel, read_strategy_current_state
 
 
 class StrategyCurrentRouter:
@@ -32,6 +32,11 @@ class StrategyCurrentRouter:
         router.add_api_route(
             "/api/strategy/current/state",
             self.get_state,
+            methods=["GET"],
+        )
+        router.add_api_route(
+            "/api/strategy/blocker-funnel",
+            self.get_blocker_funnel,
             methods=["GET"],
         )
         self.router = router
@@ -47,3 +52,15 @@ class StrategyCurrentRouter:
             return read_strategy_current_state(mode=mode, latest_n=latest_n)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to read JSONL state: {exc}")
+
+    async def get_blocker_funnel(
+        self,
+        mode: str = Query("replay", description="live | replay"),
+        date: str = Query(..., description="YYYY-MM-DD"),
+    ) -> dict:
+        if mode.strip().lower() not in {"live", "replay", "historical"}:
+            raise HTTPException(status_code=400, detail="mode must be 'live' or 'replay'")
+        try:
+            return read_blocker_funnel(mode=mode, date=date)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to read decision_traces: {exc}")

@@ -270,4 +270,136 @@ def read_strategy_current_state(
     return asdict(state)
 
 
-__all__ = ["read_strategy_current_state"]
+def read_blocker_funnel(
+    mode: str = "replay",
+    *,
+    date: str,
+    run_dir: Optional[Path] = None,
+    top_n_reasons: int = 12,
+    top_n_gates: int = 6,
+) -> dict[str, Any]:
+    """For a given date, scan decision_traces.jsonl and produce a funnel of WHY
+    snapshots were blocked from becoming trades.
+
+    Answers the operator question "why no trades on this date?" with concrete
+    numbers: how many snapshots evaluated, which gates blocked them, and what
+    reason codes those gates fired.
+
+    Schema of decision_traces.jsonl rows (per signal_logger.log_decision_trace):
+        trade_date_ist:       "2024-10-07"
+        snapshot_id:          "20241007_0915"
+        final_outcome:        "blocked" | "hold" | "executed"
+        primary_blocker_gate: "prefilter" | "stage1_threshold" | "stage2_direction" | ...
+        flow_gates: [
+            {gate_id, gate_group, status: "pass"|"blocked"|"hold", reason_code, ...},
+            ...
+        ]
+
+    Returns:
+        {
+          "date": "2024-10-07",
+          "mode": "replay",
+          "total_traces": int,
+          "outcomes": { "blocked": int, "hold": int, "executed": int },
+          "primary_blocker_gates": [ {gate, count}, ... ],
+          "blocking_reasons": [ {reason_code, count}, ... ],
+          "narrative": "<one-sentence summary>",
+        }
+    """
+    if not date or not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+        return {"error": "date must be YYYY-MM-DD", "date": date}
+
+    run_dir_path = Path(run_dir) if run_dir else _resolve_run_dir(mode)
+    traces_path = run_dir_path / "decision_traces.jsonl"
+
+    result = {
+        "date": date,
+        "mode": mode.strip().lower(),
+        "traces_path": str(traces_path),
+        "traces_path_exists": traces_path.exists(),
+        "total_traces": 0,
+        "outcomes": {},
+        "primary_blocker_gates": [],
+        "blocking_reasons": [],
+        "narrative": "no decision_traces.jsonl on disk for this mode",
+    }
+    if not traces_path.exists():
+        return result
+
+    outcomes_c: Counter[str] = Counter()
+    gates_c: Counter[str] = Counter()
+    reasons_c: Counter[str] = Counter()
+    matched = 0
+
+    with traces_path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            # Cheap pre-filter to avoid parsing JSON for non-matching dates.
+            # Trade date appears verbatim in the line; if absent, skip.
+            if date not in line:
+                continue
+            try:
+                t = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            td = str(t.get("trade_date_ist") or t.get("trade_date") or "")
+            if td != date:
+                continue
+            matched += 1
+            outcomes_c[str(t.get("final_outcome") or "?")] += 1
+            gates_c[str(t.get("primary_blocker_gate") or "?")] += 1
+            # First non-pass gate's reason — the actual proximate cause.
+            for g in (t.get("flow_gates") or []):
+                if g.get("status") != "pass":
+                    rc = str(g.get("reason_code") or g.get("gate_id") or "?")
+                    reasons_c[rc] += 1
+                    break
+
+    result["total_traces"] = matched
+    result["outcomes"] = dict(outcomes_c)
+    result["primary_blocker_gates"] = [
+        {"gate": k, "count": v} for k, v in gates_c.most_common(top_n_gates)
+    ]
+    result["blocking_reasons"] = [
+        {"reason_code": k, "count": v} for k, v in reasons_c.most_common(top_n_reasons)
+    ]
+
+    # Generate a short human narrative. Pipeline emits these outcome strings:
+    #   entry_taken  → new position opened (the "trades" event from operator's POV)
+    #   exit_taken   → position closed
+    #   manage_only  → in position, just updating
+    #   hold         → no entry but evaluated
+    #   blocked      → gate rejected this snapshot
+    # "executed" was retired before this code shipped; treat entry_taken as the trade-fired signal.
+    entries = outcomes_c.get("entry_taken", 0) + outcomes_c.get("executed", 0)
+    if matched == 0:
+        result["narrative"] = (
+            f"No decision traces for {date}. Either the strategy_app never processed "
+            f"this date or decision_traces.jsonl was rotated."
+        )
+    elif entries > 0:
+        top_reason = reasons_c.most_common(1)
+        rc = top_reason[0][0] if top_reason else "?"
+        rc_n = top_reason[0][1] if top_reason else 0
+        result["narrative"] = (
+            f"{matched} snapshots evaluated, {entries} produced trades (entry_taken). "
+            f"Most-common reason code among non-pass gates: '{rc}' ({rc_n}). "
+            f"Outcomes: {dict(outcomes_c)}."
+        )
+    else:
+        top_gate = gates_c.most_common(1)
+        top_reason = reasons_c.most_common(1)
+        gate_str = f"{top_gate[0][0]} ({top_gate[0][1]} of {matched})" if top_gate else "?"
+        reason_str = top_reason[0][0] if top_reason else "?"
+        result["narrative"] = (
+            f"{matched} snapshots evaluated, 0 produced trades. "
+            f"Most-common blocking gate: {gate_str}. "
+            f"Most-common reason code: '{reason_str}'. "
+            f"This date is empty by model behavior — not a data gap."
+        )
+
+    return result
+
+
+__all__ = ["read_strategy_current_state", "read_blocker_funnel"]

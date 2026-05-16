@@ -12,6 +12,7 @@ from market_data_dashboard.strategy_current_state import (
     _list_available_models,
     _read_runtime_config,
     _tail_lines,
+    read_blocker_funnel,
     read_strategy_current_state,
 )
 
@@ -187,6 +188,73 @@ def test_state_includes_runtime_config_and_available_models(tmp_path: Path, monk
     assert out["runtime_config"]["model_run_id"] == "C1"
     assert out["runtime_config"]["rollout_stage"] == "capped_live"
     assert out["available_models"] == []
+
+
+def _write_traces(path: Path, traces: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for t in traces:
+            f.write(json.dumps(t) + "\n")
+
+
+def test_blocker_funnel_rejects_bad_date(tmp_path: Path):
+    out = read_blocker_funnel(mode="replay", date="not-a-date", run_dir=tmp_path)
+    assert "error" in out
+
+
+def test_blocker_funnel_no_file(tmp_path: Path):
+    out = read_blocker_funnel(mode="replay", date="2024-10-07", run_dir=tmp_path)
+    assert out["total_traces"] == 0
+    assert "no decision_traces.jsonl" in out["narrative"]
+
+
+def test_blocker_funnel_all_blocked_with_clear_winner(tmp_path: Path):
+    # 3 prefilter/regime_sideways + 1 stage2/direction_below_threshold, 0 executed.
+    traces = [
+        {"trade_date_ist": "2024-10-07", "final_outcome": "blocked",
+         "primary_blocker_gate": "prefilter",
+         "flow_gates": [{"gate_id": "prefilter", "status": "blocked", "reason_code": "regime_sideways"}]},
+        {"trade_date_ist": "2024-10-07", "final_outcome": "blocked",
+         "primary_blocker_gate": "prefilter",
+         "flow_gates": [{"gate_id": "prefilter", "status": "blocked", "reason_code": "regime_sideways"}]},
+        {"trade_date_ist": "2024-10-07", "final_outcome": "blocked",
+         "primary_blocker_gate": "prefilter",
+         "flow_gates": [{"gate_id": "prefilter", "status": "blocked", "reason_code": "regime_sideways"}]},
+        {"trade_date_ist": "2024-10-07", "final_outcome": "hold",
+         "primary_blocker_gate": "stage2_direction",
+         "flow_gates": [
+             {"gate_id": "prefilter", "status": "pass"},
+             {"gate_id": "stage2_direction", "status": "hold", "reason_code": "direction_below_threshold"}
+         ]},
+        # A trace for a DIFFERENT date — must be excluded.
+        {"trade_date_ist": "2024-10-08", "final_outcome": "blocked",
+         "primary_blocker_gate": "prefilter",
+         "flow_gates": [{"gate_id": "prefilter", "status": "blocked", "reason_code": "regime_other"}]},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_blocker_funnel(mode="replay", date="2024-10-07", run_dir=tmp_path)
+    assert out["total_traces"] == 4
+    assert out["outcomes"] == {"blocked": 3, "hold": 1}
+    assert out["primary_blocker_gates"][0] == {"gate": "prefilter", "count": 3}
+    assert any(r["reason_code"] == "regime_sideways" for r in out["blocking_reasons"])
+    assert any(r["reason_code"] == "direction_below_threshold" for r in out["blocking_reasons"])
+    assert "0 produced trades" in out["narrative"]
+
+
+def test_blocker_funnel_with_entry_taken_trades(tmp_path: Path):
+    """Real-pipeline outcome strings: entry_taken (not 'executed')."""
+    traces = [
+        {"trade_date_ist": "2024-04-09", "final_outcome": "entry_taken",
+         "primary_blocker_gate": None, "flow_gates": []},
+        {"trade_date_ist": "2024-04-09", "final_outcome": "blocked",
+         "primary_blocker_gate": "stage1_threshold",
+         "flow_gates": [{"gate_id": "stage1_threshold", "status": "blocked", "reason_code": "entry_below_threshold"}]},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_blocker_funnel(mode="replay", date="2024-04-09", run_dir=tmp_path)
+    assert out["total_traces"] == 2
+    assert out["outcomes"]["entry_taken"] == 1
+    assert "1 produced trades" in out["narrative"]
 
 
 def test_mode_alias_replay_and_historical_both_map(tmp_path: Path, monkeypatch):
