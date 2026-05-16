@@ -1,4 +1,4 @@
-// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v11
+// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v12
 /* global React, TradingCore, LWChart */
 const { useState: _s, useEffect: _e, useMemo: _m, useRef: _r, useCallback: _cb } = React;
 const TC = window.TradingCore;
@@ -334,6 +334,14 @@ function _fmtProb(p) {
   if (p == null || isNaN(p)) return '—';
   return (p * 100).toFixed(1) + '%';
 }
+function _stageDiag(row, stage) {
+  const md = row?.model_diagnostics || {};
+  return md?.[stage] || {};
+}
+function _shortHash(h) {
+  const s = String(h || '').trim();
+  return s ? s.slice(0, 8) : '—';
+}
 function _outcomeColor(oc) {
   if (oc === 'entry_taken' || oc === 'exit_taken') return 'var(--pos)';
   if (oc === 'blocked') return 'var(--neg)';
@@ -459,24 +467,38 @@ function DiagPanel({ diag }) {
                 <th style={{textAlign:'left',padding:'3px 6px',width:76}}>outcome</th>
                 <th style={{textAlign:'left',padding:'3px 6px'}}>gate · reason</th>
                 <th style={{textAlign:'right',padding:'3px 6px',width:56}}>entry</th>
+                <th style={{textAlign:'left',padding:'3px 6px',width:70}}>s1 hash</th>
+                <th style={{textAlign:'right',padding:'3px 6px',width:48}}>s1 nn</th>
                 <th style={{textAlign:'right',padding:'3px 6px',width:56}}>recipe</th>
                 <th style={{textAlign:'left',padding:'3px 6px',width:80}}>regime</th>
               </tr>
             </thead>
             <tbody>
-              {decisions.map((d,i) => (
-                <tr key={i} style={{borderTop:'1px solid var(--line-3)'}}>
-                  <td style={{padding:'2px 6px',color:'var(--fg-3)',fontFamily:'var(--f-mono)'}}>{d.time || '—'}</td>
-                  <td style={{padding:'2px 6px',color:_outcomeColor(d.outcome)}}>{d.outcome || '—'}</td>
-                  <td style={{padding:'2px 6px',color:'var(--fg-2)'}}>
-                    {d.blocker_gate ? <span style={{color:'var(--fg-3)'}}>{d.blocker_gate}</span> : <span style={{color:'var(--fg-4)'}}>—</span>}
-                    {d.reason_code && <span style={{color:'var(--fg-1)',marginLeft:6}}>{d.reason_code}</span>}
-                  </td>
-                  <td style={{padding:'2px 6px',textAlign:'right',fontFamily:'var(--f-mono)',color:'var(--fg-3)'}}>{_fmtProb((d.metrics||{}).entry_prob)}</td>
-                  <td style={{padding:'2px 6px',textAlign:'right',fontFamily:'var(--f-mono)',color:'var(--fg-3)'}}>{_fmtProb((d.metrics||{}).recipe_prob)}</td>
-                  <td style={{padding:'2px 6px',color:'var(--fg-4)',fontSize:9}}>{d.regime || '—'}</td>
-                </tr>
-              ))}
+              {decisions.map((d,i) => {
+                const s1 = _stageDiag(d, 'stage1');
+                const s1Title = [
+                  `stage1 input_hash=${s1.input_hash || '—'}`,
+                  `features=${s1.feature_count ?? '—'}`,
+                  `non_null=${s1.non_null_count ?? '—'}`,
+                  `missing=${s1.missing_count ?? '—'}`,
+                  `output=${s1.output_prob ?? (d.metrics||{}).entry_prob ?? '—'}`,
+                ].join(' · ');
+                return (
+                  <tr key={i} style={{borderTop:'1px solid var(--line-3)'}}>
+                    <td style={{padding:'2px 6px',color:'var(--fg-3)',fontFamily:'var(--f-mono)'}}>{d.time || '—'}</td>
+                    <td style={{padding:'2px 6px',color:_outcomeColor(d.outcome)}}>{d.outcome || '—'}</td>
+                    <td style={{padding:'2px 6px',color:'var(--fg-2)'}}>
+                      {d.blocker_gate ? <span style={{color:'var(--fg-3)'}}>{d.blocker_gate}</span> : <span style={{color:'var(--fg-4)'}}>—</span>}
+                      {d.reason_code && <span style={{color:'var(--fg-1)',marginLeft:6}}>{d.reason_code}</span>}
+                    </td>
+                    <td title={s1Title} style={{padding:'2px 6px',textAlign:'right',fontFamily:'var(--f-mono)',color:'var(--fg-3)'}}>{_fmtProb((d.metrics||{}).entry_prob)}</td>
+                    <td title={s1Title} style={{padding:'2px 6px',fontFamily:'var(--f-mono)',color:s1.input_hash?'var(--info)':'var(--fg-4)'}}>{_shortHash(s1.input_hash)}</td>
+                    <td title={s1Title} style={{padding:'2px 6px',textAlign:'right',fontFamily:'var(--f-mono)',color:'var(--fg-4)'}}>{s1.non_null_count ?? '—'}</td>
+                    <td style={{padding:'2px 6px',textAlign:'right',fontFamily:'var(--f-mono)',color:'var(--fg-3)'}}>{_fmtProb((d.metrics||{}).recipe_prob)}</td>
+                    <td style={{padding:'2px 6px',color:'var(--fg-4)',fontSize:9}}>{d.regime || '—'}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
