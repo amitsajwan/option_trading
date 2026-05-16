@@ -1,4 +1,4 @@
-// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v8
+// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v9
 /* global React, TradingCore, LWChart */
 const { useState: _s, useEffect: _e, useMemo: _m, useRef: _r, useCallback: _cb } = React;
 const TC = window.TradingCore;
@@ -826,8 +826,10 @@ function _fmtDateOption(d, tradeCounts) {
   // Mark window so operators can tell at a glance whether they're looking at
   // in-sample (train), light-contamination (valid), or true out-of-sample (OOS) data.
   const tag = win === "train" ? "● train" : win === "valid" ? "◐ valid" : win === "OOS" ? "○ OOS  " : "  post ";
-  if (n > 0) return `${tag} · ${d} · ${String(n).padStart(3,' ')} trades`;
-  return `${tag} · ${d}`;
+  // Explicit zero-trade marker so operators don't have to scroll the dropdown to
+  // figure out which dates have replay data and which are empty by model behavior.
+  const tradeStr = n > 0 ? `${String(n).padStart(3,' ')} trades` : "   — empty";
+  return `${tag} · ${d} · ${tradeStr}`;
 }
 
 function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, upToIdx,
