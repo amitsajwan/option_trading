@@ -25,6 +25,7 @@ from contracts_app import (
 
 from ..contracts import PositionContext, StrategyVote, TradeSignal
 from .decision_field_resolver import DecisionFieldResolver
+from .health_marker import HealthMarker
 from .jsonl_sink import append_jsonl, normalize_record_timestamps
 from .redis_event_publisher import RedisEventPublisher
 
@@ -41,6 +42,9 @@ class SignalLogger:
         self._traces_path = base_dir / "decision_traces.jsonl"
         self._resolver = DecisionFieldResolver()
         self._publisher = RedisEventPublisher(logger=logger)
+        # Health marker — written when a critical JSONL append fails so the
+        # container healthcheck can surface the failure (see ARCHITECTURE.md §9).
+        self._health = HealthMarker(path=base_dir / "health_marker.json")
         self._run_id: Optional[str] = None
         self._decision_trace_enabled = (
             str(os.getenv("STRATEGY_DECISION_TRACE_ENABLED") or "1").strip().lower()
@@ -330,7 +334,15 @@ class SignalLogger:
         record["reason"] = signal.reason
         record["decision_metrics"] = self._position_decision_metrics(position, signal=signal)
         record = normalize_record_timestamps(record)
-        append_jsonl(self._positions_path, record, logger=logger)
+        # POSITION_OPEN is system-of-record (ARCHITECTURE.md §9). fsync ensures
+        # durability across crashes; failure must mark container health red.
+        ok = append_jsonl(self._positions_path, record, logger=logger, fsync=True)
+        if not ok:
+            self._health.mark_failure(
+                reason="jsonl_append_failed",
+                event_type="POSITION_OPEN",
+                details=f"path={self._positions_path} position_id={position.position_id}",
+            )
         self._publish(
             strategy_position_topic(),
             build_strategy_position_event(
@@ -385,7 +397,15 @@ class SignalLogger:
         record["reason"] = exit_signal.reason
         record["decision_metrics"] = self._position_decision_metrics(position, signal=exit_signal)
         record = normalize_record_timestamps(record)
-        append_jsonl(self._positions_path, record, logger=logger)
+        # POSITION_CLOSE is system-of-record (ARCHITECTURE.md §9). fsync ensures
+        # durability across crashes; failure must mark container health red.
+        ok = append_jsonl(self._positions_path, record, logger=logger, fsync=True)
+        if not ok:
+            self._health.mark_failure(
+                reason="jsonl_append_failed",
+                event_type="POSITION_CLOSE",
+                details=f"path={self._positions_path} position_id={position.position_id}",
+            )
         self._publish(
             strategy_position_topic(),
             build_strategy_position_event(

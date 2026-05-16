@@ -9,6 +9,7 @@ import redis
 
 from contracts_app import find_matching_python_processes, isoformat_ist, redis_connection_kwargs
 from .engines.runtime_artifacts import RuntimeArtifactStore, resolve_runtime_artifact_paths, summarize_runtime_artifacts
+from .logging.health_marker import HealthMarker
 
 
 def _truthy(value: Any) -> bool:
@@ -28,10 +29,25 @@ def evaluate(*, topic: str, artifact_dir: Optional[str] = None, metrics_tail_lin
     except Exception as exc:
         redis_error = str(exc)
 
+    # JSONL canonical-event-loss check (ARCHITECTURE.md §9). If a POSITION_OPEN/CLOSE
+    # append failed, the health marker file says ok=false. That's a hard failure.
+    health_marker = HealthMarker()
+    jsonl_healthy = health_marker.is_healthy()
+    jsonl_marker_payload = None
+    if not jsonl_healthy:
+        try:
+            jsonl_marker_payload = json.loads(health_marker.path.read_text(encoding="utf-8"))
+        except Exception:
+            jsonl_marker_payload = {"ok": False, "reason": "marker_unreadable"}
+
     session_enabled = _truthy(os.getenv("MARKET_SESSION_ENABLED", "0"))
     status = "healthy"
     code = 0
-    if not redis_ok:
+    if not jsonl_healthy:
+        # Highest priority: a system-of-record JSONL write failed. Surface immediately.
+        status = "unhealthy"
+        code = 2
+    elif not redis_ok:
         status = "unhealthy"
         code = 2
     elif not process_running:
@@ -87,6 +103,11 @@ def evaluate(*, topic: str, artifact_dir: Optional[str] = None, metrics_tail_lin
             "state": runtime_state,
             "metrics": runtime_metrics,
             "summary": summarize_runtime_artifacts(runtime_config.get("payload"), runtime_state.get("payload"), runtime_metrics),
+        },
+        "jsonl_canonical": {
+            "ok": jsonl_healthy,
+            "marker_path": str(health_marker.path),
+            "marker": jsonl_marker_payload,
         },
     }
     return result, code
