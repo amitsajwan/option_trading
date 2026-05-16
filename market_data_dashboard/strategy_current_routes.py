@@ -21,7 +21,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
-from .strategy_current_state import read_blocker_funnel, read_strategy_current_state
+from .strategy_current_state import (
+    read_blocker_funnel,
+    read_decision_timeline,
+    read_strategy_current_state,
+)
 
 
 class StrategyCurrentRouter:
@@ -37,6 +41,11 @@ class StrategyCurrentRouter:
         router.add_api_route(
             "/api/strategy/blocker-funnel",
             self.get_blocker_funnel,
+            methods=["GET"],
+        )
+        router.add_api_route(
+            "/api/strategy/decisions",
+            self.get_decisions,
             methods=["GET"],
         )
         self.router = router
@@ -62,5 +71,23 @@ class StrategyCurrentRouter:
             raise HTTPException(status_code=400, detail="mode must be 'live' or 'replay'")
         try:
             return read_blocker_funnel(mode=mode, date=date)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to read decision_traces: {exc}")
+
+    async def get_decisions(
+        self,
+        mode: str = Query("replay", description="live | replay"),
+        date: str = Query(..., description="YYYY-MM-DD"),
+        limit: int = Query(500, ge=0, le=2000),
+        offset: int = Query(0, ge=0),
+        outcome: str = Query("", description="empty | blocked | hold | entry_taken | exit_taken | manage_only"),
+    ) -> dict:
+        if mode.strip().lower() not in {"live", "replay", "historical"}:
+            raise HTTPException(status_code=400, detail="mode must be 'live' or 'replay'")
+        try:
+            return read_decision_timeline(
+                mode=mode, date=date, limit=limit, offset=offset,
+                outcome=(outcome or None),
+            )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to read decision_traces: {exc}")

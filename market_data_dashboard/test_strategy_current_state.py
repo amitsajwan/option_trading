@@ -13,6 +13,7 @@ from market_data_dashboard.strategy_current_state import (
     _read_runtime_config,
     _tail_lines,
     read_blocker_funnel,
+    read_decision_timeline,
     read_strategy_current_state,
 )
 
@@ -255,6 +256,75 @@ def test_blocker_funnel_with_entry_taken_trades(tmp_path: Path):
     assert out["total_traces"] == 2
     assert out["outcomes"]["entry_taken"] == 1
     assert "1 produced trades" in out["narrative"]
+
+
+def test_decision_timeline_no_file(tmp_path: Path):
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path)
+    assert out["traces_path_exists"] is False
+    assert out["total_for_date"] == 0
+    assert out["decisions"] == []
+
+
+def test_decision_timeline_returns_per_minute_rows(tmp_path: Path):
+    traces = [
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:15:00+05:30",
+         "snapshot_id": "20241007_0915", "final_outcome": "blocked",
+         "primary_blocker_gate": "prefilter",
+         "flow_gates": [{"gate_id": "prefilter", "status": "blocked",
+                         "reason_code": "regime_sideways", "message": "regime blocked"}],
+         "summary_metrics": {"entry_prob": 0.1, "recipe_prob": 0.05, "recipe_margin": 0.0,
+                             "direction_up_prob": 0.4},
+         "regime_context": {"regime": "SIDEWAYS"}},
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:16:00+05:30",
+         "snapshot_id": "20241007_0916", "final_outcome": "entry_taken",
+         "primary_blocker_gate": None, "flow_gates": [],
+         "summary_metrics": {"entry_prob": 0.82, "recipe_prob": 0.75, "recipe_margin": 0.10},
+         "regime_context": {"regime": "TREND_UP"}},
+        # Different date — must be excluded.
+        {"trade_date_ist": "2024-10-08", "timestamp": "2024-10-08T09:15:00+05:30",
+         "snapshot_id": "20241008_0915", "final_outcome": "blocked",
+         "flow_gates": []},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path)
+    assert out["total_for_date"] == 2
+    assert out["returned"] == 2
+    assert [d["time"] for d in out["decisions"]] == ["09:15", "09:16"]
+    assert out["decisions"][0]["reason_code"] == "regime_sideways"
+    assert out["decisions"][0]["regime"] == "SIDEWAYS"
+    assert out["decisions"][1]["outcome"] == "entry_taken"
+
+
+def test_decision_timeline_outcome_filter(tmp_path: Path):
+    traces = [
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:15:00+05:30",
+         "final_outcome": "blocked", "flow_gates": []},
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:16:00+05:30",
+         "final_outcome": "entry_taken", "flow_gates": []},
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:17:00+05:30",
+         "final_outcome": "blocked", "flow_gates": []},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path,
+                                 outcome="entry_taken")
+    assert out["total_for_date"] == 3
+    assert out["matched_filter"] == 1
+    assert out["returned"] == 1
+    assert out["decisions"][0]["outcome"] == "entry_taken"
+
+
+def test_decision_timeline_limit_and_offset(tmp_path: Path):
+    traces = [
+        {"trade_date_ist": "2024-10-07", "timestamp": f"2024-10-07T09:{i:02d}:00+05:30",
+         "final_outcome": "blocked", "flow_gates": []}
+        for i in range(15, 25)
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path,
+                                 limit=3, offset=4)
+    assert out["matched_filter"] == 10
+    assert out["returned"] == 3
+    assert [d["time"] for d in out["decisions"]] == ["09:19", "09:20", "09:21"]
 
 
 def test_mode_alias_replay_and_historical_both_map(tmp_path: Path, monkeypatch):

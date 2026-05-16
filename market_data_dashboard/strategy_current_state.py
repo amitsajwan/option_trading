@@ -402,4 +402,134 @@ def read_blocker_funnel(
     return result
 
 
-__all__ = ["read_strategy_current_state", "read_blocker_funnel"]
+def read_decision_timeline(
+    mode: str = "replay",
+    *,
+    date: str,
+    run_dir: Optional[Path] = None,
+    limit: int = 500,
+    offset: int = 0,
+    outcome: Optional[str] = None,
+) -> dict[str, Any]:
+    """Per-minute decision timeline for a date.
+
+    Surfaces one row per snapshot — what was decided and why — so the
+    operator can scroll a minute-by-minute view of "why no trade here?"
+    instead of just aggregate counts.
+
+    Each returned row is a slimmed-down decision_trace:
+        {
+          "time":        "09:15",          # IST HH:MM extracted from timestamp
+          "snapshot_id": "20241007_0915",
+          "outcome":     "blocked",        # final_outcome from the trace
+          "blocker_gate":"prefilter",      # primary_blocker_gate (None if not blocked)
+          "reason_code": "invalid_entry_phase",
+          "message":     "invalid_entry_phase",
+          "regime":      "SIDEWAYS",
+          "metrics": {
+            "entry_prob":     0.0,
+            "recipe_prob":    0.0,
+            "recipe_margin":  0.0,
+            "direction_up_prob": 0.0,
+          },
+        }
+
+    Args:
+        outcome: optional filter — only return rows whose final_outcome matches
+                 (e.g. "blocked", "hold", "entry_taken"). None/empty = all.
+        limit:   cap on returned rows after filtering. Hard cap 2000.
+        offset:  rows to skip after filtering (for paging).
+    """
+    if not date or not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+        return {"error": "date must be YYYY-MM-DD", "date": date}
+
+    run_dir_path = Path(run_dir) if run_dir else _resolve_run_dir(mode)
+    traces_path = run_dir_path / "decision_traces.jsonl"
+
+    limit = max(0, min(int(limit), 2000))
+    offset = max(0, int(offset))
+    outcome_filter = (outcome or "").strip().lower() or None
+
+    result: dict[str, Any] = {
+        "date": date,
+        "mode": mode.strip().lower(),
+        "traces_path": str(traces_path),
+        "traces_path_exists": traces_path.exists(),
+        "total_for_date": 0,
+        "matched_filter": 0,
+        "returned": 0,
+        "offset": offset,
+        "limit": limit,
+        "outcome_filter": outcome_filter,
+        "decisions": [],
+    }
+    if not traces_path.exists():
+        return result
+
+    decisions: list[dict[str, Any]] = []
+    total = 0
+    matched = 0
+
+    with traces_path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            if date not in line:  # cheap pre-filter
+                continue
+            try:
+                t = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            td = str(t.get("trade_date_ist") or t.get("trade_date") or "")
+            if td != date:
+                continue
+            total += 1
+            oc = str(t.get("final_outcome") or "?")
+            if outcome_filter and oc != outcome_filter:
+                continue
+            matched += 1
+            if matched <= offset:
+                continue
+            if len(decisions) >= limit:
+                continue  # keep counting total/matched for pagination metadata
+
+            ts = str(t.get("timestamp") or "")
+            # timestamp shape: "2024-10-07T09:15:00+05:30" — slice the HH:MM
+            hhmm = ts[11:16] if len(ts) >= 16 else ""
+
+            # First non-pass gate carries the proximate reason; fall back to summary.
+            primary_gate = t.get("primary_blocker_gate")
+            reason_code = ""
+            message = ""
+            for g in (t.get("flow_gates") or []):
+                if g.get("status") != "pass":
+                    reason_code = str(g.get("reason_code") or "")
+                    message = str(g.get("message") or "")
+                    break
+
+            sm = t.get("summary_metrics") or {}
+            rc = t.get("regime_context") or {}
+            decisions.append({
+                "time": hhmm,
+                "snapshot_id": t.get("snapshot_id"),
+                "outcome": oc,
+                "blocker_gate": primary_gate,
+                "reason_code": reason_code,
+                "message": message,
+                "regime": rc.get("regime"),
+                "metrics": {
+                    "entry_prob": sm.get("entry_prob"),
+                    "recipe_prob": sm.get("recipe_prob"),
+                    "recipe_margin": sm.get("recipe_margin"),
+                    "direction_up_prob": sm.get("direction_up_prob"),
+                },
+            })
+
+    result["total_for_date"] = total
+    result["matched_filter"] = matched
+    result["returned"] = len(decisions)
+    result["decisions"] = decisions
+    return result
+
+
+__all__ = ["read_strategy_current_state", "read_blocker_funnel", "read_decision_timeline"]

@@ -1,4 +1,4 @@
-// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v10
+// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v11
 /* global React, TradingCore, LWChart */
 const { useState: _s, useEffect: _e, useMemo: _m, useRef: _r, useCallback: _cb } = React;
 const TC = window.TradingCore;
@@ -330,11 +330,22 @@ function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upT
 // Operator answer to "why no trades on this date?" — reads runtime_config +
 // available_models from /api/strategy/current/state and per-date blocker
 // counts from /api/strategy/blocker-funnel.
+function _fmtProb(p) {
+  if (p == null || isNaN(p)) return '—';
+  return (p * 100).toFixed(1) + '%';
+}
+function _outcomeColor(oc) {
+  if (oc === 'entry_taken' || oc === 'exit_taken') return 'var(--pos)';
+  if (oc === 'blocked') return 'var(--neg)';
+  if (oc === 'hold') return 'var(--warn)';
+  return 'var(--fg-3)';
+}
 function DiagPanel({ diag }) {
+  const [tlFilter, setTlFilter] = _s('blocked');
   if (!diag) {
     return <div style={{padding:'12px',color:'var(--fg-3)',fontFamily:'var(--f-mono)',fontSize:11}}>Diagnostics unavailable in this mode.</div>;
   }
-  const { runtimeConfig, availableModels, blockerFunnel, loading, error, date, onRefresh } = diag;
+  const { runtimeConfig, availableModels, blockerFunnel, timeline, loading, error, date, onRefresh, onTimelineFilterChange } = diag;
   const rc = runtimeConfig || {};
   const models = Array.isArray(availableModels) ? availableModels : [];
   const bf = blockerFunnel || {};
@@ -342,6 +353,14 @@ function DiagPanel({ diag }) {
   const reasons = Array.isArray(bf.blocking_reasons) ? bf.blocking_reasons : [];
   const out = bf.outcomes || {};
   const outKeys = Object.keys(out);
+  const tl = timeline || {};
+  const decisions = Array.isArray(tl.decisions) ? tl.decisions : [];
+  const tlTotal = tl.matched_filter ?? tl.total_for_date ?? 0;
+
+  function setFilterAndFetch(v) {
+    setTlFilter(v);
+    if (onTimelineFilterChange) onTimelineFilterChange(v === 'all' ? '' : v);
+  }
   return (
     <div style={{padding:'10px 12px',fontFamily:'var(--f-mono)',fontSize:10.5,color:'var(--fg-2)',overflowY:'auto',maxHeight:'100%'}}>
       {error && <div style={{color:'var(--neg)',marginBottom:8}}>error: {error}</div>}
@@ -409,6 +428,58 @@ function DiagPanel({ diag }) {
               ))}
           </div>
         </>
+      )}
+
+      {/* Per-minute decision timeline — what happened at each snapshot */}
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',margin:'18px 0 4px'}}>
+        <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase'}}>
+          Per-minute decisions <span style={{color:'var(--fg-4)'}}>({decisions.length} of {tlTotal})</span>
+        </div>
+        <div style={{display:'flex',gap:4}}>
+          {['all','blocked','hold','entry_taken'].map(v => (
+            <button key={v}
+                    className={'t-btn ghost sm' + (tlFilter===v?' active':'')}
+                    onClick={()=>setFilterAndFetch(v)}
+                    style={{fontSize:9.5, padding:'2px 6px',
+                            color: tlFilter===v ? 'var(--accent)' : 'var(--fg-3)',
+                            borderColor: tlFilter===v ? 'var(--accent)' : undefined}}>
+              {v}
+            </button>
+          ))}
+        </div>
+      </div>
+      {decisions.length === 0 ? (
+        <div style={{color:'var(--fg-4)'}}>{tl.traces_path_exists === false ? 'no decision_traces.jsonl for this mode' : 'no rows match the current filter'}</div>
+      ) : (
+        <div style={{maxHeight:260,overflowY:'auto',border:'1px solid var(--line-3)',borderRadius:2}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:10}}>
+            <thead style={{position:'sticky',top:0,background:'var(--bg-2)'}}>
+              <tr style={{color:'var(--fg-4)',fontSize:9}}>
+                <th style={{textAlign:'left',padding:'3px 6px',width:46}}>time</th>
+                <th style={{textAlign:'left',padding:'3px 6px',width:76}}>outcome</th>
+                <th style={{textAlign:'left',padding:'3px 6px'}}>gate · reason</th>
+                <th style={{textAlign:'right',padding:'3px 6px',width:56}}>entry</th>
+                <th style={{textAlign:'right',padding:'3px 6px',width:56}}>recipe</th>
+                <th style={{textAlign:'left',padding:'3px 6px',width:80}}>regime</th>
+              </tr>
+            </thead>
+            <tbody>
+              {decisions.map((d,i) => (
+                <tr key={i} style={{borderTop:'1px solid var(--line-3)'}}>
+                  <td style={{padding:'2px 6px',color:'var(--fg-3)',fontFamily:'var(--f-mono)'}}>{d.time || '—'}</td>
+                  <td style={{padding:'2px 6px',color:_outcomeColor(d.outcome)}}>{d.outcome || '—'}</td>
+                  <td style={{padding:'2px 6px',color:'var(--fg-2)'}}>
+                    {d.blocker_gate ? <span style={{color:'var(--fg-3)'}}>{d.blocker_gate}</span> : <span style={{color:'var(--fg-4)'}}>—</span>}
+                    {d.reason_code && <span style={{color:'var(--fg-1)',marginLeft:6}}>{d.reason_code}</span>}
+                  </td>
+                  <td style={{padding:'2px 6px',textAlign:'right',fontFamily:'var(--f-mono)',color:'var(--fg-3)'}}>{_fmtProb((d.metrics||{}).entry_prob)}</td>
+                  <td style={{padding:'2px 6px',textAlign:'right',fontFamily:'var(--f-mono)',color:'var(--fg-3)'}}>{_fmtProb((d.metrics||{}).recipe_prob)}</td>
+                  <td style={{padding:'2px 6px',color:'var(--fg-4)',fontSize:9}}>{d.regime || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -1006,6 +1077,8 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const [runtimeConfig,  setRuntimeConfig]  = _s(null);
   const [availableModels,setAvailableModels]= _s([]);
   const [blockerFunnel,  setBlockerFunnel]  = _s(null);
+  const [timeline,       setTimeline]       = _s(null);
+  const [tlOutcome,      setTlOutcome]      = _s('blocked');
   const [diagLoading,    setDiagLoading]    = _s(false);
   const [diagError,      setDiagError]      = _s('');
   const wsRef         = _r(null);
@@ -1014,8 +1087,10 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const replayDateRef = _r('');
   const fitRef        = _r(null);
 
-  // Diagnostics: load current model + available models once, blocker funnel per date.
-  // Fires whenever replayDate changes so the Diag tab always reflects the visible date.
+  // Diagnostics: load current model + available models, blocker-funnel aggregate
+  // for the selected date, AND a per-minute decisions timeline so the operator
+  // can scroll snapshot-by-snapshot to see exactly why each minute was blocked.
+  // Re-fires whenever replayDate or the timeline outcome filter changes.
   const fetchDiag = _cb(() => {
     const date = replayDateRef.current;
     setDiagLoading(true); setDiagError('');
@@ -1025,17 +1100,23 @@ function ReplayMonitorDark({ onModeSwitch }) {
       ? fetch(`/api/strategy/blocker-funnel?mode=replay&date=${encodeURIComponent(date)}`)
           .then(r => r.ok ? r.json() : Promise.reject(new Error(`funnel HTTP ${r.status}`)))
       : Promise.resolve(null);
-    Promise.all([stateP, funnelP])
-      .then(([state, funnel]) => {
+    const tlOutcomeQ = tlOutcome ? `&outcome=${encodeURIComponent(tlOutcome)}` : '';
+    const tlP = date
+      ? fetch(`/api/strategy/decisions?mode=replay&date=${encodeURIComponent(date)}&limit=500${tlOutcomeQ}`)
+          .then(r => r.ok ? r.json() : Promise.reject(new Error(`decisions HTTP ${r.status}`)))
+      : Promise.resolve(null);
+    Promise.all([stateP, funnelP, tlP])
+      .then(([state, funnel, tl]) => {
         setRuntimeConfig(state?.runtime_config || null);
         setAvailableModels(Array.isArray(state?.available_models) ? state.available_models : []);
         setBlockerFunnel(funnel);
+        setTimeline(tl);
         setDiagLoading(false);
       })
       .catch(err => { setDiagError(err.message || String(err)); setDiagLoading(false); });
-  }, []);
+  }, [tlOutcome]);
 
-  _e(() => { fetchDiag(); /* refetch on date change */ }, [replayDate]);
+  _e(() => { fetchDiag(); /* refetch on date or filter change */ }, [replayDate, tlOutcome]);
 
   _e(() => { upToIdxRef.current    = upToIdx;    }, [upToIdx]);
   _e(() => { speedRef.current      = speed;      }, [speed]);
@@ -1239,8 +1320,10 @@ function ReplayMonitorDark({ onModeSwitch }) {
               selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
               flashId={null}
               diag={{ runtimeConfig, availableModels, blockerFunnel,
+                      timeline,
                       loading: diagLoading, error: diagError,
-                      date: replayDate, onRefresh: fetchDiag }}
+                      date: replayDate, onRefresh: fetchDiag,
+                      onTimelineFilterChange: setTlOutcome }}
             />
           </div>
 
