@@ -188,21 +188,14 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             dates = dates[-int(limit):]
         latest = dates[-1] if dates else None
 
-        positions_coll_name = (
-            os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL") or "strategy_positions_historical"
-        )
         trade_counts: dict[str, int] = {}
-        try:
-            db = self._repo._evaluation_service._db()
-            pipeline = [
-                {"$match": {"event": "POSITION_CLOSE"}},
-                {"$group": {"_id": "$trade_date_ist", "count": {"$sum": 1}}},
-            ]
-            for row in db[positions_coll_name].aggregate(pipeline):
-                if row.get("_id"):
-                    trade_counts[str(row["_id"])] = int(row.get("count") or 0)
-        except Exception:
-            pass
+        for date_value in dates:
+            run_id = self._resolve_latest_run_id_for_date(date_value)
+            if not run_id:
+                continue
+            count = self._count_closed_trades_for_run_date(date_ist=date_value, run_id=run_id)
+            if count > 0:
+                trade_counts[date_value] = count
 
         return {
             "dates": dates,
@@ -332,8 +325,47 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             return chart
         return super().load_session_underlying_chart(date_ist=date_ist, instrument=instrument)
 
+    @staticmethod
+    def _positions_collection_name() -> str:
+        return str(os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL") or "strategy_positions_historical")
+
+    def _resolve_latest_position_run_id_for_date(self, date_ist: Optional[str]) -> Optional[str]:
+        if not date_ist:
+            return None
+        try:
+            db = self._repo._evaluation_service._db()
+            doc = db[self._positions_collection_name()].find_one(
+                {
+                    "trade_date_ist": str(date_ist),
+                    "event": "POSITION_CLOSE",
+                    "run_id": {"$nin": [None, ""]},
+                },
+                {"run_id": 1},
+                sort=[("timestamp", -1), ("_id", -1)],
+            )
+            if isinstance(doc, dict) and doc.get("run_id"):
+                return str(doc["run_id"]).strip() or None
+        except Exception:
+            pass
+        return None
+
+    def _count_closed_trades_for_run_date(self, *, date_ist: str, run_id: str) -> int:
+        try:
+            db = self._repo._evaluation_service._db()
+            return int(
+                db[self._positions_collection_name()].count_documents(
+                    {
+                        "trade_date_ist": str(date_ist),
+                        "event": "POSITION_CLOSE",
+                        "run_id": str(run_id),
+                    }
+                )
+            )
+        except Exception:
+            return 0
+
     def _resolve_latest_run_id_for_date(self, date_ist: Optional[str]) -> Optional[str]:
-        """Return the run_id of the most recently submitted completed eval run for date_ist."""
+        """Return the run_id the historical session endpoint will use for date_ist."""
         if not date_ist:
             return None
         try:
@@ -352,7 +384,7 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
                 return str(doc["run_id"]).strip() or None
         except Exception:
             pass
-        return None
+        return self._resolve_latest_position_run_id_for_date(date_ist)
 
     def get_historical_strategy_session(self, **kwargs: Any) -> dict[str, Any]:
         run_id = str(kwargs.get("run_id") or "").strip() or None

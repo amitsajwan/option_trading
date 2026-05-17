@@ -117,6 +117,91 @@ class HistoricalReplayAppTests(unittest.TestCase):
         self.assertEqual(captured.get("run_id"), "run-xyz")
         self.assertEqual(payload["active_run_id"], "run-xyz")
 
+    def test_historical_monitor_service_discovers_date_run_from_positions(self) -> None:
+        if dashboard_app.HistoricalReplayMonitorService is None:
+            self.skipTest("HistoricalReplayMonitorService unavailable in this environment")
+
+        class _Collection:
+            def __init__(self, docs):
+                self._docs = list(docs)
+                self.name = "fake"
+
+            def distinct(self, field, query=None):  # noqa: ARG002
+                return sorted({doc.get(field) for doc in self._docs if doc.get(field)})
+
+            def find_one(self, query, projection=None, sort=None):  # noqa: ARG002
+                rows = [
+                    doc for doc in self._docs
+                    if all(
+                        (
+                            key == "run_id"
+                            and value == {"$nin": [None, ""]}
+                            and doc.get("run_id") not in (None, "")
+                        )
+                        or doc.get(key) == value
+                        for key, value in query.items()
+                    )
+                ]
+                rows.sort(key=lambda item: (str(item.get("timestamp") or ""), str(item.get("_id") or "")), reverse=True)
+                return rows[0] if rows else None
+
+            def count_documents(self, query, limit=0):  # noqa: ARG002
+                return sum(
+                    1
+                    for doc in self._docs
+                    if all(doc.get(key) == value for key, value in query.items())
+                )
+
+        positions = _Collection(
+            [
+                {
+                    "_id": "1",
+                    "trade_date_ist": "2024-09-18",
+                    "event": "POSITION_CLOSE",
+                    "run_id": "older-run",
+                    "timestamp": "2024-09-18T10:00:00+05:30",
+                },
+                {
+                    "_id": "2",
+                    "trade_date_ist": "2024-09-18",
+                    "event": "POSITION_CLOSE",
+                    "run_id": "latest-run",
+                    "timestamp": "2024-09-18T15:25:00+05:30",
+                },
+                {
+                    "_id": "3",
+                    "trade_date_ist": "2024-09-18",
+                    "event": "POSITION_CLOSE",
+                    "run_id": "latest-run",
+                    "timestamp": "2024-09-18T15:26:00+05:30",
+                },
+            ]
+        )
+        runs = _Collection([])
+        snapshots = _Collection([{"trade_date_ist": "2024-09-18"}])
+
+        class _EvalStub:
+            def _db(self):
+                return {
+                    "strategy_eval_runs": runs,
+                    "strategy_positions_historical": positions,
+                }
+
+        service = dashboard_app.HistoricalReplayMonitorService(None)
+        service._repo = SimpleNamespace(_evaluation_service=_EvalStub(), snapshot_collection=lambda: snapshots)
+        captured: dict[str, object] = {}
+        service.get_strategy_session = lambda **kwargs: captured.update(kwargs) or {  # type: ignore[method-assign]
+            "session": {"date_ist": "2024-09-18", "instrument": "BANKNIFTY-I"}
+        }
+        service.get_replay_status = lambda **kwargs: {"status": "complete"}  # type: ignore[method-assign]
+
+        payload = service.get_historical_strategy_session(date="2024-09-18")
+        dates_payload = service.get_available_dates(limit=250)
+
+        self.assertEqual(captured.get("run_id"), "latest-run")
+        self.assertEqual(payload["active_run_id"], "latest-run")
+        self.assertEqual(dates_payload["trade_counts"]["2024-09-18"], 2)
+
     def test_historical_replay_status_endpoint_returns_payload(self) -> None:
         payload = asyncio.run(dashboard_app.get_historical_replay_status(date="2026-03-06"))
         self.assertEqual(payload["status"], "complete")
