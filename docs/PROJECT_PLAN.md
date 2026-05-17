@@ -804,6 +804,28 @@ The "data ceiling reached" conclusion in §13-15 was **partially wrong** — it 
 
 See also: memory entry `project-option-pnl-breakthrough` for the full state + how-to-resume pointers.
 
+### Final result of 2026-05-17 session
+
+Full pipeline executed end-to-end:
+
+| Step | Result |
+|---|---|
+| HPO walk-forward (does trial 18 generalize?) | **8/10 windows ROBUST for both PE recipes** — confirmed HPO config is not single-window overfitting |
+| Grid walk-forward (are the 4 new recipes robust?) | OTM1_PE_15 + ATM_CE_5 also **8/10 ROBUST**; ATM_PE_5 + OTM1_CE_15 PARTIAL |
+| Portfolio backtest (combining 4 ROBUST recipes) | Policy A (union threshold): +5.06 — poor. Policy B (independent per-recipe): **+56.23 total**, ATM_PE_15 with HPO carries 75% (+42.41) |
+
+**Deployment candidate decided:** `ATM_PE_15` with HPO trial 18 config (`max_depth=8, learning_rate=0.01, n_estimators=300, subsample=0.85, colsample_bytree=0.7, min_child_weight=5, reg_alpha=0.1, reg_lambda=2.0`) at threshold 0.55.
+
+**Expected per-lot economics (if walk-forward holds in shadow):**
+- ~387 trades/month
+- Rs 170 net per trade (avg)
+- **~Rs 65k/month per lot**
+
+**3 audit items in OPTION_LABEL_CONTRACT.md still open** — must close before any live deployment:
+1. Entry-fill timing audit (close-of-current-bar vs next-bar-open)
+2. Per-recipe `disable_smart_strike` flag
+3. Dashboard `pnl_pct_basis` rendering for option-premium-basis recipes
+
 ---
 
 ## 17. Related Docs
