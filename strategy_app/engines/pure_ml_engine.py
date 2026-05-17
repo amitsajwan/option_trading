@@ -112,6 +112,28 @@ class PureMLEngine(StrategyEngine):
                 self._post_stop_cooldown_bars,
                 self._trailing_enabled,
             )
+        # Optional option-P&L bundle override. When OPTION_PNL_MODEL_BUNDLE
+        # env var points to a published bundle, the staged predictor path is
+        # bypassed in favour of a single binary classifier that fires the
+        # bundle's fixed recipe. See engines/option_pnl_predictor.py.
+        # Loading is best-effort: any error means the engine falls back to
+        # the staged path with a single warn log, so a bad bundle path
+        # cannot break the existing C1 flow.
+        try:
+            from .option_pnl_predictor import load_bundle_from_env  # noqa: PLC0415
+            self._option_pnl_bundle = load_bundle_from_env()
+            if self._option_pnl_bundle is not None:
+                logger.info(
+                    "OPTION-P&L bundle loaded: recipe=%s threshold=%.4f run_id=%s features=%d",
+                    self._option_pnl_bundle.recipe_id,
+                    self._option_pnl_bundle.decision_threshold,
+                    self._option_pnl_bundle.run_id,
+                    len(self._option_pnl_bundle.feature_columns),
+                )
+        except Exception as exc:  # noqa: BLE001 — never let a bad bundle crash init
+            logger.warning("OPTION_PNL_MODEL_BUNDLE load failed; staying on staged predictor: %s", exc)
+            self._option_pnl_bundle = None
+
         self._last_entry_at: Optional[str] = None
         self._last_event: Optional[dict[str, Any]] = None
         self._last_decision: Optional[dict[str, Any]] = None
@@ -370,13 +392,22 @@ class PureMLEngine(StrategyEngine):
             self._write_runtime_state()
             return None
 
-        decision = predict_staged(
-            engine=self,
-            snap=snap,
-            rolling_features=rolling_features,
-            bundle=self._model_package,
-            policy=self._staged_runtime_policy,
-        )
+        if self._option_pnl_bundle is not None:
+            # Option-P&L bundle path: single binary classifier with fixed recipe.
+            # Constructs a StagedRuntimeDecision so all downstream logic
+            # (smart-strike, premium check, signal builder, tracker) is reused.
+            from .option_pnl_predictor import build_decision_from_bundle  # noqa: PLC0415
+            decision = build_decision_from_bundle(
+                bundle=self._option_pnl_bundle, snap=snap, rolling_features=rolling_features,
+            )
+        else:
+            decision = predict_staged(
+                engine=self,
+                snap=snap,
+                rolling_features=rolling_features,
+                bundle=self._model_package,
+                policy=self._staged_runtime_policy,
+            )
         self._last_decision = self._staged_decision_summary(decision)
         trace_builder = self._build_entry_trace_builder(snap=snap)
         self._populate_staged_candidate_trace(trace_builder, decision)
@@ -506,7 +537,11 @@ class PureMLEngine(StrategyEngine):
             underlying_target_pct=self._underlying_target_pct,
             # Only override the recipe's horizon when the operator explicitly set the env var.
             # Otherwise pass None so the recipe-supplied horizon flows through unchanged.
-            max_hold_bars_override=(int(self._max_hold_bars) if os.getenv("ML_PURE_MAX_HOLD_BARS") else None),
+            max_hold_bars_override=(
+                None
+                if self._option_pnl_bundle is not None
+                else (int(self._max_hold_bars) if os.getenv("ML_PURE_MAX_HOLD_BARS") else None)
+            ),
             premium_risk_fallback_pct=self._stop_loss_pct,
             trailing_enabled=self._trailing_enabled,
             risk_manager=self._risk,

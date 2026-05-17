@@ -290,6 +290,8 @@ class SignalLogger:
         record["snapshot_id"] = snapshot_id
         record["timestamp"] = timestamp
         record["run_id"] = self._run_id
+        if record.get("risk_basis") is None:
+            record.pop("risk_basis", None)
         # Contract resolver fields override raw position fields (source of truth)
         record.update(self._position_contract_fields(signal, position=position))
         return record

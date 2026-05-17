@@ -90,6 +90,7 @@ class PositionContext:
     entry_futures_price: Optional[float] = None
     underlying_stop_pct: Optional[float] = None
     underlying_target_pct: Optional[float] = None
+    risk_basis: Optional[str] = None
 
 
 @dataclass
@@ -193,6 +194,7 @@ class TradeSignal:
     strategy_profile_id: Optional[str] = None
     underlying_stop_pct: Optional[float] = None
     underlying_target_pct: Optional[float] = None
+    risk_basis: Optional[str] = None
 
 
 class StrategyEngine(ABC):

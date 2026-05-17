@@ -148,6 +148,63 @@ def test_runtime_config_malformed_returns_error(tmp_path: Path):
     assert out == {"error": "runtime_config.json unreadable"}
 
 
+def test_runtime_config_surfaces_option_pnl_bundle_when_active(tmp_path: Path):
+    """When the engine runs an option-P&L bundle, the dashboard must report
+    the bundle as the current model — NOT the staged placeholder."""
+    cfg = {
+        "engine": "ml_pure",
+        "model": {
+            "run_id": "option_pnl_atm_pe_15_20260517",
+            "model_group": "option_pnl_v1/PE",
+            "model_type": "option_pnl_v1",
+            "recipe_id": "ATM_PE_15",
+            "decision_threshold": 0.55,
+            "option_type": "PE",
+            "max_hold_bars": 15,
+            "stop_pct_of_premium": 0.25,
+            "target_pct_of_premium": 0.40,
+            "block_expiry": False,
+        },
+        "rollout": {"stage": "capped_live"},
+        "model_legacy_staged": {
+            "run_id": "staged_deep_hpo_c1_base_20260429_040848",
+            "model_group": "banknifty_futures/h15_tp_auto",
+            "note": "loaded as structural placeholder; option-P&L bundle in `model` is firing decisions",
+        },
+    }
+    (tmp_path / "runtime_config.json").write_text(json.dumps(cfg))
+    out = _read_runtime_config(tmp_path)
+    assert out["model_run_id"] == "option_pnl_atm_pe_15_20260517"
+    assert out["model_type"] == "option_pnl_v1"
+    assert out["recipe_id"] == "ATM_PE_15"
+    assert out["decision_threshold"] == 0.55
+    assert out["option_type"] == "PE"
+    assert out["max_hold_bars"] == 15
+    assert out["stop_pct_of_premium"] == 0.25
+    assert out["target_pct_of_premium"] == 0.40
+    # Legacy model surfaced but clearly demoted
+    assert out["legacy_staged_model"]["run_id"] == "staged_deep_hpo_c1_base_20260429_040848"
+
+
+def test_runtime_config_omits_bundle_fields_when_staged(tmp_path: Path):
+    """Default staged C1 path: bundle-only fields must be absent."""
+    cfg = {
+        "engine": "ml_pure",
+        "model": {
+            "run_id": "staged_deep_hpo_c1_base_20260429_040848",
+            "model_group": "banknifty_futures/h15_tp_auto",
+            "model_type": "staged_runtime_v1",
+        },
+        "rollout": {"stage": "capped_live"},
+    }
+    (tmp_path / "runtime_config.json").write_text(json.dumps(cfg))
+    out = _read_runtime_config(tmp_path)
+    assert out["model_type"] == "staged_runtime_v1"
+    assert "recipe_id" not in out
+    assert "decision_threshold" not in out
+    assert "legacy_staged_model" not in out
+
+
 def test_list_available_models_finds_joblibs(tmp_path: Path):
     # Build a fake published_models tree matching the real layout:
     # <root>/<grp_outer>/<grp_inner>/data/training_runs/<RUN_ID>/model/model.joblib

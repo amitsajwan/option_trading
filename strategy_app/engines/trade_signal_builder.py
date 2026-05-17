@@ -83,6 +83,7 @@ def build_ml_entry_signal(
         target_pct=signal_target_pct,
         underlying_stop_pct=underlying_stop_pct,
         underlying_target_pct=underlying_target_pct,
+        risk_basis=risk_basis,
         trailing_enabled=trailing_enabled,
         max_lots=lots,
         entry_strategy_name="ML_PURE_STAGED",

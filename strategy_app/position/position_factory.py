@@ -63,6 +63,7 @@ class PositionFactory:
             entry_futures_price=entry_futures_price,
             underlying_stop_pct=underlying_stop_pct,
             underlying_target_pct=underlying_target_pct,
+            risk_basis=(str(signal.risk_basis or "").strip().lower() or None),
             high_water_premium=premium,
             target_pct=float(signal.target_pct),
             trailing_enabled=bool(signal.trailing_enabled),

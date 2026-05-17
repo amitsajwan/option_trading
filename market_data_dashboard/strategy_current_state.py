@@ -120,15 +120,21 @@ def _read_runtime_config(run_dir: Path) -> dict[str, Any]:
     except Exception:
         return {"error": "runtime_config.json unreadable"}
     # Surface a small, stable shape — don't leak the whole config.
+    # NOTE: "model" block reflects whatever model is ACTUALLY firing decisions.
+    # When the engine runs an option-P&L bundle, runtime_config.model holds the
+    # bundle's recipe info (model_type="option_pnl_v1"); the original staged
+    # package gets demoted to "model_legacy_staged" for traceability only.
     model = payload.get("model") or {}
+    legacy = payload.get("model_legacy_staged") or None
     rollout = payload.get("rollout") or {}
-    return {
+    out = {
         "engine": payload.get("engine"),
         "topic": payload.get("topic"),
         "strategy_profile_id": payload.get("strategy_profile_id"),
         "model_run_id": model.get("run_id"),
         "model_group": model.get("model_group"),
         "model_package_path": model.get("model_package_path"),
+        "model_type": model.get("model_type") or "staged_runtime_v1",
         "rollout_stage": rollout.get("stage"),
         "min_confidence": rollout.get("min_confidence"),
         "position_size_multiplier": rollout.get("position_size_multiplier"),
@@ -137,6 +143,22 @@ def _read_runtime_config(run_dir: Path) -> dict[str, Any]:
         "block_expiry": model.get("block_expiry"),
         "checked_at_ist": payload.get("checked_at_ist"),
     }
+    # Option-P&L bundle extras (only present when bundle is active)
+    if str(model.get("model_type") or "") == "option_pnl_v1":
+        out["recipe_id"] = model.get("recipe_id")
+        out["decision_threshold"] = model.get("decision_threshold")
+        out["option_type"] = model.get("option_type")
+        out["max_hold_bars"] = model.get("max_hold_bars")
+        out["stop_pct_of_premium"] = model.get("stop_pct_of_premium")
+        out["target_pct_of_premium"] = model.get("target_pct_of_premium")
+    if legacy:
+        # Visible-but-demoted: dashboard can show "fallback model loaded as
+        # placeholder" so operator sees the full picture.
+        out["legacy_staged_model"] = {
+            "run_id": legacy.get("run_id"),
+            "model_group": legacy.get("model_group"),
+        }
+    return out
 
 
 def _list_available_models(root: Optional[Path] = None) -> list[dict[str, Any]]:

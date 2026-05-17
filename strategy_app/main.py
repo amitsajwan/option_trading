@@ -337,6 +337,25 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         )
     topic = str(args.topic or snapshot_topic()).strip() or snapshot_topic()
     runtime_store = RuntimeArtifactStore(runtime_artifact_paths.root)
+    # If the engine has an option-P&L bundle loaded (via OPTION_PNL_MODEL_BUNDLE),
+    # surface it in runtime_config.model so /api/strategy/current/state reports
+    # the model that's ACTUALLY firing decisions — not the staged placeholder.
+    active_option_pnl_bundle = None
+    _opb = getattr(engine, "_option_pnl_bundle", None)
+    if _opb is not None:
+        active_option_pnl_bundle = {
+            "run_id": _opb.run_id,
+            "recipe_id": _opb.recipe_id,
+            "model_group": "option_pnl_v1/" + str(_opb.option_type),
+            "model_package_path": str(_opb.metadata.get("bundle_dir") or "")
+                or os.getenv("OPTION_PNL_MODEL_BUNDLE", ""),
+            "decision_threshold": float(_opb.decision_threshold),
+            "option_type": _opb.option_type,
+            "strike_offset_steps": int(_opb.strike_offset_steps),
+            "max_hold_bars": int(_opb.max_hold_bars),
+            "stop_pct_of_premium": float(_opb.stop_pct_of_premium),
+            "target_pct_of_premium": float(_opb.target_pct_of_premium),
+        }
     runtime_store.write_config(
         build_runtime_config_payload(
             engine=str(args.engine),
@@ -360,6 +379,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             ml_pure_max_hold_bars=ml_pure_max_hold_bars,
             ml_pure_min_oi=ml_pure_min_oi,
             ml_pure_min_volume=ml_pure_min_volume,
+            active_option_pnl_bundle=active_option_pnl_bundle,
         )
     )
     consumer = RedisSnapshotConsumer(

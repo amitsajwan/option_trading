@@ -1,4 +1,4 @@
-// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v13
+// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v14
 /* global React, TradingCore, LWChart */
 const { useState: _s, useEffect: _e, useMemo: _m, useRef: _r, useCallback: _cb } = React;
 const TC = window.TradingCore;
@@ -382,9 +382,16 @@ function DiagPanel({ diag }) {
       <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'2px 0 4px'}}>Current model</div>
       <div style={{lineHeight:1.7}}>
         <div><span style={{color:'var(--fg-4)'}}>engine</span> <span style={{color:'var(--accent)'}}>{rc.engine || '—'}</span></div>
+        <div><span style={{color:'var(--fg-4)'}}>model_type</span> <span style={{color:rc.model_type==='option_pnl_v1' ? 'var(--pos)':'var(--fg-2)'}}>{rc.model_type || '—'}</span></div>
+        {rc.recipe_id && <div><span style={{color:'var(--fg-4)'}}>recipe</span> <span style={{color:'var(--pos)'}}>{rc.recipe_id}</span> @ thr <span style={{color:'var(--fg-1)'}}>{rc.decision_threshold}</span></div>}
         <div><span style={{color:'var(--fg-4)'}}>model_run_id</span> {rc.model_run_id || '—'}</div>
         <div><span style={{color:'var(--fg-4)'}}>regime</span> {rc.regime_strategy || '—'}</div>
         <div><span style={{color:'var(--fg-4)'}}>rollout</span> {rc.rollout_stage || '—'}</div>
+        {rc.legacy_staged_model && (
+          <div style={{color:'var(--fg-4)',fontSize:9.5,marginTop:4}}>
+            (staged fallback loaded: <span style={{color:'var(--fg-3)'}}>{rc.legacy_staged_model.run_id}</span> — not firing)
+          </div>
+        )}
       </div>
 
       <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'14px 0 4px'}}>

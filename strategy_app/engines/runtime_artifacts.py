@@ -277,15 +277,37 @@ def build_runtime_config_payload(
     ml_pure_max_hold_bars: int,
     ml_pure_min_oi: float,
     ml_pure_min_volume: float,
+    active_option_pnl_bundle: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    model_payload = {
-        "run_id": run_id,
-        "model_group": model_group,
-        "model_package_path": model_package_path,
-        "threshold_report_path": threshold_report_path,
-        "guard_file": guard_file,
-        "block_expiry": bool(block_expiry),
-    }
+    # When an option-P&L bundle is loaded via OPTION_PNL_MODEL_BUNDLE, it
+    # OVERRIDES the staged model — the engine produces decisions from the
+    # bundle, not from the C1 staged package. We surface this in the
+    # runtime_config so the dashboard's "current model" reads what's
+    # actually firing trades, not the loaded-but-unused staged file.
+    if active_option_pnl_bundle:
+        # When bundle is active, the staged C1 model is loaded as a structural
+        # placeholder only — keep it under model_legacy_staged for traceability.
+        model_payload = dict(active_option_pnl_bundle)
+        model_payload.setdefault("model_type", "option_pnl_v1")
+        model_payload.setdefault("block_expiry", bool(block_expiry))
+        model_legacy = {
+            "run_id": run_id,
+            "model_group": model_group,
+            "model_package_path": model_package_path,
+            "threshold_report_path": threshold_report_path,
+            "note": "loaded as structural placeholder; option-P&L bundle in `model` is firing decisions",
+        }
+    else:
+        model_payload = {
+            "run_id": run_id,
+            "model_group": model_group,
+            "model_package_path": model_package_path,
+            "threshold_report_path": threshold_report_path,
+            "guard_file": guard_file,
+            "block_expiry": bool(block_expiry),
+            "model_type": "staged_runtime_v1",
+        }
+        model_legacy = None
     rollout_payload = {
         "stage": str(rollout_stage),
         "min_confidence": float(min_confidence),
@@ -293,7 +315,7 @@ def build_runtime_config_payload(
         "halt_consecutive_losses": int(halt_consecutive_losses),
         "halt_daily_dd_pct": float(halt_daily_dd_pct),
     }
-    return {
+    payload = {
         "artifact_type": "strategy_runtime_config",
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
         "checked_at_ist": _now_ist(),
@@ -320,6 +342,9 @@ def build_runtime_config_payload(
             "min_volume": float(ml_pure_min_volume),
         },
     }
+    if model_legacy is not None:
+        payload["model_legacy_staged"] = model_legacy
+    return payload
 
 
 def build_runtime_state_payload(
