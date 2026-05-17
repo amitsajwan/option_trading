@@ -764,7 +764,49 @@ All three depend on having fresh OOS data to validate against. Don't design or r
 
 ---
 
-## 16. Related Docs
+## 16. Postscript (2026-05-17) — option-P&L labeling broke the overfit
+
+The "data ceiling reached" conclusion in §13-15 was **partially wrong** — it was correct for futures-direction labels but not for the corpus overall. Same features, same 2020-2024 corpus, different supervision target → first positive holdout signal in 5 attempts.
+
+### Pipeline shipped (all committed)
+
+- **Equivalence contract**: `ml_pipeline_2/configs/research/option_label_contract.json` + `ml_pipeline_2/docs/training/OPTION_LABEL_CONTRACT.md` — 10-clause audit checklist tying every labeler decision to a runtime call site so train/runtime can never drift silently.
+- **Labeler module**: `ml_pipeline_2/src/ml_pipeline_2/labeling/option_pnl.py` (29 unit tests).
+- **Production driver + sanity report**: `scripts/build_option_pnl_labels.py`, `scripts/option_pnl_sanity_report.py`.
+- **MVP trainer**: `scripts/train_option_pnl_mvp.py` — per-recipe XGBoost on C1 temporal split.
+- **Walk-forward**: `scripts/walk_forward_option_pnl.py` — 10 rolling holdout windows.
+- **HPO**: `scripts/hpo_option_pnl.py` — random search, native (no optuna).
+- **Grid**: `scripts/build_option_pnl_labels_grid.py` — adds ATM_CE_5, ATM_PE_5, OTM1_CE_15, OTM1_PE_15.
+
+### Headline numbers
+
+| Stage | Result |
+|---|---|
+| MVP trainer (single Aug-Oct 2024 holdout) | 4/4 recipes positive net P&L |
+| Walk-forward (10 windows Q3-2022 → Q3-2024) | ATM_PE_15: 9/10 EDGE_ROBUST; ATM_PE_9: 8/10 EDGE_ROBUST; CE side EDGE_PARTIAL |
+| HPO interim (24/25 trials done, ATM_PE_15) | Trial 18: net +42.41 (vs MVP +1.01), WR 59.1%, AUC 0.565 — 42x improvement |
+
+**Implied economics per lot (ATM_PE_9, walk-forward weighted):** ~700 trades/month, +0.74% net per trade, Rs ~25k/month per lot pre-HPO. PF expected 1.1-1.3 pre-HPO; trial 18 pattern suggests 1.3-1.5 post-HPO.
+
+### Why this isn't a victory yet
+
+1. Walk-forward still **single corpus** — needs validation against fresh post-Monday shadow data.
+2. Win rate ~50% means **high per-trade variance** even with positive expectancy.
+3. AUC modest (~0.54-0.57) — edge is concentrated at high-probability thresholds, not broad-spectrum.
+4. **3 audit items still open** in [OPTION_LABEL_CONTRACT.md](../ml_pipeline_2/docs/training/OPTION_LABEL_CONTRACT.md) — entry-fill timing, smart-strike per-recipe disable, dashboard pnl_pct_basis rendering. Must close before any live deployment.
+
+### Updated recommendation
+
+- **Continue iterating on option-P&L lane.** This direction is alive.
+- **Do not iterate further on futures-direction labels** (C1/G4 style). Five confirmations stand; that lane is dead for this corpus.
+- **Shadow validation first** before any real-capital decision — even if HPO + grid confirm. The "single corpus" risk remains until fresh data arrives.
+- **Kite live credentials** still gate the fresh-data path (independent of option-P&L work — both tracks proceed in parallel).
+
+See also: memory entry `project-option-pnl-breakthrough` for the full state + how-to-resume pointers.
+
+---
+
+## 17. Related Docs
 
 - [SYSTEM_FLOW_DIAGRAMS.md](SYSTEM_FLOW_DIAGRAMS.md) — architecture & flow diagrams
 - [ARCHITECTURE.md](ARCHITECTURE.md) — textual cross-cutting view
