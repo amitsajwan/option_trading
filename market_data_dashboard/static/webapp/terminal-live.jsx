@@ -1,4 +1,4 @@
-// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v14
+// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v15
 /* global React, TradingCore, LWChart */
 const { useState: _s, useEffect: _e, useMemo: _m, useRef: _r, useCallback: _cb } = React;
 const TC = window.TradingCore;
@@ -354,7 +354,7 @@ function DiagPanel({ diag }) {
   if (!diag) {
     return <div style={{padding:'12px',color:'var(--fg-3)',fontFamily:'var(--f-mono)',fontSize:11}}>Diagnostics unavailable in this mode.</div>;
   }
-  const { runtimeConfig, availableModels, blockerFunnel, timeline, loading, error, date, onRefresh, onTimelineFilterChange, onTimelineCollapseChange } = diag;
+  const { runtimeConfig, availableModels, blockerFunnel, timeline, loading, error, date, onRefresh, onTimelineFilterChange, onTimelineCollapseChange, activeRunId } = diag;
   const rc = runtimeConfig || {};
   const models = Array.isArray(availableModels) ? availableModels : [];
   const bf = blockerFunnel || {};
@@ -379,13 +379,21 @@ function DiagPanel({ diag }) {
       {error && <div style={{color:'var(--neg)',marginBottom:8}}>error: {error}</div>}
       {loading && <div style={{color:'var(--fg-3)',marginBottom:8}}>loading…</div>}
 
-      <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'2px 0 4px'}}>Current model</div>
+      {/* Two distinct concepts:
+           1. "Runtime config" = model the strategy_app container is loaded with
+              right now. Would fire NEW trades on a new replay.
+           2. "Trades shown produced by" = the model that wrote the events being
+              rendered on the grid. Comes from active_run_id's metadata.
+           When these differ, show a prominent mismatch warning so the operator
+           doesn't confuse one for the other (the 2024-07-29 trap). */}
+      <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'2px 0 4px'}}>
+        Runtime config <span style={{color:'var(--fg-4)',textTransform:'none'}}>(would fire NEW trades on next replay)</span>
+      </div>
       <div style={{lineHeight:1.7}}>
         <div><span style={{color:'var(--fg-4)'}}>engine</span> <span style={{color:'var(--accent)'}}>{rc.engine || '—'}</span></div>
         <div><span style={{color:'var(--fg-4)'}}>model_type</span> <span style={{color:rc.model_type==='option_pnl_v1' ? 'var(--pos)':'var(--fg-2)'}}>{rc.model_type || '—'}</span></div>
         {rc.recipe_id && <div><span style={{color:'var(--fg-4)'}}>recipe</span> <span style={{color:'var(--pos)'}}>{rc.recipe_id}</span> @ thr <span style={{color:'var(--fg-1)'}}>{rc.decision_threshold}</span></div>}
         <div><span style={{color:'var(--fg-4)'}}>model_run_id</span> {rc.model_run_id || '—'}</div>
-        <div><span style={{color:'var(--fg-4)'}}>regime</span> {rc.regime_strategy || '—'}</div>
         <div><span style={{color:'var(--fg-4)'}}>rollout</span> {rc.rollout_stage || '—'}</div>
         {rc.legacy_staged_model && (
           <div style={{color:'var(--fg-4)',fontSize:9.5,marginTop:4}}>
@@ -393,6 +401,39 @@ function DiagPanel({ diag }) {
           </div>
         )}
       </div>
+
+      {/* Trades-shown provenance — uses the active_run_id of the displayed
+          date (passed in diag.activeRunId from ReplayMonitorDark). */}
+      <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'14px 0 4px'}}>
+        Trades shown were produced by <span style={{color:'var(--fg-4)',textTransform:'none'}}>(historical run for selected date)</span>
+      </div>
+      {(() => {
+        const arid = diag.activeRunId || '—';
+        // Heuristic: published bundles named "option_pnl_*" are the new ATM_PE_15
+        // family; everything else is legacy futures-direction (C1) staged models.
+        const isOptionPnl = typeof arid === 'string' && arid.startsWith('option_pnl_');
+        const producedModel = arid === '—' ? '— (no stored run for this date)'
+          : isOptionPnl ? 'option_pnl_v1 (bundle)'
+          : 'staged_runtime_v1 (C1-family, futures-direction labels)';
+        const runtimeRunId = rc.model_run_id || '';
+        const mismatch = arid !== '—' && arid !== runtimeRunId;
+        return (
+          <div style={{lineHeight:1.7}}>
+            <div><span style={{color:'var(--fg-4)'}}>run_id</span> <span style={{color:isOptionPnl?'var(--pos)':'var(--warn)'}}>{arid}</span></div>
+            <div><span style={{color:'var(--fg-4)'}}>model</span> <span style={{color:isOptionPnl?'var(--pos)':'var(--warn)'}}>{producedModel}</span></div>
+            {mismatch && (
+              <div style={{marginTop:6,padding:'6px 8px',background:'rgba(245,165,36,0.10)',border:'1px solid rgba(245,165,36,0.35)',borderRadius:2,color:'var(--warn)',fontSize:10}}>
+                ⚠ Trades shown ≠ runtime config. The runtime model above would produce
+                <em> different</em> trades. To see what the new model would do for this date,
+                trigger a fresh replay (POST /api/historical/replay/generate).
+              </div>
+            )}
+            {!mismatch && arid !== '—' && (
+              <div style={{marginTop:4,color:'var(--pos)',fontSize:10}}>✓ Trades shown match runtime config</div>
+            )}
+          </div>
+        );
+      })()}
 
       <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'14px 0 4px'}}>
         Available models <span style={{color:'var(--fg-4)'}}>({models.length})</span>
@@ -1378,7 +1419,8 @@ function ReplayMonitorDark({ onModeSwitch }) {
                       loading: diagLoading, error: diagError,
                       date: replayDate, onRefresh: fetchDiag,
                       onTimelineFilterChange: setTlOutcome,
-                      onTimelineCollapseChange: setTlCollapse }}
+                      onTimelineCollapseChange: setTlCollapse,
+                      activeRunId: session && session.runId ? session.runId : null }}
             />
           </div>
 
