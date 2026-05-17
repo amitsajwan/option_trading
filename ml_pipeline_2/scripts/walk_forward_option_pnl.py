@@ -94,12 +94,20 @@ class WindowResult:
     threshold_sweep: list[dict]
 
 
+DEFAULT_PARAMS = dict(
+    n_estimators=300, max_depth=4, learning_rate=0.05,
+    subsample=0.85, colsample_bytree=0.85, reg_lambda=2.0,
+)
+
+
 def train_one_window(
     df: pd.DataFrame,
     train_start: pd.Timestamp,
     train_end: pd.Timestamp,
     holdout_start: pd.Timestamp,
     holdout_end: pd.Timestamp,
+    *,
+    params: Optional[dict] = None,
 ) -> Optional[WindowResult]:
     feat_cols = select_feature_columns(df)
     train_mask = (df["trade_date"] >= train_start) & (df["trade_date"] <= train_end)
@@ -115,9 +123,9 @@ def train_one_window(
     y_ho = holdout["label"].astype(int).to_numpy()
     pnl_ho = holdout["net_pnl_pct"].astype(float).to_numpy()
 
+    model_params = {**DEFAULT_PARAMS, **(params or {})}
     model = xgb.XGBClassifier(
-        n_estimators=300, max_depth=4, learning_rate=0.05,
-        subsample=0.85, colsample_bytree=0.85, reg_lambda=2.0,
+        **model_params,
         objective="binary:logistic", eval_metric="auc",
         tree_method="hist", n_jobs=4, random_state=42,
     )
@@ -178,11 +186,20 @@ def run(args) -> int:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    params: Optional[dict] = None
+    if args.params_json:
+        params = json.loads(Path(args.params_json).read_text())
+        # If a hpo_results.json was passed directly, pull the best trial's params.
+        if isinstance(params, dict) and "trials" in params:
+            params = params["trials"][0]["params"]
+
     recipe_ids = args.recipes or ["ATM_CE_9", "ATM_PE_9", "ATM_CE_15", "ATM_PE_15"]
     print("=== Walk-forward validation ===")
     print(f"labels: {labels_root}")
     print(f"recipes: {recipe_ids}")
     print(f"windows: {len(WINDOWS)}")
+    if params:
+        print(f"PARAMS OVERRIDE: {json.dumps(params, sort_keys=True)}")
     print()
 
     all_results: dict = {}
@@ -202,6 +219,7 @@ def run(args) -> int:
                 df,
                 pd.Timestamp(t0), pd.Timestamp(t1),
                 pd.Timestamp(h0), pd.Timestamp(h1),
+                params=params,
             )
             if res is None:
                 print(f"  {w_id}: skipped (insufficient rows)")
@@ -251,6 +269,9 @@ def main() -> int:
     p.add_argument("--flat", default=str(DEFAULT_FLAT_ROOT))
     p.add_argument("--out", required=True)
     p.add_argument("--recipes", nargs="*", default=None)
+    p.add_argument("--params-json", default=None,
+                   help="Path to JSON file with XGBoost params (e.g. HPO output). "
+                        "If file is an HPO results.json with 'trials', best trial's params are used.")
     args = p.parse_args()
     return run(args)
 
