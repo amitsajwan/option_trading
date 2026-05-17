@@ -1,7 +1,9 @@
 import json
 import os
+import socket
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 from strategy_app.runtime.redis_snapshot_consumer import RedisSnapshotConsumer
 
@@ -135,21 +137,134 @@ class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
         self.assertEqual(len(engine.starts), 1)
         self.assertEqual(len(engine.ends), 1)
 
-    def test_raises_on_duplicate_consumer_lock(self) -> None:
-        payloads: list[dict] = []
-        shared_client = _FakeRedis(payloads)
-        existing_key = "strategy_app:consumer_lock:market:snapshot:v1"
-        shared_client.set(existing_key, "other-owner", nx=True, ex=120)
-        engine = _FakeEngine()
-        consumer = RedisSnapshotConsumer(
-            engine=engine,
-            topic="market:snapshot:v1",
-            client=shared_client,
-            poll_interval_sec=0.001,
-        )
+    def test_consumer_lock_stolen_when_owned_by_same_hostname(self) -> None:
+        """Container restart case: a stale lock owned by a dead PID on the
+        same hostname must be reclaimed atomically — not block the new
+        process from starting. This was previously crashing every restart
+        and recovering only via docker's restart-policy retry."""
+        os.environ["STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC"] = "5"
+        try:
+            shared_client = _FakeRedis([])
+            lock_key = "strategy_app:consumer_lock:market:snapshot:v1"
+            # Lock from a "previous" process on this same hostname (different PID)
+            stale_owner = f"{socket.gethostname()}:99999:dead0000:market:snapshot:v1"
+            shared_client.set(lock_key, stale_owner, nx=True, ex=120)
 
-        with self.assertRaisesRegex(RuntimeError, "duplicate strategy consumer detected"):
-            consumer.start(max_events=0)
+            engine = _FakeEngine()
+            consumer = RedisSnapshotConsumer(
+                engine=engine,
+                topic="market:snapshot:v1",
+                client=shared_client,
+                poll_interval_sec=0.001,
+            )
+            # _FakeRedis has no EVAL — code falls back to delete + retry SETNX.
+            # Should reclaim on the second SETNX attempt without waiting.
+            consumer._acquire_consumer_lock()
+            # Lock is now owned by our process, not the stale one
+            current = shared_client.get(lock_key)
+            self.assertEqual(current, consumer._consumer_lock_owner)
+            self.assertNotEqual(current, stale_owner)
+        finally:
+            os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
+
+    def test_consumer_lock_waits_and_acquires_when_other_owner_expires(self) -> None:
+        """If a genuinely concurrent consumer's lock is about to expire, we
+        wait for it then acquire — no crash."""
+        os.environ["STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC"] = "5"
+        try:
+            shared_client = _FakeRedis([])
+            lock_key = "strategy_app:consumer_lock:market:snapshot:v1"
+            other_owner = "different-host-12345:7:abcdef:market:snapshot:v1"
+            shared_client.set(lock_key, other_owner, nx=True, ex=120)
+
+            engine = _FakeEngine()
+            consumer = RedisSnapshotConsumer(
+                engine=engine,
+                topic="market:snapshot:v1",
+                client=shared_client,
+                poll_interval_sec=0.001,
+            )
+
+            # Simulate the lock expiring while we wait: on the 2nd Event.wait
+            # call, free the lock so the next SETNX attempt succeeds.
+            call_count = {"n": 0}
+
+            def fake_wait(_self, _timeout):
+                call_count["n"] += 1
+                if call_count["n"] == 1:
+                    shared_client.delete(lock_key)
+                return False  # not stopped
+
+            with patch("threading.Event.wait", new=fake_wait):
+                consumer._acquire_consumer_lock()
+            self.assertEqual(shared_client.get(lock_key), consumer._consumer_lock_owner)
+            self.assertGreaterEqual(call_count["n"], 1)
+        finally:
+            os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
+
+    def test_consumer_lock_raises_after_max_wait_for_persistent_other_owner(self) -> None:
+        """If a different-host lock persists past max_wait, we raise — operator
+        needs to know there's a real duplicate consumer."""
+        os.environ["STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC"] = "5"
+        try:
+            shared_client = _FakeRedis([])
+            lock_key = "strategy_app:consumer_lock:market:snapshot:v1"
+            other_owner = "different-host-12345:7:abcdef:market:snapshot:v1"
+            shared_client.set(lock_key, other_owner, nx=True, ex=300)
+
+            engine = _FakeEngine()
+            consumer = RedisSnapshotConsumer(
+                engine=engine,
+                topic="market:snapshot:v1",
+                client=shared_client,
+                poll_interval_sec=0.001,
+            )
+
+            # Patch time.monotonic to fast-forward past deadline and Event.wait
+            # to no-op — keeps the test under 100ms.
+            t = {"now": 1000.0}
+            real_monotonic = lambda: t["now"]  # noqa: E731
+
+            def fake_wait(_self, _timeout):
+                t["now"] += _timeout  # advance "time" by sleep duration
+                return False
+
+            with patch("strategy_app.runtime.redis_snapshot_consumer.time.monotonic",
+                       side_effect=real_monotonic), \
+                 patch("threading.Event.wait", new=fake_wait):
+                with self.assertRaisesRegex(RuntimeError, "duplicate strategy consumer detected after waiting"):
+                    consumer._acquire_consumer_lock()
+            # Lock untouched
+            self.assertEqual(shared_client.get(lock_key), other_owner)
+        finally:
+            os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
+
+    def test_consumer_lock_acquire_exits_cleanly_when_stop_requested(self) -> None:
+        """If shutdown is requested while waiting on the lock, exit without
+        raising — the app is closing, not trying to start."""
+        os.environ["STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC"] = "5"
+        try:
+            shared_client = _FakeRedis([])
+            lock_key = "strategy_app:consumer_lock:market:snapshot:v1"
+            shared_client.set(lock_key, "different-host:1:x:market:snapshot:v1", nx=True, ex=300)
+
+            engine = _FakeEngine()
+            consumer = RedisSnapshotConsumer(
+                engine=engine,
+                topic="market:snapshot:v1",
+                client=shared_client,
+                poll_interval_sec=0.001,
+            )
+
+            def fake_wait_with_stop(_self, _timeout):
+                return True  # simulate stop_event being set during wait
+
+            with patch("threading.Event.wait", new=fake_wait_with_stop):
+                consumer._acquire_consumer_lock()
+            # Lock NOT taken (we exited on stop), no exception raised
+            self.assertNotEqual(shared_client.get(lock_key), consumer._consumer_lock_owner)
+        finally:
+            os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
 
     def test_session_start_still_runs_when_prior_session_end_fails(self) -> None:
         payloads = [

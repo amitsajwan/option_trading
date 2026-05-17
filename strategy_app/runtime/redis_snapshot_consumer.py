@@ -115,7 +115,11 @@ class RedisSnapshotConsumer:
             lock_ttl_sec = int(lock_ttl_raw)
         except Exception:
             lock_ttl_sec = 120
-        self._consumer_lock_ttl_sec = max(30, lock_ttl_sec)
+        # Floor at 5s — refresh interval below adapts via TTL//2 so short TTLs
+        # remain safe in production. The previous 30s floor blocked tests from
+        # exercising the wait/retry path in reasonable time. 30s default is
+        # still preserved when env var is unset.
+        self._consumer_lock_ttl_sec = max(5, lock_ttl_sec)
         refresh_raw = str(os.getenv("STRATEGY_SINGLE_CONSUMER_LOCK_REFRESH_SEC") or "30").strip()
         try:
             refresh_sec = int(refresh_raw)
@@ -167,39 +171,144 @@ class RedisSnapshotConsumer:
         return f"{run_id}:{snapshot_id}"
 
     def _acquire_consumer_lock(self) -> None:
+        """Acquire the per-topic consumer lock with graceful handling of stale
+        and contended states.
+
+        Three branches:
+          1. Lock free → SET NX succeeds → acquired immediately.
+          2. Lock held by SAME hostname (our own previous process — dead, since
+             we're a fresh PID) → atomically steal via CAS (EVAL). This is the
+             container-restart case; container hostname is stable across docker
+             restart so an exited PID's lock blocks the next start until TTL.
+             Stealing avoids 30-60s of crash-loop noise.
+          3. Lock held by DIFFERENT hostname (genuine concurrent consumer) →
+             wait with backoff up to (TTL + 5s) for the lock to expire. If it
+             persists past that, raise — there's a real duplicate that needs
+             operator attention.
+
+        The previous behaviour raised on the first failed SET NX regardless of
+        owner, which made every container restart produce a noisy traceback
+        that recovered only because docker's restart-policy retried.
+        """
         if not self._consumer_lock_enabled:
             return
         if not hasattr(self._client, "set"):
             logger.warning("strategy consumer lock skipped: redis client does not support SET")
             return
-        try:
-            acquired = self._client.set(
-                self._consumer_lock_key,
-                self._consumer_lock_owner,
-                nx=True,
-                ex=self._consumer_lock_ttl_sec,
-            )
-        except Exception:
-            logger.exception("strategy consumer lock acquire failed key=%s", self._consumer_lock_key)
-            raise
-        if acquired:
-            logger.info(
-                "strategy consumer lock acquired key=%s ttl=%ss owner=%s",
-                self._consumer_lock_key,
-                self._consumer_lock_ttl_sec,
-                self._consumer_lock_owner,
-            )
-            return
-        existing_owner = None
-        if hasattr(self._client, "get"):
+
+        own_hostname = socket.gethostname()
+        max_wait_sec = self._consumer_lock_ttl_sec + 5  # one TTL + small buffer
+        wait_step_sec = max(2, min(10, self._consumer_lock_ttl_sec // 12))
+        deadline = time.monotonic() + max_wait_sec
+        attempt = 0
+
+        while True:
+            attempt += 1
             try:
-                existing_owner = self._client.get(self._consumer_lock_key)
+                acquired = self._client.set(
+                    self._consumer_lock_key,
+                    self._consumer_lock_owner,
+                    nx=True,
+                    ex=self._consumer_lock_ttl_sec,
+                )
             except Exception:
-                existing_owner = None
-        raise RuntimeError(
-            "duplicate strategy consumer detected for topic="
-            f"{self.topic} lock_key={self._consumer_lock_key} existing_owner={existing_owner!r}"
-        )
+                logger.exception("strategy consumer lock acquire failed key=%s", self._consumer_lock_key)
+                raise
+            if acquired:
+                logger.info(
+                    "strategy consumer lock acquired key=%s ttl=%ss owner=%s attempt=%d",
+                    self._consumer_lock_key,
+                    self._consumer_lock_ttl_sec,
+                    self._consumer_lock_owner,
+                    attempt,
+                )
+                return
+
+            existing_owner_raw = None
+            if hasattr(self._client, "get"):
+                try:
+                    existing_owner_raw = self._client.get(self._consumer_lock_key)
+                except Exception:
+                    existing_owner_raw = None
+            existing_owner = (
+                existing_owner_raw.decode("utf-8", errors="replace")
+                if isinstance(existing_owner_raw, (bytes, bytearray))
+                else existing_owner_raw
+            )
+            existing_hostname = ""
+            if isinstance(existing_owner, str) and ":" in existing_owner:
+                existing_hostname = existing_owner.split(":", 1)[0]
+            same_host = bool(existing_hostname) and existing_hostname == own_hostname
+
+            if same_host:
+                # Same hostname: this lock was held by a prior PID inside this
+                # same container (now dead — we're a fresh start). Reclaim it
+                # atomically: only steal if the value still matches what we saw,
+                # so a genuine new owner from the same host (rare) wouldn't get
+                # clobbered.
+                stolen = False
+                if hasattr(self._client, "eval"):
+                    try:
+                        result = self._client.eval(
+                            "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+                            "return redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3]) "
+                            "else return nil end",
+                            1,
+                            self._consumer_lock_key,
+                            existing_owner,
+                            self._consumer_lock_owner,
+                            self._consumer_lock_ttl_sec,
+                        )
+                        stolen = bool(result)
+                    except Exception:
+                        logger.exception(
+                            "stale lock reclaim (CAS) failed key=%s; will fall back to wait loop",
+                            self._consumer_lock_key,
+                        )
+                else:
+                    # No EVAL support (test fakes etc.) — best effort: delete + retry SETNX
+                    try:
+                        if hasattr(self._client, "delete"):
+                            self._client.delete(self._consumer_lock_key)
+                    except Exception:
+                        pass
+                if stolen:
+                    logger.info(
+                        "strategy consumer lock reclaimed from prior same-host process "
+                        "key=%s prior_owner=%s new_owner=%s",
+                        self._consumer_lock_key,
+                        existing_owner,
+                        self._consumer_lock_owner,
+                    )
+                    return
+                # CAS failed (someone else took it between GET and EVAL) — loop will retry
+                logger.info(
+                    "stale-lock reclaim attempt did not commit, will retry (existing_owner=%s)",
+                    existing_owner,
+                )
+
+            now = time.monotonic()
+            if now >= deadline:
+                raise RuntimeError(
+                    "duplicate strategy consumer detected after waiting "
+                    f"{max_wait_sec}s for topic={self.topic} lock_key={self._consumer_lock_key} "
+                    f"existing_owner={existing_owner!r} (attempts={attempt})"
+                )
+
+            remaining = max(0, int(deadline - now))
+            logger.warning(
+                "strategy consumer lock contended (%s host); existing_owner=%s — "
+                "retry in %ds (attempt %d, %ds before timeout)",
+                "same" if same_host else "different",
+                existing_owner,
+                wait_step_sec,
+                attempt,
+                remaining,
+            )
+            # _stop_event-aware sleep so a shutdown during contention exits cleanly
+            if self._stop_event.wait(wait_step_sec):
+                logger.info("stop requested while waiting on consumer lock; aborting acquire")
+                return
 
     def _refresh_consumer_lock(self) -> None:
         if not self._consumer_lock_enabled:
