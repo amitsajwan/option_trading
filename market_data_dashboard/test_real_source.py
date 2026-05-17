@@ -2,12 +2,67 @@ import unittest
 
 from market_data_dashboard.real_source import (
     _find_underlying_stop_trigger,
+    _latest_run_id_for_date,
     _position_to_trade,
 )
 from market_data_dashboard.schemas.monitor import MonitorCandle, MonitorSignal, MonitorSignalMetrics
 
 
 class RealSourceTradeTests(unittest.TestCase):
+    def test_latest_run_id_prefers_position_run_over_empty_registered_run(self) -> None:
+        class _Collection:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def find_one(self, query, projection=None, sort=None):  # noqa: ARG002
+                rows = []
+                for doc in self._docs:
+                    ok = True
+                    for key, value in query.items():
+                        if key == "run_id" and value == {"$nin": [None, ""]}:
+                            ok = doc.get("run_id") not in (None, "")
+                        elif isinstance(value, dict) and "$lte" in value:
+                            ok = str(doc.get(key) or "") <= str(value["$lte"])
+                        elif isinstance(value, dict) and "$gte" in value:
+                            ok = str(doc.get(key) or "") >= str(value["$gte"])
+                        else:
+                            ok = doc.get(key) == value
+                        if not ok:
+                            break
+                    if ok:
+                        rows.append(doc)
+                if sort:
+                    for field, direction in reversed(sort):
+                        rows.sort(key=lambda item: str(item.get(field) or ""), reverse=direction < 0)
+                return rows[0] if rows else None
+
+        db = {
+            "strategy_eval_runs": _Collection(
+                [
+                    {
+                        "_id": "2",
+                        "status": "completed",
+                        "date_from": "2024-09-01",
+                        "date_to": "2024-09-30",
+                        "run_id": "empty-registered-run",
+                    }
+                ]
+            ),
+            "strategy_positions_historical": _Collection(
+                [
+                    {
+                        "_id": "1",
+                        "trade_date_ist": "2024-09-18",
+                        "event": "POSITION_CLOSE",
+                        "timestamp": "2024-09-18T15:26:00+05:30",
+                        "run_id": "positions-run",
+                    }
+                ]
+            ),
+        }
+
+        self.assertEqual(_latest_run_id_for_date(db, "2024-09-18"), "positions-run")
+
     def test_find_underlying_stop_trigger_distinguishes_intrabar_and_close_breach(self) -> None:
         candles = [
             MonitorCandle(i=0, o=54006.15, h=54039.0, l=53995.10, c=54020.0, v=1, t=1, label="09:45"),

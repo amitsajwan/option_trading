@@ -475,11 +475,28 @@ def _position_to_trade(
 def _latest_run_id_for_date(db: Any, trade_date: str) -> Optional[str]:
     """Return the run_id of the most recent run that produced positions for trade_date.
 
-    First checks the Flow 3 registry (`strategy_eval_runs`) for an on-demand eval
-    orchestrator run. If none matches, falls back to scanning the streaming Flow 2
-    positions collection (`strategy_positions_historical`) so trades produced by
-    `strategy_app_historical` surface in the UI without requiring a Flow 3 re-run.
+    Prefer the run that actually produced closed positions for the selected date.
+    If no positions exist, fall back to the Flow 3 registry so zero-trade runs can
+    still surface their snapshots and signals.
     """
+    positions_coll = str(
+        os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL") or "strategy_positions_historical"
+    )
+    try:
+        doc = db[positions_coll].find_one(
+            {
+                "trade_date_ist": trade_date,
+                "event": "POSITION_CLOSE",
+                "run_id": {"$nin": [None, ""]},
+            },
+            {"run_id": 1},
+            sort=[("timestamp", DESCENDING), ("_id", DESCENDING)],
+        )
+        if doc and doc.get("run_id"):
+            return str(doc["run_id"]).strip() or None
+    except Exception:
+        pass
+
     runs_coll = str(os.getenv("MONGO_COLL_STRATEGY_EVAL_RUNS") or "strategy_eval_runs")
     try:
         doc = db[runs_coll].find_one(
