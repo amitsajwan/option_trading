@@ -979,9 +979,17 @@ class LiveStrategyMonitorService:
         if stale_positions:
             warnings.append("stale_open_positions_detected")
         if self._dataset == "historical":
-            for warning in replay_integrity_warnings(recent_trades):
+            integrity = replay_integrity_warnings(recent_trades)
+            for warning in integrity:
                 if warning not in warnings:
                     warnings.append(warning)
+            # Suppress contaminated trades for consistency with the dropdown
+            # trade-count (which already excludes overlap-tainted runs) and
+            # with the WebSocket-driven Tape grid. The warning above is what
+            # tells the operator why they see zero trades.
+            if "overlapping_replay_positions_detected" in integrity:
+                recent_trades = []
+                latest_closed_trade = None
 
         recent_activity = self.build_recent_activity(
             current_open_positions=active_positions,

@@ -1,6 +1,7 @@
 import unittest
 
 from market_data_dashboard.real_source import (
+    _enforce_replay_integrity,
     _find_underlying_stop_trigger,
     _latest_run_id_for_date,
     _position_to_trade,
@@ -30,6 +31,45 @@ class RealSourceTradeTests(unittest.TestCase):
         )
 
         self.assertEqual(warnings, [])
+
+    def test_enforce_replay_integrity_suppresses_overlapping_trades(self) -> None:
+        """If overlap is detected, the trade list MUST be blanked AND an alert
+        appended. The dropdown count already excludes contaminated runs; the
+        grid must do the same so dropdown and grid agree."""
+        contaminated = [
+            {"position_id": "p1", "entryIdx": 10, "exitIdx": 50},
+            {"position_id": "p2", "entryIdx": 20, "exitIdx": 30},  # overlaps p1
+            {"position_id": "p3", "entryIdx": 60, "exitIdx": 70},
+        ]
+        trades, alerts = _enforce_replay_integrity(contaminated, [])
+        self.assertEqual(trades, [], "overlapping trades must be suppressed from grid")
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0].level, "warn")
+        self.assertIn("overlapping positions", alerts[0].msg)
+        self.assertIn("suppressed", alerts[0].msg)
+
+    def test_enforce_replay_integrity_passthrough_for_clean_trades(self) -> None:
+        clean = [
+            {"position_id": "p1", "entryIdx": 10, "exitIdx": 20},
+            {"position_id": "p2", "entryIdx": 25, "exitIdx": 35},
+        ]
+        trades, alerts = _enforce_replay_integrity(clean, [])
+        self.assertEqual(len(trades), 2, "clean trades must pass through unchanged")
+        self.assertEqual(alerts, [], "no alerts for clean trade list")
+
+    def test_enforce_replay_integrity_preserves_existing_alerts(self) -> None:
+        """Pre-existing alerts must not be lost when overlap is detected."""
+        from market_data_dashboard.schemas.monitor import MonitorAlert
+        existing = MonitorAlert(level="info", t="09:30", msg="warmup complete", tms=1)
+        contaminated = [
+            {"position_id": "p1", "entryIdx": 10, "exitIdx": 50},
+            {"position_id": "p2", "entryIdx": 20, "exitIdx": 30},
+        ]
+        trades, alerts = _enforce_replay_integrity(contaminated, [existing])
+        self.assertEqual(trades, [])
+        self.assertEqual(len(alerts), 2)
+        self.assertIs(alerts[0], existing)
+        self.assertEqual(alerts[1].level, "warn")
 
     def test_latest_run_id_prefers_position_run_over_empty_registered_run(self) -> None:
         class _Collection:

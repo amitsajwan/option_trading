@@ -32,6 +32,38 @@ except ImportError:
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
+def _enforce_replay_integrity(trades: Any, alerts: Any) -> tuple[list, list]:
+    """If trades exhibit a replay-integrity violation (currently: overlapping
+    positions in a single-position run), append a warning alert and return an
+    empty trade list. Otherwise return inputs unchanged.
+
+    Why suppress rather than just warn:
+        The dropdown trade-count (historical_replay_monitor_service.py) already
+        excludes overlap-tainted runs from its count. Without suppressing the
+        trades here, a date that shows '— empty' in the picker would still
+        render contaminated trades on the Tape grid — the original bug class.
+
+    Pulled into a leaf helper so the suppression logic is unit-testable without
+    standing up a fake mongo for the whole _build_session flow.
+    """
+    trades_list = list(trades or [])
+    alerts_list = list(alerts or [])
+    integrity_warnings = replay_integrity_warnings(trades_list)
+    if "overlapping_replay_positions_detected" in integrity_warnings:
+        alerts_list.append(MonitorAlert(
+            level="warn",
+            t="09:15",
+            msg=(
+                "Replay integrity warning: overlapping positions were detected in this run. "
+                "Trades have been suppressed from the grid to avoid misleading display. "
+                "Regenerate the run cleanly to see real trades."
+            ),
+            tms=int(datetime.now(tz=timezone.utc).timestamp() * 1000) + 2,
+        ))
+        return [], alerts_list
+    return trades_list, alerts_list
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _safe_float(v: Any, fallback: Optional[float] = 0.0) -> Optional[float]:
@@ -738,17 +770,7 @@ def _build_session(
             ),
             tms=int(datetime.now(tz=timezone.utc).timestamp() * 1000) + 1,
         ))
-    integrity_warnings = replay_integrity_warnings(list(trades))
-    if "overlapping_replay_positions_detected" in integrity_warnings:
-        alerts.append(MonitorAlert(
-            level="warn",
-            t="09:15",
-            msg=(
-                "Replay integrity warning: overlapping positions were detected in this run. "
-                "Do not use this replay for strategy-quality conclusions until the run is regenerated cleanly."
-            ),
-            tms=int(datetime.now(tz=timezone.utc).timestamp() * 1000) + 2,
-        ))
+    trades, alerts = _enforce_replay_integrity(trades, alerts)
 
     return MonitorSession(
         date=trade_date,
