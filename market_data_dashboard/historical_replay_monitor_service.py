@@ -368,6 +368,9 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
         """Return the run_id the historical session endpoint will use for date_ist."""
         if not date_ist:
             return None
+        position_run_id = self._resolve_latest_position_run_id_for_date(date_ist)
+        if position_run_id:
+            return position_run_id
         try:
             db = self._repo._evaluation_service._db()
             runs_coll_name = str(os.getenv("MONGO_COLL_STRATEGY_EVAL_RUNS") or "strategy_eval_runs")
@@ -384,7 +387,7 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
                 return str(doc["run_id"]).strip() or None
         except Exception:
             pass
-        return self._resolve_latest_position_run_id_for_date(date_ist)
+        return None
 
     def get_historical_strategy_session(self, **kwargs: Any) -> dict[str, Any]:
         run_id = str(kwargs.get("run_id") or "").strip() or None

@@ -177,7 +177,17 @@ class HistoricalReplayAppTests(unittest.TestCase):
                 },
             ]
         )
-        runs = _Collection([])
+        runs = _Collection(
+            [
+                {
+                    "_id": "4",
+                    "run_id": "empty-registered-run",
+                    "status": "completed",
+                    "date_from": {"$lte": "2024-09-18"},
+                    "date_to": {"$gte": "2024-09-18"},
+                }
+            ]
+        )
         snapshots = _Collection([{"trade_date_ist": "2024-09-18"}])
 
         class _EvalStub:
