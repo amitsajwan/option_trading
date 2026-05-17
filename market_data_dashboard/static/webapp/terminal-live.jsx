@@ -1,4 +1,4 @@
-// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v12
+// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v13
 /* global React, TradingCore, LWChart */
 const { useState: _s, useEffect: _e, useMemo: _m, useRef: _r, useCallback: _cb } = React;
 const TC = window.TradingCore;
@@ -350,10 +350,11 @@ function _outcomeColor(oc) {
 }
 function DiagPanel({ diag }) {
   const [tlFilter, setTlFilter] = _s('blocked');
+  const [tlCollapse, setTlCollapse] = _s(true);
   if (!diag) {
     return <div style={{padding:'12px',color:'var(--fg-3)',fontFamily:'var(--f-mono)',fontSize:11}}>Diagnostics unavailable in this mode.</div>;
   }
-  const { runtimeConfig, availableModels, blockerFunnel, timeline, loading, error, date, onRefresh, onTimelineFilterChange } = diag;
+  const { runtimeConfig, availableModels, blockerFunnel, timeline, loading, error, date, onRefresh, onTimelineFilterChange, onTimelineCollapseChange } = diag;
   const rc = runtimeConfig || {};
   const models = Array.isArray(availableModels) ? availableModels : [];
   const bf = blockerFunnel || {};
@@ -368,6 +369,10 @@ function DiagPanel({ diag }) {
   function setFilterAndFetch(v) {
     setTlFilter(v);
     if (onTimelineFilterChange) onTimelineFilterChange(v === 'all' ? '' : v);
+  }
+  function setCollapseAndFetch(v) {
+    setTlCollapse(v);
+    if (onTimelineCollapseChange) onTimelineCollapseChange(v);
   }
   return (
     <div style={{padding:'10px 12px',fontFamily:'var(--f-mono)',fontSize:10.5,color:'var(--fg-2)',overflowY:'auto',maxHeight:'100%'}}>
@@ -443,7 +448,7 @@ function DiagPanel({ diag }) {
         <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase'}}>
           Per-minute decisions <span style={{color:'var(--fg-4)'}}>({decisions.length} of {tlTotal})</span>
         </div>
-        <div style={{display:'flex',gap:4}}>
+        <div style={{display:'flex',gap:4,alignItems:'center'}}>
           {['all','blocked','hold','entry_taken'].map(v => (
             <button key={v}
                     className={'t-btn ghost sm' + (tlFilter===v?' active':'')}
@@ -454,6 +459,16 @@ function DiagPanel({ diag }) {
               {v}
             </button>
           ))}
+          {/* "collapse" merges consecutive rows with bit-identical Stage-1 output
+              into a single row — exposes the "Stage-1 stuck for N minutes" signal */}
+          <button className={'t-btn ghost sm' + (tlCollapse?' active':'')}
+                  onClick={()=>setCollapseAndFetch(!tlCollapse)}
+                  title="merge consecutive rows with identical Stage-1 output"
+                  style={{fontSize:9.5, padding:'2px 6px', marginLeft:6,
+                          color: tlCollapse ? 'var(--accent)' : 'var(--fg-3)',
+                          borderColor: tlCollapse ? 'var(--accent)' : undefined}}>
+            collapse
+          </button>
         </div>
       </div>
       {decisions.length === 0 ? (
@@ -483,9 +498,17 @@ function DiagPanel({ diag }) {
                   `missing=${s1.missing_count ?? '—'}`,
                   `output=${s1.output_prob ?? (d.metrics||{}).entry_prob ?? '—'}`,
                 ].join(' · ');
+                const runMins = d.run_minutes || 1;
+                const isRun = runMins > 1;
+                const timeCell = isRun
+                  ? <span title={`${runMins} consecutive snapshots with identical Stage-1 entry_prob`}>
+                      {d.time}<span style={{color:'var(--fg-4)'}}>–{d.time_end}</span>
+                      <span style={{color:'var(--accent)',marginLeft:4,fontSize:9}}>×{runMins}</span>
+                    </span>
+                  : (d.time || '—');
                 return (
-                  <tr key={i} style={{borderTop:'1px solid var(--line-3)'}}>
-                    <td style={{padding:'2px 6px',color:'var(--fg-3)',fontFamily:'var(--f-mono)'}}>{d.time || '—'}</td>
+                  <tr key={i} style={{borderTop:'1px solid var(--line-3)',background:isRun?'rgba(245,165,36,0.04)':'transparent'}}>
+                    <td style={{padding:'2px 6px',color:'var(--fg-3)',fontFamily:'var(--f-mono)',whiteSpace:'nowrap'}}>{timeCell}</td>
                     <td style={{padding:'2px 6px',color:_outcomeColor(d.outcome)}}>{d.outcome || '—'}</td>
                     <td style={{padding:'2px 6px',color:'var(--fg-2)'}}>
                       {d.blocker_gate ? <span style={{color:'var(--fg-3)'}}>{d.blocker_gate}</span> : <span style={{color:'var(--fg-4)'}}>—</span>}
@@ -1101,6 +1124,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const [blockerFunnel,  setBlockerFunnel]  = _s(null);
   const [timeline,       setTimeline]       = _s(null);
   const [tlOutcome,      setTlOutcome]      = _s('blocked');
+  const [tlCollapse,     setTlCollapse]     = _s(true);
   const [diagLoading,    setDiagLoading]    = _s(false);
   const [diagError,      setDiagError]      = _s('');
   const wsRef         = _r(null);
@@ -1123,8 +1147,9 @@ function ReplayMonitorDark({ onModeSwitch }) {
           .then(r => r.ok ? r.json() : Promise.reject(new Error(`funnel HTTP ${r.status}`)))
       : Promise.resolve(null);
     const tlOutcomeQ = tlOutcome ? `&outcome=${encodeURIComponent(tlOutcome)}` : '';
+    const tlCollapseQ = tlCollapse ? `&collapse=true` : '';
     const tlP = date
-      ? fetch(`/api/strategy/decisions?mode=replay&date=${encodeURIComponent(date)}&limit=500${tlOutcomeQ}`)
+      ? fetch(`/api/strategy/decisions?mode=replay&date=${encodeURIComponent(date)}&limit=500${tlOutcomeQ}${tlCollapseQ}`)
           .then(r => r.ok ? r.json() : Promise.reject(new Error(`decisions HTTP ${r.status}`)))
       : Promise.resolve(null);
     Promise.all([stateP, funnelP, tlP])
@@ -1136,9 +1161,9 @@ function ReplayMonitorDark({ onModeSwitch }) {
         setDiagLoading(false);
       })
       .catch(err => { setDiagError(err.message || String(err)); setDiagLoading(false); });
-  }, [tlOutcome]);
+  }, [tlOutcome, tlCollapse]);
 
-  _e(() => { fetchDiag(); /* refetch on date or filter change */ }, [replayDate, tlOutcome]);
+  _e(() => { fetchDiag(); /* refetch on date or filter change */ }, [replayDate, tlOutcome, tlCollapse]);
 
   _e(() => { upToIdxRef.current    = upToIdx;    }, [upToIdx]);
   _e(() => { speedRef.current      = speed;      }, [speed]);
@@ -1345,7 +1370,8 @@ function ReplayMonitorDark({ onModeSwitch }) {
                       timeline,
                       loading: diagLoading, error: diagError,
                       date: replayDate, onRefresh: fetchDiag,
-                      onTimelineFilterChange: setTlOutcome }}
+                      onTimelineFilterChange: setTlOutcome,
+                      onTimelineCollapseChange: setTlCollapse }}
             />
           </div>
 

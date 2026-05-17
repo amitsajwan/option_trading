@@ -402,6 +402,47 @@ def read_blocker_funnel(
     return result
 
 
+def _collapse_consecutive_identical(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge consecutive rows whose (outcome, blocker_gate, reason_code, entry_prob)
+    are bit-identical. The dashboard caller uses this to expose the "Stage-1 is
+    stuck at one probability for 17 minutes" signal as a single labelled row
+    rather than 17 visually-identical rows the operator has to scroll past.
+
+    The collapsed row keeps the FIRST row's metadata (snapshot_id, time, regime,
+    full metrics block) and adds:
+        time_end:     time of the last row in the run
+        run_minutes:  count of merged rows (1 for un-collapsed rows)
+
+    Two rows are considered identical if they share:
+        outcome, blocker_gate, reason_code, AND the exact (bit-identical)
+        entry_prob value from summary_metrics.
+
+    Note we intentionally do NOT compare direction_up_prob or recipe_prob —
+    those vary minute-to-minute even when Stage-1 is stuck, and we want the
+    collapsing to highlight the Stage-1 freeze specifically.
+    """
+    if not rows:
+        return rows
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        last = out[-1] if out else None
+        if last is not None and (
+            r.get("outcome") == last.get("outcome")
+            and r.get("blocker_gate") == last.get("blocker_gate")
+            and r.get("reason_code") == last.get("reason_code")
+            and (r.get("metrics") or {}).get("entry_prob")
+                == (last.get("metrics") or {}).get("entry_prob")
+        ):
+            last["time_end"] = r.get("time") or last.get("time_end")
+            last["run_minutes"] = int(last.get("run_minutes") or 1) + 1
+        else:
+            nr = dict(r)
+            nr["time_end"] = r.get("time")
+            nr["run_minutes"] = 1
+            out.append(nr)
+    return out
+
+
 def read_decision_timeline(
     mode: str = "replay",
     *,
@@ -410,6 +451,7 @@ def read_decision_timeline(
     limit: int = 500,
     offset: int = 0,
     outcome: Optional[str] = None,
+    collapse: bool = False,
 ) -> dict[str, Any]:
     """Per-minute decision timeline for a date.
 
@@ -531,9 +573,15 @@ def read_decision_timeline(
                 "model_diagnostics": md,
             })
 
+    if collapse:
+        # Collapse AFTER paging — limit applies to raw rows, collapse just visually
+        # compresses the slice the caller asked for. This keeps offsets stable.
+        decisions = _collapse_consecutive_identical(decisions)
+
     result["total_for_date"] = total
     result["matched_filter"] = matched
     result["returned"] = len(decisions)
+    result["collapsed"] = bool(collapse)
     result["decisions"] = decisions
     return result
 

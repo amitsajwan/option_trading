@@ -81,13 +81,14 @@ class StrategyCurrentRouter:
         limit: int = Query(500, ge=0, le=2000),
         offset: int = Query(0, ge=0),
         outcome: str = Query("", description="empty | blocked | hold | entry_taken | exit_taken | manage_only"),
+        collapse: bool = Query(False, description="merge consecutive rows with bit-identical (outcome,gate,reason,entry_prob)"),
     ) -> dict:
         if mode.strip().lower() not in {"live", "replay", "historical"}:
             raise HTTPException(status_code=400, detail="mode must be 'live' or 'replay'")
         try:
             return read_decision_timeline(
                 mode=mode, date=date, limit=limit, offset=offset,
-                outcome=(outcome or None),
+                outcome=(outcome or None), collapse=collapse,
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to read decision_traces: {exc}")

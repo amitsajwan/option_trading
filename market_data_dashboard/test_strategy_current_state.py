@@ -319,6 +319,71 @@ def test_decision_timeline_outcome_filter(tmp_path: Path):
     assert out["decisions"][0]["outcome"] == "entry_taken"
 
 
+def test_decision_timeline_collapse_merges_identical_consecutive_rows(tmp_path: Path):
+    """3 holds with bit-identical entry_prob followed by a different one should
+    collapse into 2 rows. The 1st row gets time_end + run_minutes=3.
+
+    This is the operator's "Stage-1 stuck at one prob for N minutes" view.
+    """
+    traces = [
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T13:05:00+05:30",
+         "snapshot_id": "20241007_1305", "final_outcome": "hold",
+         "primary_blocker_gate": "stage2_direction",
+         "flow_gates": [{"gate_id": "stage2_direction", "status": "hold",
+                         "reason_code": "direction_below_threshold"}],
+         "summary_metrics": {"entry_prob": 0.5660967826843262, "direction_up_prob": 0.49}},
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T13:06:00+05:30",
+         "snapshot_id": "20241007_1306", "final_outcome": "hold",
+         "primary_blocker_gate": "stage2_direction",
+         "flow_gates": [{"gate_id": "stage2_direction", "status": "hold",
+                         "reason_code": "direction_below_threshold"}],
+         # SAME entry_prob, different direction_up_prob — should still collapse.
+         "summary_metrics": {"entry_prob": 0.5660967826843262, "direction_up_prob": 0.52}},
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T13:07:00+05:30",
+         "snapshot_id": "20241007_1307", "final_outcome": "hold",
+         "primary_blocker_gate": "stage2_direction",
+         "flow_gates": [{"gate_id": "stage2_direction", "status": "hold",
+                         "reason_code": "direction_below_threshold"}],
+         "summary_metrics": {"entry_prob": 0.5660967826843262, "direction_up_prob": 0.50}},
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T13:08:00+05:30",
+         "snapshot_id": "20241007_1308", "final_outcome": "hold",
+         "primary_blocker_gate": "stage2_direction",
+         "flow_gates": [{"gate_id": "stage2_direction", "status": "hold",
+                         "reason_code": "direction_below_threshold"}],
+         # DIFFERENT entry_prob — starts a new run.
+         "summary_metrics": {"entry_prob": 0.5691027045249939, "direction_up_prob": 0.51}},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path,
+                                 collapse=True)
+    assert out["collapsed"] is True
+    assert out["matched_filter"] == 4  # raw count is preserved
+    assert out["returned"] == 2  # 3 + 1 collapsed → 2 rows
+    first, second = out["decisions"]
+    assert first["time"] == "13:05" and first["time_end"] == "13:07"
+    assert first["run_minutes"] == 3
+    assert second["time"] == "13:08" and second["time_end"] == "13:08"
+    assert second["run_minutes"] == 1
+
+
+def test_decision_timeline_collapse_off_keeps_all_rows(tmp_path: Path):
+    """Without collapse=True, behaviour is unchanged — every row included."""
+    traces = [
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T13:05:00+05:30",
+         "final_outcome": "hold", "flow_gates": [],
+         "summary_metrics": {"entry_prob": 0.5660967826843262}},
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T13:06:00+05:30",
+         "final_outcome": "hold", "flow_gates": [],
+         "summary_metrics": {"entry_prob": 0.5660967826843262}},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path)
+    assert out["collapsed"] is False
+    assert out["returned"] == 2
+    # No collapse-only fields when collapse is off
+    assert "run_minutes" not in out["decisions"][0]
+
+
 def test_decision_timeline_limit_and_offset(tmp_path: Path):
     traces = [
         {"trade_date_ist": "2024-10-07", "timestamp": f"2024-10-07T09:{i:02d}:00+05:30",
