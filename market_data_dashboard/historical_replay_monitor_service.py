@@ -18,9 +18,11 @@ logger = logging.getLogger(__name__)
 try:
     from .historical_replay_repository import HistoricalReplayRepository
     from .live_strategy_monitor_service import LiveStrategyMonitorService, _parse_date_yyyy_mm_dd
+    from .replay_integrity import replay_integrity_warnings
 except ImportError:
     from historical_replay_repository import HistoricalReplayRepository  # type: ignore
     from live_strategy_monitor_service import LiveStrategyMonitorService, _parse_date_yyyy_mm_dd  # type: ignore
+    from replay_integrity import replay_integrity_warnings  # type: ignore
 
 
 class HistoricalReplayMonitorService(LiveStrategyMonitorService):
@@ -350,6 +352,8 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
         return None
 
     def _count_closed_trades_for_run_date(self, *, date_ist: str, run_id: str) -> int:
+        if self._run_has_overlapping_closed_positions(date_ist=date_ist, run_id=run_id):
+            return 0
         try:
             db = self._repo._evaluation_service._db()
             return int(
@@ -363,6 +367,36 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             )
         except Exception:
             return 0
+
+    def _run_has_overlapping_closed_positions(self, *, date_ist: str, run_id: str) -> bool:
+        try:
+            db = self._repo._evaluation_service._db()
+            cursor = db[self._positions_collection_name()].find(
+                {
+                    "trade_date_ist": str(date_ist),
+                    "run_id": str(run_id),
+                    "event": {"$in": ["POSITION_OPEN", "POSITION_CLOSE"]},
+                },
+                {"_id": 0, "event": 1, "position_id": 1, "timestamp": 1},
+            )
+            by_position: dict[str, dict[str, Any]] = {}
+            for doc in cursor:
+                pid = str(doc.get("position_id") or "").strip()
+                if not pid:
+                    continue
+                event = str(doc.get("event") or "").strip().upper()
+                slot = by_position.setdefault(pid, {"position_id": pid})
+                if event == "POSITION_OPEN":
+                    slot["entry_time"] = doc.get("timestamp")
+                elif event == "POSITION_CLOSE":
+                    slot["exit_time"] = doc.get("timestamp")
+            closed = [
+                row for row in by_position.values()
+                if row.get("entry_time") and row.get("exit_time")
+            ]
+            return bool(replay_integrity_warnings(closed))
+        except Exception:
+            return False
 
     def _resolve_latest_run_id_for_date(self, date_ist: Optional[str]) -> Optional[str]:
         """Return the run_id the historical session endpoint will use for date_ist."""
