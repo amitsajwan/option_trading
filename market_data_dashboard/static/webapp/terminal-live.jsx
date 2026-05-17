@@ -1,4 +1,4 @@
-// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v15
+// terminal-live.jsx — Dark Bloomberg terminal for live + replay modes  v16
 /* global React, TradingCore, LWChart */
 const { useState: _s, useEffect: _e, useMemo: _m, useRef: _r, useCallback: _cb } = React;
 const TC = window.TradingCore;
@@ -1092,7 +1092,7 @@ function _windowOf(d) {
   return "post";
 }
 
-function _fmtDateOption(d, tradeCounts) {
+function _fmtDateOption(d, tradeCounts, modelsByDate) {
   const n = (tradeCounts && tradeCounts[d]) || 0;
   const win = _windowOf(d);
   // Mark window so operators can tell at a glance whether they're looking at
@@ -1101,11 +1101,23 @@ function _fmtDateOption(d, tradeCounts) {
   // Explicit zero-trade marker so operators don't have to scroll the dropdown to
   // figure out which dates have replay data and which are empty by model behavior.
   const tradeStr = n > 0 ? `${String(n).padStart(3,' ')} trades` : "   — empty";
-  return `${tag} · ${d} · ${tradeStr}`;
+  // Model tag — derived from the latest run_id for this date so the operator
+  // can see at a glance whether this date's trades came from C1 (old futures
+  // direction) or a new option-P&L bundle. Padded to keep columns aligned.
+  const m = modelsByDate && modelsByDate[d];
+  let modelTag = "         ";
+  if (m && m.family) {
+    if (m.family === "OPT_PNL") {
+      modelTag = ` · ${(m.recipe || "OPT_PNL").padEnd(10)}`;
+    } else {
+      modelTag = ` · ${(m.family || "?").padEnd(10)}`;
+    }
+  }
+  return `${tag} · ${d} · ${tradeStr}${modelTag}`;
 }
 
 function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, upToIdx,
-  total, availableDates, tradeCounts, replayDate, onPlay, onPause, onSpeed, onScrub, onScrubEnd,
+  total, availableDates, tradeCounts, modelsByDate, replayDate, onPlay, onPause, onSpeed, onScrub, onScrubEnd,
   onReset, onDateChange, onModeSwitch, ws, datesLoading }) {
   const pnlCls = sessionPnl >= 0 ? 'pos' : 'neg';
   const pct = total > 0 ? ((upToIdx + 1) / total * 100).toFixed(0) : 0;
@@ -1142,7 +1154,7 @@ function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, u
         <select style={selStyle} value={replayDate}
           disabled={datesLoading || !availableDates.length}
           onChange={e => onDateChange(e.target.value)}>
-          {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts)}</option>)}
+          {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts, modelsByDate)}</option>)}
         </select>
       </div>
       <div className="t-status-cells" style={{flexShrink:0}}>
@@ -1165,6 +1177,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const [wsStatus,       setWsStatus]       = _s('idle');
   const [availableDates, setAvailableDates] = _s([]);
   const [tradeCounts, setTradeCounts] = _s({});
+  const [modelsByDate, setModelsByDate] = _s({});
   const [datesLoading,   setDatesLoading]   = _s(true);
   const [selectedTrade,  setSelectedTrade]  = _s(null);
   const [runtimeConfig,  setRuntimeConfig]  = _s(null);
@@ -1251,6 +1264,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
         if (!alive) return;
         setAvailableDates(Array.isArray(payload.dates) ? payload.dates : []);
         setTradeCounts(payload.trade_counts || {});
+        setModelsByDate(payload.models_by_date || {});
         setDatesLoading(false);
         if (payload.latest) handleDateChange(payload.latest);
         else setReplayError('No replay dates found in historical snapshots.');
@@ -1320,7 +1334,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
               disabled={datesLoading || !availableDates.length}
               onChange={e => handleDateChange(e.target.value)}>
               {!replayDate && <option value="">{datesLoading ? 'Loading…' : 'Select date'}</option>}
-              {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts)}</option>)}
+              {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts, modelsByDate)}</option>)}
             </select>
           </div>
           <div/>
@@ -1368,7 +1382,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
       <ReplayStatusBar
         sessionPnl={sessionPnl} tradesCount={trades.length} winRate={winRate}
         isPlaying={isPlaying} speed={speed} upToIdx={upToIdx} total={candles.length}
-        availableDates={availableDates} tradeCounts={tradeCounts} replayDate={replayDate}
+        availableDates={availableDates} tradeCounts={tradeCounts} modelsByDate={modelsByDate} replayDate={replayDate}
         onPlay={handlePlay} onPause={handlePause} onSpeed={handleSpeed}
         onScrub={handleScrub} onScrubEnd={handleScrubEnd} onReset={handleReset}
         onDateChange={handleDateChange} onModeSwitch={onModeSwitch}

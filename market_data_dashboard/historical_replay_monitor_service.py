@@ -25,6 +25,51 @@ except ImportError:
     from replay_integrity import replay_integrity_warnings  # type: ignore
 
 
+_OPTION_PNL_RUN_RE = re.compile(r"^option_pnl_(?P<recipe>[a-z0-9_]+?)_\d{8}_\d{6}$")
+# Reliable cross-version markers in the POSITION_OPEN's `reason` text:
+#   recipe=ATM_PE_15            (option-P&L bundle)
+#   risk_basis=option_premium   (option-P&L bundle)
+_RECIPE_IN_REASON_RE = re.compile(r"recipe=([A-Za-z0-9_]+)")
+_RISK_BASIS_IN_REASON_RE = re.compile(r"risk_basis=(\w+)")
+
+
+def _classify_run_id(run_id: str, sample_open_event: Optional[dict] = None) -> dict[str, str]:
+    """Map a run_id back to a human-friendly model + recipe label.
+
+    Two paths:
+      1. run_id matches the publish-script naming convention (`option_pnl_<recipe>
+         _YYYYMMDD_HHMMSS`) — recipe is in the name.
+      2. run_id is a UUID assigned by the eval orchestrator (the common case for
+         replays kicked off via /api/historical/replay/generate). In this case
+         the model identity isn't in the id — we parse it out of the OPEN
+         event's `reason` field, which always contains 'recipe=<NAME>
+         risk_basis=<basis>' for option-P&L bundles.
+
+    Returns a tiny dict with `family` (short tag for UI) and `recipe` (recipe
+    label when extractable).
+    """
+    rid = str(run_id or "").strip()
+    if not rid:
+        return {"family": "?", "recipe": "?"}
+    m = _OPTION_PNL_RUN_RE.match(rid)
+    if m:
+        recipe_slug = (m.group("recipe") or "").upper()
+        return {"family": "OPT_PNL", "recipe": recipe_slug or "?"}
+    # UUID-style run_id: parse the OPEN event's reason text — reliable because
+    # the strategy_app writes a structured string with key=value pairs that
+    # survive any nested-doc reshaping by the persistence layer.
+    if isinstance(sample_open_event, dict):
+        reason = str(sample_open_event.get("reason") or "")
+        rm = _RECIPE_IN_REASON_RE.search(reason)
+        rbm = _RISK_BASIS_IN_REASON_RE.search(reason)
+        basis = (rbm.group(1) if rbm else "").lower()
+        if basis == "option_premium" or (rm and (rm.group(1) or "").startswith(("ATM_", "OTM"))):
+            recipe = (rm.group(1) if rm else "?").upper()
+            return {"family": "OPT_PNL", "recipe": recipe or "?"}
+    # Fall through: legacy C1 family.
+    return {"family": "C1", "recipe": "futures_direction"}
+
+
 class HistoricalReplayMonitorService(LiveStrategyMonitorService):
     REPLAY_STATUS_KEY = "system:historical:replay_status"
     HISTORICAL_READY_KEY = "system:historical:data_ready"
@@ -191,6 +236,14 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
         latest = dates[-1] if dates else None
 
         trade_counts: dict[str, int] = {}
+        # Per-date model label derived from the latest run_id of that date.
+        # Lets the date dropdown distinguish "C1 stored these trades months ago"
+        # vs "new ATM_PE_15 ran here yesterday" without the operator having to
+        # open the Diag tab. Heuristic checks the run_id pattern; if that's
+        # uninformative (UUID assigned by orchestrator), samples a POSITION_OPEN
+        # event from the run to read `risk_basis` and derive the recipe.
+        models_by_date: dict[str, dict[str, Any]] = {}
+        positions_coll_name = self._positions_collection_name()
         for date_value in dates:
             run_id = self._resolve_latest_run_id_for_date(date_value)
             if not run_id:
@@ -198,6 +251,16 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             count = self._count_closed_trades_for_run_date(date_ist=date_value, run_id=run_id)
             if count > 0:
                 trade_counts[date_value] = count
+            sample_open = None
+            try:
+                db = self._repo._evaluation_service._db()
+                sample_open = db[positions_coll_name].find_one(
+                    {"trade_date_ist": date_value, "run_id": run_id, "event": "POSITION_OPEN"},
+                    {"_id": 0, "reason": 1, "stop_loss_pct": 1, "target_pct": 1, "direction": 1},
+                )
+            except Exception:
+                sample_open = None
+            models_by_date[date_value] = _classify_run_id(run_id, sample_open_event=sample_open)
 
         return {
             "dates": dates,
@@ -205,6 +268,7 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             "count": len(dates),
             "collection": coll.name,
             "trade_counts": trade_counts,
+            "models_by_date": models_by_date,
         }
 
     @staticmethod

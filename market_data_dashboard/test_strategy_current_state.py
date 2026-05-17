@@ -186,6 +186,73 @@ def test_runtime_config_surfaces_option_pnl_bundle_when_active(tmp_path: Path):
     assert out["legacy_staged_model"]["run_id"] == "staged_deep_hpo_c1_base_20260429_040848"
 
 
+def test_classify_run_id_pattern_match():
+    """The dropdown's per-date model tag relies on this — pinning the regex."""
+    from market_data_dashboard.historical_replay_monitor_service import _classify_run_id
+    # Option-P&L bundle naming from publish_option_pnl_model.py
+    out = _classify_run_id("option_pnl_atm_pe_15_20260517_135208")
+    assert out["family"] == "OPT_PNL"
+    assert out["recipe"] == "ATM_PE_15"
+    # Different recipe name slug
+    out = _classify_run_id("option_pnl_otm1_ce_15_20260601_120000")
+    assert out["family"] == "OPT_PNL"
+    assert out["recipe"] == "OTM1_CE_15"
+    # Legacy C1 family — uuid form, no prefix, no sample event
+    out = _classify_run_id("a8c930e0-f5cb-4589-b9aa-eef7a5f36eef")
+    assert out["family"] == "C1"
+    # Staged hpo naming
+    out = _classify_run_id("staged_deep_hpo_c1_base_20260429_040848")
+    assert out["family"] == "C1"
+    # Empty / None handled
+    assert _classify_run_id("")["family"] == "?"
+    assert _classify_run_id(None)["family"] == "?"
+
+
+def test_classify_run_id_uuid_with_option_pnl_event():
+    """UUID run_id from orchestrator + OPEN event with recipe=...risk_basis=...
+    in reason text → recognized as the OPT_PNL bundle. Real-world POSITION_OPEN
+    reason from strategy_app: 'ml_pure_staged: action=BUY_PE entry_prob=0.5571
+    ...recipe=ATM_PE_15 risk_basis=option_premium ...' """
+    from market_data_dashboard.historical_replay_monitor_service import _classify_run_id
+    uuid_run = "385c5cdd-354b-4453-9cb5-3ef4655586a3"
+    open_event = {
+        "direction": "PE",
+        "reason": (
+            "ml_pure_staged: action=BUY_PE entry_prob=0.5571 dir_up_prob=0.4429 "
+            "recipe=ATM_PE_15 risk_basis=option_premium recipe_prob=0.5571"
+        ),
+        "stop_loss_pct": 0.25,
+        "target_pct": 0.4,
+    }
+    out = _classify_run_id(uuid_run, sample_open_event=open_event)
+    assert out["family"] == "OPT_PNL"
+    assert out["recipe"] == "ATM_PE_15"
+
+
+def test_classify_run_id_uuid_with_c1_event():
+    """Old C1 events have no recipe=ATM_ / risk_basis=option_premium in reason —
+    classifier must NOT mistake them for OPT_PNL."""
+    from market_data_dashboard.historical_replay_monitor_service import _classify_run_id
+    uuid_run = "a8c930e0-f5cb-4589-b9aa-eef7a5f36eef"
+    c1_event = {
+        "direction": "CE",
+        "reason": "ml_pure_staged: action=BUY_CE entry_prob=0.78 dir_up_prob=0.65 ce_prob=0.65",
+    }
+    out = _classify_run_id(uuid_run, sample_open_event=c1_event)
+    assert out["family"] == "C1"
+
+
+def test_classify_run_id_uuid_with_option_pnl_recipe_only_no_basis():
+    """Defensive: if reason has recipe=ATM_PE_15 but no risk_basis marker
+    (older event variant), still classify as OPT_PNL based on recipe shape."""
+    from market_data_dashboard.historical_replay_monitor_service import _classify_run_id
+    out = _classify_run_id("uuid-xxx", sample_open_event={
+        "reason": "...recipe=ATM_PE_15...",
+    })
+    assert out["family"] == "OPT_PNL"
+    assert out["recipe"] == "ATM_PE_15"
+
+
 def test_runtime_config_omits_bundle_fields_when_staged(tmp_path: Path):
     """Default staged C1 path: bundle-only fields must be absent."""
     cfg = {
