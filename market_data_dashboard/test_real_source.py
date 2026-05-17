@@ -5,10 +5,32 @@ from market_data_dashboard.real_source import (
     _latest_run_id_for_date,
     _position_to_trade,
 )
+from market_data_dashboard.replay_integrity import replay_integrity_warnings
 from market_data_dashboard.schemas.monitor import MonitorCandle, MonitorSignal, MonitorSignalMetrics
 
 
 class RealSourceTradeTests(unittest.TestCase):
+    def test_replay_integrity_warns_on_overlapping_trades(self) -> None:
+        warnings = replay_integrity_warnings(
+            [
+                {"position_id": "p1", "entryIdx": 10, "exitIdx": 50},
+                {"position_id": "p2", "entryIdx": 20, "exitIdx": 30},
+                {"position_id": "p3", "entryIdx": 60, "exitIdx": 70},
+            ]
+        )
+
+        self.assertIn("overlapping_replay_positions_detected", warnings)
+
+    def test_replay_integrity_accepts_sequential_trades(self) -> None:
+        warnings = replay_integrity_warnings(
+            [
+                {"position_id": "p1", "entryIdx": 10, "exitIdx": 20},
+                {"position_id": "p2", "entryIdx": 20, "exitIdx": 30},
+            ]
+        )
+
+        self.assertEqual(warnings, [])
+
     def test_latest_run_id_prefers_position_run_over_empty_registered_run(self) -> None:
         class _Collection:
             def __init__(self, docs):

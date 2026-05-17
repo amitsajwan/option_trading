@@ -17,6 +17,7 @@ try:
         MonitorSignalMetrics,
         MonitorTrade,
     )
+    from .replay_integrity import replay_integrity_warnings
 except ImportError:
     from schemas.monitor import (  # type: ignore
         MonitorAlert,
@@ -26,6 +27,7 @@ except ImportError:
         MonitorSignalMetrics,
         MonitorTrade,
     )
+    from replay_integrity import replay_integrity_warnings  # type: ignore
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -735,6 +737,17 @@ def _build_session(
                 "Try a replay date with evaluations such as <strong>2024-01-23</strong>."
             ),
             tms=int(datetime.now(tz=timezone.utc).timestamp() * 1000) + 1,
+        ))
+    integrity_warnings = replay_integrity_warnings(list(trades))
+    if "overlapping_replay_positions_detected" in integrity_warnings:
+        alerts.append(MonitorAlert(
+            level="warn",
+            t="09:15",
+            msg=(
+                "Replay integrity warning: overlapping positions were detected in this run. "
+                "Do not use this replay for strategy-quality conclusions until the run is regenerated cleanly."
+            ),
+            tms=int(datetime.now(tz=timezone.utc).timestamp() * 1000) + 2,
         ))
 
     return MonitorSession(

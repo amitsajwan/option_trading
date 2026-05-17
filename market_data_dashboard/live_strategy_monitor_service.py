@@ -64,6 +64,7 @@ try:
         infer_engine_context as _infer_engine_context_module,
         promotion_lane_from_engine as _promotion_lane_from_engine_module,
     )
+    from .replay_integrity import replay_integrity_warnings
     from .ux.alerts import build_active_alerts as _build_active_alerts_module
     from .ux.decision_explainer import build_decision_explainability as _build_decision_explainability_module
 except ImportError:
@@ -78,6 +79,7 @@ except ImportError:
         infer_engine_context as _infer_engine_context_module,
         promotion_lane_from_engine as _promotion_lane_from_engine_module,
     )
+    from replay_integrity import replay_integrity_warnings  # type: ignore
     from ux.alerts import build_active_alerts as _build_active_alerts_module  # type: ignore
     from ux.decision_explainer import build_decision_explainability as _build_decision_explainability_module  # type: ignore
 
@@ -976,6 +978,10 @@ class LiveStrategyMonitorService:
             warnings.append("multiple_open_positions_detected")
         if stale_positions:
             warnings.append("stale_open_positions_detected")
+        if self._dataset == "historical":
+            for warning in replay_integrity_warnings(recent_trades):
+                if warning not in warnings:
+                    warnings.append(warning)
 
         recent_activity = self.build_recent_activity(
             current_open_positions=active_positions,
