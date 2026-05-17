@@ -1,0 +1,156 @@
+{
+  "contract_version": "1.0.0",
+  "doc": "ml_pipeline_2/docs/training/OPTION_LABEL_CONTRACT.md",
+  "purpose": "Single source of truth for option-P&L label generation. Both the offline labeler AND the runtime strategy engine MUST honor every clause below. Divergence between training-time labels and runtime execution silently destroys model edge — this contract makes the equivalence checkable.",
+
+  "atm_selection": {
+    "source_field": "snapshot.atm_strike",
+    "fallback_compute": "min(strikes, key=lambda s: abs(s - fut_close))",
+    "canonical_function": "snapshot_app/core/market_snapshot.py:_nearest_strike (line 275)",
+    "runtime_consumer": "strategy_app/engines/option_selector.py:select_strike (line 64)",
+    "rule": "Read snapshot.atm_strike directly. Do NOT recompute ATM at label time — the snapshot already has the canonical value the runtime will see.",
+    "divergence_failure": "Different ATM than runtime → label refers to a contract the runtime would never trade."
+  },
+
+  "expiry_selection": {
+    "source_field": "snapshot.expiry",
+    "canonical_function": "snapshot_app/core/market_snapshot.py:_option_expiry_date (line 144)",
+    "rule": "Use the expiry the snapshot ingested with the chain. We do NOT support roll logic in label v1 — if the chain's expiry is wrong, the snapshot is wrong upstream of us.",
+    "divergence_failure": "Label uses next-week expiry while runtime trades this-week → completely different theta + IV."
+  },
+
+  "strike_step": {
+    "source_field": "snapshot.strike_step()",
+    "rule": "Used only for OTM/ITM recipes. For ATM recipes the strike comes directly from snapshot.atm_strike; for OTM/ITM the labeler must add N * strike_step. Runtime smart-strike selector uses the SAME snapshot.strike_step() call.",
+    "canonical_function": "strategy_app/engines/option_selector.py:120-122 (step_fn = snap.strike_step)"
+  },
+
+  "premium_fills": {
+    "entry_price": {
+      "rule": "Use close-of-minute(t0) for the selected contract from the options parquet.",
+      "field": "options.close where (timestamp=t0, strike=atm_strike_t0, option_type=recipe.option_type, expiry_str=snapshot.expiry)",
+      "runtime_equivalent": "strategy_app entry-fill at snap.option_ltp(direction, strike) — see strategy_app/engines/trade_signal_builder.py:41. snap.option_ltp returns the chain row's ce_ltp/pe_ltp, which corresponds to bar close in historical replay."
+    },
+    "exit_price": {
+      "rule": "Use close-of-minute(t0 + offset) for the SAME contract chosen at t0. Strike is frozen at decision time. Compare close to stop_premium and target_premium at each bar.",
+      "early_exit_priority": [
+        "hard_close (15:15 IST)",
+        "premium stop (close <= entry * (1 - stop_pct))",
+        "premium target (close >= entry * (1 + target_pct))",
+        "max_hold_bars elapsed",
+        "soft_close (15:00 IST)"
+      ],
+      "runtime_equivalent": "strategy_app/position/tracker.py:_is_stop_hit (line 180), _check_premium_target_hit, and HARD_CLOSE_MINUTE/SOFT_CLOSE_MINUTE checks (line 97, 115). Stops checked on close only (snap.option_ltp), NEVER on intra-bar OHLC.",
+      "audit_note_2026_05_17": "Confirmed: runtime checks current_premium = snap.option_ltp(...) once per snapshot. Labeler MUST check close only — using bar.high/bar.low would create train-runtime mismatch (labels see optimistic intra-bar fills the runtime can't achieve)."
+    },
+    "missing_quote_policy": "skip_label",
+    "missing_quote_reason_codes": [
+      "missing_strike_at_entry",
+      "missing_strike_at_exit",
+      "zero_volume_at_entry",
+      "premium_below_min_entry_premium",
+      "session_boundary_exceeds_hard_close",
+      "max_hold_exceeds_session_end"
+    ]
+  },
+
+  "cost_model": {
+    "use_canonical_class": "strategy_app.tools.offline_strategy_analysis.TradingCostModel",
+    "defaults": {
+      "brokerage_per_order_inr": 20.0,
+      "charges_bps_per_side": 2.5,
+      "slippage_bps_per_side": 7.5
+    },
+    "rule": "The labeler MUST import and call TradingCostModel().breakdown(entry_value, exit_value) — do not re-derive a 200-bps-style flat. The canonical class already handles brokerage (Rs.40 round-trip flat) + charges (5 bps round-trip on notional) + slippage (15 bps round-trip on notional).",
+    "effective_round_trip_on_low_premium_options": "For a premium of Rs.100 x 15 lot size = Rs.1500 entry value, total round-trip cost is ~Rs.43 (Rs.40 brokerage + Rs.3 charges/slippage) = ~2.87% of premium. Cost-as-%-of-premium varies inversely with premium size.",
+    "rationale": "Reusing the canonical cost class keeps labeler and runtime aligned by construction. B1's 200-bps-flat was correct for futures-notional labels but wrong for option-premium labels — same brokerage in absolute Rs becomes a much bigger fraction of a Rs.100 option than of a Rs.50000 futures contract.",
+    "runtime_equivalent": "strategy_app live + replay fill paths must use the same TradingCostModel for net-pnl computation. MemorySignalLogger already does (see test_research_cost_model.py)."
+  },
+
+  "risk_basis": {
+    "value": "option_premium",
+    "rule": "All option-P&L-trained recipes MUST set risk_basis=option_premium in their stage3 recipe metadata. Stops/targets are in % of premium, not % of underlying.",
+    "min_premium_stop_pct": 0.01,
+    "guard": "runtime_contract.py:57-61 rejects option_premium recipes with stops < 1% — keep that guard in place.",
+    "reference_doc": "ml_pipeline_2/docs/JIRA_STAGED_RECIPE_RISK_BASIS_FIX.md"
+  },
+
+  "liquidity_filter": {
+    "min_oi_at_entry": 1000,
+    "min_premium_at_entry": 5.0,
+    "reject_label_if_violated": true,
+    "rationale": "A contract with <1000 OI or <Rs.5 premium is untradeable; labeling such rows pollutes the training set with fills the runtime would never get."
+  },
+
+  "session_boundaries": {
+    "source_module": "strategy_app.constants",
+    "soft_close_minute": "15:00 IST (SOFT_CLOSE_MINUTE constant)",
+    "hard_close_minute": "15:15 IST (HARD_CLOSE_MINUTE constant)",
+    "lot_size": "BANKNIFTY_LOT_SIZE = 15",
+    "rule": "Labeler MUST import these constants directly from strategy_app.constants, not duplicate the values. If session timing or lot size changes, both labeler and runtime pick up the update atomically.",
+    "no_entries_after": "15:00 IST (matches runtime SOFT_CLOSE forced exit)",
+    "no_exits_after": "15:15 IST (hard close — even an open position is force-closed)"
+  },
+
+  "recipes_v1": [
+    {
+      "id": "ATM_CE_9",
+      "option_type": "CE",
+      "strike_offset_steps": 0,
+      "max_hold_bars": 9,
+      "stop_pct_of_premium": 0.20,
+      "target_pct_of_premium": 0.30
+    },
+    {
+      "id": "ATM_PE_9",
+      "option_type": "PE",
+      "strike_offset_steps": 0,
+      "max_hold_bars": 9,
+      "stop_pct_of_premium": 0.20,
+      "target_pct_of_premium": 0.30
+    },
+    {
+      "id": "ATM_CE_15",
+      "option_type": "CE",
+      "strike_offset_steps": 0,
+      "max_hold_bars": 15,
+      "stop_pct_of_premium": 0.25,
+      "target_pct_of_premium": 0.40
+    },
+    {
+      "id": "ATM_PE_15",
+      "option_type": "PE",
+      "strike_offset_steps": 0,
+      "max_hold_bars": 15,
+      "stop_pct_of_premium": 0.25,
+      "target_pct_of_premium": 0.40
+    }
+  ],
+
+  "label_definition": {
+    "positive_class": "net_pnl_pct_of_premium > 0",
+    "threshold_pct": 0.0,
+    "comment": "v1 uses simple sign-of-net-pnl as the binary label. After-cost positive => 1. This matches B1 cost-aware semantics. Higher thresholds (e.g. >2%) can be tried in v2 once the v1 signal is verified."
+  },
+
+  "debug_columns_required": [
+    "selected_strike",
+    "selected_expiry",
+    "entry_premium",
+    "exit_premium",
+    "exit_bar_offset",
+    "exit_reason",
+    "gross_pnl_pct",
+    "net_pnl_pct",
+    "cost_pct",
+    "reason_skipped"
+  ],
+
+  "sanity_report_gates": {
+    "min_label_positive_rate": 0.05,
+    "max_label_positive_rate": 0.60,
+    "min_avg_entry_premium": 5.0,
+    "max_missing_quote_rate": 0.30,
+    "rationale": "Pre-training sanity. If labels fall outside these bands, the labeler has a bug or the data has a coverage gap — do NOT proceed to training."
+  }
+}

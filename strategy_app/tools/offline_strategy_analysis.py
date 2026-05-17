@@ -33,9 +33,12 @@ DEFAULT_PARQUET_BASE = DEFAULT_HISTORICAL_PARQUET_BASE
 DEFAULT_OUTPUT_ROOT = Path(".run/strategy_research")
 DEFAULT_CAPITAL = 500000.0
 BANKNIFTY_LOT_SIZE = 15
-DEFAULT_BROKERAGE_PER_ORDER = 20.0
-DEFAULT_CHARGES_BPS_PER_SIDE = 2.5
-DEFAULT_SLIPPAGE_BPS_PER_SIDE = 7.5
+from strategy_app.cost_model import (
+    DEFAULT_BROKERAGE_PER_ORDER,
+    DEFAULT_CHARGES_BPS_PER_SIDE,
+    DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+    TradingCostModel as _CanonicalTradingCostModel,
+)
 _REASON_RE = re.compile(r"^\[(?P<regime>[^\]]+)\]\s+(?P<strategy>[^:]+):")
 
 
@@ -61,34 +64,10 @@ class Scenario:
     risk_config: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class TradingCostModel:
-    brokerage_per_order: float = DEFAULT_BROKERAGE_PER_ORDER
-    charges_bps_per_side: float = DEFAULT_CHARGES_BPS_PER_SIDE
-    slippage_bps_per_side: float = DEFAULT_SLIPPAGE_BPS_PER_SIDE
-
-    def breakdown(self, *, entry_value: float, exit_value: float) -> dict[str, float]:
-        safe_entry = max(0.0, float(entry_value))
-        safe_exit = max(0.0, float(exit_value))
-        brokerage = 2.0 * max(0.0, float(self.brokerage_per_order))
-        charges_rate = max(0.0, float(self.charges_bps_per_side)) / 10000.0
-        slippage_rate = max(0.0, float(self.slippage_bps_per_side)) / 10000.0
-        charges = (safe_entry + safe_exit) * charges_rate
-        slippage = (safe_entry + safe_exit) * slippage_rate
-        total = brokerage + charges + slippage
-        return {
-            "brokerage_cost_amount": brokerage,
-            "charges_cost_amount": charges,
-            "slippage_cost_amount": slippage,
-            "total_cost_amount": total,
-        }
-
-    def to_metadata(self) -> dict[str, float]:
-        return {
-            "brokerage_per_order": float(self.brokerage_per_order),
-            "charges_bps_per_side": float(self.charges_bps_per_side),
-            "slippage_bps_per_side": float(self.slippage_bps_per_side),
-        }
+# Re-exported from strategy_app.cost_model so existing call sites keep working.
+# The actual definition is in strategy_app/cost_model.py (zero deps, importable
+# by ml_pipeline_2 without dragging redis/fastapi).
+TradingCostModel = _CanonicalTradingCostModel
 
 
 class MemorySignalLogger:
