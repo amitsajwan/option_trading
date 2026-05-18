@@ -25,7 +25,7 @@ fi
 EFFECTIVE_CONFIG="$CONFIG"
 if [[ -n "${HOLDOUT_START:-}" && -n "${HOLDOUT_END:-}" ]]; then
   echo "[info] Applying holdout override: ${HOLDOUT_START} → ${HOLDOUT_END}"
-  python - "$REPO_DIR" "$CONFIG" "$HOLDOUT_START" "$HOLDOUT_END" << 'PY'
+  EFFECTIVE_CONFIG=$(python - "$REPO_DIR" "$CONFIG" "$HOLDOUT_START" "$HOLDOUT_END" << 'PY'
 import json, sys
 from pathlib import Path
 repo = Path(sys.argv[1])
@@ -48,13 +48,6 @@ tmp_grid = grid_path.parent / "_tmp.grid.holdout_override.json"
 tmp_grid.write_text(json.dumps(grid, indent=2), encoding='utf-8')
 print(str(tmp_grid))
 PY
-  EFFECTIVE_CONFIG=$(python - << 'PY'
-from pathlib import Path
-import sys
-p=sys.stdin.read().strip()
-print(p)
-PY
-  )
   echo "[info] Using temp grid config: ${EFFECTIVE_CONFIG}"
 fi
 
