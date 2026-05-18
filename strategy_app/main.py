@@ -221,10 +221,12 @@ def build_engine(
     if engine_key == "ml_pure":
         model_package = _normalize_optional_str(ml_pure_model_package)
         threshold_report = _normalize_optional_str(ml_pure_threshold_report)
-        if not model_package:
-            raise ValueError("ml pure runtime requires --ml-pure-model-package or ML_PURE_MODEL_PACKAGE")
-        if not threshold_report:
-            raise ValueError("ml pure runtime requires --ml-pure-threshold-report or ML_PURE_THRESHOLD_REPORT")
+        option_pnl_bundle_env = _normalize_optional_str(os.environ.get("OPTION_PNL_MODEL_BUNDLE"))
+        if not option_pnl_bundle_env:
+            if not model_package:
+                raise ValueError("ml pure runtime requires --ml-pure-model-package or ML_PURE_MODEL_PACKAGE")
+            if not threshold_report:
+                raise ValueError("ml pure runtime requires --ml-pure-threshold-report or ML_PURE_THRESHOLD_REPORT")
         return PureMLEngine(
             model_package_path=model_package,
             threshold_report_path=threshold_report,

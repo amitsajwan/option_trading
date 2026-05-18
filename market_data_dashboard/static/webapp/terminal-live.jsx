@@ -17,7 +17,12 @@ function _bridgeTrade(tr) {
   const ep = tr.entryPx ?? tr.entry ?? 0;
   const xp = tr.exitPx  ?? tr.exit  ?? 0;
   const rng = Math.abs(ep) * 0.002;
-  const dir = tr.dir || tr.direction || 'LONG';
+  const rawDir = tr.dir || tr.direction || 'LONG';
+  // option_pnl bundles store direction as PE/CE — map to LONG/SHORT for display/CSS.
+  // CE = bullish (buy call = long delta) → LONG; PE = bearish (buy put = short delta) → SHORT.
+  const dirMap = { PE: 'SHORT', CE: 'LONG' };
+  const dir = dirMap[rawDir] || dirMap[rawDir.toUpperCase()] || rawDir;
+  const optionType = tr.optionType ?? tr.option_type ?? (rawDir === 'PE' || rawDir === 'CE' ? rawDir : null);
   return {
     ...tr, dir,
     entryPx: ep, exitPx: xp,
@@ -31,7 +36,7 @@ function _bridgeTrade(tr) {
     entryDetail: tr.entryDetail ?? `Entry at ${ep.toFixed(2)}`,
     exitDetail:  tr.exitDetail  ?? `Exit at ${xp.toFixed(2)} · ${tr.exitReason ?? 'closed'}`,
     strike: tr.strike ?? null,
-    optionType: tr.optionType ?? tr.option_type ?? null,
+    optionType,
   };
 }
 
