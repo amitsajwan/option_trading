@@ -620,7 +620,7 @@ services:
         "-m",
         "strategy_app.main",
         "--engine",
-        "${STRATEGY_ENGINE:-deterministic}",
+        "${STRATEGY_ENGINE:-ml_pure}",
         "--min-confidence",
         "${STRATEGY_MIN_CONFIDENCE:-0.65}",
         "--topic",
