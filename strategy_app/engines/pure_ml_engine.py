@@ -440,8 +440,23 @@ class PureMLEngine(StrategyEngine):
             _h = int(hashlib.md5(str(snap.snapshot_id).encode("utf-8")).hexdigest()[:8], 16)
             direction = "CE" if (_h % 2 == 0) else "PE"
 
-        from .option_selector import select_strike
-        selection = select_strike(snap, direction, decision)
+        from .option_selector import select_strike, StrikeSelection
+        # If the predictor pre-selected the strike (option-P&L bundle path),
+        # honor it strictly — smart-strike is bypassed to maintain labeler-
+        # runtime equivalence (audit row #3 of OPTION_LABEL_CONTRACT). Falls
+        # through to smart-strike only for staged C1 path or when bundle
+        # couldn't pick a strike (decision.action would already be HOLD).
+        pre_selected = getattr(decision, "selected_strike", None)
+        if pre_selected is not None and int(pre_selected) > 0:
+            selection = StrikeSelection(
+                strike=int(pre_selected),
+                reason=str(decision.selected_strike_reason or "bundle_preselected"),
+                confidence=float(max(decision.ce_prob, decision.pe_prob)),
+                iv_percentile=None,
+                mode="bundle_preselected",
+            )
+        else:
+            selection = select_strike(snap, direction, decision)
         strike = selection.strike
         if strike is None or int(strike) <= 0:
             hold_metrics = {

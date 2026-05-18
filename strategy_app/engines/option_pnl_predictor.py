@@ -373,6 +373,28 @@ def build_decision_from_bundle(
         )
 
     action = "BUY_CE" if bundle.option_type == "CE" else "BUY_PE"
+    # Pre-select strike using the SAME rule the labeler used (strict ATM or
+    # offset_steps*strike_step). Engine sees decision.selected_strike and skips
+    # smart-strike entirely. This closes audit-row #3 of OPTION_LABEL_CONTRACT.
+    selected_strike = _strike_from_bundle(bundle, snap)
+    if selected_strike is None:
+        # Same condition the labeler hits: no ATM or no strike_step. We
+        # could not pick the strike the labeler would have picked, so we
+        # cannot guarantee equivalence — block the trade rather than fall
+        # back to smart-strike (which would produce off-label fills).
+        return StagedRuntimeDecision(
+            action="HOLD",
+            reason="missing_atm_or_strike_step_for_bundle",
+            entry_prob=prob,
+            recipe_prob=prob,
+            recipe_id=bundle.recipe_id,
+            risk_basis="option_premium",
+            model_diagnostics=diagnostics,
+        )
+    strike_reason = (
+        "bundle_atm" if bundle.strike_offset_steps == 0
+        else f"bundle_atm_offset_{bundle.strike_offset_steps:+d}"
+    )
     return StagedRuntimeDecision(
         action=action,
         reason=f"option_pnl_fire:prob={prob:.4f}",
@@ -388,6 +410,8 @@ def build_decision_from_bundle(
         target_pct=bundle.target_pct_of_premium,
         risk_basis="option_premium",
         model_diagnostics=diagnostics,
+        selected_strike=int(selected_strike),
+        selected_strike_reason=strike_reason,
     )
 
 

@@ -52,6 +52,15 @@ class StagedRuntimeDecision:
     target_pct: Optional[float] = None
     risk_basis: str = "option_premium"
     model_diagnostics: dict[str, Any] = field(default_factory=dict)
+    # When the predictor pre-selects the strike (option-P&L bundle path), set
+    # `selected_strike` so PureMLEngine.evaluate skips smart-strike entirely.
+    # This guarantees labeler-runtime equivalence: the labeler used the same
+    # strike-pick rule (snapshot.atm_strike + offset_steps * strike_step), so
+    # the runtime MUST use the same one — smart-strike's confidence-based
+    # OTM_1 shift was the source of the per-trade edge gap observed in the
+    # 2024-08/09 holdout validation.
+    selected_strike: Optional[int] = None
+    selected_strike_reason: Optional[str] = None
 
 
 @dataclass(frozen=True)

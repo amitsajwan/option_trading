@@ -335,6 +335,66 @@ def test_decision_with_missing_features_does_not_crash(tmp_path: Path):
     assert decision.action in ("HOLD", "BUY_PE")
 
 
+def test_fire_decision_pre_selects_strike_atm(tmp_path: Path):
+    """When the bundle decides to fire, decision.selected_strike must be set
+    to the labeler's ATM rule — engine then bypasses smart-strike entirely.
+    This is the fix for the 2024-08/09 holdout per-trade edge gap."""
+    bundle = load_option_pnl_bundle(_write_minimal_bundle(tmp_path, option_type="PE",
+                                                           strike_offset_steps=0,
+                                                           threshold=0.0))
+    snap = _fake_snap(atm_strike=50000)  # _fake_snap strikes 49900/50000/50100 → step=100
+    decision = build_decision_from_bundle(bundle=bundle, snap=snap)
+    assert decision.action == "BUY_PE"
+    assert decision.selected_strike == 50000  # exact ATM
+    assert decision.selected_strike_reason == "bundle_atm"
+
+
+def test_fire_decision_pre_selects_strike_otm_offset(tmp_path: Path):
+    """OTM_1 PE: ATM - 1 * strike_step (per labeler convention)."""
+    bundle = load_option_pnl_bundle(_write_minimal_bundle(tmp_path, option_type="PE",
+                                                           strike_offset_steps=1,
+                                                           threshold=0.0))
+    snap = _fake_snap(atm_strike=50000)  # _fake_snap strikes 49900/50000/50100 → step=100
+    decision = build_decision_from_bundle(bundle=bundle, snap=snap)
+    assert decision.action == "BUY_PE"
+    # PE OTM goes DOWN from ATM
+    assert decision.selected_strike == 49900
+    assert decision.selected_strike_reason == "bundle_atm_offset_+1"
+
+
+def test_fire_decision_otm_ce_goes_up(tmp_path: Path):
+    """OTM_1 CE: ATM + 1 * strike_step. Direction sign matters."""
+    bundle = load_option_pnl_bundle(_write_minimal_bundle(tmp_path, option_type="CE",
+                                                           strike_offset_steps=1,
+                                                           threshold=0.0))
+    snap = _fake_snap(atm_strike=50000)  # _fake_snap strikes 49900/50000/50100 → step=100
+    decision = build_decision_from_bundle(bundle=bundle, snap=snap)
+    assert decision.action == "BUY_CE"
+    assert decision.selected_strike == 50100
+
+
+def test_fire_decision_holds_when_atm_missing(tmp_path: Path):
+    """If we can't pick the bundle's strike (no ATM), we MUST hold rather
+    than fall back to smart-strike — that would violate labeler equivalence."""
+    bundle = load_option_pnl_bundle(_write_minimal_bundle(tmp_path, option_type="PE",
+                                                           threshold=0.0))
+    snap = _fake_snap(atm_strike=None)
+    decision = build_decision_from_bundle(bundle=bundle, snap=snap)
+    assert decision.action == "HOLD"
+    assert decision.reason == "missing_atm_or_strike_step_for_bundle"
+    assert decision.selected_strike is None
+
+
+def test_hold_decision_does_not_set_strike(tmp_path: Path):
+    """When prob < threshold, no strike is selected (no trade fires)."""
+    bundle = load_option_pnl_bundle(_write_minimal_bundle(tmp_path, threshold=1.0))
+    snap = _fake_snap()
+    decision = build_decision_from_bundle(bundle=bundle, snap=snap)
+    assert decision.action == "HOLD"
+    assert decision.selected_strike is None
+    assert decision.selected_strike_reason is None
+
+
 def test_flat_v2_features_are_extracted_from_nested_snapshot(tmp_path: Path):
     feature_columns = [
         "px_fut_close",

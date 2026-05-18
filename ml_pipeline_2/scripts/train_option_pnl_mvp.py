@@ -40,18 +40,30 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 
-try:
-    import xgboost as xgb
-except ImportError:
-    print("ERROR: xgboost not installed; install with: pip install xgboost", file=sys.stderr)
-    sys.exit(2)
+# xgboost is only needed for the training path — lazy import so this module
+# can be imported (e.g. by tests of simulate_single_position) without it.
+xgb = None  # type: ignore[assignment]
+
+
+def _require_xgboost():
+    """Lazy-import xgb; raise a clear error if missing when actually needed."""
+    global xgb
+    if xgb is None:
+        try:
+            import xgboost as _xgb  # noqa: PLC0415
+        except ImportError as exc:
+            raise RuntimeError(
+                "xgboost not installed; install with: pip install xgboost"
+            ) from exc
+        xgb = _xgb
+    return xgb
 
 
 DEFAULT_LABELS_ROOT = Path("/opt/option_trading/.data/ml_pipeline/parquet_data/option_pnl_labels_v1")
@@ -83,6 +95,10 @@ class TrainResult:
     best_holdout_net_pnl_sum: float
     best_holdout_trades: int
     best_holdout_win_rate: float
+    # Per-snapshot sweep (every prob-crossing minute = trade). Inflates
+    # trade count vs reality; kept for diagnosis of "is the model edge real
+    # at all" separately from "does single-position execution preserve it".
+    threshold_sweep_optimistic: list[dict] = field(default_factory=list)
 
 
 def load_labels_and_features(labels_root: Path, flat_root: Path, recipe_id: str) -> pd.DataFrame:
@@ -136,6 +152,70 @@ def select_feature_columns(df: pd.DataFrame) -> list[str]:
     return feat_cols
 
 
+def simulate_single_position(holdout_df: pd.DataFrame, p_hold: np.ndarray,
+                              threshold: float) -> dict:
+    """Walk holdout in (trade_date, timestamp_minute) order, firing at most
+    one position at a time. Matches the live runtime's single-position
+    constraint, which the per-snapshot threshold sweep does NOT honor.
+
+    Why this matters: the per-snapshot sweep treats every prob-crossing
+    minute as an independent trade. The runtime can only hold one position;
+    while a position is open, subsequent prob-crossings are ignored. On the
+    2024-08/09 holdout this 'over-counting' inflated trainer's trade count
+    by ~3x and inflated total P&L by a similar factor. This function
+    re-computes aggregates under realistic single-position execution.
+
+    The position-open window uses the LABEL's `exit_bar_offset` (which
+    encodes the actual stop/target/max-hold exit minute). Subsequent fires
+    are blocked until `entry_minute + exit_bar_offset`. Position state
+    resets at each trade_date boundary (overnight gap, force-close).
+    """
+    df = holdout_df.copy()
+    df["sim_prob"] = p_hold
+    # Sort by (date, minute) — required since the merge with features may
+    # have scrambled order, and pandas isn't stable across versions.
+    df = df.sort_values(["trade_date", "timestamp_minute"], kind="mergesort").reset_index(drop=True)
+
+    trades: list[dict] = []
+    last_date = None
+    blocked_until_min = -1
+    for row in df.itertuples(index=False):
+        td = row.trade_date
+        if td != last_date:
+            blocked_until_min = -1
+            last_date = td
+        minute = int(row.timestamp_minute)
+        if minute < blocked_until_min:
+            continue  # position from prior fire still open
+        prob = float(row.sim_prob)
+        if prob < threshold:
+            continue
+        # Fire: realize the label's net P&L; advance the block window
+        pnl = float(getattr(row, "net_pnl_pct", 0.0) or 0.0)
+        hold = int(getattr(row, "exit_bar_offset", 1) or 1)
+        trades.append({
+            "trade_date": str(td)[:10] if hasattr(td, "strftime") else str(td),
+            "entry_minute": minute,
+            "exit_bar_offset": hold,
+            "net_pnl_pct": pnl,
+            "prob": prob,
+        })
+        blocked_until_min = minute + hold
+
+    n = len(trades)
+    if n == 0:
+        return {"n_trades": 0, "net_pnl_sum": 0.0, "win_rate": 0.0,
+                "avg_pnl": 0.0, "trades": []}
+    pnls = [t["net_pnl_pct"] for t in trades]
+    return {
+        "n_trades": n,
+        "net_pnl_sum": float(sum(pnls)),
+        "avg_pnl": float(sum(pnls) / n),
+        "win_rate": float(sum(1 for p in pnls if p > 0) / n),
+        "trades": trades,
+    }
+
+
 def split_temporal(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Train / valid / holdout by trade_date. Same windows as C1 for apples-to-apples."""
     train = df[df["trade_date"] <= TRAIN_END].copy()
@@ -164,6 +244,7 @@ def train_recipe(df: pd.DataFrame, recipe_id: str) -> TrainResult:
     y_hold = holdout["label"].astype(int).to_numpy()
     pnl_hold = holdout["net_pnl_pct"].astype(float).to_numpy()
 
+    _require_xgboost()
     model = xgb.XGBClassifier(
         n_estimators=300,
         max_depth=4,
@@ -191,26 +272,45 @@ def train_recipe(df: pd.DataFrame, recipe_id: str) -> TrainResult:
     except Exception:
         auc = float("nan")
 
-    # Threshold sweep — for each candidate threshold, simulate "trade when prob >= threshold"
-    # and aggregate realized P&L.
-    sweep: list[dict] = []
+    # Two parallel views of the threshold sweep:
+    #
+    #   OPTIMISTIC (per-snapshot): every prob-crossing minute counts as a
+    #     trade. Inflates trade count and net P&L because real runtime can't
+    #     hold concurrent positions. Kept for backward compat with earlier
+    #     reports — but DO NOT use this for "what would I earn live?".
+    #
+    #   REALISTIC (single-position): walks time-ordered, one trade open at a
+    #     time, exit-bar-offset blocks subsequent fires. This is the number
+    #     the live runtime should converge to (within smart-strike / fill
+    #     differences, which we close separately via the contract).
+    sweep_optimistic: list[dict] = []
+    sweep_realistic: list[dict] = []
     for thr in [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]:
         mask = p_hold >= thr
         n_trades = int(mask.sum())
         if n_trades == 0:
-            sweep.append({"threshold": thr, "n_trades": 0, "net_pnl_sum": 0.0, "win_rate": 0.0})
-            continue
-        traded_pnl = pnl_hold[mask]
-        sweep.append({
+            sweep_optimistic.append({"threshold": thr, "n_trades": 0, "net_pnl_sum": 0.0, "win_rate": 0.0})
+        else:
+            traded_pnl = pnl_hold[mask]
+            sweep_optimistic.append({
+                "threshold": thr,
+                "n_trades": n_trades,
+                "net_pnl_sum": float(traded_pnl.sum()),
+                "avg_pnl": float(traded_pnl.mean()),
+                "win_rate": float((traded_pnl > 0).mean()),
+            })
+        sim = simulate_single_position(holdout, p_hold, thr)
+        sweep_realistic.append({
             "threshold": thr,
-            "n_trades": n_trades,
-            "net_pnl_sum": float(traded_pnl.sum()),
-            "avg_pnl": float(traded_pnl.mean()),
-            "win_rate": float((traded_pnl > 0).mean()),
+            "n_trades": sim["n_trades"],
+            "net_pnl_sum": sim["net_pnl_sum"],
+            "avg_pnl": sim["avg_pnl"],
+            "win_rate": sim["win_rate"],
         })
 
-    # Best threshold by total net P&L (the only honest metric for "did the model add value")
-    best = max(sweep, key=lambda d: d["net_pnl_sum"])
+    # Best threshold under REALISTIC semantics — that's the deployment number.
+    best = max(sweep_realistic, key=lambda d: d["net_pnl_sum"])
+    sweep = sweep_realistic  # backward-compat: keep field name in result
 
     return TrainResult(
         recipe_id=recipe_id,
@@ -226,6 +326,7 @@ def train_recipe(df: pd.DataFrame, recipe_id: str) -> TrainResult:
         best_holdout_net_pnl_sum=float(best["net_pnl_sum"]),
         best_holdout_trades=int(best.get("n_trades", 0)),
         best_holdout_win_rate=float(best.get("win_rate", 0.0)),
+        threshold_sweep_optimistic=sweep_optimistic,  # per-snapshot, kept for diagnosis
     )
 
 
@@ -253,10 +354,13 @@ def run(args) -> int:
             res = train_recipe(df, recipe_id)
             print(f"  train/valid/holdout: {res.n_train}/{res.n_valid}/{res.n_holdout}")
             print(f"  holdout pos_rate: {res.holdout_pos_rate:.3f}  AUC: {res.holdout_roc_auc:.3f}")
-            print(f"  threshold sweep (n_trades, net_pnl_sum, win_rate):")
+            print(f"  threshold sweep — REALISTIC (single-position, runtime-equivalent):")
             for s in res.threshold_sweep:
                 print(f"    thr={s['threshold']:.2f}  n={s['n_trades']:5d}  net={s['net_pnl_sum']:+.3f}  wr={s.get('win_rate',0):.3f}")
-            print(f"  BEST threshold: {res.best_threshold_by_net_pnl:.2f}  net_pnl_sum: {res.best_holdout_net_pnl_sum:+.3f}  trades: {res.best_holdout_trades}")
+            print(f"  threshold sweep — OPTIMISTIC (per-snapshot, NOT runtime-equivalent — for diagnosis):")
+            for s in res.threshold_sweep_optimistic:
+                print(f"    thr={s['threshold']:.2f}  n={s['n_trades']:5d}  net={s['net_pnl_sum']:+.3f}  wr={s.get('win_rate',0):.3f}")
+            print(f"  BEST threshold (REALISTIC): {res.best_threshold_by_net_pnl:.2f}  net_pnl_sum: {res.best_holdout_net_pnl_sum:+.3f}  trades: {res.best_holdout_trades}  wr: {res.best_holdout_win_rate:.3f}")
             verdict = "EDGE" if res.best_holdout_net_pnl_sum > 0 else "NO_EDGE"
             print(f"  HOLDOUT VERDICT: {verdict}")
             all_results[recipe_id] = asdict(res)
