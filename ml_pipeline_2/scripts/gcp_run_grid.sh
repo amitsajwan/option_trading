@@ -36,14 +36,37 @@ grid = json.loads(grid_path.read_text(encoding='utf-8'))
 base_rel = grid["inputs"]["base_manifest_path"]
 base_path = (grid_path.parent / base_rel).resolve()
 base = json.loads(base_path.read_text(encoding='utf-8'))
-base.setdefault("windows", {}).setdefault("final_holdout", {})
+win = base.setdefault("windows", {})
+win.setdefault("final_holdout", {})
 base["windows"]["final_holdout"]["start"] = h_start
 base["windows"]["final_holdout"]["end"] = h_end
-# Ensure full_model ends before final_holdout starts
-base.setdefault("windows", {}).setdefault("full_model", {})
+# Derive consistent validation/train windows relative to new holdout
 try:
-    dt = datetime.strptime(h_start, "%Y-%m-%d") - timedelta(days=1)
-    base["windows"]["full_model"]["end"] = dt.strftime("%Y-%m-%d")
+    holdout_start_dt = datetime.strptime(h_start, "%Y-%m-%d")
+    valid_end_dt = holdout_start_dt - timedelta(days=1)
+    valid_start_dt = valid_end_dt - timedelta(days=90)
+    train_end_dt = valid_start_dt - timedelta(days=1)
+
+    # Forcefully replace windows to avoid partial merges
+    rt_start = (win.get("research_train", {}) or {}).get("start") or "2020-08-03"
+    base["windows"] = {
+        "research_train": {
+            "start": rt_start,
+            "end": train_end_dt.strftime("%Y-%m-%d"),
+        },
+        "research_valid": {
+            "start": valid_start_dt.strftime("%Y-%m-%d"),
+            "end": valid_end_dt.strftime("%Y-%m-%d"),
+        },
+        "full_model": {
+            "start": rt_start,
+            "end": valid_end_dt.strftime("%Y-%m-%d"),
+        },
+        "final_holdout": {
+            "start": h_start,
+            "end": h_end,
+        },
+    }
 except Exception:
     pass
 tmp_base = grid_path.parent / "_tmp.deep_search.holdout_override.json"
