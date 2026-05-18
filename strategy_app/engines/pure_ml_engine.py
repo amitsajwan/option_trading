@@ -61,8 +61,8 @@ class PureMLEngine(StrategyEngine):
         underlying_target_pct: Optional[float] = None,
         post_stop_cooldown_bars: int = 0,
     ) -> None:
-        self._model_package = load_staged_model_package(model_package_path)
-        self._staged_runtime_policy: dict[str, Any] = load_staged_policy(threshold_report_path)
+        self._model_package: dict[str, Any] = load_staged_model_package(model_package_path) if model_package_path else {}
+        self._staged_runtime_policy: dict[str, Any] = load_staged_policy(threshold_report_path) if threshold_report_path else {}
         runtime_payload = dict(self._staged_runtime_policy.get("runtime") or {})
         bundle_runtime_payload = dict(self._model_package.get("runtime") or {})
         bypass_deterministic_gates = env_bool(
