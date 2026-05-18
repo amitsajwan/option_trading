@@ -252,15 +252,29 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             if count > 0:
                 trade_counts[date_value] = count
             sample_open = None
+            all_recipes: list[str] = []
             try:
                 db = self._repo._evaluation_service._db()
-                sample_open = db[positions_coll_name].find_one(
+                open_docs = list(db[positions_coll_name].find(
                     {"trade_date_ist": date_value, "run_id": run_id, "event": "POSITION_OPEN"},
                     {"_id": 0, "reason": 1, "stop_loss_pct": 1, "target_pct": 1, "direction": 1},
-                )
+                ).limit(50))
+                if open_docs:
+                    sample_open = open_docs[0]
+                    for doc in open_docs:
+                        rm = _RECIPE_IN_REASON_RE.search(str(doc.get("reason") or ""))
+                        if rm:
+                            r = rm.group(1).upper()
+                            if r not in all_recipes:
+                                all_recipes.append(r)
             except Exception:
                 sample_open = None
-            models_by_date[date_value] = _classify_run_id(run_id, sample_open_event=sample_open)
+            classified = _classify_run_id(run_id, sample_open_event=sample_open)
+            if len(all_recipes) > 1:
+                classified = {"family": "OPT_PNL", "recipe": "+".join(all_recipes)}
+            elif len(all_recipes) == 1:
+                classified = {"family": "OPT_PNL", "recipe": all_recipes[0]}
+            models_by_date[date_value] = classified
 
         return {
             "dates": dates,
