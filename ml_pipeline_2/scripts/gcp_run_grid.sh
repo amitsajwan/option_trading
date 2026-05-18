@@ -27,6 +27,7 @@ if [[ -n "${HOLDOUT_START:-}" && -n "${HOLDOUT_END:-}" ]]; then
   echo "[info] Applying holdout override: ${HOLDOUT_START} → ${HOLDOUT_END}"
   EFFECTIVE_CONFIG=$(python - "$REPO_DIR" "$CONFIG" "$HOLDOUT_START" "$HOLDOUT_END" << 'PY'
 import json, sys
+from datetime import datetime, timedelta
 from pathlib import Path
 repo = Path(sys.argv[1])
 grid_path = (repo / sys.argv[2]).resolve()
@@ -38,6 +39,13 @@ base = json.loads(base_path.read_text(encoding='utf-8'))
 base.setdefault("windows", {}).setdefault("final_holdout", {})
 base["windows"]["final_holdout"]["start"] = h_start
 base["windows"]["final_holdout"]["end"] = h_end
+# Ensure full_model ends before final_holdout starts
+base.setdefault("windows", {}).setdefault("full_model", {})
+try:
+    dt = datetime.strptime(h_start, "%Y-%m-%d") - timedelta(days=1)
+    base["windows"]["full_model"]["end"] = dt.strftime("%Y-%m-%d")
+except Exception:
+    pass
 tmp_base = grid_path.parent / "_tmp.deep_search.holdout_override.json"
 tmp_base.write_text(json.dumps(base, indent=2), encoding='utf-8')
 grid["inputs"]["base_manifest_path"] = str(tmp_base.relative_to(grid_path.parent))
