@@ -48,6 +48,7 @@ tmp_grid = grid_path.parent / "_tmp.grid.holdout_override.json"
 tmp_grid.write_text(json.dumps(grid, indent=2), encoding='utf-8')
 print(str(tmp_grid))
 PY
+  )
   echo "[info] Using temp grid config: ${EFFECTIVE_CONFIG}"
 fi
 
