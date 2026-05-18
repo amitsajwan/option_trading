@@ -151,6 +151,11 @@ def _read_runtime_config(run_dir: Path) -> dict[str, Any]:
         out["max_hold_bars"] = model.get("max_hold_bars")
         out["stop_pct_of_premium"] = model.get("stop_pct_of_premium")
         out["target_pct_of_premium"] = model.get("target_pct_of_premium")
+        # Multi-bundle: list all loaded models so dashboard shows the full set.
+        # Each entry: {recipe_id, option_type, decision_threshold, run_id}
+        bundles = model.get("bundles")
+        if isinstance(bundles, list) and len(bundles) > 1:
+            out["active_bundles"] = bundles
     if legacy:
         # Visible-but-demoted: dashboard can show "fallback model loaded as
         # placeholder" so operator sees the full picture.

@@ -1,6 +1,6 @@
 # BankNifty System Source Of Truth
 
-As-of date: `2026-04-27`
+As-of date: `2026-05-18`
 
 If active docs conflict with code, code wins. If active docs conflict with each other, this file wins.
 
@@ -20,12 +20,22 @@ If active docs conflict with code, code wins. If active docs conflict with each 
 - `runtime.block_expiry` must stay aligned between training and live runtime policy.
 - Active staged label generation is built from forward futures-path barrier labeling in `ml_pipeline_2/labeling/engine.py`, not from deterministic strategy replay exits.
 
-**Current research model (not production-ready):**
+**Current deployed model:**
 
-- Run: `staged_simple_s2_v1_20260426_110326`
-- GCS root: `gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1/`
-- Status: research checkpoint — all production gates failed — `paper` rollout stage only
-- Details: `ml_pipeline_2/docs/MODEL_STATE_20260426.md`
+- Bundle: `option_pnl_atm_pe_15_20260517_135208`
+- Recipe: `ATM_PE_15` (HPO trial-18 params), option_type=PE, max_hold_bars=15, threshold=0.55
+- Local path: `/opt/option_trading/.data/ml_pipeline/option_pnl_published_models/option_pnl_atm_pe_15_20260517_135208`
+- Activated via: `OPTION_PNL_MODEL_BUNDLE=<path>` env var in docker-compose
+- Status: `paper` rollout stage only — no real capital
+- Realistic holdout (aug-sep window): 98 trades, net +2.87, WR 61% at thr=0.55
+
+**Pending (2026-05-18):**
+- CE bundle (`ATM_CE_9`) — HPO + publish pending realistic eval results
+- Multi-bundle: `OPTION_PNL_MODEL_BUNDLE` now accepts comma-separated paths; engine selects highest `(prob - threshold)` margin each bar
+- See `docs/PROJECT_PLAN.md §18` for full analysis and next steps
+
+**Retired model (do not re-deploy):**
+- `staged_simple_s2_v1_20260426_110326` — all production gates failed, futures-direction lane confirmed dead on 2020-2024 corpus
 
 ## 3. Runtime Guard Contract
 

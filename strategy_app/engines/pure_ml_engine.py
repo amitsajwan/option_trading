@@ -33,7 +33,7 @@ from .pure_ml_staged_runtime import PureMLRuntimeControls, StagedRuntimeDecision
 from .rolling_feature_state import RollingFeatureState
 from .regime import RegimeClassifier
 from .snapshot_accessor import SnapshotAccessor
-from ..utils.env import env_bool, env_float
+from ..utils.env import env_bool, env_float, env_int
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,8 @@ class PureMLEngine(StrategyEngine):
         self._underlying_target_pct: Optional[float] = (max(0.0, float(_raw_udl_target)) if _raw_udl_target is not None else None)
         self._post_stop_cooldown_bars: int = max(0, int(os.getenv("ML_PURE_POST_STOP_COOLDOWN_BARS", str(post_stop_cooldown_bars)) or 0))
         self._cooldown_bars_remaining: int = 0
+        self._option_pnl_risk_breach_cooldown_bars: int = max(0, int(env_int("OPTION_PNL_RISK_BREACH_COOLDOWN_BARS", 5) or 0))
+        self._option_pnl_risk_breach_cooldown_remaining: int = 0
         self._trailing_enabled: bool = env_bool("ML_PURE_TRAILING_ENABLED", True)
         if min_edge is not None:
             logger.warning(
@@ -113,26 +115,24 @@ class PureMLEngine(StrategyEngine):
                 self._trailing_enabled,
             )
         # Optional option-P&L bundle override. When OPTION_PNL_MODEL_BUNDLE
-        # env var points to a published bundle, the staged predictor path is
-        # bypassed in favour of a single binary classifier that fires the
-        # bundle's fixed recipe. See engines/option_pnl_predictor.py.
-        # Loading is best-effort: any error means the engine falls back to
-        # the staged path with a single warn log, so a bad bundle path
-        # cannot break the existing C1 flow.
+        # env var points to published bundle(s), the staged predictor path is
+        # bypassed. Accepts a comma-separated list for multi-bundle mode —
+        # all bundles are scored each bar and the highest-margin candidate fires.
+        # Loading is best-effort: bad paths are skipped with a warning so one
+        # broken bundle cannot block the others or the existing C1 flow.
         try:
-            from .option_pnl_predictor import load_bundle_from_env  # noqa: PLC0415
-            self._option_pnl_bundle = load_bundle_from_env()
-            if self._option_pnl_bundle is not None:
-                logger.info(
-                    "OPTION-P&L bundle loaded: recipe=%s threshold=%.4f run_id=%s features=%d",
-                    self._option_pnl_bundle.recipe_id,
-                    self._option_pnl_bundle.decision_threshold,
-                    self._option_pnl_bundle.run_id,
-                    len(self._option_pnl_bundle.feature_columns),
-                )
+            from .option_pnl_predictor import load_bundles_from_env  # noqa: PLC0415
+            self._option_pnl_bundles: list = load_bundles_from_env()
+            if self._option_pnl_bundles:
+                for _b in self._option_pnl_bundles:
+                    logger.info(
+                        "OPTION-P&L bundle loaded: recipe=%s threshold=%.4f run_id=%s features=%d",
+                        _b.recipe_id, _b.decision_threshold, _b.run_id, len(_b.feature_columns),
+                    )
+                logger.info("OPTION-P&L multi-bundle mode: %d bundle(s) active", len(self._option_pnl_bundles))
         except Exception as exc:  # noqa: BLE001 — never let a bad bundle crash init
             logger.warning("OPTION_PNL_MODEL_BUNDLE load failed; staying on staged predictor: %s", exc)
-            self._option_pnl_bundle = None
+            self._option_pnl_bundles = []
 
         self._last_entry_at: Optional[str] = None
         self._last_event: Optional[dict[str, Any]] = None
@@ -213,6 +213,7 @@ class PureMLEngine(StrategyEngine):
         self._session_updated_at_ist = self._session_started_at_ist
         self._hold_counts = {}
         self._cooldown_bars_remaining = 0
+        self._option_pnl_risk_breach_cooldown_remaining = 0
         self._feature_state.on_session_start(trade_date)
         self._tracker.on_session_start(trade_date)
         self._risk.on_session_start(trade_date)
@@ -298,6 +299,12 @@ class PureMLEngine(StrategyEngine):
                 self._handle_position_closed(system_exit, position)
                 if system_exit.exit_reason in (ExitReason.STOP_LOSS, ExitReason.TRAILING_STOP) and self._post_stop_cooldown_bars > 0:
                     self._cooldown_bars_remaining = self._post_stop_cooldown_bars
+                if (
+                    system_exit.exit_reason == ExitReason.RISK_BREACH
+                    and self._option_pnl_bundles
+                    and self._option_pnl_risk_breach_cooldown_bars > 0
+                ):
+                    self._option_pnl_risk_breach_cooldown_remaining = self._option_pnl_risk_breach_cooldown_bars
                 self._last_event = {
                     "event": "exit",
                     "snapshot_id": snap.snapshot_id,
@@ -384,6 +391,14 @@ class PureMLEngine(StrategyEngine):
             self._write_runtime_state()
             return None
 
+        if self._option_pnl_risk_breach_cooldown_remaining > 0:
+            self._option_pnl_risk_breach_cooldown_remaining -= 1
+            self._log_hold("risk_breach_cooldown", snap)
+            self._last_event = {"event": "hold", "snapshot_id": snap.snapshot_id, "reason": "risk_breach_cooldown"}
+            self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+            self._write_runtime_state()
+            return None
+
         _ts = snap.timestamp
         if _ts is not None and (_ts.hour * 60 + _ts.minute) >= 15 * 60:
             self._log_hold("soft_close_no_entry", snap)
@@ -392,13 +407,13 @@ class PureMLEngine(StrategyEngine):
             self._write_runtime_state()
             return None
 
-        if self._option_pnl_bundle is not None:
-            # Option-P&L bundle path: single binary classifier with fixed recipe.
-            # Constructs a StagedRuntimeDecision so all downstream logic
-            # (smart-strike, premium check, signal builder, tracker) is reused.
-            from .option_pnl_predictor import build_decision_from_bundle  # noqa: PLC0415
-            decision = build_decision_from_bundle(
-                bundle=self._option_pnl_bundle, snap=snap, rolling_features=rolling_features,
+        if self._option_pnl_bundles:
+            # Option-P&L bundle path: score all loaded bundles and fire the
+            # highest-margin candidate. Single-bundle is the common case;
+            # multi-bundle (CE + PE) selects best signal each bar.
+            from .option_pnl_predictor import select_best_bundle_decision  # noqa: PLC0415
+            decision = select_best_bundle_decision(
+                bundles=self._option_pnl_bundles, snap=snap, rolling_features=rolling_features,
             )
         else:
             decision = predict_staged(
@@ -554,7 +569,7 @@ class PureMLEngine(StrategyEngine):
             # Otherwise pass None so the recipe-supplied horizon flows through unchanged.
             max_hold_bars_override=(
                 None
-                if self._option_pnl_bundle is not None
+                if self._option_pnl_bundles
                 else (int(self._max_hold_bars) if os.getenv("ML_PURE_MAX_HOLD_BARS") else None)
             ),
             premium_risk_fallback_pct=self._stop_loss_pct,

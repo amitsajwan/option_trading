@@ -1,6 +1,6 @@
 # BankNifty Options ML — Project Plan
 
-**Living document.** Updated as phases progress. Last revised: 2026-05-15.
+**Living document.** Updated as phases progress. Last revised: 2026-05-18.
 
 The North Star, the current state, what we're fixing, in what order, who does what, and where we stop. Refer to this until the project is complete or explicitly redirected.
 
@@ -20,18 +20,16 @@ The North Star, the current state, what we're fixing, in what order, who does wh
 
 ---
 
-## 2. Current State Snapshot (2026-05-15 evening IST)
+## 2. Current State Snapshot (2026-05-18 IST)
 
-**One-line position:** C1 is live in `capped_live` (no real money). Four independent experiments confirm overfit on the C1 recipe family using v1 views — C1 holdout net-negative, F1 walk-forward held, B1 cost-shift held, Path C-1 (conviction filter) documented as Apr-26 dead-end. **G4 is now running** to test a structurally different question: does the C1 recipe find generalizable signal when given a richer feature set (`v3_candidate` views, ~50% more columns including `ctx_*` family)? Result by Saturday ~00:30 IST. **Do NOT deploy real capital — applies regardless of G4 outcome.**
+**One-line position:** Option-P&L lane (`option_pnl_v1`) is the active research track. `ATM_PE_15` with HPO trial-18 params is deployed at threshold 0.55 (`paper` rollout stage, no real capital). C1 futures-direction lane is confirmed dead on the 2020-2024 corpus (§15). **As of 2026-05-18:** multi-bundle support has been implemented in the runtime engine — CE and PE models can now run in parallel, with the highest-confidence signal firing each bar. Realistic single-position evaluation running on all 4 core recipes (ATM_CE_9, ATM_PE_9, ATM_CE_15, ATM_PE_15) on the ML VM. **Do NOT deploy real capital.**
 
 | Layer | State |
 |---|---|
-| **Live model** | C1 (`staged_deep_hpo_c1_base_20260429_040848`), `regime_gate_v1` active, `capped_live` @ 0.25× size. **No real-money orders are placed** — broker integration doesn't exist yet (Phase 4). |
-| **OOS verdict (2026-05-15)** | C1 holdout (2024-08 → 2024-09, 16 trades): **net −55% @ 200 bps**, PF 0.86. Training-window contribution: **+87% of total gross.** Exit-timing sweep (9/15/20/30 bars): all variants net-negative on holdout. See §14. |
-| **F1 walk-forward** | **HELD** at `stage1_cv_gate_failed`. C1 recipe trained on pre-2024 → block_rate=1.0. Recipe doesn't generalize across windows. See §15. |
-| **B1 cost-aware label** | **HELD** at `stage2_signal_check_failed`. C1 recipe + `cost_per_trade=0.02` instead of 6 bps → Stage 2 direction signal collapses under realistic-cost labels. See §15. |
-| **Path C-1 (NOT launched)** | Conviction-filter approach (`direction_or_no_trade_v1` + `stage2_target_redesign`) — already tried Apr 26 2026, killed throughput to 0 holdout trades. Replicating it under 200 bps would be even worse. Don't run. |
-| **G4 (RE-LAUNCHED 2026-05-16)** | C1 recipe + `stage{1,2,3}_*_view_v3_candidate` (130 cols vs v1's 83 — ~47 extra `ctx_*` features). First run (2026-05-15 18:32 UTC) FAILED at stage3 alignment after 5 hrs — `stage1_entry_view_v3_candidate` was missing the 2024-01-01 partition entirely (376 rows that stage2/3 had). Root-cause fixed by rebuilding the missing partition via [`snapshot_app/historical/rebuild_stage_views_from_flat.py`](../snapshot_app/historical/rebuild_stage_views_from_flat.py). v2 also had the same bug on a different date (2021-01-05) — both fixed. All three view variants (v1, v2, v3_candidate) now pass alignment. **G4 re-launched 2026-05-16 10:49 UTC, manifest `8a8dd07ad0...` (unchanged config), run dir `deep_hpo_g4_v3candidate_views_20260516_104918`. ETA ~6 hrs.** |
+| **Live model** | `ATM_PE_15` HPO trial-18 bundle (`option_pnl_atm_pe_15_20260517_135208`), threshold 0.55, `paper` rollout stage. No real-money orders. |
+| **option_pnl_v1 results** | ATM_PE_15 realistic holdout (aug-sep window): 98 trades @ thr=0.55, net +2.87, WR 61%. All 4 core recipes showed EDGE on optimistic sweep. See §16. |
+| **C1 verdict** | DEAD on 2020-2024 corpus. Four confirmations: F1 (window-shift HELD), B1 (cost-aware HELD), OOS net-negative §14, holdout exit-sweep all negative. Futures-direction lane closed. |
+| **Multi-bundle (2026-05-18)** | Engine now supports `OPTION_PNL_MODEL_BUNDLE=path1,path2,...`. All bundles scored each bar; highest `(prob − threshold)` margin fires. Awaiting CE realistic eval results to publish CE bundle. See §18. |
 | **Architecture** | Three lanes (training / live / historical replay) sharing `strategy_app` code + published model artifact. [SYSTEM_FLOW_DIAGRAMS.md](SYSTEM_FLOW_DIAGRAMS.md). |
 | **Data state** | 2020-08 → 2024-10 in mongo + parquet. **2025+ NOT acquired.** All free paths (Kite Historical, NSE bhavcopy, scrapers) inadequate for 1-min option chain. Forward live collection (Kite live credentials → Monday 09:15 IST market open) is the only viable path. |
 | **Persistence & storage** | RESOLVED 2026-05-16. JSONL is canonical for trade events (fsync on POSITION_OPEN/CLOSE, fail-health on append error via [strategy_app/logging/health_marker.py](../strategy_app/logging/health_marker.py)). Mongo is a derived read cache. Persistence consumer is a decoupled writer thread + bounded queue + pubsub recovery + env-configurable timeouts — pubsub never blocks on mongo. Commits: 4715deb (JSONL contract), bb36eef (consumer hardening), 645873b (re-enabled on historical profile). See [ARCHITECTURE.md §9-§10](ARCHITECTURE.md). |
@@ -41,15 +39,12 @@ The North Star, the current state, what we're fixing, in what order, who does wh
 
 **Next concrete actions (in priority order):**
 
-1. **Tonight ~00:30 IST:** read G4 `summary.json`. Two outcomes:
-   - G4 HELD (same as F1/B1): then the data ceiling claim firms up — recipe family genuinely exhausted regardless of feature set. Move to G2 (new labels via direct option-P&L; requires new labeler code) or accept "wait for fresh data" position.
-   - G4 PUBLISHES: feature set was the lever; we have a candidate model worth forward-validating. Wire shadow mode Monday.
-2. **Monday 2026-05-18, 09:15 IST:** if operator shares Kite live credentials, start forward shadow data collection regardless of G4 outcome. Accumulating fresh OOS data has no downside.
-3. **Continue testing untried recipe dimensions** if G4 fails: G2 (direct option-P&L label — needs new labeler code), G3 (different ML model family from the existing trainer catalog).
+1. **Read realistic CE/PE results** once GCP job completes (`/opt/option_trading/.data/ml_pipeline/all_recipes_realistic_results.json`). If ATM_CE_9 shows EDGE → run HPO → publish CE bundle.
+2. **Set `OPTION_PNL_MODEL_BUNDLE`** to comma-separated PE + CE bundle paths in docker-compose once CE bundle exists.
+3. **Historical replay** with multi-bundle config to measure CE+PE combined win rate and trade frequency vs PE-only baseline.
+4. **Kite live credentials** — still the gating action for fresh OOS shadow data.
 
-**Operator decision needed:** share Kite live trading API credentials with the runtime VM so forward shadow can start Monday. This is the unblocking action for the OOS validation side, independent of training.
-
-**Active running:** G4 training in tmux `pathg4` on `option-trading-ml-01`, manifest `8a8dd07ad0...`, started 2026-05-15 18:32 UTC.
+**Active running (2026-05-18):** Realistic 4-recipe eval, PID 444227 on `option-trading-ml-01`.
 
 ---
 
@@ -833,7 +828,89 @@ Full pipeline executed end-to-end:
 - [SYSTEM_FLOW_DIAGRAMS.md](SYSTEM_FLOW_DIAGRAMS.md) — architecture & flow diagrams
 - [ARCHITECTURE.md](ARCHITECTURE.md) — textual cross-cutting view
 - [../ml_pipeline_2/docs/training/INDEX.md](../ml_pipeline_2/docs/training/INDEX.md) — research history (A→B→C→D→E grids; F1/B1 added 2026-05-15)
-- [../ml_pipeline_2/docs/training/MODEL_STATE_20260515.md](../ml_pipeline_2/docs/training/MODEL_STATE_20260515.md) — **TODAY's session — read this first when resuming**
-- [../ml_pipeline_2/docs/training/MODEL_STATE_20260514.md](../ml_pipeline_2/docs/training/MODEL_STATE_20260514.md) — previous session (E2 / Stage-1 ablation context)
+- [../ml_pipeline_2/docs/training/MODEL_STATE_20260515.md](../ml_pipeline_2/docs/training/MODEL_STATE_20260515.md) — previous session (Phase 1 exit-sweep + G1 result)
 - [SYSTEM_SOURCE_OF_TRUTH.md](SYSTEM_SOURCE_OF_TRUTH.md) — contracts, constants
 - [../scripts/README.md](../scripts/README.md) — analysis + orchestration scripts (analyze_jsonl, sim_exit_sweep, launchers)
+
+---
+
+## 18. Multi-Bundle Analysis + Implementation (2026-05-18)
+
+### What we found
+
+The deployed system runs only `ATM_PE_15` (a PE-only put-buying model). Every trade fires as a bearish bet. The UI correctly shows `SHORT` direction for all trades — this is not a bug, it reflects that every signal is a PE (bearish underlying) position.
+
+**Root cause of PE-only deployment:** Only `ATM_PE_15` was HPO-tuned and published as a bundle. CE recipes were evaluated at the MVP training stage but never taken through HPO → publish. This was an oversight, not a deliberate design choice.
+
+### What the training data shows
+
+All 4 core recipes showed positive holdout net P&L on the MVP trainer (optimistic sweep):
+
+| Recipe | Verdict | Best Thr | Net P&L | Trades | Win Rate |
+|---|---|---|---|---|---|
+| **ATM_CE_9** | EDGE | 0.55 | +2.52 | 91 | 52.7% |
+| **ATM_PE_9** | EDGE | 0.55 | +8.99 | 820 | 55.4% |
+| **ATM_CE_15** | EDGE | 0.60 | +0.89 | 45 | 51.1% |
+| **ATM_PE_15** | EDGE | 0.65 | +1.01 | 592 | 50.7% |
+
+The realistic single-position simulator (blocks concurrent entries — the honest runtime metric) was run for all 4 recipes on 2026-05-18. Results vs the previously deployed `ATM_PE_15` aug-sep window:
+
+| Recipe | Realistic Verdict | Best Thr | Net P&L | Trades | Win Rate | AUC |
+|---|---|---|---|---|---|---|
+| **ATM_CE_9** | **EDGE** | 0.55 | **+0.171** | 31 | 48.4% | 0.581 |
+| **ATM_PE_9** | **EDGE** | 0.60 | **+1.282** | 62 | 59.7% | 0.551 |
+| **ATM_CE_15** | EDGE (marginal) | 0.65 | +0.196 | **3** | 66.7% | 0.566 |
+| **ATM_PE_15** | **NO_EDGE** | 0.70 | −0.099 | 27 | 48.1% | 0.538 |
+
+**Critical finding:** `ATM_PE_15` shows **NO_EDGE** under the honest realistic simulator on this holdout window (different holdout than aug-sep window used for the published bundle). `ATM_PE_9` is the strongest recipe at threshold 0.60. `ATM_CE_9` shows genuine edge at 0.55 but only 31 trades. `ATM_CE_15` passes with 3 trades — statistically too thin to rely on.
+
+**Deploy candidates:** `ATM_PE_9` (62 trades, +1.28, 59.7% WR) is a stronger PE model than PE_15 on this window. `ATM_CE_9` is the CE model to HPO and publish.
+
+### Why multi-bundle is the right architecture
+
+Running CE and PE models in parallel produces better coverage:
+- **BankNifty can trend both ways.** A PE-only system misses every bullish opportunity entirely.
+- **CE and PE signals are independent.** They have different feature weights and threshold calibrations. At each bar, one may clear its threshold while the other HOLDs — the system fires the one with genuine confidence.
+- **Selection rule:** highest `(prob − threshold)` margin wins. This normalises across different per-bundle calibrations so a CE model at 0.63 (margin +0.08 over 0.55) beats a PE at 0.62 (margin +0.02 over 0.60).
+- **Position constraint is preserved.** Only one position open at a time — multi-bundle does not increase capital at risk.
+
+### Code changes made
+
+Three files changed, all backward-compatible:
+
+**`strategy_app/engines/option_pnl_predictor.py`**
+- `load_bundle_from_env()` now delegates to `load_bundles_from_env()` (backward compat wrapper)
+- `load_bundles_from_env()` — parses `OPTION_PNL_MODEL_BUNDLE` as comma-separated paths, loads all, skips bad paths with a warning
+- `select_best_bundle_decision()` — scores all bundles at a bar, returns highest-margin ENTRY or a HOLD if none clear threshold
+
+**`strategy_app/engines/pure_ml_engine.py`**
+- `_option_pnl_bundle` (single) → `_option_pnl_bundles` (list)
+- Init: loads all bundles, logs each one + total count
+- Entry path: calls `select_best_bundle_decision()` instead of `build_decision_from_bundle()`
+- Risk-breach cooldown: triggers when any bundle is loaded (unchanged semantics)
+- `max_hold_bars` override: suppressed when any bundle active (unchanged semantics)
+
+**`strategy_app/main.py`**
+- Runtime state now surfaces all loaded bundles under `active_option_pnl_bundle.bundles[]`
+- First bundle drives the primary fields (backward compat for dashboard)
+
+### Config change (pending CE bundle publish)
+
+Currently `OPTION_PNL_MODEL_BUNDLE` is **not set** in `docker-compose.yml` (the engine falls through to the staged C1 predictor path when unset). To activate multi-bundle, set:
+
+```yaml
+OPTION_PNL_MODEL_BUNDLE: "/path/to/atm_pe_15_bundle,/path/to/atm_ce_9_bundle"
+```
+
+The comma-separated format is the only change needed. Single-bundle (existing PE-only) syntax also still works.
+
+### Next steps (updated after realistic eval 2026-05-18)
+
+1. [x] **Realistic eval complete** — `ATM_PE_9` best PE (60 trades, +1.28, 59.7% WR @ thr=0.60); `ATM_CE_9` best CE (31 trades, +0.17, 48.4% WR @ thr=0.55); `ATM_PE_15` NO_EDGE on this window
+2. **Run HPO for ATM_PE_9** — currently no HPO results exist for PE_9; run `hpo_option_pnl.py --recipe ATM_PE_9` to find best XGB params, then publish bundle
+3. **Run HPO for ATM_CE_9** — run `hpo_option_pnl.py --recipe ATM_CE_9`, then publish bundle
+4. **Publish both bundles** via `publish_option_pnl_model.py` — PE_9 at thr=0.60, CE_9 at thr=0.55
+5. **Update `OPTION_PNL_MODEL_BUNDLE`** in `docker-compose.yml` to include both new bundles (replacing the PE_15 path)
+6. **Run historical replay** with both bundles — measure combined trade frequency, win rate, and net P&L vs PE_15-only baseline
+7. **Re-evaluate PE_15 decision:** the published bundle was trained with HPO trial-18 on a different holdout window (aug-sep) and showed EDGE there. The NO_EDGE on this window may reflect holdout window variance. Keep PE_15 bundle active until PE_9 HPO is complete and compared.
+8. **Open audit items** before any live deployment (from §16): entry-fill timing, per-recipe smart-strike disable, dashboard pnl_pct_basis rendering

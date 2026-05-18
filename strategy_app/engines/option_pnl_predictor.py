@@ -6,8 +6,10 @@ Bundle contents (per the publish script):
     feature_columns.json  — ordered list of feature names
     metadata.json         — recipe params, decision threshold, model params
 
-This module exposes ONE function:
-    build_decision_from_bundle(bundle: OptionPnlBundle, snap) -> StagedRuntimeDecision
+This module exposes three public entry points:
+    build_decision_from_bundle(bundle, snap)  — single bundle (used by select_best_bundle_decision)
+    load_bundles_from_env()                   — load all bundles from OPTION_PNL_MODEL_BUNDLE (comma-sep)
+    select_best_bundle_decision(bundles, snap) — score all bundles, return highest-margin ENTRY or HOLD
 
 Why fake a StagedRuntimeDecision rather than a separate path: PureMLEngine's
 evaluate() consumes the staged decision object and handles the rest
@@ -123,14 +125,71 @@ def load_option_pnl_bundle(bundle_dir: str | Path) -> OptionPnlBundle:
 
 
 def load_bundle_from_env() -> Optional[OptionPnlBundle]:
-    """Read OPTION_PNL_MODEL_BUNDLE env var and load. Returns None if unset.
+    """Read OPTION_PNL_MODEL_BUNDLE env var and load the first path. Returns None if unset.
 
-    PureMLEngine calls this at __init__; if a bundle is loaded, it takes
-    precedence over the staged predictor path."""
-    env_path = os.getenv("OPTION_PNL_MODEL_BUNDLE")
-    if not env_path or not env_path.strip():
-        return None
-    return load_option_pnl_bundle(env_path.strip())
+    Kept for backward compatibility. Prefer load_bundles_from_env() for
+    multi-bundle support."""
+    bundles = load_bundles_from_env()
+    return bundles[0] if bundles else None
+
+
+def load_bundles_from_env() -> list[OptionPnlBundle]:
+    """Read OPTION_PNL_MODEL_BUNDLE env var and load all bundles.
+
+    Accepts a comma-separated list of bundle directory paths, e.g.:
+        OPTION_PNL_MODEL_BUNDLE=/path/to/pe_bundle,/path/to/ce_bundle
+
+    Returns a list of loaded bundles (may be empty). Errors on individual
+    paths are logged and skipped so one bad path cannot block others.
+    """
+    env_val = os.getenv("OPTION_PNL_MODEL_BUNDLE", "")
+    if not env_val or not env_val.strip():
+        return []
+    paths = [p.strip() for p in env_val.split(",") if p.strip()]
+    bundles: list[OptionPnlBundle] = []
+    for path in paths:
+        try:
+            bundles.append(load_option_pnl_bundle(path))
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "OPTION_PNL_MODEL_BUNDLE: failed to load bundle at %r — skipping: %s", path, exc
+            )
+    return bundles
+
+
+def select_best_bundle_decision(
+    bundles: list[OptionPnlBundle],
+    snap: Any,
+    rolling_features: Optional[dict[str, object]] = None,
+) -> "StagedRuntimeDecision":
+    """Score all bundles at the current bar and return the highest-confidence decision.
+
+    Selection rule: highest (prob - threshold) margin among bundles that
+    clear their threshold. This favours the most confident signal relative
+    to each bundle's own calibration point rather than raw probability.
+
+    Returns HOLD if no bundle clears its threshold.
+    """
+    best_decision = None
+    best_margin: float = -1.0
+    for bundle in bundles:
+        decision = build_decision_from_bundle(
+            bundle=bundle, snap=snap, rolling_features=rolling_features
+        )
+        if decision.action == "HOLD":
+            continue
+        margin = float(decision.entry_prob) - float(bundle.decision_threshold)
+        if margin > best_margin:
+            best_margin = margin
+            best_decision = decision
+    if best_decision is not None:
+        from dataclasses import replace  # noqa: PLC0415
+        return replace(best_decision, recipe_margin=float(best_margin))
+    # All HOLDs — return the last bundle's HOLD for diagnostics
+    return build_decision_from_bundle(
+        bundle=bundles[-1], snap=snap, rolling_features=rolling_features
+    )
 
 
 def _flatten_snapshot_features(

@@ -337,12 +337,14 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         )
     topic = str(args.topic or snapshot_topic()).strip() or snapshot_topic()
     runtime_store = RuntimeArtifactStore(runtime_artifact_paths.root)
-    # If the engine has an option-P&L bundle loaded (via OPTION_PNL_MODEL_BUNDLE),
-    # surface it in runtime_config.model so /api/strategy/current/state reports
-    # the model that's ACTUALLY firing decisions — not the staged placeholder.
+    # If the engine has option-P&L bundles loaded (via OPTION_PNL_MODEL_BUNDLE),
+    # surface them in runtime_config so /api/strategy/current/state reports
+    # the model(s) ACTUALLY firing decisions — not the staged placeholder.
+    # Multi-bundle: summarise all loaded bundles; first bundle drives the primary fields.
     active_option_pnl_bundle = None
-    _opb = getattr(engine, "_option_pnl_bundle", None)
-    if _opb is not None:
+    _opbs: list = getattr(engine, "_option_pnl_bundles", []) or []
+    if _opbs:
+        _opb = _opbs[0]
         active_option_pnl_bundle = {
             "run_id": _opb.run_id,
             "recipe_id": _opb.recipe_id,
@@ -355,6 +357,11 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             "max_hold_bars": int(_opb.max_hold_bars),
             "stop_pct_of_premium": float(_opb.stop_pct_of_premium),
             "target_pct_of_premium": float(_opb.target_pct_of_premium),
+            "bundles": [
+                {"recipe_id": b.recipe_id, "option_type": b.option_type,
+                 "decision_threshold": float(b.decision_threshold), "run_id": b.run_id}
+                for b in _opbs
+            ],
         }
     runtime_store.write_config(
         build_runtime_config_payload(

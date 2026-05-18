@@ -216,21 +216,29 @@ def simulate_single_position(holdout_df: pd.DataFrame, p_hold: np.ndarray,
     }
 
 
-def split_temporal(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Train / valid / holdout by trade_date. Same windows as C1 for apples-to-apples."""
+def split_temporal(df: pd.DataFrame,
+                   holdout_end: pd.Timestamp = HOLDOUT_END
+                   ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Train / valid / holdout by trade_date. Same windows as C1 for apples-to-apples.
+
+    `holdout_end` lets callers tighten the holdout (e.g. to match a runtime
+    replay's actual coverage window). Defaults to the C1 holdout end.
+    """
     train = df[df["trade_date"] <= TRAIN_END].copy()
     valid = df[(df["trade_date"] > TRAIN_END) & (df["trade_date"] <= VALID_END)].copy()
-    holdout = df[(df["trade_date"] > VALID_END) & (df["trade_date"] <= HOLDOUT_END)].copy()
+    holdout = df[(df["trade_date"] > VALID_END) & (df["trade_date"] <= holdout_end)].copy()
     return train, valid, holdout
 
 
-def train_recipe(df: pd.DataFrame, recipe_id: str) -> TrainResult:
+def train_recipe(df: pd.DataFrame, recipe_id: str,
+                 params_override: Optional[dict] = None,
+                 holdout_end: pd.Timestamp = HOLDOUT_END) -> TrainResult:
     """Train a binary XGBoost classifier for one recipe."""
     feat_cols = select_feature_columns(df)
     if not feat_cols:
         raise ValueError(f"recipe {recipe_id}: no feature columns found")
 
-    train, valid, holdout = split_temporal(df)
+    train, valid, holdout = split_temporal(df, holdout_end=holdout_end)
     if min(len(train), len(holdout)) < 100:
         raise ValueError(
             f"recipe {recipe_id}: too few rows after split — train={len(train)} holdout={len(holdout)}"
@@ -245,18 +253,18 @@ def train_recipe(df: pd.DataFrame, recipe_id: str) -> TrainResult:
     pnl_hold = holdout["net_pnl_pct"].astype(float).to_numpy()
 
     _require_xgboost()
+    # Default config matches the original MVP. Override via --params-json
+    # for HPO-trained config equivalence with the deployed bundle.
+    final_params = dict(
+        n_estimators=300, max_depth=4, learning_rate=0.05,
+        subsample=0.85, colsample_bytree=0.85, reg_lambda=2.0,
+    )
+    if params_override:
+        final_params.update(params_override)
     model = xgb.XGBClassifier(
-        n_estimators=300,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.85,
-        colsample_bytree=0.85,
-        reg_lambda=2.0,
-        objective="binary:logistic",
-        eval_metric="auc",
-        tree_method="hist",
-        n_jobs=4,
-        random_state=42,
+        **final_params,
+        objective="binary:logistic", eval_metric="auc",
+        tree_method="hist", n_jobs=4, random_state=42,
     )
     eval_set = []
     if X_valid is not None and len(X_valid) > 0:
@@ -330,6 +338,26 @@ def train_recipe(df: pd.DataFrame, recipe_id: str) -> TrainResult:
     )
 
 
+def load_params_override(path: str | Path) -> dict:
+    """Load XGB hyperparameters from JSON.
+
+    Accepts either a flat dict (`{"max_depth": 8, ...}`) or an HPO
+    `results.json` with a top-level `trials` array — in which case the
+    first trial's `params` are returned (the pipeline writes trials best-first).
+    """
+    loaded = json.loads(Path(path).read_text())
+    if isinstance(loaded, dict) and "trials" in loaded:
+        trials = loaded["trials"]
+        if not trials or "params" not in trials[0]:
+            raise ValueError(
+                f"{path}: 'trials' present but first trial has no 'params'"
+            )
+        return dict(trials[0]["params"])
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path}: expected JSON object, got {type(loaded).__name__}")
+    return dict(loaded)
+
+
 def run(args) -> int:
     labels_root = Path(args.labels)
     flat_root = Path(args.flat)
@@ -337,12 +365,18 @@ def run(args) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     recipe_ids = args.recipes or ["ATM_CE_9", "ATM_PE_9", "ATM_CE_15", "ATM_PE_15"]
+    holdout_end = pd.Timestamp(args.holdout_end) if getattr(args, "holdout_end", None) else HOLDOUT_END
+    # Optional params override (e.g. HPO trial-18 to match deployed bundle).
+    params_override: Optional[dict] = None
+    if getattr(args, "params_json", None):
+        params_override = load_params_override(args.params_json)
+        print(f"params override: {json.dumps(params_override, sort_keys=True)}")
     print(f"=== Option-P&L MVP trainer ===")
     print(f"labels: {labels_root}")
     print(f"flat:   {flat_root}")
     print(f"out:    {out_dir}")
     print(f"recipes: {recipe_ids}")
-    print(f"train end: {TRAIN_END.date()}   valid end: {VALID_END.date()}   holdout end: {HOLDOUT_END.date()}")
+    print(f"train end: {TRAIN_END.date()}   valid end: {VALID_END.date()}   holdout end: {holdout_end.date()}")
     print()
 
     all_results: dict[str, dict] = {}
@@ -351,7 +385,8 @@ def run(args) -> int:
         try:
             df = load_labels_and_features(labels_root, flat_root, recipe_id)
             print(f"  joined rows: {len(df)}")
-            res = train_recipe(df, recipe_id)
+            res = train_recipe(df, recipe_id, params_override=params_override,
+                               holdout_end=holdout_end)
             print(f"  train/valid/holdout: {res.n_train}/{res.n_valid}/{res.n_holdout}")
             print(f"  holdout pos_rate: {res.holdout_pos_rate:.3f}  AUC: {res.holdout_roc_auc:.3f}")
             print(f"  threshold sweep — REALISTIC (single-position, runtime-equivalent):")
@@ -387,6 +422,24 @@ def main() -> int:
     p.add_argument("--flat", default=str(DEFAULT_FLAT_ROOT))
     p.add_argument("--out", required=True, help="Output directory")
     p.add_argument("--recipes", nargs="*", default=None, help="Subset of recipe IDs (default: all 4)")
+    p.add_argument(
+        "--params-json",
+        default=None,
+        help=(
+            "Path to JSON with XGB hyperparameters. Accepts either a plain {param:val} "
+            "dict or an HPO results.json with top-level 'trials'[0]['params']. "
+            "Used to match the deployed bundle's HPO trial when validating realistic edge."
+        ),
+    )
+    p.add_argument(
+        "--holdout-end",
+        default=None,
+        help=(
+            "Override holdout end date (YYYY-MM-DD). Useful to tighten the holdout "
+            "to match a runtime replay's actual coverage window — e.g. set to "
+            "2024-09-30 if runtime only replayed Aug-Sep."
+        ),
+    )
     args = p.parse_args()
     return run(args)
 

@@ -179,7 +179,12 @@ def _snapshot_to_candle(doc: Dict[str, Any], idx: int) -> Optional[MonitorCandle
 
 
 def _option_dir_to_bias(raw: str) -> str:
-    """Map options direction (PE/CE/AVOID) to chart bias (SHORT/LONG/LONG)."""
+    """Map options direction (PE/CE/AVOID) to chart bias (SHORT/LONG/LONG).
+
+    PE = bearish underlying bet → SHORT bias for chart triangle / stop calculation.
+    CE = bullish underlying bet → LONG bias.
+    For display label use _option_dir_to_label() instead.
+    """
     v = str(raw or "").strip().upper()
     if v == "PE":
         return "SHORT"

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import joblib
 
-from strategy_app.contracts import SignalType
+from strategy_app.contracts import ExitReason, SignalType
 from strategy_app.engines.pure_ml_engine import PureMLEngine
 from strategy_app.engines.runtime_artifacts import RuntimeArtifactStore
 from strategy_app.engines.pure_ml_staged_runtime import StagedRuntimeDecision
@@ -431,6 +431,142 @@ class PureMLEngineTests(unittest.TestCase):
             with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=entry):
                 signal = engine.evaluate(_snapshot(snapshot_id="snap-3", ts="2026-03-02T15:01:00+05:30"))
             self.assertIsNone(signal)
+
+    def test_option_pnl_risk_breach_cooldown_blocks_immediate_refire(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.dict("os.environ", {"OPTION_PNL_RISK_BREACH_COOLDOWN_BARS": "5"}, clear=False):
+                engine = self._build_engine(root)
+            engine._option_pnl_bundles = [object()]
+            engine.on_session_start(date(2026, 3, 2))
+            entry = StagedRuntimeDecision(
+                action="BUY_PE",
+                reason="option_pnl_fire",
+                entry_prob=0.84,
+                direction_up_prob=0.16,
+                ce_prob=0.0,
+                pe_prob=1.0,
+                recipe_id="ATM_PE_15",
+                recipe_prob=0.84,
+                recipe_margin=0.0,
+                horizon_minutes=15,
+                stop_loss_pct=0.25,
+                target_pct=0.40,
+                selected_strike=50000,
+                selected_strike_reason="bundle_atm",
+            )
+
+            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+                signal = engine.evaluate(_snapshot(snapshot_id="snap-entry", ts="2026-03-02T09:30:00+05:30"))
+            self.assertIsNotNone(signal)
+            assert signal is not None
+            self.assertEqual(signal.signal_type, SignalType.ENTRY)
+
+            engine._risk.context.daily_loss_breached = True
+            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+                exit_signal = engine.evaluate(_snapshot(snapshot_id="snap-risk", ts="2026-03-02T09:31:00+05:30"))
+            self.assertIsNotNone(exit_signal)
+            assert exit_signal is not None
+            self.assertEqual(exit_signal.signal_type, SignalType.EXIT)
+            self.assertEqual(exit_signal.exit_reason, ExitReason.RISK_BREACH)
+
+            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry) as mocked_predict:
+                blocked = [
+                    engine.evaluate(_snapshot(snapshot_id=f"snap-block-{i}", ts=f"2026-03-02T09:3{i + 2}:00+05:30"))
+                    for i in range(5)
+                ]
+            self.assertEqual(blocked, [None, None, None, None, None])
+            mocked_predict.assert_not_called()
+            self.assertEqual(engine._hold_counts.get("risk_breach_cooldown"), 5)
+
+            engine._risk.context.daily_loss_breached = False
+            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+                allowed = engine.evaluate(_snapshot(snapshot_id="snap-allowed", ts="2026-03-02T09:37:00+05:30"))
+            self.assertIsNotNone(allowed)
+            assert allowed is not None
+            self.assertEqual(allowed.signal_type, SignalType.ENTRY)
+
+    def test_risk_breach_cooldown_is_option_pnl_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.dict("os.environ", {"OPTION_PNL_RISK_BREACH_COOLDOWN_BARS": "5"}, clear=False):
+                engine = self._build_engine(root)
+            engine.on_session_start(date(2026, 3, 2))
+            entry = StagedRuntimeDecision(
+                action="BUY_PE",
+                reason="recipe_selected",
+                entry_prob=0.84,
+                direction_up_prob=0.16,
+                ce_prob=0.16,
+                pe_prob=0.84,
+                recipe_id="base",
+                recipe_prob=0.84,
+                recipe_margin=0.20,
+                horizon_minutes=15,
+                stop_loss_pct=0.25,
+                target_pct=0.40,
+            )
+
+            with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=entry):
+                signal = engine.evaluate(_snapshot(snapshot_id="snap-entry", ts="2026-03-02T09:30:00+05:30"))
+            self.assertIsNotNone(signal)
+
+            engine._risk.context.daily_loss_breached = True
+            with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=entry):
+                exit_signal = engine.evaluate(_snapshot(snapshot_id="snap-risk", ts="2026-03-02T09:31:00+05:30"))
+            self.assertIsNotNone(exit_signal)
+            assert exit_signal is not None
+            self.assertEqual(exit_signal.exit_reason, ExitReason.RISK_BREACH)
+
+            engine._risk.context.daily_loss_breached = False
+            with patch("strategy_app.engines.pure_ml_engine.predict_staged", return_value=entry) as mocked_predict:
+                next_signal = engine.evaluate(_snapshot(snapshot_id="snap-next", ts="2026-03-02T09:32:00+05:30"))
+            self.assertIsNotNone(next_signal)
+            assert next_signal is not None
+            self.assertEqual(next_signal.signal_type, SignalType.ENTRY)
+            mocked_predict.assert_called_once()
+            self.assertNotIn("risk_breach_cooldown", engine._hold_counts)
+
+    def test_option_pnl_risk_breach_cooldown_resets_on_session_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.dict("os.environ", {"OPTION_PNL_RISK_BREACH_COOLDOWN_BARS": "5"}, clear=False):
+                engine = self._build_engine(root)
+            engine._option_pnl_bundles = [object()]
+            engine.on_session_start(date(2026, 3, 2))
+            entry = StagedRuntimeDecision(
+                action="BUY_PE",
+                reason="option_pnl_fire",
+                entry_prob=0.84,
+                direction_up_prob=0.16,
+                ce_prob=0.0,
+                pe_prob=1.0,
+                recipe_id="ATM_PE_15",
+                recipe_prob=0.84,
+                recipe_margin=0.0,
+                horizon_minutes=15,
+                stop_loss_pct=0.25,
+                target_pct=0.40,
+                selected_strike=50000,
+                selected_strike_reason="bundle_atm",
+            )
+
+            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+                signal = engine.evaluate(_snapshot(snapshot_id="snap-entry", ts="2026-03-02T09:30:00+05:30"))
+            self.assertIsNotNone(signal)
+            engine._risk.context.daily_loss_breached = True
+            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+                exit_signal = engine.evaluate(_snapshot(snapshot_id="snap-risk", ts="2026-03-02T09:31:00+05:30"))
+            self.assertIsNotNone(exit_signal)
+            self.assertEqual(engine._option_pnl_risk_breach_cooldown_remaining, 5)
+
+            engine.on_session_start(date(2026, 3, 3))
+
+            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+                next_signal = engine.evaluate(_snapshot(snapshot_id="snap-next-day", ts="2026-03-03T09:30:00+05:30"))
+            self.assertIsNotNone(next_signal)
+            assert next_signal is not None
+            self.assertEqual(next_signal.signal_type, SignalType.ENTRY)
 
 
 if __name__ == "__main__":
