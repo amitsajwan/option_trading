@@ -6,9 +6,9 @@ Reads:
 
 Writes:
   - snapshots_ml_flat_v3/year=YYYY/YYYY-MM-DD.parquet
-      All v2 columns PLUS 14 new microstructure features.
+      All v2 columns PLUS 11 new microstructure features.
 
-The 14 new features (v3.0, no IV dependency):
+The 11 new features (v3.0, no IV dependency):
 
   Per-strike OI structure
     oi_atm_pe_ce_ratio
@@ -27,10 +27,12 @@ The 14 new features (v3.0, no IV dependency):
     premium_range_atm_5m
     wing_premium_ratio
 
-  Multi-expiry structure
-    next_week_oi_ratio
-    near_vs_next_premium_ratio
-    oi_change_next_minus_near_5m
+  Multi-expiry features (next_week_oi_ratio, near_vs_next_premium_ratio,
+  oi_change_next_minus_near_5m) — DROPPED from v3.0 because the source
+  options/ parquet only contains the nearest expiry per trading day
+  (verified across 2024-10-01, 08, 15, 22, 29: exactly 1 expiry each).
+  These features need expiry-laddered data that we don't currently
+  ingest. Will revisit in v3.1 alongside synthesized IV if needed.
 
 Usage:
   # smoke test on one day (cheap, verifies computation)
@@ -121,9 +123,6 @@ def _compute_features_for_minute(
         "ce_pe_premium_ratio_atm": np.nan,
         "premium_range_atm_5m": np.nan,
         "wing_premium_ratio": np.nan,
-        "next_week_oi_ratio": np.nan,
-        "near_vs_next_premium_ratio": np.nan,
-        "oi_change_next_minus_near_5m": np.nan,
     }
 
     if chain_now is None or len(chain_now) == 0 or not atm_strike:
@@ -227,39 +226,9 @@ def _compute_features_for_minute(
         if body > 0:
             out["wing_premium_ratio"] = float((wing_ce_4 + wing_pe_4) / body)
 
-    # --- Multi-expiry structure ---
-    if next_chain is not None and len(next_chain) > 0:
-        next_band_strikes = strikes_in_band
-        next_band_oi = next_chain[next_chain["strike"].isin(next_band_strikes)]["oi"].sum()
-        if band_oi > 0:
-            out["next_week_oi_ratio"] = float(next_band_oi / band_oi)
-
-        next_atm_pe = _get(next_chain, atm_strike, "PE", "close")
-        next_atm_ce = _get(next_chain, atm_strike, "CE", "close")
-        if (pd.notna(atm_pe_close) and pd.notna(atm_ce_close) and
-                pd.notna(next_atm_pe) and pd.notna(next_atm_ce)):
-            near_sum = atm_pe_close + atm_ce_close
-            next_sum = next_atm_pe + next_atm_ce
-            if next_sum > 0:
-                out["near_vs_next_premium_ratio"] = float(near_sum / next_sum)
-
-        # 5m change in (next - near) ATM OI flow
-        if chain_5m_ago is not None:
-            n5 = chain_5m_ago[chain_5m_ago["expiry_str"] == next_expiry] if next_expiry else None
-            if n5 is not None and len(n5) > 0:
-                next_pe_5m = _get(n5, atm_strike, "PE", "oi")
-                next_ce_5m = _get(n5, atm_strike, "CE", "oi")
-                next_pe_now = _get(next_chain, atm_strike, "PE", "oi")
-                next_ce_now = _get(next_chain, atm_strike, "CE", "oi")
-                # near chain delta (already partly computed but we need same window)
-                near_5m_for_near = chain_5m_ago[chain_5m_ago["expiry_str"] == near_expiry]
-                near_pe_5m = _get(near_5m_for_near, atm_strike, "PE", "oi")
-                near_ce_5m = _get(near_5m_for_near, atm_strike, "CE", "oi")
-                if all(pd.notna(v) for v in (next_pe_5m, next_ce_5m, next_pe_now, next_ce_now,
-                                              near_pe_5m, near_ce_5m, atm_pe_oi, atm_ce_oi)):
-                    near_delta = (atm_pe_oi - near_pe_5m) + (atm_ce_oi - near_ce_5m)
-                    next_delta = (next_pe_now - next_pe_5m) + (next_ce_now - next_ce_5m)
-                    out["oi_change_next_minus_near_5m"] = float(next_delta - near_delta)
+    # Multi-expiry features are not computable in v3.0 because options/
+    # parquet only contains the nearest expiry per trading day. Left here
+    # as a placeholder for v3.1 once we ingest expiry-laddered data.
 
     return out
 
