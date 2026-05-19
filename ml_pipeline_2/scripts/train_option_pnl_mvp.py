@@ -320,7 +320,7 @@ def train_recipe(df: pd.DataFrame, recipe_id: str,
     best = max(sweep_realistic, key=lambda d: d["net_pnl_sum"])
     sweep = sweep_realistic  # backward-compat: keep field name in result
 
-    return TrainResult(
+    result = TrainResult(
         recipe_id=recipe_id,
         n_train=len(train),
         n_valid=len(valid),
@@ -336,6 +336,16 @@ def train_recipe(df: pd.DataFrame, recipe_id: str,
         best_holdout_win_rate=float(best.get("win_rate", 0.0)),
         threshold_sweep_optimistic=sweep_optimistic,  # per-snapshot, kept for diagnosis
     )
+    # Stash per-threshold per-trade lists in a non-dataclass attribute the
+    # caller can write to disk. Audit harness consumes one of these (the
+    # threshold the caller cares about) to compute t-stat + CI + outlier-decomp.
+    per_threshold_trades: dict[float, list[dict]] = {}
+    for thr in [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]:
+        sim = simulate_single_position(holdout, p_hold, thr)
+        per_threshold_trades[thr] = sim.get("trades") or []
+    # type: ignore[attr-defined]  (intentionally attaching at runtime)
+    result.__dict__["_per_threshold_trades"] = per_threshold_trades
+    return result
 
 
 def load_params_override(path: str | Path) -> dict:
@@ -400,6 +410,19 @@ def run(args) -> int:
             print(f"  HOLDOUT VERDICT: {verdict}")
             all_results[recipe_id] = asdict(res)
             all_results[recipe_id]["holdout_verdict"] = verdict
+            # Persist per-threshold per-trade parquets for downstream audit.
+            per_thr = res.__dict__.get("_per_threshold_trades") or {}
+            if per_thr:
+                trade_dir = out_dir / "holdout_trades" / recipe_id
+                trade_dir.mkdir(parents=True, exist_ok=True)
+                for thr, trades in per_thr.items():
+                    if not trades:
+                        continue
+                    tdf = pd.DataFrame(trades)
+                    # Normalise pnl_pct as DECIMAL (already in decimal in simulate_single_position).
+                    out_pq = trade_dir / f"thr_{int(round(thr * 100))}.parquet"
+                    tdf.to_parquet(out_pq)
+                print(f"  per-trade parquets: {trade_dir}/")
         except Exception as exc:
             print(f"  ERROR: {exc}", file=sys.stderr)
             all_results[recipe_id] = {"error": str(exc)}

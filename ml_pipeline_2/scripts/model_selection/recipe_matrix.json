@@ -1,0 +1,28 @@
+{
+  "_doc": "Recipe matrix config for the model-selection pipeline. Each matrix entry expands to recipes × thresholds × windows cells. Audit gates apply uniformly.",
+
+  "audit_gates": {
+    "_doc": "G1 = statistical edge (t > t_min AND bootstrap CI strictly above 0 AND net-without-top-5-days >= 0). G2 = trade-rate sanity. Both must pass for a cell to PASS.",
+    "min_trades": 80,
+    "max_trades": 500,
+    "min_win_rate": 0.55,
+    "t_min": 2.0,
+    "ci_must_exclude_zero": true,
+    "outlier_survival_must_be_nonneg": true
+  },
+
+  "matrix": [
+    {
+      "description": "Phase 1: HPO-tuned option-PnL recipes across two non-overlapping holdout windows",
+      "recipes": ["ATM_PE_9", "ATM_PE_15", "ATM_CE_9", "ATM_CE_15"],
+      "thresholds": [0.55, 0.60, 0.65],
+      "windows": [
+        {"start": "2024-08-01", "end": "2024-10-31"},
+        {"start": "2024-05-01", "end": "2024-07-31"}
+      ],
+      "params_source": "auto",
+      "params_source_template": ".data/ml_pipeline/option_pnl_hpo_{RECIPE}_results.json",
+      "_notes": "params_source_template currently points at non-existent canonical paths; pipeline.py falls back to default xgb params with a warning if the file is missing. We can rewire this once we settle on a canonical HPO output naming."
+    }
+  ]
+}
