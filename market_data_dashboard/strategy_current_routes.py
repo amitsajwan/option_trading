@@ -24,6 +24,7 @@ from fastapi import APIRouter, HTTPException, Query
 from .strategy_current_state import (
     read_blocker_funnel,
     read_decision_timeline,
+    read_observability_summary,
     read_strategy_current_state,
 )
 
@@ -46,6 +47,14 @@ class StrategyCurrentRouter:
         router.add_api_route(
             "/api/strategy/decisions",
             self.get_decisions,
+            methods=["GET"],
+        )
+        # One-stop observability summary — deployed model + today's gate
+        # counts + today's P&L + last decision. Designed for cron / alerting
+        # polls and the dashboard top-banner. See docs/OBSERVABILITY_GUIDE.md.
+        router.add_api_route(
+            "/api/strategy/observability/summary",
+            self.get_observability_summary,
             methods=["GET"],
         )
         self.router = router
@@ -92,3 +101,14 @@ class StrategyCurrentRouter:
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to read decision_traces: {exc}")
+
+    async def get_observability_summary(
+        self,
+        mode: str = Query("live", description="live | replay"),
+    ) -> dict:
+        if mode.strip().lower() not in {"live", "replay", "historical"}:
+            raise HTTPException(status_code=400, detail="mode must be 'live' or 'replay'")
+        try:
+            return read_observability_summary(mode=mode)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to read observability state: {exc}")

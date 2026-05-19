@@ -245,6 +245,105 @@ def _compute_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def read_observability_summary(mode: str = "live", *, run_dir: Optional[Path] = None) -> dict[str, Any]:
+    """One-stop observability snapshot for the current strategy session.
+
+    Bundles together:
+      - Currently-loaded model identity (from runtime_config)
+      - Today's gate counts (hold_counts from runtime_state, plus
+        derived from signals.jsonl when state is stale)
+      - Today's trade count + net P&L from positions.jsonl
+      - Last decision summary line (action, blocking_gate, model probs)
+      - Health marker
+
+    Designed as the single endpoint a dashboard / cron / alerting layer
+    can poll for "is the runtime healthy + producing expected output?"
+    No mongo dependency.
+    """
+    rd = run_dir if run_dir is not None else _resolve_run_dir(mode)
+    runtime_state_path = rd / "runtime_state.json"
+    decisions_path = rd / "decisions.jsonl"
+    positions_path = rd / "positions.jsonl"
+    health_marker_path = rd / "health_marker.json"
+
+    # Runtime config (currently loaded model)
+    runtime_config = _read_runtime_config(rd)
+
+    # Live runtime_state (engine's own session view — has hold_counts)
+    runtime_state: dict[str, Any] = {}
+    if runtime_state_path.exists():
+        try:
+            runtime_state = json.loads(runtime_state_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            runtime_state = {}
+    session_view = runtime_state.get("session") or {}
+    hold_counts = dict(session_view.get("hold_counts") or {})
+    bars_evaluated = int(session_view.get("bars_evaluated") or 0)
+    trade_date = session_view.get("trade_date")
+
+    # Today's trades from positions.jsonl (last 500 events filtered to
+    # POSITION_CLOSE for the active trade_date).
+    today_trades = 0
+    today_net_pnl = 0.0
+    today_wins = 0
+    if positions_path.exists() and trade_date:
+        date_prefix = str(trade_date).replace("-", "")
+        for raw in _tail_lines(positions_path, n=500):
+            try:
+                rec = json.loads(raw)
+            except Exception:
+                continue
+            if rec.get("event") != "POSITION_CLOSE":
+                continue
+            sid = str(rec.get("snapshot_id") or "")
+            if not sid.startswith(date_prefix):
+                continue
+            today_trades += 1
+            pnl = rec.get("pnl_pct")
+            try:
+                pnl_f = float(pnl) if pnl is not None else 0.0
+            except (TypeError, ValueError):
+                pnl_f = 0.0
+            today_net_pnl += pnl_f
+            if pnl_f > 0:
+                today_wins += 1
+
+    # Last decision summary (most recent line in decisions.jsonl)
+    last_decision: Optional[dict[str, Any]] = None
+    if decisions_path.exists():
+        for raw in reversed(_tail_lines(decisions_path, n=5)):
+            try:
+                last_decision = json.loads(raw)
+                break
+            except Exception:
+                continue
+
+    return {
+        "mode": mode,
+        "run_dir": str(rd),
+        "trade_date": trade_date,
+        "deployed_model": {
+            "engine": runtime_config.get("engine"),
+            "model_type": runtime_config.get("model_type"),
+            "recipe_id": runtime_config.get("recipe_id"),
+            "decision_threshold": runtime_config.get("decision_threshold"),
+            "model_run_id": runtime_config.get("model_run_id"),
+            "model_package_path": runtime_config.get("model_package_path"),
+            "checked_at_ist": runtime_config.get("checked_at_ist"),
+        },
+        "today": {
+            "bars_evaluated": bars_evaluated,
+            "hold_counts": hold_counts,
+            "trades_closed": today_trades,
+            "wins": today_wins,
+            "win_rate": (today_wins / today_trades) if today_trades > 0 else None,
+            "net_pnl_pct_sum": today_net_pnl,
+        },
+        "last_decision": last_decision,
+        "health": _read_health_marker(health_marker_path),
+    }
+
+
 def read_strategy_current_state(
     mode: str = "live",
     *,

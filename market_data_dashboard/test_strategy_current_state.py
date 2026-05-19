@@ -14,6 +14,7 @@ from market_data_dashboard.strategy_current_state import (
     _tail_lines,
     read_blocker_funnel,
     read_decision_timeline,
+    read_observability_summary,
     read_strategy_current_state,
 )
 
@@ -537,3 +538,75 @@ def test_mode_alias_replay_and_historical_both_map(tmp_path: Path, monkeypatch):
     assert historical_out["stats"]["current_run_id"] == "hist1"
     assert replay_out["stats"]["current_run_id"] == "hist1"
     assert live_out["stats"]["current_run_id"] == "live1"
+
+
+def test_observability_summary_assembles_full_picture(tmp_path: Path):
+    """One-shot observability snapshot for cron / dashboard polling."""
+    rd = tmp_path
+    # runtime_state.json with the engine's session view
+    (rd / "runtime_state.json").write_text(json.dumps({
+        "session": {
+            "trade_date": "2024-08-01",
+            "bars_evaluated": 250,
+            "hold_counts": {
+                "daily_soft_halt": 3,
+                "soft_close_no_entry": 12,
+                "entry_below_threshold": 200,
+            },
+        },
+    }))
+    # runtime_config.json is a SEPARATE file (matches what the engine writes)
+    (rd / "runtime_config.json").write_text(json.dumps({
+        "engine": "ml_pure",
+        "model": {
+            "model_type": "option_pnl_v1",
+            "recipe_id": "ATM_PE_15",
+            "decision_threshold": 0.55,
+            "run_id": "bundle-ATM_PE_15_20260517",
+        },
+        "rollout": {"stage": "paper"},
+        "checked_at_ist": "2024-08-01T09:15:00+05:30",
+    }))
+    # positions.jsonl with 3 closes on the trade_date (2 wins, 1 loss)
+    _write_records(rd / "positions.jsonl", [
+        {"event": "POSITION_OPEN",  "snapshot_id": "20240801_0930", "pnl_pct": None},
+        {"event": "POSITION_CLOSE", "snapshot_id": "20240801_0939", "pnl_pct": 0.08},
+        {"event": "POSITION_CLOSE", "snapshot_id": "20240801_1115", "pnl_pct": -0.05},
+        {"event": "POSITION_CLOSE", "snapshot_id": "20240801_1330", "pnl_pct": 0.12},
+        # different day; must NOT be counted
+        {"event": "POSITION_CLOSE", "snapshot_id": "20240802_0930", "pnl_pct": 0.20},
+    ])
+    # decisions.jsonl with the latest entry on the right date
+    _write_records(rd / "decisions.jsonl", [
+        {"snapshot_id": "20240801_0930", "action": "HOLD", "blocking_gate": "entry_below_threshold"},
+        {"snapshot_id": "20240801_1330", "action": "ENTRY", "blocking_gate": None,
+         "model": {"entry_prob": 0.61, "recipe_id": "ATM_PE_15"}},
+    ])
+
+    out = read_observability_summary(mode="live", run_dir=rd)
+
+    assert out["trade_date"] == "2024-08-01"
+    assert out["deployed_model"]["recipe_id"] == "ATM_PE_15"
+    assert out["deployed_model"]["decision_threshold"] == 0.55
+    # Today aggregates (Aug 1 only — Aug 2 close must be filtered out)
+    assert out["today"]["trades_closed"] == 3
+    assert out["today"]["wins"] == 2
+    assert out["today"]["win_rate"] == pytest.approx(2 / 3)
+    assert out["today"]["net_pnl_pct_sum"] == pytest.approx(0.15)
+    assert out["today"]["bars_evaluated"] == 250
+    assert out["today"]["hold_counts"]["entry_below_threshold"] == 200
+    # Last decision is the most recent line in decisions.jsonl
+    assert out["last_decision"]["action"] == "ENTRY"
+    assert out["last_decision"]["model"]["recipe_id"] == "ATM_PE_15"
+    # Health: no marker file → healthy
+    assert out["health"] == {"ok": True}
+
+
+def test_observability_summary_with_no_data(tmp_path: Path):
+    """Empty run dir should return a structured zero-state, not error."""
+    out = read_observability_summary(mode="live", run_dir=tmp_path)
+    assert out["today"]["trades_closed"] == 0
+    assert out["today"]["wins"] == 0
+    assert out["today"]["win_rate"] is None
+    assert out["last_decision"] is None
+    assert out["deployed_model"]["recipe_id"] is None
