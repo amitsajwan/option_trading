@@ -313,9 +313,16 @@ def build_one_day(trade_date: date, out_root: Path) -> Tuple[bool, str]:
 
     # Iterate v2 rows
     new_rows: List[Dict] = []
+    # v2 exposes ATM strike as 'opt_flow_atm_strike' (NOT 'atm_strike'). When
+    # that's missing or null we fall back to deriving ATM from px_fut_close
+    # at the same step grid used by the canonical chain (STRIKE_STEP).
     for _, row in v2.iterrows():
         snap_id = str(row.get("snapshot_id") or "")
-        atm_strike = row.get("atm_strike")
+        atm_strike = row.get("opt_flow_atm_strike")
+        if pd.isna(atm_strike):
+            fut = row.get("px_fut_close")
+            if pd.notna(fut) and fut > 0:
+                atm_strike = round(float(fut) / STRIKE_STEP) * STRIKE_STEP
         if pd.isna(atm_strike) or atm_strike is None:
             new_rows.append({"snapshot_id": snap_id})
             continue
