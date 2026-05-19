@@ -40,6 +40,10 @@ class SignalLogger:
         self._signals_path = base_dir / "signals.jsonl"
         self._positions_path = base_dir / "positions.jsonl"
         self._traces_path = base_dir / "decision_traces.jsonl"
+        # Per-snapshot structured decision summary. ONE line per evaluate()
+        # call. Captures every gate evaluated and which (if any) blocked.
+        # See docs/OBSERVABILITY_GUIDE.md "why didn't a trade fire?".
+        self._decisions_path = base_dir / "decisions.jsonl"
         self._resolver = DecisionFieldResolver()
         self._publisher = RedisEventPublisher(logger=logger)
         # Health marker — written when a critical JSONL append fails so the
@@ -420,6 +424,24 @@ class SignalLogger:
                 ),
             ),
         )
+
+    def log_decision_summary(self, summary: dict[str, Any]) -> None:
+        """Per-snapshot structured decision trace.
+
+        Writes one JSONL line per evaluate() call to decisions.jsonl. Each
+        line captures every gate evaluated, which (if any) blocked, the
+        model's output, and the engine's gate-relevant state — enough to
+        answer "what happened at minute T?" from a single grep.
+
+        Unlike decision_traces (which is detailed and conditional on the
+        STRATEGY_DECISION_TRACE_ENABLED env), this is always-on and lean.
+        """
+        if not isinstance(summary, dict):
+            return
+        record = normalize_record_timestamps(dict(summary))
+        # Stamp run_id and a hint of the engine for downstream filtering.
+        record.setdefault("run_id", self._run_id)
+        append_jsonl(self._decisions_path, record, logger=logger)
 
     def log_decision_trace(self, trace: dict[str, Any]) -> None:
         if not self._decision_trace_enabled or not isinstance(trace, dict):

@@ -94,6 +94,13 @@ class PureMLEngine(StrategyEngine):
         self._cooldown_bars_remaining: int = 0
         self._option_pnl_risk_breach_cooldown_bars: int = max(0, int(env_int("OPTION_PNL_RISK_BREACH_COOLDOWN_BARS", 5) or 0))
         self._option_pnl_risk_breach_cooldown_remaining: int = 0
+        # Daily soft-halt: once cumulative option-P&L for the trading day drops
+        # below this (negative) threshold, block new fires until the next
+        # session boundary. Set to 0.0 (or any non-negative) to disable.
+        _raw_halt = env_float("OPTION_PNL_DAILY_SOFT_HALT_PCT", -0.20)
+        self._option_pnl_daily_soft_halt_pct: float = float(_raw_halt) if _raw_halt is not None else 0.0
+        self._day_pnl_pct: float = 0.0
+        self._day_halt_active: bool = False
         self._trailing_enabled: bool = env_bool("ML_PURE_TRAILING_ENABLED", True)
         if min_edge is not None:
             logger.warning(
@@ -214,6 +221,8 @@ class PureMLEngine(StrategyEngine):
         self._hold_counts = {}
         self._cooldown_bars_remaining = 0
         self._option_pnl_risk_breach_cooldown_remaining = 0
+        self._day_pnl_pct = 0.0
+        self._day_halt_active = False
         self._feature_state.on_session_start(trade_date)
         self._tracker.on_session_start(trade_date)
         self._risk.on_session_start(trade_date)
@@ -395,6 +404,13 @@ class PureMLEngine(StrategyEngine):
             self._option_pnl_risk_breach_cooldown_remaining -= 1
             self._log_hold("risk_breach_cooldown", snap)
             self._last_event = {"event": "hold", "snapshot_id": snap.snapshot_id, "reason": "risk_breach_cooldown"}
+            self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
+            self._write_runtime_state()
+            return None
+
+        if self._day_halt_active:
+            self._log_hold("daily_soft_halt", snap)
+            self._last_event = {"event": "hold", "snapshot_id": snap.snapshot_id, "reason": "daily_soft_halt"}
             self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
             self._write_runtime_state()
             return None
@@ -594,6 +610,26 @@ class PureMLEngine(StrategyEngine):
             "direction": signal.direction,
             "strike": signal.strike,
         }
+        # One-line decision summary for the ENTRY path so decisions.jsonl
+        # has a complete per-snapshot record across both HOLD and ENTRY
+        # outcomes. Pairs the model output with the runtime side (strike,
+        # position id, signal id) for end-to-end traceability.
+        self._emit_decision_summary(
+            snap=snap,
+            action="ENTRY",
+            blocking_gate=None,
+            decision=decision,
+            extra={
+                "fired": {
+                    "signal_id": signal.signal_id,
+                    "position_id": opened.position_id,
+                    "direction": signal.direction,
+                    "strike": signal.strike,
+                    "entry_premium": signal.entry_premium,
+                    "lots": signal.lots,
+                },
+            },
+        )
         self._session_updated_at_ist = self._last_entry_at
         self._write_runtime_state()
         self._append_runtime_metric(
@@ -791,6 +827,54 @@ class PureMLEngine(StrategyEngine):
         metric.setdefault("bar", self._bars_evaluated)
         self._runtime_artifacts.append_metric(metric)
 
+    def _emit_decision_summary(
+        self,
+        snap: SnapshotAccessor,
+        action: str,
+        blocking_gate: Optional[str] = None,
+        decision: Optional[StagedRuntimeDecision] = None,
+        extra: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Append one structured line to decisions.jsonl per evaluate() call.
+
+        Captures gate-relevant engine state, the model output (if reached),
+        and which gate (if any) blocked. Always-on; complements per-event
+        signals.jsonl with a unified per-snapshot record. See
+        docs/OBSERVABILITY_GUIDE.md.
+        """
+        record: dict[str, Any] = {
+            "snapshot_id": snap.snapshot_id,
+            "ts": isoformat_ist(snap.timestamp_or_now),
+            "action": action,
+            "blocking_gate": blocking_gate,
+            "engine_state": {
+                "engine_mode": self._engine_mode,
+                "day_pnl_pct": float(self._day_pnl_pct),
+                "day_halt_active": bool(self._day_halt_active),
+                "post_stop_cooldown_remaining": int(self._cooldown_bars_remaining),
+                "risk_breach_cooldown_remaining": int(self._option_pnl_risk_breach_cooldown_remaining),
+                "has_position": bool(self._tracker.has_position),
+                "bars_evaluated": int(self._bars_evaluated),
+            },
+        }
+        if decision is not None:
+            record["model"] = {
+                "entry_prob": float(decision.entry_prob),
+                "direction_up_prob": float(decision.direction_up_prob),
+                "recipe_id": decision.recipe_id,
+                "recipe_prob": float(decision.recipe_prob),
+                "recipe_margin": float(decision.recipe_margin),
+                "selected_strike": decision.selected_strike,
+                "reason": decision.reason,
+            }
+        if extra:
+            record.update(extra)
+        try:
+            self._log.log_decision_summary(record)
+        except Exception:
+            # Never block the engine on observability emission failure.
+            logger.exception("failed to log decision summary (snapshot=%s)", snap.snapshot_id)
+
     def _log_hold(
         self,
         reason: str,
@@ -824,6 +908,15 @@ class PureMLEngine(StrategyEngine):
             "snapshot_id": snap.snapshot_id,
             "reason": hold_reason,
         }
+        # Always-on per-snapshot decision summary. One line per HOLD so
+        # operators can grep decisions.jsonl by snapshot_id and see the
+        # full gate context in one place.
+        self._emit_decision_summary(
+            snap=snap,
+            action="HOLD",
+            blocking_gate=hold_reason,
+            decision=staged_decision,
+        )
         self._session_updated_at_ist = isoformat_ist(snap.timestamp_or_now)
         self._append_runtime_metric(
             {
@@ -1065,6 +1158,24 @@ class PureMLEngine(StrategyEngine):
             lots=position.lots,
             entry_premium=position.entry_premium,
         )
+        # Daily soft-halt accumulator: track cumulative option-P&L for the
+        # trading day and flip the halt flag when it crosses a negative
+        # threshold. The flag is re-checked at the start of every evaluate()
+        # call and resets at on_session_start (date boundary).
+        if self._option_pnl_bundles and self._option_pnl_daily_soft_halt_pct < 0:
+            try:
+                pnl = float(position.pnl_pct) if position.pnl_pct is not None else 0.0
+            except (TypeError, ValueError):
+                pnl = 0.0
+            self._day_pnl_pct += pnl
+            if (not self._day_halt_active
+                    and self._day_pnl_pct < self._option_pnl_daily_soft_halt_pct):
+                self._day_halt_active = True
+                logger.info(
+                    "OPTION-P&L daily soft halt triggered: day_pnl=%.4f threshold=%.4f",
+                    self._day_pnl_pct,
+                    self._option_pnl_daily_soft_halt_pct,
+                )
         self._log.log_position_close(exit_signal=exit_signal, position=position)
 
 

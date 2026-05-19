@@ -252,6 +252,73 @@ class SignalLoggerContractTests(unittest.TestCase):
             self.assertEqual(row["underlying_target_pct"], 0.0015)
             self.assertEqual(row["snapshot_id"], "snap-manage-3")
 
+    def test_log_decision_summary_writes_jsonl(self) -> None:
+        """decisions.jsonl gets one structured line per evaluate() call.
+
+        Verifies the always-on per-snapshot decision summary added in this
+        session's observability work. Documents the file format that
+        OBSERVABILITY_GUIDE.md and any downstream tooling rely on.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            logger = SignalLogger(root)
+            logger.set_run_context("run-decisions", {})
+            # HOLD case — gate blocked, no model output yet
+            logger.log_decision_summary({
+                "snapshot_id": "snap-1",
+                "ts": "2026-05-19T10:00:00+05:30",
+                "action": "HOLD",
+                "blocking_gate": "daily_soft_halt",
+                "engine_state": {
+                    "day_pnl_pct": -0.22,
+                    "day_halt_active": True,
+                    "has_position": False,
+                },
+            })
+            # ENTRY case — gates passed, model output included
+            logger.log_decision_summary({
+                "snapshot_id": "snap-2",
+                "ts": "2026-05-19T10:05:00+05:30",
+                "action": "ENTRY",
+                "blocking_gate": None,
+                "engine_state": {
+                    "day_pnl_pct": -0.05,
+                    "day_halt_active": False,
+                    "has_position": False,
+                },
+                "model": {
+                    "entry_prob": 0.62,
+                    "recipe_id": "ATM_PE_15",
+                    "recipe_margin": 0.07,
+                    "selected_strike": 50000,
+                },
+                "fired": {
+                    "signal_id": "sig-a",
+                    "position_id": "pos-a",
+                    "direction": "PE",
+                    "strike": 50000,
+                },
+            })
+            decisions_path = root / "decisions.jsonl"
+            self.assertTrue(decisions_path.exists())
+            lines = decisions_path.read_text().strip().splitlines()
+            self.assertEqual(len(lines), 2)
+            rec1 = json.loads(lines[0])
+            rec2 = json.loads(lines[1])
+            # HOLD record
+            self.assertEqual(rec1["action"], "HOLD")
+            self.assertEqual(rec1["blocking_gate"], "daily_soft_halt")
+            self.assertIsNone(rec1.get("model"))
+            self.assertEqual(rec1["run_id"], "run-decisions")
+            # ENTRY record
+            self.assertEqual(rec2["action"], "ENTRY")
+            self.assertIsNone(rec2["blocking_gate"])
+            self.assertEqual(rec2["model"]["recipe_id"], "ATM_PE_15")
+            self.assertEqual(rec2["fired"]["direction"], "PE")
+            # Records are independent (no cross-contamination of "fired" / "model")
+            self.assertNotIn("fired", rec1)
+            self.assertNotIn("blocking_gate_reason", rec2)
+
 
 if __name__ == "__main__":
     unittest.main()
