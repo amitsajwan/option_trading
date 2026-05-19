@@ -140,24 +140,37 @@ def load_config(config_path: Path) -> Dict[str, Any]:
 
 
 def enumerate_cells(config: Dict[str, Any]) -> List[Cell]:
-    """Expand the matrix config into individual cells."""
+    """Expand the matrix config into individual cells.
+
+    params_source resolution (in priority order):
+      1. entry.params_source_map[recipe]   — explicit per-recipe path (preferred)
+      2. entry.params_source_template      — string with {RECIPE} substitution
+      3. entry.params_source               — literal value (e.g. "default")
+    Fallback when a resolved path doesn't exist: pipeline.py logs a warning
+    and uses the trainer's default XGB hyperparameters.
+    """
     cells: List[Cell] = []
     matrix = config.get("matrix") or []
     for entry in matrix:
         recipes = entry.get("recipes") or []
         thresholds = entry.get("thresholds") or []
         windows = entry.get("windows") or []
-        params_source = entry.get("params_source") or "default"
+        params_source_map = entry.get("params_source_map") or {}
+        params_source_template = entry.get("params_source_template")
+        params_source_literal = entry.get("params_source") or "default"
         description = entry.get("description", "")
         for recipe in recipes:
             for thr in thresholds:
                 for window in windows:
                     start = window["start"]
                     end = window["end"]
-                    # Resolve params_source: "auto" -> infer per-recipe HPO results
-                    ps = params_source
-                    if ps == "auto":
-                        ps = entry.get("params_source_template", "auto").replace("{RECIPE}", recipe)
+                    # Resolution priority
+                    if recipe in params_source_map:
+                        ps = params_source_map[recipe]
+                    elif params_source_template:
+                        ps = params_source_template.replace("{RECIPE}", recipe)
+                    else:
+                        ps = params_source_literal
                     cells.append(Cell(
                         recipe_id=recipe,
                         threshold=float(thr),
