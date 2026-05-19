@@ -83,9 +83,22 @@ PY
   echo "[info] Using temp grid config: ${EFFECTIVE_CONFIG}"
 fi
 
-echo "[1/4] Data preflight..."
+# run_staged_data_preflight expects a BASE (staged_v1) manifest with
+# inputs.parquet_root present. The grid manifest only references the base
+# via inputs.base_manifest_path. Resolve the base path so preflight has
+# something it can validate.
+BASE_FOR_PREFLIGHT=$(python - "$EFFECTIVE_CONFIG" << 'PY'
+import json, sys
+from pathlib import Path
+grid_path = Path(sys.argv[1]).resolve()
+grid = json.loads(grid_path.read_text(encoding="utf-8"))
+base_rel = grid["inputs"]["base_manifest_path"]
+print((grid_path.parent / base_rel).resolve())
+PY
+)
+echo "[1/4] Data preflight (against base manifest: $BASE_FOR_PREFLIGHT)..."
 python -m ml_pipeline_2.run_staged_data_preflight \
-  --config "$EFFECTIVE_CONFIG"
+  --config "$BASE_FOR_PREFLIGHT"
 
 echo "[2/4] Manifest validate-only..."
 python -m ml_pipeline_2.run_research \
