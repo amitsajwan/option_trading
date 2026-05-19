@@ -13,8 +13,13 @@ Design choices (all conservative, all reversible):
         valid:   2024-05-01 → 2024-07-31
         holdout: 2024-08-01 → 2024-10-31
 
-  - Feature set: snapshots_ml_flat_v2 columns (the same the runtime sees)
+  - Feature set: snapshots_ml_flat_v3 columns (the same the runtime sees)
     minus per-strike-ladder columns that would leak strike identity.
+    v3 = all v2 columns PLUS 11 microstructure features (oi_*, vol_*,
+    ce_pe_*, premium_range_*, wing_*). The select_feature_columns
+    helper picks these up automatically — they don't match the
+    leak prefixes or the skip set. To train on v2 instead, pass
+    --flat <v2 root> on the CLI.
 
   - Trading-utility evaluation: at each threshold, simulate "model says trade
     when prob >= threshold" → realized P&L from the LABEL's net_pnl_pct.
@@ -67,7 +72,7 @@ def _require_xgboost():
 
 
 DEFAULT_LABELS_ROOT = Path("/opt/option_trading/.data/ml_pipeline/parquet_data/option_pnl_labels_v1")
-DEFAULT_FLAT_ROOT = Path("/opt/option_trading/.data/ml_pipeline/parquet_data/snapshots_ml_flat_v2")
+DEFAULT_FLAT_ROOT = Path("/opt/option_trading/.data/ml_pipeline/parquet_data/snapshots_ml_flat_v3")
 
 # Match C1's temporal split — same train/valid/holdout windows so we can
 # compare apples-to-apples to the prior 5 overfit confirmations.
@@ -102,7 +107,7 @@ class TrainResult:
 
 
 def load_labels_and_features(labels_root: Path, flat_root: Path, recipe_id: str) -> pd.DataFrame:
-    """Load labels for one recipe + matching flat-v2 features. Join on snapshot_id."""
+    """Load labels for one recipe + matching flat features. Join on snapshot_id."""
     label_files = sorted(labels_root.glob("labels/year=*/*.parquet"))
     if not label_files:
         raise FileNotFoundError(f"no labels under {labels_root}/labels")
@@ -114,7 +119,7 @@ def load_labels_and_features(labels_root: Path, flat_root: Path, recipe_id: str)
 
     flat_files = sorted(flat_root.glob("year=*/*.parquet"))
     if not flat_files:
-        raise FileNotFoundError(f"no flat-v2 under {flat_root}")
+        raise FileNotFoundError(f"no flat snapshots under {flat_root}")
     # Load all flat data — this is fine for in-memory training (a few hundred MB).
     flat = pd.concat([pd.read_parquet(f) for f in flat_files], ignore_index=True)
     flat["trade_date"] = pd.to_datetime(flat["trade_date"])

@@ -424,8 +424,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--output-root", required=True, help="Directory where state + cells live")
     ap.add_argument("--labels", default="/opt/option_trading/.data/ml_pipeline/parquet_data/option_pnl_labels_v1",
                     help="Path to option-PnL label parquet root")
-    ap.add_argument("--flat", default="/opt/option_trading/.data/ml_pipeline/parquet_data/snapshots_ml_flat_v2",
-                    help="Path to flat-v2 feature parquet root")
+    ap.add_argument("--flat", default="/opt/option_trading/.data/ml_pipeline/parquet_data/snapshots_ml_flat_v3",
+                    help="Path to flat feature parquet root (v3 default; pass v2 path to compare)")
     ap.add_argument("--force", action="store_true", help="Re-run cells even if audit.json exists")
     ap.add_argument("--max-cells", type=int, default=0, help="Limit number of cells (0 = all)")
     args = ap.parse_args(argv)
