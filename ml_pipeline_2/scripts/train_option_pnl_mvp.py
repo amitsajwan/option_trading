@@ -217,28 +217,39 @@ def simulate_single_position(holdout_df: pd.DataFrame, p_hold: np.ndarray,
 
 
 def split_temporal(df: pd.DataFrame,
-                   holdout_end: pd.Timestamp = HOLDOUT_END
+                   holdout_end: pd.Timestamp = HOLDOUT_END,
+                   train_end: pd.Timestamp = TRAIN_END,
+                   valid_end: pd.Timestamp = VALID_END,
                    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Train / valid / holdout by trade_date. Same windows as C1 for apples-to-apples.
+    """Train / valid / holdout by trade_date.
 
-    `holdout_end` lets callers tighten the holdout (e.g. to match a runtime
-    replay's actual coverage window). Defaults to the C1 holdout end.
+    Defaults match the C1 windows (train ≤ 2024-04-30, valid (2024-04-30,
+    2024-07-31], holdout (2024-07-31, 2024-10-31]). For other holdout
+    windows the caller MUST pass train_end and valid_end so the splits
+    stay non-overlapping. For a holdout of [hs, he] use:
+        valid_end = hs - 1 day
+        train_end = valid_end - 90 days (or similar)
+    The model selection pipeline derives these automatically.
     """
-    train = df[df["trade_date"] <= TRAIN_END].copy()
-    valid = df[(df["trade_date"] > TRAIN_END) & (df["trade_date"] <= VALID_END)].copy()
-    holdout = df[(df["trade_date"] > VALID_END) & (df["trade_date"] <= holdout_end)].copy()
+    train = df[df["trade_date"] <= train_end].copy()
+    valid = df[(df["trade_date"] > train_end) & (df["trade_date"] <= valid_end)].copy()
+    holdout = df[(df["trade_date"] > valid_end) & (df["trade_date"] <= holdout_end)].copy()
     return train, valid, holdout
 
 
 def train_recipe(df: pd.DataFrame, recipe_id: str,
                  params_override: Optional[dict] = None,
-                 holdout_end: pd.Timestamp = HOLDOUT_END) -> TrainResult:
+                 holdout_end: pd.Timestamp = HOLDOUT_END,
+                 train_end: pd.Timestamp = TRAIN_END,
+                 valid_end: pd.Timestamp = VALID_END) -> TrainResult:
     """Train a binary XGBoost classifier for one recipe."""
     feat_cols = select_feature_columns(df)
     if not feat_cols:
         raise ValueError(f"recipe {recipe_id}: no feature columns found")
 
-    train, valid, holdout = split_temporal(df, holdout_end=holdout_end)
+    train, valid, holdout = split_temporal(
+        df, holdout_end=holdout_end, train_end=train_end, valid_end=valid_end,
+    )
     if min(len(train), len(holdout)) < 100:
         raise ValueError(
             f"recipe {recipe_id}: too few rows after split — train={len(train)} holdout={len(holdout)}"
@@ -376,6 +387,8 @@ def run(args) -> int:
 
     recipe_ids = args.recipes or ["ATM_CE_9", "ATM_PE_9", "ATM_CE_15", "ATM_PE_15"]
     holdout_end = pd.Timestamp(args.holdout_end) if getattr(args, "holdout_end", None) else HOLDOUT_END
+    train_end = pd.Timestamp(args.train_end) if getattr(args, "train_end", None) else TRAIN_END
+    valid_end = pd.Timestamp(args.valid_end) if getattr(args, "valid_end", None) else VALID_END
     # Optional params override (e.g. HPO trial-18 to match deployed bundle).
     params_override: Optional[dict] = None
     if getattr(args, "params_json", None):
@@ -386,7 +399,7 @@ def run(args) -> int:
     print(f"flat:   {flat_root}")
     print(f"out:    {out_dir}")
     print(f"recipes: {recipe_ids}")
-    print(f"train end: {TRAIN_END.date()}   valid end: {VALID_END.date()}   holdout end: {holdout_end.date()}")
+    print(f"train end: {train_end.date()}   valid end: {valid_end.date()}   holdout end: {holdout_end.date()}")
     print()
 
     all_results: dict[str, dict] = {}
@@ -396,7 +409,8 @@ def run(args) -> int:
             df = load_labels_and_features(labels_root, flat_root, recipe_id)
             print(f"  joined rows: {len(df)}")
             res = train_recipe(df, recipe_id, params_override=params_override,
-                               holdout_end=holdout_end)
+                               holdout_end=holdout_end,
+                               train_end=train_end, valid_end=valid_end)
             print(f"  train/valid/holdout: {res.n_train}/{res.n_valid}/{res.n_holdout}")
             print(f"  holdout pos_rate: {res.holdout_pos_rate:.3f}  AUC: {res.holdout_roc_auc:.3f}")
             print(f"  threshold sweep — REALISTIC (single-position, runtime-equivalent):")
@@ -462,6 +476,21 @@ def main() -> int:
             "to match a runtime replay's actual coverage window — e.g. set to "
             "2024-09-30 if runtime only replayed Aug-Sep."
         ),
+    )
+    p.add_argument(
+        "--train-end",
+        default=None,
+        help=(
+            "Override the training window end (YYYY-MM-DD). When the holdout "
+            "window is moved (e.g. May-Jul 2024 instead of Aug-Oct), the trainer "
+            "needs explicit train_end and valid_end so the splits stay "
+            "non-overlapping. Default keeps the C1 windows."
+        ),
+    )
+    p.add_argument(
+        "--valid-end",
+        default=None,
+        help="Override the validation window end (YYYY-MM-DD). Pairs with --train-end.",
     )
     args = p.parse_args()
     return run(args)

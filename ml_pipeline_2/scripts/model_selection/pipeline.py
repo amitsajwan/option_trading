@@ -220,6 +220,15 @@ def _run_cell(
     started_iso = datetime.utcnow().isoformat() + "Z"
     log_path = cell_dir / "train.log"
 
+    # Derive train_end + valid_end from holdout_start so non-Aug-Oct windows
+    # have non-overlapping splits. Convention: valid window is the 90 days
+    # immediately before holdout_start; train ends the day before valid starts.
+    from datetime import datetime as _dt, timedelta as _td
+    h_start = _dt.strptime(cell.holdout_start, "%Y-%m-%d")
+    valid_end_dt = h_start - _td(days=1)
+    valid_start_dt = valid_end_dt - _td(days=90)
+    train_end_dt = valid_start_dt - _td(days=1)
+
     # Build trainer command
     train_out = cell_dir / "train_out"
     cmd = [
@@ -229,6 +238,8 @@ def _run_cell(
         "--flat", flat_root,
         "--out", str(train_out),
         "--recipes", cell.recipe_id,
+        "--train-end", train_end_dt.strftime("%Y-%m-%d"),
+        "--valid-end", valid_end_dt.strftime("%Y-%m-%d"),
         "--holdout-end", cell.holdout_end,
     ]
     if cell.params_source and cell.params_source != "default":
