@@ -298,6 +298,79 @@ class TestExecutionSim:
             "R2_may_jul_2024_mechanical",
         ]
 
+    def test_short_pnl_sign_inverts(self):
+        """Short option: profit when premium drops. 100→90 should yield
+        +0.10 pnl (less the 2bp cost), exit_reason 'target' if target hits."""
+        from ml_pipeline_2.scripts.rules_pipeline.execution_sim import simulate_trades
+
+        df = _build_one_day_df(minutes=[555, 556], ce_closes=[100, 90])
+        df.loc[0, "signal"] = True
+        rule = Rule(
+            rule_id="S1",
+            direction="SELL_ATM_CE",
+            entry_conditions=(Condition("ce_close", ">", 0),),
+            disqualifiers=(),
+            exit_mechanical=ExitConfig(
+                stop_pct=100, target_pct=5, time_stop_minutes=999,
+                eod_force_close_minute=999,
+            ),
+        )
+        trades = simulate_trades(df, rule, exit_mode="mechanical", cost_bps=2.0)
+        assert len(trades) == 1
+        # premium 100 → 90 means short profits +10% of credit; minus 2 bps
+        assert abs(float(trades.iloc[0]["net_pnl_pct"]) - 0.0998) < 1e-6
+        assert trades.iloc[0]["exit_reason"] == "target"
+
+    def test_short_stop_on_premium_rise(self):
+        """Short option: stop hits when premium rises. stop_pct=100 means
+        premium has doubled (loss equals one credit)."""
+        from ml_pipeline_2.scripts.rules_pipeline.execution_sim import simulate_trades
+
+        df = _build_one_day_df(minutes=[555, 556, 557], ce_closes=[100, 150, 220])
+        df.loc[0, "signal"] = True
+        rule = Rule(
+            rule_id="S2",
+            direction="SELL_ATM_CE",
+            entry_conditions=(Condition("ce_close", ">", 0),),
+            disqualifiers=(),
+            exit_mechanical=ExitConfig(
+                stop_pct=100, target_pct=50, time_stop_minutes=999,
+                eod_force_close_minute=999,
+            ),
+        )
+        trades = simulate_trades(df, rule, exit_mode="mechanical", cost_bps=2.0)
+        assert len(trades) == 1
+        # premium 100 → 220 = +120% rise = -120% on the short. Stop at -100%.
+        # Exit at minute 557 (the first row where pnl <= -1.00).
+        assert trades.iloc[0]["exit_reason"] == "stop_loss"
+        assert int(trades.iloc[0]["exit_minute"]) == 557
+
+    def test_short_mfe_mae_directionality(self):
+        """For a short, MFE is the largest favorable drop, MAE the worst
+        adverse rise — both measured as fraction of credit."""
+        from ml_pipeline_2.scripts.rules_pipeline.execution_sim import simulate_trades
+
+        # premium walks: 100 → 105 (adverse +5%) → 95 (favorable +5%) → 110 (adverse +10%)
+        # then EOD force-close at 110 (final adverse +10%).
+        df = _build_one_day_df(minutes=[555, 556, 557, 558], ce_closes=[100, 105, 95, 110])
+        df.loc[0, "signal"] = True
+        rule = Rule(
+            rule_id="S3",
+            direction="SELL_ATM_CE",
+            entry_conditions=(Condition("ce_close", ">", 0),),
+            disqualifiers=(),
+            exit_mechanical=ExitConfig(
+                stop_pct=99, target_pct=99,
+                time_stop_minutes=999, eod_force_close_minute=999,
+            ),
+        )
+        trades = simulate_trades(df, rule, exit_mode="mechanical", cost_bps=0.0)
+        assert len(trades) == 1
+        assert abs(float(trades.iloc[0]["mfe_pct"]) - 0.05) < 1e-9   # best drop: 100→95
+        assert abs(float(trades.iloc[0]["mae_pct"]) + 0.10) < 1e-9   # worst rise: 100→110
+        # net is the EOD close at 110 → short is -10%
+        assert abs(float(trades.iloc[0]["net_pnl_pct"]) + 0.10) < 1e-9
+
     def test_returns_in_decimal_units(self):
         """Fix #5: simulate_trades must emit returns as decimals (0.05 = +5%)
         to feed audit_run.audit directly with return_col='net_pnl_pct'.

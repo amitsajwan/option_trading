@@ -26,6 +26,30 @@ def _premium_col(direction: str) -> str:
     return "ce_close" if "CE" in direction.upper() else "pe_close"
 
 
+def _is_short(direction: str) -> bool:
+    """Direction names like 'SELL_ATM_CE' or 'SELL_ATM_PE' open a short
+    position. 'BUY_*' (or anything else) is treated as long."""
+    return direction.upper().startswith("SELL_")
+
+
+def _position_pnl(entry_premium: float, current_premium: float, direction: str) -> float:
+    """Return P&L as a fraction of entry premium, sign-correct for the
+    position side. Positive = favorable for the trader; negative = adverse.
+
+    Long: profit when premium rises.
+    Short: profit when premium drops.
+
+    A stop_pct of 100 with a short means "premium has doubled" (loss of
+    one full credit). target_pct of 50 with a short means "premium has
+    halved" (classic 50%-of-credit short-option target).
+    """
+    if entry_premium <= 0:
+        return 0.0
+    if _is_short(direction):
+        return (entry_premium - current_premium) / entry_premium
+    return (current_premium - entry_premium) / entry_premium
+
+
 def _get_premium(row, direction: str) -> Optional[float]:
     col = _premium_col(direction)
     val = getattr(row, col, None)
@@ -46,7 +70,7 @@ def _evaluate_exit_conditions(
     if premium is None or entry_premium <= 0:
         return None
 
-    pnl = (premium - entry_premium) / entry_premium
+    pnl = _position_pnl(entry_premium, premium, direction)
 
     if pnl <= -exit_cfg.stop_pct / 100:
         return "stop_loss"
@@ -121,8 +145,8 @@ def simulate_trades(
 
         # Returns stored as decimal fractions (e.g. 0.05 = +5%) to match the
         # convention in audit_run.audit and the engine's POSITION_CLOSE events.
-        # cost_bps=2 → 2 bps = 0.0002 decimal.
-        gross_pnl = (exit_premium - entry_premium) / entry_premium
+        # _position_pnl handles long/short sign convention. Cost = 2 bps = 0.0002.
+        gross_pnl = _position_pnl(entry_premium, exit_premium, direction)
         net_pnl = gross_pnl - cost_bps / 10000
 
         trades.append({
@@ -166,7 +190,7 @@ def _walk_exit(
         last_same_day = (minute, premium)
 
         if premium is not None and entry_premium > 0:
-            pnl = (premium - entry_premium) / entry_premium
+            pnl = _position_pnl(entry_premium, premium, direction)
             mfe = max(mfe, pnl)
             mae = min(mae, pnl)
 

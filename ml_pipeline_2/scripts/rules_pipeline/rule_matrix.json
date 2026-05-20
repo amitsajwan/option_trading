@@ -5,7 +5,11 @@
     {"rule_id": "R2_ORB_UP", "path": "ml_pipeline_2/configs/rules/r2_opening_range_break_up.json"},
     {"rule_id": "R3_OVERBOUGHT_REVERSAL", "path": "ml_pipeline_2/configs/rules/r3_overbought_reversal.json"},
     {"rule_id": "R4_TREND_CONT", "path": "ml_pipeline_2/configs/rules/r4_trend_continuation.json"},
-    {"rule_id": "R4_FADE_TREND", "path": "ml_pipeline_2/configs/rules/r4_fade_trend.json"}
+    {"rule_id": "R4_FADE_TREND", "path": "ml_pipeline_2/configs/rules/r4_fade_trend.json"},
+    {"rule_id": "R1S_SHORT_CE_ORBDOWN", "path": "ml_pipeline_2/configs/rules/r1s_short_ce_on_orb_down.json"},
+    {"rule_id": "R2S_SHORT_PE_ORBUP", "path": "ml_pipeline_2/configs/rules/r2s_short_pe_on_orb_up.json"},
+    {"rule_id": "R3S_SHORT_CE_OVERBOUGHT", "path": "ml_pipeline_2/configs/rules/r3s_short_ce_overbought.json"},
+    {"rule_id": "R4S_SHORT_PE_TRENDUP", "path": "ml_pipeline_2/configs/rules/r4s_short_pe_trend_up.json"}
   ],
   "windows": [
     {"name": "may_jul_2024", "start": "2024-05-01", "end": "2024-07-31"},

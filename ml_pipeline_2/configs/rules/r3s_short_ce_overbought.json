@@ -1,0 +1,20 @@
+{
+  "rule_id": "R3S_SHORT_CE_OVERBOUGHT",
+  "direction": "SELL_ATM_CE",
+  "entry_conditions": [
+    {"column": "osc_rsi_14", "operator": ">", "value": 75},
+    {"column": "vwap_distance", "operator": ">", "value": 0.005},
+    {"column": "ema_9_slope", "operator": "<", "value": 0}
+  ],
+  "disqualifiers": [
+    {"column": "time_minute_of_day", "operator": "<", "value": 600},
+    {"column": "time_minute_of_day", "operator": ">", "value": 870},
+    {"column": "ctx_is_expiry_day", "operator": "==", "value": 1}
+  ],
+  "exit_mechanical": {
+    "stop_pct": 100,
+    "target_pct": 50,
+    "time_stop_minutes": 15,
+    "eod_force_close_minute": 920
+  }
+}
