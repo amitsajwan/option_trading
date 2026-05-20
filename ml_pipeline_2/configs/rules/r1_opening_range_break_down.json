@@ -4,9 +4,8 @@
   "entry_conditions": [
     {"column": "ctx_opening_range_ready", "operator": "==", "value": 1},
     {"column": "ctx_opening_range_breakout_down", "operator": "==", "value": 1},
-    {"column": "vel_pcr_delta_open", "operator": ">", "value": 0},
-    {"column": "fut_flow_volume_accel_1m", "operator": ">", "value": 0},
-    {"column": "osc_atr_percentile", "operator": ">", "value": 0.5}
+    {"column": "ret_5m", "operator": "<", "value": 0},
+    {"column": "vwap_distance", "operator": "<", "value": 0}
   ],
   "disqualifiers": [
     {"column": "time_minute_of_day", "operator": "<", "value": 570},

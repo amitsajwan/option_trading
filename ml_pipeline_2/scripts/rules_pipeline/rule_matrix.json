@@ -4,7 +4,8 @@
     {"rule_id": "R1_ORB_DOWN", "path": "ml_pipeline_2/configs/rules/r1_opening_range_break_down.json"},
     {"rule_id": "R2_ORB_UP", "path": "ml_pipeline_2/configs/rules/r2_opening_range_break_up.json"},
     {"rule_id": "R3_OVERBOUGHT_REVERSAL", "path": "ml_pipeline_2/configs/rules/r3_overbought_reversal.json"},
-    {"rule_id": "R4_TREND_CONT", "path": "ml_pipeline_2/configs/rules/r4_trend_continuation.json"}
+    {"rule_id": "R4_TREND_CONT", "path": "ml_pipeline_2/configs/rules/r4_trend_continuation.json"},
+    {"rule_id": "R4_FADE_TREND", "path": "ml_pipeline_2/configs/rules/r4_fade_trend.json"}
   ],
   "windows": [
     {"name": "may_jul_2024", "start": "2024-05-01", "end": "2024-07-31"},
