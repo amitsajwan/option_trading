@@ -86,7 +86,7 @@ def simulate_trades(
     if exit_cfg is None:
         raise ValueError(f"rule {rule.rule_id} has no exit_signal config")
 
-    df = df.sort_values(["trade_date", "timestamp_minute"]).reset_index(drop=True)
+    df = df.sort_values(["trade_date", "minute"]).reset_index(drop=True)
     direction = rule.direction
 
     trades: list[dict] = []
@@ -101,7 +101,7 @@ def simulate_trades(
             blocked_until_min = -1
             last_date = td
 
-        minute = int(row["timestamp_minute"])
+        minute = int(row["minute"])
         if minute < blocked_until_min:
             continue
 
@@ -161,7 +161,7 @@ def _walk_exit(
         if td != trade_date:
             break
 
-        minute = int(row["timestamp_minute"])
+        minute = int(row["minute"])
         premium = _get_premium(row, direction)
         last_same_day = (minute, premium)
 

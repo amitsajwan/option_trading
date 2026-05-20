@@ -104,11 +104,11 @@ def load_merged_data(
 
     if "opt_flow_atm_strike" not in flat.columns:
         raise ValueError("flat data missing 'opt_flow_atm_strike' column")
-    if "timestamp_minute" not in flat.columns:
-        raise ValueError("flat data missing 'timestamp_minute' column")
+    if "time_minute_of_day" not in flat.columns:
+        raise ValueError("flat data missing 'time_minute_of_day' column")
 
     flat["atm_strike"] = pd.to_numeric(flat["opt_flow_atm_strike"], errors="coerce")
-    flat["minute"] = pd.to_numeric(flat["timestamp_minute"], errors="coerce")
+    flat["minute"] = pd.to_numeric(flat["time_minute_of_day"], errors="coerce")
 
     opt_filtered = options[options["option_type"] == option_type].copy()
     opt_filtered = opt_filtered.rename(columns={"close": f"{option_type.lower()}_close"})
@@ -138,7 +138,7 @@ def load_merged_data_both(
     options = _load_options_for_months(options_root, start, end)
 
     flat["atm_strike"] = pd.to_numeric(flat["opt_flow_atm_strike"], errors="coerce")
-    flat["minute"] = pd.to_numeric(flat["timestamp_minute"], errors="coerce")
+    flat["minute"] = pd.to_numeric(flat["time_minute_of_day"], errors="coerce")
 
     ce = options[options["option_type"] == "CE"][["trade_date", "minute", "strike", "close"]].rename(
         columns={"close": "ce_close"}

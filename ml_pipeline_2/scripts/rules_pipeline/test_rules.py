@@ -172,7 +172,7 @@ def _build_one_day_df(minutes, ce_closes, *, extra_cols=None) -> pd.DataFrame:
     n = len(minutes)
     base = {
         "trade_date": ["2024-08-15"] * n,
-        "timestamp_minute": minutes,
+        "minute": minutes,
         "signal": [False] * n,
         "ce_close": ce_closes,
         "pe_close": [0.0] * n,
