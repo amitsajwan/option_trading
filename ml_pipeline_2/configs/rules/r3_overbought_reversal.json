@@ -1,0 +1,21 @@
+{
+  "rule_id": "R3_OVERBOUGHT_REVERSAL",
+  "direction": "BUY_ATM_PE",
+  "entry_conditions": [
+    {"column": "osc_rsi_14", "operator": ">", "value": 75},
+    {"column": "vwap_distance", "operator": ">", "value": 100},
+    {"column": "ema_9_slope", "operator": "<", "value": 0},
+    {"column": "vel_ce_oi_delta_30m", "operator": ">", "value": 0}
+  ],
+  "disqualifiers": [
+    {"column": "time_minute_of_day", "operator": "<", "value": 600},
+    {"column": "time_minute_of_day", "operator": ">", "value": 870},
+    {"column": "ctx_is_expiry_day", "operator": "==", "value": 1}
+  ],
+  "exit_mechanical": {
+    "stop_pct": 25,
+    "target_pct": 40,
+    "time_stop_minutes": 15,
+    "eod_force_close_minute": 920
+  }
+}

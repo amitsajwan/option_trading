@@ -1,0 +1,22 @@
+{
+  "rule_id": "R2_ORB_UP",
+  "direction": "BUY_ATM_CE",
+  "entry_conditions": [
+    {"column": "ctx_opening_range_ready", "operator": "==", "value": 1},
+    {"column": "ctx_opening_range_breakout_up", "operator": "==", "value": 1},
+    {"column": "vel_pcr_delta_open", "operator": "<", "value": 0},
+    {"column": "fut_flow_volume_accel_1m", "operator": ">", "value": 0},
+    {"column": "osc_atr_percentile", "operator": ">", "value": 0.5}
+  ],
+  "disqualifiers": [
+    {"column": "time_minute_of_day", "operator": "<", "value": 570},
+    {"column": "time_minute_of_day", "operator": ">", "value": 870},
+    {"column": "ctx_is_expiry_day", "operator": "==", "value": 1}
+  ],
+  "exit_mechanical": {
+    "stop_pct": 30,
+    "target_pct": 60,
+    "time_stop_minutes": 20,
+    "eod_force_close_minute": 920
+  }
+}

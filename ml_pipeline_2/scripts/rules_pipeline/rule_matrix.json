@@ -1,0 +1,22 @@
+{
+  "description": "Rules v1 baseline — 4 trader-style rules tested on the same two hold-out windows the ML audit used. Mirror the audit gates so PASS/FAIL is directly comparable.",
+  "rules": [
+    {"rule_id": "R1_ORB_DOWN", "path": "ml_pipeline_2/configs/rules/r1_opening_range_break_down.json"},
+    {"rule_id": "R2_ORB_UP", "path": "ml_pipeline_2/configs/rules/r2_opening_range_break_up.json"},
+    {"rule_id": "R3_OVERBOUGHT_REVERSAL", "path": "ml_pipeline_2/configs/rules/r3_overbought_reversal.json"},
+    {"rule_id": "R4_TREND_CONT", "path": "ml_pipeline_2/configs/rules/r4_trend_continuation.json"}
+  ],
+  "windows": [
+    {"name": "may_jul_2024", "start": "2024-05-01", "end": "2024-07-31"},
+    {"name": "aug_oct_2024", "start": "2024-08-01", "end": "2024-10-31"}
+  ],
+  "exit_modes": ["mechanical"],
+  "audit_thresholds": {
+    "min_trades": 30,
+    "max_trades": 100000,
+    "min_win_rate": 0.40,
+    "t_min": 2.0,
+    "ci_must_exclude_zero": true,
+    "outlier_survival_must_be_nonneg": true
+  }
+}
