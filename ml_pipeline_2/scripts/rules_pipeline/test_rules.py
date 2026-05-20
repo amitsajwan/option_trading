@@ -272,6 +272,58 @@ class TestExecutionSim:
         assert df["ce_close"].dropna().between(1, 5000).all()
         assert df["pe_close"].dropna().between(1, 5000).all()
 
+    def test_pipeline_enumerate_cells_cross_product(self):
+        """Orchestrator: 2 rules × 2 windows × 1 exit_mode = 4 cells, with
+        deterministic cell_ids derived from rule+window+exit_mode."""
+        from ml_pipeline_2.scripts.rules_pipeline.pipeline import enumerate_cells
+
+        cfg = {
+            "rules": [
+                {"rule_id": "R1", "path": "rules/r1.json"},
+                {"rule_id": "R2", "path": "rules/r2.json"},
+            ],
+            "windows": [
+                {"name": "may_jul_2024", "start": "2024-05-01", "end": "2024-07-31"},
+                {"name": "aug_oct_2024", "start": "2024-08-01", "end": "2024-10-31"},
+            ],
+            "exit_modes": ["mechanical"],
+        }
+        cells = enumerate_cells(cfg)
+        assert len(cells) == 4
+        ids = sorted(c.cell_id for c in cells)
+        assert ids == [
+            "R1_aug_oct_2024_mechanical",
+            "R1_may_jul_2024_mechanical",
+            "R2_aug_oct_2024_mechanical",
+            "R2_may_jul_2024_mechanical",
+        ]
+
+    def test_returns_in_decimal_units(self):
+        """Fix #5: simulate_trades must emit returns as decimals (0.05 = +5%)
+        to feed audit_run.audit directly with return_col='net_pnl_pct'.
+        Cost of 2 bps must subtract exactly 0.0002 from gross."""
+        from ml_pipeline_2.scripts.rules_pipeline.execution_sim import simulate_trades
+
+        df = _build_one_day_df(minutes=[555, 556], ce_closes=[100, 110])
+        df.loc[0, "signal"] = True
+        rule = Rule(
+            rule_id="X4",
+            direction="BUY_ATM_CE",
+            entry_conditions=(Condition("ce_close", ">", 0),),
+            disqualifiers=(),
+            exit_mechanical=ExitConfig(
+                stop_pct=99, target_pct=5, time_stop_minutes=999,
+                eod_force_close_minute=999,
+            ),
+        )
+        trades = simulate_trades(df, rule, exit_mode="mechanical", cost_bps=2.0)
+        assert len(trades) == 1
+        # +10% gross (100 → 110) - 2 bps cost = 0.1 - 0.0002 = 0.0998
+        assert abs(float(trades.iloc[0]["net_pnl_pct"]) - 0.0998) < 1e-6, (
+            f"expected ~0.0998 decimal, got {trades.iloc[0]['net_pnl_pct']}"
+        )
+        assert trades.iloc[0]["exit_reason"] == "target"
+
     def test_expiry_filter_keeps_nearest_forward_only(self):
         """Fix #3: options/ may contain multiple expiries per day. The filter
         must keep only the nearest forward expiry per trade_date so the merge

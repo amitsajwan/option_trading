@@ -119,8 +119,11 @@ def simulate_trades(
         if exit_premium is None or exit_premium <= 0:
             continue
 
-        gross_pnl = (exit_premium - entry_premium) / entry_premium * 100
-        net_pnl = gross_pnl - cost_bps / 100
+        # Returns stored as decimal fractions (e.g. 0.05 = +5%) to match the
+        # convention in audit_run.audit and the engine's POSITION_CLOSE events.
+        # cost_bps=2 → 2 bps = 0.0002 decimal.
+        gross_pnl = (exit_premium - entry_premium) / entry_premium
+        net_pnl = gross_pnl - cost_bps / 10000
 
         trades.append({
             "trade_date": td,
