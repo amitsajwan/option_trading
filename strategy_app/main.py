@@ -14,7 +14,7 @@ from contracts_app import configure_ist_logging, snapshot_topic
 
 from .contracts import SignalType, TradeSignal
 from .engines import DeterministicRuleEngine, PureMLEngine
-from .engines.profiles import PRODUCTION_DEFAULT_PROFILE_ID
+from .engines.profiles import PRODUCTION_DEFAULT_PROFILE_ID, build_run_metadata, known_profile_ids
 from .engines.runtime_artifacts import (
     RuntimeArtifactStore,
     build_runtime_config_payload,
@@ -323,20 +323,25 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     if str(args.rollout_stage) == "capped_live" and float(args.position_size_multiplier) > 0.25:
         raise SystemExit("--position-size-multiplier must be <= 0.25 for capped_live stage")
     if hasattr(engine, "set_run_context"):
-        engine.set_run_context(
-            f"runtime-{args.rollout_stage}",
-            {
-                "risk_config": {
-                    "rollout_stage": str(args.rollout_stage),
-                    "position_size_multiplier": float(args.position_size_multiplier),
-                    "halt_consecutive_losses": int(args.halt_consecutive_losses),
-                    "halt_daily_dd_pct": float(args.halt_daily_dd_pct),
-                },
-                "model_run_id": (ml_pure_switch_meta or {}).get("run_id"),
-                "strategy_profile_id": strategy_profile_id,
-                "model_group": (ml_pure_switch_meta or {}).get("model_group"),
+        run_metadata: dict = {
+            "risk_config": {
+                "rollout_stage": str(args.rollout_stage),
+                "position_size_multiplier": float(args.position_size_multiplier),
+                "halt_consecutive_losses": int(args.halt_consecutive_losses),
+                "halt_daily_dd_pct": float(args.halt_daily_dd_pct),
             },
-        )
+            "model_run_id": (ml_pure_switch_meta or {}).get("run_id"),
+            "strategy_profile_id": strategy_profile_id,
+            "model_group": (ml_pure_switch_meta or {}).get("model_group"),
+        }
+        if engine_key == "deterministic" and strategy_profile_id in known_profile_ids():
+            profile_meta = build_run_metadata(strategy_profile_id)
+            run_metadata.update(profile_meta)
+            run_metadata["risk_config"] = {
+                **profile_meta.get("risk_config", {}),
+                **run_metadata["risk_config"],
+            }
+        engine.set_run_context(f"runtime-{args.rollout_stage}", run_metadata)
     topic = str(args.topic or snapshot_topic()).strip() or snapshot_topic()
     runtime_store = RuntimeArtifactStore(runtime_artifact_paths.root)
     # If the engine has option-P&L bundles loaded (via OPTION_PNL_MODEL_BUNDLE),
