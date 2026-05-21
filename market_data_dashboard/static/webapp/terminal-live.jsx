@@ -18,13 +18,14 @@ function _bridgeTrade(tr) {
   const xp = tr.exitPx  ?? tr.exit  ?? 0;
   const rng = Math.abs(ep) * 0.002;
   const rawDir = tr.dir || tr.direction || 'LONG';
-  // option_pnl bundles store direction as PE/CE — map to LONG/SHORT for display/CSS.
-  // CE = bullish (buy call = long delta) → LONG; PE = bearish (buy put = short delta) → SHORT.
-  const dirMap = { PE: 'SHORT', CE: 'LONG' };
-  const dir = dirMap[rawDir] || dirMap[rawDir.toUpperCase()] || rawDir;
   const optionType = tr.optionType ?? tr.option_type ?? (rawDir === 'PE' || rawDir === 'CE' ? rawDir : null);
+  const positionSide = String(tr.positionSide || tr.position_side || '').trim().toUpperCase();
+  // Chart bias (LONG/SHORT triangles) follows delta; tape "Dir" shows leg + buy/sell.
+  const dirMap = { PE: 'SHORT', CE: 'LONG' };
+  const chartBias = dirMap[rawDir] || dirMap[rawDir.toUpperCase()] || rawDir;
+  const legDir = optionType || rawDir;
   return {
-    ...tr, dir,
+    ...tr, dir: chartBias, legDir, positionSide,
     entryPx: ep, exitPx: xp,
     strat: tr.strat || tr.strategy_name || '—',
     stopPx:   tr.stopPx   ?? (dir === 'LONG' ? ep - rng : ep + rng),
@@ -745,7 +746,12 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId,
                       <span className="muted" style={{fontSize:'9px'}}>FILL</span>
                     </td>
                     <td>{r.strat}</td>
-                    <td><span className={`t-dir ${r.dir}`}>{r.dir}</span></td>
+                    <td>
+                      <span className={`t-dir ${r.dir}`} title="Chart delta bias">
+                        {r.legDir || r.dir}
+                        {r.positionSide === 'LONG' ? ' · BUY' : r.positionSide === 'SHORT' ? ' · SELL' : ''}
+                      </span>
+                    </td>
                     <td style={{fontFamily:'var(--f-mono)',fontSize:'10px',whiteSpace:'nowrap'}}>
                       {r.strike ? (<>
                         <span>{Math.round(r.strike)}</span>
@@ -769,7 +775,10 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId,
                     <span className="muted" style={{fontSize:'9px',color:r.fired?'var(--fg-2)':'var(--fg-4)'}}>{r.fired?'SIG':'HLD'}</span>
                   </td>
                   <td>{r.strat || r.strategy_name || '—'}</td>
-                  <td><span className={`t-dir ${(r.dir||'LONG').toUpperCase()}`}>{(r.dir||'—').toUpperCase()}</span></td>
+                  <td className="muted" style={{fontSize:'9px'}}>
+                    {(r.dir === 'CE' || r.dir === 'PE') ? r.dir : (r.legDir || r.dir || '—')}
+                    {r.fired && r.positionSide === 'LONG' ? ' · BUY' : r.fired && r.positionSide === 'SHORT' ? ' · SELL' : ''}
+                  </td>
                   <td className="muted">—</td>
                   <td className="r muted">—</td><td className="r muted">—</td><td className="r muted">—</td><td className="r muted">—</td>
                   <td className="muted" style={{fontSize:'9px'}}>{r.reason || r.hold_reason || '—'}</td>

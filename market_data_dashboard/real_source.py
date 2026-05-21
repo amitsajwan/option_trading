@@ -445,6 +445,7 @@ def _position_to_trade(
     else:
         option_type = None
     strike_value = _safe_float(open_pos.get("strike"), fallback=None)
+    position_side = str(open_pos.get("position_side") or "LONG").strip().upper() or "LONG"
 
     contrib = open_pos.get("contributing_strategies")
     if isinstance(contrib, list) and contrib:
@@ -507,6 +508,7 @@ def _position_to_trade(
         stopTriggerDetail=stop_trigger_detail,
         strike=float(strike_value) if strike_value is not None else None,
         optionType=option_type,
+        positionSide=position_side,
     )
 
 

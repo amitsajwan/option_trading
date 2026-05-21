@@ -57,6 +57,7 @@ class MonitorTrade(BaseModel):
     stopTriggerDetail: str = ""
     strike: Optional[float] = None
     optionType: Optional[str] = None  # "CE" or "PE"
+    positionSide: Optional[str] = None  # "LONG" = buy premium, "SHORT" = sell premium
 
 
 class MonitorAlert(BaseModel):

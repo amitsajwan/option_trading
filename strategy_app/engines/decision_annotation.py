@@ -47,7 +47,11 @@ def annotate_vote_contract(
     vote.decision_mode = "rule_vote"
     if bool(raw_signals.get("_entry_warmup_blocked")):
         vote.decision_reason_code = "entry_warmup_block"
+    elif raw_signals.get("_policy_allowed") is True:
+        vote.decision_reason_code = "policy_allowed"
     elif policy_reason.startswith("allowed score="):
+        vote.decision_reason_code = "policy_allowed"
+    elif policy_reason.startswith("bypass:") or policy_reason.startswith("advisory:"):
         vote.decision_reason_code = "policy_allowed"
     elif policy_reason:
         vote.decision_reason_code = "policy_block"
