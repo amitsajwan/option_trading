@@ -1,0 +1,56 @@
+---
+description: GCP deploy workflow — commit, push, VM git pull, docker build (no SCP)
+alwaysApply: true
+---
+
+# GCP deploy workflow
+
+When changing code that runs on GCP VMs, **never use `gcloud compute scp`** to sync source. Use git.
+
+## Standard flow
+
+1. **Local** — implement + test; **commit** (ask user first if they have not asked to commit).
+2. **Push** — `git push origin <branch>` (usually `main`). Deploy tasks imply push is OK.
+3. **VM pull** — on each target VM, fast-forward the checkout:
+
+```bash
+# Runtime or ML (path is usually /opt/option_trading)
+gcloud compute ssh <VM_NAME> --zone=asia-south1-b --command "
+  sudo bash -c 'cd /opt/option_trading && git fetch origin main && git checkout main && git pull --ff-only origin main && git log -1 --oneline'
+"
+```
+
+4. **Runtime rebuild** — if `strategy_app`, `market_data_dashboard`, or compose-copied paths changed:
+
+```bash
+cd /opt/option_trading
+sudo docker compose --env-file .env.compose \
+  -f docker-compose.yml -f docker-compose.gcp.yml \
+  build strategy_app_historical   # and/or strategy_app, market_data_dashboard
+sudo docker compose --env-file .env.compose \
+  -f docker-compose.yml -f docker-compose.gcp.yml \
+  up -d --force-recreate strategy_app_historical
+```
+
+5. **Verify** — logs show expected profile/strategy; `curl http://127.0.0.1:8008/api/health`.
+
+## Targets
+
+| Lane | VM | Typical pull path |
+|------|-----|-------------------|
+| ML | `option-trading-ml-01` | `/opt/option_trading` |
+| Runtime | `option-trading-runtime-01` | `/opt/option_trading` |
+
+Project: `algo-trading-496203`, zone: `asia-south1-b`. See `.cursor/skills/gcp-vm-deploy/SKILL.md`.
+
+## ML-only script changes
+
+After `git pull`, run with `.venv/bin/python` — no docker rebuild unless dependencies changed.
+
+## Do not SCP
+
+`gcloud compute scp` is only for **non-git artifacts** (data files, one-off logs) or emergencies when git is broken. Never SCP Python/JS source that belongs in the repo.
+
+## Env / config on runtime
+
+Use `ops/gcp/patch_playbook_v1_env.sh` (or edit `.env.compose`) on the VM **after** pull, then rebuild/recreate affected services.

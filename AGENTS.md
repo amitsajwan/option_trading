@@ -44,6 +44,15 @@ Frontend type-check: `cd strategy_eval_ui && npx tsc -b --noEmit`
 - 14 failures in `strategy_app/tests/` due to `TradeSignal.lots` attribute being removed but tests not updated.
 - 1 failure in `tests/test_live_runtime_boundaries.py` — asserts `deterministic` as historical default, but compose now uses `ml_pure`.
 
+### GCP deploy (VMs)
+
+**Default workflow:** commit locally → `git push` → on VM `git pull` → `docker compose build` + `up -d --force-recreate` for affected services.
+
+- **Do not** sync application source with `gcloud compute scp`; VMs use `/opt/option_trading` git checkouts.
+- Runtime: `option-trading-runtime-01`; ML: `option-trading-ml-01`; project `algo-trading-496203`, zone `asia-south1-b`.
+- After `strategy_app` / dashboard changes, rebuild `strategy_app_historical` (and live `strategy_app` if needed) before historical replays.
+- Details: `.cursor/rules/gcp-deploy-workflow.mdc`, `.cursor/skills/gcp-vm-deploy/SKILL.md`.
+
 ### Gotchas
 
 - Docker daemon must be started manually (`sudo dockerd &`) since this runs inside a container. Socket permissions need `sudo chmod 666 /var/run/docker.sock` after daemon start.
