@@ -577,6 +577,7 @@ services:
       HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
       SNAPSHOT_V1_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
       ML_PIPELINE_2_REPO_ROOT: "/app"
+      PLAYBOOK_V1_RULE_PATH: "${PLAYBOOK_V1_RULE_PATH:-/app/ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_thesis.json}"
       ML_PURE_RUN_ID: "${ML_PURE_RUN_ID:-}"
       ML_PURE_MODEL_GROUP: "${ML_PURE_MODEL_GROUP:-}"
       ML_PURE_MODEL_PACKAGE: "${ML_PURE_MODEL_PACKAGE:-}"
