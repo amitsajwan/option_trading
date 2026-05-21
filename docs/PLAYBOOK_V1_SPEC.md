@@ -4,30 +4,47 @@
 
 ---
 
+## Production status (2026-05-21)
+
+| Layer | Status |
+|-------|--------|
+| **Promoted research rule** | `PBV1_TOP3_THESIS` — monthly audit leader (~20/51 PASS months) |
+| **Runtime brain** | `playbook_brain.py` + `PlaybookV1ShortCeStrategy` + profile `playbook_v1_paper_v1` |
+| **Deploy** | Requires `build_run_metadata` in `main.py` + rebuild `strategy_app_historical` |
+| **Next risk candidate** | `PBV1_TOP3_PRODUCTION_V1` — calm + 50% premium stop + trail |
+
+Operator details: **`docs/PLAYBOOK_V1_OPERATOR.md`**
+
+---
+
 ## Layers (what “clever” means here)
 
 | Layer | Smoke proxy (rules JSON) | Full build (later) |
 |-------|--------------------------|-------------------|
-| **Participation** | `ctx_is_high_vix_day` disqualifier; stricter `ret_5m` / `vwap_distance` | Day score → 0 trades below threshold |
+| **Participation** | `ctx_is_high_vix_day` disqualifier | Day score → 0 trades below threshold |
 | **Entry quality** | Top-3 score + optional strict entry | Score floor + dynamic daily cap |
 | **Thesis exit** | `signal_exits`: `vwap_distance >= 0` (reclaim) | ORB repair, velocity against |
-| **Hold / trail** | `target_pct: 99` (no fixed take-profit); trail 15%/8% giveback; 45m time | Per-position state machine in engine |
-| **Disaster risk** | `stop_pct: 100`, `underlying_stop_pct: 0.003` | Margin-aware caps |
+| **Hold / trail** | `target_pct: 99` (no fixed take-profit); trail 15%/8%; 45m time | Per-position state machine in engine |
+| **Disaster risk** | `underlying_stop_pct: 0.003`; production adds `stop_pct: 50` | Margin-aware caps in eval + paper |
 
 ---
 
-## Smoke rules (2026-05-21)
+## Rule variants
 
-| Rule ID | Intent |
-|---------|--------|
-| `R1S_TOP3_S3_COMPOSITE` | Research baseline |
-| `PBV1_TOP3_THESIS` | Thesis exit only; long time; no 50% target |
-| `PBV1_TOP3_THESIS_TRAIL` | Thesis + premium trail after MFE |
-| `PBV1_TOP3_CALM_THESIS` | Thesis + trail + skip high-VIX days |
-| `PBV1_TOP3_QUALITY_THESIS` | Stricter entry + calm + thesis + trail |
+| Rule ID | File | Intent |
+|---------|------|--------|
+| `PBV1_TOP3_THESIS` | `pbv1_top3_thesis.json` | **Default** — thesis, `stop_pct: 100` (no premium cap) |
+| `PBV1_TOP3_PRODUCTION_V1` | `pbv1_top3_production_v1.json` | Calm days + 50% premium stop + trail |
+| `PBV1_TOP3_CALM_THESIS` | `pbv1_top3_calm_thesis.json` | Skip high-VIX only |
+| `PBV1_TOP3_THESIS_TRAIL` | `pbv1_top3_thesis_trail.json` | Thesis + trail, no premium cap |
+| `R1S_TOP3_S3_COMPOSITE` | `r1s_top3_s3_composite.json` | Research control |
 
-Config dir: `ml_pipeline_2/configs/rules/playbook_v1/`  
-Matrix: `ml_pipeline_2/scripts/rules_pipeline/rule_matrix_playbook_v1_smoke.json`
+Config dir: `ml_pipeline_2/configs/rules/playbook_v1/`
+
+### Research matrices
+
+- Smoke: `rule_matrix_playbook_v1_smoke.json`
+- Production check: `rule_matrix_playbook_v1_production_check.json`
 
 ### Run smoke (ML VM)
 
@@ -38,53 +55,55 @@ cd /opt/option_trading
   --output-root ml_pipeline_2/artifacts/rules_runs/playbook_v1_smoke_$(date +%Y%m%d)
 ```
 
-**Go criteria for full flash:** At least one PBV1 variant **PASS** both `may_jul_2024` and `aug_oct_2024`, or **beats R1S on Aug–Oct** (where R1S historically struggles on exits).
+**Go criteria:** At least one PBV1 variant **PASS** both `may_jul_2024` and `aug_oct_2024`, or beats R1S on Aug–Oct.
 
 ### Smoke result (2026-05-21) — **GO**
 
-| Rule | may_jul | aug_oct | Trades (May–Jul) |
-|------|---------|---------|------------------|
-| R1S_TOP3_S3 | PASS | PASS | 49 |
-| PBV1_TOP3_THESIS | PASS | PASS | 48 |
-| PBV1_TOP3_THESIS_TRAIL | PASS | PASS | 51 |
-| PBV1_TOP3_CALM_THESIS | PASS | PASS | 41 |
-| PBV1_TOP3_QUALITY_THESIS | PASS | PASS | 40 |
+| Rule | may_jul | aug_oct |
+|------|---------|---------|
+| R1S_TOP3_S3 | PASS | PASS |
+| PBV1_TOP3_THESIS | PASS | PASS |
+| PBV1_TOP3_THESIS_TRAIL | PASS | PASS |
+| PBV1_TOP3_CALM_THESIS | PASS | PASS |
+| PBV1_TOP3_QUALITY_THESIS | PASS | PASS |
 
-**10/10 cells PASS.** Thesis exit (VWAP reclaim, no 50% cap) **matches or beats** fixed-target R1S on both hold-out windows, including **Aug–Oct**. Quality + calm filters reduce trades (~40 vs 49) without failing smoke.
-
-**Monthly audit** running: `playbook_v1_monthly_20260521` (tmux `pbv1_monthly`, 255 cells).
+**10/10 cells PASS.**
 
 ---
 
-## Phase 2 — Full flash (after smoke)
-
-1. **Monthly matrix** (51 months × winning PBV1 rules + R1S control).
-2. **Exit reason breakdown** — % `signal:vwap_distance` vs `trail_stop` vs `time_stop`.
-3. **`PlaybookV1ShortCeStrategy`** + **`PlaybookBrain`** in `strategy_app` (wired 2026-05-21).
-4. **Replay parity** on runtime VM vs rules cell — use profile `playbook_v1_paper_v1`.
-5. **Eval UI** — filter by `PBV1_*` strategy names.
-
-### Live wiring (implemented)
+## Live wiring (implemented)
 
 | Piece | Path |
 |-------|------|
 | Policy / exits | `strategy_app/engines/playbook_brain.py` |
-| Strategy | `strategy_app/engines/strategies/rule_top3_short_ce.py` → `PBV1_TOP3_QUALITY_THESIS` |
+| Strategy | `strategy_app/engines/strategies/rule_top3_short_ce.py` → `PlaybookV1ShortCeStrategy` |
 | Profile | `playbook_v1_paper_v1` in `strategy_app/engines/profiles.py` |
-| Rule JSON | `ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_quality_thesis.json` |
+| Rule override | env `PLAYBOOK_V1_RULE_PATH` (docker-compose historical service) |
 
 ```bash
-# Runtime replay / paper
-STRATEGY_PROFILE_ID=playbook_v1_paper_v1 python -m strategy_app.main ...
+STRATEGY_PROFILE_ID=playbook_v1_paper_v1
+PLAYBOOK_V1_RULE_PATH=/app/ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_thesis.json
+python -m strategy_app.main --engine deterministic --topic market:snapshot:v1:historical ...
 ```
 
 ---
 
-## Phase 3 — Verification
+## Phase 2 — in progress
 
-- Compare PASS month count vs R1S (target ≥ 7/51 or better Aug–Oct).
-- Operator calm-week overlay still manual until regime gate beats 6/17.
-- Document promoted rule ID in `PROJECT_STATUS` and operator sheet.
+1. Monthly matrix — `playbook_v1_monthly_*` leaderboard
+2. Runtime replay parity — `ops/gcp/compare_rules_runtime_day.py`
+3. Eval UI — run picker + deep links (`eval.jsx?v=5`)
+4. Pre-flight — `ops/gcp/preflight_historical_replay.py`
+5. Production rule backtest — `PBV1_TOP3_PRODUCTION_V1` vs thesis on Aug–Oct + Sep-24
+
+---
+
+## Phase 3 — paper gates
+
+- Rules monthly PASS stable for promoted rule
+- Runtime replay matches rules on sample days (`PARITY_OK`)
+- Paper week: max day loss within operator cap; exit mix not 100% blind time_stop
+- Document promoted rule in operator sheet (done in `PLAYBOOK_V1_OPERATOR.md`)
 
 ---
 
@@ -93,3 +112,4 @@ STRATEGY_PROFILE_ID=playbook_v1_paper_v1 python -m strategy_app.main ...
 - Partial scale-out at 20% / 30% milestones
 - Long PE/CE playbooks (0 PASS in debit monthly)
 - Automated week gate (failed v1–v3 regime filters)
+- Marketing “50%+ target” as primary exit

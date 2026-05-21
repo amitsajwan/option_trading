@@ -50,6 +50,23 @@ def wait_run_id(run_id: str, label: str, max_minutes: int = 360) -> None:
 
 
 def main() -> int:
+    try:
+        import subprocess
+
+        pre = subprocess.run(
+            ["python3", "ops/gcp/preflight_historical_replay.py"],
+            cwd="/opt/option_trading",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        print(pre.stdout or "", flush=True)
+        if pre.returncode != 0:
+            print("PREFLIGHT failed — fix historical consumer before replay", flush=True)
+            return pre.returncode
+    except Exception as exc:
+        print(f"PREFLIGHT skipped: {exc}", flush=True)
+
     for date_from, date_to, label in WINDOWS:
         print(f"QUEUE {label} {date_from} -> {date_to}", flush=True)
         try:

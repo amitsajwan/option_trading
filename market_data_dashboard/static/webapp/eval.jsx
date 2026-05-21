@@ -632,8 +632,10 @@ function EvalMonitor({ tweaks }) {
           <div className="panel-body">
             <strong>Run selected but no closed trades in this window.</strong>
             <p className="muted">
-              Run <code>{evalShortRunId(resolvedRunId)}</code> may still be running, failed, or used a strategy profile that did not trade in {filters.date_from}→{filters.date_to}.
-              Try Refresh list after completion, or widen the date range to match the run.
+              Run <code>{evalShortRunId(resolvedRunId)}</code> may still be running, failed, or replayed while{' '}
+              <code>strategy_app_historical</code> was down (snapshots emitted, 0 trades persisted).
+              On the VM run <code>sudo python3 ops/gcp/preflight_historical_replay.py</code> then re-queue.
+              Compare <strong>Option PnL%</strong> in the trades table (premium move); Capital PnL% uses full notional vs $1k and exaggerates tail days.
             </p>
           </div>
         </div>
