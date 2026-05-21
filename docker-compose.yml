@@ -348,6 +348,7 @@ services:
       STRATEGY_STRIKE_LIQUIDITY_WEIGHT: "${STRATEGY_STRIKE_LIQUIDITY_WEIGHT:-1.0}"
       STRATEGY_STRIKE_AFFORDABILITY_WEIGHT: "${STRATEGY_STRIKE_AFFORDABILITY_WEIGHT:-0.25}"
       STRATEGY_STRIKE_DISTANCE_PENALTY: "${STRATEGY_STRIKE_DISTANCE_PENALTY:-0.05}"
+      STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-}"
     command:
       [
         "python",
@@ -357,6 +358,8 @@ services:
         "${STRATEGY_ENGINE:-ml_pure}",
         "--min-confidence",
         "${STRATEGY_MIN_CONFIDENCE:-0.65}",
+        "--strategy-profile-id",
+        "${STRATEGY_PROFILE_ID:-}",
         "--topic",
         "${LIVE_TOPIC:-market:snapshot:v1}",
         "--rollout-stage",
@@ -614,6 +617,7 @@ services:
       STRATEGY_STRIKE_LIQUIDITY_WEIGHT: "${STRATEGY_STRIKE_LIQUIDITY_WEIGHT:-1.0}"
       STRATEGY_STRIKE_AFFORDABILITY_WEIGHT: "${STRATEGY_STRIKE_AFFORDABILITY_WEIGHT:-0.25}"
       STRATEGY_STRIKE_DISTANCE_PENALTY: "${STRATEGY_STRIKE_DISTANCE_PENALTY:-0.05}"
+      STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-}"
     command:
       [
         "python",
@@ -623,6 +627,8 @@ services:
         "${STRATEGY_ENGINE:-ml_pure}",
         "--min-confidence",
         "${STRATEGY_MIN_CONFIDENCE:-0.65}",
+        "--strategy-profile-id",
+        "${STRATEGY_PROFILE_ID:-}",
         "--topic",
         "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}",
         "--run-dir",
