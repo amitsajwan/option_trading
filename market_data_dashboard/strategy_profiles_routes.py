@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from strategy_app.engines.profiles import (
     PROFILE_DEBIT_MULTI_V1,
+    PROFILE_TRADER_MASTER_V1,
     PROFILE_DET_CORE_V2,
     PROFILE_DET_PROD_V1,
     PROFILE_DET_SETUP_V1,
@@ -32,6 +33,11 @@ _PROFILE_META: dict[str, dict[str, str]] = {
         "title": "Debit multi (buy CE/PE)",
         "summary": "TRENDING → long CE; SIDEWAYS → long PE. Brain gates entries.",
         "operator_focus": "true",
+    },
+    PROFILE_TRADER_MASTER_V1: {
+        "title": "Trader master (full book)",
+        "summary": "Evaluation profile: ORB, OI, VWAP, debit top-3, R1S, composites, PBV1 — regime-routed.",
+        "evaluation_profile": "true",
     },
     PROFILE_R1S_TOP3_PAPER_V1: {
         "title": "R1S top-3 short CE",

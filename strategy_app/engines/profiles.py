@@ -11,6 +11,7 @@ PROFILE_DET_V3_V1 = "det_v3_v1"
 PROFILE_R1S_TOP3_PAPER_V1 = "r1s_top3_paper_v1"
 PROFILE_PLAYBOOK_V1_PAPER_V1 = "playbook_v1_paper_v1"
 PROFILE_DEBIT_MULTI_V1 = "debit_multi_v1"
+PROFILE_TRADER_MASTER_V1 = "trader_master_v1"
 
 PRODUCTION_DEFAULT_PROFILE_ID = PROFILE_DET_PROD_V1
 
@@ -62,6 +63,78 @@ _DEBIT_MULTI_RISK_CONFIG: dict[str, Any] = {
     "stop_loss_pct": 0.30,
     "target_pct": 0.60,
     "trailing_enabled": False,
+}
+
+# Master book for evaluation: experienced trader — all major playbooks, regime-routed.
+# Union of det_core_v2 + det_prod + debit multi + trader composites + rule top-3 + R1S + PBV1.
+_TRADER_MASTER_REGIME_ENTRY_MAP: dict[str, list[str]] = {
+    "TRENDING": [
+        "IV_FILTER",
+        "ORB",
+        "OI_BUILDUP",
+        "PREV_DAY_LEVEL",
+        "R2_TOP3_LONG_CE",
+        "R1S_TOP3_SHORT_CE",
+        "TRADER_COMPOSITE",
+        "TRADER_V3_COMPOSITE",
+        "PBV1_TOP3_THESIS",
+    ],
+    "SIDEWAYS": [
+        "IV_FILTER",
+        "VWAP_RECLAIM",
+        "OI_BUILDUP",
+        "R1_TOP3_LONG_PE",
+        "R1S_TOP3_SHORT_CE",
+        "TRADER_COMPOSITE",
+        "TRADER_V3_COMPOSITE",
+        "PBV1_TOP3_THESIS",
+    ],
+    "EXPIRY": [
+        "IV_FILTER",
+        "VWAP_RECLAIM",
+        "TRADER_V3_COMPOSITE",
+    ],
+    "PRE_EXPIRY": [
+        "IV_FILTER",
+        "ORB",
+        "OI_BUILDUP",
+        "PREV_DAY_LEVEL",
+        "VWAP_RECLAIM",
+        "R1_TOP3_LONG_PE",
+        "R2_TOP3_LONG_CE",
+        "R1S_TOP3_SHORT_CE",
+        "TRADER_COMPOSITE",
+        "TRADER_V3_COMPOSITE",
+        "PBV1_TOP3_THESIS",
+    ],
+    "HIGH_VOL": [
+        "IV_FILTER",
+        "HIGH_VOL_ORB",
+        "TRADER_V3_COMPOSITE",
+        "R1S_TOP3_SHORT_CE",
+    ],
+    "AVOID": [],
+}
+_TRADER_MASTER_EXIT_STRATEGIES: list[str] = [
+    "ORB",
+    "OI_BUILDUP",
+    "HIGH_VOL_ORB",
+    "VWAP_RECLAIM",
+    "PREV_DAY_LEVEL",
+    "R1_TOP3_LONG_PE",
+    "R2_TOP3_LONG_CE",
+    "TRADER_COMPOSITE",
+    "TRADER_V3_COMPOSITE",
+    "R1S_TOP3_SHORT_CE",
+    "PBV1_TOP3_THESIS",
+]
+_TRADER_MASTER_RISK_CONFIG: dict[str, Any] = {
+    "stop_loss_pct": 0.25,
+    "target_pct": 0.70,
+    "trailing_enabled": True,
+    "trailing_activation_pct": 0.12,
+    "trailing_offset_pct": 0.06,
+    "trailing_lock_breakeven": True,
 }
 
 _DET_PROD_V1_REGIME_ENTRY_MAP: dict[str, list[str]] = {
@@ -143,6 +216,7 @@ _PROFILE_REGIME_ENTRY_MAPS: dict[str, dict[str, list[str]]] = {
     PROFILE_R1S_TOP3_PAPER_V1: _R1S_TOP3_REGIME_ENTRY_MAP,
     PROFILE_PLAYBOOK_V1_PAPER_V1: _PLAYBOOK_V1_REGIME_ENTRY_MAP,
     PROFILE_DEBIT_MULTI_V1: _DEBIT_MULTI_REGIME_ENTRY_MAP,
+    PROFILE_TRADER_MASTER_V1: _TRADER_MASTER_REGIME_ENTRY_MAP,
 }
 
 _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
@@ -153,6 +227,7 @@ _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
     PROFILE_R1S_TOP3_PAPER_V1: list(_R1S_TOP3_ALL_REGIMES),
     PROFILE_PLAYBOOK_V1_PAPER_V1: list(_PLAYBOOK_V1_ALL_REGIMES),
     PROFILE_DEBIT_MULTI_V1: list(_DEBIT_MULTI_EXIT_STRATEGIES),
+    PROFILE_TRADER_MASTER_V1: list(_TRADER_MASTER_EXIT_STRATEGIES),
 }
 
 _PROFILE_RISK_CONFIGS: dict[str, dict[str, Any]] = {
@@ -162,6 +237,7 @@ _PROFILE_RISK_CONFIGS: dict[str, dict[str, Any]] = {
     PROFILE_R1S_TOP3_PAPER_V1: _R1S_TOP3_RISK_CONFIG,
     PROFILE_PLAYBOOK_V1_PAPER_V1: _PLAYBOOK_V1_RISK_CONFIG,
     PROFILE_DEBIT_MULTI_V1: _DEBIT_MULTI_RISK_CONFIG,
+    PROFILE_TRADER_MASTER_V1: _TRADER_MASTER_RISK_CONFIG,
 }
 
 
@@ -209,6 +285,7 @@ __all__ = [
     "PROFILE_R1S_TOP3_PAPER_V1",
     "PROFILE_PLAYBOOK_V1_PAPER_V1",
     "PROFILE_DEBIT_MULTI_V1",
+    "PROFILE_TRADER_MASTER_V1",
     "build_router_config",
     "build_run_metadata",
     "get_exit_strategies",

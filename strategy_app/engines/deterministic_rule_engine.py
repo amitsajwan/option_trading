@@ -45,13 +45,14 @@ from .profiles import (
     PRODUCTION_DEFAULT_PROFILE_ID,
     PROFILE_DEBIT_MULTI_V1,
     PROFILE_R1S_TOP3_PAPER_V1,
+    PROFILE_TRADER_MASTER_V1,
 )
 from ..brain.brain import BrainDecision, TradingBrain
 from ..brain.context import DayContext
 from ..engines.runtime_artifacts import resolve_runtime_artifact_paths
 
 _PROFILES_RELAX_REGIME_CONF = frozenset(
-    {PROFILE_R1S_TOP3_PAPER_V1, PROFILE_DEBIT_MULTI_V1}
+    {PROFILE_R1S_TOP3_PAPER_V1, PROFILE_DEBIT_MULTI_V1, PROFILE_TRADER_MASTER_V1}
 )
 from .regime import RegimeClassifier, RegimeSignal
 from .snapshot_accessor import SnapshotAccessor

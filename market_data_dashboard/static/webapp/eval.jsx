@@ -34,6 +34,19 @@ const EVAL_R1S_TOP3_PRESET = {
   trailing_lock_breakeven: false,
 };
 
+const EVAL_TRADER_MASTER_PRESET = {
+  date_from: '2024-05-01',
+  date_to: '2024-07-31',
+  strategy: '',
+  regime: '',
+  stop_loss_pct: 25,
+  target_pct: 70,
+  trailing_enabled: true,
+  trailing_activation_pct: 12,
+  trailing_offset_pct: 6,
+  trailing_lock_breakeven: true,
+};
+
 const EVAL_DEBIT_MULTI_PRESET = {
   date_from: '2024-10-31',
   date_to: '2024-10-31',
@@ -918,6 +931,16 @@ function EvalMonitor({ tweaks }) {
               </select>
             </label>
             <button className="btn" onClick={() => setRiskOpen(v => !v)}>{riskOpen ? 'Hide Risk' : 'Risk'}</button>
+            <button className="btn" type="button" title="Trader master eval window (May–Jul 2024)" onClick={() => {
+              const next = { ...draft, ...EVAL_TRADER_MASTER_PRESET };
+              setDatePreset('may_jul_2024');
+              setDraft(next);
+              setFilters(next);
+              setDayPage(1);
+              setTradePage(1);
+              setSelectedDay('');
+              loadData(next, 1, 1, '', activeRunId);
+            }}>Master preset</button>
             <button className="btn" type="button" title="Debit multi smoke day — clear strategy filter" onClick={() => {
               const next = { ...draft, ...EVAL_DEBIT_MULTI_PRESET };
               setDatePreset('oct31_2024');
