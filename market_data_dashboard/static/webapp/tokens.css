@@ -217,6 +217,31 @@ table { border-collapse: collapse; width: 100%; }
 .btn.sm { height: 24px; padding: 0 8px; font-size: 11px; }
 .btn.lg { height: 40px; padding: 0 18px; font-size: 13px; font-weight: 500; }
 
+.eval-runs-panel .eval-runs-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+}
+.eval-runs-panel .eval-run-picker {
+  flex: 1 1 320px;
+  min-width: 240px;
+}
+.eval-runs-panel .eval-run-meta {
+  color: var(--ink-3);
+}
+.eval-runs-hint {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.eval-empty-panel .panel-body {
+  padding: 16px 18px;
+}
+.eval-empty-panel strong {
+  display: block;
+  margin-bottom: 6px;
+}
 .eval-filter-bar {
   display: grid;
   grid-template-columns: repeat(6, minmax(110px, 1fr)) auto auto;

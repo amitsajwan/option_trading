@@ -32,7 +32,9 @@ class DashboardStrategyEvaluationRouter:
         self.router = router
 
     async def strategy_evaluation_page(self, request: Request) -> RedirectResponse:
-        return RedirectResponse(url="/app?mode=eval", status_code=302)
+        query = str(request.url.query or "").strip()
+        target = "/app?mode=eval" + (f"&{query}" if query else "")
+        return RedirectResponse(url=target, status_code=302)
 
     def _require_strategy_eval_service(self) -> Any:
         service = self._get_strategy_eval_service()

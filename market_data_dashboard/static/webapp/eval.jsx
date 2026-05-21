@@ -114,6 +114,57 @@ function evalCsv(filename, rows) {
   URL.revokeObjectURL(url);
 }
 
+function evalShortRunId(runId) {
+  const text = String(runId || '').trim();
+  if (!text) return '--';
+  if (text.length <= 14) return text;
+  return `${text.slice(0, 8)}…${text.slice(-4)}`;
+}
+
+function evalStatusChipClass(status) {
+  const state = String(status || '').trim().toLowerCase();
+  if (state === 'completed') return 'pos';
+  if (state === 'running' || state === 'queued') return 'warn';
+  if (state === 'failed' || state === 'cancelled') return 'neg';
+  return 'info';
+}
+
+function evalRunOptionLabel(run) {
+  const id = evalShortRunId(run?.run_id);
+  const from = String(run?.date_from || '?').slice(0, 10);
+  const to = String(run?.date_to || '?').slice(0, 10);
+  const status = String(run?.status || 'unknown').toUpperCase();
+  const trades = run?.trade_count != null ? `${run.trade_count} trades` : '';
+  return [id, `${from}→${to}`, status, trades].filter(Boolean).join(' · ');
+}
+
+function evalSyncEvalUrl({ runId, filters }) {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('mode', 'eval');
+    if (runId) url.searchParams.set('run_id', runId);
+    else url.searchParams.delete('run_id');
+    if (filters?.date_from) url.searchParams.set('date_from', filters.date_from);
+    else url.searchParams.delete('date_from');
+    if (filters?.date_to) url.searchParams.set('date_to', filters.date_to);
+    else url.searchParams.delete('date_to');
+    if (filters?.dataset) url.searchParams.set('dataset', filters.dataset);
+    window.history.replaceState({}, '', url);
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+async function evalCopyText(text) {
+  const value = String(text || '').trim();
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch (_) {
+    window.prompt('Copy run id', value);
+  }
+}
+
 function normalizeRunEvent(input) {
   const raw = input && typeof input === 'object' && input.data ? input.data : input;
   if (!raw || typeof raw !== 'object') return null;
@@ -171,6 +222,8 @@ function EvalMonitor({ tweaks }) {
   const [loading, setLoading] = _evalUseState(false);
   const [error, setError] = _evalUseState('');
   const [activeRunId, setActiveRunId] = _evalUseState('');
+  const [runs, setRuns] = _evalUseState([]);
+  const [runsLoading, setRunsLoading] = _evalUseState(false);
   const [runStatus, setRunStatus] = _evalUseState(null);
   const [runEvent, setRunEvent] = _evalUseState(null);
   const [wsState, setWsState] = _evalUseState('idle');
@@ -181,8 +234,12 @@ function EvalMonitor({ tweaks }) {
   const clientRef = _evalUseRef(null);
   const pollRef = _evalUseRef(null);
 
-  const runActive = runStatus && !['completed', 'failed'].includes(String(runStatus.status || '').toLowerCase());
+  const runActive = runStatus && !['completed', 'failed', 'cancelled'].includes(String(runStatus.status || '').toLowerCase());
   const progressPct = Number(runEvent?.progress_pct ?? runStatus?.progress_pct ?? 0);
+  const resolvedRunId = String(activeRunId || summary?.resolved_run_id || '').trim();
+  const closedTrades = Number(summary?.counts?.closed_trades ?? 0);
+  const showEmptyRun = !loading && resolvedRunId && closedTrades === 0;
+  const showNoRunsHint = !loading && !runsLoading && !runs.length && !resolvedRunId;
 
   function loadData(nextFilters = filters, nextDayPage = dayPage, nextTradePage = tradePage, nextSelectedDay = selectedDay, runId = activeRunId) {
     setLoading(true);
@@ -211,19 +268,108 @@ function EvalMonitor({ tweaks }) {
       .catch(err => setFeatureData({ status: 'error', error: err.message || String(err) }));
   }
 
+  async function refreshRunsList(dataset = filters.dataset || 'historical') {
+    setRunsLoading(true);
+    try {
+      const payload = await evalGet(
+        `/api/strategy/evaluation/runs?dataset=${encodeURIComponent(dataset)}&limit=40`
+      );
+      const listed = payload?.rows ?? payload?.runs;
+      setRuns(Array.isArray(listed) ? listed : []);
+    } catch (err) {
+      setRuns([]);
+      setError(err.message || String(err));
+    } finally {
+      setRunsLoading(false);
+    }
+  }
+
+  function selectRun(run, { syncUrl = true } = {}) {
+    const runId = String(run?.run_id || '').trim();
+    if (!runId) return;
+    const next = {
+      ...filters,
+      dataset: String(run?.dataset || filters.dataset || 'historical'),
+      date_from: String(run?.date_from || filters.date_from || '').slice(0, 10) || filters.date_from,
+      date_to: String(run?.date_to || filters.date_to || '').slice(0, 10) || filters.date_to,
+    };
+    setActiveRunId(runId);
+    setDraft(next);
+    setFilters(next);
+    setDayPage(1);
+    setTradePage(1);
+    setSelectedDay('');
+    setRunStatus(run);
+    setRunEvent(null);
+    if (syncUrl) evalSyncEvalUrl({ runId, filters: next });
+    const state = String(run?.status || '').toLowerCase();
+    if (state === 'running' || state === 'queued') connectRun(runId);
+    else loadData(next, 1, 1, '', runId);
+  }
+
   _evalUseEffect(() => {
     let cancelled = false;
     const boot = async () => {
-      let runId = '';
-      try {
-        const latest = await evalGet('/api/strategy/evaluation/runs/latest?dataset=historical&status=completed');
-        runId = String(latest?.run_id || '').trim();
-        if (!cancelled && runId) setActiveRunId(runId);
-      } catch (_) {
-        runId = '';
+      const params = new URLSearchParams(window.location.search);
+      const urlRunId = String(params.get('run_id') || '').trim();
+      const urlFrom = String(params.get('date_from') || '').trim().slice(0, 10);
+      const urlTo = String(params.get('date_to') || '').trim().slice(0, 10);
+      const urlDataset = String(params.get('dataset') || tweaks?.evalDefaultDataset || 'historical').trim();
+
+      let nextFilters = { ...filters, dataset: urlDataset || filters.dataset };
+      if (urlFrom) nextFilters = { ...nextFilters, date_from: urlFrom };
+      if (urlTo) nextFilters = { ...nextFilters, date_to: urlTo };
+
+      if (!cancelled) {
+        setDraft(nextFilters);
+        setFilters(nextFilters);
       }
-      if (!cancelled && tweaks?.evalAutoRun !== false) {
-        loadData(filters, 1, 1, '', runId);
+
+      await refreshRunsList(nextFilters.dataset);
+
+      let runId = urlRunId;
+      let runDoc = null;
+      if (runId) {
+        try {
+          runDoc = await evalGet(`/api/strategy/evaluation/runs/${encodeURIComponent(runId)}`);
+        } catch (_) {
+          runDoc = null;
+        }
+      }
+      if (!runDoc) {
+        try {
+          runDoc = await evalGet(
+            `/api/strategy/evaluation/runs/latest?dataset=${encodeURIComponent(nextFilters.dataset)}&status=completed`
+          );
+          runId = String(runDoc?.run_id || '').trim();
+        } catch (_) {
+          runDoc = null;
+          runId = '';
+        }
+      } else {
+        runId = String(runDoc?.run_id || runId).trim();
+      }
+
+      if (cancelled) return;
+
+      if (runDoc?.date_from) {
+        nextFilters = { ...nextFilters, date_from: String(runDoc.date_from).slice(0, 10) };
+      }
+      if (runDoc?.date_to) {
+        nextFilters = { ...nextFilters, date_to: String(runDoc.date_to).slice(0, 10) };
+      }
+      setDraft(nextFilters);
+      setFilters(nextFilters);
+
+      if (runId) {
+        setActiveRunId(runId);
+        setRunStatus(runDoc);
+        evalSyncEvalUrl({ runId, filters: nextFilters });
+        const state = String(runDoc?.status || '').toLowerCase();
+        if (state === 'running' || state === 'queued') connectRun(runId);
+        else if (tweaks?.evalAutoRun !== false) loadData(nextFilters, 1, 1, '', runId);
+      } else if (tweaks?.evalAutoRun !== false) {
+        loadData(nextFilters, 1, 1, '', '');
       }
     };
     boot();
@@ -259,6 +405,7 @@ function EvalMonitor({ tweaks }) {
     setTradePage(1);
     setSelectedDay('');
     loadData(next, 1, 1, '', activeRunId);
+    evalSyncEvalUrl({ runId: activeRunId, filters: next });
   }
 
   function connectRun(runId) {
@@ -271,6 +418,7 @@ function EvalMonitor({ tweaks }) {
       if (['completed', 'failed'].includes(String(status.status || '').toLowerCase())) {
         if (pollRef.current) window.clearInterval(pollRef.current);
         setWsState('disconnected');
+        refreshRunsList(filters.dataset);
         loadData(filters, 1, 1, '', runId);
       }
     }).catch(() => undefined);
@@ -323,10 +471,15 @@ function EvalMonitor({ tweaks }) {
     };
     try {
       const result = await evalPost('/api/strategy/evaluation/runs', payload);
-      setActiveRunId(result.run_id || '');
+      const runId = String(result.run_id || '').trim();
+      setActiveRunId(runId);
       setRunStatus(result);
-      setFilters({ ...draft });
-      connectRun(result.run_id);
+      const next = { ...draft };
+      setFilters(next);
+      setDraft(next);
+      evalSyncEvalUrl({ runId, filters: next });
+      refreshRunsList(next.dataset);
+      connectRun(runId);
     } catch (err) {
       setRunStatus({ status: 'failed', error: err.message || String(err), progress_pct: 0 });
       setError(err.message || String(err));
@@ -415,6 +568,77 @@ function EvalMonitor({ tweaks }) {
         </div>
       </div>
 
+      <div className="panel eval-runs-panel">
+        <div className="panel-head">
+          <div className="panel-title">Replay runs</div>
+          <div className="panel-actions">
+            <button type="button" className="btn sm" onClick={() => refreshRunsList(filters.dataset)} disabled={runsLoading}>
+              {runsLoading ? 'Refreshing…' : 'Refresh list'}
+            </button>
+          </div>
+        </div>
+        <div className="panel-body">
+          <div className="eval-runs-row">
+            <label className="field eval-run-picker">
+              <span className="field-label">Select run</span>
+              <select
+                className="inp"
+                value={activeRunId}
+                onChange={e => {
+                  const runId = String(e.target.value || '').trim();
+                  const run = (runs || []).find(r => String(r.run_id || '') === runId);
+                  if (run) selectRun(run);
+                }}
+              >
+                <option value="">{runs.length ? '— pick a replay run —' : '— no runs yet —'}</option>
+                {(runs || []).map(run => (
+                  <option key={run.run_id} value={run.run_id}>{evalRunOptionLabel(run)}</option>
+                ))}
+              </select>
+            </label>
+            {resolvedRunId && (
+              <>
+                <span className={`chip ${evalStatusChipClass(runStatus?.status)}`}>
+                  <span className="dot"></span>{String(runStatus?.status || 'unknown')}
+                </span>
+                <span className="eval-run-meta mono tiny" title={resolvedRunId}>
+                  {evalShortRunId(resolvedRunId)}
+                  {runStatus?.date_from && runStatus?.date_to ? ` · ${String(runStatus.date_from).slice(0, 10)}→${String(runStatus.date_to).slice(0, 10)}` : ''}
+                  {runStatus?.trade_count != null ? ` · ${runStatus.trade_count} trades` : ''}
+                </span>
+                <button type="button" className="btn sm" onClick={() => evalCopyText(resolvedRunId)}>Copy run ID</button>
+                <button type="button" className="btn sm" onClick={() => evalCopyText(window.location.href)}>Copy link</button>
+              </>
+            )}
+          </div>
+          <p className="muted eval-runs-hint">
+            Pick a run from the list (or open a direct link with <code>?mode=eval&amp;run_id=…&amp;date_from=…&amp;date_to=…</code>).
+            Metrics load for that run&apos;s date range — not the default January window.
+          </p>
+        </div>
+      </div>
+
+      {showNoRunsHint && (
+        <div className="panel eval-empty-panel">
+          <div className="panel-body">
+            <strong>No replay runs found.</strong>
+            <p className="muted">Set a date range below and click <strong>Run Replay</strong>, or wait for an in-flight replay to finish then hit Refresh list.</p>
+          </div>
+        </div>
+      )}
+
+      {showEmptyRun && (
+        <div className="panel eval-empty-panel">
+          <div className="panel-body">
+            <strong>Run selected but no closed trades in this window.</strong>
+            <p className="muted">
+              Run <code>{evalShortRunId(resolvedRunId)}</code> may still be running, failed, or used a strategy profile that did not trade in {filters.date_from}→{filters.date_to}.
+              Try Refresh list after completion, or widen the date range to match the run.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="panel">
         <div className="panel-body">
           <div className="eval-filter-bar">
@@ -436,12 +660,6 @@ function EvalMonitor({ tweaks }) {
             <button className="btn primary" onClick={applyFilters}>Apply</button>
             <button className="btn" onClick={runReplay}>Run Replay</button>
           </div>
-          {(activeRunId || summary?.resolved_run_id) && (
-            <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-              Replay run: <code>{activeRunId || summary?.resolved_run_id}</code>
-              {!activeRunId && summary?.resolved_run_id ? ' (auto)' : ''}
-            </div>
-          )}
           {error && <div className="muted" style={{ marginTop: 8, color: 'var(--neg)', fontSize: 12 }}>{error}</div>}
           {riskOpen && (
             <div className="eval-risk-grid">
