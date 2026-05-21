@@ -12,3 +12,6 @@ def test_build_profiles_catalog_includes_debit_multi():
     assert "R2_TOP3_LONG_CE" in debit["regime_entry_map"]["TRENDING"]
     assert "R1_TOP3_LONG_PE" in debit["regime_entry_map"]["SIDEWAYS"]
     assert payload["default_operator_profile_id"] == "debit_multi_v1"
+    assert set(debit["entry_strategy_ids"]) == {"R1_TOP3_LONG_PE", "R2_TOP3_LONG_CE"}
+    assert "ORB" in debit["exit_strategies"]
+    assert "ORB" not in debit["entry_strategy_ids"]

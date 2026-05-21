@@ -70,12 +70,13 @@ def build_profiles_catalog() -> dict:
         exit_strategies = get_exit_strategies(profile_id)
         risk = get_risk_config(profile_id)
         meta = _PROFILE_META.get(profile_id, {})
-        entry_ids: set[str] = set(exit_strategies)
+        entry_ids: set[str] = set()
         for strategies in regime_map.values():
             for sid in strategies:
                 if sid and sid != "IV_FILTER":
                     entry_ids.add(sid)
         all_strategies.update(entry_ids)
+        all_strategies.update(exit_strategies)
         profiles.append(
             {
                 "profile_id": profile_id,

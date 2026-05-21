@@ -89,22 +89,20 @@ function evalNormalizeBreakdownRows(rows, keyField) {
   });
 }
 
-function evalProfileStrategyIds(profile) {
+/** Entry playbooks only (regime map). Excludes ORB/OI exit helpers from exit_strategies. */
+function evalProfileEntryStrategyIds(profile) {
   if (!profile) return [];
   const ids = new Set();
-  (profile.entry_strategy_ids || []).forEach(s => { if (s && s !== 'IV_FILTER') ids.add(s); });
-  if (!ids.size) {
-    Object.values(profile.regime_entry_map || {}).forEach(strategies => {
-      (strategies || []).forEach(s => { if (s && s !== 'IV_FILTER') ids.add(s); });
-    });
-  }
+  Object.values(profile.regime_entry_map || {}).forEach(strategies => {
+    (strategies || []).forEach(s => { if (s && s !== 'IV_FILTER') ids.add(s); });
+  });
   return Array.from(ids).sort();
 }
 
 /** Display-filter options: active VM profile + strategies seen in this eval run (not full catalog). */
 function evalCollectStrategyIds(catalog, strategyRows, activeProfile, includeFullCatalog = false) {
   const ids = new Set();
-  evalProfileStrategyIds(activeProfile).forEach(s => ids.add(s));
+  evalProfileEntryStrategyIds(activeProfile).forEach(s => ids.add(s));
   (strategyRows || []).forEach(r => {
     const sid = r.entry_strategy || r.strategy;
     if (sid) ids.add(sid);
@@ -630,7 +628,8 @@ function EvalMonitor({ tweaks }) {
     vmProfile,
     strategyFilterAllCatalog
   );
-  const profileStrategyIds = evalProfileStrategyIds(vmProfile);
+  const profileEntryIds = evalProfileEntryStrategyIds(vmProfile);
+  const profileExitIds = (vmProfile?.exit_strategies || []).filter(s => s && s !== 'IV_FILTER');
   const appliedRangeLabel = filters.date_from && filters.date_to
     ? `${filters.date_from} → ${filters.date_to}`
     : '—';
@@ -758,6 +757,11 @@ function EvalMonitor({ tweaks }) {
                       </div>
                     ))}
                   </div>
+                  {(profile.exit_strategies || []).length > 0 && (
+                    <p className="muted tiny" style={{ marginTop: 6 }}>
+                      Exit helpers (not entry playbooks): {(profile.exit_strategies || []).join(', ')}
+                    </p>
+                  )}
                   {profile.risk_config && Object.keys(profile.risk_config).length > 0 && (
                     <p className="muted tiny" style={{ marginTop: 8 }}>
                       Risk: stop {(Number(profile.risk_config.stop_loss_pct || 0) * 100).toFixed(0)}%
@@ -943,7 +947,7 @@ function EvalMonitor({ tweaks }) {
               {strategyFilterAllCatalog
                 ? 'full trader book (all profiles)'
                 : vmProfile
-                  ? `${vmProfile.title || vmProfileId} (${profileStrategyIds.join(', ') || 'see book'}) + trades in this run`
+                  ? `${vmProfile.title || vmProfileId} entries: ${profileEntryIds.join(', ') || '—'}${profileExitIds.length ? ` · exit helpers: ${profileExitIds.join(', ')}` : ''}`
                   : 'trades in this run'}
             </strong>
             . Does not change the engine — only narrows tables below.
