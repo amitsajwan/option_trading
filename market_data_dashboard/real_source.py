@@ -488,7 +488,8 @@ def _position_to_trade(
         exit=round(exit_px, 2),
         entryIdx=entry_idx,
         exitIdx=exit_idx,
-        pnlPct=round(pnl_pct, 2),
+        # Keep full fractional precision; UI fmtPct multiplies by 100 at display.
+        pnlPct=pnl_pct,
         hold=_fmt_hold(entry_ts, exit_ts),
         signal=signal,
         entryReason=signal.reason,
@@ -743,6 +744,43 @@ def _build_session(
             signals.append(sig)
             if sid:
                 signal_by_id[sid] = sig
+
+    # Positions for this run_id may reference ENTRY rows in trade_signals that were
+    # written without run_id on the vote stream; load by signal_id + date.
+    missing_sids = sorted({
+        str(docs.get("signal_id") or "").strip()
+        for docs in position_map.values()
+        if str(docs.get("signal_id") or "").strip()
+        and str(docs.get("signal_id") or "").strip() not in signal_by_id
+    })
+    if missing_sids and coll_signals in db.list_collection_names():
+        signal_proj_backfill = {
+            "_id": 0,
+            "signal_id": 1,
+            "timestamp": 1,
+            "signal_type": 1,
+            "direction": 1,
+            "confidence": 1,
+            "regime": 1,
+            "reason": 1,
+            "decision_reason_code": 1,
+            "decision_metrics": 1,
+            "entry_strategy_name": 1,
+            "payload.signal": 1,
+        }
+        for doc in db[coll_signals].find(
+            {"trade_date_ist": trade_date, "signal_id": {"$in": missing_sids}},
+            signal_proj_backfill,
+        ).sort("timestamp", ASCENDING):
+            sig = _trade_signal_to_signal(doc, candle_ts_sorted)
+            if sig is None:
+                continue
+            sid = _extract_sid(doc)
+            if not sid:
+                continue
+            if sid in traded_signal_ids:
+                sig = sig.model_copy(update={"traded": True})
+            signal_by_id[sid] = sig
 
     trades: List[MonitorTrade] = []
     for pid, docs in position_map.items():
