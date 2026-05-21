@@ -12,6 +12,8 @@ set_kv() {
 }
 set_kv STRATEGY_ENGINE deterministic
 set_kv STRATEGY_PROFILE_ID playbook_v1_paper_v1
+RULE_PATH="${2:-/app/ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_thesis.json}"
+set_kv PLAYBOOK_V1_RULE_PATH "$RULE_PATH"
 set_kv STRATEGY_MIN_CONFIDENCE 0.50
 set_kv STRATEGY_ROLLOUT_STAGE_HISTORICAL paper
 set_kv STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL 1.0

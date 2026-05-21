@@ -1,6 +1,7 @@
 """Top-3/day short ATM CE from rules JSON — Playbook v1 runtime."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -129,6 +130,13 @@ class RuleTop3ShortCeStrategy(BaseStrategy):
         )
 
 
+def _resolve_playbook_rule_path() -> Path:
+    override = str(os.getenv("PLAYBOOK_V1_RULE_PATH") or "").strip()
+    if override:
+        return Path(override)
+    return DEFAULT_PLAYBOOK_RULE
+
+
 class PlaybookV1ShortCeStrategy(RuleTop3ShortCeStrategy):
     """Monthly winner (2026-05): thesis exit; profile playbook_v1_paper_v1."""
 
@@ -137,6 +145,6 @@ class PlaybookV1ShortCeStrategy(RuleTop3ShortCeStrategy):
     def __init__(self, *, rule_path: Optional[str] = None) -> None:
         super().__init__(
             rule_path=rule_path,
-            default_rule_path=DEFAULT_PLAYBOOK_RULE,
+            default_rule_path=_resolve_playbook_rule_path(),
             strategy_name=self.name,
         )
