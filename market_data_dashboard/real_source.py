@@ -538,6 +538,18 @@ def _latest_run_id_for_date(db: Any, trade_date: str) -> Optional[str]:
 
     runs_coll = str(os.getenv("MONGO_COLL_STRATEGY_EVAL_RUNS") or "strategy_eval_runs")
     try:
+        # Prefer a completed one-day eval replay for this exact session date.
+        doc = db[runs_coll].find_one(
+            {
+                "status": "completed",
+                "date_from": trade_date,
+                "date_to": trade_date,
+            },
+            {"run_id": 1},
+            sort=[("submitted_at", DESCENDING), ("_id", DESCENDING)],
+        )
+        if doc and doc.get("run_id"):
+            return str(doc["run_id"]).strip() or None
         doc = db[runs_coll].find_one(
             {
                 "status": "completed",
@@ -545,7 +557,7 @@ def _latest_run_id_for_date(db: Any, trade_date: str) -> Optional[str]:
                 "date_to": {"$gte": trade_date},
             },
             {"run_id": 1},
-            sort=[("_id", -1)],
+            sort=[("submitted_at", DESCENDING), ("_id", DESCENDING)],
         )
         if doc and doc.get("run_id"):
             return str(doc["run_id"]).strip() or None
@@ -799,9 +811,10 @@ class MongoSource:
     COLL_SIGNALS = os.getenv("MONGO_COLL_TRADE_SIGNALS_HISTORICAL", "trade_signals_historical")
     COLL_POSITIONS = os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL", "strategy_positions_historical")
 
-    def __init__(self, db: Any, trade_date: str) -> None:
+    def __init__(self, db: Any, trade_date: str, run_id: Optional[str] = None) -> None:
         self._db = db
         self._trade_date = trade_date
+        self._run_id = str(run_id or "").strip() or None
         self._session: Optional[MonitorSession] = None
 
     def get_session(self) -> MonitorSession:
@@ -809,6 +822,7 @@ class MongoSource:
             self._session = _build_session(
                 self._db, self._trade_date,
                 self.COLL_SNAPSHOTS, self.COLL_VOTES, self.COLL_SIGNALS, self.COLL_POSITIONS,
+                run_id=self._run_id,
             )
         return self._session
 

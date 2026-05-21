@@ -1230,7 +1230,7 @@ function _fmtDateOption(d, tradeCounts, modelsByDate) {
 }
 
 function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, upToIdx,
-  total, availableDates, tradeCounts, modelsByDate, replayDate, onPlay, onPause, onSpeed, onScrub, onScrubEnd,
+  total, availableDates, tradeCounts, modelsByDate, replayDate, replayRunId, onPlay, onPause, onSpeed, onScrub, onScrubEnd,
   onReset, onDateChange, onModeSwitch, ws, datesLoading }) {
   const pnlCls = sessionPnl >= 0 ? 'pos' : 'neg';
   const pct = total > 0 ? ((upToIdx + 1) / total * 100).toFixed(0) : 0;
@@ -1266,9 +1266,13 @@ function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, u
         <span style={{fontFamily:'var(--f-mono)',fontSize:'9.5px',color:'var(--fg-3)',flexShrink:0}}>{pct}%</span>
         <select style={selStyle} value={replayDate}
           disabled={datesLoading || !availableDates.length}
-          onChange={e => onDateChange(e.target.value)}>
+          onChange={e => onDateChange(e.target.value, { runId: '' })}>
           {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts, modelsByDate)}</option>)}
         </select>
+        {replayRunId && (
+          <span style={{fontFamily:'var(--f-mono)',fontSize:'9px',color:'var(--fg-3)',flexShrink:0}}
+            title={replayRunId}>run {replayRunId.slice(0, 8)}…</span>
+        )}
       </div>
       <div className="t-status-cells" style={{flexShrink:0}}>
         <div className="t-scell big"><span className="k">P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
@@ -1279,13 +1283,39 @@ function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, u
   );
 }
 
+function _replayBootParams() {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    return {
+      date: String(p.get('date') || p.get('replay_date') || '').trim(),
+      runId: String(p.get('run_id') || '').trim(),
+    };
+  } catch (_) {
+    return { date: '', runId: '' };
+  }
+}
+
+function _syncReplayUrl({ date, runId }) {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('mode', 'replay');
+    if (date) url.searchParams.set('date', date);
+    else url.searchParams.delete('date');
+    if (runId) url.searchParams.set('run_id', runId);
+    else url.searchParams.delete('run_id');
+    window.history.replaceState({}, '', url);
+  } catch (_) { /* ignore */ }
+}
+
 // ── ReplayMonitorDark ────────────────────────────────────────────────────
 function ReplayMonitorDark({ onModeSwitch }) {
+  const _boot = _replayBootParams();
   const [session,        setSession]        = _s(null);
   const [upToIdx,        setUpToIdx]        = _s(0);
   const [isPlaying,      setIsPlaying]      = _s(false);
   const [speed,          setSpeed]          = _s(4);
-  const [replayDate,     setReplayDate]     = _s('');
+  const [replayDate,     setReplayDate]     = _s(_boot.date || '');
+  const [replayRunId,    setReplayRunId]    = _s(_boot.runId || '');
   const [replayError,    setReplayError]    = _s('');
   const [wsStatus,       setWsStatus]       = _s('idle');
   const [availableDates, setAvailableDates] = _s([]);
@@ -1305,7 +1335,8 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const wsRef         = _r(null);
   const upToIdxRef    = _r(0);
   const speedRef      = _r(4);
-  const replayDateRef = _r('');
+  const replayDateRef = _r(_boot.date || '');
+  const replayRunIdRef = _r(_boot.runId || '');
   const fitRef        = _r(null);
 
   // Diagnostics: load current model + available models, blocker-funnel aggregate
@@ -1347,12 +1378,19 @@ function ReplayMonitorDark({ onModeSwitch }) {
   _e(() => { upToIdxRef.current    = upToIdx;    }, [upToIdx]);
   _e(() => { speedRef.current      = speed;      }, [speed]);
   _e(() => { replayDateRef.current = replayDate; }, [replayDate]);
+  _e(() => { replayRunIdRef.current = replayRunId; }, [replayRunId]);
 
   function openReplaySocket() {
     if (wsRef.current) return;
     wsRef.current = TC.makeMonitorWS(
-      () => ({ action:'subscribe', mode:'replay', date:replayDateRef.current,
-               up_to_idx:upToIdxRef.current, playing:false, speed:speedRef.current }),
+      () => {
+        const sub = {
+          action:'subscribe', mode:'replay', date:replayDateRef.current,
+          up_to_idx:upToIdxRef.current, playing:false, speed:speedRef.current,
+        };
+        if (replayRunIdRef.current) sub.run_id = replayRunIdRef.current;
+        return sub;
+      },
       {
         onStatus: setWsStatus,
         onMessage(msg) {
@@ -1384,7 +1422,9 @@ function ReplayMonitorDark({ onModeSwitch }) {
         setTradeCounts(payload.trade_counts || {});
         setModelsByDate(payload.models_by_date || {});
         setDatesLoading(false);
-        if (payload.latest) handleDateChange(payload.latest);
+        const boot = _replayBootParams();
+        const pick = boot.date || payload.latest;
+        if (pick) handleDateChange(pick, { runId: boot.runId || replayRunIdRef.current });
         else setReplayError('No replay dates found in historical snapshots.');
       })
       .catch(err => { if (!alive) return; setDatesLoading(false); setReplayError('Failed to load dates: ' + err.message); });
@@ -1398,15 +1438,20 @@ function ReplayMonitorDark({ onModeSwitch }) {
   function handleScrub(idx){ setUpToIdx(idx); }
   function handleScrubEnd(idx) { setUpToIdx(idx); setIsPlaying(false); sendControl({ seek:idx, play:false }); }
   function handleReset()   { setUpToIdx(0); setIsPlaying(false); sendControl({ seek:0, play:false }); }
-  function handleDateChange(newDate) {
+  function handleDateChange(newDate, opts = {}) {
     if (!newDate) return;
+    const nextRunId = opts.runId !== undefined ? String(opts.runId || '').trim() : replayRunIdRef.current;
     setReplayDate(newDate); replayDateRef.current = newDate;
+    setReplayRunId(nextRunId); replayRunIdRef.current = nextRunId;
+    _syncReplayUrl({ date: newDate, runId: nextRunId });
     setReplayError(''); setIsPlaying(false);
     setSession(null); setUpToIdx(0);
     openReplaySocket();
-    const sent = wsRef.current && wsRef.current.send({
+    const sub = {
       action:'subscribe', mode:'replay', date:newDate, up_to_idx:0, playing:false, speed:speedRef.current,
-    });
+    };
+    if (nextRunId) sub.run_id = nextRunId;
+    const sent = wsRef.current && wsRef.current.send(sub);
     if (!sent) setWsStatus('connecting');
   }
   // keyboard nav
@@ -1450,7 +1495,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
             <span style={{fontFamily:'var(--f-mono)',fontSize:'10px',color:'var(--fg-3)'}}>Date</span>
             <select style={selStyle} value={replayDate}
               disabled={datesLoading || !availableDates.length}
-              onChange={e => handleDateChange(e.target.value)}>
+              onChange={e => handleDateChange(e.target.value, { runId: '' })}>
               {!replayDate && <option value="">{datesLoading ? 'Loading…' : 'Select date'}</option>}
               {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts, modelsByDate)}</option>)}
             </select>
@@ -1501,6 +1546,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
         sessionPnl={sessionPnl} tradesCount={trades.length} winRate={winRate}
         isPlaying={isPlaying} speed={speed} upToIdx={upToIdx} total={candles.length}
         availableDates={availableDates} tradeCounts={tradeCounts} modelsByDate={modelsByDate} replayDate={replayDate}
+        replayRunId={replayRunId || session.runId || ''}
         onPlay={handlePlay} onPause={handlePause} onSpeed={handleSpeed}
         onScrub={handleScrub} onScrubEnd={handleScrubEnd} onReset={handleReset}
         onDateChange={handleDateChange} onModeSwitch={onModeSwitch}
@@ -1552,7 +1598,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
                       date: replayDate, onRefresh: fetchDiag,
                       onTimelineFilterChange: setTlOutcome,
                       onTimelineCollapseChange: setTlCollapse,
-                      activeRunId: session && session.runId ? session.runId : null }}
+                      activeRunId: replayRunId || (session && session.runId ? session.runId : null) }}
             />
           </div>
 

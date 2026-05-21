@@ -138,6 +138,21 @@ function evalRunOptionLabel(run) {
   return [id, `${from}→${to}`, status, trades].filter(Boolean).join(' · ');
 }
 
+function evalReplayDeepLink({ runId, dateFrom, dateTo }) {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('mode', 'replay');
+    const day = String(dateFrom || dateTo || '').slice(0, 10);
+    if (day) url.searchParams.set('date', day);
+    else url.searchParams.delete('date');
+    if (runId) url.searchParams.set('run_id', runId);
+    else url.searchParams.delete('run_id');
+    return url.toString();
+  } catch (_) {
+    return '/app/?mode=replay';
+  }
+}
+
 function evalSyncEvalUrl({ runId, filters }) {
   try {
     const url = new URL(window.location.href);
@@ -621,6 +636,18 @@ function EvalMonitor({ tweaks }) {
                 </span>
                 <button type="button" className="btn sm" onClick={() => evalCopyText(resolvedRunId)}>Copy run ID</button>
                 <button type="button" className="btn sm" onClick={() => evalCopyText(window.location.href)}>Copy link</button>
+                {resolvedRunId && runStatus?.date_from && (
+                  <a
+                    className="btn sm"
+                    href={evalReplayDeepLink({
+                      runId: resolvedRunId,
+                      dateFrom: runStatus.date_from,
+                      dateTo: runStatus.date_to,
+                    })}
+                  >
+                    Open in Replay
+                  </a>
+                )}
               </>
             )}
           </div>

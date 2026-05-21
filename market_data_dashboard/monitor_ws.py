@@ -174,6 +174,7 @@ class DashboardMonitorRouter:
         self,
         mode: str = Query("live", description="live or replay"),
         date: Optional[str] = Query(None, description="Replay date YYYY-MM-DD"),
+        run_id: Optional[str] = Query(None, description="Historical eval run_id (scopes trades/votes)"),
         up_to_idx: Optional[int] = Query(None, description="Replay bar index"),
     ) -> JSONResponse:
         db = _make_db()
@@ -191,7 +192,12 @@ class DashboardMonitorRouter:
                 timestamp=_now_iso_ist(),
             )
         else:
-            source = MongoSource(db=db, trade_date=_resolve_date(db, date))
+            resolved_run = str(run_id or "").strip() or None
+            source = MongoSource(
+                db=db,
+                trade_date=_resolve_date(db, date),
+                run_id=resolved_run,
+            )
             state = _ReplaySessionState(source, up_to_idx=up_to_idx)
             kpi = _build_kpi_replay(state)
             snap = MonitorSnapshot(
@@ -261,6 +267,7 @@ class DashboardMonitorRouter:
 
                     mode = str(msg.get("mode") or "live").strip().lower()
                     date_str = str(msg.get("date") or "").strip() or None
+                    run_id_str = str(msg.get("run_id") or "").strip() or None
 
                     try:
                         db = _make_db()
@@ -269,7 +276,11 @@ class DashboardMonitorRouter:
                             state = _LiveSessionState(src)
                             kpi = _build_kpi_live(state)
                         else:
-                            src = MongoSource(db=db, trade_date=_resolve_date(db, date_str))
+                            src = MongoSource(
+                                db=db,
+                                trade_date=_resolve_date(db, date_str),
+                                run_id=run_id_str,
+                            )
                             up_to = msg.get("up_to_idx")
                             state = _ReplaySessionState(src, up_to_idx=int(up_to) if up_to is not None else None)
                             state.is_playing = bool(msg.get("playing", False))
