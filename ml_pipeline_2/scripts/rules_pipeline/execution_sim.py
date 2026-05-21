@@ -58,12 +58,34 @@ def _get_premium(row, direction: str) -> Optional[float]:
     return float(val)
 
 
+def _underlying_adverse(
+    df: pd.DataFrame,
+    idx: int,
+    entry_idx: int,
+    direction: str,
+    underlying_stop_pct: float,
+) -> bool:
+    if underlying_stop_pct <= 0 or "px_fut_close" not in df.columns:
+        return False
+    entry_fut = pd.to_numeric(df.iloc[entry_idx]["px_fut_close"], errors="coerce")
+    curr_fut = pd.to_numeric(df.iloc[idx]["px_fut_close"], errors="coerce")
+    if pd.isna(entry_fut) or pd.isna(curr_fut) or entry_fut <= 0:
+        return False
+    move = (float(curr_fut) - float(entry_fut)) / float(entry_fut)
+    if _is_short(direction):
+        return move > underlying_stop_pct
+    return move < -underlying_stop_pct
+
+
 def _evaluate_exit_conditions(
     df: pd.DataFrame,
     idx: int,
     exit_cfg: ExitConfig,
     entry_premium: float,
     direction: str,
+    *,
+    entry_idx: int,
+    mfe: float,
 ) -> Optional[str]:
     row = df.iloc[idx]
     premium = _get_premium(row, direction)
@@ -72,10 +94,22 @@ def _evaluate_exit_conditions(
 
     pnl = _position_pnl(entry_premium, premium, direction)
 
+    if exit_cfg.underlying_stop_pct is not None:
+        if _underlying_adverse(df, idx, entry_idx, direction, exit_cfg.underlying_stop_pct):
+            return "underlying_stop"
+
     if pnl <= -exit_cfg.stop_pct / 100:
         return "stop_loss"
     if pnl >= exit_cfg.target_pct / 100:
         return "target"
+
+    if (
+        exit_cfg.trail_activation_pct is not None
+        and exit_cfg.trail_giveback_pct is not None
+        and mfe >= exit_cfg.trail_activation_pct / 100
+        and pnl <= mfe - exit_cfg.trail_giveback_pct / 100
+    ):
+        return "trail_stop"
 
     if exit_cfg.signal_exits:
         # Slice preserves all columns + index, so cross-column conditions
@@ -194,7 +228,9 @@ def _walk_exit(
             mfe = max(mfe, pnl)
             mae = min(mae, pnl)
 
-        reason = _evaluate_exit_conditions(df, j, exit_cfg, entry_premium, direction)
+        reason = _evaluate_exit_conditions(
+            df, j, exit_cfg, entry_premium, direction, entry_idx=entry_idx, mfe=mfe,
+        )
         if reason:
             return minute, premium, reason, mfe, mae
 

@@ -8,6 +8,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from ..contracts import ExitReason, PositionContext, RiskContext, SignalType, TradeSignal
+from ..engines.playbook_brain import PLAYBOOK_EXIT_KEY, evaluate_playbook_exit
 from ..engines.snapshot_accessor import SnapshotAccessor
 from .position_factory import PositionFactory
 
@@ -77,7 +78,7 @@ class PositionTracker:
             current_premium = position.current_premium if position.current_premium > 0 else position.entry_premium
 
         position.current_premium = current_premium
-        position.pnl_pct = (current_premium - position.entry_premium) / position.entry_premium
+        position.pnl_pct = self._signed_pnl_pct(position, current_premium)
         position.mfe_pct = max(position.mfe_pct, position.pnl_pct)
         position.mae_pct = min(position.mae_pct, position.pnl_pct)
         position.high_water_premium = max(position.high_water_premium, current_premium)
@@ -88,6 +89,11 @@ class PositionTracker:
 
         exit_reason: Optional[ExitReason] = None
         exit_trigger = None
+        has_playbook = isinstance(position.playbook_exit_policy, dict)
+        if forced_exit_reason is None and has_playbook:
+            playbook_hit = evaluate_playbook_exit(position, snap)
+            if playbook_hit is not None:
+                exit_reason, exit_trigger = playbook_hit
         if forced_exit_reason is not None:
             exit_reason = forced_exit_reason
             exit_trigger = "forced"
@@ -97,19 +103,19 @@ class PositionTracker:
         elif self._minute_of_day(snap) >= HARD_CLOSE_MINUTE:
             exit_reason = ExitReason.TIME_STOP
             exit_trigger = "hard_close"
-        elif position.underlying_stop_pct is not None and self._is_underlying_stop_hit(position, current_futures_price):
+        elif not has_playbook and position.underlying_stop_pct is not None and self._is_underlying_stop_hit(position, current_futures_price):
             exit_reason = ExitReason.STOP_LOSS
             exit_trigger = "underlying_stop"
-        elif self._is_stop_hit(position, current_premium):
+        elif not has_playbook and self._is_premium_stop_hit(position, current_premium):
             exit_reason = self._resolve_stop_exit_reason(position)
             exit_trigger = "premium_stop"
-        elif position.underlying_target_pct is not None and self._is_underlying_target_hit(position, current_futures_price):
+        elif not has_playbook and position.underlying_target_pct is not None and self._is_underlying_target_hit(position, current_futures_price):
             exit_reason = ExitReason.TARGET_HIT
             exit_trigger = "underlying_target"
-        elif position.target_pct > 0 and position.pnl_pct >= position.target_pct:
+        elif not has_playbook and position.target_pct > 0 and position.pnl_pct >= position.target_pct:
             exit_reason = ExitReason.TARGET_HIT
             exit_trigger = "premium_target"
-        elif position.max_hold_bars is not None and position.bars_held >= int(position.max_hold_bars):
+        elif not has_playbook and position.max_hold_bars is not None and position.bars_held >= int(position.max_hold_bars):
             exit_reason = ExitReason.TIME_STOP
             exit_trigger = "max_hold"
         elif self._minute_of_day(snap) >= SOFT_CLOSE_MINUTE:
@@ -177,7 +183,23 @@ class PositionTracker:
             return current_futures_price <= position.entry_futures_price * (1.0 - target_pct)
         return False
 
-    def _is_stop_hit(self, position: PositionContext, current_premium: float) -> bool:
+    @staticmethod
+    def _is_short(position: PositionContext) -> bool:
+        return str(position.position_side or "LONG").strip().upper() == "SHORT"
+
+    @staticmethod
+    def _signed_pnl_pct(position: PositionContext, current_premium: float) -> float:
+        if position.entry_premium <= 0:
+            return 0.0
+        if PositionTracker._is_short(position):
+            return (position.entry_premium - current_premium) / position.entry_premium
+        return (current_premium - position.entry_premium) / position.entry_premium
+
+    def _is_premium_stop_hit(self, position: PositionContext, current_premium: float) -> bool:
+        if self._is_short(position):
+            if position.stop_loss_pct <= 0:
+                return False
+            return self._signed_pnl_pct(position, current_premium) <= -float(position.stop_loss_pct)
         stop_price = position.stop_price
         if stop_price is None or stop_price <= 0:
             return False

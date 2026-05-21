@@ -55,6 +55,7 @@ class PositionContext:
     mae_pct: float = 0.0
     bars_held: int = 0
     max_hold_bars: Optional[int] = None
+    position_side: str = "LONG"
     stop_loss_pct: float = 0.40
     stop_price: Optional[float] = None
     high_water_premium: float = 0.0
@@ -91,6 +92,7 @@ class PositionContext:
     underlying_stop_pct: Optional[float] = None
     underlying_target_pct: Optional[float] = None
     risk_basis: Optional[str] = None
+    playbook_exit_policy: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -161,6 +163,7 @@ class TradeSignal:
     expiry: Optional[date] = None
     entry_premium: Optional[float] = None
     max_hold_bars: Optional[int] = None
+    position_side: str = "LONG"
     stop_loss_pct: float = 0.40
     target_pct: float = 0.80
     trailing_enabled: bool = False
@@ -195,6 +198,7 @@ class TradeSignal:
     underlying_stop_pct: Optional[float] = None
     underlying_target_pct: Optional[float] = None
     risk_basis: Optional[str] = None
+    playbook_exit_policy: Optional[dict[str, Any]] = None
 
 
 class StrategyEngine(ABC):

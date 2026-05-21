@@ -22,6 +22,29 @@ const EVAL_DEFAULTS = {
   trailing_lock_breakeven: true,
 };
 
+const EVAL_R1S_TOP3_PRESET = {
+  date_from: '2024-05-01',
+  date_to: '2024-07-31',
+  strategy: 'R1S_TOP3_SHORT_CE',
+  stop_loss_pct: 100,
+  target_pct: 50,
+  trailing_enabled: false,
+  trailing_activation_pct: 0,
+  trailing_offset_pct: 0,
+  trailing_lock_breakeven: false,
+};
+
+function evalDefaultsFromTweaks(tweaks) {
+  const base = { ...EVAL_DEFAULTS, dataset: tweaks?.evalDefaultDataset || 'historical' };
+  if (tweaks?.evalPreset === 'r1s_top3') {
+    return { ...base, ...EVAL_R1S_TOP3_PRESET };
+  }
+  if ((tweaks?.evalDefaultStrategy || '').trim()) {
+    base.strategy = String(tweaks.evalDefaultStrategy).trim();
+  }
+  return base;
+}
+
 function evalNum(v, digits = 2) {
   if (v === null || v === undefined || Number.isNaN(Number(v))) return '--';
   return Number(v).toLocaleString(undefined, { maximumFractionDigits: digits });
@@ -135,8 +158,8 @@ function buildBarOption(points) {
 
 function EvalMonitor({ tweaks }) {
   const chartHeight = Number(tweaks?.evalChartHeight || 280);
-  const [draft, setDraft] = _evalUseState({ ...EVAL_DEFAULTS, dataset: tweaks?.evalDefaultDataset || 'historical' });
-  const [filters, setFilters] = _evalUseState({ ...EVAL_DEFAULTS, dataset: tweaks?.evalDefaultDataset || 'historical' });
+  const [draft, setDraft] = _evalUseState(() => evalDefaultsFromTweaks(tweaks));
+  const [filters, setFilters] = _evalUseState(() => evalDefaultsFromTweaks(tweaks));
   const [riskOpen, setRiskOpen] = _evalUseState(false);
   const [summary, setSummary] = _evalUseState(null);
   const [equity, setEquity] = _evalUseState(null);
@@ -189,12 +212,27 @@ function EvalMonitor({ tweaks }) {
   }
 
   _evalUseEffect(() => {
-    if (tweaks?.evalAutoRun !== false) loadData(filters, 1, 1, '');
+    let cancelled = false;
+    const boot = async () => {
+      let runId = '';
+      try {
+        const latest = await evalGet('/api/strategy/evaluation/runs/latest?dataset=historical&status=completed');
+        runId = String(latest?.run_id || '').trim();
+        if (!cancelled && runId) setActiveRunId(runId);
+      } catch (_) {
+        runId = '';
+      }
+      if (!cancelled && tweaks?.evalAutoRun !== false) {
+        loadData(filters, 1, 1, '', runId);
+      }
+    };
+    boot();
     evalGet('/api/trading/models').then(payload => {
       const ready = (payload.models || []).filter(m => m.ready_to_run);
       setModels(ready);
       if (ready.length) setFeatureModel(ready[0].instance_key);
     }).catch(() => setModels([]));
+    return () => { cancelled = true; };
   }, []);
 
   _evalUseEffect(() => {
@@ -220,7 +258,7 @@ function EvalMonitor({ tweaks }) {
     setDayPage(1);
     setTradePage(1);
     setSelectedDay('');
-    loadData(next, 1, 1, '');
+    loadData(next, 1, 1, '', activeRunId);
   }
 
   function connectRun(runId) {
@@ -386,9 +424,24 @@ function EvalMonitor({ tweaks }) {
             <label className="field"><span className="field-label">Strategy</span><input className="inp" value={draft.strategy} onChange={e => setDraft({ ...draft, strategy: e.target.value })} placeholder="ORB" /></label>
             <label className="field"><span className="field-label">Regime</span><input className="inp" value={draft.regime} onChange={e => setDraft({ ...draft, regime: e.target.value })} placeholder="TRENDING" /></label>
             <button className="btn" onClick={() => setRiskOpen(v => !v)}>{riskOpen ? 'Hide Risk' : 'Risk'}</button>
+            <button className="btn" type="button" onClick={() => {
+              const next = { ...draft, ...EVAL_R1S_TOP3_PRESET };
+              setDraft(next);
+              setFilters(next);
+              setDayPage(1);
+              setTradePage(1);
+              setSelectedDay('');
+              loadData(next, 1, 1, '', activeRunId);
+            }}>R1S preset</button>
             <button className="btn primary" onClick={applyFilters}>Apply</button>
             <button className="btn" onClick={runReplay}>Run Replay</button>
           </div>
+          {(activeRunId || summary?.resolved_run_id) && (
+            <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+              Replay run: <code>{activeRunId || summary?.resolved_run_id}</code>
+              {!activeRunId && summary?.resolved_run_id ? ' (auto)' : ''}
+            </div>
+          )}
           {error && <div className="muted" style={{ marginTop: 8, color: 'var(--neg)', fontSize: 12 }}>{error}</div>}
           {riskOpen && (
             <div className="eval-risk-grid">

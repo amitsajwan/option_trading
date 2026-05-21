@@ -119,6 +119,15 @@ class SnapshotAccessor:
         return self._b(self._payload.get("ctx_is_expiry_day"))
 
     @property
+    def ctx_is_high_vix_day(self) -> Optional[float]:
+        return self._first_present_float(
+            self._payload.get("ctx_is_high_vix_day"),
+            self._sc.get("ctx_is_high_vix_day"),
+            self._vix.get("ctx_is_high_vix_day"),
+            self._payload.get("is_high_vix_day"),
+        )
+
+    @property
     def session_phase(self) -> str:
         phase = str(self._sc.get("session_phase") or self._payload.get("session_phase") or "").strip()
         if phase:
@@ -259,6 +268,40 @@ class SnapshotAccessor:
     @property
     def or_ready(self) -> bool:
         return self.orh is not None and self.orl is not None
+
+    def _ctx_float(self, *keys: str) -> Optional[float]:
+        for key in keys:
+            if key in self._payload:
+                parsed = self._f(self._payload.get(key))
+                if parsed is not None:
+                    return parsed
+        return None
+
+    @property
+    def ctx_opening_range_ready(self) -> Optional[float]:
+        return self._ctx_float("ctx_opening_range_ready", "opening_range_ready")
+
+    @property
+    def ctx_opening_range_breakout_down(self) -> Optional[float]:
+        return self._ctx_float(
+            "ctx_opening_range_breakout_down",
+            "opening_range_breakout_down",
+        )
+
+    @property
+    def ctx_opening_range_breakout_up(self) -> Optional[float]:
+        return self._ctx_float(
+            "ctx_opening_range_breakout_up",
+            "opening_range_breakout_up",
+        )
+
+    @property
+    def ctx_ret_5m(self) -> Optional[float]:
+        return self._ctx_float("ret_5m", "ctx_ret_5m")
+
+    @property
+    def ctx_vwap_distance(self) -> Optional[float]:
+        return self._ctx_float("vwap_distance", "ctx_vwap_distance")
 
     @property
     def vix_current(self) -> Optional[float]:

@@ -324,7 +324,7 @@ class StrategyEvaluationService:
         doc = self._db()[self._runs_collection_name()].find_one(
             {"dataset": mode, "status": state},
             {"_id": 0},
-            sort=[("submitted_at", DESCENDING)],
+            sort=[("ended_at", DESCENDING), ("submitted_at", DESCENDING)],
         )
         return doc if isinstance(doc, dict) else None
 
@@ -472,9 +472,22 @@ class StrategyEvaluationService:
             if not found:
                 raise ValueError(f"run_id '{requested}' not found in data collections")
             return requested, {"run_id": requested, "dataset": mode, "status": "completed", "discovered": True}
-        # No run_id specified — find the most recent run from data collections.
-        names = self._collection_names(mode)
+        # No run_id specified — prefer the latest completed registry run so eval
+        # queries match the most recent orchestrated replay (not an older run that
+        # happens to have the newest trade_date_ist in Mongo).
         db = self._db()
+        try:
+            registered = db[self._runs_collection_name()].find_one(
+                {"status": "completed", "dataset": mode},
+                {"_id": 0},
+                sort=[("ended_at", DESCENDING), ("submitted_at", DESCENDING)],
+            )
+            if isinstance(registered, dict) and registered.get("run_id"):
+                resolved = str(registered["run_id"]).strip()
+                return resolved, registered
+        except Exception:
+            pass
+        names = self._collection_names(mode)
         try:
             doc = db[names["positions"]].find_one(
                 {"run_id": {"$nin": [None, ""]}},
@@ -484,18 +497,6 @@ class StrategyEvaluationService:
             if isinstance(doc, dict) and doc.get("run_id"):
                 resolved = str(doc["run_id"]).strip()
                 return resolved, {"run_id": resolved, "dataset": mode, "status": "completed", "discovered": True}
-        except Exception:
-            pass
-        # Fallback: resolve from the run registry (covers zero-trade completed runs).
-        try:
-            registered = db[self._runs_collection_name()].find_one(
-                {"status": "completed", "dataset": mode},
-                sort=[("ended_at", -1)],
-            )
-            if isinstance(registered, dict) and registered.get("run_id"):
-                resolved = str(registered["run_id"]).strip()
-                registered.pop("_id", None)
-                return resolved, registered
         except Exception:
             pass
         raise ValueError("no historical replay data found")

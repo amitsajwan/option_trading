@@ -44,7 +44,16 @@ class PositionFactory:
         entry_futures_price = snap.fut_close
         underlying_stop_pct = float(signal.underlying_stop_pct) if signal.underlying_stop_pct is not None else None
         underlying_target_pct = float(signal.underlying_target_pct) if signal.underlying_target_pct is not None else None
+        position_side = str(signal.position_side or "LONG").strip().upper() or "LONG"
         stop_price = TrailingStopManager._hard_stop_price(premium, float(signal.stop_loss_pct))
+        if position_side == "SHORT" and premium > 0 and signal.stop_loss_pct > 0:
+            stop_price = premium * (1.0 + float(signal.stop_loss_pct))
+
+        playbook_exit_policy = (
+            dict(signal.playbook_exit_policy)
+            if isinstance(signal.playbook_exit_policy, dict)
+            else None
+        )
 
         return PositionContext(
             position_id=str(uuid.uuid4())[:8],
@@ -57,6 +66,7 @@ class PositionFactory:
             signal_id=str(signal.signal_id or "").strip() or None,
             lots=max(1, int(signal.max_lots or 1)),
             max_hold_bars=(max(1, int(signal.max_hold_bars)) if signal.max_hold_bars is not None else None),
+            position_side=position_side,
             current_premium=premium,
             stop_loss_pct=float(signal.stop_loss_pct),
             stop_price=stop_price,
@@ -101,4 +111,5 @@ class PositionFactory:
                 explicit=signal.strategy_profile_id,
                 engine_mode=engine_mode,
             ),
+            playbook_exit_policy=playbook_exit_policy,
         )

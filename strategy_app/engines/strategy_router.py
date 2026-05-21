@@ -28,6 +28,9 @@ from .strategies.all_strategies import (
     VWAPPullbackContinuationStrategy,
     VWAPReclaimStrategy,
 )
+from .strategies.r1s_top3_short_ce import R1sTop3ShortCeStrategy
+from .strategies.rule_top3_long_option import R1Top3LongPeStrategy, R2Top3LongCeStrategy
+from .strategies.rule_top3_short_ce import PlaybookV1ShortCeStrategy
 
 logger = logging.getLogger(__name__)
 NON_OWNER_EXIT_CONFIDENCE = 0.80
@@ -50,6 +53,10 @@ class StrategyRouter:
         self._iv_filter = IVRegimeFilter(extreme_iv_percentile=_extreme_iv)
         self._high_vol_orb = HighVolORBStrategy()
         self._prev_day = PrevDayLevelBreakout()
+        self._r1s_top3 = R1sTop3ShortCeStrategy()
+        self._playbook_v1 = PlaybookV1ShortCeStrategy()
+        self._r1_top3_pe = R1Top3LongPeStrategy()
+        self._r2_top3_ce = R2Top3LongCeStrategy()
         self._strategy_registry: dict[str, BaseStrategy] = {
             self._iv_filter.name: self._iv_filter,
             self._high_vol_orb.name: self._high_vol_orb,
@@ -63,6 +70,10 @@ class StrategyRouter:
             self._trader_composite.name: self._trader_composite,
             self._trader_v3_composite.name: self._trader_v3_composite,
             self._prev_day.name: self._prev_day,
+            self._r1s_top3.name: self._r1s_top3,
+            self._playbook_v1.name: self._playbook_v1,
+            self._r1_top3_pe.name: self._r1_top3_pe,
+            self._r2_top3_ce.name: self._r2_top3_ce,
         }
         self._cross_exit_helpers: dict[tuple[str, str], set[str]] = {
             ("PRE_EXPIRY", "OI_BUILDUP"): {"ORB"},

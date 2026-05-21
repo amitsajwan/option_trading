@@ -32,6 +32,7 @@ from ..logging.decision_trace import (
 )
 from ..position.tracker import PositionTracker
 from ..risk.config import PositionRiskConfig
+from .playbook_brain import PLAYBOOK_EXIT_KEY
 from ..risk.manager import RiskManager
 from .decision_annotation import (
     annotate_signal_contract as apply_signal_contract,
@@ -40,7 +41,15 @@ from .decision_annotation import (
     derive_reason_code,
 )
 from .entry_policy import EntryPolicy, EntryPolicyDecision, LongOptionEntryPolicy, PolicyConfig
-from .profiles import PRODUCTION_DEFAULT_PROFILE_ID
+from .profiles import (
+    PRODUCTION_DEFAULT_PROFILE_ID,
+    PROFILE_DEBIT_MULTI_V1,
+    PROFILE_R1S_TOP3_PAPER_V1,
+)
+
+_PROFILES_RELAX_REGIME_CONF = frozenset(
+    {PROFILE_R1S_TOP3_PAPER_V1, PROFILE_DEBIT_MULTI_V1}
+)
 from .regime import RegimeClassifier, RegimeSignal
 from .snapshot_accessor import SnapshotAccessor
 from .strategy_router import StrategyRouter
@@ -499,7 +508,10 @@ class DeterministicRuleEngine(StrategyEngine):
             logger.debug("entry blocked by direction conflict ce=%d pe=%d", len(ce_votes), len(pe_votes))
             return None
 
-        if regime_signal.confidence < 0.60:
+        if (
+            self._strategy_profile_id not in _PROFILES_RELAX_REGIME_CONF
+            and regime_signal.confidence < 0.60
+        ):
             logger.debug("entry blocked by low regime confidence=%.2f", regime_signal.confidence)
             return None
 
@@ -602,6 +614,27 @@ class DeterministicRuleEngine(StrategyEngine):
             best_vote.raw_signals["_post_halt_resume_boost_score"] = round(resume_boost, 3)
             best_vote.raw_signals["_policy_score_after_resume_boost"] = round(quality_score, 3)
         stop_loss_pct, target_pct, trailing_cfg = self._resolve_entry_risk(best_vote, policy_decision)
+        raw = best_vote.raw_signals if isinstance(best_vote.raw_signals, dict) else {}
+        underlying_stop_pct: Optional[float] = None
+        playbook_metrics: Optional[dict[str, Any]] = None
+        if raw.get("_playbook_brain"):
+            position_side = "SHORT"
+            max_hold_bars = int(raw.get("_max_hold_bars") or 45)
+            raw_underlying = raw.get("_underlying_stop_pct")
+            if raw_underlying is not None:
+                underlying_stop_pct = float(raw_underlying)
+            playbook_raw = raw.get(PLAYBOOK_EXIT_KEY)
+            if isinstance(playbook_raw, dict):
+                playbook_metrics = dict(playbook_raw)
+        elif raw.get("_r1s_short_ce"):
+            position_side = "SHORT"
+            max_hold_bars = 20
+        elif raw.get("_debit_long_option"):
+            position_side = "LONG"
+            max_hold_bars = 20
+        else:
+            position_side = "LONG"
+            max_hold_bars = None
         signal = TradeSignal(
             signal_id=str(uuid.uuid4())[:8],
             timestamp=snap.timestamp_or_now,
@@ -611,9 +644,17 @@ class DeterministicRuleEngine(StrategyEngine):
             strike=selected_strike,
             expiry=expiry,
             entry_premium=premium,
+            position_side=position_side,
+            max_hold_bars=max_hold_bars,
             stop_loss_pct=stop_loss_pct,
             target_pct=target_pct,
-            trailing_enabled=trailing_cfg.trailing_enabled,
+            underlying_stop_pct=underlying_stop_pct,
+            playbook_exit_policy=playbook_metrics,
+            trailing_enabled=(
+                False
+                if position_side == "SHORT" or raw.get("_playbook_brain")
+                else trailing_cfg.trailing_enabled
+            ),
             trailing_activation_pct=trailing_cfg.trailing_activation_pct,
             trailing_offset_pct=trailing_cfg.trailing_offset_pct,
             trailing_lock_breakeven=trailing_cfg.trailing_lock_breakeven,
@@ -643,14 +684,17 @@ class DeterministicRuleEngine(StrategyEngine):
             votes=all_votes,
         )
         entry_decision_mode = self._decision_mode_from_policy(policy_decision)
+        entry_metrics: dict[str, Any] = {
+            "confidence": float(combined_confidence),
+            "policy_score": (float(policy_decision.score) if policy_decision is not None else None),
+        }
+        if playbook_metrics is not None:
+            entry_metrics[PLAYBOOK_EXIT_KEY] = playbook_metrics
         self._annotate_signal_contract(
             signal,
             decision_mode=entry_decision_mode,
             decision_reason_code=self._reason_code_from_policy(policy_decision),
-            decision_metrics={
-                "confidence": float(combined_confidence),
-                "policy_score": (float(policy_decision.score) if policy_decision is not None else None),
-            },
+            decision_metrics=entry_metrics,
         )
 
         opened = self._tracker.open_position(signal, snap)
@@ -867,7 +911,10 @@ class DeterministicRuleEngine(StrategyEngine):
         pe_votes = [vote for vote in entry_votes if vote.direction == Direction.PE]
         if ce_votes and pe_votes and not self._entry_policy_can_resolve_direction_conflict():
             return "direction_conflict"
-        if regime_signal.confidence < 0.60:
+        if (
+            self._strategy_profile_id not in _PROFILES_RELAX_REGIME_CONF
+            and regime_signal.confidence < 0.60
+        ):
             return "regime_confidence"
         if not snap.is_valid_entry_phase:
             return "entry_phase"
