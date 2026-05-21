@@ -388,14 +388,15 @@ function EvalMonitor({ tweaks }) {
     loadData(filters, dayPage, tradePage, selectedDay);
   }, [dayPage, tradePage, selectedDay]);
 
-  // Fetch brain status once on mount (eval mode reads live brain state)
+  const brainMode = filters.dataset === 'historical' ? 'replay' : 'live';
+
   _evalUseEffect(() => {
     setBrainLoading(true);
-    fetch('/api/strategy/brain/status?mode=live')
+    fetch(`/api/strategy/brain/status?mode=${brainMode}`)
       .then(r => r.ok ? r.json() : Promise.resolve({ available: false, reason: `HTTP ${r.status}` }))
       .then(data => { setBrainData(data); setBrainLoading(false); })
       .catch(err => { setBrainError(err.message || String(err)); setBrainLoading(false); });
-  }, []);
+  }, [brainMode]);
 
   _evalUseEffect(() => {
     if (featureOpen && featureModel) loadFeatureData(featureModel);
@@ -706,7 +707,7 @@ function EvalMonitor({ tweaks }) {
         error={brainError}
         onRefresh={() => {
           setBrainLoading(true); setBrainError('');
-          fetch('/api/strategy/brain/status?mode=live')
+          fetch(`/api/strategy/brain/status?mode=${brainMode}`)
             .then(r => r.ok ? r.json() : Promise.resolve({ available: false }))
             .then(d => { setBrainData(d); setBrainLoading(false); })
             .catch(e => { setBrainError(e.message || String(e)); setBrainLoading(false); });

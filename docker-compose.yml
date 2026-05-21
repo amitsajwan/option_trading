@@ -278,6 +278,7 @@ services:
       retries: 3
     volumes:
       - ./.run:/app/.run
+      - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
 
   strategy_app:
@@ -349,6 +350,10 @@ services:
       STRATEGY_STRIKE_AFFORDABILITY_WEIGHT: "${STRATEGY_STRIKE_AFFORDABILITY_WEIGHT:-0.25}"
       STRATEGY_STRIKE_DISTANCE_PENALTY: "${STRATEGY_STRIKE_DISTANCE_PENALTY:-0.05}"
       STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-}"
+      BRAIN_ENABLED: "${BRAIN_ENABLED:-true}"
+      BRAIN_DAILY_FEATURES_PATH: "${BRAIN_DAILY_FEATURES_PATH:-/app/.data/ml_pipeline/daily_regime_features.json}"
+      BRAIN_CONSENSUS_MIN_AGREEING: "${BRAIN_CONSENSUS_MIN_AGREEING:-1}"
+      BRAIN_CONSENSUS_REQUIRE_DIRECTION: "${BRAIN_CONSENSUS_REQUIRE_DIRECTION:-false}"
     command:
       [
         "python",
@@ -379,6 +384,7 @@ services:
       ]
     volumes:
       - ./.run:/app/.run
+      - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
       - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
     healthcheck:
@@ -619,6 +625,10 @@ services:
       STRATEGY_STRIKE_AFFORDABILITY_WEIGHT: "${STRATEGY_STRIKE_AFFORDABILITY_WEIGHT:-0.25}"
       STRATEGY_STRIKE_DISTANCE_PENALTY: "${STRATEGY_STRIKE_DISTANCE_PENALTY:-0.05}"
       STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-}"
+      BRAIN_ENABLED: "${BRAIN_ENABLED:-true}"
+      BRAIN_DAILY_FEATURES_PATH: "${BRAIN_DAILY_FEATURES_PATH:-/app/.data/ml_pipeline/daily_regime_features.json}"
+      BRAIN_CONSENSUS_MIN_AGREEING: "${BRAIN_CONSENSUS_MIN_AGREEING:-1}"
+      BRAIN_CONSENSUS_REQUIRE_DIRECTION: "${BRAIN_CONSENSUS_REQUIRE_DIRECTION:-false}"
     command:
       [
         "python",
@@ -653,6 +663,7 @@ services:
       ]
     volumes:
       - ./.run:/app/.run
+      - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
       - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
     healthcheck:
