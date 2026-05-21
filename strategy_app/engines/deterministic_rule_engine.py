@@ -48,6 +48,7 @@ from .profiles import (
 )
 from ..brain.brain import BrainDecision, TradingBrain
 from ..brain.context import DayContext
+from ..engines.runtime_artifacts import resolve_runtime_artifact_paths
 
 _PROFILES_RELAX_REGIME_CONF = frozenset(
     {PROFILE_R1S_TOP3_PAPER_V1, PROFILE_DEBIT_MULTI_V1}
@@ -118,6 +119,7 @@ class DeterministicRuleEngine(StrategyEngine):
         self._run_id: Optional[str] = None
         self._brain: TradingBrain = TradingBrain.from_env()
         self._day_context: Optional[DayContext] = None
+        self._brain_state_path: Optional[Path] = None
         self._set_logger_context(None)
         logger.info(
             "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s brain_enabled=%s",
@@ -231,6 +233,7 @@ class DeterministicRuleEngine(StrategyEngine):
         # Must run before risk manager so carry-based consecutive_losses can
         # be used to initialise the risk context if needed.
         self._day_context = self._brain.morning_briefing(trade_date)
+        self._write_brain_state(trade_date)
         self._risk.on_session_start(trade_date)
         # Carry over consecutive losses from previous session into risk manager
         carry = self._day_context.session_carry
@@ -1234,7 +1237,7 @@ class DeterministicRuleEngine(StrategyEngine):
                 extra_metrics=compact_metrics(vote.decision_metrics),
             )
         final_outcome = "entry_taken" if signal is not None else ("blocked" if blocker is not None or warmup_blocked else "hold")
-        return builder.finalize(
+        trace = builder.finalize(
             final_outcome=final_outcome,
             primary_blocker_gate=("warmup" if warmup_blocked else blocker),
             summary_metrics={
@@ -1242,6 +1245,17 @@ class DeterministicRuleEngine(StrategyEngine):
                 "entry_vote_count": len([vote for vote in votes if vote.signal_type == SignalType.ENTRY]),
             },
         )
+        # Attach brain context to trace so the UI blocker funnel can show
+        # day_score and consensus details without a separate API call.
+        if self._day_context is not None:
+            trace["brain"] = {
+                "day_score": self._day_context.day_score.value,
+                "day_score_confidence": round(self._day_context.day_score_confidence, 4),
+                "day_score_reason": self._day_context.day_score_reason,
+                "size_multiplier": round(self._day_context.size_multiplier, 4),
+                "carry_consecutive_losses": self._day_context.session_carry.consecutive_losses_at_close,
+            }
+        return trace
 
     def _build_position_trace(
         self,
@@ -1346,6 +1360,26 @@ class DeterministicRuleEngine(StrategyEngine):
                 "pnl_pct": position.pnl_pct,
             },
         )
+
+    def _write_brain_state(self, trade_date: date) -> None:
+        """Write brain morning context to brain_state.json for dashboard observability."""
+        if self._day_context is None:
+            return
+        try:
+            paths = resolve_runtime_artifact_paths()
+            self._brain_state_path = paths.root / "brain_state.json"
+            payload = {
+                "trade_date": trade_date.isoformat(),
+                "brain_enabled": self._brain.enabled,
+                "day_context": self._day_context.to_dict(),
+            }
+            import json as _json
+            tmp = self._brain_state_path.with_name("brain_state.json.tmp")
+            self._brain_state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+            tmp.replace(self._brain_state_path)
+        except Exception as exc:
+            logger.warning("brain_state write failed error=%s", exc)
 
     def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor) -> None:
         if bool(vote.raw_signals.get("_lock_strike_selection")):
