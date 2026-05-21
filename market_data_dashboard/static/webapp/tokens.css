@@ -334,7 +334,48 @@ table { border-collapse: collapse; width: 100%; }
   gap: 8px;
   align-items: end;
 }
+.eval-filter-bar-wide {
+  grid-template-columns: repeat(4, minmax(120px, 1fr)) repeat(2, minmax(140px, 1fr)) repeat(5, auto);
+}
 .eval-filter-bar .field-label { white-space: nowrap; }
+.eval-trader-book-panel .eval-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.eval-profile-card {
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  padding: 12px 14px;
+  background: var(--paper);
+}
+.eval-profile-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft, rgba(47, 111, 235, 0.25));
+}
+.eval-profile-card.focus {
+  border-color: var(--pos);
+}
+.eval-profile-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.eval-profile-regimes {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.eval-profile-regime-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
 .eval-risk-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(110px, 1fr));

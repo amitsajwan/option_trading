@@ -34,6 +34,75 @@ const EVAL_R1S_TOP3_PRESET = {
   trailing_lock_breakeven: false,
 };
 
+const EVAL_DEBIT_MULTI_PRESET = {
+  date_from: '2024-10-31',
+  date_to: '2024-10-31',
+  strategy: '',
+  regime: '',
+  stop_loss_pct: 30,
+  target_pct: 60,
+  trailing_enabled: false,
+  trailing_activation_pct: 0,
+  trailing_offset_pct: 0,
+  trailing_lock_breakeven: false,
+};
+
+const EVAL_DATE_PRESETS = [
+  { id: '', label: 'Custom dates' },
+  { id: 'oct31_2024', label: '2024-10-31 (debit smoke day)', date_from: '2024-10-31', date_to: '2024-10-31' },
+  { id: 'may_jul_2024', label: 'May–Jul 2024', date_from: '2024-05-01', date_to: '2024-07-31' },
+  { id: 'jan_2024', label: 'Jan 2024', date_from: '2024-01-01', date_to: '2024-01-31' },
+  { id: 'q3_2024', label: 'Jul–Sep 2024', date_from: '2024-07-01', date_to: '2024-09-30' },
+];
+
+const EVAL_REGIME_OPTIONS = ['', 'TRENDING', 'SIDEWAYS', 'EXPIRY', 'PRE_EXPIRY', 'HIGH_VOL', 'AVOID'];
+
+function evalDatePresetId(from, to) {
+  const match = EVAL_DATE_PRESETS.find(p => p.date_from === from && p.date_to === to);
+  return match ? match.id : '';
+}
+
+function evalApplyDatePreset(draft, presetId) {
+  const preset = EVAL_DATE_PRESETS.find(p => p.id === presetId);
+  if (!preset || !preset.date_from) return draft;
+  return { ...draft, date_from: preset.date_from, date_to: preset.date_to };
+}
+
+function evalStrategyLabel(id) {
+  const text = String(id || '').trim();
+  if (!text) return 'All strategies';
+  return text.replace(/_/g, ' ');
+}
+
+function evalNormalizeBreakdownRows(rows, keyField) {
+  return (rows || []).map(row => {
+    const key = row[keyField] || row.strategy || row.regime || 'UNKNOWN';
+    return {
+      ...row,
+      [keyField]: key,
+      strategy: row.strategy || (keyField === 'entry_strategy' ? key : row.strategy),
+      regime: row.regime || (keyField === 'regime' ? key : row.regime),
+      avg_pnl_pct: row.avg_pnl_pct ?? row.avg_capital_pnl_pct,
+      total_pnl_pct: row.total_pnl_pct ?? row.total_capital_pnl_pct,
+      avg_option_pnl_pct: row.avg_option_pnl_pct ?? row.avg_trade_pnl_pct,
+    };
+  });
+}
+
+function evalCollectStrategyIds(catalog, strategyRows) {
+  const ids = new Set();
+  (catalog?.all_entry_strategy_ids || []).forEach(s => ids.add(s));
+  (strategyRows || []).forEach(r => {
+    const sid = r.entry_strategy || r.strategy;
+    if (sid) ids.add(sid);
+  });
+  return Array.from(ids).sort();
+}
+
+function evalProfileForId(catalog, profileId) {
+  return (catalog?.profiles || []).find(p => p.profile_id === profileId) || null;
+}
+
 function evalDefaultsFromTweaks(tweaks) {
   const base = { ...EVAL_DEFAULTS, dataset: tweaks?.evalDefaultDataset || 'historical' };
   if (tweaks?.evalPreset === 'r1s_top3') {
@@ -249,6 +318,10 @@ function EvalMonitor({ tweaks }) {
   const [models, setModels] = _evalUseState([]);
   const [featureModel, setFeatureModel] = _evalUseState('');
   const [featureData, setFeatureData] = _evalUseState(null);
+  const [profileCatalog, setProfileCatalog] = _evalUseState(null);
+  const [vmRuntime, setVmRuntime] = _evalUseState(null);
+  const [bookOpen, setBookOpen] = _evalUseState(true);
+  const [datePreset, setDatePreset] = _evalUseState('');
   const clientRef = _evalUseRef(null);
   const pollRef = _evalUseRef(null);
 
@@ -396,6 +469,10 @@ function EvalMonitor({ tweaks }) {
       setModels(ready);
       if (ready.length) setFeatureModel(ready[0].instance_key);
     }).catch(() => setModels([]));
+    evalGet('/api/strategy/profiles/catalog').then(setProfileCatalog).catch(() => setProfileCatalog(null));
+    evalGet('/api/strategy/current/state?mode=replay&latest_n=0')
+      .then(setVmRuntime)
+      .catch(() => setVmRuntime(null));
     return () => { cancelled = true; };
   }, []);
 
@@ -516,8 +593,27 @@ function EvalMonitor({ tweaks }) {
 
   const stopAnalysis = summary?.stop_analysis || {};
   const exitRows = Array.isArray(summary?.exit_reasons) ? summary.exit_reasons : [];
-  const strategyRows = Array.isArray(summary?.by_strategy) ? summary.by_strategy : [];
-  const regimeRows = Array.isArray(summary?.by_regime) ? summary.by_regime : [];
+  const strategyRows = evalNormalizeBreakdownRows(
+    Array.isArray(summary?.by_strategy) ? summary.by_strategy : [],
+    'entry_strategy'
+  );
+  const regimeRows = evalNormalizeBreakdownRows(
+    Array.isArray(summary?.by_regime) ? summary.by_regime : [],
+    'regime'
+  );
+  const strategyOptions = evalCollectStrategyIds(profileCatalog, strategyRows);
+  const vmProfileId = String(
+    vmRuntime?.runtime_config?.strategy_profile_id
+    || vmRuntime?.runtime_config?.model?.strategy_profile_id
+    || ''
+  ).trim();
+  const vmProfile = evalProfileForId(profileCatalog, vmProfileId);
+  const appliedRangeLabel = filters.date_from && filters.date_to
+    ? `${filters.date_from} → ${filters.date_to}`
+    : '—';
+  const runRangeLabel = runStatus?.date_from && runStatus?.date_to
+    ? `${String(runStatus.date_from).slice(0, 10)} → ${String(runStatus.date_to).slice(0, 10)}`
+    : appliedRangeLabel;
   const kpiItems = [
     { label: 'Closed Trades', value: summary?.counts?.closed_trades ?? '--', sub: loading ? 'loading' : 'trades' },
     { label: 'Win Rate', value: evalPct(summary?.overall?.win_rate), sub: 'closed' },
@@ -589,11 +685,71 @@ function EvalMonitor({ tweaks }) {
         <div>
           <div className="page-crumbs">Operator / Evaluation</div>
           <h1 className="page-title">Strategy Evaluation</h1>
-          <p className="page-sub">Offline research and backtesting in the Quiet Operator shell.</p>
+          <p className="page-sub">
+            Replay runs store trades by <code>run_id</code>. Strategy / regime filters only narrow the tables below — engine profile is set on the VM (<code>STRATEGY_PROFILE_ID</code>).
+          </p>
         </div>
         <div className="head-right">
+          {vmProfileId && (
+            <span className="chip info" title={vmProfile?.summary || vmProfileId}>
+              <span className="dot"></span>VM replay: {vmProfile?.title || vmProfileId}
+            </span>
+          )}
           <span className={`chip ${error ? 'neg' : loading ? 'warn' : 'info'}`}><span className="dot"></span>{error ? 'Error' : loading ? 'Loading' : 'Ready'}</span>
         </div>
+      </div>
+
+      <div className="panel eval-trader-book-panel">
+        <div className="panel-head" onClick={() => setBookOpen(v => !v)} style={{ cursor: 'pointer' }}>
+          <div className="panel-title">{bookOpen ? '▼' : '▶'} Trader book — profiles &amp; strategies</div>
+          <div className="panel-actions">
+            <span className="chip info">{profileCatalog?.profiles?.length ?? '…'} profiles</span>
+            <span className="chip info">{profileCatalog?.all_entry_strategy_ids?.length ?? '…'} strategy IDs</span>
+          </div>
+        </div>
+        {bookOpen && (
+          <div className="panel-body">
+            <p className="muted eval-runs-hint" style={{ marginTop: 0 }}>
+              <strong>Selected run performance</strong> uses range <code>{runRangeLabel}</code>
+              {resolvedRunId ? <> · run <code>{evalShortRunId(resolvedRunId)}</code></> : ' · pick a run or Apply filters'}
+              . Comparison tables reflect closed trades in that window (after optional strategy/regime filter).
+            </p>
+            <div className="eval-profile-grid">
+              {(profileCatalog?.profiles || []).map(profile => (
+                <div
+                  key={profile.profile_id}
+                  className={`eval-profile-card${profile.profile_id === vmProfileId ? ' active' : ''}${profile.operator_focus ? ' focus' : ''}`}
+                >
+                  <div className="eval-profile-card-head">
+                    <strong>{profile.title || profile.profile_id}</strong>
+                    <span className="mono tiny">{profile.profile_id}</span>
+                  </div>
+                  {profile.summary && <p className="muted tiny">{profile.summary}</p>}
+                  <div className="eval-profile-regimes">
+                    {Object.entries(profile.regime_entry_map || {}).map(([regime, strategies]) => (
+                      <div key={regime} className="eval-profile-regime-row">
+                        <span className="chip info">{regime}</span>
+                        <span className="mono tiny">
+                          {(strategies || []).filter(s => s !== 'IV_FILTER').join(', ') || '—'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {profile.risk_config && Object.keys(profile.risk_config).length > 0 && (
+                    <p className="muted tiny" style={{ marginTop: 8 }}>
+                      Risk: stop {(Number(profile.risk_config.stop_loss_pct || 0) * 100).toFixed(0)}%
+                      · target {(Number(profile.risk_config.target_pct || 0) * 100).toFixed(0)}%
+                      · trail {profile.risk_config.trailing_enabled ? 'on' : 'off'}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+            {!profileCatalog && (
+              <p className="muted tiny">Could not load profile catalog — restart dashboard after deploy.</p>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="panel eval-runs-panel">
@@ -683,15 +839,58 @@ function EvalMonitor({ tweaks }) {
 
       <div className="panel">
         <div className="panel-body">
-          <div className="eval-filter-bar">
+          <div className="eval-filter-bar eval-filter-bar-wide">
+            <label className="field">
+              <span className="field-label">Date preset</span>
+              <select
+                className="inp"
+                value={datePreset || evalDatePresetId(draft.date_from, draft.date_to)}
+                onChange={e => {
+                  const id = e.target.value;
+                  setDatePreset(id);
+                  const next = evalApplyDatePreset(draft, id);
+                  setDraft(next);
+                }}
+              >
+                {EVAL_DATE_PRESETS.map(p => (
+                  <option key={p.id || 'custom'} value={p.id}>{p.label}</option>
+                ))}
+              </select>
+            </label>
             <label className="field"><span className="field-label">Dataset</span><select className="inp" value={draft.dataset} onChange={e => setDraft({ ...draft, dataset: e.target.value })}><option value="historical">Historical</option><option value="live">Live</option></select></label>
-            <label className="field"><span className="field-label">From</span><input className="inp" type="date" value={draft.date_from} onChange={e => setDraft({ ...draft, date_from: e.target.value })} /></label>
-            <label className="field"><span className="field-label">To</span><input className="inp" type="date" value={draft.date_to} onChange={e => setDraft({ ...draft, date_to: e.target.value })} /></label>
-            <label className="field"><span className="field-label">Strategy</span><input className="inp" value={draft.strategy} onChange={e => setDraft({ ...draft, strategy: e.target.value })} placeholder="ORB" /></label>
-            <label className="field"><span className="field-label">Regime</span><input className="inp" value={draft.regime} onChange={e => setDraft({ ...draft, regime: e.target.value })} placeholder="TRENDING" /></label>
+            <label className="field"><span className="field-label">From</span><input className="inp" type="date" value={draft.date_from} onChange={e => { setDatePreset(''); setDraft({ ...draft, date_from: e.target.value }); }} /></label>
+            <label className="field"><span className="field-label">To</span><input className="inp" type="date" value={draft.date_to} onChange={e => { setDatePreset(''); setDraft({ ...draft, date_to: e.target.value }); }} /></label>
+            <label className="field">
+              <span className="field-label">Strategy (display filter)</span>
+              <select className="inp" value={draft.strategy} onChange={e => setDraft({ ...draft, strategy: e.target.value })}>
+                <option value="">All strategies</option>
+                {strategyOptions.map(sid => (
+                  <option key={sid} value={sid}>{evalStrategyLabel(sid)}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span className="field-label">Regime (display filter)</span>
+              <select className="inp" value={draft.regime} onChange={e => setDraft({ ...draft, regime: e.target.value })}>
+                {EVAL_REGIME_OPTIONS.map(r => (
+                  <option key={r || 'all'} value={r}>{r ? r : 'All regimes'}</option>
+                ))}
+              </select>
+            </label>
             <button className="btn" onClick={() => setRiskOpen(v => !v)}>{riskOpen ? 'Hide Risk' : 'Risk'}</button>
+            <button className="btn" type="button" title="Debit multi smoke day — clear strategy filter" onClick={() => {
+              const next = { ...draft, ...EVAL_DEBIT_MULTI_PRESET };
+              setDatePreset('oct31_2024');
+              setDraft(next);
+              setFilters(next);
+              setDayPage(1);
+              setTradePage(1);
+              setSelectedDay('');
+              loadData(next, 1, 1, '', activeRunId);
+            }}>Debit preset</button>
             <button className="btn" type="button" onClick={() => {
               const next = { ...draft, ...EVAL_R1S_TOP3_PRESET };
+              setDatePreset('may_jul_2024');
               setDraft(next);
               setFilters(next);
               setDayPage(1);
@@ -702,6 +901,10 @@ function EvalMonitor({ tweaks }) {
             <button className="btn primary" onClick={applyFilters}>Apply</button>
             <button className="btn" onClick={runReplay}>Run Replay</button>
           </div>
+          <p className="muted eval-runs-hint">
+            Filters: <strong>{draft.strategy || 'all strategies'}</strong> · <strong>{draft.regime || 'all regimes'}</strong> · range <code>{draft.date_from}</code>–<code>{draft.date_to}</code>.
+            Trust <strong>Option PnL%</strong> for premium moves; Capital PnL% uses $1k notional.
+          </p>
           {error && <div className="muted" style={{ marginTop: 8, color: 'var(--neg)', fontSize: 12 }}>{error}</div>}
           {riskOpen && (
             <div className="eval-risk-grid">
@@ -760,12 +963,36 @@ function EvalMonitor({ tweaks }) {
       </div>
 
       <div className="eval-grid-2">
-        <div className="panel"><div className="panel-head"><div className="panel-title">Strategy Comparison</div></div><PaginatedTable rows={strategyRows} page={1} columns={[
-          { key: 'strategy', label: 'Strategy' }, { key: 'trades', label: 'Trades', cls: 'r' }, { key: 'win_rate', label: 'Win Rate', cls: 'r', render: r => evalPct(r.win_rate) }, { key: 'avg_pnl_pct', label: 'Avg PnL', cls: 'r', render: r => evalPct(r.avg_pnl_pct) }, { key: 'total_pnl_pct', label: 'Total PnL', cls: 'r', render: r => evalPct(r.total_pnl_pct) }, { key: 'profit_factor', label: 'PF', cls: 'r', render: r => evalNum(r.profit_factor) },
-        ]} /></div>
-        <div className="panel"><div className="panel-head"><div className="panel-title">Regime Comparison</div></div><PaginatedTable rows={regimeRows} page={1} columns={[
-          { key: 'regime', label: 'Regime' }, { key: 'trades', label: 'Trades', cls: 'r' }, { key: 'win_rate', label: 'Win Rate', cls: 'r', render: r => evalPct(r.win_rate) }, { key: 'avg_pnl_pct', label: 'Avg PnL', cls: 'r', render: r => evalPct(r.avg_pnl_pct) }, { key: 'total_pnl_pct', label: 'Total PnL', cls: 'r', render: r => evalPct(r.total_pnl_pct) }, { key: 'profit_factor', label: 'PF', cls: 'r', render: r => evalNum(r.profit_factor) },
-        ]} /></div>
+        <div className="panel">
+          <div className="panel-head">
+            <div className="panel-title">Strategy performance</div>
+            <span className="chip info">{runRangeLabel}</span>
+          </div>
+          <PaginatedTable rows={strategyRows} page={1} emptyText="No closed trades in this window." columns={[
+            { key: 'entry_strategy', label: 'Strategy', render: r => r.entry_strategy || r.strategy || '—' },
+            { key: 'trades', label: 'Trades', cls: 'r' },
+            { key: 'win_rate', label: 'Win Rate', cls: 'r', render: r => evalPct(r.win_rate) },
+            { key: 'avg_option_pnl_pct', label: 'Avg Option PnL%', cls: 'r', render: r => evalPct(r.avg_option_pnl_pct) },
+            { key: 'avg_pnl_pct', label: 'Avg Capital PnL%', cls: 'r', render: r => evalPct(r.avg_pnl_pct) },
+            { key: 'total_pnl_pct', label: 'Total Capital PnL%', cls: 'r', render: r => evalPct(r.total_pnl_pct) },
+            { key: 'profit_factor', label: 'PF', cls: 'r', render: r => evalNum(r.profit_factor) },
+          ]} />
+        </div>
+        <div className="panel">
+          <div className="panel-head">
+            <div className="panel-title">Regime performance</div>
+            <span className="chip info">{runRangeLabel}</span>
+          </div>
+          <PaginatedTable rows={regimeRows} page={1} emptyText="No closed trades in this window." columns={[
+            { key: 'regime', label: 'Regime' },
+            { key: 'trades', label: 'Trades', cls: 'r' },
+            { key: 'win_rate', label: 'Win Rate', cls: 'r', render: r => evalPct(r.win_rate) },
+            { key: 'avg_option_pnl_pct', label: 'Avg Option PnL%', cls: 'r', render: r => evalPct(r.avg_option_pnl_pct) },
+            { key: 'avg_pnl_pct', label: 'Avg Capital PnL%', cls: 'r', render: r => evalPct(r.avg_pnl_pct) },
+            { key: 'total_pnl_pct', label: 'Total Capital PnL%', cls: 'r', render: r => evalPct(r.total_pnl_pct) },
+            { key: 'profit_factor', label: 'PF', cls: 'r', render: r => evalNum(r.profit_factor) },
+          ]} />
+        </div>
       </div>
 
       <div className="eval-chart-grid">
