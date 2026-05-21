@@ -24,12 +24,13 @@ function _bridgeTrade(tr) {
   const dirMap = { PE: 'SHORT', CE: 'LONG' };
   const chartBias = dirMap[rawDir] || dirMap[rawDir.toUpperCase()] || rawDir;
   const legDir = optionType || rawDir;
+  const isLongPremium = positionSide === 'LONG' || (positionSide !== 'SHORT' && chartBias === 'LONG');
   return {
     ...tr, dir: chartBias, legDir, positionSide,
     entryPx: ep, exitPx: xp,
     strat: tr.strat || tr.strategy_name || '—',
-    stopPx:   tr.stopPx   ?? (dir === 'LONG' ? ep - rng : ep + rng),
-    targetPx: tr.targetPx ?? (dir === 'LONG' ? ep + rng * 2 : ep - rng * 2),
+    stopPx:   tr.stopPx   ?? (isLongPremium ? ep - rng : ep + rng),
+    targetPx: tr.targetPx ?? (isLongPremium ? ep + rng * 2 : ep - rng * 2),
     heldBars: tr.heldBars ?? ((tr.exitIdx ?? 0) - (tr.entryIdx ?? 0)),
     conf:     tr.conf ?? tr.confidence ?? 0.65,
     regime:   tr.regime ?? '—',
