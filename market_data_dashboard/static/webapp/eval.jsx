@@ -89,13 +89,29 @@ function evalNormalizeBreakdownRows(rows, keyField) {
   });
 }
 
-function evalCollectStrategyIds(catalog, strategyRows) {
+function evalProfileStrategyIds(profile) {
+  if (!profile) return [];
   const ids = new Set();
-  (catalog?.all_entry_strategy_ids || []).forEach(s => ids.add(s));
+  (profile.entry_strategy_ids || []).forEach(s => { if (s && s !== 'IV_FILTER') ids.add(s); });
+  if (!ids.size) {
+    Object.values(profile.regime_entry_map || {}).forEach(strategies => {
+      (strategies || []).forEach(s => { if (s && s !== 'IV_FILTER') ids.add(s); });
+    });
+  }
+  return Array.from(ids).sort();
+}
+
+/** Display-filter options: active VM profile + strategies seen in this eval run (not full catalog). */
+function evalCollectStrategyIds(catalog, strategyRows, activeProfile, includeFullCatalog = false) {
+  const ids = new Set();
+  evalProfileStrategyIds(activeProfile).forEach(s => ids.add(s));
   (strategyRows || []).forEach(r => {
     const sid = r.entry_strategy || r.strategy;
     if (sid) ids.add(sid);
   });
+  if (includeFullCatalog || !ids.size) {
+    (catalog?.all_entry_strategy_ids || []).forEach(s => ids.add(s));
+  }
   return Array.from(ids).sort();
 }
 
@@ -322,6 +338,7 @@ function EvalMonitor({ tweaks }) {
   const [vmRuntime, setVmRuntime] = _evalUseState(null);
   const [bookOpen, setBookOpen] = _evalUseState(true);
   const [datePreset, setDatePreset] = _evalUseState('');
+  const [strategyFilterAllCatalog, setStrategyFilterAllCatalog] = _evalUseState(false);
   const clientRef = _evalUseRef(null);
   const pollRef = _evalUseRef(null);
 
@@ -601,13 +618,19 @@ function EvalMonitor({ tweaks }) {
     Array.isArray(summary?.by_regime) ? summary.by_regime : [],
     'regime'
   );
-  const strategyOptions = evalCollectStrategyIds(profileCatalog, strategyRows);
   const vmProfileId = String(
     vmRuntime?.runtime_config?.strategy_profile_id
     || vmRuntime?.runtime_config?.model?.strategy_profile_id
     || ''
   ).trim();
   const vmProfile = evalProfileForId(profileCatalog, vmProfileId);
+  const strategyOptions = evalCollectStrategyIds(
+    profileCatalog,
+    strategyRows,
+    vmProfile,
+    strategyFilterAllCatalog
+  );
+  const profileStrategyIds = evalProfileStrategyIds(vmProfile);
   const appliedRangeLabel = filters.date_from && filters.date_to
     ? `${filters.date_from} → ${filters.date_to}`
     : '—';
@@ -863,12 +886,25 @@ function EvalMonitor({ tweaks }) {
             <label className="field">
               <span className="field-label">Strategy (display filter)</span>
               <select className="inp" value={draft.strategy} onChange={e => setDraft({ ...draft, strategy: e.target.value })}>
-                <option value="">All strategies</option>
+                <option value="">All in scope</option>
                 {strategyOptions.map(sid => (
                   <option key={sid} value={sid}>{evalStrategyLabel(sid)}</option>
                 ))}
               </select>
             </label>
+            {vmProfileId && (
+              <label className="field eval-filter-toggle" title="Show every strategy ID from the trader book (other profiles). Still display-only.">
+                <span className="field-label">Catalog</span>
+                <select
+                  className="inp"
+                  value={strategyFilterAllCatalog ? 'all' : 'profile'}
+                  onChange={e => setStrategyFilterAllCatalog(e.target.value === 'all')}
+                >
+                  <option value="profile">Active profile only</option>
+                  <option value="all">All profiles (11)</option>
+                </select>
+              </label>
+            )}
             <label className="field">
               <span className="field-label">Regime (display filter)</span>
               <select className="inp" value={draft.regime} onChange={e => setDraft({ ...draft, regime: e.target.value })}>
@@ -902,8 +938,17 @@ function EvalMonitor({ tweaks }) {
             <button className="btn" onClick={runReplay}>Run Replay</button>
           </div>
           <p className="muted eval-runs-hint">
-            Filters: <strong>{draft.strategy || 'all strategies'}</strong> · <strong>{draft.regime || 'all regimes'}</strong> · range <code>{draft.date_from}</code>–<code>{draft.date_to}</code>.
-            Trust <strong>Option PnL%</strong> for premium moves; Capital PnL% uses $1k notional.
+            Strategy filter scope:{' '}
+            <strong>
+              {strategyFilterAllCatalog
+                ? 'full trader book (all profiles)'
+                : vmProfile
+                  ? `${vmProfile.title || vmProfileId} (${profileStrategyIds.join(', ') || 'see book'}) + trades in this run`
+                  : 'trades in this run'}
+            </strong>
+            . Does not change the engine — only narrows tables below.
+            {' '}Regime: <strong>{draft.regime || 'all'}</strong> · range <code>{draft.date_from}</code>–<code>{draft.date_to}</code>.
+            Trust <strong>Option PnL%</strong> for premium moves.
           </p>
           {error && <div className="muted" style={{ marginTop: 8, color: 'var(--neg)', fontSize: 12 }}>{error}</div>}
           {riskOpen && (
