@@ -212,6 +212,9 @@ function EvalMonitor({ tweaks }) {
   const [draft, setDraft] = _evalUseState(() => evalDefaultsFromTweaks(tweaks));
   const [filters, setFilters] = _evalUseState(() => evalDefaultsFromTweaks(tweaks));
   const [riskOpen, setRiskOpen] = _evalUseState(false);
+  const [brainData, setBrainData] = _evalUseState(null);
+  const [brainLoading, setBrainLoading] = _evalUseState(false);
+  const [brainError, setBrainError] = _evalUseState('');
   const [summary, setSummary] = _evalUseState(null);
   const [equity, setEquity] = _evalUseState(null);
   const [days, setDays] = _evalUseState([]);
@@ -384,6 +387,15 @@ function EvalMonitor({ tweaks }) {
   _evalUseEffect(() => {
     loadData(filters, dayPage, tradePage, selectedDay);
   }, [dayPage, tradePage, selectedDay]);
+
+  // Fetch brain status once on mount (eval mode reads live brain state)
+  _evalUseEffect(() => {
+    setBrainLoading(true);
+    fetch('/api/strategy/brain/status?mode=live')
+      .then(r => r.ok ? r.json() : Promise.resolve({ available: false, reason: `HTTP ${r.status}` }))
+      .then(data => { setBrainData(data); setBrainLoading(false); })
+      .catch(err => { setBrainError(err.message || String(err)); setBrainLoading(false); });
+  }, []);
 
   _evalUseEffect(() => {
     if (featureOpen && featureModel) loadFeatureData(featureModel);
@@ -687,6 +699,19 @@ function EvalMonitor({ tweaks }) {
           </div>
         </div>
       )}
+
+      <BrainPanel
+        brainData={brainData}
+        loading={brainLoading}
+        error={brainError}
+        onRefresh={() => {
+          setBrainLoading(true); setBrainError('');
+          fetch('/api/strategy/brain/status?mode=live')
+            .then(r => r.ok ? r.json() : Promise.resolve({ available: false }))
+            .then(d => { setBrainData(d); setBrainLoading(false); })
+            .catch(e => { setBrainError(e.message || String(e)); setBrainLoading(false); });
+        }}
+      />
 
       <KpiStrip items={kpiItems} cols={8} />
 

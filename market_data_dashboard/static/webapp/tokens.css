@@ -30,6 +30,92 @@
   --r-1: 2px; --r-2: 4px; --r-3: 6px; --r-4: 8px;
 }
 
+/* ── Brain status colours ─────────────────────────────────────────────── */
+:root {
+  --brain-calm:         #0A8F5C;
+  --brain-calm-wash:    rgba(10,143,92,0.10);
+  --brain-calm-border:  rgba(10,143,92,0.28);
+  --brain-neutral:      #5A6674;
+  --brain-neutral-wash: rgba(90,102,116,0.08);
+  --brain-volatile:     #B97405;
+  --brain-volatile-wash:rgba(185,116,5,0.12);
+  --brain-avoid:        #C23E2F;
+  --brain-avoid-wash:   rgba(194,62,47,0.12);
+  --brain-unknown:      #8A94A1;
+  --brain-unknown-wash: rgba(138,148,161,0.08);
+}
+
+/* Brain badge — sits inline in a KPI label or panel header */
+.brain-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 9px; border-radius: 99px;
+  font-family: var(--f-mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+}
+.brain-badge.CALM     { color: var(--brain-calm);     background: var(--brain-calm-wash);     border-color: var(--brain-calm-border); }
+.brain-badge.NEUTRAL  { color: var(--brain-neutral);  background: var(--brain-neutral-wash);  border-color: rgba(90,102,116,0.18); }
+.brain-badge.VOLATILE { color: var(--brain-volatile); background: var(--brain-volatile-wash); border-color: rgba(185,116,5,0.28); }
+.brain-badge.AVOID    { color: var(--brain-avoid);    background: var(--brain-avoid-wash);    border-color: rgba(194,62,47,0.28); }
+.brain-badge.UNKNOWN  { color: var(--brain-unknown);  background: var(--brain-unknown-wash);  border-color: rgba(138,148,161,0.18); }
+
+/* Brain panel — light mode card used in eval view */
+.brain-panel {
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-3);
+  background: var(--paper);
+  overflow: hidden;
+}
+.brain-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 14px; border-bottom: 1px solid var(--line-1);
+  gap: 10px;
+}
+.brain-panel-title {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--ink-3); font-weight: 700;
+  display: flex; align-items: center; gap: 8px;
+}
+.brain-panel-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0;
+}
+.brain-kpi {
+  padding: 10px 14px;
+  border-right: 1px solid var(--line-1);
+  display: grid; gap: 3px;
+}
+.brain-kpi:last-child { border-right: 0; }
+.brain-kpi-label {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.10em;
+  color: var(--ink-4); font-weight: 600;
+}
+.brain-kpi-value {
+  font-family: var(--f-mono); font-variant-numeric: tabular-nums;
+  font-size: 18px; font-weight: 500; letter-spacing: -0.02em; color: var(--ink);
+  line-height: 1.1; display: flex; align-items: center; gap: 6px;
+}
+.brain-kpi-sub {
+  font-family: var(--f-mono); font-size: 10px; color: var(--ink-4);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.brain-regime-row {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  border-top: 1px solid var(--line-1);
+  font-family: var(--f-mono); font-size: 10.5px;
+}
+.brain-regime-cell {
+  padding: 8px 14px; border-right: 1px solid var(--line-1);
+  display: grid; gap: 2px;
+}
+.brain-regime-cell:last-child { border-right: 0; }
+.brain-regime-label { font-size: 9.5px; color: var(--ink-4); text-transform: uppercase; letter-spacing: 0.08em; }
+.brain-regime-val { font-variant-numeric: tabular-nums; color: var(--ink); }
+.brain-unavail {
+  padding: 12px 14px; color: var(--ink-4); font-size: 11px; font-family: var(--f-mono);
+}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {

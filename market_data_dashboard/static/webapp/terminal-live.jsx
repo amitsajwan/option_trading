@@ -127,11 +127,81 @@ function StatusBar({ sessionPnl, tradesCount, winRate, regime, engine, ws, onMod
   );
 }
 
+// ── Brain Status (compact dark-theme widget) ──────────────────────────────
+function BrainStatusCompact({ brainData }) {
+  if (!brainData || !brainData.available) return null;
+  const d = brainData;
+  const score = String(d.day_score || 'UNKNOWN').toUpperCase();
+  const scoreColor = {
+    CALM:     'var(--pos)',
+    NEUTRAL:  'var(--fg-3)',
+    VOLATILE: 'var(--warn)',
+    AVOID:    'var(--neg)',
+    UNKNOWN:  'var(--fg-4)',
+  }[score] || 'var(--fg-4)';
+  const fmtF = v => v != null ? Number(v).toFixed(4) : '—';
+  const fmtPct = v => v != null ? (Number(v)>=0?'+':'') + (Number(v)*100).toFixed(2)+'%' : '—';
+  const sizeWarn = d.size_multiplier != null && Number(d.size_multiplier) < 1.0;
+  const carryWarn = (d.carry_consecutive_losses || 0) >= 2 || (d.losing_streak_days || 0) >= 1;
+  return (
+    <div style={{flexShrink:0}}>
+      <div className="t-section-head">Brain</div>
+      <div style={{padding:'6px 12px',display:'grid',gap:4}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span style={{fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-4)'}}>day_score</span>
+          <span style={{fontFamily:'var(--f-mono)',fontSize:11,fontWeight:700,color:scoreColor}}>{score}</span>
+        </div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span style={{fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-4)'}}>conf</span>
+          <span style={{fontFamily:'var(--f-mono)',fontSize:11,color:'var(--fg-2)'}}>
+            {d.day_score_confidence != null ? (Number(d.day_score_confidence)*100).toFixed(0)+'%' : '—'}
+          </span>
+        </div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span style={{fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-4)'}}>size_mult</span>
+          <span style={{fontFamily:'var(--f-mono)',fontSize:11,color:sizeWarn?'var(--warn)':'var(--pos)'}}>
+            {d.size_multiplier != null ? Number(d.size_multiplier).toFixed(2)+'×' : '—'}
+          </span>
+        </div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <span style={{fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-4)'}}>carry</span>
+          <span style={{fontFamily:'var(--f-mono)',fontSize:11,color:carryWarn?'var(--warn)':'var(--fg-3)'}}>
+            {d.carry_consecutive_losses || 0} L · {d.losing_streak_days || 0}d
+          </span>
+        </div>
+        {d.regime_rv20 != null && (
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+            <span style={{fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-4)'}}>rv20</span>
+            <span style={{fontFamily:'var(--f-mono)',fontSize:11,color:Number(d.regime_rv20)>0.018?'var(--neg)':Number(d.regime_rv20)<0.010?'var(--pos)':'var(--warn)'}}>
+              {fmtF(d.regime_rv20)}
+            </span>
+          </div>
+        )}
+        {d.regime_sma20_slope != null && (
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+            <span style={{fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-4)'}}>sma_slope</span>
+            <span style={{fontFamily:'var(--f-mono)',fontSize:11,color:Number(d.regime_sma20_slope)>=0?'var(--pos)':'var(--neg)'}}>
+              {fmtPct(d.regime_sma20_slope)}
+            </span>
+          </div>
+        )}
+        {d.day_score_reason && (
+          <div style={{marginTop:2,fontFamily:'var(--f-mono)',fontSize:9,color:'var(--fg-4)',
+                       wordBreak:'break-all',lineHeight:1.4}}>
+            {d.day_score_reason.slice(0, 60)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Engine Roster (left rail) ────────────────────────────────────────────
-function EngineRoster({ strategies, dailyRisk }) {
+function EngineRoster({ strategies, dailyRisk, brainData }) {
   const risk = dailyRisk || 0;
   return (
     <div className="t-rail">
+      <BrainStatusCompact brainData={brainData} />
       <div className="t-section-head" style={{borderTop:0}}>Strategy Roster</div>
       <div style={{overflowY:'auto',flexShrink:0}}>
         {strategies.length === 0
@@ -359,7 +429,7 @@ function DiagPanel({ diag }) {
   if (!diag) {
     return <div style={{padding:'12px',color:'var(--fg-3)',fontFamily:'var(--f-mono)',fontSize:11}}>Diagnostics unavailable in this mode.</div>;
   }
-  const { runtimeConfig, availableModels, blockerFunnel, timeline, loading, error, date, onRefresh, onTimelineFilterChange, onTimelineCollapseChange, activeRunId } = diag;
+  const { runtimeConfig, availableModels, blockerFunnel, timeline, brainData, loading, error, date, onRefresh, onTimelineFilterChange, onTimelineCollapseChange, activeRunId } = diag;
   const rc = runtimeConfig || {};
   const models = Array.isArray(availableModels) ? availableModels : [];
   const bf = blockerFunnel || {};
@@ -383,6 +453,41 @@ function DiagPanel({ diag }) {
     <div style={{padding:'10px 12px',fontFamily:'var(--f-mono)',fontSize:10.5,color:'var(--fg-2)',overflowY:'auto',maxHeight:'100%'}}>
       {error && <div style={{color:'var(--neg)',marginBottom:8}}>error: {error}</div>}
       {loading && <div style={{color:'var(--fg-3)',marginBottom:8}}>loading…</div>}
+
+      {/* ── Brain morning context ── */}
+      <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'2px 0 6px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <span>Brain · Morning Context</span>
+        {brainData?.trade_date && <span style={{textTransform:'none',color:'var(--fg-4)',fontSize:9}}>{brainData.trade_date}</span>}
+      </div>
+      {(!brainData || !brainData.available) ? (
+        <div style={{color:'var(--fg-4)',marginBottom:10,fontSize:10}}>
+          No brain_state.json — engine not started or BRAIN_ENABLED=false.
+          <br/>Daily feature builder must run for morning context to appear.
+        </div>
+      ) : (() => {
+        const bd = brainData;
+        const score = String(bd.day_score || 'UNKNOWN').toUpperCase();
+        const scoreColor = { CALM:'var(--pos)', NEUTRAL:'var(--fg-3)', VOLATILE:'var(--warn)', AVOID:'var(--neg)', UNKNOWN:'var(--fg-4)' }[score] || 'var(--fg-4)';
+        const sizeWarn = bd.size_multiplier != null && Number(bd.size_multiplier) < 1.0;
+        const carryWarn = (bd.carry_consecutive_losses || 0) >= 2 || (bd.losing_streak_days || 0) >= 1;
+        const fmtF = v => v != null ? Number(v).toFixed(4) : '—';
+        const fmtPct = v => v != null ? (Number(v)>=0?'+':'') + (Number(v)*100).toFixed(2)+'%' : '—';
+        return (
+          <div style={{marginBottom:14,padding:'8px 10px',background:'var(--bg-2)',borderRadius:3,border:'1px solid var(--line-3)'}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'4px 10px',marginBottom:6}}>
+              <div><span style={{color:'var(--fg-4)'}}>day_score</span> <span style={{color:scoreColor,fontWeight:700}}>{score}</span></div>
+              <div><span style={{color:'var(--fg-4)'}}>conf</span> <span>{bd.day_score_confidence!=null?(Number(bd.day_score_confidence)*100).toFixed(0)+'%':'—'}</span></div>
+              <div><span style={{color:'var(--fg-4)'}}>size_mult</span> <span style={{color:sizeWarn?'var(--warn)':'var(--pos)'}}>{bd.size_multiplier!=null?Number(bd.size_multiplier).toFixed(2)+'×':'—'}</span></div>
+              <div><span style={{color:'var(--fg-4)'}}>carry</span> <span style={{color:carryWarn?'var(--warn)':'var(--fg-3)'}}>{bd.carry_consecutive_losses||0} consec · {bd.losing_streak_days||0}d streak</span></div>
+              {bd.regime_rv20!=null && <div><span style={{color:'var(--fg-4)'}}>rv20</span> <span style={{color:Number(bd.regime_rv20)>0.018?'var(--neg)':Number(bd.regime_rv20)<0.010?'var(--pos)':'var(--warn)'}}>{fmtF(bd.regime_rv20)}</span></div>}
+              {bd.regime_sma20_slope!=null && <div><span style={{color:'var(--fg-4)'}}>sma_slope</span> <span style={{color:Number(bd.regime_sma20_slope)>=0?'var(--pos)':'var(--neg)'}}>{fmtPct(bd.regime_sma20_slope)}</span></div>}
+              {bd.regime_dist_sma20!=null && <div><span style={{color:'var(--fg-4)'}}>sma_dist</span> <span>{fmtPct(bd.regime_dist_sma20)}</span></div>}
+              {bd.regime_60d_return!=null && <div><span style={{color:'var(--fg-4)'}}>60d_ret</span> <span style={{color:Number(bd.regime_60d_return)>=0?'var(--pos)':'var(--neg)'}}>{fmtPct(bd.regime_60d_return)}</span></div>}
+            </div>
+            {bd.day_score_reason && <div style={{fontSize:9,color:'var(--fg-4)',wordBreak:'break-all'}}>{bd.day_score_reason}</div>}
+          </div>
+        );
+      })()}
 
       {/* Two distinct concepts:
            1. "Runtime config" = model the strategy_app container is loaded with
@@ -1188,6 +1293,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const [runtimeConfig,  setRuntimeConfig]  = _s(null);
   const [availableModels,setAvailableModels]= _s([]);
   const [blockerFunnel,  setBlockerFunnel]  = _s(null);
+  const [brainData,      setBrainData]      = _s(null);
   const [timeline,       setTimeline]       = _s(null);
   const [tlOutcome,      setTlOutcome]      = _s('blocked');
   const [tlCollapse,     setTlCollapse]     = _s(true);
@@ -1218,12 +1324,16 @@ function ReplayMonitorDark({ onModeSwitch }) {
       ? fetch(`/api/strategy/decisions?mode=replay&date=${encodeURIComponent(date)}&limit=500${tlOutcomeQ}${tlCollapseQ}`)
           .then(r => r.ok ? r.json() : Promise.reject(new Error(`decisions HTTP ${r.status}`)))
       : Promise.resolve(null);
-    Promise.all([stateP, funnelP, tlP])
-      .then(([state, funnel, tl]) => {
+    const brainP = fetch('/api/strategy/brain/status?mode=replay')
+      .then(r => r.ok ? r.json() : Promise.resolve({ available: false, reason: `HTTP ${r.status}` }))
+      .catch(() => ({ available: false, reason: 'fetch failed' }));
+    Promise.all([stateP, funnelP, tlP, brainP])
+      .then(([state, funnel, tl, brain]) => {
         setRuntimeConfig(state?.runtime_config || null);
         setAvailableModels(Array.isArray(state?.available_models) ? state.available_models : []);
         setBlockerFunnel(funnel);
         setTimeline(tl);
+        setBrainData(brain);
         setDiagLoading(false);
       })
       .catch(err => { setDiagError(err.message || String(err)); setDiagLoading(false); });
@@ -1404,7 +1514,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
           </div>
         )}
         <div className="t-workspace" style={{flex:1,minHeight:0}}>
-          <EngineRoster strategies={strategies} dailyRisk={sessionPnl<0?Math.abs(sessionPnl)/2:0}/>
+          <EngineRoster strategies={strategies} dailyRisk={sessionPnl<0?Math.abs(sessionPnl)/2:0} brainData={brainData}/>
 
           <div className="t-center">
             <div className="t-chart-panel">
@@ -1434,7 +1544,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
               selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
               flashId={null}
               diag={{ runtimeConfig, availableModels, blockerFunnel,
-                      timeline,
+                      timeline, brainData,
                       loading: diagLoading, error: diagError,
                       date: replayDate, onRefresh: fetchDiag,
                       onTimelineFilterChange: setTlOutcome,
