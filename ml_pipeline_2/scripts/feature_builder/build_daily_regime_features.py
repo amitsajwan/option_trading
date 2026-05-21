@@ -132,7 +132,22 @@ def _load_from_csv(csv_path: Path) -> pd.Series:
     return df["close"].dropna()
 
 
-def _load_from_parquet_root(parquet_root: Path, close_col: str = "fut_close") -> pd.Series:
+_CLOSE_COL_CANDIDATES = ("px_fut_close", "fut_close", "futures_close", "close")
+
+
+def _resolve_close_col(df: pd.DataFrame, close_col: str) -> str:
+    if close_col in df.columns:
+        return close_col
+    for candidate in _CLOSE_COL_CANDIDATES:
+        if candidate in df.columns:
+            logger.info("using close column %s (requested %s not found)", candidate, close_col)
+            return candidate
+    raise ValueError(
+        f"Close column '{close_col}' not found. Available: {list(df.columns)}"
+    )
+
+
+def _load_from_parquet_root(parquet_root: Path, close_col: str = "px_fut_close") -> pd.Series:
     """Scan date-partitioned parquet files and extract daily closes.
 
     Expects directory structure::
@@ -179,10 +194,7 @@ def _load_from_parquet_root(parquet_root: Path, close_col: str = "fut_close") ->
             "Expected one of: date, snapshot_date, trade_date"
         )
 
-    if close_col not in df.columns:
-        raise ValueError(
-            f"Close column '{close_col}' not found. Available: {list(df.columns)}"
-        )
+    close_col = _resolve_close_col(df, close_col)
 
     df[date_col] = pd.to_datetime(df[date_col])
     df = df.sort_values(date_col)
@@ -254,8 +266,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--close-col",
-        default="fut_close",
-        help="Name of the futures close column in parquet (default: fut_close).",
+        default="px_fut_close",
+        help="Futures close column in parquet (default: px_fut_close; falls back to fut_close).",
     )
     parser.add_argument(
         "--output",
