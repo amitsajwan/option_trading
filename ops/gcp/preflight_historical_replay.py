@@ -13,11 +13,12 @@ COMPOSE_DIR = "/opt/option_trading"
 COMPOSE_FILE = f"{COMPOSE_DIR}/docker-compose.yml"
 ENV_FILE = f"{COMPOSE_DIR}/.env.compose"
 HISTORICAL_SERVICE = "strategy_app_historical"
-LOCK_KEY = "strategy_app:consumer_lock:market:snapshot:v1:historical"
+from wait_historical_consumers import wait_ready
 
 
-def _run(cmd: list[str]) -> tuple[int, str]:
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+def _run(cmd: list[str], *, use_sudo: bool = False) -> tuple[int, str]:
+    full = ["sudo", *cmd] if use_sudo else cmd
+    proc = subprocess.run(full, capture_output=True, text=True, check=False)
     out = (proc.stdout or "") + (proc.stderr or "")
     return proc.returncode, out.strip()
 
@@ -45,49 +46,36 @@ def main() -> int:
             "--format",
             "json",
             HISTORICAL_SERVICE,
-        ]
+        ],
+        use_sudo=True,
     )
     if code != 0:
         errors.append(f"docker compose ps failed: {ps_out[:300]}")
     elif HISTORICAL_SERVICE not in ps_out and "strategy_app_historical" not in ps_out:
         errors.append(f"{HISTORICAL_SERVICE} is not running (profile historical)")
 
-    code, logs = _run(
-        [
-            "docker",
-            "compose",
-            "--env-file",
-            ENV_FILE,
-            "-f",
-            COMPOSE_FILE,
-            "logs",
-            "--tail",
-            "80",
-            HISTORICAL_SERVICE,
-        ]
-    )
-    if code == 0:
-        if "subscribed topic=market:snapshot:v1:historical" not in logs:
-            warnings.append("historical consumer may not be subscribed yet")
-        if "PBV1_TOP3_THESIS" not in logs and "PBV1_TOP3" not in logs:
-            warnings.append("recent logs do not show PBV1 strategy activity")
-        if "profile=playbook_v1_paper_v1" not in logs and "PBV1_TOP3_THESIS" not in logs:
-            if "TRENDING -> ['PBV1_TOP3_THESIS']" not in logs:
-                warnings.append("router may not be on playbook_v1_paper_v1 (check build_run_metadata deploy)")
-
-    code, rule_env = _run(
+    code, profile_env = _run(
         [
             "docker",
             "exec",
             "option_trading-strategy_app_historical-1",
             "printenv",
-            "PLAYBOOK_V1_RULE_PATH",
-        ]
+            "STRATEGY_PROFILE_ID",
+            "STRATEGY_ENGINE",
+        ],
+        use_sudo=True,
     )
-    if code == 0 and rule_env:
-        print(f"PLAYBOOK_V1_RULE_PATH={rule_env.splitlines()[-1]}", flush=True)
+    if code == 0 and profile_env:
+        for line in profile_env.splitlines():
+            if line.strip():
+                print(line.strip(), flush=True)
     else:
-        warnings.append("PLAYBOOK_V1_RULE_PATH not readable from historical container")
+        warnings.append("STRATEGY_PROFILE_ID not readable from historical container")
+
+    if not wait_ready(30):
+        errors.append(
+            "historical consumers not subscribed (replay would emit snapshots with 0 trades)"
+        )
 
     try:
         health = _http_get("/api/health")
