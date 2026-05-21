@@ -27,6 +27,7 @@ from .strategy_current_state import (
     read_observability_summary,
     read_strategy_current_state,
 )
+from .brain_state import read_brain_state
 
 
 class StrategyCurrentRouter:
@@ -55,6 +56,11 @@ class StrategyCurrentRouter:
         router.add_api_route(
             "/api/strategy/observability/summary",
             self.get_observability_summary,
+            methods=["GET"],
+        )
+        router.add_api_route(
+            "/api/strategy/brain/status",
+            self.get_brain_status,
             methods=["GET"],
         )
         self.router = router
@@ -112,3 +118,22 @@ class StrategyCurrentRouter:
             return read_observability_summary(mode=mode)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to read observability state: {exc}")
+
+    async def get_brain_status(
+        self,
+        mode: str = Query("live", description="live | replay"),
+    ) -> dict:
+        """Return the TradingBrain morning context for the current/last session.
+
+        Reads brain_state.json written by DeterministicRuleEngine.on_session_start().
+        Returns {trade_date, brain_enabled, day_context: {day_score, confidence,
+        regime_rv20, sma20_slope, carry_consecutive_losses, size_multiplier, ...}}.
+        Returns {available: false} when no brain_state.json exists (engine not
+        started or brain disabled).
+        """
+        if mode.strip().lower() not in {"live", "replay", "historical"}:
+            raise HTTPException(status_code=400, detail="mode must be 'live' or 'replay'")
+        try:
+            return read_brain_state(mode=mode)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to read brain state: {exc}")

@@ -444,6 +444,143 @@ function ConfirmModal({ open, title, message, confirmText, requireType, danger, 
   );
 }
 
+// ── BrainStatusBadge ─────────────────────────────────────────────────────
+// Coloured pill: CALM | NEUTRAL | VOLATILE | AVOID | UNKNOWN
+function BrainStatusBadge({ score }) {
+  const s = String(score || 'UNKNOWN').toUpperCase();
+  const icons = { CALM: '●', NEUTRAL: '○', VOLATILE: '⚡', AVOID: '✕', UNKNOWN: '?' };
+  return <span className={`brain-badge ${s}`}>{icons[s] || '?'} {s}</span>;
+}
+
+// ── BrainPanel ────────────────────────────────────────────────────────────
+// Light-mode card for eval view + live top banner.
+// brainData = response from GET /api/strategy/brain/status
+function BrainPanel({ brainData, loading, error, onRefresh }) {
+  if (loading) {
+    return (
+      <div className="brain-panel">
+        <div className="brain-unavail">Loading brain status…</div>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="brain-panel">
+        <div className="brain-unavail" style={{ color: 'var(--neg)' }}>Brain status error: {error}</div>
+      </div>
+    );
+  }
+  if (!brainData || !brainData.available) {
+    return (
+      <div className="brain-panel">
+        <div className="brain-panel-head">
+          <div className="brain-panel-title">
+            <span style={{ opacity: 0.5 }}>⬡</span> Brain
+          </div>
+        </div>
+        <div className="brain-unavail">
+          No brain_state.json — engine not started or <code>BRAIN_ENABLED=false</code>.
+          Run the nightly feature builder and restart the engine to see morning context here.
+        </div>
+      </div>
+    );
+  }
+
+  const d = brainData;
+  const score = String(d.day_score || 'UNKNOWN').toUpperCase();
+  const conf  = d.day_score_confidence != null ? (Number(d.day_score_confidence) * 100).toFixed(0) + '%' : '—';
+  const sizeMult = d.size_multiplier != null ? Number(d.size_multiplier).toFixed(2) + '×' : '—';
+  const sizeWarn = d.size_multiplier != null && Number(d.size_multiplier) < 1.0;
+  const carryLosses = d.carry_consecutive_losses ?? 0;
+  const streakDays  = d.losing_streak_days ?? 0;
+  const carryWarn   = carryLosses >= 2 || streakDays >= 1;
+
+  const fmtPct = v => v != null ? (Number(v) >= 0 ? '+' : '') + (Number(v) * 100).toFixed(2) + '%' : '—';
+  const fmtF4  = v => v != null ? Number(v).toFixed(4) : '—';
+
+  return (
+    <div className="brain-panel">
+      <div className="brain-panel-head">
+        <div className="brain-panel-title">
+          <span>⬡</span> Brain
+          {d.trade_date && (
+            <span style={{ fontWeight: 400, color: 'var(--ink-4)', fontSize: 10, textTransform: 'none' }}>
+              {d.trade_date}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <BrainStatusBadge score={score} />
+          {onRefresh && (
+            <button className="btn sm ghost" onClick={onRefresh} title="Refresh brain status">↻</button>
+          )}
+        </div>
+      </div>
+
+      <div className="brain-panel-body">
+        <div className="brain-kpi">
+          <div className="brain-kpi-label">Day Score</div>
+          <div className="brain-kpi-value"><BrainStatusBadge score={score} /></div>
+          <div className="brain-kpi-sub">{conf} confidence</div>
+        </div>
+        <div className="brain-kpi">
+          <div className="brain-kpi-label">Size Multiplier</div>
+          <div className={`brain-kpi-value ${sizeWarn ? 'warn' : 'pos'}`} style={{ color: sizeWarn ? 'var(--warn)' : 'var(--pos)' }}>
+            {sizeMult}
+          </div>
+          <div className="brain-kpi-sub">{d.day_score_reason ? d.day_score_reason.slice(0, 38) : '—'}</div>
+        </div>
+        <div className="brain-kpi">
+          <div className="brain-kpi-label">Carry</div>
+          <div className={`brain-kpi-value`} style={{ color: carryWarn ? 'var(--warn)' : 'var(--ink-3)', fontSize: 14 }}>
+            {carryLosses} consec
+          </div>
+          <div className="brain-kpi-sub">{streakDays} losing days streak</div>
+        </div>
+        <div className="brain-kpi">
+          <div className="brain-kpi-label">Prior Day P&L</div>
+          <div className={`brain-kpi-value`}
+               style={{ color: d.prior_day_pnl_pct == null ? 'var(--ink-3)' : Number(d.prior_day_pnl_pct) >= 0 ? 'var(--pos)' : 'var(--neg)', fontSize: 18 }}>
+            {fmtPct(d.prior_day_pnl_pct)}
+          </div>
+          <div className="brain-kpi-sub">{d.last_trade_date || '—'}</div>
+        </div>
+      </div>
+
+      {(d.regime_rv20 != null || d.regime_sma20_slope != null || d.regime_dist_sma20 != null || d.regime_60d_return != null) && (
+        <div className="brain-regime-row">
+          <div className="brain-regime-cell">
+            <div className="brain-regime-label">RV20</div>
+            <div className="brain-regime-val"
+                 style={{ color: d.regime_rv20 != null ? (Number(d.regime_rv20) > 0.018 ? 'var(--neg)' : Number(d.regime_rv20) < 0.010 ? 'var(--pos)' : 'var(--warn)') : 'inherit' }}>
+              {fmtF4(d.regime_rv20)}
+            </div>
+          </div>
+          <div className="brain-regime-cell">
+            <div className="brain-regime-label">SMA20 Slope</div>
+            <div className="brain-regime-val"
+                 style={{ color: d.regime_sma20_slope != null ? (Number(d.regime_sma20_slope) >= 0 ? 'var(--pos)' : 'var(--neg)') : 'inherit' }}>
+              {fmtPct(d.regime_sma20_slope)}
+            </div>
+          </div>
+          <div className="brain-regime-cell">
+            <div className="brain-regime-label">SMA20 Dist</div>
+            <div className="brain-regime-val">{fmtPct(d.regime_dist_sma20)}</div>
+          </div>
+          <div className="brain-regime-cell">
+            <div className="brain-regime-label">60d Return</div>
+            <div className="brain-regime-val"
+                 style={{ color: d.regime_60d_return != null ? (Number(d.regime_60d_return) >= 0 ? 'var(--pos)' : 'var(--neg)') : 'inherit' }}>
+              {fmtPct(d.regime_60d_return)}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 Object.assign(window, {
   KpiStrip, LWChart, EChartPanel, PaginatedTable, ConfirmModal,
+  BrainStatusBadge, BrainPanel,
 });

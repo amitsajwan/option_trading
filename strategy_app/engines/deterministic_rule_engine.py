@@ -46,6 +46,9 @@ from .profiles import (
     PROFILE_DEBIT_MULTI_V1,
     PROFILE_R1S_TOP3_PAPER_V1,
 )
+from ..brain.brain import BrainDecision, TradingBrain
+from ..brain.context import DayContext
+from ..engines.runtime_artifacts import resolve_runtime_artifact_paths
 
 _PROFILES_RELAX_REGIME_CONF = frozenset(
     {PROFILE_R1S_TOP3_PAPER_V1, PROFILE_DEBIT_MULTI_V1}
@@ -114,11 +117,15 @@ class DeterministicRuleEngine(StrategyEngine):
         self._strategy_family_version = str(strategy_family_version or "DET_V1").strip() or "DET_V1"
         self._strategy_profile_id = str(strategy_profile_id or PRODUCTION_DEFAULT_PROFILE_ID).strip() or PRODUCTION_DEFAULT_PROFILE_ID
         self._run_id: Optional[str] = None
+        self._brain: TradingBrain = TradingBrain.from_env()
+        self._day_context: Optional[DayContext] = None
+        self._brain_state_path: Optional[Path] = None
         self._set_logger_context(None)
         logger.info(
-            "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s",
+            "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s brain_enabled=%s",
             self._min_confidence,
             self._velocity_enhanced,
+            self._brain.enabled,
         )
 
     def _build_entry_policy(self, config: PolicyConfig) -> EntryPolicy:
@@ -222,10 +229,30 @@ class DeterministicRuleEngine(StrategyEngine):
         self._session_event_count = 0
         self._regime_shift_streak.clear()
         self._tracker.on_session_start(trade_date)
+        # Brain morning briefing: loads daily features + cross-session carry.
+        # Must run before risk manager so carry-based consecutive_losses can
+        # be used to initialise the risk context if needed.
+        self._day_context = self._brain.morning_briefing(trade_date)
+        self._write_brain_state(trade_date)
         self._risk.on_session_start(trade_date)
+        # Carry over consecutive losses from previous session into risk manager
+        carry = self._day_context.session_carry
+        if carry.consecutive_losses_at_close > 0:
+            self._risk.context.consecutive_losses = carry.consecutive_losses_at_close
+            if carry.consecutive_losses_at_close >= self._risk.context.max_consecutive_losses:
+                self._risk.context.consecutive_loss_limit = True
+                logger.warning(
+                    "session started with carry consecutive_losses=%d from prior session — risk paused",
+                    carry.consecutive_losses_at_close,
+                )
         for strategy in self._router.all_unique_strategies():
             strategy.on_session_start(trade_date)
-        logger.info("deterministic engine session started: %s", trade_date.isoformat())
+        logger.info(
+            "deterministic engine session started: %s day_score=%s carry_losses=%d",
+            trade_date.isoformat(),
+            self._day_context.day_score.value,
+            carry.consecutive_losses_at_close,
+        )
 
     def on_session_end(self, trade_date: date) -> None:
         if self._tracker.has_position:
@@ -242,11 +269,14 @@ class DeterministicRuleEngine(StrategyEngine):
         stats = self._tracker.session_stats()
         logger.info("deterministic engine session ended: %s stats=%s", trade_date.isoformat(), stats)
         self._risk.on_session_end(trade_date)
+        # Persist session summary for cross-session carry
+        self._brain.save_session_summary(trade_date)
         for strategy in self._router.all_unique_strategies():
             strategy.on_session_end(trade_date)
         self._current_session = None
         self._session_start_monotonic = None
         self._session_event_count = 0
+        self._day_context = None
 
     def evaluate(self, snapshot: SnapshotPayload) -> Optional[TradeSignal]:
         self._session_event_count += 1
@@ -486,6 +516,20 @@ class DeterministicRuleEngine(StrategyEngine):
         risk: RiskContext,
         regime_signal: RegimeSignal,
     ) -> Optional[TradeSignal]:
+        # Brain gate: check DayScore + consensus before anything else
+        entry_votes_for_brain = [
+            v for v in votes
+            if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
+        ]
+        brain_decision = self._brain.gate_entry(entry_votes_for_brain, self._day_context)
+        if not brain_decision.allowed:
+            logger.debug(
+                "brain gate blocked reason=%s day_score=%s",
+                brain_decision.reason,
+                brain_decision.day_score,
+            )
+            return None
+
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
         if avoid_votes:
             best_avoid = max(avoid_votes, key=lambda item: item.confidence)
@@ -720,6 +764,10 @@ class DeterministicRuleEngine(StrategyEngine):
             lots=position.lots,
             entry_premium=position.entry_premium,
         )
+        self._brain.on_trade_result(
+            pnl_pct=position.pnl_pct,
+            strategy_name=str(position.entry_strategy or ""),
+        )
         self._log.log_position_close(exit_signal=exit_signal, position=position)
 
     def _resolve_entry_risk(
@@ -897,6 +945,15 @@ class DeterministicRuleEngine(StrategyEngine):
         snap: SnapshotAccessor,
         regime_signal: RegimeSignal,
     ) -> str:
+        # Check brain gate first so blocker label is precise
+        entry_votes_for_brain = [
+            v for v in votes
+            if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
+        ]
+        brain_decision = self._brain.gate_entry(entry_votes_for_brain, self._day_context)
+        if not brain_decision.allowed:
+            return f"brain_gate:{brain_decision.reason}"
+
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
         if avoid_votes:
             return "avoid_veto"
@@ -1180,7 +1237,7 @@ class DeterministicRuleEngine(StrategyEngine):
                 extra_metrics=compact_metrics(vote.decision_metrics),
             )
         final_outcome = "entry_taken" if signal is not None else ("blocked" if blocker is not None or warmup_blocked else "hold")
-        return builder.finalize(
+        trace = builder.finalize(
             final_outcome=final_outcome,
             primary_blocker_gate=("warmup" if warmup_blocked else blocker),
             summary_metrics={
@@ -1188,6 +1245,17 @@ class DeterministicRuleEngine(StrategyEngine):
                 "entry_vote_count": len([vote for vote in votes if vote.signal_type == SignalType.ENTRY]),
             },
         )
+        # Attach brain context to trace so the UI blocker funnel can show
+        # day_score and consensus details without a separate API call.
+        if self._day_context is not None:
+            trace["brain"] = {
+                "day_score": self._day_context.day_score.value,
+                "day_score_confidence": round(self._day_context.day_score_confidence, 4),
+                "day_score_reason": self._day_context.day_score_reason,
+                "size_multiplier": round(self._day_context.size_multiplier, 4),
+                "carry_consecutive_losses": self._day_context.session_carry.consecutive_losses_at_close,
+            }
+        return trace
 
     def _build_position_trace(
         self,
@@ -1292,6 +1360,26 @@ class DeterministicRuleEngine(StrategyEngine):
                 "pnl_pct": position.pnl_pct,
             },
         )
+
+    def _write_brain_state(self, trade_date: date) -> None:
+        """Write brain morning context to brain_state.json for dashboard observability."""
+        if self._day_context is None:
+            return
+        try:
+            paths = resolve_runtime_artifact_paths()
+            self._brain_state_path = paths.root / "brain_state.json"
+            payload = {
+                "trade_date": trade_date.isoformat(),
+                "brain_enabled": self._brain.enabled,
+                "day_context": self._day_context.to_dict(),
+            }
+            import json as _json
+            tmp = self._brain_state_path.with_name("brain_state.json.tmp")
+            self._brain_state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+            tmp.replace(self._brain_state_path)
+        except Exception as exc:
+            logger.warning("brain_state write failed error=%s", exc)
 
     def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor) -> None:
         if bool(vote.raw_signals.get("_lock_strike_selection")):
