@@ -127,14 +127,22 @@ def _read_runtime_config(run_dir: Path) -> dict[str, Any]:
     model = payload.get("model") or {}
     legacy = payload.get("model_legacy_staged") or None
     rollout = payload.get("rollout") or {}
+    engine = str(payload.get("engine") or "")
+    profile_id = str(payload.get("strategy_profile_id") or "").strip()
+    if engine == "deterministic":
+        model_type = f"deterministic ({profile_id})" if profile_id else "deterministic_rules"
+    elif str(model.get("model_type") or "") == "option_pnl_v1":
+        model_type = "option_pnl_v1"
+    else:
+        model_type = model.get("model_type") or "staged_runtime_v1"
     out = {
         "engine": payload.get("engine"),
         "topic": payload.get("topic"),
-        "strategy_profile_id": payload.get("strategy_profile_id"),
+        "strategy_profile_id": profile_id or None,
         "model_run_id": model.get("run_id"),
         "model_group": model.get("model_group"),
         "model_package_path": model.get("model_package_path"),
-        "model_type": model.get("model_type") or "staged_runtime_v1",
+        "model_type": model_type,
         "rollout_stage": rollout.get("stage"),
         "min_confidence": rollout.get("min_confidence"),
         "position_size_multiplier": rollout.get("position_size_multiplier"),

@@ -501,6 +501,7 @@ function DiagPanel({ diag }) {
       </div>
       <div style={{lineHeight:1.7}}>
         <div><span style={{color:'var(--fg-4)'}}>engine</span> <span style={{color:'var(--accent)'}}>{rc.engine || '—'}</span></div>
+        {rc.strategy_profile_id && <div><span style={{color:'var(--fg-4)'}}>profile</span> <span style={{color:'var(--pos)'}}>{rc.strategy_profile_id}</span></div>}
         <div><span style={{color:'var(--fg-4)'}}>model_type</span> <span style={{color:rc.model_type==='option_pnl_v1' ? 'var(--pos)':'var(--fg-2)'}}>{rc.model_type || '—'}</span></div>
         {rc.recipe_id && <div><span style={{color:'var(--fg-4)'}}>recipe</span> <span style={{color:'var(--pos)'}}>{rc.recipe_id}</span> @ thr <span style={{color:'var(--fg-1)'}}>{rc.decision_threshold}</span></div>}
         <div><span style={{color:'var(--fg-4)'}}>model_run_id</span> {rc.model_run_id || '—'}</div>
@@ -519,14 +520,16 @@ function DiagPanel({ diag }) {
       </div>
       {(() => {
         const arid = diag.activeRunId || '—';
-        // Heuristic: published bundles named "option_pnl_*" are the new ATM_PE_15
-        // family; everything else is legacy futures-direction (C1) staged models.
+        const isDeterministic = rc.engine === 'deterministic';
         const isOptionPnl = typeof arid === 'string' && arid.startsWith('option_pnl_');
         const producedModel = arid === '—' ? '— (no stored run for this date)'
+          : isDeterministic && rc.strategy_profile_id
+            ? `deterministic · ${rc.strategy_profile_id}`
           : isOptionPnl ? 'option_pnl_v1 (bundle)'
           : 'staged_runtime_v1 (C1-family, futures-direction labels)';
         const runtimeRunId = rc.model_run_id || '';
-        const mismatch = arid !== '—' && arid !== runtimeRunId;
+        // Eval run UUID ≠ ML model_run_id for deterministic/playbook — do not warn.
+        const mismatch = !isDeterministic && arid !== '—' && arid !== runtimeRunId;
         return (
           <div style={{lineHeight:1.7}}>
             <div><span style={{color:'var(--fg-4)'}}>run_id</span> <span style={{color:isOptionPnl?'var(--pos)':'var(--warn)'}}>{arid}</span></div>
