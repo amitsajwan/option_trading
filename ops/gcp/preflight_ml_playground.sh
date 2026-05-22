@@ -46,8 +46,12 @@ free_gb="$(df -BG "${REPO_ROOT}" | awk 'NR==2 {gsub(/G/,"",$4); print $4}')"
 _ok "disk ${free_gb}GB free"
 
 for pidfile in /tmp/entry_s1_only_hpo.pid /tmp/direction_s2_only_hpo.pid /tmp/ml_playground_overnight/orchestrator.pid; do
-  if [[ -f "${pidfile}" ]] && kill -0 "$(cat "${pidfile}")" 2>/dev/null; then
-    _fail "another ML job still running (pidfile ${pidfile})"
+  if [[ -f "${pidfile}" ]]; then
+    pid="$(cat "${pidfile}" 2>/dev/null || true)"
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+      _fail "another ML job still running (pidfile ${pidfile} pid=${pid})"
+    fi
+    rm -f "${pidfile}"
   fi
 done
 _ok "no conflicting pidfiles"

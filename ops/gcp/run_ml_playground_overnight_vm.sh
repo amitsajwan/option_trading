@@ -218,9 +218,13 @@ case "${_cmd}" in
     _status
     ;;
   start)
-    if [[ -f "${PIDFILE}" ]] && kill -0 "$(cat "${PIDFILE}")" 2>/dev/null; then
-      echo "Already running pid=$(cat "${PIDFILE}"). Use: $0 status"
-      exit 1
+    if [[ -f "${PIDFILE}" ]]; then
+      old_pid="$(cat "${PIDFILE}" 2>/dev/null || true)"
+      if [[ -n "${old_pid}" ]] && kill -0 "${old_pid}" 2>/dev/null; then
+        echo "Already running pid=${old_pid}. Use: $0 status"
+        exit 1
+      fi
+      rm -f "${PIDFILE}"
     fi
     if [[ -z "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1 && [[ -z "${PLAYGROUND_NO_TMUX:-}" ]]; then
       if tmux has-session -t "${TMUX_SESSION}" 2>/dev/null; then
