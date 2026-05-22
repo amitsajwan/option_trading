@@ -147,10 +147,13 @@ _TRADER_MASTER_RISK_CONFIG: dict[str, Any] = {
     # if wrong within first few bars there's no reason to hold to 25%+.
     "stop_loss_pct": 0.20,
     "target_pct": 0.70,
-    # Trailing: activate once +12% in the money, lock break-even.
+    # Trailing: activate only after +35% — the 5-min entry model expects a +12-25%
+    # option move; activating below 35% fires during the predicted move window itself
+    # and cuts runners that could reach the 70% target. At 35% we're above the
+    # model's full expected range, so activation means genuine continued momentum.
     "trailing_enabled": True,
-    "trailing_activation_pct": 0.12,
-    "trailing_offset_pct": 0.06,
+    "trailing_activation_pct": 0.35,
+    "trailing_offset_pct": 0.08,
     "trailing_lock_breakeven": True,
     # Stagnation exit: if after 12 bars (~12 min) the trade hasn't reached +5%,
     # exit — ML entry expects a move within 5 min, flat = thesis failed, theta is eating us.
