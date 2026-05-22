@@ -143,12 +143,19 @@ _TRADER_MASTER_EXIT_STRATEGIES: list[str] = [
     "PBV1_TOP3_THESIS",
 ]
 _TRADER_MASTER_RISK_CONFIG: dict[str, Any] = {
-    "stop_loss_pct": 0.25,
+    # Premium stop: cut at 20% loss — ML-gated entries have clear thesis,
+    # if wrong within first few bars there's no reason to hold to 25%+.
+    "stop_loss_pct": 0.20,
     "target_pct": 0.70,
+    # Trailing: activate once +12% in the money, lock break-even.
     "trailing_enabled": True,
     "trailing_activation_pct": 0.12,
     "trailing_offset_pct": 0.06,
     "trailing_lock_breakeven": True,
+    # Stagnation exit: if after 12 bars (~12 min) the trade hasn't reached +5%,
+    # exit — ML entry expects a move within 5 min, flat = thesis failed, theta is eating us.
+    "stagnant_exit_bars": 12,
+    "stagnant_min_gain_pct": 0.05,
 }
 
 # Same exit/risk book as trader_master; entry is ML_ENTRY only (+ IV_FILTER veto).
