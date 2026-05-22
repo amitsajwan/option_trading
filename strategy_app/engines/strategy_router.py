@@ -31,6 +31,7 @@ from .strategies.all_strategies import (
 from .strategies.r1s_top3_short_ce import R1sTop3ShortCeStrategy
 from .strategies.rule_top3_long_option import R1Top3LongPeStrategy, R2Top3LongCeStrategy
 from .strategies.rule_top3_short_ce import PlaybookV1ShortCeStrategy
+from .strategies.ml_entry import MlEntryStrategy
 
 logger = logging.getLogger(__name__)
 NON_OWNER_EXIT_CONFIDENCE = 0.80
@@ -57,6 +58,7 @@ class StrategyRouter:
         self._playbook_v1 = PlaybookV1ShortCeStrategy()
         self._r1_top3_pe = R1Top3LongPeStrategy()
         self._r2_top3_ce = R2Top3LongCeStrategy()
+        self._ml_entry = MlEntryStrategy()
         self._strategy_registry: dict[str, BaseStrategy] = {
             self._iv_filter.name: self._iv_filter,
             self._high_vol_orb.name: self._high_vol_orb,
@@ -74,6 +76,7 @@ class StrategyRouter:
             self._playbook_v1.name: self._playbook_v1,
             self._r1_top3_pe.name: self._r1_top3_pe,
             self._r2_top3_ce.name: self._r2_top3_ce,
+            self._ml_entry.name: self._ml_entry,
         }
         self._cross_exit_helpers: dict[tuple[str, str], set[str]] = {
             ("PRE_EXPIRY", "OI_BUILDUP"): {"ORB"},

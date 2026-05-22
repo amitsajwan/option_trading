@@ -85,3 +85,26 @@ sudo bash ops/gcp/run_direction_s2_only_hpo_vm.sh
 ```
 
 Unified host: [GCP_UNIFIED_VM.md](GCP_UNIFIED_VM.md).
+
+---
+
+## Experiment profile — ML entry + trader_master exits
+
+| Item | Value |
+|------|--------|
+| Profile | `trader_master_ml_entry_v1` |
+| Entry | **`ML_ENTRY` only** (+ `IV_FILTER` veto) — no ORB/PBV1/rule entry strategies |
+| Exits / risk | Same as `trader_master_v1` (ORB, OI, composites, top-3, PBV1 exit helpers, trailing) |
+| Export S1 | `python -m ml_pipeline_2.scripts.export_entry_bundle_from_research --run-dir ...` |
+| Env | `ENTRY_ML_MODEL_PATH`, `ENTRY_ML_MIN_PROB` (default 0.55); optional `DIRECTION_ML_MODEL_PATH` for CE/PE |
+| Patch VM | `ops/gcp/patch_trader_master_ml_entry_env.sh` |
+
+Replay example:
+
+```bash
+# After export on VM:
+sudo bash ops/gcp/patch_trader_master_ml_entry_env.sh
+sudo docker compose ... build strategy_app_historical
+sudo docker compose ... up -d --force-recreate strategy_app_historical
+# historical eval with STRATEGY_PROFILE_ID=trader_master_ml_entry_v1
+```
