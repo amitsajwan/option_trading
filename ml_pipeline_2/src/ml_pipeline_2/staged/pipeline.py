@@ -477,6 +477,45 @@ def build_stage2_labels_market_direction(
     return labeled.sort_values("timestamp").reset_index(drop=True)
 
 
+def build_stage2_labels_market_direction_all_rows(
+    stage_frame: pd.DataFrame,
+    oracle: pd.DataFrame,
+    manifest: Optional[dict[str, Any]] = None,
+    *_: Any,
+    **__: Any,
+) -> pd.DataFrame:
+    """Stage 2 direction labeler without the entry-quality gate.
+
+    Same CE-vs-PE market-direction label as ``direction_market_up_v1``, but keeps
+    all oracle rows with a decisive CE/PE edge — not only ``entry_label == 1``.
+    Use for direction-only overlays and conflict resolution research.
+    """
+    raw_cfg = dict(((manifest or {}).get("training") or {}).get("stage2_decisive_move_filter") or {})
+    min_edge = float(raw_cfg.get("min_ce_pe_edge", 0.002))
+    allowed_regimes: list[str] | None = raw_cfg.get("allowed_regimes") or None
+
+    labeled = _attach_labels(stage_frame, oracle)
+
+    ce_ret = pd.to_numeric(labeled["best_ce_net_return_after_cost"], errors="coerce").fillna(0.0)
+    pe_ret = pd.to_numeric(labeled["best_pe_net_return_after_cost"], errors="coerce").fillna(0.0)
+    edge = (ce_ret - pe_ret).abs()
+    labeled = labeled[edge >= min_edge].copy()
+
+    if allowed_regimes:
+        regime_series = _regime_label_series(labeled)
+        labeled = labeled[regime_series.isin(allowed_regimes)].copy()
+
+    ce_ret = pd.to_numeric(labeled["best_ce_net_return_after_cost"], errors="coerce").fillna(0.0)
+    pe_ret = pd.to_numeric(labeled["best_pe_net_return_after_cost"], errors="coerce").fillna(0.0)
+    market_up = ce_ret > pe_ret
+
+    labeled["direction_label"] = np.where(market_up, "CE", "PE")
+    labeled["move_label_valid"] = 1.0
+    labeled["move_label"] = 1.0
+    labeled["move_first_hit_side"] = np.where(market_up, "up", "down")
+    return labeled.sort_values("timestamp").reset_index(drop=True)
+
+
 def build_stage2_labels_direction_or_no_trade(
     stage_frame: pd.DataFrame,
     oracle: pd.DataFrame,

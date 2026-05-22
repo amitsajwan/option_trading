@@ -1,9 +1,11 @@
-"""Standalone direction-only ML training script.
+"""Quick baseline direction-only trainer (single XGB, no HPO).
 
-Trains a simple binary CE-vs-PE classifier at the 11:30 bar without any
-entry-quality gate. The idea: if the model is good at picking direction,
-we can use it as an optional overlay in the deterministic engine regardless
-of whether we'd take the trade at all.
+For proper walk-forward CV + Optuna HPO + model catalog search, use instead:
+    python -m ml_pipeline_2.scripts.run_direction_only_hpo
+Manifest: configs/research/staged_dual_recipe.direction_only_hpo_v1.json
+
+This script trains a simple binary CE-vs-PE classifier at the 11:30 bar without any
+entry-quality gate — useful for a fast sanity check, not for production model selection.
 
 Label construction
 ------------------
