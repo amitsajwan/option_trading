@@ -3367,6 +3367,17 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         dataset_name=support_dataset,
     )
     support_raw = _load_dataset(parquet_root, support_dataset)
+    support_scope = dict((manifest.get("inputs") or {}).get("support_window") or {})
+    if support_scope.get("start") and support_scope.get("end"):
+        before_rows = int(len(support_raw))
+        support_raw = _window(support_raw, support_scope)
+        logger.info(
+            "support_window filter %s..%s: %d -> %d rows",
+            support_scope["start"],
+            support_scope["end"],
+            before_rows,
+            len(support_raw),
+        )
     _prep_progress(
         ctx,
         status="done",

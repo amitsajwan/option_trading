@@ -4,7 +4,8 @@
   "_comment": "Direction-only research: CE vs PE without entry_label gate. Deep Optuna HPO on stage2 (velocity + midday feature sets). Reuses stage1 from deep_hpo_c1 to skip S1 search. Update stage1_reuse.source_run_dir if that run is missing on the VM.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
-    "support_dataset": "snapshots_ml_flat_v2"
+    "support_dataset": "snapshots_ml_flat_v2",
+    "support_window": { "start": "2022-01-01", "end": "2024-10-31" }
   },
   "outputs": {
     "artifacts_root": "../../artifacts/research",
@@ -39,12 +40,12 @@
       ],
       "stage3": ["fo_velocity_v1"]
     },
-    "recipe_catalog_id": "midday_l3_adjacent_v1"
+    "recipe_catalog_id": "fixed_l0_l3_v1"
   },
   "windows": {
-    "research_train": { "start": "2020-08-03", "end": "2024-04-30" },
+    "research_train": { "start": "2022-01-01", "end": "2024-04-30" },
     "research_valid": { "start": "2024-05-01", "end": "2024-07-31" },
-    "full_model": { "start": "2020-08-03", "end": "2024-07-31" },
+    "full_model": { "start": "2022-01-01", "end": "2024-07-31" },
     "final_holdout": { "start": "2024-08-01", "end": "2024-10-31" }
   },
   "views": {
