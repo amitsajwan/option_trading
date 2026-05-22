@@ -50,6 +50,7 @@ from .profiles import (
     PROFILE_R1S_TOP3_PAPER_V1,
     PROFILE_TRADER_MASTER_V1,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1,
+    PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1,
 )
 from ..brain.brain import BrainDecision, TradingBrain
 from ..brain.context import DayContext
@@ -61,8 +62,11 @@ _PROFILES_RELAX_REGIME_CONF = frozenset(
         PROFILE_DEBIT_MULTI_V1,
         PROFILE_TRADER_MASTER_V1,
         PROFILE_TRADER_MASTER_ML_ENTRY_V1,
+        PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1,
     }
 )
+
+_PROFILES_ML_ENTRY_DET_DIRECTION = frozenset({PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1})
 from ..market.regime import RegimeClassifier, RegimeSignal
 from ..market.snapshot_accessor import SnapshotAccessor
 from .strategy_router import StrategyRouter
@@ -550,28 +554,53 @@ class DeterministicRuleEngine(StrategyEngine):
         if not entry_votes:
             return None
 
+        use_ml_det_dir = self._strategy_profile_id in _PROFILES_ML_ENTRY_DET_DIRECTION
+        if use_ml_det_dir and not any(vote.strategy_name == "ML_ENTRY" for vote in entry_votes):
+            logger.debug("entry blocked: ml timing gate (no ML_ENTRY vote)")
+            return None
+        vote_pool = (
+            [vote for vote in entry_votes if vote.strategy_name != "ML_ENTRY"]
+            if use_ml_det_dir
+            else entry_votes
+        )
+
         # ORB wide-range gate: skip ORB entries when opening range is too large.
         orb_max = self._run_risk_config.orb_max_range_pts
         if orb_max and orb_max > 0:
             or_width = snap.or_width
             if or_width is not None and float(or_width) > float(orb_max):
-                pre_filter = len(entry_votes)
-                entry_votes = [
-                    v for v in entry_votes
+                pre_filter = len(vote_pool)
+                vote_pool = [
+                    v for v in vote_pool
                     if v.strategy_name not in ("ORB", "ORB_RETEST", "HIGH_VOL_ORB")
                 ]
-                if len(entry_votes) < pre_filter:
+                if len(vote_pool) < pre_filter:
                     logger.debug(
                         "ORB entry gated: or_width=%.0f > orb_max_range_pts=%.0f",
                         float(or_width),
                         float(orb_max),
                     )
-                if not entry_votes:
-                    return None
+        if use_ml_det_dir:
+            if not vote_pool:
+                vote_pool = [self._deterministic_direction_vote(snap)]
+                logger.debug(
+                    "ml timing ok; rule direction empty — snapshot tie-break dir=%s",
+                    vote_pool[0].direction.value if vote_pool[0].direction else "?",
+                )
+            entry_votes = vote_pool
+        elif not vote_pool:
+            return None
+        else:
+            entry_votes = vote_pool
 
         ce_votes = [vote for vote in entry_votes if vote.direction == Direction.CE]
         pe_votes = [vote for vote in entry_votes if vote.direction == Direction.PE]
         has_direction_conflict = bool(ce_votes and pe_votes)
+        if has_direction_conflict and self._strategy_profile_id in _PROFILES_ML_ENTRY_DET_DIRECTION:
+            entry_votes = self._resolve_direction_conflict_deterministic(entry_votes)
+            ce_votes = [vote for vote in entry_votes if vote.direction == Direction.CE]
+            pe_votes = [vote for vote in entry_votes if vote.direction == Direction.PE]
+            has_direction_conflict = bool(ce_votes and pe_votes)
         ml_can_resolve_direction_conflict = has_direction_conflict and self._entry_policy_can_resolve_direction_conflict()
         if has_direction_conflict and not ml_can_resolve_direction_conflict:
             logger.debug("entry blocked by direction conflict ce=%d pe=%d", len(ce_votes), len(pe_votes))
@@ -630,6 +659,35 @@ class DeterministicRuleEngine(StrategyEngine):
                 continue
             return self._build_entry_signal(candidate, snap, risk, entry_votes, regime_signal, policy_decision)
         return None
+
+    @staticmethod
+    def _resolve_direction_conflict_deterministic(entry_votes: list[StrategyVote]) -> list[StrategyVote]:
+        ce_votes = [vote for vote in entry_votes if vote.direction == Direction.CE]
+        pe_votes = [vote for vote in entry_votes if vote.direction == Direction.PE]
+        if ce_votes and not pe_votes:
+            return ce_votes
+        if pe_votes and not ce_votes:
+            return pe_votes
+        if len(ce_votes) >= len(pe_votes):
+            return ce_votes
+        return pe_votes
+
+    def _deterministic_direction_vote(self, snap: SnapshotAccessor) -> StrategyVote:
+        direction, basis = self._shadow_direction_from_snapshot(snap)
+        premium = snap.atm_ce_close if direction == Direction.CE else snap.atm_pe_close
+        return StrategyVote(
+            strategy_name="DET_DIRECTION",
+            snapshot_id=snap.snapshot_id,
+            timestamp=snap.timestamp_or_now,
+            trade_date=snap.trade_date,
+            signal_type=SignalType.ENTRY,
+            direction=direction,
+            confidence=0.50,
+            reason=f"det_direction: {basis}",
+            raw_signals={"direction_source": basis},
+            proposed_strike=snap.atm_strike,
+            proposed_entry_premium=premium,
+        )
 
     def _entry_policy_can_resolve_direction_conflict(self) -> bool:
         resolver = getattr(self._entry_policy, "can_resolve_direction_conflict", None)

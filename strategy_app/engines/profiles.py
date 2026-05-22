@@ -13,6 +13,7 @@ PROFILE_PLAYBOOK_V1_PAPER_V1 = "playbook_v1_paper_v1"
 PROFILE_DEBIT_MULTI_V1 = "debit_multi_v1"
 PROFILE_TRADER_MASTER_V1 = "trader_master_v1"
 PROFILE_TRADER_MASTER_ML_ENTRY_V1 = "trader_master_ml_entry_v1"
+PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1 = "trader_master_ml_entry_det_dir_v1"
 
 PRODUCTION_DEFAULT_PROFILE_ID = PROFILE_DET_PROD_V1
 
@@ -158,6 +159,18 @@ _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP: dict[str, list[str]] = {
 }
 _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP["AVOID"] = []
 
+# ML step-① timing + trader_master rule strategies for step-② direction (no direction ML).
+_TRADER_MASTER_ML_ENTRY_DET_DIR_REGIME_ENTRY_MAP: dict[str, list[str]] = {}
+for _regime, _strategies in _TRADER_MASTER_REGIME_ENTRY_MAP.items():
+    if not _strategies:
+        _TRADER_MASTER_ML_ENTRY_DET_DIR_REGIME_ENTRY_MAP[_regime] = []
+        continue
+    _merged: list[str] = ["IV_FILTER", "ML_ENTRY"]
+    for _name in _strategies:
+        if _name not in _merged:
+            _merged.append(_name)
+    _TRADER_MASTER_ML_ENTRY_DET_DIR_REGIME_ENTRY_MAP[_regime] = _merged
+
 _DET_PROD_V1_REGIME_ENTRY_MAP: dict[str, list[str]] = {
     "TRENDING": ["IV_FILTER", "ORB", "OI_BUILDUP"],
     "SIDEWAYS": ["IV_FILTER", "OI_BUILDUP"],
@@ -239,6 +252,7 @@ _PROFILE_REGIME_ENTRY_MAPS: dict[str, dict[str, list[str]]] = {
     PROFILE_DEBIT_MULTI_V1: _DEBIT_MULTI_REGIME_ENTRY_MAP,
     PROFILE_TRADER_MASTER_V1: _TRADER_MASTER_REGIME_ENTRY_MAP,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1: _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP,
+    PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1: _TRADER_MASTER_ML_ENTRY_DET_DIR_REGIME_ENTRY_MAP,
 }
 
 _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
@@ -251,6 +265,7 @@ _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
     PROFILE_DEBIT_MULTI_V1: list(_DEBIT_MULTI_EXIT_STRATEGIES),
     PROFILE_TRADER_MASTER_V1: list(_TRADER_MASTER_EXIT_STRATEGIES),
     PROFILE_TRADER_MASTER_ML_ENTRY_V1: list(_TRADER_MASTER_EXIT_STRATEGIES),
+    PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1: list(_TRADER_MASTER_EXIT_STRATEGIES),
 }
 
 _PROFILE_RISK_CONFIGS: dict[str, dict[str, Any]] = {
@@ -262,6 +277,7 @@ _PROFILE_RISK_CONFIGS: dict[str, dict[str, Any]] = {
     PROFILE_DEBIT_MULTI_V1: _DEBIT_MULTI_RISK_CONFIG,
     PROFILE_TRADER_MASTER_V1: _TRADER_MASTER_RISK_CONFIG,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1: _TRADER_MASTER_RISK_CONFIG,
+    PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1: _TRADER_MASTER_RISK_CONFIG,
 }
 
 
@@ -311,6 +327,7 @@ __all__ = [
     "PROFILE_DEBIT_MULTI_V1",
     "PROFILE_TRADER_MASTER_V1",
     "PROFILE_TRADER_MASTER_ML_ENTRY_V1",
+    "PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1",
     "build_router_config",
     "build_run_metadata",
     "get_exit_strategies",

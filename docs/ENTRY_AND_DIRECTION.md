@@ -1,21 +1,60 @@
 # Entry and direction — two-track training
 
-## Runtime (sequential, exclusive layers)
+## Canonical pipeline (3 steps)
+
+Every trade should follow this order — **no step is skipped**:
+
+```mermaid
+flowchart LR
+  S1["① Time to enter?"] --> S2["② Which side? CE / PE"]
+  S2 --> S3["③ Take trade"]
+  S1 -->|no| Z[Stay flat]
+```
+
+| Step | Question | Output |
+|------|----------|--------|
+| **① Time to enter** | Is *now* a good moment? (move / setup / gates) | trade **yes** or **no** |
+| **② Direction** | If yes, **up → CE** or **down → PE**? | one side |
+| **③ Take trade** | Strike, premium, stops, exits attached | `TradeSignal` → position |
+
+Later steps never run if an earlier step says no. Direction never overrides a blocked entry.
+
+### How the repo implements each step
+
+| Step | Target implementation | Today |
+|------|----------------------|--------|
+| **①** | S1 ML (`ENTRY_ML_*`) or playbook / IV / brain gates | `ML_ENTRY` + `IV_FILTER`, or rule entry votes + `PlaybookBrain` |
+| **②** | Rules per setup, or S2 ML (`DIRECTION_ML_*`), or simple snapshot tie-break | `DIRECTION_ML_MODEL_PATH`, conflict resolver, or `fut_return_5m` / VWAP |
+| **③** | `EntryPolicy` + strike selection + `trader_master` exits | `deterministic_rule_engine` → `TradeSignal` |
+
+| Profile | Step ① | Step ② | Step ③ |
+|---------|--------|--------|--------|
+| **`trader_master_ml_entry_det_dir_v1`** (recommended experiment) | `ML_ENTRY` + `IV_FILTER` | **Rules** (ORB, OI, VWAP, composites, …) — majority on CE/PE conflict; snapshot tie-break if no rule vote | `trader_master` exits |
+| `trader_master_ml_entry_v1` | `ML_ENTRY` only | Momentum or `DIRECTION_ML_MODEL_PATH` | same exits |
+| `trader_master_v1` | Rule strategies (mixed ①+②) | Same votes; conflict → direction ML or **block** | same exits |
+
+Patch VM for the experiment:
+
+```bash
+sudo bash ops/gcp/patch_trader_master_ml_entry_det_dir_env.sh
+# STRATEGY_PROFILE_ID=trader_master_ml_entry_det_dir_v1
+# Do not set DIRECTION_ML_MODEL_PATH
+```
+
+---
+
+## Runtime detail (rule book vs ML entry)
 
 ```mermaid
 flowchart TD
-  A[11:30 snapshot] --> B[Entry: playbook rules ± S1 ML]
+  A[Snapshot bar] --> B["① Time to enter"]
   B -->|block| Z[No trade]
-  B -->|allow| C[Rules: CE / PE votes]
-  C -->|one side| D[Trade]
-  C -->|CE+PE conflict| E[Direction ML overlay]
-  E --> D
+  B -->|allow| C["② Direction"]
+  C --> D["③ Take trade"]
 ```
 
-1. **Entry** decides *whether* to trade (playbook primary; optional Stage-1 model later).
-2. **Direction** decides *CE vs PE* only when rules disagree (`DIRECTION_ML_MODEL_PATH`).
-
-Direction never overrides a blocked entry.
+- **Entry** = step ① (whether).
+- **Direction** = step ② (CE vs PE); ML only required when rules disagree on side.
 
 ---
 
@@ -89,7 +128,19 @@ Unified host: [GCP_UNIFIED_VM.md](GCP_UNIFIED_VM.md).
 
 ---
 
-## Experiment profile — ML entry + trader_master exits
+## Experiment profiles — ML entry + trader_master exits
+
+### ML entry + deterministic direction (`trader_master_ml_entry_det_dir_v1`)
+
+| Item | Value |
+|------|--------|
+| Profile | `trader_master_ml_entry_det_dir_v1` |
+| Step ① | `ML_ENTRY` must fire (`ENTRY_ML_*`) |
+| Step ② | Regime-routed **rule** strategies (same book as `trader_master_v1`); `ML_ENTRY` vote ignored for side |
+| Step ③ | Same exits/risk as `trader_master_v1` |
+| Patch | `ops/gcp/patch_trader_master_ml_entry_det_dir_env.sh` |
+
+### ML entry + momentum / direction ML (`trader_master_ml_entry_v1`)
 
 | Item | Value |
 |------|--------|
