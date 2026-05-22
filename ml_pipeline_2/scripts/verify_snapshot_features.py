@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 # ── contract ──────────────────────────────────────────────────────────────────
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -62,9 +63,9 @@ def _load_flat(flat_root: Path, start: str, end: str, columns: List[str]) -> pd.
     frames = []
     for y in years:
         for f in sorted(flat_root.glob(f"year={y}/*.parquet")):
-            avail = set(pd.read_parquet(f, columns=[]).columns) | set(["trade_date", "timestamp"])
-            load_cols = [c for c in columns if c in avail or c in ("trade_date", "timestamp")]
-            df = pd.read_parquet(f, columns=list(set(load_cols)))
+            avail = set(pq.read_schema(f).names)
+            load_cols = [c for c in columns if c in avail] + ["trade_date", "timestamp"]
+            df = pd.read_parquet(f, columns=list(dict.fromkeys(load_cols)))
             df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
             mask = (df["trade_date"] >= start_ts) & (df["trade_date"] <= end_ts)
             if mask.any():
