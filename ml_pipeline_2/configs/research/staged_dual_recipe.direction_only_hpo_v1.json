@@ -152,7 +152,8 @@
   "hard_gates": {
     "stage1": {
       "roc_auc_min": 0.52,
-      "brier_max": 0.25
+      "brier_max": 0.25,
+      "roc_auc_drift_half_split_max_abs": 0.08
     },
     "stage2": {
       "roc_auc_min": 0.52,
