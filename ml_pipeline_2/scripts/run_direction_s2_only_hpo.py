@@ -1,6 +1,6 @@
 """Launch decoupled Stage-2 direction HPO (no entry/recipe training).
 
-Manifest: configs/research/staged_dual_recipe.direction_s2_only_hpo_v1.json
+Manifest: configs/research/staged_dual_recipe.direction_s2_only_hpo_v2.json (v1 via --config)
   - bypass_stage1 / bypass_stage3
   - direction_only_publish (economic holdout on CE/PE oracle returns)
   - Label: direction_market_up_all_v1
@@ -21,7 +21,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
 _DEFAULT_MANIFEST = (
-    _REPO / "ml_pipeline_2" / "configs" / "research" / "staged_dual_recipe.direction_s2_only_hpo_v1.json"
+    _REPO / "ml_pipeline_2" / "configs" / "research" / "staged_dual_recipe.direction_s2_only_hpo_v2.json"
 )
 
 

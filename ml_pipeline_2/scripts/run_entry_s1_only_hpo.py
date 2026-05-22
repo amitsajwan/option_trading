@@ -1,6 +1,6 @@
 """Launch decoupled Stage-1 entry HPO (no direction/recipe training).
 
-Manifest: configs/research/staged_dual_recipe.entry_s1_only_hpo_v1.json
+Manifest: configs/research/staged_dual_recipe.entry_s1_only_hpo_v2.json (v1 still available via --config)
 
 VM:
     sudo bash /opt/option_trading/ops/gcp/run_entry_s1_only_hpo_vm.sh
@@ -14,7 +14,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
 _DEFAULT_MANIFEST = (
-    _REPO / "ml_pipeline_2" / "configs" / "research" / "staged_dual_recipe.entry_s1_only_hpo_v1.json"
+    _REPO / "ml_pipeline_2" / "configs" / "research" / "staged_dual_recipe.entry_s1_only_hpo_v2.json"
 )
 
 

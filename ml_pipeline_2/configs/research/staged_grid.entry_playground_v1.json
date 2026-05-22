@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "_comment": "Entry playground: one feature-set lane each, MIDDAY+LATE, lighter Optuna than entry_s1_only_hpo_v2.",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.entry_s1_only_hpo_v2.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_entry_playground_v1"
+  },
+  "selection": {
+    "ranking_strategy": "default",
+    "robustness_probe": {
+      "enabled": false
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 1,
+    "runs": [
+      {
+        "run_id": "velocity",
+        "model_group_suffix": "_epg_velocity",
+        "overrides": {
+          "outputs": { "run_name": "entry_pg_velocity" },
+          "catalog": {
+            "feature_sets_by_stage": { "stage1": ["fo_velocity_v1"] }
+          },
+          "training": {
+            "search_options_by_stage": {
+              "stage1": {
+                "hpo": { "enabled": true, "strategy": "optuna", "trials_per_model": 24, "sampler_seed": 42 },
+                "max_experiments": 48,
+                "max_elapsed_seconds": 7200
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "regime",
+        "model_group_suffix": "_epg_regime",
+        "overrides": {
+          "outputs": { "run_name": "entry_pg_regime" },
+          "catalog": {
+            "feature_sets_by_stage": { "stage1": ["fo_midday_direction_regime_v1"] }
+          },
+          "training": {
+            "search_options_by_stage": {
+              "stage1": {
+                "hpo": { "enabled": true, "strategy": "optuna", "trials_per_model": 24, "sampler_seed": 43 },
+                "max_experiments": 48,
+                "max_elapsed_seconds": 7200
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "asymmetry",
+        "model_group_suffix": "_epg_asymmetry",
+        "overrides": {
+          "outputs": { "run_name": "entry_pg_asymmetry" },
+          "catalog": {
+            "feature_sets_by_stage": { "stage1": ["fo_midday_asymmetry"] }
+          },
+          "training": {
+            "search_options_by_stage": {
+              "stage1": {
+                "hpo": { "enabled": true, "strategy": "optuna", "trials_per_model": 24, "sampler_seed": 44 },
+                "max_experiments": 48,
+                "max_elapsed_seconds": 7200
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "oi_iv",
+        "model_group_suffix": "_epg_oi_iv",
+        "overrides": {
+          "outputs": { "run_name": "entry_pg_oi_iv" },
+          "catalog": {
+            "feature_sets_by_stage": { "stage1": ["fo_midday_time_aware_plus_oi_iv"] }
+          },
+          "training": {
+            "search_options_by_stage": {
+              "stage1": {
+                "hpo": { "enabled": true, "strategy": "optuna", "trials_per_model": 24, "sampler_seed": 45 },
+                "max_experiments": 48,
+                "max_elapsed_seconds": 7200
+              }
+            }
+          }
+        }
+      },
+      {
+        "run_id": "oi_pcr",
+        "model_group_suffix": "_epg_oi_pcr",
+        "overrides": {
+          "outputs": { "run_name": "entry_pg_oi_pcr" },
+          "catalog": {
+            "feature_sets_by_stage": { "stage1": ["fo_oi_pcr_momentum"] }
+          },
+          "training": {
+            "search_options_by_stage": {
+              "stage1": {
+                "hpo": { "enabled": true, "strategy": "optuna", "trials_per_model": 24, "sampler_seed": 46 },
+                "max_experiments": 48,
+                "max_elapsed_seconds": 7200
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}
