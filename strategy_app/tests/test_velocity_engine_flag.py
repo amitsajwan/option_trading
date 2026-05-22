@@ -1,10 +1,10 @@
 from unittest.mock import patch
 
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
-from strategy_app.engines.entry_policy import LongOptionEntryPolicy
-from strategy_app.engines.regime import RegimeClassifier
-from strategy_app.engines.velocity_entry_policy import VelocityEnhancedEntryPolicy
-from strategy_app.engines.velocity_regime_classifier import VelocityEnhancedRegimeClassifier
+from strategy_app.policy.entry_policy import LongOptionEntryPolicy
+from strategy_app.market.regime import RegimeClassifier
+from strategy_app.policy.velocity_entry_policy import VelocityEnhancedEntryPolicy
+from strategy_app.policy.velocity_regime_classifier import VelocityEnhancedRegimeClassifier
 
 
 def test_deterministic_engine_uses_plain_policy_by_default():

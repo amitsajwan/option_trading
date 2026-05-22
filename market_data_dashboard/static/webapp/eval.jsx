@@ -52,7 +52,7 @@ const EVAL_DEBIT_MULTI_PRESET = {
   date_to: '2024-10-31',
   strategy: '',
   regime: '',
-  stop_loss_pct: 30,
+  stop_loss_pct: 10,
   target_pct: 60,
   trailing_enabled: false,
   trailing_activation_pct: 0,
@@ -217,21 +217,97 @@ function evalShortRunId(runId) {
   return `${text.slice(0, 8)}…${text.slice(-4)}`;
 }
 
-function evalStatusChipClass(status) {
-  const state = String(status || '').trim().toLowerCase();
-  if (state === 'completed') return 'pos';
-  if (state === 'running' || state === 'queued') return 'warn';
-  if (state === 'failed' || state === 'cancelled') return 'neg';
-  return 'info';
+function evalFormatIstTimestamp(ts) {
+  const raw = String(ts || '').trim();
+  if (!raw) return '--';
+  try {
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return raw.slice(0, 19).replace('T', ' ');
+    return d.toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch (_) {
+    return raw.slice(0, 19).replace('T', ' ');
+  }
+}
+
+function evalSortRunsDesc(rows) {
+  const list = Array.isArray(rows) ? [...rows] : [];
+  list.sort((a, b) => {
+    const key = r => String(r?.ended_at || r?.submitted_at || r?.updated_at || r?.date_to || '').trim();
+    const ta = Date.parse(key(a)) || 0;
+    const tb = Date.parse(key(b)) || 0;
+    if (tb !== ta) return tb - ta;
+    return String(b?.run_id || '').localeCompare(String(a?.run_id || ''));
+  });
+  return list;
 }
 
 function evalRunOptionLabel(run) {
-  const id = evalShortRunId(run?.run_id);
-  const from = String(run?.date_from || '?').slice(0, 10);
-  const to = String(run?.date_to || '?').slice(0, 10);
-  const status = String(run?.status || 'unknown').toUpperCase();
+  const from = String(run?.date_from || '').slice(0, 10);
+  const to = String(run?.date_to || '').slice(0, 10);
+  const range = from && to ? `${from} → ${to}` : (from || to || 'window ?');
   const trades = run?.trade_count != null ? `${run.trade_count} trades` : '';
-  return [id, `${from}→${to}`, status, trades].filter(Boolean).join(' · ');
+  const profile = String(run?.strategy_profile_id || '').trim();
+  const queued = run?.submitted_at ? evalFormatIstTimestamp(run.submitted_at) : '';
+  const parts = [range, profile, trades, queued, evalShortRunId(run?.run_id)].filter(Boolean);
+  return parts.join(' · ');
+}
+
+function EvalRunDetails({ run, vmProfileId }) {
+  if (!run || !String(run.run_id || '').trim()) return null;
+  const profile = String(run.strategy_profile_id || '').trim();
+  const vmProfile = String(vmProfileId || '').trim();
+  const profileMismatch = profile && vmProfile && profile !== vmProfile;
+  const from = String(run.date_from || '').slice(0, 10);
+  const to = String(run.date_to || '').slice(0, 10);
+  const discovered = Boolean(run.discovered);
+  return (
+    <div className="eval-run-details">
+      <div className="eval-run-details-grid">
+        <div>
+          <div className="field-label">Run ID</div>
+          <code className="mono tiny eval-run-id-full">{String(run.run_id || '')}</code>
+        </div>
+        <div>
+          <div className="field-label">Replay window</div>
+          <strong>{from && to ? `${from} → ${to}` : (from || to || '--')}</strong>
+        </div>
+        <div>
+          <div className="field-label">Queued (IST)</div>
+          <strong>{evalFormatIstTimestamp(run.submitted_at)}</strong>
+        </div>
+        <div>
+          <div className="field-label">Finished (IST)</div>
+          <strong>{evalFormatIstTimestamp(run.ended_at || run.updated_at)}</strong>
+        </div>
+        <div>
+          <div className="field-label">Profile (from trades)</div>
+          <strong className="mono">{profile || (discovered ? '— check trades —' : '--')}</strong>
+        </div>
+        <div>
+          <div className="field-label">Status</div>
+          <strong>{String(run.status || 'unknown')}</strong>
+          {run.trade_count != null ? (
+            <span className="muted tiny"> · {run.trade_count} closed trades</span>
+          ) : null}
+        </div>
+      </div>
+      {profileMismatch && (
+        <p className="muted tiny eval-run-details-note">
+          Trades used <code>{profile}</code>; VM is now <code>{vmProfile}</code> (redeploy or different engine).
+        </p>
+      )}
+      <p className="muted tiny eval-run-details-note">
+        Dropdown lines summarize each run; details above are for the selection. Profile is read from Mongo trades for this <code>run_id</code>, not the Trader book chip (that is today&apos;s VM only).
+      </p>
+    </div>
+  );
 }
 
 function evalReplayDeepLink({ runId, dateFrom, dateTo }) {
@@ -394,7 +470,7 @@ function EvalMonitor({ tweaks }) {
         `/api/strategy/evaluation/runs?dataset=${encodeURIComponent(dataset)}&limit=40`
       );
       const listed = payload?.rows ?? payload?.runs;
-      setRuns(Array.isArray(listed) ? listed : []);
+      setRuns(evalSortRunsDesc(listed));
     } catch (err) {
       setRuns([]);
       setError(err.message || String(err));
@@ -822,14 +898,6 @@ function EvalMonitor({ tweaks }) {
             </label>
             {resolvedRunId && (
               <>
-                <span className={`chip ${evalStatusChipClass(runStatus?.status)}`}>
-                  <span className="dot"></span>{String(runStatus?.status || 'unknown')}
-                </span>
-                <span className="eval-run-meta mono tiny" title={resolvedRunId}>
-                  {evalShortRunId(resolvedRunId)}
-                  {runStatus?.date_from && runStatus?.date_to ? ` · ${String(runStatus.date_from).slice(0, 10)}→${String(runStatus.date_to).slice(0, 10)}` : ''}
-                  {runStatus?.trade_count != null ? ` · ${runStatus.trade_count} trades` : ''}
-                </span>
                 <button type="button" className="btn sm" onClick={() => evalCopyText(resolvedRunId)}>Copy run ID</button>
                 <button type="button" className="btn sm" onClick={() => evalCopyText(window.location.href)}>Copy link</button>
                 {resolvedRunId && runStatus?.date_from && (
@@ -847,9 +915,9 @@ function EvalMonitor({ tweaks }) {
               </>
             )}
           </div>
+          <EvalRunDetails run={runStatus} vmProfileId={vmProfileId} />
           <p className="muted eval-runs-hint">
-            Pick a run from the list (or open a direct link with <code>?mode=eval&amp;run_id=…&amp;date_from=…&amp;date_to=…</code>).
-            Metrics load for that run&apos;s date range — not the default January window.
+            Each option shows replay window, profile (if trades exist), trade count, and when queued. Full details appear above after you select.
           </p>
         </div>
       </div>

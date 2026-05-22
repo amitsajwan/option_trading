@@ -316,6 +316,33 @@ table { border-collapse: collapse; width: 100%; }
 .eval-runs-panel .eval-run-meta {
   color: var(--ink-3);
 }
+.eval-run-details {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-2);
+}
+.eval-run-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px 16px;
+}
+.eval-run-details-grid strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+}
+.eval-run-id-full {
+  display: block;
+  margin-top: 2px;
+  word-break: break-all;
+  font-size: 11px;
+}
+.eval-run-details-note {
+  margin: 10px 0 0;
+  line-height: 1.45;
+}
 .eval-runs-hint {
   margin: 10px 0 0;
   font-size: 12px;

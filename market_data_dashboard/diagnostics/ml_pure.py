@@ -16,7 +16,7 @@ except Exception:  # pragma: no cover
 try:
     from ..strategy_evaluation_service import _iso_or_none, _safe_float
 except ImportError:
-    from strategy_evaluation_service import _iso_or_none, _safe_float  # type: ignore
+    from market_data_dashboard.services.strategy_evaluation_service import _iso_or_none, _safe_float  # type: ignore
 
 
 def _safe_ratio(numerator: Any, denominator: Any) -> Optional[float]:

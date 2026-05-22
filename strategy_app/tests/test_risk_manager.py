@@ -3,7 +3,7 @@ from tempfile import TemporaryDirectory
 from datetime import date
 from unittest import mock
 
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 from strategy_app.risk.manager import RiskManager
 
 

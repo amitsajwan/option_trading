@@ -7,7 +7,7 @@ from contracts_app.strategy_decision_contract import normalize_decision_mode, no
 try:
     from ..strategy_evaluation_service import _iso_or_none, _safe_float
 except ImportError:
-    from strategy_evaluation_service import _iso_or_none, _safe_float  # type: ignore
+    from market_data_dashboard.services.strategy_evaluation_service import _iso_or_none, _safe_float  # type: ignore
 
 
 def _coerce_bool(raw: Any) -> Optional[bool]:
@@ -88,7 +88,13 @@ def policy_row_from_vote_doc(doc: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
-def build_deterministic_diagnostics(*, date_ist: str, votes_coll: Any, run_id: Optional[str] = None) -> dict[str, Any]:
+def build_deterministic_diagnostics(
+    *,
+    date_ist: str,
+    votes_coll: Any,
+    run_id: Optional[str] = None,
+    strategy_profile_id: Optional[str] = None,
+) -> dict[str, Any]:
     day_query = {"trade_date_ist": str(date_ist)}
     run_text = str(run_id or "").strip()
     if run_text:
@@ -149,9 +155,19 @@ def build_deterministic_diagnostics(*, date_ist: str, votes_coll: Any, run_id: O
         status = "NO_POLICY_EVALUATION_TODAY"
         summary = "Directional entries existed but no deterministic policy decisions were persisted."
 
+    r1s_block: dict[str, Any] = {}
+    try:
+        from .r1s_top3 import build_r1s_top3_diagnostics
+
+        r1s_block = build_r1s_top3_diagnostics(votes_coll=votes_coll, day_query=day_query)
+    except Exception:
+        r1s_block = {}
+
     return {
         "status": status,
         "summary": summary,
+        "r1s_top3": r1s_block,
+        "strategy_profile_id": str(strategy_profile_id or "").strip() or None,
         "counts": {
             "directional_entry_votes_day": int(directional_entry_votes_day),
             "policy_evaluated_votes_day": int(policy_evaluated_votes_day),

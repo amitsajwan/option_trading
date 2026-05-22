@@ -4,9 +4,9 @@ from datetime import datetime
 from contracts_app import IST_ZONE
 from strategy_app.contracts import Direction, SignalType, StrategyVote
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
-from strategy_app.engines.entry_policy import EntryPolicyDecision
-from strategy_app.engines.regime import Regime, RegimeSignal
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.policy.entry_policy import EntryPolicyDecision
+from strategy_app.market.regime import Regime, RegimeSignal
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 
 
 def _snapshot() -> SnapshotAccessor:

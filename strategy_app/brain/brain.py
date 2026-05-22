@@ -376,14 +376,8 @@ class TradingBrain:
         llm_clean = llm_hint.strip().upper()
         if llm_clean in ("AVOID", "VOLATILE", "NEUTRAL", "CALM"):
             reasons.append(f"llm:{llm_clean}")
-            try:
-                llm_confidence = float(
-                    # provider may have put confidence in context
-                    0.75
-                )
-                return DayScore(llm_clean), llm_confidence, "+".join(reasons)
-            except ValueError:
-                pass
+            llm_confidence = 0.75
+            return DayScore(llm_clean), llm_confidence, "+".join(reasons)
 
         # Daily feature hint from DailyFeaturesProvider
         hint_clean = hint.strip().upper()

@@ -4,13 +4,13 @@ import unittest
 from datetime import datetime
 
 from strategy_app.contracts import PositionContext
-from strategy_app.engines.playbook_brain import (
+from strategy_app.brain.playbook_brain import (
     PLAYBOOK_EXIT_KEY,
     evaluate_playbook_exit,
     playbook_exit_metrics,
 )
 from strategy_app.engines.r1s_rule_runtime import load_rule, row_passes_entry
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 from strategy_app.engines.strategies.rule_top3_short_ce import PlaybookV1ShortCeStrategy
 
 

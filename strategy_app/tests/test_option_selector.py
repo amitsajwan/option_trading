@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from strategy_app.engines.option_selector import select_strike
+from strategy_app.signals.option_selector import select_strike
 
 
 @dataclass

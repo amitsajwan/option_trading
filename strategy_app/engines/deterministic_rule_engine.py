@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
 import time as wall_time
 import uuid
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from typing import Any, Optional
 
 from ..contracts import (
@@ -32,16 +34,16 @@ from ..logging.decision_trace import (
 )
 from ..position.tracker import PositionTracker
 from ..risk.config import PositionRiskConfig
-from .playbook_brain import PLAYBOOK_EXIT_KEY
+from ..brain.playbook_brain import PLAYBOOK_EXIT_KEY
 from ..risk.manager import RiskManager
-from .decision_annotation import (
+from ..signals.decision_annotation import (
     annotate_signal_contract as apply_signal_contract,
     annotate_vote_contract as apply_vote_contract,
     derive_decision_mode,
     derive_reason_code,
 )
-from .entry_policy import EntryPolicy, EntryPolicyDecision, LongOptionEntryPolicy, PolicyConfig
-from .direction_ml_policy import maybe_wrap_with_direction_ml
+from ..policy.entry_policy import EntryPolicy, EntryPolicyDecision, LongOptionEntryPolicy, PolicyConfig
+from ..ml.direction_ml_policy import maybe_wrap_with_direction_ml
 from .profiles import (
     PRODUCTION_DEFAULT_PROFILE_ID,
     PROFILE_DEBIT_MULTI_V1,
@@ -50,16 +52,16 @@ from .profiles import (
 )
 from ..brain.brain import BrainDecision, TradingBrain
 from ..brain.context import DayContext
-from ..engines.runtime_artifacts import resolve_runtime_artifact_paths
+from ..runtime.runtime_artifacts import resolve_runtime_artifact_paths
 
 _PROFILES_RELAX_REGIME_CONF = frozenset(
     {PROFILE_R1S_TOP3_PAPER_V1, PROFILE_DEBIT_MULTI_V1, PROFILE_TRADER_MASTER_V1}
 )
-from .regime import RegimeClassifier, RegimeSignal
-from .snapshot_accessor import SnapshotAccessor
+from ..market.regime import RegimeClassifier, RegimeSignal
+from ..market.snapshot_accessor import SnapshotAccessor
 from .strategy_router import StrategyRouter
-from .velocity_entry_policy import VelocityEnhancedEntryPolicy
-from .velocity_regime_classifier import VelocityEnhancedRegimeClassifier
+from ..policy.velocity_entry_policy import VelocityEnhancedEntryPolicy
+from ..policy.velocity_regime_classifier import VelocityEnhancedRegimeClassifier
 from ..constants import EXIT_CONFIDENCE, MIN_ENTRY_CONFIDENCE, SOFT_CLOSE_MINUTE
 from ..utils.env import as_bool
 
@@ -448,43 +450,37 @@ class DeterministicRuleEngine(StrategyEngine):
             and vote.direction == Direction.EXIT
             and vote.confidence >= EXIT_CONFIDENCE
         ]
-        exit_votes = list(all_exit_votes)
-        owned_exit_votes = [vote for vote in all_exit_votes if str(vote.strategy_name or "").strip().upper() == str(position.entry_strategy or "").strip().upper()]
-        used_owned_pool = False
+        owned_exit_votes = [
+            vote for vote in all_exit_votes
+            if str(vote.strategy_name or "").strip().upper() == str(position.entry_strategy or "").strip().upper()
+        ]
+        # Prefer owned-strategy pool; fall back to all exit votes if it yields no winner.
         if owned_exit_votes:
-            exit_votes = owned_exit_votes
-            used_owned_pool = True
             logger.debug(
                 "using owned strategy exit-only pool entry_strategy=%s votes=%d",
                 position.entry_strategy,
                 len(owned_exit_votes),
             )
-            best_vote = self._select_exit_vote(exit_votes, position)
+            best_vote = self._select_exit_vote(owned_exit_votes, position)
             if best_vote is None:
-                exit_votes = [
-                    vote
-                    for vote in votes
-                    if vote.signal_type == SignalType.EXIT
-                    and vote.direction == Direction.EXIT
-                    and vote.confidence >= EXIT_CONFIDENCE
-                ]
                 logger.debug(
                     "owned exit not triggered, falling back to universal exit pool entry_strategy=%s",
                     position.entry_strategy,
                 )
+                best_vote = self._select_exit_vote(all_exit_votes, position)
         else:
             logger.debug(
                 "owned strategy exit votes missing, using universal exit pool entry_strategy=%s pool=%d",
                 position.entry_strategy,
-                len(exit_votes),
+                len(all_exit_votes),
             )
-        best_vote = self._select_exit_vote(exit_votes, position)
+            best_vote = self._select_exit_vote(all_exit_votes, position)
+
         if best_vote is None:
             return None
-        if best_vote is not None and self._should_defer_regime_shift_exit(position, best_vote):
+        if self._should_defer_regime_shift_exit(position, best_vote):
             non_regime_votes = [
-                vote
-                for vote in (all_exit_votes if used_owned_pool else exit_votes)
+                vote for vote in all_exit_votes
                 if (vote.exit_reason or ExitReason.STRATEGY_EXIT) != ExitReason.REGIME_SHIFT
             ]
             best_vote = self._select_exit_vote(non_regime_votes, position)
@@ -1407,10 +1403,9 @@ class DeterministicRuleEngine(StrategyEngine):
                 "brain_enabled": self._brain.enabled,
                 "day_context": self._day_context.to_dict(),
             }
-            import json as _json
             tmp = self._brain_state_path.with_name("brain_state.json.tmp")
             self._brain_state_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+            tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             tmp.replace(self._brain_state_path)
         except Exception as exc:
             logger.warning("brain_state write failed error=%s", exc)

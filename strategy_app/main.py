@@ -15,7 +15,7 @@ from contracts_app import configure_ist_logging, snapshot_topic
 from .contracts import SignalType, TradeSignal
 from .engines import DeterministicRuleEngine, PureMLEngine
 from .engines.profiles import PRODUCTION_DEFAULT_PROFILE_ID, build_run_metadata, known_profile_ids
-from .engines.runtime_artifacts import (
+from .runtime.runtime_artifacts import (
     RuntimeArtifactStore,
     build_runtime_config_payload,
     resolve_runtime_artifact_paths,
@@ -32,6 +32,25 @@ MAX_CAPPED_LIVE_SIZE_MULTIPLIER = 0.25
 def _normalize_optional_str(value: Optional[str]) -> Optional[str]:
     text = str(value or "").strip()
     return text or None
+
+
+def _apply_premium_stop_loss_override(risk_config: dict) -> dict:
+    """Optional env override for premium stop (fraction or percent, e.g. 0.10 or 10)."""
+    raw = str(os.getenv("STRATEGY_PREMIUM_STOP_LOSS_PCT", "") or "").strip()
+    if not raw:
+        return risk_config
+    try:
+        pct = float(raw)
+    except ValueError:
+        logger.warning("ignoring invalid STRATEGY_PREMIUM_STOP_LOSS_PCT=%r", raw)
+        return risk_config
+    if pct <= 0:
+        return risk_config
+    if pct > 1.0:
+        pct = pct / 100.0
+    merged = dict(risk_config)
+    merged["stop_loss_pct"] = pct
+    return merged
 
 
 def _build_signal_handler() -> Callable[[TradeSignal], None]:
@@ -71,22 +90,12 @@ def _resolve_optional_str(cli_value: Optional[str], env_key: str) -> Optional[st
     return _normalize_optional_str(os.getenv(env_key))
 
 
-def _resolve_ml_pure_int(cli_value: Optional[int], env_key: str, default: int) -> int:
+def _resolve_ml_num(cli_value, env_key: str, default, cast):
+    """Resolve a numeric CLI/env param with a type cast (int or float)."""
     if cli_value is not None:
-        return int(cli_value)
+        return cast(cli_value)
     raw = _normalize_optional_str(os.getenv(env_key))
-    if raw is None:
-        return int(default)
-    return int(raw)
-
-
-def _resolve_ml_pure_float(cli_value: Optional[float], env_key: str, default: float) -> float:
-    if cli_value is not None:
-        return float(cli_value)
-    raw = _normalize_optional_str(os.getenv(env_key))
-    if raw is None:
-        return float(default)
-    return float(raw)
+    return cast(default) if raw is None else cast(raw)
 
 
 def _load_json_file(path: str) -> dict:
@@ -279,11 +288,11 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     ml_pure_threshold_report = _resolve_optional_str(args.ml_pure_threshold_report, "ML_PURE_THRESHOLD_REPORT")
     ml_pure_run_id = _resolve_optional_str(args.ml_pure_run_id, "ML_PURE_RUN_ID")
     ml_pure_model_group = _resolve_optional_str(args.ml_pure_model_group, "ML_PURE_MODEL_GROUP")
-    ml_pure_max_feature_age_sec = _resolve_ml_pure_int(args.ml_pure_max_feature_age_sec, "ML_PURE_MAX_FEATURE_AGE_SEC", 90)
-    ml_pure_max_nan_features = _resolve_ml_pure_int(args.ml_pure_max_nan_features, "ML_PURE_MAX_NAN_FEATURES", 3)
-    ml_pure_max_hold_bars = _resolve_ml_pure_int(args.ml_pure_max_hold_bars, "ML_PURE_MAX_HOLD_BARS", 15)
-    ml_pure_min_oi = _resolve_ml_pure_float(args.ml_pure_min_oi, "ML_PURE_MIN_OI", 50000.0)
-    ml_pure_min_volume = _resolve_ml_pure_float(args.ml_pure_min_volume, "ML_PURE_MIN_VOLUME", 15000.0)
+    ml_pure_max_feature_age_sec = _resolve_ml_num(args.ml_pure_max_feature_age_sec, "ML_PURE_MAX_FEATURE_AGE_SEC", 90, int)
+    ml_pure_max_nan_features = _resolve_ml_num(args.ml_pure_max_nan_features, "ML_PURE_MAX_NAN_FEATURES", 3, int)
+    ml_pure_max_hold_bars = _resolve_ml_num(args.ml_pure_max_hold_bars, "ML_PURE_MAX_HOLD_BARS", 15, int)
+    ml_pure_min_oi = _resolve_ml_num(args.ml_pure_min_oi, "ML_PURE_MIN_OI", 50000.0, float)
+    ml_pure_min_volume = _resolve_ml_num(args.ml_pure_min_volume, "ML_PURE_MIN_VOLUME", 15000.0, float)
     engine_key = str(args.engine or "").strip().lower()
     ml_pure_switch_meta = None
     ml_pure_model_package, ml_pure_threshold_report, ml_pure_switch_meta = _resolve_ml_pure_switch_paths(
@@ -337,10 +346,12 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         if engine_key == "deterministic" and strategy_profile_id in known_profile_ids():
             profile_meta = build_run_metadata(strategy_profile_id)
             run_metadata.update(profile_meta)
-            run_metadata["risk_config"] = {
-                **profile_meta.get("risk_config", {}),
-                **run_metadata["risk_config"],
-            }
+            run_metadata["risk_config"] = _apply_premium_stop_loss_override(
+                {
+                    **profile_meta.get("risk_config", {}),
+                    **run_metadata["risk_config"],
+                }
+            )
         engine.set_run_context(f"runtime-{args.rollout_stage}", run_metadata)
     topic = str(args.topic or snapshot_topic()).strip() or snapshot_topic()
     runtime_store = RuntimeArtifactStore(runtime_artifact_paths.root)

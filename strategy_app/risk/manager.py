@@ -8,8 +8,8 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from ..contracts import PositionContext, RiskContext
-from ..engines.runtime_artifacts import resolve_runtime_artifact_paths
-from ..engines.snapshot_accessor import SnapshotAccessor
+from ..runtime.runtime_artifacts import resolve_runtime_artifact_paths
+from ..market.snapshot_accessor import SnapshotAccessor
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,6 @@ _RISK_PROFILE_PRESETS: dict[str, dict[str, float | int | str]] = {
 }
 
 
-
-
 class RiskManager:
     """Maintains session risk state and kill-switches."""
 
@@ -67,11 +65,13 @@ class RiskManager:
 
     def _cfg_float(self, key: str, fallback: float) -> float:
         default = float(self._profile_defaults.get(key, fallback))
-        return env_float(key, default) if env_float(key, default) is not None else default
+        value = env_float(key, default)
+        return value if value is not None else default
 
     def _cfg_int(self, key: str, fallback: int) -> int:
         default = int(self._profile_defaults.get(key, fallback))
-        return env_int(key, default) if env_int(key, default) is not None else default
+        value = env_int(key, default)
+        return value if value is not None else default
 
     def _cfg_str(self, key: str, fallback: str) -> str:
         default = str(self._profile_defaults.get(key, fallback))

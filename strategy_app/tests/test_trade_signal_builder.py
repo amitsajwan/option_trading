@@ -9,7 +9,7 @@ from typing import Optional
 
 import pytest
 
-from strategy_app.engines.trade_signal_builder import build_ml_entry_signal
+from strategy_app.signals.trade_signal_builder import build_ml_entry_signal
 
 
 @dataclass

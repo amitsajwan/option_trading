@@ -1,7 +1,8 @@
 """Playbook policy: map rules_pipeline exit JSON to live position management.
 
-Entry ranking stays in rule-backed strategies; this module owns exit parity
-with ``execution_sim._evaluate_exit_conditions`` (thesis, MFE trail, underlying).
+Hard rules first (underlying + premium stop), then intelligence (trail, thesis
+signal), then time — same order as ``execution_sim``. Entry ranking stays in
+rule-backed strategies; no discretionary overrides.
 """
 from __future__ import annotations
 
@@ -13,8 +14,8 @@ from ml_pipeline_2.scripts.rules_pipeline.condition_evaluator import evaluate_co
 from ml_pipeline_2.scripts.rules_pipeline.rule_schema import Condition, ExitConfig, Rule
 
 from ..contracts import ExitReason, PositionContext
-from .r1s_rule_runtime import snapshot_feature_row
-from .snapshot_accessor import SnapshotAccessor
+from ..engines.r1s_rule_runtime import snapshot_feature_row
+from ..market.snapshot_accessor import SnapshotAccessor
 
 PLAYBOOK_EXIT_KEY = "playbook_exit"
 

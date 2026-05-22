@@ -8,7 +8,7 @@ from typing import Any, Iterable, Optional
 import redis
 
 from contracts_app import find_matching_python_processes, isoformat_ist, redis_connection_kwargs
-from .engines.runtime_artifacts import RuntimeArtifactStore, resolve_runtime_artifact_paths, summarize_runtime_artifacts
+from .runtime.runtime_artifacts import RuntimeArtifactStore, resolve_runtime_artifact_paths, summarize_runtime_artifacts
 from .logging.health_marker import HealthMarker
 
 

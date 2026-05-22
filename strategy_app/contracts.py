@@ -93,6 +93,9 @@ class PositionContext:
     underlying_target_pct: Optional[float] = None
     risk_basis: Optional[str] = None
     playbook_exit_policy: Optional[dict[str, Any]] = None
+    # Stagnation exit: exit after stagnant_exit_bars if gain < stagnant_min_gain_pct.
+    stagnant_exit_bars: int = 0
+    stagnant_min_gain_pct: float = 0.05
 
 
 @dataclass
@@ -199,6 +202,8 @@ class TradeSignal:
     underlying_target_pct: Optional[float] = None
     risk_basis: Optional[str] = None
     playbook_exit_policy: Optional[dict[str, Any]] = None
+    stagnant_exit_bars: int = 0
+    stagnant_min_gain_pct: float = 0.05
 
 
 class StrategyEngine(ABC):

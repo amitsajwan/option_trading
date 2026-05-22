@@ -13,7 +13,7 @@ from .profiles import (
     get_regime_entry_map,
     known_profile_ids,
 )
-from .regime import Regime
+from ..market.regime import Regime
 from .strategies.all_strategies import (
     EMAcrossoverStrategy,
     FailedBreakoutReversalStrategy,
@@ -242,7 +242,7 @@ class StrategyRouter:
             ]
 
         new_entry_sets: dict[Regime, list[BaseStrategy]] = {}
-        for regime in (Regime.TRENDING, Regime.SIDEWAYS, Regime.EXPIRY, Regime.PRE_EXPIRY, Regime.HIGH_VOL, Regime.AVOID):
+        for regime in Regime:
             names = regime_entry_map.get(regime, list(default_entry.get(regime.value, [])))
             if enabled_entry is not None:
                 names = [name for name in names if name in enabled_entry]

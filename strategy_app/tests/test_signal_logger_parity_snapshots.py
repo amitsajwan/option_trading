@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from strategy_app.contracts import Direction, ExitReason, SignalType, StrategyVote, TradeSignal
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 from strategy_app.logging.signal_logger import SignalLogger
 from strategy_app.position.tracker import PositionTracker
 

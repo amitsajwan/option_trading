@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 from ..contracts import SignalType, TradeSignal
 from ..risk.manager import RiskManager
-from .snapshot_accessor import SnapshotAccessor
+from ..market.snapshot_accessor import SnapshotAccessor
 
 
 def build_ml_entry_signal(

@@ -9,7 +9,7 @@ from strategy_app.engines.profiles import (
     get_regime_entry_map,
     get_risk_config,
 )
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 from strategy_app.engines.strategies.rule_top3_long_option import (
     R1Top3LongPeStrategy,
     R2Top3LongCeStrategy,
@@ -24,8 +24,11 @@ def test_debit_multi_profile_splits_ce_and_pe_by_regime() -> None:
     assert "R2_TOP3_LONG_CE" not in mapping["SIDEWAYS"]
     assert "R1_TOP3_LONG_PE" not in mapping["TRENDING"]
     risk = get_risk_config(PROFILE_DEBIT_MULTI_V1)
-    assert risk["stop_loss_pct"] == 0.30
-    assert risk["trailing_enabled"] is False
+    assert risk["stop_loss_pct"] == 0.25
+    assert risk["trailing_enabled"] is True
+    assert risk["underlying_stop_pct"] == 0.002
+    assert risk["stagnant_exit_bars"] == 20
+    assert risk["orb_max_range_pts"] == 250.0
 
 
 def test_router_loads_debit_multi_strategies() -> None:

@@ -15,7 +15,7 @@ from contracts_app.regime_thresholds import (
     VIX_LOW_THRESHOLD,
 )
 
-from .snapshot_accessor import SnapshotAccessor
+from ..market.snapshot_accessor import SnapshotAccessor
 
 
 def _to_float(value: object) -> Optional[float]:

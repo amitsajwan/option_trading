@@ -60,9 +60,21 @@ _DEBIT_MULTI_EXIT_STRATEGIES: list[str] = [
     "OI_BUILDUP",
 ]
 _DEBIT_MULTI_RISK_CONFIG: dict[str, Any] = {
-    "stop_loss_pct": 0.30,
+    # Primary exit: close when premium PnL drops to -25%.
+    "stop_loss_pct": 0.25,
+    # Secondary hard floor: exit if BankNifty futures moves 0.20% against us (~100 pts).
+    "underlying_stop_pct": 0.002,
     "target_pct": 0.60,
-    "trailing_enabled": False,
+    # Trail profits once +15% MFE is hit; keep 8% room before locking.
+    "trailing_enabled": True,
+    "trailing_activation_pct": 0.15,
+    "trailing_offset_pct": 0.08,
+    "trailing_lock_breakeven": True,
+    # Stagnation: if after 20 bars (≈20 min) we haven't gained 5%, exit — stop theta decay.
+    "stagnant_exit_bars": 20,
+    "stagnant_min_gain_pct": 0.05,
+    # ORB guard: skip ORB entries when opening-range is wider than 250 pts.
+    "orb_max_range_pts": 250.0,
 }
 
 # Master book for evaluation: experienced trader — all major playbooks, regime-routed.

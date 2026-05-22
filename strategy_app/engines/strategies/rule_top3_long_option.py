@@ -21,7 +21,7 @@ from ..r1s_rule_runtime import (
     load_rule,
     row_passes_entry,
 )
-from ..snapshot_accessor import SnapshotAccessor
+from ...market.snapshot_accessor import SnapshotAccessor
 from ml_pipeline_2.scripts.rules_pipeline.rule_schema import Rule
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]

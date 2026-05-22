@@ -1,8 +1,8 @@
 import unittest
 
 from strategy_app.contracts import PositionContext
-from strategy_app.engines.regime import Regime
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.regime import Regime
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 from strategy_app.engines.strategies.all_strategies import IVRegimeFilter
 from strategy_app.engines.strategy_router import StrategyRouter
 from datetime import datetime, timezone

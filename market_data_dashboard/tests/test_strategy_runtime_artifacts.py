@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from market_data_dashboard.runtime_artifacts import load_strategy_runtime_observability
+from market_data_dashboard.state.runtime_artifacts import load_strategy_runtime_observability
 
 
 def test_load_strategy_runtime_observability_reads_artifacts(tmp_path: Path) -> None:

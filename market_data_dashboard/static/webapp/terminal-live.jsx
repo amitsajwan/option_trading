@@ -1114,7 +1114,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
         onModeSwitch={onModeSwitch} onHaltClick={onKillClick}
       />
       <div className="t-workspace">
-        <EngineRoster strategies={strategies} dailyRisk={sessionPnl < 0 ? Math.abs(sessionPnl)/2 : 0}/>
+        <EngineRoster strategies={strategies} dailyRisk={Math.abs(Math.min(0, sessionPnl))}/>
 
         <div className="t-center">
           <div className="t-chart-panel">
@@ -1145,8 +1145,10 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
           <div className="t-panel-head">
             <div className="t-panel-title">Trade Inspector</div>
             <div className="t-panel-actions">
-              <button className="t-btn ghost sm" title="Prev trade (K)">K ↑</button>
-              <button className="t-btn ghost sm" title="Next trade (J)">↓ J</button>
+              <button className="t-btn ghost sm" title="Prev trade (K)"
+                onClick={() => { const i=trades.findIndex(t=>t.id===selectedTrade?.id); if(i>0)setSelectedTrade(trades[i-1]); }}>K↑</button>
+              <button className="t-btn ghost sm" title="Next trade (J)"
+                onClick={() => { const i=trades.findIndex(t=>t.id===selectedTrade?.id); if(i<trades.length-1)setSelectedTrade(trades[i+1]); }}>↓J</button>
             </div>
           </div>
           <div style={{flex:1,overflowY:'auto',minHeight:0}}>

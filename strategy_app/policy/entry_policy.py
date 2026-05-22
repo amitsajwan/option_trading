@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import NamedTuple, Optional, Protocol
 
 from ..contracts import Direction, RiskContext, StrategyVote
-from .regime import RegimeSignal
-from .snapshot_accessor import SnapshotAccessor
+from ..market.regime import RegimeSignal
+from ..market.snapshot_accessor import SnapshotAccessor
 
 
 class EntryPolicyDecision(NamedTuple):

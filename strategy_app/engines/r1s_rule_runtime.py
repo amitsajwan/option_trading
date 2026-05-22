@@ -15,7 +15,7 @@ from ml_pipeline_2.scripts.rules_pipeline.condition_evaluator import (
 from ml_pipeline_2.scripts.rules_pipeline.rule_schema import Rule, TradeScoreConfig
 
 from ..contracts import Direction
-from .snapshot_accessor import SnapshotAccessor
+from ..market.snapshot_accessor import SnapshotAccessor
 
 _VIX_HIGH_THRESHOLD = 20.0
 

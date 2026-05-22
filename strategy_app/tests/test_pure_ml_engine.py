@@ -9,8 +9,8 @@ import joblib
 
 from strategy_app.contracts import ExitReason, SignalType
 from strategy_app.engines.pure_ml_engine import PureMLEngine
-from strategy_app.engines.runtime_artifacts import RuntimeArtifactStore
-from strategy_app.engines.pure_ml_staged_runtime import StagedRuntimeDecision
+from strategy_app.runtime.runtime_artifacts import RuntimeArtifactStore
+from strategy_app.ml.pure_ml_staged_runtime import StagedRuntimeDecision
 from strategy_app.logging.signal_logger import SignalLogger
 
 
@@ -456,21 +456,21 @@ class PureMLEngineTests(unittest.TestCase):
                 selected_strike_reason="bundle_atm",
             )
 
-            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+            with patch("strategy_app.ml.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
                 signal = engine.evaluate(_snapshot(snapshot_id="snap-entry", ts="2026-03-02T09:30:00+05:30"))
             self.assertIsNotNone(signal)
             assert signal is not None
             self.assertEqual(signal.signal_type, SignalType.ENTRY)
 
             engine._risk.context.daily_loss_breached = True
-            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+            with patch("strategy_app.ml.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
                 exit_signal = engine.evaluate(_snapshot(snapshot_id="snap-risk", ts="2026-03-02T09:31:00+05:30"))
             self.assertIsNotNone(exit_signal)
             assert exit_signal is not None
             self.assertEqual(exit_signal.signal_type, SignalType.EXIT)
             self.assertEqual(exit_signal.exit_reason, ExitReason.RISK_BREACH)
 
-            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry) as mocked_predict:
+            with patch("strategy_app.ml.option_pnl_predictor.select_best_bundle_decision", return_value=entry) as mocked_predict:
                 blocked = [
                     engine.evaluate(_snapshot(snapshot_id=f"snap-block-{i}", ts=f"2026-03-02T09:3{i + 2}:00+05:30"))
                     for i in range(5)
@@ -480,7 +480,7 @@ class PureMLEngineTests(unittest.TestCase):
             self.assertEqual(engine._hold_counts.get("risk_breach_cooldown"), 5)
 
             engine._risk.context.daily_loss_breached = False
-            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+            with patch("strategy_app.ml.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
                 allowed = engine.evaluate(_snapshot(snapshot_id="snap-allowed", ts="2026-03-02T09:37:00+05:30"))
             self.assertIsNotNone(allowed)
             assert allowed is not None
@@ -551,22 +551,140 @@ class PureMLEngineTests(unittest.TestCase):
                 selected_strike_reason="bundle_atm",
             )
 
-            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+            with patch("strategy_app.ml.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
                 signal = engine.evaluate(_snapshot(snapshot_id="snap-entry", ts="2026-03-02T09:30:00+05:30"))
             self.assertIsNotNone(signal)
             engine._risk.context.daily_loss_breached = True
-            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+            with patch("strategy_app.ml.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
                 exit_signal = engine.evaluate(_snapshot(snapshot_id="snap-risk", ts="2026-03-02T09:31:00+05:30"))
             self.assertIsNotNone(exit_signal)
             self.assertEqual(engine._option_pnl_risk_breach_cooldown_remaining, 5)
 
             engine.on_session_start(date(2026, 3, 3))
 
-            with patch("strategy_app.engines.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
+            with patch("strategy_app.ml.option_pnl_predictor.select_best_bundle_decision", return_value=entry):
                 next_signal = engine.evaluate(_snapshot(snapshot_id="snap-next-day", ts="2026-03-03T09:30:00+05:30"))
             self.assertIsNotNone(next_signal)
             assert next_signal is not None
             self.assertEqual(next_signal.signal_type, SignalType.ENTRY)
+
+    # ---------- Daily soft-halt ----------
+    # Stops new fires for the rest of the trading day once cumulative
+    # option-P&L drops below the configured negative threshold. Resets at
+    # session boundary. Only applies to option_pnl bundle path.
+
+    def _fake_closed_position(self, pnl_pct: float):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            pnl_pct=pnl_pct, lots=1, entry_premium=100.0,
+            position_id="pid", direction="PE", strike=50000,
+        )
+
+    def _fake_exit_signal(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            signal_id="sig", position_id="pid", direction="PE", strike=50000,
+            exit_reason=ExitReason.TIME_STOP, confidence=1.0,
+        )
+
+    def _trigger_close_with_pnl(self, engine: PureMLEngine, pnl_pct: float) -> None:
+        """Bypass the full evaluate() loop; directly invoke the close hook
+        with a stub position. This isolates the day-pnl accumulator logic."""
+        with patch.object(engine._risk, "record_trade_result"), \
+             patch.object(engine._log, "log_position_close"):
+            engine._handle_position_closed(
+                self._fake_exit_signal(), self._fake_closed_position(pnl_pct)
+            )
+
+    def test_daily_soft_halt_accumulates_and_triggers_below_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.dict("os.environ", {"OPTION_PNL_DAILY_SOFT_HALT_PCT": "-0.20"}, clear=False):
+                engine = self._build_engine(root)
+            engine._option_pnl_bundles = [object()]
+            engine.on_session_start(date(2026, 3, 2))
+
+            # Three losers, each -8%, cumulative -24% — should trip the -20% halt
+            self._trigger_close_with_pnl(engine, -0.08)
+            self.assertFalse(engine._day_halt_active)
+            self._trigger_close_with_pnl(engine, -0.08)
+            self.assertFalse(engine._day_halt_active)
+            self._trigger_close_with_pnl(engine, -0.08)
+            self.assertTrue(engine._day_halt_active)
+            self.assertAlmostEqual(engine._day_pnl_pct, -0.24, places=6)
+
+    def test_daily_soft_halt_does_not_trigger_on_winning_day(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.dict("os.environ", {"OPTION_PNL_DAILY_SOFT_HALT_PCT": "-0.20"}, clear=False):
+                engine = self._build_engine(root)
+            engine._option_pnl_bundles = [object()]
+            engine.on_session_start(date(2026, 3, 2))
+            for pnl in (+0.40, -0.20, +0.10, -0.05, +0.30):
+                self._trigger_close_with_pnl(engine, pnl)
+            self.assertFalse(engine._day_halt_active)
+            self.assertAlmostEqual(engine._day_pnl_pct, 0.55, places=6)
+
+    def test_daily_soft_halt_resets_on_session_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.dict("os.environ", {"OPTION_PNL_DAILY_SOFT_HALT_PCT": "-0.20"}, clear=False):
+                engine = self._build_engine(root)
+            engine._option_pnl_bundles = [object()]
+            engine.on_session_start(date(2026, 3, 2))
+            self._trigger_close_with_pnl(engine, -0.30)
+            self.assertTrue(engine._day_halt_active)
+            self.assertAlmostEqual(engine._day_pnl_pct, -0.30, places=6)
+            engine.on_session_start(date(2026, 3, 3))
+            self.assertFalse(engine._day_halt_active)
+            self.assertEqual(engine._day_pnl_pct, 0.0)
+
+    def test_daily_soft_halt_blocks_evaluate_fire(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.dict("os.environ", {"OPTION_PNL_DAILY_SOFT_HALT_PCT": "-0.20"}, clear=False):
+                engine = self._build_engine(root)
+            engine._option_pnl_bundles = [object()]
+            engine.on_session_start(date(2026, 3, 2))
+            engine._day_halt_active = True  # simulate already-tripped halt
+
+            entry = StagedRuntimeDecision(
+                action="BUY_PE", reason="option_pnl_fire", entry_prob=0.84,
+                direction_up_prob=0.16, ce_prob=0.0, pe_prob=1.0,
+                recipe_id="ATM_PE_15", recipe_prob=0.84, recipe_margin=0.0,
+                horizon_minutes=15, stop_loss_pct=0.25, target_pct=0.40,
+                selected_strike=50000, selected_strike_reason="bundle_atm",
+            )
+            with patch("strategy_app.ml.option_pnl_predictor.select_best_bundle_decision",
+                       return_value=entry) as mocked:
+                signal = engine.evaluate(_snapshot(snapshot_id="snap-halt", ts="2026-03-02T09:30:00+05:30"))
+            self.assertIsNone(signal)
+            mocked.assert_not_called()
+            self.assertEqual(engine._hold_counts.get("daily_soft_halt"), 1)
+
+    def test_daily_soft_halt_disabled_when_threshold_non_negative(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            # threshold=0 disables the halt entirely
+            with patch.dict("os.environ", {"OPTION_PNL_DAILY_SOFT_HALT_PCT": "0"}, clear=False):
+                engine = self._build_engine(root)
+            engine._option_pnl_bundles = [object()]
+            engine.on_session_start(date(2026, 3, 2))
+            for _ in range(10):
+                self._trigger_close_with_pnl(engine, -0.50)  # -500% cumulative
+            self.assertFalse(engine._day_halt_active)
+
+    def test_daily_soft_halt_does_not_apply_without_option_pnl_bundles(self) -> None:
+        """Legacy staged engine path must not be affected by this gate."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.dict("os.environ", {"OPTION_PNL_DAILY_SOFT_HALT_PCT": "-0.20"}, clear=False):
+                engine = self._build_engine(root)
+            engine._option_pnl_bundles = []
+            engine.on_session_start(date(2026, 3, 2))
+            self._trigger_close_with_pnl(engine, -0.50)
+            self.assertFalse(engine._day_halt_active)
+            self.assertEqual(engine._day_pnl_pct, 0.0)
 
 
 if __name__ == "__main__":

@@ -7,9 +7,9 @@ from pathlib import Path
 from contracts_app import IST_ZONE
 from strategy_app.contracts import Direction, ExitReason, PositionContext, RiskContext, SignalType, StrategyVote, TradeSignal
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
-from strategy_app.engines.entry_policy import EntryPolicyDecision, PolicyConfig
-from strategy_app.engines.regime import Regime, RegimeSignal
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.policy.entry_policy import EntryPolicyDecision, PolicyConfig
+from strategy_app.market.regime import Regime, RegimeSignal
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 from strategy_app.engines.strategies.all_strategies import ExpiryMaxPainStrategy
 from strategy_app.engines.strategy_router import StrategyRouter
 from strategy_app.logging.signal_logger import SignalLogger

@@ -10,7 +10,7 @@ import uuid
 from typing import Optional
 
 from ..contracts import PositionContext, TradeSignal
-from ..engines.snapshot_accessor import SnapshotAccessor
+from ..market.snapshot_accessor import SnapshotAccessor
 from ..logging.decision_field_resolver import DecisionFieldResolver
 from .trailing_manager import TrailingStopManager
 
@@ -112,4 +112,6 @@ class PositionFactory:
                 engine_mode=engine_mode,
             ),
             playbook_exit_policy=playbook_exit_policy,
+            stagnant_exit_bars=int(signal.stagnant_exit_bars),
+            stagnant_min_gain_pct=float(signal.stagnant_min_gain_pct),
         )

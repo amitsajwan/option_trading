@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from strategy_app.engines.runtime_artifacts import RuntimeArtifactStore
+from strategy_app.runtime.runtime_artifacts import RuntimeArtifactStore
 from strategy_app.health import evaluate
 
 

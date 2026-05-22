@@ -16,14 +16,14 @@ from ...contracts import (
     SnapshotPayload,
     StrategyVote,
 )
-from ..playbook_brain import (
+from ...brain.playbook_brain import (
     PLAYBOOK_EXIT_KEY,
     is_short_rule,
     playbook_exit_metrics,
     vote_exit_fractions,
 )
 from ..r1s_rule_runtime import composite_score, load_rule, row_passes_entry
-from ..snapshot_accessor import SnapshotAccessor
+from ...market.snapshot_accessor import SnapshotAccessor
 from ml_pipeline_2.scripts.rules_pipeline.rule_schema import Rule
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]

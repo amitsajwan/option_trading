@@ -37,82 +37,82 @@ from functools import lru_cache
 from urllib.parse import quote, urlencode
 
 try:
-    from .live_strategy_monitor_service import LiveStrategyMonitorService
+    from .services.live_strategy_monitor_service import LiveStrategyMonitorService
 except ImportError:
     try:
-        from live_strategy_monitor_service import LiveStrategyMonitorService  # type: ignore
+        from market_data_dashboard.services.live_strategy_monitor_service import LiveStrategyMonitorService  # type: ignore
     except ImportError:
         LiveStrategyMonitorService = None
 
 try:
-    from .historical_replay_monitor_service import HistoricalReplayMonitorService
+    from .services.historical_replay_monitor_service import HistoricalReplayMonitorService
 except ImportError:
     try:
-        from market_data_dashboard.historical_replay_monitor_service import HistoricalReplayMonitorService  # type: ignore
+        from market_data_dashboard.services.historical_replay_monitor_service import HistoricalReplayMonitorService  # type: ignore
     except ImportError:
         HistoricalReplayMonitorService = None
 
 try:
-    from .strategy_evaluation_service import StrategyEvaluationService
+    from .services.strategy_evaluation_service import StrategyEvaluationService
 except ImportError:
     try:
-        from strategy_evaluation_service import StrategyEvaluationService  # type: ignore
+        from market_data_dashboard.services.strategy_evaluation_service import StrategyEvaluationService  # type: ignore
     except ImportError:
         StrategyEvaluationService = None
 
 try:
-    from .research_eval_service import evaluate_recovery_scenario, list_recovery_scenarios
+    from .services.research_eval_service import evaluate_recovery_scenario, list_recovery_scenarios
 except ImportError:
     try:
-        from research_eval_service import evaluate_recovery_scenario, list_recovery_scenarios  # type: ignore
+        from market_data_dashboard.services.research_eval_service import evaluate_recovery_scenario, list_recovery_scenarios  # type: ignore
     except ImportError:
         evaluate_recovery_scenario = None  # type: ignore
         list_recovery_scenarios = None  # type: ignore
 
 try:
-    from .operator_routes import DashboardOperatorRouter
+    from .routes.operator_routes import DashboardOperatorRouter
 except ImportError:
-    from operator_routes import DashboardOperatorRouter  # type: ignore
+    from market_data_dashboard.routes.operator_routes import DashboardOperatorRouter  # type: ignore
 
 try:
-    from .historical_replay_routes import DashboardHistoricalReplayRouter
+    from .routes.historical_replay_routes import DashboardHistoricalReplayRouter
 except ImportError:
-    from market_data_dashboard.historical_replay_routes import DashboardHistoricalReplayRouter  # type: ignore
+    from market_data_dashboard.routes.historical_replay_routes import DashboardHistoricalReplayRouter  # type: ignore
 
 try:
-    from .strategy_evaluation_routes import DashboardStrategyEvaluationRouter
+    from .routes.strategy_evaluation_routes import DashboardStrategyEvaluationRouter
 except ImportError:
-    from strategy_evaluation_routes import DashboardStrategyEvaluationRouter  # type: ignore
+    from market_data_dashboard.routes.strategy_evaluation_routes import DashboardStrategyEvaluationRouter  # type: ignore
 
 try:
-    from .model_catalog_routes import DashboardModelCatalogRouter
+    from .routes.model_catalog_routes import DashboardModelCatalogRouter
 except ImportError:
-    from model_catalog_routes import DashboardModelCatalogRouter  # type: ignore
+    from market_data_dashboard.routes.model_catalog_routes import DashboardModelCatalogRouter  # type: ignore
 
 try:
-    from .public_contract_routes import DashboardPublicContractRouter
+    from .routes.public_contract_routes import DashboardPublicContractRouter
 except ImportError:
-    from public_contract_routes import DashboardPublicContractRouter  # type: ignore
+    from market_data_dashboard.routes.public_contract_routes import DashboardPublicContractRouter  # type: ignore
 
 try:
-    from .market_data_routes import DashboardMarketDataRouter
+    from .routes.market_data_routes import DashboardMarketDataRouter
 except ImportError:
-    from market_data_routes import DashboardMarketDataRouter  # type: ignore
+    from market_data_dashboard.routes.market_data_routes import DashboardMarketDataRouter  # type: ignore
 
 try:
-    from .debug_routes import DashboardDebugRouter
+    from .routes.debug_routes import DashboardDebugRouter
 except ImportError:
-    from debug_routes import DashboardDebugRouter  # type: ignore
+    from market_data_dashboard.routes.debug_routes import DashboardDebugRouter  # type: ignore
 
 try:
-    from .legacy_trading_runtime_routes import DashboardLegacyTradingRouter
+    from .routes.legacy_trading_runtime_routes import DashboardLegacyTradingRouter
 except ImportError:
-    from legacy_trading_runtime_routes import DashboardLegacyTradingRouter  # type: ignore
+    from market_data_dashboard.routes.legacy_trading_runtime_routes import DashboardLegacyTradingRouter  # type: ignore
 
 try:
-    from .monitor_ws import DashboardMonitorRouter
+    from .routes.monitor_ws import DashboardMonitorRouter
 except ImportError:
-    from monitor_ws import DashboardMonitorRouter  # type: ignore
+    from market_data_dashboard.routes.monitor_ws import DashboardMonitorRouter  # type: ignore
 
 try:
     from snapshot_app.core.snapshot_ml_flat_contract import load_contract_schema, load_feature_groups, load_legacy_mapping
@@ -122,10 +122,10 @@ except ImportError:
     load_legacy_mapping = None  # type: ignore
 
 try:
-    from .runtime_artifacts import load_strategy_runtime_observability
+    from .state.runtime_artifacts import load_strategy_runtime_observability
 except ImportError:
     try:
-        from runtime_artifacts import load_strategy_runtime_observability  # type: ignore
+        from market_data_dashboard.state.runtime_artifacts import load_strategy_runtime_observability  # type: ignore
     except ImportError:
         load_strategy_runtime_observability = None  # type: ignore
 
@@ -3855,16 +3855,16 @@ app.include_router(_historical_replay_routes.router)
 # does no mongo work, can answer 'what's running right now' even when the
 # mongo persistence path is slow/unavailable.
 try:
-    from .strategy_current_routes import StrategyCurrentRouter
+    from .routes.strategy_current_routes import StrategyCurrentRouter
 except ImportError:
-    from market_data_dashboard.strategy_current_routes import StrategyCurrentRouter  # type: ignore
+    from market_data_dashboard.routes.strategy_current_routes import StrategyCurrentRouter  # type: ignore
 _strategy_current_routes = StrategyCurrentRouter()
 app.include_router(_strategy_current_routes.router)
 
 try:
-    from .strategy_profiles_routes import StrategyProfilesRouter
+    from .routes.strategy_profiles_routes import StrategyProfilesRouter
 except ImportError:
-    from market_data_dashboard.strategy_profiles_routes import StrategyProfilesRouter  # type: ignore
+    from market_data_dashboard.routes.strategy_profiles_routes import StrategyProfilesRouter  # type: ignore
 _strategy_profiles_routes = StrategyProfilesRouter()
 app.include_router(_strategy_profiles_routes.router)
 

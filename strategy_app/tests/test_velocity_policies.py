@@ -14,10 +14,10 @@ from typing import Optional, Any
 import numpy as np
 import pandas as pd
 
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
-from strategy_app.engines.velocity_regime_classifier import VelocityEnhancedRegimeClassifier
-from strategy_app.engines.velocity_entry_policy import VelocityEnhancedEntryPolicy
-from strategy_app.engines.regime import Regime
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
+from strategy_app.policy.velocity_regime_classifier import VelocityEnhancedRegimeClassifier
+from strategy_app.policy.velocity_entry_policy import VelocityEnhancedEntryPolicy
+from strategy_app.market.regime import Regime
 from strategy_app.contracts import StrategyVote, Direction, SignalType
 
 

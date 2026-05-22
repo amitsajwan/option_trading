@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from strategy_app.contracts import Direction, RiskContext
 from strategy_app.engines.strategies.all_strategies import TraderCompositeStrategy
-from strategy_app.engines.trader_judgement import (
+from strategy_app.market.trader_judgement import (
     OptionTradabilityScorer,
     TradeGovernor,
     TraderAction,
@@ -13,7 +13,7 @@ from strategy_app.engines.trader_judgement import (
     TraderSetupState,
     TraderSetupType,
 )
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 
 
 def _base_payload(*, minutes: int) -> dict:

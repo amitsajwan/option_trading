@@ -7,11 +7,10 @@ from unittest.mock import patch
 import joblib
 
 from strategy_app.engines.pure_ml_engine import PureMLEngine
-from strategy_app.engines.runtime_artifacts import RuntimeArtifactStore
+from strategy_app.runtime.runtime_artifacts import RuntimeArtifactStore
 from strategy_app.logging.signal_logger import SignalLogger
 from strategy_app.main import (
-    _resolve_ml_pure_float,
-    _resolve_ml_pure_int,
+    _resolve_ml_num,
     _resolve_ml_pure_switch_paths,
     _resolve_optional_str,
     build_engine,
@@ -119,10 +118,10 @@ class PureMLConfigTests(unittest.TestCase):
 
     def test_resolve_ml_pure_numeric_values_use_default_when_unset(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            self.assertEqual(_resolve_ml_pure_int(None, "ML_PURE_MAX_HOLD_BARS", 15), 15)
-            self.assertAlmostEqual(_resolve_ml_pure_float(None, "ML_PURE_MIN_OI", 50000.0), 50000.0, places=6)
-            self.assertEqual(_resolve_ml_pure_int(None, "ML_PURE_MAX_FEATURE_AGE_SEC", 90), 90)
-            self.assertEqual(_resolve_ml_pure_int(None, "ML_PURE_MAX_NAN_FEATURES", 3), 3)
+            self.assertEqual(_resolve_ml_num(None, "ML_PURE_MAX_HOLD_BARS", 15, int), 15)
+            self.assertAlmostEqual(_resolve_ml_num(None, "ML_PURE_MIN_OI", 50000.0, float), 50000.0, places=6)
+            self.assertEqual(_resolve_ml_num(None, "ML_PURE_MAX_FEATURE_AGE_SEC", 90, int), 90)
+            self.assertEqual(_resolve_ml_num(None, "ML_PURE_MAX_NAN_FEATURES", 3, int), 3)
 
     def test_build_engine_ml_pure_requires_model_package(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -55,6 +55,21 @@ class PositionRiskConfig:
     regime_shift_confirm_bars: int = 2
     regime_shift_min_profit_hold_pct: Optional[float] = 0.08
 
+    # Underlying (futures) stop/target: fraction of entry futures price.
+    # e.g. 0.002 = 100 pts on a 50,000 BankNifty futures.
+    underlying_stop_pct: Optional[float] = None
+    underlying_target_pct: Optional[float] = None
+
+    # Stagnation exit: if after stagnant_exit_bars the trade hasn't reached
+    # stagnant_min_gain_pct, exit early to stop theta decay.
+    # Set stagnant_exit_bars=0 to disable.
+    stagnant_exit_bars: int = 0
+    stagnant_min_gain_pct: float = 0.05
+
+    # ORB wide-range filter: skip ORB entry if opening-range width exceeds
+    # this many BankNifty points. Set 0 to disable.
+    orb_max_range_pts: float = 0.0
+
     @classmethod
     def from_payload(cls, payload: Any) -> "PositionRiskConfig":
         if not isinstance(payload, dict):
@@ -73,6 +88,11 @@ class PositionRiskConfig:
             oi_trail=StrategyTrailConfig.from_payload(payload.get("oi_trail")),
             regime_shift_confirm_bars=as_positive_int(payload.get("regime_shift_confirm_bars"), default=2),
             regime_shift_min_profit_hold_pct=regime_shift_hold,
+            underlying_stop_pct=as_optional_float(payload.get("underlying_stop_pct")),
+            underlying_target_pct=as_optional_float(payload.get("underlying_target_pct")),
+            stagnant_exit_bars=max(0, int(as_optional_float(payload.get("stagnant_exit_bars")) or 0)),
+            stagnant_min_gain_pct=max(0.0, float(as_optional_float(payload.get("stagnant_min_gain_pct")) or 0.05)),
+            orb_max_range_pts=max(0.0, float(as_optional_float(payload.get("orb_max_range_pts")) or 0.0)),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -87,4 +107,9 @@ class PositionRiskConfig:
             "oi_trail": self.oi_trail.to_payload(),
             "regime_shift_confirm_bars": self.regime_shift_confirm_bars,
             "regime_shift_min_profit_hold_pct": self.regime_shift_min_profit_hold_pct,
+            "underlying_stop_pct": self.underlying_stop_pct,
+            "underlying_target_pct": self.underlying_target_pct,
+            "stagnant_exit_bars": self.stagnant_exit_bars,
+            "stagnant_min_gain_pct": self.stagnant_min_gain_pct,
+            "orb_max_range_pts": self.orb_max_range_pts,
         }

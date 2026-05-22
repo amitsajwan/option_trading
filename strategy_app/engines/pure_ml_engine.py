@@ -27,12 +27,12 @@ from ..logging.decision_trace import (
 )
 from ..position.tracker import PositionTracker
 from ..risk.manager import RiskManager
-from .runtime_artifacts import RuntimeArtifactStore, build_runtime_state_payload
-from .decision_annotation import annotate_signal_contract as apply_signal_contract
-from .pure_ml_staged_runtime import PureMLRuntimeControls, StagedRuntimeDecision, load_staged_model_package, load_staged_policy, predict_staged
-from .rolling_feature_state import RollingFeatureState
-from .regime import RegimeClassifier
-from .snapshot_accessor import SnapshotAccessor
+from ..runtime.runtime_artifacts import RuntimeArtifactStore, build_runtime_state_payload
+from ..signals.decision_annotation import annotate_signal_contract as apply_signal_contract
+from ..ml.pure_ml_staged_runtime import PureMLRuntimeControls, StagedRuntimeDecision, load_staged_model_package, load_staged_policy, predict_staged
+from ..ml.rolling_feature_state import RollingFeatureState
+from ..market.regime import RegimeClassifier
+from ..market.snapshot_accessor import SnapshotAccessor
 from ..utils.env import env_bool, env_float, env_int
 
 logger = logging.getLogger(__name__)
@@ -128,7 +128,7 @@ class PureMLEngine(StrategyEngine):
         # Loading is best-effort: bad paths are skipped with a warning so one
         # broken bundle cannot block the others or the existing C1 flow.
         try:
-            from .option_pnl_predictor import load_bundles_from_env  # noqa: PLC0415
+            from ..ml.option_pnl_predictor import load_bundles_from_env  # noqa: PLC0415
             self._option_pnl_bundles: list = load_bundles_from_env()
             if self._option_pnl_bundles:
                 for _b in self._option_pnl_bundles:
@@ -427,7 +427,7 @@ class PureMLEngine(StrategyEngine):
             # Option-P&L bundle path: score all loaded bundles and fire the
             # highest-margin candidate. Single-bundle is the common case;
             # multi-bundle (CE + PE) selects best signal each bar.
-            from .option_pnl_predictor import select_best_bundle_decision  # noqa: PLC0415
+            from ..ml.option_pnl_predictor import select_best_bundle_decision  # noqa: PLC0415
             decision = select_best_bundle_decision(
                 bundles=self._option_pnl_bundles, snap=snap, rolling_features=rolling_features,
             )
@@ -471,7 +471,7 @@ class PureMLEngine(StrategyEngine):
             _h = int(hashlib.md5(str(snap.snapshot_id).encode("utf-8")).hexdigest()[:8], 16)
             direction = "CE" if (_h % 2 == 0) else "PE"
 
-        from .option_selector import select_strike, StrikeSelection
+        from ..signals.option_selector import select_strike, StrikeSelection
         # If the predictor pre-selected the strike (option-P&L bundle path),
         # honor it strictly — smart-strike is bypassed to maintain labeler-
         # runtime equivalence (audit row #3 of OPTION_LABEL_CONTRACT). Falls
@@ -566,7 +566,7 @@ class PureMLEngine(StrategyEngine):
                 "smart_strike_mode_code": entry_metrics.get("smart_strike_mode_code"),
             },
         )
-        from .trade_signal_builder import build_ml_entry_signal
+        from ..signals.trade_signal_builder import build_ml_entry_signal
         signal = build_ml_entry_signal(
             snap=snap,
             decision=decision,
@@ -626,7 +626,7 @@ class PureMLEngine(StrategyEngine):
                     "direction": signal.direction,
                     "strike": signal.strike,
                     "entry_premium": signal.entry_premium,
-                    "lots": signal.lots,
+                    "lots": signal.max_lots,
                 },
             },
         )

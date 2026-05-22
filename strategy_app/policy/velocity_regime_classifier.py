@@ -14,8 +14,8 @@ import logging
 import math
 from typing import Any, Optional
 
-from .regime import Regime, RegimeClassifier, RegimeSignal
-from .snapshot_accessor import SnapshotAccessor
+from ..market.regime import Regime, RegimeClassifier, RegimeSignal
+from ..market.snapshot_accessor import SnapshotAccessor
 
 logger = logging.getLogger(__name__)
 

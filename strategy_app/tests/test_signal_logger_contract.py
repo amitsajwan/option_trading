@@ -6,7 +6,7 @@ from pathlib import Path
 
 from contracts_app import strategy_decision_trace_topic, strategy_position_topic
 from strategy_app.contracts import Direction, ExitReason, PositionContext, SignalType, StrategyVote, TradeSignal
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 from strategy_app.logging.signal_logger import SignalLogger
 from strategy_app.position.tracker import PositionTracker
 

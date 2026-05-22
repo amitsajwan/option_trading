@@ -4,7 +4,7 @@ import unittest
 from datetime import date
 
 from strategy_app.contracts import Direction, SignalType
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 from strategy_app.engines.strategies.r1s_top3_short_ce import R1sTop3ShortCeStrategy
 
 

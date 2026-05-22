@@ -15,8 +15,8 @@ from typing import Optional
 
 from ..contracts import Direction, RiskContext, StrategyVote
 from .entry_policy import EntryPolicyDecision, LongOptionEntryPolicy, PolicyConfig
-from .regime import RegimeSignal
-from .snapshot_accessor import SnapshotAccessor
+from ..market.regime import RegimeSignal
+from ..market.snapshot_accessor import SnapshotAccessor
 
 
 class VelocityEnhancedEntryPolicy(LongOptionEntryPolicy):

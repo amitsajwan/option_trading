@@ -12,7 +12,7 @@ from strategy_app.contracts import (
     SignalType,
     TradeSignal,
 )
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 
 
 def make_snapshot(

@@ -14,8 +14,8 @@ from ...contracts import (
     SnapshotPayload,
     StrategyVote,
 )
-from ..snapshot_accessor import SnapshotAccessor
-from ..trader_judgement import (
+from ...market.snapshot_accessor import SnapshotAccessor
+from ...market.trader_judgement import (
     OptionTradabilityScorer,
     TradeGovernor,
     TraderAction,
@@ -26,7 +26,7 @@ from ..trader_judgement import (
     TraderSetupState,
     TraderSetupType,
 )
-from ..trader_v3 import TraderV3CompositeStrategy
+from ...market.trader_v3 import TraderV3CompositeStrategy
 
 
 class _TraderSetupStrategy(BaseStrategy):

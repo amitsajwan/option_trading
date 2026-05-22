@@ -6,7 +6,7 @@ from contracts_app import normalize_reason_code
 
 from ..contracts import StrategyVote, TradeSignal
 from ..utils.env import safe_float as _safe_float
-from .entry_policy import EntryPolicyDecision
+from ..policy.entry_policy import EntryPolicyDecision
 
 
 def derive_decision_mode(policy_decision: Optional[EntryPolicyDecision]) -> str:

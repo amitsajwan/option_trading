@@ -17,7 +17,7 @@ try:
         MonitorSignalMetrics,
         MonitorTrade,
     )
-    from .replay_integrity import replay_integrity_warnings
+    from .state.replay_integrity import replay_integrity_warnings
 except ImportError:
     from schemas.monitor import (  # type: ignore
         MonitorAlert,
@@ -27,7 +27,7 @@ except ImportError:
         MonitorSignalMetrics,
         MonitorTrade,
     )
-    from replay_integrity import replay_integrity_warnings  # type: ignore
+    from market_data_dashboard.state.replay_integrity import replay_integrity_warnings  # type: ignore
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 

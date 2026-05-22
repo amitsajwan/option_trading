@@ -8,8 +8,8 @@ from datetime import date, datetime
 from typing import Optional
 
 from ..contracts import ExitReason, PositionContext, RiskContext, SignalType, TradeSignal
-from ..engines.playbook_brain import PLAYBOOK_EXIT_KEY, evaluate_playbook_exit
-from ..engines.snapshot_accessor import SnapshotAccessor
+from ..brain.playbook_brain import PLAYBOOK_EXIT_KEY, evaluate_playbook_exit
+from ..market.snapshot_accessor import SnapshotAccessor
 from .position_factory import PositionFactory
 
 logger = logging.getLogger(__name__)
@@ -118,6 +118,9 @@ class PositionTracker:
         elif not has_playbook and position.max_hold_bars is not None and position.bars_held >= int(position.max_hold_bars):
             exit_reason = ExitReason.TIME_STOP
             exit_trigger = "max_hold"
+        elif not has_playbook and self._is_stagnant_exit(position):
+            exit_reason = ExitReason.TIME_STOP
+            exit_trigger = "stagnant_exit"
         elif self._minute_of_day(snap) >= SOFT_CLOSE_MINUTE:
             exit_reason = ExitReason.TIME_STOP
             exit_trigger = "soft_close"
@@ -196,14 +199,34 @@ class PositionTracker:
         return (current_premium - position.entry_premium) / position.entry_premium
 
     def _is_premium_stop_hit(self, position: PositionContext, current_premium: float) -> bool:
+        """Exit on stop.
+
+        SHORT positions: use signed-pnl check (stop fires when premium rises past entry * (1+stop_pct)).
+        LONG positions: use stop_price when set (trailing stop moves it up); fall back to pnl check.
+        """
         if self._is_short(position):
             if position.stop_loss_pct <= 0:
                 return False
             return self._signed_pnl_pct(position, current_premium) <= -float(position.stop_loss_pct)
+        # LONG path — trailing manager writes stop_price upward; honour it first.
         stop_price = position.stop_price
-        if stop_price is None or stop_price <= 0:
+        if stop_price is not None and stop_price > 0:
+            return current_premium <= (stop_price + PRICE_EPS)
+        # No trailing stop price set — fall back to premium-loss percentage.
+        if position.stop_loss_pct <= 0:
             return False
-        return current_premium <= (stop_price + PRICE_EPS)
+        return self._signed_pnl_pct(position, current_premium) <= -float(position.stop_loss_pct)
+
+    @staticmethod
+    def _is_stagnant_exit(position: PositionContext) -> bool:
+        """Exit when the trade has been open for stagnant_exit_bars without reaching
+        stagnant_min_gain_pct — stops theta decay on flat / slowly-losing trades."""
+        bars = int(position.stagnant_exit_bars or 0)
+        if bars <= 0:
+            return False
+        if position.bars_held < bars:
+            return False
+        return position.pnl_pct < float(position.stagnant_min_gain_pct)
 
     def _resolve_stop_exit_reason(self, position: PositionContext) -> ExitReason:
         trail_reason = self._trailing_manager.resolve_exit_reason(position)

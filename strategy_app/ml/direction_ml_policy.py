@@ -31,9 +31,9 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from ..contracts import Direction, RiskContext, StrategyVote
-from .entry_policy import EntryPolicy, EntryPolicyDecision, PolicyConfig
-from .regime import RegimeSignal
-from .snapshot_accessor import SnapshotAccessor
+from ..policy.entry_policy import EntryPolicy, EntryPolicyDecision, PolicyConfig
+from ..market.regime import RegimeSignal
+from ..market.snapshot_accessor import SnapshotAccessor
 
 logger = logging.getLogger(__name__)
 

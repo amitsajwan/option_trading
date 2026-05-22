@@ -21,12 +21,12 @@ import joblib
 import numpy as np
 import pytest
 
-from strategy_app.engines.option_pnl_predictor import (
+from strategy_app.ml.option_pnl_predictor import (
     OptionPnlBundle,
     build_decision_from_bundle,
     load_option_pnl_bundle,
 )
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -318,7 +318,7 @@ def test_decision_handles_predict_exception_gracefully(tmp_path: Path):
 
 def test_safe_float_handles_nan_and_none():
     """Feature extraction must fill nan/None with 0.0 — matches labeler training."""
-    from strategy_app.engines.option_pnl_predictor import _safe_float
+    from strategy_app.ml.option_pnl_predictor import _safe_float
     assert _safe_float(None) == 0.0
     assert _safe_float(float("nan")) == 0.0
     assert _safe_float(float("inf")) == 0.0

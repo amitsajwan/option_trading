@@ -16,7 +16,7 @@ from ...contracts import (
     StrategyVote,
 )
 from ..r1s_rule_runtime import composite_score, default_s3_rule, row_passes_entry
-from ..snapshot_accessor import SnapshotAccessor
+from ...market.snapshot_accessor import SnapshotAccessor
 
 
 @dataclass(frozen=True)

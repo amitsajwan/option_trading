@@ -5,10 +5,10 @@ from datetime import datetime
 from contracts_app import IST_ZONE
 from strategy_app.contracts import Direction, RiskContext, SignalType, StrategyVote
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
-from strategy_app.engines.entry_policy import EntryPolicyDecision
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
-from strategy_app.engines.trader_v3 import StrikeSelectorV3, TradeGovernorV3, TraderV3CompositeStrategy, TraderV3Playbook
-from strategy_app.engines.trader_regime_v3 import TraderRegimeV3, TraderRegimeV3Label
+from strategy_app.policy.entry_policy import EntryPolicyDecision
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.trader_v3 import StrikeSelectorV3, TradeGovernorV3, TraderV3CompositeStrategy, TraderV3Playbook
+from strategy_app.market.trader_regime_v3 import TraderRegimeV3, TraderRegimeV3Label
 
 
 def _payload(
@@ -67,7 +67,7 @@ class _BlockingPolicy:
 
 def test_strike_selector_v3_selects_delta_band_contract() -> None:
     snap = SnapshotAccessor(_payload(minutes=55))
-    from strategy_app.engines.options_state import OptionsStateBuilder
+    from strategy_app.market.options_state import OptionsStateBuilder
 
     options_state = OptionsStateBuilder().build(snap)
     selection = StrikeSelectorV3().select(
@@ -245,7 +245,7 @@ def test_engine_does_not_override_locked_v3_strike() -> None:
 def test_engine_bypasses_entry_policy_for_v3_votes() -> None:
     engine = DeterministicRuleEngine(entry_policy=_BlockingPolicy())
     snap = SnapshotAccessor(_payload(minutes=60))
-    from strategy_app.engines.regime import Regime, RegimeSignal
+    from strategy_app.market.regime import Regime, RegimeSignal
 
     vote = StrategyVote(
         strategy_name="TRADER_V3_COMPOSITE",

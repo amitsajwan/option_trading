@@ -5,7 +5,7 @@ from datetime import datetime
 from contracts_app import IST_ZONE
 from strategy_app.contracts import Direction, SignalType, StrategyVote
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 
 
 def _snapshot_with_strikes(strikes: list[dict], *, atm_strike: int = 50000) -> SnapshotAccessor:

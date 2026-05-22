@@ -71,7 +71,8 @@ class SessionMemory:
                 continue
             if rec_date >= as_of_date:
                 continue
-            if best is None or rec_date > date.fromisoformat(str(best["trade_date"])):
+            best_date = date.fromisoformat(str(best["trade_date"])) if best is not None else None
+            if best_date is None or rec_date > best_date:
                 best = rec
 
         if best is None:

@@ -6,8 +6,8 @@ from pathlib import Path
 
 from strategy_app.contracts import BaseStrategy, Direction, RiskContext, SignalType, StrategyVote
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
-from strategy_app.engines.entry_policy import EntryPolicyDecision
-from strategy_app.engines.regime import Regime, RegimeSignal
+from strategy_app.policy.entry_policy import EntryPolicyDecision
+from strategy_app.market.regime import Regime, RegimeSignal
 from strategy_app.logging.signal_logger import SignalLogger
 
 
