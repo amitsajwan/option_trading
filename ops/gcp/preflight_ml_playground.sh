@@ -45,7 +45,8 @@ free_gb="$(df -BG "${REPO_ROOT}" | awk 'NR==2 {gsub(/G/,"",$4); print $4}')"
 [[ "${free_gb}" -ge "${MIN_FREE_GB}" ]] || _fail "disk free ${free_gb}GB < ${MIN_FREE_GB}GB required"
 _ok "disk ${free_gb}GB free"
 
-for pidfile in /tmp/entry_s1_only_hpo.pid /tmp/direction_s2_only_hpo.pid /tmp/ml_playground_overnight/orchestrator.pid; do
+# Do not check orchestrator.pid here — start writes it before calling preflight.
+for pidfile in /tmp/entry_s1_only_hpo.pid /tmp/direction_s2_only_hpo.pid; do
   if [[ -f "${pidfile}" ]]; then
     pid="$(cat "${pidfile}" 2>/dev/null || true)"
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then

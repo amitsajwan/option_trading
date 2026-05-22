@@ -175,8 +175,8 @@ _status() {
 
 _orchestrate() {
   _log "PLAYGROUND start mode=${PLAYGROUND_MODE} user=$(whoami)"
-  bash "${REPO_ROOT}/ops/gcp/preflight_ml_playground.sh"
   _compose_down
+  bash "${REPO_ROOT}/ops/gcp/preflight_ml_playground.sh"
 
   case "${PLAYGROUND_MODE}" in
     hpo)
@@ -238,9 +238,13 @@ case "${_cmd}" in
       echo "Status: bash ${REPO_ROOT}/ops/gcp/run_ml_playground_overnight_vm.sh status"
       exit 0
     fi
-    (_orchestrate) >> "${MASTER_LOG}" 2>&1 &
-    echo $! > "${PIDFILE}"
-    echo "Started pid=$(cat "${PIDFILE}") mode=${PLAYGROUND_MODE} log=${MASTER_LOG}"
+    (
+      echo $$ > "${PIDFILE}"
+      _orchestrate
+    ) >> "${MASTER_LOG}" 2>&1 &
+    disown 2>/dev/null || true
+    sleep 1
+    echo "Started pid=$(cat "${PIDFILE}" 2>/dev/null || echo unknown) mode=${PLAYGROUND_MODE} log=${MASTER_LOG}"
     ;;
   *)
     echo "Usage: $0 {preflight|validate|start|status}" >&2
