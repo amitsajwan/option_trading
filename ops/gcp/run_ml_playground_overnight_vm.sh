@@ -28,6 +28,8 @@ if [[ "$(id -u)" -eq 0 ]] && [[ -z "${PLAYGROUND_REEXEC:-}" ]]; then
     docker compose --env-file .env.compose \
       -f docker-compose.yml -f docker-compose.gcp.yml down || true
   fi
+  mkdir -p "${REPO_ROOT}/ml_pipeline_2/artifacts/research"
+  chown -R "${RUN_USER}:${RUN_USER}" "${REPO_ROOT}/ml_pipeline_2/artifacts" 2>/dev/null || true
   export PLAYGROUND_REEXEC=1
   exec sudo -u "${RUN_USER}" -H \
     PLAYGROUND_REEXEC=1 REPO_ROOT="${REPO_ROOT}" PLAYGROUND_MODE="${PLAYGROUND_MODE}" \

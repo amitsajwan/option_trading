@@ -23,6 +23,12 @@ _ok() { echo "PREFLIGHT OK: $*"; }
 [[ -x "${VENV_PYTHON}" ]] || _fail "missing venv python at ${VENV_PYTHON}"
 _ok "venv python"
 
+artifacts="${REPO_ROOT}/ml_pipeline_2/artifacts/research"
+mkdir -p "${artifacts}"
+touch "${artifacts}/.preflight_write_test" 2>/dev/null || _fail "cannot write to ${artifacts} (fix: sudo chown -R \$(whoami) ${REPO_ROOT}/ml_pipeline_2/artifacts)"
+rm -f "${artifacts}/.preflight_write_test"
+_ok "artifacts writable"
+
 "${VENV_PYTHON}" - <<'PY' || _fail "import check (xgboost/lightgbm/optuna/pandas)"
 import optuna  # noqa: F401
 import pandas  # noqa: F401
