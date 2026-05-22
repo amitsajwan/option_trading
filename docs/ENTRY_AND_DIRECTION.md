@@ -26,8 +26,9 @@ Direction never overrides a blocked entry.
 | Manifest | `ml_pipeline_2/configs/research/staged_dual_recipe.entry_s1_only_hpo_v1.json` |
 | Launcher | `python -m ml_pipeline_2.scripts.run_entry_s1_only_hpo` |
 | VM script | `ops/gcp/run_entry_s1_only_hpo_vm.sh` |
+| **S1 label** | `entry_bn_5m_100pts_v1` — within **5 min**, BN futures moves **≥100 points** in either direction; threshold as **% of price**: `100 / px_fut_close` (~0.20% at 50k) |
 | Flags | `bypass_stage2`, `bypass_stage3`, `entry_only_publish` |
-| Gates | `hard_gates.stage1` + `hard_gates.entry_only` (economic holdout) |
+| Gates | `hard_gates.stage1` + `hard_gates.entry_only` (economic holdout uses recipe oracle returns) |
 
 **Rules-only entry (no ML):** PBV1 rule matrices + deterministic eval replays — still the main production path until S1 HPO passes.
 

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "experiment_kind": "staged_dual_recipe_v1",
-  "_comment": "Decoupled entry research: Stage1 HPO only (trade vs no-trade). Skips S2 direction and S3 recipe training. Publish gates use entry_only economic holdout (oracle best_available return), not full 3-stage stack.",
+  "_comment": "Decoupled entry S1 HPO. Label: BankNifty futures moves >=100 pts within 5m (threshold_pct=100/price). Skips S2/S3. Economic holdout uses recipe oracle returns.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
     "support_dataset": "snapshots_ml_flat_v2",
@@ -48,7 +48,11 @@
     "stage3_view_id": "stage3_recipe_view_v2"
   },
   "labels": {
-    "stage1_labeler_id": "entry_best_recipe_v1",
+    "stage1_labeler_id": "entry_bn_5m_100pts_v1",
+    "stage1_entry_move": {
+      "horizon_minutes": 5,
+      "min_points": 100
+    },
     "stage2_labeler_id": "direction_market_up_all_v1",
     "stage3_labeler_id": "recipe_best_positive_v1"
   },

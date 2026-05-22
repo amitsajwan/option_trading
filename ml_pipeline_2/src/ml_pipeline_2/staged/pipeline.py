@@ -19,6 +19,11 @@ from ..inference_contract.predict import predict_probabilities_from_frame
 from ..labeling import EffectiveLabelConfig, build_labeled_dataset, prepare_snapshot_labeled_frame
 from ..model_search import ensure_requested_models_runnable, run_training_cycle_catalog
 from ..model_search.metrics import max_drawdown_pct, profit_factor
+from .entry_move_oracle import (
+    build_entry_bn_move_oracle,
+    merge_recipe_utility_with_entry_move_oracle,
+    stage1_entry_move_config,
+)
 from .recipes import get_recipe_catalog
 from .registries import resolve_labeler, resolve_policy, resolve_trainer, view_registry
 
@@ -413,6 +418,21 @@ def build_stage1_labels(stage_frame: pd.DataFrame, oracle: pd.DataFrame, *_: Any
     labeled = _attach_labels(stage_frame, oracle)
     labeled["move_label_valid"] = 1.0
     labeled["move_label"] = pd.to_numeric(labeled["entry_label"], errors="coerce").fillna(0.0)
+    return labeled
+
+
+def build_stage1_labels_entry_bn_move(
+    stage_frame: pd.DataFrame,
+    oracle: pd.DataFrame,
+    *_: Any,
+    **__: Any,
+) -> pd.DataFrame:
+    labeled = _attach_labels(stage_frame, oracle)
+    valid = pd.to_numeric(labeled.get("entry_label_valid"), errors="coerce").fillna(0.0)
+    labeled["move_label_valid"] = valid
+    labeled["move_label"] = (
+        pd.to_numeric(labeled["entry_label"], errors="coerce").fillna(0.0) * valid
+    )
     return labeled
 
 
@@ -3577,7 +3597,17 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         support_rows=int(len(support)),
         recipe_count=int(len(recipe_catalog)),
     )
-    oracle, utility = _build_oracle_targets(support, recipe_catalog, cost_per_trade=float(manifest["training"]["cost_per_trade"]))
+    cost_per_trade = float(manifest["training"]["cost_per_trade"])
+    oracle, utility = _build_oracle_targets(support, recipe_catalog, cost_per_trade=cost_per_trade)
+    stage1_labeler_id = str((manifest.get("labels") or {}).get("stage1_labeler_id") or "")
+    if stage1_labeler_id == "entry_bn_5m_100pts_v1":
+        move_cfg = stage1_entry_move_config(manifest)
+        move_oracle = build_entry_bn_move_oracle(
+            support,
+            horizon_minutes=int(move_cfg["horizon_minutes"]),
+            min_points=float(move_cfg["min_points"]),
+        )
+        oracle, utility = merge_recipe_utility_with_entry_move_oracle(oracle, utility, move_oracle)
     oracle_rolling = compute_rolling_oracle_stats(oracle)
     _prep_progress(
         ctx,
