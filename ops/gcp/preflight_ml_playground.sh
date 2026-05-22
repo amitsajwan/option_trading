@@ -51,7 +51,7 @@ for pidfile in /tmp/entry_s1_only_hpo.pid /tmp/direction_s2_only_hpo.pid /tmp/ml
     if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
       _fail "another ML job still running (pidfile ${pidfile} pid=${pid})"
     fi
-    rm -f "${pidfile}"
+    rm -f "${pidfile}" 2>/dev/null || sudo rm -f "${pidfile}" 2>/dev/null || true
   fi
 done
 _ok "no conflicting pidfiles"
