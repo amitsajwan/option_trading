@@ -36,8 +36,9 @@ PY
 
 ds="${PARQUET_ROOT}/snapshots_ml_flat_v2"
 [[ -d "${ds}" ]] || _fail "missing dataset ${ds}"
-count="$(find "${ds}" -name '*.parquet' 2>/dev/null | head -1 | wc -l)"
-[[ "${count}" -gt 0 ]] || _fail "no parquet under ${ds}"
+if ! find "${ds}" -name '*.parquet' -print -quit 2>/dev/null | grep -q .; then
+  _fail "no parquet under ${ds}"
+fi
 _ok "parquet snapshots_ml_flat_v2"
 
 free_gb="$(df -BG "${REPO_ROOT}" | awk 'NR==2 {gsub(/G/,"",$4); print $4}')"
