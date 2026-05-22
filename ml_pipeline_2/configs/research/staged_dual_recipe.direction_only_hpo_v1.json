@@ -88,13 +88,16 @@
     "stage2_session_filter": { "enabled": false },
     "stage2_target_redesign": { "enabled": false },
     "stage2_decisive_move_filter": { "min_ce_pe_edge": 0.002 },
-    "stage1_reuse": {
-      "source_run_id": "staged_deep_hpo_c1_base",
-      "source_run_dir": "/opt/option_trading/ml_pipeline_2/artifacts/research/staged_deep_hpo_c1_base_20260515_144206"
-    },
     "search_options_by_stage": {
       "stage1": {
-        "hpo": { "enabled": false }
+        "hpo": {
+          "enabled": true,
+          "strategy": "optuna",
+          "trials_per_model": 12,
+          "sampler_seed": 42
+        },
+        "max_experiments": 8,
+        "max_elapsed_seconds": 1800
       },
       "stage2": {
         "hpo": {
