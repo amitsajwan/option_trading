@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-Comparison: stop_fix (5a8b6684, 20% stop) vs dir_fix (9e3789a3, 40% stop bug).
-Both runs use prob>=0.65 entry filter, same profile trader_master_ml_entry_det_dir_v1.
-This isolates the exact impact of fixing the stop-loss config bug (ffd5c83).
+Comparison: CLEAN run (46efdc16, stop=20%, trailing=35% activation, prob≥0.65)
+vs dir_fix (5a8b6684, trailing=12% activation, same stop/prob).
+Isolates the impact of the trailing activation fix (5133479) + config pipeline fix (83bad06).
+
+CLEAN run: first fully correct replay — all strategies get stop=20%/target=70%/trailing=35%.
+Prior runs (9b17c897, 514900d7) were contaminated by the all-null risk_config bug.
 """
 from __future__ import annotations
 import os, sys
@@ -17,9 +20,9 @@ except ImportError:
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://mongo:27017")
 DB_NAME   = os.getenv("MONGO_DB", "trading_ai")
 
-STOP_FIX_RUN = "5a8b6684-3cb4-4788-b35e-eb3c3816b4a8"   # 20% stop (correct)
-DIR_FIX_RUN  = "9e3789a3-deb5-4dcd-ba8a-9a646a1033bd"   # 40% stop (bug)
-OLD_RUN      = "e8ba040a-a8dd-47d1-9bf8-ceffba85e809"   # prob>=0.55, 40% stop (bug)
+STOP_FIX_RUN = "46efdc16-a21c-4e81-9f1a-e6e4ac362c76"   # CLEAN: stop=20% trailing=35% prob≥0.65 (83bad06 fix)
+DIR_FIX_RUN  = "5a8b6684-3cb4-4788-b35e-eb3c3816b4a8"   # trailing=12%, stop=20% (prior)
+OLD_RUN      = "9e3789a3-deb5-4dcd-ba8a-9a646a1033bd"   # stop=40% bug, prob>=0.65
 
 LOT_SIZE = 15
 CAPITAL  = 100_000
@@ -181,8 +184,8 @@ def summarize(label: str, rows: list[dict]) -> None:
 
 # ── run ───────────────────────────────────────────────────────────────────────
 print("\n" + "█"*70)
-print("  STOP-FIX ANALYSIS  (20% stop correct vs 40% stop bug)")
-print("  All three runs use prob>=0.65, profile trader_master_ml_entry_det_dir_v1")
+print("  TRAILING-FIX ANALYSIS  (clean run: stop=20% trailing=35% vs prior runs)")
+print("  All runs: prob>=0.65, profile trader_master_ml_entry_det_dir_v1")
 print("█"*70)
 
 stop_fix_trades = load_trades(STOP_FIX_RUN)
@@ -192,18 +195,18 @@ old_trades      = load_trades(OLD_RUN)
 print(f"\nTrade counts:  stop_fix={len(stop_fix_trades)}  dir_fix={len(dir_fix_trades)}  old={len(old_trades)}")
 print("(stop_fix may still be running if < dir_fix count)")
 
-summarize("STOP_FIX  prob≥0.65, stop=20% (correct)", stop_fix_trades)
-summarize("DIR_FIX   prob≥0.65, stop=40% (bug)",     dir_fix_trades)
-summarize("OLD       prob≥0.55, stop=40% (bug)",     old_trades)
+summarize("CLEAN     prob≥0.65, stop=20%, trailing=35% activation (correct)", stop_fix_trades)
+summarize("DIR_FIX   prob≥0.65, stop=20%, trailing=12% activation (prior)", dir_fix_trades)
+summarize("OLD       prob≥0.55, stop=40% bug, trailing=12%",                old_trades)
 
 # ── head-to-head summary ──────────────────────────────────────────────────────
 print(f"\n{'='*70}")
 print("  HEAD-TO-HEAD SUMMARY")
 print(f"{'='*70}")
 for label, trades in [
-    ("STOP_FIX (20% stop)", stop_fix_trades),
-    ("DIR_FIX  (40% stop)", dir_fix_trades),
-    ("OLD      (55% thr) ", old_trades),
+    ("CLEAN   (20% stp, 35% trail)", stop_fix_trades),
+    ("DIR_FIX (20% stp, 12% trail)", dir_fix_trades),
+    ("OLD     (55% thr, 40% stop) ", old_trades),
 ]:
     if not trades:
         print(f"  {label}: no trades"); continue
