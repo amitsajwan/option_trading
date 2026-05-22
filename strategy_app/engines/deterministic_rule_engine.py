@@ -51,6 +51,7 @@ from .profiles import (
     PROFILE_TRADER_MASTER_V1,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1,
     PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1,
+    get_risk_config,
 )
 from ..brain.brain import BrainDecision, TradingBrain
 from ..brain.context import DayContext
@@ -106,7 +107,13 @@ class DeterministicRuleEngine(StrategyEngine):
         self._risk = RiskManager()
         self._log = signal_logger or SignalLogger()
         self._min_confidence = float(min_confidence)
-        self._default_risk_config = default_risk_config or PositionRiskConfig()
+        if default_risk_config is not None:
+            self._default_risk_config = default_risk_config
+        else:
+            _profile_risk = get_risk_config(strategy_profile_id)
+            self._default_risk_config = (
+                PositionRiskConfig.from_payload(_profile_risk) if _profile_risk else PositionRiskConfig()
+            )
         self._run_risk_config = self._default_risk_config
         self._default_policy_config = policy_config or PolicyConfig()
         self._injected_entry_policy = entry_policy
@@ -168,12 +175,12 @@ class DeterministicRuleEngine(StrategyEngine):
         if router_has_strategy_override and not profile_override:
             raise ValueError("strategy_profile_id is required for non-default deterministic strategy sets")
         # Only overwrite risk config when explicitly provided in metadata.
-        # On historical replay every snapshot event calls set_run_context again
-        # with sparse event metadata (no risk_config); without this guard the
-        # profile-level stop/target baked in at startup is reset to defaults
-        # on the first snapshot tick, causing DET_DIRECTION entries to fall
-        # back to StrategyVote.proposed_stop_loss_pct default (0.40).
-        if risk_payload is not None:
+        # The orchestrator sends risk_config:{} (empty dict) for every snapshot
+        # event when no explicit override was requested. An empty dict must NOT
+        # reset the profile-level config (stop=0.20, trailing=0.35…) that was
+        # baked into _default_risk_config at engine startup. Check truthiness,
+        # not just None, so {} is treated as "no override".
+        if risk_payload:
             self._run_risk_config = (
                 PositionRiskConfig.from_payload(risk_payload) if isinstance(risk_payload, dict) else self._default_risk_config
             )
