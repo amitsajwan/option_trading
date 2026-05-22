@@ -953,16 +953,93 @@ class DeterministicRuleEngine(StrategyEngine):
 
     @staticmethod
     def _shadow_direction_from_snapshot(snap: SnapshotAccessor) -> tuple[Direction, str]:
-        r5 = snap.fut_return_5m
-        if r5 is not None and float(r5) != 0.0:
-            return (Direction.CE, "fut_return_5m") if float(r5) > 0 else (Direction.PE, "fut_return_5m")
+        """Multi-signal direction scorer.
+
+        Each signal contributes a signed score (positive = CE/bullish, negative = PE/bearish).
+        Weights reflect reliability from OOS analysis:
+          1. Opening range breakout/breakdown  — strongest structural signal (weight 2)
+          2. Price vs VWAP                     — intraday trend bias        (weight 2)
+          3. ATM CE/PE premium momentum        — option market revealing hand (weight 2)
+          4. PCR change momentum               — option flow pressure        (weight 1)
+          5. Futures return 15m                — medium-term momentum        (weight 1)
+          6. Futures return 5m                 — short-term momentum (last)  (weight 1)
+
+        Final direction = CE if score > 0, PE if score < 0, tie-breaks to 15m then 5m.
+        Basis string records which signals fired (for logs/diagnostics).
+        """
+        score: float = 0.0
+        fired: list[str] = []
+
+        # 1. Opening range breakout/breakdown (weight 2) — confirmed structural break
+        if snap.orh_broken:
+            score += 2.0
+            fired.append("orh_broken")
+        elif snap.orl_broken:
+            score -= 2.0
+            fired.append("orl_broken")
+        elif snap.or_ready:
+            # Not yet broken: price position relative to OR mid gives a softer signal
+            pvs_orh = snap.price_vs_orh
+            pvs_orl = snap.price_vs_orl
+            if pvs_orh is not None and pvs_orl is not None:
+                or_bias = float(pvs_orh) - float(pvs_orl)
+                if or_bias > 0:
+                    score += 0.5
+                    fired.append("or_upper_half")
+                elif or_bias < 0:
+                    score -= 0.5
+                    fired.append("or_lower_half")
+
+        # 2. Price vs VWAP (weight 2) — intraday trend bias
+        pvwap = snap.price_vs_vwap
+        if pvwap is not None and abs(float(pvwap)) > 0.0:
+            score += 2.0 if float(pvwap) > 0 else -2.0
+            fired.append("above_vwap" if float(pvwap) > 0 else "below_vwap")
+
+        # 3. ATM CE/PE premium momentum (weight 2) — which option market is bidding up
+        ce_p = snap.atm_ce_close
+        pe_p = snap.atm_pe_close
+        if ce_p and pe_p and ce_p > 0 and pe_p > 0:
+            ratio = ce_p / pe_p
+            if ratio > 1.04:
+                score += 2.0
+                fired.append("ce_prem_dominant")
+            elif ratio < 0.96:
+                score -= 2.0
+                fired.append("pe_prem_dominant")
+
+        # 4. PCR change 5m (weight 1) — option flow pressure
+        # PCR rising = more put OI added = market positioning bearish = PE signal
+        # PCR falling = more call OI added = CE signal
+        pcr_chg = snap.pcr_change_5m
+        if pcr_chg is not None and float(pcr_chg) != 0.0:
+            score += 1.0 if float(pcr_chg) < 0 else -1.0
+            fired.append("pcr_falling" if float(pcr_chg) < 0 else "pcr_rising")
+
+        # 5. Futures return 15m (weight 1) — medium-term momentum
         r15 = snap.fut_return_15m
         if r15 is not None and float(r15) != 0.0:
-            return (Direction.CE, "fut_return_15m") if float(r15) > 0 else (Direction.PE, "fut_return_15m")
-        pvwap = snap.price_vs_vwap
-        if pvwap is not None and float(pvwap) != 0.0:
-            return (Direction.CE, "price_vs_vwap") if float(pvwap) > 0 else (Direction.PE, "price_vs_vwap")
-        return Direction.CE, "default_ce"
+            score += 1.0 if float(r15) > 0 else -1.0
+            fired.append("r15m_up" if float(r15) > 0 else "r15m_dn")
+
+        # 6. Futures return 5m (weight 1) — short-term momentum
+        r5 = snap.fut_return_5m
+        if r5 is not None and float(r5) != 0.0:
+            score += 1.0 if float(r5) > 0 else -1.0
+            fired.append("r5m_up" if float(r5) > 0 else "r5m_dn")
+
+        basis = ",".join(fired) if fired else "no_signals"
+        if score > 0:
+            return Direction.CE, f"multi_signal_ce(score={score:.1f}:{basis})"
+        if score < 0:
+            return Direction.PE, f"multi_signal_pe(score={score:.1f}:{basis})"
+
+        # Exact tie: fall back to 15m then 5m momentum, then default CE
+        if r15 is not None and float(r15) != 0.0:
+            return (Direction.CE if float(r15) > 0 else Direction.PE), f"tie_r15m({basis})"
+        if r5 is not None and float(r5) != 0.0:
+            return (Direction.CE if float(r5) > 0 else Direction.PE), f"tie_r5m({basis})"
+        return Direction.CE, f"default_ce({basis})"
 
     def _select_exit_vote(
         self,
