@@ -175,15 +175,18 @@ class DeterministicRuleEngine(StrategyEngine):
         if router_has_strategy_override and not profile_override:
             raise ValueError("strategy_profile_id is required for non-default deterministic strategy sets")
         # Only overwrite risk config when explicitly provided in metadata.
-        # The orchestrator sends risk_config:{} (empty dict) for every snapshot
-        # event when no explicit override was requested. An empty dict must NOT
-        # reset the profile-level config (stop=0.20, trailing=0.35…) that was
-        # baked into _default_risk_config at engine startup. Check truthiness,
-        # not just None, so {} is treated as "no override".
-        if risk_payload:
-            self._run_risk_config = (
-                PositionRiskConfig.from_payload(risk_payload) if isinstance(risk_payload, dict) else self._default_risk_config
-            )
+        # The orchestrator serialises the run command's risk_config for every snapshot
+        # event. When the UI queues a run without an explicit override the stored doc
+        # contains {"stop_loss_pct": null, "target_pct": null, …} — a non-empty dict
+        # with all-null values. That dict is truthy, so a simple `if risk_payload:`
+        # guard fires and resets the profile config to all-None defaults.
+        # The correct check: skip when the payload has no non-null values, i.e.
+        # there is genuinely no meaningful override being requested.
+        _has_override = isinstance(risk_payload, dict) and any(
+            v is not None for v in risk_payload.values()
+        )
+        if _has_override:
+            self._run_risk_config = PositionRiskConfig.from_payload(risk_payload)
         if isinstance(policy_payload, dict):
             policy_cfg = PolicyConfig.from_payload(policy_payload)
             self._entry_policy = self._build_entry_policy(policy_cfg)
