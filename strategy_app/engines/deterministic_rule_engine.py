@@ -167,9 +167,16 @@ class DeterministicRuleEngine(StrategyEngine):
         )
         if router_has_strategy_override and not profile_override:
             raise ValueError("strategy_profile_id is required for non-default deterministic strategy sets")
-        self._run_risk_config = (
-            PositionRiskConfig.from_payload(risk_payload) if isinstance(risk_payload, dict) else self._default_risk_config
-        )
+        # Only overwrite risk config when explicitly provided in metadata.
+        # On historical replay every snapshot event calls set_run_context again
+        # with sparse event metadata (no risk_config); without this guard the
+        # profile-level stop/target baked in at startup is reset to defaults
+        # on the first snapshot tick, causing DET_DIRECTION entries to fall
+        # back to StrategyVote.proposed_stop_loss_pct default (0.40).
+        if risk_payload is not None:
+            self._run_risk_config = (
+                PositionRiskConfig.from_payload(risk_payload) if isinstance(risk_payload, dict) else self._default_risk_config
+            )
         if isinstance(policy_payload, dict):
             policy_cfg = PolicyConfig.from_payload(policy_payload)
             self._entry_policy = self._build_entry_policy(policy_cfg)
