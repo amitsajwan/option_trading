@@ -12,7 +12,7 @@ const EVAL_DEFAULTS = {
   date_to: '2024-01-31',
   strategy: '',
   regime: '',
-  initial_capital: 1000,
+  initial_capital: 100000,
   cost_bps: 0,
   stop_loss_pct: 40,
   target_pct: 80,
@@ -186,7 +186,7 @@ function evalQuery(filters, extra) {
   params.set('date_to', filters.date_to || '');
   if ((filters.strategy || '').trim()) params.set('strategy', filters.strategy.trim());
   if ((filters.regime || '').trim()) params.set('regime', filters.regime.trim());
-  params.set('initial_capital', String(filters.initial_capital || 1000));
+  params.set('initial_capital', String(filters.initial_capital || 100000));
   params.set('cost_bps', String(filters.cost_bps || 0));
   Object.entries(extra || {}).forEach(([k, v]) => {
     if (v !== undefined && v !== null && String(v).trim() !== '') params.set(k, String(v));
@@ -812,9 +812,13 @@ function EvalMonitor({ tweaks }) {
     { key: 'direction', label: 'Dir' },
     { key: 'entry_time', label: 'Entry' },
     { key: 'exit_time', label: 'Exit' },
-    { key: 'capital_pnl_pct', label: 'Capital PnL%', cls: 'r', render: r => evalPct(r.capital_pnl_pct) },
-    { key: 'capital_pnl_amount', label: 'Capital PnL', cls: 'r', render: r => evalNum(r.capital_pnl_amount) },
-    { key: 'pnl_pct_net', label: 'Option PnL%', cls: 'r', render: r => evalPct(r.pnl_pct_net) },
+    { key: 'capital_pnl_pct', label: 'Cap PnL%', cls: 'r', render: r => evalPct(r.capital_pnl_pct) },
+    { key: 'capital_pnl_amount', label: 'Cap PnL ₹', cls: 'r', render: r => evalNum(r.capital_pnl_amount) },
+    { key: 'pnl_pct_net', label: 'Opt PnL%', cls: 'r', render: r => evalPct(r.pnl_pct_net) },
+    { key: 'capital_at_risk', label: 'Premium ₹', cls: 'r', render: r => evalNum(r.capital_at_risk) },
+    { key: 'lots', label: 'Lots', cls: 'r' },
+    { key: 'entry_premium', label: 'Entry₹', cls: 'r', render: r => evalNum(r.entry_premium) },
+    { key: 'exit_premium', label: 'Exit₹', cls: 'r', render: r => evalNum(r.exit_premium) },
     { key: 'mfe_pct', label: 'MFE', cls: 'r', render: r => evalPct(r.mfe_pct) },
     { key: 'mae_pct', label: 'MAE', cls: 'r', render: r => evalPct(r.mae_pct) },
     { key: 'stop_loss_pct', label: 'Stop%', cls: 'r', render: r => evalPct(r.stop_loss_pct) },
@@ -1085,11 +1089,12 @@ function EvalMonitor({ tweaks }) {
             </strong>
             . Does not change the engine — only narrows tables below.
             {' '}Regime: <strong>{draft.regime || 'all'}</strong> · range <code>{draft.date_from}</code>–<code>{draft.date_to}</code>.
-            Trust <strong>Option PnL%</strong> for premium moves.
+            Trust <strong>Opt PnL%</strong> for premium moves; <strong>Cap PnL%</strong> is relative to capital base <strong>₹{(filters.initial_capital || 100000).toLocaleString()}</strong> — adjust in Risk panel.
           </p>
           {error && <div className="muted" style={{ marginTop: 8, color: 'var(--neg)', fontSize: 12 }}>{error}</div>}
           {riskOpen && (
             <div className="eval-risk-grid">
+              <label className="field"><span className="field-label">Capital Base ₹</span><input className="inp" type="number" value={draft.initial_capital} onChange={e => setDraft({ ...draft, initial_capital: Number(e.target.value || 100000) })} /></label>
               <label className="field"><span className="field-label">Stop %</span><input className="inp" type="number" value={draft.stop_loss_pct} onChange={e => setDraft({ ...draft, stop_loss_pct: Number(e.target.value || 0) })} /></label>
               <label className="field"><span className="field-label">Target %</span><input className="inp" type="number" value={draft.target_pct} onChange={e => setDraft({ ...draft, target_pct: Number(e.target.value || 0) })} /></label>
               <label className="field"><span className="field-label">Trail Activation %</span><input className="inp" type="number" value={draft.trailing_activation_pct} onChange={e => setDraft({ ...draft, trailing_activation_pct: Number(e.target.value || 0) })} /></label>
