@@ -41,6 +41,7 @@ from .decision_annotation import (
     derive_reason_code,
 )
 from .entry_policy import EntryPolicy, EntryPolicyDecision, LongOptionEntryPolicy, PolicyConfig
+from .direction_ml_policy import maybe_wrap_with_direction_ml
 from .profiles import (
     PRODUCTION_DEFAULT_PROFILE_ID,
     PROFILE_DEBIT_MULTI_V1,
@@ -131,8 +132,10 @@ class DeterministicRuleEngine(StrategyEngine):
 
     def _build_entry_policy(self, config: PolicyConfig) -> EntryPolicy:
         if self._velocity_enhanced:
-            return VelocityEnhancedEntryPolicy(config=config)
-        return LongOptionEntryPolicy(config=config)
+            base: EntryPolicy = VelocityEnhancedEntryPolicy(config=config)
+        else:
+            base = LongOptionEntryPolicy(config=config)
+        return maybe_wrap_with_direction_ml(base)
 
     def set_run_context(self, run_id: Optional[str], metadata: Optional[dict[str, Any]] = None) -> None:
         self._run_id = str(run_id or "").strip() or None
@@ -545,6 +548,25 @@ class DeterministicRuleEngine(StrategyEngine):
         if not entry_votes:
             return None
 
+        # ORB wide-range gate: skip ORB entries when opening range is too large.
+        orb_max = self._run_risk_config.orb_max_range_pts
+        if orb_max and orb_max > 0:
+            or_width = snap.or_width
+            if or_width is not None and float(or_width) > float(orb_max):
+                pre_filter = len(entry_votes)
+                entry_votes = [
+                    v for v in entry_votes
+                    if v.strategy_name not in ("ORB", "ORB_RETEST", "HIGH_VOL_ORB")
+                ]
+                if len(entry_votes) < pre_filter:
+                    logger.debug(
+                        "ORB entry gated: or_width=%.0f > orb_max_range_pts=%.0f",
+                        float(or_width),
+                        float(orb_max),
+                    )
+                if not entry_votes:
+                    return None
+
         ce_votes = [vote for vote in entry_votes if vote.direction == Direction.CE]
         pe_votes = [vote for vote in entry_votes if vote.direction == Direction.PE]
         has_direction_conflict = bool(ce_votes and pe_votes)
@@ -661,6 +683,7 @@ class DeterministicRuleEngine(StrategyEngine):
         stop_loss_pct, target_pct, trailing_cfg = self._resolve_entry_risk(best_vote, policy_decision)
         raw = best_vote.raw_signals if isinstance(best_vote.raw_signals, dict) else {}
         underlying_stop_pct: Optional[float] = None
+        underlying_target_pct: Optional[float] = None
         playbook_metrics: Optional[dict[str, Any]] = None
         if raw.get("_playbook_brain"):
             position_side = "SHORT"
@@ -680,6 +703,13 @@ class DeterministicRuleEngine(StrategyEngine):
         else:
             position_side = "LONG"
             max_hold_bars = None
+
+        # Apply profile-level underlying stop/target (overridden by strategy raw if set).
+        cfg_underlying = self._run_risk_config
+        if underlying_stop_pct is None and cfg_underlying.underlying_stop_pct is not None:
+            underlying_stop_pct = float(cfg_underlying.underlying_stop_pct)
+        if underlying_target_pct is None and cfg_underlying.underlying_target_pct is not None:
+            underlying_target_pct = float(cfg_underlying.underlying_target_pct)
         signal = TradeSignal(
             signal_id=str(uuid.uuid4())[:8],
             timestamp=snap.timestamp_or_now,
@@ -694,6 +724,9 @@ class DeterministicRuleEngine(StrategyEngine):
             stop_loss_pct=stop_loss_pct,
             target_pct=target_pct,
             underlying_stop_pct=underlying_stop_pct,
+            underlying_target_pct=underlying_target_pct,
+            stagnant_exit_bars=cfg_underlying.stagnant_exit_bars,
+            stagnant_min_gain_pct=cfg_underlying.stagnant_min_gain_pct,
             playbook_exit_policy=playbook_metrics,
             trailing_enabled=(
                 False
