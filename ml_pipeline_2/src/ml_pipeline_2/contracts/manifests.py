@@ -562,9 +562,29 @@ def _validate_staged_hard_gates(payload: Dict[str, Any], errors: List[str]) -> N
             "side_share_max",
             "block_rate_min",
         ),
+        "direction_only": (
+            "profit_factor_min",
+            "max_drawdown_pct_max",
+            "trades_min",
+            "net_return_sum_min",
+            "side_share_min",
+            "side_share_max",
+            "block_rate_min",
+        ),
+        "entry_only": (
+            "profit_factor_min",
+            "max_drawdown_pct_max",
+            "trades_min",
+            "net_return_sum_min",
+            "side_share_min",
+            "side_share_max",
+            "block_rate_min",
+        ),
     }
     for section, required_keys in sections.items():
         block = payload.get(section)
+        if section in {"direction_only", "entry_only"} and block is None:
+            continue
         if not isinstance(block, dict):
             errors.append(f"hard_gates.{section} must be an object")
             continue
@@ -583,20 +603,20 @@ def _validate_staged_hard_gates(payload: Dict[str, Any], errors: List[str]) -> N
             elif section == "stage3":
                 if value < 0.0:
                     errors.append("hard_gates.stage3.max_drawdown_slack must be >= 0")
-            elif section == "combined":
+            elif section in {"combined", "direction_only", "entry_only"}:
                 if key == "trades_min" and int(value) < 0:
-                    errors.append("hard_gates.combined.trades_min must be >= 0")
+                    errors.append(f"hard_gates.{section}.trades_min must be >= 0")
                 elif key in {"side_share_min", "side_share_max", "block_rate_min", "max_drawdown_pct_max"}:
                     if value < 0.0 or value > 1.0:
-                        errors.append(f"hard_gates.combined.{key} must be in [0,1]")
+                        errors.append(f"hard_gates.{section}.{key} must be in [0,1]")
                 elif key == "profit_factor_min" and value < 1.0:
-                    errors.append("hard_gates.combined.profit_factor_min must be >= 1.0")
-        if section == "combined" and isinstance(block, dict):
+                    errors.append(f"hard_gates.{section}.profit_factor_min must be >= 1.0")
+        if section in {"combined", "direction_only"} and isinstance(block, dict):
             try:
                 side_share_min = float(block["side_share_min"])
                 side_share_max = float(block["side_share_max"])
                 if side_share_min > side_share_max:
-                    errors.append("hard_gates.combined.side_share_min must be <= side_share_max")
+                    errors.append(f"hard_gates.{section}.side_share_min must be <= side_share_max")
             except Exception:
                 pass
 
@@ -679,11 +699,19 @@ def _validate_grid_run_overrides(
                     "stage2_session_filter",
                     "stage2_target_redesign",
                     "bypass_stage2",
+                    "bypass_stage1",
+                    "bypass_stage3",
+                    "direction_only_publish",
+                    "direction_only_fixed_recipe",
+                    "entry_only_publish",
+                    "entry_only_fixed_recipe",
                 }
             )
             if unknown_training:
                 errors.append(
-                    f"{field_prefix}.training supports only search_options_by_stage, stage1_reuse, stage1_session_filter, stage2_label_filter, stage2_session_filter, stage2_target_redesign, and bypass_stage2; "
+                    f"{field_prefix}.training supports only search_options_by_stage, stage1_reuse, "
+                    "stage1_session_filter, stage2_label_filter, stage2_session_filter, stage2_target_redesign, "
+                    "bypass_stage2, bypass_stage1, bypass_stage3, direction_only_publish, and entry_only_publish; "
                     f"got unsupported keys: {unknown_training}"
                 )
             stage1_reuse = _validate_stage1_reuse(

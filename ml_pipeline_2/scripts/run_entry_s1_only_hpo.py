@@ -1,23 +1,9 @@
-"""Launch direction-only staged research with Optuna HPO (legacy 3-stage path).
+"""Launch decoupled Stage-1 entry HPO (no direction/recipe training).
 
-Prefer decoupled Stage-2-only training for strategy_app integration:
-    python -m ml_pipeline_2.scripts.run_direction_s2_only_hpo
+Manifest: configs/research/staged_dual_recipe.entry_s1_only_hpo_v1.json
 
-This script still runs S1+S2+S3 (misleading name). Manifest:
-  configs/research/staged_dual_recipe.direction_only_hpo_v1.json
-
-Decoupled manifest (recommended):
-  configs/research/staged_dual_recipe.direction_s2_only_hpo_v1.json
-
-Run on ML VM (hours; use nohup):
-    cd /opt/option_trading
-    export PYTHONPATH=/opt/option_trading
-    nohup .venv/bin/python -u -m ml_pipeline_2.scripts.run_direction_only_hpo \
-        > /tmp/direction_only_hpo.log 2>&1 &
-    tail -f /tmp/direction_only_hpo.log
-
-Or validate manifest only:
-    .venv/bin/python -m ml_pipeline_2.scripts.run_direction_only_hpo --validate-only
+VM:
+    sudo bash /opt/option_trading/ops/gcp/run_entry_s1_only_hpo_vm.sh
 """
 from __future__ import annotations
 
@@ -28,17 +14,13 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
 _DEFAULT_MANIFEST = (
-    _REPO / "ml_pipeline_2" / "configs" / "research" / "staged_dual_recipe.direction_only_hpo_v1.json"
+    _REPO / "ml_pipeline_2" / "configs" / "research" / "staged_dual_recipe.entry_s1_only_hpo_v1.json"
 )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--config",
-        default=str(_DEFAULT_MANIFEST),
-        help="Research manifest JSON path",
-    )
+    parser.add_argument("--config", default=str(_DEFAULT_MANIFEST), help="Research manifest JSON path")
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--print-resolved-config", action="store_true")
     parser.add_argument("--run-output-root", help="Optional explicit run directory")

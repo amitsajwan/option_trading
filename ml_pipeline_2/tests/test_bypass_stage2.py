@@ -232,5 +232,67 @@ def test_create_bypass_stage2_result() -> None:
     assert result["holdout_scores"]["direction_up_prob"].iloc[0] == 0.5
 
 
+def test_evaluate_entry_only_holdout() -> None:
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from ml_pipeline_2.staged.pipeline import _evaluate_entry_only_holdout
+
+    utility = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-01", "2024-01-01", "2024-01-01"],
+            "timestamp": [1000, 1001, 1002],
+            "snapshot_id": ["a", "b", "c"],
+            "best_available_net_return_after_cost": [0.02, -0.01, 0.03],
+        }
+    )
+    stage1_scores = pd.DataFrame(
+        {
+            "trade_date": utility["trade_date"],
+            "timestamp": utility["timestamp"],
+            "snapshot_id": utility["snapshot_id"],
+            "entry_prob": [0.7, 0.4, 0.8],
+        }
+    )
+    stage1_policy = {"selected_threshold": 0.55}
+    summary = _evaluate_entry_only_holdout(utility, stage1_scores, stage1_policy)
+    assert summary["evaluation_mode"] == "entry_only_holdout"
+    assert int(summary["trades"]) == 2
+
+
+def test_evaluate_direction_only_holdout() -> None:
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from ml_pipeline_2.staged.pipeline import _evaluate_direction_only_holdout
+
+    utility = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-01", "2024-01-01", "2024-01-01"],
+            "timestamp": [1000, 1001, 1002],
+            "snapshot_id": ["a", "b", "c"],
+            "best_ce_net_return_after_cost": [0.02, -0.01, 0.03],
+            "best_pe_net_return_after_cost": [-0.01, 0.02, -0.02],
+        }
+    )
+    stage2_scores = pd.DataFrame(
+        {
+            "trade_date": utility["trade_date"],
+            "timestamp": utility["timestamp"],
+            "snapshot_id": utility["snapshot_id"],
+            "direction_up_prob": [0.7, 0.3, 0.65],
+        }
+    )
+    stage2_policy = {
+        "selected_ce_threshold": 0.55,
+        "selected_pe_threshold": 0.55,
+        "selected_min_edge": 0.02,
+    }
+    summary = _evaluate_direction_only_holdout(utility, stage2_scores, stage2_policy)
+    assert summary["evaluation_mode"] == "direction_only_holdout"
+    assert int(summary["trades"]) >= 1
+    assert float(summary["profit_factor"]) > 0.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

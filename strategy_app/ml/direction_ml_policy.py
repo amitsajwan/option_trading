@@ -15,7 +15,7 @@ an optional layer:
     DIRECTION_ML_FILTER_MIN_PROB (0–1). Below that, entry is blocked.
     Useful once the model has proven itself in live shadow mode first.
 
-Load the model bundle (produced by ml_pipeline_2/scripts/train_direction_only.py):
+Load the model bundle (from train_direction_only.py or export_direction_bundle_from_research.py):
     export DIRECTION_ML_MODEL_PATH=/path/to/direction_only_model.joblib
 
 Then the DeterministicRuleEngine will automatically wrap the active policy
@@ -53,11 +53,13 @@ def _load_bundle(path: str) -> Optional[Dict[str, Any]]:
         if not isinstance(bundle, dict) or bundle.get("kind") != "direction_only_bundle":
             logger.warning("direction_ml_policy: unexpected bundle kind at %s — skipping", path)
             return None
+        source = str(bundle.get("source") or bundle.get("kind") or "unknown")
         logger.info(
-            "direction_ml_policy: loaded model from %s  features=%d  holdout_auc=%s",
+            "direction_ml_policy: loaded model from %s  source=%s  features=%d  holdout_auc=%s",
             path,
+            source,
             len(bundle.get("features", [])),
-            bundle.get("holdout_eval", {}).get("roc_auc", "?"),
+            (bundle.get("holdout_eval") or {}).get("roc_auc", "?"),
         )
         return bundle
     except Exception:

@@ -3309,6 +3309,184 @@ def _create_bypass_stage2_result(ctx: Any, stage_frames: dict[str, dict[str, pd.
     }
 
 
+def _create_bypass_stage1_result(ctx: Any, stage_frames: dict[str, dict[str, pd.DataFrame]]) -> dict[str, Any]:
+    """Skip entry-model training; always-on entry_prob for direction-only research."""
+    bypass_package = {"_bypass_stage1": True, "prediction_mode": "entry", "feature_columns": [], "models": {}}
+    dummy_path = str(ctx.output_root / "stages" / "stage1" / "bypass_placeholder.json")
+    ctx.write_json("stages/stage1/bypass_placeholder.json", {"bypass_stage1": True})
+
+    def _make_dummy_scores(frame: pd.DataFrame) -> pd.DataFrame:
+        out = frame.loc[:, KEY_COLUMNS].copy()
+        out["entry_prob"] = 1.0
+        return out
+
+    return {
+        "selection_model_path": dummy_path,
+        "model_package_path": dummy_path,
+        "search_report_path": dummy_path,
+        "training_report_path": dummy_path,
+        "feature_contract_path": dummy_path,
+        "search_package": dict(bypass_package),
+        "model_package": dict(bypass_package),
+        "validation_scores": _make_dummy_scores(stage_frames["stage1"]["research_valid"]),
+        "holdout_scores": _make_dummy_scores(stage_frames["stage1"]["final_holdout"]),
+        "validation_policy_scores": _make_dummy_scores(stage_frames["stage1"]["research_valid"]),
+        "holdout_policy_scores": _make_dummy_scores(stage_frames["stage1"]["final_holdout"]),
+    }
+
+
+def _create_bypass_stage3_result(
+    ctx: Any,
+    stage_frames: dict[str, dict[str, pd.DataFrame]],
+    *,
+    recipe_ids: Sequence[str],
+    fixed_recipe_id: str = "L0",
+) -> dict[str, Any]:
+    """Skip recipe-model training; fixed recipe probabilities for pipeline compatibility."""
+    bypass_package = {"_bypass_stage3": True, "prediction_mode": "recipe", "feature_columns": [], "models": {}}
+    dummy_path = str(ctx.output_root / "stages" / "stage3" / "bypass_placeholder.json")
+    ctx.write_json("stages/stage3/bypass_placeholder.json", {"bypass_stage3": True, "fixed_recipe_id": fixed_recipe_id})
+
+    def _make_dummy_scores(frame: pd.DataFrame) -> pd.DataFrame:
+        out = frame.loc[:, KEY_COLUMNS].copy()
+        for recipe_id in recipe_ids:
+            out[f"recipe_prob_{recipe_id}"] = 1.0 if str(recipe_id) == str(fixed_recipe_id) else 0.0
+        return out
+
+    valid_scores = _make_dummy_scores(stage_frames["stage3"]["research_valid"])
+    holdout_scores = _make_dummy_scores(stage_frames["stage3"]["final_holdout"])
+    recipe_packages = {str(fixed_recipe_id): dict(bypass_package)}
+    recipe_artifacts = {
+        str(fixed_recipe_id): {
+            "model_package_path": dummy_path,
+            "training_report_path": dummy_path,
+            "feature_contract_path": dummy_path,
+        }
+    }
+    return {
+        "training_report_path": dummy_path,
+        "search_package": dict(bypass_package),
+        "model_package": dict(bypass_package),
+        "recipe_packages": recipe_packages,
+        "recipe_artifacts": recipe_artifacts,
+        "validation_scores": valid_scores,
+        "holdout_scores": holdout_scores,
+        "validation_policy_scores": valid_scores,
+        "holdout_policy_scores": holdout_scores,
+    }
+
+
+def _evaluate_direction_only_holdout(
+    utility: pd.DataFrame,
+    stage2_scores: pd.DataFrame,
+    stage2_policy: Dict[str, Any],
+) -> dict[str, Any]:
+    """Economic holdout for decoupled direction: no entry gate, oracle CE/PE returns."""
+    merged = _merge_policy_inputs(utility, stage2_scores)
+    rows_total = len(merged)
+    entry_probs = np.ones(rows_total, dtype=float)
+    direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
+    ce_returns = _numeric_array(merged["best_ce_net_return_after_cost"], fillna=0.0)
+    pe_returns = _numeric_array(merged["best_pe_net_return_after_cost"], fillna=0.0)
+    ce_mask, pe_mask = _direction_trade_masks(
+        entry_probs,
+        direction_up_prob,
+        entry_threshold=0.0,
+        ce_threshold=float(stage2_policy["selected_ce_threshold"]),
+        pe_threshold=float(stage2_policy["selected_pe_threshold"]),
+        min_edge=float(stage2_policy["selected_min_edge"]),
+    )
+    trade_mask = ce_mask | pe_mask
+    returns = np.where(ce_mask, ce_returns, pe_returns)[trade_mask].tolist()
+    sides = np.where(ce_mask[trade_mask], "CE", "PE").tolist()
+    summary = _summarize_returns(returns, rows_total=rows_total, sides=sides)
+    summary.update(
+        {
+            "evaluation_mode": "direction_only_holdout",
+            "entry_threshold": 0.0,
+            "ce_threshold": float(stage2_policy["selected_ce_threshold"]),
+            "pe_threshold": float(stage2_policy["selected_pe_threshold"]),
+            "min_edge": float(stage2_policy["selected_min_edge"]),
+        }
+    )
+    return summary
+
+
+def _evaluate_entry_only_holdout(
+    utility: pd.DataFrame,
+    stage1_scores: pd.DataFrame,
+    stage1_policy: Dict[str, Any],
+) -> dict[str, Any]:
+    """Economic holdout for decoupled entry: trade when entry_prob >= threshold."""
+    merged = _merge_policy_inputs(utility, stage1_scores)
+    entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
+    best_returns = _numeric_array(merged["best_available_net_return_after_cost"], fillna=0.0)
+    threshold = float(stage1_policy["selected_threshold"])
+    mask = entry_probs >= threshold
+    summary = _summarize_returns(best_returns[mask].tolist(), rows_total=len(merged))
+    summary.update(
+        {
+            "evaluation_mode": "entry_only_holdout",
+            "entry_threshold": threshold,
+        }
+    )
+    return summary
+
+
+def _entry_only_trade_rows(
+    utility: pd.DataFrame,
+    stage1_scores: pd.DataFrame,
+    stage1_policy: Dict[str, Any],
+) -> pd.DataFrame:
+    merged = _merge_policy_inputs(utility, stage1_scores)
+    if len(merged) == 0:
+        return merged
+    entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
+    best_returns = _numeric_array(merged["best_available_net_return_after_cost"], fillna=0.0)
+    threshold = float(stage1_policy["selected_threshold"])
+    mask = entry_probs >= threshold
+    if not mask.any():
+        empty = merged.loc[[]].copy()
+        empty["selected_return"] = pd.Series(dtype=float)
+        return empty
+    selected = merged.loc[mask].copy()
+    selected["selected_return"] = best_returns[mask]
+    return selected
+
+
+def _direction_only_trade_rows(
+    utility: pd.DataFrame,
+    stage2_scores: pd.DataFrame,
+    stage2_policy: Dict[str, Any],
+) -> pd.DataFrame:
+    merged = _merge_policy_inputs(utility, stage2_scores)
+    if len(merged) == 0:
+        return merged
+    rows_total = len(merged)
+    entry_probs = np.ones(rows_total, dtype=float)
+    direction_up_prob = _numeric_array(merged["direction_up_prob"], fillna=0.5)
+    ce_returns = _numeric_array(merged["best_ce_net_return_after_cost"], fillna=0.0)
+    pe_returns = _numeric_array(merged["best_pe_net_return_after_cost"], fillna=0.0)
+    ce_mask, pe_mask = _direction_trade_masks(
+        entry_probs,
+        direction_up_prob,
+        entry_threshold=0.0,
+        ce_threshold=float(stage2_policy["selected_ce_threshold"]),
+        pe_threshold=float(stage2_policy["selected_pe_threshold"]),
+        min_edge=float(stage2_policy["selected_min_edge"]),
+    )
+    trade_mask = ce_mask | pe_mask
+    if not trade_mask.any():
+        empty = merged.loc[[]].copy()
+        empty["selected_side"] = pd.Series(dtype=object)
+        empty["selected_return"] = pd.Series(dtype=float)
+        return empty
+    selected = merged.loc[trade_mask].copy()
+    selected["selected_side"] = np.where(ce_mask[trade_mask], "CE", "PE")
+    selected["selected_return"] = np.where(ce_mask[trade_mask], ce_returns[trade_mask], pe_returns[trade_mask])
+    return selected
+
+
 def _stage_component_ids(manifest: Dict[str, Any], stage_name: str) -> dict[str, str]:
     return {
         "view_id": str(manifest["views"][f"{stage_name}_view_id"]),
@@ -3526,7 +3704,14 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         evaluation_mode="coverage_only",
     )
 
-    bypass_stage2 = bool(dict(manifest.get("training") or {}).get("bypass_stage2", False))
+    training_cfg = dict(manifest.get("training") or {})
+    bypass_stage1 = bool(training_cfg.get("bypass_stage1", False))
+    bypass_stage2 = bool(training_cfg.get("bypass_stage2", False))
+    bypass_stage3 = bool(training_cfg.get("bypass_stage3", False))
+    direction_only_publish = bool(training_cfg.get("direction_only_publish", False))
+    entry_only_publish = bool(training_cfg.get("entry_only_publish", False))
+    if direction_only_publish and entry_only_publish:
+        raise ValueError("training.direction_only_publish and training.entry_only_publish are mutually exclusive")
     stage2_is_direction_or_no_trade = _is_stage2_direction_or_no_trade(components["stage2"])
     if bypass_stage2:
         cv_prechecks: dict[str, Any] = {
@@ -3585,6 +3770,8 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         policy_holdout_frame=stage_frames["stage1"]["final_holdout"],
         prob_col="entry_prob",
     )
+    if stage1_result is None and bypass_stage1:
+        stage1_result = _create_bypass_stage1_result(ctx, stage_frames)
     if stage1_result is None:
         stage1_result = resolve_trainer(components["stage1"]["trainer_id"])(
             stage_name="stage1",
@@ -3617,15 +3804,19 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         stage_artifacts["stage1"]["reused_from_run_id"] = str(stage1_result["reused_from_run_id"])
         stage_artifacts["stage1"]["reused_from_run_dir"] = str(stage1_result["reused_from_run_dir"])
     ctx.append_state("stage_done", stage="stage1", completed_at_utc=stage1_completed_at)
-    stage1_cv_quality = _binary_quality(
-        labeled_frames["stage1"]["research_valid"]["move_label"],
-        stage1_result["validation_scores"]["entry_prob"],
-    )
-    stage1_cv_ok, stage1_cv_reasons = _stage_gate_result(
-        stage1_cv_quality,
-        dict(manifest["hard_gates"]["stage1"]),
-        prefix="stage1_cv.",
-    )
+    if bypass_stage1:
+        stage1_cv_quality = {"bypass_stage1": True, "roc_auc": 0.5, "brier": 0.25}
+        stage1_cv_ok, stage1_cv_reasons = True, []
+    else:
+        stage1_cv_quality = _binary_quality(
+            labeled_frames["stage1"]["research_valid"]["move_label"],
+            stage1_result["validation_scores"]["entry_prob"],
+        )
+        stage1_cv_ok, stage1_cv_reasons = _stage_gate_result(
+            stage1_cv_quality,
+            dict(manifest["hard_gates"]["stage1"]),
+            prefix="stage1_cv.",
+        )
     cv_prechecks["stage1_cv"] = {
         **stage1_cv_quality,
         "gate_passed": stage1_cv_ok,
@@ -3656,7 +3847,6 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         lifecycle_status="running",
         extra={"active_stage": "stage2", "last_progress_event": "stage_start", "last_progress_at_utc": stage2_started_at},
     )
-    bypass_stage2 = bool(dict(manifest.get("training") or {}).get("bypass_stage2", False))
     stage2_result = _load_reused_stage2_result(
         ctx=ctx,
         manifest=manifest,
@@ -3788,42 +3978,51 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         lifecycle_status="running",
         extra={"active_stage": "stage3", "last_progress_event": "stage_start", "last_progress_at_utc": stage3_started_at},
     )
-    stage3_result = resolve_trainer(components["stage3"]["trainer_id"])(
-        stage_name="stage3",
-        train_frame=_add_upstream_probs(
-            labeled_frames["stage3"]["research_train"],
-            stage1_source_frame=stage_frames["stage1"]["research_train"],
-            stage2_source_frame=stage_frames["stage2"]["research_train"],
-            stage1_package=stage1_result["search_package"],
-            stage2_package=stage2_result["search_package"],
-        ),
-        valid_frame=_add_upstream_probs(
-            stage_frames["stage3"]["research_valid"],
-            stage1_source_frame=stage_frames["stage1"]["research_valid"],
-            stage2_source_frame=stage_frames["stage2"]["research_valid"],
-            stage1_package=stage1_result["search_package"],
-            stage2_package=stage2_result["search_package"],
-        ),
-        full_model_frame=_add_upstream_probs(
-            labeled_frames["stage3"]["full_model"],
-            stage1_source_frame=stage_frames["stage1"]["full_model"],
-            stage2_source_frame=stage_frames["stage2"]["full_model"],
-            stage1_package=stage1_result["model_package"],
-            stage2_package=stage2_result["model_package"],
-        ),
-        holdout_frame=_add_upstream_probs(
-            stage_frames["stage3"]["final_holdout"],
-            stage1_source_frame=stage_frames["stage1"]["final_holdout"],
-            stage2_source_frame=stage_frames["stage2"]["final_holdout"],
-            stage1_package=stage1_result["model_package"],
-            stage2_package=stage2_result["model_package"],
-        ),
-        manifest=manifest,
-        models=list(manifest["catalog"]["models_by_stage"]["stage3"]),
-        feature_sets=list(manifest["catalog"]["feature_sets_by_stage"]["stage3"]),
-        output_root=ctx.output_root / "stages",
-        progress_callback=_stage_progress_callback(ctx, stage_name="stage3"),
-    )
+    recipe_ids_for_bypass = [recipe.recipe_id for recipe in recipe_catalog]
+    if bypass_stage3:
+        stage3_result = _create_bypass_stage3_result(
+            ctx,
+            stage_frames,
+            recipe_ids=recipe_ids_for_bypass,
+            fixed_recipe_id=str((manifest.get("training") or {}).get("direction_only_fixed_recipe") or "L0"),
+        )
+    else:
+        stage3_result = resolve_trainer(components["stage3"]["trainer_id"])(
+            stage_name="stage3",
+            train_frame=_add_upstream_probs(
+                labeled_frames["stage3"]["research_train"],
+                stage1_source_frame=stage_frames["stage1"]["research_train"],
+                stage2_source_frame=stage_frames["stage2"]["research_train"],
+                stage1_package=stage1_result["search_package"],
+                stage2_package=stage2_result["search_package"],
+            ),
+            valid_frame=_add_upstream_probs(
+                stage_frames["stage3"]["research_valid"],
+                stage1_source_frame=stage_frames["stage1"]["research_valid"],
+                stage2_source_frame=stage_frames["stage2"]["research_valid"],
+                stage1_package=stage1_result["search_package"],
+                stage2_package=stage2_result["search_package"],
+            ),
+            full_model_frame=_add_upstream_probs(
+                labeled_frames["stage3"]["full_model"],
+                stage1_source_frame=stage_frames["stage1"]["full_model"],
+                stage2_source_frame=stage_frames["stage2"]["full_model"],
+                stage1_package=stage1_result["model_package"],
+                stage2_package=stage2_result["model_package"],
+            ),
+            holdout_frame=_add_upstream_probs(
+                stage_frames["stage3"]["final_holdout"],
+                stage1_source_frame=stage_frames["stage1"]["final_holdout"],
+                stage2_source_frame=stage_frames["stage2"]["final_holdout"],
+                stage1_package=stage1_result["model_package"],
+                stage2_package=stage2_result["model_package"],
+            ),
+            manifest=manifest,
+            models=list(manifest["catalog"]["models_by_stage"]["stage3"]),
+            feature_sets=list(manifest["catalog"]["feature_sets_by_stage"]["stage3"]),
+            output_root=ctx.output_root / "stages",
+            progress_callback=_stage_progress_callback(ctx, stage_name="stage3"),
+        )
     stage3_completed_at = utc_now()
     stage_artifacts["stage3"] = {
         "started_at_utc": stage3_started_at,
@@ -3858,31 +4057,66 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     stage2_policy_scores_holdout = stage2_result["holdout_policy_scores"]
     stage3_policy_scores_valid = stage3_result["validation_policy_scores"]
     stage3_policy_scores_holdout = stage3_result["holdout_policy_scores"]
-    stage1_policy = resolve_policy(components["stage1"]["policy_id"])(
-        stage1_policy_scores_valid,
-        utility_valid,
-        dict(manifest["policy"]["stage1"]),
-    )
-    stage2_policy = resolve_policy(components["stage2"]["policy_id"])(
-        stage2_policy_scores_valid,
-        utility_valid,
-        stage1_policy_scores_valid,
-        stage1_policy,
-        dict(manifest["policy"]["stage2"]),
-    )
-    stage3_policy = resolve_policy(components["stage3"]["policy_id"])(
-        stage3_policy_scores_valid,
-        utility_valid,
-        stage1_policy_scores_valid,
-        stage2_policy_scores_valid,
-        stage1_policy,
-        stage2_policy,
-        dict(manifest["policy"]["stage3"]),
-        [recipe.recipe_id for recipe in recipe_catalog],
-        dual_side_mode=bypass_stage2,
-    )
+    if bypass_stage1 or direction_only_publish:
+        stage1_policy = {
+            "policy_id": "entry_threshold_v1",
+            "selected_threshold": 0.0,
+            "validation_rows": [],
+            "selected_validation_summary": {"threshold": 0.0, "bypass_stage1": True},
+        }
+    else:
+        stage1_policy = resolve_policy(components["stage1"]["policy_id"])(
+            stage1_policy_scores_valid,
+            utility_valid,
+            dict(manifest["policy"]["stage1"]),
+        )
+    if entry_only_publish or bypass_stage2:
+        stage2_policy = {
+            "policy_id": "direction_dual_threshold_v1",
+            "selected_ce_threshold": 0.5,
+            "selected_pe_threshold": 0.5,
+            "selected_min_edge": 0.0,
+            "bypass_stage2": True,
+        }
+    else:
+        stage2_policy = resolve_policy(components["stage2"]["policy_id"])(
+            stage2_policy_scores_valid,
+            utility_valid,
+            stage1_policy_scores_valid,
+            stage1_policy,
+            dict(manifest["policy"]["stage2"]),
+        )
+    if direction_only_publish or entry_only_publish:
+        stage3_policy = {
+            "policy_id": "recipe_fixed_baseline_guard_v1",
+            "selection_mode": "fixed_recipe",
+            "selected_recipe_id": str(
+                training_cfg.get("direction_only_fixed_recipe")
+                or training_cfg.get("entry_only_fixed_recipe")
+                or "L0"
+            ),
+            "bypass_stage3": True,
+        }
+    else:
+        stage3_policy = resolve_policy(components["stage3"]["policy_id"])(
+            stage3_policy_scores_valid,
+            utility_valid,
+            stage1_policy_scores_valid,
+            stage2_policy_scores_valid,
+            stage1_policy,
+            stage2_policy,
+            dict(manifest["policy"]["stage3"]),
+            [recipe.recipe_id for recipe in recipe_catalog],
+            dual_side_mode=bypass_stage2,
+        )
 
-    stage1_holdout_quality = _binary_quality(labeled_frames["stage1"]["final_holdout"]["entry_label"], stage1_result["holdout_scores"]["entry_prob"])
+    if bypass_stage1:
+        stage1_holdout_quality = {"bypass_stage1": True, "roc_auc": 0.5, "brier": 0.25}
+    else:
+        stage1_holdout_quality = _binary_quality(
+            labeled_frames["stage1"]["final_holdout"]["entry_label"],
+            stage1_result["holdout_scores"]["entry_prob"],
+        )
     if bypass_stage2:
         stage2_holdout_quality = {"bypass_stage2": True, "roc_auc": 0.5, "brier": 0.25}
     elif stage2_is_direction_or_no_trade:
@@ -3895,61 +4129,147 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             np.where(labeled_frames["stage2"]["final_holdout"]["direction_label"].astype(str).str.upper() == "CE", 1, 0),
             stage2_result["holdout_scores"]["direction_up_prob"],
         )
-    combined_holdout_summary = _evaluate_combined_policy(
-        utility_holdout,
-        stage1_policy_scores_holdout,
-        stage2_policy_scores_holdout,
-        stage3_policy_scores_holdout,
-        stage1_threshold=float(stage1_policy["selected_threshold"]),
-        stage2_policy=stage2_policy,
-        stage3_policy=stage3_policy,
-        recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
-        dual_side_mode=bypass_stage2,
-    )
-    combined_trade_rows = _combined_policy_trade_rows(
-        stage_frames["stage3"]["final_holdout"],
-        utility_holdout,
-        stage1_policy_scores_holdout,
-        stage2_policy_scores_holdout,
-        stage3_policy_scores_holdout,
-        stage1_threshold=float(stage1_policy["selected_threshold"]),
-        stage2_policy=stage2_policy,
-        stage3_policy=stage3_policy,
-        recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
-        dual_side_mode=bypass_stage2,
-    )
-    combined_trade_rows = _attach_support_context(combined_trade_rows, support_windows["final_holdout"])
-    training_regime_distribution = _distribution_from_series(_regime_label_series(combined_trade_rows))
-    scenario_reports = _scenario_reports(
-        base_frame=support_windows["final_holdout"],
-        trade_rows=combined_trade_rows,
-        evaluation_mode="combined_policy_holdout",
-    )
-    fixed_recipe_baselines = [
-        _fixed_recipe_baseline(
+
+    if direction_only_publish:
+        combined_holdout_summary = _evaluate_direction_only_holdout(
+            utility_holdout,
+            stage2_policy_scores_holdout,
+            stage2_policy,
+        )
+        combined_trade_rows = _direction_only_trade_rows(
+            utility_holdout,
+            stage2_policy_scores_holdout,
+            stage2_policy,
+        )
+        combined_trade_rows = _attach_support_context(combined_trade_rows, support_windows["final_holdout"])
+        training_regime_distribution = _distribution_from_series(_regime_label_series(combined_trade_rows))
+        scenario_reports = _scenario_reports(
+            base_frame=support_windows["final_holdout"],
+            trade_rows=combined_trade_rows,
+            evaluation_mode="direction_only_holdout",
+        )
+        best_fixed_baseline = dict(combined_holdout_summary)
+        stage1_gate_ok, stage1_gate_reasons = True, []
+        stage3_gate_ok, stage3_gate_reasons = True, []
+        stage2_gate_ok, stage2_gate_reasons = _stage_gate_result(
+            stage2_holdout_quality,
+            dict(manifest["hard_gates"]["stage2"]),
+            prefix="stage2.",
+        )
+        combined_gate_ok, combined_gate_reasons = _combined_gate_result(
+            combined_holdout_summary,
+            dict(manifest["hard_gates"].get("direction_only") or manifest["hard_gates"]["combined"]),
+        )
+        blocking_reasons = stage2_gate_reasons + combined_gate_reasons
+    elif entry_only_publish:
+        combined_holdout_summary = _evaluate_entry_only_holdout(
+            utility_holdout,
+            stage1_policy_scores_holdout,
+            stage1_policy,
+        )
+        combined_trade_rows = _entry_only_trade_rows(
+            utility_holdout,
+            stage1_policy_scores_holdout,
+            stage1_policy,
+        )
+        combined_trade_rows = _attach_support_context(combined_trade_rows, support_windows["final_holdout"])
+        training_regime_distribution = _distribution_from_series(_regime_label_series(combined_trade_rows))
+        scenario_reports = _scenario_reports(
+            base_frame=support_windows["final_holdout"],
+            trade_rows=combined_trade_rows,
+            evaluation_mode="entry_only_holdout",
+        )
+        best_fixed_baseline = dict(combined_holdout_summary)
+        stage2_gate_ok, stage2_gate_reasons = True, []
+        stage3_gate_ok, stage3_gate_reasons = True, []
+        stage1_gate_ok, stage1_gate_reasons = _stage_gate_result(
+            stage1_holdout_quality,
+            dict(manifest["hard_gates"]["stage1"]),
+            prefix="stage1.",
+        )
+        combined_gate_ok, combined_gate_reasons = _combined_gate_result(
+            combined_holdout_summary,
+            dict(manifest["hard_gates"].get("entry_only") or manifest["hard_gates"]["combined"]),
+        )
+        blocking_reasons = stage1_gate_reasons + combined_gate_reasons
+    else:
+        combined_holdout_summary = _evaluate_combined_policy(
             utility_holdout,
             stage1_policy_scores_holdout,
             stage2_policy_scores_holdout,
+            stage3_policy_scores_holdout,
             stage1_threshold=float(stage1_policy["selected_threshold"]),
             stage2_policy=stage2_policy,
-            recipe_id=recipe.recipe_id,
+            stage3_policy=stage3_policy,
+            recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
             dual_side_mode=bypass_stage2,
         )
-        for recipe in recipe_catalog
-    ]
-    best_fixed_baseline = max(fixed_recipe_baselines, key=lambda row: (float(row["net_return_sum"]), float(row["profit_factor"]), -float(row["max_drawdown_pct"])))
+        combined_trade_rows = _combined_policy_trade_rows(
+            stage_frames["stage3"]["final_holdout"],
+            utility_holdout,
+            stage1_policy_scores_holdout,
+            stage2_policy_scores_holdout,
+            stage3_policy_scores_holdout,
+            stage1_threshold=float(stage1_policy["selected_threshold"]),
+            stage2_policy=stage2_policy,
+            stage3_policy=stage3_policy,
+            recipe_ids=[recipe.recipe_id for recipe in recipe_catalog],
+            dual_side_mode=bypass_stage2,
+        )
+        combined_trade_rows = _attach_support_context(combined_trade_rows, support_windows["final_holdout"])
+        training_regime_distribution = _distribution_from_series(_regime_label_series(combined_trade_rows))
+        scenario_reports = _scenario_reports(
+            base_frame=support_windows["final_holdout"],
+            trade_rows=combined_trade_rows,
+            evaluation_mode="combined_policy_holdout",
+        )
+        fixed_recipe_baselines = [
+            _fixed_recipe_baseline(
+                utility_holdout,
+                stage1_policy_scores_holdout,
+                stage2_policy_scores_holdout,
+                stage1_threshold=float(stage1_policy["selected_threshold"]),
+                stage2_policy=stage2_policy,
+                recipe_id=recipe.recipe_id,
+                dual_side_mode=bypass_stage2,
+            )
+            for recipe in recipe_catalog
+        ]
+        best_fixed_baseline = max(
+            fixed_recipe_baselines,
+            key=lambda row: (float(row["net_return_sum"]), float(row["profit_factor"]), -float(row["max_drawdown_pct"])),
+        )
+        stage1_gate_ok, stage1_gate_reasons = _stage_gate_result(
+            stage1_holdout_quality,
+            dict(manifest["hard_gates"]["stage1"]),
+            prefix="stage1.",
+        )
+        stage2_gate_ok, stage2_gate_reasons = _stage_gate_result(
+            stage2_holdout_quality,
+            dict(manifest["hard_gates"]["stage2"]),
+            prefix="stage2.",
+        )
+        stage3_gate_ok = (
+            float(combined_holdout_summary["net_return_sum"]) >= float(best_fixed_baseline["net_return_sum"])
+            and float(combined_holdout_summary["profit_factor"]) >= float(best_fixed_baseline["profit_factor"])
+            and float(combined_holdout_summary["max_drawdown_pct"])
+            <= float(best_fixed_baseline["max_drawdown_pct"])
+            + float(dict(manifest["hard_gates"]["stage3"]).get("max_drawdown_slack", 0.01))
+        )
+        stage3_gate_reasons = [] if stage3_gate_ok else ["stage3.non_inferior_to_fixed_recipe_baseline_failed"]
+        combined_gate_ok, combined_gate_reasons = _combined_gate_result(
+            combined_holdout_summary,
+            dict(manifest["hard_gates"]["combined"]),
+        )
+        blocking_reasons = stage1_gate_reasons + stage2_gate_reasons + stage3_gate_reasons + combined_gate_reasons
 
-    stage1_gate_ok, stage1_gate_reasons = _stage_gate_result(stage1_holdout_quality, dict(manifest["hard_gates"]["stage1"]), prefix="stage1.")
-    stage2_gate_ok, stage2_gate_reasons = _stage_gate_result(stage2_holdout_quality, dict(manifest["hard_gates"]["stage2"]), prefix="stage2.")
-    stage3_gate_ok = (
-        float(combined_holdout_summary["net_return_sum"]) >= float(best_fixed_baseline["net_return_sum"])
-        and float(combined_holdout_summary["profit_factor"]) >= float(best_fixed_baseline["profit_factor"])
-        and float(combined_holdout_summary["max_drawdown_pct"]) <= float(best_fixed_baseline["max_drawdown_pct"]) + float(dict(manifest["hard_gates"]["stage3"]).get("max_drawdown_slack", 0.01))
-    )
-    stage3_gate_reasons = [] if stage3_gate_ok else ["stage3.non_inferior_to_fixed_recipe_baseline_failed"]
-    combined_gate_ok, combined_gate_reasons = _combined_gate_result(combined_holdout_summary, dict(manifest["hard_gates"]["combined"]))
-    blocking_reasons = stage1_gate_reasons + stage2_gate_reasons + stage3_gate_reasons + combined_gate_reasons
-    publish_assessment = {"decision": ("PUBLISH" if not blocking_reasons else "HOLD"), "publishable": not blocking_reasons, "blocking_reasons": blocking_reasons}
+    publish_assessment = {
+        "decision": ("PUBLISH" if not blocking_reasons else "HOLD"),
+        "publishable": not blocking_reasons,
+        "blocking_reasons": blocking_reasons,
+        "direction_only_publish": bool(direction_only_publish),
+        "entry_only_publish": bool(entry_only_publish),
+    }
 
     summary = {
         "summary_schema_version": SUMMARY_SCHEMA_VERSION,
@@ -3968,7 +4288,19 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "holdout_reports": {
             "stage1": stage1_holdout_quality,
             "stage2": stage2_holdout_quality,
-            "stage3": {"combined_holdout_summary": combined_holdout_summary, "best_fixed_recipe_baseline": best_fixed_baseline, "all_fixed_recipe_baselines": fixed_recipe_baselines},
+            "stage3": (
+                {"direction_only_holdout_summary": combined_holdout_summary}
+                if direction_only_publish
+                else (
+                    {"entry_only_holdout_summary": combined_holdout_summary}
+                    if entry_only_publish
+                    else {
+                        "combined_holdout_summary": combined_holdout_summary,
+                        "best_fixed_recipe_baseline": best_fixed_baseline,
+                        "all_fixed_recipe_baselines": fixed_recipe_baselines,
+                    }
+                )
+            ),
         },
         "gates": {
             "stage1": {"passed": stage1_gate_ok, "reasons": stage1_gate_reasons},
@@ -3984,7 +4316,14 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
         "label_filtering": label_filtering,
         "scenario_reports": scenario_reports,
         "training_environment": dict(training_environment["stages"]),
-        "execution_hints": dict(ctx.resolved_config.get("_execution_hints") or {}),
+        "execution_hints": {
+            **dict(ctx.resolved_config.get("_execution_hints") or {}),
+            "bypass_stage1": bool(bypass_stage1),
+            "bypass_stage2": bool(bypass_stage2),
+            "bypass_stage3": bool(bypass_stage3),
+            "direction_only_publish": bool(direction_only_publish),
+            "entry_only_publish": bool(entry_only_publish),
+        },
         "stage_artifacts": stage_artifacts,
     }
     ctx.write_json("summary.json", summary)
