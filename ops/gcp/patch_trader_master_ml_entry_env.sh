@@ -14,10 +14,15 @@ upsert() {
   fi
 }
 
+upsert STRATEGY_ENGINE deterministic
 upsert STRATEGY_PROFILE_ID trader_master_ml_entry_v1
+upsert STRATEGY_MIN_CONFIDENCE "${STRATEGY_MIN_CONFIDENCE:-0.50}"
+upsert STRATEGY_ROLLOUT_STAGE_HISTORICAL paper
+upsert STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL 1.0
+upsert MARKET_SESSION_ENABLED 0
 upsert ENTRY_ML_MODEL_PATH "$ENTRY_MODEL"
 upsert ENTRY_ML_MIN_PROB "${ENTRY_ML_MIN_PROB:-0.55}"
 # Optional: set DIRECTION_ML_MODEL_PATH for CE/PE when entry fires
 
 echo "Patched $ENV_FILE for trader_master_ml_entry_v1"
-grep -E '^(STRATEGY_PROFILE_ID|ENTRY_ML_)=' "$ENV_FILE" || true
+grep -E '^(STRATEGY_ENGINE|STRATEGY_PROFILE_ID|ENTRY_ML_)=' "$ENV_FILE" || true
