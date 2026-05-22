@@ -252,10 +252,33 @@ function evalRunOptionLabel(run) {
   const from = String(run?.date_from || '').slice(0, 10);
   const to = String(run?.date_to || '').slice(0, 10);
   const range = from && to ? `${from} → ${to}` : (from || to || 'window ?');
-  const trades = run?.trade_count != null ? `${run.trade_count} trades` : '';
+  const trades = run?.trade_count != null ? `${run.trade_count}T` : '';
   const profile = String(run?.strategy_profile_id || '').trim();
-  const queued = run?.submitted_at ? evalFormatIstTimestamp(run.submitted_at) : '';
-  const parts = [range, profile, trades, queued, evalShortRunId(run?.run_id)].filter(Boolean);
+
+  // Derive a short human tag from message or profile
+  const msg = String(run?.message || '').trim();
+  let tag = '';
+  if (msg && !msg.startsWith('Replay finished') && !msg.startsWith('tmux replay')) {
+    // custom message — use up to 30 chars
+    tag = msg.length > 30 ? msg.slice(0, 28) + '…' : msg;
+  } else if (profile) {
+    // shorten known long profile names
+    tag = profile
+      .replace('trader_master_ml_entry_det_dir_v1', 'tm_ml_det_dir')
+      .replace('trader_master_ml_entry_v1', 'tm_ml_entry')
+      .replace('trader_master_v1', 'tm_v1')
+      .replace('playbook_v1_paper_v1', 'pbv1')
+      .replace('debit_multi_v1', 'debit_multi')
+      .replace('r1s_top3_paper_v1', 'r1s_top3')
+      .replace('ml_pure_staged_v1', 'ml_pure');
+  }
+
+  // Date of this run — prefer ended_at for registered runs, submitted_at otherwise
+  const runDate = run?.ended_at || run?.submitted_at || run?.updated_at || '';
+  const dateStr = runDate ? evalFormatIstTimestamp(runDate).slice(0, 11).trim() : '';
+
+  const discovered = run?.discovered ? '⊕' : '';
+  const parts = [range, tag, trades, dateStr, discovered, evalShortRunId(run?.run_id)].filter(Boolean);
   return parts.join(' · ');
 }
 
@@ -297,6 +320,12 @@ function EvalRunDetails({ run, vmProfileId }) {
             <span className="muted tiny"> · {run.trade_count} closed trades</span>
           ) : null}
         </div>
+        {run.message ? (
+          <div style={{gridColumn: '1 / -1'}}>
+            <div className="field-label">Notes</div>
+            <span className="muted tiny">{String(run.message)}</span>
+          </div>
+        ) : null}
       </div>
       {profileMismatch && (
         <p className="muted tiny eval-run-details-note">
@@ -467,7 +496,7 @@ function EvalMonitor({ tweaks }) {
     setRunsLoading(true);
     try {
       const payload = await evalGet(
-        `/api/strategy/evaluation/runs?dataset=${encodeURIComponent(dataset)}&limit=40`
+        `/api/strategy/evaluation/runs?dataset=${encodeURIComponent(dataset)}&limit=80`
       );
       const listed = payload?.rows ?? payload?.runs;
       setRuns(evalSortRunsDesc(listed));
@@ -531,7 +560,18 @@ function EvalMonitor({ tweaks }) {
           runDoc = null;
         }
       }
-      if (!runDoc) {
+      if (!runDoc && runId) {
+        try {
+          const listPayload = await evalGet(
+            `/api/strategy/evaluation/runs?dataset=${encodeURIComponent(nextFilters.dataset)}&limit=80`
+          );
+          const listed = listPayload?.rows ?? listPayload?.runs ?? [];
+          runDoc = (listed || []).find(r => String(r?.run_id || '').trim() === runId) || null;
+        } catch (_) {
+          runDoc = null;
+        }
+      }
+      if (!runDoc && !urlRunId) {
         try {
           runDoc = await evalGet(
             `/api/strategy/evaluation/runs/latest?dataset=${encodeURIComponent(nextFilters.dataset)}&status=completed`
@@ -541,7 +581,7 @@ function EvalMonitor({ tweaks }) {
           runDoc = null;
           runId = '';
         }
-      } else {
+      } else if (runDoc) {
         runId = String(runDoc?.run_id || runId).trim();
       }
 
@@ -891,8 +931,10 @@ function EvalMonitor({ tweaks }) {
                 }}
               >
                 <option value="">{runs.length ? '— pick a replay run —' : '— no runs yet —'}</option>
-                {(runs || []).map(run => (
-                  <option key={run.run_id} value={run.run_id}>{evalRunOptionLabel(run)}</option>
+                {(runs || []).map((run, idx) => (
+                  <option key={run.run_id} value={run.run_id}>
+                    {(idx === 0 ? '★ LATEST  ' : '') + evalRunOptionLabel(run)}
+                  </option>
                 ))}
               </select>
             </label>
