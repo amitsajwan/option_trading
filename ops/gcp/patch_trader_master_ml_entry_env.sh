@@ -3,7 +3,8 @@
 set -euo pipefail
 
 ENV_FILE="${1:-/opt/option_trading/.env.compose}"
-ENTRY_MODEL="${ENTRY_ML_MODEL_PATH:-/opt/option_trading/ml_pipeline_2/artifacts/entry_only/published/entry_only_model.joblib}"
+# Container path (strategy_app_historical mounts repo at /app).
+ENTRY_MODEL="${ENTRY_ML_MODEL_PATH:-/app/ml_pipeline_2/artifacts/entry_only/published/entry_only_model.joblib}"
 
 upsert() {
   local key="$1" val="$2"
@@ -22,6 +23,11 @@ upsert STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL 1.0
 upsert MARKET_SESSION_ENABLED 0
 upsert ENTRY_ML_MODEL_PATH "$ENTRY_MODEL"
 upsert ENTRY_ML_MIN_PROB "${ENTRY_ML_MIN_PROB:-0.55}"
+# Clear ml_pure switch vars so deterministic engine starts cleanly.
+upsert ML_PURE_RUN_ID ""
+upsert ML_PURE_MODEL_GROUP ""
+upsert ML_PURE_MODEL_PACKAGE ""
+upsert ML_PURE_THRESHOLD_REPORT ""
 # Optional: set DIRECTION_ML_MODEL_PATH for CE/PE when entry fires
 
 echo "Patched $ENV_FILE for trader_master_ml_entry_v1"
