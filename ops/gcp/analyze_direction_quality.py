@@ -57,6 +57,39 @@ def _win_rate(pnls: list[float]) -> float:
     return sum(1 for p in pnls if p > 0) / len(pnls) if pnls else 0.0
 
 
+def _vote_raw_signals(vote: dict) -> dict:
+    raw = vote.get("raw_signals")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    payload = vote.get("payload")
+    if isinstance(payload, dict):
+        inner = payload.get("vote")
+        if isinstance(inner, dict):
+            nested = inner.get("raw_signals")
+            if isinstance(nested, dict):
+                return nested
+            if isinstance(nested, str):
+                try:
+                    parsed = json.loads(nested)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    pass
+    return {}
+
+
+def _direction_source_from_vote(vote: dict) -> str:
+    raw = _vote_raw_signals(vote)
+    return str(raw.get("direction_source") or "unknown").strip() or "unknown"
+
+
 def main() -> int:
     argv = [a for a in sys.argv[1:] if a]
     run_id = argv[0] if argv and not argv[0].startswith("-") else ""
@@ -85,24 +118,21 @@ def main() -> int:
         if c.get("entry_snapshot_id")
     }
     snap_to_direction_source: dict[str, str] = {}
+    vote_query: dict = {
+        "run_id": run_id,
+        "strategy": "ML_ENTRY",
+        "signal_type": "ENTRY",
+    }
+    if entry_snap_ids:
+        vote_query["snapshot_id"] = {"$in": list(entry_snap_ids)}
     for vote in db.strategy_votes_historical.find(
-        {
-            "run_id": run_id,
-            "strategy": "ML_ENTRY",
-            "signal_type": "ENTRY",
-            "snapshot_id": {"$in": list(entry_snap_ids)},
-        },
-        {"snapshot_id": 1, "raw_signals": 1, "_id": 0},
+        vote_query,
+        {"snapshot_id": 1, "raw_signals": 1, "payload": 1, "_id": 0},
     ):
-        sid = str(vote.get("snapshot_id") or "")
-        raw = vote.get("raw_signals") or {}
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except Exception:
-                raw = {}
-        src = str(raw.get("direction_source") or "unknown")
-        snap_to_direction_source[sid] = src
+        sid = str(vote.get("snapshot_id") or "").strip()
+        if not sid:
+            continue
+        snap_to_direction_source[sid] = _direction_source_from_vote(vote)
 
     print("\n" + "=" * 72)
     print(f"  DIRECTION QUALITY — {label}")
@@ -116,7 +146,7 @@ def main() -> int:
     for c in closes:
         pnl = float(c.get("pnl_pct") or 0)
         direction = str(c.get("direction") or "?")
-        sid = str(c.get("entry_snapshot_id") or "")
+        sid = str(c.get("entry_snapshot_id") or c.get("snapshot_id") or "").strip()
         src = snap_to_direction_source.get(sid, "unknown")
         if src == "unknown":
             no_source += 1
