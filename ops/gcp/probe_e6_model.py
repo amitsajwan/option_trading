@@ -33,15 +33,16 @@ def main() -> int:
     for f in aug_oct:
         p = os.path.join(V2_DIR, f)
         schema = pq.read_schema(p).names
-        cols = [c for c in features if c in schema]
+        # year is partition-keyed with dict type — read it via the file name instead
+        cols = [c for c in features if c in schema and c != "year"]
         df = pq.read_table(p, columns=cols).to_pandas()
         for c in features:
             if c not in df.columns:
                 df[c] = np.nan
+        if "year" in features:
+            df["year"] = 2024
         dfs.append(df[features])
     df = pd.concat(dfs, ignore_index=True)
-    if "year" in features:
-        df["year"] = df["year"].fillna(2024)
     print(f"holdout rows: {len(df)}")
 
     # Coverage: what fraction of features have ANY value
