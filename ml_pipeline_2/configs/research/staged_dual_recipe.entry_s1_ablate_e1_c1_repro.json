@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "experiment_kind": "staged_dual_recipe_v1",
-  "_comment": "E1 — Pure C1 stage-1 reproduction in entry-only mode. Baseline against C1's published model (holdout AUC=0.683, drift=0.017, 22K trades PF=3.99). NO HPO — fixed config to verify the pipeline + ingredients still work. If E1 fails, the wrapper is broken; if E1 passes, E2-E5 ablate one variable each.",
+  "_comment": "E1 — Pure C1 stage-1 reproduction in entry-only mode. Baseline against C1's published model (holdout AUC=0.683, drift=0.017, 22K trades PF=3.99). NO HPO — fixed config to verify the pipeline + ingredients still work. v2 of this config: corrected support_dataset to snapshots_ml_flat (v1) to pair with stage1_entry_view_v1 — previous attempt failed with 'stage frame/label join mismatch' due to v1 view × v2 dataset mismatch.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
-    "support_dataset": "snapshots_ml_flat_v2",
+    "support_dataset": "snapshots_ml_flat",
     "support_window": { "start": "2020-08-03", "end": "2024-10-31" }
   },
   "outputs": {
