@@ -54,6 +54,8 @@ def label_registry() -> dict[str, str]:
         "direction_or_no_trade_v1": "stage2",
         "direction_market_up_v1": "stage2",
         "direction_market_up_all_v1": "stage2",
+        "ce_win_v1": "stage2",
+        "pe_win_v1": "stage2",
         "recipe_best_positive_v1": "stage3",
     }
 
@@ -92,9 +94,11 @@ def resolve_labeler(labeler_id: str) -> Callable[..., Any]:
         build_stage1_labels,
         build_stage1_labels_entry_bn_move,
         build_stage2_labels,
+        build_stage2_labels_ce_win_v1,
         build_stage2_labels_direction_or_no_trade,
         build_stage2_labels_market_direction,
         build_stage2_labels_market_direction_all_rows,
+        build_stage2_labels_pe_win_v1,
         build_stage3_labels,
     )
 
@@ -105,6 +109,8 @@ def resolve_labeler(labeler_id: str) -> Callable[..., Any]:
         "direction_or_no_trade_v1": build_stage2_labels_direction_or_no_trade,
         "direction_market_up_v1": build_stage2_labels_market_direction,
         "direction_market_up_all_v1": build_stage2_labels_market_direction_all_rows,
+        "ce_win_v1": build_stage2_labels_ce_win_v1,
+        "pe_win_v1": build_stage2_labels_pe_win_v1,
         "recipe_best_positive_v1": build_stage3_labels,
     }
     if labeler_id not in registry:

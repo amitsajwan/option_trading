@@ -536,6 +536,70 @@ def build_stage2_labels_market_direction_all_rows(
     return labeled.sort_values("timestamp").reset_index(drop=True)
 
 
+def build_stage2_labels_ce_win_v1(
+    stage_frame: pd.DataFrame,
+    oracle: pd.DataFrame,
+    manifest: Optional[dict[str, Any]] = None,
+    *_: Any,
+    **__: Any,
+) -> pd.DataFrame:
+    """Per-side CE win labeler for dual direction model (model_CE).
+
+    Positive class = "CE" = short ATM CE was profitable (best_ce_net_return_after_cost > 0).
+    Negative class = "PE" = short ATM CE was not profitable.
+    Ambiguous rows (|ce_return| < min_abs_return) are excluded from training.
+
+    Does NOT gate on entry_label — trains on all bars so the direction signal is
+    independent of the entry filter and can generalize across sessions.
+    """
+    raw_cfg = dict(((manifest or {}).get("training") or {}).get("stage2_decisive_move_filter") or {})
+    min_edge = float(raw_cfg.get("min_abs_return", raw_cfg.get("min_ce_pe_edge", 0.003)))
+
+    labeled = _attach_labels(stage_frame, oracle)
+
+    ce_ret = pd.to_numeric(labeled["best_ce_net_return_after_cost"], errors="coerce").fillna(0.0)
+    labeled = labeled[ce_ret.abs() >= min_edge].copy()
+    ce_ret = pd.to_numeric(labeled["best_ce_net_return_after_cost"], errors="coerce").fillna(0.0)
+
+    ce_win = ce_ret > 0
+    labeled["direction_label"] = np.where(ce_win, "CE", "PE")
+    labeled["move_label_valid"] = 1.0
+    labeled["move_label"] = 1.0
+    labeled["move_first_hit_side"] = np.where(ce_win, "up", "down")
+    return labeled.sort_values("timestamp").reset_index(drop=True)
+
+
+def build_stage2_labels_pe_win_v1(
+    stage_frame: pd.DataFrame,
+    oracle: pd.DataFrame,
+    manifest: Optional[dict[str, Any]] = None,
+    *_: Any,
+    **__: Any,
+) -> pd.DataFrame:
+    """Per-side PE win labeler for dual direction model (model_PE).
+
+    Positive class = "CE" (string convention) = short ATM PE was profitable (best_pe_net_return_after_cost > 0).
+    Negative class = "PE" = short ATM PE was not profitable.
+    Same "CE" string = positive class convention as all other direction labelers.
+    """
+    raw_cfg = dict(((manifest or {}).get("training") or {}).get("stage2_decisive_move_filter") or {})
+    min_edge = float(raw_cfg.get("min_abs_return", raw_cfg.get("min_ce_pe_edge", 0.003)))
+
+    labeled = _attach_labels(stage_frame, oracle)
+
+    pe_ret = pd.to_numeric(labeled["best_pe_net_return_after_cost"], errors="coerce").fillna(0.0)
+    labeled = labeled[pe_ret.abs() >= min_edge].copy()
+    pe_ret = pd.to_numeric(labeled["best_pe_net_return_after_cost"], errors="coerce").fillna(0.0)
+
+    pe_win = pe_ret > 0
+    # positive class = "CE" = PE_win (keeps the binary_catalog_v1 "CE"→1 convention)
+    labeled["direction_label"] = np.where(pe_win, "CE", "PE")
+    labeled["move_label_valid"] = 1.0
+    labeled["move_label"] = 1.0
+    labeled["move_first_hit_side"] = np.where(pe_win, "up", "down")
+    return labeled.sort_values("timestamp").reset_index(drop=True)
+
+
 def build_stage2_labels_direction_or_no_trade(
     stage_frame: pd.DataFrame,
     oracle: pd.DataFrame,
@@ -4376,9 +4440,13 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
 
 __all__ = [
     "build_stage1_labels",
+    "build_stage1_labels_entry_bn_move",
     "build_stage2_labels",
+    "build_stage2_labels_ce_win_v1",
     "build_stage2_labels_direction_or_no_trade",
     "build_stage2_labels_market_direction",
+    "build_stage2_labels_market_direction_all_rows",
+    "build_stage2_labels_pe_win_v1",
     "build_stage3_labels",
     "run_staged_research",
     "select_direction_gate_economic_balance_policy",

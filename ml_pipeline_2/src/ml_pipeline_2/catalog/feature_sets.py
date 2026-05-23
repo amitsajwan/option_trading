@@ -438,6 +438,62 @@ DEFAULT_FEATURE_SET_SPECS: List[FeatureSetSpec] = [
             r"^day_of_week$",
         ),
     ),
+    # Per-side direction context — used by ce_win_v1 / pe_win_v1 dual-model labelers.
+    # Combines all proven weak anchors + regime flags + velocity + IV structure + OI flow + oracle rolling.
+    # Designed for: "is ATM CE (or PE) profitable today?" — full context, all sessions.
+    FeatureSetSpec(
+        name="fo_direction_entry_context_v1",
+        include_regex=(
+            # Price / momentum
+            r"^ret_",
+            r"^ema_",
+            r"^vwap_distance$",
+            r"^rsi_14_",
+            r"^osc_rsi_14$",
+            r"^adx_14$",
+            r"^vol_spike_ratio$",
+            # Velocity / morning context
+            r"^vel_",
+            r"^ctx_am_",
+            r"^ctx_gap_",
+            # Regime (strongest directional signal per R1S audit)
+            r"^vix_current$",
+            r"^vix_intraday_chg$",
+            r"^ctx_is_high_vix_day$",
+            r"^ctx_regime_",
+            r"^regime_vol_",
+            r"^regime_trend_",
+            # OI / flow
+            r"^pcr$",
+            r"^pcr_change_5m$",
+            r"^pcr_change_15m$",
+            r"^pcr_oi$",
+            r"^opt_flow_pcr_oi$",
+            r"^ce_pe_oi_diff$",
+            r"^opt_flow_ce_pe_oi_diff$",
+            r"^opt_flow_ce_pe_volume_diff$",
+            r"^opt_flow_atm_oi_change_1m$",
+            r"^atm_oi_ratio$",
+            r"^near_atm_oi_ratio$",
+            # IV structure
+            r"^atm_ce_iv$",
+            r"^atm_pe_iv$",
+            r"^iv_skew$",
+            r"^iv_percentile$",
+            # Oracle rolling win-rate history
+            r"^oracle_rolling_ce_win_rate_",
+            r"^oracle_rolling_pe_win_rate_",
+            r"^ce_pe_win_rate_diff_",
+            # Time / expiry context
+            r"^minutes_since_open$",
+            r"^minute_of_day$",
+            r"^time_minute_of_day$",
+            r"^day_of_week$",
+            r"^ctx_dte_days$",
+            r"^ctx_is_expiry_day$",
+            r"^ctx_is_near_expiry$",
+        ),
+    ),
     # S3+: slower regime confirmation variant.
     # Uses only the 10d oracle regime features and drops minute-level context to reduce intraday overfit.
     # Goal: test whether a calmer, lower-variance directional signal generalizes better across windows.

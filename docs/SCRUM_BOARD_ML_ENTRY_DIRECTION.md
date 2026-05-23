@@ -1,8 +1,8 @@
 # Scrum board — ML entry + direction (`trader_master_ml_entry_det_dir_v1`)
 
 **Living document** — update status, owners, and **Results** after each replay / merge.  
-**Last updated:** 2026-05-23 (E3-S5 valid replay `ae5a86b7`; ops replay fixes on `main`)  
-**Profile under test:** `trader_master_ml_entry_det_dir_v1` · **Engine commit (baseline):** `a133936`
+**Last updated:** 2026-05-23 (E3-S6 dual direction model system implemented; training pending)  
+**Profile under test:** `trader_master_ml_entry_det_dir_v1` / `trader_master_ml_entry_v1` · **Engine commit (baseline):** `a133936`
 
 Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md) · [runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md](runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md) · [ENTRY_AND_DIRECTION.md](ENTRY_AND_DIRECTION.md)
 
@@ -38,10 +38,13 @@ Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENT
 | **Ops/GCP** | `ops/gcp/diagnose_oos_replay_coverage.py` | E2-S7 trades/votes/blockers by month |
 | **Ops/GCP** | `ops/gcp/check_parquet_coverage.py` | E2-S8 partition gaps |
 | **Ops/GCP** | `ops/gcp/run_oos_validation_replay.sh` | Standard OOS windows + `all` |
-| **Engine** | `ops/gcp/run_engine_direction_ab.sh` | `baseline` \| `pe_only` \| `direction_ml` \| `v1_direction_ml` |
+| **Engine** | `ops/gcp/run_engine_direction_ab.sh` | `baseline` \| `pe_only` \| `direction_ml` \| `v1_direction_ml` \| `v1_dual_direction_ml` |
 | **Engine** | `ops/gcp/patch_trader_master_ml_entry_pe_only_env.sh` | E3-S1 PE-only |
 | **Engine** | `ops/gcp/patch_trader_master_ml_entry_direction_ml_env.sh` | E3-S2 det_dir + direction bundle |
-| **Engine** | `ops/gcp/patch_trader_master_ml_entry_v1_direction_ml_env.sh` | E3-S5 ML-only profile + direction bundle |
+| **Engine** | `ops/gcp/patch_trader_master_ml_entry_v1_direction_ml_env.sh` | E3-S5 ML-only profile + single direction bundle |
+| **Engine** | `ops/gcp/patch_trader_master_ml_entry_v1_dual_dir_env.sh` | E3-S6 ML-only profile + dual direction bundle |
+| **ML** | `ops/gcp/run_direction_dual_hpo_vm.sh` | E3-S6 train CE + PE models + export dual bundle |
+| **ML** | `ml_pipeline_2/scripts/export_direction_dual_bundle.py` | Export CE + PE runs → direction_dual_bundle.joblib |
 
 ---
 
@@ -74,6 +77,7 @@ Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENT
 | E3-S3 | Direction publish gate + OOS re-test | P1 | **Engine** | **In review** | 3 |
 | E3-S4 | Conditional S2 train (entry-positive bars) | P2 | | **Backlog** | 8 |
 | E3-S5 | Profile `trader_master_ml_entry_v1` eval path | P1 | **Engine** | **Done** | 5 |
+| E3-S6 | Dual direction model (CE + PE per-side) | P1 | **ML** | **Ready** | 8 |
 | E4-S1 | Pilot higher session trade cap | P3 | | **Backlog** | 3 |
 | E4-S2 | TIME_STOP / MFE giveback experiment | P3 | | **Backlog** | 5 |
 
@@ -469,6 +473,64 @@ sudo bash ops/gcp/run_engine_direction_ab.sh v1_direction_ml
 # or replay-only (no rebuild):
 sudo bash ops/gcp/run_engine_direction_ab.sh replay_only v1_direction_ml
 ```
+
+---
+
+### E3-S6 — Dual direction model (CE + PE per-side)
+
+| | |
+|---|---|
+| **Status** | Ready |
+| **Owner** | ML |
+| **Priority** | P1 |
+| **Points** | 8 |
+
+**Hypothesis:** Training one unified direction model on "CE vs PE" compresses two independent signals into one model with near-random AUC (0.557). Separate per-side binary models — "is CE profitable today?" and "is PE profitable today?" — have cleaner oracle labels and can produce independent edge.
+
+**Architecture (Option C):**
+- `model_CE` trained with `ce_win_v1` labeler: positive = `best_ce_net_return_after_cost > 0`
+- `model_PE` trained with `pe_win_v1` labeler: positive = `best_pe_net_return_after_cost > 0`
+- Both use `fo_direction_entry_context_v1` feature set (regime + velocity + IV + OI + oracle rolling)
+- Exported as `direction_dual_bundle.joblib` with CE and PE sub-bundles
+- Runtime: pick whichever side has `P(win) > 0.5`; if neither → no direction → no trade
+
+**Tasks:**
+- [x] Add `fo_direction_entry_context_v1` feature set to `ml_pipeline_2/catalog/feature_sets.py`
+- [x] Add `build_stage2_labels_ce_win_v1` + `build_stage2_labels_pe_win_v1` to `pipeline.py`
+- [x] Register `ce_win_v1` + `pe_win_v1` in `registries.py`
+- [x] Create manifests `direction_dual_ce_hpo_v1.json` + `direction_dual_pe_hpo_v1.json`
+- [x] Create `ml_pipeline_2/scripts/export_direction_dual_bundle.py`
+- [x] Update `strategy_app/engines/strategies/ml_entry.py` — handle `direction_dual_bundle` kind
+- [x] Create `ops/gcp/patch_trader_master_ml_entry_v1_dual_dir_env.sh`
+- [x] Create `ops/gcp/run_direction_dual_hpo_vm.sh`
+- [x] Add `v1_dual_direction_ml` variant to `run_engine_direction_ab.sh`
+- [x] Tests: `test_direction_dual_bundle.py` + `test_direction_dual_labelers.py` (14 tests pass)
+- [ ] Run dual HPO on VM: `sudo bash ops/gcp/run_direction_dual_hpo_vm.sh`
+- [ ] Review CE + PE holdout AUC from `direction_dual_report.json`
+- [ ] Run OOS replay: `sudo bash ops/gcp/run_engine_direction_ab.sh v1_dual_direction_ml`
+- [ ] Compare vs E3-S5 baseline: trades ≥ 20, PF ≥ 1.30, CE/PE balanced
+
+**Acceptance criteria:**
+- Both `model_CE` and `model_PE` holdout AUC > 0.52 (meaningful improvement over 0.50)
+- OOS replay: trades ≥ 20, PF ≥ 1.30 on `oos_primary_v1_dual_direction_ml`
+- CE share 25–75% (not degenerate single-side)
+- `direction_source = direction_dual_ml` visible in replay logs
+
+**VM commands:**
+```bash
+# Train both models + export dual bundle:
+sudo bash ops/gcp/run_direction_dual_hpo_vm.sh
+
+# Replay with dual bundle:
+sudo bash ops/gcp/run_engine_direction_ab.sh v1_dual_direction_ml
+# or replay-only (no rebuild):
+sudo bash ops/gcp/run_engine_direction_ab.sh replay_only v1_dual_direction_ml
+```
+
+**Results log:**
+| Date | Run ID | Trades | PF | CE% | Notes |
+|------|--------|--------|----|-----|-------|
+| — | — | — | — | — | Training pending |
 
 ---
 

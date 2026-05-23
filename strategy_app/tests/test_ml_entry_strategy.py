@@ -54,3 +54,53 @@ def test_ml_entry_emits_vote_when_prob_above_threshold(monkeypatch) -> None:
     assert vote.signal_type == SignalType.ENTRY
     assert vote.direction == Direction.CE
     assert vote.confidence >= 0.72
+
+
+def test_ml_entry_pe_only_forces_pe(monkeypatch) -> None:
+    monkeypatch.setenv("ENTRY_ML_MIN_PROB", "0.50")
+    monkeypatch.setenv("ML_ENTRY_PE_ONLY", "1")
+    bundle = {
+        "kind": "entry_only_bundle",
+        "features": ["fut_return_5m"],
+        "feature_medians": {"fut_return_5m": 0.0},
+        "model": MagicMock(),
+    }
+    strategy = MlEntryStrategy()
+    snap = _minimal_snapshot_payload()
+    snap["fut_return_5m"] = -0.01
+    with patch(
+        "strategy_app.engines.strategies.ml_entry.load_joblib_bundle",
+        return_value=bundle,
+    ):
+        with patch(
+            "strategy_app.engines.strategies.ml_entry.predict_positive_class_prob",
+            return_value=0.72,
+        ):
+            with patch.dict(os.environ, {"ENTRY_ML_MODEL_PATH": "/fake/entry.joblib"}):
+                vote = strategy.evaluate(snap, None, MagicMock())
+    assert vote is not None
+    assert vote.direction == Direction.PE
+    assert vote.raw_signals.get("direction_source") == "pe_only"
+
+
+def test_ml_entry_block_ce_skips_ce_momentum(monkeypatch) -> None:
+    monkeypatch.setenv("ENTRY_ML_MIN_PROB", "0.50")
+    monkeypatch.setenv("ML_ENTRY_BLOCK_CE", "1")
+    bundle = {
+        "kind": "entry_only_bundle",
+        "features": ["fut_return_5m"],
+        "feature_medians": {"fut_return_5m": 0.0},
+        "model": MagicMock(),
+    }
+    strategy = MlEntryStrategy()
+    with patch(
+        "strategy_app.engines.strategies.ml_entry.load_joblib_bundle",
+        return_value=bundle,
+    ):
+        with patch(
+            "strategy_app.engines.strategies.ml_entry.predict_positive_class_prob",
+            return_value=0.72,
+        ):
+            with patch.dict(os.environ, {"ENTRY_ML_MODEL_PATH": "/fake/entry.joblib"}):
+                vote = strategy.evaluate(_minimal_snapshot_payload(), None, MagicMock())
+    assert vote is None

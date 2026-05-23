@@ -16,12 +16,14 @@ from ...contracts import (
 )
 from ...market.snapshot_accessor import SnapshotAccessor
 from ...ml.bundle_inference import load_joblib_bundle, predict_positive_class_prob
+from ...utils.env import env_bool
 
 logger = logging.getLogger(__name__)
 
 STRATEGY_NAME = "ML_ENTRY"
 _ENTRY_BUNDLE_KIND = "entry_only_bundle"
 _DIRECTION_BUNDLE_KIND = "direction_only_bundle"
+_DIRECTION_DUAL_BUNDLE_KIND = "direction_dual_bundle"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -34,18 +36,74 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-def _resolve_direction(snap: SnapshotAccessor) -> Direction:
+def _load_dir_bundle(path: str) -> Optional[dict[str, Any]]:
+    """Load direction bundle — accepts direction_only_bundle or direction_dual_bundle."""
+    try:
+        import joblib
+        bundle = joblib.load(path)
+        if not isinstance(bundle, dict):
+            return None
+        kind = bundle.get("kind", "")
+        if kind in (_DIRECTION_BUNDLE_KIND, _DIRECTION_DUAL_BUNDLE_KIND):
+            return bundle
+        logger.warning("ml_entry: unexpected direction bundle kind=%s at %s", kind, path)
+        return None
+    except Exception:
+        logger.exception("ml_entry: failed to load direction bundle %s", path)
+        return None
+
+
+def _resolve_direction_dual(bundle: dict[str, Any], snap: SnapshotAccessor) -> Optional[Direction]:
+    """Pick CE or PE from dual bundle. Returns None when neither side exceeds 0.5."""
+    ce_sub = bundle.get("ce_bundle")
+    pe_sub = bundle.get("pe_bundle")
+    ce_win = predict_positive_class_prob(ce_sub, snap) if isinstance(ce_sub, dict) else None
+    pe_win = predict_positive_class_prob(pe_sub, snap) if isinstance(pe_sub, dict) else None
+
+    if ce_win is None and pe_win is None:
+        return None
+    if pe_win is None:
+        return Direction.CE if (ce_win or 0.0) >= 0.5 else None
+    if ce_win is None:
+        return Direction.PE if (pe_win or 0.0) >= 0.5 else None
+    # Both available: take whichever side has higher win probability (requires > 0.5 to trade)
+    if ce_win >= pe_win:
+        return Direction.CE if ce_win >= 0.5 else None
+    return Direction.PE if pe_win >= 0.5 else None
+
+
+def _resolve_direction(snap: SnapshotAccessor) -> tuple[Optional[Direction], str]:
+    """CE/PE for ML_ENTRY. Returns (direction_or_None, source_label)."""
+    if env_bool("ML_ENTRY_PE_ONLY"):
+        return Direction.PE, "pe_only"
+
+    direction: Direction
     dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "").strip()
     if dir_path:
-        bundle = load_joblib_bundle(dir_path, expected_kind=_DIRECTION_BUNDLE_KIND)
+        bundle = _load_dir_bundle(dir_path)
         if bundle is not None:
+            if bundle.get("kind") == _DIRECTION_DUAL_BUNDLE_KIND:
+                direction = _resolve_direction_dual(bundle, snap)
+                if direction is None:
+                    return None, "direction_dual_ml"
+                if env_bool("ML_ENTRY_BLOCK_CE") and direction == Direction.CE:
+                    return None, "direction_dual_ml+block_ce"
+                return direction, "direction_dual_ml"
+            # single direction_only_bundle
             ce_prob = predict_positive_class_prob(bundle, snap)
             if ce_prob is not None:
-                return Direction.CE if ce_prob >= 0.5 else Direction.PE
+                direction = Direction.CE if ce_prob >= 0.5 else Direction.PE
+                if env_bool("ML_ENTRY_BLOCK_CE") and direction == Direction.CE:
+                    return None, "direction_ml+block_ce"
+                return direction, "direction_ml"
     ret5 = snap.fut_return_5m
     if ret5 is not None and ret5 != 0:
-        return Direction.CE if float(ret5) > 0 else Direction.PE
-    return Direction.CE
+        direction = Direction.CE if float(ret5) > 0 else Direction.PE
+    else:
+        direction = Direction.CE
+    if env_bool("ML_ENTRY_BLOCK_CE") and direction == Direction.CE:
+        return None, "momentum+block_ce"
+    return direction, "momentum"
 
 
 class MlEntryStrategy(BaseStrategy):
@@ -98,7 +156,9 @@ class MlEntryStrategy(BaseStrategy):
             return None
         if entry_prob < self._min_prob:
             return None
-        direction = _resolve_direction(snap)
+        direction, direction_source = _resolve_direction(snap)
+        if direction is None:
+            return None
         premium = snap.atm_ce_close if direction == Direction.CE else snap.atm_pe_close
         return StrategyVote(
             strategy_name=self.name,
@@ -112,7 +172,7 @@ class MlEntryStrategy(BaseStrategy):
             raw_signals={
                 "entry_prob": round(entry_prob, 4),
                 "entry_threshold": self._min_prob,
-                "direction_source": "direction_ml" if os.getenv("DIRECTION_ML_MODEL_PATH", "").strip() else "momentum",
+                "direction_source": direction_source,
                 # ML_ENTRY owns its entry decision via the prob >= min_prob
                 # gate above; bypass the engine's secondary entry-policy check
                 # so the well-calibrated model signal isn't second-guessed by
