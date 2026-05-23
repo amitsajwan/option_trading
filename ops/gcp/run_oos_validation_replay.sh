@@ -218,6 +218,10 @@ if [ "${MODE}" = "all" ]; then
   exit 0
 fi
 
-setup_frozen_env
+if [ "${OOS_REPLAY_SKIP_ENV_PATCH:-0}" != "1" ]; then
+  setup_frozen_env
+else
+  log "skip setup_frozen_env (OOS_REPLAY_SKIP_ENV_PATCH=1)"
+fi
 run_single_window "${MODE}"
 log "done"

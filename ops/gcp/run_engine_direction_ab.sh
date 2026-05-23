@@ -29,6 +29,25 @@ wait_consumers() {
   "${PY}" "${REPO}/ops/gcp/wait_historical_consumers.py" 180 || true
 }
 
+run_direction_quality_gate() {
+  local variant="$1"
+  [ "${variant}" = "direction_ml" ] || [ "${variant}" = "v1_direction_ml" ] || return 0
+  local dash="${DASH_CONTAINER:-option_trading-dashboard-1}"
+  sudo docker cp "${REPO}/ops/gcp/analyze_direction_quality.py" "${dash}:/tmp/analyze_direction_quality.py"
+  local rid
+  rid="$("${PY}" -c "
+import json, urllib.request
+with urllib.request.urlopen('http://127.0.0.1:8008/api/strategy/evaluation/runs/latest?dataset=historical', timeout=15) as r:
+    d = json.load(r)
+run = d if d.get('run_id') else d.get('run') or d
+print(run.get('run_id',''))
+")"
+  if [ -n "${rid}" ]; then
+    echo "[$(date -Is)] direction quality analysis for ${rid}"
+    sudo docker exec "${dash}" python /tmp/analyze_direction_quality.py "${rid}" "oos_primary_${variant}"
+  fi
+}
+
 rebuild_hist() {
   cd "${REPO}"
   REPO_ROOT="${REPO}" "${PY}" "${REPO}/ops/gcp/wait_historical_consumers.py" clear --force 2>/dev/null || true
@@ -89,7 +108,8 @@ case "${VARIANT}" in
     *) echo "replay_only needs baseline|pe_only|direction_ml|v1_direction_ml"; exit 2 ;;
   esac
   wait_consumers
-  sudo bash "${REPO}/ops/gcp/run_oos_validation_replay.sh" replay_only oos_primary
+  sudo OOS_REPLAY_SKIP_ENV_PATCH=1 bash "${REPO}/ops/gcp/run_oos_validation_replay.sh" replay_only oos_primary
+  run_direction_quality_gate "${VARIANT}"
   exit 0
     ;;
   *)
@@ -99,21 +119,6 @@ case "${VARIANT}" in
 esac
 
 rebuild_hist
-sudo bash "${REPO}/ops/gcp/run_oos_validation_replay.sh" oos_primary
+sudo OOS_REPLAY_SKIP_ENV_PATCH=1 bash "${REPO}/ops/gcp/run_oos_validation_replay.sh" oos_primary
 echo "Log run_id in SCRUM_BOARD results: oos_primary_${VARIANT}"
-# direction_ml / v1_direction_ml variants: run direction quality gate (E3-S3)
-if [ "${VARIANT}" = "direction_ml" ] || [ "${VARIANT}" = "v1_direction_ml" ]; then
-  DASH="${DASH_CONTAINER:-option_trading-dashboard-1}"
-  sudo docker cp "${REPO}/ops/gcp/analyze_direction_quality.py" "${DASH}:/tmp/analyze_direction_quality.py"
-  RID="$(sudo "${PY}" -c "
-import json, urllib.request
-with urllib.request.urlopen('http://127.0.0.1:8008/api/strategy/evaluation/runs/latest?dataset=historical', timeout=15) as r:
-    d = json.load(r)
-run = d if d.get('run_id') else d.get('run') or d
-print(run.get('run_id',''))
-")"
-  if [ -n "${RID}" ]; then
-    echo "[$(date -Is)] direction quality analysis for ${RID}"
-    sudo docker exec "${DASH}" python /tmp/analyze_direction_quality.py "${RID}" "oos_primary_${VARIANT}"
-  fi
-fi
+run_direction_quality_gate "${VARIANT}"
