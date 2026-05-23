@@ -8,6 +8,7 @@
 #   sudo bash ops/gcp/run_engine_direction_ab.sh pe_only
 #   sudo bash ops/gcp/run_engine_direction_ab.sh direction_ml       # E3-S2: det_dir_v1 + dir ML
 #   sudo bash ops/gcp/run_engine_direction_ab.sh v1_direction_ml    # E3-S5: ML-only profile + dir ML
+#   sudo bash ops/gcp/run_engine_direction_ab.sh v1_momentum        # E3-S3: same profile + momentum
 #   sudo bash ops/gcp/run_engine_direction_ab.sh export_direction   # optional RUN_DIR=...
 #
 set -euo pipefail
@@ -33,7 +34,10 @@ wait_consumers() {
 
 run_direction_quality_gate() {
   local variant="$1"
-  [ "${variant}" = "direction_ml" ] || [ "${variant}" = "v1_direction_ml" ] || return 0
+  case "${variant}" in
+    direction_ml|v1_direction_ml|v1_momentum) ;;
+    *) return 0 ;;
+  esac
   local dash="${DASH_CONTAINER:-option_trading-dashboard-1}"
   sudo docker cp "${REPO}/ops/gcp/analyze_direction_quality.py" "${dash}:/tmp/analyze_direction_quality.py"
   local rid
@@ -90,6 +94,10 @@ case "${VARIANT}" in
     sudo bash "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_direction_ml_env.sh" "${ENV_FILE}"
     sudo bash "${REPO}/ops/gcp/patch_trader_master_eval_replay_env.sh" "${ENV_FILE}"
     ;;
+  v1_momentum)
+    sudo bash "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_momentum_env.sh" "${ENV_FILE}"
+    sudo bash "${REPO}/ops/gcp/patch_trader_master_eval_replay_env.sh" "${ENV_FILE}"
+    ;;
   export_direction)
     RUN_DIR="${RUN_DIR:?Set RUN_DIR to completed direction_s2_only HPO run}"
     "${PY}" -m ml_pipeline_2.scripts.export_direction_bundle_from_research \
@@ -107,7 +115,9 @@ case "${VARIANT}" in
     direction_ml) sudo bash "${REPO}/ops/gcp/patch_trader_master_ml_entry_direction_ml_env.sh" "${ENV_FILE}" ;;
     v1_direction_ml) sudo bash "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_direction_ml_env.sh" "${ENV_FILE}"
       sudo bash "${REPO}/ops/gcp/patch_trader_master_eval_replay_env.sh" "${ENV_FILE}" ;;
-    *) echo "replay_only needs baseline|pe_only|direction_ml|v1_direction_ml"; exit 2 ;;
+    v1_momentum) sudo bash "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_momentum_env.sh" "${ENV_FILE}"
+      sudo bash "${REPO}/ops/gcp/patch_trader_master_eval_replay_env.sh" "${ENV_FILE}" ;;
+    *) echo "replay_only needs baseline|pe_only|direction_ml|v1_direction_ml|v1_momentum"; exit 2 ;;
   esac
   wait_consumers
   sudo OOS_REPLAY_SKIP_ENV_PATCH=1 bash "${REPO}/ops/gcp/run_oos_validation_replay.sh" replay_only oos_primary
@@ -115,7 +125,7 @@ case "${VARIANT}" in
   exit 0
     ;;
   *)
-    echo "Usage: $0 {baseline|pe_only|direction_ml|v1_direction_ml|export_direction|replay_only [variant]}" >&2
+    echo "Usage: $0 {baseline|pe_only|direction_ml|v1_direction_ml|v1_momentum|export_direction|replay_only [variant]}" >&2
     exit 2
     ;;
 esac
