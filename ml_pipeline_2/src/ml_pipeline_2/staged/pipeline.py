@@ -3460,17 +3460,31 @@ def _entry_only_trade_rows(
 ) -> pd.DataFrame:
     merged = _merge_policy_inputs(utility, stage1_scores)
     if len(merged) == 0:
+        merged = merged.copy()
+        merged["selected_return"] = pd.Series(dtype=float)
+        merged["selected_side"] = pd.Series(dtype=object)
+        merged["selected_recipe"] = pd.Series(dtype=object)
         return merged
     entry_probs = _numeric_array(merged["entry_prob"], fillna=0.0)
     best_returns = _numeric_array(merged["best_available_net_return_after_cost"], fillna=0.0)
+    best_ce = _numeric_array(merged["best_ce_net_return_after_cost"], fillna=0.0)
+    best_pe = _numeric_array(merged["best_pe_net_return_after_cost"], fillna=0.0)
     threshold = float(stage1_policy["selected_threshold"])
     mask = entry_probs >= threshold
     if not mask.any():
         empty = merged.loc[[]].copy()
         empty["selected_return"] = pd.Series(dtype=float)
+        empty["selected_side"] = pd.Series(dtype=object)
+        empty["selected_recipe"] = pd.Series(dtype=object)
         return empty
     selected = merged.loc[mask].copy()
     selected["selected_return"] = best_returns[mask]
+    # Entry-only mode bypasses stage2 and stage3 — there is no learned side or
+    # recipe. _scenario_bucket_summary downstream requires both columns to exist,
+    # so report the side that delivered the larger underlying return and the
+    # caller-configured fixed recipe label.
+    selected["selected_side"] = np.where(best_ce[mask] >= best_pe[mask], "CE", "PE")
+    selected["selected_recipe"] = "ENTRY_ONLY"
     return selected
 
 
