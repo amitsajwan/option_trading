@@ -23,9 +23,11 @@ fi
 
 wait_consumers() {
   cd "${REPO}"
+  # Restart does not reload .env.compose — recreate so STRATEGY_PROFILE_ID / direction path apply.
+  REPO_ROOT="${REPO}" "${PY}" "${REPO}/ops/gcp/wait_historical_consumers.py" clear --force 2>/dev/null || true
   sudo docker compose --env-file "${ENV_FILE}" -f docker-compose.yml -f docker-compose.gcp.yml \
-    restart strategy_app_historical
-  sleep 60
+    up -d --force-recreate --pull never strategy_app_historical
+  sleep 20
   "${PY}" "${REPO}/ops/gcp/wait_historical_consumers.py" 180 || true
 }
 
