@@ -113,7 +113,7 @@ run = d if d.get('run_id') else d.get('run') or d
 print(run.get('run_id',''))
 ")"
   if [ -n "${RID}" ]; then
-    log "direction quality analysis for ${RID}"
+    echo "[$(date -Is)] direction quality analysis for ${RID}"
     sudo docker exec "${DASH}" python /tmp/analyze_direction_quality.py "${RID}" "oos_primary_${VARIANT}"
   fi
 fi

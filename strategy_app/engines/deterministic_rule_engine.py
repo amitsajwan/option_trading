@@ -67,7 +67,10 @@ _PROFILES_RELAX_REGIME_CONF = frozenset(
     }
 )
 
-_PROFILES_ML_ENTRY_DET_DIRECTION = frozenset({PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1})
+_PROFILES_ML_ENTRY_DET_DIRECTION = frozenset({
+    PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1,
+    PROFILE_TRADER_MASTER_ML_ENTRY_V1,
+})
 from ..market.regime import RegimeClassifier, RegimeSignal
 from ..market.snapshot_accessor import SnapshotAccessor
 from .strategy_router import StrategyRouter
@@ -543,19 +546,24 @@ class DeterministicRuleEngine(StrategyEngine):
         risk: RiskContext,
         regime_signal: RegimeSignal,
     ) -> Optional[TradeSignal]:
-        # Brain gate: check DayScore + consensus before anything else
-        entry_votes_for_brain = [
-            v for v in votes
-            if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
-        ]
-        brain_decision = self._brain.gate_entry(entry_votes_for_brain, self._day_context)
-        if not brain_decision.allowed:
-            logger.debug(
-                "brain gate blocked reason=%s day_score=%s",
-                brain_decision.reason,
-                brain_decision.day_score,
-            )
-            return None
+        # Brain gate: DayScore + consensus (skipped for ML-entry-primary profile when configured).
+        skip_brain = (
+            self._strategy_profile_id in _PROFILES_ML_ENTRY_DET_DIRECTION
+            and as_bool(os.getenv("ML_ENTRY_DET_SKIP_BRAIN_GATE", "false"))
+        )
+        if not skip_brain:
+            entry_votes_for_brain = [
+                v for v in votes
+                if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
+            ]
+            brain_decision = self._brain.gate_entry(entry_votes_for_brain, self._day_context)
+            if not brain_decision.allowed:
+                logger.debug(
+                    "brain gate blocked reason=%s day_score=%s",
+                    brain_decision.reason,
+                    brain_decision.day_score,
+                )
+                return None
 
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
         if avoid_votes:
@@ -1161,14 +1169,18 @@ class DeterministicRuleEngine(StrategyEngine):
         snap: SnapshotAccessor,
         regime_signal: RegimeSignal,
     ) -> str:
-        # Check brain gate first so blocker label is precise
-        entry_votes_for_brain = [
-            v for v in votes
-            if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
-        ]
-        brain_decision = self._brain.gate_entry(entry_votes_for_brain, self._day_context)
-        if not brain_decision.allowed:
-            return f"brain_gate:{brain_decision.reason}"
+        skip_brain = (
+            self._strategy_profile_id in _PROFILES_ML_ENTRY_DET_DIRECTION
+            and as_bool(os.getenv("ML_ENTRY_DET_SKIP_BRAIN_GATE", "false"))
+        )
+        if not skip_brain:
+            entry_votes_for_brain = [
+                v for v in votes
+                if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
+            ]
+            brain_decision = self._brain.gate_entry(entry_votes_for_brain, self._day_context)
+            if not brain_decision.allowed:
+                return f"brain_gate:{brain_decision.reason}"
 
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
         if avoid_votes:
