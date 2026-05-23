@@ -14,7 +14,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 E6 = "/opt/option_trading/ml_pipeline_2/artifacts/research/entry_s1_e6_soft50pts_10m_20260523_091300/stages/stage1/model.joblib"
-V2_DIR = "/opt/option_trading/.data/ml_pipeline/parquet_data/snapshots_ml_flat_v2/year=2024"
+V2_DIR = "/opt/option_trading/.data/ml_pipeline/parquet_data/stage1_entry_view_v2/year=2024"
 
 
 def main() -> int:
