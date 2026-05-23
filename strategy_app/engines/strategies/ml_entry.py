@@ -113,6 +113,11 @@ class MlEntryStrategy(BaseStrategy):
                 "entry_prob": round(entry_prob, 4),
                 "entry_threshold": self._min_prob,
                 "direction_source": "direction_ml" if os.getenv("DIRECTION_ML_MODEL_PATH", "").strip() else "momentum",
+                # ML_ENTRY owns its entry decision via the prob >= min_prob
+                # gate above; bypass the engine's secondary entry-policy check
+                # so the well-calibrated model signal isn't second-guessed by
+                # a policy that was tuned for a different label scheme.
+                "_entry_policy_mode": "bypass",
             },
             proposed_strike=snap.atm_strike,
             proposed_entry_premium=premium,

@@ -575,13 +575,22 @@ class DeterministicRuleEngine(StrategyEngine):
         if use_ml_det_dir and not any(vote.strategy_name == "ML_ENTRY" for vote in entry_votes):
             logger.debug("entry blocked: ml timing gate (no ML_ENTRY vote)")
             return None
-        vote_pool = (
-            [vote for vote in entry_votes if vote.strategy_name != "ML_ENTRY"]
-            if use_ml_det_dir
-            else entry_votes
-        )
 
-        # ORB wide-range gate: skip ORB entries when opening range is too large.
+        # ML_ENTRY's positive vote is the primary entry signal — keep it in the
+        # pool as a first-class voter alongside any rule strategies that fired.
+        # Rule strategies with higher confidence can still win the slot via the
+        # ranking below; ML wins when rule strategies are silent. Existing
+        # vetoes still eliminate bad trades downstream:
+        #   - AVOID votes (already handled above)
+        #   - direction conflict (rule strategies explicitly disagreeing)
+        #   - regime_signal.confidence < 0.60
+        #   - risk pause / invalid entry phase / session trade cap
+        # "Silence ≠ veto": a rule strategy with no setup detected no longer
+        # blocks a high-conviction ML signal.
+        vote_pool = list(entry_votes)
+
+        # ORB wide-range gate: skip ORB-family entries when opening range is
+        # too wide. Does not affect ML_ENTRY (it is not an ORB strategy).
         orb_max = self._run_risk_config.orb_max_range_pts
         if orb_max and orb_max > 0:
             or_width = snap.or_width
@@ -597,18 +606,14 @@ class DeterministicRuleEngine(StrategyEngine):
                         float(or_width),
                         float(orb_max),
                     )
-        if use_ml_det_dir:
-            if not vote_pool:
-                vote_pool = [self._deterministic_direction_vote(snap)]
-                logger.debug(
-                    "ml timing ok; rule direction empty — snapshot tie-break dir=%s",
-                    vote_pool[0].direction.value if vote_pool[0].direction else "?",
-                )
-            entry_votes = vote_pool
-        elif not vote_pool:
+
+        # In use_ml_det_dir mode, ML_ENTRY is guaranteed in vote_pool (we
+        # returned above if it didn't vote). The legacy DET_DIRECTION fallback
+        # is therefore unreachable and has been removed; ML_ENTRY itself
+        # carries a direction via _resolve_direction in ml_entry.py.
+        if not vote_pool:
             return None
-        else:
-            entry_votes = vote_pool
+        entry_votes = vote_pool
 
         ce_votes = [vote for vote in entry_votes if vote.direction == Direction.CE]
         pe_votes = [vote for vote in entry_votes if vote.direction == Direction.PE]
