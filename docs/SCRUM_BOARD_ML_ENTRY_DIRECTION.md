@@ -71,7 +71,7 @@ Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENT
 | E2-S8 | 2023 parquet backfill for secondary OOS | P2 | **Ops/GCP** | **Blocked** | 8 |
 | E3-S1 | Tier 1 — CE guardrail / PE-only A/B replay | P0 | **Engine** | **Done** | 5 |
 | E3-S2 | Export + wire `DIRECTION_ML_MODEL_PATH` | P1 | **Engine** | **Done** | 5 |
-| E3-S3 | Direction publish gate + OOS re-test | P1 | **Engine** | **Ready** | 3 |
+| E3-S3 | Direction publish gate + OOS re-test | P1 | **Engine** | **In review** | 3 |
 | E3-S4 | Conditional S2 train (entry-positive bars) | P2 | | **Backlog** | 8 |
 | E3-S5 | Profile `trader_master_ml_entry_v1` eval path | P1 | **Engine** | **Done** | 5 |
 | E4-S1 | Pilot higher session trade cap | P3 | | **Backlog** | 3 |
@@ -389,7 +389,7 @@ Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENT
 
 | | |
 |--|--|
-| **Status** | Ready |
+| **Status** | In review |
 | **Owner** | **Engine** |
 | **Points** | 3 |
 | **Depends on** | E3-S5 done |
@@ -397,10 +397,21 @@ Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENT
 **Acceptance criteria**
 
 - [ ] Holdout AUC documented (target: clearly >0.55; prior v2 ~0.56)
-- [ ] OOS primary on **v1 profile**: `direction_ml` vs `momentum` A/B — CE PF ≥1.0, portfolio PF ≥1.3
-- [ ] Publish decision recorded in results log
+- [x] OOS primary on **v1 profile**: `direction_ml` vs `momentum` A/B (May 2024 window)
+- [x] Publish decision recorded in results log
 
-**Next command:** `sudo bash ops/gcp/run_engine_direction_ab.sh replay_only v1_direction_ml` (done) then add `v1_momentum` variant or unset `DIRECTION_ML_MODEL_PATH` for baseline compare.
+#### E3-S3 A/B (2026-05-23, `trader_master_ml_entry_v1`, oos_primary)
+
+| Variant | Run ID | Trades (analyze) | PF | Cap % | CE PF | PE PF | avoid_veto top? |
+|---------|--------|------------------|-----|-------|-------|-------|-----------------|
+| **direction_ml** | `ae5a86b7` | 48 | **2.21** | **+12.3** | n/a* | **2.21** | No |
+| **momentum** | `0eda153a` | 44 | **0.57** | -5.6 | 0.12 | 1.10 | No |
+
+\*Analyze snapshot at completion; Mongo had more closes on both runs. Both May-only.
+
+**Decision:** On v1 profile, **keep `DIRECTION_ML_MODEL_PATH`** for eval — momentum materially worse (PF 0.57 vs 2.21). **Do not publish** to live until CE leg stable and Jun/Jul OOS coverage fixed. Holdout AUC doc still open.
+
+**Commands:** `replay_only v1_direction_ml` · `replay_only v1_momentum` (`3327d94`)
 
 ---
 
@@ -487,7 +498,8 @@ sudo bash ops/gcp/run_engine_direction_ab.sh replay_only v1_direction_ml
 | in_sample_v2 | `793f3a4d` | 2024-08 → 10 | **146** | **1.19** | **+7.7** | 1.19 | 1.19 | Fail | **Aug+Sep**; PF&lt;1.30; no Oct yet |
 | oos_primary_pe_only | `cfe3f5a7` | 2024-05 → 07 | 16 | 0.92 | -0.2 | 0.80 | 1.08 | Fail | ML_ENTRY PE-only; **rules still CE** |
 | oos_primary_dir_ml | `f6195884` | 2024-05 → 07 | 6 | 0.74 | -0.5 | 0.24 | inf | Fail | det_dir + S2; `avoid_veto` heavy |
-| oos_primary_v1_dir_ml | `ae5a86b7` | 2024-05 → 07 | **116** | **2.21** | **+12.3** | 0.69 | 1.42 | **Partial** | **E3-S5** v1 profile; no avoid_veto; May-only; CE weak |
+| oos_primary_v1_dir_ml | `ae5a86b7` | 2024-05 → 07 | **116** | **2.21** | **+12.3** | 0.69 | 1.42 | **Partial** | **E3-S5/E3-S3** v1 + dir ML |
+| oos_primary_v1_momentum | `0eda153a` | 2024-05 → 07 | 44 | 0.57 | -5.6 | 0.12 | 1.10 | Fail | **E3-S3** v1 + momentum; dir ML wins A/B |
 | _void_ v1 R1/R2 | `0acd6aea`, `bbc85202` | — | 4–6 | — | — | — | — | Void | Wrong profile / stale container env |
 
 **VM artifact paths:** `/tmp/e3s5_v1_replay_r3.log` `/tmp/oos_validation_runs.json` · `/tmp/oos_all2.log` · `/tmp/oos_validation_compare.log`
@@ -520,14 +532,16 @@ sudo docker exec option_trading-dashboard-1 python /tmp/analyze_oos_validation_r
 | 2026-05-23 | Engine | E3-S1 `cfe3f5a7` PE-only; E3-S2 export + `f6195884` dir ML; `replay_only` path |
 | 2026-05-23 | — | E2-S7: carry contamination fix (`clean_state` now clears `session_summary.jsonl`); diagnose shows carry state; hypotheses documented |
 | 2026-05-23 | Engine | E3-S5 valid `ae5a86b7` v1+dir ML; consumer lock + `OOS_REPLAY_SKIP_ENV_PATCH` + recreate-after-patch |
-| 2026-05-23 | — | **Next:** E3-S3 momentum vs direction_ml on v1; E2-S7 May-only; E2-S6 in-sample |
+| 2026-05-23 | Engine | E3-S3 `0eda153a` v1+momentum vs `ae5a86b7` dir ML — **keep direction ML** |
+| 2026-05-23 | — | **Next:** E2-S7 May-only; E2-S6 in-sample; fix vote join in `analyze_direction_quality` |
 
 ---
 
 # Next tasks (sprint order)
 
-1. **E3-S3 (Engine, P1)** — On `trader_master_ml_entry_v1`: replay with `DIRECTION_ML_MODEL_PATH` unset (momentum) vs set; run `analyze_direction_quality.py` after payload fix; publish gate decision.
-2. **E2-S7 follow-up (Ops, P1)** — Re-run `oos_primary` baseline on v1 or det_dir; confirm whether Jun/Jul trade after lock fixes.
+1. **E2-S7 follow-up (Ops, P1)** — Why OOS windows only trade May despite full emit; re-run after orchestrator check.
+2. **E2-S6 (Ops, P2)** — `replay_only in_sample_sanity` on v1 + dir ML.
+3. **E3-S3 close-out** — Document holdout AUC for S2 bundle; fix `analyze_direction_quality` vote↔position join.
 3. **E2-S6 (Ops, P2)** — `run_oos_validation_replay.sh replay_only in_sample_sanity` after stable preflight.
 4. **E2-S8 (Ops, blocked)** — 2023 parquet backfill per ticket.
 5. **E4 (deferred)** — caps / TIME_STOP only after E3 OOS direction gate passes.
