@@ -159,10 +159,9 @@ class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
             )
             # _FakeRedis has no EVAL — code falls back to delete + retry SETNX.
             # Should reclaim on the second SETNX attempt without waiting.
-            consumer._acquire_consumer_lock()
-            # Lock is now owned by our process, not the stale one
+            consumer._consumer_lock.acquire()
             current = shared_client.get(lock_key)
-            self.assertEqual(current, consumer._consumer_lock_owner)
+            self.assertEqual(current, consumer._consumer_lock.owner)
             self.assertNotEqual(current, stale_owner)
         finally:
             os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
@@ -196,8 +195,8 @@ class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
                 return False  # not stopped
 
             with patch("threading.Event.wait", new=fake_wait):
-                consumer._acquire_consumer_lock()
-            self.assertEqual(shared_client.get(lock_key), consumer._consumer_lock_owner)
+                consumer._consumer_lock.acquire()
+            self.assertEqual(shared_client.get(lock_key), consumer._consumer_lock.owner)
             self.assertGreaterEqual(call_count["n"], 1)
         finally:
             os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
@@ -233,8 +232,7 @@ class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
                        side_effect=real_monotonic), \
                  patch("threading.Event.wait", new=fake_wait):
                 with self.assertRaisesRegex(RuntimeError, "duplicate strategy consumer detected after waiting"):
-                    consumer._acquire_consumer_lock()
-            # Lock untouched
+                    consumer._consumer_lock.acquire()
             self.assertEqual(shared_client.get(lock_key), other_owner)
         finally:
             os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
@@ -260,9 +258,8 @@ class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
                 return True  # simulate stop_event being set during wait
 
             with patch("threading.Event.wait", new=fake_wait_with_stop):
-                consumer._acquire_consumer_lock()
-            # Lock NOT taken (we exited on stop), no exception raised
-            self.assertNotEqual(shared_client.get(lock_key), consumer._consumer_lock_owner)
+                consumer._consumer_lock.acquire()
+            self.assertNotEqual(shared_client.get(lock_key), consumer._consumer_lock.owner)
         finally:
             os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
 
