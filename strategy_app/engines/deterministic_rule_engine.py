@@ -1045,18 +1045,41 @@ class DeterministicRuleEngine(StrategyEngine):
             score += 1.0 if float(r5) > 0 else -1.0
             fired.append("r5m_up" if float(r5) > 0 else "r5m_dn")
 
+        # 7. VIX intraday change (weight 1.5) — top ML direction predictor (abs_corr 0.068).
+        # vix_intraday_chg is a percentage: +7.0 means VIX rose 7% intraday.
+        # Rising VIX = fear building = bearish; falling VIX = fear receding = bullish.
+        vix_chg = snap.vix_intraday_chg
+        if vix_chg is not None and abs(float(vix_chg)) >= 3.0:
+            score += -1.5 if float(vix_chg) > 0 else 1.5
+            fired.append("vix_rising" if float(vix_chg) > 0 else "vix_falling")
+
+        # 8. IV skew: PE vs CE implied vol (weight 1).
+        # PE IV dominating means the options market is pricing downside risk.
+        atm_ce_iv = snap.atm_ce_iv
+        atm_pe_iv = snap.atm_pe_iv
+        if atm_ce_iv and atm_pe_iv and float(atm_ce_iv) > 0 and float(atm_pe_iv) > 0:
+            iv_ratio = float(atm_pe_iv) / float(atm_ce_iv)
+            if iv_ratio > 1.10:
+                score -= 1.0
+                fired.append("pe_iv_dom")
+            elif iv_ratio < 0.90:
+                score += 1.0
+                fired.append("ce_iv_dom")
+
         basis = ",".join(fired) if fired else "no_signals"
         if score > 0:
             return Direction.CE, f"multi_signal_ce(score={score:.1f}:{basis})"
         if score < 0:
             return Direction.PE, f"multi_signal_pe(score={score:.1f}:{basis})"
 
-        # Exact tie: fall back to 15m then 5m momentum, then default CE
+        # Exact tie: fall back to 15m then 5m momentum, then default PE.
+        # PE is the conservative default — Indian equity IV skew structurally favours
+        # put premium, so an ambiguous market is more likely sideways-to-bearish.
         if r15 is not None and float(r15) != 0.0:
             return (Direction.CE if float(r15) > 0 else Direction.PE), f"tie_r15m({basis})"
         if r5 is not None and float(r5) != 0.0:
             return (Direction.CE if float(r5) > 0 else Direction.PE), f"tie_r5m({basis})"
-        return Direction.CE, f"default_ce({basis})"
+        return Direction.PE, f"default_pe({basis})"
 
     def _select_exit_vote(
         self,
