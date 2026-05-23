@@ -32,10 +32,10 @@ def main() -> int:
     dfs = []
     for f in aug_oct:
         p = os.path.join(V2_DIR, f)
-        schema = pq.read_schema(p).names
-        # year is partition-keyed with dict type — read it via the file name instead
+        pf = pq.ParquetFile(p)
+        schema = pf.schema_arrow.names
         cols = [c for c in features if c in schema and c != "year"]
-        df = pq.read_table(p, columns=cols).to_pandas()
+        df = pf.read(columns=cols).to_pandas()
         for c in features:
             if c not in df.columns:
                 df[c] = np.nan
