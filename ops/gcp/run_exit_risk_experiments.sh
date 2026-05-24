@@ -98,8 +98,9 @@ case "${MODE}" in
     run_one "E1_stagnant_20" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_env.sh" ""
     run_one "E2_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" ""
     run_one "E2E3_dyn_exit_stress" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" "${REPO}/ops/gcp/patch_eval_risk_stress_env.sh"
+    run_one "E4_stagnant20_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_dyn_exit_env.sh" ""
     ;;
-  *) echo "Usage: $0 [E1|E2|E3|E2E3|all]"; exit 2 ;;
+  *) echo "Usage: $0 [E1|E2|E2E3|E4|all]"; exit 2 ;;
 esac
 
 log "finished — logs in ${LOG_DIR}/"
