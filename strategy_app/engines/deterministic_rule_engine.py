@@ -703,7 +703,7 @@ class DeterministicRuleEngine(StrategyEngine):
         return pe_votes
 
     def _deterministic_direction_vote(self, snap: SnapshotAccessor) -> StrategyVote:
-        direction, basis = self._shadow_direction_from_snapshot(snap)
+        direction, basis, _ = self._shadow_direction_from_snapshot(snap)
         premium = snap.atm_ce_close if direction == Direction.CE else snap.atm_pe_close
         return StrategyVote(
             strategy_name="DET_DIRECTION",
@@ -947,7 +947,7 @@ class DeterministicRuleEngine(StrategyEngine):
         evaluator = getattr(self._entry_policy, "evaluate_shadow", None)
         if not callable(evaluator):
             return None
-        direction, basis = self._shadow_direction_from_snapshot(snap)
+        direction, basis, _ = self._shadow_direction_from_snapshot(snap)
         strike = snap.atm_strike
         premium = snap.option_ltp(direction.value, strike) if strike is not None and int(strike) > 0 else None
         vote = StrategyVote(
@@ -982,7 +982,7 @@ class DeterministicRuleEngine(StrategyEngine):
         return vote
 
     @staticmethod
-    def _shadow_direction_from_snapshot(snap: SnapshotAccessor) -> tuple[Direction, str]:
+    def _shadow_direction_from_snapshot(snap: SnapshotAccessor) -> tuple[Direction, str, float]:
         """Multi-signal direction scorer.
 
         Each signal contributes a signed score (positive = CE/bullish, negative = PE/bearish).
@@ -1081,18 +1081,18 @@ class DeterministicRuleEngine(StrategyEngine):
 
         basis = ",".join(fired) if fired else "no_signals"
         if score > 0:
-            return Direction.CE, f"multi_signal_ce(score={score:.1f}:{basis})"
+            return Direction.CE, f"multi_signal_ce(score={score:.1f}:{basis})", score
         if score < 0:
-            return Direction.PE, f"multi_signal_pe(score={score:.1f}:{basis})"
+            return Direction.PE, f"multi_signal_pe(score={score:.1f}:{basis})", score
 
         # Exact tie: fall back to 15m then 5m momentum, then default PE.
         # PE is the conservative default — Indian equity IV skew structurally favours
         # put premium, so an ambiguous market is more likely sideways-to-bearish.
         if r15 is not None and float(r15) != 0.0:
-            return (Direction.CE if float(r15) > 0 else Direction.PE), f"tie_r15m({basis})"
+            return (Direction.CE if float(r15) > 0 else Direction.PE), f"tie_r15m({basis})", 0.0
         if r5 is not None and float(r5) != 0.0:
-            return (Direction.CE if float(r5) > 0 else Direction.PE), f"tie_r5m({basis})"
-        return Direction.PE, f"default_pe({basis})"
+            return (Direction.CE if float(r5) > 0 else Direction.PE), f"tie_r5m({basis})", 0.0
+        return Direction.PE, f"default_pe({basis})", 0.0
 
     def _select_exit_vote(
         self,
@@ -1465,12 +1465,16 @@ class DeterministicRuleEngine(StrategyEngine):
                 extra_metrics=compact_metrics(vote.decision_metrics),
             )
         final_outcome = "entry_taken" if signal is not None else ("blocked" if blocker is not None or warmup_blocked else "hold")
+        shadow_dir, shadow_full_basis, shadow_score = self._shadow_direction_from_snapshot(snap)
         trace = builder.finalize(
             final_outcome=final_outcome,
             primary_blocker_gate=("warmup" if warmup_blocked else blocker),
             summary_metrics={
                 "vote_count": len(votes),
                 "entry_vote_count": len([vote for vote in votes if vote.signal_type == SignalType.ENTRY]),
+                "shadow_score": round(shadow_score, 2),
+                "shadow_dir": shadow_dir.value,
+                "shadow_basis": shadow_full_basis,
             },
         )
         # Attach brain context to trace so the UI blocker funnel can show

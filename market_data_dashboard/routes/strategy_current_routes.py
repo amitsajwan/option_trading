@@ -25,6 +25,7 @@ from ..state.strategy_current_state import (
     read_blocker_funnel,
     read_decision_timeline,
     read_observability_summary,
+    read_session_heatmap,
     read_strategy_current_state,
 )
 from ..state.brain_state import read_brain_state
@@ -61,6 +62,11 @@ class StrategyCurrentRouter:
         router.add_api_route(
             "/api/strategy/brain/status",
             self.get_brain_status,
+            methods=["GET"],
+        )
+        router.add_api_route(
+            "/api/strategy/session-heatmap",
+            self.get_session_heatmap,
             methods=["GET"],
         )
         self.router = router
@@ -118,6 +124,23 @@ class StrategyCurrentRouter:
             return read_observability_summary(mode=mode)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to read observability state: {exc}")
+
+    async def get_session_heatmap(
+        self,
+        mode: str = Query("replay", description="live | replay"),
+        date: str = Query(..., description="YYYY-MM-DD"),
+    ) -> dict:
+        """Compact per-minute session heatmap data for a given date.
+
+        Returns one row per traced minute with outcome, shadow score/direction/basis,
+        and entry prob — enough for the UI to paint a color-coded session strip.
+        """
+        if mode.strip().lower() not in {"live", "replay", "historical"}:
+            raise HTTPException(status_code=400, detail="mode must be 'live' or 'replay'")
+        try:
+            return read_session_heatmap(mode=mode, date=date)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to read session heatmap: {exc}")
 
     async def get_brain_status(
         self,

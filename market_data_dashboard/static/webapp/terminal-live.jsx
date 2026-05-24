@@ -425,9 +425,27 @@ function _outcomeColor(oc) {
   if (oc === 'hold') return 'var(--warn)';
   return 'var(--fg-3)';
 }
+function OutcomePill({ oc, gate }) {
+  const label = oc==='entry_taken' ? 'IN'
+              : oc==='hold'        ? 'HOLD'
+              : (!gate || gate==='warmup' || gate==='entry_phase') ? 'SKIP'
+              : 'BLOCK';
+  const styles = {
+    IN:    { background:'var(--pos)',             color:'var(--bg-0)', fontWeight:700 },
+    HOLD:  { background:'rgba(245,165,36,0.28)',  color:'var(--warn)', fontWeight:600 },
+    SKIP:  { background:'rgba(255,255,255,0.08)', color:'var(--fg-4)', fontWeight:400 },
+    BLOCK: { background:'rgba(220,50,50,0.22)',   color:'var(--neg)',  fontWeight:600 },
+  }[label];
+  return (
+    <span style={{display:'inline-block',padding:'1px 5px',borderRadius:2,fontSize:8.5,letterSpacing:'0.06em',...styles}}>{label}</span>
+  );
+}
+
 function DiagPanel({ diag }) {
   const [tlFilter, setTlFilter] = _s('blocked');
   const [tlCollapse, setTlCollapse] = _s(true);
+  const [configOpen, setConfigOpen] = _s(false);
+  const [selRow, setSelRow] = _s(null);
   if (!diag) {
     return <div style={{padding:'12px',color:'var(--fg-3)',fontFamily:'var(--f-mono)',fontSize:11}}>Diagnostics unavailable in this mode.</div>;
   }
@@ -442,251 +460,461 @@ function DiagPanel({ diag }) {
   const tl = timeline || {};
   const decisions = Array.isArray(tl.decisions) ? tl.decisions : [];
   const tlTotal = tl.matched_filter ?? tl.total_for_date ?? 0;
+  const totalDecisions = outKeys.reduce((s, k) => s + (out[k] || 0), 0);
 
   function setFilterAndFetch(v) {
     setTlFilter(v);
+    setSelRow(null);
     if (onTimelineFilterChange) onTimelineFilterChange(v === 'all' ? '' : v);
   }
   function setCollapseAndFetch(v) {
     setTlCollapse(v);
+    setSelRow(null);
     if (onTimelineCollapseChange) onTimelineCollapseChange(v);
   }
+
+  // ── compact brain badge ──────────────────────────────────────────────────
+  const brainBadge = (() => {
+    if (!brainData?.available) {
+      return <div style={{marginBottom:10,padding:'5px 8px',background:'var(--bg-2)',borderRadius:3,border:'1px solid var(--line-3)',color:'var(--fg-4)',fontSize:9.5}}>brain: unavailable</div>;
+    }
+    const bd = brainData;
+    const score = String(bd.day_score || 'UNKNOWN').toUpperCase();
+    const scoreColor = { CALM:'var(--pos)', NEUTRAL:'var(--fg-2)', VOLATILE:'var(--warn)', AVOID:'var(--neg)', UNKNOWN:'var(--fg-4)' }[score] || 'var(--fg-4)';
+    const conf = bd.day_score_confidence != null ? (Number(bd.day_score_confidence)*100).toFixed(0)+'%' : null;
+    const mult = bd.size_multiplier != null ? Number(bd.size_multiplier).toFixed(2)+'×' : null;
+    const carry = bd.carry_consecutive_losses || 0;
+    const rv20  = bd.regime_rv20 != null ? Number(bd.regime_rv20).toFixed(4) : null;
+    const slope = bd.regime_sma20_slope != null ? (Number(bd.regime_sma20_slope)*100).toFixed(2)+'%' : null;
+    const sizeWarn  = bd.size_multiplier != null && Number(bd.size_multiplier) < 1.0;
+    const carryWarn = carry >= 2 || (bd.losing_streak_days || 0) >= 1;
+    return (
+      <div style={{marginBottom:10,padding:'5px 8px',background:'var(--bg-2)',borderRadius:3,border:'1px solid var(--line-3)',display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',fontFamily:'var(--f-mono)',fontSize:10}}>
+        <span style={{fontWeight:700,fontSize:11,color:scoreColor,letterSpacing:'0.04em'}}>{score}</span>
+        {conf  && <span style={{color:'var(--fg-3)'}}>{conf}</span>}
+        {mult  && <span style={{color:sizeWarn?'var(--warn)':'var(--fg-2)'}}>{mult}</span>}
+        <span style={{color:carryWarn?'var(--warn)':'var(--fg-4)'}}>{carry}L</span>
+        {rv20  && <span><span style={{color:'var(--fg-4)'}}>rv20 </span><span style={{color:Number(bd.regime_rv20)>0.018?'var(--neg)':Number(bd.regime_rv20)<0.010?'var(--pos)':'var(--warn)'}}>{rv20}</span></span>}
+        {slope && <span><span style={{color:'var(--fg-4)'}}>slope </span><span style={{color:Number(bd.regime_sma20_slope)>=0?'var(--pos)':'var(--neg)'}}>{slope}</span></span>}
+        {bd.trade_date && <span style={{marginLeft:'auto',color:'var(--fg-4)',fontSize:9}}>{bd.trade_date}</span>}
+      </div>
+    );
+  })();
+
+  // ── filter button helper (closure over tlFilter / setFilterAndFetch) ──────
+  function TlBtn({ v, label }) {
+    const active = tlFilter === v;
+    return (
+      <button onClick={()=>setFilterAndFetch(v)}
+              style={{fontSize:9,padding:'2px 7px',borderRadius:2,cursor:'pointer',border:'none',
+                      background:active?'var(--accent)':'var(--bg-3)',
+                      color:active?'var(--bg-0)':'var(--fg-3)',fontFamily:'var(--f-mono)'}}>
+        {label || v}
+      </button>
+    );
+  }
+
   return (
     <div style={{padding:'10px 12px',fontFamily:'var(--f-mono)',fontSize:10.5,color:'var(--fg-2)',overflowY:'auto',maxHeight:'100%'}}>
       {error && <div style={{color:'var(--neg)',marginBottom:8}}>error: {error}</div>}
-      {loading && <div style={{color:'var(--fg-3)',marginBottom:8}}>loading…</div>}
+      {loading && <div style={{color:'var(--fg-3)',marginBottom:6}}>loading…</div>}
 
-      {/* ── Brain morning context ── */}
-      <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'2px 0 6px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-        <span>Brain · Morning Context</span>
-        {brainData?.trade_date && <span style={{textTransform:'none',color:'var(--fg-4)',fontSize:9}}>{brainData.trade_date}</span>}
-      </div>
-      {(!brainData || !brainData.available) ? (
-        <div style={{color:'var(--fg-4)',marginBottom:10,fontSize:10}}>
-          No brain_state.json — engine not started or BRAIN_ENABLED=false.
-          <br/>Daily feature builder must run for morning context to appear.
-        </div>
-      ) : (() => {
-        const bd = brainData;
-        const score = String(bd.day_score || 'UNKNOWN').toUpperCase();
-        const scoreColor = { CALM:'var(--pos)', NEUTRAL:'var(--fg-3)', VOLATILE:'var(--warn)', AVOID:'var(--neg)', UNKNOWN:'var(--fg-4)' }[score] || 'var(--fg-4)';
-        const sizeWarn = bd.size_multiplier != null && Number(bd.size_multiplier) < 1.0;
-        const carryWarn = (bd.carry_consecutive_losses || 0) >= 2 || (bd.losing_streak_days || 0) >= 1;
-        const fmtF = v => v != null ? Number(v).toFixed(4) : '—';
-        const fmtPct = v => v != null ? (Number(v)>=0?'+':'') + (Number(v)*100).toFixed(2)+'%' : '—';
-        return (
-          <div style={{marginBottom:14,padding:'8px 10px',background:'var(--bg-2)',borderRadius:3,border:'1px solid var(--line-3)'}}>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'4px 10px',marginBottom:6}}>
-              <div><span style={{color:'var(--fg-4)'}}>day_score</span> <span style={{color:scoreColor,fontWeight:700}}>{score}</span></div>
-              <div><span style={{color:'var(--fg-4)'}}>conf</span> <span>{bd.day_score_confidence!=null?(Number(bd.day_score_confidence)*100).toFixed(0)+'%':'—'}</span></div>
-              <div><span style={{color:'var(--fg-4)'}}>size_mult</span> <span style={{color:sizeWarn?'var(--warn)':'var(--pos)'}}>{bd.size_multiplier!=null?Number(bd.size_multiplier).toFixed(2)+'×':'—'}</span></div>
-              <div><span style={{color:'var(--fg-4)'}}>carry</span> <span style={{color:carryWarn?'var(--warn)':'var(--fg-3)'}}>{bd.carry_consecutive_losses||0} consec · {bd.losing_streak_days||0}d streak</span></div>
-              {bd.regime_rv20!=null && <div><span style={{color:'var(--fg-4)'}}>rv20</span> <span style={{color:Number(bd.regime_rv20)>0.018?'var(--neg)':Number(bd.regime_rv20)<0.010?'var(--pos)':'var(--warn)'}}>{fmtF(bd.regime_rv20)}</span></div>}
-              {bd.regime_sma20_slope!=null && <div><span style={{color:'var(--fg-4)'}}>sma_slope</span> <span style={{color:Number(bd.regime_sma20_slope)>=0?'var(--pos)':'var(--neg)'}}>{fmtPct(bd.regime_sma20_slope)}</span></div>}
-              {bd.regime_dist_sma20!=null && <div><span style={{color:'var(--fg-4)'}}>sma_dist</span> <span>{fmtPct(bd.regime_dist_sma20)}</span></div>}
-              {bd.regime_60d_return!=null && <div><span style={{color:'var(--fg-4)'}}>60d_ret</span> <span style={{color:Number(bd.regime_60d_return)>=0?'var(--pos)':'var(--neg)'}}>{fmtPct(bd.regime_60d_return)}</span></div>}
-            </div>
-            {bd.day_score_reason && <div style={{fontSize:9,color:'var(--fg-4)',wordBreak:'break-all'}}>{bd.day_score_reason}</div>}
-          </div>
-        );
-      })()}
+      {/* ── Brain badge (compact 1-line) ── */}
+      {brainBadge}
 
-      {/* Two distinct concepts:
-           1. "Runtime config" = model the strategy_app container is loaded with
-              right now. Would fire NEW trades on a new replay.
-           2. "Trades shown produced by" = the model that wrote the events being
-              rendered on the grid. Comes from active_run_id's metadata.
-           When these differ, show a prominent mismatch warning so the operator
-           doesn't confuse one for the other (the 2024-07-29 trap). */}
-      <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'2px 0 4px'}}>
-        Runtime config <span style={{color:'var(--fg-4)',textTransform:'none'}}>(would fire NEW trades on next replay)</span>
+      {/* ── Blocker funnel ── */}
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+        <span style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase'}}>
+          Funnel <span style={{textTransform:'none',color:'var(--fg-4)',fontWeight:400}}>{date || '—'}</span>
+        </span>
+        {onRefresh && <button onClick={onRefresh} style={{fontSize:9,padding:'2px 7px',borderRadius:2,cursor:'pointer',border:'none',background:'var(--bg-3)',color:'var(--fg-3)',fontFamily:'var(--f-mono)'}}>refresh</button>}
       </div>
-      <div style={{lineHeight:1.7}}>
-        <div><span style={{color:'var(--fg-4)'}}>engine</span> <span style={{color:'var(--accent)'}}>{rc.engine || '—'}</span></div>
-        {rc.strategy_profile_id && <div><span style={{color:'var(--fg-4)'}}>profile</span> <span style={{color:'var(--pos)'}}>{rc.strategy_profile_id}</span></div>}
-        <div><span style={{color:'var(--fg-4)'}}>model_type</span> <span style={{color:rc.model_type==='option_pnl_v1' ? 'var(--pos)':'var(--fg-2)'}}>{rc.model_type || '—'}</span></div>
-        {rc.recipe_id && <div><span style={{color:'var(--fg-4)'}}>recipe</span> <span style={{color:'var(--pos)'}}>{rc.recipe_id}</span> @ thr <span style={{color:'var(--fg-1)'}}>{rc.decision_threshold}</span></div>}
-        <div><span style={{color:'var(--fg-4)'}}>model_run_id</span> {rc.model_run_id || '—'}</div>
-        <div><span style={{color:'var(--fg-4)'}}>rollout</span> {rc.rollout_stage || '—'}</div>
-        {rc.legacy_staged_model && (
-          <div style={{color:'var(--fg-4)',fontSize:9.5,marginTop:4}}>
-            (staged fallback loaded: <span style={{color:'var(--fg-3)'}}>{rc.legacy_staged_model.run_id}</span> — not firing)
-          </div>
-        )}
-      </div>
-
-      {/* Trades-shown provenance — uses the active_run_id of the displayed
-          date (passed in diag.activeRunId from ReplayMonitorDark). */}
-      <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'14px 0 4px'}}>
-        Trades shown were produced by <span style={{color:'var(--fg-4)',textTransform:'none'}}>(historical run for selected date)</span>
-      </div>
-      {(() => {
-        const arid = diag.activeRunId || '—';
-        const isDeterministic = rc.engine === 'deterministic';
-        const isOptionPnl = typeof arid === 'string' && arid.startsWith('option_pnl_');
-        const producedModel = arid === '—' ? '— (no stored run for this date)'
-          : isDeterministic && rc.strategy_profile_id
-            ? `deterministic · ${rc.strategy_profile_id}`
-          : isOptionPnl ? 'option_pnl_v1 (bundle)'
-          : 'staged_runtime_v1 (C1-family, futures-direction labels)';
-        const runtimeRunId = rc.model_run_id || '';
-        // Eval run UUID ≠ ML model_run_id for deterministic/playbook — do not warn.
-        const mismatch = !isDeterministic && arid !== '—' && arid !== runtimeRunId;
-        return (
-          <div style={{lineHeight:1.7}}>
-            <div><span style={{color:'var(--fg-4)'}}>run_id</span> <span style={{color:isOptionPnl?'var(--pos)':'var(--warn)'}}>{arid}</span></div>
-            <div><span style={{color:'var(--fg-4)'}}>model</span> <span style={{color:isOptionPnl?'var(--pos)':'var(--warn)'}}>{producedModel}</span></div>
-            {mismatch && (
-              <div style={{marginTop:6,padding:'6px 8px',background:'rgba(245,165,36,0.10)',border:'1px solid rgba(245,165,36,0.35)',borderRadius:2,color:'var(--warn)',fontSize:10}}>
-                ⚠ Trades shown ≠ runtime config. The runtime model above would produce
-                <em> different</em> trades. To see what the new model would do for this date,
-                trigger a fresh replay (POST /api/historical/replay/generate).
-              </div>
-            )}
-            {!mismatch && arid !== '—' && (
-              <div style={{marginTop:4,color:'var(--pos)',fontSize:10}}>✓ Trades shown match runtime config</div>
-            )}
-          </div>
-        );
-      })()}
-
-      <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase',margin:'14px 0 4px'}}>
-        Available models <span style={{color:'var(--fg-4)'}}>({models.length})</span>
-      </div>
-      {models.length === 0 ? (
-        <div style={{color:'var(--fg-4)'}}>no published models found</div>
+      {!bf.narrative ? (
+        <div style={{color:'var(--fg-4)',marginBottom:14}}>no decision traces loaded — pick a date</div>
       ) : (
-        <div style={{maxHeight:120,overflowY:'auto',border:'1px solid var(--line-3)',borderRadius:2,padding:'4px 6px'}}>
-          {models.slice(0,30).map((m,i) => {
-            const active = m.run_id && rc.model_run_id && m.run_id === rc.model_run_id;
+        <div style={{marginBottom:14}}>
+          {/* outcome chips */}
+          <div style={{display:'flex',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+            {outKeys.map(k => {
+              const chipColor = k==='entry_taken'?'var(--pos)':k==='hold'?'var(--warn)':k==='blocked'?'var(--neg)':'var(--fg-3)';
+              return (
+                <span key={k} style={{fontSize:9.5}}>
+                  <span style={{color:chipColor,fontWeight:600}}>{out[k]}</span>
+                  <span style={{color:'var(--fg-4)',marginLeft:3}}>{k.replace('_',' ')}</span>
+                </span>
+              );
+            })}
+          </div>
+          {/* gate funnel bars */}
+          {gates.slice(0, 10).map((g, i) => {
+            const pct = totalDecisions ? Math.round(g.count / totalDecisions * 100) : 0;
             return (
-              <div key={i} style={{padding:'2px 0',color:active?'var(--accent)':'var(--fg-2)'}}>
-                {active ? '●' : '○'} <span>{m.run_id || '?'}</span>
-                {m.model_group && <span style={{color:'var(--fg-4)',marginLeft:6}}>{m.model_group}</span>}
+              <div key={i} style={{display:'flex',alignItems:'center',gap:5,marginBottom:4}}>
+                <span style={{width:86,color:'var(--fg-4)',fontSize:9,textAlign:'right',flexShrink:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{g.gate}</span>
+                <div style={{flex:1,height:4,background:'var(--bg-3)',borderRadius:2}}>
+                  <div style={{width:pct+'%',height:'100%',background:'rgba(220,50,50,0.65)',borderRadius:2}}/>
+                </div>
+                <span style={{width:30,textAlign:'right',color:'var(--fg-2)',fontSize:9,flexShrink:0}}>{g.count}</span>
+                <span style={{width:28,textAlign:'right',color:'var(--fg-4)',fontSize:9,flexShrink:0}}>{pct}%</span>
               </div>
             );
           })}
-        </div>
-      )}
-
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',margin:'14px 0 4px'}}>
-        <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase'}}>
-          Blocker funnel <span style={{color:'var(--fg-4)'}}>{date || '—'}</span>
-        </div>
-        {onRefresh && <button className="t-btn ghost sm" onClick={onRefresh} title="Reload diagnostics">refresh</button>}
-      </div>
-      {!bf.narrative ? (
-        <div style={{color:'var(--fg-4)'}}>no decision traces loaded — pick a date</div>
-      ) : (
-        <>
-          <div style={{color:'var(--fg-1)',marginBottom:8,lineHeight:1.5}}>{bf.narrative}</div>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-            <div>
-              <div style={{color:'var(--fg-4)',fontSize:9,marginBottom:2}}>outcomes</div>
-              {outKeys.length === 0 ? <div style={{color:'var(--fg-4)'}}>—</div> :
-                outKeys.map(k => (
-                  <div key={k}><span style={{color:'var(--fg-4)'}}>{k}</span> <span style={{color:'var(--fg-1)'}}>{out[k]}</span></div>
-                ))}
-            </div>
-            <div>
-              <div style={{color:'var(--fg-4)',fontSize:9,marginBottom:2}}>primary blocker gates</div>
-              {gates.length === 0 ? <div style={{color:'var(--fg-4)'}}>—</div> :
-                gates.map((g,i) => (
-                  <div key={i}><span style={{color:'var(--fg-4)'}}>{g.gate}</span> <span style={{color:'var(--fg-1)'}}>{g.count}</span></div>
-                ))}
-            </div>
-          </div>
-          <div style={{marginTop:10}}>
-            <div style={{color:'var(--fg-4)',fontSize:9,marginBottom:2}}>top reason codes (first non-pass gate)</div>
-            {reasons.length === 0 ? <div style={{color:'var(--fg-4)'}}>—</div> :
-              reasons.map((r,i) => (
-                <div key={i}><span style={{color:'var(--fg-4)'}}>{r.reason_code}</span> <span style={{color:'var(--fg-1)'}}>{r.count}</span></div>
+          {/* top reason codes */}
+          {reasons.length > 0 && (
+            <div style={{marginTop:8,paddingTop:6,borderTop:'1px solid var(--line-3)'}}>
+              <div style={{color:'var(--fg-4)',fontSize:9,marginBottom:4,letterSpacing:'0.08em',textTransform:'uppercase'}}>top reasons</div>
+              {reasons.slice(0, 5).map((r, i) => (
+                <div key={i} style={{display:'flex',justifyContent:'space-between',marginBottom:2}}>
+                  <span style={{color:'var(--fg-3)',fontSize:9.5}}>{r.reason_code}</span>
+                  <span style={{color:'var(--fg-2)',fontSize:9.5}}>{r.count}</span>
+                </div>
               ))}
-          </div>
-        </>
+            </div>
+          )}
+        </div>
       )}
 
-      {/* Per-minute decision timeline — what happened at each snapshot */}
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',margin:'18px 0 4px'}}>
-        <div style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase'}}>
-          Per-minute decisions <span style={{color:'var(--fg-4)'}}>({decisions.length} of {tlTotal})</span>
-        </div>
-        <div style={{display:'flex',gap:4,alignItems:'center'}}>
-          {['all','blocked','hold','entry_taken'].map(v => (
-            <button key={v}
-                    className={'t-btn ghost sm' + (tlFilter===v?' active':'')}
-                    onClick={()=>setFilterAndFetch(v)}
-                    style={{fontSize:9.5, padding:'2px 6px',
-                            color: tlFilter===v ? 'var(--accent)' : 'var(--fg-3)',
-                            borderColor: tlFilter===v ? 'var(--accent)' : undefined}}>
-              {v}
-            </button>
-          ))}
-          {/* "collapse" merges consecutive rows with bit-identical Stage-1 output
-              into a single row — exposes the "Stage-1 stuck for N minutes" signal */}
-          <button className={'t-btn ghost sm' + (tlCollapse?' active':'')}
-                  onClick={()=>setCollapseAndFetch(!tlCollapse)}
+      {/* ── Per-minute decision timeline ── */}
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:5}}>
+        <span style={{color:'var(--fg-4)',fontSize:9.5,letterSpacing:'0.10em',textTransform:'uppercase'}}>
+          Decisions <span style={{textTransform:'none',color:'var(--fg-4)',fontWeight:400}}>({decisions.length}/{tlTotal})</span>
+        </span>
+        <div style={{display:'flex',gap:3,alignItems:'center'}}>
+          <TlBtn v="all" label="all"/>
+          <TlBtn v="blocked" label="block"/>
+          <TlBtn v="hold" label="hold"/>
+          <TlBtn v="entry_taken" label="in"/>
+          <button onClick={()=>setCollapseAndFetch(!tlCollapse)}
                   title="merge consecutive rows with identical Stage-1 output"
-                  style={{fontSize:9.5, padding:'2px 6px', marginLeft:6,
-                          color: tlCollapse ? 'var(--accent)' : 'var(--fg-3)',
-                          borderColor: tlCollapse ? 'var(--accent)' : undefined}}>
+                  style={{fontSize:9,padding:'2px 7px',borderRadius:2,cursor:'pointer',border:'none',marginLeft:4,
+                          background:tlCollapse?'rgba(245,165,36,0.25)':'var(--bg-3)',
+                          color:tlCollapse?'var(--warn)':'var(--fg-3)',fontFamily:'var(--f-mono)'}}>
             collapse
           </button>
         </div>
       </div>
       {decisions.length === 0 ? (
-        <div style={{color:'var(--fg-4)'}}>{tl.traces_path_exists === false ? 'no decision_traces.jsonl for this mode' : 'no rows match the current filter'}</div>
+        <div style={{color:'var(--fg-4)',marginBottom:14}}>{tl.traces_path_exists === false ? 'no decision_traces.jsonl for this mode' : 'no rows match the current filter'}</div>
       ) : (
-        <div style={{maxHeight:260,overflowY:'auto',border:'1px solid var(--line-3)',borderRadius:2}}>
+        <div style={{maxHeight:300,overflowY:'auto',border:'1px solid var(--line-3)',borderRadius:2,marginBottom:14}}>
           <table style={{width:'100%',borderCollapse:'collapse',fontSize:10}}>
             <thead style={{position:'sticky',top:0,background:'var(--bg-2)'}}>
               <tr style={{color:'var(--fg-4)',fontSize:9}}>
-                <th style={{textAlign:'left',padding:'3px 6px',width:46}}>time</th>
-                <th style={{textAlign:'left',padding:'3px 6px',width:76}}>outcome</th>
-                <th style={{textAlign:'left',padding:'3px 6px'}}>gate · reason</th>
-                <th style={{textAlign:'right',padding:'3px 6px',width:56}}>entry</th>
-                <th style={{textAlign:'left',padding:'3px 6px',width:70}}>s1 hash</th>
-                <th style={{textAlign:'right',padding:'3px 6px',width:48}}>s1 nn</th>
-                <th style={{textAlign:'right',padding:'3px 6px',width:56}}>recipe</th>
-                <th style={{textAlign:'left',padding:'3px 6px',width:80}}>regime</th>
+                <th style={{textAlign:'left',padding:'3px 5px',width:52,fontWeight:400}}>time</th>
+                <th style={{textAlign:'left',padding:'3px 5px',width:42,fontWeight:400}}>status</th>
+                <th style={{textAlign:'left',padding:'3px 5px',fontWeight:400}}>gate / reason</th>
+                <th style={{textAlign:'right',padding:'3px 5px',width:60,fontWeight:400}}>shadow</th>
+                <th style={{textAlign:'right',padding:'3px 5px',width:40,fontWeight:400}}>ep%</th>
               </tr>
             </thead>
             <tbody>
-              {decisions.map((d,i) => {
-                const s1 = _stageDiag(d, 'stage1');
-                const s1Title = [
-                  `stage1 input_hash=${s1.input_hash || '—'}`,
-                  `features=${s1.feature_count ?? '—'}`,
-                  `non_null=${s1.non_null_count ?? '—'}`,
-                  `missing=${s1.missing_count ?? '—'}`,
-                  `output=${s1.output_prob ?? (d.metrics||{}).entry_prob ?? '—'}`,
-                ].join(' · ');
+              {decisions.map((d, i) => {
                 const runMins = d.run_minutes || 1;
                 const isRun = runMins > 1;
-                const timeCell = isRun
-                  ? <span title={`${runMins} consecutive snapshots with identical Stage-1 entry_prob`}>
-                      {d.time}<span style={{color:'var(--fg-4)'}}>–{d.time_end}</span>
-                      <span style={{color:'var(--accent)',marginLeft:4,fontSize:9}}>×{runMins}</span>
-                    </span>
-                  : (d.time || '—');
+                const oc = d.outcome || '';
+                const isSel = selRow === i;
+                const rowBg = isSel ? 'rgba(255,176,0,0.07)' : oc==='entry_taken' ? 'rgba(0,200,80,0.07)' : isRun ? 'rgba(245,165,36,0.03)' : 'transparent';
+                const mt = d.metrics || {};
+                const sd = mt.shadow_dir;
+                const sc = mt.shadow_score;
+                const shadowStr = sd && sc != null
+                  ? sd + (Number(sc) >= 0 ? '+' : '') + Number(sc).toFixed(1)
+                  : '—';
+                const shadowColor = sd==='CE' ? 'var(--pos)' : sd==='PE' ? 'var(--neg)' : 'var(--fg-4)';
+                const firedSignals = new Set(_parseShadowSignals(mt.shadow_basis));
                 return (
-                  <tr key={i} style={{borderTop:'1px solid var(--line-3)',background:isRun?'rgba(245,165,36,0.04)':'transparent'}}>
-                    <td style={{padding:'2px 6px',color:'var(--fg-3)',fontFamily:'var(--f-mono)',whiteSpace:'nowrap'}}>{timeCell}</td>
-                    <td style={{padding:'2px 6px',color:_outcomeColor(d.outcome)}}>{d.outcome || '—'}</td>
-                    <td style={{padding:'2px 6px',color:'var(--fg-2)'}}>
-                      {d.blocker_gate ? <span style={{color:'var(--fg-3)'}}>{d.blocker_gate}</span> : <span style={{color:'var(--fg-4)'}}>—</span>}
-                      {d.reason_code && <span style={{color:'var(--fg-1)',marginLeft:6}}>{d.reason_code}</span>}
-                    </td>
-                    <td title={s1Title} style={{padding:'2px 6px',textAlign:'right',fontFamily:'var(--f-mono)',color:'var(--fg-3)'}}>{_fmtProb((d.metrics||{}).entry_prob)}</td>
-                    <td title={s1Title} style={{padding:'2px 6px',fontFamily:'var(--f-mono)',color:s1.input_hash?'var(--info)':'var(--fg-4)'}}>{_shortHash(s1.input_hash)}</td>
-                    <td title={s1Title} style={{padding:'2px 6px',textAlign:'right',fontFamily:'var(--f-mono)',color:'var(--fg-4)'}}>{s1.non_null_count ?? '—'}</td>
-                    <td style={{padding:'2px 6px',textAlign:'right',fontFamily:'var(--f-mono)',color:'var(--fg-3)'}}>{_fmtProb((d.metrics||{}).recipe_prob)}</td>
-                    <td style={{padding:'2px 6px',color:'var(--fg-4)',fontSize:9}}>{d.regime || '—'}</td>
-                  </tr>
+                  <React.Fragment key={i}>
+                    <tr style={{borderTop:'1px solid var(--line-3)',background:rowBg,cursor:'pointer'}}
+                        onClick={()=>setSelRow(isSel ? null : i)}>
+                      <td style={{padding:'2px 5px',color:'var(--fg-3)',fontFamily:'var(--f-mono)',whiteSpace:'nowrap',fontSize:9.5}}>
+                        {isRun
+                          ? <span>{d.time}<span style={{color:'var(--fg-4)'}}>–{d.time_end}</span><span style={{color:'var(--accent)',marginLeft:3,fontSize:8.5}}>×{runMins}</span></span>
+                          : (d.time || '—')}
+                      </td>
+                      <td style={{padding:'2px 5px'}}><OutcomePill oc={oc} gate={d.blocker_gate}/></td>
+                      <td style={{padding:'2px 5px',maxWidth:130,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                        {d.blocker_gate && <span style={{color:'var(--fg-4)'}}>{d.blocker_gate}</span>}
+                        {d.reason_code  && <span style={{color:'var(--fg-2)',marginLeft:4}}>{d.reason_code}</span>}
+                        {!d.blocker_gate && !d.reason_code && <span style={{color:'var(--fg-4)'}}>—</span>}
+                      </td>
+                      <td style={{padding:'2px 5px',textAlign:'right',fontFamily:'var(--f-mono)',fontSize:9.5,color:shadowColor,whiteSpace:'nowrap'}}>{shadowStr}</td>
+                      <td style={{padding:'2px 5px',textAlign:'right',fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-3)'}}>{_fmtProb(mt.entry_prob)}</td>
+                    </tr>
+                    {isSel && (
+                      <tr style={{background:'var(--bg-2)'}}>
+                        <td colSpan={5} style={{padding:'8px 10px',borderBottom:'1px solid var(--line-3)'}}>
+                          <div style={{display:'flex',gap:20,flexWrap:'wrap',fontFamily:'var(--f-mono)',fontSize:9.5}}>
+                            {/* probability metrics */}
+                            <div>
+                              <div style={{color:'var(--fg-4)',fontSize:8.5,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:5}}>probabilities</div>
+                              {[
+                                ['entry_prob',    mt.entry_prob,        v=>v!=null&&v>=0.6?'var(--pos)':v!=null&&v>=0.4?'var(--warn)':'var(--neg)'],
+                                ['recipe_prob',   mt.recipe_prob,       ()=>'var(--fg-2)'],
+                                ['recipe_margin', mt.recipe_margin,     ()=>'var(--fg-2)'],
+                                ['dir_up_prob',   mt.direction_up_prob, v=>v!=null&&v>=0.5?'var(--pos)':'var(--neg)'],
+                              ].map(([k, v, colorFn]) => v != null && (
+                                <div key={k} style={{display:'flex',justifyContent:'space-between',gap:12,marginBottom:2}}>
+                                  <span style={{color:'var(--fg-4)'}}>{k}</span>
+                                  <span style={{color:colorFn(v),fontWeight:600}}>{_fmtProb(v)}</span>
+                                </div>
+                              ))}
+                              {mt.entry_prob == null && mt.recipe_prob == null && mt.direction_up_prob == null && (
+                                <div style={{color:'var(--fg-4)'}}>no probs in trace</div>
+                              )}
+                            </div>
+                            {/* shadow signal grid */}
+                            <div>
+                              <div style={{color:'var(--fg-4)',fontSize:8.5,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:5}}>
+                                shadow signals
+                                {mt.shadow_dir && <span style={{textTransform:'none',marginLeft:6,color:mt.shadow_dir==='CE'?'var(--pos)':'var(--neg)',fontWeight:600}}>{mt.shadow_dir} {shadowStr.replace(mt.shadow_dir,'')}</span>}
+                              </div>
+                              {_HM_SIGNALS.map(sg => {
+                                const ceHit = sg.ce.some(s => firedSignals.has(s));
+                                const peHit = sg.pe.some(s => firedSignals.has(s));
+                                return (
+                                  <div key={sg.label} style={{display:'flex',alignItems:'center',gap:4,marginBottom:2}}>
+                                    <span style={{width:50,color:'var(--fg-4)',fontSize:9,textAlign:'right',flexShrink:0}}>{sg.label}</span>
+                                    <span style={{
+                                      width:24,textAlign:'center',fontSize:8.5,borderRadius:2,padding:'0 2px',fontWeight:ceHit?700:400,
+                                      background:ceHit?'rgba(25,195,125,0.22)':'transparent',
+                                      color:ceHit?'var(--pos)':'var(--fg-4)',
+                                    }}>CE</span>
+                                    <span style={{
+                                      width:24,textAlign:'center',fontSize:8.5,borderRadius:2,padding:'0 2px',fontWeight:peHit?700:400,
+                                      background:peHit?'rgba(220,50,50,0.22)':'transparent',
+                                      color:peHit?'var(--neg)':'var(--fg-4)',
+                                    }}>PE</span>
+                                  </div>
+                                );
+                              })}
+                              {firedSignals.size === 0 && <div style={{color:'var(--fg-4)',fontSize:9}}>no shadow signals (trace predates shadow field)</div>}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ── Runtime config + models (collapsed by default) ── */}
+      <div style={{borderTop:'1px solid var(--line-3)',paddingTop:8}}>
+        <button onClick={()=>setConfigOpen(v=>!v)}
+                style={{background:'none',border:'none',cursor:'pointer',color:'var(--fg-4)',fontSize:9.5,fontFamily:'var(--f-mono)',padding:0,letterSpacing:'0.08em',textTransform:'uppercase',display:'flex',alignItems:'center',gap:4}}>
+          <span style={{fontSize:9}}>{configOpen?'▾':'▸'}</span> Runtime config &amp; models
+        </button>
+      </div>
+      {configOpen && (() => {
+        const arid = diag.activeRunId || '—';
+        const isDeterministic = rc.engine === 'deterministic';
+        const isOptionPnl = typeof arid === 'string' && arid.startsWith('option_pnl_');
+        const producedModel = arid === '—' ? '— (no stored run for this date)'
+          : isDeterministic && rc.strategy_profile_id ? `deterministic · ${rc.strategy_profile_id}`
+          : isOptionPnl ? 'option_pnl_v1 (bundle)'
+          : 'staged_runtime_v1';
+        const mismatch = !isDeterministic && arid !== '—' && arid !== (rc.model_run_id || '');
+        return (
+          <div style={{marginTop:8,lineHeight:1.7}}>
+            <div style={{color:'var(--fg-4)',fontSize:9,letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:4}}>Runtime (fires next replay)</div>
+            <div><span style={{color:'var(--fg-4)'}}>engine</span> <span style={{color:'var(--accent)'}}>{rc.engine || '—'}</span></div>
+            {rc.strategy_profile_id && <div><span style={{color:'var(--fg-4)'}}>profile</span> <span style={{color:'var(--pos)'}}>{rc.strategy_profile_id}</span></div>}
+            <div><span style={{color:'var(--fg-4)'}}>model_type</span> <span>{rc.model_type || '—'}</span></div>
+            {rc.recipe_id && <div><span style={{color:'var(--fg-4)'}}>recipe</span> <span style={{color:'var(--pos)'}}>{rc.recipe_id}</span> @ thr <span>{rc.decision_threshold}</span></div>}
+            <div><span style={{color:'var(--fg-4)'}}>model_run_id</span> <span style={{color:'var(--fg-3)'}}>{rc.model_run_id || '—'}</span></div>
+            <div style={{color:'var(--fg-4)',fontSize:9,letterSpacing:'0.08em',textTransform:'uppercase',margin:'10px 0 4px'}}>Trades shown (run_id)</div>
+            <div><span style={{color:'var(--fg-4)'}}>run_id</span> <span style={{color:isOptionPnl?'var(--pos)':'var(--warn)'}}>{arid}</span></div>
+            <div><span style={{color:'var(--fg-4)'}}>model</span> <span style={{color:isOptionPnl?'var(--pos)':'var(--warn)'}}>{producedModel}</span></div>
+            {mismatch && (
+              <div style={{marginTop:6,padding:'5px 8px',background:'rgba(245,165,36,0.10)',border:'1px solid rgba(245,165,36,0.35)',borderRadius:2,color:'var(--warn)',fontSize:9.5}}>
+                Trades shown != runtime config — trigger a fresh replay to reconcile.
+              </div>
+            )}
+            {!mismatch && arid !== '—' && <div style={{marginTop:4,color:'var(--pos)',fontSize:9.5}}>matched runtime config</div>}
+            {models.length > 0 && (
+              <>
+                <div style={{color:'var(--fg-4)',fontSize:9,letterSpacing:'0.08em',textTransform:'uppercase',margin:'10px 0 4px'}}>Available models ({models.length})</div>
+                <div style={{maxHeight:100,overflowY:'auto',border:'1px solid var(--line-3)',borderRadius:2,padding:'3px 5px'}}>
+                  {models.slice(0, 20).map((m, i) => {
+                    const active = m.run_id && rc.model_run_id && m.run_id === rc.model_run_id;
+                    return (
+                      <div key={i} style={{padding:'1px 0',color:active?'var(--accent)':'var(--fg-3)',fontSize:9.5}}>
+                        {active?'●':'○'} {m.run_id || '?'}{m.model_group && <span style={{color:'var(--fg-4)',marginLeft:6}}>{m.model_group}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+// ── SessionHeatmap ────────────────────────────────────────────────────────
+// 375-cell minute strip (9:15–15:29 IST) colored by per-minute engine outcome.
+// Each hour is one row; click a cell to see the shadow direction scorecard.
+const _HM_HOUR_SLOTS = [
+  { h: 9,  mStart: 15, mEnd: 59 },
+  { h: 10, mStart: 0,  mEnd: 59 },
+  { h: 11, mStart: 0,  mEnd: 59 },
+  { h: 12, mStart: 0,  mEnd: 59 },
+  { h: 13, mStart: 0,  mEnd: 59 },
+  { h: 14, mStart: 0,  mEnd: 59 },
+  { h: 15, mStart: 0,  mEnd: 29 },
+];
+const _HM_SIGNALS = [
+  { label:'ORB',      ce:['orh_broken','or_upper_half'], pe:['orl_broken','or_lower_half'] },
+  { label:'VWAP',     ce:['above_vwap'],                 pe:['below_vwap'] },
+  { label:'ATM Prem', ce:['ce_prem_dominant'],            pe:['pe_prem_dominant'] },
+  { label:'PCR',      ce:['pcr_falling'],                 pe:['pcr_rising'] },
+  { label:'R15m',     ce:['r15m_up'],                    pe:['r15m_dn'] },
+  { label:'R5m',      ce:['r5m_up'],                     pe:['r5m_dn'] },
+  { label:'VIX',      ce:['vix_falling'],                pe:['vix_rising'] },
+  { label:'IV Skew',  ce:['ce_iv_dom'],                  pe:['pe_iv_dom'] },
+];
+function _hmCellColor(row) {
+  if (!row) return 'rgba(255,255,255,0.04)';
+  const { oc, gate, rc } = row;
+  if (oc === 'entry_taken') return 'var(--pos)';
+  if (oc === 'hold')        return 'rgba(245,165,36,0.35)';
+  if (oc === 'blocked') {
+    if (!gate || gate === 'warmup' || gate === 'entry_phase' || rc === 'invalid_entry_phase')
+      return 'rgba(255,255,255,0.08)';
+    return 'rgba(220,50,50,0.75)';
+  }
+  return 'rgba(255,255,255,0.06)';
+}
+function _parseShadowSignals(sb) {
+  if (!sb || sb === 'no_signals') return [];
+  const m = sb.match(/\(score=[^:]*:([^)]+)\)/);
+  if (m) return m[1].split(',').filter(Boolean);
+  const s = sb.match(/[^(]+\(([^)]+)\)/);
+  if (s && s[1] !== 'no_signals') return s[1].split(',').filter(Boolean);
+  return [];
+}
+function SessionHeatmap({ data, loading }) {
+  const [sel, setSel] = _s(null);
+  const [hov, setHov] = _s(null);
+  const byTime = _m(() => {
+    const map = {};
+    if (!data?.rows) return map;
+    for (const r of data.rows) { if (r.t) map[r.t] = r; }
+    return map;
+  }, [data]);
+
+  if (loading) return (
+    <div style={{padding:'20px 12px',color:'var(--fg-3)',fontFamily:'var(--f-mono)',fontSize:11}}>
+      loading session heatmap…
+    </div>
+  );
+  if (!data) return (
+    <div style={{padding:'20px 12px',color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:11}}>
+      No heatmap data — select a replay date.
+    </div>
+  );
+
+  return (
+    <div style={{padding:'10px 12px',overflowY:'auto',maxHeight:'100%',fontFamily:'var(--f-mono)',fontSize:10}}>
+      {/* minute grid */}
+      {_HM_HOUR_SLOTS.map(({h, mStart, mEnd}) => (
+        <div key={h} style={{display:'flex',alignItems:'center',gap:1,marginBottom:2}}>
+          <span style={{width:22,color:'var(--fg-4)',fontSize:9,flexShrink:0,textAlign:'right',paddingRight:4}}>
+            {String(h).padStart(2,'0')}h
+          </span>
+          <div style={{display:'flex',gap:1}}>
+            {Array.from({length: mEnd - mStart + 1}, (_, i) => {
+              const m = mStart + i;
+              const hhmm = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+              const row  = byTime[hhmm];
+              const isSel = sel?.t === hhmm;
+              return (
+                <div
+                  key={hhmm}
+                  title={hhmm + (row ? ' · ' + row.oc : '')}
+                  onClick={() => setSel(isSel ? null : (row ? row : {t: hhmm}))}
+                  onMouseEnter={() => setHov(hhmm)}
+                  onMouseLeave={() => setHov(null)}
+                  style={{
+                    width: 8, height: 16,
+                    backgroundColor: _hmCellColor(row),
+                    borderRadius: 2,
+                    cursor: row ? 'pointer' : 'default',
+                    outline: isSel
+                      ? '2px solid var(--accent)'
+                      : hov === hhmm ? '1px solid rgba(255,255,255,0.25)' : 'none',
+                    flexShrink: 0,
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {/* legend */}
+      <div style={{display:'flex',gap:14,marginTop:8,fontSize:9,color:'var(--fg-4)'}}>
+        {[
+          ['var(--pos)',                  'entered'],
+          ['rgba(220,50,50,0.75)',        'blocked (logic)'],
+          ['rgba(255,255,255,0.08)',      'outside phase'],
+          ['rgba(245,165,36,0.35)',       'holding'],
+          ['rgba(255,255,255,0.04)',      'no data'],
+        ].map(([bg, lbl]) => (
+          <span key={lbl}>
+            <span style={{display:'inline-block',width:8,height:8,borderRadius:2,background:bg,marginRight:3,verticalAlign:'middle'}}/>
+            {lbl}
+          </span>
+        ))}
+      </div>
+
+      {/* detail strip for selected cell */}
+      {sel && (
+        <div style={{marginTop:10,padding:'8px 10px',background:'var(--bg-2)',borderRadius:3,border:'1px solid var(--line-3)'}}>
+          <div style={{display:'flex',alignItems:'baseline',gap:10,marginBottom:6,flexWrap:'wrap'}}>
+            <span style={{color:'var(--fg-1)',fontSize:12,fontWeight:700}}>{sel.t}</span>
+            <span style={{color: sel.oc==='entry_taken'?'var(--pos)':sel.oc==='blocked'?'var(--neg)':'var(--fg-3)'}}>
+              {sel.oc || '—'}
+            </span>
+            {sel.gate && <span style={{color:'var(--fg-3)',fontSize:9}}>{sel.gate}</span>}
+            {sel.rc   && <span style={{color:'var(--fg-4)',fontSize:9}}>{sel.rc}</span>}
+            {sel.ep != null && <span style={{color:'var(--fg-3)',fontSize:9}}>ep {(Number(sel.ep)*100).toFixed(1)}%</span>}
+          </div>
+          {(sel.sc != null || sel.sd) ? (() => {
+            const fired = new Set(_parseShadowSignals(sel.sb || ''));
+            return (
+              <div>
+                <div style={{color:'var(--fg-4)',fontSize:9,marginBottom:5}}>
+                  shadow · {' '}
+                  <span style={{color: (sel.sc||0)>0?'var(--pos)':(sel.sc||0)<0?'var(--neg)':'var(--fg-3)',fontWeight:700}}>
+                    {sel.sd || '?'}
+                  </span>
+                  {' '} score {sel.sc != null ? ((sel.sc>0?'+':'')+Number(sel.sc).toFixed(2)) : '—'}
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'3px 10px'}}>
+                  {_HM_SIGNALS.map(sg => {
+                    const ceFired = sg.ce.find(s => fired.has(s));
+                    const peFired = sg.pe.find(s => fired.has(s));
+                    const color = ceFired ? 'var(--pos)' : peFired ? 'var(--neg)' : 'var(--fg-4)';
+                    const sig   = ceFired || peFired || '·';
+                    return (
+                      <div key={sg.label} style={{display:'flex',gap:4,alignItems:'center',fontSize:9}}>
+                        <span style={{color:'var(--fg-4)',width:52,flexShrink:0}}>{sg.label}</span>
+                        <span style={{color,fontSize:9}}>{sig}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })() : (
+            <div style={{color:'var(--fg-4)',fontSize:9}}>No shadow score — trace predates shadow field (run a new replay to populate).</div>
+          )}
         </div>
       )}
     </div>
@@ -694,7 +922,7 @@ function DiagPanel({ diag }) {
 }
 
 // ── Tape: unified trades + signals ────────────────────────────────────────
-function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId, diag }) {
+function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId, diag, heatmap }) {
   const [filter, setFilter] = _s('all');
   const rows = _m(() => {
     const out = [];
@@ -710,10 +938,32 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId,
           <button className={filter==='all'?'active':''} onClick={()=>setFilter('all')}>Tape <span className="count">{trades.length+signals.length}</span></button>
           <button className={filter==='trades'?'active':''} onClick={()=>setFilter('trades')}>Trades <span className="count">{trades.length}</span></button>
           <button className={filter==='signals'?'active':''} onClick={()=>setFilter('signals')}>Signals <span className="count">{signals.length}</span></button>
+          {heatmap && <button className={filter==='map'?'active':''} onClick={()=>setFilter('map')}>Map</button>}
           {diag && <button className={filter==='diag'?'active':''} onClick={()=>setFilter('diag')}>Diag</button>}
         </div>
+        {(() => {
+          const bf = diag?.blockerFunnel;
+          if (!bf?.outcomes) return null;
+          const o = bf.outcomes;
+          const inN      = o.entry_taken || 0;
+          const blocked  = o.blocked || 0;
+          const held     = o.hold || 0;
+          const topGate  = (Array.isArray(bf.primary_blocker_gates) && bf.primary_blocker_gates[0]?.gate) || null;
+          return (
+            <div style={{marginLeft:'auto',paddingRight:8,display:'flex',gap:8,alignItems:'center',fontFamily:'var(--f-mono)',fontSize:9,color:'var(--fg-4)',whiteSpace:'nowrap'}}>
+              {inN > 0 && <span><span style={{color:'var(--pos)',fontWeight:600}}>{inN}</span> in</span>}
+              {blocked > 0 && <span><span style={{color:'var(--neg)',fontWeight:600}}>{blocked}</span> blocked</span>}
+              {held > 0 && <span><span style={{color:'var(--warn)',fontWeight:600}}>{held}</span> hold</span>}
+              {topGate && <span style={{color:'var(--fg-4)'}}>top: {topGate}</span>}
+            </div>
+          );
+        })()}
       </div>
-      {filter === 'diag' ? (
+      {filter === 'map' ? (
+        <div className="t-panel-body" style={{padding:0}}>
+          <SessionHeatmap data={heatmap?.data} loading={heatmap?.loading}/>
+        </div>
+      ) : filter === 'diag' ? (
         <div className="t-panel-body" style={{padding:0}}><DiagPanel diag={diag}/></div>
       ) : (
       <div className="t-panel-body">
@@ -1220,16 +1470,12 @@ function _windowOf(d) {
 function _fmtDateOption(d, tradeCounts, modelsByDate) {
   const n = (tradeCounts && tradeCounts[d]) || 0;
   const win = _windowOf(d);
-  // Mark window so operators can tell at a glance whether they're looking at
-  // in-sample (train), light-contamination (valid), or true out-of-sample (OOS) data.
   const tag = win === "train" ? "● train" : win === "valid" ? "◐ valid" : win === "OOS" ? "○ OOS  " : "  post ";
-  // Explicit zero-trade marker so operators don't have to scroll the dropdown to
-  // figure out which dates have replay data and which are empty by model behavior.
-  const tradeStr = n > 0 ? `${String(n).padStart(3,' ')} trades` : "   — empty";
-  // Model tag — derived from the latest run_id for this date so the operator
-  // can see at a glance whether this date's trades came from C1 (old futures
-  // direction) or a new option-P&L bundle. Padded to keep columns aligned.
   const m = modelsByDate && modelsByDate[d];
+  // Three states: no replay run exists for this date; ran but 0 trades; ran with trades.
+  const tradeStr = !m        ? "   no replay"
+                 : n > 0     ? `${String(n).padStart(3,' ')} trades`
+                 :             "   0 trades ";
   let modelTag = "         ";
   if (m && m.family) {
     if (m.family === "OPT_PNL") {
@@ -1278,7 +1524,7 @@ function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, u
         <span style={{fontFamily:'var(--f-mono)',fontSize:'9.5px',color:'var(--fg-3)',flexShrink:0}}>{pct}%</span>
         <select style={selStyle} value={replayDate}
           disabled={datesLoading || !availableDates.length}
-          onChange={e => onDateChange(e.target.value, { runId: '' })}>
+          onChange={e => onDateChange(e.target.value, { runId: modelsByDate[e.target.value]?.run_id || '' })}>
           {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts, modelsByDate)}</option>)}
         </select>
         {replayRunId && (
@@ -1344,6 +1590,8 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const [tlCollapse,     setTlCollapse]     = _s(true);
   const [diagLoading,    setDiagLoading]    = _s(false);
   const [diagError,      setDiagError]      = _s('');
+  const [heatmapData,    setHeatmapData]    = _s(null);
+  const [heatmapLoading, setHeatmapLoading] = _s(false);
   const wsRef         = _r(null);
   const upToIdxRef    = _r(0);
   const speedRef      = _r(4);
@@ -1360,14 +1608,17 @@ function ReplayMonitorDark({ onModeSwitch }) {
     setDiagLoading(true); setDiagError('');
     const stateP = fetch('/api/strategy/current/state?mode=replay&latest_n=0')
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`state HTTP ${r.status}`)));
+    const runQ = replayRunIdRef.current
+      ? `&run_id=${encodeURIComponent(replayRunIdRef.current)}`
+      : '';
     const funnelP = date
-      ? fetch(`/api/strategy/blocker-funnel?mode=replay&date=${encodeURIComponent(date)}`)
+      ? fetch(`/api/strategy/blocker-funnel?mode=replay&date=${encodeURIComponent(date)}${runQ}`)
           .then(r => r.ok ? r.json() : Promise.reject(new Error(`funnel HTTP ${r.status}`)))
       : Promise.resolve(null);
     const tlOutcomeQ = tlOutcome ? `&outcome=${encodeURIComponent(tlOutcome)}` : '';
     const tlCollapseQ = tlCollapse ? `&collapse=true` : '';
     const tlP = date
-      ? fetch(`/api/strategy/decisions?mode=replay&date=${encodeURIComponent(date)}&limit=500${tlOutcomeQ}${tlCollapseQ}`)
+      ? fetch(`/api/strategy/decisions?mode=replay&date=${encodeURIComponent(date)}&limit=500${runQ}${tlOutcomeQ}${tlCollapseQ}`)
           .then(r => r.ok ? r.json() : Promise.reject(new Error(`decisions HTTP ${r.status}`)))
       : Promise.resolve(null);
     const brainP = fetch('/api/strategy/brain/status?mode=replay')
@@ -1387,6 +1638,15 @@ function ReplayMonitorDark({ onModeSwitch }) {
 
   _e(() => { fetchDiag(); /* refetch on date or filter change */ }, [replayDate, tlOutcome, tlCollapse]);
 
+  _e(() => {
+    if (!replayDate) { setHeatmapData(null); return; }
+    setHeatmapLoading(true);
+    fetch(`/api/strategy/session-heatmap?mode=replay&date=${encodeURIComponent(replayDate)}`)
+      .then(r => r.ok ? r.json() : Promise.resolve(null))
+      .then(d => { setHeatmapData(d || null); setHeatmapLoading(false); })
+      .catch(() => { setHeatmapData(null); setHeatmapLoading(false); });
+  }, [replayDate]);
+
   _e(() => { upToIdxRef.current    = upToIdx;    }, [upToIdx]);
   _e(() => { speedRef.current      = speed;      }, [speed]);
   _e(() => { replayDateRef.current = replayDate; }, [replayDate]);
@@ -1394,6 +1654,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
 
   function openReplaySocket() {
     if (wsRef.current) return;
+    setWsStatus('connecting');
     wsRef.current = TC.makeMonitorWS(
       () => {
         const sub = {
@@ -1407,8 +1668,10 @@ function ReplayMonitorDark({ onModeSwitch }) {
         onStatus: setWsStatus,
         onMessage(msg) {
           if (msg.type === 'snapshot') {
-            setSession(msg.session); setUpToIdx(msg.up_to_idx); setIsPlaying(false);
-            setReplayDate(msg.session.date || ''); replayDateRef.current = msg.session.date || '';
+            const sess = msg.session || {};
+            setSession(sess); setUpToIdx(msg.up_to_idx); setIsPlaying(false);
+            setReplayDate(sess.date || ''); replayDateRef.current = sess.date || '';
+            if (sess.runId) { setReplayRunId(sess.runId); replayRunIdRef.current = sess.runId; }
             setReplayError('');
           } else if (msg.type === 'tick') {
             setUpToIdx(msg.up_to_idx);
@@ -1507,7 +1770,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
             <span style={{fontFamily:'var(--f-mono)',fontSize:'10px',color:'var(--fg-3)'}}>Date</span>
             <select style={selStyle} value={replayDate}
               disabled={datesLoading || !availableDates.length}
-              onChange={e => handleDateChange(e.target.value, { runId: '' })}>
+              onChange={e => handleDateChange(e.target.value, { runId: modelsByDate[e.target.value]?.run_id || '' })}>
               {!replayDate && <option value="">{datesLoading ? 'Loading…' : 'Select date'}</option>}
               {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts, modelsByDate)}</option>)}
             </select>
@@ -1523,6 +1786,13 @@ function ReplayMonitorDark({ onModeSwitch }) {
                replayError || 'Select a date above to load a session.'}
             </div>
             {replayError && <div style={{fontSize:10,color:'var(--fg-4)'}}>Try a different date or wait for replay data to be generated.</div>}
+            {!replayError && !replayRunId && !datesLoading && (
+              <div style={{fontSize:10,color:'var(--warn)',marginTop:6,maxWidth:420}}>
+                Tip: open Replay from Eval via <strong>Open in Replay</strong> (or add{' '}
+                <code style={{fontSize:9}}>run_id=e8ba040a-a8dd-47d1-9bf8-ceffba85e809</code> to the URL).
+                Without <code>run_id</code>, the picker may load an older experiment with no votes.
+              </div>
+            )}
           </div>
         </div>
         <div className="t-log-strip">
@@ -1604,6 +1874,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
               session={session} trades={[...trades].reverse()} signals={signals}
               selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
               flashId={null}
+              heatmap={{ data: heatmapData, loading: heatmapLoading }}
               diag={{ runtimeConfig, availableModels, blockerFunnel,
                       timeline, brainData,
                       loading: diagLoading, error: diagError,

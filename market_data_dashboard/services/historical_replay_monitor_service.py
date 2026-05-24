@@ -274,6 +274,9 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
                 classified = {"family": "OPT_PNL", "recipe": "+".join(all_recipes)}
             elif len(all_recipes) == 1:
                 classified = {"family": "OPT_PNL", "recipe": all_recipes[0]}
+            # Include run_id so the frontend can pass it back on date selection,
+            # ensuring the WebSocket loads the exact same run this trade count refers to.
+            classified["run_id"] = run_id
             models_by_date[date_value] = classified
 
         return {

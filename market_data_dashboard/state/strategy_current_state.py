@@ -703,6 +703,9 @@ def read_decision_timeline(
                     "recipe_prob": sm.get("recipe_prob"),
                     "recipe_margin": sm.get("recipe_margin"),
                     "direction_up_prob": sm.get("direction_up_prob"),
+                    "shadow_score": sm.get("shadow_score"),
+                    "shadow_dir": sm.get("shadow_dir"),
+                    "shadow_basis": sm.get("shadow_basis"),
                 },
                 "model_diagnostics": md,
             })
@@ -720,4 +723,83 @@ def read_decision_timeline(
     return result
 
 
-__all__ = ["read_strategy_current_state", "read_blocker_funnel", "read_decision_timeline"]
+def read_session_heatmap(
+    mode: str = "replay",
+    *,
+    date: str,
+    run_dir: Optional[Path] = None,
+) -> dict[str, Any]:
+    """Compact per-minute session view for the heatmap UI.
+
+    Reads all entry-evaluation traces for a date and returns one compact row
+    per traced minute — enough for the UI to paint a colored cell strip.
+
+    Each row: {t, oc, gate, rc, sc, sd, sb, ep}
+        t  — HH:MM (IST)
+        oc — final_outcome
+        gate — primary_blocker_gate
+        rc — reason_code of first non-pass flow gate
+        sc — shadow_score (float, + = CE, - = PE)
+        sd — shadow_dir ("CE"|"PE")
+        sb — shadow_basis string
+        ep — entry_prob (float|null)
+    """
+    if not date or not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+        return {"error": "date must be YYYY-MM-DD", "date": date, "rows": []}
+
+    run_dir_path = Path(run_dir) if run_dir else _resolve_run_dir(mode)
+    traces_path = run_dir_path / "decision_traces.jsonl"
+
+    result: dict[str, Any] = {
+        "date": date,
+        "mode": mode.strip().lower(),
+        "traces_path_exists": traces_path.exists(),
+        "rows": [],
+    }
+    if not traces_path.exists():
+        return result
+
+    rows: list[dict[str, Any]] = []
+    with traces_path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            if date not in line:
+                continue
+            try:
+                t = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            td = str(t.get("trade_date_ist") or t.get("trade_date") or "")
+            if td != date:
+                continue
+            # Skip position-management traces; only entry evaluations are useful for the heatmap.
+            oc_val = str(t.get("final_outcome") or "")
+            if oc_val in ("exit_taken", "manage_only"):
+                continue
+            ts = str(t.get("timestamp") or "")
+            hhmm = ts[11:16] if len(ts) >= 16 else ""
+            sm = t.get("summary_metrics") or {}
+            primary_gate = t.get("primary_blocker_gate") or ""
+            reason_code = ""
+            for g in (t.get("flow_gates") or []):
+                if g.get("status") != "pass":
+                    reason_code = str(g.get("reason_code") or "")
+                    break
+            rows.append({
+                "t": hhmm,
+                "oc": str(t.get("final_outcome") or ""),
+                "gate": primary_gate,
+                "rc": reason_code,
+                "sc": sm.get("shadow_score"),
+                "sd": sm.get("shadow_dir"),
+                "sb": sm.get("shadow_basis"),
+                "ep": sm.get("entry_prob"),
+            })
+
+    result["rows"] = rows
+    result["total"] = len(rows)
+    return result
+
+
+__all__ = ["read_strategy_current_state", "read_blocker_funnel", "read_decision_timeline", "read_session_heatmap"]
