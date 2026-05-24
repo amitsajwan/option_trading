@@ -59,5 +59,7 @@
   "snapshot_id": "snap-102",
   "timestamp": "2026-03-07T15:02:00+05:30",
   "run_id": "run-parity",
-  "reason": "entry"
+  "reason": "entry",
+  "stagnant_exit_condition": "",
+  "current_shadow_score": 0.0
 }

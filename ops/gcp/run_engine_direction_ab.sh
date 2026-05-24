@@ -9,6 +9,7 @@
 #   sudo bash ops/gcp/run_engine_direction_ab.sh direction_ml       # E3-S2: det_dir_v1 + dir ML
 #   sudo bash ops/gcp/run_engine_direction_ab.sh v1_direction_ml    # E3-S5: ML-only profile + dir ML
 #   sudo bash ops/gcp/run_engine_direction_ab.sh v1_momentum        # E3-S3: same profile + momentum
+#   sudo bash ops/gcp/run_engine_direction_ab.sh dyn_exit           # E4-S2: dynamic stagnant exit
 #   sudo bash ops/gcp/run_engine_direction_ab.sh export_direction   # optional RUN_DIR=...
 #
 set -euo pipefail
@@ -109,6 +110,11 @@ case "${VARIANT}" in
     sudo bash "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dual_dir_env.sh" "${ENV_FILE}"
     sudo bash "${REPO}/ops/gcp/patch_trader_master_eval_replay_env.sh" "${ENV_FILE}"
     ;;
+  dyn_exit)
+    # E4-S2: same entry as v1 but stagnant exit gated on shadow_score_crossed_zero.
+    sudo bash "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" "${ENV_FILE}"
+    sudo bash "${REPO}/ops/gcp/patch_trader_master_eval_replay_env.sh" "${ENV_FILE}"
+    ;;
   export_direction)
     RUN_DIR="${RUN_DIR:?Set RUN_DIR to completed direction_s2_only HPO run}"
     "${PY}" -m ml_pipeline_2.scripts.export_direction_bundle_from_research \
@@ -130,7 +136,9 @@ case "${VARIANT}" in
       sudo bash "${REPO}/ops/gcp/patch_trader_master_eval_replay_env.sh" "${ENV_FILE}" ;;
     v1_dual_direction_ml) sudo bash "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dual_dir_env.sh" "${ENV_FILE}"
       sudo bash "${REPO}/ops/gcp/patch_trader_master_eval_replay_env.sh" "${ENV_FILE}" ;;
-    *) echo "replay_only needs baseline|pe_only|direction_ml|v1_direction_ml|v1_momentum|v1_dual_direction_ml"; exit 2 ;;
+    dyn_exit) sudo bash "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" "${ENV_FILE}"
+      sudo bash "${REPO}/ops/gcp/patch_trader_master_eval_replay_env.sh" "${ENV_FILE}" ;;
+    *) echo "replay_only needs baseline|pe_only|direction_ml|v1_direction_ml|v1_momentum|v1_dual_direction_ml|dyn_exit"; exit 2 ;;
   esac
   wait_consumers
   sudo OOS_REPLAY_SKIP_ENV_PATCH=1 bash "${REPO}/ops/gcp/run_oos_validation_replay.sh" replay_only oos_primary
@@ -138,7 +146,7 @@ case "${VARIANT}" in
   exit 0
     ;;
   *)
-    echo "Usage: $0 {baseline|pe_only|direction_ml|v1_direction_ml|v1_momentum|v1_dual_direction_ml|export_direction|replay_only [variant]}" >&2
+    echo "Usage: $0 {baseline|pe_only|direction_ml|v1_direction_ml|v1_momentum|v1_dual_direction_ml|dyn_exit|export_direction|replay_only [variant]}" >&2
     exit 2
     ;;
 esac

@@ -58,5 +58,7 @@
   "event": "POSITION_MANAGE",
   "snapshot_id": "snap-103",
   "timestamp": "2026-03-07T15:03:00+05:30",
-  "run_id": "run-parity"
+  "run_id": "run-parity",
+  "stagnant_exit_condition": "",
+  "current_shadow_score": 0.0
 }

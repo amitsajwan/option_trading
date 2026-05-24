@@ -61,5 +61,7 @@
   "run_id": "run-parity",
   "exit_premium": 114.0,
   "exit_reason": "TIME_STOP",
-  "reason": "exit"
+  "reason": "exit",
+  "stagnant_exit_condition": "",
+  "current_shadow_score": 0.0
 }

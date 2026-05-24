@@ -96,6 +96,13 @@ class PositionContext:
     # Stagnation exit: exit after stagnant_exit_bars if gain < stagnant_min_gain_pct.
     stagnant_exit_bars: int = 0
     stagnant_min_gain_pct: float = 0.05
+    # Dynamic stagnant exit condition. "" = pure time-based (default).
+    # "shadow_score_crossed_zero": also require momentum has reversed (shadow score
+    # in opposite direction to the trade) before firing the stagnant exit.
+    stagnant_exit_condition: str = ""
+    # Current shadow score — updated each manage bar by the engine so the tracker
+    # can evaluate the shadow-crossed-zero condition without knowing how to compute it.
+    current_shadow_score: float = 0.0
 
 
 @dataclass
@@ -204,6 +211,7 @@ class TradeSignal:
     playbook_exit_policy: Optional[dict[str, Any]] = None
     stagnant_exit_bars: int = 0
     stagnant_min_gain_pct: float = 0.05
+    stagnant_exit_condition: str = ""
 
 
 class StrategyEngine(ABC):

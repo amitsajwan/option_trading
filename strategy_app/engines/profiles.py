@@ -14,6 +14,8 @@ PROFILE_DEBIT_MULTI_V1 = "debit_multi_v1"
 PROFILE_TRADER_MASTER_V1 = "trader_master_v1"
 PROFILE_TRADER_MASTER_ML_ENTRY_V1 = "trader_master_ml_entry_v1"
 PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1 = "trader_master_ml_entry_det_dir_v1"
+# E4-S2: same as v1 but stagnant exit held until momentum reverses (shadow_score_crossed_zero).
+PROFILE_TRADER_MASTER_ML_ENTRY_V1_DYN_EXIT = "trader_master_ml_entry_v1_dyn_exit"
 
 PRODUCTION_DEFAULT_PROFILE_ID = PROFILE_DET_PROD_V1
 
@@ -161,6 +163,13 @@ _TRADER_MASTER_RISK_CONFIG: dict[str, Any] = {
     "stagnant_min_gain_pct": 0.05,
 }
 
+# E4-S2 experiment: same risk book, but stagnant exit gated on momentum reversal.
+# Won't fire if shadow_score still agrees with trade direction — gives runners room.
+_TRADER_MASTER_DYN_EXIT_RISK_CONFIG: dict[str, Any] = {
+    **_TRADER_MASTER_RISK_CONFIG,
+    "stagnant_exit_condition": "shadow_score_crossed_zero",
+}
+
 # Same exit/risk book as trader_master; entry is ML_ENTRY only (+ IV_FILTER veto).
 _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP: dict[str, list[str]] = {
     regime: ["IV_FILTER", "ML_ENTRY"]
@@ -263,6 +272,7 @@ _PROFILE_REGIME_ENTRY_MAPS: dict[str, dict[str, list[str]]] = {
     PROFILE_TRADER_MASTER_V1: _TRADER_MASTER_REGIME_ENTRY_MAP,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1: _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP,
     PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1: _TRADER_MASTER_ML_ENTRY_DET_DIR_REGIME_ENTRY_MAP,
+    PROFILE_TRADER_MASTER_ML_ENTRY_V1_DYN_EXIT: _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP,
 }
 
 _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
@@ -276,6 +286,7 @@ _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
     PROFILE_TRADER_MASTER_V1: list(_TRADER_MASTER_EXIT_STRATEGIES),
     PROFILE_TRADER_MASTER_ML_ENTRY_V1: list(_TRADER_MASTER_EXIT_STRATEGIES),
     PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1: list(_TRADER_MASTER_EXIT_STRATEGIES),
+    PROFILE_TRADER_MASTER_ML_ENTRY_V1_DYN_EXIT: list(_TRADER_MASTER_EXIT_STRATEGIES),
 }
 
 _PROFILE_RISK_CONFIGS: dict[str, dict[str, Any]] = {
@@ -288,6 +299,7 @@ _PROFILE_RISK_CONFIGS: dict[str, dict[str, Any]] = {
     PROFILE_TRADER_MASTER_V1: _TRADER_MASTER_RISK_CONFIG,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1: _TRADER_MASTER_RISK_CONFIG,
     PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1: _TRADER_MASTER_RISK_CONFIG,
+    PROFILE_TRADER_MASTER_ML_ENTRY_V1_DYN_EXIT: _TRADER_MASTER_DYN_EXIT_RISK_CONFIG,
 }
 
 
@@ -338,6 +350,7 @@ __all__ = [
     "PROFILE_TRADER_MASTER_V1",
     "PROFILE_TRADER_MASTER_ML_ENTRY_V1",
     "PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1",
+    "PROFILE_TRADER_MASTER_ML_ENTRY_V1_DYN_EXIT",
     "build_router_config",
     "build_run_metadata",
     "get_exit_strategies",

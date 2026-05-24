@@ -65,6 +65,8 @@ class PositionRiskConfig:
     # Set stagnant_exit_bars=0 to disable.
     stagnant_exit_bars: int = 0
     stagnant_min_gain_pct: float = 0.05
+    # "shadow_score_crossed_zero": also require momentum reversal before exiting.
+    stagnant_exit_condition: str = ""
 
     # ORB wide-range filter: skip ORB entry if opening-range width exceeds
     # this many BankNifty points. Set 0 to disable.
@@ -92,6 +94,7 @@ class PositionRiskConfig:
             underlying_target_pct=as_optional_float(payload.get("underlying_target_pct")),
             stagnant_exit_bars=max(0, int(as_optional_float(payload.get("stagnant_exit_bars")) or 0)),
             stagnant_min_gain_pct=max(0.0, float(as_optional_float(payload.get("stagnant_min_gain_pct")) or 0.05)),
+            stagnant_exit_condition=str(payload.get("stagnant_exit_condition") or ""),
             orb_max_range_pts=max(0.0, float(as_optional_float(payload.get("orb_max_range_pts")) or 0.0)),
         )
 
@@ -111,5 +114,6 @@ class PositionRiskConfig:
             "underlying_target_pct": self.underlying_target_pct,
             "stagnant_exit_bars": self.stagnant_exit_bars,
             "stagnant_min_gain_pct": self.stagnant_min_gain_pct,
+            "stagnant_exit_condition": self.stagnant_exit_condition,
             "orb_max_range_pts": self.orb_max_range_pts,
         }

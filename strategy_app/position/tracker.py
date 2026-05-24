@@ -220,13 +220,30 @@ class PositionTracker:
     @staticmethod
     def _is_stagnant_exit(position: PositionContext) -> bool:
         """Exit when the trade has been open for stagnant_exit_bars without reaching
-        stagnant_min_gain_pct — stops theta decay on flat / slowly-losing trades."""
+        stagnant_min_gain_pct — stops theta decay on flat / slowly-losing trades.
+
+        With stagnant_exit_condition="shadow_score_crossed_zero" the time gate still
+        applies, but the exit is further gated on momentum having reversed: for a CE
+        trade the shadow_score must be negative; for PE it must be positive.  If
+        momentum has NOT reversed we hold the trade even past the bar limit, giving
+        runners room to reach the target instead of being cut by the clock alone.
+        """
         bars = int(position.stagnant_exit_bars or 0)
         if bars <= 0:
             return False
         if position.bars_held < bars:
             return False
-        return position.pnl_pct < float(position.stagnant_min_gain_pct)
+        if position.pnl_pct >= float(position.stagnant_min_gain_pct):
+            return False
+        condition = str(position.stagnant_exit_condition or "").strip().lower()
+        if condition == "shadow_score_crossed_zero":
+            score = float(position.current_shadow_score)
+            direction = str(position.direction or "").upper()
+            if direction == "CE" and score > 0:
+                return False
+            if direction == "PE" and score < 0:
+                return False
+        return True
 
     def _resolve_stop_exit_reason(self, position: PositionContext) -> ExitReason:
         trail_reason = self._trailing_manager.resolve_exit_reason(position)

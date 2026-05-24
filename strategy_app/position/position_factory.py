@@ -114,4 +114,5 @@ class PositionFactory:
             playbook_exit_policy=playbook_exit_policy,
             stagnant_exit_bars=int(signal.stagnant_exit_bars),
             stagnant_min_gain_pct=float(signal.stagnant_min_gain_pct),
+            stagnant_exit_condition=str(signal.stagnant_exit_condition or ""),
         )

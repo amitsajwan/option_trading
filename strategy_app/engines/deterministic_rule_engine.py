@@ -412,6 +412,9 @@ class DeterministicRuleEngine(StrategyEngine):
         risk: RiskContext,
     ) -> Optional[TradeSignal]:
         """Check for system exits (stop, target, time) and log manage events."""
+        if position.stagnant_exit_condition == "shadow_score_crossed_zero":
+            _, _, _shadow_score = self._shadow_direction_from_snapshot(snap)
+            position.current_shadow_score = float(_shadow_score)
         system_exit = self._tracker.update(snap, risk)
         if system_exit is not None:
             self._annotate_signal_contract(system_exit, decision_mode="rule_vote")
@@ -817,6 +820,7 @@ class DeterministicRuleEngine(StrategyEngine):
             underlying_target_pct=underlying_target_pct,
             stagnant_exit_bars=cfg_underlying.stagnant_exit_bars,
             stagnant_min_gain_pct=cfg_underlying.stagnant_min_gain_pct,
+            stagnant_exit_condition=str(cfg_underlying.stagnant_exit_condition or ""),
             playbook_exit_policy=playbook_metrics,
             trailing_enabled=(
                 False
