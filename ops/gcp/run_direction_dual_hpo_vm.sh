@@ -67,11 +67,28 @@ printf 'export PYTHONPATH="${REPO}"\n' >> "${WORKER}"
 printf 'cd "${REPO}"\n' >> "${WORKER}"
 cat >> "${WORKER}" << 'ENDWORKER'
 
+_check_dual_run() {
+  local run_dir="$1"
+  local side="$2"
+  local mode
+  mode="$(python3 -c "import json; print(json.load(open('${run_dir}/summary.json')).get('completion_mode',''))")"
+  if [[ "${mode}" != "completed" ]]; then
+    echo "ERROR: ${side} run did not complete training (completion_mode=${mode}): ${run_dir}"
+    python3 -c "import json; s=json.load(open('${run_dir}/summary.json')); print(s.get('publish_assessment',{}))"
+    exit 1
+  fi
+  if [[ ! -f "${run_dir}/stages/stage2/model.joblib" ]]; then
+    echo "ERROR: ${side} missing stages/stage2/model.joblib under ${run_dir}"
+    exit 1
+  fi
+}
+
 echo "[$(date -Is)] === Direction Dual HPO: model_CE ==="
 "${PY}" -m ml_pipeline_2.scripts.run_direction_s2_only_hpo --config "${CE_CONFIG}"
 
 CE_RUN_DIR="$(ls -td "${ARTIFACTS_ROOT}"/direction_dual_ce_hpo_v1_* 2>/dev/null | head -1)"
 [ -n "${CE_RUN_DIR}" ] || { echo "ERROR: CE run dir not found under ${ARTIFACTS_ROOT}"; exit 1; }
+_check_dual_run "${CE_RUN_DIR}" "CE"
 echo "[$(date -Is)] CE done: ${CE_RUN_DIR}"
 
 echo "[$(date -Is)] === Direction Dual HPO: model_PE ==="
@@ -79,6 +96,7 @@ echo "[$(date -Is)] === Direction Dual HPO: model_PE ==="
 
 PE_RUN_DIR="$(ls -td "${ARTIFACTS_ROOT}"/direction_dual_pe_hpo_v1_* 2>/dev/null | head -1)"
 [ -n "${PE_RUN_DIR}" ] || { echo "ERROR: PE run dir not found under ${ARTIFACTS_ROOT}"; exit 1; }
+_check_dual_run "${PE_RUN_DIR}" "PE"
 echo "[$(date -Is)] PE done: ${PE_RUN_DIR}"
 
 echo "[$(date -Is)] === Exporting direction_dual_bundle ==="

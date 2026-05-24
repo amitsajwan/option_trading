@@ -1,7 +1,7 @@
 # Scrum board — ML entry + direction (`trader_master_ml_entry_det_dir_v1`)
 
 **Living document** — update status, owners, and **Results** after each replay / merge.  
-**Last updated:** 2026-05-23 (E3-S6 dual direction model system implemented; training pending)  
+**Last updated:** 2026-05-23 (E3-S6 resumed — `min_abs_return` 0.003→0.001; VM HPO re-run started)  
 **Profile under test:** `trader_master_ml_entry_det_dir_v1` / `trader_master_ml_entry_v1` · **Engine commit (baseline):** `a133936`
 
 Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md) · [runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md](runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md) · [ENTRY_AND_DIRECTION.md](ENTRY_AND_DIRECTION.md)
@@ -77,7 +77,7 @@ Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENT
 | E3-S3 | Direction publish gate + OOS re-test | P1 | **Engine** | **In review** | 3 |
 | E3-S4 | Conditional S2 train (entry-positive bars) | P2 | | **Backlog** | 8 |
 | E3-S5 | Profile `trader_master_ml_entry_v1` eval path | P1 | **Engine** | **Done** | 5 |
-| E3-S6 | Dual direction model (CE + PE per-side) | P1 | **ML** | **Ready** | 8 |
+| E3-S6 | Dual direction model (CE + PE per-side) | P1 | **ML** | **In progress** | 8 |
 | E4-S1 | Pilot higher session trade cap | P3 | | **Backlog** | 3 |
 | E4-S2 | TIME_STOP / MFE giveback experiment | P3 | | **Backlog** | 5 |
 
@@ -480,10 +480,11 @@ sudo bash ops/gcp/run_engine_direction_ab.sh replay_only v1_direction_ml
 
 | | |
 |---|---|
-| **Status** | Ready |
+| **Status** | **In progress** |
 | **Owner** | ML |
 | **Priority** | P1 |
 | **Points** | 8 |
+| **Resume when** | VM dual HPO completes + export + OOS replay |
 
 **Hypothesis:** Training one unified direction model on "CE vs PE" compresses two independent signals into one model with near-random AUC (0.557). Separate per-side binary models — "is CE profitable today?" and "is PE profitable today?" — have cleaner oracle labels and can produce independent edge.
 
@@ -504,8 +505,10 @@ sudo bash ops/gcp/run_engine_direction_ab.sh replay_only v1_direction_ml
 - [x] Create `ops/gcp/patch_trader_master_ml_entry_v1_dual_dir_env.sh`
 - [x] Create `ops/gcp/run_direction_dual_hpo_vm.sh`
 - [x] Add `v1_dual_direction_ml` variant to `run_engine_direction_ab.sh`
-- [x] Tests: `test_direction_dual_bundle.py` + `test_direction_dual_labelers.py` (14 tests pass)
-- [ ] Run dual HPO on VM: `sudo bash ops/gcp/run_direction_dual_hpo_vm.sh`
+- [x] Tests: `test_direction_dual_bundle.py` + `test_direction_dual_labelers.py` (18 tests pass)
+- [x] Push + VM validate (`a3ee0e2`); run `run_direction_dual_hpo_vm.sh` on `option-trading-runtime-01`
+- [ ] **Fix applied (2026-05-23):** `min_abs_return` 0.003 → **0.001** in manifests + labeler default; worker fail-fast if no `model.joblib`
+- [ ] Re-run dual HPO after label fix
 - [ ] Review CE + PE holdout AUC from `direction_dual_report.json`
 - [ ] Run OOS replay: `sudo bash ops/gcp/run_engine_direction_ab.sh v1_dual_direction_ml`
 - [ ] Compare vs E3-S5 baseline: trades ≥ 20, PF ≥ 1.30, CE/PE balanced
@@ -528,9 +531,18 @@ sudo bash ops/gcp/run_engine_direction_ab.sh replay_only v1_dual_direction_ml
 ```
 
 **Results log:**
-| Date | Run ID | Trades | PF | CE% | Notes |
-|------|--------|--------|----|-----|-------|
-| — | — | — | — | — | Training pending |
+
+| Date | Run / artifact | CE AUC | PE AUC | Trades | PF | Notes |
+|------|----------------|--------|--------|--------|-----|-------|
+| 2026-05-23 | `direction_dual_ce_hpo_v1_20260523_162640` | — | — | 0 | — | **`stage2_signal_check_failed`**: `insufficient_samples: 0<100`; no `stages/stage2/model.joblib` |
+| 2026-05-23 | `direction_dual_pe_hpo_v1_20260523_164104` | — | — | 0 | — | Same failure as CE |
+| 2026-05-23 | export step | — | — | — | — | **`FileNotFoundError`** — export aborted; no `direction_dual_model.joblib` |
+
+**Root cause (2026-05-23):** Per-side labelers filter on `|best_*_net_return_after_cost| >= 0.003` (`stage2_decisive_move_filter.min_abs_return`). Unified S2 (`direction_market_up_all_v1`) kept ~52k rows using **CE−PE edge ≥ 0.002**; per-side 30 bps filter dropped **all** rows on VM parquet/oracle scale.
+
+**Decision:** Resumed 2026-05-23 — `min_abs_return` **0.001** in manifests + code. Unified S2 bundle remains active eval path until dual export + replay pass.
+
+**VM side effects:** HPO script stopped Docker (~16:26 UTC); bring compose back before replays (`docker compose ... up -d`).
 
 ---
 
@@ -595,15 +607,15 @@ sudo docker exec option_trading-dashboard-1 python /tmp/analyze_oos_validation_r
 | 2026-05-23 | — | E2-S7: carry contamination fix (`clean_state` now clears `session_summary.jsonl`); diagnose shows carry state; hypotheses documented |
 | 2026-05-23 | Engine | E3-S5 valid `ae5a86b7` v1+dir ML; consumer lock + `OOS_REPLAY_SKIP_ENV_PATCH` + recreate-after-patch |
 | 2026-05-23 | Engine | E3-S3 `0eda153a` v1+momentum vs `ae5a86b7` dir ML — **keep direction ML** |
-| 2026-05-23 | — | **Next:** E2-S7 May-only; E2-S6 in-sample; fix vote join in `analyze_direction_quality` |
+| 2026-05-23 | ML | E3-S6 resumed: label threshold fix + fail-fast worker; VM HPO re-run |
+| 2026-05-23 | — | **Next:** E3-S3 close-out; E2-S6 in-sample; **not** E3-S6 until label fix + team resume |
 
 ---
 
 # Next tasks (sprint order)
 
-1. **E2-S7 follow-up (Ops, P1)** — Why OOS windows only trade May despite full emit; re-run after orchestrator check.
-2. **E2-S6 (Ops, P2)** — `replay_only in_sample_sanity` on v1 + dir ML.
-3. **E3-S3 close-out** — Document holdout AUC for S2 bundle; fix `analyze_direction_quality` vote↔position join.
-3. **E2-S6 (Ops, P2)** — `run_oos_validation_replay.sh replay_only in_sample_sanity` after stable preflight.
-4. **E2-S8 (Ops, blocked)** — 2023 parquet backfill per ticket.
-5. **E4 (deferred)** — caps / TIME_STOP only after E3 OOS direction gate passes.
+1. **E3-S3 close-out (Engine, P1)** — Document S2 holdout AUC; fix `analyze_direction_quality` vote↔position join; formal publish decision on unified bundle.
+2. **E2-S6 (Ops, P2)** — `replay_only in_sample_sanity` on v1 + unified dir ML.
+3. **E2-S8 (Ops, blocked)** — 2023 parquet backfill per ticket.
+4. **E4 (deferred)** — caps / TIME_STOP only after E3 OOS direction gate passes.
+5. **E3-S6 (in progress, P1)** — VM dual HPO + export + `v1_dual_direction_ml` replay vs E3-S5 baseline.

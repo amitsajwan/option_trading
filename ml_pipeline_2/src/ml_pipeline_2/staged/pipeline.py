@@ -553,7 +553,7 @@ def build_stage2_labels_ce_win_v1(
     independent of the entry filter and can generalize across sessions.
     """
     raw_cfg = dict(((manifest or {}).get("training") or {}).get("stage2_decisive_move_filter") or {})
-    min_edge = float(raw_cfg.get("min_abs_return", raw_cfg.get("min_ce_pe_edge", 0.003)))
+    min_edge = float(raw_cfg.get("min_abs_return", raw_cfg.get("min_ce_pe_edge", 0.001)))
 
     labeled = _attach_labels(stage_frame, oracle)
 
@@ -583,7 +583,7 @@ def build_stage2_labels_pe_win_v1(
     Same "CE" string = positive class convention as all other direction labelers.
     """
     raw_cfg = dict(((manifest or {}).get("training") or {}).get("stage2_decisive_move_filter") or {})
-    min_edge = float(raw_cfg.get("min_abs_return", raw_cfg.get("min_ce_pe_edge", 0.003)))
+    min_edge = float(raw_cfg.get("min_abs_return", raw_cfg.get("min_ce_pe_edge", 0.001)))
 
     labeled = _attach_labels(stage_frame, oracle)
 

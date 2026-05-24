@@ -85,7 +85,7 @@
     "runtime": { "model_n_jobs": 8 },
     "cost_per_trade": 0.0006,
     "stage2_target_redesign": { "enabled": false },
-    "stage2_decisive_move_filter": { "min_abs_return": 0.003 },
+    "stage2_decisive_move_filter": { "min_abs_return": 0.001 },
     "search_options_by_stage": {
       "stage1": {
         "hpo": { "enabled": false, "strategy": "optuna", "trials_per_model": 1, "sampler_seed": 42 },

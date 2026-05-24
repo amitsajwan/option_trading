@@ -53,11 +53,20 @@ class TestCeWinV1:
 
         sf = _make_stage_frame(2)
         oracle = pd.DataFrame([
-            _oracle_row(0, ce_ret=0.001, pe_ret=-0.005),  # |ce_ret| = 0.001 < 0.003 → excluded
-            _oracle_row(1, ce_ret=-0.001, pe_ret=0.005),  # |ce_ret| = 0.001 < 0.003 → excluded
+            _oracle_row(0, ce_ret=0.001, pe_ret=-0.005),  # |ce_ret| = 0.001 < default 0.003 → excluded
+            _oracle_row(1, ce_ret=-0.001, pe_ret=0.005),  # |ce_ret| = 0.001 < default 0.003 → excluded
         ])
-        result = build_stage2_labels_ce_win_v1(sf, oracle)
+        manifest = {"training": {"stage2_decisive_move_filter": {"min_abs_return": 0.003}}}
+        result = build_stage2_labels_ce_win_v1(sf, oracle, manifest)
         assert len(result) == 0
+
+    def test_default_min_edge_includes_decisive_rows(self):
+        from ml_pipeline_2.staged.pipeline import build_stage2_labels_ce_win_v1
+
+        sf = _make_stage_frame(1)
+        oracle = pd.DataFrame([_oracle_row(0, ce_ret=0.0015, pe_ret=-0.005)])
+        result = build_stage2_labels_ce_win_v1(sf, oracle)
+        assert len(result) == 1
 
     def test_move_label_valid_is_one(self):
         from ml_pipeline_2.staged.pipeline import build_stage2_labels_ce_win_v1
@@ -86,11 +95,13 @@ class TestPeWinV1:
     def test_default_min_edge(self):
         from ml_pipeline_2.staged.pipeline import build_stage2_labels_pe_win_v1
 
-        sf = _make_stage_frame(1)
-        oracle = pd.DataFrame([_oracle_row(0, ce_ret=0.005, pe_ret=0.001)])
-        # |pe_ret| = 0.001 < default 0.003 → excluded
+        sf = _make_stage_frame(2)
+        oracle = pd.DataFrame([
+            _oracle_row(0, ce_ret=0.005, pe_ret=0.0005),  # |pe_ret| < default 0.001 → excluded
+            _oracle_row(1, ce_ret=0.005, pe_ret=0.0015),  # |pe_ret| >= default 0.001 → kept
+        ])
         result = build_stage2_labels_pe_win_v1(sf, oracle)
-        assert len(result) == 0
+        assert len(result) == 1
 
     def test_registered_in_registry(self):
         from ml_pipeline_2.staged.registries import label_registry, resolve_labeler

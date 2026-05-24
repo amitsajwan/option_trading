@@ -98,6 +98,20 @@ sudo bash /opt/option_trading/ops/gcp/run_direction_s2_only_hpo_vm.sh
 
 See also [DIRECTION_S2_ONLY.md](DIRECTION_S2_ONLY.md).
 
+### Track B2 — Dual per-side direction (E3-S6, **on hold**)
+
+Separate CE-win / PE-win binary models (`ce_win_v1`, `pe_win_v1`) exported as `direction_dual_bundle.joblib`. Code on `main`; **VM training resumed** after `min_abs_return` lowered to **0.001** (first run at 0.003 → 0 labeled rows).
+
+| Item | Path |
+|------|------|
+| Manifests | `direction_dual_ce_hpo_v1.json`, `direction_dual_pe_hpo_v1.json` |
+| VM script | `ops/gcp/run_direction_dual_hpo_vm.sh` |
+| Export | `ml_pipeline_2/scripts/export_direction_dual_bundle.py` |
+| Runtime patch | `ops/gcp/patch_trader_master_ml_entry_v1_dual_dir_env.sh` |
+| Replay | `run_engine_direction_ab.sh v1_dual_direction_ml` |
+
+**Use unified S2 bundle (Track B above) for eval until E3-S6 resumes.** Details: [SCRUM_BOARD_ML_ENTRY_DIRECTION.md](SCRUM_BOARD_ML_ENTRY_DIRECTION.md) E3-S6.
+
 ---
 
 ## Do not use for decoupled research
@@ -162,3 +176,12 @@ sudo docker compose ... build strategy_app_historical
 sudo docker compose ... up -d --force-recreate strategy_app_historical
 # historical eval with STRATEGY_PROFILE_ID=trader_master_ml_entry_v1
 ```
+
+### OOS validation (ML_ENTRY primary voter — May 2026)
+
+After commit `a133936`, validate on disjoint windows before tuning caps or TIME_STOP:
+
+- **[SCRUM_BOARD_ML_ENTRY_DIRECTION.md](SCRUM_BOARD_ML_ENTRY_DIRECTION.md)** — stories, owners, results log (update each sprint)
+- [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md)
+- [runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md](runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md)
+- `sudo bash ops/gcp/run_oos_validation_replay.sh oos_primary`

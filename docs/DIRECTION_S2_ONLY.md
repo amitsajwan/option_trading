@@ -52,3 +52,24 @@ Restart `strategy_app` after setting env (see `strategy_app/ml/direction_ml_poli
 - **direction_only** economic gates: PF ≥ 1, trades ≥ 30, side balance, etc.
 
 `publishable: true` means the direction model passed **decoupled** checks — not that the full staged bundle is live-ready.
+
+## Dual per-side models (E3-S6 — on hold)
+
+**Status:** Implementation merged; **VM training resumed** (2026-05-23) after `min_abs_return` fix (0.003 → 0.001).
+
+| Item | Detail |
+|------|--------|
+| Hypothesis | Separate P(CE profitable) and P(PE profitable) vs one CE-vs-PE classifier |
+| Labelers | `ce_win_v1`, `pe_win_v1` — filter `\|return\| >= min_abs_return` (manifest: 0.003) |
+| VM runs | `direction_dual_ce_hpo_v1_20260523_162640`, `direction_dual_pe_hpo_v1_20260523_164104` |
+| Outcome (first run) | Both **`stage2_signal_check_failed`**: `insufficient_samples: 0<100` at `min_abs_return=0.003` |
+| Fix (2026-05-23) | **`min_abs_return: 0.001`** in manifests + labeler default; worker aborts if no `model.joblib` |
+| Active path | Unified S2 (`direction_market_up_all_v1`) — see E3-S5 replay `ae5a86b7` |
+
+```bash
+# When resumed:
+sudo bash ops/gcp/run_direction_dual_hpo_vm.sh validate
+sudo bash ops/gcp/run_direction_dual_hpo_vm.sh
+```
+
+Board: [SCRUM_BOARD_ML_ENTRY_DIRECTION.md](SCRUM_BOARD_ML_ENTRY_DIRECTION.md) · Runtime: `direction_dual_bundle` kind in `ml_entry.py`.
