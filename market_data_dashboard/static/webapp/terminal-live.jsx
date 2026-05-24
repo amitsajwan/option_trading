@@ -777,6 +777,10 @@ const _HM_SIGNALS = [
   { label:'R5m',      ce:['r5m_up'],                     pe:['r5m_dn'] },
   { label:'VIX',      ce:['vix_falling'],                pe:['vix_rising'] },
   { label:'IV Skew',  ce:['ce_iv_dom'],                  pe:['pe_iv_dom'] },
+  // E5-S1 trap detection signals
+  { label:'ORB Trap', ce:['orb_low_rejected'],            pe:['orb_high_rejected'] },
+  { label:'VWAP Trap',ce:['vwap_reclaim_bull'],           pe:['vwap_reject_bear'] },
+  { label:'IV Fade',  ce:['pe_iv_fading'],                pe:['ce_iv_fading'] },
 ];
 function _hmCellColor(row) {
   if (!row) return 'rgba(255,255,255,0.04)';

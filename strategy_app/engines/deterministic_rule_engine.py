@@ -8,6 +8,7 @@ import math
 import os
 import time as wall_time
 import uuid
+from collections import deque
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -144,6 +145,9 @@ class DeterministicRuleEngine(StrategyEngine):
         self._brain: TradingBrain = TradingBrain.from_env()
         self._day_context: Optional[DayContext] = None
         self._brain_state_path: Optional[Path] = None
+        # Rolling buffers for multi-bar trap signal detection in shadow scorer.
+        self._iv_buf: deque = deque(maxlen=3)   # (ce_iv, pe_iv) per bar
+        self._pvwap_buf: deque = deque(maxlen=2) # price_vs_vwap per bar
         self._set_logger_context(None)
         logger.info(
             "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s brain_enabled=%s",
@@ -264,6 +268,8 @@ class DeterministicRuleEngine(StrategyEngine):
         self._session_start_monotonic = wall_time.monotonic()
         self._session_event_count = 0
         self._regime_shift_streak.clear()
+        self._iv_buf.clear()
+        self._pvwap_buf.clear()
         self._tracker.on_session_start(trade_date)
         # Brain morning briefing: loads daily features + cross-session carry.
         # Must run before risk manager so carry-based consecutive_losses can
@@ -317,6 +323,9 @@ class DeterministicRuleEngine(StrategyEngine):
     def evaluate(self, snapshot: SnapshotPayload) -> Optional[TradeSignal]:
         self._session_event_count += 1
         snap = SnapshotAccessor(snapshot)
+        # Update rolling IV and VWAP-bias buffers before any shadow-scorer calls.
+        self._iv_buf.append((snap.atm_ce_iv, snap.atm_pe_iv))
+        self._pvwap_buf.append(snap.price_vs_vwap)
         position = self._tracker.current_position
         risk = self._risk.context
         trace_blocker: Optional[str] = None
@@ -985,8 +994,7 @@ class DeterministicRuleEngine(StrategyEngine):
         self._annotate_vote_contract(vote)
         return vote
 
-    @staticmethod
-    def _shadow_direction_from_snapshot(snap: SnapshotAccessor) -> tuple[Direction, str, float]:
+    def _shadow_direction_from_snapshot(self, snap: SnapshotAccessor) -> tuple[Direction, str, float]:
         """Multi-signal direction scorer.
 
         Each signal contributes a signed score (positive = CE/bullish, negative = PE/bearish).
@@ -997,6 +1005,9 @@ class DeterministicRuleEngine(StrategyEngine):
           4. PCR change momentum               — option flow pressure        (weight 1)
           5. Futures return 15m                — medium-term momentum        (weight 1)
           6. Futures return 5m                 — short-term momentum (last)  (weight 1)
+          7. VIX intraday change               — top ML predictor            (weight 1.5)
+          8. IV skew PE vs CE                  — downside risk pricing       (weight 1)
+          9–14. Trap detection signals         — failed breakout/VWAP/IV fade (weight 2 each)
 
         Final direction = CE if score > 0, PE if score < 0, tie-breaks to 15m then 5m.
         Basis string records which signals fired (for logs/diagnostics).
@@ -1082,6 +1093,70 @@ class DeterministicRuleEngine(StrategyEngine):
             elif iv_ratio < 0.90:
                 score += 1.0
                 fired.append("ce_iv_dom")
+
+        # ── Trap detection signals (E5-S1, weight 2 each) ──────────────────────
+        # These detect when a breakout/breakdown has failed, forcing the trapped
+        # side to cover — the strongest intraday setup in Indian option premium.
+
+        # 9. ORB low rejected: price broke below ORB low but recovered above it.
+        #    Trapped sellers forced to buy back → bullish squeeze.
+        if snap.or_ready and snap.orl_broken:
+            orl = snap.orl
+            fut = snap.fut_close
+            if orl is not None and fut is not None and float(fut) > float(orl):
+                score += 2.0
+                fired.append("orb_low_rejected")
+
+        # 10. ORB high rejected: price broke above ORB high but fell back below.
+        #     Trapped buyers forced to sell → bearish squeeze.
+        if snap.or_ready and snap.orh_broken:
+            orh = snap.orh
+            fut = snap.fut_close
+            if orh is not None and fut is not None and float(fut) < float(orh):
+                score -= 2.0
+                fired.append("orb_high_rejected")
+
+        # 11. VWAP reclaim (bullish): price was below VWAP last bar, now above.
+        #     Confirms trapped sellers covering as market reclaims intraday anchor.
+        if len(self._pvwap_buf) >= 2:
+            prev_pvwap = self._pvwap_buf[-2]
+            cur_pvwap = self._pvwap_buf[-1]
+            if prev_pvwap is not None and cur_pvwap is not None:
+                if float(prev_pvwap) < 0 < float(cur_pvwap):
+                    score += 2.0
+                    fired.append("vwap_reclaim_bull")
+
+        # 12. VWAP rejection (bearish): price was above VWAP last bar, now below.
+        #     Confirms trapped buyers cutting as market loses intraday anchor.
+        if len(self._pvwap_buf) >= 2:
+            prev_pvwap = self._pvwap_buf[-2]
+            cur_pvwap = self._pvwap_buf[-1]
+            if prev_pvwap is not None and cur_pvwap is not None:
+                if float(prev_pvwap) > 0 > float(cur_pvwap):
+                    score -= 2.0
+                    fired.append("vwap_reject_bear")
+
+        # 13. PE IV fading (CE signal): PE IV spiked 2 bars ago then compressed.
+        #     Put buyers paid up in panic, now IV is collapsing — sellers winning.
+        if len(self._iv_buf) >= 3:
+            ce0, pe0 = self._iv_buf[0]  # oldest (3 bars ago)
+            ce1, pe1 = self._iv_buf[1]  # 2 bars ago
+            ce2, pe2 = self._iv_buf[2]  # current
+            if pe0 and pe1 and pe2 and float(pe0) > 0 and float(pe1) > 0 and float(pe2) > 0:
+                if float(pe1) > float(pe0) * 1.05 and float(pe2) < float(pe1) * 0.97:
+                    score += 2.0
+                    fired.append("pe_iv_fading")
+
+        # 14. CE IV fading (PE signal): CE IV spiked 2 bars ago then compressed.
+        #     Call buyers paid up in panic, now IV is collapsing — sellers winning.
+        if len(self._iv_buf) >= 3:
+            ce0, pe0 = self._iv_buf[0]
+            ce1, pe1 = self._iv_buf[1]
+            ce2, pe2 = self._iv_buf[2]
+            if ce0 and ce1 and ce2 and float(ce0) > 0 and float(ce1) > 0 and float(ce2) > 0:
+                if float(ce1) > float(ce0) * 1.05 and float(ce2) < float(ce1) * 0.97:
+                    score -= 2.0
+                    fired.append("ce_iv_fading")
 
         basis = ",".join(fired) if fired else "no_signals"
         if score > 0:
