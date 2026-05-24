@@ -1,0 +1,39 @@
+{
+  "description": "R1S with max 3 ranked entries per day vs unlimited control. 4 rules x 19 windows = 76 cells.",
+  "rules": [
+    {"rule_id": "R1S_UNLIMITED_CONTROL", "path": "ml_pipeline_2/configs/rules/r1s_top3/r1s_unlimited_control.json"},
+    {"rule_id": "R1S_TOP3_S0_FIRST", "path": "ml_pipeline_2/configs/rules/r1s_top3/r1s_top3_s0_first.json"},
+    {"rule_id": "R1S_TOP3_S1_RET5M", "path": "ml_pipeline_2/configs/rules/r1s_top3/r1s_top3_s1_ret5m.json"},
+    {"rule_id": "R1S_TOP3_S3_COMPOSITE", "path": "ml_pipeline_2/configs/rules/r1s_top3/r1s_top3_s3_composite.json"}
+  ],
+  "windows": [
+    {"name": "2020_aug_dec",  "start": "2020-08-03", "end": "2020-12-31"},
+    {"name": "2021_q1",       "start": "2021-01-01", "end": "2021-03-31"},
+    {"name": "2021_q2",       "start": "2021-04-01", "end": "2021-06-30"},
+    {"name": "2021_q3",       "start": "2021-07-01", "end": "2021-09-30"},
+    {"name": "2021_q4",       "start": "2021-10-01", "end": "2021-12-31"},
+    {"name": "2022_q1",       "start": "2022-01-01", "end": "2022-03-31"},
+    {"name": "2022_q2",       "start": "2022-04-01", "end": "2022-06-30"},
+    {"name": "2022_q3",       "start": "2022-07-01", "end": "2022-09-30"},
+    {"name": "2022_q4",       "start": "2022-10-01", "end": "2022-12-31"},
+    {"name": "2023_q1",       "start": "2023-01-01", "end": "2023-03-31"},
+    {"name": "2023_q2",       "start": "2023-04-01", "end": "2023-06-30"},
+    {"name": "2023_q3",       "start": "2023-07-01", "end": "2023-09-30"},
+    {"name": "2023_q4",       "start": "2023-10-01", "end": "2023-12-31"},
+    {"name": "2024_q1",       "start": "2024-01-01", "end": "2024-03-31"},
+    {"name": "2024_q2",       "start": "2024-04-01", "end": "2024-06-30"},
+    {"name": "2024_q3",       "start": "2024-07-01", "end": "2024-09-30"},
+    {"name": "2024_oct",      "start": "2024-10-01", "end": "2024-10-31"},
+    {"name": "2024_may_jul",  "start": "2024-05-01", "end": "2024-07-31"},
+    {"name": "2024_aug_oct",  "start": "2024-08-01", "end": "2024-10-31"}
+  ],
+  "exit_modes": ["mechanical"],
+  "audit_thresholds": {
+    "min_trades": 20,
+    "max_trades": 200,
+    "min_win_rate": 0.40,
+    "t_min": 2.0,
+    "ci_must_exclude_zero": true,
+    "outlier_survival_must_be_nonneg": true
+  }
+}

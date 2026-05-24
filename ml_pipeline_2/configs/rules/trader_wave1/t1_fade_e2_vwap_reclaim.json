@@ -1,0 +1,25 @@
+{
+  "rule_id": "T1_FADE_E2_VWAP_RECLAIM",
+  "direction": "SELL_ATM_CE",
+  "entry_conditions": [
+    {"column": "ctx_opening_range_ready", "operator": "==", "value": 1},
+    {"column": "ctx_opening_range_breakout_down", "operator": "==", "value": 1},
+    {"column": "ret_5m", "operator": "<", "value": 0},
+    {"column": "vwap_distance", "operator": "<", "value": 0}
+  ],
+  "disqualifiers": [
+    {"column": "time_minute_of_day", "operator": "<", "value": 570},
+    {"column": "time_minute_of_day", "operator": ">", "value": 870},
+    {"column": "ctx_is_expiry_day", "operator": "==", "value": 1}
+  ],
+  "exit_mechanical": {
+    "stop_pct": 100,
+    "target_pct": 50,
+    "time_stop_minutes": 25,
+    "eod_force_close_minute": 920,
+    "underlying_stop_pct": 0.003,
+    "signal_exits": [
+      {"column": "vwap_distance", "operator": ">=", "value": 0}
+    ]
+  }
+}

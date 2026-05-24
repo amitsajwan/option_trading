@@ -1,0 +1,30 @@
+{
+  "rule_id": "R1S_TOP5_TRADER_EXITS",
+  "direction": "SELL_ATM_CE",
+  "max_trades_per_day": 5,
+  "trade_score": {
+    "mode": "columns",
+    "columns": ["ret_5m", "vwap_distance"],
+    "weights": [0.5, 0.5],
+    "abs": true
+  },
+  "entry_conditions": [
+    {"column": "ctx_opening_range_ready", "operator": "==", "value": 1},
+    {"column": "ctx_opening_range_breakout_down", "operator": "==", "value": 1},
+    {"column": "ret_5m", "operator": "<", "value": 0},
+    {"column": "vwap_distance", "operator": "<", "value": 0}
+  ],
+  "disqualifiers": [
+    {"column": "time_minute_of_day", "operator": "<", "value": 570},
+    {"column": "time_minute_of_day", "operator": ">", "value": 870},
+    {"column": "ctx_is_expiry_day", "operator": "==", "value": 1}
+  ],
+  "exit_mechanical": {
+    "stop_pct": 10,
+    "target_pct": 30,
+    "time_stop_minutes": 45,
+    "eod_force_close_minute": 920,
+    "trail_activation_pct": 15,
+    "trail_giveback_pct": 8
+  }
+}

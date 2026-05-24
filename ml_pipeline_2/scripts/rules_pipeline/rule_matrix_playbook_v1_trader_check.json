@@ -1,0 +1,26 @@
+{
+  "description": "Thesis (research) vs TRADER_V1 (15% premium stop + calm + thesis + trail). Aug-Oct + Sep-24 stress day.",
+  "rules": [
+    {
+      "rule_id": "PBV1_TOP3_THESIS",
+      "path": "ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_thesis.json"
+    },
+    {
+      "rule_id": "PBV1_TOP3_TRADER_V1",
+      "path": "ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_trader_v1.json"
+    }
+  ],
+  "windows": [
+    {"name": "aug_oct_2024", "start": "2024-08-01", "end": "2024-10-31"},
+    {"name": "sep24_day", "start": "2024-09-24", "end": "2024-09-24"}
+  ],
+  "exit_modes": ["mechanical"],
+  "audit_thresholds": {
+    "min_trades": 1,
+    "max_trades": 100000,
+    "min_win_rate": 0.0,
+    "t_min": 0.0,
+    "ci_must_exclude_zero": false,
+    "outlier_survival_must_be_nonneg": false
+  }
+}

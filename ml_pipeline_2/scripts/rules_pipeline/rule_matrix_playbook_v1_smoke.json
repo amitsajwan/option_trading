@@ -1,0 +1,38 @@
+{
+  "description": "Playbook v1 smoke — thesis exit (VWAP reclaim), trail, calm-day filter, quality entry vs R1S baseline.",
+  "rules": [
+    {
+      "rule_id": "R1S_TOP3_S3_COMPOSITE",
+      "path": "ml_pipeline_2/configs/rules/r1s_top3/r1s_top3_s3_composite.json"
+    },
+    {
+      "rule_id": "PBV1_TOP3_THESIS",
+      "path": "ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_thesis.json"
+    },
+    {
+      "rule_id": "PBV1_TOP3_THESIS_TRAIL",
+      "path": "ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_thesis_trail.json"
+    },
+    {
+      "rule_id": "PBV1_TOP3_CALM_THESIS",
+      "path": "ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_calm_thesis.json"
+    },
+    {
+      "rule_id": "PBV1_TOP3_QUALITY_THESIS",
+      "path": "ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_quality_thesis.json"
+    }
+  ],
+  "windows": [
+    {"name": "may_jul_2024", "start": "2024-05-01", "end": "2024-07-31"},
+    {"name": "aug_oct_2024", "start": "2024-08-01", "end": "2024-10-31"}
+  ],
+  "exit_modes": ["mechanical"],
+  "audit_thresholds": {
+    "min_trades": 30,
+    "max_trades": 100000,
+    "min_win_rate": 0.40,
+    "t_min": 2.0,
+    "ci_must_exclude_zero": true,
+    "outlier_survival_must_be_nonneg": true
+  }
+}
