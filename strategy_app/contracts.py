@@ -100,6 +100,11 @@ class PositionContext:
     # "shadow_score_crossed_zero": also require momentum has reversed (shadow score
     # in opposite direction to the trade) before firing the stagnant exit.
     stagnant_exit_condition: str = ""
+    thesis_fail_exit_bars: int = 0
+    thesis_fail_min_mfe_pct: float = 0.02
+    thesis_fail_pnl_pct: float = -0.08
+    early_stop_loss_bars: int = 0
+    early_stop_loss_pct: float = 0.0
     # Current shadow score — updated each manage bar by the engine so the tracker
     # can evaluate the shadow-crossed-zero condition without knowing how to compute it.
     current_shadow_score: float = 0.0
@@ -212,6 +217,11 @@ class TradeSignal:
     stagnant_exit_bars: int = 0
     stagnant_min_gain_pct: float = 0.05
     stagnant_exit_condition: str = ""
+    thesis_fail_exit_bars: int = 0
+    thesis_fail_min_mfe_pct: float = 0.02
+    thesis_fail_pnl_pct: float = -0.08
+    early_stop_loss_bars: int = 0
+    early_stop_loss_pct: float = 0.0
 
 
 class StrategyEngine(ABC):

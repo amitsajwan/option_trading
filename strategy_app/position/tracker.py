@@ -106,6 +106,12 @@ class PositionTracker:
         elif not has_playbook and position.underlying_stop_pct is not None and self._is_underlying_stop_hit(position, current_futures_price):
             exit_reason = ExitReason.STOP_LOSS
             exit_trigger = "underlying_stop"
+        elif not has_playbook and self._is_early_stop_hit(position):
+            exit_reason = ExitReason.STOP_LOSS
+            exit_trigger = "early_stop"
+        elif not has_playbook and self._is_thesis_fail_exit(position):
+            exit_reason = ExitReason.TIME_STOP
+            exit_trigger = "thesis_fail"
         elif not has_playbook and self._is_premium_stop_hit(position, current_premium):
             exit_reason = self._resolve_stop_exit_reason(position)
             exit_trigger = "premium_stop"
@@ -216,6 +222,33 @@ class PositionTracker:
         if position.stop_loss_pct <= 0:
             return False
         return self._signed_pnl_pct(position, current_premium) <= -float(position.stop_loss_pct)
+
+    @staticmethod
+    @staticmethod
+    def _is_early_stop_hit(position: PositionContext) -> bool:
+        bars = int(position.early_stop_loss_bars or 0)
+        stop_pct = float(position.early_stop_loss_pct or 0.0)
+        if bars <= 0 or stop_pct <= 0:
+            return False
+        if position.bars_held > bars:
+            return False
+        return position.pnl_pct <= -abs(stop_pct)
+
+    @staticmethod
+    def _is_thesis_fail_exit(position: PositionContext) -> bool:
+        """5m entry thesis: if no run within ~2 bars and already red, exit."""
+        bars = int(position.thesis_fail_exit_bars or 0)
+        if bars <= 0:
+            return False
+        if position.bars_held < bars:
+            return False
+        min_mfe = float(position.thesis_fail_min_mfe_pct or 0.02)
+        fail_pnl = float(position.thesis_fail_pnl_pct or -0.08)
+        if position.mfe_pct < min_mfe and position.pnl_pct <= fail_pnl:
+            return True
+        if position.mfe_pct < min_mfe and position.pnl_pct < 0:
+            return True
+        return False
 
     @staticmethod
     def _is_stagnant_exit(position: PositionContext) -> bool:

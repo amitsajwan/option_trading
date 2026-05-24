@@ -156,6 +156,17 @@ Unified host: [GCP_UNIFIED_VM.md](GCP_UNIFIED_VM.md).
 | Step ③ | Same exits/risk as `trader_master_v1` |
 | Patch | `ops/gcp/patch_trader_master_ml_entry_det_dir_env.sh` |
 
+### ML entry + direction consensus (`trader_master_ml_entry_consensus_v1`) — **recommended**
+
+| Item | Value |
+|------|--------|
+| Profile | `trader_master_ml_entry_consensus_v1` |
+| Step ① | `ML_ENTRY` timing only (`ML_ENTRY_DIRECTION_MODE=consensus`) |
+| Step ② | **Consensus** — ORB/OI/VWAP/rules + shadow + momentum + direction ML as **weak** vote; **veto** if CE/PE margin &lt; `DIRECTION_CONSENSUS_MIN_MARGIN` |
+| Step ③ | **ATM only** (`atm_strike_only`, `STRATEGY_STRIKE_MAX_OTM_STEPS=0`) |
+| Exits | **Fast thesis fail** — exit by bar 2 if MFE &lt; 2% and PnL ≤ −8%; **early stop** −12% within 2 bars |
+| Patch VM | `ops/gcp/patch_trader_master_ml_entry_consensus_env.sh` |
+
 ### ML entry + momentum / direction ML (`trader_master_ml_entry_v1`)
 
 | Item | Value |

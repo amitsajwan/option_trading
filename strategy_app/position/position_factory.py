@@ -115,4 +115,9 @@ class PositionFactory:
             stagnant_exit_bars=int(signal.stagnant_exit_bars),
             stagnant_min_gain_pct=float(signal.stagnant_min_gain_pct),
             stagnant_exit_condition=str(signal.stagnant_exit_condition or ""),
+            thesis_fail_exit_bars=int(signal.thesis_fail_exit_bars),
+            thesis_fail_min_mfe_pct=float(signal.thesis_fail_min_mfe_pct),
+            thesis_fail_pnl_pct=float(signal.thesis_fail_pnl_pct),
+            early_stop_loss_bars=int(signal.early_stop_loss_bars),
+            early_stop_loss_pct=float(signal.early_stop_loss_pct or 0.0),
         )

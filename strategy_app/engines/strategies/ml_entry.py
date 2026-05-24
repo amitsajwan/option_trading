@@ -170,10 +170,40 @@ class MlEntryStrategy(BaseStrategy):
             return None
         if entry_prob < self._min_prob:
             return None
-        direction, direction_source = _resolve_direction(snap)
-        if direction is None:
-            return None
-        premium = snap.atm_ce_close if direction == Direction.CE else snap.atm_pe_close
+
+        direction_mode = os.getenv("ML_ENTRY_DIRECTION_MODE", "bind").strip().lower()
+        raw_signals: dict[str, Any] = {
+            "entry_prob": round(entry_prob, 4),
+            "entry_threshold": self._min_prob,
+            "_entry_policy_mode": "bypass",
+        }
+
+        if direction_mode == "consensus":
+            hint_dir, hint_source = _resolve_direction(snap)
+            ce_prob: Optional[float] = None
+            dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "").strip()
+            if dir_path:
+                bundle = _load_dir_bundle(dir_path)
+                if bundle is not None and bundle.get("kind") == _DIRECTION_BUNDLE_KIND:
+                    ce_prob = predict_positive_class_prob(bundle, snap)
+            raw_signals.update(
+                {
+                    "_ml_entry_timing_only": True,
+                    "direction_source": "ml_entry_timing",
+                    "ml_direction_hint": hint_dir.value if hint_dir else None,
+                    "ml_direction_ce_prob": round(ce_prob, 4) if ce_prob is not None else None,
+                    "ml_direction_hint_source": hint_source,
+                }
+            )
+            direction = hint_dir or Direction.CE
+            premium = snap.atm_ce_close if direction == Direction.CE else snap.atm_pe_close
+        else:
+            direction, direction_source = _resolve_direction(snap)
+            if direction is None:
+                return None
+            raw_signals["direction_source"] = direction_source
+            premium = snap.atm_ce_close if direction == Direction.CE else snap.atm_pe_close
+
         return StrategyVote(
             strategy_name=self.name,
             snapshot_id=snap.snapshot_id,
@@ -183,16 +213,7 @@ class MlEntryStrategy(BaseStrategy):
             direction=direction,
             confidence=round(min(1.0, entry_prob), 3),
             reason=f"ml_entry: prob={entry_prob:.3f}>={self._min_prob:.2f}",
-            raw_signals={
-                "entry_prob": round(entry_prob, 4),
-                "entry_threshold": self._min_prob,
-                "direction_source": direction_source,
-                # ML_ENTRY owns its entry decision via the prob >= min_prob
-                # gate above; bypass the engine's secondary entry-policy check
-                # so the well-calibrated model signal isn't second-guessed by
-                # a policy that was tuned for a different label scheme.
-                "_entry_policy_mode": "bypass",
-            },
+            raw_signals=raw_signals,
             proposed_strike=snap.atm_strike,
             proposed_entry_premium=premium,
         )

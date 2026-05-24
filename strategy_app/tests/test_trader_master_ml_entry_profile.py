@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from strategy_app.engines.profiles import (
+    PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1,
     PROFILE_TRADER_MASTER_V1,
     build_run_metadata,
@@ -31,6 +32,15 @@ def test_ml_entry_shares_trader_master_exits_and_risk() -> None:
     assert exits == master_exits
     assert "ORB" in exits
     assert get_risk_config(PROFILE_TRADER_MASTER_ML_ENTRY_V1) == get_risk_config(PROFILE_TRADER_MASTER_V1)
+
+
+def test_consensus_profile_uses_rule_book_for_direction() -> None:
+    mapping = get_regime_entry_map(PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1)
+    assert "ML_ENTRY" in mapping["TRENDING"]
+    assert "ORB" in mapping["TRENDING"]
+    risk = get_risk_config(PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1)
+    assert risk.get("atm_strike_only") is True
+    assert risk.get("thesis_fail_exit_bars") == 2
 
 
 def test_ml_entry_router_materializes() -> None:

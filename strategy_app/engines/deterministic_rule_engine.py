@@ -45,12 +45,14 @@ from ..signals.decision_annotation import (
 )
 from ..policy.entry_policy import EntryPolicy, EntryPolicyDecision, LongOptionEntryPolicy, PolicyConfig
 from ..ml.direction_ml_policy import maybe_wrap_with_direction_ml
+from .direction_consensus import extract_ml_direction_hint, resolve_direction_consensus
 from .profiles import (
     PRODUCTION_DEFAULT_PROFILE_ID,
     PROFILE_DEBIT_MULTI_V1,
     PROFILE_R1S_TOP3_PAPER_V1,
     PROFILE_TRADER_MASTER_V1,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1,
+    PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1,
     PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1,
     get_risk_config,
 )
@@ -65,12 +67,17 @@ _PROFILES_RELAX_REGIME_CONF = frozenset(
         PROFILE_TRADER_MASTER_V1,
         PROFILE_TRADER_MASTER_ML_ENTRY_V1,
         PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1,
+        PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1,
     }
 )
 
 _PROFILES_ML_ENTRY_DET_DIRECTION = frozenset({
     PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1,
-    PROFILE_TRADER_MASTER_ML_ENTRY_V1,
+    PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1,
+})
+
+_PROFILES_ML_ENTRY_CONSENSUS = frozenset({
+    PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1,
 })
 from ..market.regime import RegimeClassifier, RegimeSignal
 from ..market.snapshot_accessor import SnapshotAccessor
@@ -635,6 +642,14 @@ class DeterministicRuleEngine(StrategyEngine):
             return None
         entry_votes = vote_pool
 
+        if self._strategy_profile_id in _PROFILES_ML_ENTRY_CONSENSUS:
+            return self._process_entry_consensus(
+                entry_votes=entry_votes,
+                snap=snap,
+                risk=risk,
+                regime_signal=regime_signal,
+            )
+
         ce_votes = [vote for vote in entry_votes if vote.direction == Direction.CE]
         pe_votes = [vote for vote in entry_votes if vote.direction == Direction.PE]
         has_direction_conflict = bool(ce_votes and pe_votes)
@@ -702,6 +717,116 @@ class DeterministicRuleEngine(StrategyEngine):
             return self._build_entry_signal(candidate, snap, risk, entry_votes, regime_signal, policy_decision)
         return None
 
+    def _process_entry_consensus(
+        self,
+        *,
+        entry_votes: list[StrategyVote],
+        snap: SnapshotAccessor,
+        risk: RiskContext,
+        regime_signal: RegimeSignal,
+    ) -> Optional[TradeSignal]:
+        ml_votes = [v for v in entry_votes if v.strategy_name == "ML_ENTRY"]
+        if not ml_votes:
+            logger.debug("consensus entry blocked: no ML_ENTRY timing vote")
+            return None
+        ml_vote = max(ml_votes, key=lambda v: float(v.confidence or 0))
+        if ml_vote.confidence < self._min_confidence:
+            return None
+
+        shadow_dir, shadow_basis, shadow_score = self._shadow_direction_from_snapshot(snap)
+        hint_dir, ce_prob = extract_ml_direction_hint(ml_vote)
+        rule_votes = [
+            v
+            for v in entry_votes
+            if v.strategy_name != "ML_ENTRY" and v.direction in (Direction.CE, Direction.PE)
+        ]
+        consensus = resolve_direction_consensus(
+            snap=snap,
+            rule_votes=rule_votes,
+            shadow_direction=shadow_dir,
+            shadow_score=shadow_score,
+            ml_direction_hint=hint_dir,
+            ml_ce_prob=ce_prob,
+        )
+        if consensus.vetoed or consensus.direction is None:
+            logger.debug(
+                "consensus direction vetoed reason=%s ce=%.2f pe=%.2f margin=%.2f",
+                consensus.veto_reason,
+                consensus.ce_score,
+                consensus.pe_score,
+                consensus.margin,
+            )
+            return None
+
+        trade_vote = StrategyVote(
+            strategy_name=ml_vote.strategy_name,
+            snapshot_id=ml_vote.snapshot_id,
+            timestamp=ml_vote.timestamp,
+            trade_date=ml_vote.trade_date,
+            signal_type=SignalType.ENTRY,
+            direction=consensus.direction,
+            confidence=ml_vote.confidence,
+            reason=f"ml_entry+consensus: {consensus.direction.value} margin={consensus.margin:.2f}",
+            raw_signals={
+                **(ml_vote.raw_signals if isinstance(ml_vote.raw_signals, dict) else {}),
+                "direction_source": "direction_consensus",
+                "direction_consensus_ce": round(consensus.ce_score, 3),
+                "direction_consensus_pe": round(consensus.pe_score, 3),
+                "direction_consensus_margin": round(consensus.margin, 3),
+                "direction_consensus_shadow_basis": shadow_basis,
+                "_entry_policy_mode": "bypass",
+            },
+            proposed_strike=snap.atm_strike,
+            proposed_entry_premium=(
+                snap.atm_ce_close
+                if consensus.direction == Direction.CE
+                else snap.atm_pe_close
+            ),
+        )
+        if self._run_risk_config.atm_strike_only:
+            trade_vote = self._force_atm_strike(trade_vote, snap)
+
+        if (
+            self._strategy_profile_id not in _PROFILES_RELAX_REGIME_CONF
+            and regime_signal.confidence < 0.60
+        ):
+            return None
+        if not snap.is_valid_entry_phase or self._risk.is_paused:
+            return None
+
+        self._apply_strike_selection(trade_vote, snap)
+        if self._run_risk_config.atm_strike_only and not self._is_atm_strike(snap, trade_vote):
+            logger.debug("consensus entry blocked: OTM strike policy")
+            return None
+
+        policy_decision = self._evaluate_entry_policy(trade_vote, snap, regime_signal, risk)
+        self._annotate_policy(trade_vote, policy_decision)
+        self._annotate_vote_contract(trade_vote)
+        if not policy_decision.allowed:
+            return None
+        return self._build_entry_signal(
+            trade_vote, snap, risk, entry_votes, regime_signal, policy_decision
+        )
+
+    @staticmethod
+    def _force_atm_strike(vote: StrategyVote, snap: SnapshotAccessor) -> StrategyVote:
+        atm = snap.atm_strike
+        if atm is None or int(atm) <= 0 or vote.direction not in (Direction.CE, Direction.PE):
+            return vote
+        vote.proposed_strike = int(atm)
+        premium = snap.option_ltp(vote.direction.value, int(atm))
+        if premium is not None and premium > 0:
+            vote.proposed_entry_premium = float(premium)
+        vote.raw_signals["_strike_policy"] = "atm_only"
+        return vote
+
+    def _is_atm_strike(self, snap: SnapshotAccessor, vote: StrategyVote) -> bool:
+        atm = snap.atm_strike
+        strike = vote.proposed_strike
+        if atm is None or strike is None:
+            return False
+        return int(strike) == int(atm)
+
     @staticmethod
     def _resolve_direction_conflict_deterministic(entry_votes: list[StrategyVote]) -> list[StrategyVote]:
         ce_votes = [vote for vote in entry_votes if vote.direction == Direction.CE]
@@ -758,6 +883,11 @@ class DeterministicRuleEngine(StrategyEngine):
         if selected_strike is None or int(selected_strike) <= 0:
             return None
         selected_strike = int(selected_strike)
+        if self._run_risk_config.atm_strike_only:
+            atm = snap.atm_strike
+            if atm is None or int(selected_strike) != int(atm):
+                logger.debug("entry blocked: atm_strike_only policy strike=%s atm=%s", selected_strike, atm)
+                return None
 
         premium = best_vote.proposed_entry_premium
         if premium is None or premium <= 0:
@@ -830,6 +960,11 @@ class DeterministicRuleEngine(StrategyEngine):
             stagnant_exit_bars=cfg_underlying.stagnant_exit_bars,
             stagnant_min_gain_pct=cfg_underlying.stagnant_min_gain_pct,
             stagnant_exit_condition=str(cfg_underlying.stagnant_exit_condition or ""),
+            thesis_fail_exit_bars=cfg_underlying.thesis_fail_exit_bars,
+            thesis_fail_min_mfe_pct=cfg_underlying.thesis_fail_min_mfe_pct,
+            thesis_fail_pnl_pct=cfg_underlying.thesis_fail_pnl_pct,
+            early_stop_loss_bars=cfg_underlying.early_stop_loss_bars,
+            early_stop_loss_pct=float(cfg_underlying.early_stop_loss_pct or 0.0),
             playbook_exit_policy=playbook_metrics,
             trailing_enabled=(
                 False
@@ -1273,6 +1408,28 @@ class DeterministicRuleEngine(StrategyEngine):
             return "no_entry_votes"
         ce_votes = [vote for vote in entry_votes if vote.direction == Direction.CE]
         pe_votes = [vote for vote in entry_votes if vote.direction == Direction.PE]
+        if self._strategy_profile_id in _PROFILES_ML_ENTRY_CONSENSUS:
+            ml_votes = [v for v in entry_votes if v.strategy_name == "ML_ENTRY"]
+            if not ml_votes:
+                return "ml_timing_gate"
+            ml_vote = max(ml_votes, key=lambda v: float(v.confidence or 0))
+            shadow_dir, _, shadow_score = self._shadow_direction_from_snapshot(snap)
+            hint_dir, ce_prob = extract_ml_direction_hint(ml_vote)
+            rule_votes = [
+                v
+                for v in entry_votes
+                if v.strategy_name != "ML_ENTRY" and v.direction in (Direction.CE, Direction.PE)
+            ]
+            consensus = resolve_direction_consensus(
+                snap=snap,
+                rule_votes=rule_votes,
+                shadow_direction=shadow_dir,
+                shadow_score=shadow_score,
+                ml_direction_hint=hint_dir,
+                ml_ce_prob=ce_prob,
+            )
+            if consensus.vetoed or consensus.direction is None:
+                return f"direction_consensus:{consensus.veto_reason}"
         if ce_votes and pe_votes and not self._entry_policy_can_resolve_direction_conflict():
             return "direction_conflict"
         if (
@@ -1693,6 +1850,9 @@ class DeterministicRuleEngine(StrategyEngine):
 
     def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor) -> None:
         if bool(vote.raw_signals.get("_lock_strike_selection")):
+            return
+        if self._run_risk_config.atm_strike_only:
+            vote = self._force_atm_strike(vote, snap)
             return
         if self._strike_policy != "oi_volume_ranked":
             return

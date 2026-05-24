@@ -18,6 +18,8 @@ PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1 = "trader_master_ml_entry_det_dir_v1"
 PROFILE_TRADER_MASTER_ML_ENTRY_V1_DYN_EXIT = "trader_master_ml_entry_v1_dyn_exit"
 PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20 = "trader_master_ml_entry_v1_stagnant_20"
 PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20_DYN_EXIT = "trader_master_ml_entry_v1_stagnant_20_dyn_exit"
+# ML timing + rule/shadow/momentum direction consensus; veto if unclear; ATM-only; fast thesis-fail exit.
+PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1 = "trader_master_ml_entry_consensus_v1"
 
 PRODUCTION_DEFAULT_PROFILE_ID = PROFILE_DET_PROD_V1
 
@@ -184,6 +186,18 @@ _TRADER_MASTER_STAGNANT_20_DYN_EXIT_RISK_CONFIG: dict[str, Any] = {
     "stagnant_exit_condition": "shadow_score_crossed_zero",
 }
 
+# Consensus direction: ML_ENTRY = timing only; exit fast when 5m thesis fails in first ~2 bars.
+_TRADER_MASTER_ML_ENTRY_CONSENSUS_RISK_CONFIG: dict[str, Any] = {
+    **_TRADER_MASTER_RISK_CONFIG,
+    "underlying_stop_pct": 0.0015,
+    "thesis_fail_exit_bars": 2,
+    "thesis_fail_min_mfe_pct": 0.02,
+    "thesis_fail_pnl_pct": -0.08,
+    "early_stop_loss_bars": 2,
+    "early_stop_loss_pct": 0.12,
+    "atm_strike_only": True,
+}
+
 # Same exit/risk book as trader_master; entry is ML_ENTRY only (+ IV_FILTER veto).
 _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP: dict[str, list[str]] = {
     regime: ["IV_FILTER", "ML_ENTRY"]
@@ -289,6 +303,7 @@ _PROFILE_REGIME_ENTRY_MAPS: dict[str, dict[str, list[str]]] = {
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_DYN_EXIT: _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20: _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20_DYN_EXIT: _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP,
+    PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1: _TRADER_MASTER_ML_ENTRY_DET_DIR_REGIME_ENTRY_MAP,
 }
 
 _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
@@ -305,6 +320,7 @@ _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_DYN_EXIT: list(_TRADER_MASTER_EXIT_STRATEGIES),
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20: list(_TRADER_MASTER_EXIT_STRATEGIES),
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20_DYN_EXIT: list(_TRADER_MASTER_EXIT_STRATEGIES),
+    PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1: list(_TRADER_MASTER_EXIT_STRATEGIES),
 }
 
 _PROFILE_RISK_CONFIGS: dict[str, dict[str, Any]] = {
@@ -320,6 +336,7 @@ _PROFILE_RISK_CONFIGS: dict[str, dict[str, Any]] = {
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_DYN_EXIT: _TRADER_MASTER_DYN_EXIT_RISK_CONFIG,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20: _TRADER_MASTER_STAGNANT_20_RISK_CONFIG,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20_DYN_EXIT: _TRADER_MASTER_STAGNANT_20_DYN_EXIT_RISK_CONFIG,
+    PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1: _TRADER_MASTER_ML_ENTRY_CONSENSUS_RISK_CONFIG,
 }
 
 
@@ -373,6 +390,7 @@ __all__ = [
     "PROFILE_TRADER_MASTER_ML_ENTRY_V1_DYN_EXIT",
     "PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20",
     "PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20_DYN_EXIT",
+    "PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1",
     "build_router_config",
     "build_run_metadata",
     "get_exit_strategies",

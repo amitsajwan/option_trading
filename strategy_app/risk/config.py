@@ -72,6 +72,14 @@ class PositionRiskConfig:
     # this many BankNifty points. Set 0 to disable.
     orb_max_range_pts: float = 0.0
 
+    # Fast exit when ML 5m entry thesis fails early (bars ≈ minutes in replay).
+    thesis_fail_exit_bars: int = 0
+    thesis_fail_min_mfe_pct: float = 0.02
+    thesis_fail_pnl_pct: float = -0.08
+    early_stop_loss_bars: int = 0
+    early_stop_loss_pct: Optional[float] = None
+    atm_strike_only: bool = False
+
     @classmethod
     def from_payload(cls, payload: Any) -> "PositionRiskConfig":
         if not isinstance(payload, dict):
@@ -96,6 +104,12 @@ class PositionRiskConfig:
             stagnant_min_gain_pct=max(0.0, float(as_optional_float(payload.get("stagnant_min_gain_pct")) or 0.05)),
             stagnant_exit_condition=str(payload.get("stagnant_exit_condition") or ""),
             orb_max_range_pts=max(0.0, float(as_optional_float(payload.get("orb_max_range_pts")) or 0.0)),
+            thesis_fail_exit_bars=max(0, int(as_optional_float(payload.get("thesis_fail_exit_bars")) or 0)),
+            thesis_fail_min_mfe_pct=max(0.0, float(as_optional_float(payload.get("thesis_fail_min_mfe_pct")) or 0.02)),
+            thesis_fail_pnl_pct=float(as_optional_float(payload.get("thesis_fail_pnl_pct")) or -0.08),
+            early_stop_loss_bars=max(0, int(as_optional_float(payload.get("early_stop_loss_bars")) or 0)),
+            early_stop_loss_pct=as_optional_float(payload.get("early_stop_loss_pct")),
+            atm_strike_only=as_bool(payload.get("atm_strike_only"), default=False),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -116,4 +130,10 @@ class PositionRiskConfig:
             "stagnant_min_gain_pct": self.stagnant_min_gain_pct,
             "stagnant_exit_condition": self.stagnant_exit_condition,
             "orb_max_range_pts": self.orb_max_range_pts,
+            "thesis_fail_exit_bars": self.thesis_fail_exit_bars,
+            "thesis_fail_min_mfe_pct": self.thesis_fail_min_mfe_pct,
+            "thesis_fail_pnl_pct": self.thesis_fail_pnl_pct,
+            "early_stop_loss_bars": self.early_stop_loss_bars,
+            "early_stop_loss_pct": self.early_stop_loss_pct,
+            "atm_strike_only": self.atm_strike_only,
         }
