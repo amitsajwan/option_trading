@@ -95,7 +95,7 @@ These are observable market structure signals, not predicted outcomes. They prod
 | E3-S5 | Profile `trader_master_ml_entry_v1` | P1 | | **Done** | 5 |
 | E3-S6 | Dual direction model (CE + PE per-side) | P1 | ML | **Closed — ceiling** | 8 |
 | E4-S1 | Session trade cap pilot (8 → 10) | P3 | | **Backlog** | 3 |
-| E4-S2 | TIME_STOP / MFE giveback experiment | **P1** | Ops/GCP | **In Review** | 5 |
+| E4-S2 | TIME_STOP / MFE giveback experiment | **P1** | Ops/GCP | **In Progress** | 5 |
 | E4-S3 | Council exit layer (position re-eval) | P2 | Engine | **Backlog** | 8 |
 | E5-S1 | Failed-move trap signals in shadow scorer | **P1** | Engine | **In Review** | 5 |
 | E5-S2 | Intraday session regime classifier | P2 | ML | **Backlog** | 8 |
@@ -105,7 +105,7 @@ These are observable market structure signals, not predicted outcomes. They prod
 
 **Velocity (sprint 1):** 44 planned / 42 completed points  
 **Sprint 2 capacity:** E4-S2 (5) + E5-S1 (5) + E2-S6 close-out (3) = 13 points  
-**Sprint 2 velocity so far:** E4-S2 impl done (5) + E5-S1 impl done (5) = 10 pts — **replays pending**
+**Sprint 2 velocity so far:** E5-S1 impl done (5) = 5 pts · E4-S2 in progress (v2 fix applied, re-replay needed)
 
 ---
 
@@ -233,15 +233,15 @@ V1 profile removes TRADER_COMPOSITE/OI_UNWINDING `avoid_veto` conflicts. `avoid_
 
 Low priority. Current `session_trade_cap` blocker is not top-2. Revisit after E4-S2 shows exit quality improvement.
 
-### E4-S2 — TIME_STOP / MFE giveback experiment · In Review P1
+### E4-S2 — TIME_STOP / MFE giveback experiment · In Progress P1
 
 | | |
 |--|--|
-| **Status** | In Review — implementation done, replay pending |
+| **Status** | In Progress — v1 failed; v2 fix deployed, re-replay pending |
 | **Priority** | P1 |
 | **Owner** | Ops/GCP |
 | **Points** | 5 |
-| **Commit** | `c009a4e` — 2026-05-24 |
+| **Commits** | `c009a4e` v1 · `db80db5` v2 fix — 2026-05-24 |
 
 **User story:** As a trader, I want to stop giving back MFE at TIME_STOP so that winners reach their natural exit instead of being cut at a flat P&L.
 
@@ -260,12 +260,20 @@ Low priority. Current `session_trade_cap` blocker is not top-2. Revisit after E4
 - [ ] Target hits (TARGET_HIT + TRAILING_STOP at MFE ≥50%) increase
 - [ ] PF improvement ≥ 0.20 vs `3d1e2d1c` baseline on same Aug–Oct window
 
+**v1 replay result — FAIL (run `8c0b0ec0`, 2026-05-24, oos_primary May–Jul 2024):**
+- Trades: 36 · PF: **0.74** · Cap: -3.5% · TIME_STOP: 21 exits, wr=14%, avg=-6.5%
+- Root cause: held losing trades while shadow still agreed with direction → losses compounded
+- TRAILING_STOP good (10 trades, 100% WR, avg +10.6%) but masked by loser overhang
+
+**v2 fix (`db80db5`):** `_is_stagnant_exit` now exits immediately if `pnl_pct <= 0`; shadow gate only defers exit for profitable-but-stagnant trades.
+
 **Tasks**
-- [x] Implement `stagnant_exit_condition: shadow_score_crossed_zero` in risk config (`contracts.py`, `risk/config.py`, `tracker.py`, `profiles.py`)
-- [x] Add replay config variant: `dyn_exit` (`patch_trader_master_ml_entry_v1_dyn_exit_env.sh`, profile `trader_master_ml_entry_v1_dyn_exit`)
-- [ ] Run replay on Aug–Oct window: `sudo bash ops/gcp/run_engine_direction_ab.sh dyn_exit`
-- [ ] Compare exit reason distribution: TIME_STOP% before vs after
-- [ ] Run `ops/gcp/summarize_exit_reasons.py` on both runs
+- [x] Implement `stagnant_exit_condition: shadow_score_crossed_zero` in risk config
+- [x] Add replay config variant: `dyn_exit` (profile `trader_master_ml_entry_v1_dyn_exit`)
+- [x] Run v1 replay → FAIL; diagnose root cause
+- [x] Fix: add P&L floor — only defer exit when `pnl_pct > 0` (`db80db5`)
+- [ ] Re-run replay (v2): `git pull && sudo bash ops/gcp/run_engine_direction_ab.sh dyn_exit`
+- [ ] Accept: TIME_STOP% < 50%, PF ≥ +0.20 vs baseline, TIME_STOP avg P&L > 0
 
 **Quick experiment first (2 days):** Change `stagnant_exit_bars` from 12 → 20 (less aggressive). Does PF improve? This is a 30-min config change + replay.
 
@@ -504,6 +512,7 @@ All computable from `snapshot.market_data` fields already collected.
 | oos_v1_dir_ml | `ae5a86b7` | 2024-05→07 | **116** | **2.21** | **+12.3** | 0.69 | 1.42 | Partial | v1 + dir ML; CE PF <1 |
 | oos_v1_momentum | `0eda153a` | 2024-05→07 | 44 | 0.57 | -5.6 | 0.12 | 1.10 | Fail | A/B vs dir ML — dir ML wins |
 | _void_ R1/R2 | `0acd6aea`, `bbc85202` | — | 4–6 | — | — | — | — | Void | Wrong profile / stale env |
+| **dyn_exit_v1** | `8c0b0ec0` | 2024-05→07 | 36 | **0.74** | -3.5 | 1.06 | 0.43 | **Fail** | E4-S2 v1; held losers; TIME_STOP avg -6.5% |
 
 **Direction ML training log:**
 
@@ -535,6 +544,7 @@ All computable from `snapshot.market_data` fields already collected.
 | 2026-05-23 | — | E3-S1/S2/S5 done; E3-S3 A/B: dir ML wins; E2-S7 diagnose |
 | 2026-05-23 | ML | E3-S6 label fix (`min_abs_return` 0.003→0.001); VM HPO re-run |
 | 2026-05-24 | — | E3-S6 CE AUC 0.540 — direction ML ceiling confirmed; E3-S4 cancelled; E3-S6 closed; E4 ungated; Epic E5 added; Sprint 2 set |
+| 2026-05-24 | — | E4-S2 + E5-S1 implemented; E4-S2 v1 replay FAIL (PF 0.74, held losers); v2 P&L floor fix (`db80db5`); re-replay pending |
 
 ---
 
