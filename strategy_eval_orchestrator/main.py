@@ -186,7 +186,11 @@ def _replay_and_publish(
     frame["timestamp"] = frame.get("timestamp")
     frame = frame.sort_values("timestamp").reset_index(drop=True)
     total = int(len(frame))
-    sleep_sec = 0.0 if float(speed) <= 0 else (60.0 / float(speed))
+    emit_rate = float(speed)
+    if emit_rate <= 0:
+        # Never blast pub/sub at infinite rate — consumer cannot keep up (messages lost).
+        emit_rate = float(os.getenv("REPLAY_EMIT_SNAPS_PER_MIN", "2400"))
+    sleep_sec = 60.0 / max(1.0, emit_rate)
     emitted = 0
     last_pct = -1
     _ts_started = started_at or _utc_now()

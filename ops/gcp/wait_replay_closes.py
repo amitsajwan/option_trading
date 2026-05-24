@@ -53,25 +53,38 @@ def main() -> int:
     stable = 0
     poll = 0
 
+    completed_seen = False
+
     while time.time() < deadline:
         poll += 1
-        n = _count_closes(db, rid)
+        try:
+            n = _count_closes(db, rid)
+        except Exception as exc:
+            print(f"poll={poll} mongo_error={exc}", flush=True)
+            return 1
         status = _run_status(rid)
+        if status == "completed":
+            completed_seen = True
         print(f"poll={poll} status={status} closes={n}", flush=True)
 
-        if n >= args.min_closes and n == last:
-            stable += 1
-            if stable >= args.stable_polls:
-                print(f"ready closes={n} (stable {stable} polls)", flush=True)
-                return 0
-        else:
-            stable = 0
-
-        last = n
         if status in {"failed", "cancelled"}:
             print(f"run ended status={status} closes={n}", flush=True)
             return 1 if n < args.min_closes else 0
 
+        # After emission completes, wait for consumer to finish persisting closes.
+        if completed_seen or status == "completed":
+            if n == last:
+                stable += 1
+            else:
+                stable = 0
+            if n >= args.min_closes and stable >= args.stable_polls:
+                print(f"ready closes={n} (stable {stable} polls)", flush=True)
+                return 0
+            if stable >= args.stable_polls and n > 0:
+                print(f"ready closes={n} (stable, below min_closes={args.min_closes})", flush=True)
+                return 1
+
+        last = n
         time.sleep(args.poll_sec)
 
     print(f"timeout closes={last} min={args.min_closes}", flush=True)

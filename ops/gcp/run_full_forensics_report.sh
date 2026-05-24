@@ -82,7 +82,8 @@ sleep 20
 "${PY}" "${REPO}/ops/gcp/wait_historical_consumers.py" 240 || true
 "${PY}" "${REPO}/ops/gcp/preflight_historical_replay.py" >> "${REPORT_DIR}/latest_run.log" 2>&1 || true
 
-log "queue replay ${DATE_FROM} -> ${DATE_TO}"
+export REPLAY_EMIT_SNAPS_PER_MIN="${REPLAY_EMIT_SNAPS_PER_MIN:-2400}"
+log "queue replay ${DATE_FROM} -> ${DATE_TO} (emit_rate=${REPLAY_EMIT_SNAPS_PER_MIN}/min)"
 RID="$("${PY}" "${REPO}/ops/gcp/queue_replay.py" "${DATE_FROM}" "${DATE_TO}" | "${PY}" -c "
 import json,sys
 d=json.loads(sys.stdin.read())
@@ -94,22 +95,19 @@ if [ -z "${RID}" ]; then
 fi
 log "run_id=${RID}"
 
-log "waiting for replay completion (up to 3h)"
-for i in $(seq 1 360); do
-  STATUS="$("${PY}" -c "
+log "waiting for replay emission + consumer drain (up to 90m)"
+sudo docker cp "${REPO}/ops/gcp/wait_replay_closes.py" option_trading-dashboard-1:/tmp/wait_replay_closes.py 2>/dev/null || true
+if ! sudo docker exec -e MONGO_URL=mongodb://mongo:27017 option_trading-dashboard-1 \
+  python /tmp/wait_replay_closes.py "${RID}" --min-closes 400 --timeout-sec 5400 --stable-polls 8 \
+  >> "${REPORT_DIR}/latest_run.log" 2>&1; then
+  log "WARN: drain incomplete for ${RID}"
+fi
+STATUS="$("${PY}" -c "
 import json,urllib.request
 rid='${RID}'
 with urllib.request.urlopen(f'http://127.0.0.1:8008/api/strategy/evaluation/runs/{rid}',timeout=20) as r:
     print(json.load(r).get('status','').lower())
 ")"
-  if [ "${i}" -eq 1 ] || [ $((i % 10)) -eq 0 ]; then
-    log "  poll ${i}: status=${STATUS}"
-  fi
-  case "${STATUS}" in
-    completed|failed|cancelled) break ;;
-  esac
-  sleep 30
-done
 
 mv "${REPORT_FILE}" "${REPORT_DIR}/REPORT_${RID}.building.txt"
 REPORT_FILE="${REPORT_DIR}/REPORT_${RID}.txt"

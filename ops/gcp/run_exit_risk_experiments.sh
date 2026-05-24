@@ -69,24 +69,17 @@ run_one() {
     sudo bash "${extra_risk}" "${ENV_FILE}" >> "${log}" 2>&1
   fi
   wait_hist >> "${log}" 2>&1
+  export REPLAY_EMIT_SNAPS_PER_MIN="${REPLAY_EMIT_SNAPS_PER_MIN:-2400}"
   "${PY}" "${REPO}/ops/gcp/preflight_historical_replay.py" >> "${log}" 2>&1 || true
   RID="$("${PY}" "${REPO}/ops/gcp/queue_replay.py" "${DATE_FROM}" "${DATE_TO}" | "${PY}" -c "
 import json,sys
 print(json.loads(sys.stdin.read()).get('run_id',''))
 ")"
-  log "queued ${tag} run_id=${RID}"
-  for i in $(seq 1 120); do
-    st="$("${PY}" -c "
-import json,urllib.request
-with urllib.request.urlopen('http://127.0.0.1:8008/api/strategy/evaluation/runs/${RID}',timeout=20) as r:
-    print(json.load(r).get('status','').lower())
-")"
-    [ "$((i % 4))" -eq 0 ] && log "  emit wait poll=${i} status=${st}"
-    case "${st}" in completed|failed|cancelled) break ;; esac
-    sleep 30
-  done
-  log "waiting consumer drain for ${RID}"
-  if ! "${PY}" "${REPO}/ops/gcp/wait_replay_closes.py" "${RID}" --min-closes 400 --timeout-sec 2400 >> "${log}" 2>&1; then
+  log "queued ${tag} run_id=${RID} emit_rate=${REPLAY_EMIT_SNAPS_PER_MIN}/min — waiting emission+drain"
+  sudo docker cp "${REPO}/ops/gcp/wait_replay_closes.py" option_trading-dashboard-1:/tmp/wait_replay_closes.py
+  if ! sudo docker exec -e MONGO_URL=mongodb://mongo:27017 option_trading-dashboard-1 \
+    python /tmp/wait_replay_closes.py "${RID}" --min-closes 400 --timeout-sec 5400 --stable-polls 8 \
+    >> "${log}" 2>&1; then
     log "WARN: drain incomplete for ${RID} — analyzing anyway"
   fi
   analyze "${tag}" "${RID}"
