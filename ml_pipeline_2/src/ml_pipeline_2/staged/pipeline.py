@@ -3559,6 +3559,10 @@ def _direction_only_trade_rows(
 ) -> pd.DataFrame:
     merged = _merge_policy_inputs(utility, stage2_scores)
     if len(merged) == 0:
+        merged = merged.copy()
+        merged["selected_return"] = pd.Series(dtype=float)
+        merged["selected_side"] = pd.Series(dtype=object)
+        merged["selected_recipe"] = pd.Series(dtype=object)
         return merged
     rows_total = len(merged)
     entry_probs = np.ones(rows_total, dtype=float)
@@ -3578,10 +3582,13 @@ def _direction_only_trade_rows(
         empty = merged.loc[[]].copy()
         empty["selected_side"] = pd.Series(dtype=object)
         empty["selected_return"] = pd.Series(dtype=float)
+        empty["selected_recipe"] = pd.Series(dtype=object)
         return empty
     selected = merged.loc[trade_mask].copy()
     selected["selected_side"] = np.where(ce_mask[trade_mask], "CE", "PE")
     selected["selected_return"] = np.where(ce_mask[trade_mask], ce_returns[trade_mask], pe_returns[trade_mask])
+    # Direction-only bypasses stage3; scenario reports require a recipe column.
+    selected["selected_recipe"] = str(stage2_policy.get("selected_recipe_id") or "L0")
     return selected
 
 

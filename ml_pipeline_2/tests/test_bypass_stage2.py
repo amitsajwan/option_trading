@@ -294,5 +294,51 @@ def test_evaluate_direction_only_holdout() -> None:
     assert float(summary["profit_factor"]) > 0.0
 
 
+def test_direction_only_trade_rows_include_selected_recipe() -> None:
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from ml_pipeline_2.staged.pipeline import _direction_only_trade_rows, _scenario_reports
+
+    utility = pd.DataFrame(
+        {
+            "trade_date": ["2024-01-01", "2024-01-01"],
+            "timestamp": [1000, 1001],
+            "snapshot_id": ["a", "b"],
+            "best_ce_net_return_after_cost": [0.02, -0.01],
+            "best_pe_net_return_after_cost": [-0.01, 0.02],
+            "ctx_regime_trend_up": [1.0, 0.0],
+            "ctx_regime_trend_down": [0.0, 1.0],
+            "ctx_regime_sideways": [0.0, 0.0],
+            "ctx_regime_volatile": [0.0, 0.0],
+            "ctx_regime_pre_expiry": [0.0, 0.0],
+        }
+    )
+    stage2_scores = pd.DataFrame(
+        {
+            "trade_date": utility["trade_date"],
+            "timestamp": utility["timestamp"],
+            "snapshot_id": utility["snapshot_id"],
+            "direction_up_prob": [0.7, 0.3],
+        }
+    )
+    stage2_policy = {
+        "selected_ce_threshold": 0.55,
+        "selected_pe_threshold": 0.55,
+        "selected_min_edge": 0.02,
+        "selected_recipe_id": "L0",
+    }
+    trade_rows = _direction_only_trade_rows(utility, stage2_scores, stage2_policy)
+    assert "selected_recipe" in trade_rows.columns
+    if len(trade_rows) > 0:
+        assert trade_rows.iloc[0]["selected_recipe"] == "L0"
+    # Must not raise KeyError in scenario reporting path.
+    _scenario_reports(
+        base_frame=utility,
+        trade_rows=trade_rows,
+        evaluation_mode="direction_only_holdout",
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
