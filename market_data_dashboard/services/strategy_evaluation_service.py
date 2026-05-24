@@ -312,11 +312,68 @@ class StrategyEvaluationService:
             "requested_range": {"date_from": str(date_from), "date_to": str(date_to)},
         }
 
-    def get_run(self, run_id: str) -> Optional[dict[str, Any]]:
-        doc = self._db()[self._runs_collection_name()].find_one({"run_id": str(run_id)}, {"_id": 0})
-        if not isinstance(doc, dict):
+    def _discover_run_from_positions(
+        self, run_id: str, *, dataset: str = "historical"
+    ) -> Optional[dict[str, Any]]:
+        """Build a run summary from persisted trades when no registry row exists."""
+        rid = str(run_id or "").strip()
+        if not rid:
             return None
-        return doc
+        mode = str(dataset or "historical").strip().lower()
+        if mode != "historical":
+            return None
+        names = self._collection_names(mode)
+        try:
+            rows = list(
+                self._db()[names["positions"]].aggregate(
+                    [
+                        {"$match": {"run_id": rid}},
+                        {
+                            "$group": {
+                                "_id": "$run_id",
+                                "min_date": {"$min": "$trade_date_ist"},
+                                "max_date": {"$max": "$trade_date_ist"},
+                                "count": {
+                                    "$sum": {
+                                        "$cond": [{"$eq": ["$event", "POSITION_CLOSE"]}, 1, 0]
+                                    }
+                                },
+                            }
+                        },
+                    ],
+                    allowDiskUse=True,
+                )
+            )
+        except Exception:
+            return None
+        if not rows:
+            return None
+        row = rows[0]
+        trade_count = int(row.get("count") or 0)
+        if trade_count <= 0:
+            return None
+        doc = {
+            "run_id": rid,
+            "dataset": mode,
+            "status": "completed",
+            "date_from": str(row.get("min_date") or ""),
+            "date_to": str(row.get("max_date") or ""),
+            "trade_count": trade_count,
+            "signal_count": 0,
+            "vote_count": 0,
+            "submitted_at": None,
+            "discovered": True,
+        }
+        return self.enrich_run_metadata(doc, dataset=mode)
+
+    def get_run(self, run_id: str) -> Optional[dict[str, Any]]:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        doc = self._db()[self._runs_collection_name()].find_one({"run_id": rid}, {"_id": 0})
+        if isinstance(doc, dict):
+            return self.enrich_run_metadata(doc)
+        return self._discover_run_from_positions(rid)
 
     def _strategy_profile_ids_for_runs(self, run_ids: list[str], dataset: str) -> dict[str, str]:
         """Map run_id -> strategy_profile_id from persisted positions (then votes)."""

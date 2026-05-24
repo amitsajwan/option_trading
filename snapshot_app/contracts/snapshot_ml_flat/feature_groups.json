@@ -161,6 +161,17 @@
         "vol_spike_ratio"
       ]
     },
+    "daily_regime": {
+      "label": "Daily macro regime (prior-day, no lookahead)",
+      "columns": [
+        "regime_rv20",
+        "regime_dist_sma20",
+        "regime_sma20_slope",
+        "regime_60d_return",
+        "regime_vix_close",
+        "regime_vix_high"
+      ]
+    },
     "morning_context": {
       "label": "Morning Session Summary (Sprint v1)",
       "columns": [

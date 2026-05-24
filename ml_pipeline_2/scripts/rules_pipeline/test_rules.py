@@ -154,6 +154,27 @@ class TestGenerateSignals:
         result = generate_signals(df, rule)
         assert result.tolist() == [False, False, True, False]
 
+    def test_regime_disqualifiers(self):
+        df = pd.DataFrame(
+            {
+                "a": [3, 3, 3, 3],
+                "regime_rv20": [0.15, 0.25, 0.15, 0.15],
+                "regime_sma20_slope": [0.01, 0.01, -0.01, 0.01],
+            }
+        )
+        rule = Rule(
+            rule_id="T_REGIME",
+            direction="SELL_ATM_CE",
+            entry_conditions=(Condition("a", ">", 2),),
+            disqualifiers=(
+                Condition("regime_rv20", ">", 0.20),
+                Condition("regime_sma20_slope", "<=", 0),
+            ),
+            exit_mechanical=ExitConfig(100, 50, 20, 920),
+        )
+        result = generate_signals(df, rule)
+        assert result.tolist() == [True, False, False, True]
+
     def test_all_disqualified(self):
         df = pd.DataFrame({"a": [1, 2, 3], "b": [1, 1, 1]})
         rule = Rule(
@@ -447,3 +468,88 @@ class TestExecutionSim:
         assert trades.iloc[0]["exit_reason"] == "eod_force"
         assert int(trades.iloc[0]["exit_minute"]) == 557
         assert float(trades.iloc[0]["exit_premium"]) == 102.0
+
+    def test_disqualifier_all_of_blocks_real_break(self):
+        df = pd.DataFrame(
+            {
+                "ctx_opening_range_ready": [1, 1],
+                "ctx_opening_range_breakout_down": [1, 1],
+                "ret_5m": [-0.001, -0.001],
+                "vwap_distance": [-0.001, -0.001],
+                "vel_price_delta_30m": [0.5, float("nan")],
+                "pcr_change_5m": [0.01, 0.0],
+            }
+        )
+        rule = Rule(
+            rule_id="T2",
+            direction="SELL_ATM_CE",
+            entry_conditions=(
+                Condition("ctx_opening_range_ready", "==", 1),
+                Condition("ctx_opening_range_breakout_down", "==", 1),
+            ),
+            disqualifiers=(),
+            disqualifier_all_of=(
+                (
+                    Condition("vel_price_delta_30m", ">", 0),
+                    Condition("pcr_change_5m", ">", 0),
+                ),
+            ),
+            exit_mechanical=ExitConfig(100, 50, 20, 920),
+        )
+        result = generate_signals(df, rule)
+        assert result.tolist() == [False, True]
+
+    def test_short_trail_stop_after_mfe(self):
+        from ml_pipeline_2.scripts.rules_pipeline.execution_sim import simulate_trades
+
+        # Short CE: premium drop = profit; rise = loss
+        df = _build_one_day_df(
+            minutes=list(range(600, 610)),
+            ce_closes=[100, 70, 55, 80, 85, 85, 85, 85, 85, 85],
+            extra_cols={"px_fut_close": [100.0] * 10},
+        )
+        df.loc[0, "signal"] = True
+        rule = Rule(
+            rule_id="T1_E3",
+            direction="SELL_ATM_CE",
+            entry_conditions=(Condition("ce_close", ">", 0),),
+            disqualifiers=(),
+            exit_mechanical=ExitConfig(
+                stop_pct=100,
+                target_pct=99,
+                time_stop_minutes=999,
+                eod_force_close_minute=999,
+                trail_activation_pct=30,
+                trail_giveback_pct=25,
+            ),
+        )
+        trades = simulate_trades(df, rule, exit_mode="mechanical")
+        assert len(trades) == 1
+        assert trades.iloc[0]["exit_reason"] == "trail_stop"
+
+    def test_short_underlying_stop(self):
+        from ml_pipeline_2.scripts.rules_pipeline.execution_sim import simulate_trades
+
+        fut = [100.0, 100.2, 100.5, 100.6, 100.7, 100.8, 100.9, 101.0, 101.1, 101.2]
+        df = _build_one_day_df(
+            minutes=list(range(600, 610)),
+            ce_closes=[100] * 10,
+            extra_cols={"px_fut_close": fut},
+        )
+        df.loc[0, "signal"] = True
+        rule = Rule(
+            rule_id="T1_E2",
+            direction="SELL_ATM_CE",
+            entry_conditions=(Condition("ce_close", ">", 0),),
+            disqualifiers=(),
+            exit_mechanical=ExitConfig(
+                stop_pct=100,
+                target_pct=99,
+                time_stop_minutes=999,
+                eod_force_close_minute=999,
+                underlying_stop_pct=0.003,
+            ),
+        )
+        trades = simulate_trades(df, rule, exit_mode="mechanical")
+        assert len(trades) == 1
+        assert trades.iloc[0]["exit_reason"] == "underlying_stop"

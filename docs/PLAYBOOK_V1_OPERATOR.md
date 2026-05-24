@@ -4,17 +4,21 @@
 
 | Item | Value |
 |------|--------|
-| **Research default** | `PBV1_TOP3_THESIS` (`pbv1_top3_thesis.json`) |
-| **Paper / runtime profile** | `playbook_v1_paper_v1` |
-| **Strategy name in logs** | `PBV1_TOP3_THESIS` |
-| **Next experiment (risk)** | `PBV1_TOP3_PRODUCTION_V1` — calm days + 50% premium stop + trail |
+| **Research default** | `PBV1_TOP3_THESIS` (`pbv1_top3_thesis.json`) — no tight premium cap |
+| **Paper candidate (hard + smart)** | `PBV1_TOP3_TRADER_V1` (`pbv1_top3_trader_v1.json`) — 15% premium stop, calm, thesis, trail |
+| **Runtime profile** | `playbook_v1_paper_v1` |
+| **Strategy name in logs** | `PBV1_TOP3_THESIS` (strategy id; rule id is in vote reason text) |
+| **Experiment** | `PBV1_TOP3_PRODUCTION_V1` — 50% premium stop |
 
 ```bash
 # Default thesis (research parity)
 PLAYBOOK_V1_RULE_PATH=/app/ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_thesis.json
 
-# Production experiment (calm + disaster cap)
-PLAYBOOK_V1_RULE_PATH=/app/ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_production_v1.json
+# Paper candidate — hard 15% premium stop + calm + thesis + trail
+PLAYBOOK_V1_RULE_PATH=/app/ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_trader_v1.json
+
+# Production experiment (calm + 50% premium cap)
+# PLAYBOOK_V1_RULE_PATH=/app/ml_pipeline_2/configs/rules/playbook_v1/pbv1_top3_production_v1.json
 ```
 
 ## Deploy checklist (runtime VM)

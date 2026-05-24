@@ -11,9 +11,13 @@ Run on the ML VM:
 """
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
+from typing import List, Optional
 
 import pandas as pd
+
+from ml_pipeline_2.scripts.feature_builder.regime_daily import ALL_REGIME_COLUMNS, resolve_parquet_root
 
 # (window_name, start, end, R1S baseline verdict)
 # verdict from r1s_history leaderboard:
@@ -40,8 +44,8 @@ WINDOWS = [
     ("2024_oct",     "2024-10-01", "2024-10-31", "FAIL-"),
 ]
 
-# Vol / regime features candidate for the filter
-FEATURES = [
+# Intraday vol / regime (per-minute)
+INTRADAY_FEATURES = [
     "osc_atr_14",
     "osc_atr_ratio",
     "osc_atr_percentile",
@@ -54,16 +58,22 @@ FEATURES = [
     "ctx_regime_trend_down",
 ]
 
-FLAT_ROOT = Path("/opt/option_trading/.data/ml_pipeline/parquet_data/snapshots_ml_flat_v3")
+DAILY_REGIME_FEATURES = list(ALL_REGIME_COLUMNS)
+
+FEATURES: List[str] = INTRADAY_FEATURES + DAILY_REGIME_FEATURES
 
 
-def _load_quarter(start: str, end: str) -> pd.DataFrame:
+def _flat_root(explicit: Optional[str] = None) -> Path:
+    return resolve_parquet_root(explicit) / "snapshots_ml_flat_v3"
+
+
+def _load_quarter(flat_root: Path, start: str, end: str) -> pd.DataFrame:
     start_ts = pd.Timestamp(start)
     end_ts = pd.Timestamp(end)
     years = set(range(start_ts.year, end_ts.year + 1))
     frames = []
     for y in sorted(years):
-        for f in sorted(FLAT_ROOT.glob(f"year={y}/*.parquet")):
+        for f in sorted(flat_root.glob(f"year={y}/*.parquet")):
             df = pd.read_parquet(f, columns=["trade_date"] + FEATURES)
             df["trade_date"] = pd.to_datetime(df["trade_date"])
             mask = (df["trade_date"] >= start_ts) & (df["trade_date"] <= end_ts)
@@ -74,10 +84,18 @@ def _load_quarter(start: str, end: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def main() -> None:
+def main(argv: Optional[List[str]] = None) -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--parquet-root", default=None, help="parquet_data root")
+    args = p.parse_args(argv)
+
+    flat_root = _flat_root(args.parquet_root)
+    if not flat_root.exists():
+        raise SystemExit(f"flat v3 not found: {flat_root}")
+
     rows = []
     for name, start, end, verdict in WINDOWS:
-        df = _load_quarter(start, end)
+        df = _load_quarter(flat_root, start, end)
         if df.empty:
             print(f"{name}: empty")
             continue
@@ -109,6 +127,12 @@ def main() -> None:
     print("=== group means (PASS vs FAIL-) ===")
     grp = out.groupby("verdict")[FEATURES].mean(numeric_only=True).round(4)
     print(grp.to_string())
+
+    if DAILY_REGIME_FEATURES[0] in out.columns and out[DAILY_REGIME_FEATURES[0]].notna().any():
+        print()
+        print("=== daily regime: PASS vs FAIL- (window medians) ===")
+        sub = out[out["verdict"].isin(["PASS", "FAIL-"])][["verdict"] + DAILY_REGIME_FEATURES]
+        print(sub.groupby("verdict")[DAILY_REGIME_FEATURES].median(numeric_only=True).round(4).to_string())
 
 
 if __name__ == "__main__":

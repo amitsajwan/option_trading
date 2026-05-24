@@ -1,27 +1,18 @@
 ---
 name: gcp-vm-deploy
-description: Deploy this option trading project to local Google Cloud Compute Engine VMs using gcloud SSH/SCP. Use when user asks to deploy to ML or runtime VM, redeploy code, restart services, verify VM health, or run remote commands on GCP.
+description: Deploy this option trading project to Google Cloud Compute Engine VMs using gcloud SSH and git pull (no SCP for source). Use for unified VM, legacy ML/runtime VMs, deploy, restart, verify health, or remote training jobs.
 ---
 
 # GCP VM Deploy Skill
 
-Use this skill when the user asks to deploy, redeploy, restart, verify, or check this project on Google Cloud VM.
+Use this skill when the user asks to deploy, redeploy, restart, verify, or run jobs on GCP.
 
 ## GCP project
 
-Project ID:
-
 ```txt
-algo-trading-496203
+Project: algo-trading-496203
+Zone:    asia-south1-b
 ```
-
-Default zone:
-
-```txt
-asia-south1-b
-```
-
-Set once per operator session (from repo root):
 
 ```bash
 export PROJECT_ID=algo-trading-496203
@@ -30,281 +21,155 @@ gcloud config set project "${PROJECT_ID}"
 gcloud config set compute/zone "${ZONE}"
 ```
 
-## Deployment targets
+## Deployment target (preferred: unified)
 
-### ML target
+**One VM for runtime + ML** — see [docs/GCP_UNIFIED_VM.md](../../docs/GCP_UNIFIED_VM.md).
 
-Use for:
+| Field | Value |
+|-------|--------|
+| VM name | `option-trading-01` (target) or keep `option-trading-runtime-01` after merge |
+| Machine type | **`e2-highmem-16`** (16 vCPU, 128 GB) — trial-friendly in `asia-south1-b` |
+| Checkout | `/opt/option_trading` |
+| Fallback type | `e2-standard-16` (64 GB) if highmem unavailable |
 
-- research
-- backtesting
-- historical data processing
-- model development
-- experiments
-- heavy compute jobs
+**Do not** run heavy ML (oracle/HPO) during live market hours on the same host without stopping extra compose profiles or explicit user approval.
 
-VM:
+### Legacy dual-VM (until merged)
 
-```txt
-option-trading-ml-01
-```
+| Lane | VM | Path |
+|------|-----|------|
+| Runtime | `option-trading-runtime-01` | `/opt/option_trading` |
+| ML | `option-trading-ml-01` | `/opt/option_trading` |
 
-Remote directory:
+`n2-highmem-*` may return `ZONE_RESOURCE_POOL_EXHAUSTED` in this zone; prefer **E2 highmem** (`e2-highmem-8`, `e2-highmem-16`).
 
-```txt
-~/option-trading-ml
-```
+## Choose target
 
-### Runtime target
+| User intent | Target |
+|-------------|--------|
+| Live stack, dashboard, Kite, compose | Unified / runtime VM |
+| Training, HPO, parquet, research | Same VM (off-hours) or legacy `option-trading-ml-01` |
+| Both | **Unified VM only** after migration |
 
-Use for:
-
-- production runtime
-- FastAPI service
-- WebSocket service
-- scheduler
-- live option-chain fetcher
-- trading engine
-- broker API integration
-- monitoring dashboard
-
-VM:
-
-```txt
-option-trading-runtime-01
-```
-
-Remote directory:
-
-```txt
-~/option-trading-runtime
-```
-
-## Choose target first
-
-| User intent | Target | VM | Remote dir |
-|-------------|--------|-----|------------|
-| training, HPO, parquet build, research artifacts | ML | `option-trading-ml-01` | `~/option-trading-ml` |
-| live stack, dashboard, Kite, compose services | Runtime | `option-trading-runtime-01` | `~/option-trading-runtime` |
-
-If unclear, ask which lane (ML vs runtime) before running destructive commands.
-
-## Preflight (always)
-
-Run from the operator machine (WSL, Linux, or Windows with `gcloud`):
+Default `VM_NAME` for scripts: `option-trading-runtime-01` or `option-trading-01` — use whichever exists:
 
 ```bash
-gcloud auth list
-gcloud compute instances describe option-trading-ml-01 --project="${PROJECT_ID}" --zone="${ZONE}" --format="value(status)"
-gcloud compute instances describe option-trading-runtime-01 --project="${PROJECT_ID}" --zone="${ZONE}" --format="value(status)"
+gcloud compute instances list --project="${PROJECT_ID}" --filter="name~option-trading"
 ```
 
-Both should be `RUNNING` before deploy. If `TERMINATED`, start the VM:
+## Preflight
 
 ```bash
-gcloud compute instances start <VM_NAME> --project="${PROJECT_ID}" --zone="${ZONE}"
+gcloud compute instances describe "${VM_NAME}" \
+  --project="${PROJECT_ID}" --zone="${ZONE}" \
+  --format="table(name,machineType.basename(),status)"
 ```
 
-Confirm remote checkout exists:
+Start if stopped:
 
 ```bash
-gcloud compute ssh <VM_NAME> --project="${PROJECT_ID}" --zone="${ZONE}" \
-  --command "test -d ~/option-trading-ml && echo ml_ok; test -d ~/option-trading-runtime && echo rt_ok; ls -la ~ | grep option-trading"
+gcloud compute instances start "${VM_NAME}" --project="${PROJECT_ID}" --zone="${ZONE}"
 ```
 
-Adjust the path check to the target VM only.
-
-## SSH and SCP primitives
-
-SSH (interactive shell):
+Check RAM (expect ≥64 Gi on unified):
 
 ```bash
-gcloud compute ssh <VM_NAME> --project="${PROJECT_ID}" --zone="${ZONE}"
+gcloud compute ssh "${VM_NAME}" --project="${PROJECT_ID}" --zone="${ZONE}" \
+  --command "free -h && nproc"
 ```
 
-SSH (one command):
+## Code deploy (required: git, not SCP)
+
+**Local:** commit → `git push origin main`
+
+**VM:**
 
 ```bash
-gcloud compute ssh <VM_NAME> --project="${PROJECT_ID}" --zone="${ZONE}" \
-  --command "cd ~/option-trading-ml && pwd"   # or ~/option-trading-runtime
-```
-
-SCP file or directory to VM:
-
-```bash
-gcloud compute scp --recurse \
-  <local-path> \
-  <VM_NAME>:<remote-path> \
-  --project="${PROJECT_ID}" --zone="${ZONE}"
-```
-
-Example — sync one changed module to ML VM:
-
-```bash
-gcloud compute scp --recurse \
-  ml_pipeline_2/src/ml_pipeline_2/training/foo.py \
-  option-trading-ml-01:~/option-trading-ml/ml_pipeline_2/src/ml_pipeline_2/training/foo.py \
-  --project="${PROJECT_ID}" --zone="${ZONE}"
-```
-
-**Do not use `gcloud compute scp` for application source.** Commit → push → VM `git pull` → docker build. SCP is only for data artifacts or git emergencies.
-
-## Code deploy workflows
-
-### A. Git push + pull on VM (required default)
-
-**Operator machine:**
-
-```bash
-git push origin main   # after local commit
-```
-
-**Then on each VM:**
-
-```bash
-REMOTE=/opt/option_trading   # legacy: ~/option-trading-ml or ~/option-trading-runtime
-BRANCH=main
-
-gcloud compute ssh <VM_NAME> --project="${PROJECT_ID}" --zone="${ZONE}" --command "
-  sudo bash -c 'set -e
-  cd ${REMOTE}
-  git fetch origin ${BRANCH}
-  git checkout ${BRANCH}
-  git pull --ff-only origin ${BRANCH}
-  git log -1 --oneline'
+gcloud compute ssh "${VM_NAME}" --project="${PROJECT_ID}" --zone="${ZONE}" --command "
+  sudo bash -c 'cd /opt/option_trading &&
+    git fetch origin main && git checkout main && git pull --ff-only origin main &&
+    git log -1 --oneline'
 "
 ```
 
-**Runtime — rebuild after pull** (when `strategy_app`, `market_data_dashboard`, or `ml_pipeline_2` in image changed):
+**Runtime rebuild** (when `strategy_app`, `market_data_dashboard`, compose paths changed):
+
+`docker-compose.gcp.yml` uses `pull_policy: always` on `strategy_app` / `persistence_app` images. After `build`, you **must** pass **`--pull never`** on `up` or Compose will pull an old GHCR tag and the container will **not** include the code from `git pull`.
 
 ```bash
-gcloud compute ssh option-trading-runtime-01 --project="${PROJECT_ID}" --zone="${ZONE}" --command "
+gcloud compute ssh "${VM_NAME}" --project="${PROJECT_ID}" --zone="${ZONE}" --command "
   cd /opt/option_trading
-  sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml \
+  sudo docker compose --env-file .env.compose \
+    -f docker-compose.yml -f docker-compose.gcp.yml \
     build strategy_app_historical
-  sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml \
-    up -d --force-recreate strategy_app_historical
+  sudo docker compose --env-file .env.compose \
+    -f docker-compose.yml -f docker-compose.gcp.yml \
+    up -d --force-recreate --pull never strategy_app_historical
 "
 ```
 
-Add `strategy_app`, `market_data_dashboard`, etc. to `build` / `up` as needed.
-
-### B. Rsync / SCP (avoid — no git on VM or emergency only)
-
-From repo root, exclude heavy dirs. Example tarball push:
+**Post-deploy check** (second `strategy router configured` line must match `STRATEGY_PROFILE_ID` / expected profile):
 
 ```bash
-TARGET_VM=option-trading-ml-01
-REMOTE=~/option-trading-ml
-
-tar czf /tmp/option_trading_sync.tgz \
-  --exclude='.git' --exclude='.data' --exclude='.venv' \
-  --exclude='ml_pipeline_2/artifacts/research' \
-  --exclude='__pycache__' \
-  -C . .
-
-gcloud compute scp /tmp/option_trading_sync.tgz \
-  "${TARGET_VM}:${REMOTE}/../option_trading_sync.tgz" \
-  --project="${PROJECT_ID}" --zone="${ZONE}"
-
-gcloud compute ssh "${TARGET_VM}" --project="${PROJECT_ID}" --zone="${ZONE}" --command "
-  set -e
-  cd ${REMOTE}
-  tar xzf ../option_trading_sync.tgz
-  rm -f ../option_trading_sync.tgz
+gcloud compute ssh "${VM_NAME}" --project="${PROJECT_ID}" --zone="${ZONE}" --command "
+  sudo docker logs option_trading-strategy_app_historical-1 2>&1 | grep 'strategy router configured' | tail -2
 "
 ```
 
-Prefer fixing git on the VM and using workflow A. SCP single files only in emergencies.
+If you only see `det_prod_v1` once and never the target profile, the wrong image is running — rebuild with `--pull never`.
 
-### C. Runtime — operator lifecycle (live / historical)
-
-For production runtime deploys, prefer repo scripts over hand-rolled compose:
+**Historical replay:** start `strategy_app_historical` and wait for `strategy consumer subscribed` before launching replay (pub/sub is not buffered). If consumer lock is stale after recreate:
 
 ```bash
-cp -n ops/gcp/operator.env.example ops/gcp/operator.env   # if missing
-# Edit ops/gcp/operator.env: PROJECT_ID, ZONE, RUNTIME_NAME=option-trading-runtime-01
-
-bash ./ops/gcp/runtime_lifecycle_interactive.sh
+sudo docker exec option_trading-redis-1 redis-cli DEL strategy_app:consumer_lock:market:snapshot:v1:historical
 ```
 
-Menu mapping:
+## ML jobs on unified VM
 
-- `1` — Bootstrap infra
-- `2` — Start/restart live runtime (publishes runtime config, Kite preflight, VM restart)
-- `3` — Historical replay
-
-See [docs/runbooks/GCP_DEPLOYMENT.md](../../docs/runbooks/GCP_DEPLOYMENT.md) and [reference.md](reference.md) for bucket URLs and verification commands.
-
-### D. Runtime — quick VM-side compose (already on VM)
-
-When SSH'd into runtime VM and iterating with `IMAGE_SOURCE=local_build`:
+After `git pull`, use venv (no docker rebuild unless deps changed):
 
 ```bash
-cd ~/option-trading-runtime
-sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml ps
-sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml build strategy_app
-sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml up -d
+# Direction HPO (hours; off-hours only on unified host)
+sudo bash /opt/option_trading/ops/gcp/run_direction_only_hpo_vm.sh
+
+# Status
+sudo bash /opt/option_trading/ops/gcp/run_direction_only_hpo_vm.sh status
 ```
 
-See [ops/gcp/VELOCITY_RUNTIME_DEPLOY.md](../../ops/gcp/VELOCITY_RUNTIME_DEPLOY.md) for a focused local-build example.
+Parquet root: `/opt/option_trading/.data/ml_pipeline/parquet_data`
 
-### E. ML — remote training / jobs
-
-After code is on the ML VM:
+## Resize VM (more RAM/CPU)
 
 ```bash
-gcloud compute ssh option-trading-ml-01 --project="${PROJECT_ID}" --zone="${ZONE}" --command "
-  cd ~/option-trading-ml
-  # example: check running training
-  pgrep -af 'ml_pipeline_2|python.*train' || true
-  ls -lt ml_pipeline_2/artifacts/research 2>/dev/null | head
-"
+gcloud compute instances stop "${VM_NAME}" --zone="${ZONE}" --project="${PROJECT_ID}"
+gcloud compute instances set-machine-type "${VM_NAME}" \
+  --machine-type=e2-highmem-16 --zone="${ZONE}" --project="${PROJECT_ID}"
+gcloud compute instances start "${VM_NAME}" --zone="${ZONE}" --project="${PROJECT_ID}"
 ```
 
-Use `bash ./ops/gcp/start_training_interactive.sh` from the operator checkout for staged training/release flows.
-
-## Verify after deploy
-
-### ML VM
+## Verify
 
 ```bash
-gcloud compute ssh option-trading-ml-01 --project="${PROJECT_ID}" --zone="${ZONE}" --command "
-  cd ~/option-trading-ml && git log -1 --oneline && du -sh .data/ml_pipeline 2>/dev/null || echo 'no .data yet'
-"
+# Health
+gcloud compute ssh "${VM_NAME}" --project="${PROJECT_ID}" --zone="${ZONE}" \
+  --command "curl -fsS http://127.0.0.1:8008/api/health; sudo docker compose -f /opt/option_trading/docker-compose.yml ps 2>/dev/null | head -15"
+
+# ML artifacts
+gcloud compute ssh "${VM_NAME}" --project="${PROJECT_ID}" --zone="${ZONE}" \
+  --command "ls -lt /opt/option_trading/ml_pipeline_2/artifacts/research 2>/dev/null | head -5"
 ```
-
-### Runtime VM
-
-```bash
-gcloud compute ssh option-trading-runtime-01 --project="${PROJECT_ID}" --zone="${ZONE}" --command "
-  sudo tail -n 80 /var/log/option-trading-runtime-startup.log 2>/dev/null || true
-  cd ~/option-trading-runtime && sudo docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml ps
-  curl -fsS http://127.0.0.1:8008/api/health 2>/dev/null || echo 'dashboard not up'
-"
-```
-
-If compose fails, check whether checkout is under `~/option-trading-runtime` vs legacy `/opt/option_trading` — use the path that exists on the VM.
-
-## Restart runtime VM (config pull on boot)
-
-```bash
-gcloud compute instances stop option-trading-runtime-01 --project="${PROJECT_ID}" --zone="${ZONE}"
-gcloud compute instances start option-trading-runtime-01 --project="${PROJECT_ID}" --zone="${ZONE}"
-```
-
-Only after publishing runtime config when the change requires startup sync from GCS.
 
 ## Safety rules
 
-- Never SCP secrets (`.env` with keys, `credentials.json`) unless the user explicitly requests it.
-- Do not restart the runtime VM during market hours without user approval.
-- ML and runtime are separate checkouts — do not assume paths are interchangeable.
-- Prefer `ops/gcp/` scripts for live/historical; use git pull + compose rebuild for deploys, not SCP.
-- On Windows, run `gcloud` from PowerShell or WSL; long-running training should use `nohup` or `tmux` on the VM.
+- Never SCP application source; git only.
+- Never SCP secrets unless user explicitly requests.
+- **Always `up --pull never`** after `build` when using `docker-compose.gcp.yml` on the VM.
+- Do not restart runtime during market hours without approval.
+- On unified VM: avoid concurrent full compose + oracle/HPO without ≥64 GB RAM and scheduling.
+- ML VM `option-trading-ml-01`: stop after unified cutover to save cost.
 
-## Additional resources
+## References
 
-- GCS buckets and legacy paths: [reference.md](reference.md)
-- Full operator runbook: [docs/runbooks/GCP_DEPLOYMENT.md](../../docs/runbooks/GCP_DEPLOYMENT.md)
-- Terraform values: [infra/gcp/terraform.tfvars](../../infra/gcp/terraform.tfvars)
+- Unified VM analysis: [docs/GCP_UNIFIED_VM.md](../../docs/GCP_UNIFIED_VM.md)
+- Operator runbook: [docs/runbooks/GCP_DEPLOYMENT.md](../../docs/runbooks/GCP_DEPLOYMENT.md)
+- GCS paths: [reference.md](reference.md)

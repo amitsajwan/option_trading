@@ -198,7 +198,15 @@ stop days.
 
 ---
 
-## 6. The open problem
+## 6. The open problem (in progress — daily regime builder shipped)
+
+**Implementation (2026-05-20):** offline builder
+`ml_pipeline_2/scripts/feature_builder/build_daily_regime_v3.py` adds
+`regime_rv20`, `regime_dist_sma20`, `regime_sma20_slope`, `regime_60d_return`
+to flat v3 (prior-day values only). Rule variant
+`R1S_REGIME_V1` + 17Q matrix documented in
+[docs/R1S_REGIME_EXPERIMENT.md](R1S_REGIME_EXPERIMENT.md). **VM backfill +
+sweep still required** before go/no-go.
 
 **We need a regime detector that distinguishes "calm bullish drift" from
 "macro vol / sideways vol" — and none of our current per-minute features
@@ -334,14 +342,31 @@ believe R1S has edge? What would you add to make it deployable?"
 
 ---
 
+## 10. R1S top-3/day (2026-05-20) — **paper candidate**
+
+Sweep `r1s_top3_20260520` on full history (**76 cells, complete**).
+
+| Variant | 17Q PASS | May–Jul / Aug–Oct |
+|---------|----------|-------------------|
+| **R1S_TOP3_S3_COMPOSITE** | **8/17** | **both PASS** |
+| R1S unlimited (control) | 0/17 | FAIL |
+
+**Go:** Paper `R1S_TOP3_S3_COMPOSITE` with manual calm-week gate. Automated daily/VIX filters remain NO-GO.
+
+- Config: `ml_pipeline_2/configs/rules/r1s_top3/r1s_top3_s3_composite.json`
+- Paper profile: `r1s_top3_paper_v1` (`strategy_app` deterministic engine)
+- Operator sheet: `docs/R1S_TOP3_OPERATOR.md`
+- Plan + audit table: `docs/R1S_TOP3_DAILY_PLAN.md`
+- Replay + eval UI: `docs/R1S_REPLAY_EVAL_INTEGRATION.md` (profile `r1s_top3_paper_v1`, compose `STRATEGY_PROFILE_ID`)
+
+---
+
 ## TL;DR for someone with 60 seconds
 
 - Data is clean, comprehensive, 1053 days.
 - 9 independent test runs (ML + rules); 8 found no edge.
-- One strategy works **in calm regimes only**: short ATM CE on opening-range
-  break down + bearish momentum. Real edge there (6 of 17 quarters,
-  +50–200% net excluding outliers per quarter).
-- Regime detector is missing — none of our per-minute features separate
-  the calm-regime quarters from the macro-vol-regime quarters.
-- Three real paths: build daily regime features and try again,
-  accept manual regime gating, or repurpose the infrastructure.
+- Best rules result: **short ATM CE ORB-down fade**, **top-3/day**, composite score —
+  **8/17 quarters PASS**, first variant to pass **both** 2024 May–Jul and Aug–Oct.
+- Unlimited R1S fails audit gates (0/17) on this matrix; quality filter matters.
+- Deploy path: **paper** with `r1s_top3_paper_v1` + **manual** calm-week OFF;
+  ingest 2025+ for true OOS before capital.

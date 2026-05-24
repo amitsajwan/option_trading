@@ -17,6 +17,44 @@ Operator details: **`docs/PLAYBOOK_V1_OPERATOR.md`**
 
 ---
 
+## Trader desk model — hard rules + intelligence
+
+**Principle:** Intelligence (thesis, trail, ranking) sits **on top of** non‑negotiable risk rules, not instead of them. No emotion in the engine — only JSON + ordered checks in `playbook_brain.py`.
+
+### Layer A — Hard rules (always on for paper)
+
+| Rule | JSON / code | Trader meaning |
+|------|-------------|----------------|
+| Participation | `ctx_is_high_vix_day` disqualifier | No new trades on flagged chaos days |
+| Slot cap | `max_trades_per_day: 3` | Top‑3 only; no overtrading |
+| Session window | time disqualifiers | No entries outside RTH window |
+| **Premium disaster** | `stop_pct: 15` (trader) vs `100` (research thesis) | Flat if short loses **15% of credit** (premium up 15%) |
+| Index disaster | `underlying_stop_pct: 0.003` | Flat if index ~0.3% against the short |
+| Time box | `time_stop_minutes: 45`, EOD minute | No indefinite hold |
+
+### Layer B — Intelligence (after hard rules did not fire)
+
+| Rule | Mechanism |
+|------|-----------|
+| Thesis | `signal_exits`: VWAP reclaim — “fade failed, get out” |
+| Trail | MFE ≥ 15%, giveback 8% — lock part of winner |
+| No lottery TP | `target_pct: 99` — no fixed “50% target” fantasy |
+
+**Execution order in `playbook_brain`:** underlying stop → premium stop → target → trail → thesis signal → time/EOD.  
+That order is the trader checklist; changing `stop_pct` in JSON changes how aggressive Layer A is.
+
+### Rule files (pick one via `PLAYBOOK_V1_RULE_PATH`)
+
+| Profile | `stop_pct` | Participation | Use |
+|---------|------------|---------------|-----|
+| `PBV1_TOP3_THESIS` | 100 | none | Research / monthly audit winner |
+| `PBV1_TOP3_TRADER_V1` | **15** | calm VIX | **Paper candidate** — hard rules + thesis + trail |
+| `PBV1_TOP3_PRODUCTION_V1` | 50 | calm VIX | Experiment (looser premium cap) |
+
+Promote to paper only when **rules matrix** and **runtime parity** agree on stress days (e.g. 2024‑09‑24).
+
+---
+
 ## Layers (what “clever” means here)
 
 | Layer | Smoke proxy (rules JSON) | Full build (later) |
@@ -33,7 +71,8 @@ Operator details: **`docs/PLAYBOOK_V1_OPERATOR.md`**
 
 | Rule ID | File | Intent |
 |---------|------|--------|
-| `PBV1_TOP3_THESIS` | `pbv1_top3_thesis.json` | **Default** — thesis, `stop_pct: 100` (no premium cap) |
+| `PBV1_TOP3_THESIS` | `pbv1_top3_thesis.json` | Research default — thesis, `stop_pct: 100` (no premium cap) |
+| `PBV1_TOP3_TRADER_V1` | `pbv1_top3_trader_v1.json` | **Hard rules + intelligence** — 15% premium stop, calm, thesis, trail |
 | `PBV1_TOP3_PRODUCTION_V1` | `pbv1_top3_production_v1.json` | Calm days + 50% premium stop + trail |
 | `PBV1_TOP3_CALM_THESIS` | `pbv1_top3_calm_thesis.json` | Skip high-VIX only |
 | `PBV1_TOP3_THESIS_TRAIL` | `pbv1_top3_thesis_trail.json` | Thesis + trail, no premium cap |

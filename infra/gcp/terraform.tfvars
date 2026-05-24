@@ -5,8 +5,9 @@ repo_clone_url               = "https://github.com/amitsajwan/option_trading.git
 repo_ref                     = "main"
 
 runtime_name                 = "option-trading-runtime-01"
-runtime_machine_type         = "e2-standard-4"
-training_machine_type        = "n2-standard-8"
+# Unified recommendation: e2-highmem-16 (16 vCPU, 128 GB) — see docs/GCP_UNIFIED_VM.md
+runtime_machine_type         = "e2-highmem-16"
+training_machine_type        = "e2-highmem-16"
 
 artifact_registry_repository_id = "option-trading-runtime"
 artifact_registry_location      = "asia-south1"

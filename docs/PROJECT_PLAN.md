@@ -1,6 +1,6 @@
 # BankNifty Options ML — Project Plan
 
-**Living document.** Updated as phases progress. Last revised: 2026-05-18.
+**Living document.** Updated as phases progress. Last revised: 2026-05-20.
 
 The North Star, the current state, what we're fixing, in what order, who does what, and where we stop. Refer to this until the project is complete or explicitly redirected.
 
@@ -20,9 +20,13 @@ The North Star, the current state, what we're fixing, in what order, who does wh
 
 ---
 
-## 2. Current State Snapshot (2026-05-18 IST)
+## 2. Current State Snapshot (2026-05-20 IST)
 
-**One-line position:** Option-P&L lane (`option_pnl_v1`) is the active research track. `ATM_PE_15` with HPO trial-18 params is deployed at threshold 0.55 (`paper` rollout stage, no real capital). C1 futures-direction lane is confirmed dead on the 2020-2024 corpus (§15). **As of 2026-05-18:** multi-bundle support has been implemented in the runtime engine — CE and PE models can now run in parallel, with the highest-confidence signal firing each bar. Realistic single-position evaluation running on all 4 core recipes (ATM_CE_9, ATM_PE_9, ATM_CE_15, ATM_PE_15) on the ML VM. **Do NOT deploy real capital.**
+**One-line position:** **Active research track = R1S short CE + daily regime gate** (see [PROJECT_STATUS_2026-05-20.md](PROJECT_STATUS_2026-05-20.md)). Only R1S shows audit-grade edge on 2020-2024, and only in calm regimes (6/17 quarters). Daily regime features (`regime_rv20`, etc.) and rule variant `R1S_REGIME_V1` are implemented; **VM backfill + 17Q sweep required** before any runtime promotion ([R1S_REGIME_EXPERIMENT.md](R1S_REGIME_EXPERIMENT.md)).
+
+**ML lanes (option_pnl_v1, C1):** not audit-passed for deploy; `ATM_PE_15` paper bundle must not receive real capital until fresh OOS + regime-gated rules path is validated.
+
+**Runtime:** C1 `capped_live` in README is legacy config — do not increase capital on ML bundles until R1S regime go/no-go completes.
 
 | Layer | State |
 |---|---|

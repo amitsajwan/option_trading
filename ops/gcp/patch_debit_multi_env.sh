@@ -19,5 +19,7 @@ set_kv MARKET_SESSION_ENABLED 0
 # Brain uses daily_regime_features.json (mounted on historical service)
 set_kv BRAIN_DAILY_FEATURES_PATH /app/.data/ml_pipeline/daily_regime_features.json
 set_kv BRAIN_ENABLED true
+# Clear any manual premium stop override — profile now owns 0.25 (+ underlying stop + trailing).
+set_kv STRATEGY_PREMIUM_STOP_LOSS_PCT ""
 echo "patched $ENV (debit_multi_v1)"
 grep -E '^STRATEGY_ENGINE=|^STRATEGY_PROFILE_ID=|^BRAIN_DAILY_FEATURES_PATH=' "$ENV"

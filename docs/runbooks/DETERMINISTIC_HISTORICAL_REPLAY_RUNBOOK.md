@@ -70,10 +70,13 @@ Set deterministic mode for this session in `.env.compose`:
 
 ```dotenv
 STRATEGY_ENGINE=deterministic
-STRATEGY_MIN_CONFIDENCE=0.65
+STRATEGY_PROFILE_ID=r1s_top3_paper_v1
+STRATEGY_MIN_CONFIDENCE=0.50
 MARKET_SESSION_ENABLED=0
 HISTORICAL_TOPIC=market:snapshot:v1:historical
 ```
+
+For the audit-backed R1S top-3 setup, see [R1S_REPLAY_EVAL_INTEGRATION.md](../R1S_REPLAY_EVAL_INTEGRATION.md).
 
 Historical replay also needs this parquet base:
 

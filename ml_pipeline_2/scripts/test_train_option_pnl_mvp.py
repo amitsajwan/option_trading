@@ -7,10 +7,19 @@ deployment-readiness.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+import pytest
 
-from ml_pipeline_2.scripts.train_option_pnl_mvp import simulate_single_position
+from ml_pipeline_2.scripts.train_option_pnl_mvp import (
+    HOLDOUT_END,
+    load_params_override,
+    simulate_single_position,
+    split_temporal,
+)
 
 
 def _row(date, minute, pnl, hold):
@@ -118,3 +127,84 @@ def pytest_approx(value, rel=1e-6):
         def __repr__(self):
             return f"~={value}"
     return _Approx()
+
+
+# -- load_params_override ------------------------------------------------------
+# These tests gate the apples-to-apples HPO trial-18 comparison. If params
+# loading silently picks wrong values, the trainer "realistic" verdict no
+# longer matches the deployed bundle, and our deployment decision is wrong.
+
+def test_params_override_flat_dict(tmp_path: Path):
+    p = tmp_path / "params.json"
+    payload = {"max_depth": 8, "learning_rate": 0.01, "n_estimators": 300}
+    p.write_text(json.dumps(payload))
+    assert load_params_override(p) == payload
+
+
+def test_params_override_hpo_results_picks_first_trial(tmp_path: Path):
+    """HPO writes trials best-first; loader must pull trials[0].params."""
+    p = tmp_path / "hpo.json"
+    hpo_blob = {
+        "best_trial_id": 18,
+        "trials": [
+            {"trial_id": 18, "params": {"max_depth": 8, "learning_rate": 0.01,
+                                         "subsample": 0.85}},
+            {"trial_id": 4, "params": {"max_depth": 4, "learning_rate": 0.05}},
+        ],
+    }
+    p.write_text(json.dumps(hpo_blob))
+    out = load_params_override(p)
+    assert out == {"max_depth": 8, "learning_rate": 0.01, "subsample": 0.85}
+
+
+def test_params_override_hpo_empty_trials_raises(tmp_path: Path):
+    p = tmp_path / "hpo.json"
+    p.write_text(json.dumps({"trials": []}))
+    with pytest.raises(ValueError, match="trials.*no 'params'"):
+        load_params_override(p)
+
+
+def test_params_override_hpo_trial_missing_params_raises(tmp_path: Path):
+    p = tmp_path / "hpo.json"
+    p.write_text(json.dumps({"trials": [{"trial_id": 1}]}))
+    with pytest.raises(ValueError, match="trials.*no 'params'"):
+        load_params_override(p)
+
+
+def test_params_override_rejects_non_dict(tmp_path: Path):
+    p = tmp_path / "bad.json"
+    p.write_text(json.dumps([1, 2, 3]))
+    with pytest.raises(ValueError, match="expected JSON object"):
+        load_params_override(p)
+
+
+def test_split_temporal_respects_holdout_end_override():
+    """When holdout_end is tightened (e.g. 2024-09-30), Oct rows must drop out
+    of holdout. Apples-to-apples replay comparison depends on this."""
+    df = pd.DataFrame({
+        "trade_date": pd.to_datetime([
+            "2024-04-30",  # last train day
+            "2024-05-01",  # first valid day
+            "2024-07-31",  # last valid day
+            "2024-08-01",  # first holdout day
+            "2024-09-30",  # last day we want (custom holdout_end)
+            "2024-10-15",  # excluded by custom holdout_end
+            "2024-10-31",  # default holdout_end
+        ]),
+    })
+    # Default holdout_end keeps both October rows
+    _, _, hold_default = split_temporal(df)
+    assert len(hold_default) == 4
+    # Tightened holdout_end drops October rows
+    _, _, hold_tight = split_temporal(df, holdout_end=pd.Timestamp("2024-09-30"))
+    assert len(hold_tight) == 2
+    assert hold_tight["trade_date"].max() == pd.Timestamp("2024-09-30")
+
+
+def test_params_override_returns_new_dict_not_alias(tmp_path: Path):
+    """Caller mutating result must not propagate to underlying file's reload."""
+    p = tmp_path / "params.json"
+    p.write_text(json.dumps({"max_depth": 8}))
+    out = load_params_override(p)
+    out["max_depth"] = 99  # mutate
+    assert load_params_override(p) == {"max_depth": 8}

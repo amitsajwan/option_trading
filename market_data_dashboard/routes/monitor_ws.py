@@ -51,6 +51,15 @@ def _resolve_date(db: Any, requested: Optional[str]) -> str:
     )
 
 
+def _coerce_monitor_session(session: Any) -> MonitorSession:
+    """Normalize session built in real_source (avoids duplicate-class pydantic errors)."""
+    if isinstance(session, MonitorSession):
+        return session
+    if hasattr(session, "model_dump"):
+        return MonitorSession.model_validate(session.model_dump(mode="json"))
+    return MonitorSession.model_validate(session)
+
+
 # ── Session states ─────────────────────────────────────────────────────────────
 
 class _LiveSessionState:
@@ -184,7 +193,7 @@ class DashboardMonitorRouter:
             kpi = _build_kpi_live(state)
             snap = MonitorSnapshot(
                 mode="live",
-                session=state.session,
+                session=_coerce_monitor_session(state.session),
                 up_to_idx=state.current_idx,
                 live_idx=state.current_idx,
                 live_price=round(state.last_price, 2),
@@ -202,7 +211,7 @@ class DashboardMonitorRouter:
             kpi = _build_kpi_replay(state)
             snap = MonitorSnapshot(
                 mode="replay",
-                session=state.session,
+                session=_coerce_monitor_session(state.session),
                 up_to_idx=state.up_to_idx,
                 live_idx=None,
                 live_price=None,
@@ -292,7 +301,7 @@ class DashboardMonitorRouter:
 
                     snap = MonitorSnapshot(
                         mode=mode,
-                        session=state.session,
+                        session=_coerce_monitor_session(state.session),
                         up_to_idx=state.current_idx if isinstance(state, _LiveSessionState) else state.up_to_idx,
                         live_idx=state.current_idx if isinstance(state, _LiveSessionState) else None,
                         live_price=round(state.last_price, 2) if isinstance(state, _LiveSessionState) else None,

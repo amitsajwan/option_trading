@@ -44,13 +44,23 @@ Frontend type-check: `cd strategy_eval_ui && npx tsc -b --noEmit`
 - 14 failures in `strategy_app/tests/` due to `TradeSignal.lots` attribute being removed but tests not updated.
 - 1 failure in `tests/test_live_runtime_boundaries.py` — asserts `deterministic` as historical default, but compose now uses `ml_pure`.
 
-### GCP deploy (VMs)
+### GCP deploy (single VM preferred)
 
-**Default workflow:** commit locally → `git push` → on VM `git pull` → `docker compose build` + `up -d --force-recreate` for affected services.
+**Target:** one VM for **runtime + ML** — see [docs/GCP_UNIFIED_VM.md](docs/GCP_UNIFIED_VM.md).
 
-- **Do not** sync application source with `gcloud compute scp`; VMs use `/opt/option_trading` git checkouts.
-- Runtime: `option-trading-runtime-01`; ML: `option-trading-ml-01`; project `algo-trading-496203`, zone `asia-south1-b`.
-- After `strategy_app` / dashboard changes, rebuild `strategy_app_historical` (and live `strategy_app` if needed) before historical replays.
+| Item | Value |
+|------|--------|
+| Project | `algo-trading-496203` |
+| Zone | `asia-south1-b` |
+| Recommended type | **`e2-highmem-16`** (16 vCPU, 128 GB RAM) |
+| Checkout | `/opt/option_trading` |
+| Legacy VMs | `option-trading-runtime-01`, `option-trading-ml-01` (merge then stop ML VM) |
+
+**Workflow:** commit → `git push` → VM `git pull` → `docker compose build` + `up -d --force-recreate --pull never` for runtime changes (`docker-compose.gcp.yml` otherwise pulls stale GHCR and ignores the local build).
+
+- **Do not** `gcloud compute scp` application source.
+- **ML jobs** (HPO, parquet): same VM, prefer **off-market hours**; oracle labeling needs **≥64 GB** RAM.
+- **`n2-highmem-*`** may be unavailable in zone; **`e2-highmem-*`** has worked.
 - Details: `.cursor/rules/gcp-deploy-workflow.mdc`, `.cursor/skills/gcp-vm-deploy/SKILL.md`.
 
 ### Gotchas

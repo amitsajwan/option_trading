@@ -46,4 +46,4 @@ def test_trader_master_exit_helpers_separate_from_trending_entries() -> None:
     assert "ORB" in mapping["TRENDING"]
     risk = get_risk_config(PROFILE_TRADER_MASTER_V1)
     assert risk["trailing_enabled"] is True
-    assert risk["stop_loss_pct"] == 0.25
+    assert risk["stop_loss_pct"] == 0.20

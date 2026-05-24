@@ -72,7 +72,7 @@ def main() -> int:
     else:
         warnings.append("STRATEGY_PROFILE_ID not readable from historical container")
 
-    if not wait_ready(30):
+    if not wait_ready(180):
         errors.append(
             "historical consumers not subscribed (replay would emit snapshots with 0 trades)"
         )

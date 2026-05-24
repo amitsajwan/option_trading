@@ -58,6 +58,7 @@ def run_backtest(
     from .execution_sim import simulate_trades
     from .rule_schema import Rule
     from .signal_generator import generate_signals
+    from .trade_selection import apply_daily_trade_cap
     from ..model_selection.audit_run import audit
 
     flat_root = flat_root or DEFAULT_FLAT_ROOT
@@ -74,10 +75,17 @@ def run_backtest(
     logger.info("loaded %d rows (%d distinct days)", len(df),
                 df["trade_date"].nunique() if len(df) else 0)
 
-    df["signal"] = generate_signals(df, rule)
+    raw_signals = generate_signals(df, rule)
+    n_signals_raw = int(raw_signals.sum())
+    df["signal"] = apply_daily_trade_cap(df, raw_signals, rule)
     n_signals = int(df["signal"].sum())
-    logger.info("rule fires on %d/%d rows (%.2f%%)", n_signals, len(df),
-                100 * n_signals / max(1, len(df)))
+    logger.info(
+        "rule fires on %d/%d rows raw (%.2f%%), %d after daily cap",
+        n_signals_raw,
+        len(df),
+        100 * n_signals_raw / max(1, len(df)),
+        n_signals,
+    )
 
     trades = simulate_trades(df, rule, exit_mode=exit_mode, cost_bps=cost_bps)
     trades_path = output_dir / "trades.parquet"
@@ -120,6 +128,8 @@ def run_backtest(
     result["exit_mode"] = exit_mode
     result["window"] = {"start": start_date, "end": end_date}
     result["n_signal_rows"] = n_signals
+    result["n_signal_rows_raw"] = n_signals_raw
+    result["max_trades_per_day"] = rule.max_trades_per_day
     result["n_trades_emitted"] = int(len(trades))
 
     (output_dir / "audit.json").write_text(json.dumps(result, indent=2, default=str))
