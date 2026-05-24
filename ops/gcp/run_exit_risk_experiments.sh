@@ -94,6 +94,7 @@ case "${MODE}" in
   E2) run_one "E2_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" "" ;;
   E3) run_one "E3_baseline_stress_risk" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_direction_ml_env.sh" "${REPO}/ops/gcp/patch_eval_risk_stress_env.sh" ;;
   E2E3) run_one "E2E3_dyn_exit_stress" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" "${REPO}/ops/gcp/patch_eval_risk_stress_env.sh" ;;
+  E4) run_one "E4_stagnant20_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_dyn_exit_env.sh" "" ;;
   all)
     run_one "E1_stagnant_20" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_env.sh" ""
     run_one "E2_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" ""
