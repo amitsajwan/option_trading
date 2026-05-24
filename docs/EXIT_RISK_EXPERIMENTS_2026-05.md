@@ -91,7 +91,7 @@ Fill **Run ID** from log line `queued … run_id=…` or `run_ids.env`.
 | E2 | `32b01989` | 540 | **1.04** | +6.8 | **−15.0** | 318 | 1.42 | 0.81 | Done | **Best PF / Jul so far** |
 | E2E3 | `cf5ce85a` | 309 | 1.02 | — | **−4.6** | 179 | — | — | Done | Thin book; risk_pause choke |
 | E4 | `81d73382` | 484 | 1.03 | +6.9 | −19.2 | 219 | 1.27 | 0.89 | Done | Combo did not beat E2 |
-| **E5** | _TBD_ | — | — | — | — | — | — | — | **In progress** | Started 2026-05-24 ~18:11 UTC; commit `013ae66` |
+| **E5** | `2632cdc7` | 169 | 0.79 | −7.1 | May only | 134 | 0.50 | 0.89 | Done | **Failed** — May-only book; not vs E2 |
 
 ### How to refresh one row
 

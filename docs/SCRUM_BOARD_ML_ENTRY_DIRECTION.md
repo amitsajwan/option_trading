@@ -97,7 +97,7 @@ These are observable market structure signals, not predicted outcomes. They prod
 | E3-S6 | Dual direction model (CE + PE per-side) | P1 | ML | **Closed — ceiling** | 8 |
 | E4-S1 | Session trade cap pilot (8 → 10) | P3 | | **Backlog** | 3 |
 | E4-S2 | TIME_STOP / MFE giveback experiment (E1–E4 grid) | **P1** | Ops/GCP | **In review** | 5 |
-| E4-S2b | Direction consensus + fast exit (E5 replay) | **P1** | Ops/GCP | **In progress** | 5 |
+| E4-S2b | Direction consensus + fast exit (E5 replay) | **P1** | Ops/GCP | **Done — needs E5b** | 5 |
 | E4-S3 | Council exit layer (position re-eval) | P2 | Engine | **Backlog** | 8 |
 | E5-S1 | Failed-move trap signals in shadow scorer | **P1** | Engine | **In Review** | 5 |
 | E5-S2 | Intraday session regime classifier | P2 | ML | **Backlog** | 8 |
@@ -527,7 +527,7 @@ All computable from `snapshot.market_data` fields already collected.
 | **E2 dyn_exit** | `32b01989` | 540 | **1.04** | **−15.0%** | 318 | 1.42 | 0.81 | **Best PF/Jul** |
 | E2E3 stress | `cf5ce85a` | 309 | 1.02 | **−4.6%** | 179 | — | — | Thin book |
 | E4 combo | `81d73382` | 484 | 1.03 | −19.2% | 219 | 1.27 | 0.89 | No beat E2 |
-| **E5 consensus** | _pending_ | — | — | — | — | — | — | **Running** ~18:11 UTC `013ae66` |
+| **E5 consensus** | `2632cdc7` | 169 | 0.79 | −7.1% (May) | — | 134 | 0.50 | 0.89 | **Fail** | May-only; avoid_veto choke — [handover](HANDOVER_2026-05-22.md) |
 
 **Loss anatomy (E2):** 41% WR; TIME_STOP 59% of trades (PF 0.15); PE leg PF 0.81; direction ML AUC ~0.55 ceiling.
 
@@ -564,6 +564,7 @@ All computable from `snapshot.market_data` fields already collected.
 | 2026-05-24 | — | E4-S2 + E5-S1 implemented; E4-S2 v1 replay FAIL (PF 0.74, held losers); v2 P&L floor fix (`db80db5`); re-replay pending |
 | 2026-05-24 | Ops | E1–E4 May–Jul grid complete; best **E2** PF 1.04; E4 combo wash; replay throttle + drain fix (`ce02787`) |
 | 2026-05-24 | Engine | Direction consensus profile `trader_master_ml_entry_consensus_v1` + E5 experiment (`013ae66`); [EXIT_RISK_EXPERIMENTS_2026-05.md](EXIT_RISK_EXPERIMENTS_2026-05.md) |
+| 2026-05-24 | — | E5 done: `2632cdc7` PF 0.79, 169 trades May-only — expert handover updated; E5b + risk audit recommended |
 
 ---
 
