@@ -54,7 +54,14 @@ def _load_dir_bundle(path: str) -> Optional[dict[str, Any]]:
 
 
 def _resolve_direction_dual(bundle: dict[str, Any], snap: SnapshotAccessor) -> Optional[Direction]:
-    """Pick CE or PE from dual bundle. Returns None when neither side exceeds 0.5."""
+    """Pick CE or PE from dual bundle.
+
+    Default (DIRECTION_DUAL_MIN_PROB=0): argmax like unified direction_only — always
+    picks CE or PE. E3-S6 replay showed strict dual gate (both < 0.5) silenced all votes.
+
+    Set DIRECTION_DUAL_MIN_PROB=0.5 to restore the original strict gate.
+    """
+    min_prob = _env_float("DIRECTION_DUAL_MIN_PROB", 0.0)
     ce_sub = bundle.get("ce_bundle")
     pe_sub = bundle.get("pe_bundle")
     ce_win = predict_positive_class_prob(ce_sub, snap) if isinstance(ce_sub, dict) else None
@@ -63,13 +70,20 @@ def _resolve_direction_dual(bundle: dict[str, Any], snap: SnapshotAccessor) -> O
     if ce_win is None and pe_win is None:
         return None
     if pe_win is None:
-        return Direction.CE if (ce_win or 0.0) >= 0.5 else None
+        if min_prob > 0 and (ce_win or 0.0) < min_prob:
+            return None
+        return Direction.CE
     if ce_win is None:
-        return Direction.PE if (pe_win or 0.0) >= 0.5 else None
-    # Both available: take whichever side has higher win probability (requires > 0.5 to trade)
+        if min_prob > 0 and (pe_win or 0.0) < min_prob:
+            return None
+        return Direction.PE
     if ce_win >= pe_win:
-        return Direction.CE if ce_win >= 0.5 else None
-    return Direction.PE if pe_win >= 0.5 else None
+        if min_prob > 0 and ce_win < min_prob:
+            return None
+        return Direction.CE
+    if min_prob > 0 and pe_win < min_prob:
+        return None
+    return Direction.PE
 
 
 def _resolve_direction(snap: SnapshotAccessor) -> tuple[Optional[Direction], str]:

@@ -60,9 +60,21 @@ class TestResolveDual:
             result = _resolve_direction_dual(bundle, snap)
         assert result == Direction.PE
 
-    def test_returns_none_when_both_below_50(self):
+    def test_argmax_when_both_below_50_default(self):
+        from strategy_app.engines.strategies.ml_entry import _resolve_direction_dual
+        from strategy_app.contracts import Direction
+
+        bundle = _make_dual_bundle(ce_win_prob=0.45, pe_win_prob=0.48)
+        snap = _make_snap()
+        with patch("strategy_app.ml.bundle_inference.build_feature_row") as mock_features:
+            mock_features.return_value = {"vix_current": 14.0, "ctx_is_high_vix_day": 0.0}
+            result = _resolve_direction_dual(bundle, snap)
+        assert result == Direction.PE
+
+    def test_returns_none_when_both_below_50_strict(self, monkeypatch):
         from strategy_app.engines.strategies.ml_entry import _resolve_direction_dual
 
+        monkeypatch.setenv("DIRECTION_DUAL_MIN_PROB", "0.5")
         bundle = _make_dual_bundle(ce_win_prob=0.45, pe_win_prob=0.48)
         snap = _make_snap()
         with patch("strategy_app.ml.bundle_inference.build_feature_row") as mock_features:
