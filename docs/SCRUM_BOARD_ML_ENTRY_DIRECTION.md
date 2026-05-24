@@ -95,16 +95,17 @@ These are observable market structure signals, not predicted outcomes. They prod
 | E3-S5 | Profile `trader_master_ml_entry_v1` | P1 | | **Done** | 5 |
 | E3-S6 | Dual direction model (CE + PE per-side) | P1 | ML | **Closed — ceiling** | 8 |
 | E4-S1 | Session trade cap pilot (8 → 10) | P3 | | **Backlog** | 3 |
-| E4-S2 | TIME_STOP / MFE giveback experiment | **P1** | Ops/GCP | **Ready** | 5 |
+| E4-S2 | TIME_STOP / MFE giveback experiment | **P1** | Ops/GCP | **In Review** | 5 |
 | E4-S3 | Council exit layer (position re-eval) | P2 | Engine | **Backlog** | 8 |
-| E5-S1 | Failed-move trap signals in shadow scorer | **P1** | Engine | **Ready** | 5 |
+| E5-S1 | Failed-move trap signals in shadow scorer | **P1** | Engine | **In Review** | 5 |
 | E5-S2 | Intraday session regime classifier | P2 | ML | **Backlog** | 8 |
 | E5-S3 | Time-window signal weighting | P2 | Engine | **Backlog** | 3 |
 | E5-S4 | Dynamic exit — premium-based triggers | P2 | ML | **Backlog** | 8 |
 | E5-S5 | Trap-aware direction ML (post-E5-S1) | P3 | | **Backlog** | 8 |
 
 **Velocity (sprint 1):** 44 planned / 42 completed points  
-**Sprint 2 capacity:** E4-S2 (5) + E5-S1 (5) + E2-S6 close-out (3) = 13 points
+**Sprint 2 capacity:** E4-S2 (5) + E5-S1 (5) + E2-S6 close-out (3) = 13 points  
+**Sprint 2 velocity so far:** E4-S2 impl done (5) + E5-S1 impl done (5) = 10 pts — **replays pending**
 
 ---
 
@@ -232,14 +233,15 @@ V1 profile removes TRADER_COMPOSITE/OI_UNWINDING `avoid_veto` conflicts. `avoid_
 
 Low priority. Current `session_trade_cap` blocker is not top-2. Revisit after E4-S2 shows exit quality improvement.
 
-### E4-S2 — TIME_STOP / MFE giveback experiment · Ready P1
+### E4-S2 — TIME_STOP / MFE giveback experiment · In Review P1
 
 | | |
 |--|--|
-| **Status** | Ready |
+| **Status** | In Review — implementation done, replay pending |
 | **Priority** | P1 |
 | **Owner** | Ops/GCP |
 | **Points** | 5 |
+| **Commit** | `c009a4e` — 2026-05-24 |
 
 **User story:** As a trader, I want to stop giving back MFE at TIME_STOP so that winners reach their natural exit instead of being cut at a flat P&L.
 
@@ -259,9 +261,9 @@ Low priority. Current `session_trade_cap` blocker is not top-2. Revisit after E4
 - [ ] PF improvement ≥ 0.20 vs `3d1e2d1c` baseline on same Aug–Oct window
 
 **Tasks**
-- [ ] Implement `STAGNANT_EXIT_CONDITION: shadow_score_crossed_zero` in risk config
-- [ ] Add replay config variant: `dynamic_stagnant_exit`
-- [ ] Run replay on Aug–Oct window
+- [x] Implement `stagnant_exit_condition: shadow_score_crossed_zero` in risk config (`contracts.py`, `risk/config.py`, `tracker.py`, `profiles.py`)
+- [x] Add replay config variant: `dyn_exit` (`patch_trader_master_ml_entry_v1_dyn_exit_env.sh`, profile `trader_master_ml_entry_v1_dyn_exit`)
+- [ ] Run replay on Aug–Oct window: `sudo bash ops/gcp/run_engine_direction_ab.sh dyn_exit`
 - [ ] Compare exit reason distribution: TIME_STOP% before vs after
 - [ ] Run `ops/gcp/summarize_exit_reasons.py` on both runs
 
@@ -304,11 +306,12 @@ Layer 5 — Dynamic exit (premium slowing, opposite side writing, VWAP loss, del
 
 Layers 4 is done (E1). Layers 2, 3, 5 are partially in the shadow scorer but missing the *failed move* detection. Layers 1 and 5 are new.
 
-### E5-S1 — Failed-move trap signals in shadow scorer · Ready P1
+### E5-S1 — Failed-move trap signals in shadow scorer · In Review P1
 
 | | |
 |--|--|
-| **Status** | Ready |
+| **Status** | In Review — implementation + tests done, replay pending |
+| **Commit** | `528ff11` — 2026-05-24 |
 | **Priority** | P1 |
 | **Owner** | Engine |
 | **Points** | 5 |
@@ -338,16 +341,16 @@ Layers 4 is done (E1). Layers 2, 3, 5 are partially in the shadow scorer but mis
 All computable from `snapshot.market_data` fields already collected.
 
 **Acceptance criteria**
-- [ ] All 6 signals implemented in `_shadow_direction_from_snapshot`, appear in `shadow_basis` string
-- [ ] Unit tests: 6 new signal conditions, snapshot mock fixtures
+- [x] All 6 signals implemented in `_shadow_direction_from_snapshot`, appear in `shadow_basis` string
+- [x] Unit tests: 20 tests covering all 6 signals + boundary conditions + buffer reset (`test_trap_signals_shadow_scorer.py`)
 - [ ] Aug–Oct replay: run with new signals, check correlation — do trap signals fire on the 61-trade winners more than on losers? (Use `read_decision_timeline` + drill-down UI)
 - [ ] PF on Aug–Oct with trap signals ≥ PF without (baseline: 1.98 on `3d1e2d1c`)
 
 **Tasks**
-- [ ] Add signals to `deterministic_rule_engine.py` `_shadow_direction_from_snapshot`
-- [ ] Update `_HM_SIGNALS` in `terminal-live.jsx` to include new signal categories
-- [ ] Add unit tests in `strategy_app/tests/`
-- [ ] Run replay: `replay_only v1_direction_ml` after signal addition
+- [x] Add signals to `deterministic_rule_engine.py` `_shadow_direction_from_snapshot` (rolling `_iv_buf` + `_pvwap_buf`, cleared on session start)
+- [x] Update `_HM_SIGNALS` in `terminal-live.jsx` (ORB Trap, VWAP Trap, IV Fade rows)
+- [x] Add unit tests in `strategy_app/tests/`
+- [ ] Run replay: `sudo bash ops/gcp/run_engine_direction_ab.sh replay_only v1_direction_ml`
 - [ ] Analyze: check `shadow_dir` vs actual outcome per trade; look at `shadow_basis` on winning vs losing days
 
 ### E5-S2 — Intraday session regime classifier · Backlog P2
