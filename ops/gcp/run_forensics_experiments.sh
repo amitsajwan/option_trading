@@ -6,6 +6,7 @@
 #   A  v1_direction_ml + eval defaults (session cap=12)
 #   B  v1_direction_ml + no session cap (unlock missed entries)
 #   C  dyn_exit v2 + no session cap
+#   D  v1_dual_direction_ml + no session cap (needs dual gate fix in image)
 #
 set -euo pipefail
 REPO="${REPO_ROOT:-/opt/option_trading}"
@@ -76,16 +77,24 @@ print(run.get('run_id',''))
 cd "${REPO}"
 git pull --ff-only origin main 2>/dev/null || true
 
+if [ "${SKIP_HIST_BUILD:-0}" != "1" ]; then
+  echo "[$(date -Is)] build strategy_app_historical" | tee -a "${LOG_DIR}/master.log"
+  sudo docker compose --env-file "${ENV_FILE}" -f docker-compose.yml -f docker-compose.gcp.yml \
+    build strategy_app_historical >> "${LOG_DIR}/build.log" 2>&1 || true
+fi
+
 case "${MODE}" in
   expA) run_exp "expA_v1_dir_baseline" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_direction_ml_env.sh" 0 ;;
   expB) run_exp "expB_v1_dir_no_cap" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_direction_ml_env.sh" 1 ;;
   expC) run_exp "expC_v1_dyn_exit_v2" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" 1 ;;
+  expD) run_exp "expD_v1_dual_no_cap" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dual_dir_env.sh" 1 ;;
   all)
     run_exp "expA_v1_dir_baseline" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_direction_ml_env.sh" 0
     run_exp "expB_v1_dir_no_cap" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_direction_ml_env.sh" 1
     run_exp "expC_v1_dyn_exit_v2" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" 1
+    run_exp "expD_v1_dual_no_cap" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dual_dir_env.sh" 1
     ;;
-  *) echo "Usage: $0 [expA|expB|expC|all]"; exit 2 ;;
+  *) echo "Usage: $0 [expA|expB|expC|expD|all]"; exit 2 ;;
 esac
 
 echo "[$(date -Is)] finished — logs in ${LOG_DIR}/"
