@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# E4-S2: ML-only profile with dynamic stagnant exit (shadow_score_crossed_zero).
-# Same entry config as trader_master_ml_entry_v1 but stagnant exit is gated on
-# momentum reversal — won't fire if shadow score still agrees with trade direction.
+# E1: ML entry v1 + direction ML; stagnant_exit_bars=20 (profile stagnant_20).
 set -euo pipefail
 
 ENV_FILE="${1:-/opt/option_trading/.env.compose}"
@@ -18,7 +16,7 @@ upsert() {
 }
 
 upsert STRATEGY_ENGINE deterministic
-upsert STRATEGY_PROFILE_ID trader_master_ml_entry_v1_dyn_exit
+upsert STRATEGY_PROFILE_ID trader_master_ml_entry_v1_stagnant_20
 upsert STRATEGY_MIN_CONFIDENCE "${STRATEGY_MIN_CONFIDENCE:-0.50}"
 upsert STRATEGY_ROLLOUT_STAGE_HISTORICAL paper
 upsert STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL 1.0
@@ -33,5 +31,5 @@ upsert ML_PURE_MODEL_GROUP ""
 upsert ML_PURE_MODEL_PACKAGE ""
 upsert ML_PURE_THRESHOLD_REPORT ""
 
-echo "Patched $ENV_FILE for trader_master_ml_entry_v1_dyn_exit (dynamic stagnant exit)"
+echo "Patched $ENV_FILE for trader_master_ml_entry_v1_stagnant_20 + direction ML"
 grep -E '^(STRATEGY_PROFILE_ID|ENTRY_ML_|DIRECTION_ML_)=' "$ENV_FILE" || true
