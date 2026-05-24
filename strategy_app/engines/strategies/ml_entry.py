@@ -90,34 +90,40 @@ def _resolve_direction(snap: SnapshotAccessor) -> tuple[Optional[Direction], str
     """CE/PE for ML_ENTRY. Returns (direction_or_None, source_label)."""
     if env_bool("ML_ENTRY_PE_ONLY"):
         return Direction.PE, "pe_only"
+    if env_bool("ML_ENTRY_CE_ONLY"):
+        return Direction.CE, "ce_only"
 
-    direction: Direction
+    block_ce = env_bool("ML_ENTRY_BLOCK_CE")
+    block_pe = env_bool("ML_ENTRY_BLOCK_PE")
+
+    def _apply_block(direction: Optional[Direction], source: str) -> tuple[Optional[Direction], str]:
+        if direction is None:
+            return None, source
+        if block_ce and direction == Direction.CE:
+            return None, f"{source}+block_ce"
+        if block_pe and direction == Direction.PE:
+            return None, f"{source}+block_pe"
+        return direction, source
+
+    direction: Optional[Direction]
     dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "").strip()
     if dir_path:
         bundle = _load_dir_bundle(dir_path)
         if bundle is not None:
             if bundle.get("kind") == _DIRECTION_DUAL_BUNDLE_KIND:
                 direction = _resolve_direction_dual(bundle, snap)
-                if direction is None:
-                    return None, "direction_dual_ml"
-                if env_bool("ML_ENTRY_BLOCK_CE") and direction == Direction.CE:
-                    return None, "direction_dual_ml+block_ce"
-                return direction, "direction_dual_ml"
+                return _apply_block(direction, "direction_dual_ml")
             # single direction_only_bundle
             ce_prob = predict_positive_class_prob(bundle, snap)
             if ce_prob is not None:
                 direction = Direction.CE if ce_prob >= 0.5 else Direction.PE
-                if env_bool("ML_ENTRY_BLOCK_CE") and direction == Direction.CE:
-                    return None, "direction_ml+block_ce"
-                return direction, "direction_ml"
+                return _apply_block(direction, "direction_ml")
     ret5 = snap.fut_return_5m
     if ret5 is not None and ret5 != 0:
         direction = Direction.CE if float(ret5) > 0 else Direction.PE
     else:
         direction = Direction.CE
-    if env_bool("ML_ENTRY_BLOCK_CE") and direction == Direction.CE:
-        return None, "momentum+block_ce"
-    return direction, "momentum"
+    return _apply_block(direction, "momentum")
 
 
 class MlEntryStrategy(BaseStrategy):

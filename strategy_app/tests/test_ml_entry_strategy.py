@@ -104,3 +104,55 @@ def test_ml_entry_block_ce_skips_ce_momentum(monkeypatch) -> None:
             with patch.dict(os.environ, {"ENTRY_ML_MODEL_PATH": "/fake/entry.joblib"}):
                 vote = strategy.evaluate(_minimal_snapshot_payload(), None, MagicMock())
     assert vote is None
+
+
+def test_ml_entry_block_pe_skips_pe_momentum(monkeypatch) -> None:
+    monkeypatch.setenv("ENTRY_ML_MIN_PROB", "0.50")
+    monkeypatch.setenv("ML_ENTRY_BLOCK_PE", "1")
+    bundle = {
+        "kind": "entry_only_bundle",
+        "features": ["fut_return_5m"],
+        "feature_medians": {"fut_return_5m": 0.0},
+        "model": MagicMock(),
+    }
+    strategy = MlEntryStrategy()
+    snap = _minimal_snapshot_payload()
+    snap["futures_derived"] = {"fut_return_5m": -0.01}  # momentum points PE
+    with patch(
+        "strategy_app.engines.strategies.ml_entry.load_joblib_bundle",
+        return_value=bundle,
+    ):
+        with patch(
+            "strategy_app.engines.strategies.ml_entry.predict_positive_class_prob",
+            return_value=0.72,
+        ):
+            with patch.dict(os.environ, {"ENTRY_ML_MODEL_PATH": "/fake/entry.joblib"}):
+                vote = strategy.evaluate(snap, None, MagicMock())
+    assert vote is None
+
+
+def test_ml_entry_ce_only_forces_ce(monkeypatch) -> None:
+    monkeypatch.setenv("ENTRY_ML_MIN_PROB", "0.50")
+    monkeypatch.setenv("ML_ENTRY_CE_ONLY", "1")
+    bundle = {
+        "kind": "entry_only_bundle",
+        "features": ["fut_return_5m"],
+        "feature_medians": {"fut_return_5m": 0.0},
+        "model": MagicMock(),
+    }
+    strategy = MlEntryStrategy()
+    snap = _minimal_snapshot_payload()
+    snap["futures_derived"] = {"fut_return_5m": -0.01}  # momentum would say PE; CE_ONLY must override
+    with patch(
+        "strategy_app.engines.strategies.ml_entry.load_joblib_bundle",
+        return_value=bundle,
+    ):
+        with patch(
+            "strategy_app.engines.strategies.ml_entry.predict_positive_class_prob",
+            return_value=0.72,
+        ):
+            with patch.dict(os.environ, {"ENTRY_ML_MODEL_PATH": "/fake/entry.joblib"}):
+                vote = strategy.evaluate(snap, None, MagicMock())
+    assert vote is not None
+    assert vote.direction == Direction.CE
+    assert vote.raw_signals.get("direction_source") == "ce_only"

@@ -1,7 +1,7 @@
 # Exit + risk experiments — May–Jul 2024 OOS (team runbook)
 
 **Living document** — update the [results table](#results-scorecard) after each replay completes.  
-**Last updated:** 2026-05-24  
+**Last updated:** 2026-05-24 (E6 / 5-gate ship plan added)  
 **VM:** `option-trading-runtime-01` · zone `asia-south1-b` · checkout `/opt/option_trading`  
 **Baseline reference run:** `ae5a86b7-9198-4e64-9399-fd5fea03e293` (profile `trader_master_ml_entry_v1` + direction ML, PF ≈ 1.0 on full window after throttle fix)
 
@@ -74,6 +74,8 @@ Per [GCP deploy workflow](../.cursor/rules/gcp-deploy-workflow.mdc): `git pull` 
 | **E2E3** | `E2E3_dyn_exit_stress` | E2 patch | `patch_eval_risk_stress_env.sh` | E2 + `consec_losses=4` stress |
 | **E4** | `E4_stagnant20_dyn_exit` | `patch_trader_master_ml_entry_v1_stagnant_20_dyn_exit_env.sh` | — | E1 + E2 combined |
 | **E5** | `E5_direction_consensus` | `patch_trader_master_ml_entry_consensus_env.sh` | — | Direction consensus + veto; ATM-only; fast thesis-fail exit |
+| **E6** | `E6_ce_only` | `patch_trader_master_ml_entry_v1_ce_only_env.sh` | — | E2 + `ML_ENTRY_BLOCK_PE=1` (CE-only ship gate) |
+| **E6_aug_oct** | `E6_ce_only_aug_oct` | same patch | — | Same profile; window **2024-08-01 → 2024-10-31** |
 
 **Script:** `ops/gcp/run_exit_risk_experiments.sh`  
 **Window:** 2024-05-01 → 2024-07-31 · **~23,412** snapshots emitted per run
@@ -92,6 +94,19 @@ Fill **Run ID** from log line `queued … run_id=…` or `run_ids.env`.
 | E2E3 | `cf5ce85a` | 309 | 1.02 | — | **−4.6** | 179 | — | — | Done | Thin book; risk_pause choke |
 | E4 | `81d73382` | 484 | 1.03 | +6.9 | −19.2 | 219 | 1.27 | 0.89 | Done | Combo did not beat E2 |
 | **E5** | `2632cdc7` | 169 | 0.79 | −7.1 | May only | 134 | 0.50 | 0.89 | Done | **Failed** — May-only book; not vs E2 |
+| **E6** CE-only | _pending_ | — | — | — | — | — | — | — | **Queued** | E2 + `ML_ENTRY_BLOCK_PE`; May–Jul sanity |
+| **E6_aug_oct** CE-only | _pending_ | — | — | — | — | — | — | — | **Queued** | Aug–Oct; **ship gate** (net PF≥1.10, CI_lo≥1.0, ≥400 trades) |
+
+### 5-gate ship plan (Gates 1–2 implemented)
+
+| Gate | Experiment / tool | Command |
+|------|-------------------|---------|
+| **1** CE-only | E6, E6_aug_oct | `run_exit_risk_experiments.sh E6` · `E6_aug_oct` |
+| **2** Net costs | Re-analyze any run_id | `analyze_oos_validation_run.py <rid> <label>` + `OOS_COST_SLIPPAGE_BPS=50` |
+
+**E6 patch:** `ops/gcp/patch_trader_master_ml_entry_v1_ce_only_env.sh` → profile `trader_master_ml_entry_v1_dyn_exit`, `ML_ENTRY_BLOCK_PE=1`.
+
+**Gate 2 env:** `OOS_COST_BROKERAGE_PER_ORDER`, `OOS_COST_CHARGES_BPS`, `OOS_COST_SLIPPAGE_BPS`, `OOS_BOOTSTRAP_ITERATIONS`, `OOS_BOOTSTRAP_SEED`.
 
 ### How to refresh one row
 

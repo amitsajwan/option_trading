@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Exit + risk experiments only (frozen ML entry + direction ML).
 #
-#   sudo bash ops/gcp/run_exit_risk_experiments.sh [E1|E2|E3|E2E3|E4|E5|all]
+#   sudo bash ops/gcp/run_exit_risk_experiments.sh [E1|E2|E3|E2E3|E4|E5|E6|E6_aug_oct|all]
 #
 # Baseline reference: ae5a86b7 (May–Jul 2024, PF 1.0)
+# E6: CE-only ship gate. E6_aug_oct: same profile, OOS walk-forward window.
 #
 set -euo pipefail
 REPO="${REPO_ROOT:-/opt/option_trading}"
@@ -96,6 +97,11 @@ case "${MODE}" in
   E2E3) run_one "E2E3_dyn_exit_stress" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" "${REPO}/ops/gcp/patch_eval_risk_stress_env.sh" ;;
   E4) run_one "E4_stagnant20_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_dyn_exit_env.sh" "" ;;
   E5) run_one "E5_direction_consensus" "${REPO}/ops/gcp/patch_trader_master_ml_entry_consensus_env.sh" "" ;;
+  E6) run_one "E6_ce_only" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_ce_only_env.sh" "" ;;
+  E6_aug_oct)
+    DATE_FROM="2024-08-01"
+    DATE_TO="2024-10-31"
+    run_one "E6_ce_only_aug_oct" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_ce_only_env.sh" "" ;;
   all)
     run_one "E1_stagnant_20" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_env.sh" ""
     run_one "E2_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" ""
@@ -103,7 +109,7 @@ case "${MODE}" in
     run_one "E4_stagnant20_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_dyn_exit_env.sh" ""
     run_one "E5_direction_consensus" "${REPO}/ops/gcp/patch_trader_master_ml_entry_consensus_env.sh" ""
     ;;
-  *) echo "Usage: $0 [E1|E2|E2E3|E4|E5|all]"; exit 2 ;;
+  *) echo "Usage: $0 [E1|E2|E2E3|E4|E5|E6|E6_aug_oct|all]"; exit 2 ;;
 esac
 
 log "finished — logs in ${LOG_DIR}/"

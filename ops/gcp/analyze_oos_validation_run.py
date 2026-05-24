@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sys
 import urllib.request
 from collections import Counter, defaultdict
@@ -24,6 +25,16 @@ MIN_TRADES = int(os.getenv("OOS_MIN_TRADES", "40"))
 MIN_PF = float(os.getenv("OOS_MIN_PF", "1.30"))
 MIN_LEG_PF = float(os.getenv("OOS_MIN_LEG_PF", "1.00"))
 
+# Cost overlay — gross runtime pnl_pct has zero slippage/brokerage. Overlay
+# applies post-hoc. Defaults mirror strategy_app/cost_model.py; bump
+# OOS_COST_SLIPPAGE_BPS for ATM BN weeklies if testing realistic fills
+# (effective half-spread can be 50-150 bps per side, not 7.5).
+COST_BROKERAGE_PER_ORDER = float(os.getenv("OOS_COST_BROKERAGE_PER_ORDER", "20.0"))
+COST_CHARGES_BPS = float(os.getenv("OOS_COST_CHARGES_BPS", "2.5"))
+COST_SLIPPAGE_BPS = float(os.getenv("OOS_COST_SLIPPAGE_BPS", "7.5"))
+BOOTSTRAP_ITERATIONS = int(os.getenv("OOS_BOOTSTRAP_ITERATIONS", "3000"))
+BOOTSTRAP_SEED = int(os.getenv("OOS_BOOTSTRAP_SEED", "42"))
+
 
 def pct(v: float) -> str:
     return f"{v * 100:+.1f}%"
@@ -33,10 +44,19 @@ def pcts(v: float) -> str:
     return f"{v * 100:.1f}%"
 
 
-def profit_factor(rows: list[dict], *, key: str = "cap_pnl_pct") -> float:
-    wins = sum(r[key] for r in rows if r["pnl_pct"] > 0)
-    loss = abs(sum(r[key] for r in rows if r["pnl_pct"] <= 0))
+def profit_factor(rows: list[dict], *, key: str = "cap_pnl_pct", sign_key: str = "pnl_pct") -> float:
+    wins = sum(r[key] for r in rows if r[sign_key] > 0)
+    loss = abs(sum(r[key] for r in rows if r[sign_key] <= 0))
     return wins / loss if loss > 0 else float("inf")
+
+
+def _trade_costs(entry_value: float, exit_value: float) -> float:
+    """Round-trip cost: brokerage (both legs) + (charges + slippage) on each side value."""
+    safe_entry = max(0.0, entry_value)
+    safe_exit = max(0.0, exit_value)
+    brokerage = 2.0 * COST_BROKERAGE_PER_ORDER
+    bps_rate = (COST_CHARGES_BPS + COST_SLIPPAGE_BPS) / 10000.0
+    return brokerage + (safe_entry + safe_exit) * bps_rate
 
 
 def load_trades(db, run_id: str) -> list[dict]:
@@ -47,6 +67,7 @@ def load_trades(db, run_id: str) -> list[dict]:
     ):
         pnl_pct = float(doc.get("pnl_pct") or 0)
         entry_prem = float(doc.get("entry_premium") or 0)
+        exit_prem = float(doc.get("exit_premium") or (entry_prem * (1.0 + pnl_pct)))
         lots = max(1, int(doc.get("lots") or 1))
         stop_pct = float(doc.get("stop_loss_pct") or 0)
         direction = str(doc.get("direction") or "")
@@ -55,8 +76,16 @@ def load_trades(db, run_id: str) -> list[dict]:
         date = str(doc.get("trade_date_ist") or "")
         ml_prob = doc.get("ml_entry_prob")
         ml_prob = float(ml_prob) if ml_prob is not None else None
-        cap_at_risk = entry_prem * lots * LOT_SIZE
+        units = lots * LOT_SIZE
+        entry_value = entry_prem * units
+        exit_value = exit_prem * units
+        cap_at_risk = entry_value
         cap_pnl_pct = (pnl_pct * cap_at_risk) / CAPITAL if CAPITAL > 0 else 0.0
+        gross_pnl_amt = (exit_value - entry_value) if direction != "SHORT" else (entry_value - exit_value)
+        cost_amt = _trade_costs(entry_value, exit_value)
+        net_pnl_amt = gross_pnl_amt - cost_amt
+        net_pnl_pct = (net_pnl_amt / entry_value) if entry_value > 0 else 0.0
+        net_cap_pnl_pct = (net_pnl_amt / CAPITAL) if CAPITAL > 0 else 0.0
         rows.append(
             {
                 "date": date,
@@ -67,9 +96,44 @@ def load_trades(db, run_id: str) -> list[dict]:
                 "stop_pct": stop_pct,
                 "cap_pnl_pct": cap_pnl_pct,
                 "ml_prob": ml_prob,
+                "entry_premium": entry_prem,
+                "exit_premium": exit_prem,
+                "lots": lots,
+                "cost_amt": cost_amt,
+                "net_pnl_pct": net_pnl_pct,
+                "net_cap_pnl_pct": net_cap_pnl_pct,
             }
         )
     return rows
+
+
+def bootstrap_pf_ci(
+    rows: list[dict],
+    *,
+    key: str = "net_cap_pnl_pct",
+    sign_key: str = "net_pnl_pct",
+    iterations: int = BOOTSTRAP_ITERATIONS,
+    seed: int = BOOTSTRAP_SEED,
+) -> tuple[float, float, float]:
+    """Return (lo_2.5, median, hi_97.5) for bootstrapped profit factor."""
+    if not rows or iterations <= 0:
+        return (0.0, 0.0, 0.0)
+    rng = random.Random(seed)
+    n = len(rows)
+    pfs: list[float] = []
+    for _ in range(iterations):
+        sample = [rows[rng.randrange(n)] for _ in range(n)]
+        pf = profit_factor(sample, key=key, sign_key=sign_key)
+        if pf == float("inf"):
+            continue
+        pfs.append(pf)
+    if not pfs:
+        return (0.0, 0.0, 0.0)
+    pfs.sort()
+    lo = pfs[int(0.025 * len(pfs))]
+    hi = pfs[min(len(pfs) - 1, int(0.975 * len(pfs)))]
+    med = pfs[len(pfs) // 2]
+    return (lo, med, hi)
 
 
 def blocker_histogram(db, run_id: str) -> Counter[str]:
@@ -119,31 +183,33 @@ def latest_run_id() -> str:
     return rid
 
 
-def leg_pf(rows: list[dict], direction: str) -> float | None:
+def leg_pf(rows: list[dict], direction: str, *, key: str = "cap_pnl_pct", sign_key: str = "pnl_pct") -> float | None:
     leg = [r for r in rows if r["direction"] == direction]
     if not leg:
         return None
-    return profit_factor(leg)
+    return profit_factor(leg, key=key, sign_key=sign_key)
 
 
 def evaluate_gates(rows: list[dict]) -> list[tuple[str, bool, str]]:
     n = len(rows)
-    pf = profit_factor(rows) if rows else 0.0
-    ce_pf = leg_pf(rows, "CE")
-    pe_pf = leg_pf(rows, "PE")
+    gross_pf = profit_factor(rows) if rows else 0.0
+    net_pf = profit_factor(rows, key="net_cap_pnl_pct", sign_key="net_pnl_pct") if rows else 0.0
+    ce_pf = leg_pf(rows, "CE", key="net_cap_pnl_pct", sign_key="net_pnl_pct")
+    pe_pf = leg_pf(rows, "PE", key="net_cap_pnl_pct", sign_key="net_pnl_pct")
     stops = sorted({round(r["stop_pct"] * 100) for r in rows if r["stop_pct"] > 0})
     stop_ok = not stops or stops == [20] or (20 in stops and max(stops) <= 25)
 
     checks: list[tuple[str, bool, str]] = [
         ("trades >= {}".format(MIN_TRADES), n >= MIN_TRADES, f"{n}"),
-        ("portfolio PF >= {}".format(MIN_PF), pf >= MIN_PF, f"{pf:.2f}"),
+        ("gross PF >= {}".format(MIN_PF), gross_pf >= MIN_PF, f"{gross_pf:.2f}"),
+        ("net PF >= {}".format(MIN_PF), net_pf >= MIN_PF, f"{net_pf:.2f}"),
         (
-            "CE leg PF >= {}".format(MIN_LEG_PF),
+            "net CE leg PF >= {}".format(MIN_LEG_PF),
             ce_pf is not None and ce_pf >= MIN_LEG_PF,
             "n/a" if ce_pf is None else f"{ce_pf:.2f}",
         ),
         (
-            "PE leg PF >= {}".format(MIN_LEG_PF),
+            "net PE leg PF >= {}".format(MIN_LEG_PF),
             pe_pf is not None and pe_pf >= MIN_LEG_PF,
             "n/a" if pe_pf is None else f"{pe_pf:.2f}",
         ),
@@ -171,27 +237,42 @@ def summarize(label: str, run_id: str, rows: list[dict], db) -> bool:
         return all_ok
 
     pnls = [r["pnl_pct"] for r in rows]
+    net_pnls = [r["net_pnl_pct"] for r in rows]
     cpnls = [r["cap_pnl_pct"] for r in rows]
+    net_cpnls = [r["net_cap_pnl_pct"] for r in rows]
     wins = [r for r in rows if r["pnl_pct"] > 0]
+    net_wins = [r for r in rows if r["net_pnl_pct"] > 0]
     n = len(rows)
     pf = profit_factor(rows)
+    net_pf = profit_factor(rows, key="net_cap_pnl_pct", sign_key="net_pnl_pct")
+    net_pf_lo, net_pf_med, net_pf_hi = bootstrap_pf_ci(rows)
 
-    print(f"\n  Trades        : {n}")
-    print(f"  Win rate      : {len(wins)/n*100:.0f}%")
-    print(f"  Avg opt PnL   : {pct(mean(pnls))}   median {pct(median(pnls))}")
+    print(f"\n  Trades            : {n}")
+    print(f"  Win rate (gross)  : {len(wins)/n*100:.0f}%   net: {len(net_wins)/n*100:.0f}%")
+    print(f"  Avg opt PnL gross : {pct(mean(pnls))}   median {pct(median(pnls))}")
+    print(f"  Avg opt PnL net   : {pct(mean(net_pnls))}   median {pct(median(net_pnls))}")
     if n > 1:
-        print(f"  Std dev       : {pcts(stdev(pnls))}")
-    print(f"  Total cap PnL : {pct(sum(cpnls))}")
-    print(f"  Profit factor : {pf:.2f}")
+        print(f"  Std dev (gross)   : {pcts(stdev(pnls))}")
+    print(f"  Total cap PnL gross: {pct(sum(cpnls))}")
+    print(f"  Total cap PnL net  : {pct(sum(net_cpnls))}")
+    print(f"  Profit factor gross: {pf:.2f}")
+    print(f"  Profit factor NET  : {net_pf:.2f}   bootstrap 95% CI [{net_pf_lo:.2f}, {net_pf_hi:.2f}]  (n={BOOTSTRAP_ITERATIONS})")
+    print(
+        f"  Cost overlay      : brokerage={COST_BROKERAGE_PER_ORDER:.1f}/order  "
+        f"charges={COST_CHARGES_BPS:.1f}bps/side  slippage={COST_SLIPPAGE_BPS:.1f}bps/side"
+    )
 
     for d in ("CE", "PE"):
         leg = [r for r in rows if r["direction"] == d]
         if leg:
             lp = [r["pnl_pct"] for r in leg]
+            np_ = [r["net_pnl_pct"] for r in leg]
             lpf = leg_pf(rows, d)
+            n_lpf = leg_pf(rows, d, key="net_cap_pnl_pct", sign_key="net_pnl_pct")
             print(
-                f"  {d}: n={len(leg):2d}  wr={sum(1 for p in lp if p>0)/len(leg)*100:.0f}%  "
-                f"avg={pct(mean(lp))}  leg_PF={lpf:.2f}"
+                f"  {d}: n={len(leg):2d}  wr_gross={sum(1 for p in lp if p>0)/len(leg)*100:.0f}%  "
+                f"avg_gross={pct(mean(lp))}  avg_net={pct(mean(np_))}  "
+                f"leg_PF_gross={lpf:.2f}  leg_PF_NET={n_lpf:.2f}"
             )
 
     by_exit: dict[str, list[float]] = defaultdict(list)

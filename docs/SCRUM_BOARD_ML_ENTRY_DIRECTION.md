@@ -98,6 +98,7 @@ These are observable market structure signals, not predicted outcomes. They prod
 | E4-S1 | Session trade cap pilot (8 → 10) | P3 | | **Backlog** | 3 |
 | E4-S2 | TIME_STOP / MFE giveback experiment (E1–E4 grid) | **P1** | Ops/GCP | **In review** | 5 |
 | E4-S2b | Direction consensus + fast exit (E5 replay) | **P1** | Ops/GCP | **Done — needs E5b** | 5 |
+| E4-S3 | **5-gate ship:** E6 CE-only + cost overlay (Gates 1–2) | **P0** | Ops/GCP | **In progress** | 3 |
 | E4-S3 | Council exit layer (position re-eval) | P2 | Engine | **Backlog** | 8 |
 | E5-S1 | Failed-move trap signals in shadow scorer | **P1** | Engine | **In Review** | 5 |
 | E5-S2 | Intraday session regime classifier | P2 | ML | **Backlog** | 8 |
