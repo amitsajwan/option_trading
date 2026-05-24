@@ -237,6 +237,10 @@ class PositionTracker:
             return False
         condition = str(position.stagnant_exit_condition or "").strip().lower()
         if condition == "shadow_score_crossed_zero":
+            # Only defer exit for profitable trades — holding a losing trade because
+            # macro direction still agrees compounds the loss (E4-S2 v1 finding).
+            if position.pnl_pct <= 0:
+                return True
             score = float(position.current_shadow_score)
             direction = str(position.direction or "").upper()
             if direction == "CE" and score > 0:

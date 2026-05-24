@@ -266,5 +266,71 @@ class TestTrapSignalDirectionality(unittest.TestCase):
         self.assertLess(score, 0)
 
 
+class TestDynamicStagnantExitPnLFloor(unittest.TestCase):
+    """E4-S2 v2: shadow_score_crossed_zero must not hold underwater trades.
+
+    Replay finding 2026-05-24: v1 held losing trades while shadow agreed with
+    direction, producing TIME_STOP avg -6.5% (was +0.19%). Fix: only defer exit
+    when pnl_pct > 0.
+    """
+
+    def _position(self, *, pnl_pct: float, direction: str, shadow_score: float,
+                  bars: int = 15) -> object:
+        from strategy_app.contracts import PositionContext
+        from datetime import datetime, timezone
+        return PositionContext(
+            position_id="test",
+            direction=direction,
+            strike=50000,
+            expiry=None,
+            entry_premium=100.0,
+            entry_time=datetime(2024, 8, 1, 9, 30, tzinfo=timezone.utc),
+            entry_snapshot_id="snap-001",
+            lots=1,
+            pnl_pct=pnl_pct,
+            bars_held=bars,
+            stagnant_exit_bars=12,
+            stagnant_min_gain_pct=0.05,
+            stagnant_exit_condition="shadow_score_crossed_zero",
+            current_shadow_score=shadow_score,
+        )
+
+    def test_profitable_with_agreeing_shadow_is_held(self) -> None:
+        """CE trade at +3% (below 5% threshold), shadow positive → hold."""
+        from strategy_app.position.tracker import PositionTracker
+        pos = self._position(pnl_pct=0.03, direction="CE", shadow_score=2.5)
+        self.assertFalse(PositionTracker._is_stagnant_exit(pos))
+
+    def test_losing_trade_exits_even_with_agreeing_shadow(self) -> None:
+        """CE trade at -5% with still-positive shadow → exit (don't hold losers)."""
+        from strategy_app.position.tracker import PositionTracker
+        pos = self._position(pnl_pct=-0.05, direction="CE", shadow_score=2.5)
+        self.assertTrue(PositionTracker._is_stagnant_exit(pos))
+
+    def test_flat_trade_exits_even_with_agreeing_shadow(self) -> None:
+        """CE trade at exactly 0% → exit (floor is strictly > 0)."""
+        from strategy_app.position.tracker import PositionTracker
+        pos = self._position(pnl_pct=0.0, direction="CE", shadow_score=1.0)
+        self.assertTrue(PositionTracker._is_stagnant_exit(pos))
+
+    def test_profitable_ce_reversed_shadow_exits(self) -> None:
+        """CE trade at +3% but shadow has gone negative → momentum reversed, exit."""
+        from strategy_app.position.tracker import PositionTracker
+        pos = self._position(pnl_pct=0.03, direction="CE", shadow_score=-1.5)
+        self.assertTrue(PositionTracker._is_stagnant_exit(pos))
+
+    def test_profitable_pe_agreeing_shadow_is_held(self) -> None:
+        """PE trade at +3%, shadow negative (PE-agreeing) → hold."""
+        from strategy_app.position.tracker import PositionTracker
+        pos = self._position(pnl_pct=0.03, direction="PE", shadow_score=-2.0)
+        self.assertFalse(PositionTracker._is_stagnant_exit(pos))
+
+    def test_losing_pe_exits_even_with_agreeing_shadow(self) -> None:
+        """PE trade at -8%, shadow still negative (agreeing) → exit anyway."""
+        from strategy_app.position.tracker import PositionTracker
+        pos = self._position(pnl_pct=-0.08, direction="PE", shadow_score=-2.0)
+        self.assertTrue(PositionTracker._is_stagnant_exit(pos))
+
+
 if __name__ == "__main__":
     unittest.main()
