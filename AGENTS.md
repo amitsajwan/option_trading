@@ -62,6 +62,7 @@ Frontend type-check: `cd strategy_eval_ui && npx tsc -b --noEmit`
 - **ML jobs** (HPO, parquet): same VM, prefer **off-market hours**; oracle labeling needs **≥64 GB** RAM.
 - **`n2-highmem-*`** may be unavailable in zone; **`e2-highmem-*`** has worked.
 - Details: `.cursor/rules/gcp-deploy-workflow.mdc`, `.cursor/skills/gcp-vm-deploy/SKILL.md`.
+- **Exit/risk experiments (May–Jul OOS):** `docs/EXIT_RISK_EXPERIMENTS_2026-05.md` — E1–E5 replay grid, scorecard, consensus profile.
 
 ### Gotchas
 

@@ -1,7 +1,7 @@
 # Scrum board — ML entry · direction · trap detection
 
 **Living document** — update status, owners, and **Results** after each replay / merge.  
-**Last updated:** 2026-05-24 (E3-S6 CE AUC 0.540; direction ML ceiling confirmed; pivot to trap detection)  
+**Last updated:** 2026-05-24 (E1–E4 exit grid done; E5 direction consensus replay in progress; see [EXIT_RISK_EXPERIMENTS_2026-05.md](EXIT_RISK_EXPERIMENTS_2026-05.md))  
 **Profile under test:** `trader_master_ml_entry_v1` · **Engine baseline:** `a133936`
 
 Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md) · [ENTRY_AND_DIRECTION.md](ENTRY_AND_DIRECTION.md) · [runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md](runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md)
@@ -56,6 +56,7 @@ These are observable market structure signals, not predicted outcomes. They prod
 
 | Team | Script | Purpose |
 |------|--------|---------|
+| Ops/GCP | `ops/gcp/run_exit_risk_experiments.sh` | **E1–E5** May–Jul replay grid — [runbook](EXIT_RISK_EXPERIMENTS_2026-05.md) |
 | Ops/GCP | `ops/gcp/run_engine_direction_ab.sh` | `baseline` \| `v1_direction_ml` \| `v1_dual_direction_ml` |
 | Ops/GCP | `ops/gcp/run_oos_validation_replay.sh` | OOS windows |
 | Ops/GCP | `ops/gcp/analyze_oos_validation_run.py` | PASS/FAIL analyzer |
@@ -95,7 +96,8 @@ These are observable market structure signals, not predicted outcomes. They prod
 | E3-S5 | Profile `trader_master_ml_entry_v1` | P1 | | **Done** | 5 |
 | E3-S6 | Dual direction model (CE + PE per-side) | P1 | ML | **Closed — ceiling** | 8 |
 | E4-S1 | Session trade cap pilot (8 → 10) | P3 | | **Backlog** | 3 |
-| E4-S2 | TIME_STOP / MFE giveback experiment | **P1** | Ops/GCP | **In Progress** | 5 |
+| E4-S2 | TIME_STOP / MFE giveback experiment (E1–E4 grid) | **P1** | Ops/GCP | **In review** | 5 |
+| E4-S2b | Direction consensus + fast exit (E5 replay) | **P1** | Ops/GCP | **In progress** | 5 |
 | E4-S3 | Council exit layer (position re-eval) | P2 | Engine | **Backlog** | 8 |
 | E5-S1 | Failed-move trap signals in shadow scorer | **P1** | Engine | **In Review** | 5 |
 | E5-S2 | Intraday session regime classifier | P2 | ML | **Backlog** | 8 |
@@ -514,6 +516,21 @@ All computable from `snapshot.market_data` fields already collected.
 | _void_ R1/R2 | `0acd6aea`, `bbc85202` | — | 4–6 | — | — | — | — | Void | Wrong profile / stale env |
 | **dyn_exit_v1** | `8c0b0ec0` | 2024-05→07 | 36 | **0.74** | -3.5 | 1.06 | 0.43 | **Fail** | E4-S2 v1; held losers; TIME_STOP avg -6.5% |
 
+### Exit + risk grid (May–Jul 2024, full window) — [EXIT_RISK_EXPERIMENTS_2026-05.md](EXIT_RISK_EXPERIMENTS_2026-05.md)
+
+**Harness:** `run_exit_risk_experiments.sh` · emit 2400/min · drain ≥400 closes · `ENTRY_ML_MIN_PROB=0.65`
+
+| Exp | Run ID | Trades | PF | Jul cap | TIME_STOP | CE PF | PE PF | Verdict |
+|-----|--------|--------|-----|---------|-----------|-------|-------|---------|
+| Ref | `ae5a86b7` | 541 | 1.00 | −19.7% | 339 | 1.36 | 0.79 | Flat book |
+| E1 stagnant_20 | `2b7cd0e7` | 491 | 1.03 | −16.2% | **230** | — | — | Best TIME_STOP cut |
+| **E2 dyn_exit** | `32b01989` | 540 | **1.04** | **−15.0%** | 318 | 1.42 | 0.81 | **Best PF/Jul** |
+| E2E3 stress | `cf5ce85a` | 309 | 1.02 | **−4.6%** | 179 | — | — | Thin book |
+| E4 combo | `81d73382` | 484 | 1.03 | −19.2% | 219 | 1.27 | 0.89 | No beat E2 |
+| **E5 consensus** | _pending_ | — | — | — | — | — | — | **Running** ~18:11 UTC `013ae66` |
+
+**Loss anatomy (E2):** 41% WR; TIME_STOP 59% of trades (PF 0.15); PE leg PF 0.81; direction ML AUC ~0.55 ceiling.
+
 **Direction ML training log:**
 
 | Run | Model | CV AUC | Holdout AUC | Oracle PF | Published? | Notes |
@@ -545,17 +562,19 @@ All computable from `snapshot.market_data` fields already collected.
 | 2026-05-23 | ML | E3-S6 label fix (`min_abs_return` 0.003→0.001); VM HPO re-run |
 | 2026-05-24 | — | E3-S6 CE AUC 0.540 — direction ML ceiling confirmed; E3-S4 cancelled; E3-S6 closed; E4 ungated; Epic E5 added; Sprint 2 set |
 | 2026-05-24 | — | E4-S2 + E5-S1 implemented; E4-S2 v1 replay FAIL (PF 0.74, held losers); v2 P&L floor fix (`db80db5`); re-replay pending |
+| 2026-05-24 | Ops | E1–E4 May–Jul grid complete; best **E2** PF 1.04; E4 combo wash; replay throttle + drain fix (`ce02787`) |
+| 2026-05-24 | Engine | Direction consensus profile `trader_master_ml_entry_consensus_v1` + E5 experiment (`013ae66`); [EXIT_RISK_EXPERIMENTS_2026-05.md](EXIT_RISK_EXPERIMENTS_2026-05.md) |
 
 ---
 
 # Next tasks (sprint 2 order)
 
-1. **E4-S2 quick experiment (Ops, P1, 2 days)** — Change `stagnant_exit_bars` 12→20, run Aug–Oct replay. Does PF improve? This is the fastest measurable test of the TIME_STOP hypothesis.
+1. **E5 replay close-out (Ops, P1)** — Finish `E5_direction_consensus` on VM; paste run_id + PF/Jul/TIME_STOP into [EXIT_RISK_EXPERIMENTS_2026-05.md](EXIT_RISK_EXPERIMENTS_2026-05.md) §4. Decide ship: E2 exits vs E5 full stack.
 
-2. **E5-S1 (Engine, P1, 3 days)** — Add 6 trap signals to `_shadow_direction_from_snapshot`. Unit tests. Run replay, check if trap signals fire on winning trades. Update heatmap signal categories in UI.
+2. **E5-S1 trap signals (Engine, P1)** — Add failed-move traps to shadow scorer; replay; correlate with winners.
 
-3. **E2-S6 close-out (Ops, P2)** — Fresh `replay_only in_sample_sanity` on v1 + dir ML. Get Oct month. If PF still < 1.30, close as-is and note trap signals may fix it in Sprint 3.
+3. **Vote telemetry (Engine, P2)** — Persist `direction_source`, consensus margin on `strategy_votes_historical` for forensics join.
 
-4. **E3-S6 PE result logging** — When PE finishes, log AUC in direction ML training log. If < 0.55 as expected: no further action. If ≥ 0.58: reopen discussion.
+4. **E2-S6 close-out (Ops, P2)** — Aug–Oct in-sample replay on chosen profile after E5 verdict.
 
-5. **E4-S3 / E5-S4 design spike (ML, P2)** — Design the dynamic exit trigger spec before implementation. Decide: rule-based triggers (E5-S4) vs council re-eval (E4-S3) — or both as composable layers.
+5. **E4-S3 / E5-S4 design spike (ML, P2)** — Premium-based dynamic exits vs council re-eval.

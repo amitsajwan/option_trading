@@ -188,6 +188,14 @@ sudo docker compose ... up -d --force-recreate strategy_app_historical
 # historical eval with STRATEGY_PROFILE_ID=trader_master_ml_entry_v1
 ```
 
+### Exit + risk experiment grid (May–Jul 2024)
+
+Full team runbook, scorecard, and E1–E5 results: **[EXIT_RISK_EXPERIMENTS_2026-05.md](EXIT_RISK_EXPERIMENTS_2026-05.md)**
+
+```bash
+sudo bash ops/gcp/run_exit_risk_experiments.sh E5   # direction consensus (latest)
+```
+
 ### OOS validation (ML_ENTRY primary voter — May 2026)
 
 After commit `a133936`, validate on disjoint windows before tuning caps or TIME_STOP:
