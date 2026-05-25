@@ -436,9 +436,18 @@ class DeterministicRuleEngine(StrategyEngine):
         risk: RiskContext,
     ) -> Optional[TradeSignal]:
         """Check for system exits (stop, target, time) and log manage events."""
-        if position.stagnant_exit_condition == "shadow_score_crossed_zero":
-            _, _, _shadow_score = self._shadow_direction_from_snapshot(snap)
-            position.current_shadow_score = float(_shadow_score)
+        # Populate current shadow score when needed by any dynamic exit logic.
+        if (
+            position.stagnant_exit_condition == "shadow_score_crossed_zero"
+            or as_bool(os.getenv("DYNAMIC_SCRATCH_ENABLED", "false"))
+            or as_bool(os.getenv("STAGNANT_PROFIT_EXIT_ENABLED", "false"))
+        ):
+            try:
+                _, _, _shadow_score = self._shadow_direction_from_snapshot(snap)
+                position.current_shadow_score = float(_shadow_score)
+            except Exception:
+                # Do not block manage loop if scorer fails; leave score as-is.
+                pass
         system_exit = self._tracker.update(snap, risk)
         if system_exit is not None:
             self._annotate_signal_contract(system_exit, decision_mode="rule_vote")
@@ -593,6 +602,33 @@ class DeterministicRuleEngine(StrategyEngine):
                 logger.debug(
                     "entry blocked: regime tag=%s not in ENTRY_REGIME_ALLOWED_TAGS",
                     self._session_regime_tag,
+                )
+                return None
+
+        # Optional trap gate: require a minimum number of trap cues to be present
+        # (any side) before considering entries. Disabled by default.
+        if as_bool(os.getenv("ENTRY_TRAP_GATE_ENABLED", "false")):
+            min_match = 0
+            try:
+                min_match = int(os.getenv("ENTRY_TRAP_MIN_MATCH", "2") or "2")
+            except Exception:
+                min_match = 2
+            # Reuse shadow scorer basis; parse fired signal list from basis string.
+            # Basis format: "multi_signal_ce(score=...:sig1,sig2,...)" or similar
+            _dir_hint, _basis, _shadow_score = self._shadow_direction_from_snapshot(snap)
+            fired_str = _basis.split(":", 1)[-1] if ":" in _basis else _basis
+            fired_set = {s.strip() for s in fired_str.split(",") if s.strip()}
+            # CE-side trap cues
+            ce_traps = {"orb_low_rejected", "vwap_reclaim_bull", "pe_iv_fading"}
+            # PE-side trap cues
+            pe_traps = {"orb_high_rejected", "vwap_reject_bear", "ce_iv_fading"}
+            ce_hits = len(fired_set & ce_traps)
+            pe_hits = len(fired_set & pe_traps)
+            if max(ce_hits, pe_hits) < max(1, min_match):
+                logger.debug(
+                    "entry blocked: trap_gate min=%d fired=%s",
+                    max(1, min_match),
+                    ",".join(sorted(fired_set)) or "none",
                 )
                 return None
 

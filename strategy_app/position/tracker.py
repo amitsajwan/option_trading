@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import date, datetime
 from typing import Optional
 
 from ..contracts import ExitReason, PositionContext, RiskContext, SignalType, TradeSignal
+from ..utils.env import as_bool
 from ..brain.playbook_brain import PLAYBOOK_EXIT_KEY, evaluate_playbook_exit
 from ..market.snapshot_accessor import SnapshotAccessor
 from .position_factory import PositionFactory
@@ -90,6 +92,18 @@ class PositionTracker:
         exit_reason: Optional[ExitReason] = None
         exit_trigger = None
         has_playbook = isinstance(position.playbook_exit_policy, dict)
+        # Dynamic scratch: if enabled and trade is red, and shadow score now
+        # opposes our direction, exit immediately (do not wait for TIME_STOP or SL).
+        if forced_exit_reason is None and as_bool(os.getenv("DYNAMIC_SCRATCH_ENABLED", "false")):
+            try:
+                score = float(position.current_shadow_score)
+                d = str(position.direction or "").upper()
+                flip = (d == "CE" and score < 0.0) or (d == "PE" and score > 0.0)
+                if position.pnl_pct <= 0.0 and flip:
+                    exit_reason = ExitReason.TIME_STOP
+                    exit_trigger = "dynamic_scratch"
+            except Exception:
+                pass
         if forced_exit_reason is None and has_playbook:
             playbook_hit = evaluate_playbook_exit(position, snap)
             if playbook_hit is not None:
@@ -100,6 +114,23 @@ class PositionTracker:
         elif risk.daily_loss_breached or risk.weekly_loss_breached:
             exit_reason = ExitReason.RISK_BREACH
             exit_trigger = "risk_breach"
+        # Small-profit stagnant exit: bank profits when giving back and momentum has
+        # stalled (proxy via MFE giveback). Placed before clock/stop exits.
+        elif exit_reason is None and as_bool(os.getenv("STAGNANT_PROFIT_EXIT_ENABLED", "false")):
+            try:
+                min_gain = float(os.getenv("STAGNANT_PROFIT_PCT", "0.03") or 0.03)
+                decel_bars = int(os.getenv("STAGNANT_PROFIT_DECEL_BARS", "2") or 2)
+            except Exception:
+                min_gain = 0.03
+                decel_bars = 2
+            giveback = float(position.mfe_pct) - float(position.pnl_pct)
+            if (
+                position.bars_held >= decel_bars
+                and float(position.pnl_pct) >= min_gain
+                and giveback >= 0.02
+            ):
+                exit_reason = ExitReason.TIME_STOP
+                exit_trigger = "stagnant_profit_exit"
         elif self._minute_of_day(snap) >= HARD_CLOSE_MINUTE:
             exit_reason = ExitReason.TIME_STOP
             exit_trigger = "hard_close"
