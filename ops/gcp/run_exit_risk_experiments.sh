@@ -62,6 +62,7 @@ run_one() {
   local tag="$1"
   local profile_patch="$2"
   local extra_risk="${3:-}"
+  local min_closes="${4:-400}"
   local log="${LOG_DIR}/${tag}.log"
   : > "${log}"
   log "START ${tag}"
@@ -78,10 +79,10 @@ run_one() {
 import json,sys
 print(json.loads(sys.stdin.read()).get('run_id',''))
 ")"
-  log "queued ${tag} run_id=${RID} emit_rate=${REPLAY_EMIT_SNAPS_PER_MIN}/min — waiting emission+drain"
+  log "queued ${tag} run_id=${RID} emit_rate=${REPLAY_EMIT_SNAPS_PER_MIN}/min min_closes=${min_closes} — waiting emission+drain"
   sudo docker cp "${REPO}/ops/gcp/wait_replay_closes.py" option_trading-dashboard-1:/tmp/wait_replay_closes.py
   if ! sudo docker exec -e MONGO_URL=mongodb://mongo:27017 option_trading-dashboard-1 \
-    python /tmp/wait_replay_closes.py "${RID}" --min-closes 400 --timeout-sec 5400 --stable-polls 8 \
+    python /tmp/wait_replay_closes.py "${RID}" --min-closes "${min_closes}" --timeout-sec 5400 --stable-polls 8 \
     >> "${log}" 2>&1; then
     log "WARN: drain incomplete for ${RID} — analyzing anyway"
   fi
@@ -98,28 +99,28 @@ case "${MODE}" in
   E3) run_one "E3_baseline_stress_risk" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_direction_ml_env.sh" "${REPO}/ops/gcp/patch_eval_risk_stress_env.sh" ;;
   E2E3) run_one "E2E3_dyn_exit_stress" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" "${REPO}/ops/gcp/patch_eval_risk_stress_env.sh" ;;
   E4) run_one "E4_stagnant20_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_dyn_exit_env.sh" "" ;;
-  E5) run_one "E5_direction_consensus" "${REPO}/ops/gcp/patch_trader_master_ml_entry_consensus_env.sh" "" ;;
-  E6) run_one "E6_ce_only" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_ce_only_env.sh" "" ;;
+  E5) run_one "E5_direction_consensus" "${REPO}/ops/gcp/patch_trader_master_ml_entry_consensus_env.sh" "" 120 ;;
+  E6) run_one "E6_ce_only" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_ce_only_env.sh" "" 40 ;;
   E6_aug_oct)
     DATE_FROM="2024-08-01"
     DATE_TO="2024-10-31"
-    run_one "E6_ce_only_aug_oct" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_ce_only_env.sh" "" ;;
-  E8) run_one "E8_ce_notbull_topwins" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_e8_env.sh" "" ;;
+    run_one "E6_ce_only_aug_oct" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_ce_only_env.sh" "" 40 ;;
+  E8) run_one "E8_ce_notbull_topwins" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_e8_env.sh" "" 40 ;;
   E8_aug_oct)
     DATE_FROM="2024-08-01"
     DATE_TO="2024-10-31"
-    run_one "E8_ce_notbull_topwins_aug_oct" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_e8_env.sh" "" ;;
-  E7) run_one "E7_ce_topwins" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_e7_env.sh" "" ;;
+    run_one "E8_ce_notbull_topwins_aug_oct" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_e8_env.sh" "" 40 ;;
+  E7) run_one "E7_ce_topwins" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_e7_env.sh" "" 40 ;;
   E7_aug_oct)
     DATE_FROM="2024-08-01"
     DATE_TO="2024-10-31"
-    run_one "E7_ce_topwins_aug_oct" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_e7_env.sh" "" ;;
+    run_one "E7_ce_topwins_aug_oct" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_e7_env.sh" "" 40 ;;
   all)
     run_one "E1_stagnant_20" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_env.sh" ""
     run_one "E2_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" ""
     run_one "E2E3_dyn_exit_stress" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" "${REPO}/ops/gcp/patch_eval_risk_stress_env.sh"
     run_one "E4_stagnant20_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_dyn_exit_env.sh" ""
-    run_one "E5_direction_consensus" "${REPO}/ops/gcp/patch_trader_master_ml_entry_consensus_env.sh" ""
+    run_one "E5_direction_consensus" "${REPO}/ops/gcp/patch_trader_master_ml_entry_consensus_env.sh" "" 120
     ;;
   *) echo "Usage: $0 [E1|E2|E2E3|E4|E5|E6|E6_aug_oct|E7|E7_aug_oct|E8|E8_aug_oct|all]"; exit 2 ;;
 esac

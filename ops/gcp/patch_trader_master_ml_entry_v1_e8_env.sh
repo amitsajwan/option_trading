@@ -49,6 +49,9 @@ upsert ENTRY_REGIME_ALLOWED_TAGS "bear,chop"
 # Layer 3: entry time-window filter (top-3 IST windows from E7 decomposition)
 upsert ENTRY_TIME_WINDOWS "09:45-10:15,10:45-11:15,11:15-11:45"
 
+# Keep direction resolution deterministic across runs (avoid consensus carryover)
+upsert ML_ENTRY_DIRECTION_MODE bind
+
 # Direction ML still loaded but its vote is no-op since CE is forced
 upsert DIRECTION_ML_MODEL_PATH "$DIR_MODEL"
 upsert ML_PURE_RUN_ID ""
