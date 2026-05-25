@@ -115,6 +115,27 @@ case "${MODE}" in
     DATE_FROM="2024-08-01"
     DATE_TO="2024-10-31"
     run_one "E7_ce_topwins_aug_oct" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_e7_env.sh" "" 40 ;;
+  E7D0_aug_oct)
+    DATE_FROM="2024-08-01"; DATE_TO="2024-10-31"
+    run_one "E7D0_bind_momentum_aug_oct" "${REPO}/ops/gcp/patch_e7d0_bind_momentum_env.sh" "" 40 ;;
+  E7D1_aug_oct)
+    DATE_FROM="2024-08-01"; DATE_TO="2024-10-31"
+    run_one "E7D1_bind_dirml_argmax_aug_oct" "${REPO}/ops/gcp/patch_e7d1_bind_dirml_argmax_env.sh" "" 40 ;;
+  E7D1b_aug_oct)
+    DATE_FROM="2024-08-01"; DATE_TO="2024-10-31"
+    run_one "E7D1b_bind_dirml_strict_aug_oct" "${REPO}/ops/gcp/patch_e7d1b_bind_dirml_strict_env.sh" "" 40 ;;
+  E7D2_aug_oct)
+    DATE_FROM="2024-08-01"; DATE_TO="2024-10-31"
+    run_one "E7D2_consensus_default_aug_oct" "${REPO}/ops/gcp/patch_e7d2_consensus_default_env.sh" "" 40 ;;
+  E7D3_aug_oct)
+    DATE_FROM="2024-08-01"; DATE_TO="2024-10-31"
+    run_one "E7D3_consensus_no_ml_aug_oct" "${REPO}/ops/gcp/patch_e7d3_consensus_no_ml_env.sh" "" 40 ;;
+  E7D4_aug_oct)
+    DATE_FROM="2024-08-01"; DATE_TO="2024-10-31"
+    run_one "E7D4_consensus_shadow2x_aug_oct" "${REPO}/ops/gcp/patch_e7d4_consensus_shadow2x_env.sh" "" 40 ;;
+  E7D5_aug_oct)
+    DATE_FROM="2024-08-01"; DATE_TO="2024-10-31"
+    run_one "E7D5_consensus_high_margin_aug_oct" "${REPO}/ops/gcp/patch_e7d5_consensus_high_margin_env.sh" "" 40 ;;
   all)
     run_one "E1_stagnant_20" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_env.sh" ""
     run_one "E2_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_dyn_exit_env.sh" ""
@@ -122,7 +143,7 @@ case "${MODE}" in
     run_one "E4_stagnant20_dyn_exit" "${REPO}/ops/gcp/patch_trader_master_ml_entry_v1_stagnant_20_dyn_exit_env.sh" ""
     run_one "E5_direction_consensus" "${REPO}/ops/gcp/patch_trader_master_ml_entry_consensus_env.sh" "" 120
     ;;
-  *) echo "Usage: $0 [E1|E2|E2E3|E4|E5|E6|E6_aug_oct|E7|E7_aug_oct|E8|E8_aug_oct|all]"; exit 2 ;;
+  *) echo "Usage: $0 [E1|E2|E2E3|E4|E5|E6|E6_aug_oct|E7|E7_aug_oct|E8|E8_aug_oct|E7D0_aug_oct|E7D1_aug_oct|E7D1b_aug_oct|E7D2_aug_oct|E7D3_aug_oct|E7D4_aug_oct|E7D5_aug_oct|all]"; exit 2 ;;
 esac
 
 log "finished — logs in ${LOG_DIR}/"
