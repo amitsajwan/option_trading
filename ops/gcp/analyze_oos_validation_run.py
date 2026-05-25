@@ -199,19 +199,22 @@ def evaluate_gates(rows: list[dict]) -> list[tuple[str, bool, str]]:
     stops = sorted({round(r["stop_pct"] * 100) for r in rows if r["stop_pct"] > 0})
     stop_ok = not stops or stops == [20] or (20 in stops and max(stops) <= 25)
 
+    # Leg-PF gates: a leg with zero trades is "n/a" — that's a profile
+    # decision (e.g. CE-only blocks PE entirely), not a failure. Skip the
+    # gate when n/a so OVERALL reflects the configured book honestly.
     checks: list[tuple[str, bool, str]] = [
         ("trades >= {}".format(MIN_TRADES), n >= MIN_TRADES, f"{n}"),
         ("gross PF >= {}".format(MIN_PF), gross_pf >= MIN_PF, f"{gross_pf:.2f}"),
         ("net PF >= {}".format(MIN_PF), net_pf >= MIN_PF, f"{net_pf:.2f}"),
         (
             "net CE leg PF >= {}".format(MIN_LEG_PF),
-            ce_pf is not None and ce_pf >= MIN_LEG_PF,
-            "n/a" if ce_pf is None else f"{ce_pf:.2f}",
+            ce_pf is None or ce_pf >= MIN_LEG_PF,
+            "n/a (skip)" if ce_pf is None else f"{ce_pf:.2f}",
         ),
         (
             "net PE leg PF >= {}".format(MIN_LEG_PF),
-            pe_pf is not None and pe_pf >= MIN_LEG_PF,
-            "n/a" if pe_pf is None else f"{pe_pf:.2f}",
+            pe_pf is None or pe_pf >= MIN_LEG_PF,
+            "n/a (skip)" if pe_pf is None else f"{pe_pf:.2f}",
         ),
         ("stop config ~20%", stop_ok, str(stops) + "%" if stops else "no stops seen"),
     ]
