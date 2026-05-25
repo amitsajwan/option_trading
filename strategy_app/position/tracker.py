@@ -104,7 +104,30 @@ class PositionTracker:
                     exit_trigger = "dynamic_scratch"
             except Exception:
                 pass
-        if forced_exit_reason is None and has_playbook:
+        # Opposite-side premium dominance scratch: if enabled and trade is red,
+        # and the opposite option premium dominates by ratio, exit immediately.
+        if forced_exit_reason is None and as_bool(os.getenv("OPP_SIDE_PREM_SCRATCH_ENABLED", "false")) and exit_reason is None:
+            try:
+                ce_p = snap.atm_ce_close
+                pe_p = snap.atm_pe_close
+                if ce_p and pe_p and float(ce_p) > 0 and float(pe_p) > 0:
+                    ratio = 1.10
+                    try:
+                        ratio = float(os.getenv("OPP_SIDE_PREM_DOM_RATIO", "1.10") or 1.10)
+                    except Exception:
+                        ratio = 1.10
+                    d = str(position.direction or "").upper()
+                    if position.pnl_pct <= 0.0:
+                        if d == "CE" and (float(pe_p) / float(ce_p)) >= ratio:
+                            exit_reason = ExitReason.TIME_STOP
+                            exit_trigger = "opp_prem_dom_scratch"
+                        elif d == "PE" and (float(ce_p) / float(pe_p)) >= ratio:
+                            exit_reason = ExitReason.TIME_STOP
+                            exit_trigger = "opp_prem_dom_scratch"
+            except Exception:
+                pass
+
+        if forced_exit_reason is None and has_playbook and exit_reason is None:
             playbook_hit = evaluate_playbook_exit(position, snap)
             if playbook_hit is not None:
                 exit_reason, exit_trigger = playbook_hit
