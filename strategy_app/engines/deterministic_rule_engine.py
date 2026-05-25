@@ -46,6 +46,11 @@ from ..signals.decision_annotation import (
 from ..policy.entry_policy import EntryPolicy, EntryPolicyDecision, LongOptionEntryPolicy, PolicyConfig
 from ..ml.direction_ml_policy import maybe_wrap_with_direction_ml
 from .direction_consensus import extract_ml_direction_hint, resolve_direction_consensus
+from .entry_gates import (
+    compute_regime_tag,
+    is_in_configured_time_window,
+    is_session_regime_allowed,
+)
 from .profiles import (
     PRODUCTION_DEFAULT_PROFILE_ID,
     PROFILE_DEBIT_MULTI_V1,
@@ -155,6 +160,8 @@ class DeterministicRuleEngine(StrategyEngine):
         # Rolling buffers for multi-bar trap signal detection in shadow scorer.
         self._iv_buf: deque = deque(maxlen=3)   # (ce_iv, pe_iv) per bar
         self._pvwap_buf: deque = deque(maxlen=2) # price_vs_vwap per bar
+        # E8 session-once daily regime tag — computed lazily after ORB resolves.
+        self._session_regime_tag: Optional[str] = None
         self._set_logger_context(None)
         logger.info(
             "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s brain_enabled=%s",
@@ -277,6 +284,7 @@ class DeterministicRuleEngine(StrategyEngine):
         self._regime_shift_streak.clear()
         self._iv_buf.clear()
         self._pvwap_buf.clear()
+        self._session_regime_tag = None
         self._tracker.on_session_start(trade_date)
         # Brain morning briefing: loads daily features + cross-session carry.
         # Must run before risk manager so carry-based consecutive_losses can
@@ -565,6 +573,29 @@ class DeterministicRuleEngine(StrategyEngine):
         risk: RiskContext,
         regime_signal: RegimeSignal,
     ) -> Optional[TradeSignal]:
+        # E8 gates: env-driven time-window + daily-regime filters. Both default
+        # off; when configured they apply across all profiles.
+        if not is_in_configured_time_window(snap):
+            logger.debug("entry blocked: outside ENTRY_TIME_WINDOWS")
+            return None
+        tagger = os.getenv("ENTRY_REGIME_TAGGER", "").strip()
+        if tagger:
+            if self._session_regime_tag is None:
+                tag = compute_regime_tag(tagger, snap)
+                if tag != "unknown":
+                    self._session_regime_tag = tag
+                    logger.info(
+                        "session regime tag computed: tag=%s tagger=%s",
+                        tag,
+                        tagger,
+                    )
+            if not is_session_regime_allowed(self._session_regime_tag):
+                logger.debug(
+                    "entry blocked: regime tag=%s not in ENTRY_REGIME_ALLOWED_TAGS",
+                    self._session_regime_tag,
+                )
+                return None
+
         # Brain gate: DayScore + consensus (skipped for ML-entry-primary profile when configured).
         skip_brain = (
             self._strategy_profile_id in _PROFILES_ML_ENTRY_DET_DIRECTION
