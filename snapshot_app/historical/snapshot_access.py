@@ -1,4 +1,17 @@
-"""Shared snapshot input access contract for canonical and derived snapshot datasets."""
+"""Shared snapshot input access contract for canonical and derived snapshot datasets.
+
+Dataset hierarchy (parquet_data/):
+  snapshots/              — CANONICAL: nested snapshot_raw_json. Used by replay runner + strategy engine.
+  snapshots_ml_flat/      — V1 FLAT (DEPRECATED for ML training): no velocity features. Built by snapshot_batch_runner.
+  snapshots_ml_flat_v2/   — V2 FLAT (CURRENT ML TRAINING DATASET): adds vel_*, ctx_am_*, ctx_gap_*
+                            velocity features at 11:30 bar. Built by enrichment_runner.
+                            All direction/entry/option-pnl models are trained on this dataset.
+
+Rule of thumb:
+  Replay / strategy engine  → use `snapshots`          (SNAPSHOT_DATASET_CANONICAL)
+  ML training / HPO         → use `snapshots_ml_flat_v2` (SNAPSHOT_DATASET_ML_FLAT_V2)
+  Legacy reference only     → `snapshots_ml_flat`        (SNAPSHOT_DATASET_ML_FLAT) — do NOT use for new training
+"""
 
 from __future__ import annotations
 
@@ -16,8 +29,9 @@ SNAPSHOT_INPUT_MODE_ML_FLAT = "ml_flat"
 SNAPSHOT_INPUT_MODE_CANONICAL = "canonical"
 SNAPSHOT_INPUT_MODES = frozenset({SNAPSHOT_INPUT_MODE_ML_FLAT, SNAPSHOT_INPUT_MODE_CANONICAL})
 
-SNAPSHOT_DATASET_ML_FLAT = "snapshots_ml_flat"
-SNAPSHOT_DATASET_CANONICAL = "snapshots"
+SNAPSHOT_DATASET_ML_FLAT = "snapshots_ml_flat"          # DEPRECATED for ML training — use V2 below
+SNAPSHOT_DATASET_ML_FLAT_V2 = "snapshots_ml_flat_v2"   # CURRENT: all direction/entry/pnl models trained here
+SNAPSHOT_DATASET_CANONICAL = "snapshots"                # Strategy engine replay + R1S IS/OOS replays
 DEFAULT_EXTERNAL_DATA_ROOT = Path(__file__).resolve().parents[2] / ".data" / "ml_pipeline"
 DEFAULT_HISTORICAL_PARQUET_BASE = DEFAULT_EXTERNAL_DATA_ROOT / "parquet_data"
 

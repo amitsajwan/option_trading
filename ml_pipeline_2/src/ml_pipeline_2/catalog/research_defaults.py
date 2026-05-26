@@ -24,7 +24,7 @@ def default_staged_manifest_payload() -> Dict[str, Any]:
         "experiment_kind": "staged_dual_recipe_v1",
         "inputs": {
             "parquet_root": DEFAULT_STAGED_PARQUET_ROOT,
-            "support_dataset": "snapshots_ml_flat",
+            "support_dataset": "snapshots_ml_flat_v2",
         },
         "outputs": {
             "artifacts_root": "../../artifacts/research",

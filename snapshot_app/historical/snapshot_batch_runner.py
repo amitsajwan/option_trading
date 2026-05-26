@@ -1,4 +1,15 @@
-"""CLI for historical Layer-2 snapshot batch build and validation."""
+"""CLI for historical Layer-2 snapshot batch build and validation.
+
+OUTPUT DATASET: snapshots_ml_flat (V1) — DEPRECATED for ML training.
+  - V1 lacks velocity features (vel_*, ctx_am_*, ctx_gap_*).
+  - For ML training use snapshots_ml_flat_v2 built by enrichment_runner.py.
+  - This runner still needed to produce the v1 input that enrichment_runner reads.
+
+Pipeline order:
+  1. snapshot_batch_runner.py  → parquet_data/snapshots/          (canonical, for replay)
+  2. snapshot_batch_runner.py  → parquet_data/snapshots_ml_flat/  (v1 flat, input to step 3)
+  3. enrichment_runner.py      → parquet_data/snapshots_ml_flat_v2/ (V2, USE THIS FOR TRAINING)
+"""
 
 from __future__ import annotations
 
