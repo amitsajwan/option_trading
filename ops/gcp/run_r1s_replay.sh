@@ -47,8 +47,8 @@ gate_dates() {
 
 gate_profile() {
   case "$1" in
-    gate1_unfiltered)  echo "trader_r1s_v1_unfiltered" ;;
-    *)                 echo "trader_r1s_v1" ;;
+    gate1_unfiltered)  echo "trader_master_v1" ;;
+    *)                 echo "r1s_top3_paper_v1" ;;
   esac
 }
 
@@ -119,7 +119,12 @@ log "=== R1S replay: ${GATE} | ${DATE_FROM} → ${DATE_TO} | profile=${PROFILE} 
 log "Hypothesis doc: docs/R1S_SELLSIDE_HYPOTHESIS_2026-05-26.md"
 
 log "--- patching strategy profile to ${PROFILE} ---"
-export TRADER_PROFILE="${PROFILE}"
+if grep -q '^STRATEGY_PROFILE_ID=' "${REPO}/.env.compose" 2>/dev/null; then
+  sed -i "s|^STRATEGY_PROFILE_ID=.*|STRATEGY_PROFILE_ID=${PROFILE}|" "${REPO}/.env.compose"
+else
+  echo "STRATEGY_PROFILE_ID=${PROFILE}" >> "${REPO}/.env.compose"
+fi
+log "STRATEGY_PROFILE_ID set to ${PROFILE} in .env.compose"
 export REPLAY_EMIT_SNAPS_PER_MIN="${REPLAY_EMIT_SNAPS_PER_MIN:-2400}"
 
 log "--- preflight ---"
