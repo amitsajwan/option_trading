@@ -334,5 +334,118 @@ class RealSourceTradeTests(unittest.TestCase):
         self.assertEqual(row["regimeContext"]["regime"], "TRENDING")
 
 
+class LiveMongoSourceTickRefreshTests(unittest.TestCase):
+    """Regression: long-lived WS connections must see new minute bars appearing
+    after the session was first built. If get_latest_tick() does not invalidate
+    its cached session when a fresh bar lands in Mongo, the dashboard chart
+    freezes at whatever candles existed at connect time."""
+
+    def test_get_latest_tick_refreshes_session_on_new_minute_bar(self) -> None:
+        from datetime import datetime, timezone
+        from market_data_dashboard.real_source import LiveMongoSource
+        from market_data_dashboard.schemas.monitor import MonitorCandle, MonitorSession
+
+        base_ts = 1_700_000_000_000  # ms
+        base_dt = datetime.fromtimestamp(base_ts / 1000, tz=timezone.utc)
+        # Session as it looked at connect time: 3 one-minute candles
+        cached_candles = [
+            MonitorCandle(i=0, t=base_ts + 0, o=100.0, h=101.0, l=99.5, c=100.5, v=10, label="10:00"),
+            MonitorCandle(i=1, t=base_ts + 60_000, o=100.5, h=101.5, l=100.0, c=101.0, v=20, label="10:01"),
+            MonitorCandle(i=2, t=base_ts + 120_000, o=101.0, h=102.0, l=100.5, c=101.5, v=15, label="10:02"),
+        ]
+        rebuilt_candles = cached_candles + [
+            MonitorCandle(i=3, t=base_ts + 180_000, o=101.5, h=102.5, l=101.0, c=102.0, v=25, label="10:03"),
+        ]
+
+        class _SnapshotsCollection:
+            def find_one(self, *args, **kwargs):
+                # Newer snapshot than the last cached candle
+                return {
+                    "timestamp": datetime.fromtimestamp((base_ts + 180_000) / 1000, tz=timezone.utc),
+                    "payload": {"snapshot": {"futures_bar": {"fut_close": 102.0}}},
+                }
+
+        class _DB:
+            def __getitem__(self, name):
+                if name == LiveMongoSource.COLL_SNAPSHOTS:
+                    return _SnapshotsCollection()
+                raise KeyError(name)
+
+        src = LiveMongoSource(db=_DB(), trade_date="2026-05-26")
+        # Prime the cache as if get_session() ran when only 3 candles existed
+        src._session = MonitorSession(
+            date="2026-05-26", instrument="BANKNIFTY26JUNFUT",
+            candles=cached_candles, signals=[], trades=[], alerts=[], basePrice=100.0,
+        )
+        src._candle_ts_sorted = [c.t for c in cached_candles]
+        rebuild_calls = {"n": 0}
+
+        def _fake_get_session():
+            if src._session is None:
+                rebuild_calls["n"] += 1
+                src._session = MonitorSession(
+                    date="2026-05-26", instrument="BANKNIFTY26JUNFUT",
+                    candles=rebuilt_candles, signals=[], trades=[], alerts=[], basePrice=100.0,
+                )
+                src._candle_ts_sorted = [c.t for c in rebuilt_candles]
+            return src._session
+
+        src.get_session = _fake_get_session  # type: ignore[assignment]
+
+        idx, price = src.get_latest_tick()
+
+        self.assertEqual(rebuild_calls["n"], 1, "session must be rebuilt when a new minute bar arrives")
+        self.assertEqual(idx, 3, "tick must point at the newly-appended candle")
+        self.assertAlmostEqual(price, 102.0)
+        self.assertEqual(len(src._candle_ts_sorted), 4)
+
+    def test_get_latest_tick_does_not_refresh_when_no_new_bar(self) -> None:
+        from datetime import datetime, timezone
+        from market_data_dashboard.real_source import LiveMongoSource
+        from market_data_dashboard.schemas.monitor import MonitorCandle, MonitorSession
+
+        base_ts = 1_700_000_000_000
+        candles = [
+            MonitorCandle(i=0, t=base_ts + 0, o=100.0, h=101.0, l=99.5, c=100.5, v=10, label="10:00"),
+            MonitorCandle(i=1, t=base_ts + 60_000, o=100.5, h=101.5, l=100.0, c=101.0, v=20, label="10:01"),
+        ]
+
+        class _SnapshotsCollection:
+            def find_one(self, *args, **kwargs):
+                # Same-minute tick, no new bar
+                return {
+                    "timestamp": datetime.fromtimestamp((base_ts + 90_000) / 1000, tz=timezone.utc),
+                    "payload": {"snapshot": {"futures_bar": {"fut_close": 101.2}}},
+                }
+
+        class _DB:
+            def __getitem__(self, name):
+                if name == LiveMongoSource.COLL_SNAPSHOTS:
+                    return _SnapshotsCollection()
+                raise KeyError(name)
+
+        src = LiveMongoSource(db=_DB(), trade_date="2026-05-26")
+        src._session = MonitorSession(
+            date="2026-05-26", instrument="BANKNIFTY26JUNFUT",
+            candles=candles, signals=[], trades=[], alerts=[], basePrice=100.0,
+        )
+        src._candle_ts_sorted = [c.t for c in candles]
+        rebuild_calls = {"n": 0}
+
+        original_get_session = src.get_session
+
+        def _tracked_get_session():
+            if src._session is None:
+                rebuild_calls["n"] += 1
+            return original_get_session()
+
+        src.get_session = _tracked_get_session  # type: ignore[assignment]
+
+        idx, price = src.get_latest_tick()
+
+        self.assertEqual(rebuild_calls["n"], 0, "no rebuild when tick lands within an existing minute")
+        self.assertAlmostEqual(price, 101.2)
+
+
 if __name__ == "__main__":
     unittest.main()

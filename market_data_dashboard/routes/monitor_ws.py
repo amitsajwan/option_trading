@@ -228,18 +228,38 @@ class DashboardMonitorRouter:
         async def _loop() -> None:
             if state is None:
                 return
+            last_candle_count = (
+                len(state.session.candles) if isinstance(state, _LiveSessionState) else 0
+            )
             try:
                 while state.alive:
                     if isinstance(state, _LiveSessionState):
                         state.tick()
-                        await ws.send_json({
-                            "type": "tick",
-                            "mode": "live",
-                            "up_to_idx": state.current_idx,
-                            "live_idx": state.current_idx,
-                            "live_price": round(state.last_price, 2),
-                            "timestamp": _now_iso_ist(),
-                        })
+                        current_count = len(state.session.candles)
+                        if current_count > last_candle_count:
+                            # New minute bar(s) appeared — push a full snapshot so the
+                            # client sees the new candles, not just an updated last_price.
+                            kpi = _build_kpi_live(state)
+                            snap = MonitorSnapshot(
+                                mode="live",
+                                session=_coerce_monitor_session(state.session),
+                                up_to_idx=state.current_idx,
+                                live_idx=state.current_idx,
+                                live_price=round(state.last_price, 2),
+                                kpi_items=kpi,
+                                timestamp=_now_iso_ist(),
+                            )
+                            await ws.send_json({"type": "snapshot", **snap.model_dump(mode="json")})
+                            last_candle_count = current_count
+                        else:
+                            await ws.send_json({
+                                "type": "tick",
+                                "mode": "live",
+                                "up_to_idx": state.current_idx,
+                                "live_idx": state.current_idx,
+                                "live_price": round(state.last_price, 2),
+                                "timestamp": _now_iso_ist(),
+                            })
                         await asyncio.sleep(1.0)
                     elif isinstance(state, _ReplaySessionState):
                         state.step()

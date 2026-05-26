@@ -1146,7 +1146,13 @@ class LiveMongoSource:
         return self._session
 
     def get_latest_tick(self) -> Tuple[int, float]:
-        """Lightweight query: returns (current_candle_idx, live_price)."""
+        """Lightweight query: returns (current_candle_idx, live_price).
+
+        If a new minute bar has appeared in Mongo since this source built its
+        session, the session is invalidated so the next get_session() rebuilds
+        the candle list. Without this, a long-lived WS connection would freeze
+        at whatever candles existed at connect time.
+        """
         session = self.get_session()
         fallback_idx = len(session.candles) - 1
         fallback_price = session.candles[fallback_idx].c
@@ -1165,6 +1171,14 @@ class LiveMongoSource:
             ts = _ts_ms(doc.get("timestamp"))
             if ts is None:
                 return fallback_idx, fallback_price
+
+            if self._candle_ts_sorted and ts >= self._candle_ts_sorted[-1] + 60_000:
+                self._session = None
+                self._candle_ts_sorted = []
+                session = self.get_session()
+                fallback_idx = len(session.candles) - 1
+                fallback_price = session.candles[fallback_idx].c
+
             payload = doc.get("payload") or {}
             snapshot = (payload.get("snapshot") or {}) if isinstance(payload, dict) else {}
             futures_bar = (snapshot.get("futures_bar") or {}) if isinstance(snapshot, dict) else {}
