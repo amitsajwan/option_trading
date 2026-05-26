@@ -110,6 +110,9 @@ def _mock_session(step1_ok=True, step2_location=None, step2_body=None, step2_sta
     """Build a requests.Session mock that simulates Zerodha login flow."""
     session = MagicMock()
 
+    # Step 0: GET connect/login (pre-visit — always succeeds, result ignored)
+    session.get.return_value = MagicMock(status_code=200)
+
     # Step 1: POST /api/login
     login_resp = MagicMock()
     if step1_ok:
@@ -121,9 +124,11 @@ def _mock_session(step1_ok=True, step2_location=None, step2_body=None, step2_sta
         login_resp.json.return_value = {"status": "error", "message": "invalid password"}
     login_resp.raise_for_status = MagicMock()
 
-    # Step 2: POST /api/twofa
+    # Step 2: POST /api/twofa — set url to the location so the redirect-following
+    # path is exercised (requests sets resp.url to the final URL after redirects)
     twofa_resp = MagicMock()
     twofa_resp.status_code = step2_status
+    twofa_resp.url = step2_location or ""
     twofa_resp.headers = {"Location": step2_location or ""}
     if step2_body is not None:
         twofa_resp.json.return_value = step2_body

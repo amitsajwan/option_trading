@@ -273,8 +273,8 @@ function LWChart({
       const cExit  = tr.exitIdx != null && tr.exitIdx <= visIdx ? candles[tr.exitIdx] : null;
       const entryTs = cEntry ? Math.floor(cEntry.t / 1000) : (tr.t ? Math.floor(tr.t / 1000) : null);
       const exitTs  = cExit  ? Math.floor(cExit.t  / 1000) : entryTs;
-      const entryPx = tr.entryPx ?? tr.entry;
-      const exitPx  = tr.exitPx  ?? tr.exit  ?? entryPx;
+      const entryPx = cEntry ? cEntry.c : (tr.entryPx ?? tr.entry);
+      const exitPx  = cExit  ? cExit.c  : (tr.exitPx  ?? tr.exit  ?? entryPx);
       if (entryTs == null || entryPx == null || exitTs == null || exitPx == null) continue;
       const color = tr.pnlPct > 0 ? (dark ? '#19c37d' : '#0A8F5C') : tr.pnlPct < 0 ? (dark ? '#f23c4a' : '#C23E2F') : (dark ? '#7d8593' : '#5A6674');
       const s = chart.addLineSeries({ color, lineWidth: 1, lastValueVisible: false, priceLineVisible: false });

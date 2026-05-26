@@ -120,6 +120,19 @@ def login_headless(
     session = requests.Session()
     session.headers.update({"X-Kite-Version": "3"})
 
+    # Create client early — needed for login_url() in Step 0 and generate_session() in Step 3.
+    kite = create_kite_client(api_key=api_key)
+
+    # Step 0: visit kite.trade/connect/login so the session acquires the
+    # KiteConnect app context cookie.  Without this Zerodha treats the
+    # subsequent login as a plain web login and returns profile JSON
+    # instead of redirecting to the registered callback with request_token.
+    try:
+        session.get(kite.login_url(), timeout=15, allow_redirects=True)
+        logger.info("Step 0: KiteConnect session context established")
+    except Exception as exc:
+        logger.warning("Step 0: connect-login pre-visit failed (continuing): %s", exc)
+
     # Step 1: login with user_id + password
     logger.info("Step 1: logging in as %s", user_id)
     try:
@@ -144,7 +157,7 @@ def login_headless(
         return None, 1
     logger.info("Step 1 OK — request_id received")
 
-    # Step 2: submit TOTP
+    # Step 2: submit TOTP — follow redirects so the final URL carries request_token
     totp_code = _generate_totp(totp_secret)
     logger.info("Step 2: submitting TOTP code %s", totp_code)
     try:
@@ -157,20 +170,21 @@ def login_headless(
                 "twofa_type": "totp",
             },
             timeout=15,
-            allow_redirects=False,
+            allow_redirects=True,
         )
     except Exception as exc:
         logger.error("TOTP POST failed: %s", exc)
         return None, 1
 
-    # Extract request_token from the redirect Location header or response body
+    # Extract request_token from the final URL, any redirect Location, or body
     request_token: Optional[str] = None
-    location = resp.headers.get("Location") or ""
-    match = re.search(r"request_token=([A-Za-z0-9]+)", location)
-    if match:
-        request_token = match.group(1)
-    else:
-        # Some API versions return it in the JSON body
+    for candidate in [str(getattr(resp, "url", "") or ""), resp.headers.get("Location") or "", resp.text[:500]]:
+        match = re.search(r"request_token=([A-Za-z0-9]+)", candidate)
+        if match:
+            request_token = match.group(1)
+            break
+    if not request_token:
+        # Fallback: JSON body at data.request_token
         try:
             body2 = resp.json()
             request_token = (body2.get("data") or {}).get("request_token")
@@ -179,9 +193,9 @@ def login_headless(
 
     if not request_token:
         logger.error(
-            "Could not extract request_token. Status: %s Location: %s Body: %s",
+            "Could not extract request_token. Status: %s URL: %s Body: %s",
             resp.status_code,
-            location[:200],
+            (resp.url or "")[:200],
             resp.text[:300],
         )
         return None, 1

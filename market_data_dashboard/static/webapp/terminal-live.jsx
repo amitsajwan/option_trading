@@ -353,9 +353,9 @@ function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upT
           const eiN = Math.min(t.entryIdx, visible.length - 1);
           const exN = Math.min(t.exitIdx ?? t.entryIdx, visible.length - 1);
           const x1 = xOf(eiN);
-          const y1 = yOf(t.entryPx);
+          const y1 = yOf(candles[eiN]?.c ?? t.entryPx);
           const x2 = xOf(exN);
-          const y2 = yOf(t.exitPx ?? t.entryPx);
+          const y2 = yOf(candles[exN]?.c ?? candles[eiN]?.c ?? t.exitPx ?? t.entryPx);
           const pnl = Number(t.pnlPct || 0);
           const color = pnl > 0 ? 'var(--pos)' : pnl < 0 ? 'var(--neg)' : 'var(--fg-3)';
           const isSel = selectedTrade?.id === t.id;
