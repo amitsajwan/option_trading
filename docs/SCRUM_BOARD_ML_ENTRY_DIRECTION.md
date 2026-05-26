@@ -1,7 +1,7 @@
 # Scrum board — ML entry · direction · trap detection
 
 **Living document** — update status, owners, and **Results** after each replay / merge.  
-**Last updated:** 2026-05-26 (Sprint 4 opened — live mode shipped to GCP, depth persistence ready, Direction Discovery epics D1-D4 added)  
+**Last updated:** 2026-05-26 evening (R1-S1 VIX audit PASS; R1-S2 replay attempted — blocked by missing canonical snapshots for IS years 2020-H2→2023; dataset hierarchy clarified and deprecated; `run_r1s_replay.sh` created)  
 **Profile under test:** `trader_master_ml_entry_v1` · **Live profile:** `trader_master_live_v1` · **Engine baseline:** `a133936`
 
 Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md) · [ENTRY_AND_DIRECTION.md](ENTRY_AND_DIRECTION.md) · [runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md](runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md)
@@ -119,8 +119,9 @@ Live mode is now running on GCP (paper, no real orders). Per-minute snapshots pe
 | E7-S3 | Replay with depth signals (Aug–Oct baseline) | P2 | Ops/GCP | **Cancelled — no historical depth data** | 3 |
 | E7-S4 | Wire depth_collector in docker-compose + env docs | P2 | Ops/GCP | **Done** | 2 |
 | E7-S5 | Halt button backend endpoint | **P0** | Engine | **Done** | 5 |
-| R1-S1 | VIX field audit — verify snapshot.vix in IS parquet | **P0** | Ops/GCP | **Backlog** | 1 |
-| R1-S2 | IS replay (2020-Q3 → 2023-Q4) VIX filter Gate 1 | P1 | Ops/GCP | **Blocked** (R1-S1) | 3 |
+| R1-S1 | VIX field audit — verify snapshot.vix in IS parquet | **P0** | Ops/GCP | **Done** | 1 |
+| R1-S1b | Rebuild canonical snapshots for IS years 2020-H2→2023 | **P0** | Ops/GCP | **Backlog** | 3 |
+| R1-S2 | IS replay (2020-Q3 → 2023-Q4) VIX filter Gate 1 | P1 | Ops/GCP | **Blocked** (R1-S1b) | 3 |
 | R1-S3 | OOS-A replay (2024-Q1 + Q2) Gate 2 | P1 | Ops/GCP | **Blocked** (R1-S2) | 3 |
 | R1-S4 | OOS-B replay (2024-Q3 + Oct) Gate 3 | P1 | Ops/GCP | **Blocked** (R1-S3) | 2 |
 | R1-S5 | R1S engine story (only if all gates pass) | P2 | Engine | **Backlog** | 8 |
@@ -133,6 +134,7 @@ Live mode is now running on GCP (paper, no real orders). Per-minute snapshots pe
 | D2-S1 | Ingest NIFTY 50 cash + futures | **P1** | Engine | **Backlog** | 3 |
 | D2-S2 | Ingest NIFTY BANK cash + compute futures-spot basis | **P1** | Engine | **Backlog** | 2 |
 | D2-S3 | Block-trade detection from last_quantity | P1 | Engine | **Backlog** | 3 |
+| D2-S4 | Integration smoke test for live enrichment rollout | P1 | Team Claude | **Backlog** | 2 |
 | D3-S1 | Greeks per strike (Delta/Gamma/Theta/Vega) | P2 | Engine | **Backlog** | 5 |
 | D3-S2 | Gamma Exposure (GEX) profile | P2 | Engine | **Blocked** (D3-S1) | 3 |
 | D3-S3 | Expand option chain in snapshot (25 → 50 strikes) | P2 | Engine | **Backlog** | 2 |
@@ -149,7 +151,8 @@ Live mode is now running on GCP (paper, no real orders). Per-minute snapshots pe
 **Velocity (sprint 1):** 44 planned / 42 completed points  
 **Sprint 2 velocity:** E5-S1 done (5) = 5 pts · E4-S2 v2 replay pending  
 **Sprint 3 velocity:** E7-S1 (5) + E7-S2 (2) + E7-S4 (2) + E7-S5 (5) + OP bonus (5+3+5+2+1=16) = **30 pts**  
-**Sprint 4 planned:** R1-S1 + D1-S1 + D1-S2 + D2-S1 + D2-S2 + D2-S3 = **17 pts P0/P1 must-have** · D1-S3 + D1-S4 = +8 stretch (depth-data dependent)
+**Sprint 4 planned:** R1-S1 + D1-S1 + D1-S2 + D2-S1 + D2-S2 + D2-S3 = **17 pts P0/P1 must-have** · D2-S4 integration verification = +2 support follow-up · D1-S3 + D1-S4 = +8 stretch (depth-data dependent)
+**Sprint 4 in-session (2026-05-26):** R1-S1 DONE (1 pt). R1-S1b discovered as new blocker (3 pts). Dataset hierarchy docs + deprecation markers committed. `run_r1s_replay.sh` ready on VM.
 
 ---
 
@@ -618,14 +621,35 @@ docker compose --profile live up -d
 
 | ID | Story | Priority | Owner | Status | Points |
 |----|-------|----------|-------|--------|--------|
-| R1-S1 | VIX field audit — verify `snapshot.vix` populated in IS parquet | P0 | Ops/GCP | **Backlog** | 1 |
-| R1-S2 | IS replay (2020-Q3 → 2023-Q4) with VIX filter — Gate 1 | P1 | Ops/GCP | **Backlog** | 3 |
+| R1-S1 | VIX field audit — verify `snapshot.vix` populated in IS parquet | P0 | Ops/GCP | **Done** | 1 |
+| R1-S1b | Rebuild canonical snapshots for IS years 2020-H2→2023 | **P0** | Ops/GCP | **Backlog** | 3 |
+| R1-S2 | IS replay (2020-Q3 → 2023-Q4) with VIX filter — Gate 1 | P1 | Ops/GCP | **Blocked** (R1-S1b) | 3 |
 | R1-S3 | OOS-A replay (2024-Q1 + Q2) — Gate 2 | P1 | Ops/GCP | **Blocked** (R1-S2) | 3 |
 | R1-S4 | OOS-B replay (2024-Q3 + Oct) — Gate 3 | P1 | Ops/GCP | **Blocked** (R1-S3) | 2 |
 | R1-S5 | R1S engine story (only if all gates pass) | P2 | Engine | **Backlog** | 8 |
 
-**Gate sequence:** R1-S1 → R1-S2 (Gate 1) → R1-S3 (Gate 2) → R1-S4 (Gate 3) → R1-S5.
+**Gate sequence:** R1-S1 ✅ → R1-S1b → R1-S2 (Gate 1) → R1-S3 (Gate 2) → R1-S4 (Gate 3) → R1-S5.
 Stop immediately at first gate failure. Do not tune thresholds.
+
+### R1-S1 — VIX field audit · Done
+
+- **Result:** `vix/vix.parquet` 1182 rows, IS window 811 days, **100% fill rate** — PASS
+- Script: `ops/gcp/audit_vix_field.py`
+- VIX flows into canonical snapshots via `_compute_vix_block()` → `vix_context` block → `SnapshotAccessor.vix_current`
+
+### R1-S1b — Rebuild canonical snapshots 2020-H2→2023 · Backlog P0
+
+**Blocker discovered 2026-05-26:** The replay runner requires `parquet_data/snapshots/` with `snapshot_raw_json`. On the VM only 3 chunks exist: `2020-H1`, `2024-H1`, `2024-H2`. The full IS window (2020-07-01 → 2023-12-31) has **zero canonical snapshots** — hence every queued replay returns `emitted=0`.
+
+`snapshots_ml_flat` HAS the IS data (12 chunks, 2020–2024) but does NOT contain `snapshot_raw_json` — it is a flat feature table only. Cannot be used to drive the replay engine.
+
+**What the next team needs to do:**
+1. Identify source raw data for 2020-H2 → 2023 (MongoDB `phase1_market_snapshots_historical`, or re-run `snapshot_batch_runner.py` if OHLCV source parquets exist under `futures/`, `options/`, `spot/`)
+2. Run `snapshot_batch_runner.py --output-dataset snapshots --start 2020-07-01 --end 2023-12-31` (or equivalent) to rebuild canonical parquet
+3. Verify chunks appear: `parquet_data/snapshots/year=2020/chunk=202007_202012_m6/data.parquet` etc.
+4. Then run: `sudo bash ops/gcp/run_r1s_replay.sh gate1`
+
+**Script ready:** `ops/gcp/run_r1s_replay.sh` — profile `r1s_top3_paper_v1`, gates 1/2/3 and unfiltered baseline wired, `.env.compose` auto-patched, analysis called at end.
 
 ---
 
@@ -708,6 +732,7 @@ Stop immediately at first gate failure. Do not tune thresholds.
 | 2026-05-24 | Engine | Direction consensus profile `trader_master_ml_entry_consensus_v1` + E5 experiment (`013ae66`); [EXIT_RISK_EXPERIMENTS_2026-05.md](EXIT_RISK_EXPERIMENTS_2026-05.md) |
 | 2026-05-24 | — | E5 done: `2632cdc7` PF 0.79, 169 trades May-only — expert handover updated; E5b + risk audit recommended |
 | **2026-05-25** | Engine | **E1–E8 arc concluded: zero OOS configs.** E5-S1 trap signals marked Done (26 tests pass). Sprint 3 opened: live depth side-channel (E7-S1 + E7-S2) implemented — `DepthContext`, `RedisDepthReader`, `depth_collector`, 4 depth signals in shadow scorer, `trader_master_live_v1` profile. Replay fully unaffected. |
+| **2026-05-26 evening** | Claude | **R1-S1 DONE.** VIX audit PASS (100% fill rate IS window). **R1-S1b discovered:** canonical `snapshots` parquet missing for IS years 2020-H2→2023 — `emitted=0` on every IS replay attempt. `snapshots_ml_flat` confirmed as flat-only (no `snapshot_raw_json`). Dataset hierarchy clarified: 3 datasets, deprecation comments added to `snapshot_access.py` + `snapshot_batch_runner.py`, `research_defaults.py` default fixed to `snapshots_ml_flat_v2`. Replay script `ops/gcp/run_r1s_replay.sh` created and on VM. R1-S2 remains blocked on canonical parquet rebuild. |
 | **2026-05-26** | Ops/Engine | **Sprint 3 closed + Sprint 4 opened.** GCP VM switched from historical replay to **live ingestion + paper trading**. Headless TOTP refresh installed (b552e4c). depth_collector upgraded with 5-level ladder + Mongo persistence + 7-day TTL (05784b4). Dashboard live-chart auto-refresh fix (2258a5f). 10-strike JUN ATM±2 depth coverage active. Today's live session: 294 snapshots persisted with full 25-strike chain; zero trade signals (correct — IV percentile 99.2 + EXPIRY regime; IV_FILTER vetoed 36/36 evaluations). **Sprint 4 opens with Direction Discovery focus** — Epic D1 (audit-first signal discovery), D2 (Tier 1 data: NIFTY, basis, blocks), D3 (Tier 2: Greeks, wider chain, VWAP), D4 (Tier 3: WebSocket ticks). **Critical rule: no new primary voter until pre-registered audit gates pass.** |
 | **2026-05-26** | Tech lead | **Sprint 3 closeout decisions.** 8 stories cancelled as "arc superseded" (E2-S6, E4-S2, E4-S2b, E4-S3 5-gate-ship, E5-S2, E5-S3, E5-S4, E7-S3) — all were predicated on the long-ATM-1-min lane that E1–E8 closed. E5-S5 folded into D1-S2 (trap signals are direction features). R1-S1 (VIX field audit) carried into Sprint 4 as the only genuine spillover — blocks the entire R1 sell-side epic. See "Sprint 3 closeout" section for full rationale table. |
 
@@ -726,11 +751,12 @@ Stop immediately at first gate failure. Do not tune thresholds.
 1. **D1-S1 Audit framework (ML, P0, 5 pts)** — Build the pre-registered audit script. Required before any direction-feature work can proceed.
 2. **D1-S2 Audit chain-aggregate features (ML, P0, 3 pts)** — Run D1-S1 over today's 294 snapshots + accumulating days. Establishes baseline of which existing snapshot fields predict direction. **Includes the 6 E5-S1 trap signals as candidate features** (orb_low_rejected, orb_high_rejected, vwap_reclaim_bull, vwap_reject_bear, pe_iv_fading, ce_iv_fading).
 3. **D2-S1 / D2-S2 / D2-S3 (Engine, P1, 3+2+3 pts)** — In parallel with audit: ingest NIFTY, basis, block flow. Each is a cheap independent ticket.
-4. **Wait 3+ trading days for depth data accumulation** (no work, just elapsed time).
-5. **D1-S3 Audit depth features (ML, P1, 3 pts)** — Once 3+ days of depth ticks accumulated.
-6. **D1-S4 Shadow voter (Engine, P1, 5 pts)** — Implement top-validated feature as SHADOW only. Env-gated. Cannot trigger trades.
-7. **Wait 5+ trading days for shadow data accumulation.**
-8. **D1-S5 + D1-S6 Promote + VIX gate (Engine, P2, 5 pts)** — Only if shadow audit passes pre-registered gates.
+4. **D2-S4 Integration smoke test (Team Claude, P1, 2 pts)** — Verify the end-to-end path `ingestion_app -> snapshot_app -> Mongo -> downstream consumers` before Sprint 4 enrichment work is called done. Catch env wiring, field-shape, and audit-script mismatches early.
+5. **Wait 3+ trading days for depth data accumulation** (no work, just elapsed time).
+6. **D1-S3 Audit depth features (ML, P1, 3 pts)** — Once 3+ days of depth ticks accumulated.
+7. **D1-S4 Shadow voter (Engine, P1, 5 pts)** — Implement top-validated feature as SHADOW only. Env-gated. Cannot trigger trades.
+8. **Wait 5+ trading days for shadow data accumulation.**
+9. **D1-S5 + D1-S6 Promote + VIX gate (Engine, P2, 5 pts)** — Only if shadow audit passes pre-registered gates.
 
 ---
 
@@ -1016,6 +1042,31 @@ Kite's quote response includes `last_quantity` (size of the last trade). Trades 
 - [ ] Direction tagging unit-tested against known mid prices
 - [ ] Snapshot includes block_flow object
 - [ ] Available as candidate feature for D1-S2 audit
+
+---
+
+### D2-S4 — Integration smoke test for live enrichment rollout · Backlog · P1 · 2 pts
+
+**Owner:** Team Claude
+
+**Description**
+
+Before Sprint 4 live-enrichment work is called done, run an end-to-end smoke test across `ingestion_app` -> `snapshot_app` -> Mongo -> downstream consumers. This is where env wiring, field-shape drift, and audit-script/schema mismatches should be caught before signoff.
+
+**Tasks**
+- [ ] Verify `/api/v1/market/tick/{instrument}` returns `last_quantity`, `best_bid`, `best_ask`, `mid` for NIFTY cash, NIFTY BANK cash, current BANKNIFTY future, and ATM CE/PE
+- [ ] Verify persisted `phase1_market_snapshots` docs include `nifty_context`, `underlying_context`, `block_flow`, `futures_derived.vwap_anchored_open`, and `futures_derived.price_vs_vwap_anchored`
+- [ ] Confirm env-gated activation path is documented and working: `CROSS_ASSET_ENABLED`, `NIFTY_FUT_SYMBOL`, `BLOCK_TRADE_MIN_LOTS`
+- [ ] Confirm session-reset behavior on new `trade_date` for rolling spread/basis/block-flow state and anchored VWAP
+- [ ] Confirm no breakage in downstream consumers (`persistence_app`, dashboard views, `strategy_app` snapshot parsers/accessors)
+- [ ] Run `ops/gcp/audit_vix_field.py` and `ops/gcp/run_direction_audit.sh`; document any schema or default-path mismatches as explicit follow-up bugs before signoff
+- [ ] Save results as `docs/audits/SPRINT4_INTEGRATION_SMOKE_<YYYY-MM-DD>.md`
+
+**Acceptance criteria**
+- [ ] At least one successful smoke run documented on target environment (local compose or GCP VM)
+- [ ] Mongo snapshot sample shows all new fields populated, or explicitly null during warm-up windows
+- [ ] No consumer errors attributable to the new fields
+- [ ] Any audit-script/schema mismatch converted into explicit follow-up ticket(s) before sprint signoff
 
 ---
 
