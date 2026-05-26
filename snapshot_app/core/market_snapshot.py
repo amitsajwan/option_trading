@@ -818,6 +818,157 @@ def _compute_max_pain(strikes: List[Dict[str, Any]]) -> Optional[int]:
     return best
 
 
+def _compute_nifty_context(
+    *,
+    nifty_cash_price: Optional[float],
+    nifty_fut_price: Optional[float],
+    banknifty_fut_price: Optional[float],
+    prev_nifty_cash: Optional[float],
+    rolling_spread_buf: "deque[float]",
+) -> Dict[str, Any]:
+    """D2-S1: NIFTY 50 cash + futures + BANKNIFTY spread context."""
+    bn_minus_nifty: Optional[float] = None
+    if banknifty_fut_price is not None and nifty_cash_price is not None and nifty_cash_price != 0.0:
+        bn_minus_nifty = float(banknifty_fut_price - nifty_cash_price)
+
+    nifty_fut_basis: Optional[float] = None
+    if nifty_fut_price is not None and nifty_cash_price is not None:
+        nifty_fut_basis = float(nifty_fut_price - nifty_cash_price)
+
+    spread_change_5m: Optional[float] = None
+    spread_z: Optional[float] = None
+    if bn_minus_nifty is not None:
+        rolling_spread_buf.append(bn_minus_nifty)
+        if len(rolling_spread_buf) >= 5:
+            prev_5 = list(rolling_spread_buf)[-6] if len(rolling_spread_buf) > 5 else list(rolling_spread_buf)[0]
+            spread_change_5m = float(bn_minus_nifty - prev_5)
+        if len(rolling_spread_buf) >= 5:
+            arr = list(rolling_spread_buf)
+            mean_s = sum(arr) / len(arr)
+            std_s = float((sum((x - mean_s) ** 2 for x in arr) / len(arr)) ** 0.5) if len(arr) > 1 else 0.0
+            spread_z = float((bn_minus_nifty - mean_s) / std_s) if std_s > 0.0 else 0.0
+
+    nifty_change_pct: Optional[float] = None
+    if nifty_cash_price is not None and prev_nifty_cash is not None and prev_nifty_cash != 0.0:
+        nifty_change_pct = float((nifty_cash_price - prev_nifty_cash) / prev_nifty_cash * 100.0)
+
+    return {
+        "nifty_cash": nifty_cash_price,
+        "nifty_future": nifty_fut_price,
+        "nifty_fut_basis": nifty_fut_basis,
+        "banknifty_minus_nifty_spread": bn_minus_nifty,
+        "spread_change_5m": spread_change_5m,
+        "spread_z": spread_z,
+        "nifty_change_pct": nifty_change_pct,
+    }
+
+
+def _compute_underlying_context(
+    *,
+    banknifty_cash_price: Optional[float],
+    banknifty_fut_price: Optional[float],
+    rolling_basis_buf: "deque[float]",
+) -> Dict[str, Any]:
+    """D2-S2: BANKNIFTY cash vs futures basis."""
+    basis: Optional[float] = None
+    basis_pct: Optional[float] = None
+    basis_z: Optional[float] = None
+
+    if banknifty_cash_price is not None and banknifty_fut_price is not None:
+        basis = float(banknifty_fut_price - banknifty_cash_price)
+        if banknifty_cash_price != 0.0:
+            basis_pct = float(basis / banknifty_cash_price * 100.0)
+        rolling_basis_buf.append(basis)
+        if len(rolling_basis_buf) >= 5:
+            arr = list(rolling_basis_buf)
+            mean_b = sum(arr) / len(arr)
+            std_b = float((sum((x - mean_b) ** 2 for x in arr) / len(arr)) ** 0.5) if len(arr) > 1 else 0.0
+            basis_z = float((basis - mean_b) / std_b) if std_b > 0.0 else 0.0
+
+    return {
+        "cash": banknifty_cash_price,
+        "basis": basis,
+        "basis_pct": basis_pct,
+        "basis_z": basis_z,
+    }
+
+
+_BLOCK_TRADE_MIN_LOTS_DEFAULT = 5
+_BANKNIFTY_LOT_SIZE = int(os.getenv("BANKNIFTY_LOT_SIZE") or "15")
+_NIFTY_LOT_SIZE = int(os.getenv("NIFTY_LOT_SIZE") or "50")
+
+
+def _classify_block_direction(
+    last_price: Optional[float],
+    mid: Optional[float],
+) -> Optional[str]:
+    """Aggressive buyer (ask hit) vs seller (bid hit) classification."""
+    if last_price is None or mid is None:
+        return None
+    return "buy" if last_price >= mid else "sell"
+
+
+def _compute_block_flow(
+    *,
+    atm_ce_tick: Optional[Dict[str, Any]],
+    atm_pe_tick: Optional[Dict[str, Any]],
+    fut_tick: Optional[Dict[str, Any]],
+    rolling_block_buf: "deque[Dict[str, Any]]",
+    block_min_lots: int = _BLOCK_TRADE_MIN_LOTS_DEFAULT,
+    window_bars: int = 5,
+) -> Dict[str, Any]:
+    """D2-S3: Detect block trades and maintain rolling 5-bar net flow."""
+
+    def _check_block(tick: Optional[Dict[str, Any]], lot_size: int, label: str) -> Optional[Dict[str, Any]]:
+        if tick is None:
+            return None
+        last_qty = tick.get("last_quantity")
+        if last_qty is None:
+            return None
+        try:
+            qty = int(last_qty)
+        except (TypeError, ValueError):
+            return None
+        if qty < block_min_lots * lot_size:
+            return None
+        direction = _classify_block_direction(
+            _safe_float(tick.get("last_price")),
+            _safe_float(tick.get("mid")),
+        )
+        return {"instrument": label, "quantity": qty, "direction": direction}
+
+    ce_block = _check_block(atm_ce_tick, _BANKNIFTY_LOT_SIZE, "atm_ce")
+    pe_block = _check_block(atm_pe_tick, _BANKNIFTY_LOT_SIZE, "atm_pe")
+    fut_block = _check_block(fut_tick, _BANKNIFTY_LOT_SIZE, "futures")
+
+    current_bar: Dict[str, Any] = {}
+    for label, blk in [("atm_ce", ce_block), ("atm_pe", pe_block), ("futures", fut_block)]:
+        if blk is not None:
+            current_bar[label] = blk
+    rolling_block_buf.append(current_bar)
+
+    window = list(rolling_block_buf)[-window_bars:]
+
+    def _net_flow(key: str) -> Optional[int]:
+        buys = sum(
+            b[key]["quantity"] for b in window
+            if key in b and b[key].get("direction") == "buy"
+        )
+        sells = sum(
+            b[key]["quantity"] for b in window
+            if key in b and b[key].get("direction") == "sell"
+        )
+        if buys == 0 and sells == 0:
+            return None
+        return int(buys - sells)
+
+    return {
+        "atm_ce": _net_flow("atm_ce"),
+        "atm_pe": _net_flow("atm_pe"),
+        "futures": _net_flow("futures"),
+    }
+
+
 def _compute_vix_block(
     *,
     trade_date: pd.Timestamp,
@@ -974,6 +1125,17 @@ def prepare_market_snapshot_window(
     same_day.loc[positive_volume, "vwap"] = cumulative_pv.loc[positive_volume] / cumulative_volume.loc[positive_volume]
     same_day["price_vs_vwap"] = (same_day["close"] - same_day["vwap"]) / same_day["vwap"].replace(0.0, np.nan)
 
+    anchor_mask = same_day["minute_of_day"] >= SESSION_OPEN_MINUTE
+    anchored_tp = typical_price.where(anchor_mask, 0.0)
+    anchored_vol = volume.where(anchor_mask, 0.0)
+    anchored_valid = valid_vwap & anchor_mask
+    anchored_cum_pv = (anchored_tp.where(anchored_valid, 0.0) * anchored_vol.where(anchored_valid, 0.0)).cumsum()
+    anchored_cum_vol = anchored_vol.where(anchored_valid, 0.0).cumsum()
+    same_day["vwap_anchored_open"] = np.nan
+    anchored_pos = anchored_cum_vol > 0.0
+    same_day.loc[anchored_pos, "vwap_anchored_open"] = anchored_cum_pv.loc[anchored_pos] / anchored_cum_vol.loc[anchored_pos]
+    same_day["price_vs_vwap_anchored"] = (same_day["close"] - same_day["vwap_anchored_open"]) / same_day["vwap_anchored_open"].replace(0.0, np.nan)
+
     same_day["atr_ratio"] = same_day["atr_14"] / same_day["close"].replace(0.0, np.nan)
     atr_daily_percentile = _daily_atr_percentile(bars_calc, resolved_trade_date, period=14)
     same_day["atr_daily_percentile"] = atr_daily_percentile
@@ -1031,6 +1193,8 @@ def prepare_market_snapshot_window(
             "ema_50_slope",
             "vwap",
             "price_vs_vwap",
+            "vwap_anchored_open",
+            "price_vs_vwap_anchored",
             "atr_ratio",
             "atr_daily_percentile",
             "dist_from_day_high",
@@ -1178,6 +1342,8 @@ def build_market_snapshot(
         "ema_50_slope": _nullable_float(current_futures.get("ema_50_slope")),
         "vwap": _nullable_float(current_futures.get("vwap")),
         "price_vs_vwap": _nullable_float(current_futures.get("price_vs_vwap")),
+        "vwap_anchored_open": _nullable_float(current_futures.get("vwap_anchored_open")),
+        "price_vs_vwap_anchored": _nullable_float(current_futures.get("price_vs_vwap_anchored")),
         "atr_ratio": _nullable_float(current_futures.get("atr_ratio")),
         "atr_daily_percentile": _nullable_float(current_futures.get("atr_daily_percentile")),
         "dist_from_day_high": _nullable_float(current_futures.get("dist_from_day_high")),
@@ -1607,6 +1773,14 @@ class LiveMarketSnapshotBuilder:
         self._kite_history_cache_end_date: Optional[datetime.date] = None
         # VIX for live snapshots is sourced strictly from market API stream/tick endpoints.
         self.vix_daily = pd.DataFrame()
+        # D2-S1/S2/S3: Cross-asset context state (rolling buffers, session-reset on date change)
+        self._cross_asset_enabled = _truthy(os.getenv("CROSS_ASSET_ENABLED", "0"))
+        self._block_min_lots = int(os.getenv("BLOCK_TRADE_MIN_LOTS") or str(_BLOCK_TRADE_MIN_LOTS_DEFAULT))
+        self._rolling_spread_buf: deque = deque(maxlen=60)
+        self._rolling_basis_buf: deque = deque(maxlen=60)
+        self._rolling_block_buf: deque = deque(maxlen=10)
+        self._cross_asset_last_trade_date: Optional[str] = None
+        self._prev_nifty_cash: Optional[float] = None
         # Velocity feature accumulator: computes vel_*/ctx_am_*/ctx_gap_* at 11:30 IST
         # and injects them into every post-11:30 snapshot for the same trade_date.
         # parquet_root enables context lookup (prev_day_close, vol averages) so that
@@ -1618,6 +1792,91 @@ class LiveMarketSnapshotBuilder:
             if _LiveVelocityAccumulator is not None
             else None
         )
+
+    def _reset_cross_asset_buffers_if_new_session(self, trade_date_str: str) -> None:
+        """Session-reset rolling buffers on new trade date."""
+        if self._cross_asset_last_trade_date != trade_date_str:
+            self._rolling_spread_buf.clear()
+            self._rolling_basis_buf.clear()
+            self._rolling_block_buf.clear()
+            self._prev_nifty_cash = None
+            self._cross_asset_last_trade_date = trade_date_str
+
+    def fetch_cross_asset_context(
+        self,
+        trade_date_str: str,
+        atm_ce_symbol: Optional[str] = None,
+        atm_pe_symbol: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """D2-S1/S2/S3: Fetch NIFTY, BANKNIFTY cash, and block-flow data.
+
+        Returns dict with keys: nifty_context, underlying_context, block_flow.
+        All values None-safe — missing ticks produce None fields, not errors.
+        """
+        self._reset_cross_asset_buffers_if_new_session(trade_date_str)
+
+        nifty_cash_tick: Optional[Dict[str, Any]] = None
+        nifty_fut_tick: Optional[Dict[str, Any]] = None
+        banknifty_cash_tick: Optional[Dict[str, Any]] = None
+        atm_ce_tick: Optional[Dict[str, Any]] = None
+        atm_pe_tick: Optional[Dict[str, Any]] = None
+        fut_tick: Optional[Dict[str, Any]] = None
+
+        def _safe_tick(symbol: str) -> Optional[Dict[str, Any]]:
+            try:
+                return self._get_json(f"{self.market_api_base}/api/v1/market/tick/{symbol}")
+            except Exception:
+                return None
+
+        nifty_cash_tick = _safe_tick("NSE:NIFTY 50")
+        nifty_fut_sym = str(os.getenv("NIFTY_FUT_SYMBOL") or "NFO:NIFTY26JUNFUT").strip()
+        nifty_fut_tick = _safe_tick(nifty_fut_sym)
+        banknifty_cash_tick = _safe_tick("NSE:NIFTY BANK")
+        fut_tick = _safe_tick(self.instrument)
+        if atm_ce_symbol:
+            atm_ce_tick = _safe_tick(atm_ce_symbol)
+        if atm_pe_symbol:
+            atm_pe_tick = _safe_tick(atm_pe_symbol)
+
+        def _lp(tick: Optional[Dict[str, Any]]) -> Optional[float]:
+            if tick is None:
+                return None
+            return _nullable_float(_safe_float(tick.get("last_price")))
+
+        nifty_cash_price = _lp(nifty_cash_tick)
+        nifty_fut_price = _lp(nifty_fut_tick)
+        banknifty_cash_price = _lp(banknifty_cash_tick)
+        banknifty_fut_price = _lp(fut_tick)
+
+        nifty_ctx = _compute_nifty_context(
+            nifty_cash_price=nifty_cash_price,
+            nifty_fut_price=nifty_fut_price,
+            banknifty_fut_price=banknifty_fut_price,
+            prev_nifty_cash=self._prev_nifty_cash,
+            rolling_spread_buf=self._rolling_spread_buf,
+        )
+        if nifty_cash_price is not None:
+            self._prev_nifty_cash = nifty_cash_price
+
+        underlying_ctx = _compute_underlying_context(
+            banknifty_cash_price=banknifty_cash_price,
+            banknifty_fut_price=banknifty_fut_price,
+            rolling_basis_buf=self._rolling_basis_buf,
+        )
+
+        block_flow = _compute_block_flow(
+            atm_ce_tick=atm_ce_tick,
+            atm_pe_tick=atm_pe_tick,
+            fut_tick=fut_tick,
+            rolling_block_buf=self._rolling_block_buf,
+            block_min_lots=self._block_min_lots,
+        )
+
+        return {
+            "nifty_context": nifty_ctx,
+            "underlying_context": underlying_ctx,
+            "block_flow": block_flow,
+        }
 
     def _get_json(self, url: str, params: Optional[Dict[str, Any]] = None) -> Any:
         response = requests.get(
@@ -1836,6 +2095,28 @@ class LiveMarketSnapshotBuilder:
             prev_session_chain_baseline=prev_session_chain_baseline,
             risk_free_rate_default=self.risk_free_rate_default,
         )
+        if self._cross_asset_enabled:
+            trade_date_str = str(snapshot.get("trade_date") or "")
+            atm_strike = None
+            ca = snapshot.get("chain_aggregates") or {}
+            if isinstance(ca, dict):
+                atm_strike = ca.get("atm_strike")
+            atm_ce_sym = (
+                f"NFO:{self.instrument.replace('FUT', str(atm_strike) + 'CE')}"
+                if atm_strike else None
+            )
+            atm_pe_sym = (
+                f"NFO:{self.instrument.replace('FUT', str(atm_strike) + 'PE')}"
+                if atm_strike else None
+            )
+            cross = self.fetch_cross_asset_context(
+                trade_date_str=trade_date_str,
+                atm_ce_symbol=atm_ce_sym,
+                atm_pe_symbol=atm_pe_sym,
+            )
+            snapshot["nifty_context"] = cross["nifty_context"]
+            snapshot["underlying_context"] = cross["underlying_context"]
+            snapshot["block_flow"] = cross["block_flow"]
         if self._velocity_acc is not None:
             snapshot = self._velocity_acc.process(snapshot)
         return snapshot

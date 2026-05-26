@@ -268,10 +268,26 @@ class KiteDataService:
     def get_tick(self, instrument: str) -> Dict[str, Any]:
         symbol = _normalize_symbol(instrument)
         quote = self._kite_client().quote([symbol]).get(symbol) or {}
+        last_price = _to_float(quote.get("last_price"))
+        depth = quote.get("depth") if isinstance(quote.get("depth"), dict) else {}
+        buy_depth = depth.get("buy") or []
+        sell_depth = depth.get("sell") or []
+        best_bid = _to_float(buy_depth[0].get("price")) if buy_depth else None
+        best_ask = _to_float(sell_depth[0].get("price")) if sell_depth else None
+        mid = (
+            float((best_bid + best_ask) / 2.0)
+            if best_bid is not None and best_ask is not None
+            else None
+        )
+        last_quantity = _to_int(quote.get("last_quantity") or quote.get("last_traded_quantity"))
         out = {
             "instrument": str(instrument or "").strip().upper(),
             "timestamp": _iso_now_ist(),
-            "last_price": _to_float(quote.get("last_price")),
+            "last_price": last_price,
+            "last_quantity": last_quantity,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "mid": mid,
             "volume": _to_int(quote.get("volume")),
             "oi": _to_int(quote.get("oi")),
             "oi_day_high": _to_int(quote.get("oi_day_high")),
