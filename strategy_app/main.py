@@ -22,6 +22,7 @@ from .runtime.runtime_artifacts import (
 )
 from .logging.signal_logger import SignalLogger
 from .runtime import RedisSnapshotConsumer
+from .runtime.redis_depth_reader import build_depth_reader_from_env
 
 logger = logging.getLogger(__name__)
 MIN_PAPER_DAYS = 10
@@ -255,6 +256,7 @@ def build_engine(
             signal_logger=signal_logger,
             engine_mode="deterministic",
             strategy_profile_id=(strategy_profile_id or PRODUCTION_DEFAULT_PROFILE_ID),
+            depth_reader=build_depth_reader_from_env(),
         )
     raise ValueError(f"unsupported engine: {engine_name}")
 

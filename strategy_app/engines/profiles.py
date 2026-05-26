@@ -20,6 +20,9 @@ PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20 = "trader_master_ml_entry_v1_stagn
 PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20_DYN_EXIT = "trader_master_ml_entry_v1_stagnant_20_dyn_exit"
 # ML timing + rule/shadow/momentum direction consensus; veto if unclear; ATM-only; fast thesis-fail exit.
 PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1 = "trader_master_ml_entry_consensus_v1"
+# Live trading: ML entry + CE-only + tighter session cap + depth signals enabled.
+# Use with DEPTH_FEED_ENABLED=1 and ML_ENTRY_BLOCK_PE=1 env vars.
+PROFILE_TRADER_MASTER_LIVE_V1 = "trader_master_live_v1"
 
 PRODUCTION_DEFAULT_PROFILE_ID = PROFILE_DET_PROD_V1
 
@@ -186,6 +189,29 @@ _TRADER_MASTER_STAGNANT_20_DYN_EXIT_RISK_CONFIG: dict[str, Any] = {
     "stagnant_exit_condition": "shadow_score_crossed_zero",
 }
 
+# Live v1: tighter stop/trail params for real-capital execution.
+# CE-only is enforced via env var ML_ENTRY_BLOCK_PE=1 (not in risk config).
+# Depth signals are activated by DEPTH_FEED_ENABLED=1 env var.
+# Half-size session cap vs paper until first live OOS window is complete.
+_TRADER_MASTER_LIVE_V1_RISK_CONFIG: dict[str, Any] = {
+    **_TRADER_MASTER_RISK_CONFIG,
+    # Tighter stop: live fills have slippage; cut faster on wrong-side entries.
+    "stop_loss_pct": 0.18,
+    # Keep target same — no reason to cap winners in live.
+    "target_pct": 0.70,
+    # Trail earlier: protect capital once +25% MFE (vs 35% in paper).
+    "trailing_activation_pct": 0.25,
+    "trailing_offset_pct": 0.08,
+    "trailing_lock_breakeven": True,
+    # Stagnation: exit flat trades faster live (10 bars vs 12) — theta is real money.
+    "stagnant_exit_bars": 10,
+    "stagnant_min_gain_pct": 0.05,
+    # Hard session cap: max 4 live trades per session until edge is re-verified.
+    "session_trade_cap": 4,
+    # ATM only: do not chase OTM strikes in live.
+    "atm_strike_only": True,
+}
+
 # Consensus direction: ML_ENTRY = timing only; exit fast when 5m thesis fails in first ~2 bars.
 _TRADER_MASTER_ML_ENTRY_CONSENSUS_RISK_CONFIG: dict[str, Any] = {
     **_TRADER_MASTER_RISK_CONFIG,
@@ -304,6 +330,7 @@ _PROFILE_REGIME_ENTRY_MAPS: dict[str, dict[str, list[str]]] = {
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20: _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20_DYN_EXIT: _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP,
     PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1: _TRADER_MASTER_ML_ENTRY_DET_DIR_REGIME_ENTRY_MAP,
+    PROFILE_TRADER_MASTER_LIVE_V1: _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP,
 }
 
 _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
@@ -321,6 +348,7 @@ _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20: list(_TRADER_MASTER_EXIT_STRATEGIES),
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20_DYN_EXIT: list(_TRADER_MASTER_EXIT_STRATEGIES),
     PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1: list(_TRADER_MASTER_EXIT_STRATEGIES),
+    PROFILE_TRADER_MASTER_LIVE_V1: list(_TRADER_MASTER_EXIT_STRATEGIES),
 }
 
 _PROFILE_RISK_CONFIGS: dict[str, dict[str, Any]] = {
@@ -337,6 +365,7 @@ _PROFILE_RISK_CONFIGS: dict[str, dict[str, Any]] = {
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20: _TRADER_MASTER_STAGNANT_20_RISK_CONFIG,
     PROFILE_TRADER_MASTER_ML_ENTRY_V1_STAGNANT_20_DYN_EXIT: _TRADER_MASTER_STAGNANT_20_DYN_EXIT_RISK_CONFIG,
     PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1: _TRADER_MASTER_ML_ENTRY_CONSENSUS_RISK_CONFIG,
+    PROFILE_TRADER_MASTER_LIVE_V1: _TRADER_MASTER_LIVE_V1_RISK_CONFIG,
 }
 
 

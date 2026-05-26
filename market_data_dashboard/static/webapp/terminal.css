@@ -682,3 +682,23 @@ body.app-dark .status-dot { background: var(--pos); box-shadow: 0 0 0 3px rgba(2
 
 /* Progress bar in eval run */
 body.app-dark progress { accent-color: var(--info); }
+
+/* Eval shell — single vertical scroll (avoid body + inner double scroll) */
+body.app-dark #app-shell {
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+body.app-dark #kill-banner-slot { flex-shrink: 0; }
+body.app-dark .topnav { flex-shrink: 0; }
+body.app-dark #page {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}

@@ -369,6 +369,8 @@ services:
       BRAIN_CONSENSUS_MIN_AGREEING: "${BRAIN_CONSENSUS_MIN_AGREEING:-1}"
       BRAIN_CONSENSUS_REQUIRE_DIRECTION: "${BRAIN_CONSENSUS_REQUIRE_DIRECTION:-false}"
       ML_ENTRY_DET_SKIP_BRAIN_GATE: "${ML_ENTRY_DET_SKIP_BRAIN_GATE:-false}"
+      DEPTH_FEED_ENABLED: "${DEPTH_FEED_ENABLED:-0}"
+      DEPTH_STALE_SEC: "${DEPTH_STALE_SEC:-30}"
     command:
       [
         "python",
@@ -407,6 +409,39 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
+
+  depth_collector:
+    # Live-only side-channel: polls Kite REST API for ATM CE/PE order book depth
+    # and writes best-bid/ask to Redis for strategy_app to read as a live signal.
+    # Operator runbook — ATM strike rotation:
+    #   1. Identify the new ATM CE/PE symbols from the chain (e.g. NFO:BANKNIFTY24OCT50000CE)
+    #   2. Update DEPTH_FEED_INSTRUMENTS in your .env or compose override
+    #   3. docker compose --profile live up -d --no-deps depth_collector
+    #      (rolling restart — Redis keys expire via TTL if collector stops)
+    # Enable: add --profile live to docker compose up, set DEPTH_FEED_ENABLED=1
+    # on strategy_app, and set DEPTH_FEED_INSTRUMENTS to the ATM symbols.
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: ingestion_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      EXECUTION_MODE: "live"
+      KITE_API_KEY: "${KITE_API_KEY:-}"
+      KITE_ACCESS_TOKEN: "${KITE_ACCESS_TOKEN:-}"
+      DEPTH_FEED_INSTRUMENTS: "${DEPTH_FEED_INSTRUMENTS:-}"
+      DEPTH_POLL_INTERVAL_SEC: "${DEPTH_POLL_INTERVAL_SEC:-5}"
+      DEPTH_STALE_TTL_SEC: "${DEPTH_STALE_TTL_SEC:-60}"
+      DEPTH_MARKET_OPEN_IST: "${DEPTH_MARKET_OPEN_IST:-09:15}"
+      DEPTH_MARKET_CLOSE_IST: "${DEPTH_MARKET_CLOSE_IST:-15:35}"
+    command: ["python", "-m", "ingestion_app.collectors.depth_collector"]
 
   dashboard:
     profiles: ["ui"]

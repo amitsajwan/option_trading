@@ -40,6 +40,7 @@ function LWChart({
   const prevUpToRef  = useRef(-1);
   const prevCandRef  = useRef(null);
   const priceLinesRef = useRef([]);
+  const connSeriesRef = useRef([]);
   const isPlayingRef = useRef(isPlaying);
   // stable refs so click handler isn't a stale closure
   const tradesRef    = useRef(trades);
@@ -258,6 +259,30 @@ function LWChart({
     seriesRef.current.setMarkers(markers);
   }, [trades, signals, selectedTrade, selectedSignal, upToIdx, candles]);
 
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    try { connSeriesRef.current.forEach(s => { try { chart.removeSeries(s); } catch (_) {} }); } catch (_) {}
+    connSeriesRef.current = [];
+    const dark = _isDark();
+    const visIdx = upToIdx == null ? Infinity : upToIdx;
+    const list = Array.isArray(trades) ? trades : [];
+    for (const tr of list) {
+      if (tr.entryIdx > visIdx) continue;
+      const cEntry = candles[tr.entryIdx];
+      const cExit  = tr.exitIdx != null && tr.exitIdx <= visIdx ? candles[tr.exitIdx] : null;
+      const entryTs = cEntry ? Math.floor(cEntry.t / 1000) : (tr.t ? Math.floor(tr.t / 1000) : null);
+      const exitTs  = cExit  ? Math.floor(cExit.t  / 1000) : entryTs;
+      const entryPx = tr.entryPx ?? tr.entry;
+      const exitPx  = tr.exitPx  ?? tr.exit  ?? entryPx;
+      if (entryTs == null || entryPx == null || exitTs == null || exitPx == null) continue;
+      const color = tr.pnlPct > 0 ? (dark ? '#19c37d' : '#0A8F5C') : tr.pnlPct < 0 ? (dark ? '#f23c4a' : '#C23E2F') : (dark ? '#7d8593' : '#5A6674');
+      const s = chart.addLineSeries({ color, lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+      s.setData([{ time: entryTs, value: entryPx }, { time: exitTs, value: exitPx }]);
+      connSeriesRef.current.push(s);
+    }
+  }, [trades, candles, upToIdx]);
+
   // ── Price lines for selected trade (entry / stop / target) ────────────
   useEffect(() => {
     const series = seriesRef.current;
@@ -367,7 +392,7 @@ function EChartPanel({ option, height }) {
   return <div ref={ref} style={{ width: '100%', height: height || 280, minHeight: 180 }} />;
 }
 
-function PaginatedTable({ columns, rows, page, pageSize, onPage, onExportCsv, emptyText, onRowClick, selectedKey }) {
+function PaginatedTable({ columns, rows, page, pageSize, onPage, onExportCsv, emptyText, onRowClick, selectedKey, rowCls }) {
   const safeRows = rows || [];
   const safeCols = columns || [];
   const limit = Number(pageSize || 50);
@@ -389,8 +414,9 @@ function PaginatedTable({ columns, rows, page, pageSize, onPage, onExportCsv, em
               {safeRows.map((row, idx) => {
                 const key = row.id || row.trade_id || row.date || idx;
                 const selected = selectedKey && String(selectedKey) === String(row.date || key);
+                const extraCls = rowCls ? rowCls(row) : '';
                 return (
-                  <tr key={key} className={selected ? 'selected' : ''} onClick={() => onRowClick && onRowClick(row)}>
+                  <tr key={key} className={[selected ? 'selected' : '', extraCls].filter(Boolean).join(' ')} onClick={() => onRowClick && onRowClick(row)}>
                     {safeCols.map(col => (
                       <td key={col.key} className={col.cls || ''}>
                         {col.render ? col.render(row) : (row[col.key] ?? '--')}

@@ -200,8 +200,14 @@ def print_overall(rows: list[dict]) -> None:
     print(f"- **net PF: {net:.3f}** (bootstrap 95% CI: [{lo:.2f}, {hi:.2f}], n_iter=1500)")
     ce = [r for r in rows if r["direction"] == "CE"]
     pe = [r for r in rows if r["direction"] == "PE"]
-    print(f"- CE: n={len(ce)}, net PF={pf(ce):.2f}, avg_net={mean(r['net_pnl_pct'] for r in ce)*100:+.2f}%")
-    print(f"- PE: n={len(pe)}, net PF={pf(pe):.2f}, avg_net={mean(r['net_pnl_pct'] for r in pe)*100:+.2f}%")
+    if ce:
+        print(f"- CE: n={len(ce)}, net PF={pf(ce):.2f}, avg_net={mean(r['net_pnl_pct'] for r in ce)*100:+.2f}%")
+    else:
+        print("- CE: n=0")
+    if pe:
+        print(f"- PE: n={len(pe)}, net PF={pf(pe):.2f}, avg_net={mean(r['net_pnl_pct'] for r in pe)*100:+.2f}%")
+    else:
+        print("- PE: n=0")
     print(
         f"- cost overlay: brokerage={COST_BROKERAGE_PER_ORDER:.1f}/order  "
         f"charges={COST_CHARGES_BPS:.1f}bps/side  slippage={COST_SLIPPAGE_BPS:.1f}bps/side"

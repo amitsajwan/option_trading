@@ -332,9 +332,6 @@ function EvalRunDetails({ run, vmProfileId }) {
           Trades used <code>{profile}</code>; VM is now <code>{vmProfile}</code> (redeploy or different engine).
         </p>
       )}
-      <p className="muted tiny eval-run-details-note">
-        Dropdown lines summarize each run; details above are for the selection. Profile is read from Mongo trades for this <code>run_id</code>, not the Trader book chip (that is today&apos;s VM only).
-      </p>
     </div>
   );
 }
@@ -452,7 +449,7 @@ function EvalMonitor({ tweaks }) {
   const [featureData, setFeatureData] = _evalUseState(null);
   const [profileCatalog, setProfileCatalog] = _evalUseState(null);
   const [vmRuntime, setVmRuntime] = _evalUseState(null);
-  const [bookOpen, setBookOpen] = _evalUseState(true);
+  const [bookOpen, setBookOpen] = _evalUseState(false);
   const [datePreset, setDatePreset] = _evalUseState('');
   const [strategyFilterAllCatalog, setStrategyFilterAllCatalog] = _evalUseState(false);
   const clientRef = _evalUseRef(null);
@@ -757,8 +754,6 @@ function EvalMonitor({ tweaks }) {
     vmProfile,
     strategyFilterAllCatalog
   );
-  const profileEntryIds = evalProfileEntryStrategyIds(vmProfile);
-  const profileExitIds = (vmProfile?.exit_strategies || []).filter(s => s && s !== 'IV_FILTER');
   const appliedRangeLabel = filters.date_from && filters.date_to
     ? `${filters.date_from} → ${filters.date_to}`
     : '—';
@@ -772,8 +767,8 @@ function EvalMonitor({ tweaks }) {
     { label: 'End Equity', value: evalNum(summary?.equity?.end_capital), sub: 'capital' },
     { label: 'Max Drawdown', value: evalPct(summary?.equity?.max_drawdown_pct), cls: 'neg', sub: 'peak to trough' },
     { label: 'Profit Factor', value: evalNum(summary?.overall?.profit_factor), sub: 'gross' },
-    { label: 'Loss Streak', value: summary?.streaks?.max_trade_loss_streak ?? '--', sub: 'trade' },
-    { label: 'Loss Streak', value: summary?.streaks?.max_day_loss_streak ?? '--', sub: 'day' },
+    { label: 'Trade Streak', value: summary?.streaks?.max_trade_loss_streak ?? '--', sub: 'loss' },
+    { label: 'Day Streak', value: summary?.streaks?.max_day_loss_streak ?? '--', sub: 'loss' },
   ];
 
   const equityOption = _evalUseMemo(() => buildLineOption(equity?.equity_curve || [], 'equity', 'Equity'), [equity]);
@@ -808,25 +803,25 @@ function EvalMonitor({ tweaks }) {
   const tradeColumns = [
     { key: 'trade_date_ist', label: 'Day' },
     { key: 'entry_strategy', label: 'Strategy' },
-    { key: 'regime', label: 'Regime' },
+    { key: 'regime', label: 'Regime', cls: 'mobile-hide' },
     { key: 'direction', label: 'Dir' },
-    { key: 'entry_time', label: 'Entry' },
-    { key: 'exit_time', label: 'Exit' },
+    { key: 'entry_time', label: 'Entry', cls: 'mobile-hide' },
+    { key: 'exit_time', label: 'Exit', cls: 'mobile-hide' },
     { key: 'capital_pnl_pct', label: 'Cap PnL%', cls: 'r', render: r => evalPct(r.capital_pnl_pct) },
-    { key: 'capital_pnl_amount', label: 'Cap PnL ₹', cls: 'r', render: r => evalNum(r.capital_pnl_amount) },
     { key: 'pnl_pct_net', label: 'Opt PnL%', cls: 'r', render: r => evalPct(r.pnl_pct_net) },
-    { key: 'capital_at_risk', label: 'Premium ₹', cls: 'r', render: r => evalNum(r.capital_at_risk) },
-    { key: 'lots', label: 'Lots', cls: 'r' },
-    { key: 'entry_premium', label: 'Entry₹', cls: 'r', render: r => evalNum(r.entry_premium) },
-    { key: 'exit_premium', label: 'Exit₹', cls: 'r', render: r => evalNum(r.exit_premium) },
-    { key: 'mfe_pct', label: 'MFE', cls: 'r', render: r => evalPct(r.mfe_pct) },
-    { key: 'mae_pct', label: 'MAE', cls: 'r', render: r => evalPct(r.mae_pct) },
-    { key: 'stop_loss_pct', label: 'Stop%', cls: 'r', render: r => evalPct(r.stop_loss_pct) },
-    { key: 'entry_stop_price', label: 'Entry Stop', cls: 'r', render: r => evalNum(r.entry_stop_price) },
-    { key: 'exit_stop_price', label: 'Exit Stop', cls: 'r', render: r => evalNum(r.exit_stop_price) },
-    { key: 'trailing_enabled', label: 'Trail', render: r => evalBool(r.trailing_enabled) },
-    { key: 'bars_held', label: 'Bars', cls: 'r' },
-    { key: 'exit_reason', label: 'Exit Reason' },
+    { key: 'capital_pnl_amount', label: 'Cap PnL ₹', cls: 'r mobile-hide', render: r => evalNum(r.capital_pnl_amount) },
+    { key: 'capital_at_risk', label: 'Premium ₹', cls: 'r mobile-hide', render: r => evalNum(r.capital_at_risk) },
+    { key: 'lots', label: 'Lots', cls: 'r mobile-hide' },
+    { key: 'entry_premium', label: 'Entry₹', cls: 'r mobile-hide', render: r => evalNum(r.entry_premium) },
+    { key: 'exit_premium', label: 'Exit₹', cls: 'r mobile-hide', render: r => evalNum(r.exit_premium) },
+    { key: 'mfe_pct', label: 'MFE', cls: 'r mobile-hide', render: r => evalPct(r.mfe_pct) },
+    { key: 'mae_pct', label: 'MAE', cls: 'r mobile-hide', render: r => evalPct(r.mae_pct) },
+    { key: 'stop_loss_pct', label: 'Stop%', cls: 'r mobile-hide', render: r => evalPct(r.stop_loss_pct) },
+    { key: 'entry_stop_price', label: 'Entry Stop', cls: 'r mobile-hide', render: r => evalNum(r.entry_stop_price) },
+    { key: 'exit_stop_price', label: 'Exit Stop', cls: 'r mobile-hide', render: r => evalNum(r.exit_stop_price) },
+    { key: 'trailing_enabled', label: 'Trail', cls: 'mobile-hide', render: r => evalBool(r.trailing_enabled) },
+    { key: 'bars_held', label: 'Bars', cls: 'r mobile-hide' },
+    { key: 'exit_reason', label: 'Exit' },
   ];
 
   const ranking = (featureData?.ranking?.rows || []).slice(0, 12);
@@ -836,22 +831,195 @@ function EvalMonitor({ tweaks }) {
 
   return (
     <div className="monitor-shell mode-eval">
-      <div className="page-head">
-        <div>
-          <div className="page-crumbs">Operator / Evaluation</div>
-          <h1 className="page-title">Strategy Evaluation</h1>
-          <p className="page-sub">
-            Replay runs store trades by <code>run_id</code>. Strategy / regime filters only narrow the tables below — engine profile is set on the VM (<code>STRATEGY_PROFILE_ID</code>).
-          </p>
+      <div className="eval-sticky-stack">
+        <div className="page-head eval-page-head-compact">
+          <div>
+            <div className="page-crumbs">Operator / Evaluation</div>
+            <h1 className="page-title">Strategy Evaluation</h1>
+            <p className="page-sub hide-mobile">
+              Pick a <code>run_id</code>, apply filters, then scroll for KPIs, charts, and trades.
+            </p>
+          </div>
+          <div className="head-right">
+            {vmProfileId && (
+              <span className="chip info" title={vmProfile?.summary || vmProfileId}>
+                <span className="dot"></span>VM: {vmProfile?.title || vmProfileId}
+              </span>
+            )}
+            <span className={`chip ${error ? 'neg' : loading ? 'warn' : 'info'}`}><span className="dot"></span>{error ? 'Error' : loading ? 'Loading' : 'Ready'}</span>
+          </div>
         </div>
-        <div className="head-right">
-          {vmProfileId && (
-            <span className="chip info" title={vmProfile?.summary || vmProfileId}>
-              <span className="dot"></span>VM replay: {vmProfile?.title || vmProfileId}
-            </span>
-          )}
-          <span className={`chip ${error ? 'neg' : loading ? 'warn' : 'info'}`}><span className="dot"></span>{error ? 'Error' : loading ? 'Loading' : 'Ready'}</span>
+
+        <div className="panel eval-runs-panel">
+          <div className="panel-head">
+            <div className="panel-title">Replay runs</div>
+            <div className="panel-actions">
+              <button type="button" className="btn sm" onClick={() => refreshRunsList(filters.dataset)} disabled={runsLoading}>
+                {runsLoading ? 'Refreshing…' : 'Refresh list'}
+              </button>
+            </div>
+          </div>
+          <div className="panel-body">
+            <div className="eval-runs-row">
+              <label className="field eval-run-picker">
+                <span className="field-label">Select run</span>
+                <select
+                  className="inp"
+                  value={activeRunId}
+                  onChange={e => {
+                    const runId = String(e.target.value || '').trim();
+                    const run = (runs || []).find(r => String(r.run_id || '') === runId);
+                    if (run) selectRun(run);
+                  }}
+                >
+                  <option value="">{runs.length ? '— pick a replay run —' : '— no runs yet —'}</option>
+                  {(runs || []).map((run, idx) => (
+                    <option key={run.run_id} value={run.run_id}>
+                      {(idx === 0 ? '★ LATEST  ' : '') + evalRunOptionLabel(run)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {resolvedRunId && (
+                <>
+                  <button type="button" className="btn sm" onClick={() => evalCopyText(resolvedRunId)}>Copy run ID</button>
+                  <button type="button" className="btn sm" onClick={() => evalCopyText(window.location.href)}>Copy link</button>
+                  {resolvedRunId && runStatus?.date_from && (
+                    <a
+                      className="btn sm"
+                      href={evalReplayDeepLink({
+                        runId: resolvedRunId,
+                        dateFrom: runStatus.date_from,
+                        dateTo: runStatus.date_to,
+                      })}
+                    >
+                      Open in Replay
+                    </a>
+                  )}
+                </>
+              )}
+            </div>
+            <EvalRunDetails run={runStatus} vmProfileId={vmProfileId} />
+          </div>
         </div>
+
+        <div className="panel eval-controls-panel">
+          <div className="panel-body">
+            <div className="eval-filter-bar eval-filter-bar-wide">
+              <label className="field">
+                <span className="field-label">Date preset</span>
+                <select
+                  className="inp"
+                  value={datePreset || evalDatePresetId(draft.date_from, draft.date_to)}
+                  onChange={e => {
+                    const id = e.target.value;
+                    setDatePreset(id);
+                    const next = evalApplyDatePreset(draft, id);
+                    setDraft(next);
+                  }}
+                >
+                  {EVAL_DATE_PRESETS.map(p => (
+                    <option key={p.id || 'custom'} value={p.id}>{p.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field"><span className="field-label">Dataset</span><select className="inp" value={draft.dataset} onChange={e => setDraft({ ...draft, dataset: e.target.value })}><option value="historical">Historical</option><option value="live">Live</option></select></label>
+              <label className="field"><span className="field-label">From</span><input className="inp" type="date" value={draft.date_from} onChange={e => { setDatePreset(''); setDraft({ ...draft, date_from: e.target.value }); }} /></label>
+              <label className="field"><span className="field-label">To</span><input className="inp" type="date" value={draft.date_to} onChange={e => { setDatePreset(''); setDraft({ ...draft, date_to: e.target.value }); }} /></label>
+              <label className="field">
+                <span className="field-label">Strategy filter</span>
+                <select className="inp" value={draft.strategy} onChange={e => setDraft({ ...draft, strategy: e.target.value })}>
+                  <option value="">All in scope</option>
+                  {strategyOptions.map(sid => (
+                    <option key={sid} value={sid}>{evalStrategyLabel(sid)}</option>
+                  ))}
+                </select>
+              </label>
+              {vmProfileId && (
+                <label className="field eval-filter-toggle" title="Show every strategy ID from the trader book (other profiles). Still display-only.">
+                  <span className="field-label">Catalog</span>
+                  <select
+                    className="inp"
+                    value={strategyFilterAllCatalog ? 'all' : 'profile'}
+                    onChange={e => setStrategyFilterAllCatalog(e.target.value === 'all')}
+                  >
+                    <option value="profile">Active profile only</option>
+                    <option value="all">All profiles (11)</option>
+                  </select>
+                </label>
+              )}
+              <label className="field">
+                <span className="field-label">Regime filter</span>
+                <select className="inp" value={draft.regime} onChange={e => setDraft({ ...draft, regime: e.target.value })}>
+                  {EVAL_REGIME_OPTIONS.map(r => (
+                    <option key={r || 'all'} value={r}>{r ? r : 'All regimes'}</option>
+                  ))}
+                </select>
+              </label>
+              <button className="btn" onClick={() => setRiskOpen(v => !v)}>{riskOpen ? 'Hide Risk' : `Risk ${draft.stop_loss_pct}/${draft.target_pct}`}</button>
+              <button className="btn" type="button" title="Trader master eval window (May–Jul 2024)" onClick={() => {
+                const next = { ...draft, ...EVAL_TRADER_MASTER_PRESET };
+                setDatePreset('may_jul_2024');
+                setDraft(next);
+                setFilters(next);
+                setDayPage(1);
+                setTradePage(1);
+                setSelectedDay('');
+                loadData(next, 1, 1, '', activeRunId);
+              }}>Master</button>
+              <button className="btn" type="button" title="Debit multi smoke day" onClick={() => {
+                const next = { ...draft, ...EVAL_DEBIT_MULTI_PRESET };
+                setDatePreset('oct31_2024');
+                setDraft(next);
+                setFilters(next);
+                setDayPage(1);
+                setTradePage(1);
+                setSelectedDay('');
+                loadData(next, 1, 1, '', activeRunId);
+              }}>Debit</button>
+              <button className="btn" type="button" onClick={() => {
+                const next = { ...draft, ...EVAL_R1S_TOP3_PRESET };
+                setDatePreset('may_jul_2024');
+                setDraft(next);
+                setFilters(next);
+                setDayPage(1);
+                setTradePage(1);
+                setSelectedDay('');
+                loadData(next, 1, 1, '', activeRunId);
+              }}>R1S</button>
+              <button className="btn primary" onClick={applyFilters}>Apply</button>
+              <button className="btn" onClick={runReplay}>Run Replay</button>
+            </div>
+            {error && <div className="muted" style={{ marginTop: 8, color: 'var(--neg)', fontSize: 12 }}>{error}</div>}
+            {riskOpen && (
+              <div className="eval-risk-grid">
+                <label className="field"><span className="field-label">Capital Base ₹</span><input className="inp" type="number" value={draft.initial_capital} onChange={e => setDraft({ ...draft, initial_capital: Number(e.target.value || 100000) })} /></label>
+                <label className="field"><span className="field-label">Stop %</span><input className="inp" type="number" value={draft.stop_loss_pct} onChange={e => setDraft({ ...draft, stop_loss_pct: Number(e.target.value || 0) })} /></label>
+                <label className="field"><span className="field-label">Target %</span><input className="inp" type="number" value={draft.target_pct} onChange={e => setDraft({ ...draft, target_pct: Number(e.target.value || 0) })} /></label>
+                <label className="field"><span className="field-label">Trail Activation %</span><input className="inp" type="number" value={draft.trailing_activation_pct} onChange={e => setDraft({ ...draft, trailing_activation_pct: Number(e.target.value || 0) })} /></label>
+                <label className="field"><span className="field-label">Trail Offset %</span><input className="inp" type="number" value={draft.trailing_offset_pct} onChange={e => setDraft({ ...draft, trailing_offset_pct: Number(e.target.value || 0) })} /></label>
+                <label className="field"><span className="field-label">Trailing</span><select className="inp" value={String(draft.trailing_enabled)} onChange={e => setDraft({ ...draft, trailing_enabled: e.target.value === 'true' })}><option value="true">On</option><option value="false">Off</option></select></label>
+                <label className="field"><span className="field-label">Lock BE</span><select className="inp" value={String(draft.trailing_lock_breakeven)} onChange={e => setDraft({ ...draft, trailing_lock_breakeven: e.target.value === 'true' })}><option value="true">On</option><option value="false">Off</option></select></label>
+              </div>
+            )}
+            <p className="muted eval-runs-hint" style={{ marginTop: 8, marginBottom: 0 }}>
+              Filters narrow tables only · range <code>{draft.date_from}</code>–<code>{draft.date_to}</code>
+              {resolvedRunId ? <> · run <code>{evalShortRunId(resolvedRunId)}</code></> : null}
+            </p>
+          </div>
+        </div>
+
+        {runActive && (
+          <div className="panel">
+            <div className="eval-progress-strip">
+              <div className="progress-bar"><div className="progress-fill" style={{ width: `${Math.max(0, Math.min(100, progressPct))}%` }} /></div>
+              <strong>{evalNum(progressPct, 0)}%</strong>
+              <span>{runEvent?.current_day || runStatus?.date_from || '--'} / {runStatus?.date_to || '--'}</span>
+              <span>run_id: {(activeRunId || runStatus?.run_id || '').slice(0, 8) || '--'}</span>
+              <span className={`chip ${wsState === 'connected' ? 'pos' : 'warn'}`}><span className="dot"></span>{wsState}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="panel eval-trader-book-panel">
@@ -912,62 +1080,6 @@ function EvalMonitor({ tweaks }) {
         )}
       </div>
 
-      <div className="panel eval-runs-panel">
-        <div className="panel-head">
-          <div className="panel-title">Replay runs</div>
-          <div className="panel-actions">
-            <button type="button" className="btn sm" onClick={() => refreshRunsList(filters.dataset)} disabled={runsLoading}>
-              {runsLoading ? 'Refreshing…' : 'Refresh list'}
-            </button>
-          </div>
-        </div>
-        <div className="panel-body">
-          <div className="eval-runs-row">
-            <label className="field eval-run-picker">
-              <span className="field-label">Select run</span>
-              <select
-                className="inp"
-                value={activeRunId}
-                onChange={e => {
-                  const runId = String(e.target.value || '').trim();
-                  const run = (runs || []).find(r => String(r.run_id || '') === runId);
-                  if (run) selectRun(run);
-                }}
-              >
-                <option value="">{runs.length ? '— pick a replay run —' : '— no runs yet —'}</option>
-                {(runs || []).map((run, idx) => (
-                  <option key={run.run_id} value={run.run_id}>
-                    {(idx === 0 ? '★ LATEST  ' : '') + evalRunOptionLabel(run)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {resolvedRunId && (
-              <>
-                <button type="button" className="btn sm" onClick={() => evalCopyText(resolvedRunId)}>Copy run ID</button>
-                <button type="button" className="btn sm" onClick={() => evalCopyText(window.location.href)}>Copy link</button>
-                {resolvedRunId && runStatus?.date_from && (
-                  <a
-                    className="btn sm"
-                    href={evalReplayDeepLink({
-                      runId: resolvedRunId,
-                      dateFrom: runStatus.date_from,
-                      dateTo: runStatus.date_to,
-                    })}
-                  >
-                    Open in Replay
-                  </a>
-                )}
-              </>
-            )}
-          </div>
-          <EvalRunDetails run={runStatus} vmProfileId={vmProfileId} />
-          <p className="muted eval-runs-hint">
-            Each option shows replay window, profile (if trades exist), trade count, and when queued. Full details appear above after you select.
-          </p>
-        </div>
-      </div>
-
       {showNoRunsHint && (
         <div className="panel eval-empty-panel">
           <div className="panel-body">
@@ -987,133 +1099,6 @@ function EvalMonitor({ tweaks }) {
               On the VM run <code>sudo python3 ops/gcp/preflight_historical_replay.py</code> then re-queue.
               Compare <strong>Option PnL%</strong> in the trades table (premium move); Capital PnL% uses full notional vs $1k and exaggerates tail days.
             </p>
-          </div>
-        </div>
-      )}
-
-      <div className="panel">
-        <div className="panel-body">
-          <div className="eval-filter-bar eval-filter-bar-wide">
-            <label className="field">
-              <span className="field-label">Date preset</span>
-              <select
-                className="inp"
-                value={datePreset || evalDatePresetId(draft.date_from, draft.date_to)}
-                onChange={e => {
-                  const id = e.target.value;
-                  setDatePreset(id);
-                  const next = evalApplyDatePreset(draft, id);
-                  setDraft(next);
-                }}
-              >
-                {EVAL_DATE_PRESETS.map(p => (
-                  <option key={p.id || 'custom'} value={p.id}>{p.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="field"><span className="field-label">Dataset</span><select className="inp" value={draft.dataset} onChange={e => setDraft({ ...draft, dataset: e.target.value })}><option value="historical">Historical</option><option value="live">Live</option></select></label>
-            <label className="field"><span className="field-label">From</span><input className="inp" type="date" value={draft.date_from} onChange={e => { setDatePreset(''); setDraft({ ...draft, date_from: e.target.value }); }} /></label>
-            <label className="field"><span className="field-label">To</span><input className="inp" type="date" value={draft.date_to} onChange={e => { setDatePreset(''); setDraft({ ...draft, date_to: e.target.value }); }} /></label>
-            <label className="field">
-              <span className="field-label">Strategy (display filter)</span>
-              <select className="inp" value={draft.strategy} onChange={e => setDraft({ ...draft, strategy: e.target.value })}>
-                <option value="">All in scope</option>
-                {strategyOptions.map(sid => (
-                  <option key={sid} value={sid}>{evalStrategyLabel(sid)}</option>
-                ))}
-              </select>
-            </label>
-            {vmProfileId && (
-              <label className="field eval-filter-toggle" title="Show every strategy ID from the trader book (other profiles). Still display-only.">
-                <span className="field-label">Catalog</span>
-                <select
-                  className="inp"
-                  value={strategyFilterAllCatalog ? 'all' : 'profile'}
-                  onChange={e => setStrategyFilterAllCatalog(e.target.value === 'all')}
-                >
-                  <option value="profile">Active profile only</option>
-                  <option value="all">All profiles (11)</option>
-                </select>
-              </label>
-            )}
-            <label className="field">
-              <span className="field-label">Regime (display filter)</span>
-              <select className="inp" value={draft.regime} onChange={e => setDraft({ ...draft, regime: e.target.value })}>
-                {EVAL_REGIME_OPTIONS.map(r => (
-                  <option key={r || 'all'} value={r}>{r ? r : 'All regimes'}</option>
-                ))}
-              </select>
-            </label>
-            <button className="btn" onClick={() => setRiskOpen(v => !v)}>{riskOpen ? 'Hide Risk' : 'Risk'}</button>
-            <button className="btn" type="button" title="Trader master eval window (May–Jul 2024)" onClick={() => {
-              const next = { ...draft, ...EVAL_TRADER_MASTER_PRESET };
-              setDatePreset('may_jul_2024');
-              setDraft(next);
-              setFilters(next);
-              setDayPage(1);
-              setTradePage(1);
-              setSelectedDay('');
-              loadData(next, 1, 1, '', activeRunId);
-            }}>Master preset</button>
-            <button className="btn" type="button" title="Debit multi smoke day — clear strategy filter" onClick={() => {
-              const next = { ...draft, ...EVAL_DEBIT_MULTI_PRESET };
-              setDatePreset('oct31_2024');
-              setDraft(next);
-              setFilters(next);
-              setDayPage(1);
-              setTradePage(1);
-              setSelectedDay('');
-              loadData(next, 1, 1, '', activeRunId);
-            }}>Debit preset</button>
-            <button className="btn" type="button" onClick={() => {
-              const next = { ...draft, ...EVAL_R1S_TOP3_PRESET };
-              setDatePreset('may_jul_2024');
-              setDraft(next);
-              setFilters(next);
-              setDayPage(1);
-              setTradePage(1);
-              setSelectedDay('');
-              loadData(next, 1, 1, '', activeRunId);
-            }}>R1S preset</button>
-            <button className="btn primary" onClick={applyFilters}>Apply</button>
-            <button className="btn" onClick={runReplay}>Run Replay</button>
-          </div>
-          <p className="muted eval-runs-hint">
-            Strategy filter scope:{' '}
-            <strong>
-              {strategyFilterAllCatalog
-                ? 'full trader book (all profiles)'
-                : vmProfile
-                  ? `${vmProfile.title || vmProfileId} entries: ${profileEntryIds.join(', ') || '—'}${profileExitIds.length ? ` · exit helpers: ${profileExitIds.join(', ')}` : ''}`
-                  : 'trades in this run'}
-            </strong>
-            . Does not change the engine — only narrows tables below.
-            {' '}Regime: <strong>{draft.regime || 'all'}</strong> · range <code>{draft.date_from}</code>–<code>{draft.date_to}</code>.
-            Trust <strong>Opt PnL%</strong> for premium moves; <strong>Cap PnL%</strong> is relative to capital base <strong>₹{(filters.initial_capital || 100000).toLocaleString()}</strong> — adjust in Risk panel.
-          </p>
-          {error && <div className="muted" style={{ marginTop: 8, color: 'var(--neg)', fontSize: 12 }}>{error}</div>}
-          {riskOpen && (
-            <div className="eval-risk-grid">
-              <label className="field"><span className="field-label">Capital Base ₹</span><input className="inp" type="number" value={draft.initial_capital} onChange={e => setDraft({ ...draft, initial_capital: Number(e.target.value || 100000) })} /></label>
-              <label className="field"><span className="field-label">Stop %</span><input className="inp" type="number" value={draft.stop_loss_pct} onChange={e => setDraft({ ...draft, stop_loss_pct: Number(e.target.value || 0) })} /></label>
-              <label className="field"><span className="field-label">Target %</span><input className="inp" type="number" value={draft.target_pct} onChange={e => setDraft({ ...draft, target_pct: Number(e.target.value || 0) })} /></label>
-              <label className="field"><span className="field-label">Trail Activation %</span><input className="inp" type="number" value={draft.trailing_activation_pct} onChange={e => setDraft({ ...draft, trailing_activation_pct: Number(e.target.value || 0) })} /></label>
-              <label className="field"><span className="field-label">Trail Offset %</span><input className="inp" type="number" value={draft.trailing_offset_pct} onChange={e => setDraft({ ...draft, trailing_offset_pct: Number(e.target.value || 0) })} /></label>
-              <label className="field"><span className="field-label">Trailing</span><select className="inp" value={String(draft.trailing_enabled)} onChange={e => setDraft({ ...draft, trailing_enabled: e.target.value === 'true' })}><option value="true">On</option><option value="false">Off</option></select></label>
-              <label className="field"><span className="field-label">Lock BE</span><select className="inp" value={String(draft.trailing_lock_breakeven)} onChange={e => setDraft({ ...draft, trailing_lock_breakeven: e.target.value === 'true' })}><option value="true">On</option><option value="false">Off</option></select></label>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {runActive && (
-        <div className="panel">
-          <div className="eval-progress-strip">
-            <div className="progress-bar"><div className="progress-fill" style={{ width: `${Math.max(0, Math.min(100, progressPct))}%` }} /></div>
-            <strong>{evalNum(progressPct, 0)}%</strong>
-            <span>{runEvent?.current_day || runStatus?.date_from || '--'} / {runStatus?.date_to || '--'}</span>
-            <span>run_id: {(activeRunId || runStatus?.run_id || '').slice(0, 8) || '--'}</span>
-            <span className={`chip ${wsState === 'connected' ? 'pos' : 'warn'}`}><span className="dot"></span>{wsState}</span>
           </div>
         </div>
       )}
@@ -1144,13 +1129,13 @@ function EvalMonitor({ tweaks }) {
           { label: 'Avg Target', value: evalPct(stopAnalysis.avg_configured_target_pct), sub: 'config' },
           { label: 'Trail Stops', value: stopAnalysis.trailing_stop_exits ?? '--', sub: 'count' },
         ]} /></div></div>
-        <div className="panel"><div className="panel-head"><div className="panel-title">Exit Reason Breakdown</div></div><PaginatedTable columns={[
+        <div className="panel eval-table-panel"><div className="panel-head"><div className="panel-title">Exit Reason Breakdown</div></div><PaginatedTable columns={[
           { key: 'exit_reason', label: 'Exit Reason' }, { key: 'count', label: 'Count', cls: 'r' }, { key: 'pct', label: '%', cls: 'r', render: r => evalPct(r.pct) }, { key: 'avg_capital_pnl_pct', label: 'Avg Capital PnL', cls: 'r', render: r => evalPct(r.avg_capital_pnl_pct) },
         ]} rows={exitRows} page={1} emptyText="No exit reasons." /></div>
       </div>
 
       <div className="eval-grid-2">
-        <div className="panel">
+        <div className="panel eval-table-panel">
           <div className="panel-head">
             <div className="panel-title">Strategy performance</div>
             <span className="chip info">{runRangeLabel}</span>
@@ -1165,7 +1150,7 @@ function EvalMonitor({ tweaks }) {
             { key: 'profit_factor', label: 'PF', cls: 'r', render: r => evalNum(r.profit_factor) },
           ]} />
         </div>
-        <div className="panel">
+        <div className="panel eval-table-panel">
           <div className="panel-head">
             <div className="panel-title">Regime performance</div>
             <span className="chip info">{runRangeLabel}</span>
@@ -1188,13 +1173,13 @@ function EvalMonitor({ tweaks }) {
         <div className="panel full"><div className="panel-head"><div className="panel-title">Daily Returns</div></div><EChartPanel option={dailyOption} height={chartHeight} /></div>
       </div>
 
-      <div className="panel"><div className="panel-head"><div className="panel-title">Per-Day Summary</div></div><PaginatedTable rows={days} columns={dayColumns} page={dayPage} onPage={setDayPage} onRowClick={r => { setSelectedDay(String(r.date || '')); setTradePage(1); }} selectedKey={selectedDay} onExportCsv={() => evalCsv('days.csv', days)} /></div>
+      <div className="panel eval-table-panel"><div className="panel-head"><div className="panel-title">Per-Day Summary</div></div><PaginatedTable rows={days} columns={dayColumns} page={dayPage} onPage={setDayPage} onRowClick={r => { setSelectedDay(String(r.date || '')); setTradePage(1); }} selectedKey={selectedDay} onExportCsv={() => evalCsv('days.csv', days)} /></div>
 
-      <div className="panel"><div className="panel-head"><div className="panel-title">Trades {selectedDay && <span className="chip info" style={{ marginLeft: 8 }}>{selectedDay}</span>}</div><div>{selectedDay && <button className="btn sm ghost" onClick={() => setSelectedDay('')}>Clear Day</button>}</div></div><PaginatedTable rows={trades} columns={tradeColumns} page={tradePage} onPage={setTradePage} onExportCsv={() => evalCsv('trades.csv', trades)} /></div>
+      <div className="panel eval-table-panel"><div className="panel-head"><div className="panel-title">Trades {selectedDay && <span className="chip info" style={{ marginLeft: 8 }}>{selectedDay}</span>}</div><div>{selectedDay && <button className="btn sm ghost" onClick={() => setSelectedDay('')}>Clear Day</button>}</div></div><PaginatedTable rows={trades} columns={tradeColumns} page={tradePage} onPage={setTradePage} onExportCsv={() => evalCsv('trades.csv', trades)} rowCls={r => { const v = Number(r.capital_pnl_pct); return v > 0 ? 'row-win' : v < 0 ? 'row-loss' : ''; }} /></div>
 
       <div className="panel collapsible-panel">
         <div className="panel-head" onClick={() => setFeatureOpen(v => !v)}>
-          <div className="panel-title">{featureOpen ? 'v' : '>'} Feature Intelligence</div>
+          <div className="panel-title">{featureOpen ? '▼' : '▶'} Feature Intelligence</div>
           <div className="row gap-s"><span className="chip info">snapshot_ml_flat</span><span className={`chip ${coverage.requested_range_in_coverage === false ? 'warn' : 'pos'}`}>{coverage.training_start ? `${coverage.training_start} to ${coverage.training_end}` : 'Coverage'}</span></div>
         </div>
         {featureOpen && (

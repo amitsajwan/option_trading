@@ -63,5 +63,10 @@
   "exit_reason": "TIME_STOP",
   "reason": "exit",
   "stagnant_exit_condition": "",
+  "thesis_fail_exit_bars": 0,
+  "thesis_fail_min_mfe_pct": 0.02,
+  "thesis_fail_pnl_pct": -0.08,
+  "early_stop_loss_bars": 0,
+  "early_stop_loss_pct": 0.0,
   "current_shadow_score": 0.0
 }

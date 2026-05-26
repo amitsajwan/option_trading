@@ -51,6 +51,8 @@ from .entry_gates import (
     is_in_configured_time_window,
     is_session_regime_allowed,
 )
+from ..market.depth_context import DepthContext
+from ..runtime.redis_depth_reader import RedisDepthReader
 from .profiles import (
     PRODUCTION_DEFAULT_PROFILE_ID,
     PROFILE_DEBIT_MULTI_V1,
@@ -59,6 +61,7 @@ from .profiles import (
     PROFILE_TRADER_MASTER_ML_ENTRY_V1,
     PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1,
     PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1,
+    PROFILE_TRADER_MASTER_LIVE_V1,
     get_risk_config,
 )
 from ..brain.brain import BrainDecision, TradingBrain
@@ -73,6 +76,7 @@ _PROFILES_RELAX_REGIME_CONF = frozenset(
         PROFILE_TRADER_MASTER_ML_ENTRY_V1,
         PROFILE_TRADER_MASTER_ML_ENTRY_DET_DIR_V1,
         PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1,
+        PROFILE_TRADER_MASTER_LIVE_V1,
     }
 )
 
@@ -111,6 +115,7 @@ class DeterministicRuleEngine(StrategyEngine):
         engine_mode: str = "deterministic",
         strategy_family_version: Optional[str] = None,
         strategy_profile_id: str = PRODUCTION_DEFAULT_PROFILE_ID,
+        depth_reader: Optional[RedisDepthReader] = None,
     ) -> None:
         self._velocity_enhanced = as_bool(os.getenv("STRATEGY_ENHANCED_VELOCITY"))
         self._regime = (
@@ -162,6 +167,10 @@ class DeterministicRuleEngine(StrategyEngine):
         self._pvwap_buf: deque = deque(maxlen=2) # price_vs_vwap per bar
         # E8 session-once daily regime tag — computed lazily after ORB resolves.
         self._session_regime_tag: Optional[str] = None
+        # Optional live depth feed (None in replay/offline — signals degrade gracefully).
+        self._depth_reader: Optional[RedisDepthReader] = depth_reader
+        # Per-evaluate depth snapshot — set at start of evaluate(), read by shadow scorer.
+        self._current_depth_ctx: Optional[DepthContext] = None
         self._set_logger_context(None)
         logger.info(
             "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s brain_enabled=%s",
@@ -341,6 +350,10 @@ class DeterministicRuleEngine(StrategyEngine):
         # Update rolling IV and VWAP-bias buffers before any shadow-scorer calls.
         self._iv_buf.append((snap.atm_ce_iv, snap.atm_pe_iv))
         self._pvwap_buf.append(snap.price_vs_vwap)
+        # Read live depth side-channel once per bar (None in replay — graceful fallback).
+        self._current_depth_ctx = (
+            self._depth_reader.read_depth() if self._depth_reader is not None else None
+        )
         position = self._tracker.current_position
         risk = self._risk.context
         trace_blocker: Optional[str] = None
@@ -1359,6 +1372,35 @@ class DeterministicRuleEngine(StrategyEngine):
                 if float(ce1) > float(ce0) * 1.05 and float(ce2) < float(ce1) * 0.97:
                     score -= 2.0
                     fired.append("ce_iv_fading")
+
+        # ── Live depth signals (15–18) — only fire when depth feed is active ──────
+        # These use the real-time order book rather than price/IV proxies.
+        # In replay/offline mode self._current_depth_ctx is None → signals silent.
+        _d = self._current_depth_ctx
+        if _d is not None:
+            # 15. CE bid dominance: CE buyers pressing — calls being chased up.
+            if _d.ce_valid:
+                ce_bid = float(_d.ce.bid_qty or 0)
+                ce_ask = float(_d.ce.ask_qty or 0)
+                if ce_ask > 0 and ce_bid > ce_ask * 1.5:
+                    score += 1.5
+                    fired.append("depth_ce_bid_dom")
+                # 18. CE ask dominance: calls being dumped — bearish.
+                elif ce_bid > 0 and ce_ask > ce_bid * 2.0:
+                    score -= 1.5
+                    fired.append("depth_ce_ask_dom")
+
+            # 16. PE bid dominance: PE buyers pressing — puts being chased up (bearish).
+            if _d.pe_valid:
+                pe_bid = float(_d.pe.bid_qty or 0)
+                pe_ask = float(_d.pe.ask_qty or 0)
+                if pe_ask > 0 and pe_bid > pe_ask * 1.5:
+                    score -= 1.5
+                    fired.append("depth_pe_bid_dom")
+                # 17. PE ask dominance: puts being offered into — sellers absorbing (bullish).
+                elif pe_bid > 0 and pe_ask > pe_bid * 2.0:
+                    score += 1.5
+                    fired.append("depth_pe_offer_dom")
 
         basis = ",".join(fired) if fired else "no_signals"
         if score > 0:

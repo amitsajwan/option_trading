@@ -350,6 +350,25 @@ function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upT
         <path d={vwapPath} className="t-chart-vwap"/>
 
         {trades.filter(t => t.entryIdx < visible.length).map(t => {
+          const eiN = Math.min(t.entryIdx, visible.length - 1);
+          const exN = Math.min(t.exitIdx ?? t.entryIdx, visible.length - 1);
+          const x1 = xOf(eiN);
+          const y1 = yOf(t.entryPx);
+          const x2 = xOf(exN);
+          const y2 = yOf(t.exitPx ?? t.entryPx);
+          const pnl = Number(t.pnlPct || 0);
+          const color = pnl > 0 ? 'var(--pos)' : pnl < 0 ? 'var(--neg)' : 'var(--fg-3)';
+          const isSel = selectedTrade?.id === t.id;
+          return (
+            <g key={"link-"+t.id} opacity={isSel?1:0.7}>
+              <line x1={x1} y1={y1} x2={x2} y2={y2}
+                    stroke={color} strokeWidth={isSel?2:1} strokeDasharray={isSel?"":"3 3"}/>
+              <circle cx={x2} cy={y2} r={isSel?3.5:2.5} fill={color} stroke={color}/>
+            </g>
+          );
+        })}
+
+        {trades.filter(t => t.entryIdx < visible.length).map(t => {
           const isSel = selectedTrade?.id === t.id;
           const cx = xOf(Math.min(t.entryIdx, visible.length - 1));
           const cy = yOf(t.entryPx);

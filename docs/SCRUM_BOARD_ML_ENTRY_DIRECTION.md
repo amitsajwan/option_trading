@@ -1,34 +1,37 @@
 # Scrum board — ML entry · direction · trap detection
 
 **Living document** — update status, owners, and **Results** after each replay / merge.  
-**Last updated:** 2026-05-24 (E1–E4 exit grid done; E5 direction consensus replay in progress; see [EXIT_RISK_EXPERIMENTS_2026-05.md](EXIT_RISK_EXPERIMENTS_2026-05.md))  
-**Profile under test:** `trader_master_ml_entry_v1` · **Engine baseline:** `a133936`
+**Last updated:** 2026-05-26 (E7-S4 + E7-S5 Done; Sprint 3 complete; R1S sell-side spec next)  
+**Profile under test:** `trader_master_ml_entry_v1` · **Live profile:** `trader_master_live_v1` · **Engine baseline:** `a133936`
 
 Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md) · [ENTRY_AND_DIRECTION.md](ENTRY_AND_DIRECTION.md) · [runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md](runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md)
 
 ---
 
-## Strategic context (2026-05-24)
+## Strategic context (2026-05-25 — arc conclusion)
 
-**Direction ML has hit a ceiling.** Three independent training attempts (unified S2, unified v2, dual CE/PE) all converge to AUC 0.54–0.56. This is not a training bug — it is a signal ceiling. Predicting "CE or PE" at session open from regime + velocity + IV features does not have enough information.
+**E1–E8 research arc is complete. Zero configs have survived OOS validation.**
 
-**The real edge is trap detection, not direction prediction.**
-Profitable intraday option traders do not predict where price goes. They detect when one side is trapped and forced to unwind:
-- Failed ORB breakdown → sellers trapped → CE squeeze
-- Price below VWAP → retail puts in → snaps back above VWAP → PUT IV collapses → CE scalp
-- PE IV spikes then compresses while spot holds → PE writers absorbing, not fleeing → trend continuation signal
+| Layer | Verdict |
+|-------|---------|
+| Entry timing (AUC 0.65) | Real edge, not enough alone |
+| Direction ML | AUC ceiling 0.54–0.557 — decisive null |
+| CE-only filter | PF 1.36–1.42 — structural asymmetry, not enough alone |
+| Time-window filter | Collapsed OOS |
+| Regime filter (E8) | In-sample PF 3.00 → OOS PF 0.54 — overfit |
 
-These are observable market structure signals, not predicted outcomes. They produce cleaner labels, earlier entries, and are computable from the snapshot data we already collect.
+**Root cause:** Long-ATM weekly at 1-min entry bleeds theta regardless of signal. No filter is sufficient.
 
-**What this means for the board:**
-1. E3 direction ML stories are closed/resolved — unified direction ML stays as interim signal (PF 2.21 vs momentum 0.57), but no more ML direction training investment
-2. E4 (exits/TIME_STOP) is ungated — direction ML path found its ceiling, no need to wait
-3. Epic E5 (trap detection) is the new sprint priority
+**Current pivot: Live Infrastructure + human-style approach.**  
+The data we collect is rich (OHLCV, VWAP, ORB, IV, OI, PCR, VIX). What was missing was depth (bid/ask order book) — live execution will provide this. Sprint 3 delivers the side-channel architecture so depth signals upgrade trap detection when live without breaking replay.
 
-**Known gaps to close:**
-- 291% total MFE left on table across 61 trades — TIME_STOP fires at +0.19% while avg MFE was +9.6%
-- Shadow scorer has 8 signals but none detect *failed* moves (the strongest real-world setup)
-- Direction: AUC 0.54 unified ML stays interim until E5 trap signals prove out in replay
+**Recommended next experiment:** Sell-side premium (R1S short ATM CE on bear/chop days) — the only PASS-class edge found in the arc. Needs a clean hypothesis + pre-registered pass gate before coding.
+
+**Known gaps still open:**
+- E7 OOS (CE + top-3 windows) — replay running on VM; expected to fail
+- E6 CE-only clean re-run — docker-compose bug fixed; needs VM run
+- E7-S3 — baseline PF replay with `trader_master_live_v1` profile (VM task)
+- R1S sell-side spec — pre-registered hypothesis needed before any sell-side code
 
 ---
 
@@ -69,9 +72,11 @@ These are observable market structure signals, not predicted outcomes. They prod
 
 | Field | Value |
 |-------|--------|
-| **Sprint** | Sprint 2 — Trap detection + exit quality |
-| **Dates** | 2026-05-24 → TBD |
-| **Sprint goal** | (1) TIME_STOP / MFE giveback experiment proves dynamic exit beats static target. (2) Failed-move trap signals in shadow scorer show measurable improvement in direction quality on replay. |
+| **Sprint** | Sprint 3 — Live Infrastructure |
+| **Dates** | 2026-05-25 → TBD |
+| **Sprint goal** | (1) Depth side-channel architecture shipped — replay unaffected, live upgrades trap signals automatically. (2) Live profile ready for paper-live execution once a validated OOS candidate exists. |
+
+**Sprint 2 outcome (closed 2026-05-25):** E5-S1 trap signals implemented + 26 tests. E4-S2 dynamic exit v2 replay still pending. Arc E1–E8 concluded with zero OOS configs — see handover.
 
 ---
 
@@ -100,15 +105,26 @@ These are observable market structure signals, not predicted outcomes. They prod
 | E4-S2b | Direction consensus + fast exit (E5 replay) | **P1** | Ops/GCP | **Done — needs E5b** | 5 |
 | E4-S3 | **5-gate ship:** E6 CE-only + cost overlay (Gates 1–2) | **P0** | Ops/GCP | **In progress** | 3 |
 | E4-S3 | Council exit layer (position re-eval) | P2 | Engine | **Backlog** | 8 |
-| E5-S1 | Failed-move trap signals in shadow scorer | **P1** | Engine | **In Review** | 5 |
+| E5-S1 | Failed-move trap signals in shadow scorer | **P1** | Engine | **Done** | 5 |
 | E5-S2 | Intraday session regime classifier | P2 | ML | **Backlog** | 8 |
 | E5-S3 | Time-window signal weighting | P2 | Engine | **Backlog** | 3 |
 | E5-S4 | Dynamic exit — premium-based triggers | P2 | ML | **Backlog** | 8 |
 | E5-S5 | Trap-aware direction ML (post-E5-S1) | P3 | | **Backlog** | 8 |
+| E7-S1 | Live depth feed side-channel architecture | **P1** | Engine | **Done** | 5 |
+| E7-S2 | Live profile `trader_master_live_v1` | **P1** | Engine | **Done** | 2 |
+| E7-S3 | Replay with depth signals (Aug–Oct baseline) | P2 | Ops/GCP | **Backlog** | 3 |
+| E7-S4 | Wire depth_collector in docker-compose + env docs | P2 | Ops/GCP | **Done** | 2 |
+| E7-S5 | Halt button backend endpoint | **P0** | Engine | **Done** | 5 |
+| R1-S1 | VIX field audit — verify snapshot.vix in IS parquet | **P0** | Ops/GCP | **Backlog** | 1 |
+| R1-S2 | IS replay (2020-Q3 → 2023-Q4) VIX filter Gate 1 | P1 | Ops/GCP | **Blocked** (R1-S1) | 3 |
+| R1-S3 | OOS-A replay (2024-Q1 + Q2) Gate 2 | P1 | Ops/GCP | **Blocked** (R1-S2) | 3 |
+| R1-S4 | OOS-B replay (2024-Q3 + Oct) Gate 3 | P1 | Ops/GCP | **Blocked** (R1-S3) | 2 |
+| R1-S5 | R1S engine story (only if all gates pass) | P2 | Engine | **Backlog** | 8 |
 
 **Velocity (sprint 1):** 44 planned / 42 completed points  
-**Sprint 2 capacity:** E4-S2 (5) + E5-S1 (5) + E2-S6 close-out (3) = 13 points  
-**Sprint 2 velocity so far:** E5-S1 impl done (5) = 5 pts · E4-S2 in progress (v2 fix applied, re-replay needed)
+**Sprint 2 velocity:** E5-S1 done (5) = 5 pts · E4-S2 v2 replay pending  
+**Sprint 3 velocity so far:** E7-S1 (5) + E7-S2 (2) + E7-S4 (2) + E7-S5 (5) = 14 pts  
+**Sprint 3 status:** E7 epic complete except E7-S3 (VM replay, Ops/GCP)
 
 ---
 
@@ -488,6 +504,106 @@ All computable from `snapshot.market_data` fields already collected.
 
 ---
 
+## Epic E7 — Live Infrastructure ✓ (partial)
+
+**Outcome:** Depth order-book data flows as a side-channel into the strategy engine in live mode. Replay is completely unaffected. Live profile is ready for paper-live execution.
+
+**Core architectural decision:** Depth is NOT embedded in the snapshot schema (would break historical replay and require schema migrations). Instead it is a Redis side-channel: `depth:atm_ce:latest` / `depth:atm_pe:latest`, read once per bar in `evaluate()`, silently absent in replay.
+
+### E7-S1 — Live depth feed side-channel architecture · Done
+
+| | |
+|--|--|
+| **Status** | Done |
+| **Commit** | `2026-05-25` |
+| **Points** | 5 |
+
+**What was built:**
+- `strategy_app/market/depth_context.py` — `StrikeDepth` + `DepthContext` dataclasses
+- `strategy_app/runtime/redis_depth_reader.py` — `RedisDepthReader`; reads from Redis, checks 30s staleness, returns `None` when absent
+- `ingestion_app/collectors/depth_collector.py` — polls Kite REST every `DEPTH_POLL_INTERVAL_SEC` (default 5s) during market hours; writes `depth:atm_ce:latest` / `depth:atm_pe:latest`
+- `DeterministicRuleEngine` — accepts optional `depth_reader`; reads depth once per `evaluate()`; stores in `self._current_depth_ctx`
+- 4 new depth signals (15–18) added to `_shadow_direction_from_snapshot`:
+  - `depth_ce_bid_dom` (+1.5): CE bid_qty > ask_qty × 1.5 — CE buyers pressing
+  - `depth_pe_offer_dom` (+1.5): PE ask_qty > bid_qty × 2 — puts being sold (bullish)
+  - `depth_pe_bid_dom` (−1.5): PE bid_qty > ask_qty × 1.5 — put buyers pressing (bearish)
+  - `depth_ce_ask_dom` (−1.5): CE ask_qty > bid_qty × 2 — calls being dumped (bearish)
+- `strategy_app/main.py` — `build_depth_reader_from_env()` wired into engine construction
+- 26 tests in `strategy_app/tests/test_depth_signals.py` — all pass
+
+**Activation (3 env vars):**
+```bash
+DEPTH_FEED_ENABLED=1
+DEPTH_FEED_INSTRUMENTS=NFO:BANKNIFTY24AUG50000CE,NFO:BANKNIFTY24AUG50000PE
+DEPTH_POLL_INTERVAL_SEC=5
+```
+
+**Replay:** `DEPTH_FEED_ENABLED` defaults to `0` — no depth keys in Redis → all 4 signals silent → zero impact on historical results.
+
+### E7-S2 — Live profile `trader_master_live_v1` · Done
+
+| | |
+|--|--|
+| **Status** | Done |
+| **Points** | 2 |
+
+**Profile spec vs paper (`trader_master_ml_entry_v1`):**
+
+| Parameter | Paper | Live |
+|-----------|-------|------|
+| `stop_loss_pct` | 20% | **18%** (slippage is real) |
+| `trailing_activation_pct` | 35% | **25%** (protect capital earlier) |
+| `stagnant_exit_bars` | 12 | **10** (theta is real money) |
+| `session_trade_cap` | 12 | **4** (until edge re-verified) |
+| `atm_strike_only` | False | **True** (no OTM chase) |
+
+Use with `ML_ENTRY_BLOCK_PE=1` (CE-only until PE OOS verified) and `DEPTH_FEED_ENABLED=1`.
+
+### E7-S3 — Replay with depth signals (Aug–Oct baseline) · Backlog P2
+
+Run Aug–Oct replay with `trader_master_live_v1` profile (but `DEPTH_FEED_ENABLED=0` — replay mode). Establishes the baseline PF for the live profile before depth upgrades. Compare to E2 `32b01989` May–Jul.
+
+### E7-S4 — Wire depth_collector in docker-compose + env docs · Done
+
+`depth_collector` service added to `docker-compose.yml` under `profiles: ["live"]`. Env vars: `KITE_API_KEY`, `KITE_ACCESS_TOKEN`, `DEPTH_FEED_INSTRUMENTS`, `DEPTH_POLL_INTERVAL_SEC`, `DEPTH_STALE_TTL_SEC`. Strategy_app gets `DEPTH_FEED_ENABLED` (default 0) and `DEPTH_STALE_SEC` (default 30).
+
+**ATM rotation runbook** (embedded in compose comment):
+1. Update `DEPTH_FEED_INSTRUMENTS` in `.env` with new strike symbols
+2. `docker compose --profile live up -d --no-deps depth_collector`
+3. Old keys auto-expire via Redis TTL (60s) — no manual cleanup needed
+
+**Activation:**
+```bash
+DEPTH_FEED_ENABLED=1
+DEPTH_FEED_INSTRUMENTS=NFO:BANKNIFTY25JUN50000CE,NFO:BANKNIFTY25JUN50000PE
+docker compose --profile live up -d
+```
+
+### E7-S5 — Halt button backend endpoint · Done
+
+`POST /api/operator/halt` endpoint implemented in `market_data_dashboard/routes/operator_routes.py`. Writes sentinel file; `strategy_app/risk/manager.py` checks `is_halted()` each tick. Path resolved via `STRATEGY_RUN_DIR` env var (set on both dashboard and strategy_app containers). Fixed in commits `5f450d6` (ro mount) + `5a3cbc5` (path resolver). Tests: `market_data_dashboard/tests/test_operator_halt_routes.py`.
+
+---
+
+## Epic R1 — Sell-side premium (R1S short ATM CE)
+
+**Motivation:** Only PASS-class edge found in E1–E8 arc. Short ATM CE on ORB-down + bearish momentum + below VWAP; profits from theta capture in calm-vol regimes. Fails catastrophically in macro-vol events (STOP blowouts when IV spikes). Regime filter (VIX < 16) is the hypothesis.
+
+**Spec:** `docs/R1S_SELLSIDE_HYPOTHESIS_2026-05-26.md` — pass gates and OOS windows are frozen.
+
+| ID | Story | Priority | Owner | Status | Points |
+|----|-------|----------|-------|--------|--------|
+| R1-S1 | VIX field audit — verify `snapshot.vix` populated in IS parquet | P0 | Ops/GCP | **Backlog** | 1 |
+| R1-S2 | IS replay (2020-Q3 → 2023-Q4) with VIX filter — Gate 1 | P1 | Ops/GCP | **Backlog** | 3 |
+| R1-S3 | OOS-A replay (2024-Q1 + Q2) — Gate 2 | P1 | Ops/GCP | **Blocked** (R1-S2) | 3 |
+| R1-S4 | OOS-B replay (2024-Q3 + Oct) — Gate 3 | P1 | Ops/GCP | **Blocked** (R1-S3) | 2 |
+| R1-S5 | R1S engine story (only if all gates pass) | P2 | Engine | **Backlog** | 8 |
+
+**Gate sequence:** R1-S1 → R1-S2 (Gate 1) → R1-S3 (Gate 2) → R1-S4 (Gate 3) → R1-S5.
+Stop immediately at first gate failure. Do not tune thresholds.
+
+---
+
 ## Epic E6 — Coverage & data quality (future)
 
 | ID | Story | Priority | Status | Notes |
@@ -566,17 +682,20 @@ All computable from `snapshot.market_data` fields already collected.
 | 2026-05-24 | Ops | E1–E4 May–Jul grid complete; best **E2** PF 1.04; E4 combo wash; replay throttle + drain fix (`ce02787`) |
 | 2026-05-24 | Engine | Direction consensus profile `trader_master_ml_entry_consensus_v1` + E5 experiment (`013ae66`); [EXIT_RISK_EXPERIMENTS_2026-05.md](EXIT_RISK_EXPERIMENTS_2026-05.md) |
 | 2026-05-24 | — | E5 done: `2632cdc7` PF 0.79, 169 trades May-only — expert handover updated; E5b + risk audit recommended |
+| **2026-05-25** | Engine | **E1–E8 arc concluded: zero OOS configs.** E5-S1 trap signals marked Done (26 tests pass). Sprint 3 opened: live depth side-channel (E7-S1 + E7-S2) implemented — `DepthContext`, `RedisDepthReader`, `depth_collector`, 4 depth signals in shadow scorer, `trader_master_live_v1` profile. Replay fully unaffected. |
 
 ---
 
-# Next tasks (sprint 2 order)
+# Next tasks (sprint 3 order)
 
-1. **E5 replay close-out (Ops, P1)** — Finish `E5_direction_consensus` on VM; paste run_id + PF/Jul/TIME_STOP into [EXIT_RISK_EXPERIMENTS_2026-05.md](EXIT_RISK_EXPERIMENTS_2026-05.md) §4. Decide ship: E2 exits vs E5 full stack.
+1. **E7-S5 Halt button backend (Engine, P0)** — No live-capital execution until this is resolved. Implement `POST /api/strategy/halt` endpoint that stops the consumer loop and closes any open position. See `project_halt_gap.md`.
 
-2. **E5-S1 trap signals (Engine, P1)** — Add failed-move traps to shadow scorer; replay; correlate with winners.
+2. **Wait for E7 OOS result (Ops, P1)** — VM replay running. If it passes: plan Nov–Jan third window. If it fails (expected): long-ATM-1-min lane is exhausted — confirm structural pivot to sell-side.
 
-3. **Vote telemetry (Engine, P2)** — Persist `direction_source`, consensus margin on `strategy_votes_historical` for forensics join.
+3. **E6 clean re-run (Ops, P1)** — `sudo bash ops/gcp/run_exit_risk_experiments.sh E6` then `E6_aug_oct`. CE-only baseline without windows/regime — establishes true CE-only floor before any structural change.
 
-4. **E2-S6 close-out (Ops, P2)** — Aug–Oct in-sample replay on chosen profile after E5 verdict.
+4. **E7-S3 Replay with live profile (Ops, P2)** — Run Aug–Oct with `trader_master_live_v1` profile, `DEPTH_FEED_ENABLED=0`. Baseline PF for live config before depth signals go live.
 
-5. **E4-S3 / E5-S4 design spike (ML, P2)** — Premium-based dynamic exits vs council re-eval.
+5. **E7-S4 docker-compose wiring (Ops, P2)** — Add `DEPTH_FEED_INSTRUMENTS` to docker-compose; document ATM rotation runbook.
+
+6. **Define sell-side hypothesis (ML, P1)** — Before writing any code: write a falsifiable hypothesis for R1S sell-side (short ATM CE on bear/chop days) with pre-registered pass gate (PF, CI lower bound, n). Use same discipline as E1–E8.

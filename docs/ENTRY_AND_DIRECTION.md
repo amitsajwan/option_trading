@@ -196,6 +196,17 @@ Full team runbook, scorecard, and E1–E5 results: **[EXIT_RISK_EXPERIMENTS_2026
 sudo bash ops/gcp/run_exit_risk_experiments.sh E5   # direction consensus (latest)
 ```
 
+### Human-style design spec
+
+For the next strategy iteration, see **[HUMAN_STYLE_STRATEGY_SPEC_2026-05.md](HUMAN_STYLE_STRATEGY_SPEC_2026-05.md)**.
+It translates the replay findings into a more discretionary framework:
+
+- skip-first behavior
+- CE-first asymmetric side policy
+- setup / trap-based context over raw direction prediction
+- fast confirmation / fast exit for 5-minute entry theses
+- net-cost-first promotion criteria
+
 ### OOS validation (ML_ENTRY primary voter — May 2026)
 
 After commit `a133936`, validate on disjoint windows before tuning caps or TIME_STOP:

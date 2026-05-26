@@ -322,6 +322,9 @@ table { border-collapse: collapse; width: 100%; }
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--paper-2);
+  max-height: 128px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .eval-run-details-grid {
   display: grid;
@@ -362,14 +365,31 @@ table { border-collapse: collapse; width: 100%; }
   align-items: end;
 }
 .eval-filter-bar-wide {
-  grid-template-columns: repeat(4, minmax(120px, 1fr)) repeat(2, minmax(140px, 1fr)) repeat(5, auto);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 10px;
+}
+.eval-filter-bar-wide .field {
+  flex: 1 1 130px;
+  min-width: 118px;
+  max-width: 100%;
+}
+.eval-filter-bar-wide .eval-filter-toggle {
+  flex: 0 1 140px;
+}
+.eval-filter-bar-wide > .btn {
+  flex: 0 0 auto;
 }
 .eval-filter-bar .field-label { white-space: nowrap; }
 .eval-trader-book-panel .eval-profile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 12px;
   margin-top: 12px;
+  max-height: min(260px, 38vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .eval-profile-card {
   border: 1px solid var(--line);
@@ -437,6 +457,8 @@ table { border-collapse: collapse; width: 100%; }
   border-top: 1px solid var(--line-1);
 }
 .eval-table tbody tr.selected { background: var(--info-wash); }
+.eval-table tbody tr.row-win { background: var(--pos-wash); }
+.eval-table tbody tr.row-loss { background: var(--neg-wash); }
 .collapsible-panel > .panel-head { cursor: pointer; }
 .feature-group-grid {
   display: grid;
@@ -775,6 +797,50 @@ table { border-collapse: collapse; width: 100%; }
 
 /* ============ Monitor layout ============ */
 .monitor-shell { display: grid; gap: 14px; }
+
+/* Eval — compact layout, sticky controls, bounded tables */
+.monitor-shell.mode-eval {
+  gap: 12px;
+  padding-bottom: 20px;
+}
+.eval-sticky-stack {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  display: grid;
+  gap: 10px;
+  padding-bottom: 6px;
+  margin: -4px 0 2px;
+  background: linear-gradient(180deg, var(--paper) 78%, transparent);
+}
+.eval-page-head-compact {
+  padding-bottom: 6px;
+  margin-bottom: 0;
+  border-bottom: none;
+}
+.eval-page-head-compact .page-title { font-size: 18px; }
+.eval-page-head-compact .page-sub { font-size: 11px; line-height: 1.45; max-width: 62ch; }
+.mode-eval .eval-chart-grid .panel .panel-body,
+.mode-eval .eval-chart-grid .panel {
+  min-width: 0;
+}
+.mode-eval .eval-table-panel .panel-body.flush {
+  max-height: min(360px, 42vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.mode-eval .eval-table-panel .tbl {
+  width: max-content;
+  min-width: 100%;
+}
+.mode-eval > .kpi-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (min-width: 1200px) {
+  .mode-eval > .kpi-strip {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+}
 
 .head-right { display: flex; align-items: center; gap: 8px; }
 
