@@ -95,7 +95,7 @@ Live mode is now running on GCP (paper, no real orders). Per-minute snapshots pe
 | E2-S3 | Brain skip flag for ML-entry eval | P1 | | **Done** | 2 |
 | E2-S4 | Three-window validation (fair harness) | P0 | | **Done** | 5 |
 | E2-S5 | Fix replay orchestrator (wait on run_id) | P1 | | **Done** | 1 |
-| E2-S6 | Full Aug–Oct in-sample replay | P2 | Ops/GCP | **In review** | 3 |
+| E2-S6 | Full Aug–Oct in-sample replay | P2 | Ops/GCP | **Cancelled — arc superseded** | 3 |
 | E2-S7 | Investigate May-only / low vote count | P1 | | **Done** | 5 |
 | E2-S8 | 2023 parquet backfill | P3 | Ops/GCP | **Blocked** | 8 |
 | E3-S1 | Tier 1 — CE guardrail / PE-only A/B | P0 | | **Done** | 5 |
@@ -105,18 +105,18 @@ Live mode is now running on GCP (paper, no real orders). Per-minute snapshots pe
 | E3-S5 | Profile `trader_master_ml_entry_v1` | P1 | | **Done** | 5 |
 | E3-S6 | Dual direction model (CE + PE per-side) | P1 | ML | **Closed — ceiling** | 8 |
 | E4-S1 | Session trade cap pilot (8 → 10) | P3 | | **Backlog** | 3 |
-| E4-S2 | TIME_STOP / MFE giveback experiment (E1–E4 grid) | **P1** | Ops/GCP | **In review** | 5 |
-| E4-S2b | Direction consensus + fast exit (E5 replay) | **P1** | Ops/GCP | **Done — needs E5b** | 5 |
-| E4-S3 | **5-gate ship:** E6 CE-only + cost overlay (Gates 1–2) | **P0** | Ops/GCP | **In progress** | 3 |
-| E4-S3 | Council exit layer (position re-eval) | P2 | Engine | **Backlog** | 8 |
+| E4-S2 | TIME_STOP / MFE giveback experiment (E1–E4 grid) | **P1** | Ops/GCP | **Cancelled — arc superseded** | 5 |
+| E4-S2b | Direction consensus + fast exit (E5 replay) | **P1** | Ops/GCP | **Cancelled — arc superseded** | 5 |
+| E4-S3 | **5-gate ship:** E6 CE-only + cost overlay (Gates 1–2) | **P0** | Ops/GCP | **Cancelled — arc superseded** | 3 |
+| E4-S3b | Council exit layer (position re-eval) | P2 | Engine | **Backlog** | 8 |
 | E5-S1 | Failed-move trap signals in shadow scorer | **P1** | Engine | **Done** | 5 |
-| E5-S2 | Intraday session regime classifier | P2 | ML | **Backlog** | 8 |
-| E5-S3 | Time-window signal weighting | P2 | Engine | **Backlog** | 3 |
-| E5-S4 | Dynamic exit — premium-based triggers | P2 | ML | **Backlog** | 8 |
-| E5-S5 | Trap-aware direction ML (post-E5-S1) | P3 | | **Backlog** | 8 |
+| E5-S2 | Intraday session regime classifier | P2 | ML | **Cancelled — arc superseded** | 8 |
+| E5-S3 | Time-window signal weighting | P2 | Engine | **Cancelled — arc superseded** | 3 |
+| E5-S4 | Dynamic exit — premium-based triggers | P2 | ML | **Cancelled — arc superseded** | 8 |
+| E5-S5 | Trap-aware direction ML (post-E5-S1) | P3 | | **Folded into D1-S2** | 8 |
 | E7-S1 | Live depth feed side-channel architecture | **P1** | Engine | **Done** | 5 |
 | E7-S2 | Live profile `trader_master_live_v1` | **P1** | Engine | **Done** | 2 |
-| E7-S3 | Replay with depth signals (Aug–Oct baseline) | P2 | Ops/GCP | **Backlog** | 3 |
+| E7-S3 | Replay with depth signals (Aug–Oct baseline) | P2 | Ops/GCP | **Cancelled — no historical depth data** | 3 |
 | E7-S4 | Wire depth_collector in docker-compose + env docs | P2 | Ops/GCP | **Done** | 2 |
 | E7-S5 | Halt button backend endpoint | **P0** | Engine | **Done** | 5 |
 | R1-S1 | VIX field audit — verify snapshot.vix in IS parquet | **P0** | Ops/GCP | **Backlog** | 1 |
@@ -149,7 +149,7 @@ Live mode is now running on GCP (paper, no real orders). Per-minute snapshots pe
 **Velocity (sprint 1):** 44 planned / 42 completed points  
 **Sprint 2 velocity:** E5-S1 done (5) = 5 pts · E4-S2 v2 replay pending  
 **Sprint 3 velocity:** E7-S1 (5) + E7-S2 (2) + E7-S4 (2) + E7-S5 (5) + OP bonus (5+3+5+2+1=16) = **30 pts**  
-**Sprint 4 planned:** D1-S1, D1-S2, D2-S1, D2-S2, D2-S3 = **16 pts P0/P1 must-have** · D1-S3, D1-S4 = +8 stretch (depth-data dependent)
+**Sprint 4 planned:** R1-S1 + D1-S1 + D1-S2 + D2-S1 + D2-S2 + D2-S3 = **17 pts P0/P1 must-have** · D1-S3 + D1-S4 = +8 stretch (depth-data dependent)
 
 ---
 
@@ -709,6 +709,7 @@ Stop immediately at first gate failure. Do not tune thresholds.
 | 2026-05-24 | — | E5 done: `2632cdc7` PF 0.79, 169 trades May-only — expert handover updated; E5b + risk audit recommended |
 | **2026-05-25** | Engine | **E1–E8 arc concluded: zero OOS configs.** E5-S1 trap signals marked Done (26 tests pass). Sprint 3 opened: live depth side-channel (E7-S1 + E7-S2) implemented — `DepthContext`, `RedisDepthReader`, `depth_collector`, 4 depth signals in shadow scorer, `trader_master_live_v1` profile. Replay fully unaffected. |
 | **2026-05-26** | Ops/Engine | **Sprint 3 closed + Sprint 4 opened.** GCP VM switched from historical replay to **live ingestion + paper trading**. Headless TOTP refresh installed (b552e4c). depth_collector upgraded with 5-level ladder + Mongo persistence + 7-day TTL (05784b4). Dashboard live-chart auto-refresh fix (2258a5f). 10-strike JUN ATM±2 depth coverage active. Today's live session: 294 snapshots persisted with full 25-strike chain; zero trade signals (correct — IV percentile 99.2 + EXPIRY regime; IV_FILTER vetoed 36/36 evaluations). **Sprint 4 opens with Direction Discovery focus** — Epic D1 (audit-first signal discovery), D2 (Tier 1 data: NIFTY, basis, blocks), D3 (Tier 2: Greeks, wider chain, VWAP), D4 (Tier 3: WebSocket ticks). **Critical rule: no new primary voter until pre-registered audit gates pass.** |
+| **2026-05-26** | Tech lead | **Sprint 3 closeout decisions.** 8 stories cancelled as "arc superseded" (E2-S6, E4-S2, E4-S2b, E4-S3 5-gate-ship, E5-S2, E5-S3, E5-S4, E7-S3) — all were predicated on the long-ATM-1-min lane that E1–E8 closed. E5-S5 folded into D1-S2 (trap signals are direction features). R1-S1 (VIX field audit) carried into Sprint 4 as the only genuine spillover — blocks the entire R1 sell-side epic. See "Sprint 3 closeout" section for full rationale table. |
 
 ---
 
@@ -716,8 +717,14 @@ Stop immediately at first gate failure. Do not tune thresholds.
 
 **Critical path: audit BEFORE implementing. Per v3 verdict, adding features at 1-min horizon without an audit is the failure pattern we must avoid.**
 
+**Pull from Sprint 3 (genuine spillover):**
+
+0. **R1-S1 VIX field audit (Ops/GCP, P0, 1 pt)** — Cheapest unblock available. Verify `snapshot.vix` is populated in IS parquet quarters on VM. Unblocks the entire R1 sell-side epic (R1-S2 → R1-S5).
+
+**New Sprint 4 work — critical path:**
+
 1. **D1-S1 Audit framework (ML, P0, 5 pts)** — Build the pre-registered audit script. Required before any direction-feature work can proceed.
-2. **D1-S2 Audit chain-aggregate features (ML, P0, 3 pts)** — Run D1-S1 over today's 294 snapshots + accumulating days. Establishes baseline of which existing snapshot fields predict direction.
+2. **D1-S2 Audit chain-aggregate features (ML, P0, 3 pts)** — Run D1-S1 over today's 294 snapshots + accumulating days. Establishes baseline of which existing snapshot fields predict direction. **Includes the 6 E5-S1 trap signals as candidate features** (orb_low_rejected, orb_high_rejected, vwap_reclaim_bull, vwap_reject_bear, pe_iv_fading, ce_iv_fading).
 3. **D2-S1 / D2-S2 / D2-S3 (Engine, P1, 3+2+3 pts)** — In parallel with audit: ingest NIFTY, basis, block flow. Each is a cheap independent ticket.
 4. **Wait 3+ trading days for depth data accumulation** (no work, just elapsed time).
 5. **D1-S3 Audit depth features (ML, P1, 3 pts)** — Once 3+ days of depth ticks accumulated.
@@ -725,9 +732,38 @@ Stop immediately at first gate failure. Do not tune thresholds.
 7. **Wait 5+ trading days for shadow data accumulation.**
 8. **D1-S5 + D1-S6 Promote + VIX gate (Engine, P2, 5 pts)** — Only if shadow audit passes pre-registered gates.
 
-**Parallel track — R1 sell-side (carry-over from Sprint 3):**
+---
 
-- **R1-S1 VIX field audit (Ops/GCP, P0, 1 pt)** — Still blocks all R1 stories. Verify `snapshot.vix` is populated in IS parquet quarters on VM.
+# Sprint 3 closeout (2026-05-26)
+
+The E1–E8 research arc concluded in Sprint 3 with a definitive structural verdict:
+**"Long-ATM-1-min lane is exhausted. Structural pivot required."**
+(Memory: `project_e7_oos_result_2026-05-25`, `project_e8_oos_failure_2026-05-25`.)
+
+That verdict makes a cluster of in-flight or backlog stories no longer actionable, because they were all built on the dead lane. To keep the board honest, those nine stories were closed at Sprint 4 open. Documenting here so the closures aren't lost in the table churn:
+
+| ID | Old status | New status | Why |
+|----|---|---|---|
+| E2-S6 | In review | **Cancelled — arc superseded** | Best run PF 1.19 already fails the gate; rerunning with traps doesn't change the structural conclusion |
+| E4-S2 | In review | **Cancelled — arc superseded** | Exits don't fix the entry-side edge gap |
+| E4-S2b | Done — needs E5b | **Cancelled — arc superseded** | E5b was implicitly cancelled with the arc |
+| E4-S3 (5-gate ship) | In progress | **Cancelled — arc superseded** | Was the ship vehicle for the dead lane; renamed sibling story to E4-S3b to keep IDs unique |
+| E5-S2 | Backlog P2 | **Cancelled — arc superseded** | Intraday regime classifier was a feature for the dead lane |
+| E5-S3 | Backlog P2 | **Cancelled — arc superseded** | Time windows already failed OOS in E7D0 |
+| E5-S4 | Backlog P2 | **Cancelled — arc superseded** | Dynamic exit on dead lane |
+| E5-S5 | Backlog P3 | **Folded into D1-S2** | Trap signals ARE direction features — they're now part of the D1-S2 audit candidate list |
+| E7-S3 | Backlog P2 | **Cancelled — no historical depth** | depth_collector is live-only; we have no historical depth backfill to replay against |
+
+**Carried forward into Sprint 4:**
+
+- **R1-S1 (VIX field audit, P0, 1 pt)** — the only Sprint 3 P0 leftover. Cheap. Unblocks R1-S2 → R1-S5.
+
+**Still open from prior sprints, status unchanged:**
+
+- **E2-S8 (2023 parquet backfill, Blocked, 8 pts)** — leave blocked; resurrect if R1 sell-side audit needs older quarters
+- **E4-S1 (Session trade cap pilot 8→10, Backlog P3)** — defer past Sprint 4
+- **E4-S3b (Council exit layer, Backlog P2)** — defer; revisit if D1 finds something
+- **R1-S2 → R1-S5** — blocked on R1-S1, will unblock in order
 
 ---
 
@@ -786,6 +822,16 @@ Use the D1-S1 framework to test direction signal in features we already capture 
 - `atm_options.atm_ce_iv` − `atm_options.atm_pe_iv` (IV skew)
 - `chain_aggregates.max_pain` distance from `futures_bar.fut_close`
 - `chain_aggregates.distance_to_max_pain_pct`
+
+**E5-S1 trap signals to audit as direction features** (folded in from cancelled E5-S5):
+- `orb_low_rejected` — failed bear breakout, should predict CE-side recovery
+- `orb_high_rejected` — failed bull breakout, should predict PE-side reversal
+- `vwap_reclaim_bull` — price reclaimed VWAP from below, should predict CE
+- `vwap_reject_bear` — price rejected at VWAP from above, should predict PE
+- `pe_iv_fading` — PE IV compressing after spike, should predict CE
+- `ce_iv_fading` — CE IV compressing after spike, should predict PE
+
+Each trap signal has a documented direction tag — the audit tests whether that tag holds up at 1m/5m/15m horizons.
 
 **Acceptance criteria**
 - [ ] All listed features have verdict (pass/fail vs gates)
