@@ -409,6 +409,214 @@ def _find_underlying_stop_trigger(
     return trigger_label, detail
 
 
+def _strategy_from_open_position(open_pos: Dict[str, Any]) -> str:
+    contrib = open_pos.get("contributing_strategies")
+    if isinstance(contrib, list) and contrib:
+        return str(contrib[0] or "unknown").strip()
+    return str(open_pos.get("entry_strategy") or open_pos.get("strategy") or "unknown").strip()
+
+
+def _vote_doc_to_entry_summary(doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    payload_vote = ((doc.get("payload") or {}).get("vote")) if isinstance(doc.get("payload"), dict) else {}
+    payload_vote = payload_vote if isinstance(payload_vote, dict) else {}
+    snapshot_id = str(doc.get("snapshot_id") or payload_vote.get("snapshot_id") or "").strip()
+    if not snapshot_id:
+        return None
+    raw_signals = (
+        doc.get("raw_signals")
+        if isinstance(doc.get("raw_signals"), dict)
+        else payload_vote.get("raw_signals")
+    )
+    raw_signals = dict(raw_signals or {}) if isinstance(raw_signals, dict) else {}
+    decision_metrics = (
+        doc.get("decision_metrics")
+        if isinstance(doc.get("decision_metrics"), dict)
+        else payload_vote.get("decision_metrics")
+    )
+    decision_metrics = dict(decision_metrics or {}) if isinstance(decision_metrics, dict) else {}
+    return {
+        "snapshot_id": snapshot_id,
+        "strategy": str(doc.get("strategy") or payload_vote.get("strategy") or "").strip() or None,
+        "direction": str(doc.get("direction") or payload_vote.get("direction") or "").strip() or None,
+        "confidence": _safe_float(
+            doc.get("confidence") if doc.get("confidence") is not None else payload_vote.get("confidence"),
+            fallback=None,
+        ),
+        "reason": str(doc.get("reason") or payload_vote.get("reason") or "").strip() or None,
+        "decision_reason_code": str(
+            doc.get("decision_reason_code") or payload_vote.get("decision_reason_code") or ""
+        ).strip() or None,
+        "decision_metrics": decision_metrics,
+        "raw_signals": raw_signals,
+    }
+
+
+def _pick_selected_entry_vote(
+    votes: List[Dict[str, Any]],
+    *,
+    preferred_strategy: Optional[str] = None,
+    preferred_direction: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if not votes:
+        return None
+
+    def _norm(value: Any) -> str:
+        return str(value or "").strip().upper()
+
+    strategy_norm = _norm(preferred_strategy)
+    direction_norm = _norm(preferred_direction)
+    for vote in votes:
+        if strategy_norm and _norm(vote.get("strategy")) == strategy_norm:
+            return dict(vote)
+    directional_votes = [
+        vote for vote in votes
+        if _norm(vote.get("direction")) in {"CE", "PE"}
+    ]
+    if direction_norm:
+        exact_dir = [vote for vote in directional_votes if _norm(vote.get("direction")) == direction_norm]
+        if exact_dir:
+            return dict(
+                max(
+                    exact_dir,
+                    key=lambda item: float(_safe_float(item.get("confidence"), fallback=0.0) or 0.0),
+                )
+            )
+    if directional_votes:
+        return dict(
+            max(
+                directional_votes,
+                key=lambda item: float(_safe_float(item.get("confidence"), fallback=0.0) or 0.0),
+            )
+        )
+    return dict(votes[0])
+
+
+def _load_entry_context_by_snapshot(
+    db: Any,
+    *,
+    trade_date: str,
+    coll_votes: str,
+    coll_traces: str,
+    run_id: Optional[str],
+    snapshot_meta: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    snapshot_ids = sorted({
+        str(snapshot_id or "").strip()
+        for snapshot_id in snapshot_meta.keys()
+        if str(snapshot_id or "").strip()
+    })
+    if not snapshot_ids:
+        return {}
+
+    out: Dict[str, Dict[str, Any]] = {
+        snapshot_id: {"snapshotId": snapshot_id}
+        for snapshot_id in snapshot_ids
+    }
+    collections = set(db.list_collection_names())
+
+    if coll_traces in collections:
+        trace_query: Dict[str, Any] = {
+            "trade_date_ist": trade_date,
+            "snapshot_id": {"$in": snapshot_ids},
+            "evaluation_type": "entry",
+            "final_outcome": "entry_taken",
+        }
+        if run_id:
+            trace_query["run_id"] = run_id
+        trace_proj = {
+            "_id": 0,
+            "snapshot_id": 1,
+            "summary_metrics": 1,
+            "selected_strategy_name": 1,
+            "selected_direction": 1,
+            "payload.trace": 1,
+        }
+        for doc in db[coll_traces].find(trace_query, trace_proj).sort("timestamp", ASCENDING):
+            snapshot_id = str(doc.get("snapshot_id") or "").strip()
+            if not snapshot_id:
+                continue
+            payload = doc.get("payload") if isinstance(doc.get("payload"), dict) else {}
+            trace = payload.get("trace") if isinstance(payload, dict) and isinstance(payload.get("trace"), dict) else {}
+            selected_candidate = {}
+            if isinstance(trace, dict):
+                for candidate in (trace.get("candidates") or []):
+                    if isinstance(candidate, dict) and bool(candidate.get("selected")):
+                        selected_candidate = dict(candidate)
+                        break
+            out.setdefault(snapshot_id, {"snapshotId": snapshot_id}).update(
+                {
+                    "traceSummary": (
+                        dict(doc.get("summary_metrics") or {})
+                        if isinstance(doc.get("summary_metrics"), dict)
+                        else dict(trace.get("summary_metrics") or {})
+                        if isinstance(trace, dict)
+                        else {}
+                    ),
+                    "selectedCandidate": selected_candidate,
+                    "flowGates": list(trace.get("flow_gates") or []) if isinstance(trace, dict) else [],
+                    "regimeContext": dict(trace.get("regime_context") or {}) if isinstance(trace, dict) else {},
+                    "warmupContext": dict(trace.get("warmup_context") or {}) if isinstance(trace, dict) else {},
+                    "selectedStrategyName": str(
+                        doc.get("selected_strategy_name")
+                        or (selected_candidate.get("strategy_name") if isinstance(selected_candidate, dict) else "")
+                        or ""
+                    ).strip() or None,
+                    "selectedDirection": str(
+                        doc.get("selected_direction")
+                        or (selected_candidate.get("direction") if isinstance(selected_candidate, dict) else "")
+                        or ""
+                    ).strip() or None,
+                }
+            )
+
+    if coll_votes in collections:
+        vote_query: Dict[str, Any] = {
+            "trade_date_ist": trade_date,
+            "snapshot_id": {"$in": snapshot_ids},
+        }
+        if run_id:
+            vote_query["run_id"] = run_id
+        vote_proj = {
+            "_id": 0,
+            "snapshot_id": 1,
+            "strategy": 1,
+            "direction": 1,
+            "confidence": 1,
+            "reason": 1,
+            "decision_reason_code": 1,
+            "decision_metrics": 1,
+            "raw_signals": 1,
+            "payload.vote": 1,
+        }
+        votes_by_snapshot: Dict[str, List[Dict[str, Any]]] = {}
+        for doc in db[coll_votes].find(vote_query, vote_proj).sort("timestamp", ASCENDING):
+            row = _vote_doc_to_entry_summary(doc)
+            if row is None:
+                continue
+            votes_by_snapshot.setdefault(str(row["snapshot_id"]), []).append(row)
+        for snapshot_id, votes in votes_by_snapshot.items():
+            ctx = out.setdefault(snapshot_id, {"snapshotId": snapshot_id})
+            meta = snapshot_meta.get(snapshot_id) or {}
+            selected_vote = _pick_selected_entry_vote(
+                votes,
+                preferred_strategy=(
+                    meta.get("strategy")
+                    or ctx.get("selectedStrategyName")
+                    or (ctx.get("selectedCandidate") or {}).get("strategy_name")
+                ),
+                preferred_direction=(
+                    meta.get("direction")
+                    or ctx.get("selectedDirection")
+                    or (ctx.get("selectedCandidate") or {}).get("direction")
+                ),
+            )
+            ctx["votes"] = votes
+            if selected_vote is not None:
+                ctx["selectedVote"] = selected_vote
+
+    return out
+
+
 def _position_to_trade(
     position_id: str,
     open_pos: Dict[str, Any],
@@ -418,6 +626,7 @@ def _position_to_trade(
     signal: Optional[MonitorSignal],
     candle_ts_sorted: List[int],
     candles: List[MonitorCandle],
+    entry_context: Optional[Dict[str, Any]] = None,
 ) -> Optional[MonitorTrade]:
     entry_ts = _ts_ms(open_pos.get("timestamp") or open_doc.get("timestamp"))
     exit_ts = _ts_ms(close_pos.get("timestamp") or close_doc.get("timestamp"))
@@ -447,14 +656,17 @@ def _position_to_trade(
     strike_value = _safe_float(open_pos.get("strike"), fallback=None)
     position_side = str(open_pos.get("position_side") or "LONG").strip().upper() or "LONG"
 
-    contrib = open_pos.get("contributing_strategies")
-    if isinstance(contrib, list) and contrib:
-        strat = str(contrib[0] or "unknown").strip()
-    else:
-        strat = str(open_pos.get("entry_strategy") or open_pos.get("strategy") or "unknown").strip()
+    strat = _strategy_from_open_position(open_pos)
     stop_basis = _stop_basis(open_pos)
     entry_futures_price = _safe_float(open_pos.get("entry_futures_price"), fallback=None)
     underlying_stop_price = _underlying_stop_level(open_pos)
+    entry_snapshot_id = str(
+        open_pos.get("entry_snapshot_id")
+        or open_doc.get("entry_snapshot_id")
+        or open_pos.get("snapshot_id")
+        or open_doc.get("snapshot_id")
+        or ""
+    ).strip() or None
     stop_trigger_candle = None
     stop_trigger_detail = ""
     if stop_basis == "underlying":
@@ -509,6 +721,8 @@ def _position_to_trade(
         strike=float(strike_value) if strike_value is not None else None,
         optionType=option_type,
         positionSide=position_side,
+        entrySnapshotId=entry_snapshot_id,
+        entryContext=dict(entry_context or {}),
     )
 
 
@@ -592,6 +806,7 @@ def _build_session(
     coll_votes: str,
     coll_signals: str,
     coll_positions: str,
+    coll_traces: str,
     run_id: Optional[str] = None,
 ) -> MonitorSession:
     latest_run_id = run_id or _latest_run_id_for_date(db, trade_date)
@@ -784,11 +999,48 @@ def _build_session(
                 sig = sig.model_copy(update={"traded": True})
             signal_by_id[sid] = sig
 
+    entry_snapshot_meta: Dict[str, Dict[str, Any]] = {}
+    for docs in position_map.values():
+        open_pos = docs.get("open")
+        close_pos = docs.get("close")
+        if not isinstance(open_pos, dict) or not isinstance(close_pos, dict):
+            continue
+        entry_snapshot_id = str(
+            open_pos.get("entry_snapshot_id")
+            or open_pos.get("snapshot_id")
+            or ((docs.get("open_doc") or {}).get("entry_snapshot_id") if isinstance(docs.get("open_doc"), dict) else None)
+            or ((docs.get("open_doc") or {}).get("snapshot_id") if isinstance(docs.get("open_doc"), dict) else None)
+            or ""
+        ).strip()
+        if not entry_snapshot_id:
+            continue
+        entry_snapshot_meta.setdefault(
+            entry_snapshot_id,
+            {
+                "strategy": _strategy_from_open_position(open_pos),
+                "direction": str(open_pos.get("direction") or "").strip().upper() or None,
+            },
+        )
+
+    entry_context_by_snapshot = _load_entry_context_by_snapshot(
+        db,
+        trade_date=trade_date,
+        coll_votes=coll_votes,
+        coll_traces=coll_traces,
+        run_id=detected_run_id or latest_run_id,
+        snapshot_meta=entry_snapshot_meta,
+    )
+
     trades: List[MonitorTrade] = []
     for pid, docs in position_map.items():
         if not isinstance(docs.get("open"), dict) or not isinstance(docs.get("close"), dict):
             continue
         sid = docs.get("signal_id", "")
+        entry_snapshot_id = str(
+            docs["open"].get("entry_snapshot_id")
+            or docs["open"].get("snapshot_id")
+            or ""
+        ).strip()
         trade = _position_to_trade(
             pid,
             docs["open"],
@@ -798,6 +1050,7 @@ def _build_session(
             signal_by_id.get(sid) if sid else None,
             candle_ts_sorted,
             candles,
+            entry_context=entry_context_by_snapshot.get(entry_snapshot_id or ""),
         )
         if trade is not None:
             trades.append(trade)
@@ -850,6 +1103,7 @@ class MongoSource:
     COLL_VOTES = os.getenv("MONGO_COLL_STRATEGY_VOTES_HISTORICAL", "strategy_votes_historical")
     COLL_SIGNALS = os.getenv("MONGO_COLL_TRADE_SIGNALS_HISTORICAL", "trade_signals_historical")
     COLL_POSITIONS = os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL", "strategy_positions_historical")
+    COLL_TRACES = os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES_HISTORICAL", "strategy_decision_traces_historical")
 
     def __init__(self, db: Any, trade_date: str, run_id: Optional[str] = None) -> None:
         self._db = db
@@ -861,7 +1115,7 @@ class MongoSource:
         if self._session is None:
             self._session = _build_session(
                 self._db, self._trade_date,
-                self.COLL_SNAPSHOTS, self.COLL_VOTES, self.COLL_SIGNALS, self.COLL_POSITIONS,
+                self.COLL_SNAPSHOTS, self.COLL_VOTES, self.COLL_SIGNALS, self.COLL_POSITIONS, self.COLL_TRACES,
                 run_id=self._run_id,
             )
         return self._session
@@ -874,6 +1128,7 @@ class LiveMongoSource:
     COLL_VOTES = os.getenv("MONGO_COLL_STRATEGY_VOTES", "strategy_votes")
     COLL_SIGNALS = os.getenv("MONGO_COLL_TRADE_SIGNALS", "trade_signals")
     COLL_POSITIONS = os.getenv("MONGO_COLL_STRATEGY_POSITIONS", "strategy_positions")
+    COLL_TRACES = os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES", "strategy_decision_traces")
 
     def __init__(self, db: Any, trade_date: Optional[str] = None) -> None:
         self._db = db
@@ -885,7 +1140,7 @@ class LiveMongoSource:
         if self._session is None:
             self._session = _build_session(
                 self._db, self._trade_date,
-                self.COLL_SNAPSHOTS, self.COLL_VOTES, self.COLL_SIGNALS, self.COLL_POSITIONS,
+                self.COLL_SNAPSHOTS, self.COLL_VOTES, self.COLL_SIGNALS, self.COLL_POSITIONS, self.COLL_TRACES,
             )
             self._candle_ts_sorted = [c.t for c in self._session.candles]
         return self._session

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -58,6 +58,8 @@ class MonitorTrade(BaseModel):
     strike: Optional[float] = None
     optionType: Optional[str] = None  # "CE" or "PE"
     positionSide: Optional[str] = None  # "LONG" = buy premium, "SHORT" = sell premium
+    entrySnapshotId: Optional[str] = None
+    entryContext: dict[str, Any] = Field(default_factory=dict)
 
 
 class MonitorAlert(BaseModel):

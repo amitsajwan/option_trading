@@ -3,6 +3,7 @@ import unittest
 from market_data_dashboard.real_source import (
     _enforce_replay_integrity,
     _find_underlying_stop_trigger,
+    _load_entry_context_by_snapshot,
     _latest_run_id_for_date,
     _position_to_trade,
 )
@@ -175,6 +176,7 @@ class RealSourceTradeTests(unittest.TestCase):
             "b148d344",
             {
                 "timestamp": "2024-09-25T09:45:00+05:30",
+                "entry_snapshot_id": "snap-entry-1",
                 "direction": "CE",
                 "lots": 5,
                 "entry_premium": 120.95,
@@ -204,6 +206,132 @@ class RealSourceTradeTests(unittest.TestCase):
         self.assertAlmostEqual(trade.underlyingStopPrice or 0.0, 53965.98, places=6)
         self.assertEqual(trade.stopTriggerCandle, "10:07")
         self.assertIn("underlying stop on close", trade.stopTriggerDetail)
+        self.assertEqual(trade.entrySnapshotId, "snap-entry-1")
+        self.assertEqual(trade.entryContext, {})
+
+    def test_load_entry_context_by_snapshot_merges_trace_and_selected_vote(self) -> None:
+        class _Cursor:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def sort(self, *_args, **_kwargs):
+                return self
+
+            def __iter__(self):
+                return iter(self._docs)
+
+        class _Collection:
+            def __init__(self, docs):
+                self._docs = list(docs)
+
+            def find(self, query, projection=None):  # noqa: ARG002
+                rows = []
+                for doc in self._docs:
+                    if str(doc.get("trade_date_ist") or "") != str(query.get("trade_date_ist") or ""):
+                        continue
+                    run_id = str(query.get("run_id") or "").strip()
+                    if run_id and str(doc.get("run_id") or "").strip() != run_id:
+                        continue
+                    snap_filter = query.get("snapshot_id") or {}
+                    snap_values = set(snap_filter.get("$in") or []) if isinstance(snap_filter, dict) else set()
+                    if snap_values and str(doc.get("snapshot_id") or "") not in snap_values:
+                        continue
+                    for key, value in query.items():
+                        if key in {"trade_date_ist", "run_id", "snapshot_id"}:
+                            continue
+                        if doc.get(key) != value:
+                            break
+                    else:
+                        rows.append(doc)
+                return _Cursor(rows)
+
+        db = {
+            "strategy_votes_historical": _Collection(
+                [
+                    {
+                        "trade_date_ist": "2024-09-25",
+                        "run_id": "run-1",
+                        "snapshot_id": "snap-entry-1",
+                        "strategy": "ML_ENTRY",
+                        "direction": "PE",
+                        "confidence": 0.81,
+                        "reason": "ml_entry+consensus: PE margin=2.90",
+                        "decision_metrics": {"policy_score": 0.85},
+                        "raw_signals": {
+                            "direction_source": "direction_consensus",
+                            "direction_consensus_ce": 1.2,
+                            "direction_consensus_pe": 4.1,
+                            "direction_consensus_margin": 2.9,
+                            "_policy_reason": "allowed score=0.85",
+                            "_policy_checks": {
+                                "volume": "PASS:vol_ratio=1.40",
+                                "momentum": "PASS:r5m=-0.0040,r15m=-0.0060",
+                            },
+                        },
+                    },
+                    {
+                        "trade_date_ist": "2024-09-25",
+                        "run_id": "run-1",
+                        "snapshot_id": "snap-entry-1",
+                        "strategy": "ORB_BREAK",
+                        "direction": "CE",
+                        "confidence": 0.55,
+                        "reason": "orb breakout",
+                        "decision_metrics": {},
+                        "raw_signals": {},
+                    },
+                ]
+            ),
+            "strategy_decision_traces_historical": _Collection(
+                [
+                    {
+                        "trade_date_ist": "2024-09-25",
+                        "run_id": "run-1",
+                        "snapshot_id": "snap-entry-1",
+                        "evaluation_type": "entry",
+                        "final_outcome": "entry_taken",
+                        "summary_metrics": {
+                            "entry_prob": 0.82,
+                            "shadow_score": -3.0,
+                            "shadow_dir": "PE",
+                            "shadow_basis": "multi_signal_pe(score=-3.0:below_vwap,pe_prem_dominant,r5m_dn)",
+                        },
+                        "selected_strategy_name": "ML_ENTRY",
+                        "selected_direction": "PE",
+                        "payload": {
+                            "trace": {
+                                "regime_context": {"regime": "TRENDING"},
+                                "flow_gates": [{"gate_id": "policy_checks", "status": "pass"}],
+                                "candidates": [
+                                    {"strategy_name": "ML_ENTRY", "direction": "PE", "selected": True},
+                                ],
+                            }
+                        },
+                    }
+                ]
+            ),
+        }
+        class _Db(dict):
+            def list_collection_names(self):
+                return ["strategy_votes_historical", "strategy_decision_traces_historical"]
+
+        ctx = _load_entry_context_by_snapshot(
+            _Db(db),
+            trade_date="2024-09-25",
+            coll_votes="strategy_votes_historical",
+            coll_traces="strategy_decision_traces_historical",
+            run_id="run-1",
+            snapshot_meta={"snap-entry-1": {"strategy": "ML_ENTRY", "direction": "PE"}},
+        )
+
+        self.assertIn("snap-entry-1", ctx)
+        row = ctx["snap-entry-1"]
+        self.assertEqual(row["selectedVote"]["strategy"], "ML_ENTRY")
+        self.assertEqual(row["selectedVote"]["direction"], "PE")
+        self.assertAlmostEqual(row["selectedVote"]["raw_signals"]["direction_consensus_pe"], 4.1, places=6)
+        self.assertEqual(row["traceSummary"]["shadow_dir"], "PE")
+        self.assertEqual(row["selectedCandidate"]["strategy_name"], "ML_ENTRY")
+        self.assertEqual(row["regimeContext"]["regime"], "TRENDING")
 
 
 if __name__ == "__main__":

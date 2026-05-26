@@ -1084,14 +1084,64 @@ function TradeInspector({ session, trade }) {
   // it's rendered via TC.fmtPct which multiplies by 100 at display time.
   const plannedPct = ((trade.targetPx - trade.entryPx) / trade.entryPx) * (trade.dir === 'SHORT' ? -1 : 1);
 
-  const probs = trade.probs || {
-    entry_prob:    { v: trade.conf, gate: 0.60, label: 'Entry gate' },
-    trade_prob:    { v: trade.conf * 0.92, gate: 0.55, label: 'Trade gate' },
-    ce_prob:       { v: trade.dir === 'LONG' ? 0.65 : 0.28, label: 'CE bias' },
-    pe_prob:       { v: trade.dir === 'LONG' ? 0.28 : 0.65, label: 'PE bias' },
-    recipe_prob:   { v: trade.conf * 0.94, label: 'Recipe prob' },
-    recipe_margin: { v: trade.conf * 0.42, label: 'Recipe margin' },
-  };
+  const ctx = trade.entryContext || {};
+  const traceSummary = ctx.traceSummary || {};
+  const selectedVote = ctx.selectedVote || {};
+  const selectedVoteMetrics = selectedVote.decision_metrics || {};
+  const selectedVoteRaw = selectedVote.raw_signals || {};
+  const selectedCandidate = ctx.selectedCandidate || {};
+
+  const _num = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+
+  // Use only stored signal metrics and replay-linked trade context.
+  const sm = trade.signal?.metrics || {};
+  const entryProb = _num(traceSummary.entry_prob ?? selectedVoteRaw.entry_prob ?? sm.entry_prob);
+  const tradeProb = _num(sm.trade_prob);
+  const recipeProb = _num(traceSummary.recipe_prob ?? sm.recipe_prob);
+  const recipeMargin = _num(traceSummary.recipe_margin ?? sm.recipe_margin);
+  const upProb = _num(traceSummary.direction_up_prob ?? sm.up_prob);
+  const probs = [
+    { v: entryProb, gate: 0.60, label: 'Entry gate', kind: 'gate' },
+    { v: tradeProb, gate: 0.55, label: 'Trade gate', kind: 'gate' },
+    { v: recipeProb, label: 'Recipe prob', kind: 'neutral' },
+    { v: recipeMargin, label: 'Recipe margin', kind: 'neutral' },
+    { v: upProb, label: 'Up prob', kind: 'neutral' },
+  ].filter(p => p.v != null && Number.isFinite(Number(p.v)));
+
+  // Direction decision — which leg was chosen and why
+  const ceProb = _num(selectedVoteRaw.direction_consensus_ce ?? sm.ce_prob);
+  const peProb = _num(selectedVoteRaw.direction_consensus_pe ?? sm.pe_prob);
+  const consensusMargin = _num(selectedVoteRaw.direction_consensus_margin);
+  const chosenLeg = trade.optionType || trade.legDir || (trade.dir === 'SHORT' ? 'PE' : 'CE');
+  const dirBasis = trade.signal?.reason || trade.entryReason || '';
+  const shadowDir = traceSummary.shadow_dir || null;
+  const shadowScore = traceSummary.shadow_score;
+  const shadowBasis = traceSummary.shadow_basis || selectedVoteRaw.direction_consensus_shadow_basis || '';
+  const firedShadowSignals = new Set(_parseShadowSignals(shadowBasis));
+  const directionSource = String(selectedVoteRaw.direction_source || '').trim();
+  const policyReason = String(selectedVoteRaw._policy_reason || '').trim();
+  const policyChecks = selectedVoteRaw._policy_checks && typeof selectedVoteRaw._policy_checks === 'object'
+    ? selectedVoteRaw._policy_checks
+    : {};
+  const policyCheckRows = Object.entries(policyChecks);
+  const selectedStrategy = String(
+    selectedVote.strategy
+    || ctx.selectedStrategyName
+    || selectedCandidate.strategy_name
+    || ''
+  ).trim();
+  // Parse direction decision keywords from reason string
+  const dirKeywords = [];
+  if (directionSource)             dirKeywords.push(directionSource);
+  if (/shadow/i.test(dirBasis))    dirKeywords.push('shadow');
+  if (/momentum/i.test(dirBasis))  dirKeywords.push('momentum');
+  if (/ml/i.test(dirBasis))        dirKeywords.push('ml');
+  if (/vwap/i.test(dirBasis))      dirKeywords.push('vwap');
+  if (/orb/i.test(dirBasis))       dirKeywords.push('orb');
+  if (/pcr/i.test(dirBasis))       dirKeywords.push('pcr');
+  if (/consensus/i.test(dirBasis)) dirKeywords.push('consensus');
+  if (/bind/i.test(dirBasis))      dirKeywords.push('bind');
+  if (/expir/i.test(dirBasis))     dirKeywords.push('expiry-mode');
 
   const confluence = trade.confluence || [];
   const counterfactuals = trade.counterfactuals || [
@@ -1142,8 +1192,116 @@ function TradeInspector({ session, trade }) {
         {/* Probability stack */}
         <div className="t-section-head">Why it fired</div>
         <div className="t-prob-stack">
-          {Object.values(probs).map((p, i) => <ProbRow key={i} {...p} kind={i < 2 ? 'gate' : 'neutral'}/>)}
+          {probs.length > 0 ? (
+            probs.map((p, i) => <ProbRow key={i} {...p} />)
+          ) : (
+            <div style={{color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:9.5}}>
+              No linked probability metrics for this trade.
+            </div>
+          )}
         </div>
+
+        {/* Direction decision */}
+        <div className="t-section-head">Direction decision</div>
+        <div className="t-dir-decision">
+          {(ceProb != null || peProb != null) ? (
+            <div className="t-dir-leg-row">
+              <span className={`t-dir-leg ${chosenLeg === 'CE' ? 'chosen' : ''}`} style={{color: chosenLeg==='CE'?'var(--pos)':'var(--fg-3)'}}>
+                CE {ceProb != null ? `${(ceProb*100).toFixed(0)}%` : '—'}
+                {chosenLeg === 'CE' && <span style={{marginLeft:4,fontSize:9}}>▲ chosen</span>}
+              </span>
+              <div style={{flex:1,margin:'0 6px',height:4,borderRadius:2,background:'var(--bg-2)',position:'relative'}}>
+                {ceProb != null && <div style={{position:'absolute',left:0,top:0,height:'100%',width:(ceProb*100)+'%',background:'var(--pos)',borderRadius:2,opacity:0.7}}/>}
+              </div>
+              <span className={`t-dir-leg ${chosenLeg === 'PE' ? 'chosen' : ''}`} style={{color: chosenLeg==='PE'?'var(--neg)':'var(--fg-3)'}}>
+                PE {peProb != null ? `${(peProb*100).toFixed(0)}%` : '—'}
+                {chosenLeg === 'PE' && <span style={{marginLeft:4,fontSize:9}}>▲ chosen</span>}
+              </span>
+            </div>
+          ) : (
+            <div style={{color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:9.5}}>
+              Side-probability fields were not stored for this trade; chosen leg was <span style={{color:chosenLeg==='CE'?'var(--pos)':'var(--neg)'}}>{chosenLeg}</span>.
+            </div>
+          )}
+          {upProb != null && (
+            <div className="t-dir-up-row">
+              <span style={{color:'var(--fg-3)',fontSize:10}}>up_prob</span>
+              <div style={{flex:1,margin:'0 6px',height:3,borderRadius:2,background:'var(--bg-2)',position:'relative'}}>
+                <div style={{position:'absolute',left:'50%',top:0,height:'100%',width:Math.abs(upProb-0.5)*100+'%',
+                  background:upProb>=0.5?'var(--pos)':'var(--neg)',borderRadius:2,opacity:0.65,
+                  transform:upProb>=0.5?'none':'translateX(-100%)'}}/>
+                <div style={{position:'absolute',left:'50%',top:-1,width:1,height:5,background:'var(--fg-3)',opacity:0.4}}/>
+              </div>
+              <span style={{color:'var(--fg-3)',fontSize:10}}>{(upProb*100).toFixed(0)}%</span>
+            </div>
+          )}
+          {consensusMargin != null && (
+            <div style={{marginTop:5,fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-3)'}}>
+              consensus margin <span style={{color:consensusMargin >= 0.5 ? 'var(--pos)' : consensusMargin >= 0.2 ? 'var(--warn)' : 'var(--neg)'}}>{consensusMargin.toFixed(2)}</span>
+            </div>
+          )}
+          {shadowDir && shadowScore != null && (
+            <div style={{marginTop:5,fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-3)'}}>
+              shadow <span style={{color:shadowDir==='CE'?'var(--pos)':'var(--neg)',fontWeight:700}}>{shadowDir}</span> {Number(shadowScore) >= 0 ? '+' : ''}{Number(shadowScore).toFixed(1)}
+            </div>
+          )}
+          {shadowBasis && (
+            <>
+              <div style={{marginTop:4,display:'flex',flexWrap:'wrap',gap:3}}>
+                {_HM_SIGNALS.map(sg => {
+                  const ceHit = sg.ce.some(s => firedShadowSignals.has(s));
+                  const peHit = sg.pe.some(s => firedShadowSignals.has(s));
+                  if (!ceHit && !peHit) return null;
+                  return (
+                    <span key={sg.label} className="t-confluence-chip" style={{color:ceHit?'var(--pos)':'var(--neg)'}}>
+                      {sg.label}:{ceHit ? 'CE' : 'PE'}
+                    </span>
+                  );
+                })}
+              </div>
+              <div style={{marginTop:4,fontFamily:'var(--f-mono)',fontSize:9,color:'var(--fg-3)',wordBreak:'break-all',lineHeight:1.4}}>{shadowBasis}</div>
+            </>
+          )}
+          {dirKeywords.length > 0 && (
+            <div className="t-dir-basis" style={{marginTop:4,display:'flex',flexWrap:'wrap',gap:3}}>
+              <span style={{color:'var(--fg-4)',fontSize:9,marginRight:2}}>basis:</span>
+              {dirKeywords.map((k,i) => <span key={i} className="t-confluence-chip">{k}</span>)}
+            </div>
+          )}
+          {selectedStrategy && (
+            <div style={{marginTop:4,fontFamily:'var(--f-mono)',fontSize:9,color:'var(--fg-3)'}}>
+              selected vote: {selectedStrategy}{selectedVote.direction ? ` · ${selectedVote.direction}` : ''}{selectedVote.confidence != null ? ` · conf ${(Number(selectedVote.confidence)*100).toFixed(0)}%` : ''}
+            </div>
+          )}
+          {dirBasis && <div style={{marginTop:4,fontFamily:'var(--f-mono)',fontSize:9,color:'var(--fg-3)',wordBreak:'break-all',lineHeight:1.4}}>{dirBasis}</div>}
+          {selectedVote.reason && selectedVote.reason !== dirBasis && (
+            <div style={{marginTop:4,fontFamily:'var(--f-mono)',fontSize:9,color:'var(--fg-3)',wordBreak:'break-all',lineHeight:1.4}}>
+              {selectedVote.reason}
+            </div>
+          )}
+        </div>
+
+        {(policyReason || policyCheckRows.length > 0 || Object.keys(selectedVoteMetrics).length > 0) && <>
+          <div className="t-section-head">Policy · Signals</div>
+          <div style={{fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-3)',lineHeight:1.45}}>
+            {policyReason && <div style={{marginBottom:4}}>{policyReason}</div>}
+            {policyCheckRows.length > 0 && (
+              <div style={{display:'grid',gridTemplateColumns:'auto 1fr',columnGap:8,rowGap:3}}>
+                {policyCheckRows.map(([k, v]) => (
+                  <React.Fragment key={k}>
+                    <span style={{color:'var(--fg-4)'}}>{k}</span>
+                    <span style={{color:/^PASS/i.test(String(v))?'var(--pos)':/^WARN/i.test(String(v))?'var(--warn)':/^BLOCK/i.test(String(v))?'var(--neg)':'var(--fg-3)'}}>{String(v)}</span>
+                  </React.Fragment>
+                ))}
+              </div>
+            )}
+            {selectedVoteMetrics.policy_score != null && (
+              <div style={{marginTop:5}}>
+                policy_score <span style={{color:'var(--fg-2)'}}>{Number(selectedVoteMetrics.policy_score).toFixed(2)}</span>
+              </div>
+            )}
+          </div>
+        </>}
 
         {/* Confluence */}
         {confluence.length > 0 && <>
