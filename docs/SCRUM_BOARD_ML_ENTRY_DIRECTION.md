@@ -1,7 +1,7 @@
 # Scrum board — ML entry · direction · trap detection
 
 **Living document** — update status, owners, and **Results** after each replay / merge.  
-**Last updated:** 2026-05-26 (E7-S4 + E7-S5 Done; Sprint 3 complete; R1S sell-side spec next)  
+**Last updated:** 2026-05-26 (Sprint 4 opened — live mode shipped to GCP, depth persistence ready, Direction Discovery epics D1-D4 added)  
 **Profile under test:** `trader_master_ml_entry_v1` · **Live profile:** `trader_master_live_v1` · **Engine baseline:** `a133936`
 
 Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md) · [ENTRY_AND_DIRECTION.md](ENTRY_AND_DIRECTION.md) · [runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md](runbooks/OOS_VALIDATION_ML_ENTRY_PRIMARY_VOTER.md)
@@ -22,16 +22,20 @@ Related: [BREAKTHROUGH_ML_ENTRY_PRIMARY_VOTER_2026-05-23.md](BREAKTHROUGH_ML_ENT
 
 **Root cause:** Long-ATM weekly at 1-min entry bleeds theta regardless of signal. No filter is sufficient.
 
-**Current pivot: Live Infrastructure + human-style approach.**  
-The data we collect is rich (OHLCV, VWAP, ORB, IV, OI, PCR, VIX). What was missing was depth (bid/ask order book) — live execution will provide this. Sprint 3 delivers the side-channel architecture so depth signals upgrade trap detection when live without breaking replay.
+**v3 microstructure verdict (2026-05-19):** 11 OI/Vol/Premium features at the same horizon — 1 PASS in 24 cells. **Adding more features at 1-min horizon does not unlock edge.** Any new feature must clear an audit gate before joining the engine.
 
-**Recommended next experiment:** Sell-side premium (R1S short ATM CE on bear/chop days) — the only PASS-class edge found in the arc. Needs a clean hypothesis + pre-registered pass gate before coding.
+**Current pivot (Sprint 4): Direction Signal Discovery.**  
+Live mode is now running on GCP (paper, no real orders). Per-minute snapshots persist with full 25-strike chain. Depth ladder starts persisting tomorrow. Before adding any new voter, run audit-first: prove the signal exists in real live data using pre-registered gates, then implement as **shadow voter**, then promote after 5+ days of positive shadow.
+
+**Two pivots remain valid:**  
+1. **Sell-side premium (R1S)** — only PASS-class edge found in arc. Pre-registered hypothesis frozen in `docs/R1S_SELLSIDE_HYPOTHESIS_2026-05-26.md`. See Epic R1.  
+2. **Direction discovery from live data** — new this sprint. See Epic D1.
 
 **Known gaps still open:**
 - E7 OOS (CE + top-3 windows) — replay running on VM; expected to fail
 - E6 CE-only clean re-run — docker-compose bug fixed; needs VM run
 - E7-S3 — baseline PF replay with `trader_master_live_v1` profile (VM task)
-- R1S sell-side spec — pre-registered hypothesis needed before any sell-side code
+- R1-S1 — VIX field audit (blocks R1 epic)
 
 ---
 
@@ -72,11 +76,11 @@ The data we collect is rich (OHLCV, VWAP, ORB, IV, OI, PCR, VIX). What was missi
 
 | Field | Value |
 |-------|--------|
-| **Sprint** | Sprint 3 — Live Infrastructure |
-| **Dates** | 2026-05-25 → TBD |
-| **Sprint goal** | (1) Depth side-channel architecture shipped — replay unaffected, live upgrades trap signals automatically. (2) Live profile ready for paper-live execution once a validated OOS candidate exists. |
+| **Sprint** | Sprint 4 — Direction Discovery + Live Data Enrichment |
+| **Dates** | 2026-05-26 → 2026-06-09 (2 weeks) |
+| **Sprint goal** | (1) Audit-first direction signal validated from real live data using pre-registered gates. (2) Tier-1 cross-asset data (NIFTY, basis, block flow) ingested. (3) Shadow voter for top feature emitting non-trading votes by sprint end. **No new primary voter until audit gates pass.** |
 
-**Sprint 2 outcome (closed 2026-05-25):** E5-S1 trap signals implemented + 26 tests. E4-S2 dynamic exit v2 replay still pending. Arc E1–E8 concluded with zero OOS configs — see handover.
+**Sprint 3 outcome (closed 2026-05-26):** E7-S1, E7-S2, E7-S4, E7-S5 done = 14 pts. **Bonus live-mode delivery:** GCP VM switched from historical replay to live ingestion + paper trading. Headless TOTP token refresh installed (`b552e4c`). Depth_collector upgraded with 5-level ladder + Mongo persistence (`05784b4`). Dashboard live-chart auto-refresh bug fixed (`2258a5f`). 10-strike (JUN ATM±2) depth coverage active. **Today's live session:** 294 snapshots persisted with full 25-strike chain; zero signals fired (correct — IV percentile 99.2 + EXPIRY regime; IV_FILTER vetoed all 36 evaluations).
 
 ---
 
@@ -120,11 +124,32 @@ The data we collect is rich (OHLCV, VWAP, ORB, IV, OI, PCR, VIX). What was missi
 | R1-S3 | OOS-A replay (2024-Q1 + Q2) Gate 2 | P1 | Ops/GCP | **Blocked** (R1-S2) | 3 |
 | R1-S4 | OOS-B replay (2024-Q3 + Oct) Gate 3 | P1 | Ops/GCP | **Blocked** (R1-S3) | 2 |
 | R1-S5 | R1S engine story (only if all gates pass) | P2 | Engine | **Backlog** | 8 |
+| D1-S1 | Direction-prediction audit framework | **P0** | ML / research | **Backlog** | 5 |
+| D1-S2 | Audit chain-aggregate features (PCR, OI Δ, IV skew) | **P0** | ML / research | **Backlog** | 3 |
+| D1-S3 | Audit depth-derived features (qty_imb, microprice) | P1 | ML / research | **Blocked** (3+ days depth data) | 3 |
+| D1-S4 | Shadow voter for top-validated feature | P1 | Engine | **Blocked** (D1-S2/S3) | 5 |
+| D1-S5 | Promote shadow → primary (5-day audit gate) | P2 | Engine | **Blocked** (D1-S4) | 3 |
+| D1-S6 | VIX-regime gate on direction voter | P2 | Engine | **Blocked** (D1-S5) | 2 |
+| D2-S1 | Ingest NIFTY 50 cash + futures | **P1** | Engine | **Backlog** | 3 |
+| D2-S2 | Ingest NIFTY BANK cash + compute futures-spot basis | **P1** | Engine | **Backlog** | 2 |
+| D2-S3 | Block-trade detection from last_quantity | P1 | Engine | **Backlog** | 3 |
+| D3-S1 | Greeks per strike (Delta/Gamma/Theta/Vega) | P2 | Engine | **Backlog** | 5 |
+| D3-S2 | Gamma Exposure (GEX) profile | P2 | Engine | **Blocked** (D3-S1) | 3 |
+| D3-S3 | Expand option chain in snapshot (25 → 50 strikes) | P2 | Engine | **Backlog** | 2 |
+| D3-S4 | Session VWAP + Anchored VWAP in snapshot | P2 | Engine | **Backlog** | 2 |
+| D4-S1 | Complete WebSocket tick collector | P3 | Engine | **Backlog** | 8 |
+| D4-S2 | Cumulative Volume Delta (CVD) from ticks | P3 | ML / research | **Blocked** (D4-S1) | 3 |
+| D4-S3 | Calendar spread (JUN vs JUL futures) | P3 | Engine | **Backlog** | 2 |
+| OP-S1 | Headless TOTP auth + systemd timer | — | Ops/GCP | **Done** | 5 |
+| OP-S2 | GCP VM switched to live mode + paper trading | — | Ops/GCP | **Done** | 3 |
+| OP-S3 | depth_collector: 5-level ladder + Mongo persistence | — | Engine | **Done** | 5 |
+| OP-S4 | Dashboard live chart auto-refresh fix | — | Engine | **Done** | 2 |
+| OP-S5 | ATM±2 (10-strike JUN) depth coverage | — | Ops/GCP | **Done** | 1 |
 
 **Velocity (sprint 1):** 44 planned / 42 completed points  
 **Sprint 2 velocity:** E5-S1 done (5) = 5 pts · E4-S2 v2 replay pending  
-**Sprint 3 velocity so far:** E7-S1 (5) + E7-S2 (2) + E7-S4 (2) + E7-S5 (5) = 14 pts  
-**Sprint 3 status:** E7 epic complete except E7-S3 (VM replay, Ops/GCP)
+**Sprint 3 velocity:** E7-S1 (5) + E7-S2 (2) + E7-S4 (2) + E7-S5 (5) + OP bonus (5+3+5+2+1=16) = **30 pts**  
+**Sprint 4 planned:** D1-S1, D1-S2, D2-S1, D2-S2, D2-S3 = **16 pts P0/P1 must-have** · D1-S3, D1-S4 = +8 stretch (depth-data dependent)
 
 ---
 
@@ -683,19 +708,463 @@ Stop immediately at first gate failure. Do not tune thresholds.
 | 2026-05-24 | Engine | Direction consensus profile `trader_master_ml_entry_consensus_v1` + E5 experiment (`013ae66`); [EXIT_RISK_EXPERIMENTS_2026-05.md](EXIT_RISK_EXPERIMENTS_2026-05.md) |
 | 2026-05-24 | — | E5 done: `2632cdc7` PF 0.79, 169 trades May-only — expert handover updated; E5b + risk audit recommended |
 | **2026-05-25** | Engine | **E1–E8 arc concluded: zero OOS configs.** E5-S1 trap signals marked Done (26 tests pass). Sprint 3 opened: live depth side-channel (E7-S1 + E7-S2) implemented — `DepthContext`, `RedisDepthReader`, `depth_collector`, 4 depth signals in shadow scorer, `trader_master_live_v1` profile. Replay fully unaffected. |
+| **2026-05-26** | Ops/Engine | **Sprint 3 closed + Sprint 4 opened.** GCP VM switched from historical replay to **live ingestion + paper trading**. Headless TOTP refresh installed (b552e4c). depth_collector upgraded with 5-level ladder + Mongo persistence + 7-day TTL (05784b4). Dashboard live-chart auto-refresh fix (2258a5f). 10-strike JUN ATM±2 depth coverage active. Today's live session: 294 snapshots persisted with full 25-strike chain; zero trade signals (correct — IV percentile 99.2 + EXPIRY regime; IV_FILTER vetoed 36/36 evaluations). **Sprint 4 opens with Direction Discovery focus** — Epic D1 (audit-first signal discovery), D2 (Tier 1 data: NIFTY, basis, blocks), D3 (Tier 2: Greeks, wider chain, VWAP), D4 (Tier 3: WebSocket ticks). **Critical rule: no new primary voter until pre-registered audit gates pass.** |
 
 ---
 
-# Next tasks (sprint 3 order)
+# Next tasks (Sprint 4 order)
 
-1. **E7-S5 Halt button backend (Engine, P0)** — No live-capital execution until this is resolved. Implement `POST /api/strategy/halt` endpoint that stops the consumer loop and closes any open position. See `project_halt_gap.md`.
+**Critical path: audit BEFORE implementing. Per v3 verdict, adding features at 1-min horizon without an audit is the failure pattern we must avoid.**
 
-2. **Wait for E7 OOS result (Ops, P1)** — VM replay running. If it passes: plan Nov–Jan third window. If it fails (expected): long-ATM-1-min lane is exhausted — confirm structural pivot to sell-side.
+1. **D1-S1 Audit framework (ML, P0, 5 pts)** — Build the pre-registered audit script. Required before any direction-feature work can proceed.
+2. **D1-S2 Audit chain-aggregate features (ML, P0, 3 pts)** — Run D1-S1 over today's 294 snapshots + accumulating days. Establishes baseline of which existing snapshot fields predict direction.
+3. **D2-S1 / D2-S2 / D2-S3 (Engine, P1, 3+2+3 pts)** — In parallel with audit: ingest NIFTY, basis, block flow. Each is a cheap independent ticket.
+4. **Wait 3+ trading days for depth data accumulation** (no work, just elapsed time).
+5. **D1-S3 Audit depth features (ML, P1, 3 pts)** — Once 3+ days of depth ticks accumulated.
+6. **D1-S4 Shadow voter (Engine, P1, 5 pts)** — Implement top-validated feature as SHADOW only. Env-gated. Cannot trigger trades.
+7. **Wait 5+ trading days for shadow data accumulation.**
+8. **D1-S5 + D1-S6 Promote + VIX gate (Engine, P2, 5 pts)** — Only if shadow audit passes pre-registered gates.
 
-3. **E6 clean re-run (Ops, P1)** — `sudo bash ops/gcp/run_exit_risk_experiments.sh E6` then `E6_aug_oct`. CE-only baseline without windows/regime — establishes true CE-only floor before any structural change.
+**Parallel track — R1 sell-side (carry-over from Sprint 3):**
 
-4. **E7-S3 Replay with live profile (Ops, P2)** — Run Aug–Oct with `trader_master_live_v1` profile, `DEPTH_FEED_ENABLED=0`. Baseline PF for live config before depth signals go live.
+- **R1-S1 VIX field audit (Ops/GCP, P0, 1 pt)** — Still blocks all R1 stories. Verify `snapshot.vix` is populated in IS parquet quarters on VM.
 
-5. **E7-S4 docker-compose wiring (Ops, P2)** — Add `DEPTH_FEED_INSTRUMENTS` to docker-compose; document ATM rotation runbook.
+---
 
-6. **Define sell-side hypothesis (ML, P1)** — Before writing any code: write a falsifiable hypothesis for R1S sell-side (short ATM CE on bear/chop days) with pre-registered pass gate (PF, CI lower bound, n). Use same discipline as E1–E8.
+# Epic D1 — Direction Signal Discovery
+
+**Goal:** Identify a validated direction-prediction signal (CE vs PE) from real live data before adding any new voter to strategy_app. Audit-first, then shadow voter, then promote — no shortcuts.
+
+**Strategic context:**
+- E1–E8 arc closed: zero OOS edge from 1-min long-ATM lane
+- v3 microstructure: 11 features, 1 PASS in 24 cells → **adding features without audit doesn't work**
+- R1S sell-side: only PASS-class config so far (regime-conditional, VIX<16)
+- Live mode shipped 2026-05-26: real data accumulating now
+- This epic mandates: **no new primary voter until pre-registered audit gates pass**
+
+### D1-S1 — Direction-prediction audit framework · Backlog · P0 · 5 pts
+
+**Owner:** _unassigned_
+
+**Description**
+
+Build a reusable audit script that, given any candidate feature(s) from `phase1_market_snapshots`, measures predictive power for futures direction at 1m / 5m / 15m horizons.
+
+**Tasks**
+- [ ] Load snapshots from Mongo `trading_ai.phase1_market_snapshots` filtered by `trade_date_ist` range
+- [ ] For each snapshot, extract feature value(s) and the futures_close at t+1m, t+5m, t+15m
+- [ ] Compute hit-rate (sign match) per horizon
+- [ ] Compute bootstrap 95% CI lower bound on hit-rate (1000 resamples)
+- [ ] Compute by-day distribution: % of days with positive hit-rate
+- [ ] Output table: feature → {hit_rate, ci_lb, pos_days_pct, n_obs, verdict}
+- [ ] Verdict gate (pre-registered, frozen before any feature test): **CI lb > 50% AND pos_days_pct ≥ 60% AND n_obs ≥ 200**
+- [ ] Save as `docs/audits/direction_audit_template.py` + example notebook
+
+**Acceptance criteria**
+- [ ] Runs against today's 294 snapshots and outputs verdict table
+- [ ] At least 10 candidate features tested in the example
+- [ ] Output reproducible (seed fixed)
+- [ ] Anti-pattern guard: gates are written into the script as frozen constants, not parameters
+
+**Anti-pattern callout:** Do NOT tune the gate to make a feature pass. Gates are frozen on PR open; any change requires a new ticket.
+
+---
+
+### D1-S2 — Audit chain-aggregate features · Backlog · P0 · 3 pts
+
+**Owner:** _unassigned_ · **Dependency:** D1-S1
+
+**Description**
+
+Use the D1-S1 framework to test direction signal in features we already capture per minute. This is the cheapest signal discovery — no new data needed.
+
+**Features to test** (all paths under `payload.snapshot.*`):
+- `chain_aggregates.pcr`, `pcr_change_5m`, `pcr_change_15m`
+- `chain_aggregates.ce_pe_oi_diff`, `ce_pe_volume_diff`
+- `atm_options.atm_oi_ratio`
+- `atm_options.atm_ce_oi_change_1m` − `atm_options.atm_pe_oi_change_1m`
+- `atm_options.atm_ce_iv` − `atm_options.atm_pe_iv` (IV skew)
+- `chain_aggregates.max_pain` distance from `futures_bar.fut_close`
+- `chain_aggregates.distance_to_max_pain_pct`
+
+**Acceptance criteria**
+- [ ] All listed features have verdict (pass/fail vs gates)
+- [ ] Top 3 features by CI_lb identified
+- [ ] Written to `docs/audits/CHAIN_FEATURES_DIRECTION_AUDIT_<YYYY-MM-DD>.md`
+- [ ] **Note:** single-day n is too small to confirm pass; document this caveat. Repeat audit weekly.
+
+**Important caveat:** 2026-05-26 (today) was EXPIRY-day regime with IV=99.2 percentile — NOT representative. Need at least 3 normal-regime days before drawing conclusions.
+
+---
+
+### D1-S3 — Audit depth-derived features · Blocked · P1 · 3 pts
+
+**Owner:** _unassigned_ · **Dependency:** ≥3 trading days of data in `market_depth_ticks` (earliest available 2026-05-30)
+
+**Description**
+
+After 3+ trading days of depth ticks accumulated, audit the depth-derived features for direction signal — separately and in combination with chain-aggregate features (D1-S2).
+
+**Features to test** (from `market_depth_ticks` docs):
+- `qty_imbalance` (CE) − `qty_imbalance` (PE) at ATM strike, instantaneous
+- Rolling 30s / 60s mean of CE−PE qty_imbalance
+- `microprice` − `mid` (drift), rolling
+- `spread` widening/tightening (z-score)
+- Total bid stack: CE total_bid_qty − PE total_bid_qty
+- OI-level interaction: depth imbalance × snapshot OI delta
+
+**Acceptance criteria**
+- [ ] At least 3 trading days of depth data in Mongo
+- [ ] Audit run; verdict table written to `docs/audits/DEPTH_FEATURES_DIRECTION_AUDIT_<date>.md`
+- [ ] **Incremental test:** does depth ADD signal on top of chain-aggregate features (D1-S2), or is it redundant? Use AUC of chain-only vs chain+depth.
+- [ ] If redundant: document and DO NOT proceed to D1-S4 with depth
+
+---
+
+### D1-S4 — Direction shadow voter implementation · Blocked · P1 · 5 pts
+
+**Owner:** _unassigned_ · **Dependency:** D1-S2 OR D1-S3 (at least one feature passes audit gates)
+
+**Description**
+
+Implement the top-validated feature as a **SHADOW voter** in strategy_app. Shadow = produces votes that are logged to Mongo but **do not drive trade execution**. This collects real-world performance data without risk.
+
+**Tasks**
+- [ ] New strategy class (e.g. `CHAIN_DIRECTION` or `DEPTH_DIRECTION`) in `strategy_app/engines/`
+- [ ] Env gates:
+  - `STRATEGY_SHADOW_DIRECTION_ENABLED=0` (default OFF)
+  - `STRATEGY_SHADOW_DIRECTION_FEATURE=<feature_name>` (which validated feature to use)
+  - `STRATEGY_SHADOW_DIRECTION_THRESHOLD=<value>` (from audit)
+- [ ] Votes published to existing `market:strategy:votes:v1` topic with `shadow=true` flag
+- [ ] **NOT registered in the regime router** — engine never sees shadow votes for entry decisions
+- [ ] strategy_persistence_app already persists votes — confirm shadow flag is preserved
+- [ ] Unit tests
+- [ ] Tagged regression test: confirm no trade signals or position changes are triggered by shadow
+
+**Acceptance criteria**
+- [ ] Strategy class implemented + unit tests pass
+- [ ] When `STRATEGY_SHADOW_DIRECTION_ENABLED=0`: no votes produced
+- [ ] When `=1`: votes appear in Mongo with `shadow=true`
+- [ ] At least one shadow vote captured during a live session
+- [ ] Zero trade signals / position changes attributable to shadow
+
+**Anti-pattern callout:** Even if the audit shows huge edge, this MUST go through shadow phase. No exceptions. Refer to v3 verdict.
+
+---
+
+### D1-S5 — Shadow → primary promotion · Blocked · P2 · 3 pts
+
+**Owner:** _unassigned_ · **Dependency:** D1-S4 + 5 trading days of shadow data
+
+**Description**
+
+After 5+ trading days of shadow voting, run a second audit comparing the actual shadow votes against subsequent futures direction. If pass against pre-registered gates, register the strategy in the regime router so it becomes a primary voter.
+
+**Pre-registered gates (frozen before audit run):**
+- Hit rate > 55% with bootstrap CI lower bound > 50%
+- ≥ 60% of trading days have positive hit-rate
+- Holds in ≥ 2 of 3 horizons (1m, 5m, 15m)
+- n_votes ≥ 100 over the 5 days
+
+**Tasks**
+- [ ] Audit script for shadow-vote vs futures-direction (extends D1-S1)
+- [ ] Pre-register gates as frozen constants in PR description
+- [ ] Run audit on accumulated shadow data
+- [ ] If PASS: add strategy to regime router (`strategy_app/engines/strategy_router.py`)
+- [ ] If PASS: flip `STRATEGY_SHADOW_DIRECTION_ENABLED` semantics (still env-gated, but now active)
+- [ ] If FAIL: document, keep in shadow, or remove entirely
+
+**Acceptance criteria**
+- [ ] At least 5 trading days of shadow data
+- [ ] Pre-registered gates documented
+- [ ] Audit outcome documented in `docs/audits/SHADOW_PROMOTION_<date>.md`
+- [ ] If passed: first live primary vote captured during paper session
+- [ ] Memory entry created describing outcome
+
+---
+
+### D1-S6 — VIX-regime gate on direction voter · Blocked · P2 · 2 pts
+
+**Owner:** _unassigned_ · **Dependency:** D1-S5 promoted
+
+**Description**
+
+Per `project_r1s_regime_finding`, signal works in calm regimes (VIX<16), fails in macro-vol events. Add a regime gate so the direction voter only fires in low-VIX conditions.
+
+**Tasks**
+- [ ] Gate condition: voter only fires when `vix_current < STRATEGY_DIRECTION_MAX_VIX` (default 16.0)
+- [ ] Re-run D1-S5 audit split by VIX regime; document hit-rate difference
+- [ ] If signal holds without VIX gate, consider removing — don't add complexity that doesn't help
+
+**Acceptance criteria**
+- [ ] VIX gate implemented + unit tests
+- [ ] Audit shows meaningful separation between VIX<16 and VIX≥16 hit-rates
+
+---
+
+# Epic D2 — Live Data Enrichment (Tier 1)
+
+**Goal:** Ingest cross-asset + flow data to enrich direction features. Cheap wins; high direction-signal value per academic + practitioner literature.
+
+**Rationale:** Currently we only track BANKNIFTY futures. Options settle on the *index*, not futures — basis matters. NIFTY context provides market-wide trend. Block trades flag institutional flow.
+
+### D2-S1 — Ingest NIFTY 50 cash + futures · Backlog · P1 · 3 pts
+
+**Owner:** _unassigned_
+
+**Tasks**
+- [ ] Add `NSE:NIFTY 50` and `NFO:NIFTY26JUNFUT` to ingestion_app instrument list
+- [ ] Snapshot integration: new field `nifty_context.{cash, future, basis, banknifty_minus_nifty_spread, spread_change_5m}`
+- [ ] Compute spread z-score over rolling 60-bar window
+- [ ] Unit tests
+
+**Acceptance criteria**
+- [ ] NIFTY cash + future in snapshot payload
+- [ ] BANKNIFTY−NIFTY spread computed
+- [ ] At least 1 trading day of data captured
+- [ ] No breakage of existing snapshot consumers (persistence_app, strategy_app)
+
+---
+
+### D2-S2 — Ingest NIFTY BANK cash + basis · Backlog · P1 · 2 pts
+
+**Owner:** _unassigned_
+
+**Description**
+
+Currently we track BANKNIFTY *futures* only. Options settle on the *index*. Futures-spot basis is a known FII-positioning indicator.
+
+**Tasks**
+- [ ] Add `NSE:NIFTY BANK` to ingestion
+- [ ] Snapshot integration: `underlying_context.{cash, basis, basis_pct, basis_z}`
+- [ ] basis = futures_price − cash_spot
+- [ ] basis_z = rolling z-score (60-bar)
+- [ ] Unit tests
+
+**Acceptance criteria**
+- [ ] `underlying_context` block in snapshot
+- [ ] basis_z computed
+- [ ] Available as candidate feature for D1-S2 audit
+
+---
+
+### D2-S3 — Block-trade detection from last_quantity · Backlog · P1 · 3 pts
+
+**Owner:** _unassigned_
+
+**Description**
+
+Kite's quote response includes `last_quantity` (size of the last trade). Trades ≥ N lots flag institutional flow. Direction can be inferred: if last_price ≥ mid, the ask was hit (aggressive buyer); else bid hit (aggressive seller).
+
+**Tasks**
+- [ ] Extract `last_quantity` from quote response in ingestion path
+- [ ] Lot size config per instrument (BankNifty option lot = 15 or 30 depending on contract)
+- [ ] Detect block: `last_quantity >= N_LOTS * lot_size` (env: `BLOCK_TRADE_MIN_LOTS=5`)
+- [ ] Tag direction from last_price vs mid
+- [ ] Rolling 5-min counter: net block flow per instrument (block_buys − block_sells)
+- [ ] Snapshot field: `block_flow.{atm_ce, atm_pe, futures}` with running net counter
+- [ ] Unit tests covering: lot size resolution, direction tagging, rolling-window reset on session boundary
+
+**Acceptance criteria**
+- [ ] Block detection logic with configurable threshold
+- [ ] Direction tagging unit-tested against known mid prices
+- [ ] Snapshot includes block_flow object
+- [ ] Available as candidate feature for D1-S2 audit
+
+---
+
+# Epic D3 — Live Data Enrichment (Tier 2)
+
+**Goal:** Higher-effort data adds — Greeks, wider chain coverage, VWAP. Each independently has direction-signal value.
+
+### D3-S1 — Greeks per strike (Delta/Gamma/Theta/Vega) · Backlog · P2 · 5 pts
+
+**Owner:** _unassigned_
+
+**Description**
+
+We already compute IV per strike. Greeks are one Black-Scholes evaluation away. Adds delta-weighted OI (institutional positioning) and gamma exposure (dealer hedging magnets).
+
+**Tasks**
+- [ ] New module `snapshot_app/greeks.py` with Black-Scholes pricer
+- [ ] Inputs: spot, strike, time-to-expiry, IV, rate, type (CE/PE)
+- [ ] Output Greeks: delta, gamma, theta, vega per strike
+- [ ] Aggregate fields in `chain_aggregates`: `net_delta_oi`, `net_gamma_oi`, `net_vega_oi`
+- [ ] Unit tests against textbook reference values (known IV/spot inputs, within 1% of expected)
+- [ ] Performance: full 25-strike Greek calc must complete within 50ms per snapshot
+
+**Acceptance criteria**
+- [ ] Greeks computed for all strikes in snapshot
+- [ ] Aggregates in chain_aggregates
+- [ ] Tests vs reference values pass within 1%
+- [ ] Snapshot publication rate unchanged
+
+---
+
+### D3-S2 — Gamma Exposure (GEX) profile · Blocked · P2 · 3 pts
+
+**Owner:** _unassigned_ · **Dependency:** D3-S1
+
+**Description**
+
+Dealer gamma exposure (GEX) per strike maps where market-makers need to delta-hedge. Net GEX flip point acts as a price magnet on high-OI strikes.
+
+**Tasks**
+- [ ] Per-strike: `gex = gamma × OI × 100 × spot²` (sign convention: CE +, PE −)
+- [ ] Net GEX = Σ (CE_gex − PE_gex) across strikes
+- [ ] Identify "GEX flip" strike where cumulative net GEX crosses zero
+- [ ] Snapshot field: `gex_profile.{net_gex, flip_strike, top_3_pos_strikes, top_3_neg_strikes}`
+- [ ] Unit tests
+
+**Acceptance criteria**
+- [ ] GEX profile in snapshot
+- [ ] Flip strike correctly identified on test fixture
+- [ ] Available as candidate feature for D1-S2 audit
+
+---
+
+### D3-S3 — Expand option chain in snapshot (25 → 50 strikes) · Backlog · P2 · 2 pts
+
+**Owner:** _unassigned_
+
+**Description**
+
+Today snapshot includes 25 strikes around ATM. Wing strikes (deeper OTM) carry "tail bet" positioning that's directional. Bump to 50 strikes (±25).
+
+**Tasks**
+- [ ] Update strike-count config in snapshot_app
+- [ ] Validate Kite quote API batch size still under limit (it is — 50 instruments is fine)
+- [ ] Verify Mongo doc size doesn't push limits (each strike ~200 bytes × 25 extra = +5KB/snapshot, fine)
+- [ ] Unit tests
+
+**Acceptance criteria**
+- [ ] 50 strikes per snapshot
+- [ ] No regression in publication rate or Mongo write success rate
+
+---
+
+### D3-S4 — Session VWAP + Anchored VWAP · Backlog · P2 · 2 pts
+
+**Owner:** _unassigned_
+
+**Tasks**
+- [ ] Compute session VWAP from session_open: cumulative (price × volume) / cumulative volume
+- [ ] Anchored VWAP from configurable pivot (e.g., gap_fill, prior_day_close)
+- [ ] Snapshot field: `vwap_context.{session, anchored, dist_pct, slope_5m}`
+- [ ] Unit tests
+
+**Acceptance criteria**
+- [ ] Session VWAP in snapshot
+- [ ] Distance from VWAP computed
+- [ ] Available as candidate feature for D1-S2 audit
+
+---
+
+# Epic D4 — Live Data Enrichment (Tier 3)
+
+**Goal:** Tick-level / high-frequency data. Significant architecture lift, deferred until lower tiers prove out.
+
+### D4-S1 — Complete WebSocket tick collector · Backlog · P3 · 8 pts
+
+**Owner:** _unassigned_
+
+**Description**
+
+`ingestion_app/collectors/websocket_tick_collector.py` exists but is partial. Complete it: subscribe to Kite WebSocket V3 in "full" mode for sub-second LTP + 5-level depth ticks. Replaces 5s REST polling for option depth (D4-S1 must coexist with depth_collector for back-compat).
+
+**Tasks**
+- [ ] Connect to Kite WebSocket V3 with reconnect/backoff
+- [ ] Subscribe to ATM ± 2 strikes in "full" mode
+- [ ] Persist ticks to new Mongo collection `market_ticks` with 3-day TTL
+- [ ] Maintain Redis latest-tick keys for low-latency strategy_app reads
+- [ ] Health metric: ticks/sec per instrument
+- [ ] Integration tests + 1-day stability run
+
+**Acceptance criteria**
+- [ ] WebSocket connection stable for ≥6 market hours
+- [ ] Sub-second tick rate observed
+- [ ] depth_collector can be disabled when WS is healthy (env switch)
+
+---
+
+### D4-S2 — Cumulative Volume Delta (CVD) · Blocked · P3 · 3 pts
+
+**Owner:** _unassigned_ · **Dependency:** D4-S1
+
+**Description**
+
+For each tick: classify as aggressive_buy if last_price ≥ prev_best_ask, aggressive_sell if ≤ prev_best_bid. Running cumulative net = CVD. Strong direction indicator in liquid markets.
+
+**Tasks**
+- [ ] Tick classifier in WebSocket consumer
+- [ ] Running cumulative counter per instrument, session-resetting
+- [ ] Snapshot field: `cvd.{atm_ce, atm_pe, futures, session_cumulative}`
+- [ ] Tests
+
+**Acceptance criteria**
+- [ ] CVD computed per tick
+- [ ] Session reset on market open
+- [ ] Available as candidate feature for D1-S3 audit
+
+---
+
+### D4-S3 — Calendar spread (JUN vs JUL futures) · Backlog · P3 · 2 pts
+
+**Owner:** _unassigned_
+
+**Tasks**
+- [ ] Add `NFO:BANKNIFTY26JULFUT` to ingestion
+- [ ] Snapshot field: `calendar_spread.{value, change_5m, change_15m}`
+- [ ] Unit tests
+
+**Acceptance criteria**
+- [ ] Both contracts polled
+- [ ] Spread in snapshot
+- [ ] Available as candidate feature for D1-S2 audit
+
+---
+
+# Epic OP — Live Ops (Sprint 3 bonus, all Done)
+
+These were completed during Sprint 3 but track here for traceability.
+
+### OP-S1 — Headless TOTP auth + systemd timer · Done · 5 pts
+
+- `ingestion_app/kite_totp_auth.py` (3-step Zerodha headless login: connect/login → /api/login → /api/twofa → /connect/finish → access_token)
+- `ops/gcp/install_token_refresh_timer.sh` (systemd timer fires daily at 03:00 UTC = 08:30 IST)
+- 15 unit tests passing
+- Commits: `b552e4c`, fix in `05784b4`
+- Memory: `project_gcp_live_mode_2026-05-26`
+
+### OP-S2 — GCP VM switched to live mode + paper trading · Done · 3 pts
+
+- Cleared replay flag in Redis (`system:virtual_time:enabled`)
+- Stopped `*_historical` containers
+- Updated `.env.compose`: `STRATEGY_ROLLOUT_STAGE=paper`, `INSTRUMENT_SYMBOL=BANKNIFTY26JUNFUT`, `DEPTH_FEED_ENABLED=1`, plus `KITE_API_KEY` / `KITE_API_SECRET` (were missing — depth_collector needs them)
+- Live profile + default services running (depth_collector, snapshot_app, persistence_app, strategy_app, strategy_persistence_app)
+- Verified end-to-end: 294 snapshots persisted today, full 25-strike chain captured per minute
+
+### OP-S3 — depth_collector: 5-level ladder + Mongo persistence · Done · 5 pts
+
+- Full 5-level bid/ask ladder captured (was: best bid/ask only)
+- Derived metrics: spread, mid, microprice, qty_imbalance, total stack qtys
+- Mongo collection `market_depth_ticks` with indexes + 7-day TTL
+- Redis writes preserved for back-compat with `RedisDepthReader`
+- 17 unit tests passing
+- Commit: `05784b4`
+
+### OP-S4 — Dashboard live chart auto-refresh · Done · 2 pts
+
+- Root cause: `LiveMongoSource` cached candle list once at WS-connect time; never refreshed when new minute bars arrived
+- Fix: `get_latest_tick()` invalidates session cache when newer bar exists in Mongo
+- `monitor_ws._loop()` pushes a full snapshot frame (not just tick) when candle count grows
+- 2 regression tests added
+- Commit: `2258a5f`
+
+### OP-S5 — ATM±2 (10-strike JUN) depth coverage · Done · 1 pt
+
+- `DEPTH_FEED_INSTRUMENTS` expanded from 2 → 10 strikes (BANKNIFTY26JUN55300-55700, CE+PE)
+- Verified all 10 strikes return valid 5-level quotes
+- depth_collector recreated with new config; clean startup confirmed
+- Polling starts tomorrow morning 09:15 IST
+- **Operator note:** May strikes were initially configured but all expire 2026-05-28 — switched to JUN strikes for liquidity
