@@ -428,11 +428,16 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      mongo:
+        condition: service_healthy
     environment:
       TZ: "Asia/Kolkata"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
       EXECUTION_MODE: "live"
       KITE_API_KEY: "${KITE_API_KEY:-}"
       KITE_ACCESS_TOKEN: "${KITE_ACCESS_TOKEN:-}"
@@ -441,6 +446,8 @@ services:
       DEPTH_STALE_TTL_SEC: "${DEPTH_STALE_TTL_SEC:-60}"
       DEPTH_MARKET_OPEN_IST: "${DEPTH_MARKET_OPEN_IST:-09:15}"
       DEPTH_MARKET_CLOSE_IST: "${DEPTH_MARKET_CLOSE_IST:-15:35}"
+      DEPTH_MONGO_ENABLED: "${DEPTH_MONGO_ENABLED:-1}"
+      DEPTH_MONGO_TTL_DAYS: "${DEPTH_MONGO_TTL_DAYS:-7}"
     command: ["python", "-m", "ingestion_app.collectors.depth_collector"]
 
   dashboard:
