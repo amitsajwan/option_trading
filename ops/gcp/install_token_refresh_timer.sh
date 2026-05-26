@@ -82,9 +82,9 @@ if "\${PY_BIN}" -m ingestion_app.kite_totp_auth \
 
   echo "[\$(date -u +%Y-%m-%dT%H:%M:%SZ)] Token refresh OK — restarting ingestion_app" | tee -a "\${LOG_FILE}"
 
-  # Restart ingestion_app to pick up fresh credentials
+  # Force-recreate so Docker picks up the updated credentials.json bind-mount
   cd "\${REPO_ROOT}"
-  docker compose restart ingestion_app 2>&1 | tee -a "\${LOG_FILE}"
+  docker compose up -d --no-deps --force-recreate ingestion_app 2>&1 | tee -a "\${LOG_FILE}"
 
   # Optionally push fresh credentials to GCS runtime-config bucket so other
   # consumers (depth_collector on live profile) also get the new token.

@@ -124,12 +124,14 @@ def login_headless(
     kite = create_kite_client(api_key=api_key)
 
     # Step 0: visit kite.trade/connect/login so the session acquires the
-    # KiteConnect app context cookie.  Without this Zerodha treats the
-    # subsequent login as a plain web login and returns profile JSON
-    # instead of redirecting to the registered callback with request_token.
+    # KiteConnect app context cookie.  Capture the sess_id from the final
+    # redirect URL — it's required as an explicit param to /connect/finish.
+    sess_id = ""
     try:
-        session.get(kite.login_url(), timeout=15, allow_redirects=True)
-        logger.info("Step 0: KiteConnect session context established")
+        resp0 = session.get(kite.login_url(), timeout=15, allow_redirects=True)
+        m = re.search(r"sess_id=([^&]+)", str(getattr(resp0, "url", "") or ""))
+        sess_id = m.group(1) if m else ""
+        logger.info("Step 0: KiteConnect session established (sess_id=%s…)", sess_id[:8])
     except Exception as exc:
         logger.warning("Step 0: connect-login pre-visit failed (continuing): %s", exc)
 
@@ -157,7 +159,7 @@ def login_headless(
         return None, 1
     logger.info("Step 1 OK — request_id received")
 
-    # Step 2: submit TOTP — follow redirects so the final URL carries request_token
+    # Step 2: submit TOTP
     totp_code = _generate_totp(totp_secret)
     logger.info("Step 2: submitting TOTP code %s", totp_code)
     try:
@@ -170,41 +172,74 @@ def login_headless(
                 "twofa_type": "totp",
             },
             timeout=15,
-            allow_redirects=True,
+            allow_redirects=False,
         )
     except Exception as exc:
         logger.error("TOTP POST failed: %s", exc)
         return None, 1
 
-    # Extract request_token from the final URL, any redirect Location, or body
+    # Extract request_token — try three sources in priority order:
+    #   1. Location header (old Zerodha behavior: 302 redirect to callback)
+    #   2. /connect/finish endpoint (new Zerodha behavior: 200 JSON, then finish)
+    #   3. JSON body at data.request_token (some API versions)
     request_token: Optional[str] = None
-    for candidate in [str(getattr(resp, "url", "") or ""), resp.headers.get("Location") or "", resp.text[:500]]:
-        match = re.search(r"request_token=([A-Za-z0-9]+)", candidate)
-        if match:
-            request_token = match.group(1)
-            break
+
+    location = resp.headers.get("Location") or ""
+    match = re.search(r"request_token=([A-Za-z0-9]+)", location)
+    if match:
+        request_token = match.group(1)
+        logger.info("Step 2 OK — request_token from redirect Location header")
+
+    if not request_token and resp.status_code == 200:
+        # New Zerodha behavior: twofa returns 200 JSON; browser then GETs
+        # /connect/finish?api_key=...&sess_id=... which issues a 302 to the
+        # registered callback URL with request_token.
+        # We must NOT follow that redirect — the callback host (127.0.0.1:5000)
+        # doesn't exist on the VM.  Read request_token from Location directly.
+        logger.info("Step 2: twofa returned 200 — calling /connect/finish (sess_id=%s…)", sess_id[:8])
+        try:
+            finish_resp = session.get(
+                f"{_KITE_BASE}/connect/finish",
+                params={"api_key": api_key, "sess_id": sess_id},
+                timeout=15,
+                allow_redirects=False,
+            )
+            finish_location = finish_resp.headers.get("Location") or ""
+            logger.info("Step 2: /connect/finish → status=%s Location=%s",
+                        finish_resp.status_code, finish_location[:120])
+            match = re.search(r"request_token=([A-Za-z0-9]+)", finish_location)
+            if match:
+                request_token = match.group(1)
+                logger.info("Step 2 OK — request_token from /connect/finish Location header")
+            else:
+                match = re.search(r"request_token=([A-Za-z0-9]+)", finish_resp.text[:1000])
+                if match:
+                    request_token = match.group(1)
+                    logger.info("Step 2 OK — request_token from /connect/finish body")
+        except Exception as exc:
+            logger.error("/connect/finish call failed: %s", exc)
+
     if not request_token:
-        # Fallback: JSON body at data.request_token
         try:
             body2 = resp.json()
             request_token = (body2.get("data") or {}).get("request_token")
+            if request_token:
+                logger.info("Step 2 OK — request_token from JSON body")
         except Exception:
             pass
 
     if not request_token:
         logger.error(
-            "Could not extract request_token. Status: %s URL: %s Body: %s",
+            "Could not extract request_token. Status: %s Location: %s Body: %s",
             resp.status_code,
-            (resp.url or "")[:200],
+            location[:200],
             resp.text[:300],
         )
         return None, 1
-    logger.info("Step 2 OK — request_token received")
 
     # Step 3: exchange request_token for access_token via KiteConnect SDK
     logger.info("Step 3: exchanging request_token for access_token")
     try:
-        kite = create_kite_client(api_key=api_key)
         data: dict[str, Any] = kite.generate_session(request_token, api_secret=api_secret)
     except Exception as exc:
         logger.error("generate_session failed: %s", exc)
