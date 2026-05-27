@@ -23,7 +23,11 @@ need_cmd() {
 }
 
 need_cmd curl
-if command -v python >/dev/null 2>&1; then
+if [ -x "/opt/option_trading/.venv/bin/python" ]; then
+  PYTHON_BIN="/opt/option_trading/.venv/bin/python"
+elif [ -x ".venv/bin/python" ]; then
+  PYTHON_BIN=".venv/bin/python"
+elif command -v python >/dev/null 2>&1; then
   PYTHON_BIN="python"
 elif command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="python3"
