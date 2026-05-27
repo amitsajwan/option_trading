@@ -136,8 +136,10 @@ from pymongo import MongoClient
 from contracts_app import resolve_namespace
 
 run_id = os.environ["RUN_ID"]
-ns = resolve_namespace("sim", run_id=run_id)
-run_dir = ns.run_dir_for()
+repo_root = Path(os.getenv("REPO_ROOT", "/opt/option_trading"))
+run_dir = repo_root / ".run" / "strategy_app_sim" / run_id
+if not (run_dir / "manifest.json").exists():
+    run_dir = resolve_namespace("sim", run_id=run_id).run_dir_for()
 manifest = run_dir / "manifest.json"
 if not manifest.exists():
     raise SystemExit(f"manifest missing: {manifest}")
@@ -158,6 +160,7 @@ else:
         serverSelectionTimeoutMS=3000,
     )
 db = client[os.getenv("MONGO_DB", "trading_ai")]
+ns = resolve_namespace("sim", run_id=run_id)
 for base in ("snapshots", "votes", "signals", "positions", "decision_traces"):
     coll = ns.collection_for(base)
     n = int(db[coll].count_documents({"run_id": run_id}))
