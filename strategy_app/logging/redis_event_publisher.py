@@ -60,7 +60,6 @@ class RedisEventPublisher:
                         "source_mode": source_mode,
                         "published_at": isoformat_ist(datetime.now()),
                     },
-                    maxlen=0,
                 )
                 return
             self._client.publish(topic_text, payload)
