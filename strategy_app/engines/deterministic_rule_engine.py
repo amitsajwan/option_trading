@@ -1492,6 +1492,14 @@ class DeterministicRuleEngine(StrategyEngine):
         snap: SnapshotAccessor,
         regime_signal: RegimeSignal,
     ) -> str:
+        # Mirror the env-driven early returns in _process_entry_votes so the
+        # trace records a real reason instead of falling through to a generic
+        # policy_checks/no_selection block.
+        if not is_in_configured_time_window(snap):
+            return "entry_time_windows"
+        tagger = os.getenv("ENTRY_REGIME_TAGGER", "").strip()
+        if tagger and not is_session_regime_allowed(self._session_regime_tag):
+            return "entry_regime_tag"
         skip_brain = (
             self._strategy_profile_id in _PROFILES_ML_ENTRY_DET_DIRECTION
             and as_bool(os.getenv("ML_ENTRY_DET_SKIP_BRAIN_GATE", "false"))
@@ -1637,6 +1645,30 @@ class DeterministicRuleEngine(StrategyEngine):
                 }
             )
             return gates, "blocked", "warmup", False
+        if blocker == "entry_time_windows":
+            gates.append(
+                {
+                    "gate_id": "entry_time_windows",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "outside_configured_time_window",
+                    "message": f"snapshot outside ENTRY_TIME_WINDOWS={os.getenv('ENTRY_TIME_WINDOWS','')}",
+                    "metrics": {},
+                }
+            )
+            return gates, "blocked", "entry_time_windows", False
+        if blocker == "entry_regime_tag":
+            gates.append(
+                {
+                    "gate_id": "entry_regime_tag",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "regime_tag_not_allowed",
+                    "message": f"session regime tag={self._session_regime_tag} not in ENTRY_REGIME_ALLOWED_TAGS",
+                    "metrics": {},
+                }
+            )
+            return gates, "blocked", "entry_regime_tag", False
         if blocker == "direction_conflict":
             gates.append(
                 {
