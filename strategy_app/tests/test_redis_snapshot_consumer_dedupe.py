@@ -82,11 +82,13 @@ class _FakeRedis:
     def __init__(self, payloads: list[dict]) -> None:
         self._pubsub = _FakePubSub(payloads)
         self._store: dict[str, str] = {}
+        self.set_calls = 0
 
     def pubsub(self, ignore_subscribe_messages=True):  # noqa: ARG002
         return self._pubsub
 
     def set(self, key: str, value: str, nx: bool = False, ex: int | None = None):  # noqa: ARG002
+        self.set_calls += 1
         if nx and key in self._store:
             return False
         self._store[key] = value
@@ -136,6 +138,30 @@ class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
         self.assertEqual(engine.evaluated_snapshot_ids, ["20260306_1002", "20260306_1003"])
         self.assertEqual(len(engine.starts), 1)
         self.assertEqual(len(engine.ends), 1)
+
+    def test_consumer_lock_enabled_alias_false_skips_lock_acquire(self) -> None:
+        old_alias = os.environ.get("STRATEGY_CONSUMER_LOCK_ENABLED")
+        os.environ["STRATEGY_CONSUMER_LOCK_ENABLED"] = "false"
+        try:
+            payloads = [_event("20260306_1002", "2026-03-06T10:02:00+05:30")]
+            fake_redis = _FakeRedis(payloads)
+            engine = _FakeEngine()
+            consumer = RedisSnapshotConsumer(
+                engine=engine,
+                topic="market:snapshot:v1",
+                client=fake_redis,
+                poll_interval_sec=0.001,
+            )
+
+            consumed = consumer.start(max_events=1)
+
+            self.assertEqual(consumed, 1)
+            self.assertEqual(fake_redis.set_calls, 0)
+        finally:
+            if old_alias is None:
+                os.environ.pop("STRATEGY_CONSUMER_LOCK_ENABLED", None)
+            else:
+                os.environ["STRATEGY_CONSUMER_LOCK_ENABLED"] = old_alias
 
     def test_consumer_lock_stolen_when_owned_by_same_hostname(self) -> None:
         """Container restart case: a stale lock owned by a dead PID on the

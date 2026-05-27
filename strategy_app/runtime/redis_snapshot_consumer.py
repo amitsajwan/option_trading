@@ -6,21 +6,24 @@ import json
 import logging
 import os
 import re
+import socket
 import time
 from collections import deque
 from datetime import date
 from threading import Event
-from typing import Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 import redis
 
-from contracts_app import parse_snapshot_event, redis_connection_kwargs, snapshot_topic
+from contracts_app import build_snapshot_event, parse_snapshot_event, redis_connection_kwargs, snapshot_topic
 
 from ..contracts import StrategyEngine, TradeSignal
 from .consumer_lock import ConsumerLock, lock_config_from_env
 
 logger = logging.getLogger(__name__)
 _DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+STREAM_GROUP_NAME = "consumer-group-1"
+SENTINEL_TYPE = "sentinel"
 
 
 def _redis_client() -> redis.Redis:
@@ -78,6 +81,80 @@ def _event_run_id(event: dict[str, object]) -> Optional[str]:
     return None
 
 
+def _decode_stream_value(value: Any) -> Any:
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _decode_stream_fields(fields: Mapping[Any, Any]) -> dict[str, Any]:
+    return {str(_decode_stream_value(k)): _decode_stream_value(v) for k, v in dict(fields or {}).items()}
+
+
+def _json_dict(raw: Any) -> Optional[dict[str, Any]]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not isinstance(raw, str):
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _merge_stream_metadata(event: dict[str, Any], fields: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    merged = dict(metadata)
+    for key in ("source_mode", "run_id", "sim_label"):
+        value = fields.get(key)
+        if value not in (None, ""):
+            merged[key] = value
+    event["metadata"] = merged
+    return event
+
+
+def _snapshot_event_from_stream_fields(fields: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """Normalize SIM-3 Redis Stream fields into the pubsub snapshot envelope."""
+    payload = _json_dict(fields.get("payload"))
+    if payload is None:
+        return None
+
+    direct = parse_snapshot_event(payload)
+    if direct is not None:
+        return _merge_stream_metadata(dict(direct), fields)
+
+    nested_payload = payload.get("payload")
+    if isinstance(nested_payload, dict):
+        nested_event = parse_snapshot_event(nested_payload)
+        if nested_event is not None:
+            return _merge_stream_metadata(dict(nested_event), fields)
+        snapshot = nested_payload.get("snapshot")
+        if isinstance(snapshot, dict):
+            event = build_snapshot_event(
+                snapshot=snapshot,
+                source=str(payload.get("source") or fields.get("source_mode") or "sim_publisher"),
+                event_id=str(payload.get("event_id") or ""),
+                published_at=str(payload.get("published_at") or payload.get("timestamp") or ""),
+                metadata=payload.get("meta") if isinstance(payload.get("meta"), dict) else {},
+            )
+            return _merge_stream_metadata(event, fields)
+
+    snapshot = payload.get("snapshot")
+    if isinstance(snapshot, dict):
+        event = build_snapshot_event(
+            snapshot=snapshot,
+            source=str(payload.get("source") or fields.get("source_mode") or "sim_publisher"),
+            event_id=str(payload.get("event_id") or ""),
+            published_at=str(payload.get("published_at") or payload.get("timestamp") or ""),
+            metadata=payload.get("meta") if isinstance(payload.get("meta"), dict) else {},
+        )
+        return _merge_stream_metadata(event, fields)
+    return None
+
+
 class RedisSnapshotConsumer:
     """Subscribe to snapshot events and invoke the strategy engine contract."""
 
@@ -87,12 +164,23 @@ class RedisSnapshotConsumer:
         engine: StrategyEngine,
         topic: Optional[str] = None,
         client: Optional[redis.Redis] = None,
+        transport: Optional[str] = None,
+        stream_name: Optional[str] = None,
+        stream_group: str = STREAM_GROUP_NAME,
+        stream_consumer_name: Optional[str] = None,
         poll_interval_sec: float = 0.2,
         on_signal: Optional[Callable[[TradeSignal], None]] = None,
     ) -> None:
         self.engine = engine
         self.topic = str(topic or snapshot_topic()).strip() or snapshot_topic()
         self._client = client or _redis_client()
+        env_transport = str(os.getenv("STRATEGY_CONSUMER_TRANSPORT") or "pubsub").strip().lower()
+        self._transport = str(transport or env_transport or "pubsub").strip().lower()
+        if self._transport not in {"pubsub", "streams"}:
+            raise ValueError("transport must be 'pubsub' or 'streams'")
+        self._stream_name = str(stream_name or os.getenv("STRATEGY_STREAM_NAME") or "").strip()
+        self._stream_group = str(stream_group or STREAM_GROUP_NAME).strip() or STREAM_GROUP_NAME
+        self._stream_consumer_name = str(stream_consumer_name or f"consumer-{socket.gethostname()}").strip()
         self._poll_interval_sec = max(0.01, float(poll_interval_sec))
         self._on_signal = on_signal
         self._stop_event = Event()
@@ -166,9 +254,124 @@ class RedisSnapshotConsumer:
             self._seen_snapshot_keys.discard(evicted)
         return True
 
+    def _process_event(self, event: dict[str, object]) -> bool:
+        snapshot = event.get("snapshot")
+        if not isinstance(snapshot, dict):
+            return False
+
+        self._handle_session(snapshot)
+        if not self._accept_snapshot_once(event, snapshot):
+            logger.debug(
+                "strategy consumer skipped duplicate snapshot snapshot_id=%s run_id=%s",
+                str(event.get("snapshot_id") or ""),
+                _event_run_id(event) or "",
+            )
+            return False
+        run_id = _event_run_id(event)
+        metadata = _event_metadata(event)
+        if hasattr(self.engine, "set_run_context"):
+            try:
+                self.engine.set_run_context(run_id, metadata)  # type: ignore[attr-defined]
+            except Exception:
+                logger.exception("failed to set strategy run context run_id=%s", run_id)
+        signal = self.engine.evaluate(snapshot)
+        if signal is not None and self._on_signal is not None:
+            self._on_signal(signal)
+        self._events_seen += 1
+        return True
+
+    def _ensure_stream_group(self) -> None:
+        try:
+            self._client.xgroup_create(
+                self._stream_name,
+                self._stream_group,
+                id="0",
+                mkstream=True,
+            )
+            logger.info(
+                "strategy stream consumer group created stream=%s group=%s",
+                self._stream_name,
+                self._stream_group,
+            )
+        except Exception as exc:
+            if "BUSYGROUP" not in str(exc):
+                raise
+
+    def _read_stream_batch(self, stream_id: str) -> list[tuple[str, dict[str, Any]]]:
+        response = self._client.xreadgroup(
+            self._stream_group,
+            self._stream_consumer_name,
+            {self._stream_name: stream_id},
+            count=50,
+            block=5000,
+        )
+        out: list[tuple[str, dict[str, Any]]] = []
+        for _stream_name, entries in response or []:
+            for entry_id, fields in entries or []:
+                out.append((str(_decode_stream_value(entry_id)), _decode_stream_fields(fields)))
+        return out
+
+    def _start_streams(self, *, max_events: Optional[int]) -> int:
+        if not self._stream_name:
+            raise ValueError("STRATEGY_STREAM_NAME is required when STRATEGY_CONSUMER_TRANSPORT=streams")
+        self._ensure_stream_group()
+        self._running = True
+        self._stop_event.clear()
+        logger.info(
+            "strategy consumer stream started stream=%s group=%s consumer=%s",
+            self._stream_name,
+            self._stream_group,
+            self._stream_consumer_name,
+        )
+        read_pending = True
+        try:
+            while not self._stop_event.is_set():
+                if max_events is not None and self._events_seen >= max_events:
+                    break
+                batch = self._read_stream_batch("0" if read_pending else ">")
+                if read_pending and not batch:
+                    read_pending = False
+                    continue
+                if not batch:
+                    time.sleep(self._poll_interval_sec)
+                    continue
+                for entry_id, fields in batch:
+                    if str(fields.get("type") or "").lower() == SENTINEL_TYPE:
+                        logger.info(
+                            "strategy consumer received sentinel stream=%s run_id=%s aborted=%s total_published=%s",
+                            self._stream_name,
+                            fields.get("run_id"),
+                            fields.get("aborted"),
+                            fields.get("total_published"),
+                        )
+                        self._stop_event.set()
+                        break
+                    event = _snapshot_event_from_stream_fields(fields)
+                    if event is None:
+                        logger.warning("ignored invalid stream snapshot entry stream=%s id=%s", self._stream_name, entry_id)
+                        self._client.xack(self._stream_name, self._stream_group, entry_id)
+                        continue
+                    self._process_event(event)
+                    self._client.xack(self._stream_name, self._stream_group, entry_id)
+                    if max_events is not None and self._events_seen >= max_events:
+                        break
+        finally:
+            if self._current_session is not None:
+                try:
+                    self.engine.on_session_end(self._current_session)
+                except Exception:
+                    logger.exception("session end hook failed")
+                self._current_session = None
+            self._running = False
+            logger.info("strategy consumer stream stopped stream=%s events=%s", self._stream_name, self._events_seen)
+
+        return self._events_seen
+
     def start(self, *, max_events: Optional[int] = None) -> int:
         """Blocking consume loop. Returns consumed event count."""
         max_count = None if max_events is None else max(0, int(max_events))
+        if self._transport == "streams":
+            return self._start_streams(max_events=max_count)
         self._consumer_lock.acquire()
         pubsub = self._client.pubsub(ignore_subscribe_messages=True)
         pubsub.subscribe(self.topic)
@@ -204,30 +407,7 @@ class RedisSnapshotConsumer:
                 if event is None:
                     continue
 
-                snapshot = event.get("snapshot")
-                if not isinstance(snapshot, dict):
-                    continue
-
-                self._handle_session(snapshot)
-                if not self._accept_snapshot_once(event, snapshot):
-                    logger.debug(
-                        "strategy consumer skipped duplicate snapshot snapshot_id=%s run_id=%s",
-                        str(event.get("snapshot_id") or ""),
-                        _event_run_id(event) or "",
-                    )
-                    continue
-                run_id = _event_run_id(event)
-                metadata = _event_metadata(event)
-                if hasattr(self.engine, "set_run_context"):
-                    try:
-                        self.engine.set_run_context(run_id, metadata)  # type: ignore[attr-defined]
-                    except Exception:
-                        logger.exception("failed to set strategy run context run_id=%s", run_id)
-                signal = self.engine.evaluate(snapshot)
-                if signal is not None and self._on_signal is not None:
-                    self._on_signal(signal)
-
-                self._events_seen += 1
+                self._process_event(event)
         finally:
             try:
                 pubsub.close()

@@ -108,7 +108,11 @@ def owners_are_reclaimable(existing: ConsumerLockOwner, ours: ConsumerLockOwner)
 
 
 def lock_config_from_env() -> tuple[bool, int, int, int]:
-    lock_enabled_raw = str(os.getenv("STRATEGY_SINGLE_CONSUMER_LOCK_ENABLED") or "1").strip().lower()
+    lock_enabled_raw = str(
+        os.getenv("STRATEGY_CONSUMER_LOCK_ENABLED")
+        or os.getenv("STRATEGY_SINGLE_CONSUMER_LOCK_ENABLED")
+        or "1"
+    ).strip().lower()
     enabled = lock_enabled_raw not in {"0", "false", "no", "off"}
     try:
         ttl_sec = int(str(os.getenv("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC") or "120").strip())
