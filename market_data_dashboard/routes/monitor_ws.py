@@ -71,6 +71,9 @@ class _LiveSessionState:
 
     def tick(self) -> None:
         self.current_idx, self.last_price = self.source.get_latest_tick()
+        # get_latest_tick() invalidates source._session when a new minute bar arrives;
+        # re-grab the session ref so len(state.session.candles) reflects the new bar.
+        self.session = self.source.get_session()
 
     @property
     def alive(self) -> bool:
