@@ -125,6 +125,9 @@ services:
       HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
       SNAPSHOT_V1_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
       ML_PIPELINE_DISABLE_KITE_BACKFILL: "${ML_PIPELINE_DISABLE_KITE_BACKFILL:-1}"
+      CROSS_ASSET_ENABLED: "${CROSS_ASSET_ENABLED:-0}"
+      NIFTY_FUT_SYMBOL: "${NIFTY_FUT_SYMBOL:-NFO:NIFTY26JUNFUT}"
+      BLOCK_TRADE_MIN_LOTS: "${BLOCK_TRADE_MIN_LOTS:-5}"
     command:
       [
         "python",
