@@ -1,7 +1,7 @@
 # Scrum board — Sim / Replay subsystem
 
 **Living document.** Update Status + Owner + acceptance metrics as work lands.
-**Last updated:** 2026-05-27 evening (design locked, no stories started)
+**Last updated:** 2026-05-27 night — SIM-1 done (commit `9cee9a6`), SIM-2/3/7 unblocked
 **Design doc:** [project_sim_replay_design_2026-05-27 in memory](../C:/Users/amits/.claude/projects/c--code-option-trading-option-trading-repo/memory/project_sim_replay_design_2026-05-27.md) — read this first if cold.
 
 ---
@@ -92,7 +92,7 @@ SIM-10 (cleanup cron) is post-launch, no dependency on others.
 
 | ID | Story | Priority | Suggested owner | Status | Pts |
 |----|-------|----------|------------------|--------|-----|
-| SIM-1 | Namespace resolver + manifest contract | **P0** | Claude | **Backlog** | 3 |
+| SIM-1 | Namespace resolver + manifest contract | **P0** | Claude | **Done** (`9cee9a6`) | 3 |
 | SIM-2 | Mongo schema init (`*_sim` collections + TTL + `kind` field) | **P0** | Claude | **Backlog** | 2 |
 | SIM-3 | Sim publisher CLI | **P0** | Claude | **Backlog** | 3 |
 | SIM-4 | Redis Streams support in `redis_snapshot_consumer.py` | **P0** | Claude | **Backlog** | 5 |
