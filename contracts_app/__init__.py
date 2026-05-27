@@ -32,6 +32,8 @@ from .topics import (
     trade_signal_topic,
 )
 from .options_math import black_scholes_price, calculate_option_greeks, estimate_risk_free_rate
+from .sim_manifest import SimManifest, TerminalStatus, compute_config_hash, resolve_git_commit
+from .sim_namespace import Kind, Namespace, Transport, resolve_namespace
 from .strategy_decision_contract import (
     ALIAS_REASON_CODES,
     DECISION_MODES,
@@ -82,6 +84,14 @@ __all__ = [
     "black_scholes_price",
     "calculate_option_greeks",
     "estimate_risk_free_rate",
+    "Kind",
+    "Namespace",
+    "Transport",
+    "resolve_namespace",
+    "SimManifest",
+    "TerminalStatus",
+    "compute_config_hash",
+    "resolve_git_commit",
     "ENGINE_MODES",
     "DECISION_MODES",
     "ALIAS_REASON_CODES",
