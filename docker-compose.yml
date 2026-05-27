@@ -480,6 +480,7 @@ services:
       STRATEGY_EVAL_COMMAND_TOPIC: "${STRATEGY_EVAL_COMMAND_TOPIC:-strategy:eval:command}"
       STRATEGY_EVAL_GLOBAL_CHANNEL: "${STRATEGY_EVAL_GLOBAL_CHANNEL:-strategy:eval:global}"
       STRATEGY_EVAL_RUN_CHANNEL_PREFIX: "${STRATEGY_EVAL_RUN_CHANNEL_PREFIX:-strategy:eval:run:}"
+      SIM_COMMAND_TOPIC: "${SIM_COMMAND_TOPIC:-sim:run:command}"
       DASHBOARD_CORS_ORIGINS: "${DASHBOARD_CORS_ORIGINS:-http://localhost:8011,http://127.0.0.1:8011,http://localhost:5173,http://127.0.0.1:5173}"
       INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26MARFUT}"
       MARKET_DATA_API_URL: "http://ingestion_app:8004"
@@ -519,6 +520,35 @@ services:
     volumes:
       - ./.data/ml_pipeline/parquet_data:/app/.data/ml_pipeline/parquet_data:ro
       - ./.run:/app/.run
+
+  # SIM replay orchestrator: spawns publisher + strategy_app_sim per run (dashboard enqueues via Redis).
+  sim_orchestrator:
+    profiles: ["ui", "sim"]
+    build:
+      context: .
+      dockerfile: sim_orchestrator/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      MONGO_COLL_STRATEGY_EVAL_RUNS: "${MONGO_COLL_STRATEGY_EVAL_RUNS:-strategy_eval_runs}"
+      SIM_COMMAND_TOPIC: "${SIM_COMMAND_TOPIC:-sim:run:command}"
+      REPO_ROOT: "/opt/option_trading"
+      STRATEGY_APP_SIM_IMAGE: "${STRATEGY_APP_SIM_IMAGE:-option_trading-strategy_app_sim}"
+    volumes:
+      - .:/opt/option_trading
+      - ./.run:/opt/option_trading/.run
+      - /var/run/docker.sock:/var/run/docker.sock
 
   strategy_eval_ui:
     profiles: ["ui"]

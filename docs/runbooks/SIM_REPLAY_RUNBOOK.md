@@ -6,8 +6,10 @@ Use this runbook to operate SIM runs end-to-end from the dashboard API and monit
 
 - Dashboard API is healthy at `http://127.0.0.1:8008`
 - Redis + Mongo are reachable by dashboard and strategy services
+- **`sim_orchestrator` service is running** (spawns publisher + `strategy_app_sim`; dashboard only enqueues via Redis)
 - `strategy_app_sim` is available in `docker compose --profile sim config --services`
-- SIM orchestrator endpoints are mounted (`/api/sim/runs`)
+- SIM API endpoints are mounted (`/api/sim/runs`)
+- Topic: `SIM_COMMAND_TOPIC` (default `sim:run:command`)
 
 Quick health check:
 
@@ -151,6 +153,18 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now sim-gc.timer
 sudo systemctl list-timers sim-gc.timer --no-pager
 ```
+
+## Start sim orchestrator (GCP)
+
+```bash
+cd /opt/option_trading
+sudo docker compose --env-file .env.compose \
+  -f docker-compose.yml -f docker-compose.gcp.yml \
+  up -d --pull never sim_orchestrator
+sudo docker logs option_trading-sim_orchestrator-1 --tail 30
+```
+
+Expect: `sim_orchestrator subscribed topic=sim:run:command`.
 
 ## Automated Smoke
 

@@ -37,6 +37,14 @@ services:
     image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/strategy_eval_orchestrator:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always
 
+  sim_orchestrator:
+    image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/sim_orchestrator:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
+    pull_policy: always
+    volumes:
+      - .:/opt/option_trading
+      - ./.run:/opt/option_trading/.run
+      - /var/run/docker.sock:/var/run/docker.sock
+
   strategy_eval_ui:
     image: ${GHCR_IMAGE_PREFIX:?set GHCR_IMAGE_PREFIX}/strategy_eval_ui:${APP_IMAGE_TAG:?set APP_IMAGE_TAG}
     pull_policy: always

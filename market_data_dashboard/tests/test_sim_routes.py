@@ -6,7 +6,11 @@ from tempfile import TemporaryDirectory
 from fastapi import HTTPException
 
 from market_data_dashboard.routes.schemas.sim import SimRunCreateRequest
-from market_data_dashboard.routes.sim_routes import DashboardSimRouter
+from market_data_dashboard.routes.sim_routes import (
+    SIM_EVENT_CANCEL,
+    SIM_EVENT_START,
+    DashboardSimRouter,
+)
 
 
 class _InsertOneResult:
@@ -89,25 +93,14 @@ class SimRoutesTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = TemporaryDirectory()
         self.fake_db = _FakeDb()
-        self.spawned = {"publisher": [], "consumer": [], "stopped": []}
+        self.published: list[dict] = []
 
-        def _spawn_publisher(args, env):  # noqa: ARG001
-            self.spawned["publisher"].append(list(args))
-            return 12345
-
-        def _spawn_consumer(run_id):
-            self.spawned["consumer"].append(str(run_id))
-            return f"container-{run_id}"
-
-        def _stop_consumer(container_id):
-            self.spawned["stopped"].append(str(container_id))
+        def _publish(payload: dict) -> None:
+            self.published.append(dict(payload))
 
         self.router = DashboardSimRouter(
             get_db=lambda: self.fake_db,
-            spawn_publisher=_spawn_publisher,
-            spawn_consumer=_spawn_consumer,
-            stop_consumer=_stop_consumer,
-            get_image_digest=lambda: "sha256:test",
+            publish_command=_publish,
             run_dir_root=Path(self._tmp.name),
         )
 
@@ -124,7 +117,7 @@ class SimRoutesTests(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.status_code, 400)
 
-    def test_create_list_get_and_delete_run(self) -> None:
+    def test_create_list_get_and_cancel_run(self) -> None:
         created = self.router.create_run(
             SimRunCreateRequest(
                 source_date="2024-08-01",
@@ -137,8 +130,9 @@ class SimRoutesTests(unittest.TestCase):
         run_id = str(created["run_id"])
         self.assertTrue(created["manifest_path"].endswith("manifest.json"))
         self.assertIn(run_id, created["stream_name"])
-        self.assertEqual(len(self.spawned["publisher"]), 1)
-        self.assertEqual(self.spawned["consumer"], [run_id])
+        self.assertEqual(len(self.published), 1)
+        self.assertEqual(self.published[0]["event_type"], SIM_EVENT_START)
+        self.assertEqual(self.published[0]["run_id"], run_id)
 
         listing = self.router.list_runs(date=None, limit=20)
         rows = listing["rows"]
@@ -150,10 +144,9 @@ class SimRoutesTests(unittest.TestCase):
         self.assertEqual(detail["run_id"], run_id)
 
         cancel = self.router.cancel_run(run_id)
-        self.assertEqual(cancel["status"], "cancelled")
-        self.assertEqual(len(self.spawned["stopped"]), 1)
+        self.assertEqual(cancel["status"], "cancel_requested")
+        self.assertEqual(self.published[1]["event_type"], SIM_EVENT_CANCEL)
 
 
 if __name__ == "__main__":
     unittest.main()
-

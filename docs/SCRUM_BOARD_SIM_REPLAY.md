@@ -303,7 +303,7 @@ resolve_namespace("oos").collection_for("strategy_votes")  # → "strategy_votes
 
 **Tasks**
 - [x] New router `market_data_dashboard/routes/sim_routes.py` mounting:
-  - `POST /api/sim/runs` — body: `{source_date, source_coll, label, env_overrides, speed}`. Allocates UUIDv7 run_id; writes manifest to run dir + `strategy_eval_runs`; spawns publisher subprocess; spawns consumer container; returns `{run_id, manifest_path, stream_name, dashboard_url}`
+  - `POST /api/sim/runs` — body: `{source_date, source_coll, label, env_overrides, speed}`. Allocates UUIDv7 run_id; writes manifest to run dir + `strategy_eval_runs`; **publishes Redis command**; `sim_orchestrator` spawns publisher + consumer; returns `{run_id, manifest_path, stream_name, dashboard_url}`
   - `GET /api/sim/runs?date=YYYY-MM-DD&limit=N` — paginated list (newest first)
   - `GET /api/sim/runs/{run_id}` — manifest + current status + summary metrics
   - `DELETE /api/sim/runs/{run_id}` — sends SIGTERM to publisher + container; writes `terminal_status=cancelled`

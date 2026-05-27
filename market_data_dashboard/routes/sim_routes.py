@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import json
 import os
-import signal
-import subprocess
-import threading
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Optional
 
+import redis
 from fastapi import APIRouter, HTTPException, Query
+from pymongo import MongoClient
 
 from contracts_app import SimManifest, compute_config_hash, resolve_git_commit, resolve_namespace
 
@@ -37,6 +35,9 @@ ALLOWED_ENV_OVERRIDE_KEYS = {
     "STRATEGY_IV_EXTREME_PERCENTILE",
 }
 
+SIM_EVENT_START = "sim_run_start"
+SIM_EVENT_CANCEL = "sim_run_cancel"
+
 
 def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
@@ -49,8 +50,6 @@ def _new_run_id() -> str:
 
 
 def _default_db():
-    from pymongo import MongoClient
-
     uri = str(os.getenv("MONGODB_URI") or os.getenv("MONGO_URI") or "").strip()
     if uri:
         client = MongoClient(uri)
@@ -67,50 +66,24 @@ def _runs_collection_name() -> str:
     return str(os.getenv("MONGO_COLL_STRATEGY_EVAL_RUNS") or "strategy_eval_runs")
 
 
-def _default_publisher_spawn(args: list[str], env: dict[str, str]) -> int:
-    proc = subprocess.Popen(args, env=env)
-    return int(proc.pid)
+def _command_channel() -> str:
+    return str(os.getenv("SIM_COMMAND_TOPIC") or "sim:run:command").strip() or "sim:run:command"
 
 
-def _default_consumer_spawn(run_id: str) -> str:
-    cmd = [
-        "docker",
-        "compose",
-        "--env-file",
-        ".env.compose",
-        "run",
-        "--rm",
-        "-d",
-        "-e",
-        f"SIM_RUN_ID={run_id}",
-        "strategy_app_sim",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return str(result.stdout or "").strip()
+def _default_redis() -> redis.Redis:
+    return redis.Redis(
+        host=str(os.getenv("REDIS_HOST") or "localhost"),
+        port=int(os.getenv("REDIS_PORT") or "6379"),
+        db=int(os.getenv("REDIS_DB") or "0"),
+        decode_responses=True,
+        socket_connect_timeout=2,
+        socket_timeout=2,
+    )
 
 
-def _default_consumer_stop(container_id: str) -> None:
-    if not str(container_id or "").strip():
-        return
-    subprocess.run(["docker", "stop", str(container_id)], check=False, capture_output=True, text=True)
-
-
-def _default_image_digest() -> str:
-    image = str(os.getenv("STRATEGY_APP_SIM_IMAGE") or "option_trading-strategy_app_sim").strip()
-    if not image:
-        return "unknown"
-    try:
-        out = subprocess.run(
-            ["docker", "image", "inspect", image, "--format", "{{index .RepoDigests 0}}"],
-            capture_output=True,
-            text=True,
-            timeout=4,
-            check=True,
-        )
-        text = str(out.stdout or "").strip()
-        return text or "unknown"
-    except Exception:
-        return "unknown"
+def _default_publish_command(payload: dict[str, Any]) -> None:
+    client = _default_redis()
+    client.publish(_command_channel(), json.dumps(payload, ensure_ascii=False, default=str))
 
 
 class DashboardSimRouter:
@@ -118,17 +91,11 @@ class DashboardSimRouter:
         self,
         *,
         get_db: Callable[[], Any] = _default_db,
-        spawn_publisher: Callable[[list[str], dict[str, str]], int] = _default_publisher_spawn,
-        spawn_consumer: Callable[[str], str] = _default_consumer_spawn,
-        stop_consumer: Callable[[str], None] = _default_consumer_stop,
-        get_image_digest: Callable[[], str] = _default_image_digest,
+        publish_command: Callable[[dict[str, Any]], None] = _default_publish_command,
         run_dir_root: Optional[Path] = None,
     ) -> None:
         self._get_db = get_db
-        self._spawn_publisher = spawn_publisher
-        self._spawn_consumer = spawn_consumer
-        self._stop_consumer = stop_consumer
-        self._get_image_digest = get_image_digest
+        self._publish_command = publish_command
         self._run_dir_root = Path(run_dir_root) if run_dir_root is not None else None
 
         router = APIRouter(tags=["sim"])
@@ -140,45 +107,6 @@ class DashboardSimRouter:
 
     def _runs_coll(self):
         return self._get_db()[_runs_collection_name()]
-
-    def _seal_run_dir(self, run_dir: Path) -> None:
-        try:
-            targets: Iterable[Path] = [run_dir] + list(run_dir.rglob("*"))
-            for path in targets:
-                try:
-                    mode = path.stat().st_mode
-                    path.chmod(mode & ~0o222)
-                except Exception:
-                    continue
-        except Exception:
-            return
-
-    def _watch_terminal_status(self, run_id: str, run_dir: Path) -> None:
-        runs = self._runs_coll()
-        result_path = run_dir / "result.json"
-        cancellation_path = run_dir / "cancellation.json"
-        deadline = time.time() + (60.0 * 60.0 * 6.0)
-        while time.time() < deadline:
-            terminal_status: Optional[str] = None
-            if result_path.exists():
-                terminal_status = "completed"
-            elif cancellation_path.exists():
-                terminal_status = "cancelled"
-            if terminal_status:
-                self._seal_run_dir(run_dir)
-                runs.update_one(
-                    {"run_id": run_id},
-                    {
-                        "$set": {
-                            "status": terminal_status,
-                            "terminal_status": terminal_status,
-                            "completed_at": _now_iso(),
-                            "updated_at": _now_iso(),
-                        }
-                    },
-                )
-                return
-            time.sleep(1.0)
 
     @staticmethod
     def _validate_env_overrides(env_overrides: Dict[str, str]) -> None:
@@ -195,7 +123,7 @@ class DashboardSimRouter:
             raise HTTPException(status_code=409, detail=f"run dir already exists: {run_dir}")
         run_dir.mkdir(parents=True, exist_ok=False)
 
-        image_digest = self._get_image_digest()
+        image_digest = str(os.getenv("STRATEGY_APP_SIM_IMAGE_DIGEST") or "pending")
         config_hash = compute_config_hash(
             env_overrides=body.env_overrides,
             image_digest=image_digest,
@@ -244,48 +172,19 @@ class DashboardSimRouter:
         )
         manifest.write_to(run_dir)
 
-        publisher_args = [
-            "python",
-            "-m",
-            "ops.sim.run_sim_publisher",
-            "--run-id",
-            run_id,
-            "--source-date",
-            body.source_date,
-            "--source-coll",
-            body.source_coll,
-            "--speed",
-            str(body.speed),
-            "--label",
-            body.label,
-            "--image-digest",
-            image_digest,
-            "--env-overrides-json",
-            json.dumps(body.env_overrides),
-        ]
-        child_env = dict(os.environ)
-        publisher_pid = self._spawn_publisher(publisher_args, child_env)
-        container_id = self._spawn_consumer(run_id)
-
-        runs.update_one(
-            {"run_id": run_id},
+        self._publish_command(
             {
-                "$set": {
-                    "status": "running",
-                    "started_at": _now_iso(),
-                    "updated_at": _now_iso(),
-                    "publisher_pid": int(publisher_pid),
-                    "consumer_container_id": container_id,
-                }
-            },
+                "event_type": SIM_EVENT_START,
+                "event_version": "1.0",
+                "run_id": run_id,
+                "source_date": body.source_date,
+                "source_coll": body.source_coll,
+                "label": body.label,
+                "speed": float(body.speed),
+                "env_overrides": dict(body.env_overrides),
+                "submitted_at": submitted_at,
+            }
         )
-        watcher = threading.Thread(
-            target=self._watch_terminal_status,
-            args=(run_id, run_dir),
-            daemon=True,
-            name=f"sim-run-watch-{run_id[:8]}",
-        )
-        watcher.start()
 
         return SimRunCreateResponse(
             run_id=run_id,
@@ -339,7 +238,13 @@ class DashboardSimRouter:
         if normalized.get("status") != row.get("status"):
             self._runs_coll().update_one(
                 {"run_id": rid},
-                {"$set": {"status": normalized.get("status"), "terminal_status": normalized.get("terminal_status"), "updated_at": _now_iso()}},
+                {
+                    "$set": {
+                        "status": normalized.get("status"),
+                        "terminal_status": normalized.get("terminal_status"),
+                        "updated_at": _now_iso(),
+                    }
+                },
             )
         return SimRunSummary(**normalized).model_dump()
 
@@ -349,23 +254,23 @@ class DashboardSimRouter:
         if not row:
             raise HTTPException(status_code=404, detail=f"run_id not found: {rid}")
 
-        pid = row.get("publisher_pid")
-        if isinstance(pid, int) and pid > 0:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except Exception:
-                pass
-
-        container_id = str(row.get("consumer_container_id") or "").strip()
-        if container_id:
-            self._stop_consumer(container_id)
-
         self._runs_coll().update_one(
             {"run_id": rid},
-            {"$set": {"status": "cancelled", "terminal_status": "cancelled", "updated_at": _now_iso()}},
+            {"$set": {"status": "cancel_requested", "updated_at": _now_iso()}},
         )
-        return {"run_id": rid, "status": "cancelled"}
+        self._publish_command(
+            {
+                "event_type": SIM_EVENT_CANCEL,
+                "event_version": "1.0",
+                "run_id": rid,
+            }
+        )
+        return {"run_id": rid, "status": "cancel_requested"}
 
 
-__all__ = ["DashboardSimRouter", "ALLOWED_ENV_OVERRIDE_KEYS"]
-
+__all__ = [
+    "DashboardSimRouter",
+    "ALLOWED_ENV_OVERRIDE_KEYS",
+    "SIM_EVENT_START",
+    "SIM_EVENT_CANCEL",
+]
