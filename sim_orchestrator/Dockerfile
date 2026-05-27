@@ -5,9 +5,7 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends docker.io docker-compose-plugin \
-    && rm -rf /var/lib/apt/lists/*
+# Docker CLI is provided via host bind-mounts in compose (socket + /usr/bin/docker + cli-plugins).
 
 COPY sim_orchestrator/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt

@@ -523,7 +523,7 @@ services:
 
   # SIM replay orchestrator: spawns publisher + strategy_app_sim per run (dashboard enqueues via Redis).
   sim_orchestrator:
-    profiles: ["ui", "sim"]
+    profiles: ["ui"]
     build:
       context: .
       dockerfile: sim_orchestrator/Dockerfile
@@ -549,6 +549,8 @@ services:
       - .:/opt/option_trading
       - ./.run:/opt/option_trading/.run
       - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
 
   strategy_eval_ui:
     profiles: ["ui"]
