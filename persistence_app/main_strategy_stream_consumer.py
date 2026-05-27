@@ -18,7 +18,12 @@ logger = logging.getLogger(__name__)
 
 
 def _redis_client() -> redis.Redis:
-    return redis.Redis(**redis_connection_kwargs(decode_responses=True, for_pubsub=False))
+    # We use blocking XREADGROUP (block=5000ms). Ensure socket_timeout exceeds
+    # the block time, otherwise redis-py raises "Timeout reading from socket".
+    kwargs = dict(redis_connection_kwargs(decode_responses=True, for_pubsub=False))
+    kwargs.setdefault("socket_connect_timeout", 2)
+    kwargs["socket_timeout"] = max(float(kwargs.get("socket_timeout") or 0), 10.0)
+    return redis.Redis(**kwargs)
 
 
 def _stream_group_name() -> str:
