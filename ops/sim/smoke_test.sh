@@ -23,11 +23,17 @@ need_cmd() {
 }
 
 need_cmd curl
-need_cmd python
+if command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+else
+  fail "missing required command: python/python3"
+fi
 
 log "resolving source_date from Mongo (>=100 snapshots in ${SOURCE_COLL})"
 SOURCE_DATE="${SOURCE_DATE:-$(
-python - <<'PY'
+"${PYTHON_BIN}" - <<'PY'
 import os
 from pymongo import MongoClient
 
@@ -57,7 +63,7 @@ PY
 
 log "using source_date=${SOURCE_DATE}"
 
-POST_BODY="$(python - <<PY
+POST_BODY="$("${PYTHON_BIN}" - <<PY
 import json, os
 print(json.dumps({
   "source_date": os.getenv("SOURCE_DATE"),
@@ -77,7 +83,7 @@ CREATE_JSON="$(
     -d "${POST_BODY}"
 )"
 
-RUN_ID="$(python - <<PY
+RUN_ID="$("${PYTHON_BIN}" - <<PY
 import json
 payload = json.loads('''${CREATE_JSON}''')
 rid = str(payload.get("run_id") or "").strip()
@@ -99,7 +105,7 @@ while true; do
   fi
 
   RUN_JSON="$(curl -fsS "${API_BASE_URL}/api/sim/runs/${RUN_ID}")"
-  TERMINAL_STATUS="$(python - <<PY
+  TERMINAL_STATUS="$("${PYTHON_BIN}" - <<PY
 import json
 payload = json.loads('''${RUN_JSON}''')
 print(str(payload.get("terminal_status") or payload.get("status") or ""))
@@ -115,7 +121,7 @@ done
 [ "${TERMINAL_STATUS}" = "completed" ] || fail "run did not complete cleanly (status=${TERMINAL_STATUS})"
 
 log "verifying manifest + sealed run dir + collection writes"
-python - <<'PY'
+"${PYTHON_BIN}" - <<'PY'
 import os
 import stat
 from pathlib import Path
