@@ -43,6 +43,7 @@ services:
     volumes:
       - .:/opt/option_trading
       - ./.run:/opt/option_trading/.run
+      - ./.run:/app/.run
       - /var/run/docker.sock:/var/run/docker.sock
       - /usr/bin/docker:/usr/bin/docker:ro
       - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
