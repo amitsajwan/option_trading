@@ -808,6 +808,10 @@ services:
       MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
       NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
       STRATEGY_REDIS_PUBLISH_ENABLED: "${STRATEGY_REDIS_PUBLISH_ENABLED:-1}"
+      STRATEGY_VOTE_TOPIC: "stream:votes:sim:${SIM_RUN_ID:-sim_run_id_required}"
+      TRADE_SIGNAL_TOPIC: "stream:signals:sim:${SIM_RUN_ID:-sim_run_id_required}"
+      STRATEGY_POSITION_TOPIC: "stream:positions:sim:${SIM_RUN_ID:-sim_run_id_required}"
+      STRATEGY_DECISION_TRACE_TOPIC: "stream:decision_trace:sim:${SIM_RUN_ID:-sim_run_id_required}"
       STRATEGY_CONSUMER_TRANSPORT: "streams"
       STRATEGY_CONSUMER_LOCK_ENABLED: "false"
       STRATEGY_STREAM_NAME: "stream:snapshots:sim:${SIM_RUN_ID:-sim_run_id_required}"
@@ -864,6 +868,44 @@ services:
       - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
       - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
+
+  # Spawned per-run by SIM orchestrator alongside strategy_app_sim:
+  #   docker compose run --rm -d -e SIM_RUN_ID=<rid> strategy_persistence_sim
+  # Consumes per-run SIM streams (votes/signals/positions/decision_trace) and
+  # writes to the *_sim mongo collections for the REPLAY UI.
+  strategy_persistence_sim:
+    profiles: ["sim"]
+    build:
+      context: .
+      dockerfile: persistence_app/Dockerfile
+    restart: "no"
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      SIM_RUN_ID: "${SIM_RUN_ID:-sim_run_id_required}"
+      MONGO_COLL_STRATEGY_VOTES: "${MONGO_COLL_STRATEGY_VOTES_SIM:-strategy_votes_sim}"
+      MONGO_COLL_TRADE_SIGNALS: "${MONGO_COLL_TRADE_SIGNALS_SIM:-trade_signals_sim}"
+      MONGO_COLL_STRATEGY_POSITIONS: "${MONGO_COLL_STRATEGY_POSITIONS_SIM:-strategy_positions_sim}"
+      MONGO_COLL_STRATEGY_DECISION_TRACES: "${MONGO_COLL_STRATEGY_DECISION_TRACES_SIM:-strategy_decision_traces_sim}"
+      MARKET_SESSION_ENABLED: "0"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+    command:
+      ["python", "-m", "persistence_app.main_strategy_stream_consumer", "--run-id", "${SIM_RUN_ID:-sim_run_id_required}", "--health-log-interval-sec", "30"]
+    volumes:
+      - ./.run:/app/.run
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
 
   # Re-enabled 2026-05-16 after Stage 3 hardening landed (commit bb36eef): decoupled
   # writer thread, bounded queue, pubsub recovery on error, env-configurable mongo

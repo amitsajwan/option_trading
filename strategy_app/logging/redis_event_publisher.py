@@ -45,7 +45,25 @@ class RedisEventPublisher:
             return
         try:
             assert self._client is not None
-            self._client.publish(topic, json.dumps(event, default=_json_default))
+            stream_prefix = "stream:"
+            topic_text = str(topic or "").strip()
+            payload = json.dumps(event, default=_json_default)
+            if topic_text.startswith(stream_prefix):
+                metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+                run_id = str(metadata.get("run_id") or "").strip()
+                source_mode = str(metadata.get("source_mode") or "").strip()
+                self._client.xadd(
+                    topic_text,
+                    {
+                        "payload": payload,
+                        "run_id": run_id,
+                        "source_mode": source_mode,
+                        "published_at": isoformat_ist(datetime.now()),
+                    },
+                    maxlen=0,
+                )
+                return
+            self._client.publish(topic_text, payload)
         except Exception:
             self._logger.exception("failed to publish strategy event topic=%s; disabling redis publishing", topic)
             self._enabled = False

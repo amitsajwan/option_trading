@@ -156,6 +156,28 @@ def spawn_consumer(run_id: str) -> str:
     return str(result.stdout or "").strip()
 
 
+def spawn_persistence(run_id: str) -> str:
+    root = _repo_root()
+    env_file = root / ".env.compose"
+    cmd: list[str] = ["docker", "compose"]
+    for f in _compose_files():
+        cmd.extend(["-f", f])
+    if env_file.is_file():
+        cmd.extend(["--env-file", str(env_file)])
+    cmd.extend(
+        [
+            "run",
+            "--rm",
+            "-d",
+            "-e",
+            f"SIM_RUN_ID={run_id}",
+            "strategy_persistence_sim",
+        ]
+    )
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=str(root))
+    return str(result.stdout or "").strip()
+
+
 def stop_consumer(container_id: str) -> None:
     text = str(container_id or "").strip()
     if not text:
@@ -265,6 +287,7 @@ def _handle_start(coll: Any, payload: Mapping[str, Any]) -> None:
             image_digest=image_digest,
             env_overrides=env_overrides,
         )
+        persistence_container_id = spawn_persistence(run_id)
         container_id = spawn_consumer(run_id)
     except Exception as exc:
         logger.exception("sim run spawn failed run_id=%s: %s", run_id, exc)
@@ -291,6 +314,7 @@ def _handle_start(coll: Any, payload: Mapping[str, Any]) -> None:
                 "updated_at": _now_iso(),
                 "publisher_pid": int(publisher_pid),
                 "consumer_container_id": container_id,
+                "persistence_container_id": persistence_container_id,
             }
         },
     )
@@ -331,6 +355,9 @@ def _handle_cancel(coll: Any, payload: Mapping[str, Any]) -> None:
     container_id = str(row.get("consumer_container_id") or "").strip()
     if container_id:
         stop_consumer(container_id)
+    persistence_container_id = str(row.get("persistence_container_id") or "").strip()
+    if persistence_container_id:
+        stop_consumer(persistence_container_id)
 
     coll.update_one(
         {"run_id": run_id},
