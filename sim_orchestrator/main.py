@@ -134,6 +134,13 @@ def _compose_files() -> list[str]:
     return [str(p) for p in files]
 
 
+def _compose_run_env(run_id: str) -> dict[str, str]:
+    """Env for ``docker compose run`` so ${SIM_RUN_ID} interpolates in compose YAML."""
+    env = _spawn_env()
+    env["SIM_RUN_ID"] = str(run_id).strip()
+    return env
+
+
 def spawn_consumer(run_id: str) -> str:
     root = _repo_root()
     env_file = root / ".env.compose"
@@ -148,12 +155,17 @@ def spawn_consumer(run_id: str) -> str:
             "run",
             "--rm",
             "-d",
-            "-e",
-            f"SIM_RUN_ID={run_id}",
             "strategy_app_sim",
         ]
     )
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=str(root))
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=str(root),
+        env=_compose_run_env(run_id),
+    )
     return str(result.stdout or "").strip()
 
 
@@ -171,12 +183,17 @@ def spawn_persistence(run_id: str) -> str:
             "run",
             "--rm",
             "-d",
-            "-e",
-            f"SIM_RUN_ID={run_id}",
             "strategy_persistence_sim",
         ]
     )
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True, cwd=str(root))
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=str(root),
+        env=_compose_run_env(run_id),
+    )
     return str(result.stdout or "").strip()
 
 
