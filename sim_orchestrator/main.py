@@ -142,6 +142,7 @@ def spawn_consumer(run_id: str) -> str:
         cmd.extend(["-f", f])
     if env_file.is_file():
         cmd.extend(["--env-file", str(env_file)])
+    cmd.extend(["--profile", "sim"])
     cmd.extend(
         [
             "run",
@@ -164,6 +165,7 @@ def spawn_persistence(run_id: str) -> str:
         cmd.extend(["-f", f])
     if env_file.is_file():
         cmd.extend(["--env-file", str(env_file)])
+    cmd.extend(["--profile", "sim"])
     cmd.extend(
         [
             "run",
@@ -329,10 +331,11 @@ def _handle_start(coll: Any, payload: Mapping[str, Any]) -> None:
     )
     watcher.start()
     logger.info(
-        "sim run started run_id=%s publisher_pid=%s container_id=%s",
+        "sim run started run_id=%s publisher_pid=%s consumer_container_id=%s persistence_container_id=%s",
         run_id,
         publisher_pid,
         container_id,
+        persistence_container_id,
     )
 
 
