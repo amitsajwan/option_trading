@@ -1441,6 +1441,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   const [flashIdx,      setFlashIdx]      = _s(null);
   const [runtimeConfig, setRuntimeConfig] = _s(null);
   const [availableModels, setAvailableModels] = _s([]);
+  const [brainData, setBrainData] = _s(null);
   const wsRef         = _r(null);
   const sessionRef    = _r(null);
   const prevIdxRef    = _r(null);
@@ -1457,6 +1458,18 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     return () => { alive = false; };
   }, []);
 
+  // Live brain status — initial fetch + refresh every 30s.
+  _e(() => {
+    let alive = true;
+    const load = () => fetch('/api/strategy/brain/status?mode=live')
+      .then(r => r.ok ? r.json() : Promise.resolve({ available: false, reason: `HTTP ${r.status}` }))
+      .catch(() => ({ available: false, reason: 'fetch failed' }))
+      .then(b => { if (alive) setBrainData(b); });
+    load();
+    const id = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
   _e(() => {
     const ws = TC.makeMonitorWS(
       () => ({ action: 'subscribe', mode: 'live' }),
@@ -1468,6 +1481,26 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
             setUpToIdx(msg.up_to_idx);
             if (msg.live_price != null) setLivePrice(msg.live_price);
             prevIdxRef.current = msg.up_to_idx;
+          } else if (msg.type === 'waiting') {
+            setSession({
+              date: new Date().toISOString().slice(0, 10),
+              instrument: 'BANKNIFTY',
+              candles: [],
+              signals: [],
+              trades: [],
+              alerts: [{ level: 'warn', t: '—', msg: msg.hint || msg.message || 'Waiting for live snapshots…', tms: Date.now() }],
+              basePrice: 0,
+            });
+          } else if (msg.type === 'error') {
+            setSession({
+              date: new Date().toISOString().slice(0, 10),
+              instrument: 'BANKNIFTY',
+              candles: [],
+              signals: [],
+              trades: [],
+              alerts: [{ level: 'error', t: '—', msg: msg.message || 'Monitor error', tms: Date.now() }],
+              basePrice: 0,
+            });
           } else if (msg.type === 'tick') {
             const newIdx = msg.up_to_idx;
             const sess = sessionRef.current;
@@ -1567,7 +1600,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
             session={session} trades={[...trades].reverse()} signals={signals}
             selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
             flashId={flashId}
-            diag={{ runtimeConfig, availableModels, blockerFunnel: null,
+            diag={{ runtimeConfig, availableModels, brainData, blockerFunnel: null,
                     loading: false, error: '', date: null, onRefresh: null }}
           />
         </div>
