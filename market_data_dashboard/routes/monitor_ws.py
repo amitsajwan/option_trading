@@ -234,11 +234,14 @@ class DashboardMonitorRouter:
             last_candle_count = (
                 len(state.session.candles) if isinstance(state, _LiveSessionState) else 0
             )
+            last_sent_price: Optional[float] = None
+            last_sent_idx: Optional[int] = None
             try:
                 while state.alive:
                     if isinstance(state, _LiveSessionState):
                         state.tick()
                         current_count = len(state.session.candles)
+                        current_price = round(state.last_price, 2)
                         if current_count > last_candle_count:
                             # New minute bar(s) appeared — push a full snapshot so the
                             # client sees the new candles, not just an updated last_price.
@@ -248,21 +251,26 @@ class DashboardMonitorRouter:
                                 session=_coerce_monitor_session(state.session),
                                 up_to_idx=state.current_idx,
                                 live_idx=state.current_idx,
-                                live_price=round(state.last_price, 2),
+                                live_price=current_price,
                                 kpi_items=kpi,
                                 timestamp=_now_iso_ist(),
                             )
                             await ws.send_json({"type": "snapshot", **snap.model_dump(mode="json")})
                             last_candle_count = current_count
-                        else:
+                            last_sent_price = current_price
+                            last_sent_idx = state.current_idx
+                        elif current_price != last_sent_price or state.current_idx != last_sent_idx:
+                            # Only push a tick when LTP or bar index actually changed.
                             await ws.send_json({
                                 "type": "tick",
                                 "mode": "live",
                                 "up_to_idx": state.current_idx,
                                 "live_idx": state.current_idx,
-                                "live_price": round(state.last_price, 2),
+                                "live_price": current_price,
                                 "timestamp": _now_iso_ist(),
                             })
+                            last_sent_price = current_price
+                            last_sent_idx = state.current_idx
                         await asyncio.sleep(1.0)
                     elif isinstance(state, _ReplaySessionState):
                         state.step()
