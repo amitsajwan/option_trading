@@ -1442,6 +1442,8 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   const [runtimeConfig, setRuntimeConfig] = _s(null);
   const [availableModels, setAvailableModels] = _s([]);
   const [brainData, setBrainData] = _s(null);
+  const [blockerFunnel, setBlockerFunnel] = _s(null);
+  const [timeline, setTimeline] = _s(null);
   const wsRef         = _r(null);
   const sessionRef    = _r(null);
   const prevIdxRef    = _r(null);
@@ -1465,6 +1467,32 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
       .then(r => r.ok ? r.json() : Promise.resolve({ available: false, reason: `HTTP ${r.status}` }))
       .catch(() => ({ available: false, reason: 'fetch failed' }))
       .then(b => { if (alive) setBrainData(b); });
+    load();
+    const id = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  // Live blocker funnel + decision timeline for today (IST). Refresh every 30s.
+  _e(() => {
+    let alive = true;
+    const todayIST = () => {
+      const now = new Date();
+      // Convert to IST (UTC+5:30) and format YYYY-MM-DD
+      const ist = new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000);
+      return ist.toISOString().slice(0, 10);
+    };
+    const load = () => {
+      const date = todayIST();
+      const funnelP = fetch(`/api/strategy/blocker-funnel?mode=live&date=${date}`)
+        .then(r => r.ok ? r.json() : null).catch(() => null);
+      const tlP = fetch(`/api/strategy/decisions?mode=live&date=${date}&limit=500`)
+        .then(r => r.ok ? r.json() : null).catch(() => null);
+      Promise.all([funnelP, tlP]).then(([f, t]) => {
+        if (!alive) return;
+        setBlockerFunnel(f);
+        setTimeline(t);
+      });
+    };
     load();
     const id = setInterval(load, 30000);
     return () => { alive = false; clearInterval(id); };
@@ -1600,7 +1628,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
             session={session} trades={[...trades].reverse()} signals={signals}
             selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
             flashId={flashId}
-            diag={{ runtimeConfig, availableModels, brainData, blockerFunnel: null,
+            diag={{ runtimeConfig, availableModels, brainData, blockerFunnel, timeline,
                     loading: false, error: '', date: null, onRefresh: null }}
           />
         </div>
