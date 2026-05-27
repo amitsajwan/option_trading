@@ -753,6 +753,85 @@ services:
       timeout: 10s
       retries: 3
 
+  # Spawned per-run by SIM orchestrator via:
+  #   docker compose --env-file .env.compose run --rm -d -e SIM_RUN_ID=<rid> strategy_app_sim
+  # Not part of default `docker compose up`; kept under a dedicated profile.
+  strategy_app_sim:
+    profiles: ["sim"]
+    build:
+      context: .
+      dockerfile: strategy_app/Dockerfile
+    restart: "no"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MARKET_SESSION_ENABLED: "0"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      STRATEGY_REDIS_PUBLISH_ENABLED: "${STRATEGY_REDIS_PUBLISH_ENABLED:-1}"
+      STRATEGY_CONSUMER_TRANSPORT: "streams"
+      STRATEGY_CONSUMER_LOCK_ENABLED: "false"
+      STRATEGY_STREAM_NAME: "stream:snapshots:sim:${SIM_RUN_ID:-sim_run_id_required}"
+      STRATEGY_RUN_DIR: "/app/.run/strategy_app_sim/${SIM_RUN_ID:-sim_run_id_required}"
+      LIVE_TOPIC: "${LIVE_TOPIC:-market:snapshot:v1}"
+      HISTORICAL_TOPIC: "${HISTORICAL_TOPIC:-market:snapshot:v1:historical}"
+      SNAPSHOT_V1_TOPIC: "stream:snapshots:sim:${SIM_RUN_ID:-sim_run_id_required}"
+      MONGO_COLL_SNAPSHOTS: "${MONGO_COLL_SNAPSHOTS_SIM:-phase1_market_snapshots_sim}"
+      MONGO_COLL_STRATEGY_VOTES: "${MONGO_COLL_STRATEGY_VOTES_SIM:-strategy_votes_sim}"
+      MONGO_COLL_TRADE_SIGNALS: "${MONGO_COLL_TRADE_SIGNALS_SIM:-trade_signals_sim}"
+      MONGO_COLL_STRATEGY_POSITIONS: "${MONGO_COLL_STRATEGY_POSITIONS_SIM:-strategy_positions_sim}"
+      MONGO_COLL_STRATEGY_DECISION_TRACES: "${MONGO_COLL_STRATEGY_DECISION_TRACES_SIM:-strategy_decision_traces_sim}"
+      MONGO_COLL_MARKET_DEPTH_TICKS: "${MONGO_COLL_MARKET_DEPTH_TICKS_SIM:-market_depth_ticks_sim}"
+      ML_PIPELINE_2_REPO_ROOT: "/app"
+      STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-}"
+      ENTRY_ML_MODEL_PATH: "${ENTRY_ML_MODEL_PATH:-}"
+      ENTRY_ML_MIN_PROB: "${ENTRY_ML_MIN_PROB:-0.55}"
+      ENTRY_TIME_WINDOWS: "${ENTRY_TIME_WINDOWS:-}"
+      ENTRY_REGIME_TAGGER: "${ENTRY_REGIME_TAGGER:-}"
+      ENTRY_REGIME_ALLOWED_TAGS: "${ENTRY_REGIME_ALLOWED_TAGS:-}"
+      DIRECTION_ML_MODEL_PATH: "${DIRECTION_ML_MODEL_PATH:-}"
+      DIRECTION_ML_WEIGHT: "${DIRECTION_ML_WEIGHT:-0.40}"
+      DIRECTION_ML_FILTER_MIN_PROB: "${DIRECTION_ML_FILTER_MIN_PROB:-}"
+      ML_PURE_RUN_ID: "${ML_PURE_RUN_ID:-}"
+      ML_PURE_MODEL_GROUP: "${ML_PURE_MODEL_GROUP:-}"
+      ML_PURE_MODEL_PACKAGE: "${ML_PURE_MODEL_PACKAGE:-}"
+      OPTION_PNL_MODEL_BUNDLE: "${OPTION_PNL_MODEL_BUNDLE:-}"
+      BRAIN_ENABLED: "${BRAIN_ENABLED:-true}"
+      BRAIN_DAILY_FEATURES_PATH: "${BRAIN_DAILY_FEATURES_PATH:-/app/.data/ml_pipeline/daily_regime_features.json}"
+      BRAIN_CONSENSUS_MIN_AGREEING: "${BRAIN_CONSENSUS_MIN_AGREEING:-1}"
+      STRATEGY_IV_EXTREME_PERCENTILE: "${STRATEGY_IV_EXTREME_PERCENTILE:-95.0}"
+    command:
+      [
+        "python",
+        "-m",
+        "strategy_app.main",
+        "--engine",
+        "${STRATEGY_ENGINE:-ml_pure}",
+        "--min-confidence",
+        "${STRATEGY_MIN_CONFIDENCE:-0.65}",
+        "--strategy-profile-id",
+        "${STRATEGY_PROFILE_ID:-}",
+        "--topic",
+        "stream:snapshots:sim:${SIM_RUN_ID:-sim_run_id_required}",
+        "--run-dir",
+        "/app/.run/strategy_app_sim/${SIM_RUN_ID:-sim_run_id_required}",
+        "--rollout-stage",
+        "${STRATEGY_ROLLOUT_STAGE_HISTORICAL:-paper}",
+        "--position-size-multiplier",
+        "${STRATEGY_POSITION_SIZE_MULTIPLIER_HISTORICAL:-1.0}",
+      ]
+    volumes:
+      - ./.run:/app/.run
+      - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
+
   # Re-enabled 2026-05-16 after Stage 3 hardening landed (commit bb36eef): decoupled
   # writer thread, bounded queue, pubsub recovery on error, env-configurable mongo
   # timeouts (default 30s socket, was 5s). Replay no longer triggers silent hang.

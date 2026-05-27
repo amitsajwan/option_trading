@@ -171,12 +171,12 @@ class TestPublisherManifest(unittest.TestCase):
             self.assertIn("config_hash", data)
             self.assertIn("git_commit", data)
 
-    def test_manifest_is_immutable_refuses_overwrite(self) -> None:
+    def test_manifest_write_is_idempotent_for_same_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             pub = _make_publisher(run_dir_root=Path(tmp))
-            pub.write_initial_manifest()
-            with self.assertRaises(FileExistsError):
-                pub.write_initial_manifest()
+            first = pub.write_initial_manifest()
+            second = pub.write_initial_manifest()
+            self.assertEqual(first, second)
 
     def test_manifest_is_round_trippable_via_simmanifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+from market_data_dashboard._namespace import BASE_SNAPSHOTS
 from market_data_dashboard.services.live_strategy_monitor_service import LiveStrategyMonitorService
 from market_data_dashboard.services.strategy_evaluation_service import StrategyEvaluationService
 
@@ -313,7 +314,7 @@ class LiveStrategyMonitorServiceTests(unittest.TestCase):
                     ]
                 )
 
-        fake_db = {"phase1_market_snapshots": CollectionStub()}
+        fake_db = {BASE_SNAPSHOTS: CollectionStub()}
         self.service._evaluation_service._db = lambda: fake_db  # type: ignore[method-assign]
 
         chart = self.service.load_session_underlying_chart(date_ist="2026-03-02", instrument="BANKNIFTY26MARFUT")

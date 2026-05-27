@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+from .._namespace import normalize_kind
 from ..state.strategy_current_state import (
     read_blocker_funnel,
     read_decision_timeline,
@@ -71,11 +72,20 @@ class StrategyCurrentRouter:
         )
         self.router = router
 
+    @staticmethod
+    def _mode_from_kind_or_mode(kind: str | None, mode: str) -> str:
+        if str(kind or "").strip():
+            resolved = normalize_kind(kind, default="live")
+            return "live" if resolved == "live" else "replay"
+        return mode
+
     async def get_state(
         self,
         mode: str = Query("live", description="live | replay"),
+        kind: str | None = Query(None, description="optional namespace: live|oos|sim"),
         latest_n: int = Query(50, ge=0, le=500, description="how many recent position events to include"),
     ) -> dict:
+        mode = self._mode_from_kind_or_mode(kind, mode)
         if mode.strip().lower() not in {"live", "replay", "historical"}:
             raise HTTPException(status_code=400, detail="mode must be 'live' or 'replay'")
         try:
@@ -86,8 +96,10 @@ class StrategyCurrentRouter:
     async def get_blocker_funnel(
         self,
         mode: str = Query("replay", description="live | replay"),
+        kind: str | None = Query(None, description="optional namespace: live|oos|sim"),
         date: str = Query(..., description="YYYY-MM-DD"),
     ) -> dict:
+        mode = self._mode_from_kind_or_mode(kind, mode)
         if mode.strip().lower() not in {"live", "replay", "historical"}:
             raise HTTPException(status_code=400, detail="mode must be 'live' or 'replay'")
         try:
@@ -98,12 +110,14 @@ class StrategyCurrentRouter:
     async def get_decisions(
         self,
         mode: str = Query("replay", description="live | replay"),
+        kind: str | None = Query(None, description="optional namespace: live|oos|sim"),
         date: str = Query(..., description="YYYY-MM-DD"),
         limit: int = Query(500, ge=0, le=2000),
         offset: int = Query(0, ge=0),
         outcome: str = Query("", description="empty | blocked | hold | entry_taken | exit_taken | manage_only"),
         collapse: bool = Query(False, description="merge consecutive rows with bit-identical (outcome,gate,reason,entry_prob)"),
     ) -> dict:
+        mode = self._mode_from_kind_or_mode(kind, mode)
         if mode.strip().lower() not in {"live", "replay", "historical"}:
             raise HTTPException(status_code=400, detail="mode must be 'live' or 'replay'")
         try:

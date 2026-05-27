@@ -13,6 +13,7 @@ from contracts_app.strategy_decision_contract import (
 )
 
 try:
+    from .._namespace import BASE_SNAPSHOTS
     from .strategy_evaluation_service import (
         StrategyEvaluationService,
         _iso_or_none,
@@ -22,6 +23,7 @@ try:
         _safe_float,
     )
 except ImportError:
+    from market_data_dashboard._namespace import BASE_SNAPSHOTS  # type: ignore
     from market_data_dashboard.services.strategy_evaluation_service import (  # type: ignore
         StrategyEvaluationService,
         _iso_or_none,
@@ -236,13 +238,13 @@ class LiveStrategyMonitorService:
         *,
         dataset: str = "live",
         snapshot_collection_env: str = "MONGO_COLL_SNAPSHOTS",
-        default_snapshot_collection: str = "phase1_market_snapshots",
+        default_snapshot_collection: str = BASE_SNAPSHOTS,
     ) -> None:
         self._evaluation_service = evaluation_service or StrategyEvaluationService()
         self._dataset = str(dataset or "live").strip().lower() or "live"
         self._snapshot_collection_env = str(snapshot_collection_env or "MONGO_COLL_SNAPSHOTS").strip() or "MONGO_COLL_SNAPSHOTS"
         self._default_snapshot_collection = (
-            str(default_snapshot_collection or "phase1_market_snapshots").strip() or "phase1_market_snapshots"
+            str(default_snapshot_collection or BASE_SNAPSHOTS).strip() or BASE_SNAPSHOTS
         )
         self._repo = LiveStrategyRepository(
             self._evaluation_service,

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import List, Tuple, Optional, Dict, Any
 from pymongo import MongoClient, ASCENDING
 
+from market_data_dashboard._namespace import BASE_POSITIONS, BASE_SNAPSHOTS
 
 def _to_ms(ts) -> int:
     if ts is None:
@@ -38,8 +39,8 @@ def make_db():
     return MongoClient(f"mongodb://{host}:{port}", serverSelectionTimeoutMS=5000)[db]
 
 
-COLL_SNAPSHOTS = os.getenv("MONGO_COLL_SNAPSHOTS_HISTORICAL", "phase1_market_snapshots_historical")
-COLL_POSITIONS = os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL", "strategy_positions_historical")
+COLL_SNAPSHOTS = os.getenv("MONGO_COLL_SNAPSHOTS_HISTORICAL", f"{BASE_SNAPSHOTS}_historical")
+COLL_POSITIONS = os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL", f"{BASE_POSITIONS}_historical")
 
 
 # ── Candle loading ───────────────────────────────────────────────────────────

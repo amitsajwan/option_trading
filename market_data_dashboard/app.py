@@ -37,6 +37,11 @@ from functools import lru_cache
 from urllib.parse import quote, urlencode
 
 try:
+    from ._namespace import BASE_SNAPSHOTS
+except ImportError:
+    from market_data_dashboard._namespace import BASE_SNAPSHOTS  # type: ignore
+
+try:
     from .services.live_strategy_monitor_service import LiveStrategyMonitorService
 except ImportError:
     try:
@@ -113,6 +118,11 @@ try:
     from .routes.monitor_ws import DashboardMonitorRouter
 except ImportError:
     from market_data_dashboard.routes.monitor_ws import DashboardMonitorRouter  # type: ignore
+
+try:
+    from .routes.sim_routes import DashboardSimRouter
+except ImportError:
+    from market_data_dashboard.routes.sim_routes import DashboardSimRouter  # type: ignore
 
 try:
     from snapshot_app.core.snapshot_ml_flat_contract import load_contract_schema, load_feature_groups, load_legacy_mapping
@@ -1295,7 +1305,7 @@ def _load_latest_snapshot_from_mongo(instrument: str) -> Optional[Dict[str, Any]
     if _strategy_eval_service is None:
         return None
     try:
-        coll_name = str(os.getenv("MONGO_COLL_SNAPSHOTS") or "phase1_market_snapshots").strip() or "phase1_market_snapshots"
+        coll_name = str(os.getenv("MONGO_COLL_SNAPSHOTS") or BASE_SNAPSHOTS).strip() or BASE_SNAPSHOTS
         coll = _strategy_eval_service._db()[coll_name]
         query = {"instrument": str(instrument).strip().upper()}
         projection = {
@@ -1332,8 +1342,8 @@ def _load_latest_historical_snapshot_from_mongo(instrument: str) -> Optional[Dic
         return None
     try:
         coll_name = (
-            str(os.getenv("MONGO_COLL_SNAPSHOTS_HISTORICAL") or "phase1_market_snapshots_historical").strip()
-            or "phase1_market_snapshots_historical"
+            str(os.getenv("MONGO_COLL_SNAPSHOTS_HISTORICAL") or f"{BASE_SNAPSHOTS}_historical").strip()
+            or f"{BASE_SNAPSHOTS}_historical"
         )
         coll = _strategy_eval_service._db()[coll_name]
         query: Dict[str, Any] = {}
@@ -3842,6 +3852,9 @@ app.include_router(_operator_routes.router)
 _monitor_routes = DashboardMonitorRouter()
 app.include_router(_monitor_routes.router)
 
+_sim_routes = DashboardSimRouter()
+app.include_router(_sim_routes.router)
+
 _historical_replay_routes = DashboardHistoricalReplayRouter(
     templates=templates,
     templates_dir=templates_dir,
@@ -5071,7 +5084,7 @@ async def get_redis_mongo_sync_lag(instrument: str = ""):
         mongo_timestamp=snapshot_doc_ts,
         threshold_seconds=thresholds["snapshot"],
         redis_source=redis_snapshot_source or "redis_ohlc_proxy",
-        mongo_source=str(os.getenv("MONGO_COLL_SNAPSHOTS") or "phase1_market_snapshots"),
+        mongo_source=str(os.getenv("MONGO_COLL_SNAPSHOTS") or BASE_SNAPSHOTS),
         note="Redis side uses latest 1m OHLC timestamp as snapshot proxy (snapshot events are pub/sub).",
     )
 

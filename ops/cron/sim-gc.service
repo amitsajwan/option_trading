@@ -1,0 +1,13 @@
+[Unit]
+Description=SIM replay run-dir garbage collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/option_trading
+Environment=SIM_GC_RETENTION_DAYS=30
+ExecStart=/usr/bin/env bash /opt/option_trading/ops/cron/sim_gc.sh
+StandardOutput=journal
+StandardError=journal
+

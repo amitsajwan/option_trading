@@ -209,6 +209,22 @@ class SimPublisher:
             speed=self.speed,
             created_at=isoformat_ist(now_ist()),
         )
+        target = self._run_dir / "manifest.json"
+        if target.exists():
+            try:
+                existing = SimManifest.from_json(target.read_text(encoding="utf-8"))
+                if (
+                    existing.run_id == manifest.run_id
+                    and existing.source_date == manifest.source_date
+                    and existing.source_coll == manifest.source_coll
+                    and existing.config_hash == manifest.config_hash
+                ):
+                    return target
+            except Exception:
+                pass
+            raise FileExistsError(
+                f"manifest already exists at {target}; manifests are immutable"
+            )
         return manifest.write_to(self._run_dir)
 
     # ── lifecycle ────────────────────────────────────────────────────────

@@ -106,7 +106,10 @@ function TickerBar({ quote, instrument }) {
 }
 
 // ── StatusBar ────────────────────────────────────────────────────────────
-function StatusBar({ sessionPnl, tradesCount, winRate, regime, engine, ws, onModeSwitch, onHaltClick }) {
+function StatusBar({
+  sessionPnl, tradesCount, winRate, regime, engine, ws, onModeSwitch, onHaltClick,
+  watchMode, simRuns, watchRunId, onWatchChange, onBackToLive,
+}) {
   const pnlCls = sessionPnl >= 0 ? 'pos' : 'neg';
   return (
     <div className="t-status-bar">
@@ -114,6 +117,26 @@ function StatusBar({ sessionPnl, tradesCount, winRate, regime, engine, ws, onMod
         <button className="active"><span className="dot live"/>Live</button>
         <button onClick={() => onModeSwitch('replay')}><span className="dot replay"/>Replay</button>
         <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:'0 10px'}}>
+        <span style={{fontFamily:'var(--f-mono)',fontSize:'9px',color:'var(--fg-4)',textTransform:'uppercase'}}>watching</span>
+        <select
+          className="inp"
+          style={{height:22,minWidth:180,padding:'0 6px',fontSize:'10px'}}
+          value={watchMode === 'sim' ? `sim:${watchRunId || ''}` : 'live'}
+          onChange={e => {
+            const raw = String(e.target.value || '');
+            if (raw === 'live') { onBackToLive(); return; }
+            if (raw.startsWith('sim:')) onWatchChange(raw.slice(4));
+          }}
+        >
+          <option value="live">LIVE</option>
+          {(simRuns || []).map(run => (
+            <option key={run.run_id} value={`sim:${run.run_id}`}>
+              {`SIM · ${String(run.label || 'run').slice(0, 16)} · ${String(run.run_id || '').slice(0, 8)}…`}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="t-status-cells">
         <div className="t-scell big"><span className="k">Session P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
@@ -123,6 +146,9 @@ function StatusBar({ sessionPnl, tradesCount, winRate, regime, engine, ws, onMod
         <div className="t-scell"><span className="k">WS</span><span className={`v ${ws === 'connected' ? 'pos' : 'warn'}`} style={{fontSize:'11px'}}>{ws}</span></div>
       </div>
       <div className="t-status-actions">
+        {watchMode === 'sim' && (
+          <button className="t-btn ghost" onClick={onBackToLive}>Back to LIVE</button>
+        )}
         <button className="t-btn danger" onClick={onHaltClick}>⏻ Halt <span className="kbd">⌘.</span></button>
       </div>
     </div>
@@ -1444,48 +1470,57 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   const [brainData, setBrainData] = _s(null);
   const [blockerFunnel, setBlockerFunnel] = _s(null);
   const [timeline, setTimeline] = _s(null);
+  const [simRunsToday, setSimRunsToday] = _s([]);
+  const [watchMode, setWatchMode] = _s('live');
+  const [watchRunId, setWatchRunId] = _s('');
+  const [watchDate, setWatchDate] = _s('');
   const wsRef         = _r(null);
   const sessionRef    = _r(null);
   const prevIdxRef    = _r(null);
   _e(() => { sessionRef.current = session; }, [session]);
+  const _todayIST = () => {
+    const now = new Date();
+    const ist = new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000);
+    return ist.toISOString().slice(0, 10);
+  };
 
   // Diagnostics: in live mode we surface current model + available models.
   // Blocker funnel needs a date and is replay-only.
   _e(() => {
     let alive = true;
-    fetch('/api/strategy/current/state?mode=live&latest_n=0')
+    const kindQ = watchMode === 'sim' ? `&kind=sim${watchRunId ? `&run_id=${encodeURIComponent(watchRunId)}` : ''}` : '';
+    const modeQ = watchMode === 'sim' ? 'replay' : 'live';
+    fetch(`/api/strategy/current/state?mode=${modeQ}&latest_n=0${kindQ}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`state HTTP ${r.status}`)))
       .then(s => { if (!alive) return; setRuntimeConfig(s?.runtime_config || null); setAvailableModels(Array.isArray(s?.available_models) ? s.available_models : []); })
       .catch(() => {});
     return () => { alive = false; };
-  }, []);
+  }, [watchMode, watchRunId]);
 
   // Live brain status — initial fetch + refresh every 30s.
   _e(() => {
     let alive = true;
-    const load = () => fetch('/api/strategy/brain/status?mode=live')
+    const modeQ = watchMode === 'sim' ? 'replay' : 'live';
+    const kindQ = watchMode === 'sim' ? `&kind=sim${watchRunId ? `&run_id=${encodeURIComponent(watchRunId)}` : ''}` : '';
+    const load = () => fetch(`/api/strategy/brain/status?mode=${modeQ}${kindQ}`)
       .then(r => r.ok ? r.json() : Promise.resolve({ available: false, reason: `HTTP ${r.status}` }))
       .catch(() => ({ available: false, reason: 'fetch failed' }))
       .then(b => { if (alive) setBrainData(b); });
     load();
     const id = setInterval(load, 30000);
     return () => { alive = false; clearInterval(id); };
-  }, []);
+  }, [watchMode, watchRunId]);
 
   // Live blocker funnel + decision timeline for today (IST). Refresh every 30s.
   _e(() => {
     let alive = true;
-    const todayIST = () => {
-      const now = new Date();
-      // Convert to IST (UTC+5:30) and format YYYY-MM-DD
-      const ist = new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000);
-      return ist.toISOString().slice(0, 10);
-    };
     const load = () => {
-      const date = todayIST();
-      const funnelP = fetch(`/api/strategy/blocker-funnel?mode=live&date=${date}`)
+      const date = watchMode === 'sim' ? (watchDate || _todayIST()) : _todayIST();
+      const modeQ = watchMode === 'sim' ? 'replay' : 'live';
+      const kindQ = watchMode === 'sim' ? `&kind=sim${watchRunId ? `&run_id=${encodeURIComponent(watchRunId)}` : ''}` : '';
+      const funnelP = fetch(`/api/strategy/blocker-funnel?mode=${modeQ}&date=${date}${kindQ}`)
         .then(r => r.ok ? r.json() : null).catch(() => null);
-      const tlP = fetch(`/api/strategy/decisions?mode=live&date=${date}&limit=500`)
+      const tlP = fetch(`/api/strategy/decisions?mode=${modeQ}&date=${date}&limit=500${kindQ}`)
         .then(r => r.ok ? r.json() : null).catch(() => null);
       Promise.all([funnelP, tlP]).then(([f, t]) => {
         if (!alive) return;
@@ -1496,11 +1531,33 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     load();
     const id = setInterval(load, 30000);
     return () => { alive = false; clearInterval(id); };
+  }, [watchMode, watchRunId, watchDate]);
+
+  _e(() => {
+    let alive = true;
+    const load = () => fetch(`/api/sim/runs?date=${encodeURIComponent(_todayIST())}&limit=50`)
+      .then(r => (r.ok ? r.json() : Promise.resolve({ rows: [] })))
+      .catch(() => ({ rows: [] }))
+      .then(payload => {
+        if (!alive) return;
+        const rows = Array.isArray(payload?.rows) ? payload.rows : (Array.isArray(payload?.runs) ? payload.runs : []);
+        setSimRunsToday(rows);
+      });
+    load();
+    const id = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(id); };
   }, []);
 
   _e(() => {
     const ws = TC.makeMonitorWS(
-      () => ({ action: 'subscribe', mode: 'live' }),
+      () => {
+        const payload = { action: 'subscribe', mode: watchMode === 'sim' ? 'sim' : 'live' };
+        if (watchMode === 'sim') {
+          if (watchRunId) payload.run_id = watchRunId;
+          if (watchDate) payload.date = watchDate;
+        }
+        return payload;
+      },
       {
         onStatus: setWsStatus,
         onMessage(msg) {
@@ -1551,7 +1608,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     );
     wsRef.current = ws;
     return () => ws.close();
-  }, []);
+  }, [watchMode, watchRunId, watchDate]);
 
   // keyboard nav
   _e(() => {
@@ -1600,10 +1657,29 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   return (
     <div className="cockpit">
       <TickerBar quote={quote} instrument={session.instrument}/>
+      {watchMode === 'sim' && (
+        <div style={{background:'var(--warn)',color:'#231500',padding:'6px 10px',fontSize:'11px',fontWeight:700}}>
+          Watching SIM run {watchRunId ? `${watchRunId.slice(0, 8)}…` : '—'}{watchDate ? ` · ${watchDate}` : ''} · Not LIVE market feed
+        </div>
+      )}
       <StatusBar
         sessionPnl={sessionPnl} tradesCount={trades.length} winRate={winRate}
         regime={regime} engine={engine} ws={wsStatus}
         onModeSwitch={onModeSwitch} onHaltClick={onKillClick}
+        watchMode={watchMode}
+        simRuns={simRunsToday}
+        watchRunId={watchRunId}
+        onWatchChange={(runId) => {
+          const row = (simRunsToday || []).find(r => String(r?.run_id || '') === String(runId || ''));
+          setWatchMode('sim');
+          setWatchRunId(String(runId || '').trim());
+          setWatchDate(String(row?.source_date || row?.trade_date || row?.date || '').slice(0, 10));
+        }}
+        onBackToLive={() => {
+          setWatchMode('live');
+          setWatchRunId('');
+          setWatchDate('');
+        }}
       />
       <div className="t-workspace">
         <EngineRoster strategies={strategies} dailyRisk={Math.abs(Math.min(0, sessionPnl))}/>
@@ -1729,8 +1805,21 @@ function _fmtDateOption(d, tradeCounts, modelsByDate) {
   return `${tag} · ${d} · ${tradeStr}${modelTag}`;
 }
 
+function _fmtReplayRunOption(opt, tradeCounts, modelsByDate) {
+  if (!opt) return '';
+  const kind = String(opt.kind || 'oos').toLowerCase() === 'sim' ? 'sim' : 'oos';
+  const date = String(opt.date || '').slice(0, 10);
+  const runId = String(opt.runId || '').trim();
+  const label = String(opt.label || '').trim();
+  if (kind === 'sim') {
+    const rid = runId ? ` · run ${runId.slice(0, 8)}…` : '';
+    return `[SIM] ${date || 'date ?'}${label ? ` · ${label}` : ''}${rid}`;
+  }
+  return `[OOS] ${_fmtDateOption(date, tradeCounts, modelsByDate)}`;
+}
+
 function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, upToIdx,
-  total, availableDates, tradeCounts, modelsByDate, replayDate, replayRunId, onPlay, onPause, onSpeed, onScrub, onScrubEnd,
+  total, replayOptions, tradeCounts, modelsByDate, replayDate, replayRunId, replayKind, onPlay, onPause, onSpeed, onScrub, onScrubEnd,
   onReset, onDateChange, onModeSwitch, ws, datesLoading }) {
   const pnlCls = sessionPnl >= 0 ? 'pos' : 'neg';
   const pct = total > 0 ? ((upToIdx + 1) / total * 100).toFixed(0) : 0;
@@ -1764,10 +1853,21 @@ function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, u
           onTouchEnd={e => onScrubEnd(Number(e.target.value))}
         />
         <span style={{fontFamily:'var(--f-mono)',fontSize:'9.5px',color:'var(--fg-3)',flexShrink:0}}>{pct}%</span>
-        <select style={selStyle} value={replayDate}
-          disabled={datesLoading || !availableDates.length}
-          onChange={e => onDateChange(e.target.value, { runId: modelsByDate[e.target.value]?.run_id || '' })}>
-          {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts, modelsByDate)}</option>)}
+        <select
+          style={selStyle}
+          value={`${replayKind}:${replayDate}:${replayRunId || ''}`}
+          disabled={datesLoading || !replayOptions.length}
+          onChange={e => {
+            const next = (replayOptions || []).find(r => r.key === e.target.value);
+            if (!next) return;
+            onDateChange(next.date, { runId: next.runId || '', kind: next.kind || 'oos' });
+          }}
+        >
+          {(replayOptions || []).map(opt => (
+            <option key={opt.key} value={opt.key}>
+              {_fmtReplayRunOption(opt, tradeCounts, modelsByDate)}
+            </option>
+          ))}
         </select>
         {replayRunId && (
           <span style={{fontFamily:'var(--f-mono)',fontSize:'9px',color:'var(--fg-3)',flexShrink:0}}
@@ -1789,13 +1889,14 @@ function _replayBootParams() {
     return {
       date: String(p.get('date') || p.get('replay_date') || '').trim(),
       runId: String(p.get('run_id') || '').trim(),
+      kind: String(p.get('kind') || '').trim().toLowerCase(),
     };
   } catch (_) {
-    return { date: '', runId: '' };
+    return { date: '', runId: '', kind: '' };
   }
 }
 
-function _syncReplayUrl({ date, runId }) {
+function _syncReplayUrl({ date, runId, kind }) {
   try {
     const url = new URL(window.location.href);
     url.searchParams.set('mode', 'replay');
@@ -1803,6 +1904,8 @@ function _syncReplayUrl({ date, runId }) {
     else url.searchParams.delete('date');
     if (runId) url.searchParams.set('run_id', runId);
     else url.searchParams.delete('run_id');
+    if (kind) url.searchParams.set('kind', kind);
+    else url.searchParams.delete('kind');
     window.history.replaceState({}, '', url);
   } catch (_) { /* ignore */ }
 }
@@ -1816,9 +1919,12 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const [speed,          setSpeed]          = _s(4);
   const [replayDate,     setReplayDate]     = _s(_boot.date || '');
   const [replayRunId,    setReplayRunId]    = _s(_boot.runId || '');
+  const [replayKind,     setReplayKind]     = _s((_boot.kind === 'sim' ? 'sim' : 'oos'));
   const [replayError,    setReplayError]    = _s('');
   const [wsStatus,       setWsStatus]       = _s('idle');
   const [availableDates, setAvailableDates] = _s([]);
+  const [oosRuns, setOosRuns] = _s([]);
+  const [simRuns, setSimRuns] = _s([]);
   const [tradeCounts, setTradeCounts] = _s({});
   const [modelsByDate, setModelsByDate] = _s({});
   const [datesLoading,   setDatesLoading]   = _s(true);
@@ -1839,6 +1945,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const speedRef      = _r(4);
   const replayDateRef = _r(_boot.date || '');
   const replayRunIdRef = _r(_boot.runId || '');
+  const replayKindRef = _r(_boot.kind === 'sim' ? 'sim' : 'oos');
   const fitRef        = _r(null);
 
   // Diagnostics: load current model + available models, blocker-funnel aggregate
@@ -1848,22 +1955,23 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const fetchDiag = _cb(() => {
     const date = replayDateRef.current;
     setDiagLoading(true); setDiagError('');
-    const stateP = fetch('/api/strategy/current/state?mode=replay&latest_n=0')
+    const kindQ = replayKindRef.current === 'sim' ? '&kind=sim' : '&kind=oos';
+    const stateP = fetch(`/api/strategy/current/state?mode=replay&latest_n=0${kindQ}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`state HTTP ${r.status}`)));
     const runQ = replayRunIdRef.current
       ? `&run_id=${encodeURIComponent(replayRunIdRef.current)}`
       : '';
     const funnelP = date
-      ? fetch(`/api/strategy/blocker-funnel?mode=replay&date=${encodeURIComponent(date)}${runQ}`)
+      ? fetch(`/api/strategy/blocker-funnel?mode=replay${kindQ}&date=${encodeURIComponent(date)}${runQ}`)
           .then(r => r.ok ? r.json() : Promise.reject(new Error(`funnel HTTP ${r.status}`)))
       : Promise.resolve(null);
     const tlOutcomeQ = tlOutcome ? `&outcome=${encodeURIComponent(tlOutcome)}` : '';
     const tlCollapseQ = tlCollapse ? `&collapse=true` : '';
     const tlP = date
-      ? fetch(`/api/strategy/decisions?mode=replay&date=${encodeURIComponent(date)}&limit=500${runQ}${tlOutcomeQ}${tlCollapseQ}`)
+      ? fetch(`/api/strategy/decisions?mode=replay${kindQ}&date=${encodeURIComponent(date)}&limit=500${runQ}${tlOutcomeQ}${tlCollapseQ}`)
           .then(r => r.ok ? r.json() : Promise.reject(new Error(`decisions HTTP ${r.status}`)))
       : Promise.resolve(null);
-    const brainP = fetch('/api/strategy/brain/status?mode=replay')
+    const brainP = fetch(`/api/strategy/brain/status?mode=replay${kindQ}`)
       .then(r => r.ok ? r.json() : Promise.resolve({ available: false, reason: `HTTP ${r.status}` }))
       .catch(() => ({ available: false, reason: 'fetch failed' }));
     Promise.all([stateP, funnelP, tlP, brainP])
@@ -1883,7 +1991,8 @@ function ReplayMonitorDark({ onModeSwitch }) {
   _e(() => {
     if (!replayDate) { setHeatmapData(null); return; }
     setHeatmapLoading(true);
-    fetch(`/api/strategy/session-heatmap?mode=replay&date=${encodeURIComponent(replayDate)}`)
+    const kindQ = replayKind === 'sim' ? '&kind=sim' : '&kind=oos';
+    fetch(`/api/strategy/session-heatmap?mode=replay${kindQ}&date=${encodeURIComponent(replayDate)}`)
       .then(r => r.ok ? r.json() : Promise.resolve(null))
       .then(d => { setHeatmapData(d || null); setHeatmapLoading(false); })
       .catch(() => { setHeatmapData(null); setHeatmapLoading(false); });
@@ -1893,6 +2002,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   _e(() => { speedRef.current      = speed;      }, [speed]);
   _e(() => { replayDateRef.current = replayDate; }, [replayDate]);
   _e(() => { replayRunIdRef.current = replayRunId; }, [replayRunId]);
+  _e(() => { replayKindRef.current = replayKind; }, [replayKind]);
 
   function openReplaySocket() {
     if (wsRef.current) return;
@@ -1903,6 +2013,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
           action:'subscribe', mode:'replay', date:replayDateRef.current,
           up_to_idx:upToIdxRef.current, playing:false, speed:speedRef.current,
         };
+        sub.kind = replayKindRef.current === 'sim' ? 'sim' : 'oos';
         if (replayRunIdRef.current) sub.run_id = replayRunIdRef.current;
         return sub;
       },
@@ -1931,17 +2042,27 @@ function ReplayMonitorDark({ onModeSwitch }) {
 
   _e(() => {
     let alive = true;
-    fetch('/api/historical/replay/dates?limit=250')
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then(payload => {
+    Promise.all([
+      fetch('/api/historical/replay/dates?limit=250')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))),
+      fetch('/api/strategy/evaluation/runs?dataset=historical&limit=250')
+        .then(r => (r.ok ? r.json() : Promise.resolve({ rows: [] })))
+        .catch(() => ({ rows: [] })),
+      fetch('/api/sim/runs?limit=120')
+        .then(r => (r.ok ? r.json() : Promise.resolve({ rows: [] })))
+        .catch(() => ({ rows: [] })),
+    ])
+      .then(([payload, oosPayload, simPayload]) => {
         if (!alive) return;
         setAvailableDates(Array.isArray(payload.dates) ? payload.dates : []);
         setTradeCounts(payload.trade_counts || {});
         setModelsByDate(payload.models_by_date || {});
+        setOosRuns(Array.isArray(oosPayload?.rows) ? oosPayload.rows : (Array.isArray(oosPayload?.runs) ? oosPayload.runs : []));
+        setSimRuns(Array.isArray(simPayload?.rows) ? simPayload.rows : (Array.isArray(simPayload?.runs) ? simPayload.runs : []));
         setDatesLoading(false);
         const boot = _replayBootParams();
         const pick = boot.date || payload.latest;
-        if (pick) handleDateChange(pick, { runId: boot.runId || replayRunIdRef.current });
+        if (pick) handleDateChange(pick, { runId: boot.runId || replayRunIdRef.current, kind: (boot.kind === 'sim' ? 'sim' : 'oos') });
         else setReplayError('No replay dates found in historical snapshots.');
       })
       .catch(err => { if (!alive) return; setDatesLoading(false); setReplayError('Failed to load dates: ' + err.message); });
@@ -1958,15 +2079,18 @@ function ReplayMonitorDark({ onModeSwitch }) {
   function handleDateChange(newDate, opts = {}) {
     if (!newDate) return;
     const nextRunId = opts.runId !== undefined ? String(opts.runId || '').trim() : replayRunIdRef.current;
+    const nextKind = opts.kind === 'sim' ? 'sim' : (opts.kind === 'oos' ? 'oos' : replayKindRef.current);
     setReplayDate(newDate); replayDateRef.current = newDate;
     setReplayRunId(nextRunId); replayRunIdRef.current = nextRunId;
-    _syncReplayUrl({ date: newDate, runId: nextRunId });
+    setReplayKind(nextKind); replayKindRef.current = nextKind;
+    _syncReplayUrl({ date: newDate, runId: nextRunId, kind: nextKind });
     setReplayError(''); setIsPlaying(false);
     setSession(null); setUpToIdx(0);
     openReplaySocket();
     const sub = {
       action:'subscribe', mode:'replay', date:newDate, up_to_idx:0, playing:false, speed:speedRef.current,
     };
+    sub.kind = nextKind;
     if (nextRunId) sub.run_id = nextRunId;
     const sent = wsRef.current && wsRef.current.send(sub);
     if (!sent) setWsStatus('connecting');
@@ -1992,6 +2116,37 @@ function ReplayMonitorDark({ onModeSwitch }) {
     return () => window.removeEventListener('keydown', fn);
   }, [session, upToIdx, selectedTrade, isPlaying]);
 
+  const replayOptions = (() => {
+    const out = [];
+    const seen = new Set();
+    (oosRuns || []).forEach(r => {
+      const rid = String(r?.run_id || '').trim();
+      if (!rid) return;
+      const d = String(r?.date_from || r?.date || r?.ended_at || r?.submitted_at || '').slice(0, 10);
+      const key = `oos:${d}:${rid}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ key, kind: 'oos', date: d, runId: rid, label: String(r?.message || '').trim() });
+    });
+    (availableDates || []).slice().reverse().forEach(d => {
+      const rid = modelsByDate && modelsByDate[d] ? String(modelsByDate[d].run_id || '').trim() : '';
+      const key = `oos:${d}:${rid}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ key, kind: 'oos', date: d, runId: rid, label: '' });
+    });
+    (simRuns || []).forEach(r => {
+      const rid = String(r?.run_id || '').trim();
+      if (!rid) return;
+      const d = String(r?.source_date || r?.trade_date || r?.date || r?.created_at || '').slice(0, 10);
+      const key = `sim:${d}:${rid}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ key, kind: 'sim', date: d, runId: rid, label: String(r?.label || '').trim() });
+    });
+    return out;
+  })();
+
   // Loading state
   if (!session) {
     const selStyle = { fontFamily:'var(--f-mono)', fontSize:'10px', background:'var(--bg-2)',
@@ -2010,11 +2165,15 @@ function ReplayMonitorDark({ onModeSwitch }) {
           </div>
           <div style={{display:'flex',alignItems:'center',gap:8,padding:'0 12px'}}>
             <span style={{fontFamily:'var(--f-mono)',fontSize:'10px',color:'var(--fg-3)'}}>Date</span>
-            <select style={selStyle} value={replayDate}
-              disabled={datesLoading || !availableDates.length}
-              onChange={e => handleDateChange(e.target.value, { runId: modelsByDate[e.target.value]?.run_id || '' })}>
-              {!replayDate && <option value="">{datesLoading ? 'Loading…' : 'Select date'}</option>}
-              {availableDates.slice().reverse().map(d => <option key={d} value={d}>{_fmtDateOption(d, tradeCounts, modelsByDate)}</option>)}
+            <select style={selStyle} value={`${replayKind}:${replayDate}:${replayRunId || ''}`}
+              disabled={datesLoading || !replayOptions.length}
+              onChange={e => {
+                const next = (replayOptions || []).find(r => r.key === e.target.value);
+                if (!next) return;
+                handleDateChange(next.date, { runId: next.runId || '', kind: next.kind || 'oos' });
+              }}>
+              {!replayDate && <option value="">{datesLoading ? 'Loading…' : 'Select run'}</option>}
+              {replayOptions.map(opt => <option key={opt.key} value={opt.key}>{_fmtReplayRunOption(opt, tradeCounts, modelsByDate)}</option>)}
             </select>
           </div>
           <div/>
@@ -2069,7 +2228,8 @@ function ReplayMonitorDark({ onModeSwitch }) {
       <ReplayStatusBar
         sessionPnl={sessionPnl} tradesCount={trades.length} winRate={winRate}
         isPlaying={isPlaying} speed={speed} upToIdx={upToIdx} total={candles.length}
-        availableDates={availableDates} tradeCounts={tradeCounts} modelsByDate={modelsByDate} replayDate={replayDate}
+        replayOptions={replayOptions} tradeCounts={tradeCounts} modelsByDate={modelsByDate} replayDate={replayDate}
+        replayKind={replayKind}
         replayRunId={replayRunId || session.runId || ''}
         onPlay={handlePlay} onPause={handlePause} onSpeed={handleSpeed}
         onScrub={handleScrub} onScrubEnd={handleScrubEnd} onReset={handleReset}

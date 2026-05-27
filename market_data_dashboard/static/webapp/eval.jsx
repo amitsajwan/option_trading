@@ -248,6 +248,17 @@ function evalSortRunsDesc(rows) {
   return list;
 }
 
+function evalNormalizeRunKind(kind) {
+  const raw = String(kind || '').trim().toLowerCase();
+  if (raw === 'sim') return 'sim';
+  if (raw === 'oos' || raw === 'historical' || raw === 'replay') return 'oos';
+  return 'oos';
+}
+
+function evalRunKindBadge(run) {
+  return evalNormalizeRunKind(run?.kind) === 'sim' ? '[SIM]' : '[OOS]';
+}
+
 function evalRunOptionLabel(run) {
   const from = String(run?.date_from || '').slice(0, 10);
   const to = String(run?.date_to || '').slice(0, 10);
@@ -278,7 +289,7 @@ function evalRunOptionLabel(run) {
   const dateStr = runDate ? evalFormatIstTimestamp(runDate).slice(0, 11).trim() : '';
 
   const discovered = run?.discovered ? '⊕' : '';
-  const parts = [range, tag, trades, dateStr, discovered, evalShortRunId(run?.run_id)].filter(Boolean);
+  const parts = [evalRunKindBadge(run), range, tag, trades, dateStr, discovered, evalShortRunId(run?.run_id)].filter(Boolean);
   return parts.join(' · ');
 }
 
@@ -289,6 +300,7 @@ function EvalRunDetails({ run, vmProfileId }) {
   const profileMismatch = profile && vmProfile && profile !== vmProfile;
   const from = String(run.date_from || '').slice(0, 10);
   const to = String(run.date_to || '').slice(0, 10);
+  const runKind = evalNormalizeRunKind(run?.kind);
   const discovered = Boolean(run.discovered);
   return (
     <div className="eval-run-details">
@@ -300,6 +312,10 @@ function EvalRunDetails({ run, vmProfileId }) {
         <div>
           <div className="field-label">Replay window</div>
           <strong>{from && to ? `${from} → ${to}` : (from || to || '--')}</strong>
+        </div>
+        <div>
+          <div className="field-label">Kind</div>
+          <strong>{runKind === 'sim' ? 'SIM' : 'OOS'}</strong>
         </div>
         <div>
           <div className="field-label">Queued (IST)</div>
@@ -440,6 +456,7 @@ function EvalMonitor({ tweaks }) {
   const [activeRunId, setActiveRunId] = _evalUseState('');
   const [runs, setRuns] = _evalUseState([]);
   const [runsLoading, setRunsLoading] = _evalUseState(false);
+  const [runKindFilter, setRunKindFilter] = _evalUseState('all');
   const [runStatus, setRunStatus] = _evalUseState(null);
   const [runEvent, setRunEvent] = _evalUseState(null);
   const [wsState, setWsState] = _evalUseState('idle');
@@ -461,6 +478,10 @@ function EvalMonitor({ tweaks }) {
   const closedTrades = Number(summary?.counts?.closed_trades ?? 0);
   const showEmptyRun = !loading && resolvedRunId && closedTrades === 0;
   const showNoRunsHint = !loading && !runsLoading && !runs.length && !resolvedRunId;
+  const filteredRuns = (runs || []).filter(run => {
+    if (runKindFilter === 'all') return true;
+    return evalNormalizeRunKind(run?.kind) === runKindFilter;
+  });
 
   function loadData(nextFilters = filters, nextDayPage = dayPage, nextTradePage = tradePage, nextSelectedDay = selectedDay, runId = activeRunId) {
     setLoading(true);
@@ -492,11 +513,34 @@ function EvalMonitor({ tweaks }) {
   async function refreshRunsList(dataset = filters.dataset || 'historical') {
     setRunsLoading(true);
     try {
-      const payload = await evalGet(
+      const oosPayload = await evalGet(
         `/api/strategy/evaluation/runs?dataset=${encodeURIComponent(dataset)}&limit=80`
       );
-      const listed = payload?.rows ?? payload?.runs;
-      setRuns(evalSortRunsDesc(listed));
+      const oosRuns = (oosPayload?.rows ?? oosPayload?.runs ?? []).map(r => ({
+        ...r,
+        kind: evalNormalizeRunKind(r?.kind),
+      }));
+      let simRuns = [];
+      try {
+        const simPayload = await evalGet('/api/sim/runs?limit=80');
+        simRuns = (simPayload?.rows ?? simPayload?.runs ?? []).map(r => ({
+          ...r,
+          kind: 'sim',
+          dataset: r?.dataset || 'historical',
+          status: r?.status || r?.terminal_status || 'completed',
+        }));
+      } catch (_) {
+        simRuns = [];
+      }
+      const merged = [];
+      const seen = new Set();
+      [...simRuns, ...oosRuns].forEach(r => {
+        const rid = String(r?.run_id || '').trim();
+        if (!rid || seen.has(rid)) return;
+        seen.add(rid);
+        merged.push(r);
+      });
+      setRuns(evalSortRunsDesc(merged));
     } catch (err) {
       setRuns([]);
       setError(err.message || String(err));
@@ -872,12 +916,20 @@ function EvalMonitor({ tweaks }) {
                     if (run) selectRun(run);
                   }}
                 >
-                  <option value="">{runs.length ? '— pick a replay run —' : '— no runs yet —'}</option>
-                  {(runs || []).map((run, idx) => (
+                  <option value="">{filteredRuns.length ? '— pick a replay run —' : '— no runs yet —'}</option>
+                  {filteredRuns.map((run, idx) => (
                     <option key={run.run_id} value={run.run_id}>
                       {(idx === 0 ? '★ LATEST  ' : '') + evalRunOptionLabel(run)}
                     </option>
                   ))}
+                </select>
+              </label>
+              <label className="field" style={{ maxWidth: 160 }}>
+                <span className="field-label">Kind</span>
+                <select className="inp" value={runKindFilter} onChange={e => setRunKindFilter(e.target.value)}>
+                  <option value="all">All</option>
+                  <option value="oos">OOS</option>
+                  <option value="sim">SIM</option>
                 </select>
               </label>
               {resolvedRunId && (

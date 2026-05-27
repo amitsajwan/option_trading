@@ -16,10 +16,12 @@ from contracts_app import historical_snapshot_topic, redis_connection_kwargs
 logger = logging.getLogger(__name__)
 
 try:
+    from .._namespace import BASE_SNAPSHOTS
     from .historical_replay_repository import HistoricalReplayRepository
     from .live_strategy_monitor_service import LiveStrategyMonitorService, _parse_date_yyyy_mm_dd
     from ..state.replay_integrity import replay_integrity_warnings
 except ImportError:
+    from market_data_dashboard._namespace import BASE_SNAPSHOTS  # type: ignore
     from market_data_dashboard.services.historical_replay_repository import HistoricalReplayRepository  # type: ignore
     from market_data_dashboard.services.live_strategy_monitor_service import LiveStrategyMonitorService, _parse_date_yyyy_mm_dd  # type: ignore
     from market_data_dashboard.state.replay_integrity import replay_integrity_warnings  # type: ignore
@@ -81,7 +83,7 @@ class HistoricalReplayMonitorService(LiveStrategyMonitorService):
             evaluation_service,
             dataset="historical",
             snapshot_collection_env="MONGO_COLL_SNAPSHOTS_HISTORICAL",
-            default_snapshot_collection="phase1_market_snapshots_historical",
+            default_snapshot_collection=f"{BASE_SNAPSHOTS}_historical",
         )
         self._repo = HistoricalReplayRepository(self._evaluation_service)
 

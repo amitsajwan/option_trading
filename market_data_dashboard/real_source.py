@@ -9,6 +9,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from pymongo import ASCENDING, DESCENDING, MongoClient
 
 try:
+    from ._namespace import (
+        BASE_DECISION_TRACES,
+        BASE_POSITIONS,
+        BASE_SIGNALS,
+        BASE_SNAPSHOTS,
+        BASE_VOTES,
+        collection_for,
+        normalize_kind,
+    )
     from .schemas.monitor import (
         MonitorAlert,
         MonitorCandle,
@@ -19,6 +28,15 @@ try:
     )
     from .state.replay_integrity import replay_integrity_warnings
 except ImportError:
+    from market_data_dashboard._namespace import (  # type: ignore
+        BASE_DECISION_TRACES,
+        BASE_POSITIONS,
+        BASE_SIGNALS,
+        BASE_SNAPSHOTS,
+        BASE_VOTES,
+        collection_for,
+        normalize_kind,
+    )
     from schemas.monitor import (  # type: ignore
         MonitorAlert,
         MonitorCandle,
@@ -127,6 +145,19 @@ def _nearest_candle_idx(candle_ts_sorted: List[int], ts_ms: int) -> int:
     if abs(candle_ts_sorted[before] - ts_ms) <= abs(candle_ts_sorted[pos] - ts_ms):
         return before
     return pos
+
+
+def _is_market_open_now_ist() -> bool:
+    try:
+        from contracts_app.market_session import is_market_open_ist, load_holidays
+
+        open_time = str(os.getenv("MARKET_OPEN_TIME") or "09:15").strip() or "09:15"
+        close_time = str(os.getenv("MARKET_CLOSE_TIME") or "15:30").strip() or "15:30"
+        holidays_file = str(os.getenv("NSE_HOLIDAYS_FILE") or "").strip() or None
+        holidays = load_holidays(holidays_file)
+        return bool(is_market_open_ist(datetime.now(tz=_IST), open_time, close_time, holidays))
+    except Exception:
+        return False
 
 
 def _today_ist() -> str:
@@ -1097,25 +1128,41 @@ def _build_session(
 # ── Sources ────────────────────────────────────────────────────────────────────
 
 class MongoSource:
-    """Historical replay — reads from *_historical collections."""
+    """Historical/sim replay reader backed by Mongo collections."""
 
-    COLL_SNAPSHOTS = os.getenv("MONGO_COLL_SNAPSHOTS_HISTORICAL", "phase1_market_snapshots_historical")
-    COLL_VOTES = os.getenv("MONGO_COLL_STRATEGY_VOTES_HISTORICAL", "strategy_votes_historical")
-    COLL_SIGNALS = os.getenv("MONGO_COLL_TRADE_SIGNALS_HISTORICAL", "trade_signals_historical")
-    COLL_POSITIONS = os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL", "strategy_positions_historical")
-    COLL_TRACES = os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES_HISTORICAL", "strategy_decision_traces_historical")
+    COLL_SNAPSHOTS = os.getenv("MONGO_COLL_SNAPSHOTS_HISTORICAL", f"{BASE_SNAPSHOTS}_historical")
+    COLL_VOTES = os.getenv("MONGO_COLL_STRATEGY_VOTES_HISTORICAL", f"{BASE_VOTES}_historical")
+    COLL_SIGNALS = os.getenv("MONGO_COLL_TRADE_SIGNALS_HISTORICAL", f"{BASE_SIGNALS}_historical")
+    COLL_POSITIONS = os.getenv("MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL", f"{BASE_POSITIONS}_historical")
+    COLL_TRACES = os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES_HISTORICAL", f"{BASE_DECISION_TRACES}_historical")
 
-    def __init__(self, db: Any, trade_date: str, run_id: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        db: Any,
+        trade_date: str,
+        run_id: Optional[str] = None,
+        kind: str = "oos",
+    ) -> None:
         self._db = db
         self._trade_date = trade_date
         self._run_id = str(run_id or "").strip() or None
+        self._kind = normalize_kind(kind, default="oos")
+        self._coll_snapshots = collection_for(BASE_SNAPSHOTS, kind=self._kind, run_id=self._run_id)
+        self._coll_votes = collection_for(BASE_VOTES, kind=self._kind, run_id=self._run_id)
+        self._coll_signals = collection_for(BASE_SIGNALS, kind=self._kind, run_id=self._run_id)
+        self._coll_positions = collection_for(BASE_POSITIONS, kind=self._kind, run_id=self._run_id)
+        self._coll_traces = collection_for(BASE_DECISION_TRACES, kind=self._kind, run_id=self._run_id)
         self._session: Optional[MonitorSession] = None
 
     def get_session(self) -> MonitorSession:
         if self._session is None:
             self._session = _build_session(
                 self._db, self._trade_date,
-                self.COLL_SNAPSHOTS, self.COLL_VOTES, self.COLL_SIGNALS, self.COLL_POSITIONS, self.COLL_TRACES,
+                self._coll_snapshots,
+                self._coll_votes,
+                self._coll_signals,
+                self._coll_positions,
+                self._coll_traces,
                 run_id=self._run_id,
             )
         return self._session
@@ -1124,26 +1171,84 @@ class MongoSource:
 class LiveMongoSource:
     """Live session — reads from live (non-historical) collections and supports tick queries."""
 
-    COLL_SNAPSHOTS = os.getenv("MONGO_COLL_SNAPSHOTS", "phase1_market_snapshots")
-    COLL_VOTES = os.getenv("MONGO_COLL_STRATEGY_VOTES", "strategy_votes")
-    COLL_SIGNALS = os.getenv("MONGO_COLL_TRADE_SIGNALS", "trade_signals")
-    COLL_POSITIONS = os.getenv("MONGO_COLL_STRATEGY_POSITIONS", "strategy_positions")
-    COLL_TRACES = os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES", "strategy_decision_traces")
+    COLL_SNAPSHOTS = os.getenv("MONGO_COLL_SNAPSHOTS", BASE_SNAPSHOTS)
+    COLL_VOTES = os.getenv("MONGO_COLL_STRATEGY_VOTES", BASE_VOTES)
+    COLL_SIGNALS = os.getenv("MONGO_COLL_TRADE_SIGNALS", BASE_SIGNALS)
+    COLL_POSITIONS = os.getenv("MONGO_COLL_STRATEGY_POSITIONS", BASE_POSITIONS)
+    COLL_TRACES = os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES", BASE_DECISION_TRACES)
 
-    def __init__(self, db: Any, trade_date: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        db: Any,
+        trade_date: Optional[str] = None,
+        *,
+        kind: str = "live",
+        run_id: Optional[str] = None,
+    ) -> None:
         self._db = db
         self._trade_date = trade_date or _today_ist()
+        self._run_id = str(run_id or "").strip() or None
+        self._kind = normalize_kind(kind, default="live")
+        self._coll_snapshots = collection_for(BASE_SNAPSHOTS, kind=self._kind, run_id=self._run_id)
+        self._coll_votes = collection_for(BASE_VOTES, kind=self._kind, run_id=self._run_id)
+        self._coll_signals = collection_for(BASE_SIGNALS, kind=self._kind, run_id=self._run_id)
+        self._coll_positions = collection_for(BASE_POSITIONS, kind=self._kind, run_id=self._run_id)
+        self._coll_traces = collection_for(BASE_DECISION_TRACES, kind=self._kind, run_id=self._run_id)
         self._session: Optional[MonitorSession] = None
         self._candle_ts_sorted: List[int] = []
 
     def get_session(self) -> MonitorSession:
         if self._session is None:
-            self._session = _build_session(
-                self._db, self._trade_date,
-                self.COLL_SNAPSHOTS, self.COLL_VOTES, self.COLL_SIGNALS, self.COLL_POSITIONS, self.COLL_TRACES,
-            )
+            self._session = self._load_session_with_premarket_fallback()
             self._candle_ts_sorted = [c.t for c in self._session.candles]
         return self._session
+
+    def _load_session_with_premarket_fallback(self) -> MonitorSession:
+        requested = self._trade_date
+        try:
+            return _build_session(
+                self._db,
+                requested,
+                self._coll_snapshots,
+                self._coll_votes,
+                self._coll_signals,
+                self._coll_positions,
+                self._coll_traces,
+                run_id=self._run_id,
+            )
+        except ValueError as exc:
+            if "No snapshot data" not in str(exc) or requested != _today_ist():
+                raise
+            if _is_market_open_now_ist():
+                raise
+            fallback = latest_available_date(self._db, self._coll_snapshots)
+            if fallback == requested:
+                raise
+            self._trade_date = fallback
+            session = _build_session(
+                self._db,
+                fallback,
+                self._coll_snapshots,
+                self._coll_votes,
+                self._coll_signals,
+                self._coll_positions,
+                self._coll_traces,
+                run_id=self._run_id,
+            )
+            today = _today_ist()
+            session.alerts.insert(
+                0,
+                MonitorAlert(
+                    level="warn",
+                    t="09:15",
+                    msg=(
+                        f"<strong>Pre-market</strong> — showing <strong>{fallback}</strong> session. "
+                        f"Live <strong>{today}</strong> data starts after market open (~09:15 IST)."
+                    ),
+                    tms=int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+                ),
+            )
+            return session
 
     def get_latest_tick(self) -> Tuple[int, float]:
         """Lightweight query: returns (current_candle_idx, live_price).
@@ -1157,7 +1262,7 @@ class LiveMongoSource:
         fallback_idx = len(session.candles) - 1
         fallback_price = session.candles[fallback_idx].c
         try:
-            doc = self._db[self.COLL_SNAPSHOTS].find_one(
+            doc = self._db[self._coll_snapshots].find_one(
                 {"trade_date_ist": self._trade_date},
                 {
                     "_id": 0,

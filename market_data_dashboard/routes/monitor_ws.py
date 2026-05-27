@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 try:
+    from .._namespace import BASE_POSITIONS, BASE_SNAPSHOTS, BASE_VOTES, collection_for, normalize_kind
     from .schemas.monitor import (
         MonitorKpiItem,
         MonitorSession,
@@ -17,6 +18,13 @@ try:
     )
     from .real_source import LiveMongoSource, MongoSource, latest_replay_date, make_mongo_db
 except ImportError:
+    from market_data_dashboard._namespace import (  # type: ignore
+        BASE_POSITIONS,
+        BASE_SNAPSHOTS,
+        BASE_VOTES,
+        collection_for,
+        normalize_kind,
+    )
     from schemas.monitor import (  # type: ignore
         MonitorKpiItem,
         MonitorSession,
@@ -45,9 +53,9 @@ def _resolve_date(db: Any, requested: Optional[str]) -> str:
         return requested
     return latest_replay_date(
         db,
-        MongoSource.COLL_SNAPSHOTS,
-        MongoSource.COLL_VOTES,
-        MongoSource.COLL_POSITIONS,
+        collection_for(BASE_SNAPSHOTS, kind="oos"),
+        collection_for(BASE_VOTES, kind="oos"),
+        collection_for(BASE_POSITIONS, kind="oos"),
     )
 
 
@@ -185,13 +193,17 @@ class DashboardMonitorRouter:
     async def snapshot(
         self,
         mode: str = Query("live", description="live or replay"),
+        kind: Optional[str] = Query(None, description="live|oos|sim (optional explicit namespace)"),
         date: Optional[str] = Query(None, description="Replay date YYYY-MM-DD"),
         run_id: Optional[str] = Query(None, description="Historical eval run_id (scopes trades/votes)"),
         up_to_idx: Optional[int] = Query(None, description="Replay bar index"),
     ) -> JSONResponse:
         db = _make_db()
-        if mode == "live":
-            source = LiveMongoSource(db=db, trade_date=date)
+        mode_norm = str(mode or "live").strip().lower()
+        default_kind = "sim" if mode_norm == "sim" else ("live" if mode_norm == "live" else "oos")
+        kind_norm = normalize_kind(kind, default=default_kind)
+        if mode_norm == "live" and kind_norm == "live":
+            source = LiveMongoSource(db=db, trade_date=date, kind="live")
             state: Any = _LiveSessionState(source)
             kpi = _build_kpi_live(state)
             snap = MonitorSnapshot(
@@ -209,6 +221,7 @@ class DashboardMonitorRouter:
                 db=db,
                 trade_date=_resolve_date(db, date),
                 run_id=resolved_run,
+                kind=kind_norm,
             )
             state = _ReplaySessionState(source, up_to_idx=up_to_idx)
             kpi = _build_kpi_replay(state)
@@ -306,13 +319,15 @@ class DashboardMonitorRouter:
                             pass
 
                     mode = str(msg.get("mode") or "live").strip().lower()
+                    default_kind = "sim" if mode == "sim" else ("live" if mode == "live" else "oos")
+                    kind = normalize_kind(msg.get("kind"), default=default_kind)
                     date_str = str(msg.get("date") or "").strip() or None
                     run_id_str = str(msg.get("run_id") or "").strip() or None
 
                     try:
                         db = _make_db()
-                        if mode == "live":
-                            src = LiveMongoSource(db=db, trade_date=date_str)
+                        if mode == "live" and kind == "live":
+                            src = LiveMongoSource(db=db, trade_date=date_str, kind="live")
                             state = _LiveSessionState(src)
                             kpi = _build_kpi_live(state)
                         else:
@@ -320,6 +335,7 @@ class DashboardMonitorRouter:
                                 db=db,
                                 trade_date=_resolve_date(db, date_str),
                                 run_id=run_id_str,
+                                kind=kind,
                             )
                             up_to = msg.get("up_to_idx")
                             state = _ReplaySessionState(src, up_to_idx=int(up_to) if up_to is not None else None)
