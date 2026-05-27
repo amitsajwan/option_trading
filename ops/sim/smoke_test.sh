@@ -171,9 +171,16 @@ else:
 db = client[os.getenv("MONGO_DB", "trading_ai")]
 ns = resolve_namespace("sim", run_id=run_id)
 counts: dict[str, int] = {}
-for base in ("snapshots", "votes", "signals", "positions", "decision_traces"):
+bases = {
+    "snapshots": "phase1_market_snapshots",
+    "votes": "strategy_votes",
+    "signals": "trade_signals",
+    "positions": "strategy_positions",
+    "decision_traces": "strategy_decision_traces",
+}
+for label, base in bases.items():
     coll = ns.collection_for(base)
-    counts[base] = int(db[coll].count_documents({"run_id": run_id}))
+    counts[label] = int(db[coll].count_documents({"run_id": run_id}))
 strategy_writes = sum(counts.get(k, 0) for k in ("votes", "signals", "positions", "decision_traces"))
 if strategy_writes < 1:
     print(

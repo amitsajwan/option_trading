@@ -13,6 +13,14 @@ from pymongo import MongoClient
 
 from contracts_app import SimManifest, compute_config_hash, resolve_git_commit, resolve_namespace
 
+from market_data_dashboard._namespace import (
+    BASE_DECISION_TRACES,
+    BASE_POSITIONS,
+    BASE_SIGNALS,
+    BASE_SNAPSHOTS,
+    BASE_VOTES,
+)
+
 from .schemas.sim import SimRunCreateRequest, SimRunCreateResponse, SimRunSummary
 
 ALLOWED_ENV_OVERRIDE_KEYS = {
@@ -219,12 +227,18 @@ class DashboardSimRouter:
             ns = resolve_namespace("sim", run_id=run_id)
             db = self._get_db()
             counts: dict[str, int] = {}
-            for kind in ["snapshots", "votes", "signals", "positions", "decision_traces"]:
-                coll = ns.collection_for(kind)
+            for label, base in (
+                ("snapshots", BASE_SNAPSHOTS),
+                ("votes", BASE_VOTES),
+                ("signals", BASE_SIGNALS),
+                ("positions", BASE_POSITIONS),
+                ("decision_traces", BASE_DECISION_TRACES),
+            ):
+                coll = ns.collection_for(base)
                 try:
-                    counts[kind] = int(db[coll].count_documents({"run_id": run_id}))
+                    counts[label] = int(db[coll].count_documents({"run_id": run_id}))
                 except Exception:
-                    counts[kind] = 0
+                    counts[label] = 0
             row.setdefault("metadata", {})
             row["metadata"]["collection_counts"] = counts
         return row
