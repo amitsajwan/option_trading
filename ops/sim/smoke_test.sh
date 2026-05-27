@@ -99,6 +99,7 @@ PY
 )"
 
 log "run_id=${RUN_ID}"
+export RUN_ID
 START_TS="$(date +%s)"
 TERMINAL_STATUS=""
 
