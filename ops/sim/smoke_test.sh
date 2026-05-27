@@ -66,6 +66,7 @@ PY
 )}"
 
 log "using source_date=${SOURCE_DATE}"
+export SOURCE_DATE
 
 POST_BODY="$("${PYTHON_BIN}" - <<PY
 import json, os
