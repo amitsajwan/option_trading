@@ -80,6 +80,11 @@ class _CollectionLike(Protocol):
         ...
 
 
+class _CollectionWriterLike(Protocol):
+    def insert_one(self, document: Mapping[str, Any]) -> Any:
+        ...
+
+
 # ── Manifest helpers ──────────────────────────────────────────────────────
 
 
@@ -151,6 +156,7 @@ class SimPublisher:
         max_len: int,
         redis_client: _RedisLike,
         mongo_collection: _CollectionLike,
+        sim_snapshot_collection: Optional[_CollectionWriterLike] = None,
         image_digest: str = "unknown",
         env_overrides: Optional[Mapping[str, str]] = None,
         event_kind: str = DEFAULT_EVENT_KIND,
@@ -176,6 +182,7 @@ class SimPublisher:
         self.max_len = int(max_len)
         self._redis = redis_client
         self._coll = mongo_collection
+        self._sim_snapshot_coll = sim_snapshot_collection
         self._image_digest = image_digest
         self._env_overrides = dict(env_overrides or {})
         self._event_kind = event_kind
@@ -290,6 +297,22 @@ class SimPublisher:
             "payload": json.dumps(payload, default=str),
         }
 
+    def _persist_sim_snapshot(self, doc: Mapping[str, Any]) -> None:
+        """Persist source snapshot into ``phase1_market_snapshots_sim``.
+
+        REPLAY reads candles from Mongo snapshots, not directly from Redis
+        streams. Persisting per-run snapshots makes SIM runs visible in UI.
+        """
+        if self._sim_snapshot_coll is None:
+            return
+        if not hasattr(self._sim_snapshot_coll, "insert_one"):
+            return
+        payload = dict(doc)
+        payload.pop("_id", None)
+        payload["run_id"] = self.run_id
+        payload.setdefault("created_at", datetime.now(tz=timezone.utc))
+        self._sim_snapshot_coll.insert_one(payload)
+
     def _emit_sentinel(self, *, total_published: int) -> str:
         fields = {
             "type": SENTINEL_TYPE,
@@ -328,6 +351,7 @@ class SimPublisher:
             for doc in self._iter_source():
                 if self._state.aborted:
                     break
+                self._persist_sim_snapshot(doc)
                 fields = self._wrap_event(doc)
                 self._redis.xadd(
                     self._stream_name,
@@ -445,6 +469,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     redis_client = _connect_redis()
     mongo_coll = _connect_mongo_collection(args.source_coll)
+    sim_snapshot_coll = _connect_mongo_collection(
+        resolve_namespace("sim", run_id=args.run_id).collection_for("phase1_market_snapshots")
+    )
 
     publisher = SimPublisher(
         run_id=args.run_id,
@@ -455,6 +482,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         max_len=args.max_len,
         redis_client=redis_client,
         mongo_collection=mongo_coll,
+        sim_snapshot_collection=sim_snapshot_coll,
         image_digest=args.image_digest,
         env_overrides=env_overrides,
     )

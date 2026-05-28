@@ -860,8 +860,9 @@ def _build_session(
     }
     candles: List[MonitorCandle] = []
     instrument = "BANKNIFTY-I"
+    snapshot_q = dict(run_date_q) if latest_run_id else dict(date_q)
     for i, doc in enumerate(
-        db[coll_snapshots].find(date_q, snap_proj).sort("timestamp", ASCENDING)
+        db[coll_snapshots].find(snapshot_q, snap_proj).sort("timestamp", ASCENDING)
     ):
         c = _snapshot_to_candle(doc, i)
         if c is not None:
