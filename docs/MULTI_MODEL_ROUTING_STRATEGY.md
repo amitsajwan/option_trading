@@ -213,3 +213,186 @@ If not, keep as shadow and continue data collection.
 - No depth-only autonomous entry logic.
 
 Keep the first implementation simple, explicit, and easy to debug.
+
+---
+
+## Complete pluggable design (target state)
+
+This section defines a production-ready plugin architecture that is measurable,
+auditable, and safe to roll out in stages.
+
+### Component interfaces (contracts)
+
+Each component must implement a small, typed contract:
+
+```text
+interface EntryPlugin:
+  evaluate(snapshot, context) -> EntryDecision
+
+interface DirectionPlugin:
+  evaluate(snapshot, context, entry_decision) -> DirectionDecision
+
+interface StrikePlugin:
+  select(snapshot, context, entry_decision, direction_decision) -> StrikeDecision
+
+interface DepthPlugin:
+  evaluate(snapshot, depth_context, direction_decision, strike_decision) -> DepthDecision
+
+interface RiskPlugin:
+  evaluate(snapshot, position, decisions...) -> RiskDecision
+```
+
+Decision objects must be immutable, include:
+
+- `pass` boolean
+- numeric score/probability
+- `reason_codes` list
+- `diagnostics` map (`str -> scalar`)
+- `plugin_id` and `plugin_version`
+
+### Pipeline orchestration
+
+Runtime executes deterministic stage order:
+
+1. Entry
+2. Direction
+3. Strike
+4. Depth gate
+5. Risk gate
+6. Signal emit
+
+Hard fail-fast:
+
+- if any stage returns `pass=false`, downstream stages may still run in shadow
+  mode for telemetry, but no trade is emitted.
+
+### Plugin registry and config
+
+Use one registry plus config, not hardcoded if/else in engine:
+
+```yaml
+runtime:
+  plugins:
+    entry:
+      active: entry_primary_v1
+      shadows: [entry_e5_shadow, entry_e3_shadow]
+    direction:
+      active: direction_composite_v1
+      shadows: [direction_momentum_v1]
+    strike:
+      active: strike_confidence_iv_v1
+    depth:
+      active: depth_guard_v1
+    risk:
+      active: risk_governor_v1
+```
+
+Each plugin is selected by ID and version; registry resolves implementation.
+
+### Data parity modes (must be explicit)
+
+Every run must declare one of:
+
+- `parity_mode=live_full` (snapshot + depth + all side channels)
+- `parity_mode=replay_snapshot_only` (no depth side channel)
+- `parity_mode=replay_full` (snapshot + replayed depth)
+
+Never compare results across parity modes without labeling them.
+
+---
+
+## Measurability framework (what must be logged)
+
+For each snapshot tick, persist one `decision_trace` record:
+
+- run metadata: `run_id`, `profile_id`, `parity_mode`, `trade_date`
+- stage outputs:
+  - `entry.*`
+  - `direction.*`
+  - `strike.*`
+  - `depth.*`
+  - `risk.*`
+- final output:
+  - `final_action`, `final_reason_codes`
+- plugin identities:
+  - `entry_plugin_id/version`, etc.
+
+For each open/close trade:
+
+- entry snapshot id and full stage decisions at entry
+- exit reason code
+- realized `pnl_pct`, `mfe_pct`, `mae_pct`, `bars_held`
+
+### Mandatory scorecards
+
+Compute these per run and per regime:
+
+- return: `net_pct`, `gross_pos`, `gross_neg`, `profit_factor`
+- quality: `win_rate`, `avg_win`, `avg_loss`, `expectancy`
+- risk: `max_dd`, `loss_tail_p95`, `consecutive_losses_max`
+- behavior: `trade_count`, side mix (`CE/PE`), average hold bars
+- execution proxy: average spread/relative spread at entry (if available)
+- gate diagnostics: rejection rates by stage and reason code
+
+### Direction-specific scorecard
+
+Measure direction as a classifier on executed entries:
+
+- `direction_win_rate_overall`
+- `direction_win_rate_by_side` (CE, PE)
+- `direction_edge_vs_baseline` (composite minus momentum on same entries)
+- source attribution:
+  - top signal tokens by support (`n`) and contribution to pnl
+  - contradiction frequency (e.g. momentum CE vs depth PE)
+
+---
+
+## Acceptance criteria (promotion gates)
+
+A candidate plugin/version can be promoted only if all pass over a fixed window
+(minimum 5 sessions and minimum 40 trades unless market was abnormally quiet):
+
+1. `net_pct` >= baseline
+2. `max_dd` <= baseline
+3. `profit_factor` >= baseline - tolerance(0.05)
+4. `trade_count` within [0.7x, 1.3x] of baseline (unless explicitly intended)
+5. no increase in risk-policy violations
+6. parity-consistent behavior (no dependence on unavailable replay-only data)
+
+If any fail: keep as shadow.
+
+---
+
+## Strike policy design (decoupled, pluggable)
+
+Direction and strike must stay separate.
+
+`strike_confidence_iv_v1`:
+
+- inputs: side, entry confidence, IV percentile, spread proxy, strike step
+- outputs: `selected_strike`, `mode` (`atm`, `otm_1`, `hold`)
+
+Default logic:
+
+- high IV percentile above reject threshold -> `hold`
+- high confidence + IV below ceiling -> `otm_1`
+- else -> `atm`
+
+This plugin must emit `selected_strike_reason` and be A/B testable.
+
+---
+
+## Implementation roadmap (small deployable slices)
+
+1. **Slice A: Contracts + trace schema**
+   - Add decision objects and per-stage trace fields.
+2. **Slice B: Registry + config wiring**
+   - Resolve plugin IDs from config/env.
+3. **Slice C: Strike plugin activation for ML entry path**
+   - Remove hard ATM coupling from ML entry vote.
+4. **Slice D: Replay depth parity**
+   - Feed `market_depth_ticks` into sim side-channel.
+5. **Slice E: Promotion automation**
+   - Auto-generate scorecards and pass/fail gates.
+
+Each slice must ship with regression tests and one reproducible sim replay.

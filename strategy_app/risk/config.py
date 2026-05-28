@@ -79,6 +79,7 @@ class PositionRiskConfig:
     early_stop_loss_bars: int = 0
     early_stop_loss_pct: Optional[float] = None
     atm_strike_only: bool = False
+    allow_non_atm_for_ml_entry: bool = False
 
     @classmethod
     def from_payload(cls, payload: Any) -> "PositionRiskConfig":
@@ -110,6 +111,7 @@ class PositionRiskConfig:
             early_stop_loss_bars=max(0, int(as_optional_float(payload.get("early_stop_loss_bars")) or 0)),
             early_stop_loss_pct=as_optional_float(payload.get("early_stop_loss_pct")),
             atm_strike_only=as_bool(payload.get("atm_strike_only"), default=False),
+            allow_non_atm_for_ml_entry=as_bool(payload.get("allow_non_atm_for_ml_entry"), default=False),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -136,4 +138,5 @@ class PositionRiskConfig:
             "early_stop_loss_bars": self.early_stop_loss_bars,
             "early_stop_loss_pct": self.early_stop_loss_pct,
             "atm_strike_only": self.atm_strike_only,
+            "allow_non_atm_for_ml_entry": self.allow_non_atm_for_ml_entry,
         }

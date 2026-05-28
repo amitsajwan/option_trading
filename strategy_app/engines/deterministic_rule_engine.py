@@ -865,7 +865,7 @@ class DeterministicRuleEngine(StrategyEngine):
                 else snap.atm_pe_close
             ),
         )
-        if self._run_risk_config.atm_strike_only:
+        if self._run_risk_config.atm_strike_only and not self._allow_non_atm_for_ml_entry(trade_vote):
             trade_vote = self._force_atm_strike(trade_vote, snap)
 
         if (
@@ -877,7 +877,11 @@ class DeterministicRuleEngine(StrategyEngine):
             return None
 
         self._apply_strike_selection(trade_vote, snap)
-        if self._run_risk_config.atm_strike_only and not self._is_atm_strike(snap, trade_vote):
+        if (
+            self._run_risk_config.atm_strike_only
+            and not self._allow_non_atm_for_ml_entry(trade_vote)
+            and not self._is_atm_strike(snap, trade_vote)
+        ):
             logger.debug("consensus entry blocked: OTM strike policy")
             return None
 
@@ -908,6 +912,12 @@ class DeterministicRuleEngine(StrategyEngine):
         if atm is None or strike is None:
             return False
         return int(strike) == int(atm)
+
+    def _allow_non_atm_for_ml_entry(self, vote: StrategyVote) -> bool:
+        return bool(
+            self._run_risk_config.allow_non_atm_for_ml_entry
+            and str(vote.strategy_name or "").strip().upper() == "ML_ENTRY"
+        )
 
     @staticmethod
     def _resolve_direction_conflict_deterministic(entry_votes: list[StrategyVote]) -> list[StrategyVote]:
@@ -965,7 +975,7 @@ class DeterministicRuleEngine(StrategyEngine):
         if selected_strike is None or int(selected_strike) <= 0:
             return None
         selected_strike = int(selected_strike)
-        if self._run_risk_config.atm_strike_only:
+        if self._run_risk_config.atm_strike_only and not self._allow_non_atm_for_ml_entry(best_vote):
             atm = snap.atm_strike
             if atm is None or int(selected_strike) != int(atm):
                 logger.debug("entry blocked: atm_strike_only policy strike=%s atm=%s", selected_strike, atm)
@@ -1994,7 +2004,7 @@ class DeterministicRuleEngine(StrategyEngine):
     def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor) -> None:
         if bool(vote.raw_signals.get("_lock_strike_selection")):
             return
-        if self._run_risk_config.atm_strike_only:
+        if self._run_risk_config.atm_strike_only and not self._allow_non_atm_for_ml_entry(vote):
             vote = self._force_atm_strike(vote, snap)
             return
         if self._strike_policy != "oi_volume_ranked":

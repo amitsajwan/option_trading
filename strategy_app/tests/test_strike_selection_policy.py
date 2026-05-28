@@ -6,6 +6,7 @@ from contracts_app import IST_ZONE
 from strategy_app.contracts import Direction, SignalType, StrategyVote
 from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngine
 from strategy_app.market.snapshot_accessor import SnapshotAccessor
+from strategy_app.risk.config import PositionRiskConfig
 
 
 def _snapshot_with_strikes(strikes: list[dict], *, atm_strike: int = 50000) -> SnapshotAccessor:
@@ -27,10 +28,10 @@ def _snapshot_with_strikes(strikes: list[dict], *, atm_strike: int = 50000) -> S
     )
 
 
-def _entry_vote(direction: Direction) -> StrategyVote:
+def _entry_vote(direction: Direction, *, strategy_name: str = "EMA_CROSSOVER") -> StrategyVote:
     ts = datetime(2026, 3, 6, 10, 0, tzinfo=IST_ZONE)
     return StrategyVote(
-        strategy_name="EMA_CROSSOVER",
+        strategy_name=strategy_name,
         snapshot_id="snap-strike-policy",
         timestamp=ts,
         trade_date="2026-03-06",
@@ -92,6 +93,46 @@ class StrikeSelectionPolicyTests(unittest.TestCase):
 
         self.assertEqual(vote.proposed_strike, 50000)
         self.assertAlmostEqual(float(vote.proposed_entry_premium or 0.0), 102.0, places=6)
+
+    def test_atm_only_can_be_bypassed_for_ml_entry(self) -> None:
+        engine = DeterministicRuleEngine(min_confidence=0.65)
+        engine._run_risk_config = PositionRiskConfig(
+            atm_strike_only=True,
+            allow_non_atm_for_ml_entry=True,
+        )
+        snap = _snapshot_with_strikes(
+            [
+                {"strike": 50000.0, "ce_ltp": 100.0, "ce_oi": 15000.0, "ce_volume": 15000.0},
+                {"strike": 50100.0, "ce_ltp": 78.0, "ce_oi": 80000.0, "ce_volume": 90000.0},
+            ],
+            atm_strike=50000,
+        )
+        vote = _entry_vote(Direction.CE, strategy_name="ML_ENTRY")
+
+        engine._apply_strike_selection(vote, snap)
+
+        self.assertEqual(vote.proposed_strike, 50100)
+        self.assertEqual(vote.raw_signals.get("_strike_policy"), "oi_volume_ranked")
+
+    def test_atm_only_still_applies_to_non_ml_strategies(self) -> None:
+        engine = DeterministicRuleEngine(min_confidence=0.65)
+        engine._run_risk_config = PositionRiskConfig(
+            atm_strike_only=True,
+            allow_non_atm_for_ml_entry=True,
+        )
+        snap = _snapshot_with_strikes(
+            [
+                {"strike": 50000.0, "ce_ltp": 100.0, "ce_oi": 15000.0, "ce_volume": 15000.0},
+                {"strike": 50100.0, "ce_ltp": 78.0, "ce_oi": 80000.0, "ce_volume": 90000.0},
+            ],
+            atm_strike=50000,
+        )
+        vote = _entry_vote(Direction.CE, strategy_name="EMA_CROSSOVER")
+
+        engine._apply_strike_selection(vote, snap)
+
+        self.assertEqual(vote.proposed_strike, 50000)
+        self.assertEqual(vote.raw_signals.get("_strike_policy"), "atm_only")
 
 
 if __name__ == "__main__":
