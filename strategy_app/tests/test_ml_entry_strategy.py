@@ -29,6 +29,7 @@ def test_ml_entry_returns_none_without_model_path(monkeypatch) -> None:
 
 def test_ml_entry_emits_vote_when_prob_above_threshold(monkeypatch) -> None:
     monkeypatch.setenv("ENTRY_ML_MIN_PROB", "0.50")
+    monkeypatch.setenv("ML_ENTRY_DIRECTION_MODE", "momentum")
     bundle = {
         "kind": "entry_only_bundle",
         "features": ["fut_return_5m"],
@@ -85,6 +86,7 @@ def test_ml_entry_pe_only_forces_pe(monkeypatch) -> None:
 
 def test_ml_entry_block_ce_skips_ce_momentum(monkeypatch) -> None:
     monkeypatch.setenv("ENTRY_ML_MIN_PROB", "0.50")
+    monkeypatch.setenv("ML_ENTRY_DIRECTION_MODE", "momentum")
     monkeypatch.setenv("ML_ENTRY_BLOCK_CE", "1")
     bundle = {
         "kind": "entry_only_bundle",
@@ -108,6 +110,7 @@ def test_ml_entry_block_ce_skips_ce_momentum(monkeypatch) -> None:
 
 def test_ml_entry_block_pe_skips_pe_momentum(monkeypatch) -> None:
     monkeypatch.setenv("ENTRY_ML_MIN_PROB", "0.50")
+    monkeypatch.setenv("ML_ENTRY_DIRECTION_MODE", "momentum")
     monkeypatch.setenv("ML_ENTRY_BLOCK_PE", "1")
     bundle = {
         "kind": "entry_only_bundle",
