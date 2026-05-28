@@ -126,7 +126,8 @@ class BuildRecordTests(unittest.TestCase):
         # Back-compat: only flat best-bid/ask fields, no ladder
         self.assertNotIn("bid_levels", payload)
         self.assertNotIn("ask_levels", payload)
-        self.assertNotIn("qty_imbalance", payload)
+        self.assertIn("qty_imbalance", payload)
+        self.assertIn("microprice", payload)
         self.assertEqual(payload["best_bid"], 56.0)
         self.assertEqual(payload["best_ask"], 56.2)
 

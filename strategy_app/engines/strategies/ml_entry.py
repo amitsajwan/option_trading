@@ -16,6 +16,7 @@ from ...contracts import (
 )
 from ...market.snapshot_accessor import SnapshotAccessor
 from ...ml.bundle_inference import load_joblib_bundle, predict_positive_class_prob
+from ...ml.entry_direction_resolver import resolve_entry_direction, resolve_entry_direction_momentum
 from ...utils.env import env_bool
 
 logger = logging.getLogger(__name__)
@@ -86,24 +87,25 @@ def _resolve_direction_dual(bundle: dict[str, Any], snap: SnapshotAccessor) -> O
     return Direction.PE
 
 
+def _apply_direction_block(
+    direction: Optional[Direction],
+    source: str,
+) -> tuple[Optional[Direction], str]:
+    if direction is None:
+        return None, source
+    if env_bool("ML_ENTRY_BLOCK_CE") and direction == Direction.CE:
+        return None, f"{source}+block_ce"
+    if env_bool("ML_ENTRY_BLOCK_PE") and direction == Direction.PE:
+        return None, f"{source}+block_pe"
+    return direction, source
+
+
 def _resolve_direction(snap: SnapshotAccessor) -> tuple[Optional[Direction], str]:
     """CE/PE for ML_ENTRY. Returns (direction_or_None, source_label)."""
     if env_bool("ML_ENTRY_PE_ONLY"):
         return Direction.PE, "pe_only"
     if env_bool("ML_ENTRY_CE_ONLY"):
         return Direction.CE, "ce_only"
-
-    block_ce = env_bool("ML_ENTRY_BLOCK_CE")
-    block_pe = env_bool("ML_ENTRY_BLOCK_PE")
-
-    def _apply_block(direction: Optional[Direction], source: str) -> tuple[Optional[Direction], str]:
-        if direction is None:
-            return None, source
-        if block_ce and direction == Direction.CE:
-            return None, f"{source}+block_ce"
-        if block_pe and direction == Direction.PE:
-            return None, f"{source}+block_pe"
-        return direction, source
 
     direction: Optional[Direction]
     dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "").strip()
@@ -112,18 +114,18 @@ def _resolve_direction(snap: SnapshotAccessor) -> tuple[Optional[Direction], str
         if bundle is not None:
             if bundle.get("kind") == _DIRECTION_DUAL_BUNDLE_KIND:
                 direction = _resolve_direction_dual(bundle, snap)
-                return _apply_block(direction, "direction_dual_ml")
+                return _apply_direction_block(direction, "direction_dual_ml")
             # single direction_only_bundle
             ce_prob = predict_positive_class_prob(bundle, snap)
             if ce_prob is not None:
                 direction = Direction.CE if ce_prob >= 0.5 else Direction.PE
-                return _apply_block(direction, "direction_ml")
+                return _apply_direction_block(direction, "direction_ml")
     ret5 = snap.fut_return_5m
     if ret5 is not None and ret5 != 0:
         direction = Direction.CE if float(ret5) > 0 else Direction.PE
     else:
         direction = Direction.CE
-    return _apply_block(direction, "momentum")
+    return _apply_direction_block(direction, "momentum")
 
 
 class MlEntryStrategy(BaseStrategy):
@@ -177,7 +179,48 @@ class MlEntryStrategy(BaseStrategy):
         if entry_prob < self._min_prob:
             return None
 
-        direction_mode = os.getenv("ML_ENTRY_DIRECTION_MODE", "bind").strip().lower()
+        if env_bool("ML_ENTRY_PE_ONLY"):
+            direction = Direction.PE
+            raw_signals = {
+                "entry_prob": round(entry_prob, 4),
+                "entry_threshold": self._min_prob,
+                "direction_source": "pe_only",
+            }
+            return StrategyVote(
+                strategy_name=self.name,
+                snapshot_id=snap.snapshot_id,
+                timestamp=snap.timestamp_or_now,
+                trade_date=snap.trade_date,
+                signal_type=SignalType.ENTRY,
+                direction=direction,
+                confidence=round(min(1.0, entry_prob), 3),
+                reason=f"ml_entry: prob={entry_prob:.3f}>={self._min_prob:.2f}",
+                raw_signals=raw_signals,
+                proposed_strike=snap.atm_strike,
+                proposed_entry_premium=snap.atm_pe_close,
+            )
+        if env_bool("ML_ENTRY_CE_ONLY"):
+            direction = Direction.CE
+            raw_signals = {
+                "entry_prob": round(entry_prob, 4),
+                "entry_threshold": self._min_prob,
+                "direction_source": "ce_only",
+            }
+            return StrategyVote(
+                strategy_name=self.name,
+                snapshot_id=snap.snapshot_id,
+                timestamp=snap.timestamp_or_now,
+                trade_date=snap.trade_date,
+                signal_type=SignalType.ENTRY,
+                direction=direction,
+                confidence=round(min(1.0, entry_prob), 3),
+                reason=f"ml_entry: prob={entry_prob:.3f}>={self._min_prob:.2f}",
+                raw_signals=raw_signals,
+                proposed_strike=snap.atm_strike,
+                proposed_entry_premium=snap.atm_ce_close,
+            )
+
+        direction_mode = os.getenv("ML_ENTRY_DIRECTION_MODE", "composite").strip().lower()
         raw_signals: dict[str, Any] = {
             "entry_prob": round(entry_prob, 4),
             "entry_threshold": self._min_prob,
@@ -189,9 +232,9 @@ class MlEntryStrategy(BaseStrategy):
             ce_prob: Optional[float] = None
             dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "").strip()
             if dir_path:
-                bundle = _load_dir_bundle(dir_path)
-                if bundle is not None and bundle.get("kind") == _DIRECTION_BUNDLE_KIND:
-                    ce_prob = predict_positive_class_prob(bundle, snap)
+                dir_bundle = _load_dir_bundle(dir_path)
+                if dir_bundle is not None and dir_bundle.get("kind") == _DIRECTION_BUNDLE_KIND:
+                    ce_prob = predict_positive_class_prob(dir_bundle, snap)
             raw_signals.update(
                 {
                     "_ml_entry_timing_only": True,
@@ -202,13 +245,34 @@ class MlEntryStrategy(BaseStrategy):
                 }
             )
             direction = hint_dir or Direction.CE
-            premium = snap.atm_ce_close if direction == Direction.CE else snap.atm_pe_close
-        else:
+        elif direction_mode in {"legacy", "direction_ml", "bind"}:
             direction, direction_source = _resolve_direction(snap)
             if direction is None:
                 return None
             raw_signals["direction_source"] = direction_source
-            premium = snap.atm_ce_close if direction == Direction.CE else snap.atm_pe_close
+        elif direction_mode in {"momentum", "mom"}:
+            dir_result = resolve_entry_direction_momentum(snap)
+            if dir_result.vetoed or dir_result.direction is None:
+                return None
+            direction = dir_result.direction
+            raw_signals.update(dir_result.as_raw_signals())
+        else:
+            dir_result = resolve_entry_direction(snap)
+            if dir_result.vetoed or dir_result.direction is None:
+                return None
+            direction = dir_result.direction
+            raw_signals.update(dir_result.as_raw_signals())
+
+        direction, block_tag = _apply_direction_block(
+            direction,
+            str(raw_signals.get("direction_source") or ""),
+        )
+        if direction is None:
+            return None
+        if block_tag != str(raw_signals.get("direction_source") or ""):
+            raw_signals["direction_source"] = block_tag
+
+        premium = snap.atm_ce_close if direction == Direction.CE else snap.atm_pe_close
 
         return StrategyVote(
             strategy_name=self.name,

@@ -21,11 +21,21 @@ class StrikeDepth:
     ask_qty: Optional[int]
     instrument: str = ""
     fetched_at: str = ""
+    microprice: Optional[float] = None
+    qty_imbalance: Optional[float] = None
+    total_bid_qty: Optional[int] = None
+    total_ask_qty: Optional[int] = None
 
     @property
     def spread(self) -> Optional[float]:
         if self.best_bid is not None and self.best_ask is not None:
             return self.best_ask - self.best_bid
+        return None
+
+    @property
+    def mid(self) -> Optional[float]:
+        if self.best_bid is not None and self.best_ask is not None:
+            return (self.best_bid + self.best_ask) / 2.0
         return None
 
     @property

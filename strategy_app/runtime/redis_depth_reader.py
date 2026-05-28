@@ -55,6 +55,10 @@ def _parse_strike_depth(raw: Optional[str]) -> Optional[StrikeDepth]:
         best_ask = float(data["best_ask"]) if data.get("best_ask") is not None else None
         bid_qty = int(data["bid_qty"]) if data.get("bid_qty") is not None else None
         ask_qty = int(data["ask_qty"]) if data.get("ask_qty") is not None else None
+        microprice = float(data["microprice"]) if data.get("microprice") is not None else None
+        qty_imbalance = float(data["qty_imbalance"]) if data.get("qty_imbalance") is not None else None
+        total_bid_qty = int(data["total_bid_qty"]) if data.get("total_bid_qty") is not None else None
+        total_ask_qty = int(data["total_ask_qty"]) if data.get("total_ask_qty") is not None else None
     except (KeyError, TypeError, ValueError):
         return None
     return StrikeDepth(
@@ -64,6 +68,10 @@ def _parse_strike_depth(raw: Optional[str]) -> Optional[StrikeDepth]:
         ask_qty=ask_qty,
         instrument=str(data.get("instrument") or ""),
         fetched_at=str(data.get("fetched_at") or ""),
+        microprice=microprice,
+        qty_imbalance=qty_imbalance,
+        total_bid_qty=total_bid_qty,
+        total_ask_qty=total_ask_qty,
     )
 
 

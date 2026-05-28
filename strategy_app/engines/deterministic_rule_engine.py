@@ -52,6 +52,7 @@ from .entry_gates import (
     is_session_regime_allowed,
 )
 from ..market.depth_context import DepthContext
+from ..runtime.eval_context import clear_depth_context, set_depth_context
 from ..runtime.redis_depth_reader import RedisDepthReader
 from .profiles import (
     PRODUCTION_DEFAULT_PROFILE_ID,
@@ -354,6 +355,7 @@ class DeterministicRuleEngine(StrategyEngine):
         self._current_depth_ctx = (
             self._depth_reader.read_depth() if self._depth_reader is not None else None
         )
+        set_depth_context(self._current_depth_ctx)
         position = self._tracker.current_position
         risk = self._risk.context
         trace_blocker: Optional[str] = None

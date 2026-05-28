@@ -213,7 +213,7 @@ def _build_record(instrument: str, quote: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _redis_payload(record: Dict[str, Any]) -> Dict[str, Any]:
-    """The strategy_app RedisDepthReader expects a flat schema. Strip Mongo-only fields."""
+    """Flat schema for strategy_app RedisDepthReader (live side-channel)."""
     return {
         "instrument": record["instrument"],
         "best_bid": record["best_bid"],
@@ -222,6 +222,10 @@ def _redis_payload(record: Dict[str, Any]) -> Dict[str, Any]:
         "ask_qty": record["ask_qty"],
         "fetched_at": record["fetched_at_ist"],
         "fetched_at_epoch": record["fetched_at_epoch"],
+        "microprice": record.get("microprice"),
+        "qty_imbalance": record.get("qty_imbalance"),
+        "total_bid_qty": record.get("total_bid_qty"),
+        "total_ask_qty": record.get("total_ask_qty"),
     }
 
 
