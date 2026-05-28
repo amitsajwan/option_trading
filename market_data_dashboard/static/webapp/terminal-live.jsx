@@ -20,9 +20,15 @@ function _bridgeTrade(tr) {
   const rawDir = tr.dir || tr.direction || 'LONG';
   const optionType = tr.optionType ?? tr.option_type ?? (rawDir === 'PE' || rawDir === 'CE' ? rawDir : null);
   const positionSide = String(tr.positionSide || tr.position_side || '').trim().toUpperCase();
-  // Chart bias (LONG/SHORT triangles) follows delta; tape "Dir" shows leg + buy/sell.
+  // Chart bias (LONG/SHORT triangles) must include position side.
+  // Example: CE + SHORT (short call) is bearish, not LONG.
   const dirMap = { PE: 'SHORT', CE: 'LONG' };
-  const chartBias = dirMap[rawDir] || dirMap[rawDir.toUpperCase()] || rawDir;
+  const rawLegBias = dirMap[rawDir] || dirMap[String(rawDir).toUpperCase()] || rawDir;
+  let chartBias = rawLegBias;
+  if (optionType === 'CE' && positionSide === 'SHORT') chartBias = 'SHORT';
+  else if (optionType === 'PE' && positionSide === 'SHORT') chartBias = 'LONG';
+  else if (optionType === 'PE' && positionSide === 'LONG') chartBias = 'SHORT';
+  else if (optionType === 'CE' && positionSide === 'LONG') chartBias = 'LONG';
   const legDir = optionType || rawDir;
   const isLongPremium = positionSide === 'LONG' || (positionSide !== 'SHORT' && chartBias === 'LONG');
   return {
