@@ -544,6 +544,7 @@ services:
       MONGO_COLL_STRATEGY_EVAL_RUNS: "${MONGO_COLL_STRATEGY_EVAL_RUNS:-strategy_eval_runs}"
       SIM_COMMAND_TOPIC: "${SIM_COMMAND_TOPIC:-sim:run:command}"
       REPO_ROOT: "/opt/option_trading"
+      PYTHONPATH: "/opt/option_trading:/app"
       STRATEGY_APP_SIM_IMAGE: "${STRATEGY_APP_SIM_IMAGE:-option_trading-strategy_app_sim}"
     volumes:
       - .:/opt/option_trading

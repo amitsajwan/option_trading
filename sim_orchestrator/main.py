@@ -134,37 +134,81 @@ def _compose_files() -> list[str]:
     return [str(p) for p in files]
 
 
-def _compose_run_env(run_id: str) -> dict[str, str]:
-    """Env for ``docker compose run`` so ${SIM_RUN_ID} interpolates in compose YAML."""
+def _load_env_file(path: Path) -> dict[str, str]:
+    """Parse a simple KEY=VALUE env file (no export / quoting semantics)."""
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip().strip('"').strip("'")
+        out[key] = value
+    return out
+
+
+def _compose_run_env(
+    run_id: str,
+    env_overrides: Optional[Mapping[str, Any]] = None,
+) -> dict[str, str]:
+    """Env for ``docker compose run`` so ${SIM_RUN_ID} and overrides interpolate in YAML.
+
+    ``docker compose run -e`` only sets container env; service ``command:`` and
+    ``environment:`` blocks are resolved from the subprocess host env at parse
+    time. Manifest overrides must therefore be merged here (and still passed as
+    ``-e`` for any keys not declared in compose).
+
+    When ``env_overrides`` is non-empty, callers must omit ``--env-file`` on the
+    compose CLI: compose gives the env file precedence over the subprocess env
+    for ${VAR} interpolation, which would ignore manifest overrides.
+    """
     env = _spawn_env()
+    env_file = _repo_root() / ".env.compose"
+    env.update(_load_env_file(env_file))
     env["SIM_RUN_ID"] = str(run_id).strip()
+    if env_overrides:
+        for key, value in env_overrides.items():
+            name = str(key or "").strip()
+            if not name:
+                continue
+            env[name] = str(value)
     return env
 
 
-def spawn_consumer(run_id: str) -> str:
+def spawn_consumer(run_id: str, env_overrides: Optional[Mapping[str, Any]] = None) -> str:
     root = _repo_root()
     env_file = root / ".env.compose"
+    use_env_file = env_file.is_file() and not env_overrides
     cmd: list[str] = ["docker", "compose"]
     for f in _compose_files():
         cmd.extend(["-f", f])
-    if env_file.is_file():
+    if use_env_file:
         cmd.extend(["--env-file", str(env_file)])
     cmd.extend(["--profile", "sim"])
-    cmd.extend(
-        [
-            "run",
-            "--rm",
-            "-d",
-            "strategy_app_sim",
-        ]
-    )
+    cmd.extend(["run", "--rm", "-d"])
+    if env_overrides:
+        for key, value in env_overrides.items():
+            name = str(key or "").strip()
+            if not name:
+                continue
+            cmd.extend(["-e", f"{name}={str(value)}"])
+    cmd.append("strategy_app_sim")
     result = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         check=True,
         cwd=str(root),
-        env=_compose_run_env(run_id),
+        env=_compose_run_env(run_id, env_overrides),
     )
     return str(result.stdout or "").strip()
 
@@ -307,7 +351,7 @@ def _handle_start(coll: Any, payload: Mapping[str, Any]) -> None:
             env_overrides=env_overrides,
         )
         persistence_container_id = spawn_persistence(run_id)
-        container_id = spawn_consumer(run_id)
+        container_id = spawn_consumer(run_id, env_overrides=env_overrides)
     except Exception as exc:
         logger.exception("sim run spawn failed run_id=%s: %s", run_id, exc)
         coll.update_one(
