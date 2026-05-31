@@ -891,14 +891,33 @@ function PipelineMonitor() {
         display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <span style={_mono({ fontWeight: 600, fontSize: 13, marginRight: 6 })}>Pipeline</span>
         {TABS.map(t => <TabBtn key={t.id} id={t.id} label={t.label} />)}
+        <button
+          title="Jump to latest sim run"
+          onClick={() => {
+            fetch('/api/sim/runs?limit=1')
+              .then(r => r.ok ? r.json() : null)
+              .then(d => {
+                const run = (d?.runs || [])[0];
+                if (run?.run_id) {
+                  const date = run.source_date || '';
+                  window.location.href = `${window.location.pathname}?mode=replay&kind=sim&run_id=${run.run_id}${date ? `&date=${date}` : ''}`;
+                }
+              })
+              .catch(() => {});
+          }}
+          style={{ ..._mono({ fontSize: 9.5 }), marginLeft: 'auto', padding: '2px 8px',
+            background: '#27272a', border: '1px solid #3f3f46', borderRadius: 3,
+            color: '#a1a1aa', cursor: 'pointer' }}>
+          Latest run
+        </button>
         {(runId || runDate) && (
-          <span style={_mono({ fontSize: 9.5, color: '#52525b', marginLeft: 'auto', marginRight: 8 })}
+          <span style={_mono({ fontSize: 9.5, color: '#52525b', marginRight: 8 })}
             title={runId}>
             {runDate && <span style={{ color: '#71717a', marginRight: 6 }}>{runDate}</span>}
             {runId && <span>run:{runId.slice(0, 8)}…</span>}
           </span>
         )}
-        <span style={_mono({ fontSize: 10, color: wsStatus === 'connected' ? '#22c55e' : '#71717a', marginLeft: runId ? 0 : 'auto' })}>
+        <span style={_mono({ fontSize: 10, color: wsStatus === 'connected' ? '#22c55e' : '#71717a' })}>
           ● {wsStatus}
         </span>
         {error && <span style={_mono({ fontSize: 10, color: '#ef4444' })}>⚠ {error}</span>}

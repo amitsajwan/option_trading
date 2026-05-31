@@ -840,6 +840,21 @@ class DeterministicRuleEngine(StrategyEngine):
             )
             return None
 
+        _consensus_extras: dict[str, Any] = {
+            "direction_source": "direction_consensus",
+            "direction_consensus_ce": round(consensus.ce_score, 3),
+            "direction_consensus_pe": round(consensus.pe_score, 3),
+            "direction_consensus_margin": round(consensus.margin, 3),
+            "direction_consensus_shadow_basis": shadow_basis,
+            "direction_consensus_sources": {k: round(v, 3) for k, v in (consensus.sources or {}).items()},
+        }
+        # Mutate the original ml_vote so _entry_candidate_gate_rows (which receives
+        # the original vote from the engine's vote pool) can see the direction data.
+        if isinstance(ml_vote.raw_signals, dict):
+            ml_vote.raw_signals.update(_consensus_extras)
+        else:
+            ml_vote.raw_signals = dict(_consensus_extras)
+
         trade_vote = StrategyVote(
             strategy_name=ml_vote.strategy_name,
             snapshot_id=ml_vote.snapshot_id,
@@ -851,12 +866,6 @@ class DeterministicRuleEngine(StrategyEngine):
             reason=f"ml_entry+consensus: {consensus.direction.value} margin={consensus.margin:.2f}",
             raw_signals={
                 **(ml_vote.raw_signals if isinstance(ml_vote.raw_signals, dict) else {}),
-                "direction_source": "direction_consensus",
-                "direction_consensus_ce": round(consensus.ce_score, 3),
-                "direction_consensus_pe": round(consensus.pe_score, 3),
-                "direction_consensus_margin": round(consensus.margin, 3),
-                "direction_consensus_shadow_basis": shadow_basis,
-                "direction_consensus_sources": {k: round(v, 3) for k, v in (consensus.sources or {}).items()},
                 "_entry_policy_mode": "bypass",
             },
             proposed_strike=snap.atm_strike,
