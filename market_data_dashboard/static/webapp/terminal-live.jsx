@@ -147,7 +147,7 @@ function StatusBar({
       <div className="t-status-cells">
         <div className="t-scell big"><span className="k">Session P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
         <div className="t-scell"><span className="k">Trades</span><span className="v">{tradesCount}<span className="sub">/ {winRate}% WR</span></span></div>
-        <div className="t-scell"><span className="k">Regime</span><span className="v" style={{color:'var(--info)',fontSize:'11px'}}>{regime || '—'}</span></div>
+        <div className="t-scell"><span className="k">Regime</span><span className="v" style={{color:(typeof REGIME_COLORS !== 'undefined' && REGIME_COLORS[regime]) || 'var(--info)',fontSize:'11px'}}>{regime || '—'}</span></div>
         <div className="t-scell"><span className="k">Engine</span><span className="v" style={{fontSize:'11px'}}>{engine || '—'}</span></div>
         <div className="t-scell"><span className="k">WS</span><span className={`v ${ws === 'connected' ? 'pos' : 'warn'}`} style={{fontSize:'11px'}}>{ws}</span></div>
       </div>
@@ -1663,6 +1663,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   return (
     <div className="cockpit">
       <TickerBar quote={quote} instrument={session.instrument}/>
+      {typeof StaleBanner !== 'undefined' && <StaleBanner />}
       {watchMode === 'sim' && (
         <div style={{background:'var(--warn)',color:'#231500',padding:'6px 10px',fontSize:'11px',fontWeight:700}}>
           Watching SIM run {watchRunId ? `${watchRunId.slice(0, 8)}…` : '—'}{watchDate ? ` · ${watchDate}` : ''} · Not LIVE market feed
@@ -1728,6 +1729,9 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
           <div style={{flex:1,overflowY:'auto',minHeight:0}}>
             <TradeInspector session={session} trade={displayTrade}/>
           </div>
+          {typeof DepthMiniWidget !== 'undefined' && (
+            <DepthMiniWidget runId={watchMode === 'sim' ? watchRunId : ''} />
+          )}
         </div>
       </div>
       <LogStrip session={session} alerts={session.alerts} wsStatus={wsStatus}/>

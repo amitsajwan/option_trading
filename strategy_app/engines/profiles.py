@@ -315,6 +315,16 @@ _DET_V3_V1_RISK_CONFIG: dict[str, Any] = {
     "trailing_lock_breakeven": True,
 }
 
+# Mapping from new Phase 3 regime labels to the existing label they inherit from.
+# Applied after all per-profile maps are defined so adding new Regime enum members
+# never requires editing every individual map.
+_NEW_REGIME_FALLBACKS: dict[str, str] = {
+    "CHOP": "SIDEWAYS",      # Chop uses same strategies as sideways
+    "BREAKOUT": "TRENDING",  # Breakout uses same strategies as trending
+    "PANIC": "AVOID",        # No new entries during panic
+    "DEAD_MARKET": "AVOID",  # No new entries in dead markets
+}
+
 _PROFILE_REGIME_ENTRY_MAPS: dict[str, dict[str, list[str]]] = {
     PROFILE_DET_PROD_V1: _DET_PROD_V1_REGIME_ENTRY_MAP,
     PROFILE_DET_CORE_V2: _DET_CORE_V2_REGIME_ENTRY_MAP,
@@ -332,6 +342,13 @@ _PROFILE_REGIME_ENTRY_MAPS: dict[str, dict[str, list[str]]] = {
     PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1: _TRADER_MASTER_ML_ENTRY_DET_DIR_REGIME_ENTRY_MAP,
     PROFILE_TRADER_MASTER_LIVE_V1: _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP,
 }
+
+# Backfill new regime labels into every profile map using the fallback mapping.
+# This ensures StrategyRouter.get_strategies_for_regime() never KeyErrors on new labels.
+for _profile_map in _PROFILE_REGIME_ENTRY_MAPS.values():
+    for _new_label, _fallback in _NEW_REGIME_FALLBACKS.items():
+        if _new_label not in _profile_map:
+            _profile_map[_new_label] = list(_profile_map.get(_fallback, []))
 
 _PROFILE_EXIT_STRATEGIES: dict[str, list[str]] = {
     PROFILE_DET_PROD_V1: _DET_PROD_V1_EXIT_STRATEGIES,

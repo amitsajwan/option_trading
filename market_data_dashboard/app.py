@@ -125,6 +125,11 @@ except ImportError:
     from market_data_dashboard.routes.sim_routes import DashboardSimRouter  # type: ignore
 
 try:
+    from .routes.pipeline_routes import PipelineRouter
+except ImportError:
+    from market_data_dashboard.routes.pipeline_routes import PipelineRouter  # type: ignore
+
+try:
     from snapshot_app.core.snapshot_ml_flat_contract import load_contract_schema, load_feature_groups, load_legacy_mapping
 except ImportError:
     load_contract_schema = None  # type: ignore
@@ -3854,6 +3859,9 @@ app.include_router(_monitor_routes.router)
 
 _sim_routes = DashboardSimRouter()
 app.include_router(_sim_routes.router)
+
+_pipeline_routes = PipelineRouter()
+app.include_router(_pipeline_routes.router)
 
 _historical_replay_routes = DashboardHistoricalReplayRouter(
     templates=templates,

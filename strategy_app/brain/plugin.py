@@ -22,10 +22,24 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import date
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     from .context import DayContext, FitnessScore
+
+
+class RegimeDecisionResult(NamedTuple):
+    """Typed output of a :class:`RegimePlugin` classification call.
+
+    Importable independently of ``RegimePlugin`` to avoid circular imports
+    when ``contracts_app.decision_events`` needs the type.
+    """
+
+    regime: str
+    confidence: float
+    evidence: dict[str, Any]
+    plugin_id: str
+    plugin_version: str
 
 
 class ContextProvider(ABC):
@@ -73,4 +87,116 @@ class StrategyPlugin(ABC):
         """
 
 
-__all__ = ["ContextProvider", "StrategyPlugin"]
+class DepthDecisionResult(NamedTuple):
+    """Output of a :class:`DepthPlugin` evaluation.
+
+    Depth acts as a **confidence modifier**, not just a pass/fail gate:
+    - CE trade + strong CE bid → confidence_delta > 0 (depth aligned)
+    - CE trade + heavy ask pressure → confidence_delta < 0 (depth disagrees)
+    - Depth absent (replay / feed offline) → proceed=True, confidence_delta=None
+
+    ``DEPTH_HARD_GATE=1`` enables hard rejection when depth strongly disagrees.
+    """
+
+    proceed: bool                        # True = continue to strike selection
+    skip_reason: Optional[str]           # set when proceed=False
+    confidence_delta: Optional[float]    # adjustment to upstream confidence; None = no change
+    ce_bid_strength: Optional[float]     # CE bid qty / (bid+ask) qty, 0–1
+    pe_bid_strength: Optional[float]     # PE bid qty / (bid+ask) qty, 0–1
+    spread_pct: Optional[float]          # (ask - bid) / bid for the target side
+    depth_aligned: bool                  # True when depth direction matches trade direction
+    depth_available: bool                # False when feed is offline / stale
+    plugin_id: str
+    plugin_version: str
+
+
+class DepthPlugin(ABC):
+    """Evaluates option order-book depth before strike selection.
+
+    Live deployments inject a concrete implementation that reads from the
+    ``ingestion_app`` depth feed via :class:`~strategy_app.runtime.redis_depth_reader.RedisDepthReader`.
+    Replay and paper-trading use the default :class:`~strategy_app.market.depth_plugin.PassthroughDepthPlugin`
+    which always proceeds without blocking.
+
+    Rules:
+    - ``proceed=True`` whenever depth is absent (feed offline / replay) — never block.
+    - ``proceed=False`` only when depth IS available AND quality is below threshold
+      AND the consumer is configured with ``DEPTH_HARD_GATE=1``.
+    """
+
+    @property
+    @abstractmethod
+    def plugin_id(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def plugin_version(self) -> str: ...
+
+    @abstractmethod
+    def evaluate(
+        self,
+        direction: str,
+        snapshot: dict[str, Any],
+        context: dict[str, Any],
+    ) -> DepthDecisionResult:
+        """Evaluate depth quality for the given direction and snapshot.
+
+        Args:
+            direction: ``"CE"`` or ``"PE"``.
+            snapshot:  Raw snapshot payload (same shape as MarketSnapshot).
+            context:   Day context from :class:`ContextProvider` providers.
+
+        Returns:
+            :class:`DepthDecisionResult` — always with ``proceed=True`` when
+            depth data is absent.
+        """
+
+
+class RegimePlugin(ABC):
+    """Pluggable regime classifier for the stream-native pipeline.
+
+    Implement this to supply custom or ML-backed regime classification.
+    The default implementation is :class:`~strategy_app.market.regime_plugin_adapter.RegimeClassifierAdapter`
+    which wraps the existing rule-based :class:`~strategy_app.market.regime.RegimeClassifier`.
+
+    Registration::
+
+        consumer = RegimeDecisionConsumer(bus=stage_bus, plugin=MyRegimePlugin())
+    """
+
+    @property
+    @abstractmethod
+    def plugin_id(self) -> str:
+        """Stable identifier for this plugin, e.g. ``'regime_classifier_v1'``."""
+
+    @property
+    @abstractmethod
+    def plugin_version(self) -> str:
+        """Semver string, e.g. ``'1.0'``."""
+
+    @abstractmethod
+    def classify(
+        self,
+        snapshot: dict[str, Any],
+        context: dict[str, Any],
+    ) -> RegimeDecisionResult:
+        """Classify the market regime for one snapshot.
+
+        Args:
+            snapshot: Raw snapshot payload dict (same shape as MarketSnapshot).
+            context:  Per-day context from :class:`ContextProvider` providers.
+
+        Returns:
+            A :class:`RegimeDecisionResult` with ``regime``, ``confidence``,
+            ``evidence``, ``plugin_id``, and ``plugin_version``.
+        """
+
+
+__all__ = [
+    "ContextProvider",
+    "StrategyPlugin",
+    "DepthPlugin",
+    "DepthDecisionResult",
+    "RegimePlugin",
+    "RegimeDecisionResult",
+]
