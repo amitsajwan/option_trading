@@ -153,6 +153,38 @@ function TraceTimeline({ trace }) {
                 ) : null;
               })()}
 
+              {/* Direction consensus: per-source vote breakdown */}
+              {st.gate_id === 'direction_consensus' && (() => {
+                const srcEntries = Object.entries(p).filter(([k]) =>
+                  k.startsWith('rule:') || k.startsWith('shadow:') || k.startsWith('momentum:') || k.startsWith('direction_ml:')
+                );
+                if (!srcEntries.length) return null;
+                const ceEntries = srcEntries.filter(([k]) => k.endsWith(':CE'));
+                const peEntries = srcEntries.filter(([k]) => k.endsWith(':PE'));
+                const renderGroup = (entries, dir, color) => entries.length ? (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={_mono({ fontSize: 9, color, fontWeight: 600 })}>{dir}</span>
+                    {entries.map(([k, v]) => {
+                      const src = k.replace(`:${dir}`, '').replace('rule:', '').replace('direction_ml', 'ML');
+                      return (
+                        <span key={k} style={_mono({ fontSize: 9, color: '#52525b' })}>
+                          {src}:{typeof v === 'number' ? v.toFixed(2) : v}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : null;
+                return (
+                  <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {renderGroup(ceEntries, 'CE', '#22c55e')}
+                    {renderGroup(peEntries, 'PE', '#f97316')}
+                    {p.shadow_basis && (
+                      <span style={_mono({ fontSize: 9, color: '#52525b' })}>shadow:{p.shadow_basis}</span>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Regime evidence */}
               {(st.stage === 'regime' || st.gate_id === 'regime_classification') && p.evidence && (
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
