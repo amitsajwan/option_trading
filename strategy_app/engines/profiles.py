@@ -208,8 +208,9 @@ _TRADER_MASTER_LIVE_V1_RISK_CONFIG: dict[str, Any] = {
     "stagnant_min_gain_pct": 0.05,
     # Hard session cap: max 4 live trades per session until edge is re-verified.
     "session_trade_cap": 4,
-    # ATM only: do not chase OTM strikes in live.
+    # ATM only for det-engine strategies; ML_ENTRY bypasses this when STRATEGY_SMART_STRIKE_ENABLED=1.
     "atm_strike_only": True,
+    "allow_non_atm_for_ml_entry": True,
 }
 
 # Consensus direction: ML_ENTRY = timing only; exit fast when 5m thesis fails in first ~2 bars.
@@ -222,6 +223,7 @@ _TRADER_MASTER_ML_ENTRY_CONSENSUS_RISK_CONFIG: dict[str, Any] = {
     "early_stop_loss_bars": 2,
     "early_stop_loss_pct": 0.12,
     "atm_strike_only": True,
+    "allow_non_atm_for_ml_entry": True,
 }
 
 # Same exit/risk book as trader_master; entry is ML_ENTRY only (+ IV_FILTER veto).

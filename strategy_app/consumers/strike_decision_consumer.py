@@ -131,7 +131,8 @@ class StrikeDecisionConsumer:
         confidence = float(depth_event.get("confidence") or 0.5)
         decision_proxy = _DirectionDecisionProxy(confidence, direction)
 
-        selection = select_strike(snap, direction, decision_proxy)
+        regime = str(depth_event.get("regime") or "")
+        selection = select_strike(snap, direction, decision_proxy, regime=regime)
 
         # Determine position side: CE/PE both LONG for standard option buying
         position_side = "LONG"
