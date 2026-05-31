@@ -897,7 +897,7 @@ function PipelineMonitor() {
             fetch('/api/sim/runs?limit=1')
               .then(r => r.ok ? r.json() : null)
               .then(d => {
-                const run = (d?.runs || [])[0];
+                const run = (d?.rows || d?.runs || [])[0];
                 if (run?.run_id) {
                   const date = run.source_date || '';
                   window.location.href = `${window.location.pathname}?mode=replay&kind=sim&run_id=${run.run_id}${date ? `&date=${date}` : ''}`;
