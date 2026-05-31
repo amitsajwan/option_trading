@@ -168,6 +168,9 @@ class DeterministicRuleEngine(StrategyEngine):
         self._pvwap_buf: deque = deque(maxlen=2) # price_vs_vwap per bar
         # E8 session-once daily regime tag — computed lazily after ORB resolves.
         self._session_regime_tag: Optional[str] = None
+        # Trader-discipline: track last exit for cooldown / direction-flip rules.
+        self._last_stop_bar: Optional[int] = None        # event count when last STOP_LOSS fired
+        self._last_exit_direction: Optional[str] = None  # "CE" | "PE" at last stop exit
         # Optional live depth feed (None in replay/offline — signals degrade gracefully).
         self._depth_reader: Optional[RedisDepthReader] = depth_reader
         # Per-evaluate depth snapshot — set at start of evaluate(), read by shadow scorer.
@@ -295,6 +298,8 @@ class DeterministicRuleEngine(StrategyEngine):
         self._iv_buf.clear()
         self._pvwap_buf.clear()
         self._session_regime_tag = None
+        self._last_stop_bar = None
+        self._last_exit_direction = None
         self._tracker.on_session_start(trade_date)
         # Brain morning briefing: loads daily features + cross-session carry.
         # Must run before risk manager so carry-based consecutive_losses can
@@ -1133,6 +1138,14 @@ class DeterministicRuleEngine(StrategyEngine):
 
     def _handle_position_closed(self, exit_signal: TradeSignal, position: PositionContext) -> None:
         self._reset_regime_shift_streak(position.position_id)
+        # Record stop-loss exits so discipline rules can enforce cooldowns.
+        exit_reason_str = str(getattr(exit_signal, "exit_reason", None) or "").upper()
+        if "STOP" in exit_reason_str and "TIME" not in exit_reason_str:
+            self._last_stop_bar = self._session_event_count
+            self._last_exit_direction = str(
+                position.direction.value if hasattr(position.direction, "value")
+                else position.direction or ""
+            ).upper()
         self._risk.record_trade_result(
             pnl_pct=position.pnl_pct,
             lots=position.lots,
@@ -1535,6 +1548,40 @@ class DeterministicRuleEngine(StrategyEngine):
             if not brain_decision.allowed:
                 return f"brain_gate:{brain_decision.reason}"
 
+        # ── Trader discipline gates ────────────────────────────────────────────
+        # 1. SIDEWAYS + returns_mixed: market has no intraday conviction.
+        #    A trader never enters when returns are contradicting themselves.
+        if (
+            regime_signal.regime is not None
+            and str(regime_signal.regime.value if hasattr(regime_signal.regime, "value") else regime_signal.regime).upper() == "SIDEWAYS"
+            and "returns_mixed" in (regime_signal.reason or "")
+        ):
+            cooldown_bars = int(os.getenv("SIDEWAYS_MIXED_COOLDOWN_BARS", "0"))
+            if cooldown_bars == 0:
+                return "sideways_returns_mixed"
+
+        # 2. Post-STOP_LOSS cooldown: after a stop, wait N bars before re-entering.
+        stop_cooldown = int(os.getenv("STOP_LOSS_COOLDOWN_BARS", "5"))
+        if self._last_stop_bar is not None:
+            bars_since_stop = self._session_event_count - self._last_stop_bar
+            if bars_since_stop < stop_cooldown:
+                return f"stop_loss_cooldown:{bars_since_stop}<{stop_cooldown}"
+
+        # 3. Direction-flip block: after a STOP_LOSS, don't flip direction for N bars.
+        flip_cooldown = int(os.getenv("DIRECTION_FLIP_COOLDOWN_BARS", "8"))
+        if self._last_stop_bar is not None and self._last_exit_direction:
+            bars_since_stop = self._session_event_count - self._last_stop_bar
+            if bars_since_stop < flip_cooldown:
+                # Determine current candidate direction from votes
+                entry_v = [v for v in votes if v.signal_type == SignalType.ENTRY
+                           and v.direction in (Direction.CE, Direction.PE)]
+                if entry_v:
+                    current_dirs = {str(v.direction.value if hasattr(v.direction, "value") else v.direction).upper()
+                                    for v in entry_v}
+                    if self._last_exit_direction not in current_dirs:
+                        return f"direction_flip_cooldown:{bars_since_stop}<{flip_cooldown}"
+        # ── End discipline gates ───────────────────────────────────────────────
+
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
         if avoid_votes:
             return "avoid_veto"
@@ -1715,6 +1762,45 @@ class DeterministicRuleEngine(StrategyEngine):
                 }
             )
             return gates, "blocked", "regime_confidence", False
+        if blocker == "sideways_returns_mixed":
+            gates.append(
+                {
+                    "gate_id": "sideways_returns_mixed",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "sideways_returns_mixed",
+                    "message": "SIDEWAYS + returns_mixed: no directional conviction — trader discipline block",
+                    "metrics": {"regime_confidence": regime_signal.confidence},
+                }
+            )
+            return gates, "blocked", "sideways_returns_mixed", False
+        if blocker is not None and blocker.startswith("stop_loss_cooldown:"):
+            bars_info = blocker.split(":", 1)[1]
+            gates.append(
+                {
+                    "gate_id": "stop_loss_cooldown",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "stop_loss_cooldown",
+                    "message": f"Cooldown after STOP_LOSS: {bars_info} bars — no re-entry yet",
+                    "metrics": {"bars_since_stop": int(bars_info.split("<")[0])},
+                }
+            )
+            return gates, "blocked", "stop_loss_cooldown", False
+        if blocker is not None and blocker.startswith("direction_flip_cooldown:"):
+            bars_info = blocker.split(":", 1)[1]
+            gates.append(
+                {
+                    "gate_id": "direction_flip_cooldown",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "direction_flip_cooldown",
+                    "message": f"Direction flip blocked within cooldown: {bars_info} bars — wait for market to settle",
+                    "metrics": {"bars_since_stop": int(bars_info.split("<")[0]),
+                                "last_direction": self._last_exit_direction or ""},
+                }
+            )
+            return gates, "blocked", "direction_flip_cooldown", False
         if blocker == "entry_phase":
             gates.append(
                 {
