@@ -118,6 +118,24 @@ function TraceTimeline({ trace }) {
                 )}
               </div>
               {/* Stage-specific detail rows */}
+
+              {/* Entry: show why it was blocked */}
+              {st.stage === 'entry' && Array.isArray(p.reason_codes) && p.reason_codes.length > 0 && (
+                <div style={{ marginTop: 5 }}>
+                  {p.reason_codes.map((rc, i) => (
+                    <div key={i} style={_mono({ fontSize: 10, color: '#ef4444', marginBottom: 2 })}>
+                      ✗ {rc}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Direction: show veto reason */}
+              {st.stage === 'direction' && p.vetoed && p.reason && (
+                <div style={_mono({ fontSize: 10, color: '#ef4444', marginTop: 4 })}>✗ {p.reason}</div>
+              )}
+
+              {/* Depth: CE/PE gauges + skip reason */}
               {st.stage === 'depth' && (
                 <div style={{ display: 'flex', gap: 12, marginTop: 4, flexWrap: 'wrap' }}>
                   {p.ce_bid_strength != null && (
@@ -137,15 +155,32 @@ function TraceTimeline({ trace }) {
                       {p.depth_aligned ? 'aligned' : 'opposed'}
                     </span>
                   )}
+                  {p.skip_reason && (
+                    <span style={_mono({ fontSize: 10, color: '#ef4444' })}>✗ {p.skip_reason}</span>
+                  )}
                 </div>
               )}
-              {st.stage === 'regime' && p.evidence && Object.keys(p.evidence).length > 0 && (
-                <div style={{ marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {Object.entries(p.evidence).slice(0, 4).map(([k, v]) => (
-                    <span key={k} style={_mono({ fontSize: 9, color: '#52525b' })}>
-                      {k}:{String(v)}
-                    </span>
-                  ))}
+
+              {/* Risk: rejection reason */}
+              {st.stage === 'risk' && !p.approved && p.rejection_reason && (
+                <div style={_mono({ fontSize: 10, color: '#ef4444', marginTop: 4 })}>✗ {p.rejection_reason}</div>
+              )}
+
+              {/* Regime: key evidence */}
+              {st.stage === 'regime' && p.evidence && (
+                <div style={{ marginTop: 4 }}>
+                  {p.evidence.reason && (
+                    <div style={_mono({ fontSize: 10, color: '#a1a1aa', marginBottom: 3 })}>
+                      {p.evidence.reason}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {['r5m','r15m','r30m','vol_ratio','pcr'].filter(k => p.evidence[k] != null).map(k => (
+                      <span key={k} style={_mono({ fontSize: 9, color: '#52525b' })}>
+                        {k}:{typeof p.evidence[k] === 'number' ? p.evidence[k].toFixed(4) : p.evidence[k]}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
               {st.timestamp && (
