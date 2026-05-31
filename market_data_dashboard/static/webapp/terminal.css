@@ -149,7 +149,7 @@ body.live-terminal {
 /* ── Status bar (row 2) ────────────────────────────────────────────── */
 .t-status-bar {
   display: grid;
-  grid-template-columns: 220px 1fr auto;
+  grid-template-columns: 290px 1fr auto;
   align-items: stretch;
   border-bottom: 1px solid var(--line-2);
   background: var(--bg-1);

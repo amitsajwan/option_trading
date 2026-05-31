@@ -87,14 +87,27 @@ function TraceTimeline({ trace }) {
     return <div style={_mono({ color: '#71717a', fontSize: 12 })}>No stages found</div>;
   }
   const sorted = [...trace.stages].sort((a, b) =>
-    STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage)
+    STAGE_ORDER.indexOf(a.stage.split(':')[0]) - STAGE_ORDER.indexOf(b.stage.split(':')[0])
   );
+
+  const brain = trace.brain || {};
+  const rc    = trace.regime_context || {};
+  const cands = trace.candidates || [];
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+
+      {/* ── Gate chain ── */}
       {sorted.map((st, i) => {
         const blocked = st.outcome === 'blocked' || st.outcome === 'vetoed' || st.outcome === 'rejected';
-        const color   = blocked ? '#ef4444' : '#22c55e';
+        const skipped = st.outcome === 'SKIP';
+        const isExec  = st.stage === 'execution' || st.stage.startsWith('execution');
+        const color   = blocked || skipped ? '#ef4444' : isExec ? '#06b6d4' : '#22c55e';
         const p       = st.payload || {};
+        const label   = STAGE_LABELS[st.stage.split(':')[0]] || st.stage;
+        const gateId  = st.gate_id || st.plugin_id || '';
+        const showGate = gateId && gateId !== label.toLowerCase() && gateId !== st.stage;
+
         return (
           <div key={st.stage + i} style={{ display: 'flex', gap: 12, paddingBottom: 14, position: 'relative' }}>
             {i < sorted.length - 1 && (
@@ -105,38 +118,63 @@ function TraceTimeline({ trace }) {
               background: color + '33', border: `2px solid ${color}`, zIndex: 1 }} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
-                <span style={_mono({ fontSize: 11, fontWeight: 600, color: '#e4e4e7' })}>
-                  {STAGE_LABELS[st.stage] || st.stage}
-                </span>
+                <span style={_mono({ fontSize: 11, fontWeight: 600, color: '#e4e4e7' })}>{label}</span>
                 <span style={_mono({ fontSize: 10, color })}>{st.outcome || '—'}</span>
                 {st.confidence != null && <BidGauge confidence={st.confidence} />}
-                {st.plugin_id && (
-                  <span style={_mono({ fontSize: 10, color: '#71717a' })}>{st.plugin_id}</span>
-                )}
+                {showGate && <span style={_mono({ fontSize: 9.5, color: '#52525b' })}>{gateId}</span>}
                 {st.plugin_version && (
                   <span style={_mono({ fontSize: 9, color: '#52525b' })}>v{st.plugin_version}</span>
                 )}
               </div>
-              {/* Stage-specific detail rows */}
 
-              {/* Entry: show why it was blocked */}
-              {st.stage === 'entry' && Array.isArray(p.reason_codes) && p.reason_codes.length > 0 && (
-                <div style={{ marginTop: 5 }}>
-                  {p.reason_codes.map((rc, i) => (
-                    <div key={i} style={_mono({ fontSize: 10, color: '#ef4444', marginBottom: 2 })}>
-                      ✗ {rc}
-                    </div>
+              {/* Gate message / reason */}
+              {p.message && (
+                <div style={_mono({ fontSize: 10, color: '#a1a1aa', marginBottom: 3 })}>{p.message}</div>
+              )}
+              {p.reason_code && (
+                <div style={_mono({ fontSize: 10, color: '#ef4444', marginBottom: 2 })}>✗ {p.reason_code}</div>
+              )}
+
+              {/* Gate metrics as key:value chips */}
+              {(() => {
+                const skip = new Set(['gate_id','gate_group','message','reason_code','skip_reason',
+                                      'evidence','reason','reason_codes','approved','vetoed']);
+                const kvs = Object.entries(p).filter(([k,v]) =>
+                  !skip.has(k) && v != null && typeof v !== 'object' && v !== ''
+                );
+                return kvs.length > 0 ? (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+                    {kvs.map(([k,v]) => (
+                      <span key={k} style={_mono({ fontSize: 9, color: '#52525b' })}>
+                        {k}:{typeof v === 'number' ? v.toFixed(4) : String(v)}
+                      </span>
+                    ))}
+                  </div>
+                ) : null;
+              })()}
+
+              {/* Regime evidence */}
+              {(st.stage === 'regime' || st.gate_id === 'regime_classification') && p.evidence && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
+                  {['r5m','r15m','r30m','vol_ratio','pcr'].filter(k => p.evidence[k] != null).map(k => (
+                    <span key={k} style={_mono({ fontSize: 9, color: '#52525b' })}>
+                      {k}:{p.evidence[k].toFixed(4)}
+                    </span>
                   ))}
                 </div>
               )}
 
-              {/* Direction: show veto reason */}
-              {st.stage === 'direction' && p.vetoed && p.reason && (
-                <div style={_mono({ fontSize: 10, color: '#ef4444', marginTop: 4 })}>✗ {p.reason}</div>
+              {/* Entry: reason codes */}
+              {Array.isArray(p.reason_codes) && p.reason_codes.length > 0 && (
+                <div style={{ marginTop: 4 }}>
+                  {p.reason_codes.map((rc, j) => (
+                    <div key={j} style={_mono({ fontSize: 10, color: '#ef4444', marginBottom: 2 })}>✗ {rc}</div>
+                  ))}
+                </div>
               )}
 
-              {/* Depth: CE/PE gauges + skip reason */}
-              {st.stage === 'depth' && (
+              {/* Depth gauges */}
+              {p.ce_bid_strength != null || p.pe_bid_strength != null ? (
                 <div style={{ display: 'flex', gap: 12, marginTop: 4, flexWrap: 'wrap' }}>
                   {p.ce_bid_strength != null && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -150,46 +188,110 @@ function TraceTimeline({ trace }) {
                       <BidGauge confidence={p.pe_bid_strength} width={50} />
                     </div>
                   )}
-                  {p.depth_aligned != null && (
-                    <span style={_mono({ fontSize: 10, color: p.depth_aligned ? '#22c55e' : '#ef4444' })}>
-                      {p.depth_aligned ? 'aligned' : 'opposed'}
-                    </span>
-                  )}
-                  {p.skip_reason && (
-                    <span style={_mono({ fontSize: 10, color: '#ef4444' })}>✗ {p.skip_reason}</span>
-                  )}
+                  {p.skip_reason && <span style={_mono({ fontSize: 10, color: '#ef4444' })}>✗ {p.skip_reason}</span>}
                 </div>
-              )}
+              ) : null}
 
-              {/* Risk: rejection reason */}
-              {st.stage === 'risk' && !p.approved && p.rejection_reason && (
-                <div style={_mono({ fontSize: 10, color: '#ef4444', marginTop: 4 })}>✗ {p.rejection_reason}</div>
+              {/* Risk / direction text reasons */}
+              {p.skip_reason && !p.ce_bid_strength && (
+                <div style={_mono({ fontSize: 10, color: '#ef4444', marginTop: 3 })}>✗ {p.skip_reason}</div>
               )}
-
-              {/* Regime: key evidence */}
-              {st.stage === 'regime' && p.evidence && (
-                <div style={{ marginTop: 4 }}>
-                  {p.evidence.reason && (
-                    <div style={_mono({ fontSize: 10, color: '#a1a1aa', marginBottom: 3 })}>
-                      {p.evidence.reason}
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {['r5m','r15m','r30m','vol_ratio','pcr'].filter(k => p.evidence[k] != null).map(k => (
-                      <span key={k} style={_mono({ fontSize: 9, color: '#52525b' })}>
-                        {k}:{typeof p.evidence[k] === 'number' ? p.evidence[k].toFixed(4) : p.evidence[k]}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {st.timestamp && (
-                <div style={_mono({ fontSize: 10, color: '#52525b', marginTop: 2 })}>{st.timestamp}</div>
+              {p.rejection_reason && (
+                <div style={_mono({ fontSize: 10, color: '#ef4444', marginTop: 3 })}>✗ {p.rejection_reason}</div>
               )}
             </div>
           </div>
         );
       })}
+
+      {/* ── Candidate panel ── */}
+      {cands.length > 0 && (
+        <div style={{ borderTop: '1px solid #27272a', marginTop: 8, paddingTop: 10 }}>
+          <div style={_mono({ fontSize: 10, color: '#52525b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' })}>
+            Candidates ({cands.length})
+          </div>
+          {cands.map((c, i) => {
+            const conf    = c.confidence;
+            const selColor = c.selected ? '#4ade80' : '#52525b';
+            const termColor = c.terminal_status === 'selected' ? '#4ade80'
+                            : c.terminal_status === 'blocked' ? '#ef4444' : '#71717a';
+            return (
+              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start',
+                marginBottom: 8, padding: '6px 0', borderBottom: '1px solid #18181b' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={_mono({ fontSize: 10, fontWeight: 600, color: '#e4e4e7' })}>
+                      {c.strategy_name || '—'}
+                    </span>
+                    {c.direction && (
+                      <span style={_mono({ fontSize: 10, color: c.direction === 'CE' ? '#22c55e' : '#f97316',
+                        background: (c.direction === 'CE' ? '#22c55e' : '#f97316') + '22',
+                        border: `1px solid ${c.direction === 'CE' ? '#22c55e' : '#f97316'}44`,
+                        borderRadius: 3, padding: '1px 6px' })}>
+                        {c.direction}
+                      </span>
+                    )}
+                    {conf != null && <BidGauge confidence={conf} />}
+                    <span style={_mono({ fontSize: 9, color: termColor })}>
+                      {c.terminal_status || (c.selected ? 'selected' : 'blocked')}
+                    </span>
+                    {c.terminal_gate_id && (
+                      <span style={_mono({ fontSize: 9, color: '#52525b' })}>@ {c.terminal_gate_id}</span>
+                    )}
+                  </div>
+                  {c.metrics && Object.keys(c.metrics).length > 0 && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
+                      {Object.entries(c.metrics).map(([k,v]) => (
+                        <span key={k} style={_mono({ fontSize: 9, color: '#52525b' })}>
+                          {k}:{typeof v === 'number' ? v.toFixed(3) : String(v)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Brain panel ── */}
+      {(brain.day_score || rc.regime) && (
+        <div style={{ borderTop: '1px solid #27272a', marginTop: 4, paddingTop: 10,
+          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          {brain.day_score && (
+            <div>
+              <div style={_mono({ fontSize: 9, color: '#52525b', textTransform: 'uppercase', marginBottom: 3 })}>Brain</div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={_mono({ fontSize: 10, color: brain.day_score === 'UNKNOWN' ? '#f97316'
+                  : brain.day_score === 'GOOD' ? '#22c55e' : '#ef4444' })}>
+                  {brain.day_score}
+                </span>
+                {brain.size_multiplier != null && brain.size_multiplier !== 1 && (
+                  <span style={_mono({ fontSize: 9, color: '#71717a' })}>×{brain.size_multiplier}</span>
+                )}
+                {brain.carry_consecutive_losses > 0 && (
+                  <span style={_mono({ fontSize: 9, color: '#ef4444' })}>losses:{brain.carry_consecutive_losses}</span>
+                )}
+                {brain.day_score_reason && (
+                  <span style={_mono({ fontSize: 9, color: '#52525b' })}>{brain.day_score_reason}</span>
+                )}
+              </div>
+            </div>
+          )}
+          {rc.regime && (
+            <div>
+              <div style={_mono({ fontSize: 9, color: '#52525b', textTransform: 'uppercase', marginBottom: 3 })}>Regime</div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <RegimeBadge regime={rc.regime} confidence={rc.confidence} />
+              </div>
+              {rc.reason && (
+                <div style={_mono({ fontSize: 9, color: '#71717a', marginTop: 2 })}>{rc.reason}</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -627,12 +729,16 @@ function PipelineMonitor() {
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState(null);
   const [wsStatus,   setWsStatus]   = useState('connecting');
+  const [tradesOnly, setTradesOnly] = useState(false);
   const wsRef   = useRef(null);
   const pollRef = useRef(null);
 
-  // Derive run_id from URL or leave empty (routes will fall back to env)
-  const runId = useMemo(() => {
-    try { return new URLSearchParams(window.location.search).get('run_id') || ''; } catch (_) { return ''; }
+  // Derive run_id + date from URL
+  const { runId, runDate } = useMemo(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      return { runId: p.get('run_id') || '', runDate: p.get('date') || '' };
+    } catch (_) { return { runId: '', runDate: '' }; }
   }, []);
 
   // WebSocket — prefer WS for live updates, fall back to polling if it fails
@@ -671,7 +777,8 @@ function PipelineMonitor() {
 
     // Polling fallback — runs in parallel for initial load and when WS drops
     const poll = () => {
-      fetch('/api/pipeline/latest?limit=50')
+      const qs = runId ? `?limit=50&run_id=${encodeURIComponent(runId)}` : '?limit=50';
+      fetch(`/api/pipeline/latest${qs}`)
         .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
         .then(d => { if (alive) { setTraces(d.traces || []); setError(null); } })
         .catch(e => { if (alive) setError(e.message); });
@@ -752,7 +859,14 @@ function PipelineMonitor() {
         display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <span style={_mono({ fontWeight: 600, fontSize: 13, marginRight: 6 })}>Pipeline</span>
         {TABS.map(t => <TabBtn key={t.id} id={t.id} label={t.label} />)}
-        <span style={_mono({ fontSize: 10, color: wsStatus === 'connected' ? '#22c55e' : '#71717a', marginLeft: 'auto' })}>
+        {(runId || runDate) && (
+          <span style={_mono({ fontSize: 9.5, color: '#52525b', marginLeft: 'auto', marginRight: 8 })}
+            title={runId}>
+            {runDate && <span style={{ color: '#71717a', marginRight: 6 }}>{runDate}</span>}
+            {runId && <span>run:{runId.slice(0, 8)}…</span>}
+          </span>
+        )}
+        <span style={_mono({ fontSize: 10, color: wsStatus === 'connected' ? '#22c55e' : '#71717a', marginLeft: runId ? 0 : 'auto' })}>
           ● {wsStatus}
         </span>
         {error && <span style={_mono({ fontSize: 10, color: '#ef4444' })}>⚠ {error}</span>}
@@ -780,18 +894,46 @@ function PipelineMonitor() {
       {/* ── Monitor tab ──────────────────────────────────────────────── */}
       {tab === 'monitor' && (
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          <div style={{ width: 420, flexShrink: 0, borderRight: '1px solid #27272a', overflowY: 'auto' }}>
+          <div style={{ width: 420, flexShrink: 0, borderRight: '1px solid #27272a', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '6px 12px', borderBottom: '1px solid #27272a', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button onClick={() => setTradesOnly(false)}
+                style={{ ..._mono({ fontSize: 10 }), padding: '2px 8px', borderRadius: 3, border: 'none',
+                  cursor: 'pointer', background: !tradesOnly ? '#4ade8033' : '#27272a',
+                  color: !tradesOnly ? '#4ade80' : '#71717a' }}>
+                All
+              </button>
+              <button onClick={() => setTradesOnly(true)}
+                style={{ ..._mono({ fontSize: 10 }), padding: '2px 8px', borderRadius: 3, border: 'none',
+                  cursor: 'pointer', background: tradesOnly ? '#4ade8033' : '#27272a',
+                  color: tradesOnly ? '#4ade80' : '#71717a' }}>
+                Trades only
+              </button>
+              <span style={_mono({ fontSize: 10, color: '#52525b', marginLeft: 'auto' })}>
+                {traces.filter(tr => {
+                  const sig = tr.signal_type || tr.stages?.execution?.outcome || '—';
+                  return sig && sig !== 'SKIP' && sig !== '—';
+                }).length} trades / {traces.length} total
+              </span>
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1 }}>
             {traces.length === 0 ? (
               <div style={{ padding: 24, color: '#52525b', textAlign: 'center', ..._mono({ fontSize: 12 }) }}>
                 No pipeline events yet.<br />Start a sim run to see traces.
               </div>
             ) : (
-              traces.map(tr => (
-                <TraceRow key={tr.trace_id} trace={tr}
-                  selected={selected === tr.trace_id}
-                  onClick={() => setSelected(tr.trace_id)} />
-              ))
+              traces
+                .filter(tr => {
+                  if (!tradesOnly) return true;
+                  const sig = tr.signal_type || tr.stages?.execution?.outcome || '—';
+                  return sig && sig !== 'SKIP' && sig !== '—';
+                })
+                .map(tr => (
+                  <TraceRow key={tr.trace_id} trace={tr}
+                    selected={selected === tr.trace_id}
+                    onClick={() => setSelected(tr.trace_id)} />
+                ))
             )}
+            </div>
           </div>
           <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
             {!selected && (
