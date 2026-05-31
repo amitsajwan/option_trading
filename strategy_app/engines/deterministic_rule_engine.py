@@ -671,6 +671,44 @@ class DeterministicRuleEngine(StrategyEngine):
                 )
                 return None
 
+        # ── Trader discipline gates (actual blocking) ────────────────────────
+        # 1. SIDEWAYS + returns_mixed: no directional conviction — skip entirely.
+        regime_str = str(
+            regime_signal.regime.value if hasattr(regime_signal.regime, "value") else regime_signal.regime or ""
+        ).upper()
+        if (
+            regime_str == "SIDEWAYS"
+            and "returns_mixed" in (regime_signal.reason or "")
+        ):
+            logger.debug("entry blocked: sideways_returns_mixed reason=%s", regime_signal.reason)
+            return None
+
+        # 2. Post-STOP_LOSS cooldown: no re-entry for N bars after a hard stop.
+        _stop_cool = int(os.getenv("STOP_LOSS_COOLDOWN_BARS", "5"))
+        if self._last_stop_bar is not None:
+            _bars_since = self._session_event_count - self._last_stop_bar
+            if _bars_since < _stop_cool:
+                logger.debug("entry blocked: stop_loss_cooldown bars_since=%d min=%d", _bars_since, _stop_cool)
+                return None
+
+        # 3. Direction-flip block: after a STOP_LOSS, don't flip direction for N bars.
+        _flip_cool = int(os.getenv("DIRECTION_FLIP_COOLDOWN_BARS", "8"))
+        if self._last_stop_bar is not None and self._last_exit_direction:
+            _bars_since = self._session_event_count - self._last_stop_bar
+            if _bars_since < _flip_cool:
+                _cur_entry_dirs = {
+                    str(v.direction.value if hasattr(v.direction, "value") else v.direction or "").upper()
+                    for v in votes
+                    if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
+                }
+                if self._last_exit_direction not in _cur_entry_dirs:
+                    logger.debug(
+                        "entry blocked: direction_flip_cooldown last=%s current=%s bars=%d",
+                        self._last_exit_direction, _cur_entry_dirs, _bars_since,
+                    )
+                    return None
+        # ── End discipline gates ──────────────────────────────────────────────
+
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
         if avoid_votes:
             best_avoid = max(avoid_votes, key=lambda item: item.confidence)
