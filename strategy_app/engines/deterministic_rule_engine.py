@@ -811,7 +811,7 @@ class DeterministicRuleEngine(StrategyEngine):
         if ml_can_resolve_direction_conflict:
             scored_candidates: list[tuple[StrategyVote, EntryPolicyDecision]] = []
             for candidate in ranked_entry_votes:
-                self._apply_strike_selection(candidate, snap)
+                self._apply_strike_selection(candidate, snap, regime=regime_signal.regime.value)
                 policy_decision = self._evaluate_entry_policy(candidate, snap, regime_signal, risk)
                 self._annotate_policy(candidate, policy_decision)
                 self._annotate_vote_contract(candidate)
@@ -841,7 +841,7 @@ class DeterministicRuleEngine(StrategyEngine):
             return self._build_entry_signal(best_vote, snap, risk, entry_votes, regime_signal, best_decision)
 
         for candidate in ranked_entry_votes:
-            self._apply_strike_selection(candidate, snap)
+            self._apply_strike_selection(candidate, snap, regime=regime_signal.regime.value)
             policy_decision = self._evaluate_entry_policy(candidate, snap, regime_signal, risk)
             self._annotate_policy(candidate, policy_decision)
             self._annotate_vote_contract(candidate)
@@ -939,7 +939,7 @@ class DeterministicRuleEngine(StrategyEngine):
         if not snap.is_valid_entry_phase or self._risk.is_paused:
             return None
 
-        self._apply_strike_selection(trade_vote, snap)
+        self._apply_strike_selection(trade_vote, snap, regime=regime_signal.regime.value)
         if (
             self._run_risk_config.atm_strike_only
             and not self._allow_non_atm_for_ml_entry(trade_vote)
@@ -2175,12 +2175,39 @@ class DeterministicRuleEngine(StrategyEngine):
         except Exception as exc:
             logger.warning("brain_state write failed error=%s", exc)
 
-    def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor) -> None:
+    def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor, regime: str = "") -> None:
         if bool(vote.raw_signals.get("_lock_strike_selection")):
             return
         if self._run_risk_config.atm_strike_only and not self._allow_non_atm_for_ml_entry(vote):
             vote = self._force_atm_strike(vote, snap)
             return
+
+        if (
+            os.getenv("STRATEGY_SMART_STRIKE_ENABLED", "").strip() == "1"
+            and self._allow_non_atm_for_ml_entry(vote)
+        ):
+            from ..signals.option_selector import select_strike as _smart_select
+
+            class _Proxy:
+                def __init__(self, v: StrategyVote) -> None:
+                    conf = float(v.confidence or 0.0)
+                    self.ce_prob = conf if v.direction == Direction.CE else 0.0
+                    self.pe_prob = conf if v.direction == Direction.PE else 0.0
+
+            direction_str = vote.direction.value
+            selection = _smart_select(snap, direction_str, _Proxy(vote), regime=regime)
+            if selection.strike is not None and int(selection.strike) > 0:
+                ltp = snap.option_ltp(direction_str, int(selection.strike))
+                if ltp is not None and float(ltp) > 0:
+                    vote.proposed_strike = int(selection.strike)
+                    vote.proposed_entry_premium = float(ltp)
+                    vote.raw_signals["_strike_policy"] = f"smart_strike_{selection.mode}"
+                    vote.raw_signals["_strike_selected"] = int(selection.strike)
+                    vote.raw_signals["_strike_selected_premium"] = float(round(ltp, 4))
+                    vote.raw_signals["_strike_mode"] = selection.mode
+                    vote.raw_signals["_strike_reason"] = selection.reason
+            return
+
         if self._strike_policy != "oi_volume_ranked":
             return
         direction = vote.direction
