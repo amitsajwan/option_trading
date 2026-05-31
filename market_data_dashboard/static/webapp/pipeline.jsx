@@ -765,13 +765,15 @@ function PipelineMonitor() {
   const wsRef   = useRef(null);
   const pollRef = useRef(null);
 
-  // Derive run_id + date from URL
-  const { runId, runDate } = useMemo(() => {
+  // run_id + date — readable from URL but also updatable without a page reload
+  const _urlParams = () => {
     try {
       const p = new URLSearchParams(window.location.search);
       return { runId: p.get('run_id') || '', runDate: p.get('date') || '' };
     } catch (_) { return { runId: '', runDate: '' }; }
-  }, []);
+  };
+  const [runId,   setRunId]   = useState(() => _urlParams().runId);
+  const [runDate, setRunDate] = useState(() => _urlParams().runDate);
 
   // WebSocket — prefer WS for live updates, fall back to polling if it fails
   useEffect(() => {
@@ -824,7 +826,7 @@ function PipelineMonitor() {
       clearInterval(pollRef.current);
       if (wsRef.current) wsRef.current.close();
     };
-  }, []);
+  }, [runId]); // restart poll + WS when run switches
 
   // Stream health — compact bar, used across tabs
   useEffect(() => {
@@ -900,7 +902,11 @@ function PipelineMonitor() {
                 const run = (d?.rows || d?.runs || [])[0];
                 if (run?.run_id) {
                   const date = run.source_date || '';
-                  window.location.href = `${window.location.pathname}?mode=replay&kind=sim&run_id=${run.run_id}${date ? `&date=${date}` : ''}`;
+                  setRunId(run.run_id);
+                  setRunDate(date);
+                  // Update URL without page reload
+                  const url = `${window.location.pathname}?mode=replay&kind=sim&run_id=${run.run_id}${date ? `&date=${date}` : ''}`;
+                  window.history.pushState({}, '', url);
                 }
               })
               .catch(() => {});
