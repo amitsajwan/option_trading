@@ -856,6 +856,7 @@ class DeterministicRuleEngine(StrategyEngine):
                 "direction_consensus_pe": round(consensus.pe_score, 3),
                 "direction_consensus_margin": round(consensus.margin, 3),
                 "direction_consensus_shadow_basis": shadow_basis,
+                "direction_consensus_sources": {k: round(v, 3) for k, v in (consensus.sources or {}).items()},
                 "_entry_policy_mode": "bypass",
             },
             proposed_strike=snap.atm_strike,
@@ -1729,6 +1730,28 @@ class DeterministicRuleEngine(StrategyEngine):
                 }
             )
             return gates, "blocked", "risk_pause", False
+        if raw_signals.get("direction_source") == "direction_consensus":
+            dir_sources = raw_signals.get("direction_consensus_sources") or {}
+            ce = raw_signals.get("direction_consensus_ce", 0)
+            pe = raw_signals.get("direction_consensus_pe", 0)
+            margin = raw_signals.get("direction_consensus_margin", 0)
+            winner = vote.direction.value if vote.direction else "?"
+            gates.append(
+                {
+                    "gate_id": "direction_consensus",
+                    "gate_group": "direction",
+                    "status": "pass",
+                    "reason_code": None,
+                    "message": f"{winner}  ce={ce:.2f} pe={pe:.2f} margin={margin:.2f}",
+                    "metrics": {
+                        "ce_score": ce,
+                        "pe_score": pe,
+                        "margin": margin,
+                        "shadow_basis": raw_signals.get("direction_consensus_shadow_basis"),
+                        **{k: round(v, 3) for k, v in dir_sources.items()},
+                    },
+                }
+            )
         gates.append(
             {
                 "gate_id": "confidence_gate",
