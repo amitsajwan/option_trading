@@ -123,6 +123,7 @@ function StatusBar({
         <button className="active"><span className="dot live"/>Live</button>
         <button onClick={() => onModeSwitch('replay')}><span className="dot replay"/>Replay</button>
         <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
+        <button onClick={() => onModeSwitch('pipeline')} style={{opacity:0.85}}>⬡ Pipeline</button>
       </div>
       <div style={{display:'flex',alignItems:'center',gap:8,padding:'0 10px'}}>
         <span style={{fontFamily:'var(--f-mono)',fontSize:'9px',color:'var(--fg-4)',textTransform:'uppercase'}}>watching</span>
@@ -1842,6 +1843,7 @@ function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, u
         <button onClick={() => onModeSwitch('live')}><span className="dot live"/>Live</button>
         <button className="active"><span className="dot replay"/>Replay</button>
         <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
+        <button onClick={() => onModeSwitch('pipeline')} style={{opacity:0.85}}>⬡ Pipeline</button>
       </div>
       <div style={{display:'flex',alignItems:'center',gap:5,padding:'0 10px',flex:1,overflow:'hidden',minWidth:0}}>
         {isPlaying
@@ -2172,6 +2174,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
             <button onClick={() => onModeSwitch('live')}><span className="dot live"/>Live</button>
             <button className="active"><span className="dot replay"/>Replay</button>
             <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
+            <button onClick={() => onModeSwitch('pipeline')} style={{opacity:0.85}}>⬡ Pipeline</button>
           </div>
           <div style={{display:'flex',alignItems:'center',gap:8,padding:'0 12px'}}>
             <span style={{fontFamily:'var(--f-mono)',fontSize:'10px',color:'var(--fg-3)'}}>Date</span>
