@@ -48,6 +48,14 @@ ${COMPOSE} up -d \
   ingestion_app \
   strategy_persistence_app
 
+
+# strategy_app won't auto-start if snapshot_app is unhealthy (off-hours, no live bars).
+# Force-start it so the new image is running; it will idle until market open.
+if [ "$(docker inspect -f '{{.State.Status}}' option_trading-strategy_app-1 2>/dev/null)" = "created" ]; then
+  echo "=== strategy_app in Created state (snapshot_app unhealthy off-hours) — force starting ==="
+  docker start option_trading-strategy_app-1
+fi
+
 echo ""
 echo "=== Deploy complete — commit: $(git log --oneline -1) ==="
 echo "=== Container status ==="
