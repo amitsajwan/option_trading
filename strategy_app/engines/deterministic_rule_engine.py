@@ -171,6 +171,7 @@ class DeterministicRuleEngine(StrategyEngine):
         # Trader-discipline: track last exit for cooldown / direction-flip rules.
         self._last_stop_bar: Optional[int] = None        # event count when last STOP_LOSS fired
         self._last_exit_direction: Optional[str] = None  # "CE" | "PE" at last stop exit
+        self._last_any_exit_bar: Optional[int] = None   # event count of ANY exit (for general spacing)
         # Optional live depth feed (None in replay/offline — signals degrade gracefully).
         self._depth_reader: Optional[RedisDepthReader] = depth_reader
         # Per-evaluate depth snapshot — set at start of evaluate(), read by shadow scorer.
@@ -300,6 +301,7 @@ class DeterministicRuleEngine(StrategyEngine):
         self._session_regime_tag = None
         self._last_stop_bar = None
         self._last_exit_direction = None
+        self._last_any_exit_bar = None
         self._tracker.on_session_start(trade_date)
         # Brain morning briefing: loads daily features + cross-session carry.
         # Must run before risk manager so carry-based consecutive_losses can
@@ -672,6 +674,14 @@ class DeterministicRuleEngine(StrategyEngine):
                 return None
 
         # ── Trader discipline gates (actual blocking) ────────────────────────
+        # 0. Minimum re-entry spacing: never enter immediately after any exit.
+        _reentry_gap = int(os.getenv("MIN_REENTRY_BARS", "3"))
+        if self._last_any_exit_bar is not None:
+            _bars_since_exit = self._session_event_count - self._last_any_exit_bar
+            if _bars_since_exit < _reentry_gap:
+                logger.debug("entry blocked: min_reentry_gap bars_since=%d min=%d", _bars_since_exit, _reentry_gap)
+                return None
+
         # 1. SIDEWAYS + returns_mixed: no directional conviction — skip entirely.
         regime_str = str(
             regime_signal.regime.value if hasattr(regime_signal.regime, "value") else regime_signal.regime or ""
@@ -1178,12 +1188,20 @@ class DeterministicRuleEngine(StrategyEngine):
         self._reset_regime_shift_streak(position.position_id)
         # Record stop-loss exits so discipline rules can enforce cooldowns.
         exit_reason_str = str(getattr(exit_signal, "exit_reason", None) or "").upper()
+        exit_dir = str(
+            position.direction.value if hasattr(position.direction, "value")
+            else position.direction or ""
+        ).upper()
+        # Always track any exit for minimum re-entry spacing.
+        self._last_any_exit_bar = self._session_event_count
         if "STOP" in exit_reason_str and "TIME" not in exit_reason_str:
+            # Hard STOP_LOSS: longer cooldown + direction-flip block.
             self._last_stop_bar = self._session_event_count
-            self._last_exit_direction = str(
-                position.direction.value if hasattr(position.direction, "value")
-                else position.direction or ""
-            ).upper()
+            self._last_exit_direction = exit_dir
+        elif "TIME" in exit_reason_str and position.pnl_pct < 0:
+            # TIME_STOP with a loss: treat like a soft stop — record direction too.
+            self._last_stop_bar = self._session_event_count
+            self._last_exit_direction = exit_dir
         self._risk.record_trade_result(
             pnl_pct=position.pnl_pct,
             lots=position.lots,
