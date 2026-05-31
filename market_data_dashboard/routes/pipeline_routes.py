@@ -96,6 +96,18 @@ def _redis_client():
 # Data helpers
 # ---------------------------------------------------------------------------
 
+def _sanitize(obj: Any) -> Any:
+    """Recursively replace NaN/Inf floats with None so json.dumps never crashes."""
+    if isinstance(obj, float):
+        import math
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+
 def _stage_sort_key(stage: str) -> int:
     try:
         return _STAGE_ORDER.index(stage)
@@ -180,7 +192,7 @@ class PipelineRouter:
                 by_trace[tid].append(doc)
 
         traces = [_collapse_trace(docs) for docs in list(by_trace.values())[:limit]]
-        return {"traces": traces, "total": len(traces)}
+        return _sanitize({"traces": traces, "total": len(traces)})
 
     # ── GET /api/pipeline/trace/{trace_id} ────────────────────────────────
 
@@ -207,7 +219,7 @@ class PipelineRouter:
             raise HTTPException(status_code=404, detail=f"trace_id {trace_id!r} not found")
 
         stages = sorted(raw, key=lambda d: _stage_sort_key(d.get("stage", "")))
-        return {"trace_id": trace_id, "stages": stages, "stage_count": len(stages)}
+        return _sanitize({"trace_id": trace_id, "stages": stages, "stage_count": len(stages)})
 
     # ── GET /api/regime/timeline ───────────────────────────────────────────
 
@@ -253,7 +265,7 @@ class PipelineRouter:
             # Compute duration by diffing against next entry's timestamp
             regimes.append(entry)
 
-        return {"regimes": regimes, "total": len(regimes), "run_id": run_id}
+        return _sanitize({"regimes": regimes, "total": len(regimes), "run_id": run_id})
 
     # ── GET /api/depth/current ─────────────────────────────────────────────
 
