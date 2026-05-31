@@ -115,8 +115,20 @@ class RegimeDecisionConsumer:
         return processed
 
     def _process(self, snapshot_event: dict, out_stream: str) -> None:
-        snapshot = snapshot_event.get("snapshot") if isinstance(snapshot_event.get("snapshot"), dict) else {}
-        snapshot_id = str(snapshot_event.get("snapshot_id") or snapshot.get("snapshot_id") or "")
+        # Snapshot events are wrapped: event["payload"]["snapshot"] is the actual snapshot.
+        # Fall back to event["snapshot"] for direct-publish formats.
+        _inner = snapshot_event.get("payload") if isinstance(snapshot_event.get("payload"), dict) else {}
+        snapshot = (
+            _inner.get("snapshot") if isinstance(_inner.get("snapshot"), dict)
+            else snapshot_event.get("snapshot") if isinstance(snapshot_event.get("snapshot"), dict)
+            else {}
+        )
+        snapshot_id = str(
+            snapshot_event.get("snapshot_id")
+            or _inner.get("snapshot_id")
+            or snapshot.get("snapshot_id")
+            or ""
+        )
         # trace_id: carry forward from upstream event; fall back to event_id
         trace_id = str(snapshot_event.get("trace_id") or snapshot_event.get("event_id") or "")
         parent_event_id = str(snapshot_event.get("event_id") or "")
