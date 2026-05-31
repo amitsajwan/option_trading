@@ -87,6 +87,10 @@ class RedisEventBus(EventBus):
         import redis as _redis  # lazy so tests can patch before importing
 
         kwargs = dict(redis_kwargs or redis_connection_kwargs(decode_responses=True, for_pubsub=False))
+        # socket_timeout must exceed the largest block_ms used in XREADGROUP calls
+        # (currently 2000 ms = 2s).  Set 30s so blocking reads never time out.
+        kwargs.setdefault("socket_timeout", 30.0)
+        kwargs.setdefault("socket_connect_timeout", 5.0)
         self._client: _redis.Redis = _redis.Redis(**kwargs)
 
     # ── publish ────────────────────────────────────────────────────────────
