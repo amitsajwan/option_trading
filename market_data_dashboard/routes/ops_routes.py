@@ -177,56 +177,82 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
         _jobs[job_id]["status"] = "loading"
 
     try:
-        # Build the env for this sim — base env + ML paths + overrides
+        # Baseline = strategy_app's REAL live config from ops_env.json (shared .run
+        # volume). The dashboard process env does NOT carry strategy_app's vars, so
+        # reading os.getenv here would silently diverge from live (e.g. capping the
+        # day at RISK_MAX_SESSION_TRADES=6 instead of the live 12). ops_env.json is
+        # the source of truth; os.getenv is only a fallback.
+        ops_path = STRATEGY_RUN_DIR / "ops_env.json"
+        live: dict[str, str] = {}
+        if ops_path.exists():
+            try:
+                live = json.loads(ops_path.read_text(encoding="utf-8"))
+            except Exception:
+                live = {}
+
+        def _live(key: str, fallback: str) -> str:
+            v = live.get(key)
+            if v not in (None, ""):
+                return str(v)
+            env_v = os.getenv(key)
+            if env_v not in (None, ""):
+                return str(env_v)
+            return fallback
+
         sim_env = {
-            # ML model paths from live container
-            "ENTRY_ML_MODEL_PATH":
-                os.getenv("ENTRY_ML_MODEL_PATH",
+            # ML model paths + thresholds — from live config
+            "ENTRY_ML_MODEL_PATH":     _live("ENTRY_ML_MODEL_PATH",
                           "/app/ml_pipeline_2/artifacts/entry_only/published/entry_only_model.joblib"),
-            "DIRECTION_ML_MODEL_PATH":
-                os.getenv("DIRECTION_ML_MODEL_PATH",
+            "DIRECTION_ML_MODEL_PATH": _live("DIRECTION_ML_MODEL_PATH",
                           "/app/ml_pipeline_2/artifacts/direction_only/published/direction_only_model.joblib"),
-            "ENTRY_ML_MIN_PROB":      os.getenv("ENTRY_ML_MIN_PROB", "0.65"),
-            "DIRECTION_ML_WEIGHT":    os.getenv("DIRECTION_ML_WEIGHT", "0.40"),
-            "OPTION_PNL_MODEL_BUNDLE": os.getenv("OPTION_PNL_MODEL_BUNDLE", ""),
+            "ENTRY_ML_MIN_PROB":       _live("ENTRY_ML_MIN_PROB", "0.65"),
+            "DIRECTION_ML_WEIGHT":     _live("DIRECTION_ML_WEIGHT", "0.40"),
+            "DIRECTION_ML_FILTER_MIN_PROB": _live("DIRECTION_ML_FILTER_MIN_PROB", ""),
+            "OPTION_PNL_MODEL_BUNDLE": _live("OPTION_PNL_MODEL_BUNDLE", ""),
             # Disable side effects for sim
             "STRATEGY_REDIS_PUBLISH_ENABLED": "0",
             "MARKET_SESSION_ENABLED":          "0",
             "BRAIN_ENABLED":                   "false",
             "STRATEGY_STARTUP_WARMUP_EVENTS":  "0",
-            # Current live config as base
-            "EXIT_POLICY_STACK_ENABLED":       os.getenv("EXIT_POLICY_STACK_ENABLED", "1"),
-            "EXIT_PREMIUM_TARGET_PCT":         os.getenv("EXIT_PREMIUM_TARGET_PCT", "0.04"),
-            "EXIT_TRAILING_ACTIVATION_PCT":    os.getenv("EXIT_TRAILING_ACTIVATION_PCT", "0.01"),
-            "EXIT_TRAILING_TRAIL_PCT":         os.getenv("EXIT_TRAILING_TRAIL_PCT", "0.005"),
-            "EXIT_THESIS_FAIL_BARS":           os.getenv("EXIT_THESIS_FAIL_BARS", "3"),
-            "EXIT_THESIS_FAIL_MIN_MFE":        os.getenv("EXIT_THESIS_FAIL_MIN_MFE", "0.002"),
-            "CONSENSUS_BYPASS_MIN_CONFIDENCE": os.getenv("CONSENSUS_BYPASS_MIN_CONFIDENCE", "0.65"),
-            "DIRECTION_MIN_MARGIN_SIDEWAYS":   os.getenv("DIRECTION_MIN_MARGIN_SIDEWAYS", "2.0"),
-            "STRATEGY_STRIKE_SELECTION_POLICY": os.getenv("STRATEGY_STRIKE_SELECTION_POLICY", "smart_strike"),
-            "SMART_STRIKE_MAX_PREMIUM":        os.getenv("SMART_STRIKE_MAX_PREMIUM", "800"),
-            "STRATEGY_STRIKE_MAX_OTM_STEPS":   os.getenv("STRATEGY_STRIKE_MAX_OTM_STEPS", "8"),
-            "STRATEGY_SMART_STRIKE_ENABLED":   os.getenv("STRATEGY_SMART_STRIKE_ENABLED", "1"),
-            "SMART_STRIKE_OTM_CONFIDENCE":     os.getenv("SMART_STRIKE_OTM_CONFIDENCE", "0.55"),
-            "SMART_STRIKE_OTM2_ENABLED":       os.getenv("SMART_STRIKE_OTM2_ENABLED", "1"),
-            "SMART_STRIKE_OTM2_CONFIDENCE":    os.getenv("SMART_STRIKE_OTM2_CONFIDENCE", "0.65"),
-            "SMART_STRIKE_OTM3_ENABLED":       os.getenv("SMART_STRIKE_OTM3_ENABLED", "1"),
-            "SMART_STRIKE_OTM3_CONFIDENCE":    os.getenv("SMART_STRIKE_OTM3_CONFIDENCE", "0.75"),
-            "SMART_STRIKE_OTM3_REGIMES":       os.getenv("SMART_STRIKE_OTM3_REGIMES", "BREAKOUT,TRENDING"),
-            "SMART_STRIKE_OTM4_ENABLED":       os.getenv("SMART_STRIKE_OTM4_ENABLED", "1"),
-            "SMART_STRIKE_OTM4_CONFIDENCE":    os.getenv("SMART_STRIKE_OTM4_CONFIDENCE", "0.85"),
-            "SMART_STRIKE_OTM4_REGIMES":       os.getenv("SMART_STRIKE_OTM4_REGIMES", "BREAKOUT"),
-            "STRATEGY_PROFILE_ID":             os.getenv("STRATEGY_PROFILE_ID",
-                                                         "trader_master_ml_entry_consensus_v1"),
-            "RISK_MAX_CONSECUTIVE_LOSSES":     os.getenv("RISK_MAX_CONSECUTIVE_LOSSES", "3"),
-            "RISK_MAX_SESSION_TRADES":         os.getenv("RISK_MAX_SESSION_TRADES", "6"),
-            "RISK_CAPITAL_ALLOCATED":          os.getenv("RISK_CAPITAL_ALLOCATED", "500000"),
+            # Exit + entry + strike config — from live config
+            "EXIT_POLICY_STACK_ENABLED":       _live("EXIT_POLICY_STACK_ENABLED", "1"),
+            "EXIT_PREMIUM_TARGET_PCT":         _live("EXIT_PREMIUM_TARGET_PCT", "0.04"),
+            "EXIT_TRAILING_ACTIVATION_PCT":    _live("EXIT_TRAILING_ACTIVATION_PCT", "0.01"),
+            "EXIT_TRAILING_TRAIL_PCT":         _live("EXIT_TRAILING_TRAIL_PCT", "0.005"),
+            "EXIT_THESIS_FAIL_BARS":           _live("EXIT_THESIS_FAIL_BARS", "3"),
+            "EXIT_THESIS_FAIL_MIN_MFE":        _live("EXIT_THESIS_FAIL_MIN_MFE", "0.002"),
+            "CONSENSUS_BYPASS_MIN_CONFIDENCE": _live("CONSENSUS_BYPASS_MIN_CONFIDENCE", "0.65"),
+            "DIRECTION_MIN_MARGIN_SIDEWAYS":   _live("DIRECTION_MIN_MARGIN_SIDEWAYS", "2.0"),
+            "STRATEGY_STRIKE_SELECTION_POLICY": _live("STRATEGY_STRIKE_SELECTION_POLICY", "smart_strike"),
+            "SMART_STRIKE_MAX_PREMIUM":        _live("SMART_STRIKE_MAX_PREMIUM", "800"),
+            "STRATEGY_STRIKE_MAX_OTM_STEPS":   _live("STRATEGY_STRIKE_MAX_OTM_STEPS", "8"),
+            "STRATEGY_SMART_STRIKE_ENABLED":   _live("STRATEGY_SMART_STRIKE_ENABLED", "1"),
+            "SMART_STRIKE_OTM_CONFIDENCE":     _live("SMART_STRIKE_OTM_CONFIDENCE", "0.55"),
+            "SMART_STRIKE_OTM2_ENABLED":       _live("SMART_STRIKE_OTM2_ENABLED", "1"),
+            "SMART_STRIKE_OTM2_CONFIDENCE":    _live("SMART_STRIKE_OTM2_CONFIDENCE", "0.65"),
+            "SMART_STRIKE_OTM3_ENABLED":       _live("SMART_STRIKE_OTM3_ENABLED", "1"),
+            "SMART_STRIKE_OTM3_CONFIDENCE":    _live("SMART_STRIKE_OTM3_CONFIDENCE", "0.75"),
+            "SMART_STRIKE_OTM3_REGIMES":       _live("SMART_STRIKE_OTM3_REGIMES", "BREAKOUT,TRENDING"),
+            "SMART_STRIKE_OTM4_ENABLED":       _live("SMART_STRIKE_OTM4_ENABLED", "1"),
+            "SMART_STRIKE_OTM4_CONFIDENCE":    _live("SMART_STRIKE_OTM4_CONFIDENCE", "0.85"),
+            "SMART_STRIKE_OTM4_REGIMES":       _live("SMART_STRIKE_OTM4_REGIMES", "BREAKOUT"),
+            "STRATEGY_ENHANCED_VELOCITY":      _live("STRATEGY_ENHANCED_VELOCITY", "0"),
+            "STRATEGY_IV_EXTREME_PERCENTILE":  _live("STRATEGY_IV_EXTREME_PERCENTILE", "95.0"),
+            "STRATEGY_PROFILE_ID":             _live("STRATEGY_PROFILE_ID",
+                                                     "trader_master_ml_entry_consensus_v1"),
+            # Risk limits — critical: live runs 12 session trades, not the 6 default
+            "RISK_MAX_CONSECUTIVE_LOSSES":     _live("RISK_MAX_CONSECUTIVE_LOSSES", "3"),
+            "RISK_MAX_SESSION_TRADES":         _live("RISK_MAX_SESSION_TRADES", "6"),
+            "RISK_MAX_LOTS_PER_TRADE":         _live("RISK_MAX_LOTS_PER_TRADE", "5"),
+            "RISK_CAPITAL_ALLOCATED":          _live("RISK_CAPITAL_ALLOCATED", "500000"),
+            "RISK_PER_TRADE_PCT":              _live("RISK_PER_TRADE_PCT", "0.005"),
+            "STRATEGY_MIN_CONFIDENCE":         _live("STRATEGY_MIN_CONFIDENCE", "0.50") or "0.50",
             "STRATEGY_RUN_DIR":                f"/tmp/sim_{job_id}",
             "REDIS_HOST":                      os.getenv("REDIS_HOST", "localhost"),
             "DEPTH_FEED_ENABLED":              "0",
-            "STRATEGY_MIN_CONFIDENCE":         os.getenv("STRATEGY_MIN_CONFIDENCE", "0.50") or "0.50",
         }
-        # Apply user overrides (validated keys only)
+        # Apply user overrides (validated keys only) — these are the deltas the
+        # operator dialed in the OPS panel, layered on top of the live baseline.
         for k, v in overrides.items():
             if k in _SAFE_OVERRIDE_KEYS:
                 sim_env[k] = str(v)
@@ -306,9 +332,12 @@ def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[d
     from strategy_app.contracts import SignalType
     from strategy_app.position.exit_policy import build_default_exit_stack
 
-    profile_id = os.getenv("STRATEGY_PROFILE_ID", "trader_master_ml_entry_consensus_v1")
+    profile_id = os.getenv("STRATEGY_PROFILE_ID", "trader_master_ml_entry_consensus_v1") \
+        or "trader_master_ml_entry_consensus_v1"
+    _minconf_raw = os.getenv("STRATEGY_MIN_CONFIDENCE", "0.50")
+    min_conf = float(_minconf_raw) if str(_minconf_raw).strip() else 0.50
     engine = DeterministicRuleEngine(
-        min_confidence=float(os.getenv("STRATEGY_MIN_CONFIDENCE", "0.50")),
+        min_confidence=min_conf,
         strategy_profile_id=profile_id,
     )
     exit_stack_name = build_default_exit_stack().name
