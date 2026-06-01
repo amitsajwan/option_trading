@@ -224,6 +224,7 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
             "STRATEGY_RUN_DIR":                f"/tmp/sim_{job_id}",
             "REDIS_HOST":                      os.getenv("REDIS_HOST", "localhost"),
             "DEPTH_FEED_ENABLED":              "0",
+            "STRATEGY_MIN_CONFIDENCE":         os.getenv("STRATEGY_MIN_CONFIDENCE", "0.50") or "0.50",
         }
         # Apply user overrides (validated keys only)
         for k, v in overrides.items():
@@ -328,6 +329,10 @@ def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[d
     current_entry: Optional[dict] = None
     total = len(snaps)
 
+    # diagnostics
+    _diag = {"evaluated": 0, "eval_errors": 0, "signals": 0,
+             "entries": 0, "exits": 0, "first_error": None}
+
     for i, snap in enumerate(snaps):
         # Update progress every 20 snapshots
         if i % 20 == 0:
@@ -336,11 +341,21 @@ def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[d
 
         try:
             signal = engine.evaluate(snap)
-        except Exception:
+            _diag["evaluated"] += 1
+        except Exception as exc:
+            _diag["eval_errors"] += 1
+            if _diag["first_error"] is None:
+                import traceback as _tb
+                _diag["first_error"] = f"{exc} :: {_tb.format_exc()[-400:]}"
             continue
 
         if signal is None:
             continue
+        _diag["signals"] += 1
+        if signal.signal_type == SignalType.ENTRY:
+            _diag["entries"] += 1
+        elif signal.signal_type == SignalType.EXIT:
+            _diag["exits"] += 1
 
         ts = str(snap.get("timestamp", ""))
         hhmm = ts[11:16] if len(ts) > 15 else "?"
@@ -389,6 +404,7 @@ def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[d
     engine.on_session_end(trade_date_obj)
     with _jobs_lock:
         _jobs[job_id]["progress"] = total
+        _jobs[job_id]["diag"] = _diag
     return trades, exit_stack_name
 
 
