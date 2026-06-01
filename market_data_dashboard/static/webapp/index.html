@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Strategy Monitor · NIFTY 50</title>
+<title>Strategy Monitor · BANKNIFTY · LIVE</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -183,6 +183,17 @@
         btn.classList.toggle('active', btn.dataset.mode === mode);
         btn.onclick = () => setMode(btn.dataset.mode);
       });
+    }, [mode]);
+
+    // Sync URL and page title with current mode.
+    // When switching to LIVE the URL is cleaned (removes stale replay params).
+    useEffect(() => {
+      const modeLabels = { live: 'LIVE', replay: 'REPLAY', eval: 'EVAL', pipeline: 'PIPELINE' };
+      document.title = `Strategy Monitor · BANKNIFTY · ${modeLabels[mode] || mode.toUpperCase()}`;
+      if (mode === 'live') {
+        // Clear any leftover replay/sim query params
+        window.history.replaceState({}, '', window.location.pathname);
+      }
     }, [mode]);
 
     useEffect(() => {

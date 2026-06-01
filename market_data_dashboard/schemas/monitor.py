@@ -89,6 +89,7 @@ class MonitorSession(BaseModel):
     alerts: List[MonitorAlert]
     basePrice: float
     runId: Optional[str] = None
+    engine: Optional[str] = None
 
 
 class MonitorKpiItem(BaseModel):
