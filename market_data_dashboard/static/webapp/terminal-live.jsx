@@ -280,179 +280,153 @@ function EngineRoster({ strategies, dailyRisk, brainData }) {
   );
 }
 
-// ── SVG Candlestick Chart ────────────────────────────────────────────────
-function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upToIdx, flashIdx }) {
-  const W = 1000, H = 360;
-  const PAD = { l: 8, r: 60, t: 8, b: 22 };
-  const iW = W - PAD.l - PAD.r, iH = H - PAD.t - PAD.b;
-  const visible = candles.slice(0, upToIdx + 1);
-  const slot = iW / Math.max(1, visible.length);
-  const bodyW = Math.max(2, slot - 1.5);
+// ── Lightweight Charts Candlestick Chart ─────────────────────────────────
+// Replaces the fixed SVG. Gives native zoom (scroll wheel), pan (drag),
+// crosshair tooltip, and auto-resize — without affecting page font size.
+function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upToIdx }) {
+  const LWC = window.LightweightCharts;
+  const containerRef = _r(null);
+  const chartRef     = _r(null);
+  const candleRef    = _r(null);
+  const vwapRef      = _r(null);
+  const priceLineRef = _r(null);
+  const stopLineRef  = _r(null);
+  const tgtLineRef   = _r(null);
 
-  const [pMin, pMax] = _m(() => {
-    let lo = Infinity, hi = -Infinity;
-    visible.forEach(c => { lo = Math.min(lo, c.l); hi = Math.max(hi, c.h); });
-    const pad = (hi - lo) * 0.10;
-    return [lo - pad, hi + pad];
-  }, [visible]);
+  // ── Init chart once ──────────────────────────────────────────────────
+  _e(() => {
+    if (!LWC || !containerRef.current) return;
+    const cs = getComputedStyle(document.documentElement);
+    const get = v => cs.getPropertyValue(v).trim();
 
-  const xOf = i => PAD.l + i * slot + slot / 2;
-  const yOf = p => PAD.t + (pMax - p) / (pMax - pMin) * iH;
+    const chart = LWC.createChart(containerRef.current, {
+      layout: { background: { type: 'solid', color: 'transparent' }, textColor: get('--fg-3') || '#71717a', fontSize: 10 },
+      grid:   { vertLines: { color: get('--line-1') || '#27272a', style: 1 }, horzLines: { color: get('--line-1') || '#27272a', style: 1 } },
+      crosshair: { mode: LWC.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: get('--line-2') || '#3f3f46', scaleMargins: { top: 0.05, bottom: 0.05 } },
+      timeScale: { borderColor: get('--line-2') || '#3f3f46', timeVisible: true, secondsVisible: false, fixLeftEdge: false, fixRightEdge: false },
+      handleWheelMove: true,
+      handleScroll: true,
+    });
+    chartRef.current = chart;
 
-  const vwapPath = _m(() => {
+    candleRef.current = chart.addCandlestickSeries({
+      upColor: '#22c55e', downColor: '#ef4444',
+      borderUpColor: '#22c55e', borderDownColor: '#ef4444',
+      wickUpColor: '#22c55e', wickDownColor: '#ef4444',
+    });
+
+    vwapRef.current = chart.addLineSeries({
+      color: '#3b82f6', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+
+    // Click on chart → find nearest trade marker and select it
+    chart.subscribeClick(param => {
+      if (!param.time || !param.point) return;
+      const clickedTime = Number(param.time);
+      let best = null, bestDist = 999999;
+      trades.forEach(t => {
+        const c = candles[t.entryIdx];
+        if (!c) return;
+        const tSec = Math.floor(c.t / 1000);
+        const d = Math.abs(tSec - clickedTime);
+        if (d < bestDist) { bestDist = d; best = t; }
+      });
+      if (best && bestDist <= 120) onSelectTrade(best); // within 2 bars
+    });
+
+    // Auto-resize when container size changes
+    const ro = new ResizeObserver(() => {
+      if (!containerRef.current || !chartRef.current) return;
+      const { width, height } = containerRef.current.getBoundingClientRect();
+      chartRef.current.resize(width, Math.max(200, height));
+    });
+    ro.observe(containerRef.current);
+
+    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
+  }, []); // eslint-disable-line
+
+  // ── Update candles + VWAP whenever data changes ───────────────────────
+  _e(() => {
+    if (!candleRef.current || !candles.length) return;
+    const visible = candles.slice(0, upToIdx + 1);
+
+    const lwcData = visible.map(c => ({
+      time: Math.floor(c.t / 1000),
+      open: c.o, high: c.h, low: c.l, close: c.c,
+    }));
+    candleRef.current.setData(lwcData);
+
+    // VWAP
     let cv = 0, cc = 0;
-    return visible.map((c, i) => {
+    const vwapData = visible.map(c => {
       const tp = (c.h + c.l + c.c) / 3;
       cv += tp * (c.v || 1); cc += (c.v || 1);
-      return `${i === 0 ? 'M' : 'L'} ${xOf(i).toFixed(1)} ${yOf(cv/cc).toFixed(1)}`;
-    }).join(' ');
-  }, [visible, pMin, pMax]);
+      return { time: Math.floor(c.t / 1000), value: Math.round(cv / cc * 100) / 100 };
+    });
+    vwapRef.current.setData(vwapData);
 
-  const ticks = _m(() => {
-    const out = [];
-    const step = Math.ceil((pMax - pMin) / 6 / 10) * 10 || 10;
-    let p = Math.ceil(pMin / step) * step;
-    while (p < pMax) { out.push(p); p += step; }
-    return out;
-  }, [pMin, pMax]);
+    // Trade markers: entry arrow + exit dot label
+    const markers = [];
+    trades.filter(t => t.entryIdx < visible.length).forEach(t => {
+      const ec = candles[t.entryIdx];
+      if (!ec) return;
+      const pnl = Number(t.pnlPct || 0);
+      const isSel = selectedTrade?.id === t.id;
+      const color = isSel ? '#f59e0b' : (pnl > 0 ? '#22c55e' : pnl < 0 ? '#ef4444' : '#71717a');
+      const isLong = t.dir === 'LONG';
+      markers.push({
+        time: Math.floor(ec.t / 1000),
+        position: isLong ? 'belowBar' : 'aboveBar',
+        color,
+        shape: isLong ? 'arrowUp' : 'arrowDown',
+        text: `${t.legDir || t.dir}${isSel ? ' ●' : ''}`,
+        size: isSel ? 2 : 1,
+      });
+      // Exit marker if trade is closed and exitIdx is valid
+      if (t.exitReason && t.exitIdx != null && t.exitIdx < visible.length) {
+        const xc = candles[t.exitIdx];
+        if (xc) {
+          markers.push({
+            time: Math.floor(xc.t / 1000),
+            position: isLong ? 'aboveBar' : 'belowBar',
+            color,
+            shape: 'circle',
+            text: pnl >= 0 ? `+${(pnl*100).toFixed(1)}%` : `${(pnl*100).toFixed(1)}%`,
+            size: 1,
+          });
+        }
+      }
+    });
+    markers.sort((a, b) => a.time - b.time);
+    candleRef.current.setMarkers(markers);
 
-  const timeTicks = _m(() => {
-    const out = [];
-    const n = visible.length;
-    const step = Math.max(1, Math.floor(n / 6));
-    for (let i = 0; i < n; i += step) out.push(i);
-    if (n > 0 && out[out.length - 1] !== n - 1) out.push(n - 1);
-    return out;
-  }, [visible.length]);
+    // Current price dashed line
+    const lastClose = visible[visible.length - 1]?.c;
+    if (lastClose) {
+      if (priceLineRef.current) { try { candleRef.current.removePriceLine(priceLineRef.current); } catch(_){} }
+      priceLineRef.current = candleRef.current.createPriceLine({ price: lastClose, color: '#f59e0b', lineWidth: 1, lineStyle: LWC.LineStyle.Dashed, axisLabelVisible: true, title: '' });
+    }
 
-  const [hover, setHover] = _s(null);
-  const svgRef = _r(null);
+    // Scroll to latest bar
+    chartRef.current?.timeScale().scrollToPosition(3, false);
+  }, [candles, upToIdx, trades, selectedTrade]);
 
-  const handleMove = _cb(e => {
-    const r = svgRef.current?.getBoundingClientRect();
-    if (!r) return;
-    const x = (e.clientX - r.left) * (W / r.width);
-    const i = Math.floor((x - PAD.l) / slot);
-    setHover(i >= 0 && i < visible.length ? i : null);
-  }, [visible.length, slot]);
+  // ── Stop / target lines for selected trade ────────────────────────────
+  _e(() => {
+    if (!candleRef.current) return;
+    if (stopLineRef.current) { try { candleRef.current.removePriceLine(stopLineRef.current); } catch(_){} stopLineRef.current = null; }
+    if (tgtLineRef.current)  { try { candleRef.current.removePriceLine(tgtLineRef.current);  } catch(_){} tgtLineRef.current  = null; }
+    if (!selectedTrade) return;
+    const { stopPx, targetPx } = selectedTrade;
+    if (stopPx && stopPx > 0)   stopLineRef.current = candleRef.current.createPriceLine({ price: stopPx,   color: '#ef4444', lineWidth: 1, lineStyle: LWC.LineStyle.Dotted, axisLabelVisible: true, title: 'STP' });
+    if (targetPx && targetPx > 0) tgtLineRef.current = candleRef.current.createPriceLine({ price: targetPx, color: '#22c55e', lineWidth: 1, lineStyle: LWC.LineStyle.Dotted, axisLabelVisible: true, title: 'TGT' });
+  }, [selectedTrade]);
 
-  const curPx = visible[visible.length - 1]?.c || 0;
-  const curY  = yOf(curPx);
-
-  return (
-    <div className="t-chart-area">
-      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
-           onMouseMove={handleMove} onMouseLeave={() => setHover(null)}>
-        <g className="t-chart-grid">
-          {ticks.map(p => <line key={p} x1={PAD.l} x2={W-PAD.r} y1={yOf(p)} y2={yOf(p)}/>)}
-        </g>
-
-        {selectedTrade && (() => {
-          const t = selectedTrade;
-          const eiN = Math.min(t.entryIdx, visible.length - 1);
-          const exN = Math.min(t.exitIdx,  visible.length - 1);
-          if (eiN < 0) return null;
-          return (
-            <g>
-              <rect x={xOf(eiN)-bodyW/2} y={Math.min(yOf(t.stopPx),yOf(t.targetPx))}
-                width={xOf(exN)-xOf(eiN)+bodyW}
-                height={Math.abs(yOf(t.stopPx)-yOf(t.targetPx))} className="t-chart-trade-band"/>
-              <line x1={PAD.l} x2={W-PAD.r} y1={yOf(t.stopPx)}   y2={yOf(t.stopPx)}   className="t-chart-stop-line"/>
-              <line x1={PAD.l} x2={W-PAD.r} y1={yOf(t.targetPx)} y2={yOf(t.targetPx)} className="t-chart-target-line"/>
-              <text x={W-PAD.r+3} y={yOf(t.stopPx)+3} fill="var(--neg)" fontFamily="var(--f-mono)" fontSize="9">STP {t.stopPx.toFixed(0)}</text>
-              <text x={W-PAD.r+3} y={yOf(t.targetPx)+3} fill="var(--pos)" fontFamily="var(--f-mono)" fontSize="9">TGT {t.targetPx.toFixed(0)}</text>
-            </g>
-          );
-        })()}
-
-        {visible.map((c, i) => {
-          const up = c.c >= c.o;
-          const x = xOf(i);
-          const bTop = yOf(Math.max(c.o, c.c));
-          const bBot = yOf(Math.min(c.o, c.c));
-          const flash = i === flashIdx ? ' flash' : '';
-          return (
-            <g key={i}>
-              <line x1={x} x2={x} y1={yOf(c.h)} y2={yOf(c.l)} className={`t-candle-wick ${up?'up':'down'}`} strokeWidth="1"/>
-              <rect x={x-bodyW/2} y={bTop} width={bodyW} height={Math.max(1,bBot-bTop)}
-                    className={`t-candle-body ${up?'up':'down'}${flash}`} strokeWidth="0.5"/>
-            </g>
-          );
-        })}
-
-        <path d={vwapPath} className="t-chart-vwap"/>
-
-        {trades.filter(t => t.entryIdx < visible.length).map(t => {
-          const eiN = Math.min(t.entryIdx, visible.length - 1);
-          const exN = Math.min(t.exitIdx ?? t.entryIdx, visible.length - 1);
-          const x1 = xOf(eiN);
-          const y1 = yOf(candles[eiN]?.c ?? t.entryPx);
-          const x2 = xOf(exN);
-          const y2 = yOf(candles[exN]?.c ?? candles[eiN]?.c ?? t.exitPx ?? t.entryPx);
-          const pnl = Number(t.pnlPct || 0);
-          const color = pnl > 0 ? 'var(--pos)' : pnl < 0 ? 'var(--neg)' : 'var(--fg-3)';
-          const isSel = selectedTrade?.id === t.id;
-          return (
-            <g key={"link-"+t.id} opacity={isSel?1:0.7}>
-              <line x1={x1} y1={y1} x2={x2} y2={y2}
-                    stroke={color} strokeWidth={isSel?2:1} strokeDasharray={isSel?"":"3 3"}/>
-              <circle cx={x2} cy={y2} r={isSel?3.5:2.5} fill={color} stroke={color}/>
-            </g>
-          );
-        })}
-
-        {trades.filter(t => t.entryIdx < visible.length).map(t => {
-          const isSel = selectedTrade?.id === t.id;
-          const cx = xOf(Math.min(t.entryIdx, visible.length - 1));
-          const cy = yOf(t.entryPx);
-          const color = t.dir === 'LONG' ? 'var(--pos)' : 'var(--neg)';
-          const d = t.dir === 'LONG'
-            ? `M ${cx} ${cy+13} L ${cx-4} ${cy+21} L ${cx+4} ${cy+21} Z`
-            : `M ${cx} ${cy-13} L ${cx-4} ${cy-21} L ${cx+4} ${cy-21} Z`;
-          return (
-            <path key={t.id} d={d} fill={color} fillOpacity={isSel?1:0.55}
-                  stroke={color} strokeWidth="1" className="t-trade-marker"
-                  onClick={() => onSelectTrade(t)}/>
-          );
-        })}
-
-        <g>
-          <line x1={PAD.l} x2={W-PAD.r} y1={curY} y2={curY} stroke="var(--accent)" strokeWidth="1" strokeDasharray="1 2" opacity="0.6"/>
-          <rect x={W-PAD.r+2} y={curY-9} width={54} height={18} fill="var(--accent)" rx="2"/>
-          <text x={W-PAD.r+5} y={curY+4} fill="#1a1100" fontFamily="var(--f-mono)" fontSize="10" fontWeight="700">{curPx.toFixed(0)}</text>
-        </g>
-
-        <g>
-          {ticks.map(p => <text key={p} x={W-PAD.r+3} y={yOf(p)+3} fontFamily="var(--f-mono)" fontSize="9" fill="var(--fg-3)">{p.toFixed(0)}</text>)}
-        </g>
-        <g>
-          {timeTicks.map(i => (
-            <text key={i} x={xOf(i)} y={H-6} fontFamily="var(--f-mono)" fontSize="9" fill="var(--fg-3)" textAnchor="middle">
-              {_barLabel(session, i)}
-            </text>
-          ))}
-        </g>
-
-        {hover != null && (() => {
-          const c = visible[hover];
-          if (!c) return null;
-          const x = xOf(hover);
-          const tipX = hover > visible.length * 0.7 ? x - 170 : x + 8;
-          return (
-            <g>
-              <line x1={x} x2={x} y1={PAD.t} y2={H-PAD.b} className="t-chart-crosshair"/>
-              <rect x={tipX} y={PAD.t+4} width={164} height={80} fill="var(--bg-2)" stroke="var(--line-3)" rx="2"/>
-              <text x={tipX+8} y={PAD.t+18} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-2)">{_barLabel(session,hover)}</text>
-              <text x={tipX+8} y={PAD.t+34} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">O <tspan fill="var(--fg-1)" fontWeight="600">{c.o.toFixed(0)}</tspan></text>
-              <text x={tipX+70} y={PAD.t+34} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">H <tspan fill="var(--pos)" fontWeight="600">{c.h.toFixed(0)}</tspan></text>
-              <text x={tipX+8} y={PAD.t+50} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">L <tspan fill="var(--neg)" fontWeight="600">{c.l.toFixed(0)}</tspan></text>
-              <text x={tipX+70} y={PAD.t+50} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">C <tspan fill={c.c>=c.o?'var(--pos)':'var(--neg)'} fontWeight="600">{c.c.toFixed(0)}</tspan></text>
-            </g>
-          );
-        })()}
-      </svg>
-    </div>
-  );
+  if (!LWC) {
+    return <div className="t-chart-area" style={{display:'flex',alignItems:'center',justifyContent:'center',color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:11}}>lightweight-charts not loaded</div>;
+  }
+  return <div className="t-chart-area" ref={containerRef} style={{position:'relative',width:'100%',height:'100%',minHeight:260}} />;
 }
 
 // ── DiagPanel: current model + available models + blocker funnel ─────────
@@ -1129,21 +1103,31 @@ function TradeInspector({ session, trade }) {
   // Use only stored signal metrics and replay-linked trade context.
   const sm = trade.signal?.metrics || {};
   const entryProb = _num(traceSummary.entry_prob ?? selectedVoteRaw.entry_prob ?? sm.entry_prob);
-  const tradeProb = _num(sm.trade_prob);
-  const recipeProb = _num(traceSummary.recipe_prob ?? sm.recipe_prob);
-  const recipeMargin = _num(traceSummary.recipe_margin ?? sm.recipe_margin);
-  const upProb = _num(traceSummary.direction_up_prob ?? sm.up_prob);
+  // trade_prob is a placeholder (0.5) for deterministic/bypass mode — hide the gate to avoid
+  // showing a false FAIL when the engine never evaluated an ML trade gate.
+  const _policyMode = String(selectedVoteRaw._entry_policy_mode || '').trim();
+  const tradeProb = _policyMode === 'bypass' ? null : _num(sm.trade_prob);
+  // In bypass/deterministic mode, recipe_prob and up_prob come only from ML metrics defaults (0.5).
+  // Only show them when a real trace value exists — otherwise they're meaningless placeholders.
+  const recipeProb   = _num(traceSummary.recipe_prob   ?? (_policyMode === 'bypass' ? null : sm.recipe_prob));
+  const recipeMargin = _num(traceSummary.recipe_margin ?? (_policyMode === 'bypass' ? null : sm.recipe_margin));
+  const upProb       = _num(traceSummary.direction_up_prob ?? (_policyMode === 'bypass' ? null : sm.up_prob));
   const probs = [
-    { v: entryProb, gate: 0.60, label: 'Entry gate', kind: 'gate' },
-    { v: tradeProb, gate: 0.55, label: 'Trade gate', kind: 'gate' },
-    { v: recipeProb, label: 'Recipe prob', kind: 'neutral' },
-    { v: recipeMargin, label: 'Recipe margin', kind: 'neutral' },
-    { v: upProb, label: 'Up prob', kind: 'neutral' },
+    { v: entryProb,    gate: 0.60, label: 'Entry gate',    kind: 'gate' },
+    { v: tradeProb,    gate: 0.55, label: 'Trade gate',    kind: 'gate' },
+    { v: recipeProb,               label: 'Recipe prob',   kind: 'neutral' },
+    { v: recipeMargin,             label: 'Recipe margin', kind: 'neutral' },
+    { v: upProb,                   label: 'Up prob',       kind: 'neutral' },
   ].filter(p => p.v != null && Number.isFinite(Number(p.v)));
 
   // Direction decision — which leg was chosen and why
-  const ceProb = _num(selectedVoteRaw.direction_consensus_ce ?? sm.ce_prob);
-  const peProb = _num(selectedVoteRaw.direction_consensus_pe ?? sm.pe_prob);
+  // direction_consensus values are SCORES (summed signal weights, can exceed 1.0), not probabilities.
+  // Normalize when total > 1 so the bars display as 0-100% instead of 0-393%.
+  const _rawCeScore = _num(selectedVoteRaw.direction_consensus_ce ?? sm.ce_prob);
+  const _rawPeScore = _num(selectedVoteRaw.direction_consensus_pe ?? sm.pe_prob);
+  const _dirTotal = (_rawCeScore || 0) + (_rawPeScore || 0);
+  const ceProb = _dirTotal > 1 ? (_rawCeScore || 0) / _dirTotal : _rawCeScore;
+  const peProb = _dirTotal > 1 ? (_rawPeScore || 0) / _dirTotal : _rawPeScore;
   const consensusMargin = _num(selectedVoteRaw.direction_consensus_margin);
   const chosenLeg = trade.optionType || trade.legDir || (trade.dir === 'SHORT' ? 'PE' : 'CE');
   const dirBasis = trade.signal?.reason || trade.entryReason || '';
@@ -1204,7 +1188,7 @@ function TradeInspector({ session, trade }) {
           <div className="t-inspector-meta">
             <span>{_barLabel(session,trade.entryIdx)} → {_barLabel(session,trade.exitIdx)}</span>
             <span>·</span><span>{trade.heldBars}b</span>
-            <span>·</span><span>{trade.regime}</span>
+            <span>·</span><span>{trade.regime || (trade.entryContext?.regimeContext?.regime) || '—'}</span>
           </div>
         </div>
         <span className={`t-chip ${outCls}`}>● {(trade.exitReason||'').replace('_',' ')}</span>
@@ -1655,8 +1639,9 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   const sessionPnl     = rawTrades.reduce((a, t) => a + (t.pnlPct || 0), 0);
   const wins           = rawTrades.filter(t => (t.pnlPct || 0) > 0).length;
   const winRate        = rawTrades.length ? Math.round(wins / rawTrades.length * 100) : 0;
-  const regime         = session.regime || (trades[0]?.regime) || '—';
-  const engine         = session.engine || 'ML_PURE';
+  const _latestSignal  = (session.signals || []).reduce((a, s) => (!a || s.idx > a.idx ? s : a), null);
+  const regime         = session.regime || _latestSignal?.regime || (trades[0]?.regime) || '—';
+  const engine         = runtimeConfig?.engine || runtimeConfig?.model_type || session.engine || '—';
 
   // Default to latest trade in inspector
   const displayTrade   = selectedTrade || (trades.length > 0 ? trades[0] : null);

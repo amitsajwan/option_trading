@@ -393,6 +393,26 @@ services:
       ML_ENTRY_DET_SKIP_BRAIN_GATE: "${ML_ENTRY_DET_SKIP_BRAIN_GATE:-false}"
       DEPTH_FEED_ENABLED: "${DEPTH_FEED_ENABLED:-0}"
       DEPTH_STALE_SEC: "${DEPTH_STALE_SEC:-30}"
+
+      # ── Exit policy stack (E2) ─────────────────────────────────────────────
+      # Master switch — set to 1 to activate. Default 0 preserves existing behaviour.
+      EXIT_POLICY_STACK_ENABLED: "${EXIT_POLICY_STACK_ENABLED:-0}"
+      EXIT_PREMIUM_TARGET_PCT: "${EXIT_PREMIUM_TARGET_PCT:-0.015}"
+      EXIT_TRAILING_ACTIVATION_PCT: "${EXIT_TRAILING_ACTIVATION_PCT:-0.01}"
+      EXIT_TRAILING_TRAIL_PCT: "${EXIT_TRAILING_TRAIL_PCT:-0.005}"
+      EXIT_THESIS_FAIL_BARS: "${EXIT_THESIS_FAIL_BARS:-3}"
+      EXIT_THESIS_FAIL_MIN_MFE: "${EXIT_THESIS_FAIL_MIN_MFE:-0.002}"
+
+      # ── Entry gate (E3) ───────────────────────────────────────────────────
+      # Align consensus bypass threshold to entry gate. Default 0.65 = same as STRATEGY_MIN_CONFIDENCE.
+      CONSENSUS_BYPASS_MIN_CONFIDENCE: "${CONSENSUS_BYPASS_MIN_CONFIDENCE:-0.65}"
+      # SIDEWAYS regime requires higher direction margin (noisier signals in flat market).
+      DIRECTION_MIN_MARGIN_SIDEWAYS: "${DIRECTION_MIN_MARGIN_SIDEWAYS:-2.0}"
+
+      # ── Risk sizing (E4) ──────────────────────────────────────────────────
+      # RISK_CALCULATOR=fixed_fraction uses 1% of capital at risk per trade.
+      RISK_CALCULATOR: "${RISK_CALCULATOR:-fixed_fraction}"
+      RISK_FRACTION_PCT: "${RISK_FRACTION_PCT:-0.01}"
     command:
       [
         "python",
@@ -430,6 +450,72 @@ services:
       test: ["CMD", "python", "-m", "strategy_app.health"]
       interval: 60s
       timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # EXECUTION APP
+  # Routes strategy trade signals to the configured broker adapter.
+  # EXECUTION_ADAPTER=paper  → no real orders (safe default)
+  # EXECUTION_ADAPTER=kite   → real Kite NFO orders (requires credentials)
+  # Enable by adding --profile live to docker compose up, or run individually.
+  # ─────────────────────────────────────────────────────────────────────────
+  execution_app:
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: execution_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      strategy_app:
+        condition: service_started
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+
+      # ── Adapter selection ──────────────────────────────────────────────────
+      EXECUTION_ADAPTER: "${EXECUTION_ADAPTER:-paper}"
+
+      # ── Kite credentials (required when EXECUTION_ADAPTER=kite) ───────────
+      KITE_API_KEY: "${KITE_API_KEY:-}"
+      KITE_ACCESS_TOKEN: "${KITE_ACCESS_TOKEN:-}"
+
+      # ── Order management ──────────────────────────────────────────────────
+      ORDER_FILL_TIMEOUT_SEC: "${ORDER_FILL_TIMEOUT_SEC:-30}"
+      ORDER_POLL_INTERVAL_SEC: "${ORDER_POLL_INTERVAL_SEC:-1}"
+
+      # ── Fill tracking ─────────────────────────────────────────────────────
+      FILL_TRACKER_ENABLED: "${FILL_TRACKER_ENABLED:-1}"
+      EXECUTION_FILLS_STREAM: "${EXECUTION_FILLS_STREAM:-execution:fills:v1}"
+      MONGO_COLL_EXECUTION_FILLS: "${MONGO_COLL_EXECUTION_FILLS:-execution_fills}"
+      MONGO_COLL_STRATEGY_POSITIONS: "${MONGO_COLL_STRATEGY_POSITIONS:-strategy_positions}"
+
+      # ── Shadow mode ──────────────────────────────────────────────────────
+      SHADOW_MAX_LOTS: "${SHADOW_MAX_LOTS:-1}"
+      SHADOW_REAL_FILLS_STREAM: "${SHADOW_REAL_FILLS_STREAM:-execution:fills:real:v1}"
+      SHADOW_PAPER_FILLS_STREAM: "${SHADOW_PAPER_FILLS_STREAM:-execution:fills:paper:v1}"
+
+      # ── Alerts ────────────────────────────────────────────────────────────
+      ALERT_ENABLED: "${ALERT_ENABLED:-0}"
+      ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
+      ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+
+      # ── Signal subscription ───────────────────────────────────────────────
+      TRADE_SIGNAL_TOPIC: "${TRADE_SIGNAL_TOPIC:-market:strategy:signals:v1}"
+    ports:
+      - "${EXECUTION_APP_HEALTH_PORT:-8009}:8009"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8009/health')"]
+      interval: 30s
+      timeout: 5s
       retries: 3
 
   depth_collector:

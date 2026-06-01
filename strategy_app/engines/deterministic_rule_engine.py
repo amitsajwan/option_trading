@@ -192,7 +192,17 @@ class DeterministicRuleEngine(StrategyEngine):
         return maybe_wrap_with_direction_ml(base)
 
     def set_run_context(self, run_id: Optional[str], metadata: Optional[dict[str, Any]] = None) -> None:
-        self._run_id = str(run_id or "").strip() or None
+        # E6-S1: preserve session run_id set at startup — snapshot events carry no
+        # run_id so calling set_run_context from the consumer would clear it.
+        new_run_id = str(run_id or "").strip() or None
+        if new_run_id:
+            self._run_id = new_run_id
+        # E6-S3: skip rebuilding entry policy (which reloads the ML model bundle)
+        # when the call comes from a snapshot event with no config payload.
+        # Only rebuild when metadata carries an actual policy/risk/regime override.
+        _has_payload = isinstance(metadata, dict) and any(
+            k in metadata for k in ("policy_config", "risk_config", "regime_config", "router_config")
+        )
         risk_payload = metadata.get("risk_config") if isinstance(metadata, dict) else None
         policy_payload = metadata.get("policy_config") if isinstance(metadata, dict) else None
         regime_payload = metadata.get("regime_config") if isinstance(metadata, dict) else None
@@ -231,7 +241,8 @@ class DeterministicRuleEngine(StrategyEngine):
             self._entry_policy = self._injected_entry_policy
             self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)
-        else:
+        elif _has_payload:
+            # Only rebuild on actual overrides — not on per-snapshot heartbeat calls.
             self._entry_policy = self._build_entry_policy(self._default_policy_config)
             self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)
@@ -246,7 +257,7 @@ class DeterministicRuleEngine(StrategyEngine):
         self._ml_score_all_snapshots = (
             as_bool(metadata.get("ml_score_all_snapshots")) if isinstance(metadata, dict) else False
         )
-        self._set_logger_context(run_id)
+        self._set_logger_context(new_run_id or self._run_id)
 
     def _set_logger_context(self, run_id: Optional[str]) -> None:
         payload = {
@@ -865,7 +876,13 @@ class DeterministicRuleEngine(StrategyEngine):
             logger.debug("consensus entry blocked: no ML_ENTRY timing vote")
             return None
         ml_vote = max(ml_votes, key=lambda v: float(v.confidence or 0))
-        if ml_vote.confidence < self._min_confidence:
+        # E3-S1: bypass path uses its own threshold, aligned to the entry gate (0.65).
+        # CONSENSUS_BYPASS_MIN_CONFIDENCE can be raised independently of the main
+        # self._min_confidence (0.50) which guards non-consensus paths.
+        _bypass_min = float(os.getenv("CONSENSUS_BYPASS_MIN_CONFIDENCE", str(self._min_confidence)) or self._min_confidence)
+        if ml_vote.confidence < _bypass_min:
+            logger.debug("consensus bypass blocked: confidence=%.3f < bypass_min=%.3f",
+                         float(ml_vote.confidence or 0), _bypass_min)
             return None
 
         shadow_dir, shadow_basis, shadow_score = self._shadow_direction_from_snapshot(snap)
@@ -882,6 +899,7 @@ class DeterministicRuleEngine(StrategyEngine):
             shadow_score=shadow_score,
             ml_direction_hint=hint_dir,
             ml_ce_prob=ce_prob,
+            regime_signal=regime_signal,
         )
         if consensus.vetoed or consensus.direction is None:
             logger.debug(
@@ -950,6 +968,15 @@ class DeterministicRuleEngine(StrategyEngine):
 
         policy_decision = self._evaluate_entry_policy(trade_vote, snap, regime_signal, risk)
         self._annotate_policy(trade_vote, policy_decision)
+        # Mirror annotation back to ml_vote so the candidate trace reflects the real outcome.
+        # Without this, ml_vote._policy_allowed stays None and the trace shows "blocked" even
+        # though the consensus bypass passed — a tracing lie.
+        if isinstance(ml_vote.raw_signals, dict):
+            ml_vote.raw_signals["_policy_allowed"] = policy_decision.allowed
+            ml_vote.raw_signals["_policy_reason"] = policy_decision.reason
+            ml_vote.raw_signals["_policy_score"] = round(policy_decision.score, 3)
+            ml_vote.raw_signals["_policy_checks"] = dict(policy_decision.checks)
+            ml_vote.raw_signals["_execution_path"] = "consensus_bypass"
         self._annotate_vote_contract(trade_vote)
         if not policy_decision.allowed:
             return None
@@ -1669,6 +1696,7 @@ class DeterministicRuleEngine(StrategyEngine):
                 shadow_score=shadow_score,
                 ml_direction_hint=hint_dir,
                 ml_ce_prob=ce_prob,
+                regime_signal=regime_signal,
             )
             if consensus.vetoed or consensus.direction is None:
                 return f"direction_consensus:{consensus.veto_reason}"
@@ -1915,17 +1943,28 @@ class DeterministicRuleEngine(StrategyEngine):
         )
         if float(vote.confidence) < self._min_confidence:
             return gates, "blocked", "confidence_gate", False
+        policy_mode = str(raw_signals.get("_entry_policy_mode") or "").strip().lower()
         policy_allowed = raw_signals.get("_policy_allowed")
+        # Bypass mode: the vote declared _entry_policy_mode=bypass — treat as pass regardless
+        # of whether _policy_allowed was mirrored. This prevents the trace showing "blocked"
+        # when the entry fired correctly via the consensus bypass path.
+        if policy_mode == "bypass" and policy_allowed is None:
+            policy_allowed = True
         policy_reason = str(raw_signals.get("_policy_reason") or "").strip()
+        policy_checks = raw_signals.get("_policy_checks") or {}
         gates.append(
             {
                 "gate_id": "policy_checks",
                 "gate_group": "policy",
                 "status": ("pass" if policy_allowed is True else "blocked"),
                 "reason_code": (vote.decision_reason_code if policy_allowed is not True else "policy_allowed"),
-                "message": policy_reason or None,
+                "message": policy_reason or (f"bypass:entry_prob={raw_signals.get('entry_prob','?')}>={raw_signals.get('entry_threshold','?')}" if policy_mode == "bypass" else None),
                 "metrics": {
+                    "policy_mode": policy_mode or None,
                     "policy_score": raw_signals.get("_policy_score"),
+                    "entry_prob": raw_signals.get("entry_prob"),
+                    "entry_threshold": raw_signals.get("entry_threshold"),
+                    **{k: v for k, v in policy_checks.items() if k not in ("mode", "strategy")},
                 },
             }
         )
@@ -2029,6 +2068,18 @@ class DeterministicRuleEngine(StrategyEngine):
             )
         final_outcome = "entry_taken" if signal is not None else ("blocked" if blocker is not None or warmup_blocked else "hold")
         shadow_dir, shadow_full_basis, shadow_score = self._shadow_direction_from_snapshot(snap)
+        # Derive the execution_path from the winning vote's annotation so the trace top-level
+        # immediately answers "HOW did this fire?" without reading candidates[0].ordered_gates.
+        execution_path: str | None = None
+        if signal is not None:
+            for vote in votes:
+                rs = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
+                ep = str(rs.get("_execution_path") or "").strip()
+                if ep:
+                    execution_path = ep
+                    break
+            if execution_path is None:
+                execution_path = "direct_candidate"
         trace = builder.finalize(
             final_outcome=final_outcome,
             primary_blocker_gate=("warmup" if warmup_blocked else blocker),
@@ -2040,6 +2091,8 @@ class DeterministicRuleEngine(StrategyEngine):
                 "shadow_basis": shadow_full_basis,
             },
         )
+        if execution_path is not None:
+            trace["execution_path"] = execution_path
         # Attach brain context to trace so the UI blocker funnel can show
         # day_score and consensus details without a separate API call.
         if self._day_context is not None:

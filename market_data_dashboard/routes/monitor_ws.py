@@ -121,7 +121,7 @@ def _build_kpi_live(state: _LiveSessionState) -> List[MonitorKpiItem]:
     wins = sum(1 for t in visible if t.pnlPct > 0)
     wr = (wins / len(visible) * 100) if visible else 0.0
     return [
-        MonitorKpiItem(label="ENGINE", value="ML_PURE_V3", sub="stage-1 · stage-2 · policy"),
+        MonitorKpiItem(label="ENGINE", value=str(session.engine or "—"), sub=session.instrument),
         MonitorKpiItem(label="INSTRUMENT", value=session.instrument, cls="pos", sub="live · BANKNIFTY"),
         MonitorKpiItem(
             label="SESSION P&L",
