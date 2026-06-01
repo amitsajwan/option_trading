@@ -285,6 +285,11 @@ function EngineRoster({ strategies, dailyRisk, brainData }) {
 // crosshair tooltip, and auto-resize — without affecting page font size.
 function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upToIdx }) {
   const LWC = window.LightweightCharts;
+  // LightweightCharts renders the time axis in UTC and has no timezone support.
+  // Our candle .t is true UTC ms. Shift by IST (+5:30) so the axis prints IST
+  // wall-clock (09:15 not 03:45). All series + markers + click use the same shift.
+  const IST = 19800; // 5.5h in seconds
+  const _tsec = (ms) => Math.floor(ms / 1000) + IST;
   const containerRef = _r(null);
   const chartRef     = _r(null);
   const candleRef    = _r(null);
@@ -328,7 +333,7 @@ function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upT
       trades.forEach(t => {
         const c = candles[t.entryIdx];
         if (!c) return;
-        const tSec = Math.floor(c.t / 1000);
+        const tSec = _tsec(c.t);
         const d = Math.abs(tSec - clickedTime);
         if (d < bestDist) { bestDist = d; best = t; }
       });
@@ -352,7 +357,7 @@ function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upT
     const visible = candles.slice(0, upToIdx + 1);
 
     const lwcData = visible.map(c => ({
-      time: Math.floor(c.t / 1000),
+      time: _tsec(c.t),
       open: c.o, high: c.h, low: c.l, close: c.c,
     }));
     candleRef.current.setData(lwcData);
@@ -362,7 +367,7 @@ function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upT
     const vwapData = visible.map(c => {
       const tp = (c.h + c.l + c.c) / 3;
       cv += tp * (c.v || 1); cc += (c.v || 1);
-      return { time: Math.floor(c.t / 1000), value: Math.round(cv / cc * 100) / 100 };
+      return { time: _tsec(c.t), value: Math.round(cv / cc * 100) / 100 };
     });
     vwapRef.current.setData(vwapData);
 
@@ -376,7 +381,7 @@ function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upT
       const color = isSel ? '#f59e0b' : (pnl > 0 ? '#22c55e' : pnl < 0 ? '#ef4444' : '#71717a');
       const isLong = t.dir === 'LONG';
       markers.push({
-        time: Math.floor(ec.t / 1000),
+        time: _tsec(ec.t),
         position: isLong ? 'belowBar' : 'aboveBar',
         color,
         shape: isLong ? 'arrowUp' : 'arrowDown',
@@ -388,7 +393,7 @@ function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upT
         const xc = candles[t.exitIdx];
         if (xc) {
           markers.push({
-            time: Math.floor(xc.t / 1000),
+            time: _tsec(xc.t),
             position: isLong ? 'aboveBar' : 'belowBar',
             color,
             shape: 'circle',
