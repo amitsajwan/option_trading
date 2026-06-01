@@ -130,13 +130,24 @@ def run_fidelity_check(
     pnl_tolerance: float = 0.001,   # 0.1% absolute tolerance per trade
     count_tolerance: int = 0,       # default: trade count must match exactly
     run_id_filter: Optional[str] = None,  # isolate a single session when multiple ran same day
+    snapshot_start_time: Optional[str] = None,  # HH:MM — only feed snapshots >= this time
 ) -> dict[str, Any]:
     """Compare sim output to live trades for one day.
+
+    snapshot_start_time: if the live session started mid-day (e.g. '14:02'), pass that
+    time so the sim only sees snapshots from that point onward and starts with fresh risk
+    state — matching the live session's starting conditions.
 
     Returns a result dict with keys: passed, live_count, sim_count, mismatches, report.
     """
     live_trades = _load_live_trades(positions_jsonl, trade_date, run_id_filter=run_id_filter)
     snapshots   = _load_live_snapshots(events_jsonl, trade_date)
+
+    if snapshot_start_time and snapshots:
+        snapshots = [
+            s for s in snapshots
+            if str(s.get("timestamp", ""))[11:16] >= snapshot_start_time
+        ]
 
     if not snapshots:
         return {"passed": False, "error": f"No snapshots in {events_jsonl} for {trade_date}"}
@@ -278,6 +289,10 @@ def _cli() -> None:
     parser.add_argument("--run-id",         default=None,
                         help="Isolate a single live session (e.g. paper-20260601-140239-5b1b2c8d). "
                              "Required when multiple sessions ran on the same day with different configs.")
+    parser.add_argument("--start-time",     default=None,
+                        help="HH:MM — only feed snapshots >= this time to the sim. "
+                             "Use when the live session started mid-day so the sim starts fresh "
+                             "at the same point (e.g. '14:02').")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
@@ -289,6 +304,7 @@ def _cli() -> None:
         ops_env_json=args.ops_env,
         pnl_tolerance=args.pnl_tolerance,
         run_id_filter=args.run_id,
+        snapshot_start_time=args.start_time,
     )
 
     print(result["report"])
