@@ -16,25 +16,38 @@ Do not use `runtime_lifecycle_interactive.sh` as the main entrypoint for parquet
 
 ## What The Wrapper Produces
 
-The wrapper builds and publishes:
+Supported operator output:
 
 - canonical `snapshots`
 - `market_base`
-- `snapshots_ml_flat`
-- `stage1_entry_view`
-- `stage2_direction_view`
-- `stage3_recipe_view`
+- `snapshots_ml_flat_v2`
+- `stage1_entry_view_v2`
+- `stage2_direction_view_v2`
+- `stage3_recipe_view_v2`
 - `reports/build_manifest.json`
 - `reports/validation_report.json`
 - `reports/window_manifest_latest.json`
 - `reports/coverage_audit.json`
+
+Optional legacy output, only when explicitly enabled in `operator.env`:
+
+- `snapshots_ml_flat`
+- `stage1_entry_view`
+- `stage2_direction_view`
+- `stage3_recipe_view`
+
+Contract summary:
+
+- replay / strategy runtime reads canonical `snapshots`
+- staged training reads `snapshots_ml_flat_v2` + `stage*_view_v2`
+- legacy V1 flat/view datasets are retained only for historical reproducibility
 
 It also fails closed before publish when:
 
 - raw/options source coverage is incomplete for the requested window
 - the local build does not close the requested window
 - the local build manifest is not publishable
-- `stage2_direction_view` is missing any column from `STAGE2_REQUIRED_COLUMNS`
+- `stage2_direction_view_v2` is missing any column from `STAGE2_REQUIRED_COLUMNS`
 
 ## Host Constraints
 
@@ -245,10 +258,10 @@ Look for:
 
 - `snapshots`
 - `market_base`
-- `snapshots_ml_flat`
-- `stage1_entry_view`
-- `stage2_direction_view`
-- `stage3_recipe_view`
+- `snapshots_ml_flat_v2`
+- `stage1_entry_view_v2`
+- `stage2_direction_view_v2`
+- `stage3_recipe_view_v2`
 - `reports/build_manifest.json`
 - `reports/validation_report.json`
 - `reports/window_manifest_latest.json`
@@ -257,7 +270,7 @@ Look for:
 Also verify only the expected chunk files exist:
 
 ```bash
-for ds in snapshots market_base snapshots_ml_flat stage1_entry_view stage2_direction_view stage3_recipe_view; do
+for ds in snapshots market_base snapshots_ml_flat_v2 stage1_entry_view_v2 stage2_direction_view_v2 stage3_recipe_view_v2; do
   echo "== ${ds}"
   gcloud storage ls "${SNAPSHOT_PARQUET_BUCKET_URL}/${ds}/**" | grep 'data.parquet$' | sort
 done
@@ -271,7 +284,7 @@ import os
 from pathlib import Path
 import pandas as pd
 
-root = Path(os.environ.get("REPO_ROOT", ".")) / ".data/ml_pipeline/parquet_data/stage2_direction_view"
+root = Path(os.environ.get("REPO_ROOT", ".")) / ".data/ml_pipeline/parquet_data/stage2_direction_view_v2"
 sample = next(root.rglob("*.parquet"))
 required = [
     "pcr_change_5m",
@@ -417,10 +430,10 @@ Example clean local output reset:
 ```bash
 rm -rf .data/ml_pipeline/parquet_data/snapshots \
        .data/ml_pipeline/parquet_data/market_base \
-       .data/ml_pipeline/parquet_data/snapshots_ml_flat \
-       .data/ml_pipeline/parquet_data/stage1_entry_view \
-       .data/ml_pipeline/parquet_data/stage2_direction_view \
-       .data/ml_pipeline/parquet_data/stage3_recipe_view
+       .data/ml_pipeline/parquet_data/snapshots_ml_flat_v2 \
+       .data/ml_pipeline/parquet_data/stage1_entry_view_v2 \
+       .data/ml_pipeline/parquet_data/stage2_direction_view_v2 \
+       .data/ml_pipeline/parquet_data/stage3_recipe_view_v2
 ```
 
 Then rerun:

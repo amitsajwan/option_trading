@@ -4,7 +4,7 @@
   "_comment": "E5 — E1 + shorter training window (2022-01 instead of 2020-08). Tests whether the 2020-2021 history is critical to C1's stability, or whether 2022+ data alone is enough.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
-    "support_dataset": "snapshots_ml_flat_v2",
+    "support_dataset": "snapshots_ml_flat",
     "support_window": { "start": "2022-01-01", "end": "2024-10-31" }
   },
   "outputs": {

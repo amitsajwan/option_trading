@@ -2,6 +2,7 @@
   "schema_version": 1,
   "experiment_kind": "factory_campaign_v1",
   "campaign_id": "smoke_test_campaign_v1",
+  "_comment": "LEGACY smoke campaign for the baseline snapshots_ml_flat/v1-view lane. Retained for historical smoke coverage, not as the supported V2 default path.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
     "support_dataset": "snapshots_ml_flat"

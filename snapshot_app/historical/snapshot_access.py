@@ -1,16 +1,16 @@
-"""Shared snapshot input access contract for canonical and derived snapshot datasets.
+"""Shared snapshot input access contract for canonical and training datasets.
 
 Dataset hierarchy (parquet_data/):
-  snapshots/              — CANONICAL: nested snapshot_raw_json. Used by replay runner + strategy engine.
-  snapshots_ml_flat/      — V1 FLAT (DEPRECATED for ML training): no velocity features. Built by snapshot_batch_runner.
-  snapshots_ml_flat_v2/   — V2 FLAT (CURRENT ML TRAINING DATASET): adds vel_*, ctx_am_*, ctx_gap_*
-                            velocity features at 11:30 bar. Built by enrichment_runner.
-                            All direction/entry/option-pnl models are trained on this dataset.
+  snapshots/              — CANONICAL: nested snapshot_raw_json. Replay/runtime source of truth.
+  market_base/            — INTERNAL bridge dataset used to derive training datasets.
+  snapshots_ml_flat/      — LEGACY V1 support dataset. No velocity features. Do not use for new training.
+  snapshots_ml_flat_v2/   — SUPPORTED training support dataset. Adds vel_*, ctx_am_*, ctx_gap_*.
+  stage*_view_v2/         — SUPPORTED training views rebuilt from snapshots_ml_flat_v2.
 
 Rule of thumb:
-  Replay / strategy engine  → use `snapshots`          (SNAPSHOT_DATASET_CANONICAL)
-  ML training / HPO         → use `snapshots_ml_flat_v2` (SNAPSHOT_DATASET_ML_FLAT_V2)
-  Legacy reference only     → `snapshots_ml_flat`        (SNAPSHOT_DATASET_ML_FLAT) — do NOT use for new training
+  Replay / strategy engine      → use `snapshots`            (SNAPSHOT_DATASET_CANONICAL)
+  ML training / HPO / preflight → use `snapshots_ml_flat_v2` (SNAPSHOT_DATASET_SUPPORT_V2)
+  Legacy reference only         → use `snapshots_ml_flat`    (SNAPSHOT_DATASET_ML_FLAT)
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+import warnings
 
 try:
     import duckdb
@@ -25,12 +26,21 @@ except ImportError:  # pragma: no cover - exercised in runtime
     duckdb = None  # type: ignore[assignment]
 
 
-SNAPSHOT_INPUT_MODE_ML_FLAT = "ml_flat"
+SNAPSHOT_INPUT_MODE_SUPPORT_V2 = "support_v2"
+SNAPSHOT_INPUT_MODE_LEGACY_ML_FLAT = "legacy_ml_flat"
+SNAPSHOT_INPUT_MODE_ML_FLAT = "ml_flat"  # DEPRECATED alias for support_v2
 SNAPSHOT_INPUT_MODE_CANONICAL = "canonical"
-SNAPSHOT_INPUT_MODES = frozenset({SNAPSHOT_INPUT_MODE_ML_FLAT, SNAPSHOT_INPUT_MODE_CANONICAL})
+SNAPSHOT_INPUT_MODES = frozenset(
+    {
+        SNAPSHOT_INPUT_MODE_SUPPORT_V2,
+        SNAPSHOT_INPUT_MODE_LEGACY_ML_FLAT,
+        SNAPSHOT_INPUT_MODE_CANONICAL,
+    }
+)
 
 SNAPSHOT_DATASET_ML_FLAT = "snapshots_ml_flat"          # DEPRECATED for ML training — use V2 below
 SNAPSHOT_DATASET_ML_FLAT_V2 = "snapshots_ml_flat_v2"   # CURRENT: all direction/entry/pnl models trained here
+SNAPSHOT_DATASET_SUPPORT_V2 = SNAPSHOT_DATASET_ML_FLAT_V2
 SNAPSHOT_DATASET_CANONICAL = "snapshots"                # Strategy engine replay + R1S IS/OOS replays
 DEFAULT_EXTERNAL_DATA_ROOT = Path(__file__).resolve().parents[2] / ".data" / "ml_pipeline"
 DEFAULT_HISTORICAL_PARQUET_BASE = DEFAULT_EXTERNAL_DATA_ROOT / "parquet_data"
@@ -101,9 +111,20 @@ def _query_trade_day_summary(glob_expr: str) -> tuple[Optional[str], Optional[st
 
 def _validate_mode(mode: str) -> str:
     text = str(mode or "").strip().lower()
+    if text == SNAPSHOT_INPUT_MODE_ML_FLAT:
+        warnings.warn(
+            "snapshot_access mode='ml_flat' is deprecated; use 'support_v2' for the "
+            "supported training dataset or 'legacy_ml_flat' for the old V1 dataset.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return SNAPSHOT_INPUT_MODE_SUPPORT_V2
     if text not in SNAPSHOT_INPUT_MODES:
         allowed = ", ".join(sorted(SNAPSHOT_INPUT_MODES))
-        raise ValueError(f"unsupported snapshot input mode '{mode}'; expected one of: {allowed}")
+        raise ValueError(
+            f"unsupported snapshot input mode '{mode}'; expected one of: {allowed} "
+            f"(deprecated alias: {SNAPSHOT_INPUT_MODE_ML_FLAT})"
+        )
     return text
 
 
@@ -119,9 +140,14 @@ def _raise_post_archive_error(
             f"{context} requires canonical `snapshots` parquet with `snapshot_raw_json` through {requested_max_day}, "
             f"but available canonical `snapshots` only run through {available_max_day}."
         )
+    if mode == SNAPSHOT_INPUT_MODE_SUPPORT_V2:
+        raise FileNotFoundError(
+            f"{context} requires supported training dataset `snapshots_ml_flat_v2` through {requested_max_day}, "
+            f"but available `snapshots_ml_flat_v2` only run through {available_max_day}."
+        )
     raise FileNotFoundError(
-        f"{context} requires snapshots_ml_flat input through {requested_max_day}, "
-        f"but available snapshots_ml_flat only run through {available_max_day}."
+        f"{context} requires legacy `snapshots_ml_flat` input through {requested_max_day}, "
+        f"but available legacy `snapshots_ml_flat` only run through {available_max_day}."
     )
 
 
@@ -137,21 +163,39 @@ def require_snapshot_access(
     resolved_mode = _validate_mode(mode)
     context_text = str(context or "snapshot_access").strip() or "snapshot_access"
 
-    if resolved_mode == SNAPSHOT_INPUT_MODE_ML_FLAT:
+    if resolved_mode in {SNAPSHOT_INPUT_MODE_SUPPORT_V2, SNAPSHOT_INPUT_MODE_LEGACY_ML_FLAT}:
         root = Path(snapshot_root) if snapshot_root is not None else None
         if root is None and parquet_base is not None:
-            root = Path(parquet_base) / SNAPSHOT_DATASET_ML_FLAT
+            dataset_name = (
+                SNAPSHOT_DATASET_SUPPORT_V2
+                if resolved_mode == SNAPSHOT_INPUT_MODE_SUPPORT_V2
+                else SNAPSHOT_DATASET_ML_FLAT
+            )
+            root = Path(parquet_base) / dataset_name
         if root is None:
+            required_dataset = (
+                SNAPSHOT_DATASET_SUPPORT_V2
+                if resolved_mode == SNAPSHOT_INPUT_MODE_SUPPORT_V2
+                else SNAPSHOT_DATASET_ML_FLAT
+            )
             raise FileNotFoundError(
-                f"{context_text} requires derived snapshots_ml_flat input. "
-                "Pass snapshot_root or provide a parquet base with snapshots_ml_flat."
+                f"{context_text} requires dataset `{required_dataset}`. "
+                f"Pass snapshot_root or provide a parquet base with `{required_dataset}`."
             )
         if not _has_parquet(root, mode=resolved_mode):
+            if resolved_mode == SNAPSHOT_INPUT_MODE_SUPPORT_V2 and parquet_base is not None:
+                legacy_root = Path(parquet_base) / SNAPSHOT_DATASET_ML_FLAT
+                if _has_parquet(legacy_root, mode=SNAPSHOT_INPUT_MODE_LEGACY_ML_FLAT):
+                    raise FileNotFoundError(
+                        f"{context_text} requires supported training dataset `{SNAPSHOT_DATASET_SUPPORT_V2}`, "
+                        f"but this environment only has legacy `{SNAPSHOT_DATASET_ML_FLAT}`."
+                    )
             raise FileNotFoundError(
-                f"{context_text} requires derived snapshots_ml_flat input. "
+                f"{context_text} requires dataset "
+                f"`{SNAPSHOT_DATASET_SUPPORT_V2 if resolved_mode == SNAPSHOT_INPUT_MODE_SUPPORT_V2 else SNAPSHOT_DATASET_ML_FLAT}`. "
                 f"Expected root: {str(root).replace(chr(92), '/')}"
             )
-        dataset_name = SNAPSHOT_DATASET_ML_FLAT
+        dataset_name = SNAPSHOT_DATASET_SUPPORT_V2 if resolved_mode == SNAPSHOT_INPUT_MODE_SUPPORT_V2 else SNAPSHOT_DATASET_ML_FLAT
     else:
         if parquet_base is None:
             raise FileNotFoundError(
@@ -161,11 +205,17 @@ def require_snapshot_access(
         base = Path(parquet_base)
         root = base / SNAPSHOT_DATASET_CANONICAL
         if not _has_parquet(root, mode=resolved_mode):
+            support_v2_root = base / SNAPSHOT_DATASET_SUPPORT_V2
             ml_flat_root = base / SNAPSHOT_DATASET_ML_FLAT
-            if _has_parquet(ml_flat_root, mode=SNAPSHOT_INPUT_MODE_ML_FLAT):
+            if _has_parquet(support_v2_root, mode=SNAPSHOT_INPUT_MODE_SUPPORT_V2):
                 raise FileNotFoundError(
                     f"{context_text} requires canonical `snapshots` parquet with `snapshot_raw_json`, "
-                    "but this environment only has `snapshots_ml_flat`."
+                    f"but this environment only has training support dataset `{SNAPSHOT_DATASET_SUPPORT_V2}`."
+                )
+            if _has_parquet(ml_flat_root, mode=SNAPSHOT_INPUT_MODE_LEGACY_ML_FLAT):
+                raise FileNotFoundError(
+                    f"{context_text} requires canonical `snapshots` parquet with `snapshot_raw_json`, "
+                    f"but this environment only has legacy `{SNAPSHOT_DATASET_ML_FLAT}`."
                 )
             raise FileNotFoundError(
                 f"{context_text} requires canonical `snapshots` parquet with `snapshot_raw_json`, "

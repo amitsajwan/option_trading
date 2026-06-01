@@ -48,17 +48,23 @@ Expected staged parquet root:
 
 - `.data/ml_pipeline/parquet_data`
 
-Typical datasets:
+Supported default contract:
 
-- `snapshots`
-- `snapshots_ml_flat`
 - `snapshots_ml_flat_v2`
-- `stage1_entry_view`
 - `stage1_entry_view_v2`
-- `stage2_direction_view`
 - `stage2_direction_view_v2`
-- `stage3_recipe_view`
 - `stage3_recipe_view_v2`
+
+Related dataset used outside `ml_pipeline_2`:
+
+- `snapshots` for historical replay / runtime
+
+Legacy datasets kept for historical reproducibility only:
+
+- `snapshots_ml_flat`
+- `stage1_entry_view`
+- `stage2_direction_view`
+- `stage3_recipe_view`
 
 Candidate datasets such as `*_v3_candidate` are valid research inputs when the manifest points to the matching view IDs and the staged registries support them.
 
@@ -74,6 +80,13 @@ Use when you want one resolved staged manifest executed into one run root.
 python -m ml_pipeline_2.run_research \
   --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json
 ```
+
+The checked-in default manifest is the supported V2 path:
+
+- `support_dataset = snapshots_ml_flat_v2`
+- `stage1_view_id = stage1_entry_view_v2`
+- `stage2_view_id = stage2_direction_view_v2`
+- `stage3_view_id = stage3_recipe_view_v2`
 
 This writes under:
 

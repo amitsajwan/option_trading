@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "experiment_kind": "staged_dual_recipe_v1",
-  "_comment": "E3 — E1 + fo_velocity_v1 features instead of fo_full. Tests whether velocity features can match or beat the broad fo_full set with C1's proven labeler/window. Everything else identical to E1.",
+  "_comment": "E3 — E2 + fo_velocity_v1 features instead of fo_full. Tests whether velocity features can match or beat the broad fo_full set on the supported v2 schema. Velocity columns live in the v2 support/view lane, so this ablation must stay fully on v2.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
     "support_dataset": "snapshots_ml_flat_v2",
@@ -31,7 +31,7 @@
     "final_holdout": { "start": "2024-08-01", "end": "2024-10-31" }
   },
   "views": {
-    "stage1_view_id": "stage1_entry_view_v1",
+    "stage1_view_id": "stage1_entry_view_v2",
     "stage2_view_id": "stage2_direction_view_v2",
     "stage3_view_id": "stage3_recipe_view_v2"
   },

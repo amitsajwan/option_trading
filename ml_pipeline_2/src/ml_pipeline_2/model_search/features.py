@@ -20,6 +20,10 @@ IDENTITY_COLUMNS: Tuple[str, ...] = (
 
 LABEL_COLUMNS: Tuple[str, ...] = (
     "entry_label",
+    "entry_label_valid",
+    "entry_up_move_pct",
+    "entry_down_move_pct",
+    "entry_threshold_pct",
     "direction_label",
     "direction_up",
     "recipe_label",

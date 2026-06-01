@@ -1,4 +1,9 @@
-"""Replay prebuilt historical snapshots to redis topic."""
+"""Replay canonical historical snapshots to redis.
+
+The replay source dataset is always canonical ``snapshots`` with ``snapshot_raw_json``.
+To match the supported V2 training contract at runtime, replay injects the same
+``velocity_enrichment`` block used by live inference before publishing events.
+"""
 
 from __future__ import annotations
 

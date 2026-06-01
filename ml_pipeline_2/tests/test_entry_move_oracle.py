@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from ml_pipeline_2.model_search.features import select_feature_columns
 from ml_pipeline_2.staged.entry_move_oracle import build_entry_bn_move_oracle
 
 
@@ -38,3 +39,18 @@ def test_entry_bn_move_insufficient_forward_bars_invalid() -> None:
     day = _synthetic_day().iloc[-2:].copy()
     oracle = build_entry_bn_move_oracle(day, horizon_minutes=5, min_points=100.0)
     assert int(oracle.iloc[-1]["entry_label_valid"]) == 0
+
+
+def test_entry_bn_oracle_columns_excluded_from_model_features() -> None:
+    oracle = build_entry_bn_move_oracle(_synthetic_day(), horizon_minutes=5, min_points=100.0)
+    frame = oracle.assign(ema_9_slope=0.1)
+    selected = select_feature_columns(frame, feature_profile="all")
+    for col in (
+        "entry_label",
+        "entry_label_valid",
+        "entry_up_move_pct",
+        "entry_down_move_pct",
+        "entry_threshold_pct",
+    ):
+        assert col not in selected
+    assert "ema_9_slope" in selected

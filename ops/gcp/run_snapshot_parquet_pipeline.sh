@@ -307,6 +307,69 @@ print(json.dumps(payload, indent=2))
 PY
 }
 
+resolve_requested_window() {
+  if [ -n "${YEAR}" ]; then
+    RESOLVED_MIN_DAY="$(printf '%04d-01-01' "${YEAR}")"
+    RESOLVED_MAX_DAY="$(printf '%04d-12-31' "${YEAR}")"
+    return
+  fi
+  RESOLVED_MIN_DAY="${MIN_DAY}"
+  RESOLVED_MAX_DAY="${MAX_DAY}"
+}
+
+resolve_effective_build_window() {
+  local audit_path="$1"
+  EFFECTIVE_WINDOW_START="${RESOLVED_MIN_DAY}"
+  EFFECTIVE_WINDOW_END="${RESOLVED_MAX_DAY}"
+  if [ -z "${EFFECTIVE_WINDOW_START}" ]; then
+    EFFECTIVE_WINDOW_START="$(json_get "${audit_path}" "built_days.min")"
+  fi
+  if [ -z "${EFFECTIVE_WINDOW_END}" ]; then
+    EFFECTIVE_WINDOW_END="$(json_get "${audit_path}" "built_days.max")"
+  fi
+  if [ -z "${EFFECTIVE_WINDOW_START}" ] || [ -z "${EFFECTIVE_WINDOW_END}" ]; then
+    echo "Unable to resolve effective build window for supported V2 dataset rebuild." >&2
+    exit 6
+  fi
+}
+
+run_supported_training_enrichment() {
+  local cmd=(
+    python -m snapshot_app.historical.enrichment_runner
+    --parquet-root "${PARQUET_BASE}"
+    --start-date "${EFFECTIVE_WINDOW_START}"
+    --end-date "${EFFECTIVE_WINDOW_END}"
+    --output-dataset snapshots_ml_flat_v2
+    --workers "${SNAPSHOT_JOBS}"
+  )
+  (
+    cd "${REPO_ROOT}"
+    "${cmd[@]}"
+  )
+}
+
+rebuild_supported_stage_views() {
+  local cmd=(
+    python -m snapshot_app.historical.rebuild_stage_views_from_flat
+    --parquet-root "${PARQUET_BASE}"
+    --source-flat-dataset snapshots_ml_flat_v2
+    --output-stage1-dataset stage1_entry_view_v2
+    --output-stage2-dataset stage2_direction_view_v2
+    --output-stage3-dataset stage3_recipe_view_v2
+    --start-date "${EFFECTIVE_WINDOW_START}"
+    --end-date "${EFFECTIVE_WINDOW_END}"
+    --build-source "${BUILD_SOURCE}"
+    --build-run-id "${BUILD_RUN_ID}_views_v2"
+  )
+  if [ "${NO_RESUME}" = "1" ]; then
+    cmd+=(--no-resume)
+  fi
+  (
+    cd "${REPO_ROOT}"
+    "${cmd[@]}"
+  )
+}
+
 snapshot_runner_base_args() {
   SNAPSHOT_RUNNER_ARGS=(
     python -m snapshot_app.historical.snapshot_batch_runner
@@ -353,16 +416,27 @@ ensure_supported_host
 # shellcheck disable=SC1090
 source "${OPERATOR_ENV_FILE}"
 
+if [ -n "${PUBLISH_DERIVED_ML_FLAT+x}" ]; then
+  echo "DEPRECATED: PUBLISH_DERIVED_ML_FLAT now maps to legacy snapshots_ml_flat publishing. Use PUBLISH_SUPPORT_DATASET_V2 or PUBLISH_LEGACY_ML_FLAT." >&2
+  PUBLISH_LEGACY_ML_FLAT="${PUBLISH_DERIVED_ML_FLAT}"
+fi
+if [ -n "${PUBLISH_STAGE_VIEWS+x}" ]; then
+  echo "DEPRECATED: PUBLISH_STAGE_VIEWS now maps to legacy v1 stage view publishing. Use PUBLISH_STAGE_VIEWS_V2 or PUBLISH_LEGACY_STAGE_VIEWS." >&2
+  PUBLISH_LEGACY_STAGE_VIEWS="${PUBLISH_STAGE_VIEWS}"
+fi
+
 VENV_DIR="${VENV_DIR:-${REPO_ROOT}/.venv}"
 PARQUET_BASE="${PARQUET_BASE:-${REPO_ROOT}/.data/ml_pipeline/parquet_data}"
 RAW_DATA_ROOT="${RAW_DATA_ROOT:-${REPO_ROOT}/.cache/banknifty_data}"
 LOCAL_RAW_ARCHIVE_ROOT="${LOCAL_RAW_ARCHIVE_ROOT:-}"
 SYNC_RAW_ARCHIVE_FROM_GCS="${SYNC_RAW_ARCHIVE_FROM_GCS:-1}"
 PUBLISH_SNAPSHOT_PARQUET="${PUBLISH_SNAPSHOT_PARQUET:-1}"
-PUBLISH_DERIVED_ML_FLAT="${PUBLISH_DERIVED_ML_FLAT:-1}"
-PUBLISH_NORMALIZED_CACHE="${PUBLISH_NORMALIZED_CACHE:-0}"
-PUBLISH_STAGE_VIEWS="${PUBLISH_STAGE_VIEWS:-1}"
+PUBLISH_SUPPORT_DATASET_V2="${PUBLISH_SUPPORT_DATASET_V2:-1}"
+PUBLISH_STAGE_VIEWS_V2="${PUBLISH_STAGE_VIEWS_V2:-1}"
+PUBLISH_LEGACY_ML_FLAT="${PUBLISH_LEGACY_ML_FLAT:-0}"
+PUBLISH_LEGACY_STAGE_VIEWS="${PUBLISH_LEGACY_STAGE_VIEWS:-0}"
 PUBLISH_MARKET_BASE="${PUBLISH_MARKET_BASE:-1}"
+PUBLISH_NORMALIZED_CACHE="${PUBLISH_NORMALIZED_CACHE:-0}"
 CLEAN_PUBLISH_PREFIXES="${CLEAN_PUBLISH_PREFIXES:-1}"
 VERIFY_PUBLISHED_PREFIXES="${VERIFY_PUBLISHED_PREFIXES:-1}"
 ALLOW_PARTIAL_PUBLISH="${ALLOW_PARTIAL_PUBLISH:-0}"
@@ -392,6 +466,8 @@ RAW_ARCHIVE_BUCKET_URL="${RAW_ARCHIVE_BUCKET_URL:?set RAW_ARCHIVE_BUCKET_URL in 
 SNAPSHOT_PARQUET_BUCKET_URL="${SNAPSHOT_PARQUET_BUCKET_URL:?set SNAPSHOT_PARQUET_BUCKET_URL in operator.env}"
 STAGE2_REQUIRED_COLUMNS="${STAGE2_REQUIRED_COLUMNS:-pcr_change_5m,pcr_change_15m,atm_oi_ratio,near_atm_oi_ratio,atm_ce_oi,atm_pe_oi}"
 MIN_FREE_DISK_GB="${MIN_FREE_DISK_GB:-150}"
+
+resolve_requested_window
 
 ensure_file "${REPO_ROOT}/ops/gcp/publish_snapshot_parquet.sh"
 require_command python3
@@ -539,8 +615,22 @@ fi
 
 if [ "${BUILD_STAGE}" != "snapshots" ]; then
   echo
-  echo "== Step 7b: Verify local Stage 2 schema =="
-  verify_stage2_required_columns "${PARQUET_BASE}/stage2_direction_view" "${STAGE2_REQUIRED_COLUMNS}"
+  if [ "${VALIDATE_ONLY}" = "1" ]; then
+    echo "== Step 7b: Verify supported V2 Stage 2 schema =="
+    verify_stage2_required_columns "${PARQUET_BASE}/stage2_direction_view_v2" "${STAGE2_REQUIRED_COLUMNS}"
+  else
+    echo "== Step 7b: Build supported V2 training support dataset =="
+    resolve_effective_build_window "${AUDIT_PATH}"
+    run_supported_training_enrichment
+
+    echo
+    echo "== Step 7c: Rebuild supported V2 stage views =="
+    rebuild_supported_stage_views
+
+    echo
+    echo "== Step 7d: Verify supported V2 Stage 2 schema =="
+    verify_stage2_required_columns "${PARQUET_BASE}/stage2_direction_view_v2" "${STAGE2_REQUIRED_COLUMNS}"
+  fi
 fi
 
 if [ "${VALIDATE_ONLY}" = "1" ]; then
@@ -608,7 +698,18 @@ fi
 echo
 echo "== Step 8: Clean remote publish prefixes =="
 if [ "${CLEAN_PUBLISH_PREFIXES}" = "1" ]; then
-  for ds in snapshots market_base snapshots_ml_flat stage1_entry_view stage2_direction_view stage3_recipe_view reports; do
+  for ds in \
+    snapshots \
+    market_base \
+    snapshots_ml_flat_v2 \
+    stage1_entry_view_v2 \
+    stage2_direction_view_v2 \
+    stage3_recipe_view_v2 \
+    snapshots_ml_flat \
+    stage1_entry_view \
+    stage2_direction_view \
+    stage3_recipe_view \
+    reports; do
     echo "Cleaning remote prefix ${SNAPSHOT_PARQUET_BUCKET_URL%/}/${ds}"
     gcloud storage rm --recursive "${SNAPSHOT_PARQUET_BUCKET_URL%/}/${ds}" || true
   done
@@ -619,17 +720,24 @@ fi
 echo
 echo "== Step 9: Publish parquet outputs =="
 export REPO_ROOT PARQUET_BASE REPORT_ROOT SNAPSHOT_PARQUET_BUCKET_URL
-export PUBLISH_DERIVED_ML_FLAT PUBLISH_NORMALIZED_CACHE PUBLISH_STAGE_VIEWS PUBLISH_MARKET_BASE
+export PUBLISH_SUPPORT_DATASET_V2 PUBLISH_STAGE_VIEWS_V2 PUBLISH_LEGACY_ML_FLAT PUBLISH_LEGACY_STAGE_VIEWS
+export PUBLISH_NORMALIZED_CACHE PUBLISH_MARKET_BASE
 "${REPO_ROOT}/ops/gcp/publish_snapshot_parquet.sh"
 
 if [ "${VERIFY_PUBLISHED_PREFIXES}" = "1" ]; then
   echo
   echo "== Step 10: Verify published GCS layout =="
   gcloud storage ls "${SNAPSHOT_PARQUET_BUCKET_URL%/}/reports/**"
-  for ds in snapshots market_base snapshots_ml_flat stage1_entry_view stage2_direction_view stage3_recipe_view; do
+  for ds in snapshots market_base snapshots_ml_flat_v2 stage1_entry_view_v2 stage2_direction_view_v2 stage3_recipe_view_v2; do
     echo "== ${ds}"
     gcloud storage ls "${SNAPSHOT_PARQUET_BUCKET_URL%/}/${ds}/**" | grep 'data.parquet$' | sort
   done
+  if [ "${PUBLISH_LEGACY_ML_FLAT}" = "1" ] || [ "${PUBLISH_LEGACY_STAGE_VIEWS}" = "1" ]; then
+    for ds in snapshots_ml_flat stage1_entry_view stage2_direction_view stage3_recipe_view; do
+      echo "== ${ds}"
+      gcloud storage ls "${SNAPSHOT_PARQUET_BUCKET_URL%/}/${ds}/**" | grep 'data.parquet$' | sort
+    done
+  fi
 fi
 
 echo

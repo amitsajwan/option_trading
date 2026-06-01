@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "experiment_kind": "staged_dual_recipe_v1",
-  "_comment": "E4 — E1 + swap labeler to entry_bn_5m_100pts_v1 (our 'harsh' raw move label). Tests whether the labeler is the cause of probability collapse, with everything else held at C1's working settings.",
+  "_comment": "E4 — E1 + swap labeler to entry_bn_5m_100pts_v1 (our 'harsh' raw move label). Tests whether the labeler is the cause of probability collapse, with everything else held at C1's working v1 settings.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
-    "support_dataset": "snapshots_ml_flat_v2",
+    "support_dataset": "snapshots_ml_flat",
     "support_window": { "start": "2020-08-03", "end": "2024-10-31" }
   },
   "outputs": {

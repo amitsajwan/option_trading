@@ -2,6 +2,7 @@
   "schema_version": 1,
   "experiment_kind": "factory_campaign_v1",
   "campaign_id": "stage2_family_screen_campaign_v2",
+  "_comment": "LEGACY baseline/transition campaign. The campaign metadata still points at snapshots_ml_flat and older base manifests; keep for reproducibility, not as the default V2 operator path.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
     "support_dataset": "snapshots_ml_flat"

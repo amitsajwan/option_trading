@@ -16,7 +16,12 @@ def test_default_staged_manifest_matches_checked_in_default() -> None:
     assert payload["catalog"]["feature_sets_by_stage"] == defaults["catalog"]["feature_sets_by_stage"]
     assert payload["inputs"] == {
         "parquet_root": "../../../.data/ml_pipeline/parquet_data",
-        "support_dataset": "snapshots_ml_flat",
+        "support_dataset": "snapshots_ml_flat_v2",
+    }
+    assert payload["views"] == {
+        "stage1_view_id": "stage1_entry_view_v2",
+        "stage2_view_id": "stage2_direction_view_v2",
+        "stage3_view_id": "stage3_recipe_view_v2",
     }
     assert payload["outputs"]["artifacts_root"] == "../../artifacts/research"
     assert payload["windows"]["research_train"] == {"start": "2020-08-03", "end": "2024-04-30"}

@@ -32,7 +32,7 @@ def test_staged_manifest_resolves_relative_paths_from_config_dir(tmp_path: Path)
     resolved = load_and_resolve_manifest(config_path, validate_paths=True)
 
     assert Path(resolved["inputs"]["parquet_root"]) == parquet_root
-    assert resolved["inputs"]["support_dataset"] == "snapshots_ml_flat"
+    assert resolved["inputs"]["support_dataset"] == "snapshots_ml_flat_v2"
     assert Path(resolved["outputs"]["artifacts_root"]) == workspace / "ml_pipeline_2" / "artifacts" / "research"
 
 

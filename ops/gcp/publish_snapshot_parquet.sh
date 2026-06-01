@@ -5,8 +5,10 @@ REPO_ROOT="${REPO_ROOT:-$(pwd)}"
 PARQUET_BASE="${PARQUET_BASE:-${REPO_ROOT}/.data/ml_pipeline/parquet_data}"
 REPORT_ROOT="${REPORT_ROOT:-${REPO_ROOT}/.run/snapshot_parquet}"
 SNAPSHOT_PARQUET_BUCKET_URL="${SNAPSHOT_PARQUET_BUCKET_URL:?set SNAPSHOT_PARQUET_BUCKET_URL, for example gs://my-snapshot-bucket/parquet_data}"
-PUBLISH_DERIVED_ML_FLAT="${PUBLISH_DERIVED_ML_FLAT:-1}"
-PUBLISH_STAGE_VIEWS="${PUBLISH_STAGE_VIEWS:-1}"
+PUBLISH_SUPPORT_DATASET_V2="${PUBLISH_SUPPORT_DATASET_V2:-1}"
+PUBLISH_STAGE_VIEWS_V2="${PUBLISH_STAGE_VIEWS_V2:-1}"
+PUBLISH_LEGACY_ML_FLAT="${PUBLISH_LEGACY_ML_FLAT:-0}"
+PUBLISH_LEGACY_STAGE_VIEWS="${PUBLISH_LEGACY_STAGE_VIEWS:-0}"
 PUBLISH_MARKET_BASE="${PUBLISH_MARKET_BASE:-1}"
 PUBLISH_NORMALIZED_CACHE="${PUBLISH_NORMALIZED_CACHE:-0}"
 
@@ -34,11 +36,21 @@ if [ "${PUBLISH_MARKET_BASE}" = "1" ]; then
   sync_dir "${PARQUET_BASE}/market_base" "${TARGET_ROOT}/market_base"
 fi
 
-if [ "${PUBLISH_DERIVED_ML_FLAT}" = "1" ]; then
+if [ "${PUBLISH_SUPPORT_DATASET_V2}" = "1" ]; then
+  sync_dir "${PARQUET_BASE}/snapshots_ml_flat_v2" "${TARGET_ROOT}/snapshots_ml_flat_v2"
+fi
+
+if [ "${PUBLISH_LEGACY_ML_FLAT}" = "1" ]; then
   sync_dir "${PARQUET_BASE}/snapshots_ml_flat" "${TARGET_ROOT}/snapshots_ml_flat"
 fi
 
-if [ "${PUBLISH_STAGE_VIEWS}" = "1" ]; then
+if [ "${PUBLISH_STAGE_VIEWS_V2}" = "1" ]; then
+  sync_dir "${PARQUET_BASE}/stage1_entry_view_v2" "${TARGET_ROOT}/stage1_entry_view_v2"
+  sync_dir "${PARQUET_BASE}/stage2_direction_view_v2" "${TARGET_ROOT}/stage2_direction_view_v2"
+  sync_dir "${PARQUET_BASE}/stage3_recipe_view_v2" "${TARGET_ROOT}/stage3_recipe_view_v2"
+fi
+
+if [ "${PUBLISH_LEGACY_STAGE_VIEWS}" = "1" ]; then
   sync_dir "${PARQUET_BASE}/stage1_entry_view" "${TARGET_ROOT}/stage1_entry_view"
   sync_dir "${PARQUET_BASE}/stage2_direction_view" "${TARGET_ROOT}/stage2_direction_view"
   sync_dir "${PARQUET_BASE}/stage3_recipe_view" "${TARGET_ROOT}/stage3_recipe_view"

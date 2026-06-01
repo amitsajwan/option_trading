@@ -108,12 +108,14 @@ Current bootstrap derives:
 
 After startup, the expected local path is `${REPO_ROOT}/.data/ml_pipeline/parquet_data` when `REPO_ROOT` is set in `ops/gcp/operator.env`, otherwise `/opt/option_trading/.data/ml_pipeline/parquet_data`.
 
-The snapshot flow must already have published these datasets before training starts:
+The supported operator path requires these datasets before training starts:
 
-- `snapshots_ml_flat`
-- `stage1_entry_view`
-- `stage2_direction_view`
-- `stage3_recipe_view`
+- `snapshots_ml_flat_v2`
+- `stage1_entry_view_v2`
+- `stage2_direction_view_v2`
+- `stage3_recipe_view_v2`
+
+Replay uses canonical `snapshots`; staged training uses the V2 support/view contract above.
 
 Recommended rebuild order around training:
 
@@ -187,10 +189,10 @@ Look for:
 - repo checkout exists under `/opt/option_trading`
 - parquet datasets are present locally
 - at minimum:
-  - `snapshots_ml_flat`
-  - `stage1_entry_view`
-  - `stage2_direction_view`
-  - `stage3_recipe_view`
+  - `snapshots_ml_flat_v2`
+  - `stage1_entry_view_v2`
+  - `stage2_direction_view_v2`
+  - `stage3_recipe_view_v2`
 
 Before training, verify the Stage 2 schema guard locally. If the required columns are missing, stop and rerun the snapshot workflow first.
 
@@ -199,7 +201,7 @@ python - <<'PY'
 from pathlib import Path
 import pandas as pd
 
-root = Path("/opt/option_trading/.data/ml_pipeline/parquet_data/stage2_direction_view")
+root = Path("/opt/option_trading/.data/ml_pipeline/parquet_data/stage2_direction_view_v2")
 sample = next(root.rglob("*.parquet"))
 required = [
     "pcr_change_5m",
@@ -418,8 +420,8 @@ want to deploy it while research continues in parallel.
 - Deployed with `regime_gate_v1` active — only VOLATILE and SIDEWAYS sessions trade live
 
 **Next candidate:** `staged_deep_hpo_e2_volatile_only` (ready to run — pipeline fixed)
-- E1 (`staged_deep_hpo_e1_volatile_only_20260501_170058`) failed: `stage2_direction_view` lacks `ctx_regime_*` columns → `_regime_label_series` returned all UNKNOWN → `allowed_regimes` filter dropped all rows → 0 S2 samples
-- Fix applied in `pipeline.py`: stage2 frame is now enriched with `ctx_regime_*` columns from `snapshots_ml_flat` via `snapshot_id` join before the labeler runs. Holdout evaluation also now excludes SIDEWAYS sessions (regime_gate_v1 parity).
+- E1 (`staged_deep_hpo_e1_volatile_only_20260501_170058`) failed on the legacy V1 lane: `stage2_direction_view` lacked `ctx_regime_*` columns → `_regime_label_series` returned all UNKNOWN → `allowed_regimes` filter dropped all rows → 0 S2 samples
+- Fix applied in `pipeline.py`: stage2 frame is enriched from the support dataset via `snapshot_id` join before the labeler runs. In the supported operator path, that support dataset is `snapshots_ml_flat_v2`; holdout evaluation also excludes SIDEWAYS sessions (regime_gate_v1 parity).
 - E2 config: `ml_pipeline_2/configs/research/staged_dual_recipe.deep_hpo_e2_volatile_only.json` — pull branch on VM and run
 - E2 goal: sharper S2 decision boundary, block_rate ≥ 25%, VOLATILE PF ≥ 1.3
 - Replace C1 once E2 completes and meets criteria

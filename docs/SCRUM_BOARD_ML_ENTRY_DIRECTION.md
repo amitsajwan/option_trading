@@ -641,11 +641,11 @@ Stop immediately at first gate failure. Do not tune thresholds.
 
 **Blocker discovered 2026-05-26:** The replay runner requires `parquet_data/snapshots/` with `snapshot_raw_json`. On the VM only 3 chunks exist: `2020-H1`, `2024-H1`, `2024-H2`. The full IS window (2020-07-01 → 2023-12-31) has **zero canonical snapshots** — hence every queued replay returns `emitted=0`.
 
-`snapshots_ml_flat` HAS the IS data (12 chunks, 2020–2024) but does NOT contain `snapshot_raw_json` — it is a flat feature table only. Cannot be used to drive the replay engine.
+`snapshots_ml_flat` and `snapshots_ml_flat_v2` may still have the IS data, but neither contains `snapshot_raw_json` — they are flat training/support tables only. They cannot drive the replay engine.
 
 **What the next team needs to do:**
 1. Identify source raw data for 2020-H2 → 2023 (MongoDB `phase1_market_snapshots_historical`, or re-run `snapshot_batch_runner.py` if OHLCV source parquets exist under `futures/`, `options/`, `spot/`)
-2. Run `snapshot_batch_runner.py --output-dataset snapshots --start 2020-07-01 --end 2023-12-31` (or equivalent) to rebuild canonical parquet
+2. Run `python -m snapshot_app.historical.snapshot_batch_runner --build-stage snapshots --min-day 2020-07-01 --max-day 2023-12-31` (or equivalent) to rebuild canonical parquet
 3. Verify chunks appear: `parquet_data/snapshots/year=2020/chunk=202007_202012_m6/data.parquet` etc.
 4. Then run: `sudo bash ops/gcp/run_r1s_replay.sh gate1`
 

@@ -10,10 +10,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from contracts_app.sim_namespace import (
-    Namespace,
-    resolve_namespace,
-)
+from contracts_app import Namespace, resolve_namespace
 
 
 class TestResolveNamespace(unittest.TestCase):

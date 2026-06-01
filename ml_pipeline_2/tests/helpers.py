@@ -210,7 +210,16 @@ def build_staged_parquet_root(root: Path) -> Path:
                 }
             )
     frame = pd.DataFrame(rows)
-    for dataset_name in ("snapshots_ml_flat", "stage1_entry_view", "stage2_direction_view", "stage3_recipe_view"):
+    for dataset_name in (
+        "snapshots_ml_flat",
+        "snapshots_ml_flat_v2",
+        "stage1_entry_view",
+        "stage2_direction_view",
+        "stage3_recipe_view",
+        "stage1_entry_view_v2",
+        "stage2_direction_view_v2",
+        "stage3_recipe_view_v2",
+    ):
         out_dir = parquet_root / dataset_name / "year=2024"
         out_dir.mkdir(parents=True, exist_ok=True)
         frame.to_parquet(out_dir / "data.parquet", index=False)

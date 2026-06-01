@@ -1,9 +1,10 @@
 {
   "schema_version": 1,
   "experiment_kind": "staged_dual_recipe_v1",
+  "_comment": "Supported default staged manifest. Operator-supported path = canonical snapshots for replay, snapshots_ml_flat_v2 for training support, and stage*_view_v2 for training views.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
-    "support_dataset": "snapshots_ml_flat"
+    "support_dataset": "snapshots_ml_flat_v2"
   },
   "outputs": {
     "artifacts_root": "../../artifacts/research",
@@ -29,9 +30,9 @@
     "final_holdout": {"start": "2024-08-01", "end": "2024-10-31"}
   },
   "views": {
-    "stage1_view_id": "stage1_entry_view_v1",
-    "stage2_view_id": "stage2_direction_view_v1",
-    "stage3_view_id": "stage3_recipe_view_v1"
+    "stage1_view_id": "stage1_entry_view_v2",
+    "stage2_view_id": "stage2_direction_view_v2",
+    "stage3_view_id": "stage3_recipe_view_v2"
   },
   "labels": {
     "stage1_labeler_id": "entry_best_recipe_v1",

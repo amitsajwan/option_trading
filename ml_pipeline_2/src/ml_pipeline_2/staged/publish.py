@@ -115,6 +115,15 @@ def _load_stage_model(path_value: str) -> Dict[str, Any]:
     return payload
 
 
+def _infer_view_version(*view_ids: str) -> str:
+    tokens = [str(view_id or "").strip().lower() for view_id in view_ids]
+    if tokens and all(token.endswith("_v2") for token in tokens):
+        return "v2"
+    if tokens and all(token.endswith("_v1") for token in tokens):
+        return "v1"
+    return "mixed"
+
+
 def assess_staged_release_candidate(*, run_dir: str | Path, force_publish_nonpublishable: bool = False) -> Dict[str, Any]:
     source_run_dir = Path(run_dir).resolve()
     summary_path = source_run_dir / "summary.json"
@@ -149,6 +158,9 @@ def assess_staged_release_candidate(*, run_dir: str | Path, force_publish_nonpub
 def _build_runtime_bundle(summary: Dict[str, Any], *, model_group: str, profile_id: str) -> Dict[str, Any]:
     stage_artifacts = dict(summary.get("stage_artifacts") or {})
     component_ids = dict(summary.get("component_ids") or {})
+    stage1_component = dict(component_ids.get("stage1") or {})
+    stage2_component = dict(component_ids.get("stage2") or {})
+    stage3_component = dict(component_ids.get("stage3") or {})
     recipe_catalog = validate_recipe_catalog_payload(
         [recipe.to_dict() for recipe in get_recipe_catalog(str(summary["recipe_catalog_id"]))]
     )
@@ -160,9 +172,12 @@ def _build_runtime_bundle(summary: Dict[str, Any], *, model_group: str, profile_
     if not recipe_artifacts:
         raise ValueError("stage3 recipe_artifacts must be present in staged summary")
     views = view_registry()
-    stage1_view = views[str(component_ids["stage1"]["view_id"])].dataset_name
-    stage2_view = views[str(component_ids["stage2"]["view_id"])].dataset_name
-    stage3_view = views[str(component_ids["stage3"]["view_id"])].dataset_name
+    stage1_view_id = str(stage1_component["view_id"])
+    stage2_view_id = str(stage2_component["view_id"])
+    stage3_view_id = str(stage3_component["view_id"])
+    stage1_view = views[stage1_view_id].dataset_name
+    stage2_view = views[stage2_view_id].dataset_name
+    stage3_view = views[stage3_view_id].dataset_name
     stage3_packages = {
         str(recipe_id): _load_stage_model(str(Path(recipe_artifacts[str(recipe_id)]["model_package_path"]).resolve()))
         for recipe_id in stage3_recipe_ids
@@ -177,6 +192,13 @@ def _build_runtime_bundle(summary: Dict[str, Any], *, model_group: str, profile_
         "runtime": {
             "prefilter_gate_ids": list(summary.get("runtime_prefilter_gate_ids") or []),
             "block_expiry": bool(summary.get("runtime_block_expiry", False)),
+            "support_dataset": str(summary.get("support_dataset") or ""),
+            "view_ids": {
+                "stage1": stage1_view_id,
+                "stage2": stage2_view_id,
+                "stage3": stage3_view_id,
+            },
+            "view_version": _infer_view_version(stage1_view_id, stage2_view_id, stage3_view_id),
         },
         "stages": {
             "stage1": {
@@ -200,6 +222,13 @@ def _build_runtime_policy(summary: Dict[str, Any], *, model_group: str, profile_
         [recipe.to_dict() for recipe in get_recipe_catalog(str(summary["recipe_catalog_id"]))]
     )
     policy_reports = dict(summary.get("policy_reports") or {})
+    component_ids = dict(summary.get("component_ids") or {})
+    stage1_component = dict(component_ids.get("stage1") or {})
+    stage2_component = dict(component_ids.get("stage2") or {})
+    stage3_component = dict(component_ids.get("stage3") or {})
+    stage1_view_id = str(stage1_component.get("view_id") or "")
+    stage2_view_id = str(stage2_component.get("view_id") or "")
+    stage3_view_id = str(stage3_component.get("view_id") or "")
     return {
         "kind": STAGED_RUNTIME_POLICY_KIND,
         "created_at_utc": utc_now(),
@@ -212,6 +241,13 @@ def _build_runtime_policy(summary: Dict[str, Any], *, model_group: str, profile_
         "runtime": {
             "prefilter_gate_ids": list(summary.get("runtime_prefilter_gate_ids") or []),
             "block_expiry": bool(summary.get("runtime_block_expiry", False)),
+            "support_dataset": str(summary.get("support_dataset") or ""),
+            "view_ids": {
+                "stage1": stage1_view_id,
+                "stage2": stage2_view_id,
+                "stage3": stage3_view_id,
+            },
+            "view_version": _infer_view_version(stage1_view_id, stage2_view_id, stage3_view_id),
         },
         "recipe_catalog": recipe_catalog,
     }

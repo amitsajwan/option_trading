@@ -89,6 +89,22 @@ def _validate_paths(resolved: Dict[str, Any], errors: List[str]) -> None:
         if not (parquet_root / dataset_name).exists():
             errors.append(f"views.{stage_name}_view_id dataset not found under parquet_root: {dataset_name}")
 
+    stage1_view_id = str(views.get("stage1_view_id") or "").strip()
+    if stage1_view_id in registry and support_dataset:
+        stage1_dataset_name = str(registry[stage1_view_id].dataset_name)
+        expected_support_by_stage1_dataset = {
+            "stage1_entry_view": "snapshots_ml_flat",
+            "stage1_entry_view_v2": "snapshots_ml_flat_v2",
+            "stage1_entry_view_v3": "snapshots_ml_flat_v2",
+            "stage1_entry_view_v3_candidate": "snapshots_ml_flat_v2",
+        }
+        expected_support = expected_support_by_stage1_dataset.get(stage1_dataset_name)
+        if expected_support and support_dataset != expected_support:
+            errors.append(
+                "inputs.support_dataset is incompatible with views.stage1_view_id: "
+                f"{stage1_view_id} expects {expected_support} but got {support_dataset}"
+            )
+
 
 def _validate_staged_catalog(payload: Dict[str, Any], errors: List[str]) -> None:
     from ..staged.recipes import recipe_catalog_ids

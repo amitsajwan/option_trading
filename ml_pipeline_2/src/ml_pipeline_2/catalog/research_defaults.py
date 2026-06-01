@@ -7,6 +7,10 @@ from ..contracts.types import LabelRecipe, PreprocessConfig
 
 DEFAULT_EXTERNAL_DATA_ROOT = "../../../.data/ml_pipeline"
 DEFAULT_STAGED_PARQUET_ROOT = f"{DEFAULT_EXTERNAL_DATA_ROOT}/parquet_data"
+DEFAULT_SUPPORT_DATASET = "snapshots_ml_flat_v2"
+DEFAULT_STAGE1_VIEW_ID = "stage1_entry_view_v2"
+DEFAULT_STAGE2_VIEW_ID = "stage2_direction_view_v2"
+DEFAULT_STAGE3_VIEW_ID = "stage3_recipe_view_v2"
 
 
 DEFAULT_STAGED_RECIPES = (
@@ -24,7 +28,7 @@ def default_staged_manifest_payload() -> Dict[str, Any]:
         "experiment_kind": "staged_dual_recipe_v1",
         "inputs": {
             "parquet_root": DEFAULT_STAGED_PARQUET_ROOT,
-            "support_dataset": "snapshots_ml_flat_v2",
+            "support_dataset": DEFAULT_SUPPORT_DATASET,
         },
         "outputs": {
             "artifacts_root": "../../artifacts/research",
@@ -50,9 +54,9 @@ def default_staged_manifest_payload() -> Dict[str, Any]:
             "final_holdout": {"start": "2024-08-01", "end": "2024-10-31"},
         },
         "views": {
-            "stage1_view_id": "stage1_entry_view_v1",
-            "stage2_view_id": "stage2_direction_view_v1",
-            "stage3_view_id": "stage3_recipe_view_v1",
+            "stage1_view_id": DEFAULT_STAGE1_VIEW_ID,
+            "stage2_view_id": DEFAULT_STAGE2_VIEW_ID,
+            "stage3_view_id": DEFAULT_STAGE3_VIEW_ID,
         },
         "labels": {
             "stage1_labeler_id": "entry_best_recipe_v1",

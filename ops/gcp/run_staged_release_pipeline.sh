@@ -118,6 +118,52 @@ print(json.dumps({"status": "ok", "checked_files": len(files), "required_columns
 PY
 }
 
+verify_supported_training_contract() {
+  python - <<'PY' "${STAGED_CONFIG}" "${REPO_ROOT}"
+import json
+import sys
+from pathlib import Path
+
+from ml_pipeline_2.contracts.manifests import load_and_resolve_manifest
+
+config_arg = Path(sys.argv[1])
+repo_root = Path(sys.argv[2]).resolve()
+config_path = config_arg if config_arg.is_absolute() else (repo_root / config_arg)
+resolved = load_and_resolve_manifest(config_path, validate_paths=False)
+support_dataset = str((resolved.get("inputs") or {}).get("support_dataset") or "")
+views = dict(resolved.get("views") or {})
+expected_views = {
+    "stage1_view_id": "stage1_entry_view_v2",
+    "stage2_view_id": "stage2_direction_view_v2",
+    "stage3_view_id": "stage3_recipe_view_v2",
+}
+errors = []
+if support_dataset != "snapshots_ml_flat_v2":
+    errors.append(
+        f"run_staged_release_pipeline.sh only supports support_dataset=snapshots_ml_flat_v2; "
+        f"got {support_dataset or '<empty>'}"
+    )
+for key, expected in expected_views.items():
+    actual = str(views.get(key) or "")
+    if actual != expected:
+        errors.append(
+            f"run_staged_release_pipeline.sh requires {key}={expected}; got {actual or '<empty>'}"
+        )
+if errors:
+    raise SystemExit("\n".join(errors))
+print(
+    json.dumps(
+        {
+            "status": "ok",
+            "support_dataset": support_dataset,
+            "views": expected_views,
+        },
+        indent=2,
+    )
+)
+PY
+}
+
 ensure_file "${OPERATOR_ENV_FILE}"
 
 # shellcheck disable=SC1090
@@ -149,10 +195,10 @@ if [ ! -f "${REPO_ROOT}/.env.compose" ] && [ -f "${REPO_ROOT}/.env.compose.examp
   echo "Created ${REPO_ROOT}/.env.compose from .env.compose.example"
 fi
 
-ensure_dir "${PARQUET_BASE}/snapshots_ml_flat"
-ensure_dir "${PARQUET_BASE}/stage1_entry_view"
-ensure_dir "${PARQUET_BASE}/stage2_direction_view"
-ensure_dir "${PARQUET_BASE}/stage3_recipe_view"
+ensure_dir "${PARQUET_BASE}/snapshots_ml_flat_v2"
+ensure_dir "${PARQUET_BASE}/stage1_entry_view_v2"
+ensure_dir "${PARQUET_BASE}/stage2_direction_view_v2"
+ensure_dir "${PARQUET_BASE}/stage3_recipe_view_v2"
 
 if [ ! -d "${VENV_DIR}" ]; then
   python3 -m venv "${VENV_DIR}"
@@ -164,8 +210,11 @@ python -m pip install -e "${REPO_ROOT}/ml_pipeline_2"
 python -m pip install pyarrow lightgbm xgboost
 ensure_lightgbm_runtime
 
+echo "== Preflight: Verify supported V2 staged manifest contract =="
+verify_supported_training_contract
+
 echo "== Preflight: Verify local Stage 2 schema =="
-verify_stage2_required_columns "${PARQUET_BASE}/stage2_direction_view" "${STAGE2_REQUIRED_COLUMNS}"
+verify_stage2_required_columns "${PARQUET_BASE}/stage2_direction_view_v2" "${STAGE2_REQUIRED_COLUMNS}"
 
 python -m ml_pipeline_2.run_staged_release \
   --config "${STAGED_CONFIG}" \

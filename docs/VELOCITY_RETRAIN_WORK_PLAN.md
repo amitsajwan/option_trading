@@ -84,17 +84,19 @@ and within expected ranges.
 #### A3 — Promote dataset
 Only after A1 and A2 pass:
 ```bash
-# On GCP — rename v2 to production name
-mv /home/.data/ml_pipeline/parquet_data/snapshots_ml_flat \
-   /home/.data/ml_pipeline/parquet_data/snapshots_ml_flat_v1_archive
-
-mv /home/.data/ml_pipeline/parquet_data/snapshots_ml_flat_v2 \
-   /home/.data/ml_pipeline/parquet_data/snapshots_ml_flat
+# Keep explicit versioned names in production.
+# snapshots_ml_flat_v2 remains the supported training support dataset.
+# Legacy snapshots_ml_flat may be archived or left in place for historical reference.
 ```
-**DO NOT delete `snapshots_ml_flat_v1_archive`** — keep until first campaign completes.
+**Do not repoint training back to unversioned `snapshots_ml_flat`.** The supported contract is explicit:
 
-**Definition of Done**: `ls parquet_data/snapshots_ml_flat/` shows year=2020..2024 directories.  
-`ls parquet_data/snapshots_ml_flat_v1_archive/` also exists as fallback.
+- `support_dataset = snapshots_ml_flat_v2`
+- `stage1_view_id = stage1_entry_view_v2`
+- `stage2_view_id = stage2_direction_view_v2`
+- `stage3_view_id = stage3_recipe_view_v2`
+
+**Definition of Done**: `ls parquet_data/snapshots_ml_flat_v2/` shows year=2020..2024 directories.  
+Legacy `snapshots_ml_flat/` may remain as fallback, but is not the production training name.
 
 ---
 
@@ -284,7 +286,7 @@ Model catalog for each stage:
 - Stage 2: XGB + LGBM + LogReg  
 - Stage 3: XGB + LGBM + LogReg  
 
-Dataset: `"support_dataset": "snapshots_ml_flat"` (after promotion by Team A).
+Dataset: `"support_dataset": "snapshots_ml_flat_v2"`.
 
 **Definition of Done**:  
 - Manifest validates via `validate_manifest()`  
@@ -298,7 +300,7 @@ Dataset: `"support_dataset": "snapshots_ml_flat"` (after promotion by Team A).
 
 ```json
 {
-  "inputs": { "support_dataset": "snapshots_ml_flat" },
+  "inputs": { "support_dataset": "snapshots_ml_flat_v2" },
   "training": {
     "bypass_stage2": true,
     "stage1": { ... full catalog },
@@ -517,7 +519,7 @@ AFTER FULL RETRAIN FINISHES (~48 hrs):
 
 | Team | Done when |
 |------|-----------|
-| **A** | v2 validated, promoted to `snapshots_ml_flat`, enrichment VM stopped |
+| **A** | `snapshots_ml_flat_v2` + `*_view_v2` validated, enrichment VM stopped |
 | **B** | vel_ + ADX + gap + vol_spike in feature sets, tests pass |
 | **C** | bypass_stage2 works, velocity_hpo_v1 manifest valid, wiring test passes |
 | **D** | All 3 campaign configs created and validate, signal check gate documented |

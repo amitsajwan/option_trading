@@ -2,6 +2,7 @@
   "schema_version": 1,
   "experiment_kind": "factory_campaign_v1",
   "campaign_id": "stage3_search_campaign_v1",
+  "_comment": "LEGACY baseline campaign. Uses snapshots_ml_flat and v1 grid templates for historical comparison only; not part of the supported V2 operator path.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
     "support_dataset": "snapshots_ml_flat"

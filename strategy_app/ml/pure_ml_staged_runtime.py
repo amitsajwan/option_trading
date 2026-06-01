@@ -284,15 +284,25 @@ def _run_prefilter_chain(engine: Any, snap: Any, stage1_row: dict[str, object], 
 
 
 def _is_v2_bundle(bundle: dict[str, Any]) -> bool:
-    """Return True when the staged bundle was trained on V2 (velocity-enriched) features.
+    """Return True when the staged bundle uses the supported V2 training contract.
 
-    Detected by explicit ``runtime.view_version = "v2"`` in the bundle, or by the
-    presence of a velocity column name (prefix ``vel_`` or ``ctx_am_``) in stage1's
-    feature_columns list.
+    Preferred detection uses explicit runtime metadata written at publish time:
+    ``runtime.view_version``, ``runtime.support_dataset``, and ``runtime.view_ids``.
+    Older bundles fall back to stage1 feature inspection for backward compatibility.
     """
     runtime = bundle.get("runtime") or {}
-    if str(runtime.get("view_version") or "").lower() == "v2":
+    view_version = str(runtime.get("view_version") or "").strip().lower()
+    if view_version in {"v1", "v2"}:
+        return view_version == "v2"
+    support_dataset = str(runtime.get("support_dataset") or "").strip().lower()
+    if support_dataset:
+        return support_dataset == "snapshots_ml_flat_v2"
+    view_ids = dict(runtime.get("view_ids") or {})
+    stage_view_ids = [str(view_ids.get(stage) or "").strip().lower() for stage in ("stage1", "stage2", "stage3")]
+    if stage_view_ids and all(view_id.endswith("_v2") for view_id in stage_view_ids if view_id):
         return True
+    if stage_view_ids and all(view_id.endswith("_v1") for view_id in stage_view_ids if view_id):
+        return False
     stage1_cols = list((((bundle.get("stages") or {}).get("stage1") or {}).get("model_package") or {}).get("feature_columns") or [])
     return any(str(c).startswith(("vel_", "ctx_am_", "ctx_gap_")) for c in stage1_cols)
 

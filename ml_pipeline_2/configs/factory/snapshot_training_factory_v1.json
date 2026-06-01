@@ -1,5 +1,6 @@
 {
   "workflow_id": "snapshot_training_factory_v1",
+  "_comment": "LEGACY baseline factory. Uses snapshots_ml_flat and v1 stage views for historical reproducibility only; not part of the supported V2 operator path.",
   "inputs": {
     "parquet_root": "../../../.data/ml_pipeline/parquet_data",
     "support_dataset": "snapshots_ml_flat"
