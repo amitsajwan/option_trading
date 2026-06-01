@@ -41,8 +41,17 @@ logger = logging.getLogger(__name__)
 
 # ── Live positions reader ─────────────────────────────────────────────────────
 
-def _load_live_trades(positions_jsonl: str, trade_date: str) -> List[dict]:
-    """Read closed trades from live positions.jsonl for the given date."""
+def _load_live_trades(
+    positions_jsonl: str,
+    trade_date: str,
+    run_id_filter: Optional[str] = None,
+) -> List[dict]:
+    """Read closed trades from live positions.jsonl for the given date.
+
+    run_id_filter: if set, only include positions whose run_id matches this prefix.
+    Pass the full run_id (e.g. 'paper-20260601-140239-5b1b2c8d') to isolate one session.
+    Use this when multiple sessions ran on the same day with different configs.
+    """
     path = Path(positions_jsonl)
     if not path.exists():
         return []
@@ -60,6 +69,8 @@ def _load_live_trades(positions_jsonl: str, trade_date: str) -> List[dict]:
             continue
         run_id = str(d.get("run_id") or "")
         if run_id.lower().startswith("sim"):
+            continue
+        if run_id_filter is not None and run_id != run_id_filter:
             continue
         pid = d.get("position_id", "")
         evt = d.get("event", "")
@@ -118,12 +129,13 @@ def run_fidelity_check(
     ops_env_json: Optional[str] = None,
     pnl_tolerance: float = 0.001,   # 0.1% absolute tolerance per trade
     count_tolerance: int = 0,       # default: trade count must match exactly
+    run_id_filter: Optional[str] = None,  # isolate a single session when multiple ran same day
 ) -> dict[str, Any]:
     """Compare sim output to live trades for one day.
 
     Returns a result dict with keys: passed, live_count, sim_count, mismatches, report.
     """
-    live_trades = _load_live_trades(positions_jsonl, trade_date)
+    live_trades = _load_live_trades(positions_jsonl, trade_date, run_id_filter=run_id_filter)
     snapshots   = _load_live_snapshots(events_jsonl, trade_date)
 
     if not snapshots:
@@ -263,6 +275,9 @@ def _cli() -> None:
     parser.add_argument("--ops-env",        default=None,  help="Path to ops_env.json")
     parser.add_argument("--out",            default=None,  help="Write report to this file")
     parser.add_argument("--pnl-tolerance",  type=float, default=0.001)
+    parser.add_argument("--run-id",         default=None,
+                        help="Isolate a single live session (e.g. paper-20260601-140239-5b1b2c8d). "
+                             "Required when multiple sessions ran on the same day with different configs.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
@@ -273,6 +288,7 @@ def _cli() -> None:
         positions_jsonl=args.live_positions,
         ops_env_json=args.ops_env,
         pnl_tolerance=args.pnl_tolerance,
+        run_id_filter=args.run_id,
     )
 
     print(result["report"])
