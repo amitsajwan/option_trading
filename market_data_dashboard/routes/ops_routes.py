@@ -127,41 +127,76 @@ def _load_today_snapshots(trade_date: str) -> list[dict]:
 
 # ── Also load actual today's closed trades from positions JSONL ───────────────
 
+def _hhmm(ts: str) -> str:
+    return ts[11:16] if len(ts) > 15 else "?"
+
+
 def _load_actual_trades(trade_date: str) -> list[dict]:
+    """Reconstruct today's real closed trades from positions.jsonl.
+
+    Two correctness fixes vs the naive version:
+      1. Entry time comes from POSITION_OPEN, exit time from POSITION_CLOSE
+         (previously both used the close timestamp → time_in == time_out).
+      2. Restarts during the day append duplicate positions for the same
+         logical trade. We dedupe by entry_snapshot_id (the bar a trade
+         entered on uniquely identifies it), keeping the first occurrence —
+         so the 6× repeated rows collapse to one.
+    """
     pos_path = STRATEGY_RUN_DIR / "positions.jsonl"
     if not pos_path.exists():
         return []
-    positions: dict[str, dict] = {}
+
+    open_ts: dict[str, str] = {}      # position_id -> entry timestamp (from OPEN)
+    closes: dict[str, dict] = {}       # position_id -> close record
+
     for line in pos_path.read_text(encoding="utf-8").splitlines():
         try:
             d = json.loads(line)
-            pid = d.get("position_id", "")
-            evt = d.get("event", "")
-            if evt in ("POSITION_OPEN", "POSITION_MANAGE", "POSITION_CLOSE"):
-                if evt == "POSITION_CLOSE" or pid not in positions:
-                    positions[pid] = d
         except Exception:
-            pass
+            continue
+        # Only consider events whose timestamp is on the requested trade date
+        ts = str(d.get("timestamp", ""))
+        if not ts.startswith(trade_date):
+            continue
+        pid = d.get("position_id", "")
+        evt = d.get("event", "")
+        if evt == "POSITION_OPEN" and pid and pid not in open_ts:
+            open_ts[pid] = ts
+        elif evt == "POSITION_CLOSE" and pid:
+            closes[pid] = d  # last close per pid wins
+
     trades = []
-    for p in positions.values():
-        if p.get("event") == "POSITION_CLOSE":
-            ts = str(p.get("timestamp", ""))
-            exit_r = p.get("exit_reason", "")
-            label = str(p.get("exit_policy_triggered") or exit_r or "")
-            trades.append({
-                "time_in":  ts[11:16] if len(ts) > 15 else "?",
-                "time_out": ts[11:16] if len(ts) > 15 else "?",
-                "direction": p.get("direction", ""),
-                "strike":   p.get("strike"),
-                "prem_in":  float(p.get("entry_premium") or 0),
-                "prem_out": float(p.get("exit_premium") or p.get("entry_premium") or 0),
-                "pnl_pct":  float(p.get("pnl_pct") or 0),
-                "mfe_pct":  float(p.get("mfe_pct") or 0),
-                "mae_pct":  float(p.get("mae_pct") or 0),
-                "bars":     int(p.get("bars_held") or 0),
-                "exit":     label,
-                "source":   "actual",
-            })
+    seen_keys: set = set()
+    for pid, p in closes.items():
+        close_ts = str(p.get("timestamp", ""))
+        entry_ts = open_ts.get(pid, close_ts)
+        # Dedup key: a logical trade = (entry bar, direction, strike, entry premium)
+        dedup_key = (
+            entry_ts[:16],
+            str(p.get("direction", "")),
+            p.get("strike"),
+            round(float(p.get("entry_premium") or 0), 1),
+        )
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
+
+        exit_r = p.get("exit_reason", "")
+        label = str(p.get("exit_policy_triggered") or exit_r or "")
+        trades.append({
+            "time_in":   _hhmm(entry_ts),
+            "time_out":  _hhmm(close_ts),
+            "direction": p.get("direction", ""),
+            "strike":    p.get("strike"),
+            "prem_in":   float(p.get("entry_premium") or 0),
+            "prem_out":  float(p.get("exit_premium") or p.get("entry_premium") or 0),
+            "pnl_pct":   float(p.get("pnl_pct") or 0),
+            "mfe_pct":   float(p.get("mfe_pct") or 0),
+            "mae_pct":   float(p.get("mae_pct") or 0),
+            "bars":      int(p.get("bars_held") or 0),
+            "exit":      label,
+            "source":    "actual",
+        })
     trades.sort(key=lambda x: x["time_in"])
     return trades
 
