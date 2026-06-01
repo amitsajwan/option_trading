@@ -42,6 +42,15 @@ _SAFE_OVERRIDE_KEYS = {
     "RISK_MAX_CONSECUTIVE_LOSSES",
     "RISK_MAX_SESSION_TRADES",
     "STRATEGY_PROFILE_ID",
+    # Lottery mode
+    "EXIT_STRATEGY_MODE",
+    "LOTTERY_HARD_STOP_PCT",
+    "LOTTERY_BIG_TARGET_PCT",
+    "LOTTERY_RUNNER_ACTIVATION_MFE",
+    "LOTTERY_RUNNER_GIVEBACK_FRAC",
+    "LOTTERY_THESIS_FAIL_BARS",
+    "LOTTERY_MOMENTUM_FLIP",
+    "LOTTERY_TIMESTOP_BARS",
 }
 
 # Live-job registry — keyed by job_id
@@ -101,6 +110,7 @@ def _read_live_config() -> dict[str, Any]:
         "RISK_MAX_CONSECUTIVE_LOSSES":    _e("RISK_MAX_CONSECUTIVE_LOSSES", "3"),
         "RISK_MAX_SESSION_TRADES":        _e("RISK_MAX_SESSION_TRADES", "6"),
         "STRATEGY_PROFILE_ID":            _e("STRATEGY_PROFILE_ID", "trader_master_ml_entry_consensus_v1"),
+        "EXIT_STRATEGY_MODE":             _e("EXIT_STRATEGY_MODE", "scalper"),
     }
     cfg["ops_env"] = ops_env
     cfg["strategy_run_dir"] = str(STRATEGY_RUN_DIR)
@@ -297,6 +307,8 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
             "RISK_CAPITAL_ALLOCATED":          _live("RISK_CAPITAL_ALLOCATED", "500000"),
             "RISK_PER_TRADE_PCT":              _live("RISK_PER_TRADE_PCT", "0.005"),
             "STRATEGY_MIN_CONFIDENCE":         _live("STRATEGY_MIN_CONFIDENCE", "0.50") or "0.50",
+            # Exit strategy mode — scalper (live default) or lottery (experiment)
+            "EXIT_STRATEGY_MODE":              _live("EXIT_STRATEGY_MODE", "scalper"),
             "STRATEGY_RUN_DIR":                f"/tmp/sim_{job_id}",
             "REDIS_HOST":                      os.getenv("REDIS_HOST", "localhost"),
             "DEPTH_FEED_ENABLED":              "0",

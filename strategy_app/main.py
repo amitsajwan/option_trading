@@ -424,7 +424,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         "STRATEGY_STRIKE_SELECTION_POLICY", "SMART_STRIKE_MAX_PREMIUM",
         "STRATEGY_STRIKE_MAX_OTM_STEPS", "STRATEGY_SMART_STRIKE_ENABLED",
         "RISK_MAX_CONSECUTIVE_LOSSES", "RISK_MAX_SESSION_TRADES",
-        "STRATEGY_PROFILE_ID", "STRATEGY_MIN_CONFIDENCE",
+        "STRATEGY_PROFILE_ID", "STRATEGY_MIN_CONFIDENCE", "EXIT_STRATEGY_MODE",
         # ML model paths + risk + smart-strike tiers — so the OPS sim reproduces
         # live exactly (these live only in strategy_app's container env).
         "ENTRY_ML_MODEL_PATH", "ENTRY_ML_MIN_PROB",

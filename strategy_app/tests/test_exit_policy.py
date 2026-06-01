@@ -13,7 +13,12 @@ from strategy_app.position.exit_policy import (
     PremiumTargetPolicy,
     ThesisFailPolicy,
     TrailingStopPolicy,
+    HardStopPolicy,
+    BigTargetPolicy,
+    RunnerTrailPolicy,
+    MomentumReversalPolicy,
     build_default_exit_stack,
+    build_lottery_exit_stack,
 )
 
 
@@ -145,5 +150,86 @@ class TestBuildDefaultExitStack:
 
     def test_env_override(self, monkeypatch):
         monkeypatch.setenv("EXIT_PREMIUM_TARGET_PCT", "0.03")
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "scalper")
         stack = build_default_exit_stack()
         assert "3.0%" in stack.name
+
+
+class TestHardStopPolicy:
+    def test_fires_at_stop(self):
+        p = HardStopPolicy(0.25)
+        assert p.check(_pos(pnl_pct=-0.25), _snap) == ExitReason.STOP_LOSS
+        assert p.check(_pos(pnl_pct=-0.30), _snap) == ExitReason.STOP_LOSS
+
+    def test_silent_above_stop(self):
+        p = HardStopPolicy(0.25)
+        assert p.check(_pos(pnl_pct=-0.10), _snap) is None
+
+    def test_disabled_at_one(self):
+        p = HardStopPolicy(1.0)  # disabled — ride to zero
+        assert p.check(_pos(pnl_pct=-0.95), _snap) is None
+        assert "off" in p.name
+
+
+class TestBigTargetPolicy:
+    def test_fires_at_big_target(self):
+        p = BigTargetPolicy(0.40)
+        assert p.check(_pos(pnl_pct=0.40), _snap) == ExitReason.TARGET_HIT
+        assert p.check(_pos(pnl_pct=0.55), _snap) == ExitReason.TARGET_HIT
+
+    def test_silent_below(self):
+        # Crucially: does NOT exit at +2% like the scalper target would
+        p = BigTargetPolicy(0.40)
+        assert p.check(_pos(pnl_pct=0.02), _snap) is None
+        assert p.check(_pos(pnl_pct=0.24), _snap) is None
+
+
+class TestRunnerTrailPolicy:
+    def test_silent_before_activation(self):
+        # MFE only +15%, activation +20% → not active, let it run
+        p = RunnerTrailPolicy(activation_mfe=0.20, giveback_frac=0.40)
+        assert p.check(_pos(mfe_pct=0.15, pnl_pct=0.05), _snap) is None
+
+    def test_lets_winner_run(self):
+        # MFE +30%, floor = 30*(1-0.4)=18%; pnl 25% > 18% → hold, let it run
+        p = RunnerTrailPolicy(activation_mfe=0.20, giveback_frac=0.40)
+        assert p.check(_pos(mfe_pct=0.30, pnl_pct=0.25), _snap) is None
+
+    def test_protects_fat_winner(self):
+        # MFE +30%, floor 18%; pnl fell to 15% < 18% → lock it in
+        p = RunnerTrailPolicy(activation_mfe=0.20, giveback_frac=0.40)
+        assert p.check(_pos(mfe_pct=0.30, pnl_pct=0.15), _snap) == ExitReason.TRAILING_STOP
+
+
+class TestMomentumReversalPolicy:
+    def test_pe_exits_on_bullish_flip(self):
+        p = MomentumReversalPolicy(1.0)
+        assert p.check(_pos(direction="PE", current_shadow_score=1.5), _snap) == ExitReason.REGIME_SHIFT
+
+    def test_pe_holds_when_aligned(self):
+        p = MomentumReversalPolicy(1.0)
+        assert p.check(_pos(direction="PE", current_shadow_score=-2.0), _snap) is None
+
+    def test_ce_exits_on_bearish_flip(self):
+        p = MomentumReversalPolicy(1.0)
+        assert p.check(_pos(direction="CE", current_shadow_score=-1.5), _snap) == ExitReason.REGIME_SHIFT
+
+
+class TestLotteryStack:
+    def test_builds_lottery_mode(self, monkeypatch):
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "lottery")
+        stack = build_default_exit_stack()
+        assert "hard_stop" in stack.name
+        assert "big_target" in stack.name
+        assert "runner_trail" in stack.name
+        # Scalper-only policies must NOT be in lottery mode
+        assert "premium_target" not in stack.name   # scalper emergency target
+        assert "give=" in stack.name                # lottery runner giveback
+
+    def test_lottery_lets_24pct_run(self):
+        # The real 2026-06-01 case: trade reached +24%. Scalper exits at +0.5%.
+        # Lottery should still be holding at +20% (target 40%, runner floor not breached).
+        stack = build_lottery_exit_stack()
+        pos = _pos(pnl_pct=0.20, mfe_pct=0.20, bars_held=5)
+        # MFE 20% just hit activation; floor = 20*0.6 = 12%; pnl 20% > 12% → hold
+        assert stack.check(pos, _snap) is None

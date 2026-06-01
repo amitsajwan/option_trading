@@ -130,18 +130,128 @@ class CompositeExitPolicy(ExitPolicy):
         return "composite[" + ",".join(p.name for p in self._policies) + "]"
 
 
-def build_default_exit_stack() -> CompositeExitPolicy:
-    """Build exit stack from env vars. Called once at engine startup.
+# ─────────────────────────────────────────────────────────────────────────────
+# LOTTERY MODE — asymmetric payoff: lose small often, win big rarely.
+# Selected via EXIT_STRATEGY_MODE=lottery. The opposite philosophy of the
+# scalper stack above: it does NOT cut winners early. Tight trailing/target are
+# removed; winners are allowed to run to a big target or a loose giveback trail.
+# ─────────────────────────────────────────────────────────────────────────────
 
-    Order matters — first to trigger wins:
-      1. ThesisFail   — cut dead entries early (MFE never moved after N bars)
+
+class HardStopPolicy(ExitPolicy):
+    """Cap the loss — the 'ticket price' you accept losing. Exit at -stop_pct.
+
+    Set stop_pct >= 1.0 to disable (ride a lottery ticket all the way to zero).
+    """
+
+    def __init__(self, stop_pct: float = 0.25):
+        self._stop = stop_pct
+
+    def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
+        if self._stop < 1.0 and position.pnl_pct <= -self._stop:
+            return ExitReason.STOP_LOSS
+        return None
+
+    @property
+    def name(self) -> str:
+        return f"hard_stop_{self._stop:.0%}" if self._stop < 1.0 else "hard_stop_off"
+
+
+class BigTargetPolicy(ExitPolicy):
+    """Take the lottery win — exit when premium gains target_pct (e.g. +40%)."""
+
+    def __init__(self, target_pct: float = 0.40):
+        self._target = target_pct
+
+    def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
+        if position.pnl_pct >= self._target:
+            return ExitReason.TARGET_HIT
+        return None
+
+    @property
+    def name(self) -> str:
+        return f"big_target_{self._target:.0%}"
+
+
+class RunnerTrailPolicy(ExitPolicy):
+    """Loose giveback trail — ONLY after a big move. Protects fat winners without
+    choking them.
+
+    Activates once MFE >= activation_mfe (e.g. +20%). Then locks a floor at
+    mfe * (1 - giveback_frac): with giveback 0.40 and MFE 30%, floor = 18% — the
+    trade can swing 20%->50% freely but won't round-trip a +30% winner back to 0.
+    Far looser than the scalper's 0.5% trail.
+    """
+
+    def __init__(self, activation_mfe: float = 0.20, giveback_frac: float = 0.40):
+        self._activation = activation_mfe
+        self._giveback = giveback_frac
+
+    def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
+        if position.mfe_pct < self._activation:
+            return None
+        floor = position.mfe_pct * (1.0 - self._giveback)
+        if position.pnl_pct < floor:
+            return ExitReason.TRAILING_STOP
+        return None
+
+    @property
+    def name(self) -> str:
+        return f"runner_trail_act={self._activation:.0%}_give={self._giveback:.0%}"
+
+
+class MomentumReversalPolicy(ExitPolicy):
+    """Exit if the directional thesis broke — shadow score flipped hard against us.
+
+    For a PE (bearish) bet, a strongly positive shadow score means momentum turned
+    bullish: the lottery thesis is dead, cut it. Uses current_shadow_score which the
+    tracker refreshes each bar. flip_threshold is the magnitude required.
+    """
+
+    def __init__(self, flip_threshold: float = 1.0):
+        self._flip = flip_threshold
+
+    def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
+        try:
+            score = float(position.current_shadow_score)
+        except (TypeError, ValueError):
+            return None
+        d = str(position.direction or "").upper()
+        if d == "PE" and score >= self._flip:
+            return ExitReason.REGIME_SHIFT
+        if d == "CE" and score <= -self._flip:
+            return ExitReason.REGIME_SHIFT
+        return None
+
+    @property
+    def name(self) -> str:
+        return f"momentum_flip_{self._flip:g}"
+
+
+class TimestopPolicy(ExitPolicy):
+    """Fallback — exit after max_bars. Lottery uses a longer hold than scalper so
+    the rare big move has room to develop."""
+
+    def __init__(self, max_bars: int = 25):
+        self._max_bars = max_bars
+
+    def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
+        if position.bars_held >= self._max_bars:
+            return ExitReason.TIME_STOP
+        return None
+
+    @property
+    def name(self) -> str:
+        return f"timestop_{self._max_bars}b"
+
+
+def build_scalper_exit_stack() -> CompositeExitPolicy:
+    """Scalper: capture small consistent gains, don't give them back.
+
+    Order (first to trigger wins):
+      1. ThesisFail   — cut dead entries early
       2. TrailingStop — ride winners; trails peak by trail_pct once activated
-      3. PremiumTarget — emergency floor only; set high (default 4%) so it
-                         never fires before TrailingStop can do its job
-
-    PremiumTarget at 1.5% was capping runners: it fired before TrailingStop
-    could trail up to 3-4%. Raised default to 0.04 (4%) — acts as safety net
-    only on very fast moves where TrailingStop hasn't activated yet.
+      3. PremiumTarget — emergency floor only (default 4%)
     """
     target_pct = float(os.getenv("EXIT_PREMIUM_TARGET_PCT", "0.04") or "0.04")
     activation_pct = float(os.getenv("EXIT_TRAILING_ACTIVATION_PCT", "0.01") or "0.01")
@@ -149,10 +259,55 @@ def build_default_exit_stack() -> CompositeExitPolicy:
     thesis_bars = int(os.getenv("EXIT_THESIS_FAIL_BARS", "3") or "3")
     thesis_min_mfe = float(os.getenv("EXIT_THESIS_FAIL_MIN_MFE", "0.002") or "0.002")
 
-    stack = CompositeExitPolicy([
+    return CompositeExitPolicy([
         ThesisFailPolicy(thesis_bars, thesis_min_mfe),
         TrailingStopPolicy(activation_pct, trail_pct),
         PremiumTargetPolicy(target_pct),
     ])
-    logger.info("exit policy stack: %s", stack.name)
+
+
+def build_lottery_exit_stack() -> CompositeExitPolicy:
+    """Lottery: lose small often, win big rarely. Let winners RUN.
+
+    Order (first to trigger wins):
+      1. HardStop        — cap the ticket loss
+      2. ThesisFail      — cut dead/flat tickets (theta drain) but only when MFE
+                           never showed promise (lottery min_mfe is higher)
+      3. MomentumReversal — directional thesis broke
+      4. BigTarget       — take the lottery win
+      5. RunnerTrail     — loose giveback only after a big move
+      6. Timestop        — EOD fallback (longer hold)
+    """
+    hard_stop = float(os.getenv("LOTTERY_HARD_STOP_PCT", "0.25") or "0.25")
+    big_target = float(os.getenv("LOTTERY_BIG_TARGET_PCT", "0.40") or "0.40")
+    runner_act = float(os.getenv("LOTTERY_RUNNER_ACTIVATION_MFE", "0.20") or "0.20")
+    runner_give = float(os.getenv("LOTTERY_RUNNER_GIVEBACK_FRAC", "0.40") or "0.40")
+    thesis_bars = int(os.getenv("LOTTERY_THESIS_FAIL_BARS", "4") or "4")
+    thesis_min_mfe = float(os.getenv("LOTTERY_THESIS_FAIL_MIN_MFE", "0.03") or "0.03")
+    flip = float(os.getenv("LOTTERY_MOMENTUM_FLIP", "1.0") or "1.0")
+    timestop = int(os.getenv("LOTTERY_TIMESTOP_BARS", "25") or "25")
+
+    policies: list[ExitPolicy] = [
+        HardStopPolicy(hard_stop),
+        ThesisFailPolicy(thesis_bars, thesis_min_mfe),
+    ]
+    if flip > 0:
+        policies.append(MomentumReversalPolicy(flip))
+    policies += [
+        BigTargetPolicy(big_target),
+        RunnerTrailPolicy(runner_act, runner_give),
+        TimestopPolicy(timestop),
+    ]
+    return CompositeExitPolicy(policies)
+
+
+def build_default_exit_stack() -> CompositeExitPolicy:
+    """Build the exit stack for the configured EXIT_STRATEGY_MODE.
+
+    EXIT_STRATEGY_MODE=scalper (default) — capture small gains, don't give back.
+    EXIT_STRATEGY_MODE=lottery           — lose small often, win big rarely.
+    """
+    mode = str(os.getenv("EXIT_STRATEGY_MODE", "scalper") or "scalper").strip().lower()
+    stack = build_lottery_exit_stack() if mode == "lottery" else build_scalper_exit_stack()
+    logger.info("exit policy mode=%s stack: %s", mode, stack.name)
     return stack

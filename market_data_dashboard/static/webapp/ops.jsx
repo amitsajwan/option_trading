@@ -334,8 +334,26 @@ function OpsPage() {
 
   const handleReset = () => setCfg({...liveEnv});
 
+  // Strategy mode preset. Lottery snaps entry/risk to its philosophy (rare,
+  // high-conviction, let it run); user can still tweak any slider after.
+  const setStrategyMode = (mode) => {
+    setCfg(prev => {
+      const next = {...prev, EXIT_STRATEGY_MODE: mode};
+      if (mode === 'lottery') {
+        next.CONSENSUS_BYPASS_MIN_CONFIDENCE = '0.80';
+        next.RISK_MAX_SESSION_TRADES = '3';
+        next.STRATEGY_STRIKE_SELECTION_POLICY = 'smart_strike';
+      } else {
+        next.CONSENSUS_BYPASS_MIN_CONFIDENCE = liveEnv.CONSENSUS_BYPASS_MIN_CONFIDENCE || '0.65';
+        next.RISK_MAX_SESSION_TRADES = liveEnv.RISK_MAX_SESSION_TRADES || '6';
+      }
+      return next;
+    });
+  };
+
   const v = (key, fallback = '0') => cfg[key] ?? liveEnv[key] ?? fallback;
   const lv = (key, fallback = '0') => liveEnv[key] ?? fallback;
+  const curMode = v('EXIT_STRATEGY_MODE', 'scalper');
 
   const simTrades   = job?.trades || [];
   const actualTrades = job?.actual_trades || [];
@@ -362,9 +380,24 @@ function OpsPage() {
             )}
           </div>
 
+          {/* ── Strategy mode — the big choice ── */}
+          <div style={{display:'flex', alignItems:'center', gap:14, padding:'4px 0 10px', borderBottom:'1px solid var(--line-1)', marginBottom:4}}>
+            <span style={{fontFamily:'var(--f-mono)', fontSize:11, fontWeight:600, letterSpacing:'0.04em', color:'var(--ink-2)'}}>STRATEGY MODE</span>
+            <div className="ops-seg" style={{width:260}}>
+              <button className={curMode==='scalper'?'active':''} onClick={()=>setStrategyMode('scalper')}>Scalper</button>
+              <button className={curMode==='lottery'?'active':''} onClick={()=>setStrategyMode('lottery')}>🎟 Lottery</button>
+            </div>
+            <span style={{fontFamily:'var(--f-mono)', fontSize:10, color:'var(--ink-3)'}}>
+              {curMode==='lottery'
+                ? 'rare high-conviction bets · let winners run · lose small often'
+                : 'frequent · capture small gains · tight exits'}
+            </span>
+          </div>
+
           <div className="ops-config-groups">
 
-            {/* Exit strategy */}
+            {/* Exit strategy — scalper params (shown when scalper) */}
+            {curMode !== 'lottery' && (
             <div>
               <div className="ops-group-label">Exit Strategy</div>
               <ToggleCtrl label="Exit stack enabled"
@@ -390,6 +423,38 @@ function OpsPage() {
                 format={v => (v*100).toFixed(1)+'%'}
                 onChange={setVal('EXIT_PREMIUM_TARGET_PCT')} />
             </div>
+            )}
+
+            {/* Lottery exit params (shown when lottery) */}
+            {curMode === 'lottery' && (
+            <div>
+              <div className="ops-group-label">🎟 Lottery Exit</div>
+              <SliderCtrl label="Hard stop (cap loss)"
+                value={parseFloat(v('LOTTERY_HARD_STOP_PCT','0.25'))}
+                live={parseFloat(v('LOTTERY_HARD_STOP_PCT','0.25'))}
+                min={0.10} max={0.50} step={0.05}
+                format={v => '-'+(v*100).toFixed(0)+'%'}
+                onChange={setVal('LOTTERY_HARD_STOP_PCT')} />
+              <SliderCtrl label="Big target (take win)"
+                value={parseFloat(v('LOTTERY_BIG_TARGET_PCT','0.40'))}
+                live={parseFloat(v('LOTTERY_BIG_TARGET_PCT','0.40'))}
+                min={0.20} max={1.00} step={0.05}
+                format={v => '+'+(v*100).toFixed(0)+'%'}
+                onChange={setVal('LOTTERY_BIG_TARGET_PCT')} />
+              <SliderCtrl label="Runner activates at"
+                value={parseFloat(v('LOTTERY_RUNNER_ACTIVATION_MFE','0.20'))}
+                live={parseFloat(v('LOTTERY_RUNNER_ACTIVATION_MFE','0.20'))}
+                min={0.10} max={0.50} step={0.05}
+                format={v => '+'+(v*100).toFixed(0)+'%'}
+                onChange={setVal('LOTTERY_RUNNER_ACTIVATION_MFE')} />
+              <SliderCtrl label="Runner giveback"
+                value={parseFloat(v('LOTTERY_RUNNER_GIVEBACK_FRAC','0.40'))}
+                live={parseFloat(v('LOTTERY_RUNNER_GIVEBACK_FRAC','0.40'))}
+                min={0.20} max={0.60} step={0.05}
+                format={v => (v*100).toFixed(0)+'%'}
+                onChange={setVal('LOTTERY_RUNNER_GIVEBACK_FRAC')} />
+            </div>
+            )}
 
             {/* Entry gate */}
             <div>
