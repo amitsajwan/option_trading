@@ -76,26 +76,31 @@ class _TierConfig:
 
 
 # Conservative production defaults — tune via env vars, not code.
+# NOTE: *_IV_CEIL is compared against snap.iv_percentile (0–100), so these MUST
+# be percentile thresholds, not absolute IV. They were previously 30–60 (read
+# like absolute IV%), which rejected ALL OTM tiers whenever IV percentile > 60
+# — i.e. most active days — forcing every trade to ATM. Corrected to percentile
+# ceilings: deeper tiers gated slightly tighter, but all reachable in normal IV.
 _DEFAULTS: dict[str, Any] = {
     "IV_REJECT_PCTILE": 90.0,
     # Tier 1 entry gate (also gate for ALL OTM)
     "OTM_CONFIDENCE": 0.55,
-    "OTM_IV_CEIL": 60.0,
+    "OTM_IV_CEIL": 92.0,
     # Tier 2
     "OTM2_CONFIDENCE": 0.65,
-    "OTM2_IV_CEIL": 50.0,
+    "OTM2_IV_CEIL": 91.0,
     "OTM2_REGIMES": "",
     "OTM2_MAX_BAR_HOUR": 0,
     "OTM2_MIN_OI": 100_000.0,
     # Tier 3
     "OTM3_CONFIDENCE": 0.75,
-    "OTM3_IV_CEIL": 40.0,
+    "OTM3_IV_CEIL": 90.0,
     "OTM3_REGIMES": "BREAKOUT,TRENDING",
     "OTM3_MAX_BAR_HOUR": 12,
     "OTM3_MIN_OI": 75_000.0,
     # Tier 4
     "OTM4_CONFIDENCE": 0.85,
-    "OTM4_IV_CEIL": 30.0,
+    "OTM4_IV_CEIL": 89.0,
     "OTM4_REGIMES": "BREAKOUT",
     "OTM4_MAX_BAR_HOUR": 11,
     "OTM4_MIN_OI": 50_000.0,

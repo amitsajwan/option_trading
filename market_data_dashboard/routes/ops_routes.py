@@ -278,6 +278,14 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
             "SMART_STRIKE_OTM4_ENABLED":       _live("SMART_STRIKE_OTM4_ENABLED", "1"),
             "SMART_STRIKE_OTM4_CONFIDENCE":    _live("SMART_STRIKE_OTM4_CONFIDENCE", "0.85"),
             "SMART_STRIKE_OTM4_REGIMES":       _live("SMART_STRIKE_OTM4_REGIMES", "BREAKOUT"),
+            # IV ceilings as PERCENTILE thresholds (moderate experiment). Live still
+            # pins the old absolute-style 60/50/40/30 via env; the sim uses corrected
+            # percentile ceilings so OTM is reachable in normal IV. Promote to live by
+            # setting these in .env.compose once validated here.
+            "SMART_STRIKE_OTM_IV_CEIL":        _live("SMART_STRIKE_OTM_IV_CEIL_SIM", "92"),
+            "SMART_STRIKE_OTM2_IV_CEIL":       _live("SMART_STRIKE_OTM2_IV_CEIL_SIM", "91"),
+            "SMART_STRIKE_OTM3_IV_CEIL":       _live("SMART_STRIKE_OTM3_IV_CEIL_SIM", "90"),
+            "SMART_STRIKE_OTM4_IV_CEIL":       _live("SMART_STRIKE_OTM4_IV_CEIL_SIM", "89"),
             "STRATEGY_ENHANCED_VELOCITY":      _live("STRATEGY_ENHANCED_VELOCITY", "0"),
             "STRATEGY_IV_EXTREME_PERCENTILE":  _live("STRATEGY_IV_EXTREME_PERCENTILE", "95.0"),
             "STRATEGY_PROFILE_ID":             _live("STRATEGY_PROFILE_ID",
