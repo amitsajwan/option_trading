@@ -59,10 +59,10 @@ class SimTodayRequest(BaseModel):
 # ── Config reader ──────────────────────────────────────────────────────────────
 
 def _read_live_config() -> dict[str, Any]:
-    """Return current live config values from runtime_config.json + env."""
+    """Return current live config from ops_env.json (written by strategy_app) + runtime_config."""
     cfg: dict[str, Any] = {}
 
-    # Read runtime_config.json written by strategy_app at startup
+    # Read runtime_config.json (engine + profile info)
     rc_path = STRATEGY_RUN_DIR / "runtime_config.json"
     if rc_path.exists():
         try:
@@ -70,8 +70,20 @@ def _read_live_config() -> dict[str, Any]:
         except Exception:
             pass
 
-    # Surface the specific env vars the OPS panel controls
+    # ops_env.json: written by strategy_app at startup with its actual env vars.
+    # This is the source of truth for live config — not the dashboard's own os.environ.
+    ops_env_from_file: dict[str, str] = {}
+    ops_path = STRATEGY_RUN_DIR / "ops_env.json"
+    if ops_path.exists():
+        try:
+            ops_env_from_file = json.loads(ops_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
     def _e(key: str, fallback: str = "") -> str:
+        # Prefer ops_env.json (strategy_app's actual value), fall back to dashboard's env
+        if key in ops_env_from_file and ops_env_from_file[key]:
+            return ops_env_from_file[key]
         return str(os.getenv(key, fallback) or fallback)
 
     ops_env = {

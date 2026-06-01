@@ -414,6 +414,27 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             active_option_pnl_bundle=active_option_pnl_bundle,
         )
     )
+    # Write ops-relevant env vars to a file so the dashboard OPS tab can read
+    # the actual live config even though it runs in a separate container.
+    _ops_env_keys = [
+        "EXIT_POLICY_STACK_ENABLED", "EXIT_PREMIUM_TARGET_PCT",
+        "EXIT_TRAILING_ACTIVATION_PCT", "EXIT_TRAILING_TRAIL_PCT",
+        "EXIT_THESIS_FAIL_BARS", "EXIT_THESIS_FAIL_MIN_MFE",
+        "CONSENSUS_BYPASS_MIN_CONFIDENCE", "DIRECTION_MIN_MARGIN_SIDEWAYS",
+        "STRATEGY_STRIKE_SELECTION_POLICY", "SMART_STRIKE_MAX_PREMIUM",
+        "STRATEGY_STRIKE_MAX_OTM_STEPS", "STRATEGY_SMART_STRIKE_ENABLED",
+        "RISK_MAX_CONSECUTIVE_LOSSES", "RISK_MAX_SESSION_TRADES",
+        "STRATEGY_PROFILE_ID", "STRATEGY_MIN_CONFIDENCE",
+    ]
+    try:
+        import json as _json
+        _ops_env = {k: str(os.getenv(k, "") or "") for k in _ops_env_keys}
+        _ops_env_path = runtime_artifact_paths.root / "ops_env.json"
+        _ops_env_path.write_text(_json.dumps(_ops_env, indent=2), encoding="utf-8")
+        logger.info("ops_env.json written to %s", _ops_env_path)
+    except Exception as _e:
+        logger.warning("could not write ops_env.json: %s", _e)
+
     consumer = RedisSnapshotConsumer(
         engine=engine,
         topic=topic,
