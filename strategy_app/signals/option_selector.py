@@ -7,8 +7,10 @@ every threshold is an env var.
 Master switch:
   STRATEGY_SMART_STRIKE_ENABLED=1
 
-Premium hard cap — skip trade entirely if no strike is affordable:
-  SMART_STRIKE_MAX_PREMIUM=600         0 = no cap; recommended 400-600
+Premium target — prefer strikes within budget, but always return a strike.
+Entry is already decided upstream; this selector never skips a trade:
+  SMART_STRIKE_MAX_PREMIUM=600         0 = no cap; try deepest within budget first,
+                                       fall back to deepest available if nothing fits
 
 IV hard reject (trade skipped entirely):
   SMART_STRIKE_IV_REJECT_PCTILE=90.0
@@ -267,16 +269,16 @@ def select_strike(snap: Any, direction: str, decision: Any, regime: str = "") ->
 
     max_premium = _env_float("SMART_STRIKE_MAX_PREMIUM", 0.0)  # 0 = no cap
 
-    # Try tiers from deepest to shallowest; return first that fully passes.
-    # Deeper OTM = cheaper premium, so once ltp > max_premium we break:
-    # all shallower strikes will be even more expensive.
+    # Pass 1: try tiers deepest-first with ALL gates including premium target.
+    # Deeper OTM = cheaper, so if ltp > max_premium here, shallower will be worse —
+    # skip pass 1 entirely for this tier and let pass 2 handle it.
     for tier in _build_otm_tiers():
         strike_candidate = _otm_strike(tier.n)
         ltp = _ltp(strike_candidate)
         if ltp is None:
-            continue  # no LTP data at this depth — try shallower
+            continue
         if max_premium > 0 and ltp > max_premium:
-            break  # too expensive; shallower strikes cost even more — reject
+            break  # shallower = more expensive — no point continuing pass 1
         if not _tier_passes(tier, confidence, iv_pct, regime, snap, direction, strike_candidate):
             continue
         return StrikeSelection(
@@ -288,21 +290,29 @@ def select_strike(snap: Any, direction: str, decision: Any, regime: str = "") ->
             otm_steps=tier.n,
         )
 
-    # No OTM tier passed — check if ATM is within premium cap before accepting it
-    atm_ltp = _ltp(atm_int)
-    if max_premium > 0 and atm_ltp is not None and atm_ltp > max_premium:
+    # Pass 2: no strike found within budget. Entry was already confirmed — always
+    # take the best available strike, just ignoring the premium cap.
+    # Deepest OTM with passing tier gates wins; fall back to ATM if nothing.
+    for tier in _build_otm_tiers():
+        strike_candidate = _otm_strike(tier.n)
+        ltp = _ltp(strike_candidate)
+        if ltp is None:
+            continue
+        if not _tier_passes(tier, confidence, iv_pct, regime, snap, direction, strike_candidate):
+            continue
         return StrikeSelection(
-            strike=None,
-            reason=f"rejected_too_expensive_atm_{atm_ltp:.0f}_cap_{max_premium:.0f}",
+            strike=strike_candidate,
+            reason=f"otm_{tier.n}_over_cap_{ltp:.0f}_conf_{confidence:.3f}",
             confidence=confidence,
             iv_percentile=iv_pct,
-            mode="rejected_too_expensive",
-            otm_steps=0,
+            mode=f"otm_{tier.n}",
+            otm_steps=tier.n,
         )
 
+    # ATM fallback — entry is confirmed, always return something tradeable
     return StrikeSelection(
         strike=atm_int,
-        reason=f"atm_no_tier_passed_conf_{confidence:.3f}",
+        reason=f"atm_fallback_conf_{confidence:.3f}",
         confidence=confidence,
         iv_percentile=iv_pct,
         mode="atm",
