@@ -35,6 +35,7 @@ _SAFE_OVERRIDE_KEYS = {
     "EXIT_THESIS_FAIL_BARS",
     "EXIT_THESIS_FAIL_MIN_MFE",
     "CONSENSUS_BYPASS_MIN_CONFIDENCE",
+    "STRATEGY_MIN_CONFIDENCE",
     "DIRECTION_MIN_MARGIN_SIDEWAYS",
     "STRATEGY_STRIKE_SELECTION_POLICY",
     "SMART_STRIKE_MAX_PREMIUM",
@@ -325,6 +326,15 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
         for k, v in overrides.items():
             if k in _SAFE_OVERRIDE_KEYS:
                 sim_env[k] = str(v)
+
+        # CONSENSUS_BYPASS_MIN_CONFIDENCE is the UI-visible "min confidence" slider.
+        # The engine ALSO reads STRATEGY_MIN_CONFIDENCE as the primary entry gate
+        # (passed to DeterministicRuleEngine.__init__ min_confidence param).
+        # Mirror the user's confidence override to both so either key controls entries.
+        if "CONSENSUS_BYPASS_MIN_CONFIDENCE" in overrides:
+            sim_env["STRATEGY_MIN_CONFIDENCE"] = sim_env["CONSENSUS_BYPASS_MIN_CONFIDENCE"]
+        if "STRATEGY_MIN_CONFIDENCE" in overrides:
+            sim_env["CONSENSUS_BYPASS_MIN_CONFIDENCE"] = sim_env["STRATEGY_MIN_CONFIDENCE"]
 
         # Load snapshots
         snaps = _load_today_snapshots(trade_date)

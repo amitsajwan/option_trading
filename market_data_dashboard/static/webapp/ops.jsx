@@ -539,6 +539,27 @@ function OpsPage() {
           </div>
         )}
 
+        {/* ── Sim diagnostics (shown after run) ── */}
+        {job?.status === 'done' && (
+          <div style={{fontFamily:'var(--f-mono)', fontSize:10, color:'var(--ink-3)',
+            background:'var(--paper-2)', border:'1px solid var(--line-1)', borderRadius:'var(--r-2)',
+            padding:'8px 14px', display:'flex', gap:20, flexWrap:'wrap'}}>
+            <span style={{color:'var(--ink-2)', fontWeight:600}}>SIM DIAG</span>
+            {job.diag && <>
+              <span>snapshots: {job.diag.evaluated}</span>
+              <span>signals: {job.diag.signals}</span>
+              <span>entries: {job.diag.entries}</span>
+              {job.diag.eval_errors > 0 && <span style={{color:'var(--neg)'}}>errors: {job.diag.eval_errors}</span>}
+            </>}
+            <span>exit_mode: <span style={{color:'var(--ink)'}}>{job.exit_stack || '—'}</span></span>
+            {job.overrides_applied && Object.keys(job.overrides_applied).length > 0 && (
+              <span>overrides: {Object.entries(job.overrides_applied).map(([k,v]) =>
+                `${k.replace(/^(EXIT_|LOTTERY_|STRATEGY_|RISK_|CONSENSUS_|DIRECTION_)/,'').toLowerCase()}=${v}`
+              ).join(' · ')}</span>
+            )}
+          </div>
+        )}
+
         {/* ── Results (actual vs sim side by side) ── */}
         {(job?.status === 'done' || actualTrades.length > 0) && (
           <div className="ops-results">
