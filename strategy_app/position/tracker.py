@@ -33,6 +33,11 @@ class PositionTracker:
         self._exit_stack: Optional[CompositeExitPolicy] = (
             build_default_exit_stack() if self._exit_stack_enabled else None
         )
+        # Lottery mode: the stack is the SOLE discretionary authority (it carries its
+        # own HardStop + Timestop), so legacy inline exits are suppressed to let
+        # winners run. Scalper mode keeps the inline exits as complementary
+        # stop-loss / timestop backstops (the scalper stack has no hard stop).
+        self._exit_mode = str(os.getenv("EXIT_STRATEGY_MODE", "scalper") or "scalper").strip().lower()
 
     def on_session_start(self, trade_date: date) -> None:
         self._position = None
@@ -137,18 +142,39 @@ class PositionTracker:
             playbook_hit = evaluate_playbook_exit(position, snap)
             if playbook_hit is not None:
                 exit_reason, exit_trigger = playbook_hit
+        # When the composite exit stack is active it is the SOLE discretionary
+        # authority — the legacy inline exits (stagnant, thesis_fail, premium_target,
+        # max_hold, early_stop, …) must NOT run, or they cut winners the stack wants
+        # to let run (this is exactly what defeated lottery mode: thesis_fail/stagnant
+        # exited at +0.7% while the stack was holding for the fat tail).
+        _stack_active = (
+            self._exit_stack is not None
+            and not has_playbook
+            and self._exit_mode == "lottery"
+        )
         if forced_exit_reason is None and not has_playbook and exit_reason is None and self._exit_stack is not None:
             stack_reason = self._exit_stack.check(position, snap)
             if stack_reason is not None:
                 exit_reason = stack_reason
                 exit_trigger = "exit_stack"
 
+        # ── Hard safety floors — always apply, even over the exit stack ──
         if forced_exit_reason is not None:
             exit_reason = forced_exit_reason
             exit_trigger = "forced"
         elif risk.daily_loss_breached or risk.weekly_loss_breached:
             exit_reason = ExitReason.RISK_BREACH
             exit_trigger = "risk_breach"
+        elif self._minute_of_day(snap) >= HARD_CLOSE_MINUTE:
+            exit_reason = ExitReason.TIME_STOP
+            exit_trigger = "hard_close"
+        elif _stack_active:
+            # Stack already had its say above. Only the soft-close clock floor
+            # remains; all other legacy discretionary exits are suppressed.
+            if exit_reason is None and self._minute_of_day(snap) >= SOFT_CLOSE_MINUTE:
+                exit_reason = ExitReason.TIME_STOP
+                exit_trigger = "soft_close"
+        # ── Legacy inline discretionary exits (only when stack NOT active) ──
         # Small-profit stagnant exit: bank profits when giving back and momentum has
         # stalled (proxy via MFE giveback). Placed before clock/stop exits.
         elif exit_reason is None and as_bool(os.getenv("STAGNANT_PROFIT_EXIT_ENABLED", "false")):
@@ -166,9 +192,6 @@ class PositionTracker:
             ):
                 exit_reason = ExitReason.TIME_STOP
                 exit_trigger = "stagnant_profit_exit"
-        elif self._minute_of_day(snap) >= HARD_CLOSE_MINUTE:
-            exit_reason = ExitReason.TIME_STOP
-            exit_trigger = "hard_close"
         elif not has_playbook and position.underlying_stop_pct is not None and self._is_underlying_stop_hit(position, current_futures_price):
             exit_reason = ExitReason.STOP_LOSS
             exit_trigger = "underlying_stop"
