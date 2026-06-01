@@ -1,0 +1,453 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Mobile-first overrides for the LIVE/REPLAY cockpit (body.live-terminal).
+   Every rule in this file is gated by a viewport @media; desktop is
+   unchanged. Owned by Phase 1-7 of the mobile-friendly rollout.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Mobile shell elements: hidden by default; revealed inside the media
+   block. Desktop shell elements (.ticker-bar, .t-status-bar, .t-workspace,
+   .t-log-strip) keep their desktop styles; mobile @media hides them and
+   reveals the .m-shell tree instead. ─────────────────────────────────── */
+.m-shell { display: none; }
+
+/* ───────────────── Phase 1 — gate the viewport lock ──────────────────── */
+@media (max-width: 640px) {
+  /* Let the page scroll on phones. Desktop keeps height:100vh / overflow:hidden. */
+  body.live-terminal {
+    overflow: auto;
+    height: auto;
+    min-height: 100vh;
+    -webkit-text-size-adjust: 100%;
+  }
+  body.live-terminal #app-shell {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+  body.live-terminal #page {
+    height: auto;
+    overflow: visible;
+  }
+  body.live-terminal .cockpit {
+    height: auto;
+    min-height: 100vh;
+    grid-template-rows: auto auto 1fr auto;
+    overflow: visible;
+  }
+}
+
+/* ───────────────── Phase 2-7 — mobile layout ─────────────────────────── */
+@media (max-width: 640px) {
+  /* Hide desktop chrome on mobile — we render .m-shell instead. */
+  body.live-terminal .ticker-bar,
+  body.live-terminal .t-status-bar,
+  body.live-terminal .t-workspace,
+  body.live-terminal .t-log-strip {
+    display: none !important;
+  }
+
+  /* Hide the floating Ops gear on mobile — moved into the bottom sheet. */
+  body.live-terminal .ops-gear-btn,
+  body.live-terminal .ops-gear-label {
+    display: none !important;
+  }
+
+  /* Reveal the mobile shell. */
+  body.live-terminal .m-shell {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    background: var(--bg-0);
+    color: var(--fg-1);
+    font-family: var(--f-sans);
+  }
+
+  /* ── Sticky header (Phase 2): 2 rows, system orb + P&L + halt ───────── */
+  .m-header {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: linear-gradient(180deg, #0e1015 0%, #0a0c10 100%);
+    border-bottom: 1px solid var(--line-2);
+    display: grid;
+    grid-template-rows: 36px 52px;
+  }
+  .m-header-row1 {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--line-1);
+  }
+  .m-brand {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--f-mono); font-size: 11px;
+    color: var(--fg-1); letter-spacing: 0.06em; font-weight: 600;
+  }
+  .m-brand-mark {
+    width: 14px; height: 14px;
+    background: var(--accent);
+    clip-path: polygon(0 100%, 0 60%, 25% 35%, 50% 50%, 75% 15%, 100% 30%, 100% 100%);
+  }
+  /* The combined system orb collapses WS / engine / stale / halt into ONE
+     status indicator: green=healthy, amber=degraded, red=broken/halted. */
+  .m-orb {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--f-mono); font-size: 10px;
+    color: var(--fg-3); letter-spacing: 0.04em;
+  }
+  .m-orb-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--fg-4);
+    box-shadow: 0 0 0 0 rgba(0,0,0,0);
+    transition: background .2s, box-shadow .2s;
+  }
+  .m-orb-dot.ok    { background: var(--pos); box-shadow: 0 0 6px var(--pos-wash); animation: m-orb-pulse 1.6s ease-out infinite; }
+  .m-orb-dot.warn  { background: var(--warn); box-shadow: 0 0 6px var(--warn-wash); }
+  .m-orb-dot.crit  { background: var(--neg); box-shadow: 0 0 8px var(--neg-wash); }
+  @keyframes m-orb-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(25,195,125,0.6); }
+    70%  { box-shadow: 0 0 0 4px rgba(25,195,125,0); }
+    100% { box-shadow: 0 0 0 0 rgba(25,195,125,0); }
+  }
+  .m-orb-fresh { color: var(--fg-4); font-size: 9.5px; }
+
+  .m-symbol {
+    display: flex; align-items: baseline; gap: 8px; justify-content: center;
+    font-family: var(--f-mono);
+    overflow: hidden; min-width: 0;
+  }
+  .m-symbol .sym { font-size: 10px; color: var(--fg-3); letter-spacing: 0.08em; text-transform: uppercase; }
+  .m-symbol .px  { font-size: 13px; color: var(--fg-1); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .m-symbol .chg { font-size: 11px; font-variant-numeric: tabular-nums; }
+  .m-symbol .chg.pos { color: var(--pos); }
+  .m-symbol .chg.neg { color: var(--neg); }
+
+  .m-header-row2 {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 0 8px 0 14px;
+  }
+  /* Stress-adaptive P&L: font grows with magnitude. */
+  .m-pnl {
+    display: flex; align-items: baseline; gap: 8px;
+    font-family: var(--f-mono); font-variant-numeric: tabular-nums;
+    min-width: 0;
+  }
+  .m-pnl .val {
+    font-size: 22px; font-weight: 700; letter-spacing: -0.02em; line-height: 1;
+  }
+  .m-pnl .val.pos { color: var(--pos); }
+  .m-pnl .val.neg { color: var(--neg); }
+  .m-pnl .val.flat { color: var(--fg-2); }
+  /* Magnitude steps: |pnl|>=1% → larger, >=2% → louder. */
+  .m-pnl[data-stress="high"] .val { font-size: 26px; }
+  .m-pnl[data-stress="extreme"] .val { font-size: 28px; font-weight: 800; }
+  .m-pnl .glyph { font-size: 14px; }
+  .m-pnl .meta {
+    display: flex; flex-direction: column; gap: 1px;
+    font-size: 10px; color: var(--fg-3); letter-spacing: 0.02em;
+  }
+  .m-pnl .meta .k { color: var(--fg-4); font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; }
+  .m-pnl .meta .v { color: var(--fg-2); font-weight: 500; }
+
+  /* Action icons — bottom of header, deliberately top-right (thumb stretch). */
+  .m-iconbtn {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px solid var(--line-2);
+    color: var(--fg-2);
+    display: grid; place-items: center;
+    font-size: 17px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background .12s, border-color .12s, color .12s;
+  }
+  .m-iconbtn:active { background: var(--bg-2); }
+  .m-iconbtn.danger { color: var(--neg); border-color: rgba(242,60,74,0.45); }
+  .m-iconbtn.danger:active { background: var(--neg); color: #fff; border-color: var(--neg); }
+  .m-iconbtn[aria-disabled="true"] { opacity: 0.35; pointer-events: none; }
+
+  /* ── Tab strip (Phase 4) ─────────────────────────────────────────────── */
+  .m-tabs {
+    position: sticky;
+    top: 88px; /* row1 (36) + row2 (52) */
+    z-index: 25;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--line-2);
+  }
+  .m-tab {
+    background: transparent; border: 0;
+    height: var(--touch);
+    color: var(--fg-3);
+    font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; font-weight: 500;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .m-tab .count {
+    font-size: 9.5px; color: var(--fg-4); font-weight: 400; letter-spacing: 0.02em;
+  }
+  .m-tab[aria-pressed="true"] { color: var(--fg-1); border-bottom-color: var(--accent); }
+  .m-tab[aria-pressed="true"] .count { color: var(--fg-2); }
+
+  /* ── Tab body (Phase 5) ──────────────────────────────────────────────── */
+  .m-body {
+    flex: 1;
+    min-height: 0;
+    padding: 8px 10px 80px;  /* bottom pad reserves space for safe-area + sheet handles */
+    padding-bottom: max(80px, env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Trade cards (replaces .t-tape-table on mobile) */
+  .m-cards { display: flex; flex-direction: column; gap: 8px; }
+  .m-card {
+    background: var(--bg-1);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-3);
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto auto;
+    gap: 4px 10px;
+    -webkit-tap-highlight-color: transparent;
+    transition: background .15s, border-color .15s;
+  }
+  .m-card:active { background: var(--bg-2); }
+  .m-card[aria-pressed="true"] {
+    border-color: var(--accent);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  .m-card-head {
+    grid-column: 1 / 2;
+    display: flex; align-items: center; gap: 6px; min-width: 0;
+    font-family: var(--f-mono); font-size: 12px; color: var(--fg-1); font-weight: 600;
+  }
+  .m-card-head .strat { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-card-dir {
+    font-family: var(--f-mono); font-size: 9.5px; font-weight: 700;
+    padding: 2px 6px; border-radius: var(--r-1); letter-spacing: 0.10em;
+    flex-shrink: 0;
+  }
+  .m-card-dir.LONG  { color: var(--pos); background: var(--pos-wash); }
+  .m-card-dir.SHORT { color: var(--neg); background: var(--neg-wash); }
+
+  .m-card-pnl {
+    grid-column: 2 / 3;
+    grid-row: 1 / 2;
+    font-family: var(--f-mono); font-variant-numeric: tabular-nums;
+    font-size: 16px; font-weight: 700; text-align: right;
+    display: inline-flex; align-items: baseline; gap: 4px; justify-content: flex-end;
+  }
+  .m-card-pnl.pos { color: var(--pos); }
+  .m-card-pnl.neg { color: var(--neg); }
+  .m-card-pnl .glyph { font-size: 12px; }
+
+  .m-card-prices {
+    grid-column: 1 / -1;
+    font-family: var(--f-mono); font-variant-numeric: tabular-nums;
+    font-size: 11px; color: var(--fg-2);
+    display: flex; gap: 10px; flex-wrap: wrap;
+  }
+  .m-card-prices .arr { color: var(--fg-4); margin: 0 4px; }
+  .m-card-prices .lbl { color: var(--fg-4); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; margin-right: 4px; }
+
+  .m-card-foot {
+    grid-column: 1 / -1;
+    display: flex; gap: 8px; align-items: center; justify-content: space-between;
+    font-family: var(--f-mono); font-size: 10px; color: var(--fg-3);
+  }
+  .m-card-foot .reason { letter-spacing: 0.04em; text-transform: uppercase; }
+  .m-card-foot .reason.target { color: var(--pos); }
+  .m-card-foot .reason.stop   { color: var(--neg); }
+  .m-card-foot .reason.time   { color: var(--warn); }
+  .m-card-foot .time { color: var(--fg-4); }
+
+  /* Empty state */
+  .m-empty {
+    padding: 32px 20px;
+    text-align: center;
+    color: var(--fg-3);
+    font-family: var(--f-mono); font-size: 12px;
+  }
+  .m-empty .hint { color: var(--fg-4); font-size: 10.5px; margin-top: 6px; }
+
+  /* Pull-to-refresh indicator (Phase 5) */
+  .m-ptr {
+    height: 0; overflow: hidden;
+    display: grid; place-items: center;
+    color: var(--fg-3); font-family: var(--f-mono); font-size: 10.5px;
+    transition: height .15s ease;
+  }
+  .m-ptr.pulling { height: 40px; }
+  .m-ptr.refreshing { height: 40px; color: var(--pos); }
+
+  /* Chart tab — fills available height */
+  .m-chart-wrap {
+    height: 60vh;
+    min-height: 320px;
+    background: var(--bg-0);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-3);
+    overflow: hidden;
+    /* allow vertical page scroll; LWC handles 2-finger pinch */
+    touch-action: pan-y pinch-zoom;
+  }
+
+  /* Brain & Risk tab — rendered inline */
+  .m-section {
+    margin-bottom: 14px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-3);
+    background: var(--bg-1);
+    overflow: hidden;
+  }
+  .m-section-head {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line-1);
+    font-family: var(--f-mono); font-size: 10px;
+    color: var(--fg-3); letter-spacing: 0.14em; text-transform: uppercase;
+    font-weight: 600;
+  }
+  .m-section-body { padding: 8px 12px 10px; }
+  .m-kv-list { display: grid; gap: 6px; }
+  .m-kv {
+    display: flex; align-items: baseline; justify-content: space-between;
+    font-family: var(--f-mono); font-size: 12px;
+    padding: 4px 0;
+    border-bottom: 1px dashed var(--line-1);
+  }
+  .m-kv:last-child { border-bottom: 0; }
+  .m-kv .k { color: var(--fg-3); font-size: 10.5px; letter-spacing: 0.04em; }
+  .m-kv .v { color: var(--fg-1); font-variant-numeric: tabular-nums; }
+  .m-kv .v.pos { color: var(--pos); }
+  .m-kv .v.neg { color: var(--neg); }
+  .m-kv .v.warn { color: var(--warn); }
+
+  /* More tab — list of actions */
+  .m-actions { display: flex; flex-direction: column; gap: 8px; }
+  .m-action {
+    appearance: none; border: 1px solid var(--line-2);
+    background: var(--bg-1); color: var(--fg-1);
+    padding: 14px 14px;
+    border-radius: var(--r-3);
+    font-family: var(--f-mono); font-size: 12px; font-weight: 500;
+    text-align: left;
+    display: flex; align-items: center; justify-content: space-between;
+    min-height: var(--touch);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .m-action:active { background: var(--bg-2); }
+  .m-action .label { letter-spacing: 0.04em; }
+  .m-action .sub { color: var(--fg-3); font-size: 10.5px; }
+  .m-action.danger { color: var(--neg); border-color: rgba(242,60,74,0.4); }
+
+  /* ── Bottom sheet (Phase 6) ──────────────────────────────────────────── */
+  .m-sheet-overlay {
+    position: fixed; inset: 0; z-index: 220;
+    background: rgba(0,0,0,0);
+    pointer-events: none;
+    transition: background .2s ease;
+  }
+  .m-sheet-overlay.open {
+    background: rgba(0,0,0,0.4);
+    pointer-events: all;
+  }
+  .m-sheet {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    background: var(--bg-1);
+    border-top: 1px solid var(--line-3);
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    max-height: 80vh;
+    overflow: hidden;
+    transform: translateY(100%);
+    transition: transform .25s cubic-bezier(.4,0,.2,1);
+    display: flex; flex-direction: column;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .m-sheet.open { transform: translateY(0); }
+  .m-sheet-grab {
+    width: 36px; height: 4px; border-radius: 2px;
+    background: var(--line-3);
+    margin: 8px auto 4px;
+  }
+  .m-sheet-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px 10px;
+    border-bottom: 1px solid var(--line-1);
+  }
+  .m-sheet-title {
+    font-family: var(--f-mono); font-size: 11px; font-weight: 600;
+    color: var(--fg-1); letter-spacing: 0.14em; text-transform: uppercase;
+  }
+  .m-sheet-close {
+    appearance: none; border: 0; background: transparent;
+    color: var(--fg-3); font-size: 20px; padding: 4px 8px; cursor: pointer;
+    line-height: 1;
+  }
+  .m-sheet-body { overflow-y: auto; padding: 12px 14px; }
+  .m-sheet-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line-1);
+    font-family: var(--f-mono); font-size: 12px;
+  }
+  .m-sheet-row:last-child { border-bottom: 0; }
+  .m-sheet-label {
+    flex: 1;
+    color: var(--fg-2);
+    font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .m-sheet-modes {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 8px; margin-top: 4px;
+  }
+  .m-sheet-mode {
+    appearance: none; border: 1px solid var(--line-2);
+    background: var(--bg-2); color: var(--fg-1);
+    padding: 12px;
+    border-radius: var(--r-3);
+    font-family: var(--f-mono); font-size: 12px;
+    min-height: var(--touch);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .m-sheet-mode.active { border-color: var(--accent); color: var(--accent); background: var(--bg-1); }
+  .m-sheet-mode .sub { color: var(--fg-3); font-size: 10px; margin-left: 4px; }
+
+  /* Halt confirm modal — boost input height for mobile gloves/wet hands. */
+  .t-halt-input { height: 56px !important; font-size: 16px !important; }
+  .t-overlay-card { min-width: 0 !important; width: calc(100vw - 32px); padding: 18px 18px !important; }
+
+  /* Hide all kbd hints on mobile */
+  body.live-terminal .kbd { display: none !important; }
+  body.live-terminal .t-btn .kbd { display: none !important; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Phase 7 — Landscape (≤900px wide, landscape):
+   Header collapses to a single 44px row; tabs hide; whatever is active
+   fills the viewport. Power-user "I rotated to focus on the chart" mode.
+   ───────────────────────────────────────────────────────────────────────── */
+@media (max-width: 900px) and (orientation: landscape) {
+  body.live-terminal .m-shell { min-height: 100vh; }
+  body.live-terminal .m-header { grid-template-rows: 44px; }
+  body.live-terminal .m-header-row1 { display: none; }
+  body.live-terminal .m-header-row2 { padding: 0 8px 0 12px; }
+  body.live-terminal .m-header-row2 .m-pnl .val { font-size: 18px; }
+  body.live-terminal .m-tabs { display: none; }
+  body.live-terminal .m-body { padding: 8px; min-height: calc(100vh - 44px); }
+  body.live-terminal .m-chart-wrap { height: calc(100vh - 60px); }
+}

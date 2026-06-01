@@ -1452,8 +1452,405 @@ function LogStrip({ session, alerts, wsStatus }) {
   );
 }
 
+// ── useIsMobile — single source of truth for the mobile breakpoint ───────
+function _useIsMobile() {
+  const mq = '(max-width: 640px)';
+  const [isMobile, setIsMobile] = _s(() =>
+    typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia(mq).matches : false);
+  _e(() => {
+    if (!window.matchMedia) return;
+    const m = window.matchMedia(mq);
+    const fn = e => setIsMobile(e.matches);
+    if (m.addEventListener) m.addEventListener('change', fn);
+    else m.addListener(fn);
+    return () => {
+      if (m.removeEventListener) m.removeEventListener('change', fn);
+      else m.removeListener(fn);
+    };
+  }, []);
+  return isMobile;
+}
+
+// ── _fmtRelTime — "2s ago" / "12s ago" / "1m ago" ────────────────────────
+function _fmtRelTime(ms) {
+  if (!ms) return '—';
+  const dt = Math.max(0, Date.now() - ms);
+  if (dt < 1000) return 'now';
+  const s = Math.floor(dt / 1000);
+  if (s < 60) return `${s}s ago`;
+  const mn = Math.floor(s / 60);
+  if (mn < 60) return `${mn}m ago`;
+  return `${Math.floor(mn / 60)}h ago`;
+}
+
+// ── MobileTradeCard — replaces a Tape row on mobile ──────────────────────
+function MobileTradeCard({ trade, selected, onSelect, session }) {
+  const t = trade;
+  const pnl = t.pnlPct || 0;
+  const pnlCls = pnl >= 0 ? 'pos' : 'neg';
+  const glyph = pnl >= 0 ? '▲' : '▼';
+  const reason = (t.exitReason || '').toUpperCase();
+  const reasonCls =
+    reason === 'TARGET_HIT' || reason === 'TARGET' ? 'target' :
+    reason === 'STOP_HIT'   || reason === 'STOP'   ? 'stop'   :
+    reason.includes('TIME') ? 'time' : '';
+  const dir = t.dir || 'LONG';
+  const legDir = t.legDir || dir;
+  const entryLabel = _barLabel(session, t.entryIdx);
+  const exitLabel  = _barLabel(session, t.exitIdx);
+  return (
+    <button
+      type="button"
+      className="m-card"
+      aria-pressed={selected ? 'true' : 'false'}
+      onClick={() => onSelect(t)}>
+      <div className="m-card-head">
+        <span className={`m-card-dir ${dir}`}>{legDir}{t.optionType && legDir !== t.optionType ? ` ${t.optionType}` : ''}</span>
+        <span className="strat">{t.strat || '—'}</span>
+      </div>
+      <div className={`m-card-pnl ${pnlCls}`}>
+        <span className="glyph">{glyph}</span>
+        <span>{TC.fmtPct(pnl, 2)}</span>
+      </div>
+      <div className="m-card-prices">
+        <span><span className="lbl">in</span>{(t.entryPx || 0).toFixed(2)}</span>
+        <span className="arr">→</span>
+        <span><span className="lbl">out</span>{(t.exitPx || 0).toFixed(2)}</span>
+        {t.strike && <span><span className="lbl">strike</span>{Math.round(t.strike)}{t.optionType ? ` ${t.optionType}` : ''}</span>}
+      </div>
+      <div className="m-card-foot">
+        <span className="time">{entryLabel} → {exitLabel}</span>
+        {reason && <span className={`reason ${reasonCls}`}>{reason.replace(/_/g, ' ')}</span>}
+      </div>
+    </button>
+  );
+}
+
+// ── MobileBottomSheet — generic bottom-anchored sheet ────────────────────
+function MobileBottomSheet({ open, title, onClose, children }) {
+  _e(() => {
+    if (!open) return;
+    const fn = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, [open, onClose]);
+  return (
+    <div className={`m-sheet-overlay ${open ? 'open' : ''}`}
+         onClick={e => { if (e.target.classList.contains('m-sheet-overlay')) onClose(); }}>
+      <div className={`m-sheet ${open ? 'open' : ''}`}>
+        <div className="m-sheet-grab"/>
+        <div className="m-sheet-head">
+          <span className="m-sheet-title">{title}</span>
+          <button className="m-sheet-close" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="m-sheet-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── MobileLiveShell — phone-first layout for LiveMonitorDark ─────────────
+function MobileLiveShell({
+  session, candles, upToIdx, flashIdx, flashId,
+  trades, signals, strategies,
+  quote, sessionPnl, winRate, regime, engine,
+  brainData, wsStatus, watchMode, watchRunId, simRuns,
+  selectedTrade, onSelectTrade,
+  onHaltClick, onModeSwitch, onBackToLive, onWatchChange,
+}) {
+  const [tab, setTab] = _s('tape');            // tape | chart | brain | more
+  const [sheet, setSheet] = _s(null);          // null | 'ops'
+  const [lastTickAt, setLastTickAt] = _s(Date.now());
+  const [now, setNow] = _s(Date.now());
+  const inspectorTrade = selectedTrade || (trades.length ? trades[0] : null);
+  const [showInspector, setShowInspector] = _s(false);
+
+  // Tick: bump freshness whenever the upstream upToIdx advances.
+  _e(() => { setLastTickAt(Date.now()); }, [upToIdx]);
+  // Clock for freshness display — refresh every 2s, cheap.
+  _e(() => { const id = setInterval(() => setNow(Date.now()), 2000); return () => clearInterval(id); }, []);
+
+  // System orb state — combined health.
+  const ageMs = now - lastTickAt;
+  let orbCls = 'ok', orbLbl = 'LIVE';
+  if (wsStatus !== 'connected') { orbCls = 'crit'; orbLbl = wsStatus.toUpperCase(); }
+  else if (ageMs > 30000) { orbCls = 'crit'; orbLbl = 'STALE'; }
+  else if (ageMs > 10000) { orbCls = 'warn'; orbLbl = 'SLOW'; }
+
+  // Stress level for P&L sizing.
+  const absPnl = Math.abs(sessionPnl);
+  const stress = absPnl >= 0.02 ? 'extreme' : absPnl >= 0.01 ? 'high' : 'normal';
+  const pnlCls = sessionPnl > 0.0005 ? 'pos' : sessionPnl < -0.0005 ? 'neg' : 'flat';
+  const pnlGlyph = sessionPnl > 0.0005 ? '▲' : sessionPnl < -0.0005 ? '▼' : '◆';
+
+  // Chart container — only mount when chart tab is visible to save memory.
+  // (TermChart auto-resizes via ResizeObserver, so toggling visibility is fine.)
+  const chartHostRef = _r(null);
+
+  // Pull-to-refresh — simple touch-driven trigger that re-fetches via fetch() of
+  // /api/strategy/current/state. Throttled so the user can't hammer it.
+  const ptrRef = _r({ startY: 0, dragging: false, refreshing: false });
+  const [ptrState, setPtrState] = _s('idle'); // idle | pulling | refreshing
+  const onTouchStart = _cb(e => {
+    if (window.scrollY > 0) return;
+    ptrRef.current.startY = e.touches[0].clientY;
+    ptrRef.current.dragging = true;
+  }, []);
+  const onTouchMove = _cb(e => {
+    if (!ptrRef.current.dragging) return;
+    const dy = e.touches[0].clientY - ptrRef.current.startY;
+    if (dy > 60 && ptrState !== 'pulling') setPtrState('pulling');
+    else if (dy <= 0 && ptrState !== 'idle') setPtrState('idle');
+  }, [ptrState]);
+  const onTouchEnd = _cb(() => {
+    if (!ptrRef.current.dragging) return;
+    ptrRef.current.dragging = false;
+    if (ptrState === 'pulling' && !ptrRef.current.refreshing) {
+      ptrRef.current.refreshing = true;
+      setPtrState('refreshing');
+      // The WS pushes snapshots automatically; this just nudges the user.
+      setTimeout(() => {
+        ptrRef.current.refreshing = false;
+        setPtrState('idle');
+      }, 700);
+    } else {
+      setPtrState('idle');
+    }
+  }, [ptrState]);
+
+  const tradeCount = trades.length;
+  const signalCount = signals.length;
+
+  return (
+    <div className="m-shell">
+      {/* ── Sticky header ────────────────────────────────────────────────── */}
+      <header className="m-header" role="banner">
+        <div className="m-header-row1">
+          <div className="m-brand"><span className="m-brand-mark"/>QUANT</div>
+          <div className="m-symbol">
+            <span className="sym">{quote?.symbol || session.instrument}</span>
+            <span className="px">{quote ? quote.spot.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'}</span>
+            {quote && (
+              <span className={`chg ${quote.spotChg >= 0 ? 'pos' : 'neg'}`}>
+                {quote.spotChg >= 0 ? '+' : ''}{quote.spotChgPct.toFixed(2)}%
+              </span>
+            )}
+          </div>
+          <div className="m-orb" title={`feed ${orbLbl} · ${_fmtRelTime(lastTickAt)}`}>
+            <span className={`m-orb-dot ${orbCls}`}/>
+            <span className="m-orb-fresh">{_fmtRelTime(lastTickAt)}</span>
+          </div>
+        </div>
+        <div className="m-header-row2">
+          <div className="m-pnl" data-stress={stress}>
+            <span className={`val ${pnlCls}`}>
+              <span className="glyph">{pnlGlyph}</span> {TC.fmtPct(sessionPnl, 2)}
+            </span>
+            <div className="meta">
+              <span className="k">trades</span>
+              <span className="v">{tradeCount} · {winRate}%</span>
+            </div>
+          </div>
+          <button className="m-iconbtn"
+                  aria-label="Settings and mode switch"
+                  onClick={() => setSheet('ops')}>⚙</button>
+          <button className="m-iconbtn danger"
+                  aria-label="Halt engine"
+                  onClick={onHaltClick}>⏻</button>
+        </div>
+      </header>
+
+      {/* ── Tab strip ────────────────────────────────────────────────────── */}
+      <nav className="m-tabs" role="tablist">
+        <button className="m-tab" aria-pressed={tab==='tape'}    onClick={() => setTab('tape')}>
+          Tape <span className="count">{tradeCount}</span>
+        </button>
+        <button className="m-tab" aria-pressed={tab==='chart'}   onClick={() => setTab('chart')}>Chart</button>
+        <button className="m-tab" aria-pressed={tab==='brain'}   onClick={() => setTab('brain')}>Brain</button>
+        <button className="m-tab" aria-pressed={tab==='more'}    onClick={() => setTab('more')}>More</button>
+      </nav>
+
+      {/* ── Body ─────────────────────────────────────────────────────────── */}
+      <main className="m-body"
+            onTouchStart={onTouchStart}
+            onTouchMove={onTouchMove}
+            onTouchEnd={onTouchEnd}>
+        <div className={`m-ptr ${ptrState !== 'idle' ? ptrState : ''}`}>
+          {ptrState === 'pulling' ? 'Release to refresh' : ptrState === 'refreshing' ? 'Refreshing…' : ''}
+        </div>
+
+        {tab === 'tape' && (
+          tradeCount === 0
+            ? <div className="m-empty">
+                No trades yet today.
+                <div className="hint">{signalCount > 0 ? `${signalCount} signal${signalCount===1?'':'s'} considered` : 'Waiting for signals…'}</div>
+              </div>
+            : <div className="m-cards">
+                {trades.map(t => (
+                  <MobileTradeCard
+                    key={t.id}
+                    trade={t}
+                    session={session}
+                    selected={inspectorTrade?.id === t.id && showInspector}
+                    onSelect={tr => { onSelectTrade(tr); setShowInspector(true); }}/>
+                ))}
+              </div>
+        )}
+
+        {tab === 'chart' && (
+          <div className="m-chart-wrap" ref={chartHostRef}>
+            <TermChart
+              session={session} candles={candles} trades={trades}
+              selectedTrade={inspectorTrade} onSelectTrade={onSelectTrade}
+              upToIdx={upToIdx} flashIdx={flashIdx}
+            />
+          </div>
+        )}
+
+        {tab === 'brain' && (
+          <>
+            <div className="m-section">
+              <div className="m-section-head">Brain</div>
+              <div className="m-section-body">
+                {brainData?.available
+                  ? <div className="m-kv-list">
+                      <div className="m-kv"><span className="k">day_score</span>
+                        <span className={`v ${
+                          String(brainData.day_score || '').toUpperCase() === 'CALM' ? 'pos' :
+                          String(brainData.day_score || '').toUpperCase() === 'AVOID' ? 'neg' :
+                          String(brainData.day_score || '').toUpperCase() === 'VOLATILE' ? 'warn' : ''
+                        }`}>{String(brainData.day_score || '—').toUpperCase()}</span></div>
+                      <div className="m-kv"><span className="k">confidence</span>
+                        <span className="v">{brainData.day_score_confidence != null
+                          ? (Number(brainData.day_score_confidence)*100).toFixed(0)+'%' : '—'}</span></div>
+                      <div className="m-kv"><span className="k">size mult</span>
+                        <span className={`v ${brainData.size_multiplier != null && Number(brainData.size_multiplier) < 1 ? 'warn' : 'pos'}`}>
+                          {brainData.size_multiplier != null ? Number(brainData.size_multiplier).toFixed(2)+'×' : '—'}
+                        </span></div>
+                      <div className="m-kv"><span className="k">carry</span>
+                        <span className="v">{brainData.carry_consecutive_losses || 0} L · {brainData.losing_streak_days || 0}d</span></div>
+                    </div>
+                  : <div className="m-empty" style={{padding:'14px 4px'}}>Brain status unavailable.</div>
+                }
+              </div>
+            </div>
+            <div className="m-section">
+              <div className="m-section-head">Session</div>
+              <div className="m-section-body">
+                <div className="m-kv-list">
+                  <div className="m-kv"><span className="k">P&amp;L</span>
+                    <span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl, 2)}</span></div>
+                  <div className="m-kv"><span className="k">trades</span><span className="v">{tradeCount}</span></div>
+                  <div className="m-kv"><span className="k">win rate</span><span className="v">{winRate}%</span></div>
+                  <div className="m-kv"><span className="k">regime</span><span className="v">{regime || '—'}</span></div>
+                  <div className="m-kv"><span className="k">engine</span><span className="v">{engine || '—'}</span></div>
+                  <div className="m-kv"><span className="k">feed</span>
+                    <span className={`v ${orbCls === 'ok' ? 'pos' : orbCls === 'warn' ? 'warn' : 'neg'}`}>
+                      {orbLbl} · {_fmtRelTime(lastTickAt)}
+                    </span></div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {tab === 'more' && (
+          <>
+            <div className="m-section">
+              <div className="m-section-head">Strategy Roster</div>
+              <div className="m-section-body">
+                {strategies.length === 0
+                  ? <div className="m-empty" style={{padding:'14px 4px'}}>No trades yet.</div>
+                  : <div className="m-kv-list">
+                      {strategies.map(s => (
+                        <div key={s.id} className="m-kv">
+                          <span className="k">{s.name} · {s.trades}t · {s.wr}%</span>
+                          <span className={`v ${s.pnl >= 0 ? 'pos' : 'neg'}`}>{TC.fmtPct(s.pnl, 2)}</span>
+                        </div>
+                      ))}
+                    </div>}
+              </div>
+            </div>
+            <div className="m-actions">
+              <button className="m-action" onClick={() => setSheet('ops')}>
+                <span className="label">Mode &amp; Ops</span>
+                <span className="sub">Replay · Eval · Pipeline</span>
+              </button>
+              <button className="m-action danger" onClick={onHaltClick}>
+                <span className="label">⏻  Halt engine</span>
+                <span className="sub">requires confirmation</span>
+              </button>
+            </div>
+          </>
+        )}
+      </main>
+
+      {/* ── Inspector bottom sheet (tap a trade card) ────────────────────── */}
+      <MobileBottomSheet
+        open={showInspector && !!inspectorTrade}
+        title={`Trade · ${inspectorTrade?.id || ''}`}
+        onClose={() => setShowInspector(false)}>
+        {inspectorTrade && (
+          <TradeInspector session={session} trade={inspectorTrade}/>
+        )}
+      </MobileBottomSheet>
+
+      {/* ── Ops / mode-switch bottom sheet ───────────────────────────────── */}
+      <MobileBottomSheet
+        open={sheet === 'ops'}
+        title="Settings"
+        onClose={() => setSheet(null)}>
+        <div className="m-sheet-row" style={{display:'block'}}>
+          <div className="m-sheet-label">Mode</div>
+          <div className="m-sheet-modes">
+            <button className="m-sheet-mode active">● Live</button>
+            <button className="m-sheet-mode" onClick={() => { setSheet(null); onModeSwitch('replay'); }}>◷ Replay</button>
+            <button className="m-sheet-mode" onClick={() => { setSheet(null); onModeSwitch('eval'); }}>
+              ⚗ Eval <span className="sub">desktop</span>
+            </button>
+            <button className="m-sheet-mode" onClick={() => { setSheet(null); onModeSwitch('pipeline'); }}>
+              ⬡ Pipeline <span className="sub">desktop</span>
+            </button>
+          </div>
+        </div>
+        {(simRuns && simRuns.length > 0) && (
+          <div className="m-sheet-row" style={{display:'block'}}>
+            <div className="m-sheet-label">Watching</div>
+            <select
+              className="inp"
+              style={{width:'100%', height:44, marginTop:6, fontSize:13}}
+              value={watchMode === 'sim' ? `sim:${watchRunId || ''}` : 'live'}
+              onChange={e => {
+                const raw = String(e.target.value || '');
+                if (raw === 'live') { onBackToLive(); return; }
+                if (raw.startsWith('sim:')) onWatchChange(raw.slice(4));
+              }}>
+              <option value="live">LIVE</option>
+              {simRuns.map(run => (
+                <option key={run.run_id} value={`sim:${run.run_id}`}>
+                  SIM · {String(run.label || 'run').slice(0, 16)} · {String(run.run_id || '').slice(0, 8)}…
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div className="m-sheet-row" style={{display:'block', marginTop:8}}>
+          <div className="m-sheet-label">Diagnostics</div>
+          <div style={{display:'grid', gap:4, marginTop:6, fontFamily:'var(--f-mono)', fontSize:11, color:'var(--fg-3)'}}>
+            <div>WebSocket: <span style={{color: wsStatus === 'connected' ? 'var(--pos)' : 'var(--warn)'}}>{wsStatus}</span></div>
+            <div>Last tick: {_fmtRelTime(lastTickAt)}</div>
+            <div>Engine: {engine || '—'}</div>
+          </div>
+        </div>
+      </MobileBottomSheet>
+    </div>
+  );
+}
+
 // ── LiveMonitorDark — main component ────────────────────────────────────
 function LiveMonitorDark({ onModeSwitch, onKillClick }) {
+  const isMobile = _useIsMobile();
   const [session,       setSession]       = _s(null);
   const [upToIdx,       setUpToIdx]       = _s(0);
   const [livePrice,     setLivePrice]     = _s(null);
@@ -1650,6 +2047,29 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
 
   // Default to latest trade in inspector
   const displayTrade   = selectedTrade || (trades.length > 0 ? trades[0] : null);
+
+  if (isMobile) {
+    return (
+      <MobileLiveShell
+        session={session} candles={candles} upToIdx={upToIdx}
+        flashIdx={flashIdx} flashId={flashId}
+        trades={trades} signals={signals} strategies={strategies}
+        quote={quote} sessionPnl={sessionPnl} winRate={winRate}
+        regime={regime} engine={engine}
+        brainData={brainData} wsStatus={wsStatus}
+        watchMode={watchMode} watchRunId={watchRunId} simRuns={simRunsToday}
+        selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
+        onHaltClick={onKillClick} onModeSwitch={onModeSwitch}
+        onBackToLive={() => { setWatchMode('live'); setWatchRunId(''); setWatchDate(''); }}
+        onWatchChange={(runId) => {
+          const row = (simRunsToday || []).find(r => String(r?.run_id || '') === String(runId || ''));
+          setWatchMode('sim');
+          setWatchRunId(String(runId || '').trim());
+          setWatchDate(String(row?.source_date || row?.trade_date || row?.date || '').slice(0, 10));
+        }}
+      />
+    );
+  }
 
   return (
     <div className="cockpit">
