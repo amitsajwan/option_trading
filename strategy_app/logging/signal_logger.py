@@ -430,6 +430,9 @@ class SignalLogger:
         record["entry_snapshot_id"] = str(position.entry_snapshot_id or "").strip() or None
         record["exit_premium"] = position.current_premium
         record["exit_reason"] = exit_signal.exit_reason.value if exit_signal.exit_reason else None
+        record["exit_policy_triggered"] = str(
+            (exit_signal.decision_metrics or {}).get("exit_policy_triggered") or ""
+        ) or None
         record["reason"] = exit_signal.reason
         record["decision_metrics"] = self._position_decision_metrics(position, signal=exit_signal)
         record = normalize_record_timestamps(record)
