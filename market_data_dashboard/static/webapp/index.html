@@ -70,6 +70,42 @@
     .mode-seg button { padding: 4px 8px; font-size: 11px; }
   }
 
+  /* OPS drawer */
+  .ops-gear-btn {
+    appearance: none; border: 1px solid var(--line-1); border-radius: var(--r-2);
+    background: transparent; color: var(--ink-3); width: 30px; height: 30px;
+    display: grid; place-items: center; cursor: pointer; font-size: 15px;
+    flex-shrink: 0; transition: color .15s, border-color .15s, background .15s;
+  }
+  .ops-gear-btn:hover { color: var(--ink); border-color: var(--ink-3); background: var(--paper-2); }
+  .ops-gear-btn.active { color: var(--ink); border-color: var(--ink); background: var(--paper-2); }
+
+  .ops-drawer-overlay {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,0); pointer-events: none;
+    transition: background .2s;
+  }
+  .ops-drawer-overlay.open { background: rgba(0,0,0,0.25); pointer-events: all; }
+  .ops-drawer {
+    position: absolute; top: 0; right: 0; bottom: 0; width: min(820px, 95vw);
+    background: var(--paper); border-left: 1px solid var(--line-1);
+    transform: translateX(100%); transition: transform .25s cubic-bezier(.4,0,.2,1);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .ops-drawer.open { transform: translateX(0); }
+  .ops-drawer-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; border-bottom: 1px solid var(--line-1);
+    flex-shrink: 0;
+  }
+  .ops-drawer-title { font-family: var(--f-mono); font-size: 12px; font-weight: 600;
+    letter-spacing: 0.04em; color: var(--ink); flex: 1; }
+  .ops-drawer-close { appearance: none; border: 0; background: transparent;
+    color: var(--ink-3); font-size: 18px; cursor: pointer; padding: 2px 6px;
+    border-radius: var(--r-2); line-height: 1; }
+  .ops-drawer-close:hover { background: var(--paper-2); color: var(--ink); }
+  .ops-drawer-body { flex: 1; overflow-y: auto; }
+
   /* Tweaks-panel-specific  */
   .kill-banner {
     background: var(--neg-wash); color: var(--neg); border: 1px solid rgba(194,62,47,0.3);
@@ -92,14 +128,28 @@
       <button data-mode="replay">◷ Replay</button>
       <button data-mode="eval">⚗ Eval</button>
       <button data-mode="pipeline">⬡ Pipeline</button>
-      <button data-mode="ops">⚙ Ops</button>
     </div>
     <div class="spacer"></div>
     <span id="kill-indicator" class="chip" style="display:none"><span class="dot"></span>Engine halted</span>
+    <button id="ops-gear-btn" class="ops-gear-btn" title="Daily Ops — simulate & configure">⚙</button>
     <span class="user mobile-hide"><span class="status-dot"></span>ops · amitsajwan</span>
   </nav>
 
   <div id="kill-banner-slot"></div>
+
+  <!-- OPS drawer — rendered by React, toggled by the ⚙ gear button -->
+  <div id="ops-drawer-overlay" class="ops-drawer-overlay">
+    <div id="ops-drawer" class="ops-drawer">
+      <div class="ops-drawer-header">
+        <span class="ops-drawer-title">⚙ Daily Ops</span>
+        <button class="ops-drawer-close" id="ops-drawer-close">✕</button>
+      </div>
+      <div class="ops-drawer-body" id="ops-drawer-body">
+        <!-- OpsPage mounts here -->
+      </div>
+    </div>
+  </div>
+
   <main id="page" class="page">
     <div class="loading-shell">loading…</div>
   </main>
@@ -177,7 +227,7 @@
     // class when their createChart useEffect fires (children mount after parent renders).
     // live + replay → cockpit shell (live-terminal); eval → dark panel layout (app-dark)
     document.body.classList.toggle('live-terminal', mode === 'live' || mode === 'replay');
-    document.body.classList.toggle('app-dark', mode === 'eval' || mode === 'pipeline' || mode === 'ops');
+    document.body.classList.toggle('app-dark', mode === 'eval' || mode === 'pipeline');
 
     useEffect(() => {
       // Sync mode buttons
@@ -190,7 +240,7 @@
     // Sync URL and page title with current mode.
     // When switching to LIVE the URL is cleaned (removes stale replay params).
     useEffect(() => {
-      const modeLabels = { live: 'LIVE', replay: 'REPLAY', eval: 'EVAL', pipeline: 'PIPELINE', ops: 'OPS' };
+      const modeLabels = { live: 'LIVE', replay: 'REPLAY', eval: 'EVAL', pipeline: 'PIPELINE' };
       document.title = `Strategy Monitor · BANKNIFTY · ${modeLabels[mode] || mode.toUpperCase()}`;
       if (mode === 'live') {
         // Clear any leftover replay/sim query params
@@ -214,6 +264,37 @@
         slot.innerHTML = '';
       }
     }, [killed]);
+
+    // ── OPS drawer ──────────────────────────────────────────────────────────
+    const [opsOpen, setOpsOpen] = useState(false);
+
+    useEffect(() => {
+      const overlay = document.getElementById('ops-drawer-overlay');
+      const drawer  = document.getElementById('ops-drawer');
+      const gearBtn = document.getElementById('ops-gear-btn');
+      const closeBtn = document.getElementById('ops-drawer-close');
+      if (!overlay || !drawer || !gearBtn) return;
+
+      const open  = () => { overlay.classList.add('open'); drawer.classList.add('open'); gearBtn.classList.add('active'); setOpsOpen(true); };
+      const close = () => { overlay.classList.remove('open'); drawer.classList.remove('open'); gearBtn.classList.remove('active'); setOpsOpen(false); };
+      const toggle = () => overlay.classList.contains('open') ? close() : open();
+
+      gearBtn.onclick = toggle;
+      if (closeBtn) closeBtn.onclick = close;
+      // Click on overlay background (not drawer) closes it
+      overlay.onclick = (e) => { if (e.target === overlay) close(); };
+
+      return () => { gearBtn.onclick = null; };
+    }, []);
+
+    // Mount OpsPage into the drawer body once
+    useEffect(() => {
+      const body = document.getElementById('ops-drawer-body');
+      if (!body || !window.OpsPage) return;
+      const root = ReactDOM.createRoot(body);
+      root.render(React.createElement(window.OpsPage));
+    }, []);
+    // ────────────────────────────────────────────────────────────────────────
 
     // Tweaks are managed by TweaksPanel itself (protocol + open state).
     // We only need to track mode/density/etc. state here.
@@ -252,9 +333,7 @@
         ? <ReplayMonitorDark onModeSwitch={setMode} />
         : mode === 'pipeline'
           ? <PipelineMonitor />
-          : mode === 'ops'
-            ? <OpsPage />
-            : <EvalMonitor tweaks={tweaks} />;
+          : <EvalMonitor tweaks={tweaks} />;
 
     return (
       <>
