@@ -393,12 +393,18 @@ def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[d
     exit_stack_name = build_default_exit_stack().name
 
     run_meta = build_run_metadata(profile_id)
-    run_meta["risk_config"] = {
+    # MERGE run overrides onto the profile's risk_config (don't overwrite) — exactly
+    # like strategy_app/main.py. Overwriting wiped the profile's
+    # allow_non_atm_for_ml_entry / atm_strike_only flags, so the smart-strike gate
+    # never fired and every sim trade was ATM regardless of strike config.
+    _profile_risk = dict(run_meta.get("risk_config", {}) or {})
+    _profile_risk.update({
         "rollout_stage": "paper",
         "position_size_multiplier": 1.0,
         "halt_consecutive_losses": int(os.getenv("RISK_MAX_CONSECUTIVE_LOSSES", "3")),
         "halt_daily_dd_pct": 0.04,
-    }
+    })
+    run_meta["risk_config"] = _profile_risk
     engine.set_run_context(f"sim-{job_id}", run_meta)
 
     trade_date_obj = date.fromisoformat(trade_date)
