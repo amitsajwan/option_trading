@@ -50,7 +50,10 @@ class FillTracker:
     """Consumes fill events from Redis stream and persists to MongoDB."""
 
     def __init__(self) -> None:
-        self._r = redis.Redis(**redis_connection_kwargs(decode_responses=True))
+        # for_pubsub=True → socket_timeout=None, required because XREADGROUP blocks for
+        # _BLOCK_MS (5s). A 2s socket timeout would fire before the block completes,
+        # causing spurious timeout errors and constant retry churn.
+        self._r = redis.Redis(**redis_connection_kwargs(decode_responses=True, for_pubsub=True))
         mongo = _mongo_client()
         db = mongo[os.getenv("MONGO_DB", "trading_ai")]
         self._fills_coll: Collection = db[_COLL_FILLS]

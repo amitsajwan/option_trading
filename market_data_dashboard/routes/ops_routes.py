@@ -383,126 +383,32 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
 
 
 def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[dict], str]:
-    """Run the deterministic engine over today's snapshots. Returns (trades, exit_stack_name)."""
+    """Run the deterministic engine over today's snapshots. Returns (trades, exit_stack_name).
+
+    Delegates to strategy_app.sim.replay_engine.replay_day() — the shared implementation
+    used by both the OPS same-day sim and the multi-day sim. Config is already set in
+    os.environ by the caller (_run_sim_thread). Progress is forwarded via callback.
+    """
     import sys
     repo = Path("/app")
     if str(repo) not in sys.path:
         sys.path.insert(0, str(repo))
 
-    from strategy_app.engines import DeterministicRuleEngine
-    from strategy_app.engines.profiles import build_run_metadata
-    from strategy_app.contracts import SignalType
-    from strategy_app.position.exit_policy import build_default_exit_stack
+    from strategy_app.sim.replay_engine import replay_day
 
-    profile_id = os.getenv("STRATEGY_PROFILE_ID", "trader_master_ml_entry_consensus_v1") \
-        or "trader_master_ml_entry_consensus_v1"
-    _minconf_raw = os.getenv("STRATEGY_MIN_CONFIDENCE", "0.50")
-    min_conf = float(_minconf_raw) if str(_minconf_raw).strip() else 0.50
-    engine = DeterministicRuleEngine(
-        min_confidence=min_conf,
-        strategy_profile_id=profile_id,
-    )
-    exit_stack_name = build_default_exit_stack().name
+    os.environ.setdefault("STRATEGY_RUN_ID", f"sim-{job_id}")
 
-    run_meta = build_run_metadata(profile_id)
-    # MERGE run overrides onto the profile's risk_config (don't overwrite) — exactly
-    # like strategy_app/main.py. Overwriting wiped the profile's
-    # allow_non_atm_for_ml_entry / atm_strike_only flags, so the smart-strike gate
-    # never fired and every sim trade was ATM regardless of strike config.
-    _profile_risk = dict(run_meta.get("risk_config", {}) or {})
-    _profile_risk.update({
-        "rollout_stage": "paper",
-        "position_size_multiplier": 1.0,
-        "halt_consecutive_losses": int(os.getenv("RISK_MAX_CONSECUTIVE_LOSSES", "3")),
-        "halt_daily_dd_pct": 0.04,
-    })
-    run_meta["risk_config"] = _profile_risk
-    engine.set_run_context(f"sim-{job_id}", run_meta)
+    def _progress(i: int, total: int) -> None:
+        with _jobs_lock:
+            _jobs[job_id]["progress"] = i
 
-    trade_date_obj = date.fromisoformat(trade_date)
-    engine.on_session_start(trade_date_obj)
+    result = replay_day(snaps, trade_date, progress_cb=_progress)
 
-    trades = []
-    current_entry: Optional[dict] = None
-    total = len(snaps)
-
-    # diagnostics
-    _diag = {"evaluated": 0, "eval_errors": 0, "signals": 0,
-             "entries": 0, "exits": 0, "first_error": None}
-
-    for i, snap in enumerate(snaps):
-        # Update progress every 20 snapshots
-        if i % 20 == 0:
-            with _jobs_lock:
-                _jobs[job_id]["progress"] = i
-
-        try:
-            signal = engine.evaluate(snap)
-            _diag["evaluated"] += 1
-        except Exception as exc:
-            _diag["eval_errors"] += 1
-            if _diag["first_error"] is None:
-                import traceback as _tb
-                _diag["first_error"] = f"{exc} :: {_tb.format_exc()[-400:]}"
-            continue
-
-        if signal is None:
-            continue
-        _diag["signals"] += 1
-        if signal.signal_type == SignalType.ENTRY:
-            _diag["entries"] += 1
-        elif signal.signal_type == SignalType.EXIT:
-            _diag["exits"] += 1
-
-        ts = str(snap.get("timestamp", ""))
-        hhmm = ts[11:16] if len(ts) > 15 else "?"
-
-        if signal.signal_type == SignalType.ENTRY:
-            current_entry = {
-                "time_in": hhmm,
-                "direction": signal.direction,
-                "strike": signal.strike,
-                "prem_in": float(signal.entry_premium or 0),
-                "lots": signal.max_lots,
-            }
-
-        elif signal.signal_type == SignalType.EXIT and current_entry is not None:
-            closed = engine._tracker._closed_positions
-            if closed:
-                cp = closed[-1]
-                pnl_pct = float(cp.get("pnl_pct", 0))
-                mfe_pct  = float(cp.get("mfe_pct", 0))
-                mae_pct  = float(cp.get("mae_pct", 0))
-                exit_prem = float(cp.get("exit_premium", current_entry["prem_in"]))
-                exit_trigger = str(cp.get("exit_policy_triggered") or "")
-                exit_reason  = str(cp.get("exit_reason") or "")
-                label = exit_trigger if exit_trigger else exit_reason
-            else:
-                pnl_pct = mfe_pct = mae_pct = 0.0
-                exit_prem = current_entry["prem_in"]
-                label = signal.exit_reason.value if signal.exit_reason else "?"
-
-            trades.append({
-                "time_in":  current_entry["time_in"],
-                "time_out": hhmm,
-                "direction": current_entry["direction"],
-                "strike":   current_entry["strike"],
-                "prem_in":  current_entry["prem_in"],
-                "prem_out": exit_prem,
-                "pnl_pct":  pnl_pct,
-                "mfe_pct":  mfe_pct,
-                "mae_pct":  mae_pct,
-                "lots":     current_entry["lots"],
-                "exit":     label,
-                "source":   "sim",
-            })
-            current_entry = None
-
-    engine.on_session_end(trade_date_obj)
     with _jobs_lock:
-        _jobs[job_id]["progress"] = total
-        _jobs[job_id]["diag"] = _diag
-    return trades, exit_stack_name
+        _jobs[job_id]["progress"] = len(snaps)
+        _jobs[job_id]["diag"] = result["diag"]
+
+    return result["trades"], result["exit_stack_name"]
 
 
 # ── Router ─────────────────────────────────────────────────────────────────────

@@ -134,9 +134,11 @@ def test_tier1_pe_picks_otm1():
 
 
 def test_tier1_iv_too_high_returns_atm():
-    # iv_pct=65 > OTM_IV_CEIL default 60
-    snap = FakeSnap(iv_percentile=65.0)
-    with _enable():
+    # iv_pct=93 > OTM_IV_CEIL default 92 (percentile threshold, see §3.3 fix).
+    # We also lift the hard-reject ceiling to 95 so the code reaches the tier-ceiling
+    # check rather than the reject path (otherwise reject at 90 fires first).
+    snap = FakeSnap(iv_percentile=93.0)
+    with _enable(**{"SMART_STRIKE_IV_REJECT_PCTILE": "95"}):
         sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.80))
     assert sel.mode == "atm"
 
@@ -228,8 +230,9 @@ def test_tier4_picks_otm4_perfect_conditions():
 
 
 def test_tier4_falls_back_when_iv_too_high():
-    # IV=35 > OTM4 ceil 30, passes OTM3 ceil 40
-    snap = FakeSnap(iv_percentile=35.0, timestamp=_Hour(10))
+    # iv_pct=90 > OTM4 percentile ceil 89, but <= OTM3 ceil 90 (equals, not strictly above)
+    # so OTM3 passes. Tests the percentile-threshold ordering of the corrected ceilings.
+    snap = FakeSnap(iv_percentile=89.5, timestamp=_Hour(10))
     with _enable("SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM4_ENABLED"):
         sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="BREAKOUT")
     assert sel.mode == "otm_3"
@@ -362,3 +365,95 @@ def test_otm3_custom_regime_list():
         sel_t = select_strike(snap, "CE", FakeDecision(ce_prob=0.80), regime="TRENDING")
     assert sel_s.mode == "otm_3"
     assert sel_t.mode == "otm_1"   # TRENDING not in custom list
+
+
+# ---------------------------------------------------------------------------
+# STRIKE-S4 — IV-ceiling percentile-not-absolute regression (§3.3 fix)
+# ---------------------------------------------------------------------------
+# On 2026-06-01, iv_percentile was at the 86th percentile. The old ceilings
+# (OTM1=60, OTM2=50, OTM3=40, OTM4=30) looked like absolute IV but were compared
+# against iv_percentile (0–100). 86 > all of 30–60 → every OTM tier rejected → ATM
+# locked on every active day. Fixed to percentile thresholds (89–92).
+# This test locks that fix in: the old ceilings reject OTM at iv_pct=86; the new
+# default percentile ceilings accept it.
+
+def test_iv_percentile_86_passes_new_percentile_ceilings():
+    """iv_percentile=86 is below the corrected OTM1 ceil of 92 — tier should be reached."""
+    snap = FakeSnap(iv_percentile=86.0)
+    with _enable():  # uses corrected defaults: OTM_IV_CEIL=92
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.60))
+    assert sel.mode == "otm_1", (
+        f"Expected otm_1 at iv_pct=86 with percentile ceiling=92, got {sel.mode}. "
+        "If this fails, IV ceilings have been reverted to absolute-IV values."
+    )
+
+
+# ---------------------------------------------------------------------------
+# STRIKE-S1 — STRATEGY_STRIKE_MAX_OTM_STEPS honoured (was ignored, hard-capped at 4)
+# ---------------------------------------------------------------------------
+
+def test_max_otm_steps_limits_tier_count():
+    """With MAX_OTM_STEPS=2, only tiers 1 and 2 are built even if 3+4 are enabled."""
+    snap = FakeSnap(iv_percentile=20.0, timestamp=_Hour(10))
+    with _enable(
+        "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM4_ENABLED",
+        **{"STRATEGY_STRIKE_MAX_OTM_STEPS": "2"},
+    ):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="BREAKOUT")
+    assert sel.otm_steps <= 2, f"Expected OTM ≤ 2 steps, got {sel.otm_steps}"
+
+
+def test_max_otm_steps_zero_or_one_gives_otm1():
+    """MAX_OTM_STEPS=1 should still produce OTM-1 (minimum is 1)."""
+    snap = FakeSnap(iv_percentile=20.0)
+    with _enable(**{"STRATEGY_STRIKE_MAX_OTM_STEPS": "1"}):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.60))
+    assert sel.otm_steps == 1
+
+
+def test_max_otm_steps_8_allows_deeper_tiers_when_enabled():
+    """MAX_OTM_STEPS=8 with OTM5 enabled should allow tier-5 selection."""
+    snap = FakeSnap(
+        iv_percentile=20.0,
+        timestamp=_Hour(9),
+        _ltp_table={
+            ("CE", 48000): 1200.0,
+            ("CE", 48100): 900.0,
+            ("CE", 48200): 650.0,
+            ("CE", 48300): 400.0,
+            ("CE", 48400): 250.0,
+            ("CE", 48500): 150.0,   # OTM-5
+        },
+    )
+    with _enable(
+        "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED",
+        "SMART_STRIKE_OTM4_ENABLED", "SMART_STRIKE_OTM5_ENABLED",
+        **{
+            "STRATEGY_STRIKE_MAX_OTM_STEPS": "8",
+            "SMART_STRIKE_OTM5_CONFIDENCE": "0.90",   # meets ce_prob=0.90
+            "SMART_STRIKE_OTM5_IV_CEIL": "92",
+            "SMART_STRIKE_OTM5_REGIMES": "BREAKOUT",
+            "SMART_STRIKE_OTM5_MAX_BAR_HOUR": "11",
+            "SMART_STRIKE_OTM5_MIN_OI": "0",
+        },
+    ):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="BREAKOUT")
+    assert sel.otm_steps == 5, f"Expected OTM-5, got {sel.otm_steps} ({sel.mode})"
+
+
+def test_iv_percentile_86_rejected_by_old_absolute_ceilings():
+    """With the old absolute-looking ceilings (60/50/40/30), iv_pct=86 should reject all OTM."""
+    snap = FakeSnap(iv_percentile=86.0)
+    with _enable(
+        "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM4_ENABLED",
+        **{
+            "SMART_STRIKE_OTM_IV_CEIL":  "60",  # old: treated as absolute IV → rejects at pct=86
+            "SMART_STRIKE_OTM2_IV_CEIL": "50",
+            "SMART_STRIKE_OTM3_IV_CEIL": "40",
+            "SMART_STRIKE_OTM4_IV_CEIL": "30",
+        },
+    ):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="BREAKOUT")
+    assert sel.mode == "atm", (
+        f"Expected ATM with old absolute-style ceilings at iv_pct=86, got {sel.mode}."
+    )
