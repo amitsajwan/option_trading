@@ -146,7 +146,6 @@ def _load_actual_trades(trade_date: str) -> list[dict]:
     for p in positions.values():
         if p.get("event") == "POSITION_CLOSE":
             ts = str(p.get("timestamp", ""))
-            ep = float(p.get("exit_policy_triggered") or "")  if p.get("exit_policy_triggered") else None
             exit_r = p.get("exit_reason", "")
             label = str(p.get("exit_policy_triggered") or exit_r or "")
             trades.append({

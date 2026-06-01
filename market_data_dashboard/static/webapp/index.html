@@ -285,33 +285,54 @@
     }, [killed]);
 
     // ── OPS drawer ──────────────────────────────────────────────────────────
-    const [opsOpen, setOpsOpen] = useState(false);
-
+    // OpsPage is mounted lazily on first open so Babel has time to compile
+    // ops.jsx before we try to use window.OpsPage.
     useEffect(() => {
-      const overlay = document.getElementById('ops-drawer-overlay');
-      const drawer  = document.getElementById('ops-drawer');
-      const gearBtn = document.getElementById('ops-gear-btn');
+      const overlay  = document.getElementById('ops-drawer-overlay');
+      const drawer   = document.getElementById('ops-drawer');
+      const gearBtn  = document.getElementById('ops-gear-btn');
       const closeBtn = document.getElementById('ops-drawer-close');
       if (!overlay || !drawer || !gearBtn) return;
 
-      const open  = () => { overlay.classList.add('open'); drawer.classList.add('open'); gearBtn.classList.add('active'); setOpsOpen(true); };
-      const close = () => { overlay.classList.remove('open'); drawer.classList.remove('open'); gearBtn.classList.remove('active'); setOpsOpen(false); };
-      const toggle = () => overlay.classList.contains('open') ? close() : open();
+      let mounted = false;
 
-      gearBtn.onclick = toggle;
-      if (closeBtn) closeBtn.onclick = close;
-      // Click on overlay background (not drawer) closes it
-      overlay.onclick = (e) => { if (e.target === overlay) close(); };
+      const openDrawer = () => {
+        // Mount OpsPage the first time the drawer is opened
+        if (!mounted) {
+          const body = document.getElementById('ops-drawer-body');
+          if (body && window.OpsPage) {
+            ReactDOM.createRoot(body).render(React.createElement(window.OpsPage));
+            mounted = true;
+          } else {
+            body.innerHTML = '<div style="padding:20px;font-family:monospace;font-size:12px;color:#888">Loading ops module…</div>';
+            // Retry once after 500ms in case Babel hasn't finished
+            setTimeout(() => {
+              if (!mounted && body && window.OpsPage) {
+                body.innerHTML = '';
+                ReactDOM.createRoot(body).render(React.createElement(window.OpsPage));
+                mounted = true;
+              }
+            }, 500);
+          }
+        }
+        overlay.classList.add('open');
+        drawer.classList.add('open');
+        gearBtn.classList.add('active');
+      };
+
+      const closeDrawer = () => {
+        overlay.classList.remove('open');
+        drawer.classList.remove('open');
+        gearBtn.classList.remove('active');
+      };
+
+      const toggle = () => overlay.classList.contains('open') ? closeDrawer() : openDrawer();
+
+      gearBtn.onclick    = toggle;
+      if (closeBtn) closeBtn.onclick = closeDrawer;
+      overlay.onclick    = (e) => { if (e.target === overlay) closeDrawer(); };
 
       return () => { gearBtn.onclick = null; };
-    }, []);
-
-    // Mount OpsPage into the drawer body once
-    useEffect(() => {
-      const body = document.getElementById('ops-drawer-body');
-      if (!body || !window.OpsPage) return;
-      const root = ReactDOM.createRoot(body);
-      root.render(React.createElement(window.OpsPage));
     }, []);
     // ────────────────────────────────────────────────────────────────────────
 
