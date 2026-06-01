@@ -51,10 +51,14 @@ ${COMPOSE} up -d \
 
 # strategy_app won't auto-start if snapshot_app is unhealthy (off-hours, no live bars).
 # Force-start it so the new image is running; it will idle until market open.
-if [ "$(docker inspect -f '{{.State.Status}}' option_trading-strategy_app-1 2>/dev/null)" = "created" ]; then
-  echo "=== strategy_app in Created state (snapshot_app unhealthy off-hours) — force starting ==="
-  docker start option_trading-strategy_app-1
-fi
+# Force-start any service left in Created state (snapshot_app unhealthy off-hours blocks compose)
+for svc in strategy_app strategy_persistence_app; do
+  cname="option_trading-${svc}-1"
+  if [ "$(docker inspect -f '{{.State.Status}}' "${cname}" 2>/dev/null)" = "created" ]; then
+    echo "=== ${cname} in Created state — force starting ==="
+    docker start "${cname}"
+  fi
+done
 
 echo ""
 echo "=== Deploy complete — commit: $(git log --oneline -1) ==="
