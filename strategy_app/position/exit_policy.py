@@ -131,17 +131,28 @@ class CompositeExitPolicy(ExitPolicy):
 
 
 def build_default_exit_stack() -> CompositeExitPolicy:
-    """Build exit stack from env vars. Called once at engine startup."""
-    target_pct = float(os.getenv("EXIT_PREMIUM_TARGET_PCT", "0.015") or "0.015")
+    """Build exit stack from env vars. Called once at engine startup.
+
+    Order matters — first to trigger wins:
+      1. ThesisFail   — cut dead entries early (MFE never moved after N bars)
+      2. TrailingStop — ride winners; trails peak by trail_pct once activated
+      3. PremiumTarget — emergency floor only; set high (default 4%) so it
+                         never fires before TrailingStop can do its job
+
+    PremiumTarget at 1.5% was capping runners: it fired before TrailingStop
+    could trail up to 3-4%. Raised default to 0.04 (4%) — acts as safety net
+    only on very fast moves where TrailingStop hasn't activated yet.
+    """
+    target_pct = float(os.getenv("EXIT_PREMIUM_TARGET_PCT", "0.04") or "0.04")
     activation_pct = float(os.getenv("EXIT_TRAILING_ACTIVATION_PCT", "0.01") or "0.01")
     trail_pct = float(os.getenv("EXIT_TRAILING_TRAIL_PCT", "0.005") or "0.005")
     thesis_bars = int(os.getenv("EXIT_THESIS_FAIL_BARS", "3") or "3")
     thesis_min_mfe = float(os.getenv("EXIT_THESIS_FAIL_MIN_MFE", "0.002") or "0.002")
 
     stack = CompositeExitPolicy([
-        PremiumTargetPolicy(target_pct),
-        TrailingStopPolicy(activation_pct, trail_pct),
         ThesisFailPolicy(thesis_bars, thesis_min_mfe),
+        TrailingStopPolicy(activation_pct, trail_pct),
+        PremiumTargetPolicy(target_pct),
     ])
     logger.info("exit policy stack: %s", stack.name)
     return stack
