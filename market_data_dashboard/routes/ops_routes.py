@@ -111,6 +111,13 @@ def _read_live_config() -> dict[str, Any]:
         "RISK_MAX_SESSION_TRADES":        _e("RISK_MAX_SESSION_TRADES", "6"),
         "STRATEGY_PROFILE_ID":            _e("STRATEGY_PROFILE_ID", "trader_master_ml_entry_consensus_v1"),
         "EXIT_STRATEGY_MODE":             _e("EXIT_STRATEGY_MODE", "scalper"),
+        # Lottery params — included so UI can show live vs changed correctly
+        "LOTTERY_HARD_STOP_PCT":          _e("LOTTERY_HARD_STOP_PCT", "0.25"),
+        "LOTTERY_BIG_TARGET_PCT":         _e("LOTTERY_BIG_TARGET_PCT", "0.40"),
+        "LOTTERY_RUNNER_ACTIVATION_MFE":  _e("LOTTERY_RUNNER_ACTIVATION_MFE", "0.10"),
+        "LOTTERY_RUNNER_GIVEBACK_FRAC":   _e("LOTTERY_RUNNER_GIVEBACK_FRAC", "0.35"),
+        "LOTTERY_THESIS_FAIL_BARS":       _e("LOTTERY_THESIS_FAIL_BARS", "4"),
+        "LOTTERY_TIMESTOP_BARS":          _e("LOTTERY_TIMESTOP_BARS", "90"),
     }
     cfg["ops_env"] = ops_env
     cfg["strategy_run_dir"] = str(STRATEGY_RUN_DIR)

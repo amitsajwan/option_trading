@@ -162,10 +162,15 @@ function Ctrl({ label, valueStr, changed, children }) {
 function SliderCtrl({ label, value, live, min, max, step = 0.001, format, onChange }) {
   const changed = Math.abs(num(value) - num(live)) > step * 0.5;
   const fmt = format || ((v) => (v * 100).toFixed(1) + '%');
+  const pct = Math.round(((num(value) - num(min)) / (num(max) - num(min))) * 100);
+  const fillStyle = {
+    background: `linear-gradient(to right, ${changed ? '#d97706' : 'var(--ink)'} 0%, ${changed ? '#d97706' : 'var(--ink)'} ${pct}%, var(--line-2) ${pct}%, var(--line-2) 100%)`
+  };
   return (
     <Ctrl label={label} valueStr={fmt(num(value))} changed={changed}>
       <input type="range" className={`ops-slider${changed ? ' changed' : ''}`}
              min={min} max={max} step={step} value={value}
+             style={fillStyle}
              onChange={(e) => onChange(parseFloat(e.target.value))} />
     </Ctrl>
   );
@@ -431,25 +436,25 @@ function OpsPage() {
               <div className="ops-group-label">🎟 Lottery Exit</div>
               <SliderCtrl label="Hard stop (cap loss)"
                 value={parseFloat(v('LOTTERY_HARD_STOP_PCT','0.25'))}
-                live={parseFloat(v('LOTTERY_HARD_STOP_PCT','0.25'))}
+                live={parseFloat(lv('LOTTERY_HARD_STOP_PCT','0.25'))}
                 min={0.10} max={0.50} step={0.05}
                 format={v => '-'+(v*100).toFixed(0)+'%'}
                 onChange={setVal('LOTTERY_HARD_STOP_PCT')} />
               <SliderCtrl label="Big target (take win)"
                 value={parseFloat(v('LOTTERY_BIG_TARGET_PCT','0.40'))}
-                live={parseFloat(v('LOTTERY_BIG_TARGET_PCT','0.40'))}
+                live={parseFloat(lv('LOTTERY_BIG_TARGET_PCT','0.40'))}
                 min={0.20} max={1.00} step={0.05}
                 format={v => '+'+(v*100).toFixed(0)+'%'}
                 onChange={setVal('LOTTERY_BIG_TARGET_PCT')} />
               <SliderCtrl label="Runner activates at"
-                value={parseFloat(v('LOTTERY_RUNNER_ACTIVATION_MFE','0.20'))}
-                live={parseFloat(v('LOTTERY_RUNNER_ACTIVATION_MFE','0.20'))}
+                value={parseFloat(v('LOTTERY_RUNNER_ACTIVATION_MFE','0.10'))}
+                live={parseFloat(lv('LOTTERY_RUNNER_ACTIVATION_MFE','0.10'))}
                 min={0.10} max={0.50} step={0.05}
                 format={v => '+'+(v*100).toFixed(0)+'%'}
                 onChange={setVal('LOTTERY_RUNNER_ACTIVATION_MFE')} />
               <SliderCtrl label="Runner giveback"
-                value={parseFloat(v('LOTTERY_RUNNER_GIVEBACK_FRAC','0.40'))}
-                live={parseFloat(v('LOTTERY_RUNNER_GIVEBACK_FRAC','0.40'))}
+                value={parseFloat(v('LOTTERY_RUNNER_GIVEBACK_FRAC','0.35'))}
+                live={parseFloat(lv('LOTTERY_RUNNER_GIVEBACK_FRAC','0.35'))}
                 min={0.20} max={0.60} step={0.05}
                 format={v => (v*100).toFixed(0)+'%'}
                 onChange={setVal('LOTTERY_RUNNER_GIVEBACK_FRAC')} />
