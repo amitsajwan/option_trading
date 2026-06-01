@@ -70,15 +70,31 @@
     .mode-seg button { padding: 4px 8px; font-size: 11px; }
   }
 
-  /* OPS drawer */
+  /* OPS gear — fixed floating launcher, visible in EVERY mode (incl. live-terminal,
+     which hides .topnav). Pinned bottom-right above all chrome. */
   .ops-gear-btn {
-    appearance: none; border: 1px solid var(--line-1); border-radius: var(--r-2);
-    background: transparent; color: var(--ink-3); width: 30px; height: 30px;
-    display: grid; place-items: center; cursor: pointer; font-size: 15px;
-    flex-shrink: 0; transition: color .15s, border-color .15s, background .15s;
+    position: fixed; right: 18px; bottom: 18px; z-index: 190;
+    appearance: none; width: 44px; height: 44px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: #16181d; color: #c8ccd4;
+    display: grid; place-items: center; cursor: pointer; font-size: 19px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,0,0,0.2);
+    transition: transform .15s, color .15s, background .15s, box-shadow .15s;
   }
-  .ops-gear-btn:hover { color: var(--ink); border-color: var(--ink-3); background: var(--paper-2); }
-  .ops-gear-btn.active { color: var(--ink); border-color: var(--ink); background: var(--paper-2); }
+  .ops-gear-btn:hover {
+    color: #fff; background: #1f222a; transform: translateY(-1px) rotate(30deg);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+  }
+  .ops-gear-btn.active { color: #fff; background: #2a2e38; transform: rotate(90deg); }
+  .ops-gear-label {
+    position: fixed; right: 70px; bottom: 30px; z-index: 190;
+    font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.04em;
+    color: #c8ccd4; background: #16181d; padding: 3px 8px; border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.12); pointer-events: none;
+    opacity: 0; transform: translateX(6px); transition: opacity .15s, transform .15s;
+    white-space: nowrap;
+  }
+  .ops-gear-btn:hover + .ops-gear-label { opacity: 1; transform: translateX(0); }
 
   .ops-drawer-overlay {
     position: fixed; inset: 0; z-index: 200;
@@ -131,9 +147,12 @@
     </div>
     <div class="spacer"></div>
     <span id="kill-indicator" class="chip" style="display:none"><span class="dot"></span>Engine halted</span>
-    <button id="ops-gear-btn" class="ops-gear-btn" title="Daily Ops — simulate & configure">⚙</button>
     <span class="user mobile-hide"><span class="status-dot"></span>ops · amitsajwan</span>
   </nav>
+
+  <!-- OPS launcher — fixed floating, outside topnav so it survives live-terminal mode -->
+  <button id="ops-gear-btn" class="ops-gear-btn" title="Daily Ops — simulate & configure">⚙</button>
+  <span class="ops-gear-label">Daily Ops</span>
 
   <div id="kill-banner-slot"></div>
 
