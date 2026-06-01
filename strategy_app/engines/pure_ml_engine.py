@@ -487,7 +487,12 @@ class PureMLEngine(StrategyEngine):
                 mode="bundle_preselected",
             )
         else:
-            selection = select_strike(snap, direction, decision)
+            try:
+                _regime_sig = self._regime.classify(snap)
+                _regime_str = _regime_sig.regime.value if _regime_sig and hasattr(_regime_sig.regime, "value") else ""
+            except Exception:
+                _regime_str = ""
+            selection = select_strike(snap, direction, decision, regime=_regime_str)
         strike = selection.strike
         if strike is None or int(strike) <= 0:
             hold_metrics = {

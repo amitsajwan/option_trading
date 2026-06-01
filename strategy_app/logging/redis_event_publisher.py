@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 from datetime import datetime
 from typing import Any, Optional
 
-import redis
-
-from contracts_app import isoformat_ist, redis_connection_kwargs
+from contracts_app import isoformat_ist
+from contracts_app.event_bus import EventBus, RedisEventBus
 
 
 def _json_default(value: Any) -> str:
@@ -25,55 +23,50 @@ def _json_default(value: Any) -> str:
 
 
 class RedisEventPublisher:
-    def __init__(self, *, logger: logging.Logger) -> None:
+    """Thin publish-only facade over :class:`EventBus`.
+
+    Accepts an injected ``bus`` so callers can swap the transport in tests.
+    When no ``bus`` is provided a :class:`RedisEventBus` is created using
+    the default ``redis_connection_kwargs``.
+
+    Publishing is guarded by the ``STRATEGY_REDIS_PUBLISH_ENABLED`` env var
+    (default: enabled).  A single publish failure disables further publishing
+    for the lifetime of this instance to avoid log-flooding on Redis outages.
+    """
+
+    def __init__(self, *, bus: Optional[EventBus] = None, logger: logging.Logger) -> None:
         self._logger = logger
-        self._enabled = str(os.getenv("STRATEGY_REDIS_PUBLISH_ENABLED") or "1").strip().lower() not in {"0", "false", "no", "off"}
-        self._client: Optional[redis.Redis] = None
+        self._enabled = (
+            str(os.getenv("STRATEGY_REDIS_PUBLISH_ENABLED") or "1").strip().lower()
+            not in {"0", "false", "no", "off"}
+        )
+        self._bus: Optional[EventBus] = None
         if self._enabled:
             try:
-                self._client = redis.Redis(**redis_connection_kwargs(decode_responses=True, for_pubsub=False))
+                self._bus = bus if bus is not None else RedisEventBus()
             except Exception:
                 self._logger.exception("failed to initialize strategy redis publisher")
                 self._enabled = False
 
     @property
     def enabled(self) -> bool:
-        return bool(self._enabled and self._client is not None)
+        return bool(self._enabled and self._bus is not None)
 
     def publish(self, topic: str, event: dict[str, Any]) -> None:
         if not self.enabled:
             return
         try:
-            assert self._client is not None
-            stream_prefix = "stream:"
-            topic_text = str(topic or "").strip()
-            payload = json.dumps(event, default=_json_default)
-            if topic_text.startswith(stream_prefix):
-                metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-                run_id = str(metadata.get("run_id") or "").strip()
-                source_mode = str(metadata.get("source_mode") or "").strip()
-                self._client.xadd(
-                    topic_text,
-                    {
-                        "payload": payload,
-                        "run_id": run_id,
-                        "source_mode": source_mode,
-                        "published_at": isoformat_ist(datetime.now()),
-                    },
-                )
-                return
-            self._client.publish(topic_text, payload)
+            assert self._bus is not None
+            self._bus.publish(str(topic or "").strip(), event)
         except Exception:
-            self._logger.exception("failed to publish strategy event topic=%s; disabling redis publishing", topic)
+            self._logger.exception(
+                "failed to publish strategy event topic=%s; disabling redis publishing", topic
+            )
             self._enabled = False
-            try:
-                if self._client is not None:
-                    self._client.close()
-            except Exception:
-                pass
-            self._client = None
+            self._bus = None
 
 
 __all__ = [
     "RedisEventPublisher",
+    "_json_default",
 ]

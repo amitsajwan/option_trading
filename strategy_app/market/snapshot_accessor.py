@@ -269,6 +269,31 @@ class SnapshotAccessor:
     def or_ready(self) -> bool:
         return self.orh is not None and self.orl is not None
 
+    @property
+    def opening_range_width_pct(self) -> Optional[float]:
+        """Opening range width as a fraction of the lower bound (ORL).
+
+        Computed from existing orh/orl — no new snapshot data required.
+        Returns None when opening range is not yet established.
+        """
+        orh = self.orh
+        orl = self.orl
+        if orh is None or orl is None or orl <= 0.0:
+            return None
+        return float((orh - orl) / orl)
+
+    @property
+    def candle_overlap(self) -> Optional[float]:
+        """Bar-to-bar candle overlap ratio (0–1).
+
+        Populated by RollingFeatureState.update() into futures_derived.
+        Returns None during warmup (< 2 bars) or when not computed.
+        """
+        val = self._fd.get("candle_overlap")
+        if val is None:
+            val = self._payload.get("candle_overlap")
+        return self._f(val)
+
     def _ctx_float(self, *keys: str) -> Optional[float]:
         for key in keys:
             if key in self._payload:

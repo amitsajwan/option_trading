@@ -17,9 +17,12 @@ class SnapshotEventEnvelope:
     snapshot_id: str
     snapshot: dict[str, Any]
     metadata: dict[str, Any]
+    # Additive nullable fields — existing consumers ignore unknown keys.
+    trace_id: Optional[str] = None
+    parent_event_id: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "event_type": self.event_type,
             "event_version": self.event_version,
             "event_id": self.event_id,
@@ -29,6 +32,11 @@ class SnapshotEventEnvelope:
             "snapshot": self.snapshot,
             "metadata": self.metadata,
         }
+        if self.trace_id is not None:
+            d["trace_id"] = self.trace_id
+        if self.parent_event_id is not None:
+            d["parent_event_id"] = self.parent_event_id
+        return d
 
 
 def _normalize_published_at(value: Optional[Any]) -> str:
@@ -43,6 +51,8 @@ def build_snapshot_event(
     event_id: Optional[str] = None,
     published_at: Optional[str] = None,
     metadata: Optional[dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
+    parent_event_id: Optional[str] = None,
 ) -> dict[str, Any]:
     snap = dict(snapshot or {})
     envelope = SnapshotEventEnvelope(
@@ -54,6 +64,8 @@ def build_snapshot_event(
         snapshot_id=str(snap.get("snapshot_id") or ""),
         snapshot=snap,
         metadata=dict(metadata or {}),
+        trace_id=trace_id,
+        parent_event_id=parent_event_id,
     )
     return envelope.to_dict()
 
@@ -81,9 +93,11 @@ def _build_event(
     published_at: Optional[str] = None,
     event_id: Optional[str] = None,
     metadata: Optional[dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
+    parent_event_id: Optional[str] = None,
 ) -> dict[str, Any]:
     payload = dict(body or {})
-    return {
+    d: dict[str, Any] = {
         "event_type": str(event_type),
         "event_version": str(event_version),
         "event_id": str(event_id or uuid4()),
@@ -92,6 +106,11 @@ def _build_event(
         body_key: payload,
         "metadata": dict(metadata or {}),
     }
+    if trace_id is not None:
+        d["trace_id"] = trace_id
+    if parent_event_id is not None:
+        d["parent_event_id"] = parent_event_id
+    return d
 
 
 def _parse_event(payload: dict[str, Any], *, event_type: str, body_key: str) -> Optional[dict[str, Any]]:
@@ -112,6 +131,8 @@ def build_strategy_vote_event(
     event_id: Optional[str] = None,
     published_at: Optional[str] = None,
     metadata: Optional[dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
+    parent_event_id: Optional[str] = None,
 ) -> dict[str, Any]:
     return _build_event(
         event_type="strategy_vote",
@@ -122,6 +143,8 @@ def build_strategy_vote_event(
         event_id=event_id,
         published_at=published_at,
         metadata=metadata,
+        trace_id=trace_id,
+        parent_event_id=parent_event_id,
     )
 
 
@@ -136,6 +159,8 @@ def build_trade_signal_event(
     event_id: Optional[str] = None,
     published_at: Optional[str] = None,
     metadata: Optional[dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
+    parent_event_id: Optional[str] = None,
 ) -> dict[str, Any]:
     return _build_event(
         event_type="trade_signal",
@@ -146,6 +171,8 @@ def build_trade_signal_event(
         event_id=event_id,
         published_at=published_at,
         metadata=metadata,
+        trace_id=trace_id,
+        parent_event_id=parent_event_id,
     )
 
 
@@ -160,6 +187,8 @@ def build_strategy_position_event(
     event_id: Optional[str] = None,
     published_at: Optional[str] = None,
     metadata: Optional[dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
+    parent_event_id: Optional[str] = None,
 ) -> dict[str, Any]:
     return _build_event(
         event_type="strategy_position",
@@ -170,6 +199,8 @@ def build_strategy_position_event(
         event_id=event_id,
         published_at=published_at,
         metadata=metadata,
+        trace_id=trace_id,
+        parent_event_id=parent_event_id,
     )
 
 
@@ -184,6 +215,8 @@ def build_strategy_decision_trace_event(
     event_id: Optional[str] = None,
     published_at: Optional[str] = None,
     metadata: Optional[dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
+    parent_event_id: Optional[str] = None,
 ) -> dict[str, Any]:
     return _build_event(
         event_type="strategy_decision_trace",
@@ -194,6 +227,8 @@ def build_strategy_decision_trace_event(
         event_id=event_id,
         published_at=published_at,
         metadata=metadata,
+        trace_id=trace_id,
+        parent_event_id=parent_event_id,
     )
 
 

@@ -20,6 +20,11 @@ class Regime(str, Enum):
     AVOID = "AVOID"
     PRE_EXPIRY = "PRE_EXPIRY"
     EXPIRY = "EXPIRY"
+    # Phase 3 additions — canonical regime labels for stream-native pipeline
+    CHOP = "CHOP"          # Low-vol, mixed returns, high candle overlap
+    BREAKOUT = "BREAKOUT"  # ORH/ORL just broken with strong vol alignment
+    PANIC = "PANIC"        # Fast intraday vol spike without full VIX halt
+    DEAD_MARKET = "DEAD_MARKET"  # Near-zero participation; no tradeable move
 
 
 class RegimeSignal:
@@ -43,6 +48,13 @@ class RegimeClassifier:
         self._trend_vol_ratio_min = env_float("REGIME_TREND_VOL_RATIO_MIN", 1.30) or 1.30
         self._high_vol_vix_min = env_float("REGIME_HIGH_VOL_VIX_MIN", 22.0) or 22.0
         self._high_vol_rvol_min = env_float("REGIME_HIGH_VOL_RVOL_MIN", 0.015) or 0.015
+        # Phase 3 thresholds
+        self._panic_vix_chg_min = env_float("REGIME_PANIC_VIX_CHG_MIN", 5.0) or 5.0
+        self._panic_rvol_min = env_float("REGIME_PANIC_RVOL_MIN", 0.012) or 0.012
+        self._chop_vol_ratio_max = env_float("REGIME_CHOP_VOL_RATIO_MAX", 0.90) or 0.90
+        self._chop_candle_overlap_min = env_float("REGIME_CHOP_CANDLE_OVERLAP_MIN", 0.40) or 0.40
+        self._dead_vol_ratio_max = env_float("REGIME_DEAD_VOL_RATIO_MAX", 0.30) or 0.30
+        self._breakout_orw_pct_min = env_float("REGIME_BREAKOUT_ORW_PCT_MIN", 0.003) or 0.003
         if model_path:
             self._load_model(model_path)
 
@@ -70,6 +82,19 @@ class RegimeClassifier:
                 self._high_vol_rvol_min = float(payload["high_vol_rvol_min"])
             except (TypeError, ValueError):
                 pass
+        for key, attr in (
+            ("panic_vix_chg_min", "_panic_vix_chg_min"),
+            ("panic_rvol_min", "_panic_rvol_min"),
+            ("chop_vol_ratio_max", "_chop_vol_ratio_max"),
+            ("chop_candle_overlap_min", "_chop_candle_overlap_min"),
+            ("dead_vol_ratio_max", "_dead_vol_ratio_max"),
+            ("breakout_orw_pct_min", "_breakout_orw_pct_min"),
+        ):
+            if key in payload:
+                try:
+                    setattr(self, attr, float(payload[key]))
+                except (TypeError, ValueError):
+                    pass
 
     def classify(self, snap: SnapshotAccessor) -> RegimeSignal:
         if self._use_model:
@@ -108,9 +133,17 @@ class RegimeClassifier:
                 },
             )
 
+        panic = self._check_panic(snap)
+        if panic is not None:
+            return panic
+
         high_vol = self._check_high_vol(snap)
         if high_vol is not None:
             return high_vol
+
+        dead = self._check_dead_market(snap)
+        if dead is not None:
+            return dead
 
         return self._classify_trend_vs_sideways(snap)
 
@@ -132,6 +165,35 @@ class RegimeClassifier:
                 confidence=0.99,
                 reason=f"SESSION_PHASE: {snap.session_phase}",
                 evidence={"session_phase": snap.session_phase},
+            )
+        return None
+
+    def _check_panic(self, snap: SnapshotAccessor) -> Optional[RegimeSignal]:
+        """Fast intraday volatility spike — not yet at VIX halt level but untradeably fast."""
+        vix_chg = snap.vix_intraday_chg
+        rvol = snap.realized_vol_30m
+        if vix_chg is None or rvol is None:
+            return None
+        if vix_chg > self._panic_vix_chg_min and rvol > self._panic_rvol_min:
+            return RegimeSignal(
+                regime=Regime.PANIC,
+                confidence=0.88,
+                reason=f"PANIC: vix_chg={vix_chg:.1f}% rvol={rvol:.4f}",
+                evidence={"vix_intraday_chg": vix_chg, "realized_vol_30m": rvol},
+            )
+        return None
+
+    def _check_dead_market(self, snap: SnapshotAccessor) -> Optional[RegimeSignal]:
+        """Near-zero participation — volume too low to trade."""
+        vol_ratio = snap.vol_ratio
+        if vol_ratio is None:
+            return None
+        if vol_ratio < self._dead_vol_ratio_max:
+            return RegimeSignal(
+                regime=Regime.DEAD_MARKET,
+                confidence=0.85,
+                reason=f"DEAD_MARKET: vol_ratio={vol_ratio:.2f}",
+                evidence={"vol_ratio": vol_ratio},
             )
         return None
 
@@ -238,7 +300,28 @@ class RegimeClassifier:
 
         evidence["bull_score"] = round(bull_score, 3)
         evidence["bear_score"] = round(bear_score, 3)
+
+        # Enrich evidence with Phase 3 features when available
+        candle_overlap = snap.candle_overlap
+        orw_pct = snap.opening_range_width_pct
+        evidence["candle_overlap"] = candle_overlap
+        evidence["opening_range_width_pct"] = orw_pct
+
         trend_threshold = 2.0
+
+        # BREAKOUT takes priority over TRENDING when orh/orl is freshly broken
+        # with strong volume and a wide-enough opening range.
+        orh_or_orl_broken = snap.orh_broken or snap.orl_broken
+        orw_wide_enough = orw_pct is None or orw_pct >= self._breakout_orw_pct_min
+        if orh_or_orl_broken and strong_vol and orw_wide_enough:
+            confidence = 0.88 if (bull_score + bear_score) >= 2.5 else 0.75
+            direction = "BULL" if snap.orh_broken else "BEAR"
+            return RegimeSignal(
+                regime=Regime.BREAKOUT,
+                confidence=confidence,
+                reason=f"BREAKOUT_{direction}: " + ", ".join(reasons),
+                evidence=evidence,
+            )
 
         if bull_score >= trend_threshold:
             confidence = 0.85 if bull_score >= 3.0 else 0.70
@@ -256,6 +339,19 @@ class RegimeClassifier:
                 reason="TRENDING_BEAR: " + ", ".join(reasons),
                 evidence=evidence,
             )
+
+        # CHOP: returns are mixed, vol is weak, and candle overlap is high
+        returns_mixed = not (aligned_up or aligned_down)
+        weak_vol = vol_ratio is not None and vol_ratio < self._chop_vol_ratio_max
+        high_overlap = candle_overlap is not None and candle_overlap >= self._chop_candle_overlap_min
+        if returns_mixed and (weak_vol or high_overlap):
+            return RegimeSignal(
+                regime=Regime.CHOP,
+                confidence=0.72,
+                reason="CHOP: " + ", ".join(reasons),
+                evidence=evidence,
+            )
+
         return RegimeSignal(
             regime=Regime.SIDEWAYS,
             confidence=0.65,

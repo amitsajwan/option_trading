@@ -24,8 +24,6 @@ import os
 import time
 from typing import Optional
 
-import redis
-
 from contracts_app import get_redis_key, redis_connection_kwargs
 
 from ..market.depth_context import DepthContext, StrikeDepth
@@ -37,8 +35,9 @@ _KEY_PE = "depth:atm_pe:latest"
 _DEFAULT_STALE_SEC = 30
 
 
-def _redis_client() -> redis.Redis:
-    return redis.Redis(**redis_connection_kwargs(decode_responses=True))
+def _redis_client():
+    import redis as _redis
+    return _redis.Redis(**redis_connection_kwargs(decode_responses=True))
 
 
 def _parse_strike_depth(raw: Optional[str]) -> Optional[StrikeDepth]:
@@ -87,10 +86,10 @@ class RedisDepthReader:
     def __init__(
         self,
         *,
-        client: Optional[redis.Redis] = None,
+        client=None,
         stale_sec: Optional[float] = None,
     ) -> None:
-        self._client = client or _redis_client()
+        self._client = client if client is not None else _redis_client()
         self._stale_sec = float(
             stale_sec
             if stale_sec is not None

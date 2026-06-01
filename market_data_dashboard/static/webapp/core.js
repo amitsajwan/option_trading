@@ -80,7 +80,7 @@
     function close() {
       dead = true;
       if (retryTimer) clearTimeout(retryTimer);
-      if (ws) { ws.onclose = null; ws.close(); }
+      if (ws) { ws.onerror = null; ws.onclose = null; ws.close(); }
     }
 
     connect();

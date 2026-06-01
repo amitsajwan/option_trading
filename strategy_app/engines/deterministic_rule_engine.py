@@ -168,6 +168,10 @@ class DeterministicRuleEngine(StrategyEngine):
         self._pvwap_buf: deque = deque(maxlen=2) # price_vs_vwap per bar
         # E8 session-once daily regime tag — computed lazily after ORB resolves.
         self._session_regime_tag: Optional[str] = None
+        # Trader-discipline: track last exit for cooldown / direction-flip rules.
+        self._last_stop_bar: Optional[int] = None        # event count when last STOP_LOSS fired
+        self._last_exit_direction: Optional[str] = None  # "CE" | "PE" at last stop exit
+        self._last_any_exit_bar: Optional[int] = None   # event count of ANY exit (for general spacing)
         # Optional live depth feed (None in replay/offline — signals degrade gracefully).
         self._depth_reader: Optional[RedisDepthReader] = depth_reader
         # Per-evaluate depth snapshot — set at start of evaluate(), read by shadow scorer.
@@ -295,6 +299,9 @@ class DeterministicRuleEngine(StrategyEngine):
         self._iv_buf.clear()
         self._pvwap_buf.clear()
         self._session_regime_tag = None
+        self._last_stop_bar = None
+        self._last_exit_direction = None
+        self._last_any_exit_bar = None
         self._tracker.on_session_start(trade_date)
         # Brain morning briefing: loads daily features + cross-session carry.
         # Must run before risk manager so carry-based consecutive_losses can
@@ -666,6 +673,52 @@ class DeterministicRuleEngine(StrategyEngine):
                 )
                 return None
 
+        # ── Trader discipline gates (actual blocking) ────────────────────────
+        # 0. Minimum re-entry spacing: never enter immediately after any exit.
+        _reentry_gap = int(os.getenv("MIN_REENTRY_BARS", "3"))
+        if self._last_any_exit_bar is not None:
+            _bars_since_exit = self._session_event_count - self._last_any_exit_bar
+            if _bars_since_exit < _reentry_gap:
+                logger.debug("entry blocked: min_reentry_gap bars_since=%d min=%d", _bars_since_exit, _reentry_gap)
+                return None
+
+        # 1. SIDEWAYS + returns_mixed: no directional conviction — skip entirely.
+        regime_str = str(
+            regime_signal.regime.value if hasattr(regime_signal.regime, "value") else regime_signal.regime or ""
+        ).upper()
+        if (
+            regime_str == "SIDEWAYS"
+            and "returns_mixed" in (regime_signal.reason or "")
+        ):
+            logger.debug("entry blocked: sideways_returns_mixed reason=%s", regime_signal.reason)
+            return None
+
+        # 2. Post-STOP_LOSS cooldown: no re-entry for N bars after a hard stop.
+        _stop_cool = int(os.getenv("STOP_LOSS_COOLDOWN_BARS", "5"))
+        if self._last_stop_bar is not None:
+            _bars_since = self._session_event_count - self._last_stop_bar
+            if _bars_since < _stop_cool:
+                logger.debug("entry blocked: stop_loss_cooldown bars_since=%d min=%d", _bars_since, _stop_cool)
+                return None
+
+        # 3. Direction-flip block: after a STOP_LOSS, don't flip direction for N bars.
+        _flip_cool = int(os.getenv("DIRECTION_FLIP_COOLDOWN_BARS", "8"))
+        if self._last_stop_bar is not None and self._last_exit_direction:
+            _bars_since = self._session_event_count - self._last_stop_bar
+            if _bars_since < _flip_cool:
+                _cur_entry_dirs = {
+                    str(v.direction.value if hasattr(v.direction, "value") else v.direction or "").upper()
+                    for v in votes
+                    if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
+                }
+                if self._last_exit_direction not in _cur_entry_dirs:
+                    logger.debug(
+                        "entry blocked: direction_flip_cooldown last=%s current=%s bars=%d",
+                        self._last_exit_direction, _cur_entry_dirs, _bars_since,
+                    )
+                    return None
+        # ── End discipline gates ──────────────────────────────────────────────
+
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
         if avoid_votes:
             best_avoid = max(avoid_votes, key=lambda item: item.confidence)
@@ -758,7 +811,7 @@ class DeterministicRuleEngine(StrategyEngine):
         if ml_can_resolve_direction_conflict:
             scored_candidates: list[tuple[StrategyVote, EntryPolicyDecision]] = []
             for candidate in ranked_entry_votes:
-                self._apply_strike_selection(candidate, snap)
+                self._apply_strike_selection(candidate, snap, regime=regime_signal.regime.value)
                 policy_decision = self._evaluate_entry_policy(candidate, snap, regime_signal, risk)
                 self._annotate_policy(candidate, policy_decision)
                 self._annotate_vote_contract(candidate)
@@ -788,7 +841,7 @@ class DeterministicRuleEngine(StrategyEngine):
             return self._build_entry_signal(best_vote, snap, risk, entry_votes, regime_signal, best_decision)
 
         for candidate in ranked_entry_votes:
-            self._apply_strike_selection(candidate, snap)
+            self._apply_strike_selection(candidate, snap, regime=regime_signal.regime.value)
             policy_decision = self._evaluate_entry_policy(candidate, snap, regime_signal, risk)
             self._annotate_policy(candidate, policy_decision)
             self._annotate_vote_contract(candidate)
@@ -840,6 +893,21 @@ class DeterministicRuleEngine(StrategyEngine):
             )
             return None
 
+        _consensus_extras: dict[str, Any] = {
+            "direction_source": "direction_consensus",
+            "direction_consensus_ce": round(consensus.ce_score, 3),
+            "direction_consensus_pe": round(consensus.pe_score, 3),
+            "direction_consensus_margin": round(consensus.margin, 3),
+            "direction_consensus_shadow_basis": shadow_basis,
+            "direction_consensus_sources": {k: round(v, 3) for k, v in (consensus.sources or {}).items()},
+        }
+        # Mutate the original ml_vote so _entry_candidate_gate_rows (which receives
+        # the original vote from the engine's vote pool) can see the direction data.
+        if isinstance(ml_vote.raw_signals, dict):
+            ml_vote.raw_signals.update(_consensus_extras)
+        else:
+            ml_vote.raw_signals = dict(_consensus_extras)
+
         trade_vote = StrategyVote(
             strategy_name=ml_vote.strategy_name,
             snapshot_id=ml_vote.snapshot_id,
@@ -851,11 +919,6 @@ class DeterministicRuleEngine(StrategyEngine):
             reason=f"ml_entry+consensus: {consensus.direction.value} margin={consensus.margin:.2f}",
             raw_signals={
                 **(ml_vote.raw_signals if isinstance(ml_vote.raw_signals, dict) else {}),
-                "direction_source": "direction_consensus",
-                "direction_consensus_ce": round(consensus.ce_score, 3),
-                "direction_consensus_pe": round(consensus.pe_score, 3),
-                "direction_consensus_margin": round(consensus.margin, 3),
-                "direction_consensus_shadow_basis": shadow_basis,
                 "_entry_policy_mode": "bypass",
             },
             proposed_strike=snap.atm_strike,
@@ -876,7 +939,7 @@ class DeterministicRuleEngine(StrategyEngine):
         if not snap.is_valid_entry_phase or self._risk.is_paused:
             return None
 
-        self._apply_strike_selection(trade_vote, snap)
+        self._apply_strike_selection(trade_vote, snap, regime=regime_signal.regime.value)
         if (
             self._run_risk_config.atm_strike_only
             and not self._allow_non_atm_for_ml_entry(trade_vote)
@@ -1123,6 +1186,22 @@ class DeterministicRuleEngine(StrategyEngine):
 
     def _handle_position_closed(self, exit_signal: TradeSignal, position: PositionContext) -> None:
         self._reset_regime_shift_streak(position.position_id)
+        # Record stop-loss exits so discipline rules can enforce cooldowns.
+        exit_reason_str = str(getattr(exit_signal, "exit_reason", None) or "").upper()
+        exit_dir = str(
+            position.direction.value if hasattr(position.direction, "value")
+            else position.direction or ""
+        ).upper()
+        # Always track any exit for minimum re-entry spacing.
+        self._last_any_exit_bar = self._session_event_count
+        if "STOP" in exit_reason_str and "TIME" not in exit_reason_str:
+            # Hard STOP_LOSS: longer cooldown + direction-flip block.
+            self._last_stop_bar = self._session_event_count
+            self._last_exit_direction = exit_dir
+        elif "TIME" in exit_reason_str and position.pnl_pct < 0:
+            # TIME_STOP with a loss: treat like a soft stop — record direction too.
+            self._last_stop_bar = self._session_event_count
+            self._last_exit_direction = exit_dir
         self._risk.record_trade_result(
             pnl_pct=position.pnl_pct,
             lots=position.lots,
@@ -1525,6 +1604,40 @@ class DeterministicRuleEngine(StrategyEngine):
             if not brain_decision.allowed:
                 return f"brain_gate:{brain_decision.reason}"
 
+        # ── Trader discipline gates ────────────────────────────────────────────
+        # 1. SIDEWAYS + returns_mixed: market has no intraday conviction.
+        #    A trader never enters when returns are contradicting themselves.
+        if (
+            regime_signal.regime is not None
+            and str(regime_signal.regime.value if hasattr(regime_signal.regime, "value") else regime_signal.regime).upper() == "SIDEWAYS"
+            and "returns_mixed" in (regime_signal.reason or "")
+        ):
+            cooldown_bars = int(os.getenv("SIDEWAYS_MIXED_COOLDOWN_BARS", "0"))
+            if cooldown_bars == 0:
+                return "sideways_returns_mixed"
+
+        # 2. Post-STOP_LOSS cooldown: after a stop, wait N bars before re-entering.
+        stop_cooldown = int(os.getenv("STOP_LOSS_COOLDOWN_BARS", "5"))
+        if self._last_stop_bar is not None:
+            bars_since_stop = self._session_event_count - self._last_stop_bar
+            if bars_since_stop < stop_cooldown:
+                return f"stop_loss_cooldown:{bars_since_stop}<{stop_cooldown}"
+
+        # 3. Direction-flip block: after a STOP_LOSS, don't flip direction for N bars.
+        flip_cooldown = int(os.getenv("DIRECTION_FLIP_COOLDOWN_BARS", "8"))
+        if self._last_stop_bar is not None and self._last_exit_direction:
+            bars_since_stop = self._session_event_count - self._last_stop_bar
+            if bars_since_stop < flip_cooldown:
+                # Determine current candidate direction from votes
+                entry_v = [v for v in votes if v.signal_type == SignalType.ENTRY
+                           and v.direction in (Direction.CE, Direction.PE)]
+                if entry_v:
+                    current_dirs = {str(v.direction.value if hasattr(v.direction, "value") else v.direction).upper()
+                                    for v in entry_v}
+                    if self._last_exit_direction not in current_dirs:
+                        return f"direction_flip_cooldown:{bars_since_stop}<{flip_cooldown}"
+        # ── End discipline gates ───────────────────────────────────────────────
+
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
         if avoid_votes:
             return "avoid_veto"
@@ -1705,6 +1818,45 @@ class DeterministicRuleEngine(StrategyEngine):
                 }
             )
             return gates, "blocked", "regime_confidence", False
+        if blocker == "sideways_returns_mixed":
+            gates.append(
+                {
+                    "gate_id": "sideways_returns_mixed",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "sideways_returns_mixed",
+                    "message": "SIDEWAYS + returns_mixed: no directional conviction — trader discipline block",
+                    "metrics": {"regime_confidence": regime_signal.confidence},
+                }
+            )
+            return gates, "blocked", "sideways_returns_mixed", False
+        if blocker is not None and blocker.startswith("stop_loss_cooldown:"):
+            bars_info = blocker.split(":", 1)[1]
+            gates.append(
+                {
+                    "gate_id": "stop_loss_cooldown",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "stop_loss_cooldown",
+                    "message": f"Cooldown after STOP_LOSS: {bars_info} bars — no re-entry yet",
+                    "metrics": {"bars_since_stop": int(bars_info.split("<")[0])},
+                }
+            )
+            return gates, "blocked", "stop_loss_cooldown", False
+        if blocker is not None and blocker.startswith("direction_flip_cooldown:"):
+            bars_info = blocker.split(":", 1)[1]
+            gates.append(
+                {
+                    "gate_id": "direction_flip_cooldown",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "direction_flip_cooldown",
+                    "message": f"Direction flip blocked within cooldown: {bars_info} bars — wait for market to settle",
+                    "metrics": {"bars_since_stop": int(bars_info.split("<")[0]),
+                                "last_direction": self._last_exit_direction or ""},
+                }
+            )
+            return gates, "blocked", "direction_flip_cooldown", False
         if blocker == "entry_phase":
             gates.append(
                 {
@@ -1729,6 +1881,28 @@ class DeterministicRuleEngine(StrategyEngine):
                 }
             )
             return gates, "blocked", "risk_pause", False
+        if raw_signals.get("direction_source") == "direction_consensus":
+            dir_sources = raw_signals.get("direction_consensus_sources") or {}
+            ce = raw_signals.get("direction_consensus_ce", 0)
+            pe = raw_signals.get("direction_consensus_pe", 0)
+            margin = raw_signals.get("direction_consensus_margin", 0)
+            winner = vote.direction.value if vote.direction else "?"
+            gates.append(
+                {
+                    "gate_id": "direction_consensus",
+                    "gate_group": "direction",
+                    "status": "pass",
+                    "reason_code": None,
+                    "message": f"{winner}  ce={ce:.2f} pe={pe:.2f} margin={margin:.2f}",
+                    "metrics": {
+                        "ce_score": ce,
+                        "pe_score": pe,
+                        "margin": margin,
+                        "shadow_basis": raw_signals.get("direction_consensus_shadow_basis"),
+                        **{k: round(v, 3) for k, v in dir_sources.items()},
+                    },
+                }
+            )
         gates.append(
             {
                 "gate_id": "confidence_gate",
@@ -2001,12 +2175,39 @@ class DeterministicRuleEngine(StrategyEngine):
         except Exception as exc:
             logger.warning("brain_state write failed error=%s", exc)
 
-    def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor) -> None:
+    def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor, regime: str = "") -> None:
         if bool(vote.raw_signals.get("_lock_strike_selection")):
             return
         if self._run_risk_config.atm_strike_only and not self._allow_non_atm_for_ml_entry(vote):
             vote = self._force_atm_strike(vote, snap)
             return
+
+        if (
+            os.getenv("STRATEGY_SMART_STRIKE_ENABLED", "").strip() == "1"
+            and self._allow_non_atm_for_ml_entry(vote)
+        ):
+            from ..signals.option_selector import select_strike as _smart_select
+
+            class _Proxy:
+                def __init__(self, v: StrategyVote) -> None:
+                    conf = float(v.confidence or 0.0)
+                    self.ce_prob = conf if v.direction == Direction.CE else 0.0
+                    self.pe_prob = conf if v.direction == Direction.PE else 0.0
+
+            direction_str = vote.direction.value
+            selection = _smart_select(snap, direction_str, _Proxy(vote), regime=regime)
+            if selection.strike is not None and int(selection.strike) > 0:
+                ltp = snap.option_ltp(direction_str, int(selection.strike))
+                if ltp is not None and float(ltp) > 0:
+                    vote.proposed_strike = int(selection.strike)
+                    vote.proposed_entry_premium = float(ltp)
+                    vote.raw_signals["_strike_policy"] = f"smart_strike_{selection.mode}"
+                    vote.raw_signals["_strike_selected"] = int(selection.strike)
+                    vote.raw_signals["_strike_selected_premium"] = float(round(ltp, 4))
+                    vote.raw_signals["_strike_mode"] = selection.mode
+                    vote.raw_signals["_strike_reason"] = selection.reason
+            return
+
         if self._strike_policy != "oi_volume_ranked":
             return
         direction = vote.direction

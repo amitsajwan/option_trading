@@ -282,6 +282,31 @@ class RollingFeatureState:
         highs = list(self._highs)
         lows = list(self._lows)
         volumes = list(self._volumes)
+
+        # candle_overlap: bar-to-bar body overlap ratio (0–1).
+        # Computed AFTER appending current bar — highs[-1] is current, highs[-2] is previous.
+        # Returns 0.0 during warmup (< 2 bars) to avoid None-propagation in the feature vector.
+        candle_overlap: Optional[float]
+        if len(highs) >= 2 and len(lows) >= 2:
+            h_cur, h_prev = highs[-1], highs[-2]
+            l_cur, l_prev = lows[-1], lows[-2]
+            bar_range = h_cur - l_cur
+            if bar_range > 0.0:
+                overlap = max(0.0, min(h_cur, h_prev) - max(l_cur, l_prev))
+                candle_overlap = float(overlap / bar_range)
+            else:
+                candle_overlap = 0.0
+        else:
+            candle_overlap = 0.0
+
+        # opening_range_width_pct: (orh - orl) / orl
+        orh_val = _to_float(snap.orh)
+        orl_val = _to_float(snap.orl)
+        opening_range_width_pct: Optional[float]
+        if orh_val is not None and orl_val is not None and orl_val > 0.0:
+            opening_range_width_pct = float((orh_val - orl_val) / orl_val)
+        else:
+            opening_range_width_pct = None
         atr_14 = _atr_wilder(highs, lows, closes, period=14)
         if atr_14 is not None:
             self._last_day_atr = float(atr_14)
@@ -472,6 +497,11 @@ class RollingFeatureState:
             "opt_flow_pcr_oi": pcr,
             "time_minute_of_day": minute_of_day,
             "time_day_of_week": day_of_week,
+            # Phase 3 features — regime CHOP/BREAKOUT detection
+            "candle_overlap": candle_overlap,
+            "ctx_candle_overlap": candle_overlap,
+            "opening_range_width_pct": opening_range_width_pct,
+            "ctx_opening_range_width_pct": opening_range_width_pct,
         }
 
     def _prev_atm_oi_sum(self, snap: SnapshotAccessor) -> Optional[float]:

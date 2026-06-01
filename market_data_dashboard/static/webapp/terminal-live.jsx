@@ -123,6 +123,7 @@ function StatusBar({
         <button className="active"><span className="dot live"/>Live</button>
         <button onClick={() => onModeSwitch('replay')}><span className="dot replay"/>Replay</button>
         <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
+        <button onClick={() => onModeSwitch('pipeline')} style={{opacity:0.85}}>⬡ Pipeline</button>
       </div>
       <div style={{display:'flex',alignItems:'center',gap:8,padding:'0 10px'}}>
         <span style={{fontFamily:'var(--f-mono)',fontSize:'9px',color:'var(--fg-4)',textTransform:'uppercase'}}>watching</span>
@@ -147,7 +148,7 @@ function StatusBar({
       <div className="t-status-cells">
         <div className="t-scell big"><span className="k">Session P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
         <div className="t-scell"><span className="k">Trades</span><span className="v">{tradesCount}<span className="sub">/ {winRate}% WR</span></span></div>
-        <div className="t-scell"><span className="k">Regime</span><span className="v" style={{color:'var(--info)',fontSize:'11px'}}>{regime || '—'}</span></div>
+        <div className="t-scell"><span className="k">Regime</span><span className="v" style={{color:(typeof REGIME_COLORS !== 'undefined' && REGIME_COLORS[regime]) || 'var(--info)',fontSize:'11px'}}>{regime || '—'}</span></div>
         <div className="t-scell"><span className="k">Engine</span><span className="v" style={{fontSize:'11px'}}>{engine || '—'}</span></div>
         <div className="t-scell"><span className="k">WS</span><span className={`v ${ws === 'connected' ? 'pos' : 'warn'}`} style={{fontSize:'11px'}}>{ws}</span></div>
       </div>
@@ -1663,6 +1664,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   return (
     <div className="cockpit">
       <TickerBar quote={quote} instrument={session.instrument}/>
+      {typeof StaleBanner !== 'undefined' && <StaleBanner />}
       {watchMode === 'sim' && (
         <div style={{background:'var(--warn)',color:'#231500',padding:'6px 10px',fontSize:'11px',fontWeight:700}}>
           Watching SIM run {watchRunId ? `${watchRunId.slice(0, 8)}…` : '—'}{watchDate ? ` · ${watchDate}` : ''} · Not LIVE market feed
@@ -1728,6 +1730,9 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
           <div style={{flex:1,overflowY:'auto',minHeight:0}}>
             <TradeInspector session={session} trade={displayTrade}/>
           </div>
+          {typeof DepthMiniWidget !== 'undefined' && (
+            <DepthMiniWidget runId={watchMode === 'sim' ? watchRunId : ''} />
+          )}
         </div>
       </div>
       <LogStrip session={session} alerts={session.alerts} wsStatus={wsStatus}/>
@@ -1838,6 +1843,7 @@ function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, u
         <button onClick={() => onModeSwitch('live')}><span className="dot live"/>Live</button>
         <button className="active"><span className="dot replay"/>Replay</button>
         <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
+        <button onClick={() => onModeSwitch('pipeline')} style={{opacity:0.85}}>⬡ Pipeline</button>
       </div>
       <div style={{display:'flex',alignItems:'center',gap:5,padding:'0 10px',flex:1,overflow:'hidden',minWidth:0}}>
         {isPlaying
@@ -2168,6 +2174,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
             <button onClick={() => onModeSwitch('live')}><span className="dot live"/>Live</button>
             <button className="active"><span className="dot replay"/>Replay</button>
             <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
+            <button onClick={() => onModeSwitch('pipeline')} style={{opacity:0.85}}>⬡ Pipeline</button>
           </div>
           <div style={{display:'flex',alignItems:'center',gap:8,padding:'0 12px'}}>
             <span style={{fontFamily:'var(--f-mono)',fontSize:'10px',color:'var(--fg-3)'}}>Date</span>

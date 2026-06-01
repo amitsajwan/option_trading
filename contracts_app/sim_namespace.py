@@ -32,12 +32,22 @@ _VALID_KINDS: tuple[Kind, ...] = ("live", "oos", "sim")
 # ``strategy_eval_runs`` keep working without special-casing).
 _NAMESPACED_BASES: frozenset[str] = frozenset(
     {
+        # Legacy snapshot + strategy collections
         "phase1_market_snapshots",
         "strategy_votes",
         "trade_signals",
         "strategy_positions",
         "strategy_decision_traces",
         "market_depth_ticks",
+        # Phase 2 stream-native decision pipeline collections
+        # stream_for() uses these slugs directly; collection_for() appends the kind suffix.
+        "regime_decisions",
+        "entry_decisions",
+        "direction_decisions",
+        "depth_decisions",
+        "strike_decisions",
+        "risk_decisions",
+        "execution_events",
     }
 )
 

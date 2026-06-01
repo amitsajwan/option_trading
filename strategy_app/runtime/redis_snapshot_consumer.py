@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping, Optional
 import redis
 
 from contracts_app import build_snapshot_event, parse_snapshot_event, redis_connection_kwargs, snapshot_topic
+from contracts_app.event_bus import EventBus
 
 from ..contracts import StrategyEngine, TradeSignal
 from .consumer_lock import ConsumerLock, lock_config_from_env
@@ -164,6 +165,7 @@ class RedisSnapshotConsumer:
         engine: StrategyEngine,
         topic: Optional[str] = None,
         client: Optional[redis.Redis] = None,
+        bus: Optional[EventBus] = None,
         transport: Optional[str] = None,
         stream_name: Optional[str] = None,
         stream_group: str = STREAM_GROUP_NAME,
@@ -173,7 +175,12 @@ class RedisSnapshotConsumer:
     ) -> None:
         self.engine = engine
         self.topic = str(topic or snapshot_topic()).strip() or snapshot_topic()
+        # Raw Redis client — used for ConsumerLock (key-value) and pubsub.
+        # Never used for stream operations when a bus is provided.
         self._client = client or _redis_client()
+        # EventBus — used for all stream operations (xreadgroup, xack, xgroup_create).
+        # When None, falls back to calling self._client directly (legacy path).
+        self._bus = bus
         env_transport = str(os.getenv("STRATEGY_CONSUMER_TRANSPORT") or "pubsub").strip().lower()
         self._transport = str(transport or env_transport or "pubsub").strip().lower()
         if self._transport not in {"pubsub", "streams"}:
@@ -280,7 +287,22 @@ class RedisSnapshotConsumer:
         self._events_seen += 1
         return True
 
+    def _ack(self, entry_id: str) -> None:
+        """Acknowledge a stream message via bus if available, else direct client."""
+        if self._bus is not None:
+            self._bus.acknowledge(self._stream_name, self._stream_group, entry_id)
+        else:
+            self._client.xack(self._stream_name, self._stream_group, entry_id)
+
     def _ensure_stream_group(self) -> None:
+        if self._bus is not None:
+            self._bus.ensure_group(self._stream_name, self._stream_group)
+            logger.info(
+                "strategy stream consumer group ensured stream=%s group=%s",
+                self._stream_name,
+                self._stream_group,
+            )
+            return
         try:
             self._client.xgroup_create(
                 self._stream_name,
@@ -298,6 +320,16 @@ class RedisSnapshotConsumer:
                 raise
 
     def _read_stream_batch(self, stream_id: str) -> list[tuple[str, dict[str, Any]]]:
+        if self._bus is not None:
+            raw = self._bus.consume(
+                self._stream_name,
+                self._stream_group,
+                self._stream_consumer_name,
+                count=50,
+                block_ms=5000,
+                stream_id=stream_id,
+            )
+            return [(msg_id, _decode_stream_fields(fields)) for msg_id, fields in raw]
         response = self._client.xreadgroup(
             self._stream_group,
             self._stream_consumer_name,
@@ -349,10 +381,13 @@ class RedisSnapshotConsumer:
                     event = _snapshot_event_from_stream_fields(fields)
                     if event is None:
                         logger.warning("ignored invalid stream snapshot entry stream=%s id=%s", self._stream_name, entry_id)
-                        self._client.xack(self._stream_name, self._stream_group, entry_id)
+                        self._ack(entry_id)
                         continue
                     self._process_event(event)
-                    self._client.xack(self._stream_name, self._stream_group, entry_id)
+                    # Acknowledge AFTER successful evaluate() so the message
+                    # remains in the PEL and can be re-delivered on restart
+                    # if evaluate() raises before this line.
+                    self._ack(entry_id)
                     if max_events is not None and self._events_seen >= max_events:
                         break
         finally:

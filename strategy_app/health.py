@@ -5,9 +5,8 @@ import json
 import os
 from typing import Any, Iterable, Optional
 
-import redis
-
 from contracts_app import find_matching_python_processes, isoformat_ist, redis_connection_kwargs
+from contracts_app.event_bus import EventBus
 from .runtime.runtime_artifacts import RuntimeArtifactStore, resolve_runtime_artifact_paths, summarize_runtime_artifacts
 from .logging.health_marker import HealthMarker
 
@@ -16,18 +15,29 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _check_redis(bus: Optional[EventBus] = None) -> tuple[bool, Optional[str]]:
+    """Ping Redis via an injected bus if available, else via a direct connection.
+
+    The direct-connection fallback is intentional — health.py is a standalone
+    CLI entry point that runs before any bus is constructed.
+    """
+    if bus is not None:
+        ok = bus.ping()
+        return ok, None if ok else "bus ping returned False"
+    try:
+        import redis as _redis
+        client = _redis.Redis(**redis_connection_kwargs(decode_responses=True, for_pubsub=False))
+        return bool(client.ping()), None
+    except Exception as exc:
+        return False, str(exc)
+
+
 def evaluate(*, topic: str, artifact_dir: Optional[str] = None, metrics_tail_lines: int = 10) -> tuple[dict[str, Any], int]:
     _ = topic
     process_matches = find_matching_python_processes(["strategy_app.main"])
     process_running = len(process_matches) > 0
 
-    redis_ok = False
-    redis_error = None
-    try:
-        client = redis.Redis(**redis_connection_kwargs(decode_responses=True, for_pubsub=False))
-        redis_ok = bool(client.ping())
-    except Exception as exc:
-        redis_error = str(exc)
+    redis_ok, redis_error = _check_redis()
 
     # JSONL canonical-event-loss check (ARCHITECTURE.md §9). If a POSITION_OPEN/CLOSE
     # append failed, the health marker file says ok=false. That's a hard failure.
