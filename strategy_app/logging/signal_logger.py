@@ -25,6 +25,28 @@ from contracts_app import (
 
 from ..contracts import PositionContext, StrategyVote, TradeSignal
 from .decision_field_resolver import DecisionFieldResolver
+
+# E5-S1: lazy import so alerts module is optional (avoids hard dep on requests/urllib3)
+def _try_alert_open(**kwargs) -> None:
+    try:
+        from execution_app.alerts import alert_open
+        alert_open(**kwargs)
+    except Exception:
+        pass
+
+def _try_alert_close(**kwargs) -> None:
+    try:
+        from execution_app.alerts import alert_close
+        alert_close(**kwargs)
+    except Exception:
+        pass
+
+def _try_alert_halt(**kwargs) -> None:
+    try:
+        from execution_app.alerts import alert_halt
+        alert_halt(**kwargs)
+    except Exception:
+        pass
 from .health_marker import HealthMarker
 from .jsonl_sink import append_jsonl, normalize_record_timestamps
 from .redis_event_publisher import RedisEventPublisher
@@ -361,6 +383,14 @@ class SignalLogger:
                 ),
             ),
         )
+        _try_alert_open(
+            direction=str(position.direction or ""),
+            strike=int(position.strike or 0),
+            entry_premium=float(position.entry_premium or 0),
+            lots=int(position.lots or 1),
+            session_trade_count=1,
+            regime=str(record.get("entry_regime") or ""),
+        )
 
     def log_position_manage(self, *, position: PositionContext, timestamp: datetime, snapshot_id: str) -> None:
         record = self._position_event_base(
@@ -423,6 +453,17 @@ class SignalLogger:
                     snapshot_id=close_snapshot_id,
                 ),
             ),
+        )
+        _dm = record.get("decision_metrics") or {}
+        _try_alert_close(
+            direction=str(position.direction or ""),
+            strike=int(position.strike or 0),
+            pnl_pct=float(position.pnl_pct or 0),
+            exit_reason=str(exit_signal.exit_reason.value if exit_signal.exit_reason else ""),
+            mfe_pct=float(position.mfe_pct or 0),
+            mae_pct=float(position.mae_pct or 0),
+            bars_held=int(position.bars_held or 0),
+            exit_policy_triggered=str(_dm.get("exit_policy_triggered") or ""),
         )
 
     def log_decision_summary(self, summary: dict[str, Any]) -> None:

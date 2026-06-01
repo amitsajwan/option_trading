@@ -27,6 +27,7 @@ class ExitReason(str, Enum):
     STRATEGY_EXIT = "STRATEGY_EXIT"
     RISK_BREACH = "RISK_BREACH"
     MANUAL = "MANUAL"
+    THESIS_FAIL = "THESIS_FAIL"
 
 
 class SignalType(str, Enum):

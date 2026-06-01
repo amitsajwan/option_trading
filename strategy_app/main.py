@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import sys
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -354,7 +356,10 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
                     **run_metadata["risk_config"],
                 }
             )
-        engine.set_run_context(f"runtime-{args.rollout_stage}", run_metadata)
+        # E6-S1: unique run_id per session — prevents multi-run days mixing trades in MongoDB
+        _session_ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        _session_run_id = f"{args.rollout_stage}-{_session_ts}-{str(uuid.uuid4())[:8]}"
+        engine.set_run_context(_session_run_id, run_metadata)
     topic = str(args.topic or snapshot_topic()).strip() or snapshot_topic()
     runtime_store = RuntimeArtifactStore(runtime_artifact_paths.root)
     # If the engine has option-P&L bundles loaded (via OPTION_PNL_MODEL_BUNDLE),
@@ -395,7 +400,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             position_size_multiplier=float(args.position_size_multiplier),
             halt_consecutive_losses=int(args.halt_consecutive_losses),
             halt_daily_dd_pct=float(args.halt_daily_dd_pct),
-            run_id=(ml_pure_switch_meta or {}).get("run_id"),
+            run_id=_session_run_id if hasattr(engine, "set_run_context") else (ml_pure_switch_meta or {}).get("run_id"),
             model_group=(ml_pure_switch_meta or {}).get("model_group"),
             model_package_path=ml_pure_model_package,
             threshold_report_path=ml_pure_threshold_report,
