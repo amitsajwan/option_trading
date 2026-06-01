@@ -257,6 +257,88 @@ def test_tier4_oi_gate_blocks_falls_back_to_otm3():
 # Missing LTP at deep tier cascades to shallower
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# MAX PREMIUM cap — no edge above the cap, skip trade entirely
+# ---------------------------------------------------------------------------
+
+def test_max_premium_picks_deepest_affordable():
+    # OTM4=250, OTM3=400, OTM2=700, OTM1=900, ATM=1200 — cap 600 → OTM3
+    snap = FakeSnap(
+        iv_percentile=20.0,
+        timestamp=_Hour(10),
+        _ltp_table={
+            ("CE", 48000): 1200.0,
+            ("CE", 48100): 900.0,
+            ("CE", 48200): 700.0,
+            ("CE", 48300): 400.0,
+            ("CE", 48400): 250.0,
+        },
+    )
+    with _enable(
+        "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM4_ENABLED",
+        **{"SMART_STRIKE_MAX_PREMIUM": "600"},
+    ):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="BREAKOUT")
+    assert sel.mode == "otm_4"   # OTM4 is cheapest and passes all gates
+    assert sel.strike == 48400
+
+
+def test_max_premium_skips_trade_when_even_deepest_too_expensive():
+    # All strikes > 600 — no edge, reject trade
+    snap = FakeSnap(
+        iv_percentile=20.0,
+        _ltp_table={
+            ("CE", 48000): 1200.0,
+            ("CE", 48100): 1000.0,
+            ("CE", 48200): 800.0,
+            ("CE", 48300): 700.0,
+            ("CE", 48400): 650.0,
+        },
+    )
+    with _enable(
+        "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM4_ENABLED",
+        **{"SMART_STRIKE_MAX_PREMIUM": "600"},
+    ):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="BREAKOUT")
+    assert sel.strike is None
+    assert sel.mode == "rejected_too_expensive"
+
+
+def test_max_premium_atm_within_cap_allowed():
+    # ATM=500 ≤ cap 600, but no OTM tier passes conf (low conf) — still take ATM
+    snap = FakeSnap(iv_percentile=30.0, _ltp_table={("CE", 48000): 500.0, ("CE", 48100): 300.0})
+    with _enable(**{"SMART_STRIKE_MAX_PREMIUM": "600", "SMART_STRIKE_OTM_CONFIDENCE": "0.80"}):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.55))
+    assert sel.mode == "atm"
+    assert sel.strike == 48000
+
+
+def test_max_premium_atm_too_expensive_rejects():
+    # ATM=1200 > cap 600 → reject
+    snap = FakeSnap(iv_percentile=30.0)  # default ltp=500 for all... override ATM
+    snap_expensive = FakeSnap(
+        iv_percentile=30.0,
+        _ltp_table={("CE", 48000): 1200.0, ("CE", 48100): 900.0, ("CE", 48200): 700.0,
+                    ("CE", 48300): 650.0, ("CE", 48400): 620.0},
+    )
+    with _enable(
+        "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM4_ENABLED",
+        **{"SMART_STRIKE_MAX_PREMIUM": "600", "SMART_STRIKE_OTM_CONFIDENCE": "0.90"},
+    ):
+        # conf=0.55 < 0.90 → no OTM tier passes; ATM=1200 > cap → reject
+        sel = select_strike(snap_expensive, "CE", FakeDecision(ce_prob=0.55))
+    assert sel.strike is None
+    assert sel.mode == "rejected_too_expensive"
+
+
+def test_max_premium_zero_means_no_cap():
+    # MAX_PREMIUM=0 → no cap, expensive ATM allowed
+    snap = FakeSnap(iv_percentile=30.0)  # default ltp=500 for all
+    with _enable(**{"SMART_STRIKE_MAX_PREMIUM": "0"}):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.40))
+    assert sel.mode == "atm"   # no cap, low conf, stays ATM fine
+
+
 def test_missing_ltp_at_otm4_falls_back_to_otm3():
     snap = FakeSnap(
         iv_percentile=20.0,

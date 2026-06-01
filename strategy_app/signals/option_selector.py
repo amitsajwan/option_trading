@@ -7,6 +7,9 @@ every threshold is an env var.
 Master switch:
   STRATEGY_SMART_STRIKE_ENABLED=1
 
+Premium hard cap — skip trade entirely if no strike is affordable:
+  SMART_STRIKE_MAX_PREMIUM=600         0 = no cap; recommended 400-600
+
 IV hard reject (trade skipped entirely):
   SMART_STRIKE_IV_REJECT_PCTILE=90.0
 
@@ -262,12 +265,18 @@ def select_strike(snap: Any, direction: str, decision: Any, regime: str = "") ->
         v = ltp_fn(direction, strike)
         return float(v) if v is not None and float(v) > 0 else None
 
-    # Try tiers from deepest to shallowest; return first that fully passes
+    max_premium = _env_float("SMART_STRIKE_MAX_PREMIUM", 0.0)  # 0 = no cap
+
+    # Try tiers from deepest to shallowest; return first that fully passes.
+    # Deeper OTM = cheaper premium, so once ltp > max_premium we break:
+    # all shallower strikes will be even more expensive.
     for tier in _build_otm_tiers():
         strike_candidate = _otm_strike(tier.n)
         ltp = _ltp(strike_candidate)
         if ltp is None:
             continue  # no LTP data at this depth — try shallower
+        if max_premium > 0 and ltp > max_premium:
+            break  # too expensive; shallower strikes cost even more — reject
         if not _tier_passes(tier, confidence, iv_pct, regime, snap, direction, strike_candidate):
             continue
         return StrikeSelection(
@@ -279,7 +288,18 @@ def select_strike(snap: Any, direction: str, decision: Any, regime: str = "") ->
             otm_steps=tier.n,
         )
 
-    # No OTM tier passed — ATM
+    # No OTM tier passed — check if ATM is within premium cap before accepting it
+    atm_ltp = _ltp(atm_int)
+    if max_premium > 0 and atm_ltp is not None and atm_ltp > max_premium:
+        return StrikeSelection(
+            strike=None,
+            reason=f"rejected_too_expensive_atm_{atm_ltp:.0f}_cap_{max_premium:.0f}",
+            confidence=confidence,
+            iv_percentile=iv_pct,
+            mode="rejected_too_expensive",
+            otm_steps=0,
+        )
+
     return StrikeSelection(
         strike=atm_int,
         reason=f"atm_no_tier_passed_conf_{confidence:.3f}",
