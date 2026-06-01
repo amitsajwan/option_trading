@@ -158,6 +158,13 @@ def _load_actual_trades(trade_date: str) -> list[dict]:
         ts = str(d.get("timestamp", ""))
         if not ts.startswith(trade_date):
             continue
+        # Exclude sim runs that may have leaked into the live positions file.
+        # Real live trades have run_id None (pre-run_id-fix) or "paper-*"/"capped_live-*".
+        # Anything starting with "sim" is an OPS/standalone sim and must not appear
+        # in the Actual panel.
+        run_id = str(d.get("run_id") or "")
+        if run_id.lower().startswith("sim"):
+            continue
         pid = d.get("position_id", "")
         evt = d.get("event", "")
         if evt == "POSITION_OPEN" and pid and pid not in open_ts:
