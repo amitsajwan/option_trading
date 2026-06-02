@@ -1577,8 +1577,8 @@ function MobileLiveShell({
   const ageMs = now - lastTickAt;
   let orbCls = 'ok', orbLbl = 'LIVE';
   if (wsStatus !== 'connected') { orbCls = 'crit'; orbLbl = wsStatus.toUpperCase(); }
-  else if (ageMs > 30000) { orbCls = 'crit'; orbLbl = 'STALE'; }
-  else if (ageMs > 10000) { orbCls = 'warn'; orbLbl = 'SLOW'; }
+  else if (ageMs > 90000) { orbCls = 'crit'; orbLbl = 'STALE'; }
+  else if (ageMs > 70000) { orbCls = 'warn'; orbLbl = 'SLOW'; }
 
   // Stress level for P&L sizing.
   const absPnl = Math.abs(sessionPnl);
