@@ -596,6 +596,9 @@ services:
       - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
       - ./.run:/app/.run
       - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
+      - ./market_data_dashboard/state:/app/market_data_dashboard/state:ro
+      - ./market_data_dashboard/routes:/app/market_data_dashboard/routes:ro
+      - ./market_data_dashboard/static:/app/market_data_dashboard/static:ro
 
   strategy_eval_orchestrator:
     profiles: ["ui", "historical"]
