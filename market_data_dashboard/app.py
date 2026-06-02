@@ -3452,17 +3452,8 @@ async def websocket_stomp(ws: WebSocket):
     message_seq = 0
     buffer = ""
 
-    # NOTE: redis.asyncio pubsub is unreliable in some Windows setups.
-    # Use sync Redis pubsub in a background thread and forward into this async WS.
-    redis_client = redis.Redis(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        db=0,
-        decode_responses=True,
-        socket_connect_timeout=2,
-        socket_timeout=2,
-    )
-    pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
+    client_host = (ws.client.host if ws.client else "unknown")
+    logger.info("ws connect conn=%s proto=%s client=%s", conn_id, selected_subprotocol or "legacy", client_host)
     loop = asyncio.get_running_loop()
     stop_event = threading.Event()
     ctrl_q: "queue.SimpleQueue[tuple[str, str]]" = queue.SimpleQueue()
@@ -3621,6 +3612,7 @@ async def websocket_stomp(ws: WebSocket):
             ctrl_q.put(("subscribe", ch))
             legacy_subs[ch] = {"destination": ch, "kind": "channel", "name": ch}
 
+        logger.debug("ws legacy_subscribe conn=%s channels=%s", conn_id, channels)
         await ws.send_text(json.dumps({"type": "subscribed", "channels": channels}, ensure_ascii=False))
 
     try:
@@ -3696,6 +3688,7 @@ async def websocket_stomp(ws: WebSocket):
                 if command == "SUBSCRIBE":
                     destination = headers.get("destination", "")
                     sub_id = headers.get("id") or str(uuid.uuid4())
+                    logger.debug("ws stomp_subscribe conn=%s destination=%s", conn_id, destination)
 
                     mapped = _stomp_destination_to_redis(destination)
                     if not mapped:
@@ -3758,9 +3751,9 @@ async def websocket_stomp(ws: WebSocket):
                     continue
 
     except WebSocketDisconnect:
-        pass
+        logger.info("ws disconnect conn=%s messages_sent=%s", conn_id, message_seq)
     except Exception as e:
-        logger.warning("WebSocket error (%s): %s", conn_id, e)
+        logger.warning("ws error conn=%s: %s", conn_id, e)
     finally:
         try:
             stop_event.set()
