@@ -298,6 +298,10 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
             "SMART_STRIKE_OTM4_ENABLED":       _live("SMART_STRIKE_OTM4_ENABLED", "1"),
             "SMART_STRIKE_OTM4_CONFIDENCE":    _live("SMART_STRIKE_OTM4_CONFIDENCE", "0.85"),
             "SMART_STRIKE_OTM4_REGIMES":       _live("SMART_STRIKE_OTM4_REGIMES", "BREAKOUT"),
+            # OI minimums — pass live values; lower defaults so OTM tiers are reachable
+            "SMART_STRIKE_OTM2_MIN_OI":         _live("SMART_STRIKE_OTM2_MIN_OI", "20000"),
+            "SMART_STRIKE_OTM3_MIN_OI":         _live("SMART_STRIKE_OTM3_MIN_OI", "15000"),
+            "SMART_STRIKE_OTM4_MIN_OI":         _live("SMART_STRIKE_OTM4_MIN_OI", "10000"),
             # IV ceilings as PERCENTILE thresholds (moderate experiment). Live still
             # pins the old absolute-style 60/50/40/30 via env; the sim uses corrected
             # percentile ceilings so OTM is reachable in normal IV. Promote to live by
@@ -423,7 +427,10 @@ def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[d
 
     from strategy_app.sim.replay_engine import replay_day
 
-    os.environ.setdefault("STRATEGY_RUN_ID", f"sim-{job_id}")
+    run_id = f"sim-{job_id}"
+    os.environ.setdefault("STRATEGY_RUN_ID", run_id)
+    with _jobs_lock:
+        _jobs[job_id]["run_id"] = run_id
 
     def _progress(i: int, total: int) -> None:
         with _jobs_lock:

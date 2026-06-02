@@ -361,9 +361,9 @@ function OpsPage() {
         next.LOTTERY_TIMESTOP_BARS           = '90';
       } else {
         // Scalper — restore live values
-        next.CONSENSUS_BYPASS_MIN_CONFIDENCE = liveEnv.CONSENSUS_BYPASS_MIN_CONFIDENCE || '0.65';
-        next.STRATEGY_MIN_CONFIDENCE         = liveEnv.STRATEGY_MIN_CONFIDENCE || '0.65';
-        next.RISK_MAX_SESSION_TRADES         = liveEnv.RISK_MAX_SESSION_TRADES || '6';
+        next.CONSENSUS_BYPASS_MIN_CONFIDENCE = liveEnv.CONSENSUS_BYPASS_MIN_CONFIDENCE || '0.80';
+        next.STRATEGY_MIN_CONFIDENCE         = liveEnv.STRATEGY_MIN_CONFIDENCE || '0.80';
+        next.RISK_MAX_SESSION_TRADES         = liveEnv.RISK_MAX_SESSION_TRADES || '20';
         next.STRATEGY_STRIKE_SELECTION_POLICY = liveEnv.STRATEGY_STRIKE_SELECTION_POLICY || 'smart_strike';
         next.STRATEGY_SMART_STRIKE_ENABLED   = liveEnv.STRATEGY_SMART_STRIKE_ENABLED || '1';
         next.STRATEGY_STRIKE_MAX_OTM_STEPS   = liveEnv.STRATEGY_STRIKE_MAX_OTM_STEPS || '8';
@@ -536,6 +536,13 @@ function OpsPage() {
               <span style={{fontFamily:'var(--f-mono)', fontSize:10.5, color:'var(--pos)', marginLeft:4}}>
                 ✓ done — {simTrades.length} trades
               </span>
+            )}
+            {job?.status === 'done' && job?.run_id && (
+              <a href={`/app?mode=replay&kind=sim&run_id=${job.run_id}&date=${simDate}`}
+                 style={{fontFamily:'var(--f-mono)', fontSize:10.5, color:'var(--ink-3)',
+                   marginLeft:8, textDecoration:'underline', cursor:'pointer'}}>
+                View in Terminal
+              </a>
             )}
             {job?.status === 'error' && (
               <span style={{fontFamily:'var(--f-mono)', fontSize:10.5, color:'var(--neg)', marginLeft:4}}>
