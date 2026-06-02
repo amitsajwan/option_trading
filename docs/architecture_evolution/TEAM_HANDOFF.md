@@ -18,8 +18,8 @@
 ## For Team 2 — Story A2: `strategy_app` switch to streams
 
 ### Your task in one sentence
-Switch `strategy_app` to consume snapshots from `stream:snapshots:live` (Redis Stream)
-instead of `market:snapshot:v1` (pub/sub). The stream now exists thanks to A1.
+Verify that `strategy_app` defaults to streams transport (it already does — line 184 of `redis_snapshot_consumer.py`),
+confirm all existing tests pass, and write the missing regression test to lock in this behaviour.
 
 ### Exact steps
 
@@ -38,19 +38,17 @@ docs/architecture_evolution/DECISIONS.md   # why we are doing this
 strategy_app/runtime/redis_snapshot_consumer.py   # full file — understand _start_streams()
 ```
 
-**3. What to change**
+**3. What to verify (read-only audit first)**
 
 File: `strategy_app/runtime/redis_snapshot_consumer.py`
 
-- Line ~184: `env_transport = str(os.getenv("STRATEGY_CONSUMER_TRANSPORT") or "pubsub")...`
-  → change default from `"pubsub"` to `"streams"`
+- Line 184: confirm `env_transport` default is `"streams"` ✓ (already done)
+- Line 189: confirm `STRATEGY_STREAM_NAME` env var is wired into `self._stream_name` ✓ (already done)
+- Line 409: confirm `start()` calls `_start_streams()` when `transport=="streams"` ✓ (already done)
+- Line 411: confirm `ConsumerLock.acquire()` is ONLY called in the `else` (pubsub) branch ✓
 
-- Add support for `STRATEGY_STREAM_NAME` env var to override the stream name.
-  When transport=streams, use `os.getenv("STRATEGY_STREAM_NAME") or "stream:snapshots:live"`
-  as the stream to consume from (instead of the pubsub topic).
-
-- Wire this into `_start_streams()` — it already reads `self._stream_name`, make sure
-  `__init__` populates it from the env var when transport=streams.
+No code changes needed in `redis_snapshot_consumer.py` — it is already correct.
+Your only deliverable is the **new test** below.
 
 **4. DO NOT touch**
 - `contracts_app/sim_namespace.py` — `Namespace.transport()` stays unchanged (that is story D1, Sprint 4)

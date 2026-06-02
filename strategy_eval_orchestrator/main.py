@@ -116,6 +116,26 @@ def _command_channel() -> str:
     return str(os.getenv("STRATEGY_EVAL_COMMAND_TOPIC") or "strategy:eval:command")
 
 
+def _command_stream() -> str:
+    return str(os.getenv("STRATEGY_EVAL_COMMAND_STREAM") or "stream:eval:commands")
+
+
+def _command_stream_group() -> str:
+    return str(os.getenv("STRATEGY_EVAL_COMMAND_GROUP") or "eval-orchestrator-grp-1")
+
+
+def _eval_commands_pubsub_shadow() -> bool:
+    return str(os.getenv("EVAL_COMMANDS_PUBSUB_SHADOW") or "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _ensure_command_group(redis_client: redis.Redis) -> None:
+    try:
+        redis_client.xgroup_create(_command_stream(), _command_stream_group(), id="0", mkstream=True)
+    except Exception as exc:
+        if "BUSYGROUP" not in str(exc):
+            logger.warning("xgroup_create warn: %s", exc)
+
+
 def _historical_topic() -> str:
     return str(os.getenv("HISTORICAL_TOPIC") or historical_snapshot_topic()).strip() or historical_snapshot_topic()
 
@@ -418,32 +438,81 @@ def _process_command(redis_client: redis.Redis, coll: Any, command: dict[str, An
 def run_loop() -> int:
     redis_client = _redis_client()
     mongo_client, runs_coll = _mongo_collection()
-    pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
-    pubsub.subscribe(_command_channel())
-    logger.info("strategy_eval_orchestrator subscribed topic=%s", _command_channel())
+    stream = _command_stream()
+    group = _command_stream_group()
+    consumer = f"orchestrator-{os.getenv('HOSTNAME') or 'default'}"
+    _ensure_command_group(redis_client)
+    logger.info(
+        "strategy_eval_orchestrator listening stream=%s group=%s consumer=%s",
+        stream, group, consumer,
+    )
+    if _eval_commands_pubsub_shadow():
+        pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
+        pubsub.subscribe(_command_channel())
+        logger.info(
+            "strategy_eval_orchestrator shadow pubsub topic=%s (EVAL_COMMANDS_PUBSUB_SHADOW=true)",
+            _command_channel(),
+        )
+    else:
+        pubsub = None
+
+    read_pending = True
     try:
         while True:
-            msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-            if not msg:
-                time.sleep(0.01)
-                continue
-            data = msg.get("data")
-            if not isinstance(data, str):
-                continue
+            stream_id = "0" if read_pending else ">"
             try:
-                payload = json.loads(data)
-            except Exception:
+                response = redis_client.xreadgroup(
+                    group, consumer, {stream: stream_id}, count=10, block=2000
+                )
+            except Exception as exc:
+                logger.warning("xreadgroup error: %s", exc)
+                time.sleep(1.0)
                 continue
-            if not isinstance(payload, dict):
+
+            if read_pending and not response:
+                read_pending = False
                 continue
-            _process_command(redis_client, runs_coll, payload)
+
+            for _sname, entries in response or []:
+                for entry_id, fields in entries or []:
+                    raw = fields.get("payload") if isinstance(fields, dict) else None
+                    if not isinstance(raw, str):
+                        redis_client.xack(stream, group, entry_id)
+                        continue
+                    try:
+                        payload = json.loads(raw)
+                    except Exception:
+                        redis_client.xack(stream, group, entry_id)
+                        continue
+                    if not isinstance(payload, dict):
+                        redis_client.xack(stream, group, entry_id)
+                        continue
+                    try:
+                        _process_command(redis_client, runs_coll, payload)
+                    except Exception:
+                        logger.exception("_process_command failed entry_id=%s", entry_id)
+                    redis_client.xack(stream, group, entry_id)
+
+            if pubsub is not None:
+                msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=0)
+                if msg:
+                    data = msg.get("data")
+                    if isinstance(data, str):
+                        try:
+                            payload = json.loads(data)
+                            if isinstance(payload, dict):
+                                _process_command(redis_client, runs_coll, payload)
+                        except Exception:
+                            pass
+
     except KeyboardInterrupt:
         logger.info("strategy_eval_orchestrator interrupted")
     finally:
-        try:
-            pubsub.close()
-        except Exception:
-            pass
+        if pubsub is not None:
+            try:
+                pubsub.close()
+            except Exception:
+                pass
         try:
             mongo_client.close()
         except Exception:
