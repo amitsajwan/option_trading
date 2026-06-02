@@ -2179,7 +2179,291 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   );
 }
 
-// ── Replay Ticker Bar ─────────────────────────────────────────────────────
+// ── MobileReplayShell ─────────────────────────────────────────────────────
+// Uses the same m-shell layout as live. Replay-specific header: date/run picker
+// in row-1 and play/pause + scrub bar in row-2. Body (tape/chart/map/more) is
+// shared infrastructure — same MobileTradeCard, TermChart, TradeInspector.
+// Handles both loading (session=null) and loaded states in one component.
+function MobileReplayShell({
+  session, candles, upToIdx, trades, signals,
+  sessionPnl, winRate,
+  selectedTrade, onSelectTrade,
+  blockerFunnel, heatmap,
+  isPlaying, speed, total, vtLabel,
+  replayDate, replayRunId, replayKind,
+  replayOptions, tradeCounts, modelsByDate, datesLoading, wsStatus, replayError,
+  onPlay, onPause, onSpeed, onScrub, onScrubEnd, onReset, onDateChange, onModeSwitch,
+}) {
+  const [tab, setTab] = _s('tape');
+  const isMobile = _useIsMobile();
+  const [showInspector, setShowInspector] = _s(false);
+  const inspectorTrade = selectedTrade || ((trades||[]).length ? trades[0] : null);
+  const pct      = total > 0 ? ((upToIdx + 1) / total * 100).toFixed(0) : 0;
+  const pnlCls   = (sessionPnl||0) > 0.0005 ? 'pos' : (sessionPnl||0) < -0.0005 ? 'neg' : 'flat';
+  const pnlGlyph = (sessionPnl||0) > 0.0005 ? '▲' : (sessionPnl||0) < -0.0005 ? '▼' : '◆';
+  const tradeCount = (trades||[]).length;
+  const selStyle = { fontFamily:'var(--f-mono)', fontSize:10, background:'var(--bg-2)',
+    color:'var(--fg-1)', border:'1px solid var(--line-2)', borderRadius:'var(--r-2)',
+    padding:'0 6px', height:24, flex:1, minWidth:0 };
+
+  // ── Two-level run picker: filter by date, then choose the run on that date.
+  // With many sim runs accumulating, a single flat dropdown is hectic — group
+  // the options by date (newest first) so the operator picks a date, then the
+  // specific run. Run dropdown is only shown when a date has more than one run.
+  // Default the kind filter to the loaded run's kind (usually 'sim' from the
+  // boot pick) so the picker lands on sim runs without manual toggling.
+  const [kindFilter, setKindFilter] = _s(replayKind === 'oos' ? 'oos' : 'sim');
+  const filteredOptions = (replayOptions||[]).filter(o => kindFilter==='all' || o.kind===kindFilter);
+  const dateGroups = (() => {
+    const m = new Map();
+    filteredOptions.forEach(o => {
+      if (!o.date) return;
+      if (!m.has(o.date)) m.set(o.date, { date:o.date, runs:[], kinds:new Set() });
+      const g = m.get(o.date); g.runs.push(o); g.kinds.add(o.kind);
+    });
+    return [...m.values()].sort((a,b) => String(b.date).localeCompare(String(a.date)));
+  })();
+  const [filterDate, setFilterDate] = _s(replayDate || '');
+  _e(() => { if (replayDate) setFilterDate(replayDate); }, [replayDate]);
+  const activeDate = filterDate || replayDate || '';
+  const runsForDate = filteredOptions.filter(o => o.date === activeDate);
+  const _dateLabel = g => {
+    const kinds = [...g.kinds];
+    const tag = kinds.length === 1 ? kinds[0] : kinds.join('/');
+    return `${g.date} · ${g.runs.length} ${tag}`;
+  };
+  const _loadDate = d => {
+    setFilterDate(d);
+    const runs = filteredOptions.filter(o => o.date === d);
+    // Prefer a sim run that has data, else the first run on that date.
+    const pick = runs.find(r => r.kind==='sim') || runs[0];
+    if (pick) onDateChange(pick.date, { runId: pick.runId||'', kind: pick.kind||'oos' });
+  };
+  const _setKind = k => {
+    setKindFilter(k);
+    const opts = (replayOptions||[]).filter(o => k==='all' || o.kind===k);
+    // Keep the current date if it still has runs under the new kind; else jump
+    // to the newest date available for that kind and load it.
+    if (opts.some(o => o.date === activeDate)) return;
+    const newest = opts.map(o => o.date).filter(Boolean)
+      .sort((a,b) => String(b).localeCompare(String(a)))[0];
+    if (newest) {
+      setFilterDate(newest);
+      const runs = opts.filter(o => o.date === newest);
+      const pick = runs.find(r => r.kind==='sim') || runs[0];
+      if (pick) onDateChange(pick.date, { runId: pick.runId||'', kind: pick.kind||'oos' });
+    }
+  };
+
+  return (
+    <div className="m-shell">
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <header className="m-header">
+        {/* Row 1: brand + run picker + orb + back-to-Live */}
+        <div className="m-header-row1">
+          <div className="m-brand">
+            <span className="m-brand-mark"/>QUANT
+            <span style={{fontSize:9,opacity:0.55,marginLeft:4,color:'var(--info)'}}>◷ REPLAY</span>
+          </div>
+          <div style={{display:'flex',gap:6,flex:1,minWidth:0,alignItems:'center'}}>
+            {/* Kind filter — Sim / OOS / All (segmented) */}
+            <div style={{display:'flex',flexShrink:0,border:'1px solid var(--line-2)',borderRadius:'var(--r-2)',overflow:'hidden'}}>
+              {['sim','oos','all'].map(k => (
+                <button key={k} onClick={() => _setKind(k)}
+                  style={{border:0,background:kindFilter===k?'var(--accent)':'transparent',
+                    color:kindFilter===k?'#1a1100':'var(--fg-3)',fontFamily:'var(--f-mono)',
+                    fontSize:9.5,letterSpacing:'0.04em',padding:'0 7px',height:24,cursor:'pointer',
+                    textTransform:'uppercase'}}>
+                  {k}
+                </button>
+              ))}
+            </div>
+            {/* Date dropdown — distinct dates newest-first */}
+            <select style={{...selStyle, flex:'0 0 auto', maxWidth:150}}
+              value={activeDate}
+              disabled={datesLoading || !dateGroups.length}
+              onChange={e => _loadDate(e.target.value)}>
+              {!activeDate && <option value="">{datesLoading ? 'Loading…' : 'Date'}</option>}
+              {dateGroups.map(g => <option key={g.date} value={g.date}>{_dateLabel(g)}</option>)}
+            </select>
+            {/* Run dropdown — only when the chosen date has more than one run */}
+            {runsForDate.length > 1 && (
+              <select style={selStyle}
+                value={`${replayKind}:${replayDate}:${replayRunId||''}`}
+                onChange={e => {
+                  const next = runsForDate.find(r => r.key === e.target.value);
+                  if (next) onDateChange(next.date, { runId: next.runId||'', kind: next.kind||'oos' });
+                }}>
+                {runsForDate.map(opt => (
+                  <option key={opt.key} value={opt.key}>{_fmtReplayRunOption(opt, tradeCounts, modelsByDate)}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
+            <div className="m-orb" title={`ws: ${wsStatus}`}>
+              <span className={`m-orb-dot ${wsStatus==='connected'?'ok':wsStatus==='connecting'?'warn':'crit'}`}/>
+            </div>
+            <button style={{height:28,padding:'0 12px',borderRadius:'var(--r-2)',border:'1px solid var(--line-2)',
+              background:'transparent',color:'var(--fg-2)',fontFamily:'var(--f-mono)',fontSize:10.5,
+              cursor:'pointer',display:'flex',alignItems:'center',gap:5}}
+              onClick={() => onModeSwitch('live')}>
+              <span style={{width:7,height:7,borderRadius:'50%',background:'var(--pos)',display:'inline-block'}}/>Live
+            </button>
+          </div>
+        </div>
+
+        {/* Row 2: loading status (no session) or scrub + play controls */}
+        {!session ? (
+          <div className="m-header-row2" style={{justifyContent:'center'}}>
+            <span style={{fontFamily:'var(--f-mono)',fontSize:10.5,color:'var(--fg-3)'}}>
+              {datesLoading ? '⏳ Loading dates…'
+                : wsStatus==='connecting' ? '⟳ Connecting…'
+                : wsStatus==='disconnected' ? '⟳ Reconnecting…'
+                : replayError ? '✗ ' + replayError
+                : 'Select a run above to start replay.'}
+            </span>
+          </div>
+        ) : (
+          <div className="m-header-row2" style={{display:'flex',alignItems:'center',gap:8}}>
+            <div className="m-pnl" data-stress="normal">
+              <span className={`val ${pnlCls}`}><span className="glyph">{pnlGlyph}</span>{TC.fmtPct(sessionPnl||0,2)}</span>
+              <div className="meta"><span className="k">trades</span><span className="v">{tradeCount} · {winRate||0}%</span></div>
+            </div>
+            {isPlaying
+              ? <button className="m-iconbtn" style={{flexShrink:0}} onClick={onPause} title="Pause (Space)">⏸</button>
+              : <button className="m-iconbtn" style={{flexShrink:0,color:'var(--pos)'}} onClick={onPlay} title="Play (Space)">▶</button>
+            }
+            <input type="range" min={0} max={Math.max(0,total-1)} value={upToIdx}
+              style={{flex:1,minWidth:0,accentColor:'var(--accent)',cursor:'pointer'}}
+              onChange={e => onScrub(+e.target.value)}
+              onMouseUp={e => onScrubEnd(+e.target.value)}
+              onTouchEnd={() => onScrubEnd(upToIdx)}
+            />
+            <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',whiteSpace:'nowrap',minWidth:62,flexShrink:0}}>
+              {vtLabel||'—'} · {pct}%
+            </span>
+            <select value={speed} onChange={e => onSpeed(+e.target.value)}
+              style={{fontFamily:'var(--f-mono)',fontSize:10,background:'var(--bg-2)',color:'var(--fg-1)',
+                border:'1px solid var(--line-2)',borderRadius:'var(--r-2)',padding:'0 4px',height:24,width:42,flexShrink:0}}>
+              {[1,2,4,8,16].map(s => <option key={s} value={s}>{s}×</option>)}
+            </select>
+            <button className="m-iconbtn" style={{flexShrink:0}} onClick={onReset} title="Reset to start">⟲</button>
+          </div>
+        )}
+      </header>
+
+      {/* ── Body ───────────────────────────────────────────────────────── */}
+      {!session ? (
+        <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',
+          flexDirection:'column',gap:8,color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:11}}>
+          {replayError
+            ? <><span style={{color:'var(--neg)'}}>✗ {replayError}</span>
+                <span style={{fontSize:9,marginTop:4,color:'var(--fg-4)'}}>Try a different run or trigger a sim from the ⚙ OPS drawer first.</span></>
+            : <span>{datesLoading ? 'Loading…' : wsStatus}</span>}
+        </div>
+      ) : (
+        <div className="m-split">
+          <div className="m-left">
+            <nav className="m-tabs" role="tablist">
+              <button className="m-tab" data-tab="tape" aria-pressed={tab==='tape'} onClick={() => setTab('tape')}>
+                Tape <span className="count">{tradeCount}</span>
+              </button>
+              <button className="m-tab" data-tab="chart" aria-pressed={tab==='chart'} onClick={() => setTab('chart')}>Chart</button>
+              <button className="m-tab" data-tab="map"   aria-pressed={tab==='map'}   onClick={() => setTab('map')}>Map</button>
+              <button className="m-tab" data-tab="more"  aria-pressed={tab==='more'}  onClick={() => setTab('more')}>More</button>
+            </nav>
+            <main className="m-body">
+              <div className={tab==='tape' ? '' : 'm-tab-hidden'}>
+                {tradeCount === 0
+                  ? <div className="m-empty">No trades at this point.<div className="hint">Scrub forward or press ▶ to play</div></div>
+                  : <div className="m-cards">
+                      {(trades||[]).map(t => (
+                        <MobileTradeCard key={t.id} trade={t} session={session}
+                          selected={inspectorTrade?.id===t.id && showInspector}
+                          onSelect={tr => { onSelectTrade(tr); setShowInspector(true); }}/>
+                      ))}
+                    </div>}
+              </div>
+              {isMobile && (
+                <div className={`m-chart-tab-pane ${tab==='chart' ? '' : 'm-tab-hidden'}`}>
+                  <div className="m-chart-wrap">
+                    <TermChart session={session} candles={candles||[]} trades={trades||[]}
+                      selectedTrade={inspectorTrade}
+                      onSelectTrade={tr => { onSelectTrade(tr); setShowInspector(true); }}
+                      upToIdx={upToIdx} flashIdx={null}/>
+                  </div>
+                </div>
+              )}
+              <div className={tab==='map' ? '' : 'm-tab-hidden'} style={{height:'100%',overflowY:'auto'}}>
+                <SessionHeatmap data={heatmap?.data} loading={!heatmap}/>
+              </div>
+              <div className={tab==='more' ? '' : 'm-tab-hidden'}>
+                <div className="m-section">
+                  <div className="m-section-head">Session</div>
+                  <div className="m-section-body">
+                    <div className="m-kv-list">
+                      <div className="m-kv"><span className="k">date</span><span className="v">{replayDate||session?.date||'—'}</span></div>
+                      <div className="m-kv"><span className="k">P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl||0,2)}</span></div>
+                      <div className="m-kv"><span className="k">trades</span><span className="v">{tradeCount} · {winRate||0}%</span></div>
+                      <div className="m-kv"><span className="k">progress</span><span className="v">{upToIdx+1}/{total} bars · {pct}%</span></div>
+                      {session?.instrument && <div className="m-kv"><span className="k">instrument</span><span className="v">{session.instrument}</span></div>}
+                    </div>
+                  </div>
+                </div>
+                {blockerFunnel?.outcomes && (() => {
+                  const o = blockerFunnel.outcomes;
+                  const top = blockerFunnel.primary_blocker_gates?.[0]?.gate;
+                  return (
+                    <div className="m-section">
+                      <div className="m-section-head">Decision Funnel</div>
+                      <div className="m-section-body">
+                        <div className="m-kv-list">
+                          <div className="m-kv"><span className="k">evaluated</span><span className="v">{o.evaluated||0}</span></div>
+                          <div className="m-kv"><span className="k">taken</span><span className="v pos">{o.entry_taken||0}</span></div>
+                          <div className="m-kv"><span className="k">blocked</span><span className="v neg">{o.blocked||0}</span></div>
+                          {top && <div className="m-kv"><span className="k">top gate</span><span className="v" style={{fontSize:9}}>{top}</span></div>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </main>
+          </div>
+          {!isMobile && (
+            <div className="m-right-pane">
+              <div className="m-right-chart">
+                <TermChart session={session} candles={candles||[]} trades={trades||[]}
+                  selectedTrade={inspectorTrade}
+                  onSelectTrade={tr => { onSelectTrade(tr); setShowInspector(true); }}
+                  upToIdx={upToIdx} flashIdx={null}/>
+              </div>
+              {showInspector && inspectorTrade && (
+                <div className="m-right-inspector">
+                  <TradeInspector session={session} trade={inspectorTrade}/>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {isMobile && showInspector && inspectorTrade && (
+        <div className="m-sheet-overlay" onClick={() => setShowInspector(false)}>
+          <div className="m-sheet" onClick={e => e.stopPropagation()}>
+            <button style={{position:'absolute',top:8,right:12,background:'none',border:'none',
+              color:'var(--fg-3)',fontSize:18,cursor:'pointer',lineHeight:1}}
+              onClick={() => setShowInspector(false)}>×</button>
+            <TradeInspector session={session} trade={inspectorTrade}/>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Legacy helpers — kept so diff is minimal; no longer referenced after ReplayMonitorDark migration
 function ReplayTickerBar({ date, vtLabel, instrument, isPlaying }) {
   const [clock, setClock] = _s(TC.fmtClock(new Date()));
   _e(() => { const id = setInterval(() => setClock(TC.fmtClock(new Date())), 1000); return () => clearInterval(id); }, []);
@@ -2617,166 +2901,34 @@ function ReplayMonitorDark({ onModeSwitch }) {
     return out;
   })();
 
-  // Loading state
-  if (!session) {
-    const selStyle = { fontFamily:'var(--f-mono)', fontSize:'10px', background:'var(--bg-2)',
-      color:'var(--fg-1)', border:'1px solid var(--line-2)', borderRadius:'var(--r-2)', padding:'2px 8px' };
-    return (
-      <div className="cockpit">
-        <div className="ticker-bar">
-          <div className="t-brand"><span className="t-brand-mark"/><b>QUANT</b><span>OPS</span><span className="ver">replay</span></div>
-          <div/><div/>
-        </div>
-        <div className="t-status-bar">
-          <div className="t-mode-toggle">
-            <button onClick={() => onModeSwitch('live')}><span className="dot live"/>Live</button>
-            <button className="active"><span className="dot replay"/>Replay</button>
-            <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
-            <button onClick={() => onModeSwitch('pipeline')} style={{opacity:0.85}}>⬡ Pipeline</button>
-          </div>
-          <div style={{display:'flex',alignItems:'center',gap:8,padding:'0 12px'}}>
-            <span style={{fontFamily:'var(--f-mono)',fontSize:'10px',color:'var(--fg-3)'}}>Date</span>
-            <select style={selStyle} value={`${replayKind}:${replayDate}:${replayRunId || ''}`}
-              disabled={datesLoading || !replayOptions.length}
-              onChange={e => {
-                const next = (replayOptions || []).find(r => r.key === e.target.value);
-                if (!next) return;
-                handleDateChange(next.date, { runId: next.runId || '', kind: next.kind || 'oos' });
-              }}>
-              {!replayDate && <option value="">{datesLoading ? 'Loading…' : 'Select run'}</option>}
-              {replayOptions.map(opt => <option key={opt.key} value={opt.key}>{_fmtReplayRunOption(opt, tradeCounts, modelsByDate)}</option>)}
-            </select>
-          </div>
-          <div/>
-        </div>
-        <div className="t-loading">
-          <div style={{textAlign:'center'}}>
-            <div style={{color:'var(--fg-2)',marginBottom:8}}>
-              {datesLoading          ? 'Loading replay dates…' :
-               wsStatus==='connecting' ? 'Connecting to server…' :
-               wsStatus==='disconnected' ? 'Reconnecting…' :
-               replayError || 'Select a date above to load a session.'}
-            </div>
-            {replayError && <div style={{fontSize:10,color:'var(--fg-4)'}}>Try a different date or wait for replay data to be generated.</div>}
-            {!replayError && !replayRunId && !datesLoading && (
-              <div style={{fontSize:10,color:'var(--warn)',marginTop:6,maxWidth:420}}>
-                Tip: open Replay from Eval via <strong>Open in Replay</strong> (or add{' '}
-                <code style={{fontSize:9}}>run_id=e8ba040a-a8dd-47d1-9bf8-ceffba85e809</code> to the URL).
-                Without <code>run_id</code>, the picker may load an older experiment with no votes.
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="t-log-strip">
-          <span className="t-chip" style={{fontSize:'8.5px'}}>LOG</span>
-          <div className="t-log-feed"><span style={{color:'var(--fg-4)'}}>Awaiting session</span></div>
-          <div className="t-log-perf"><span><span className="k">ws</span>{wsStatus}</span></div>
-        </div>
-      </div>
-    );
-  }
-
-  const candles     = session.candles || [];
-  const rawTrades   = (session.trades || []).filter(t => t.exitIdx <= upToIdx);
-  const trades      = rawTrades.map(_bridgeTrade);
-  const signals     = (session.signals || []).filter(s => s.idx <= upToIdx).slice(-120).reverse();
-  const strategies  = _makeStrategies(trades);
-  const sessionPnl  = rawTrades.reduce((a,t) => a + (t.pnlPct||0), 0);
-  const wins        = rawTrades.filter(t => (t.pnlPct||0) > 0).length;
-  const winRate     = rawTrades.length ? Math.round(wins/rawTrades.length*100) : 0;
-  const vtLabel     = candles[upToIdx]?.label ||
+  // Compute visible data (works whether session is null or loaded)
+  const candles    = session ? (session.candles || []) : [];
+  const rawTrades  = session ? (session.trades || []).filter(t => t.exitIdx <= upToIdx) : [];
+  const trades     = rawTrades.map(_bridgeTrade);
+  const signals    = session ? (session.signals || []).filter(s => s.idx <= upToIdx).slice(-120).reverse() : [];
+  const sessionPnl = rawTrades.reduce((a,t) => a + (t.pnlPct||0), 0);
+  const wins       = rawTrades.filter(t => (t.pnlPct||0) > 0).length;
+  const winRate    = rawTrades.length ? Math.round(wins/rawTrades.length*100) : 0;
+  const vtLabel    = candles[upToIdx]?.label ||
     new Date(candles[upToIdx]?.t||0).toLocaleTimeString('en-IN',
       { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Kolkata' });
-  const displayTrade = selectedTrade || (trades.length > 0 ? trades[0] : null);
-  const noData = candles.length > 0 && session.trades.length === 0
-    && (session.alerts||[]).some(a => a.level === 'warn');
-  const banner = replayError || (noData ? `No high-confidence ML signals on ${replayDate}.` : '');
 
   return (
-    <div className="cockpit">
-      <ReplayTickerBar date={session.date} vtLabel={vtLabel}
-        instrument={session.instrument} isPlaying={isPlaying}/>
-      <ReplayStatusBar
-        sessionPnl={sessionPnl} tradesCount={trades.length} winRate={winRate}
-        isPlaying={isPlaying} speed={speed} upToIdx={upToIdx} total={candles.length}
-        replayOptions={replayOptions} tradeCounts={tradeCounts} modelsByDate={modelsByDate} replayDate={replayDate}
-        replayKind={replayKind}
-        replayRunId={replayRunId || session.runId || ''}
-        onPlay={handlePlay} onPause={handlePause} onSpeed={handleSpeed}
-        onScrub={handleScrub} onScrubEnd={handleScrubEnd} onReset={handleReset}
-        onDateChange={handleDateChange} onModeSwitch={onModeSwitch}
-        ws={wsStatus} datesLoading={datesLoading}
-      />
-
-      {/* The 1fr workspace row — flex column so optional banner doesn't break the grid */}
-      <div style={{display:'flex',flexDirection:'column',minHeight:0,overflow:'hidden'}}>
-        {banner && (
-          <div style={{background:'var(--warn-wash)',borderBottom:'1px solid rgba(245,165,36,0.25)',
-            padding:'5px 14px',fontFamily:'var(--f-mono)',fontSize:10.5,color:'var(--warn)',
-            display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
-            <span style={{flex:1}}>{banner}</span>
-          </div>
-        )}
-        <div className="t-workspace" style={{flex:1,minHeight:0}}>
-          <EngineRoster strategies={strategies} dailyRisk={sessionPnl<0?Math.abs(sessionPnl)/2:0} brainData={brainData}/>
-
-          <div className="t-center">
-            <div className="t-chart-panel">
-              <div className="t-panel-head">
-                <div className="t-panel-title">
-                  {session.instrument} · 1m
-                  <span className="count">{Math.min(upToIdx+1,candles.length)}/{candles.length} bars</span>
-                </div>
-                <div className="t-panel-actions">
-                  <button className="t-btn ghost sm" title="Fit chart"
-                    onClick={() => fitRef.current && fitRef.current()}>fit</button>
-                  {displayTrade && <span className="t-chip amber">● {displayTrade.id}</span>}
-                </div>
-              </div>
-              <div style={{flex:1,minHeight:0}}>
-                <LWChart
-                  candles={candles} upToIdx={upToIdx}
-                  trades={trades} signals={signals}
-                  selectedTrade={displayTrade} selectedSignal={null}
-                  onSelectTrade={setSelectedTrade} onSelectSignal={() => {}}
-                  height="100%" isPlaying={isPlaying} fitRef={fitRef}
-                />
-              </div>
-            </div>
-            <Tape
-              session={session} trades={[...trades].reverse()} signals={signals}
-              selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
-              flashId={null}
-              heatmap={{ data: heatmapData, loading: heatmapLoading }}
-              diag={{ runtimeConfig, availableModels, blockerFunnel,
-                      timeline, brainData,
-                      loading: diagLoading, error: diagError,
-                      date: replayDate, onRefresh: fetchDiag,
-                      onTimelineFilterChange: setTlOutcome,
-                      onTimelineCollapseChange: setTlCollapse,
-                      activeRunId: replayRunId || (session && session.runId ? session.runId : null) }}
-            />
-          </div>
-
-          <div className="t-rail right" style={{display:'flex',flexDirection:'column'}}>
-            <div className="t-panel-head">
-              <div className="t-panel-title">Trade Inspector</div>
-              <div className="t-panel-actions">
-                <button className="t-btn ghost sm" title="Prev (K)"
-                  onClick={() => { const i=trades.findIndex(t=>t.id===selectedTrade?.id); if(i>0)setSelectedTrade(trades[i-1]); }}>K↑</button>
-                <button className="t-btn ghost sm" title="Next (J)"
-                  onClick={() => { const i=trades.findIndex(t=>t.id===selectedTrade?.id); if(i<trades.length-1)setSelectedTrade(trades[i+1]); }}>↓J</button>
-              </div>
-            </div>
-            <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-              <TradeInspector session={session} trade={displayTrade}/>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <LogStrip session={session} alerts={session.alerts} wsStatus={wsStatus}/>
-    </div>
+    <MobileReplayShell
+      session={session} candles={candles} upToIdx={upToIdx}
+      trades={trades} signals={signals}
+      sessionPnl={sessionPnl} winRate={winRate}
+      selectedTrade={selectedTrade} onSelectTrade={setSelectedTrade}
+      blockerFunnel={blockerFunnel}
+      heatmap={{ data: heatmapData, loading: heatmapLoading }}
+      isPlaying={isPlaying} speed={speed} total={candles.length} vtLabel={vtLabel}
+      replayDate={replayDate} replayRunId={replayRunId || (session?.runId||'')} replayKind={replayKind}
+      replayOptions={replayOptions} tradeCounts={tradeCounts} modelsByDate={modelsByDate}
+      datesLoading={datesLoading} wsStatus={wsStatus} replayError={replayError}
+      onPlay={handlePlay} onPause={handlePause} onSpeed={handleSpeed}
+      onScrub={handleScrub} onScrubEnd={handleScrubEnd} onReset={handleReset}
+      onDateChange={handleDateChange} onModeSwitch={onModeSwitch}
+    />
   );
 }
 
