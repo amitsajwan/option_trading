@@ -189,27 +189,13 @@ class TestRunDirFor(unittest.TestCase):
 
 
 class TestLockKeyFor(unittest.TestCase):
-    def test_live_lock_present(self) -> None:
-        ns = resolve_namespace("live")
-        self.assertEqual(
-            ns.lock_key_for(),
-            "strategy_app:consumer_lock:market:snapshot:v1",
-        )
-
-    def test_oos_lock_present(self) -> None:
-        ns = resolve_namespace("oos")
-        self.assertEqual(
-            ns.lock_key_for(),
-            "strategy_app_historical:consumer_lock:market:snapshot:v1:historical",
-        )
-
-    def test_sim_lock_is_none_by_design(self) -> None:
-        """Sim runs use ephemeral consumer containers + Redis Streams
-        consumer groups; consumer locks are unnecessary AND were the source
-        of the 2026-05-27 morning's stale-lock crash loop. This is a
-        deliberate design choice — keep this test green forever."""
-        ns = resolve_namespace("sim", run_id="rrr")
-        self.assertIsNone(ns.lock_key_for())
+    def test_lock_key_none_for_all_modes(self) -> None:
+        """D2: ConsumerLock removed. lock_key_for() always returns None.
+        All snapshot consumers use Redis Streams consumer groups instead."""
+        for kind, kwargs in [("live", {}), ("oos", {}), ("sim", {"run_id": "rrr"})]:
+            with self.subTest(kind=kind):
+                ns = resolve_namespace(kind, **kwargs)
+                self.assertIsNone(ns.lock_key_for())
 
 
 class TestTransport(unittest.TestCase):

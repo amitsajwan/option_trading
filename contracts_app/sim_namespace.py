@@ -146,17 +146,15 @@ class Namespace:
             return _OOS_RUN_DIR
         return _LIVE_RUN_DIR
 
-    # ── consumer lock ────────────────────────────────────────────────────
+    # ── consumer lock (D2: removed) ──────────────────────────────────────
     def lock_key_for(self) -> Optional[str]:
-        """Redis consumer-lock key. ``None`` for sim — by design, sim runs
-        use ephemeral consumer containers + Redis Streams consumer groups,
-        so locking is unnecessary and was actively harmful in early designs.
+        """Deprecated — always returns ``None``.
+
+        ConsumerLock was removed in D2 (arch/streams-loose-coupling).
+        All snapshot consumers now use Redis Streams consumer groups which
+        provide exclusive delivery without a separate distributed lock.
         """
-        if self.kind == "sim":
-            return None
-        if self.kind == "oos":
-            return "strategy_app_historical:consumer_lock:market:snapshot:v1:historical"
-        return "strategy_app:consumer_lock:market:snapshot:v1"
+        return None
 
 
 def resolve_namespace(kind: Kind, run_id: Optional[str] = None) -> Namespace:

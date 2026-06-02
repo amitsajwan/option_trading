@@ -37,9 +37,10 @@ class TestStreamNameRouting:
         assert _stream_name_for_topic("market:snapshot:historical:test") == "stream:snapshots:historical"
 
 
-class TestDualWriteShadowEnabled:
+class TestStreamOnlyPublish:
+    """D2: shadow pub/sub removed. publish() is always XADD only."""
+
     def test_xadd_called_on_every_publish(self, monkeypatch):
-        monkeypatch.setenv("SNAPSHOT_PUBSUB_SHADOW", "true")
         pub, client = _make_publisher()
         pub.publish(topic="market:snapshot:v1", payload={"snapshot_id": "s1"})
         client.xadd.assert_called_once()
@@ -49,17 +50,12 @@ class TestDualWriteShadowEnabled:
         assert kwargs["maxlen"] == _STREAM_MAXLEN
         assert kwargs["approximate"] is True
 
-    def test_publish_also_called_when_shadow_true(self, monkeypatch):
-        monkeypatch.setenv("SNAPSHOT_PUBSUB_SHADOW", "true")
+    def test_redis_publish_never_called(self, monkeypatch):
         pub, client = _make_publisher()
         pub.publish(topic="market:snapshot:v1", payload={"snapshot_id": "s1"})
-        client.publish.assert_called_once()
-        topic_arg, payload_arg = client.publish.call_args[0]
-        assert topic_arg == "market:snapshot:v1"
-        assert "snapshot_id" in payload_arg
+        client.publish.assert_not_called()
 
     def test_payload_is_valid_json_in_stream_entry(self, monkeypatch):
-        monkeypatch.setenv("SNAPSHOT_PUBSUB_SHADOW", "false")
         pub, client = _make_publisher()
         pub.publish(topic="market:snapshot:v1", payload={"key": "value", "num": 42})
         args, _ = client.xadd.call_args
@@ -69,37 +65,14 @@ class TestDualWriteShadowEnabled:
         assert parsed["num"] == 42
 
 
-class TestDualWriteShadowDisabled:
-    def test_xadd_still_called_when_shadow_false(self, monkeypatch):
-        monkeypatch.setenv("SNAPSHOT_PUBSUB_SHADOW", "false")
-        pub, client = _make_publisher()
-        pub.publish(topic="market:snapshot:v1", payload={"snapshot_id": "s2"})
-        client.xadd.assert_called_once()
-
-    def test_publish_not_called_when_shadow_false(self, monkeypatch):
-        monkeypatch.setenv("SNAPSHOT_PUBSUB_SHADOW", "false")
-        pub, client = _make_publisher()
-        pub.publish(topic="market:snapshot:v1", payload={"snapshot_id": "s2"})
-        client.publish.assert_not_called()
-
-    @pytest.mark.parametrize("val", ["0", "false", "no", "off"])
-    def test_all_falsy_values_disable_shadow(self, monkeypatch, val):
-        monkeypatch.setenv("SNAPSHOT_PUBSUB_SHADOW", val)
-        pub, client = _make_publisher()
-        pub.publish(topic="market:snapshot:v1", payload={})
-        client.publish.assert_not_called()
-
-
 class TestHistoricalTopicStream:
     def test_historical_publish_goes_to_historical_stream(self, monkeypatch):
-        monkeypatch.setenv("SNAPSHOT_PUBSUB_SHADOW", "false")
         pub, client = _make_publisher()
         pub.publish(topic="market:snapshot:v1:historical", payload={"snapshot_id": "h1"})
         args, _ = client.xadd.call_args
         assert args[0] == "stream:snapshots:historical"
 
     def test_topic_stored_in_stream_entry(self, monkeypatch):
-        monkeypatch.setenv("SNAPSHOT_PUBSUB_SHADOW", "false")
         pub, client = _make_publisher()
         pub.publish(topic="market:snapshot:v1:historical", payload={})
         args, _ = client.xadd.call_args

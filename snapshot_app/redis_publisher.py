@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Optional
 
 import redis
@@ -14,10 +13,6 @@ _STREAM_MAXLEN = 500
 
 def _redis_client() -> redis.Redis:
     return redis.Redis(**redis_connection_kwargs(decode_responses=True))
-
-
-def _pubsub_shadow_enabled() -> bool:
-    return str(os.getenv("SNAPSHOT_PUBSUB_SHADOW") or "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _stream_name_for_topic(topic: str) -> str:
@@ -39,5 +34,3 @@ class RedisEventPublisher(EventPublisher):
             maxlen=_STREAM_MAXLEN,
             approximate=True,
         )
-        if _pubsub_shadow_enabled():
-            self._client.publish(str(topic), serialized)

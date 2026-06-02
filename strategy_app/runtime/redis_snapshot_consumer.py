@@ -19,7 +19,6 @@ from contracts_app import build_snapshot_event, parse_snapshot_event, redis_conn
 from contracts_app.event_bus import EventBus
 
 from ..contracts import StrategyEngine, TradeSignal
-from .consumer_lock import ConsumerLock, lock_config_from_env
 
 logger = logging.getLogger(__name__)
 _DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
@@ -175,8 +174,7 @@ class RedisSnapshotConsumer:
     ) -> None:
         self.engine = engine
         self.topic = str(topic or snapshot_topic()).strip() or snapshot_topic()
-        # Raw Redis client — used for ConsumerLock (key-value) and pubsub.
-        # Never used for stream operations when a bus is provided.
+        # Raw Redis client — used for stream operations when no bus is provided.
         self._client = client or _redis_client()
         # EventBus — used for all stream operations (xreadgroup, xack, xgroup_create).
         # When None, falls back to calling self._client directly (legacy path).
@@ -203,15 +201,6 @@ class RedisSnapshotConsumer:
         self._dedupe_window = max(100, dedupe_window)
         self._seen_snapshot_keys: set[str] = set()
         self._seen_snapshot_order: deque[str] = deque()
-        lock_enabled, lock_ttl_sec, lock_refresh_sec, _lock_max_wait = lock_config_from_env()
-        self._consumer_lock = ConsumerLock(
-            self._client,
-            topic=self.topic,
-            stop_event=self._stop_event,
-            enabled=lock_enabled,
-            ttl_sec=lock_ttl_sec,
-            refresh_sec=lock_refresh_sec,
-        )
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -406,57 +395,4 @@ class RedisSnapshotConsumer:
     def start(self, *, max_events: Optional[int] = None) -> int:
         """Blocking consume loop. Returns consumed event count."""
         max_count = None if max_events is None else max(0, int(max_events))
-        if self._transport == "streams":
-            return self._start_streams(max_events=max_count)
-        self._consumer_lock.acquire()
-        pubsub = self._client.pubsub(ignore_subscribe_messages=True)
-        pubsub.subscribe(self.topic)
-        self._running = True
-        self._stop_event.clear()
-        last_lock_refresh_at = time.monotonic()
-        logger.info("strategy consumer subscribed topic=%s", self.topic)
-
-        try:
-            while not self._stop_event.is_set():
-                if max_count is not None and self._events_seen >= max_count:
-                    break
-                now = time.monotonic()
-                if now - last_lock_refresh_at >= self._consumer_lock.refresh_interval_sec:
-                    self._consumer_lock.refresh()
-                    last_lock_refresh_at = now
-
-                msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-                if not msg:
-                    time.sleep(self._poll_interval_sec)
-                    continue
-
-                data = msg.get("data")
-                if not isinstance(data, str):
-                    continue
-                try:
-                    payload = json.loads(data)
-                except Exception:
-                    logger.warning("ignored non-json event on topic=%s", self.topic)
-                    continue
-
-                event = parse_snapshot_event(payload)
-                if event is None:
-                    continue
-
-                self._process_event(event)
-        finally:
-            try:
-                pubsub.close()
-            except Exception:
-                pass
-            if self._current_session is not None:
-                try:
-                    self.engine.on_session_end(self._current_session)
-                except Exception:
-                    logger.exception("session end hook failed")
-                self._current_session = None
-            self._running = False
-            self._consumer_lock.release()
-            logger.info("strategy consumer stopped topic=%s events=%s", self.topic, self._events_seen)
-
-        return self._events_seen
+        return self._start_streams(max_events=max_count)

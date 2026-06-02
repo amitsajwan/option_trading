@@ -1,11 +1,13 @@
+"""D2: ConsumerLock removed. Tests migrated from pubsub to streams transport."""
 import json
-import os
-import socket
 import unittest
 from datetime import date
-from unittest.mock import patch
 
 from strategy_app.runtime.redis_snapshot_consumer import RedisSnapshotConsumer
+
+# Re-exported for test_consumer_lock.py and test_redis_snapshot_consumer_streams_default.py
+# which import _FakeRedis from this module.
+_FakeRedis = None  # see _FakeStreamRedis below — keep name for import compatibility
 
 
 def _event(snapshot_id: str, ts: str) -> dict:
@@ -26,6 +28,11 @@ def _event(snapshot_id: str, ts: str) -> dict:
         },
         "metadata": {},
     }
+
+
+def _stream_entry(snapshot_id: str, ts: str, entry_id: str) -> tuple:
+    payload = json.dumps(_event(snapshot_id, ts), ensure_ascii=False)
+    return (entry_id, {"payload": payload})
 
 
 class _FakeEngine:
@@ -60,78 +67,57 @@ class _FailingEndEngine(_FakeEngine):
             raise RuntimeError("boom")
 
 
-class _FakePubSub:
-    def __init__(self, payloads: list[dict]) -> None:
-        self._messages = [{"data": json.dumps(payload)} for payload in payloads]
-        self.subscribed: list[str] = []
-        self.closed = False
+class _FakeStreamRedis:
+    """Minimal Redis fake supporting xreadgroup + xack + xgroup_create for tests."""
 
-    def subscribe(self, topic: str) -> None:
-        self.subscribed.append(topic)
+    def __init__(self, entries: list[tuple]) -> None:
+        self._pending = list(entries)
+        self._acked: list[str] = []
+        self._exhausted = False
 
-    def get_message(self, ignore_subscribe_messages=True, timeout=1.0):  # noqa: ARG002
-        if self._messages:
-            return self._messages.pop(0)
-        return None
+    def xgroup_create(self, *args, **kwargs):
+        pass
 
-    def close(self) -> None:
-        self.closed = True
+    def xreadgroup(self, group, consumer, streams, count=50, block=5000):
+        stream_name = list(streams.keys())[0]
+        stream_id = list(streams.values())[0]
+        if stream_id == "0":
+            return []
+        batch = self._pending[:count]
+        self._pending = self._pending[count:]
+        if not batch and not self._exhausted:
+            self._exhausted = True
+            return []
+        return [(stream_name, batch)] if batch else []
+
+    def xack(self, stream, group, *entry_ids):
+        self._acked.extend(entry_ids)
 
 
-class _FakeRedis:
-    def __init__(self, payloads: list[dict]) -> None:
-        self._pubsub = _FakePubSub(payloads)
-        self._store: dict[str, str] = {}
-        self.set_calls = 0
+# Keep _FakeRedis name importable (streams_default test imports it)
+_FakeRedis = _FakeStreamRedis
 
-    def pubsub(self, ignore_subscribe_messages=True):  # noqa: ARG002
-        return self._pubsub
 
-    def set(self, key: str, value: str, nx: bool = False, ex: int | None = None):  # noqa: ARG002
-        self.set_calls += 1
-        if nx and key in self._store:
-            return False
-        self._store[key] = value
-        return True
-
-    def get(self, key: str):
-        return self._store.get(key)
-
-    def expire(self, key: str, ttl: int):  # noqa: ARG002
-        return key in self._store
-
-    def delete(self, key: str):
-        existed = key in self._store
-        if existed:
-            del self._store[key]
-        return 1 if existed else 0
+def _make_consumer(engine, entries, stream_name="stream:snapshots:live"):
+    client = _FakeStreamRedis(entries)
+    return RedisSnapshotConsumer(
+        engine=engine,
+        stream_name=stream_name,
+        client=client,
+        transport="streams",
+        poll_interval_sec=0.001,
+    ), client
 
 
 class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self._env_lock_enabled = os.environ.get("STRATEGY_SINGLE_CONSUMER_LOCK_ENABLED")
-        os.environ["STRATEGY_SINGLE_CONSUMER_LOCK_ENABLED"] = "1"
-
-    def tearDown(self) -> None:
-        if self._env_lock_enabled is None:
-            os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_ENABLED", None)
-        else:
-            os.environ["STRATEGY_SINGLE_CONSUMER_LOCK_ENABLED"] = self._env_lock_enabled
-
     def test_skips_duplicate_snapshot_ids(self) -> None:
-        payloads = [
-            _event("20260306_1002", "2026-03-06T10:02:00+05:30"),
-            _event("20260306_1002", "2026-03-06T10:02:00+05:30"),
-            _event("20260306_1003", "2026-03-06T10:03:00+05:30"),
+        entries = [
+            _stream_entry("20260306_1002", "2026-03-06T10:02:00+05:30", "1-1"),
+            _stream_entry("20260306_1002", "2026-03-06T10:02:00+05:30", "1-2"),
+            _stream_entry("20260306_1003", "2026-03-06T10:03:00+05:30", "1-3"),
         ]
         engine = _FakeEngine()
-        consumer = RedisSnapshotConsumer(
-            engine=engine,
-            topic="market:snapshot:v1",
-            client=_FakeRedis(payloads),
-            transport="pubsub",
-            poll_interval_sec=0.001,
-        )
+        consumer, _ = _make_consumer(engine, entries)
 
         consumed = consumer.start(max_events=2)
 
@@ -140,176 +126,29 @@ class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
         self.assertEqual(len(engine.starts), 1)
         self.assertEqual(len(engine.ends), 1)
 
-    def test_consumer_lock_enabled_alias_false_skips_lock_acquire(self) -> None:
-        old_alias = os.environ.get("STRATEGY_CONSUMER_LOCK_ENABLED")
-        os.environ["STRATEGY_CONSUMER_LOCK_ENABLED"] = "false"
-        try:
-            payloads = [_event("20260306_1002", "2026-03-06T10:02:00+05:30")]
-            fake_redis = _FakeRedis(payloads)
-            engine = _FakeEngine()
-            consumer = RedisSnapshotConsumer(
-                engine=engine,
-                topic="market:snapshot:v1",
-                client=fake_redis,
-                transport="pubsub",
-                poll_interval_sec=0.001,
-            )
-
-            consumed = consumer.start(max_events=1)
-
-            self.assertEqual(consumed, 1)
-            self.assertEqual(fake_redis.set_calls, 0)
-        finally:
-            if old_alias is None:
-                os.environ.pop("STRATEGY_CONSUMER_LOCK_ENABLED", None)
-            else:
-                os.environ["STRATEGY_CONSUMER_LOCK_ENABLED"] = old_alias
-
-    def test_consumer_lock_stolen_when_owned_by_same_hostname(self) -> None:
-        """Container restart case: a stale lock owned by a dead PID on the
-        same hostname must be reclaimed atomically — not block the new
-        process from starting. This was previously crashing every restart
-        and recovering only via docker's restart-policy retry."""
-        os.environ["STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC"] = "5"
-        try:
-            shared_client = _FakeRedis([])
-            lock_key = "strategy_app:consumer_lock:market:snapshot:v1"
-            # Lock from a "previous" process on this same hostname (different PID)
-            stale_owner = f"{socket.gethostname()}:99999:dead0000:market:snapshot:v1"
-            shared_client.set(lock_key, stale_owner, nx=True, ex=120)
-
-            engine = _FakeEngine()
-            consumer = RedisSnapshotConsumer(
-                engine=engine,
-                topic="market:snapshot:v1",
-                client=shared_client,
-                poll_interval_sec=0.001,
-            )
-            # _FakeRedis has no EVAL — code falls back to delete + retry SETNX.
-            # Should reclaim on the second SETNX attempt without waiting.
-            consumer._consumer_lock.acquire()
-            current = shared_client.get(lock_key)
-            self.assertEqual(current, consumer._consumer_lock.owner)
-            self.assertNotEqual(current, stale_owner)
-        finally:
-            os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
-
-    def test_consumer_lock_waits_and_acquires_when_other_owner_expires(self) -> None:
-        """If a genuinely concurrent consumer's lock is about to expire, we
-        wait for it then acquire — no crash."""
-        os.environ["STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC"] = "5"
-        try:
-            shared_client = _FakeRedis([])
-            lock_key = "strategy_app:consumer_lock:market:snapshot:v1"
-            other_owner = "different-host-12345:7:abcdef:market:snapshot:v1"
-            shared_client.set(lock_key, other_owner, nx=True, ex=120)
-
-            engine = _FakeEngine()
-            consumer = RedisSnapshotConsumer(
-                engine=engine,
-                topic="market:snapshot:v1",
-                client=shared_client,
-                poll_interval_sec=0.001,
-            )
-
-            # Simulate the lock expiring while we wait: on the 2nd Event.wait
-            # call, free the lock so the next SETNX attempt succeeds.
-            call_count = {"n": 0}
-
-            def fake_wait(_self, _timeout):
-                call_count["n"] += 1
-                if call_count["n"] == 1:
-                    shared_client.delete(lock_key)
-                return False  # not stopped
-
-            with patch("threading.Event.wait", new=fake_wait):
-                consumer._consumer_lock.acquire()
-            self.assertEqual(shared_client.get(lock_key), consumer._consumer_lock.owner)
-            self.assertGreaterEqual(call_count["n"], 1)
-        finally:
-            os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
-
-    def test_consumer_lock_raises_after_max_wait_for_persistent_other_owner(self) -> None:
-        """If a different-host lock persists past max_wait, we raise — operator
-        needs to know there's a real duplicate consumer."""
-        os.environ["STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC"] = "5"
-        try:
-            shared_client = _FakeRedis([])
-            lock_key = "strategy_app:consumer_lock:market:snapshot:v1"
-            other_owner = "different-host-12345:7:abcdef:market:snapshot:v1"
-            shared_client.set(lock_key, other_owner, nx=True, ex=300)
-
-            engine = _FakeEngine()
-            consumer = RedisSnapshotConsumer(
-                engine=engine,
-                topic="market:snapshot:v1",
-                client=shared_client,
-                poll_interval_sec=0.001,
-            )
-
-            # Patch time.monotonic to fast-forward past deadline and Event.wait
-            # to no-op — keeps the test under 100ms.
-            t = {"now": 1000.0}
-            real_monotonic = lambda: t["now"]  # noqa: E731
-
-            def fake_wait(_self, _timeout):
-                t["now"] += _timeout  # advance "time" by sleep duration
-                return False
-
-            with patch("strategy_app.runtime.redis_snapshot_consumer.time.monotonic",
-                       side_effect=real_monotonic), \
-                 patch("threading.Event.wait", new=fake_wait):
-                with self.assertRaisesRegex(RuntimeError, "duplicate strategy consumer detected after waiting"):
-                    consumer._consumer_lock.acquire()
-            self.assertEqual(shared_client.get(lock_key), other_owner)
-        finally:
-            os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
-
-    def test_consumer_lock_acquire_exits_cleanly_when_stop_requested(self) -> None:
-        """If shutdown is requested while waiting on the lock, exit without
-        raising — the app is closing, not trying to start."""
-        os.environ["STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC"] = "5"
-        try:
-            shared_client = _FakeRedis([])
-            lock_key = "strategy_app:consumer_lock:market:snapshot:v1"
-            shared_client.set(lock_key, "different-host:1:x:market:snapshot:v1", nx=True, ex=300)
-
-            engine = _FakeEngine()
-            consumer = RedisSnapshotConsumer(
-                engine=engine,
-                topic="market:snapshot:v1",
-                client=shared_client,
-                poll_interval_sec=0.001,
-            )
-
-            def fake_wait_with_stop(_self, _timeout):
-                return True  # simulate stop_event being set during wait
-
-            with patch("threading.Event.wait", new=fake_wait_with_stop):
-                consumer._consumer_lock.acquire()
-            self.assertNotEqual(shared_client.get(lock_key), consumer._consumer_lock.owner)
-        finally:
-            os.environ.pop("STRATEGY_SINGLE_CONSUMER_LOCK_TTL_SEC", None)
-
     def test_session_start_still_runs_when_prior_session_end_fails(self) -> None:
-        payloads = [
-            _event("20260306_1514", "2026-03-06T15:14:00+05:30"),
-            _event("20260307_0915", "2026-03-07T09:15:00+05:30"),
+        entries = [
+            _stream_entry("20260306_1514", "2026-03-06T15:14:00+05:30", "2-1"),
+            _stream_entry("20260307_0915", "2026-03-07T09:15:00+05:30", "2-2"),
         ]
         engine = _FailingEndEngine()
-        consumer = RedisSnapshotConsumer(
-            engine=engine,
-            topic="market:snapshot:v1",
-            client=_FakeRedis(payloads),
-            transport="pubsub",
-            poll_interval_sec=0.001,
-        )
+        consumer, _ = _make_consumer(engine, entries)
 
         consumed = consumer.start(max_events=2)
 
         self.assertEqual(consumed, 2)
         self.assertEqual(engine.starts, [date(2026, 3, 6), date(2026, 3, 7)])
         self.assertEqual(engine.evaluated_snapshot_ids, ["20260306_1514", "20260307_0915"])
+
+    def test_acks_each_processed_entry(self) -> None:
+        entries = [
+            _stream_entry("20260306_1002", "2026-03-06T10:02:00+05:30", "3-1"),
+            _stream_entry("20260306_1003", "2026-03-06T10:03:00+05:30", "3-2"),
+        ]
+        engine = _FakeEngine()
+        consumer, client = _make_consumer(engine, entries)
+        consumer.start(max_events=2)
+        self.assertEqual(sorted(client._acked), ["3-1", "3-2"])
 
 
 if __name__ == "__main__":
