@@ -4,12 +4,13 @@
    ───────────────────────────────────────────────────────────────────────── */
 
 /* ── Always hide old desktop cockpit chrome ──────────────────────────── */
+/* NOTE: the floating .ops-gear-btn is intentionally NOT hidden here — it is the
+   only entry point to the OPS / Run-Sim drawer in the live & replay terminal.
+   It is position:fixed z-index:210 so it floats above the LiveShell. */
 body.live-terminal .ticker-bar,
 body.live-terminal .t-status-bar,
 body.live-terminal .t-workspace,
-body.live-terminal .t-log-strip,
-body.live-terminal .ops-gear-btn,
-body.live-terminal .ops-gear-label { display: none !important; }
+body.live-terminal .t-log-strip { display: none !important; }
 
 /* ── App shell: let it scroll naturally (shell manages its own height) ── */
 body.live-terminal              { overflow: auto; height: auto; min-height: 100vh; }
