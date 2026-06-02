@@ -409,11 +409,16 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
                 "overrides_applied": {k: v for k, v in overrides.items() if k in _SAFE_OVERRIDE_KEYS},
             })
 
-        # Persist to Mongo sim collections so the Replay terminal can show it
+        # Persist to Mongo sim collections so the Replay terminal can show it.
+        # NOTE: snapshots/positions are persisted under "ops-sim-{job_id}" — the
+        # SAME id the replay UI queries. _run_engine set job["run_id"] to the
+        # engine-internal "sim-{job_id}" which has NO mongo data; overwrite it
+        # here so any UI consumer of job.run_id points at the persisted run.
         try:
             replay_url = _persist_sim_to_mongo(job_id, trade_date, snaps, trades)
             with _jobs_lock:
                 _jobs[job_id]["replay_url"] = replay_url
+                _jobs[job_id]["run_id"] = f"ops-sim-{job_id}"
         except Exception as exc:
             logger.warning("ops sim: failed to persist to mongo (non-fatal): %s", exc)
 

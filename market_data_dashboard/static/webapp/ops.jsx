@@ -567,13 +567,6 @@ function OpsPage() {
                 )}
               </>
             )}
-            {job?.status === 'done' && job?.run_id && (
-              <a href={`/app?mode=replay&kind=sim&run_id=${job.run_id}&date=${simDate}`}
-                 style={{fontFamily:'var(--f-mono)', fontSize:10.5, color:'var(--ink-3)',
-                   marginLeft:8, textDecoration:'underline', cursor:'pointer'}}>
-                View in Terminal
-              </a>
-            )}
             {job?.status === 'error' && (
               <span style={{fontFamily:'var(--f-mono)', fontSize:10.5, color:'var(--neg)', marginLeft:4}}>
                 ✗ {job.error}
