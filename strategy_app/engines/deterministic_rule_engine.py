@@ -184,6 +184,9 @@ class DeterministicRuleEngine(StrategyEngine):
         self._current_depth_ctx: Optional[DepthContext] = None
         # Entry pipeline v2 — strangler flag (default off; set STRATEGY_ENTRY_PIPELINE_V2=1 to enable).
         self._entry_pipeline_v2: bool = as_bool(os.getenv("STRATEGY_ENTRY_PIPELINE_V2", "0"))
+        # Most-recent v2 gate-cascade decision trace (one bar). Consumed by the sim
+        # replay + Terminal decision view. None until the first v2 evaluation.
+        self.last_entry_trace: Optional[dict[str, Any]] = None
         self._entry_config: EntryConfig = EntryConfig.from_env()
         try:
             self._entry_config.assert_consistency()
@@ -1068,7 +1071,34 @@ class DeterministicRuleEngine(StrategyEngine):
                 all_votes, ctx_.regime, policy_decision,
             )
 
-        return _evaluate_v2(ctx=ctx, gates=gates, build_signal_fn=_build)
+        signal = _evaluate_v2(ctx=ctx, gates=gates, build_signal_fn=_build)
+        # Capture the gate cascade for this bar so the sim/Terminal can show
+        # exactly how the trade was (or wasn't) picked. Cheap, structural — no
+        # behaviour change. Reason codes come straight from each GateResult.
+        ts = getattr(snap, "timestamp", None)
+        self.last_entry_trace = {
+            "decision_id": ctx.decision_id,
+            "snapshot_id": getattr(snap, "snapshot_id", None),
+            "timestamp": ts.isoformat() if ts is not None else None,
+            "final_outcome": "entered" if signal is not None else "no_trade",
+            "selected_direction": (ctx.direction.value if ctx.direction is not None else None),
+            "selected_strike": ctx.strike,
+            "selected_premium": ctx.premium,
+            "primary_blocker_gate": next(
+                (t.gate_name for t in reversed(ctx.trace) if t.outcome.value != "pass"),
+                None,
+            ),
+            "gates": [
+                {
+                    "gate": t.gate_name,
+                    "outcome": t.outcome.value,
+                    "reason": t.reason,
+                    "values": dict(t.values),
+                }
+                for t in ctx.trace
+            ],
+        }
+        return signal
 
     @staticmethod
     def _force_atm_strike(vote: StrategyVote, snap: SnapshotAccessor) -> StrategyVote:

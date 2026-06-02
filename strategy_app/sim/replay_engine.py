@@ -61,6 +61,7 @@ class ReplayResult(TypedDict):
     trades:         List[TradeRecord]
     exit_stack_name: str
     diag:           ReplayDiag
+    decision_traces: List[dict]   # per-bar v2 gate cascade (empty under v1)
 
 
 # ── Core replay ───────────────────────────────────────────────────────────────
@@ -130,6 +131,8 @@ def replay_day(
     }
 
     trades: List[TradeRecord] = []
+    decision_traces: List[dict] = []
+    _last_trace_id: Optional[str] = None
     current_entry: Optional[dict] = None
     total = len(snapshots)
 
@@ -145,6 +148,13 @@ def replay_day(
             if diag["first_error"] is None:
                 diag["first_error"] = f"{exc} :: {traceback.format_exc()[-400:]}"
             continue
+
+        # Capture the per-bar gate cascade BEFORE the signal-None short-circuit —
+        # the no_trade bars are exactly the ones we need to explain. None under v1.
+        _tr = getattr(engine, "last_entry_trace", None)
+        if _tr is not None and _tr.get("decision_id") != _last_trace_id:
+            _last_trace_id = _tr.get("decision_id")
+            decision_traces.append(_tr)
 
         if signal is None:
             continue
@@ -199,7 +209,12 @@ def replay_day(
     if progress_cb is not None:
         progress_cb(total, total)
 
-    return ReplayResult(trades=trades, exit_stack_name=exit_stack_name, diag=diag)
+    return ReplayResult(
+        trades=trades,
+        exit_stack_name=exit_stack_name,
+        diag=diag,
+        decision_traces=decision_traces,
+    )
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
