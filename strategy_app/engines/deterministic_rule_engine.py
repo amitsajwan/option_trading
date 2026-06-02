@@ -2249,6 +2249,11 @@ class DeterministicRuleEngine(StrategyEngine):
 
             direction_str = vote.direction.value
             selection = _smart_select(snap, direction_str, _Proxy(vote), regime=regime)
+            logger.info(
+                "strike_selection strategy=%s dir=%s atm=%s regime=%s → strike=%s mode=%s reason=%s",
+                vote.strategy_name, direction_str, snap.atm_strike, regime,
+                selection.strike, selection.mode, selection.reason,
+            )
             if selection.strike is not None and int(selection.strike) > 0:
                 ltp = snap.option_ltp(direction_str, int(selection.strike))
                 if ltp is not None and float(ltp) > 0:

@@ -91,7 +91,7 @@ _DEFAULTS: dict[str, Any] = {
     "OTM2_IV_CEIL": 91.0,
     "OTM2_REGIMES": "",
     "OTM2_MAX_BAR_HOUR": 0,
-    "OTM2_MIN_OI": 100_000.0,
+    "OTM2_MIN_OI": 75_000.0,
     # Tier 3
     "OTM3_CONFIDENCE": 0.75,
     "OTM3_IV_CEIL": 90.0,
