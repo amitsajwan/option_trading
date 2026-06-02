@@ -314,13 +314,13 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
             "STRATEGY_IV_EXTREME_PERCENTILE":  _live("STRATEGY_IV_EXTREME_PERCENTILE", "95.0"),
             "STRATEGY_PROFILE_ID":             _live("STRATEGY_PROFILE_ID",
                                                      "trader_master_ml_entry_consensus_v1"),
-            # Risk limits — critical: live runs 12 session trades, not the 6 default
+            # Risk limits — mirror live exactly (live currently runs 20 session trades)
             "RISK_MAX_CONSECUTIVE_LOSSES":     _live("RISK_MAX_CONSECUTIVE_LOSSES", "3"),
-            "RISK_MAX_SESSION_TRADES":         _live("RISK_MAX_SESSION_TRADES", "6"),
+            "RISK_MAX_SESSION_TRADES":         _live("RISK_MAX_SESSION_TRADES", "20"),
             "RISK_MAX_LOTS_PER_TRADE":         _live("RISK_MAX_LOTS_PER_TRADE", "5"),
             "RISK_CAPITAL_ALLOCATED":          _live("RISK_CAPITAL_ALLOCATED", "500000"),
             "RISK_PER_TRADE_PCT":              _live("RISK_PER_TRADE_PCT", "0.005"),
-            "STRATEGY_MIN_CONFIDENCE":         _live("STRATEGY_MIN_CONFIDENCE", "0.50") or "0.50",
+            "STRATEGY_MIN_CONFIDENCE":         _live("STRATEGY_MIN_CONFIDENCE", "") or _live("CONSENSUS_BYPASS_MIN_CONFIDENCE", "0.80") or "0.80",
             # Exit strategy mode — scalper (live default) or lottery (OTM high-conviction)
             "EXIT_STRATEGY_MODE":              _live("EXIT_STRATEGY_MODE", "scalper"),
             "LOTTERY_HARD_STOP_PCT":           _live("LOTTERY_HARD_STOP_PCT", "0.20"),
