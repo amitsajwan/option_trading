@@ -147,6 +147,7 @@ class PositionTracker:
         # max_hold, early_stop, …) must NOT run, or they cut winners the stack wants
         # to let run (this is exactly what defeated lottery mode: thesis_fail/stagnant
         # exited at +0.7% while the stack was holding for the fat tail).
+        # Scalper keeps legacy exits as safety backstops (premium_stop, stagnant_exit).
         _stack_active = (
             self._exit_stack is not None
             and not has_playbook
@@ -345,7 +346,7 @@ class PositionTracker:
 
     @staticmethod
     def _is_thesis_fail_exit(position: PositionContext) -> bool:
-        """5m entry thesis: if no run within ~2 bars and already red, exit."""
+        """Exit when trade showed no MFE and has reached fail_pnl loss threshold."""
         bars = int(position.thesis_fail_exit_bars or 0)
         if bars <= 0:
             return False
@@ -353,11 +354,7 @@ class PositionTracker:
             return False
         min_mfe = float(position.thesis_fail_min_mfe_pct or 0.02)
         fail_pnl = float(position.thesis_fail_pnl_pct or -0.08)
-        if position.mfe_pct < min_mfe and position.pnl_pct <= fail_pnl:
-            return True
-        if position.mfe_pct < min_mfe and position.pnl_pct < 0:
-            return True
-        return False
+        return position.mfe_pct < min_mfe and position.pnl_pct <= fail_pnl
 
     @staticmethod
     def _is_stagnant_exit(position: PositionContext) -> bool:
