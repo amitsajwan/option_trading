@@ -4,12 +4,13 @@
    ───────────────────────────────────────────────────────────────────────── */
 
 /* ── Always hide old desktop cockpit chrome ──────────────────────────── */
+/* ReplayMonitorDark migrated to m-shell — none of these class names appear
+   in live or replay mode anymore. The floating .ops-gear-btn is intentionally
+   kept visible (position:fixed, z-index:210 — OPS drawer entry point). */
 body.live-terminal .ticker-bar,
 body.live-terminal .t-status-bar,
 body.live-terminal .t-workspace,
-body.live-terminal .t-log-strip,
-body.live-terminal .ops-gear-btn,
-body.live-terminal .ops-gear-label { display: none !important; }
+body.live-terminal .t-log-strip { display: none !important; }
 
 /* ── App shell: let it scroll naturally (shell manages its own height) ── */
 body.live-terminal              { overflow: auto; height: auto; min-height: 100vh; }
