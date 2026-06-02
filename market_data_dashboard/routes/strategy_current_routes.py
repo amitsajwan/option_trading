@@ -95,7 +95,7 @@ class StrategyCurrentRouter:
 
     async def get_blocker_funnel(
         self,
-        mode: str = Query("replay", description="live | replay"),
+        mode: str = Query("live", description="live | replay"),
         kind: str | None = Query(None, description="optional namespace: live|oos|sim"),
         date: str = Query(..., description="YYYY-MM-DD"),
     ) -> dict:
@@ -109,7 +109,7 @@ class StrategyCurrentRouter:
 
     async def get_decisions(
         self,
-        mode: str = Query("replay", description="live | replay"),
+        mode: str = Query("live", description="live | replay"),
         kind: str | None = Query(None, description="optional namespace: live|oos|sim"),
         date: str = Query(..., description="YYYY-MM-DD"),
         limit: int = Query(500, ge=0, le=2000),
@@ -141,7 +141,7 @@ class StrategyCurrentRouter:
 
     async def get_session_heatmap(
         self,
-        mode: str = Query("replay", description="live | replay"),
+        mode: str = Query("live", description="live | replay"),
         date: str = Query(..., description="YYYY-MM-DD"),
     ) -> dict:
         """Compact per-minute session heatmap data for a given date.
