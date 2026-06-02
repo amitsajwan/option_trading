@@ -272,7 +272,8 @@ function TradeTable({ trades }) {
 
 // ── Main OPS component ────────────────────────────────────────────────────────
 function OpsPage() {
-  const today = new Date().toISOString().slice(0, 10);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const [simDate, setSimDate] = _s(todayStr);
 
   // Live config from server
   const [liveEnv, setLiveEnv] = _s({});
@@ -327,7 +328,7 @@ function OpsPage() {
     fetch('/api/ops/sim/today', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ date: today, overrides }),
+      body: JSON.stringify({ date: simDate, overrides }),
     })
       .then(r => r.json())
       .then(data => {
@@ -394,7 +395,12 @@ function OpsPage() {
         <div className="ops-config">
           <div className="ops-config-header">
             <span className="ops-config-title">Sim Config</span>
-            <span className="ops-config-date">{today}</span>
+            <input type="date" className="ops-config-date"
+              value={simDate} max={todayStr}
+              onChange={e => { if (e.target.value) setSimDate(e.target.value); }}
+              style={{cursor:'pointer', fontFamily:'var(--f-mono)', fontSize:11,
+                color:'var(--ink-2)', background:'var(--paper)', border:'1px solid var(--line-1)',
+                borderRadius:'var(--r-2)', padding:'3px 8px'}} />
             {changedKeys.length > 0 && (
               <span className="ops-changes-badge">{changedKeys.length} change{changedKeys.length > 1 ? 's' : ''} from live</span>
             )}
@@ -581,7 +587,7 @@ function OpsPage() {
 
             <div className="ops-result-panel">
               <div className="ops-result-header">
-                <span className="ops-result-title actual">Actual — {today}</span>
+                <span className="ops-result-title actual">Actual — {simDate}</span>
                 <SummaryBar trades={actualTrades} isActual />
               </div>
               <TradeTable trades={actualTrades} />
