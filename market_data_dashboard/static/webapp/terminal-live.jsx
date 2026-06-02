@@ -1566,6 +1566,7 @@ function MobileLiveShell({
   const [now, setNow] = _s(Date.now());
   const inspectorTrade = selectedTrade || (trades.length ? trades[0] : null);
   const [showInspector, setShowInspector] = _s(false);
+  const isMobile = _useIsMobile();
 
   // Tick: bump freshness whenever the upstream upToIdx advances.
   _e(() => { setLastTickAt(Date.now()); }, [upToIdx]);
@@ -1584,10 +1585,6 @@ function MobileLiveShell({
   const stress = absPnl >= 0.02 ? 'extreme' : absPnl >= 0.01 ? 'high' : 'normal';
   const pnlCls = sessionPnl > 0.0005 ? 'pos' : sessionPnl < -0.0005 ? 'neg' : 'flat';
   const pnlGlyph = sessionPnl > 0.0005 ? '▲' : sessionPnl < -0.0005 ? '▼' : '◆';
-
-  // Chart container — only mount when chart tab is visible to save memory.
-  // (TermChart auto-resizes via ResizeObserver, so toggling visibility is fine.)
-  const chartHostRef = _r(null);
 
   // Pull-to-refresh — simple touch-driven trigger that re-fetches via fetch() of
   // /api/strategy/current/state. Throttled so the user can't hammer it.
@@ -1620,7 +1617,6 @@ function MobileLiveShell({
     }
   }, [ptrState]);
 
-  const isMobile = _useIsMobile();
   const tradeCount = trades.length;
   const signalCount = signals.length;
 
@@ -1683,12 +1679,12 @@ function MobileLiveShell({
             <button className="m-tab" data-tab="more"  aria-pressed={tab==='more'}  onClick={() => setTab('more')}>More</button>
           </nav>
           <main className="m-body"
-              onTouchStart={onTouchStart}
-              onTouchMove={onTouchMove}
-              onTouchEnd={onTouchEnd}>
-          <div className={`m-ptr ${ptrState !== 'idle' ? ptrState : ''}`}>
-            {ptrState === 'pulling' ? 'Release to refresh' : ptrState === 'refreshing' ? 'Refreshing…' : ''}
-          </div>
+                onTouchStart={onTouchStart}
+                onTouchMove={onTouchMove}
+                onTouchEnd={onTouchEnd}>
+            <div className={`m-ptr ${ptrState !== 'idle' ? ptrState : ''}`}>
+              {ptrState === 'pulling' ? 'Release to refresh' : ptrState === 'refreshing' ? 'Refreshing…' : ''}
+            </div>
 
           {/* Tape tab */}
           <div className={tab === 'tape' ? '' : 'm-tab-hidden'}>
@@ -1807,7 +1803,7 @@ function MobileLiveShell({
               />
             </div>
             {/* Inspector panel — slides in when a trade is selected */}
-            {inspectorTrade && (
+            {showInspector && inspectorTrade && (
               <div className="m-right-inspector">
                 <div className="m-right-inspector-head">
                   <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',letterSpacing:'0.12em',textTransform:'uppercase'}}>
@@ -1825,15 +1821,17 @@ function MobileLiveShell({
 
       </div>{/* end m-split */}
 
-      {/* ── Inspector bottom sheet (tap a trade card) ────────────────────── */}
-      <MobileBottomSheet
-        open={showInspector && !!inspectorTrade}
-        title={`Trade · ${inspectorTrade?.id || ''}`}
-        onClose={() => setShowInspector(false)}>
-        {inspectorTrade && (
-          <TradeInspector session={session} trade={inspectorTrade}/>
-        )}
-      </MobileBottomSheet>
+      {/* ── Inspector bottom sheet — phone only; desktop uses right-pane panel */}
+      {isMobile && (
+        <MobileBottomSheet
+          open={showInspector && !!inspectorTrade}
+          title={`Trade · ${inspectorTrade?.id || ''}`}
+          onClose={() => setShowInspector(false)}>
+          {inspectorTrade && (
+            <TradeInspector session={session} trade={inspectorTrade}/>
+          )}
+        </MobileBottomSheet>
+      )}
 
       {/* ── Ops / mode-switch bottom sheet ───────────────────────────────── */}
       <MobileBottomSheet

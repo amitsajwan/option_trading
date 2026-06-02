@@ -50,7 +50,7 @@ body.live-terminal #page        { height: auto; overflow: visible; }
 }
 .m-header-row2 {
   display: grid;
-  grid-template-columns: 1fr auto auto auto auto;
+  grid-template-columns: 1fr auto auto auto;
   align-items: center;
   gap: 10px;
   padding: 0 10px 0 16px;
