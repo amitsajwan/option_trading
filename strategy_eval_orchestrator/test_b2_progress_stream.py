@@ -124,5 +124,23 @@ class TestDashboardProgressHistory(unittest.TestCase):
         self.assertEqual(svc._progress_stream("abc"), "stream:eval:progress:abc")
 
 
+class TestProgressStreamExpiry(unittest.TestCase):
+    def test_ttl_constant_is_24h(self):
+        from strategy_eval_orchestrator.main import _PROGRESS_STREAM_TTL_SECS
+        self.assertEqual(_PROGRESS_STREAM_TTL_SECS, 86400)
+
+    def test_expire_called_on_stream_key(self):
+        from strategy_eval_orchestrator.main import _expire_progress_stream
+        client = MagicMock()
+        _expire_progress_stream(client, "run-77")
+        client.expire.assert_called_once_with("stream:eval:progress:run-77", 86400)
+
+    def test_expire_swallows_redis_errors(self):
+        from strategy_eval_orchestrator.main import _expire_progress_stream
+        client = MagicMock()
+        client.expire.side_effect = Exception("connection lost")
+        _expire_progress_stream(client, "run-77")  # must not raise
+
+
 if __name__ == "__main__":
     unittest.main()

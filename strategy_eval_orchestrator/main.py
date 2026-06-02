@@ -118,6 +118,7 @@ def _progress_stream(run_id: str) -> str:
 
 
 _PROGRESS_STREAM_MAXLEN = 200
+_PROGRESS_STREAM_TTL_SECS = 86400  # 24 h — allows late UI inspection after run ends
 
 
 def _command_channel() -> str:
@@ -156,6 +157,13 @@ def _write_replay_status_key(redis_client: redis.Redis, payload: dict[str, Any])
     try:
         redis_client.set(REPLAY_STATUS_KEY, json.dumps(payload, ensure_ascii=False, default=str))
         redis_client.set(HISTORICAL_READY_KEY, "1" if payload.get("data_ready") else "0")
+    except Exception:
+        pass
+
+
+def _expire_progress_stream(redis_client: redis.Redis, run_id: str) -> None:
+    try:
+        redis_client.expire(_progress_stream(run_id), _PROGRESS_STREAM_TTL_SECS)
     except Exception:
         pass
 
@@ -412,6 +420,7 @@ def _process_command(redis_client: redis.Redis, coll: Any, command: dict[str, An
             run_id,
             {"event_type": "run_failed", "message": "Replay failed", "error": str(exc)},
         )
+        _expire_progress_stream(redis_client, run_id)
         return
 
     status = str(result.get("status") or "complete")
@@ -443,10 +452,12 @@ def _process_command(redis_client: redis.Redis, coll: Any, command: dict[str, An
                 "message": "Evaluation data refreshed",
             },
         )
+        _expire_progress_stream(redis_client, run_id)
         return
 
     _update_run(coll, run_id, status="failed", ended_at=_utc_now(), error="Unknown replay status")
     _publish_run_event(redis_client, run_id, {"event_type": "run_failed", "message": "Unknown replay status"})
+    _expire_progress_stream(redis_client, run_id)
 
 
 def run_loop() -> int:
