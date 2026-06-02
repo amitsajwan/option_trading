@@ -3,14 +3,15 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Strategy Monitor · NIFTY 50</title>
+<title>Strategy Monitor · BANKNIFTY · LIVE</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
-<link rel="stylesheet" href="tokens.css?v=3" />
-<link rel="stylesheet" href="terminal.css?v=3" />
+<link rel="stylesheet" href="tokens.css?v=4" />
+<link rel="stylesheet" href="terminal.css?v=4" />
+<link rel="stylesheet" href="terminal-mobile.css?v=4" />
 
 <template id="__bundler_thumbnail">
   <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
@@ -70,6 +71,58 @@
     .mode-seg button { padding: 4px 8px; font-size: 11px; }
   }
 
+  /* OPS gear — fixed floating launcher, visible in EVERY mode (incl. live-terminal,
+     which hides .topnav). Pinned bottom-right above all chrome. */
+  .ops-gear-btn {
+    position: fixed; right: 18px; bottom: 18px; z-index: 190;
+    appearance: none; width: 44px; height: 44px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: #16181d; color: #c8ccd4;
+    display: grid; place-items: center; cursor: pointer; font-size: 19px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,0,0,0.2);
+    transition: transform .15s, color .15s, background .15s, box-shadow .15s;
+  }
+  .ops-gear-btn:hover {
+    color: #fff; background: #1f222a; transform: translateY(-1px) rotate(30deg);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+  }
+  .ops-gear-btn.active { color: #fff; background: #2a2e38; transform: rotate(90deg); }
+  .ops-gear-label {
+    position: fixed; right: 70px; bottom: 30px; z-index: 190;
+    font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.04em;
+    color: #c8ccd4; background: #16181d; padding: 3px 8px; border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.12); pointer-events: none;
+    opacity: 0; transform: translateX(6px); transition: opacity .15s, transform .15s;
+    white-space: nowrap;
+  }
+  .ops-gear-btn:hover + .ops-gear-label { opacity: 1; transform: translateX(0); }
+
+  .ops-drawer-overlay {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,0); pointer-events: none;
+    transition: background .2s;
+  }
+  .ops-drawer-overlay.open { background: rgba(0,0,0,0.25); pointer-events: all; }
+  .ops-drawer {
+    position: absolute; top: 0; right: 0; bottom: 0; width: min(820px, 95vw);
+    background: var(--paper); border-left: 1px solid var(--line-1);
+    transform: translateX(100%); transition: transform .25s cubic-bezier(.4,0,.2,1);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .ops-drawer.open { transform: translateX(0); }
+  .ops-drawer-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; border-bottom: 1px solid var(--line-1);
+    flex-shrink: 0;
+  }
+  .ops-drawer-title { font-family: var(--f-mono); font-size: 12px; font-weight: 600;
+    letter-spacing: 0.04em; color: var(--ink); flex: 1; }
+  .ops-drawer-close { appearance: none; border: 0; background: transparent;
+    color: var(--ink-3); font-size: 18px; cursor: pointer; padding: 2px 6px;
+    border-radius: var(--r-2); line-height: 1; }
+  .ops-drawer-close:hover { background: var(--paper-2); color: var(--ink); }
+  .ops-drawer-body { flex: 1; overflow-y: auto; }
+
   /* Tweaks-panel-specific  */
   .kill-banner {
     background: var(--neg-wash); color: var(--neg); border: 1px solid rgba(194,62,47,0.3);
@@ -98,7 +151,25 @@
     <span class="user mobile-hide"><span class="status-dot"></span>ops · amitsajwan</span>
   </nav>
 
+  <!-- OPS launcher — fixed floating, outside topnav so it survives live-terminal mode -->
+  <button id="ops-gear-btn" class="ops-gear-btn" title="Daily Ops — simulate & configure">⚙</button>
+  <span class="ops-gear-label">Daily Ops</span>
+
   <div id="kill-banner-slot"></div>
+
+  <!-- OPS drawer — rendered by React, toggled by the ⚙ gear button -->
+  <div id="ops-drawer-overlay" class="ops-drawer-overlay">
+    <div id="ops-drawer" class="ops-drawer">
+      <div class="ops-drawer-header">
+        <span class="ops-drawer-title">⚙ Daily Ops</span>
+        <button class="ops-drawer-close" id="ops-drawer-close">✕</button>
+      </div>
+      <div class="ops-drawer-body" id="ops-drawer-body">
+        <!-- OpsPage mounts here -->
+      </div>
+    </div>
+  </div>
+
   <main id="page" class="page">
     <div class="loading-shell">loading…</div>
   </main>
@@ -113,16 +184,17 @@
 <script src="core.js?v=6"></script>
 <script type="text/babel" src="components.jsx?v=12"></script>
 <script type="text/babel" src="tweaks-panel.jsx?v=5"></script>
-<script type="text/babel" src="terminal-live.jsx?v=23"></script>
+<script type="text/babel" src="terminal-live.jsx?v=27"></script>
 <script type="text/babel" src="eval.jsx?v=16"></script>
 <script type="text/babel" src="pipeline.jsx?v=1"></script>
+<script type="text/babel" src="ops.jsx?v=1"></script>
 
 <script type="text/babel">
   const { useState, useEffect } = React;
 
   // Persisted tweak defaults
   const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-    "mode": "replay",
+    "mode": "live",
     "density": "compact",
     "speedPreset": 8,
     "replayAuto": true,
@@ -185,6 +257,17 @@
       });
     }, [mode]);
 
+    // Sync URL and page title with current mode.
+    // When switching to LIVE the URL is cleaned (removes stale replay params).
+    useEffect(() => {
+      const modeLabels = { live: 'LIVE', replay: 'REPLAY', eval: 'EVAL', pipeline: 'PIPELINE' };
+      document.title = `Strategy Monitor · BANKNIFTY · ${modeLabels[mode] || mode.toUpperCase()}`;
+      if (mode === 'live') {
+        // Clear any leftover replay/sim query params
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    }, [mode]);
+
     useEffect(() => {
       const ind = document.getElementById('kill-indicator');
       if (ind) ind.style.display = killed ? 'inline-flex' : 'none';
@@ -201,6 +284,58 @@
         slot.innerHTML = '';
       }
     }, [killed]);
+
+    // ── OPS drawer ──────────────────────────────────────────────────────────
+    // OpsPage is mounted lazily on first open so Babel has time to compile
+    // ops.jsx before we try to use window.OpsPage.
+    useEffect(() => {
+      const overlay  = document.getElementById('ops-drawer-overlay');
+      const drawer   = document.getElementById('ops-drawer');
+      const gearBtn  = document.getElementById('ops-gear-btn');
+      const closeBtn = document.getElementById('ops-drawer-close');
+      if (!overlay || !drawer || !gearBtn) return;
+
+      let mounted = false;
+
+      const openDrawer = () => {
+        // Mount OpsPage the first time the drawer is opened
+        if (!mounted) {
+          const body = document.getElementById('ops-drawer-body');
+          if (body && window.OpsPage) {
+            ReactDOM.createRoot(body).render(React.createElement(window.OpsPage));
+            mounted = true;
+          } else {
+            body.innerHTML = '<div style="padding:20px;font-family:monospace;font-size:12px;color:#888">Loading ops module…</div>';
+            // Retry once after 500ms in case Babel hasn't finished
+            setTimeout(() => {
+              if (!mounted && body && window.OpsPage) {
+                body.innerHTML = '';
+                ReactDOM.createRoot(body).render(React.createElement(window.OpsPage));
+                mounted = true;
+              }
+            }, 500);
+          }
+        }
+        overlay.classList.add('open');
+        drawer.classList.add('open');
+        gearBtn.classList.add('active');
+      };
+
+      const closeDrawer = () => {
+        overlay.classList.remove('open');
+        drawer.classList.remove('open');
+        gearBtn.classList.remove('active');
+      };
+
+      const toggle = () => overlay.classList.contains('open') ? closeDrawer() : openDrawer();
+
+      gearBtn.onclick    = toggle;
+      if (closeBtn) closeBtn.onclick = closeDrawer;
+      overlay.onclick    = (e) => { if (e.target === overlay) closeDrawer(); };
+
+      return () => { gearBtn.onclick = null; };
+    }, []);
+    // ────────────────────────────────────────────────────────────────────────
 
     // Tweaks are managed by TweaksPanel itself (protocol + open state).
     // We only need to track mode/density/etc. state here.

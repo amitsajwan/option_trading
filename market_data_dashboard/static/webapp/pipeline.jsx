@@ -476,8 +476,8 @@ function DepthMiniWidget({ runId }) {
                 </span>
               </div>
             ))}
-            <div style={{ fontFamily: 'var(--f-mono)', fontSize: 9.5, color: data.depth_aligned ? 'var(--pos)' : 'var(--neg)', marginTop: 1 }}>
-              {data.depth_aligned ? '✓ aligned' : '✗ opposed'}
+            <div style={{ fontFamily: 'var(--f-mono)', fontSize: 9.5, color: data.depth_aligned ? 'var(--neg)' : 'var(--pos)', marginTop: 1 }}>
+              {(data.depth_dominant || (data.depth_aligned ? 'PE' : 'CE'))} dominant
             </div>
           </div>
         )}

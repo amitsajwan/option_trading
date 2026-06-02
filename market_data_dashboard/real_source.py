@@ -830,6 +830,101 @@ def _latest_run_id_for_date(db: Any, trade_date: str) -> Optional[str]:
     return None
 
 
+def _open_position_to_live_trade(
+    position_id: str,
+    open_pos: Dict[str, Any],
+    manage_pos: Optional[Dict[str, Any]],
+    open_doc: Dict[str, Any],
+    signal: Optional[MonitorSignal],
+    candle_ts_sorted: List[int],
+    candles: List[MonitorCandle],
+) -> Optional[MonitorTrade]:
+    """Build a MonitorTrade stub for a live position that is still open (no POSITION_CLOSE yet).
+
+    Uses the most recent POSITION_MANAGE snapshot for current premium and pnl_pct so the
+    tape shows a live P&L row while the trade is in-flight. exitReason is left empty to
+    signal the trade is still active.
+    """
+    entry_ts = _ts_ms(open_pos.get("timestamp") or open_doc.get("timestamp"))
+    if entry_ts is None:
+        return None
+
+    entry_idx = _nearest_candle_idx(candle_ts_sorted, entry_ts)
+    entry_px = _safe_float(open_pos.get("entry_premium"), fallback=None)
+    entry_px = float(entry_px) if entry_px is not None else candles[entry_idx].c
+
+    cur = manage_pos if manage_pos is not None else open_pos
+    exit_ts = _ts_ms(cur.get("timestamp"))
+    exit_idx = _nearest_candle_idx(candle_ts_sorted, exit_ts) if exit_ts is not None else len(candles) - 1
+    exit_px = _safe_float(cur.get("current_premium"), fallback=None)
+    exit_px = float(exit_px) if exit_px is not None else candles[exit_idx].c
+    pnl_pct = float(_safe_float(cur.get("pnl_pct"), fallback=0.0) or 0.0)
+
+    raw_direction = str(open_pos.get("direction") or "LONG").strip().upper()
+    direction = _option_dir_to_bias(raw_direction)
+    option_type = raw_direction if raw_direction in ("CE", "PE") else None
+    position_side = str(open_pos.get("position_side") or "").strip().upper() or None
+    strat = _strategy_from_open_position(open_pos)
+    strike = _safe_float(open_pos.get("strike"), fallback=None)
+    strike = float(strike) if strike is not None else None
+
+    if signal is None:
+        signal = MonitorSignal(
+            t=candles[entry_idx].t,
+            idx=entry_idx,
+            strat=strat,
+            dir=direction,
+            conf=0.0,
+            fired=True,
+            traded=True,
+            reason="",
+            detail="",
+            metrics=MonitorSignalMetrics(
+                entry_prob=0.0, trade_prob=0.0, up_prob=0.0,
+                ce_prob=0.0, pe_prob=0.0, recipe_prob=0.0, recipe_margin=0.0,
+            ),
+            regime=str(open_pos.get("regime") or "UNKNOWN"),
+        )
+
+    stop_price = _safe_float(open_pos.get("stop_price"), fallback=None)
+    stop_price = float(stop_price) if stop_price is not None else None
+    stop_loss_pct = _safe_float(open_pos.get("stop_loss_pct"), fallback=None)
+    stop_loss_pct = float(stop_loss_pct) if stop_loss_pct is not None else None
+    target_pct = _safe_float(open_pos.get("target_pct"), fallback=None)
+    target_pct = float(target_pct) if target_pct is not None else None
+    try:
+        max_hold_bars = int(open_pos["max_hold_bars"]) if open_pos.get("max_hold_bars") is not None else None
+    except (TypeError, ValueError):
+        max_hold_bars = None
+
+    return MonitorTrade(
+        id=position_id,
+        t=entry_ts,
+        tLabel=candles[entry_idx].label if entry_idx < len(candles) else "",
+        strat=strat,
+        dir=direction,
+        qty=int(_safe_float(open_pos.get("lots") or open_pos.get("qty"), fallback=1) or 1),
+        entry=round(entry_px, 2),
+        exit=round(exit_px, 2),
+        entryIdx=entry_idx,
+        exitIdx=exit_idx,
+        pnlPct=pnl_pct,
+        hold="OPEN",
+        signal=signal,
+        entryReason=signal.reason,
+        entryDetail=signal.detail,
+        exitReason="",
+        strike=strike,
+        optionType=option_type,
+        positionSide=position_side,
+        stopPrice=stop_price,
+        stopBasis=_stop_basis(open_pos),
+        stopLossPct=stop_loss_pct,
+        targetPct=target_pct,
+        maxHoldBars=max_hold_bars,
+    )
+
+
 def _build_session(
     db: Any,
     trade_date: str,
@@ -839,6 +934,8 @@ def _build_session(
     coll_positions: str,
     coll_traces: str,
     run_id: Optional[str] = None,
+    include_open_positions: bool = False,
+    engine_hint: Optional[str] = None,
 ) -> MonitorSession:
     latest_run_id = run_id or _latest_run_id_for_date(db, trade_date)
     date_q: Dict[str, Any] = {"trade_date_ist": trade_date}
@@ -909,6 +1006,10 @@ def _build_session(
                 slot["signal_id"] = str(doc.get("signal_id") or payload_pos.get("signal_id") or "").strip()
             if detected_run_id is None:
                 detected_run_id = str(doc.get("run_id") or "").strip() or None
+        elif event == "POSITION_MANAGE":
+            # Keep the most recent manage snapshot so live open positions show current pnl/premium.
+            slot["last_manage"] = payload_pos
+            slot["last_manage_doc"] = doc
 
     # signal_ids that produced a fully closed position
     traded_signal_ids: set = {
@@ -1114,6 +1215,25 @@ def _build_session(
         ))
     trades, alerts = _enforce_replay_integrity(trades, alerts)
 
+    if include_open_positions:
+        trades = list(trades)
+        for pid, docs in position_map.items():
+            if not isinstance(docs.get("open"), dict) or isinstance(docs.get("close"), dict):
+                continue
+            sid = docs.get("signal_id", "")
+            open_trade = _open_position_to_live_trade(
+                pid,
+                docs["open"],
+                docs.get("last_manage"),
+                docs.get("open_doc") or {},
+                signal_by_id.get(sid) if sid else None,
+                candle_ts_sorted,
+                candles,
+            )
+            if open_trade is not None:
+                trades.append(open_trade)
+        trades.sort(key=lambda t: t.entryIdx)
+
     return MonitorSession(
         date=trade_date,
         instrument=instrument,
@@ -1123,6 +1243,7 @@ def _build_session(
         alerts=alerts,
         basePrice=candles[0].c,
         runId=detected_run_id,
+        engine=engine_hint,
     )
 
 
@@ -1204,7 +1325,25 @@ class LiveMongoSource:
             self._candle_ts_sorted = [c.t for c in self._session.candles]
         return self._session
 
+    def _read_engine_hint(self) -> Optional[str]:
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            run_dir = (
+                os.getenv("STRATEGY_RUN_DIR_LIVE")
+                or os.getenv("STRATEGY_RUN_DIR")
+                or "/app/.run/strategy_app"
+            )
+            rc_path = _Path(run_dir) / "runtime_config.json"
+            if rc_path.exists():
+                rc = _json.loads(rc_path.read_text(encoding="utf-8"))
+                return str(rc.get("engine") or "").strip() or None
+        except Exception:
+            pass
+        return None
+
     def _load_session_with_premarket_fallback(self) -> MonitorSession:
+        engine_hint = self._read_engine_hint()
         requested = self._trade_date
         try:
             return _build_session(
@@ -1216,6 +1355,8 @@ class LiveMongoSource:
                 self._coll_positions,
                 self._coll_traces,
                 run_id=self._run_id,
+                include_open_positions=True,
+                engine_hint=engine_hint,
             )
         except ValueError as exc:
             if "No snapshot data" not in str(exc) or requested != _today_ist():
@@ -1235,6 +1376,8 @@ class LiveMongoSource:
                 self._coll_positions,
                 self._coll_traces,
                 run_id=self._run_id,
+                include_open_positions=True,
+                engine_hint=engine_hint,
             )
             today = _today_ist()
             session.alerts.insert(

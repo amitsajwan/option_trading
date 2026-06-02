@@ -28,6 +28,12 @@
   --accent-ink: #F6F4EF;
 
   --r-1: 2px; --r-2: 4px; --r-3: 6px; --r-4: 8px;
+
+  /* Responsive breakpoints + touch target floor (mobile-first) */
+  --bp-sm: 640px;
+  --bp-md: 900px;
+  --bp-lg: 1200px;
+  --touch: 44px;
 }
 
 /* ── Brain status colours ─────────────────────────────────────────────── */

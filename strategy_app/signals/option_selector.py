@@ -76,26 +76,31 @@ class _TierConfig:
 
 
 # Conservative production defaults — tune via env vars, not code.
+# NOTE: *_IV_CEIL is compared against snap.iv_percentile (0–100), so these MUST
+# be percentile thresholds, not absolute IV. They were previously 30–60 (read
+# like absolute IV%), which rejected ALL OTM tiers whenever IV percentile > 60
+# — i.e. most active days — forcing every trade to ATM. Corrected to percentile
+# ceilings: deeper tiers gated slightly tighter, but all reachable in normal IV.
 _DEFAULTS: dict[str, Any] = {
     "IV_REJECT_PCTILE": 90.0,
     # Tier 1 entry gate (also gate for ALL OTM)
     "OTM_CONFIDENCE": 0.55,
-    "OTM_IV_CEIL": 60.0,
+    "OTM_IV_CEIL": 92.0,
     # Tier 2
     "OTM2_CONFIDENCE": 0.65,
-    "OTM2_IV_CEIL": 50.0,
+    "OTM2_IV_CEIL": 91.0,
     "OTM2_REGIMES": "",
     "OTM2_MAX_BAR_HOUR": 0,
     "OTM2_MIN_OI": 100_000.0,
     # Tier 3
     "OTM3_CONFIDENCE": 0.75,
-    "OTM3_IV_CEIL": 40.0,
+    "OTM3_IV_CEIL": 90.0,
     "OTM3_REGIMES": "BREAKOUT,TRENDING",
     "OTM3_MAX_BAR_HOUR": 12,
     "OTM3_MIN_OI": 75_000.0,
     # Tier 4
     "OTM4_CONFIDENCE": 0.85,
-    "OTM4_IV_CEIL": 30.0,
+    "OTM4_IV_CEIL": 89.0,
     "OTM4_REGIMES": "BREAKOUT",
     "OTM4_MAX_BAR_HOUR": 11,
     "OTM4_MIN_OI": 50_000.0,
@@ -118,10 +123,20 @@ def _env_regimes(name: str, default: str) -> frozenset:
 
 
 def _build_otm_tiers() -> list[_TierConfig]:
-    """Return enabled OTM tiers sorted deepest-first."""
+    """Return enabled OTM tiers sorted deepest-first.
+
+    The max depth is bounded by STRATEGY_STRIKE_MAX_OTM_STEPS (default 4).
+    Tiers 5–8 use the same *_ENABLED / *_CONFIDENCE / *_IV_CEIL / *_REGIMES env
+    pattern as tiers 2–4; add SMART_STRIKE_OTM5_ENABLED=1 etc. to activate them.
+    Defaults for tiers 5–8 follow the same progression (higher confidence + tighter
+    IV ceilings than the inner tiers) so they are off until explicitly configured.
+    """
+    max_steps = int(_env_float("STRATEGY_STRIKE_MAX_OTM_STEPS", 4.0))
+    max_steps = max(1, min(max_steps, 8))   # safety: clamp to [1, 8]
+
     tiers: list[_TierConfig] = []
 
-    # Tier 1 is always included when smart strike is on (no separate _ENABLED flag)
+    # Tier 1 is always included (no separate _ENABLED flag)
     tiers.append(_TierConfig(
         n=1,
         conf_min=_env_float("SMART_STRIKE_OTM_CONFIDENCE", _DEFAULTS["OTM_CONFIDENCE"]),
@@ -131,17 +146,36 @@ def _build_otm_tiers() -> list[_TierConfig]:
         min_oi=0.0,
     ))
 
-    for n in (2, 3, 4):
+    # Tiers 2–8: each requires explicit _ENABLED=1 AND must be within max_steps.
+    # Tiers 2–4 have explicit _DEFAULTS; 5–8 use a linear extrapolation so they
+    # have sane (very strict) defaults if activated without fine-tuning.
+    for n in range(2, max_steps + 1):
         tag = f"OTM{n}"
         if os.getenv(f"SMART_STRIKE_{tag}_ENABLED", "").strip() != "1":
             continue
+
+        if n <= 4:
+            # Tier has explicit defaults
+            conf_default  = _DEFAULTS[f"{tag}_CONFIDENCE"]
+            iv_ceil_def   = _DEFAULTS[f"{tag}_IV_CEIL"]
+            regimes_def   = _DEFAULTS[f"{tag}_REGIMES"]
+            max_hour_def  = _DEFAULTS[f"{tag}_MAX_BAR_HOUR"]
+            min_oi_def    = _DEFAULTS[f"{tag}_MIN_OI"]
+        else:
+            # Tier 5–8: conservative extrapolated defaults (conf rises, IV ceil tightens)
+            conf_default  = min(0.97, _DEFAULTS["OTM4_CONFIDENCE"] + 0.02 * (n - 4))
+            iv_ceil_def   = max(80.0, _DEFAULTS["OTM4_IV_CEIL"] - 2.0 * (n - 4))
+            regimes_def   = "BREAKOUT"
+            max_hour_def  = 10
+            min_oi_def    = max(20_000.0, _DEFAULTS["OTM4_MIN_OI"] - 5_000.0 * (n - 4))
+
         tiers.append(_TierConfig(
             n=n,
-            conf_min=_env_float(f"SMART_STRIKE_{tag}_CONFIDENCE", _DEFAULTS[f"{tag}_CONFIDENCE"]),
-            iv_ceil=_env_float(f"SMART_STRIKE_{tag}_IV_CEIL", _DEFAULTS[f"{tag}_IV_CEIL"]),
-            regimes=_env_regimes(f"SMART_STRIKE_{tag}_REGIMES", _DEFAULTS[f"{tag}_REGIMES"]),
-            max_hour=int(_env_float(f"SMART_STRIKE_{tag}_MAX_BAR_HOUR", _DEFAULTS[f"{tag}_MAX_BAR_HOUR"])),
-            min_oi=_env_float(f"SMART_STRIKE_{tag}_MIN_OI", _DEFAULTS[f"{tag}_MIN_OI"]),
+            conf_min=_env_float(f"SMART_STRIKE_{tag}_CONFIDENCE", conf_default),
+            iv_ceil=_env_float(f"SMART_STRIKE_{tag}_IV_CEIL", iv_ceil_def),
+            regimes=_env_regimes(f"SMART_STRIKE_{tag}_REGIMES", regimes_def),
+            max_hour=int(_env_float(f"SMART_STRIKE_{tag}_MAX_BAR_HOUR", max_hour_def)),
+            min_oi=_env_float(f"SMART_STRIKE_{tag}_MIN_OI", min_oi_def),
         ))
 
     # Deepest tier first so we return the best possible strike

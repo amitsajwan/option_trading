@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ..contracts import Direction, StrategyVote
+from ..market.regime import Regime, RegimeSignal
 from ..market.snapshot_accessor import SnapshotAccessor
 def _env_float(name: str, default: float) -> float:
     raw = os.getenv(name, "").strip()
@@ -44,9 +45,16 @@ def resolve_direction_consensus(
     shadow_score: float,
     ml_direction_hint: Optional[Direction] = None,
     ml_ce_prob: Optional[float] = None,
+    regime_signal: Optional[RegimeSignal] = None,
 ) -> DirectionConsensusResult:
-    """Score CE vs PE from multiple sources; veto if margin below threshold."""
-    min_margin = _env_float("DIRECTION_CONSENSUS_MIN_MARGIN", 1.25)
+    """Score CE vs PE from multiple sources; veto if margin below threshold or contra-regime."""
+    regime_name = regime_signal.regime.value if regime_signal is not None else ""
+    # E3-S2: SIDEWAYS regime requires a higher direction margin — flat markets
+    # produce noisy signals.  DIRECTION_MIN_MARGIN_SIDEWAYS (default 2.0) overrides
+    # the global min_margin when the classifier says SIDEWAYS.
+    _sideways_margin = _env_float("DIRECTION_MIN_MARGIN_SIDEWAYS", 2.0)
+    _global_margin = _env_float("DIRECTION_CONSENSUS_MIN_MARGIN", 1.25)
+    min_margin = _sideways_margin if regime_name == "SIDEWAYS" else _global_margin
     ml_weight = _env_float("DIRECTION_CONSENSUS_ML_WEIGHT", 0.35)
     rule_weight = _env_float("DIRECTION_CONSENSUS_RULE_WEIGHT", 1.0)
     shadow_weight = _env_float("DIRECTION_CONSENSUS_SHADOW_WEIGHT", 1.0)
@@ -125,6 +133,37 @@ def resolve_direction_consensus(
             sources=sources,
         )
     direction = Direction.CE if ce_score > pe_score else Direction.PE
+
+    # Regime-direction conflict veto.
+    # If the regime classifier says BREAKOUT or PANIC with a clear bear/bull lean,
+    # block a trade whose direction contradicts that lean.  A CE entry during a
+    # BREAKOUT_BEAR (bear_score > 0, zero bull evidence) is a signal-vs-regime
+    # conflict: the direction signals caught a brief bounce but the structural
+    # read is bearish.  Require the caller to pass regime_signal to enable this.
+    if regime_signal is not None:
+        ev = regime_signal.evidence if isinstance(regime_signal.evidence, dict) else {}
+        bear_score = float(ev.get("bear_score") or 0.0)
+        bull_score = float(ev.get("bull_score") or 0.0)
+        is_breakout = regime_signal.regime == Regime.BREAKOUT
+        is_panic    = regime_signal.regime == Regime.PANIC
+        contra_ce = direction == Direction.CE and (
+            (is_breakout and bear_score > bull_score) or is_panic
+        )
+        contra_pe = direction == Direction.PE and (
+            is_breakout and bull_score > bear_score
+        )
+        if contra_ce or contra_pe:
+            regime_lbl = f"{regime_signal.regime.value}_{'bear' if bear_score >= bull_score else 'bull'}"
+            return DirectionConsensusResult(
+                direction=None,
+                ce_score=ce_score,
+                pe_score=pe_score,
+                margin=margin,
+                vetoed=True,
+                veto_reason=f"contra_regime:{regime_lbl} bear={bear_score} bull={bull_score}",
+                sources=sources,
+            )
+
     return DirectionConsensusResult(
         direction=direction,
         ce_score=ce_score,

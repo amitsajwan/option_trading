@@ -133,6 +133,62 @@ def _bid_strength_from_tick(doc: dict | None) -> float | None:
     return round(total_bid / total, 3) if total > 0 else 0.5
 
 
+def _read_live_depth_from_redis() -> dict | None:
+    """Read CE/PE depth directly from the Redis keys written by depth_collector.
+
+    Returns None if Redis is unavailable, keys are missing, or data is stale
+    (> 120 s old). The caller falls through to the MongoDB path when None.
+    """
+    try:
+        from contracts_app import get_redis_key, redis_connection_kwargs
+        import json as _json
+        import time as _time
+
+        r = redis.Redis(**redis_connection_kwargs(decode_responses=True))
+        raw_ce = r.get(get_redis_key("depth:atm_ce:latest"))
+        raw_pe = r.get(get_redis_key("depth:atm_pe:latest"))
+        if not raw_ce and not raw_pe:
+            return None
+
+        ce = _json.loads(raw_ce) if raw_ce else {}
+        pe = _json.loads(raw_pe) if raw_pe else {}
+
+        now_epoch = _time.time()
+        ce_age = now_epoch - (ce.get("fetched_at_epoch") or 0)
+        pe_age = now_epoch - (pe.get("fetched_at_epoch") or 0)
+        if ce_age > 120 and pe_age > 120:
+            return None
+
+        ce_str = _bid_strength_from_tick(ce) if ce else None
+        pe_str = _bid_strength_from_tick(pe) if pe else None
+        # aligned = PE bid strength exceeds CE — indicates put-side is dominant
+        aligned = bool((pe_str or 0) > (ce_str or 0))
+        dominant = "PE" if aligned else "CE"
+        ts = (ce or pe).get("fetched_at", "")
+        return {
+            "trace_id": "",
+            "run_id": "",
+            "timestamp": ts,
+            "updated_at": ts,
+            "ce_bid_strength": ce_str,
+            "pe_bid_strength": pe_str,
+            "ce_instrument": ce.get("instrument", ""),
+            "pe_instrument": pe.get("instrument", ""),
+            "spread_pct": ce.get("spread"),
+            "depth_aligned": aligned,
+            "depth_dominant": dominant,
+            "depth_available": True,
+            "direction": "",
+            "confidence": None,
+            "proceed": True,
+            "skip_reason": None,
+            "source": "redis_live",
+        }
+    except Exception as exc:
+        logger.debug("live depth redis read failed: %s", exc)
+        return None
+
+
 def _blocker_stage(blocker: str) -> str:
     for prefix, stage in _BLOCKER_TO_STAGE.items():
         if blocker.startswith(prefix) or prefix in blocker:
@@ -560,7 +616,16 @@ class PipelineRouter:
     # ── GET /api/depth/current ─────────────────────────────────────────────
 
     async def get_depth_current(self, run_id: str = Query(default="")):
-        """Return the most recent depth decision event."""
+        """Return the most recent depth decision event.
+
+        For live mode (no run_id), reads directly from Redis where depth_collector
+        writes fresh data every 5 s. Falls through to MongoDB for sim/historical runs.
+        """
+        if not run_id:
+            live = _read_live_depth_from_redis()
+            if live is not None:
+                return live
+
         coll = _get_collection()
         if coll is None:
             return {"depth_available": False, "error": "mongodb unavailable"}

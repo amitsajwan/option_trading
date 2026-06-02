@@ -81,87 +81,6 @@ function _makeQuote(session, upToIdx) {
   };
 }
 
-// ── TickerBar ────────────────────────────────────────────────────────────
-function TickerBar({ quote, instrument }) {
-  const [clock, setClock] = _s(TC.fmtClock(new Date()));
-  _e(() => { const id = setInterval(() => setClock(TC.fmtClock(new Date())), 1000); return () => clearInterval(id); }, []);
-  if (!quote) return <div className="ticker-bar"><div className="t-brand"><span className="t-brand-mark"/><b>QUANT</b><span>OPS</span></div><div className="ticker-clock"><span className="t-live-pulse"/><span>{clock}</span></div></div>;
-  const cls = quote.spotChg >= 0 ? 'pos' : 'neg';
-  return (
-    <div className="ticker-bar">
-      <div className="t-brand">
-        <span className="t-brand-mark"/>
-        <b>QUANT</b><span>OPS</span>
-        <span className="ver">live</span>
-      </div>
-      <div className="ticker-pairs">
-        <div className="t-spot-big">
-          <span className="lbl" style={{fontSize:'9.5px',color:'var(--fg-3)',letterSpacing:'0.10em',textTransform:'uppercase'}}>{quote.symbol}</span>
-          <span className="val">{quote.spot.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-          <span className={`delta ${cls}`}>{TC.fmtSigned(quote.spotChg,2)} ({TC.fmtSigned(quote.spotChgPct,2,'%')})</span>
-        </div>
-        <div className="pair"><span className="lbl">H</span><span className="val">{quote.dayHigh.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
-        <div className="pair"><span className="lbl">L</span><span className="val">{quote.dayLow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
-      </div>
-      <div className="ticker-clock">
-        <span className="t-live-pulse"/>
-        <span>{clock}</span>
-      </div>
-    </div>
-  );
-}
-
-// ── StatusBar ────────────────────────────────────────────────────────────
-function StatusBar({
-  sessionPnl, tradesCount, winRate, regime, engine, ws, onModeSwitch, onHaltClick,
-  watchMode, simRuns, watchRunId, onWatchChange, onBackToLive,
-}) {
-  const pnlCls = sessionPnl >= 0 ? 'pos' : 'neg';
-  return (
-    <div className="t-status-bar">
-      <div className="t-mode-toggle">
-        <button className="active"><span className="dot live"/>Live</button>
-        <button onClick={() => onModeSwitch('replay')}><span className="dot replay"/>Replay</button>
-        <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
-        <button onClick={() => onModeSwitch('pipeline')} style={{opacity:0.85}}>⬡ Pipeline</button>
-      </div>
-      <div style={{display:'flex',alignItems:'center',gap:8,padding:'0 10px'}}>
-        <span style={{fontFamily:'var(--f-mono)',fontSize:'9px',color:'var(--fg-4)',textTransform:'uppercase'}}>watching</span>
-        <select
-          className="inp"
-          style={{height:22,minWidth:180,padding:'0 6px',fontSize:'10px'}}
-          value={watchMode === 'sim' ? `sim:${watchRunId || ''}` : 'live'}
-          onChange={e => {
-            const raw = String(e.target.value || '');
-            if (raw === 'live') { onBackToLive(); return; }
-            if (raw.startsWith('sim:')) onWatchChange(raw.slice(4));
-          }}
-        >
-          <option value="live">LIVE</option>
-          {(simRuns || []).map(run => (
-            <option key={run.run_id} value={`sim:${run.run_id}`}>
-              {`SIM · ${String(run.label || 'run').slice(0, 16)} · ${String(run.run_id || '').slice(0, 8)}…`}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="t-status-cells">
-        <div className="t-scell big"><span className="k">Session P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
-        <div className="t-scell"><span className="k">Trades</span><span className="v">{tradesCount}<span className="sub">/ {winRate}% WR</span></span></div>
-        <div className="t-scell"><span className="k">Regime</span><span className="v" style={{color:(typeof REGIME_COLORS !== 'undefined' && REGIME_COLORS[regime]) || 'var(--info)',fontSize:'11px'}}>{regime || '—'}</span></div>
-        <div className="t-scell"><span className="k">Engine</span><span className="v" style={{fontSize:'11px'}}>{engine || '—'}</span></div>
-        <div className="t-scell"><span className="k">WS</span><span className={`v ${ws === 'connected' ? 'pos' : 'warn'}`} style={{fontSize:'11px'}}>{ws}</span></div>
-      </div>
-      <div className="t-status-actions">
-        {watchMode === 'sim' && (
-          <button className="t-btn ghost" onClick={onBackToLive}>Back to LIVE</button>
-        )}
-        <button className="t-btn danger" onClick={onHaltClick}>⏻ Halt <span className="kbd">⌘.</span></button>
-      </div>
-    </div>
-  );
-}
-
 // ── Brain Status (compact dark-theme widget) ──────────────────────────────
 function BrainStatusCompact({ brainData }) {
   if (!brainData || !brainData.available) return null;
@@ -280,179 +199,158 @@ function EngineRoster({ strategies, dailyRisk, brainData }) {
   );
 }
 
-// ── SVG Candlestick Chart ────────────────────────────────────────────────
-function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upToIdx, flashIdx }) {
-  const W = 1000, H = 360;
-  const PAD = { l: 8, r: 60, t: 8, b: 22 };
-  const iW = W - PAD.l - PAD.r, iH = H - PAD.t - PAD.b;
-  const visible = candles.slice(0, upToIdx + 1);
-  const slot = iW / Math.max(1, visible.length);
-  const bodyW = Math.max(2, slot - 1.5);
+// ── Lightweight Charts Candlestick Chart ─────────────────────────────────
+// Replaces the fixed SVG. Gives native zoom (scroll wheel), pan (drag),
+// crosshair tooltip, and auto-resize — without affecting page font size.
+function TermChart({ session, candles, trades, selectedTrade, onSelectTrade, upToIdx }) {
+  const LWC = window.LightweightCharts;
+  // LightweightCharts renders the time axis in UTC and has no timezone support.
+  // Our candle .t is true UTC ms. Shift by IST (+5:30) so the axis prints IST
+  // wall-clock (09:15 not 03:45). All series + markers + click use the same shift.
+  const IST = 19800; // 5.5h in seconds
+  const _tsec = (ms) => Math.floor(ms / 1000) + IST;
+  const containerRef = _r(null);
+  const chartRef     = _r(null);
+  const candleRef    = _r(null);
+  const vwapRef      = _r(null);
+  const priceLineRef = _r(null);
+  const stopLineRef  = _r(null);
+  const tgtLineRef   = _r(null);
 
-  const [pMin, pMax] = _m(() => {
-    let lo = Infinity, hi = -Infinity;
-    visible.forEach(c => { lo = Math.min(lo, c.l); hi = Math.max(hi, c.h); });
-    const pad = (hi - lo) * 0.10;
-    return [lo - pad, hi + pad];
-  }, [visible]);
+  // ── Init chart once ──────────────────────────────────────────────────
+  _e(() => {
+    if (!LWC || !containerRef.current) return;
+    const cs = getComputedStyle(document.documentElement);
+    const get = v => cs.getPropertyValue(v).trim();
 
-  const xOf = i => PAD.l + i * slot + slot / 2;
-  const yOf = p => PAD.t + (pMax - p) / (pMax - pMin) * iH;
+    const chart = LWC.createChart(containerRef.current, {
+      layout: { background: { type: 'solid', color: 'transparent' }, textColor: get('--fg-3') || '#71717a', fontSize: 10 },
+      grid:   { vertLines: { color: get('--line-1') || '#27272a', style: 1 }, horzLines: { color: get('--line-1') || '#27272a', style: 1 } },
+      crosshair: { mode: LWC.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: get('--line-2') || '#3f3f46', scaleMargins: { top: 0.05, bottom: 0.05 } },
+      timeScale: { borderColor: get('--line-2') || '#3f3f46', timeVisible: true, secondsVisible: false, fixLeftEdge: false, fixRightEdge: false },
+      handleWheelMove: true,
+      handleScroll: true,
+    });
+    chartRef.current = chart;
 
-  const vwapPath = _m(() => {
+    candleRef.current = chart.addCandlestickSeries({
+      upColor: '#22c55e', downColor: '#ef4444',
+      borderUpColor: '#22c55e', borderDownColor: '#ef4444',
+      wickUpColor: '#22c55e', wickDownColor: '#ef4444',
+    });
+
+    vwapRef.current = chart.addLineSeries({
+      color: '#3b82f6', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
+
+    // Click on chart → find nearest trade marker and select it
+    chart.subscribeClick(param => {
+      if (!param.time || !param.point) return;
+      const clickedTime = Number(param.time);
+      let best = null, bestDist = 999999;
+      trades.forEach(t => {
+        const c = candles[t.entryIdx];
+        if (!c) return;
+        const tSec = _tsec(c.t);
+        const d = Math.abs(tSec - clickedTime);
+        if (d < bestDist) { bestDist = d; best = t; }
+      });
+      if (best && bestDist <= 120) onSelectTrade(best); // within 2 bars
+    });
+
+    // Auto-resize when container size changes
+    const ro = new ResizeObserver(() => {
+      if (!containerRef.current || !chartRef.current) return;
+      const { width, height } = containerRef.current.getBoundingClientRect();
+      chartRef.current.resize(width, Math.max(200, height));
+    });
+    ro.observe(containerRef.current);
+
+    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
+  }, []); // eslint-disable-line
+
+  // ── Update candles + VWAP whenever data changes ───────────────────────
+  _e(() => {
+    if (!candleRef.current || !candles.length) return;
+    const visible = candles.slice(0, upToIdx + 1);
+
+    const lwcData = visible.map(c => ({
+      time: _tsec(c.t),
+      open: c.o, high: c.h, low: c.l, close: c.c,
+    }));
+    candleRef.current.setData(lwcData);
+
+    // VWAP
     let cv = 0, cc = 0;
-    return visible.map((c, i) => {
+    const vwapData = visible.map(c => {
       const tp = (c.h + c.l + c.c) / 3;
       cv += tp * (c.v || 1); cc += (c.v || 1);
-      return `${i === 0 ? 'M' : 'L'} ${xOf(i).toFixed(1)} ${yOf(cv/cc).toFixed(1)}`;
-    }).join(' ');
-  }, [visible, pMin, pMax]);
+      return { time: _tsec(c.t), value: Math.round(cv / cc * 100) / 100 };
+    });
+    vwapRef.current.setData(vwapData);
 
-  const ticks = _m(() => {
-    const out = [];
-    const step = Math.ceil((pMax - pMin) / 6 / 10) * 10 || 10;
-    let p = Math.ceil(pMin / step) * step;
-    while (p < pMax) { out.push(p); p += step; }
-    return out;
-  }, [pMin, pMax]);
+    // Trade markers: entry arrow + exit dot label
+    const markers = [];
+    trades.filter(t => t.entryIdx < visible.length).forEach(t => {
+      const ec = candles[t.entryIdx];
+      if (!ec) return;
+      const pnl = Number(t.pnlPct || 0);
+      const isSel = selectedTrade?.id === t.id;
+      const color = isSel ? '#f59e0b' : (pnl > 0 ? '#22c55e' : pnl < 0 ? '#ef4444' : '#71717a');
+      const isLong = t.dir === 'LONG';
+      markers.push({
+        time: _tsec(ec.t),
+        position: isLong ? 'belowBar' : 'aboveBar',
+        color,
+        shape: isLong ? 'arrowUp' : 'arrowDown',
+        text: `${t.legDir || t.dir}${isSel ? ' ●' : ''}`,
+        size: isSel ? 2 : 1,
+      });
+      // Exit marker if trade is closed and exitIdx is valid
+      if (t.exitReason && t.exitIdx != null && t.exitIdx < visible.length) {
+        const xc = candles[t.exitIdx];
+        if (xc) {
+          markers.push({
+            time: _tsec(xc.t),
+            position: isLong ? 'aboveBar' : 'belowBar',
+            color,
+            shape: 'circle',
+            text: pnl >= 0 ? `+${(pnl*100).toFixed(1)}%` : `${(pnl*100).toFixed(1)}%`,
+            size: 1,
+          });
+        }
+      }
+    });
+    markers.sort((a, b) => a.time - b.time);
+    candleRef.current.setMarkers(markers);
 
-  const timeTicks = _m(() => {
-    const out = [];
-    const n = visible.length;
-    const step = Math.max(1, Math.floor(n / 6));
-    for (let i = 0; i < n; i += step) out.push(i);
-    if (n > 0 && out[out.length - 1] !== n - 1) out.push(n - 1);
-    return out;
-  }, [visible.length]);
+    // Current price dashed line
+    const lastClose = visible[visible.length - 1]?.c;
+    if (lastClose) {
+      if (priceLineRef.current) { try { candleRef.current.removePriceLine(priceLineRef.current); } catch(_){} }
+      priceLineRef.current = candleRef.current.createPriceLine({ price: lastClose, color: '#f59e0b', lineWidth: 1, lineStyle: LWC.LineStyle.Dashed, axisLabelVisible: true, title: '' });
+    }
 
-  const [hover, setHover] = _s(null);
-  const svgRef = _r(null);
+    // Scroll to latest bar
+    chartRef.current?.timeScale().scrollToPosition(3, false);
+  }, [candles, upToIdx, trades, selectedTrade]);
 
-  const handleMove = _cb(e => {
-    const r = svgRef.current?.getBoundingClientRect();
-    if (!r) return;
-    const x = (e.clientX - r.left) * (W / r.width);
-    const i = Math.floor((x - PAD.l) / slot);
-    setHover(i >= 0 && i < visible.length ? i : null);
-  }, [visible.length, slot]);
+  // ── Stop / target lines for selected trade ────────────────────────────
+  _e(() => {
+    if (!candleRef.current) return;
+    if (stopLineRef.current) { try { candleRef.current.removePriceLine(stopLineRef.current); } catch(_){} stopLineRef.current = null; }
+    if (tgtLineRef.current)  { try { candleRef.current.removePriceLine(tgtLineRef.current);  } catch(_){} tgtLineRef.current  = null; }
+    if (!selectedTrade) return;
+    const { stopPx, targetPx } = selectedTrade;
+    if (stopPx && stopPx > 0)   stopLineRef.current = candleRef.current.createPriceLine({ price: stopPx,   color: '#ef4444', lineWidth: 1, lineStyle: LWC.LineStyle.Dotted, axisLabelVisible: true, title: 'STP' });
+    if (targetPx && targetPx > 0) tgtLineRef.current = candleRef.current.createPriceLine({ price: targetPx, color: '#22c55e', lineWidth: 1, lineStyle: LWC.LineStyle.Dotted, axisLabelVisible: true, title: 'TGT' });
+  }, [selectedTrade]);
 
-  const curPx = visible[visible.length - 1]?.c || 0;
-  const curY  = yOf(curPx);
-
-  return (
-    <div className="t-chart-area">
-      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
-           onMouseMove={handleMove} onMouseLeave={() => setHover(null)}>
-        <g className="t-chart-grid">
-          {ticks.map(p => <line key={p} x1={PAD.l} x2={W-PAD.r} y1={yOf(p)} y2={yOf(p)}/>)}
-        </g>
-
-        {selectedTrade && (() => {
-          const t = selectedTrade;
-          const eiN = Math.min(t.entryIdx, visible.length - 1);
-          const exN = Math.min(t.exitIdx,  visible.length - 1);
-          if (eiN < 0) return null;
-          return (
-            <g>
-              <rect x={xOf(eiN)-bodyW/2} y={Math.min(yOf(t.stopPx),yOf(t.targetPx))}
-                width={xOf(exN)-xOf(eiN)+bodyW}
-                height={Math.abs(yOf(t.stopPx)-yOf(t.targetPx))} className="t-chart-trade-band"/>
-              <line x1={PAD.l} x2={W-PAD.r} y1={yOf(t.stopPx)}   y2={yOf(t.stopPx)}   className="t-chart-stop-line"/>
-              <line x1={PAD.l} x2={W-PAD.r} y1={yOf(t.targetPx)} y2={yOf(t.targetPx)} className="t-chart-target-line"/>
-              <text x={W-PAD.r+3} y={yOf(t.stopPx)+3} fill="var(--neg)" fontFamily="var(--f-mono)" fontSize="9">STP {t.stopPx.toFixed(0)}</text>
-              <text x={W-PAD.r+3} y={yOf(t.targetPx)+3} fill="var(--pos)" fontFamily="var(--f-mono)" fontSize="9">TGT {t.targetPx.toFixed(0)}</text>
-            </g>
-          );
-        })()}
-
-        {visible.map((c, i) => {
-          const up = c.c >= c.o;
-          const x = xOf(i);
-          const bTop = yOf(Math.max(c.o, c.c));
-          const bBot = yOf(Math.min(c.o, c.c));
-          const flash = i === flashIdx ? ' flash' : '';
-          return (
-            <g key={i}>
-              <line x1={x} x2={x} y1={yOf(c.h)} y2={yOf(c.l)} className={`t-candle-wick ${up?'up':'down'}`} strokeWidth="1"/>
-              <rect x={x-bodyW/2} y={bTop} width={bodyW} height={Math.max(1,bBot-bTop)}
-                    className={`t-candle-body ${up?'up':'down'}${flash}`} strokeWidth="0.5"/>
-            </g>
-          );
-        })}
-
-        <path d={vwapPath} className="t-chart-vwap"/>
-
-        {trades.filter(t => t.entryIdx < visible.length).map(t => {
-          const eiN = Math.min(t.entryIdx, visible.length - 1);
-          const exN = Math.min(t.exitIdx ?? t.entryIdx, visible.length - 1);
-          const x1 = xOf(eiN);
-          const y1 = yOf(candles[eiN]?.c ?? t.entryPx);
-          const x2 = xOf(exN);
-          const y2 = yOf(candles[exN]?.c ?? candles[eiN]?.c ?? t.exitPx ?? t.entryPx);
-          const pnl = Number(t.pnlPct || 0);
-          const color = pnl > 0 ? 'var(--pos)' : pnl < 0 ? 'var(--neg)' : 'var(--fg-3)';
-          const isSel = selectedTrade?.id === t.id;
-          return (
-            <g key={"link-"+t.id} opacity={isSel?1:0.7}>
-              <line x1={x1} y1={y1} x2={x2} y2={y2}
-                    stroke={color} strokeWidth={isSel?2:1} strokeDasharray={isSel?"":"3 3"}/>
-              <circle cx={x2} cy={y2} r={isSel?3.5:2.5} fill={color} stroke={color}/>
-            </g>
-          );
-        })}
-
-        {trades.filter(t => t.entryIdx < visible.length).map(t => {
-          const isSel = selectedTrade?.id === t.id;
-          const cx = xOf(Math.min(t.entryIdx, visible.length - 1));
-          const cy = yOf(t.entryPx);
-          const color = t.dir === 'LONG' ? 'var(--pos)' : 'var(--neg)';
-          const d = t.dir === 'LONG'
-            ? `M ${cx} ${cy+13} L ${cx-4} ${cy+21} L ${cx+4} ${cy+21} Z`
-            : `M ${cx} ${cy-13} L ${cx-4} ${cy-21} L ${cx+4} ${cy-21} Z`;
-          return (
-            <path key={t.id} d={d} fill={color} fillOpacity={isSel?1:0.55}
-                  stroke={color} strokeWidth="1" className="t-trade-marker"
-                  onClick={() => onSelectTrade(t)}/>
-          );
-        })}
-
-        <g>
-          <line x1={PAD.l} x2={W-PAD.r} y1={curY} y2={curY} stroke="var(--accent)" strokeWidth="1" strokeDasharray="1 2" opacity="0.6"/>
-          <rect x={W-PAD.r+2} y={curY-9} width={54} height={18} fill="var(--accent)" rx="2"/>
-          <text x={W-PAD.r+5} y={curY+4} fill="#1a1100" fontFamily="var(--f-mono)" fontSize="10" fontWeight="700">{curPx.toFixed(0)}</text>
-        </g>
-
-        <g>
-          {ticks.map(p => <text key={p} x={W-PAD.r+3} y={yOf(p)+3} fontFamily="var(--f-mono)" fontSize="9" fill="var(--fg-3)">{p.toFixed(0)}</text>)}
-        </g>
-        <g>
-          {timeTicks.map(i => (
-            <text key={i} x={xOf(i)} y={H-6} fontFamily="var(--f-mono)" fontSize="9" fill="var(--fg-3)" textAnchor="middle">
-              {_barLabel(session, i)}
-            </text>
-          ))}
-        </g>
-
-        {hover != null && (() => {
-          const c = visible[hover];
-          if (!c) return null;
-          const x = xOf(hover);
-          const tipX = hover > visible.length * 0.7 ? x - 170 : x + 8;
-          return (
-            <g>
-              <line x1={x} x2={x} y1={PAD.t} y2={H-PAD.b} className="t-chart-crosshair"/>
-              <rect x={tipX} y={PAD.t+4} width={164} height={80} fill="var(--bg-2)" stroke="var(--line-3)" rx="2"/>
-              <text x={tipX+8} y={PAD.t+18} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-2)">{_barLabel(session,hover)}</text>
-              <text x={tipX+8} y={PAD.t+34} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">O <tspan fill="var(--fg-1)" fontWeight="600">{c.o.toFixed(0)}</tspan></text>
-              <text x={tipX+70} y={PAD.t+34} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">H <tspan fill="var(--pos)" fontWeight="600">{c.h.toFixed(0)}</tspan></text>
-              <text x={tipX+8} y={PAD.t+50} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">L <tspan fill="var(--neg)" fontWeight="600">{c.l.toFixed(0)}</tspan></text>
-              <text x={tipX+70} y={PAD.t+50} fontFamily="var(--f-mono)" fontSize="9.5" fill="var(--fg-3)">C <tspan fill={c.c>=c.o?'var(--pos)':'var(--neg)'} fontWeight="600">{c.c.toFixed(0)}</tspan></text>
-            </g>
-          );
-        })()}
-      </svg>
-    </div>
-  );
+  if (!LWC) {
+    return <div className="t-chart-area" style={{display:'flex',alignItems:'center',justifyContent:'center',color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:11}}>lightweight-charts not loaded</div>;
+  }
+  return <div className="t-chart-area" ref={containerRef} style={{position:'relative',width:'100%',height:'100%',minHeight:260}} />;
 }
 
 // ── DiagPanel: current model + available models + blocker funnel ─────────
@@ -1129,21 +1027,31 @@ function TradeInspector({ session, trade }) {
   // Use only stored signal metrics and replay-linked trade context.
   const sm = trade.signal?.metrics || {};
   const entryProb = _num(traceSummary.entry_prob ?? selectedVoteRaw.entry_prob ?? sm.entry_prob);
-  const tradeProb = _num(sm.trade_prob);
-  const recipeProb = _num(traceSummary.recipe_prob ?? sm.recipe_prob);
-  const recipeMargin = _num(traceSummary.recipe_margin ?? sm.recipe_margin);
-  const upProb = _num(traceSummary.direction_up_prob ?? sm.up_prob);
+  // trade_prob is a placeholder (0.5) for deterministic/bypass mode — hide the gate to avoid
+  // showing a false FAIL when the engine never evaluated an ML trade gate.
+  const _policyMode = String(selectedVoteRaw._entry_policy_mode || '').trim();
+  const tradeProb = _policyMode === 'bypass' ? null : _num(sm.trade_prob);
+  // In bypass/deterministic mode, recipe_prob and up_prob come only from ML metrics defaults (0.5).
+  // Only show them when a real trace value exists — otherwise they're meaningless placeholders.
+  const recipeProb   = _num(traceSummary.recipe_prob   ?? (_policyMode === 'bypass' ? null : sm.recipe_prob));
+  const recipeMargin = _num(traceSummary.recipe_margin ?? (_policyMode === 'bypass' ? null : sm.recipe_margin));
+  const upProb       = _num(traceSummary.direction_up_prob ?? (_policyMode === 'bypass' ? null : sm.up_prob));
   const probs = [
-    { v: entryProb, gate: 0.60, label: 'Entry gate', kind: 'gate' },
-    { v: tradeProb, gate: 0.55, label: 'Trade gate', kind: 'gate' },
-    { v: recipeProb, label: 'Recipe prob', kind: 'neutral' },
-    { v: recipeMargin, label: 'Recipe margin', kind: 'neutral' },
-    { v: upProb, label: 'Up prob', kind: 'neutral' },
+    { v: entryProb,    gate: 0.60, label: 'Entry gate',    kind: 'gate' },
+    { v: tradeProb,    gate: 0.55, label: 'Trade gate',    kind: 'gate' },
+    { v: recipeProb,               label: 'Recipe prob',   kind: 'neutral' },
+    { v: recipeMargin,             label: 'Recipe margin', kind: 'neutral' },
+    { v: upProb,                   label: 'Up prob',       kind: 'neutral' },
   ].filter(p => p.v != null && Number.isFinite(Number(p.v)));
 
   // Direction decision — which leg was chosen and why
-  const ceProb = _num(selectedVoteRaw.direction_consensus_ce ?? sm.ce_prob);
-  const peProb = _num(selectedVoteRaw.direction_consensus_pe ?? sm.pe_prob);
+  // direction_consensus values are SCORES (summed signal weights, can exceed 1.0), not probabilities.
+  // Normalize when total > 1 so the bars display as 0-100% instead of 0-393%.
+  const _rawCeScore = _num(selectedVoteRaw.direction_consensus_ce ?? sm.ce_prob);
+  const _rawPeScore = _num(selectedVoteRaw.direction_consensus_pe ?? sm.pe_prob);
+  const _dirTotal = (_rawCeScore || 0) + (_rawPeScore || 0);
+  const ceProb = _dirTotal > 1 ? (_rawCeScore || 0) / _dirTotal : _rawCeScore;
+  const peProb = _dirTotal > 1 ? (_rawPeScore || 0) / _dirTotal : _rawPeScore;
   const consensusMargin = _num(selectedVoteRaw.direction_consensus_margin);
   const chosenLeg = trade.optionType || trade.legDir || (trade.dir === 'SHORT' ? 'PE' : 'CE');
   const dirBasis = trade.signal?.reason || trade.entryReason || '';
@@ -1204,7 +1112,7 @@ function TradeInspector({ session, trade }) {
           <div className="t-inspector-meta">
             <span>{_barLabel(session,trade.entryIdx)} → {_barLabel(session,trade.exitIdx)}</span>
             <span>·</span><span>{trade.heldBars}b</span>
-            <span>·</span><span>{trade.regime}</span>
+            <span>·</span><span>{trade.regime || (trade.entryContext?.regimeContext?.regime) || '—'}</span>
           </div>
         </div>
         <span className={`t-chip ${outCls}`}>● {(trade.exitReason||'').replace('_',' ')}</span>
@@ -1463,6 +1371,566 @@ function LogStrip({ session, alerts, wsStatus }) {
   );
 }
 
+// ── useIsMobile — single source of truth for the mobile breakpoint ───────
+function _useIsMobile() {
+  const mq = '(max-width: 640px)';
+  const [isMobile, setIsMobile] = _s(() =>
+    typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia(mq).matches : false);
+  _e(() => {
+    if (!window.matchMedia) return;
+    const m = window.matchMedia(mq);
+    const fn = e => setIsMobile(e.matches);
+    if (m.addEventListener) m.addEventListener('change', fn);
+    else m.addListener(fn);
+    return () => {
+      if (m.removeEventListener) m.removeEventListener('change', fn);
+      else m.removeListener(fn);
+    };
+  }, []);
+  return isMobile;
+}
+
+// ── _fmtRelTime — "2s ago" / "12s ago" / "1m ago" ────────────────────────
+function _fmtRelTime(ms) {
+  if (!ms) return '—';
+  const dt = Math.max(0, Date.now() - ms);
+  if (dt < 1000) return 'now';
+  const s = Math.floor(dt / 1000);
+  if (s < 60) return `${s}s ago`;
+  const mn = Math.floor(s / 60);
+  if (mn < 60) return `${mn}m ago`;
+  return `${Math.floor(mn / 60)}h ago`;
+}
+
+// ── MobileTradeCard — replaces a Tape row on mobile ──────────────────────
+function _parseEntrySignals(rawReason) {
+  const r = String(rawReason || '');
+  const regimeM = r.match(/\[([A-Z_]+)\]/);
+  const regime  = regimeM ? regimeM[1] : null;
+  const probM   = r.match(/prob[=\s]*([\d.]+)/i);
+  const prob    = probM ? Math.round(Number(probM[1]) * 100) : null;
+  const keywords = [];
+  if (/\bORB\b/i.test(r))       keywords.push('ORB');
+  if (/\bVWAP\b/i.test(r))      keywords.push('VWAP');
+  if (/\bBREAKOUT\b/i.test(r))  keywords.push('BRKOUT');
+  if (/\bTRAP\b/i.test(r))      keywords.push('TRAP');
+  if (/\bIV\b/i.test(r))        keywords.push('IV');
+  if (/\bMOMENTUM\b/i.test(r))  keywords.push('MOM');
+  return { regime, prob, keywords };
+}
+
+function MobileTradeCard({ trade, selected, onSelect, session }) {
+  const t = trade;
+  const pnl = t.pnlPct || 0;
+  const pnlCls = pnl >= 0 ? 'pos' : 'neg';
+  const glyph = pnl >= 0 ? '▲' : '▼';
+  const exitReason = (t.exitReason || '').toUpperCase();
+  const exitCls =
+    exitReason === 'TARGET_HIT' || exitReason === 'TARGET'   ? 'target' :
+    exitReason === 'STOP_HIT'   || exitReason === 'STOP'     ? 'stop'   :
+    exitReason === 'HARD_STOP'                                ? 'stop'   :
+    exitReason.includes('TIME')                               ? 'time'   : '';
+  const dir = t.dir || 'LONG';
+  const legDir = t.legDir || dir;
+  const entryLabel = _barLabel(session, t.entryIdx);
+  const exitLabel  = _barLabel(session, t.exitIdx);
+  const { regime, prob, keywords } = _parseEntrySignals(t.reason || t.entryDetail || '');
+  const regimeColor =
+    regime === 'BREAKOUT' ? 'var(--pos)' :
+    regime === 'VOLATILE' ? 'var(--warn)' :
+    regime === 'SIDEWAYS' ? 'var(--fg-3)' :
+    regime === 'BEARISH'  ? 'var(--neg)'  : 'var(--fg-4)';
+  return (
+    <button
+      type="button"
+      className="m-card"
+      aria-pressed={selected ? 'true' : 'false'}
+      onClick={() => onSelect(t)}>
+      <div className="m-card-head">
+        <span className={`m-card-dir ${dir}`}>{legDir}{t.optionType && legDir !== t.optionType ? ` ${t.optionType}` : ''}</span>
+        <span className="strat">{t.strat || '—'}</span>
+        {prob != null && <span style={{fontFamily:'var(--f-mono)',fontSize:9,color:'var(--fg-3)',marginLeft:'auto'}}>conf {prob}%</span>}
+      </div>
+      {/* signal pills row */}
+      {(regime || keywords.length > 0) && (
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:3}}>
+          {regime && <span style={{fontSize:8.5,fontFamily:'var(--f-mono)',padding:'1px 5px',borderRadius:3,border:`1px solid ${regimeColor}`,color:regimeColor,letterSpacing:'0.05em'}}>{regime}</span>}
+          {keywords.map(k => (
+            <span key={k} style={{fontSize:8.5,fontFamily:'var(--f-mono)',padding:'1px 5px',borderRadius:3,background:'rgba(255,255,255,0.06)',color:'var(--fg-3)'}}>{k}</span>
+          ))}
+        </div>
+      )}
+      <div className={`m-card-pnl ${pnlCls}`}>
+        <span className="glyph">{glyph}</span>
+        <span>{TC.fmtPct(pnl, 2)}</span>
+      </div>
+      <div className="m-card-prices">
+        <span><span className="lbl">in</span>{(t.entryPx || 0).toFixed(2)}</span>
+        <span className="arr">→</span>
+        <span><span className="lbl">out</span>{(t.exitPx || 0).toFixed(2)}</span>
+        {t.strike && <span><span className="lbl">strike</span>{Math.round(t.strike)}{t.optionType ? ` ${t.optionType}` : ''}</span>}
+      </div>
+      <div className="m-card-foot">
+        <span className="time">{entryLabel} → {exitLabel}</span>
+        {exitReason && <span className={`reason ${exitCls}`}>{exitReason.replace(/_/g, ' ')}</span>}
+      </div>
+    </button>
+  );
+}
+
+// ── MobileBottomSheet — generic bottom-anchored sheet ────────────────────
+function MobileBottomSheet({ open, title, onClose, children }) {
+  _e(() => {
+    if (!open) return;
+    const fn = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, [open, onClose]);
+  return (
+    <div className={`m-sheet-overlay ${open ? 'open' : ''}`}
+         onClick={e => { if (e.target.classList.contains('m-sheet-overlay')) onClose(); }}>
+      <div className={`m-sheet ${open ? 'open' : ''}`}>
+        <div className="m-sheet-grab"/>
+        <div className="m-sheet-head">
+          <span className="m-sheet-title">{title}</span>
+          <button className="m-sheet-close" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="m-sheet-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── MobileLiveShell — phone-first layout for LiveMonitorDark ─────────────
+function MobileLiveShell({
+  session, candles, upToIdx, flashIdx, flashId,
+  trades, signals, strategies,
+  quote, sessionPnl, winRate, regime, engine,
+  brainData, wsStatus, watchMode, watchRunId, simRuns,
+  runtimeConfig, availableModels, blockerFunnel, timeline, heatmap, openPosition,
+  selectedTrade, onSelectTrade,
+  onHaltClick, onModeSwitch, onBackToLive, onWatchChange,
+}) {
+  const [tab, setTab] = _s('tape');   // tape | chart | map | more
+  const [sheet, setSheet] = _s(null); // null | 'ops'
+  const [lastTickAt, setLastTickAt] = _s(Date.now());
+  const [now, setNow] = _s(Date.now());
+  const inspectorTrade = selectedTrade || (trades.length ? trades[0] : null);
+  const [showInspector, setShowInspector] = _s(false);
+  const isMobile = _useIsMobile();
+
+  _e(() => { setLastTickAt(Date.now()); }, [upToIdx]);
+  _e(() => { const id = setInterval(() => setNow(Date.now()), 2000); return () => clearInterval(id); }, []);
+
+  const ageMs = now - lastTickAt;
+  let orbCls = 'ok', orbLbl = 'LIVE';
+  if (wsStatus !== 'connected') { orbCls = 'crit'; orbLbl = wsStatus.toUpperCase(); }
+  else if (ageMs > 90000) { orbCls = 'crit'; orbLbl = 'STALE'; }
+  else if (ageMs > 70000) { orbCls = 'warn'; orbLbl = 'SLOW'; }
+
+  const absPnl = Math.abs(sessionPnl);
+  const stress = absPnl >= 0.02 ? 'extreme' : absPnl >= 0.01 ? 'high' : 'normal';
+  const pnlCls = sessionPnl > 0.0005 ? 'pos' : sessionPnl < -0.0005 ? 'neg' : 'flat';
+  const pnlGlyph = sessionPnl > 0.0005 ? '▲' : sessionPnl < -0.0005 ? '▼' : '◆';
+
+  // Pull-to-refresh
+  const ptrRef = _r({ startY: 0, dragging: false, refreshing: false });
+  const [ptrState, setPtrState] = _s('idle');
+  const onTouchStart = _cb(e => {
+    if (window.scrollY > 0) return;
+    ptrRef.current.startY = e.touches[0].clientY;
+    ptrRef.current.dragging = true;
+  }, []);
+  const onTouchMove = _cb(e => {
+    if (!ptrRef.current.dragging) return;
+    const dy = e.touches[0].clientY - ptrRef.current.startY;
+    if (dy > 60 && ptrState !== 'pulling') setPtrState('pulling');
+    else if (dy <= 0 && ptrState !== 'idle') setPtrState('idle');
+  }, [ptrState]);
+  const onTouchEnd = _cb(() => {
+    if (!ptrRef.current.dragging) return;
+    ptrRef.current.dragging = false;
+    if (ptrState === 'pulling' && !ptrRef.current.refreshing) {
+      ptrRef.current.refreshing = true;
+      setPtrState('refreshing');
+      setTimeout(() => { ptrRef.current.refreshing = false; setPtrState('idle'); }, 700);
+    } else { setPtrState('idle'); }
+  }, [ptrState]);
+
+  const tradeCount  = trades.length;
+  const signalCount = signals.length;
+  const rc  = runtimeConfig || {};
+  const bf  = blockerFunnel || {};
+  const tradesDone = (bf.outcomes?.entry_taken || 0) + (bf.outcomes?.executed || 0);
+  const maxTrades  = rc.risk_max_session_trades ?? null;
+  // Last entry prob from decision timeline (most recent minute)
+  const lastProb = (() => {
+    const rows = timeline?.decisions;
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const ep = rows[0]?.metrics?.entry_prob;
+    return ep != null ? Math.round(Number(ep) * 100) : null;
+  })();
+
+  return (
+    <div className="m-shell">
+      {/* ── Sticky header ────────────────────────────────────────────────── */}
+      <header className="m-header" role="banner">
+        <div className="m-header-row1">
+          <div className="m-brand"><span className="m-brand-mark"/>QUANT</div>
+          <div className="m-symbol">
+            <span className="sym">{quote?.symbol || session.instrument}</span>
+            <span className="px">{quote ? quote.spot.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'}</span>
+            {quote && (
+              <span className={`chg ${quote.spotChg >= 0 ? 'pos' : 'neg'}`}>
+                {quote.spotChg >= 0 ? '+' : ''}{quote.spotChgPct.toFixed(2)}%
+              </span>
+            )}
+          </div>
+          <div className="m-orb" title={`feed ${orbLbl} · ${_fmtRelTime(lastTickAt)}`}>
+            <span className={`m-orb-dot ${orbCls}`}/>
+            <span className="m-orb-fresh">{_fmtRelTime(lastTickAt)}</span>
+          </div>
+        </div>
+        <div className="m-header-row2">
+          <div className="m-pnl" data-stress={stress}>
+            <span className={`val ${pnlCls}`}>
+              <span className="glyph">{pnlGlyph}</span> {TC.fmtPct(sessionPnl, 2)}
+            </span>
+            <div className="meta">
+              <span className="k">trades</span>
+              <span className="v">{tradeCount}{maxTrades != null ? ` / ${maxTrades}` : ''} · {winRate}%</span>
+            </div>
+          </div>
+          <div className="m-header-desk-cells">
+            <div className="cell"><span className="k">Regime</span><span className="v">{regime||'—'}</span></div>
+            <div className="cell"><span className="k">Engine</span><span className="v">{engine||'—'}</span></div>
+            {lastProb != null
+              ? <div className="cell"><span className="k">ep</span>
+                  <span className={`v ${lastProb >= 80 ? 'pos' : lastProb >= 65 ? 'warn' : 'neg'}`}>{lastProb}%</span></div>
+              : <div className="cell"><span className="k">Feed</span>
+                  <span className={`v ${orbCls==='ok'?'pos':orbCls==='warn'?'warn':'neg'}`}>{orbLbl}</span></div>
+            }
+          </div>
+          <button className="m-iconbtn" aria-label="Settings" onClick={() => setSheet('ops')}>⚙</button>
+          <button className="m-iconbtn danger" aria-label="Halt" onClick={onHaltClick}>⏻</button>
+        </div>
+        {/* Open position banner — only shown when a position is live */}
+        {openPosition && (() => {
+          const op = openPosition;
+          const opPnl = op.pnl_pct != null ? Number(op.pnl_pct) : null;
+          const opMfe = op.mfe_pct != null ? Number(op.mfe_pct) : null;
+          const opCls = opPnl != null && opPnl > 0 ? 'pos' : opPnl != null && opPnl < 0 ? 'neg' : 'flat';
+          return (
+            <div style={{
+              background: 'rgba(255,160,0,0.10)', borderBottom: '1px solid rgba(255,160,0,0.25)',
+              padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 10,
+              fontFamily: 'var(--f-mono)', fontSize: 10,
+            }}>
+              <span style={{width:7,height:7,borderRadius:'50%',background:'var(--warn)',display:'inline-block',flexShrink:0,animation:'pulse 1.2s infinite'}}/>
+              <span style={{color:'var(--warn)',fontWeight:700,letterSpacing:'0.06em'}}>OPEN</span>
+              <span style={{color:'var(--fg-2)',fontWeight:600}}>
+                {op.option_type || op.direction} {op.strike ? Math.round(op.strike) : ''}
+              </span>
+              {opPnl != null && <span className={opCls} style={{fontWeight:700}}>{opPnl >= 0 ? '+' : ''}{(opPnl*100).toFixed(2)}%</span>}
+              {opMfe != null && <span style={{color:'var(--fg-4)'}}>mfe {opMfe >= 0 ? '+' : ''}{(opMfe*100).toFixed(2)}%</span>}
+              {op.bars_held != null && <span style={{color:'var(--fg-4)'}}>{op.bars_held}b</span>}
+              <span style={{color:'var(--fg-4)',marginLeft:'auto'}}>{(op.entry_time||'').slice(11,16)}</span>
+            </div>
+          );
+        })()}
+      </header>
+
+      {/* ── Body ─────────────────────────────────────────────────────────── */}
+      <div className="m-split">
+        <div className="m-left">
+          <nav className="m-tabs" role="tablist">
+            <button className="m-tab" data-tab="tape" aria-pressed={tab==='tape'} onClick={() => setTab('tape')}>
+              Tape <span className="count">{tradeCount}</span>
+            </button>
+            <button className="m-tab" data-tab="chart" aria-pressed={tab==='chart'} onClick={() => setTab('chart')}>Chart</button>
+            <button className="m-tab" data-tab="map"   aria-pressed={tab==='map'}   onClick={() => setTab('map')}>Map</button>
+            <button className="m-tab" data-tab="more"  aria-pressed={tab==='more'}  onClick={() => setTab('more')}>More</button>
+          </nav>
+          <main className="m-body" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+            <div className={`m-ptr ${ptrState !== 'idle' ? ptrState : ''}`}>
+              {ptrState === 'pulling' ? 'Release to refresh' : ptrState === 'refreshing' ? 'Refreshing…' : ''}
+            </div>
+
+          {/* ── Tape tab ──────────────────────────────────────────────────── */}
+          <div className={tab === 'tape' ? '' : 'm-tab-hidden'}>
+            {/* Gate funnel strip — visible when no trades yet or always */}
+            {bf.outcomes && (() => {
+              const o = bf.outcomes;
+              const topGate = bf.primary_blocker_gates?.[0]?.gate;
+              const taken = o.entry_taken || 0;
+              const blocked = o.blocked || 0;
+              const hold = o.hold || 0;
+              return (
+                <div style={{
+                  display:'flex', alignItems:'center', gap:10, padding:'6px 12px 4px',
+                  fontFamily:'var(--f-mono)', fontSize:9.5, borderBottom:'1px solid rgba(255,255,255,0.06)',
+                  flexWrap:'wrap',
+                }}>
+                  {taken > 0  && <span><span style={{color:'var(--pos)',fontWeight:700}}>{taken}</span> <span style={{color:'var(--fg-4)'}}>in</span></span>}
+                  {blocked > 0 && <span><span style={{color:'var(--neg)',fontWeight:700}}>{blocked}</span> <span style={{color:'var(--fg-4)'}}>blocked</span></span>}
+                  {hold > 0   && <span><span style={{color:'var(--warn)',fontWeight:700}}>{hold}</span> <span style={{color:'var(--fg-4)'}}>hold</span></span>}
+                  {topGate && <span style={{color:'var(--fg-4)',marginLeft:'auto',fontSize:9}}>⊘ {topGate}</span>}
+                </div>
+              );
+            })()}
+            {tradeCount === 0
+              ? <div className="m-empty">
+                  No trades yet today.
+                  <div className="hint">{signalCount > 0 ? `${signalCount} signal${signalCount===1?'':'s'} considered` : 'Waiting for signals…'}</div>
+                </div>
+              : <div className="m-cards">
+                  {trades.map(t => (
+                    <MobileTradeCard key={t.id} trade={t} session={session}
+                      selected={inspectorTrade?.id === t.id && showInspector}
+                      onSelect={tr => { onSelectTrade(tr); setShowInspector(true); }}/>
+                  ))}
+                </div>
+            }
+          </div>
+
+          {/* ── Chart tab — phone only ─────────────────────────────────────── */}
+          {isMobile && (
+            <div className={`m-chart-tab-pane ${tab === 'chart' ? '' : 'm-tab-hidden'}`}>
+              <div className="m-chart-wrap">
+                <TermChart session={session} candles={candles} trades={trades}
+                  selectedTrade={inspectorTrade} onSelectTrade={tr => { onSelectTrade(tr); setShowInspector(true); }}
+                  upToIdx={upToIdx} flashIdx={flashIdx}/>
+              </div>
+            </div>
+          )}
+
+          {/* ── Map tab ───────────────────────────────────────────────────── */}
+          <div className={tab === 'map' ? '' : 'm-tab-hidden'} style={{height:'100%',overflowY:'auto'}}>
+            <SessionHeatmap data={heatmap?.data} loading={!heatmap}/>
+          </div>
+
+          {/* ── More tab ──────────────────────────────────────────────────── */}
+          <div className={tab === 'more' ? '' : 'm-tab-hidden'}>
+
+            {/* Brain context — first thing a trader checks in the morning */}
+            <div className="m-section">
+              <div className="m-section-head">Brain</div>
+              <div className="m-section-body">
+                {brainData?.available
+                  ? <div className="m-kv-list">
+                      <div className="m-kv"><span className="k">day_score</span>
+                        <span className={`v ${
+                          String(brainData.day_score||'').toUpperCase()==='CALM'?'pos':
+                          String(brainData.day_score||'').toUpperCase()==='AVOID'?'neg':
+                          String(brainData.day_score||'').toUpperCase()==='VOLATILE'?'warn':''
+                        }`}>{String(brainData.day_score||'—').toUpperCase()}</span></div>
+                      <div className="m-kv"><span className="k">confidence</span>
+                        <span className="v">{brainData.day_score_confidence!=null?(Number(brainData.day_score_confidence)*100).toFixed(0)+'%':'—'}</span></div>
+                      <div className="m-kv"><span className="k">size mult</span>
+                        <span className={`v ${brainData.size_multiplier!=null&&Number(brainData.size_multiplier)<1?'warn':'pos'}`}>
+                          {brainData.size_multiplier!=null?Number(brainData.size_multiplier).toFixed(2)+'×':'—'}</span></div>
+                      <div className="m-kv"><span className="k">carry</span>
+                        <span className="v">{brainData.carry_consecutive_losses||0} L · {brainData.losing_streak_days||0}d</span></div>
+                    </div>
+                  : <div className="m-empty" style={{padding:'10px 4px'}}>Brain unavailable.</div>
+                }
+              </div>
+            </div>
+
+            {/* Session snapshot */}
+            <div className="m-section">
+              <div className="m-section-head">Session</div>
+              <div className="m-section-body">
+                <div className="m-kv-list">
+                  <div className="m-kv"><span className="k">P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
+                  <div className="m-kv"><span className="k">trades</span>
+                    <span className="v">{tradeCount}{maxTrades!=null?` / ${maxTrades}`:''} · {winRate}%</span></div>
+                  <div className="m-kv"><span className="k">regime</span><span className="v">{regime||'—'}</span></div>
+                  <div className="m-kv"><span className="k">feed</span>
+                    <span className={`v ${orbCls==='ok'?'pos':orbCls==='warn'?'warn':'neg'}`}>{orbLbl} · {_fmtRelTime(lastTickAt)}</span></div>
+                  {lastProb != null && <div className="m-kv"><span className="k">last ep</span>
+                    <span className={`v ${lastProb>=80?'pos':lastProb>=65?'warn':'neg'}`}>{lastProb}%</span></div>}
+                </div>
+              </div>
+            </div>
+
+            {/* System config */}
+            {(() => {
+              const mdl = Array.isArray(availableModels) ? availableModels.find(m => m.is_current) : null;
+              const exitMode = rc.exit_strategy_mode || '—';
+              const conf     = rc.min_confidence != null ? `${(rc.min_confidence*100).toFixed(0)}%` : '—';
+              const profile  = rc.strategy_profile_id || '—';
+              const stage    = rc.rollout_stage || '—';
+              const dot = ok => <span style={{display:'inline-block',width:7,height:7,borderRadius:'50%',background:ok?'var(--pos)':'var(--neg)',marginRight:5,verticalAlign:'middle'}}/>;
+              const row = (label, val, ok) => (
+                <div className="m-kv" key={label}>
+                  <span className="k" style={{color:'var(--fg-3)'}}>{ok!=null&&dot(ok)}{label}</span>
+                  <span className="v" style={{fontFamily:'var(--f-mono)',fontSize:11,color:'var(--fg-1)'}}>{val}</span>
+                </div>
+              );
+              const exitColor = exitMode==='lottery'?'var(--warn)':exitMode==='scalper'?'var(--fg-2)':'var(--fg-4)';
+              return (
+                <div className="m-section">
+                  <div className="m-section-head">System</div>
+                  <div className="m-section-body"><div className="m-kv-list">
+                    {row('Engine',    rc.engine || engine || '—',  !!(rc.engine||engine))}
+                    {row('Profile',   <span style={{fontSize:10,color:'var(--fg-3)'}}>{profile}</span>, profile!=='—')}
+                    {row('Stage',     stage,  stage==='live')}
+                    {row('Exit mode', <span style={{color:exitColor,fontWeight:600,textTransform:'uppercase'}}>{exitMode}</span>, null)}
+                    {row('Confidence', conf, conf!=='—')}
+                    {rc.smart_strike_enabled!=null && row('Smart strike', rc.smart_strike_enabled?'on':'off', rc.smart_strike_enabled)}
+                    {mdl && row('Model AUC', `${mdl.holdout_auc?.toFixed(3)||'?'} · ${mdl.feature_count??'?'}f`, true)}
+                  </div></div>
+                </div>
+              );
+            })()}
+
+            {/* Gate funnel detail */}
+            {bf.outcomes && (() => {
+              const o = bf.outcomes;
+              const gates = Array.isArray(bf.primary_blocker_gates) ? bf.primary_blocker_gates.slice(0,3) : [];
+              return (
+                <div className="m-section">
+                  <div className="m-section-head">Gate Funnel</div>
+                  <div className="m-section-body"><div className="m-kv-list">
+                    {(o.entry_taken||0)>0 && <div className="m-kv"><span className="k">entries taken</span><span className="v pos">{o.entry_taken}</span></div>}
+                    {(o.blocked||0)>0    && <div className="m-kv"><span className="k">blocked</span><span className="v neg">{o.blocked}</span></div>}
+                    {(o.hold||0)>0       && <div className="m-kv"><span className="k">hold</span><span className="v warn">{o.hold}</span></div>}
+                    {gates.map((g,i) => (
+                      <div className="m-kv" key={i}>
+                        <span className="k" style={{fontSize:9}}>{i===0?'top gate':`gate ${i+1}`}</span>
+                        <span className="v" style={{fontSize:9,color:'var(--neg)'}}>{g.gate} <span style={{color:'var(--fg-4)'}}>×{g.count}</span></span>
+                      </div>
+                    ))}
+                  </div></div>
+                </div>
+              );
+            })()}
+
+            {/* Strategy roster */}
+            {strategies.length > 0 && (
+              <div className="m-section">
+                <div className="m-section-head">Strategy Roster</div>
+                <div className="m-section-body"><div className="m-kv-list">
+                  {strategies.map(s => (
+                    <div key={s.id} className="m-kv">
+                      <span className="k">{s.name} · {s.trades}t · {s.wr}%</span>
+                      <span className={`v ${s.pnl>=0?'pos':'neg'}`}>{TC.fmtPct(s.pnl,2)}</span>
+                    </div>
+                  ))}
+                </div></div>
+              </div>
+            )}
+
+            <div className="m-actions">
+              <button className="m-action" onClick={() => setSheet('ops')}>
+                <span className="label">Mode &amp; Ops</span>
+                <span className="sub">Replay · Eval · Pipeline</span>
+              </button>
+              <button className="m-action danger" onClick={onHaltClick}>
+                <span className="label">⏻  Halt engine</span>
+                <span className="sub">requires confirmation</span>
+              </button>
+            </div>
+          </div>
+
+        </main>
+        </div>{/* end m-left */}
+
+        {/* Right pane: chart on desktop only — phone chart tab handles mobile (never both) */}
+        {!isMobile && (
+          <div className="m-right-pane">
+            <div className="m-right-chart">
+              <TermChart
+                session={session} candles={candles} trades={trades}
+                selectedTrade={inspectorTrade} onSelectTrade={tr => { onSelectTrade(tr); setShowInspector(true); }}
+                upToIdx={upToIdx} flashIdx={flashIdx}
+              />
+            </div>
+            {/* Inspector panel — slides in when a trade is selected */}
+            {showInspector && inspectorTrade && (
+              <div className="m-right-inspector">
+                <div className="m-right-inspector-head">
+                  <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',letterSpacing:'0.12em',textTransform:'uppercase'}}>
+                    Trade Inspector
+                  </span>
+                  <button className="m-sheet-close" onClick={() => setShowInspector(false)}>✕</button>
+                </div>
+                <div style={{flex:1,overflowY:'auto',minHeight:0}}>
+                  <TradeInspector session={session} trade={inspectorTrade}/>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+      </div>{/* end m-split */}
+
+      {/* ── Inspector bottom sheet — phone only; desktop uses right-pane panel */}
+      {isMobile && (
+        <MobileBottomSheet
+          open={showInspector && !!inspectorTrade}
+          title={`Trade · ${inspectorTrade?.id || ''}`}
+          onClose={() => setShowInspector(false)}>
+          {inspectorTrade && (
+            <TradeInspector session={session} trade={inspectorTrade}/>
+          )}
+        </MobileBottomSheet>
+      )}
+
+      {/* ── Ops / mode-switch bottom sheet ───────────────────────────────── */}
+      <MobileBottomSheet
+        open={sheet === 'ops'}
+        title="Settings"
+        onClose={() => setSheet(null)}>
+        <div className="m-sheet-row" style={{display:'block'}}>
+          <div className="m-sheet-label">Mode</div>
+          <div className="m-sheet-modes">
+            <button className="m-sheet-mode active">● Live</button>
+            <button className="m-sheet-mode" onClick={() => { setSheet(null); onModeSwitch('replay'); }}>◷ Replay</button>
+            <button className="m-sheet-mode" onClick={() => { setSheet(null); onModeSwitch('eval'); }}>
+              ⚗ Eval <span className="sub">desktop</span>
+            </button>
+            <button className="m-sheet-mode" onClick={() => { setSheet(null); onModeSwitch('pipeline'); }}>
+              ⬡ Pipeline <span className="sub">desktop</span>
+            </button>
+          </div>
+        </div>
+        {(simRuns && simRuns.length > 0) && (
+          <div className="m-sheet-row" style={{display:'block'}}>
+            <div className="m-sheet-label">Watching</div>
+            <select
+              className="inp"
+              style={{width:'100%', height:44, marginTop:6, fontSize:13}}
+              value={watchMode === 'sim' ? `sim:${watchRunId || ''}` : 'live'}
+              onChange={e => {
+                const raw = String(e.target.value || '');
+                if (raw === 'live') { onBackToLive(); return; }
+                if (raw.startsWith('sim:')) onWatchChange(raw.slice(4));
+              }}>
+              <option value="live">LIVE</option>
+              {simRuns.map(run => (
+                <option key={run.run_id} value={`sim:${run.run_id}`}>
+                  SIM · {String(run.label || 'run').slice(0, 16)} · {String(run.run_id || '').slice(0, 8)}…
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div className="m-sheet-row" style={{display:'block', marginTop:8}}>
+          <div className="m-sheet-label">Diagnostics</div>
+          <div style={{display:'grid', gap:4, marginTop:6, fontFamily:'var(--f-mono)', fontSize:11, color:'var(--fg-3)'}}>
+            <div>WebSocket: <span style={{color: wsStatus === 'connected' ? 'var(--pos)' : 'var(--warn)'}}>{wsStatus}</span></div>
+            <div>Last tick: {_fmtRelTime(lastTickAt)}</div>
+            <div>Engine: {engine || '—'}</div>
+          </div>
+        </div>
+      </MobileBottomSheet>
+    </div>
+  );
+}
+
 // ── LiveMonitorDark — main component ────────────────────────────────────
 function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   const [session,       setSession]       = _s(null);
@@ -1474,9 +1942,11 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   const [flashIdx,      setFlashIdx]      = _s(null);
   const [runtimeConfig, setRuntimeConfig] = _s(null);
   const [availableModels, setAvailableModels] = _s([]);
+  const [openPosition, setOpenPosition] = _s(null);
   const [brainData, setBrainData] = _s(null);
   const [blockerFunnel, setBlockerFunnel] = _s(null);
   const [timeline, setTimeline] = _s(null);
+  const [heatmapData, setHeatmapData] = _s(null);
   const [simRunsToday, setSimRunsToday] = _s([]);
   const [watchMode, setWatchMode] = _s('live');
   const [watchRunId, setWatchRunId] = _s('');
@@ -1491,17 +1961,23 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     return ist.toISOString().slice(0, 10);
   };
 
-  // Diagnostics: in live mode we surface current model + available models.
-  // Blocker funnel needs a date and is replay-only.
+  // State: runtime config + available models + open position. Refresh every 30s.
   _e(() => {
     let alive = true;
     const kindQ = watchMode === 'sim' ? `&kind=sim${watchRunId ? `&run_id=${encodeURIComponent(watchRunId)}` : ''}` : '';
     const modeQ = watchMode === 'sim' ? 'replay' : 'live';
-    fetch(`/api/strategy/current/state?mode=${modeQ}&latest_n=0${kindQ}`)
+    const load = () => fetch(`/api/strategy/current/state?mode=${modeQ}&latest_n=0${kindQ}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`state HTTP ${r.status}`)))
-      .then(s => { if (!alive) return; setRuntimeConfig(s?.runtime_config || null); setAvailableModels(Array.isArray(s?.available_models) ? s.available_models : []); })
+      .then(s => {
+        if (!alive) return;
+        setRuntimeConfig(s?.runtime_config || null);
+        setAvailableModels(Array.isArray(s?.available_models) ? s.available_models : []);
+        setOpenPosition(s?.open_position || null);
+      })
       .catch(() => {});
-    return () => { alive = false; };
+    load();
+    const id = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(id); };
   }, [watchMode, watchRunId]);
 
   // Live brain status — initial fetch + refresh every 30s.
@@ -1537,6 +2013,21 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     };
     load();
     const id = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, [watchMode, watchRunId, watchDate]);
+
+  // Session heatmap for today. Refresh every 60s.
+  _e(() => {
+    let alive = true;
+    const load = () => {
+      const date = watchMode === 'sim' ? (watchDate || _todayIST()) : _todayIST();
+      const modeQ = watchMode === 'sim' ? 'replay' : 'live';
+      fetch(`/api/strategy/session-heatmap?mode=${modeQ}&date=${date}`)
+        .then(r => r.ok ? r.json() : null).catch(() => null)
+        .then(d => { if (alive) setHeatmapData(d); });
+    };
+    load();
+    const id = setInterval(load, 60000);
     return () => { alive = false; clearInterval(id); };
   }, [watchMode, watchRunId, watchDate]);
 
@@ -1655,88 +2146,36 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   const sessionPnl     = rawTrades.reduce((a, t) => a + (t.pnlPct || 0), 0);
   const wins           = rawTrades.filter(t => (t.pnlPct || 0) > 0).length;
   const winRate        = rawTrades.length ? Math.round(wins / rawTrades.length * 100) : 0;
-  const regime         = session.regime || (trades[0]?.regime) || '—';
-  const engine         = session.engine || 'ML_PURE';
+  const _latestSignal  = (session.signals || []).reduce((a, s) => (!a || s.idx > a.idx ? s : a), null);
+  const regime         = session.regime || _latestSignal?.regime || (trades[0]?.regime) || '—';
+  const engine         = runtimeConfig?.engine || runtimeConfig?.model_type || session.engine || '—';
 
   // Default to latest trade in inspector
   const displayTrade   = selectedTrade || (trades.length > 0 ? trades[0] : null);
 
   return (
-    <div className="cockpit">
-      <TickerBar quote={quote} instrument={session.instrument}/>
-      {typeof StaleBanner !== 'undefined' && <StaleBanner />}
-      {watchMode === 'sim' && (
-        <div style={{background:'var(--warn)',color:'#231500',padding:'6px 10px',fontSize:'11px',fontWeight:700}}>
-          Watching SIM run {watchRunId ? `${watchRunId.slice(0, 8)}…` : '—'}{watchDate ? ` · ${watchDate}` : ''} · Not LIVE market feed
-        </div>
-      )}
-      <StatusBar
-        sessionPnl={sessionPnl} tradesCount={trades.length} winRate={winRate}
-        regime={regime} engine={engine} ws={wsStatus}
-        onModeSwitch={onModeSwitch} onHaltClick={onKillClick}
-        watchMode={watchMode}
-        simRuns={simRunsToday}
-        watchRunId={watchRunId}
-        onWatchChange={(runId) => {
-          const row = (simRunsToday || []).find(r => String(r?.run_id || '') === String(runId || ''));
-          setWatchMode('sim');
-          setWatchRunId(String(runId || '').trim());
-          setWatchDate(String(row?.source_date || row?.trade_date || row?.date || '').slice(0, 10));
-        }}
-        onBackToLive={() => {
-          setWatchMode('live');
-          setWatchRunId('');
-          setWatchDate('');
-        }}
-      />
-      <div className="t-workspace">
-        <EngineRoster strategies={strategies} dailyRisk={Math.abs(Math.min(0, sessionPnl))}/>
-
-        <div className="t-center">
-          <div className="t-chart-panel">
-            <div className="t-panel-head">
-              <div className="t-panel-title">
-                {session.instrument} · 1m <span className="count">{Math.min(upToIdx+1,candles.length)}/{candles.length} bars</span>
-              </div>
-              <div className="t-panel-actions">
-                {displayTrade && <span className="t-chip amber">● {displayTrade.id}</span>}
-              </div>
-            </div>
-            <TermChart
-              session={session} candles={candles} trades={trades}
-              selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
-              upToIdx={upToIdx} flashIdx={flashIdx}
-            />
-          </div>
-          <Tape
-            session={session} trades={[...trades].reverse()} signals={signals}
-            selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
-            flashId={flashId}
-            diag={{ runtimeConfig, availableModels, brainData, blockerFunnel, timeline,
-                    loading: false, error: '', date: null, onRefresh: null }}
-          />
-        </div>
-
-        <div className="t-rail right" style={{display:'flex',flexDirection:'column'}}>
-          <div className="t-panel-head">
-            <div className="t-panel-title">Trade Inspector</div>
-            <div className="t-panel-actions">
-              <button className="t-btn ghost sm" title="Prev trade (K)"
-                onClick={() => { const i=trades.findIndex(t=>t.id===selectedTrade?.id); if(i>0)setSelectedTrade(trades[i-1]); }}>K↑</button>
-              <button className="t-btn ghost sm" title="Next trade (J)"
-                onClick={() => { const i=trades.findIndex(t=>t.id===selectedTrade?.id); if(i<trades.length-1)setSelectedTrade(trades[i+1]); }}>↓J</button>
-            </div>
-          </div>
-          <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-            <TradeInspector session={session} trade={displayTrade}/>
-          </div>
-          {typeof DepthMiniWidget !== 'undefined' && (
-            <DepthMiniWidget runId={watchMode === 'sim' ? watchRunId : ''} />
-          )}
-        </div>
-      </div>
-      <LogStrip session={session} alerts={session.alerts} wsStatus={wsStatus}/>
-    </div>
+    <MobileLiveShell
+      session={session} candles={candles} upToIdx={upToIdx}
+      flashIdx={flashIdx} flashId={flashId}
+      trades={trades} signals={signals} strategies={strategies}
+      quote={quote} sessionPnl={sessionPnl} winRate={winRate}
+      regime={regime} engine={engine}
+      brainData={brainData} wsStatus={wsStatus}
+      runtimeConfig={runtimeConfig} availableModels={availableModels}
+      openPosition={openPosition}
+      blockerFunnel={blockerFunnel} timeline={timeline}
+      heatmap={heatmapData ? { data: heatmapData } : null}
+      watchMode={watchMode} watchRunId={watchRunId} simRuns={simRunsToday}
+      selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
+      onHaltClick={onKillClick} onModeSwitch={onModeSwitch}
+      onBackToLive={() => { setWatchMode('live'); setWatchRunId(''); setWatchDate(''); }}
+      onWatchChange={(runId) => {
+        const row = (simRunsToday || []).find(r => String(r?.run_id || '') === String(runId || ''));
+        setWatchMode('sim');
+        setWatchRunId(String(runId || '').trim());
+        setWatchDate(String(row?.source_date || row?.trade_date || row?.date || '').slice(0, 10));
+      }}
+    />
   );
 }
 

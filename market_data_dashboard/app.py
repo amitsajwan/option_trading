@@ -3889,6 +3889,13 @@ except ImportError:
 _strategy_profiles_routes = StrategyProfilesRouter()
 app.include_router(_strategy_profiles_routes.router)
 
+try:
+    from .routes.ops_routes import OpsRouter
+except ImportError:
+    from market_data_dashboard.routes.ops_routes import OpsRouter  # type: ignore
+_ops_routes = OpsRouter()
+app.include_router(_ops_routes.router)
+
 _strategy_evaluation_routes = DashboardStrategyEvaluationRouter(
     templates=templates,
     get_strategy_eval_service=lambda: _strategy_eval_service,

@@ -39,12 +39,11 @@ class _CurrentState:
     health_marker: dict[str, Any]
     stats: dict[str, Any]
     latest_positions: list[dict[str, Any]]
-    # Model + engine the strategy_app self-declared at start. Read from
-    # runtime_config.json. Tells the operator WHAT is producing the events.
     runtime_config: dict[str, Any]
-    # Other published models available on disk (could be switched to with a
-    # container restart). Tells the operator WHAT ELSE could be loaded.
     available_models: list[dict[str, Any]]
+    # Most recent open position (POSITION_OPEN/MANAGE without a POSITION_CLOSE).
+    # None when flat. Enables the dashboard to show a live position banner.
+    open_position: Optional[dict[str, Any]]
 
 
 def _resolve_run_dir(mode: str) -> Path:
@@ -171,7 +170,26 @@ def _read_runtime_config(run_dir: Path) -> dict[str, Any]:
             "run_id": legacy.get("run_id"),
             "model_group": legacy.get("model_group"),
         }
+    # Merge key operational knobs from ops_env.json (written by strategy_app at startup).
+    ops_path = run_dir / "ops_env.json"
+    if ops_path.exists():
+        try:
+            ops = json.loads(ops_path.read_text(encoding="utf-8"))
+            out["exit_strategy_mode"] = str(ops.get("EXIT_STRATEGY_MODE") or "scalper").strip().lower()
+            out["exit_stack_name"] = str(ops.get("EXIT_STACK_NAME") or "").strip() or None
+            out["risk_max_session_trades"] = _safe_int(ops.get("RISK_MAX_SESSION_TRADES"))
+            out["risk_max_consecutive_losses"] = _safe_int(ops.get("RISK_MAX_CONSECUTIVE_LOSSES"))
+            out["smart_strike_enabled"] = str(ops.get("STRATEGY_SMART_STRIKE_ENABLED") or "0") == "1"
+        except Exception:
+            pass
     return out
+
+
+def _safe_int(v: Any) -> Any:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _list_available_models(root: Optional[Path] = None) -> list[dict[str, Any]]:
@@ -388,6 +406,7 @@ def read_strategy_current_state(
     health_marker = _read_health_marker(marker_path)
     runtime_config = _read_runtime_config(run_dir_path)
     available_models = _list_available_models()
+    open_position = _find_open_position(all_records)
 
     state = _CurrentState(
         mode=mode.strip().lower(),
@@ -400,8 +419,45 @@ def read_strategy_current_state(
         latest_positions=latest_position_records,
         runtime_config=runtime_config,
         available_models=available_models,
+        open_position=open_position,
     )
     return asdict(state)
+
+
+def _find_open_position(records: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Scan JSONL records to find the most recent position that isn't closed.
+
+    Returns a compact dict for the dashboard open-position banner, or None
+    when the strategy is flat (every POSITION_OPEN has a matching POSITION_CLOSE).
+    """
+    last_event: dict[str, dict] = {}  # position_id → {event, data}
+    for r in records:
+        event = str(r.get("event") or "")
+        pid = str(r.get("position_id") or "").strip()
+        if not pid or event not in ("POSITION_OPEN", "POSITION_MANAGE", "POSITION_CLOSE"):
+            continue
+        last_event[pid] = {"event": event, "data": r}
+
+    open_entries = [v for v in last_event.values() if v["event"] != "POSITION_CLOSE"]
+    if not open_entries:
+        return None
+
+    latest = max(open_entries, key=lambda v: str(v["data"].get("timestamp") or ""))
+    d = latest["data"]
+    return {
+        "position_id": d.get("position_id"),
+        "direction": d.get("direction"),
+        "option_type": d.get("option_type"),
+        "strike": d.get("strike"),
+        "entry_premium": d.get("entry_premium"),
+        "current_premium": d.get("current_premium") or d.get("entry_premium"),
+        "pnl_pct": d.get("pnl_pct"),
+        "mfe_pct": d.get("mfe_pct"),
+        "bars_held": d.get("bars_held"),
+        "entry_time": str(d.get("entry_time") or d.get("timestamp") or "")[:19],
+        "regime": d.get("entry_regime") or d.get("regime"),
+        "last_event": latest["event"],
+    }
 
 
 def read_blocker_funnel(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 import os
 import uuid
 from datetime import date, datetime
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 from ..constants import BANKNIFTY_LOT_SIZE, HARD_CLOSE_MINUTE, PRICE_EPS, SOFT_CLOSE_MINUTE
 from .trailing_manager import TrailingStopManager
+from .exit_policy import CompositeExitPolicy, build_default_exit_stack
 
 
 class PositionTracker:
@@ -27,6 +29,15 @@ class PositionTracker:
         self._position: Optional[PositionContext] = None
         self._closed_positions: list[dict[str, object]] = []
         self._trailing_manager = TrailingStopManager()
+        self._exit_stack_enabled = as_bool(os.getenv("EXIT_POLICY_STACK_ENABLED", "false"))
+        self._exit_stack: Optional[CompositeExitPolicy] = (
+            build_default_exit_stack() if self._exit_stack_enabled else None
+        )
+        # Lottery mode: the stack is the SOLE discretionary authority (it carries its
+        # own HardStop + Timestop), so legacy inline exits are suppressed to let
+        # winners run. Scalper mode keeps the inline exits as complementary
+        # stop-loss / timestop backstops (the scalper stack has no hard stop).
+        self._exit_mode = str(os.getenv("EXIT_STRATEGY_MODE", "scalper") or "scalper").strip().lower()
 
     def on_session_start(self, trade_date: date) -> None:
         self._position = None
@@ -131,12 +142,40 @@ class PositionTracker:
             playbook_hit = evaluate_playbook_exit(position, snap)
             if playbook_hit is not None:
                 exit_reason, exit_trigger = playbook_hit
+        # When the composite exit stack is active it is the SOLE discretionary
+        # authority — the legacy inline exits (stagnant, thesis_fail, premium_target,
+        # max_hold, early_stop, …) must NOT run, or they cut winners the stack wants
+        # to let run (this is exactly what defeated lottery mode: thesis_fail/stagnant
+        # exited at +0.7% while the stack was holding for the fat tail).
+        # Scalper keeps legacy exits as safety backstops (premium_stop, stagnant_exit).
+        _stack_active = (
+            self._exit_stack is not None
+            and not has_playbook
+            and self._exit_mode == "lottery"
+        )
+        if forced_exit_reason is None and not has_playbook and exit_reason is None and self._exit_stack is not None:
+            stack_reason = self._exit_stack.check(position, snap)
+            if stack_reason is not None:
+                exit_reason = stack_reason
+                exit_trigger = "exit_stack"
+
+        # ── Hard safety floors — always apply, even over the exit stack ──
         if forced_exit_reason is not None:
             exit_reason = forced_exit_reason
             exit_trigger = "forced"
         elif risk.daily_loss_breached or risk.weekly_loss_breached:
             exit_reason = ExitReason.RISK_BREACH
             exit_trigger = "risk_breach"
+        elif self._minute_of_day(snap) >= HARD_CLOSE_MINUTE:
+            exit_reason = ExitReason.TIME_STOP
+            exit_trigger = "hard_close"
+        elif _stack_active:
+            # Stack already had its say above. Only the soft-close clock floor
+            # remains; all other legacy discretionary exits are suppressed.
+            if exit_reason is None and self._minute_of_day(snap) >= SOFT_CLOSE_MINUTE:
+                exit_reason = ExitReason.TIME_STOP
+                exit_trigger = "soft_close"
+        # ── Legacy inline discretionary exits (only when stack NOT active) ──
         # Small-profit stagnant exit: bank profits when giving back and momentum has
         # stalled (proxy via MFE giveback). Placed before clock/stop exits.
         elif exit_reason is None and as_bool(os.getenv("STAGNANT_PROFIT_EXIT_ENABLED", "false")):
@@ -154,9 +193,6 @@ class PositionTracker:
             ):
                 exit_reason = ExitReason.TIME_STOP
                 exit_trigger = "stagnant_profit_exit"
-        elif self._minute_of_day(snap) >= HARD_CLOSE_MINUTE:
-            exit_reason = ExitReason.TIME_STOP
-            exit_trigger = "hard_close"
         elif not has_playbook and position.underlying_stop_pct is not None and self._is_underlying_stop_hit(position, current_futures_price):
             exit_reason = ExitReason.STOP_LOSS
             exit_trigger = "underlying_stop"
@@ -188,7 +224,7 @@ class PositionTracker:
 
         if exit_reason is None:
             return None
-        return self._close_position(snap, exit_reason, current_premium)
+        return self._close_position(snap, exit_reason, current_premium, exit_trigger=exit_trigger or "")
 
     def force_exit(self, snap: SnapshotAccessor, reason: ExitReason) -> Optional[TradeSignal]:
         return self.update(snap, RiskContext(), forced_exit_reason=reason)
@@ -197,17 +233,37 @@ class PositionTracker:
         if not self._closed_positions:
             return {"trades": 0}
         pnls = [float(item["pnl_pct"]) for item in self._closed_positions]
+        mfes = [float(item["mfe_pct"]) for item in self._closed_positions]
+        maes = [float(item["mae_pct"]) for item in self._closed_positions]
         wins = [value for value in pnls if value > 0]
         losses = [value for value in pnls if value <= 0]
+        # E2-S6: exit quality metrics
+        avg_mfe = sum(mfes) / len(mfes) if mfes else 0.0
+        avg_pnl = sum(pnls) / len(pnls)
+        capture_ratios = [
+            p / m for p, m in zip(pnls, mfes) if m > 0
+        ]
+        avg_capture_ratio = sum(capture_ratios) / len(capture_ratios) if capture_ratios else 0.0
+        # E4-S2: net P&L after transaction costs
+        _cost_per_lot = float(os.getenv("TRANSACTION_COST_PER_LOT", "50") or "50")
+        net_pnls = [
+            float(item["pnl_pct"]) - _net_cost_pct(item, _cost_per_lot)
+            for item in self._closed_positions
+        ]
         return {
             "trades": len(pnls),
             "wins": len(wins),
             "losses": len(losses),
             "win_rate": (len(wins) / len(pnls)) if pnls else 0.0,
-            "avg_pnl_pct": sum(pnls) / len(pnls),
-            "avg_mfe_pct": sum(float(item["mfe_pct"]) for item in self._closed_positions) / len(self._closed_positions),
-            "avg_mae_pct": sum(float(item["mae_pct"]) for item in self._closed_positions) / len(self._closed_positions),
+            "avg_pnl_pct": avg_pnl,
+            "avg_net_pnl_pct": sum(net_pnls) / len(net_pnls) if net_pnls else 0.0,
+            "avg_mfe_pct": avg_mfe,
+            "avg_mae_pct": sum(maes) / len(maes) if maes else 0.0,
+            "avg_capture_ratio": avg_capture_ratio,
+            "exit_triggers": _exit_trigger_counts(self._closed_positions),
         }
+
+    # ── helpers ────────────────────────────────────────────────────────────
 
     def _current_premium(self, snap: SnapshotAccessor, direction: str, strike: int) -> Optional[float]:
         return snap.option_ltp(direction, strike)
@@ -290,7 +346,7 @@ class PositionTracker:
 
     @staticmethod
     def _is_thesis_fail_exit(position: PositionContext) -> bool:
-        """5m entry thesis: if no run within ~2 bars and already red, exit."""
+        """Exit when trade showed no MFE and has reached fail_pnl loss threshold."""
         bars = int(position.thesis_fail_exit_bars or 0)
         if bars <= 0:
             return False
@@ -298,11 +354,7 @@ class PositionTracker:
             return False
         min_mfe = float(position.thesis_fail_min_mfe_pct or 0.02)
         fail_pnl = float(position.thesis_fail_pnl_pct or -0.08)
-        if position.mfe_pct < min_mfe and position.pnl_pct <= fail_pnl:
-            return True
-        if position.mfe_pct < min_mfe and position.pnl_pct < 0:
-            return True
-        return False
+        return position.mfe_pct < min_mfe and position.pnl_pct <= fail_pnl
 
     @staticmethod
     def _is_stagnant_exit(position: PositionContext) -> bool:
@@ -342,7 +394,7 @@ class PositionTracker:
             return ExitReason.TRAILING_STOP
         return ExitReason.STOP_LOSS
 
-    def _close_position(self, snap: SnapshotAccessor, reason: ExitReason, exit_premium: float) -> TradeSignal:
+    def _close_position(self, snap: SnapshotAccessor, reason: ExitReason, exit_premium: float, *, exit_trigger: str = "") -> TradeSignal:
         if self._position is None:
             raise RuntimeError("no open position to close")
         position = self._position
@@ -381,6 +433,7 @@ class PositionTracker:
             "oi_trail_active": position.oi_trail_active,
             "oi_trail_stop_price": position.oi_trail_stop_price,
             "exit_reason": reason.value,
+            "exit_policy_triggered": exit_trigger,
             "underlying_stop_pct": position.underlying_stop_pct,
             "underlying_target_pct": position.underlying_target_pct,
             "entry_futures_price": position.entry_futures_price,
@@ -404,7 +457,33 @@ class PositionTracker:
                 f"{reason.value} pnl={position.pnl_pct:.2%} mfe={position.mfe_pct:.2%} "
                 f"mae={position.mae_pct:.2%} stop={position.stop_price or 0.0:.2f}"
             ),
+            decision_metrics={"exit_policy_triggered": exit_trigger} if exit_trigger else {},
         )
         self._position = None
         logger.info("position closed id=%s reason=%s pnl=%.2f%%", signal.position_id, reason.value, position.pnl_pct * 100.0)
         return signal
+
+
+# ── module-level helpers ───────────────────────────────────────────────────
+
+
+def _net_cost_pct(position_record: dict, cost_per_lot: float) -> float:
+    """E4-S2: transaction cost as fraction of entry premium notional."""
+    lots = int(position_record.get("lots") or 1)
+    entry_premium = float(position_record.get("entry_premium") or 0)
+    if entry_premium <= 0 or lots <= 0:
+        return 0.0
+    # 2 × cost (entry + exit), expressed as fraction of notional
+    notional_per_lot = entry_premium * BANKNIFTY_LOT_SIZE
+    if notional_per_lot <= 0:
+        return 0.0
+    return 2.0 * cost_per_lot * lots / (notional_per_lot * lots)
+
+
+def _exit_trigger_counts(closed_positions: list[dict]) -> dict[str, int]:
+    """E2-S6: count how many trades exited via each trigger."""
+    triggers = [
+        str(p.get("exit_policy_triggered") or p.get("exit_reason") or "unknown")
+        for p in closed_positions
+    ]
+    return dict(Counter(triggers))

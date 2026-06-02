@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import sys
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -354,7 +356,10 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
                     **run_metadata["risk_config"],
                 }
             )
-        engine.set_run_context(f"runtime-{args.rollout_stage}", run_metadata)
+        # E6-S1: unique run_id per session — prevents multi-run days mixing trades in MongoDB
+        _session_ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        _session_run_id = f"{args.rollout_stage}-{_session_ts}-{str(uuid.uuid4())[:8]}"
+        engine.set_run_context(_session_run_id, run_metadata)
     topic = str(args.topic or snapshot_topic()).strip() or snapshot_topic()
     runtime_store = RuntimeArtifactStore(runtime_artifact_paths.root)
     # If the engine has option-P&L bundles loaded (via OPTION_PNL_MODEL_BUNDLE),
@@ -395,7 +400,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             position_size_multiplier=float(args.position_size_multiplier),
             halt_consecutive_losses=int(args.halt_consecutive_losses),
             halt_daily_dd_pct=float(args.halt_daily_dd_pct),
-            run_id=(ml_pure_switch_meta or {}).get("run_id"),
+            run_id=_session_run_id if hasattr(engine, "set_run_context") else (ml_pure_switch_meta or {}).get("run_id"),
             model_group=(ml_pure_switch_meta or {}).get("model_group"),
             model_package_path=ml_pure_model_package,
             threshold_report_path=ml_pure_threshold_report,
@@ -409,6 +414,37 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             active_option_pnl_bundle=active_option_pnl_bundle,
         )
     )
+    # Write ops-relevant env vars to a file so the dashboard OPS tab can read
+    # the actual live config even though it runs in a separate container.
+    _ops_env_keys = [
+        "EXIT_POLICY_STACK_ENABLED", "EXIT_PREMIUM_TARGET_PCT",
+        "EXIT_TRAILING_ACTIVATION_PCT", "EXIT_TRAILING_TRAIL_PCT",
+        "EXIT_THESIS_FAIL_BARS", "EXIT_THESIS_FAIL_MIN_MFE",
+        "CONSENSUS_BYPASS_MIN_CONFIDENCE", "DIRECTION_MIN_MARGIN_SIDEWAYS",
+        "STRATEGY_STRIKE_SELECTION_POLICY", "SMART_STRIKE_MAX_PREMIUM",
+        "STRATEGY_STRIKE_MAX_OTM_STEPS", "STRATEGY_SMART_STRIKE_ENABLED",
+        "RISK_MAX_CONSECUTIVE_LOSSES", "RISK_MAX_SESSION_TRADES",
+        "STRATEGY_PROFILE_ID", "STRATEGY_MIN_CONFIDENCE", "EXIT_STRATEGY_MODE",
+        # ML model paths + risk + smart-strike tiers — so the OPS sim reproduces
+        # live exactly (these live only in strategy_app's container env).
+        "ENTRY_ML_MODEL_PATH", "ENTRY_ML_MIN_PROB",
+        "DIRECTION_ML_MODEL_PATH", "DIRECTION_ML_WEIGHT", "DIRECTION_ML_FILTER_MIN_PROB",
+        "OPTION_PNL_MODEL_BUNDLE",
+        "RISK_CAPITAL_ALLOCATED", "RISK_PER_TRADE_PCT", "RISK_MAX_LOTS_PER_TRADE",
+        "SMART_STRIKE_OTM_CONFIDENCE", "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM2_CONFIDENCE",
+        "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM3_CONFIDENCE", "SMART_STRIKE_OTM3_REGIMES",
+        "SMART_STRIKE_OTM4_ENABLED", "SMART_STRIKE_OTM4_CONFIDENCE", "SMART_STRIKE_OTM4_REGIMES",
+        "STRATEGY_ENHANCED_VELOCITY", "STRATEGY_IV_EXTREME_PERCENTILE",
+    ]
+    try:
+        import json as _json
+        _ops_env = {k: str(os.getenv(k, "") or "") for k in _ops_env_keys}
+        _ops_env_path = runtime_artifact_paths.root / "ops_env.json"
+        _ops_env_path.write_text(_json.dumps(_ops_env, indent=2), encoding="utf-8")
+        logger.info("ops_env.json written to %s", _ops_env_path)
+    except Exception as _e:
+        logger.warning("could not write ops_env.json: %s", _e)
+
     consumer = RedisSnapshotConsumer(
         engine=engine,
         topic=topic,
