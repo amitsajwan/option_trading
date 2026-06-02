@@ -19,6 +19,7 @@ from strategy_app.position.exit_policy import (
     MomentumReversalPolicy,
     build_default_exit_stack,
     build_lottery_exit_stack,
+    build_adaptive_exit_stack,
 )
 
 
@@ -233,3 +234,45 @@ class TestLotteryStack:
         pos = _pos(pnl_pct=0.20, mfe_pct=0.20, bars_held=5)
         # MFE 20% just hit activation; floor = 20*0.6 = 12%; pnl 20% > 12% → hold
         assert stack.check(pos, _snap) is None
+
+
+class TestAdaptiveStack:
+    def test_builds_adaptive_mode(self, monkeypatch):
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "adaptive")
+        stack = build_default_exit_stack()
+        assert "adaptive" in stack.name
+        assert "lottery=BREAKOUT,TRENDING" in stack.name
+
+    def test_breakout_regime_uses_lottery(self):
+        stack = build_adaptive_exit_stack()
+        # BREAKOUT entry: MFE hit 5%, pnl pulled back to 0.5%.
+        # Scalper trail (act=1%, trail=0.5%): floor = 5%-0.5% = 4.5%; pnl 0.5% < 4.5% → STOP
+        # Lottery runner (act=20% default): mfe 5% < 20% → not active; thesis_fail min_mfe=3%
+        #   satisfied (5%>3%); no other exit fires → holds
+        pos = _pos(entry_regime="BREAKOUT", pnl_pct=0.005, mfe_pct=0.05, bars_held=5)
+        assert stack.check(pos, _snap) is None  # lottery lets it run
+
+    def test_sideways_regime_uses_scalper(self, monkeypatch):
+        monkeypatch.setenv("EXIT_THESIS_FAIL_BARS", "3")
+        monkeypatch.setenv("EXIT_THESIS_FAIL_MIN_MFE", "0.002")
+        stack = build_adaptive_exit_stack()
+        # SIDEWAYS entry, 3 bars held, MFE never moved → scalper thesis_fail fires
+        pos = _pos(entry_regime="SIDEWAYS", pnl_pct=-0.01, mfe_pct=0.0, bars_held=3)
+        assert stack.check(pos, _snap) == ExitReason.THESIS_FAIL
+
+    def test_trending_regime_uses_lottery(self):
+        stack = build_adaptive_exit_stack()
+        # TRENDING entry, +30% MFE, pnl still +25% — lottery holds (target 50% not hit)
+        pos = _pos(entry_regime="TRENDING", pnl_pct=0.25, mfe_pct=0.30, bars_held=15)
+        assert stack.check(pos, _snap) is None
+
+    def test_custom_lottery_regimes(self, monkeypatch):
+        monkeypatch.setenv("ADAPTIVE_LOTTERY_REGIMES", "HIGH_VOL")
+        stack = build_adaptive_exit_stack()
+        assert "lottery=HIGH_VOL" in stack.name
+        # HIGH_VOL → lottery (runs)
+        pos_hv = _pos(entry_regime="HIGH_VOL", pnl_pct=0.01, mfe_pct=0.10, bars_held=5)
+        # BREAKOUT → scalper (thesis_fail fires at 3b with zero MFE, but MFE=10% so no)
+        pos_bo = _pos(entry_regime="BREAKOUT", pnl_pct=-0.01, mfe_pct=0.0, bars_held=3)
+        assert stack.check(pos_hv, _snap) is None   # lottery holds
+        assert stack.check(pos_bo, _snap) == ExitReason.THESIS_FAIL  # scalper cuts

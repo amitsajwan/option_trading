@@ -301,13 +301,61 @@ def build_lottery_exit_stack() -> CompositeExitPolicy:
     return CompositeExitPolicy(policies)
 
 
+class RegimeAdaptiveExitPolicy(ExitPolicy):
+    """Route to lottery or scalper exit stack based on the regime at entry time.
+
+    BREAKOUT / TRENDING → lottery: asymmetric payoff, let the move develop.
+    Everything else      → scalper: capture small gains, cut losses fast.
+
+    Controlled by EXIT_STRATEGY_MODE=adaptive. The set of lottery regimes can be
+    overridden via ADAPTIVE_LOTTERY_REGIMES (comma-separated, default BREAKOUT,TRENDING).
+    """
+
+    _DEFAULT_LOTTERY_REGIMES = {"BREAKOUT", "TRENDING"}
+
+    def __init__(self, scalper: CompositeExitPolicy, lottery: CompositeExitPolicy):
+        self._scalper = scalper
+        self._lottery = lottery
+        raw = os.getenv("ADAPTIVE_LOTTERY_REGIMES", "") or ""
+        if raw.strip():
+            self._lottery_regimes = {r.strip().upper() for r in raw.split(",") if r.strip()}
+        else:
+            self._lottery_regimes = self._DEFAULT_LOTTERY_REGIMES
+
+    def _stack_for(self, position: PositionContext) -> CompositeExitPolicy:
+        regime = str(position.entry_regime or "").strip().upper()
+        return self._lottery if regime in self._lottery_regimes else self._scalper
+
+    def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
+        return self._stack_for(position).check(position, snap)
+
+    @property
+    def name(self) -> str:
+        regimes = ",".join(sorted(self._lottery_regimes))
+        return f"adaptive[lottery={regimes}|scalper=rest]"
+
+
+def build_adaptive_exit_stack() -> RegimeAdaptiveExitPolicy:
+    scalper = build_scalper_exit_stack()
+    lottery = build_lottery_exit_stack()
+    stack = RegimeAdaptiveExitPolicy(scalper, lottery)
+    logger.info("exit policy mode=adaptive stack: %s", stack.name)
+    return stack
+
+
 def build_default_exit_stack() -> CompositeExitPolicy:
     """Build the exit stack for the configured EXIT_STRATEGY_MODE.
 
-    EXIT_STRATEGY_MODE=scalper (default) — capture small gains, don't give back.
-    EXIT_STRATEGY_MODE=lottery           — lose small often, win big rarely.
+    EXIT_STRATEGY_MODE=scalper   (default) — capture small gains, don't give back.
+    EXIT_STRATEGY_MODE=lottery             — lose small often, win big rarely.
+    EXIT_STRATEGY_MODE=adaptive            — lottery on BREAKOUT/TRENDING, scalper otherwise.
     """
     mode = str(os.getenv("EXIT_STRATEGY_MODE", "scalper") or "scalper").strip().lower()
-    stack = build_lottery_exit_stack() if mode == "lottery" else build_scalper_exit_stack()
+    if mode == "lottery":
+        stack = build_lottery_exit_stack()
+    elif mode == "adaptive":
+        stack = build_adaptive_exit_stack()
+    else:
+        stack = build_scalper_exit_stack()
     logger.info("exit policy mode=%s stack: %s", mode, stack.name)
     return stack
