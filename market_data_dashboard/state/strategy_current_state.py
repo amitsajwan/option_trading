@@ -171,7 +171,26 @@ def _read_runtime_config(run_dir: Path) -> dict[str, Any]:
             "run_id": legacy.get("run_id"),
             "model_group": legacy.get("model_group"),
         }
+    # Merge key operational knobs from ops_env.json (written by strategy_app at startup).
+    ops_path = run_dir / "ops_env.json"
+    if ops_path.exists():
+        try:
+            ops = json.loads(ops_path.read_text(encoding="utf-8"))
+            out["exit_strategy_mode"] = str(ops.get("EXIT_STRATEGY_MODE") or "scalper").strip().lower()
+            out["exit_stack_name"] = str(ops.get("EXIT_STACK_NAME") or "").strip() or None
+            out["risk_max_session_trades"] = _safe_int(ops.get("RISK_MAX_SESSION_TRADES"))
+            out["risk_max_consecutive_losses"] = _safe_int(ops.get("RISK_MAX_CONSECUTIVE_LOSSES"))
+            out["smart_strike_enabled"] = str(ops.get("STRATEGY_SMART_STRIKE_ENABLED") or "0") == "1"
+        except Exception:
+            pass
     return out
+
+
+def _safe_int(v: Any) -> Any:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _list_available_models(root: Optional[Path] = None) -> list[dict[str, Any]]:

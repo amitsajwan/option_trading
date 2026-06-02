@@ -1763,6 +1763,47 @@ function MobileLiveShell({
 
           {/* More tab */}
           <div className={tab === 'more' ? '' : 'm-tab-hidden'}>
+            {/* ── System Status ───────────────────────────────────────────── */}
+            {(() => {
+              const rc  = runtimeConfig || {};
+              const bf  = blockerFunnel || {};
+              const mdl = Array.isArray(availableModels) ? availableModels.find(m => m.is_current) : null;
+              // rc.min_confidence comes from rollout.min_confidence in runtime_config.json
+              // rc.exit_strategy_mode + rc.risk_max_session_trades come from ops_env.json overlay
+              const exitMode   = rc.exit_strategy_mode || '—';
+              const conf       = rc.min_confidence != null ? `${(rc.min_confidence*100).toFixed(0)}%` : '—';
+              const maxTrades  = rc.risk_max_session_trades ?? '—';
+              const tradesDone = (bf.outcomes?.entry_taken || 0) + (bf.outcomes?.executed || 0);
+              const profile    = rc.strategy_profile_id || '—';
+              const stage      = rc.rollout_stage || '—';
+              const smartStrike= rc.smart_strike_enabled;
+              const dot = (ok) => <span style={{display:'inline-block',width:7,height:7,borderRadius:'50%',background:ok?'var(--pos)':'var(--neg)',marginRight:5,verticalAlign:'middle'}}/>;
+              const row = (label, val, ok) => (
+                <div className="m-kv" key={label}>
+                  <span className="k" style={{color:'var(--fg-3)'}}>{ok != null && dot(ok)}{label}</span>
+                  <span className="v" style={{fontFamily:'var(--f-mono)',fontSize:11,color:'var(--fg-1)'}}>{val}</span>
+                </div>
+              );
+              const exitModeColor = exitMode === 'lottery' ? 'var(--warn)' : exitMode === 'scalper' ? 'var(--fg-2)' : 'var(--fg-4)';
+              return (
+                <div className="m-section">
+                  <div className="m-section-head">System Status</div>
+                  <div className="m-section-body">
+                    <div className="m-kv-list">
+                      {row('Engine', rc.engine || engine || '—', !!(rc.engine || engine))}
+                      {row('Profile', <span style={{fontSize:10,color:'var(--fg-3)'}}>{profile}</span>, profile !== '—')}
+                      {row('Stage', stage, stage === 'live')}
+                      {row('Exit mode', <span style={{color:exitModeColor,fontWeight:600,textTransform:'uppercase'}}>{exitMode}</span>, null)}
+                      {row('Confidence', conf, conf !== '—')}
+                      {row('Trades today', `${tradesDone} / ${maxTrades}`, tradesDone < (maxTrades === '—' ? 999 : Number(maxTrades)))}
+                      {smartStrike != null && row('Smart strike', smartStrike ? 'on' : 'off', smartStrike)}
+                      {mdl && row('Entry model AUC', `${mdl.holdout_auc?.toFixed(3) || '?'} · ${mdl.feature_count ?? '?'}f`, true)}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+            {/* ── Strategy Roster ─────────────────────────────────────────── */}
             <div className="m-section">
               <div className="m-section-head">Strategy Roster</div>
               <div className="m-section-body">
