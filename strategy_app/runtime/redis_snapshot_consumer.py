@@ -181,11 +181,12 @@ class RedisSnapshotConsumer:
         # EventBus — used for all stream operations (xreadgroup, xack, xgroup_create).
         # When None, falls back to calling self._client directly (legacy path).
         self._bus = bus
-        env_transport = str(os.getenv("STRATEGY_CONSUMER_TRANSPORT") or "pubsub").strip().lower()
-        self._transport = str(transport or env_transport or "pubsub").strip().lower()
+        env_transport = str(os.getenv("STRATEGY_CONSUMER_TRANSPORT") or "streams").strip().lower()
+        self._transport = str(transport or env_transport or "streams").strip().lower()
         if self._transport not in {"pubsub", "streams"}:
             raise ValueError("transport must be 'pubsub' or 'streams'")
-        self._stream_name = str(stream_name or os.getenv("STRATEGY_STREAM_NAME") or "").strip()
+        _default_stream = "stream:snapshots:live" if self._transport == "streams" else ""
+        self._stream_name = str(stream_name or os.getenv("STRATEGY_STREAM_NAME") or _default_stream).strip()
         self._stream_group = str(stream_group or STREAM_GROUP_NAME).strip() or STREAM_GROUP_NAME
         self._stream_consumer_name = str(stream_consumer_name or f"consumer-{socket.gethostname()}").strip()
         self._poll_interval_sec = max(0.01, float(poll_interval_sec))

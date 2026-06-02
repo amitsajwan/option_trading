@@ -129,6 +129,7 @@ class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
             engine=engine,
             topic="market:snapshot:v1",
             client=_FakeRedis(payloads),
+            transport="pubsub",
             poll_interval_sec=0.001,
         )
 
@@ -150,6 +151,7 @@ class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
                 engine=engine,
                 topic="market:snapshot:v1",
                 client=fake_redis,
+                transport="pubsub",
                 poll_interval_sec=0.001,
             )
 
@@ -299,6 +301,7 @@ class RedisSnapshotConsumerDedupeTests(unittest.TestCase):
             engine=engine,
             topic="market:snapshot:v1",
             client=_FakeRedis(payloads),
+            transport="pubsub",
             poll_interval_sec=0.001,
         )
 
