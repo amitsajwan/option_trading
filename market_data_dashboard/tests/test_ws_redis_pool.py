@@ -126,6 +126,10 @@ class TestPoolSubscribe(unittest.TestCase):
 
 
 class TestPoolDispatch(unittest.TestCase):
+    def _flush(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Run event loop briefly to execute pending call_soon_threadsafe callbacks."""
+        loop.run_until_complete(asyncio.sleep(0))
+
     def test_dispatch_puts_to_matching_queue(self):
         loop = asyncio.new_event_loop()
         pool = _make_pool()
@@ -133,6 +137,7 @@ class TestPoolDispatch(unittest.TestCase):
         ctx.add_subscription("channel", "market:snapshot:v1")
 
         pool._dispatch("market:snapshot:v1", '{"snap": 1}')
+        self._flush(loop)
 
         self.assertFalse(ctx.msg_queue.empty())
         msg = ctx.msg_queue.get_nowait()
@@ -146,6 +151,7 @@ class TestPoolDispatch(unittest.TestCase):
         ctx.add_subscription("channel", "market:snapshot:v1")
 
         pool._dispatch("other:channel", '{"x": 1}')
+        self._flush(loop)
         self.assertTrue(ctx.msg_queue.empty())
 
     def test_dispatch_drops_oldest_on_overflow(self):
@@ -156,6 +162,7 @@ class TestPoolDispatch(unittest.TestCase):
 
         for i in range(101):
             pool._dispatch("ch", f'{{"i": {i}}}')
+        self._flush(loop)
 
         self.assertLessEqual(ctx.msg_queue.qsize(), 100)
         last = None

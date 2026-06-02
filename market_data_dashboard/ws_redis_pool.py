@@ -269,17 +269,23 @@ class SharedRedisPool:
                     "channel": channel,
                     "data": decoded,
                 }
+                # asyncio.Queue is NOT thread-safe — schedule put via the
+                # connection's event loop so all queue ops run in the loop thread.
+                def _do_put(q=ctx.msg_queue, m=msg) -> None:
+                    if q.full():
+                        try:
+                            q.get_nowait()
+                        except Exception:
+                            pass
+                    try:
+                        q.put_nowait(m)
+                    except Exception:
+                        pass
+
                 try:
-                    ctx.msg_queue.put_nowait(msg)
-                except asyncio.QueueFull:
-                    try:
-                        ctx.msg_queue.get_nowait()
-                    except Exception:
-                        pass
-                    try:
-                        ctx.msg_queue.put_nowait(msg)
-                    except Exception:
-                        pass
+                    ctx.async_loop.call_soon_threadsafe(_do_put)
+                except Exception:
+                    pass
             except Exception as exc:
                 logger.debug("dispatch error conn=%s: %s", ctx.conn_id, exc)
 
