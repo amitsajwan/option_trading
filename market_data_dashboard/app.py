@@ -32,7 +32,7 @@ import queue
 import fnmatch
 import subprocess
 import sys
-from .ws_redis_pool import SharedRedisPool as _SharedRedisPool, _pool as _ws_pool
+from .ws_redis_pool import _pool as _ws_pool
 from collections import deque
 from functools import lru_cache
 from urllib.parse import quote, urlencode
@@ -3459,7 +3459,7 @@ async def websocket_stomp(ws: WebSocket):
     buffer = ""
 
     loop = asyncio.get_running_loop()
-    _conn_ctx = _ws_pool.register(conn_id, loop)
+    _conn_q = _ws_pool.register(conn_id, loop)
 
     # STOMP subscriptions (internal_id -> {stomp_id, destination, kind, name})
     stomp_subs: Dict[str, Dict[str, str]] = {}
@@ -3560,7 +3560,7 @@ async def websocket_stomp(ws: WebSocket):
         """Drain the per-connection asyncio.Queue fed by the shared pool threads."""
         while True:
             try:
-                msg = await asyncio.wait_for(_conn_ctx.msg_queue.get(), timeout=1.0)
+                msg = await asyncio.wait_for(_conn_q.get(), timeout=1.0)
                 await _handle_redis_message(msg)
             except asyncio.TimeoutError:
                 continue
