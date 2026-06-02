@@ -213,17 +213,32 @@ class TestLockKeyFor(unittest.TestCase):
 
 
 class TestTransport(unittest.TestCase):
-    def test_live_pubsub(self) -> None:
-        self.assertEqual(resolve_namespace("live").transport(), "pubsub")
+    def test_live_streams(self) -> None:
+        self.assertEqual(resolve_namespace("live").transport(), "streams")
 
-    def test_oos_pubsub(self) -> None:
-        self.assertEqual(resolve_namespace("oos").transport(), "pubsub")
+    def test_oos_streams(self) -> None:
+        self.assertEqual(resolve_namespace("oos").transport(), "streams")
 
     def test_sim_streams(self) -> None:
         self.assertEqual(
             resolve_namespace("sim", run_id="r1").transport(),
             "streams",
         )
+
+    def test_legacy_rollback_live_pubsub(self) -> None:
+        import os
+        with unittest.mock.patch.dict(os.environ, {"NAMESPACE_STREAMS_TRANSPORT": "false"}):
+            self.assertEqual(resolve_namespace("live").transport(), "pubsub")
+
+    def test_legacy_rollback_oos_pubsub(self) -> None:
+        import os
+        with unittest.mock.patch.dict(os.environ, {"NAMESPACE_STREAMS_TRANSPORT": "false"}):
+            self.assertEqual(resolve_namespace("oos").transport(), "pubsub")
+
+    def test_legacy_rollback_sim_still_streams(self) -> None:
+        import os
+        with unittest.mock.patch.dict(os.environ, {"NAMESPACE_STREAMS_TRANSPORT": "false"}):
+            self.assertEqual(resolve_namespace("sim", run_id="r1").transport(), "streams")
 
 
 class TestNamespaceImmutable(unittest.TestCase):

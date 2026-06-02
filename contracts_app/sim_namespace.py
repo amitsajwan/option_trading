@@ -92,8 +92,17 @@ class Namespace:
 
     # ── transport / topic / stream naming ────────────────────────────────
     def transport(self) -> Transport:
-        """``streams`` for sim, ``pubsub`` for live and oos."""
-        return "streams" if self.kind == "sim" else "pubsub"
+        """Return the transport for this namespace.
+
+        D1 (arch/streams-loose-coupling): returns ``streams`` for all modes.
+        Set ``NAMESPACE_STREAMS_TRANSPORT=false`` to revert to legacy behaviour
+        (``pubsub`` for live/oos, ``streams`` for sim) during rollback.
+        """
+        import os
+        legacy = str(os.getenv("NAMESPACE_STREAMS_TRANSPORT") or "true").strip().lower() in {"0", "false", "no", "off"}
+        if legacy:
+            return "streams" if self.kind == "sim" else "pubsub"
+        return "streams"
 
     def stream_for(self, what: str) -> str:
         """Return the per-mode stream/topic name for an event kind.
