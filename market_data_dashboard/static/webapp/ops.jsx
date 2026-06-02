@@ -551,9 +551,21 @@ function OpsPage() {
               {isRunning ? '⏳ Running…' : '▶  Run Sim'}
             </button>
             {job?.status === 'done' && (
-              <span style={{fontFamily:'var(--f-mono)', fontSize:10.5, color:'var(--pos)', marginLeft:4}}>
-                ✓ done — {simTrades.length} trades
-              </span>
+              <>
+                <span style={{fontFamily:'var(--f-mono)', fontSize:10.5, color:'var(--pos)', marginLeft:4}}>
+                  ✓ done — {simTrades.length} trades
+                </span>
+                {job.replay_url && (
+                  <a href={job.replay_url}
+                     style={{marginLeft:'auto', fontFamily:'var(--f-mono)', fontSize:11,
+                             color:'var(--ink)', textDecoration:'none',
+                             border:'1px solid var(--line-1)', borderRadius:'var(--r-2)',
+                             padding:'4px 12px', background:'var(--paper-2)',
+                             display:'inline-flex', alignItems:'center', gap:5}}>
+                    ◷ View in Terminal
+                  </a>
+                )}
+              </>
             )}
             {job?.status === 'done' && job?.run_id && (
               <a href={`/app?mode=replay&kind=sim&run_id=${job.run_id}&date=${simDate}`}

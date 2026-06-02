@@ -9,17 +9,20 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
 import uuid
 from collections import deque
-from datetime import date, datetime
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
@@ -351,7 +354,7 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
         if "STRATEGY_MIN_CONFIDENCE" in overrides:
             sim_env["CONSENSUS_BYPASS_MIN_CONFIDENCE"] = sim_env["STRATEGY_MIN_CONFIDENCE"]
 
-        # Load snapshots
+        # Load snapshots — kept in memory for Mongo persist after run
         snaps = _load_today_snapshots(trade_date)
         total = len(snaps)
         with _jobs_lock:
@@ -406,12 +409,170 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
                 "overrides_applied": {k: v for k, v in overrides.items() if k in _SAFE_OVERRIDE_KEYS},
             })
 
+        # Persist to Mongo sim collections so the Replay terminal can show it
+        try:
+            replay_url = _persist_sim_to_mongo(job_id, trade_date, snaps, trades)
+            with _jobs_lock:
+                _jobs[job_id]["replay_url"] = replay_url
+        except Exception as exc:
+            logger.warning("ops sim: failed to persist to mongo (non-fatal): %s", exc)
+
     except Exception as exc:
         import traceback
         with _jobs_lock:
             _jobs[job_id]["status"] = "error"
             _jobs[job_id]["error"] = str(exc)
             _jobs[job_id]["traceback"] = traceback.format_exc()
+
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _persist_sim_to_mongo(
+    job_id: str,
+    trade_date: str,
+    snaps: list[dict],
+    trades: list[dict],
+) -> str:
+    """Write snapshots + position events to sim Mongo collections, create eval-run entry.
+
+    Returns the replay_url the UI can navigate to (/app?mode=replay&kind=sim&...).
+    Non-fatal — caller should swallow exceptions and log rather than failing the job.
+    """
+    import sys
+    from pymongo import MongoClient
+
+    repo = Path("/app")
+    if str(repo) not in sys.path:
+        sys.path.insert(0, str(repo))
+    from contracts_app import resolve_namespace
+
+    run_id = f"ops-sim-{job_id}"
+    ns = resolve_namespace("sim", run_id=run_id)
+    coll_snaps = ns.collection_for("phase1_market_snapshots")
+    coll_pos = ns.collection_for("strategy_positions")
+    runs_coll = str(os.getenv("MONGO_COLL_STRATEGY_EVAL_RUNS") or "strategy_eval_runs")
+
+    uri = str(os.getenv("MONGODB_URI") or os.getenv("MONGO_URI") or "").strip()
+    if uri:
+        client = MongoClient(uri)
+    else:
+        client = MongoClient(
+            host=str(os.getenv("MONGO_HOST") or "localhost"),
+            port=int(os.getenv("MONGO_PORT") or "27017"),
+        )
+    db_name = str(os.getenv("MONGO_DB") or "trading_ai").strip() or "trading_ai"
+    db = client[db_name]
+
+    # ── Snapshots → phase1_market_snapshots_sim ──────────────────────────────
+    def _parse_ts(raw: Any) -> datetime:
+        if isinstance(raw, datetime):
+            return raw
+        if isinstance(raw, str):
+            for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    return datetime.strptime(raw[:25], fmt)
+                except ValueError:
+                    pass
+            try:
+                # Strip timezone suffix and treat as IST
+                return datetime.fromisoformat(raw[:19]).replace(tzinfo=_IST)
+            except ValueError:
+                pass
+        return datetime.now(tz=_IST)
+
+    snap_docs = []
+    for snap in snaps:
+        fb = snap.get("futures_bar") or {}
+        sc = snap.get("session_context") or {}
+        ts = _parse_ts(snap.get("timestamp"))
+        snap_docs.append({
+            "run_id": run_id,
+            "trade_date_ist": trade_date,
+            "timestamp": ts,
+            "instrument": snap.get("instrument", "BANKNIFTY-I"),
+            "payload": {
+                "snapshot": {
+                    "futures_bar": {
+                        "fut_open":   float(fb.get("open") or fb.get("o") or fb.get("fut_open") or 0),
+                        "fut_high":   float(fb.get("high") or fb.get("h") or fb.get("fut_high") or 0),
+                        "fut_low":    float(fb.get("low") or fb.get("l") or fb.get("fut_low") or 0),
+                        "fut_close":  float(fb.get("close") or fb.get("c") or fb.get("fut_close") or 0),
+                        "fut_volume": int(float(fb.get("volume") or fb.get("v") or fb.get("fut_volume") or 0)),
+                    },
+                    "session_context": sc,
+                }
+            },
+        })
+    if snap_docs:
+        db[coll_snaps].insert_many(snap_docs)
+
+    # ── Trades → POSITION_OPEN + POSITION_CLOSE events ───────────────────────
+    def _hhmm_to_dt(hhmm: str) -> datetime:
+        try:
+            h, m = int(hhmm[:2]), int(hhmm[3:5])
+            y, mo, d = [int(p) for p in trade_date.split("-")]
+            return datetime(y, mo, d, h, m, 0, tzinfo=_IST)
+        except Exception:
+            return datetime.now(tz=_IST)
+
+    pos_docs = []
+    for i, t in enumerate(trades):
+        pid = f"{run_id}-pos-{i}"
+        open_ts = _hhmm_to_dt(str(t.get("time_in", "09:15")))
+        close_ts = _hhmm_to_dt(str(t.get("time_out", "15:25")))
+        common = {"direction": t.get("direction", ""), "strike": t.get("strike")}
+        pos_docs.append({
+            "event": "POSITION_OPEN",
+            "position_id": pid,
+            "signal_id": pid,
+            "timestamp": open_ts,
+            "trade_date_ist": trade_date,
+            "run_id": run_id,
+            "payload": {"position": {"entry_premium": float(t.get("prem_in") or 0), **common}},
+        })
+        pos_docs.append({
+            "event": "POSITION_CLOSE",
+            "position_id": pid,
+            "signal_id": pid,
+            "timestamp": close_ts,
+            "trade_date_ist": trade_date,
+            "run_id": run_id,
+            "payload": {
+                "position": {
+                    "entry_premium": float(t.get("prem_in") or 0),
+                    "exit_premium":  float(t.get("prem_out") or 0),
+                    "pnl_pct":       float(t.get("pnl_pct") or 0),
+                    "mfe_pct":       float(t.get("mfe_pct") or 0),
+                    "mae_pct":       float(t.get("mae_pct") or 0),
+                    "exit_reason":   str(t.get("exit") or ""),
+                    **common,
+                }
+            },
+        })
+    if pos_docs:
+        db[coll_pos].insert_many(pos_docs)
+
+    # ── strategy_eval_runs entry ─────────────────────────────────────────────
+    now_iso = datetime.now(tz=timezone.utc).isoformat()
+    try:
+        db[runs_coll].insert_one({
+            "run_id": run_id,
+            "kind": "sim",
+            "status": "completed",
+            "terminal_status": "completed",
+            "source_date": trade_date,
+            "source_coll": "ops_sim",
+            "label": f"ops-sim {trade_date}",
+            "speed": 0.0,
+            "env_overrides": {},
+            "submitted_at": now_iso,
+            "updated_at": now_iso,
+        })
+    except Exception:
+        pass  # duplicate key if user re-runs same job; not fatal
+
+    return f"/app?mode=replay&kind=sim&run_id={run_id}&date={trade_date}"
 
 
 def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[dict], str]:
