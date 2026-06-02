@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any, Optional
 
 from contracts_app import TimestampSourceMode, now_ist, parse_timestamp_to_ist
+
+
+def _parse_hhmm(raw: str, default_h: int, default_m: int) -> int:
+    """Parse 'HH:MM' → minutes since midnight. Returns default on any error."""
+    try:
+        parts = raw.strip().split(":")
+        return int(parts[0]) * 60 + int(parts[1])
+    except Exception:
+        return default_h * 60 + default_m
 
 
 class SnapshotAccessor:
@@ -150,15 +160,23 @@ class SnapshotAccessor:
 
     @property
     def is_valid_entry_phase(self) -> bool:
-        # The staged runtime's valid_entry_phase_v1 gate must mirror the training
-        # distribution: training data was captured during the normal intraday
-        # session (09:45 - 14:30 IST = "ACTIVE"). Non-ACTIVE ticks (DISCOVERY,
-        # PRE_CLOSE, CLOSED) were excluded at training time.
-        #
-        # For V2 (velocity-enriched) bundles, a further implicit restriction to
-        # the 11:30 IST midday row is enforced downstream by the
-        # feature_completeness_v1 gate: non-11:30 ticks carry NaN for all 30
-        # velocity features and are rejected there.
+        # Default window matches model training distribution (09:45–14:30 IST).
+        # Override via env vars — do not go below 09:35 (pre-open noise) or
+        # above 15:05 (OOS for the model, thin liquidity near close).
+        #   ENTRY_WINDOW_START_IST=09:45   (HH:MM format)
+        #   ENTRY_WINDOW_END_IST=14:30     (HH:MM format, exclusive)
+        start_raw = os.getenv("ENTRY_WINDOW_START_IST", "").strip()
+        end_raw = os.getenv("ENTRY_WINDOW_END_IST", "").strip()
+        if start_raw or end_raw:
+            ts = self.timestamp
+            if ts is None:
+                return False
+            minute = ts.hour * 60 + ts.minute
+            start = _parse_hhmm(start_raw, 9, 45) if start_raw else 9 * 60 + 45
+            end = _parse_hhmm(end_raw, 14, 30) if end_raw else 14 * 60 + 30
+            return start <= minute < end
+        # Default: honour the session_phase produced by snapshot_app — mirrors
+        # training distribution (ACTIVE = 09:45–14:30 IST).
         return self.session_phase == "ACTIVE"
 
     @property
