@@ -278,14 +278,14 @@ def build_lottery_exit_stack() -> CompositeExitPolicy:
       5. RunnerTrail     — loose giveback only after a big move
       6. Timestop        — EOD fallback (longer hold)
     """
-    hard_stop = float(os.getenv("LOTTERY_HARD_STOP_PCT", "0.25") or "0.25")
-    big_target = float(os.getenv("LOTTERY_BIG_TARGET_PCT", "0.40") or "0.40")
+    hard_stop = float(os.getenv("LOTTERY_HARD_STOP_PCT", "0.20") or "0.20")
+    big_target = float(os.getenv("LOTTERY_BIG_TARGET_PCT", "0.50") or "0.50")
     runner_act = float(os.getenv("LOTTERY_RUNNER_ACTIVATION_MFE", "0.20") or "0.20")
-    runner_give = float(os.getenv("LOTTERY_RUNNER_GIVEBACK_FRAC", "0.40") or "0.40")
-    thesis_bars = int(os.getenv("LOTTERY_THESIS_FAIL_BARS", "4") or "4")
+    runner_give = float(os.getenv("LOTTERY_RUNNER_GIVEBACK_FRAC", "0.35") or "0.35")
+    thesis_bars = int(os.getenv("LOTTERY_THESIS_FAIL_BARS", "5") or "5")
     thesis_min_mfe = float(os.getenv("LOTTERY_THESIS_FAIL_MIN_MFE", "0.03") or "0.03")
     flip = float(os.getenv("LOTTERY_MOMENTUM_FLIP", "1.0") or "1.0")
-    timestop = int(os.getenv("LOTTERY_TIMESTOP_BARS", "25") or "25")
+    timestop = int(os.getenv("LOTTERY_TIMESTOP_BARS", "90") or "90")
 
     policies: list[ExitPolicy] = [
         HardStopPolicy(hard_stop),

@@ -345,12 +345,27 @@ function OpsPage() {
     setCfg(prev => {
       const next = {...prev, EXIT_STRATEGY_MODE: mode};
       if (mode === 'lottery') {
+        // Lottery = OTM + high conviction + let winners run
         next.CONSENSUS_BYPASS_MIN_CONFIDENCE = '0.80';
-        next.RISK_MAX_SESSION_TRADES = '3';
+        next.STRATEGY_MIN_CONFIDENCE         = '0.80';
+        next.RISK_MAX_SESSION_TRADES         = '3';
         next.STRATEGY_STRIKE_SELECTION_POLICY = 'smart_strike';
+        next.STRATEGY_SMART_STRIKE_ENABLED   = '1';
+        next.STRATEGY_STRIKE_MAX_OTM_STEPS   = '8';
+        next.LOTTERY_HARD_STOP_PCT           = '0.20';
+        next.LOTTERY_BIG_TARGET_PCT          = '0.50';
+        next.LOTTERY_RUNNER_ACTIVATION_MFE   = '0.20';
+        next.LOTTERY_RUNNER_GIVEBACK_FRAC    = '0.35';
+        next.LOTTERY_THESIS_FAIL_BARS        = '5';
+        next.LOTTERY_TIMESTOP_BARS           = '90';
       } else {
+        // Scalper — restore live values
         next.CONSENSUS_BYPASS_MIN_CONFIDENCE = liveEnv.CONSENSUS_BYPASS_MIN_CONFIDENCE || '0.65';
-        next.RISK_MAX_SESSION_TRADES = liveEnv.RISK_MAX_SESSION_TRADES || '6';
+        next.STRATEGY_MIN_CONFIDENCE         = liveEnv.STRATEGY_MIN_CONFIDENCE || '0.65';
+        next.RISK_MAX_SESSION_TRADES         = liveEnv.RISK_MAX_SESSION_TRADES || '6';
+        next.STRATEGY_STRIKE_SELECTION_POLICY = liveEnv.STRATEGY_STRIKE_SELECTION_POLICY || 'smart_strike';
+        next.STRATEGY_SMART_STRIKE_ENABLED   = liveEnv.STRATEGY_SMART_STRIKE_ENABLED || '1';
+        next.STRATEGY_STRIKE_MAX_OTM_STEPS   = liveEnv.STRATEGY_STRIKE_MAX_OTM_STEPS || '8';
       }
       return next;
     });
@@ -435,20 +450,20 @@ function OpsPage() {
             <div>
               <div className="ops-group-label">🎟 Lottery Exit</div>
               <SliderCtrl label="Hard stop (cap loss)"
-                value={parseFloat(v('LOTTERY_HARD_STOP_PCT','0.25'))}
-                live={parseFloat(lv('LOTTERY_HARD_STOP_PCT','0.25'))}
+                value={parseFloat(v('LOTTERY_HARD_STOP_PCT','0.20'))}
+                live={parseFloat(lv('LOTTERY_HARD_STOP_PCT','0.20'))}
                 min={0.10} max={0.50} step={0.05}
                 format={v => '-'+(v*100).toFixed(0)+'%'}
                 onChange={setVal('LOTTERY_HARD_STOP_PCT')} />
               <SliderCtrl label="Big target (take win)"
-                value={parseFloat(v('LOTTERY_BIG_TARGET_PCT','0.40'))}
-                live={parseFloat(lv('LOTTERY_BIG_TARGET_PCT','0.40'))}
+                value={parseFloat(v('LOTTERY_BIG_TARGET_PCT','0.50'))}
+                live={parseFloat(lv('LOTTERY_BIG_TARGET_PCT','0.50'))}
                 min={0.20} max={1.00} step={0.05}
                 format={v => '+'+(v*100).toFixed(0)+'%'}
                 onChange={setVal('LOTTERY_BIG_TARGET_PCT')} />
               <SliderCtrl label="Runner activates at"
-                value={parseFloat(v('LOTTERY_RUNNER_ACTIVATION_MFE','0.10'))}
-                live={parseFloat(lv('LOTTERY_RUNNER_ACTIVATION_MFE','0.10'))}
+                value={parseFloat(v('LOTTERY_RUNNER_ACTIVATION_MFE','0.20'))}
+                live={parseFloat(lv('LOTTERY_RUNNER_ACTIVATION_MFE','0.20'))}
                 min={0.10} max={0.50} step={0.05}
                 format={v => '+'+(v*100).toFixed(0)+'%'}
                 onChange={setVal('LOTTERY_RUNNER_ACTIVATION_MFE')} />
