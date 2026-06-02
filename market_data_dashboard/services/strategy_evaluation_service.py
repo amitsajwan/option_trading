@@ -237,6 +237,27 @@ class StrategyEvaluationService:
     def _eval_commands_pubsub_shadow(self) -> bool:
         return str(os.getenv("EVAL_COMMANDS_PUBSUB_SHADOW") or "true").strip().lower() not in {"0", "false", "no", "off"}
 
+    def _progress_stream(self, run_id: str) -> str:
+        prefix = str(os.getenv("STRATEGY_EVAL_PROGRESS_STREAM_PREFIX") or "stream:eval:progress:")
+        return f"{prefix}{run_id}"
+
+    def get_run_progress_history(self, run_id: str, *, count: int = 200) -> list[dict[str, Any]]:
+        stream = self._progress_stream(str(run_id).strip())
+        try:
+            entries = self._redis().xrange(stream, count=max(1, int(count)))
+        except Exception:
+            return []
+        result = []
+        for _entry_id, fields in entries or []:
+            raw = fields.get("payload") if isinstance(fields, dict) else None
+            if not isinstance(raw, str):
+                continue
+            try:
+                result.append(json.loads(raw))
+            except Exception:
+                continue
+        return result
+
     def _publish_run_event(self, run_id: str, payload: dict[str, Any]) -> None:
         body = dict(payload or {})
         body["run_id"] = run_id

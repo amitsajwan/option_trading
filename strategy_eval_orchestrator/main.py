@@ -112,6 +112,14 @@ def _global_channel() -> str:
     return str(os.getenv("STRATEGY_EVAL_GLOBAL_CHANNEL") or "strategy:eval:global")
 
 
+def _progress_stream(run_id: str) -> str:
+    prefix = str(os.getenv("STRATEGY_EVAL_PROGRESS_STREAM_PREFIX") or "stream:eval:progress:")
+    return f"{prefix}{run_id}"
+
+
+_PROGRESS_STREAM_MAXLEN = 200
+
+
 def _command_channel() -> str:
     return str(os.getenv("STRATEGY_EVAL_COMMAND_TOPIC") or "strategy:eval:command")
 
@@ -162,6 +170,12 @@ def _publish_run_event(redis_client: redis.Redis, run_id: str, payload: dict[str
     body["run_id"] = str(run_id)
     body["timestamp"] = _utc_now()
     rendered = json.dumps(body, ensure_ascii=False, default=str)
+    redis_client.xadd(
+        _progress_stream(run_id),
+        {"payload": rendered, "event_type": str(body.get("event_type") or "")},
+        maxlen=_PROGRESS_STREAM_MAXLEN,
+        approximate=True,
+    )
     redis_client.publish(_run_channel(run_id), rendered)
     redis_client.publish(_global_channel(), rendered)
 
