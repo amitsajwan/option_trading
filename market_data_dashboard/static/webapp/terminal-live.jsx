@@ -81,87 +81,6 @@ function _makeQuote(session, upToIdx) {
   };
 }
 
-// ── TickerBar ────────────────────────────────────────────────────────────
-function TickerBar({ quote, instrument }) {
-  const [clock, setClock] = _s(TC.fmtClock(new Date()));
-  _e(() => { const id = setInterval(() => setClock(TC.fmtClock(new Date())), 1000); return () => clearInterval(id); }, []);
-  if (!quote) return <div className="ticker-bar"><div className="t-brand"><span className="t-brand-mark"/><b>QUANT</b><span>OPS</span></div><div className="ticker-clock"><span className="t-live-pulse"/><span>{clock}</span></div></div>;
-  const cls = quote.spotChg >= 0 ? 'pos' : 'neg';
-  return (
-    <div className="ticker-bar">
-      <div className="t-brand">
-        <span className="t-brand-mark"/>
-        <b>QUANT</b><span>OPS</span>
-        <span className="ver">live</span>
-      </div>
-      <div className="ticker-pairs">
-        <div className="t-spot-big">
-          <span className="lbl" style={{fontSize:'9.5px',color:'var(--fg-3)',letterSpacing:'0.10em',textTransform:'uppercase'}}>{quote.symbol}</span>
-          <span className="val">{quote.spot.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-          <span className={`delta ${cls}`}>{TC.fmtSigned(quote.spotChg,2)} ({TC.fmtSigned(quote.spotChgPct,2,'%')})</span>
-        </div>
-        <div className="pair"><span className="lbl">H</span><span className="val">{quote.dayHigh.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
-        <div className="pair"><span className="lbl">L</span><span className="val">{quote.dayLow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
-      </div>
-      <div className="ticker-clock">
-        <span className="t-live-pulse"/>
-        <span>{clock}</span>
-      </div>
-    </div>
-  );
-}
-
-// ── StatusBar ────────────────────────────────────────────────────────────
-function StatusBar({
-  sessionPnl, tradesCount, winRate, regime, engine, ws, onModeSwitch, onHaltClick,
-  watchMode, simRuns, watchRunId, onWatchChange, onBackToLive,
-}) {
-  const pnlCls = sessionPnl >= 0 ? 'pos' : 'neg';
-  return (
-    <div className="t-status-bar">
-      <div className="t-mode-toggle">
-        <button className="active"><span className="dot live"/>Live</button>
-        <button onClick={() => onModeSwitch('replay')}><span className="dot replay"/>Replay</button>
-        <button onClick={() => onModeSwitch('eval')}><span className="dot eval"/>Eval</button>
-        <button onClick={() => onModeSwitch('pipeline')} style={{opacity:0.85}}>⬡ Pipeline</button>
-      </div>
-      <div style={{display:'flex',alignItems:'center',gap:8,padding:'0 10px'}}>
-        <span style={{fontFamily:'var(--f-mono)',fontSize:'9px',color:'var(--fg-4)',textTransform:'uppercase'}}>watching</span>
-        <select
-          className="inp"
-          style={{height:22,minWidth:180,padding:'0 6px',fontSize:'10px'}}
-          value={watchMode === 'sim' ? `sim:${watchRunId || ''}` : 'live'}
-          onChange={e => {
-            const raw = String(e.target.value || '');
-            if (raw === 'live') { onBackToLive(); return; }
-            if (raw.startsWith('sim:')) onWatchChange(raw.slice(4));
-          }}
-        >
-          <option value="live">LIVE</option>
-          {(simRuns || []).map(run => (
-            <option key={run.run_id} value={`sim:${run.run_id}`}>
-              {`SIM · ${String(run.label || 'run').slice(0, 16)} · ${String(run.run_id || '').slice(0, 8)}…`}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="t-status-cells">
-        <div className="t-scell big"><span className="k">Session P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
-        <div className="t-scell"><span className="k">Trades</span><span className="v">{tradesCount}<span className="sub">/ {winRate}% WR</span></span></div>
-        <div className="t-scell"><span className="k">Regime</span><span className="v" style={{color:(typeof REGIME_COLORS !== 'undefined' && REGIME_COLORS[regime]) || 'var(--info)',fontSize:'11px'}}>{regime || '—'}</span></div>
-        <div className="t-scell"><span className="k">Engine</span><span className="v" style={{fontSize:'11px'}}>{engine || '—'}</span></div>
-        <div className="t-scell"><span className="k">WS</span><span className={`v ${ws === 'connected' ? 'pos' : 'warn'}`} style={{fontSize:'11px'}}>{ws}</span></div>
-      </div>
-      <div className="t-status-actions">
-        {watchMode === 'sim' && (
-          <button className="t-btn ghost" onClick={onBackToLive}>Back to LIVE</button>
-        )}
-        <button className="t-btn danger" onClick={onHaltClick}>⏻ Halt <span className="kbd">⌘.</span></button>
-      </div>
-    </div>
-  );
-}
-
 // ── Brain Status (compact dark-theme widget) ──────────────────────────────
 function BrainStatusCompact({ brainData }) {
   if (!brainData || !brainData.available) return null;
@@ -1485,20 +1404,43 @@ function _fmtRelTime(ms) {
 }
 
 // ── MobileTradeCard — replaces a Tape row on mobile ──────────────────────
+function _parseEntrySignals(rawReason) {
+  const r = String(rawReason || '');
+  const regimeM = r.match(/\[([A-Z_]+)\]/);
+  const regime  = regimeM ? regimeM[1] : null;
+  const probM   = r.match(/prob[=\s]*([\d.]+)/i);
+  const prob    = probM ? Math.round(Number(probM[1]) * 100) : null;
+  const keywords = [];
+  if (/\bORB\b/i.test(r))       keywords.push('ORB');
+  if (/\bVWAP\b/i.test(r))      keywords.push('VWAP');
+  if (/\bBREAKOUT\b/i.test(r))  keywords.push('BRKOUT');
+  if (/\bTRAP\b/i.test(r))      keywords.push('TRAP');
+  if (/\bIV\b/i.test(r))        keywords.push('IV');
+  if (/\bMOMENTUM\b/i.test(r))  keywords.push('MOM');
+  return { regime, prob, keywords };
+}
+
 function MobileTradeCard({ trade, selected, onSelect, session }) {
   const t = trade;
   const pnl = t.pnlPct || 0;
   const pnlCls = pnl >= 0 ? 'pos' : 'neg';
   const glyph = pnl >= 0 ? '▲' : '▼';
-  const reason = (t.exitReason || '').toUpperCase();
-  const reasonCls =
-    reason === 'TARGET_HIT' || reason === 'TARGET' ? 'target' :
-    reason === 'STOP_HIT'   || reason === 'STOP'   ? 'stop'   :
-    reason.includes('TIME') ? 'time' : '';
+  const exitReason = (t.exitReason || '').toUpperCase();
+  const exitCls =
+    exitReason === 'TARGET_HIT' || exitReason === 'TARGET'   ? 'target' :
+    exitReason === 'STOP_HIT'   || exitReason === 'STOP'     ? 'stop'   :
+    exitReason === 'HARD_STOP'                                ? 'stop'   :
+    exitReason.includes('TIME')                               ? 'time'   : '';
   const dir = t.dir || 'LONG';
   const legDir = t.legDir || dir;
   const entryLabel = _barLabel(session, t.entryIdx);
   const exitLabel  = _barLabel(session, t.exitIdx);
+  const { regime, prob, keywords } = _parseEntrySignals(t.reason || t.entryDetail || '');
+  const regimeColor =
+    regime === 'BREAKOUT' ? 'var(--pos)' :
+    regime === 'VOLATILE' ? 'var(--warn)' :
+    regime === 'SIDEWAYS' ? 'var(--fg-3)' :
+    regime === 'BEARISH'  ? 'var(--neg)'  : 'var(--fg-4)';
   return (
     <button
       type="button"
@@ -1508,7 +1450,17 @@ function MobileTradeCard({ trade, selected, onSelect, session }) {
       <div className="m-card-head">
         <span className={`m-card-dir ${dir}`}>{legDir}{t.optionType && legDir !== t.optionType ? ` ${t.optionType}` : ''}</span>
         <span className="strat">{t.strat || '—'}</span>
+        {prob != null && <span style={{fontFamily:'var(--f-mono)',fontSize:9,color:'var(--fg-3)',marginLeft:'auto'}}>conf {prob}%</span>}
       </div>
+      {/* signal pills row */}
+      {(regime || keywords.length > 0) && (
+        <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:3}}>
+          {regime && <span style={{fontSize:8.5,fontFamily:'var(--f-mono)',padding:'1px 5px',borderRadius:3,border:`1px solid ${regimeColor}`,color:regimeColor,letterSpacing:'0.05em'}}>{regime}</span>}
+          {keywords.map(k => (
+            <span key={k} style={{fontSize:8.5,fontFamily:'var(--f-mono)',padding:'1px 5px',borderRadius:3,background:'rgba(255,255,255,0.06)',color:'var(--fg-3)'}}>{k}</span>
+          ))}
+        </div>
+      )}
       <div className={`m-card-pnl ${pnlCls}`}>
         <span className="glyph">{glyph}</span>
         <span>{TC.fmtPct(pnl, 2)}</span>
@@ -1521,7 +1473,7 @@ function MobileTradeCard({ trade, selected, onSelect, session }) {
       </div>
       <div className="m-card-foot">
         <span className="time">{entryLabel} → {exitLabel}</span>
-        {reason && <span className={`reason ${reasonCls}`}>{reason.replace(/_/g, ' ')}</span>}
+        {exitReason && <span className={`reason ${exitCls}`}>{exitReason.replace(/_/g, ' ')}</span>}
       </div>
     </button>
   );
@@ -1556,40 +1508,35 @@ function MobileLiveShell({
   trades, signals, strategies,
   quote, sessionPnl, winRate, regime, engine,
   brainData, wsStatus, watchMode, watchRunId, simRuns,
-  runtimeConfig, availableModels, blockerFunnel, timeline,
+  runtimeConfig, availableModels, blockerFunnel, timeline, heatmap, openPosition,
   selectedTrade, onSelectTrade,
   onHaltClick, onModeSwitch, onBackToLive, onWatchChange,
 }) {
-  const [tab, setTab] = _s('tape');            // tape | chart | brain | more
-  const [sheet, setSheet] = _s(null);          // null | 'ops'
+  const [tab, setTab] = _s('tape');   // tape | chart | map | more
+  const [sheet, setSheet] = _s(null); // null | 'ops'
   const [lastTickAt, setLastTickAt] = _s(Date.now());
   const [now, setNow] = _s(Date.now());
   const inspectorTrade = selectedTrade || (trades.length ? trades[0] : null);
   const [showInspector, setShowInspector] = _s(false);
   const isMobile = _useIsMobile();
 
-  // Tick: bump freshness whenever the upstream upToIdx advances.
   _e(() => { setLastTickAt(Date.now()); }, [upToIdx]);
-  // Clock for freshness display — refresh every 2s, cheap.
   _e(() => { const id = setInterval(() => setNow(Date.now()), 2000); return () => clearInterval(id); }, []);
 
-  // System orb state — combined health.
   const ageMs = now - lastTickAt;
   let orbCls = 'ok', orbLbl = 'LIVE';
   if (wsStatus !== 'connected') { orbCls = 'crit'; orbLbl = wsStatus.toUpperCase(); }
   else if (ageMs > 90000) { orbCls = 'crit'; orbLbl = 'STALE'; }
   else if (ageMs > 70000) { orbCls = 'warn'; orbLbl = 'SLOW'; }
 
-  // Stress level for P&L sizing.
   const absPnl = Math.abs(sessionPnl);
   const stress = absPnl >= 0.02 ? 'extreme' : absPnl >= 0.01 ? 'high' : 'normal';
   const pnlCls = sessionPnl > 0.0005 ? 'pos' : sessionPnl < -0.0005 ? 'neg' : 'flat';
   const pnlGlyph = sessionPnl > 0.0005 ? '▲' : sessionPnl < -0.0005 ? '▼' : '◆';
 
-  // Pull-to-refresh — simple touch-driven trigger that re-fetches via fetch() of
-  // /api/strategy/current/state. Throttled so the user can't hammer it.
+  // Pull-to-refresh
   const ptrRef = _r({ startY: 0, dragging: false, refreshing: false });
-  const [ptrState, setPtrState] = _s('idle'); // idle | pulling | refreshing
+  const [ptrState, setPtrState] = _s('idle');
   const onTouchStart = _cb(e => {
     if (window.scrollY > 0) return;
     ptrRef.current.startY = e.touches[0].clientY;
@@ -1607,18 +1554,23 @@ function MobileLiveShell({
     if (ptrState === 'pulling' && !ptrRef.current.refreshing) {
       ptrRef.current.refreshing = true;
       setPtrState('refreshing');
-      // The WS pushes snapshots automatically; this just nudges the user.
-      setTimeout(() => {
-        ptrRef.current.refreshing = false;
-        setPtrState('idle');
-      }, 700);
-    } else {
-      setPtrState('idle');
-    }
+      setTimeout(() => { ptrRef.current.refreshing = false; setPtrState('idle'); }, 700);
+    } else { setPtrState('idle'); }
   }, [ptrState]);
 
-  const tradeCount = trades.length;
+  const tradeCount  = trades.length;
   const signalCount = signals.length;
+  const rc  = runtimeConfig || {};
+  const bf  = blockerFunnel || {};
+  const tradesDone = (bf.outcomes?.entry_taken || 0) + (bf.outcomes?.executed || 0);
+  const maxTrades  = rc.risk_max_session_trades ?? null;
+  // Last entry prob from decision timeline (most recent minute)
+  const lastProb = (() => {
+    const rows = timeline?.decisions;
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const ep = rows[0]?.metrics?.entry_prob;
+    return ep != null ? Math.round(Number(ep) * 100) : null;
+  })();
 
   return (
     <div className="m-shell">
@@ -1647,47 +1599,86 @@ function MobileLiveShell({
             </span>
             <div className="meta">
               <span className="k">trades</span>
-              <span className="v">{tradeCount} · {winRate}%</span>
+              <span className="v">{tradeCount}{maxTrades != null ? ` / ${maxTrades}` : ''} · {winRate}%</span>
             </div>
           </div>
           <div className="m-header-desk-cells">
             <div className="cell"><span className="k">Regime</span><span className="v">{regime||'—'}</span></div>
             <div className="cell"><span className="k">Engine</span><span className="v">{engine||'—'}</span></div>
-            <div className="cell"><span className="k">Feed</span>
-              <span className={`v ${orbCls==='ok'?'pos':orbCls==='warn'?'warn':'neg'}`}>{orbLbl}</span></div>
+            {lastProb != null
+              ? <div className="cell"><span className="k">ep</span>
+                  <span className={`v ${lastProb >= 80 ? 'pos' : lastProb >= 65 ? 'warn' : 'neg'}`}>{lastProb}%</span></div>
+              : <div className="cell"><span className="k">Feed</span>
+                  <span className={`v ${orbCls==='ok'?'pos':orbCls==='warn'?'warn':'neg'}`}>{orbLbl}</span></div>
+            }
           </div>
-          <button className="m-iconbtn"
-                  aria-label="Settings and mode switch"
-                  onClick={() => setSheet('ops')}>⚙</button>
-          <button className="m-iconbtn danger"
-                  aria-label="Halt engine"
-                  onClick={onHaltClick}>⏻</button>
+          <button className="m-iconbtn" aria-label="Settings" onClick={() => setSheet('ops')}>⚙</button>
+          <button className="m-iconbtn danger" aria-label="Halt" onClick={onHaltClick}>⏻</button>
         </div>
+        {/* Open position banner — only shown when a position is live */}
+        {openPosition && (() => {
+          const op = openPosition;
+          const opPnl = op.pnl_pct != null ? Number(op.pnl_pct) : null;
+          const opMfe = op.mfe_pct != null ? Number(op.mfe_pct) : null;
+          const opCls = opPnl != null && opPnl > 0 ? 'pos' : opPnl != null && opPnl < 0 ? 'neg' : 'flat';
+          return (
+            <div style={{
+              background: 'rgba(255,160,0,0.10)', borderBottom: '1px solid rgba(255,160,0,0.25)',
+              padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 10,
+              fontFamily: 'var(--f-mono)', fontSize: 10,
+            }}>
+              <span style={{width:7,height:7,borderRadius:'50%',background:'var(--warn)',display:'inline-block',flexShrink:0,animation:'pulse 1.2s infinite'}}/>
+              <span style={{color:'var(--warn)',fontWeight:700,letterSpacing:'0.06em'}}>OPEN</span>
+              <span style={{color:'var(--fg-2)',fontWeight:600}}>
+                {op.option_type || op.direction} {op.strike ? Math.round(op.strike) : ''}
+              </span>
+              {opPnl != null && <span className={opCls} style={{fontWeight:700}}>{opPnl >= 0 ? '+' : ''}{(opPnl*100).toFixed(2)}%</span>}
+              {opMfe != null && <span style={{color:'var(--fg-4)'}}>mfe {opMfe >= 0 ? '+' : ''}{(opMfe*100).toFixed(2)}%</span>}
+              {op.bars_held != null && <span style={{color:'var(--fg-4)'}}>{op.bars_held}b</span>}
+              <span style={{color:'var(--fg-4)',marginLeft:'auto'}}>{(op.entry_time||'').slice(11,16)}</span>
+            </div>
+          );
+        })()}
       </header>
 
-      {/* ── Body — phone: single column; desktop: 2-col split ──────────── */}
+      {/* ── Body ─────────────────────────────────────────────────────────── */}
       <div className="m-split">
-
-        {/* Left pane: tab strip + scrollable content ─────────────────────── */}
         <div className="m-left">
           <nav className="m-tabs" role="tablist">
-            <button className="m-tab" data-tab="tape"  aria-pressed={tab==='tape'}  onClick={() => setTab('tape')}>
+            <button className="m-tab" data-tab="tape" aria-pressed={tab==='tape'} onClick={() => setTab('tape')}>
               Tape <span className="count">{tradeCount}</span>
             </button>
             <button className="m-tab" data-tab="chart" aria-pressed={tab==='chart'} onClick={() => setTab('chart')}>Chart</button>
-            <button className="m-tab" data-tab="brain" aria-pressed={tab==='brain'} onClick={() => setTab('brain')}>Brain</button>
+            <button className="m-tab" data-tab="map"   aria-pressed={tab==='map'}   onClick={() => setTab('map')}>Map</button>
             <button className="m-tab" data-tab="more"  aria-pressed={tab==='more'}  onClick={() => setTab('more')}>More</button>
           </nav>
-          <main className="m-body"
-                onTouchStart={onTouchStart}
-                onTouchMove={onTouchMove}
-                onTouchEnd={onTouchEnd}>
+          <main className="m-body" onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
             <div className={`m-ptr ${ptrState !== 'idle' ? ptrState : ''}`}>
               {ptrState === 'pulling' ? 'Release to refresh' : ptrState === 'refreshing' ? 'Refreshing…' : ''}
             </div>
 
-          {/* Tape tab */}
+          {/* ── Tape tab ──────────────────────────────────────────────────── */}
           <div className={tab === 'tape' ? '' : 'm-tab-hidden'}>
+            {/* Gate funnel strip — visible when no trades yet or always */}
+            {bf.outcomes && (() => {
+              const o = bf.outcomes;
+              const topGate = bf.primary_blocker_gates?.[0]?.gate;
+              const taken = o.entry_taken || 0;
+              const blocked = o.blocked || 0;
+              const hold = o.hold || 0;
+              return (
+                <div style={{
+                  display:'flex', alignItems:'center', gap:10, padding:'6px 12px 4px',
+                  fontFamily:'var(--f-mono)', fontSize:9.5, borderBottom:'1px solid rgba(255,255,255,0.06)',
+                  flexWrap:'wrap',
+                }}>
+                  {taken > 0  && <span><span style={{color:'var(--pos)',fontWeight:700}}>{taken}</span> <span style={{color:'var(--fg-4)'}}>in</span></span>}
+                  {blocked > 0 && <span><span style={{color:'var(--neg)',fontWeight:700}}>{blocked}</span> <span style={{color:'var(--fg-4)'}}>blocked</span></span>}
+                  {hold > 0   && <span><span style={{color:'var(--warn)',fontWeight:700}}>{hold}</span> <span style={{color:'var(--fg-4)'}}>hold</span></span>}
+                  {topGate && <span style={{color:'var(--fg-4)',marginLeft:'auto',fontSize:9}}>⊘ {topGate}</span>}
+                </div>
+              );
+            })()}
             {tradeCount === 0
               ? <div className="m-empty">
                   No trades yet today.
@@ -1695,10 +1686,7 @@ function MobileLiveShell({
                 </div>
               : <div className="m-cards">
                   {trades.map(t => (
-                    <MobileTradeCard
-                      key={t.id}
-                      trade={t}
-                      session={session}
+                    <MobileTradeCard key={t.id} trade={t} session={session}
                       selected={inspectorTrade?.id === t.id && showInspector}
                       onSelect={tr => { onSelectTrade(tr); setShowInspector(true); }}/>
                   ))}
@@ -1706,21 +1694,26 @@ function MobileLiveShell({
             }
           </div>
 
-          {/* Chart tab — phone only; on desktop chart lives in right pane (never both) */}
+          {/* ── Chart tab — phone only ─────────────────────────────────────── */}
           {isMobile && (
             <div className={`m-chart-tab-pane ${tab === 'chart' ? '' : 'm-tab-hidden'}`}>
               <div className="m-chart-wrap">
-                <TermChart
-                  session={session} candles={candles} trades={trades}
+                <TermChart session={session} candles={candles} trades={trades}
                   selectedTrade={inspectorTrade} onSelectTrade={tr => { onSelectTrade(tr); setShowInspector(true); }}
-                  upToIdx={upToIdx} flashIdx={flashIdx}
-                />
+                  upToIdx={upToIdx} flashIdx={flashIdx}/>
               </div>
             </div>
           )}
 
-          {/* Brain tab */}
-          <div className={tab === 'brain' ? '' : 'm-tab-hidden'}>
+          {/* ── Map tab ───────────────────────────────────────────────────── */}
+          <div className={tab === 'map' ? '' : 'm-tab-hidden'} style={{height:'100%',overflowY:'auto'}}>
+            <SessionHeatmap data={heatmap?.data} loading={!heatmap}/>
+          </div>
+
+          {/* ── More tab ──────────────────────────────────────────────────── */}
+          <div className={tab === 'more' ? '' : 'm-tab-hidden'}>
+
+            {/* Brain context — first thing a trader checks in the morning */}
             <div className="m-section">
               <div className="m-section-head">Brain</div>
               <div className="m-section-body">
@@ -1736,89 +1729,100 @@ function MobileLiveShell({
                         <span className="v">{brainData.day_score_confidence!=null?(Number(brainData.day_score_confidence)*100).toFixed(0)+'%':'—'}</span></div>
                       <div className="m-kv"><span className="k">size mult</span>
                         <span className={`v ${brainData.size_multiplier!=null&&Number(brainData.size_multiplier)<1?'warn':'pos'}`}>
-                          {brainData.size_multiplier!=null?Number(brainData.size_multiplier).toFixed(2)+'×':'—'}
-                        </span></div>
+                          {brainData.size_multiplier!=null?Number(brainData.size_multiplier).toFixed(2)+'×':'—'}</span></div>
                       <div className="m-kv"><span className="k">carry</span>
                         <span className="v">{brainData.carry_consecutive_losses||0} L · {brainData.losing_streak_days||0}d</span></div>
                     </div>
-                  : <div className="m-empty" style={{padding:'14px 4px'}}>Brain status unavailable.</div>
+                  : <div className="m-empty" style={{padding:'10px 4px'}}>Brain unavailable.</div>
                 }
               </div>
             </div>
+
+            {/* Session snapshot */}
             <div className="m-section">
               <div className="m-section-head">Session</div>
               <div className="m-section-body">
                 <div className="m-kv-list">
                   <div className="m-kv"><span className="k">P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
-                  <div className="m-kv"><span className="k">trades</span><span className="v">{tradeCount}</span></div>
-                  <div className="m-kv"><span className="k">win rate</span><span className="v">{winRate}%</span></div>
+                  <div className="m-kv"><span className="k">trades</span>
+                    <span className="v">{tradeCount}{maxTrades!=null?` / ${maxTrades}`:''} · {winRate}%</span></div>
                   <div className="m-kv"><span className="k">regime</span><span className="v">{regime||'—'}</span></div>
-                  <div className="m-kv"><span className="k">engine</span><span className="v">{engine||'—'}</span></div>
                   <div className="m-kv"><span className="k">feed</span>
                     <span className={`v ${orbCls==='ok'?'pos':orbCls==='warn'?'warn':'neg'}`}>{orbLbl} · {_fmtRelTime(lastTickAt)}</span></div>
+                  {lastProb != null && <div className="m-kv"><span className="k">last ep</span>
+                    <span className={`v ${lastProb>=80?'pos':lastProb>=65?'warn':'neg'}`}>{lastProb}%</span></div>}
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* More tab */}
-          <div className={tab === 'more' ? '' : 'm-tab-hidden'}>
-            {/* ── System Status ───────────────────────────────────────────── */}
+            {/* System config */}
             {(() => {
-              const rc  = runtimeConfig || {};
-              const bf  = blockerFunnel || {};
               const mdl = Array.isArray(availableModels) ? availableModels.find(m => m.is_current) : null;
-              // rc.min_confidence comes from rollout.min_confidence in runtime_config.json
-              // rc.exit_strategy_mode + rc.risk_max_session_trades come from ops_env.json overlay
-              const exitMode   = rc.exit_strategy_mode || '—';
-              const conf       = rc.min_confidence != null ? `${(rc.min_confidence*100).toFixed(0)}%` : '—';
-              const maxTrades  = rc.risk_max_session_trades ?? '—';
-              const tradesDone = (bf.outcomes?.entry_taken || 0) + (bf.outcomes?.executed || 0);
-              const profile    = rc.strategy_profile_id || '—';
-              const stage      = rc.rollout_stage || '—';
-              const smartStrike= rc.smart_strike_enabled;
-              const dot = (ok) => <span style={{display:'inline-block',width:7,height:7,borderRadius:'50%',background:ok?'var(--pos)':'var(--neg)',marginRight:5,verticalAlign:'middle'}}/>;
+              const exitMode = rc.exit_strategy_mode || '—';
+              const conf     = rc.min_confidence != null ? `${(rc.min_confidence*100).toFixed(0)}%` : '—';
+              const profile  = rc.strategy_profile_id || '—';
+              const stage    = rc.rollout_stage || '—';
+              const dot = ok => <span style={{display:'inline-block',width:7,height:7,borderRadius:'50%',background:ok?'var(--pos)':'var(--neg)',marginRight:5,verticalAlign:'middle'}}/>;
               const row = (label, val, ok) => (
                 <div className="m-kv" key={label}>
-                  <span className="k" style={{color:'var(--fg-3)'}}>{ok != null && dot(ok)}{label}</span>
+                  <span className="k" style={{color:'var(--fg-3)'}}>{ok!=null&&dot(ok)}{label}</span>
                   <span className="v" style={{fontFamily:'var(--f-mono)',fontSize:11,color:'var(--fg-1)'}}>{val}</span>
                 </div>
               );
-              const exitModeColor = exitMode === 'lottery' ? 'var(--warn)' : exitMode === 'scalper' ? 'var(--fg-2)' : 'var(--fg-4)';
+              const exitColor = exitMode==='lottery'?'var(--warn)':exitMode==='scalper'?'var(--fg-2)':'var(--fg-4)';
               return (
                 <div className="m-section">
-                  <div className="m-section-head">System Status</div>
-                  <div className="m-section-body">
-                    <div className="m-kv-list">
-                      {row('Engine', rc.engine || engine || '—', !!(rc.engine || engine))}
-                      {row('Profile', <span style={{fontSize:10,color:'var(--fg-3)'}}>{profile}</span>, profile !== '—')}
-                      {row('Stage', stage, stage === 'live')}
-                      {row('Exit mode', <span style={{color:exitModeColor,fontWeight:600,textTransform:'uppercase'}}>{exitMode}</span>, null)}
-                      {row('Confidence', conf, conf !== '—')}
-                      {row('Trades today', `${tradesDone} / ${maxTrades}`, tradesDone < (maxTrades === '—' ? 999 : Number(maxTrades)))}
-                      {smartStrike != null && row('Smart strike', smartStrike ? 'on' : 'off', smartStrike)}
-                      {mdl && row('Entry model AUC', `${mdl.holdout_auc?.toFixed(3) || '?'} · ${mdl.feature_count ?? '?'}f`, true)}
-                    </div>
-                  </div>
+                  <div className="m-section-head">System</div>
+                  <div className="m-section-body"><div className="m-kv-list">
+                    {row('Engine',    rc.engine || engine || '—',  !!(rc.engine||engine))}
+                    {row('Profile',   <span style={{fontSize:10,color:'var(--fg-3)'}}>{profile}</span>, profile!=='—')}
+                    {row('Stage',     stage,  stage==='live')}
+                    {row('Exit mode', <span style={{color:exitColor,fontWeight:600,textTransform:'uppercase'}}>{exitMode}</span>, null)}
+                    {row('Confidence', conf, conf!=='—')}
+                    {rc.smart_strike_enabled!=null && row('Smart strike', rc.smart_strike_enabled?'on':'off', rc.smart_strike_enabled)}
+                    {mdl && row('Model AUC', `${mdl.holdout_auc?.toFixed(3)||'?'} · ${mdl.feature_count??'?'}f`, true)}
+                  </div></div>
                 </div>
               );
             })()}
-            {/* ── Strategy Roster ─────────────────────────────────────────── */}
-            <div className="m-section">
-              <div className="m-section-head">Strategy Roster</div>
-              <div className="m-section-body">
-                {strategies.length===0
-                  ? <div className="m-empty" style={{padding:'14px 4px'}}>No trades yet.</div>
-                  : <div className="m-kv-list">
-                      {strategies.map(s => (
-                        <div key={s.id} className="m-kv">
-                          <span className="k">{s.name} · {s.trades}t · {s.wr}%</span>
-                          <span className={`v ${s.pnl>=0?'pos':'neg'}`}>{TC.fmtPct(s.pnl,2)}</span>
-                        </div>
-                      ))}
-                    </div>}
+
+            {/* Gate funnel detail */}
+            {bf.outcomes && (() => {
+              const o = bf.outcomes;
+              const gates = Array.isArray(bf.primary_blocker_gates) ? bf.primary_blocker_gates.slice(0,3) : [];
+              return (
+                <div className="m-section">
+                  <div className="m-section-head">Gate Funnel</div>
+                  <div className="m-section-body"><div className="m-kv-list">
+                    {(o.entry_taken||0)>0 && <div className="m-kv"><span className="k">entries taken</span><span className="v pos">{o.entry_taken}</span></div>}
+                    {(o.blocked||0)>0    && <div className="m-kv"><span className="k">blocked</span><span className="v neg">{o.blocked}</span></div>}
+                    {(o.hold||0)>0       && <div className="m-kv"><span className="k">hold</span><span className="v warn">{o.hold}</span></div>}
+                    {gates.map((g,i) => (
+                      <div className="m-kv" key={i}>
+                        <span className="k" style={{fontSize:9}}>{i===0?'top gate':`gate ${i+1}`}</span>
+                        <span className="v" style={{fontSize:9,color:'var(--neg)'}}>{g.gate} <span style={{color:'var(--fg-4)'}}>×{g.count}</span></span>
+                      </div>
+                    ))}
+                  </div></div>
+                </div>
+              );
+            })()}
+
+            {/* Strategy roster */}
+            {strategies.length > 0 && (
+              <div className="m-section">
+                <div className="m-section-head">Strategy Roster</div>
+                <div className="m-section-body"><div className="m-kv-list">
+                  {strategies.map(s => (
+                    <div key={s.id} className="m-kv">
+                      <span className="k">{s.name} · {s.trades}t · {s.wr}%</span>
+                      <span className={`v ${s.pnl>=0?'pos':'neg'}`}>{TC.fmtPct(s.pnl,2)}</span>
+                    </div>
+                  ))}
+                </div></div>
               </div>
-            </div>
+            )}
+
             <div className="m-actions">
               <button className="m-action" onClick={() => setSheet('ops')}>
                 <span className="label">Mode &amp; Ops</span>
@@ -1830,6 +1834,7 @@ function MobileLiveShell({
               </button>
             </div>
           </div>
+
         </main>
         </div>{/* end m-left */}
 
@@ -1937,9 +1942,11 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   const [flashIdx,      setFlashIdx]      = _s(null);
   const [runtimeConfig, setRuntimeConfig] = _s(null);
   const [availableModels, setAvailableModels] = _s([]);
+  const [openPosition, setOpenPosition] = _s(null);
   const [brainData, setBrainData] = _s(null);
   const [blockerFunnel, setBlockerFunnel] = _s(null);
   const [timeline, setTimeline] = _s(null);
+  const [heatmapData, setHeatmapData] = _s(null);
   const [simRunsToday, setSimRunsToday] = _s([]);
   const [watchMode, setWatchMode] = _s('live');
   const [watchRunId, setWatchRunId] = _s('');
@@ -1954,17 +1961,23 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     return ist.toISOString().slice(0, 10);
   };
 
-  // Diagnostics: in live mode we surface current model + available models.
-  // Blocker funnel needs a date and is replay-only.
+  // State: runtime config + available models + open position. Refresh every 30s.
   _e(() => {
     let alive = true;
     const kindQ = watchMode === 'sim' ? `&kind=sim${watchRunId ? `&run_id=${encodeURIComponent(watchRunId)}` : ''}` : '';
     const modeQ = watchMode === 'sim' ? 'replay' : 'live';
-    fetch(`/api/strategy/current/state?mode=${modeQ}&latest_n=0${kindQ}`)
+    const load = () => fetch(`/api/strategy/current/state?mode=${modeQ}&latest_n=0${kindQ}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`state HTTP ${r.status}`)))
-      .then(s => { if (!alive) return; setRuntimeConfig(s?.runtime_config || null); setAvailableModels(Array.isArray(s?.available_models) ? s.available_models : []); })
+      .then(s => {
+        if (!alive) return;
+        setRuntimeConfig(s?.runtime_config || null);
+        setAvailableModels(Array.isArray(s?.available_models) ? s.available_models : []);
+        setOpenPosition(s?.open_position || null);
+      })
       .catch(() => {});
-    return () => { alive = false; };
+    load();
+    const id = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(id); };
   }, [watchMode, watchRunId]);
 
   // Live brain status — initial fetch + refresh every 30s.
@@ -2000,6 +2013,21 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     };
     load();
     const id = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, [watchMode, watchRunId, watchDate]);
+
+  // Session heatmap for today. Refresh every 60s.
+  _e(() => {
+    let alive = true;
+    const load = () => {
+      const date = watchMode === 'sim' ? (watchDate || _todayIST()) : _todayIST();
+      const modeQ = watchMode === 'sim' ? 'replay' : 'live';
+      fetch(`/api/strategy/session-heatmap?mode=${modeQ}&date=${date}`)
+        .then(r => r.ok ? r.json() : null).catch(() => null)
+        .then(d => { if (alive) setHeatmapData(d); });
+    };
+    load();
+    const id = setInterval(load, 60000);
     return () => { alive = false; clearInterval(id); };
   }, [watchMode, watchRunId, watchDate]);
 
@@ -2134,7 +2162,9 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
       regime={regime} engine={engine}
       brainData={brainData} wsStatus={wsStatus}
       runtimeConfig={runtimeConfig} availableModels={availableModels}
+      openPosition={openPosition}
       blockerFunnel={blockerFunnel} timeline={timeline}
+      heatmap={heatmapData ? { data: heatmapData } : null}
       watchMode={watchMode} watchRunId={watchRunId} simRuns={simRunsToday}
       selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
       onHaltClick={onKillClick} onModeSwitch={onModeSwitch}
