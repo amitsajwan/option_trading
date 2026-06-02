@@ -359,6 +359,21 @@ function OpsPage() {
         next.LOTTERY_RUNNER_GIVEBACK_FRAC    = '0.35';
         next.LOTTERY_THESIS_FAIL_BARS        = '5';
         next.LOTTERY_TIMESTOP_BARS           = '90';
+      } else if (mode === 'adaptive') {
+        // Adaptive = scalper-style entry/risk, but exits route by ENTRY regime:
+        // BREAKOUT/TRENDING → lottery runner (let it run), everything else → scalper.
+        next.CONSENSUS_BYPASS_MIN_CONFIDENCE = liveEnv.CONSENSUS_BYPASS_MIN_CONFIDENCE || '0.65';
+        next.STRATEGY_MIN_CONFIDENCE         = liveEnv.STRATEGY_MIN_CONFIDENCE || '0.65';
+        next.RISK_MAX_SESSION_TRADES         = liveEnv.RISK_MAX_SESSION_TRADES || '6';
+        next.STRATEGY_STRIKE_SELECTION_POLICY = liveEnv.STRATEGY_STRIKE_SELECTION_POLICY || 'smart_strike';
+        next.STRATEGY_SMART_STRIKE_ENABLED   = liveEnv.STRATEGY_SMART_STRIKE_ENABLED || '1';
+        next.STRATEGY_STRIKE_MAX_OTM_STEPS   = liveEnv.STRATEGY_STRIKE_MAX_OTM_STEPS || '8';
+        next.ADAPTIVE_LOTTERY_REGIMES        = liveEnv.ADAPTIVE_LOTTERY_REGIMES || 'BREAKOUT,TRENDING';
+        // Lottery branch params (used for BREAKOUT/TRENDING exits) — live values
+        next.LOTTERY_HARD_STOP_PCT           = liveEnv.LOTTERY_HARD_STOP_PCT || '0.20';
+        next.LOTTERY_BIG_TARGET_PCT          = liveEnv.LOTTERY_BIG_TARGET_PCT || '0.50';
+        next.LOTTERY_RUNNER_ACTIVATION_MFE   = liveEnv.LOTTERY_RUNNER_ACTIVATION_MFE || '0.03';
+        next.LOTTERY_RUNNER_GIVEBACK_FRAC    = liveEnv.LOTTERY_RUNNER_GIVEBACK_FRAC || '0.35';
       } else {
         // Scalper — restore live values
         next.CONSENSUS_BYPASS_MIN_CONFIDENCE = liveEnv.CONSENSUS_BYPASS_MIN_CONFIDENCE || '0.65';
@@ -409,13 +424,16 @@ function OpsPage() {
           {/* ── Strategy mode — the big choice ── */}
           <div style={{display:'flex', alignItems:'center', gap:14, padding:'4px 0 10px', borderBottom:'1px solid var(--line-1)', marginBottom:4}}>
             <span style={{fontFamily:'var(--f-mono)', fontSize:11, fontWeight:600, letterSpacing:'0.04em', color:'var(--ink-2)'}}>STRATEGY MODE</span>
-            <div className="ops-seg" style={{width:260}}>
+            <div className="ops-seg" style={{width:340}}>
               <button className={curMode==='scalper'?'active':''} onClick={()=>setStrategyMode('scalper')}>Scalper</button>
+              <button className={curMode==='adaptive'?'active':''} onClick={()=>setStrategyMode('adaptive')}>⚖ Adaptive</button>
               <button className={curMode==='lottery'?'active':''} onClick={()=>setStrategyMode('lottery')}>🎟 Lottery</button>
             </div>
             <span style={{fontFamily:'var(--f-mono)', fontSize:10, color:'var(--ink-3)'}}>
               {curMode==='lottery'
                 ? 'rare high-conviction bets · let winners run · lose small often'
+                : curMode==='adaptive'
+                ? 'lottery on BREAKOUT/TRENDING · scalper otherwise · exits route by regime'
                 : 'frequent · capture small gains · tight exits'}
             </span>
           </div>
@@ -451,8 +469,8 @@ function OpsPage() {
             </div>
             )}
 
-            {/* Lottery exit params (shown when lottery) */}
-            {curMode === 'lottery' && (
+            {/* Lottery exit params (shown when lottery, and adaptive — used for BREAKOUT/TRENDING) */}
+            {curMode !== 'scalper' && (
             <div>
               <div className="ops-group-label">🎟 Lottery Exit</div>
               <SliderCtrl label="Hard stop (cap loss)"
