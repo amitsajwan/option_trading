@@ -1620,6 +1620,7 @@ function MobileLiveShell({
     }
   }, [ptrState]);
 
+  const isMobile = _useIsMobile();
   const tradeCount = trades.length;
   const signalCount = signals.length;
 
@@ -1668,21 +1669,20 @@ function MobileLiveShell({
         </div>
       </header>
 
-      {/* ── Tab strip ────────────────────────────────────────────────────── */}
-      <nav className="m-tabs" role="tablist">
-        <button className="m-tab" data-tab="tape"  aria-pressed={tab==='tape'}  onClick={() => setTab('tape')}>
-          Tape <span className="count">{tradeCount}</span>
-        </button>
-        <button className="m-tab" data-tab="chart" aria-pressed={tab==='chart'} onClick={() => setTab('chart')}>Chart</button>
-        <button className="m-tab" data-tab="brain" aria-pressed={tab==='brain'} onClick={() => setTab('brain')}>Brain</button>
-        <button className="m-tab" data-tab="more"  aria-pressed={tab==='more'}  onClick={() => setTab('more')}>More</button>
-      </nav>
-
       {/* ── Body — phone: single column; desktop: 2-col split ──────────── */}
       <div className="m-split">
 
-        {/* Left pane: tabs + content (all sizes). On desktop always visible. */}
-        <main className="m-body"
+        {/* Left pane: tab strip + scrollable content ─────────────────────── */}
+        <div className="m-left">
+          <nav className="m-tabs" role="tablist">
+            <button className="m-tab" data-tab="tape"  aria-pressed={tab==='tape'}  onClick={() => setTab('tape')}>
+              Tape <span className="count">{tradeCount}</span>
+            </button>
+            <button className="m-tab" data-tab="chart" aria-pressed={tab==='chart'} onClick={() => setTab('chart')}>Chart</button>
+            <button className="m-tab" data-tab="brain" aria-pressed={tab==='brain'} onClick={() => setTab('brain')}>Brain</button>
+            <button className="m-tab" data-tab="more"  aria-pressed={tab==='more'}  onClick={() => setTab('more')}>More</button>
+          </nav>
+          <main className="m-body"
               onTouchStart={onTouchStart}
               onTouchMove={onTouchMove}
               onTouchEnd={onTouchEnd}>
@@ -1710,16 +1710,18 @@ function MobileLiveShell({
             }
           </div>
 
-          {/* Chart tab — phone only; on desktop chart lives in right pane */}
-          <div className={`m-chart-tab-pane ${tab === 'chart' ? '' : 'm-tab-hidden'}`}>
-            <div className="m-chart-wrap">
-              <TermChart
-                session={session} candles={candles} trades={trades}
-                selectedTrade={inspectorTrade} onSelectTrade={tr => { onSelectTrade(tr); setShowInspector(true); }}
-                upToIdx={upToIdx} flashIdx={flashIdx}
-              />
+          {/* Chart tab — phone only; on desktop chart lives in right pane (never both) */}
+          {isMobile && (
+            <div className={`m-chart-tab-pane ${tab === 'chart' ? '' : 'm-tab-hidden'}`}>
+              <div className="m-chart-wrap">
+                <TermChart
+                  session={session} candles={candles} trades={trades}
+                  selectedTrade={inspectorTrade} onSelectTrade={tr => { onSelectTrade(tr); setShowInspector(true); }}
+                  upToIdx={upToIdx} flashIdx={flashIdx}
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Brain tab */}
           <div className={tab === 'brain' ? '' : 'm-tab-hidden'}>
@@ -1792,31 +1794,34 @@ function MobileLiveShell({
             </div>
           </div>
         </main>
+        </div>{/* end m-left */}
 
-        {/* Right pane: chart always visible on desktop (hidden on phone — chart tab handles it) */}
-        <div className="m-right-pane">
-          <div className="m-right-chart">
-            <TermChart
-              session={session} candles={candles} trades={trades}
-              selectedTrade={inspectorTrade} onSelectTrade={tr => { onSelectTrade(tr); setShowInspector(true); }}
-              upToIdx={upToIdx} flashIdx={flashIdx}
-            />
-          </div>
-          {/* Inspector panel — slides in when a trade is selected */}
-          {inspectorTrade && (
-            <div className="m-right-inspector">
-              <div className="m-right-inspector-head">
-                <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',letterSpacing:'0.12em',textTransform:'uppercase'}}>
-                  Trade Inspector
-                </span>
-                <button className="m-sheet-close" onClick={() => setShowInspector(false)}>✕</button>
-              </div>
-              <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-                <TradeInspector session={session} trade={inspectorTrade}/>
-              </div>
+        {/* Right pane: chart on desktop only — phone chart tab handles mobile (never both) */}
+        {!isMobile && (
+          <div className="m-right-pane">
+            <div className="m-right-chart">
+              <TermChart
+                session={session} candles={candles} trades={trades}
+                selectedTrade={inspectorTrade} onSelectTrade={tr => { onSelectTrade(tr); setShowInspector(true); }}
+                upToIdx={upToIdx} flashIdx={flashIdx}
+              />
             </div>
-          )}
-        </div>
+            {/* Inspector panel — slides in when a trade is selected */}
+            {inspectorTrade && (
+              <div className="m-right-inspector">
+                <div className="m-right-inspector-head">
+                  <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',letterSpacing:'0.12em',textTransform:'uppercase'}}>
+                    Trade Inspector
+                  </span>
+                  <button className="m-sheet-close" onClick={() => setShowInspector(false)}>✕</button>
+                </div>
+                <div style={{flex:1,overflowY:'auto',minHeight:0}}>
+                  <TradeInspector session={session} trade={inspectorTrade}/>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
       </div>{/* end m-split */}
 
