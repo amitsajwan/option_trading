@@ -2206,6 +2206,55 @@ function MobileReplayShell({
     color:'var(--fg-1)', border:'1px solid var(--line-2)', borderRadius:'var(--r-2)',
     padding:'0 6px', height:24, flex:1, minWidth:0 };
 
+  // ── Two-level run picker: filter by date, then choose the run on that date.
+  // With many sim runs accumulating, a single flat dropdown is hectic — group
+  // the options by date (newest first) so the operator picks a date, then the
+  // specific run. Run dropdown is only shown when a date has more than one run.
+  // Default the kind filter to the loaded run's kind (usually 'sim' from the
+  // boot pick) so the picker lands on sim runs without manual toggling.
+  const [kindFilter, setKindFilter] = _s(replayKind === 'oos' ? 'oos' : 'sim');
+  const filteredOptions = (replayOptions||[]).filter(o => kindFilter==='all' || o.kind===kindFilter);
+  const dateGroups = (() => {
+    const m = new Map();
+    filteredOptions.forEach(o => {
+      if (!o.date) return;
+      if (!m.has(o.date)) m.set(o.date, { date:o.date, runs:[], kinds:new Set() });
+      const g = m.get(o.date); g.runs.push(o); g.kinds.add(o.kind);
+    });
+    return [...m.values()].sort((a,b) => String(b.date).localeCompare(String(a.date)));
+  })();
+  const [filterDate, setFilterDate] = _s(replayDate || '');
+  _e(() => { if (replayDate) setFilterDate(replayDate); }, [replayDate]);
+  const activeDate = filterDate || replayDate || '';
+  const runsForDate = filteredOptions.filter(o => o.date === activeDate);
+  const _dateLabel = g => {
+    const kinds = [...g.kinds];
+    const tag = kinds.length === 1 ? kinds[0] : kinds.join('/');
+    return `${g.date} · ${g.runs.length} ${tag}`;
+  };
+  const _loadDate = d => {
+    setFilterDate(d);
+    const runs = filteredOptions.filter(o => o.date === d);
+    // Prefer a sim run that has data, else the first run on that date.
+    const pick = runs.find(r => r.kind==='sim') || runs[0];
+    if (pick) onDateChange(pick.date, { runId: pick.runId||'', kind: pick.kind||'oos' });
+  };
+  const _setKind = k => {
+    setKindFilter(k);
+    const opts = (replayOptions||[]).filter(o => k==='all' || o.kind===k);
+    // Keep the current date if it still has runs under the new kind; else jump
+    // to the newest date available for that kind and load it.
+    if (opts.some(o => o.date === activeDate)) return;
+    const newest = opts.map(o => o.date).filter(Boolean)
+      .sort((a,b) => String(b).localeCompare(String(a)))[0];
+    if (newest) {
+      setFilterDate(newest);
+      const runs = opts.filter(o => o.date === newest);
+      const pick = runs.find(r => r.kind==='sim') || runs[0];
+      if (pick) onDateChange(pick.date, { runId: pick.runId||'', kind: pick.kind||'oos' });
+    }
+  };
+
   return (
     <div className="m-shell">
       {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -2216,18 +2265,41 @@ function MobileReplayShell({
             <span className="m-brand-mark"/>QUANT
             <span style={{fontSize:9,opacity:0.55,marginLeft:4,color:'var(--info)'}}>◷ REPLAY</span>
           </div>
-          <select style={selStyle}
-            value={`${replayKind}:${replayDate}:${replayRunId||''}`}
-            disabled={datesLoading || !(replayOptions||[]).length}
-            onChange={e => {
-              const next = (replayOptions||[]).find(r => r.key === e.target.value);
-              if (next) onDateChange(next.date, { runId: next.runId||'', kind: next.kind||'oos' });
-            }}>
-            {!replayDate && <option value="">{datesLoading ? 'Loading…' : 'Select run'}</option>}
-            {(replayOptions||[]).map(opt => (
-              <option key={opt.key} value={opt.key}>{_fmtReplayRunOption(opt, tradeCounts, modelsByDate)}</option>
-            ))}
-          </select>
+          <div style={{display:'flex',gap:6,flex:1,minWidth:0,alignItems:'center'}}>
+            {/* Kind filter — Sim / OOS / All (segmented) */}
+            <div style={{display:'flex',flexShrink:0,border:'1px solid var(--line-2)',borderRadius:'var(--r-2)',overflow:'hidden'}}>
+              {['sim','oos','all'].map(k => (
+                <button key={k} onClick={() => _setKind(k)}
+                  style={{border:0,background:kindFilter===k?'var(--accent)':'transparent',
+                    color:kindFilter===k?'#1a1100':'var(--fg-3)',fontFamily:'var(--f-mono)',
+                    fontSize:9.5,letterSpacing:'0.04em',padding:'0 7px',height:24,cursor:'pointer',
+                    textTransform:'uppercase'}}>
+                  {k}
+                </button>
+              ))}
+            </div>
+            {/* Date dropdown — distinct dates newest-first */}
+            <select style={{...selStyle, flex:'0 0 auto', maxWidth:150}}
+              value={activeDate}
+              disabled={datesLoading || !dateGroups.length}
+              onChange={e => _loadDate(e.target.value)}>
+              {!activeDate && <option value="">{datesLoading ? 'Loading…' : 'Date'}</option>}
+              {dateGroups.map(g => <option key={g.date} value={g.date}>{_dateLabel(g)}</option>)}
+            </select>
+            {/* Run dropdown — only when the chosen date has more than one run */}
+            {runsForDate.length > 1 && (
+              <select style={selStyle}
+                value={`${replayKind}:${replayDate}:${replayRunId||''}`}
+                onChange={e => {
+                  const next = runsForDate.find(r => r.key === e.target.value);
+                  if (next) onDateChange(next.date, { runId: next.runId||'', kind: next.kind||'oos' });
+                }}>
+                {runsForDate.map(opt => (
+                  <option key={opt.key} value={opt.key}>{_fmtReplayRunOption(opt, tradeCounts, modelsByDate)}</option>
+                ))}
+              </select>
+            )}
+          </div>
           <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
             <div className="m-orb" title={`ws: ${wsStatus}`}>
               <span className={`m-orb-dot ${wsStatus==='connected'?'ok':wsStatus==='connecting'?'warn':'crit'}`}/>
