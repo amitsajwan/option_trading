@@ -303,9 +303,14 @@ def _replay_and_publish(
 def _process_command(redis_client: redis.Redis, coll: Any, command: dict[str, Any]) -> None:
     run_id = str(command.get("run_id") or "").strip()
     if not run_id:
+        logger.warning("orchestrator received command with no run_id — ignored")
         return
     date_from = str(command.get("date_from") or "").strip()
     date_to = str(command.get("date_to") or "").strip()
+    logger.info(
+        "orchestrator command received run_id=%s date_from=%s date_to=%s dataset=%s",
+        run_id, date_from, date_to, command.get("dataset") or "historical",
+    )
     dataset = str(command.get("dataset") or "historical").strip().lower()
     speed = float(command.get("speed") or 0.0)
     base_path = str(command.get("base_path") or "").strip() or str(_default_snapshot_parquet_base())

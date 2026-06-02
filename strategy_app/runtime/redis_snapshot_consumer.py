@@ -346,6 +346,9 @@ class RedisSnapshotConsumer:
             self._stream_consumer_name,
         )
         read_pending = True
+        _health_interval = 60.0
+        _last_health = time.monotonic()
+        _last_message_at: Optional[float] = None
         try:
             while not self._stop_event.is_set():
                 if max_events is not None and self._events_seen >= max_events:
@@ -354,9 +357,19 @@ class RedisSnapshotConsumer:
                 if read_pending and not batch:
                     read_pending = False
                     continue
+                now = time.monotonic()
                 if not batch:
+                    if now - _last_health >= _health_interval:
+                        idle_sec = round(now - _last_message_at, 1) if _last_message_at else None
+                        logger.info(
+                            "strategy consumer health stream=%s events=%s dedupe_window=%s idle_sec=%s",
+                            self._stream_name, self._events_seen,
+                            len(self._seen_snapshot_keys), idle_sec,
+                        )
+                        _last_health = now
                     time.sleep(self._poll_interval_sec)
                     continue
+                _last_message_at = now
                 for entry_id, fields in batch:
                     if str(fields.get("type") or "").lower() == SENTINEL_TYPE:
                         logger.info(

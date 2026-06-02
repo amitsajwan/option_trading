@@ -148,6 +148,7 @@ class SharedRedisPool:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 return
+            restarting = self._thread is not None  # thread existed but died
             self._redis_client = redis.Redis(
                 host=self._host,
                 port=self._port,
@@ -159,7 +160,13 @@ class SharedRedisPool:
             self._pubsub = self._redis_client.pubsub(ignore_subscribe_messages=True)
             self._thread = threading.Thread(target=self._run, name="ws-pool-reader", daemon=True)
             self._thread.start()
-            logger.info("ws-pool reader thread started host=%s port=%s", self._host, self._port)
+            if restarting:
+                logger.warning(
+                    "ws-pool reader thread RESTARTED (previous thread died) host=%s port=%s",
+                    self._host, self._port,
+                )
+            else:
+                logger.info("ws-pool reader thread started host=%s port=%s", self._host, self._port)
 
     def _dispatch(self, channel: str, data: Any) -> None:
         decoded: Any
@@ -190,12 +197,13 @@ class SharedRedisPool:
                     pass
 
         for q, loop in targets:
-            def _do_put(q: "asyncio.Queue[Any]" = q, m: Any = msg) -> None:
+            def _do_put(q: "asyncio.Queue[Any]" = q, m: Any = msg, ch: str = channel) -> None:
                 if q.full():
                     try:
                         q.get_nowait()
                     except Exception:
                         pass
+                    logger.debug("ws-pool queue full, oldest message dropped channel=%s", ch)
                 try:
                     q.put_nowait(m)
                 except Exception:
@@ -216,14 +224,18 @@ class SharedRedisPool:
                     try:
                         if action == "subscribe":
                             self._pubsub.subscribe(name)
+                            logger.info("ws-pool subscribed channel=%s", name)
                         elif action == "psubscribe":
                             self._pubsub.psubscribe(name)
+                            logger.info("ws-pool psubscribed pattern=%s", name)
                         elif action == "unsubscribe":
                             self._pubsub.unsubscribe(name)
+                            logger.info("ws-pool unsubscribed channel=%s", name)
                         elif action == "punsubscribe":
                             self._pubsub.punsubscribe(name)
-                    except Exception:
-                        pass
+                            logger.info("ws-pool punsubscribed pattern=%s", name)
+                    except Exception as exc:
+                        logger.warning("ws-pool %s failed name=%s: %s", action, name, exc)
 
                 msg = self._pubsub.get_message(timeout=1.0)
                 if not msg:
