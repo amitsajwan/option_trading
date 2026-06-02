@@ -1556,6 +1556,7 @@ function MobileLiveShell({
   trades, signals, strategies,
   quote, sessionPnl, winRate, regime, engine,
   brainData, wsStatus, watchMode, watchRunId, simRuns,
+  runtimeConfig, availableModels, blockerFunnel, timeline,
   selectedTrade, onSelectTrade,
   onHaltClick, onModeSwitch, onBackToLive, onWatchChange,
 }) {
@@ -1652,6 +1653,12 @@ function MobileLiveShell({
               <span className="v">{tradeCount} · {winRate}%</span>
             </div>
           </div>
+          <div className="m-header-desk-cells">
+            <div className="cell"><span className="k">Regime</span><span className="v">{regime||'—'}</span></div>
+            <div className="cell"><span className="k">Engine</span><span className="v">{engine||'—'}</span></div>
+            <div className="cell"><span className="k">Feed</span>
+              <span className={`v ${orbCls==='ok'?'pos':orbCls==='warn'?'warn':'neg'}`}>{orbLbl}</span></div>
+          </div>
           <button className="m-iconbtn"
                   aria-label="Settings and mode switch"
                   onClick={() => setSheet('ops')}>⚙</button>
@@ -1663,53 +1670,59 @@ function MobileLiveShell({
 
       {/* ── Tab strip ────────────────────────────────────────────────────── */}
       <nav className="m-tabs" role="tablist">
-        <button className="m-tab" aria-pressed={tab==='tape'}    onClick={() => setTab('tape')}>
+        <button className="m-tab" data-tab="tape"  aria-pressed={tab==='tape'}  onClick={() => setTab('tape')}>
           Tape <span className="count">{tradeCount}</span>
         </button>
-        <button className="m-tab" aria-pressed={tab==='chart'}   onClick={() => setTab('chart')}>Chart</button>
-        <button className="m-tab" aria-pressed={tab==='brain'}   onClick={() => setTab('brain')}>Brain</button>
-        <button className="m-tab" aria-pressed={tab==='more'}    onClick={() => setTab('more')}>More</button>
+        <button className="m-tab" data-tab="chart" aria-pressed={tab==='chart'} onClick={() => setTab('chart')}>Chart</button>
+        <button className="m-tab" data-tab="brain" aria-pressed={tab==='brain'} onClick={() => setTab('brain')}>Brain</button>
+        <button className="m-tab" data-tab="more"  aria-pressed={tab==='more'}  onClick={() => setTab('more')}>More</button>
       </nav>
 
-      {/* ── Body ─────────────────────────────────────────────────────────── */}
-      <main className="m-body"
-            onTouchStart={onTouchStart}
-            onTouchMove={onTouchMove}
-            onTouchEnd={onTouchEnd}>
-        <div className={`m-ptr ${ptrState !== 'idle' ? ptrState : ''}`}>
-          {ptrState === 'pulling' ? 'Release to refresh' : ptrState === 'refreshing' ? 'Refreshing…' : ''}
-        </div>
+      {/* ── Body — phone: single column; desktop: 2-col split ──────────── */}
+      <div className="m-split">
 
-        {tab === 'tape' && (
-          tradeCount === 0
-            ? <div className="m-empty">
-                No trades yet today.
-                <div className="hint">{signalCount > 0 ? `${signalCount} signal${signalCount===1?'':'s'} considered` : 'Waiting for signals…'}</div>
-              </div>
-            : <div className="m-cards">
-                {trades.map(t => (
-                  <MobileTradeCard
-                    key={t.id}
-                    trade={t}
-                    session={session}
-                    selected={inspectorTrade?.id === t.id && showInspector}
-                    onSelect={tr => { onSelectTrade(tr); setShowInspector(true); }}/>
-                ))}
-              </div>
-        )}
-
-        {tab === 'chart' && (
-          <div className="m-chart-wrap" ref={chartHostRef}>
-            <TermChart
-              session={session} candles={candles} trades={trades}
-              selectedTrade={inspectorTrade} onSelectTrade={onSelectTrade}
-              upToIdx={upToIdx} flashIdx={flashIdx}
-            />
+        {/* Left pane: tabs + content (all sizes). On desktop always visible. */}
+        <main className="m-body"
+              onTouchStart={onTouchStart}
+              onTouchMove={onTouchMove}
+              onTouchEnd={onTouchEnd}>
+          <div className={`m-ptr ${ptrState !== 'idle' ? ptrState : ''}`}>
+            {ptrState === 'pulling' ? 'Release to refresh' : ptrState === 'refreshing' ? 'Refreshing…' : ''}
           </div>
-        )}
 
-        {tab === 'brain' && (
-          <>
+          {/* Tape tab */}
+          <div className={tab === 'tape' ? '' : 'm-tab-hidden'}>
+            {tradeCount === 0
+              ? <div className="m-empty">
+                  No trades yet today.
+                  <div className="hint">{signalCount > 0 ? `${signalCount} signal${signalCount===1?'':'s'} considered` : 'Waiting for signals…'}</div>
+                </div>
+              : <div className="m-cards">
+                  {trades.map(t => (
+                    <MobileTradeCard
+                      key={t.id}
+                      trade={t}
+                      session={session}
+                      selected={inspectorTrade?.id === t.id && showInspector}
+                      onSelect={tr => { onSelectTrade(tr); setShowInspector(true); }}/>
+                  ))}
+                </div>
+            }
+          </div>
+
+          {/* Chart tab — phone only; on desktop chart lives in right pane */}
+          <div className={`m-chart-tab-pane ${tab === 'chart' ? '' : 'm-tab-hidden'}`}>
+            <div className="m-chart-wrap">
+              <TermChart
+                session={session} candles={candles} trades={trades}
+                selectedTrade={inspectorTrade} onSelectTrade={tr => { onSelectTrade(tr); setShowInspector(true); }}
+                upToIdx={upToIdx} flashIdx={flashIdx}
+              />
+            </div>
+          </div>
+
+          {/* Brain tab */}
+          <div className={tab === 'brain' ? '' : 'm-tab-hidden'}>
             <div className="m-section">
               <div className="m-section-head">Brain</div>
               <div className="m-section-body">
@@ -1717,19 +1730,18 @@ function MobileLiveShell({
                   ? <div className="m-kv-list">
                       <div className="m-kv"><span className="k">day_score</span>
                         <span className={`v ${
-                          String(brainData.day_score || '').toUpperCase() === 'CALM' ? 'pos' :
-                          String(brainData.day_score || '').toUpperCase() === 'AVOID' ? 'neg' :
-                          String(brainData.day_score || '').toUpperCase() === 'VOLATILE' ? 'warn' : ''
-                        }`}>{String(brainData.day_score || '—').toUpperCase()}</span></div>
+                          String(brainData.day_score||'').toUpperCase()==='CALM'?'pos':
+                          String(brainData.day_score||'').toUpperCase()==='AVOID'?'neg':
+                          String(brainData.day_score||'').toUpperCase()==='VOLATILE'?'warn':''
+                        }`}>{String(brainData.day_score||'—').toUpperCase()}</span></div>
                       <div className="m-kv"><span className="k">confidence</span>
-                        <span className="v">{brainData.day_score_confidence != null
-                          ? (Number(brainData.day_score_confidence)*100).toFixed(0)+'%' : '—'}</span></div>
+                        <span className="v">{brainData.day_score_confidence!=null?(Number(brainData.day_score_confidence)*100).toFixed(0)+'%':'—'}</span></div>
                       <div className="m-kv"><span className="k">size mult</span>
-                        <span className={`v ${brainData.size_multiplier != null && Number(brainData.size_multiplier) < 1 ? 'warn' : 'pos'}`}>
-                          {brainData.size_multiplier != null ? Number(brainData.size_multiplier).toFixed(2)+'×' : '—'}
+                        <span className={`v ${brainData.size_multiplier!=null&&Number(brainData.size_multiplier)<1?'warn':'pos'}`}>
+                          {brainData.size_multiplier!=null?Number(brainData.size_multiplier).toFixed(2)+'×':'—'}
                         </span></div>
                       <div className="m-kv"><span className="k">carry</span>
-                        <span className="v">{brainData.carry_consecutive_losses || 0} L · {brainData.losing_streak_days || 0}d</span></div>
+                        <span className="v">{brainData.carry_consecutive_losses||0} L · {brainData.losing_streak_days||0}d</span></div>
                     </div>
                   : <div className="m-empty" style={{padding:'14px 4px'}}>Brain status unavailable.</div>
                 }
@@ -1739,34 +1751,30 @@ function MobileLiveShell({
               <div className="m-section-head">Session</div>
               <div className="m-section-body">
                 <div className="m-kv-list">
-                  <div className="m-kv"><span className="k">P&amp;L</span>
-                    <span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl, 2)}</span></div>
+                  <div className="m-kv"><span className="k">P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
                   <div className="m-kv"><span className="k">trades</span><span className="v">{tradeCount}</span></div>
                   <div className="m-kv"><span className="k">win rate</span><span className="v">{winRate}%</span></div>
-                  <div className="m-kv"><span className="k">regime</span><span className="v">{regime || '—'}</span></div>
-                  <div className="m-kv"><span className="k">engine</span><span className="v">{engine || '—'}</span></div>
+                  <div className="m-kv"><span className="k">regime</span><span className="v">{regime||'—'}</span></div>
+                  <div className="m-kv"><span className="k">engine</span><span className="v">{engine||'—'}</span></div>
                   <div className="m-kv"><span className="k">feed</span>
-                    <span className={`v ${orbCls === 'ok' ? 'pos' : orbCls === 'warn' ? 'warn' : 'neg'}`}>
-                      {orbLbl} · {_fmtRelTime(lastTickAt)}
-                    </span></div>
+                    <span className={`v ${orbCls==='ok'?'pos':orbCls==='warn'?'warn':'neg'}`}>{orbLbl} · {_fmtRelTime(lastTickAt)}</span></div>
                 </div>
               </div>
             </div>
-          </>
-        )}
+          </div>
 
-        {tab === 'more' && (
-          <>
+          {/* More tab */}
+          <div className={tab === 'more' ? '' : 'm-tab-hidden'}>
             <div className="m-section">
               <div className="m-section-head">Strategy Roster</div>
               <div className="m-section-body">
-                {strategies.length === 0
+                {strategies.length===0
                   ? <div className="m-empty" style={{padding:'14px 4px'}}>No trades yet.</div>
                   : <div className="m-kv-list">
                       {strategies.map(s => (
                         <div key={s.id} className="m-kv">
                           <span className="k">{s.name} · {s.trades}t · {s.wr}%</span>
-                          <span className={`v ${s.pnl >= 0 ? 'pos' : 'neg'}`}>{TC.fmtPct(s.pnl, 2)}</span>
+                          <span className={`v ${s.pnl>=0?'pos':'neg'}`}>{TC.fmtPct(s.pnl,2)}</span>
                         </div>
                       ))}
                     </div>}
@@ -1782,9 +1790,35 @@ function MobileLiveShell({
                 <span className="sub">requires confirmation</span>
               </button>
             </div>
-          </>
-        )}
-      </main>
+          </div>
+        </main>
+
+        {/* Right pane: chart always visible on desktop (hidden on phone — chart tab handles it) */}
+        <div className="m-right-pane">
+          <div className="m-right-chart">
+            <TermChart
+              session={session} candles={candles} trades={trades}
+              selectedTrade={inspectorTrade} onSelectTrade={tr => { onSelectTrade(tr); setShowInspector(true); }}
+              upToIdx={upToIdx} flashIdx={flashIdx}
+            />
+          </div>
+          {/* Inspector panel — slides in when a trade is selected */}
+          {inspectorTrade && (
+            <div className="m-right-inspector">
+              <div className="m-right-inspector-head">
+                <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',letterSpacing:'0.12em',textTransform:'uppercase'}}>
+                  Trade Inspector
+                </span>
+                <button className="m-sheet-close" onClick={() => setShowInspector(false)}>✕</button>
+              </div>
+              <div style={{flex:1,overflowY:'auto',minHeight:0}}>
+                <TradeInspector session={session} trade={inspectorTrade}/>
+              </div>
+            </div>
+          )}
+        </div>
+
+      </div>{/* end m-split */}
 
       {/* ── Inspector bottom sheet (tap a trade card) ────────────────────── */}
       <MobileBottomSheet
@@ -1850,7 +1884,6 @@ function MobileLiveShell({
 
 // ── LiveMonitorDark — main component ────────────────────────────────────
 function LiveMonitorDark({ onModeSwitch, onKillClick }) {
-  const isMobile = _useIsMobile();
   const [session,       setSession]       = _s(null);
   const [upToIdx,       setUpToIdx]       = _s(0);
   const [livePrice,     setLivePrice]     = _s(null);
@@ -2048,105 +2081,27 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   // Default to latest trade in inspector
   const displayTrade   = selectedTrade || (trades.length > 0 ? trades[0] : null);
 
-  if (isMobile) {
-    return (
-      <MobileLiveShell
-        session={session} candles={candles} upToIdx={upToIdx}
-        flashIdx={flashIdx} flashId={flashId}
-        trades={trades} signals={signals} strategies={strategies}
-        quote={quote} sessionPnl={sessionPnl} winRate={winRate}
-        regime={regime} engine={engine}
-        brainData={brainData} wsStatus={wsStatus}
-        watchMode={watchMode} watchRunId={watchRunId} simRuns={simRunsToday}
-        selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
-        onHaltClick={onKillClick} onModeSwitch={onModeSwitch}
-        onBackToLive={() => { setWatchMode('live'); setWatchRunId(''); setWatchDate(''); }}
-        onWatchChange={(runId) => {
-          const row = (simRunsToday || []).find(r => String(r?.run_id || '') === String(runId || ''));
-          setWatchMode('sim');
-          setWatchRunId(String(runId || '').trim());
-          setWatchDate(String(row?.source_date || row?.trade_date || row?.date || '').slice(0, 10));
-        }}
-      />
-    );
-  }
-
   return (
-    <div className="cockpit">
-      <TickerBar quote={quote} instrument={session.instrument}/>
-      {typeof StaleBanner !== 'undefined' && <StaleBanner />}
-      {watchMode === 'sim' && (
-        <div style={{background:'var(--warn)',color:'#231500',padding:'6px 10px',fontSize:'11px',fontWeight:700}}>
-          Watching SIM run {watchRunId ? `${watchRunId.slice(0, 8)}…` : '—'}{watchDate ? ` · ${watchDate}` : ''} · Not LIVE market feed
-        </div>
-      )}
-      <StatusBar
-        sessionPnl={sessionPnl} tradesCount={trades.length} winRate={winRate}
-        regime={regime} engine={engine} ws={wsStatus}
-        onModeSwitch={onModeSwitch} onHaltClick={onKillClick}
-        watchMode={watchMode}
-        simRuns={simRunsToday}
-        watchRunId={watchRunId}
-        onWatchChange={(runId) => {
-          const row = (simRunsToday || []).find(r => String(r?.run_id || '') === String(runId || ''));
-          setWatchMode('sim');
-          setWatchRunId(String(runId || '').trim());
-          setWatchDate(String(row?.source_date || row?.trade_date || row?.date || '').slice(0, 10));
-        }}
-        onBackToLive={() => {
-          setWatchMode('live');
-          setWatchRunId('');
-          setWatchDate('');
-        }}
-      />
-      <div className="t-workspace">
-        <EngineRoster strategies={strategies} dailyRisk={Math.abs(Math.min(0, sessionPnl))}/>
-
-        <div className="t-center">
-          <div className="t-chart-panel">
-            <div className="t-panel-head">
-              <div className="t-panel-title">
-                {session.instrument} · 1m <span className="count">{Math.min(upToIdx+1,candles.length)}/{candles.length} bars</span>
-              </div>
-              <div className="t-panel-actions">
-                {displayTrade && <span className="t-chip amber">● {displayTrade.id}</span>}
-              </div>
-            </div>
-            <TermChart
-              session={session} candles={candles} trades={trades}
-              selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
-              upToIdx={upToIdx} flashIdx={flashIdx}
-            />
-          </div>
-          <Tape
-            session={session} trades={[...trades].reverse()} signals={signals}
-            selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
-            flashId={flashId}
-            diag={{ runtimeConfig, availableModels, brainData, blockerFunnel, timeline,
-                    loading: false, error: '', date: null, onRefresh: null }}
-          />
-        </div>
-
-        <div className="t-rail right" style={{display:'flex',flexDirection:'column'}}>
-          <div className="t-panel-head">
-            <div className="t-panel-title">Trade Inspector</div>
-            <div className="t-panel-actions">
-              <button className="t-btn ghost sm" title="Prev trade (K)"
-                onClick={() => { const i=trades.findIndex(t=>t.id===selectedTrade?.id); if(i>0)setSelectedTrade(trades[i-1]); }}>K↑</button>
-              <button className="t-btn ghost sm" title="Next trade (J)"
-                onClick={() => { const i=trades.findIndex(t=>t.id===selectedTrade?.id); if(i<trades.length-1)setSelectedTrade(trades[i+1]); }}>↓J</button>
-            </div>
-          </div>
-          <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-            <TradeInspector session={session} trade={displayTrade}/>
-          </div>
-          {typeof DepthMiniWidget !== 'undefined' && (
-            <DepthMiniWidget runId={watchMode === 'sim' ? watchRunId : ''} />
-          )}
-        </div>
-      </div>
-      <LogStrip session={session} alerts={session.alerts} wsStatus={wsStatus}/>
-    </div>
+    <MobileLiveShell
+      session={session} candles={candles} upToIdx={upToIdx}
+      flashIdx={flashIdx} flashId={flashId}
+      trades={trades} signals={signals} strategies={strategies}
+      quote={quote} sessionPnl={sessionPnl} winRate={winRate}
+      regime={regime} engine={engine}
+      brainData={brainData} wsStatus={wsStatus}
+      runtimeConfig={runtimeConfig} availableModels={availableModels}
+      blockerFunnel={blockerFunnel} timeline={timeline}
+      watchMode={watchMode} watchRunId={watchRunId} simRuns={simRunsToday}
+      selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
+      onHaltClick={onKillClick} onModeSwitch={onModeSwitch}
+      onBackToLive={() => { setWatchMode('live'); setWatchRunId(''); setWatchDate(''); }}
+      onWatchChange={(runId) => {
+        const row = (simRunsToday || []).find(r => String(r?.run_id || '') === String(runId || ''));
+        setWatchMode('sim');
+        setWatchRunId(String(runId || '').trim());
+        setWatchDate(String(row?.source_date || row?.trade_date || row?.date || '').slice(0, 10));
+      }}
+    />
   );
 }
 

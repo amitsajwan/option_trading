@@ -4,11 +4,156 @@
    unchanged. Owned by Phase 1-7 of the mobile-friendly rollout.
    ───────────────────────────────────────────────────────────────────────── */
 
-/* ── Mobile shell elements: hidden by default; revealed inside the media
-   block. Desktop shell elements (.ticker-bar, .t-status-bar, .t-workspace,
-   .t-log-strip) keep their desktop styles; mobile @media hides them and
-   reveals the .m-shell tree instead. ─────────────────────────────────── */
-.m-shell { display: none; }
+/* ── The new LiveShell is now the layout for ALL screen sizes.
+   .m-shell is always visible; the old cockpit chrome is always hidden.
+   Desktop gets a 2-col split via .m-split; phone stacks them.
+   ─────────────────────────────────────────────────────────────────────── */
+
+/* Always hide the old desktop chrome — LiveShell replaces it. */
+body.live-terminal .ticker-bar,
+body.live-terminal .t-status-bar,
+body.live-terminal .t-workspace,
+body.live-terminal .t-log-strip {
+  display: none !important;
+}
+body.live-terminal .ops-gear-btn,
+body.live-terminal .ops-gear-label {
+  display: none !important;
+}
+
+/* Shell is always displayed */
+.m-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-0);
+  color: var(--fg-1);
+  font-family: var(--f-sans);
+  overflow: hidden;
+}
+
+/* Tab content hidden when not active */
+.m-tab-hidden { display: none !important; }
+
+/* ── Desktop split layout (≥1024px) ───────────────────────────────────── */
+.m-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Left pane: tabs + content */
+.m-body {
+  flex: 0 0 400px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px 10px 20px;
+  border-right: 1px solid var(--line-2);
+  min-height: 0;
+  background: var(--bg-1);
+}
+
+/* Right pane: chart (always visible) + inspector drawer */
+.m-right-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-0);
+  position: relative;
+}
+.m-right-chart {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: pan-y pinch-zoom;
+}
+.m-right-inspector {
+  flex: 0 0 260px;
+  border-top: 1px solid var(--line-2);
+  background: var(--bg-1);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.m-right-inspector-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line-1);
+  background: var(--bg-1);
+  flex-shrink: 0;
+}
+
+/* On desktop, Chart tab (phone-only chart pane) is hidden — chart is in right pane */
+.m-chart-tab-pane { display: none; }
+
+/* Header wider on desktop */
+.m-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: linear-gradient(180deg, #0e1015 0%, #0a0c10 100%);
+  border-bottom: 1px solid var(--line-2);
+  display: grid;
+  grid-template-rows: 40px 52px;
+  flex-shrink: 0;
+}
+.m-header-row1 {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line-1);
+}
+.m-header-row2 {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 0 16px;
+}
+
+/* On desktop, show extra status info in header row 2 */
+.m-header-desk-cells {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  color: var(--fg-3);
+}
+.m-header-desk-cells .cell {
+  display: flex; flex-direction: column; gap: 1px;
+}
+.m-header-desk-cells .k {
+  font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--fg-4);
+}
+.m-header-desk-cells .v { color: var(--fg-1); font-weight: 500; }
+.m-header-desk-cells .v.pos { color: var(--pos); }
+.m-header-desk-cells .v.neg { color: var(--neg); }
+.m-header-desk-cells .v.warn { color: var(--warn); }
+
+/* Tab strip — desktop: 3 tabs (no Chart tab since chart is always in right pane) */
+.m-tabs {
+  position: sticky;
+  top: 92px;
+  z-index: 25;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line-2);
+  flex-shrink: 0;
+}
+/* Hide Chart tab on desktop — chart lives in right pane */
+.m-tab[data-tab="chart"] { display: none; }
+/* Make remaining 3 tabs fill the space */
+@media (min-width: 1024px) {
+  .m-tabs { grid-template-columns: repeat(3, 1fr); }
+}
 
 /* ───────────────── Phase 1 — gate the viewport lock ──────────────────── */
 @media (max-width: 640px) {
@@ -36,49 +181,40 @@
   }
 }
 
-/* ───────────────── Phase 2-7 — mobile layout ─────────────────────────── */
+/* ───────────────── Phone overrides (≤640px) ──────────────────────────── */
 @media (max-width: 640px) {
-  /* Hide desktop chrome on mobile — we render .m-shell instead. */
-  body.live-terminal .ticker-bar,
-  body.live-terminal .t-status-bar,
-  body.live-terminal .t-workspace,
-  body.live-terminal .t-log-strip {
-    display: none !important;
-  }
+  /* Phone: shell scrolls, not fixed height */
+  body.live-terminal { overflow: auto; height: auto; -webkit-text-size-adjust: 100%; }
+  body.live-terminal #app-shell { height: auto; overflow: visible; }
+  body.live-terminal #page { height: auto; overflow: visible; }
 
-  /* Hide the floating Ops gear on mobile — moved into the bottom sheet. */
-  body.live-terminal .ops-gear-btn,
-  body.live-terminal .ops-gear-label {
-    display: none !important;
-  }
+  .m-shell { height: auto; min-height: 100vh; overflow: visible; }
 
-  /* Reveal the mobile shell. */
-  body.live-terminal .m-shell {
-    display: flex;
-    flex-direction: column;
-    min-height: 100vh;
-    background: var(--bg-0);
-    color: var(--fg-1);
-    font-family: var(--f-sans);
-  }
+  /* Split becomes single column on phone */
+  .m-split { flex-direction: column; overflow: visible; }
 
-  /* ── Sticky header (Phase 2): 2 rows, system orb + P&L + halt ───────── */
-  .m-header {
-    position: sticky;
-    top: 0;
-    z-index: 30;
-    background: linear-gradient(180deg, #0e1015 0%, #0a0c10 100%);
-    border-bottom: 1px solid var(--line-2);
-    display: grid;
-    grid-template-rows: 36px 52px;
-  }
+  /* Body fills width, no border */
+  .m-body { flex: none; border-right: none; padding: 8px 10px 80px; }
+
+  /* Right pane (chart) hidden on phone — Chart tab handles it */
+  .m-right-pane { display: none; }
+
+  /* Hide desktop-only status cells and constrain header row 2 to 3 cols */
+  .m-header-desk-cells { display: none; }
+  .m-header-row2 { grid-template-columns: 1fr auto auto; }
+
+  /* Show chart tab pane on phone */
+  .m-chart-tab-pane { display: block !important; }
+
+  /* Chart tab visible in strip on phone */
+  .m-tab[data-tab="chart"] { display: inline-flex !important; }
+  .m-tabs { grid-template-columns: repeat(4, 1fr); top: 88px; }
+
+  /* Header tighter on phone */
+  .m-header { grid-template-rows: 36px 52px; }
   .m-header-row1 {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: center;
     gap: 10px;
     padding: 0 12px;
-    border-bottom: 1px solid var(--line-1);
   }
   .m-brand {
     display: inline-flex; align-items: center; gap: 8px;
