@@ -2192,7 +2192,7 @@ function MobileReplayShell({
   isPlaying, speed, total, vtLabel,
   replayDate, replayRunId, replayKind,
   replayOptions, tradeCounts, modelsByDate, datesLoading, wsStatus, replayError,
-  onPlay, onPause, onSpeed, onScrub, onScrubEnd, onReset, onDateChange, onModeSwitch,
+  onPlay, onPause, onSpeed, onScrub, onScrubEnd, onReset, onDateChange, onModeSwitch, onRefreshRuns,
 }) {
   const [tab, setTab] = _s('tape');
   const isMobile = _useIsMobile();
@@ -2298,6 +2298,13 @@ function MobileReplayShell({
                   <option key={opt.key} value={opt.key}>{_fmtReplayRunOption(opt, tradeCounts, modelsByDate)}</option>
                 ))}
               </select>
+            )}
+            {/* Refresh — re-fetch the run list so sims run after opening Replay appear */}
+            {onRefreshRuns && (
+              <button title="Refresh run list" onClick={onRefreshRuns}
+                style={{flexShrink:0,width:24,height:24,borderRadius:'var(--r-2)',
+                  border:'1px solid var(--line-2)',background:'transparent',color:'var(--fg-3)',
+                  cursor:'pointer',fontSize:12,lineHeight:1,display:'grid',placeItems:'center'}}>⟳</button>
             )}
           </div>
           <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
@@ -2546,8 +2553,11 @@ function _fmtReplayRunOption(opt, tradeCounts, modelsByDate) {
   const runId = String(opt.runId || '').trim();
   const label = String(opt.label || '').trim();
   if (kind === 'sim') {
-    const rid = runId ? ` · run ${runId.slice(0, 8)}…` : '';
-    return `[SIM] ${date || 'date ?'}${label ? ` · ${label}` : ''}${rid}`;
+    const t   = opt.time ? `${opt.time}` : (runId ? runId.slice(0, 8) : '');
+    const trd = (opt.nTrades != null && opt.nTrades !== '') ? ` · ${opt.nTrades}t` : '';
+    const lbl = label ? ` · ${label}` : '';
+    // date is already shown by the date dropdown; lead with time so the newest run is obvious
+    return `${t}${trd}${lbl}`;
   }
   return `[OOS] ${_fmtDateOption(date, tradeCounts, modelsByDate)}`;
 }
@@ -2775,8 +2785,11 @@ function ReplayMonitorDark({ onModeSwitch }) {
 
   _e(() => { return () => { if (wsRef.current) wsRef.current.close(); }; }, []);
 
-  _e(() => {
-    let alive = true;
+  // Fetch the run lists (OOS dates, eval runs, sim runs). autoPick=true on first
+  // load picks the newest sim run; the ⟳ refresh button calls it with false so
+  // sims run after Replay was opened show up without disturbing the loaded run.
+  const loadRunLists = _cb((autoPick) => {
+    setDatesLoading(true);
     Promise.all([
       fetch('/api/historical/replay/dates?limit=250')
         .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))),
@@ -2788,19 +2801,16 @@ function ReplayMonitorDark({ onModeSwitch }) {
         .catch(() => ({ rows: [] })),
     ])
       .then(([payload, oosPayload, simPayload]) => {
-        if (!alive) return;
         setAvailableDates(Array.isArray(payload.dates) ? payload.dates : []);
         setTradeCounts(payload.trade_counts || {});
         setModelsByDate(payload.models_by_date || {});
         setOosRuns(Array.isArray(oosPayload?.rows) ? oosPayload.rows : (Array.isArray(oosPayload?.runs) ? oosPayload.runs : []));
         setSimRuns(Array.isArray(simPayload?.rows) ? simPayload.rows : (Array.isArray(simPayload?.runs) ? simPayload.runs : []));
         setDatesLoading(false);
+        if (!autoPick) return;   // refresh-only: leave the loaded run as-is
         const boot = _replayBootParams();
-        // Respect an explicit date in the URL (e.g. "View in Terminal" deep-links
-        // pass date+run_id+kind). Otherwise prefer the newest SIM run that has
-        // snapshot data — the same-day workflow — instead of falling back to the
-        // stale OOS holdout date (2024-10-31), which is frequently empty and lands
-        // the user on a "No snapshot data" dead-end.
+        // Respect an explicit date in the URL (deep-links). Otherwise prefer the
+        // newest SIM run with data over the stale OOS holdout date (2024-10-31).
         let pick = boot.date;
         let pickKind = boot.kind === 'sim' ? 'sim' : (boot.kind === 'oos' ? 'oos' : '');
         let pickRunId = boot.runId || replayRunIdRef.current;
@@ -2819,9 +2829,10 @@ function ReplayMonitorDark({ onModeSwitch }) {
         if (pick) handleDateChange(pick, { runId: pickRunId, kind: pickKind || 'oos' });
         else setReplayError('No replay dates found in historical snapshots.');
       })
-      .catch(err => { if (!alive) return; setDatesLoading(false); setReplayError('Failed to load dates: ' + err.message); });
-    return () => { alive = false; };
+      .catch(err => { setDatesLoading(false); setReplayError('Failed to load dates: ' + err.message); });
   }, []);
+
+  _e(() => { loadRunLists(true); }, []);
 
   function sendControl(patch) { wsRef.current && wsRef.current.send({ action:'control', ...patch }); }
   function handlePlay()    { setIsPlaying(true);  sendControl({ play: true }); }
@@ -2896,7 +2907,14 @@ function ReplayMonitorDark({ onModeSwitch }) {
       const key = `sim:${d}:${rid}`;
       if (seen.has(key)) return;
       seen.add(key);
-      out.push({ key, kind: 'sim', date: d, runId: rid, label: String(r?.label || '').trim() });
+      // Carry submitted time + trade count so multiple same-date runs are
+      // distinguishable (newest first) in the run dropdown.
+      const sub = String(r?.submitted_at || r?.created_at || '');
+      const time = sub.length >= 16 ? sub.slice(11, 16) : '';
+      const cc = r?.metadata?.collection_counts || {};
+      const nTrades = Math.floor((cc.positions || 0) / 2) || cc.signals || 0;
+      out.push({ key, kind: 'sim', date: d, runId: rid, label: String(r?.label || '').trim(),
+        time, nTrades });
     });
     return out;
   })();
@@ -2928,6 +2946,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
       onPlay={handlePlay} onPause={handlePause} onSpeed={handleSpeed}
       onScrub={handleScrub} onScrubEnd={handleScrubEnd} onReset={handleReset}
       onDateChange={handleDateChange} onModeSwitch={onModeSwitch}
+      onRefreshRuns={() => loadRunLists(false)}
     />
   );
 }
