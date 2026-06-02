@@ -51,6 +51,12 @@ from .entry_gates import (
     is_in_configured_time_window,
     is_session_regime_allowed,
 )
+from .entry_config import EntryConfig
+from .entry_pipeline_contracts import EntryContext
+from .entry_pipeline_gates import (
+    build_entry_pipeline,
+    evaluate_v2 as _evaluate_v2,
+)
 from ..market.depth_context import DepthContext
 from ..runtime.eval_context import clear_depth_context, set_depth_context
 from ..runtime.redis_depth_reader import RedisDepthReader
@@ -176,12 +182,20 @@ class DeterministicRuleEngine(StrategyEngine):
         self._depth_reader: Optional[RedisDepthReader] = depth_reader
         # Per-evaluate depth snapshot — set at start of evaluate(), read by shadow scorer.
         self._current_depth_ctx: Optional[DepthContext] = None
+        # Entry pipeline v2 — strangler flag (default off; set STRATEGY_ENTRY_PIPELINE_V2=1 to enable).
+        self._entry_pipeline_v2: bool = as_bool(os.getenv("STRATEGY_ENTRY_PIPELINE_V2", "0"))
+        self._entry_config: EntryConfig = EntryConfig.from_env()
+        try:
+            self._entry_config.assert_consistency()
+        except ValueError as _ecfg_err:
+            logger.warning("entry_config assertion failed: %s", _ecfg_err)
         self._set_logger_context(None)
         logger.info(
-            "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s brain_enabled=%s",
+            "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s brain_enabled=%s pipeline_v2=%s",
             self._min_confidence,
             self._velocity_enhanced,
             self._brain.enabled,
+            self._entry_pipeline_v2,
         )
 
     def _build_entry_policy(self, config: PolicyConfig) -> EntryPolicy:
@@ -788,6 +802,14 @@ class DeterministicRuleEngine(StrategyEngine):
             return None
         entry_votes = vote_pool
 
+        if self._entry_pipeline_v2:
+            return self._process_entry_votes_v2(
+                votes=entry_votes,
+                snap=snap,
+                risk=risk,
+                regime_signal=regime_signal,
+            )
+
         if self._strategy_profile_id in _PROFILES_ML_ENTRY_CONSENSUS:
             return self._process_entry_consensus(
                 entry_votes=entry_votes,
@@ -830,7 +852,9 @@ class DeterministicRuleEngine(StrategyEngine):
             eligible = [
                 (candidate, policy_decision)
                 for candidate, policy_decision in scored_candidates
-                if candidate.confidence >= self._min_confidence and policy_decision.allowed
+                if candidate.confidence >= self._min_confidence
+                and policy_decision.allowed
+                and not candidate.raw_signals.get("_strike_vetoed")
             ]
             if not eligible:
                 logger.debug(
@@ -857,6 +881,8 @@ class DeterministicRuleEngine(StrategyEngine):
             self._annotate_policy(candidate, policy_decision)
             self._annotate_vote_contract(candidate)
             if candidate.confidence < self._min_confidence:
+                continue
+            if candidate.raw_signals.get("_strike_vetoed"):
                 continue
             if not policy_decision.allowed:
                 continue
@@ -958,6 +984,12 @@ class DeterministicRuleEngine(StrategyEngine):
             return None
 
         self._apply_strike_selection(trade_vote, snap, regime=regime_signal.regime.value)
+        if trade_vote.raw_signals.get("_strike_vetoed"):
+            logger.debug(
+                "consensus entry blocked: strike_veto reason=%s",
+                trade_vote.raw_signals.get("_strike_veto_reason"),
+            )
+            return None
         if (
             self._run_risk_config.atm_strike_only
             and not self._allow_non_atm_for_ml_entry(trade_vote)
@@ -983,6 +1015,60 @@ class DeterministicRuleEngine(StrategyEngine):
         return self._build_entry_signal(
             trade_vote, snap, risk, entry_votes, regime_signal, policy_decision
         )
+
+    # ------------------------------------------------------------------
+    # Entry pipeline v2 — gate cascade
+    # ------------------------------------------------------------------
+
+    def _process_entry_votes_v2(
+        self,
+        *,
+        votes: list[StrategyVote],
+        snap: SnapshotAccessor,
+        risk: RiskContext,
+        regime_signal: RegimeSignal,
+    ) -> Optional[TradeSignal]:
+        """Run the v2 gate-cascade pipeline (STRATEGY_ENTRY_PIPELINE_V2=1)."""
+        relax_conf = self._strategy_profile_id in _PROFILES_RELAX_REGIME_CONF
+        gates = build_entry_pipeline(
+            regime_min_relax=relax_conf,
+            shadow_fn=self._shadow_direction_from_snapshot,
+            ml_hint_fn=extract_ml_direction_hint,
+            consensus_fn=resolve_direction_consensus,
+            ml_entry_vote_selector=lambda vts: max(
+                (v for v in vts if v.strategy_name == "ML_ENTRY"),
+                key=lambda v: float(v.confidence or 0),
+                default=None,
+            ),
+            apply_strike_fn=lambda vote, snap_, regime="": self._apply_strike_selection(
+                vote, snap_, regime=regime
+            ),
+            policy_fn=lambda vote, snap_, regime_, risk_: self._evaluate_entry_policy(
+                vote, snap_, regime_, risk_
+            ),
+        )
+        ctx = EntryContext(
+            snap=snap,
+            regime=regime_signal,
+            risk=risk,
+            votes=votes,
+            config=self._entry_config,
+        )
+        all_votes = votes
+
+        def _build(ctx_: EntryContext) -> Optional[TradeSignal]:
+            if ctx_.candidate is None or ctx_.direction is None:
+                return None
+            policy_decision = self._evaluate_entry_policy(
+                ctx_.candidate, ctx_.snap, ctx_.regime, ctx_.risk
+            )
+            self._annotate_vote_contract(ctx_.candidate)
+            return self._build_entry_signal(
+                ctx_.candidate, ctx_.snap, ctx_.risk,
+                all_votes, ctx_.regime, policy_decision,
+            )
+
+        return _evaluate_v2(ctx=ctx, gates=gates, build_signal_fn=_build)
 
     @staticmethod
     def _force_atm_strike(vote: StrategyVote, snap: SnapshotAccessor) -> StrategyVote:
@@ -1059,6 +1145,14 @@ class DeterministicRuleEngine(StrategyEngine):
     ) -> Optional[TradeSignal]:
         direction = best_vote.direction
         if direction not in (Direction.CE, Direction.PE):
+            return None
+
+        # Strike layer veto is authoritative — no affordable/priced strike = no trade.
+        if best_vote.raw_signals.get("_strike_vetoed"):
+            logger.info(
+                "entry skipped: strike_veto reason=%s",
+                best_vote.raw_signals.get("_strike_veto_reason"),
+            )
             return None
 
         selected_strike = best_vote.proposed_strike or snap.atm_strike
@@ -2228,6 +2322,18 @@ class DeterministicRuleEngine(StrategyEngine):
         except Exception as exc:
             logger.warning("brain_state write failed error=%s", exc)
 
+    def _mark_strike_veto(self, vote: StrategyVote, mode: str, reason: str) -> None:
+        """Flag a vote as vetoed by the strike layer so every entry path skips it."""
+        vote.raw_signals["_strike_vetoed"] = True
+        vote.raw_signals["_strike_veto_mode"] = str(mode)
+        vote.raw_signals["_strike_veto_reason"] = str(reason)
+        logger.info(
+            "strike_veto strategy=%s dir=%s mode=%s reason=%s → no_trade",
+            vote.strategy_name,
+            getattr(vote.direction, "value", vote.direction),
+            mode, reason,
+        )
+
     def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor, regime: str = "") -> None:
         if bool(vote.raw_signals.get("_lock_strike_selection")):
             return
@@ -2264,6 +2370,11 @@ class DeterministicRuleEngine(StrategyEngine):
                     vote.raw_signals["_strike_selected_premium"] = float(round(ltp, 4))
                     vote.raw_signals["_strike_mode"] = selection.mode
                     vote.raw_signals["_strike_reason"] = selection.reason
+            elif str(selection.mode or "").startswith("rejected"):
+                # Strike layer vetoed (premium hard-cap, IV too high, …). This is a
+                # real no-trade — record it so every entry path skips the vote
+                # instead of silently falling back to a default strike.
+                self._mark_strike_veto(vote, selection.mode, selection.reason)
             return
 
         if self._strike_policy != "oi_volume_ranked":

@@ -7,10 +7,15 @@ every threshold is an env var.
 Master switch:
   STRATEGY_SMART_STRIKE_ENABLED=1
 
-Premium target — prefer strikes within budget, but always return a strike.
-Entry is already decided upstream; this selector never skips a trade:
-  SMART_STRIKE_MAX_PREMIUM=600         0 = no cap; try deepest within budget first,
-                                       fall back to deepest available if nothing fits
+Premium budget:
+  SMART_STRIKE_MAX_PREMIUM=600         0 = no cap; try deepest within budget first.
+  SMART_STRIKE_HARD_PREMIUM_CAP=1      1 = HARD cap (DEFAULT): the budget is a veto.
+                                       If no affordable, priced strike exists, SKIP
+                                       the trade (strike=None) — strike/depth
+                                       analysis is part of the decision, like
+                                       IV-too-high. Only bites when a cap is set.
+                                       0 = SOFT cap (legacy): fall back to the
+                                       best/ATM strike anyway, even over budget.
 
 IV hard reject (trade skipped entirely):
   SMART_STRIKE_IV_REJECT_PCTILE=90.0
@@ -302,6 +307,12 @@ def select_strike(snap: Any, direction: str, decision: Any, regime: str = "") ->
         return float(v) if v is not None and float(v) > 0 else None
 
     max_premium = _env_float("SMART_STRIKE_MAX_PREMIUM", 0.0)  # 0 = no cap
+    # Hard cap (DEFAULT): the premium budget is a real veto. Strike/depth analysis
+    # is part of the decision — "no affordable, priced strike" is a legitimate
+    # no-trade, exactly like IV-too-high. Only bites when a positive cap is set;
+    # with no cap (max_premium=0) nothing changes. Set SMART_STRIKE_HARD_PREMIUM_CAP=0
+    # to restore the legacy soft behaviour (trade the best strike even over budget).
+    hard_cap = os.getenv("SMART_STRIKE_HARD_PREMIUM_CAP", "1").strip() == "1"
 
     # Pass 1: try tiers deepest-first with ALL gates including premium target.
     # Deeper OTM = cheaper, so if ltp > max_premium here, shallower will be worse —
@@ -324,26 +335,42 @@ def select_strike(snap: Any, direction: str, decision: Any, regime: str = "") ->
             otm_steps=tier.n,
         )
 
-    # Pass 2: no strike found within budget. Entry was already confirmed — always
-    # take the best available strike, just ignoring the premium cap.
-    # Deepest OTM with passing tier gates wins; fall back to ATM if nothing.
-    for tier in _build_otm_tiers():
-        strike_candidate = _otm_strike(tier.n)
-        ltp = _ltp(strike_candidate)
-        if ltp is None:
-            continue
-        if not _tier_passes(tier, confidence, iv_pct, regime, snap, direction, strike_candidate):
-            continue
-        return StrikeSelection(
-            strike=strike_candidate,
-            reason=f"otm_{tier.n}_over_cap_{ltp:.0f}_conf_{confidence:.3f}",
-            confidence=confidence,
-            iv_percentile=iv_pct,
-            mode=f"otm_{tier.n}",
-            otm_steps=tier.n,
-        )
+    # Pass 2: no strike fit the premium budget. SOFT cap only — take the best
+    # available strike, ignoring the cap. Under a hard cap this pass is skipped:
+    # if nothing affordable exists we veto rather than buy an over-budget strike.
+    if not (hard_cap and max_premium > 0):
+        for tier in _build_otm_tiers():
+            strike_candidate = _otm_strike(tier.n)
+            ltp = _ltp(strike_candidate)
+            if ltp is None:
+                continue
+            if not _tier_passes(tier, confidence, iv_pct, regime, snap, direction, strike_candidate):
+                continue
+            return StrikeSelection(
+                strike=strike_candidate,
+                reason=f"otm_{tier.n}_over_cap_{ltp:.0f}_conf_{confidence:.3f}",
+                confidence=confidence,
+                iv_percentile=iv_pct,
+                mode=f"otm_{tier.n}",
+                otm_steps=tier.n,
+            )
 
-    # ATM fallback — entry is confirmed, always return something tradeable
+    # ATM fallback. Under a hard cap, ATM only qualifies if it is itself priced
+    # AND within budget — a missing LTP means no depth, an over-budget LTP means
+    # unaffordable; either way the strike layer vetoes the trade.
+    if hard_cap and max_premium > 0:
+        atm_ltp = _ltp(atm_int)
+        if atm_ltp is None or atm_ltp > max_premium:
+            return StrikeSelection(
+                strike=None,
+                reason=f"no_affordable_strike_cap_{max_premium:.0f}_atm_ltp_{atm_ltp}",
+                confidence=confidence,
+                iv_percentile=iv_pct,
+                mode="rejected_premium_cap",
+                otm_steps=0,
+            )
+
+    # ATM fallback — soft path (or hard cap with affordable ATM): return tradeable
     return StrikeSelection(
         strike=atm_int,
         reason=f"atm_fallback_conf_{confidence:.3f}",

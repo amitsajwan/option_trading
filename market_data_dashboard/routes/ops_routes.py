@@ -43,6 +43,7 @@ _SAFE_OVERRIDE_KEYS = {
     "STRATEGY_STRIKE_SELECTION_POLICY",
     "STRATEGY_SMART_STRIKE_ENABLED",
     "SMART_STRIKE_MAX_PREMIUM",
+    "SMART_STRIKE_HARD_PREMIUM_CAP",
     "STRATEGY_STRIKE_MAX_OTM_STEPS",
     "RISK_MAX_CONSECUTIVE_LOSSES",
     "RISK_MAX_SESSION_TRADES",
@@ -236,6 +237,38 @@ def _load_actual_trades(trade_date: str) -> list[dict]:
 _ENV_LOCK = threading.Lock()
 
 
+def _summarize_trades(trades: list[dict]) -> dict[str, Any]:
+    """Aggregate a list of sim/actual trades into the OPS summary chips.
+
+    Capture ratio is the AGGREGATE Σpnl / Σmfe over trades that had favorable
+    excursion — NOT the mean of per-trade p/m ratios. The mean-of-ratios form
+    was unstable: a single trade with a small MFE and a loss (e.g. pnl -5.10%
+    on mfe +0.86% → ratio -593%) swamped the average and produced a nonsense
+    "MFE capture -85%". The aggregate is bounded by the favorable move actually
+    available and is the figure both the live and sim panels should agree on.
+    """
+    if not trades:
+        return {
+            "trade_count": 0, "win_count": 0, "win_rate": 0.0,
+            "session_pnl": 0.0, "avg_mfe": 0.0, "capture_ratio": 0.0,
+            "avg_premium": 0.0,
+        }
+    pnls = [t["pnl_pct"] for t in trades]
+    mfes = [t.get("mfe_pct") or 0.0 for t in trades]
+    wins = [p for p in pnls if p > 0]
+    cap_num = sum(p for p, m in zip(pnls, mfes) if m > 0)
+    cap_den = sum(m for m in mfes if m > 0)
+    return {
+        "trade_count": len(trades),
+        "win_count": len(wins),
+        "win_rate": len(wins) / len(trades),
+        "session_pnl": sum(pnls),
+        "avg_mfe": sum(mfes) / len(mfes),
+        "capture_ratio": (cap_num / cap_den) if cap_den > 0 else 0.0,
+        "avg_premium": sum(t["prem_in"] for t in trades) / len(trades),
+    }
+
+
 def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> None:
     """Run today's sim in a background thread. Updates _jobs[job_id] in place."""
     with _jobs_lock:
@@ -384,28 +417,13 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
                     else:
                         os.environ[k] = old
 
-        # Build summary
-        pnls = [t["pnl_pct"] for t in trades]
-        mfes = [t["mfe_pct"] for t in trades]
-        wins = [p for p in pnls if p > 0]
-        avg_prem = sum(t["prem_in"] for t in trades) / len(trades) if trades else 0
-        caps = [p / m for p, m in zip(pnls, mfes) if m > 0]
-        avg_cap = sum(caps) / len(caps) if caps else 0
-
+        # Build summary (aggregate capture ratio — see _summarize_trades)
         with _jobs_lock:
             _jobs[job_id].update({
                 "status": "done",
                 "trades": trades,
                 "exit_stack": exit_stack_name,
-                "summary": {
-                    "trade_count": len(trades),
-                    "win_count": len(wins),
-                    "win_rate": len(wins) / len(trades) if trades else 0,
-                    "session_pnl": sum(pnls),
-                    "avg_mfe": sum(mfes) / len(mfes) if mfes else 0,
-                    "capture_ratio": avg_cap,
-                    "avg_premium": avg_prem,
-                },
+                "summary": _summarize_trades(trades),
                 "overrides_applied": {k: v for k, v in overrides.items() if k in _SAFE_OVERRIDE_KEYS},
             })
 

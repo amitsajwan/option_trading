@@ -217,8 +217,12 @@ function SummaryBar({ trades, isActual }) {
   const wins = pnls.filter(p => p > 0);
   const total = pnls.reduce((a, b) => a + b, 0);
   const mfes  = trades.map(t => t.mfe_pct || 0);
-  const caps  = pnls.map((p, i) => mfes[i] > 0 ? p / mfes[i] : null).filter(v => v !== null);
-  const avgCap = caps.length ? caps.reduce((a, b) => a + b, 0) / caps.length : 0;
+  // Capture = aggregate Σpnl / Σmfe over trades with favorable excursion, NOT
+  // the mean of per-trade p/m ratios. A single trade with a small MFE and a loss
+  // (e.g. -5.10% pnl on +0.86% mfe → -593%) swamps the mean → bogus "-85%".
+  const capNum = pnls.reduce((a, p, i) => mfes[i] > 0 ? a + p : a, 0);
+  const capDen = mfes.reduce((a, m) => m > 0 ? a + m : a, 0);
+  const avgCap = capDen > 0 ? capNum / capDen : 0;
   const avgPrem = trades.map(t => t.prem_in).reduce((a, b) => a + b, 0) / trades.length;
   const cls = total >= 0 ? 'pos' : 'neg';
   return (

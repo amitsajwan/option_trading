@@ -1,0 +1,77 @@
+---
+description: GCP deploy workflow — unified VM preferred; commit, push, git pull, docker build (no SCP)
+---
+
+# GCP deploy workflow
+
+When changing code that runs on GCP VMs, **never use `gcloud compute scp`** to sync source. Use git.
+
+## VM strategy (2026)
+
+**Prefer one unified VM** for runtime + ML. Analysis: [docs/GCP_UNIFIED_VM.md](docs/GCP_UNIFIED_VM.md).
+
+| | Unified (target) | Legacy split |
+|--|------------------|--------------|
+| VM | **`option-trading-runtime-01`** (unified, May 2026) | `option-trading-runtime-01` + `option-trading-ml-01` (ml **stopped**) |
+| Shape | **`e2-highmem-8`** (8 vCPU, 64 GB); `e2-highmem-16` after quota bump | 4–8 vCPU / 6–16 GB each |
+| Path | `/opt/option_trading` | same on both |
+
+- **Trial / zone stock:** `n2-highmem-8` may be unavailable in `asia-south1-b`; use **`e2-highmem-16`** or `e2-highmem-8`.
+- **Schedule:** heavy ML (oracle, HPO) off live market hours on unified host, or stop extra compose profiles first.
+
+## Standard flow
+
+1. **Local** — implement + test; **commit** (ask user first if they have not asked to commit).
+2. **Push** — `git push origin main` (deploy tasks imply push is OK).
+3. **VM pull**:
+
+```bash
+gcloud compute ssh <VM_NAME> --zone=asia-south1-b --project=algo-trading-496203 --command "
+  sudo bash -c 'cd /opt/option_trading && git fetch origin main && git checkout main && git pull --ff-only origin main && git log -1 --oneline'
+"
+```
+
+4. **Runtime rebuild** — if `strategy_app`, `market_data_dashboard`, or compose paths changed:
+
+`docker-compose.gcp.yml` sets `pull_policy: always` on app images. **`docker compose build` alone is not enough** — `up` will re-pull stale GHCR and ignore the VM git checkout.
+
+```bash
+cd /opt/option_trading
+sudo docker compose --env-file .env.compose \
+  -f docker-compose.yml -f docker-compose.gcp.yml \
+  build strategy_app_historical
+sudo docker compose --env-file .env.compose \
+  -f docker-compose.yml -f docker-compose.gcp.yml \
+  up -d --force-recreate --pull never strategy_app_historical
+```
+
+5. **Verify** — health + **confirm the running image matches git** (router log must show the expected `strategy_profile_id`, not only `det_prod_v1` from router init):
+
+```bash
+curl -fsS http://127.0.0.1:8008/api/health
+sudo docker logs option_trading-strategy_app_historical-1 2>&1 | grep 'strategy router configured' | tail -2
+```
+
+Before historical replay: clear stale consumer lock (`ops/gcp/wait_historical_consumers.py clear --force` or `ops/gcp/clean_state_before_replay.sh`). Historical service sets `STRATEGY_CONSUMER_LOCK_INSTANCE_ID=strategy_app_historical` so force-recreate reclaims the lock immediately instead of waiting for TTL.
+
+## ML on same VM
+
+After `git pull`:
+
+```bash
+/opt/option_trading/.venv/bin/python -m ml_pipeline_2.scripts.run_direction_only_hpo
+# or
+sudo bash /opt/option_trading/ops/gcp/run_direction_only_hpo_vm.sh
+```
+
+No docker rebuild for ML-only script changes unless `requirements` changed.
+
+## Do not SCP
+
+`gcloud compute scp` only for **data artifacts** or git emergencies — never application source.
+
+## Env / config
+
+`ops/gcp/patch_playbook_v1_env.sh` or `.env.compose` on VM after pull, then rebuild affected services.
+
+Details: `.cursor/skills/gcp-vm-deploy/SKILL.md`

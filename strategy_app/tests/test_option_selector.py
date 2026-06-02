@@ -286,8 +286,8 @@ def test_max_premium_picks_deepest_affordable():
     assert sel.strike == 48400
 
 
-def test_max_premium_all_over_budget_falls_back_to_deepest_passing_tier():
-    # All strikes > 600 — entry already decided, always return something.
+def test_soft_cap_all_over_budget_falls_back_to_deepest_passing_tier():
+    # SOFT cap (opt-in): all strikes > 600 → take the best strike anyway.
     # Pass 2: deepest tier that passes gates (conf+OI+regime) ignoring premium.
     snap = FakeSnap(
         iv_percentile=20.0,
@@ -302,23 +302,135 @@ def test_max_premium_all_over_budget_falls_back_to_deepest_passing_tier():
     )
     with _enable(
         "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM4_ENABLED",
-        **{"SMART_STRIKE_MAX_PREMIUM": "600"},
+        **{"SMART_STRIKE_MAX_PREMIUM": "600", "SMART_STRIKE_HARD_PREMIUM_CAP": "0"},
     ):
         sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="BREAKOUT")
-    # Entry confirmed → always get a strike, not None
+    # Soft cap → always get a strike, not None
     assert sel.strike is not None
     assert sel.otm_steps > 0   # deepest possible tier returned
 
 
-def test_max_premium_atm_fallback_always_returns_strike():
-    # Low conf → no OTM tier passes, but entry is confirmed — must return ATM
+def test_soft_cap_atm_fallback_always_returns_strike():
+    # SOFT cap (opt-in): low conf → no OTM tier passes → return ATM even over budget.
     snap = FakeSnap(
         iv_percentile=30.0,
         _ltp_table={("CE", 48000): 1200.0, ("CE", 48100): 900.0},
     )
-    with _enable(**{"SMART_STRIKE_MAX_PREMIUM": "600", "SMART_STRIKE_OTM_CONFIDENCE": "0.90"}):
+    with _enable(**{
+        "SMART_STRIKE_MAX_PREMIUM": "600",
+        "SMART_STRIKE_HARD_PREMIUM_CAP": "0",
+        "SMART_STRIKE_OTM_CONFIDENCE": "0.90",
+    }):
         sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.40))
-    assert sel.strike == 48000   # ATM — never None, entry was decided
+    assert sel.strike == 48000   # ATM — soft cap never skips
+    assert sel.mode == "atm"
+
+
+def test_hard_cap_is_default_over_budget_vetoes():
+    # No SMART_STRIKE_HARD_PREMIUM_CAP set → hard cap is the DEFAULT.
+    # ATM (1200) over the 600 budget, no OTM fits → veto (skip).
+    snap = FakeSnap(
+        iv_percentile=30.0,
+        _ltp_table={("CE", 48000): 1200.0, ("CE", 48100): 900.0},
+    )
+    with _enable(**{
+        "SMART_STRIKE_MAX_PREMIUM": "600",
+        "SMART_STRIKE_OTM_CONFIDENCE": "0.90",
+    }):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.40))
+    assert sel.strike is None
+    assert sel.mode == "rejected_premium_cap"
+
+
+def test_hard_cap_all_over_budget_vetoes_trade():
+    # Every strike > 600 AND hard cap on → no affordable strike → SKIP (None).
+    snap = FakeSnap(
+        iv_percentile=20.0,
+        timestamp=_Hour(10),
+        _ltp_table={
+            ("CE", 48000): 1200.0,
+            ("CE", 48100): 1000.0,
+            ("CE", 48200): 800.0,
+            ("CE", 48300): 700.0,
+            ("CE", 48400): 650.0,
+        },
+    )
+    with _enable(
+        "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM4_ENABLED",
+        **{"SMART_STRIKE_MAX_PREMIUM": "600", "SMART_STRIKE_HARD_PREMIUM_CAP": "1"},
+    ):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="BREAKOUT")
+    assert sel.strike is None
+    assert sel.mode == "rejected_premium_cap"
+
+
+def test_hard_cap_affordable_atm_still_trades():
+    # Low conf → no OTM passes, but ATM (500) is within the 600 budget → trade ATM.
+    snap = FakeSnap(
+        iv_percentile=30.0,
+        _ltp_table={("CE", 48000): 500.0, ("CE", 48100): 900.0},
+    )
+    with _enable(**{
+        "SMART_STRIKE_MAX_PREMIUM": "600",
+        "SMART_STRIKE_HARD_PREMIUM_CAP": "1",
+        "SMART_STRIKE_OTM_CONFIDENCE": "0.90",
+    }):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.40))
+    assert sel.strike == 48000
+    assert sel.mode == "atm"
+
+
+def test_hard_cap_over_budget_atm_vetoes():
+    # ATM itself (1200) exceeds the 600 budget and no OTM fits → veto.
+    snap = FakeSnap(
+        iv_percentile=30.0,
+        _ltp_table={("CE", 48000): 1200.0, ("CE", 48100): 900.0},
+    )
+    with _enable(**{
+        "SMART_STRIKE_MAX_PREMIUM": "600",
+        "SMART_STRIKE_HARD_PREMIUM_CAP": "1",
+        "SMART_STRIKE_OTM_CONFIDENCE": "0.90",
+    }):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.40))
+    assert sel.strike is None
+    assert sel.mode == "rejected_premium_cap"
+
+
+def test_hard_cap_affordable_otm_still_picked():
+    # Hard cap on but a cheap OTM exists within budget → Pass 1 still selects it.
+    snap = FakeSnap(
+        iv_percentile=20.0,
+        timestamp=_Hour(10),
+        _ltp_table={
+            ("CE", 48000): 1200.0,
+            ("CE", 48100): 900.0,
+            ("CE", 48200): 700.0,
+            ("CE", 48300): 400.0,
+            ("CE", 48400): 250.0,
+        },
+    )
+    with _enable(
+        "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM4_ENABLED",
+        **{"SMART_STRIKE_MAX_PREMIUM": "600", "SMART_STRIKE_HARD_PREMIUM_CAP": "1"},
+    ):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="BREAKOUT")
+    assert sel.mode == "otm_4"
+    assert sel.strike == 48400
+
+
+def test_hard_cap_with_zero_premium_does_not_veto():
+    # max_premium=0 means "no cap" — hard-cap flag must not veto when there is no budget.
+    snap = FakeSnap(
+        iv_percentile=30.0,
+        _ltp_table={("CE", 48000): 1200.0},
+    )
+    with _enable(**{
+        "SMART_STRIKE_MAX_PREMIUM": "0",
+        "SMART_STRIKE_HARD_PREMIUM_CAP": "1",
+        "SMART_STRIKE_OTM_CONFIDENCE": "0.90",
+    }):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.40))
+    assert sel.strike == 48000
     assert sel.mode == "atm"
 
 
