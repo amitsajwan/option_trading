@@ -32,6 +32,7 @@ import queue
 import fnmatch
 import subprocess
 import sys
+from .ws_redis_pool import SharedRedisPool as _SharedRedisPool, _pool as _ws_pool
 from collections import deque
 from functools import lru_cache
 from urllib.parse import quote, urlencode
@@ -181,6 +182,8 @@ if _redis_env_config is not None:
 else:
     REDIS_HOST = os.getenv("REDIS_HOST") or os.getenv("DEFAULT_REDIS_HOST") or "localhost"
     REDIS_PORT = int(os.getenv("REDIS_PORT") or os.getenv("DEFAULT_REDIS_PORT") or "6379")
+
+_ws_pool.configure(REDIS_HOST, REDIS_PORT)
 
 _default_instrument_raw = (
     (resolve_instrument_symbol() if resolve_instrument_symbol else "")
@@ -3379,10 +3382,217 @@ def _parse_stomp_frames(buffer: str) -> Tuple[List[Dict[str, Any]], str]:
     return frames, remainder
 
 
+# ---------------------------------------------------------------------------
+# C1 — Shared Redis reader pool
+#
+# DISPLAY_ONLY channels (market:ohlc:*, market:tick:*, indicators:*, auth:status,
+# strategy:eval:*, raw/*) are intentionally pub/sub, not streams.  These are
+# ephemeral display feeds; durability would create unbounded stream growth.
+#
+# Previous design: one Redis connection + one OS thread per browser tab.
+# New design: one shared connection + one reader thread, per-tab asyncio.Queue.
+# ---------------------------------------------------------------------------
+
+class _WsPool:
+    """Shared Redis pub/sub reader pool for WebSocket dashboard connections.
+
+    Replaces the per-tab thread model: N browser tabs now share a single Redis
+    connection and a single reader thread instead of spawning N threads.
+    A slow or disconnected tab cannot block others because each tab has its own
+    asyncio.Queue(maxsize=100); the oldest message is dropped when a queue is full.
+    """
+
+    _MAX_QUEUE = 100  # per-connection queue depth; oldest dropped on overflow
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        # conn_id -> {"queue": asyncio.Queue, "loop": event_loop, "channels": set, "patterns": set}
+        self._connections: Dict[str, Dict] = {}
+        # Reverse indexes for efficient dispatch
+        self._channel_to_conns: Dict[str, set] = {}
+        self._pattern_to_conns: Dict[str, set] = {}
+
+        # Shared pub/sub state (all access guarded by _lock except _run())
+        self._redis_client: Optional[redis.Redis] = None
+        self._pubsub: Optional[Any] = None
+        self._ctrl_q: "queue.SimpleQueue[tuple[str, str]]" = queue.SimpleQueue()
+        self._thread: Optional[threading.Thread] = None
+        self._thread_stop = threading.Event()
+
+    # ------------------------------------------------------------------
+    # Public API (called from async WS handler, which runs in event loop)
+    # ------------------------------------------------------------------
+
+    def register(self, conn_id: str, q: "asyncio.Queue[Any]", loop: asyncio.AbstractEventLoop) -> None:
+        with self._lock:
+            self._connections[conn_id] = {"queue": q, "loop": loop, "channels": set(), "patterns": set()}
+        self._ensure_thread()
+
+    def unregister(self, conn_id: str) -> None:
+        with self._lock:
+            conn = self._connections.pop(conn_id, None)
+            if not conn:
+                return
+            for ch in conn.get("channels", set()):
+                listeners = self._channel_to_conns.get(ch)
+                if listeners is not None:
+                    listeners.discard(conn_id)
+                    if not listeners:
+                        self._channel_to_conns.pop(ch, None)
+                        self._ctrl_q.put(("unsubscribe", ch))
+            for pat in conn.get("patterns", set()):
+                listeners = self._pattern_to_conns.get(pat)
+                if listeners is not None:
+                    listeners.discard(conn_id)
+                    if not listeners:
+                        self._pattern_to_conns.pop(pat, None)
+                        self._ctrl_q.put(("punsubscribe", pat))
+
+    def subscribe(self, conn_id: str, kind: str, name: str) -> None:
+        with self._lock:
+            conn = self._connections.get(conn_id)
+            if not conn:
+                return
+            if kind == "pattern":
+                conn["patterns"].add(name)
+                listeners = self._pattern_to_conns.setdefault(name, set())
+                if not listeners:
+                    self._ctrl_q.put(("psubscribe", name))
+                listeners.add(conn_id)
+            else:
+                conn["channels"].add(name)
+                listeners = self._channel_to_conns.setdefault(name, set())
+                if not listeners:
+                    self._ctrl_q.put(("subscribe", name))
+                listeners.add(conn_id)
+
+    def unsubscribe(self, conn_id: str, kind: str, name: str) -> None:
+        with self._lock:
+            conn = self._connections.get(conn_id)
+            if not conn:
+                return
+            if kind == "pattern":
+                conn["patterns"].discard(name)
+                listeners = self._pattern_to_conns.get(name, set())
+                listeners.discard(conn_id)
+                if not listeners:
+                    self._pattern_to_conns.pop(name, None)
+                    self._ctrl_q.put(("punsubscribe", name))
+            else:
+                conn["channels"].discard(name)
+                listeners = self._channel_to_conns.get(name, set())
+                listeners.discard(conn_id)
+                if not listeners:
+                    self._channel_to_conns.pop(name, None)
+                    self._ctrl_q.put(("unsubscribe", name))
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _ensure_thread(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._thread_stop.clear()
+            self._redis_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                db=0,
+                decode_responses=True,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+            )
+            self._pubsub = self._redis_client.pubsub(ignore_subscribe_messages=True)
+            self._thread = threading.Thread(target=self._run, name="ws-pool-reader", daemon=True)
+            self._thread.start()
+
+    def _dispatch(self, msg: Dict[str, Any]) -> None:
+        if msg.get("type") not in {"message", "pmessage"}:
+            return
+        channel = msg.get("channel")
+        if not channel:
+            return
+        channel = channel.decode("utf-8") if isinstance(channel, (bytes, bytearray)) else str(channel)
+
+        with self._lock:
+            target_items: List[tuple] = []
+            for cid in self._channel_to_conns.get(channel, set()):
+                conn = self._connections.get(cid)
+                if conn:
+                    target_items.append((conn["queue"], conn["loop"]))
+            for pat, cids in self._pattern_to_conns.items():
+                try:
+                    if fnmatch.fnmatchcase(channel, pat):
+                        for cid in cids:
+                            conn = self._connections.get(cid)
+                            if conn:
+                                target_items.append((conn["queue"], conn["loop"]))
+                except Exception:
+                    pass
+
+        for q, loop in target_items:
+            def _do_put(q=q, msg=msg, channel=channel):
+                if q.full():
+                    try:
+                        q.get_nowait()
+                    except Exception:
+                        pass
+                try:
+                    q.put_nowait((channel, msg))
+                except Exception:
+                    pass
+            try:
+                loop.call_soon_threadsafe(_do_put)
+            except Exception:
+                pass
+
+    def _run(self) -> None:
+        try:
+            while not self._thread_stop.is_set():
+                while True:
+                    try:
+                        action, name = self._ctrl_q.get_nowait()
+                    except Exception:
+                        break
+                    try:
+                        if action == "subscribe":
+                            self._pubsub.subscribe(name)
+                        elif action == "psubscribe":
+                            self._pubsub.psubscribe(name)
+                        elif action == "unsubscribe":
+                            self._pubsub.unsubscribe(name)
+                        elif action == "punsubscribe":
+                            self._pubsub.punsubscribe(name)
+                    except Exception:
+                        pass
+
+                msg = self._pubsub.get_message(timeout=1.0)
+                if msg:
+                    self._dispatch(msg)
+        except Exception as exc:
+            logger.warning("ws-pool reader thread error: %s", exc)
+        finally:
+            try:
+                self._pubsub.close()
+            except Exception:
+                pass
+            try:
+                self._redis_client.close()
+            except Exception:
+                pass
+
+
+_WS_POOL = _WsPool()
+
+
 def _stomp_destination_to_redis(destination: str) -> List[Tuple[str, str]]:
     """Map a STOMP destination to one or more Redis pub/sub subscriptions.
 
     Returns list of (kind, name) where kind is 'channel' or 'pattern'.
+
+    DISPLAY_ONLY: all destinations here map to intentionally ephemeral pub/sub
+    channels (not Redis Streams).  Do NOT add stream-backed channels here.
     """
     # Auth status
     if destination == "/topic/auth/status":
@@ -3452,20 +3662,8 @@ async def websocket_stomp(ws: WebSocket):
     message_seq = 0
     buffer = ""
 
-    # NOTE: redis.asyncio pubsub is unreliable in some Windows setups.
-    # Use sync Redis pubsub in a background thread and forward into this async WS.
-    redis_client = redis.Redis(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        db=0,
-        decode_responses=True,
-        socket_connect_timeout=2,
-        socket_timeout=2,
-    )
-    pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
     loop = asyncio.get_running_loop()
-    stop_event = threading.Event()
-    ctrl_q: "queue.SimpleQueue[tuple[str, str]]" = queue.SimpleQueue()
+    _conn_ctx = _ws_pool.register(conn_id, loop)
 
     # STOMP subscriptions (internal_id -> {stomp_id, destination, kind, name})
     stomp_subs: Dict[str, Dict[str, str]] = {}
@@ -3562,39 +3760,20 @@ async def websocket_stomp(ws: WebSocket):
         except Exception as e:
             logger.warning("WS forward error (%s): %s", conn_id, e)
 
-    def _redis_thread() -> None:
-        """Blocking Redis pubsub loop running in a background thread."""
-        try:
-            while not stop_event.is_set():
-                # Apply any pending control commands
-                while True:
-                    try:
-                        action, name = ctrl_q.get_nowait()
-                    except Exception:
-                        break
-                    try:
-                        if action == "subscribe":
-                            pubsub.subscribe(name)
-                        elif action == "psubscribe":
-                            pubsub.psubscribe(name)
-                        elif action == "unsubscribe":
-                            pubsub.unsubscribe(name)
-                        elif action == "punsubscribe":
-                            pubsub.punsubscribe(name)
-                    except Exception:
-                        continue
+    async def _pool_reader() -> None:
+        """Drain the per-connection asyncio.Queue fed by the shared pool threads."""
+        while True:
+            try:
+                msg = await asyncio.wait_for(_conn_ctx.msg_queue.get(), timeout=1.0)
+                await _handle_redis_message(msg)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.debug("pool_reader error conn=%s: %s", conn_id, exc)
 
-                msg = pubsub.get_message(timeout=1.0)
-                if msg:
-                    try:
-                        asyncio.run_coroutine_threadsafe(_handle_redis_message(msg), loop)
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.warning("Redis WS thread ended (%s): %s", conn_id, e)
-
-    t = threading.Thread(target=_redis_thread, name=f"ws-redis-{conn_id}", daemon=True)
-    t.start()
+    _pool_reader_task = asyncio.ensure_future(_pool_reader())
 
     async def _legacy_subscribe(channels: list[str]):
         # Best-effort mapping from old dashboard channel list to actual Redis channels.
@@ -3602,23 +3781,23 @@ async def websocket_stomp(ws: WebSocket):
             # already includes timeframe?
             if ch.startswith("market:ohlc:") and ch.count(":") == 2:
                 # old: market:ohlc:{instrument} -> subscribe to all TF
-                ctrl_q.put(("psubscribe", f"{ch}:*"))
+                _ws_pool.subscribe(conn_id, "pattern", f"{ch}:*")
                 legacy_subs[ch] = {"destination": ch, "kind": "pattern", "name": f"{ch}:*"}
                 continue
             if ch.startswith("indicators:") and ch.count(":") == 1:
                 # old: indicators:{instrument} -> indicators:{instrument}:*
                 pat = f"{ch}:*"
-                ctrl_q.put(("psubscribe", pat))
+                _ws_pool.subscribe(conn_id, "pattern", pat)
                 legacy_subs[ch] = {"destination": ch, "kind": "pattern", "name": pat}
                 continue
             if ch.startswith("market:tick:") and ch.count(":") == 2:
                 # old: market:tick:{instrument} -> market:tick:{instrument}:*
                 pat = f"{ch}:*"
-                ctrl_q.put(("psubscribe", pat))
+                _ws_pool.subscribe(conn_id, "pattern", pat)
                 legacy_subs[ch] = {"destination": ch, "kind": "pattern", "name": pat}
                 continue
 
-            ctrl_q.put(("subscribe", ch))
+            _ws_pool.subscribe(conn_id, "channel", ch)
             legacy_subs[ch] = {"destination": ch, "kind": "channel", "name": ch}
 
         await ws.send_text(json.dumps({"type": "subscribed", "channels": channels}, ensure_ascii=False))
@@ -3719,9 +3898,9 @@ async def websocket_stomp(ws: WebSocket):
                             "name": name,
                         }
                         if kind == "pattern":
-                            ctrl_q.put(("psubscribe", name))
+                            _ws_pool.subscribe(conn_id, "pattern", name)
                         else:
-                            ctrl_q.put(("subscribe", name))
+                            _ws_pool.subscribe(conn_id, "channel", name)
 
                     receipt = headers.get("receipt")
                     if receipt:
@@ -3736,9 +3915,9 @@ async def websocket_stomp(ws: WebSocket):
                         if not sub:
                             continue
                         if sub.get("kind") == "pattern":
-                            ctrl_q.put(("punsubscribe", sub.get("name", "")))
+                            _ws_pool.unsubscribe(conn_id, "pattern", sub.get("name", ""))
                         else:
-                            ctrl_q.put(("unsubscribe", sub.get("name", "")))
+                            _ws_pool.unsubscribe(conn_id, "channel", sub.get("name", ""))
                     continue
 
                 if command == "DISCONNECT":
@@ -3754,7 +3933,10 @@ async def websocket_stomp(ws: WebSocket):
                     if destination.startswith("/app/redis/publish"):
                         redis_channel = headers.get("redis-channel")
                         if redis_channel:
-                            await redis_client.publish(redis_channel, body)
+                            try:
+                                _redis_sync_client().publish(redis_channel, body)
+                            except Exception:
+                                pass
                     continue
 
     except WebSocketDisconnect:
@@ -3763,17 +3945,10 @@ async def websocket_stomp(ws: WebSocket):
         logger.warning("WebSocket error (%s): %s", conn_id, e)
     finally:
         try:
-            stop_event.set()
+            _pool_reader_task.cancel()
         except Exception:
             pass
-        try:
-            pubsub.close()
-        except Exception:
-            pass
-        try:
-            redis_client.close()
-        except Exception:
-            pass
+        _ws_pool.unregister(conn_id)
 
 def _truthy(value: Any, default: bool = False) -> bool:
     if value is None:
