@@ -3458,6 +3458,9 @@ async def websocket_stomp(ws: WebSocket):
     message_seq = 0
     buffer = ""
 
+    client_host = (ws.client.host if ws.client else "unknown")
+    logger.info("ws connect conn=%s proto=%s client=%s", conn_id, selected_subprotocol or "legacy", client_host)
+
     loop = asyncio.get_running_loop()
     _conn_q = _ws_pool.register(conn_id, loop)
 
@@ -3596,6 +3599,7 @@ async def websocket_stomp(ws: WebSocket):
             _ws_pool.subscribe(conn_id, "channel", ch)
             legacy_subs[ch] = {"destination": ch, "kind": "channel", "name": ch}
 
+        logger.debug("ws legacy_subscribe conn=%s channels=%s", conn_id, channels)
         await ws.send_text(json.dumps({"type": "subscribed", "channels": channels}, ensure_ascii=False))
 
     try:
@@ -3671,6 +3675,7 @@ async def websocket_stomp(ws: WebSocket):
                 if command == "SUBSCRIBE":
                     destination = headers.get("destination", "")
                     sub_id = headers.get("id") or str(uuid.uuid4())
+                    logger.debug("ws stomp_subscribe conn=%s destination=%s", conn_id, destination)
 
                     mapped = _stomp_destination_to_redis(destination)
                     if not mapped:
@@ -3736,15 +3741,16 @@ async def websocket_stomp(ws: WebSocket):
                     continue
 
     except WebSocketDisconnect:
-        pass
+        logger.info("ws disconnect conn=%s messages_sent=%s", conn_id, message_seq)
     except Exception as e:
-        logger.warning("WebSocket error (%s): %s", conn_id, e)
+        logger.warning("ws error conn=%s: %s", conn_id, e)
     finally:
         try:
             _pool_reader_task.cancel()
         except Exception:
             pass
         _ws_pool.unregister(conn_id)
+        logger.debug("ws cleanup done conn=%s", conn_id)
 
 def _truthy(value: Any, default: bool = False) -> bool:
     if value is None:
