@@ -70,6 +70,8 @@ REPO = Path("/app")
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+TODAY = date.today().isoformat()
+
 from strategy_app.engines import DeterministicRuleEngine
 from strategy_app.engines.profiles import build_run_metadata
 from strategy_app.contracts import SignalType
@@ -94,7 +96,7 @@ try:
         "halt_consecutive_losses": 3,
         "halt_daily_dd_pct": 0.04,
     }
-    engine.set_run_context("sim-2026-06-01", run_meta)
+    engine.set_run_context(f"sim-{TODAY}", run_meta)
     print("Profile applied:", PROFILE)
 except Exception as e:
     print(f"Engine load failed: {e}")
@@ -103,7 +105,6 @@ except Exception as e:
 
 # ── Read today's snapshots ───────────────────────────────────────────────────
 events_path = REPO / ".run/snapshot_app/events.jsonl"
-TODAY = "2026-06-01"
 
 snapshots = []
 for line in events_path.read_text().splitlines():

@@ -2512,8 +2512,27 @@ function ReplayMonitorDark({ onModeSwitch }) {
         setSimRuns(Array.isArray(simPayload?.rows) ? simPayload.rows : (Array.isArray(simPayload?.runs) ? simPayload.runs : []));
         setDatesLoading(false);
         const boot = _replayBootParams();
-        const pick = boot.date || payload.latest;
-        if (pick) handleDateChange(pick, { runId: boot.runId || replayRunIdRef.current, kind: (boot.kind === 'sim' ? 'sim' : 'oos') });
+        // Respect an explicit date in the URL (e.g. "View in Terminal" deep-links
+        // pass date+run_id+kind). Otherwise prefer the newest SIM run that has
+        // snapshot data — the same-day workflow — instead of falling back to the
+        // stale OOS holdout date (2024-10-31), which is frequently empty and lands
+        // the user on a "No snapshot data" dead-end.
+        let pick = boot.date;
+        let pickKind = boot.kind === 'sim' ? 'sim' : (boot.kind === 'oos' ? 'oos' : '');
+        let pickRunId = boot.runId || replayRunIdRef.current;
+        if (!pick) {
+          const simRows = Array.isArray(simPayload?.rows) ? simPayload.rows : [];
+          const latestSim = simRows.find(r => ((r?.metadata?.collection_counts?.snapshots) || 0) > 0) || simRows[0];
+          if (latestSim && (latestSim.source_date || latestSim.date)) {
+            pick = latestSim.source_date || latestSim.date;
+            pickKind = 'sim';
+            pickRunId = latestSim.run_id || '';
+          } else {
+            pick = payload.latest;
+            pickKind = pickKind || 'oos';
+          }
+        }
+        if (pick) handleDateChange(pick, { runId: pickRunId, kind: pickKind || 'oos' });
         else setReplayError('No replay dates found in historical snapshots.');
       })
       .catch(err => { if (!alive) return; setDatesLoading(false); setReplayError('Failed to load dates: ' + err.message); });
