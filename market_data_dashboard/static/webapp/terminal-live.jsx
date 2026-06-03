@@ -1268,13 +1268,25 @@ function TradeInspector({ session, trade }) {
   // direction_consensus values are SCORES (summed signal weights, can exceed 1.0), not probabilities.
   // Normalize when total > 1 so the bars display as 0-100% instead of 0-393%.
   // Prefer real consensus scores; ignore the 0.5/0.5 ml-default placeholder pair.
-  let _rawCeScore = _num(selectedVoteRaw.direction_consensus_ce ?? sm.ce_prob);
-  let _rawPeScore = _num(selectedVoteRaw.direction_consensus_pe ?? sm.pe_prob);
+  // The deterministic ML_ENTRY composite resolver stores its CE/PE scores under
+  // entry_dir_* (not direction_consensus_*), so fall back to those.
+  let _rawCeScore = _num(selectedVoteRaw.direction_consensus_ce ?? selectedVoteRaw.entry_dir_ce_score ?? sm.ce_prob);
+  let _rawPeScore = _num(selectedVoteRaw.direction_consensus_pe ?? selectedVoteRaw.entry_dir_pe_score ?? sm.pe_prob);
   if (_isPlaceholder(_rawCeScore) && _isPlaceholder(_rawPeScore)) { _rawCeScore = null; _rawPeScore = null; }
   const _dirTotal = (_rawCeScore || 0) + (_rawPeScore || 0);
   const ceProb = _rawCeScore == null ? null : (_dirTotal > 1 ? (_rawCeScore || 0) / _dirTotal : _rawCeScore);
   const peProb = _rawPeScore == null ? null : (_dirTotal > 1 ? (_rawPeScore || 0) / _dirTotal : _rawPeScore);
-  const consensusMargin = _num(selectedVoteRaw.direction_consensus_margin);
+  const consensusMargin = _num(selectedVoteRaw.direction_consensus_margin ?? selectedVoteRaw.entry_dir_margin);
+
+  // Entry quality grade + live/paper tier (E9). Stored on the vote raw_signals.
+  const entryGrade = String(selectedVoteRaw.entry_grade || '').trim().toUpperCase();
+  const entryGradeReasons = Array.isArray(selectedVoteRaw.entry_grade_reasons) ? selectedVoteRaw.entry_grade_reasons : [];
+  const entryTier = String(selectedVoteRaw.tier || '').trim().toLowerCase();
+  const liveWouldTake = selectedVoteRaw.live_would_take === true;
+  const tierReason = String(selectedVoteRaw.tier_reason || '').trim();
+  // Per-source direction breakdown: {"momentum_5m:CE": 1.0, "depth_net": 1.1, ...}
+  const entryDirSources = (selectedVoteRaw.entry_dir_sources && typeof selectedVoteRaw.entry_dir_sources === 'object')
+    ? selectedVoteRaw.entry_dir_sources : {};
   const chosenLeg = trade.optionType || trade.legDir || (trade.dir === 'SHORT' ? 'PE' : 'CE');
   const dirBasis = trade.signal?.reason || trade.entryReason || '';
   const shadowDir = traceSummary.shadow_dir || null;
@@ -1383,7 +1395,7 @@ function TradeInspector({ session, trade }) {
         {/* Direction decision (collapsed) */}
         <CollapseSection
           title="Direction decision"
-          summary={`${chosenLeg}${consensusMargin != null ? ` · margin ${consensusMargin.toFixed(2)}` : ''}`}
+          summary={`${chosenLeg}${consensusMargin != null ? ` · margin ${consensusMargin.toFixed(2)}` : ''}${entryGrade ? ` · ${entryGrade}` : ''}${entryTier ? ` · ${liveWouldTake ? 'LIVE' : 'PAPER'}` : ''}`}
         >
         <div className="t-dir-decision">
           {(ceProb != null || peProb != null) ? (
@@ -1419,7 +1431,62 @@ function TradeInspector({ session, trade }) {
           )}
           {consensusMargin != null && (
             <div style={{marginTop:5,fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-3)'}}>
-              consensus margin <span style={{color:consensusMargin >= 0.5 ? 'var(--pos)' : consensusMargin >= 0.2 ? 'var(--warn)' : 'var(--neg)'}}>{consensusMargin.toFixed(2)}</span>
+              direction margin <span style={{color:consensusMargin >= 2.0 ? 'var(--pos)' : consensusMargin >= 1.0 ? 'var(--warn)' : 'var(--neg)'}}>{consensusMargin.toFixed(2)}</span>
+            </div>
+          )}
+          {/* Per-source direction breakdown (composite resolver). Each chip is one
+              signal's contribution; depth_net is the de-correlated order-book vote.
+              This is what exposes depth-domination (the fce59da2 failure mode). */}
+          {Object.keys(entryDirSources).length > 0 && (
+            <div style={{marginTop:5}}>
+              <span style={{color:'var(--fg-4)',fontSize:9,marginRight:2,fontFamily:'var(--f-mono)'}}>sources:</span>
+              <div style={{marginTop:3,display:'flex',flexWrap:'wrap',gap:3}}>
+                {Object.entries(entryDirSources)
+                  .sort((a,b)=>Math.abs(Number(b[1]))-Math.abs(Number(a[1])))
+                  .map(([k,v],i)=>{
+                    const side = /:CE$|->CE$/.test(k) ? 'CE' : /:PE$|->PE$/.test(k) ? 'PE' : null;
+                    const isDepth = String(k).startsWith('depth');
+                    const col = side==='CE'?'var(--pos)':side==='PE'?'var(--neg)':'var(--fg-3)';
+                    return (
+                      <span key={i} className="t-confluence-chip"
+                        style={{color:col, border: isDepth ? '1px solid var(--warn)' : undefined}}
+                        title={isDepth ? 'order-book depth (de-correlated net vote)' : ''}>
+                        {k} {Number(v).toFixed(2)}
+                      </span>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+          {/* Entry quality grade + live/paper tier (E9) */}
+          {entryGrade && (
+            <div style={{marginTop:6,paddingTop:5,borderTop:'1px solid var(--bg-2)'}}>
+              <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                <span style={{
+                  fontFamily:'var(--f-mono)',fontSize:10,fontWeight:700,padding:'1px 6px',borderRadius:3,
+                  color: entryGrade==='GOOD'?'var(--pos)':entryGrade==='BAD'?'var(--neg)':'var(--warn)',
+                  background:'var(--bg-2)'}}>
+                  {entryGrade}
+                </span>
+                {entryTier && (
+                  <span style={{
+                    fontFamily:'var(--f-mono)',fontSize:10,fontWeight:700,padding:'1px 6px',borderRadius:3,
+                    color: liveWouldTake ? 'var(--pos)' : 'var(--fg-3)',
+                    background:'var(--bg-2)'}}>
+                    {liveWouldTake ? '● LIVE' : '○ PAPER'}
+                  </span>
+                )}
+                {tierReason && (
+                  <span style={{color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:9}}>{tierReason}</span>
+                )}
+              </div>
+              {entryGradeReasons.length > 0 && (
+                <div style={{marginTop:3,display:'flex',flexWrap:'wrap',gap:3}}>
+                  {entryGradeReasons.map((r,i)=>(
+                    <span key={i} className="t-confluence-chip" style={{color:'var(--fg-3)'}}>{r}</span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {shadowDir && shadowScore != null && (
