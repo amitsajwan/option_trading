@@ -568,6 +568,15 @@ def _persist_sim_to_mongo(
                 "entry_strategy_name":str(t.get("strategy_name") or ""),
                 "strategy":           str(t.get("strategy_name") or ""),
                 "reason":             str(t.get("entry_reason") or ""),
+                # E9 entry quality + tiering (carried from replay_engine so the
+                # replay UI can show grade/tier without the vote stream).
+                "entry_snapshot_id":  str(t.get("entry_snapshot_id") or ""),
+                "snapshot_id":        str(t.get("entry_snapshot_id") or ""),
+                "entry_grade":        str(t.get("entry_grade") or ""),
+                "tier":               str(t.get("tier") or ""),
+                "live_would_take":    bool(t.get("live_would_take") or False),
+                "entry_dir_margin":   t.get("entry_dir_margin"),
+                "entry_grade_reasons": list(t.get("entry_grade_reasons") or []),
                 **common,
             }},
         })

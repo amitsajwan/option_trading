@@ -45,7 +45,19 @@ function _bridgeTrade(tr) {
     exitDetail:  tr.exitDetail  ?? `Exit at ${xp.toFixed(2)} · ${tr.exitReason ?? 'closed'}`,
     strike: tr.strike ?? null,
     optionType,
+    entryGrade: (tr.entryGrade ?? tr.entry_grade ?? '').toString().toUpperCase(),
+    tier: (tr.tier ?? '').toString().toLowerCase(),
+    liveWouldTake: tr.liveWouldTake ?? tr.live_would_take ?? false,
   };
+}
+
+// Grade -> color for the tape dot. GREEN=GOOD, YELLOW=OK, RED=BAD.
+function _gradeColor(g) {
+  const u = String(g || '').toUpperCase();
+  if (u === 'GOOD') return 'var(--pos)';
+  if (u === 'OK')   return 'var(--warn)';
+  if (u === 'BAD')  return 'var(--neg)';
+  return null;
 }
 
 function _makeStrategies(trades) {
@@ -950,7 +962,16 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId,
                       <span className={`t-tape-type-dot ${(r.dir||'').toLowerCase()} fired`}/>
                       <span className="muted" style={{fontSize:'9px'}}>FILL</span>
                     </td>
-                    <td>{r.strat}</td>
+                    <td>
+                      {_gradeColor(r.entryGrade) && (
+                        <span title={`entry grade ${r.entryGrade}${r.tier ? ` · ${r.liveWouldTake ? 'LIVE' : 'PAPER'}` : ''}`}
+                          style={{display:'inline-block',width:7,height:7,borderRadius:'50%',marginRight:5,
+                            background:_gradeColor(r.entryGrade),
+                            boxShadow: r.liveWouldTake ? '0 0 0 1.5px var(--pos)' : 'none',
+                            verticalAlign:'middle'}}/>
+                      )}
+                      {r.strat}
+                    </td>
                     <td>
                       <span className={`t-dir ${r.dir}`} title="Chart delta bias">
                         {r.legDir || r.dir}

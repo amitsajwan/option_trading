@@ -48,6 +48,14 @@ class TradeRecord(TypedDict):
     source:         str             # always "sim"
     strategy_name:  str             # e.g. "ML_ENTRY", "ORB" — shown as label in tape
     entry_reason:   str             # signal.reason — why the entry fired
+    # E9 entry quality + tiering (carried so the replay UI can show grade/tier
+    # even though the ops-sim path doesn't persist the vote stream).
+    entry_grade:        str         # GOOD | OK | BAD | "" (when not graded)
+    tier:               str         # live | paper | ""
+    live_would_take:    bool
+    entry_snapshot_id:  str
+    entry_dir_margin:   Optional[float]
+    entry_grade_reasons: List[str]
 
 
 class ReplayDiag(TypedDict):
@@ -167,6 +175,8 @@ def replay_day(
 
         if signal.signal_type == SignalType.ENTRY:
             diag["entries"] += 1
+            _rs = getattr(signal, "raw_signals", None)
+            _rs = _rs if isinstance(_rs, dict) else {}
             current_entry = {
                 "time_in":       hhmm,
                 "direction":     signal.direction,
@@ -175,6 +185,12 @@ def replay_day(
                 "lots":          signal.max_lots,
                 "strategy_name": str(getattr(signal, "entry_strategy_name", "") or ""),
                 "entry_reason":  str(getattr(signal, "reason", "") or ""),
+                "entry_grade":   str(_rs.get("entry_grade") or ""),
+                "tier":          str(_rs.get("tier") or ""),
+                "live_would_take": bool(_rs.get("live_would_take") or False),
+                "entry_snapshot_id": str(snap.get("snapshot_id") or ""),
+                "entry_dir_margin": _rs.get("entry_dir_margin"),
+                "entry_grade_reasons": list(_rs.get("entry_grade_reasons") or []),
             }
 
         elif signal.signal_type == SignalType.EXIT and current_entry is not None:
@@ -207,6 +223,12 @@ def replay_day(
                 source="sim",
                 strategy_name=current_entry.get("strategy_name", ""),
                 entry_reason=current_entry.get("entry_reason", ""),
+                entry_grade=current_entry.get("entry_grade", ""),
+                tier=current_entry.get("tier", ""),
+                live_would_take=bool(current_entry.get("live_would_take", False)),
+                entry_snapshot_id=current_entry.get("entry_snapshot_id", ""),
+                entry_dir_margin=current_entry.get("entry_dir_margin"),
+                entry_grade_reasons=list(current_entry.get("entry_grade_reasons") or []),
             ))
             current_entry = None
 

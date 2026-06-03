@@ -721,6 +721,34 @@ def _position_to_trade(
             regime="UNKNOWN",
         )
 
+    # E9 grade/tier — prefer the linked vote's raw_signals, else fall back to the
+    # fields the ops-sim path stamps directly on the position (no vote stream there).
+    _ctx = dict(entry_context or {})
+    _sel_vote = _ctx.get("selectedVote") if isinstance(_ctx.get("selectedVote"), dict) else None
+    _sel_raw = (_sel_vote or {}).get("raw_signals") if isinstance((_sel_vote or {}).get("raw_signals"), dict) else {}
+    entry_grade = str((_sel_raw.get("entry_grade") if _sel_raw else None) or open_pos.get("entry_grade") or "").strip().upper()
+    entry_tier = str((_sel_raw.get("tier") if _sel_raw else None) or open_pos.get("tier") or "").strip().lower()
+    live_would_take = bool(
+        (_sel_raw.get("live_would_take") if _sel_raw else None)
+        if _sel_raw.get("live_would_take") is not None
+        else open_pos.get("live_would_take") or False
+    )
+    # When the inspector has no linked vote (ops-sim path) but the position carries
+    # grade/tier, synthesise a minimal selectedVote so the inspector renders them.
+    if _sel_vote is None and (entry_grade or open_pos.get("entry_dir_margin") is not None):
+        _ctx["selectedVote"] = {
+            "strategy": strat,
+            "direction": str(open_pos.get("direction") or "").strip() or None,
+            "raw_signals": {
+                "entry_grade": entry_grade,
+                "tier": entry_tier,
+                "live_would_take": live_would_take,
+                "entry_dir_margin": open_pos.get("entry_dir_margin"),
+                "entry_grade_reasons": list(open_pos.get("entry_grade_reasons") or []),
+                "entry_dir_sources": dict(open_pos.get("entry_dir_sources") or {}),
+            },
+        }
+
     return MonitorTrade(
         id=position_id,
         t=entry_ts,
@@ -753,7 +781,10 @@ def _position_to_trade(
         optionType=option_type,
         positionSide=position_side,
         entrySnapshotId=entry_snapshot_id,
-        entryContext=dict(entry_context or {}),
+        entryContext=_ctx,
+        entryGrade=entry_grade,
+        tier=entry_tier,
+        liveWouldTake=live_would_take,
     )
 
 
