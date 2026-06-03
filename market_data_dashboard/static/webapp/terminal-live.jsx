@@ -1942,6 +1942,7 @@ function MobileLiveShell({
                   <span className={`v ${orbCls==='ok'?'pos':orbCls==='warn'?'warn':'neg'}`}>{orbLbl}</span></div>
             }
           </div>
+          <button className="m-iconbtn" aria-label="Pipeline / decision flow" title="Decision flow (every bar, blocked + entered)" onClick={() => onModeSwitch('pipeline')}>⬡</button>
           <button className="m-iconbtn" aria-label="Settings" onClick={() => setSheet('ops')}>⚙</button>
           <button className="m-iconbtn danger" aria-label="Halt" onClick={onHaltClick}>⏻</button>
         </div>
