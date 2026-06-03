@@ -26,6 +26,16 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 @dataclass
 class EntryDirectionResult:
     direction: Optional[Direction]
@@ -231,18 +241,47 @@ def resolve_entry_direction_composite(
 
     depth_ctx = depth if depth is not None else get_depth_context()
     if depth_ctx is not None and w_depth > 0:
+        # Collect raw per-leg depth contributions first, THEN combine.
+        depth_ce = 0.0
+        depth_pe = 0.0
+        depth_tags: dict[str, float] = {}
         if depth_ctx.ce_valid and depth_ctx.ce is not None:
             d_ce, d_pe, tags = _depth_leg_scores(depth_ctx.ce, ce_bullish=True, weight=w_depth)
-            ce_score += d_ce
-            pe_score += d_pe
+            depth_ce += d_ce
+            depth_pe += d_pe
             for tag in tags:
-                sources[f"depth_ce:{tag}"] = w_depth
+                depth_tags[f"depth_ce:{tag}"] = w_depth
         if depth_ctx.pe_valid and depth_ctx.pe is not None:
             d_ce, d_pe, tags = _depth_leg_scores(depth_ctx.pe, ce_bullish=False, weight=w_depth)
-            ce_score += d_ce
-            pe_score += d_pe
+            depth_ce += d_ce
+            depth_pe += d_pe
             for tag in tags:
-                sources[f"depth_pe:{tag}"] = w_depth
+                depth_tags[f"depth_pe:{tag}"] = w_depth
+
+        # ── De-correlation ────────────────────────────────────────────────
+        # bid_dom / imbalance / microprice off the SAME book are highly
+        # correlated: summing them lets a single noisy book manufacture a large
+        # directional margin (root cause of the 2026-06-03 fce59da2 CE miss,
+        # where 4 depth ticks contributed ~4.4 of a 5.70 CE score). Instead,
+        # collapse depth into ONE net signed vote and cap its magnitude so the
+        # whole order-book counts at most like a single strong source.
+        if _env_int("ENTRY_DIR_DEPTH_DECORRELATE", 1) != 0:
+            net = depth_ce - depth_pe
+            cap = _env_float("ENTRY_DIR_DEPTH_NET_CAP", w_depth)
+            net = max(-cap, min(cap, net))
+            if net > 0:
+                ce_score += net
+            elif net < 0:
+                pe_score += -net
+            # Keep the raw tags visible for the inspector, but the SCORE impact
+            # is the single capped net vote above.
+            sources.update(depth_tags)
+            if net != 0.0:
+                sources["depth_net"] = round(net, 4)
+        else:
+            ce_score += depth_ce
+            pe_score += depth_pe
+            sources.update(depth_tags)
 
     margin = abs(ce_score - pe_score)
     if ce_score <= 0 and pe_score <= 0:

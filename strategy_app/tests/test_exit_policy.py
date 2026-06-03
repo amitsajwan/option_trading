@@ -17,9 +17,12 @@ from strategy_app.position.exit_policy import (
     BigTargetPolicy,
     RunnerTrailPolicy,
     MomentumReversalPolicy,
+    ExpiryAwareExitPolicy,
     build_default_exit_stack,
     build_lottery_exit_stack,
     build_adaptive_exit_stack,
+    build_expiry_exit_stack,
+    build_scalper_exit_stack,
 )
 
 
@@ -236,6 +239,32 @@ class TestLotteryStack:
         assert stack.check(pos, _snap) is None
 
 
+class TestScalperHardStop:
+    """Scalper sub-stack must carry its own HardStop so the adaptive stack is
+    self-sufficient for loss protection when legacy inline exits are suppressed."""
+
+    def test_scalper_has_hard_stop_by_default(self, monkeypatch):
+        monkeypatch.delenv("EXIT_SCALPER_HARD_STOP_PCT", raising=False)
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "scalper")
+        stack = build_default_exit_stack()
+        assert "hard_stop_25%" in stack.name
+
+    def test_scalper_hard_stop_fires_at_cap(self, monkeypatch):
+        monkeypatch.setenv("EXIT_SCALPER_HARD_STOP_PCT", "0.25")
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "scalper")
+        stack = build_default_exit_stack()
+        # -30% loss exceeds the 25% cap → HardStop must fire (loss protection
+        # no longer depends on the tracker's legacy inline stop-losses).
+        pos = _pos(pnl_pct=-0.30, mfe_pct=0.0, bars_held=2)
+        assert stack.check(pos, _snap) == ExitReason.STOP_LOSS
+
+    def test_scalper_hard_stop_disabled_when_ge_one(self, monkeypatch):
+        monkeypatch.setenv("EXIT_SCALPER_HARD_STOP_PCT", "1.0")
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "scalper")
+        stack = build_default_exit_stack()
+        assert "hard_stop_off" in stack.name
+
+
 class TestAdaptiveStack:
     def test_builds_adaptive_mode(self, monkeypatch):
         monkeypatch.setenv("EXIT_STRATEGY_MODE", "adaptive")
@@ -276,3 +305,50 @@ class TestAdaptiveStack:
         pos_bo = _pos(entry_regime="BREAKOUT", pnl_pct=-0.01, mfe_pct=0.0, bars_held=3)
         assert stack.check(pos_hv, _snap) is None   # lottery holds
         assert stack.check(pos_bo, _snap) == ExitReason.THESIS_FAIL  # scalper cuts
+
+
+def _snap_dte(is_expiry=False, dte=None):
+    m = MagicMock()
+    m.is_expiry_day = is_expiry
+    m.days_to_expiry = dte
+    return m
+
+
+class TestExpiryAwareStack:
+    def test_off_by_default_no_wrap(self, monkeypatch):
+        monkeypatch.delenv("EXIT_EXPIRY_OVERRIDE_ENABLED", raising=False)
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "adaptive")
+        stack = build_default_exit_stack()
+        assert "expiry_aware" not in stack.name
+
+    def test_enabled_wraps_stack(self, monkeypatch):
+        monkeypatch.setenv("EXIT_EXPIRY_OVERRIDE_ENABLED", "1")
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "adaptive")
+        stack = build_default_exit_stack()
+        assert "expiry_aware" in stack.name
+
+    def test_routes_to_expiry_stack_on_expiry_day(self, monkeypatch):
+        # expiry hard stop 15% fires at -16%; normal scalper hard stop 25% does not.
+        monkeypatch.setenv("EXIT_SCALPER_HARD_STOP_PCT", "0.25")
+        monkeypatch.setenv("EXIT_EXPIRY_HARD_STOP_PCT", "0.15")
+        wrapped = ExpiryAwareExitPolicy(
+            normal=build_scalper_exit_stack(),
+            expiry=build_expiry_exit_stack(),
+            dte_threshold=0,
+        )
+        pos = _pos(pnl_pct=-0.16, mfe_pct=0.0, bars_held=1)
+        assert wrapped.check(pos, _snap_dte(is_expiry=True)) == ExitReason.STOP_LOSS
+        assert wrapped.check(pos, _snap_dte(is_expiry=False)) is None
+
+    def test_dte_threshold_routing(self, monkeypatch):
+        monkeypatch.setenv("EXIT_SCALPER_HARD_STOP_PCT", "0.25")
+        monkeypatch.setenv("EXIT_EXPIRY_HARD_STOP_PCT", "0.15")
+        wrapped = ExpiryAwareExitPolicy(
+            normal=build_scalper_exit_stack(),
+            expiry=build_expiry_exit_stack(),
+            dte_threshold=1,
+        )
+        pos = _pos(pnl_pct=-0.16, mfe_pct=0.0, bars_held=1)
+        assert wrapped.check(pos, _snap_dte(dte=1)) == ExitReason.STOP_LOSS  # within threshold
+        assert wrapped.check(pos, _snap_dte(dte=3)) is None                 # far from expiry
+        assert wrapped.check(pos, _snap_dte(dte=None)) is None              # unknown DTE → normal

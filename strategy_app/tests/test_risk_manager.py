@@ -67,6 +67,48 @@ class RiskManagerTests(unittest.TestCase):
             lots = mgr.compute_lots(entry_premium=250.0, stop_loss_pct=0.40, confidence=0.25)
             self.assertEqual(lots, 8)
 
+    def test_live_eligible_good_grade_clean_session(self) -> None:
+        with TemporaryDirectory() as tmp_dir, mock.patch.dict(
+            "os.environ", {"STRATEGY_RUN_DIR": tmp_dir}, clear=False
+        ):
+            mgr = RiskManager()
+            mgr.on_session_start(date(2026, 6, 3))
+            ok, reason = mgr.live_eligible(grade="GOOD", confidence=0.9)
+            self.assertTrue(ok, reason)
+
+    def test_live_eligible_bad_grade_blocked(self) -> None:
+        with TemporaryDirectory() as tmp_dir, mock.patch.dict(
+            "os.environ", {"STRATEGY_RUN_DIR": tmp_dir}, clear=False
+        ):
+            mgr = RiskManager()
+            mgr.on_session_start(date(2026, 6, 3))
+            ok, reason = mgr.live_eligible(grade="BAD", confidence=0.9)
+            self.assertFalse(ok)
+            self.assertIn("grade_below_min", reason)
+
+    def test_live_eligible_blocked_when_operator_halted(self) -> None:
+        with TemporaryDirectory() as tmp_dir, mock.patch.dict(
+            "os.environ", {"STRATEGY_RUN_DIR": tmp_dir}, clear=False
+        ):
+            mgr = RiskManager()
+            mgr.on_session_start(date(2026, 6, 3))
+            halt_path = mgr._operator_halt_path
+            halt_path.parent.mkdir(parents=True, exist_ok=True)
+            halt_path.touch()
+            ok, reason = mgr.live_eligible(grade="GOOD", confidence=0.9)
+            self.assertFalse(ok)
+            self.assertIn("operator_halt", reason)
+
+    def test_live_eligible_confidence_floor(self) -> None:
+        with TemporaryDirectory() as tmp_dir, mock.patch.dict(
+            "os.environ", {"STRATEGY_RUN_DIR": tmp_dir, "RISK_CONFIDENCE_FLOOR": "0.65"}, clear=False
+        ):
+            mgr = RiskManager()
+            mgr.on_session_start(date(2026, 6, 3))
+            ok, reason = mgr.live_eligible(grade="GOOD", confidence=0.50)
+            self.assertFalse(ok)
+            self.assertIn("confidence_below_floor", reason)
+
     def test_profile_can_be_overridden_by_env(self) -> None:
         with mock.patch.dict(
             "os.environ",

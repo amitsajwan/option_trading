@@ -549,6 +549,7 @@ class DeterministicRuleEngine(StrategyEngine):
             vote.raw_signals["_regime"] = regime_signal.regime.value
             vote.raw_signals["_regime_conf"] = round(regime_signal.confidence, 3)
             vote.raw_signals["_regime_reason"] = regime_signal.reason
+            self._grade_and_tier_vote(vote, snap, regime_signal.regime.value, risk)
             self._annotate_vote_contract(vote)
             votes.append(vote)
 
@@ -556,6 +557,36 @@ class DeterministicRuleEngine(StrategyEngine):
             self._annotate_vote_contract(shadow_vote)
             self._log.log_vote(shadow_vote)
         return votes
+
+    def _grade_and_tier_vote(self, vote, snap, regime_name, risk) -> None:
+        """Attach entry-quality grade + live/paper tier to an ENTRY vote.
+
+        Observational only — NEVER blocks. Paper takes every trade; the tier
+        labels which subset would fire on real money. Gated by
+        ENTRY_TIERING_ENABLED (default on). Skipped for exit votes and for
+        direction modes that don't produce composite direction scores.
+        """
+        from ..utils.env import as_bool
+        if not as_bool(os.getenv("ENTRY_TIERING_ENABLED", "true")):
+            return
+        try:
+            if getattr(vote, "signal_type", None) != SignalType.ENTRY:
+                return
+            raw = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
+            from ..signals.entry_quality import grade_entry_from_raw, decide_tier
+            quality = grade_entry_from_raw(
+                raw, snap, direction=vote.direction, regime=regime_name,
+            )
+            if quality is None:
+                return
+            raw.update(quality.as_raw_signals())
+            tier = decide_tier(
+                quality.grade, risk, confidence=float(vote.confidence or 0.0),
+            )
+            raw.update(tier.as_raw_signals())
+            vote.raw_signals = raw
+        except Exception:
+            logger.exception("entry tiering failed snapshot=%s", getattr(snap, "snapshot_id", "?"))
 
     def _process_exit_votes(
         self,
