@@ -66,16 +66,20 @@ OPS_SIM_CONFIG = {
     # New paper config: ₹200-600 premium BAND, hard cap, up to 10-step OTM (deep
     # tiers enabled + regime-agnostic) so the band is actually reachable on this
     # instrument. See docs/ENTRY_PIPELINE_V1_V2_ANALYSIS.md §1.
-    "SMART_STRIKE_MAX_PREMIUM": "600",
+    # NOTE: this BANKNIFTY data's chain stops at ~12-OTM where premiums are still
+    # ~₹580-650 (flat decay). ₹200 is unreachable; ₹550-700 catches the deepest
+    # available strikes. Band set to fire on those so v1/v2 parity is testable.
+    "SMART_STRIKE_MAX_PREMIUM": "700",
     "SMART_STRIKE_MIN_PREMIUM": "200",
     "SMART_STRIKE_HARD_PREMIUM_CAP": "1",
-    "STRATEGY_STRIKE_MAX_OTM_STEPS": "10",
+    "STRATEGY_STRIKE_MAX_OTM_STEPS": "12",
     "SMART_STRIKE_OTM_CONFIDENCE": "0.55",
     "SMART_STRIKE_OTM2_ENABLED": "1", "SMART_STRIKE_OTM3_ENABLED": "1",
     "SMART_STRIKE_OTM4_ENABLED": "1", "SMART_STRIKE_OTM5_ENABLED": "1",
     "SMART_STRIKE_OTM6_ENABLED": "1", "SMART_STRIKE_OTM7_ENABLED": "1",
     "SMART_STRIKE_OTM8_ENABLED": "1", "SMART_STRIKE_OTM9_ENABLED": "1",
-    "SMART_STRIKE_OTM10_ENABLED": "1",
+    "SMART_STRIKE_OTM10_ENABLED": "1", "SMART_STRIKE_OTM11_ENABLED": "1",
+    "SMART_STRIKE_OTM12_ENABLED": "1",
     "SMART_STRIKE_OTM_IV_CEIL": "92",
     "ENTRY_ML_MIN_PROB": "0.65",
     "DIRECTION_ML_WEIGHT": "0.40",

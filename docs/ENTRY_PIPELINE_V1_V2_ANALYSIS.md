@@ -1,10 +1,24 @@
 # Entry Pipeline v1 vs v2 — Divergence Analysis
 
-**Status:** RESOLVED to root cause. The decision-trace capture (now built) attributed
-every divergent bar to a specific gate. Two distinct v2 parity bugs found. v2 stays
-flag-OFF until both are fixed and re-verified.
+**Status:** FIXED + VERIFIED. Both bugs root-caused via decision trace, fixed, and
+re-verified — v2 is now decision-equivalent to v1 on both firing days (commit 5714612).
 
-## TL;DR — two confirmed v2 bugs (trace-backed)
+## Verification (post-fix golden master)
+
+| Day | Config | Before fix | After fix |
+|---|---|---|---|
+| 2026-05-26 | live profile | v1=7, **v2=1** | v1=7, **v2=7** ✅ MATCH |
+| 2026-06-02 | consensus, band ₹200-700, paper unlimited | v1=9, **v2=12** | v1=12, **v2=12** ✅ MATCH (+7.08%) |
+
+## Option-chain depth finding (verified via probe_chain.py)
+
+This BANKNIFTY data's chain **stops at ~12 steps OTM**, where premiums are still
+**~₹580 (CE) / ~₹620-650 (PE)** — decay is flat (~₹45/100pt step, far-dated/high-IV).
+**₹200 is unreachable; the cheapest strike that exists is ~₹580.** So a ₹200-600 band
+only catches the single deepest CE strike; a realistic band is **₹550-700** (deepest
+available) or a cap ~₹1100 (ATM). 10-step OTM machinery works; the *data* is the limit.
+
+## TL;DR — two confirmed v2 bugs (trace-backed) — NOW FIXED
 
 1. **`DirectionGate` over-vetoes on non-consensus profiles.** It applies the
    consensus-bypass threshold (`CONSENSUS_BYPASS_MIN_CONFIDENCE=0.80`) as a *universal*
