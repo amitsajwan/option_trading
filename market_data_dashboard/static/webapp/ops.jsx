@@ -507,6 +507,11 @@ function OpsPage() {
             {/* Entry gate */}
             <div>
               <div className="ops-group-label">Entry Gate</div>
+              <SegCtrl label="Pipeline"
+                value={v('STRATEGY_ENTRY_PIPELINE_V2','0')}
+                live={lv('STRATEGY_ENTRY_PIPELINE_V2','0')}
+                options={[{value:'0',label:'v1 (live)'},{value:'1',label:'v2 (gate cascade)'}]}
+                onChange={setVal('STRATEGY_ENTRY_PIPELINE_V2')} />
               <SliderCtrl label="Min confidence"
                 value={parseFloat(v('CONSENSUS_BYPASS_MIN_CONFIDENCE','0.65'))}
                 live={parseFloat(lv('CONSENSUS_BYPASS_MIN_CONFIDENCE','0.65'))}
@@ -529,6 +534,12 @@ function OpsPage() {
                 live={lv('STRATEGY_STRIKE_SELECTION_POLICY','atm')}
                 options={[{value:'atm',label:'ATM'},{value:'smart_strike',label:'Smart'}]}
                 onChange={setVal('STRATEGY_STRIKE_SELECTION_POLICY')} />
+              <SliderCtrl label="Min premium"
+                value={parseFloat(v('SMART_STRIKE_MIN_PREMIUM','0'))}
+                live={parseFloat(lv('SMART_STRIKE_MIN_PREMIUM','0'))}
+                min={0} max={800} step={50}
+                format={v => v===0?'off':'₹'+v.toFixed(0)}
+                onChange={setVal('SMART_STRIKE_MIN_PREMIUM')} />
               <SliderCtrl label="Max premium"
                 value={parseFloat(v('SMART_STRIKE_MAX_PREMIUM','800'))}
                 live={parseFloat(lv('SMART_STRIKE_MAX_PREMIUM','800'))}

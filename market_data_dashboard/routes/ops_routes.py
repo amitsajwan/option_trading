@@ -48,6 +48,8 @@ _SAFE_OVERRIDE_KEYS = {
     "RISK_MAX_CONSECUTIVE_LOSSES",
     "RISK_MAX_SESSION_TRADES",
     "STRATEGY_PROFILE_ID",
+    "STRATEGY_ENTRY_PIPELINE_V2",
+    "SMART_STRIKE_MIN_PREMIUM",
     # Lottery / adaptive mode
     "EXIT_STRATEGY_MODE",
     "ADAPTIVE_LOTTERY_REGIMES",
@@ -368,6 +370,9 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
             "LOTTERY_THESIS_FAIL_MIN_MFE":     _live("LOTTERY_THESIS_FAIL_MIN_MFE", "0.03"),
             "LOTTERY_TIMESTOP_BARS":           _live("LOTTERY_TIMESTOP_BARS", "90"),
             "LOTTERY_MOMENTUM_FLIP":           _live("LOTTERY_MOMENTUM_FLIP", "1.0"),
+            # v2 gate-cascade pipeline — off by default, togglable from OPS panel
+            "STRATEGY_ENTRY_PIPELINE_V2":      _live("STRATEGY_ENTRY_PIPELINE_V2", "0"),
+            "SMART_STRIKE_MIN_PREMIUM":        _live("SMART_STRIKE_MIN_PREMIUM", "0"),
             "STRATEGY_RUN_DIR":                f"/tmp/sim_{job_id}",
             "REDIS_HOST":                      os.getenv("REDIS_HOST", "localhost"),
             "DEPTH_FEED_ENABLED":              "0",
@@ -409,7 +414,7 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
                 old_env[k] = os.environ.get(k)
                 os.environ[k] = v
             try:
-                trades, exit_stack_name = _run_engine(snaps, trade_date, job_id)
+                trades, exit_stack_name, decision_traces = _run_engine(snaps, trade_date, job_id)
             finally:
                 for k, old in old_env.items():
                     if old is None:
@@ -433,7 +438,7 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
         # engine-internal "sim-{job_id}" which has NO mongo data; overwrite it
         # here so any UI consumer of job.run_id points at the persisted run.
         try:
-            replay_url = _persist_sim_to_mongo(job_id, trade_date, snaps, trades)
+            replay_url = _persist_sim_to_mongo(job_id, trade_date, snaps, trades, decision_traces)
             with _jobs_lock:
                 _jobs[job_id]["replay_url"] = replay_url
                 _jobs[job_id]["run_id"] = f"ops-sim-{job_id}"
@@ -456,6 +461,7 @@ def _persist_sim_to_mongo(
     trade_date: str,
     snaps: list[dict],
     trades: list[dict],
+    decision_traces: Optional[list[dict]] = None,
 ) -> str:
     """Write snapshots + position events to sim Mongo collections, create eval-run entry.
 
@@ -474,6 +480,7 @@ def _persist_sim_to_mongo(
     ns = resolve_namespace("sim", run_id=run_id)
     coll_snaps = ns.collection_for("phase1_market_snapshots")
     coll_pos = ns.collection_for("strategy_positions")
+    coll_traces = ns.collection_for("strategy_decision_traces")
     runs_coll = str(os.getenv("MONGO_COLL_STRATEGY_EVAL_RUNS") or "strategy_eval_runs")
 
     uri = str(os.getenv("MONGODB_URI") or os.getenv("MONGO_URI") or "").strip()
@@ -576,6 +583,51 @@ def _persist_sim_to_mongo(
     if pos_docs:
         db[coll_pos].insert_many(pos_docs)
 
+    # ── v2 gate-cascade decision traces → Terminal decision view ─────────────
+    # Each element is the last_entry_trace dict from the engine: decision_id,
+    # timestamp, final_outcome, primary_blocker_gate, gates[]. The Terminal's
+    # existing decision-trace view reads this collection and shows
+    # ENTER/SKIP/VETO per bar with the gate that stopped it.
+    if decision_traces:
+        trace_docs = []
+        for tr in decision_traces:
+            ts_raw = tr.get("timestamp")
+            try:
+                ts = datetime.fromisoformat(ts_raw) if ts_raw else datetime.now(tz=_IST)
+            except Exception:
+                ts = datetime.now(tz=_IST)
+            trace_docs.append({
+                "run_id": run_id,
+                "trade_date_ist": trade_date,
+                "timestamp": ts,
+                "decision_id": tr.get("decision_id"),
+                "snapshot_id": tr.get("snapshot_id"),
+                "final_outcome": tr.get("final_outcome"),
+                "primary_blocker_gate": tr.get("primary_blocker_gate"),
+                "selected_direction": tr.get("selected_direction"),
+                "selected_strike": tr.get("selected_strike"),
+                "selected_premium": tr.get("selected_premium"),
+                "gates": tr.get("gates", []),
+                # Terminal-compatible fields (mirrors v1 trace shape)
+                "engine_mode": "v2_gate_cascade",
+                "decision_mode": "v2",
+                "evaluation_type": "entry",
+                "flow_gates": [
+                    {
+                        "gate_id": g["gate"],
+                        "gate_group": g["gate"],
+                        "status": "pass" if g["outcome"] == "pass" else "blocked",
+                        "reason_code": g.get("reason") or None,
+                        "metrics": {k: float(v) for k, v in (g.get("values") or {}).items()
+                                    if isinstance(v, (int, float))},
+                    }
+                    for g in tr.get("gates", [])
+                ],
+                "candidates": [],
+            })
+        if trace_docs:
+            db[coll_traces].insert_many(trace_docs)
+
     # ── strategy_eval_runs entry ─────────────────────────────────────────────
     now_iso = datetime.now(tz=timezone.utc).isoformat()
     try:
@@ -598,7 +650,7 @@ def _persist_sim_to_mongo(
     return f"/app?mode=replay&kind=sim&run_id={run_id}&date={trade_date}"
 
 
-def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[dict], str]:
+def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[dict], str, list[dict]]:
     """Run the deterministic engine over today's snapshots. Returns (trades, exit_stack_name).
 
     Delegates to strategy_app.sim.replay_engine.replay_day() — the shared implementation
@@ -627,7 +679,7 @@ def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[d
         _jobs[job_id]["progress"] = len(snaps)
         _jobs[job_id]["diag"] = result["diag"]
 
-    return result["trades"], result["exit_stack_name"]
+    return result["trades"], result["exit_stack_name"], result.get("decision_traces", [])
 
 
 # ── Router ─────────────────────────────────────────────────────────────────────
