@@ -1850,8 +1850,18 @@ function MobileTradeCard({ trade, selected, onSelect, session }) {
       aria-pressed={selected ? 'true' : 'false'}
       onClick={() => onSelect(t)}>
       <div className="m-card-head">
+        {_gradeColor(t.entryGrade) && (
+          <span title={`entry grade ${t.entryGrade}${t.tier ? ` · ${t.liveWouldTake ? 'LIVE' : 'PAPER'}` : ''}`}
+            style={{display:'inline-block',width:8,height:8,borderRadius:'50%',marginRight:5,flex:'0 0 auto',
+              background:_gradeColor(t.entryGrade),
+              boxShadow: t.liveWouldTake ? '0 0 0 1.5px var(--pos)' : 'none'}}/>
+        )}
         <span className={`m-card-dir ${dir}`}>{legDir}{t.optionType && legDir !== t.optionType ? ` ${t.optionType}` : ''}</span>
         <span className="strat">{t.strat || '—'}</span>
+        {t.entryGrade && (
+          <span style={{fontFamily:'var(--f-mono)',fontSize:8.5,fontWeight:700,marginLeft:6,
+            color:_gradeColor(t.entryGrade)}}>{t.entryGrade}{t.liveWouldTake ? '·LIVE' : t.tier === 'paper' ? '·PAPER' : ''}</span>
+        )}
         {prob != null && <span style={{fontFamily:'var(--f-mono)',fontSize:9,color:'var(--fg-3)',marginLeft:'auto'}}>conf {prob}%</span>}
       </div>
       {/* signal pills row */}
