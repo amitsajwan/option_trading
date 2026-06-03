@@ -998,6 +998,193 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId,
   );
 }
 
+// ── Collapsible section header ────────────────────────────────────────────
+function CollapseSection({ title, summary, defaultOpen = false, children }) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  return (
+    <div>
+      <div
+        className="t-section-head"
+        onClick={() => setOpen(o => !o)}
+        style={{cursor:'pointer', userSelect:'none', display:'flex', justifyContent:'space-between', alignItems:'center'}}
+      >
+        <span>{title}</span>
+        <span style={{display:'flex', alignItems:'center', gap:6}}>
+          {!open && summary && <span style={{color:'var(--fg-4)', fontFamily:'var(--f-mono)', fontSize:9, fontWeight:400}}>{summary}</span>}
+          <span style={{color:'var(--fg-4)', fontSize:9}}>{open ? '▲' : '▼'}</span>
+        </span>
+      </div>
+      {open && children}
+    </div>
+  );
+}
+
+// ── Decision chain — gate cascade from the decision trace ─────────────────
+// Friendly short labels for the engine's gate_ids. Unknown ids fall back to the
+// id itself, so this stays correct even as the engine adds gates.
+const GATE_LABELS = {
+  regime_classification: 'Regime', avoid_veto: 'Avoid', risk_halt: 'Risk halt',
+  router_regime_block: 'Router', warmup: 'Warmup', entry_time_windows: 'Time window',
+  entry_regime_tag: 'Regime tag', direction_conflict: 'Dir conflict',
+  regime_confidence: 'Regime conf', sideways_returns_mixed: 'Sideways mixed',
+  stop_loss_cooldown: 'Stop cooldown', direction_flip_cooldown: 'Flip cooldown',
+  zero_mfe_cooldown: 'Zero-MFE cool', direction_evidence: 'Dir evidence',
+  entry_phase: 'Phase', risk_pause: 'Risk pause', direction_consensus: 'Consensus',
+  confidence_gate: 'Confidence', policy_checks: 'Policy', candidate_ranking: 'Ranking',
+  strike_depth: 'Strike', execution: 'Execute',
+};
+function gateLabel(id) {
+  return GATE_LABELS[id] || String(id || '?').replace(/_/g, ' ');
+}
+
+function DecisionChain({ orderedGates, flowGates, regimeEvidence, proposedDir }) {
+  const [openIdx, setOpenIdx] = React.useState(null);
+
+  // Prefer the selected candidate's full ordered_gates; fall back to flow_gates.
+  let gates = Array.isArray(orderedGates) && orderedGates.length ? orderedGates
+            : Array.isArray(flowGates) ? flowGates : [];
+  const hasGates = gates.length > 0;
+
+  // First blocked gate is the decisive one; gates after it were never reached.
+  const blockerIdx = gates.findIndex(g => String(g.status || '').toLowerCase() === 'blocked');
+
+  // Regime evidence bull/bear
+  const bull = regimeEvidence?.bull_score != null ? Number(regimeEvidence.bull_score) : null;
+  const bear = regimeEvidence?.bear_score != null ? Number(regimeEvidence.bear_score) : null;
+  const r5m  = regimeEvidence?.r5m  != null ? Number(regimeEvidence.r5m)  : null;
+  const r15m = regimeEvidence?.r15m != null ? Number(regimeEvidence.r15m) : null;
+  const dir  = String(proposedDir || '').toUpperCase();
+  const evidenceOk = dir === 'PE'
+    ? (bear != null && bull != null && (bear >= 0.2 || bull <= 0.6))
+    : dir === 'CE'
+    ? (bull != null && bear != null && (bull >= 0.2 || bear <= 0.6))
+    : true;
+  const evidenceMismatch = !evidenceOk && bull != null && bear != null;
+
+  const statusColor = (s, reached) => {
+    s = String(s || '').toLowerCase();
+    if (s === 'pass') return 'var(--pos)';
+    if (s === 'blocked') return 'var(--neg)';
+    if (s === 'skipped') return 'var(--warn)';
+    return reached ? 'var(--fg-3)' : 'var(--fg-4)';
+  };
+  const statusSym = (s, reached) => {
+    s = String(s || '').toLowerCase();
+    if (s === 'pass') return '●';
+    if (s === 'blocked') return '✗';
+    if (s === 'skipped') return '◐';
+    return reached ? '○' : '·';
+  };
+
+  return (
+    <div style={{padding:'0 12px 8px'}}>
+      {/* Gate dot row — only gates up to & including the blocker are "reached" */}
+      {hasGates && (
+        <div style={{display:'flex', gap:3, alignItems:'center', marginBottom:6, flexWrap:'wrap'}}>
+          {gates.map((g, i) => {
+            const reached = blockerIdx < 0 || i <= blockerIdx;
+            const isOpen = openIdx === i;
+            const status = reached ? g.status : 'unreached';
+            return (
+              <span
+                key={i}
+                title={`${g.gate_id || g.gate_group} · ${g.status}`}
+                onClick={() => setOpenIdx(isOpen ? null : i)}
+                style={{
+                  fontFamily:'var(--f-mono)', fontSize:9.5, color: statusColor(status, reached),
+                  cursor:'pointer', padding:'1px 3px', borderRadius:2,
+                  background: isOpen ? 'var(--bg-2)' : 'transparent', whiteSpace:'nowrap',
+                  opacity: reached ? 1 : 0.5,
+                }}
+              >
+                {statusSym(status, reached)}<span style={{fontSize:8, color: isOpen ? 'var(--fg-2)' : 'var(--fg-4)', marginLeft:2}}>{gateLabel(g.gate_id)}</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Blocker line */}
+      {blockerIdx >= 0 && (
+        <div style={{fontFamily:'var(--f-mono)', fontSize:9.5, color:'var(--neg)', marginBottom:5, lineHeight:1.4}}>
+          ✗ blocked at <strong>{gateLabel(gates[blockerIdx].gate_id)}</strong>
+          {gates[blockerIdx].reason_code ? ` · ${gates[blockerIdx].reason_code}` : ''}
+          {gates[blockerIdx].message ? <span style={{color:'var(--fg-4)'}}> · {gates[blockerIdx].message}</span> : null}
+        </div>
+      )}
+
+      {/* Expanded gate detail */}
+      {openIdx != null && gates[openIdx] && (() => {
+        const g = gates[openIdx];
+        const metrics = g.metrics && typeof g.metrics === 'object' ? Object.entries(g.metrics) : [];
+        return (
+          <div style={{background:'var(--bg-2)', border:'1px solid var(--line-1)', borderRadius:2, padding:'6px 8px', marginBottom:6}}>
+            <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-3)', marginBottom:4, letterSpacing:'0.07em'}}>
+              {g.gate_id} · <span style={{color: statusColor(g.status, true)}}>{String(g.status||'').toUpperCase()}</span>
+            </div>
+            {g.reason_code && <div style={{fontFamily:'var(--f-mono)', fontSize:9.5, color:'var(--fg-2)', marginBottom:3}}>{g.reason_code}</div>}
+            {g.message && <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-3)', marginBottom:4, lineHeight:1.4}}>{g.message}</div>}
+            {metrics.length > 0 && (
+              <div style={{display:'grid', gridTemplateColumns:'auto 1fr', columnGap:8, rowGap:2}}>
+                {metrics.map(([k,v]) => (
+                  <React.Fragment key={k}>
+                    <span style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-4)'}}>{k}</span>
+                    <span style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-2)'}}>{typeof v === 'number' ? v.toFixed(3) : String(v)}</span>
+                  </React.Fragment>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Regime evidence strip */}
+      {(bull != null || bear != null) && (
+        <div style={{borderTop:'1px solid var(--line-1)', paddingTop:6, marginTop:2}}>
+          <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-4)', letterSpacing:'0.07em', marginBottom:4}}>REGIME EVIDENCE</div>
+          {bull != null && (
+            <div style={{marginBottom:3}}>
+              <div style={{display:'flex', justifyContent:'space-between', fontFamily:'var(--f-mono)', fontSize:9, color: dir==='CE' ? 'var(--pos)' : 'var(--fg-4)', marginBottom:1}}>
+                <span>bull</span><span>{bull.toFixed(2)}</span>
+              </div>
+              <div style={{height:4, background:'var(--bg-3)', borderRadius:2, position:'relative'}}>
+                <div style={{position:'absolute', left:0, top:0, height:'100%', width:Math.min(100, bull/3*100)+'%', background:'var(--pos)', borderRadius:2, opacity:0.7}}/>
+              </div>
+            </div>
+          )}
+          {bear != null && (
+            <div style={{marginBottom:4}}>
+              <div style={{display:'flex', justifyContent:'space-between', fontFamily:'var(--f-mono)', fontSize:9, color: dir==='PE' ? 'var(--neg)' : 'var(--fg-4)', marginBottom:1}}>
+                <span>bear</span><span>{bear.toFixed(2)}</span>
+              </div>
+              <div style={{height:4, background:'var(--bg-3)', borderRadius:2, position:'relative'}}>
+                <div style={{position:'absolute', left:0, top:0, height:'100%', width:Math.min(100, bear/3*100)+'%', background:'var(--neg)', borderRadius:2, opacity:0.7}}/>
+              </div>
+            </div>
+          )}
+          {dir && (
+            <div style={{fontFamily:'var(--f-mono)', fontSize:9, color: evidenceMismatch ? 'var(--neg)' : 'var(--pos)'}}>
+              {dir} {evidenceMismatch ? '← ⚠ against evidence' : '← ✓ agrees with evidence'}
+            </div>
+          )}
+          {(r5m != null || r15m != null) && (
+            <div style={{marginTop:3, fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-4)'}}>
+              {r5m  != null && <span style={{marginRight:8}}>r5m {r5m>=0?'+':''}{(r5m*100).toFixed(2)}%</span>}
+              {r15m != null && <span>r15m {r15m>=0?'+':''}{(r15m*100).toFixed(2)}%</span>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!hasGates && (bull == null && bear == null) && (
+        <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-4)', marginTop:2}}>
+          No decision trace linked for this trade.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Trade Inspector ──────────────────────────────────────────────────────
 function TradeInspector({ session, trade }) {
   if (!trade) {
@@ -1130,20 +1317,36 @@ function TradeInspector({ session, trade }) {
           <div className="t-outcome-cell"><div className="k">Conf</div><div className="v">{((trade.conf||0)*100).toFixed(0)}%</div></div>
         </div>
 
-        {/* Probability stack */}
-        <div className="t-section-head">Why it fired</div>
-        <div className="t-prob-stack">
-          {probs.length > 0 ? (
-            probs.map((p, i) => <ProbRow key={i} {...p} />)
-          ) : (
-            <div style={{color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:9.5}}>
-              No linked probability metrics for this trade.
-            </div>
-          )}
-        </div>
+        {/* Decision chain — gate cascade + regime evidence (always visible) */}
+        <div className="t-section-head">Decision chain</div>
+        <DecisionChain
+          orderedGates={selectedCandidate.ordered_gates}
+          flowGates={ctx.flowGates}
+          regimeEvidence={(ctx.regimeContext && ctx.regimeContext.evidence) || {}}
+          proposedDir={chosenLeg}
+        />
 
-        {/* Direction decision */}
-        <div className="t-section-head">Direction decision</div>
+        {/* ML probabilities (collapsed) */}
+        <CollapseSection
+          title="ML probabilities"
+          summary={entryProb != null ? `entry ${entryProb.toFixed(2)}` : '—'}
+        >
+          <div className="t-prob-stack">
+            {probs.length > 0 ? (
+              probs.map((p, i) => <ProbRow key={i} {...p} />)
+            ) : (
+              <div style={{color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:9.5,padding:'0 12px 8px'}}>
+                No linked probability metrics for this trade.
+              </div>
+            )}
+          </div>
+        </CollapseSection>
+
+        {/* Direction decision (collapsed) */}
+        <CollapseSection
+          title="Direction decision"
+          summary={`${chosenLeg}${consensusMargin != null ? ` · margin ${consensusMargin.toFixed(2)}` : ''}`}
+        >
         <div className="t-dir-decision">
           {(ceProb != null || peProb != null) ? (
             <div className="t-dir-leg-row">
@@ -1221,10 +1424,14 @@ function TradeInspector({ session, trade }) {
             </div>
           )}
         </div>
+        </CollapseSection>
 
-        {(policyReason || policyCheckRows.length > 0 || Object.keys(selectedVoteMetrics).length > 0) && <>
-          <div className="t-section-head">Policy · Signals</div>
-          <div style={{fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-3)',lineHeight:1.45}}>
+        {(policyReason || policyCheckRows.length > 0 || Object.keys(selectedVoteMetrics).length > 0) && (
+          <CollapseSection
+            title="Policy · Signals"
+            summary={selectedVoteMetrics.policy_score != null ? `score ${Number(selectedVoteMetrics.policy_score).toFixed(2)}` : (policyReason ? 'allowed' : '')}
+          >
+          <div style={{fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-3)',lineHeight:1.45,padding:'0 12px 8px'}}>
             {policyReason && <div style={{marginBottom:4}}>{policyReason}</div>}
             {policyCheckRows.length > 0 && (
               <div style={{display:'grid',gridTemplateColumns:'auto 1fr',columnGap:8,rowGap:3}}>
@@ -1242,52 +1449,57 @@ function TradeInspector({ session, trade }) {
               </div>
             )}
           </div>
-        </>}
+          </CollapseSection>
+        )}
 
         {/* Confluence */}
-        {confluence.length > 0 && <>
-          <div className="t-section-head">Confluence</div>
-          <div className="t-confluence-list">
-            {confluence.map((c, i) => <span key={i} className="t-confluence-chip">{c}</span>)}
-          </div>
-        </>}
+        {confluence.length > 0 && (
+          <CollapseSection title="Confluence" summary={`${confluence.length} signals`}>
+            <div className="t-confluence-list" style={{padding:'0 12px 8px'}}>
+              {confluence.map((c, i) => <span key={i} className="t-confluence-chip">{c}</span>)}
+            </div>
+          </CollapseSection>
+        )}
 
         {/* Risk envelope */}
-        <div className="t-section-head">Risk envelope</div>
-        <RiskEnvelope trade={trade} path={pathPoints} session={session}/>
+        <CollapseSection title="Risk envelope" summary={`stop ${(trade.stopPx||0).toFixed(0)} · tgt ${(trade.targetPx||0).toFixed(0)}`}>
+          <RiskEnvelope trade={trade} path={pathPoints} session={session}/>
+        </CollapseSection>
 
         {/* Rationale */}
-        <div className="t-section-head">Entry · Exit rationale</div>
-        <div className="t-rationale">
-          <div className="t-rationale-block entry">
-            <div className="heading"><span style={{color:'var(--pos)'}}>● Entry</span><span style={{color:'var(--fg-3)'}}>{_barLabel(session,trade.entryIdx)}</span></div>
-            <div className="body">{trade.entryDetail}</div>
+        <CollapseSection title="Entry · Exit rationale" defaultOpen={true} summary="">
+          <div className="t-rationale">
+            <div className="t-rationale-block entry">
+              <div className="heading"><span style={{color:'var(--pos)'}}>● Entry</span><span style={{color:'var(--fg-3)'}}>{_barLabel(session,trade.entryIdx)}</span></div>
+              <div className="body">{trade.entryDetail}</div>
+            </div>
+            <div className={`t-rationale-block exit ${trade.exitReason==='TARGET_HIT'?'target':''}`}>
+              <div className="heading"><span style={{color:trade.exitReason==='TARGET_HIT'?'var(--pos)':'var(--neg)'}}>● Exit · {(trade.exitReason||'').replace('_',' ')}</span></div>
+              <div className="body">{trade.exitDetail}</div>
+            </div>
           </div>
-          <div className={`t-rationale-block exit ${trade.exitReason==='TARGET_HIT'?'target':''}`}>
-            <div className="heading"><span style={{color:trade.exitReason==='TARGET_HIT'?'var(--pos)':'var(--neg)'}}>● Exit · {(trade.exitReason||'').replace('_',' ')}</span></div>
-            <div className="body">{trade.exitDetail}</div>
-          </div>
-        </div>
+        </CollapseSection>
 
         {/* Counterfactuals */}
-        <div className="t-section-head">What-if</div>
-        <div className="t-cf-ribbon">
-          {counterfactuals.map((cf, i) => {
-            const d = typeof cf.delta === 'number' ? cf.delta : 0;
-            const pct = Math.min(100, Math.abs(d) / 0.4 * 50);
-            const cls = d > 0.001 ? 'pos' : d < -0.001 ? 'neg' : 'zero';
-            return (
-              <div key={i} className="t-cf-row">
-                <div className="scen">{cf.label}<span className="note">{cf.note}</span></div>
-                <div className={`delta ${cls}`}>{d===0?'±0.00':TC.fmtPct(d,2)}</div>
-                <div className="delta-bar">
-                  <span className="zero-mark"/>
-                  <span className={`fill ${cls==='neg'?'neg':''}`} style={{left:d>=0?'50%':(50-pct)+'%',width:pct+'%'}}/>
+        <CollapseSection title="What-if" summary="">
+          <div className="t-cf-ribbon">
+            {counterfactuals.map((cf, i) => {
+              const d = typeof cf.delta === 'number' ? cf.delta : 0;
+              const pct = Math.min(100, Math.abs(d) / 0.4 * 50);
+              const cls = d > 0.001 ? 'pos' : d < -0.001 ? 'neg' : 'zero';
+              return (
+                <div key={i} className="t-cf-row">
+                  <div className="scen">{cf.label}<span className="note">{cf.note}</span></div>
+                  <div className={`delta ${cls}`}>{d===0?'±0.00':TC.fmtPct(d,2)}</div>
+                  <div className="delta-bar">
+                    <span className="zero-mark"/>
+                    <span className={`fill ${cls==='neg'?'neg':''}`} style={{left:d>=0?'50%':(50-pct)+'%',width:pct+'%'}}/>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </CollapseSection>
       </div>
     </div>
   );
