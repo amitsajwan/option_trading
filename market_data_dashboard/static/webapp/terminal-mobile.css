@@ -149,12 +149,54 @@ body.live-terminal #page        { height: auto; overflow: visible; }
 .m-left {
   display: flex;
   flex-direction: column;
-  flex: 0 0 400px;
+  flex: 0 0 var(--left-w, 400px);   /* width is user-resizable via --left-w */
   min-height: 0;
   border-right: 1px solid var(--line-2);
   background: var(--bg-1);
   overflow: hidden;
 }
+
+/* ── Resize dividers (reusable) ───────────────────────────────────────── */
+/* Vertical splitter (drag left/right) — sits between left pane and right pane */
+.m-divider-v {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 5;
+  transition: background .12s;
+}
+.m-divider-v::after {                       /* visible hairline in the middle */
+  content: ""; position: absolute; left: 2px; top: 0; bottom: 0; width: 1px;
+  background: var(--line-2);
+}
+.m-divider-v:hover, .m-divider-v.dragging { background: var(--accent, #2a3a52); }
+
+/* Horizontal splitter (drag up/down) — sits between chart and inspector */
+.m-divider-h {
+  flex: 0 0 5px;
+  cursor: row-resize;
+  background: transparent;
+  position: relative;
+  z-index: 5;
+  transition: background .12s;
+}
+.m-divider-h::after {
+  content: ""; position: absolute; top: 2px; left: 0; right: 0; height: 1px;
+  background: var(--line-2);
+}
+.m-divider-h:hover, .m-divider-h.dragging { background: var(--accent, #2a3a52); }
+
+/* While dragging, kill text selection + pointer noise globally */
+body.m-resizing, body.m-resizing * { user-select: none !important; cursor: inherit !important; }
+
+/* Maximize button (reusable) */
+.m-maximize-btn {
+  background: transparent; border: 0; color: var(--fg-3); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 2px 6px; border-radius: 3px;
+  transition: color .12s, background .12s;
+}
+.m-maximize-btn:hover { color: var(--fg-1); background: var(--bg-2); }
 
 /* Tab strip — normal flow inside left pane, NOT sticky */
 .m-tabs {
@@ -212,7 +254,7 @@ body.live-terminal #page        { height: auto; overflow: visible; }
   touch-action: pan-y pinch-zoom;
 }
 .m-right-inspector {
-  flex: 0 0 260px;
+  flex: 0 0 var(--insp-h, 320px);   /* height is user-resizable via --insp-h */
   border-top: 1px solid var(--line-2);
   background: var(--bg-1);
   display: flex;
@@ -220,6 +262,10 @@ body.live-terminal #page        { height: auto; overflow: visible; }
   min-height: 0;
   overflow: hidden;
 }
+/* Maximized: inspector fills the right pane, chart shrinks to a thin strip */
+.m-right-pane.inspector-max .m-right-chart { flex: 0 0 90px; min-height: 90px; }
+.m-right-pane.inspector-max .m-right-inspector { flex: 1; }
+.m-right-pane.inspector-max .m-divider-h { display: none; }
 .m-right-inspector-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 6px 12px; border-bottom: 1px solid var(--line-1);
@@ -352,6 +398,8 @@ body.live-terminal #page        { height: auto; overflow: visible; }
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 .m-sheet.open { transform: translateY(0); }
+.m-sheet.maximized { max-height: 98vh; height: 98vh; }
+.m-sheet.maximized .m-sheet-body { flex: 1; }
 .m-sheet-grab { width: 36px; height: 4px; border-radius: 2px; background: var(--line-3); margin: 8px auto 4px; }
 .m-sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px 10px; border-bottom: 1px solid var(--line-1); }
 .m-sheet-title { font-family: var(--f-mono); font-size: 11px; font-weight: 600; color: var(--fg-1); letter-spacing: 0.14em; text-transform: uppercase; }

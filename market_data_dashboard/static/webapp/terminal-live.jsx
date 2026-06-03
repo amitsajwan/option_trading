@@ -1603,6 +1603,70 @@ function _useIsMobile() {
   return isMobile;
 }
 
+// ── Resizable persisted-size hook ────────────────────────────────────────
+// Returns [size, startDrag]. `size` is a number (px). `startDrag(e)` begins a
+// pointer drag; `axis` "x" resizes width, "y" resizes height. `dir` +1 means
+// dragging toward larger values increases size (e.g. divider above a bottom
+// panel → dragging up grows it → dir=-1). Persisted to localStorage by `key`.
+function _useResizable({ key, axis, dir = 1, def, min, max }) {
+  const [size, setSize] = _s(() => {
+    try { const v = parseFloat(localStorage.getItem(key)); if (Number.isFinite(v)) return v; } catch (_) {}
+    return def;
+  });
+  const startDrag = _cb((e) => {
+    e.preventDefault();
+    const start = axis === 'x' ? e.clientX : e.clientY;
+    const startSize = size;
+    document.body.classList.add('m-resizing');
+    const onMove = (ev) => {
+      const cur = axis === 'x' ? ev.clientX : ev.clientY;
+      const delta = (cur - start) * dir;
+      const clampMax = typeof max === 'function' ? max() : max;
+      let next = startSize + delta;
+      next = Math.max(min, Math.min(clampMax, next));
+      setSize(next);
+    };
+    const onUp = () => {
+      document.body.classList.remove('m-resizing');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      // persistence handled by the effect on [size]; avoid writing a stale value here
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [size, axis, dir, min, max, key]);
+
+  // persist on every settle (size changes from drag)
+  _e(() => { try { localStorage.setItem(key, String(Math.round(size))); } catch (_) {} }, [size, key]);
+
+  return [size, startDrag, setSize];
+}
+
+// ── ResizeDivider — draggable splitter (vertical or horizontal) ──────────
+function ResizeDivider({ axis, onDown, dragging }) {
+  return (
+    <div
+      className={`${axis === 'x' ? 'm-divider-v' : 'm-divider-h'}${dragging ? ' dragging' : ''}`}
+      onPointerDown={onDown}
+      role="separator"
+      aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'}
+    />
+  );
+}
+
+// ── MaximizeBtn — toggles a pane to fill its container ───────────────────
+function MaximizeBtn({ maximized, onToggle, title }) {
+  return (
+    <button
+      className="m-maximize-btn"
+      onClick={onToggle}
+      title={title || (maximized ? 'Restore' : 'Maximize')}
+    >
+      {maximized ? '🗗' : '⛶'}
+    </button>
+  );
+}
+
 // ── _fmtRelTime — "2s ago" / "12s ago" / "1m ago" ────────────────────────
 function _fmtRelTime(ms) {
   if (!ms) return '—';
@@ -1693,20 +1757,25 @@ function MobileTradeCard({ trade, selected, onSelect, session }) {
 
 // ── MobileBottomSheet — generic bottom-anchored sheet ────────────────────
 function MobileBottomSheet({ open, title, onClose, children }) {
+  const [maxed, setMaxed] = _s(false);
   _e(() => {
     if (!open) return;
     const fn = e => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', fn);
     return () => window.removeEventListener('keydown', fn);
   }, [open, onClose]);
+  _e(() => { if (!open) setMaxed(false); }, [open]);   // reset on close
   return (
     <div className={`m-sheet-overlay ${open ? 'open' : ''}`}
          onClick={e => { if (e.target.classList.contains('m-sheet-overlay')) onClose(); }}>
-      <div className={`m-sheet ${open ? 'open' : ''}`}>
-        <div className="m-sheet-grab"/>
+      <div className={`m-sheet ${open ? 'open' : ''}${maxed ? ' maximized' : ''}`}>
+        <div className="m-sheet-grab" onClick={() => setMaxed(m => !m)}/>
         <div className="m-sheet-head">
           <span className="m-sheet-title">{title}</span>
-          <button className="m-sheet-close" onClick={onClose} aria-label="Close">✕</button>
+          <span style={{display:'flex',alignItems:'center',gap:2}}>
+            <MaximizeBtn maximized={maxed} onToggle={() => setMaxed(m => !m)}/>
+            <button className="m-sheet-close" onClick={onClose} aria-label="Close">✕</button>
+          </span>
         </div>
         <div className="m-sheet-body">{children}</div>
       </div>
@@ -1730,7 +1799,18 @@ function MobileLiveShell({
   const [now, setNow] = _s(Date.now());
   const inspectorTrade = selectedTrade || (trades.length ? trades[0] : null);
   const [showInspector, setShowInspector] = _s(false);
+  const [inspectorMax, setInspectorMax] = _s(false);
   const isMobile = _useIsMobile();
+
+  // Resizable panes (persisted): left-pane width + inspector height
+  const [leftW, startLeftDrag] = _useResizable({
+    key: 'term.leftW', axis: 'x', dir: 1, def: 400, min: 280,
+    max: () => Math.min(720, window.innerWidth - 360),
+  });
+  const [inspH, startInspDrag] = _useResizable({
+    key: 'term.inspH', axis: 'y', dir: -1, def: 320, min: 180,
+    max: () => Math.max(220, window.innerHeight - 220),
+  });
 
   _e(() => { setLastTickAt(Date.now()); }, [upToIdx]);
   _e(() => { const id = setInterval(() => setNow(Date.now()), 2000); return () => clearInterval(id); }, []);
@@ -1854,7 +1934,7 @@ function MobileLiveShell({
       </header>
 
       {/* ── Body ─────────────────────────────────────────────────────────── */}
-      <div className="m-split">
+      <div className="m-split" style={{'--left-w': leftW + 'px'}}>
         <div className="m-left">
           <nav className="m-tabs" role="tablist">
             <button className="m-tab" data-tab="tape" aria-pressed={tab==='tape'} onClick={() => setTab('tape')}>
@@ -2050,9 +2130,12 @@ function MobileLiveShell({
         </main>
         </div>{/* end m-left */}
 
+        {/* Vertical divider — drag to resize left pane width (desktop only) */}
+        {!isMobile && <ResizeDivider axis="x" onDown={startLeftDrag} />}
+
         {/* Right pane: chart on desktop only — phone chart tab handles mobile (never both) */}
         {!isMobile && (
-          <div className="m-right-pane">
+          <div className={`m-right-pane${inspectorMax && showInspector && inspectorTrade ? ' inspector-max' : ''}`}>
             <div className="m-right-chart">
               <TermChart
                 session={session} candles={candles} trades={trades}
@@ -2062,17 +2145,24 @@ function MobileLiveShell({
             </div>
             {/* Inspector panel — slides in when a trade is selected */}
             {showInspector && inspectorTrade && (
-              <div className="m-right-inspector">
-                <div className="m-right-inspector-head">
-                  <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',letterSpacing:'0.12em',textTransform:'uppercase'}}>
-                    Trade Inspector
-                  </span>
-                  <button className="m-sheet-close" onClick={() => setShowInspector(false)}>✕</button>
+              <>
+                {/* Horizontal divider — drag to resize inspector height */}
+                {!inspectorMax && <ResizeDivider axis="y" onDown={startInspDrag} />}
+                <div className="m-right-inspector" style={inspectorMax ? undefined : {'--insp-h': inspH + 'px'}}>
+                  <div className="m-right-inspector-head">
+                    <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',letterSpacing:'0.12em',textTransform:'uppercase'}}>
+                      Trade Inspector
+                    </span>
+                    <span style={{display:'flex',alignItems:'center',gap:2}}>
+                      <MaximizeBtn maximized={inspectorMax} onToggle={() => setInspectorMax(m => !m)}/>
+                      <button className="m-sheet-close" onClick={() => { setShowInspector(false); setInspectorMax(false); }}>✕</button>
+                    </span>
+                  </div>
+                  <div style={{flex:1,overflowY:'auto',minHeight:0}}>
+                    <TradeInspector session={session} trade={inspectorTrade}/>
+                  </div>
                 </div>
-                <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-                  <TradeInspector session={session} trade={inspectorTrade}/>
-                </div>
-              </div>
+              </>
             )}
           </div>
         )}
@@ -2409,6 +2499,15 @@ function MobileReplayShell({
   const [tab, setTab] = _s('tape');
   const isMobile = _useIsMobile();
   const [showInspector, setShowInspector] = _s(false);
+  const [inspectorMax, setInspectorMax] = _s(false);
+  const [leftW, startLeftDrag] = _useResizable({
+    key: 'term.leftW', axis: 'x', dir: 1, def: 400, min: 280,
+    max: () => Math.min(720, window.innerWidth - 360),
+  });
+  const [inspH, startInspDrag] = _useResizable({
+    key: 'term.inspH', axis: 'y', dir: -1, def: 320, min: 180,
+    max: () => Math.max(220, window.innerHeight - 220),
+  });
   const inspectorTrade = selectedTrade || ((trades||[]).length ? trades[0] : null);
   const pct      = total > 0 ? ((upToIdx + 1) / total * 100).toFixed(0) : 0;
   const pnlCls   = (sessionPnl||0) > 0.0005 ? 'pos' : (sessionPnl||0) < -0.0005 ? 'neg' : 'flat';
@@ -2582,7 +2681,7 @@ function MobileReplayShell({
             : <span>{datesLoading ? 'Loading…' : wsStatus}</span>}
         </div>
       ) : (
-        <div className="m-split">
+        <div className="m-split" style={{'--left-w': leftW + 'px'}}>
           <div className="m-left">
             <nav className="m-tabs" role="tablist">
               <button className="m-tab" data-tab="tape" aria-pressed={tab==='tape'} onClick={() => setTab('tape')}>
@@ -2650,8 +2749,9 @@ function MobileReplayShell({
               </div>
             </main>
           </div>
+          {!isMobile && <ResizeDivider axis="x" onDown={startLeftDrag} />}
           {!isMobile && (
-            <div className="m-right-pane">
+            <div className={`m-right-pane${inspectorMax && showInspector && inspectorTrade ? ' inspector-max' : ''}`}>
               <div className="m-right-chart">
                 <TermChart session={session} candles={candles||[]} trades={trades||[]}
                   selectedTrade={inspectorTrade}
@@ -2659,9 +2759,20 @@ function MobileReplayShell({
                   upToIdx={upToIdx} flashIdx={null}/>
               </div>
               {showInspector && inspectorTrade && (
-                <div className="m-right-inspector">
-                  <TradeInspector session={session} trade={inspectorTrade}/>
-                </div>
+                <>
+                  {!inspectorMax && <ResizeDivider axis="y" onDown={startInspDrag} />}
+                  <div className="m-right-inspector" style={inspectorMax ? undefined : {'--insp-h': inspH + 'px'}}>
+                    <div className="m-right-inspector-head">
+                      <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',letterSpacing:'0.12em',textTransform:'uppercase'}}>
+                        Trade Inspector
+                      </span>
+                      <MaximizeBtn maximized={inspectorMax} onToggle={() => setInspectorMax(m => !m)}/>
+                    </div>
+                    <div style={{flex:1,overflowY:'auto',minHeight:0}}>
+                      <TradeInspector session={session} trade={inspectorTrade}/>
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           )}
