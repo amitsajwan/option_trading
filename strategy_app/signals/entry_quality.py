@@ -173,6 +173,9 @@ def grade_entry(
     # ── 1) Effective margin ─────────────────────────────────────────────────
     # Margin is now the de-correlated margin (depth capped to one vote). A thin
     # margin means the sources barely agreed.
+    # 2.0 default verified reasonable: across 22 entries (2026-06-01..03) the
+    # margin median was 2.00 and 11/22 cleared 2.0. The "everything mild" seen on
+    # 2026-06-02 was a genuinely low-conviction day, not a threshold bug. Tune via env.
     good_margin = _env_float("ENTRY_QUALITY_MARGIN_GOOD", 2.0)
     weak_margin = _env_float("ENTRY_QUALITY_MARGIN_WEAK", 1.0)
     margin = float(dir_result.margin)
@@ -215,15 +218,24 @@ def grade_entry(
             reasons.append(f"stale_momentum r1m={float(r1):+.4f} vs r5m={float(r5):+.4f}")
 
     # ── 5) IV skew disagreement (options market leaned the other way) ───────
+    # IMPORTANT (data-confirmed 2026-06-01..03): index options carry a PERMANENT
+    # put skew. Across those 3 days iv_skew_disagree fired on 100% of CE entries
+    # (12/12) with PE/CE IV ratios tightly clustered 1.23–1.32 — i.e. it was a
+    # CONSTANT CE TAX, not a directional signal. The old 0.08 band (fire >1.08)
+    # caught all of it and starved the live book. Treat skew as a signal only when
+    # ABNORMALLY large vs the baseline index put skew: PE band 0.35 (fire >1.35x)
+    # clears the normal 1.23–1.32 range while still catching genuinely extreme
+    # downside-vol regimes. CE-richer (calls > puts) is rare/meaningful -> tighter.
     ce_iv = snap.atm_ce_iv
     pe_iv = snap.atm_pe_iv
     if ce_iv and pe_iv and float(ce_iv) > 0 and float(pe_iv) > 0:
         ratio = float(pe_iv) / float(ce_iv)
-        skew_band = _env_float("ENTRY_QUALITY_IV_SKEW_BAND", 0.08)
+        pe_band = _env_float("ENTRY_QUALITY_IV_SKEW_PE_BAND", 0.35)  # PE richer is normal
+        ce_band = _env_float("ENTRY_QUALITY_IV_SKEW_CE_BAND", 0.08)  # CE richer is notable
         iv_side: Optional[Direction] = None
-        if ratio > 1.0 + skew_band:
-            iv_side = Direction.PE  # puts richer -> downside lean
-        elif ratio < 1.0 - skew_band:
+        if ratio > 1.0 + pe_band:
+            iv_side = Direction.PE  # puts ABNORMALLY rich -> genuine downside lean
+        elif ratio < 1.0 - ce_band:
             iv_side = Direction.CE
         if iv_side is not None and iv_side != direction:
             p = _env_float("ENTRY_QUALITY_PEN_IV_DISAGREE", 0.2)

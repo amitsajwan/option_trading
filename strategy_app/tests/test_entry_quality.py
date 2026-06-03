@@ -90,7 +90,9 @@ def test_fce59da2_shaped_entry_is_bad_and_paper() -> None:
     snap = _snap(
         fut_return_1m=-0.00026,  # reversing
         fut_return_5m=0.00147,
-        atm_ce_iv=58.0, atm_pe_iv=66.0,  # pe richer -> iv leans PE, disagrees with CE
+        # ABNORMAL put skew (1.40x) — beyond the normal index 1.2-1.3 band, so it
+        # is a genuine downside lean that disagrees with this CE.
+        atm_ce_iv=50.0, atm_pe_iv=70.0,
     )
     res = grade_entry(dir_result, snap, regime="SIDEWAYS")
     assert res.grade == BAD, res.reasons
@@ -101,6 +103,19 @@ def test_fce59da2_shaped_entry_is_bad_and_paper() -> None:
     tier = decide_tier(res.grade, RiskContext(), confidence=0.65)
     assert tier.tier == "paper"
     assert tier.live_would_take is False
+
+
+def test_normal_index_put_skew_does_not_penalise_ce() -> None:
+    """Routine index put skew (PE IV ~1.25-1.32x CE IV) must NOT fire iv_skew on a
+    CE — it is structural, not a directional signal (data-confirmed 2026-06-02)."""
+    dir_result = _clean_dir(direction=Direction.CE, margin=3.0)
+    snap = _snap(atm_ce_iv=50.0, atm_pe_iv=63.0)  # ratio 1.26 = normal
+    res = grade_entry(dir_result, snap, regime="TRENDING")
+    assert not any("iv_skew_disagree" in r for r in res.reasons), res.reasons
+    assert res.grade == GOOD
+    # A clean GOOD trade in a clean session is live-eligible.
+    tier = decide_tier(res.grade, RiskContext(), confidence=0.9)
+    assert tier.tier == "live"
 
 
 def test_grade_from_raw_returns_none_without_scores() -> None:
