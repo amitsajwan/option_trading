@@ -1844,7 +1844,18 @@ class DeterministicRuleEngine(StrategyEngine):
             if not brain_decision.allowed:
                 return f"brain_gate:{brain_decision.reason}"
 
-        # ── Trader discipline gates ────────────────────────────────────────────
+        # ── Trader discipline gates (order MUST mirror _process_entry_votes) ───
+        # NOTE: this method is the single place that derives the trace's blocker
+        # string. Every early-return in _process_entry_votes must have a matching
+        # branch here in the SAME ORDER, or the trace will show the wrong gate.
+
+        # 0. Minimum re-entry spacing: never enter immediately after any exit.
+        reentry_gap = int(os.getenv("MIN_REENTRY_BARS", "3"))
+        if self._last_any_exit_bar is not None:
+            bars_since_exit = self._session_event_count - self._last_any_exit_bar
+            if bars_since_exit < reentry_gap:
+                return f"min_reentry_gap:{bars_since_exit}<{reentry_gap}"
+
         # 1. SIDEWAYS + returns_mixed: market has no intraday conviction.
         #    A trader never enters when returns are contradicting themselves.
         if (
@@ -1865,17 +1876,35 @@ class DeterministicRuleEngine(StrategyEngine):
 
         # 3. Direction-flip block: after a STOP_LOSS, don't flip direction for N bars.
         flip_cooldown = int(os.getenv("DIRECTION_FLIP_COOLDOWN_BARS", "8"))
+        _entry_v = [v for v in votes if v.signal_type == SignalType.ENTRY
+                    and v.direction in (Direction.CE, Direction.PE)]
+        _cur_dirs = {str(v.direction.value if hasattr(v.direction, "value") else v.direction).upper()
+                     for v in _entry_v}
         if self._last_stop_bar is not None and self._last_exit_direction:
             bars_since_stop = self._session_event_count - self._last_stop_bar
-            if bars_since_stop < flip_cooldown:
-                # Determine current candidate direction from votes
-                entry_v = [v for v in votes if v.signal_type == SignalType.ENTRY
-                           and v.direction in (Direction.CE, Direction.PE)]
-                if entry_v:
-                    current_dirs = {str(v.direction.value if hasattr(v.direction, "value") else v.direction).upper()
-                                    for v in entry_v}
-                    if self._last_exit_direction not in current_dirs:
-                        return f"direction_flip_cooldown:{bars_since_stop}<{flip_cooldown}"
+            if bars_since_stop < flip_cooldown and _entry_v and self._last_exit_direction not in _cur_dirs:
+                return f"direction_flip_cooldown:{bars_since_stop}<{flip_cooldown}"
+
+        # 4. Zero-MFE same-direction block: last trade had no favorable excursion.
+        zero_mfe_cool = int(os.getenv("ZERO_MFE_COOLDOWN_BARS", "10"))
+        if self._last_zero_mfe_bar is not None and self._last_zero_mfe_direction:
+            bars_since_zero = self._session_event_count - self._last_zero_mfe_bar
+            if bars_since_zero < zero_mfe_cool and self._last_zero_mfe_direction in _cur_dirs:
+                return f"zero_mfe_cooldown:{bars_since_zero}<{zero_mfe_cool}"
+
+        # 5. Direction-evidence agreement: don't trade against bull/bear evidence.
+        ev = getattr(regime_signal, "evidence", None) or {}
+        try:
+            _bull = float(ev.get("bull_score", -1)); _bear = float(ev.get("bear_score", -1))
+        except (TypeError, ValueError):
+            _bull = _bear = -1.0
+        if _bull >= 0 and _bear >= 0 and _cur_dirs:
+            ev_support = float(os.getenv("DIRECTION_EVIDENCE_SUPPORT_MIN", "0.2"))
+            ev_oppose = float(os.getenv("DIRECTION_EVIDENCE_OPPOSING_MAX", "0.6"))
+            if "PE" in _cur_dirs and _bull > ev_oppose and _bear < ev_support:
+                return "direction_evidence_mismatch:PE"
+            if "CE" in _cur_dirs and _bear > ev_oppose and _bull < ev_support:
+                return "direction_evidence_mismatch:CE"
         # ── End discipline gates ───────────────────────────────────────────────
 
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
@@ -1947,6 +1976,10 @@ class DeterministicRuleEngine(StrategyEngine):
         warmup_blocked: bool,
         warmup_reason: str,
     ) -> tuple[list[dict[str, Any]], str, Optional[str], bool]:
+        def _f(x):
+            try: return float(x)
+            except (TypeError, ValueError): return 0.0
+        _ev0 = getattr(regime_signal, "evidence", None) or {}
         gates: list[dict[str, Any]] = [
             {
                 "gate_id": "regime_classification",
@@ -1957,6 +1990,24 @@ class DeterministicRuleEngine(StrategyEngine):
                 "metrics": {"regime_confidence": regime_signal.confidence},
             }
         ]
+        # Always emit the direction-evidence row (bull/bear scores) so the UI can show
+        # whether the trade agreed with the market evidence — even on passed trades.
+        if "bull_score" in _ev0 or "bear_score" in _ev0:
+            gates.append(
+                {
+                    "gate_id": "direction_evidence",
+                    "gate_group": "evidence",
+                    "status": "pass",
+                    "reason_code": None,
+                    "message": f"bull={_f(_ev0.get('bull_score')):.2f} bear={_f(_ev0.get('bear_score')):.2f}",
+                    "metrics": {
+                        "bull_score": _f(_ev0.get("bull_score")),
+                        "bear_score": _f(_ev0.get("bear_score")),
+                        "r5m": _f(_ev0.get("r5m")),
+                        "r15m": _f(_ev0.get("r15m")),
+                    },
+                }
+            )
         raw_signals = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
         selected = bool(
             signal is not None
@@ -2059,6 +2110,19 @@ class DeterministicRuleEngine(StrategyEngine):
                 }
             )
             return gates, "blocked", "regime_confidence", False
+        if blocker is not None and blocker.startswith("min_reentry_gap:"):
+            bars_info = blocker.split(":", 1)[1]
+            gates.append(
+                {
+                    "gate_id": "min_reentry_gap",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "min_reentry_gap",
+                    "message": f"Minimum re-entry spacing: {bars_info} bars since last exit",
+                    "metrics": {"bars_since_exit": int(bars_info.split("<")[0])},
+                }
+            )
+            return gates, "blocked", "min_reentry_gap", False
         if blocker == "sideways_returns_mixed":
             gates.append(
                 {
@@ -2098,6 +2162,42 @@ class DeterministicRuleEngine(StrategyEngine):
                 }
             )
             return gates, "blocked", "direction_flip_cooldown", False
+        if blocker is not None and blocker.startswith("zero_mfe_cooldown:"):
+            bars_info = blocker.split(":", 1)[1]
+            gates.append(
+                {
+                    "gate_id": "zero_mfe_cooldown",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "zero_mfe_cooldown",
+                    "message": f"Last {self._last_zero_mfe_direction or ''} trade had zero favorable excursion — same-direction blocked for {bars_info} bars",
+                    "metrics": {"bars_since_zero_mfe": int(bars_info.split("<")[0]),
+                                "last_direction": self._last_zero_mfe_direction or ""},
+                }
+            )
+            return gates, "blocked", "zero_mfe_cooldown", False
+        if blocker is not None and blocker.startswith("direction_evidence_mismatch:"):
+            blocked_dir = blocker.split(":", 1)[1]
+            _ev = getattr(regime_signal, "evidence", None) or {}
+            def _f(x):
+                try: return float(x)
+                except (TypeError, ValueError): return 0.0
+            gates.append(
+                {
+                    "gate_id": "direction_evidence",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "direction_evidence_mismatch",
+                    "message": f"{blocked_dir} entry against market evidence — bull/bear scores oppose the trade direction",
+                    "metrics": {
+                        "bull_score": _f(_ev.get("bull_score")),
+                        "bear_score": _f(_ev.get("bear_score")),
+                        "r5m": _f(_ev.get("r5m")),
+                        "r15m": _f(_ev.get("r15m")),
+                    },
+                }
+            )
+            return gates, "blocked", "direction_evidence", False
         if blocker == "entry_phase":
             gates.append(
                 {
