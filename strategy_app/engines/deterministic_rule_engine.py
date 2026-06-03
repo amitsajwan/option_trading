@@ -1122,6 +1122,10 @@ class DeterministicRuleEngine(StrategyEngine):
         self._annotate_vote_contract(trade_vote)
         if not policy_decision.allowed:
             return None
+        # Grade + tier the FINAL trade vote (now carries direction_consensus_* or
+        # entry_dir_*). _collect_votes graded the raw ML_ENTRY vote earlier, but the
+        # consensus direction is only resolved here, so re-grade with full context.
+        self._grade_and_tier_vote(trade_vote, snap, regime_signal.regime.value, risk)
         return self._build_entry_signal(
             trade_vote, snap, risk, entry_votes, regime_signal, policy_decision
         )
@@ -1413,6 +1417,7 @@ class DeterministicRuleEngine(StrategyEngine):
                 + (f" | resume_boost=+{resume_boost:.2f}" if resume_boost_applied else "")
             ),
             votes=all_votes,
+            raw_signals=dict(raw) if isinstance(raw, dict) else {},
         )
         entry_decision_mode = self._decision_mode_from_policy(policy_decision)
         entry_metrics: dict[str, Any] = {

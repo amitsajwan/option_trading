@@ -112,18 +112,35 @@ def grade_entry_from_raw(
     """
     if direction is None:
         return None
-    if "entry_dir_ce_score" not in raw_signals and "entry_dir_margin" not in raw_signals:
+    # Composite direction mode stores entry_dir_*; consensus mode stores
+    # direction_consensus_*. Grade either — fall back to consensus when the
+    # composite fields are absent (e.g. the ops-sim replay default profile).
+    has_composite = "entry_dir_ce_score" in raw_signals or "entry_dir_margin" in raw_signals
+    has_consensus = "direction_consensus_ce" in raw_signals or "direction_consensus_margin" in raw_signals
+    if not has_composite and not has_consensus:
         return None
-    dir_result = EntryDirectionResult(
-        direction=direction,
-        source=str(raw_signals.get("direction_source") or "composite"),
-        ce_score=float(raw_signals.get("entry_dir_ce_score") or 0.0),
-        pe_score=float(raw_signals.get("entry_dir_pe_score") or 0.0),
-        margin=float(raw_signals.get("entry_dir_margin") or 0.0),
-        vetoed=bool(raw_signals.get("entry_dir_vetoed") or False),
-        veto_reason=str(raw_signals.get("entry_dir_veto_reason") or ""),
-        sources=dict(raw_signals.get("entry_dir_sources") or {}),
-    )
+    if has_composite:
+        dir_result = EntryDirectionResult(
+            direction=direction,
+            source=str(raw_signals.get("direction_source") or "composite"),
+            ce_score=float(raw_signals.get("entry_dir_ce_score") or 0.0),
+            pe_score=float(raw_signals.get("entry_dir_pe_score") or 0.0),
+            margin=float(raw_signals.get("entry_dir_margin") or 0.0),
+            vetoed=bool(raw_signals.get("entry_dir_vetoed") or False),
+            veto_reason=str(raw_signals.get("entry_dir_veto_reason") or ""),
+            sources=dict(raw_signals.get("entry_dir_sources") or {}),
+        )
+    else:
+        dir_result = EntryDirectionResult(
+            direction=direction,
+            source=str(raw_signals.get("direction_source") or "direction_consensus"),
+            ce_score=float(raw_signals.get("direction_consensus_ce") or 0.0),
+            pe_score=float(raw_signals.get("direction_consensus_pe") or 0.0),
+            margin=float(raw_signals.get("direction_consensus_margin") or 0.0),
+            vetoed=False,
+            veto_reason="",
+            sources=dict(raw_signals.get("direction_consensus_sources") or {}),
+        )
     return grade_entry(dir_result, snap, regime=regime)
 
 
