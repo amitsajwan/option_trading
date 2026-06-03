@@ -21,10 +21,18 @@ Exit 0 if v1==v2 on every compared day, 1 on any divergence.
 """
 
 import json
+import logging
 import os
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+# Surface the engine's INFO strike-selection / veto logs (the harness has no
+# main.py logging setup, so default WARNING hides them). Targeted, not global.
+logging.basicConfig(level=logging.WARNING, format="%(message)s")
+for _lg in ("strategy_app.engines.deterministic_rule_engine",
+            "strategy_app.signals.option_selector"):
+    logging.getLogger(_lg).setLevel(logging.INFO)
 
 REPO = Path("/app")
 if str(REPO) not in sys.path:
@@ -55,27 +63,25 @@ OPS_SIM_CONFIG = {
     "EXIT_TRAILING_TRAIL_PCT": "0.005",
     "STRATEGY_STRIKE_SELECTION_POLICY": "smart_strike",
     "STRATEGY_SMART_STRIKE_ENABLED": "1",
-    # Soft cap on purpose: --ops reproduces the *original firing* OPS sim (ATM
-    # fallback, ~15 trades) so v1-vs-v2 parity can be checked on real trades.
-    # The hard-cap behaviour is verified separately (it correctly vetoes those
-    # over-budget ATM trades — see ENTRY_PIPELINE_V1_V2_ANALYSIS.md).
-    "SMART_STRIKE_MAX_PREMIUM": "500",
-    "SMART_STRIKE_HARD_PREMIUM_CAP": "0",
-    "STRATEGY_STRIKE_MAX_OTM_STEPS": "8",
+    # New paper config: ₹200-600 premium BAND, hard cap, up to 10-step OTM (deep
+    # tiers enabled + regime-agnostic) so the band is actually reachable on this
+    # instrument. See docs/ENTRY_PIPELINE_V1_V2_ANALYSIS.md §1.
+    "SMART_STRIKE_MAX_PREMIUM": "600",
+    "SMART_STRIKE_MIN_PREMIUM": "200",
+    "SMART_STRIKE_HARD_PREMIUM_CAP": "1",
+    "STRATEGY_STRIKE_MAX_OTM_STEPS": "10",
     "SMART_STRIKE_OTM_CONFIDENCE": "0.55",
-    "SMART_STRIKE_OTM2_ENABLED": "1", "SMART_STRIKE_OTM2_CONFIDENCE": "0.65",
-    "SMART_STRIKE_OTM3_ENABLED": "1", "SMART_STRIKE_OTM3_CONFIDENCE": "0.75",
-    "SMART_STRIKE_OTM3_REGIMES": "BREAKOUT,TRENDING",
-    "SMART_STRIKE_OTM4_ENABLED": "1", "SMART_STRIKE_OTM4_CONFIDENCE": "0.85",
-    "SMART_STRIKE_OTM4_REGIMES": "BREAKOUT",
-    "SMART_STRIKE_OTM2_MIN_OI": "20000", "SMART_STRIKE_OTM3_MIN_OI": "15000",
-    "SMART_STRIKE_OTM4_MIN_OI": "10000",
-    "SMART_STRIKE_OTM_IV_CEIL": "92", "SMART_STRIKE_OTM2_IV_CEIL": "91",
-    "SMART_STRIKE_OTM3_IV_CEIL": "90", "SMART_STRIKE_OTM4_IV_CEIL": "89",
+    "SMART_STRIKE_OTM2_ENABLED": "1", "SMART_STRIKE_OTM3_ENABLED": "1",
+    "SMART_STRIKE_OTM4_ENABLED": "1", "SMART_STRIKE_OTM5_ENABLED": "1",
+    "SMART_STRIKE_OTM6_ENABLED": "1", "SMART_STRIKE_OTM7_ENABLED": "1",
+    "SMART_STRIKE_OTM8_ENABLED": "1", "SMART_STRIKE_OTM9_ENABLED": "1",
+    "SMART_STRIKE_OTM10_ENABLED": "1",
+    "SMART_STRIKE_OTM_IV_CEIL": "92",
     "ENTRY_ML_MIN_PROB": "0.65",
     "DIRECTION_ML_WEIGHT": "0.40",
-    "RISK_MAX_SESSION_TRADES": "20",
-    "RISK_MAX_CONSECUTIVE_LOSSES": "3",
+    # Paper trading: no trade/loss limits — observe full behaviour (0 = disabled).
+    "RISK_MAX_SESSION_TRADES": "0",
+    "RISK_MAX_CONSECUTIVE_LOSSES": "0",
 }
 # Default model paths if the container env doesn't already carry them.
 _MODEL_DEFAULTS = {

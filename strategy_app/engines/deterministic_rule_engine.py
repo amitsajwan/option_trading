@@ -1033,8 +1033,10 @@ class DeterministicRuleEngine(StrategyEngine):
     ) -> Optional[TradeSignal]:
         """Run the v2 gate-cascade pipeline (STRATEGY_ENTRY_PIPELINE_V2=1)."""
         relax_conf = self._strategy_profile_id in _PROFILES_RELAX_REGIME_CONF
+        is_consensus = self._strategy_profile_id in _PROFILES_ML_ENTRY_CONSENSUS
         gates = build_entry_pipeline(
             regime_min_relax=relax_conf,
+            is_consensus=is_consensus,
             shadow_fn=self._shadow_direction_from_snapshot,
             ml_hint_fn=extract_ml_direction_hint,
             consensus_fn=resolve_direction_consensus,

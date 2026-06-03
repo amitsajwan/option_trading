@@ -288,6 +288,29 @@ class TestDirectionGate:
         assert r.outcome == GateOutcome.PASS
         assert ctx.direction == Direction.PE
 
+    def test_non_consensus_uses_candidate_direction_no_bypass_veto(self):
+        # Bug-1 fix: non-consensus profile → take the candidate's own direction, with
+        # NO ML_ENTRY requirement and NO 0.80 bypass veto, even at low confidence.
+        gate, _, _ = _make_direction_gate(direction=Direction.CE)
+        gate._is_consensus = False
+        cand = _vote(name="ORB", confidence=0.66, direction=Direction.PE)
+        ctx = _ctx(votes=[cand], cfg=_cfg(CONSENSUS_BYPASS_MIN_CONFIDENCE="0.80"))
+        ctx.reset_candidate(cand)
+        r = gate.apply(ctx)
+        assert r.outcome == GateOutcome.PASS          # not vetoed despite conf < 0.80
+        assert ctx.direction == Direction.PE          # candidate's own direction
+
+    def test_non_consensus_skips_candidate_without_direction(self):
+        gate, _, _ = _make_direction_gate()
+        gate._is_consensus = False
+        cand = _vote(name="ORB", confidence=0.90, direction=Direction.NONE) \
+            if hasattr(Direction, "NONE") else _vote(name="ORB", confidence=0.90)
+        cand.direction = None
+        ctx = _ctx(votes=[cand])
+        ctx.reset_candidate(cand)
+        r = gate.apply(ctx)
+        assert r.outcome == GateOutcome.SKIP_CANDIDATE
+
 
 # ===========================================================================
 # Gate 5 — StrikeDepthGate

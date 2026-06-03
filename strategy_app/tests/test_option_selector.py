@@ -434,6 +434,69 @@ def test_hard_cap_with_zero_premium_does_not_veto():
     assert sel.mode == "atm"
 
 
+def test_premium_band_picks_deepest_within_band():
+    # Band [200,600]: ladder ATM=1200, OTM1=900, OTM2=650, OTM3=450, OTM4=250, OTM5=120.
+    # Deepest within band (>=200, <=600) and passing gates is OTM4 @250.
+    snap = FakeSnap(
+        iv_percentile=20.0, timestamp=_Hour(10),
+        _ltp_table={
+            ("CE", 48000): 1200.0, ("CE", 48100): 900.0, ("CE", 48200): 650.0,
+            ("CE", 48300): 450.0, ("CE", 48400): 250.0, ("CE", 48500): 120.0,
+        },
+    )
+    with _enable(
+        "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED",
+        "SMART_STRIKE_OTM4_ENABLED", "SMART_STRIKE_OTM5_ENABLED",
+        **{"SMART_STRIKE_MAX_PREMIUM": "600", "SMART_STRIKE_MIN_PREMIUM": "200",
+           "STRATEGY_STRIKE_MAX_OTM_STEPS": "10", "SMART_STRIKE_OTM5_CONFIDENCE": "0.55"},
+    ):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="SIDEWAYS")
+    assert sel.strike == 48400  # OTM4 @250 — deepest in band; OTM5 @120 below floor
+    assert sel.mode == "otm_4"
+
+
+def test_premium_band_skips_too_cheap_deep_strike():
+    # OTM5 @150 is below the 200 floor → skipped; OTM3 @450 is the deepest in band.
+    snap = FakeSnap(
+        iv_percentile=20.0, timestamp=_Hour(10),
+        _ltp_table={
+            ("CE", 48000): 1200.0, ("CE", 48100): 900.0, ("CE", 48200): 700.0,
+            ("CE", 48300): 450.0, ("CE", 48400): 180.0, ("CE", 48500): 150.0,
+        },
+    )
+    with _enable(
+        "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED",
+        "SMART_STRIKE_OTM4_ENABLED", "SMART_STRIKE_OTM5_ENABLED",
+        **{"SMART_STRIKE_MAX_PREMIUM": "600", "SMART_STRIKE_MIN_PREMIUM": "200",
+           "STRATEGY_STRIKE_MAX_OTM_STEPS": "10"},
+    ):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="SIDEWAYS")
+    assert sel.strike == 48300  # OTM3 @450; OTM4 @180 and OTM5 @150 below the 200 floor
+    assert sel.mode == "otm_3"
+
+
+def test_deep_tiers_reachable_any_regime():
+    # Tier 6 enabled, SIDEWAYS regime — deep tiers are now regime-agnostic by default.
+    snap = FakeSnap(
+        iv_percentile=20.0, timestamp=_Hour(13),
+        _ltp_table={
+            ("CE", 48000): 1200.0, ("CE", 48100): 1000.0, ("CE", 48200): 800.0,
+            ("CE", 48300): 650.0, ("CE", 48400): 500.0, ("CE", 48500): 380.0,
+            ("CE", 48600): 280.0,
+        },
+    )
+    with _enable(
+        "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM4_ENABLED",
+        "SMART_STRIKE_OTM5_ENABLED", "SMART_STRIKE_OTM6_ENABLED",
+        **{"SMART_STRIKE_MAX_PREMIUM": "600", "SMART_STRIKE_MIN_PREMIUM": "200",
+           "STRATEGY_STRIKE_MAX_OTM_STEPS": "10"},
+    ):
+        sel = select_strike(snap, "CE", FakeDecision(ce_prob=0.90), regime="SIDEWAYS")
+    # Deepest in band [200,600] is OTM6 @280 (48600); reachable despite SIDEWAYS.
+    assert sel.otm_steps == 6
+    assert sel.strike == 48600
+
+
 def test_max_premium_zero_means_no_cap():
     snap = FakeSnap(iv_percentile=30.0)
     with _enable(**{"SMART_STRIKE_MAX_PREMIUM": "0"}):

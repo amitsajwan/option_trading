@@ -197,6 +197,27 @@ class RiskManagerTests(unittest.TestCase):
             self.assertTrue(mgr.is_paused)
             self.assertEqual(mgr.pause_reason, "consecutive_loss_pause")
 
+    def test_consecutive_losses_disabled_when_limit_zero(self) -> None:
+        # Paper trading: RISK_MAX_CONSECUTIVE_LOSSES=0 means unlimited — never pause.
+        with mock.patch.dict("os.environ", {"RISK_MAX_CONSECUTIVE_LOSSES": "0"}, clear=False):
+            mgr = RiskManager()
+            mgr.on_session_start(date(2026, 3, 5))
+            for _ in range(6):
+                mgr.record_trade_result(pnl_pct=-0.10, lots=1, entry_premium=100.0)
+            mgr.update(_snap(ts="2026-03-05T10:00:00+05:30", vix_intraday_chg=0.0), None)
+            self.assertFalse(mgr.is_paused)
+            self.assertIsNone(mgr.pause_reason)
+
+    def test_session_cap_disabled_when_zero(self) -> None:
+        with mock.patch.dict("os.environ", {"RISK_MAX_SESSION_TRADES": "0"}, clear=False):
+            mgr = RiskManager()
+            mgr.on_session_start(date(2026, 3, 5))
+            for _ in range(10):
+                mgr.record_trade_result(pnl_pct=0.05, lots=1, entry_premium=100.0)
+            mgr.update(_snap(ts="2026-03-05T10:00:00+05:30", vix_intraday_chg=0.0), None)
+            self.assertFalse(mgr.context.session_trade_cap_breached)
+            self.assertFalse(mgr.is_halted)
+
 
 if __name__ == "__main__":
     unittest.main()

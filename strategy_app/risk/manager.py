@@ -195,7 +195,9 @@ class RiskManager:
                 )
             ctx.session_trade_cap_breached = True
 
-        if ctx.consecutive_losses >= ctx.max_consecutive_losses:
+        # max_consecutive_losses <= 0 disables the pause (e.g. paper trading where we
+        # want unlimited trades to observe behaviour) — mirrors the session-cap guard.
+        if ctx.max_consecutive_losses > 0 and ctx.consecutive_losses >= ctx.max_consecutive_losses:
             if not ctx.consecutive_loss_limit:
                 logger.warning("consecutive loss limit reached count=%d", ctx.consecutive_losses)
             ctx.consecutive_loss_limit = True

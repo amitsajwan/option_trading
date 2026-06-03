@@ -148,16 +148,31 @@ class DirectionGate(Gate):
         ml_hint_fn: Callable,
         consensus_fn: Callable,
         ml_entry_vote_selector: Callable,
+        is_consensus: bool = True,
     ) -> None:
         self._shadow_fn = shadow_fn
         self._ml_hint_fn = ml_hint_fn
         self._consensus_fn = consensus_fn
         self._ml_vote_selector = ml_entry_vote_selector
+        self._is_consensus = is_consensus
 
     def apply(self, ctx: EntryContext) -> GateResult:
         snap = ctx.snap
         regime = ctx.regime
         cfg = ctx.config
+
+        # Bug-1 fix: the consensus-bypass path (ML_ENTRY vote required + 0.80 bypass
+        # threshold) is v1's behaviour ONLY for consensus profiles
+        # (_PROFILES_ML_ENTRY_CONSENSUS). For every other profile, v1 takes the
+        # scored/sequential path where direction is the candidate vote's OWN direction
+        # — no ML_ENTRY requirement, no bypass gate. Mirror that here so v2 stops
+        # over-vetoing real trades (see docs/ENTRY_PIPELINE_V1_V2_ANALYSIS.md bug 1).
+        if not self._is_consensus:
+            cand = ctx.candidate
+            if cand is None or cand.direction not in (Direction.CE, Direction.PE):
+                return GateResult.skip("candidate_no_direction")
+            ctx.direction = cand.direction
+            return GateResult.ok()
 
         ml_votes = [v for v in ctx.votes if v.strategy_name == "ML_ENTRY"]
         if not ml_votes:
@@ -392,6 +407,7 @@ def _log_gate_outcome(
 def build_entry_pipeline(
     *,
     regime_min_relax: bool = False,
+    is_consensus: bool = True,
     shadow_fn: Callable,
     ml_hint_fn: Callable,
     consensus_fn: Callable,
@@ -409,6 +425,7 @@ def build_entry_pipeline(
             ml_hint_fn=ml_hint_fn,
             consensus_fn=consensus_fn,
             ml_entry_vote_selector=ml_entry_vote_selector,
+            is_consensus=is_consensus,
         ),
         StrikeDepthGate(apply_strike_fn=apply_strike_fn),
         EntryPolicyGate(policy_fn=policy_fn),

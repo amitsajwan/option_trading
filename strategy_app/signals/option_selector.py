@@ -9,6 +9,9 @@ Master switch:
 
 Premium budget:
   SMART_STRIKE_MAX_PREMIUM=600         0 = no cap; try deepest within budget first.
+  SMART_STRIKE_MIN_PREMIUM=200         0 = no floor; with a [min,max] band the selector
+                                       takes the deepest strike priced inside the band
+                                       (e.g. 200-600), going as deep as MAX_OTM_STEPS.
   SMART_STRIKE_HARD_PREMIUM_CAP=1      1 = HARD cap (DEFAULT): the budget is a veto.
                                        If no affordable, priced strike exists, SKIP
                                        the trade (strike=None) — strike/depth
@@ -137,7 +140,7 @@ def _build_otm_tiers() -> list[_TierConfig]:
     IV ceilings than the inner tiers) so they are off until explicitly configured.
     """
     max_steps = int(_env_float("STRATEGY_STRIKE_MAX_OTM_STEPS", 4.0))
-    max_steps = max(1, min(max_steps, 8))   # safety: clamp to [1, 8]
+    max_steps = max(1, min(max_steps, 12))   # safety: clamp to [1, 12] (supports 10-step OTM)
 
     tiers: list[_TierConfig] = []
 
@@ -167,12 +170,16 @@ def _build_otm_tiers() -> list[_TierConfig]:
             max_hour_def  = _DEFAULTS[f"{tag}_MAX_BAR_HOUR"]
             min_oi_def    = _DEFAULTS[f"{tag}_MIN_OI"]
         else:
-            # Tier 5–8: conservative extrapolated defaults (conf rises, IV ceil tightens)
-            conf_default  = min(0.97, _DEFAULTS["OTM4_CONFIDENCE"] + 0.02 * (n - 4))
+            # Tiers 5+: reachable across regimes so premium-band selection can go deep
+            # enough to hit a cheap strike. Keep confidence at the base OTM gate (don't
+            # escalate it out of reach), drop the regime/hour restriction, and remove the
+            # OI floor — deep OTM is thinner but still the intended target for a low
+            # premium budget. All still overridable per-tier via env.
+            conf_default  = _DEFAULTS["OTM_CONFIDENCE"]
             iv_ceil_def   = max(80.0, _DEFAULTS["OTM4_IV_CEIL"] - 2.0 * (n - 4))
-            regimes_def   = "BREAKOUT"
-            max_hour_def  = 10
-            min_oi_def    = max(20_000.0, _DEFAULTS["OTM4_MIN_OI"] - 5_000.0 * (n - 4))
+            regimes_def   = ""          # any regime
+            max_hour_def  = 0           # no hour restriction
+            min_oi_def    = 0.0         # no OI floor (deep OTM is thin by nature)
 
         tiers.append(_TierConfig(
             n=n,
@@ -314,17 +321,33 @@ def select_strike(snap: Any, direction: str, decision: Any, regime: str = "") ->
     # to restore the legacy soft behaviour (trade the best strike even over budget).
     hard_cap = os.getenv("SMART_STRIKE_HARD_PREMIUM_CAP", "1").strip() == "1"
 
-    # Pass 1: try tiers deepest-first with ALL gates including premium target.
-    # Deeper OTM = cheaper, so if ltp > max_premium here, shallower will be worse —
-    # skip pass 1 entirely for this tier and let pass 2 handle it.
+    # Premium floor: skip strikes cheaper than this (too deep / lottery dust).
+    # With a [min, max] band the selector picks the deepest strike that is still
+    # >= min_premium and <= max_premium, e.g. the ₹200–600 band.
+    min_premium = _env_float("SMART_STRIKE_MIN_PREMIUM", 0.0)
+    # Band mode: when a premium floor is set, selection is premium-driven. Gate only on
+    # the base OTM confidence (IV is already reject-checked above) and ignore the
+    # per-tier regime/OI/hour escalation, so the [min,max] band is reachable in ANY
+    # regime and at any depth — that is the point of a budget band.
+    band_mode = min_premium > 0
+    base_conf_min = _env_float("SMART_STRIKE_OTM_CONFIDENCE", _DEFAULTS["OTM_CONFIDENCE"])
+
+    # Pass 1: tiers deepest-first (deepest = cheapest). Skip ones below the floor
+    # (too deep), stop once above the cap (shallower only gets more expensive), and
+    # take the deepest strike that lands inside the [min, max] band and passes gates.
     for tier in _build_otm_tiers():
         strike_candidate = _otm_strike(tier.n)
         ltp = _ltp(strike_candidate)
         if ltp is None:
             continue
+        if min_premium > 0 and ltp < min_premium:
+            continue  # too cheap/deep — shallower (more expensive) may enter the band
         if max_premium > 0 and ltp > max_premium:
             break  # shallower = more expensive — no point continuing pass 1
-        if not _tier_passes(tier, confidence, iv_pct, regime, snap, direction, strike_candidate):
+        if band_mode:
+            if confidence < base_conf_min:
+                continue
+        elif not _tier_passes(tier, confidence, iv_pct, regime, snap, direction, strike_candidate):
             continue
         return StrikeSelection(
             strike=strike_candidate,
