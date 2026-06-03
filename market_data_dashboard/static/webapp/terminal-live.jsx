@@ -2754,6 +2754,25 @@ function MobileReplayShell({
                   border:'1px solid var(--line-2)',background:'transparent',color:'var(--fg-3)',
                   cursor:'pointer',fontSize:12,lineHeight:1,display:'grid',placeItems:'center'}}>⟳</button>
             )}
+            {/* Paper/Live book toggle (sim dual-book): PAPER = every trade (analysis);
+                LIVE = GOOD-only independent slot, never blocked by a paper hold. */}
+            {replayKind === 'sim' && onBookChange && (
+              <div style={{display:'inline-flex',flexShrink:0,borderRadius:'var(--r-2)',overflow:'hidden',border:'1px solid var(--line-2)'}}
+                title="PAPER = every trade · LIVE = GOOD-only independent slot (never blocked by paper)">
+                {['paper','live'].map(b => {
+                  const on = (replayBook||'paper') === b;
+                  return (
+                    <button key={b} onClick={() => onBookChange(b)}
+                      style={{border:0,cursor:'pointer',fontFamily:'var(--f-mono)',fontSize:9.5,
+                        letterSpacing:'0.04em',padding:'0 9px',height:24,textTransform:'uppercase',
+                        background: on ? (b==='live'?'var(--pos)':'var(--accent)') : 'transparent',
+                        color: on ? (b==='live'?'#06210f':'#1a1100') : 'var(--fg-3)'}}>
+                      {b}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
           <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
             <div className="m-orb" title={`ws: ${wsStatus}`}>
@@ -3077,17 +3096,6 @@ function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, u
         {replayRunId && (
           <span style={{fontFamily:'var(--f-mono)',fontSize:'9px',color:'var(--fg-3)',flexShrink:0}}
             title={replayRunId}>run {replayRunId.slice(0, 8)}…</span>
-        )}
-        {replayKind === 'sim' && onBookChange && (
-          <div style={{display:'flex',gap:2,flexShrink:0,marginLeft:4}} title="Paper = every trade; Live = GOOD-only independent slot (never blocked by paper)">
-            {['paper','live'].map(b => (
-              <button key={b} className="t-btn sm ghost"
-                style={(replayBook||'paper')===b
-                  ? {background: b==='live'?'var(--pos)':'var(--bg-4)', color: b==='live'?'#06210f':'var(--fg-1)', borderColor:'var(--line-3)', textTransform:'uppercase'}
-                  : {textTransform:'uppercase'}}
-                onClick={() => onBookChange(b)}>{b}</button>
-            ))}
-          </div>
         )}
       </div>
       <div className="t-status-cells" style={{flexShrink:0}}>
