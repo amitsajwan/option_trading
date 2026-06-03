@@ -424,7 +424,7 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
                 old_env[k] = os.environ.get(k)
                 os.environ[k] = v
             try:
-                trades, exit_stack_name, decision_traces = _run_engine(snaps, trade_date, job_id)
+                trades, exit_stack_name, decision_traces, live_trades = _run_engine(snaps, trade_date, job_id)
             finally:
                 for k, old in old_env.items():
                     if old is None:
@@ -448,7 +448,7 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
         # engine-internal "sim-{job_id}" which has NO mongo data; overwrite it
         # here so any UI consumer of job.run_id points at the persisted run.
         try:
-            replay_url = _persist_sim_to_mongo(job_id, trade_date, snaps, trades, decision_traces)
+            replay_url = _persist_sim_to_mongo(job_id, trade_date, snaps, trades, decision_traces, live_trades)
             with _jobs_lock:
                 _jobs[job_id]["replay_url"] = replay_url
                 _jobs[job_id]["run_id"] = f"ops-sim-{job_id}"
@@ -472,6 +472,7 @@ def _persist_sim_to_mongo(
     snaps: list[dict],
     trades: list[dict],
     decision_traces: Optional[list[dict]] = None,
+    live_trades: Optional[list[dict]] = None,
 ) -> str:
     """Write snapshots + position events to sim Mongo collections, create eval-run entry.
 
@@ -557,8 +558,17 @@ def _persist_sim_to_mongo(
             return datetime.now(tz=_IST)
 
     pos_docs = []
-    for i, t in enumerate(trades):
-        pid = f"{run_id}-pos-{i}"
+    # Tag each book so the UI can distinguish the analysis tape (paper, takes
+    # everything) from the independent LIVE slot (only GOOD, never blocked by paper).
+    _books: list[tuple[str, list[dict]]] = [("paper", list(trades))]
+    if live_trades:
+        _books.append(("live", list(live_trades)))
+    _trade_rows: list[tuple[str, int, dict]] = []
+    for _book, _list in _books:
+        for _i, _t in enumerate(_list):
+            _trade_rows.append((_book, _i, _t))
+    for _book, i, t in _trade_rows:
+        pid = f"{run_id}-{_book}-pos-{i}" if _book == "live" else f"{run_id}-pos-{i}"
         open_ts = _hhmm_to_dt(str(t.get("time_in", "09:15")))
         close_ts = _hhmm_to_dt(str(t.get("time_out", "15:25")))
         common = {"direction": t.get("direction", ""), "strike": t.get("strike")}
@@ -584,6 +594,7 @@ def _persist_sim_to_mongo(
                 "live_would_take":    bool(t.get("live_would_take") or False),
                 "entry_dir_margin":   t.get("entry_dir_margin"),
                 "entry_grade_reasons": list(t.get("entry_grade_reasons") or []),
+                "book":               _book,
                 **common,
             }},
         })
@@ -602,6 +613,7 @@ def _persist_sim_to_mongo(
                     "mfe_pct":       float(t.get("mfe_pct") or 0),
                     "mae_pct":       float(t.get("mae_pct") or 0),
                     "exit_reason":   str(t.get("exit") or ""),
+                    "book":          _book,
                     **common,
                 }
             },
@@ -699,13 +711,34 @@ def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[d
         with _jobs_lock:
             _jobs[job_id]["progress"] = i
 
+    # ── PAPER book: takes every qualifying trade (the analysis tape) ──────────
     result = replay_day(snaps, trade_date, progress_cb=_progress)
+
+    # ── LIVE book: independent slot, only opens live-eligible (GOOD) entries, so
+    # a low-grade paper trade never blocks a later GOOD trade. Runs the SAME engine
+    # with ENTRY_LIVE_ONLY_GATE=1 over the same snapshots. Its trades are what the
+    # live book would actually have taken — answering "if a GOOD trade appears at t2
+    # while a paper trade is still open, is it taken?" (yes, in this book).
+    live_trades: list[dict] = []
+    _prev_gate = os.environ.get("ENTRY_LIVE_ONLY_GATE")
+    try:
+        os.environ["ENTRY_LIVE_ONLY_GATE"] = "1"
+        live_result = replay_day(snaps, trade_date)
+        live_trades = list(live_result.get("trades") or [])
+    except Exception:
+        logger.exception("ops sim: live-book replay failed (non-fatal)")
+    finally:
+        if _prev_gate is None:
+            os.environ.pop("ENTRY_LIVE_ONLY_GATE", None)
+        else:
+            os.environ["ENTRY_LIVE_ONLY_GATE"] = _prev_gate
 
     with _jobs_lock:
         _jobs[job_id]["progress"] = len(snaps)
         _jobs[job_id]["diag"] = result["diag"]
+        _jobs[job_id]["live_trade_count"] = len(live_trades)
 
-    return result["trades"], result["exit_stack_name"], result.get("decision_traces", [])
+    return result["trades"], result["exit_stack_name"], result.get("decision_traces", []), live_trades
 
 
 # ── Router ─────────────────────────────────────────────────────────────────────

@@ -134,6 +134,10 @@ class DeterministicRuleEngine(StrategyEngine):
         self._tracker = PositionTracker()
         self._risk = RiskManager()
         self._log = signal_logger or SignalLogger()
+        # Live-only entry gate: when set, this engine only opens live-eligible
+        # (GOOD) entries — used to run a parallel LIVE book whose single slot is
+        # never blocked by low-grade paper trades. Default off (= take everything).
+        self._entry_live_only_gate = as_bool(os.getenv("ENTRY_LIVE_ONLY_GATE", "false"))
         self._min_confidence = float(min_confidence)
         if default_risk_config is not None:
             self._default_risk_config = default_risk_config
@@ -1289,6 +1293,22 @@ class DeterministicRuleEngine(StrategyEngine):
         direction = best_vote.direction
         if direction not in (Direction.CE, Direction.PE):
             return None
+
+        # Live-only entry gate (single chokepoint for ALL entry paths): when this
+        # engine instance is the LIVE book (ENTRY_LIVE_ONLY_GATE=1), only spend its
+        # one slot on live-eligible (GOOD) entries, so a low-grade trade never
+        # occupies the slot and blocks a later GOOD trade. Ensure the vote is graded
+        # first (consensus path grades earlier; direct paths may not have). The
+        # PAPER book runs the same engine with the gate OFF and takes everything.
+        if self._entry_live_only_gate:
+            raw = best_vote.raw_signals if isinstance(best_vote.raw_signals, dict) else {}
+            if "live_would_take" not in raw:
+                self._grade_and_tier_vote(best_vote, snap, regime_signal.regime.value, risk)
+                raw = best_vote.raw_signals if isinstance(best_vote.raw_signals, dict) else {}
+            if not bool(raw.get("live_would_take")):
+                logger.debug("live-gate skip: grade=%s tier=%s",
+                             raw.get("entry_grade"), raw.get("tier"))
+                return None
 
         # Strike layer veto is authoritative — no affordable/priced strike = no trade.
         if best_vote.raw_signals.get("_strike_vetoed"):
