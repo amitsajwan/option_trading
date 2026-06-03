@@ -55,8 +55,12 @@ OPS_SIM_CONFIG = {
     "EXIT_TRAILING_TRAIL_PCT": "0.005",
     "STRATEGY_STRIKE_SELECTION_POLICY": "smart_strike",
     "STRATEGY_SMART_STRIKE_ENABLED": "1",
+    # Soft cap on purpose: --ops reproduces the *original firing* OPS sim (ATM
+    # fallback, ~15 trades) so v1-vs-v2 parity can be checked on real trades.
+    # The hard-cap behaviour is verified separately (it correctly vetoes those
+    # over-budget ATM trades — see ENTRY_PIPELINE_V1_V2_ANALYSIS.md).
     "SMART_STRIKE_MAX_PREMIUM": "500",
-    "SMART_STRIKE_HARD_PREMIUM_CAP": "1",
+    "SMART_STRIKE_HARD_PREMIUM_CAP": "0",
     "STRATEGY_STRIKE_MAX_OTM_STEPS": "8",
     "SMART_STRIKE_OTM_CONFIDENCE": "0.55",
     "SMART_STRIKE_OTM2_ENABLED": "1", "SMART_STRIKE_OTM2_CONFIDENCE": "0.65",

@@ -1,7 +1,23 @@
 # Entry Pipeline v1 vs v2 — Divergence Analysis
 
-**Status:** In progress. Verified facts + honest gaps below. Gate-level detail pending
-trace capture (§6), which is also the Terminal feature (§7).
+**Status:** RESOLVED to root cause. The decision-trace capture (now built) attributed
+every divergent bar to a specific gate. Two distinct v2 parity bugs found. v2 stays
+flag-OFF until both are fixed and re-verified.
+
+## TL;DR — two confirmed v2 bugs (trace-backed)
+
+1. **`DirectionGate` over-vetoes on non-consensus profiles.** It applies the
+   consensus-bypass threshold (`CONSENSUS_BYPASS_MIN_CONFIDENCE=0.80`) as a *universal*
+   veto. v1 only applies that on the consensus-bypass path; non-consensus profiles
+   (e.g. `trader_master_live_v1`) enter at ML confidence 0.65–0.80. → On **05-26** v2
+   vetoed 7 real trades v1 took (`ml_confidence_below_bypass`, conf 0.65–0.80 < 0.80).
+   **v2 too strict.**
+2. **v2 does not replicate v1's stateful risk guards** (consecutive-loss halt /
+   re-entry cooldown / session-cap timing). → On **06-02** v2 entered **3 more** trades
+   than v1, all *after* the consecutive-loss limit fired. **v2 too loose.**
+
+Both are real, opposite-direction divergences. The gate cascade is sound; the bugs are
+(1) a mis-scoped threshold in one gate and (2) missing risk-state gates.
 
 ---
 
@@ -16,11 +32,15 @@ live `strategy_app` container so models + libs match live.
 
 | Date | Config | v1 | v2 | Verdict |
 |---|---|---|---|---|
-| 2026-05-26 | live profile (`trader_master_live_v1`, min_conf 0.80) | **7 trades, −31.41%** | **1 trade, −12.14%** | **DIVERGE** |
-| 2026-05-27 | live profile | 0 | 0 | match (no signal) |
-| 2026-06-01 | live profile | 0 | 0 | match (no signal) |
-| 2026-06-02 | live profile | 0 | 0 | match (no signal) |
-| 2026-06-02 | partial OPS overrides (8 vars) | 0 | 0 | **INVALID** — config did not reproduce the 15-trade OPS sim |
+| 2026-05-26 | live profile (`trader_master_live_v1`) | **7 trades, −31.41%** | **1 trade, −12.14%** | **DIVERGE** (bug 1) |
+| 2026-06-02 | OPS consensus profile, **soft cap** (firing) | **9 trades, −3.56%** | **12 trades, −3.61%** | **DIVERGE** (bug 2) |
+| 2026-06-02 | OPS consensus profile, **hard cap ₹500** | 0 | 0 | match (both correctly veto over-budget ATM at StrikeDepth) |
+| 2026-05-27 / 06-01 | live profile | 0 | 0 | match (no signal) |
+
+> Verification rigor note: an early "06-02 MATCH" was a **false positive** — a stray
+> `docker compose run` pulled the stale GHCR image (no v2 code), so both runs were
+> really v1. Caught via `v2 bars_traced=0`. All results above use `--pull never` on a
+> locally-built image verified to contain the trace code (`bars_traced > 0`).
 
 ### 2.1 The 05-26 divergence (the only day that fired)
 
@@ -40,32 +60,56 @@ Two observations:
   **CE 55900 @ 10:36** — opposite direction, ~same time.
 - **v1 re-enters 5× on PE 55200 (13:01–13:23); v2 does not re-enter at all.**
 
-## 3. The key diagnostic clue
+## 3. Root cause — confirmed by the decision trace
 
-On the 6 bars v1 traded but v2 didn't, **v2 logged no `entry_gate` veto/skip lines.**
-If a gate had rejected those bars, we'd see them (every non-PASS is logged with a
-`decision_id`). Their absence means those bars **never reached the gate cascade in v2** —
-the divergence is **upstream of the gates**: vote pool, position-held short-circuit, or
-re-entry/cooldown state.
+### Bug 1 — DirectionGate over-vetoes on non-consensus profiles (05-26)
 
-> Therefore the headline is NOT "a gate is too strict." It is "v2 evaluates *fewer bars*
-> than v1," most likely because of a different open decision (10:34 PE vs 10:36 CE) that
-> cascades into different position/exit/re-entry timing for the rest of the day.
+The trace for all 7 v1-only bars is identical in shape:
 
-## 4. Root-cause hypotheses (ranked, to be confirmed by §6 trace)
+```
+v2@10:34: Direction=VETO(ml_confidence_below_bypass  ml_confidence=0.796  bypass_min=0.8)
+v2@12:03: Direction=VETO(ml_confidence_below_bypass  ml_confidence=0.672  bypass_min=0.8)
+v2@13:01: Direction=VETO(ml_confidence_below_bypass  ml_confidence=0.664  bypass_min=0.8)
+... (13:06=0.652, 13:11=0.698, 13:17=0.761, 13:23=0.670)
+```
 
-1. **Different first trade → different day.** v2 picks CE@10:36, v1 picks PE@10:34. Once
-   the opening trade differs, every subsequent position-held window, exit, and re-entry
-   opportunity differs. A single different pick at the open can fully explain 1 vs 7.
-   *Most likely.*
-2. **Candidate ranking / VETO-vs-SKIP semantics.** v2 runs one ranked candidate per bar
-   and a `VETO` kills the whole bar (vs `SKIP` → next candidate). If `DirectionGate`
-   returns `VETO` where v1's consensus would have tried another candidate, v2 enters
-   fewer bars. (Note: DirectionGate currently returns VETO, not SKIP — see §5.)
-3. **Direction source mismatch.** v1 consensus vs v2 `DirectionGate` may resolve CE/PE
-   differently at 10:34–10:36, producing the opposite opening side.
+`DirectionGate.apply` ([entry_pipeline_gates.py](../strategy_app/engines/entry_pipeline_gates.py#L168))
+unconditionally does:
 
-## 5. What's wrong / what should have been done
+```python
+if ml_vote.confidence < cfg.bypass_min_confidence:   # 0.80
+    return GateResult.veto("ml_confidence_below_bypass", ...)
+```
+
+But `CONSENSUS_BYPASS_MIN_CONFIDENCE` is the gate for v1's **consensus-bypass path only**
+(`_process_entry_consensus`, used for `_PROFILES_ML_ENTRY_CONSENSUS`). The live profile
+`trader_master_live_v1` is **not** a consensus profile — in v1 it takes the
+scored/sequential path, gated by `min_confidence` (≈0.50), so it legitimately enters at
+ML confidence 0.65–0.80. v2 applies the 0.80 bypass gate to *every* profile → vetoes
+those 7 trades. **The opening 10:36 CE that v2 did take just happened to clear 0.80;
+everything after didn't.**
+
+### Bug 2 — v2 ignores v1's stateful risk guards (06-02, consensus profile)
+
+`v2 bar outcomes: Direction=18, entered=12` and the 3 v2-only trades all land at
+13:07–13:25, **after** both runs logged `consecutive loss limit reached count=3`. v1's
+consensus path stops trading once the consecutive-loss halt trips and during re-entry
+cooldowns; v2's cascade has **no gate for consecutive-loss halt / re-entry cooldown /
+session-trade-cap timing**, so it keeps entering. v2 enters 12 vs v1's 9.
+
+## 4. The fixes
+
+1. **DirectionGate:** only enforce the consensus-bypass threshold when the active profile
+   is a consensus profile (mirror v1's `_PROFILES_ML_ENTRY_CONSENSUS` dispatch). For
+   non-consensus profiles, resolve direction from the candidate vote and let
+   `ConfidenceGate` apply `min_confidence` — do not veto on `bypass_min`.
+2. **Add a `RiskStateGate`** (or fold into `HardGatesGate`) that replicates v1's
+   consecutive-loss halt, re-entry cooldown, and session-trade-cap checks, so v2 stops
+   trading exactly where v1 does.
+3. Re-run the golden master on 05-26 (live) + 06-02 (consensus, soft cap) until both
+   are MATCH, then widen to more days before any cutover.
+
+## 5. What should have been done (process)
 
 - **Golden master should have run *during* the refactor, not after.** The §6 design
   mandated v1≡v2 parity before cutover; the implementation landed without it, so the
