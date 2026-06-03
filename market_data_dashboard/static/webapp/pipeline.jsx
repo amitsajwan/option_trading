@@ -809,10 +809,16 @@ function PipelineMonitor() {
 
     connect();
 
-    // Polling fallback — runs in parallel for initial load and when WS drops
+    // Polling — initial load + WS-drop fallback. When no run_id, read LIVE traces
+    // by date (defaults to today) from strategy_decision_traces so the Pipeline
+    // view shows the live/replay session, not the stale pipeline_decision_events.
+    const _today = () => { try { return new Date().toISOString().slice(0,10); } catch(_) { return ''; } };
     const poll = () => {
-      const qs = runId ? `?limit=50&run_id=${encodeURIComponent(runId)}` : '?limit=50';
-      fetch(`/api/pipeline/latest${qs}`)
+      const parts = ['limit=80'];
+      if (runId) parts.push(`run_id=${encodeURIComponent(runId)}`);
+      const _date = runDate || (runId ? '' : _today());
+      if (_date) parts.push(`date=${encodeURIComponent(_date)}`);
+      fetch(`/api/pipeline/latest?${parts.join('&')}`)
         .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
         .then(d => { if (alive) { setTraces(d.traces || []); setError(null); } })
         .catch(e => { if (alive) setError(e.message); });
@@ -826,7 +832,7 @@ function PipelineMonitor() {
       clearInterval(pollRef.current);
       if (wsRef.current) wsRef.current.close();
     };
-  }, [runId]); // restart poll + WS when run switches
+  }, [runId, runDate]); // restart poll + WS when run/date switches
 
   // Stream health — compact bar, used across tabs
   useEffect(() => {

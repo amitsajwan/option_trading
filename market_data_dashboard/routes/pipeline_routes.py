@@ -32,8 +32,12 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-_COLLECTION     = "pipeline_decision_events"
-_SIM_COLLECTION = "strategy_decision_traces_sim"
+_COLLECTION      = "pipeline_decision_events"
+_SIM_COLLECTION  = "strategy_decision_traces_sim"
+# Live + replay decision traces (one doc per evaluated bar, same nested
+# payload.trace schema as the sim collection). This is where real trading
+# writes — 298k+ docs vs the sparse pipeline_decision_events.
+_LIVE_COLLECTION = "strategy_decision_traces"
 _STAGE_ORDER    = ["regime", "entry", "direction", "depth", "strike", "risk", "execution"]
 
 # Maps primary_blocker_gate prefixes → which stage blocked
@@ -106,6 +110,20 @@ def _get_sim_collection():
         return _db_cache["sim_coll"]
     except Exception as exc:
         logger.warning("pipeline_routes: sim collection unavailable: %s", exc)
+        return None
+
+
+def _get_live_collection():
+    if "live_coll" in _db_cache:
+        return _db_cache["live_coll"]
+    try:
+        coll = _get_collection()
+        if coll is None:
+            return None
+        _db_cache["live_coll"] = coll.database[_LIVE_COLLECTION]
+        return _db_cache["live_coll"]
+    except Exception as exc:
+        logger.warning("pipeline_routes: live collection unavailable: %s", exc)
         return None
 
 
@@ -447,8 +465,39 @@ class PipelineRouter:
     # ── GET /api/pipeline/latest ───────────────────────────────────────────
 
     async def get_latest(self, limit: int = Query(default=50, ge=1, le=200),
-                         run_id: Optional[str] = Query(default=None)):
-        """Return the last `limit` trace summaries, one row per trace_id."""
+                         run_id: Optional[str] = Query(default=None),
+                         date: Optional[str] = Query(default=None)):
+        """Return the last `limit` trace summaries, one row per trace_id.
+
+        `date=YYYY-MM-DD` (and/or no run_id) → read LIVE/replay traces from
+        strategy_decision_traces (the collection real trading writes to). This is
+        what lights up the Pipeline view for live + historical sessions.
+        """
+        # Live/replay by date → strategy_decision_traces (per-bar, same schema as sim)
+        if date or (run_id and run_id.startswith("paper-")) or (run_id and run_id.startswith("capped")):
+            live_coll = _get_live_collection()
+            if live_coll is not None:
+                try:
+                    q: dict = {}
+                    if date:
+                        q["trade_date_ist"] = date
+                    if run_id:
+                        q["run_id"] = run_id
+                    raw = list(live_coll.find(
+                        q,
+                        {"_id": 0, "trace_id": 1, "run_id": 1, "final_outcome": 1,
+                         "primary_blocker_gate": 1, "engine_mode": 1, "timestamp": 1,
+                         "market_time_ist": 1, "selected_direction": 1, "summary_metrics": 1,
+                         "snapshot_id": 1},
+                        sort=[("timestamp", DESCENDING)],
+                        limit=limit,
+                    ))
+                    if raw:
+                        traces = [_adapt_sim_trace(doc) for doc in raw]
+                        return _sanitize({"traces": traces, "total": len(traces), "source": "live"})
+                except Exception as exc:
+                    logger.warning("live trace query failed, falling through: %s", exc)
+
         # Sim run_id → query the sim summary collection (different schema)
         if run_id:
             sim_coll = _get_sim_collection()
@@ -519,6 +568,16 @@ class PipelineRouter:
             raise HTTPException(status_code=500, detail=str(exc))
 
         if not raw:
+            # Primary source for live/replay: strategy_decision_traces (per-bar,
+            # nested payload.trace — same shape the sim detail adapter handles).
+            live_coll = _get_live_collection()
+            if live_coll is not None:
+                try:
+                    live_doc = live_coll.find_one({"trace_id": trace_id}, {"_id": 0})
+                    if live_doc:
+                        return _sanitize(_adapt_sim_trace_detail(live_doc))
+                except Exception as exc:
+                    logger.warning("live trace lookup failed: %s", exc)
             # Fall back to sim summary collection
             sim_coll = _get_sim_collection()
             if sim_coll is not None:
