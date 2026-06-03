@@ -60,6 +60,11 @@ _SAFE_OVERRIDE_KEYS = {
     "LOTTERY_THESIS_FAIL_BARS",
     "LOTTERY_MOMENTUM_FLIP",
     "LOTTERY_TIMESTOP_BARS",
+    # E9 entry quality + live/paper tiering
+    "RISK_LIVE_MIN_GRADE",
+    "ENTRY_QUALITY_GOOD_AT",
+    "ENTRY_QUALITY_IV_SKEW_PE_BAND",
+    "ENTRY_TIERING_ENABLED",
 }
 
 # Live-job registry — keyed by job_id
@@ -376,6 +381,8 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
             # v2 gate-cascade pipeline — off by default, togglable from OPS panel
             "STRATEGY_ENTRY_PIPELINE_V2":      _live("STRATEGY_ENTRY_PIPELINE_V2", "0"),
             "SMART_STRIKE_MIN_PREMIUM":        _live("SMART_STRIKE_MIN_PREMIUM", "0"),
+            # E9 live/paper tiering — grade floor for live eligibility (GOOD|OK)
+            "RISK_LIVE_MIN_GRADE":             _live("RISK_LIVE_MIN_GRADE", "GOOD"),
             "STRATEGY_RUN_DIR":                f"/tmp/sim_{job_id}",
             "REDIS_HOST":                      os.getenv("REDIS_HOST", "localhost"),
             "DEPTH_FEED_ENABLED":              "0",
