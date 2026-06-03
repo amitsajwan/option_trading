@@ -1037,7 +1037,8 @@ function gateLabel(id) {
   return GATE_LABELS[id] || String(id || '?').replace(/_/g, ' ');
 }
 
-function DecisionChain({ orderedGates, flowGates, regimeEvidence, proposedDir }) {
+function DecisionChain({ orderedGates, flowGates, regimeEvidence, proposedDir,
+                         fallbackReason, fallbackRegime, fallbackEntryProb }) {
   const [openIdx, setOpenIdx] = React.useState(null);
 
   // Prefer the selected candidate's full ordered_gates; fall back to flow_gates.
@@ -1176,9 +1177,29 @@ function DecisionChain({ orderedGates, flowGates, regimeEvidence, proposedDir })
         </div>
       )}
 
-      {!hasGates && (bull == null && bear == null) && (
-        <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-4)', marginTop:2}}>
-          No decision trace linked for this trade.
+      {/* Fallback when no full gate trace is linked (e.g. older replay/sim runs):
+          show what we DO know from the trade's own reason + regime, instead of a
+          bare "no trace" that makes a real trade look broken. */}
+      {!hasGates && (
+        <div style={{marginTop: (bull != null || bear != null) ? 8 : 0}}>
+          {fallbackRegime && (
+            <div style={{fontFamily:'var(--f-mono)', fontSize:9.5, marginBottom:3}}>
+              <span style={{color:'var(--fg-4)'}}>regime </span>
+              <span style={{color:'var(--fg-2)'}}>{fallbackRegime}</span>
+              {dir && <><span style={{color:'var(--fg-4)'}}> · dir </span><span style={{color:dir==='CE'?'var(--pos)':'var(--neg)'}}>{dir}</span></>}
+              {fallbackEntryProb != null && <><span style={{color:'var(--fg-4)'}}> · entry_prob </span><span style={{color: fallbackEntryProb>=0.65?'var(--pos)':'var(--warn)'}}>{Number(fallbackEntryProb).toFixed(2)}</span></>}
+            </div>
+          )}
+          {fallbackReason && (
+            <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-3)', wordBreak:'break-all', lineHeight:1.4}}>
+              {fallbackReason}
+            </div>
+          )}
+          {!fallbackRegime && !fallbackReason && (
+            <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-4)'}}>
+              No decision trace linked (older run — re-run with v2 tracing for the full gate chain).
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1213,18 +1234,30 @@ function TradeInspector({ session, trade }) {
 
   // Use only stored signal metrics and replay-linked trade context.
   const sm = trade.signal?.metrics || {};
-  const entryProb = _num(traceSummary.entry_prob ?? selectedVoteRaw.entry_prob ?? sm.entry_prob);
-  // trade_prob is a placeholder (0.5) for deterministic/bypass mode — hide the gate to avoid
-  // showing a false FAIL when the engine never evaluated an ML trade gate.
+  // Exactly-0.5 ML metrics are model-output PLACEHOLDERS (the engine never produced
+  // a real prob, e.g. consensus/bypass mode). Showing them as red "✗ fail" gates on a
+  // trade that actually fired (and often won) is wrong — drop them. A prob of exactly
+  // 0.5000 is effectively never a real ML output, so this filter is safe.
+  const _isPlaceholder = (v) => v == null || !Number.isFinite(Number(v)) || Math.abs(Number(v) - 0.5) < 1e-6;
+  const _real = (v) => (_isPlaceholder(v) ? null : _num(v));
+
+  // Try the real entry prob from the reason string ("prob=0.951>=0.65") before falling
+  // back to metrics — that's the value the engine actually gated on.
+  const _reasonStr = String(trade.signal?.reason || trade.entryReason || trade.entryDetail || '');
+  const _probFromReason = (() => {
+    const m = _reasonStr.match(/prob[=:\s]+([0-9.]+)/i);
+    return m ? _num(m[1]) : null;
+  })();
+
   const _policyMode = String(selectedVoteRaw._entry_policy_mode || '').trim();
-  const tradeProb = _policyMode === 'bypass' ? null : _num(sm.trade_prob);
-  // In bypass/deterministic mode, recipe_prob and up_prob come only from ML metrics defaults (0.5).
-  // Only show them when a real trace value exists — otherwise they're meaningless placeholders.
-  const recipeProb   = _num(traceSummary.recipe_prob   ?? (_policyMode === 'bypass' ? null : sm.recipe_prob));
-  const recipeMargin = _num(traceSummary.recipe_margin ?? (_policyMode === 'bypass' ? null : sm.recipe_margin));
-  const upProb       = _num(traceSummary.direction_up_prob ?? (_policyMode === 'bypass' ? null : sm.up_prob));
+  const entryProb = _probFromReason
+    ?? _real(traceSummary.entry_prob) ?? _real(selectedVoteRaw.entry_prob) ?? _real(sm.entry_prob);
+  const tradeProb = _policyMode === 'bypass' ? null : _real(sm.trade_prob);
+  const recipeProb   = _real(traceSummary.recipe_prob)   ?? (_policyMode === 'bypass' ? null : _real(sm.recipe_prob));
+  const recipeMargin = _real(traceSummary.recipe_margin) ?? (_policyMode === 'bypass' ? null : _real(sm.recipe_margin));
+  const upProb       = _real(traceSummary.direction_up_prob) ?? (_policyMode === 'bypass' ? null : _real(sm.up_prob));
   const probs = [
-    { v: entryProb,    gate: 0.60, label: 'Entry gate',    kind: 'gate' },
+    { v: entryProb,    gate: 0.65, label: 'Entry gate',    kind: 'gate' },
     { v: tradeProb,    gate: 0.55, label: 'Trade gate',    kind: 'gate' },
     { v: recipeProb,               label: 'Recipe prob',   kind: 'neutral' },
     { v: recipeMargin,             label: 'Recipe margin', kind: 'neutral' },
@@ -1234,11 +1267,13 @@ function TradeInspector({ session, trade }) {
   // Direction decision — which leg was chosen and why
   // direction_consensus values are SCORES (summed signal weights, can exceed 1.0), not probabilities.
   // Normalize when total > 1 so the bars display as 0-100% instead of 0-393%.
-  const _rawCeScore = _num(selectedVoteRaw.direction_consensus_ce ?? sm.ce_prob);
-  const _rawPeScore = _num(selectedVoteRaw.direction_consensus_pe ?? sm.pe_prob);
+  // Prefer real consensus scores; ignore the 0.5/0.5 ml-default placeholder pair.
+  let _rawCeScore = _num(selectedVoteRaw.direction_consensus_ce ?? sm.ce_prob);
+  let _rawPeScore = _num(selectedVoteRaw.direction_consensus_pe ?? sm.pe_prob);
+  if (_isPlaceholder(_rawCeScore) && _isPlaceholder(_rawPeScore)) { _rawCeScore = null; _rawPeScore = null; }
   const _dirTotal = (_rawCeScore || 0) + (_rawPeScore || 0);
-  const ceProb = _dirTotal > 1 ? (_rawCeScore || 0) / _dirTotal : _rawCeScore;
-  const peProb = _dirTotal > 1 ? (_rawPeScore || 0) / _dirTotal : _rawPeScore;
+  const ceProb = _rawCeScore == null ? null : (_dirTotal > 1 ? (_rawCeScore || 0) / _dirTotal : _rawCeScore);
+  const peProb = _rawPeScore == null ? null : (_dirTotal > 1 ? (_rawPeScore || 0) / _dirTotal : _rawPeScore);
   const consensusMargin = _num(selectedVoteRaw.direction_consensus_margin);
   const chosenLeg = trade.optionType || trade.legDir || (trade.dir === 'SHORT' ? 'PE' : 'CE');
   const dirBasis = trade.signal?.reason || trade.entryReason || '';
@@ -1324,6 +1359,9 @@ function TradeInspector({ session, trade }) {
           flowGates={ctx.flowGates}
           regimeEvidence={(ctx.regimeContext && ctx.regimeContext.evidence) || {}}
           proposedDir={chosenLeg}
+          fallbackReason={_reasonStr}
+          fallbackRegime={trade.regime || (ctx.regimeContext && ctx.regimeContext.regime)}
+          fallbackEntryProb={entryProb}
         />
 
         {/* ML probabilities (collapsed) */}
