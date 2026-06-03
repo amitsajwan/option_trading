@@ -563,9 +563,11 @@ def _persist_sim_to_mongo(
             "trade_date_ist": trade_date,
             "run_id": run_id,
             "payload": {"position": {
-                "entry_premium":  float(t.get("prem_in") or 0),
-                "entry_strategy": str(t.get("strategy_name") or ""),
-                "reason":         str(t.get("entry_reason") or ""),
+                "entry_premium":      float(t.get("prem_in") or 0),
+                "entry_strategy":     str(t.get("strategy_name") or ""),
+                "entry_strategy_name":str(t.get("strategy_name") or ""),
+                "strategy":           str(t.get("strategy_name") or ""),
+                "reason":             str(t.get("entry_reason") or ""),
                 **common,
             }},
         })

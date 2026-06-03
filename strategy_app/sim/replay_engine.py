@@ -173,7 +173,7 @@ def replay_day(
                 "strike":        signal.strike,
                 "prem_in":       float(signal.entry_premium or 0),
                 "lots":          signal.max_lots,
-                "strategy_name": str(getattr(signal, "strategy_name", "") or ""),
+                "strategy_name": str(getattr(signal, "entry_strategy_name", "") or ""),
                 "entry_reason":  str(getattr(signal, "reason", "") or ""),
             }
 
