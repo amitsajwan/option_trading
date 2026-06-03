@@ -769,6 +769,52 @@ class DeterministicRuleEngine(StrategyEngine):
                         self._last_zero_mfe_direction, _bars_since_zero, _zero_mfe_cool,
                     )
                     return None
+        # 5. Direction-evidence agreement gate.
+        #    The regime tagger computes bull_score/bear_score from returns, volume,
+        #    OI, PCR and ORB — rich market evidence that is ALREADY COMPUTED but was
+        #    never used to gate the direction of a proposed trade.
+        #
+        #    The gate asks: "does the current market evidence support the direction
+        #    we're about to trade?" If bear_score=0 and bull_score=0.8, entering PE
+        #    is trading against the observable evidence regardless of what the ML
+        #    timing model says.
+        #
+        #    Block when:
+        #      PE entry: bull_score > OPPOSING_MAX  AND  bear_score < SUPPORT_MIN
+        #      CE entry: bear_score > OPPOSING_MAX  AND  bull_score < SUPPORT_MIN
+        #
+        #    Defaults are conservative — only veto when evidence is clearly wrong.
+        _ev_support_min  = float(os.getenv("DIRECTION_EVIDENCE_SUPPORT_MIN", "0.2"))
+        _ev_opposing_max = float(os.getenv("DIRECTION_EVIDENCE_OPPOSING_MAX", "0.6"))
+        _evidence = getattr(regime_signal, "evidence", None) or {}
+        _bull = float(_evidence.get("bull_score", -1))
+        _bear = float(_evidence.get("bear_score", -1))
+        if _bull >= 0 and _bear >= 0:
+            _entry_dirs = {
+                str(v.direction.value if hasattr(v.direction, "value") else v.direction or "").upper()
+                for v in votes
+                if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
+            }
+            if "PE" in _entry_dirs and _bull > _ev_opposing_max and _bear < _ev_support_min:
+                logger.info(
+                    "entry blocked: direction_evidence_mismatch dir=PE "
+                    "bull_score=%.2f > opposing_max=%.2f bear_score=%.2f < support_min=%.2f "
+                    "regime=%s evidence=%s",
+                    _bull, _ev_opposing_max, _bear, _ev_support_min,
+                    regime_signal.regime.value if hasattr(regime_signal.regime, "value") else regime_signal.regime,
+                    {k: v for k, v in _evidence.items() if k in ("bull_score","bear_score","r5m","r15m","orl_broken","orh_broken")},
+                )
+                return None
+            if "CE" in _entry_dirs and _bear > _ev_opposing_max and _bull < _ev_support_min:
+                logger.info(
+                    "entry blocked: direction_evidence_mismatch dir=CE "
+                    "bear_score=%.2f > opposing_max=%.2f bull_score=%.2f < support_min=%.2f "
+                    "regime=%s evidence=%s",
+                    _bear, _ev_opposing_max, _bull, _ev_support_min,
+                    regime_signal.regime.value if hasattr(regime_signal.regime, "value") else regime_signal.regime,
+                    {k: v for k, v in _evidence.items() if k in ("bull_score","bear_score","r5m","r15m","orl_broken","orh_broken")},
+                )
+                return None
         # ── End discipline gates ──────────────────────────────────────────────
 
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
