@@ -34,18 +34,20 @@ from typing import Callable, List, Optional, Tuple, TypedDict
 # ── Typed result ──────────────────────────────────────────────────────────────
 
 class TradeRecord(TypedDict):
-    time_in:   str
-    time_out:  str
-    direction: str
-    strike:    Optional[int]
-    prem_in:   float
-    prem_out:  float
-    pnl_pct:   float
-    mfe_pct:   float
-    mae_pct:   float
-    lots:      int
-    exit:      str
-    source:    str       # always "sim"
+    time_in:        str
+    time_out:       str
+    direction:      str
+    strike:         Optional[int]
+    prem_in:        float
+    prem_out:       float
+    pnl_pct:        float
+    mfe_pct:        float
+    mae_pct:        float
+    lots:           int
+    exit:           str
+    source:         str             # always "sim"
+    strategy_name:  str             # e.g. "ML_ENTRY", "ORB" — shown as label in tape
+    entry_reason:   str             # signal.reason — why the entry fired
 
 
 class ReplayDiag(TypedDict):
@@ -166,11 +168,13 @@ def replay_day(
         if signal.signal_type == SignalType.ENTRY:
             diag["entries"] += 1
             current_entry = {
-                "time_in":  hhmm,
-                "direction": signal.direction,
-                "strike":   signal.strike,
-                "prem_in":  float(signal.entry_premium or 0),
-                "lots":     signal.max_lots,
+                "time_in":       hhmm,
+                "direction":     signal.direction,
+                "strike":        signal.strike,
+                "prem_in":       float(signal.entry_premium or 0),
+                "lots":          signal.max_lots,
+                "strategy_name": str(getattr(signal, "strategy_name", "") or ""),
+                "entry_reason":  str(getattr(signal, "reason", "") or ""),
             }
 
         elif signal.signal_type == SignalType.EXIT and current_entry is not None:
@@ -201,6 +205,8 @@ def replay_day(
                 lots=current_entry["lots"],
                 exit=label,
                 source="sim",
+                strategy_name=current_entry.get("strategy_name", ""),
+                entry_reason=current_entry.get("entry_reason", ""),
             ))
             current_entry = None
 

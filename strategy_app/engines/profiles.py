@@ -164,9 +164,11 @@ _TRADER_MASTER_RISK_CONFIG: dict[str, Any] = {
     "trailing_activation_pct": 0.35,
     "trailing_offset_pct": 0.08,
     "trailing_lock_breakeven": True,
-    # Stagnation exit: if after 12 bars (~12 min) the trade hasn't reached +5%,
-    # exit — ML entry expects a move within 5 min, flat = thesis failed, theta is eating us.
-    "stagnant_exit_bars": 12,
+    # Stagnation exit: if after 3 bars (~3 min) the trade hasn't reached +5%,
+    # exit — ML entry expects a move within the first few bars; flat/losing = thesis
+    # failed, theta is eating us. 3 bars matches EXIT_THESIS_FAIL_BARS so both
+    # mechanisms agree on the same cut-off.
+    "stagnant_exit_bars": 3,
     "stagnant_min_gain_pct": 0.05,
 }
 
@@ -180,7 +182,7 @@ _TRADER_MASTER_DYN_EXIT_RISK_CONFIG: dict[str, Any] = {
 # E1: same entry book; give ML thesis more time before stagnant TIME_STOP.
 _TRADER_MASTER_STAGNANT_20_RISK_CONFIG: dict[str, Any] = {
     **_TRADER_MASTER_RISK_CONFIG,
-    "stagnant_exit_bars": 20,
+    "stagnant_exit_bars": 3,   # was 20; aligned to 3-bar cut
 }
 
 # E4: E1 stagnant window + E2 shadow-gated defer on profitable stagnation.
@@ -203,8 +205,8 @@ _TRADER_MASTER_LIVE_V1_RISK_CONFIG: dict[str, Any] = {
     "trailing_activation_pct": 0.25,
     "trailing_offset_pct": 0.08,
     "trailing_lock_breakeven": True,
-    # Stagnation: exit flat trades faster live (10 bars vs 12) — theta is real money.
-    "stagnant_exit_bars": 10,
+    # Stagnation: cut at 3 bars — if no move in 3 min, thesis is wrong.
+    "stagnant_exit_bars": 3,
     "stagnant_min_gain_pct": 0.05,
     # Hard session cap: max 4 live trades per session until edge is re-verified.
     "session_trade_cap": 4,

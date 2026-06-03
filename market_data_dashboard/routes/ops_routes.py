@@ -562,7 +562,12 @@ def _persist_sim_to_mongo(
             "timestamp": open_ts,
             "trade_date_ist": trade_date,
             "run_id": run_id,
-            "payload": {"position": {"entry_premium": float(t.get("prem_in") or 0), **common}},
+            "payload": {"position": {
+                "entry_premium":  float(t.get("prem_in") or 0),
+                "entry_strategy": str(t.get("strategy_name") or ""),
+                "reason":         str(t.get("entry_reason") or ""),
+                **common,
+            }},
         })
         pos_docs.append({
             "event": "POSITION_CLOSE",
