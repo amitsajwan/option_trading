@@ -2629,7 +2629,7 @@ function MobileReplayShell({
   selectedTrade, onSelectTrade,
   blockerFunnel, heatmap,
   isPlaying, speed, total, vtLabel,
-  replayDate, replayRunId, replayKind,
+  replayDate, replayRunId, replayKind, replayBook, onBookChange,
   replayOptions, tradeCounts, modelsByDate, datesLoading, wsStatus, replayError,
   onPlay, onPause, onSpeed, onScrub, onScrubEnd, onReset, onDateChange, onModeSwitch, onRefreshRuns,
 }) {
@@ -3078,6 +3078,17 @@ function ReplayStatusBar({ sessionPnl, tradesCount, winRate, isPlaying, speed, u
           <span style={{fontFamily:'var(--f-mono)',fontSize:'9px',color:'var(--fg-3)',flexShrink:0}}
             title={replayRunId}>run {replayRunId.slice(0, 8)}…</span>
         )}
+        {replayKind === 'sim' && onBookChange && (
+          <div style={{display:'flex',gap:2,flexShrink:0,marginLeft:4}} title="Paper = every trade; Live = GOOD-only independent slot (never blocked by paper)">
+            {['paper','live'].map(b => (
+              <button key={b} className="t-btn sm ghost"
+                style={(replayBook||'paper')===b
+                  ? {background: b==='live'?'var(--pos)':'var(--bg-4)', color: b==='live'?'#06210f':'var(--fg-1)', borderColor:'var(--line-3)', textTransform:'uppercase'}
+                  : {textTransform:'uppercase'}}
+                onClick={() => onBookChange(b)}>{b}</button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="t-status-cells" style={{flexShrink:0}}>
         <div className="t-scell big"><span className="k">P&amp;L</span><span className={`v ${pnlCls}`}>{TC.fmtPct(sessionPnl,2)}</span></div>
@@ -3095,9 +3106,10 @@ function _replayBootParams() {
       date: String(p.get('date') || p.get('replay_date') || '').trim(),
       runId: String(p.get('run_id') || '').trim(),
       kind: String(p.get('kind') || '').trim().toLowerCase(),
+      book: String(p.get('book') || '').trim().toLowerCase(),
     };
   } catch (_) {
-    return { date: '', runId: '', kind: '' };
+    return { date: '', runId: '', kind: '', book: '' };
   }
 }
 
@@ -3125,6 +3137,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const [replayDate,     setReplayDate]     = _s(_boot.date || '');
   const [replayRunId,    setReplayRunId]    = _s(_boot.runId || '');
   const [replayKind,     setReplayKind]     = _s((_boot.kind === 'sim' ? 'sim' : 'oos'));
+  const [replayBook,     setReplayBook]     = _s(_boot.book === 'live' ? 'live' : 'paper');
   const [replayError,    setReplayError]    = _s('');
   const [wsStatus,       setWsStatus]       = _s('idle');
   const [availableDates, setAvailableDates] = _s([]);
@@ -3151,6 +3164,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const replayDateRef = _r(_boot.date || '');
   const replayRunIdRef = _r(_boot.runId || '');
   const replayKindRef = _r(_boot.kind === 'sim' ? 'sim' : 'oos');
+  const replayBookRef = _r(_boot.book === 'live' ? 'live' : 'paper');
   const fitRef        = _r(null);
 
   // Diagnostics: load current model + available models, blocker-funnel aggregate
@@ -3208,6 +3222,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   _e(() => { replayDateRef.current = replayDate; }, [replayDate]);
   _e(() => { replayRunIdRef.current = replayRunId; }, [replayRunId]);
   _e(() => { replayKindRef.current = replayKind; }, [replayKind]);
+  _e(() => { replayBookRef.current = replayBook; }, [replayBook]);
 
   function openReplaySocket() {
     if (wsRef.current) return;
@@ -3220,6 +3235,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
         };
         sub.kind = replayKindRef.current === 'sim' ? 'sim' : 'oos';
         if (replayRunIdRef.current) sub.run_id = replayRunIdRef.current;
+        if (replayKindRef.current === 'sim') sub.book = replayBookRef.current || 'paper';
         return sub;
       },
       {
@@ -3317,6 +3333,25 @@ function ReplayMonitorDark({ onModeSwitch }) {
     };
     sub.kind = nextKind;
     if (nextRunId) sub.run_id = nextRunId;
+    if (nextKind === 'sim') sub.book = replayBookRef.current || 'paper';
+    const sent = wsRef.current && wsRef.current.send(sub);
+    if (!sent) setWsStatus('connecting');
+  }
+  // Paper/live book toggle (sim dual-book). Re-subscribes the same run with the
+  // chosen book so the tape switches between the analysis (paper) book and the
+  // independent live (GOOD-only) book.
+  function handleBookChange(nextBook) {
+    const b = nextBook === 'live' ? 'live' : 'paper';
+    setReplayBook(b); replayBookRef.current = b;
+    setReplayError(''); setIsPlaying(false); setSession(null); setUpToIdx(0);
+    openReplaySocket();
+    const sub = {
+      action:'subscribe', mode:'replay', date:replayDateRef.current,
+      up_to_idx:0, playing:false, speed:speedRef.current,
+      kind: replayKindRef.current === 'sim' ? 'sim' : 'oos',
+      book: b,
+    };
+    if (replayRunIdRef.current) sub.run_id = replayRunIdRef.current;
     const sent = wsRef.current && wsRef.current.send(sub);
     if (!sent) setWsStatus('connecting');
   }
@@ -3401,6 +3436,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
       heatmap={{ data: heatmapData, loading: heatmapLoading }}
       isPlaying={isPlaying} speed={speed} total={candles.length} vtLabel={vtLabel}
       replayDate={replayDate} replayRunId={replayRunId || (session?.runId||'')} replayKind={replayKind}
+      replayBook={replayBook} onBookChange={handleBookChange}
       replayOptions={replayOptions} tradeCounts={tradeCounts} modelsByDate={modelsByDate}
       datesLoading={datesLoading} wsStatus={wsStatus} replayError={replayError}
       onPlay={handlePlay} onPause={handlePause} onSpeed={handleSpeed}

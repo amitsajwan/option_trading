@@ -558,8 +558,12 @@ def _persist_sim_to_mongo(
             return datetime.now(tz=_IST)
 
     pos_docs = []
-    # Tag each book so the UI can distinguish the analysis tape (paper, takes
-    # everything) from the independent LIVE slot (only GOOD, never blocked by paper).
+    # Two independent books under ONE run_id (shared candles/snapshots), each
+    # tagged book=paper|live. The replay build filters to a single book at a time
+    # (so overlapping paper/live positions don't trip the integrity check), and
+    # the UI paper/live toggle picks which book to show.
+    #   paper: takes everything (the analysis tape)
+    #   live : independent slot; only GOOD; never blocked by paper
     _books: list[tuple[str, list[dict]]] = [("paper", list(trades))]
     if live_trades:
         _books.append(("live", list(live_trades)))
@@ -568,7 +572,7 @@ def _persist_sim_to_mongo(
         for _i, _t in enumerate(_list):
             _trade_rows.append((_book, _i, _t))
     for _book, i, t in _trade_rows:
-        pid = f"{run_id}-{_book}-pos-{i}" if _book == "live" else f"{run_id}-pos-{i}"
+        pid = f"{run_id}-live-pos-{i}" if _book == "live" else f"{run_id}-pos-{i}"
         open_ts = _hhmm_to_dt(str(t.get("time_in", "09:15")))
         close_ts = _hhmm_to_dt(str(t.get("time_out", "15:25")))
         common = {"direction": t.get("direction", ""), "strike": t.get("strike")}

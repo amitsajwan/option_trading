@@ -967,12 +967,25 @@ def _build_session(
     run_id: Optional[str] = None,
     include_open_positions: bool = False,
     engine_hint: Optional[str] = None,
+    book: Optional[str] = None,
 ) -> MonitorSession:
     latest_run_id = run_id or _latest_run_id_for_date(db, trade_date)
     date_q: Dict[str, Any] = {"trade_date_ist": trade_date}
     run_date_q: Dict[str, Any] = {"trade_date_ist": trade_date}
     if latest_run_id:
         run_date_q["run_id"] = latest_run_id
+
+    # Book filter: a run may hold two independent books (paper takes everything;
+    # live = GOOD-only independent slot). Build ONE book at a time so overlapping
+    # paper/live positions don't trip the overlap-integrity check. Default "paper"
+    # also matches legacy positions that have no book field.
+    book_norm = str(book or "paper").strip().lower()
+    if book_norm == "live":
+        pos_book_q: Dict[str, Any] = {"payload.position.book": "live"}
+    else:
+        pos_book_q = {"payload.position.book": {"$ne": "live"}}
+    pos_query = dict(run_date_q)
+    pos_query.update(pos_book_q)
 
     snap_proj = {
         "_id": 0,
@@ -1017,7 +1030,7 @@ def _build_session(
     }
     position_map: Dict[str, Dict[str, Any]] = {}
     detected_run_id: Optional[str] = latest_run_id
-    for doc in db[coll_positions].find(run_date_q, pos_proj).sort("timestamp", ASCENDING):
+    for doc in db[coll_positions].find(pos_query, pos_proj).sort("timestamp", ASCENDING):
         pid = str(doc.get("position_id") or "").strip()
         if not pid:
             continue
@@ -1295,11 +1308,13 @@ class MongoSource:
         trade_date: str,
         run_id: Optional[str] = None,
         kind: str = "oos",
+        book: Optional[str] = None,
     ) -> None:
         self._db = db
         self._trade_date = trade_date
         self._run_id = str(run_id or "").strip() or None
         self._kind = normalize_kind(kind, default="oos")
+        self._book = str(book or "paper").strip().lower()
         self._coll_snapshots = collection_for(BASE_SNAPSHOTS, kind=self._kind, run_id=self._run_id)
         self._coll_votes = collection_for(BASE_VOTES, kind=self._kind, run_id=self._run_id)
         self._coll_signals = collection_for(BASE_SIGNALS, kind=self._kind, run_id=self._run_id)
@@ -1317,6 +1332,7 @@ class MongoSource:
                 self._coll_positions,
                 self._coll_traces,
                 run_id=self._run_id,
+                book=self._book,
             )
         return self._session
 

@@ -197,6 +197,7 @@ class DashboardMonitorRouter:
         date: Optional[str] = Query(None, description="Replay date YYYY-MM-DD"),
         run_id: Optional[str] = Query(None, description="Historical eval run_id (scopes trades/votes)"),
         up_to_idx: Optional[int] = Query(None, description="Replay bar index"),
+        book: Optional[str] = Query(None, description="paper|live book filter (sim dual-book)"),
     ) -> JSONResponse:
         db = _make_db()
         mode_norm = str(mode or "live").strip().lower()
@@ -222,6 +223,7 @@ class DashboardMonitorRouter:
                 trade_date=_resolve_date(db, date),
                 run_id=resolved_run,
                 kind=kind_norm,
+                book=book,
             )
             state = _ReplaySessionState(source, up_to_idx=up_to_idx)
             kpi = _build_kpi_replay(state)
@@ -323,6 +325,7 @@ class DashboardMonitorRouter:
                     kind = normalize_kind(msg.get("kind"), default=default_kind)
                     date_str = str(msg.get("date") or "").strip() or None
                     run_id_str = str(msg.get("run_id") or "").strip() or None
+                    book_str = str(msg.get("book") or "").strip().lower() or None
 
                     try:
                         db = _make_db()
@@ -336,6 +339,7 @@ class DashboardMonitorRouter:
                                 trade_date=_resolve_date(db, date_str),
                                 run_id=run_id_str,
                                 kind=kind,
+                                book=book_str,
                             )
                             up_to = msg.get("up_to_idx")
                             state = _ReplaySessionState(src, up_to_idx=int(up_to) if up_to is not None else None)
