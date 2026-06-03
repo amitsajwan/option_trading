@@ -235,6 +235,12 @@ _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP: dict[str, list[str]] = {
     if strategies
 }
 _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP["AVOID"] = []
+# CHOP = no sustained directional move by definition. ML_ENTRY is a timing model
+# that expects a move to develop; in CHOP that move never comes. The _NEW_REGIME_FALLBACKS
+# map would route CHOP → SIDEWAYS (which has ML_ENTRY), so we override explicitly.
+# Analysis: 3 consecutive PE losses in CHOP on 2026-06-03, all TIME_STOP at 3 bars,
+# MFE=0.00% on 2 of 3 — market never moved. Root cause: CHOP entry should not happen.
+_TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP["CHOP"] = []
 
 # ML step-① timing + trader_master rule strategies for step-② direction (no direction ML).
 _TRADER_MASTER_ML_ENTRY_DET_DIR_REGIME_ENTRY_MAP: dict[str, list[str]] = {}

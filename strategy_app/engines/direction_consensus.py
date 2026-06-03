@@ -55,7 +55,10 @@ def resolve_direction_consensus(
     _sideways_margin = _env_float("DIRECTION_MIN_MARGIN_SIDEWAYS", 2.0)
     _global_margin = _env_float("DIRECTION_CONSENSUS_MIN_MARGIN", 1.25)
     min_margin = _sideways_margin if regime_name == "SIDEWAYS" else _global_margin
-    ml_weight = _env_float("DIRECTION_CONSENSUS_ML_WEIGHT", 0.35)
+    # Direction ML model AUC=0.557 (near coin-flip on holdout) — reduced from 0.35
+    # so near-random signal doesn't dominate; rules + shadow score carry the decision.
+    # Raise back toward 0.35 only after retraining produces AUC >= 0.65.
+    ml_weight = _env_float("DIRECTION_CONSENSUS_ML_WEIGHT", 0.15)
     rule_weight = _env_float("DIRECTION_CONSENSUS_RULE_WEIGHT", 1.0)
     shadow_weight = _env_float("DIRECTION_CONSENSUS_SHADOW_WEIGHT", 1.0)
     momentum_weight = _env_float("DIRECTION_CONSENSUS_MOMENTUM_WEIGHT", 0.75)

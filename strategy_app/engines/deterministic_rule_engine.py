@@ -178,6 +178,8 @@ class DeterministicRuleEngine(StrategyEngine):
         self._last_stop_bar: Optional[int] = None        # event count when last STOP_LOSS fired
         self._last_exit_direction: Optional[str] = None  # "CE" | "PE" at last stop exit
         self._last_any_exit_bar: Optional[int] = None   # event count of ANY exit (for general spacing)
+        self._last_zero_mfe_bar: Optional[int] = None   # event count when a zero-MFE exit occurred
+        self._last_zero_mfe_direction: Optional[str] = None  # direction of that zero-MFE trade
         # Optional live depth feed (None in replay/offline — signals degrade gracefully).
         self._depth_reader: Optional[RedisDepthReader] = depth_reader
         # Per-evaluate depth snapshot — set at start of evaluate(), read by shadow scorer.
@@ -330,6 +332,8 @@ class DeterministicRuleEngine(StrategyEngine):
         self._last_stop_bar = None
         self._last_exit_direction = None
         self._last_any_exit_bar = None
+        self._last_zero_mfe_bar = None
+        self._last_zero_mfe_direction = None
         self._tracker.on_session_start(trade_date)
         # Brain morning briefing: loads daily features + cross-session carry.
         # Must run before risk manager so carry-based consecutive_losses can
@@ -743,6 +747,26 @@ class DeterministicRuleEngine(StrategyEngine):
                     logger.debug(
                         "entry blocked: direction_flip_cooldown last=%s current=%s bars=%d",
                         self._last_exit_direction, _cur_entry_dirs, _bars_since,
+                    )
+                    return None
+
+        # 4. Zero-MFE same-direction block: if the last trade produced no favorable
+        #    excursion (mfe ≈ 0) and was a loss, the thesis was immediately wrong.
+        #    Block the same direction for ZERO_MFE_COOLDOWN_BARS — the market is
+        #    telling you the move isn't happening. Default: 10 bars (~10 min).
+        _zero_mfe_cool = int(os.getenv("ZERO_MFE_COOLDOWN_BARS", "10"))
+        if self._last_zero_mfe_bar is not None and self._last_zero_mfe_direction:
+            _bars_since_zero = self._session_event_count - self._last_zero_mfe_bar
+            if _bars_since_zero < _zero_mfe_cool:
+                _cur_dirs = {
+                    str(v.direction.value if hasattr(v.direction, "value") else v.direction or "").upper()
+                    for v in votes
+                    if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
+                }
+                if self._last_zero_mfe_direction in _cur_dirs:
+                    logger.info(
+                        "entry blocked: zero_mfe_cooldown last_dir=%s bars_since=%d cool=%d",
+                        self._last_zero_mfe_direction, _bars_since_zero, _zero_mfe_cool,
                     )
                     return None
         # ── End discipline gates ──────────────────────────────────────────────
@@ -1347,6 +1371,17 @@ class DeterministicRuleEngine(StrategyEngine):
         ).upper()
         # Always track any exit for minimum re-entry spacing.
         self._last_any_exit_bar = self._session_event_count
+        # Zero-MFE exit: market never moved in our favour — same direction re-entry
+        # is almost certainly wrong (the thesis produced no excursion whatsoever).
+        # Block same-direction entries for ZERO_MFE_COOLDOWN_BARS after this.
+        _ZERO_MFE_THRESHOLD = 0.001  # <0.1% MFE counts as zero
+        if position.mfe_pct < _ZERO_MFE_THRESHOLD and position.pnl_pct < 0:
+            self._last_zero_mfe_bar = self._session_event_count
+            self._last_zero_mfe_direction = exit_dir
+            logger.info(
+                "zero_mfe_exit dir=%s mfe=%.3f pnl=%.3f — same-direction cooldown armed",
+                exit_dir, position.mfe_pct, position.pnl_pct,
+            )
         if "STOP" in exit_reason_str and "TIME" not in exit_reason_str:
             # Hard STOP_LOSS: longer cooldown + direction-flip block.
             self._last_stop_bar = self._session_event_count
