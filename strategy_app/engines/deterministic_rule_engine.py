@@ -639,7 +639,7 @@ class DeterministicRuleEngine(StrategyEngine):
         # E8 gates: env-driven time-window + daily-regime filters. Both default
         # off; when configured they apply across all profiles.
         if not is_in_configured_time_window(snap):
-            logger.debug("entry blocked: outside ENTRY_TIME_WINDOWS")
+            logger.info("entry blocked: outside ENTRY_TIME_WINDOWS")
             return None
         tagger = os.getenv("ENTRY_REGIME_TAGGER", "").strip()
         if tagger:
@@ -711,7 +711,7 @@ class DeterministicRuleEngine(StrategyEngine):
         if self._last_any_exit_bar is not None:
             _bars_since_exit = self._session_event_count - self._last_any_exit_bar
             if _bars_since_exit < _reentry_gap:
-                logger.debug("entry blocked: min_reentry_gap bars_since=%d min=%d", _bars_since_exit, _reentry_gap)
+                logger.info("entry blocked: min_reentry_gap bars_since=%d min=%d", _bars_since_exit, _reentry_gap)
                 return None
 
         # 1. SIDEWAYS + returns_mixed: no directional conviction — skip entirely.
@@ -722,7 +722,7 @@ class DeterministicRuleEngine(StrategyEngine):
             regime_str == "SIDEWAYS"
             and "returns_mixed" in (regime_signal.reason or "")
         ):
-            logger.debug("entry blocked: sideways_returns_mixed reason=%s", regime_signal.reason)
+            logger.info("entry blocked: sideways_returns_mixed reason=%s", regime_signal.reason)
             return None
 
         # 2. Post-STOP_LOSS cooldown: no re-entry for N bars after a hard stop.
@@ -730,7 +730,7 @@ class DeterministicRuleEngine(StrategyEngine):
         if self._last_stop_bar is not None:
             _bars_since = self._session_event_count - self._last_stop_bar
             if _bars_since < _stop_cool:
-                logger.debug("entry blocked: stop_loss_cooldown bars_since=%d min=%d", _bars_since, _stop_cool)
+                logger.info("entry blocked: stop_loss_cooldown bars_since=%d min=%d", _bars_since, _stop_cool)
                 return None
 
         # 3. Direction-flip block: after a STOP_LOSS, don't flip direction for N bars.
@@ -744,7 +744,7 @@ class DeterministicRuleEngine(StrategyEngine):
                     if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
                 }
                 if self._last_exit_direction not in _cur_entry_dirs:
-                    logger.debug(
+                    logger.info(
                         "entry blocked: direction_flip_cooldown last=%s current=%s bars=%d",
                         self._last_exit_direction, _cur_entry_dirs, _bars_since,
                     )
@@ -774,7 +774,7 @@ class DeterministicRuleEngine(StrategyEngine):
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
         if avoid_votes:
             best_avoid = max(avoid_votes, key=lambda item: item.confidence)
-            logger.debug("entry vetoed strategy=%s reason=%s", best_avoid.strategy_name, best_avoid.reason)
+            logger.info("entry vetoed strategy=%s reason=%s", best_avoid.strategy_name, best_avoid.reason)
             return None
 
         entry_votes = [
@@ -787,7 +787,7 @@ class DeterministicRuleEngine(StrategyEngine):
 
         use_ml_det_dir = self._strategy_profile_id in _PROFILES_ML_ENTRY_DET_DIRECTION
         if use_ml_det_dir and not any(vote.strategy_name == "ML_ENTRY" for vote in entry_votes):
-            logger.debug("entry blocked: ml timing gate (no ML_ENTRY vote)")
+            logger.info("entry blocked: ml timing gate (no ML_ENTRY vote)")
             return None
 
         # ML_ENTRY's positive vote is the primary entry signal — keep it in the
@@ -855,14 +855,14 @@ class DeterministicRuleEngine(StrategyEngine):
             has_direction_conflict = bool(ce_votes and pe_votes)
         ml_can_resolve_direction_conflict = has_direction_conflict and self._entry_policy_can_resolve_direction_conflict()
         if has_direction_conflict and not ml_can_resolve_direction_conflict:
-            logger.debug("entry blocked by direction conflict ce=%d pe=%d", len(ce_votes), len(pe_votes))
+            logger.info("entry blocked: direction_conflict ce=%d pe=%d", len(ce_votes), len(pe_votes))
             return None
 
         if (
             self._strategy_profile_id not in _PROFILES_RELAX_REGIME_CONF
             and regime_signal.confidence < 0.60
         ):
-            logger.debug("entry blocked by low regime confidence=%.2f", regime_signal.confidence)
+            logger.info("entry blocked: low_regime_confidence=%.2f", regime_signal.confidence)
             return None
 
         if not snap.is_valid_entry_phase or self._risk.is_paused:
@@ -884,8 +884,8 @@ class DeterministicRuleEngine(StrategyEngine):
                 and not candidate.raw_signals.get("_strike_vetoed")
             ]
             if not eligible:
-                logger.debug(
-                    "entry blocked by ml direction resolution ce=%d pe=%d",
+                logger.info(
+                    "entry blocked: ml_direction_resolution ce=%d pe=%d",
                     len(ce_votes),
                     len(pe_votes),
                 )
@@ -908,10 +908,16 @@ class DeterministicRuleEngine(StrategyEngine):
             self._annotate_policy(candidate, policy_decision)
             self._annotate_vote_contract(candidate)
             if candidate.confidence < self._min_confidence:
+                logger.info("entry blocked: confidence=%.3f < min=%.3f strategy=%s",
+                            float(candidate.confidence), self._min_confidence, candidate.strategy_name)
                 continue
             if candidate.raw_signals.get("_strike_vetoed"):
+                logger.info("entry blocked: strike_vetoed reason=%s strategy=%s",
+                            candidate.raw_signals.get("_strike_veto_reason"), candidate.strategy_name)
                 continue
             if not policy_decision.allowed:
+                logger.info("entry blocked: entry_policy reason=%s strategy=%s",
+                            policy_decision.reason, candidate.strategy_name)
                 continue
             return self._build_entry_signal(candidate, snap, risk, entry_votes, regime_signal, policy_decision)
         return None
@@ -926,7 +932,7 @@ class DeterministicRuleEngine(StrategyEngine):
     ) -> Optional[TradeSignal]:
         ml_votes = [v for v in entry_votes if v.strategy_name == "ML_ENTRY"]
         if not ml_votes:
-            logger.debug("consensus entry blocked: no ML_ENTRY timing vote")
+            logger.info("entry blocked: consensus_no_ml_entry_vote")
             return None
         ml_vote = max(ml_votes, key=lambda v: float(v.confidence or 0))
         # E3-S1: bypass path uses its own threshold, aligned to the entry gate (0.65).
@@ -934,8 +940,8 @@ class DeterministicRuleEngine(StrategyEngine):
         # self._min_confidence (0.50) which guards non-consensus paths.
         _bypass_min = float(os.getenv("CONSENSUS_BYPASS_MIN_CONFIDENCE", str(self._min_confidence)) or self._min_confidence)
         if ml_vote.confidence < _bypass_min:
-            logger.debug("consensus bypass blocked: confidence=%.3f < bypass_min=%.3f",
-                         float(ml_vote.confidence or 0), _bypass_min)
+            logger.info("entry blocked: consensus_bypass_confidence=%.3f < bypass_min=%.3f",
+                        float(ml_vote.confidence or 0), _bypass_min)
             return None
 
         shadow_dir, shadow_basis, shadow_score = self._shadow_direction_from_snapshot(snap)
@@ -955,8 +961,8 @@ class DeterministicRuleEngine(StrategyEngine):
             regime_signal=regime_signal,
         )
         if consensus.vetoed or consensus.direction is None:
-            logger.debug(
-                "consensus direction vetoed reason=%s ce=%.2f pe=%.2f margin=%.2f",
+            logger.info(
+                "entry blocked: direction_consensus_vetoed reason=%s ce=%.2f pe=%.2f margin=%.2f",
                 consensus.veto_reason,
                 consensus.ce_score,
                 consensus.pe_score,
@@ -1022,7 +1028,7 @@ class DeterministicRuleEngine(StrategyEngine):
             and not self._allow_non_atm_for_ml_entry(trade_vote)
             and not self._is_atm_strike(snap, trade_vote)
         ):
-            logger.debug("consensus entry blocked: OTM strike policy")
+            logger.info("entry blocked: consensus_otm_strike_policy")
             return None
 
         policy_decision = self._evaluate_entry_policy(trade_vote, snap, regime_signal, risk)
@@ -1218,7 +1224,7 @@ class DeterministicRuleEngine(StrategyEngine):
         if self._run_risk_config.atm_strike_only and not self._allow_non_atm_for_ml_entry(best_vote):
             atm = snap.atm_strike
             if atm is None or int(selected_strike) != int(atm):
-                logger.debug("entry blocked: atm_strike_only policy strike=%s atm=%s", selected_strike, atm)
+                logger.info("entry blocked: atm_strike_only policy strike=%s atm=%s", selected_strike, atm)
                 return None
 
         premium = best_vote.proposed_entry_premium
