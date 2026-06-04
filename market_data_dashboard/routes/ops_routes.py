@@ -55,6 +55,10 @@ _SAFE_OVERRIDE_KEYS = {
     # via the trace harness before any live cut-over.
     "ENTRY_ML_MODEL_PATH",
     "ENTRY_ML_MIN_PROB",
+    # Direction A/B (sim-only): flip the direction engine (composite heuristic resolver
+    # vs consensus ML direction model) to compare CE/PE selection + grader activation.
+    "ML_ENTRY_DIRECTION_MODE",
+    "DIRECTION_ML_MODEL_PATH",
     # Lottery / adaptive mode
     "EXIT_STRATEGY_MODE",
     "ADAPTIVE_LOTTERY_REGIMES",
