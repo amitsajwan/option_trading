@@ -177,9 +177,9 @@ def verify_entry_label(
             "side_of_move": "up" if up_pts >= down_pts else "down",
         }
 
-    fired_total = fired_moved = 0
-    notfired_total = notfired_moved = 0
-    fired_excursions: list[float] = []
+    # Compute the realised forward move ONCE per bar (independent of threshold),
+    # then evaluate separation at the primary threshold AND across a sweep (A9).
+    pairs: list[tuple[float, bool, float]] = []  # (prob, moved, excursion_pts)
     detail: list[dict[str, Any]] = []
     for t in traces:
         cand = _entry_candidate(t)
@@ -190,30 +190,36 @@ def verify_entry_label(
         r = realised(mk) if mk else None
         if r is None:
             continue
+        pairs.append((p, bool(r["moved"]), float(r["max_excursion_pts"])))
         if p >= prob_threshold:
-            fired_total += 1
-            fired_excursions.append(r["max_excursion_pts"])
-            if r["moved"]:
-                fired_moved += 1
             detail.append({"time": mk, "entry_prob": round(p, 4), **r,
                            "direction": (cand or {}).get("direction"),
                            "outcome": t.get("final_outcome")})
-        else:
-            notfired_total += 1
-            if r["moved"]:
-                notfired_moved += 1
 
-    precision = round(fired_moved / fired_total, 4) if fired_total else None
-    base_rate_notfired = round(notfired_moved / notfired_total, 4) if notfired_total else None
+    def _at(thr: float) -> dict[str, Any]:
+        fired = [(m, e) for (pp, m, e) in pairs if pp >= thr]
+        decl = [m for (pp, m, e) in pairs if pp < thr]
+        fired_moved = sum(1 for m, e in fired if m)
+        decl_moved = sum(1 for m in decl if m)
+        prec = round(fired_moved / len(fired), 4) if fired else None
+        base = round(decl_moved / len(decl), 4) if decl else None
+        sep = round((prec or 0) - (base or 0), 4) if (prec is not None and base is not None) else None
+        return {"thr": thr, "fired": len(fired), "precision": prec,
+                "declined": len(decl), "decl_move_rate": base, "separation": sep}
+
+    primary = _at(prob_threshold)
+    sweep = [_at(thr) for thr in (0.50, 0.65, 0.75, 0.85, 0.90)]
     return {
         "label": {"horizon_minutes": horizon_minutes, "min_points": min_points,
                   "prob_threshold": prob_threshold,
                   "definition": "move >= min_points in EITHER direction within horizon"},
-        "fired": {"n": fired_total, "moved": fired_moved, "precision": precision},
-        "not_fired": {"n": notfired_total, "moved": notfired_moved, "move_rate": base_rate_notfired},
-        "separation": (round((precision or 0) - (base_rate_notfired or 0), 4)
-                       if precision is not None and base_rate_notfired is not None else None),
-        "fired_excursion_pts": _dist(fired_excursions),
+        "fired": {"n": primary["fired"], "moved": sum(1 for (pp, m, e) in pairs if pp >= prob_threshold and m),
+                  "precision": primary["precision"]},
+        "not_fired": {"n": primary["declined"], "moved": sum(1 for (pp, m, e) in pairs if pp < prob_threshold and m),
+                      "move_rate": primary["decl_move_rate"]},
+        "separation": primary["separation"],
+        "threshold_sweep": sweep,
+        "fired_excursion_pts": _dist([e for (pp, m, e) in pairs if pp >= prob_threshold]),
         "fired_detail": detail,
     }
 
@@ -232,12 +238,15 @@ def analyze_traces(
 
     trade_outcomes: list[dict] = []
     for t in (trades or []):
+        pos = t.get("payload", {}).get("position", {}) if isinstance(t.get("payload"), dict) else {}
         pnl = _num(t.get("pnl_pct"))
         if pnl is None:
-            pos = t.get("payload", {}).get("position", {}) if isinstance(t.get("payload"), dict) else {}
             pnl = _num(pos.get("pnl_pct"))
+        mfe = _num(t.get("mfe_pct"))
+        if mfe is None:
+            mfe = _num(pos.get("mfe_pct"))
         if pnl is not None:
-            trade_outcomes.append({"pnl_pct": pnl})
+            trade_outcomes.append({"pnl_pct": pnl, "mfe_pct": mfe})
 
     meta = {
         "n_traces": len(traces),
@@ -408,11 +417,30 @@ def analyze_traces(
         "direction": direction,
         "gates": gates,
         "market_structure": structure,
-        "trades_summary": {"n": len(trade_outcomes),
-                           "wins": sum(1 for o in trade_outcomes if o["pnl_pct"] > 0),
-                           "losses": sum(1 for o in trade_outcomes if o["pnl_pct"] <= 0),
-                           "net_pnl_pct": round(sum(o["pnl_pct"] for o in trade_outcomes), 4)} if trade_outcomes else None,
+        "trades_summary": _trades_summary(trade_outcomes),
         "per_trade": per_trade,
+    }
+
+
+def _trades_summary(outcomes: list[dict]) -> Optional[dict[str, Any]]:
+    """Win/loss + MFE-giveback (A7). A giveback = a trade whose MFE was meaningfully
+    positive but exited far below it (gave back captured profit). We flag the count and
+    total points given back; 1-bar-vs-multi-bar classification needs the intra-trade
+    premium path (not in the close event) — noted as a follow-up."""
+    if not outcomes:
+        return None
+    give_thresh = 0.01  # 1% MFE-to-exit gap counts as a giveback
+    givebacks = [o for o in outcomes
+                 if o.get("mfe_pct") is not None and (o["mfe_pct"] - o["pnl_pct"]) >= give_thresh and o["mfe_pct"] > 0]
+    return {
+        "n": len(outcomes),
+        "wins": sum(1 for o in outcomes if o["pnl_pct"] > 0),
+        "losses": sum(1 for o in outcomes if o["pnl_pct"] <= 0),
+        "net_pnl_pct": round(sum(o["pnl_pct"] for o in outcomes), 4),
+        "avg_mfe_pct": round(sum(o["mfe_pct"] for o in outcomes if o.get("mfe_pct") is not None)
+                             / max(1, sum(1 for o in outcomes if o.get("mfe_pct") is not None)), 4),
+        "giveback_count": len(givebacks),
+        "giveback_pts_pct": round(sum(o["mfe_pct"] - o["pnl_pct"] for o in givebacks), 4),
     }
 
 
@@ -426,7 +454,10 @@ def render_markdown(report: dict[str, Any]) -> str:
     L.append(f"- direction_source: **{m.get('direction_source') or 'n/a'}**  (composite=heuristic, consensus/direction_ml=stage-2 model)")
     ts = report.get("trades_summary")
     if ts:
-        L.append(f"- trades: {ts['n']} ({ts['wins']}W/{ts['losses']}L) net **{ts['net_pnl_pct']:+.2%}**" if isinstance(ts['net_pnl_pct'], float) else f"- trades: {ts['n']}")
+        line = f"- trades: {ts['n']} ({ts['wins']}W/{ts['losses']}L) net **{ts['net_pnl_pct']:+.2%}**" if isinstance(ts['net_pnl_pct'], float) else f"- trades: {ts['n']}"
+        if ts.get("giveback_count"):
+            line += f" | givebacks: {ts['giveback_count']} (gave back {ts.get('giveback_pts_pct',0):+.2%} MFE), avg_mfe {ts.get('avg_mfe_pct')}"
+        L.append(line)
     L.append("")
 
     me = report["ml_entry"]
@@ -454,6 +485,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         L.append(f"- NOT fired: {nf['n']} bars, move happened {nf['moved']} -> base move-rate {nf['move_rate']}")
         L.append(f"- separation (precision - base): **{elc['separation']}** (>0 means the model adds signal on this day)")
         L.append(f"- realised excursion on fired bars (pts): {elc['fired_excursion_pts']}")
+        sweep = elc.get("threshold_sweep") or []
+        if sweep:
+            L.append("- threshold sweep (thr: fire/prec | declined/rate | SEP):")
+            for s in sweep:
+                L.append(f"    {s['thr']:.2f}: {s['fired']}/{s['precision']} | {s['declined']}/{s['decl_move_rate']} | **{s['separation']}**")
         L.append("")
 
     d = report["direction"]

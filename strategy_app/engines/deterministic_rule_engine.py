@@ -446,6 +446,15 @@ class DeterministicRuleEngine(StrategyEngine):
             with self._eval_timer.measure("manage_position"):
                 system_exit = self._manage_open_position(snap, position, risk)
             if system_exit is not None:
+                # A2: trace the system-exit bar too (stop/target/trailing/time/thesis),
+                # so EVERY bar is traced — not just entry/vote bars. _build_position_trace
+                # is self-contained (computes its own regime).
+                exit_trace = self._build_position_trace(
+                    snap=snap, position=position, votes=[], signal=system_exit,
+                    final_outcome="exit_taken",
+                )
+                self.last_decision_trace = exit_trace
+                self._log.log_decision_trace(exit_trace)
                 return system_exit
 
         with self._eval_timer.measure("regime"):
