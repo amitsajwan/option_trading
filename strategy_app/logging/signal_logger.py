@@ -215,6 +215,9 @@ class SignalLogger:
             "signal_type": signal.signal_type.value if signal.signal_type else None,
             "direction": signal.direction,
             "strike": signal.strike,
+            # Expiry is required downstream for real-broker instrument resolution
+            # (Dhan maps (expiry, strike, CE/PE) -> securityId). Serialize as ISO date.
+            "expiry": signal.expiry.isoformat() if getattr(signal, "expiry", None) else None,
             "entry_premium": signal.entry_premium,
             "max_hold_bars": signal.max_hold_bars,
             "stop_loss_pct": signal.stop_loss_pct,
