@@ -242,6 +242,37 @@ Same day (06-04), same entry model (E6), same 10 entry bars; only `ML_ENTRY_DIRE
 - **Action A10:** consider switching live direction to `composite` (it also enables the
   grader); validate multi-day first.
 
+## STEP 10 — CORRECTION: live runs COMPOSITE; faithful entry A/B + direction-ML tilt
+**Verified 2026-06-05:** the live strategy container has `ML_ENTRY_DIRECTION_MODE` *unset*
+(the `.env.compose` `consensus` value never propagates through the compose env whitelist)
+→ engine defaults to **composite**. So live has always run composite + grader; the
+"degenerate consensus" was a sim artifact from my earlier `sim_env` fallback forcing
+`consensus` (now reverted to `composite`). Earlier S8 entry A/B ran under the wrong
+(consensus) mode — re-run under composite below.
+
+**Entry A/B under COMPOSITE (real live mode), 6 days:**
+| Day | E6+comp | v2+comp |
+|---|---|---|
+| 05-26 | 1 / −12.14% | **0** (avoided) |
+| 05-27 | 1 / −6.6% | 1 / +0.33% |
+| 06-01 | 7 / +11.47% | 5 / **−0.67%** (v2 missed the good day) |
+| 06-02 | 4 / −5.23% | 4 / −5.23% |
+| 06-03 | 7 / +47.46% | 7 / +44.44% |
+| 06-04 | 10 / +10.96% | 5 / +15.82% |
+| **Σ** | **+45.9%** | **+54.7%** |
+v2 nets higher (tail-risk avoidance), but its selectivity also **cuts winners** (06-01).
+Outlier-dominated, 6 days → directionally positive, not conclusive.
+
+**Direction-ML tilt added (`ENTRY_DIR_W_ML=0.20`):** the direction-only ML model now
+contributes a minor, confidence-weighted signal inside composite (contribution =
+`0.20*|2*(ce_prob-0.5)|`): degenerate model ≈0, confident call up to 0.20 — below every
+other signal so it nudges, never dominates. This is how direction-v2 is "used" without
+replacing the composite vote. (commit 28be656)
+
+**Target config (deliberate cutover, not this morning):** composite direction +
+`ENTRY_DIR_W_ML=0.20` (direction-v2 bundle) + entry v2 010pct @0.50. Live stays on
+E6+composite for this morning's paper session.
+
 ---
 **Document status: COMPLETE for the 2026-06-04 run.** S0–S6 verified with root causes;
 final consolidated verdict + prioritized plan above. S7 + multi-day are tracked actions.
