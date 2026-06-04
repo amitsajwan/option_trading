@@ -1,3 +1,4 @@
+import os
 import unittest
 from tempfile import TemporaryDirectory
 from datetime import date
@@ -5,6 +6,15 @@ from unittest import mock
 
 from strategy_app.market.snapshot_accessor import SnapshotAccessor
 from strategy_app.risk.manager import RiskManager
+
+
+def _clear_ambient_risk_env() -> None:
+    """Remove ambient RISK_* overrides (e.g. from a developer .env loaded into the
+    shell) so profile-preset tests exercise the preset, not the local environment.
+    Call inside a mock.patch.dict(os.environ, ...) block — patch.dict restores all
+    keys on exit. RISK_PROFILE is preserved so the profile still loads."""
+    for k in [k for k in list(os.environ) if k.startswith("RISK_") and k != "RISK_PROFILE"]:
+        os.environ.pop(k, None)
 
 
 def _snap(*, ts: str, vix_intraday_chg: float | None = None, vix_spike_flag: bool = False) -> SnapshotAccessor:
@@ -57,6 +67,7 @@ class RiskManagerTests(unittest.TestCase):
 
     def test_aggressive_safe_profile_applies_defaults(self) -> None:
         with mock.patch.dict("os.environ", {"RISK_PROFILE": "aggressive_safe_v1"}, clear=False):
+            _clear_ambient_risk_env()
             mgr = RiskManager()
             mgr.on_session_start(date(2026, 3, 5))
             self.assertEqual(mgr.context.max_consecutive_losses, 3)

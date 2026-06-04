@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -205,10 +206,17 @@ class PureMLConfigTests(unittest.TestCase):
             model_bundle = self._write_model_bundle(root)
             threshold_report = self._write_threshold_report(root)
 
-            with patch("strategy_app.main._enforce_ml_runtime_guard", return_value=None), patch(
+            # Hermetic: drop ambient STRATEGY_* overrides (a developer .env loaded
+            # into the shell sets STRATEGY_PROFILE_ID/ENGINE) so the CLI resolves its
+            # own ml_pure default rather than the local environment's.
+            with patch.dict("os.environ", {}, clear=False), patch(
+                "strategy_app.main._enforce_ml_runtime_guard", return_value=None
+            ), patch(
                 "strategy_app.main.RedisSnapshotConsumer.start",
                 return_value=0,
             ):
+                for _k in ("STRATEGY_PROFILE_ID", "STRATEGY_ENGINE"):
+                    os.environ.pop(_k, None)
                 exit_code = run_cli(
                     [
                         "--engine",

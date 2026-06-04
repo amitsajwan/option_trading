@@ -62,7 +62,7 @@ class StrategyHealthRuntimeArtifactsTests(unittest.TestCase):
             redis_client = MagicMock()
             redis_client.ping.return_value = True
 
-            with patch("strategy_app.health.find_matching_python_processes", return_value=[("1234", "strategy_app.main")]), patch("strategy_app.health.redis.Redis", return_value=redis_client):
+            with patch("strategy_app.health.find_matching_python_processes", return_value=[("1234", "strategy_app.main")]), patch("redis.Redis", return_value=redis_client):
                 result, code = evaluate(topic="market:snapshot:v1", artifact_dir=str(store.paths.root), metrics_tail_lines=5)
 
             self.assertEqual(code, 0)
