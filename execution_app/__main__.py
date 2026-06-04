@@ -5,9 +5,10 @@ Subscribes to trade signals and routes them to the configured broker adapter.
 Selected adapter:
   EXECUTION_ADAPTER=paper   PaperAdapter  (default — safe, no real orders)
   EXECUTION_ADAPTER=kite    KiteAdapter   (requires KITE_API_KEY + KITE_ACCESS_TOKEN)
+  EXECUTION_ADAPTER=dhan    DhanAdapter   (requires DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN)
 
 Health endpoint:
-  GET /health  → {"status": "ok", "adapter": "paper|kite"}
+  GET /health  → {"status": "ok", "adapter": "paper|kite|dhan"}
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from fastapi import FastAPI
 from contracts_app import configure_ist_logging
 
 from .adapter.base import BrokerAdapter
+from .adapter.dhan import DhanAdapter
 from .adapter.kite import KiteAdapter
 from .adapter.paper import PaperAdapter
 from .adapter.shadow import ShadowAdapter
@@ -51,6 +53,9 @@ def _build_adapter() -> BrokerAdapter:
     if _ADAPTER_ENV == "kite":
         _adapter_name = "kite"
         return KiteAdapter()
+    if _ADAPTER_ENV == "dhan":
+        _adapter_name = "dhan"
+        return DhanAdapter()
     if _ADAPTER_ENV == "shadow":
         _adapter_name = "shadow"
         return ShadowAdapter()
