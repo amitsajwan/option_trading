@@ -10,6 +10,7 @@
   "signal_type": "HOLD",
   "direction": null,
   "strike": null,
+  "expiry": null,
   "entry_premium": null,
   "max_hold_bars": null,
   "stop_loss_pct": 0.4,

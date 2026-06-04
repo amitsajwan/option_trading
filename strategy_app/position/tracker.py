@@ -456,6 +456,9 @@ class PositionTracker:
             signal_type=SignalType.EXIT,
             direction=position.direction,
             strike=position.strike,
+            # Carry the position's expiry so the broker can resolve the instrument
+            # on exit (a live position must be exitable, not stranded).
+            expiry=getattr(position, "expiry", None),
             entry_premium=position.entry_premium,
             position_id=position.position_id,
             exit_reason=reason,
