@@ -873,6 +873,11 @@ class DeterministicRuleEngine(StrategyEngine):
                 return None  # blocker: direction_evidence_mismatch:PE (per-tick summary)
             if "CE" in _entry_dirs and _bear > _ev_opposing_max and _bull < _ev_support_min:
                 return None  # blocker: direction_evidence_mismatch:CE (per-tick summary)
+
+        # 6. Trend-fade guard (#3): don't fade the dominant VWAP trend on a shallow
+        #    pullback. No-op unless TREND_FADE_GUARD_ENABLED. Mirrored in _derive_entry_blocker.
+        if self._trend_fade_block(votes, snap) is not None:
+            return None  # blocker: trend_fade_guard:<dir> (per-tick summary)
         # ── End discipline gates ──────────────────────────────────────────────
 
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
@@ -1868,6 +1873,43 @@ class DeterministicRuleEngine(StrategyEngine):
         blocked = bool(reasons)
         return blocked, ",".join(reasons) if blocked else ""
 
+    def _trend_fade_block(
+        self,
+        votes: list[StrategyVote],
+        snap: SnapshotAccessor,
+    ) -> Optional[str]:
+        """#3 Trend-fade guard — don't fade the dominant VWAP trend on a shallow pullback.
+
+        A counter-trend option (a PE while price still holds above VWAP, or a CE while
+        price holds below VWAP) is blocked ONLY while the opposing move is still a shallow
+        pullback — i.e. the 30m return has not yet become a genuine trend the other way.
+        Once the reversal is real (|fut_return_30m| beyond the strong threshold) the guard
+        releases, so true reversals remain tradeable. Default-OFF via TREND_FADE_GUARD_ENABLED;
+        when off this returns None and the gate is a no-op.
+
+        Returns "trend_fade_guard:PE" / "trend_fade_guard:CE", or None.
+        """
+        if not as_bool(os.getenv("TREND_FADE_GUARD_ENABLED", "false")):
+            return None
+        pvw = snap.price_vs_vwap
+        r30m = snap.fut_return_30m
+        if pvw is None or r30m is None:
+            return None
+        vwap_min = float(os.getenv("TREND_FADE_GUARD_VWAP_MIN", "0.001"))
+        r30m_strong = float(os.getenv("TREND_FADE_GUARD_R30M_STRONG", "0.005"))
+        entry_dirs = {
+            str(v.direction.value if hasattr(v.direction, "value") else v.direction or "").upper()
+            for v in votes
+            if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
+        }
+        # Bullish day structure (price above VWAP) + only a shallow dip → don't buy puts.
+        if "PE" in entry_dirs and pvw >= vwap_min and r30m > -r30m_strong:
+            return "trend_fade_guard:PE"
+        # Bearish day structure (price below VWAP) + only a shallow bounce → don't buy calls.
+        if "CE" in entry_dirs and pvw <= -vwap_min and r30m < r30m_strong:
+            return "trend_fade_guard:CE"
+        return None
+
     def _derive_entry_blocker(
         self,
         *,
@@ -1957,6 +1999,11 @@ class DeterministicRuleEngine(StrategyEngine):
                 return "direction_evidence_mismatch:PE"
             if "CE" in _cur_dirs and _bear > ev_oppose and _bull < ev_support:
                 return "direction_evidence_mismatch:CE"
+
+        # 6. Trend-fade guard (#3): mirror of _process_entry_votes gate 6.
+        _fade = self._trend_fade_block(votes, snap)
+        if _fade is not None:
+            return _fade
         # ── End discipline gates ───────────────────────────────────────────────
 
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
@@ -2250,6 +2297,25 @@ class DeterministicRuleEngine(StrategyEngine):
                 }
             )
             return gates, "blocked", "direction_evidence", False
+        if blocker is not None and blocker.startswith("trend_fade_guard:"):
+            blocked_dir = blocker.split(":", 1)[1]
+            def _ff(x):
+                try: return float(x)
+                except (TypeError, ValueError): return 0.0
+            gates.append(
+                {
+                    "gate_id": "trend_fade_guard",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "trend_fade_guard",
+                    "message": f"{blocked_dir} entry fades the dominant VWAP trend on a shallow pullback — trader discipline block",
+                    "metrics": {
+                        "price_vs_vwap": _ff(getattr(snap, "price_vs_vwap", None)),
+                        "fut_return_30m": _ff(getattr(snap, "fut_return_30m", None)),
+                    },
+                }
+            )
+            return gates, "blocked", "trend_fade_guard", False
         if blocker == "entry_phase":
             gates.append(
                 {

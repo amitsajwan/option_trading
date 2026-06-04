@@ -458,6 +458,12 @@ services:
       # ── Exit strategy mode ────────────────────────────────────────────────
       EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
       ADAPTIVE_LOTTERY_REGIMES: "${ADAPTIVE_LOTTERY_REGIMES:-BREAKOUT,TRENDING}"
+      # ── Trend-aware regime + trend-fade guard (2026-06-04 postmortem) ──────
+      REGIME_TREND_ALIGNED_BONUS: "${REGIME_TREND_ALIGNED_BONUS:-0.0}"
+      REGIME_TREND_SCORE_MIN: "${REGIME_TREND_SCORE_MIN:-2.0}"
+      TREND_FADE_GUARD_ENABLED: "${TREND_FADE_GUARD_ENABLED:-false}"
+      TREND_FADE_GUARD_VWAP_MIN: "${TREND_FADE_GUARD_VWAP_MIN:-0.001}"
+      TREND_FADE_GUARD_R30M_STRONG: "${TREND_FADE_GUARD_R30M_STRONG:-0.005}"
       LOTTERY_HARD_STOP_PCT: "${LOTTERY_HARD_STOP_PCT:-0.20}"
       LOTTERY_BIG_TARGET_PCT: "${LOTTERY_BIG_TARGET_PCT:-0.50}"
       LOTTERY_RUNNER_ACTIVATION_MFE: "${LOTTERY_RUNNER_ACTIVATION_MFE:-0.20}"
@@ -510,6 +516,7 @@ services:
   # Routes strategy trade signals to the configured broker adapter.
   # EXECUTION_ADAPTER=paper  → no real orders (safe default)
   # EXECUTION_ADAPTER=kite   → real Kite NFO orders (requires credentials)
+  # EXECUTION_ADAPTER=dhan   → real Dhan NFO orders (requires DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN)
   # Enable by adding --profile live to docker compose up, or run individually.
   # ─────────────────────────────────────────────────────────────────────────
   execution_app:
@@ -540,6 +547,11 @@ services:
       # ── Kite credentials (required when EXECUTION_ADAPTER=kite) ───────────
       KITE_API_KEY: "${KITE_API_KEY:-}"
       KITE_ACCESS_TOKEN: "${KITE_ACCESS_TOKEN:-}"
+
+      # ── Dhan credentials (required when EXECUTION_ADAPTER=dhan) ───────────
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
 
       # ── Order management ──────────────────────────────────────────────────
       ORDER_FILL_TIMEOUT_SEC: "${ORDER_FILL_TIMEOUT_SEC:-30}"
@@ -1077,6 +1089,12 @@ services:
       # ── Exit strategy mode ────────────────────────────────────────────────
       EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
       ADAPTIVE_LOTTERY_REGIMES: "${ADAPTIVE_LOTTERY_REGIMES:-BREAKOUT,TRENDING}"
+      # ── Trend-aware regime + trend-fade guard (2026-06-04 postmortem) ──────
+      REGIME_TREND_ALIGNED_BONUS: "${REGIME_TREND_ALIGNED_BONUS:-0.0}"
+      REGIME_TREND_SCORE_MIN: "${REGIME_TREND_SCORE_MIN:-2.0}"
+      TREND_FADE_GUARD_ENABLED: "${TREND_FADE_GUARD_ENABLED:-false}"
+      TREND_FADE_GUARD_VWAP_MIN: "${TREND_FADE_GUARD_VWAP_MIN:-0.001}"
+      TREND_FADE_GUARD_R30M_STRONG: "${TREND_FADE_GUARD_R30M_STRONG:-0.005}"
       LOTTERY_HARD_STOP_PCT: "${LOTTERY_HARD_STOP_PCT:-0.20}"
       LOTTERY_BIG_TARGET_PCT: "${LOTTERY_BIG_TARGET_PCT:-0.50}"
       LOTTERY_RUNNER_ACTIVATION_MFE: "${LOTTERY_RUNNER_ACTIVATION_MFE:-0.20}"
