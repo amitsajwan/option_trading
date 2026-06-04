@@ -494,11 +494,7 @@ def _attach_trace_analysis(
     """
     if not decision_traces:
         return
-    import sys as _sys
-    repo = Path("/app")
-    if str(repo) not in _sys.path:
-        _sys.path.insert(0, str(repo))
-    from ops.gcp.analyze_sim_trace import analyze_traces, render_markdown
+    from strategy_app.sim.trace_digest import analyze_traces, render_markdown
 
     # Entry-label thresholds — default to the DEPLOYED model (50pts / 10min), env-overridable.
     horizon = int(os.getenv("ENTRY_LABEL_VERIFY_HORIZON", "10") or "10")
