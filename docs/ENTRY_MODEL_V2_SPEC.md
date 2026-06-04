@@ -7,6 +7,30 @@
 
 ---
 
+## 0. Data availability (checked 2026-06-04)
+
+**Yes — we have the training data, in full.** The flattened ML feature view used by the deployed model is on the **dev/build machine** at `.data/ml_pipeline/parquet_data/snapshots_ml_flat_v2/` (one parquet per trading day):
+
+| Year | Trading days |
+|------|--------------|
+| 2020 | 251 |
+| 2021 | 247 |
+| 2022 | 247 |
+| 2023 | 245 |
+| 2024 | 209 (through **2024-10-31**) |
+| **Total** | **1,199 days (2020-01-01 → 2024-10-31), ~4.75 yrs** |
+
+Raw `futures/`, `options/`, `market_base/` parquet (back to 2020) are alongside it, so the feature view can be rebuilt if needed. This is a **single-stage / entry-only** model (`bypass_stage2=true, bypass_stage3=true, entry_only_publish=true`) — no staged dependencies.
+
+**Where it is NOT:** the live VM's `.data/ml_pipeline/parquet_data/` is **empty** — training does **not** run on the VM. Run it on the dev/build box (or wherever `ml_pipeline_2` runs) that holds this parquet. Mongo on the VM holds only `phase1_market_snapshots_historical` = 2024-01-01→2024-10-31 (209 days) + small live 2026 — that's for replay/sim, not the primary training source.
+
+**Gap to know:** data ends **2024-10-31**. There is no parquet for Nov-2024 → 2026. Live 2026 snapshots (collected since ~late-May-2026) sit in Mongo/JSONL and are **not yet flattened to parquet**. Implications:
+- The spec's train/valid/holdout windows (2022→2024-10) are **fully covered** — train today, no data gathering needed.
+- More regime diversity is available for free: **2020–2021** (COVID crash + bull) can be added to the training window. Their lower index levels (~30–38k vs ~54k now) reinforce the **%-based label** in §2.1.
+- **Forward-validation on 2026** requires either the sim path (already wired: ops-sim + `analyze_sim_trace.py`) or running the mongo→parquet flattening ETL on recent live snapshots.
+
+---
+
 ## 1. Why a new model (the problem in one paragraph)
 
 The deployed entry model (`entry_s1_e6_soft50pts_10m`, label = "BankNifty futures move ≥50 pts in **either** direction within **10 min**") has a strong holdout **ROC-AUC 0.83** but is **useless as a gate in production**: on the 2026-06-04 replay it scored **min 0.669 / median 0.849 over 119 bars and fired on 100% of them** at the recommended `min_prob=0.65`. A 50-pt move in 10 min is nearly always achievable (median *realised* excursion that day was 66.8 pts), so the model learned to (correctly) say "yes" almost always. It cannot separate good entries from bad — all real filtering is done downstream by the gates, not the model. (Verified with `ops/gcp/analyze_sim_trace.py` → `verify_entry_label`: FIRED 119, moved 87 → "precision" 0.73 but **0 not-fired bars → separation unmeasurable**.)
