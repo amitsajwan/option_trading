@@ -247,12 +247,19 @@ def analyze_traces(
             probs.append(p)
             if p >= entry_threshold:
                 fired += 1
+    n_bars = len(traces)
     ml_entry = {
-        "bars_with_entry_candidate": len(probs),
-        "entry_prob": _dist(probs),
+        # Bars where the entry model FIRED (produced a vote, prob >= threshold).
+        "bars_fired": len(probs),
+        # Total bars in the session (the honest denominator — declined bars included).
+        "bars_total": n_bars,
+        # Fire rate over the whole session. The model declines on the rest — this is
+        # the real discrimination, NOT visible if you only look at fired bars.
+        "fire_rate_pct": round(100.0 * len(probs) / n_bars, 1) if n_bars else None,
+        "entry_prob_when_fired": _dist(probs),
         "histogram": _histogram(probs, [0.0, 0.5, 0.65, 0.8, 0.9, 1.0]),
-        "cleared_threshold": {"threshold": entry_threshold, "count": fired,
-                              "pct_of_candidates": round(100.0 * fired / len(probs), 1) if probs else None},
+        "note": "entry_prob distribution is over FIRED bars only; declined-bar probs "
+                "(<threshold) are not yet captured in the trace.",
     }
 
     # ── direction health ──
@@ -404,11 +411,11 @@ def render_markdown(report: dict[str, Any]) -> str:
 
     me = report["ml_entry"]
     L.append("## ML entry health")
-    L.append(f"- entry_prob over {me['bars_with_entry_candidate']} bars: {me['entry_prob']}")
-    L.append(f"- histogram: {me['histogram']}")
-    ct = me["cleared_threshold"]
-    L.append(f"- cleared {ct['threshold']}: {ct['count']} ({ct['pct_of_candidates']}% of candidates) "
-             f"-> {'WARN: likely a near-constant YES (not discriminating)' if (ct['pct_of_candidates'] or 0) > 90 else 'discriminating'}")
+    L.append(f"- FIRE RATE: {me['bars_fired']}/{me['bars_total']} bars = **{me['fire_rate_pct']}%** "
+             f"(model declined on the other {me['bars_total'] - me['bars_fired']})")
+    L.append(f"- entry_prob when fired: {me['entry_prob_when_fired']}")
+    L.append(f"- histogram (fired bars): {me['histogram']}")
+    L.append(f"- note: {me['note']}")
     L.append("")
 
     elc = report.get("entry_label_check")

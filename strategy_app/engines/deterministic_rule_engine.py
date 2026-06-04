@@ -460,6 +460,21 @@ class DeterministicRuleEngine(StrategyEngine):
         with self._eval_timer.measure("collect_votes"):
             votes = self._collect_votes(snapshot, snap, regime_signal, position, risk, shadow_vote)
         if not votes:
+            # Trace EVERY bar — incl. bars where no strategy voted (e.g. entry model
+            # declined, prob < min_prob). Without this the trace only captured fired
+            # bars, biasing analysis (the declined bars are the not-fired population).
+            no_vote_trace = (
+                self._build_position_trace(
+                    snap=snap, position=position, votes=[], signal=None, final_outcome="manage_only",
+                )
+                if position is not None
+                else self._build_entry_trace(
+                    snap=snap, regime_signal=regime_signal, votes=[], signal=None,
+                    blocker="no_strategy_votes", warmup_blocked=False, warmup_reason="",
+                )
+            )
+            self.last_decision_trace = no_vote_trace
+            self._log.log_decision_trace(no_vote_trace)
             self._emit_decision_summary(
                 snap=snap,
                 action=("manage_only" if position is not None else "hold"),

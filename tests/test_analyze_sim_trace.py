@@ -81,7 +81,9 @@ def test_analyze_traces_full_report_shape():
         _entry_trace("2026-06-04T10:47:00", 0.55),
     ]
     rep = analyze_traces(traces, trades=[{"pnl_pct": -0.0036}])
-    assert rep["ml_entry"]["cleared_threshold"]["count"] == 1
+    assert rep["ml_entry"]["bars_fired"] == 2
+    assert rep["ml_entry"]["bars_total"] == 2
+    assert rep["ml_entry"]["fire_rate_pct"] == 100.0  # both synthetic bars have a candidate
     assert rep["direction"]["ce_pe"] == {"CE": 1}
     assert rep["market_structure"]["position_in_range"] == {"near_high": 1}
     assert rep["gates"]["candidate_veto_reason"].get("below_threshold") == 1
