@@ -21,7 +21,8 @@ All under `/opt/option_trading/.run/strategy_app{,_historical}/`:
 | `runtime_state.json` | Current state snapshot (engine, last event, hold counts) | Rewritten every snapshot |
 | `signals.jsonl` | Every signal: ENTRY, EXIT, HOLD (with reason) | Append-only, one line per signal |
 | `positions.jsonl` | Position events: OPEN, MANAGE, CLOSE | Append-only, one line per event |
-| `decision_traces.jsonl` | Full decision context per snapshot | Append-only |
+| `decisions.jsonl` | **One lean line per tick**: input → what happened → output / blocking gate | Append-only, always-on |
+| `decision_traces.jsonl` | Full decision context per snapshot (env-gated, deep) | Append-only |
 | `metrics.jsonl` | Engine metrics events (session start, entry, exit) | Append-only |
 
 JSONL is canonical. Mongo is a derived read cache (the dashboard reads
@@ -41,7 +42,37 @@ grep '"snapshot_id":"YYYYMMDD_HHMM"' .run/strategy_app_historical/signals.jsonl 
 If you get a hit, the trade fired. The line includes the `decision_metrics`
 (entry_prob, recipe_id, recipe_margin) and the resulting recipe params.
 
+### "What happened at minute T?" (one-grep answer)
+
+`decisions.jsonl` has exactly one line per evaluate() call — the canonical
+"what happened this tick" record. Look here first; the env-gated
+`decision_traces.jsonl` is the deep layer beneath it.
+
+```bash
+grep '"snapshot_id":"YYYYMMDD_HHMM"' .run/strategy_app_historical/decisions.jsonl \
+  | jq '{action, blocking_gate, input, votes, output}'
+```
+
+Each line carries:
+
+| Field | Meaning |
+|---|---|
+| `action` | `entry_taken` / `exit_taken` / `manage_only` / `blocked` / `hold` |
+| `blocking_gate` | The decisive gate that stopped an entry (null when a trade fired). Includes numbers, e.g. `stop_loss_cooldown:2<5`, `direction_evidence_mismatch:PE` |
+| `input` | `session_phase`, `fut_close`, `atm_strike`, `or_width`, `regime`, `regime_conf` |
+| `engine_state` | `has_position`, `is_halted`, `is_paused`, `warmup_blocked`, session P&L / trade count / consecutive losses, `bars_evaluated` |
+| `votes` | Per-strategy: `strategy`, `direction`, `confidence`, `grade`, `tier` |
+| `output` | When a signal fired: `signal_type`, `direction`, `strike`, `exit_reason`, `grade`, `tier`, `execution_path` |
+| `position` | When a position is open: id, direction, strike, bars_held, pnl_pct |
+
+This is the single source of truth for the per-tick decision. The
+human-readable `logger.info("entry blocked: …")` narration that used to be
+scattered through the engine has been removed — `blocking_gate` replaces it.
+
 ### "Why didn't a trade fire at minute T?"
+
+Fastest: `jq '.blocking_gate'` on the `decisions.jsonl` line above. The
+legacy 3-file path still works via `signals.jsonl`:
 
 ```bash
 grep '"snapshot_id":"YYYYMMDD_HHMM"' .run/strategy_app_historical/signals.jsonl \
@@ -245,9 +276,11 @@ to dashboard miscounts. The runbook covers how to handle.
 These were identified during the 2026-05-19 cleanup. Each is a known gap
 we should close opportunistically rather than at once.
 
-1. **Per-snapshot `decisions.jsonl`** — single line per evaluate() call,
-   listing all gates evaluated and which blocked. Would collapse
-   "why didn't this fire" from 3-file grep to 1-file grep.
+1. ✅ **Per-snapshot `decisions.jsonl`** — *Closed (2026-06-04).* One
+   always-on line per evaluate() call with input → what-happened → output /
+   `blocking_gate`. Implemented in both `pure_ml_engine` and
+   `deterministic_rule_engine`. See the "What happened at minute T?" recipe
+   above. Collapsed "why didn't this fire" from a 3-file grep to one line.
 2. **`/api/strategy/observability/summary`** — single JSON endpoint with
    deployed model, today's gate counts, recent trades, audit status.
    Lets the dashboard show a one-line health summary.
