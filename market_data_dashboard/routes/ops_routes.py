@@ -50,6 +50,11 @@ _SAFE_OVERRIDE_KEYS = {
     "STRATEGY_PROFILE_ID",
     "STRATEGY_ENTRY_PIPELINE_V2",
     "SMART_STRIKE_MIN_PREMIUM",
+    # Entry-model A/B (sim-only): point a sim run at a candidate bundle + its operating
+    # threshold without touching the live model. Lets us validate a replacement model
+    # via the trace harness before any live cut-over.
+    "ENTRY_ML_MODEL_PATH",
+    "ENTRY_ML_MIN_PROB",
     # Lottery / adaptive mode
     "EXIT_STRATEGY_MODE",
     "ADAPTIVE_LOTTERY_REGIMES",
