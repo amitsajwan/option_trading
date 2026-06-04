@@ -281,6 +281,17 @@ def analyze_traces(
     bears = [_num((_dir(t).get("evidence") or {}).get("bear_score")) for t in taken]
     graded = sum(1 for t in taken if _dir(t).get("grade_evaluated"))
     modes = Counter(str(_dir(t).get("mode")) for t in taken if _dir(t))
+
+    # ── Direction-model health over ALL bars (not just taken) ──────────────────
+    # The model runs every bar; verifying it on the whole population is what makes
+    # "is direction working?" clear. would_be_pe counts bars where ce_prob < 0.5 —
+    # i.e. the model DID signal PE, even if none were taken that day. A tiny spread
+    # (max-min) means the model is ~flat → no real directional signal on this run.
+    dir_all = [_num(_dir(t).get("ml_ce_prob")) for t in traces if _dir(t).get("ml_ce_prob") is not None]
+    dir_all = [p for p in dir_all if p is not None]
+    would_ce = sum(1 for p in dir_all if p >= 0.5)
+    would_pe = sum(1 for p in dir_all if p < 0.5)
+    spread = round(max(dir_all) - min(dir_all), 4) if dir_all else None
     direction = {
         "taken": len(taken),
         "ce_pe": dict(dir_counter),
@@ -290,11 +301,18 @@ def analyze_traces(
         "ml_ce_prob": _dist(ce_probs),
         "evidence_bull": _dist([b for b in bulls if b is not None]),
         "evidence_bear": _dist([b for b in bears if b is not None]),
-        # The key gap-exposer: how many taken trades were actually run through the
-        # GOOD/OK/BAD grader. 0 => the grader was bypassed (consensus mode) and the
-        # thin-margin/chop/iv-skew DIRECTION vetoes never evaluated these trades.
         "grade_evaluated_count": graded,
         "grade_coverage": (round(graded / len(taken), 3) if taken else None),
+        # Whole-run view of the direction model:
+        "all_bars": {
+            "n": len(dir_all),
+            "ml_ce_prob": _dist(dir_all),
+            "would_be_ce": would_ce,
+            "would_be_pe": would_pe,
+            "ce_prob_spread": spread,
+            # Flat output across the whole session => effectively no directional signal.
+            "degenerate": bool(spread is not None and spread < 0.05),
+        },
     }
 
     # ── gate / veto histogram ──
@@ -407,13 +425,18 @@ def render_markdown(report: dict[str, Any]) -> str:
         L.append("")
 
     d = report["direction"]
+    ab = d.get("all_bars") or {}
     L.append("## Direction health")
-    L.append(f"- taken: {d['taken']} | CE/PE: {d['ce_pe']} | mode: {d.get('mode')}")
-    L.append(f"- direction_source: {d['direction_source'] or 'n/a'} | ml_ce_prob: {d.get('ml_ce_prob')} | margin: {d['margin']}")
+    L.append(f"- ALL BARS ({ab.get('n')}): ml_ce_prob {ab.get('ml_ce_prob')} | spread {ab.get('ce_prob_spread')}")
+    L.append(f"- would-be CE/PE over all bars: {ab.get('would_be_ce')} / {ab.get('would_be_pe')}"
+             + ("  -> WARN: model produced NO PE signal this run" if ab.get('would_be_pe') == 0 else ""))
+    if ab.get("degenerate"):
+        L.append(f"  -> WARN: DEGENERATE — ce_prob spread {ab.get('ce_prob_spread')} < 0.05; model ~flat, no real directional signal this run")
+    L.append(f"- taken: {d['taken']} | CE/PE taken: {d['ce_pe']} | mode: {d.get('mode')} | source: {d['direction_source'] or 'n/a'}")
     L.append(f"- evidence bull: {d.get('evidence_bull')} | bear: {d.get('evidence_bear')}")
     gc = d.get("grade_coverage")
     L.append(f"- grade coverage: {d.get('grade_evaluated_count')}/{d['taken']} graded "
-             + (f"-> WARN: GOOD/OK/BAD grader BYPASSED (direction vetoes inactive in this mode)" if gc == 0 else ""))
+             + ("-> WARN: GOOD/OK/BAD grader BYPASSED (direction vetoes inactive in this mode)" if gc == 0 else ""))
     L.append("")
 
     g = report["gates"]
