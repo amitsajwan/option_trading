@@ -159,12 +159,17 @@ def replay_day(
                 diag["first_error"] = f"{exc} :: {traceback.format_exc()[-400:]}"
             continue
 
-        # Capture the per-bar gate cascade BEFORE the signal-None short-circuit —
-        # the no_trade bars are exactly the ones we need to explain. None under v1.
-        _tr = getattr(engine, "last_entry_trace", None)
-        if _tr is not None and _tr.get("decision_id") != _last_trace_id:
-            _last_trace_id = _tr.get("decision_id")
-            decision_traces.append(_tr)
+        # Capture the per-bar decision trace BEFORE the signal-None short-circuit —
+        # the no_trade bars are exactly the ones we need to explain. Prefer the RICH
+        # trace (DecisionTraceBuilder: candidates, direction scores, per-gate veto,
+        # entry_prob, market_structure); fall back to the v2 gate-cascade trace.
+        # Dedup per bar: rich trace uses trace_id, the v2 trace uses decision_id.
+        _tr = getattr(engine, "last_decision_trace", None) or getattr(engine, "last_entry_trace", None)
+        if _tr is not None:
+            _tr_key = _tr.get("trace_id") or _tr.get("decision_id")
+            if _tr_key != _last_trace_id:
+                _last_trace_id = _tr_key
+                decision_traces.append(_tr)
 
         if signal is None:
             continue
