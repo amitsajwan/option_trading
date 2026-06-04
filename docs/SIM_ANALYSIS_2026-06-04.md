@@ -52,16 +52,18 @@ Engine: deterministic, `direction_source=ml_entry_timing` (consensus mode = what
 - **Action:** direction-model rework is the priority after entry-v2. Verify across
   more days; quantify with the same `all_bars` degenerate flag.
 
-## STEP 3 — Entry blocking is done by the REGIME gate, not the ML
-- **Finding:** of 109 blocked (fired-but-not-taken... see note), primary blockers:
-  `sideways_returns_mixed` **85**, `min_reentry_gap` 15, `confidence_gate` 8,
-  `candidate_ranking` 1.
-- **Reasoning:** 78% of blocking is one regime check
-  ([:818-822](../strategy_app/engines/deterministic_rule_engine.py#L818)) — SIDEWAYS +
-  mixed returns → no conviction → skip. The ML entry model adds ~no filtering at its
-  threshold; the **regime tagger is the real entry filter.**
-- **Implication:** whether blocking is *correct* now depends entirely on the regime
-  tagger being right → STEP 5.
+## STEP 3 — Filtering is TWO-STAGE (entry model declines most; regime gate catches the rest) [CORRECTED w/ full population]
+- **Finding (full 351-bar population):** `no_strategy_votes` (entry model declined,
+  prob<0.65) **198**, `sideways_returns_mixed` **85**, `no_exit_trigger` 34 (position
+  mgmt), `min_reentry_gap` 15, `confidence_gate` 8, `candidate_ranking` 1, taken/None 10.
+- **Reasoning:** the entry model is the **first and largest** filter — it declines 198
+  of ~341 non-position bars (~58%). Of the 119 it *passes*, the regime gate
+  ([:818-822](../strategy_app/engines/deterministic_rule_engine.py#L818)) blocks 85
+  (71%). So **both** matter — my earlier "regime gate does 78% of blocking" was over
+  the fired-bars-only subset (85/109) and undercounted the entry model's own
+  declines. Corrected: entry-declines 198 > regime-block 85.
+- **Implication:** whether the 85 regime blocks are *correct* depends on the regime
+  tagger → STEP 5.
 
 ## STEP 4 — Direction-quality grader is BYPASSED in consensus mode
 - **Finding:** `grade_coverage 0/10` — the GOOD/OK/BAD grader ran on zero taken trades.
@@ -77,11 +79,23 @@ Engine: deterministic, `direction_source=ml_entry_timing` (consensus mode = what
 
 ---
 
+## STEP 5 — Regime tagger looks BROADLY CORRECT on this (range-bound) day
+- **Finding:** over 351 bars — CHOP 135 (38%), SIDEWAYS 135 (38%), AVOID 65 (19%),
+  BREAKOUT 9 (3%), **TRENDING only 7 (2%)**.
+- **Reasoning:** 76% chop/sideways for a genuinely range-bound day is appropriate, and
+  **the feared "false TRENDING" does NOT reproduce here** (only 2% TRENDING). Cross-tab
+  vs swing structure: CHOP/SIDEWAYS bars are mostly `range` (75 / 56) with some micro
+  up/down-trend (noisy 1-pivot fractal) — expected divergence between a broad regime
+  label and a micro swing read. So on this run the regime tagger is not the culprit;
+  it correctly refused a no-trend day.
+- **Caveat:** the original mislabel finding was on a *different* day; needs a
+  multi-day check before clearing the tagger generally. `AVOID` (65 bars) is a
+  no-entry regime (likely open/close windows) — confirm it's time-based, not eating
+  tradeable bars.
+- **Action:** re-run S5 across several days; spot-check any TRENDING/BREAKOUT bar's
+  card against realised forward move.
+
 ## PENDING STEPS
-- **STEP 5 — Regime tagger** (drives 78% of blocking): over the full session, was
-  SIDEWAYS/TRENDING/BREAKOUT correct vs realised price structure (cross-check against
-  the `market_structure` block we capture)? Original 3-loss finding: it mislabeled a
-  range-bound tape as TRENDING.
 - **STEP 6 — Exits**: exit-reason distribution; are exits premature (the +5-min
   time-stop / MFE-giveback pattern from the earlier 3-loss run)?
 - **STEP 7 — Declined-prob capture** (from Step 1 caveat) to measure entry separation.
