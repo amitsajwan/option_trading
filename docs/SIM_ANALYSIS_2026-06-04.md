@@ -146,3 +146,54 @@ Engine: deterministic, `direction_source=ml_entry_timing` (consensus mode = what
 
 > Note on "109 blocked": that count is over *fired* bars in the pre-fix digest. With
 > full-population traces, re-derive blocked counts over all 351 bars in STEP 5.
+
+---
+
+# FINAL CONSOLIDATED ANALYSIS (2026-06-04 run)
+
+## Bottom line
+**No execution bug / wrong trade was found.** The engine did what it was configured to
+do — verified now that the trace is complete and trustworthy. The session was
+4W/6L, **net +0.80%**. What we found are **capability weaknesses and observability
+gaps**, not malfunctions.
+
+## What is WORKING
+- **Entry model** — discriminates (fires 33.9%, declines 66%). The earlier "fires
+  100%/useless" was a survivorship-bias artifact of the incomplete trace, now corrected.
+- **Regime tagger** — broadly correct on this range-bound day (76% chop/sideways, only
+  2% TRENDING; no false-trend). *Single day — needs multi-day confirmation.*
+- **Entry discipline gates** — the regime "no-conviction" block (85 bars) is doing
+  sensible work refusing chop.
+- **Trailing exit** — not broken; it executes (the giveback was a 1-bar granularity
+  limit, not a logic fault).
+
+## What is WEAK (real, actionable)
+1. **Direction model is degenerate** — flat ~0.515 all day, spread 0.0008, **zero PE
+   signalled** → defaults CE every bar. No real side-selection skill. *This is the
+   single biggest capability gap.* (Affects every trade.)
+2. **Direction-quality grader is bypassed** in consensus mode (the live mode) → the
+   thin-margin/chop/iv-skew vetoes never run; only an extreme-evidence guard is active.
+3. **Exit observability + intra-bar giveback** — exits recorded generically as
+   `exit_stack`; can't see target/stop/trailing/time/thesis. The +2.08%→−0.36% giveback
+   is a 1-min round-trip the bar-close trailing can't catch.
+
+## What was NOISE (don't chase)
+- "Entry fires 100%" → my analysis error (survivorship bias). Fixed.
+- "All CE / no veto" → explained by the flat direction model + grader bypass, not a bug.
+- "Regime mislabels TRENDING" → did **not** reproduce this day.
+
+## Prioritized plan (what / where)
+| Pri | Action | Where |
+|-----|--------|-------|
+| **P1** | **Direction model rework** — degenerate/flat; this gates every trade's edge | `direction_only` model + training (after entry-v2) |
+| **P1** | Surface the specific exit trigger (not generic `exit_stack`) | `strategy_app/position/tracker.py` → trace → `trace_digest.py` (A6) |
+| **P2** | Make grader work in consensus mode (or tighten evidence gate) | `strategy_app/signals/entry_quality.py` + engine evidence gate (A4) |
+| **P2** | Capture declined-bar entry probs (true separation) | `ml_entry.py` + engine no-vote trace (A1, S7) |
+| **P2** | Classify 1-bar vs multi-bar givebacks before tuning trail | exit-policy review (A7) |
+| **P3** | Entry model v2 retrain — refinement, not rescue | `docs/ENTRY_MODEL_V2_SPEC.md` (on ML VM) |
+| **P3** | Trace the ~9 early-return exit bars (100% coverage) | `deterministic_rule_engine.py:445` (A2) |
+| **P3** | Multi-day re-run of S5/S6 to confirm beyond one day | ops-sim + analyzer |
+
+## One-line verdict
+*The plumbing now tells the truth; the strategy isn't buggy; the **direction model is
+the real problem**, and exits + grader need observability/coverage before tuning.*
