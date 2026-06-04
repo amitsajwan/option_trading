@@ -545,6 +545,9 @@ services:
 
       # ── Adapter selection ──────────────────────────────────────────────────
       EXECUTION_ADAPTER: "${EXECUTION_ADAPTER:-paper}"
+      # Paper/live safety gate: when 1 (default) only tier=="live" signals reach the
+      # broker; paper-tier signals are skipped (fail-closed). Set 0 for full-live.
+      EXECUTION_REQUIRE_LIVE_TIER: "${EXECUTION_REQUIRE_LIVE_TIER:-1}"
 
       # ── Kite credentials (required when EXECUTION_ADAPTER=kite) ───────────
       KITE_API_KEY: "${KITE_API_KEY:-}"

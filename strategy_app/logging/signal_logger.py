@@ -188,8 +188,25 @@ class SignalLogger:
                 break
         engine_mode = self._effective_engine_mode(signal.engine_mode, source=signal.source)
         decision_mode = self._resolve_decision_mode_for_signal(signal, engine_mode)
+        # Live/paper tier — emitted so execution_app can gate real orders on tier=="live".
+        # Entries carry it on the signal's raw_signals (and on the originating vote);
+        # exits carry it on raw_signals (propagated from the position by the tracker).
+        tier = None
+        entry_grade = None
+        if isinstance(signal.raw_signals, dict):
+            tier = signal.raw_signals.get("tier")
+            entry_grade = signal.raw_signals.get("entry_grade")
+        if tier is None:
+            for vote in signal.votes:
+                rs = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
+                if rs.get("tier"):
+                    tier = rs.get("tier")
+                    entry_grade = entry_grade or rs.get("entry_grade")
+                    break
         return {
             "event": "SIGNAL",
+            "tier": tier,
+            "entry_grade": entry_grade,
             "signal_id": signal.signal_id,
             "timestamp": signal.timestamp,
             "snapshot_id": signal.snapshot_id,

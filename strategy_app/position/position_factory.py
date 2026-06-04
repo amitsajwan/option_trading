@@ -98,6 +98,7 @@ class PositionFactory:
             entry_strategy=str(signal.entry_strategy_name or ""),
             entry_regime=str(signal.entry_regime_name or ""),
             entry_reason=signal.reason,
+            tier=str((signal.raw_signals or {}).get("tier") or "") if isinstance(signal.raw_signals, dict) else "",
             decision_metrics=self._resolver.signal_decision_metrics(signal),
             engine_mode=engine_mode,
             decision_mode=decision_mode,

@@ -286,11 +286,20 @@ class TestProfilesBackfill:
                     f"profile {profile_id!r} missing regime key {label!r}"
                 )
 
-    def test_chop_uses_sideways_strategies(self):
+    def test_chop_inherits_sideways_or_is_deliberate_no_trade(self):
+        # CHOP defaults to the SIDEWAYS strategy list via _NEW_REGIME_FALLBACKS, but a
+        # profile may deliberately override CHOP to [] (no-trade). Long-premium ML-entry
+        # profiles do exactly this: buying options into mixed, low-energy chop just bleeds
+        # theta (profiles.py CHOP override; 2026-06-03 analysis — 3 consecutive PE losses
+        # in CHOP, all TIME_STOP, MFE≈0). CHOP must therefore be EITHER the SIDEWAYS set
+        # or empty — never some other arbitrary strategy list.
         for profile_id in known_profile_ids():
             regime_map = get_regime_entry_map(profile_id)
-            assert regime_map.get("CHOP") == regime_map.get("SIDEWAYS"), (
-                f"profile {profile_id!r}: CHOP should inherit SIDEWAYS strategies"
+            chop = regime_map.get("CHOP")
+            sideways = regime_map.get("SIDEWAYS")
+            assert chop == sideways or chop == [], (
+                f"profile {profile_id!r}: CHOP must inherit SIDEWAYS or be empty "
+                f"(deliberate no-trade), got {chop!r}"
             )
 
     def test_breakout_uses_trending_strategies(self):
