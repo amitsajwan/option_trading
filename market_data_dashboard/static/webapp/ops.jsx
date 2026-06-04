@@ -217,8 +217,12 @@ function SummaryBar({ trades, isActual }) {
   const wins = pnls.filter(p => p > 0);
   const total = pnls.reduce((a, b) => a + b, 0);
   const mfes  = trades.map(t => t.mfe_pct || 0);
-  const caps  = pnls.map((p, i) => mfes[i] > 0 ? p / mfes[i] : null).filter(v => v !== null);
-  const avgCap = caps.length ? caps.reduce((a, b) => a + b, 0) / caps.length : 0;
+  // Capture = aggregate Σpnl / Σmfe over trades with favorable excursion, NOT
+  // the mean of per-trade p/m ratios. A single trade with a small MFE and a loss
+  // (e.g. -5.10% pnl on +0.86% mfe → -593%) swamps the mean → bogus "-85%".
+  const capNum = pnls.reduce((a, p, i) => mfes[i] > 0 ? a + p : a, 0);
+  const capDen = mfes.reduce((a, m) => m > 0 ? a + m : a, 0);
+  const avgCap = capDen > 0 ? capNum / capDen : 0;
   const avgPrem = trades.map(t => t.prem_in).reduce((a, b) => a + b, 0) / trades.length;
   const cls = total >= 0 ? 'pos' : 'neg';
   return (
@@ -345,43 +349,46 @@ function OpsPage() {
   const setStrategyMode = (mode) => {
     setCfg(prev => {
       const next = {...prev, EXIT_STRATEGY_MODE: mode};
+      // All modes: ATM ₹600-1300 band, smart_strike, 4 OTM steps max.
+      // Lottery params are tuned for ATM (not OTM): hard stop 15%, big target 40%,
+      // runner activates at 15% MFE (a real move, not noise), runner giveback 30%.
       if (mode === 'lottery') {
-        // Lottery = OTM + high conviction + let winners run
-        next.CONSENSUS_BYPASS_MIN_CONFIDENCE = '0.80';
-        next.STRATEGY_MIN_CONFIDENCE         = '0.80';
-        next.RISK_MAX_SESSION_TRADES         = '3';
+        next.CONSENSUS_BYPASS_MIN_CONFIDENCE = '0.85';
+        next.STRATEGY_MIN_CONFIDENCE         = '0.85';
+        next.SMART_STRIKE_MIN_PREMIUM        = '600';
+        next.SMART_STRIKE_MAX_PREMIUM        = '1300';
         next.STRATEGY_STRIKE_SELECTION_POLICY = 'smart_strike';
         next.STRATEGY_SMART_STRIKE_ENABLED   = '1';
-        next.STRATEGY_STRIKE_MAX_OTM_STEPS   = '8';
-        next.LOTTERY_HARD_STOP_PCT           = '0.20';
-        next.LOTTERY_BIG_TARGET_PCT          = '0.50';
-        next.LOTTERY_RUNNER_ACTIVATION_MFE   = '0.20';
-        next.LOTTERY_RUNNER_GIVEBACK_FRAC    = '0.35';
+        next.STRATEGY_STRIKE_MAX_OTM_STEPS   = '4';
+        next.LOTTERY_HARD_STOP_PCT           = '0.15';
+        next.LOTTERY_BIG_TARGET_PCT          = '0.40';
+        next.LOTTERY_RUNNER_ACTIVATION_MFE   = '0.15';
+        next.LOTTERY_RUNNER_GIVEBACK_FRAC    = '0.30';
         next.LOTTERY_THESIS_FAIL_BARS        = '5';
-        next.LOTTERY_TIMESTOP_BARS           = '90';
+        next.LOTTERY_TIMESTOP_BARS           = '60';
       } else if (mode === 'adaptive') {
-        // Adaptive = scalper-style entry/risk, but exits route by ENTRY regime:
-        // BREAKOUT/TRENDING → lottery runner (let it run), everything else → scalper.
-        next.CONSENSUS_BYPASS_MIN_CONFIDENCE = liveEnv.CONSENSUS_BYPASS_MIN_CONFIDENCE || '0.65';
-        next.STRATEGY_MIN_CONFIDENCE         = liveEnv.STRATEGY_MIN_CONFIDENCE || '0.65';
-        next.RISK_MAX_SESSION_TRADES         = liveEnv.RISK_MAX_SESSION_TRADES || '6';
-        next.STRATEGY_STRIKE_SELECTION_POLICY = liveEnv.STRATEGY_STRIKE_SELECTION_POLICY || 'smart_strike';
-        next.STRATEGY_SMART_STRIKE_ENABLED   = liveEnv.STRATEGY_SMART_STRIKE_ENABLED || '1';
-        next.STRATEGY_STRIKE_MAX_OTM_STEPS   = liveEnv.STRATEGY_STRIKE_MAX_OTM_STEPS || '8';
-        next.ADAPTIVE_LOTTERY_REGIMES        = liveEnv.ADAPTIVE_LOTTERY_REGIMES || 'BREAKOUT,TRENDING';
-        // Lottery branch params (used for BREAKOUT/TRENDING exits) — live values
-        next.LOTTERY_HARD_STOP_PCT           = liveEnv.LOTTERY_HARD_STOP_PCT || '0.20';
-        next.LOTTERY_BIG_TARGET_PCT          = liveEnv.LOTTERY_BIG_TARGET_PCT || '0.50';
-        next.LOTTERY_RUNNER_ACTIVATION_MFE   = liveEnv.LOTTERY_RUNNER_ACTIVATION_MFE || '0.03';
-        next.LOTTERY_RUNNER_GIVEBACK_FRAC    = liveEnv.LOTTERY_RUNNER_GIVEBACK_FRAC || '0.35';
-      } else {
-        // Scalper — restore live values
+        // Adaptive = regime-aware: BREAKOUT/TRENDING → lottery runner, rest → scalper.
         next.CONSENSUS_BYPASS_MIN_CONFIDENCE = liveEnv.CONSENSUS_BYPASS_MIN_CONFIDENCE || '0.80';
         next.STRATEGY_MIN_CONFIDENCE         = liveEnv.STRATEGY_MIN_CONFIDENCE || '0.80';
-        next.RISK_MAX_SESSION_TRADES         = liveEnv.RISK_MAX_SESSION_TRADES || '20';
+        next.SMART_STRIKE_MIN_PREMIUM        = liveEnv.SMART_STRIKE_MIN_PREMIUM || '600';
+        next.SMART_STRIKE_MAX_PREMIUM        = liveEnv.SMART_STRIKE_MAX_PREMIUM || '1300';
         next.STRATEGY_STRIKE_SELECTION_POLICY = liveEnv.STRATEGY_STRIKE_SELECTION_POLICY || 'smart_strike';
         next.STRATEGY_SMART_STRIKE_ENABLED   = liveEnv.STRATEGY_SMART_STRIKE_ENABLED || '1';
-        next.STRATEGY_STRIKE_MAX_OTM_STEPS   = liveEnv.STRATEGY_STRIKE_MAX_OTM_STEPS || '8';
+        next.STRATEGY_STRIKE_MAX_OTM_STEPS   = liveEnv.STRATEGY_STRIKE_MAX_OTM_STEPS || '4';
+        next.ADAPTIVE_LOTTERY_REGIMES        = liveEnv.ADAPTIVE_LOTTERY_REGIMES || 'BREAKOUT,TRENDING';
+        next.LOTTERY_HARD_STOP_PCT           = liveEnv.LOTTERY_HARD_STOP_PCT || '0.15';
+        next.LOTTERY_BIG_TARGET_PCT          = liveEnv.LOTTERY_BIG_TARGET_PCT || '0.40';
+        next.LOTTERY_RUNNER_ACTIVATION_MFE   = liveEnv.LOTTERY_RUNNER_ACTIVATION_MFE || '0.15';
+        next.LOTTERY_RUNNER_GIVEBACK_FRAC    = liveEnv.LOTTERY_RUNNER_GIVEBACK_FRAC || '0.30';
+      } else {
+        // Scalper — tight target, fast exit on stagnant
+        next.CONSENSUS_BYPASS_MIN_CONFIDENCE = liveEnv.CONSENSUS_BYPASS_MIN_CONFIDENCE || '0.80';
+        next.STRATEGY_MIN_CONFIDENCE         = liveEnv.STRATEGY_MIN_CONFIDENCE || '0.80';
+        next.SMART_STRIKE_MIN_PREMIUM        = liveEnv.SMART_STRIKE_MIN_PREMIUM || '600';
+        next.SMART_STRIKE_MAX_PREMIUM        = liveEnv.SMART_STRIKE_MAX_PREMIUM || '1300';
+        next.STRATEGY_STRIKE_SELECTION_POLICY = liveEnv.STRATEGY_STRIKE_SELECTION_POLICY || 'smart_strike';
+        next.STRATEGY_SMART_STRIKE_ENABLED   = liveEnv.STRATEGY_SMART_STRIKE_ENABLED || '1';
+        next.STRATEGY_STRIKE_MAX_OTM_STEPS   = liveEnv.STRATEGY_STRIKE_MAX_OTM_STEPS || '4';
       }
       return next;
     });
@@ -503,6 +510,11 @@ function OpsPage() {
             {/* Entry gate */}
             <div>
               <div className="ops-group-label">Entry Gate</div>
+              <SegCtrl label="Live filter"
+                value={v('RISK_LIVE_MIN_GRADE','GOOD')}
+                live={lv('RISK_LIVE_MIN_GRADE','GOOD')}
+                options={[{value:'GOOD',label:'GOOD only (strict)'},{value:'OK',label:'OK+ (lenient)'}]}
+                onChange={setVal('RISK_LIVE_MIN_GRADE')} />
               <SliderCtrl label="Min confidence"
                 value={parseFloat(v('CONSENSUS_BYPASS_MIN_CONFIDENCE','0.65'))}
                 live={parseFloat(lv('CONSENSUS_BYPASS_MIN_CONFIDENCE','0.65'))}
@@ -525,10 +537,16 @@ function OpsPage() {
                 live={lv('STRATEGY_STRIKE_SELECTION_POLICY','atm')}
                 options={[{value:'atm',label:'ATM'},{value:'smart_strike',label:'Smart'}]}
                 onChange={setVal('STRATEGY_STRIKE_SELECTION_POLICY')} />
+              <SliderCtrl label="Min premium"
+                value={parseFloat(v('SMART_STRIKE_MIN_PREMIUM','600'))}
+                live={parseFloat(lv('SMART_STRIKE_MIN_PREMIUM','600'))}
+                min={0} max={900} step={50}
+                format={v => v===0?'off':'₹'+v.toFixed(0)}
+                onChange={setVal('SMART_STRIKE_MIN_PREMIUM')} />
               <SliderCtrl label="Max premium"
-                value={parseFloat(v('SMART_STRIKE_MAX_PREMIUM','800'))}
-                live={parseFloat(lv('SMART_STRIKE_MAX_PREMIUM','800'))}
-                min={300} max={1500} step={50}
+                value={parseFloat(v('SMART_STRIKE_MAX_PREMIUM','1300'))}
+                live={parseFloat(lv('SMART_STRIKE_MAX_PREMIUM','1300'))}
+                min={300} max={1600} step={50}
                 format={v => '₹'+v.toFixed(0)}
                 onChange={setVal('SMART_STRIKE_MAX_PREMIUM')} />
               <SliderCtrl label="Max OTM steps"

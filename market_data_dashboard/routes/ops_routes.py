@@ -43,10 +43,13 @@ _SAFE_OVERRIDE_KEYS = {
     "STRATEGY_STRIKE_SELECTION_POLICY",
     "STRATEGY_SMART_STRIKE_ENABLED",
     "SMART_STRIKE_MAX_PREMIUM",
+    "SMART_STRIKE_HARD_PREMIUM_CAP",
     "STRATEGY_STRIKE_MAX_OTM_STEPS",
     "RISK_MAX_CONSECUTIVE_LOSSES",
     "RISK_MAX_SESSION_TRADES",
     "STRATEGY_PROFILE_ID",
+    "STRATEGY_ENTRY_PIPELINE_V2",
+    "SMART_STRIKE_MIN_PREMIUM",
     # Lottery / adaptive mode
     "EXIT_STRATEGY_MODE",
     "ADAPTIVE_LOTTERY_REGIMES",
@@ -57,6 +60,11 @@ _SAFE_OVERRIDE_KEYS = {
     "LOTTERY_THESIS_FAIL_BARS",
     "LOTTERY_MOMENTUM_FLIP",
     "LOTTERY_TIMESTOP_BARS",
+    # E9 entry quality + live/paper tiering
+    "RISK_LIVE_MIN_GRADE",
+    "ENTRY_QUALITY_GOOD_AT",
+    "ENTRY_QUALITY_IV_SKEW_PE_BAND",
+    "ENTRY_TIERING_ENABLED",
 }
 
 # Live-job registry — keyed by job_id
@@ -111,19 +119,20 @@ def _read_live_config() -> dict[str, Any]:
         "CONSENSUS_BYPASS_MIN_CONFIDENCE":_e("CONSENSUS_BYPASS_MIN_CONFIDENCE", "0.65"),
         "DIRECTION_MIN_MARGIN_SIDEWAYS":  _e("DIRECTION_MIN_MARGIN_SIDEWAYS", "2.0"),
         "STRATEGY_STRIKE_SELECTION_POLICY":_e("STRATEGY_STRIKE_SELECTION_POLICY", "atm"),
-        "SMART_STRIKE_MAX_PREMIUM":       _e("SMART_STRIKE_MAX_PREMIUM", "600"),
-        "STRATEGY_STRIKE_MAX_OTM_STEPS":  _e("STRATEGY_STRIKE_MAX_OTM_STEPS", "0"),
+        "SMART_STRIKE_MIN_PREMIUM":       _e("SMART_STRIKE_MIN_PREMIUM", "600"),
+        "SMART_STRIKE_MAX_PREMIUM":       _e("SMART_STRIKE_MAX_PREMIUM", "1300"),
+        "STRATEGY_STRIKE_MAX_OTM_STEPS":  _e("STRATEGY_STRIKE_MAX_OTM_STEPS", "4"),
         "RISK_MAX_CONSECUTIVE_LOSSES":    _e("RISK_MAX_CONSECUTIVE_LOSSES", "3"),
-        "RISK_MAX_SESSION_TRADES":        _e("RISK_MAX_SESSION_TRADES", "6"),
+        "RISK_MAX_SESSION_TRADES":        _e("RISK_MAX_SESSION_TRADES", "20"),
         "STRATEGY_PROFILE_ID":            _e("STRATEGY_PROFILE_ID", "trader_master_ml_entry_consensus_v1"),
-        "EXIT_STRATEGY_MODE":             _e("EXIT_STRATEGY_MODE", "scalper"),
-        # Lottery params — included so UI can show live vs changed correctly
-        "LOTTERY_HARD_STOP_PCT":          _e("LOTTERY_HARD_STOP_PCT", "0.20"),
-        "LOTTERY_BIG_TARGET_PCT":         _e("LOTTERY_BIG_TARGET_PCT", "0.50"),
-        "LOTTERY_RUNNER_ACTIVATION_MFE":  _e("LOTTERY_RUNNER_ACTIVATION_MFE", "0.20"),
-        "LOTTERY_RUNNER_GIVEBACK_FRAC":   _e("LOTTERY_RUNNER_GIVEBACK_FRAC", "0.35"),
+        "EXIT_STRATEGY_MODE":             _e("EXIT_STRATEGY_MODE", "adaptive"),
+        # Lottery params — ATM-tuned values (used for BREAKOUT/TRENDING in adaptive mode)
+        "LOTTERY_HARD_STOP_PCT":          _e("LOTTERY_HARD_STOP_PCT", "0.15"),
+        "LOTTERY_BIG_TARGET_PCT":         _e("LOTTERY_BIG_TARGET_PCT", "0.40"),
+        "LOTTERY_RUNNER_ACTIVATION_MFE":  _e("LOTTERY_RUNNER_ACTIVATION_MFE", "0.15"),
+        "LOTTERY_RUNNER_GIVEBACK_FRAC":   _e("LOTTERY_RUNNER_GIVEBACK_FRAC", "0.30"),
         "LOTTERY_THESIS_FAIL_BARS":       _e("LOTTERY_THESIS_FAIL_BARS", "5"),
-        "LOTTERY_TIMESTOP_BARS":          _e("LOTTERY_TIMESTOP_BARS", "90"),
+        "LOTTERY_TIMESTOP_BARS":          _e("LOTTERY_TIMESTOP_BARS", "60"),
     }
     cfg["ops_env"] = ops_env
     cfg["strategy_run_dir"] = str(STRATEGY_RUN_DIR)
@@ -236,6 +245,38 @@ def _load_actual_trades(trade_date: str) -> list[dict]:
 _ENV_LOCK = threading.Lock()
 
 
+def _summarize_trades(trades: list[dict]) -> dict[str, Any]:
+    """Aggregate a list of sim/actual trades into the OPS summary chips.
+
+    Capture ratio is the AGGREGATE Σpnl / Σmfe over trades that had favorable
+    excursion — NOT the mean of per-trade p/m ratios. The mean-of-ratios form
+    was unstable: a single trade with a small MFE and a loss (e.g. pnl -5.10%
+    on mfe +0.86% → ratio -593%) swamped the average and produced a nonsense
+    "MFE capture -85%". The aggregate is bounded by the favorable move actually
+    available and is the figure both the live and sim panels should agree on.
+    """
+    if not trades:
+        return {
+            "trade_count": 0, "win_count": 0, "win_rate": 0.0,
+            "session_pnl": 0.0, "avg_mfe": 0.0, "capture_ratio": 0.0,
+            "avg_premium": 0.0,
+        }
+    pnls = [t["pnl_pct"] for t in trades]
+    mfes = [t.get("mfe_pct") or 0.0 for t in trades]
+    wins = [p for p in pnls if p > 0]
+    cap_num = sum(p for p, m in zip(pnls, mfes) if m > 0)
+    cap_den = sum(m for m in mfes if m > 0)
+    return {
+        "trade_count": len(trades),
+        "win_count": len(wins),
+        "win_rate": len(wins) / len(trades),
+        "session_pnl": sum(pnls),
+        "avg_mfe": sum(mfes) / len(mfes),
+        "capture_ratio": (cap_num / cap_den) if cap_den > 0 else 0.0,
+        "avg_premium": sum(t["prem_in"] for t in trades) / len(trades),
+    }
+
+
 def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> None:
     """Run today's sim in a background thread. Updates _jobs[job_id] in place."""
     with _jobs_lock:
@@ -290,7 +331,8 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
             "DIRECTION_MIN_MARGIN_SIDEWAYS":   _live("DIRECTION_MIN_MARGIN_SIDEWAYS", "2.0"),
             "STRATEGY_STRIKE_SELECTION_POLICY": _live("STRATEGY_STRIKE_SELECTION_POLICY", "smart_strike"),
             "STRATEGY_SMART_STRIKE_ENABLED":   _live("STRATEGY_SMART_STRIKE_ENABLED", "1"),
-            "SMART_STRIKE_MAX_PREMIUM":        _live("SMART_STRIKE_MAX_PREMIUM", "800"),
+            "SMART_STRIKE_MIN_PREMIUM":        _live("SMART_STRIKE_MIN_PREMIUM", "600"),
+            "SMART_STRIKE_MAX_PREMIUM":        _live("SMART_STRIKE_MAX_PREMIUM", "1300"),
             "STRATEGY_STRIKE_MAX_OTM_STEPS":   _live("STRATEGY_STRIKE_MAX_OTM_STEPS", "8"),
             "STRATEGY_SMART_STRIKE_ENABLED":   _live("STRATEGY_SMART_STRIKE_ENABLED", "1"),
             "SMART_STRIKE_OTM_CONFIDENCE":     _live("SMART_STRIKE_OTM_CONFIDENCE", "0.55"),
@@ -325,16 +367,22 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
             "RISK_CAPITAL_ALLOCATED":          _live("RISK_CAPITAL_ALLOCATED", "500000"),
             "RISK_PER_TRADE_PCT":              _live("RISK_PER_TRADE_PCT", "0.005"),
             "STRATEGY_MIN_CONFIDENCE":         _live("STRATEGY_MIN_CONFIDENCE", "") or _live("CONSENSUS_BYPASS_MIN_CONFIDENCE", "0.80") or "0.80",
-            # Exit strategy mode — scalper (live default) or lottery (OTM high-conviction)
-            "EXIT_STRATEGY_MODE":              _live("EXIT_STRATEGY_MODE", "scalper"),
-            "LOTTERY_HARD_STOP_PCT":           _live("LOTTERY_HARD_STOP_PCT", "0.20"),
-            "LOTTERY_BIG_TARGET_PCT":          _live("LOTTERY_BIG_TARGET_PCT", "0.50"),
-            "LOTTERY_RUNNER_ACTIVATION_MFE":   _live("LOTTERY_RUNNER_ACTIVATION_MFE", "0.20"),
-            "LOTTERY_RUNNER_GIVEBACK_FRAC":    _live("LOTTERY_RUNNER_GIVEBACK_FRAC", "0.35"),
+            # Exit strategy mode — adaptive (live default): scalper for SIDEWAYS/CHOP,
+            # lottery runner for BREAKOUT/TRENDING. Lottery params ATM-tuned.
+            "EXIT_STRATEGY_MODE":              _live("EXIT_STRATEGY_MODE", "adaptive"),
+            "LOTTERY_HARD_STOP_PCT":           _live("LOTTERY_HARD_STOP_PCT", "0.15"),
+            "LOTTERY_BIG_TARGET_PCT":          _live("LOTTERY_BIG_TARGET_PCT", "0.40"),
+            "LOTTERY_RUNNER_ACTIVATION_MFE":   _live("LOTTERY_RUNNER_ACTIVATION_MFE", "0.15"),
+            "LOTTERY_RUNNER_GIVEBACK_FRAC":    _live("LOTTERY_RUNNER_GIVEBACK_FRAC", "0.30"),
             "LOTTERY_THESIS_FAIL_BARS":        _live("LOTTERY_THESIS_FAIL_BARS", "5"),
             "LOTTERY_THESIS_FAIL_MIN_MFE":     _live("LOTTERY_THESIS_FAIL_MIN_MFE", "0.03"),
-            "LOTTERY_TIMESTOP_BARS":           _live("LOTTERY_TIMESTOP_BARS", "90"),
+            "LOTTERY_TIMESTOP_BARS":           _live("LOTTERY_TIMESTOP_BARS", "60"),
             "LOTTERY_MOMENTUM_FLIP":           _live("LOTTERY_MOMENTUM_FLIP", "1.0"),
+            # v2 gate-cascade pipeline — off by default, togglable from OPS panel
+            "STRATEGY_ENTRY_PIPELINE_V2":      _live("STRATEGY_ENTRY_PIPELINE_V2", "0"),
+            "SMART_STRIKE_MIN_PREMIUM":        _live("SMART_STRIKE_MIN_PREMIUM", "0"),
+            # E9 live/paper tiering — grade floor for live eligibility (GOOD|OK)
+            "RISK_LIVE_MIN_GRADE":             _live("RISK_LIVE_MIN_GRADE", "GOOD"),
             "STRATEGY_RUN_DIR":                f"/tmp/sim_{job_id}",
             "REDIS_HOST":                      os.getenv("REDIS_HOST", "localhost"),
             "DEPTH_FEED_ENABLED":              "0",
@@ -376,7 +424,7 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
                 old_env[k] = os.environ.get(k)
                 os.environ[k] = v
             try:
-                trades, exit_stack_name = _run_engine(snaps, trade_date, job_id)
+                trades, exit_stack_name, decision_traces, live_trades = _run_engine(snaps, trade_date, job_id)
             finally:
                 for k, old in old_env.items():
                     if old is None:
@@ -384,28 +432,13 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
                     else:
                         os.environ[k] = old
 
-        # Build summary
-        pnls = [t["pnl_pct"] for t in trades]
-        mfes = [t["mfe_pct"] for t in trades]
-        wins = [p for p in pnls if p > 0]
-        avg_prem = sum(t["prem_in"] for t in trades) / len(trades) if trades else 0
-        caps = [p / m for p, m in zip(pnls, mfes) if m > 0]
-        avg_cap = sum(caps) / len(caps) if caps else 0
-
+        # Build summary (aggregate capture ratio — see _summarize_trades)
         with _jobs_lock:
             _jobs[job_id].update({
                 "status": "done",
                 "trades": trades,
                 "exit_stack": exit_stack_name,
-                "summary": {
-                    "trade_count": len(trades),
-                    "win_count": len(wins),
-                    "win_rate": len(wins) / len(trades) if trades else 0,
-                    "session_pnl": sum(pnls),
-                    "avg_mfe": sum(mfes) / len(mfes) if mfes else 0,
-                    "capture_ratio": avg_cap,
-                    "avg_premium": avg_prem,
-                },
+                "summary": _summarize_trades(trades),
                 "overrides_applied": {k: v for k, v in overrides.items() if k in _SAFE_OVERRIDE_KEYS},
             })
 
@@ -415,7 +448,7 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
         # engine-internal "sim-{job_id}" which has NO mongo data; overwrite it
         # here so any UI consumer of job.run_id points at the persisted run.
         try:
-            replay_url = _persist_sim_to_mongo(job_id, trade_date, snaps, trades)
+            replay_url = _persist_sim_to_mongo(job_id, trade_date, snaps, trades, decision_traces, live_trades)
             with _jobs_lock:
                 _jobs[job_id]["replay_url"] = replay_url
                 _jobs[job_id]["run_id"] = f"ops-sim-{job_id}"
@@ -438,6 +471,8 @@ def _persist_sim_to_mongo(
     trade_date: str,
     snaps: list[dict],
     trades: list[dict],
+    decision_traces: Optional[list[dict]] = None,
+    live_trades: Optional[list[dict]] = None,
 ) -> str:
     """Write snapshots + position events to sim Mongo collections, create eval-run entry.
 
@@ -456,6 +491,7 @@ def _persist_sim_to_mongo(
     ns = resolve_namespace("sim", run_id=run_id)
     coll_snaps = ns.collection_for("phase1_market_snapshots")
     coll_pos = ns.collection_for("strategy_positions")
+    coll_traces = ns.collection_for("strategy_decision_traces")
     runs_coll = str(os.getenv("MONGO_COLL_STRATEGY_EVAL_RUNS") or "strategy_eval_runs")
 
     uri = str(os.getenv("MONGODB_URI") or os.getenv("MONGO_URI") or "").strip()
@@ -522,8 +558,21 @@ def _persist_sim_to_mongo(
             return datetime.now(tz=_IST)
 
     pos_docs = []
-    for i, t in enumerate(trades):
-        pid = f"{run_id}-pos-{i}"
+    # Two independent books under ONE run_id (shared candles/snapshots), each
+    # tagged book=paper|live. The replay build filters to a single book at a time
+    # (so overlapping paper/live positions don't trip the integrity check), and
+    # the UI paper/live toggle picks which book to show.
+    #   paper: takes everything (the analysis tape)
+    #   live : independent slot; only GOOD; never blocked by paper
+    _books: list[tuple[str, list[dict]]] = [("paper", list(trades))]
+    if live_trades:
+        _books.append(("live", list(live_trades)))
+    _trade_rows: list[tuple[str, int, dict]] = []
+    for _book, _list in _books:
+        for _i, _t in enumerate(_list):
+            _trade_rows.append((_book, _i, _t))
+    for _book, i, t in _trade_rows:
+        pid = f"{run_id}-live-pos-{i}" if _book == "live" else f"{run_id}-pos-{i}"
         open_ts = _hhmm_to_dt(str(t.get("time_in", "09:15")))
         close_ts = _hhmm_to_dt(str(t.get("time_out", "15:25")))
         common = {"direction": t.get("direction", ""), "strike": t.get("strike")}
@@ -534,7 +583,24 @@ def _persist_sim_to_mongo(
             "timestamp": open_ts,
             "trade_date_ist": trade_date,
             "run_id": run_id,
-            "payload": {"position": {"entry_premium": float(t.get("prem_in") or 0), **common}},
+            "payload": {"position": {
+                "entry_premium":      float(t.get("prem_in") or 0),
+                "entry_strategy":     str(t.get("strategy_name") or ""),
+                "entry_strategy_name":str(t.get("strategy_name") or ""),
+                "strategy":           str(t.get("strategy_name") or ""),
+                "reason":             str(t.get("entry_reason") or ""),
+                # E9 entry quality + tiering (carried from replay_engine so the
+                # replay UI can show grade/tier without the vote stream).
+                "entry_snapshot_id":  str(t.get("entry_snapshot_id") or ""),
+                "snapshot_id":        str(t.get("entry_snapshot_id") or ""),
+                "entry_grade":        str(t.get("entry_grade") or ""),
+                "tier":               str(t.get("tier") or ""),
+                "live_would_take":    bool(t.get("live_would_take") or False),
+                "entry_dir_margin":   t.get("entry_dir_margin"),
+                "entry_grade_reasons": list(t.get("entry_grade_reasons") or []),
+                "book":               _book,
+                **common,
+            }},
         })
         pos_docs.append({
             "event": "POSITION_CLOSE",
@@ -551,12 +617,58 @@ def _persist_sim_to_mongo(
                     "mfe_pct":       float(t.get("mfe_pct") or 0),
                     "mae_pct":       float(t.get("mae_pct") or 0),
                     "exit_reason":   str(t.get("exit") or ""),
+                    "book":          _book,
                     **common,
                 }
             },
         })
     if pos_docs:
         db[coll_pos].insert_many(pos_docs)
+
+    # ── v2 gate-cascade decision traces → Terminal decision view ─────────────
+    # Each element is the last_entry_trace dict from the engine: decision_id,
+    # timestamp, final_outcome, primary_blocker_gate, gates[]. The Terminal's
+    # existing decision-trace view reads this collection and shows
+    # ENTER/SKIP/VETO per bar with the gate that stopped it.
+    if decision_traces:
+        trace_docs = []
+        for tr in decision_traces:
+            ts_raw = tr.get("timestamp")
+            try:
+                ts = datetime.fromisoformat(ts_raw) if ts_raw else datetime.now(tz=_IST)
+            except Exception:
+                ts = datetime.now(tz=_IST)
+            trace_docs.append({
+                "run_id": run_id,
+                "trade_date_ist": trade_date,
+                "timestamp": ts,
+                "decision_id": tr.get("decision_id"),
+                "snapshot_id": tr.get("snapshot_id"),
+                "final_outcome": tr.get("final_outcome"),
+                "primary_blocker_gate": tr.get("primary_blocker_gate"),
+                "selected_direction": tr.get("selected_direction"),
+                "selected_strike": tr.get("selected_strike"),
+                "selected_premium": tr.get("selected_premium"),
+                "gates": tr.get("gates", []),
+                # Terminal-compatible fields (mirrors v1 trace shape)
+                "engine_mode": "v2_gate_cascade",
+                "decision_mode": "v2",
+                "evaluation_type": "entry",
+                "flow_gates": [
+                    {
+                        "gate_id": g["gate"],
+                        "gate_group": g["gate"],
+                        "status": "pass" if g["outcome"] == "pass" else "blocked",
+                        "reason_code": g.get("reason") or None,
+                        "metrics": {k: float(v) for k, v in (g.get("values") or {}).items()
+                                    if isinstance(v, (int, float))},
+                    }
+                    for g in tr.get("gates", [])
+                ],
+                "candidates": [],
+            })
+        if trace_docs:
+            db[coll_traces].insert_many(trace_docs)
 
     # ── strategy_eval_runs entry ─────────────────────────────────────────────
     now_iso = datetime.now(tz=timezone.utc).isoformat()
@@ -580,7 +692,7 @@ def _persist_sim_to_mongo(
     return f"/app?mode=replay&kind=sim&run_id={run_id}&date={trade_date}"
 
 
-def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[dict], str]:
+def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[dict], str, list[dict]]:
     """Run the deterministic engine over today's snapshots. Returns (trades, exit_stack_name).
 
     Delegates to strategy_app.sim.replay_engine.replay_day() — the shared implementation
@@ -603,13 +715,34 @@ def _run_engine(snaps: list[dict], trade_date: str, job_id: str) -> tuple[list[d
         with _jobs_lock:
             _jobs[job_id]["progress"] = i
 
+    # ── PAPER book: takes every qualifying trade (the analysis tape) ──────────
     result = replay_day(snaps, trade_date, progress_cb=_progress)
+
+    # ── LIVE book: independent slot, only opens live-eligible (GOOD) entries, so
+    # a low-grade paper trade never blocks a later GOOD trade. Runs the SAME engine
+    # with ENTRY_LIVE_ONLY_GATE=1 over the same snapshots. Its trades are what the
+    # live book would actually have taken — answering "if a GOOD trade appears at t2
+    # while a paper trade is still open, is it taken?" (yes, in this book).
+    live_trades: list[dict] = []
+    _prev_gate = os.environ.get("ENTRY_LIVE_ONLY_GATE")
+    try:
+        os.environ["ENTRY_LIVE_ONLY_GATE"] = "1"
+        live_result = replay_day(snaps, trade_date)
+        live_trades = list(live_result.get("trades") or [])
+    except Exception:
+        logger.exception("ops sim: live-book replay failed (non-fatal)")
+    finally:
+        if _prev_gate is None:
+            os.environ.pop("ENTRY_LIVE_ONLY_GATE", None)
+        else:
+            os.environ["ENTRY_LIVE_ONLY_GATE"] = _prev_gate
 
     with _jobs_lock:
         _jobs[job_id]["progress"] = len(snaps)
         _jobs[job_id]["diag"] = result["diag"]
+        _jobs[job_id]["live_trade_count"] = len(live_trades)
 
-    return result["trades"], result["exit_stack_name"]
+    return result["trades"], result["exit_stack_name"], result.get("decision_traces", []), live_trades
 
 
 # ── Router ─────────────────────────────────────────────────────────────────────

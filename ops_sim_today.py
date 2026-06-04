@@ -236,8 +236,11 @@ if trades:
     total = sum(pnls)
     avg_prem = sum(t["prem_in"] for t in trades) / len(trades)
     avg_mfe  = sum(mfes) / len(mfes)
-    caps = [p/m for p,m in zip(pnls,mfes) if m > 0]
-    avg_cap = sum(caps)/len(caps) if caps else 0
+    # Aggregate capture Σpnl/Σmfe — not mean-of-ratios, which a single
+    # small-MFE loser distorts into a nonsense negative figure.
+    cap_num = sum(p for p, m in zip(pnls, mfes) if m > 0)
+    cap_den = sum(m for m in mfes if m > 0)
+    avg_cap = cap_num / cap_den if cap_den > 0 else 0
     print("")
     print("  Trades: %d  |  Wins: %d/%d (%d%%)" % (len(trades), len(wins), len(trades), len(wins)*100//len(trades)))
     print("  Session P&L:  %+.2f%%" % (total*100))

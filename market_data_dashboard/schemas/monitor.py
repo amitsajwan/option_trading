@@ -60,6 +60,10 @@ class MonitorTrade(BaseModel):
     positionSide: Optional[str] = None  # "LONG" = buy premium, "SHORT" = sell premium
     entrySnapshotId: Optional[str] = None
     entryContext: dict[str, Any] = Field(default_factory=dict)
+    # E9 entry quality + tiering (for the tape grade dot + inspector).
+    entryGrade: str = ""              # GOOD | OK | BAD | ""
+    tier: str = ""                   # live | paper | ""
+    liveWouldTake: bool = False
 
 
 class MonitorAlert(BaseModel):

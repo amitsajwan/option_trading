@@ -195,7 +195,9 @@ class RiskManager:
                 )
             ctx.session_trade_cap_breached = True
 
-        if ctx.consecutive_losses >= ctx.max_consecutive_losses:
+        # max_consecutive_losses <= 0 disables the pause (e.g. paper trading where we
+        # want unlimited trades to observe behaviour) — mirrors the session-cap guard.
+        if ctx.max_consecutive_losses > 0 and ctx.consecutive_losses >= ctx.max_consecutive_losses:
             if not ctx.consecutive_loss_limit:
                 logger.warning("consecutive loss limit reached count=%d", ctx.consecutive_losses)
             ctx.consecutive_loss_limit = True
@@ -254,6 +256,29 @@ class RiskManager:
         base_lots = int(risk_capital / max_loss_per_lot)
         scaled = max(1, int(base_lots * confidence_scale))
         return min(scaled, ctx.max_lots_per_trade)
+
+    def live_eligible(self, *, grade: str, confidence: float = 1.0) -> tuple[bool, str]:
+        """Whether an entry of this quality would be taken on REAL money.
+
+        Paper mode takes everything (the caller does not block on this result) —
+        this only labels the *tier*. The day we flip to live, the set of trades
+        with tier=live is exactly the book that fires.
+
+        Delegates the grade + recent-performance logic to
+        signals.entry_quality.decide_tier (shared with the strategy path), then
+        layers the manager-only operator-halt and confidence-floor checks.
+        """
+        # Local import avoids a circular import at module load (signals imports ml).
+        from ..signals.entry_quality import decide_tier
+
+        if self._operator_halt_path.exists():
+            return False, "halted:operator_halt"
+        decision = decide_tier(grade, self._context, confidence=confidence)
+        if not decision.live_would_take:
+            return False, decision.reason
+        if float(confidence) < float(self._confidence_floor):
+            return False, f"confidence_below_floor:{float(confidence):.2f}<{self._confidence_floor:.2f}"
+        return True, decision.reason
 
     def _check_vix_spike(self, snap: SnapshotAccessor) -> None:
         ctx = self._context

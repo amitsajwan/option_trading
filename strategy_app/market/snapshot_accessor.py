@@ -208,6 +208,14 @@ class SnapshotAccessor:
         return self._f(self._fb.get("fut_oi"))
 
     @property
+    def fut_return_1m(self) -> Optional[float]:
+        return self._f(self._fd.get("fut_return_1m"))
+
+    @property
+    def fut_return_3m(self) -> Optional[float]:
+        return self._f(self._fd.get("fut_return_3m"))
+
+    @property
     def fut_return_5m(self) -> Optional[float]:
         return self._f(self._fd.get("fut_return_5m"))
 

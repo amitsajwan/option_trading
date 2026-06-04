@@ -147,11 +147,17 @@ class PositionTracker:
         # max_hold, early_stop, …) must NOT run, or they cut winners the stack wants
         # to let run (this is exactly what defeated lottery mode: thesis_fail/stagnant
         # exited at +0.7% while the stack was holding for the fat tail).
-        # Scalper keeps legacy exits as safety backstops (premium_stop, stagnant_exit).
+        #
+        # adaptive mode is also authoritative: its scalper sub-stack now carries its
+        # own HardStop (EXIT_SCALPER_HARD_STOP_PCT), so suppressing the legacy inline
+        # exits no longer removes loss protection. Without this, adaptive ran BOTH the
+        # regime-routed stack AND the legacy winner-clippers, so BREAKOUT/TRENDING
+        # trades were cut flat on thesis_fail/stagnant before the move could develop.
+        # Pure scalper mode keeps legacy exits as complementary backstops.
         _stack_active = (
             self._exit_stack is not None
             and not has_playbook
-            and self._exit_mode == "lottery"
+            and self._exit_mode in ("lottery", "adaptive")
         )
         if forced_exit_reason is None and not has_playbook and exit_reason is None and self._exit_stack is not None:
             stack_reason = self._exit_stack.check(position, snap)

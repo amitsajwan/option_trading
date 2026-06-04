@@ -45,7 +45,19 @@ function _bridgeTrade(tr) {
     exitDetail:  tr.exitDetail  ?? `Exit at ${xp.toFixed(2)} · ${tr.exitReason ?? 'closed'}`,
     strike: tr.strike ?? null,
     optionType,
+    entryGrade: (tr.entryGrade ?? tr.entry_grade ?? '').toString().toUpperCase(),
+    tier: (tr.tier ?? '').toString().toLowerCase(),
+    liveWouldTake: tr.liveWouldTake ?? tr.live_would_take ?? false,
   };
+}
+
+// Grade -> color for the tape dot. GREEN=GOOD, YELLOW=OK, RED=BAD.
+function _gradeColor(g) {
+  const u = String(g || '').toUpperCase();
+  if (u === 'GOOD') return 'var(--pos)';
+  if (u === 'OK')   return 'var(--warn)';
+  if (u === 'BAD')  return 'var(--neg)';
+  return null;
 }
 
 function _makeStrategies(trades) {
@@ -950,7 +962,16 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId,
                       <span className={`t-tape-type-dot ${(r.dir||'').toLowerCase()} fired`}/>
                       <span className="muted" style={{fontSize:'9px'}}>FILL</span>
                     </td>
-                    <td>{r.strat}</td>
+                    <td>
+                      {_gradeColor(r.entryGrade) && (
+                        <span title={`entry grade ${r.entryGrade}${r.tier ? ` · ${r.liveWouldTake ? 'LIVE' : 'PAPER'}` : ''}`}
+                          style={{display:'inline-block',width:7,height:7,borderRadius:'50%',marginRight:5,
+                            background:_gradeColor(r.entryGrade),
+                            boxShadow: r.liveWouldTake ? '0 0 0 1.5px var(--pos)' : 'none',
+                            verticalAlign:'middle'}}/>
+                      )}
+                      {r.strat}
+                    </td>
                     <td>
                       <span className={`t-dir ${r.dir}`} title="Chart delta bias">
                         {r.legDir || r.dir}
@@ -998,6 +1019,214 @@ function Tape({ session, trades, signals, selectedTrade, onSelectTrade, flashId,
   );
 }
 
+// ── Collapsible section header ────────────────────────────────────────────
+function CollapseSection({ title, summary, defaultOpen = false, children }) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  return (
+    <div>
+      <div
+        className="t-section-head"
+        onClick={() => setOpen(o => !o)}
+        style={{cursor:'pointer', userSelect:'none', display:'flex', justifyContent:'space-between', alignItems:'center'}}
+      >
+        <span>{title}</span>
+        <span style={{display:'flex', alignItems:'center', gap:6}}>
+          {!open && summary && <span style={{color:'var(--fg-4)', fontFamily:'var(--f-mono)', fontSize:9, fontWeight:400}}>{summary}</span>}
+          <span style={{color:'var(--fg-4)', fontSize:9}}>{open ? '▲' : '▼'}</span>
+        </span>
+      </div>
+      {open && children}
+    </div>
+  );
+}
+
+// ── Decision chain — gate cascade from the decision trace ─────────────────
+// Friendly short labels for the engine's gate_ids. Unknown ids fall back to the
+// id itself, so this stays correct even as the engine adds gates.
+const GATE_LABELS = {
+  regime_classification: 'Regime', avoid_veto: 'Avoid', risk_halt: 'Risk halt',
+  router_regime_block: 'Router', warmup: 'Warmup', entry_time_windows: 'Time window',
+  entry_regime_tag: 'Regime tag', direction_conflict: 'Dir conflict',
+  regime_confidence: 'Regime conf', sideways_returns_mixed: 'Sideways mixed',
+  stop_loss_cooldown: 'Stop cooldown', direction_flip_cooldown: 'Flip cooldown',
+  zero_mfe_cooldown: 'Zero-MFE cool', direction_evidence: 'Dir evidence',
+  entry_phase: 'Phase', risk_pause: 'Risk pause', direction_consensus: 'Consensus',
+  confidence_gate: 'Confidence', policy_checks: 'Policy', candidate_ranking: 'Ranking',
+  strike_depth: 'Strike', execution: 'Execute',
+};
+function gateLabel(id) {
+  return GATE_LABELS[id] || String(id || '?').replace(/_/g, ' ');
+}
+
+function DecisionChain({ orderedGates, flowGates, regimeEvidence, proposedDir,
+                         fallbackReason, fallbackRegime, fallbackEntryProb }) {
+  const [openIdx, setOpenIdx] = React.useState(null);
+
+  // Prefer the selected candidate's full ordered_gates; fall back to flow_gates.
+  let gates = Array.isArray(orderedGates) && orderedGates.length ? orderedGates
+            : Array.isArray(flowGates) ? flowGates : [];
+  const hasGates = gates.length > 0;
+
+  // First blocked gate is the decisive one; gates after it were never reached.
+  const blockerIdx = gates.findIndex(g => String(g.status || '').toLowerCase() === 'blocked');
+
+  // Regime evidence bull/bear
+  const bull = regimeEvidence?.bull_score != null ? Number(regimeEvidence.bull_score) : null;
+  const bear = regimeEvidence?.bear_score != null ? Number(regimeEvidence.bear_score) : null;
+  const r5m  = regimeEvidence?.r5m  != null ? Number(regimeEvidence.r5m)  : null;
+  const r15m = regimeEvidence?.r15m != null ? Number(regimeEvidence.r15m) : null;
+  const dir  = String(proposedDir || '').toUpperCase();
+  const evidenceOk = dir === 'PE'
+    ? (bear != null && bull != null && (bear >= 0.2 || bull <= 0.6))
+    : dir === 'CE'
+    ? (bull != null && bear != null && (bull >= 0.2 || bear <= 0.6))
+    : true;
+  const evidenceMismatch = !evidenceOk && bull != null && bear != null;
+
+  const statusColor = (s, reached) => {
+    s = String(s || '').toLowerCase();
+    if (s === 'pass') return 'var(--pos)';
+    if (s === 'blocked') return 'var(--neg)';
+    if (s === 'skipped') return 'var(--warn)';
+    return reached ? 'var(--fg-3)' : 'var(--fg-4)';
+  };
+  const statusSym = (s, reached) => {
+    s = String(s || '').toLowerCase();
+    if (s === 'pass') return '●';
+    if (s === 'blocked') return '✗';
+    if (s === 'skipped') return '◐';
+    return reached ? '○' : '·';
+  };
+
+  return (
+    <div style={{padding:'0 12px 8px'}}>
+      {/* Gate dot row — only gates up to & including the blocker are "reached" */}
+      {hasGates && (
+        <div style={{display:'flex', gap:3, alignItems:'center', marginBottom:6, flexWrap:'wrap'}}>
+          {gates.map((g, i) => {
+            const reached = blockerIdx < 0 || i <= blockerIdx;
+            const isOpen = openIdx === i;
+            const status = reached ? g.status : 'unreached';
+            return (
+              <span
+                key={i}
+                title={`${g.gate_id || g.gate_group} · ${g.status}`}
+                onClick={() => setOpenIdx(isOpen ? null : i)}
+                style={{
+                  fontFamily:'var(--f-mono)', fontSize:9.5, color: statusColor(status, reached),
+                  cursor:'pointer', padding:'1px 3px', borderRadius:2,
+                  background: isOpen ? 'var(--bg-2)' : 'transparent', whiteSpace:'nowrap',
+                  opacity: reached ? 1 : 0.5,
+                }}
+              >
+                {statusSym(status, reached)}<span style={{fontSize:8, color: isOpen ? 'var(--fg-2)' : 'var(--fg-4)', marginLeft:2}}>{gateLabel(g.gate_id)}</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Blocker line */}
+      {blockerIdx >= 0 && (
+        <div style={{fontFamily:'var(--f-mono)', fontSize:9.5, color:'var(--neg)', marginBottom:5, lineHeight:1.4}}>
+          ✗ blocked at <strong>{gateLabel(gates[blockerIdx].gate_id)}</strong>
+          {gates[blockerIdx].reason_code ? ` · ${gates[blockerIdx].reason_code}` : ''}
+          {gates[blockerIdx].message ? <span style={{color:'var(--fg-4)'}}> · {gates[blockerIdx].message}</span> : null}
+        </div>
+      )}
+
+      {/* Expanded gate detail */}
+      {openIdx != null && gates[openIdx] && (() => {
+        const g = gates[openIdx];
+        const metrics = g.metrics && typeof g.metrics === 'object' ? Object.entries(g.metrics) : [];
+        return (
+          <div style={{background:'var(--bg-2)', border:'1px solid var(--line-1)', borderRadius:2, padding:'6px 8px', marginBottom:6}}>
+            <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-3)', marginBottom:4, letterSpacing:'0.07em'}}>
+              {g.gate_id} · <span style={{color: statusColor(g.status, true)}}>{String(g.status||'').toUpperCase()}</span>
+            </div>
+            {g.reason_code && <div style={{fontFamily:'var(--f-mono)', fontSize:9.5, color:'var(--fg-2)', marginBottom:3}}>{g.reason_code}</div>}
+            {g.message && <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-3)', marginBottom:4, lineHeight:1.4}}>{g.message}</div>}
+            {metrics.length > 0 && (
+              <div style={{display:'grid', gridTemplateColumns:'auto 1fr', columnGap:8, rowGap:2}}>
+                {metrics.map(([k,v]) => (
+                  <React.Fragment key={k}>
+                    <span style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-4)'}}>{k}</span>
+                    <span style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-2)'}}>{typeof v === 'number' ? v.toFixed(3) : String(v)}</span>
+                  </React.Fragment>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Regime evidence strip */}
+      {(bull != null || bear != null) && (
+        <div style={{borderTop:'1px solid var(--line-1)', paddingTop:6, marginTop:2}}>
+          <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-4)', letterSpacing:'0.07em', marginBottom:4}}>REGIME EVIDENCE</div>
+          {bull != null && (
+            <div style={{marginBottom:3}}>
+              <div style={{display:'flex', justifyContent:'space-between', fontFamily:'var(--f-mono)', fontSize:9, color: dir==='CE' ? 'var(--pos)' : 'var(--fg-4)', marginBottom:1}}>
+                <span>bull</span><span>{bull.toFixed(2)}</span>
+              </div>
+              <div style={{height:4, background:'var(--bg-3)', borderRadius:2, position:'relative'}}>
+                <div style={{position:'absolute', left:0, top:0, height:'100%', width:Math.min(100, bull/3*100)+'%', background:'var(--pos)', borderRadius:2, opacity:0.7}}/>
+              </div>
+            </div>
+          )}
+          {bear != null && (
+            <div style={{marginBottom:4}}>
+              <div style={{display:'flex', justifyContent:'space-between', fontFamily:'var(--f-mono)', fontSize:9, color: dir==='PE' ? 'var(--neg)' : 'var(--fg-4)', marginBottom:1}}>
+                <span>bear</span><span>{bear.toFixed(2)}</span>
+              </div>
+              <div style={{height:4, background:'var(--bg-3)', borderRadius:2, position:'relative'}}>
+                <div style={{position:'absolute', left:0, top:0, height:'100%', width:Math.min(100, bear/3*100)+'%', background:'var(--neg)', borderRadius:2, opacity:0.7}}/>
+              </div>
+            </div>
+          )}
+          {dir && (
+            <div style={{fontFamily:'var(--f-mono)', fontSize:9, color: evidenceMismatch ? 'var(--neg)' : 'var(--pos)'}}>
+              {dir} {evidenceMismatch ? '← ⚠ against evidence' : '← ✓ agrees with evidence'}
+            </div>
+          )}
+          {(r5m != null || r15m != null) && (
+            <div style={{marginTop:3, fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-4)'}}>
+              {r5m  != null && <span style={{marginRight:8}}>r5m {r5m>=0?'+':''}{(r5m*100).toFixed(2)}%</span>}
+              {r15m != null && <span>r15m {r15m>=0?'+':''}{(r15m*100).toFixed(2)}%</span>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Fallback when no full gate trace is linked (e.g. older replay/sim runs):
+          show what we DO know from the trade's own reason + regime, instead of a
+          bare "no trace" that makes a real trade look broken. */}
+      {!hasGates && (
+        <div style={{marginTop: (bull != null || bear != null) ? 8 : 0}}>
+          {fallbackRegime && (
+            <div style={{fontFamily:'var(--f-mono)', fontSize:9.5, marginBottom:3}}>
+              <span style={{color:'var(--fg-4)'}}>regime </span>
+              <span style={{color:'var(--fg-2)'}}>{fallbackRegime}</span>
+              {dir && <><span style={{color:'var(--fg-4)'}}> · dir </span><span style={{color:dir==='CE'?'var(--pos)':'var(--neg)'}}>{dir}</span></>}
+              {fallbackEntryProb != null && <><span style={{color:'var(--fg-4)'}}> · entry_prob </span><span style={{color: fallbackEntryProb>=0.65?'var(--pos)':'var(--warn)'}}>{Number(fallbackEntryProb).toFixed(2)}</span></>}
+            </div>
+          )}
+          {fallbackReason && (
+            <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-3)', wordBreak:'break-all', lineHeight:1.4}}>
+              {fallbackReason}
+            </div>
+          )}
+          {!fallbackRegime && !fallbackReason && (
+            <div style={{fontFamily:'var(--f-mono)', fontSize:9, color:'var(--fg-4)'}}>
+              No decision trace linked (older run — re-run with v2 tracing for the full gate chain).
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Trade Inspector ──────────────────────────────────────────────────────
 function TradeInspector({ session, trade }) {
   if (!trade) {
@@ -1026,18 +1255,30 @@ function TradeInspector({ session, trade }) {
 
   // Use only stored signal metrics and replay-linked trade context.
   const sm = trade.signal?.metrics || {};
-  const entryProb = _num(traceSummary.entry_prob ?? selectedVoteRaw.entry_prob ?? sm.entry_prob);
-  // trade_prob is a placeholder (0.5) for deterministic/bypass mode — hide the gate to avoid
-  // showing a false FAIL when the engine never evaluated an ML trade gate.
+  // Exactly-0.5 ML metrics are model-output PLACEHOLDERS (the engine never produced
+  // a real prob, e.g. consensus/bypass mode). Showing them as red "✗ fail" gates on a
+  // trade that actually fired (and often won) is wrong — drop them. A prob of exactly
+  // 0.5000 is effectively never a real ML output, so this filter is safe.
+  const _isPlaceholder = (v) => v == null || !Number.isFinite(Number(v)) || Math.abs(Number(v) - 0.5) < 1e-6;
+  const _real = (v) => (_isPlaceholder(v) ? null : _num(v));
+
+  // Try the real entry prob from the reason string ("prob=0.951>=0.65") before falling
+  // back to metrics — that's the value the engine actually gated on.
+  const _reasonStr = String(trade.signal?.reason || trade.entryReason || trade.entryDetail || '');
+  const _probFromReason = (() => {
+    const m = _reasonStr.match(/prob[=:\s]+([0-9.]+)/i);
+    return m ? _num(m[1]) : null;
+  })();
+
   const _policyMode = String(selectedVoteRaw._entry_policy_mode || '').trim();
-  const tradeProb = _policyMode === 'bypass' ? null : _num(sm.trade_prob);
-  // In bypass/deterministic mode, recipe_prob and up_prob come only from ML metrics defaults (0.5).
-  // Only show them when a real trace value exists — otherwise they're meaningless placeholders.
-  const recipeProb   = _num(traceSummary.recipe_prob   ?? (_policyMode === 'bypass' ? null : sm.recipe_prob));
-  const recipeMargin = _num(traceSummary.recipe_margin ?? (_policyMode === 'bypass' ? null : sm.recipe_margin));
-  const upProb       = _num(traceSummary.direction_up_prob ?? (_policyMode === 'bypass' ? null : sm.up_prob));
+  const entryProb = _probFromReason
+    ?? _real(traceSummary.entry_prob) ?? _real(selectedVoteRaw.entry_prob) ?? _real(sm.entry_prob);
+  const tradeProb = _policyMode === 'bypass' ? null : _real(sm.trade_prob);
+  const recipeProb   = _real(traceSummary.recipe_prob)   ?? (_policyMode === 'bypass' ? null : _real(sm.recipe_prob));
+  const recipeMargin = _real(traceSummary.recipe_margin) ?? (_policyMode === 'bypass' ? null : _real(sm.recipe_margin));
+  const upProb       = _real(traceSummary.direction_up_prob) ?? (_policyMode === 'bypass' ? null : _real(sm.up_prob));
   const probs = [
-    { v: entryProb,    gate: 0.60, label: 'Entry gate',    kind: 'gate' },
+    { v: entryProb,    gate: 0.65, label: 'Entry gate',    kind: 'gate' },
     { v: tradeProb,    gate: 0.55, label: 'Trade gate',    kind: 'gate' },
     { v: recipeProb,               label: 'Recipe prob',   kind: 'neutral' },
     { v: recipeMargin,             label: 'Recipe margin', kind: 'neutral' },
@@ -1047,12 +1288,26 @@ function TradeInspector({ session, trade }) {
   // Direction decision — which leg was chosen and why
   // direction_consensus values are SCORES (summed signal weights, can exceed 1.0), not probabilities.
   // Normalize when total > 1 so the bars display as 0-100% instead of 0-393%.
-  const _rawCeScore = _num(selectedVoteRaw.direction_consensus_ce ?? sm.ce_prob);
-  const _rawPeScore = _num(selectedVoteRaw.direction_consensus_pe ?? sm.pe_prob);
+  // Prefer real consensus scores; ignore the 0.5/0.5 ml-default placeholder pair.
+  // The deterministic ML_ENTRY composite resolver stores its CE/PE scores under
+  // entry_dir_* (not direction_consensus_*), so fall back to those.
+  let _rawCeScore = _num(selectedVoteRaw.direction_consensus_ce ?? selectedVoteRaw.entry_dir_ce_score ?? sm.ce_prob);
+  let _rawPeScore = _num(selectedVoteRaw.direction_consensus_pe ?? selectedVoteRaw.entry_dir_pe_score ?? sm.pe_prob);
+  if (_isPlaceholder(_rawCeScore) && _isPlaceholder(_rawPeScore)) { _rawCeScore = null; _rawPeScore = null; }
   const _dirTotal = (_rawCeScore || 0) + (_rawPeScore || 0);
-  const ceProb = _dirTotal > 1 ? (_rawCeScore || 0) / _dirTotal : _rawCeScore;
-  const peProb = _dirTotal > 1 ? (_rawPeScore || 0) / _dirTotal : _rawPeScore;
-  const consensusMargin = _num(selectedVoteRaw.direction_consensus_margin);
+  const ceProb = _rawCeScore == null ? null : (_dirTotal > 1 ? (_rawCeScore || 0) / _dirTotal : _rawCeScore);
+  const peProb = _rawPeScore == null ? null : (_dirTotal > 1 ? (_rawPeScore || 0) / _dirTotal : _rawPeScore);
+  const consensusMargin = _num(selectedVoteRaw.direction_consensus_margin ?? selectedVoteRaw.entry_dir_margin);
+
+  // Entry quality grade + live/paper tier (E9). Stored on the vote raw_signals.
+  const entryGrade = String(selectedVoteRaw.entry_grade || '').trim().toUpperCase();
+  const entryGradeReasons = Array.isArray(selectedVoteRaw.entry_grade_reasons) ? selectedVoteRaw.entry_grade_reasons : [];
+  const entryTier = String(selectedVoteRaw.tier || '').trim().toLowerCase();
+  const liveWouldTake = selectedVoteRaw.live_would_take === true;
+  const tierReason = String(selectedVoteRaw.tier_reason || '').trim();
+  // Per-source direction breakdown: {"momentum_5m:CE": 1.0, "depth_net": 1.1, ...}
+  const entryDirSources = (selectedVoteRaw.entry_dir_sources && typeof selectedVoteRaw.entry_dir_sources === 'object')
+    ? selectedVoteRaw.entry_dir_sources : {};
   const chosenLeg = trade.optionType || trade.legDir || (trade.dir === 'SHORT' ? 'PE' : 'CE');
   const dirBasis = trade.signal?.reason || trade.entryReason || '';
   const shadowDir = traceSummary.shadow_dir || null;
@@ -1130,20 +1385,39 @@ function TradeInspector({ session, trade }) {
           <div className="t-outcome-cell"><div className="k">Conf</div><div className="v">{((trade.conf||0)*100).toFixed(0)}%</div></div>
         </div>
 
-        {/* Probability stack */}
-        <div className="t-section-head">Why it fired</div>
-        <div className="t-prob-stack">
-          {probs.length > 0 ? (
-            probs.map((p, i) => <ProbRow key={i} {...p} />)
-          ) : (
-            <div style={{color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:9.5}}>
-              No linked probability metrics for this trade.
-            </div>
-          )}
-        </div>
+        {/* Decision chain — gate cascade + regime evidence (always visible) */}
+        <div className="t-section-head">Decision chain</div>
+        <DecisionChain
+          orderedGates={selectedCandidate.ordered_gates}
+          flowGates={ctx.flowGates}
+          regimeEvidence={(ctx.regimeContext && ctx.regimeContext.evidence) || {}}
+          proposedDir={chosenLeg}
+          fallbackReason={_reasonStr}
+          fallbackRegime={trade.regime || (ctx.regimeContext && ctx.regimeContext.regime)}
+          fallbackEntryProb={entryProb}
+        />
 
-        {/* Direction decision */}
-        <div className="t-section-head">Direction decision</div>
+        {/* ML probabilities (collapsed) */}
+        <CollapseSection
+          title="ML probabilities"
+          summary={entryProb != null ? `entry ${entryProb.toFixed(2)}` : '—'}
+        >
+          <div className="t-prob-stack">
+            {probs.length > 0 ? (
+              probs.map((p, i) => <ProbRow key={i} {...p} />)
+            ) : (
+              <div style={{color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:9.5,padding:'0 12px 8px'}}>
+                No linked probability metrics for this trade.
+              </div>
+            )}
+          </div>
+        </CollapseSection>
+
+        {/* Direction decision (collapsed) */}
+        <CollapseSection
+          title="Direction decision"
+          summary={`${chosenLeg}${consensusMargin != null ? ` · margin ${consensusMargin.toFixed(2)}` : ''}${entryGrade ? ` · ${entryGrade}` : ''}${entryTier ? ` · ${liveWouldTake ? 'LIVE' : 'PAPER'}` : ''}`}
+        >
         <div className="t-dir-decision">
           {(ceProb != null || peProb != null) ? (
             <div className="t-dir-leg-row">
@@ -1178,7 +1452,62 @@ function TradeInspector({ session, trade }) {
           )}
           {consensusMargin != null && (
             <div style={{marginTop:5,fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-3)'}}>
-              consensus margin <span style={{color:consensusMargin >= 0.5 ? 'var(--pos)' : consensusMargin >= 0.2 ? 'var(--warn)' : 'var(--neg)'}}>{consensusMargin.toFixed(2)}</span>
+              direction margin <span style={{color:consensusMargin >= 2.0 ? 'var(--pos)' : consensusMargin >= 1.0 ? 'var(--warn)' : 'var(--neg)'}}>{consensusMargin.toFixed(2)}</span>
+            </div>
+          )}
+          {/* Per-source direction breakdown (composite resolver). Each chip is one
+              signal's contribution; depth_net is the de-correlated order-book vote.
+              This is what exposes depth-domination (the fce59da2 failure mode). */}
+          {Object.keys(entryDirSources).length > 0 && (
+            <div style={{marginTop:5}}>
+              <span style={{color:'var(--fg-4)',fontSize:9,marginRight:2,fontFamily:'var(--f-mono)'}}>sources:</span>
+              <div style={{marginTop:3,display:'flex',flexWrap:'wrap',gap:3}}>
+                {Object.entries(entryDirSources)
+                  .sort((a,b)=>Math.abs(Number(b[1]))-Math.abs(Number(a[1])))
+                  .map(([k,v],i)=>{
+                    const side = /:CE$|->CE$/.test(k) ? 'CE' : /:PE$|->PE$/.test(k) ? 'PE' : null;
+                    const isDepth = String(k).startsWith('depth');
+                    const col = side==='CE'?'var(--pos)':side==='PE'?'var(--neg)':'var(--fg-3)';
+                    return (
+                      <span key={i} className="t-confluence-chip"
+                        style={{color:col, border: isDepth ? '1px solid var(--warn)' : undefined}}
+                        title={isDepth ? 'order-book depth (de-correlated net vote)' : ''}>
+                        {k} {Number(v).toFixed(2)}
+                      </span>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+          {/* Entry quality grade + live/paper tier (E9) */}
+          {entryGrade && (
+            <div style={{marginTop:6,paddingTop:5,borderTop:'1px solid var(--bg-2)'}}>
+              <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                <span style={{
+                  fontFamily:'var(--f-mono)',fontSize:10,fontWeight:700,padding:'1px 6px',borderRadius:3,
+                  color: entryGrade==='GOOD'?'var(--pos)':entryGrade==='BAD'?'var(--neg)':'var(--warn)',
+                  background:'var(--bg-2)'}}>
+                  {entryGrade}
+                </span>
+                {entryTier && (
+                  <span style={{
+                    fontFamily:'var(--f-mono)',fontSize:10,fontWeight:700,padding:'1px 6px',borderRadius:3,
+                    color: liveWouldTake ? 'var(--pos)' : 'var(--fg-3)',
+                    background:'var(--bg-2)'}}>
+                    {liveWouldTake ? '● LIVE' : '○ PAPER'}
+                  </span>
+                )}
+                {tierReason && (
+                  <span style={{color:'var(--fg-4)',fontFamily:'var(--f-mono)',fontSize:9}}>{tierReason}</span>
+                )}
+              </div>
+              {entryGradeReasons.length > 0 && (
+                <div style={{marginTop:3,display:'flex',flexWrap:'wrap',gap:3}}>
+                  {entryGradeReasons.map((r,i)=>(
+                    <span key={i} className="t-confluence-chip" style={{color:'var(--fg-3)'}}>{r}</span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {shadowDir && shadowScore != null && (
@@ -1221,10 +1550,14 @@ function TradeInspector({ session, trade }) {
             </div>
           )}
         </div>
+        </CollapseSection>
 
-        {(policyReason || policyCheckRows.length > 0 || Object.keys(selectedVoteMetrics).length > 0) && <>
-          <div className="t-section-head">Policy · Signals</div>
-          <div style={{fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-3)',lineHeight:1.45}}>
+        {(policyReason || policyCheckRows.length > 0 || Object.keys(selectedVoteMetrics).length > 0) && (
+          <CollapseSection
+            title="Policy · Signals"
+            summary={selectedVoteMetrics.policy_score != null ? `score ${Number(selectedVoteMetrics.policy_score).toFixed(2)}` : (policyReason ? 'allowed' : '')}
+          >
+          <div style={{fontFamily:'var(--f-mono)',fontSize:9.5,color:'var(--fg-3)',lineHeight:1.45,padding:'0 12px 8px'}}>
             {policyReason && <div style={{marginBottom:4}}>{policyReason}</div>}
             {policyCheckRows.length > 0 && (
               <div style={{display:'grid',gridTemplateColumns:'auto 1fr',columnGap:8,rowGap:3}}>
@@ -1242,52 +1575,57 @@ function TradeInspector({ session, trade }) {
               </div>
             )}
           </div>
-        </>}
+          </CollapseSection>
+        )}
 
         {/* Confluence */}
-        {confluence.length > 0 && <>
-          <div className="t-section-head">Confluence</div>
-          <div className="t-confluence-list">
-            {confluence.map((c, i) => <span key={i} className="t-confluence-chip">{c}</span>)}
-          </div>
-        </>}
+        {confluence.length > 0 && (
+          <CollapseSection title="Confluence" summary={`${confluence.length} signals`}>
+            <div className="t-confluence-list" style={{padding:'0 12px 8px'}}>
+              {confluence.map((c, i) => <span key={i} className="t-confluence-chip">{c}</span>)}
+            </div>
+          </CollapseSection>
+        )}
 
         {/* Risk envelope */}
-        <div className="t-section-head">Risk envelope</div>
-        <RiskEnvelope trade={trade} path={pathPoints} session={session}/>
+        <CollapseSection title="Risk envelope" summary={`stop ${(trade.stopPx||0).toFixed(0)} · tgt ${(trade.targetPx||0).toFixed(0)}`}>
+          <RiskEnvelope trade={trade} path={pathPoints} session={session}/>
+        </CollapseSection>
 
         {/* Rationale */}
-        <div className="t-section-head">Entry · Exit rationale</div>
-        <div className="t-rationale">
-          <div className="t-rationale-block entry">
-            <div className="heading"><span style={{color:'var(--pos)'}}>● Entry</span><span style={{color:'var(--fg-3)'}}>{_barLabel(session,trade.entryIdx)}</span></div>
-            <div className="body">{trade.entryDetail}</div>
+        <CollapseSection title="Entry · Exit rationale" defaultOpen={true} summary="">
+          <div className="t-rationale">
+            <div className="t-rationale-block entry">
+              <div className="heading"><span style={{color:'var(--pos)'}}>● Entry</span><span style={{color:'var(--fg-3)'}}>{_barLabel(session,trade.entryIdx)}</span></div>
+              <div className="body">{trade.entryDetail}</div>
+            </div>
+            <div className={`t-rationale-block exit ${trade.exitReason==='TARGET_HIT'?'target':''}`}>
+              <div className="heading"><span style={{color:trade.exitReason==='TARGET_HIT'?'var(--pos)':'var(--neg)'}}>● Exit · {(trade.exitReason||'').replace('_',' ')}</span></div>
+              <div className="body">{trade.exitDetail}</div>
+            </div>
           </div>
-          <div className={`t-rationale-block exit ${trade.exitReason==='TARGET_HIT'?'target':''}`}>
-            <div className="heading"><span style={{color:trade.exitReason==='TARGET_HIT'?'var(--pos)':'var(--neg)'}}>● Exit · {(trade.exitReason||'').replace('_',' ')}</span></div>
-            <div className="body">{trade.exitDetail}</div>
-          </div>
-        </div>
+        </CollapseSection>
 
         {/* Counterfactuals */}
-        <div className="t-section-head">What-if</div>
-        <div className="t-cf-ribbon">
-          {counterfactuals.map((cf, i) => {
-            const d = typeof cf.delta === 'number' ? cf.delta : 0;
-            const pct = Math.min(100, Math.abs(d) / 0.4 * 50);
-            const cls = d > 0.001 ? 'pos' : d < -0.001 ? 'neg' : 'zero';
-            return (
-              <div key={i} className="t-cf-row">
-                <div className="scen">{cf.label}<span className="note">{cf.note}</span></div>
-                <div className={`delta ${cls}`}>{d===0?'±0.00':TC.fmtPct(d,2)}</div>
-                <div className="delta-bar">
-                  <span className="zero-mark"/>
-                  <span className={`fill ${cls==='neg'?'neg':''}`} style={{left:d>=0?'50%':(50-pct)+'%',width:pct+'%'}}/>
+        <CollapseSection title="What-if" summary="">
+          <div className="t-cf-ribbon">
+            {counterfactuals.map((cf, i) => {
+              const d = typeof cf.delta === 'number' ? cf.delta : 0;
+              const pct = Math.min(100, Math.abs(d) / 0.4 * 50);
+              const cls = d > 0.001 ? 'pos' : d < -0.001 ? 'neg' : 'zero';
+              return (
+                <div key={i} className="t-cf-row">
+                  <div className="scen">{cf.label}<span className="note">{cf.note}</span></div>
+                  <div className={`delta ${cls}`}>{d===0?'±0.00':TC.fmtPct(d,2)}</div>
+                  <div className="delta-bar">
+                    <span className="zero-mark"/>
+                    <span className={`fill ${cls==='neg'?'neg':''}`} style={{left:d>=0?'50%':(50-pct)+'%',width:pct+'%'}}/>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </CollapseSection>
       </div>
     </div>
   );
@@ -1391,6 +1729,70 @@ function _useIsMobile() {
   return isMobile;
 }
 
+// ── Resizable persisted-size hook ────────────────────────────────────────
+// Returns [size, startDrag]. `size` is a number (px). `startDrag(e)` begins a
+// pointer drag; `axis` "x" resizes width, "y" resizes height. `dir` +1 means
+// dragging toward larger values increases size (e.g. divider above a bottom
+// panel → dragging up grows it → dir=-1). Persisted to localStorage by `key`.
+function _useResizable({ key, axis, dir = 1, def, min, max }) {
+  const [size, setSize] = _s(() => {
+    try { const v = parseFloat(localStorage.getItem(key)); if (Number.isFinite(v)) return v; } catch (_) {}
+    return def;
+  });
+  const startDrag = _cb((e) => {
+    e.preventDefault();
+    const start = axis === 'x' ? e.clientX : e.clientY;
+    const startSize = size;
+    document.body.classList.add('m-resizing');
+    const onMove = (ev) => {
+      const cur = axis === 'x' ? ev.clientX : ev.clientY;
+      const delta = (cur - start) * dir;
+      const clampMax = typeof max === 'function' ? max() : max;
+      let next = startSize + delta;
+      next = Math.max(min, Math.min(clampMax, next));
+      setSize(next);
+    };
+    const onUp = () => {
+      document.body.classList.remove('m-resizing');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      // persistence handled by the effect on [size]; avoid writing a stale value here
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [size, axis, dir, min, max, key]);
+
+  // persist on every settle (size changes from drag)
+  _e(() => { try { localStorage.setItem(key, String(Math.round(size))); } catch (_) {} }, [size, key]);
+
+  return [size, startDrag, setSize];
+}
+
+// ── ResizeDivider — draggable splitter (vertical or horizontal) ──────────
+function ResizeDivider({ axis, onDown, dragging }) {
+  return (
+    <div
+      className={`${axis === 'x' ? 'm-divider-v' : 'm-divider-h'}${dragging ? ' dragging' : ''}`}
+      onPointerDown={onDown}
+      role="separator"
+      aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'}
+    />
+  );
+}
+
+// ── MaximizeBtn — toggles a pane to fill its container ───────────────────
+function MaximizeBtn({ maximized, onToggle, title }) {
+  return (
+    <button
+      className="m-maximize-btn"
+      onClick={onToggle}
+      title={title || (maximized ? 'Restore' : 'Maximize')}
+    >
+      {maximized ? '🗗' : '⛶'}
+    </button>
+  );
+}
+
 // ── _fmtRelTime — "2s ago" / "12s ago" / "1m ago" ────────────────────────
 function _fmtRelTime(ms) {
   if (!ms) return '—';
@@ -1448,8 +1850,18 @@ function MobileTradeCard({ trade, selected, onSelect, session }) {
       aria-pressed={selected ? 'true' : 'false'}
       onClick={() => onSelect(t)}>
       <div className="m-card-head">
+        {_gradeColor(t.entryGrade) && (
+          <span title={`entry grade ${t.entryGrade}${t.tier ? ` · ${t.liveWouldTake ? 'LIVE' : 'PAPER'}` : ''}`}
+            style={{display:'inline-block',width:8,height:8,borderRadius:'50%',marginRight:5,flex:'0 0 auto',
+              background:_gradeColor(t.entryGrade),
+              boxShadow: t.liveWouldTake ? '0 0 0 1.5px var(--pos)' : 'none'}}/>
+        )}
         <span className={`m-card-dir ${dir}`}>{legDir}{t.optionType && legDir !== t.optionType ? ` ${t.optionType}` : ''}</span>
         <span className="strat">{t.strat || '—'}</span>
+        {t.entryGrade && (
+          <span style={{fontFamily:'var(--f-mono)',fontSize:8.5,fontWeight:700,marginLeft:6,
+            color:_gradeColor(t.entryGrade)}}>{t.entryGrade}{t.liveWouldTake ? '·LIVE' : t.tier === 'paper' ? '·PAPER' : ''}</span>
+        )}
         {prob != null && <span style={{fontFamily:'var(--f-mono)',fontSize:9,color:'var(--fg-3)',marginLeft:'auto'}}>conf {prob}%</span>}
       </div>
       {/* signal pills row */}
@@ -1481,20 +1893,25 @@ function MobileTradeCard({ trade, selected, onSelect, session }) {
 
 // ── MobileBottomSheet — generic bottom-anchored sheet ────────────────────
 function MobileBottomSheet({ open, title, onClose, children }) {
+  const [maxed, setMaxed] = _s(false);
   _e(() => {
     if (!open) return;
     const fn = e => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', fn);
     return () => window.removeEventListener('keydown', fn);
   }, [open, onClose]);
+  _e(() => { if (!open) setMaxed(false); }, [open]);   // reset on close
   return (
     <div className={`m-sheet-overlay ${open ? 'open' : ''}`}
          onClick={e => { if (e.target.classList.contains('m-sheet-overlay')) onClose(); }}>
-      <div className={`m-sheet ${open ? 'open' : ''}`}>
-        <div className="m-sheet-grab"/>
+      <div className={`m-sheet ${open ? 'open' : ''}${maxed ? ' maximized' : ''}`}>
+        <div className="m-sheet-grab" onClick={() => setMaxed(m => !m)}/>
         <div className="m-sheet-head">
           <span className="m-sheet-title">{title}</span>
-          <button className="m-sheet-close" onClick={onClose} aria-label="Close">✕</button>
+          <span style={{display:'flex',alignItems:'center',gap:2}}>
+            <MaximizeBtn maximized={maxed} onToggle={() => setMaxed(m => !m)}/>
+            <button className="m-sheet-close" onClick={onClose} aria-label="Close">✕</button>
+          </span>
         </div>
         <div className="m-sheet-body">{children}</div>
       </div>
@@ -1518,7 +1935,18 @@ function MobileLiveShell({
   const [now, setNow] = _s(Date.now());
   const inspectorTrade = selectedTrade || (trades.length ? trades[0] : null);
   const [showInspector, setShowInspector] = _s(false);
+  const [inspectorMax, setInspectorMax] = _s(false);
   const isMobile = _useIsMobile();
+
+  // Resizable panes (persisted): left-pane width + inspector height
+  const [leftW, startLeftDrag] = _useResizable({
+    key: 'term.leftW', axis: 'x', dir: 1, def: 400, min: 280,
+    max: () => Math.min(720, window.innerWidth - 360),
+  });
+  const [inspH, startInspDrag] = _useResizable({
+    key: 'term.inspH', axis: 'y', dir: -1, def: 320, min: 180,
+    max: () => Math.max(220, window.innerHeight - 220),
+  });
 
   _e(() => { setLastTickAt(Date.now()); }, [upToIdx]);
   _e(() => { const id = setInterval(() => setNow(Date.now()), 2000); return () => clearInterval(id); }, []);
@@ -1612,6 +2040,7 @@ function MobileLiveShell({
                   <span className={`v ${orbCls==='ok'?'pos':orbCls==='warn'?'warn':'neg'}`}>{orbLbl}</span></div>
             }
           </div>
+          <button className="m-iconbtn" aria-label="Pipeline / decision flow" title="Decision flow (every bar, blocked + entered)" onClick={() => onModeSwitch('pipeline')}>⬡</button>
           <button className="m-iconbtn" aria-label="Settings" onClick={() => setSheet('ops')}>⚙</button>
           <button className="m-iconbtn danger" aria-label="Halt" onClick={onHaltClick}>⏻</button>
         </div>
@@ -1642,7 +2071,7 @@ function MobileLiveShell({
       </header>
 
       {/* ── Body ─────────────────────────────────────────────────────────── */}
-      <div className="m-split">
+      <div className="m-split" style={{'--left-w': leftW + 'px'}}>
         <div className="m-left">
           <nav className="m-tabs" role="tablist">
             <button className="m-tab" data-tab="tape" aria-pressed={tab==='tape'} onClick={() => setTab('tape')}>
@@ -1838,9 +2267,12 @@ function MobileLiveShell({
         </main>
         </div>{/* end m-left */}
 
+        {/* Vertical divider — drag to resize left pane width (desktop only) */}
+        {!isMobile && <ResizeDivider axis="x" onDown={startLeftDrag} />}
+
         {/* Right pane: chart on desktop only — phone chart tab handles mobile (never both) */}
         {!isMobile && (
-          <div className="m-right-pane">
+          <div className={`m-right-pane${inspectorMax && showInspector && inspectorTrade ? ' inspector-max' : ''}`}>
             <div className="m-right-chart">
               <TermChart
                 session={session} candles={candles} trades={trades}
@@ -1850,17 +2282,24 @@ function MobileLiveShell({
             </div>
             {/* Inspector panel — slides in when a trade is selected */}
             {showInspector && inspectorTrade && (
-              <div className="m-right-inspector">
-                <div className="m-right-inspector-head">
-                  <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',letterSpacing:'0.12em',textTransform:'uppercase'}}>
-                    Trade Inspector
-                  </span>
-                  <button className="m-sheet-close" onClick={() => setShowInspector(false)}>✕</button>
+              <>
+                {/* Horizontal divider — drag to resize inspector height */}
+                {!inspectorMax && <ResizeDivider axis="y" onDown={startInspDrag} />}
+                <div className="m-right-inspector" style={inspectorMax ? undefined : {'--insp-h': inspH + 'px'}}>
+                  <div className="m-right-inspector-head">
+                    <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',letterSpacing:'0.12em',textTransform:'uppercase'}}>
+                      Trade Inspector
+                    </span>
+                    <span style={{display:'flex',alignItems:'center',gap:2}}>
+                      <MaximizeBtn maximized={inspectorMax} onToggle={() => setInspectorMax(m => !m)}/>
+                      <button className="m-sheet-close" onClick={() => { setShowInspector(false); setInspectorMax(false); }}>✕</button>
+                    </span>
+                  </div>
+                  <div style={{flex:1,overflowY:'auto',minHeight:0}}>
+                    <TradeInspector session={session} trade={inspectorTrade}/>
+                  </div>
                 </div>
-                <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-                  <TradeInspector session={session} trade={inspectorTrade}/>
-                </div>
-              </div>
+              </>
             )}
           </div>
         )}
@@ -2190,13 +2629,22 @@ function MobileReplayShell({
   selectedTrade, onSelectTrade,
   blockerFunnel, heatmap,
   isPlaying, speed, total, vtLabel,
-  replayDate, replayRunId, replayKind,
+  replayDate, replayRunId, replayKind, replayBook, onBookChange,
   replayOptions, tradeCounts, modelsByDate, datesLoading, wsStatus, replayError,
   onPlay, onPause, onSpeed, onScrub, onScrubEnd, onReset, onDateChange, onModeSwitch, onRefreshRuns,
 }) {
   const [tab, setTab] = _s('tape');
   const isMobile = _useIsMobile();
   const [showInspector, setShowInspector] = _s(false);
+  const [inspectorMax, setInspectorMax] = _s(false);
+  const [leftW, startLeftDrag] = _useResizable({
+    key: 'term.leftW', axis: 'x', dir: 1, def: 400, min: 280,
+    max: () => Math.min(720, window.innerWidth - 360),
+  });
+  const [inspH, startInspDrag] = _useResizable({
+    key: 'term.inspH', axis: 'y', dir: -1, def: 320, min: 180,
+    max: () => Math.max(220, window.innerHeight - 220),
+  });
   const inspectorTrade = selectedTrade || ((trades||[]).length ? trades[0] : null);
   const pct      = total > 0 ? ((upToIdx + 1) / total * 100).toFixed(0) : 0;
   const pnlCls   = (sessionPnl||0) > 0.0005 ? 'pos' : (sessionPnl||0) < -0.0005 ? 'neg' : 'flat';
@@ -2306,6 +2754,25 @@ function MobileReplayShell({
                   border:'1px solid var(--line-2)',background:'transparent',color:'var(--fg-3)',
                   cursor:'pointer',fontSize:12,lineHeight:1,display:'grid',placeItems:'center'}}>⟳</button>
             )}
+            {/* Paper/Live book toggle (sim dual-book): PAPER = every trade (analysis);
+                LIVE = GOOD-only independent slot, never blocked by a paper hold. */}
+            {replayKind === 'sim' && onBookChange && (
+              <div style={{display:'inline-flex',flexShrink:0,borderRadius:'var(--r-2)',overflow:'hidden',border:'1px solid var(--line-2)'}}
+                title="PAPER = every trade · LIVE = GOOD-only independent slot (never blocked by paper)">
+                {['paper','live'].map(b => {
+                  const on = (replayBook||'paper') === b;
+                  return (
+                    <button key={b} onClick={() => onBookChange(b)}
+                      style={{border:0,cursor:'pointer',fontFamily:'var(--f-mono)',fontSize:9.5,
+                        letterSpacing:'0.04em',padding:'0 9px',height:24,textTransform:'uppercase',
+                        background: on ? (b==='live'?'var(--pos)':'var(--accent)') : 'transparent',
+                        color: on ? (b==='live'?'#06210f':'#1a1100') : 'var(--fg-3)'}}>
+                      {b}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
           <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
             <div className="m-orb" title={`ws: ${wsStatus}`}>
@@ -2370,7 +2837,7 @@ function MobileReplayShell({
             : <span>{datesLoading ? 'Loading…' : wsStatus}</span>}
         </div>
       ) : (
-        <div className="m-split">
+        <div className="m-split" style={{'--left-w': leftW + 'px'}}>
           <div className="m-left">
             <nav className="m-tabs" role="tablist">
               <button className="m-tab" data-tab="tape" aria-pressed={tab==='tape'} onClick={() => setTab('tape')}>
@@ -2438,8 +2905,9 @@ function MobileReplayShell({
               </div>
             </main>
           </div>
+          {!isMobile && <ResizeDivider axis="x" onDown={startLeftDrag} />}
           {!isMobile && (
-            <div className="m-right-pane">
+            <div className={`m-right-pane${inspectorMax && showInspector && inspectorTrade ? ' inspector-max' : ''}`}>
               <div className="m-right-chart">
                 <TermChart session={session} candles={candles||[]} trades={trades||[]}
                   selectedTrade={inspectorTrade}
@@ -2447,9 +2915,20 @@ function MobileReplayShell({
                   upToIdx={upToIdx} flashIdx={null}/>
               </div>
               {showInspector && inspectorTrade && (
-                <div className="m-right-inspector">
-                  <TradeInspector session={session} trade={inspectorTrade}/>
-                </div>
+                <>
+                  {!inspectorMax && <ResizeDivider axis="y" onDown={startInspDrag} />}
+                  <div className="m-right-inspector" style={inspectorMax ? undefined : {'--insp-h': inspH + 'px'}}>
+                    <div className="m-right-inspector-head">
+                      <span style={{fontFamily:'var(--f-mono)',fontSize:10,color:'var(--fg-3)',letterSpacing:'0.12em',textTransform:'uppercase'}}>
+                        Trade Inspector
+                      </span>
+                      <MaximizeBtn maximized={inspectorMax} onToggle={() => setInspectorMax(m => !m)}/>
+                    </div>
+                    <div style={{flex:1,overflowY:'auto',minHeight:0}}>
+                      <TradeInspector session={session} trade={inspectorTrade}/>
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -2635,9 +3114,10 @@ function _replayBootParams() {
       date: String(p.get('date') || p.get('replay_date') || '').trim(),
       runId: String(p.get('run_id') || '').trim(),
       kind: String(p.get('kind') || '').trim().toLowerCase(),
+      book: String(p.get('book') || '').trim().toLowerCase(),
     };
   } catch (_) {
-    return { date: '', runId: '', kind: '' };
+    return { date: '', runId: '', kind: '', book: '' };
   }
 }
 
@@ -2665,6 +3145,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const [replayDate,     setReplayDate]     = _s(_boot.date || '');
   const [replayRunId,    setReplayRunId]    = _s(_boot.runId || '');
   const [replayKind,     setReplayKind]     = _s((_boot.kind === 'sim' ? 'sim' : 'oos'));
+  const [replayBook,     setReplayBook]     = _s(_boot.book === 'live' ? 'live' : 'paper');
   const [replayError,    setReplayError]    = _s('');
   const [wsStatus,       setWsStatus]       = _s('idle');
   const [availableDates, setAvailableDates] = _s([]);
@@ -2691,6 +3172,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   const replayDateRef = _r(_boot.date || '');
   const replayRunIdRef = _r(_boot.runId || '');
   const replayKindRef = _r(_boot.kind === 'sim' ? 'sim' : 'oos');
+  const replayBookRef = _r(_boot.book === 'live' ? 'live' : 'paper');
   const fitRef        = _r(null);
 
   // Diagnostics: load current model + available models, blocker-funnel aggregate
@@ -2748,6 +3230,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
   _e(() => { replayDateRef.current = replayDate; }, [replayDate]);
   _e(() => { replayRunIdRef.current = replayRunId; }, [replayRunId]);
   _e(() => { replayKindRef.current = replayKind; }, [replayKind]);
+  _e(() => { replayBookRef.current = replayBook; }, [replayBook]);
 
   function openReplaySocket() {
     if (wsRef.current) return;
@@ -2760,6 +3243,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
         };
         sub.kind = replayKindRef.current === 'sim' ? 'sim' : 'oos';
         if (replayRunIdRef.current) sub.run_id = replayRunIdRef.current;
+        if (replayKindRef.current === 'sim') sub.book = replayBookRef.current || 'paper';
         return sub;
       },
       {
@@ -2857,6 +3341,25 @@ function ReplayMonitorDark({ onModeSwitch }) {
     };
     sub.kind = nextKind;
     if (nextRunId) sub.run_id = nextRunId;
+    if (nextKind === 'sim') sub.book = replayBookRef.current || 'paper';
+    const sent = wsRef.current && wsRef.current.send(sub);
+    if (!sent) setWsStatus('connecting');
+  }
+  // Paper/live book toggle (sim dual-book). Re-subscribes the same run with the
+  // chosen book so the tape switches between the analysis (paper) book and the
+  // independent live (GOOD-only) book.
+  function handleBookChange(nextBook) {
+    const b = nextBook === 'live' ? 'live' : 'paper';
+    setReplayBook(b); replayBookRef.current = b;
+    setReplayError(''); setIsPlaying(false); setSession(null); setUpToIdx(0);
+    openReplaySocket();
+    const sub = {
+      action:'subscribe', mode:'replay', date:replayDateRef.current,
+      up_to_idx:0, playing:false, speed:speedRef.current,
+      kind: replayKindRef.current === 'sim' ? 'sim' : 'oos',
+      book: b,
+    };
+    if (replayRunIdRef.current) sub.run_id = replayRunIdRef.current;
     const sent = wsRef.current && wsRef.current.send(sub);
     if (!sent) setWsStatus('connecting');
   }
@@ -2941,6 +3444,7 @@ function ReplayMonitorDark({ onModeSwitch }) {
       heatmap={{ data: heatmapData, loading: heatmapLoading }}
       isPlaying={isPlaying} speed={speed} total={candles.length} vtLabel={vtLabel}
       replayDate={replayDate} replayRunId={replayRunId || (session?.runId||'')} replayKind={replayKind}
+      replayBook={replayBook} onBookChange={handleBookChange}
       replayOptions={replayOptions} tradeCounts={tradeCounts} modelsByDate={modelsByDate}
       datesLoading={datesLoading} wsStatus={wsStatus} replayError={replayError}
       onPlay={handlePlay} onPause={handlePause} onSpeed={handleSpeed}

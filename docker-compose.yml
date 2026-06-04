@@ -404,12 +404,51 @@ services:
       EXIT_TRAILING_TRAIL_PCT: "${EXIT_TRAILING_TRAIL_PCT:-0.005}"
       EXIT_THESIS_FAIL_BARS: "${EXIT_THESIS_FAIL_BARS:-3}"
       EXIT_THESIS_FAIL_MIN_MFE: "${EXIT_THESIS_FAIL_MIN_MFE:-0.002}"
+      # Scalper sub-stack hard loss cap (makes adaptive self-sufficient; >=1.0 disables)
+      EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+
+      # ── Near-expiry exit override (tighter stack at low DTE; off by default) ─
+      EXIT_EXPIRY_OVERRIDE_ENABLED: "${EXIT_EXPIRY_OVERRIDE_ENABLED:-0}"
+      EXIT_EXPIRY_DTE_THRESHOLD: "${EXIT_EXPIRY_DTE_THRESHOLD:-0}"
+      EXIT_EXPIRY_HARD_STOP_PCT: "${EXIT_EXPIRY_HARD_STOP_PCT:-0.15}"
+      EXIT_EXPIRY_THESIS_FAIL_BARS: "${EXIT_EXPIRY_THESIS_FAIL_BARS:-3}"
+      EXIT_EXPIRY_THESIS_FAIL_MIN_MFE: "${EXIT_EXPIRY_THESIS_FAIL_MIN_MFE:-0.02}"
+      EXIT_EXPIRY_TRAIL_ACTIVATION_PCT: "${EXIT_EXPIRY_TRAIL_ACTIVATION_PCT:-0.03}"
+      EXIT_EXPIRY_TRAIL_PCT: "${EXIT_EXPIRY_TRAIL_PCT:-0.015}"
+      EXIT_EXPIRY_PREMIUM_TARGET_PCT: "${EXIT_EXPIRY_PREMIUM_TARGET_PCT:-0.10}"
 
       # ── Entry gate (E3) ───────────────────────────────────────────────────
       # Align consensus bypass threshold to entry gate. Default 0.65 = same as STRATEGY_MIN_CONFIDENCE.
       CONSENSUS_BYPASS_MIN_CONFIDENCE: "${CONSENSUS_BYPASS_MIN_CONFIDENCE:-0.65}"
       # SIDEWAYS regime requires higher direction margin (noisier signals in flat market).
       DIRECTION_MIN_MARGIN_SIDEWAYS: "${DIRECTION_MIN_MARGIN_SIDEWAYS:-2.0}"
+
+      # ── Entry quality grade + live/paper tiering (E9) ─────────────────────
+      # Observational: NEVER blocks. Paper takes every trade; the tier labels the
+      # subset that WOULD fire on real money (live_would_take). See entry_quality.py.
+      ENTRY_TIERING_ENABLED: "${ENTRY_TIERING_ENABLED:-true}"
+      # Depth de-correlation: collapse correlated order-book ticks into one capped
+      # net vote (root-cause fix for the 2026-06-03 fce59da2 CE miss). 0 = legacy sum.
+      ENTRY_DIR_DEPTH_DECORRELATE: "${ENTRY_DIR_DEPTH_DECORRELATE:-1}"
+      ENTRY_DIR_DEPTH_NET_CAP: "${ENTRY_DIR_DEPTH_NET_CAP:-1.1}"
+      # Grade thresholds (score starts 1.0, penalties subtract; GOOD>=good_at, BAD<bad_below).
+      ENTRY_QUALITY_GOOD_AT: "${ENTRY_QUALITY_GOOD_AT:-0.8}"
+      ENTRY_QUALITY_BAD_BELOW: "${ENTRY_QUALITY_BAD_BELOW:-0.5}"
+      ENTRY_QUALITY_MARGIN_GOOD: "${ENTRY_QUALITY_MARGIN_GOOD:-2.0}"
+      ENTRY_QUALITY_MARGIN_WEAK: "${ENTRY_QUALITY_MARGIN_WEAK:-1.0}"
+      ENTRY_QUALITY_MAX_DEPTH_SHARE: "${ENTRY_QUALITY_MAX_DEPTH_SHARE:-0.6}"
+      ENTRY_QUALITY_CHOP_REGIMES: "${ENTRY_QUALITY_CHOP_REGIMES:-SIDEWAYS,CHOP,UNKNOWN}"
+      ENTRY_QUALITY_IV_SKEW_BAND: "${ENTRY_QUALITY_IV_SKEW_BAND:-0.08}"
+      ENTRY_QUALITY_PEN_MARGIN_THIN: "${ENTRY_QUALITY_PEN_MARGIN_THIN:-0.5}"
+      ENTRY_QUALITY_PEN_MARGIN_MILD: "${ENTRY_QUALITY_PEN_MARGIN_MILD:-0.2}"
+      ENTRY_QUALITY_PEN_DEPTH_DOM: "${ENTRY_QUALITY_PEN_DEPTH_DOM:-0.3}"
+      ENTRY_QUALITY_PEN_CHOP_REGIME: "${ENTRY_QUALITY_PEN_CHOP_REGIME:-0.3}"
+      ENTRY_QUALITY_PEN_STALE_MOMENTUM: "${ENTRY_QUALITY_PEN_STALE_MOMENTUM:-0.3}"
+      ENTRY_QUALITY_PEN_IV_DISAGREE: "${ENTRY_QUALITY_PEN_IV_DISAGREE:-0.2}"
+      # RiskManager live-eligibility: grade floor + recent (session) performance gate.
+      RISK_LIVE_MIN_GRADE: "${RISK_LIVE_MIN_GRADE:-GOOD}"
+      RISK_LIVE_MIN_WINRATE: "${RISK_LIVE_MIN_WINRATE:-0.0}"
+      RISK_LIVE_WINRATE_MIN_TRADES: "${RISK_LIVE_WINRATE_MIN_TRADES:-5}"
 
       # ── Risk sizing (E4) ──────────────────────────────────────────────────
       # RISK_CALCULATOR=fixed_fraction uses 1% of capital at risk per trade.
@@ -1013,6 +1052,29 @@ services:
       SMART_STRIKE_OTM4_MAX_BAR_HOUR: "${SMART_STRIKE_OTM4_MAX_BAR_HOUR:-}"
       SMART_STRIKE_OTM4_MIN_OI: "${SMART_STRIKE_OTM4_MIN_OI:-}"
       ML_ENTRY_BLOCK_PE: "${ML_ENTRY_BLOCK_PE:-0}"
+
+      # ── Exit policy stack (E2) ─────────────────────────────────────────────
+      # Master switch — set to 1 to activate. Default 0 preserves existing behaviour.
+      EXIT_POLICY_STACK_ENABLED: "${EXIT_POLICY_STACK_ENABLED:-0}"
+      EXIT_PREMIUM_TARGET_PCT: "${EXIT_PREMIUM_TARGET_PCT:-0.015}"
+      EXIT_TRAILING_ACTIVATION_PCT: "${EXIT_TRAILING_ACTIVATION_PCT:-0.01}"
+      EXIT_TRAILING_TRAIL_PCT: "${EXIT_TRAILING_TRAIL_PCT:-0.005}"
+      EXIT_THESIS_FAIL_BARS: "${EXIT_THESIS_FAIL_BARS:-3}"
+      EXIT_THESIS_FAIL_MIN_MFE: "${EXIT_THESIS_FAIL_MIN_MFE:-0.002}"
+      # Scalper sub-stack hard loss cap (makes adaptive self-sufficient; >=1.0 disables)
+      EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+
+      # ── Near-expiry exit override (tighter stack at low DTE; off by default) ─
+      EXIT_EXPIRY_OVERRIDE_ENABLED: "${EXIT_EXPIRY_OVERRIDE_ENABLED:-0}"
+      EXIT_EXPIRY_DTE_THRESHOLD: "${EXIT_EXPIRY_DTE_THRESHOLD:-0}"
+      EXIT_EXPIRY_HARD_STOP_PCT: "${EXIT_EXPIRY_HARD_STOP_PCT:-0.15}"
+      EXIT_EXPIRY_THESIS_FAIL_BARS: "${EXIT_EXPIRY_THESIS_FAIL_BARS:-3}"
+      EXIT_EXPIRY_THESIS_FAIL_MIN_MFE: "${EXIT_EXPIRY_THESIS_FAIL_MIN_MFE:-0.02}"
+      EXIT_EXPIRY_TRAIL_ACTIVATION_PCT: "${EXIT_EXPIRY_TRAIL_ACTIVATION_PCT:-0.03}"
+      EXIT_EXPIRY_TRAIL_PCT: "${EXIT_EXPIRY_TRAIL_PCT:-0.015}"
+      EXIT_EXPIRY_PREMIUM_TARGET_PCT: "${EXIT_EXPIRY_PREMIUM_TARGET_PCT:-0.10}"
+
+      # ── Exit strategy mode ────────────────────────────────────────────────
       EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
       ADAPTIVE_LOTTERY_REGIMES: "${ADAPTIVE_LOTTERY_REGIMES:-BREAKOUT,TRENDING}"
       LOTTERY_HARD_STOP_PCT: "${LOTTERY_HARD_STOP_PCT:-0.20}"
@@ -1023,6 +1085,29 @@ services:
       LOTTERY_THESIS_FAIL_MIN_MFE: "${LOTTERY_THESIS_FAIL_MIN_MFE:-0.03}"
       LOTTERY_TIMESTOP_BARS: "${LOTTERY_TIMESTOP_BARS:-90}"
       LOTTERY_MOMENTUM_FLIP: "${LOTTERY_MOMENTUM_FLIP:-1.0}"
+
+      # ── Entry quality grade + live/paper tiering (E9) ─────────────────────
+      # Observational: NEVER blocks. Paper takes every trade; the tier labels the
+      # subset that WOULD fire on real money (live_would_take). See entry_quality.py.
+      ENTRY_TIERING_ENABLED: "${ENTRY_TIERING_ENABLED:-true}"
+      ENTRY_DIR_DEPTH_DECORRELATE: "${ENTRY_DIR_DEPTH_DECORRELATE:-1}"
+      ENTRY_DIR_DEPTH_NET_CAP: "${ENTRY_DIR_DEPTH_NET_CAP:-1.1}"
+      ENTRY_QUALITY_GOOD_AT: "${ENTRY_QUALITY_GOOD_AT:-0.8}"
+      ENTRY_QUALITY_BAD_BELOW: "${ENTRY_QUALITY_BAD_BELOW:-0.5}"
+      ENTRY_QUALITY_MARGIN_GOOD: "${ENTRY_QUALITY_MARGIN_GOOD:-2.0}"
+      ENTRY_QUALITY_MARGIN_WEAK: "${ENTRY_QUALITY_MARGIN_WEAK:-1.0}"
+      ENTRY_QUALITY_MAX_DEPTH_SHARE: "${ENTRY_QUALITY_MAX_DEPTH_SHARE:-0.6}"
+      ENTRY_QUALITY_CHOP_REGIMES: "${ENTRY_QUALITY_CHOP_REGIMES:-SIDEWAYS,CHOP,UNKNOWN}"
+      ENTRY_QUALITY_IV_SKEW_BAND: "${ENTRY_QUALITY_IV_SKEW_BAND:-0.08}"
+      ENTRY_QUALITY_PEN_MARGIN_THIN: "${ENTRY_QUALITY_PEN_MARGIN_THIN:-0.5}"
+      ENTRY_QUALITY_PEN_MARGIN_MILD: "${ENTRY_QUALITY_PEN_MARGIN_MILD:-0.2}"
+      ENTRY_QUALITY_PEN_DEPTH_DOM: "${ENTRY_QUALITY_PEN_DEPTH_DOM:-0.3}"
+      ENTRY_QUALITY_PEN_CHOP_REGIME: "${ENTRY_QUALITY_PEN_CHOP_REGIME:-0.3}"
+      ENTRY_QUALITY_PEN_STALE_MOMENTUM: "${ENTRY_QUALITY_PEN_STALE_MOMENTUM:-0.3}"
+      ENTRY_QUALITY_PEN_IV_DISAGREE: "${ENTRY_QUALITY_PEN_IV_DISAGREE:-0.2}"
+      RISK_LIVE_MIN_GRADE: "${RISK_LIVE_MIN_GRADE:-GOOD}"
+      RISK_LIVE_MIN_WINRATE: "${RISK_LIVE_MIN_WINRATE:-0.0}"
+      RISK_LIVE_WINRATE_MIN_TRADES: "${RISK_LIVE_WINRATE_MIN_TRADES:-5}"
     command:
       [
         "python",

@@ -24,6 +24,7 @@ from ..contracts import (
     StrategyVote,
     TradeSignal,
 )
+from contracts_app import isoformat_ist
 from ..logging.signal_logger import SignalLogger
 from ..logging.decision_trace import (
     DecisionTraceBuilder,
@@ -33,6 +34,7 @@ from ..logging.decision_trace import (
     risk_state_payload,
     warmup_context_payload,
 )
+from ..utils.env import safe_float as _safe_float
 from ..position.tracker import PositionTracker
 from ..risk.config import PositionRiskConfig
 from ..brain.playbook_brain import PLAYBOOK_EXIT_KEY
@@ -50,6 +52,13 @@ from .entry_gates import (
     compute_regime_tag,
     is_in_configured_time_window,
     is_session_regime_allowed,
+)
+from .entry_config import EntryConfig
+from .eval_timing import PhaseTimer
+from .entry_pipeline_contracts import EntryContext
+from .entry_pipeline_gates import (
+    build_entry_pipeline,
+    evaluate_v2 as _evaluate_v2,
 )
 from ..market.depth_context import DepthContext
 from ..runtime.eval_context import clear_depth_context, set_depth_context
@@ -128,6 +137,10 @@ class DeterministicRuleEngine(StrategyEngine):
         self._tracker = PositionTracker()
         self._risk = RiskManager()
         self._log = signal_logger or SignalLogger()
+        # Live-only entry gate: when set, this engine only opens live-eligible
+        # (GOOD) entries — used to run a parallel LIVE book whose single slot is
+        # never blocked by low-grade paper trades. Default off (= take everything).
+        self._entry_live_only_gate = as_bool(os.getenv("ENTRY_LIVE_ONLY_GATE", "false"))
         self._min_confidence = float(min_confidence)
         if default_risk_config is not None:
             self._default_risk_config = default_risk_config
@@ -172,16 +185,32 @@ class DeterministicRuleEngine(StrategyEngine):
         self._last_stop_bar: Optional[int] = None        # event count when last STOP_LOSS fired
         self._last_exit_direction: Optional[str] = None  # "CE" | "PE" at last stop exit
         self._last_any_exit_bar: Optional[int] = None   # event count of ANY exit (for general spacing)
+        self._last_zero_mfe_bar: Optional[int] = None   # event count when a zero-MFE exit occurred
+        self._last_zero_mfe_direction: Optional[str] = None  # direction of that zero-MFE trade
         # Optional live depth feed (None in replay/offline — signals degrade gracefully).
         self._depth_reader: Optional[RedisDepthReader] = depth_reader
         # Per-evaluate depth snapshot — set at start of evaluate(), read by shadow scorer.
         self._current_depth_ctx: Optional[DepthContext] = None
+        # Entry pipeline v2 — strangler flag (default off; set STRATEGY_ENTRY_PIPELINE_V2=1 to enable).
+        self._entry_pipeline_v2: bool = as_bool(os.getenv("STRATEGY_ENTRY_PIPELINE_V2", "0"))
+        # Most-recent v2 gate-cascade decision trace (one bar). Consumed by the sim
+        # replay + Terminal decision view. None until the first v2 evaluation.
+        self.last_entry_trace: Optional[dict[str, Any]] = None
+        # Per-phase evaluate() profiling — off by default, enable in SIM/replay
+        # with STRATEGY_EVAL_TIMING=1 to see where the per-bar budget goes.
+        self._eval_timer = PhaseTimer(enabled=as_bool(os.getenv("STRATEGY_EVAL_TIMING", "0")))
+        self._entry_config: EntryConfig = EntryConfig.from_env()
+        try:
+            self._entry_config.assert_consistency()
+        except ValueError as _ecfg_err:
+            logger.warning("entry_config assertion failed: %s", _ecfg_err)
         self._set_logger_context(None)
         logger.info(
-            "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s brain_enabled=%s",
+            "deterministic engine initialized min_confidence=%.2f velocity_enhanced=%s brain_enabled=%s pipeline_v2=%s",
             self._min_confidence,
             self._velocity_enhanced,
             self._brain.enabled,
+            self._entry_pipeline_v2,
         )
 
     def _build_entry_policy(self, config: PolicyConfig) -> EntryPolicy:
@@ -310,9 +339,12 @@ class DeterministicRuleEngine(StrategyEngine):
         self._iv_buf.clear()
         self._pvwap_buf.clear()
         self._session_regime_tag = None
+        self._eval_timer.reset()
         self._last_stop_bar = None
         self._last_exit_direction = None
         self._last_any_exit_bar = None
+        self._last_zero_mfe_bar = None
+        self._last_zero_mfe_direction = None
         self._tracker.on_session_start(trade_date)
         # Brain morning briefing: loads daily features + cross-session carry.
         # Must run before risk manager so carry-based consecutive_losses can
@@ -353,6 +385,8 @@ class DeterministicRuleEngine(StrategyEngine):
                 self._handle_position_closed(exit_signal, position)
         stats = self._tracker.session_stats()
         logger.info("deterministic engine session ended: %s stats=%s", trade_date.isoformat(), stats)
+        if self._eval_timer.enabled:
+            logger.info("eval timing %s | %s", trade_date.isoformat(), self._eval_timer.format_summary())
         self._risk.on_session_end(trade_date)
         # Persist session summary for cross-session carry
         self._brain.save_session_summary(trade_date)
@@ -364,15 +398,24 @@ class DeterministicRuleEngine(StrategyEngine):
         self._day_context = None
 
     def evaluate(self, snapshot: SnapshotPayload) -> Optional[TradeSignal]:
+        # Thin wrapper: count one bar and time the whole body so SIM profiling
+        # has a `total` to compute per-phase percentages against. No-op overhead
+        # when STRATEGY_EVAL_TIMING is off.
+        self._eval_timer.mark_bar()
+        with self._eval_timer.measure("total"):
+            return self._evaluate_impl(snapshot)
+
+    def _evaluate_impl(self, snapshot: SnapshotPayload) -> Optional[TradeSignal]:
         self._session_event_count += 1
         snap = SnapshotAccessor(snapshot)
         # Update rolling IV and VWAP-bias buffers before any shadow-scorer calls.
         self._iv_buf.append((snap.atm_ce_iv, snap.atm_pe_iv))
         self._pvwap_buf.append(snap.price_vs_vwap)
         # Read live depth side-channel once per bar (None in replay — graceful fallback).
-        self._current_depth_ctx = (
-            self._depth_reader.read_depth() if self._depth_reader is not None else None
-        )
+        with self._eval_timer.measure("depth_read"):
+            self._current_depth_ctx = (
+                self._depth_reader.read_depth() if self._depth_reader is not None else None
+            )
         set_depth_context(self._current_depth_ctx)
         position = self._tracker.current_position
         risk = self._risk.context
@@ -380,14 +423,17 @@ class DeterministicRuleEngine(StrategyEngine):
         warmup_blocked = False
         warmup_reason = ""
 
-        self._risk.update(snap, position)
+        with self._eval_timer.measure("risk_update"):
+            self._risk.update(snap, position)
 
         if position is not None:
-            system_exit = self._manage_open_position(snap, position, risk)
+            with self._eval_timer.measure("manage_position"):
+                system_exit = self._manage_open_position(snap, position, risk)
             if system_exit is not None:
                 return system_exit
 
-        regime_signal = self._regime.classify(snap)
+        with self._eval_timer.measure("regime"):
+            regime_signal = self._regime.classify(snap)
         logger.debug(
             "snapshot=%s regime=%s conf=%.2f phase=%s reason=%s",
             snap.snapshot_id,
@@ -396,14 +442,26 @@ class DeterministicRuleEngine(StrategyEngine):
             snap.session_phase,
             regime_signal.reason,
         )
-        shadow_vote = self._build_ml_shadow_vote(snap=snap, regime_signal=regime_signal)
-        votes = self._collect_votes(snapshot, snap, regime_signal, position, risk, shadow_vote)
+        with self._eval_timer.measure("shadow_vote"):
+            shadow_vote = self._build_ml_shadow_vote(snap=snap, regime_signal=regime_signal)
+        with self._eval_timer.measure("collect_votes"):
+            votes = self._collect_votes(snapshot, snap, regime_signal, position, risk, shadow_vote)
         if not votes:
+            self._emit_decision_summary(
+                snap=snap,
+                action=("manage_only" if position is not None else "hold"),
+                regime_signal=regime_signal,
+                votes=[],
+                signal=None,
+                position=position,
+                blocking_gate=(None if position is not None else "no_strategy_votes"),
+            )
             return None
 
         signal: Optional[TradeSignal] = None
         if position is not None:
-            signal = self._process_exit_votes(votes, snap, position)
+            with self._eval_timer.measure("exit_votes"):
+                signal = self._process_exit_votes(votes, snap, position)
 
         if signal is None and position is None and not self._risk.is_halted and self._router.regime_allows_entry(regime_signal.regime):
             _ts = snap.timestamp
@@ -419,7 +477,8 @@ class DeterministicRuleEngine(StrategyEngine):
                             vote.raw_signals["_entry_warmup_reason"] = warmup_reason
                             self._annotate_vote_contract(vote)
                 else:
-                    signal = self._process_entry_votes(votes, snap, risk, regime_signal)
+                    with self._eval_timer.measure("entry_votes"):
+                        signal = self._process_entry_votes(votes, snap, risk, regime_signal)
                     if signal is None:
                         trace_blocker = self._derive_entry_blocker(votes=votes, snap=snap, regime_signal=regime_signal)
         elif position is None:
@@ -447,6 +506,14 @@ class DeterministicRuleEngine(StrategyEngine):
                     final_outcome=("exit_taken" if signal is not None else "manage_only"),
                 )
             )
+            self._emit_decision_summary(
+                snap=snap,
+                action=("exit_taken" if signal is not None else "manage_only"),
+                regime_signal=regime_signal,
+                votes=votes,
+                signal=signal,
+                position=active_position,
+            )
         else:
             self._log.log_decision_trace(
                 self._build_entry_trace(
@@ -458,6 +525,19 @@ class DeterministicRuleEngine(StrategyEngine):
                     warmup_blocked=warmup_blocked,
                     warmup_reason=warmup_reason,
                 )
+            )
+            self._emit_decision_summary(
+                snap=snap,
+                action=(
+                    "entry_taken" if signal is not None
+                    else ("blocked" if (trace_blocker is not None or warmup_blocked) else "hold")
+                ),
+                regime_signal=regime_signal,
+                votes=votes,
+                signal=signal,
+                position=None,
+                blocking_gate=("warmup" if warmup_blocked else trace_blocker),
+                warmup_blocked=warmup_blocked,
             )
 
         return signal
@@ -495,6 +575,14 @@ class DeterministicRuleEngine(StrategyEngine):
                     final_outcome="exit_taken",
                 )
             )
+            self._emit_decision_summary(
+                snap=snap,
+                action="exit_taken",
+                regime_signal=None,
+                votes=[],
+                signal=system_exit,
+                position=position,
+            )
             return system_exit
         refreshed_position = self._tracker.current_position
         if refreshed_position is not None:
@@ -528,6 +616,7 @@ class DeterministicRuleEngine(StrategyEngine):
             vote.raw_signals["_regime"] = regime_signal.regime.value
             vote.raw_signals["_regime_conf"] = round(regime_signal.confidence, 3)
             vote.raw_signals["_regime_reason"] = regime_signal.reason
+            self._grade_and_tier_vote(vote, snap, regime_signal.regime.value, risk)
             self._annotate_vote_contract(vote)
             votes.append(vote)
 
@@ -535,6 +624,36 @@ class DeterministicRuleEngine(StrategyEngine):
             self._annotate_vote_contract(shadow_vote)
             self._log.log_vote(shadow_vote)
         return votes
+
+    def _grade_and_tier_vote(self, vote, snap, regime_name, risk) -> None:
+        """Attach entry-quality grade + live/paper tier to an ENTRY vote.
+
+        Observational only — NEVER blocks. Paper takes every trade; the tier
+        labels which subset would fire on real money. Gated by
+        ENTRY_TIERING_ENABLED (default on). Skipped for exit votes and for
+        direction modes that don't produce composite direction scores.
+        """
+        from ..utils.env import as_bool
+        if not as_bool(os.getenv("ENTRY_TIERING_ENABLED", "true")):
+            return
+        try:
+            if getattr(vote, "signal_type", None) != SignalType.ENTRY:
+                return
+            raw = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
+            from ..signals.entry_quality import grade_entry_from_raw, decide_tier
+            quality = grade_entry_from_raw(
+                raw, snap, direction=vote.direction, regime=regime_name,
+            )
+            if quality is None:
+                return
+            raw.update(quality.as_raw_signals())
+            tier = decide_tier(
+                quality.grade, risk, confidence=float(vote.confidence or 0.0),
+            )
+            raw.update(tier.as_raw_signals())
+            vote.raw_signals = raw
+        except Exception:
+            logger.exception("entry tiering failed snapshot=%s", getattr(snap, "snapshot_id", "?"))
 
     def _process_exit_votes(
         self,
@@ -618,7 +737,8 @@ class DeterministicRuleEngine(StrategyEngine):
         # E8 gates: env-driven time-window + daily-regime filters. Both default
         # off; when configured they apply across all profiles.
         if not is_in_configured_time_window(snap):
-            logger.debug("entry blocked: outside ENTRY_TIME_WINDOWS")
+            # Blocker captured centrally as "entry_time_windows" in the per-tick
+            # decisions.jsonl summary (see _derive_entry_blocker).
             return None
         tagger = os.getenv("ENTRY_REGIME_TAGGER", "").strip()
         if tagger:
@@ -632,11 +752,7 @@ class DeterministicRuleEngine(StrategyEngine):
                         tagger,
                     )
             if not is_session_regime_allowed(self._session_regime_tag):
-                logger.debug(
-                    "entry blocked: regime tag=%s not in ENTRY_REGIME_ALLOWED_TAGS",
-                    self._session_regime_tag,
-                )
-                return None
+                return None  # blocker: entry_regime_tag (per-tick summary)
 
         # Optional trap gate: require a minimum number of trap cues to be present
         # (any side) before considering entries. Disabled by default.
@@ -658,12 +774,7 @@ class DeterministicRuleEngine(StrategyEngine):
             ce_hits = len(fired_set & ce_traps)
             pe_hits = len(fired_set & pe_traps)
             if max(ce_hits, pe_hits) < max(1, min_match):
-                logger.debug(
-                    "entry blocked: trap_gate min=%d fired=%s",
-                    max(1, min_match),
-                    ",".join(sorted(fired_set)) or "none",
-                )
-                return None
+                return None  # blocker: trap_gate (per-tick summary)
 
         # Brain gate: DayScore + consensus (skipped for ML-entry-primary profile when configured).
         skip_brain = (
@@ -677,12 +788,7 @@ class DeterministicRuleEngine(StrategyEngine):
             ]
             brain_decision = self._brain.gate_entry(entry_votes_for_brain, self._day_context)
             if not brain_decision.allowed:
-                logger.debug(
-                    "brain gate blocked reason=%s day_score=%s",
-                    brain_decision.reason,
-                    brain_decision.day_score,
-                )
-                return None
+                return None  # blocker: brain_gate:<reason> (per-tick summary)
 
         # ── Trader discipline gates (actual blocking) ────────────────────────
         # 0. Minimum re-entry spacing: never enter immediately after any exit.
@@ -690,8 +796,7 @@ class DeterministicRuleEngine(StrategyEngine):
         if self._last_any_exit_bar is not None:
             _bars_since_exit = self._session_event_count - self._last_any_exit_bar
             if _bars_since_exit < _reentry_gap:
-                logger.debug("entry blocked: min_reentry_gap bars_since=%d min=%d", _bars_since_exit, _reentry_gap)
-                return None
+                return None  # blocker: min_reentry_gap (per-tick summary)
 
         # 1. SIDEWAYS + returns_mixed: no directional conviction — skip entirely.
         regime_str = str(
@@ -701,16 +806,14 @@ class DeterministicRuleEngine(StrategyEngine):
             regime_str == "SIDEWAYS"
             and "returns_mixed" in (regime_signal.reason or "")
         ):
-            logger.debug("entry blocked: sideways_returns_mixed reason=%s", regime_signal.reason)
-            return None
+            return None  # blocker: sideways_returns_mixed (per-tick summary)
 
         # 2. Post-STOP_LOSS cooldown: no re-entry for N bars after a hard stop.
         _stop_cool = int(os.getenv("STOP_LOSS_COOLDOWN_BARS", "5"))
         if self._last_stop_bar is not None:
             _bars_since = self._session_event_count - self._last_stop_bar
             if _bars_since < _stop_cool:
-                logger.debug("entry blocked: stop_loss_cooldown bars_since=%d min=%d", _bars_since, _stop_cool)
-                return None
+                return None  # blocker: stop_loss_cooldown (per-tick summary)
 
         # 3. Direction-flip block: after a STOP_LOSS, don't flip direction for N bars.
         _flip_cool = int(os.getenv("DIRECTION_FLIP_COOLDOWN_BARS", "8"))
@@ -723,18 +826,58 @@ class DeterministicRuleEngine(StrategyEngine):
                     if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
                 }
                 if self._last_exit_direction not in _cur_entry_dirs:
-                    logger.debug(
-                        "entry blocked: direction_flip_cooldown last=%s current=%s bars=%d",
-                        self._last_exit_direction, _cur_entry_dirs, _bars_since,
-                    )
-                    return None
+                    return None  # blocker: direction_flip_cooldown (per-tick summary)
+
+        # 4. Zero-MFE same-direction block: if the last trade produced no favorable
+        #    excursion (mfe ≈ 0) and was a loss, the thesis was immediately wrong.
+        #    Block the same direction for ZERO_MFE_COOLDOWN_BARS — the market is
+        #    telling you the move isn't happening. Default: 10 bars (~10 min).
+        _zero_mfe_cool = int(os.getenv("ZERO_MFE_COOLDOWN_BARS", "10"))
+        if self._last_zero_mfe_bar is not None and self._last_zero_mfe_direction:
+            _bars_since_zero = self._session_event_count - self._last_zero_mfe_bar
+            if _bars_since_zero < _zero_mfe_cool:
+                _cur_dirs = {
+                    str(v.direction.value if hasattr(v.direction, "value") else v.direction or "").upper()
+                    for v in votes
+                    if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
+                }
+                if self._last_zero_mfe_direction in _cur_dirs:
+                    return None  # blocker: zero_mfe_cooldown (per-tick summary)
+        # 5. Direction-evidence agreement gate.
+        #    The regime tagger computes bull_score/bear_score from returns, volume,
+        #    OI, PCR and ORB — rich market evidence that is ALREADY COMPUTED but was
+        #    never used to gate the direction of a proposed trade.
+        #
+        #    The gate asks: "does the current market evidence support the direction
+        #    we're about to trade?" If bear_score=0 and bull_score=0.8, entering PE
+        #    is trading against the observable evidence regardless of what the ML
+        #    timing model says.
+        #
+        #    Block when:
+        #      PE entry: bull_score > OPPOSING_MAX  AND  bear_score < SUPPORT_MIN
+        #      CE entry: bear_score > OPPOSING_MAX  AND  bull_score < SUPPORT_MIN
+        #
+        #    Defaults are conservative — only veto when evidence is clearly wrong.
+        _ev_support_min  = float(os.getenv("DIRECTION_EVIDENCE_SUPPORT_MIN", "0.2"))
+        _ev_opposing_max = float(os.getenv("DIRECTION_EVIDENCE_OPPOSING_MAX", "0.6"))
+        _evidence = getattr(regime_signal, "evidence", None) or {}
+        _bull = float(_evidence.get("bull_score", -1))
+        _bear = float(_evidence.get("bear_score", -1))
+        if _bull >= 0 and _bear >= 0:
+            _entry_dirs = {
+                str(v.direction.value if hasattr(v.direction, "value") else v.direction or "").upper()
+                for v in votes
+                if v.signal_type == SignalType.ENTRY and v.direction in (Direction.CE, Direction.PE)
+            }
+            if "PE" in _entry_dirs and _bull > _ev_opposing_max and _bear < _ev_support_min:
+                return None  # blocker: direction_evidence_mismatch:PE (per-tick summary)
+            if "CE" in _entry_dirs and _bear > _ev_opposing_max and _bull < _ev_support_min:
+                return None  # blocker: direction_evidence_mismatch:CE (per-tick summary)
         # ── End discipline gates ──────────────────────────────────────────────
 
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
         if avoid_votes:
-            best_avoid = max(avoid_votes, key=lambda item: item.confidence)
-            logger.debug("entry vetoed strategy=%s reason=%s", best_avoid.strategy_name, best_avoid.reason)
-            return None
+            return None  # blocker: avoid_veto (per-tick summary)
 
         entry_votes = [
             vote
@@ -746,8 +889,7 @@ class DeterministicRuleEngine(StrategyEngine):
 
         use_ml_det_dir = self._strategy_profile_id in _PROFILES_ML_ENTRY_DET_DIRECTION
         if use_ml_det_dir and not any(vote.strategy_name == "ML_ENTRY" for vote in entry_votes):
-            logger.debug("entry blocked: ml timing gate (no ML_ENTRY vote)")
-            return None
+            return None  # blocker: ml_timing_gate (per-tick summary)
 
         # ML_ENTRY's positive vote is the primary entry signal — keep it in the
         # pool as a first-class voter alongside any rule strategies that fired.
@@ -788,6 +930,14 @@ class DeterministicRuleEngine(StrategyEngine):
             return None
         entry_votes = vote_pool
 
+        if self._entry_pipeline_v2:
+            return self._process_entry_votes_v2(
+                votes=entry_votes,
+                snap=snap,
+                risk=risk,
+                regime_signal=regime_signal,
+            )
+
         if self._strategy_profile_id in _PROFILES_ML_ENTRY_CONSENSUS:
             return self._process_entry_consensus(
                 entry_votes=entry_votes,
@@ -806,18 +956,16 @@ class DeterministicRuleEngine(StrategyEngine):
             has_direction_conflict = bool(ce_votes and pe_votes)
         ml_can_resolve_direction_conflict = has_direction_conflict and self._entry_policy_can_resolve_direction_conflict()
         if has_direction_conflict and not ml_can_resolve_direction_conflict:
-            logger.debug("entry blocked by direction conflict ce=%d pe=%d", len(ce_votes), len(pe_votes))
-            return None
+            return None  # blocker: direction_conflict (per-tick summary)
 
         if (
             self._strategy_profile_id not in _PROFILES_RELAX_REGIME_CONF
             and regime_signal.confidence < 0.60
         ):
-            logger.debug("entry blocked by low regime confidence=%.2f", regime_signal.confidence)
-            return None
+            return None  # blocker: regime_confidence (per-tick summary)
 
         if not snap.is_valid_entry_phase or self._risk.is_paused:
-            return None
+            return None  # blocker: entry_phase / risk_pause (per-tick summary)
         ranked_entry_votes = sorted(entry_votes, key=lambda item: item.confidence, reverse=True)
         if ml_can_resolve_direction_conflict:
             scored_candidates: list[tuple[StrategyVote, EntryPolicyDecision]] = []
@@ -830,15 +978,12 @@ class DeterministicRuleEngine(StrategyEngine):
             eligible = [
                 (candidate, policy_decision)
                 for candidate, policy_decision in scored_candidates
-                if candidate.confidence >= self._min_confidence and policy_decision.allowed
+                if candidate.confidence >= self._min_confidence
+                and policy_decision.allowed
+                and not candidate.raw_signals.get("_strike_vetoed")
             ]
             if not eligible:
-                logger.debug(
-                    "entry blocked by ml direction resolution ce=%d pe=%d",
-                    len(ce_votes),
-                    len(pe_votes),
-                )
-                return None
+                return None  # blocker: ml_direction_resolution (per-tick summary)
             best_vote, best_decision = max(
                 eligible,
                 key=lambda item: (float(item[1].score), float(item[0].confidence)),
@@ -857,9 +1002,11 @@ class DeterministicRuleEngine(StrategyEngine):
             self._annotate_policy(candidate, policy_decision)
             self._annotate_vote_contract(candidate)
             if candidate.confidence < self._min_confidence:
-                continue
+                continue  # blocker: confidence_gate (per-tick summary)
+            if candidate.raw_signals.get("_strike_vetoed"):
+                continue  # blocker: strike_vetoed (per-tick summary)
             if not policy_decision.allowed:
-                continue
+                continue  # blocker: policy_gate (per-tick summary)
             return self._build_entry_signal(candidate, snap, risk, entry_votes, regime_signal, policy_decision)
         return None
 
@@ -873,17 +1020,14 @@ class DeterministicRuleEngine(StrategyEngine):
     ) -> Optional[TradeSignal]:
         ml_votes = [v for v in entry_votes if v.strategy_name == "ML_ENTRY"]
         if not ml_votes:
-            logger.debug("consensus entry blocked: no ML_ENTRY timing vote")
-            return None
+            return None  # blocker: ml_timing_gate / consensus_no_ml_entry_vote (per-tick summary)
         ml_vote = max(ml_votes, key=lambda v: float(v.confidence or 0))
         # E3-S1: bypass path uses its own threshold, aligned to the entry gate (0.65).
         # CONSENSUS_BYPASS_MIN_CONFIDENCE can be raised independently of the main
         # self._min_confidence (0.50) which guards non-consensus paths.
         _bypass_min = float(os.getenv("CONSENSUS_BYPASS_MIN_CONFIDENCE", str(self._min_confidence)) or self._min_confidence)
         if ml_vote.confidence < _bypass_min:
-            logger.debug("consensus bypass blocked: confidence=%.3f < bypass_min=%.3f",
-                         float(ml_vote.confidence or 0), _bypass_min)
-            return None
+            return None  # blocker: consensus_bypass_confidence (per-tick summary)
 
         shadow_dir, shadow_basis, shadow_score = self._shadow_direction_from_snapshot(snap)
         hint_dir, ce_prob = extract_ml_direction_hint(ml_vote)
@@ -902,14 +1046,7 @@ class DeterministicRuleEngine(StrategyEngine):
             regime_signal=regime_signal,
         )
         if consensus.vetoed or consensus.direction is None:
-            logger.debug(
-                "consensus direction vetoed reason=%s ce=%.2f pe=%.2f margin=%.2f",
-                consensus.veto_reason,
-                consensus.ce_score,
-                consensus.pe_score,
-                consensus.margin,
-            )
-            return None
+            return None  # blocker: direction_consensus:<reason> (per-tick summary)
 
         _consensus_extras: dict[str, Any] = {
             "direction_source": "direction_consensus",
@@ -958,13 +1095,18 @@ class DeterministicRuleEngine(StrategyEngine):
             return None
 
         self._apply_strike_selection(trade_vote, snap, regime=regime_signal.regime.value)
+        if trade_vote.raw_signals.get("_strike_vetoed"):
+            logger.debug(
+                "consensus entry blocked: strike_veto reason=%s",
+                trade_vote.raw_signals.get("_strike_veto_reason"),
+            )
+            return None
         if (
             self._run_risk_config.atm_strike_only
             and not self._allow_non_atm_for_ml_entry(trade_vote)
             and not self._is_atm_strike(snap, trade_vote)
         ):
-            logger.debug("consensus entry blocked: OTM strike policy")
-            return None
+            return None  # blocker: consensus_otm_strike_policy (per-tick summary)
 
         policy_decision = self._evaluate_entry_policy(trade_vote, snap, regime_signal, risk)
         self._annotate_policy(trade_vote, policy_decision)
@@ -980,9 +1122,96 @@ class DeterministicRuleEngine(StrategyEngine):
         self._annotate_vote_contract(trade_vote)
         if not policy_decision.allowed:
             return None
+        # Grade + tier the FINAL trade vote (now carries direction_consensus_* or
+        # entry_dir_*). _collect_votes graded the raw ML_ENTRY vote earlier, but the
+        # consensus direction is only resolved here, so re-grade with full context.
+        self._grade_and_tier_vote(trade_vote, snap, regime_signal.regime.value, risk)
         return self._build_entry_signal(
             trade_vote, snap, risk, entry_votes, regime_signal, policy_decision
         )
+
+    # ------------------------------------------------------------------
+    # Entry pipeline v2 — gate cascade
+    # ------------------------------------------------------------------
+
+    def _process_entry_votes_v2(
+        self,
+        *,
+        votes: list[StrategyVote],
+        snap: SnapshotAccessor,
+        risk: RiskContext,
+        regime_signal: RegimeSignal,
+    ) -> Optional[TradeSignal]:
+        """Run the v2 gate-cascade pipeline (STRATEGY_ENTRY_PIPELINE_V2=1)."""
+        relax_conf = self._strategy_profile_id in _PROFILES_RELAX_REGIME_CONF
+        is_consensus = self._strategy_profile_id in _PROFILES_ML_ENTRY_CONSENSUS
+        gates = build_entry_pipeline(
+            regime_min_relax=relax_conf,
+            is_consensus=is_consensus,
+            shadow_fn=self._shadow_direction_from_snapshot,
+            ml_hint_fn=extract_ml_direction_hint,
+            consensus_fn=resolve_direction_consensus,
+            ml_entry_vote_selector=lambda vts: max(
+                (v for v in vts if v.strategy_name == "ML_ENTRY"),
+                key=lambda v: float(v.confidence or 0),
+                default=None,
+            ),
+            apply_strike_fn=lambda vote, snap_, regime="": self._apply_strike_selection(
+                vote, snap_, regime=regime
+            ),
+            policy_fn=lambda vote, snap_, regime_, risk_: self._evaluate_entry_policy(
+                vote, snap_, regime_, risk_
+            ),
+        )
+        ctx = EntryContext(
+            snap=snap,
+            regime=regime_signal,
+            risk=risk,
+            votes=votes,
+            config=self._entry_config,
+        )
+        all_votes = votes
+
+        def _build(ctx_: EntryContext) -> Optional[TradeSignal]:
+            if ctx_.candidate is None or ctx_.direction is None:
+                return None
+            policy_decision = self._evaluate_entry_policy(
+                ctx_.candidate, ctx_.snap, ctx_.regime, ctx_.risk
+            )
+            self._annotate_vote_contract(ctx_.candidate)
+            return self._build_entry_signal(
+                ctx_.candidate, ctx_.snap, ctx_.risk,
+                all_votes, ctx_.regime, policy_decision,
+            )
+
+        signal = _evaluate_v2(ctx=ctx, gates=gates, build_signal_fn=_build)
+        # Capture the gate cascade for this bar so the sim/Terminal can show
+        # exactly how the trade was (or wasn't) picked. Cheap, structural — no
+        # behaviour change. Reason codes come straight from each GateResult.
+        ts = getattr(snap, "timestamp", None)
+        self.last_entry_trace = {
+            "decision_id": ctx.decision_id,
+            "snapshot_id": getattr(snap, "snapshot_id", None),
+            "timestamp": ts.isoformat() if ts is not None else None,
+            "final_outcome": "entered" if signal is not None else "no_trade",
+            "selected_direction": (ctx.direction.value if ctx.direction is not None else None),
+            "selected_strike": ctx.strike,
+            "selected_premium": ctx.premium,
+            "primary_blocker_gate": next(
+                (t.gate_name for t in reversed(ctx.trace) if t.outcome.value != "pass"),
+                None,
+            ),
+            "gates": [
+                {
+                    "gate": t.gate_name,
+                    "outcome": t.outcome.value,
+                    "reason": t.reason,
+                    "values": dict(t.values),
+                }
+                for t in ctx.trace
+            ],
+        }
+        return signal
 
     @staticmethod
     def _force_atm_strike(vote: StrategyVote, snap: SnapshotAccessor) -> StrategyVote:
@@ -1061,6 +1290,30 @@ class DeterministicRuleEngine(StrategyEngine):
         if direction not in (Direction.CE, Direction.PE):
             return None
 
+        # Live-only entry gate (single chokepoint for ALL entry paths): when this
+        # engine instance is the LIVE book (ENTRY_LIVE_ONLY_GATE=1), only spend its
+        # one slot on live-eligible (GOOD) entries, so a low-grade trade never
+        # occupies the slot and blocks a later GOOD trade. Ensure the vote is graded
+        # first (consensus path grades earlier; direct paths may not have). The
+        # PAPER book runs the same engine with the gate OFF and takes everything.
+        if self._entry_live_only_gate:
+            raw = best_vote.raw_signals if isinstance(best_vote.raw_signals, dict) else {}
+            if "live_would_take" not in raw:
+                self._grade_and_tier_vote(best_vote, snap, regime_signal.regime.value, risk)
+                raw = best_vote.raw_signals if isinstance(best_vote.raw_signals, dict) else {}
+            if not bool(raw.get("live_would_take")):
+                logger.debug("live-gate skip: grade=%s tier=%s",
+                             raw.get("entry_grade"), raw.get("tier"))
+                return None
+
+        # Strike layer veto is authoritative — no affordable/priced strike = no trade.
+        if best_vote.raw_signals.get("_strike_vetoed"):
+            logger.info(
+                "entry skipped: strike_veto reason=%s",
+                best_vote.raw_signals.get("_strike_veto_reason"),
+            )
+            return None
+
         selected_strike = best_vote.proposed_strike or snap.atm_strike
         if selected_strike is None or int(selected_strike) <= 0:
             return None
@@ -1068,7 +1321,7 @@ class DeterministicRuleEngine(StrategyEngine):
         if self._run_risk_config.atm_strike_only and not self._allow_non_atm_for_ml_entry(best_vote):
             atm = snap.atm_strike
             if atm is None or int(selected_strike) != int(atm):
-                logger.debug("entry blocked: atm_strike_only policy strike=%s atm=%s", selected_strike, atm)
+                logger.info("entry blocked: atm_strike_only policy strike=%s atm=%s", selected_strike, atm)
                 return None
 
         premium = best_vote.proposed_entry_premium
@@ -1180,6 +1433,7 @@ class DeterministicRuleEngine(StrategyEngine):
                 + (f" | resume_boost=+{resume_boost:.2f}" if resume_boost_applied else "")
             ),
             votes=all_votes,
+            raw_signals=dict(raw) if isinstance(raw, dict) else {},
         )
         entry_decision_mode = self._decision_mode_from_policy(policy_decision)
         entry_metrics: dict[str, Any] = {
@@ -1221,6 +1475,17 @@ class DeterministicRuleEngine(StrategyEngine):
         ).upper()
         # Always track any exit for minimum re-entry spacing.
         self._last_any_exit_bar = self._session_event_count
+        # Zero-MFE exit: market never moved in our favour — same direction re-entry
+        # is almost certainly wrong (the thesis produced no excursion whatsoever).
+        # Block same-direction entries for ZERO_MFE_COOLDOWN_BARS after this.
+        _ZERO_MFE_THRESHOLD = 0.001  # <0.1% MFE counts as zero
+        if position.mfe_pct < _ZERO_MFE_THRESHOLD and position.pnl_pct < 0:
+            self._last_zero_mfe_bar = self._session_event_count
+            self._last_zero_mfe_direction = exit_dir
+            logger.info(
+                "zero_mfe_exit dir=%s mfe=%.3f pnl=%.3f — same-direction cooldown armed",
+                exit_dir, position.mfe_pct, position.pnl_pct,
+            )
         if "STOP" in exit_reason_str and "TIME" not in exit_reason_str:
             # Hard STOP_LOSS: longer cooldown + direction-flip block.
             self._last_stop_bar = self._session_event_count
@@ -1631,7 +1896,18 @@ class DeterministicRuleEngine(StrategyEngine):
             if not brain_decision.allowed:
                 return f"brain_gate:{brain_decision.reason}"
 
-        # ── Trader discipline gates ────────────────────────────────────────────
+        # ── Trader discipline gates (order MUST mirror _process_entry_votes) ───
+        # NOTE: this method is the single place that derives the trace's blocker
+        # string. Every early-return in _process_entry_votes must have a matching
+        # branch here in the SAME ORDER, or the trace will show the wrong gate.
+
+        # 0. Minimum re-entry spacing: never enter immediately after any exit.
+        reentry_gap = int(os.getenv("MIN_REENTRY_BARS", "3"))
+        if self._last_any_exit_bar is not None:
+            bars_since_exit = self._session_event_count - self._last_any_exit_bar
+            if bars_since_exit < reentry_gap:
+                return f"min_reentry_gap:{bars_since_exit}<{reentry_gap}"
+
         # 1. SIDEWAYS + returns_mixed: market has no intraday conviction.
         #    A trader never enters when returns are contradicting themselves.
         if (
@@ -1652,17 +1928,35 @@ class DeterministicRuleEngine(StrategyEngine):
 
         # 3. Direction-flip block: after a STOP_LOSS, don't flip direction for N bars.
         flip_cooldown = int(os.getenv("DIRECTION_FLIP_COOLDOWN_BARS", "8"))
+        _entry_v = [v for v in votes if v.signal_type == SignalType.ENTRY
+                    and v.direction in (Direction.CE, Direction.PE)]
+        _cur_dirs = {str(v.direction.value if hasattr(v.direction, "value") else v.direction).upper()
+                     for v in _entry_v}
         if self._last_stop_bar is not None and self._last_exit_direction:
             bars_since_stop = self._session_event_count - self._last_stop_bar
-            if bars_since_stop < flip_cooldown:
-                # Determine current candidate direction from votes
-                entry_v = [v for v in votes if v.signal_type == SignalType.ENTRY
-                           and v.direction in (Direction.CE, Direction.PE)]
-                if entry_v:
-                    current_dirs = {str(v.direction.value if hasattr(v.direction, "value") else v.direction).upper()
-                                    for v in entry_v}
-                    if self._last_exit_direction not in current_dirs:
-                        return f"direction_flip_cooldown:{bars_since_stop}<{flip_cooldown}"
+            if bars_since_stop < flip_cooldown and _entry_v and self._last_exit_direction not in _cur_dirs:
+                return f"direction_flip_cooldown:{bars_since_stop}<{flip_cooldown}"
+
+        # 4. Zero-MFE same-direction block: last trade had no favorable excursion.
+        zero_mfe_cool = int(os.getenv("ZERO_MFE_COOLDOWN_BARS", "10"))
+        if self._last_zero_mfe_bar is not None and self._last_zero_mfe_direction:
+            bars_since_zero = self._session_event_count - self._last_zero_mfe_bar
+            if bars_since_zero < zero_mfe_cool and self._last_zero_mfe_direction in _cur_dirs:
+                return f"zero_mfe_cooldown:{bars_since_zero}<{zero_mfe_cool}"
+
+        # 5. Direction-evidence agreement: don't trade against bull/bear evidence.
+        ev = getattr(regime_signal, "evidence", None) or {}
+        try:
+            _bull = float(ev.get("bull_score", -1)); _bear = float(ev.get("bear_score", -1))
+        except (TypeError, ValueError):
+            _bull = _bear = -1.0
+        if _bull >= 0 and _bear >= 0 and _cur_dirs:
+            ev_support = float(os.getenv("DIRECTION_EVIDENCE_SUPPORT_MIN", "0.2"))
+            ev_oppose = float(os.getenv("DIRECTION_EVIDENCE_OPPOSING_MAX", "0.6"))
+            if "PE" in _cur_dirs and _bull > ev_oppose and _bear < ev_support:
+                return "direction_evidence_mismatch:PE"
+            if "CE" in _cur_dirs and _bear > ev_oppose and _bull < ev_support:
+                return "direction_evidence_mismatch:CE"
         # ── End discipline gates ───────────────────────────────────────────────
 
         avoid_votes = [vote for vote in votes if vote.direction == Direction.AVOID]
@@ -1734,6 +2028,10 @@ class DeterministicRuleEngine(StrategyEngine):
         warmup_blocked: bool,
         warmup_reason: str,
     ) -> tuple[list[dict[str, Any]], str, Optional[str], bool]:
+        def _f(x):
+            try: return float(x)
+            except (TypeError, ValueError): return 0.0
+        _ev0 = getattr(regime_signal, "evidence", None) or {}
         gates: list[dict[str, Any]] = [
             {
                 "gate_id": "regime_classification",
@@ -1744,6 +2042,24 @@ class DeterministicRuleEngine(StrategyEngine):
                 "metrics": {"regime_confidence": regime_signal.confidence},
             }
         ]
+        # Always emit the direction-evidence row (bull/bear scores) so the UI can show
+        # whether the trade agreed with the market evidence — even on passed trades.
+        if "bull_score" in _ev0 or "bear_score" in _ev0:
+            gates.append(
+                {
+                    "gate_id": "direction_evidence",
+                    "gate_group": "evidence",
+                    "status": "pass",
+                    "reason_code": None,
+                    "message": f"bull={_f(_ev0.get('bull_score')):.2f} bear={_f(_ev0.get('bear_score')):.2f}",
+                    "metrics": {
+                        "bull_score": _f(_ev0.get("bull_score")),
+                        "bear_score": _f(_ev0.get("bear_score")),
+                        "r5m": _f(_ev0.get("r5m")),
+                        "r15m": _f(_ev0.get("r15m")),
+                    },
+                }
+            )
         raw_signals = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
         selected = bool(
             signal is not None
@@ -1846,6 +2162,19 @@ class DeterministicRuleEngine(StrategyEngine):
                 }
             )
             return gates, "blocked", "regime_confidence", False
+        if blocker is not None and blocker.startswith("min_reentry_gap:"):
+            bars_info = blocker.split(":", 1)[1]
+            gates.append(
+                {
+                    "gate_id": "min_reentry_gap",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "min_reentry_gap",
+                    "message": f"Minimum re-entry spacing: {bars_info} bars since last exit",
+                    "metrics": {"bars_since_exit": int(bars_info.split("<")[0])},
+                }
+            )
+            return gates, "blocked", "min_reentry_gap", False
         if blocker == "sideways_returns_mixed":
             gates.append(
                 {
@@ -1885,6 +2214,42 @@ class DeterministicRuleEngine(StrategyEngine):
                 }
             )
             return gates, "blocked", "direction_flip_cooldown", False
+        if blocker is not None and blocker.startswith("zero_mfe_cooldown:"):
+            bars_info = blocker.split(":", 1)[1]
+            gates.append(
+                {
+                    "gate_id": "zero_mfe_cooldown",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "zero_mfe_cooldown",
+                    "message": f"Last {self._last_zero_mfe_direction or ''} trade had zero favorable excursion — same-direction blocked for {bars_info} bars",
+                    "metrics": {"bars_since_zero_mfe": int(bars_info.split("<")[0]),
+                                "last_direction": self._last_zero_mfe_direction or ""},
+                }
+            )
+            return gates, "blocked", "zero_mfe_cooldown", False
+        if blocker is not None and blocker.startswith("direction_evidence_mismatch:"):
+            blocked_dir = blocker.split(":", 1)[1]
+            _ev = getattr(regime_signal, "evidence", None) or {}
+            def _f(x):
+                try: return float(x)
+                except (TypeError, ValueError): return 0.0
+            gates.append(
+                {
+                    "gate_id": "direction_evidence",
+                    "gate_group": "policy",
+                    "status": "blocked",
+                    "reason_code": "direction_evidence_mismatch",
+                    "message": f"{blocked_dir} entry against market evidence — bull/bear scores oppose the trade direction",
+                    "metrics": {
+                        "bull_score": _f(_ev.get("bull_score")),
+                        "bear_score": _f(_ev.get("bear_score")),
+                        "r5m": _f(_ev.get("r5m")),
+                        "r15m": _f(_ev.get("r15m")),
+                    },
+                }
+            )
+            return gates, "blocked", "direction_evidence", False
         if blocker == "entry_phase":
             gates.append(
                 {
@@ -1993,6 +2358,123 @@ class DeterministicRuleEngine(StrategyEngine):
             )
             return gates, "passed", None, True
         return gates, "skipped", "candidate_ranking", False
+
+    @staticmethod
+    def _summary_votes_digest(votes: list[StrategyVote]) -> list[dict[str, Any]]:
+        """Compact per-vote rows for the decision summary (entry/AVOID only).
+
+        Sorted by confidence desc so the most relevant candidate is first. Only
+        the fields needed to answer "which strategies wanted in, how strongly,
+        and what grade/tier they earned" — not the full raw_signals blob.
+        """
+        rows: list[dict[str, Any]] = []
+        relevant = [
+            v for v in votes
+            if v.signal_type == SignalType.ENTRY or v.direction == Direction.AVOID
+        ]
+        for vote in sorted(relevant, key=lambda v: float(v.confidence or 0.0), reverse=True):
+            raw = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
+            rows.append({
+                "strategy": str(vote.strategy_name or "").strip() or None,
+                "direction": (vote.direction.value if vote.direction is not None else None),
+                "confidence": _safe_float(vote.confidence),
+                "grade": str(raw.get("entry_grade") or "").strip() or None,
+                "tier": str(raw.get("tier") or "").strip() or None,
+            })
+        return rows
+
+    def _emit_decision_summary(
+        self,
+        *,
+        snap: SnapshotAccessor,
+        action: str,
+        regime_signal: Optional[RegimeSignal],
+        votes: list[StrategyVote],
+        signal: Optional[TradeSignal],
+        position: Optional[PositionContext],
+        blocking_gate: Optional[str] = None,
+        warmup_blocked: bool = False,
+    ) -> None:
+        """Append one always-on line per evaluate() call to decisions.jsonl.
+
+        This is the single human-/grep-readable summary of "what happened at
+        minute T": the input (price/regime/phase), the engine state, the votes
+        that wanted in, and the output (trade taken, or the gate that blocked
+        it). It closes observability gap #1 in docs/OBSERVABILITY_GUIDE.md and
+        is the canonical place to look first — the env-gated decision_trace is
+        the deep layer beneath it.
+
+        Never raises: observability must not break the trading loop.
+        """
+        try:
+            risk_ctx = getattr(self._risk, "context", None)
+            regime_val = None
+            regime_conf = None
+            if regime_signal is not None:
+                _r = getattr(regime_signal, "regime", None)
+                regime_val = str(getattr(_r, "value", _r) or "").strip() or None
+                regime_conf = _safe_float(getattr(regime_signal, "confidence", None))
+
+            record: dict[str, Any] = {
+                "snapshot_id": snap.snapshot_id,
+                "ts": isoformat_ist(snap.timestamp_or_now),
+                "trade_date_ist": isoformat_ist(snap.timestamp_or_now)[:10],
+                "engine_mode": self._engine_mode,
+                "action": action,
+                "blocking_gate": str(blocking_gate or "").strip() or None,
+                "input": {
+                    "session_phase": snap.session_phase or None,
+                    "fut_close": _safe_float(snap.fut_close),
+                    "atm_strike": snap.atm_strike,
+                    "or_width": _safe_float(snap.or_width),
+                    "regime": regime_val,
+                    "regime_conf": regime_conf,
+                },
+                "engine_state": {
+                    "has_position": position is not None,
+                    "is_halted": bool(getattr(self._risk, "is_halted", False)),
+                    "is_paused": bool(getattr(self._risk, "is_paused", False)),
+                    "warmup_blocked": bool(warmup_blocked),
+                    "session_pnl_total": _safe_float(getattr(risk_ctx, "session_pnl_total", None)),
+                    "session_trade_count": int(getattr(risk_ctx, "session_trade_count", 0) or 0),
+                    "consecutive_losses": int(getattr(risk_ctx, "consecutive_losses", 0) or 0),
+                    "bars_evaluated": int(self._session_event_count),
+                },
+                "votes": self._summary_votes_digest(votes),
+            }
+
+            if position is not None:
+                record["position"] = {
+                    "position_id": str(getattr(position, "position_id", None) or "").strip() or None,
+                    "direction": str(getattr(position, "direction", None) or "").strip() or None,
+                    "strike": getattr(position, "strike", None),
+                    "bars_held": int(getattr(position, "bars_held", 0) or 0),
+                    "pnl_pct": _safe_float(getattr(position, "pnl_pct", None)),
+                }
+
+            if signal is not None:
+                out_raw: dict[str, Any] = {}
+                if isinstance(signal.votes, list) and signal.votes:
+                    _wraw = signal.votes[0].raw_signals
+                    out_raw = _wraw if isinstance(_wraw, dict) else {}
+                def _ev(x: Any) -> Optional[str]:
+                    if x is None:
+                        return None
+                    return str(getattr(x, "value", x)).strip() or None
+                record["output"] = {
+                    "signal_type": _ev(signal.signal_type),
+                    "direction": _ev(signal.direction),
+                    "strike": getattr(signal, "strike", None),
+                    "exit_reason": _ev(getattr(signal, "exit_reason", None)),
+                    "reason": str(getattr(signal, "reason", None) or "").strip() or None,
+                    "grade": str(out_raw.get("entry_grade") or "").strip() or None,
+                    "tier": str(out_raw.get("tier") or "").strip() or None,
+                    "execution_path": str(out_raw.get("_execution_path") or "").strip() or None,
+                }
+
+            self._log.log_decision_summary(record)
+        except Exception:
+            logger.exception("failed to log decision summary (snapshot=%s)", getattr(snap, "snapshot_id", "?"))
 
     def _build_entry_trace(
         self,
@@ -2228,6 +2710,18 @@ class DeterministicRuleEngine(StrategyEngine):
         except Exception as exc:
             logger.warning("brain_state write failed error=%s", exc)
 
+    def _mark_strike_veto(self, vote: StrategyVote, mode: str, reason: str) -> None:
+        """Flag a vote as vetoed by the strike layer so every entry path skips it."""
+        vote.raw_signals["_strike_vetoed"] = True
+        vote.raw_signals["_strike_veto_mode"] = str(mode)
+        vote.raw_signals["_strike_veto_reason"] = str(reason)
+        logger.info(
+            "strike_veto strategy=%s dir=%s mode=%s reason=%s → no_trade",
+            vote.strategy_name,
+            getattr(vote.direction, "value", vote.direction),
+            mode, reason,
+        )
+
     def _apply_strike_selection(self, vote: StrategyVote, snap: SnapshotAccessor, regime: str = "") -> None:
         if bool(vote.raw_signals.get("_lock_strike_selection")):
             return
@@ -2264,6 +2758,11 @@ class DeterministicRuleEngine(StrategyEngine):
                     vote.raw_signals["_strike_selected_premium"] = float(round(ltp, 4))
                     vote.raw_signals["_strike_mode"] = selection.mode
                     vote.raw_signals["_strike_reason"] = selection.reason
+            elif str(selection.mode or "").startswith("rejected"):
+                # Strike layer vetoed (premium hard-cap, IV too high, …). This is a
+                # real no-trade — record it so every entry path skips the vote
+                # instead of silently falling back to a default strike.
+                self._mark_strike_veto(vote, selection.mode, selection.reason)
             return
 
         if self._strike_policy != "oi_volume_ranked":

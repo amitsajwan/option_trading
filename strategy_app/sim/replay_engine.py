@@ -34,18 +34,28 @@ from typing import Callable, List, Optional, Tuple, TypedDict
 # ── Typed result ──────────────────────────────────────────────────────────────
 
 class TradeRecord(TypedDict):
-    time_in:   str
-    time_out:  str
-    direction: str
-    strike:    Optional[int]
-    prem_in:   float
-    prem_out:  float
-    pnl_pct:   float
-    mfe_pct:   float
-    mae_pct:   float
-    lots:      int
-    exit:      str
-    source:    str       # always "sim"
+    time_in:        str
+    time_out:       str
+    direction:      str
+    strike:         Optional[int]
+    prem_in:        float
+    prem_out:       float
+    pnl_pct:        float
+    mfe_pct:        float
+    mae_pct:        float
+    lots:           int
+    exit:           str
+    source:         str             # always "sim"
+    strategy_name:  str             # e.g. "ML_ENTRY", "ORB" — shown as label in tape
+    entry_reason:   str             # signal.reason — why the entry fired
+    # E9 entry quality + tiering (carried so the replay UI can show grade/tier
+    # even though the ops-sim path doesn't persist the vote stream).
+    entry_grade:        str         # GOOD | OK | BAD | "" (when not graded)
+    tier:               str         # live | paper | ""
+    live_would_take:    bool
+    entry_snapshot_id:  str
+    entry_dir_margin:   Optional[float]
+    entry_grade_reasons: List[str]
 
 
 class ReplayDiag(TypedDict):
@@ -61,6 +71,7 @@ class ReplayResult(TypedDict):
     trades:         List[TradeRecord]
     exit_stack_name: str
     diag:           ReplayDiag
+    decision_traces: List[dict]   # per-bar v2 gate cascade (empty under v1)
 
 
 # ── Core replay ───────────────────────────────────────────────────────────────
@@ -130,6 +141,8 @@ def replay_day(
     }
 
     trades: List[TradeRecord] = []
+    decision_traces: List[dict] = []
+    _last_trace_id: Optional[str] = None
     current_entry: Optional[dict] = None
     total = len(snapshots)
 
@@ -146,6 +159,13 @@ def replay_day(
                 diag["first_error"] = f"{exc} :: {traceback.format_exc()[-400:]}"
             continue
 
+        # Capture the per-bar gate cascade BEFORE the signal-None short-circuit —
+        # the no_trade bars are exactly the ones we need to explain. None under v1.
+        _tr = getattr(engine, "last_entry_trace", None)
+        if _tr is not None and _tr.get("decision_id") != _last_trace_id:
+            _last_trace_id = _tr.get("decision_id")
+            decision_traces.append(_tr)
+
         if signal is None:
             continue
 
@@ -155,12 +175,22 @@ def replay_day(
 
         if signal.signal_type == SignalType.ENTRY:
             diag["entries"] += 1
+            _rs = getattr(signal, "raw_signals", None)
+            _rs = _rs if isinstance(_rs, dict) else {}
             current_entry = {
-                "time_in":  hhmm,
-                "direction": signal.direction,
-                "strike":   signal.strike,
-                "prem_in":  float(signal.entry_premium or 0),
-                "lots":     signal.max_lots,
+                "time_in":       hhmm,
+                "direction":     signal.direction,
+                "strike":        signal.strike,
+                "prem_in":       float(signal.entry_premium or 0),
+                "lots":          signal.max_lots,
+                "strategy_name": str(getattr(signal, "entry_strategy_name", "") or ""),
+                "entry_reason":  str(getattr(signal, "reason", "") or ""),
+                "entry_grade":   str(_rs.get("entry_grade") or ""),
+                "tier":          str(_rs.get("tier") or ""),
+                "live_would_take": bool(_rs.get("live_would_take") or False),
+                "entry_snapshot_id": str(snap.get("snapshot_id") or ""),
+                "entry_dir_margin": _rs.get("entry_dir_margin"),
+                "entry_grade_reasons": list(_rs.get("entry_grade_reasons") or []),
             }
 
         elif signal.signal_type == SignalType.EXIT and current_entry is not None:
@@ -191,6 +221,14 @@ def replay_day(
                 lots=current_entry["lots"],
                 exit=label,
                 source="sim",
+                strategy_name=current_entry.get("strategy_name", ""),
+                entry_reason=current_entry.get("entry_reason", ""),
+                entry_grade=current_entry.get("entry_grade", ""),
+                tier=current_entry.get("tier", ""),
+                live_would_take=bool(current_entry.get("live_would_take", False)),
+                entry_snapshot_id=current_entry.get("entry_snapshot_id", ""),
+                entry_dir_margin=current_entry.get("entry_dir_margin"),
+                entry_grade_reasons=list(current_entry.get("entry_grade_reasons") or []),
             ))
             current_entry = None
 
@@ -199,7 +237,12 @@ def replay_day(
     if progress_cb is not None:
         progress_cb(total, total)
 
-    return ReplayResult(trades=trades, exit_stack_name=exit_stack_name, diag=diag)
+    return ReplayResult(
+        trades=trades,
+        exit_stack_name=exit_stack_name,
+        diag=diag,
+        decision_traces=decision_traces,
+    )
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

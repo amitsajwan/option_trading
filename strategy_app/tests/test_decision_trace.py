@@ -103,6 +103,48 @@ class DecisionTraceTests(unittest.TestCase):
             self.assertEqual(rows[-1]["final_outcome"], "blocked")
             self.assertEqual(rows[-1]["primary_blocker_gate"], "policy_gate")
 
+    def test_deterministic_engine_emits_decision_summary_on_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            logger = SignalLogger(Path(tmpdir))
+            engine = DeterministicRuleEngine(signal_logger=logger, entry_policy=_AllowPolicy())
+            engine.on_session_start(date(2026, 3, 7))
+            engine._regime.classify = lambda snap: RegimeSignal(regime=Regime.TRENDING, confidence=0.9, reason="test", evidence={})  # type: ignore[method-assign]
+            engine._router.get_strategies = lambda regime, position: [_StaticEntryStrategy("ORB")]  # type: ignore[method-assign]
+            engine._router.regime_allows_entry = lambda regime: True  # type: ignore[method-assign]
+
+            engine.evaluate(_snapshot("snap-1", "2026-03-07T09:00:00+00:00"))
+
+            rows = [json.loads(line) for line in (Path(tmpdir) / "decisions.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(rows), 1)
+            summary = rows[-1]
+            self.assertEqual(summary["snapshot_id"], "snap-1")
+            self.assertEqual(summary["action"], "entry_taken")
+            self.assertIsNone(summary["blocking_gate"])
+            self.assertEqual(summary["engine_mode"], "deterministic")
+            self.assertFalse(summary["engine_state"]["has_position"])
+            # The single tick line carries input, votes, and output — no second grep needed.
+            self.assertEqual(summary["input"]["regime"], "TRENDING")
+            self.assertEqual(summary["output"]["signal_type"], "ENTRY")
+            self.assertEqual(summary["output"]["direction"], "CE")
+            self.assertTrue(any(v["strategy"] == "ORB" for v in summary["votes"]))
+
+    def test_deterministic_engine_summary_records_blocking_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            logger = SignalLogger(Path(tmpdir))
+            engine = DeterministicRuleEngine(signal_logger=logger, entry_policy=_BlockPolicy())
+            engine.on_session_start(date(2026, 3, 7))
+            engine._regime.classify = lambda snap: RegimeSignal(regime=Regime.TRENDING, confidence=0.9, reason="test", evidence={})  # type: ignore[method-assign]
+            engine._router.get_strategies = lambda regime, position: [_StaticEntryStrategy("ORB")]  # type: ignore[method-assign]
+            engine._router.regime_allows_entry = lambda regime: True  # type: ignore[method-assign]
+
+            engine.evaluate(_snapshot("snap-1", "2026-03-07T09:01:00+00:00"))
+
+            rows = [json.loads(line) for line in (Path(tmpdir) / "decisions.jsonl").read_text(encoding="utf-8").splitlines()]
+            summary = rows[-1]
+            self.assertEqual(summary["action"], "blocked")
+            self.assertEqual(summary["blocking_gate"], "policy_gate")
+            self.assertNotIn("output", summary)
+
     def test_deterministic_engine_soft_close_blocks_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = SignalLogger(Path(tmpdir))

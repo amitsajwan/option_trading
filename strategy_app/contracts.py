@@ -211,6 +211,9 @@ class TradeSignal:
     decision_metrics: dict[str, Any] = field(default_factory=dict)
     strategy_family_version: Optional[str] = None
     strategy_profile_id: Optional[str] = None
+    # Pass-through of the originating vote's raw_signals (entry_dir_*, entry_grade,
+    # tier, ...) so downstream replay/persistence can surface them without the vote.
+    raw_signals: dict[str, Any] = field(default_factory=dict)
     underlying_stop_pct: Optional[float] = None
     underlying_target_pct: Optional[float] = None
     risk_basis: Optional[str] = None

@@ -88,3 +88,51 @@ def test_resolve_entry_direction_default_is_composite(monkeypatch: pytest.Monkey
     result = resolve_entry_direction(snap)
     assert result.direction in (Direction.CE, Direction.PE)
     assert "composite" in result.source or result.source.startswith("composite")
+
+
+def _depth_ctx_all_ce() -> DepthContext:
+    """A book where bid_dom + imbalance + microprice ALL fire CE — the correlated
+    multi-tick case that manufactured the fce59da2 margin."""
+    return DepthContext(
+        ce=StrikeDepth(
+            best_bid=100.0,
+            best_ask=101.0,
+            bid_qty=500,
+            ask_qty=100,     # bid >> ask -> bid_dom CE
+            microprice=100.9,  # micro+ -> CE
+            qty_imbalance=0.6,  # imb+ -> CE
+        ),
+    )
+
+
+def test_depth_decorrelation_caps_net_vote(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Isolate depth: kill every non-depth source so the score is depth-only.
+    for key in (
+        "ENTRY_DIR_W_MOMENTUM_5M", "ENTRY_DIR_W_MOMENTUM_15M", "ENTRY_DIR_W_VWAP",
+        "ENTRY_DIR_W_VIX", "ENTRY_DIR_W_IV_SKEW", "ENTRY_DIR_W_OR_TRAP", "ENTRY_DIR_W_PCR",
+    ):
+        monkeypatch.setenv(key, "0")
+    monkeypatch.setenv("ENTRY_DIR_MIN_MARGIN", "0.01")
+    monkeypatch.setenv("ENTRY_DIR_W_DEPTH", "1.1")
+    monkeypatch.setenv("ENTRY_DIR_DEPTH_NET_CAP", "1.1")
+    snap = _snap(futures_derived={})
+
+    # Decorrelation ON (default): three correlated CE ticks collapse to <=1.1.
+    monkeypatch.setenv("ENTRY_DIR_DEPTH_DECORRELATE", "1")
+    set_depth_context(_depth_ctx_all_ce())
+    try:
+        on = resolve_entry_direction_composite(snap)
+    finally:
+        clear_depth_context()
+    assert on.direction == Direction.CE
+    assert on.margin <= 1.1 + 1e-9, f"net depth not capped: {on.margin}"
+    assert "depth_net" in on.sources
+
+    # Decorrelation OFF: the same ticks each add full weight -> much larger margin.
+    monkeypatch.setenv("ENTRY_DIR_DEPTH_DECORRELATE", "0")
+    set_depth_context(_depth_ctx_all_ce())
+    try:
+        off = resolve_entry_direction_composite(snap)
+    finally:
+        clear_depth_context()
+    assert off.margin > on.margin, "decorrelation should reduce manufactured margin"

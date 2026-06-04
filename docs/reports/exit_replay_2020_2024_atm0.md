@@ -1,0 +1,275 @@
+# Exit Policy Replay Report
+
+Period: **2020-01-01** → **2024-12-31**  |  
+Entry bar: 5  |  OTM steps: 0  |  
+Error days: 0
+
+> **Note:** Entries are synthetic (fixed bar, ATM/OTM strike).
+> This study isolates EXIT quality only — not entry quality.
+
+## Stack Comparison
+
+| Metric | scalper | lottery |
+| --- | --- | --- |
+| Trades | 498 | 498 |
+| Win rate | 52% | 37% |
+| Cumulative P&L | +0.92% | -6.40% |
+| Expectancy (per trade) | +0.0018% | -0.0128% |
+| Profit factor | 1.05 | 0.82 |
+| Max drawdown | 1.42% | 8.61% |
+| Fat-tail capture (avg) | -33.16 | -1.36 |
+| Fat-tail trades | 6 | 6 |
+
+## Per-Day Summary
+
+| Date | Underlying% | scalper CE pnl | lottery CE pnl | scalper PE pnl | lottery PE pnl |
+| --- | --- | --- | --- | --- | --- |
+| 2020-01-01 | -0.4% | -1.27% (TRAILING) | -1.27% (THESIS_F) | -2.43% (TRAILING) | -3.50% (THESIS_F) |
+| 2020-01-02 | +0.9% | +7.98% (TARGET_H) | -29.84% (STOP_LOS) | -3.90% (THESIS_F) | -0.26% (THESIS_F) |
+| 2020-01-03 | -0.8% | +5.04% (TARGET_H) | +2.93% (THESIS_F) | -0.82% (TRAILING) | -0.58% (THESIS_F) |
+| 2020-01-06 | -2.0% | +0.61% (TRAILING) | +2.07% (THESIS_F) | +4.21% (TARGET_H) | +17.72% (TRAILING) |
+| 2020-01-07 | -0.2% | +7.57% (TARGET_H) | +10.77% (TIME_STO) | -3.37% (THESIS_F) | -11.55% (TIME_STO) |
+| 2020-01-08 | +0.8% | +19.91% (TARGET_H) | +7.49% (TRAILING) | -6.55% (THESIS_F) | -6.45% (THESIS_F) |
+| 2020-01-09 | +1.1% | -21.74% (THESIS_F) | -29.57% (STOP_LOS) | +9.81% (TARGET_H) | +4.74% (TRAILING) |
+| 2020-01-10 | -0.5% | +0.56% (TRAILING) | +0.56% (THESIS_F) | +5.60% (TARGET_H) | +12.90% (TRAILING) |
+| 2020-01-13 | +0.3% | -0.21% (THESIS_F) | -1.67% (THESIS_F) | +1.25% (TRAILING) | +0.61% (THESIS_F) |
+| 2020-01-14 | -0.2% | +0.75% (TRAILING) | +4.50% (TIME_STO) | -0.87% (THESIS_F) | -7.49% (THESIS_F) |
+| 2020-01-15 | -0.4% | +7.20% (TARGET_H) | -16.29% (TIME_STO) | -0.26% (TRAILING) | -1.58% (THESIS_F) |
+| 2020-01-16 | +0.1% | -5.84% (THESIS_F) | -7.15% (THESIS_F) | +10.13% (TARGET_H) | +18.12% (TRAILING) |
+| 2020-01-17 | +0.1% | +4.98% (TARGET_H) | +10.16% (TIME_STO) | -0.32% (TRAILING) | -3.35% (THESIS_F) |
+| 2020-01-20 | -2.5% | -10.09% (THESIS_F) | -17.77% (THESIS_F) | +4.26% (TARGET_H) | +28.64% (TIME_STO) |
+| 2020-01-21 | +0.0% | +8.40% (TARGET_H) | +21.98% (TRAILING) | -7.87% (THESIS_F) | -6.31% (THESIS_F) |
+| 2020-01-22 | -1.1% | +9.03% (TARGET_H) | -25.69% (STOP_LOS) | -16.40% (THESIS_F) | -6.16% (THESIS_F) |
+| 2020-01-23 | +1.0% | +28.51% (TARGET_H) | +48.21% (TARGET_H) | -20.72% (THESIS_F) | -22.54% (THESIS_F) |
+| 2020-01-24 | +0.7% | +6.81% (TARGET_H) | +47.15% (TARGET_H) | -5.60% (THESIS_F) | -2.84% (THESIS_F) |
+| 2020-01-27 | -0.6% | -1.39% (THESIS_F) | -8.79% (THESIS_F) | +6.82% (TARGET_H) | -24.20% (TIME_STO) |
+| 2020-01-28 | -0.4% | +9.00% (TARGET_H) | +40.46% (TARGET_H) | -0.92% (THESIS_F) | -5.70% (THESIS_F) |
+| 2020-01-29 | -0.2% | -1.05% (TRAILING) | -1.05% (THESIS_F) | -5.98% (THESIS_F) | -1.67% (THESIS_F) |
+| 2020-01-30 | -2.0% | -14.29% (THESIS_F) | -17.46% (THESIS_F) | -0.74% (TRAILING) | +1.78% (THESIS_F) |
+| 2020-01-31 | -0.1% | +4.62% (TARGET_H) | +1.21% (TIME_STO) | -0.35% (TRAILING) | -7.55% (THESIS_F) |
+| 2020-02-01 | -3.3% | +7.79% (TARGET_H) | +14.94% (TIME_STO) | -6.54% (THESIS_F) | -3.70% (THESIS_F) |
+| 2020-02-03 | +1.1% | +1.33% (TRAILING) | -4.57% (THESIS_F) | +8.56% (TARGET_H) | +41.19% (TARGET_H) |
+| 2020-02-04 | +1.3% | +2.01% (TRAILING) | +1.16% (TIME_STO) | -4.24% (THESIS_F) | -7.52% (THESIS_F) |
+| 2020-02-05 | +1.0% | +4.02% (TARGET_H) | +19.46% (TRAILING) | -17.94% (THESIS_F) | -14.95% (THESIS_F) |
+| 2020-02-06 | +0.3% | +4.10% (TARGET_H) | -26.43% (STOP_LOS) | +4.11% (TARGET_H) | +5.06% (TRAILING) |
+| 2020-02-07 | -0.4% | -1.49% (TRAILING) | +9.01% (TIME_STO) | -0.66% (THESIS_F) | -2.43% (THESIS_F) |
+| 2020-02-10 | -0.3% | -10.01% (THESIS_F) | -12.35% (THESIS_F) | +7.04% (TARGET_H) | +1.40% (TIME_STO) |
+| 2020-02-11 | +0.3% | +7.21% (TARGET_H) | +25.60% (TIME_STO) | -3.86% (TRAILING) | +1.15% (THESIS_F) |
+| 2020-02-12 | +0.1% | +5.78% (TARGET_H) | -10.49% (TIME_STO) | -6.51% (THESIS_F) | -8.04% (THESIS_F) |
+| 2020-02-13 | -1.2% | -13.45% (THESIS_F) | -19.47% (THESIS_F) | -4.09% (THESIS_F) | +0.92% (THESIS_F) |
+| 2020-02-14 | -1.2% | -5.37% (THESIS_F) | -7.08% (THESIS_F) | +6.24% (TARGET_H) | -2.78% (TIME_STO) |
+| 2020-02-17 | -0.3% | -37.13% (THESIS_F) | -37.28% (STOP_LOS) | +20.72% (TARGET_H) | +59.80% (TARGET_H) |
+| 2020-02-18 | -0.1% | -1.45% (TRAILING) | -6.66% (THESIS_F) | -0.63% (THESIS_F) | +2.43% (THESIS_F) |
+| 2020-02-19 | -0.0% | +4.70% (TARGET_H) | -30.32% (STOP_LOS) | -6.13% (TRAILING) | -4.19% (THESIS_F) |
+| 2020-02-20 | +0.5% | +36.61% (TARGET_H) | +88.14% (TARGET_H) | -2.95% (TRAILING) | -37.22% (STOP_LOS) |
+| 2020-02-24 | -0.5% | +5.05% (TARGET_H) | +9.33% (TIME_STO) | +5.16% (TARGET_H) | -10.37% (TIME_STO) |
+| 2020-02-25 | +0.0% | -0.56% (TRAILING) | -18.44% (TIME_STO) | +6.25% (TARGET_H) | +14.59% (TIME_STO) |
+| 2024-01-01 | -0.4% | +3.25% (TRAILING) | -5.92% (TIME_STO) | -1.93% (THESIS_F) | -3.00% (THESIS_F) |
+| 2024-01-02 | -1.0% | -2.61% (TRAILING) | -5.71% (THESIS_F) | -0.01% (TRAILING) | -4.98% (TIME_STO) |
+| 2024-01-03 | +0.3% | -9.10% (THESIS_F) | -9.20% (THESIS_F) | +7.04% (TARGET_H) | +8.21% (TIME_STO) |
+| 2024-01-04 | +1.0% | +1.10% (TRAILING) | -1.40% (THESIS_F) | +2.10% (TRAILING) | +2.26% (THESIS_F) |
+| 2024-01-05 | -0.4% | -0.64% (TRAILING) | -4.45% (THESIS_F) | +4.29% (TARGET_H) | +6.26% (TIME_STO) |
+| 2024-01-08 | -1.8% | +19.45% (TARGET_H) | +14.48% (TRAILING) | +5.52% (TARGET_H) | -12.67% (THESIS_F) |
+| 2024-01-09 | -0.8% | -1.79% (THESIS_F) | -1.74% (THESIS_F) | +1.79% (TRAILING) | +33.28% (TIME_STO) |
+| 2024-01-10 | +0.8% | +2.28% (TRAILING) | -26.96% (STOP_LOS) | +4.78% (TARGET_H) | -4.06% (TRAILING) |
+| 2024-01-11 | -0.4% | +5.16% (TARGET_H) | -8.67% (TIME_STO) | -3.96% (THESIS_F) | +1.18% (THESIS_F) |
+| 2024-01-12 | +0.5% | -2.78% (TRAILING) | -2.26% (THESIS_F) | +0.34% (TRAILING) | +2.85% (THESIS_F) |
+| 2024-01-15 | +0.8% | +8.46% (TARGET_H) | +15.35% (TRAILING) | -1.52% (THESIS_F) | -7.01% (THESIS_F) |
+| 2024-01-16 | -0.1% | -3.27% (THESIS_F) | -4.70% (THESIS_F) | +0.51% (TRAILING) | +1.02% (THESIS_F) |
+| 2024-01-17 | -1.7% | -19.31% (THESIS_F) | -31.64% (STOP_LOS) | +4.66% (TARGET_H) | +59.20% (TARGET_H) |
+| 2024-01-18 | +0.4% | -1.54% (THESIS_F) | +8.77% (TIME_STO) | -5.30% (TRAILING) | -5.30% (THESIS_F) |
+| 2024-01-19 | -0.7% | +0.05% (TRAILING) | -0.13% (THESIS_F) | +0.79% (TRAILING) | +0.33% (THESIS_F) |
+| 2024-01-20 | +0.3% | -0.05% (TRAILING) | +2.18% (THESIS_F) | +8.55% (TARGET_H) | -2.86% (THESIS_F) |
+| 2024-01-23 | -3.2% | -87.52% (timestop) | -4.55% (THESIS_F) | +0.70% (TRAILING) | +40.50% (TARGET_H) |
+| 2024-01-24 | +1.4% | +9.19% (TARGET_H) | +44.29% (TARGET_H) | -16.37% (THESIS_F) | -24.79% (THESIS_F) |
+| 2024-01-25 | -0.5% | +6.01% (TARGET_H) | -26.25% (STOP_LOS) | +31.79% (TARGET_H) | +52.22% (TARGET_H) |
+| 2024-01-29 | +0.8% | +1.57% (TRAILING) | +8.79% (TRAILING) | +8.78% (TARGET_H) | -5.47% (THESIS_F) |
+| 2024-01-30 | -0.6% | -2.66% (THESIS_F) | -4.26% (THESIS_F) | +9.14% (TARGET_H) | +11.81% (TRAILING) |
+| 2024-01-31 | +1.6% | -7.53% (THESIS_F) | -10.27% (THESIS_F) | +8.98% (TARGET_H) | -33.60% (STOP_LOS) |
+| 2024-02-01 | +0.2% | -1.09% (TRAILING) | -7.62% (THESIS_F) | +4.55% (TARGET_H) | +19.62% (TIME_STO) |
+| 2024-02-02 | -1.2% | +6.43% (TARGET_H) | -4.12% (TIME_STO) | -3.99% (THESIS_F) | -6.18% (THESIS_F) |
+| 2024-02-05 | -0.3% | +5.64% (TARGET_H) | +18.60% (TRAILING) | -7.23% (THESIS_F) | -13.55% (THESIS_F) |
+| 2024-02-06 | +0.2% | +5.39% (TARGET_H) | +15.71% (TIME_STO) | -3.14% (TRAILING) | -6.00% (THESIS_F) |
+| 2024-02-07 | +0.1% | -6.48% (THESIS_F) | -25.93% (STOP_LOS) | +0.27% (TRAILING) | -12.25% (THESIS_F) |
+| 2024-02-08 | -2.2% | -0.13% (THESIS_F) | -1.38% (THESIS_F) | +1.77% (TRAILING) | +2.66% (THESIS_F) |
+| 2024-02-09 | +1.7% | +15.24% (TARGET_H) | +8.06% (TRAILING) | -11.08% (THESIS_F) | -15.37% (THESIS_F) |
+| 2024-02-12 | -1.9% | +6.84% (TARGET_H) | -19.79% (TIME_STO) | +5.72% (TARGET_H) | +14.85% (TIME_STO) |
+| 2024-02-13 | +1.0% | -16.28% (THESIS_F) | +19.92% (TRAILING) | +5.40% (TARGET_H) | -4.29% (TRAILING) |
+| 2024-02-14 | +2.1% | +30.25% (TARGET_H) | -4.41% (TRAILING) | -3.41% (TRAILING) | +19.12% (TRAILING) |
+| 2024-02-15 | +0.4% | -2.05% (THESIS_F) | -1.95% (THESIS_F) | +7.21% (TARGET_H) | +43.45% (TARGET_H) |
+| 2024-02-16 | -0.2% | +4.09% (TARGET_H) | -5.05% (THESIS_F) | +4.18% (TARGET_H) | +3.85% (TIME_STO) |
+| 2024-02-19 | +0.1% | +1.75% (TRAILING) | -1.78% (THESIS_F) | +6.50% (TARGET_H) | +2.13% (THESIS_F) |
+| 2024-02-20 | +1.2% | +4.06% (TARGET_H) | +40.65% (TARGET_H) | -2.70% (TRAILING) | -27.33% (STOP_LOS) |
+| 2024-02-21 | -1.0% | -4.26% (THESIS_F) | -21.41% (THESIS_F) | +8.46% (TARGET_H) | +7.23% (TRAILING) |
+| 2024-02-22 | -0.0% | -16.40% (timestop) | -2.78% (THESIS_F) | +5.10% (TARGET_H) | +1.61% (THESIS_F) |
+| 2024-02-23 | -0.6% | +6.03% (TARGET_H) | +15.89% (TIME_STO) | -4.33% (THESIS_F) | -3.01% (THESIS_F) |
+| 2024-02-26 | -0.3% | +6.86% (TARGET_H) | +19.91% (TIME_STO) | -3.23% (TRAILING) | -6.11% (THESIS_F) |
+| 2024-02-27 | +0.1% | +10.75% (TARGET_H) | +11.83% (TIME_STO) | -7.50% (THESIS_F) | -13.84% (THESIS_F) |
+| 2024-02-28 | -1.8% | +4.22% (TARGET_H) | -1.31% (TIME_STO) | -4.92% (THESIS_F) | -5.21% (THESIS_F) |
+| 2024-02-29 | +0.6% | -3.59% (THESIS_F) | -7.18% (TIME_STO) | +15.50% (TARGET_H) | -32.99% (STOP_LOS) |
+| 2024-03-01 | +2.0% | +5.47% (TARGET_H) | +9.37% (TIME_STO) | -2.54% (TRAILING) | +1.48% (THESIS_F) |
+| 2024-03-02 | +0.1% | +4.60% (TARGET_H) | +13.03% (TIME_STO) | -2.15% (THESIS_F) | -1.19% (THESIS_F) |
+| 2024-03-04 | +0.1% | -3.34% (THESIS_F) | -3.67% (THESIS_F) | +4.71% (TARGET_H) | +8.56% (TIME_STO) |
+| 2024-03-05 | +0.8% | +6.02% (TARGET_H) | +3.41% (TIME_STO) | -0.55% (TRAILING) | -6.96% (THESIS_F) |
+| 2024-03-06 | +0.9% | -6.74% (TRAILING) | +75.85% (TARGET_H) | -6.04% (THESIS_F) | +2.34% (THESIS_F) |
+| 2024-03-07 | -0.6% | -47.35% (timestop) | -1.04% (THESIS_F) | +1.10% (TRAILING) | +0.10% (THESIS_F) |
+| 2024-03-11 | -0.9% | -2.34% (THESIS_F) | -6.79% (THESIS_F) | +4.12% (TARGET_H) | +3.07% (TIME_STO) |
+| 2024-03-12 | +0.1% | -0.70% (TRAILING) | -0.70% (THESIS_F) | +5.38% (TARGET_H) | -27.83% (STOP_LOS) |
+| 2024-03-13 | -1.2% | +7.03% (TARGET_H) | -34.38% (STOP_LOS) | -6.08% (THESIS_F) | -3.77% (THESIS_F) |
+| 2024-03-14 | +0.0% | +5.46% (TARGET_H) | +12.43% (TIME_STO) | -6.08% (THESIS_F) | -11.26% (THESIS_F) |
+| 2024-03-15 | -0.3% | +5.42% (TARGET_H) | -25.57% (STOP_LOS) | -0.49% (THESIS_F) | -2.16% (THESIS_F) |
+| 2024-03-18 | +0.3% | -3.97% (THESIS_F) | -2.47% (THESIS_F) | +5.33% (TARGET_H) | +19.59% (TIME_STO) |
+| 2024-03-19 | -0.5% | +7.05% (TARGET_H) | +16.37% (TIME_STO) | -5.55% (THESIS_F) | -5.30% (THESIS_F) |
+| 2024-03-20 | -0.0% | +4.83% (TARGET_H) | -24.83% (TIME_STO) | -4.82% (TRAILING) | -14.51% (THESIS_F) |
+| 2024-03-21 | +0.2% | -11.83% (THESIS_F) | -8.43% (THESIS_F) | +9.15% (TARGET_H) | -6.75% (TIME_STO) |
+| 2024-03-22 | +0.5% | -0.62% (TRAILING) | -0.33% (THESIS_F) | +1.80% (TRAILING) | -0.61% (THESIS_F) |
+| 2024-03-26 | -0.2% | +1.07% (TRAILING) | +1.07% (THESIS_F) | -5.03% (TRAILING) | -3.18% (THESIS_F) |
+| 2024-03-27 | +0.2% | -3.35% (TRAILING) | -3.35% (THESIS_F) | +6.62% (TARGET_H) | -32.51% (STOP_LOS) |
+| 2024-03-28 | +0.1% | +4.76% (TARGET_H) | +7.20% (TIME_STO) | -1.94% (THESIS_F) | -1.82% (THESIS_F) |
+| 2024-04-01 | +0.5% | +0.45% (TRAILING) | -0.59% (THESIS_F) | +3.21% (TRAILING) | -2.07% (TIME_STO) |
+| 2024-04-02 | +0.2% | +4.67% (TARGET_H) | +16.58% (TRAILING) | +0.62% (TRAILING) | -27.76% (STOP_LOS) |
+| 2024-04-03 | +0.5% | -2.46% (THESIS_F) | -11.72% (THESIS_F) | +0.07% (TRAILING) | -2.82% (TIME_STO) |
+| 2024-04-04 | +0.2% | -3.86% (THESIS_F) | -4.64% (THESIS_F) | +4.11% (TARGET_H) | +25.55% (TIME_STO) |
+| 2024-04-05 | +1.1% | +5.16% (TARGET_H) | +16.45% (TRAILING) | -3.88% (THESIS_F) | -7.42% (THESIS_F) |
+| 2024-04-08 | -0.1% | -1.57% (TRAILING) | -4.99% (TIME_STO) | +1.10% (TRAILING) | -0.68% (THESIS_F) |
+| 2024-04-09 | -0.1% | +5.57% (TARGET_H) | -7.85% (THESIS_F) | -0.18% (TRAILING) | +1.91% (THESIS_F) |
+| 2024-04-10 | +0.2% | +4.28% (TARGET_H) | +40.50% (TARGET_H) | -3.30% (THESIS_F) | -16.60% (THESIS_F) |
+| 2024-04-12 | -0.1% | -2.90% (THESIS_F) | -5.54% (THESIS_F) | +1.01% (TRAILING) | +18.12% (TIME_STO) |
+| 2024-04-15 | +0.5% | -1.89% (TRAILING) | -7.75% (THESIS_F) | +12.17% (TARGET_H) | +3.13% (TIME_STO) |
+| 2024-04-16 | -0.1% | +5.86% (TARGET_H) | -26.68% (STOP_LOS) | +0.23% (TRAILING) | -8.29% (THESIS_F) |
+| 2024-04-18 | -1.2% | +4.47% (TARGET_H) | -16.95% (TIME_STO) | -4.34% (THESIS_F) | -5.24% (THESIS_F) |
+| 2024-04-19 | +1.6% | +7.40% (TARGET_H) | +22.88% (TIME_STO) | -0.83% (TRAILING) | -9.73% (THESIS_F) |
+| 2024-04-22 | +0.1% | +0.08% (TRAILING) | -25.31% (STOP_LOS) | -3.34% (TRAILING) | +1.60% (THESIS_F) |
+| 2024-04-23 | -0.4% | -51.24% (timestop) | -4.69% (THESIS_F) | +20.81% (TARGET_H) | +11.54% (TRAILING) |
+| 2024-04-24 | +0.2% | -11.76% (THESIS_F) | -7.77% (THESIS_F) | -6.10% (TRAILING) | -6.10% (THESIS_F) |
+| 2024-04-25 | +1.3% | -2.16% (TRAILING) | -2.38% (THESIS_F) | -0.50% (TRAILING) | -0.50% (THESIS_F) |
+| 2024-04-26 | -0.4% | +4.57% (TARGET_H) | +21.24% (TIME_STO) | -6.15% (THESIS_F) | -5.18% (THESIS_F) |
+| 2024-04-29 | +2.1% | +4.55% (TARGET_H) | -1.43% (TIME_STO) | -10.16% (THESIS_F) | -11.91% (THESIS_F) |
+| 2024-04-30 | -0.4% | +13.62% (TARGET_H) | +12.02% (TRAILING) | -15.11% (THESIS_F) | -9.14% (THESIS_F) |
+| 2024-05-02 | +0.2% | +4.19% (TARGET_H) | +0.99% (THESIS_F) | +4.71% (TARGET_H) | +0.07% (TIME_STO) |
+| 2024-05-03 | -0.9% | +6.68% (TARGET_H) | -1.67% (TIME_STO) | -7.38% (THESIS_F) | -7.01% (THESIS_F) |
+| 2024-05-06 | -0.4% | +9.03% (TARGET_H) | +48.48% (TARGET_H) | -1.53% (TRAILING) | -18.95% (THESIS_F) |
+| 2024-05-07 | -1.5% | +8.60% (TARGET_H) | -12.41% (TIME_STO) | -8.93% (TRAILING) | -6.99% (THESIS_F) |
+| 2024-05-08 | -0.2% | -15.39% (THESIS_F) | -31.98% (STOP_LOS) | +4.31% (TARGET_H) | +12.86% (TRAILING) |
+| 2024-05-09 | -1.2% | +0.04% (THESIS_F) | +1.90% (THESIS_F) | +1.24% (TRAILING) | +3.33% (TIME_STO) |
+| 2024-05-10 | -0.2% | +3.07% (TRAILING) | +26.91% (TIME_STO) | -16.74% (THESIS_F) | -19.73% (THESIS_F) |
+| 2024-05-13 | +1.0% | -3.85% (TRAILING) | -26.33% (STOP_LOS) | +4.50% (TARGET_H) | +30.85% (TIME_STO) |
+| 2024-05-14 | -0.0% | +4.86% (TARGET_H) | -35.95% (STOP_LOS) | +10.82% (TARGET_H) | +11.59% (TRAILING) |
+| 2024-05-15 | -0.4% | -9.11% (TRAILING) | -29.67% (STOP_LOS) | +4.36% (TARGET_H) | -1.38% (THESIS_F) |
+| 2024-05-16 | +0.2% | +9.21% (TARGET_H) | -11.93% (TIME_STO) | -6.47% (THESIS_F) | -6.13% (THESIS_F) |
+| 2024-05-17 | +0.2% | -5.13% (THESIS_F) | -4.70% (THESIS_F) | +2.55% (TRAILING) | +5.09% (TIME_STO) |
+| 2024-05-18 | -0.0% | -4.02% (TRAILING) | -4.02% (THESIS_F) | -2.52% (THESIS_F) | +0.49% (THESIS_F) |
+| 2024-05-21 | -0.2% | +12.74% (TARGET_H) | -20.24% (TIME_STO) | -0.14% (THESIS_F) | +0.76% (THESIS_F) |
+| 2024-05-22 | -0.2% | -4.83% (THESIS_F) | -5.33% (THESIS_F) | -0.41% (TRAILING) | +19.11% (TIME_STO) |
+| 2024-05-23 | +1.7% | -0.01% (TRAILING) | +2.64% (THESIS_F) | -3.37% (TRAILING) | -3.37% (THESIS_F) |
+| 2024-05-24 | +0.4% | +5.91% (TARGET_H) | -0.21% (TIME_STO) | -4.20% (THESIS_F) | -4.54% (THESIS_F) |
+| 2024-05-27 | +0.4% | +7.80% (TARGET_H) | +23.63% (TIME_STO) | -8.31% (THESIS_F) | -12.24% (THESIS_F) |
+| 2024-05-28 | -0.5% | +11.43% (TARGET_H) | -18.04% (TIME_STO) | -6.94% (THESIS_F) | -3.81% (THESIS_F) |
+| 2024-05-29 | -0.9% | +7.64% (TARGET_H) | -26.69% (STOP_LOS) | -6.52% (THESIS_F) | -17.74% (THESIS_F) |
+| 2024-05-30 | +0.3% | -5.17% (THESIS_F) | -2.42% (THESIS_F) | +4.05% (TARGET_H) | -2.42% (TIME_STO) |
+| 2024-05-31 | +0.4% | +4.08% (TARGET_H) | -4.09% (TIME_STO) | -6.26% (THESIS_F) | -5.11% (THESIS_F) |
+| 2024-06-03 | +1.7% | -3.17% (TRAILING) | -26.93% (STOP_LOS) | +10.12% (TARGET_H) | +13.23% (TRAILING) |
+| 2024-06-04 | -6.9% | -9.11% (THESIS_F) | -9.82% (THESIS_F) | +9.39% (TARGET_H) | +42.78% (TARGET_H) |
+| 2024-06-05 | +3.4% | +17.52% (TARGET_H) | -28.38% (STOP_LOS) | -0.16% (TRAILING) | +2.04% (THESIS_F) |
+| 2024-06-06 | +0.2% | +5.65% (TARGET_H) | +6.23% (TIME_STO) | -4.66% (THESIS_F) | +1.27% (THESIS_F) |
+| 2024-06-07 | +1.6% | +12.62% (TARGET_H) | +11.68% (TRAILING) | -7.15% (THESIS_F) | -10.40% (THESIS_F) |
+| 2024-06-10 | -0.7% | -1.68% (THESIS_F) | -23.25% (TIME_STO) | -0.75% (TRAILING) | -11.96% (THESIS_F) |
+| 2024-06-11 | +0.2% | -7.51% (TRAILING) | -5.29% (THESIS_F) | -2.27% (TRAILING) | -25.32% (STOP_LOS) |
+| 2024-06-12 | +0.2% | +12.26% (TARGET_H) | +41.13% (TARGET_H) | -11.16% (THESIS_F) | -14.77% (THESIS_F) |
+| 2024-06-13 | -0.4% | +0.51% (TRAILING) | -2.11% (THESIS_F) | -1.14% (THESIS_F) | -0.65% (THESIS_F) |
+| 2024-06-14 | +0.1% | -7.36% (THESIS_F) | -10.82% (THESIS_F) | +11.49% (TARGET_H) | +22.05% (TIME_STO) |
+| 2024-06-18 | +0.5% | -13.56% (THESIS_F) | -15.46% (THESIS_F) | +24.41% (TARGET_H) | +9.67% (TRAILING) |
+| 2024-06-19 | +1.9% | +45.74% (TARGET_H) | +45.74% (TARGET_H) | -27.00% (THESIS_F) | -27.00% (STOP_LOS) |
+| 2024-06-20 | +0.3% | -2.62% (TRAILING) | -3.45% (THESIS_F) | -3.81% (THESIS_F) | -2.88% (THESIS_F) |
+| 2024-06-21 | -0.4% | +5.13% (TARGET_H) | -20.74% (TIME_STO) | +0.40% (TRAILING) | +0.25% (THESIS_F) |
+| 2024-06-24 | +1.0% | -4.74% (THESIS_F) | -3.82% (THESIS_F) | +8.63% (TARGET_H) | +17.14% (TRAILING) |
+| 2024-06-25 | +1.6% | +8.66% (TARGET_H) | +10.62% (TIME_STO) | -9.04% (THESIS_F) | -11.49% (THESIS_F) |
+| 2024-06-26 | +0.5% | -10.60% (THESIS_F) | -22.16% (THESIS_F) | +7.66% (TARGET_H) | +46.73% (TARGET_H) |
+| 2024-06-27 | +0.2% | +4.25% (TARGET_H) | +2.46% (TIME_STO) | -5.82% (THESIS_F) | -2.37% (THESIS_F) |
+| 2024-06-28 | -0.7% | +4.43% (TARGET_H) | +5.30% (TIME_STO) | +2.10% (TRAILING) | -3.89% (THESIS_F) |
+| 2024-07-01 | +0.3% | -10.57% (THESIS_F) | -10.17% (THESIS_F) | +10.90% (TARGET_H) | -22.96% (TIME_STO) |
+| 2024-07-02 | -0.9% | +2.29% (TRAILING) | -28.70% (STOP_LOS) | -3.85% (THESIS_F) | +2.11% (THESIS_F) |
+| 2024-07-03 | +0.5% | +68.29% (TARGET_H) | +68.29% (TARGET_H) | -20.94% (THESIS_F) | -25.21% (STOP_LOS) |
+| 2024-07-04 | -0.1% | +6.75% (TARGET_H) | +9.58% (TIME_STO) | -8.90% (THESIS_F) | -5.25% (THESIS_F) |
+| 2024-07-05 | -0.5% | -4.93% (TRAILING) | -8.44% (THESIS_F) | +4.67% (TARGET_H) | +44.91% (TARGET_H) |
+| 2024-07-08 | -0.1% | +17.09% (TARGET_H) | +15.16% (TRAILING) | -10.71% (TRAILING) | -19.52% (THESIS_F) |
+| 2024-07-09 | +0.2% | +4.39% (TARGET_H) | -2.36% (TIME_STO) | +0.98% (TRAILING) | -8.18% (THESIS_F) |
+| 2024-07-10 | -0.4% | -99.95% (timestop) | -5.49% (THESIS_F) | -11.14% (THESIS_F) | -11.01% (THESIS_F) |
+| 2024-07-11 | +0.1% | -6.52% (THESIS_F) | -8.89% (THESIS_F) | -1.30% (TRAILING) | +7.26% (TIME_STO) |
+| 2024-07-12 | -0.2% | +6.16% (TARGET_H) | +47.66% (TARGET_H) | -13.07% (THESIS_F) | -14.48% (THESIS_F) |
+| 2024-07-15 | +0.5% | -5.01% (TRAILING) | -5.01% (THESIS_F) | +9.67% (TARGET_H) | -27.21% (STOP_LOS) |
+| 2024-07-16 | -0.2% | +8.41% (TARGET_H) | -25.91% (STOP_LOS) | +8.98% (TARGET_H) | +41.12% (TARGET_H) |
+| 2024-07-18 | +0.4% | +4.12% (TARGET_H) | +8.09% (TIME_STO) | +1.38% (TRAILING) | +2.27% (THESIS_F) |
+| 2024-07-19 | -0.5% | +4.29% (TARGET_H) | +4.69% (TIME_STO) | -6.27% (THESIS_F) | -12.15% (THESIS_F) |
+| 2024-07-22 | +0.4% | +2.09% (TRAILING) | +27.82% (TIME_STO) | -4.26% (THESIS_F) | -5.32% (THESIS_F) |
+| 2024-07-23 | -1.2% | -0.55% (TRAILING) | -0.76% (THESIS_F) | +5.37% (TARGET_H) | -0.12% (THESIS_F) |
+| 2024-07-24 | -0.3% | -30.66% (THESIS_F) | -26.57% (STOP_LOS) | +28.95% (TARGET_H) | +10.55% (TRAILING) |
+| 2024-07-25 | -0.1% | +9.89% (TARGET_H) | -7.00% (TIME_STO) | -11.20% (THESIS_F) | -7.09% (THESIS_F) |
+| 2024-07-26 | +1.3% | -4.51% (TRAILING) | -13.28% (THESIS_F) | +8.83% (TARGET_H) | +6.58% (TIME_STO) |
+| 2024-07-29 | -0.3% | +6.02% (TARGET_H) | +20.42% (TIME_STO) | -7.20% (THESIS_F) | -2.91% (THESIS_F) |
+| 2024-07-30 | +0.2% | +1.27% (TRAILING) | +0.24% (THESIS_F) | +4.21% (TARGET_H) | -25.96% (STOP_LOS) |
+| 2024-07-31 | +0.1% | +9.50% (TARGET_H) | -30.29% (STOP_LOS) | -7.23% (TRAILING) | +1.43% (THESIS_F) |
+| 2024-08-01 | -0.4% | +4.27% (TARGET_H) | -11.44% (TIME_STO) | -2.52% (THESIS_F) | -3.75% (THESIS_F) |
+| 2024-08-02 | +0.0% | +10.41% (TARGET_H) | +11.16% (TRAILING) | +5.74% (TARGET_H) | -5.94% (TIME_STO) |
+| 2024-08-05 | -1.0% | +1.37% (TRAILING) | -23.36% (TIME_STO) | +6.21% (TARGET_H) | +7.61% (TRAILING) |
+| 2024-08-06 | -1.2% | +26.54% (TARGET_H) | +15.11% (TRAILING) | -12.57% (THESIS_F) | -11.87% (THESIS_F) |
+| 2024-08-07 | +0.0% | -18.57% (THESIS_F) | -20.38% (THESIS_F) | +22.32% (TARGET_H) | +43.59% (TARGET_H) |
+| 2024-08-08 | -0.1% | -2.17% (THESIS_F) | -3.13% (THESIS_F) | +1.24% (TRAILING) | +1.24% (THESIS_F) |
+| 2024-08-09 | -0.1% | -0.53% (TRAILING) | -6.91% (THESIS_F) | +6.17% (TARGET_H) | -7.64% (TIME_STO) |
+| 2024-08-12 | +0.5% | -5.38% (TRAILING) | -5.38% (THESIS_F) | -1.83% (THESIS_F) | +1.66% (THESIS_F) |
+| 2024-08-13 | -1.0% | +8.82% (TARGET_H) | -6.90% (TIME_STO) | -8.26% (THESIS_F) | -5.45% (THESIS_F) |
+| 2024-08-14 | -0.3% | +9.81% (TARGET_H) | -25.83% (STOP_LOS) | +5.42% (TARGET_H) | -23.59% (TIME_STO) |
+| 2024-08-16 | +0.8% | +7.29% (TARGET_H) | -25.44% (STOP_LOS) | -6.31% (THESIS_F) | -8.13% (THESIS_F) |
+| 2024-08-19 | -0.4% | -0.26% (THESIS_F) | -7.10% (THESIS_F) | +7.12% (TARGET_H) | +5.62% (TIME_STO) |
+| 2024-08-20 | +0.6% | +4.55% (TARGET_H) | +45.43% (TARGET_H) | -6.21% (THESIS_F) | -3.63% (THESIS_F) |
+| 2024-08-21 | +0.0% | -24.23% (THESIS_F) | -28.13% (STOP_LOS) | +4.73% (TARGET_H) | +45.33% (TARGET_H) |
+| 2024-08-22 | +0.2% | +4.99% (TARGET_H) | +20.40% (TRAILING) | -6.45% (THESIS_F) | -2.64% (THESIS_F) |
+| 2024-08-23 | -0.1% | +11.37% (TARGET_H) | +11.73% (TRAILING) | -9.18% (THESIS_F) | -13.22% (THESIS_F) |
+| 2024-08-26 | +0.1% | +7.31% (TARGET_H) | +31.12% (TIME_STO) | -12.16% (THESIS_F) | -15.04% (THESIS_F) |
+| 2024-08-27 | -0.1% | -12.09% (THESIS_F) | -18.70% (THESIS_F) | +14.45% (TARGET_H) | +48.11% (TARGET_H) |
+| 2024-08-28 | -0.5% | +10.56% (TARGET_H) | -30.46% (STOP_LOS) | +0.13% (THESIS_F) | -0.81% (THESIS_F) |
+| 2024-08-29 | +0.2% | -1.12% (TRAILING) | +0.75% (THESIS_F) | +2.40% (TRAILING) | -2.88% (TIME_STO) |
+| 2024-08-30 | +0.3% | +6.98% (TARGET_H) | -3.50% (TIME_STO) | -2.11% (THESIS_F) | -0.12% (THESIS_F) |
+| 2024-09-02 | -0.2% | +0.55% (TRAILING) | -11.55% (TIME_STO) | -3.27% (THESIS_F) | -4.41% (THESIS_F) |
+| 2024-09-03 | +0.4% | +15.96% (TARGET_H) | -3.71% (TIME_STO) | -7.32% (THESIS_F) | -1.87% (THESIS_F) |
+| 2024-09-04 | +0.1% | +5.46% (TARGET_H) | -28.89% (STOP_LOS) | -1.62% (THESIS_F) | -1.36% (THESIS_F) |
+| 2024-09-05 | +0.1% | -5.07% (THESIS_F) | -5.66% (THESIS_F) | +2.42% (TRAILING) | +7.24% (TIME_STO) |
+| 2024-09-06 | -1.5% | -3.01% (TRAILING) | -14.02% (TIME_STO) | +0.13% (THESIS_F) | +0.44% (THESIS_F) |
+| 2024-09-09 | +1.0% | +12.29% (TARGET_H) | +11.54% (TRAILING) | -13.89% (THESIS_F) | -17.77% (THESIS_F) |
+| 2024-09-10 | -0.1% | -2.22% (THESIS_F) | +1.46% (THESIS_F) | +9.85% (TARGET_H) | +12.77% (TIME_STO) |
+| 2024-09-11 | -0.3% | -9.22% (TRAILING) | -5.99% (THESIS_F) | +6.33% (TARGET_H) | -31.94% (STOP_LOS) |
+| 2024-09-12 | +0.8% | +1.46% (TRAILING) | +2.94% (THESIS_F) | -4.53% (THESIS_F) | -7.44% (THESIS_F) |
+| 2024-09-13 | -0.0% | -7.68% (THESIS_F) | -13.65% (THESIS_F) | +4.86% (TARGET_H) | +6.10% (TIME_STO) |
+| 2024-09-16 | +0.6% | +6.61% (TARGET_H) | +11.47% (TRAILING) | +5.10% (TARGET_H) | -25.49% (STOP_LOS) |
+| 2024-09-17 | +0.0% | -1.49% (THESIS_F) | -10.86% (THESIS_F) | +4.11% (TARGET_H) | -27.24% (STOP_LOS) |
+| 2024-09-18 | +1.0% | +6.99% (TARGET_H) | +40.33% (TARGET_H) | -6.51% (TRAILING) | -19.28% (THESIS_F) |
+| 2024-09-19 | +0.6% | -17.43% (THESIS_F) | -16.51% (THESIS_F) | +8.57% (TARGET_H) | +3.39% (TRAILING) |
+| 2024-09-20 | +0.5% | +7.23% (TARGET_H) | -5.39% (TIME_STO) | -9.80% (THESIS_F) | -4.17% (THESIS_F) |
+| 2024-09-23 | +0.3% | -8.24% (TRAILING) | -8.24% (THESIS_F) | +5.98% (TARGET_H) | +0.07% (TIME_STO) |
+| 2024-09-24 | -0.1% | -5.62% (TRAILING) | -5.62% (THESIS_F) | -1.85% (TRAILING) | -4.05% (THESIS_F) |
+| 2024-09-25 | +0.4% | -5.20% (THESIS_F) | -11.51% (THESIS_F) | -9.93% (TRAILING) | -8.61% (THESIS_F) |
+| 2024-09-26 | +0.4% | +5.19% (TARGET_H) | -11.37% (TIME_STO) | +0.20% (TRAILING) | +1.33% (THESIS_F) |
+| 2024-09-27 | -0.5% | -1.66% (TRAILING) | -2.95% (THESIS_F) | +1.12% (TRAILING) | +1.12% (THESIS_F) |
+| 2024-09-30 | -1.1% | -7.15% (THESIS_F) | -8.39% (THESIS_F) | +7.03% (TARGET_H) | +33.20% (TIME_STO) |
+| 2024-10-01 | +0.0% | -5.42% (THESIS_F) | -3.89% (THESIS_F) | -15.06% (THESIS_F) | -20.53% (THESIS_F) |
+| 2024-10-03 | -0.9% | -5.99% (TRAILING) | -5.99% (THESIS_F) | -4.29% (TRAILING) | +2.36% (THESIS_F) |
+| 2024-10-04 | -0.7% | -2.59% (THESIS_F) | -10.77% (THESIS_F) | +1.56% (TRAILING) | -5.86% (TIME_STO) |
+| 2024-10-07 | -1.8% | +8.81% (TARGET_H) | -15.64% (TIME_STO) | -8.15% (THESIS_F) | -7.38% (THESIS_F) |
+| 2024-10-08 | +0.6% | +7.93% (TARGET_H) | +26.52% (TIME_STO) | +4.63% (TARGET_H) | -29.61% (STOP_LOS) |
+| 2024-10-09 | -0.1% | +4.10% (TARGET_H) | +16.77% (TRAILING) | -1.40% (THESIS_F) | -1.56% (THESIS_F) |
+| 2024-10-10 | +0.5% | +5.27% (TARGET_H) | +0.46% (THESIS_F) | +4.53% (TARGET_H) | -17.38% (TIME_STO) |
+| 2024-10-11 | -1.0% | -6.44% (THESIS_F) | -11.26% (THESIS_F) | -2.11% (TRAILING) | +2.24% (THESIS_F) |
+| 2024-10-14 | +1.2% | +0.72% (TRAILING) | +2.85% (THESIS_F) | +7.13% (TARGET_H) | -31.98% (STOP_LOS) |
+| 2024-10-15 | -0.1% | +4.10% (TARGET_H) | -19.90% (TIME_STO) | +7.97% (TARGET_H) | +12.82% (TRAILING) |
+| 2024-10-16 | +0.2% | -31.20% (THESIS_F) | -31.20% (STOP_LOS) | +8.44% (TARGET_H) | -32.26% (STOP_LOS) |
+| 2024-10-17 | -1.2% | -1.57% (THESIS_F) | -3.08% (THESIS_F) | -0.84% (TRAILING) | +53.10% (TARGET_H) |
+| 2024-10-18 | +1.9% | -4.52% (THESIS_F) | -4.38% (THESIS_F) | +4.04% (TARGET_H) | -31.51% (STOP_LOS) |
+| 2024-10-21 | -0.9% | +0.22% (TRAILING) | -30.20% (STOP_LOS) | +4.41% (TARGET_H) | +42.52% (TARGET_H) |
+| 2024-10-22 | -1.4% | -28.85% (THESIS_F) | -26.33% (STOP_LOS) | +10.58% (TARGET_H) | +15.05% (TRAILING) |
+| 2024-10-23 | +0.1% | -18.02% (THESIS_F) | -28.86% (STOP_LOS) | +12.80% (TARGET_H) | +5.95% (TRAILING) |
+| 2024-10-24 | +0.6% | -5.30% (TRAILING) | -25.30% (STOP_LOS) | +8.46% (TARGET_H) | -2.53% (THESIS_F) |
+| 2024-10-25 | -1.3% | -11.08% (THESIS_F) | -14.13% (THESIS_F) | +10.63% (TARGET_H) | +52.90% (TARGET_H) |
+| 2024-10-28 | +0.6% | -0.27% (TRAILING) | -24.14% (TIME_STO) | +9.37% (TARGET_H) | +27.93% (TIME_STO) |
+| 2024-10-29 | +1.8% | +11.19% (TARGET_H) | +3.44% (TRAILING) | -7.82% (THESIS_F) | -11.86% (THESIS_F) |
+| 2024-10-30 | -0.7% | +10.62% (TARGET_H) | -32.09% (STOP_LOS) | -10.39% (THESIS_F) | -5.64% (THESIS_F) |
+| 2024-10-31 | -0.3% | -4.81% (THESIS_F) | -8.17% (THESIS_F) | +5.93% (TARGET_H) | -4.16% (TIME_STO) |

@@ -21,6 +21,7 @@ from typing import Optional
 
 from ..contracts import ExitReason, PositionContext
 from ..market.snapshot_accessor import SnapshotAccessor
+from ..utils.env import as_bool
 
 logger = logging.getLogger(__name__)
 
@@ -249,10 +250,14 @@ def build_scalper_exit_stack() -> CompositeExitPolicy:
     """Scalper: capture small consistent gains, don't give them back.
 
     Order (first to trigger wins):
-      1. ThesisFail   — cut dead entries early
-      2. TrailingStop — ride winners; trails peak by trail_pct once activated
-      3. PremiumTarget — emergency floor only (default 4%)
+      1. HardStop     — cap the loss so the stack is self-sufficient (no reliance
+                        on the tracker's legacy inline stop-losses). Disabled when
+                        EXIT_SCALPER_HARD_STOP_PCT >= 1.0.
+      2. ThesisFail   — cut dead entries early
+      3. TrailingStop — ride winners; trails peak by trail_pct once activated
+      4. PremiumTarget — emergency floor only (default 4%)
     """
+    hard_stop = float(os.getenv("EXIT_SCALPER_HARD_STOP_PCT", "0.25") or "0.25")
     target_pct = float(os.getenv("EXIT_PREMIUM_TARGET_PCT", "0.04") or "0.04")
     activation_pct = float(os.getenv("EXIT_TRAILING_ACTIVATION_PCT", "0.01") or "0.01")
     trail_pct = float(os.getenv("EXIT_TRAILING_TRAIL_PCT", "0.005") or "0.005")
@@ -260,6 +265,7 @@ def build_scalper_exit_stack() -> CompositeExitPolicy:
     thesis_min_mfe = float(os.getenv("EXIT_THESIS_FAIL_MIN_MFE", "0.002") or "0.002")
 
     return CompositeExitPolicy([
+        HardStopPolicy(hard_stop),
         ThesisFailPolicy(thesis_bars, thesis_min_mfe),
         TrailingStopPolicy(activation_pct, trail_pct),
         PremiumTargetPolicy(target_pct),
@@ -335,6 +341,64 @@ class RegimeAdaptiveExitPolicy(ExitPolicy):
         return f"adaptive[lottery={regimes}|scalper=rest]"
 
 
+class ExpiryAwareExitPolicy(ExitPolicy):
+    """Route to a tighter 'expiry' stack when near expiry, else the normal stack.
+
+    Near expiry, theta dominates and ATM premium decays non-linearly: a stalled
+    thesis bleeds far faster than on a fresh DTE. So when the snapshot is within
+    ``dte_threshold`` days of expiry we swap in a tighter stack (faster thesis
+    fail, tighter hard stop, earlier trail). Gated by EXIT_EXPIRY_OVERRIDE_ENABLED.
+
+    dte_threshold semantics:
+      0  → expiry day only (uses snap.is_expiry_day, robust when DTE is missing)
+      N  → snap.days_to_expiry <= N
+    When DTE is unavailable and threshold > 0, falls back to the normal stack.
+    """
+
+    def __init__(self, normal: ExitPolicy, expiry: ExitPolicy, dte_threshold: int = 0):
+        self._normal = normal
+        self._expiry = expiry
+        self._dte_threshold = dte_threshold
+
+    def _is_expiry(self, snap: SnapshotAccessor) -> bool:
+        try:
+            if self._dte_threshold <= 0:
+                return bool(snap.is_expiry_day)
+            dte = snap.days_to_expiry
+            return dte is not None and int(dte) <= self._dte_threshold
+        except Exception:
+            return False
+
+    def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
+        stack = self._expiry if self._is_expiry(snap) else self._normal
+        return stack.check(position, snap)
+
+    @property
+    def name(self) -> str:
+        return f"expiry_aware[dte<={self._dte_threshold}->{self._expiry.name}|else={self._normal.name}]"
+
+
+def build_expiry_exit_stack() -> CompositeExitPolicy:
+    """Tight stack for near-expiry positions — cut stalls fast, trail early.
+
+    Theta is brutal at low DTE, so this is deliberately tighter than scalper:
+    smaller hard stop, fewer thesis-fail bars, earlier/tighter trail.
+    """
+    hard_stop = float(os.getenv("EXIT_EXPIRY_HARD_STOP_PCT", "0.15") or "0.15")
+    thesis_bars = int(os.getenv("EXIT_EXPIRY_THESIS_FAIL_BARS", "3") or "3")
+    thesis_min_mfe = float(os.getenv("EXIT_EXPIRY_THESIS_FAIL_MIN_MFE", "0.02") or "0.02")
+    activation_pct = float(os.getenv("EXIT_EXPIRY_TRAIL_ACTIVATION_PCT", "0.03") or "0.03")
+    trail_pct = float(os.getenv("EXIT_EXPIRY_TRAIL_PCT", "0.015") or "0.015")
+    target_pct = float(os.getenv("EXIT_EXPIRY_PREMIUM_TARGET_PCT", "0.10") or "0.10")
+
+    return CompositeExitPolicy([
+        HardStopPolicy(hard_stop),
+        ThesisFailPolicy(thesis_bars, thesis_min_mfe),
+        TrailingStopPolicy(activation_pct, trail_pct),
+        PremiumTargetPolicy(target_pct),
+    ])
+
+
 def build_adaptive_exit_stack() -> RegimeAdaptiveExitPolicy:
     scalper = build_scalper_exit_stack()
     lottery = build_lottery_exit_stack()
@@ -343,19 +407,32 @@ def build_adaptive_exit_stack() -> RegimeAdaptiveExitPolicy:
     return stack
 
 
-def build_default_exit_stack() -> CompositeExitPolicy:
+def build_default_exit_stack() -> ExitPolicy:
     """Build the exit stack for the configured EXIT_STRATEGY_MODE.
 
     EXIT_STRATEGY_MODE=scalper   (default) — capture small gains, don't give back.
     EXIT_STRATEGY_MODE=lottery             — lose small often, win big rarely.
     EXIT_STRATEGY_MODE=adaptive            — lottery on BREAKOUT/TRENDING, scalper otherwise.
+
+    When EXIT_EXPIRY_OVERRIDE_ENABLED=1 the chosen stack is wrapped so that
+    near-expiry snapshots (within EXIT_EXPIRY_DTE_THRESHOLD days) route to a
+    tighter expiry stack — theta is brutal at low DTE.
     """
     mode = str(os.getenv("EXIT_STRATEGY_MODE", "scalper") or "scalper").strip().lower()
     if mode == "lottery":
-        stack = build_lottery_exit_stack()
+        stack: ExitPolicy = build_lottery_exit_stack()
     elif mode == "adaptive":
         stack = build_adaptive_exit_stack()
     else:
         stack = build_scalper_exit_stack()
+
+    if as_bool(os.getenv("EXIT_EXPIRY_OVERRIDE_ENABLED", "false")):
+        dte_threshold = int(os.getenv("EXIT_EXPIRY_DTE_THRESHOLD", "0") or "0")
+        stack = ExpiryAwareExitPolicy(
+            normal=stack,
+            expiry=build_expiry_exit_stack(),
+            dte_threshold=dte_threshold,
+        )
+
     logger.info("exit policy mode=%s stack: %s", mode, stack.name)
     return stack
