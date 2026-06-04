@@ -183,6 +183,22 @@ Compared deployed **E6** vs published **v2 `010pct`** (sim-only override
 - **Actions:** A8 re-tune v2 threshold on 2026 sim data (multi-day); A9 make the digest
   separation params model-aware (label + threshold sweep), not hardcoded.
 
+### S8 correction — ENTRY IS THE FIRST GATE (firing ≠ trading)
+The "v2 fires 99% at 0.50 → threshold doesn't transfer / re-tune to 0.85" worry was
+**over-stated**: fire-rate-in-isolation is not the operational metric — the downstream
+gates (regime/reentry/confidence) cut candidates to a book regardless. Full-cascade A/B
+(same day): **E6 took 10 trades (net +0.80%); v2@0.50 took 8** — the same set minus the
+bars v2 declined:
+- v2 declined **10:33** (E6's −3.0% entry) and instead entered 10:34 (−0.83%): **+2.2%**
+- v2 declined **14:19** (E6's −1.83% loser): **+1.8%**
+- v2 declined **13:28** (a +0.47% small winner): −0.5%
+- net **+0.80% → +4.33%** on the day.
+So v2's *few* declines landed on E6's **worst** entries → it improves entry quality at
+the margin **even at 0.50**, because the gates handle volume and v2's wider prob
+distribution makes its declines targeted. Re-tuning the threshold may not be necessary;
+the right metric is **taken-book quality**, not entry fire rate. Caveats: 1 day, ~10
+trades, dropped a small winner too, 10:34 gain partly timing-luck → multi-day still required.
+
 ---
 **Document status: COMPLETE for the 2026-06-04 run.** S0–S6 verified with root causes;
 final consolidated verdict + prioritized plan above. S7 + multi-day are tracked actions.
