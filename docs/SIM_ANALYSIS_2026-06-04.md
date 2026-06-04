@@ -127,9 +127,38 @@ Engine: deterministic, `direction_source=ml_entry_timing` (consensus mode = what
   unavoidable at 1-min, accept or go finer-grained) vs **multi-bar** (trailing genuinely
   too loose → tighten). Don't blindly tune the trail.
 
-## PENDING STEPS
-- **STEP 7 — Declined-prob capture** (from Step 1 caveat) to measure entry separation.
-- **Multi-day** re-run of S5 (regime) and S6 (exits) to confirm beyond one day.
+## STEP 7 — Declined-prob capture (defined; pending implementation)
+- **What:** record the entry model's probability on bars where it **declined**
+  (prob < 0.65), not just where it fired. Today `ml_entry.py:179` returns `None` below
+  threshold and discards the prob, so only the 119 fired probs are visible; the 232
+  declined probs are invisible.
+- **Why:** to measure **separation** — do fired bars actually have better forward moves
+  than declined bars? `verify_entry_label` needs *both* populations. Without declined
+  probs, separation is unmeasurable (we can't tell if the 34% fire rate is skill or an
+  arbitrary cutoff). It is the exact full-population check we used to expose the
+  direction model as degenerate.
+- **Where:** emit the computed prob on the no-vote bar's trace `model_diagnostics`
+  (`ml_entry.py` + the engine no-vote trace), so the digest sees prob on all ~351 bars.
+
+## Multi-day (pending)
+- Re-run S5 (regime) and S6 (exits) across several days to confirm beyond one day.
+
+---
+
+## Using THIS harness to validate a NEW entry model (replacement playbook)
+The whole point of the trace tooling: when the entry model is swapped, re-run the
+ops-sim and the digest tells you immediately whether the new model is better.
+1. Back up the current bundle; drop the new `entry_only_model.joblib` in
+   `ml_pipeline_2/artifacts/entry_only/published/` (keep a `.bak`).
+2. Ensure it's in the running containers (rebuild/redeploy), re-run ops-sim for the day.
+3. Read the digest: **fire rate** (vs the old 34%), entry-prob distribution, and —
+   once S7 lands — the **separation** (fired-vs-declined move rate). Compare per-bar
+   cards for any behaviour change. Direction model is unchanged (still the known weak
+   link), so expect direction to stay flat — judge the entry model in isolation.
+
+---
+**Document status: COMPLETE for the 2026-06-04 run.** S0–S6 verified with root causes;
+final consolidated verdict + prioritized plan above. S7 + multi-day are tracked actions.
 
 ---
 
