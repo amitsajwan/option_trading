@@ -112,6 +112,21 @@ Engine: deterministic, `direction_source=ml_entry_timing` (consensus mode = what
   (b) review why trailing/stop don't fire within the 5-min window (params vs the model
   re-eval horizon). See `strategy_app/position/` exit policy + tracker.
 
+### S6 root-cause (CE 54900 +2.08%→−0.36% giveback) — investigated
+- **Mechanism:** `tracker.update` ([tracker.py:86-96](../strategy_app/position/tracker.py#L86))
+  computes `current_premium` from the bar **close**, sets `pnl_pct`, then
+  `mfe_pct = max(mfe_pct, pnl_pct)`. So MFE is **close-based**, and the exit stack is
+  checked once per 1-min bar. Trailing locks at `mfe − 0.5%` = +1.58% and fires when a
+  *later* bar's pnl drops below that ([exit_policy.py:77-82](../strategy_app/position/exit_policy.py#L77)).
+- **What happened:** premium closed **+2.08%** one minute and **−0.36%** the next — a
+  ~2.4% round-trip **in a single bar**. Trailing fired on the −0.36% bar (one bar late),
+  jumping past the +1.58% lock. So trailing is *not broken* — it executed, but bar-close
+  granularity means an intra-minute round-trip exits at the next close.
+- **Recorded as** generic `exit_stack`, hiding that it was `TRAILING_STOP` → A6.
+- **Refined action (A7):** classify givebacks as **1-bar** (granularity-limited;
+  unavoidable at 1-min, accept or go finer-grained) vs **multi-bar** (trailing genuinely
+  too loose → tighten). Don't blindly tune the trail.
+
 ## PENDING STEPS
 - **STEP 7 — Declined-prob capture** (from Step 1 caveat) to measure entry separation.
 - **Multi-day** re-run of S5 (regime) and S6 (exits) to confirm beyond one day.
