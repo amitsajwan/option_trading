@@ -199,6 +199,27 @@ distribution makes its declines targeted. Re-tuning the threshold may not be nec
 the right metric is **taken-book quality**, not entry fire rate. Caveats: 1 day, ~10
 trades, dropped a small winner too, 10:34 gain partly timing-luck → multi-day still required.
 
+### S8 multi-day A/B (E6 vs v2 010pct @0.50, 6 days) — A8
+| Day | E6 trades/net | v2 trades/net |
+|---|---|---|
+| 05-26 | 1 / **−12.14%** | **0 / 0.00%** (sat out) |
+| 05-27 | 4 / +0.85% | 1 / +0.33% |
+| 06-01 | 2 / +0.74% | 1 / −1.49% |
+| 06-02 | 5 / −6.83% | 5 / −6.83% (identical) |
+| 06-03 | 5 / +38.31% | 5 / +35.29% |
+| 06-04 | 10 / +0.80% | 8 / +4.32% |
+| **Σ** | **+21.73%** | **+31.62%** |
+
+- **v2 wins (+9.9% over 6 days), but the edge is TAIL-RISK AVOIDANCE, not alpha:** its
+  whole relative advantage is sitting out the −12.14% day (05-26). Ex the +38% outlier
+  (06-03): E6 **−16.6%** vs v2 **−3.7%** — almost all the avoided −12% day.
+- On high-activity days (06-02, 06-03) **v2 ≈ E6** (same/near trades; gates dominate,
+  v2 doesn't prune). v2 differs only on low-activity days.
+- **Caveats:** 6 days, 0–10 trades/day, two outlier days (−12% / +38%) dominate. Not
+  statistically robust; 06-03 +38% & 06-02 exact tie warrant a sanity check (expiry/gap
+  or data artifact). Directionally: v2 ≥ E6, clearly better on tail risk → reasonable
+  cut-over candidate at 0.50, pending more days.
+
 ---
 **Document status: COMPLETE for the 2026-06-04 run.** S0–S6 verified with root causes;
 final consolidated verdict + prioritized plan above. S7 + multi-day are tracked actions.
