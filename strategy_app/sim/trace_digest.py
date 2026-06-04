@@ -269,11 +269,32 @@ def analyze_traces(
                 if m is not None:
                     margins.append(m)
                     break
+    # Direction decision card — read the consolidated trace["direction"] block so
+    # "why this side / why no direction veto" is answerable from the digest alone.
+    def _dir(t: dict) -> dict:
+        d = t.get("direction")
+        return d if isinstance(d, dict) else {}
+
+    ce_probs = [_num(_dir(t).get("ml_ce_prob")) for t in taken]
+    ce_probs = [p for p in ce_probs if p is not None]
+    bulls = [_num((_dir(t).get("evidence") or {}).get("bull_score")) for t in taken]
+    bears = [_num((_dir(t).get("evidence") or {}).get("bear_score")) for t in taken]
+    graded = sum(1 for t in taken if _dir(t).get("grade_evaluated"))
+    modes = Counter(str(_dir(t).get("mode")) for t in taken if _dir(t))
     direction = {
         "taken": len(taken),
         "ce_pe": dict(dir_counter),
         "margin": _dist(margins),
         "direction_source": meta["direction_source"],
+        "mode": dict(modes),
+        "ml_ce_prob": _dist(ce_probs),
+        "evidence_bull": _dist([b for b in bulls if b is not None]),
+        "evidence_bear": _dist([b for b in bears if b is not None]),
+        # The key gap-exposer: how many taken trades were actually run through the
+        # GOOD/OK/BAD grader. 0 => the grader was bypassed (consensus mode) and the
+        # thin-margin/chop/iv-skew DIRECTION vetoes never evaluated these trades.
+        "grade_evaluated_count": graded,
+        "grade_coverage": (round(graded / len(taken), 3) if taken else None),
     }
 
     # ── gate / veto histogram ──
@@ -304,11 +325,18 @@ def analyze_traces(
     per_trade = []
     for t in taken:
         cand = _entry_candidate(t)
+        dd = _dir(t)
+        ev = dd.get("evidence") or {}
         per_trade.append({
             "time": t.get("timestamp"),
             "direction": (cand or {}).get("direction"),
             "entry_prob": _entry_prob(cand),
             "direction_source": t.get("direction_source"),
+            "ml_ce_prob": _num(dd.get("ml_ce_prob")),
+            "bull": _num(ev.get("bull_score")),
+            "bear": _num(ev.get("bear_score")),
+            "grade": dd.get("grade"),
+            "grade_evaluated": dd.get("grade_evaluated"),
             "regime": (t.get("regime_context") or {}).get("regime") if isinstance(t.get("regime_context"), dict) else None,
             "position_in_range": _ms_field(t, "position_in_range", "label"),
             "range_position": _ms_field(t, "position_in_range", "range_position"),
@@ -380,8 +408,12 @@ def render_markdown(report: dict[str, Any]) -> str:
 
     d = report["direction"]
     L.append("## Direction health")
-    L.append(f"- taken: {d['taken']} | CE/PE: {d['ce_pe']} | margin: {d['margin']}")
-    L.append(f"- direction_source: {d['direction_source'] or 'n/a'}")
+    L.append(f"- taken: {d['taken']} | CE/PE: {d['ce_pe']} | mode: {d.get('mode')}")
+    L.append(f"- direction_source: {d['direction_source'] or 'n/a'} | ml_ce_prob: {d.get('ml_ce_prob')} | margin: {d['margin']}")
+    L.append(f"- evidence bull: {d.get('evidence_bull')} | bear: {d.get('evidence_bear')}")
+    gc = d.get("grade_coverage")
+    L.append(f"- grade coverage: {d.get('grade_evaluated_count')}/{d['taken']} graded "
+             + (f"-> WARN: GOOD/OK/BAD grader BYPASSED (direction vetoes inactive in this mode)" if gc == 0 else ""))
     L.append("")
 
     g = report["gates"]
@@ -403,10 +435,67 @@ def render_markdown(report: dict[str, Any]) -> str:
         prob = pt["entry_prob"]
         prob_s = f"{prob:.3f}" if isinstance(prob, float) else "?"
         L.append(f"{i}. {pt.get('time')} **{pt.get('direction')}** prob={prob_s} "
-                 f"[{pt.get('regime')}] src={pt.get('direction_source')} | "
+                 f"[{pt.get('regime')}] src={pt.get('direction_source')} "
+                 f"ce_prob={pt.get('ml_ce_prob')} bull={pt.get('bull')} bear={pt.get('bear')} "
+                 f"grade={pt.get('grade')}(eval={pt.get('grade_evaluated')}) | "
                  f"range={pt.get('position_in_range')}({pt.get('range_position')}) "
                  f"breakout={pt.get('breakout')} swing={pt.get('swing')} mom={pt.get('momentum')}")
     return "\n".join(L)
 
 
-__all__ = ["analyze_traces", "render_markdown", "verify_entry_label"]
+def render_decision_card(trace: dict) -> str:
+    """Render ONE decision completely — 'analysing an entry pass/fail, at one go'.
+
+    Linearises a single bar's trace into a self-contained card: the entry-model
+    prob, the full direction decision (mode/prob/evidence/grade + whether the grader
+    even ran), the market-structure read, the ordered gate cascade with pass/veto and
+    the values each gate saw, and the final outcome/blocker — so no engine grep or
+    cross-referencing is needed to explain why this entry was taken or skipped.
+    """
+    cand = _entry_candidate(trace)
+    d = trace.get("direction") if isinstance(trace.get("direction"), dict) else {}
+    ev = d.get("evidence") or {}
+    ms = trace.get("market_structure") or {}
+    reg = trace.get("regime_context") or {}
+
+    def _ms(*p):
+        n = ms
+        for k in p:
+            n = n.get(k) if isinstance(n, dict) else None
+        return n
+
+    outcome = str(trace.get("final_outcome") or "?")
+    blocker = trace.get("primary_blocker_gate")
+    L: list[str] = []
+    L.append(f"=== {trace.get('timestamp')}  OUTCOME={outcome.upper()}"
+             + (f"  BLOCKER={blocker}" if blocker else "") + " ===")
+    prob = _entry_prob(cand)
+    L.append(f"  ENTRY    : prob={prob:.3f}" if isinstance(prob, float) else "  ENTRY    : prob=?")
+    L.append(f"  DIRECTION: mode={d.get('mode')} chosen={d.get('chosen') or (cand or {}).get('direction')} "
+             f"src={d.get('source')} ml_ce_prob={d.get('ml_ce_prob')} margin={d.get('margin')}")
+    L.append(f"             evidence bull={ev.get('bull_score')} bear={ev.get('bear_score')}  "
+             f"grade={d.get('grade')} tier={d.get('tier')} "
+             f"grade_evaluated={d.get('grade_evaluated')}"
+             + ("  <- grader BYPASSED (no thin-margin/chop/iv-skew veto)" if d.get('grade_evaluated') is False else ""))
+    L.append(f"  REGIME   : {reg.get('regime')} (conf {reg.get('confidence')}) {reg.get('reason') or ''}")
+    L.append(f"  STRUCTURE: range={_ms('position_in_range','label')}({_ms('position_in_range','range_position')}) "
+             f"breakout={_ms('breakout_state','label')} swing={_ms('swing_pivots','structure')} "
+             f"mom={_ms('momentum_alignment','label')}")
+    # Gate cascade: flow gates + the entry candidate's ordered gates.
+    rows: list = list(trace.get("flow_gates") or [])
+    if isinstance(cand, dict):
+        rows += list(cand.get("ordered_gates") or [])
+    L.append("  GATES    :")
+    for g in rows:
+        if not isinstance(g, dict):
+            continue
+        status = str(g.get("status") or "?").upper()
+        mark = "x" if status == "BLOCKED" else "."
+        metrics = g.get("metrics") or {}
+        mstr = " " + " ".join(f"{k}={v}" for k, v in metrics.items()) if metrics else ""
+        rc = f" reason={g.get('reason_code')}" if g.get("reason_code") else ""
+        L.append(f"    [{mark}] {g.get('gate_id')} ({g.get('gate_group')}) {status}{rc}{mstr}")
+    return "\n".join(L)
+
+
+__all__ = ["analyze_traces", "render_markdown", "render_decision_card", "verify_entry_label"]

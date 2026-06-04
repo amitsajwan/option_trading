@@ -513,6 +513,12 @@ def _attach_trace_analysis(
     try:
         (run_dir / "trace_report.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
         (run_dir / "trace_report.md").write_text(markdown, encoding="utf-8")
+        # SAME FORMAT AS LIVE: one full decision-trace per line, identical shape to the
+        # live sink (.run/strategy_app/decision_traces.jsonl). So analyze_sim_trace.py
+        # and the per-decision card run identically on sim and live trace files.
+        with (run_dir / "decision_traces.jsonl").open("w", encoding="utf-8") as fh:
+            for tr in decision_traces:
+                fh.write(json.dumps(tr, default=str) + "\n")
     except Exception:
         pass  # report attachment to the job is the primary channel
 

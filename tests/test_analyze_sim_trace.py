@@ -1,19 +1,34 @@
 """Tests for the decision-trace analyzer + entry-label verifier."""
 from __future__ import annotations
 
-from ops.gcp.analyze_sim_trace import analyze_traces, verify_entry_label
+from ops.gcp.analyze_sim_trace import analyze_traces, render_decision_card, verify_entry_label
 
 
-def _entry_trace(ts, prob, *, outcome="hold", direction="CE", selected=False, ms=None):
+def _entry_trace(ts, prob, *, outcome="hold", direction="CE", selected=False, ms=None,
+                 grade_evaluated=False, ce_prob=0.58, bull=0.30, bear=0.40):
     return {
         "timestamp": ts,
         "final_outcome": outcome,
-        "direction_source": "consensus(direction_ml)",
+        "direction_source": "ml_entry_timing",
+        "regime_context": {"regime": "SIDEWAYS", "confidence": 0.62, "reason": "returns_mixed"},
+        "direction": {
+            "mode": "consensus", "chosen": direction, "source": "ml_entry_timing",
+            "ml_ce_prob": ce_prob, "margin": None,
+            "evidence": {"bull_score": bull, "bear_score": bear},
+            "grade": None, "tier": None, "grade_evaluated": grade_evaluated,
+        },
         "candidates": [{
             "strategy_name": "ML_ENTRY", "direction": direction, "selected": selected,
             "metrics": {"entry_prob": prob}, "terminal_status": "selected" if selected else "blocked",
             "terminal_reason_code": None if selected else "below_threshold",
+            "ordered_gates": [
+                {"gate_id": "regime_classification", "gate_group": "regime", "status": "pass",
+                 "metrics": {"regime_confidence": 0.62}},
+                {"gate_id": "direction_evidence", "gate_group": "evidence", "status": "pass",
+                 "metrics": {"bull_score": bull, "bear_score": bear}},
+            ],
         }],
+        "flow_gates": [],
         "market_structure": ms or {"position_in_range": {"label": "mid"}},
     }
 
@@ -78,3 +93,29 @@ def test_analyze_traces_runs_label_check_when_snapshots_given():
     snaps = _series(54000, 7.0)
     rep = analyze_traces(traces, snapshots=snaps, entry_horizon_minutes=10, entry_min_points=50.0)
     assert rep["entry_label_check"]["fired"]["precision"] == 1.0
+
+
+def test_direction_block_surfaced_in_report():
+    # 2 taken CE trades, grader NOT evaluated (consensus mode) -> coverage 0.
+    traces = [
+        _entry_trace("2026-06-04T10:46:00", 0.92, outcome="entry_taken", selected=True, grade_evaluated=False),
+        _entry_trace("2026-06-04T14:01:00", 0.93, outcome="entry_taken", selected=True, grade_evaluated=False),
+    ]
+    rep = analyze_traces(traces)
+    d = rep["direction"]
+    assert d["mode"] == {"consensus": 2}
+    assert d["ml_ce_prob"]["n"] == 2
+    assert d["grade_evaluated_count"] == 0
+    assert d["grade_coverage"] == 0.0
+    assert d["evidence_bull"]["n"] == 2
+
+
+def test_decision_card_shows_full_cascade_and_grader_bypass():
+    t = _entry_trace("2026-06-04T10:46:00", 0.92, outcome="entry_taken", selected=True, grade_evaluated=False)
+    card = render_decision_card(t)
+    assert "OUTCOME=ENTRY_TAKEN" in card
+    assert "ENTRY    : prob=0.920" in card
+    assert "DIRECTION:" in card and "ml_ce_prob=0.58" in card
+    assert "grader BYPASSED" in card          # the consensus-mode gap is surfaced inline
+    assert "regime_classification" in card and "direction_evidence" in card  # gate cascade
+    assert "STRUCTURE:" in card

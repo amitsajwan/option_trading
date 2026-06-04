@@ -2636,6 +2636,8 @@ class DeterministicRuleEngine(StrategyEngine):
         # consensus/direction_ml stage-2). Surfacing it on the trace top-level is the
         # exact signal that lets sim==live fidelity be verified at a glance.
         direction_source: str | None = None
+        dir_vote_rs: dict[str, Any] = {}
+        dir_vote_dir: Optional[str] = None
         for vote in votes:
             if vote.signal_type != SignalType.ENTRY:
                 continue
@@ -2643,6 +2645,10 @@ class DeterministicRuleEngine(StrategyEngine):
             ds = str(rs.get("direction_source") or "").strip()
             if ds and direction_source is None:
                 direction_source = ds
+            if not dir_vote_rs:
+                dir_vote_rs = rs
+                dir_vote_dir = (vote.direction.value if getattr(vote, "direction", None) is not None
+                                and hasattr(vote.direction, "value") else None)
             if signal is not None:
                 ep = str(rs.get("_execution_path") or "").strip()
                 if ep and execution_path is None:
@@ -2664,6 +2670,33 @@ class DeterministicRuleEngine(StrategyEngine):
             trace["execution_path"] = execution_path
         if direction_source is not None:
             trace["direction_source"] = direction_source
+        # Consolidated DIRECTION decision card — so "why this side / why no direction
+        # veto" is answerable from the trace alone (no engine grep). Captures the
+        # mode, the direction-model prob, the de-correlated margin, the bull/bear
+        # evidence the veto reads, and whether the GOOD/OK/BAD grader actually ran
+        # (it no-ops in consensus mode → grade_evaluated=False exposes that gap).
+        _ev = getattr(regime_signal, "evidence", None) or {}
+        trace["direction"] = {
+            "mode": os.getenv("ML_ENTRY_DIRECTION_MODE", "composite"),
+            "chosen": dir_vote_dir,
+            "source": direction_source,
+            "ml_ce_prob": _safe_float(dir_vote_rs.get("ml_direction_ce_prob")),
+            "margin": _safe_float(
+                dir_vote_rs.get("entry_dir_margin")
+                if dir_vote_rs.get("entry_dir_margin") is not None
+                else dir_vote_rs.get("direction_consensus_margin")
+            ),
+            "evidence": {
+                "bull_score": _safe_float(_ev.get("bull_score")),
+                "bear_score": _safe_float(_ev.get("bear_score")),
+            },
+            "grade": dir_vote_rs.get("entry_grade"),
+            "tier": dir_vote_rs.get("tier"),
+            # False ⇒ the entry-quality grader did NOT run for this decision
+            # (e.g. consensus mode emits ml_direction_* not entry_dir_*), so the
+            # thin-margin / chop / iv-skew direction vetoes were bypassed.
+            "grade_evaluated": bool(dir_vote_rs.get("entry_grade")),
+        }
         # Market-structure context (bottoms / highs / breakouts lens) so the clean
         # record answers "WHERE in the tape did we decide?" without model introspection.
         trace["market_structure"] = self._structure.snapshot(snap)

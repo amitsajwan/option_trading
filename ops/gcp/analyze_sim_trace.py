@@ -28,11 +28,12 @@ if str(_REPO) not in sys.path:
 
 from strategy_app.sim.trace_digest import (  # noqa: E402
     analyze_traces,
+    render_decision_card,
     render_markdown,
     verify_entry_label,
 )
 
-__all__ = ["analyze_traces", "render_markdown", "verify_entry_label"]
+__all__ = ["analyze_traces", "render_markdown", "render_decision_card", "verify_entry_label"]
 
 
 def _read_jsonl(path: str) -> list[dict]:
@@ -61,6 +62,9 @@ def main() -> int:
     ap.add_argument("--entry-min-points", type=float, default=50.0, help="entry-label move threshold in points (deployed model=50)")
     ap.add_argument("--json", dest="json_out", default=None, help="write full report JSON here")
     ap.add_argument("--md", dest="md_out", default=None, help="write markdown digest here")
+    ap.add_argument("--cards", default=None, choices=["taken", "blocked", "all"],
+                    help="also print a complete per-decision card for each matching bar")
+    ap.add_argument("--card-time", default=None, help="print the full card for the bar at this timestamp (substring match)")
     args = ap.parse_args()
 
     traces = _read_jsonl(args.traces)
@@ -84,6 +88,24 @@ def main() -> int:
         with open(args.md_out, "w", encoding="utf-8") as fh:
             fh.write(md)
     print(md)
+
+    # Per-decision cards — "analysing an entry pass/fail, everything at one go".
+    if args.card_time:
+        for t in traces:
+            if args.card_time in str(t.get("timestamp") or ""):
+                print("\n" + render_decision_card(t))
+    elif args.cards:
+        def _match(t: dict) -> bool:
+            oc = str(t.get("final_outcome") or "")
+            if args.cards == "all":
+                return True
+            if args.cards == "taken":
+                return oc == "entry_taken"
+            return oc not in ("entry_taken", "hold")  # blocked
+        print("\n## Per-decision cards")
+        for t in traces:
+            if _match(t):
+                print("\n" + render_decision_card(t))
     return 0
 
 
