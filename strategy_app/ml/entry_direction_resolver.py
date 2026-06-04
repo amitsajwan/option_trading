@@ -1,11 +1,13 @@
-"""CE/PE side selection for ML entry (no direction-ML).
+"""CE/PE side selection for ML entry.
 
-Combines snapshot momentum/structure with optional live depth (Redis side-channel).
-Direction ML is intentionally not used — scores are auditable per source.
+Combines snapshot momentum/structure with optional live depth (Redis side-channel),
+and — when ENTRY_DIR_W_ML>0 — a minor, confidence-weighted tilt from the direction-only
+ML model (DIRECTION_ML_MODEL_PATH). Scores remain auditable per source.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -14,6 +16,33 @@ from ..contracts import Direction
 from ..market.depth_context import DepthContext, StrikeDepth
 from ..market.snapshot_accessor import SnapshotAccessor
 from ..runtime.eval_context import get_depth_context
+
+logger = logging.getLogger(__name__)
+
+# Cached direction-ML bundle (load once per path; None = load failed, don't retry).
+_DIR_ML_BUNDLE_CACHE: dict[str, Any] = {}
+
+
+def _ml_direction_ce_prob(snap: SnapshotAccessor) -> Optional[float]:
+    """P(CE) from the direction-only ML model at DIRECTION_ML_MODEL_PATH, or None."""
+    path = os.getenv("DIRECTION_ML_MODEL_PATH", "").strip()
+    if not path:
+        return None
+    if path not in _DIR_ML_BUNDLE_CACHE:
+        try:
+            from .bundle_inference import load_joblib_bundle
+            _DIR_ML_BUNDLE_CACHE[path] = load_joblib_bundle(path, expected_kind="direction_only_bundle")
+        except Exception:
+            logger.exception("entry_dir: failed to load direction ML bundle %s", path)
+            _DIR_ML_BUNDLE_CACHE[path] = None
+    bundle = _DIR_ML_BUNDLE_CACHE[path]
+    if not isinstance(bundle, dict):
+        return None
+    try:
+        from .bundle_inference import predict_positive_class_prob
+        return predict_positive_class_prob(bundle, snap)
+    except Exception:
+        return None
 
 
 def _env_float(name: str, default: float) -> float:
@@ -176,6 +205,7 @@ def resolve_entry_direction_composite(
     w_or_trap = _env_float("ENTRY_DIR_W_OR_TRAP", 0.9)
     w_pcr = _env_float("ENTRY_DIR_W_PCR", 0.4)
     w_depth = _env_float("ENTRY_DIR_W_DEPTH", 1.1)
+    w_dir_ml = _env_float("ENTRY_DIR_W_ML", 0.20)
 
     ce_score = 0.0
     pe_score = 0.0
@@ -282,6 +312,24 @@ def resolve_entry_direction_composite(
             ce_score += depth_ce
             pe_score += depth_pe
             sources.update(depth_tags)
+
+    # ── Direction-ML tilt (confidence-weighted, minor) ──────────────────────────
+    # Include the direction-only ML model as a small signal: contribution =
+    # ENTRY_DIR_W_ML * |2*(ce_prob-0.5)| on the signed side. A flat/degenerate model
+    # (ce_prob≈0.5) adds ~0; a confident call adds up to the weight (default 0.20 —
+    # below every other signal, so it nudges, never dominates). Set ENTRY_DIR_W_ML=0
+    # to disable. This is the "soft overlay" usage of the thin ML direction edge.
+    if w_dir_ml > 0:
+        ce_prob = _ml_direction_ce_prob(snap)
+        if ce_prob is not None:
+            signed = 2.0 * (float(ce_prob) - 0.5)  # [-1, 1]
+            contrib = w_dir_ml * abs(signed)
+            if signed > 0:
+                ce_score += contrib
+                sources["dir_ml:CE"] = round(contrib, 4)
+            elif signed < 0:
+                pe_score += contrib
+                sources["dir_ml:PE"] = round(contrib, 4)
 
     margin = abs(ce_score - pe_score)
     if ce_score <= 0 and pe_score <= 0:
