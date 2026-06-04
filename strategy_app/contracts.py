@@ -83,6 +83,9 @@ class PositionContext:
     entry_strategy: str = ""
     entry_regime: str = ""
     entry_reason: str = ""
+    # Live/paper tier carried from the entry signal's grade decision, so the exit
+    # signal can re-publish it and execution can gate real orders on tier=="live".
+    tier: str = ""
     decision_metrics: dict[str, Any] = field(default_factory=dict)
     engine_mode: Optional[str] = None
     decision_mode: Optional[str] = None

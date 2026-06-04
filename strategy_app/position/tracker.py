@@ -464,6 +464,10 @@ class PositionTracker:
                 f"mae={position.mae_pct:.2%} stop={position.stop_price or 0.0:.2f}"
             ),
             decision_metrics={"exit_policy_triggered": exit_trigger} if exit_trigger else {},
+            # Carry the position's live/paper tier so execution can gate the exit
+            # the same way it gated the entry (a live position must always be
+            # exitable; a paper position's exit must never hit the real broker).
+            raw_signals={"tier": str(getattr(position, "tier", "") or "")},
         )
         self._position = None
         logger.info("position closed id=%s reason=%s pnl=%.2f%%", signal.position_id, reason.value, position.pnl_pct * 100.0)

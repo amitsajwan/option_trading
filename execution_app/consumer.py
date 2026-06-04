@@ -35,6 +35,17 @@ _ORDER_FILL_TIMEOUT = float(os.getenv("ORDER_FILL_TIMEOUT_SEC", "30") or "30")
 _ORDER_POLL_INTERVAL = float(os.getenv("ORDER_POLL_INTERVAL_SEC", "1") or "1")
 
 
+def _require_live_tier() -> bool:
+    """When set (default ON), only signals tagged tier=='live' reach the broker.
+
+    This is the paper/live safety gate: the strategy emits BOTH paper- and live-tier
+    signals to the same topic, but only the live book should ever place real orders.
+    Fail-closed — any signal without an explicit tier=='live' is treated as paper and
+    skipped. Set EXECUTION_REQUIRE_LIVE_TIER=0 to execute every signal (full-live).
+    """
+    return str(os.getenv("EXECUTION_REQUIRE_LIVE_TIER", "1") or "1").strip().lower() in {"1", "true", "yes"}
+
+
 class ExecutionConsumer:
     """Subscribe to trade signals; route to broker; emit fill events."""
 
@@ -68,9 +79,12 @@ class ExecutionConsumer:
             logger.warning("execution consumer: invalid JSON message")
             return
 
-        signal_body = parse_trade_signal_event(payload)
-        if signal_body is None:
+        event = parse_trade_signal_event(payload)
+        if event is None:
             return
+        # parse_trade_signal_event returns the full event wrapper; the signal fields
+        # live under the "signal" body. Fall back to the wrapper itself for robustness.
+        signal_body = event.get("signal") if isinstance(event.get("signal"), dict) else event
 
         signal_type = str(signal_body.get("signal_type") or "").upper()
         signal_id = str(signal_body.get("signal_id") or "")
@@ -78,11 +92,26 @@ class ExecutionConsumer:
         strike = signal_body.get("strike")
         position_id = signal_body.get("position_id")
         entry_premium = signal_body.get("entry_premium")
+        tier = str(signal_body.get("tier") or "").strip().lower()
 
         logger.info(
-            "execution consumer: signal type=%s id=%s dir=%s strike=%s pos=%s",
-            signal_type, signal_id, direction, strike, position_id,
+            "execution consumer: signal type=%s id=%s dir=%s strike=%s pos=%s tier=%s",
+            signal_type, signal_id, direction, strike, position_id, tier or "?",
         )
+
+        # ── Paper/live safety gate ────────────────────────────────────────────
+        # Only tier=="live" signals may reach the real broker. Fail-closed: a
+        # missing/paper tier is skipped for BOTH entries and exits — skipping a
+        # paper entry avoids an unwanted real order, and skipping a paper exit
+        # avoids a "sell-to-close" on an option the broker never bought (a naked
+        # short). A live position's exit carries tier=="live" (propagated from the
+        # position by the tracker), so it is never stranded.
+        if _require_live_tier() and tier != "live":
+            logger.info(
+                "execution consumer: SKIP non-live signal (gate) type=%s id=%s tier=%s",
+                signal_type, signal_id, tier or "(none)",
+            )
+            return
 
         fill: Optional[FillEvent] = None
 
@@ -165,6 +194,14 @@ def _dict_to_signal_stub(d: dict):
     """Minimal duck-typed stub so adapter methods can read signal fields."""
     from datetime import date, datetime
 
+    def _parse_date(v) -> Optional[date]:
+        if not v:
+            return None
+        try:
+            return datetime.fromisoformat(str(v)).date() if "T" in str(v) else date.fromisoformat(str(v))
+        except Exception:
+            return None
+
     class _Stub:
         signal_id = str(d.get("signal_id") or "")
         direction = d.get("direction")
@@ -173,14 +210,6 @@ def _dict_to_signal_stub(d: dict):
         max_lots = int(d.get("max_lots") or 1)
         expiry = _parse_date(d.get("expiry"))
         signal_type = d.get("signal_type")
-
-    def _parse_date(v) -> Optional[date]:
-        if not v:
-            return None
-        try:
-            return datetime.fromisoformat(str(v)).date() if "T" in str(v) else date.fromisoformat(str(v))
-        except Exception:
-            return None
 
     return _Stub()
 

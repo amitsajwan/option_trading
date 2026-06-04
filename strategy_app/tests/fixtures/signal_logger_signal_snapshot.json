@@ -1,5 +1,7 @@
 {
   "event": "SIGNAL",
+  "tier": null,
+  "entry_grade": null,
   "signal_id": "sig-hold-1",
   "timestamp": "2026-03-07T15:01:00+05:30",
   "snapshot_id": "snap-101",

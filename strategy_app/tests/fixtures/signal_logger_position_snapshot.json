@@ -40,6 +40,7 @@
   "oi_trail_stop_price": null,
   "entry_strategy": "",
   "entry_regime": "",
+  "tier": "",
   "entry_reason": "entry",
   "decision_metrics": {
     "confidence": 0.74
