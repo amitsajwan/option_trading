@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import os
+
 # Market
-BANKNIFTY_LOT_SIZE = 15
+# Env-configurable so live trading can use the current exchange lot size while
+# historical replays keep their era-appropriate value (mirrors snapshot_app's
+# market_snapshot.py, which already reads this same env var). NSE lot size for
+# BANKNIFTY is 30 as of 2026; default stays 15 to preserve existing replays/tests.
+BANKNIFTY_LOT_SIZE = int(os.getenv("BANKNIFTY_LOT_SIZE") or "15")
 
 # Session timing (minutes since midnight)
 SOFT_CLOSE_MINUTE = 15 * 60          # 15:00 IST
