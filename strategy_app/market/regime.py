@@ -251,11 +251,23 @@ class RegimeClassifier:
         bear_score = 0.0
         reasons: list[str] = []
 
+        # Optional bonus for a clean multi-timeframe alignment (#1 trend-aware regime).
+        # Aligned 5m/15m/30m returns are strong intraday-trend evidence, but on its own
+        # an aligned side only scores 1.4 — below the 2.0 TRENDING threshold — and a
+        # low-volume morning then DEMOTES it further via the weak-vol penalty below.
+        # The result: real grind-trends get labelled SIDEWAYS, which routes the adaptive
+        # exit to the scalper (3% target) instead of the runner stack. This bonus (default
+        # 0.0 = legacy behaviour) lets an aligned trend clear the threshold; when active it
+        # also exempts the aligned side from the weak-vol demotion. Recommended: 0.8.
+        aligned = aligned_up or aligned_down
+        aligned_trend_bonus = env_float("REGIME_TREND_ALIGNED_BONUS", 0.0) or 0.0
+        protect_from_weak_vol = aligned and aligned_trend_bonus > 0
+
         if aligned_up:
-            bull_score += 1.4
+            bull_score += 1.4 + aligned_trend_bonus
             reasons.append("returns_aligned_up")
         elif aligned_down:
-            bear_score += 1.4
+            bear_score += 1.4 + aligned_trend_bonus
             reasons.append("returns_aligned_down")
         else:
             reasons.append("returns_mixed")
@@ -266,7 +278,7 @@ class RegimeClassifier:
             elif bear_score > bull_score:
                 bear_score += 0.5
             reasons.append(f"strong_vol={vol_ratio:.2f}")
-        elif vol_ratio is not None and vol_ratio < 1.0:
+        elif vol_ratio is not None and vol_ratio < 1.0 and not protect_from_weak_vol:
             bull_score *= 0.8
             bear_score *= 0.8
             reasons.append(f"weak_vol={vol_ratio:.2f}")
@@ -307,7 +319,10 @@ class RegimeClassifier:
         evidence["candle_overlap"] = candle_overlap
         evidence["opening_range_width_pct"] = orw_pct
 
-        trend_threshold = 2.0
+        # Configurable TRENDING score threshold (#1). Default 2.0 preserves legacy
+        # behaviour; lowering it (e.g. 1.3) is an alternative to REGIME_TREND_ALIGNED_BONUS
+        # for promoting aligned-but-weak-volume trends out of the SIDEWAYS bucket.
+        trend_threshold = env_float("REGIME_TREND_SCORE_MIN", 2.0) or 2.0
 
         # BREAKOUT takes priority over TRENDING when orh/orl is freshly broken
         # with strong volume and a wide-enough opening range.
