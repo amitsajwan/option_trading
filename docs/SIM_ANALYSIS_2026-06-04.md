@@ -220,6 +220,28 @@ trades, dropped a small winner too, 10:34 gain partly timing-luck → multi-day 
   or data artifact). Directionally: v2 ≥ E6, clearly better on tail risk → reasonable
   cut-over candidate at 0.50, pending more days.
 
+## STEP 9 — Direction A/B: composite resolver >> consensus ML model
+Same day (06-04), same entry model (E6), same 10 entry bars; only `ML_ENTRY_DIRECTION_MODE` differs:
+
+| | Consensus (live: direction-only ML) | Composite (heuristic resolver) |
+|---|---|---|
+| CE / PE | 10 / 0 (all CE) | **7 / 3** (real variety) |
+| Grader active | 0/10 (bypassed) | **10/10** (active) |
+| Net | +0.80% | **+10.96%** |
+| direction_source | flat `ml_entry_timing` (ce_prob 0.515) | multi-signal (momentum_5m/15m, vwap, iv_skew, orb_reject) |
+
+- **The composite resolver is the real direction-finding algorithm** — it produced CE/PE
+  variety, picked 3 PE the degenerate ML model missed (right on a down-choppy day →
+  +0.80% → +10.96%), AND it auto-activates the GOOD/OK/BAD grader (the veto we wanted
+  enabled). So "enable the grader" = "use composite direction" — one switch does both.
+- The consensus ML direction model is degenerate (flat 0.515 → all-CE); composite is the
+  better finder here. (A separate Direction-v2 ML model was also built 2026-06-05, AUC
+  0.593 — still marginal; composite looks stronger near-term.)
+- Single day — multi-day A/B running to confirm. Caveat: composite's +10.96% on a
+  down-choppy day reflects its PE picks paying off; needs confirmation across regimes.
+- **Action A10:** consider switching live direction to `composite` (it also enables the
+  grader); validate multi-day first.
+
 ---
 **Document status: COMPLETE for the 2026-06-04 run.** S0–S6 verified with root causes;
 final consolidated verdict + prioritized plan above. S7 + multi-day are tracked actions.
