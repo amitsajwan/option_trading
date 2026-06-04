@@ -95,10 +95,26 @@ Engine: deterministic, `direction_source=ml_entry_timing` (consensus mode = what
 - **Action:** re-run S5 across several days; spot-check any TRENDING/BREAKOUT bar's
   card against realised forward move.
 
+## STEP 6 — Exits: time-stop dominates, MFE giveback, and exit reason is too coarse
+- **Finding:** all 10 trades exit via generic `exit_stack`; hold times cluster ~5 min
+  (1,4,6,5,5,5,5,3,5,5). MFE giveback: CE 54900 hit **MFE +2.08%** then exited −0.36%;
+  CE 54800 +0.60%→−2.53%. Deep losers ran the full ~5 min (mae −5.04%, −3.00%) with no
+  fast stop. Session 4W/6L, net +0.80% (winners +11.6% vs losers −10.8%).
+- **Reasoning (two issues):**
+  1. **Observability:** `exit_reason="exit_stack"` is the umbrella policy name — we
+     cannot see WHICH rule (target/stop/trailing/time/thesis) actually fired. The exit
+     cascade is not surfaced like the entry cascade. The specific trigger likely exists
+     in `exit_policy_triggered` but isn't propagated to the trace/digest.
+  2. **Behavior:** trailing (act 1% / trail 0.5%) and target (4%) appear not to bind —
+     everything resolves at the ~5-min time horizon. No effective MFE lock (gave back
+     +2.08%) and no fast loss-cut. Matches the prior 3-loss / MFE-giveback finding.
+- **Action:** (a) surface the specific exit trigger in the position trace + digest;
+  (b) review why trailing/stop don't fire within the 5-min window (params vs the model
+  re-eval horizon). See `strategy_app/position/` exit policy + tracker.
+
 ## PENDING STEPS
-- **STEP 6 — Exits**: exit-reason distribution; are exits premature (the +5-min
-  time-stop / MFE-giveback pattern from the earlier 3-loss run)?
 - **STEP 7 — Declined-prob capture** (from Step 1 caveat) to measure entry separation.
+- **Multi-day** re-run of S5 (regime) and S6 (exits) to confirm beyond one day.
 
 ---
 
@@ -110,6 +126,8 @@ Engine: deterministic, `direction_source=ml_entry_timing` (consensus mode = what
 | A3 | Direction-model rework (degenerate, flat 0.515) | `direction_only` model + training | High |
 | A4 | Grader to understand consensus `ml_direction_*` (or tighten evidence gate) | `signals/entry_quality.py`, engine evidence gate | High |
 | A5 | Entry model v2 retrain (refinement) | `docs/ENTRY_MODEL_V2_SPEC.md` (in progress on ML VM) | Med |
+| A6 | Surface specific exit trigger (target/stop/trailing/time/thesis) in trace+digest | `strategy_app/position/tracker.py`, `trace_digest.py` | High |
+| A7 | Fix MFE giveback — trailing/stop don't bind in the ~5-min window | `strategy_app/position/` exit policy params vs model horizon | High |
 
 > Note on "109 blocked": that count is over *fired* bars in the pre-fix digest. With
 > full-population traces, re-derive blocked counts over all 351 bars in STEP 5.
