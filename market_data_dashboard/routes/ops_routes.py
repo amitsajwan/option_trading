@@ -320,10 +320,12 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
                           "/app/ml_pipeline_2/artifacts/entry_only/published/entry_only_model.joblib"),
             "DIRECTION_ML_MODEL_PATH": _live("DIRECTION_ML_MODEL_PATH",
                           "/app/ml_pipeline_2/artifacts/direction_only/published/direction_only_model.joblib"),
-            # Direction-selection mode MUST mirror live, or the sim silently runs the
-            # composite heuristic (no direction ML) while live runs consensus (stage-2
-            # direction model) — making the sim's direction picks unrepresentative.
-            "ML_ENTRY_DIRECTION_MODE": _live("ML_ENTRY_DIRECTION_MODE", "consensus"),
+            # Direction-selection mode MUST mirror live. Live leaves ML_ENTRY_DIRECTION_MODE
+            # UNSET (the .env.compose value never reaches the strategy container), so the
+            # engine defaults to `composite`. The earlier "consensus" fallback here made
+            # the sim diverge from live (forced the degenerate direction-only ML model →
+            # all-CE) — verified 2026-06-05. Fallback MUST be composite to match live.
+            "ML_ENTRY_DIRECTION_MODE": _live("ML_ENTRY_DIRECTION_MODE", "composite"),
             "ENTRY_ML_MIN_PROB":       _live("ENTRY_ML_MIN_PROB", "0.65"),
             "DIRECTION_ML_WEIGHT":     _live("DIRECTION_ML_WEIGHT", "0.40"),
             "DIRECTION_ML_FILTER_MIN_PROB": _live("DIRECTION_ML_FILTER_MIN_PROB", ""),
