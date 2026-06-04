@@ -22,7 +22,7 @@
 
 Raw `futures/`, `options/`, `market_base/` parquet (back to 2020) are alongside it, so the feature view can be rebuilt if needed. This is a **single-stage / entry-only** model (`bypass_stage2=true, bypass_stage3=true, entry_only_publish=true`) — no staged dependencies.
 
-**Where to train — the new ML VM.** Training runs on the **dedicated ML VM** (just provisioned), NOT the live runtime VM (whose `.data/ml_pipeline/parquet_data/` is empty and whose CPUs serve live ingestion/strategy). First step on the ML VM: **sync the parquet** `snapshots_ml_flat_v2/` (+ `futures/`, `options/`, `market_base/`) from the dev/build box (`.data/ml_pipeline/parquet_data/`) — e.g. `gcloud compute scp --recurse` or a GCS staging bucket. The runtime VM's Mongo only holds `phase1_market_snapshots_historical` = 2024-01→2024-10 + small live 2026 (for replay/sim, not training). Keep the live VM untouched.
+**Where to train — the new ML VM.** Training runs on the **dedicated ML VM `option-trading-ml-01`** (n2-standard-8, 8 vCPU, asia-south1-b, project `amit-trading`), NOT the live runtime VM (whose `.data/ml_pipeline/parquet_data/` is empty and whose CPUs serve live ingestion/strategy). First step on the ML VM: **sync the parquet** `snapshots_ml_flat_v2/` (+ `futures/`, `options/`, `market_base/`) from the dev/build box (`.data/ml_pipeline/parquet_data/`) — e.g. `gcloud compute scp --recurse` or a GCS staging bucket. The runtime VM's Mongo only holds `phase1_market_snapshots_historical` = 2024-01→2024-10 + small live 2026 (for replay/sim, not training). Keep the live VM untouched.
 
 **Gap to know:** data ends **2024-10-31**. There is no parquet for Nov-2024 → 2026. Live 2026 snapshots (collected since ~late-May-2026) sit in Mongo/JSONL and are **not yet flattened to parquet**. Implications:
 - The spec's train/valid/holdout windows (2022→2024-10) are **fully covered** — train today, no data gathering needed.
@@ -131,9 +131,16 @@ Do **not** ship `min_prob=0.65` by default. Choose the threshold on the **OOS ho
 **Ready-to-run config is provided:** `ml_pipeline_2/configs/research/staged_dual_recipe.entry_s1_v2_5m_sweep.json`
 (5-min horizon, `min_points: 44` = 0.10% at the 2022–24 median, HPO enabled, 6 candidate models, brier objective, purge_days=1, tightened `hard_gates` AUC≥0.62). It runs as-is against the current oracle.
 
-Steps on the **ML VM**:
-1. **Sync the parquet** from the dev box (§0) into `.data/ml_pipeline/parquet_data/` on the ML VM.
-2. **Run the sweep** — launch the pipeline once per threshold by editing `labels.stage1_entry_move.min_points` ∈ `{35, 44, 52, 61}` (≈ 0.08 / 0.10 / 0.12 / 0.14% at training median) and `outputs.run_name` accordingly. *Preferred:* add a `min_pct` arg to `entry_move_oracle.py` (§2.1) and sweep `{0.08, 0.10, 0.12, 0.14}%` so the label is level-invariant.
+Steps on the **ML VM** (`option-trading-ml-01`):
+1. **Parquet is already present** at `/opt/option_trading/.data/ml_pipeline/parquet_data/snapshots_ml_flat_v2/` (1,199 days, 2020→2024-10). No sync needed.
+2. **Run the sweep** — launch per threshold (validate first, then run):
+   ```bash
+   cd /opt/option_trading && export PYTHONPATH=/opt/option_trading
+   .venv/bin/python -m ml_pipeline_2.scripts.run_entry_s1_only_hpo \
+     --config ml_pipeline_2/configs/research/staged_dual_recipe.entry_s1_v2_5m_sweep.json --validate-only
+   # then drop --validate-only to train
+   ```
+   Repeat with `labels.stage1_entry_move.min_points` ∈ `{35, 44, 52, 61}` (≈ 0.08 / 0.10 / 0.12 / 0.14% at training median) and bump `outputs.run_name`. *Preferred:* add a `min_pct` arg to `entry_move_oracle.py` (§2.1) and sweep `{0.08, 0.10, 0.12, 0.14}%` so the label is level-invariant.
 3. **Calibrate at publish** — fit isotonic on a held-out slice; emit a reliability table; verify ECE ≤ 0.05 (§5).
 4. **Publish** the winner to `ml_pipeline_2/artifacts/entry_only/published/entry_only_model.joblib` (keep a `.bak` of the current one).
 5. **Validate on the sim** — deploy the branch, run ops-sim for several days, read the auto-generated digest (`analysis.markdown` on the job / `/tmp/sim_<job>/trace_report.md`); confirm the §6 gates, especially **separation ≥ +0.10** and a non-collapsed prob histogram.
@@ -156,3 +163,16 @@ Steps on the **ML VM**:
 - Reference configs: `staged_dual_recipe.entry_s1_e6_soft50pts_10m.json` (deployed, fixed), `entry_s1_only_hpo_v1.json` (HPO template, harsh label)
 - Verification tooling: `strategy_app/sim/trace_digest.py` (`verify_entry_label`), `ops/gcp/analyze_sim_trace.py` (CLI)
 - Deployed model card: AUC 0.830, Brier 0.170, drift 0.020, 51 features, label 50pts/10min, no calibrator.
+
+---
+
+## 10. Handover status (2026-06-04)
+
+**ML VM `option-trading-ml-01` is provisioned and ready to train:**
+- Repo at `/opt/option_trading`; full parquet present (2020→2024-10, 1,199 days); `.venv` has `ml_pipeline_2` + xgboost 3.2 / lightgbm 4.6 / **optuna 4.9** (installed 2026-06-04) / sklearn / pandas / pyarrow / numpy; 90 GB free. Survives reboots (all on persistent disk).
+
+**Remaining step to launch:** get this branch's config onto the ML VM. The spec + config (`staged_dual_recipe.entry_s1_v2_5m_sweep.json`) are on branch `feat/decision-trace-structure-sim-analyzer`; the ML VM checkout is older. Either merge that branch to `main` (recommended for a shared box) then `git pull` on the VM, or `git fetch && checkout` the branch directly. (`git config --global --add safe.directory /opt/option_trading` first — the VM had a dubious-ownership warning.)
+
+**Decision still open for the team:** §9 — add `min_pct` to the oracle (recommended) vs sweep fixed `min_points`; morning-velocity backfill vs segment-aware; symmetric move label vs an economic Stage-1b. Direction model is the next bottleneck after this (separate work).
+
+**Owner from here:** modelling team. This doc + the config are the entry point; validate winners via the sim digest (`analyze_sim_trace.py` / `verify_entry_label`).
