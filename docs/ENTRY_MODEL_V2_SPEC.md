@@ -50,17 +50,25 @@ Oracle: `ml_pipeline_2/src/ml_pipeline_2/staged/entry_move_oracle.py` — label 
 ### 2.1 Use a PERCENTAGE threshold, not fixed points
 The training window spans BankNifty ~38,000 (2022) → ~52,000 (2024) → ~54,000 (2026). A fixed `min_points` is a **moving target in % terms** (50 pts = 0.13% in 2022 but 0.093% in 2026), which biases the label across the window. **Define the move in % of price.** The oracle already converts points→% per-bar, so either (a) pick `min_points` knowing it drifts, or — preferred — (b) **extend the oracle to accept `min_pct` directly** and pass that. *Small code change; recommended.*
 
-### 2.2 Recommended starting point and sweep
-For a **5-minute** horizon, anchor on the two known points:
-- 5 min / 100 pts → ~7% positive (too hard, collapses)
-- 10 min / 50 pts → ~30–40% positive (balanced base rate, but easy at 10 min)
+### 2.2 Recommended threshold — MEASURED from 2022–2024 data (not estimated)
+Horizon is **fixed at 5 minutes** (10-min is rejected — too slow for our exits). The 5-min forward max-excursion distribution was computed directly from the futures parquet (**703 trading days, 262,661 bars, 2022-01→2024-10**, median index 43,739):
 
-By vol-scaling (excursion ∝ ~√horizon, factor √0.5 ≈ 0.71), the 5-min threshold that reproduces the ~35% base rate of 10 min/50 pts is **≈ 35 pts ≈ 0.065%** at current levels.
+| Threshold | Positive rate (5-min) | ≈ pts @ 2022–24 median (43.7k) | ≈ pts @ today (54k) |
+|-----------|----------------------|-------------------------------|---------------------|
+| 0.06% | 69.1% | 26 | 32 |
+| 0.08% | 52.5% | 35 | 43 |
+| **0.10%** | **39.5%** | **44** | **54** |
+| 0.12% | 29.8% | 52 | 65 |
+| 0.14% | ~24% | 61 | 76 |
+| (fixed 100 pts) | 6.6% | — | — | ← the collapse regime (old harsh label) |
 
-**Primary label: 5 min, `min_pct = 0.08%` (≈ 40–45 pts at BankNifty ~54k).** This sits just above the 5-min median excursion → a selective but learnable ~**35–40% positive rate**.
+Median 5-min excursion = **36 pts = 0.083%**. Note 100 pts/5min = **6.6%** positive — matches the documented collapse (~7%, max prob 0.276).
 
-**Run a label sweep** (this is how we pick, not by guessing): train the identical pipeline at
-`min_pct ∈ {0.06%, 0.08%, 0.10%, 0.12%}` (5-min horizon) and select by the gates in §6. Roughly: 0.06% ≈ easy/high base-rate, 0.12% ≈ approaching the collapse regime. Expect 0.08–0.10% to be the sweet spot.
+**→ Primary label: 5 min, `min_pct = 0.10%` → 39.5% positive rate** (≈ 44 pts in the 2022–24 window, ≈ 54 pts at today's ~54k). This is the 5-minute analogue of the working base-rate of the old 10min/50pts label, at the shorter horizon — balanced and learnable, safely clear of the 7% collapse cliff.
+
+**Use % not fixed points** (§2.1): a "50 pt" label is 0.13% in 2022 (≈27% positive) but 0.093% at 54k (≈45% positive) — inconsistent difficulty across the window. % keeps it constant.
+
+**Sweep `min_pct ∈ {0.08, 0.10, 0.12, 0.14}%`** and pick by the §6 gates (target 30–40% positive + best separation). Expect **0.10–0.12%** to win.
 
 > **Why "either direction" stays:** Stage-1 is a *timing/volatility* gate; the side is chosen by the direction model. Keep the symmetric move label. (If we later want an economically-aware entry label — "a long ATM option opened now reaches +X% before theta" — that is a separate Stage-1b experiment, noted in §8.)
 
