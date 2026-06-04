@@ -22,7 +22,7 @@
 
 Raw `futures/`, `options/`, `market_base/` parquet (back to 2020) are alongside it, so the feature view can be rebuilt if needed. This is a **single-stage / entry-only** model (`bypass_stage2=true, bypass_stage3=true, entry_only_publish=true`) — no staged dependencies.
 
-**Where it is NOT:** the live VM's `.data/ml_pipeline/parquet_data/` is **empty** — training does **not** run on the VM. Run it on the dev/build box (or wherever `ml_pipeline_2` runs) that holds this parquet. Mongo on the VM holds only `phase1_market_snapshots_historical` = 2024-01-01→2024-10-31 (209 days) + small live 2026 — that's for replay/sim, not the primary training source.
+**Where to train — the new ML VM.** Training runs on the **dedicated ML VM** (just provisioned), NOT the live runtime VM (whose `.data/ml_pipeline/parquet_data/` is empty and whose CPUs serve live ingestion/strategy). First step on the ML VM: **sync the parquet** `snapshots_ml_flat_v2/` (+ `futures/`, `options/`, `market_base/`) from the dev/build box (`.data/ml_pipeline/parquet_data/`) — e.g. `gcloud compute scp --recurse` or a GCS staging bucket. The runtime VM's Mongo only holds `phase1_market_snapshots_historical` = 2024-01→2024-10 + small live 2026 (for replay/sim, not training). Keep the live VM untouched.
 
 **Gap to know:** data ends **2024-10-31**. There is no parquet for Nov-2024 → 2026. Live 2026 snapshots (collected since ~late-May-2026) sit in Mongo/JSONL and are **not yet flattened to parquet**. Implications:
 - The spec's train/valid/holdout windows (2022→2024-10) are **fully covered** — train today, no data gathering needed.
@@ -128,11 +128,16 @@ Do **not** ship `min_prob=0.65` by default. Choose the threshold on the **OOS ho
 
 ## 8. Deliverables & how to run
 
-1. New config `ml_pipeline_2/configs/research/staged_dual_recipe.entry_s1_v2_5m_sweep.json` — clone `entry_s1_e6_soft50pts_10m.json`, set `horizon_minutes: 5`, `min_pct` (sweep 0.06–0.12%), `hpo.enabled: true` (24 trials), candidate model list from §4, add isotonic calibration, tightened `hard_gates` from §6.
-2. Run the staged pipeline (same entrypoint as prior runs; `bypass_stage2/3: true`, `entry_only_publish: true`).
-3. Publish bundle to `ml_pipeline_2/artifacts/entry_only/published/entry_only_model.joblib` (keep `.bak` of the current one).
-4. Validate with the sim: deploy branch, run ops-sim for several days, read the auto-generated digest (`analysis.markdown` on the job / `/tmp/sim_<job>/trace_report.md`) and confirm the §6 gates — especially **separation > 0** and a non-collapsed prob histogram.
-5. Record in the run report: label base rate, AUC, drift, ECE/reliability, chosen threshold, separation, per-regime breakdown, morning-feature handling (§3.1).
+**Ready-to-run config is provided:** `ml_pipeline_2/configs/research/staged_dual_recipe.entry_s1_v2_5m_sweep.json`
+(5-min horizon, `min_points: 44` = 0.10% at the 2022–24 median, HPO enabled, 6 candidate models, brier objective, purge_days=1, tightened `hard_gates` AUC≥0.62). It runs as-is against the current oracle.
+
+Steps on the **ML VM**:
+1. **Sync the parquet** from the dev box (§0) into `.data/ml_pipeline/parquet_data/` on the ML VM.
+2. **Run the sweep** — launch the pipeline once per threshold by editing `labels.stage1_entry_move.min_points` ∈ `{35, 44, 52, 61}` (≈ 0.08 / 0.10 / 0.12 / 0.14% at training median) and `outputs.run_name` accordingly. *Preferred:* add a `min_pct` arg to `entry_move_oracle.py` (§2.1) and sweep `{0.08, 0.10, 0.12, 0.14}%` so the label is level-invariant.
+3. **Calibrate at publish** — fit isotonic on a held-out slice; emit a reliability table; verify ECE ≤ 0.05 (§5).
+4. **Publish** the winner to `ml_pipeline_2/artifacts/entry_only/published/entry_only_model.joblib` (keep a `.bak` of the current one).
+5. **Validate on the sim** — deploy the branch, run ops-sim for several days, read the auto-generated digest (`analysis.markdown` on the job / `/tmp/sim_<job>/trace_report.md`); confirm the §6 gates, especially **separation ≥ +0.10** and a non-collapsed prob histogram.
+6. **Record** in the run report: label base rate, AUC, drift, ECE/reliability, chosen threshold, separation, per-regime breakdown, morning-feature handling (§3.1).
 
 ---
 
