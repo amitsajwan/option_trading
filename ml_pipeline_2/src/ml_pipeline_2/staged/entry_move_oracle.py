@@ -39,6 +39,7 @@ def _label_day_moves(
     *,
     horizon_minutes: int,
     min_points: float,
+    min_pct: float | None = None,
 ) -> pd.DataFrame:
     work = day.sort_values("timestamp").reset_index(drop=True)
     n = len(work)
@@ -53,8 +54,16 @@ def _label_day_moves(
     threshold_pct = np.full(n, np.nan, dtype=float)
 
     horizon = max(1, int(horizon_minutes))
+    # min_pct (a price fraction, e.g. 0.0010 == 0.10%) takes precedence over
+    # min_points when supplied, so the label is level-invariant across the
+    # 2022->2024->2026 index drift. min_points stays as the legacy fallback.
+    use_pct = min_pct is not None
+    pct_thr = float(min_pct) if use_pct else 0.0
     min_pts = float(min_points)
-    if min_pts <= 0.0:
+    if use_pct:
+        if pct_thr <= 0.0:
+            raise ValueError("min_pct must be positive")
+    elif min_pts <= 0.0:
         raise ValueError("min_points must be positive")
 
     for i in range(n):
@@ -68,7 +77,7 @@ def _label_day_moves(
         fwd_low = np.nanmin(lows[i + 1 : end])
         if not np.isfinite(fwd_high) or not np.isfinite(fwd_low):
             continue
-        thr = min_pts / px
+        thr = pct_thr if use_pct else min_pts / px
         up = (fwd_high - px) / px
         down = (px - fwd_low) / px
         valid[i] = 1
@@ -103,8 +112,14 @@ def build_entry_bn_move_oracle(
     *,
     horizon_minutes: int = 5,
     min_points: float = 100.0,
+    min_pct: float | None = None,
 ) -> pd.DataFrame:
-    """Build stage-1 entry oracle from futures 5m excursion (points → % of price)."""
+    """Build stage-1 entry oracle from futures 5m excursion (points → % of price).
+
+    When ``min_pct`` (a price fraction, e.g. 0.0010 == 0.10%) is supplied it
+    defines the move threshold directly and ``min_points`` is ignored, keeping
+    label difficulty constant across index levels.
+    """
     if bool(support.duplicated(subset=KEY_COLUMNS).any()):
         raise ValueError("support frame contains duplicate staged oracle keys")
 
@@ -120,7 +135,12 @@ def build_entry_bn_move_oracle(
     frame = frame.dropna(subset=["timestamp"]).sort_values(["trade_date", "timestamp"])
 
     day_frames = [
-        _label_day_moves(day, horizon_minutes=horizon_minutes, min_points=min_points)
+        _label_day_moves(
+            day,
+            horizon_minutes=horizon_minutes,
+            min_points=min_points,
+            min_pct=min_pct,
+        )
         for _, day in frame.groupby("trade_date", sort=False)
     ]
     if not day_frames:
@@ -173,7 +193,9 @@ def merge_recipe_utility_with_entry_move_oracle(
 
 def stage1_entry_move_config(manifest: dict[str, Any]) -> dict[str, Any]:
     raw = dict((manifest.get("labels") or {}).get("stage1_entry_move") or {})
+    min_pct_raw = raw.get("min_pct")
     return {
         "horizon_minutes": int(raw.get("horizon_minutes", 5)),
         "min_points": float(raw.get("min_points", 100.0)),
+        "min_pct": (float(min_pct_raw) if min_pct_raw is not None else None),
     }

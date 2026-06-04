@@ -35,6 +35,19 @@ def test_entry_bn_move_labels_positive_on_120pt_rally() -> None:
     assert float(first["entry_threshold_pct"]) == pytest.approx(100.0 / 50_000.0, rel=1e-6)
 
 
+def test_entry_bn_move_min_pct_is_level_invariant() -> None:
+    """min_pct defines the threshold directly and ignores min_points/level."""
+    day = _synthetic_day()
+    # 0.20% of 50000 == 100 pts; the +120pt rally clears it at t0.
+    oracle = build_entry_bn_move_oracle(day, horizon_minutes=5, min_pct=0.0020)
+    first = oracle.iloc[0]
+    assert int(first["entry_label"]) == 1
+    assert float(first["entry_threshold_pct"]) == pytest.approx(0.0020, rel=1e-9)
+    # A threshold far above the realised excursion stays negative regardless of level.
+    oracle_hi = build_entry_bn_move_oracle(day, horizon_minutes=5, min_pct=0.05)
+    assert int(oracle_hi.iloc[0]["entry_label"]) == 0
+
+
 def test_entry_bn_move_insufficient_forward_bars_invalid() -> None:
     day = _synthetic_day().iloc[-2:].copy()
     oracle = build_entry_bn_move_oracle(day, horizon_minutes=5, min_points=100.0)

@@ -3691,6 +3691,7 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             support,
             horizon_minutes=int(move_cfg["horizon_minutes"]),
             min_points=float(move_cfg["min_points"]),
+            min_pct=(None if move_cfg.get("min_pct") is None else float(move_cfg["min_pct"])),
         )
         oracle, utility = merge_recipe_utility_with_entry_move_oracle(oracle, utility, move_oracle)
     oracle_rolling = compute_rolling_oracle_stats(oracle)
