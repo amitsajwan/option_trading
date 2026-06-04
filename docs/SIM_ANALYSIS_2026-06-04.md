@@ -157,6 +157,33 @@ ops-sim and the digest tells you immediately whether the new model is better.
    link), so expect direction to stay flat — judge the entry model in isolation.
 
 ---
+## STEP 8 — v2 entry model validated via the harness (sim A/B, 2026-06-04)
+Compared deployed **E6** vs published **v2 `010pct`** (sim-only override
+`ENTRY_ML_MODEL_PATH`/`ENTRY_ML_MIN_PROB`; live untouched). Separation on v2's
+**native** target (5-min, 54 pts ≈ 0.10% @ 54k), threshold sweep; base move-rate ≈ 0.42.
+
+| thr | E6 fire/prec/SEP | v2 fire/prec/SEP |
+|---|---|---|
+| 0.65 | 119 / .462 / n/a (1 declined) | 98 / .459 / +0.04 |
+| 0.75 | 105 / .476 / +0.14 | 48 / .479 / +0.05 |
+| 0.85 | 58 / .50 / +0.08 | 14 / .571 / +0.14 |
+| **0.90** | 16 / .563 / +0.12 | 11 / **.727** / **+0.30** |
+
+- **v2 is structurally better:** prob spread 0.47→1.0 (vs E6 flat 0.59→0.98); its top
+  bucket discriminates (0.90: 72.7% prec vs 42% base, +0.30) where E6 can't (56%).
+- **E6 is near-constant-yes among *evaluated* bars** (119/120 fire at 0.65) — note the
+  earlier "33% fire" used the wrong denominator (353 incl. AVOID + in-position bars
+  where the entry model is never consulted); correct denominator is ~120 evaluated.
+- **v2's 0.50 op-point does NOT transfer to 2026:** fires 99% at 0.50 here (probs
+  shifted high vs the 2024 holdout's 22%). Needs re-tuning to ~0.85–0.90 on live-like
+  data before any cut-over.
+- **One low-edge day (~42% base move-rate) — multi-day validation required.**
+- **Harness gap found:** the digest's separation is hardcoded to 0.65 / 10min-50pts;
+  it should match each model's native label + sweep thresholds (done here inline).
+- **Actions:** A8 re-tune v2 threshold on 2026 sim data (multi-day); A9 make the digest
+  separation params model-aware (label + threshold sweep), not hardcoded.
+
+---
 **Document status: COMPLETE for the 2026-06-04 run.** S0–S6 verified with root causes;
 final consolidated verdict + prioritized plan above. S7 + multi-day are tracked actions.
 
