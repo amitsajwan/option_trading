@@ -81,13 +81,31 @@ def test_analyze_traces_full_report_shape():
         _entry_trace("2026-06-04T10:47:00", 0.55),
     ]
     rep = analyze_traces(traces, trades=[{"pnl_pct": -0.0036}])
-    assert rep["ml_entry"]["bars_fired"] == 2
-    assert rep["ml_entry"]["bars_total"] == 2
-    assert rep["ml_entry"]["fire_rate_pct"] == 100.0  # both synthetic bars have a candidate
+    # 0.92 fires (>=0.65), 0.55 is a declined bar -> 1 fired of 2.
+    assert rep["ml_entry"]["bars_fired"] == 1
+    assert rep["ml_entry"]["bars_with_prob"] == 2
+    assert rep["ml_entry"]["fire_rate_pct"] == 50.0
     assert rep["direction"]["ce_pe"] == {"CE": 1}
     assert rep["market_structure"]["position_in_range"] == {"near_high": 1}
     assert rep["gates"]["candidate_veto_reason"].get("below_threshold") == 1
     assert rep["trades_summary"]["losses"] == 1
+
+
+def test_s7_declined_probs_enable_separation():
+    # Fired bar (0.92) sees a move; declined bar (0.40, via entry_model) is flat ->
+    # the declined bar becomes the not-fired population, so separation is computable.
+    fired = _entry_trace("2026-06-04T09:30:00", 0.92, outcome="entry_taken", selected=True)
+    fired["entry_model"] = {"entry_prob": 0.92, "threshold": 0.65, "fired": True}
+    declined = {"timestamp": "2026-06-04T09:45:00", "final_outcome": "hold",
+                "entry_model": {"entry_prob": 0.40, "threshold": 0.65, "fired": False},
+                "candidates": []}
+    snaps = _series(54000, 7.0, m0=30, n=12) + _series(54100, 0.2, m0=45, n=12)
+    rep = analyze_traces([fired, declined], snapshots=snaps, entry_horizon_minutes=10, entry_min_points=50.0)
+    me = rep["ml_entry"]
+    assert me["bars_fired"] == 1 and me["bars_with_prob"] == 2
+    elc = rep["entry_label_check"]
+    assert elc["fired"]["n"] == 1 and elc["not_fired"]["n"] == 1   # declined bar now counted
+    assert elc["separation"] is not None
 
 
 def test_analyze_traces_runs_label_check_when_snapshots_given():

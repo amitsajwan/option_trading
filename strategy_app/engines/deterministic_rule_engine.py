@@ -61,7 +61,7 @@ from .entry_pipeline_gates import (
     evaluate_v2 as _evaluate_v2,
 )
 from ..market.depth_context import DepthContext
-from ..runtime.eval_context import clear_depth_context, set_depth_context
+from ..runtime.eval_context import clear_depth_context, clear_entry_diag, get_entry_diag, set_depth_context
 from ..runtime.redis_depth_reader import RedisDepthReader
 from .profiles import (
     PRODUCTION_DEFAULT_PROFILE_ID,
@@ -424,6 +424,9 @@ class DeterministicRuleEngine(StrategyEngine):
         # Feed the market-structure reader one fut OHLC bar/tick so every decision
         # trace can carry the bottoms/highs/breakouts context.
         self._structure.update(snap)
+        # Clear last bar's entry-model diagnostics; ML_ENTRY repopulates it this bar
+        # (incl. on declines) so the trace captures fired + declined probs (S7).
+        clear_entry_diag()
         # Read live depth side-channel once per bar (None in replay — graceful fallback).
         with self._eval_timer.measure("depth_read"):
             self._current_depth_ctx = (
@@ -2712,6 +2715,12 @@ class DeterministicRuleEngine(StrategyEngine):
             # thin-margin / chop / iv-skew direction vetoes were bypassed.
             "grade_evaluated": bool(dir_vote_rs.get("entry_grade")),
         }
+        # Entry-model diagnostics for EVERY bar — incl. declined bars (prob < threshold)
+        # that produced no vote/candidate. This is what makes entry separation
+        # measurable (fired vs declined prob distribution) — S7.
+        _ediag = get_entry_diag()
+        if isinstance(_ediag, dict):
+            trace["entry_model"] = dict(_ediag)
         # Market-structure context (bottoms / highs / breakouts lens) so the clean
         # record answers "WHERE in the tape did we decide?" without model introspection.
         trace["market_structure"] = self._structure.snapshot(snap)

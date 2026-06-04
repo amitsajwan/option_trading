@@ -90,6 +90,17 @@ def _entry_prob(cand: Optional[dict]) -> Optional[float]:
     return _num(cand.get("confidence"))
 
 
+def _trace_entry_prob(t: dict) -> Optional[float]:
+    """Entry-model prob for a bar — prefers the per-bar entry_model diag (captured on
+    EVERY bar incl. declines, S7); falls back to the fired candidate's prob."""
+    em = t.get("entry_model")
+    if isinstance(em, dict):
+        p = _num(em.get("entry_prob"))
+        if p is not None:
+            return p
+    return _entry_prob(_entry_candidate(t))
+
+
 def _minute_key(ts: Any) -> Optional[str]:
     """Normalise a timestamp to 'YYYY-MM-DDTHH:MM' for cross-source joins."""
     s = str(ts or "").strip()
@@ -172,7 +183,7 @@ def verify_entry_label(
     detail: list[dict[str, Any]] = []
     for t in traces:
         cand = _entry_candidate(t)
-        p = _entry_prob(cand)
+        p = _trace_entry_prob(t)
         if p is None:
             continue
         mk = _minute_key(t.get("timestamp"))
@@ -238,28 +249,37 @@ def analyze_traces(
     }
 
     # ── ML entry health ──
-    probs: list[float] = []
-    fired = 0
+    # Prefer the per-bar entry_model diag (captured on EVERY bar incl. declines, S7);
+    # fall back to the fired candidate's prob for older traces.
+    def _bar_entry(t: dict) -> tuple[Optional[float], Optional[bool]]:
+        em = t.get("entry_model")
+        fired_flag = em.get("fired") if isinstance(em, dict) else None
+        p = _trace_entry_prob(t)
+        return p, (fired_flag if fired_flag is not None else (None if p is None else p >= entry_threshold))
+
+    all_probs: list[float] = []
+    fired_probs: list[float] = []
     for t in traces:
-        cand = _entry_candidate(t)
-        p = _entry_prob(cand)
-        if p is not None:
-            probs.append(p)
-            if p >= entry_threshold:
-                fired += 1
+        p, fired_flag = _bar_entry(t)
+        if p is None:
+            continue
+        all_probs.append(p)
+        if (fired_flag if fired_flag is not None else p >= entry_threshold):
+            fired_probs.append(p)
     n_bars = len(traces)
+    have_declined = len(all_probs) > len(fired_probs)  # S7 data present?
     ml_entry = {
-        # Bars where the entry model FIRED (produced a vote, prob >= threshold).
-        "bars_fired": len(probs),
-        # Total bars in the session (the honest denominator — declined bars included).
+        "bars_fired": len(fired_probs),
+        "bars_with_prob": len(all_probs),
         "bars_total": n_bars,
-        # Fire rate over the whole session. The model declines on the rest — this is
-        # the real discrimination, NOT visible if you only look at fired bars.
-        "fire_rate_pct": round(100.0 * len(probs) / n_bars, 1) if n_bars else None,
-        "entry_prob_when_fired": _dist(probs),
-        "histogram": _histogram(probs, [0.0, 0.5, 0.65, 0.8, 0.9, 1.0]),
-        "note": "entry_prob distribution is over FIRED bars only; declined-bar probs "
-                "(<threshold) are not yet captured in the trace.",
+        "fire_rate_pct": round(100.0 * len(fired_probs) / n_bars, 1) if n_bars else None,
+        "entry_prob_when_fired": _dist(fired_probs),
+        # FULL distribution (fired + declined) — only meaningful once S7 is live.
+        "entry_prob_all_bars": _dist(all_probs),
+        "histogram_all": _histogram(all_probs, [0.0, 0.3, 0.5, 0.65, 0.8, 0.9, 1.0]),
+        "histogram": _histogram(fired_probs, [0.0, 0.5, 0.65, 0.8, 0.9, 1.0]),
+        "note": ("full distribution captured (fired + declined)" if have_declined
+                 else "declined-bar probs not present in these traces (pre-S7)"),
     }
 
     # ── direction health ──
@@ -412,10 +432,15 @@ def render_markdown(report: dict[str, Any]) -> str:
     me = report["ml_entry"]
     L.append("## ML entry health")
     L.append(f"- FIRE RATE: {me['bars_fired']}/{me['bars_total']} bars = **{me['fire_rate_pct']}%** "
-             f"(model declined on the other {me['bars_total'] - me['bars_fired']})")
-    L.append(f"- entry_prob when fired: {me['entry_prob_when_fired']}")
-    L.append(f"- histogram (fired bars): {me['histogram']}")
+             f"(declined on {me['bars_total'] - me['bars_fired']})")
+    L.append(f"- entry_prob ALL bars: {me.get('entry_prob_all_bars')} | when fired: {me['entry_prob_when_fired']}")
+    L.append(f"- histogram all bars: {me.get('histogram_all')}")
     L.append(f"- note: {me['note']}")
+    elc = report.get("entry_label_check")
+    if elc and elc.get("not_fired", {}).get("n"):
+        L.append(f"- SEPARATION (fired move-rate {elc['fired'].get('precision')} - declined "
+                 f"{elc['not_fired'].get('move_rate')}) = **{elc.get('separation')}** "
+                 f"(>0 = entry model adds skill)")
     L.append("")
 
     elc = report.get("entry_label_check")
