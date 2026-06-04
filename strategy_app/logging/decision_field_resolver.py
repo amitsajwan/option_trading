@@ -83,9 +83,17 @@ class DecisionFieldResolver:
         raw_signals = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
         if bool(raw_signals.get("_entry_warmup_blocked")):
             return "entry_warmup_block"
+        # _policy_allowed is the authoritative gate result; check it before the
+        # free-text _policy_reason to avoid tagging allowed/taken trades as "policy_block".
+        policy_allowed = raw_signals.get("_policy_allowed")
+        if policy_allowed is True:
+            return "policy_allowed"
+        if policy_allowed is False:
+            return "policy_block"
+        # Fallback: _policy_allowed not set (older path) — infer from reason text.
         policy_reason = str(raw_signals.get("_policy_reason") or "").strip()
         if policy_reason:
-            if policy_reason.lower().startswith("allowed score="):
+            if policy_reason.lower().startswith("allowed"):
                 return "policy_allowed"
             return "policy_block"
         return extract_reason_code_from_text(vote.reason)

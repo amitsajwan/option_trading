@@ -96,13 +96,17 @@ def _flatten_ml_metrics(value: Any) -> dict[str, Optional[float]]:
         ce_prob = float(direction_up)
     if pe_prob is None and direction_up is not None:
         pe_prob = float(1.0 - direction_up)
+    # ml_entry_prob: "entry_prob" is the ML-pure key; "confidence" is the
+    # deterministic/ML_ENTRY key (both represent the entry model probability).
+    entry_prob = _optional_float(metrics.get("entry_prob")) or _optional_float(metrics.get("confidence"))
     return {
-        "ml_entry_prob": _optional_float(metrics.get("entry_prob")),
+        "ml_entry_prob": entry_prob,
         "ml_direction_up_prob": direction_up,
         "ml_ce_prob": ce_prob,
         "ml_pe_prob": pe_prob,
+        # recipe_prob / recipe_margin: ML-pure only; edge = margin proxy for det engine.
         "ml_recipe_prob": _optional_float(metrics.get("recipe_prob")),
-        "ml_recipe_margin": _optional_float(metrics.get("recipe_margin")),
+        "ml_recipe_margin": _optional_float(metrics.get("recipe_margin")) or _optional_float(metrics.get("edge")),
     }
 
 
