@@ -199,3 +199,40 @@ def test_env_not_mutated_after_replay():
     _run_with_mocked_engine(engine, [])
     after = dict(os.environ)
     assert before == after, "replay_day must not permanently mutate os.environ"
+
+
+class _TracingEngine(_FakeEngine):
+    """Engine that emits a RICH decision trace (last_decision_trace) per bar."""
+
+    def evaluate(self, snap: dict) -> Optional[_FakeSignal]:
+        idx = self._i
+        # Rich trace with candidates + market_structure, unique trace_id per bar.
+        self.last_decision_trace = {
+            "trace_id": f"tr-{idx}",
+            "final_outcome": "entry_taken" if self._signals.get(idx) else "hold",
+            "direction_source": "consensus(direction_ml)",
+            "candidates": [{
+                "strategy_name": "ML_ENTRY",
+                "direction": "CE",
+                "selected": bool(self._signals.get(idx)),
+                "metrics": {"entry_prob": 0.9},
+                "terminal_status": "selected" if self._signals.get(idx) else "blocked",
+            }],
+            "market_structure": {"position_in_range": {"label": "near_high"}},
+        }
+        return super().evaluate(snap)
+
+
+def test_replay_collects_rich_decision_trace():
+    entry_sig = _FakeSignal(_SignalType.ENTRY, direction="CE", strike=48000, premium=500.0)
+    engine = _TracingEngine({1: entry_sig})
+    snaps = [{"timestamp": f"2026-01-02T09:{m:02d}:00"} for m in range(3)]
+    result = _run_with_mocked_engine(engine, snaps)
+
+    traces = result["decision_traces"]
+    # One trace per bar (deduped by trace_id), each carrying the rich payload.
+    assert len(traces) == 3
+    assert {t["trace_id"] for t in traces} == {"tr-0", "tr-1", "tr-2"}
+    assert all(t["candidates"] and t["candidates"][0]["strategy_name"] == "ML_ENTRY" for t in traces)
+    assert all("market_structure" in t for t in traces)
+    assert any(t["direction_source"].startswith("consensus") for t in traces)

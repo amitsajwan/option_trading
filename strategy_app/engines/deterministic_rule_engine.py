@@ -61,7 +61,7 @@ from .entry_pipeline_gates import (
     evaluate_v2 as _evaluate_v2,
 )
 from ..market.depth_context import DepthContext
-from ..runtime.eval_context import clear_depth_context, set_depth_context
+from ..runtime.eval_context import clear_depth_context, clear_entry_diag, get_entry_diag, set_depth_context
 from ..runtime.redis_depth_reader import RedisDepthReader
 from .profiles import (
     PRODUCTION_DEFAULT_PROFILE_ID,
@@ -98,6 +98,7 @@ _PROFILES_ML_ENTRY_DET_DIRECTION = frozenset({
 _PROFILES_ML_ENTRY_CONSENSUS = frozenset({
     PROFILE_TRADER_MASTER_ML_ENTRY_CONSENSUS_V1,
 })
+from ..market.market_structure import MarketStructureTracker
 from ..market.regime import RegimeClassifier, RegimeSignal
 from ..market.snapshot_accessor import SnapshotAccessor
 from .strategy_router import StrategyRouter
@@ -196,6 +197,14 @@ class DeterministicRuleEngine(StrategyEngine):
         # Most-recent v2 gate-cascade decision trace (one bar). Consumed by the sim
         # replay + Terminal decision view. None until the first v2 evaluation.
         self.last_entry_trace: Optional[dict[str, Any]] = None
+        # Most-recent RICH decision trace (DecisionTraceBuilder output: candidates,
+        # direction scores, per-gate veto, entry_prob, regime, market_structure).
+        # This is the clean, LLM-readable record — durably logged in live and
+        # collected ephemerally by the sim replay. None until the first evaluation.
+        self.last_decision_trace: Optional[dict[str, Any]] = None
+        # Session-scoped market-structure reader (bottoms / highs / breakouts lens).
+        # Fed one fut OHLC bar per tick; its read is attached to every decision trace.
+        self._structure = MarketStructureTracker()
         # Per-phase evaluate() profiling — off by default, enable in SIM/replay
         # with STRATEGY_EVAL_TIMING=1 to see where the per-bar budget goes.
         self._eval_timer = PhaseTimer(enabled=as_bool(os.getenv("STRATEGY_EVAL_TIMING", "0")))
@@ -345,6 +354,7 @@ class DeterministicRuleEngine(StrategyEngine):
         self._last_any_exit_bar = None
         self._last_zero_mfe_bar = None
         self._last_zero_mfe_direction = None
+        self._structure.on_session_start(trade_date)
         self._tracker.on_session_start(trade_date)
         # Brain morning briefing: loads daily features + cross-session carry.
         # Must run before risk manager so carry-based consecutive_losses can
@@ -411,6 +421,12 @@ class DeterministicRuleEngine(StrategyEngine):
         # Update rolling IV and VWAP-bias buffers before any shadow-scorer calls.
         self._iv_buf.append((snap.atm_ce_iv, snap.atm_pe_iv))
         self._pvwap_buf.append(snap.price_vs_vwap)
+        # Feed the market-structure reader one fut OHLC bar/tick so every decision
+        # trace can carry the bottoms/highs/breakouts context.
+        self._structure.update(snap)
+        # Clear last bar's entry-model diagnostics; ML_ENTRY repopulates it this bar
+        # (incl. on declines) so the trace captures fired + declined probs (S7).
+        clear_entry_diag()
         # Read live depth side-channel once per bar (None in replay — graceful fallback).
         with self._eval_timer.measure("depth_read"):
             self._current_depth_ctx = (
@@ -430,6 +446,15 @@ class DeterministicRuleEngine(StrategyEngine):
             with self._eval_timer.measure("manage_position"):
                 system_exit = self._manage_open_position(snap, position, risk)
             if system_exit is not None:
+                # A2: trace the system-exit bar too (stop/target/trailing/time/thesis),
+                # so EVERY bar is traced — not just entry/vote bars. _build_position_trace
+                # is self-contained (computes its own regime).
+                exit_trace = self._build_position_trace(
+                    snap=snap, position=position, votes=[], signal=system_exit,
+                    final_outcome="exit_taken",
+                )
+                self.last_decision_trace = exit_trace
+                self._log.log_decision_trace(exit_trace)
                 return system_exit
 
         with self._eval_timer.measure("regime"):
@@ -447,6 +472,21 @@ class DeterministicRuleEngine(StrategyEngine):
         with self._eval_timer.measure("collect_votes"):
             votes = self._collect_votes(snapshot, snap, regime_signal, position, risk, shadow_vote)
         if not votes:
+            # Trace EVERY bar — incl. bars where no strategy voted (e.g. entry model
+            # declined, prob < min_prob). Without this the trace only captured fired
+            # bars, biasing analysis (the declined bars are the not-fired population).
+            no_vote_trace = (
+                self._build_position_trace(
+                    snap=snap, position=position, votes=[], signal=None, final_outcome="manage_only",
+                )
+                if position is not None
+                else self._build_entry_trace(
+                    snap=snap, regime_signal=regime_signal, votes=[], signal=None,
+                    blocker="no_strategy_votes", warmup_blocked=False, warmup_reason="",
+                )
+            )
+            self.last_decision_trace = no_vote_trace
+            self._log.log_decision_trace(no_vote_trace)
             self._emit_decision_summary(
                 snap=snap,
                 action=("manage_only" if position is not None else "hold"),
@@ -497,15 +537,15 @@ class DeterministicRuleEngine(StrategyEngine):
 
         if position is not None:
             active_position = self._tracker.current_position or position
-            self._log.log_decision_trace(
-                self._build_position_trace(
-                    snap=snap,
-                    position=active_position,
-                    votes=votes,
-                    signal=signal,
-                    final_outcome=("exit_taken" if signal is not None else "manage_only"),
-                )
+            decision_trace = self._build_position_trace(
+                snap=snap,
+                position=active_position,
+                votes=votes,
+                signal=signal,
+                final_outcome=("exit_taken" if signal is not None else "manage_only"),
             )
+            self.last_decision_trace = decision_trace
+            self._log.log_decision_trace(decision_trace)
             self._emit_decision_summary(
                 snap=snap,
                 action=("exit_taken" if signal is not None else "manage_only"),
@@ -515,17 +555,17 @@ class DeterministicRuleEngine(StrategyEngine):
                 position=active_position,
             )
         else:
-            self._log.log_decision_trace(
-                self._build_entry_trace(
-                    snap=snap,
-                    regime_signal=regime_signal,
-                    votes=votes,
-                    signal=signal,
-                    blocker=trace_blocker,
-                    warmup_blocked=warmup_blocked,
-                    warmup_reason=warmup_reason,
-                )
+            decision_trace = self._build_entry_trace(
+                snap=snap,
+                regime_signal=regime_signal,
+                votes=votes,
+                signal=signal,
+                blocker=trace_blocker,
+                warmup_blocked=warmup_blocked,
+                warmup_reason=warmup_reason,
             )
+            self.last_decision_trace = decision_trace
+            self._log.log_decision_trace(decision_trace)
             self._emit_decision_summary(
                 snap=snap,
                 action=(
@@ -2619,15 +2659,29 @@ class DeterministicRuleEngine(StrategyEngine):
         # Derive the execution_path from the winning vote's annotation so the trace top-level
         # immediately answers "HOW did this fire?" without reading candidates[0].ordered_gates.
         execution_path: str | None = None
-        if signal is not None:
-            for vote in votes:
-                rs = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
+        # direction_source exposes WHICH direction engine ran (composite heuristic vs
+        # consensus/direction_ml stage-2). Surfacing it on the trace top-level is the
+        # exact signal that lets sim==live fidelity be verified at a glance.
+        direction_source: str | None = None
+        dir_vote_rs: dict[str, Any] = {}
+        dir_vote_dir: Optional[str] = None
+        for vote in votes:
+            if vote.signal_type != SignalType.ENTRY:
+                continue
+            rs = vote.raw_signals if isinstance(vote.raw_signals, dict) else {}
+            ds = str(rs.get("direction_source") or "").strip()
+            if ds and direction_source is None:
+                direction_source = ds
+            if not dir_vote_rs:
+                dir_vote_rs = rs
+                dir_vote_dir = (vote.direction.value if getattr(vote, "direction", None) is not None
+                                and hasattr(vote.direction, "value") else None)
+            if signal is not None:
                 ep = str(rs.get("_execution_path") or "").strip()
-                if ep:
+                if ep and execution_path is None:
                     execution_path = ep
-                    break
-            if execution_path is None:
-                execution_path = "direct_candidate"
+        if signal is not None and execution_path is None:
+            execution_path = "direct_candidate"
         trace = builder.finalize(
             final_outcome=final_outcome,
             primary_blocker_gate=("warmup" if warmup_blocked else blocker),
@@ -2641,6 +2695,44 @@ class DeterministicRuleEngine(StrategyEngine):
         )
         if execution_path is not None:
             trace["execution_path"] = execution_path
+        if direction_source is not None:
+            trace["direction_source"] = direction_source
+        # Consolidated DIRECTION decision card — so "why this side / why no direction
+        # veto" is answerable from the trace alone (no engine grep). Captures the
+        # mode, the direction-model prob, the de-correlated margin, the bull/bear
+        # evidence the veto reads, and whether the GOOD/OK/BAD grader actually ran
+        # (it no-ops in consensus mode → grade_evaluated=False exposes that gap).
+        _ev = getattr(regime_signal, "evidence", None) or {}
+        trace["direction"] = {
+            "mode": os.getenv("ML_ENTRY_DIRECTION_MODE", "composite"),
+            "chosen": dir_vote_dir,
+            "source": direction_source,
+            "ml_ce_prob": _safe_float(dir_vote_rs.get("ml_direction_ce_prob")),
+            "margin": _safe_float(
+                dir_vote_rs.get("entry_dir_margin")
+                if dir_vote_rs.get("entry_dir_margin") is not None
+                else dir_vote_rs.get("direction_consensus_margin")
+            ),
+            "evidence": {
+                "bull_score": _safe_float(_ev.get("bull_score")),
+                "bear_score": _safe_float(_ev.get("bear_score")),
+            },
+            "grade": dir_vote_rs.get("entry_grade"),
+            "tier": dir_vote_rs.get("tier"),
+            # False ⇒ the entry-quality grader did NOT run for this decision
+            # (e.g. consensus mode emits ml_direction_* not entry_dir_*), so the
+            # thin-margin / chop / iv-skew direction vetoes were bypassed.
+            "grade_evaluated": bool(dir_vote_rs.get("entry_grade")),
+        }
+        # Entry-model diagnostics for EVERY bar — incl. declined bars (prob < threshold)
+        # that produced no vote/candidate. This is what makes entry separation
+        # measurable (fired vs declined prob distribution) — S7.
+        _ediag = get_entry_diag()
+        if isinstance(_ediag, dict):
+            trace["entry_model"] = dict(_ediag)
+        # Market-structure context (bottoms / highs / breakouts lens) so the clean
+        # record answers "WHERE in the tape did we decide?" without model introspection.
+        trace["market_structure"] = self._structure.snapshot(snap)
         # Attach brain context to trace so the UI blocker funnel can show
         # day_score and consensus details without a separate API call.
         if self._day_context is not None:
@@ -2747,7 +2839,7 @@ class DeterministicRuleEngine(StrategyEngine):
                     selected=False,
                 )
         primary_blocker = None if signal is not None else "no_exit_trigger"
-        return builder.finalize(
+        trace = builder.finalize(
             final_outcome=final_outcome,
             primary_blocker_gate=primary_blocker,
             summary_metrics={
@@ -2756,6 +2848,8 @@ class DeterministicRuleEngine(StrategyEngine):
                 "pnl_pct": position.pnl_pct,
             },
         )
+        trace["market_structure"] = self._structure.snapshot(snap)
+        return trace
 
     def _write_brain_state(self, trade_date: date) -> None:
         """Write brain morning context to brain_state.json for dashboard observability."""

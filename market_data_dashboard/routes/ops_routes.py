@@ -50,6 +50,15 @@ _SAFE_OVERRIDE_KEYS = {
     "STRATEGY_PROFILE_ID",
     "STRATEGY_ENTRY_PIPELINE_V2",
     "SMART_STRIKE_MIN_PREMIUM",
+    # Entry-model A/B (sim-only): point a sim run at a candidate bundle + its operating
+    # threshold without touching the live model. Lets us validate a replacement model
+    # via the trace harness before any live cut-over.
+    "ENTRY_ML_MODEL_PATH",
+    "ENTRY_ML_MIN_PROB",
+    # Direction A/B (sim-only): flip the direction engine (composite heuristic resolver
+    # vs consensus ML direction model) to compare CE/PE selection + grader activation.
+    "ML_ENTRY_DIRECTION_MODE",
+    "DIRECTION_ML_MODEL_PATH",
     # Lottery / adaptive mode
     "EXIT_STRATEGY_MODE",
     "ADAPTIVE_LOTTERY_REGIMES",
@@ -311,6 +320,12 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
                           "/app/ml_pipeline_2/artifacts/entry_only/published/entry_only_model.joblib"),
             "DIRECTION_ML_MODEL_PATH": _live("DIRECTION_ML_MODEL_PATH",
                           "/app/ml_pipeline_2/artifacts/direction_only/published/direction_only_model.joblib"),
+            # Direction-selection mode MUST mirror live. Live leaves ML_ENTRY_DIRECTION_MODE
+            # UNSET (the .env.compose value never reaches the strategy container), so the
+            # engine defaults to `composite`. The earlier "consensus" fallback here made
+            # the sim diverge from live (forced the degenerate direction-only ML model →
+            # all-CE) — verified 2026-06-05. Fallback MUST be composite to match live.
+            "ML_ENTRY_DIRECTION_MODE": _live("ML_ENTRY_DIRECTION_MODE", "composite"),
             "ENTRY_ML_MIN_PROB":       _live("ENTRY_ML_MIN_PROB", "0.65"),
             "DIRECTION_ML_WEIGHT":     _live("DIRECTION_ML_WEIGHT", "0.40"),
             "DIRECTION_ML_FILTER_MIN_PROB": _live("DIRECTION_ML_FILTER_MIN_PROB", ""),
@@ -442,6 +457,14 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
                 "overrides_applied": {k: v for k, v in overrides.items() if k in _SAFE_OVERRIDE_KEYS},
             })
 
+        # Auto-generate the decision-trace digest (no manual export step). Uses the
+        # in-process traces/snapshots/trades; writes an ephemeral JSON+MD report to
+        # the run dir and attaches the markdown to the job so the UI/API can show it.
+        try:
+            _attach_trace_analysis(job_id, decision_traces, snaps, trades, live_trades)
+        except Exception as exc:
+            logger.warning("ops sim: trace analysis failed (non-fatal): %s", exc)
+
         # Persist to Mongo sim collections so the Replay terminal can show it.
         # NOTE: snapshots/positions are persisted under "ops-sim-{job_id}" — the
         # SAME id the replay UI queries. _run_engine set job["run_id"] to the
@@ -464,6 +487,60 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
 
 
 _IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _attach_trace_analysis(
+    job_id: str,
+    decision_traces: Optional[list[dict]],
+    snaps: list[dict],
+    trades: list[dict],
+    live_trades: Optional[list[dict]] = None,
+) -> None:
+    """Run the decision-trace analyzer in-process and attach the digest to the job.
+
+    Removes the manual "export to JSONL + run CLI" step: when a sim finishes, the
+    LLM-readable report (per-component health + entry-model label verification +
+    market-structure read) is generated automatically and stored on the job, plus
+    written to the ephemeral run dir.
+    """
+    if not decision_traces:
+        return
+    from strategy_app.sim.trace_digest import analyze_traces, render_markdown
+
+    # Entry-label thresholds — default to the DEPLOYED model (50pts / 10min), env-overridable.
+    horizon = int(os.getenv("ENTRY_LABEL_VERIFY_HORIZON", "10") or "10")
+    min_points = float(os.getenv("ENTRY_LABEL_VERIFY_MIN_POINTS", "50") or "50")
+
+    report = analyze_traces(
+        decision_traces, trades,
+        snapshots=snaps,
+        entry_horizon_minutes=horizon,
+        entry_min_points=min_points,
+    )
+    markdown = render_markdown(report)
+
+    run_dir = Path(f"/tmp/sim_{job_id}")
+    run_dir.mkdir(exist_ok=True)
+    try:
+        (run_dir / "trace_report.json").write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+        (run_dir / "trace_report.md").write_text(markdown, encoding="utf-8")
+        # SAME FORMAT AS LIVE: one full decision-trace per line, identical shape to the
+        # live sink (.run/strategy_app/decision_traces.jsonl). So analyze_sim_trace.py
+        # and the per-decision card run identically on sim and live trace files.
+        with (run_dir / "decision_traces.jsonl").open("w", encoding="utf-8") as fh:
+            for tr in decision_traces:
+                fh.write(json.dumps(tr, default=str) + "\n")
+    except Exception:
+        pass  # report attachment to the job is the primary channel
+
+    with _jobs_lock:
+        _jobs[job_id]["analysis"] = {
+            "markdown": markdown,
+            "entry_label_check": report.get("entry_label_check"),
+            "ml_entry": report.get("ml_entry"),
+            "direction": report.get("direction"),
+            "market_structure": report.get("market_structure"),
+        }
 
 
 def _persist_sim_to_mongo(

@@ -176,6 +176,19 @@ class MlEntryStrategy(BaseStrategy):
         entry_prob = predict_positive_class_prob(bundle, snap)
         if entry_prob is None:
             return None
+        # Record the prob EVERY bar — incl. declines — so the trace captures the full
+        # distribution (fired + declined) for separation analysis (S7). Done before the
+        # threshold gate so declined bars (prob < min_prob) are not lost.
+        try:
+            from ...runtime.eval_context import set_entry_diag
+            set_entry_diag({
+                "entry_prob": round(float(entry_prob), 4),
+                "threshold": round(float(self._min_prob), 4),
+                "fired": bool(entry_prob >= self._min_prob),
+                "snapshot_id": snap.snapshot_id,
+            })
+        except Exception:
+            pass
         if entry_prob < self._min_prob:
             return None
 

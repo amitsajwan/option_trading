@@ -159,12 +159,17 @@ def replay_day(
                 diag["first_error"] = f"{exc} :: {traceback.format_exc()[-400:]}"
             continue
 
-        # Capture the per-bar gate cascade BEFORE the signal-None short-circuit —
-        # the no_trade bars are exactly the ones we need to explain. None under v1.
-        _tr = getattr(engine, "last_entry_trace", None)
-        if _tr is not None and _tr.get("decision_id") != _last_trace_id:
-            _last_trace_id = _tr.get("decision_id")
-            decision_traces.append(_tr)
+        # Capture the per-bar decision trace BEFORE the signal-None short-circuit —
+        # the no_trade bars are exactly the ones we need to explain. Prefer the RICH
+        # trace (DecisionTraceBuilder: candidates, direction scores, per-gate veto,
+        # entry_prob, market_structure); fall back to the v2 gate-cascade trace.
+        # Dedup per bar: rich trace uses trace_id, the v2 trace uses decision_id.
+        _tr = getattr(engine, "last_decision_trace", None) or getattr(engine, "last_entry_trace", None)
+        if _tr is not None:
+            _tr_key = _tr.get("trace_id") or _tr.get("decision_id")
+            if _tr_key != _last_trace_id:
+                _last_trace_id = _tr_key
+                decision_traces.append(_tr)
 
         if signal is None:
             continue
@@ -202,7 +207,13 @@ def replay_day(
                 mfe_pct  = float(cp.get("mfe_pct", 0))
                 mae_pct  = float(cp.get("mae_pct", 0))
                 exit_prem = float(cp.get("exit_premium", current_entry["prem_in"]))
-                label = str(cp.get("exit_policy_triggered") or cp.get("exit_reason") or "")
+                # Surface the SPECIFIC exit, not just the generic trigger: the stack
+                # records exit_policy_triggered="exit_stack" but the real rule that fired
+                # (trailing_stop/target_hit/thesis_fail/time_stop/stop_loss) is in
+                # exit_reason. Show "trigger:reason" so neither is lost (A6).
+                _trig = str(cp.get("exit_policy_triggered") or "")
+                _rsn = str(cp.get("exit_reason") or "")
+                label = f"{_trig}:{_rsn}" if (_trig and _rsn and _trig != _rsn) else (_trig or _rsn or "")
             else:
                 pnl_pct = mfe_pct = mae_pct = 0.0
                 exit_prem = current_entry["prem_in"]

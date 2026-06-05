@@ -136,3 +136,50 @@ def test_depth_decorrelation_caps_net_vote(monkeypatch: pytest.MonkeyPatch) -> N
     finally:
         clear_depth_context()
     assert off.margin > on.margin, "decorrelation should reduce manufactured margin"
+
+
+def test_dir_ml_tilt_confidence_weighted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ENTRY_DIR_W_ML adds a confidence-weighted tilt from the direction-ML model.
+
+    A flat ce_prob (~0.5, degenerate model) contributes ~0; a confident call adds
+    up to the weight on the signed side.
+    """
+    import strategy_app.ml.entry_direction_resolver as r
+    # Kill all non-ML signals so the score is the ML tilt only.
+    for key in ("ENTRY_DIR_W_MOMENTUM_5M", "ENTRY_DIR_W_MOMENTUM_15M", "ENTRY_DIR_W_VWAP",
+                "ENTRY_DIR_W_VIX", "ENTRY_DIR_W_IV_SKEW", "ENTRY_DIR_W_OR_TRAP",
+                "ENTRY_DIR_W_PCR", "ENTRY_DIR_W_DEPTH"):
+        monkeypatch.setenv(key, "0")
+    monkeypatch.setenv("ENTRY_DIR_W_ML", "0.20")
+    monkeypatch.setenv("ENTRY_DIR_MIN_MARGIN", "0.0001")
+    snap = _snap(futures_derived={})
+
+    # Confident PE call (ce_prob 0.1) -> PE, contrib = 0.20*|2*(0.1-0.5)| = 0.16
+    monkeypatch.setattr(r, "_ml_direction_ce_prob", lambda s: 0.1)
+    res = resolve_entry_direction_composite(snap)
+    assert res.direction == Direction.PE
+    assert res.sources.get("dir_ml:PE") == pytest.approx(0.16, abs=1e-3)
+
+    # Confident CE call (ce_prob 0.9) -> CE, contrib 0.16
+    monkeypatch.setattr(r, "_ml_direction_ce_prob", lambda s: 0.9)
+    res = resolve_entry_direction_composite(snap)
+    assert res.direction == Direction.CE
+    assert res.sources.get("dir_ml:CE") == pytest.approx(0.16, abs=1e-3)
+
+    # Flat/degenerate model (0.515) contributes ~0.006 -> negligible (vetoed by margin).
+    monkeypatch.setattr(r, "_ml_direction_ce_prob", lambda s: 0.515)
+    monkeypatch.setenv("ENTRY_DIR_MIN_MARGIN", "0.05")
+    res = resolve_entry_direction_composite(snap)
+    assert res.vetoed  # tiny tilt below margin floor -> no conviction
+
+
+def test_dir_ml_disabled_when_weight_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    import strategy_app.ml.entry_direction_resolver as r
+    monkeypatch.setenv("ENTRY_DIR_W_ML", "0")
+    called = {"n": 0}
+    def _spy(s):
+        called["n"] += 1
+        return 0.9
+    monkeypatch.setattr(r, "_ml_direction_ce_prob", _spy)
+    resolve_entry_direction_composite(_snap())
+    assert called["n"] == 0  # weight 0 -> model never consulted
