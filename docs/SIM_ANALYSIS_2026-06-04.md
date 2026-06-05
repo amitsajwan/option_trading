@@ -352,3 +352,13 @@ gaps**, not malfunctions.
 ## One-line verdict
 *The plumbing now tells the truth; the strategy isn't buggy; the **direction model is
 the real problem**, and exits + grader need observability/coverage before tuning.*
+
+---
+
+## CUTOVER (2026-06-05): v2 models LIVE (paper)
+Both latest models plugged into live (paper, 0.25x) per user go:
+- Entry: **v2 010pct @ ENTRY_ML_MIN_PROB=0.50** (fires ~19%, selective). Direction: **composite + direction-v2 as 0.20 dir_ml tilt**, grader active.
+- Method: bind-mounted `artifacts/` → host file-swap + restart, **no rebuild**. Bundles from GCS `*_v2/active/`. Backups: `*.bak.E6` / `*.bak.v1`.
+- Validated (ops-sim = live config, 06-04): entry 19.1% fire, grader 5/5, dir_ml firing, 5 trades +15.82%, no errors.
+- Rollback: restore `.bak` + ENTRY_ML_MIN_PROB=0.65 + restart (~2 min).
+- Memory: project_v2_models_live_cutover_2026-06-05.
