@@ -279,6 +279,15 @@ final consolidated verdict + prioritized plan above. S7 + multi-day are tracked 
 
 ---
 
+## STATUS (2026-06-05) — harness/observability findings: ALL DONE + deployed + validated
+- **A1** declined-prob capture (S7) — done. **A2** trace every bar incl. exits (367 bars) — done.
+- **A4** grader — resolved (live=composite → grader active). **A5** entry v2 — published.
+- **A6** specific exit reason (`exit_stack:trailing_stop`) — done. **A7** giveback stats — done
+  (06-04: 2 givebacks, +3.53% MFE returned). **A9** separation threshold-sweep — done
+  (E6 @0.90: SEP +0.277). **A10** live=composite — verified (was always composite).
+- **A3** direction rework — addressed via composite + `ENTRY_DIR_W_ML=0.20` tilt + direction-v2.
+- Remaining = the two **deliberate** cutover decisions (v2 models live; merge to main) — not blockers.
+
 ## CONSOLIDATED ACTIONS (what / where) — updated each step
 | # | Action | Where | Priority |
 |---|--------|-------|----------|
