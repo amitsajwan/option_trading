@@ -75,13 +75,12 @@ def test_no_fakeout_conflict_on_breakout():
     assert "loaded_into_fakeout" not in analyze_conflicts(v).conflicts
 
 
-def test_structure_quality_is_neutral_except_fakeout_penalty():
-    # DATA-DRIVEN (8 live days, n=24): breakout did NOT beat coiling, so quality is NOT
-    # biased by breakout. Only a fakeout (trap) is penalised.
+def test_structure_breakout_casts_a_confirming_vote():
+    # breakout CONFIRMS (votes quality up); fakeout withholds (votes down); coiling neutral.
+    # A modest vote (compared on raw quality so the nudge is visible past integer rounding).
     breakout = assess_opportunity(_loaded_verdicts(structure=_v("structure", "breakout", value=1.0)), gate_p=1.0)
     coiling = assess_opportunity(_loaded_verdicts(structure=_v("structure", "coiling", value=0.3)), gate_p=1.0)
-    at_extreme = assess_opportunity(_loaded_verdicts(structure=_v("structure", "at_extreme", value=0.0)), gate_p=1.0)
     fakeout = assess_opportunity(_loaded_verdicts(structure=_v("structure", "fakeout", value=-1.0)), gate_p=1.0)
-    assert breakout.quality == coiling.quality == at_extreme.quality   # no unproven bias
-    assert fakeout.quality < breakout.quality                          # trap still down-ranked
-    assert breakout.evidence["structure"] == "breakout"
+    assert breakout.evidence["quality_raw"] > coiling.evidence["quality_raw"] > fakeout.evidence["quality_raw"]
+    assert breakout.evidence["structure_confirms"] is True
+    assert coiling.evidence["structure_confirms"] is False

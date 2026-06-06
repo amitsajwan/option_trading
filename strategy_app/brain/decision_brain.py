@@ -24,16 +24,16 @@ SCORE_MIN = 3
 P_REF = 0.55                 # realistic structural-bias direction (Sprint-4 replaces)
 EDGE_THRESHOLD = 0.0
 QUALITY_MIN = 5
-W_EDGE, W_TAIL, W_ROOM, W_STRUCT = 0.45, 0.25, 0.20, 0.10
+W_EDGE, W_TAIL, W_ROOM, W_STRUCT = 0.45, 0.25, 0.15, 0.15
 EDGE_FULL, SPACE_FULL = 0.03, 3.0
 CURVE_POINTS = (0.50, 0.55, 0.58, 0.60, 1.0)
-# structure -> quality contribution. NOTE (2026-06-06, 8 live days, n=24): the trader
-# intuition "breakout > coiling" did NOT hold — breakout was rare (n=3) and `at_extreme`
-# saw the biggest moves. So we do NOT bias quality by breakout (insufficient/contrary
-# evidence); structure only PENALISES a fakeout (a failed-breakout trap is a safety rule,
-# not an edge claim). Revisit with more days / a direction study, where structure likely
-# matters most. Direction-agnostic.
-_STRUCT_QUALITY = {"breakout": 0.5, "coiling": 0.5, "inside": 0.5, "at_extreme": 0.5, "fakeout": 0.0}
+# structure as a CONFIRMING VOTE (per operator): a breakout = the spring releasing through a
+# level confirms the setup's timing (the "release" Phase-0 lacked) and votes the quality UP;
+# a fakeout (failed-breakout trap) withholds confirmation and votes it DOWN. This is a
+# conviction/agreement vote, NOT an edge-size claim — on 8 quiet days breakout did not predict
+# a bigger move (n=3), so W_STRUCT is modest: it nudges, it does not gate. Direction-agnostic.
+_STRUCT_QUALITY = {"breakout": 1.0, "coiling": 0.5, "inside": 0.5, "at_extreme": 0.5, "fakeout": 0.0}
+_STRUCT_CONFIRMS = {"breakout"}     # which structure verdicts cast a confirming vote
 
 # Tradeable regimes: a LOADED SPRING is by definition compression (atr_build < 0.7*atr_base),
 # which the regime sense labels "compressed" — so it MUST be tradeable. The policy's
@@ -189,7 +189,9 @@ def assess_opportunity(
     n_edge = _clamp01(edge_gate / EDGE_FULL)
     n_tail = _clamp01(prob_200 / 0.20)
     n_room = _clamp01((space_ratio - 1.0) / (SPACE_FULL - 1.0))
-    quality = round(10 * (W_EDGE * n_edge + W_TAIL * n_tail + W_ROOM * n_room + W_STRUCT * n_struct))
+    q_raw = 10 * (W_EDGE * n_edge + W_TAIL * n_tail + W_ROOM * n_room + W_STRUCT * n_struct)
+    quality = round(q_raw)
+    structure_confirms = struct_state in _STRUCT_CONFIRMS    # breakout casts the confirming vote
     passes = (edge_gate > EDGE_THRESHOLD) and (quality >= QUALITY_MIN)
 
     return OpportunityVerdict(
@@ -197,6 +199,7 @@ def assess_opportunity(
         evidence={"gross_if_right_pct": gr, "gross_if_wrong_pct": gw, "cost_pct": cost,
                   "gate_p": gate_p, "edge_at_gate_p": round(edge_gate, 5),
                   "prob_200": prob_200, "space_to_move_ratio": space_ratio, "structure": struct_state,
+                  "structure_confirms": structure_confirms, "quality_raw": round(q_raw, 3),
                   "n_edge": round(n_edge, 3), "n_tail": round(n_tail, 3),
                   "n_room": round(n_room, 3), "n_struct": round(n_struct, 3)},
     )
