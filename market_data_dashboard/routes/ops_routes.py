@@ -731,6 +731,9 @@ def _persist_sim_to_mongo(
                 "selected_strike": tr.get("selected_strike"),
                 "selected_premium": tr.get("selected_premium"),
                 "gates": tr.get("gates", []),
+                # Intelligent-brain shadow block (senses verdicts + ladder + decision) so the
+                # Replay UI can show the new senses->brain->direction->exit flow per bar.
+                "intelligent_brain": tr.get("intelligent_brain"),
                 # Terminal-compatible fields (mirrors v1 trace shape)
                 "engine_mode": "v2_gate_cascade",
                 "decision_mode": "v2",
