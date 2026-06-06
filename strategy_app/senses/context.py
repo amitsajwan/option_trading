@@ -72,6 +72,12 @@ class BarContext:
     # intra-trade path for exit simulation: (high_disp, low_disp, close_disp) per future bar,
     # displacement in points from the entry close. Backtest only.
     future_path: list[tuple[float, float, float]] = field(default_factory=list)
+    # REAL held-strike option-premium %-paths (best_pct, worst_pct, close_pct) per future bar,
+    # measured from the actual chain ltp/high/low vs the entry-strike premium. Backtest only.
+    future_opt_ce: list[tuple[float, float, float]] = field(default_factory=list)
+    future_opt_pe: list[tuple[float, float, float]] = field(default_factory=list)
+    entry_ce_premium: float | None = None
+    entry_pe_premium: float | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
     def as_mapping(self) -> dict[str, Any]:
@@ -160,6 +166,39 @@ def _structure_for_bar(bars: list[dict[str, Any]], i: int) -> dict[str, Any]:
             "struct_trend": trend, "day_high": day_h, "day_low": day_l}
 
 
+def _held_strike_paths(bars: list[dict[str, Any]], i: int, horizon: int):
+    """Real held-contract option %-paths. Picks the entry strike (nearest to entry close),
+    then walks THAT SAME strike's ltp/high/low over the next `horizon` bars (carry-forward if
+    the strike drops out of the chain window). Returns (entry_ce, entry_pe, ce_path, pe_path)
+    or (None, None, [], []) when the chain is absent."""
+    chain = bars[i].get("chain")
+    if not chain:
+        return None, None, [], []
+    close = float(bars[i]["c"])
+    strike = min(chain, key=lambda k: abs(k - close))
+    row0 = chain[strike]
+    entry_ce, entry_pe = row0.get("ce"), row0.get("pe")
+    ce_path: list[tuple[float, float, float]] = []
+    pe_path: list[tuple[float, float, float]] = []
+    last_ce = last_pe = None
+    for x in bars[i + 1:i + 1 + horizon]:
+        cj = x.get("chain") or {}
+        row = cj.get(strike)
+        if row is not None:
+            last_ce = row
+            last_pe = row
+        rc, rp = (last_ce or {}), (last_pe or {})
+        if entry_ce and rc.get("ce") is not None:
+            ce_path.append(((rc.get("ce_h", rc["ce"]) - entry_ce) / entry_ce,
+                            (rc.get("ce_l", rc["ce"]) - entry_ce) / entry_ce,
+                            (rc["ce"] - entry_ce) / entry_ce))
+        if entry_pe and rp.get("pe") is not None:
+            pe_path.append(((rp.get("pe_h", rp["pe"]) - entry_pe) / entry_pe,
+                            (rp.get("pe_l", rp["pe"]) - entry_pe) / entry_pe,
+                            (rp["pe"] - entry_pe) / entry_pe))
+    return entry_ce, entry_pe, ce_path, pe_path
+
+
 def build_contexts(
     days_bars: dict[str, list[dict[str, Any]]],
     *,
@@ -207,6 +246,7 @@ def build_contexts(
                 fut_signed = up if up >= down else -down
                 fut_path = [(float(x["h"]) - entry, float(x["l"]) - entry, float(x["c"]) - entry)
                             for x in future]
+            entry_ce_prem, entry_pe_prem, opt_ce, opt_pe = _held_strike_paths(bars, i, horizon)
             out.append(BarContext(
                 day=day, index=i, close=float(b["c"]),
                 atr_build=atr_build, atr_base=atr_base,
@@ -225,6 +265,8 @@ def build_contexts(
                 struct_position=struct["struct_position"], struct_trend=struct["struct_trend"],
                 day_high=struct["day_high"], day_low=struct["day_low"],
                 future_move_pt=fut_move, future_signed_move_pt=fut_signed, future_path=fut_path,
+                future_opt_ce=opt_ce, future_opt_pe=opt_pe,
+                entry_ce_premium=entry_ce_prem, entry_pe_premium=entry_pe_prem,
             ))
     return out
 

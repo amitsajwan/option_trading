@@ -24,7 +24,7 @@ from typing import Any
 from strategy_app.brain.decision_brain import CURVE_POINTS, P_REF, DecisionBrain
 from strategy_app.brain.sense_runner import run_senses
 from strategy_app.senses.context import build_contexts
-from strategy_app.position.exit_sim import ExitParams, simulate_exit
+from strategy_app.position.exit_sim import ExitParams, simulate_exit, simulate_exit_real
 from strategy_app.senses.cost_ev import CostEvSense
 from strategy_app.senses.direction import DirectionSense, PlaceholderDirection
 
@@ -46,8 +46,10 @@ class BacktestReport:
     structure_breakdown: dict[str, tuple[int, float, float]] = field(default_factory=dict)
     # real DirectionSense on taken trades: (n_decided, n_abstain, accuracy, net%_avg over decided)
     direction_real: tuple[int, int, float, float] = (0, 0, 0.0, 0.0)
-    # simulated exits on decided trades: (time_stop_net%_avg, giveback_fix_net%_avg)
+    # simulated exits on decided trades (delta proxy): (time_stop_net%_avg, giveback_fix_net%_avg)
     exit_compare: tuple[float, float] = (0.0, 0.0)
+    # REAL held-strike option-price exits: (n, time_stop_net%_avg, giveback_net%_avg, avg_entry_premium)
+    real_exit_compare: tuple[int, float, float, float] = (0, 0.0, 0.0, 0.0)
 
     #: direction accuracy we have plausibly achieved (handover: structural/ML ~0.55-0.59)
     ACHIEVABLE_ACCURACY = 0.60
@@ -103,9 +105,12 @@ class BacktestReport:
                       f"  decided={dec}  abstained={ab}  realized_accuracy={acc:.1%}  "
                       f"net/trade@that_accuracy={net * 100:.2f}%"]
             ts, gb = self.exit_compare
-            lines += ["  exits on decided trades (simulated on the real path, net of cost):",
-                      f"    time-stop (hold to 10m): {ts * 100:.2f}%/trade   "
-                      f"giveback-fix (stop+trail):  {gb * 100:.2f}%/trade"]
+            lines += ["  exits — DELTA PROXY (net of cost):",
+                      f"    time-stop: {ts * 100:.2f}%/trade   giveback-fix: {gb * 100:.2f}%/trade"]
+            rn, rts, rgb, rprem = self.real_exit_compare
+            if rn:
+                lines += [f"  exits — REAL held-strike option path (n={rn}, avg entry premium Rs{rprem:.0f}, net of cost):",
+                          f"    time-stop: {rts * 100:.2f}%/trade   giveback-fix: {rgb * 100:.2f}%/trade   <-- REAL PRICES"]
         return "\n".join(lines)
 
 
@@ -133,7 +138,9 @@ def run_brain_backtest(
     struct_acc: dict[str, list[tuple[float, float]]] = {}   # struct -> [(realised_move, net@perfect)]
     dir_decided = dir_correct = dir_abstain = 0
     dir_net_sum = 0.0
-    exit_ts_sum = exit_gb_sum = 0.0      # simulated exits over decided trades
+    exit_ts_sum = exit_gb_sum = 0.0      # delta-proxy exits over decided trades
+    real_decided = 0
+    real_ts_sum = real_gb_sum = real_prem_sum = 0.0   # REAL held-strike option-path exits
     exit_params = ExitParams(premium_pts=cost_ev.premium_pts)
 
     for ctx in contexts:
@@ -178,6 +185,16 @@ def run_brain_backtest(
             exit_ts_sum += float(simulate_exit(rd.verdict, ctx.future_path, exit_params,
                                                time_stop_only=True)["exit_pct"]) - cost
             exit_gb_sum += float(simulate_exit(rd.verdict, ctx.future_path, exit_params)["exit_pct"]) - cost
+            # REAL held-strike option path + real per-trade cost on the actual entry premium
+            real_path = ctx.future_opt_ce if rd.verdict == "CE" else ctx.future_opt_pe
+            entry_prem = ctx.entry_ce_premium if rd.verdict == "CE" else ctx.entry_pe_premium
+            if real_path and entry_prem and entry_prem > 0:
+                ev = entry_prem * cost_ev.lot_qty
+                real_cost = cost_ev.cost_model.breakdown(entry_value=ev, exit_value=ev)["total_cost_amount"] / ev
+                real_decided += 1
+                real_prem_sum += entry_prem
+                real_ts_sum += float(simulate_exit_real(real_path, exit_params, time_stop_only=True)["exit_pct"]) - real_cost
+                real_gb_sum += float(simulate_exit_real(real_path, exit_params)["exit_pct"]) - real_cost
         else:
             dir_abstain += 1
 
@@ -202,6 +219,10 @@ def run_brain_backtest(
                         (dir_net_sum / dir_decided if dir_decided else 0.0)),
         exit_compare=((exit_ts_sum / dir_decided if dir_decided else 0.0),
                       (exit_gb_sum / dir_decided if dir_decided else 0.0)),
+        real_exit_compare=(real_decided,
+                           (real_ts_sum / real_decided if real_decided else 0.0),
+                           (real_gb_sum / real_decided if real_decided else 0.0),
+                           (real_prem_sum / real_decided if real_decided else 0.0)),
     )
 
 
@@ -224,7 +245,18 @@ def _load_days_from_mongo() -> tuple[dict[str, list[dict[str, Any]]], dict[str, 
             fd = s.get("futures_derived") or {}
             ca = s.get("chain_aggregates") or {}
             orng = s.get("opening_range") or {}
+            chain = {}
+            for row in (s.get("strikes") or []):
+                k = row.get("strike")
+                if k is None:
+                    continue
+                chain[int(round(float(k)))] = {
+                    "ce": row.get("ce_ltp"), "pe": row.get("pe_ltp"),
+                    "ce_h": row.get("ce_high"), "ce_l": row.get("ce_low"),
+                    "pe_h": row.get("pe_high"), "pe_l": row.get("pe_low"),
+                }
             rows.append({
+                "chain": chain,
                 "c": f.get("fut_close"), "h": f.get("fut_high"), "l": f.get("fut_low"),
                 "ovol": (ca.get("total_ce_volume") or 0) + (ca.get("total_pe_volume") or 0),
                 "ooi": (ca.get("total_ce_oi") or 0) + (ca.get("total_pe_oi") or 0),

@@ -33,6 +33,32 @@ def _prem_pct(delta: float, disp: float, premium_pts: float, theta: float, bar_i
     return delta * disp / premium_pts - theta * (bar_idx + 1)
 
 
+def walk_premium_path(
+    prem_path: list[tuple[float, float, float]],
+    params: ExitParams | None = None,
+    *,
+    time_stop_only: bool = False,
+) -> dict[str, float | int | str]:
+    """Apply the exit policy over a premium-% path: per-bar (best_pct, worst_pct, close_pct),
+    each already a return on premium. Model-free core — used by both the delta proxy and the
+    REAL per-strike option path. hard-stop on the adverse extreme, MFE-giveback trail, time-stop.
+    """
+    p = params or ExitParams()
+    if not prem_path:
+        return {"exit_pct": 0.0, "exit_bar": 0, "reason": "no_path"}
+    peak_mfe = -1e9
+    for t, (best_pct, worst_pct, close_pct) in enumerate(prem_path):
+        if not time_stop_only:
+            if worst_pct <= -p.hard_stop_pct:
+                return {"exit_pct": -p.hard_stop_pct, "exit_bar": t, "reason": "hard_stop"}
+            peak_mfe = max(peak_mfe, best_pct)
+            if peak_mfe >= p.min_mfe_to_trail and close_pct <= peak_mfe * (1.0 - p.mfe_giveback_frac):
+                return {"exit_pct": round(close_pct, 5), "exit_bar": t, "reason": "mfe_giveback"}
+        else:
+            peak_mfe = max(peak_mfe, best_pct)
+    return {"exit_pct": round(prem_path[-1][2], 5), "exit_bar": len(prem_path) - 1, "reason": "time_stop"}
+
+
 def simulate_exit(
     side: str,
     future_path: list[tuple[float, float, float]],
@@ -50,32 +76,28 @@ def simulate_exit(
     if not future_path:
         return {"exit_pct": 0.0, "exit_bar": 0, "reason": "no_path"}
     ce = side == "CE"
-
-    peak_mfe = -1e9
+    prem_path = []
     for t, (high_disp, low_disp, close_disp) in enumerate(future_path):
-        # favourable / adverse underlying displacement for this side
         fav_best = high_disp if ce else -low_disp     # most favourable point in the bar
         fav_worst = low_disp if ce else -high_disp     # most adverse point in the bar
-        best_pct = _prem_pct(p.delta, fav_best, p.premium_pts, p.theta_pct_per_bar, t)
-        worst_pct = _prem_pct(p.delta, fav_worst, p.premium_pts, p.theta_pct_per_bar, t)
-        close_pct = _prem_pct(p.delta, (close_disp if ce else -close_disp), p.premium_pts, p.theta_pct_per_bar, t)
-
-        if not time_stop_only:
-            # 1) hard stop — adverse extreme breaches the cap (conservative: fill at the cap)
-            if worst_pct <= -p.hard_stop_pct:
-                return {"exit_pct": -p.hard_stop_pct, "exit_bar": t, "reason": "hard_stop"}
-            # 2) MFE giveback — once we've run, don't hand it back
-            peak_mfe = max(peak_mfe, best_pct)
-            if peak_mfe >= p.min_mfe_to_trail and close_pct <= peak_mfe * (1.0 - p.mfe_giveback_frac):
-                return {"exit_pct": round(close_pct, 5), "exit_bar": t, "reason": "mfe_giveback"}
-        else:
-            peak_mfe = max(peak_mfe, best_pct)
-
-    # 3) time stop — exit at the last bar's close
-    last_close_disp = future_path[-1][2]
-    exit_pct = _prem_pct(p.delta, (last_close_disp if ce else -last_close_disp),
-                         p.premium_pts, p.theta_pct_per_bar, len(future_path) - 1)
-    return {"exit_pct": round(exit_pct, 5), "exit_bar": len(future_path) - 1, "reason": "time_stop"}
+        prem_path.append((
+            _prem_pct(p.delta, fav_best, p.premium_pts, p.theta_pct_per_bar, t),
+            _prem_pct(p.delta, fav_worst, p.premium_pts, p.theta_pct_per_bar, t),
+            _prem_pct(p.delta, (close_disp if ce else -close_disp), p.premium_pts, p.theta_pct_per_bar, t),
+        ))
+    return walk_premium_path(prem_path, p, time_stop_only=time_stop_only)
 
 
-__all__ = ["ExitParams", "simulate_exit"]
+def simulate_exit_real(
+    prem_path: list[tuple[float, float, float]],
+    params: ExitParams | None = None,
+    *,
+    time_stop_only: bool = False,
+) -> dict[str, float | int | str]:
+    """Exit on the REAL held-strike option path: per-bar (best_pct, worst_pct, close_pct)
+    measured from the actual chain ltp/high/low vs the entry premium (no delta/theta proxy —
+    IV crush + gamma + decay are already in the prices)."""
+    return walk_premium_path(prem_path, params, time_stop_only=time_stop_only)
+
+
+__all__ = ["ExitParams", "simulate_exit", "simulate_exit_real", "walk_premium_path"]
