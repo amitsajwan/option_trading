@@ -173,7 +173,15 @@ Deferred          B-5.x  Oversight   ·   B-6.x  Shadow→live
 - [x] 10-min exit (in-position cooldown prevents overlap — fixes B-2.1 oq#3); net P&L as a **sensitivity curve over assumed direction accuracy** (50/55/58/60/perfect), with **interpolated break-even accuracy**.
 - [x] Per-bar latency assertion (<1s, no LLM — D6): asserts in the runner; synthetic p99 ≈ 0.06ms.
 **Acceptance (conditional — Decision D5):** PASS if net≥0 at realistic structural-bias direction, OR curve shows direction is the only gap (profitable at achievable accuracy); STOP only if negative even at perfect. Gate logic implemented in `BacktestReport.gate()`.
-**Results:** ✅ machinery verified (`test_brain_backtest.py`, 9 tests: curve monotonic in p, latency budget, break-even interpolation, all gate verdicts). **⚠ REAL NUMBERS PENDING — needs the VM run** (`python ops/research/brain_backtest.py` in the strategy_app container; this box has no `phase1_market_snapshots`). Synthetic demo (empirical-anchor cost calibration): net −2.3%/trade @0.50 → +3.5% @perfect, **break-even ≈ 0.70** → "MARGINAL, direction is the gap (and a wide one — 0.70 needed vs ~0.59 achievable)". This restates the project thesis quantitatively: with the exit asymmetry, the move detector alone isn't enough — **Phase 4 (exits) must compress the asymmetry to drop break-even**, and Sprint 4 (direction) must close the rest. Not a STOP (perfect > 0). **The real curve on the 7 live days is the actual GO/NO-GO — do not read the synthetic as the verdict.**
+**Results:** ✅✅ **RAN ON REAL VM DATA (2026-06-06, project amit-trading, 8 live days, 2128 bars, 24 trades ~3/day).** Verdict = **MARGINAL — NOT a STOP, not a clean PASS.**
+
+| direction accuracy | 0.50 | 0.55 | 0.58 | 0.60 | perfect |
+|---|---|---|---|---|---|
+| net %/trade | −2.23% | −1.78% | −1.50% | −1.32% | **+2.33%** |
+
+Break-even at **0.745** direction accuracy (vs ~0.59 achievable). Latency p99 0.03ms / max 0.52ms (< 1s, D6 ✓). The move/destination/cost path is **sound** (positive at perfect direction → not a STOP per D5), but realistic direction (~0.55–0.60) **loses**, and the gap to break-even (0.745) is **wider than achieved direction**. Real data matched the synthetic prediction (~0.70) closely — validates the machinery and the thesis: **direction is the binding constraint, and exits (the wrong-side asymmetry) must also compress to drop break-even.** Caveats: cost_ev still empirical-anchor (not per-fill — break-even is sensitive to it); 8 quiet days; `loaded` via live `vol_ratio` ≠ proof's exact ATR window. **How run:** strategy_app image built from branch (no live restart), `docker compose run --rm --no-deps -v .../ops:/app/ops --entrypoint sh strategy_app -c 'pip install pymongo -q; python ops/research/brain_backtest.py'` (pymongo not in the image). Live containers untouched (still old image; VM working tree now on the branch).
+
+**UPDATE (real DirectionSense wired, VM):** with the structural DirectionSense (VWAP+momentum, abstain on conflict) measured on the 24 taken trades: **decided=11, abstained=13, realized accuracy 63.6%, net −1.44%/trade.** Abstaining on conflict lifts accuracy (56.6%→63.6%) — but still < 0.745 break-even. **Quantified path:** at 63.6% direction, capping the wrong-side loss at ~−4.2% (vs −7.5%) breaks even → **direction + tighter exits together reach profitability; neither alone.** (63.6% is n=11 — directional, not significant.) Next lever = **exits (Sprint 5)** to compress the wrong-side asymmetry.
 
 > **GATE:** B-2.6 must be GO before Sprint 4 starts.
 
@@ -188,12 +196,13 @@ Deferred          B-5.x  Oversight   ·   B-6.x  Shadow→live
 - [ ] Low-confidence CE maps to UNKNOWN at the contract/consumer boundary.
 **Acceptance:** contract + consumer tests green; UNKNOWN propagates to WAIT.
 
-### B-3.2 · Structural direction sense — `[CODEX]` · **P0** · depends-on: B-3.1
-**Status:** Backlog · **Owner:** _@codex_ · **Files:** `senses/direction.py`, extends `ml/entry_direction_resolver.py`, `market/depth_context.py`
+### B-3.2 · Structural direction sense — `[CLAUDE]` · **P0**
+**Status:** In review (built + measured on VM) · **Owner:** _@claude_ · **File:** `senses/direction.py`
+**Research (8 days, `ops/research/direction_research.py`):** on **ALL** moved bars every trend/breakout/momentum signal is ANTI-predictive (breakout continuation just 37%) — the market mean-reverts. On **LOADED** bars (the ones we trade) it flips to continuation: **VWAP = 56.6% at full coverage (best)**, momentum_5m 54.8%, breakout 55.6%. Direction is *conditional on loaded* — which is exactly where the brain consults it.
 **Tasks:**
-- [ ] Build VWAP / OFI / CE-PE depth structural direction; abstain when unclear.
-- [ ] A/B vs existing ML resolver on accrued live data.
-**Acceptance:** beats ~0.55, OR documents the structural-CE-bias + abstain fallback.
+- [x] Built `DirectionSense` = VWAP primary + 5m-momentum confirm; **abstain (UNKNOWN→WAIT) on conflict** (D5). Replaced the UNKNOWN stub. Records side/basis as evidence.
+- [ ] A/B vs the existing ML resolver — deferred (ML resolver path not wired into the brain yet; structural is the chosen primary).
+**Acceptance:** beats ~0.55 OR documents structural-bias + abstain fallback. **MET:** VWAP 56.6% on loaded bars (full coverage); and with the abstain logic the **realized accuracy on the brain's TAKEN trades is 63.6%** (11 decided / 13 abstained of 24) — abstaining on VWAP-vs-momentum conflict lifts accuracy (the D5 "fewer, cleaner" payoff). ⚠ Honest: the 63.6% is on **n=11** (huge CI) — directional, not significant. Net still **−1.44%/trade** (63.6% < 0.745 break-even). **Key:** at 63.6% direction, break-even needs the wrong-side loss capped at ~−4.2% (vs −7.5% now) → **direction + tighter exits ≈ break-even; neither alone.** Direction is no longer the *sole* gap — exits are the co-requisite.
 
 ### B-3.3 · Direction A/B analysis — `[CLAUDE]` · **P1** · depends-on: B-3.2
 **Status:** Backlog · **Owner:** _@claude_
