@@ -69,6 +69,9 @@ class BarContext:
     # realised future move over the horizon (backtest only; None live)
     future_move_pt: float | None = None
     future_signed_move_pt: float | None = None   # +ve up, -ve down (for "perfect direction")
+    # intra-trade path for exit simulation: (high_disp, low_disp, close_disp) per future bar,
+    # displacement in points from the entry close. Backtest only.
+    future_path: list[tuple[float, float, float]] = field(default_factory=list)
     extras: dict[str, Any] = field(default_factory=dict)
 
     def as_mapping(self) -> dict[str, Any]:
@@ -195,11 +198,15 @@ def build_contexts(
             struct = _structure_for_bar(bars, i)
             future = [x for x in bars[i + 1:i + 1 + horizon] if x.get("h") is not None and x.get("l") is not None]
             fut_move = fut_signed = None
+            fut_path: list[tuple[float, float, float]] = []
             if future:
-                up = max(float(x["h"]) for x in future) - float(b["c"])
-                down = float(b["c"]) - min(float(x["l"]) for x in future)
+                entry = float(b["c"])
+                up = max(float(x["h"]) for x in future) - entry
+                down = entry - min(float(x["l"]) for x in future)
                 fut_move = max(up, down)
                 fut_signed = up if up >= down else -down
+                fut_path = [(float(x["h"]) - entry, float(x["l"]) - entry, float(x["c"]) - entry)
+                            for x in future]
             out.append(BarContext(
                 day=day, index=i, close=float(b["c"]),
                 atr_build=atr_build, atr_base=atr_base,
@@ -217,7 +224,7 @@ def build_contexts(
                 struct_breakout=struct["struct_breakout"], struct_fakeout=struct["struct_fakeout"],
                 struct_position=struct["struct_position"], struct_trend=struct["struct_trend"],
                 day_high=struct["day_high"], day_low=struct["day_low"],
-                future_move_pt=fut_move, future_signed_move_pt=fut_signed,
+                future_move_pt=fut_move, future_signed_move_pt=fut_signed, future_path=fut_path,
             ))
     return out
 

@@ -24,6 +24,7 @@ from typing import Any
 from strategy_app.brain.decision_brain import CURVE_POINTS, P_REF, DecisionBrain
 from strategy_app.brain.sense_runner import run_senses
 from strategy_app.senses.context import build_contexts
+from strategy_app.position.exit_sim import ExitParams, simulate_exit
 from strategy_app.senses.cost_ev import CostEvSense
 from strategy_app.senses.direction import DirectionSense, PlaceholderDirection
 
@@ -45,6 +46,8 @@ class BacktestReport:
     structure_breakdown: dict[str, tuple[int, float, float]] = field(default_factory=dict)
     # real DirectionSense on taken trades: (n_decided, n_abstain, accuracy, net%_avg over decided)
     direction_real: tuple[int, int, float, float] = (0, 0, 0.0, 0.0)
+    # simulated exits on decided trades: (time_stop_net%_avg, giveback_fix_net%_avg)
+    exit_compare: tuple[float, float] = (0.0, 0.0)
 
     #: direction accuracy we have plausibly achieved (handover: structural/ML ~0.55-0.59)
     ACHIEVABLE_ACCURACY = 0.60
@@ -99,6 +102,10 @@ class BacktestReport:
             lines += ["", "REAL DirectionSense on taken trades (VWAP+momentum, abstains on conflict):",
                       f"  decided={dec}  abstained={ab}  realized_accuracy={acc:.1%}  "
                       f"net/trade@that_accuracy={net * 100:.2f}%"]
+            ts, gb = self.exit_compare
+            lines += ["  exits on decided trades (simulated on the real path, net of cost):",
+                      f"    time-stop (hold to 10m): {ts * 100:.2f}%/trade   "
+                      f"giveback-fix (stop+trail):  {gb * 100:.2f}%/trade"]
         return "\n".join(lines)
 
 
@@ -126,6 +133,8 @@ def run_brain_backtest(
     struct_acc: dict[str, list[tuple[float, float]]] = {}   # struct -> [(realised_move, net@perfect)]
     dir_decided = dir_correct = dir_abstain = 0
     dir_net_sum = 0.0
+    exit_ts_sum = exit_gb_sum = 0.0      # simulated exits over decided trades
+    exit_params = ExitParams(premium_pts=cost_ev.premium_pts)
 
     for ctx in contexts:
         base = ctx.as_mapping()
@@ -165,6 +174,10 @@ def run_brain_backtest(
             correct = (rd.verdict == "CE") == (signed > 0)
             dir_correct += int(correct)
             dir_net_sum += (right if correct else wrong) - cost
+            # simulated exits on the REAL path for this side: time-stop vs giveback-fix
+            exit_ts_sum += float(simulate_exit(rd.verdict, ctx.future_path, exit_params,
+                                               time_stop_only=True)["exit_pct"]) - cost
+            exit_gb_sum += float(simulate_exit(rd.verdict, ctx.future_path, exit_params)["exit_pct"]) - cost
         else:
             dir_abstain += 1
 
@@ -187,6 +200,8 @@ def run_brain_backtest(
         direction_real=(dir_decided, dir_abstain,
                         (dir_correct / dir_decided if dir_decided else 0.0),
                         (dir_net_sum / dir_decided if dir_decided else 0.0)),
+        exit_compare=((exit_ts_sum / dir_decided if dir_decided else 0.0),
+                      (exit_gb_sum / dir_decided if dir_decided else 0.0)),
     )
 
 
