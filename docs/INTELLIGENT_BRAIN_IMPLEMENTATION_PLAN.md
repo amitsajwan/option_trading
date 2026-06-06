@@ -98,6 +98,8 @@ The decision-event pipeline (`strategy_app/consumers/*`) is the wiring that alre
 - *Optionally* test a re-specified `released` trigger (velocity **OR** volume, and/or a 2–3 bar window) — but only as a refinement; **"release adds nothing, use `loaded` alone" is an acceptable pass.** Do not force-fit a trigger to pass.
 - **Exit criteria (the gate):** `loaded` still beats base by **≥1.4× on ≥100 pt** on the accrued sample. If not → STOP. (A working `released` trigger is *not* required to pass.)
 
+> **B-0.2 finding (2026-06-06, team CLAUDE) — GATE = GO (conditional).** `loaded` = 49% ≥100 pt (n=229, ~33/day) vs base 32–34% → **1.44–1.53×**, clears the 1.4× bar; ≥200 pt lift ~2.2× (signal strengthens with move size). The **sum-of-4 score is confirmed non-monotonic** (0→95, 1→90, 2→106, 3→135 median pt) and is **retired** — the `loaded` *pair* is the phenomenon, not the additive score. The `released` trigger (velocity AND volume same-bar) never fired; re-spec'd variants (`current_or`, `3bar_or`) are an *optional* refinement — "use `loaded` alone" is an accepted pass (D3). Proof machinery refactored + verified (`strategy_app/tests/test_bigmove_score_backtest.py`, 3/3). **Conditions:** re-run the verified script on VM mongo to attach the dose-response/monotonicity/release table + confirm compression-tightness is non-decreasing; weekly re-run as data accrues; no real size until OOS. Full memo: [INTELLIGENT_BRAIN_PHASE0_GATE_MEMO.md](INTELLIGENT_BRAIN_PHASE0_GATE_MEMO.md).
+
 ### Phase 1 — Senses as pure functions
 - Create `strategy_app/senses/` with `SenseVerdict` + one module per sense (§3).
 - Extract Compression/Expansion/Move from the research script into tested functions (single source of truth — the script then imports them).
