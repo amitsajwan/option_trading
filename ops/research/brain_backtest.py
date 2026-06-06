@@ -41,6 +41,8 @@ class BacktestReport:
     latency_ms_p99: float
     latency_ms_max: float
     reason_counts: dict[str, int] = field(default_factory=dict)
+    # research: does structure discriminate? {struct_verdict: (n, avg_realised_move_pt, net@perfect%)}
+    structure_breakdown: dict[str, tuple[int, float, float]] = field(default_factory=dict)
 
     #: direction accuracy we have plausibly achieved (handover: structural/ML ~0.55-0.59)
     ACHIEVABLE_ACCURACY = 0.60
@@ -85,6 +87,11 @@ class BacktestReport:
             lines.append(f"{p:>10.2f} {self.net_curve[p] * 100:>14.2f}% {self.avg_net_curve[p] * 100:>11.2f}%")
         lines += ["", f"GATE: {self.gate()}", "",
                   "Decision reasons: " + ", ".join(f"{k}={v}" for k, v in sorted(self.reason_counts.items()))]
+        if self.structure_breakdown:
+            lines += ["", "Structure breakdown of taken trades (does structure discriminate?):",
+                      f"{'structure':>12} {'n':>4} {'avg_move_pt':>12} {'net@perfect%':>13}"]
+            for k, (n, mv, net) in sorted(self.structure_breakdown.items(), key=lambda x: -x[1][0]):
+                lines.append(f"{k:>12} {n:>4} {mv:>12.0f} {net * 100:>12.2f}%")
         return "\n".join(lines)
 
 
@@ -108,6 +115,7 @@ def run_brain_backtest(
     latencies: list[float] = []
     reason_counts: dict[str, int] = {}
     cooldown_until: dict[str, int] = {}
+    struct_acc: dict[str, list[tuple[float, float]]] = {}   # struct -> [(realised_move, net@perfect)]
 
     for ctx in contexts:
         base = ctx.as_mapping()
@@ -136,6 +144,8 @@ def run_brain_backtest(
         cost = cost_ev.cost_pct()
         for p in CURVE_POINTS:
             curve_sum[p] += p * right + (1.0 - p) * wrong - cost
+        sv = verdicts["structure"].verdict if "structure" in verdicts else "n/a"
+        struct_acc.setdefault(sv, []).append((float(realised), right - cost))   # net@perfect
 
     latencies.sort()
     p99 = latencies[min(len(latencies) - 1, int(0.99 * len(latencies)))] if latencies else 0.0
@@ -143,12 +153,16 @@ def run_brain_backtest(
     assert lat_max < latency_budget_ms, f"latency budget blown: {lat_max:.1f}ms >= {latency_budget_ms}ms (D6)"
 
     avg_curve = {p: (curve_sum[p] / accountable if accountable else 0.0) for p in CURVE_POINTS}
+    structure_breakdown = {
+        k: (len(v), sum(m for m, _ in v) / len(v), sum(n for _, n in v) / len(v))
+        for k, v in struct_acc.items()
+    }
     return BacktestReport(
         days=len(days_bars), bars=len(contexts), trades=trades, accountable_trades=accountable,
         net_curve={p: round(curve_sum[p], 5) for p in CURVE_POINTS},
         avg_net_curve={p: round(avg_curve[p], 5) for p in CURVE_POINTS},
         latency_ms_p99=round(p99, 3), latency_ms_max=round(lat_max, 3),
-        reason_counts=reason_counts,
+        reason_counts=reason_counts, structure_breakdown=structure_breakdown,
     )
 
 
