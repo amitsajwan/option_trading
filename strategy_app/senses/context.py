@@ -56,6 +56,13 @@ class BarContext:
     pe_bid_strength: float | None = None
     # execution inputs
     spread_pct: float | None = None
+    # structure (trader's highs/lows/breakouts lens)
+    struct_breakout: str | None = None      # "up" | "down" | "none"
+    struct_fakeout: bool = False
+    struct_position: str | None = None       # "near_high" | "near_low" | "inside"
+    struct_trend: str | None = None          # "up" | "down" | "choppy"
+    day_high: float | None = None
+    day_low: float | None = None
     # realised future move over the horizon (backtest only; None live)
     future_move_pt: float | None = None
     future_signed_move_pt: float | None = None   # +ve up, -ve down (for "perfect direction")
@@ -76,6 +83,9 @@ class BarContext:
             "net_ofi": self.net_ofi,
             "ce_bid_strength": self.ce_bid_strength, "pe_bid_strength": self.pe_bid_strength,
             "spread_pct": self.spread_pct,
+            "struct_breakout": self.struct_breakout, "struct_fakeout": self.struct_fakeout,
+            "struct_position": self.struct_position, "struct_trend": self.struct_trend,
+            "day_high": self.day_high, "day_low": self.day_low,
             "future_move_pt": self.future_move_pt, "future_signed_move_pt": self.future_signed_move_pt,
             **self.extras,
         }
@@ -108,6 +118,39 @@ def _atr(H: list[float], L: list[float], C: list[float]) -> float:
 
 def _none_in(values: list[Any]) -> bool:
     return any(v is None for v in values)
+
+
+BREAKOUT_LOOKBACK = 20
+NEAR_EDGE_FRAC = 0.2
+TREND_LOOKBACK = 10
+TREND_EPS = 0.001
+
+
+def _structure_for_bar(bars: list[dict[str, Any]], i: int) -> dict[str, Any]:
+    """Trader structure (highs/lows/breakouts) from the bars up to i. Lightweight analog
+    of MarketStructureTracker for the backtest; the live path uses snapshot-native fields."""
+    close = float(bars[i]["c"])
+    day_h = max(float(x["h"]) for x in bars[: i + 1] if x.get("h") is not None)
+    day_l = min(float(x["l"]) for x in bars[: i + 1] if x.get("l") is not None)
+    win = bars[max(0, i - BREAKOUT_LOOKBACK):i]
+    prior_high = max((float(x["h"]) for x in win if x.get("h") is not None), default=day_h)
+    prior_low = min((float(x["l"]) for x in win if x.get("l") is not None), default=day_l)
+
+    breakout = "up" if close > prior_high else "down" if close < prior_low else "none"
+    recent = [float(x["c"]) for x in bars[max(0, i - 2):i] if x.get("c") is not None]
+    fakeout = bool(recent and ((max(recent) > prior_high and close <= prior_high)
+                               or (min(recent) < prior_low and close >= prior_low)))
+    rng = max(day_h - day_l, 1e-9)
+    position = ("near_high" if (day_h - close) < NEAR_EDGE_FRAC * rng
+                else "near_low" if (close - day_l) < NEAR_EDGE_FRAC * rng else "inside")
+    if i >= TREND_LOOKBACK and bars[i - TREND_LOOKBACK].get("c"):
+        ref = float(bars[i - TREND_LOOKBACK]["c"])
+        trend = ("up" if close > ref * (1 + TREND_EPS)
+                 else "down" if close < ref * (1 - TREND_EPS) else "choppy")
+    else:
+        trend = "choppy"
+    return {"struct_breakout": breakout, "struct_fakeout": fakeout, "struct_position": position,
+            "struct_trend": trend, "day_high": day_h, "day_low": day_l}
 
 
 def build_contexts(
@@ -145,6 +188,7 @@ def build_contexts(
             atr_build = _atr(H, L, C)
             atr_base = _atr(Hb, Lb, Cb)
             vol_build = sum(float(x.get("ovol") or 0.0) for x in bars[i - BUILD_WINDOW:i]) / BUILD_WINDOW
+            struct = _structure_for_bar(bars, i)
             future = [x for x in bars[i + 1:i + 1 + horizon] if x.get("h") is not None and x.get("l") is not None]
             fut_move = fut_signed = None
             if future:
@@ -165,6 +209,9 @@ def build_contexts(
                 net_ofi=b.get("net_ofi"),
                 ce_bid_strength=b.get("ce_bid_strength"), pe_bid_strength=b.get("pe_bid_strength"),
                 spread_pct=b.get("spread_pct"),
+                struct_breakout=struct["struct_breakout"], struct_fakeout=struct["struct_fakeout"],
+                struct_position=struct["struct_position"], struct_trend=struct["struct_trend"],
+                day_high=struct["day_high"], day_low=struct["day_low"],
                 future_move_pt=fut_move, future_signed_move_pt=fut_signed,
             ))
     return out

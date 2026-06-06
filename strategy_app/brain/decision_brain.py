@@ -24,9 +24,13 @@ SCORE_MIN = 3
 P_REF = 0.55                 # realistic structural-bias direction (Sprint-4 replaces)
 EDGE_THRESHOLD = 0.0
 QUALITY_MIN = 5
-W_EDGE, W_TAIL, W_ROOM = 0.5, 0.3, 0.2
+# quality blend now includes STRUCTURE (the trader's catalyst lens) — a loaded spring that is
+# actually breaking out ranks above one merely coiling (the "capture != opportunity" fix).
+W_EDGE, W_TAIL, W_ROOM, W_STRUCT = 0.40, 0.20, 0.15, 0.25
 EDGE_FULL, SPACE_FULL = 0.03, 3.0
 CURVE_POINTS = (0.50, 0.55, 0.58, 0.60, 1.0)
+# structure verdict -> quality contribution (release best, trap worst). Direction-agnostic.
+_STRUCT_QUALITY = {"breakout": 1.0, "coiling": 0.4, "inside": 0.4, "at_extreme": 0.15, "fakeout": 0.0}
 
 # Tradeable regimes: a LOADED SPRING is by definition compression (atr_build < 0.7*atr_base),
 # which the regime sense labels "compressed" — so it MUST be tradeable. The policy's
@@ -118,6 +122,12 @@ def analyze_conflicts(verdicts: Mapping[str, SenseVerdict]) -> ConflictVerdict:
         fired.append("velocity_up_volume_weak")
         ev["C"] = {"velocity": True, "volume": False}
 
+    # E — loaded spring releasing into a FAKEOUT (broke a level then snapped back) = a trap.
+    structure = verdicts.get("structure")
+    if move_strong and structure is not None and structure.verdict == "fakeout":
+        fired.append("loaded_into_fakeout")
+        ev["E"] = {"structure": "fakeout"}
+
     # D — loaded but no room (structural; SKIP)
     if move_strong and destination is not None and not destination.is_abstain:
         ratio = destination.evidence.get("space_to_move_ratio")
@@ -169,18 +179,23 @@ def assess_opportunity(
         space_ratio = destination.evidence.get("space_to_move_ratio")
     space_ratio = float(space_ratio) if space_ratio is not None else 1.0
 
+    structure = verdicts.get("structure")
+    struct_state = structure.verdict if (structure is not None and not structure.is_abstain) else "inside"
+    n_struct = _STRUCT_QUALITY.get(struct_state, 0.4)
+
     n_edge = _clamp01(edge_gate / EDGE_FULL)
     n_tail = _clamp01(prob_200 / 0.20)
     n_room = _clamp01((space_ratio - 1.0) / (SPACE_FULL - 1.0))
-    quality = round(10 * (W_EDGE * n_edge + W_TAIL * n_tail + W_ROOM * n_room))
+    quality = round(10 * (W_EDGE * n_edge + W_TAIL * n_tail + W_ROOM * n_room + W_STRUCT * n_struct))
     passes = (edge_gate > EDGE_THRESHOLD) and (quality >= QUALITY_MIN)
 
     return OpportunityVerdict(
         edge_pct=round(edge, 5), quality=quality, p_ref=p_ref, net_curve=net_curve, passes=passes,
         evidence={"gross_if_right_pct": gr, "gross_if_wrong_pct": gw, "cost_pct": cost,
                   "gate_p": gate_p, "edge_at_gate_p": round(edge_gate, 5),
-                  "prob_200": prob_200, "space_to_move_ratio": space_ratio,
-                  "n_edge": round(n_edge, 3), "n_tail": round(n_tail, 3), "n_room": round(n_room, 3)},
+                  "prob_200": prob_200, "space_to_move_ratio": space_ratio, "structure": struct_state,
+                  "n_edge": round(n_edge, 3), "n_tail": round(n_tail, 3),
+                  "n_room": round(n_room, 3), "n_struct": round(n_struct, 3)},
     )
 
 

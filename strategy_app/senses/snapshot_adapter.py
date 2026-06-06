@@ -20,6 +20,45 @@ from ..market.snapshot_accessor import SnapshotAccessor
 from .context import VELOCITY_K, VOL_SPIKE
 
 
+def _structure_from_snapshot(snap, close, prev_high, prev_low) -> dict[str, Any]:
+    """Stateless structure read from snapshot-native fields (EMA stack + ORB + prior-day H/L).
+
+    A lighter analog of MarketStructureTracker (which is stateful and runs in the engine).
+    The engine shadow can overlay the full tracker's swing pivots later; this is enough for
+    breakout/fakeout/trend without engine state.
+    """
+    # trend from the EMA stack (the trader's quick trend read)
+    e9, e21, e50 = snap.ema_9, snap.ema_21, snap.ema_50
+    if None not in (e9, e21, e50):
+        trend = "up" if e9 > e21 > e50 else "down" if e9 < e21 < e50 else "choppy"
+    else:
+        trend = None
+
+    pvorh, pvorl = snap.price_vs_orh, snap.price_vs_orl   # +ve above ORH / below ORL
+    orh_broken, orl_broken = snap.orh_broken, snap.orl_broken
+
+    broke_up = (prev_high is not None and close is not None and close > prev_high) or bool(orh_broken and (pvorh or 0) > 0)
+    broke_down = (prev_low is not None and close is not None and close < prev_low) or bool(orl_broken and (pvorl or 0) < 0)
+    breakout = "up" if broke_up else "down" if broke_down else "none"
+    # fakeout: broke the opening range at some point but price is back on the other side now
+    fakeout = bool((orh_broken and (pvorh is not None) and pvorh < 0)
+                   or (orl_broken and (pvorl is not None) and pvorl > 0))
+
+    position = None
+    if close is not None and prev_high is not None and prev_low is not None and prev_high > prev_low:
+        rng = prev_high - prev_low
+        if (prev_high - close) < 0.2 * rng:
+            position = "near_high"
+        elif (close - prev_low) < 0.2 * rng:
+            position = "near_low"
+        else:
+            position = "inside"
+
+    return {"struct_breakout": breakout, "struct_fakeout": fakeout,
+            "struct_position": position, "struct_trend": trend,
+            "day_high": prev_high, "day_low": prev_low}
+
+
 def snapshot_to_sense_context(
     snap: SnapshotAccessor,
     *,
@@ -40,6 +79,9 @@ def snapshot_to_sense_context(
     vol_ratio_volume = snap.fut_volume_ratio
     volume_flag = (float(vol_ratio_volume) > VOL_SPIKE) if vol_ratio_volume is not None else None
 
+    prev_high, prev_low = snap.prev_day_high, snap.prev_day_low
+    struct = _structure_from_snapshot(snap, close, prev_high, prev_low)
+
     ctx: dict[str, Any] = {
         "close": close,
         # compression: vol_ratio < COMPRESS_RATIO == coiled (lower = quieter than baseline)
@@ -55,8 +97,10 @@ def snapshot_to_sense_context(
         "pe_oi_top_strike": snap.pe_oi_top_strike,
         "opening_range_high": snap.orh,
         "opening_range_low": snap.orl,
-        "prior_day_high": None,
-        "prior_day_low": None,
+        "prior_day_high": prev_high,
+        "prior_day_low": prev_low,
+        # structure (trader highs/lows/breakouts — stateless analog of MarketStructureTracker)
+        **struct,
         # execution
         "spread_pct": None,
         # cost/ev premium (lets CostEvSense use the live ATM premium instead of a default)
