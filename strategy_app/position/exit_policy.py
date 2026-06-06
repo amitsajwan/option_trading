@@ -417,6 +417,13 @@ def build_default_exit_stack() -> ExitPolicy:
     When EXIT_EXPIRY_OVERRIDE_ENABLED=1 the chosen stack is wrapped so that
     near-expiry snapshots (within EXIT_EXPIRY_DTE_THRESHOLD days) route to a
     tighter expiry stack — theta is brutal at low DTE.
+
+    UNIVERSAL MAX-LOSS FLOOR (EXIT_MAX_LOSS_PCT, default 0.10):
+    A mode/regime-independent hard stop is ALWAYS checked first, wrapping the whole
+    stack. This closes the 2026-06-05 footgun where EXIT_SCALPER_HARD_STOP_PCT only
+    protected the scalper stack, so adaptive-mode BREAKOUT/TRENDING trades fell
+    through to the lottery 20% stop and one ran to -13%. No regime/mode path can now
+    leave a trade unprotected. Set EXIT_MAX_LOSS_PCT>=1.0 to disable (not advised live).
     """
     mode = str(os.getenv("EXIT_STRATEGY_MODE", "scalper") or "scalper").strip().lower()
     if mode == "lottery":
@@ -434,5 +441,15 @@ def build_default_exit_stack() -> ExitPolicy:
             dte_threshold=dte_threshold,
         )
 
-    logger.info("exit policy mode=%s stack: %s", mode, stack.name)
+    max_loss = float(os.getenv("EXIT_MAX_LOSS_PCT", "0.10") or "0.10")
+    if max_loss < 1.0:
+        # Floor checked FIRST so it overrides any looser mode/regime stop.
+        stack = CompositeExitPolicy([HardStopPolicy(max_loss), stack])
+
+    logger.info(
+        "exit policy mode=%s max_loss_floor=%s stack: %s",
+        mode,
+        f"{max_loss:.0%}" if max_loss < 1.0 else "off",
+        stack.name,
+    )
     return stack
