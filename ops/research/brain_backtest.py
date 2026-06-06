@@ -25,7 +25,7 @@ from strategy_app.brain.decision_brain import CURVE_POINTS, P_REF, DecisionBrain
 from strategy_app.brain.sense_runner import run_senses
 from strategy_app.senses.context import build_contexts
 from strategy_app.senses.cost_ev import CostEvSense
-from strategy_app.senses.direction import PlaceholderDirection
+from strategy_app.senses.direction import DirectionSense, PlaceholderDirection
 
 HORIZON = 10
 
@@ -43,6 +43,8 @@ class BacktestReport:
     reason_counts: dict[str, int] = field(default_factory=dict)
     # research: does structure discriminate? {struct_verdict: (n, avg_realised_move_pt, net@perfect%)}
     structure_breakdown: dict[str, tuple[int, float, float]] = field(default_factory=dict)
+    # real DirectionSense on taken trades: (n_decided, n_abstain, accuracy, net%_avg over decided)
+    direction_real: tuple[int, int, float, float] = (0, 0, 0.0, 0.0)
 
     #: direction accuracy we have plausibly achieved (handover: structural/ML ~0.55-0.59)
     ACHIEVABLE_ACCURACY = 0.60
@@ -92,6 +94,11 @@ class BacktestReport:
                       f"{'structure':>12} {'n':>4} {'avg_move_pt':>12} {'net@perfect%':>13}"]
             for k, (n, mv, net) in sorted(self.structure_breakdown.items(), key=lambda x: -x[1][0]):
                 lines.append(f"{k:>12} {n:>4} {mv:>12.0f} {net * 100:>12.2f}%")
+        dec, ab, acc, net = self.direction_real
+        if dec or ab:
+            lines += ["", "REAL DirectionSense on taken trades (VWAP+momentum, abstains on conflict):",
+                      f"  decided={dec}  abstained={ab}  realized_accuracy={acc:.1%}  "
+                      f"net/trade@that_accuracy={net * 100:.2f}%"]
         return "\n".join(lines)
 
 
@@ -107,6 +114,7 @@ def run_brain_backtest(
 ) -> BacktestReport:
     cost_ev = cost_ev or CostEvSense()
     dir_s = PlaceholderDirection(direction_side)
+    real_dir = DirectionSense()      # measured on taken trades (does NOT drive selection here)
     brain = DecisionBrain(p_ref=p_ref, defer_direction=True)
 
     contexts = build_contexts(days_bars, horizon=horizon, levels=levels)
@@ -116,6 +124,8 @@ def run_brain_backtest(
     reason_counts: dict[str, int] = {}
     cooldown_until: dict[str, int] = {}
     struct_acc: dict[str, list[tuple[float, float]]] = {}   # struct -> [(realised_move, net@perfect)]
+    dir_decided = dir_correct = dir_abstain = 0
+    dir_net_sum = 0.0
 
     for ctx in contexts:
         base = ctx.as_mapping()
@@ -147,6 +157,17 @@ def run_brain_backtest(
         sv = verdicts["structure"].verdict if "structure" in verdicts else "n/a"
         struct_acc.setdefault(sv, []).append((float(realised), right - cost))   # net@perfect
 
+        # real DirectionSense: would it have called the side right on this taken trade?
+        rd = real_dir.evaluate(base)
+        signed = ctx.future_signed_move_pt
+        if rd.verdict in ("CE", "PE") and signed is not None and signed != 0:
+            dir_decided += 1
+            correct = (rd.verdict == "CE") == (signed > 0)
+            dir_correct += int(correct)
+            dir_net_sum += (right if correct else wrong) - cost
+        else:
+            dir_abstain += 1
+
     latencies.sort()
     p99 = latencies[min(len(latencies) - 1, int(0.99 * len(latencies)))] if latencies else 0.0
     lat_max = latencies[-1] if latencies else 0.0
@@ -163,6 +184,9 @@ def run_brain_backtest(
         avg_net_curve={p: round(avg_curve[p], 5) for p in CURVE_POINTS},
         latency_ms_p99=round(p99, 3), latency_ms_max=round(lat_max, 3),
         reason_counts=reason_counts, structure_breakdown=structure_breakdown,
+        direction_real=(dir_decided, dir_abstain,
+                        (dir_correct / dir_decided if dir_decided else 0.0),
+                        (dir_net_sum / dir_decided if dir_decided else 0.0)),
     )
 
 
@@ -182,6 +206,7 @@ def _load_days_from_mongo() -> tuple[dict[str, list[dict[str, Any]]], dict[str, 
         for d in coll.find({"trade_date_ist": day}).sort("timestamp", 1):
             s = (d.get("payload") or {}).get("snapshot") or {}
             f = s.get("futures_bar") or {}
+            fd = s.get("futures_derived") or {}
             ca = s.get("chain_aggregates") or {}
             orng = s.get("opening_range") or {}
             rows.append({
@@ -191,6 +216,7 @@ def _load_days_from_mongo() -> tuple[dict[str, list[dict[str, Any]]], dict[str, 
                 "max_pain": ca.get("max_pain"),
                 "ce_oi_top_strike": ca.get("ce_oi_top_strike"), "pe_oi_top_strike": ca.get("pe_oi_top_strike"),
                 "opening_range_high": orng.get("high"), "opening_range_low": orng.get("low"),
+                "vwap": fd.get("vwap"), "fut_return_5m": fd.get("fut_return_5m"),
             })
         days_bars[day] = rows
     # prior-day high/low as always-available levels

@@ -50,6 +50,9 @@ class BarContext:
     prior_day_low: float | None = None
     opening_range_high: float | None = None
     opening_range_low: float | None = None
+    # direction inputs (the measured signals: VWAP bias + 5-min momentum)
+    vwap: float | None = None
+    fut_return_5m: float | None = None
     # flow inputs (depth; abstain when absent)
     net_ofi: float | None = None
     ce_bid_strength: float | None = None
@@ -80,6 +83,7 @@ class BarContext:
             "ce_oi_top_strike": self.ce_oi_top_strike, "pe_oi_top_strike": self.pe_oi_top_strike,
             "prior_day_high": self.prior_day_high, "prior_day_low": self.prior_day_low,
             "opening_range_high": self.opening_range_high, "opening_range_low": self.opening_range_low,
+            "vwap": self.vwap, "fut_return_5m": self.fut_return_5m,
             "net_ofi": self.net_ofi,
             "ce_bid_strength": self.ce_bid_strength, "pe_bid_strength": self.pe_bid_strength,
             "spread_pct": self.spread_pct,
@@ -206,6 +210,7 @@ def build_contexts(
                 ce_oi_top_strike=b.get("ce_oi_top_strike"), pe_oi_top_strike=b.get("pe_oi_top_strike"),
                 prior_day_high=day_levels.get("prior_day_high"), prior_day_low=day_levels.get("prior_day_low"),
                 opening_range_high=b.get("opening_range_high"), opening_range_low=b.get("opening_range_low"),
+                vwap=b.get("vwap"), fut_return_5m=b.get("fut_return_5m"),
                 net_ofi=b.get("net_ofi"),
                 ce_bid_strength=b.get("ce_bid_strength"), pe_bid_strength=b.get("pe_bid_strength"),
                 spread_pct=b.get("spread_pct"),

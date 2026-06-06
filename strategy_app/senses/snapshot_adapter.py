@@ -99,6 +99,9 @@ def snapshot_to_sense_context(
         "opening_range_low": snap.orl,
         "prior_day_high": prev_high,
         "prior_day_low": prev_low,
+        # direction inputs (measured signals: VWAP bias + 5-min momentum)
+        "vwap": snap.vwap,
+        "fut_return_5m": snap.fut_return_5m,
         # structure (trader highs/lows/breakouts — stateless analog of MarketStructureTracker)
         **struct,
         # execution
