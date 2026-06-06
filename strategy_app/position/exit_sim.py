@@ -12,6 +12,14 @@ what lets the e2e MEASURE exits instead of assuming a static loss cap:
 Honesty: the option path is a delta+theta proxy off the underlying path (no real per-strike
 premium ticks here), same provisional basis as cost_ev. It models the *shape* of the exit
 dynamics (stop vs trail vs time), which is what we need to compare policies — not a fill.
+
+DATA LIMITATION (probed 2026-06-07, `ops/research/_probe_chain_hl.py`): per-strike rows in
+`phase1_market_snapshots` carry only **LTP (1-min close)** — `ce_high/ce_low/pe_high/pe_low`
+are 0% populated (all NaN). So `simulate_exit_real` runs **1-min-close granularity** (the
+held-strike path falls back high=low=close). Consequence: intrabar stop breaches that recover
+by the close are MISSED (loser P&L slightly optimistic), and the trail uses close peaks (true
+intrabar MFE >= shown). True intrabar fidelity needs a FORWARD ingestion change to persist
+per-strike OHLC (or ticks) — it cannot be recovered from existing data.
 """
 from __future__ import annotations
 
