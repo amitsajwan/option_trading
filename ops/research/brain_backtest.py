@@ -50,6 +50,10 @@ class BacktestReport:
     exit_compare: tuple[float, float] = (0.0, 0.0)
     # REAL held-strike option-price exits: (n, time_stop_net%_avg, giveback_net%_avg, avg_entry_premium)
     real_exit_compare: tuple[int, float, float, float] = (0, 0.0, 0.0, 0.0)
+    # per-day REAL net: {day: (n, giveback_net_sum%, time_stop_net_sum%)} — isolates outlier days
+    day_breakdown: dict[str, tuple[int, float, float]] = field(default_factory=dict)
+    # winner distribution (REAL peak favourable %): (max, n>15%, n>10%, n>5%, avg_mfe)
+    winner_mfe: tuple[float, int, int, int, float] = (0.0, 0, 0, 0, 0.0)
 
     #: direction accuracy we have plausibly achieved (handover: structural/ML ~0.55-0.59)
     ACHIEVABLE_ACCURACY = 0.60
@@ -111,6 +115,15 @@ class BacktestReport:
             if rn:
                 lines += [f"  exits — REAL held-strike option path (n={rn}, avg entry premium Rs{rprem:.0f}, net of cost):",
                           f"    time-stop: {rts * 100:.2f}%/trade   giveback-fix: {rgb * 100:.2f}%/trade   <-- REAL PRICES"]
+                mx, n15, n10, n5, avg = self.winner_mfe
+                lines += ["  winner distribution (REAL peak favourable % before exit):",
+                          f"    max={mx * 100:.1f}%  >15%={n15}  >10%={n10}  >5%={n5}  avg_MFE={avg * 100:.1f}%"]
+                if self.day_breakdown:
+                    lines += ["  per-day REAL net (giveback-fix | time-stop) — isolates outlier days:",
+                              f"    {'day':>12} {'n':>3} {'giveback%':>10} {'timestop%':>10}"]
+                    for day in sorted(self.day_breakdown):
+                        n0, gs, tss = self.day_breakdown[day]
+                        lines.append(f"    {day:>12} {n0:>3} {gs * 100:>9.2f}% {tss * 100:>9.2f}%")
         return "\n".join(lines)
 
 
@@ -139,8 +152,8 @@ def run_brain_backtest(
     dir_decided = dir_correct = dir_abstain = 0
     dir_net_sum = 0.0
     exit_ts_sum = exit_gb_sum = 0.0      # delta-proxy exits over decided trades
-    real_decided = 0
-    real_ts_sum = real_gb_sum = real_prem_sum = 0.0   # REAL held-strike option-path exits
+    real_prem_sum = 0.0
+    real_trades: list[tuple[str, float, float, float]] = []   # (day, gb_net, ts_net, mfe) REAL path
     exit_params = ExitParams(premium_pts=cost_ev.premium_pts)
 
     for ctx in contexts:
@@ -191,10 +204,11 @@ def run_brain_backtest(
             if real_path and entry_prem and entry_prem > 0:
                 ev = entry_prem * cost_ev.lot_qty
                 real_cost = cost_ev.cost_model.breakdown(entry_value=ev, exit_value=ev)["total_cost_amount"] / ev
-                real_decided += 1
                 real_prem_sum += entry_prem
-                real_ts_sum += float(simulate_exit_real(real_path, exit_params, time_stop_only=True)["exit_pct"]) - real_cost
-                real_gb_sum += float(simulate_exit_real(real_path, exit_params)["exit_pct"]) - real_cost
+                gb = float(simulate_exit_real(real_path, exit_params)["exit_pct"]) - real_cost
+                ts = float(simulate_exit_real(real_path, exit_params, time_stop_only=True)["exit_pct"]) - real_cost
+                mfe = max((b for (b, _w, _c) in real_path), default=0.0)   # peak favourable (the "15%+" runner)
+                real_trades.append((ctx.day, gb, ts, mfe))
         else:
             dir_abstain += 1
 
@@ -208,6 +222,17 @@ def run_brain_backtest(
         k: (len(v), sum(m for m, _ in v) / len(v), sum(n for _, n in v) / len(v))
         for k, v in struct_acc.items()
     }
+    rn = len(real_trades)
+    real_ts_avg = sum(t for _, _, t, _ in real_trades) / rn if rn else 0.0
+    real_gb_avg = sum(g for _, g, _, _ in real_trades) / rn if rn else 0.0
+    day_breakdown: dict[str, tuple[int, float, float]] = {}
+    for day, gb, ts, _mfe in real_trades:
+        n0, gs, ts0 = day_breakdown.get(day, (0, 0.0, 0.0))
+        day_breakdown[day] = (n0 + 1, gs + gb, ts0 + ts)
+    mfes = [m for _, _, _, m in real_trades]
+    winner_mfe = (max(mfes, default=0.0),
+                  sum(1 for m in mfes if m > 0.15), sum(1 for m in mfes if m > 0.10),
+                  sum(1 for m in mfes if m > 0.05), (sum(mfes) / rn if rn else 0.0))
     return BacktestReport(
         days=len(days_bars), bars=len(contexts), trades=trades, accountable_trades=accountable,
         net_curve={p: round(curve_sum[p], 5) for p in CURVE_POINTS},
@@ -219,10 +244,8 @@ def run_brain_backtest(
                         (dir_net_sum / dir_decided if dir_decided else 0.0)),
         exit_compare=((exit_ts_sum / dir_decided if dir_decided else 0.0),
                       (exit_gb_sum / dir_decided if dir_decided else 0.0)),
-        real_exit_compare=(real_decided,
-                           (real_ts_sum / real_decided if real_decided else 0.0),
-                           (real_gb_sum / real_decided if real_decided else 0.0),
-                           (real_prem_sum / real_decided if real_decided else 0.0)),
+        real_exit_compare=(rn, real_ts_avg, real_gb_avg, (real_prem_sum / rn if rn else 0.0)),
+        day_breakdown=day_breakdown, winner_mfe=winner_mfe,
     )
 
 
