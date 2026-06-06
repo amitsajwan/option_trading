@@ -215,4 +215,13 @@ It does **not** place trades. It *supervises and adapts* the deterministic layer
 
 ## 11. One-paragraph summary for whoever picks this up
 
-We stopped trying to predict direction with a model and instead built a **big-move detector** (compression→expansion) on a **10-minute** horizon — and on the same quiet days the ML failed, it nearly doubles the odds of catching a 100-pt move (34%→59%) and triples them for 200-pt moves, ~8 signals/day. The plan is **not** to turn that into a rigid algo, but into a **layered brain**: independent "senses" (regime, compression, expansion, direction, cost, risk) each reporting structured evidence; a fast **decision brain** that trades only when they *agree* and abstains when they don't; and a slower **LLM oversight brain** that audits the day, adapts the thresholds, and explains every call. Direction is the remaining hard problem and the next build. Everything stays halted and sim-gated until the end-to-end, cost-aware backtest clears.
+We stopped trying to predict direction with a model and instead built a **big-move detector** on a **10-minute** horizon. The validated core is **`loaded` = compression AND OI-building** — on the same quiet days the ML failed, loaded bars saw a ≥100-pt move **49%** of the time vs **34%** base (~33/day). The plan is **not** a rigid algo, but a **layered brain**: independent "senses" (day-personality, regime, compression, expansion, destination, direction, cost, risk) each reporting structured evidence; a fast deterministic **decision brain** that trades **1 lot** only when they *agree* (ConflictAnalysis + OpportunityQuality) and abstains when they don't; an **optional/deferred** oversight layer (human for now). Direction is the remaining hard problem, built **after** entry. Everything stays halted and sim-gated until the e2e, cost-aware backtest clears.
+
+---
+
+## Appendix — data & reproduction (so the numbers are traceable)
+
+- **Data:** `trading_ai.phase1_market_snapshots` (mongo on the runtime VM) — full 25-strike chain + futures bar + chain/ladder aggregates, 1-min, persisted for *all* bars. **7 live days: 2026-05-26, 05-27, 06-01..06-05** (~2,400 bars). Quiet/low-vol regime — treat lifts as directional until more days accrue.
+- **Proof script:** [`ops/research/bigmove_score_backtest.py`](../ops/research/bigmove_score_backtest.py) — pure price/volume/OI, no ML/engine. Run inside the strategy_app container (`docker cp` → `docker exec python`); reads mongo directly.
+- **Headline numbers (10-min horizon, target 100 pt):** base 34% · `loaded` 49% (n=229, mean 117 pt, 11% ≥200 pt). 5-min horizon ≈ base (dead). depth/OFI (`market_depth_ticks.qty_imbalance`) did not help *timing*.
+- **Repro caveat:** the per-bar feature pipeline for the *ML* models needs the engine (`SnapshotAccessor` + `project_stage_views_v2`); the BigMoveScore needs none — it's the simpler, more robust path on purpose.
