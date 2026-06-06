@@ -229,7 +229,7 @@ def run_brain_backtest(
     for day, gb, ts, _mfe in real_trades:
         n0, gs, ts0 = day_breakdown.get(day, (0, 0.0, 0.0))
         day_breakdown[day] = (n0 + 1, gs + gb, ts0 + ts)
-    mfes = [m for _, _, _, m in real_trades]
+    mfes = [m for _, _, _, m in real_trades if m == m]   # m==m drops NaN
     winner_mfe = (max(mfes, default=0.0),
                   sum(1 for m in mfes if m > 0.15), sum(1 for m in mfes if m > 0.10),
                   sum(1 for m in mfes if m > 0.05), (sum(mfes) / rn if rn else 0.0))

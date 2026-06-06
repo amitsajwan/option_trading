@@ -13,6 +13,7 @@ warmup = 42 bars.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -133,6 +134,15 @@ def _none_in(values: list[Any]) -> bool:
     return any(v is None for v in values)
 
 
+def _fin(x: Any) -> float | None:
+    """Coerce to a finite float, else None (guards None/NaN/inf from sparse chain rows)."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
 BREAKOUT_LOOKBACK = 20
 NEAR_EDGE_FRAC = 0.2
 TREND_LOOKBACK = 10
@@ -177,25 +187,26 @@ def _held_strike_paths(bars: list[dict[str, Any]], i: int, horizon: int):
     close = float(bars[i]["c"])
     strike = min(chain, key=lambda k: abs(k - close))
     row0 = chain[strike]
-    entry_ce, entry_pe = row0.get("ce"), row0.get("pe")
+    entry_ce, entry_pe = _fin(row0.get("ce")), _fin(row0.get("pe"))
     ce_path: list[tuple[float, float, float]] = []
     pe_path: list[tuple[float, float, float]] = []
-    last_ce = last_pe = None
+    last_row = None
     for x in bars[i + 1:i + 1 + horizon]:
-        cj = x.get("chain") or {}
-        row = cj.get(strike)
+        row = (x.get("chain") or {}).get(strike)
         if row is not None:
-            last_ce = row
-            last_pe = row
-        rc, rp = (last_ce or {}), (last_pe or {})
-        if entry_ce and rc.get("ce") is not None:
-            ce_path.append(((rc.get("ce_h", rc["ce"]) - entry_ce) / entry_ce,
-                            (rc.get("ce_l", rc["ce"]) - entry_ce) / entry_ce,
-                            (rc["ce"] - entry_ce) / entry_ce))
-        if entry_pe and rp.get("pe") is not None:
-            pe_path.append(((rp.get("pe_h", rp["pe"]) - entry_pe) / entry_pe,
-                            (rp.get("pe_l", rp["pe"]) - entry_pe) / entry_pe,
-                            (rp["pe"] - entry_pe) / entry_pe))
+            last_row = row
+        r = last_row or {}
+        ce, pe = _fin(r.get("ce")), _fin(r.get("pe"))
+        if entry_ce and entry_ce > 0 and ce is not None:
+            ceh = _fin(r.get("ce_h")); cel = _fin(r.get("ce_l"))     # high/low may be absent -> use close
+            ceh = ceh if ceh is not None else ce
+            cel = cel if cel is not None else ce
+            ce_path.append(((ceh - entry_ce) / entry_ce, (cel - entry_ce) / entry_ce, (ce - entry_ce) / entry_ce))
+        if entry_pe and entry_pe > 0 and pe is not None:
+            peh = _fin(r.get("pe_h")); pel = _fin(r.get("pe_l"))
+            peh = peh if peh is not None else pe
+            pel = pel if pel is not None else pe
+            pe_path.append(((peh - entry_pe) / entry_pe, (pel - entry_pe) / entry_pe, (pe - entry_pe) / entry_pe))
     return entry_ce, entry_pe, ce_path, pe_path
 
 
