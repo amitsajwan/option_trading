@@ -5,9 +5,17 @@ are, the 1-min option bar already gives intrabar exit precision; if not, we'd ne
 """
 from __future__ import annotations
 
+import math
 import os
 
 from pymongo import MongoClient
+
+
+def _fin(x) -> bool:
+    try:
+        return math.isfinite(float(x))
+    except (TypeError, ValueError):
+        return False
 
 
 def main() -> None:
@@ -23,15 +31,15 @@ def main() -> None:
             s = (d.get("payload") or {}).get("snapshot") or {}
             for r in (s.get("strikes") or []):
                 rows += 1
-                if r.get("ce_ltp") is not None:
+                if _fin(r.get("ce_ltp")):
                     ce_ltp += 1
-                if r.get("ce_high") is not None and r.get("ce_low") is not None:
+                if _fin(r.get("ce_high")) and _fin(r.get("ce_low")):
                     ce_hl += 1
-                if r.get("pe_ltp") is not None:
+                if _fin(r.get("pe_ltp")):
                     pe_ltp += 1
-                if r.get("pe_high") is not None and r.get("pe_low") is not None:
+                if _fin(r.get("pe_high")) and _fin(r.get("pe_low")):
                     pe_hl += 1
-                if sample is None and r.get("ce_high") is not None:
+                if sample is None and _fin(r.get("ce_high")):
                     sample = {k: r.get(k) for k in ("strike", "ce_ltp", "ce_open", "ce_high", "ce_low",
                                                     "pe_ltp", "pe_high", "pe_low")}
 
