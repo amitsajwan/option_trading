@@ -423,7 +423,13 @@ class DeterministicRuleEngine(StrategyEngine):
         # when STRATEGY_EVAL_TIMING is off.
         self._eval_timer.mark_bar()
         with self._eval_timer.measure("total"):
-            return self._evaluate_impl(snapshot)
+            signal = self._evaluate_impl(snapshot)
+        # Surface the intelligent-brain shadow on the decision trace the sim/UI render, so a
+        # SIM run shows the new senses->brain->direction->exit flow next to the engine's actual
+        # decision. Read-only: the shadow never affected `signal`.
+        if self._brain_shadow is not None and self.last_brain_shadow and isinstance(self.last_decision_trace, dict):
+            self.last_decision_trace["intelligent_brain"] = self.last_brain_shadow
+        return signal
 
     def _run_brain_shadow(self, snap: SnapshotAccessor, position: Any) -> None:
         """Shadow-run the intelligent DecisionBrain for this bar (board: entry wiring).

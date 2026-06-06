@@ -334,6 +334,10 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
             "STRATEGY_REDIS_PUBLISH_ENABLED": "0",
             "MARKET_SESSION_ENABLED":          "0",
             "BRAIN_ENABLED":                   "false",
+            # Intelligent-brain SHADOW on for sim: runs senses->decision->direction->exit each
+            # bar and attaches the reasoning to the decision trace (read-only; never changes the
+            # engine's actual trade). Lets a UI SIM show the new flow next to the live decision.
+            "INTELLIGENT_BRAIN_SHADOW":        _live("INTELLIGENT_BRAIN_SHADOW", "1"),
             "STRATEGY_STARTUP_WARMUP_EVENTS":  "0",
             # Exit + entry + strike config — from live config
             "EXIT_POLICY_STACK_ENABLED":       _live("EXIT_POLICY_STACK_ENABLED", "1"),

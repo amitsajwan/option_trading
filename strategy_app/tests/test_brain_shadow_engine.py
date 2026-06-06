@@ -54,6 +54,33 @@ class BrainShadowWiringTest(unittest.TestCase):
             finally:
                 os.environ.pop("INTELLIGENT_BRAIN_SHADOW", None)
 
+    def test_shadow_attaches_to_decision_trace_for_sim_ui(self):
+        # When the shadow is on, evaluate() must surface the brain block on last_decision_trace
+        # so a SIM run / UI shows the new senses->brain->direction->exit flow.
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["INTELLIGENT_BRAIN_SHADOW"] = "true"
+            try:
+                engine = DeterministicRuleEngine(signal_logger=SignalLogger(run_dir=d), entry_policy=_AllowPolicy())
+                snap = {
+                    "session_context": {"snapshot_id": "s1", "timestamp": "2026-06-05T09:30:00+05:30",
+                                        "date": "2026-06-05", "session_phase": "ACTIVE", "minutes_since_open": 60},
+                    "futures_bar": {"fut_close": 54000.0, "fut_high": 54020.0, "fut_low": 53980.0},
+                    "futures_derived": {"vol_ratio": 0.5, "fut_oi_change_30m": 8000.0, "vwap": 53990.0,
+                                        "fut_return_5m": 0.001, "ema_9": 54010.0, "ema_21": 53990.0},
+                    "chain_aggregates": {"atm_strike": 54000, "max_pain": 54600,
+                                        "ce_oi_top_strike": 55200, "pe_oi_top_strike": 53000},
+                    "opening_range": {"orh": 54400.0, "orl": 53600.0},
+                    "atm_options": {"atm_ce_close": 1000.0, "atm_pe_close": 1000.0},
+                }
+                engine.evaluate(snap)
+                trace = engine.last_decision_trace
+                self.assertIsInstance(trace, dict)
+                self.assertIn("intelligent_brain", trace)
+                self.assertIn("action", trace["intelligent_brain"])
+                self.assertIn("verdicts", trace["intelligent_brain"])
+            finally:
+                os.environ.pop("INTELLIGENT_BRAIN_SHADOW", None)
+
     def test_shadow_never_raises_on_bad_snapshot(self):
         with tempfile.TemporaryDirectory() as d:
             os.environ["INTELLIGENT_BRAIN_SHADOW"] = "true"
