@@ -233,7 +233,14 @@ def _load_days_from_mongo() -> tuple[dict[str, list[dict[str, Any]]], dict[str, 
 
 def main() -> None:
     days_bars, levels = _load_days_from_mongo()
-    report = run_brain_backtest(days_bars, levels=levels)
+    # Exit-sensitivity hook: BRAIN_MAX_LOSS_PCT lets us model tighter exits (compress the
+    # wrong-side asymmetry) to confirm the "direction + tighter exits = break-even" path.
+    cost_ev = None
+    mlp = os.getenv("BRAIN_MAX_LOSS_PCT")
+    if mlp:
+        cost_ev = CostEvSense(max_loss_pct=float(mlp))
+        print(f"[exit-sensitivity] CostEvSense max_loss_pct={float(mlp):.3f}")
+    report = run_brain_backtest(days_bars, levels=levels, cost_ev=cost_ev)
     print(report.render())
 
 
