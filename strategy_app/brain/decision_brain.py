@@ -24,13 +24,16 @@ SCORE_MIN = 3
 P_REF = 0.55                 # realistic structural-bias direction (Sprint-4 replaces)
 EDGE_THRESHOLD = 0.0
 QUALITY_MIN = 5
-# quality blend now includes STRUCTURE (the trader's catalyst lens) — a loaded spring that is
-# actually breaking out ranks above one merely coiling (the "capture != opportunity" fix).
-W_EDGE, W_TAIL, W_ROOM, W_STRUCT = 0.40, 0.20, 0.15, 0.25
+W_EDGE, W_TAIL, W_ROOM, W_STRUCT = 0.45, 0.25, 0.20, 0.10
 EDGE_FULL, SPACE_FULL = 0.03, 3.0
 CURVE_POINTS = (0.50, 0.55, 0.58, 0.60, 1.0)
-# structure verdict -> quality contribution (release best, trap worst). Direction-agnostic.
-_STRUCT_QUALITY = {"breakout": 1.0, "coiling": 0.4, "inside": 0.4, "at_extreme": 0.15, "fakeout": 0.0}
+# structure -> quality contribution. NOTE (2026-06-06, 8 live days, n=24): the trader
+# intuition "breakout > coiling" did NOT hold — breakout was rare (n=3) and `at_extreme`
+# saw the biggest moves. So we do NOT bias quality by breakout (insufficient/contrary
+# evidence); structure only PENALISES a fakeout (a failed-breakout trap is a safety rule,
+# not an edge claim). Revisit with more days / a direction study, where structure likely
+# matters most. Direction-agnostic.
+_STRUCT_QUALITY = {"breakout": 0.5, "coiling": 0.5, "inside": 0.5, "at_extreme": 0.5, "fakeout": 0.0}
 
 # Tradeable regimes: a LOADED SPRING is by definition compression (atr_build < 0.7*atr_base),
 # which the regime sense labels "compressed" — so it MUST be tradeable. The policy's
