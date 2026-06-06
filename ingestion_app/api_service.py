@@ -19,6 +19,7 @@ from contracts_app import TimestampSourceMode, get_redis_key, isoformat_ist, par
 
 from .env_settings import credentials_path_candidates, redis_config, resolve_instrument_symbol
 from .kite_client import create_kite_client
+from .strike_ohlc import StrikeOhlcAccumulator
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -186,6 +187,16 @@ class KiteDataService:
         self._kite_lock = threading.Lock()
         self._ins_cache: Dict[str, _CachedInstruments] = {}
         self._ins_ttl_sec = max(60, int(os.getenv("KITE_INSTRUMENTS_TTL_SECONDS", "900")))
+        # Per-strike 1-min OHLC sampler (forward exit-fidelity fix). Default OFF — the live
+        # data path is unchanged until STRIKE_OHLC_ENABLED is set. Builds intrabar option
+        # OHLC by sampling last_price every few seconds (Kite quote() only gives day-OHLC).
+        self._strike_ohlc = StrikeOhlcAccumulator()
+        self._strike_ohlc_enabled = os.getenv("STRIKE_OHLC_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+        self._strike_ohlc_instruments = [s.strip().upper() for s in
+                                         os.getenv("STRIKE_OHLC_INSTRUMENTS", "BANKNIFTY").split(",") if s.strip()]
+        self._strike_ohlc_sample_sec = max(2, int(os.getenv("STRIKE_OHLC_SAMPLE_SECONDS", "5")))
+        self._strike_sampler_started = False
+        self._strike_sampler_lock = threading.Lock()
 
     def _kite_client(self):
         if self._kite is not None:
@@ -198,6 +209,46 @@ class KiteDataService:
                 raise RuntimeError("Kite credentials unavailable")
             self._kite = create_kite_client(api_key=api_key, access_token=access_token)
             return self._kite
+
+    # ---- per-strike 1-min OHLC sampler (forward exit-fidelity fix) ----
+
+    def _ensure_strike_sampler(self) -> None:
+        """Lazily start the background sampler thread once (only when enabled)."""
+        if not self._strike_ohlc_enabled or self._strike_sampler_started:
+            return
+        with self._strike_sampler_lock:
+            if self._strike_sampler_started:
+                return
+            threading.Thread(target=self._strike_ohlc_loop, name="strike-ohlc", daemon=True).start()
+            self._strike_sampler_started = True
+
+    def _strike_ohlc_loop(self) -> None:
+        while True:
+            for inst in self._strike_ohlc_instruments:
+                try:
+                    self._sample_strike_ohlc(inst)
+                except Exception:
+                    pass
+            try:
+                self._strike_ohlc.prune(time.time() - 300)
+            except Exception:
+                pass
+            time.sleep(self._strike_ohlc_sample_sec)
+
+    def _sample_strike_ohlc(self, instrument: str) -> None:
+        _expiry, rows, _fut = self._select_options(instrument=instrument)
+        symbols = [f"NFO:{r.get('tradingsymbol')}" for r in rows if r.get("tradingsymbol")]
+        if not symbols:
+            return
+        quote_map = self._kite_client().quote(symbols)
+        now = time.time()
+        for r in rows:
+            strike = _to_float(r.get("strike"))
+            side = str(r.get("instrument_type") or "").upper()
+            if strike is None or side not in ("CE", "PE"):
+                continue
+            q = quote_map.get(f"NFO:{r.get('tradingsymbol')}") or {}
+            self._strike_ohlc.update(int(round(strike)), side, _to_float(q.get("last_price")), now)
 
     def health_payload(self) -> Dict[str, Any]:
         status = "healthy"
@@ -500,6 +551,7 @@ class KiteDataService:
         return target_expiry.isoformat(), selected, float(fut_price)
 
     def get_options_chain(self, instrument: str) -> Dict[str, Any]:
+        self._ensure_strike_sampler()
         expiry, rows, fut_price = self._select_options(instrument=instrument)
 
         quote_symbols = [f"NFO:{row.get('tradingsymbol')}" for row in rows if row.get("tradingsymbol")]
@@ -542,6 +594,14 @@ class KiteDataService:
                 rec["pe_volume"] = side_payload["volume"]
 
         strikes = [by_strike[k] for k in sorted(by_strike.keys())]
+        if self._strike_ohlc_enabled:                  # fill intrabar 1-min OHLC from the sampler
+            for rec in strikes:
+                cb = self._strike_ohlc.bar(rec["strike"], "CE")
+                if cb:
+                    rec["ce_open"], rec["ce_high"], rec["ce_low"] = cb["open"], cb["high"], cb["low"]
+                pb = self._strike_ohlc.bar(rec["strike"], "PE")
+                if pb:
+                    rec["pe_open"], rec["pe_high"], rec["pe_low"] = pb["open"], pb["high"], pb["low"]
         pcr, max_pain = _pcr_and_max_pain(strikes)
         instrument_u = str(instrument or "").strip().upper()
         payload = {
