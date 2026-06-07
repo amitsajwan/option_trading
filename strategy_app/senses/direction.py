@@ -26,9 +26,14 @@ from typing import Any, Mapping
 from . import SenseVerdict
 
 UNKNOWN = "UNKNOWN"
-# confidences are anchored to the measured loaded-bar accuracies (vwap 0.566, agree higher)
-_CONF_AGREE = 0.60
-_CONF_VWAP_ONLY = 0.55
+# confidences anchored to measured loaded-bar accuracies (vwap 0.566; agree higher).
+# Reconciliation 2026-06-07: abstaining on every vwap/momentum CONFLICT threw away winning
+# trades (live made +10.5%/52tr vs brain +4%/7tr). So we no longer abstain on conflict —
+# we take the VWAP side (the best single signal) at lower confidence, and only abstain when
+# VWAP itself is unavailable. Far more trades; per-trade accuracy ~vwap-alone.
+_CONF_AGREE = 0.60        # vwap & momentum agree
+_CONF_VWAP_ONLY = 0.55    # momentum neutral
+_CONF_CONFLICT = 0.50     # momentum disagrees — trust vwap but flag low conviction
 
 
 def _sign(x: Any) -> int:
@@ -56,17 +61,13 @@ class DirectionSense:
                                 evidence={"side": UNKNOWN, "basis": [], "reason": "price at vwap"})
         mom_side = _sign(context.get("fut_return_5m"))
 
-        if mom_side != 0 and mom_side != vwap_side:
-            # the two reads conflict -> abstain (D5: conflicted == UNKNOWN -> WAIT)
-            return SenseVerdict(self.name, UNKNOWN, 0.0, value=None,
-                                evidence={"side": UNKNOWN, "basis": ["vwap", "momentum_5m"],
-                                          "reason": "vwap vs momentum disagree",
-                                          "vwap_side": vwap_side, "mom_side": mom_side})
-
         side = "CE" if vwap_side > 0 else "PE"
-        agree = mom_side == vwap_side
-        conf = _CONF_AGREE if agree else _CONF_VWAP_ONLY
-        basis = ["vwap"] + (["momentum_5m"] if agree else [])
+        if mom_side == vwap_side:
+            conf, basis = _CONF_AGREE, ["vwap", "momentum_5m"]
+        elif mom_side == 0:
+            conf, basis = _CONF_VWAP_ONLY, ["vwap"]
+        else:
+            conf, basis = _CONF_CONFLICT, ["vwap"]   # momentum disagrees -> trust vwap, low conviction
         return SenseVerdict(self.name, side, conf, value=float(vwap_side),
                             evidence={"side": side, "basis": basis, "confidence_src": "measured_loaded_bars",
                                       "vwap_side": vwap_side, "mom_side": mom_side})
