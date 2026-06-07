@@ -63,6 +63,39 @@ def test_adapter_quiet_when_no_compression():
     assert verdicts["move"].verdict == "quiet"
 
 
+def test_adapter_maps_weekly_levels():
+    # §12.1 — week_high/low flow from session_levels into the sense context
+    payload = _payload()
+    payload["session_levels"] = {"prev_day_high": 55000.0, "prev_day_low": 53000.0,
+                                 "week_high": 55400.0, "week_low": 52600.0}
+    ctx = snapshot_to_sense_context(SnapshotAccessor(payload))
+    assert ctx["week_high"] == 55400.0 and ctx["week_low"] == 52600.0
+    assert ctx["prior_day_high"] == 55000.0
+
+
+def test_adapter_detects_prior_day_sweep_up():
+    # §12.2 — bar pierces PDH intrabar (fut_high 54020 > PDH 54010) but closes back below it.
+    payload = _payload(close=54000.0)   # fut_high = close+20 = 54020, fut_low = close-20 = 53980
+    payload["session_levels"] = {"prev_day_high": 54010.0, "prev_day_low": 53000.0}
+    ctx = snapshot_to_sense_context(SnapshotAccessor(payload))
+    assert ctx["struct_swept"] is True
+    assert ctx["struct_sweep_direction"] == "up"
+    assert ctx["struct_fakeout"] is True          # a sweep IS a trap -> routes to fakeout
+    # and that fakeout reaches the brain's conflict layer as loaded_into_fakeout
+    verdicts = run_senses(ctx, direction_sense=PlaceholderDirection("CE"))
+    assert verdicts["structure"].verdict == "fakeout"
+    assert verdicts["structure"].evidence["sweep_direction"] == "up"
+
+
+def test_adapter_no_sweep_when_close_holds_breakout():
+    # close ABOVE PDH (a genuine breakout, not a swept-and-rejected trap) -> not a sweep
+    payload = _payload(close=54000.0)
+    payload["session_levels"] = {"prev_day_high": 53990.0, "prev_day_low": 53000.0}
+    ctx = snapshot_to_sense_context(SnapshotAccessor(payload))
+    assert ctx["struct_swept"] is False
+    assert ctx["struct_sweep_direction"] == "none"
+
+
 def test_brain_decides_end_to_end_on_live_snapshot():
     # full path: live snapshot -> adapter -> senses -> brain (defer_direction shadow mode)
     snap = SnapshotAccessor(_payload(vol_ratio=0.5, oi_change=8000.0))

@@ -15,9 +15,15 @@ Reads these semantic context keys (producers — backtest context builder or the
 adapter/MarketStructureTracker — populate them; this sense stays pure):
   struct_breakout : "up" | "down" | "none"
   struct_fakeout  : bool   (broke a level this/recent bar then reverted back inside)
+  struct_swept    : bool   (pierced a prior-day extreme intrabar then closed back inside)
+  struct_sweep_direction : "up" | "down" | "none"   (which liquidity pool was taken — EVIDENCE only)
   struct_position : "near_high" | "near_low" | "inside"
   struct_trend    : "up" | "down" | "choppy"   (swing / EMA structure)
   day_high, day_low : floats (evidence)
+
+A liquidity sweep is folded into ``struct_fakeout`` by the producer (a sweep IS a trap), so it
+flows through the existing fakeout verdict and the brain's ``loaded_into_fakeout`` conflict.
+``struct_sweep_direction`` stays EVIDENCE only — direction-agnostic, like breakout direction.
 """
 from __future__ import annotations
 
@@ -39,6 +45,8 @@ class StructureSense:
 
         evidence = {
             "breakout": breakout, "fakeout": fakeout, "position": position, "trend": trend,
+            "swept": bool(context.get("struct_swept")),
+            "sweep_direction": context.get("struct_sweep_direction"),
             "day_high": context.get("day_high"), "day_low": context.get("day_low"),
         }
 

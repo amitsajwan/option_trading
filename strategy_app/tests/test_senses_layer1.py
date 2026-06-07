@@ -68,6 +68,16 @@ def test_destination_no_room_when_wall_close():
     assert v.evidence["space_to_move_ratio"] < 1.0
 
 
+def test_destination_uses_weekly_level_as_wall():
+    # §12.1 — a nearby weekly high becomes the nearest resistance and shrinks the room.
+    # No prior-day / ORB walls above; week_high 54050 is the only wall above close 54000.
+    ctx = {"close": 54000.0, "expected_move_pt": 117.0,
+           "prior_day_low": 53000.0, "week_high": 54050.0, "week_low": 52000.0}
+    v = DestinationSense().evaluate(ctx)
+    assert v.evidence["nearest_resistance"] == 54050.0   # the weekly high
+    assert v.verdict == "no_room"                         # 50pt room < 117pt move
+
+
 def test_destination_abstains_without_levels():
     v = DestinationSense().evaluate({"close": 54000.0, "expected_move_pt": 117.0})
     assert v.is_abstain
@@ -169,3 +179,27 @@ def test_build_contexts_windowing_and_warmup():
     c0 = ctxs[0]
     assert c0.atr_base > 0 and c0.atr_build > 0
     assert c0.future_move_pt is not None and c0.future_signed_move_pt is not None
+
+
+def test_build_contexts_weekly_levels_flow_through():
+    # §12.1 offline symmetry — week_high/low from levels reach the context mapping
+    bars = [{"c": 100.0 + i, "h": 101.0 + i, "l": 99.0 + i, "ovol": 100.0, "ooi": 1000.0 + i}
+            for i in range(WARMUP + 15)]
+    levels = {"d": {"prior_day_high": 200.0, "prior_day_low": 50.0,
+                    "week_high": 250.0, "week_low": 40.0}}
+    m = build_contexts({"d": bars}, horizon=10, levels=levels)[0].as_mapping()
+    assert m["week_high"] == 250.0 and m["week_low"] == 40.0
+
+
+def test_build_contexts_detects_prior_day_sweep():
+    # §12.2 offline symmetry — a bar that pierces PDH intrabar but closes back below sweeps up.
+    # PDH=150; the warmup bars stay well below it, then bar at WARMUP pierces & rejects.
+    bars = [{"c": 100.0, "h": 101.0, "l": 99.0, "ovol": 100.0, "ooi": 1000.0 + i}
+            for i in range(WARMUP + 12)]
+    swept_i = WARMUP
+    bars[swept_i] = {"c": 149.0, "h": 152.0, "l": 99.0, "ovol": 100.0, "ooi": 1000.0 + swept_i}
+    levels = {"d": {"prior_day_high": 150.0, "prior_day_low": 50.0}}
+    ctxs = build_contexts({"d": bars}, horizon=10, levels=levels)
+    swept = next(c for c in ctxs if c.index == swept_i)
+    assert swept.struct_swept is True and swept.struct_sweep_direction == "up"
+    assert swept.struct_fakeout is True       # routed to the trap verdict

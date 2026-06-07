@@ -219,6 +219,67 @@ We stopped trying to predict direction with a model and instead built a **big-mo
 
 ---
 
+## 12. Liquidity / Structure sense — scoped addition (2026-06-07)
+
+A review proposed adding a "Market Structure / Liquidity Sense" (PDH/PDL/weekly/session
+distances, liquidity sweeps, structure) as the system's "biggest missing component."
+**Assessment: the premise is largely already built.** `StructureSense`
+([structure.py](../strategy_app/senses/structure.py)) and `DestinationSense`
+([destination.py](../strategy_app/senses/destination.py)) already deliver breakout /
+fakeout / at_extreme / coiling, EMA-stack trend, prior-day H/L + ORB + OI-wall S/R, and
+`space_to_move_ratio`. Structure is already wired into Layer 2 — conflict
+`loaded_into_fakeout` ([decision_brain.py:128-132](../strategy_app/brain/decision_brain.py#L128-L132))
+and the `W_STRUCT` quality vote ([decision_brain.py:30-35](../strategy_app/brain/decision_brain.py#L30-L35)).
+So this is **not** a missing pillar; it's a *sharpening* of two existing senses plus one
+genuinely new (and risky) direction hypothesis. Scoped into three tickets:
+
+### 12.1 — Weekly H/L into Destination · GREEN-LIGHT (low risk)
+Destination only knows prior-*day* H/L, ORB, and OI walls. Weekly levels are objective
+magnets/walls and the data **already exists**: `SnapshotAccessor.week_high` / `week_low`
+([snapshot_accessor.py:564-569](../strategy_app/market/snapshot_accessor.py#L564-L569)),
+sourced from the same `session_levels` payload as the prior-day levels already in use.
+- **Change:** map `week_high`/`week_low` in [snapshot_adapter.py:94-101](../strategy_app/senses/snapshot_adapter.py#L94-L101)
+  and add them to the candidate list in [destination.py:28-33](../strategy_app/senses/destination.py#L28-L33).
+- **Gate (cheap but required):** confirm the live/sim snapshot producer actually populates
+  `session_levels.week_high/low` (the accessor property exists; verify the field is non-null
+  on real bars before relying on it). Pure additive S/R — no thesis change.
+
+### 12.2 — Sweep detection on PDH/PDL + explicit `sweep_direction` · GREEN-LIGHT (low risk)
+Today `struct_fakeout` (the "swept a level then snapped back" trap) is derived **only from
+the opening range**, never prior-day extremes
+([snapshot_adapter.py:43-45](../strategy_app/senses/snapshot_adapter.py#L43-L45)). So
+"swept PDH then rejected" is currently invisible.
+- **Change:** in `_structure_from_snapshot` ([snapshot_adapter.py:23-59](../strategy_app/senses/snapshot_adapter.py#L23-L59)),
+  also flag a sweep when price pierced `prev_day_high`/`prev_day_low` intrabar then closed
+  back inside, and surface a `sweep_direction` ("up"/"down"/none) field. Keep `StructureSense`
+  pure — it just reads the new keys.
+- **Scope discipline:** this only *enriches evidence and the existing fakeout/at_extreme
+  verdicts*. It must **not** silently become a fade signal — that's 12.3.
+
+### 12.3 — Structure/sweep → DirectionSense · RESEARCH TICKET, GATED (do not bolt on)
+The review's headline idea: "swept PDH + rejection → fade to PE." `DirectionSense` today is
+**VWAP + 5m momentum only** ([direction.py:47-72](../strategy_app/senses/direction.py#L47-L72))
+and cannot express this. It is the only part with real P&L potential — **and the most
+dangerous**, for three reasons baked into our own findings:
+1. Direction is *the* bottleneck and **more inputs have not helped** (depth/OFI didn't; structural
+   direction ~0.56, below cost break-even — §1, §10).
+2. "Sweep + rejection → fade" is a **mean-reversion** signal living inside a **momentum**
+   (compression→expansion) engine. Wrong-regime application is net-negative.
+3. Sample is **7–8 quiet days** — on them, breakout did *not* predict a bigger move (n=3),
+   which is precisely why `W_STRUCT` is modest, not a gate.
+
+**Therefore:** treat as a **pre-registered, regime-gated direction experiment**, never a merge
+into the live direction vote. Pre-register (hypothesis, levels, IS/OOS split, ship-gate) in a
+new `docs/` spec à la the R1S hypotheses; measure sweep-fade accuracy *conditioned on the
+loaded gate* in [direction_research.py](../ops/research/direction_research.py) before any code
+touches `DirectionSense`. If it can't beat ~0.55 on held-out days, it dies in research.
+
+**Status:** 12.1 + 12.2 are safe to implement when build resumes (still HALTED, still sim-gated
+per §8). 12.3 is queued as research only. None of this changes the Phase-0 gate or the "big-move
+first, direction after" doctrine.
+
+---
+
 ## Appendix — data & reproduction (so the numbers are traceable)
 
 - **Data:** `trading_ai.phase1_market_snapshots` (mongo on the runtime VM) — full 25-strike chain + futures bar + chain/ladder aggregates, 1-min, persisted for *all* bars. **7 live days: 2026-05-26, 05-27, 06-01..06-05** (~2,400 bars). Quiet/low-vol regime — treat lifts as directional until more days accrue.

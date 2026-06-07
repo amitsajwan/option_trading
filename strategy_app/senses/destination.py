@@ -2,9 +2,9 @@
 
 Finds the nearest support/resistance from levels that are ALWAYS present in the raw
 snapshot/sim (not the annotation path, which may be empty in sim): OI walls in
-``chain_aggregates`` (max_pain, ce/pe top-OI strikes), prior-day high/low, and the
-opening range. Returns the space available vs the expected move, so the brain can
-SKIP a loaded spring that has no room to a wall.
+``chain_aggregates`` (max_pain, ce/pe top-OI strikes), prior-day high/low, weekly
+high/low, and the opening range. Returns the space available vs the expected move, so
+the brain can SKIP a loaded spring that has no room to a wall.
 
 ``space_to_move_ratio`` = available_space_toward_move / expected_move_pt. The brain
 treats a value < 1.0 as "no room" (the move can't complete before hitting a wall).
@@ -29,6 +29,7 @@ class DestinationSense:
             context.get("max_pain"),
             context.get("ce_oi_top_strike"), context.get("pe_oi_top_strike"),
             context.get("prior_day_high"), context.get("prior_day_low"),
+            context.get("week_high"), context.get("week_low"),
             context.get("opening_range_high"), context.get("opening_range_low"),
         ]
         for lvl in candidates:

@@ -289,15 +289,25 @@ def _load_days_from_mongo() -> tuple[dict[str, list[dict[str, Any]]], dict[str, 
                 "vwap": fd.get("vwap"), "fut_return_5m": fd.get("fut_return_5m"),
             })
         days_bars[day] = rows
-    # prior-day high/low as always-available levels
+    # prior-day high/low + trailing-5-day weekly high/low as always-available levels
+    # (mirrors snapshot_app/core/market_snapshot.py: week_* = last 5 trading days, excl. today)
     levels: dict[str, dict[str, float | None]] = {}
     prev_hi = prev_lo = None
+    day_hi: list[float] = []          # per-prior-day highs (most recent last)
+    day_lo: list[float] = []
     for day in days:
-        levels[day] = {"prior_day_high": prev_hi, "prior_day_low": prev_lo}
+        wk_hi = max(day_hi[-5:]) if day_hi else None
+        wk_lo = min(day_lo[-5:]) if day_lo else None
+        levels[day] = {"prior_day_high": prev_hi, "prior_day_low": prev_lo,
+                       "week_high": wk_hi, "week_low": wk_lo}
         highs = [r["h"] for r in days_bars[day] if r["h"] is not None]
         lows = [r["l"] for r in days_bars[day] if r["l"] is not None]
         prev_hi = max(highs) if highs else prev_hi
         prev_lo = min(lows) if lows else prev_lo
+        if highs:
+            day_hi.append(max(highs))
+        if lows:
+            day_lo.append(min(lows))
     return days_bars, levels
 
 

@@ -26,6 +26,14 @@ def _structure_from_snapshot(snap, close, prev_high, prev_low) -> dict[str, Any]
     A lighter analog of MarketStructureTracker (which is stateful and runs in the engine).
     The engine shadow can overlay the full tracker's swing pivots later; this is enough for
     breakout/fakeout/trend without engine state.
+
+    Liquidity sweeps (board §12.2): a sweep is a single-bar trap — the bar pierced a prior-day
+    extreme intrabar (``fut_high`` > PDH / ``fut_low`` < PDL) but the *close* came back inside.
+    That is the ICT "swept the pool then rejected" pattern, and it is treated as a ``fakeout``
+    (the existing trap verdict), so it routes through the brain's ``loaded_into_fakeout`` conflict.
+    ``sweep_direction`` ("up" = took upside liquidity then fell back) is recorded as EVIDENCE
+    only — direction-agnostic by design, mirroring how breakout direction is recorded but never
+    voted as a side. Feeding sweeps into the DIRECTION sense is deliberately deferred to §12.3.
     """
     # trend from the EMA stack (the trader's quick trend read)
     e9, e21, e50 = snap.ema_9, snap.ema_21, snap.ema_50
@@ -40,9 +48,20 @@ def _structure_from_snapshot(snap, close, prev_high, prev_low) -> dict[str, Any]
     broke_up = (prev_high is not None and close is not None and close > prev_high) or bool(orh_broken and (pvorh or 0) > 0)
     broke_down = (prev_low is not None and close is not None and close < prev_low) or bool(orl_broken and (pvorl or 0) < 0)
     breakout = "up" if broke_up else "down" if broke_down else "none"
-    # fakeout: broke the opening range at some point but price is back on the other side now
-    fakeout = bool((orh_broken and (pvorh is not None) and pvorh < 0)
-                   or (orl_broken and (pvorl is not None) and pvorl > 0))
+
+    # prior-day liquidity sweep: bar pierced PDH/PDL intrabar but closed back inside (a trap)
+    bar_high, bar_low = snap.fut_high, snap.fut_low
+    swept_up = bool(prev_high is not None and close is not None and bar_high is not None
+                    and bar_high > prev_high and close < prev_high)
+    swept_down = bool(prev_low is not None and close is not None and bar_low is not None
+                      and bar_low < prev_low and close > prev_low)
+    sweep_direction = "up" if swept_up else "down" if swept_down else "none"
+    swept = swept_up or swept_down
+
+    # fakeout: broke the opening range, OR swept a prior-day extreme, then snapped back inside
+    orb_fakeout = bool((orh_broken and (pvorh is not None) and pvorh < 0)
+                       or (orl_broken and (pvorl is not None) and pvorl > 0))
+    fakeout = orb_fakeout or swept
 
     position = None
     if close is not None and prev_high is not None and prev_low is not None and prev_high > prev_low:
@@ -55,6 +74,7 @@ def _structure_from_snapshot(snap, close, prev_high, prev_low) -> dict[str, Any]
             position = "inside"
 
     return {"struct_breakout": breakout, "struct_fakeout": fakeout,
+            "struct_swept": swept, "struct_sweep_direction": sweep_direction,
             "struct_position": position, "struct_trend": trend,
             "day_high": prev_high, "day_low": prev_low}
 
@@ -99,6 +119,9 @@ def snapshot_to_sense_context(
         "opening_range_low": snap.orl,
         "prior_day_high": prev_high,
         "prior_day_low": prev_low,
+        # weekly levels (always-present session_levels feed — same source as prior-day H/L)
+        "week_high": snap.week_high,
+        "week_low": snap.week_low,
         # direction inputs (measured signals: VWAP bias + 5-min momentum)
         "vwap": snap.vwap,
         "fut_return_5m": snap.fut_return_5m,

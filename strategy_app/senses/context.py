@@ -49,6 +49,8 @@ class BarContext:
     pe_oi_top_strike: float | None = None
     prior_day_high: float | None = None
     prior_day_low: float | None = None
+    week_high: float | None = None
+    week_low: float | None = None
     opening_range_high: float | None = None
     opening_range_low: float | None = None
     # direction inputs (the measured signals: VWAP bias + 5-min momentum)
@@ -63,6 +65,8 @@ class BarContext:
     # structure (trader's highs/lows/breakouts lens)
     struct_breakout: str | None = None      # "up" | "down" | "none"
     struct_fakeout: bool = False
+    struct_swept: bool = False               # pierced a prior-day extreme then closed back inside
+    struct_sweep_direction: str | None = None  # "up" | "down" | "none" (evidence only)
     struct_position: str | None = None       # "near_high" | "near_low" | "inside"
     struct_trend: str | None = None          # "up" | "down" | "choppy"
     day_high: float | None = None
@@ -92,12 +96,14 @@ class BarContext:
             "max_pain": self.max_pain,
             "ce_oi_top_strike": self.ce_oi_top_strike, "pe_oi_top_strike": self.pe_oi_top_strike,
             "prior_day_high": self.prior_day_high, "prior_day_low": self.prior_day_low,
+            "week_high": self.week_high, "week_low": self.week_low,
             "opening_range_high": self.opening_range_high, "opening_range_low": self.opening_range_low,
             "vwap": self.vwap, "fut_return_5m": self.fut_return_5m,
             "net_ofi": self.net_ofi,
             "ce_bid_strength": self.ce_bid_strength, "pe_bid_strength": self.pe_bid_strength,
             "spread_pct": self.spread_pct,
             "struct_breakout": self.struct_breakout, "struct_fakeout": self.struct_fakeout,
+            "struct_swept": self.struct_swept, "struct_sweep_direction": self.struct_sweep_direction,
             "struct_position": self.struct_position, "struct_trend": self.struct_trend,
             "day_high": self.day_high, "day_low": self.day_low,
             "future_move_pt": self.future_move_pt, "future_signed_move_pt": self.future_signed_move_pt,
@@ -149,9 +155,16 @@ TREND_LOOKBACK = 10
 TREND_EPS = 0.001
 
 
-def _structure_for_bar(bars: list[dict[str, Any]], i: int) -> dict[str, Any]:
+def _structure_for_bar(
+    bars: list[dict[str, Any]], i: int,
+    *, prior_day_high: float | None = None, prior_day_low: float | None = None,
+) -> dict[str, Any]:
     """Trader structure (highs/lows/breakouts) from the bars up to i. Lightweight analog
-    of MarketStructureTracker for the backtest; the live path uses snapshot-native fields."""
+    of MarketStructureTracker for the backtest; the live path uses snapshot-native fields.
+
+    §12.2 sweep: mirrors the live adapter — the bar pierced a PRIOR-DAY extreme intrabar
+    (``h`` > PDH / ``l`` < PDL) but the close came back inside. Folded into ``struct_fakeout``
+    (a sweep is a trap) with ``struct_sweep_direction`` recorded as evidence only."""
     close = float(bars[i]["c"])
     day_h = max(float(x["h"]) for x in bars[: i + 1] if x.get("h") is not None)
     day_l = min(float(x["l"]) for x in bars[: i + 1] if x.get("l") is not None)
@@ -163,6 +176,18 @@ def _structure_for_bar(bars: list[dict[str, Any]], i: int) -> dict[str, Any]:
     recent = [float(x["c"]) for x in bars[max(0, i - 2):i] if x.get("c") is not None]
     fakeout = bool(recent and ((max(recent) > prior_high and close <= prior_high)
                                or (min(recent) < prior_low and close >= prior_low)))
+
+    # prior-day liquidity sweep (same definition as snapshot_adapter._structure_from_snapshot)
+    bar_h = _fin(bars[i].get("h"))
+    bar_l = _fin(bars[i].get("l"))
+    swept_up = bool(prior_day_high is not None and bar_h is not None
+                    and bar_h > prior_day_high and close < prior_day_high)
+    swept_down = bool(prior_day_low is not None and bar_l is not None
+                      and bar_l < prior_day_low and close > prior_day_low)
+    sweep_direction = "up" if swept_up else "down" if swept_down else "none"
+    swept = swept_up or swept_down
+    fakeout = fakeout or swept
+
     rng = max(day_h - day_l, 1e-9)
     position = ("near_high" if (day_h - close) < NEAR_EDGE_FRAC * rng
                 else "near_low" if (close - day_l) < NEAR_EDGE_FRAC * rng else "inside")
@@ -172,8 +197,10 @@ def _structure_for_bar(bars: list[dict[str, Any]], i: int) -> dict[str, Any]:
                  else "down" if close < ref * (1 - TREND_EPS) else "choppy")
     else:
         trend = "choppy"
-    return {"struct_breakout": breakout, "struct_fakeout": fakeout, "struct_position": position,
-            "struct_trend": trend, "day_high": day_h, "day_low": day_l}
+    return {"struct_breakout": breakout, "struct_fakeout": fakeout,
+            "struct_swept": swept, "struct_sweep_direction": sweep_direction,
+            "struct_position": position, "struct_trend": trend,
+            "day_high": day_h, "day_low": day_l}
 
 
 def _held_strike_paths(bars: list[dict[str, Any]], i: int, horizon: int):
@@ -222,7 +249,7 @@ def build_contexts(
     ``ooi`` (option OI), optional ``max_pain``/``ce_oi_top_strike``/
     ``pe_oi_top_strike``/``opening_range_high``/``opening_range_low``/``net_ofi``/
     ``ce_bid_strength``/``pe_bid_strength``/``spread_pct``.
-    ``levels[day]`` may carry ``prior_day_high``/``prior_day_low``.
+    ``levels[day]`` may carry ``prior_day_high``/``prior_day_low``/``week_high``/``week_low``.
     """
     levels = levels or {}
     out: list[BarContext] = []
@@ -245,7 +272,8 @@ def build_contexts(
             atr_build = _atr(H, L, C)
             atr_base = _atr(Hb, Lb, Cb)
             vol_build = sum(float(x.get("ovol") or 0.0) for x in bars[i - BUILD_WINDOW:i]) / BUILD_WINDOW
-            struct = _structure_for_bar(bars, i)
+            struct = _structure_for_bar(bars, i, prior_day_high=day_levels.get("prior_day_high"),
+                                        prior_day_low=day_levels.get("prior_day_low"))
             future = [x for x in bars[i + 1:i + 1 + horizon] if x.get("h") is not None and x.get("l") is not None]
             fut_move = fut_signed = None
             fut_path: list[tuple[float, float, float]] = []
@@ -267,12 +295,14 @@ def build_contexts(
                 max_pain=b.get("max_pain"),
                 ce_oi_top_strike=b.get("ce_oi_top_strike"), pe_oi_top_strike=b.get("pe_oi_top_strike"),
                 prior_day_high=day_levels.get("prior_day_high"), prior_day_low=day_levels.get("prior_day_low"),
+                week_high=day_levels.get("week_high"), week_low=day_levels.get("week_low"),
                 opening_range_high=b.get("opening_range_high"), opening_range_low=b.get("opening_range_low"),
                 vwap=b.get("vwap"), fut_return_5m=b.get("fut_return_5m"),
                 net_ofi=b.get("net_ofi"),
                 ce_bid_strength=b.get("ce_bid_strength"), pe_bid_strength=b.get("pe_bid_strength"),
                 spread_pct=b.get("spread_pct"),
                 struct_breakout=struct["struct_breakout"], struct_fakeout=struct["struct_fakeout"],
+                struct_swept=struct["struct_swept"], struct_sweep_direction=struct["struct_sweep_direction"],
                 struct_position=struct["struct_position"], struct_trend=struct["struct_trend"],
                 day_high=struct["day_high"], day_low=struct["day_low"],
                 future_move_pt=fut_move, future_signed_move_pt=fut_signed, future_path=fut_path,
