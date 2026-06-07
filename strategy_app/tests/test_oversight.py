@@ -136,18 +136,33 @@ class TestOversightBrain:
     def test_enabled_writes_veto_from_lean(self, tmp_path, monkeypatch):
         monkeypatch.setenv("BRAIN_OVERSIGHT_ENABLED", "true")
         monkeypatch.setenv("BRAIN_LLM_API_KEY", "k")
+        # _SNAP is a +0.5% UP tape, so a CE (bullish) lean is consistent and
+        # survives verification → it vetoes the opposite (PE) side.
         monkeypatch.setattr(
             brain_mod, "reason",
-            lambda *a, **k: OversightVerdict(posture="trend_down", direction_lean="PE",
+            lambda *a, **k: OversightVerdict(posture="trend_up", direction_lean="CE",
                                              lean_confidence=0.75, risk_flag="reduce",
-                                             thesis="bearish: extended above PDH, faded"),
+                                             thesis="bullish: holding above PDH"),
         )
         b = OversightBrain(run_dir=tmp_path)
         v = b.cycle(_SNAP, prior_fii_cr=-8776, events=["US CPI 10 Jul"])
-        assert v.direction_lean == "PE"
+        assert v.direction_lean == "CE"
         st = json.loads((tmp_path / "oversight_state.json").read_text())
-        assert st["oversight_veto_side"] == "CE"               # bearish lean ⇒ don't take CE
+        assert st["oversight_veto_side"] == "PE"               # bullish lean ⇒ don't take PE
         assert st["oversight_risk_flag"] == "reduce"
+
+    def test_enabled_kills_hallucinated_lean(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("BRAIN_OVERSIGHT_ENABLED", "true")
+        monkeypatch.setenv("BRAIN_LLM_API_KEY", "k")
+        # bearish lean on the +0.5% up tape = hallucination → verified away → no veto
+        monkeypatch.setattr(
+            brain_mod, "reason",
+            lambda *a, **k: OversightVerdict(direction_lean="PE", lean_confidence=0.9),
+        )
+        b = OversightBrain(run_dir=tmp_path)
+        b.cycle(_SNAP)
+        st = json.loads((tmp_path / "oversight_state.json").read_text())
+        assert st["oversight_veto_side"] == ""                 # contradiction killed → no veto
 
     def test_read_risk_state(self, tmp_path):
         OversightBrain(run_dir=tmp_path).cycle(_SNAP)

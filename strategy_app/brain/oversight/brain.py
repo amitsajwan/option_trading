@@ -27,6 +27,7 @@ from typing import Any, Optional
 from .facts import MarketFacts
 from .reasoner import OversightVerdict, reason, rule_reason
 from .scratchpad import Scratchpad
+from .verify import verify_verdict
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,12 @@ class OversightBrain:
         else:
             verdict = OversightVerdict()  # disabled / unkeyed → strict no-op (neutral)
 
+        # VERIFY — catch hallucinations: downgrade any verdict that contradicts the
+        # ground-truth facts before it can influence anything.
         compact = facts.to_prompt_dict()
+        verdict, _hallucination_flags = verify_verdict(verdict, compact)
+        if _hallucination_flags:
+            logger.warning("oversight hallucination flags=%s", _hallucination_flags)
         scratch.add(time=facts.timestamp[11:16] or "", verdict=verdict, facts=compact)
         scratch.persist(self._scratch_path(trade_date))
         self._write_state(verdict)

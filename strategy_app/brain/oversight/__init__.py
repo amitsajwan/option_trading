@@ -21,6 +21,7 @@ from .facts import MarketFacts
 from .gate import oversight_entry_veto
 from .reasoner import OversightVerdict
 from .scratchpad import Scratchpad
+from .verify import verify_verdict
 
 __all__ = [
     "OversightBrain",
@@ -28,4 +29,5 @@ __all__ = [
     "OversightVerdict",
     "Scratchpad",
     "oversight_entry_veto",
+    "verify_verdict",
 ]

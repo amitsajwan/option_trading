@@ -196,15 +196,17 @@ def replay_day(
     # Oversight brain: refresh the risk-reducing state every ~30 bars (≈30 min) so
     # the engine's veto can act on it. Off unless BRAIN_OVERSIGHT_ENABLED.
     _oversight = None
+    _oversight_every = 30  # ~30 min (1 bar/min)
     if os.getenv("BRAIN_OVERSIGHT_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on"):
         try:
             from ..brain.oversight.brain import OversightBrain
             _oversight = OversightBrain()
+            _oversight_every = max(1, int(os.getenv("BRAIN_OVERSIGHT_EVERY_BARS", "30") or 30))
         except Exception:
             _oversight = None
 
     for i, snap in enumerate(snapshots):
-        if _oversight is not None and i % 30 == 0:
+        if _oversight is not None and i % _oversight_every == 0:
             try:
                 _oversight.cycle(snap)
             except Exception:
