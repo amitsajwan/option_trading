@@ -55,6 +55,11 @@ _SAFE_OVERRIDE_KEYS = {
     # via the trace harness before any live cut-over.
     "ENTRY_ML_MODEL_PATH",
     "ENTRY_ML_MIN_PROB",
+    # Oversight brain (sim-only A/B): toggle the slow-lane risk-reducing brain +
+    # its entry-veto gate per run, to measure base vs oversight-gated P&L.
+    "BRAIN_OVERSIGHT_ENABLED",
+    "BRAIN_OVERSIGHT_GATE_ENABLED",
+    "BRAIN_OVERSIGHT_MODE",
     # Direction A/B (sim-only): flip the direction engine (composite heuristic resolver
     # vs consensus ML direction model) to compare CE/PE selection + grader activation.
     "ML_ENTRY_DIRECTION_MODE",

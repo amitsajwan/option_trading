@@ -147,4 +147,35 @@ def reason(
         return OversightVerdict()
 
 
-__all__ = ["OversightVerdict", "reason"]
+_RULE_TREND_PCT = 0.003   # >0.3% vs prev close = a clear intraday trend
+
+
+def rule_reason(facts: dict[str, Any]) -> OversightVerdict:
+    """Deterministic baseline reasoner — no LLM, no key.
+
+    A transparent anti-chase heuristic so the gate mechanism can be measured
+    without an API key (and as a fallback): when the tape clearly trends one way
+    vs the prior close, lean that way (so the engine avoids chasing the *other*
+    side — directly targeting the CE-into-a-falling-tape losses). Flat → no lean.
+    The LLM (``reason``) replaces this when a key is configured.
+    """
+    chg = facts.get("fut_vs_prev_close_pct")
+    if not isinstance(chg, (int, float)):
+        return OversightVerdict(posture="unknown")
+    if chg <= -_RULE_TREND_PCT:
+        return OversightVerdict(
+            posture="trend_down", direction_lean="PE", lean_confidence=0.7,
+            risk_flag="normal", thesis="rule: down vs prev close — avoid chasing CE",
+            reasoning=f"fut {round(chg*100,2)}% vs prev close",
+        )
+    if chg >= _RULE_TREND_PCT:
+        return OversightVerdict(
+            posture="trend_up", direction_lean="CE", lean_confidence=0.7,
+            risk_flag="normal", thesis="rule: up vs prev close — avoid chasing PE",
+            reasoning=f"fut +{round(chg*100,2)}% vs prev close",
+        )
+    return OversightVerdict(posture="choppy", direction_lean="none",
+                            thesis="rule: flat vs prev close — no lean")
+
+
+__all__ = ["OversightVerdict", "reason", "rule_reason"]

@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .facts import MarketFacts
-from .reasoner import OversightVerdict, reason
+from .reasoner import OversightVerdict, reason, rule_reason
 from .scratchpad import Scratchpad
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,10 @@ class OversightBrain:
         trade_date = facts.trade_date or date.today().isoformat()
         scratch = Scratchpad.load_or_new(self._scratch_path(trade_date), trade_date)
 
-        if self._enabled and self._api_key:
+        mode = os.getenv("BRAIN_OVERSIGHT_MODE", "llm").strip().lower()
+        if self._enabled and mode == "rule":
+            verdict = rule_reason(facts.to_prompt_dict())          # deterministic, no key
+        elif self._enabled and self._api_key:
             verdict = reason(
                 facts.to_prompt_dict(),
                 scratch.to_prompt_context(),
@@ -93,7 +96,7 @@ class OversightBrain:
                 model=self._model,
             )
         else:
-            verdict = OversightVerdict()  # disabled → strict no-op (neutral)
+            verdict = OversightVerdict()  # disabled / unkeyed → strict no-op (neutral)
 
         compact = facts.to_prompt_dict()
         scratch.add(time=facts.timestamp[11:16] or "", verdict=verdict, facts=compact)

@@ -1694,14 +1694,10 @@ class DeterministicRuleEngine(StrategyEngine):
         if os.getenv("BRAIN_OVERSIGHT_GATE_ENABLED", "false").strip().lower() not in ("1", "true", "yes", "on"):
             return False
         try:
-            import time as _t
-            now = _t.monotonic()
-            if now - getattr(self, "_oversight_state_at", 0.0) > 30.0:
-                from ..brain.oversight.brain import OversightBrain
-                self._oversight_state = OversightBrain.read_risk_state()
-                self._oversight_state_at = now
+            from ..brain.oversight.brain import OversightBrain
+            state = OversightBrain.read_risk_state()
             direction = getattr(candidate.direction, "value", candidate.direction)
-            vetoed, reason = oversight_entry_veto(str(direction), getattr(self, "_oversight_state", {}) or {})
+            vetoed, reason = oversight_entry_veto(str(direction), state)
             if vetoed:
                 candidate.raw_signals["_oversight_veto"] = reason
             return vetoed
