@@ -130,7 +130,7 @@ def _env_regimes(name: str, default: str) -> frozenset:
     return frozenset(r.strip().upper() for r in raw.split(",") if r.strip())
 
 
-def _build_otm_tiers() -> list[_TierConfig]:
+def _build_otm_tiers(all_depths: bool = False) -> list[_TierConfig]:
     """Return enabled OTM tiers sorted deepest-first.
 
     The max depth is bounded by STRATEGY_STRIKE_MAX_OTM_STEPS (default 4).
@@ -138,9 +138,22 @@ def _build_otm_tiers() -> list[_TierConfig]:
     pattern as tiers 2–4; add SMART_STRIKE_OTM5_ENABLED=1 etc. to activate them.
     Defaults for tiers 5–8 follow the same progression (higher confidence + tighter
     IV ceilings than the inner tiers) so they are off until explicitly configured.
+
+    ``all_depths=True`` (band/premium-driven mode) builds EVERY depth 1..max_steps at
+    the base OTM confidence, ignoring the per-tier _ENABLED/regime/OI gates — because
+    band mode already selects purely on the premium window, so requiring a separate
+    _ENABLED flag per depth just blocks the budget from reaching deeper strikes.
     """
     max_steps = int(_env_float("STRATEGY_STRIKE_MAX_OTM_STEPS", 4.0))
     max_steps = max(1, min(max_steps, 12))   # safety: clamp to [1, 12] (supports 10-step OTM)
+
+    if all_depths:
+        base_conf = _env_float("SMART_STRIKE_OTM_CONFIDENCE", _DEFAULTS["OTM_CONFIDENCE"])
+        return sorted(
+            (_TierConfig(n=n, conf_min=base_conf, iv_ceil=100.0, regimes=frozenset(), max_hour=0, min_oi=0.0)
+             for n in range(1, max_steps + 1)),
+            key=lambda t: t.n, reverse=True,
+        )
 
     tiers: list[_TierConfig] = []
 
@@ -335,7 +348,9 @@ def select_strike(snap: Any, direction: str, decision: Any, regime: str = "") ->
     # Pass 1: tiers deepest-first (deepest = cheapest). Skip ones below the floor
     # (too deep), stop once above the cap (shallower only gets more expensive), and
     # take the deepest strike that lands inside the [min, max] band and passes gates.
-    for tier in _build_otm_tiers():
+    # In band mode, scan ALL depths (premium window is the selector) — don't require a
+    # per-tier _ENABLED flag, which would cap depth and trap us in expensive near-ATM.
+    for tier in _build_otm_tiers(all_depths=band_mode):
         strike_candidate = _otm_strike(tier.n)
         ltp = _ltp(strike_candidate)
         if ltp is None:
