@@ -60,6 +60,7 @@ _SAFE_OVERRIDE_KEYS = {
     "BRAIN_OVERSIGHT_ENABLED",
     "BRAIN_OVERSIGHT_GATE_ENABLED",
     "BRAIN_OVERSIGHT_MODE",
+    "BRAIN_OVERSIGHT_EVERY_BARS",
     # Direction A/B (sim-only): flip the direction engine (composite heuristic resolver
     # vs consensus ML direction model) to compare CE/PE selection + grader activation.
     "ML_ENTRY_DIRECTION_MODE",
