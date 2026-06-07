@@ -16,13 +16,14 @@ from ..senses.cost_ev import CostEvSense
 from ..senses.destination import DestinationSense
 from ..senses.direction import DirectionSense
 from ..senses.flow import FlowSense
+from ..senses.expiry import ExpirySense
 from ..senses.move import MoveSense
 from ..senses.regime import RegimeSense
 from ..senses.risk import RiskSense
 from ..senses.structure import StructureSense
 
-_MOVE, _REGIME, _DEST, _RISK, _FLOW, _STRUCT = (
-    MoveSense(), RegimeSense(), DestinationSense(), RiskSense(), FlowSense(), StructureSense())
+_MOVE, _REGIME, _DEST, _RISK, _FLOW, _STRUCT, _EXPIRY = (
+    MoveSense(), RegimeSense(), DestinationSense(), RiskSense(), FlowSense(), StructureSense(), ExpirySense())
 
 
 def run_senses(
@@ -48,6 +49,7 @@ def run_senses(
         "risk": _RISK.evaluate(context),
         "flow": _FLOW.evaluate(context),
         "structure": _STRUCT.evaluate(context),
+        "expiry": _EXPIRY.evaluate(context),
         "direction": direction_sense.evaluate(context),
     }
 

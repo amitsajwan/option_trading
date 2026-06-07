@@ -108,6 +108,8 @@ def snapshot_to_sense_context(
         "spread_pct": None,
         # cost/ev premium (lets CostEvSense use the live ATM premium instead of a default)
         "atm_premium": snap.atm_premium,
+        # expiry (lets the brain factor days-to-expiry into moneyness/cost reasoning)
+        "days_to_expiry": snap.days_to_expiry,
     }
 
     # flow/OFI — only when depth is present; else FlowSense abstains (handover: depth optional)
