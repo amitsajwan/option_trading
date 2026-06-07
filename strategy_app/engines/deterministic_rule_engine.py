@@ -75,6 +75,9 @@ from .profiles import (
     get_risk_config,
 )
 from ..brain.brain import BrainDecision, TradingBrain
+from ..brain.decision_brain import DecisionBrain
+from ..brain.sense_runner import run_senses
+from ..senses.snapshot_adapter import snapshot_to_sense_context
 from ..brain.context import DayContext
 from ..runtime.runtime_artifacts import resolve_runtime_artifact_paths
 
@@ -202,6 +205,13 @@ class DeterministicRuleEngine(StrategyEngine):
         # This is the clean, LLM-readable record — durably logged in live and
         # collected ephemerally by the sim replay. None until the first evaluation.
         self.last_decision_trace: Optional[dict[str, Any]] = None
+        # Intelligent-brain SHADOW (board: entry wiring). Env-gated, default OFF. When on,
+        # the new DecisionBrain runs every bar in defer_direction mode and writes its verdict
+        # to `last_brain_shadow` for comparison — it NEVER affects the live TradeSignal.
+        self._brain_shadow_enabled: bool = as_bool(os.getenv("INTELLIGENT_BRAIN_SHADOW", "false"))
+        self._brain_shadow: Optional[DecisionBrain] = (
+            DecisionBrain(defer_direction=True) if self._brain_shadow_enabled else None)
+        self.last_brain_shadow: Optional[dict[str, Any]] = None
         # Session-scoped market-structure reader (bottoms / highs / breakouts lens).
         # Fed one fut OHLC bar per tick; its read is attached to every decision trace.
         self._structure = MarketStructureTracker()
@@ -413,7 +423,38 @@ class DeterministicRuleEngine(StrategyEngine):
         # when STRATEGY_EVAL_TIMING is off.
         self._eval_timer.mark_bar()
         with self._eval_timer.measure("total"):
-            return self._evaluate_impl(snapshot)
+            signal = self._evaluate_impl(snapshot)
+        # Surface the intelligent-brain shadow on the decision trace the sim/UI render, so a
+        # SIM run shows the new senses->brain->direction->exit flow next to the engine's actual
+        # decision. Read-only: the shadow never affected `signal`.
+        if self._brain_shadow is not None and self.last_brain_shadow and isinstance(self.last_decision_trace, dict):
+            self.last_decision_trace["intelligent_brain"] = self.last_brain_shadow
+        return signal
+
+    def _run_brain_shadow(self, snap: SnapshotAccessor, position: Any) -> None:
+        """Shadow-run the intelligent DecisionBrain for this bar (board: entry wiring).
+
+        READ-ONLY: stores + logs the verdict in ``last_brain_shadow`` for comparison
+        against the live decision. Must NEVER raise into the live path — every error is
+        swallowed and recorded so the shadow can't affect trading.
+        """
+        try:
+            rc = self._risk.context
+            risk_ctx = {
+                "daily_dd": float(getattr(rc, "daily_pnl_pct", 0.0) or 0.0),
+                "consec_losses": int(getattr(rc, "consecutive_losses", 0) or 0),
+                "in_position": position is not None,
+            }
+            ctx = snapshot_to_sense_context(snap, risk_ctx=risk_ctx)
+            decision = self._brain_shadow.decide(run_senses(ctx))
+            self.last_brain_shadow = decision.to_trace()
+            logger.info(
+                "brain_shadow action=%s side=%s reason=%s step=%s",
+                decision.action, decision.side, decision.reason, decision.ladder_step,
+            )
+        except Exception:
+            logger.exception("brain_shadow failed (ignored — shadow only)")
+            self.last_brain_shadow = {"error": True}
 
     def _evaluate_impl(self, snapshot: SnapshotPayload) -> Optional[TradeSignal]:
         self._session_event_count += 1
@@ -435,6 +476,10 @@ class DeterministicRuleEngine(StrategyEngine):
         set_depth_context(self._current_depth_ctx)
         position = self._tracker.current_position
         risk = self._risk.context
+
+        # Intelligent-brain shadow (env-gated, read-only, never affects the live signal).
+        if self._brain_shadow is not None:
+            self._run_brain_shadow(snap, position)
         trace_blocker: Optional[str] = None
         warmup_blocked = False
         warmup_reason = ""

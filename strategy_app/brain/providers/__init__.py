@@ -7,7 +7,8 @@ time.
 Built-in providers
 ------------------
 DailyFeaturesProvider   — reads daily_regime_features.json (nightly build)
-LLMContextProvider      — stub; no-op today; ready for future LLM wiring
+LLMContextProvider      — LLM morning posture via any OpenAI-compatible endpoint
+                          (Groq/Gemini/DeepSeek/…); off unless BRAIN_LLM_ENABLED=true
 
 Adding a new provider
 ---------------------

@@ -159,6 +159,37 @@ class TestBuildDefaultExitStack:
         assert "3.0%" in stack.name
 
 
+class TestUniversalMaxLossFloor:
+    """The 2026-06-05 footgun: adaptive mode routed TRENDING/BREAKOUT trades to the
+    lottery 20% stop, so EXIT_SCALPER_HARD_STOP_PCT=0.05 protected nothing and a
+    trade ran to -13%. The universal EXIT_MAX_LOSS_PCT floor must catch it."""
+
+    def test_floor_catches_trending_trade_in_adaptive_mode(self, monkeypatch):
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "adaptive")
+        monkeypatch.setenv("EXIT_MAX_LOSS_PCT", "0.10")
+        monkeypatch.setenv("LOTTERY_HARD_STOP_PCT", "0.20")  # the loose stop that failed
+        monkeypatch.setenv("EXIT_SCALPER_HARD_STOP_PCT", "0.05")  # only protected scalper
+        stack = build_default_exit_stack()
+        # TRENDING -> routes to lottery (20% stop). At -12% the lottery stop is silent,
+        # but the universal 10% floor must fire.
+        assert stack.check(_pos(pnl_pct=-0.12, entry_regime="TRENDING"), _snap) == ExitReason.STOP_LOSS
+        assert "hard_stop_10%" in stack.name
+
+    def test_floor_default_on_when_env_absent(self, monkeypatch):
+        monkeypatch.delenv("EXIT_MAX_LOSS_PCT", raising=False)
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "adaptive")
+        stack = build_default_exit_stack()
+        assert stack.check(_pos(pnl_pct=-0.15, entry_regime="BREAKOUT"), _snap) == ExitReason.STOP_LOSS
+
+    def test_floor_disabled_at_one(self, monkeypatch):
+        monkeypatch.setenv("EXIT_MAX_LOSS_PCT", "1.0")
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "scalper")
+        monkeypatch.setenv("EXIT_SCALPER_HARD_STOP_PCT", "0.25")
+        stack = build_default_exit_stack()
+        # floor off -> only the scalper 25% stop; -12% is silent
+        assert stack.check(_pos(pnl_pct=-0.12, entry_regime="SIDEWAYS"), _snap) is None
+
+
 class TestHardStopPolicy:
     def test_fires_at_stop(self):
         p = HardStopPolicy(0.25)
