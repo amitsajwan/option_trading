@@ -62,6 +62,7 @@ from typing import Any
 
 from ..plugin import ContextProvider
 from .daily_features import DailyFeaturesProvider
+from .market_levels import compute_levels, load_daily_ohlc
 from .openai_compatible import LLMClientError, chat_completion, extract_json_object
 
 logger = logging.getLogger(__name__)
@@ -76,13 +77,18 @@ _DEFAULT_MODEL = "llama-3.3-70b-versatile"
 _SYSTEM_PROMPT = (
     "You are a risk-aware assistant for a BankNifty intraday options strategy that "
     "tries to capture large (>=100 point) index moves on a ~10-minute horizon. "
-    "Given the date and quantitative context, classify today's trading conditions. "
+    "You are given verified quantitative context (computed by the system — trust it). "
+    "Classify today's trading conditions and add brief qualitative colour. "
     "Respond with ONLY a JSON object of the form: "
     '{"day_assessment": "CALM|NEUTRAL|VOLATILE|AVOID", "confidence": 0.0-1.0, '
-    '"reasoning": "<=1 sentence", "risk_notes": "<=1 sentence"}. '
+    '"reasoning": "<=1 sentence", "risk_notes": "<=1 sentence", '
+    '"week_summary": "<=1 sentence on the week so far from the given levels", '
+    '"news": "<=1 sentence on known market-moving events/news, or \\"unknown\\""}. '
     "Definitions: CALM = steady low-volatility drift; NEUTRAL = mixed / unclear; "
     "VOLATILE = large whippy moves (rich for big-move capture but risky); "
-    "AVOID = no edge, major event risk, or thin liquidity. Be conservative."
+    "AVOID = no edge, major event risk, or thin liquidity. Be conservative. "
+    "For 'news': only state events you can actually verify right now; if you "
+    "cannot verify, write \"unknown\" — do NOT invent or recall from memory."
 )
 
 
@@ -173,23 +179,33 @@ class LLMContextProvider(ContextProvider):
 
     @staticmethod
     def _market_context(trade_date: date) -> dict[str, Any]:
-        """Pull the day's quantitative regime features to ground the prompt.
+        """Gather the verified facts that ground the prompt — facts-not-memory.
 
-        Reuses :class:`DailyFeaturesProvider` (same file + path resolution).
-        Returns the ``daily.*`` features with the prefix stripped, or ``{}`` if
-        the feature file is absent — the prompt then notes "no context".
+        Two reliable, deterministic sources (both degrade to nothing if absent):
+        rolling regime features (:class:`DailyFeaturesProvider`) and prev-day /
+        recent-week reference levels (:mod:`market_levels`). The LLM only ever
+        *interprets* these; it never fetches or recalls the numbers itself.
         """
+        ctx: dict[str, Any] = {}
         try:
             override = os.getenv("BRAIN_LLM_FEATURES_PATH", "").strip()
             provider = DailyFeaturesProvider(path=Path(override) if override else None)
             feats = provider.provide(trade_date)
-        except Exception:  # feature file is best-effort context, not required
-            return {}
-        return {
-            key[len(_DAILY_PREFIX):]: val
-            for key, val in feats.items()
-            if key.startswith(_DAILY_PREFIX) and not key.endswith("day_score_hint")
-        }
+            ctx.update(
+                {
+                    key[len(_DAILY_PREFIX):]: val
+                    for key, val in feats.items()
+                    if key.startswith(_DAILY_PREFIX) and not key.endswith("day_score_hint")
+                }
+            )
+        except Exception:  # best-effort context, not required
+            pass
+        try:
+            levels = compute_levels(load_daily_ohlc(), asof=trade_date)
+            ctx.update(levels)
+        except Exception:
+            pass
+        return ctx
 
     @staticmethod
     def _build_messages(
@@ -200,8 +216,9 @@ class LLMContextProvider(ContextProvider):
         context = _json.dumps(features, sort_keys=True) if features else "none available"
         user = (
             f"Date: {trade_date.isoformat()} (Asia/Kolkata).\n"
-            f"Quantitative context (rolling daily features): {context}.\n"
-            "Classify today's trading conditions."
+            f"Verified quantitative context (regime features + prev-day/recent-week "
+            f"levels): {context}.\n"
+            "Classify today's trading conditions and add the week/news colour."
         )
         return [
             {"role": "system", "content": _SYSTEM_PROMPT},
@@ -221,7 +238,7 @@ class LLMContextProvider(ContextProvider):
         if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
             out[f"{_CONTEXT_PREFIX}confidence"] = max(0.0, min(1.0, float(confidence)))
 
-        for src in ("reasoning", "risk_notes"):
+        for src in ("reasoning", "risk_notes", "week_summary", "news"):
             val = obj.get(src)
             if isinstance(val, str) and val.strip():
                 out[f"{_CONTEXT_PREFIX}{src}"] = val.strip()[:500]

@@ -19,5 +19,6 @@ The brain calls every provider at morning_briefing and merges the results.
 
 from .daily_features import DailyFeaturesProvider
 from .llm_stub import LLMContextProvider
+from .market_context import MarketContextProvider
 
-__all__ = ["DailyFeaturesProvider", "LLMContextProvider"]
+__all__ = ["DailyFeaturesProvider", "LLMContextProvider", "MarketContextProvider"]

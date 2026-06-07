@@ -76,7 +76,9 @@ from .profiles import (
 )
 from ..brain.brain import BrainDecision, TradingBrain
 from ..brain.decision_brain import DecisionBrain
+from ..brain.reflection import ClosedTrade, reflect
 from ..brain.sense_runner import run_senses
+from ..cost_model import TradingCostModel
 from ..senses.snapshot_adapter import snapshot_to_sense_context
 from ..brain.context import DayContext
 from ..runtime.runtime_artifacts import resolve_runtime_artifact_paths
@@ -1593,7 +1595,89 @@ class DeterministicRuleEngine(StrategyEngine):
             pnl_pct=position.pnl_pct,
             strategy_name=str(position.entry_strategy or ""),
         )
+        # Phase-2 deterministic reflection (mechanical trade journal). Must run
+        # BEFORE log_position_close so its numeric flags ride into the durable
+        # POSITION_CLOSE record. Pure annotation — wrapped so it can never break
+        # the close path. See docs/INTELLIGENT_BRAIN_AGENTIC_IMPLEMENTATION_PLAN.md.
+        self._journal_closed_trade(exit_signal, position)
         self._log.log_position_close(exit_signal=exit_signal, position=position)
+
+    def _journal_closed_trade(
+        self, exit_signal: TradeSignal, position: PositionContext
+    ) -> None:
+        """Mechanically tag why a closed trade lost (cost/exit/direction/entry/noise).
+
+        Never raises — reflection is advisory journaling, never load-bearing.
+        Full record → ``trade_journal`` log line; numeric flags → decision_metrics
+        (so they persist in the fsync'd POSITION_CLOSE system-of-record).
+        """
+        if os.getenv("BRAIN_REFLECTION_ENABLED", "true").strip().lower() in ("0", "false", "no"):
+            return
+        try:
+            cost_frac = self._closed_trade_cost_frac(position)
+            metrics = position.decision_metrics if isinstance(position.decision_metrics, dict) else {}
+            entry_verdicts = (
+                metrics.get("sense_verdicts")
+                or metrics.get("senses")
+                or metrics.get("verdicts")
+                or {}
+            )
+            edge_frac = next(
+                (
+                    float(metrics[k])
+                    for k in ("opportunity_edge", "expected_edge", "net_edge", "edge_pct")
+                    if isinstance(metrics.get(k), (int, float)) and not isinstance(metrics.get(k), bool)
+                ),
+                abs(float(position.target_pct or 0.0)),
+            )
+            trade = ClosedTrade(
+                direction=str(getattr(position.direction, "value", position.direction) or "").upper(),
+                net_pnl_frac=float(position.pnl_pct or 0.0),
+                cost_frac=cost_frac,
+                mfe_frac=float(position.mfe_pct or 0.0),
+                target_frac=abs(float(position.target_pct or 0.0)),
+                stop_frac=abs(float(position.stop_loss_pct or 0.0)),
+                mae_frac=float(position.mae_pct or 0.0),
+                bars_held=int(position.bars_held or 0),
+                exit_reason=str(exit_signal.exit_reason.value if exit_signal.exit_reason else ""),
+                entry_verdicts=entry_verdicts if isinstance(entry_verdicts, dict) else {},
+            )
+            record = reflect(trade, edge_frac=edge_frac)
+            record["position_id"] = position.position_id
+            ap = record["autopsy"]
+            ex = record["execution"]
+            # Numeric flags into the durable POSITION_CLOSE record (strings are
+            # dropped by merge_decision_metrics, so the tag goes only to the log).
+            if isinstance(position.decision_metrics, dict):
+                position.decision_metrics["reflection_is_loss"] = 1.0 if ap["is_loss"] else 0.0
+                position.decision_metrics["reflection_needs_reasoning"] = 1.0 if ap["needs_reasoning"] else 0.0
+                position.decision_metrics["reflection_overpaid"] = 1.0 if ex["overpaid"] else 0.0
+                if ex["cost_to_edge"] is not None:
+                    position.decision_metrics["reflection_cost_to_edge"] = float(ex["cost_to_edge"])
+            logger.info("trade_journal %s", json.dumps(record, default=str))
+        except Exception as exc:  # journaling must never break the close path
+            logger.warning(
+                "trade_journal failed position_id=%s error=%s",
+                getattr(position, "position_id", "?"), exc,
+            )
+
+    def _closed_trade_cost_frac(self, position: PositionContext) -> float:
+        """Round-trip slippage+charges as a fraction of entry notional.
+
+        Uses the shared :class:`TradingCostModel`; falls back to ~1.3% (the
+        observed live round-trip) if notional can't be reconstructed.
+        """
+        try:
+            lot_size = int(os.getenv("STRATEGY_LOT_SIZE", "").strip() or 0) or 30
+            qty = max(1, int(position.lots or 1)) * lot_size
+            entry_val = float(position.entry_premium or 0.0) * qty
+            if entry_val <= 0:
+                return 0.013
+            exit_val = float(position.current_premium or position.entry_premium or 0.0) * qty
+            total = TradingCostModel().breakdown(entry_value=entry_val, exit_value=exit_val)["total_cost_amount"]
+            return total / entry_val
+        except Exception:
+            return 0.013
 
     def _resolve_entry_risk(
         self,
