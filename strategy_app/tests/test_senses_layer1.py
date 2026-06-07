@@ -143,11 +143,10 @@ def test_direction_vwap_plus_momentum_agree_gives_side():
     assert v2.verdict == "PE"
 
 
-def test_direction_conflict_takes_vwap_side_low_conviction():
-    # above vwap but momentum down -> trust VWAP side at low conviction (no longer abstain;
-    # reconciliation showed abstaining on conflict threw away winning trades)
+def test_direction_abstains_when_vwap_and_momentum_disagree():
+    # above vwap but momentum down -> conflict -> UNKNOWN (D5)
     v = DirectionSense().evaluate({"close": 54050.0, "vwap": 54000.0, "fut_return_5m": -0.001})
-    assert v.verdict == "CE" and v.confidence == 0.50 and v.evidence["basis"] == ["vwap"]
+    assert v.verdict == UNKNOWN and "disagree" in v.evidence["reason"]
 
 
 def test_direction_vwap_only_when_momentum_flat():

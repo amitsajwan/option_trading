@@ -32,10 +32,8 @@ class ExitParams:
     delta: float = 0.5                  # ATM delta proxy (underlying pt -> premium pt)
     theta_pct_per_bar: float = 0.0006   # per-minute theta drag as % of premium
     hard_stop_pct: float = 0.045        # max loss cap on premium
-    # Reconciliation 2026-06-07: live had 22.9%-MFE runners the tight trail capped. Loosen so
-    # winners run: only trail after a bigger MFE, and allow more giveback before exiting.
-    mfe_giveback_frac: float = 0.6      # exit if give back > this fraction of peak MFE
-    min_mfe_to_trail: float = 0.04      # only start trailing once MFE exceeds this
+    mfe_giveback_frac: float = 0.5      # exit if give back > this fraction of peak MFE
+    min_mfe_to_trail: float = 0.02      # only start trailing once MFE exceeds this
 
 
 def _prem_pct(delta: float, disp: float, premium_pts: float, theta: float, bar_idx: int) -> float:
