@@ -341,6 +341,9 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
             "STRATEGY_STARTUP_WARMUP_EVENTS":  "0",
             # Exit + entry + strike config — from live config
             "EXIT_POLICY_STACK_ENABLED":       _live("EXIT_POLICY_STACK_ENABLED", "1"),
+            # Scalper hard-stop in sim (was a VM-local hotfix — now committed so it stops
+            # blocking pulls; cf. the 2026-06-05 hardstop lesson).
+            "EXIT_SCALPER_HARD_STOP_PCT":      _live("EXIT_SCALPER_HARD_STOP_PCT", "0.07"),
             "EXIT_PREMIUM_TARGET_PCT":         _live("EXIT_PREMIUM_TARGET_PCT", "0.04"),
             "EXIT_TRAILING_ACTIVATION_PCT":    _live("EXIT_TRAILING_ACTIVATION_PCT", "0.01"),
             "EXIT_TRAILING_TRAIL_PCT":         _live("EXIT_TRAILING_TRAIL_PCT", "0.005"),
