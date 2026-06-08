@@ -1144,6 +1144,20 @@ class DeterministicRuleEngine(StrategyEngine):
         if consensus.vetoed or consensus.direction is None:
             return None  # blocker: direction_consensus:<reason> (per-tick summary)
 
+        # Direction-conviction gate (best-version): trade only high-conviction sides.
+        # Validated 2026-06-08: trades with high entry_dir_margin won ~74% (68% right
+        # side) vs ~17% for the low-conviction half. This gates on the ML resolver's
+        # entry_dir_margin directly — the consensus-margin knob does NOT enforce this
+        # in composite mode. Default 0 = OFF (no behaviour change).
+        try:
+            _dir_min = float(os.getenv("ENTRY_DIR_MARGIN_MIN", "0") or 0)
+        except (TypeError, ValueError):
+            _dir_min = 0.0
+        if _dir_min > 0 and isinstance(ml_vote.raw_signals, dict):
+            _edm = ml_vote.raw_signals.get("entry_dir_margin")
+            if isinstance(_edm, (int, float)) and abs(float(_edm)) < _dir_min:
+                return None  # blocker: low_direction_conviction (entry_dir_margin gate)
+
         _consensus_extras: dict[str, Any] = {
             "direction_source": "direction_consensus",
             "direction_consensus_ce": round(consensus.ce_score, 3),
