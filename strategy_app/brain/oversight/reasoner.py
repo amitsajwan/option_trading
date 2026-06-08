@@ -41,6 +41,8 @@ _SYSTEM_PROMPT = (
     "defend a stale view. If unclear, posture='choppy', lean='none', risk='normal'.\n"
     "- Use location: price vs prev-day high/low (PDH/PDL), week levels, max-pain, PCR, "
     "OI walls, VIX, gap, prior FII. Chasing extended moves past levels tends to fail.\n"
+    "- A 'web_context' field (if present) is a SOFT web/news read from another model — "
+    "weigh it skeptically as colour, never as ground truth; the numeric facts win on conflict.\n"
     "Respond with ONLY this JSON: {\"posture\":\"trend_up|trend_down|choppy|stand_down\", "
     "\"direction_lean\":\"CE|PE|none\", \"lean_confidence\":0.0-1.0, "
     "\"risk_flag\":\"normal|reduce|stand_down\", \"key_levels\":[numbers], "

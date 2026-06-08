@@ -85,12 +85,32 @@ class OversightBrain:
         trade_date = facts.trade_date or date.today().isoformat()
         scratch = Scratchpad.load_or_new(self._scratch_path(trade_date), trade_date)
 
+        # ONLINE-DATA sense (Gemini web): fetch once/day, cache in the scratchpad.
+        # Gemini browses; Groq reasons over it (soft, hallucination-aware).
+        if self._enabled and not scratch.web_context and _env_bool("BRAIN_WEB_ENABLED", False):
+            gem_key = os.getenv("BRAIN_GEMINI_API_KEY", "").strip()
+            if gem_key:
+                try:
+                    from .gemini_web import fetch_web_context
+                    wc = fetch_web_context(
+                        api_key=gem_key, model=os.getenv("BRAIN_GEMINI_MODEL", "").strip() or None
+                    )
+                    if wc:
+                        scratch.web_context = wc
+                except Exception as exc:
+                    logger.warning("oversight web fetch failed: %s", exc)
+
+        # Facts the LLM reasons over = deterministic facts (+ the soft web context).
+        facts_for_prompt = facts.to_prompt_dict()
+        if scratch.web_context:
+            facts_for_prompt["web_context"] = scratch.web_context
+
         mode = os.getenv("BRAIN_OVERSIGHT_MODE", "llm").strip().lower()
         if self._enabled and mode == "rule":
             verdict = rule_reason(facts.to_prompt_dict())          # deterministic, no key
         elif self._enabled and self._api_key:
             verdict = reason(
-                facts.to_prompt_dict(),
+                facts_for_prompt,
                 scratch.to_prompt_context(),
                 api_key=self._api_key,
                 base_url=self._base_url,

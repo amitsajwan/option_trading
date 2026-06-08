@@ -19,6 +19,7 @@ Safety doctrine (see docs/INTELLIGENT_BRAIN_AGENTIC_ARCHITECTURE.md):
 from .brain import OversightBrain
 from .facts import MarketFacts
 from .gate import oversight_entry_veto
+from .gemini_web import fetch_web_context
 from .reasoner import OversightVerdict
 from .scratchpad import Scratchpad
 from .verify import verify_verdict
@@ -30,4 +31,5 @@ __all__ = [
     "Scratchpad",
     "oversight_entry_veto",
     "verify_verdict",
+    "fetch_web_context",
 ]

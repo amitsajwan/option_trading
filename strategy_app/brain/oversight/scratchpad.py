@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class Scratchpad:
     trade_date: str
     thesis: str = ""
+    web_context: str = ""   # Gemini online-data sense, fetched once/day (cached)
     cycles: list[dict[str, Any]] = field(default_factory=list)
 
     def add(self, *, time: str, verdict: Any, facts: dict[str, Any]) -> None:
@@ -64,7 +65,12 @@ class Scratchpad:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(
-                json.dumps({"trade_date": self.trade_date, "thesis": self.thesis, "cycles": self.cycles}),
+                json.dumps({
+                    "trade_date": self.trade_date,
+                    "thesis": self.thesis,
+                    "web_context": self.web_context,
+                    "cycles": self.cycles,
+                }),
                 encoding="utf-8",
             )
         except Exception as exc:  # memory is best-effort
@@ -79,6 +85,7 @@ class Scratchpad:
                     return cls(
                         trade_date=trade_date,
                         thesis=str(raw.get("thesis") or ""),
+                        web_context=str(raw.get("web_context") or ""),
                         cycles=list(raw.get("cycles") or []),
                     )
         except Exception as exc:
