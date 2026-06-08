@@ -137,6 +137,28 @@ def resolve_direction_consensus(
         )
     direction = Direction.CE if ce_score > pe_score else Direction.PE
 
+    # ML-confidence gate (consensus mode). Require the direction-ML model to be
+    # sufficiently confident in the CHOSEN side, else abstain. OFF by default
+    # (DIRECTION_ML_CONFIDENCE_MIN=0). Validated 2026-06-09: bars where the ML
+    # model is confident (|p-0.5| large) are 73-77% direction-accurate OOS vs
+    # ~53-55% for low-confidence bars — this gate trades the unsure bars away.
+    # NOTE: this works in consensus mode, unlike DIRECTION_ML_FILTER_MIN_PROB
+    # (which only fires in the standalone direction-ML policy path).
+    _ml_conf_min = _env_float("DIRECTION_ML_CONFIDENCE_MIN", 0.0)
+    if _ml_conf_min > 0 and ml_ce_prob is not None:
+        chosen_ml_prob = float(ml_ce_prob) if direction == Direction.CE else (1.0 - float(ml_ce_prob))
+        sources["ml_chosen_prob"] = chosen_ml_prob
+        if chosen_ml_prob < _ml_conf_min:
+            return DirectionConsensusResult(
+                direction=None,
+                ce_score=ce_score,
+                pe_score=pe_score,
+                margin=margin,
+                vetoed=True,
+                veto_reason=f"ml_confidence<{_ml_conf_min:g}({chosen_ml_prob:.2f})",
+                sources=sources,
+            )
+
     # Regime-direction conflict veto.
     # If the regime classifier says BREAKOUT or PANIC with a clear bear/bull lean,
     # block a trade whose direction contradicts that lean.  A CE entry during a
