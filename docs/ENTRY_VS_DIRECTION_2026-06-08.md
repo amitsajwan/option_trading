@@ -35,3 +35,10 @@ This also explains why **everything else washed out**: location, the anti-chase 
 
 ## Bottom line
 The edge is real: **the entry catches a ≥100pt move 57% of the time, and we win 79% when we're on the right side.** The only thing standing between this and profitability is **side selection at 56%.** Every future effort should be a direction experiment or a direction-confidence/abstain filter — nothing else.
+
+## Follow-up: market-structure (HH/HL) as direction — REFUTED (2026-06-08)
+Tested HH/HL (20-bar) structure on the same 37 entries:
+- **[A] structure as the direction signal: 50% (15/30) when clear — WORSE than the 56% baseline.** Coin flip.
+- **[B] "only trade when structure agrees" filter: win 46% (agree) vs 45% (disagree/unclear) — identical.** No separation. The P&L split (+10.68 vs −0.55) is a few big winners in the larger bucket, not an edge.
+
+**Four direction signals now refuted** (location, trend-vs-prev-close, LLM-over-facts, HH/HL) — all ~50–56%. Direction at 10-min is near-random from price/structure features. The next and likely final price-based test is whether the **existing direction model's own confidence** separates a high-accuracy (>62%) subset to trade while abstaining on the coin-flip rest. If that also fails, the honest conclusion is the strategy has **no tradable direction edge from current features** — it needs a genuinely different signal (order-flow / OI dynamics / cross-asset), not another reshuffle of price.
