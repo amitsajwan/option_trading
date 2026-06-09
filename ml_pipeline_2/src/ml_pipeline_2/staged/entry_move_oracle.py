@@ -285,6 +285,8 @@ def _label_day_moves_clean_start(
     out["entry_label"] = labels.astype(int)
     out["entry_label_valid"] = valid.astype(int)
     out["entry_net_move_pct"] = net_move_pct
+    out["entry_up_move_pct"] = np.where(net_move_pct > 0, net_move_pct, np.nan)
+    out["entry_down_move_pct"] = np.where(net_move_pct < 0, -net_move_pct, np.nan)
     out["entry_threshold_pct"] = min_pct
     out["direction_label"] = None
     out["direction_up"] = np.nan
