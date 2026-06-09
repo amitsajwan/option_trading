@@ -50,7 +50,7 @@ Frontend type-check: `cd strategy_eval_ui && npx tsc -b --noEmit`
 
 | Item | Value |
 |------|--------|
-| Project | `algo-trading-496203` |
+| Project | `amit-trading` |
 | Zone | `asia-south1-b` |
 | Recommended type | **`e2-highmem-16`** (16 vCPU, 128 GB RAM) |
 | Checkout | `/opt/option_trading` |

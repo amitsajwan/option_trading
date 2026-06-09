@@ -12,12 +12,12 @@
 **Off-hours ML on unified host** (prefer decoupled direction — see [DIRECTION_S2_ONLY.md](DIRECTION_S2_ONLY.md)):
 
 ```bash
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading
 sudo bash /opt/option_trading/ops/gcp/run_direction_s2_only_hpo_vm.sh validate
 sudo bash /opt/option_trading/ops/gcp/run_direction_s2_only_hpo_vm.sh   # night/weekend only
 ```
 
-GCS backup: `gs://algo-trading-496203-option-trading-snapshots/ml_pipeline/` (~4.4 GB).
+GCS backup: `gs://amit-trading-option-trading-snapshots/ml_pipeline/` (~4.4 GB).
 
 ---
 
@@ -83,7 +83,7 @@ Split made sense early: isolate ML memory spikes from live trading stack, scale 
 ```txt
 Name:         option-trading-01   (or rename existing runtime VM after merge)
 Zone:         asia-south1-b
-Project:      algo-trading-496203
+Project:      amit-trading
 Machine type: e2-highmem-16
 Disk:         500 GB+ pd-ssd (parquet + docker + artifacts)
 Path:         /opt/option_trading
@@ -96,7 +96,7 @@ Path:         /opt/option_trading
 - Confirm:
 
 ```bash
-gcloud compute project-info describe --project=algo-trading-496203 \
+gcloud compute project-info describe --project=amit-trading \
   --format="table(quotas.metric,quotas.limit,quotas.usage)" | findstr CPU
 ```
 
@@ -142,8 +142,8 @@ See `infra/gcp/terraform.tfvars` — add optional unified mode:
 Until Terraform is updated, resize via:
 
 ```bash
-gcloud compute instances stop option-trading-01 --zone=asia-south1-b --project=algo-trading-496203
+gcloud compute instances stop option-trading-01 --zone=asia-south1-b --project=amit-trading
 gcloud compute instances set-machine-type option-trading-01 \
-  --machine-type=e2-highmem-16 --zone=asia-south1-b --project=algo-trading-496203
-gcloud compute instances start option-trading-01 --zone=asia-south1-b --project=algo-trading-496203
+  --machine-type=e2-highmem-16 --zone=asia-south1-b --project=amit-trading
+gcloud compute instances start option-trading-01 --zone=asia-south1-b --project=amit-trading
 ```

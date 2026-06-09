@@ -6,7 +6,7 @@
 #
 # Run this ONCE on the VM after first deploy:
 #   gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b \
-#     --project=algo-trading-496203 \
+#     --project=amit-trading \
 #     --command "cd /opt/option_trading && sudo bash ops/gcp/install_token_refresh_timer.sh"
 #
 # Prerequisites:

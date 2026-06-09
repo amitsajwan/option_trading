@@ -9,12 +9,12 @@ Use this skill when the user asks to deploy, redeploy, restart, verify, or run j
 ## GCP project
 
 ```txt
-Project: algo-trading-496203
+Project: amit-trading
 Zone:    asia-south1-b
 ```
 
 ```bash
-export PROJECT_ID=algo-trading-496203
+export PROJECT_ID=amit-trading
 export ZONE=asia-south1-b
 gcloud config set project "${PROJECT_ID}"
 gcloud config set compute/zone "${ZONE}"

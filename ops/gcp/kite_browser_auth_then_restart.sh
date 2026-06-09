@@ -3,7 +3,7 @@
 #
 # On your laptop (PowerShell), in one terminal:
 #   gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b `
-#     --project=algo-trading-496203 -- -L 5000:127.0.0.1:5000
+#     --project=amit-trading -- -L 5000:127.0.0.1:5000
 #
 # In that SSH session on the VM:
 #   sudo bash /opt/option_trading/ops/gcp/kite_browser_auth_then_restart.sh

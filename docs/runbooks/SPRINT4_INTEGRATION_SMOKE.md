@@ -26,7 +26,7 @@ docker compose --env-file .env.compose exec snapshot_app printenv CROSS_ASSET_EN
 
 ```bash
 # VM
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203 \
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading \
   --command "cd ~/option_trading_repo && docker compose --env-file .env.compose exec -T snapshot_app printenv CROSS_ASSET_ENABLED NIFTY_FUT_SYMBOL BLOCK_TRADE_MIN_LOTS"
 ```
 
@@ -59,7 +59,7 @@ foreach ($i in $syms) {
 For VM runs, port-forward first:
 
 ```bash
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203 -- -L 8004:localhost:8004
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading -- -L 8004:localhost:8004
 # Then run the same loop from your laptop against localhost:8004.
 ```
 
@@ -75,7 +75,7 @@ ATM strike of the day: take spot from the NIFTY BANK cash tick, round to nearest
 Let `snapshot_app` run 5-10 minutes after market open. Sample the two most recent docs:
 
 ```bash
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203 --command "
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading --command "
 docker exec option_trading-dashboard-1 mongosh trading_ai --quiet --eval '
 db.phase1_market_snapshots.find({}, {
   \"payload.snapshot.nifty_context\":1,
@@ -145,7 +145,7 @@ docker compose --env-file .env.compose logs --since 15m persistence_app strategy
 
 ```bash
 # VM
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203 --command "
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading --command "
 cd ~/option_trading_repo && docker compose --env-file .env.compose logs --since 15m persistence_app strategy_persistence_app 2>&1 | grep -E 'ERROR|TRACEBACK|KeyError|TypeError' | tail -30"
 ```
 
@@ -158,7 +158,7 @@ curl.exe -s http://localhost:8086/health  # local
 ```
 
 ```bash
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203 --command "curl -s http://localhost:8086/health"
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading --command "curl -s http://localhost:8086/health"
 ```
 
 ### 4c. Snapshot builder unit tests
@@ -176,7 +176,7 @@ python -m pytest snapshot_app/tests -k "snapshot or cross_asset or block" -x -q
 ### 5a. VIX field audit (R1S unblocker)
 
 ```bash
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203 --command "
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading --command "
 cd ~/option_trading_repo && docker compose --env-file .env.compose run --rm strategy_app python ops/gcp/audit_vix_field.py"
 ```
 
@@ -185,7 +185,7 @@ cd ~/option_trading_repo && docker compose --env-file .env.compose run --rm stra
 ### 5b. Direction audit (known schema drift)
 
 ```bash
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203 --command "
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading --command "
 cd ~/option_trading_repo && bash ops/gcp/run_direction_audit.sh 2026-05-26 2026-05-26"
 ```
 
