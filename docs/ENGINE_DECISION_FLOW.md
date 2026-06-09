@@ -177,6 +177,24 @@ GET  /api/ops/sim/<job_id>   → read summary.trade_count / win_count
 
 ---
 
+## 9b. Cleanup backlog — dormant-but-referenced (do NOT blind-delete)
+
+These paths are **not used by the live profile**, but are **referenced elsewhere**
+(tooling defaults, tests). Removing them is a *deliberate refactor*, not a quick
+delete. Each row = the prerequisite to remove it safely.
+
+| Dormant thing | Referenced by | Must do FIRST |
+|---|---|---|
+| consensus profile `trader_master_ml_entry_consensus_v1` + [`_process_entry_consensus`](../strategy_app/engines/deterministic_rule_engine.py#L1125) | sim/replay **defaults**: [`replay_engine.py:155`](../strategy_app/sim/replay_engine.py#L155), `ops_sim_today.py:42`, `golden_master_v1_v2.py:56` | **align these defaults to `trader_master_live_v1`** (also fixes a latent sim≠live mismatch) |
+| [`resolve_direction_consensus`](../strategy_app/engines/direction_consensus.py#L40) + its margin/ML-gate env knobs | only the consensus profile + the OFF v2 pipeline | remove the consensus profile first (above) |
+| v2 entry pipeline ([`entry_pipeline_gates.py`](../strategy_app/engines/entry_pipeline_gates.py), `_process_entry_votes_v2`) | `STRATEGY_ENTRY_PIPELINE_V2` (default 0, never enabled in any live/sim config) | confirm no config sets it to 1, then delete + its analysis docs |
+| `PureMLEngine` ([`pure_ml_engine.py`](../strategy_app/engines/pure_ml_engine.py)) | `test_pure_ml_engine.py`, `test_live_runtime_boundaries.py` | decide if the ML-pure engine is a kept alternative; if not, delete engine + tests + `RUNTIME_DECISION_FLOW.md` |
+| `DIRECTION_ML_CONFIDENCE_MIN` gate (added 2026-06-09, lives in the dead `resolve_direction_consensus`) | only my recent commits | remove (dead for live) OR relocate to the live path if a confidence gate is wanted |
+
+> **Execution rule:** do this off-market, one row at a time, running the full
+> test suite after each. The mismatch in row 1 (sim default ≠ live profile) is
+> the highest-value fix and unblocks the rest.
+
 ## 10. Glossary (plain English)
 - **Snapshot** — a once-a-minute picture of the option chain + futures.
 - **Gate** — a yes/no check; any "no" = HOLD (no trade).
