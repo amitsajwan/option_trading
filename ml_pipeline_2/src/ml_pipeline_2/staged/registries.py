@@ -50,6 +50,8 @@ def label_registry() -> dict[str, str]:
     return {
         "entry_best_recipe_v1": "stage1",
         "entry_bn_5m_100pts_v1": "stage1",
+        "entry_bn_clean_move_strict_v1": "stage1",
+        "entry_bn_clean_move_soft_v1": "stage1",
         "direction_best_recipe_v1": "stage2",
         "direction_or_no_trade_v1": "stage2",
         "direction_market_up_v1": "stage2",
