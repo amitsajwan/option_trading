@@ -12,6 +12,7 @@ dependencies = [
   "joblib",
   "lightgbm",
   "numpy",
+  "optuna",
   "pandas",
   "pyarrow",
   "scikit-learn",
