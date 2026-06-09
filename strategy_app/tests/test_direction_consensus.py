@@ -112,6 +112,51 @@ def test_ml_confidence_gate_off_by_default(monkeypatch: pytest.MonkeyPatch) -> N
     assert result.direction == Direction.CE
 
 
+# ── Regime guard: abstain on expansion (wide opening-range) days ─────────────
+
+def _regime(orw: float) -> object:
+    from strategy_app.market.regime import Regime, RegimeSignal
+    return RegimeSignal(
+        regime=Regime.SIDEWAYS, confidence=0.7, reason="t",
+        evidence={"opening_range_width_pct": orw, "bull_score": 0.0, "bear_score": 0.0},
+    )
+
+
+def test_regime_guard_vetoes_expansion_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DIRECTION_CONSENSUS_MIN_MARGIN", "0.5")
+    monkeypatch.setenv("REGIME_GUARD_MAX_ORW", "0.008")
+    result = resolve_direction_consensus(
+        snap=_snap(), rule_votes=_clear_ce_votes(),
+        shadow_direction=Direction.CE, shadow_score=2.0, ml_ce_prob=0.55,
+        regime_signal=_regime(0.012),  # wide opening range -> abstain
+    )
+    assert result.vetoed
+    assert "expansion_day" in result.veto_reason
+
+
+def test_regime_guard_passes_tight_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DIRECTION_CONSENSUS_MIN_MARGIN", "0.5")
+    monkeypatch.setenv("REGIME_GUARD_MAX_ORW", "0.008")
+    result = resolve_direction_consensus(
+        snap=_snap(), rule_votes=_clear_ce_votes(),
+        shadow_direction=Direction.CE, shadow_score=2.0, ml_ce_prob=0.55,
+        regime_signal=_regime(0.004),  # tight range -> trades
+    )
+    assert not result.vetoed
+    assert result.direction == Direction.CE
+
+
+def test_regime_guard_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DIRECTION_CONSENSUS_MIN_MARGIN", "0.5")
+    monkeypatch.delenv("REGIME_GUARD_MAX_ORW", raising=False)
+    result = resolve_direction_consensus(
+        snap=_snap(), rule_votes=_clear_ce_votes(),
+        shadow_direction=Direction.CE, shadow_score=2.0, ml_ce_prob=0.55,
+        regime_signal=_regime(0.012),  # wide range, but guard off -> trades
+    )
+    assert not result.vetoed
+
+
 def test_ml_confidence_gate_uses_pe_side_prob(monkeypatch: pytest.MonkeyPatch) -> None:
     # Chosen side PE: gate must check (1 - ml_ce_prob). ml_ce_prob=0.55 -> PE prob 0.45 < 0.60 -> veto.
     monkeypatch.setenv("DIRECTION_CONSENSUS_MIN_MARGIN", "0.5")

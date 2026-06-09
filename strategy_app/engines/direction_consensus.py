@@ -159,6 +159,26 @@ def resolve_direction_consensus(
                 sources=sources,
             )
 
+    # Regime guard — abstain on EXPANSION/event days. Validated 2026-06-09:
+    # when the opening range is wide (>= REGIME_GUARD_MAX_ORW, e.g. 0.8%) the
+    # direction edge collapses to noise (both ML and structural signals ~50%),
+    # because these are gap/event days where price expands directionally and the
+    # mean-reversion read breaks. OFF by default (REGIME_GUARD_MAX_ORW=0).
+    _max_orw = _env_float("REGIME_GUARD_MAX_ORW", 0.0)
+    if _max_orw > 0 and regime_signal is not None:
+        _ev = regime_signal.evidence if isinstance(regime_signal.evidence, dict) else {}
+        _orw = _ev.get("opening_range_width_pct")
+        if isinstance(_orw, (int, float)) and _orw >= _max_orw:
+            return DirectionConsensusResult(
+                direction=None,
+                ce_score=ce_score,
+                pe_score=pe_score,
+                margin=margin,
+                vetoed=True,
+                veto_reason=f"expansion_day_orw>={_max_orw:g}({_orw:.4f})",
+                sources=sources,
+            )
+
     # Regime-direction conflict veto.
     # If the regime classifier says BREAKOUT or PANIC with a clear bear/bull lean,
     # block a trade whose direction contradicts that lean.  A CE entry during a
