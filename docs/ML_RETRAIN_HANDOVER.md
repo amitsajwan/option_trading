@@ -60,11 +60,11 @@ ENTRY_POSITIVE = |Close(T+Y) - Close(T)| >= X
 
 ## 3. How to run it (ML VM)
 
-**Runbook:** [`docs/ML_PLAYGROUND_OVERNIGHT.md`](ML_PLAYGROUND_OVERNIGHT.md) — one-command overnight Optuna HPO for entry + direction, then feature-set grids.
+**Runbook:** [`docs/ML_PLAYGROUND_OVERNIGHT.md`](ML_PLAYGROUND_OVERNIGHT.md) — one-command overnight Optuna HPO + feature-set grids. **Run the ENTRY track only** (entry HPO + entry grid); the direction track is out of scope for this job — skip it.
 **Script:** [`ops/gcp/run_ml_playground_overnight_vm.sh`](../ops/gcp/run_ml_playground_overnight_vm.sh) (+ `preflight_ml_playground.sh`, `summarize_ml_playground_overnight.sh`).
 **Prior spec (for label/HPO/calibration mechanics):** [`docs/ENTRY_MODEL_V2_SPEC.md`](ENTRY_MODEL_V2_SPEC.md) — **but override its magnitude-only label with §2 above.**
 
-**Models/features already wired** (see runbook): xgb / lgbm / logreg via Optuna; feature sets `fo_velocity_v1`, `fo_midday_*`, `fo_oi_pcr_momentum`. Add the new label heads to the recipe manifests.
+**Models/features already wired** (see runbook): xgb / lgbm / logreg via Optuna; feature sets `fo_velocity_v1`, `fo_midday_*`, `fo_oi_pcr_momentum`. Add the new clean-move label to the entry recipe manifest.
 
 **Step 1 is to add the new label** to the labeler, then run the playground. Confirm the VM name before launching (runbook says `option-trading-runtime-01`; a dedicated `option-trading-ml-01` may also exist — verify which has the GPU/data).
 
@@ -85,17 +85,16 @@ A model/config is **only** validated if it passes ALL:
 1. **Separation** — fired bars must clearly out-perform declined bars (not a flat 0.51 prob everywhere).
 2. **True OOS** — hold out time-separated quarters; report OOS, not just in-sample.
 3. **Drop-outlier robustness** — recompute net **without the single best trade** and **without the top 3**. If it craters, it's noise. *(This is the test that killed our "+1.16%" lottery — it was 2 lucky winners on an 18-trade bleed.)*
-4. **Calibration** — predicted prob ≈ realized frequency (the current direction model is *anti*-calibrated for side).
+4. **Calibration** — predicted clean-move prob ≈ realized clean-move frequency (the current entry model fires on chop; the new one must be honest about its hit-rate).
 5. **Per-trade ≠ per-bar** — validate on actual *trade* P&L after cost, not just per-bar accuracy.
 
 ---
 
 ## 6. Honest priors / cautions (so you don't repeat our dead ends)
 
-- **Don't assume direction gets easy on big moves.** We *gated* the existing model to high-confidence (= big-move) bars and direction stayed ≤50%. A clean-directional *label* is a different mechanism and may do better — **but prove it, don't assume it.**
-- **Costs are brutal** (~0.6%/leg vs ~2.5% typical move). The label must clear cost or nothing else matters.
-- **Fewer trades is fine.** A model firing 2–4×/day on clean trends at 60%+ side accuracy beats 30×/day at coin-flip.
-- If clean-directional direction *still* can't beat ~58–60%, the honest fallback is **structural**: sell-side (collect premium, inverts cost math) or a longer horizon. Flag it early rather than over-tuning.
+- **Costs are brutal** (~0.6%/leg vs ~2.5% typical move). The label's X must clear option cost or nothing else matters.
+- **Fewer trades is fine.** A model firing 2–4×/day on clean moves beats 30×/day on chop — the whole point of the clean-start condition is to fire less, on better setups.
+- **Don't assume chop is trivially separable.** The clean-move label is a different target than the old `|move|≥X`, and may separate well — **but prove it on OOS, don't assume it.** If even a clean-move label can't beat the current entry model, say so early rather than over-tuning.
 
 ---
 

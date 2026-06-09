@@ -20,8 +20,10 @@ from ..labeling import EffectiveLabelConfig, build_labeled_dataset, prepare_snap
 from ..model_search import ensure_requested_models_runnable, run_training_cycle_catalog
 from ..model_search.metrics import max_drawdown_pct, profit_factor
 from .entry_move_oracle import (
+    build_entry_bn_clean_move_oracle,
     build_entry_bn_move_oracle,
     merge_recipe_utility_with_entry_move_oracle,
+    stage1_clean_move_config,
     stage1_entry_move_config,
 )
 from .recipes import get_recipe_catalog
@@ -422,6 +424,21 @@ def build_stage1_labels(stage_frame: pd.DataFrame, oracle: pd.DataFrame, *_: Any
 
 
 def build_stage1_labels_entry_bn_move(
+    stage_frame: pd.DataFrame,
+    oracle: pd.DataFrame,
+    *_: Any,
+    **__: Any,
+) -> pd.DataFrame:
+    labeled = _attach_labels(stage_frame, oracle)
+    valid = pd.to_numeric(labeled.get("entry_label_valid"), errors="coerce").fillna(0.0)
+    labeled["move_label_valid"] = valid
+    labeled["move_label"] = (
+        pd.to_numeric(labeled["entry_label"], errors="coerce").fillna(0.0) * valid
+    )
+    return labeled
+
+
+def build_stage1_labels_entry_bn_clean_move(
     stage_frame: pd.DataFrame,
     oracle: pd.DataFrame,
     *_: Any,
@@ -3692,6 +3709,17 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
             horizon_minutes=int(move_cfg["horizon_minutes"]),
             min_points=float(move_cfg["min_points"]),
             min_pct=(None if move_cfg.get("min_pct") is None else float(move_cfg["min_pct"])),
+        )
+        oracle, utility = merge_recipe_utility_with_entry_move_oracle(oracle, utility, move_oracle)
+    elif stage1_labeler_id in ("entry_bn_clean_move_strict_v1", "entry_bn_clean_move_soft_v1"):
+        clean_cfg = stage1_clean_move_config(manifest)
+        mode = "strict" if stage1_labeler_id == "entry_bn_clean_move_strict_v1" else "soft"
+        move_oracle = build_entry_bn_clean_move_oracle(
+            support,
+            horizon_minutes=int(clean_cfg["horizon_minutes"]),
+            min_pct=float(clean_cfg["min_pct"]),
+            n_clean_bars=int(clean_cfg["n_clean_bars"]),
+            mode=mode,
         )
         oracle, utility = merge_recipe_utility_with_entry_move_oracle(oracle, utility, move_oracle)
     oracle_rolling = compute_rolling_oracle_stats(oracle)
