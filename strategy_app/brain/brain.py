@@ -51,6 +51,7 @@ from .fitness import StrategyFitnessEvaluator
 from .plugin import ContextProvider
 from .providers.daily_features import DailyFeaturesProvider
 from .providers.llm_stub import LLMContextProvider
+from .providers.market_context import MarketContextProvider
 from .session_memory import SessionMemory
 
 logger = logging.getLogger(__name__)
@@ -145,6 +146,7 @@ class TradingBrain:
         )
         providers: list[ContextProvider] = [
             DailyFeaturesProvider(),
+            MarketContextProvider(),
             LLMContextProvider(),
         ]
         return cls(

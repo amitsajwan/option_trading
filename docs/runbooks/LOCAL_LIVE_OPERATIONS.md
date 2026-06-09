@@ -356,7 +356,7 @@ When running ingestion_app on a GCP VM, the Kite access token must be refreshed 
 
 ```bash
 gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b \
-  --project=algo-trading-496203 \
+  --project=amit-trading \
   --command "sudo tee /opt/option_trading/.env.totp <<'EOF'
 KITE_USER_ID=BV2032
 KITE_PASSWORD=<your zerodha password>
@@ -371,7 +371,7 @@ sudo chmod 600 /opt/option_trading/.env.totp"
 
 ```bash
 gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b \
-  --project=algo-trading-496203 \
+  --project=amit-trading \
   --command "cd /opt/option_trading && sudo bash ops/gcp/install_token_refresh_timer.sh"
 ```
 
@@ -381,7 +381,7 @@ The timer fires at **03:00 UTC (08:30 IST)** daily, before market opens at 09:15
 
 ```bash
 gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b \
-  --project=algo-trading-496203 \
+  --project=amit-trading \
   --command "systemctl list-timers kite-token-refresh.timer"
 ```
 
@@ -389,7 +389,7 @@ gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b \
 
 ```bash
 gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b \
-  --project=algo-trading-496203 \
+  --project=amit-trading \
   --command "sudo systemctl start kite-token-refresh.service && sudo journalctl -u kite-token-refresh.service -n 30 --no-pager"
 ```
 
@@ -412,7 +412,7 @@ Useful to verify `.env.totp` is readable and the TOTP secret is correct:
 
 ```bash
 gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b \
-  --project=algo-trading-496203 \
+  --project=amit-trading \
   --command "cd /opt/option_trading && source .env.totp && .venv/bin/python -m ingestion_app.kite_totp_auth --dry-run"
 ```
 
@@ -420,7 +420,7 @@ gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b \
 
 ```bash
 gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b \
-  --project=algo-trading-496203 \
+  --project=amit-trading \
   --command "tail -50 /var/log/kite-token-refresh.log"
 ```
 

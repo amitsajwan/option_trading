@@ -37,9 +37,18 @@ _SAFE_OVERRIDE_KEYS = {
     "EXIT_TRAILING_TRAIL_PCT",
     "EXIT_THESIS_FAIL_BARS",
     "EXIT_THESIS_FAIL_MIN_MFE",
+    "EXIT_SCALPER_HARD_STOP_PCT",
     "CONSENSUS_BYPASS_MIN_CONFIDENCE",
     "STRATEGY_MIN_CONFIDENCE",
     "DIRECTION_MIN_MARGIN_SIDEWAYS",
+    "DIRECTION_CONSENSUS_MIN_MARGIN",
+    "DIRECTION_ML_CONFIDENCE_MIN",
+    "REGIME_GUARD_MAX_ORW",
+    "ENTRY_ALLOWED_REGIMES",
+    "ENTRY_CONFIRM_PREV_TICK",
+    "DIRECTION_ML_FILTER_MIN_PROB",
+    "DIRECTION_ML_WEIGHT",
+    "ENTRY_DIR_MARGIN_MIN",
     "STRATEGY_STRIKE_SELECTION_POLICY",
     "STRATEGY_SMART_STRIKE_ENABLED",
     "SMART_STRIKE_MAX_PREMIUM",
@@ -55,6 +64,12 @@ _SAFE_OVERRIDE_KEYS = {
     # via the trace harness before any live cut-over.
     "ENTRY_ML_MODEL_PATH",
     "ENTRY_ML_MIN_PROB",
+    # Oversight brain (sim-only A/B): toggle the slow-lane risk-reducing brain +
+    # its entry-veto gate per run, to measure base vs oversight-gated P&L.
+    "BRAIN_OVERSIGHT_ENABLED",
+    "BRAIN_OVERSIGHT_GATE_ENABLED",
+    "BRAIN_OVERSIGHT_MODE",
+    "BRAIN_OVERSIGHT_EVERY_BARS",
     # Direction A/B (sim-only): flip the direction engine (composite heuristic resolver
     # vs consensus ML direction model) to compare CE/PE selection + grader activation.
     "ML_ENTRY_DIRECTION_MODE",

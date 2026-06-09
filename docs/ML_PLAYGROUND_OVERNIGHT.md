@@ -27,22 +27,22 @@ One-command overnight run on **`option-trading-runtime-01`**: full Optuna HPO fo
 
 ```bash
 # Local: commit + push, then on VM:
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203 --command "
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading --command "
   sudo bash -c 'cd /opt/option_trading && git fetch origin main && git checkout main && git pull --ff-only origin main && git log -1 --oneline'
 "
 
 # Preflight (imports, parquet, RAM, manifests)
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203 --command "
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading --command "
   sudo bash /opt/option_trading/ops/gcp/run_ml_playground_overnight_vm.sh preflight
 "
 
 # Full night (HPO + grids) — auto tmux + compose down + runs as amits
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203 --command "
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading --command "
   sudo bash /opt/option_trading/ops/gcp/run_ml_playground_overnight_vm.sh start
 "
 
 # Morning status
-gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=algo-trading-496203 --command "
+gcloud compute ssh option-trading-runtime-01 --zone=asia-south1-b --project=amit-trading --command "
   sudo bash /opt/option_trading/ops/gcp/run_ml_playground_overnight_vm.sh status
   sudo bash /opt/option_trading/ops/gcp/summarize_ml_playground_overnight.sh
 "

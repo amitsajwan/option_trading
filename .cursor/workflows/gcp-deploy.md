@@ -26,7 +26,7 @@ When changing code that runs on GCP VMs, **never use `gcloud compute scp`** to s
 3. **VM pull**:
 
 ```bash
-gcloud compute ssh <VM_NAME> --zone=asia-south1-b --project=algo-trading-496203 --command "
+gcloud compute ssh <VM_NAME> --zone=asia-south1-b --project=amit-trading --command "
   sudo bash -c 'cd /opt/option_trading && git fetch origin main && git checkout main && git pull --ff-only origin main && git log -1 --oneline'
 "
 ```

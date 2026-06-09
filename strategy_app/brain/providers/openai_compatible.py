@@ -73,6 +73,10 @@ def chat_completion(
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
+            # Some providers front their API with Cloudflare, which 1010-bans the
+            # default "Python-urllib" UA. Present a normal client UA.
+            "User-Agent": "option-trading-oversight/1.0",
+            "Accept": "application/json",
         },
     )
     try:

@@ -56,6 +56,53 @@ class TradeRecord(TypedDict):
     entry_snapshot_id:  str
     entry_dir_margin:   Optional[float]
     entry_grade_reasons: List[str]
+    # Deterministic post-trade reflection (Phase 2) — surfaced so the Replay UI
+    # can show WHY each trade closed (cost/exit/direction/entry/noise miss),
+    # recomputed with the same logic the live engine journals on close.
+    loss_tag:           str          # LossTag value, or "" for a win
+    needs_reasoning:    bool          # True => ambiguous loser (would go to LLM autopsy)
+
+
+def _closed_trade_reflection(
+    cp: dict, current_entry: dict, exit_prem: float
+) -> Tuple[str, bool]:
+    """Recompute the deterministic loss tag for a closed sim trade.
+
+    Mirrors the live engine's ``_journal_closed_trade`` so the Replay UI shows the
+    same cause-of-loss it would journal in production. Best-effort: ("", False) on
+    any issue — never breaks the replay.
+    """
+    try:
+        from ..brain.reflection import ClosedTrade, autopsy
+        from ..cost_model import TradingCostModel
+
+        lots = max(1, int(current_entry.get("lots") or 1))
+        lot_size = int(os.getenv("STRATEGY_LOT_SIZE", "").strip() or 0) or 30
+        qty = lots * lot_size
+        prem_in = float(current_entry.get("prem_in") or 0.0)
+        entry_val = prem_in * qty
+        if entry_val > 0:
+            total = TradingCostModel().breakdown(
+                entry_value=entry_val, exit_value=float(exit_prem) * qty
+            )["total_cost_amount"]
+            cost_frac = total / entry_val
+        else:
+            cost_frac = 0.013
+        d = current_entry.get("direction")
+        trade = ClosedTrade(
+            direction=str(getattr(d, "value", d) or "").upper(),
+            net_pnl_frac=float(cp.get("pnl_pct") or 0.0),
+            cost_frac=cost_frac,
+            mfe_frac=float(cp.get("mfe_pct") or 0.0),
+            target_frac=abs(float(cp.get("target_pct") or 0.0)),
+            stop_frac=abs(float(cp.get("stop_loss_pct") or 0.0)),
+            mae_frac=float(cp.get("mae_pct") or 0.0),
+            exit_reason=str(cp.get("exit_reason") or ""),
+        )
+        r = autopsy(trade)
+        return (r.tag or "", bool(r.needs_reasoning))
+    except Exception:
+        return ("", False)
 
 
 class ReplayDiag(TypedDict):
@@ -105,6 +152,11 @@ def replay_day(
     from strategy_app.contracts import SignalType
     from strategy_app.position.exit_policy import build_default_exit_stack
 
+    # CLEANUP-BACKLOG (docs/ENGINE_DECISION_FLOW.md §9b): this DEFAULT differs from
+    # the LIVE profile (trader_master_live_v1). Live works only because ops_env
+    # passes STRATEGY_PROFILE_ID explicitly; if it ever doesn't, the sim silently
+    # runs a DIFFERENT direction path than live. Align this default to the live
+    # profile (highest-value cleanup — de-risks sim≠live).
     profile_id = os.getenv("STRATEGY_PROFILE_ID", "trader_master_ml_entry_consensus_v1") \
         or "trader_master_ml_entry_consensus_v1"
     min_conf_raw = os.getenv("STRATEGY_MIN_CONFIDENCE", "0.50")
@@ -146,7 +198,24 @@ def replay_day(
     current_entry: Optional[dict] = None
     total = len(snapshots)
 
+    # Oversight brain: refresh the risk-reducing state every ~30 bars (≈30 min) so
+    # the engine's veto can act on it. Off unless BRAIN_OVERSIGHT_ENABLED.
+    _oversight = None
+    _oversight_every = 30  # ~30 min (1 bar/min)
+    if os.getenv("BRAIN_OVERSIGHT_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            from ..brain.oversight.brain import OversightBrain
+            _oversight = OversightBrain()
+            _oversight_every = max(1, int(os.getenv("BRAIN_OVERSIGHT_EVERY_BARS", "30") or 30))
+        except Exception:
+            _oversight = None
+
     for i, snap in enumerate(snapshots):
+        if _oversight is not None and i % _oversight_every == 0:
+            try:
+                _oversight.cycle(snap)
+            except Exception:
+                pass
         if i % 20 == 0 and progress_cb is not None:
             progress_cb(i, total)
 
@@ -214,10 +283,12 @@ def replay_day(
                 _trig = str(cp.get("exit_policy_triggered") or "")
                 _rsn = str(cp.get("exit_reason") or "")
                 label = f"{_trig}:{_rsn}" if (_trig and _rsn and _trig != _rsn) else (_trig or _rsn or "")
+                _loss_tag, _needs_reasoning = _closed_trade_reflection(cp, current_entry, exit_prem)
             else:
                 pnl_pct = mfe_pct = mae_pct = 0.0
                 exit_prem = current_entry["prem_in"]
                 label = signal.exit_reason.value if signal.exit_reason else "?"
+                _loss_tag, _needs_reasoning = "", False
 
             trades.append(TradeRecord(
                 time_in=current_entry["time_in"],
@@ -240,6 +311,8 @@ def replay_day(
                 entry_snapshot_id=current_entry.get("entry_snapshot_id", ""),
                 entry_dir_margin=current_entry.get("entry_dir_margin"),
                 entry_grade_reasons=list(current_entry.get("entry_grade_reasons") or []),
+                loss_tag=_loss_tag,
+                needs_reasoning=_needs_reasoning,
             ))
             current_entry = None
 

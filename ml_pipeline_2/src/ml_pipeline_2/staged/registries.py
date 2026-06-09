@@ -50,6 +50,8 @@ def label_registry() -> dict[str, str]:
     return {
         "entry_best_recipe_v1": "stage1",
         "entry_bn_5m_100pts_v1": "stage1",
+        "entry_bn_clean_move_strict_v1": "stage1",
+        "entry_bn_clean_move_soft_v1": "stage1",
         "direction_best_recipe_v1": "stage2",
         "direction_or_no_trade_v1": "stage2",
         "direction_market_up_v1": "stage2",
@@ -92,6 +94,7 @@ def publish_registry() -> dict[str, str]:
 def resolve_labeler(labeler_id: str) -> Callable[..., Any]:
     from .pipeline import (
         build_stage1_labels,
+        build_stage1_labels_entry_bn_clean_move,
         build_stage1_labels_entry_bn_move,
         build_stage2_labels,
         build_stage2_labels_ce_win_v1,
@@ -105,6 +108,8 @@ def resolve_labeler(labeler_id: str) -> Callable[..., Any]:
     registry = {
         "entry_best_recipe_v1": build_stage1_labels,
         "entry_bn_5m_100pts_v1": build_stage1_labels_entry_bn_move,
+        "entry_bn_clean_move_strict_v1": build_stage1_labels_entry_bn_clean_move,
+        "entry_bn_clean_move_soft_v1": build_stage1_labels_entry_bn_clean_move,
         "direction_best_recipe_v1": build_stage2_labels,
         "direction_or_no_trade_v1": build_stage2_labels_direction_or_no_trade,
         "direction_market_up_v1": build_stage2_labels_market_direction,

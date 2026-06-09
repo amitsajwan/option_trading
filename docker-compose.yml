@@ -393,6 +393,8 @@ services:
       # grader); was previously absent so the .env.compose `consensus` value silently
       # never reached the container — making it explicit removes that landmine.
       ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-composite}"
+      REGIME_GUARD_MAX_ORW: "${REGIME_GUARD_MAX_ORW:-}"
+      DIRECTION_ML_CONFIDENCE_MIN: "${DIRECTION_ML_CONFIDENCE_MIN:-}"
       ENTRY_DIR_W_ML: "${ENTRY_DIR_W_ML:-0.20}"
       DIRECTION_ML_FILTER_MIN_PROB: "${DIRECTION_ML_FILTER_MIN_PROB:-}"
       BRAIN_ENABLED: "${BRAIN_ENABLED:-true}"
@@ -942,6 +944,8 @@ services:
       # grader); was previously absent so the .env.compose `consensus` value silently
       # never reached the container — making it explicit removes that landmine.
       ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-composite}"
+      REGIME_GUARD_MAX_ORW: "${REGIME_GUARD_MAX_ORW:-}"
+      DIRECTION_ML_CONFIDENCE_MIN: "${DIRECTION_ML_CONFIDENCE_MIN:-}"
       ENTRY_DIR_W_ML: "${ENTRY_DIR_W_ML:-0.20}"
       DIRECTION_ML_FILTER_MIN_PROB: "${DIRECTION_ML_FILTER_MIN_PROB:-}"
       STRATEGY_RUN_DIR: "/app/.run/strategy_app_historical"
@@ -1052,6 +1056,8 @@ services:
       # grader); was previously absent so the .env.compose `consensus` value silently
       # never reached the container — making it explicit removes that landmine.
       ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-composite}"
+      REGIME_GUARD_MAX_ORW: "${REGIME_GUARD_MAX_ORW:-}"
+      DIRECTION_ML_CONFIDENCE_MIN: "${DIRECTION_ML_CONFIDENCE_MIN:-}"
       ENTRY_DIR_W_ML: "${ENTRY_DIR_W_ML:-0.20}"
       DIRECTION_ML_FILTER_MIN_PROB: "${DIRECTION_ML_FILTER_MIN_PROB:-}"
       ML_PURE_RUN_ID: "${ML_PURE_RUN_ID:-}"

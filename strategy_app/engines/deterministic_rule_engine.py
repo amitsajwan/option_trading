@@ -76,7 +76,10 @@ from .profiles import (
 )
 from ..brain.brain import BrainDecision, TradingBrain
 from ..brain.decision_brain import DecisionBrain
+from ..brain.oversight.gate import oversight_entry_veto
+from ..brain.reflection import ClosedTrade, reflect
 from ..brain.sense_runner import run_senses
+from ..cost_model import TradingCostModel
 from ..senses.snapshot_adapter import snapshot_to_sense_context
 from ..brain.context import DayContext
 from ..runtime.runtime_artifacts import resolve_runtime_artifact_paths
@@ -825,6 +828,33 @@ class DeterministicRuleEngine(StrategyEngine):
             # Blocker captured centrally as "entry_time_windows" in the per-tick
             # decisions.jsonl summary (see _derive_entry_blocker).
             return None
+
+        # Regime guard — abstain on EXPANSION/event days (wide opening range),
+        # where direction goes ~50% random (validated 2026-06-09). OFF by default
+        # (REGIME_GUARD_MAX_ORW=0). This MUST live on the common entry path: the
+        # consensus resolver (resolve_direction_consensus) is bypassed for non-
+        # consensus profiles like trader_master_live_v1, so a guard placed there
+        # never fires for the live engine.
+        try:
+            _max_orw = float(os.getenv("REGIME_GUARD_MAX_ORW", "0") or "0")
+        except ValueError:
+            _max_orw = 0.0
+        if _max_orw > 0.0:
+            _orw = snap.opening_range_width_pct
+            if _orw is not None and float(_orw) >= _max_orw:
+                return None  # blocker: regime_guard_expansion (per-tick summary)
+
+        # Chop filter (Track 1, 2026-06-09): trade ONLY in the allowed regimes,
+        # e.g. ENTRY_ALLOWED_REGIMES=TRENDING,BREAKOUT — options bleed on chop,
+        # and the lottery's wins were all trend days. OFF by default (empty = all
+        # regimes). Comma-separated Regime values; skip if the bar's regime isn't listed.
+        _allowed = os.getenv("ENTRY_ALLOWED_REGIMES", "").strip()
+        if _allowed:
+            _allow_set = {r.strip().upper() for r in _allowed.split(",") if r.strip()}
+            _rname = regime_signal.regime.value if regime_signal is not None else ""
+            if _rname not in _allow_set:
+                return None  # blocker: regime_not_allowed (chop filter)
+
         tagger = os.getenv("ENTRY_REGIME_TAGGER", "").strip()
         if tagger:
             if self._session_regime_tag is None:
@@ -1071,6 +1101,7 @@ class DeterministicRuleEngine(StrategyEngine):
                 if candidate.confidence >= self._min_confidence
                 and policy_decision.allowed
                 and not candidate.raw_signals.get("_strike_vetoed")
+                and not self._oversight_vetoed(candidate)
             ]
             if not eligible:
                 return None  # blocker: ml_direction_resolution (per-tick summary)
@@ -1097,10 +1128,12 @@ class DeterministicRuleEngine(StrategyEngine):
                 continue  # blocker: strike_vetoed (per-tick summary)
             if not policy_decision.allowed:
                 continue  # blocker: policy_gate (per-tick summary)
+            if self._oversight_vetoed(candidate):
+                continue  # blocker: oversight_veto (risk-reducing, flag-gated)
             return self._build_entry_signal(candidate, snap, risk, entry_votes, regime_signal, policy_decision)
         return None
 
-    def _process_entry_consensus(
+    def _process_entry_consensus(  # CLEANUP-BACKLOG §9b: DORMANT — only the consensus profile reaches this; live (trader_master_live_v1) uses the default dispatch below
         self,
         *,
         entry_votes: list[StrategyVote],
@@ -1137,6 +1170,20 @@ class DeterministicRuleEngine(StrategyEngine):
         )
         if consensus.vetoed or consensus.direction is None:
             return None  # blocker: direction_consensus:<reason> (per-tick summary)
+
+        # Direction-conviction gate (best-version): trade only high-conviction sides.
+        # Validated 2026-06-08: trades with high entry_dir_margin won ~74% (68% right
+        # side) vs ~17% for the low-conviction half. This gates on the ML resolver's
+        # entry_dir_margin directly — the consensus-margin knob does NOT enforce this
+        # in composite mode. Default 0 = OFF (no behaviour change).
+        try:
+            _dir_min = float(os.getenv("ENTRY_DIR_MARGIN_MIN", "0") or 0)
+        except (TypeError, ValueError):
+            _dir_min = 0.0
+        if _dir_min > 0 and isinstance(ml_vote.raw_signals, dict):
+            _edm = ml_vote.raw_signals.get("entry_dir_margin")
+            if isinstance(_edm, (int, float)) and abs(float(_edm)) < _dir_min:
+                return None  # blocker: low_direction_conviction (entry_dir_margin gate)
 
         _consensus_extras: dict[str, Any] = {
             "direction_source": "direction_consensus",
@@ -1233,6 +1280,10 @@ class DeterministicRuleEngine(StrategyEngine):
         regime_signal: RegimeSignal,
     ) -> Optional[TradeSignal]:
         """Run the v2 gate-cascade pipeline (STRATEGY_ENTRY_PIPELINE_V2=1)."""
+        # CLEANUP-BACKLOG (docs/ENGINE_DECISION_FLOW.md §9b): DORMANT — the v2
+        # pipeline is OFF in every live/sim config (STRATEGY_ENTRY_PIPELINE_V2=0).
+        # Candidate for deletion (with entry_pipeline_gates.py) once confirmed no
+        # config enables it.
         relax_conf = self._strategy_profile_id in _PROFILES_RELAX_REGIME_CONF
         is_consensus = self._strategy_profile_id in _PROFILES_ML_ENTRY_CONSENSUS
         gates = build_entry_pipeline(
@@ -1593,7 +1644,110 @@ class DeterministicRuleEngine(StrategyEngine):
             pnl_pct=position.pnl_pct,
             strategy_name=str(position.entry_strategy or ""),
         )
+        # Phase-2 deterministic reflection (mechanical trade journal). Must run
+        # BEFORE log_position_close so its numeric flags ride into the durable
+        # POSITION_CLOSE record. Pure annotation — wrapped so it can never break
+        # the close path. See docs/INTELLIGENT_BRAIN_AGENTIC_IMPLEMENTATION_PLAN.md.
+        self._journal_closed_trade(exit_signal, position)
         self._log.log_position_close(exit_signal=exit_signal, position=position)
+
+    def _journal_closed_trade(
+        self, exit_signal: TradeSignal, position: PositionContext
+    ) -> None:
+        """Mechanically tag why a closed trade lost (cost/exit/direction/entry/noise).
+
+        Never raises — reflection is advisory journaling, never load-bearing.
+        Full record → ``trade_journal`` log line; numeric flags → decision_metrics
+        (so they persist in the fsync'd POSITION_CLOSE system-of-record).
+        """
+        if os.getenv("BRAIN_REFLECTION_ENABLED", "true").strip().lower() in ("0", "false", "no"):
+            return
+        try:
+            cost_frac = self._closed_trade_cost_frac(position)
+            metrics = position.decision_metrics if isinstance(position.decision_metrics, dict) else {}
+            entry_verdicts = (
+                metrics.get("sense_verdicts")
+                or metrics.get("senses")
+                or metrics.get("verdicts")
+                or {}
+            )
+            edge_frac = next(
+                (
+                    float(metrics[k])
+                    for k in ("opportunity_edge", "expected_edge", "net_edge", "edge_pct")
+                    if isinstance(metrics.get(k), (int, float)) and not isinstance(metrics.get(k), bool)
+                ),
+                abs(float(position.target_pct or 0.0)),
+            )
+            trade = ClosedTrade(
+                direction=str(getattr(position.direction, "value", position.direction) or "").upper(),
+                net_pnl_frac=float(position.pnl_pct or 0.0),
+                cost_frac=cost_frac,
+                mfe_frac=float(position.mfe_pct or 0.0),
+                target_frac=abs(float(position.target_pct or 0.0)),
+                stop_frac=abs(float(position.stop_loss_pct or 0.0)),
+                mae_frac=float(position.mae_pct or 0.0),
+                bars_held=int(position.bars_held or 0),
+                exit_reason=str(exit_signal.exit_reason.value if exit_signal.exit_reason else ""),
+                entry_verdicts=entry_verdicts if isinstance(entry_verdicts, dict) else {},
+            )
+            record = reflect(trade, edge_frac=edge_frac)
+            record["position_id"] = position.position_id
+            ap = record["autopsy"]
+            ex = record["execution"]
+            # Numeric flags into the durable POSITION_CLOSE record (strings are
+            # dropped by merge_decision_metrics, so the tag goes only to the log).
+            if isinstance(position.decision_metrics, dict):
+                position.decision_metrics["reflection_is_loss"] = 1.0 if ap["is_loss"] else 0.0
+                position.decision_metrics["reflection_needs_reasoning"] = 1.0 if ap["needs_reasoning"] else 0.0
+                position.decision_metrics["reflection_overpaid"] = 1.0 if ex["overpaid"] else 0.0
+                if ex["cost_to_edge"] is not None:
+                    position.decision_metrics["reflection_cost_to_edge"] = float(ex["cost_to_edge"])
+            logger.info("trade_journal %s", json.dumps(record, default=str))
+        except Exception as exc:  # journaling must never break the close path
+            logger.warning(
+                "trade_journal failed position_id=%s error=%s",
+                getattr(position, "position_id", "?"), exc,
+            )
+
+    def _closed_trade_cost_frac(self, position: PositionContext) -> float:
+        """Round-trip slippage+charges as a fraction of entry notional.
+
+        Uses the shared :class:`TradingCostModel`; falls back to ~1.3% (the
+        observed live round-trip) if notional can't be reconstructed.
+        """
+        try:
+            lot_size = int(os.getenv("STRATEGY_LOT_SIZE", "").strip() or 0) or 30
+            qty = max(1, int(position.lots or 1)) * lot_size
+            entry_val = float(position.entry_premium or 0.0) * qty
+            if entry_val <= 0:
+                return 0.013
+            exit_val = float(position.current_premium or position.entry_premium or 0.0) * qty
+            total = TradingCostModel().breakdown(entry_value=entry_val, exit_value=exit_val)["total_cost_amount"]
+            return total / entry_val
+        except Exception:
+            return 0.013
+
+    def _oversight_vetoed(self, candidate: StrategyVote) -> bool:
+        """Risk-reducing veto from the slow-lane oversight brain (flag-gated, OFF by default).
+
+        Reads the precomputed ``oversight_state.json`` (cheap; cached ~30s) and
+        vetoes the candidate if the brain said stand-down or leans against this
+        side. It can only BLOCK an entry, never create one. See
+        ``strategy_app/brain/oversight/`` and the agentic architecture doc.
+        """
+        if os.getenv("BRAIN_OVERSIGHT_GATE_ENABLED", "false").strip().lower() not in ("1", "true", "yes", "on"):
+            return False
+        try:
+            from ..brain.oversight.brain import OversightBrain
+            state = OversightBrain.read_risk_state()
+            direction = getattr(candidate.direction, "value", candidate.direction)
+            vetoed, reason = oversight_entry_veto(str(direction), state)
+            if vetoed:
+                candidate.raw_signals["_oversight_veto"] = reason
+            return vetoed
+        except Exception:  # risk-reducing layer must never break the engine
+            return False
 
     def _resolve_entry_risk(
         self,

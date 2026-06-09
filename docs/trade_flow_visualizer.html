@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trade Decision Flow — BANKNIFTY 2026-06-03</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0e0e0e; color: #d4d4d4; font-family: 'Courier New', monospace; font-size: 13px; }
+
+  h1 { padding: 16px 20px 4px; font-size: 14px; color: #888; letter-spacing: 0.1em; font-weight: 400; }
+  .subtitle { padding: 0 20px 16px; font-size: 11px; color: #555; }
+
+  /* ── Bar picker ─────────────────────────────────────────────────────── */
+  .bar-picker { display: flex; gap: 8px; padding: 0 20px 20px; flex-wrap: wrap; }
+  .bar-btn {
+    padding: 6px 12px; border: 1px solid #333; background: #1a1a1a; color: #888;
+    cursor: pointer; font-family: inherit; font-size: 11px; letter-spacing: 0.05em;
+    transition: all 0.15s;
+  }
+  .bar-btn:hover { border-color: #555; color: #ccc; }
+  .bar-btn.active { border-color: #4a9; color: #4a9; background: #0f201a; }
+  .bar-btn.blocked { border-color: #733; color: #c44; }
+  .bar-btn.blocked.active { background: #1a0f0f; border-color: #c44; color: #f66; }
+  .bar-btn.traded { border-color: #363; color: #4c4; }
+  .bar-btn.traded.active { background: #0f1a0f; border-color: #4c4; color: #6e6; }
+
+  /* ── Layout ─────────────────────────────────────────────────────────── */
+  .layout { display: flex; gap: 0; height: calc(100vh - 120px); }
+
+  /* ── Pipeline (left) ─────────────────────────────────────────────────── */
+  .pipeline { width: 400px; flex-shrink: 0; padding: 0 20px; overflow-y: auto; }
+
+  .snapshot-box {
+    background: #1a1a2e; border: 1px solid #2a2a4a; padding: 12px;
+    margin-bottom: 4px;
+  }
+  .snapshot-box .label { font-size: 10px; color: #666; letter-spacing: 0.1em; margin-bottom: 6px; }
+  .snapshot-box .values { display: flex; gap: 16px; flex-wrap: wrap; }
+  .snapshot-box .kv { font-size: 12px; }
+  .snapshot-box .kv span { color: #888; }
+  .snapshot-box .kv strong { color: #aac; }
+
+  .arrow { text-align: center; color: #444; font-size: 16px; line-height: 20px; }
+
+  .gate {
+    border: 1px solid #2a2a2a; background: #141414;
+    margin-bottom: 4px; transition: all 0.3s; opacity: 0.3;
+  }
+  .gate.active { opacity: 1; }
+  .gate.pass { border-color: #2a4a2a; background: #0f1a0f; }
+  .gate.block { border-color: #4a2a2a; background: #1a0f0f; }
+  .gate.skip-c { border-color: #4a3a1a; background: #1a160a; }
+
+  .gate-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; cursor: pointer;
+  }
+  .gate-name { font-size: 11px; letter-spacing: 0.08em; color: #888; }
+  .gate.active .gate-name { color: #ccc; }
+  .gate-result {
+    font-size: 10px; letter-spacing: 0.1em; padding: 2px 8px;
+    font-weight: 700;
+  }
+  .pass .gate-result { color: #4a9; background: #0a1a10; }
+  .block .gate-result { color: #f55; background: #1a0808; }
+  .skip-c .gate-result { color: #fa4; background: #1a1000; }
+  .pending .gate-result { color: #444; }
+
+  .gate-body { padding: 0 12px 10px; display: none; }
+  .gate.active .gate-body { display: block; }
+  .gate-reason { font-size: 11px; color: #999; margin-bottom: 6px; line-height: 1.5; }
+  .gate-reason strong { color: #f55; }
+  .gate-reason.ok strong { color: #4a9; }
+  .gate-metrics { display: flex; gap: 12px; flex-wrap: wrap; }
+  .metric { font-size: 10px; color: #666; }
+  .metric strong { color: #aaa; }
+  .metric.bad strong { color: #f66; }
+  .metric.good strong { color: #4a9; }
+  .metric.warn strong { color: #fa4; }
+
+  .outcome-box {
+    margin-top: 8px; padding: 14px; text-align: center;
+    border: 1px solid #333; background: #111; opacity: 0.2;
+    transition: all 0.4s;
+  }
+  .outcome-box.show { opacity: 1; }
+  .outcome-box.trade { border-color: #4a9; background: #0a1a10; }
+  .outcome-box.no-trade { border-color: #733; background: #120808; }
+  .outcome-label { font-size: 10px; color: #666; letter-spacing: 0.12em; margin-bottom: 6px; }
+  .outcome-main { font-size: 18px; font-weight: 700; }
+  .outcome-box.trade .outcome-main { color: #4e9; }
+  .outcome-box.no-trade .outcome-main { color: #f44; }
+  .outcome-detail { font-size: 11px; color: #888; margin-top: 4px; }
+  .outcome-box.trade .outcome-detail { color: #6ab; }
+
+  /* ── Detail panel (right) ────────────────────────────────────────────── */
+  .detail { flex: 1; padding: 0 24px; overflow-y: auto; border-left: 1px solid #1e1e1e; }
+  .detail-title { font-size: 10px; color: #555; letter-spacing: 0.12em; padding: 4px 0 12px; }
+
+  .context-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+  .ctx-card { background: #141414; border: 1px solid #222; padding: 12px; }
+  .ctx-card-title { font-size: 9px; color: #555; letter-spacing: 0.1em; margin-bottom: 8px; text-transform: uppercase; }
+  .ctx-row { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; }
+  .ctx-row .k { color: #666; }
+  .ctx-row .v { color: #aaa; }
+  .ctx-row .v.up { color: #4c4; }
+  .ctx-row .v.dn { color: #f44; }
+  .ctx-row .v.warn { color: #fa4; }
+  .ctx-row .v.bad { color: #f55; font-weight: 700; }
+  .ctx-row .v.good { color: #4a9; font-weight: 700; }
+
+  .evidence-bar-wrap { margin-bottom: 4px; }
+  .evidence-bar-label { display: flex; justify-content: space-between; font-size: 10px; color: #666; margin-bottom: 2px; }
+  .evidence-bar-track { height: 6px; background: #222; position: relative; }
+  .evidence-bar-fill { height: 100%; transition: width 0.4s; }
+  .bull-fill { background: #4a9; }
+  .bear-fill { background: #f55; }
+
+  .log-section { margin-top: 12px; }
+  .log-title { font-size: 9px; color: #555; letter-spacing: 0.1em; margin-bottom: 8px; text-transform: uppercase; }
+  .log-line {
+    font-size: 10px; padding: 5px 8px; margin-bottom: 2px;
+    border-left: 2px solid transparent; background: #111;
+    line-height: 1.6;
+  }
+  .log-line.pass { border-color: #2a5a2a; }
+  .log-line.block { border-color: #5a2a2a; }
+  .log-line.info { border-color: #2a3a5a; }
+  .log-line .ts { color: #555; margin-right: 8px; }
+  .log-line .tag { color: #666; }
+  .log-line .msg-block { color: #f66; }
+  .log-line .msg-pass { color: #4a9; }
+  .log-line .msg-info { color: #78a; }
+  .log-line .val { color: #aaa; }
+
+  .pnl-badge {
+    display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 700;
+  }
+  .pnl-badge.pos { color: #4e9; background: #0a1a10; }
+  .pnl-badge.neg { color: #f55; background: #1a0808; }
+</style>
+</head>
+<body>
+
+<h1>TRADE DECISION FLOW — BANKNIFTY 2026-06-03</h1>
+<div class="subtitle">Every 1-min bar passes through 8 gates. Click a bar below to trace exactly what happened.</div>
+
+<div class="bar-picker" id="barPicker"></div>
+
+<div class="layout">
+  <!-- Pipeline -->
+  <div class="pipeline">
+    <div class="snapshot-box" id="snapBox">
+      <div class="label">SNAPSHOT IN</div>
+      <div class="values" id="snapValues"></div>
+    </div>
+    <div class="arrow">↓</div>
+    <div id="gates"></div>
+    <div class="outcome-box" id="outcomeBox">
+      <div class="outcome-label">DECISION</div>
+      <div class="outcome-main" id="outcomeMain">—</div>
+      <div class="outcome-detail" id="outcomeDetail"></div>
+    </div>
+  </div>
+
+  <!-- Detail -->
+  <div class="detail">
+    <div class="detail-title">MARKET CONTEXT + EVIDENCE + LOGS</div>
+
+    <div class="context-grid">
+      <div class="ctx-card">
+        <div class="ctx-card-title">Market at entry bar</div>
+        <div id="marketCtx"></div>
+      </div>
+      <div class="ctx-card">
+        <div class="ctx-card-title">Regime evidence</div>
+        <div id="regimeCtx"></div>
+      </div>
+    </div>
+
+    <div class="log-section">
+      <div class="log-title">Engine log (what you'd see with grep "entry blocked|entry signal")</div>
+      <div id="logLines"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Real data from today's session ───────────────────────────────────────────
+const BARS = [
+  {
+    id: "0948", label: "09:48 PE", outcome: "blocked",
+    snap: { time:"09:48", fut: 53500, regime:"CHOP", regimeConf: 0.72, iv: 78.8, atm: 53500 },
+    market: { r5m:"+0.04%", r15m:"+0.03%", r30m:"-0.11%", volRatio:"0.72 (weak)", pcr:"1.19", orb:"neither broken" },
+    evidence: { bull: 0.80, bear: 0.00, r5m: 0.0004, r15m: 0.0003, orl: false, orh: false },
+    gates: [
+      { name:"HARD GATES", result:"pass", reason:"Session active, risk running, 09:45–14:30 window open", metrics:[] },
+      { name:"REGIME ROUTING", result:"block",
+        reason:"<strong>CHOP → [] in profile.</strong> ML_ENTRY is not routed to CHOP regime. CHOP means no sustained move — ML_ENTRY needs one to profit.",
+        metrics:[{k:"regime",v:"CHOP",cls:"bad"},{k:"strategies_in_CHOP",v:"none (fixed 2026-06-03)",cls:"bad"},{k:"was_before_fix",v:"SIDEWAYS fallback → ML_ENTRY",cls:"warn"}]
+      },
+    ],
+    mlProb: 0.969, mlDir: "PE", dirConf: 0.698,
+    logs: [
+      { cls:"block", ts:"09:48:06", tag:"deterministic_rule_engine", msg:"entry blocked: CHOP → [] — ML_ENTRY not routed to CHOP regime" }
+    ]
+  },
+  {
+    id: "0958", label: "09:58 PE", outcome: "blocked",
+    snap: { time:"09:58", fut: 53500, regime:"CHOP", regimeConf: 0.71, iv: 84.9, atm: 53500 },
+    market: { r5m:"+0.02%", r15m:"+0.01%", r30m:"-0.08%", volRatio:"0.69 (weak)", pcr:"1.21", orb:"neither" },
+    evidence: { bull: 0.72, bear: 0.00, r5m: 0.0002, r15m: 0.0001, orl: false, orh: false },
+    gates: [
+      { name:"HARD GATES", result:"pass", reason:"OK", metrics:[] },
+      { name:"REGIME ROUTING", result:"block",
+        reason:"<strong>CHOP → [].</strong> Also: IV spike to 84.9 percentile — near the 90 reject threshold.",
+        metrics:[{k:"regime",v:"CHOP",cls:"bad"},{k:"iv_pct",v:"84.9",cls:"warn"}]
+      },
+    ],
+    mlProb: 0.925, mlDir: "PE", dirConf: 0.666,
+    logs: [
+      { cls:"block", ts:"09:58:05", tag:"deterministic_rule_engine", msg:"entry blocked: CHOP → [] — ML_ENTRY not routed to CHOP regime" }
+    ]
+  },
+  {
+    id: "1006", label: "10:06 PE", outcome: "blocked",
+    snap: { time:"10:06", fut: 53600, regime:"CHOP", regimeConf: 0.69, iv: 54.8, atm: 53600 },
+    market: { r5m:"+0.01%", r15m:"+0.02%", r30m:"-0.05%", volRatio:"0.74 (weak)", pcr:"1.15", orb:"neither" },
+    evidence: { bull: 0.75, bear: 0.00, r5m: 0.0001, r15m: 0.0002, orl: false, orh: false },
+    gates: [
+      { name:"HARD GATES", result:"pass", reason:"OK", metrics:[] },
+      { name:"REGIME ROUTING", result:"block",
+        reason:"<strong>CHOP → [].</strong> Third consecutive CHOP bar. Market consolidated after morning gap-down.",
+        metrics:[{k:"regime",v:"CHOP",cls:"bad"},{k:"consecutive_chop_bars",v:"3+",cls:"bad"}]
+      },
+    ],
+    mlProb: 0.883, mlDir: "PE", dirConf: 0.636,
+    logs: [
+      { cls:"block", ts:"10:06:05", tag:"deterministic_rule_engine", msg:"entry blocked: CHOP → [] — ML_ENTRY not routed to CHOP regime" },
+      { cls:"info", ts:"10:06:05", tag:"deterministic_rule_engine", msg:"zero_mfe_exit dir=PE mfe=0.000 pnl=-0.021 — same-direction cooldown armed" }
+    ]
+  },
+  {
+    id: "1028", label: "10:28 CE", outcome: "blocked",
+    snap: { time:"10:28", fut: 53600, regime:"CHOP", regimeConf: 0.68, iv: 51.5, atm: 53600 },
+    market: { r5m:"+0.03%", r15m:"+0.02%", r30m:"+0.01%", volRatio:"0.78 (weak)", pcr:"1.10", orb:"neither" },
+    evidence: { bull: 0.72, bear: 0.00, r5m: 0.0003, r15m: 0.0002, orl: false, orh: false },
+    gates: [
+      { name:"HARD GATES", result:"pass", reason:"OK — zero_mfe_cooldown for PE expired", metrics:[] },
+      { name:"REGIME ROUTING", result:"block",
+        reason:"<strong>CHOP → [].</strong> CE direction this time (ML pivot). Still CHOP — blocked before any vote fires.",
+        metrics:[{k:"regime",v:"CHOP",cls:"bad"},{k:"dir_proposed",v:"CE",cls:"warn"}]
+      },
+    ],
+    mlProb: 0.831, mlDir: "CE", dirConf: 0.598,
+    logs: [
+      { cls:"block", ts:"10:28:04", tag:"deterministic_rule_engine", msg:"entry blocked: CHOP → [] — ML_ENTRY not routed to CHOP regime" }
+    ]
+  },
+  {
+    id: "1033", label: "10:33 PE ✓", outcome: "traded",
+    snap: { time:"10:33", fut: 53400, regime:"SIDEWAYS", regimeConf: 0.74, iv: 48.2, atm: 53400 },
+    market: { r5m:"-0.06%", r15m:"-0.04%", r30m:"-0.12%", volRatio:"1.08 (normal)", pcr:"0.88", orb:"orl near" },
+    evidence: { bull: 0.10, bear: 0.90, r5m: -0.0006, r15m: -0.0004, orl: false, orh: false },
+    gates: [
+      { name:"HARD GATES", result:"pass", reason:"Session active, cooldowns clear", metrics:[] },
+      { name:"REGIME ROUTING", result:"pass",
+        reason:"SIDEWAYS → ['IV_FILTER','ML_ENTRY']. Regime allows ML_ENTRY.",
+        metrics:[{k:"regime",v:"SIDEWAYS",cls:"good"},{k:"strategies",v:"IV_FILTER, ML_ENTRY",cls:"good"}]
+      },
+      { name:"ML_ENTRY TIMING", result:"pass",
+        reason:"Entry probability 0.88 ≥ threshold 0.65. ML timing model sees an entry pattern.",
+        metrics:[{k:"entry_prob",v:"0.88",cls:"good"},{k:"threshold",v:"0.65",cls:""}]
+      },
+      { name:"DIRECTION EVIDENCE", result:"pass",
+        reason:"<strong class='ok'>Evidence agrees with PE.</strong> bear_score=0.90 ≥ support_min=0.20. Market trending down.",
+        metrics:[{k:"bear_score",v:"0.90 ≥ 0.20 ✓",cls:"good"},{k:"bull_score",v:"0.10 < 0.60 ✓",cls:"good"},{k:"r5m",v:"-0.06%",cls:"good"},{k:"r15m",v:"-0.04%",cls:"good"}]
+      },
+      { name:"DIRECTION CONSENSUS", result:"pass",
+        reason:"Shadow score bearish. Rules: bearish. Direction ML (weight 0.15): PE. Consensus: PE, margin=1.95.",
+        metrics:[{k:"direction",v:"PE",cls:"good"},{k:"margin",v:"1.95 > 1.75 ✓",cls:"good"},{k:"ml_weight",v:"0.15 (reduced)",cls:"warn"}]
+      },
+      { name:"STRIKE / DEPTH", result:"pass",
+        reason:"smart_strike: OTM2, PE 53300 @₹1048. Within ₹600–1300 band. IV 48.2 < reject_pctile 90.",
+        metrics:[{k:"strike",v:"53300 PE",cls:"good"},{k:"premium",v:"₹1048",cls:"good"},{k:"mode",v:"otm_2",cls:""},{k:"iv_pct",v:"48.2",cls:"good"}]
+      },
+      { name:"POLICY + CONFIDENCE", result:"pass",
+        reason:"Entry policy: allowed. Confidence 0.88 ≥ min_confidence 0.80.",
+        metrics:[{k:"policy",v:"allowed",cls:"good"},{k:"conf",v:"0.88 ≥ 0.80 ✓",cls:"good"}]
+      },
+    ],
+    mlProb: 0.882, mlDir: "PE", dirConf: 0.76,
+    tradeResult: { pnl: "+3.62%", mfe: "+3.62%", exit: "EXIT_STACK", lots: 1 },
+    logs: [
+      { cls:"pass", ts:"10:33:05", tag:"deterministic_rule_engine", msg:"strike_selection strategy=ML_ENTRY dir=PE atm=53400 regime=SIDEWAYS → strike=53300 mode=otm_2 reason=otm_2_conf_0.882_iv_48.2" },
+      { cls:"pass", ts:"10:33:05", tag:"deterministic_rule_engine", msg:"entry signal regime=SIDEWAYS strategy=ML_ENTRY dir=PE strike=53300 premium=1048.00 conf=0.76 lots=1 session_pnl=0.00%" },
+      { cls:"pass", ts:"10:35:06", tag:"position.tracker", msg:"position closed reason=EXIT_STACK pnl=+3.62% mfe=+3.62% mae=-0.14%" }
+    ]
+  },
+  {
+    id: "1230", label: "12:30 CE ✓✓", outcome: "traded",
+    snap: { time:"12:30", fut: 53700, regime:"BREAKOUT", regimeConf: 0.88, iv: 38.4, atm: 53700 },
+    market: { r5m:"+0.18%", r15m:"+0.22%", r30m:"+0.31%", volRatio:"1.65 (strong)", pcr:"0.74", orb:"ORH broken" },
+    evidence: { bull: 2.70, bear: 0.00, r5m: 0.0018, r15m: 0.0022, orl: false, orh: true },
+    gates: [
+      { name:"HARD GATES", result:"pass", reason:"Session active, all cooldowns clear, 12:30 within 09:45–14:30", metrics:[] },
+      { name:"REGIME ROUTING", result:"pass",
+        reason:"BREAKOUT → ['IV_FILTER','ML_ENTRY']. Strong regime, high confidence 0.88.",
+        metrics:[{k:"regime",v:"BREAKOUT",cls:"good"},{k:"regime_conf",v:"0.88",cls:"good"}]
+      },
+      { name:"ML_ENTRY TIMING", result:"pass",
+        reason:"Entry probability 0.93 ≥ 0.65. Model sees a strong momentum entry.",
+        metrics:[{k:"entry_prob",v:"0.93",cls:"good"}]
+      },
+      { name:"DIRECTION EVIDENCE", result:"pass",
+        reason:"<strong class='ok'>Strong bull evidence.</strong> bull_score=2.70 (returns aligned up + strong vol + OI buildup + ORH broken). bear_score=0.00.",
+        metrics:[{k:"bull_score",v:"2.70 ≥ 0.20 ✓",cls:"good"},{k:"bear_score",v:"0.00",cls:"good"},{k:"orh_broken",v:"true ✓",cls:"good"},{k:"r5m",v:"+0.18%",cls:"good"}]
+      },
+      { name:"DIRECTION CONSENSUS", result:"pass",
+        reason:"All signals agree: CE. Shadow bullish, rules bullish, direction ML CE. Margin=2.41.",
+        metrics:[{k:"direction",v:"CE",cls:"good"},{k:"margin",v:"2.41",cls:"good"},{k:"all_agree",v:"yes",cls:"good"}]
+      },
+      { name:"STRIKE / DEPTH", result:"pass",
+        reason:"OTM3 CE 53700 @₹1102 — BREAKOUT regime allows OTM3. IV 38.4 well below ceil. Within ₹600–1300 band.",
+        metrics:[{k:"strike",v:"53700 CE",cls:"good"},{k:"premium",v:"₹1102",cls:"good"},{k:"mode",v:"otm_3 (BREAKOUT allowed)",cls:"good"},{k:"iv_pct",v:"38.4",cls:"good"}]
+      },
+      { name:"POLICY + CONFIDENCE", result:"pass",
+        reason:"Allowed. Confidence 0.93 ≥ 0.80.",
+        metrics:[{k:"conf",v:"0.93 ≥ 0.80 ✓",cls:"good"}]
+      },
+    ],
+    mlProb: 0.931, mlDir: "CE", dirConf: 0.85,
+    tradeResult: { pnl: "+14.93%", mfe: "+22.91%", exit: "TRAILING STOP", lots: 1 },
+    logs: [
+      { cls:"pass", ts:"12:30:05", tag:"deterministic_rule_engine", msg:"strike_selection strategy=ML_ENTRY dir=CE atm=53700 regime=BREAKOUT → strike=53700 mode=otm_3 reason=otm_3_conf_0.931_iv_38.4_regime_BREAKOUT" },
+      { cls:"pass", ts:"12:30:05", tag:"deterministic_rule_engine", msg:"entry signal regime=BREAKOUT strategy=ML_ENTRY dir=CE strike=53700 premium=1102.00 conf=0.85 lots=1 session_pnl=+0.04%" },
+      { cls:"info", ts:"12:41:05", tag:"position.tracker", msg:"trailing stop activated mfe=+22.91% trail=30% activation=15%" },
+      { cls:"pass", ts:"12:49:06", tag:"position.tracker", msg:"position closed reason=TRAILING_STOP pnl=+14.93% mfe=+22.91% mae=-0.31%" }
+    ]
+  },
+  {
+    id: "hypothetical", label: "11:05 PE (hyp)", outcome: "blocked",
+    snap: { time:"11:05", fut: 53550, regime:"SIDEWAYS", regimeConf: 0.70, iv: 44.1, atm: 53550 },
+    market: { r5m:"+0.05%", r15m:"+0.04%", r30m:"-0.02%", volRatio:"0.85 (weak)", pcr:"1.12", orb:"neither" },
+    evidence: { bull: 0.82, bear: 0.00, r5m: 0.0005, r15m: 0.0004, orl: false, orh: false },
+    gates: [
+      { name:"HARD GATES", result:"pass", reason:"OK — cooldowns clear", metrics:[] },
+      { name:"REGIME ROUTING", result:"pass",
+        reason:"SIDEWAYS → ML_ENTRY allowed. Not CHOP.",
+        metrics:[{k:"regime",v:"SIDEWAYS",cls:"good"}]
+      },
+      { name:"ML_ENTRY TIMING", result:"pass",
+        reason:"Entry prob 0.86 ≥ 0.65 — timing model fires.",
+        metrics:[{k:"entry_prob",v:"0.86",cls:"good"}]
+      },
+      { name:"DIRECTION EVIDENCE", result:"block",
+        reason:"<strong>Direction disagrees with evidence for PE.</strong> bull_score=0.82 > opposing_max=0.60. bear_score=0.00 < support_min=0.20. Market ticking UP — no bear signal at all.",
+        metrics:[{k:"bull_score",v:"0.82 > 0.60 ✗",cls:"bad"},{k:"bear_score",v:"0.00 < 0.20 ✗",cls:"bad"},{k:"r5m",v:"+0.05%",cls:"bad"},{k:"r15m",v:"+0.04%",cls:"bad"}]
+      },
+    ],
+    mlProb: 0.862, mlDir: "PE", dirConf: 0.71,
+    logs: [
+      { cls:"block", ts:"11:05:05", tag:"deterministic_rule_engine",
+        msg:"entry blocked: direction_evidence_mismatch dir=PE bull_score=0.82 > 0.60 bear_score=0.00 < 0.20 evidence={bull:0.82,bear:0.00,r5m:+0.05%}" }
+    ]
+  }
+];
+
+// ── Gate name display map ─────────────────────────────────────────────────────
+const GATE_STAGES = [
+  "HARD GATES", "REGIME ROUTING", "ML_ENTRY TIMING",
+  "DIRECTION EVIDENCE", "DIRECTION CONSENSUS",
+  "STRIKE / DEPTH", "POLICY + CONFIDENCE"
+];
+
+// ── Render ────────────────────────────────────────────────────────────────────
+let currentBar = null;
+
+function renderBarPicker() {
+  const el = document.getElementById('barPicker');
+  BARS.forEach(b => {
+    const btn = document.createElement('button');
+    btn.className = `bar-btn ${b.outcome}`;
+    btn.textContent = b.label;
+    btn.onclick = () => selectBar(b.id);
+    el.appendChild(btn);
+  });
+}
+
+function selectBar(id) {
+  currentBar = BARS.find(b => b.id === id);
+  document.querySelectorAll('.bar-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.bar-btn').forEach(b => {
+    if (b.textContent === currentBar.label) b.classList.add('active');
+  });
+  renderPipeline(currentBar);
+  renderDetail(currentBar);
+}
+
+function renderPipeline(bar) {
+  // Snapshot
+  const snap = bar.snap;
+  document.getElementById('snapValues').innerHTML = `
+    <div class="kv"><span>time</span> <strong>${snap.time}</strong></div>
+    <div class="kv"><span>BNF</span> <strong>${snap.fut.toLocaleString()}</strong></div>
+    <div class="kv"><span>regime</span> <strong>${snap.regime}</strong></div>
+    <div class="kv"><span>conf</span> <strong>${snap.regimeConf}</strong></div>
+    <div class="kv"><span>IV%</span> <strong>${snap.iv}</strong></div>
+    <div class="kv"><span>ATM</span> <strong>${snap.atm}</strong></div>
+  `;
+
+  // Gates
+  const gatesEl = document.getElementById('gates');
+  gatesEl.innerHTML = '';
+  let blocked = false;
+  GATE_STAGES.forEach((stageName, i) => {
+    const g = bar.gates.find(g => g.name === stageName);
+    const div = document.createElement('div');
+
+    if (blocked) {
+      div.className = 'gate';
+      div.innerHTML = `
+        <div class="gate-header">
+          <span class="gate-name">STAGE ${i+2} · ${stageName}</span>
+          <span class="gate-result pending">—</span>
+        </div>`;
+    } else if (!g) {
+      // not reached
+      div.className = 'gate active pass';
+      div.innerHTML = `
+        <div class="gate-header">
+          <span class="gate-name">STAGE ${i+2} · ${stageName}</span>
+          <span class="gate-result">PASS</span>
+        </div>
+        <div class="gate-body"><div class="gate-reason ok"><strong>Passed</strong></div></div>`;
+    } else {
+      const cls = g.result === 'pass' ? 'pass' : g.result === 'block' ? 'block' : 'skip-c';
+      const resultLabel = g.result === 'pass' ? 'PASS' : g.result === 'block' ? 'BLOCK' : 'SKIP';
+      const metricsHtml = g.metrics.map(m =>
+        `<div class="metric ${m.cls||''}"><span>${m.k}: </span><strong>${m.v}</strong></div>`
+      ).join('');
+      div.className = `gate active ${cls}`;
+      div.innerHTML = `
+        <div class="gate-header">
+          <span class="gate-name">STAGE ${i+2} · ${stageName}</span>
+          <span class="gate-result">${resultLabel}</span>
+        </div>
+        <div class="gate-body">
+          <div class="gate-reason">${g.reason}</div>
+          <div class="gate-metrics">${metricsHtml}</div>
+        </div>`;
+      if (g.result === 'block') blocked = true;
+    }
+
+    // arrow after each gate (except last)
+    gatesEl.appendChild(div);
+    if (i < GATE_STAGES.length - 1) {
+      const arr = document.createElement('div');
+      arr.className = 'arrow';
+      arr.textContent = blocked ? '·' : '↓';
+      gatesEl.appendChild(arr);
+    }
+  });
+
+  // Outcome
+  const ob = document.getElementById('outcomeBox');
+  const om = document.getElementById('outcomeMain');
+  const od = document.getElementById('outcomeDetail');
+  if (bar.outcome === 'traded') {
+    ob.className = 'outcome-box show trade';
+    om.textContent = 'TRADE TAKEN';
+    const r = bar.tradeResult;
+    od.innerHTML = `${r.pnl} · MFE ${r.mfe} · ${r.exit} · ${r.lots} lot`;
+  } else {
+    ob.className = 'outcome-box show no-trade';
+    om.textContent = 'NO TRADE';
+    const blocker = bar.gates.find(g => g.result === 'block');
+    od.textContent = blocker ? `blocked at: ${blocker.name}` : 'filtered';
+  }
+}
+
+function renderDetail(bar) {
+  const ev = bar.evidence;
+
+  // Market context
+  const m = bar.market;
+  document.getElementById('marketCtx').innerHTML = `
+    <div class="ctx-row"><span class="k">r5m</span><span class="v ${ev.r5m > 0 ? 'up' : 'dn'}">${m.r5m}</span></div>
+    <div class="ctx-row"><span class="k">r15m</span><span class="v ${ev.r15m > 0 ? 'up' : 'dn'}">${m.r15m}</span></div>
+    <div class="ctx-row"><span class="k">r30m</span><span class="v">${m.r30m}</span></div>
+    <div class="ctx-row"><span class="k">volume</span><span class="v">${m.volRatio}</span></div>
+    <div class="ctx-row"><span class="k">PCR</span><span class="v">${m.pcr}</span></div>
+    <div class="ctx-row"><span class="k">ORB</span><span class="v">${m.orb}</span></div>
+    <div class="ctx-row"><span class="k">ML_ENTRY prob</span><span class="v ${bar.mlProb >= 0.80 ? 'good' : 'warn'}">${(bar.mlProb*100).toFixed(0)}%</span></div>
+    <div class="ctx-row"><span class="k">ML direction</span><span class="v">${bar.mlDir}</span></div>
+  `;
+
+  // Evidence scores
+  const bullPct = Math.min(100, (ev.bull / 3) * 100);
+  const bearPct = Math.min(100, (ev.bear / 3) * 100);
+  const bullCls = (bar.mlDir === 'CE' && ev.bull > 0.2) ? 'good' : (bar.mlDir === 'PE' && ev.bull > 0.6) ? 'bad' : '';
+  const bearCls = (bar.mlDir === 'PE' && ev.bear > 0.2) ? 'good' : (bar.mlDir === 'CE' && ev.bear > 0.6) ? 'bad' : '';
+  document.getElementById('regimeCtx').innerHTML = `
+    <div class="evidence-bar-wrap">
+      <div class="evidence-bar-label">
+        <span class="${bullCls}">bull_score ${ev.bull.toFixed(2)}</span>
+        <span style="font-size:9px;color:#555">max 3.0</span>
+      </div>
+      <div class="evidence-bar-track"><div class="evidence-bar-fill bull-fill" style="width:${bullPct}%"></div></div>
+    </div>
+    <div class="evidence-bar-wrap" style="margin-top:8px">
+      <div class="evidence-bar-label">
+        <span class="${bearCls}">bear_score ${ev.bear.toFixed(2)}</span>
+        <span style="font-size:9px;color:#555">max 3.0</span>
+      </div>
+      <div class="evidence-bar-track"><div class="evidence-bar-fill bear-fill" style="width:${bearPct}%"></div></div>
+    </div>
+    <div style="margin-top:10px">
+    <div class="ctx-row"><span class="k">direction proposed</span><span class="v ${
+      (bar.mlDir==='PE' && ev.bull>0.6 && ev.bear<0.2) ? 'bad' :
+      (bar.mlDir==='CE' && ev.bear>0.6 && ev.bull<0.2) ? 'bad' : 'good'
+    }">${bar.mlDir} ${
+      (bar.mlDir==='PE' && ev.bull>0.6 && ev.bear<0.2) ? '← against evidence' :
+      (bar.mlDir==='CE' && ev.bear>0.6 && ev.bull<0.2) ? '← against evidence' : '← agrees with evidence'
+    }</span></div>
+    <div class="ctx-row"><span class="k">orh_broken</span><span class="v ${ev.orh?'up':''}">${ev.orh}</span></div>
+    <div class="ctx-row"><span class="k">orl_broken</span><span class="v ${ev.orl?'dn':''}">${ev.orl}</span></div>
+    </div>
+  `;
+
+  // Logs
+  document.getElementById('logLines').innerHTML = bar.logs.map(l => `
+    <div class="log-line ${l.cls}">
+      <span class="ts">${l.ts}</span>
+      <span class="tag">${l.tag}</span>
+      <span class="msg-${l.cls}"> ${l.msg}</span>
+    </div>
+  `).join('');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+renderBarPicker();
+selectBar("1230");   // default: show the winning trade
+</script>
+</body>
+</html>

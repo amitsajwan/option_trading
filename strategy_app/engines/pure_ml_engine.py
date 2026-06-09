@@ -1,4 +1,11 @@
-"""Pure-ML runtime engine (staged runtime bundle only)."""
+"""Pure-ML runtime engine (staged runtime bundle only).
+
+CLEANUP-BACKLOG (docs/ENGINE_DECISION_FLOW.md §9b): NOT the live engine. Live runs
+`deterministic_rule_engine`. This engine is referenced only by tests
+(test_pure_ml_engine.py, test_live_runtime_boundaries.py). RUNTIME_DECISION_FLOW.md
+documents THIS engine, not live. Keep only if pure-ML is a deliberate alternative;
+otherwise delete engine + tests + that doc together.
+"""
 
 from __future__ import annotations
 

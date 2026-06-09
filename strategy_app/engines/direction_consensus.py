@@ -48,6 +48,12 @@ def resolve_direction_consensus(
     regime_signal: Optional[RegimeSignal] = None,
 ) -> DirectionConsensusResult:
     """Score CE vs PE from multiple sources; veto if margin below threshold or contra-regime."""
+    # CLEANUP-BACKLOG (docs/ENGINE_DECISION_FLOW.md §9b): DORMANT for the live
+    # profile `trader_master_live_v1` — this function is only reached via the
+    # consensus profile (_process_entry_consensus) and the OFF v2 pipeline. Env
+    # knobs read below (DIRECTION_CONSENSUS_MIN_MARGIN, DIRECTION_ML_CONFIDENCE_MIN)
+    # have NO live effect. To change LIVE direction, edit _process_entry_votes
+    # or ml_entry.py:_resolve_direction — NOT here.
     regime_name = regime_signal.regime.value if regime_signal is not None else ""
     # E3-S2: SIDEWAYS regime requires a higher direction margin — flat markets
     # produce noisy signals.  DIRECTION_MIN_MARGIN_SIDEWAYS (default 2.0) overrides
@@ -136,6 +142,48 @@ def resolve_direction_consensus(
             sources=sources,
         )
     direction = Direction.CE if ce_score > pe_score else Direction.PE
+
+    # ML-confidence gate (consensus mode). Require the direction-ML model to be
+    # sufficiently confident in the CHOSEN side, else abstain. OFF by default
+    # (DIRECTION_ML_CONFIDENCE_MIN=0). Validated 2026-06-09: bars where the ML
+    # model is confident (|p-0.5| large) are 73-77% direction-accurate OOS vs
+    # ~53-55% for low-confidence bars — this gate trades the unsure bars away.
+    # NOTE: this works in consensus mode, unlike DIRECTION_ML_FILTER_MIN_PROB
+    # (which only fires in the standalone direction-ML policy path).
+    _ml_conf_min = _env_float("DIRECTION_ML_CONFIDENCE_MIN", 0.0)
+    if _ml_conf_min > 0 and ml_ce_prob is not None:
+        chosen_ml_prob = float(ml_ce_prob) if direction == Direction.CE else (1.0 - float(ml_ce_prob))
+        sources["ml_chosen_prob"] = chosen_ml_prob
+        if chosen_ml_prob < _ml_conf_min:
+            return DirectionConsensusResult(
+                direction=None,
+                ce_score=ce_score,
+                pe_score=pe_score,
+                margin=margin,
+                vetoed=True,
+                veto_reason=f"ml_confidence<{_ml_conf_min:g}({chosen_ml_prob:.2f})",
+                sources=sources,
+            )
+
+    # Regime guard — abstain on EXPANSION/event days. Validated 2026-06-09:
+    # when the opening range is wide (>= REGIME_GUARD_MAX_ORW, e.g. 0.8%) the
+    # direction edge collapses to noise (both ML and structural signals ~50%),
+    # because these are gap/event days where price expands directionally and the
+    # mean-reversion read breaks. OFF by default (REGIME_GUARD_MAX_ORW=0).
+    _max_orw = _env_float("REGIME_GUARD_MAX_ORW", 0.0)
+    if _max_orw > 0 and regime_signal is not None:
+        _ev = regime_signal.evidence if isinstance(regime_signal.evidence, dict) else {}
+        _orw = _ev.get("opening_range_width_pct")
+        if isinstance(_orw, (int, float)) and _orw >= _max_orw:
+            return DirectionConsensusResult(
+                direction=None,
+                ce_score=ce_score,
+                pe_score=pe_score,
+                margin=margin,
+                vetoed=True,
+                veto_reason=f"expansion_day_orw>={_max_orw:g}({_orw:.4f})",
+                sources=sources,
+            )
 
     # Regime-direction conflict veto.
     # If the regime classifier says BREAKOUT or PANIC with a clear bear/bull lean,

@@ -258,6 +258,17 @@ class MlEntryStrategy(BaseStrategy):
                 }
             )
             direction = hint_dir or Direction.CE
+            # Prev-tick confirmation (Track 1, 2026-06-09): only take the side if
+            # the immediate 1-min momentum AGREES with the chosen direction —
+            # i.e. don't fight the current move. OFF by default
+            # (ENTRY_CONFIRM_PREV_TICK). No delay/late-entry cost (uses the
+            # already-closed 1m bar).
+            if env_bool("ENTRY_CONFIRM_PREV_TICK") and direction in (Direction.CE, Direction.PE):
+                _r1 = snap.fut_return_1m
+                if _r1 is not None and float(_r1) != 0.0:
+                    _mom = Direction.CE if float(_r1) > 0 else Direction.PE
+                    if _mom != direction:
+                        return None  # abstain: prev_tick_momentum_disagree
         elif direction_mode in {"legacy", "direction_ml", "bind"}:
             direction, direction_source = _resolve_direction(snap)
             if direction is None:

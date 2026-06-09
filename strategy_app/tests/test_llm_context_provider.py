@@ -104,6 +104,17 @@ class TestNormalise:
     def test_empty_object(self):
         assert LLMContextProvider._normalise({}) == {}
 
+    def test_week_summary_and_news_mapped(self):
+        out = LLMContextProvider._normalise(
+            {
+                "day_assessment": "NEUTRAL",
+                "week_summary": "down ~0.5% on the week, range-bound",
+                "news": "unknown",
+            }
+        )
+        assert out["llm.week_summary"].startswith("down")
+        assert out["llm.news"] == "unknown"
+
 
 # ─────────────────────────── full provide() path ────────────────────────────
 
