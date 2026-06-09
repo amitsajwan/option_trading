@@ -107,4 +107,13 @@ A published **`entry_only_bundle`** that, on **true OOS**:
 
 Strategy then drops it into the live engine via `ENTRY_ML_MODEL_PATH` (no engine change), pairs it with the existing direction mechanism, and runs the **trade-level** validation (net after cost + drop-outlier robustness, §5.3) in **paper** before any live change. *(Direction remains the known open problem — a clean-move entry alone won't fix P&L if direction stays a coin-flip; that's a separate, later task.)*
 
+---
+
+## 8. Direction phase (FUTURE — separate from this entry job; context only)
+
+Direction is the *next* model after entry — **do not start it as part of this job.** But two findings define how to build it, so capture them now:
+
+- **There is a validated ~55% base direction member already:** `fade_r5m` (= PE if 5-min momentum is up; the market **mean-reverts**) scores **55.2% on n=950** big-move bars (large sample, not thin noise; `FOLLOW`=44.8% confirms it). That's the floor to beat — and it means **momentum-fade is a real signal**, but capped: correlated fades (r5m/r15m) ensemble to only ~55%.
+- **The retrained direction model's job is to ADD an *independent* signal, not replace the fade.** To clear the ~61% cost break-even, you need **model + fade = strong + strong agreement**, where the model is **independent of momentum** (so it adds info the fade doesn't have). The current direction model fails this — its confidence is a *magnitude* detector (predicts move size, ≤50% on side). So: train a direction model **for the side**, **calibrated**, **independent of momentum features where possible**, then **ensemble it with `fade_r5m`** — don't try to win on either alone.
+
 **Questions / context:** see `docs/ENGINE_DECISION_FLOW.md` (how the live engine consumes the model) and the memory notes on the direction findings.
