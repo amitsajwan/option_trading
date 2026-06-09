@@ -844,6 +844,17 @@ class DeterministicRuleEngine(StrategyEngine):
             if _orw is not None and float(_orw) >= _max_orw:
                 return None  # blocker: regime_guard_expansion (per-tick summary)
 
+        # Chop filter (Track 1, 2026-06-09): trade ONLY in the allowed regimes,
+        # e.g. ENTRY_ALLOWED_REGIMES=TRENDING,BREAKOUT — options bleed on chop,
+        # and the lottery's wins were all trend days. OFF by default (empty = all
+        # regimes). Comma-separated Regime values; skip if the bar's regime isn't listed.
+        _allowed = os.getenv("ENTRY_ALLOWED_REGIMES", "").strip()
+        if _allowed:
+            _allow_set = {r.strip().upper() for r in _allowed.split(",") if r.strip()}
+            _rname = regime_signal.regime.value if regime_signal is not None else ""
+            if _rname not in _allow_set:
+                return None  # blocker: regime_not_allowed (chop filter)
+
         tagger = os.getenv("ENTRY_REGIME_TAGGER", "").strip()
         if tagger:
             if self._session_regime_tag is None:
