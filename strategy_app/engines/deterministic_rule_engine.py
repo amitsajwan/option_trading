@@ -1122,7 +1122,7 @@ class DeterministicRuleEngine(StrategyEngine):
             return self._build_entry_signal(candidate, snap, risk, entry_votes, regime_signal, policy_decision)
         return None
 
-    def _process_entry_consensus(
+    def _process_entry_consensus(  # CLEANUP-BACKLOG §9b: DORMANT — only the consensus profile reaches this; live (trader_master_live_v1) uses the default dispatch below
         self,
         *,
         entry_votes: list[StrategyVote],
@@ -1269,6 +1269,10 @@ class DeterministicRuleEngine(StrategyEngine):
         regime_signal: RegimeSignal,
     ) -> Optional[TradeSignal]:
         """Run the v2 gate-cascade pipeline (STRATEGY_ENTRY_PIPELINE_V2=1)."""
+        # CLEANUP-BACKLOG (docs/ENGINE_DECISION_FLOW.md §9b): DORMANT — the v2
+        # pipeline is OFF in every live/sim config (STRATEGY_ENTRY_PIPELINE_V2=0).
+        # Candidate for deletion (with entry_pipeline_gates.py) once confirmed no
+        # config enables it.
         relax_conf = self._strategy_profile_id in _PROFILES_RELAX_REGIME_CONF
         is_consensus = self._strategy_profile_id in _PROFILES_ML_ENTRY_CONSENSUS
         gates = build_entry_pipeline(

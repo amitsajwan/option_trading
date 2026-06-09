@@ -152,6 +152,11 @@ def replay_day(
     from strategy_app.contracts import SignalType
     from strategy_app.position.exit_policy import build_default_exit_stack
 
+    # CLEANUP-BACKLOG (docs/ENGINE_DECISION_FLOW.md §9b): this DEFAULT differs from
+    # the LIVE profile (trader_master_live_v1). Live works only because ops_env
+    # passes STRATEGY_PROFILE_ID explicitly; if it ever doesn't, the sim silently
+    # runs a DIFFERENT direction path than live. Align this default to the live
+    # profile (highest-value cleanup — de-risks sim≠live).
     profile_id = os.getenv("STRATEGY_PROFILE_ID", "trader_master_ml_entry_consensus_v1") \
         or "trader_master_ml_entry_consensus_v1"
     min_conf_raw = os.getenv("STRATEGY_MIN_CONFIDENCE", "0.50")

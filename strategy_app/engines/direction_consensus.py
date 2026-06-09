@@ -48,6 +48,12 @@ def resolve_direction_consensus(
     regime_signal: Optional[RegimeSignal] = None,
 ) -> DirectionConsensusResult:
     """Score CE vs PE from multiple sources; veto if margin below threshold or contra-regime."""
+    # CLEANUP-BACKLOG (docs/ENGINE_DECISION_FLOW.md §9b): DORMANT for the live
+    # profile `trader_master_live_v1` — this function is only reached via the
+    # consensus profile (_process_entry_consensus) and the OFF v2 pipeline. Env
+    # knobs read below (DIRECTION_CONSENSUS_MIN_MARGIN, DIRECTION_ML_CONFIDENCE_MIN)
+    # have NO live effect. To change LIVE direction, edit _process_entry_votes
+    # or ml_entry.py:_resolve_direction — NOT here.
     regime_name = regime_signal.regime.value if regime_signal is not None else ""
     # E3-S2: SIDEWAYS regime requires a higher direction margin — flat markets
     # produce noisy signals.  DIRECTION_MIN_MARGIN_SIDEWAYS (default 2.0) overrides
