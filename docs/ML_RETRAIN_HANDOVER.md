@@ -1,8 +1,10 @@
-# ML Retrain — Handover for the ML Team
+# ML Entry-Model Retrain — Handover for the ML Team
 
-> **Date:** 2026-06-09 · **From:** strategy · **Goal:** retrain entry (and direction) with a **clean-directional label**, because the current magnitude-only label is the proven root cause of an unprofitable system.
+> **Date:** 2026-06-09 · **From:** strategy · **Goal:** retrain the **ENTRY model only** with a **clean-move label** (direction-agnostic). Direction is OUT of scope here — separate, later.
 >
 > Read this top to bottom — the *label* section is the actual ask; everything else is context + how-to.
+
+> **TL;DR (one line for the team):** Retrain the **entry model** with the label **`|move| ≥ X% within Y min AND the first 3 bars are in the same direction`** — a single binary, direction-agnostic. The "first 3 bars same direction" forces a *clean start* so the model stops firing on chop. Ship only if it beats the current entry model on **separation + OOS** and is **calibrated**.
 
 ---
 
@@ -22,35 +24,37 @@ After exhaustive testing on live data, here's what's established:
 
 ---
 
-## 2. THE ASK — the new label (this is the whole job)
+## 2. THE ASK — the new entry label (this is the whole job)
 
-Train entry as **two directional heads** on a **clean-directional** label, in **option-return / cost-aware** space.
+Retrain the **entry model only** — a single, **direction-agnostic** binary classifier — with a **clean-move** label.
 
 ### Label definition
 For a signal at bar **T**, over the next **Y minutes** (start with Y = 5 and Y = 10):
 
 ```
-CLEAN_UP   = (Close(T+Y) - Close(T)) >= X    AND   first N bars after T are up
-CLEAN_DOWN = (Close(T) - Close(T+Y)) >= X    AND   first N bars after T are down
+ENTRY_POSITIVE = |Close(T+Y) - Close(T)| >= X
+                 AND
+                 the first 3 bars after T are all in the same direction
+                 (all up, or all down — i.e. the move starts clean, no reversal)
 ```
 
-- **X = the move that clears cost**, not a round number. Costs ≈ 0.6%/leg, options move ~2.5% on a typical winner → set X so the *option* clears cost (≈0.10–0.20% underlying / ~70–110 pts; tune it). Express in **% not raw points** (level-invariant).
-- **N = 3** to start. The "first 3 bars in-direction" condition is what filters chop — it forces a *clean start*, not a round-trip range.
-- Train **two heads** (clean-up, clean-down). This couples entry + direction on a *consistent* target and gives the engine a `CE_wins` / `PE_wins` probability directly.
+- **Direction-agnostic:** a clean UP move and a clean DOWN move are **both POSITIVE.** This is an entry/magnitude model — it predicts *"a clean move is coming,"* NOT which way. (Direction is a separate problem, handled later — do not build it here.)
+- **X = the move that clears cost**, not a round number. Costs ≈ 0.6%/leg; set X so the *option* clears cost (≈0.10–0.20% underlying / ~70–110 pts; tune it). Express in **% not raw points** (level-invariant).
+- **"first 3 bars same direction"** is the key addition vs the old label — it forces a **clean start** so the model stops firing on chop (up-50 / down-50 / net-0 ranges that the old `|move|≥X` label counted as positive).
 
 ### Variants to sweep (pick the most learnable)
-| Variant | First-N condition | Note |
+| Variant | "clean start" condition | Note |
 |---|---|---|
-| **strict** | all 3 bars in-direction | cleanest, fewest positives |
-| **soft** | 2-of-3 OR net-positive over first 3 | more samples, more robust — **fallback if strict is too sparse** |
+| **strict** | all 3 bars same direction | cleanest, fewest positives |
+| **soft** | 2-of-3 same direction, OR net-positive over first 3 | more samples — **fallback if strict is too sparse** |
 | **efficiency** | `\|net\| / path >= 0.6` over Y | continuous "cleanliness" |
 
-> Existing structure to reuse: the **dual-direction bundle** (`strategy_app/ml/...`, `_resolve_direction_dual`, `ce_bundle`/`pe_bundle`) — the two-head model already has a home in the engine.
-
 ### What this buys us
-- Model learns **trend-vs-chop** from features (a hand-coded regime gate can't).
-- "Clean start" is in the **label**, so the model predicts it at T → **enter immediately, no late-entry cost.**
-- Fires **less often** (clean trends are rarer) — that's intended: *"big move, big profit, but less."*
+- The model learns **trend-vs-chop** from features — it stops firing on ranges where options bleed.
+- It's a **drop-in replacement** for the current entry model (same direction-agnostic shape) — the engine already consumes an `entry_only_bundle` via `ENTRY_ML_MODEL_PATH`; no engine change needed.
+- Fires **less often** (clean moves are rarer than any-move) — intended: *"big move, big profit, but less."*
+
+> **Scope note:** this is ENTRY only. To *trade*, the system still needs a direction (CE/PE) — that stays on the existing mechanism for now and is a **separate future task.** Do not couple direction into this model.
 
 ---
 
@@ -97,6 +101,11 @@ A model/config is **only** validated if it passes ALL:
 
 ## 7. Definition of done
 
-A published **dual-head entry/direction bundle** that, on **true OOS**, is **net-positive after cost** and **survives drop-outlier robustness** (not carried by 1–2 trades), with calibrated probabilities. Then strategy wires it into the live engine (paper → validate → live).
+A published **`entry_only_bundle`** that, on **true OOS**:
+- **beats the current entry model** at predicting clean moves (separation + AUC on the clean-move label),
+- is **calibrated** (predicted prob ≈ realized clean-move frequency),
+- and fires on **higher-quality (cleaner) setups** — verifiable by lower chop-rate among fired bars.
+
+Strategy then drops it into the live engine via `ENTRY_ML_MODEL_PATH` (no engine change), pairs it with the existing direction mechanism, and runs the **trade-level** validation (net after cost + drop-outlier robustness, §5.3) in **paper** before any live change. *(Direction remains the known open problem — a clean-move entry alone won't fix P&L if direction stays a coin-flip; that's a separate, later task.)*
 
 **Questions / context:** see `docs/ENGINE_DECISION_FLOW.md` (how the live engine consumes the model) and the memory notes on the direction findings.
