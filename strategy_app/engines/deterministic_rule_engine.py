@@ -828,6 +828,22 @@ class DeterministicRuleEngine(StrategyEngine):
             # Blocker captured centrally as "entry_time_windows" in the per-tick
             # decisions.jsonl summary (see _derive_entry_blocker).
             return None
+
+        # Regime guard — abstain on EXPANSION/event days (wide opening range),
+        # where direction goes ~50% random (validated 2026-06-09). OFF by default
+        # (REGIME_GUARD_MAX_ORW=0). This MUST live on the common entry path: the
+        # consensus resolver (resolve_direction_consensus) is bypassed for non-
+        # consensus profiles like trader_master_live_v1, so a guard placed there
+        # never fires for the live engine.
+        try:
+            _max_orw = float(os.getenv("REGIME_GUARD_MAX_ORW", "0") or "0")
+        except ValueError:
+            _max_orw = 0.0
+        if _max_orw > 0.0:
+            _orw = snap.opening_range_width_pct
+            if _orw is not None and float(_orw) >= _max_orw:
+                return None  # blocker: regime_guard_expansion (per-tick summary)
+
         tagger = os.getenv("ENTRY_REGIME_TAGGER", "").strip()
         if tagger:
             if self._session_regime_tag is None:
