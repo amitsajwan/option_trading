@@ -72,14 +72,14 @@ def _load_view(view: str, start: str, end: str, cols: List[str] | None = None) -
     return d[(d["trade_date"] >= start) & (d["trade_date"] <= end)].copy()
 
 
-def _labels(min_pct: float, start: str, end: str) -> pd.DataFrame:
+def _labels(min_pct: float, start: str, end: str, side: str = "any") -> pd.DataFrame:
     from ml_pipeline_2.staged.entry_move_oracle import build_entry_bn_move_oracle
 
     sup = _load_view(
         "snapshots_ml_flat_v2", start, end,
         ["trade_date", "timestamp", "snapshot_id", "px_fut_close", "px_fut_high", "px_fut_low"],
     )
-    orc = build_entry_bn_move_oracle(sup, horizon_minutes=5, min_pct=min_pct)
+    orc = build_entry_bn_move_oracle(sup, horizon_minutes=5, min_pct=min_pct, side=side)
     return orc[orc["entry_label_valid"] == 1][["snapshot_id", "entry_label"]]
 
 
@@ -199,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--min-pct", type=float, required=True, help="MUST match the manifest stage1_entry_move.min_pct")
+    ap.add_argument("--side", choices=["any", "up", "down"], default="any",
+                    help="signed label: 'up'=CE (forward high), 'down'=PE (forward low), 'any'=magnitude. MUST match the manifest labeler.")
     ap.add_argument("--label-tag", required=True)
     ap.add_argument("--feature-set-label", default="fo_comprehensive")
     ap.add_argument("--view", default="stage1_entry_view_v2")
@@ -233,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def frame(view_start, view_end):
         feat = _load_view(args.view, view_start, view_end)
-        lab = _labels(args.min_pct, view_start, view_end)
+        lab = _labels(args.min_pct, view_start, view_end, side=args.side)
         m = feat.merge(lab, on="snapshot_id", how="inner")
         X = m.reindex(columns=features)
         for f in features:
@@ -295,8 +297,12 @@ def main(argv: list[str] | None = None) -> int:
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "source": "entry_comprehensive_5m_calibrated",
         "source_run": run_dir.name,
+        # side -> trade direction this model scores. up=CE, down=PE, any=magnitude.
+        "side": args.side,
+        "direction": {"up": "CE", "down": "PE", "any": "ANY"}[args.side],
         "source_description": (
-            f"Full-feature entry model. 5-min EITHER-direction move, level-invariant "
+            f"Full-feature entry model. 5-min "
+            f"{ {'up': 'UP/CE', 'down': 'DOWN/PE', 'any': 'EITHER-direction'}[args.side] } move, level-invariant "
             f"min_pct={args.min_pct} ({args.min_pct*100:.2f}%). {selected.get('name')} on {args.view} "
             f"({len(features)} feat, {feature_set}). Isotonic-calibrated on 2024-05..07; OOS 2024-08..10."
         ),
@@ -318,7 +324,8 @@ def main(argv: list[str] | None = None) -> int:
         "ship_gates": gates,
         "ship_gates_all_pass": all_pass,
         "training_metadata": {
-            "labeler": "entry_bn_5m_100pts_v1",
+            "labeler": {"up": "entry_bn_5m_up_v1", "down": "entry_bn_5m_down_v1", "any": "entry_bn_5m_100pts_v1"}[args.side],
+            "side": args.side,
             "horizon_minutes": 5,
             "min_pct": args.min_pct,
             "view": args.view,

@@ -3702,13 +3702,20 @@ def run_staged_research(ctx: RunContext) -> Dict[str, Any]:
     cost_per_trade = float(manifest["training"]["cost_per_trade"])
     oracle, utility = _build_oracle_targets(support, recipe_catalog, cost_per_trade=cost_per_trade)
     stage1_labeler_id = str((manifest.get("labels") or {}).get("stage1_labeler_id") or "")
-    if stage1_labeler_id == "entry_bn_5m_100pts_v1":
+    if stage1_labeler_id in ("entry_bn_5m_100pts_v1", "entry_bn_5m_up_v1", "entry_bn_5m_down_v1"):
         move_cfg = stage1_entry_move_config(manifest)
+        # Signed dual-model support: labeler_id is the single source of truth for
+        # direction. up_v1 -> CE (forward high clears +thr); down_v1 -> PE (low -thr).
+        side = {
+            "entry_bn_5m_up_v1": "up",
+            "entry_bn_5m_down_v1": "down",
+        }.get(stage1_labeler_id, "any")
         move_oracle = build_entry_bn_move_oracle(
             support,
             horizon_minutes=int(move_cfg["horizon_minutes"]),
             min_points=float(move_cfg["min_points"]),
             min_pct=(None if move_cfg.get("min_pct") is None else float(move_cfg["min_pct"])),
+            side=side,
         )
         oracle, utility = merge_recipe_utility_with_entry_move_oracle(oracle, utility, move_oracle)
     elif stage1_labeler_id in ("entry_bn_clean_move_strict_v1", "entry_bn_clean_move_soft_v1"):
