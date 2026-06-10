@@ -51,6 +51,7 @@ def _label_day_moves(
     horizon_minutes: int,
     min_points: float,
     min_pct: float | None = None,
+    side: str = "any",
 ) -> pd.DataFrame:
     work = day.sort_values("timestamp").reset_index(drop=True)
     n = len(work)
@@ -76,6 +77,8 @@ def _label_day_moves(
             raise ValueError("min_pct must be positive")
     elif min_pts <= 0.0:
         raise ValueError("min_points must be positive")
+    if side not in ("any", "up", "down"):
+        raise ValueError(f"side must be 'any', 'up' or 'down', got {side!r}")
 
     for i in range(n):
         px = entry[i]
@@ -95,7 +98,15 @@ def _label_day_moves(
         up_move[i] = up
         down_move[i] = down
         threshold_pct[i] = thr
-        if max(up, down) >= thr:
+        # side: 'up' -> CE model (forward HIGH clears +thr); 'down' -> PE model
+        # (forward LOW clears -thr); 'any' -> legacy direction-agnostic magnitude.
+        if side == "up":
+            positive = up >= thr
+        elif side == "down":
+            positive = down >= thr
+        else:
+            positive = max(up, down) >= thr
+        if positive:
             labels[i] = 1
 
     out = work.loc[:, KEY_COLUMNS].copy()
@@ -124,12 +135,20 @@ def build_entry_bn_move_oracle(
     horizon_minutes: int = 5,
     min_points: float = 100.0,
     min_pct: float | None = None,
+    side: str = "any",
 ) -> pd.DataFrame:
     """Build stage-1 entry oracle from futures 5m excursion (points → % of price).
 
     When ``min_pct`` (a price fraction, e.g. 0.0010 == 0.10%) is supplied it
     defines the move threshold directly and ``min_points`` is ignored, keeping
     label difficulty constant across index levels.
+
+    ``side`` selects the directional target (signed dual-model support):
+      * ``"any"``  — legacy direction-agnostic magnitude (max(up, down) >= thr).
+      * ``"up"``   — CE model: positive iff the forward HIGH clears +thr.
+      * ``"down"`` — PE model: positive iff the forward LOW clears -thr.
+    ``entry_up_move_pct`` / ``entry_down_move_pct`` are emitted regardless of
+    ``side`` so the publisher can re-derive either label from one oracle.
     """
     if bool(support.duplicated(subset=KEY_COLUMNS).any()):
         raise ValueError("support frame contains duplicate staged oracle keys")
@@ -151,6 +170,7 @@ def build_entry_bn_move_oracle(
             horizon_minutes=horizon_minutes,
             min_points=min_points,
             min_pct=min_pct,
+            side=side,
         )
         for _, day in frame.groupby("trade_date", sort=False)
     ]
