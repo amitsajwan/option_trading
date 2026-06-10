@@ -117,6 +117,13 @@ _status() {
 
 case "${1:-start}" in
   status) _status ;;
+  _foreground)
+    # Internal entrypoint: runs the orchestrator in the FOREGROUND so the
+    # surrounding tmux (or nohup) session stays alive for the whole run.
+    echo "$$" > "${PIDFILE}"
+    trap 'rm -f "${PIDFILE}"' EXIT
+    _orchestrate
+    ;;
   start)
     if [[ -f "${PIDFILE}" ]] && kill -0 "$(cat "${PIDFILE}" 2>/dev/null || echo)" 2>/dev/null; then
       echo "Already running pid=$(cat "${PIDFILE}"). Use: $0 status"; exit 1
@@ -125,11 +132,16 @@ case "${1:-start}" in
       if tmux has-session -t "${TMUX_SESSION}" 2>/dev/null; then
         echo "tmux session ${TMUX_SESSION} exists. Attach: tmux attach -t ${TMUX_SESSION}"; exit 1
       fi
+      # Run the orchestrator in the FOREGROUND of the detached session. The
+      # session lives exactly as long as _orchestrate, keeping the python HPO
+      # (a child of this session) alive until completion.
       tmux new-session -d -s "${TMUX_SESSION}" \
-        "RETRAIN_NO_TMUX=1 bash ${REPO_ROOT}/ops/gcp/run_entry_fullfeature_retrain_vm.sh start"
-      echo "Started in tmux ${TMUX_SESSION}. Status: bash $0 status"; exit 0
+        "RETRAIN_NO_TMUX=1 bash ${REPO_ROOT}/ops/gcp/run_entry_fullfeature_retrain_vm.sh _foreground >> ${MASTER_LOG} 2>&1"
+      sleep 1
+      echo "Started in tmux ${TMUX_SESSION} pid=$(cat "${PIDFILE}" 2>/dev/null || echo pending). Status: bash $0 status"; exit 0
     fi
-    ( echo $$ > "${PIDFILE}"; _orchestrate ) >> "${MASTER_LOG}" 2>&1 &
+    # No-tmux fallback: detach via nohup+setsid so SIGHUP on shell exit can't kill it.
+    setsid nohup bash "${REPO_ROOT}/ops/gcp/run_entry_fullfeature_retrain_vm.sh" _foreground >> "${MASTER_LOG}" 2>&1 < /dev/null &
     disown 2>/dev/null || true
     sleep 1
     echo "Started pid=$(cat "${PIDFILE}" 2>/dev/null || echo unknown) log=${MASTER_LOG}"
