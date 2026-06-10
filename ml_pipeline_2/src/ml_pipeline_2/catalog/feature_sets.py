@@ -521,6 +521,87 @@ DEFAULT_FEATURE_SET_SPECS: List[FeatureSetSpec] = [
             r"^ctx_is_near_expiry$",
         ),
     ),
+    # Comprehensive entry feature set — the deliberate UNION of every engineered
+    # feature group available in snapshots_ml_flat_v2/v3, built so the entry HPO
+    # CANNOT collapse onto a 3-feature OI/volume subset (the fo_oi_pcr_momentum
+    # failure documented in ENTRY_MODEL_FULLFEATURE_HANDOVER.md). It spans:
+    #   - price momentum / EMA trend / oscillators / VWAP-distance / day-range
+    #   - futures flow + full options flow (OI, volume, PCR, ATM OI change)
+    #   - IV structure (skew, percentile, ATM CE/PE IV) when present in the view
+    #   - VIX + daily macro regime + intraday regime flags + expiry context
+    #   - velocity (vel_*, ctx_am_*, ctx_gap_*, adx, vol_spike) + oracle rolling
+    # Level-invariant by construction: raw absolute price levels (px_*, vwap_fut,
+    # absolute ATM strike) and the chain-row count are excluded so the model does
+    # not learn the 2022->2026 index drift. Regexes for columns absent from a
+    # given dataset are silently dropped by the resolver.
+    FeatureSetSpec(
+        name="fo_comprehensive",
+        include_regex=(
+            # Price momentum / trend / volatility
+            r"^ret_",
+            r"^ema_",
+            r"^osc_",
+            r"^rsi_14_",
+            r"^atr_14_",
+            r"^adx_14$",
+            r"^vol_spike_ratio$",
+            r"^price_vs_vwap$",
+            r"^vwap_distance$",
+            r"^dist_",
+            r"^distance_from_day_",
+            # Futures flow
+            r"^fut_flow_",
+            # Options flow / OI / PCR
+            r"^opt_flow_",
+            r"^pcr$",
+            r"^pcr_oi$",
+            r"^pcr_change_5m$",
+            r"^pcr_change_15m$",
+            r"^atm_oi_ratio$",
+            r"^near_atm_oi_ratio$",
+            r"^ce_oi_total$",
+            r"^pe_oi_total$",
+            r"^ce_volume_total$",
+            r"^pe_volume_total$",
+            r"^ce_pe_oi_diff$",
+            r"^ce_pe_volume_diff$",
+            r"^atm_ce_oi$",
+            r"^atm_pe_oi$",
+            r"^dealer_proxy_",
+            # IV structure (present in enriched views; silently absent otherwise)
+            r"^iv_",
+            r".*_iv$",
+            r"^iv_skew$",
+            r"^iv_percentile$",
+            r"^vix_current$",
+            r"^vix_intraday_chg$",
+            # Daily macro regime + intraday regime flags
+            r"^regime_",
+            r"^ctx_",
+            # Velocity / morning context
+            r"^vel_",
+            r"^ctx_am_",
+            r"^ctx_gap_",
+            # Oracle rolling win-rate memory
+            r"^oracle_rolling_ce_win_rate_",
+            r"^oracle_rolling_pe_win_rate_",
+            r"^ce_pe_win_rate_diff_",
+            # Time / session context
+            r"^time_",
+            r"^minute_of_day$",
+            r"^minute_index$",
+            r"^minutes_since_open$",
+            r"^day_of_week$",
+        ),
+        exclude_regex=(
+            # Raw absolute price levels — non-stationary across index drift
+            r"^px_",
+            r"^vwap_fut$",
+            # Absolute strike level + raw chain-row count (pure noise / level)
+            r"^opt_flow_atm_strike$",
+            r"^opt_flow_rows$",
+        ),
+    ),
 ]
 
 
