@@ -23,11 +23,42 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.request
 
 logger = logging.getLogger(__name__)
+
+
+def _salvage_brief(text: str) -> dict | None:
+    """Regex-salvage the key brief fields from a TRUNCATED or grounding-decorated
+    response (Gemini's grounded reply sometimes cuts off mid-JSON), so a valid bias
+    isn't lost just because the object never closed. Returns None if no bias found."""
+    def field(key: str, quoted: bool = True):
+        if quoted:
+            m = re.search(r'"' + key + r'"\s*:\s*"([^"]*)"', text)
+        else:
+            m = re.search(r'"' + key + r'"\s*:\s*([0-9.]+|true|false)', text, re.I)
+        return m.group(1) if m else None
+
+    bias = field("day_bias")
+    if not bias:
+        return None
+    out: dict = {"day_bias": bias}
+    conv = field("conviction", quoted=False)
+    if conv is not None:
+        try:
+            out["conviction"] = float(conv)
+        except ValueError:
+            pass
+    gr = field("grounded", quoted=False)
+    if gr is not None:
+        out["grounded"] = gr.strip().lower() == "true"
+    ns = field("news_summary")
+    if ns:
+        out["news_summary"] = ns
+    return out
 
 _DEFAULT_MODEL = "gemini-2.5-flash"
 _PROMPT = (
@@ -191,6 +222,8 @@ def fetch_session_brief(context: dict, *, api_key: str, model: str | None = None
         obj = extract_json_object(text)
     except Exception:
         obj = None
+    if not isinstance(obj, dict):
+        obj = _salvage_brief(text)   # truncated/decorated JSON -> regex-salvage the bias
     if not isinstance(obj, dict):
         return {**neutral, "news_summary": text[:400]}
     out = {**neutral, **obj}
