@@ -128,8 +128,21 @@ class SessionBiasStore:
                      and (now - cur.fetched_at) < self._ttl)
             if fresh and not force:
                 return cur
+            # First brief of the day = morning thesis; later refreshes = intraday update
+            # that reassesses the prior view.
+            same_day_prior = cur if (cur is not None and cur.trade_date == day) else None
+            phase = "intraday" if same_day_prior is not None else "morning"
+            prior = None
+            if same_day_prior is not None:
+                prior = {
+                    "day_bias": same_day_prior.day_bias,
+                    "conviction": same_day_prior.conviction,
+                    "grounded": same_day_prior.grounded,
+                    "news_summary": same_day_prior.news_summary,
+                }
             try:
-                brief = fetch_session_brief(build_context(snap), api_key=self._api_key, model=self._model)
+                brief = fetch_session_brief(build_context(snap), api_key=self._api_key,
+                                            model=self._model, phase=phase, prior=prior)
             except Exception:
                 logger.debug("session_bias: fetch failed", exc_info=True)
                 return cur  # keep stale rather than blank

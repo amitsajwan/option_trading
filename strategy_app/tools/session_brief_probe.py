@@ -25,8 +25,12 @@ ctx = build_context(acc)
 
 print("=== CONTEXT (our levels sent to Gemini) ===")
 print(json.dumps(ctx, indent=2, default=str))
-print("\n=== PROMPT ===")
-print(_brief_prompt(ctx))
+print("\n========== MORNING PROMPT ==========")
+print(_brief_prompt(ctx, phase="morning"))
+print("\n========== INTRADAY (30-min) PROMPT ==========")
+_prior = {"day_bias": "BEARISH", "conviction": 0.6, "grounded": True,
+          "news_summary": "US closed lower; GIFT Nifty down ~0.4%; banks weak on FII selling."}
+print(_brief_prompt({**ctx, "time": "11:50:00"}, phase="intraday", prior=_prior))
 
 key = (os.getenv("GEMINI_WEB_API_KEY", "") or os.getenv("BRAIN_LLM_API_KEY", "")).strip()
 if not key:
