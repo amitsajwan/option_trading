@@ -280,6 +280,43 @@ class MlEntryStrategy(BaseStrategy):
                 return None
             direction = dir_result.direction
             raw_signals.update(dir_result.as_raw_signals())
+        elif direction_mode == "regime_dual":
+            # STEP 1: RegimeDirector picks the side; STEP 2: the matching signed
+            # CE/PE model confirms a move that way. BRAIN_DUAL_MODE=shadow logs the
+            # verdict but lets composite drive the real order (collect live
+            # follow-through with no risk); =live/paper -> regime_dual drives + vetoes.
+            from ...brain.regime_director import RegimeDirector
+            from ...ml.dual_entry_confirmer import DualEntryConfirmer
+
+            verdict = RegimeDirector().decide(snap)
+            confirm = (
+                DualEntryConfirmer().confirm(verdict.side, snap)
+                if verdict.side in ("CE", "PE")
+                else None
+            )
+            raw_signals.update(
+                {
+                    "regime_side": verdict.side,
+                    "regime_signal": verdict.signal,
+                    "regime_confidence": round(verdict.confidence, 3),
+                    "regime_breakdown": verdict.breakdown,
+                    "regime_reason": verdict.reason,
+                }
+            )
+            if confirm is not None:
+                raw_signals.update(confirm.as_raw_signals())
+            if os.getenv("BRAIN_DUAL_MODE", "shadow").strip().lower() == "shadow":
+                dir_result = resolve_entry_direction(snap)
+                if dir_result.vetoed or dir_result.direction is None:
+                    return None
+                direction = dir_result.direction
+                raw_signals.update(dir_result.as_raw_signals())
+                raw_signals["direction_source"] = "regime_dual_shadow"
+            else:
+                if verdict.side not in ("CE", "PE") or confirm is None or not confirm.fire:
+                    return None
+                direction = Direction.CE if verdict.side == "CE" else Direction.PE
+                raw_signals["direction_source"] = f"regime_dual:{verdict.signal}"
         else:
             dir_result = resolve_entry_direction(snap)
             if dir_result.vetoed or dir_result.direction is None:

@@ -40,11 +40,18 @@ A model can only be as good as the information in its features. Relabeling the e
 
 - **Output:** a calibrated probability per side; the model does **not** say CE/PE — **direction is supplied live by regime**, then we fire the matching side if its prob clears the threshold. Bundle records `side` / `direction` for runtime.
 - **Auto-publishes** when gates pass (no hold). Orchestrator: `ops/gcp/run_dual_entry_retrain_vm.sh`.
-- **What extra these need to actually work (beyond what's built):**
+- **What extra these need to actually work:**
   1. **Regime features** in the view (realized-vol state, trend-vs-range, dist-from-VWAP/max_pain, time-of-day) so the model learns the **follow-vs-fade flip**. *Current build uses `fo_comprehensive` only — regime features are the first upgrade if v1 underwhelms.*
-  2. **A live regime classifier / switch** (bull→CE, bear→PE, or consult-both) — this is the hinge; measured today that naive flow-following loses (43%) and fade wins (57%) in the current regime.
-  3. **Runtime dual-bundle wiring** + a regime gate in `ml_entry.py` (today only a single `ENTRY_ML_MODEL_PATH` is loaded).
-  4. **Honest eval:** per-side AUC, **follow-through on fired bars**, **per-year** (so it isn't just fitting 2026 reversion).
+  2. ✅ **Live regime classifier / switch — BUILT** (`strategy_app/brain/regime_director.py`): pluggable `REGIME_DIRECTION_SIGNAL` ∈ {agreement_lever (default, validated 61%), ema_cross, vwap, fade_vwap, combo}. Slot-1 = direction-first.
+  3. ✅ **Runtime dual-bundle wiring — BUILT** (`strategy_app/ml/dual_entry_confirmer.py` + `ml_entry.py` mode `ML_ENTRY_DIRECTION_MODE=regime_dual`, `ENTRY_CE_MODEL_PATH`/`ENTRY_PE_MODEL_PATH`, `BRAIN_DUAL_MODE=shadow|live`).
+  4. **Honest eval — harness BUILT** (`strategy_app/tools/dual_regime_replay.py`): grades each detector's conditioned follow-through; run per-year + recent. Still TODO: pick the winning detector + per-side thresholds from its output, then shadow live.
+
+### Dual-model entry flow (regime_dual mode)
+```
+snap -> RegimeDirector.decide() -> side (CE/PE/ABSTAIN)   [step 1: direction-first]
+     -> DualEntryConfirmer.confirm(side) -> fire?/prob     [step 2: matching CE/PE model]
+     -> ml_entry: shadow (log only) | live (drive + veto)
+```
 
 ## D. LLM / oversight (shadow only)
 | Component | Status | Result |
