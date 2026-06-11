@@ -286,9 +286,21 @@ class MlEntryStrategy(BaseStrategy):
             # verdict but lets composite drive the real order (collect live
             # follow-through with no risk); =live/paper -> regime_dual drives + vetoes.
             from ...brain.regime_director import RegimeDirector
+            from ...brain.session_bias import get_session_bias_store
             from ...ml.dual_entry_confirmer import DualEntryConfirmer
 
-            verdict = RegimeDirector().decide(snap)
+            # Gemini session-bias (live news) as a sense: refresh in the background
+            # (non-blocking) and fold the held thesis into combo (confirm/veto + reason).
+            _store = get_session_bias_store()
+            try:
+                _store.refresh_async(snap)
+            except Exception:
+                pass
+            _bias = _store.current()
+            if _bias is not None:
+                raw_signals.update(_bias.as_sense())
+                raw_signals["session_plan"] = (_bias.plan or "")[:200]
+            verdict = RegimeDirector().decide(snap, session_bias=_bias)
             confirm = (
                 DualEntryConfirmer().confirm(verdict.side, snap)
                 if verdict.side in ("CE", "PE")
