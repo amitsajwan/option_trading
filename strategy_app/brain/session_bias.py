@@ -84,7 +84,7 @@ def build_context(snap: SnapshotAccessor) -> Dict[str, Any]:
         "time": sc.get("time"),
         "days_to_expiry": snap.days_to_expiry,
         "spot": snap.fut_close,
-        "open": (raw.get("futures_bar") or {}).get("open"),
+        "open": snap.fut_open,
         "prev_day_high": sl.get("prev_day_high"),
         "prev_day_low": sl.get("prev_day_low"),
         "prev_day_close": sl.get("prev_day_close"),
@@ -111,6 +111,8 @@ class SessionBiasStore:
         self._enabled = _env_bool("GROUNDING_ENABLED", False) if enabled is None else enabled
         self._lock = threading.Lock()
         self._bias: Optional[SessionBias] = None
+        self._day_open: Optional[float] = None   # captured at the first brief of the day
+        self._day_open_date: str = ""
 
     @property
     def enabled(self) -> bool:
@@ -140,8 +142,16 @@ class SessionBiasStore:
                     "grounded": same_day_prior.grounded,
                     "news_summary": same_day_prior.news_summary,
                 }
+            ctx = build_context(snap)
+            # Capture the TRUE day-open once (first brief of the day) and carry it into
+            # every later brief — so intraday refreshes still know where the day opened.
+            if self._day_open_date != day:
+                self._day_open = ctx.get("open")
+                self._day_open_date = day
+            if self._day_open is not None:
+                ctx["open"] = self._day_open
             try:
-                brief = fetch_session_brief(build_context(snap), api_key=self._api_key,
+                brief = fetch_session_brief(ctx, api_key=self._api_key,
                                             model=self._model, phase=phase, prior=prior)
             except Exception:
                 logger.debug("session_bias: fetch failed", exc_info=True)

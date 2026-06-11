@@ -120,6 +120,9 @@ def _brief_prompt(ctx: dict, *, phase: str = "morning", prior: dict | None = Non
                 "mid-session. Be concrete and skeptical.\n\n")
     else:
         step1 = (
+            "This is the SESSION OPEN — the day's range is still forming (treat today_open / opening "
+            "range below as the early picture, not a settled trend). Set the day thesis from the "
+            "overnight set-up.\n"
             "STEP 1 - RETRIEVE LIVE INFO NOW via web search (do NOT use training memory; only state "
             "what current search results verify):\n"
             "  - Overnight/global cues: US close (Dow/Nasdaq/S&P), GIFT Nifty / SGX Nifty indication for "
