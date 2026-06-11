@@ -65,6 +65,29 @@ def test_missing_fields_never_raise():
     assert RegimeDirector("agreement_lever").decide(snap()).side == ABSTAIN
 
 
+class _Bias:
+    def __init__(self, side, conviction, grounded, news="news"):
+        self.side, self.conviction, self.grounded, self.news_summary = side, conviction, grounded, news
+
+
+def test_llm_overlay_vetoes_contradicting_side():
+    # structure says CE, grounded high-conviction LLM says PE -> ABSTAIN (veto)
+    v = RegimeDirector("combo").decide(snap(**CE_AGREE), session_bias=_Bias("PE", 0.8, True))
+    assert v.side == ABSTAIN and "VETO" in v.reason
+
+
+def test_llm_overlay_agrees_boosts_and_annotates():
+    v = RegimeDirector("combo").decide(snap(**CE_AGREE), session_bias=_Bias("CE", 0.8, True))
+    assert v.side == CE and "AGREES" in v.reason
+
+
+def test_llm_overlay_ignored_when_ungrounded_or_lowconv():
+    base = RegimeDirector("combo").decide(snap(**CE_AGREE))
+    v1 = RegimeDirector("combo").decide(snap(**CE_AGREE), session_bias=_Bias("PE", 0.9, False))  # ungrounded
+    v2 = RegimeDirector("combo").decide(snap(**CE_AGREE), session_bias=_Bias("PE", 0.2, True))   # low conv
+    assert v1.side == base.side == CE and v2.side == CE  # structure stands
+
+
 def test_confirmer_side_validation_and_missing_bundle():
     c = DualEntryConfirmer(ce_path="", pe_path="")
     assert c.confirm("XX", snap()).fire is False           # bad side

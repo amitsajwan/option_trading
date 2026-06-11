@@ -197,7 +197,7 @@ class RegimeDirector:
             logger.warning("regime_director: unknown signal %r, using %s", self.signal, DEFAULT_SIGNAL)
             self.signal = DEFAULT_SIGNAL
 
-    def decide(self, snap: SnapshotAccessor) -> RegimeVerdict:
+    def decide(self, snap: SnapshotAccessor, session_bias: Any = None) -> RegimeVerdict:
         try:
             verdict = _DETECTORS[self.signal](snap)
         except Exception:
@@ -209,4 +209,43 @@ class RegimeDirector:
             verdict.trend_dir = trend_dir
         except Exception:
             pass
+        if session_bias is not None:
+            _apply_llm_overlay(verdict, session_bias)
         return verdict
+
+
+def _apply_llm_overlay(v: RegimeVerdict, bias: Any,
+                       min_conviction: float = None) -> None:
+    """Fold the Gemini session bias (live news) into the verdict:
+      - a grounded, high-conviction LLM bias that CONTRADICTS the structural side
+        VETOES it (-> ABSTAIN: don't trade into the news),
+      - one that AGREES boosts confidence,
+      - and either way the LLM's news becomes the decision REASON.
+    The LLM never creates a side on its own (it confirms/vetoes structure, not leads).
+    Controlled by REGIME_LLM_MIN_CONVICTION (default 0.55); never raises.
+    """
+    if min_conviction is None:
+        try:
+            min_conviction = float(os.getenv("REGIME_LLM_MIN_CONVICTION", "0.55") or 0.55)
+        except ValueError:
+            min_conviction = 0.55
+    try:
+        grounded = bool(getattr(bias, "grounded", False))
+        bside = getattr(bias, "side", None)            # CE / PE / None
+        conv = float(getattr(bias, "conviction", 0.0) or 0.0)
+        news = str(getattr(bias, "news_summary", "") or "")
+    except Exception:
+        return
+    v.breakdown["llm_bias"] = bside
+    v.breakdown["llm_conviction"] = round(conv, 2)
+    v.breakdown["llm_grounded"] = grounded
+    if (not grounded) or conv < min_conviction or bside not in (CE, PE):
+        return  # no strong grounded view -> structure stands as-is
+    if v.side in (CE, PE):
+        if bside == v.side:
+            v.confidence = min(1.0, v.confidence + 0.15)
+            v.reason = f"{v.reason}; LLM AGREES {bside} ({conv:.2f}): {news[:140]}"
+        else:
+            v.reason = f"LLM VETO — structure={v.side} vs grounded news={bside} ({conv:.2f}): {news[:140]}"
+            v.side = ABSTAIN
+            v.confidence = 0.0

@@ -113,68 +113,99 @@ class SessionBiasStore:
         self._bias: Optional[SessionBias] = None
         self._day_open: Optional[float] = None   # captured at the first brief of the day
         self._day_open_date: str = ""
+        self._refreshing: bool = False
 
     @property
     def enabled(self) -> bool:
         return self._enabled and bool(self._api_key)
 
+    def _is_fresh(self, day: str) -> bool:
+        cur = self._bias
+        return (cur is not None and cur.trade_date == day
+                and (time.time() - cur.fetched_at) < self._ttl)
+
     def update(self, snap: SnapshotAccessor, *, force: bool = False) -> Optional[SessionBias]:
-        """Refresh if new day / stale / forced; otherwise keep the held thesis."""
+        """Refresh if new day / stale / forced; otherwise keep the held thesis. The
+        network fetch runs WITHOUT the lock held, so current() never blocks on it."""
         if not self.enabled:
             return self._bias
         day = snap.trade_date
         now = time.time()
         with self._lock:
+            if self._is_fresh(day) and not force:
+                return self._bias
             cur = self._bias
-            fresh = (cur is not None and cur.trade_date == day
-                     and (now - cur.fetched_at) < self._ttl)
-            if fresh and not force:
-                return cur
-            # First brief of the day = morning thesis; later refreshes = intraday update
-            # that reassesses the prior view.
             same_day_prior = cur if (cur is not None and cur.trade_date == day) else None
             phase = "intraday" if same_day_prior is not None else "morning"
             prior = None
             if same_day_prior is not None:
-                prior = {
-                    "day_bias": same_day_prior.day_bias,
-                    "conviction": same_day_prior.conviction,
-                    "grounded": same_day_prior.grounded,
-                    "news_summary": same_day_prior.news_summary,
-                }
+                prior = {"day_bias": same_day_prior.day_bias, "conviction": same_day_prior.conviction,
+                         "grounded": same_day_prior.grounded, "news_summary": same_day_prior.news_summary}
             ctx = build_context(snap)
-            # Capture the TRUE day-open once (first brief of the day) and carry it into
-            # every later brief — so intraday refreshes still know where the day opened.
             if self._day_open_date != day:
                 self._day_open = ctx.get("open")
                 self._day_open_date = day
             if self._day_open is not None:
                 ctx["open"] = self._day_open
+        # ── network OUTSIDE the lock ──
+        try:
+            brief = fetch_session_brief(ctx, api_key=self._api_key, model=self._model,
+                                        phase=phase, prior=prior)
+        except Exception:
+            logger.debug("session_bias: fetch failed", exc_info=True)
+            return self._bias  # keep stale rather than blank
+        new_bias = SessionBias(
+            day_bias=brief.get("day_bias", "NEUTRAL"),
+            conviction=float(brief.get("conviction") or 0.0),
+            grounded=bool(brief.get("grounded")),
+            news_summary=str(brief.get("news_summary") or ""),
+            key_levels=dict(brief.get("key_levels") or {}),
+            plan=str(brief.get("plan") or ""), risks=str(brief.get("risks") or ""),
+            as_of=str(brief.get("as_of") or ""), trade_date=day, fetched_at=now,
+        )
+        with self._lock:
+            self._bias = new_bias
+        logger.info("session_bias refreshed: %s conv=%.2f grounded=%s",
+                    new_bias.day_bias, new_bias.conviction, new_bias.grounded)
+        return new_bias
+
+    def refresh_async(self, snap: SnapshotAccessor) -> None:
+        """Non-blocking: kick a background refresh if stale; return immediately so the
+        engine hot-path never stalls on the ~30s grounded call."""
+        if not self.enabled:
+            return
+        day = snap.trade_date
+        with self._lock:
+            if self._refreshing or self._is_fresh(day):
+                return
+            self._refreshing = True
+
+        def _bg() -> None:
             try:
-                brief = fetch_session_brief(ctx, api_key=self._api_key,
-                                            model=self._model, phase=phase, prior=prior)
-            except Exception:
-                logger.debug("session_bias: fetch failed", exc_info=True)
-                return cur  # keep stale rather than blank
-            self._bias = SessionBias(
-                day_bias=brief.get("day_bias", "NEUTRAL"),
-                conviction=float(brief.get("conviction") or 0.0),
-                grounded=bool(brief.get("grounded")),
-                news_summary=str(brief.get("news_summary") or ""),
-                key_levels=dict(brief.get("key_levels") or {}),
-                plan=str(brief.get("plan") or ""),
-                risks=str(brief.get("risks") or ""),
-                as_of=str(brief.get("as_of") or ""),
-                trade_date=day,
-                fetched_at=now,
-            )
-            logger.info("session_bias refreshed: %s conv=%.2f grounded=%s",
-                        self._bias.day_bias, self._bias.conviction, self._bias.grounded)
-            return self._bias
+                self.update(snap, force=True)
+            finally:
+                with self._lock:
+                    self._refreshing = False
+
+        threading.Thread(target=_bg, daemon=True).start()
 
     def current(self) -> Optional[SessionBias]:
         with self._lock:
             return self._bias
 
 
-__all__ = ["SessionBias", "SessionBiasStore", "build_context"]
+_STORE: Optional[SessionBiasStore] = None
+_STORE_LOCK = threading.Lock()
+
+
+def get_session_bias_store() -> SessionBiasStore:
+    """Process-wide singleton so the engine shares one session thesis across bars."""
+    global _STORE
+    if _STORE is None:
+        with _STORE_LOCK:
+            if _STORE is None:
+                _STORE = SessionBiasStore()
+    return _STORE
+
+
+__all__ = ["SessionBias", "SessionBiasStore", "build_context", "get_session_bias_store"]
