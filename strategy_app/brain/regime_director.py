@@ -37,6 +37,44 @@ class RegimeVerdict:
     signal: str                     # which detector produced it
     breakdown: Dict[str, Optional[str]] = field(default_factory=dict)  # per-sub-signal votes
     reason: str = ""
+    quality: str = "MID"            # regime quality: "TREND" | "MID" | "CHOP" (complex mind)
+    trend_dir: Optional[str] = None  # multi-timeframe aligned trend side, if any
+
+
+def _f(v: Any) -> Optional[float]:
+    try:
+        x = float(v)
+        return None if x != x else x
+    except (TypeError, ValueError):
+        return None
+
+
+def _mtf(s: SnapshotAccessor) -> Dict[str, Any]:
+    raw = getattr(s, "raw_payload", None)
+    return (raw.get("mtf_derived") or {}) if isinstance(raw, dict) else {}
+
+
+def regime_quality(s: SnapshotAccessor) -> tuple[str, Optional[str]]:
+    """Complex-mind regime classifier (NOT a single EMA): multi-timeframe EMA trend
+    alignment + Bollinger band position. Returns (quality, aligned_trend_side).
+      TREND = MTF-aligned trend AND price extended to the band edge (late/mature).
+      MID   = MTF-aligned trend AND price near the mean (pullback/early — best entry).
+      CHOP  = no multi-timeframe trend agreement (stand aside).
+    """
+    m = _mtf(s)
+    aligned = bool(m.get("mtf_aligned"))
+    t5 = str(m.get("ema_trend_5m") or "").upper()
+    t15 = str(m.get("ema_trend_15m") or "").upper()
+    bb = _f(m.get("bb_pct_b_5m"))
+    adir: Optional[str] = None
+    if aligned and t5 == t15 and t5 in ("BULLISH", "BEARISH"):
+        adir = CE if t5 == "BULLISH" else PE
+    if adir is None:
+        return "CHOP", None
+    if bb is None:
+        return "MID", adir
+    extended = (bb >= 0.75) if adir == CE else (bb <= 0.25)
+    return ("TREND" if extended else "MID"), adir
 
 
 def _sgn_side(value: Optional[float], pos: str = CE, neg: str = PE) -> Optional[str]:
@@ -127,19 +165,31 @@ def _detect_combo(s: SnapshotAccessor) -> RegimeVerdict:
     return RegimeVerdict(ABSTAIN, 0.0, "combo", bd, "lever/ema disagree -> abstain")
 
 
+def _detect_mtf_trend(s: SnapshotAccessor) -> RegimeVerdict:
+    """Complex-mind direction: trade WITH the multi-timeframe aligned trend."""
+    q, adir = regime_quality(s)
+    bd = {"quality": q, "mtf_trend": adir}
+    if adir is None:
+        return RegimeVerdict(ABSTAIN, 0.0, "mtf_trend", bd, "no multi-timeframe trend")
+    return RegimeVerdict(adir, 0.7, "mtf_trend", bd, f"mtf-aligned {q} {adir}")
+
+
 _DETECTORS: Dict[str, Callable[[SnapshotAccessor], RegimeVerdict]] = {
     "agreement_lever": _detect_agreement_lever,
     "ema_cross": _detect_ema_cross,
     "vwap": _detect_vwap,
     "fade_vwap": _detect_fade_vwap,
     "combo": _detect_combo,
+    "mtf_trend": _detect_mtf_trend,
 }
 
 DEFAULT_SIGNAL = "agreement_lever"
 
 
 class RegimeDirector:
-    """Step-1 direction call. Detector chosen by REGIME_DIRECTION_SIGNAL env."""
+    """Step-1 direction call. Detector chosen by REGIME_DIRECTION_SIGNAL env. Every
+    verdict carries the complex-mind regime `quality` (TREND/MID/CHOP) so the engine
+    can gate to MID+TREND and skip CHOP."""
 
     def __init__(self, signal: Optional[str] = None) -> None:
         self.signal = (signal or os.getenv("REGIME_DIRECTION_SIGNAL", DEFAULT_SIGNAL)).strip().lower()
@@ -149,7 +199,14 @@ class RegimeDirector:
 
     def decide(self, snap: SnapshotAccessor) -> RegimeVerdict:
         try:
-            return _DETECTORS[self.signal](snap)
+            verdict = _DETECTORS[self.signal](snap)
         except Exception:
             logger.debug("regime_director: detector %s failed", self.signal, exc_info=True)
-            return RegimeVerdict(ABSTAIN, 0.0, self.signal, {}, "detector error -> abstain")
+            verdict = RegimeVerdict(ABSTAIN, 0.0, self.signal, {}, "detector error -> abstain")
+        try:
+            quality, trend_dir = regime_quality(snap)
+            verdict.quality = quality
+            verdict.trend_dir = trend_dir
+        except Exception:
+            pass
+        return verdict

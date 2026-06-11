@@ -294,10 +294,13 @@ class MlEntryStrategy(BaseStrategy):
                 if verdict.side in ("CE", "PE")
                 else None
             )
+            quality = str(getattr(verdict, "quality", "") or "").upper()
             raw_signals.update(
                 {
                     "regime_side": verdict.side,
                     "regime_signal": verdict.signal,
+                    "regime_quality": quality,
+                    "regime_trend_dir": getattr(verdict, "trend_dir", None),
                     "regime_confidence": round(verdict.confidence, 3),
                     "regime_breakdown": verdict.breakdown,
                     "regime_reason": verdict.reason,
@@ -313,10 +316,24 @@ class MlEntryStrategy(BaseStrategy):
                 raw_signals.update(dir_result.as_raw_signals())
                 raw_signals["direction_source"] = "regime_dual_shadow"
             else:
-                if verdict.side not in ("CE", "PE") or confirm is None or not confirm.fire:
+                if verdict.side not in ("CE", "PE"):
+                    return None
+                # Regime-quality gate: only trade allowed regimes (default MID+TREND;
+                # skip CHOP). REGIME_ALLOWED can override (e.g. "TREND").
+                allowed = {x.strip().upper() for x in
+                           os.getenv("REGIME_ALLOWED", "MID,TREND").split(",") if x.strip()}
+                if allowed and quality and quality not in allowed:
+                    return None
+                # Dual CE/PE confirm is OPTIONAL: only required when a bundle is set
+                # (we are NOT using the dual models for now per the current plan).
+                use_confirm = bool(
+                    os.getenv("ENTRY_CE_MODEL_PATH", "").strip()
+                    or os.getenv("ENTRY_PE_MODEL_PATH", "").strip()
+                )
+                if use_confirm and (confirm is None or not confirm.fire):
                     return None
                 direction = Direction.CE if verdict.side == "CE" else Direction.PE
-                raw_signals["direction_source"] = f"regime_dual:{verdict.signal}"
+                raw_signals["direction_source"] = f"regime_dual:{verdict.signal}:{quality}"
         else:
             dir_result = resolve_entry_direction(snap)
             if dir_result.vetoed or dir_result.direction is None:
