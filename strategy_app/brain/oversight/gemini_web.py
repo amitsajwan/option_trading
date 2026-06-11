@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 
@@ -47,30 +48,45 @@ def fetch_web_context(*, api_key: str, model: str | None = None, timeout_s: floa
     return _call_gemini(_PROMPT, api_key=api_key, model=model, timeout_s=timeout_s)[:800]
 
 
-def _call_gemini(prompt: str, *, api_key: str, model: str, timeout_s: float) -> str:
-    """POST one grounded prompt to Gemini generateContent; return joined text or ''."""
+_RETRYABLE_HTTP = {500, 502, 503, 504}  # transient server / overload ("high demand")
+
+
+def _call_gemini(prompt: str, *, api_key: str, model: str, timeout_s: float,
+                 retries: int = 3) -> str:
+    """POST one grounded prompt to Gemini generateContent; return joined text or ''.
+    Retries transient failures (timeouts + 5xx "high demand") with backoff — the
+    grounded google_search call 503s/times-out intermittently. A 4xx (auth/quota)
+    is non-transient -> return '' immediately (no point retrying depleted credits)."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     body = {"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}]}
-    req = urllib.request.Request(
-        url, data=json.dumps(body).encode("utf-8"), method="POST",
-        headers={"Content-Type": "application/json", "User-Agent": "option-trading-oversight/1.0"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        parts = data["candidates"][0]["content"]["parts"]
-        return " ".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("text")).strip()
-    except urllib.error.HTTPError as exc:
-        detail = ""
+    data_bytes = json.dumps(body).encode("utf-8")
+    for attempt in range(max(1, retries)):
+        req = urllib.request.Request(
+            url, data=data_bytes, method="POST",
+            headers={"Content-Type": "application/json", "User-Agent": "option-trading-oversight/1.0"},
+        )
         try:
-            detail = exc.read().decode("utf-8")[:200]
-        except Exception:
-            pass
-        logger.warning("gemini_web HTTP %s: %s", exc.code, detail)
-        return ""
-    except Exception as exc:
-        logger.warning("gemini_web failed: %s", exc)
-        return ""
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            parts = data["candidates"][0]["content"]["parts"]
+            text = " ".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("text")).strip()
+            if text:
+                return text
+            # empty body (rare) -> treat as transient and retry
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8")[:160]
+            except Exception:
+                pass
+            logger.warning("gemini_web HTTP %s (attempt %d/%d): %s", exc.code, attempt + 1, retries, detail)
+            if exc.code not in _RETRYABLE_HTTP:
+                return ""  # auth/quota/bad-request -> don't retry
+        except Exception as exc:  # timeout / connection reset -> retry
+            logger.warning("gemini_web failed (attempt %d/%d): %s", attempt + 1, retries, exc)
+        if attempt < retries - 1:
+            time.sleep(2.0 * (attempt + 1))  # 2s, 4s backoff
+    return ""
 
 
 def _brief_prompt(ctx: dict, *, phase: str = "morning", prior: dict | None = None) -> str:
@@ -155,7 +171,7 @@ def _brief_prompt(ctx: dict, *, phase: str = "morning", prior: dict | None = Non
 
 
 def fetch_session_brief(context: dict, *, api_key: str, model: str | None = None,
-                        timeout_s: float = 30.0, phase: str = "morning",
+                        timeout_s: float = 40.0, phase: str = "morning",
                         prior: dict | None = None) -> dict:
     """Context-aware, search-grounded session brief. Returns a dict with day_bias /
     conviction / grounded / news_summary / key_levels / plan / risks. Never raises;
