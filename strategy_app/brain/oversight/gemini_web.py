@@ -44,30 +44,22 @@ def fetch_web_context(*, api_key: str, model: str | None = None, timeout_s: floa
     if not api_key:
         return ""
     model = (model or _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    )
-    body = {
-        "contents": [{"parts": [{"text": _PROMPT}]}],
-        "tools": [{"google_search": {}}],
-    }
+    return _call_gemini(_PROMPT, api_key=api_key, model=model, timeout_s=timeout_s)[:800]
+
+
+def _call_gemini(prompt: str, *, api_key: str, model: str, timeout_s: float) -> str:
+    """POST one grounded prompt to Gemini generateContent; return joined text or ''."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    body = {"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}]}
     req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": "option-trading-oversight/1.0",
-        },
+        url, data=json.dumps(body).encode("utf-8"), method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": "option-trading-oversight/1.0"},
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         parts = data["candidates"][0]["content"]["parts"]
-        text = " ".join(
-            p.get("text", "") for p in parts if isinstance(p, dict) and p.get("text")
-        ).strip()
-        return text[:800]
+        return " ".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("text")).strip()
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
@@ -81,4 +73,74 @@ def fetch_web_context(*, api_key: str, model: str | None = None, timeout_s: floa
         return ""
 
 
-__all__ = ["fetch_web_context"]
+def _brief_prompt(ctx: dict) -> str:
+    """Clear, well-guided session-brief prompt: LIVE news first, then OUR levels, then a
+    structured view. Demands a `grounded` flag so hallucinated (non-retrieved) views are
+    visible and discounted downstream."""
+    def g(k, d="unknown"):
+        v = ctx.get(k)
+        return d if v is None else v
+    ctx_lines = (
+        f"- date/time: {g('date')} ~{g('time')} IST, days_to_expiry={g('days_to_expiry')}\n"
+        f"- spot/futures now: {g('spot')}, today_open: {g('open')}\n"
+        f"- prev day: high={g('prev_day_high')} low={g('prev_day_low')} close={g('prev_day_close')}\n"
+        f"- opening range: high={g('orb_high')} low={g('orb_low')}\n"
+        f"- OI walls: call_wall(resistance)={g('call_wall')} put_wall(support)={g('put_wall')} max_pain={g('max_pain')}\n"
+        f"- India VIX: {g('vix')} ({g('vix_regime')})"
+    )
+    return (
+        "You are a pre-market analyst for an Indian intraday options trader trading BankNifty "
+        "(NSE: NIFTY BANK) weekly options. Be concrete and skeptical.\n\n"
+        "STEP 1 - RETRIEVE LIVE INFO NOW via web search (do NOT use training memory; only state "
+        "what current search results verify):\n"
+        "  - Overnight/global cues: US close (Dow/Nasdaq/S&P), GIFT Nifty / SGX Nifty indication for "
+        "India's open, Asian markets, Brent crude, USD/INR.\n"
+        "  - India/bank-specific: RBI actions or commentary, major banking-sector news, yesterday's "
+        "FII/DII cash flow.\n"
+        "  - Scheduled TODAY/this week: India/US CPI, FOMC, RBI policy, big bank results, F&O expiry, NSE holiday.\n\n"
+        "STEP 2 - OUR STRUCTURAL CONTEXT (BankNifty today):\n" + ctx_lines + "\n\n"
+        "STEP 3 - Give your view, grounded in the STEP-1 news AND STEP-2 levels: the day's directional "
+        "bias (will banks trend up, down, or chop?), conviction, the levels that matter today, and a "
+        "concrete scenario plan. Cite the real news you used.\n\n"
+        "Respond with ONLY this JSON (no prose, no markdown):\n"
+        '{"day_bias":"BULLISH|BEARISH|NEUTRAL","conviction":0.0,"grounded":true,'
+        '"news_summary":"<=2 sentences of the REAL retrieved news/cues","key_levels":'
+        '{"support":[],"resistance":[]},"plan":"<=2 sentences of scenarios","risks":"<=1 sentence",'
+        '"as_of":"' + str(g("date")) + " " + str(g("time")) + ' IST"}\n'
+        'Set "grounded":false if you could NOT retrieve real current news; then "day_bias" must be '
+        '"NEUTRAL" unless the levels alone justify a lean (say so in news_summary).'
+    )
+
+
+def fetch_session_brief(context: dict, *, api_key: str, model: str | None = None,
+                        timeout_s: float = 30.0) -> dict:
+    """Context-aware, search-grounded session brief. Returns a dict with day_bias /
+    conviction / grounded / news_summary / key_levels / plan / risks. Never raises;
+    on any failure returns a NEUTRAL, ungrounded brief."""
+    neutral = {"day_bias": "NEUTRAL", "conviction": 0.0, "grounded": False,
+               "news_summary": "", "key_levels": {}, "plan": "", "risks": "", "as_of": ""}
+    if not api_key:
+        return neutral
+    model = (model or _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
+    text = _call_gemini(_brief_prompt(context or {}), api_key=api_key, model=model, timeout_s=timeout_s)
+    if not text:
+        return neutral
+    try:
+        from ..providers.openai_compatible import extract_json_object
+        obj = extract_json_object(text)
+    except Exception:
+        obj = None
+    if not isinstance(obj, dict):
+        return {**neutral, "news_summary": text[:400]}
+    out = {**neutral, **obj}
+    bias = str(out.get("day_bias") or "NEUTRAL").upper()
+    out["day_bias"] = bias if bias in ("BULLISH", "BEARISH", "NEUTRAL") else "NEUTRAL"
+    try:
+        out["conviction"] = max(0.0, min(1.0, float(out.get("conviction") or 0.0)))
+    except (TypeError, ValueError):
+        out["conviction"] = 0.0
+    out["grounded"] = bool(out.get("grounded"))
+    return out
+
+
+__all__ = ["fetch_web_context", "fetch_session_brief"]
