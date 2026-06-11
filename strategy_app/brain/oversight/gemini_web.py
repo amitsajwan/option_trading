@@ -92,13 +92,18 @@ def _brief_prompt(ctx: dict, *, phase: str = "morning", prior: dict | None = Non
         f"- OI walls: call_wall(resistance)={g('call_wall')} put_wall(support)={g('put_wall')} max_pain={g('max_pain')}\n"
         f"- India VIX: {g('vix')} ({g('vix_regime')})"
     )
-    # Explicit date anchor so the model can't drift to "today's real date" when a
-    # snapshot is replayed, and so "overnight"/"yesterday" are unambiguous.
+    # Explicit, PHASE-AWARE date anchor so the model can't drift to "today's real
+    # date" on replay, and so the morning vs intraday scope is unambiguous.
+    if phase == "intraday":
+        scope = (f"analyse {g('date')}'s session INCLUDING intraday developments through ~{g('time')} "
+                 f"IST; \"yesterday\" = the prior trading session before {g('date')}")
+    else:
+        scope = (f"analyse the run-up to the {g('date')} session — overnight before {g('date')}, "
+                 f"{g('date')} pre-market, and the prior trading session's FII/DII")
     anchor = (
         f"TODAY'S TRADING SESSION IS {g('date')}, current time ~{g('time')} IST. Everything below "
-        f"(\"overnight\", \"yesterday\", \"today\", \"now\") is RELATIVE TO {g('date')}: analyse the "
-        f"run-up to the {g('date')} session only — overnight before {g('date')}, {g('date')} pre-market, "
-        f"and the prior trading session's FII/DII. Do NOT analyse any other date.\n\n"
+        f"(\"overnight\", \"yesterday\", \"today\", \"now\") is RELATIVE TO {g('date')}: {scope}. "
+        f"Do NOT analyse any other date.\n\n"
     )
     if phase == "intraday":
         pr = prior or {}
