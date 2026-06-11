@@ -92,6 +92,14 @@ def _brief_prompt(ctx: dict, *, phase: str = "morning", prior: dict | None = Non
         f"- OI walls: call_wall(resistance)={g('call_wall')} put_wall(support)={g('put_wall')} max_pain={g('max_pain')}\n"
         f"- India VIX: {g('vix')} ({g('vix_regime')})"
     )
+    # Explicit date anchor so the model can't drift to "today's real date" when a
+    # snapshot is replayed, and so "overnight"/"yesterday" are unambiguous.
+    anchor = (
+        f"TODAY'S TRADING SESSION IS {g('date')}, current time ~{g('time')} IST. Everything below "
+        f"(\"overnight\", \"yesterday\", \"today\", \"now\") is RELATIVE TO {g('date')}: analyse the "
+        f"run-up to the {g('date')} session only — overnight before {g('date')}, {g('date')} pre-market, "
+        f"and the prior trading session's FII/DII. Do NOT analyse any other date.\n\n"
+    )
     if phase == "intraday":
         pr = prior or {}
         prior_line = (
@@ -123,7 +131,7 @@ def _brief_prompt(ctx: dict, *, phase: str = "morning", prior: dict | None = Non
         role = ("You are a pre-market analyst for an Indian intraday options trader trading BankNifty "
                 "(NSE: NIFTY BANK) weekly options. Be concrete and skeptical.\n\n")
     return (
-        role + step1 + "\n"
+        role + anchor + step1 + "\n"
         "STEP 2 - OUR STRUCTURAL CONTEXT (BankNifty today):\n" + ctx_lines + "\n\n"
         "STEP 3 - Give your view, grounded in the STEP-1 news AND STEP-2 levels: the directional "
         "bias for the rest of the session (banks trend up, down, or chop?), conviction, the levels "
