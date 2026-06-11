@@ -88,6 +88,23 @@ def test_llm_overlay_ignored_when_ungrounded_or_lowconv():
     assert v1.side == base.side == CE and v2.side == CE  # structure stands
 
 
+def test_weighted_fires_on_clear_lean():
+    v = RegimeDirector("weighted").decide(snap(**CE_AGREE))
+    assert v.side == CE and v.confidence > 0.5
+
+
+def test_weighted_abstains_on_split():
+    # mom CE vs vwap PE, nothing else -> votes cancel -> abstain
+    s = snap(fut_return_15m=0.002, price_vs_vwap=-0.001)
+    assert RegimeDirector("weighted").decide(s).side == ABSTAIN
+
+
+def test_weighted_graceful_when_oi_missing():
+    # CE lean on every signal except OI (missing) -> still fires CE (no abstain on missing)
+    s = snap(**{**CE_AGREE, "atm_ce_oi_change_30m": None, "atm_pe_oi_change_30m": None})
+    assert RegimeDirector("weighted").decide(s).side == CE
+
+
 def test_confirmer_side_validation_and_missing_bundle():
     c = DualEntryConfirmer(ce_path="", pe_path="")
     assert c.confirm("XX", snap()).fire is False           # bad side

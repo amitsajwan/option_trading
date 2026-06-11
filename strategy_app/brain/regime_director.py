@@ -107,6 +107,13 @@ def _vwap(s: SnapshotAccessor) -> Optional[str]:
 
 def _atm_oi(s: SnapshotAccessor) -> Optional[str]:
     ce, pe = s.atm_ce_oi_change_30m, s.atm_pe_oi_change_30m
+    if ce is None or pe is None:
+        # 30m change follows the rolling ATM and is None ~46% of bars (see LIVE_ISSUES
+        # D1); fall back to the 1-min change (98% present) so OI still contributes.
+        ao = (getattr(s, "raw_payload", None) or {}).get("atm_options") or {}
+        ce = ao.get("atm_ce_oi_change_1m") if ce is None else ce
+        pe = ao.get("atm_pe_oi_change_1m") if pe is None else pe
+    ce, pe = _f(ce), _f(pe)
     if ce is None or pe is None or ce == pe:
         return None
     # more CE-OI written than PE-OI => call writers => bearish => PE.
@@ -165,6 +172,54 @@ def _detect_combo(s: SnapshotAccessor) -> RegimeVerdict:
     return RegimeVerdict(ABSTAIN, 0.0, "combo", bd, "lever/ema disagree -> abstain")
 
 
+def _wenv(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    try:
+        return float(raw) if raw else default
+    except ValueError:
+        return default
+
+
+# sub-signal -> (function, default weight env var, default weight). A weight of 0
+# disables a signal; a NEGATIVE weight FADES it (use the opposite side) — useful since
+# e.g. EMA/vwap follow-the-trend was anti-predictive in the recent mean-reverting regime.
+_WEIGHTED_SIGNALS = (
+    ("mom15", _mom15, "REGIME_W_MOM", 1.0),
+    ("max_pain", _max_pain, "REGIME_W_MAXPAIN", 0.8),
+    ("atm_oi", _atm_oi, "REGIME_W_OI", 0.8),
+    ("vwap", _vwap, "REGIME_W_VWAP", 1.0),
+    ("ema", _ema, "REGIME_W_EMA", 0.5),
+)
+
+
+def _detect_weighted(s: SnapshotAccessor) -> RegimeVerdict:
+    """Weighted-confidence direction (LIVE_ISSUES L2): instead of requiring ALL signals
+    to agree (4% coverage), sum signed weighted votes. A MISSING signal contributes 0
+    (graceful — no abstain on missing OI). Fire when |confidence| >= REGIME_CONF_THRESHOLD.
+    Confidence = |score| / sum(|weight of present signals|), so it's the *net* lean."""
+    tau = _wenv("REGIME_CONF_THRESHOLD", 0.34)
+    score = 0.0
+    wsum = 0.0
+    bd: Dict[str, Optional[str]] = {}
+    for name, fn, env, default in _WEIGHTED_SIGNALS:
+        w = _wenv(env, default)
+        side = fn(s)
+        bd[name] = side
+        if side in (CE, PE) and w != 0.0:
+            vote = 1.0 if side == CE else -1.0
+            score += w * vote          # negative w fades the signal
+            wsum += abs(w)
+    if wsum == 0.0:
+        return RegimeVerdict(ABSTAIN, 0.0, "weighted", bd, "no signals present")
+    conf = abs(score) / wsum
+    bd["score"] = round(score, 2)            # type: ignore[assignment]
+    bd["conf"] = round(conf, 2)              # type: ignore[assignment]
+    if score == 0.0 or conf < tau:
+        return RegimeVerdict(ABSTAIN, conf, "weighted", bd, f"conf {conf:.2f} < {tau:.2f} -> abstain")
+    side = CE if score > 0 else PE
+    return RegimeVerdict(side, conf, "weighted", bd, f"weighted {side} conf={conf:.2f} (>= {tau:.2f})")
+
+
 def _detect_mtf_trend(s: SnapshotAccessor) -> RegimeVerdict:
     """Complex-mind direction: trade WITH the multi-timeframe aligned trend."""
     q, adir = regime_quality(s)
@@ -180,6 +235,7 @@ _DETECTORS: Dict[str, Callable[[SnapshotAccessor], RegimeVerdict]] = {
     "vwap": _detect_vwap,
     "fade_vwap": _detect_fade_vwap,
     "combo": _detect_combo,
+    "weighted": _detect_weighted,
     "mtf_trend": _detect_mtf_trend,
 }
 
