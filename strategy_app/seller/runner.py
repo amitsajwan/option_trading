@@ -1,0 +1,160 @@
+"""SellerRunner — the live loop (paper or real). Drives the validated pipeline on the
+live snapshot feed: manage open spreads INTRADAY, enter once/day in the window.
+
+PAPER mode (default, EXECUTION/mode='paper'): fills come from the chain via PaperLegGateway,
+no broker orders — this runs the T9 live paper cycle. REAL mode wires a DhanLegGateway.
+
+Restart-safe (PositionManager durable store). Logs every paper/real action to a JSONL
+trade log so the cycle is auditable. NO real money unless gateway is DhanLegGateway AND
+operator explicitly enables it.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+from datetime import date, datetime, timezone
+from typing import Callable, Optional
+
+from ..market.snapshot_accessor import SnapshotAccessor
+from .brain import SellerBrain
+from .executor import SafeExecutor, OpenSpread
+from .gateway import LegGateway, PaperLegGateway
+from .manager import PositionManager, RiskGates
+
+logger = logging.getLogger(__name__)
+
+
+def _fnum(x):
+    try:
+        v = float(x); return v if v == v else None
+    except Exception:
+        return None
+
+
+def build_price_fn(snap: dict) -> Callable[[str, int], Optional[float]]:
+    chain = {}
+    for r in (snap.get("strikes") or []):
+        k = _fnum(r.get("strike"))
+        if k is None:
+            continue
+        chain[int(k)] = (_fnum(r.get("ce_ltp")), _fnum(r.get("pe_ltp")))
+    fut = SnapshotAccessor(snap).fut_close
+
+    def price(ot: str, strike: int) -> Optional[float]:
+        pair = chain.get(strike)
+        if pair:
+            v = pair[0] if ot == "CE" else pair[1]
+            if v and v > 0:
+                return v
+        if fut is None:
+            return None
+        return max(0.0, (fut - strike) if ot == "CE" else (strike - fut))
+    return price
+
+
+class SellerRunner:
+    def __init__(self, mongo_db, gateway_factory: Optional[Callable[[Callable], LegGateway]] = None,
+                 live_collection: str = "phase1_market_snapshots"):
+        self._col = mongo_db[live_collection]
+        self._brain = SellerBrain()
+        self._mgr = PositionManager()
+        self._risk = RiskGates()
+        self._lot = int(os.getenv("BANKNIFTY_LOT_SIZE", "30") or 30)
+        self._width = int(os.getenv("SELLER_SPREAD_WIDTH", "300") or 300)
+        # default gateway = PAPER (no real money)
+        self._gw_factory = gateway_factory or (lambda pf: PaperLegGateway(pf, float(os.getenv("SELLER_SLIPPAGE_PTS", "1.0") or 1.0)))
+        self._win = (os.getenv("SELLER_ENTRY_WINDOW", "10:00-14:00") or "10:00-14:00").split("-")
+        self._log_path = os.path.join(os.getenv("STRATEGY_RUN_DIR", "/tmp"), "seller_trades.jsonl")
+        self._daily_pnl = 0.0
+        self._cur_day: Optional[str] = None
+        self._entered_today = False
+        logger.info("SellerRunner up (lot=%d width=%d paper=%s open=%d)", self._lot, self._width,
+                    gateway_factory is None, len(self._mgr.open_spreads))
+
+    def _log(self, event: str, **kw):
+        rec = {"ts": datetime.now(timezone.utc).isoformat(), "event": event, **kw}
+        try:
+            with open(self._log_path, "a") as fh:
+                fh.write(json.dumps(rec, default=str) + "\n")
+        except OSError:
+            pass
+        logger.info("seller %s %s", event, kw)
+
+    def _latest(self) -> Optional[dict]:
+        doc = self._col.find_one(sort=[("timestamp", -1)])
+        return (doc.get("payload") or {}).get("snapshot") if doc else None
+
+    @staticmethod
+    def _hhmm(snap: dict) -> str:
+        t = ((snap.get("session_context") or {}).get("time") or snap.get("timestamp") or "")
+        return t[11:16] if len(t) > 15 else t[:5]
+
+    def _expiry(self, snap: dict) -> date:
+        # TODO: resolve the real nearest BankNifty monthly expiry from the chain/scrip master.
+        raw = ((snap.get("session_context") or {}).get("expiry") or snap.get("expiry"))
+        try:
+            return date.fromisoformat(str(raw)[:10])
+        except Exception:
+            return date(2099, 1, 1)  # paper placeholder
+
+    def on_snapshot(self, snap: dict) -> None:
+        if not snap or not snap.get("strikes"):
+            return
+        day = snap.get("trade_date_ist") or self._hhmm(snap)
+        if day != self._cur_day:
+            self._cur_day, self._daily_pnl, self._entered_today = day, 0.0, False
+        pf = build_price_fn(snap)
+        expiry = self._expiry(snap)
+        acc = SnapshotAccessor(snap)
+        # ── manage open spreads INTRADAY ──
+        for sp in list(self._mgr.open_spreads):
+            val = PositionManager.spread_value(sp, pf)
+            if val is None:
+                continue
+            held = 0  # days held, from the spread's opened date
+            try:
+                held = (date.today() - date.fromisoformat(sp.trade_date)).days
+            except Exception:
+                held = 0
+            reason = self._mgr.check_exit(sp, val, held, dte=None)
+            if reason:
+                ex = SafeExecutor(self._gw_factory(pf), sp.qty, self._width)
+                exit_val = ex.close_spread(sp, expiry)
+                pnl = (sp.entry_credit - (exit_val if exit_val is not None else val)) * sp.qty
+                self._daily_pnl += pnl
+                self._log("close", spread_id=sp.spread_id, structure=sp.structure, reason=reason,
+                          credit=sp.entry_credit, exit_value=exit_val, pnl_rs=round(pnl, 1))
+                self._mgr.remove(sp.spread_id)
+        # ── entry: once/day, in window, risk-permitting ──
+        if self._entered_today:
+            return
+        hh = self._hhmm(snap)
+        if not (self._win[0] <= hh <= self._win[1]):
+            return
+        ok, why = self._risk.can_open(len(self._mgr.open_spreads), self._daily_pnl)
+        if not ok:
+            return
+        decision = self._brain.decide(acc)
+        if not decision.fires:
+            return
+        ex = SafeExecutor(self._gw_factory(pf), self._lot, self._width)
+        spread = ex.open_spread(decision, expiry, trade_date=str(day))
+        if spread is not None:
+            self._mgr.add(spread)
+            self._entered_today = True
+            self._log("open", spread_id=spread.spread_id, structure=spread.structure,
+                      credit=spread.entry_credit, legs=[(l.action, l.option_type, l.strike) for l in spread.legs],
+                      regime=decision.regime, iv_rank=decision.iv_rank)
+
+    def run_forever(self, interval_s: float = 30.0) -> None:
+        logger.info("SellerRunner loop start (interval=%.0fs, log=%s)", interval_s, self._log_path)
+        while True:
+            try:
+                snap = self._latest()
+                if snap:
+                    self.on_snapshot(snap)
+            except Exception:
+                logger.exception("seller loop error")
+            time.sleep(interval_s)
