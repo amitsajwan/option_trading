@@ -974,6 +974,7 @@ def _compute_vix_block(
     trade_date: pd.Timestamp,
     vix_daily: pd.DataFrame,
     vix_live_current: Optional[float],
+    session_open_vix: Optional[float] = None,
 ) -> Dict[str, Any]:
     out = {
         "vix_prev_close": None,
@@ -1005,6 +1006,11 @@ def _compute_vix_block(
         vix_current = float(vix_live_current)
     if not np.isfinite(vix_open) and np.isfinite(prev_close):
         vix_open = float(prev_close)
+    # Live path: vix_daily is empty so vix_open/prev_close are NaN. Use the
+    # captured session-open VIX (first finite live tick of the day) so
+    # vix_intraday_chg is computed live instead of left NaN.
+    if not np.isfinite(vix_open) and np.isfinite(_safe_float(session_open_vix)):
+        vix_open = float(session_open_vix)
     if not np.isfinite(vix_current) and np.isfinite(vix_open):
         vix_current = float(vix_open)
 
@@ -1231,6 +1237,7 @@ def build_market_snapshot(
     risk_free_rate_default: float = 0.065,
     prepared_window: Optional[PreparedMarketSnapshotWindow] = None,
     current_index: Optional[int] = None,
+    session_open_vix: Optional[float] = None,
 ) -> Dict[str, Any]:
     if state is None:
         state = MarketSnapshotState()
@@ -1402,6 +1409,7 @@ def build_market_snapshot(
         trade_date=trade_date,
         vix_daily=(vix_daily if vix_daily is not None else pd.DataFrame()),
         vix_live_current=vix_live_current,
+        session_open_vix=session_open_vix,
     )
 
     ce_ltp = _safe_float(atm_row.get("ce_ltp")) if isinstance(atm_row, dict) else float("nan")
@@ -1754,6 +1762,7 @@ class LiveMarketSnapshotBuilder:
         enable_kite_backfill: bool = True,
         kite_history_days: int = 12,
         parquet_root: Optional[str] = None,
+        velocity_context_provider: Optional[Any] = None,
     ):
         self.instrument = str(instrument or "").strip().upper()
         if not self.instrument:
@@ -1785,13 +1794,43 @@ class LiveMarketSnapshotBuilder:
         # and injects them into every post-11:30 snapshot for the same trade_date.
         # parquet_root enables context lookup (prev_day_close, vol averages) so that
         # ctx_gap_* / vol_spike_ratio match the training-data values.
+        # velocity_context_provider (mongo, live) takes precedence over parquet
+        # for prev_day_close / vol averages so ctx_gap_* / vol_spike_ratio /
+        # ctx_am_vol_vs_yday are populated live (the runtime VM has no parquet).
         self._velocity_acc = (
             _LiveVelocityAccumulator(
                 parquet_root=Path(parquet_root) if parquet_root else None,
+                context_provider=velocity_context_provider,
             )
             if _LiveVelocityAccumulator is not None
             else None
         )
+        # Session-open VIX (first finite live VIX of the trade_date) — feeds
+        # vix_open so vix_intraday_chg is non-NaN live (vix_daily is empty live).
+        self._session_open_vix: Optional[float] = None
+        self._vix_session_date: Optional[str] = None
+
+    def _update_session_open_vix(
+        self, *, ohlc: pd.DataFrame, vix_live: Optional[float],
+    ) -> None:
+        """Latch the first finite live VIX of each trade_date as the session open.
+
+        Resets on a new trade_date. Derives trade_date from the latest OHLC bar
+        (the same source build_market_snapshot uses for the snapshot date).
+        """
+        try:
+            if ohlc is None or len(ohlc) == 0:
+                return
+            td = str(pd.Timestamp(ohlc.iloc[-1]["timestamp"]).date())
+        except Exception:
+            return
+        if td != self._vix_session_date:
+            self._vix_session_date = td
+            self._session_open_vix = None
+        if self._session_open_vix is None:
+            v = _safe_float(vix_live)
+            if np.isfinite(v):
+                self._session_open_vix = float(v)
 
     def _reset_cross_asset_buffers_if_new_session(self, trade_date_str: str) -> None:
         """Session-reset rolling buffers on new trade date."""
@@ -2085,6 +2124,7 @@ class LiveMarketSnapshotBuilder:
         ohlc = self._augment_ohlc_with_kite_history(ohlc=ohlc)
         chain = self.fetch_options_chain()
         vix_live = self.fetch_live_vix()
+        self._update_session_open_vix(ohlc=ohlc, vix_live=vix_live)
         snapshot = build_market_snapshot(
             instrument=self.instrument,
             ohlc=ohlc,
@@ -2094,6 +2134,7 @@ class LiveMarketSnapshotBuilder:
             vix_live_current=vix_live,
             prev_session_chain_baseline=prev_session_chain_baseline,
             risk_free_rate_default=self.risk_free_rate_default,
+            session_open_vix=self._session_open_vix,
         )
         if self._cross_asset_enabled:
             trade_date_str = str(snapshot.get("trade_date") or "")
