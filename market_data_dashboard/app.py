@@ -3847,6 +3847,17 @@ _operator_routes = DashboardOperatorRouter(
 )
 app.include_router(_operator_routes.router)
 
+# Seller (S3 iron-condor) dashboard — defensive: never block app startup on it.
+try:
+    try:
+        from .routes.seller_routes import SellerRouter as _SellerRouter
+    except ImportError:
+        from market_data_dashboard.routes.seller_routes import SellerRouter as _SellerRouter  # type: ignore
+    app.include_router(_SellerRouter().router)
+except Exception as _seller_exc:  # pragma: no cover
+    import logging as _logging
+    _logging.getLogger(__name__).warning("seller routes not loaded: %s", _seller_exc)
+
 _monitor_routes = DashboardMonitorRouter()
 app.include_router(_monitor_routes.router)
 
