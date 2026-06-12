@@ -1,0 +1,40 @@
+# S3 seller service overlay — adds the seller daemon to the compose stack.
+# Deploy:
+#   cp docs/docker-compose.seller.yml docker-compose.seller.yml   (or keep in docs/ and -f it)
+#   docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml \
+#       -f docker-compose.seller.yml --profile ui build strategy_app dashboard seller_app
+#   docker compose ... up -d
+# PAPER by default. Real money requires EXECUTION_ADAPTER=dhan AND SELLER_LIVE_ENABLED=1.
+services:
+  seller_app:
+    build:
+      context: .
+      dockerfile: strategy_app/Dockerfile
+    restart: unless-stopped
+    working_dir: /app
+    depends_on:
+      - mongo
+    environment:
+      TZ: "Asia/Kolkata"
+      PYTHONPATH: /app
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: trading_ai
+      STRATEGY_RUN_DIR: /seller_run
+      EXECUTION_ADAPTER: "${EXECUTION_ADAPTER:-paper}"
+      SELLER_LIVE_ENABLED: "${SELLER_LIVE_ENABLED:-0}"
+      SELLER_CONDOR_OFFSET: "${SELLER_CONDOR_OFFSET:-200}"
+      SELLER_IV_RANK_MIN: "${SELLER_IV_RANK_MIN:-30}"
+      SELLER_SPREAD_WIDTH: "${SELLER_SPREAD_WIDTH:-300}"
+      SELLER_TP_FRAC: "${SELLER_TP_FRAC:-0.50}"
+      SELLER_STOP_MULT: "${SELLER_STOP_MULT:-2.0}"
+      SELLER_MAX_HOLD_DAYS: "${SELLER_MAX_HOLD_DAYS:-5}"
+      SELLER_ENTRY_WINDOW: "${SELLER_ENTRY_WINDOW:-10:00-14:00}"
+      SELLER_LOOP_INTERVAL_S: "${SELLER_LOOP_INTERVAL_S:-30}"
+      BANKNIFTY_LOT_SIZE: "${BANKNIFTY_LOT_SIZE:-30}"
+    volumes:
+      - seller_run:/seller_run
+    command: ["python", "-m", "strategy_app.seller"]
+
+volumes:
+  seller_run:
