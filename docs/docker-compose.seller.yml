@@ -9,7 +9,7 @@ services:
   seller_app:
     build:
       context: .
-      dockerfile: strategy_app/Dockerfile
+      dockerfile: market_data_dashboard/Dockerfile   # has pymongo + strategy_app + seller code
     restart: unless-stopped
     working_dir: /app
     depends_on:
