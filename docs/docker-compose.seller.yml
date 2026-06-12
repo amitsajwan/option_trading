@@ -35,6 +35,16 @@ services:
     volumes:
       - seller_run:/seller_run
     command: ["python", "-m", "strategy_app.seller"]
+    healthcheck:
+      disable: true   # daemon has no HTTP endpoint; the dashboard healthcheck doesn't apply
+
+  # Use the LOCAL build of the dashboard (with the /seller route baked in) instead of the
+  # pinned GHCR image, so the route survives recreate. (gcp override pins image+pull_policy:always.)
+  dashboard:
+    build:
+      context: .
+      dockerfile: market_data_dashboard/Dockerfile
+    pull_policy: never
 
 volumes:
   seller_run:
