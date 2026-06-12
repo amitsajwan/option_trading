@@ -57,6 +57,7 @@ def build_price_fn(snap: dict) -> Callable[[str, int], Optional[float]]:
 class SellerRunner:
     def __init__(self, mongo_db, gateway_factory: Optional[Callable[[Callable], LegGateway]] = None,
                  live_collection: str = "phase1_market_snapshots"):
+        self._db = mongo_db
         self._col = mongo_db[live_collection]
         self._brain = SellerBrain()
         self._mgr = PositionManager()
@@ -70,8 +71,42 @@ class SellerRunner:
         self._daily_pnl = 0.0
         self._cur_day: Optional[str] = None
         self._entered_today = False
-        logger.info("SellerRunner up (lot=%d width=%d paper=%s open=%d)", self._lot, self._width,
-                    gateway_factory is None, len(self._mgr.open_spreads))
+        self._mode = "live" if (os.getenv("EXECUTION_ADAPTER", "paper").strip().lower() == "dhan"
+                                and (os.getenv("SELLER_LIVE_ENABLED", "0") or "0").strip() in ("1", "true", "yes")) else "paper"
+        logger.info("SellerRunner up (lot=%d width=%d mode=%s open=%d)", self._lot, self._width,
+                    self._mode, len(self._mgr.open_spreads))
+
+    # ── mongo mirror (for the dashboard) ─────────────────────────────────────
+    def _publish_status(self, snap, acc, decision) -> None:
+        try:
+            self._db["seller_status"].update_one({"_id": "live"}, {"$set": {
+                "_id": "live", "ts": datetime.now(timezone.utc).isoformat(), "time": self._hhmm(snap),
+                "mode": self._mode, "decision": decision.structure if decision.fires else "SIT OUT",
+                "reason": (decision.reason or "")[:80], "iv_rank": round(acc.iv_percentile or 0, 1),
+                "fires": bool(decision.fires), "open_count": len(self._mgr.open_spreads),
+            }}, upsert=True)
+        except Exception:
+            pass
+
+    def _mirror_open(self, spread, decision) -> None:
+        try:
+            self._db["seller_positions"].insert_one({
+                "spread_id": spread.spread_id, "day": spread.trade_date, "structure": spread.structure,
+                "credit": spread.entry_credit, "iv_rank": decision.iv_rank, "opened_at": spread.opened_at,
+                "legs": [[l.action, l.option_type, l.strike] for l in spread.legs]})
+        except Exception:
+            pass
+
+    def _mirror_close(self, spread, reason, held, pnl) -> None:
+        try:
+            self._db["seller_trades"].insert_one({
+                "source": "live", "spread_id": spread.spread_id, "day": spread.trade_date,
+                "structure": spread.structure, "credit": spread.entry_credit, "reason": reason,
+                "days_held": held, "pnl_rs": round(pnl), "iv_rank": (spread.meta or {}).get("iv_rank"),
+                "entry_ts": spread.opened_at, "exit_ts": datetime.now(timezone.utc).isoformat()})
+            self._db["seller_positions"].delete_one({"spread_id": spread.spread_id})
+        except Exception:
+            pass
 
     def _log(self, event: str, **kw):
         rec = {"ts": datetime.now(timezone.utc).isoformat(), "event": event, **kw}
@@ -108,6 +143,8 @@ class SellerRunner:
         pf = build_price_fn(snap)
         expiry = self._expiry(snap)
         acc = SnapshotAccessor(snap)
+        decision = self._brain.decide(acc)
+        self._publish_status(snap, acc, decision)
         # ── manage open spreads INTRADAY ──
         for sp in list(self._mgr.open_spreads):
             val = PositionManager.spread_value(sp, pf)
@@ -126,6 +163,7 @@ class SellerRunner:
                 self._daily_pnl += pnl
                 self._log("close", spread_id=sp.spread_id, structure=sp.structure, reason=reason,
                           credit=sp.entry_credit, exit_value=exit_val, pnl_rs=round(pnl, 1))
+                self._mirror_close(sp, reason, held, pnl)
                 self._mgr.remove(sp.spread_id)
         # ── entry: once/day, in window, risk-permitting ──
         if self._entered_today:
@@ -136,7 +174,6 @@ class SellerRunner:
         ok, why = self._risk.can_open(len(self._mgr.open_spreads), self._daily_pnl)
         if not ok:
             return
-        decision = self._brain.decide(acc)
         if not decision.fires:
             return
         ex = SafeExecutor(self._gw_factory(pf), self._lot, self._width)
@@ -147,6 +184,7 @@ class SellerRunner:
             self._log("open", spread_id=spread.spread_id, structure=spread.structure,
                       credit=spread.entry_credit, legs=[(l.action, l.option_type, l.strike) for l in spread.legs],
                       regime=decision.regime, iv_rank=decision.iv_rank)
+            self._mirror_open(spread, decision)
 
     def run_forever(self, interval_s: float = 30.0) -> None:
         logger.info("SellerRunner loop start (interval=%.0fs, log=%s)", interval_s, self._log_path)
