@@ -103,6 +103,7 @@ class SellerRunner:
                 "source": "live", "spread_id": spread.spread_id, "day": spread.trade_date,
                 "structure": spread.structure, "credit": spread.entry_credit, "reason": reason,
                 "days_held": held, "pnl_rs": round(pnl), "iv_rank": (spread.meta or {}).get("iv_rank"),
+                "legs": [[l.action, l.option_type, l.strike] for l in spread.legs],
                 "entry_ts": spread.opened_at, "exit_ts": datetime.now(timezone.utc).isoformat()})
             self._db["seller_positions"].delete_one({"spread_id": spread.spread_id})
         except Exception:

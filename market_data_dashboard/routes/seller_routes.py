@@ -137,7 +137,7 @@ th{color:var(--mut);font-weight:600}.g{color:var(--g)}.r{color:var(--r)}.mut{col
 <div class=grid id=kpis></div>
 <div class=card><h3>Equity / per-trade P&amp;L</h3><div class=bar id=bar></div></div>
 <div class=card><h3>Trade ledger</h3><div style="overflow:auto"><table id=tbl><thead><tr>
-<th>date</th><th>IV-rank</th><th>structure</th><th>credit</th><th>outcome</th><th>held</th><th>₹ P&amp;L</th></tr></thead><tbody></tbody></table></div></div>
+<th>date</th><th>IV-rank</th><th>structure</th><th>legs (short/long)</th><th>credit</th><th>outcome</th><th>held</th><th>₹ P&amp;L</th></tr></thead><tbody></tbody></table></div></div>
 
 <div class=warn><b>Paper only — real money OFF.</b> Edge validated mostly on 2024 (higher-IV); the 2026 sample is small (current-regime sanity check). Go-live only after a full live paper cycle (T9) clears net-cost in this regime + Dhan 2-leg execution is proven.</div>
 <div class=sub style="margin-top:10px">2024 backtest (209 days): 71% win · +₹1,427/trade · +₹228k · drop-top3 +₹208k (robust).</div>
@@ -145,6 +145,8 @@ th{color:var(--mut);font-weight:600}.g{color:var(--g)}.r{color:var(--r)}.mut{col
 <script>
 let SRC="sim_2026";
 const rs=n=>(n>=0?"+":"−")+"₹"+Math.abs(n).toLocaleString("en-IN");
+function fmtLegs(legs){if(!legs||!legs.length)return '—';const m={};legs.forEach(l=>{const a=l[0],t=l[1],k=l[2];m[(a=='SELL'?'s':'b')+t]=k});
+ const put=m.sPE!=null?`P ${m.sPE}/${m.bPE}`:'';const call=m.sCE!=null?`C ${m.sCE}/${m.bCE}`:'';return [put,call].filter(Boolean).join(' · ')||'—';}
 async function j(u){try{const r=await fetch(u);return await r.json()}catch(e){return null}}
 function kpi(l,v,c){return `<div class=kpi><div class=l>${l}</div><div class="v ${c||''}">${v}</div></div>`}
 async function load(){
@@ -156,11 +158,14 @@ async function load(){
     const ivr=s.iv_rank==null?'—':s.iv_rank;
     const dec=s.decision||'—';
     const col=(s.fires)?'var(--g)':'var(--mut)';
+    const ops=st.open_positions||[];
     document.getElementById('live').innerHTML=
       `<div><span class=dot style="background:${col}"></span><b>${dec}</b></div>`+
       `<div class=mut>IV-rank <b style="color:var(--fg)">${ivr}</b></div>`+
-      `<div class=mut>open positions <b style="color:var(--fg)">${(st.open_positions||[]).length}</b></div>`+
-      `<div class=mut>last update ${s.time||s.ts||'—'}</div>`;
+      `<div class=mut>open positions <b style="color:var(--fg)">${ops.length}</b></div>`+
+      `<div class=mut>last update ${s.time||s.ts||'—'}</div>`+
+      (ops.length?('<div style="flex-basis:100%;margin-top:8px;border-top:1px solid var(--bd);padding-top:8px">'+
+        ops.map(o=>`<div class=mut style="font-size:12px">▸ <b style="color:var(--fg)">${o.structure}</b> ${fmtLegs(o.legs)} · credit ${o.credit}</div>`).join('')+'</div>'):'');
   }
   const m=await j('/api/seller/metrics?source='+SRC);
   if(m){document.getElementById('kpis').innerHTML=
@@ -177,7 +182,7 @@ async function load(){
   const tb=document.querySelector('#tbl tbody');
   if(td&&td.trades){tb.innerHTML=td.trades.map(t=>{
     const p=t.pnl_rs;const c=p==null?'mut':(p>0?'g':(p<0?'r':'mut'));
-    return `<tr><td>${t.day||t.entry_ts||''}</td><td>${t.iv_rank??'—'}</td><td>${t.structure||''}</td><td>${t.credit??'—'}</td><td>${t.reason||t.exit_reason||''}</td><td>${t.days_held??'—'}</td><td class=${c}>${p==null?'—':rs(p)}</td></tr>`}).join('')||'<tr><td colspan=7 class=mut>no trades yet — sitting out / low IV</td></tr>';}
+    return `<tr><td>${t.day||t.entry_ts||''}</td><td>${t.iv_rank??'—'}</td><td>${t.structure||''}</td><td class=mut style="font-size:12px">${fmtLegs(t.legs)}</td><td>${t.credit??'—'}</td><td>${t.reason||t.exit_reason||''}</td><td>${t.days_held??'—'}</td><td class=${c}>${p==null?'—':rs(p)}</td></tr>`}).join('')||'<tr><td colspan=8 class=mut>no trades yet — sitting out / low IV</td></tr>';}
 }
 document.getElementById('seg').addEventListener('click',e=>{if(e.target.dataset.s){SRC=e.target.dataset.s;
   [...document.querySelectorAll('#seg button')].forEach(b=>b.classList.toggle('on',b.dataset.s===SRC));load();}});
