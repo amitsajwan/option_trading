@@ -153,6 +153,7 @@ def run_loop(
     idle_sleep_seconds: int,
     build_run_id: str,
     parquet_root: Optional[str] = None,
+    velocity_context_provider: Optional[Any] = None,
 ) -> int:
     builder = LiveMarketSnapshotBuilder(
         instrument=instrument,
@@ -160,6 +161,7 @@ def run_loop(
         dashboard_api_base=dashboard_api_base,
         timeout_seconds=timeout_seconds,
         parquet_root=parquet_root,
+        velocity_context_provider=velocity_context_provider,
     )
     if parquet_root:
         logger.info("snapshot_app velocity context parquet_root=%s", parquet_root)
@@ -350,6 +352,10 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             "SNAPSHOT_PARQUET_ROOT=%s does not exist; velocity context will be NaN",
             parquet_root_raw,
         )
+    # Live runtime has no flat parquet — read prev-day velocity context from the
+    # mongo snapshot collections instead (populates ctx_gap_*, vol_spike_ratio,
+    # ctx_am_vol_vs_yday). Safe no-op if mongo/pymongo is unavailable.
+    velocity_context_provider = _build_mongo_velocity_context_provider()
     return run_loop(
         instrument=instrument,
         market_api_base=str(args.market_api_base),
@@ -369,7 +375,43 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         idle_sleep_seconds=idle_sleep_seconds,
         build_run_id=build_run_id,
         parquet_root=parquet_root,
+        velocity_context_provider=velocity_context_provider,
     )
+
+
+def _build_mongo_velocity_context_provider() -> Optional[Any]:
+    """Mongo-backed prev-day velocity context provider, or None if unavailable.
+
+    Reads prev_day_close / midday option volume / 20-day avg from the mongo
+    snapshot collections so ctx_gap_* / vol_spike_ratio / ctx_am_vol_vs_yday are
+    populated live (the runtime VM has no flat parquet). Opt out with
+    SNAPSHOT_VELOCITY_CONTEXT_MONGO=0. Any failure returns None (features stay
+    NaN — identical to prior behaviour, no regression).
+    """
+    if not _truthy(os.getenv("SNAPSHOT_VELOCITY_CONTEXT_MONGO", "1")):
+        return None
+    try:
+        from pymongo import MongoClient
+
+        from snapshot_app.core.live_velocity_state import make_mongo_context_provider
+    except Exception as exc:  # pragma: no cover - import guard
+        logger.warning("velocity context: mongo provider unavailable (%s)", exc)
+        return None
+    host = os.getenv("MONGO_HOST", "localhost")
+    port = int(os.getenv("MONGO_PORT", "27017") or "27017")
+    db_name = os.getenv("MONGO_DB", "trading_ai")
+    try:
+        client = MongoClient(host=host, port=port, serverSelectionTimeoutMS=5000)
+        db = client[db_name]
+        logger.info(
+            "velocity context: mongo provider enabled host=%s db=%s", host, db_name
+        )
+        return make_mongo_context_provider(db)
+    except Exception as exc:
+        logger.warning(
+            "velocity context: mongo connect failed (%s); context will be NaN", exc
+        )
+        return None
 
 
 if __name__ == "__main__":
