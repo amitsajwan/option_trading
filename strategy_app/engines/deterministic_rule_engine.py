@@ -1293,7 +1293,7 @@ class DeterministicRuleEngine(StrategyEngine):
             ml_hint_fn=extract_ml_direction_hint,
             consensus_fn=resolve_direction_consensus,
             ml_entry_vote_selector=lambda vts: max(
-                (v for v in vts if v.strategy_name == "ML_ENTRY"),
+                (v for v in vts if v.strategy_name in ("ML_ENTRY", "VOL_GATE_ENTRY")),
                 key=lambda v: float(v.confidence or 0),
                 default=None,
             ),
