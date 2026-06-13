@@ -174,7 +174,9 @@ class DirectionGate(Gate):
             ctx.direction = cand.direction
             return GateResult.ok()
 
-        ml_votes = [v for v in ctx.votes if v.strategy_name == "ML_ENTRY"]
+        # ML_ENTRY and VOL_GATE_ENTRY are interchangeable entry triggers (same
+        # bypass pipeline); whichever is active produces the entry vote.
+        ml_votes = [v for v in ctx.votes if v.strategy_name in ("ML_ENTRY", "VOL_GATE_ENTRY")]
         if not ml_votes:
             return GateResult.veto("no_ml_entry_vote")
 
