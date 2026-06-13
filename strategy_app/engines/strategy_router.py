@@ -185,20 +185,24 @@ class StrategyRouter:
     def available_strategy_names(self) -> list[str]:
         return sorted(self._strategy_registry.keys())
 
+    def _resolve_strategy_name(self, name: str) -> str:
+        """Swap the ML entry trigger for the non-ML volatility gate when
+        ENTRY_VOL_GATE_ENABLED=1 — same regime map + downstream pipeline, only
+        the trigger changes (clean A/B / drop-in). Applied in BOTH the initial
+        materialization and configure() so the live profile gets the swap too.
+        """
+        if name == "ML_ENTRY" and os.getenv(
+            "ENTRY_VOL_GATE_ENABLED", "0"
+        ).strip().lower() in ("1", "true", "yes", "on"):
+            return "VOL_GATE_ENTRY"
+        return name
+
     def _materialize_entry_sets(self, regime_entry_map: dict[str, list[str]]) -> dict[Regime, list[BaseStrategy]]:
-        # ENTRY_VOL_GATE_ENABLED=1 swaps the ML entry trigger for the non-ML
-        # volatility gate everywhere ML_ENTRY appears — same regime map, same
-        # downstream pipeline, only the trigger changes (clean A/B / drop-in).
-        swap = os.getenv("ENTRY_VOL_GATE_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
-
-        def _resolve(name: str) -> str:
-            return "VOL_GATE_ENTRY" if (swap and name == "ML_ENTRY") else name
-
         return {
             regime: [
-                self._strategy_registry[_resolve(name)]
+                self._strategy_registry[self._resolve_strategy_name(name)]
                 for name in regime_entry_map.get(regime.value, [])
-                if _resolve(name) in self._strategy_registry
+                if self._resolve_strategy_name(name) in self._strategy_registry
             ]
             for regime in Regime
         }
@@ -260,7 +264,11 @@ class StrategyRouter:
             names = regime_entry_map.get(regime, list(default_entry.get(regime.value, [])))
             if enabled_entry is not None:
                 names = [name for name in names if name in enabled_entry]
-            new_entry_sets[regime] = [self._strategy_registry[name] for name in names if name in self._strategy_registry]
+            new_entry_sets[regime] = [
+                self._strategy_registry[self._resolve_strategy_name(name)]
+                for name in names
+                if self._resolve_strategy_name(name) in self._strategy_registry
+            ]
         self._entry_sets = new_entry_sets
 
         if configured_exit:
