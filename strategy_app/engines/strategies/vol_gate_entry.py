@@ -116,9 +116,13 @@ class VolGateEntryStrategy(BaseStrategy):
         if direction is None:
             return None
 
-        # confidence scales with how far above the gate we are: at the gate -> 0.5,
-        # at 2x the gate -> 1.0. Keeps downstream confidence ranking meaningful.
-        conf = min(1.0, max(0.5, gate_val / (2.0 * gate_min))) if gate_min > 0 else 0.5
+        # Confidence: clearing the ATR gate is the selection, so a fired bar
+        # starts at 0.65 (clears the consensus bypass gate if a consensus profile
+        # is ever used) and scales to 1.0 at 2x the gate — keeps ranking meaningful.
+        conf = (
+            min(1.0, 0.65 + 0.35 * max(0.0, (gate_val - gate_min) / gate_min))
+            if gate_min > 0 else 0.65
+        )
         raw_signals = {
             "atr_14_1m": round(atr, 3),
             "atr_pct": round(atr_pct, 6),
