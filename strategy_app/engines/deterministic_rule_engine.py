@@ -637,18 +637,19 @@ class DeterministicRuleEngine(StrategyEngine):
         risk: RiskContext,
     ) -> Optional[TradeSignal]:
         """Check for system exits (stop, target, time) and log manage events."""
-        # Populate current shadow score when needed by any dynamic exit logic.
-        if (
-            position.stagnant_exit_condition == "shadow_score_crossed_zero"
-            or as_bool(os.getenv("DYNAMIC_SCRATCH_ENABLED", "false"))
-            or as_bool(os.getenv("STAGNANT_PROFIT_EXIT_ENABLED", "false"))
-        ):
-            try:
-                _, _, _shadow_score = self._shadow_direction_from_snapshot(snap)
-                position.current_shadow_score = float(_shadow_score)
-            except Exception:
-                # Do not block manage loop if scorer fails; leave score as-is.
-                pass
+        # Refresh the shadow (live direction) score EVERY bar. The
+        # MomentumReversalPolicy thesis-invalidation exit (active in the lottery
+        # stack via LOTTERY_MOMENTUM_FLIP) reads position.current_shadow_score to
+        # detect the directional thesis breaking — without this refresh it stays
+        # 0.0 and the momentum-flip exit can never fire, so losers run to the
+        # (option-gap-prone) hard stop instead of being cut early. The stagnant /
+        # dynamic-scratch exits also consume it. Cheap; never blocks the loop.
+        try:
+            _, _, _shadow_score = self._shadow_direction_from_snapshot(snap)
+            position.current_shadow_score = float(_shadow_score)
+        except Exception:
+            # Do not block manage loop if scorer fails; leave score as-is.
+            pass
         system_exit = self._tracker.update(snap, risk)
         if system_exit is not None:
             self._annotate_signal_contract(system_exit, decision_mode="rule_vote")
