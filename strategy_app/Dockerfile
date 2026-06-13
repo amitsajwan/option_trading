@@ -12,7 +12,10 @@ RUN apt-get update \
 COPY strategy_app/requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
-RUN pip install --no-cache-dir --no-deps xgboost==2.1.4
+# Must match the xgboost version models are TRAINED with (ml_pipeline_2 → 3.2.0).
+# A 3.2.0-pickled model loaded under 2.1.4 is SILENTLY mis-evaluated (wrong probs,
+# no error) — caused live entry over-firing. Keep this in lock-step with training.
+RUN pip install --no-cache-dir --no-deps xgboost==3.2.0
 
 COPY contracts_app /app/contracts_app
 COPY ml_pipeline_2 /app/ml_pipeline_2

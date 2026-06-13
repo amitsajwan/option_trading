@@ -13,7 +13,9 @@ RUN apt-get update && apt-get install -y \
 COPY market_data_dashboard/requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
-RUN pip install --no-cache-dir --no-deps xgboost==2.1.4
+# Must match the xgboost version models are TRAINED with (ml_pipeline_2 → 3.2.0).
+# A 3.2.0-pickled model loaded under 2.1.4 is silently mis-evaluated (wrong probs).
+RUN pip install --no-cache-dir --no-deps xgboost==3.2.0
 
 # Copy application code + shared packages used by dashboard
 COPY market_data_dashboard /app/market_data_dashboard

@@ -15,8 +15,11 @@ dependencies = [
   "optuna",
   "pandas",
   "pyarrow",
-  "scikit-learn",
-  "xgboost",
+  # Pinned to match the SERVING images (strategy_app / dashboard). A model
+  # pickled with a different xgboost major is silently mis-evaluated at serve
+  # time (wrong probs, no error). Keep these in lock-step with the Dockerfiles.
+  "scikit-learn==1.7.2",
+  "xgboost==3.2.0",
 ]
 
 [project.scripts]
