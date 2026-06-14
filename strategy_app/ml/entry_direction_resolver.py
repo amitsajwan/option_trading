@@ -401,8 +401,16 @@ def resolve_entry_direction(
 ) -> EntryDirectionResult:
     mode = str(os.getenv("ML_ENTRY_DIRECTION_MODE") or "composite").strip().lower()
     if mode in {"momentum", "mom"}:
-        return resolve_entry_direction_momentum(snap)
-    if mode in {"composite", "multi", "bind", ""}:
-        return resolve_entry_direction_composite(snap, depth=depth)
-    # Unknown mode — fall back to composite.
-    return resolve_entry_direction_composite(snap, depth=depth)
+        result = resolve_entry_direction_momentum(snap)
+    else:
+        # composite / multi / bind / "" / unknown → composite
+        result = resolve_entry_direction_composite(snap, depth=depth)
+
+    # SHADOW ONLY (DIRECTION_SHADOW_ENABLED): log what the LLM would have picked.
+    # Off the hot path (daemon thread), never raises, never changes `result`.
+    try:
+        from ..brain.direction_shadow import get_direction_shadow
+        get_direction_shadow().record(snap, result)
+    except Exception:
+        pass
+    return result

@@ -58,7 +58,14 @@ class SellerBrain:
                  direction_signal: Optional[str] = None, condor_offset: Optional[int] = None):
         self._width = int(width if width is not None else _env_float("SELLER_SPREAD_WIDTH", 300))
         self._iv_min = iv_rank_min if iv_rank_min is not None else _env_float("SELLER_IV_RANK_MIN", 30.0)
-        self._cond_off = int(condor_offset if condor_offset is not None else _env_float("SELLER_CONDOR_OFFSET", 100))
+        # Default 200 = the VALIDATED offset (209-day expiry-aware SIM). NOTE (trader review): even
+        # ±200 is only ~0.3σ of a weekly — a delta-based strike (~12-16Δ ≈ ATM±500-700) is the
+        # recommended redesign before real money. 200 is the validated-fixed-point default for now.
+        self._cond_off = int(condor_offset if condor_offset is not None else _env_float("SELLER_CONDOR_OFFSET", 200))
+        # Entry-DTE gate: only sell with theta runway. EXPIRY-AWARE SIM (209 days, weekly options)
+        # proved the edge lives ENTIRELY in early-cycle entries — DTE>=4 wins ~74% (+₹1,149/trade),
+        # while DTE 0-1 entries are pure gamma with no theta left to harvest (0% win, net loss).
+        self._min_dte = int(_env_float("SELLER_MIN_DTE", 4))
         # Directional vertical only on genuine strong trends (default ON); else iron condor.
         self._directional_on_trend = (os.getenv("SELLER_DIRECTIONAL_ON_TREND", "1") or "1").strip() not in ("0", "false", "no")
         self._dir = RegimeDirector(direction_signal or os.getenv("REGIME_DIRECTION_SIGNAL", "weighted"))
@@ -112,6 +119,12 @@ class SellerBrain:
         if iv_rank is not None and iv_rank < self._iv_min:
             return SellerDecision("none", regime=quality, iv_rank=iv_rank,
                                   reason=f"IV-rank {iv_rank:.0f} < {self._iv_min:.0f} (premium too thin)")
+
+        # DTE gate — need theta runway. Near-expiry entries are all gamma, no theta (proven net-loss).
+        dte = snap.days_to_expiry
+        if dte is not None and dte < self._min_dte:
+            return SellerDecision("none", regime=quality, iv_rank=iv_rank,
+                                  reason=f"DTE {dte} < {self._min_dte} (no theta runway — gamma trap)")
 
         atm = self._nearest_strike(snap, float(ref))
         if atm is None:

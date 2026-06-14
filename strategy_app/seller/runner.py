@@ -127,6 +127,17 @@ class SellerRunner:
         t = ((snap.get("session_context") or {}).get("time") or snap.get("timestamp") or "")
         return t[11:16] if len(t) > 15 else t[:5]
 
+    @staticmethod
+    def _trade_date(snap: dict) -> Optional[str]:
+        """Real ISO trade date — NEVER fall back to HH:MM (that would reset daily gates every
+        minute). Tries trade_date_ist -> session_context.date -> timestamp[:10]. (review H4/C-fix)"""
+        sc = snap.get("session_context") or {}
+        raw = snap.get("trade_date_ist") or sc.get("date") or str(sc.get("timestamp") or snap.get("timestamp") or "")[:10]
+        try:
+            return date.fromisoformat(str(raw)[:10]).isoformat()
+        except Exception:
+            return None
+
     def _expiry(self, snap: dict) -> date:
         # TODO: resolve the real nearest BankNifty monthly expiry from the chain/scrip master.
         raw = ((snap.get("session_context") or {}).get("expiry") or snap.get("expiry"))
@@ -138,8 +149,8 @@ class SellerRunner:
     def on_snapshot(self, snap: dict) -> None:
         if not snap or not snap.get("strikes"):
             return
-        day = snap.get("trade_date_ist") or self._hhmm(snap)
-        if day != self._cur_day:
+        day = self._trade_date(snap)
+        if day and day != self._cur_day:   # only reset daily gates on a REAL date rollover
             self._cur_day, self._daily_pnl, self._entered_today = day, 0.0, False
         pf = build_price_fn(snap)
         expiry = self._expiry(snap)
@@ -151,16 +162,21 @@ class SellerRunner:
             val = PositionManager.spread_value(sp, pf)
             if val is None:
                 continue
-            held = 0  # days held, from the spread's opened date
+            held = 0  # days held, from the SNAPSHOT date (not wall-clock — replay-safe). review H1
             try:
-                held = (date.today() - date.fromisoformat(sp.trade_date)).days
+                held = (date.fromisoformat(day or self._cur_day) - date.fromisoformat(sp.trade_date)).days
             except Exception:
                 held = 0
-            reason = self._mgr.check_exit(sp, val, held, dte=None)
+            reason = self._mgr.check_exit(sp, val, held, dte=acc.days_to_expiry)
             if reason:
                 ex = SafeExecutor(self._gw_factory(pf), sp.qty, self._width)
                 exit_val = ex.close_spread(sp, expiry)
-                pnl = (sp.entry_credit - (exit_val if exit_val is not None else val)) * sp.qty
+                if exit_val is None:
+                    # A leg failed to square off. KEEP the spread in the durable store and retry
+                    # next tick — NEVER drop a still-live position from tracking. (review C1)
+                    self._log("close_failed", spread_id=sp.spread_id, reason=reason)
+                    continue
+                pnl = (sp.entry_credit - exit_val) * sp.qty
                 self._daily_pnl += pnl
                 self._log("close", spread_id=sp.spread_id, structure=sp.structure, reason=reason,
                           credit=sp.entry_credit, exit_value=exit_val, pnl_rs=round(pnl, 1))

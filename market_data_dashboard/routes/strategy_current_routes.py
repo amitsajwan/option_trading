@@ -30,6 +30,7 @@ from ..state.strategy_current_state import (
     read_strategy_current_state,
 )
 from ..state.brain_state import read_brain_state
+from ..state.direction_shadow_state import read_direction_shadow
 
 
 class StrategyCurrentRouter:
@@ -63,6 +64,13 @@ class StrategyCurrentRouter:
         router.add_api_route(
             "/api/strategy/brain/status",
             self.get_brain_status,
+            methods=["GET"],
+        )
+        # LLM direction-shadow experiment: what Groq/Gemini WOULD have picked vs our
+        # composite (shadow only — never affects orders). See direction_shadow_state.
+        router.add_api_route(
+            "/api/strategy/brain/direction-shadow",
+            self.get_direction_shadow,
             methods=["GET"],
         )
         router.add_api_route(
@@ -174,3 +182,21 @@ class StrategyCurrentRouter:
             return read_brain_state(mode=mode)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to read brain state: {exc}")
+
+    async def get_direction_shadow(
+        self,
+        mode: str = Query("live", description="live | replay"),
+        recent: int = Query(20, ge=0, le=200, description="how many recent shadow entries to include"),
+    ) -> dict:
+        """LLM direction-shadow summary: what Groq/Gemini WOULD have picked vs our composite.
+
+        Shadow only — never affects orders. Returns commit/agreement/grounded rates and
+        mean confidence always; LLM accuracy appears once outcomes are backfilled.
+        {available: false} when DIRECTION_SHADOW_ENABLED is off or no entries logged yet.
+        """
+        if mode.strip().lower() not in {"live", "replay", "historical"}:
+            raise HTTPException(status_code=400, detail="mode must be 'live' or 'replay'")
+        try:
+            return read_direction_shadow(mode=mode, recent=recent)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to read direction shadow: {exc}")

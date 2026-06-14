@@ -49,8 +49,11 @@ class OpenSpread:
 
     @property
     def max_risk(self) -> float:
-        # defined risk per unit = total width - credit (condor: sum of leg widths; sign>=0)
-        return max(0.0, self.width - self.entry_credit)
+        # Defined risk per unit. For an iron condor ONLY ONE side can finish ITM at expiry, so the
+        # max loss is a SINGLE wing-width minus the (total) credit kept — not both wings. `self.width`
+        # is stored as 2x the wing for a condor, so halve it here. (architect+trader review fix.)
+        single_wing = self.width / 2 if self.structure == "iron_condor" else self.width
+        return max(0.0, single_wing - self.entry_credit)
 
 
 class SafeExecutor:
