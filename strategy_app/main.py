@@ -360,6 +360,33 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         _session_ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         _session_run_id = f"{args.rollout_stage}-{_session_ts}-{str(uuid.uuid4())[:8]}"
         engine.set_run_context(_session_run_id, run_metadata)
+    # Startup config audit — runs BEFORE the first bar so bad config is visible immediately.
+    # Fatal rules abort the process; conflict rules log warnings.
+    try:
+        from ops.config_audit import audit as _config_audit, fatal_errors as _fatal_errors
+        _env_snapshot = dict(os.environ)
+
+        # Fatal check first — bad engine config kills the process here, not mid-session.
+        _fatals = _fatal_errors(_env_snapshot)
+        if _fatals:
+            for _msg in _fatals:
+                logger.error("CONFIG FATAL %s", _msg)
+            raise ValueError(
+                "Startup aborted — fatal config errors detected (see CONFIG FATAL log lines above). "
+                "Fix .env.compose and restart. Details: " + "; ".join(_fatals)
+            )
+
+        _audit_text = _config_audit(_env_snapshot)
+        for _line in _audit_text.splitlines():
+            if "[!]" in _line:
+                logger.warning("CONFIG AUDIT %s", _line.strip())
+            else:
+                logger.debug("CONFIG AUDIT %s", _line)
+    except ValueError:
+        raise   # re-raise fatal config errors
+    except Exception:
+        logger.debug("config audit skipped", exc_info=True)
+
     topic = str(args.topic or snapshot_topic()).strip() or snapshot_topic()
     runtime_store = RuntimeArtifactStore(runtime_artifact_paths.root)
     # If the engine has option-P&L bundles loaded (via OPTION_PNL_MODEL_BUNDLE),

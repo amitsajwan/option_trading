@@ -315,6 +315,14 @@ class RegimeAdaptiveExitPolicy(ExitPolicy):
 
     Controlled by EXIT_STRATEGY_MODE=adaptive. The set of lottery regimes can be
     overridden via ADAPTIVE_LOTTERY_REGIMES (comma-separated, default BREAKOUT,TRENDING).
+
+    CRITICAL: BREAKOUT and TRENDING entries use the LOTTERY hard stop (LOTTERY_HARD_STOP_PCT,
+    default 20%), NOT the scalper hard stop (EXIT_SCALPER_HARD_STOP_PCT). Setting only
+    EXIT_SCALPER_HARD_STOP_PCT=0.05 gives ZERO protection on BREAKOUT/TRENDING trades —
+    they bypass the scalper stack entirely and run the 20% lottery stop.
+    Root cause of the 2026-06-05 incident where a BREAKOUT entry ran to -13.2% unstopped
+    while EXIT_SCALPER_HARD_STOP_PCT=0.05 was set. Fix: also set LOTTERY_HARD_STOP_PCT
+    to your desired max loss, or exclude BREAKOUT from ADAPTIVE_LOTTERY_REGIMES.
     """
 
     _DEFAULT_LOTTERY_REGIMES = {"BREAKOUT", "TRENDING"}

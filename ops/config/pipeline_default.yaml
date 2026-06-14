@@ -1,0 +1,103 @@
+# Decision pipeline — loaded by PipelineExecutor at startup.
+#
+# Design principle (per 2026-06-14 data evidence):
+#   Regime ✓ + Volatility ✓ + Direction ? (coin flip, 50.3% OOS)
+#   → Volatility is the primary gatekeeper (ENTRY)
+#   → Direction only influences *how* you trade, not *whether* you trade
+#   → Uncertain direction → straddle (trade the vol, not the side)
+#   → Range regime → seller path (different product entirely)
+#
+# FLOW:
+#   regime → [TREND/HIGH_VOL → volatility → trade_selector]
+#           → [RANGE         → seller_flow → iron_condor / no_trade]
+#           → [LOW_VOL       → no_trade]
+#
+#   volatility (big-move gate) → [pass → trade_selector → directional / straddle]
+#                              → [fail → no_trade]
+#
+#   trade_selector (direction) → [bullish  → buy_call]
+#                              → [bearish  → buy_put]
+#                              → [uncertain → straddle]    # ← trade the vol, not the side
+#
+# ENV VARS THAT AFFECT THIS PIPELINE:
+#   ENTRY_ML_MODEL_PATH   — path to entry_only_v3 joblib bundle (AUC 0.831)
+#   REGIME_DIRECTION_SIGNAL — "weighted" | "combo" (default: weighted)
+#   REGIME_W_MOM          — MUST be 0 (momentum_15m is anti-signal, 48.1% accuracy)
+#   SELLER_IV_RANK_MIN    — IV rank floor for seller gate
+
+pipeline:
+  start: regime
+
+nodes:
+
+  # ── Stage 1: Regime — is it tradeable and what product? ──────────────────────
+  regime:
+    model: regime_classifier
+    outputs:
+      TREND_UP:   volatility      # trending bull → vol gate → trade type
+      TREND_DOWN: volatility      # trending bear → vol gate → trade type
+      RANGE:      seller_flow     # sideways / chop → seller path directly
+      HIGH_VOL:   volatility      # breakout / panic → vol gate (higher bar)
+      LOW_VOL:    no_trade        # dead market / expiry / avoid → sit out
+
+  # ── Stage 2a: Volatility gate — is a big move expected? ──────────────────────
+  # entry_only_v3 (E6, AUC 0.83): P(≥50pt in 10min) >= 0.85
+  # PRIMARY decision gate — most bars fail here and that is correct.
+  # max_nan_features: refuse to score if more than this many features are NaN.
+  #   → blocks market-open bars (vel_* delta features need 30-60min of history)
+  #   → blocks stale/old snapshots that never had velocity features
+  #   → allows the 8 structural NaNs present on every live GCP bar
+  #   When refused the bar returns "fail" silently — no trade until data is ready.
+  volatility:
+    model: big_move_model
+    threshold: 0.85
+    pass: trade_selector
+    fail: no_trade
+    params:
+      max_nan_features: 15
+
+  # ── Stage 2b: Seller gate — IV rank + regime quality ─────────────────────────
+  seller_flow:
+    model: seller_model
+    threshold: 0.30             # IV rank floor (30th percentile minimum)
+    high_confidence: iron_condor
+    low_confidence:  no_trade
+
+  # ── Stage 3: Trade selector — direction influences HOW, not WHETHER ───────────
+  # Direction model: ~50% accuracy overall; only fire directional on high confidence.
+  # On uncertain direction the vol is still expected → straddle captures the move.
+  trade_selector:
+    model: direction_model
+    threshold: 0.65
+    bullish:   buy_call         # high confidence bull → long CE
+    bearish:   buy_put          # high confidence bear → long PE
+    uncertain: straddle         # low confidence → straddle (buy both, ride the move)
+
+  # ── Terminal nodes ────────────────────────────────────────────────────────────
+  iron_condor:
+    strategy: iron_condor       # S3 seller: shorts ATM±200, 50%TP / 2×SL / DTE7
+
+  buy_call:
+    strategy: directional_call  # CE: magnitude expected + direction bullish
+
+  buy_put:
+    strategy: directional_put   # PE: magnitude expected + direction bearish
+
+  straddle:
+    strategy: straddle          # ATM CE + PE: magnitude expected, direction uncertain
+
+  no_trade:
+    action: skip                # all non-trade paths converge here
+
+# ── Risk guardrails (enforced by the caller, not the executor) ─────────────────
+risk:
+  daily_loss_pct: 0.01          # stop trading if daily P&L < -1% (was 2%, tightened)
+  max_position_pct: 0.05        # max capital per trade (5%)
+  max_open_positions: 2         # 1 seller + 1 buyer position allowed concurrently
+  stop_trading_after_losses: 3  # consecutive-loss cutoff
+
+# ── Execution parameters ───────────────────────────────────────────────────────
+execution:
+  order_type: limit             # always limit orders on Dhan
+  slippage_check: true
+  max_slippage_pct: 0.002       # 0.2% slippage budget (reject wider fills)

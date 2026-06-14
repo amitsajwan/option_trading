@@ -21,10 +21,15 @@ from .executor import FilledLeg, OpenSpread
 logger = logging.getLogger(__name__)
 
 # exit thresholds (per-unit, fraction of credit / DTE)
+# TIME EXIT is DTE-DRIVEN, not a fixed day-cap. EXPIRY-AWARE SIM (209 days, weekly options) proved:
+# once you've entered with theta runway (DTE>=4), HOLD and let theta finish — exiting early leaves
+# money on the table. Close at DTE_EXIT=1 (the day before expiry): captures ~full theta yet avoids
+# the final-day gamma whip AND India's exercise-STT on ITM index options expiring in-the-money.
+# (Holding to DTE0/wire backtests ~+₹15k higher but that STT cost isn't modelled — 1 is prudent.)
 TP_FRAC = float(os.getenv("SELLER_TP_FRAC", "0.50") or 0.50)        # take 50% of credit
 STOP_MULT = float(os.getenv("SELLER_STOP_MULT", "2.0") or 2.0)      # stop at 2x credit
-DTE_EXIT = int(os.getenv("SELLER_DTE_EXIT", "7") or 7)              # force-exit before gamma week
-MAX_HOLD_DAYS = int(os.getenv("SELLER_MAX_HOLD_DAYS", "5") or 5)    # hold-horizon cap
+DTE_EXIT = int(os.getenv("SELLER_DTE_EXIT", "1") or 1)              # close 1 day before expiry (out before gamma/STT)
+MAX_HOLD_DAYS = int(os.getenv("SELLER_MAX_HOLD_DAYS", "10") or 10)  # safety backstop only (DTE drives the real exit)
 
 
 class PositionStore:

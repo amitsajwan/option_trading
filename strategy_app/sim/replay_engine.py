@@ -56,6 +56,7 @@ class TradeRecord(TypedDict):
     entry_snapshot_id:  str
     entry_dir_margin:   Optional[float]
     entry_grade_reasons: List[str]
+    entry_prob:          Optional[float]   # ML entry model probability at entry bar (None for vol-gate)
     # Deterministic post-trade reflection (Phase 2) — surfaced so the Replay UI
     # can show WHY each trade closed (cost/exit/direction/entry/noise miss),
     # recomputed with the same logic the live engine journals on close.
@@ -251,6 +252,11 @@ def replay_day(
             diag["entries"] += 1
             _rs = getattr(signal, "raw_signals", None)
             _rs = _rs if isinstance(_rs, dict) else {}
+            _ep_raw = _rs.get("entry_prob") or _rs.get("ml_entry_prob")
+            try:
+                _entry_prob: Optional[float] = float(_ep_raw) if _ep_raw is not None else None
+            except (TypeError, ValueError):
+                _entry_prob = None
             current_entry = {
                 "time_in":       hhmm,
                 "direction":     signal.direction,
@@ -265,6 +271,7 @@ def replay_day(
                 "entry_snapshot_id": str(snap.get("snapshot_id") or ""),
                 "entry_dir_margin": _rs.get("entry_dir_margin"),
                 "entry_grade_reasons": list(_rs.get("entry_grade_reasons") or []),
+                "entry_prob":    _entry_prob,
             }
 
         elif signal.signal_type == SignalType.EXIT and current_entry is not None:
@@ -311,6 +318,7 @@ def replay_day(
                 entry_snapshot_id=current_entry.get("entry_snapshot_id", ""),
                 entry_dir_margin=current_entry.get("entry_dir_margin"),
                 entry_grade_reasons=list(current_entry.get("entry_grade_reasons") or []),
+                entry_prob=current_entry.get("entry_prob"),
                 loss_tag=_loss_tag,
                 needs_reasoning=_needs_reasoning,
             ))
