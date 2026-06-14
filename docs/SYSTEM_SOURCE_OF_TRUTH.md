@@ -1,94 +1,139 @@
-# BankNifty System Source Of Truth
+# BankNifty System — Source of Truth
 
-As-of date: `2026-05-18`
+As-of date: **2026-06-14**
 
-If active docs conflict with code, code wins. If active docs conflict with each other, this file wins.
+> If active docs conflict with code, code wins. If active docs conflict with each
+> other, this file wins. The previous version of this doc (dated 2026-05-18)
+> referenced the dead `ml_pure` engine and old model bundles — it is superseded.
 
-## 1. Runtime Contract
+---
 
-- Live trading runtime is `strategy_app.main --engine ml_pure`.
-- Deterministic runtime is retained for replay and research only.
-- Legacy transitional runtime wrapper and registry-backed ML entry overlay have been removed.
-- `ml_pipeline_2` is the only supported ML training and publish source for live runtime artifacts.
-- Event bus is Redis and persistence is MongoDB.
+## 1. Runtime Engine
 
-## 2. ML Artifact Contract
+**Active engine:** `deterministic_rule_engine` (profile `trader_master_live_v1`).  
+The `ml_pure` engine referenced in the May-18 version is **retired** — do not deploy it.
 
-- Runtime artifact selection is by `ML_PURE_RUN_ID` + `ML_PURE_MODEL_GROUP`, or explicit package/report paths.
-- Explicit paths (`ML_PURE_MODEL_PACKAGE`, `ML_PURE_THRESHOLD_REPORT`) accept local file paths or `gs://` GCS URLs. GCS files are downloaded to local cache on first use (`GCS_ARTIFACT_CACHE_DIR`, default `~/.cache/option_trading_models/`).
-- In run-id mode, startup is blocked unless publish validation passes and both resolved artifact paths exist.
-- `runtime.block_expiry` must stay aligned between training and live runtime policy.
-- Active staged label generation is built from forward futures-path barrier labeling in `ml_pipeline_2/labeling/engine.py`, not from deterministic strategy replay exits.
+- Entry trigger: `ML_ENTRY` (xgboost entry_only_v3 bundle) or `VOL_GATE_ENTRY` (ATR-based, no ML)
+- Direction: weighted direction detector via `REGIME_DIRECTION_SIGNAL=weighted`
+- Exits: `EXIT_STRATEGY_MODE=adaptive` (BREAKOUT/TRENDING → lottery, else → scalper)
+- Transport: Redis pub/sub + MongoDB persistence
+- Execution: `EXECUTION_ADAPTER=dhan` (real) or `paper`
 
-**Current deployed model:**
+**GCP project:** `amit-trading` (old `algo-trading-496203` and `amittrading-493606` are DEAD — never use)  
+**Runtime VM:** `option-trading-runtime-01`, zone `asia-south1-b`  
+**ML VM:** `option-trading-ml-01`, zone `asia-south1-b` (stopped when idle; restartable)
 
-- Bundle: `option_pnl_atm_pe_15_20260517_135208`
-- Recipe: `ATM_PE_15` (HPO trial-18 params), option_type=PE, max_hold_bars=15, threshold=0.55
-- Local path: `/opt/option_trading/.data/ml_pipeline/option_pnl_published_models/option_pnl_atm_pe_15_20260517_135208`
-- Activated via: `OPTION_PNL_MODEL_BUNDLE=<path>` env var in docker-compose
-- Status: `paper` rollout stage only — no real capital
-- Realistic holdout (aug-sep window): 98 trades, net +2.87, WR 61% at thr=0.55
+---
 
-**Pending (2026-05-18):**
-- CE bundle (`ATM_CE_9`) — HPO + publish pending realistic eval results
-- Multi-bundle: `OPTION_PNL_MODEL_BUNDLE` now accepts comma-separated paths; engine selects highest `(prob - threshold)` margin each bar
-- See `docs/PROJECT_PLAN.md §18` for full analysis and next steps
+## 2. Active ML Model
 
-**Retired model (do not re-deploy):**
-- `staged_simple_s2_v1_20260426_110326` — all production gates failed, futures-direction lane confirmed dead on 2020-2024 corpus
+| Asset | Details |
+|---|---|
+| Bundle | `entry_only_v3` (020pct label, ≥110pt move) |
+| AUC | 0.831, ECE 0.009 (well-calibrated) |
+| Threshold | `ENTRY_ML_MIN_PROB=0.45` (per model report, fire_rate 0.79%, precision 59%); live .env.compose still has wrong 0.85 — fix manually |
+| GCS path | `gs://amit-trading-option-trading-models/published_models/entry_only_v3/` |
+| Local path (VM) | bind-mounted from `/opt/option_trading/.data/ml_pipeline/...` |
+| xgboost version | **3.2.0** — pin in Dockerfile; mismatch produces garbage probs |
 
-## 3. Runtime Guard Contract
+**Retired / do not deploy:**
+- `direction_only_v2` — 0.593 AUC in-sample; inverts to 43.9% OOS. Direction detection is a dead end.
+- `option_pnl_atm_pe_15_*` bundles (ml_pure era) — wrong engine, retired.
 
-When `engine=ml_pure` with a model package set (`runtime_ml_enabled=true`):
+---
 
-- `paper` and `shadow` stages: allowed without guard file — no real capital is sized.
-- `capped_live` stage: full guard required:
-  - `position_size_multiplier <= 0.25`
-  - guard file (`STRATEGY_ML_RUNTIME_GUARD_FILE`) must confirm:
-    - `approved_for_runtime=true`
-    - `offline_strict_positive_passed=true`
-    - `paper_days_observed>=10`
-    - `shadow_days_observed>=10`
-- Any other stage value raises a startup error.
+## 3. Strategy Findings (the hard verdicts)
 
-## 4. Current Research + Replay Contract
+See `docs/FINDINGS_2026-06-14.md` for the full evidence base. Summary:
 
-- Deterministic replay validates B1-B5 behavior and exit attribution.
-- After replay validation, decide whether staged views, label recipes, or training windows need regeneration before retraining `ml_pipeline_2`.
-- The supported training and publish entrypoint is `python -m ml_pipeline_2.run_staged_release ...`.
-- `python -m ml_pipeline_2.run_research ...` remains supported for manifest validation and research runs, but it does not publish a live runtime handoff by itself.
-- There is no supported runtime ML overlay on top of deterministic votes.
+| Component | Verdict |
+|---|---|
+| Entry magnitude | ✅ SOLVED — AUC 0.83, 4.37× move discrimination |
+| Direction (buy-side) | ❌ DEAD — 50.3% 2024, 43.9% 2026 OOS (inverts) |
+| S3 Seller | ✅ ONLY ROBUST PATH — 78% win, +₹1,692/trade on 2024 paper |
+| Real money | ❌ OFF — seller needs live-cycle paper; buyer has no edge |
 
-## 5. Canonical References
+---
 
-- **Zero-to-live setup:** `docs/runbooks/LIVE_SETUP_GUIDE.md`
-- Runbooks index: `docs/runbooks/README.md`
-- Snapshot workflow: `docs/runbooks/GCP_SNAPSHOT_PARQUET_RUN_GUIDE.md`
-- Training workflow: `docs/runbooks/TRAINING_RELEASE_RUNBOOK.md`
-- Live runtime workflow: `docs/runbooks/GCP_DEPLOYMENT.md`
-- Cleanup workflow: `docs/runbooks/CLEANUP_ROLLBACK_RUNBOOK.md`
-- Runtime flow: `strategy_app/docs/STRATEGY_ML_FLOW.md`
-- Strategy current-state validation: `strategy_app/docs/CURRENT_TREE_VALIDATION.md`
-- Strategy catalog: `strategy_app/docs/strategy_catalog.md`
-- Module design: `strategy_app/docs/detailed-design.md`
-- Consolidation status: `strategy_app/docs/ENGINE_CONSOLIDATION_PLAN.md`
-- Module-level staged ML detail: `ml_pipeline_2/docs/gcp_user_guide.md`
+## 4. Config Contract
 
-## 6. Last Verified Commands
+**Single source of config:** `/opt/option_trading/.env.compose` on the runtime VM (185-line brain config).  
+The `.deploy/runtime-config/` directory (ml_pure C1 stale templates) has been deleted locally; delete it on the GCP VM too if it still exists there.
 
+Critical env vars:
 ```bash
-python -m snapshot_app.historical.snapshot_batch_runner --validate-only --base .data/ml_pipeline/parquet_data --window-manifest-out .run/window_manifest_latest.json
-python -m ml_pipeline_2.run_research --config ml_pipeline_2/configs/research/staged_dual_recipe.default.json --validate-only
-python -m strategy_app.main --engine deterministic --topic market:snapshot:v1:historical
-python -m strategy_app.main --engine ml_pure --ml-pure-run-id <run_id> --ml-pure-model-group banknifty_futures/h15_tp_auto
-# GCS explicit path mode (new as of 2026-04-27):
-python -m strategy_app.main --engine ml_pure \
-  --ml-pure-model-package gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1/model/model.joblib \
-  --ml-pure-threshold-report gs://amittrading-493606-option-trading-models/published_models/research/staged_simple_s2_v1/config/profiles/ml_pure_staged_v1/threshold_report.json
+EXECUTION_ADAPTER=paper           # NEVER change to 'dhan' without live-cycle paper validation
+ENTRY_VOL_GATE_ENABLED=0          # 0 = ML_ENTRY active; 1 = VOL_GATE_ENTRY (ATR-based, no ML)
+REGIME_DIRECTION_SIGNAL=agreement_lever  # validated ~61% on big moves; combo = slightly higher but stricter
+REGIME_W_MOM=0                    # momentum_15m is an ANTI-signal — keep at 0
+ENTRY_ML_MIN_PROB=0.45            # recommended per model report (fire_rate 0.79%, precision 59%); live was wrongly set to 0.85
+ENTRY_ML_MODEL_PATH=/app/ml_pipeline_2/artifacts/entry_only/published/entry_only_model_020pct.joblib  # CORRECT container path
+EXIT_STRATEGY_MODE=adaptive       # BREAKOUT/TRENDING → lottery (20% stop); else → scalper
+LOTTERY_HARD_STOP_PCT=0.07        # applies to BREAKOUT/TRENDING entries — must set alongside scalper stop
+EXIT_SCALPER_HARD_STOP_PCT=0.05   # applies to NON-breakout entries only
 ```
 
-**GCP deploy:**
+> **⚠️ KNOWN ISSUES in live .env.compose (fix manually on GCP VM):**
+> - `ENTRY_ML_MODEL_PATH` was set to `/app/models/entry_only_v3.joblib` — dir does not exist → vol gate silently OFF
+> - `ENTRY_ML_MIN_PROB` was set to `0.85` (set June 12 to dodge degenerate cluster; must revert to `0.45`)
+> - Also verify xgboost version: model trained on 3.2.0; container must match or probs are garbage
+
+**Config validation:**
 ```bash
-gcloud compute ssh savitasajwan03@option-trading-runtime-01 --zone asia-south1-b --project amittrading-493606
-cd /opt/option_trading && bash ./ops/gcp/runtime_lifecycle_interactive.sh
+docker exec strategy_app printenv | python -m ops.config_audit -
 ```
+
+---
+
+## 5. Two Regime Systems — Quick Reference
+
+See `docs/TWO_REGIME_SYSTEMS.md` for full detail.
+
+1. **Regime enum** — routes which entry strategies are available (AVOID/CHOP → none)
+2. **RegimeDirector quality** — gates direction confidence (CHOP → ABSTAIN → no entry side)
+
+These are SEPARATE. `REGIME_ALLOWED=MID,TREND` is a direction quality filter — it
+does NOT block entries in Regime-enum BREAKOUT.
+
+---
+
+## 6. Safe Operations
+
+See `docs/CONFIG_SAFE_OPS.md` for the full guide. Key rules:
+- Never `docker cp` a fix — commit + rebuild + redeploy
+- Only one `.env.compose` — the 185-line brain config
+- Pin `xgboost==3.2.0` in Dockerfiles
+- Use `run_id` filter on mongo aggregations (deterministic `_id` → stale contamination)
+- Run `config_audit.py` before every live session
+
+---
+
+## 7. GCP Commands
+
+```bash
+# SSH to runtime VM
+gcloud compute ssh option-trading-runtime-01 --zone asia-south1-b --project amit-trading
+
+# Start ML VM (stopped to save cost)
+gcloud compute instances start option-trading-ml-01 --zone asia-south1-b --project amit-trading
+
+# On runtime VM — standard lifecycle
+cd /opt/option_trading
+docker-compose ps
+docker exec strategy_app printenv | python -m ops.config_audit -
+docker-compose logs --tail=50 strategy_app
+```
+
+---
+
+## 8. Canonical Reference Docs
+
+| Doc | Purpose |
+|---|---|
+| `docs/FINDINGS_2026-06-14.md` | Full evidence base — what works, what doesn't, what to build next |
+| `docs/TWO_REGIME_SYSTEMS.md` | Regime enum vs RegimeDirector quality — the naming confusion |
+| `docs/CONFIG_SAFE_OPS.md` | How to safely change code and config without losing fixes |
+| `docs/RUNTIME_STATE_AND_RECOVERY.md` | VM rebuild guide + config snapshot |
+| `docs/strategy_platform/05_CONFIG_REFERENCE.md` | Every env var with default and meaning |
+| `docs/runbooks/GCP_DEPLOYMENT.md` | Deploy runbook |
+| `docs/runbooks/LIVE_SETUP_GUIDE.md` | Zero-to-live setup |

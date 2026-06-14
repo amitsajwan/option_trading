@@ -1,6 +1,6 @@
 # Models Index — BankNifty option-trading brain
 
-_Living index of every model in the system: what it predicts, its label, features, status, and what each still needs. Last updated 2026-06-11._
+_Living index of every model in the system: what it predicts, its label, features, status, and what each still needs. Last updated 2026-06-14._
 
 ## The two jobs (read this first)
 The system deliberately **separates two questions**, because they have very different ceilings:
@@ -15,43 +15,27 @@ A model can only be as good as the information in its features. Relabeling the e
 
 | Model | Label (X% / Y / dir) | Features | Status | Holdout AUC | Location |
 |---|---|---|---|---|---|
-| `entry_only_v3` | 0.20% / 5m / either | ~51 (fo subset) | live-capable, prior baseline | 0.831 | GCS `*_v3/active` |
-| **comprehensive 010pct** | 0.10% (~55pt) / 5m / either | **57** (`fo_comprehensive`) | ✅ **published, ALL_PASS** | **0.821** | VM `published_comprehensive/entry_only_model_010pct.joblib` |
-| **comprehensive 013pct** | 0.13% (~70pt) / 5m / either | 57 (`fo_comprehensive`) | ✅ **published, ALL_PASS** | **0.824** | `published_comprehensive/...013pct.joblib` |
-| **comprehensive 020pct** | 0.20% (~110pt) / 5m / either | 57 (`fo_comprehensive`) | ⏳ **training** (final magnitude sweep, ETA ~tonight) | — | (pending) |
+| **`entry_only_v3`** | 0.20% / 5m / either | ~51 (fo subset) | ✅ **ACTIVE — live-capable, deployed** | 0.831 | GCS `published_models/entry_only_v3/` |
+| comprehensive 010pct | 0.10% (~55pt) / 5m / either | 57 (`fo_comprehensive`) | published, not deployed (superceded by v3) | 0.821 | GCS `published_comprehensive/` |
+| comprehensive 013pct | 0.13% (~70pt) / 5m / either | 57 (`fo_comprehensive`) | published, not deployed | 0.824 | GCS `published_comprehensive/` |
+| comprehensive 020pct | 0.20% (~110pt) / 5m / either | 57 (`fo_comprehensive`) | not pursued (v3 sufficient) | — | — |
 
-- **Selected model so far:** `xgb_regularized`. Calibrated (isotonic, valid 2024-05..07), OOS 2024-08..10, drop-outlier robust.
-- Runtime contract: `kind="entry_only_bundle"`, keys `features` / `feature_medians` / `model`; loaded via `ENTRY_ML_MODEL_PATH`, threshold `ENTRY_ML_MIN_PROB`. Feature row built by `project_stage_views_v2` (must be live-computable).
+- **Active model:** `entry_only_v3` (xgb_shallow). Calibrated, ECE 0.009, ship_gates_all_pass=True.
+- **Correct threshold:** `ENTRY_ML_MIN_PROB=0.45` (fire_rate 0.79%, precision 59%). ⚠️ Live .env.compose has wrong 0.85 — needs manual fix.
+- **Correct path in container:** `/app/ml_pipeline_2/artifacts/entry_only/published/entry_only_model_020pct.joblib`. ⚠️ Live .env.compose has wrong `/app/models/` — vol gate silently OFF until fixed.
+- **Repurpose:** use as "don't-sell-into-a-move" gate for S3 seller — skip iron condor if model fires high magnitude probability.
+- Runtime contract: `kind="entry_only_bundle"`, keys `features` / `feature_medians` / `model`; loaded via `ENTRY_ML_MODEL_PATH`, threshold `ENTRY_ML_MIN_PROB`. Feature row built by `project_stage_views_v2`.
 
-## B. Direction models ("which way / CE vs PE")
+## B. Direction models — ABANDONED (direction is ~50% coin flip)
 
-| Model | Label | Features | Status | AUC | Notes |
-|---|---|---|---|---|---|
-| `direction_only_v2` | CE beats PE (3m) | fo subset | published GCS, not live | 0.593 | thin pocket ~64% @prob≥0.60 (20% cov); ≈0.5 on bars we actually trade |
-| `ce_win_v1` / `pe_win_v1` (dual, 05-23) | signed win | fo | **speced, training never finished** | — | superseded by Section C |
-| 3-signal agreement lever | momentum+max_pain+OI agree, 10m big moves | rule (not ML) | **validated ~61%**, not wired | — | the one real direction edge; use as **abstain gate** |
+> Direction has been conclusively refuted: quorum 50.3% in 2024 over 37k bars, inverts to 43.9% in 2026 OOS.
+> Do NOT build or deploy direction models for buy-side. See `FINDINGS_2026-06-14.md`.
 
-## C. Dual SIGNED entry models — NEW (your "two models, regime picks which") ⏳ queued
-
-| Model | Label | Features | Status | What it needs |
-|---|---|---|---|---|
-| **dual CE** `entry_s1_dual_ce_5m_013pct` | **fwd-5m HIGH ≥ +0.13%** (`entry_bn_5m_up_v1`) | `fo_comprehensive` | 🟡 **queued tonight** (auto after magnitude) | see below |
-| **dual PE** `entry_s1_dual_pe_5m_013pct` | **fwd-5m LOW ≤ −0.13%** (`entry_bn_5m_down_v1`) | `fo_comprehensive` | 🟡 **queued tonight** | see below |
-
-- **Output:** a calibrated probability per side; the model does **not** say CE/PE — **direction is supplied live by regime**, then we fire the matching side if its prob clears the threshold. Bundle records `side` / `direction` for runtime.
-- **Auto-publishes** when gates pass (no hold). Orchestrator: `ops/gcp/run_dual_entry_retrain_vm.sh`.
-- **What extra these need to actually work:**
-  1. **Regime features** in the view (realized-vol state, trend-vs-range, dist-from-VWAP/max_pain, time-of-day) so the model learns the **follow-vs-fade flip**. *Current build uses `fo_comprehensive` only — regime features are the first upgrade if v1 underwhelms.*
-  2. ✅ **Live regime classifier / switch — BUILT** (`strategy_app/brain/regime_director.py`): pluggable `REGIME_DIRECTION_SIGNAL` ∈ {agreement_lever (default, validated 61%), ema_cross, vwap, fade_vwap, combo}. Slot-1 = direction-first.
-  3. ✅ **Runtime dual-bundle wiring — BUILT** (`strategy_app/ml/dual_entry_confirmer.py` + `ml_entry.py` mode `ML_ENTRY_DIRECTION_MODE=regime_dual`, `ENTRY_CE_MODEL_PATH`/`ENTRY_PE_MODEL_PATH`, `BRAIN_DUAL_MODE=shadow|live`).
-  4. **Honest eval — harness BUILT** (`strategy_app/tools/dual_regime_replay.py`): grades each detector's conditioned follow-through; run per-year + recent. Still TODO: pick the winning detector + per-side thresholds from its output, then shadow live.
-
-### Dual-model entry flow (regime_dual mode)
-```
-snap -> RegimeDirector.decide() -> side (CE/PE/ABSTAIN)   [step 1: direction-first]
-     -> DualEntryConfirmer.confirm(side) -> fire?/prob     [step 2: matching CE/PE model]
-     -> ml_entry: shadow (log only) | live (drive + veto)
-```
+| Model | AUC | Verdict |
+|---|---|---|
+| `direction_only_v2` | 0.593 | ❌ in-sample; live inverts to 43.9% — RETIRED, do not deploy |
+| Dual CE/PE (`entry_s1_dual_*`) | never finished | ❌ abandoned — same ceiling applies |
+| 3-signal agreement lever (rule) | ~61% on big moves | Partially validated, but inverts OOS 2026; not deployed |
 
 ## D. LLM / oversight (shadow only)
 | Component | Status | Result |
