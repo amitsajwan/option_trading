@@ -19,39 +19,12 @@ from typing import Callable, Optional
 
 from ..market.snapshot_accessor import SnapshotAccessor
 from .brain import SellerBrain
+from .chain_utils import build_price_fn  # chain-shift-aware price lookup (permanent fix)
 from .executor import SafeExecutor, OpenSpread
 from .gateway import LegGateway, PaperLegGateway
 from .manager import PositionManager, RiskGates
 
 logger = logging.getLogger(__name__)
-
-
-def _fnum(x):
-    try:
-        v = float(x); return v if v == v else None
-    except Exception:
-        return None
-
-
-def build_price_fn(snap: dict) -> Callable[[str, int], Optional[float]]:
-    chain = {}
-    for r in (snap.get("strikes") or []):
-        k = _fnum(r.get("strike"))
-        if k is None:
-            continue
-        chain[int(k)] = (_fnum(r.get("ce_ltp")), _fnum(r.get("pe_ltp")))
-    fut = SnapshotAccessor(snap).fut_close
-
-    def price(ot: str, strike: int) -> Optional[float]:
-        pair = chain.get(strike)
-        if pair:
-            v = pair[0] if ot == "CE" else pair[1]
-            if v and v > 0:
-                return v
-        if fut is None:
-            return None
-        return max(0.0, (fut - strike) if ot == "CE" else (strike - fut))
-    return price
 
 
 class SellerRunner:
