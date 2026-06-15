@@ -1,0 +1,93 @@
+# =============================================================================
+# strategy_config.yml  --  THE single source of truth for strategy tunables.
+#
+# Read by BOTH live (strategy_app/main.py) and SIM (ops_routes) via
+# strategy_app/config/loader.py, so SIM can never diverge from LIVE.
+#
+# Generated from strategy_app/config/registry.py (the declaration table).
+# To add/rename a key: edit the registry, not this file by hand.
+# Values reconciled to the live container env on 2026-06-14 (parity-verified).
+# =============================================================================
+
+execution:
+  adapter: dhan
+  rollout_stage: paper
+profile:
+  id: trader_master_live_v1
+entry:
+  time_windows: 09:45-14:30
+  min_confidence: 0.65
+  bypass_min_confidence: 0.65
+  pipeline_v2: false
+  vol_gate:
+    enabled: true
+    atr_min_pct: 0.00088
+  ml:
+    model_path: /app/ml_pipeline_2/artifacts/entry_only/published/entry_only_model_020pct.joblib
+    min_prob: 0.45
+direction:
+  mode: regime_dual
+  ml:
+    model_path: /app/ml_pipeline_2/artifacts/direction_only/published/direction_only_model.joblib
+    weight: 0.4
+    filter_min_prob: ''
+  min_margin_sideways: 2.0
+regime:
+  trend_score_min: 2.0
+  aligned_bonus: 0.0
+  vol_ratio_min: 1.3
+exit:
+  mode: adaptive
+  max_loss_pct: 0.1
+  policy_stack_enabled: true
+  scalper:
+    hard_stop_pct: 0.07
+    target_pct: 0.03
+    trailing_activation_pct: 0.015
+    trailing_trail_pct: 0.008
+    thesis_fail_bars: 999
+    thesis_fail_min_mfe: 0.002
+  lottery:
+    regimes:
+    - BREAKOUT
+    - TRENDING
+    hard_stop_pct: 0.2
+    big_target_pct: 0.5
+    runner_activation_mfe: 0.2
+    runner_giveback_frac: 0.35
+    thesis_fail_bars: 999
+    thesis_fail_min_mfe: 0.03
+    timestop_bars: 90
+    momentum_flip: 1.0
+strike:
+  policy: otm
+  smart_strike_enabled: true
+  min_premium: 0
+  max_premium: 1300
+  max_otm_steps: 12
+  otm:
+    confidence: 0.55
+  otm2:
+    enabled: true
+    confidence: 0.65
+    min_oi: 75000
+  otm3:
+    enabled: true
+    confidence: 0.75
+    regimes:
+    - BREAKOUT
+    - TRENDING
+    min_oi: 75000
+  otm4:
+    enabled: true
+    confidence: 0.85
+    regimes:
+    - BREAKOUT
+    min_oi: 50000
+risk:
+  max_consecutive_losses: 6
+  max_session_trades: 6
+  max_lots_per_trade: 1
+  capital: 41000
+  per_trade_pct: 0.005
+  live_min_grade: OK

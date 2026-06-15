@@ -22,6 +22,7 @@ from strategy_app.engines.entry_pipeline_gates import (
     DirectionGate,
     EntryPolicyGate,
     HardGatesGate,
+    MLEntryGate,
     RegimeConfidenceGate,
     StrikeDepthGate,
     VotesGate,
@@ -220,7 +221,59 @@ class TestRegimeConfidenceGate:
 
 
 # ===========================================================================
-# Gate 4 — DirectionGate
+# Gate 4a — MLEntryGate (ML-first ordering)
+# ===========================================================================
+
+class TestMLEntryGate:
+    def test_pass_and_stash_ml_vote(self):
+        gate = MLEntryGate()
+        v = _vote(name="ML_ENTRY", confidence=0.80)
+        ctx = _ctx(votes=[v])
+        r = gate.apply(ctx)
+        assert r.outcome == GateOutcome.PASS
+        assert ctx.ml_vote is v          # stashed for DirectionGate
+
+    def test_veto_no_ml_entry_vote(self):
+        gate = MLEntryGate()
+        ctx = _ctx(votes=[_vote(name="RULE_STRATEGY")])
+        r = gate.apply(ctx)
+        assert r.outcome == GateOutcome.VETO
+        assert r.reason == "no_ml_entry_vote"
+
+    def test_veto_below_bypass(self):
+        gate = MLEntryGate()
+        ctx = _ctx(
+            votes=[_vote(name="ML_ENTRY", confidence=0.70)],
+            cfg=_cfg(CONSENSUS_BYPASS_MIN_CONFIDENCE="0.90"),
+        )
+        r = gate.apply(ctx)
+        assert r.outcome == GateOutcome.VETO
+        assert r.reason == "ml_confidence_below_bypass"
+
+    def test_vol_gate_entry_also_accepted(self):
+        gate = MLEntryGate()
+        ctx = _ctx(votes=[_vote(name="VOL_GATE_ENTRY", confidence=0.80)])
+        assert gate.apply(ctx).outcome == GateOutcome.PASS
+
+    def test_non_consensus_passes_through(self):
+        gate = MLEntryGate(is_consensus=False)
+        ctx = _ctx(votes=[_vote(name="RULE_STRATEGY")])  # no ML vote at all
+        assert gate.apply(ctx).outcome == GateOutcome.PASS
+
+    def test_direction_consumes_stashed_vote(self):
+        # ML-first flow: MLEntryGate stashes, DirectionGate consumes it.
+        ml_gate = MLEntryGate()
+        dir_gate, _, _ = _make_direction_gate(direction=Direction.CE)
+        ctx = _ctx(votes=[_vote(name="ML_ENTRY", confidence=0.80)])
+        assert ml_gate.apply(ctx).outcome == GateOutcome.PASS
+        assert ctx.ml_vote is not None
+        r = dir_gate.apply(ctx)
+        assert r.outcome == GateOutcome.PASS
+        assert ctx.direction == Direction.CE
+
+
+# ===========================================================================
+# Gate 4b — DirectionGate
 # ===========================================================================
 
 def _make_direction_gate(*, consensus_vetoed=False, direction=Direction.CE):

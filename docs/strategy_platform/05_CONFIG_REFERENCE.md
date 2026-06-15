@@ -4,7 +4,16 @@
 config-driven contract: behaviour changes here, not in code. Set in
 `.env.compose` on the VM (live) or via OPS-sim overrides (experiments).*
 
-> Source of truth at runtime: `strategy_app/main.py` writes the live values it actually
+> **Now consolidated** → every tunable below is declared once in
+> `strategy_app/config/registry.py`, lives in `ops/strategy_config.yml`, and is
+> read by BOTH live and sim via `strategy_app/config/loader.py` — SIM can no
+> longer diverge from LIVE. The always-fresh, auto-generated table is
+> [`CONFIG_REGISTRY_TABLE.md`](CONFIG_REGISTRY_TABLE.md) (run
+> `python ops/gen_config_docs.py`). The prose below is curated context/findings;
+> the generated table is the authoritative key list. Plan + cutover steps:
+> [`CONFIG_CONSOLIDATION_PLAN.md`](CONFIG_CONSOLIDATION_PLAN.md).
+
+> Source of truth at runtime (today): `strategy_app/main.py` writes the live values it actually
 > used to `.run/strategy_app/ops_env.json`. The OPS sim reads that file as its baseline.
 
 ---
@@ -37,14 +46,14 @@ the scalper stack has no hard stop of its own.
 
 | Var | Default | Meaning |
 |---|---|---|
-| `LOTTERY_HARD_STOP_PCT` | `0.25` | Cap the loss at −25% (the "ticket price"). Set ≥ `1.0` to disable (ride to zero). |
-| `LOTTERY_BIG_TARGET_PCT` | `0.40` | Take the lottery win at +40%. |
+| `LOTTERY_HARD_STOP_PCT` | `0.20` | Cap the loss at −20% (the "ticket price"). Set ≥ `1.0` to disable (ride to zero). |
+| `LOTTERY_BIG_TARGET_PCT` | `0.50` | Take the lottery win at +50%. |
 | `LOTTERY_RUNNER_ACTIVATION_MFE` | `0.20` | Runner trail activates only after MFE ≥ 20%. |
-| `LOTTERY_RUNNER_GIVEBACK_FRAC` | `0.40` | Once active, exit if pnl falls below peak×(1−0.40). Loose — lets 20%→50% run. |
-| `LOTTERY_THESIS_FAIL_BARS` | `4` | Cut dead/flat tickets after N bars… |
-| `LOTTERY_THESIS_FAIL_MIN_MFE` | `0.03` | …only if MFE never reached 3% (don't kill a ticket that showed promise). |
+| `LOTTERY_RUNNER_GIVEBACK_FRAC` | `0.35` | Once active, exit if pnl falls below peak×(1−0.35). Loose — lets 20%→50% run. |
+| `LOTTERY_THESIS_FAIL_BARS` | `999` | **Disabled by design** — lottery tickets are NOT cut on thesis-fail; the timestop is the backstop. (A finite value here would defeat letting winners run.) |
+| `LOTTERY_THESIS_FAIL_MIN_MFE` | `0.03` | Only relevant if `THESIS_FAIL_BARS` < 999: don't kill a ticket that showed ≥3% promise. |
 | `LOTTERY_MOMENTUM_FLIP` | `1.0` | Exit if shadow score flips against the thesis by this magnitude. `0` = off. |
-| `LOTTERY_TIMESTOP_BARS` | `25` | Max hold. **Finding:** 25 was the binding constraint on 2026-06-01 — consider 90 with the runner trail on (see Findings §3.4). |
+| `LOTTERY_TIMESTOP_BARS` | `90` | Max hold (90 min) — the **real** backstop for lottery tickets since thesis-fail is off. |
 
 **Recommended protected lottery config** (from the sweep): `MOMENTUM_FLIP=0`,
 `RUNNER_ACTIVATION_MFE=0.10`, `RUNNER_GIVEBACK_FRAC=0.35`, `TIMESTOP_BARS=90`.
@@ -59,6 +68,34 @@ In lottery mode the stack is authoritative — inline exits are suppressed.
 | `CONSENSUS_BYPASS_MIN_CONFIDENCE` | `0.65` | Min ML entry confidence for the consensus-bypass path. Lottery uses `0.80` (rare, high conviction). |
 | `DIRECTION_MIN_MARGIN_SIDEWAYS` | `2.0` | Higher direction margin required in SIDEWAYS regime (noisy). Global default margin is 1.25. |
 | `STRATEGY_MIN_CONFIDENCE` | `0.50` | Base engine min confidence (non-consensus paths). |
+| `ENTRY_ML_MIN_PROB` | `0.40` | Min probability from `entry_only_v3` to allow ML_ENTRY. Recommended: 0.40 (model's optimal). Do NOT set above 0.85 — that excludes the dominant 0.826 bucket and silences the model. |
+| `REGIME_ALLOWED` | `MID,TREND` | **Direction quality gate** (RegimeDirector TREND/MID/CHOP — NOT the Regime enum). Bars where quality=CHOP are blocked. See `docs/TWO_REGIME_SYSTEMS.md`. |
+
+---
+
+## Vol-gate entry (`ENTRY_VOL_GATE_ENABLED=1`)
+
+Swap-in alternative to ML_ENTRY. Trigger = ATR-based volatility gate; direction logic is shared.
+
+| Var | Default | Meaning |
+|---|---|---|
+| `ENTRY_VOL_GATE_ENABLED` | `0` | `1` = activate VolGateEntry (replaces ML_ENTRY). `0` = use ML_ENTRY. |
+| `ATR_ENTRY_MIN_PCT` | `0.00088` | Gate: `atr_14_1m / price >= this`. Default 0.00088 ≈ p90 of live ATR (≈3× lift over base move rate). For 2024 backtests use 0.0006 (lower vol). **0.0006 is a knife-edge in backtests** — do not treat as validated for live. |
+| `ATR_ENTRY_MIN_ABS` | `0` | If >0, gate on absolute `atr_14_1m >= this` instead of pct. Escape hatch; prefer pct. |
+| `ATR_ENTRY_BB_MIN` | `0` | Optional Bollinger-band width confirm (`bb_width_5m >= this`). Default 0 = off. |
+
+---
+
+## Direction detector (`REGIME_DIRECTION_SIGNAL`)
+
+| Var | Default | Meaning |
+|---|---|---|
+| `REGIME_DIRECTION_SIGNAL` | `weighted` | `weighted` = graceful (absent member → 0 weight). `combo` / `agreement_lever` = hard-block (ALL trio members must agree; absent = ABSTAIN). **Use `weighted`** — in 2024, OI/max_pain absent ~46% of bars, so combo/agreement_lever ABSTAIN always. |
+| `REGIME_W_MOM` | `1.0` | Weight for `momentum_15m`. **Set to 0** — it is an ANTI-signal (48.1% accuracy, confirmed 2026-06-14 over 37,050 bars in both halves). |
+| `REGIME_W_VWAP` | `1.0` | Weight for VWAP. Mildly anti (50.5% acc) — consider reducing to 0.5. |
+| `REGIME_W_MAXPAIN` | `0.8` | Weight for max pain (51.2% acc, H2 52.8%). Positive contributor — keep. |
+| `REGIME_W_OI` | `0.8` | Weight for ATM OI signal (52.1% acc, best individual). Keep. |
+| `REGIME_W_EMA` | `0.5` | Weight for EMA trend signal. Modest positive — keep. |
 
 ---
 
@@ -136,14 +173,25 @@ Currently includes all `EXIT_*`, `LOTTERY_*`, `CONSENSUS_BYPASS_MIN_CONFIDENCE`,
 
 ## How a config flows (live vs sim)
 
+**Today (being replaced):**
 ```
 LIVE:  .env.compose ─► docker-compose env ─► strategy_app process env
                                           └─► main.py writes ops_env.json (the truth)
 
 SIM:   ops_env.json (live baseline)  +  operator overrides (OPS drawer / API)
        ─► applied to os.environ under a lock ─► fresh engine ─► /tmp run dir
-       (never touches live topics or live .run)
 ```
+The SIM path re-defaults any var missing from `ops_env.json` using its *own*
+hardcoded fallbacks — this is the divergence source (see consolidation plan §1).
 
-**Golden rule:** to change live behaviour, edit `.env.compose` and restart the service.
-To *test* a change, pass it as an OPS-sim override first. Never edit code to change a number.
+**Target (after consolidation):**
+```
+ops/strategy_config.yml ─► load_config() ─► os.environ ─┬─► LIVE (main.py)
+                           (one loader, one registry)   └─► SIM (+ operator overrides)
+```
+Both paths call the **same loader on the same file**. SIM divergence becomes
+structurally impossible.
+
+**Golden rule:** to change behaviour, edit `ops/strategy_config.yml` (today:
+`.env.compose`) and restart. To *test* a change, pass it as an OPS-sim override
+first. Never edit code to change a number.
