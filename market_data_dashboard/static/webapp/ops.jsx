@@ -510,6 +510,37 @@ function OpsPage() {
             {/* Entry gate */}
             <div>
               <div className="ops-group-label">Entry Gate</div>
+              <SliderCtrl label="Move-detect ATR"
+                value={parseFloat(v('ATR_ENTRY_MIN_PCT','0.00088'))}
+                live={parseFloat(lv('ATR_ENTRY_MIN_PCT','0.00088'))}
+                min={0.0004} max={0.0012} step={0.00002}
+                format={x => x.toFixed(5)}
+                onChange={setVal('ATR_ENTRY_MIN_PCT')} />
+              <SegCtrl label="Direction"
+                value={v('ML_ENTRY_DIRECTION_MODE','regime_dual')}
+                live={lv('ML_ENTRY_DIRECTION_MODE','regime_dual')}
+                options={[{value:'regime_dual',label:'Regime+ML'},{value:'conviction_ensemble',label:'Conviction'}]}
+                onChange={setVal('ML_ENTRY_DIRECTION_MODE')} />
+              {v('ML_ENTRY_DIRECTION_MODE','regime_dual') === 'conviction_ensemble' && (
+                <div style={{paddingLeft:'10px', borderLeft:'2px solid var(--line-2)', marginLeft:'2px'}}>
+                  <ToggleCtrl label="member: vwap" value={v('DIR_MEMBER_VWAP_ENABLED','1')}
+                    live={lv('DIR_MEMBER_VWAP_ENABLED','1')} onChange={setVal('DIR_MEMBER_VWAP_ENABLED')} />
+                  <ToggleCtrl label="member: OR-break" value={v('DIR_MEMBER_ORB_ENABLED','1')}
+                    live={lv('DIR_MEMBER_ORB_ENABLED','1')} onChange={setVal('DIR_MEMBER_ORB_ENABLED')} />
+                  <ToggleCtrl label="member: straddle" value={v('DIR_MEMBER_STRD_ENABLED','1')}
+                    live={lv('DIR_MEMBER_STRD_ENABLED','1')} onChange={setVal('DIR_MEMBER_STRD_ENABLED')} />
+                  <ToggleCtrl label="member: momentum (non-robust)" value={v('DIR_MEMBER_MOM_ENABLED','0')}
+                    live={lv('DIR_MEMBER_MOM_ENABLED','0')} onChange={setVal('DIR_MEMBER_MOM_ENABLED')} />
+                  <SegCtrl label="Vote rule" value={v('DIR_CONVICTION_RULE','unanimous')}
+                    live={lv('DIR_CONVICTION_RULE','unanimous')}
+                    options={[{value:'unanimous',label:'Unanimous (veto)'},{value:'majority',label:'Majority'}]}
+                    onChange={setVal('DIR_CONVICTION_RULE')} />
+                </div>
+              )}
+              <ToggleCtrl label="Entry: ML move-model (off=ATR gate)"
+                value={v('ENTRY_VOL_GATE_ENABLED','1') === '1' ? '0' : '1'}
+                live={lv('ENTRY_VOL_GATE_ENABLED','1') === '1' ? '0' : '1'}
+                onChange={(val) => setVal('ENTRY_VOL_GATE_ENABLED')(val === '1' ? '0' : '1')} />
               <SegCtrl label="Live filter"
                 value={v('RISK_LIVE_MIN_GRADE','GOOD')}
                 live={lv('RISK_LIVE_MIN_GRADE','GOOD')}

@@ -125,14 +125,60 @@ class RegimeConfidenceGate(Gate):
 
 
 # ---------------------------------------------------------------------------
-# Gate 4 — DirectionGate
+# Gate 4a — MLEntryGate (ML-FIRST: run the ML/vol entry trigger before direction)
+# ---------------------------------------------------------------------------
+
+class MLEntryGate(Gate):
+    """ML-first entry trigger: require a usable ML_ENTRY / VOL_GATE_ENTRY vote that
+    clears the bypass confidence threshold, BEFORE any direction work is done.
+
+    Splitting this out of DirectionGate gives a clean, ordered trace — you see
+    exactly whether a bar died on the ML threshold (``no_ml_entry_vote`` /
+    ``ml_confidence_below_bypass``) or later on direction. Stashes the winning
+    vote on ``ctx.ml_vote`` for DirectionGate to consume.
+
+    For non-consensus profiles the ML trigger is not required (the candidate's own
+    direction is used downstream), so this gate PASSes through untouched.
+    """
+
+    name = "MLEntry"
+
+    def __init__(self, is_consensus: bool = True) -> None:
+        self._is_consensus = is_consensus
+
+    def apply(self, ctx: EntryContext) -> GateResult:
+        if not self._is_consensus:
+            return GateResult.ok()
+
+        cfg = ctx.config
+        # ML_ENTRY and VOL_GATE_ENTRY are interchangeable entry triggers (same
+        # bypass pipeline); whichever is active produces the entry vote.
+        ml_votes = [v for v in ctx.votes if v.strategy_name in ("ML_ENTRY", "VOL_GATE_ENTRY")]
+        if not ml_votes:
+            return GateResult.veto("no_ml_entry_vote")
+
+        ml_vote = max(ml_votes, key=lambda v: float(v.confidence or 0))
+
+        if ml_vote.confidence < cfg.bypass_min_confidence:
+            return GateResult.veto(
+                "ml_confidence_below_bypass",
+                ml_confidence=round(float(ml_vote.confidence), 3),
+                bypass_min=cfg.bypass_min_confidence,
+            )
+
+        ctx.ml_vote = ml_vote
+        return GateResult.ok()
+
+
+# ---------------------------------------------------------------------------
+# Gate 4b — DirectionGate (resolve CE/PE AFTER the ML trigger passed)
 # ---------------------------------------------------------------------------
 
 class DirectionGate(Gate):
     """Resolve CE/PE direction via consensus (ML advisory + rules + shadow).
 
-    Writes ``ctx.direction`` on PASS.
-    VETO on consensus.vetoed or no direction.
+    Runs AFTER MLEntryGate, consuming the vote it stashed on ``ctx.ml_vote``.
+    Writes ``ctx.direction`` on PASS. VETO on consensus.vetoed or no direction.
 
     Requires the engine to provide callbacks for shadow scoring and consensus:
     - ``shadow_fn(snap) -> (Direction, str, float)``
@@ -174,20 +220,20 @@ class DirectionGate(Gate):
             ctx.direction = cand.direction
             return GateResult.ok()
 
-        # ML_ENTRY and VOL_GATE_ENTRY are interchangeable entry triggers (same
-        # bypass pipeline); whichever is active produces the entry vote.
-        ml_votes = [v for v in ctx.votes if v.strategy_name in ("ML_ENTRY", "VOL_GATE_ENTRY")]
-        if not ml_votes:
-            return GateResult.veto("no_ml_entry_vote")
-
-        ml_vote = max(ml_votes, key=lambda v: float(v.confidence or 0))
-
-        if ml_vote.confidence < cfg.bypass_min_confidence:
-            return GateResult.veto(
-                "ml_confidence_below_bypass",
-                ml_confidence=round(float(ml_vote.confidence), 3),
-                bypass_min=cfg.bypass_min_confidence,
-            )
+        # MLEntryGate (runs first) stashed the winning vote. Fall back to selecting
+        # it here so DirectionGate still works if used without MLEntryGate.
+        ml_vote = ctx.ml_vote
+        if ml_vote is None:
+            ml_votes = [v for v in ctx.votes if v.strategy_name in ("ML_ENTRY", "VOL_GATE_ENTRY")]
+            if not ml_votes:
+                return GateResult.veto("no_ml_entry_vote")
+            ml_vote = max(ml_votes, key=lambda v: float(v.confidence or 0))
+            if ml_vote.confidence < cfg.bypass_min_confidence:
+                return GateResult.veto(
+                    "ml_confidence_below_bypass",
+                    ml_confidence=round(float(ml_vote.confidence), 3),
+                    bypass_min=cfg.bypass_min_confidence,
+                )
 
         shadow_dir, shadow_basis, shadow_score = self._shadow_fn(snap)
         hint_dir, ce_prob = self._ml_hint_fn(ml_vote)
@@ -422,6 +468,9 @@ def build_entry_pipeline(
         HardGatesGate(),
         VotesGate(),
         RegimeConfidenceGate(relax=regime_min_relax),
+        # ML-FIRST: the ML/vol entry trigger runs as its own gate before direction,
+        # so a bar that fails the ML threshold never reaches direction resolution.
+        MLEntryGate(is_consensus=is_consensus),
         DirectionGate(
             shadow_fn=shadow_fn,
             ml_hint_fn=ml_hint_fn,

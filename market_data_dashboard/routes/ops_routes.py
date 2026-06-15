@@ -29,67 +29,49 @@ logger = logging.getLogger(__name__)
 STRATEGY_RUN_DIR = Path(os.getenv("STRATEGY_RUN_DIR", "/app/.run/strategy_app"))
 EVENTS_JSONL      = STRATEGY_RUN_DIR.parent / "snapshot_app" / "events.jsonl"
 
-# Keys the UI is allowed to override for a sim run
-_SAFE_OVERRIDE_KEYS = {
-    "EXIT_POLICY_STACK_ENABLED",
-    "EXIT_PREMIUM_TARGET_PCT",
-    "EXIT_TRAILING_ACTIVATION_PCT",
-    "EXIT_TRAILING_TRAIL_PCT",
-    "EXIT_THESIS_FAIL_BARS",
-    "EXIT_THESIS_FAIL_MIN_MFE",
-    "EXIT_SCALPER_HARD_STOP_PCT",
-    "CONSENSUS_BYPASS_MIN_CONFIDENCE",
-    "STRATEGY_MIN_CONFIDENCE",
-    "DIRECTION_MIN_MARGIN_SIDEWAYS",
+# Keys the UI is allowed to override for a sim run.
+# Phase 2: the strategy-config portion is DERIVED from the registry
+# (sim_overridable=True) so it can never drift from what live actually reads.
+# Below we only list the sim-only experimental knobs that are NOT strategy config
+# (oversight brain, entry-quality tiering, a few legacy direction/strike tunables).
+from strategy_app.config.registry import SAFE_OVERRIDE_KEYS as _REGISTRY_OVERRIDE_KEYS
+
+_SIM_EXTRA_OVERRIDE_KEYS = {
+    # Legacy direction/strike tunables not in the registry
     "DIRECTION_CONSENSUS_MIN_MARGIN",
     "DIRECTION_ML_CONFIDENCE_MIN",
     "REGIME_GUARD_MAX_ORW",
     "ENTRY_ALLOWED_REGIMES",
     "ENTRY_CONFIRM_PREV_TICK",
-    "DIRECTION_ML_FILTER_MIN_PROB",
-    "DIRECTION_ML_WEIGHT",
     "ENTRY_DIR_MARGIN_MIN",
-    "STRATEGY_STRIKE_SELECTION_POLICY",
-    "STRATEGY_SMART_STRIKE_ENABLED",
-    "SMART_STRIKE_MAX_PREMIUM",
     "SMART_STRIKE_HARD_PREMIUM_CAP",
-    "STRATEGY_STRIKE_MAX_OTM_STEPS",
-    "RISK_MAX_CONSECUTIVE_LOSSES",
-    "RISK_MAX_SESSION_TRADES",
-    "STRATEGY_PROFILE_ID",
-    "STRATEGY_ENTRY_PIPELINE_V2",
-    "SMART_STRIKE_MIN_PREMIUM",
-    # Entry-model A/B (sim-only): point a sim run at a candidate bundle + its operating
-    # threshold without touching the live model. Lets us validate a replacement model
-    # via the trace harness before any live cut-over.
-    "ENTRY_ML_MODEL_PATH",
-    "ENTRY_ML_MIN_PROB",
     # Oversight brain (sim-only A/B): toggle the slow-lane risk-reducing brain +
     # its entry-veto gate per run, to measure base vs oversight-gated P&L.
     "BRAIN_OVERSIGHT_ENABLED",
     "BRAIN_OVERSIGHT_GATE_ENABLED",
     "BRAIN_OVERSIGHT_MODE",
     "BRAIN_OVERSIGHT_EVERY_BARS",
-    # Direction A/B (sim-only): flip the direction engine (composite heuristic resolver
-    # vs consensus ML direction model) to compare CE/PE selection + grader activation.
-    "ML_ENTRY_DIRECTION_MODE",
-    "DIRECTION_ML_MODEL_PATH",
-    # Lottery / adaptive mode
-    "EXIT_STRATEGY_MODE",
-    "ADAPTIVE_LOTTERY_REGIMES",
-    "LOTTERY_HARD_STOP_PCT",
-    "LOTTERY_BIG_TARGET_PCT",
-    "LOTTERY_RUNNER_ACTIVATION_MFE",
-    "LOTTERY_RUNNER_GIVEBACK_FRAC",
-    "LOTTERY_THESIS_FAIL_BARS",
-    "LOTTERY_MOMENTUM_FLIP",
-    "LOTTERY_TIMESTOP_BARS",
     # E9 entry quality + live/paper tiering
-    "RISK_LIVE_MIN_GRADE",
     "ENTRY_QUALITY_GOOD_AT",
     "ENTRY_QUALITY_IV_SKEW_PE_BAND",
     "ENTRY_TIERING_ENABLED",
+    # Conviction-ensemble direction: per-member enable + thresholds + rule.
+    # A disabled member is EXCLUDED (never votes/vetoes) — correct missing semantics.
+    "DIR_MEMBER_VWAP_ENABLED",
+    "DIR_MEMBER_ORB_ENABLED",
+    "DIR_MEMBER_STRD_ENABLED",
+    "DIR_MEMBER_MOM_ENABLED",
+    "DIR_VWAP_MIN_DIST",
+    "DIR_STRD_MIN_GAP",
+    "DIR_CONVICTION_RULE",
+    # Gate enable toggles (filter gates; disabled = pass-through)
+    "ENTRY_VOL_GATE_ENABLED",
+    "EXIT_POLICY_STACK_ENABLED",
+    "ATR_ENTRY_MIN_PCT",
+    "ENTRY_TIME_WINDOWS",
 }
+
+_SAFE_OVERRIDE_KEYS = _REGISTRY_OVERRIDE_KEYS | _SIM_EXTRA_OVERRIDE_KEYS
 
 # Live-job registry — keyed by job_id
 _jobs: dict[str, dict[str, Any]] = {}
@@ -127,37 +109,30 @@ def _read_live_config() -> dict[str, Any]:
         except Exception:
             pass
 
+    # Registry-resolved defaults (from ops/strategy_config.yml) so the displayed
+    # config can never show a stale hardcoded literal — the LOTTERY=5 confusion.
+    try:
+        from strategy_app.config.loader import resolve as _resolve_config
+        _reg_defaults = _resolve_config()
+    except Exception:
+        _reg_defaults = {}
+
     def _e(key: str, fallback: str = "") -> str:
-        # Prefer ops_env.json (strategy_app's actual value), fall back to dashboard's env
+        # ops_env.json (strategy_app's actual value) -> dashboard env -> registry
+        # default (single source of truth) -> caller's literal fallback.
         if key in ops_env_from_file and ops_env_from_file[key]:
             return ops_env_from_file[key]
-        return str(os.getenv(key, fallback) or fallback)
+        env_v = os.getenv(key)
+        if env_v not in (None, ""):
+            return str(env_v)
+        if _reg_defaults.get(key) not in (None, ""):
+            return str(_reg_defaults[key])
+        return fallback
 
-    ops_env = {
-        "EXIT_POLICY_STACK_ENABLED":      _e("EXIT_POLICY_STACK_ENABLED", "0"),
-        "EXIT_PREMIUM_TARGET_PCT":        _e("EXIT_PREMIUM_TARGET_PCT", "0.04"),
-        "EXIT_TRAILING_ACTIVATION_PCT":   _e("EXIT_TRAILING_ACTIVATION_PCT", "0.01"),
-        "EXIT_TRAILING_TRAIL_PCT":        _e("EXIT_TRAILING_TRAIL_PCT", "0.005"),
-        "EXIT_THESIS_FAIL_BARS":          _e("EXIT_THESIS_FAIL_BARS", "3"),
-        "EXIT_THESIS_FAIL_MIN_MFE":       _e("EXIT_THESIS_FAIL_MIN_MFE", "0.002"),
-        "CONSENSUS_BYPASS_MIN_CONFIDENCE":_e("CONSENSUS_BYPASS_MIN_CONFIDENCE", "0.65"),
-        "DIRECTION_MIN_MARGIN_SIDEWAYS":  _e("DIRECTION_MIN_MARGIN_SIDEWAYS", "2.0"),
-        "STRATEGY_STRIKE_SELECTION_POLICY":_e("STRATEGY_STRIKE_SELECTION_POLICY", "atm"),
-        "SMART_STRIKE_MIN_PREMIUM":       _e("SMART_STRIKE_MIN_PREMIUM", "600"),
-        "SMART_STRIKE_MAX_PREMIUM":       _e("SMART_STRIKE_MAX_PREMIUM", "1300"),
-        "STRATEGY_STRIKE_MAX_OTM_STEPS":  _e("STRATEGY_STRIKE_MAX_OTM_STEPS", "4"),
-        "RISK_MAX_CONSECUTIVE_LOSSES":    _e("RISK_MAX_CONSECUTIVE_LOSSES", "3"),
-        "RISK_MAX_SESSION_TRADES":        _e("RISK_MAX_SESSION_TRADES", "20"),
-        "STRATEGY_PROFILE_ID":            _e("STRATEGY_PROFILE_ID", "trader_master_ml_entry_consensus_v1"),
-        "EXIT_STRATEGY_MODE":             _e("EXIT_STRATEGY_MODE", "adaptive"),
-        # Lottery params — ATM-tuned values (used for BREAKOUT/TRENDING in adaptive mode)
-        "LOTTERY_HARD_STOP_PCT":          _e("LOTTERY_HARD_STOP_PCT", "0.15"),
-        "LOTTERY_BIG_TARGET_PCT":         _e("LOTTERY_BIG_TARGET_PCT", "0.40"),
-        "LOTTERY_RUNNER_ACTIVATION_MFE":  _e("LOTTERY_RUNNER_ACTIVATION_MFE", "0.15"),
-        "LOTTERY_RUNNER_GIVEBACK_FRAC":   _e("LOTTERY_RUNNER_GIVEBACK_FRAC", "0.30"),
-        "LOTTERY_THESIS_FAIL_BARS":       _e("LOTTERY_THESIS_FAIL_BARS", "5"),
-        "LOTTERY_TIMESTOP_BARS":          _e("LOTTERY_TIMESTOP_BARS", "60"),
-    }
+    # Build the display from the FULL registry so every live gate shows (no stale
+    # hardcoded subset). Each value: ops_env.json (live actual) -> dashboard env ->
+    # registry/YAML default. This is exactly the config the SIM mirrors.
+    ops_env = {key: _e(key, "") for key in _reg_defaults}
     cfg["ops_env"] = ops_env
     cfg["strategy_run_dir"] = str(STRATEGY_RUN_DIR)
     cfg["events_jsonl_exists"] = EVENTS_JSONL.exists()
@@ -329,101 +304,53 @@ def _run_sim_thread(job_id: str, trade_date: str, overrides: dict[str, str]) -> 
                 return str(env_v)
             return fallback
 
-        sim_env = {
-            # ML model paths + thresholds — from live config
-            "ENTRY_ML_MODEL_PATH":     _live("ENTRY_ML_MODEL_PATH",
-                          "/app/ml_pipeline_2/artifacts/entry_only/published/entry_only_model.joblib"),
-            "DIRECTION_ML_MODEL_PATH": _live("DIRECTION_ML_MODEL_PATH",
-                          "/app/ml_pipeline_2/artifacts/direction_only/published/direction_only_model.joblib"),
-            # Direction-selection mode MUST mirror live. Live leaves ML_ENTRY_DIRECTION_MODE
-            # UNSET (the .env.compose value never reaches the strategy container), so the
-            # engine defaults to `composite`. The earlier "consensus" fallback here made
-            # the sim diverge from live (forced the degenerate direction-only ML model →
-            # all-CE) — verified 2026-06-05. Fallback MUST be composite to match live.
-            "ML_ENTRY_DIRECTION_MODE": _live("ML_ENTRY_DIRECTION_MODE", "composite"),
-            "ENTRY_ML_MIN_PROB":       _live("ENTRY_ML_MIN_PROB", "0.65"),
-            "DIRECTION_ML_WEIGHT":     _live("DIRECTION_ML_WEIGHT", "0.40"),
-            "DIRECTION_ML_FILTER_MIN_PROB": _live("DIRECTION_ML_FILTER_MIN_PROB", ""),
-            "OPTION_PNL_MODEL_BUNDLE": _live("OPTION_PNL_MODEL_BUNDLE", ""),
-            # Disable side effects for sim
+        # ── Single-source baseline ────────────────────────────────────────
+        # Phase 2: SIM's strategy config now comes from the SAME loader LIVE uses
+        # (ops/strategy_config.yml via the registry). This deletes the hand-built
+        # fallback dict that was the divergence source — there is no second set of
+        # defaults to drift. Any registry value live has hot-patched (present in
+        # ops_env.json) still overlays on top, so SIM mirrors the running process.
+        # See docs/strategy_platform/CONFIG_CONSOLIDATION_PLAN.md.
+        from strategy_app.config.loader import resolve as _resolve_config
+        from strategy_app.config.registry import REGISTRY as _REGISTRY
+
+        sim_env = dict(_resolve_config())          # YAML = source of truth
+        for _k in list(sim_env.keys()):            # overlay live's actual running value
+            _v = live.get(_k)
+            if _v not in (None, ""):
+                sim_env[_k] = str(_v)
+
+        # Non-registry vars that genuinely live only in strategy_app's env, plus
+        # sim-only experimental knobs (IV ceilings use a _SIM source so live can
+        # keep its absolute ceilings while the sim tests percentile ones).
+        sim_env.update({
+            "OPTION_PNL_MODEL_BUNDLE":       _live("OPTION_PNL_MODEL_BUNDLE", ""),
+            "SMART_STRIKE_OTM_IV_CEIL":      _live("SMART_STRIKE_OTM_IV_CEIL_SIM", "92"),
+            "SMART_STRIKE_OTM2_IV_CEIL":     _live("SMART_STRIKE_OTM2_IV_CEIL_SIM", "91"),
+            "SMART_STRIKE_OTM3_IV_CEIL":     _live("SMART_STRIKE_OTM3_IV_CEIL_SIM", "90"),
+            "SMART_STRIKE_OTM4_IV_CEIL":     _live("SMART_STRIKE_OTM4_IV_CEIL_SIM", "89"),
+            "STRATEGY_ENHANCED_VELOCITY":    _live("STRATEGY_ENHANCED_VELOCITY", "0"),
+            "STRATEGY_IV_EXTREME_PERCENTILE": _live("STRATEGY_IV_EXTREME_PERCENTILE", "95.0"),
+        })
+
+        # Sim-only operational overrides — never touch live topics / state / broker.
+        sim_env.update({
+            # Force PAPER execution — the SIM must NEVER reach Dhan. (The registry
+            # baseline carries EXECUTION_ADAPTER=dhan for live-parity; override it
+            # here.) The in-process sim runs no execution_app and publishes nothing,
+            # so this is defence-in-depth on top of REDIS_PUBLISH_ENABLED=0.
+            "EXECUTION_ADAPTER":              "paper",
             "STRATEGY_REDIS_PUBLISH_ENABLED": "0",
-            "MARKET_SESSION_ENABLED":          "0",
-            "BRAIN_ENABLED":                   "false",
-            # Intelligent-brain SHADOW on for sim: runs senses->decision->direction->exit each
-            # bar and attaches the reasoning to the decision trace (read-only; never changes the
-            # engine's actual trade). Lets a UI SIM show the new flow next to the live decision.
-            "INTELLIGENT_BRAIN_SHADOW":        _live("INTELLIGENT_BRAIN_SHADOW", "1"),
-            "STRATEGY_STARTUP_WARMUP_EVENTS":  "0",
-            # Exit + entry + strike config — from live config
-            "EXIT_POLICY_STACK_ENABLED":       _live("EXIT_POLICY_STACK_ENABLED", "1"),
-            # Scalper hard-stop in sim (was a VM-local hotfix — now committed so it stops
-            # blocking pulls; cf. the 2026-06-05 hardstop lesson).
-            "EXIT_SCALPER_HARD_STOP_PCT":      _live("EXIT_SCALPER_HARD_STOP_PCT", "0.07"),
-            "EXIT_PREMIUM_TARGET_PCT":         _live("EXIT_PREMIUM_TARGET_PCT", "0.04"),
-            "EXIT_TRAILING_ACTIVATION_PCT":    _live("EXIT_TRAILING_ACTIVATION_PCT", "0.01"),
-            "EXIT_TRAILING_TRAIL_PCT":         _live("EXIT_TRAILING_TRAIL_PCT", "0.005"),
-            "EXIT_THESIS_FAIL_BARS":           _live("EXIT_THESIS_FAIL_BARS", "3"),
-            "EXIT_THESIS_FAIL_MIN_MFE":        _live("EXIT_THESIS_FAIL_MIN_MFE", "0.002"),
-            "CONSENSUS_BYPASS_MIN_CONFIDENCE": _live("CONSENSUS_BYPASS_MIN_CONFIDENCE", "0.65"),
-            "DIRECTION_MIN_MARGIN_SIDEWAYS":   _live("DIRECTION_MIN_MARGIN_SIDEWAYS", "2.0"),
-            "STRATEGY_STRIKE_SELECTION_POLICY": _live("STRATEGY_STRIKE_SELECTION_POLICY", "smart_strike"),
-            "STRATEGY_SMART_STRIKE_ENABLED":   _live("STRATEGY_SMART_STRIKE_ENABLED", "1"),
-            "SMART_STRIKE_MIN_PREMIUM":        _live("SMART_STRIKE_MIN_PREMIUM", "600"),
-            "SMART_STRIKE_MAX_PREMIUM":        _live("SMART_STRIKE_MAX_PREMIUM", "1300"),
-            "STRATEGY_STRIKE_MAX_OTM_STEPS":   _live("STRATEGY_STRIKE_MAX_OTM_STEPS", "8"),
-            "STRATEGY_SMART_STRIKE_ENABLED":   _live("STRATEGY_SMART_STRIKE_ENABLED", "1"),
-            "SMART_STRIKE_OTM_CONFIDENCE":     _live("SMART_STRIKE_OTM_CONFIDENCE", "0.55"),
-            "SMART_STRIKE_OTM2_ENABLED":       _live("SMART_STRIKE_OTM2_ENABLED", "1"),
-            "SMART_STRIKE_OTM2_CONFIDENCE":    _live("SMART_STRIKE_OTM2_CONFIDENCE", "0.65"),
-            "SMART_STRIKE_OTM3_ENABLED":       _live("SMART_STRIKE_OTM3_ENABLED", "1"),
-            "SMART_STRIKE_OTM3_CONFIDENCE":    _live("SMART_STRIKE_OTM3_CONFIDENCE", "0.75"),
-            "SMART_STRIKE_OTM3_REGIMES":       _live("SMART_STRIKE_OTM3_REGIMES", "BREAKOUT,TRENDING"),
-            "SMART_STRIKE_OTM4_ENABLED":       _live("SMART_STRIKE_OTM4_ENABLED", "1"),
-            "SMART_STRIKE_OTM4_CONFIDENCE":    _live("SMART_STRIKE_OTM4_CONFIDENCE", "0.85"),
-            "SMART_STRIKE_OTM4_REGIMES":       _live("SMART_STRIKE_OTM4_REGIMES", "BREAKOUT"),
-            # OI minimums — pass live values; lower defaults so OTM tiers are reachable
-            "SMART_STRIKE_OTM2_MIN_OI":         _live("SMART_STRIKE_OTM2_MIN_OI", "20000"),
-            "SMART_STRIKE_OTM3_MIN_OI":         _live("SMART_STRIKE_OTM3_MIN_OI", "15000"),
-            "SMART_STRIKE_OTM4_MIN_OI":         _live("SMART_STRIKE_OTM4_MIN_OI", "10000"),
-            # IV ceilings as PERCENTILE thresholds (moderate experiment). Live still
-            # pins the old absolute-style 60/50/40/30 via env; the sim uses corrected
-            # percentile ceilings so OTM is reachable in normal IV. Promote to live by
-            # setting these in .env.compose once validated here.
-            "SMART_STRIKE_OTM_IV_CEIL":        _live("SMART_STRIKE_OTM_IV_CEIL_SIM", "92"),
-            "SMART_STRIKE_OTM2_IV_CEIL":       _live("SMART_STRIKE_OTM2_IV_CEIL_SIM", "91"),
-            "SMART_STRIKE_OTM3_IV_CEIL":       _live("SMART_STRIKE_OTM3_IV_CEIL_SIM", "90"),
-            "SMART_STRIKE_OTM4_IV_CEIL":       _live("SMART_STRIKE_OTM4_IV_CEIL_SIM", "89"),
-            "STRATEGY_ENHANCED_VELOCITY":      _live("STRATEGY_ENHANCED_VELOCITY", "0"),
-            "STRATEGY_IV_EXTREME_PERCENTILE":  _live("STRATEGY_IV_EXTREME_PERCENTILE", "95.0"),
-            "STRATEGY_PROFILE_ID":             _live("STRATEGY_PROFILE_ID",
-                                                     "trader_master_ml_entry_consensus_v1"),
-            # Risk limits — mirror live exactly (live currently runs 20 session trades)
-            "RISK_MAX_CONSECUTIVE_LOSSES":     _live("RISK_MAX_CONSECUTIVE_LOSSES", "3"),
-            "RISK_MAX_SESSION_TRADES":         _live("RISK_MAX_SESSION_TRADES", "20"),
-            "RISK_MAX_LOTS_PER_TRADE":         _live("RISK_MAX_LOTS_PER_TRADE", "5"),
-            "RISK_CAPITAL_ALLOCATED":          _live("RISK_CAPITAL_ALLOCATED", "500000"),
-            "RISK_PER_TRADE_PCT":              _live("RISK_PER_TRADE_PCT", "0.005"),
-            "STRATEGY_MIN_CONFIDENCE":         _live("STRATEGY_MIN_CONFIDENCE", "") or _live("CONSENSUS_BYPASS_MIN_CONFIDENCE", "0.80") or "0.80",
-            # Exit strategy mode — adaptive (live default): scalper for SIDEWAYS/CHOP,
-            # lottery runner for BREAKOUT/TRENDING. Lottery params ATM-tuned.
-            "EXIT_STRATEGY_MODE":              _live("EXIT_STRATEGY_MODE", "adaptive"),
-            "LOTTERY_HARD_STOP_PCT":           _live("LOTTERY_HARD_STOP_PCT", "0.15"),
-            "LOTTERY_BIG_TARGET_PCT":          _live("LOTTERY_BIG_TARGET_PCT", "0.40"),
-            "LOTTERY_RUNNER_ACTIVATION_MFE":   _live("LOTTERY_RUNNER_ACTIVATION_MFE", "0.15"),
-            "LOTTERY_RUNNER_GIVEBACK_FRAC":    _live("LOTTERY_RUNNER_GIVEBACK_FRAC", "0.30"),
-            "LOTTERY_THESIS_FAIL_BARS":        _live("LOTTERY_THESIS_FAIL_BARS", "5"),
-            "LOTTERY_THESIS_FAIL_MIN_MFE":     _live("LOTTERY_THESIS_FAIL_MIN_MFE", "0.03"),
-            "LOTTERY_TIMESTOP_BARS":           _live("LOTTERY_TIMESTOP_BARS", "60"),
-            "LOTTERY_MOMENTUM_FLIP":           _live("LOTTERY_MOMENTUM_FLIP", "1.0"),
-            # v2 gate-cascade pipeline — off by default, togglable from OPS panel
-            "STRATEGY_ENTRY_PIPELINE_V2":      _live("STRATEGY_ENTRY_PIPELINE_V2", "0"),
-            "SMART_STRIKE_MIN_PREMIUM":        _live("SMART_STRIKE_MIN_PREMIUM", "0"),
-            # E9 live/paper tiering — grade floor for live eligibility (GOOD|OK)
-            "RISK_LIVE_MIN_GRADE":             _live("RISK_LIVE_MIN_GRADE", "GOOD"),
-            "STRATEGY_RUN_DIR":                f"/tmp/sim_{job_id}",
-            "REDIS_HOST":                      os.getenv("REDIS_HOST", "localhost"),
-            "DEPTH_FEED_ENABLED":              "0",
-        }
+            "MARKET_SESSION_ENABLED":         "0",
+            "BRAIN_ENABLED":                  "false",
+            # Intelligent-brain SHADOW: runs senses->decision->direction->exit each bar
+            # and attaches reasoning to the trace (read-only; never changes the trade).
+            "INTELLIGENT_BRAIN_SHADOW":       _live("INTELLIGENT_BRAIN_SHADOW", "1"),
+            "STRATEGY_STARTUP_WARMUP_EVENTS": "0",
+            "STRATEGY_RUN_DIR":               f"/tmp/sim_{job_id}",
+            "REDIS_HOST":                     os.getenv("REDIS_HOST", "localhost"),
+            "DEPTH_FEED_ENABLED":             "0",
+        })
         # Apply user overrides (validated keys only) — these are the deltas the
         # operator dialed in the OPS panel, layered on top of the live baseline.
         for k, v in overrides.items():

@@ -264,6 +264,20 @@ def build_engine(
 
 
 def run_cli(argv: Optional[Iterable[str]] = None) -> int:
+    # Single-source config: project ops/strategy_config.yml into os.environ BEFORE
+    # anything reads env. Phase 1 uses env_wins precedence so existing .env.compose
+    # values stay authoritative — adding this is a provable no-op. Flip to yaml_wins
+    # in phase 3. See docs/strategy_platform/CONFIG_CONSOLIDATION_PLAN.md.
+    try:
+        from .config.loader import apply_to_environ
+        # Phase 3: YAML is now the source of truth (yaml_wins). The loader logs any
+        # key whose prior env value really differed, so the cutover is auditable.
+        # Instant revert without redeploy: STRATEGY_CONFIG_PRECEDENCE=env_wins.
+        _cfg_precedence = os.getenv("STRATEGY_CONFIG_PRECEDENCE", "yaml_wins")
+        apply_to_environ(precedence=_cfg_precedence)
+    except Exception as _cfg_e:  # never let config loading crash startup
+        logger.warning("strategy_config loader skipped: %s", _cfg_e)
+
     parser = argparse.ArgumentParser(description="Strategy app redis consumer runtime.")
     parser.add_argument("--engine", choices=["deterministic", "ml_pure"], default="deterministic")
     parser.add_argument("--topic", default=None, help=f"Snapshot topic (default: {snapshot_topic()})")
@@ -443,24 +457,12 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     )
     # Write ops-relevant env vars to a file so the dashboard OPS tab can read
     # the actual live config even though it runs in a separate container.
-    _ops_env_keys = [
-        "EXIT_POLICY_STACK_ENABLED", "EXIT_PREMIUM_TARGET_PCT",
-        "EXIT_TRAILING_ACTIVATION_PCT", "EXIT_TRAILING_TRAIL_PCT",
-        "EXIT_THESIS_FAIL_BARS", "EXIT_THESIS_FAIL_MIN_MFE",
-        "CONSENSUS_BYPASS_MIN_CONFIDENCE", "DIRECTION_MIN_MARGIN_SIDEWAYS",
-        "STRATEGY_STRIKE_SELECTION_POLICY", "SMART_STRIKE_MAX_PREMIUM",
-        "STRATEGY_STRIKE_MAX_OTM_STEPS", "STRATEGY_SMART_STRIKE_ENABLED",
-        "RISK_MAX_CONSECUTIVE_LOSSES", "RISK_MAX_SESSION_TRADES",
-        "STRATEGY_PROFILE_ID", "STRATEGY_MIN_CONFIDENCE", "EXIT_STRATEGY_MODE",
-        # ML model paths + risk + smart-strike tiers — so the OPS sim reproduces
-        # live exactly (these live only in strategy_app's container env).
-        "ENTRY_ML_MODEL_PATH", "ENTRY_ML_MIN_PROB",
-        "DIRECTION_ML_MODEL_PATH", "DIRECTION_ML_WEIGHT", "DIRECTION_ML_FILTER_MIN_PROB",
+    # Phase 3: the key list is DERIVED from the config registry (no more hand-
+    # maintained list to drift). Plus a few non-registry sim-reproduction vars.
+    from .config.registry import OPS_ENV_KEYS as _registry_ops_keys
+    _ops_env_keys = list(_registry_ops_keys) + [
+        # Non-registry vars the OPS sim also needs to mirror live exactly.
         "OPTION_PNL_MODEL_BUNDLE",
-        "RISK_CAPITAL_ALLOCATED", "RISK_PER_TRADE_PCT", "RISK_MAX_LOTS_PER_TRADE",
-        "SMART_STRIKE_OTM_CONFIDENCE", "SMART_STRIKE_OTM2_ENABLED", "SMART_STRIKE_OTM2_CONFIDENCE",
-        "SMART_STRIKE_OTM3_ENABLED", "SMART_STRIKE_OTM3_CONFIDENCE", "SMART_STRIKE_OTM3_REGIMES",
-        "SMART_STRIKE_OTM4_ENABLED", "SMART_STRIKE_OTM4_CONFIDENCE", "SMART_STRIKE_OTM4_REGIMES",
         "STRATEGY_ENHANCED_VELOCITY", "STRATEGY_IV_EXTREME_PERCENTILE",
     ]
     try:

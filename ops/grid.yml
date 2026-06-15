@@ -1,0 +1,76 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Grid experiment config — ops/grid.yml
+#
+# Run with:  python ops/run_grid.py [--vm-ip 34.x.x.x] [--dry-run]
+#
+# Each cell is a named SIM override bundle.  The runner submits one
+# POST /api/ops/sim/today per cell × date, then prints a comparison table.
+#
+# Override keys: any key listed in market_data_dashboard/routes/ops_routes.py
+#   _SAFE_OVERRIDE_KEYS  (anything in that set is accepted by the API).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Dates to replay (YYYY-MM-DD).  Must have live snapshots in mongo.
+dates:
+  - "2026-06-12"
+  - "2026-06-11"
+  - "2026-06-10"
+
+# --- Grid cells --------------------------------------------------------------
+cells:
+
+  # Baseline: replicate live config exactly (no overrides)
+  - name: live_baseline
+    description: "Matches live .env.compose — adaptive exit, ATR vol gate"
+    overrides: {}
+
+  # A/B: scalper vs adaptive
+  - name: scalper_mode
+    description: "Pure scalper exit (7% SL, 3% TP, no lottery)"
+    overrides:
+      EXIT_STRATEGY_MODE: "scalper"
+
+  # Tighter scalper SL
+  - name: scalper_tight_sl
+    description: "Scalper with 5% SL (tighter risk)"
+    overrides:
+      EXIT_STRATEGY_MODE: "scalper"
+      EXIT_SCALPER_HARD_STOP_PCT: "0.05"
+
+  # Lottery-only (both TRENDING and SIDEWAYS go to lottery)
+  - name: lottery_all_regimes
+    description: "Route all regimes to lottery stack"
+    overrides:
+      EXIT_STRATEGY_MODE: "adaptive"
+      ADAPTIVE_LOTTERY_REGIMES: "TRENDING,BREAKOUT,SIDEWAYS,HIGH_VOL"
+
+  # ML entry gate instead of ATR vol gate
+  - name: ml_entry_gate
+    description: "Use entry_only_v3 ML model instead of ATR gate"
+    overrides:
+      ENTRY_VOL_GATE_ENABLED: "0"
+      ENTRY_ML_MIN_PROB: "0.45"
+
+  # ATR gate at lower threshold (allow more trades)
+  - name: atr_low_threshold
+    description: "ATR gate at p75 (0.0006) — more trades, lower quality bar"
+    overrides:
+      ATR_ENTRY_MIN_PCT: "0.0006"
+
+  # Regime_dual direction vs pure composite heuristic
+  - name: direction_composite
+    description: "Pure composite heuristic direction (no ML tilt)"
+    overrides:
+      ML_ENTRY_DIRECTION_MODE: "composite"
+
+  # Lottery with original tight params (what ops_config was showing as defaults)
+  - name: lottery_tight
+    description: "Lottery with 15% SL / 40% TP / 5-bar thesis / 60-bar timestop"
+    overrides:
+      EXIT_STRATEGY_MODE: "adaptive"
+      LOTTERY_HARD_STOP_PCT: "0.15"
+      LOTTERY_BIG_TARGET_PCT: "0.40"
+      LOTTERY_RUNNER_ACTIVATION_MFE: "0.15"
+      LOTTERY_RUNNER_GIVEBACK_FRAC: "0.30"
+      LOTTERY_THESIS_FAIL_BARS: "5"
+      LOTTERY_TIMESTOP_BARS: "60"

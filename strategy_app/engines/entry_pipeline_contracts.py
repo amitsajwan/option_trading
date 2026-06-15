@@ -113,6 +113,7 @@ class EntryContext:
     strike: Optional[int] = field(default=None)
     premium: Optional[float] = field(default=None)
     lots: Optional[int] = field(default=None)
+    ml_vote: "Optional[StrategyVote]" = field(default=None)  # stashed by MLEntryGate
 
     # --- observability ---
     trace: list[GateTrace] = field(default_factory=list)
@@ -124,6 +125,7 @@ class EntryContext:
         self.strike = None
         self.premium = None
         self.lots = None
+        self.ml_vote = None
 
 
 # ---------------------------------------------------------------------------
