@@ -64,6 +64,19 @@ _SIM_EXTRA_OVERRIDE_KEYS = {
     "DIR_VWAP_MIN_DIST",
     "DIR_STRD_MIN_GAP",
     "DIR_CONVICTION_RULE",
+    # Regime-conditioned confluence council (trader checklist) — ML_ENTRY_DIRECTION_MODE=checklist
+    "ML_ENTRY_DIRECTION_MODE",
+    "DIR_REGIME_TREND_DIST",
+    "DIR_COUNCIL_MIN_AGREE",
+    "DIR_MAXPAIN_MIN_PTS",
+    "DIR_MAXPAIN_AS_VOTE",
+    "DIR_PCR_MIN_CHG",
+    "DIR_MODEL_MIN_CONF",
+    "DIR_COUNCIL_USE_MODEL",
+    "DIR_COUNCIL_USE_DEPTH",
+    "DIR_DEPTH_MIN_IMB",
+    # Selection Gate 1 (opportunity selection replaces the absolute ATR cliff)
+    "OPPORTUNITY_GATE_ENABLED",
     # Gate enable toggles (filter gates; disabled = pass-through)
     "ENTRY_VOL_GATE_ENABLED",
     "EXIT_POLICY_STACK_ENABLED",
