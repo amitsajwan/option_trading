@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .compression_features import COMPRESSION_FEATURE_COLUMNS as _COMPRESSION_FEATURE_FIELDS
 from .velocity_features import VELOCITY_COLUMNS
 
 
@@ -54,6 +55,10 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
             "atr_daily_percentile",
             "dist_from_day_high",
             "dist_from_day_low",
+            # BMM compression / stored-energy / structure features. Live: carried in the
+            # snapshot "futures_derived" block (mss3). Historical: top-level flat columns.
+            # The shared compression_features module is the single source of truth.
+            *_COMPRESSION_FEATURE_FIELDS,
         ),
         "mtf_derived": (
             "rsi_14_1m",

@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from snapshot_app.core.compression_features import add_compression_features_from_flat
 from snapshot_app.core.stage_views import project_stage_views_v2_from_flat_row
 
 try:
@@ -293,6 +294,12 @@ def rebuild_stage_views_from_flat(
             day_frame = _merge_flat_with_base(primary_frame, base_frame)
         else:
             day_frame = primary_frame
+
+        # BMM compression / stored-energy / structure features (causal). Same shared
+        # module the live snapshot path uses -> zero train/serve skew. Computed on the
+        # full sorted intraday flat frame so rolling windows are correct.
+        day_frame = day_frame.sort_values("timestamp").reset_index(drop=True)
+        day_frame = add_compression_features_from_flat(day_frame)
 
         projected = _project_day_rows(
             day_frame,

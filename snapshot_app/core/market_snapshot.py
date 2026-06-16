@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import requests
 from contracts_app import TimestampSourceMode, isoformat_ist
+from .compression_features import COMPRESSION_FEATURE_COLUMNS, add_compression_features
 from .market_snapshot_contract import SCHEMA_NAME, SCHEMA_VERSION
 
 try:
@@ -1151,6 +1152,10 @@ def prepare_market_snapshot_window(
     same_day["dist_from_day_high"] = (same_day["close"] - same_day["day_high"]) / same_day["day_high"].replace(0.0, np.nan)
     same_day["dist_from_day_low"] = (same_day["close"] - same_day["day_low"]) / same_day["day_low"].replace(0.0, np.nan)
 
+    # BMM compression / stored-energy / structure features (causal). Single source of
+    # truth shared with the historical rebuild so there is zero train/serve skew.
+    add_compression_features(same_day)
+
     by_day = {}
     for day_key, grp in bars_calc.groupby("trade_date", sort=True):
         by_day[str(day_key)] = grp.sort_values("timestamp")
@@ -1205,6 +1210,7 @@ def prepare_market_snapshot_window(
             "atr_daily_percentile",
             "dist_from_day_high",
             "dist_from_day_low",
+            *COMPRESSION_FEATURE_COLUMNS,
         ],
     ].copy()
 
@@ -1356,6 +1362,9 @@ def build_market_snapshot(
         "dist_from_day_high": _nullable_float(current_futures.get("dist_from_day_high")),
         "dist_from_day_low": _nullable_float(current_futures.get("dist_from_day_low")),
     }
+    # BMM compression / stored-energy / structure features (shared module).
+    for _comp_col in COMPRESSION_FEATURE_COLUMNS:
+        mss3[_comp_col] = _nullable_float(current_futures.get(_comp_col))
     mss_mtf = _compute_mtf_block(bars_calc)
 
     day_bars = bars_calc[bars_calc["trade_date"] == str(trade_date.date())].copy()
