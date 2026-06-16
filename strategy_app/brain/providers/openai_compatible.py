@@ -133,7 +133,18 @@ def extract_json_object(content: str) -> dict[str, Any]:
             except json.JSONDecodeError:
                 continue
 
-    # 3. Outermost brace slice (prose before/after the object).
+    # 3. First complete object via raw_decode — robust to TRAILING junk after a
+    #    valid object (e.g. small models that append a stray "}" or extra prose).
+    start = text.find("{")
+    if start != -1:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(text[start:])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+    # 4. Outermost brace slice (prose before/after a SINGLE object).
     start, end = text.find("{"), text.rfind("}")
     if start != -1 and end > start:
         try:
