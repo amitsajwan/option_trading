@@ -1,5 +1,8 @@
 # Engine Decision Flow — AUTHORITATIVE (start here)
 
+> **Full system map (gates + flow + councils + config):** see [SYSTEM_FLOW.md](SYSTEM_FLOW.md). This doc is the live-engine decision detail.
+
+
 > **As-of:** 2026-06-09 · **Owner:** strategy_app
 >
 > **What this doc is:** the single, plain-English source of truth for how the
