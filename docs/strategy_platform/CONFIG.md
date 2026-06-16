@@ -100,3 +100,35 @@ DIR_COUNCIL_USE_MODEL=0
 | Per-key `environment:` block (double-entry) | replace with `env_file: - .env.compose` so `.env.compose` is the TRUE single source (no per-key mapping). |
 
 After cleanup: **one file (`.env.compose`), one command (`--env-file .env.compose up`), one diagram.** Nothing else to remember.
+
+---
+
+## Profiles — switchable configs (prod / shadow), like prod/UAT
+
+Behaviour variants live in **`ops/profiles/<name>.env`** as small overlays (only the
+keys that differ from base). Today:
+
+| Profile | What | Money |
+|---|---|---|
+| `prod` | `regime_dual` (current live baseline) | paper now; real only when execution_app up + tier |
+| `shadow` | checklist council + selection gate, `STRATEGY_MIN_CONFIDENCE=0` | **paper** — observe the new strategy on real data before trusting it |
+
+**Why a "shadow":** it's the stage between SIM and real money — run the *new* strategy
+on live data with **paper execution** to watch its real decisions. Switchable, never a
+hand-edit.
+
+### Run a profile in SIM (works today — one command)
+```bash
+bash ops/run_sim_profile.sh shadow 2026-06-11     # validated: 41 council confluence votes -> 1 selected trade
+bash ops/run_sim_profile.sh prod   2026-06-11
+```
+The SIM uses the **same profile file** as live → they can't diverge.
+
+### Run a profile LIVE (target — needs the env_file refactor + image rebuild)
+```bash
+PROFILE=shadow sudo docker compose --env-file .env.compose --env-file ops/profiles/$PROFILE.env up -d strategy_app
+```
+> Blocked until: (1) compose `strategy_app` uses `env_file:` (not the per-key
+> `environment:` block) so any profile key passes through, and (2) the **image is
+> rebuilt** with the code/config baked in (today it's docker-cp'd → reverts on
+> recreate → crash). Those two are the remaining "proper solution" work.
