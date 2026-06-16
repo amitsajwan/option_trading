@@ -664,6 +664,53 @@ def _persist_sim_to_mongo(
     if pos_docs:
         db[coll_pos].insert_many(pos_docs)
 
+    # ── Entry votes → sim votes collection ───────────────────────────────────
+    # Without this the trade inspector finds no vote to link to a position and
+    # falls back to a SYNTHETIC entry card (conf 0.5, regime UNKNOWN). Persist the
+    # ENTRY votes (which carry the real council raw_signals: council_regime,
+    # council_votes, council_result, entry_prob, direction_source) keyed by
+    # snapshot_id + run_id so the inspector shows the true "why". Best-effort.
+    try:
+        from contracts_app import BASE_VOTES  # type: ignore
+        coll_votes = ns.collection_for(BASE_VOTES)
+        votes_path = Path(f"/tmp/sim_{job_id}/votes.jsonl")
+        if votes_path.exists():
+            vote_docs = []
+            seen: set[tuple[str, str]] = set()
+            for _line in votes_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    v = json.loads(_line)
+                except Exception:
+                    continue
+                if v.get("signal_type") != "ENTRY":
+                    continue
+                sid = str(v.get("snapshot_id") or "").strip()
+                if not sid:
+                    continue
+                key = (sid, str(v.get("direction") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                vote_docs.append({
+                    "trade_date_ist":       trade_date,
+                    "snapshot_id":          sid,
+                    "run_id":               run_id,
+                    "timestamp":            _parse_ts(v.get("timestamp")),
+                    "strategy":             str(v.get("strategy") or ""),
+                    "direction":            str(v.get("direction") or ""),
+                    "confidence":           v.get("confidence"),
+                    "reason":               str(v.get("reason") or ""),
+                    "decision_reason_code": v.get("decision_reason_code"),
+                    "decision_metrics":     v.get("decision_metrics"),
+                    "raw_signals":          v.get("raw_signals") or {},
+                    "regime":               v.get("regime"),
+                    "payload":              {"vote": v},
+                })
+            if vote_docs:
+                db[coll_votes].insert_many(vote_docs)
+    except Exception:
+        pass  # vote linkage is best-effort; never fail the sim persist
+
     # ── v2 gate-cascade decision traces → Terminal decision view ─────────────
     # Each element is the last_entry_trace dict from the engine: decision_id,
     # timestamp, final_outcome, primary_blocker_gate, gates[]. The Terminal's
