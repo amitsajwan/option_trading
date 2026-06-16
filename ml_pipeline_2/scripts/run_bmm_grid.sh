@@ -16,6 +16,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
+PY="${PY:-python3}"
 PARQUET_ROOT="${PARQUET_ROOT:-$HOME/parquet_data}"
 ENRICH="${ENRICH:-1}"
 VIEW_DATASET="${VIEW_DATASET:-stage1_entry_view_v3_candidate}"
@@ -43,7 +44,7 @@ echo "repo=$REPO  parquet_root=$PARQUET_ROOT  logdir=$LOGDIR"
 
 if [ "$ENRICH" = "1" ]; then
   echo "--- [1/2] enriching $VIEW_DATASET with compression features ---"
-  python ml_pipeline_2/scripts/enrich_view_compression.py \
+  "$PY" ml_pipeline_2/scripts/enrich_view_compression.py \
     --parquet-root "$PARQUET_ROOT" \
     --view-dataset "$VIEW_DATASET" \
     --flat-dataset snapshots_ml_flat_v2 2>&1 | tee "$LOGDIR/enrich.log"
@@ -57,7 +58,7 @@ for run in "${CONFIGS[@]}"; do
   cfg="ml_pipeline_2/configs/research/staged_dual_recipe.${run}.json"
   log="$LOGDIR/${run}.log"
   echo "  launching $run -> $log"
-  nohup python -m ml_pipeline_2.run_research --config "$cfg" > "$log" 2>&1 &
+  nohup "$PY" -m ml_pipeline_2.run_research --config "$cfg" > "$log" 2>&1 &
   echo "    pid=$!"
 done
 echo ""
@@ -66,4 +67,4 @@ echo "  python ml_pipeline_2/scripts/bmm_results.py --watch"
 echo "  tail -f $LOGDIR/bmm_h15m_020pct.log"
 wait
 echo "=== all BMM trainings finished ==="
-python ml_pipeline_2/scripts/bmm_results.py
+"$PY" ml_pipeline_2/scripts/bmm_results.py
