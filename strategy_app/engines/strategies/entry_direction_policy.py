@@ -286,11 +286,18 @@ def _regime_council_direction(
     # vwap acceptance (already confident by the regime test)
     if pv is not None:
         votes["vwap"] = _sg(pv)
-    # max_pain magnet: price below max_pain -> pulled up -> CE
+    # max_pain magnet: price below max_pain -> pulled up -> CE.
+    # ADVISORY by default (DIR_MAXPAIN_AS_VOTE=0): a STATIC pin magnet structurally
+    # OPPOSES VWAP in any trend (price trends away from the pin), causing spurious
+    # dissent + over-abstain. The proven lever used max_pain as a *dynamic* confirmer
+    # (~60% agree on big moves), not a static magnet — encode that before counting it.
     mp, atm = snap.max_pain, snap.atm_strike
     mp_min = float(os.getenv("DIR_MAXPAIN_MIN_PTS", "50") or 50)
     if mp and atm and abs(mp - atm) >= mp_min:
-        votes["max_pain"] = 1 if atm < mp else -1
+        mp_vote = 1 if atm < mp else -1
+        raw_signals["maxpain_magnet"] = mp_vote  # always logged
+        if env_bool("DIR_MAXPAIN_AS_VOTE", False):
+            votes["max_pain"] = mp_vote
     # PCR flow: rising PCR (puts building) -> bullish
     pc = snap.pcr_change_5m
     pthr = float(os.getenv("DIR_PCR_MIN_CHG", "0.02") or 0.02)

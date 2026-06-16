@@ -44,29 +44,27 @@ def test_trend_needs_momentum_to_confirm_vwap():
     assert d is None and rs["council_regime"] == "range"
 
 
-def test_trend_up_with_full_confluence_takes_CE():
-    # trend up + vwap(+) + max_pain magnet up (atm<mp) + pcr rising = 3 agree -> CE
-    d, rs = _regime_council_direction(_Snap(0.003, 0.002, 57000, 57300, 0.05), {})
-    assert d == Direction.CE
-    assert rs["council_agree"] == 3 and rs["council_result"].startswith("confluence")
-
-
-def test_trend_down_with_full_confluence_takes_PE():
-    # trend down + vwap(-) + max_pain magnet down (atm>mp) + pcr falling = PE
-    d, rs = _regime_council_direction(_Snap(-0.003, -0.002, 57300, 57000, -0.05), {})
-    assert d == Direction.PE and rs["council_agree"] == 3
-
-
-def test_trend_but_insufficient_confluence_abstains():
-    # trend up, but max_pain within 50pt (skipped) and pcr flat (skipped) -> only vwap -> abstain
-    d, rs = _regime_council_direction(_Snap(0.003, 0.002, 57000, 57010, 0.0), {})
-    assert d is None
-    assert rs["council_agree"] == 1 and "insufficient_confluence" in rs["council_result"]
-
-
-def test_dissent_outvotes_when_min_agree_lowered(monkeypatch):
-    # lower min_agree to 2: vwap(+) + pcr(+) agree, max_pain(-) dissents -> 2>=2 and 2>1 -> CE
+def test_maxpain_advisory_by_default(monkeypatch):
+    # default: max_pain is ADVISORY (logged, NOT a vote) so it never causes false
+    # dissent. Council = vwap + pcr. At min_agree=2 they agree -> CE.
     monkeypatch.setenv("DIR_COUNCIL_MIN_AGREE", "2")
     d, rs = _regime_council_direction(_Snap(0.003, 0.002, 57300, 57000, 0.05), {})
     assert d == Direction.CE
-    assert rs["council_agree"] == 2 and rs["council_against"] == 1
+    assert "max_pain" not in rs["council_votes"]      # advisory, not counted
+    assert rs["maxpain_magnet"] == -1                  # still logged (atm>mp -> bearish pin)
+    assert rs["council_agree"] == 2 and rs["council_against"] == 0
+
+
+def test_maxpain_as_vote_when_enabled(monkeypatch):
+    # opt-in: DIR_MAXPAIN_AS_VOTE=1 -> max_pain counts. atm<mp -> bullish, 3 agree -> CE.
+    monkeypatch.setenv("DIR_MAXPAIN_AS_VOTE", "1")
+    d, rs = _regime_council_direction(_Snap(0.003, 0.002, 57000, 57300, 0.05), {})
+    assert d == Direction.CE
+    assert rs["council_votes"].get("max_pain") == 1 and rs["council_agree"] == 3
+
+
+def test_trend_but_insufficient_confluence_abstains():
+    # trend up, only vwap present (pcr flat -> skipped, max_pain advisory) -> 1 < 3 -> abstain
+    d, rs = _regime_council_direction(_Snap(0.003, 0.002, 57000, 57010, 0.0), {})
+    assert d is None
+    assert rs["council_agree"] == 1 and "insufficient_confluence" in rs["council_result"]
