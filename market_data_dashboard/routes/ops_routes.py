@@ -671,8 +671,9 @@ def _persist_sim_to_mongo(
     # council_votes, council_result, entry_prob, direction_source) keyed by
     # snapshot_id + run_id so the inspector shows the true "why". Best-effort.
     try:
-        from contracts_app import BASE_VOTES  # type: ignore
-        coll_votes = ns.collection_for(BASE_VOTES)
+        # Same namespace helper the persist already uses for positions/traces, so the
+        # collection name matches what the inspector reads (e.g. strategy_votes_sim).
+        coll_votes = ns.collection_for("strategy_votes")
         votes_path = Path(f"/tmp/sim_{job_id}/votes.jsonl")
         if votes_path.exists():
             vote_docs = []
