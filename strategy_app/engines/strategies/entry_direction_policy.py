@@ -303,6 +303,15 @@ def _regime_council_direction(
     pthr = float(os.getenv("DIR_PCR_MIN_CHG", "0.02") or 0.02)
     if pc is not None and abs(float(pc)) >= pthr:
         votes["pcr"] = _sg(pc)
+    # Straddle expansion: CE option gaining faster than PE -> bullish. Per-bar option
+    # flow (no velocity/model needed) -> the 3rd de-correlated structural member, so a
+    # 3-agreement council works WITHOUT rolling serving. (Used by the conviction ensemble.)
+    if env_bool("DIR_MEMBER_STRD_ENABLED", True):
+        ao = snap.raw_payload.get("atm_options") or {}
+        ce, pe = ao.get("atm_ce_return_1m"), ao.get("atm_pe_return_1m")
+        sgap = float(os.getenv("DIR_STRD_MIN_GAP", "0.005") or 0.005)
+        if ce is not None and pe is not None and abs(float(ce) - float(pe)) >= sgap:
+            votes["straddle"] = _sg(float(ce) - float(pe))
     # direction model — confidence-gated
     dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "").strip()
     if dir_path and env_bool("DIR_COUNCIL_USE_MODEL", True):

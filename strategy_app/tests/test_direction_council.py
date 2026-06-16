@@ -13,8 +13,11 @@ from strategy_app.engines.strategies.entry_direction_policy import _regime_counc
 
 
 class _Snap:
-    def __init__(self, pv, ret5, atm, max_pain, pcr_chg):
-        self.raw_payload = {"futures_derived": {"price_vs_vwap": pv}}
+    def __init__(self, pv, ret5, atm, max_pain, pcr_chg, ce_ret=None, pe_ret=None):
+        self.raw_payload = {
+            "futures_derived": {"price_vs_vwap": pv},
+            "atm_options": {"atm_ce_return_1m": ce_ret, "atm_pe_return_1m": pe_ret},
+        }
         self.fut_return_5m = ret5
         self.atm_strike = atm
         self.max_pain = max_pain
@@ -63,8 +66,18 @@ def test_maxpain_as_vote_when_enabled(monkeypatch):
     assert rs["council_votes"].get("max_pain") == 1 and rs["council_agree"] == 3
 
 
+def test_three_member_structural_confluence_no_model_needed():
+    # vwap + pcr + straddle(CE faster) all bullish = 3 structural members agree -> CE
+    # at the default min_agree=3, WITHOUT the model or rolling serving.
+    d, rs = _regime_council_direction(
+        _Snap(0.003, 0.002, 57000, 57010, 0.05, ce_ret=0.02, pe_ret=0.0), {})
+    assert d == Direction.CE
+    assert set(rs["council_votes"]) >= {"vwap", "pcr", "straddle"}
+    assert rs["council_agree"] == 3 and rs["council_result"] == "confluence_3of3"
+
+
 def test_trend_but_insufficient_confluence_abstains():
-    # trend up, only vwap present (pcr flat -> skipped, max_pain advisory) -> 1 < 3 -> abstain
+    # trend up, only vwap present (pcr flat, straddle absent, max_pain advisory) -> 1<3 -> abstain
     d, rs = _regime_council_direction(_Snap(0.003, 0.002, 57000, 57010, 0.0), {})
     assert d is None
     assert rs["council_agree"] == 1 and "insufficient_confluence" in rs["council_result"]
