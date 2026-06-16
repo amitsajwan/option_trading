@@ -264,20 +264,13 @@ def build_engine(
 
 
 def run_cli(argv: Optional[Iterable[str]] = None) -> int:
-    # Single-source config: project ops/strategy_config.yml into os.environ BEFORE
-    # anything reads env. Phase 1 uses env_wins precedence so existing .env.compose
-    # values stay authoritative — adding this is a provable no-op. Flip to yaml_wins
-    # in phase 3. See docs/strategy_platform/CONFIG_CONSOLIDATION_PLAN.md.
-    try:
-        from .config.loader import apply_to_environ
-        # Phase 3: YAML is now the source of truth (yaml_wins). The loader logs any
-        # key whose prior env value really differed, so the cutover is auditable.
-        # Instant revert without redeploy: STRATEGY_CONFIG_PRECEDENCE=env_wins.
-        _cfg_precedence = os.getenv("STRATEGY_CONFIG_PRECEDENCE", "yaml_wins")
-        apply_to_environ(precedence=_cfg_precedence)
-    except Exception as _cfg_e:  # never let config loading crash startup
-        logger.warning("strategy_config loader skipped: %s", _cfg_e)
-
+    # CONFIG SOURCE OF TRUTH = .env.compose (applied via `docker compose --env-file
+    # .env.compose up`). See docs/strategy_platform/CONFIG.md. The old
+    # ops/strategy_config.yml loader was REMOVED here: it was never deployed (the
+    # yaml is absent in the container) and its yaml_wins precedence could silently
+    # override .env.compose with registry defaults — a confusion landmine. The
+    # registry (strategy_app/config/registry.py) is kept ONLY to derive the sim
+    # override allowlist in ops_routes — it no longer touches os.environ at startup.
     parser = argparse.ArgumentParser(description="Strategy app redis consumer runtime.")
     parser.add_argument("--engine", choices=["deterministic", "ml_pure"], default="deterministic")
     parser.add_argument("--topic", default=None, help=f"Snapshot topic (default: {snapshot_topic()})")
