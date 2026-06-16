@@ -236,6 +236,95 @@ def _conviction_ensemble_direction(
     return None, raw_signals
 
 
+def _regime_council_direction(
+    snap: SnapshotAccessor, raw_signals: dict[str, Any]
+) -> tuple[Optional[Direction], dict[str, Any]]:
+    """Trader checklist: REGIME-conditioned confluence council.
+
+    The literal rule a disciplined trader uses:
+      STEP 1 — what kind of day? Only take a *directional* bet in a TRENDING
+        regime. In a range/chop, direction is a coin flip -> ABSTAIN (caller takes
+        a straddle or skips). Trend = price decisively off VWAP AND 5m momentum
+        agreeing with that side.
+      STEP 2 — does the desk AGREE? De-correlated members vote CE/PE *only when
+        confident*: vwap (acceptance), max_pain (magnet), PCR (flow), the direction
+        model (confidence-gated), optional depth. Anti-signals (momentum, ORB) are
+        excluded. Require >= DIR_COUNCIL_MIN_AGREE members to agree WITH the trend
+        and outnumber dissenters, else ABSTAIN.
+
+    Never trusts one indicator; never forces a side on a coin flip. Config (env):
+      DIR_REGIME_TREND_DIST (0.0015)  DIR_COUNCIL_MIN_AGREE (3)
+      DIR_MAXPAIN_MIN_PTS (50)        DIR_PCR_MIN_CHG (0.02)
+      DIR_MODEL_MIN_CONF (0.60)       DIR_COUNCIL_USE_MODEL (1)
+      DIR_COUNCIL_USE_DEPTH (0 — UNVALIDATED, off by default)
+    """
+    fd = snap.raw_payload.get("futures_derived") or {}
+
+    def _sg(x):
+        try:
+            x = float(x)
+        except (TypeError, ValueError):
+            return 0
+        return 1 if x > 0 else (-1 if x < 0 else 0)
+
+    raw_signals["direction_source"] = "regime_council"
+
+    # ── STEP 1: regime (trend vs range) ────────────────────────────────────────
+    pv = fd.get("price_vs_vwap")
+    ret5 = snap.fut_return_5m
+    trend_dist = float(os.getenv("DIR_REGIME_TREND_DIST", "0.0015") or 0.0015)
+    trend = 0
+    if pv is not None and abs(float(pv)) >= trend_dist and ret5 is not None and _sg(ret5) == _sg(pv):
+        trend = _sg(pv)
+    raw_signals["council_regime"] = ("trend_up" if trend > 0 else "trend_down" if trend < 0 else "range")
+    if trend == 0:
+        raw_signals["council_result"] = "range_abstain"  # -> caller straddles / skips
+        return None, raw_signals
+
+    # ── STEP 2: confluence council (confident votes only) ──────────────────────
+    votes: dict[str, int] = {}
+    # vwap acceptance (already confident by the regime test)
+    if pv is not None:
+        votes["vwap"] = _sg(pv)
+    # max_pain magnet: price below max_pain -> pulled up -> CE
+    mp, atm = snap.max_pain, snap.atm_strike
+    mp_min = float(os.getenv("DIR_MAXPAIN_MIN_PTS", "50") or 50)
+    if mp and atm and abs(mp - atm) >= mp_min:
+        votes["max_pain"] = 1 if atm < mp else -1
+    # PCR flow: rising PCR (puts building) -> bullish
+    pc = snap.pcr_change_5m
+    pthr = float(os.getenv("DIR_PCR_MIN_CHG", "0.02") or 0.02)
+    if pc is not None and abs(float(pc)) >= pthr:
+        votes["pcr"] = _sg(pc)
+    # direction model — confidence-gated
+    dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "").strip()
+    if dir_path and env_bool("DIR_COUNCIL_USE_MODEL", True):
+        b = _load_dir_bundle(dir_path)
+        if b is not None and b.get("kind") == _DIRECTION_BUNDLE_KIND:
+            cp = predict_positive_class_prob(b, snap)
+            conf = float(os.getenv("DIR_MODEL_MIN_CONF", "0.60") or 0.60)
+            if cp is not None and (cp >= conf or cp <= 1.0 - conf):
+                votes["model"] = 1 if cp >= 0.5 else -1
+    # depth imbalance (optional, UNVALIDATED — off by default)
+    if env_bool("DIR_COUNCIL_USE_DEPTH", False):
+        dp = snap.raw_payload.get("depth") or {}
+        imb = dp.get("qty_imbalance")
+        if imb is not None and abs(float(imb)) >= float(os.getenv("DIR_DEPTH_MIN_IMB", "0.2") or 0.2):
+            votes["depth"] = _sg(imb)
+
+    agree = [m for m, v in votes.items() if v == trend]
+    against = [m for m, v in votes.items() if v == -trend]
+    min_agree = int(os.getenv("DIR_COUNCIL_MIN_AGREE", "3") or 3)
+    raw_signals["council_votes"] = votes
+    raw_signals["council_agree"] = len(agree)
+    raw_signals["council_against"] = len(against)
+    if len(agree) >= min_agree and len(agree) > len(against):
+        raw_signals["council_result"] = f"confluence_{len(agree)}of{len(votes)}"
+        return (Direction.CE if trend > 0 else Direction.PE), raw_signals
+    raw_signals["council_result"] = f"insufficient_confluence_{len(agree)}lt{min_agree}"
+    return None, raw_signals
+
+
 def resolve_direction_for_entry(
     snap: SnapshotAccessor,
 ) -> tuple[Optional[Direction], dict[str, Any]]:
@@ -287,6 +376,10 @@ def resolve_direction_for_entry(
         raw_signals["direction_source"] = direction_source
     elif direction_mode in {"conviction_ensemble", "conviction", "ensemble"}:
         direction, raw_signals = _conviction_ensemble_direction(snap, raw_signals)
+        if direction is None:
+            return None, raw_signals
+    elif direction_mode in {"checklist", "council", "regime_council"}:
+        direction, raw_signals = _regime_council_direction(snap, raw_signals)
         if direction is None:
             return None, raw_signals
     elif direction_mode in {"momentum", "mom"}:

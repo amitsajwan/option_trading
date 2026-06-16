@@ -135,3 +135,26 @@ A fixed ATR threshold encodes "I know tomorrow's relevant volatility today."
 June 12 disproved that. Ranking measures opportunity **relative to today's
 market**, the cost floor enforces **economic viability**, and the budget enforces
 **discipline** — which is how a human trader actually operates.
+
+## 9. ATR-ratio as a selection signal (verified 2026-06-15/16)
+
+ATR ratio works as a primary selection signal — **about as well as the entry
+model** for move-detection (corr 0.92), with practical advantages:
+
+- **Available every bar from the open** — no morning feature-starvation, no model
+  load, no early-thin-distribution issue. ATR distributions are stable across days,
+  so it gets an excellent **multi-day baseline** (the fix for the percentile gate's
+  early-session bias).
+- June 2026 verify (top-6 bars/day, ranked relative-to-today):
+  - 06-11: ATR surfaced the morning move window (09:46/09:48 → 75/95pt, 09:56 → 60pt);
+    the rolling **model** was sharper at the exact peaks (09:53/09:54 → 114/160pt, ranked
+    #1/#2 by prob but #9/#14 by ATR).
+  - 06-10: ATR **beat** the model (found 11:31 → 89pt; model's top bar was only 4pt).
+  - 06-12: both mediocre (genuinely quiet day).
+- Both fix the original complaint: on 06-11 the absolute ATR 0.00088 cliff fired **0**
+  in-window, but ATR-**rank** picks the day's top bars regardless of absolute level.
+
+**Recommendation (not yet wired):** blend **ATR percentile (primary, robust) + rolling
+model prob (secondary, sharper)**, in `score_cutoff` mode with a **multi-day baseline**
+(kills early-session bias) + cost floor + ≤3/day budget. ATR carries the morning even
+when the model is thin; the model adds peak sharpness. De-correlated, both point at moves.
