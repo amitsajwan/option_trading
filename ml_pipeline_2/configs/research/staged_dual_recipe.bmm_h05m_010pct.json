@@ -63,7 +63,7 @@
     }
   },
   "views": {
-    "stage1_view_id": "stage1_entry_view_v2",
+    "stage1_view_id": "stage1_entry_view_v3_candidate",
     "stage2_view_id": "stage2_direction_view_v2",
     "stage3_view_id": "stage3_recipe_view_v2"
   },
@@ -108,7 +108,7 @@
     },
     "random_state": 42,
     "runtime": {
-      "model_n_jobs": 4
+      "model_n_jobs": 1
     },
     "cost_per_trade": 0.0006,
     "search_options_by_stage": {

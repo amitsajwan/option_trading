@@ -17,11 +17,18 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
 PARQUET_ROOT="${PARQUET_ROOT:-$HOME/parquet_data}"
-REBUILD="${REBUILD:-1}"
-REBUILD_START="${REBUILD_START:-2022-01-01}"
-REBUILD_END="${REBUILD_END:-2024-10-31}"
+ENRICH="${ENRICH:-1}"
+VIEW_DATASET="${VIEW_DATASET:-stage1_entry_view_v3_candidate}"
 LOGDIR="$HOME/bmm_logs"
 mkdir -p "$LOGDIR"
+
+# Ensure the config's relative parquet_root resolves to the real data dir.
+DATA_LINK="$REPO/.data/ml_pipeline/parquet_data"
+if [ ! -e "$DATA_LINK" ]; then
+  mkdir -p "$(dirname "$DATA_LINK")"
+  ln -s "$PARQUET_ROOT" "$DATA_LINK"
+  echo "linked $DATA_LINK -> $PARQUET_ROOT"
+fi
 
 CONFIGS=(
   bmm_h05m_010pct
@@ -34,17 +41,15 @@ CONFIGS=(
 echo "=== BMM grid launcher ==="
 echo "repo=$REPO  parquet_root=$PARQUET_ROOT  logdir=$LOGDIR"
 
-if [ "$REBUILD" = "1" ]; then
-  echo "--- [1/2] rebuilding stage views WITH compression features ($REBUILD_START..$REBUILD_END) ---"
-  python -m snapshot_app.historical.rebuild_stage_views_from_flat \
+if [ "$ENRICH" = "1" ]; then
+  echo "--- [1/2] enriching $VIEW_DATASET with compression features ---"
+  python ml_pipeline_2/scripts/enrich_view_compression.py \
     --parquet-root "$PARQUET_ROOT" \
-    --source-flat-dataset snapshots_ml_flat_v2 \
-    --base-dataset market_base \
-    --start-date "$REBUILD_START" --end-date "$REBUILD_END" \
-    --no-resume 2>&1 | tee "$LOGDIR/rebuild.log"
-  echo "--- rebuild done ---"
+    --view-dataset "$VIEW_DATASET" \
+    --flat-dataset snapshots_ml_flat_v2 2>&1 | tee "$LOGDIR/enrich.log"
+  echo "--- enrich done ---"
 else
-  echo "--- [1/2] REBUILD=0, skipping stage-view rebuild ---"
+  echo "--- [1/2] ENRICH=0, skipping view enrichment ---"
 fi
 
 echo "--- [2/2] launching ${#CONFIGS[@]} trainings in parallel ---"

@@ -32,6 +32,9 @@ MATRIX = [
 ]
 
 FEATURE_SET = "fo_bmm_v1"
+# Complete backbone view present on the ML VM; enriched in place with the 12 compression
+# columns by enrich_view_compression.py. (v2 view / market_base are not on the VM.)
+STAGE1_VIEW = "stage1_entry_view_v3_candidate"
 
 
 def main() -> int:
@@ -48,6 +51,10 @@ def main() -> int:
         # Feature set on every stage (stage2/3 bypassed but keep consistent).
         for stage in ("stage1", "stage2", "stage3"):
             cfg["catalog"]["feature_sets_by_stage"][stage] = [FEATURE_SET]
+        # Stage1 features come from the enriched candidate view on the VM.
+        cfg["views"]["stage1_view_id"] = STAGE1_VIEW
+        # 8-core VM running 5 jobs in parallel -> keep per-job threads modest.
+        cfg["training"].setdefault("runtime", {})["model_n_jobs"] = 1
         # Label: horizon + per-horizon move threshold.
         cfg["labels"]["stage1_entry_move"] = {
             "horizon_minutes": horizon,
