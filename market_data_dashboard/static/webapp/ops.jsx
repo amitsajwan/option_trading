@@ -344,6 +344,21 @@ function OpsPage() {
 
   const handleReset = () => setCfg({...liveEnv});
 
+  // Shadow preset: regime-conditioned checklist council + Selection Gate 1 (paper).
+  // Replaces the absolute ATR cliff with rank-of-today selection so quiet days still
+  // trade their best bars. One click sets every key (the panel doesn't expose
+  // OPPORTUNITY_GATE / DIR_COUNCIL individually). Then pick a date and Run Sim.
+  const applyShadowPreset = () => setCfg(prev => ({
+    ...prev,
+    ENTRY_VOL_GATE_ENABLED:   '0',
+    ENTRY_ML_MIN_PROB:        '0.0',
+    ML_ENTRY_DIRECTION_MODE:  'checklist',
+    OPPORTUNITY_GATE_ENABLED: '1',
+    DIR_COUNCIL_USE_MODEL:    '0',
+    DIR_COUNCIL_MIN_AGREE:    '2',
+    STRATEGY_MIN_CONFIDENCE:  '0.0',
+  }));
+
   // Strategy mode preset. Lottery snaps entry/risk to its philosophy (rare,
   // high-conviction, let it run); user can still tweak any slider after.
   const setStrategyMode = (mode) => {
@@ -445,6 +460,19 @@ function OpsPage() {
             </span>
           </div>
 
+          {/* ── Entry / direction preset (Shadow = council + selection gate) ── */}
+          <div style={{display:'flex', alignItems:'center', gap:14, padding:'4px 0 10px', borderBottom:'1px solid var(--line-1)', marginBottom:4}}>
+            <span style={{fontFamily:'var(--f-mono)', fontSize:11, fontWeight:600, letterSpacing:'0.04em', color:'var(--ink-2)'}}>ENTRY / DIRECTION</span>
+            <div className="ops-seg" style={{width:340}}>
+              <button
+                className={(v('OPPORTUNITY_GATE_ENABLED','0')==='1' && v('ML_ENTRY_DIRECTION_MODE','')==='checklist') ? 'active' : ''}
+                onClick={applyShadowPreset}>🌓 Shadow (council + selection)</button>
+            </div>
+            <span style={{fontFamily:'var(--f-mono)', fontSize:10, color:'var(--ink-3)'}}>
+              checklist council + Selection Gate 1 · trades quiet days · paper · use “Reset to live” for the ATR vol gate
+            </span>
+          </div>
+
           <div className="ops-config-groups">
 
             {/* Exit strategy — scalper params (shown when scalper) */}
@@ -519,7 +547,7 @@ function OpsPage() {
               <SegCtrl label="Direction"
                 value={v('ML_ENTRY_DIRECTION_MODE','regime_dual')}
                 live={lv('ML_ENTRY_DIRECTION_MODE','regime_dual')}
-                options={[{value:'regime_dual',label:'Regime+ML'},{value:'conviction_ensemble',label:'Conviction'}]}
+                options={[{value:'regime_dual',label:'Regime+ML'},{value:'checklist',label:'Checklist'},{value:'conviction_ensemble',label:'Conviction'}]}
                 onChange={setVal('ML_ENTRY_DIRECTION_MODE')} />
               {v('ML_ENTRY_DIRECTION_MODE','regime_dual') === 'conviction_ensemble' && (
                 <div style={{paddingLeft:'10px', borderLeft:'2px solid var(--line-2)', marginLeft:'2px'}}>
