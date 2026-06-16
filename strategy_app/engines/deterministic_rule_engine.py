@@ -143,6 +143,12 @@ class DeterministicRuleEngine(StrategyEngine):
         self._router = router or StrategyRouter()
         self._tracker = PositionTracker()
         self._risk = RiskManager()
+        # Selection Gate 1 (OPPORTUNITY_GATE_ENABLED, default off): per-trade_date
+        # opportunity session — ranks each in-window bar relative to today + cost
+        # floor + daily budget, replacing the absolute ATR cliff with selection.
+        # Requires the upstream entry threshold near-0 (every bar a candidate).
+        self._opp_session: Any = None
+        self._opp_session_date: Optional[str] = None
         self._log = signal_logger or SignalLogger()
         # Live-only entry gate: when set, this engine only opens live-eligible
         # (GOOD) entries — used to run a parallel LIVE book whose single slot is
@@ -816,6 +822,41 @@ class DeterministicRuleEngine(StrategyEngine):
         self._handle_position_closed(exit_signal, position)
         return exit_signal
 
+    def _opportunity_gate_blocks(self, snap: SnapshotAccessor, votes: list[StrategyVote]) -> bool:
+        """Selection Gate 1 (see OPPORTUNITY_GATE_ENABLED). Returns True to BLOCK.
+
+        Observes every in-window bar into a per-trade_date OpportunitySession (causal,
+        relative-to-today percentile + cost floor + daily budget). Score blends ATR
+        percentile (always available) with the entry-model prob when a candidate vote
+        carries one. Fail-open: any internal error -> do not block.
+        """
+        try:
+            from .opportunity import OpportunitySession, OpportunityConfig, BarInputs
+            td = snap.trade_date or ""
+            if self._opp_session is None or self._opp_session_date != td:
+                self._opp_session = OpportunitySession(OpportunityConfig())
+                self._opp_session_date = td
+            spot = snap.fut_close
+            mtf = snap.raw_payload.get("mtf_derived") or {}
+            atr14 = mtf.get("atr_14_1m")
+            atr_ratio = (float(atr14) / float(spot)) if (atr14 and spot) else None
+            ce, pe = snap.atm_ce_close, snap.atm_pe_close
+            straddle = (float(ce) + float(pe)) if (ce is not None and pe is not None) else None
+            prob = None
+            for v in votes:
+                rs = getattr(v, "raw_signals", None) or {}
+                if rs.get("entry_prob") is not None:
+                    prob = float(rs["entry_prob"])
+                    break
+            dec = self._opp_session.observe(BarInputs(
+                ts=snap.timestamp_or_now, spot=float(spot or 0.0), prob=prob,
+                atr_ratio=atr_ratio, straddle_premium=straddle,
+            ))
+            return not dec.enter
+        except Exception:
+            logger.debug("opportunity gate errored — failing open (no block)", exc_info=True)
+            return False
+
     def _process_entry_votes(
         self,
         votes: list[StrategyVote],
@@ -855,6 +896,14 @@ class DeterministicRuleEngine(StrategyEngine):
             _rname = regime_signal.regime.value if regime_signal is not None else ""
             if _rname not in _allow_set:
                 return None  # blocker: regime_not_allowed (chop filter)
+
+        # Selection Gate 1 (OPPORTUNITY_GATE_ENABLED, default off): rank THIS in-window
+        # bar's opportunity relative to today + cost floor + daily budget. Replaces the
+        # absolute ATR cliff with relative selection. Observes every in-window bar so the
+        # ranking is causal/relative-to-today. Requires the upstream entry threshold near-0
+        # (every bar a candidate) — otherwise it ranks only pre-filtered bars.
+        if as_bool(os.getenv("OPPORTUNITY_GATE_ENABLED")) and self._opportunity_gate_blocks(snap, votes):
+            return None  # blocker: opportunity_gate (not selected / below cost floor / budget)
 
         tagger = os.getenv("ENTRY_REGIME_TAGGER", "").strip()
         if tagger:
