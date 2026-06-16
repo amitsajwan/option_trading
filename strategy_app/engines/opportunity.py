@@ -21,12 +21,15 @@ from typing import Optional
 class OpportunityConfig:
     enabled: bool = True
     warmup_bars: int = 15
-    # component weights (should sum ~1.0); normalised defensively at use
-    w_atr_pct: float = 0.35
-    w_atr_accel: float = 0.20
-    w_volume_pct: float = 0.15
-    w_straddle_expansion: float = 0.15
-    w_regime_quality: float = 0.15
+    # component weights (should sum ~1.0); normalised defensively at use.
+    # w_entry_prob is the trained move model (our best ranker, AUC ~0.78). When
+    # >0 it dominates; the structural components remain as de-correlated backups.
+    w_entry_prob: float = 0.60
+    w_atr_pct: float = 0.20
+    w_atr_accel: float = 0.10
+    w_volume_pct: float = 0.05
+    w_straddle_expansion: float = 0.05
+    w_regime_quality: float = 0.00
     accel_lookback: int = 5          # bars back for ATR/straddle acceleration
     # selection:
     #   "percentile"  → enter if score in top (100 - selection_percentile)% of
@@ -58,6 +61,7 @@ class OpportunityConfig:
 class BarInputs:
     ts: datetime
     spot: float
+    prob: Optional[float] = None            # entry model P(move) for this bar (primary signal)
     atr_ratio: Optional[float] = None       # atr_14_1m / price
     volume: Optional[float] = None
     straddle_premium: Optional[float] = None  # ATM CE+PE premium (expected-move proxy)
@@ -105,6 +109,7 @@ class OpportunitySession:
         b = baseline or {}
         # baseline seeds rank stability but is NOT counted as session history for
         # acceleration/expansion deltas — kept in separate prefix lists.
+        self._prob: list[float] = list(b.get("prob", []))
         self._atr: list[float] = list(b.get("atr", []))
         self._vol: list[float] = list(b.get("volume", []))
         self._accel: list[float] = list(b.get("accel", []))
@@ -121,6 +126,7 @@ class OpportunitySession:
     def _weights(self) -> dict[str, float]:
         c = self.cfg
         raw = {
+            "entry_prob": c.w_entry_prob,
             "atr_percentile": c.w_atr_pct,
             "atr_acceleration": c.w_atr_accel,
             "volume_percentile": c.w_volume_pct,
@@ -159,6 +165,7 @@ class OpportunitySession:
 
         # component percentile ranks (causal)
         comp: dict[str, float] = {}
+        comp["entry_prob"] = _pct_rank(self._prob, bar.prob) if bar.prob is not None else 0.0
         comp["atr_percentile"] = _pct_rank(self._atr, bar.atr_ratio) if bar.atr_ratio is not None else 0.0
         comp["volume_percentile"] = _pct_rank(self._vol, bar.volume) if bar.volume is not None else 0.0
         comp["atr_acceleration"] = _pct_rank(self._accel, accel) if accel is not None else 0.0
@@ -169,6 +176,8 @@ class OpportunitySession:
         score = sum(w[k] * comp[k] for k in w)
 
         # update ranking pools (baseline + today) AND today-only delta sequences
+        if bar.prob is not None:
+            self._prob.append(bar.prob)
         if bar.atr_ratio is not None:
             self._atr.append(bar.atr_ratio)
             self._atr_today.append(bar.atr_ratio)

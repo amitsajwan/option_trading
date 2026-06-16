@@ -159,7 +159,7 @@ gcloud compute ssh option-trading-runtime-01 --zone asia-south1-b --project amit
 | Asset | Detail |
 |---|---|
 | Bundle | `entry_only_v3` (020pct label, ≥110pt move in 5 min) |
-| AUC | 0.831, ECE 0.009 (calibrated) |
+| AUC | 0.831 = **lab/full-feature** holdout (the 11:30 bar where all 57 feats exist). **Served per-bar from 09:45 it is much lower** — see §4 note. |
 | Threshold | 0.45 (fire_rate 0.79%, precision 59%) |
 | GCS | `gs://amit-trading-option-trading-models/published_models/entry_only_v3/` |
 | Container path | `/app/ml_pipeline_2/artifacts/entry_only/published/entry_only_model_020pct.joblib` |
@@ -174,8 +174,8 @@ ATR gate runs instead. Only enable ML gate after confirming xgboost version matc
 
 | Component | Verdict | Basis |
 |---|---|---|
-| Entry (magnitude) | ✅ SOLVED | AUC 0.831, 4.37× lift on big moves |
-| Direction (buyer) | ⚠️ UNRESOLVED | Simulation was broken; 2024 grid definitive result pending |
+| Entry (magnitude) | ⚠️ OK, not "solved" | Honest **served** walk-forward 2024 (09:45–14:45) AUC **0.773**; morning 0.715. The 0.831 was a full-feature lab number. Move-detection ≈ ATR (corr 0.92) — no edge over a free formula. See note. |
+| Direction (buyer) | ❌ THE WALL | ~50–56% side accuracy; net-negative after cost. The actual bottleneck, not entry. |
 | S3 Seller | ✅ ONLY PROVEN PATH | 78% win, +₹1,692/trade, 2024 paper |
 | Real money | ❌ OFF | Seller needs live-cycle paper; buyer unresolved |
 | **June 12 live** | **+32.5% (trade 2), lottery held winner** | Actual: 56500 CE ₹781→₹1034 in 64 bars |
@@ -184,6 +184,34 @@ ATR gate runs instead. Only enable ML gate after confirming xgboost version matc
 underlying-direction accuracy data (37,050 move-bars). That measurement is still valid.  
 However, *two simulation bugs* masked the true P&L picture — see Section 5.  
 The 2024 grid with fixed simulation will give the definitive P&L verdict.
+
+### 4a. Entry-model serving finding (2026-06-15)
+
+The entry model uses **41 of its 57 features from the velocity/`ctx_am_*` block, which is
+computed ONLY at the 11:30 bar** (`LiveVelocityAccumulator` / `enrichment_runner`). So served
+per-bar across the 09:45–14:45 trade window it ran with **41/57 features median-filled** — not
+corrupt, but **starved**. This suppressed the absolute probability (capped ~0.29 in the morning),
+so an absolute threshold (0.40 / ATR 0.00088) fired **0 trades on quiet mornings** (Jun 10/11/12).
+
+- **Rolling velocity retrain** (compute velocity per-bar from 09:45, 10-min, leak-free; trained
+  2020–2023, walk-forward 2024): honest head-to-head vs the 11:30 model = **marginal**
+  (all-window AUC 0.7731 → 0.7816; morning 0.7150 → 0.7188). The earlier "0.76→0.85" win was
+  look-ahead. Bundle on ML VM `~/entry_rolling_bundle.joblib`, **not deployed**.
+- **Why marginal:** the 16 per-bar feats already carry move-detection; the 41 velocity feats are
+  largely redundant for ranking. Move-detection ≈ ATR; **not the bottleneck.**
+- **Real fix = SELECTION Gate 1, not retrain.** The model *ranks* morning moves fine (AUC 0.715);
+  the bug was the absolute threshold. `strategy_app/engines/opportunity.py` now ranks the entry
+  prob **relative to today** (percentile) + a ~108pt cost floor + ≤3/day budget — built+tested
+  (9 tests), **not yet wired** into the live engine.
+- **June 2026 verify (selection gate, structural-only — no model prob offline):** picks ~0–1/day
+  and the **108pt cost floor is the binding constraint** on quiet days; structural ranking alone
+  picks small-move bars → confirms the gate **needs the entry-model prob** to rank well (offline
+  it can't be scored without June in the training-parquet/sim). Proper model-scored June verify =
+  run the sim with the rolling accumulator. **Quiet-day economics:** even a perfect ranker yields
+  few trades when no bar's expected move clears cost — that is the *correct* zero.
+- **Direction node moved:** live direction = `resolve_direction_for_entry()` in
+  `entry_direction_policy.py` (dispatch on `ML_ENTRY_DIRECTION_MODE`), **not** `ml_entry.py:103`
+  as ENGINE_DECISION_FLOW still says. The direction-only ML model has the same 11:30 problem.
 
 ---
 
