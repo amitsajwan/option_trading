@@ -1,6 +1,16 @@
 # Stage 2 Direction Model — Recovery Plan
-> **Status**: Active  
-> **Last updated**: 2026-04-12  
+
+> **STATUS: RETIRED 2026-06-14. DO NOT FOLLOW.**
+> Direction detection is a dead end — not a 57% recoverable problem, but a 50.3% coin flip
+> in 2024 that INVERTS to 43.9% in 2026 OOS. Six independent tests confirm: magnitude is
+> predictable, direction is not. The S3 seller is the only robust path.
+> See `docs/FINDINGS_2026-06-14.md` for the full evidence.
+> The content below is preserved for historical reference only.
+
+---
+
+> **Status**: ~~Active~~ RETIRED  
+> **Last updated**: 2026-04-12 (superseded 2026-06-14)  
 > **Owner**: ML team  
 > **Context**: Stage 2 (CE/PE direction gate) has consistently failed to reach ROC ≥ 0.55 across 6 experiments. Stage 1 (entry gate) is solid at ROC 0.619. This document is the agreed plan forward.
 

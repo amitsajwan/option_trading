@@ -34,14 +34,15 @@
 
 | Component | Verdict | Detail |
 |---|---|---|
-| **Entry** | ✅ **strong, solved** | AUC 0.83, 82% catch ≥70pt. Best label = **110pt / 0.20% (`020`)** — clears cost. `010` (54pt) fires on chop; `15m_060` (320pt) fires on nothing (DO NOT use live). |
-| **Direction** | ❌ **the bottleneck** | ~57–58%. Best validated = **fade-exhaustion 57%** (fade a clean run). **Momentum fully exhausted** (past/future/any lookback = ~55% fade ceiling). ML "direction" model = magnitude detector (AUC 0.59, ≤50% on side). |
-| **Exits** | ✅ **optimal, don't touch** | scalper, symmetric ~2.5% win/loss. Looser/lottery/trail all strictly worse (proven). |
-| **P&L** | ❌ **−EV** | Best = −0.40% (110pt entry + consensus). Break-even needs **~61% direction**; we have 57%. |
-| **Costs** | brutal | ~0.6%/leg; the move must clear it. |
-| **Refuted (don't re-chase)** | — | lottery (outlier mirage), confirmation gates (marginal/mirage), regime-conditional follow, future-1-min (look-ahead artifact), ML high-conf (magnitude). |
+| **Entry** | ✅ **strong, solved** | AUC 0.83, 4.37× move discrimination. Best label = **110pt / 0.20% (`020`)** — clears cost. ECE 0.009 (well-calibrated). |
+| **Direction** | ❌ **DEAD — not 57%, it's 50%** | 2024: 50.3% quorum (coin flip) over 37,050 move-bars. 2026 OOS: **43.9% (INVERTS)**. The "57%" figure was from a contaminated, momentum-polluted measurement. All 6 independent tests converge: direction is not predictable. Order-flow proxies also ~50% at 1–5 bars. |
+| **Exits** | ✅ **adaptive is best** | adaptive +0.62%, scalper −0.89%, lottery H2-negative. adaptive routes BREAKOUT→lottery (20% stop) — see gotcha below. |
+| **P&L (buy-side)** | ❌ **−EV, no path to fix** | 125 live trades, zero net-positive days. The direction wall cannot be cleared — all proxies tested, all coin-flips. |
+| **Costs** | real ~₹180–220/lot | Round-trip from 37 measured trades; ~1% of entry notional for ATM options. |
+| **Refuted (don't re-chase)** | — | lottery exit (outlier-driven), buy-side direction signals, order-flow pressure, LLM direction overlay (follows vwap 79%, zero independent value), option depth (block_flow null). |
+| **S3 Seller** | ✅ **ONLY ROBUST PATH** | 78% win, +₹1,692/trade, +₹123k 2024 paper. Drop-top3 +₹104k. Real money OFF until live-cycle paper. |
 
-**The one lever:** an **independent (non-momentum) direction signal** from order-book/OI/IV microstructure, stacked on the 57% fade → target 61%+. Else go **sell-side** (inverts cost math).
+**Updated conclusion (2026-06-14):** There is no buy-side edge and no direction signal remaining to test. Go **sell-side** (S3 seller). See `docs/FINDINGS_2026-06-14.md` for full evidence.
 
 ---
 
