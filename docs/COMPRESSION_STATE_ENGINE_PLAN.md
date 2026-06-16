@@ -184,6 +184,33 @@ Read these before believing any green number:
 
 ---
 
+## 6b. RESULTS — E1 (2026-06-16, harness v1, 1199 days 2020-2024)
+
+| | ≥100pt lift | ≥150pt lift | direction |
+|---|---|---|---|
+| train (2020-2023) | 1.06 | 1.04 | 44.1% |
+| **test (2024, OOS)** | **1.26** | **1.31** | **41.3%** |
+| 2024 Q1/Q2/Q3/Q4 | 1.22/1.29/1.28/1.31 | 1.22/1.22/1.54/1.47 | 40.9/37.9/40.5/50.6% |
+
+Lift rises over time: 2020 ~0.8 → 2021 ~1.1 → 2023 up to 1.9 → 2024 steady 1.2-1.3 (all
+4 quarters > 1.2). ~15.9k setups total (2.6k in 2024) — ample n.
+
+**Verdict:**
+- **E1 PARTIAL PASS.** Compression→acceptance *does* precede a ≥100pt move ~30% more than
+  base in 2024, **stable across all quarters, and OOS > train (not overfit).** But below the
+  1.5× gate — a modest, real move edge.
+- **DIRECTION REFUTED, but informative:** the breakout-acceptance *direction* is 41-44%
+  (anti-predictive, every regime) → **FADE the breakout (~59%).** Matches our prior
+  mean-revert / fade-vwap finding. "Follow the breakout" is dead; "fade the breakout" is the
+  candidate edge.
+- **Caveat:** harness v1 likely under-measures (forward move from confirm bar misses the
+  thrust; "next-bar-holds" may catch exhaustion pokes). E2 refinement could raise the lift
+  and clarify whether the fade is real or a measurement artifact.
+
+**Next:** E2 — refine the setup (measure from breakout bar; stricter compression; longer
+horizon) AND test the **FADE direction explicitly, cost-aware, walk-forward + 2026 forward**.
+If fade-59% survives cost + forward, *that* is the headline, not the follow-breakout.
+
 ## 7. First concrete deliverable (next commit)
 `research/compression_harness.py` (run on the ML VM / flat parquet) that, per 2024 day:
 1. builds causal compression features (BB width, ATR trend, range-contraction, EMA
