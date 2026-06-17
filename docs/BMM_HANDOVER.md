@@ -24,10 +24,15 @@ Related docs: [BMM_RESULTS.md](BMM_RESULTS.md) (verdict/numbers) ·
 - **Decision (from product owner):** go with the new compression model; **single model**;
   **ML-only entry gate** (drop the ATR-OR), wrapped in the Selection Gate with
   freshness-abstain.
-- **In flight:** training the **production** model = `fo_bmm_v1` @ 5m/0.20% on the **v2 view**
-  (what live actually emits → serve-parity). One run decides ship-vs-keep-v3 (0.831).
-- **The real lever is still DIRECTION**, not entry. Entry is "done right" now; profitability
-  is gated on the direction Stage-2 experiment (§7).
+- **DECISIVE RESULT (2026-06-17):** the production model trained on the v2 view =
+  **AUC 0.8146 — BELOW v3's 0.831 (−0.016).** The candidate-view +0.009 flipped sign → it was
+  view-dependent noise, not a robust gain. **→ KEEP `entry_only_v3` as the entry model; do NOT
+  ship the compression model.** (Shared compression module stays in the codebase — cheap, wired,
+  reusable as *direction* candidate features — but is not the production entry.)
+- **So the entry question is closed: v3 stays.** Skip §4 Steps 1-2 (no new model to train/ship).
+  The ML-only-gate design (§4 Step 3) still applies — just point it at v3.
+- **The real lever is DIRECTION**, not entry. Move-detection is saturated (every variant ~0.81-0.83).
+  Profitability is gated entirely on the direction Stage-2 experiment (§6) — **start there.**
 
 ---
 

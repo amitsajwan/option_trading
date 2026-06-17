@@ -56,19 +56,43 @@ finding), but small — it is roughly the ceiling of what feature work buys on a
   (view) + 0.009 (features) ≈ **0.84**, i.e. likely beats v3 — but this is **arithmetic, not yet
   trained**; the `bmm_prod_5m020_v2view` run settles it from a real number.
 
+## 4b. PRODUCTION RUN (decisive) — compression does NOT beat v3
+
+Trained `fo_bmm_v1` @ 5m/0.20% on the **v2 view** (v3's exact recipe, only the feature set
+changed → a clean like-for-like feature A/B; both resolve to the identical 83 features incl.
+all 12 compression cols):
+
+| model | feature set | view | AUC |
+|---|---|---|---|
+| **v3 (live)** | fo_velocity_v1 | v2 | **0.831** |
+| bmm_prod | fo_bmm_v1 (+compression) | v2 | **0.8146** (drift 0.056, brier 0.080) |
+
+**On the serve-parity v2 view, the compression feature set is −0.016 BELOW v3.** And note the
+sign flip vs §3:
+- candidate view: fo_bmm_v1 (0.815) **>** fo_velocity_v1 (0.806) → +0.009
+- v2 view: fo_bmm_v1 (0.8146) **<** fo_velocity_v1 (0.831) → −0.016
+
+The "+0.009" did **not** generalize — it reversed on the production view. So the compression
+features are **within view-dependent noise, not a robust improvement.** The projected ~0.84
+(0.806 + view + features) was wrong: the v2-view benefit accrued to the *velocity* features
+(0.806→0.831), not the compression set (candidate 0.815 ≈ v2 0.8146).
+
 ## 5. Verdict & decision
 
 - **Single model**, selectivity via threshold (multiple = redundant; proven).
-- **Compression features earn a small, real keep (+0.009)** and are wired into both live and
-  historical paths (one shared module → no serve-skew). Worth keeping *if* the v2-view trained
-  model is ≥ v3; otherwise v3 stays (the +0.009 doesn't justify 12-feature maintenance for a
-  sub-v3 result).
-- **Entry gate → ML-only**, wrapped in the Selection Gate (rank-vs-today + cost floor + budget),
-  with **feature-freshness → abstain** as the only safety (drop the ATR-OR).
-- **The honest overlay:** this round did entry *right* and proved move-detection is saturated.
-  **None of it moves P&L** — profitability still hinges entirely on **direction + the ~108pt cost**.
-  The next experiment (direction on the move-positive subset, follow vs **fade ~59%**) is the one
-  that decides whether the system makes money.
+- **Compression features do NOT robustly beat v3.** On the clean serve-parity v2-view A/B,
+  fo_bmm_v1 (0.8146) is −0.016 below v3 (0.831); the candidate-view +0.009 flipped sign → noise.
+  **RECOMMENDATION: keep `entry_only_v3` as the entry model.** Shipping a sub-v3 model plus the
+  12-feature live-parity maintenance burden is not justified by a non-robust, view-dependent
+  delta. (The shared compression module stays in the codebase — cheap, already wired, and useful
+  as candidate features for *direction* — but is not the production entry model.)
+- **Entry gate → ML-only is still the right design** (v3 prob → Selection Gate → trade,
+  freshness→abstain, drop ATR-OR). Just point it at **v3**, not the compression model.
+- **The honest overlay (now reinforced):** every feature variant lands at ~0.81–0.83; move-
+  detection is **saturated** and v3 is at the ceiling. **None of this moves P&L** — profitability
+  hinges entirely on **direction + the ~108pt cost**. The next experiment (direction on the
+  move-positive subset, follow vs **fade ~59%**) is the only thing that decides whether the
+  system makes money. **That is where remaining effort should go.**
 
 ## Reproduce
 - Configs: `ml_pipeline_2/configs/research/staged_dual_recipe.bmm_*.json`,
