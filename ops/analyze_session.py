@@ -32,7 +32,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DASHBOARD_URL  = os.getenv("MARKET_DATA_API_URL", "http://localhost:8008")
+_cfg: dict = {
+    "dashboard_url": os.getenv("MARKET_DATA_API_URL", "http://localhost:8008"),
+    "sim_base_dir":  Path(os.getenv("SIM_BASE_DIR", "/opt/option_trading/.run/strategy_app_sim")),
+    "live_run_dir":  Path(os.getenv("LIVE_RUN_DIR",  "/opt/option_trading/.run/strategy_app_historical")),
+}
 SIM_BASE_DIR   = Path(os.getenv("SIM_BASE_DIR", "/opt/option_trading/.run/strategy_app_sim"))
 LIVE_RUN_DIR   = Path(os.getenv("LIVE_RUN_DIR",  "/opt/option_trading/.run/strategy_app_historical"))
 POLL_INTERVAL  = 5    # seconds between status polls
@@ -50,7 +54,7 @@ ML_GATES     = {"confidence_gate", "no_strategy_votes"}  # usually ML threshold 
 
 # ── API helpers ───────────────────────────────────────────────────────────────
 def _api(method: str, path: str, body: Optional[dict] = None) -> dict:
-    url  = f"{DASHBOARD_URL}{path}"
+    url  = f"{_cfg['dashboard_url']}{path}"
     data = json.dumps(body).encode() if body else None
     req  = urllib.request.Request(
         url, data=data,
@@ -313,11 +317,10 @@ def main():
                         help="ML entry probability threshold (default 0.049)")
     parser.add_argument("--skip-sim", action="store_true",
                         help="Do not run new SIMs; only show live MongoDB data")
-    parser.add_argument("--dashboard-url", default=DASHBOARD_URL)
+    parser.add_argument("--dashboard-url", default=_cfg["dashboard_url"])
     args = parser.parse_args()
 
-    global DASHBOARD_URL
-    DASHBOARD_URL = args.dashboard_url
+    _cfg["dashboard_url"] = args.dashboard_url
     date = args.date
 
     print()
