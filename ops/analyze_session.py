@@ -216,10 +216,10 @@ print(JSON.stringify({{
     try:
         with open("/tmp/_mq.js", "w") as f:
             f.write(js)
-        subprocess.run("docker cp /tmp/_mq.js option_trading-mongo-1:/tmp/_mq.js",
+        subprocess.run("sudo docker cp /tmp/_mq.js option_trading-mongo-1:/tmp/_mq.js",
                        shell=True, capture_output=True)
         r = subprocess.run(
-            "docker exec option_trading-mongo-1 mongosh trading_ai --quiet /tmp/_mq.js",
+            "sudo docker exec option_trading-mongo-1 mongosh trading_ai --quiet /tmp/_mq.js",
             shell=True, capture_output=True, text=True, timeout=30
         )
         raw = r.stdout.strip()
