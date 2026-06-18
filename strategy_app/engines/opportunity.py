@@ -9,6 +9,7 @@ this session (expanding window), never the full day — so a backtest cannot che
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
@@ -52,6 +53,27 @@ class OpportunityConfig:
     # daily budget
     max_entries_per_day: int = 3
     min_spacing_minutes: int = 20
+
+    @classmethod
+    def from_env(cls) -> "OpportunityConfig":
+        def _i(k: str, d: int) -> int:
+            try: return int(os.getenv(k, "") or d)
+            except ValueError: return d
+        def _f(k: str, d: float) -> float:
+            try: return float(os.getenv(k, "") or d)
+            except ValueError: return d
+        def _s(k: str, d: str) -> str:
+            return (os.getenv(k, "") or d).strip()
+        return cls(
+            selection_mode=_s("OPP_GATE_SELECTION_MODE", "percentile"),
+            selection_percentile=_f("OPP_GATE_SELECTION_PERCENTILE", 80.0),
+            score_cutoff=_f("OPP_GATE_SCORE_CUTOFF", 65.0),
+            max_entries_per_day=_i("OPP_GATE_MAX_ENTRIES", 3),
+            min_spacing_minutes=_i("OPP_GATE_MIN_SPACING_MINUTES", 20),
+            warmup_bars=_i("OPP_GATE_WARMUP_BARS", 15),
+            min_expected_move_pts=_f("OPP_GATE_MIN_MOVE_PTS", 108.0),
+            hold_bars=_i("OPP_GATE_HOLD_BARS", 10),
+        )
 
 
 # ---------------------------------------------------------------------------

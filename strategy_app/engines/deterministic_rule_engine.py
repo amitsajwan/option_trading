@@ -192,6 +192,10 @@ class DeterministicRuleEngine(StrategyEngine):
         # Rolling buffers for multi-bar trap signal detection in shadow scorer.
         self._iv_buf: deque = deque(maxlen=3)   # (ce_iv, pe_iv) per bar
         self._pvwap_buf: deque = deque(maxlen=2) # price_vs_vwap per bar
+        # Rolling OHLC for inline price-structure direction scoring (signals 19-23).
+        # Computed from the bar sequence the engine already sees — works in live AND
+        # historical SIM without relying on stored dir_score in MongoDB snapshots.
+        self._ohlc_buf: deque = deque(maxlen=10)  # (high, low, close, open, price_vs_vwap)
         # E8 session-once daily regime tag — computed lazily after ORB resolves.
         self._session_regime_tag: Optional[str] = None
         # Trader-discipline: track last exit for cooldown / direction-flip rules.
@@ -366,6 +370,7 @@ class DeterministicRuleEngine(StrategyEngine):
         self._regime_shift_streak.clear()
         self._iv_buf.clear()
         self._pvwap_buf.clear()
+        self._ohlc_buf.clear()
         self._session_regime_tag = None
         self._eval_timer.reset()
         self._last_stop_bar = None
@@ -471,6 +476,7 @@ class DeterministicRuleEngine(StrategyEngine):
         # Update rolling IV and VWAP-bias buffers before any shadow-scorer calls.
         self._iv_buf.append((snap.atm_ce_iv, snap.atm_pe_iv))
         self._pvwap_buf.append(snap.price_vs_vwap)
+        self._ohlc_buf.append((snap.fut_high, snap.fut_low, snap.fut_close, snap.fut_open, snap.price_vs_vwap))
         # Feed the market-structure reader one fut OHLC bar/tick so every decision
         # trace can carry the bottoms/highs/breakouts context.
         self._structure.update(snap)
@@ -834,7 +840,7 @@ class DeterministicRuleEngine(StrategyEngine):
             from .opportunity import OpportunitySession, OpportunityConfig, BarInputs
             td = snap.trade_date or ""
             if self._opp_session is None or self._opp_session_date != td:
-                self._opp_session = OpportunitySession(OpportunityConfig())
+                self._opp_session = OpportunitySession(OpportunityConfig.from_env())
                 self._opp_session_date = td
             spot = snap.fut_close
             mtf = snap.raw_payload.get("mtf_derived") or {}
@@ -900,8 +906,7 @@ class DeterministicRuleEngine(StrategyEngine):
         # Selection Gate 1 (OPPORTUNITY_GATE_ENABLED, default off): rank THIS in-window
         # bar's opportunity relative to today + cost floor + daily budget. Replaces the
         # absolute ATR cliff with relative selection. Observes every in-window bar so the
-        # ranking is causal/relative-to-today. Requires the upstream entry threshold near-0
-        # (every bar a candidate) — otherwise it ranks only pre-filtered bars.
+        # ranking is causal/relative-to-today. Configure via OPP_GATE_* env vars.
         if as_bool(os.getenv("OPPORTUNITY_GATE_ENABLED")) and self._opportunity_gate_blocks(snap, votes):
             return None  # blocker: opportunity_gate (not selected / below cost floor / budget)
 
@@ -2078,6 +2083,74 @@ class DeterministicRuleEngine(StrategyEngine):
                 elif pe_bid > 0 and pe_ask > pe_bid * 2.0:
                     score += 1.5
                     fired.append("depth_pe_offer_dom")
+
+        # ── Price structure signals (19–23) — inline from rolling OHLC buffer ───────
+        # Mirrors direction_features.py logic so train/serve parity holds.
+        # Works in live AND historical SIM (no stored dir_score needed).
+        _buf = list(self._ohlc_buf)  # oldest→newest: (high, low, close, open, pvwap)
+        _n = len(_buf)
+        _ds: float = 0.0
+
+        # 19. Higher lows / lower highs price structure (±2).
+        if _n >= 2:
+            _highs = [b[0] for b in _buf if b[0] is not None]
+            _lows  = [b[1] for b in _buf if b[1] is not None]
+            if len(_highs) >= 2 and len(_lows) >= 2:
+                _rising_lows   = sum(1 for i in range(1, len(_lows))  if _lows[i]  > _lows[i-1])  / max(1, len(_lows)  - 1)
+                _falling_highs = sum(1 for i in range(1, len(_highs)) if _highs[i] < _highs[i-1]) / max(1, len(_highs) - 1)
+                _net = _rising_lows - _falling_highs
+                if _net > 0.1:
+                    _ds += 2.0; fired.append("struct_hl")
+                elif _net < -0.1:
+                    _ds -= 2.0; fired.append("struct_lh")
+
+        # 20. 3-consecutive VWAP hold (±2) — reuses existing _pvwap_buf (len 2) + current bar.
+        if _n >= 3:
+            _pv3 = [b[4] for b in _buf[-3:]]
+            if all(v is not None for v in _pv3):
+                if all(float(v) > 0 for v in _pv3):
+                    _ds += 2.0; fired.append("vwap3_bull")
+                elif all(float(v) < 0 for v in _pv3):
+                    _ds -= 2.0; fired.append("vwap3_bear")
+
+        # 21. EMA stack quality (±1) — ema_order is always in _fd for live/flat snapshots.
+        _ema_ord = snap._fd.get("ema_order")
+        if _ema_ord is not None:
+            try:
+                _eo = int(float(_ema_ord))
+                if _eo > 0:
+                    _ds += 1.0; fired.append("ema_stack_bull")
+                elif _eo < 0:
+                    _ds -= 1.0; fired.append("ema_stack_bear")
+            except (TypeError, ValueError):
+                pass
+
+        # 22. Body pressure: bullish body fraction over available bars (±1).
+        if _n >= 3:
+            _bull_n = sum(1 for b in _buf if b[2] is not None and b[3] is not None and float(b[2]) > float(b[3]))
+            _bf = _bull_n / _n
+            if _bf >= 0.60:
+                _ds += 1.0; fired.append("pressure_bull")
+            elif _bf <= 0.40:
+                _ds -= 1.0; fired.append("pressure_bear")
+
+        # 23. Session position: price near day high (≥0.85) or day low (≤0.15) (±1).
+        _sess_pos = snap._fd.get("position_in_day_range")
+        if _sess_pos is not None:
+            try:
+                _sp = float(_sess_pos)
+                if _sp >= 0.85:
+                    _ds += 1.0; fired.append("sess_hi")
+                elif _sp <= 0.15:
+                    _ds -= 1.0; fired.append("sess_lo")
+            except (TypeError, ValueError):
+                pass
+
+        # Apply price-structure score to main scorer (need ≥3 bars for signal to be meaningful).
+        if _n >= 3 and _ds != 0.0:
+            _pw = 2.0 if abs(_ds) >= 5.0 else (1.5 if abs(_ds) >= 3.0 else 0.0)
+            if _pw > 0:
+                score += _pw if _ds > 0 else -_pw
 
         basis = ",".join(fired) if fired else "no_signals"
         if score > 0:
