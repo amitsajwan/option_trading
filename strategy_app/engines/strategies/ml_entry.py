@@ -100,6 +100,12 @@ class MlEntryStrategy(BaseStrategy):
             "entry_threshold": self._min_prob,
             **raw_signals,
         }
+        # Scale confidence to engine-passing range [0.65, 1.0] so min_confidence=0.65
+        # gate does not block ML votes. Same formula pattern as VOL_GATE_ENTRY.
+        conf = (
+            min(1.0, 0.65 + 0.35 * max(0.0, (entry_prob - self._min_prob) / self._min_prob))
+            if self._min_prob > 0 else 0.65
+        )
         premium = snap.atm_ce_close if direction == Direction.CE else snap.atm_pe_close
         return StrategyVote(
             strategy_name=self.name,
@@ -108,7 +114,7 @@ class MlEntryStrategy(BaseStrategy):
             trade_date=snap.trade_date,
             signal_type=SignalType.ENTRY,
             direction=direction,
-            confidence=round(min(1.0, entry_prob), 3),
+            confidence=round(conf, 3),
             reason=f"ml_entry: prob={entry_prob:.3f}>={self._min_prob:.2f}",
             raw_signals=raw_signals,
             proposed_strike=snap.atm_strike,

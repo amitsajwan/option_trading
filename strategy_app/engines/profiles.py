@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 PROFILE_DET_PROD_V1 = "det_prod_v1"
@@ -221,7 +222,7 @@ _TRADER_MASTER_ML_ENTRY_CONSENSUS_RISK_CONFIG: dict[str, Any] = {
     "underlying_stop_pct": 0.0015,
     "thesis_fail_exit_bars": 2,
     "thesis_fail_min_mfe_pct": 0.02,
-    "thesis_fail_pnl_pct": -0.08,
+    "thesis_fail_pnl_pct": -0.03,
     "early_stop_loss_bars": 2,
     "early_stop_loss_pct": 0.12,
     "atm_strike_only": True,
@@ -409,7 +410,14 @@ def get_exit_strategies(profile_id: str) -> list[str]:
 
 
 def get_risk_config(profile_id: str) -> dict[str, Any]:
-    return dict(_PROFILE_RISK_CONFIGS.get(str(profile_id), {}))
+    cfg = dict(_PROFILE_RISK_CONFIGS.get(str(profile_id), {}))
+    env_thesis_pnl = os.getenv("THESIS_FAIL_PNL_PCT")
+    if env_thesis_pnl is not None:
+        try:
+            cfg["thesis_fail_pnl_pct"] = float(env_thesis_pnl)
+        except ValueError:
+            pass
+    return cfg
 
 
 def build_router_config(profile_id: str) -> dict[str, Any]:

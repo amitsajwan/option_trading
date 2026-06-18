@@ -30,7 +30,7 @@ SSH prefix: `gcloud compute ssh option-trading-runtime-01 --zone asia-south1-b -
 |---|---|---|---|
 | 1.1 | **YAML ↔ .env.compose parity** | `cd /opt/option_trading && python3 ops/config_parity.py .env.compose --strict; echo $?` | `No real differences` + exit `0` |
 | 1.2 | **Live config (UI panel)** | open `http://34.14.171.45:8008/` → OPS panel, OR `curl -s localhost:8008/api/ops/config` | 60 keys, values below |
-| 1.3 | **Critical values** | (from 1.2) | `ENTRY_VOL_GATE_ENABLED=1`, `ATR_ENTRY_MIN_PCT=0.00088`, `ML_ENTRY_DIRECTION_MODE=regime_dual` (or `conviction_ensemble` if cut over), `STRATEGY_STRIKE_SELECTION_POLICY=otm`, `SMART_STRIKE_MAX_PREMIUM=1300`, `EXIT_STRATEGY_MODE=adaptive`, `EXIT_MAX_LOSS_PCT=0.1`, `RISK_MAX_SESSION_TRADES=6`, `RISK_MAX_CONSECUTIVE_LOSSES=6`, `STRATEGY_PROFILE_ID=trader_master_live_v1` |
+| 1.3 | **Critical values** | (from 1.2) | `ENTRY_VOL_GATE_ENABLED=0`, `ENTRY_ML_MODEL_PATH=/app/ml_pipeline_2/artifacts/entry_only/published/velocity_base_entry_bundle.joblib`, `ENTRY_ML_MIN_PROB=0.049` (top-10% quantile), `ML_ENTRY_DIRECTION_MODE=regime_dual`, `STRATEGY_STRIKE_SELECTION_POLICY=otm`, `SMART_STRIKE_MAX_PREMIUM=1300`, `EXIT_STRATEGY_MODE=adaptive`, `EXIT_MAX_LOSS_PCT=0.1`, `RISK_MAX_SESSION_TRADES=6`, `RISK_MAX_CONSECUTIVE_LOSSES=6`, `STRATEGY_PROFILE_ID=trader_master_live_v1` |
 | 1.4 | **Startup applied config** | `sudo docker logs option_trading-strategy_app-1 2>&1 \| grep 'strategy_config applied' \| tail -1` | `60/60 keys ... real_overrides=0` |
 
 ---
@@ -66,8 +66,8 @@ Run during market hours; tail the live engine and confirm each stage fires.
 | 3.1 | Engine consuming bars | `L "consumed events"` or `L "snapshot"` | count advancing each minute |
 | 3.2 | **Regime** classify | `L "regime"` | a Regime enum per bar (TRENDING/SIDEWAYS/…); CHOP/AVOID → no entry |
 | 3.3 | **Time gate** | `L "entry_time_windows"` | only blocks outside 09:45–14:30 |
-| 3.4 | **Vol gate (member)** | `L "vol_gate"` | `atr_pct=…>=0.00088` fires on high-vol bars |
-| 3.5 | **MLEntry / bypass** | `L "ml_confidence_below_bypass"` or entry_gate trace | passes ≥0.65 |
+| 3.4 | **Entry trigger (vol gate OR ML)** | If `ENTRY_VOL_GATE_ENABLED=1`: `L "vol_gate"` → `atr_pct=…>=0.00088`. If `=0` (ML_ENTRY): `L "ml_entry"` → `entry_prob=…>=0.049` on velocity_base bundle | fires on qualifying bars |
+| 3.5 | **MLEntry / bypass** | `L "ml_confidence_below_bypass"` or entry_gate trace | If ML_ENTRY: passes ≥0.049; if VOL_GATE: passes ≥0.65 |
 | 3.6 | **Direction** | `L "direction_source"` | `regime_dual…` (or `conviction_ensemble`), CE/PE resolved |
 | 3.7 | **Strike** | `L "strike"` / `L "premium"` | OTM strike in ₹600–1300, not vetoed |
 | 3.8 | **Exit stack built** | `sudo docker logs option_trading-strategy_app-1 2>&1 \| grep -i "exit policy\|exit_stack" \| tail -1` | `composite[hard_stop_10%, adaptive[lottery=BREAKOUT,TRENDING\|scalper=rest]]` |
@@ -130,12 +130,16 @@ Run during market hours; tail the live engine and confirm each stage fires.
 
 ---
 
-## §8  Current known state (as of 2026-06-14 — resolve before real money)
+## §8  Current known state (as of 2026-06-17)
 
 - ❌ **execution_app EXITED 2 days** → §0.1 must be fixed.
 - ❌ **Dhan `Invalid IP`** (478 June rejects) → §0.2 whitelist `34.14.171.45`.
 - ⚠️ **No real fills ever** — June "trades" were paper (`paper_*`) / replay-contaminated. First real fill is unproven; watch §5.6 closely.
 - ⚠️ **Depth not collected** (`DEPTH_FEED_INSTRUMENTS` empty) — not required for go-live, but a known gap.
+- ⚠️ **Entry model switched 2026-06-17:** `VOL_GATE_ENTRY` → `ML_ENTRY` with `velocity_base` bundle at `ENTRY_ML_MIN_PROB=0.049` (top-10% quantile). Bundle is research-grade (`ml_pipeline_2_research_model_package` re-packaged as `entry_only_bundle`).
+  - **Morning-session risk:** before 11:30 IST, 39/54 velocity features are NaN (imputed to medians). Model may produce unreliable probabilities in first 90 minutes.
+  - **vol_spike_ratio permanently NaN** — no 20-day rolling context available.
+  - **Awaiting first live-bar score** — bundle loads on first snapshot tomorrow (2026-06-18) at 09:45 IST.
 - ✅ Config single-source + parity, SIM≡LIVE engine, sim→Dhan leak closed, 1-lot cap, exit stacks correct.
 
-**Bottom line:** the *strategy/config/data* path is ready; the *execution* path (§0.1, §0.2) is NOT. Real money cannot start until execution_app is up AND the Dhan IP is whitelisted AND a first real `filled` order (not `paper_*`, not `Invalid IP`) is confirmed.
+**Bottom line:** the *strategy/config/data* path is ready; the *execution* path (§0.1, §0.2) is NOT. Real money cannot start until execution_app is up AND the Dhan IP is whitelisted AND a first real `filled` order (not `paper_*`, not `Invalid IP`) is confirmed. The ML_ENTRY switch adds an additional validation requirement: confirm the velocity_base bundle loads cleanly and scores sensibly on the first live bars.

@@ -13,6 +13,7 @@ import pandas as pd
 import requests
 from contracts_app import TimestampSourceMode, isoformat_ist
 from .compression_features import COMPRESSION_FEATURE_COLUMNS, add_compression_features
+from .direction_features import DIRECTION_FEATURE_COLUMNS, add_direction_features
 from .market_snapshot_contract import SCHEMA_NAME, SCHEMA_VERSION
 
 try:
@@ -1155,6 +1156,9 @@ def prepare_market_snapshot_window(
     # BMM compression / stored-energy / structure features (causal). Single source of
     # truth shared with the historical rebuild so there is zero train/serve skew.
     add_compression_features(same_day)
+    # Direction structure features (price structure, VWAP hold, EMA, pressure, session).
+    # Depends on ema_order + position_in_day_range from compression features above.
+    add_direction_features(same_day)
 
     by_day = {}
     for day_key, grp in bars_calc.groupby("trade_date", sort=True):
@@ -1211,6 +1215,7 @@ def prepare_market_snapshot_window(
             "dist_from_day_high",
             "dist_from_day_low",
             *COMPRESSION_FEATURE_COLUMNS,
+            *DIRECTION_FEATURE_COLUMNS,
         ],
     ].copy()
 
@@ -1365,6 +1370,9 @@ def build_market_snapshot(
     # BMM compression / stored-energy / structure features (shared module).
     for _comp_col in COMPRESSION_FEATURE_COLUMNS:
         mss3[_comp_col] = _nullable_float(current_futures.get(_comp_col))
+    # Direction structure features (price structure, VWAP hold, EMA, pressure, session pos).
+    for _dir_col in DIRECTION_FEATURE_COLUMNS:
+        mss3[_dir_col] = _nullable_float(current_futures.get(_dir_col))
     mss_mtf = _compute_mtf_block(bars_calc)
 
     day_bars = bars_calc[bars_calc["trade_date"] == str(trade_date.date())].copy()

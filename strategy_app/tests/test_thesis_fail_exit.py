@@ -21,7 +21,7 @@ def _pos(**kwargs: object) -> PositionContext:
         mfe_pct=0.005,
         thesis_fail_exit_bars=2,
         thesis_fail_min_mfe_pct=0.02,
-        thesis_fail_pnl_pct=-0.08,
+        thesis_fail_pnl_pct=-0.03,
         early_stop_loss_bars=2,
         early_stop_loss_pct=0.12,
     )

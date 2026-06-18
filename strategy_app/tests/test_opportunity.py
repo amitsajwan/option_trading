@@ -24,6 +24,17 @@ def _cfg(**kw):
     return OpportunityConfig(**base)
 
 
+def test_config_from_env_overrides_daily_budget_and_spacing():
+    cfg = OpportunityConfig.from_env({
+        "OPPORTUNITY_GATE_ENABLED": "1",
+        "OPP_GATE_MAX_ENTRIES": "6",
+        "OPP_GATE_MIN_SPACING_MINUTES": "5",
+    })
+    assert cfg.enabled is True
+    assert cfg.max_entries_per_day == 6
+    assert cfg.min_spacing_minutes == 5
+
+
 def test_warmup_blocks_early_bars():
     s = OpportunitySession(_cfg(warmup_bars=5))
     for i in range(5):

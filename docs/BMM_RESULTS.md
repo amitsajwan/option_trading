@@ -94,6 +94,29 @@ features are **within view-dependent noise, not a robust improvement.** The proj
   move-positive subset, follow vs **fade ~59%**) is the only thing that decides whether the
   system makes money. **That is where remaining effort should go.**
 
+## 6. June-2026 Forward Check (OOS temporal holdout)
+
+Date: 2026-06-17. Pipeline: runtime Mongo → `snapshots_ml_flat` → `enrichment_runner` →
+`snapshots_ml_flat_v2` → `rebuild_stage_views_from_flat` → `stage1_entry_view_v2` → score.
+Window: 8 trading days (2026-06-01..06-17, excluding 06-03 and 06-09 for incomplete data).
+Label: `entry_bn_move_oracle` 5m/0.20%. n=2876 valid labeled rows, positive_rate=6.33%.
+
+| bundle | AUC | 95% CI | vs holdout-2024 |
+|---|---|---|---|
+| **velocity_base** (v3 equivalent) | **0.6748** | [0.6347, 0.7134] | −0.156 vs 0.831 |
+| bmm_prod (compression) | 0.6298 | [0.5846, 0.6781] | −0.185 vs 0.8146 |
+| velocity_bmm | 0.6203 | [0.5738, 0.6679] | — |
+
+**Observations:**
+- All three models retain >0.62 AUC ~18 months after training cutoff → no complete collapse.
+- velocity_base still leads bmm_prod by **+0.045** in the forward period (same ordering as holdout).
+- Absolute decay is ~0.15–0.19 over 18 months; consistent with expected concept drift.
+- `vol_spike_ratio` and IV-delta features were zero (no 20-day rolling context available for
+  2026 dates); all other features resolved — no missing-feature warnings from the scoring harness.
+- Small sample (8 days) → wide CIs; lower CI bound ≥ 0.57 for all, confirming residual edge.
+- **Verdict: v3 (velocity_base) remains the best entry model into June-2026 forward period.**
+  Compression model continues to lag velocity; the holdout ordering holds in the forward check.
+
 ## Reproduce
 - Configs: `ml_pipeline_2/configs/research/staged_dual_recipe.bmm_*.json`,
   `…ab_5m020_*.json`, `…bmm_prod_5m020_v2view.json`.

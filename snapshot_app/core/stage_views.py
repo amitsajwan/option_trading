@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .compression_features import COMPRESSION_FEATURE_COLUMNS as _COMPRESSION_FEATURE_FIELDS
+from .direction_features import DIRECTION_FEATURE_COLUMNS as _DIRECTION_FEATURE_FIELDS
 from .velocity_features import VELOCITY_COLUMNS
 
 
@@ -59,6 +60,8 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
             # snapshot "futures_derived" block (mss3). Historical: top-level flat columns.
             # The shared compression_features module is the single source of truth.
             *_COMPRESSION_FEATURE_FIELDS,
+            # Direction structure features (5-component score + total dir_score).
+            *_DIRECTION_FEATURE_FIELDS,
         ),
         "mtf_derived": (
             "rsi_14_1m",
