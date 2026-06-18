@@ -73,7 +73,7 @@ def enqueue_sim(label: str, date: str, env_overrides: dict[str, str]) -> str:
         "source_date":  date,
         "source_coll":  "phase1_market_snapshots",
         "label":        label,
-        "speed":        0,
+        "speed":        1,
         "env_overrides": env_overrides,
     }
     r      = _api("POST", "/api/sim/runs", payload)
@@ -216,13 +216,16 @@ print(JSON.stringify({{
     try:
         with open("/tmp/_mq.js", "w") as f:
             f.write(js)
-        subprocess.run(["docker", "cp", "/tmp/_mq.js", "option_trading-mongo-1:/tmp/_mq.js"],
-                       capture_output=True)
+        subprocess.run("docker cp /tmp/_mq.js option_trading-mongo-1:/tmp/_mq.js",
+                       shell=True, capture_output=True)
         r = subprocess.run(
-            ["docker", "exec", "option_trading-mongo-1", "mongosh", "trading_ai", "--quiet", "/tmp/_mq.js"],
-            capture_output=True, text=True, timeout=30
+            "docker exec option_trading-mongo-1 mongosh trading_ai --quiet /tmp/_mq.js",
+            shell=True, capture_output=True, text=True, timeout=30
         )
-        return json.loads(r.stdout.strip() or "{}")
+        raw = r.stdout.strip()
+        if not raw:
+            return {"error": f"mongosh empty output, stderr={r.stderr[:200]}"}
+        return json.loads(raw)
     except Exception as e:
         return {"error": str(e)}
 
