@@ -121,6 +121,8 @@ def load_sim(run_id: str) -> dict:
         "run_id":    run_id,
         "decisions": _read_jsonl(d / "decisions.jsonl"),
         "traces":    _read_jsonl(d / "decision_traces.jsonl"),
+        "signals":   _read_jsonl(d / "signals.jsonl"),
+        "positions": _read_jsonl(d / "positions.jsonl"),
         "votes":     _read_jsonl(d / "votes.jsonl"),
         "summary":   _read_jsonl(d / "session_summary.jsonl"),
         "run_dir":   d,
@@ -134,6 +136,8 @@ def load_live(date: str) -> dict:
         "run_id":    f"live-{date}",
         "decisions": _read_jsonl(d / "decisions.jsonl"),
         "traces":    _read_jsonl(d / "decision_traces.jsonl"),
+        "signals":   _read_jsonl(d / "signals.jsonl"),
+        "positions": _read_jsonl(d / "positions.jsonl"),
         "votes":     _read_jsonl(d / "votes.jsonl"),
         "summary":   _read_jsonl(d / "session_summary.jsonl"),
         "run_dir":   d,
@@ -433,10 +437,11 @@ def main():
     dec_b = decision_stats(art_b["decisions"])
     flow_a = trace_gate_flow(art_a["traces"])
     flow_b = trace_gate_flow(art_b["traces"])
+    sig_a_entries = [s for s in art_a["signals"] if s.get("signal_type") == "ENTRY"]
+    sig_b_entries = [s for s in art_b["signals"] if s.get("signal_type") == "ENTRY"]
 
-    # Extract closed positions from votes (position events live in votes.jsonl)
-    pos_a_closed = [v for v in art_a["votes"] if v.get("event") == "POSITION_CLOSE"]
-    pos_b_closed = [v for v in art_b["votes"] if v.get("event") == "POSITION_CLOSE"]
+    pos_a_closed = [p for p in art_a["positions"] if p.get("event") == "POSITION_CLOSE"]
+    pos_b_closed = [p for p in art_b["positions"] if p.get("event") == "POSITION_CLOSE"]
 
     # session_summary
     sum_a = art_a["summary"][0] if art_a["summary"] else {}
@@ -445,7 +450,7 @@ def main():
     # ── 5. SCENARIO A REPORT ──────────────────────────────────────────────────
     hdr(f"4 ▸ SCENARIO A — {int(args.daily_loss_pct*100)}% daily loss limit  (max_trades={args.max_trades})", "═")
     print(f"  Bars evaluated : {len(art_a['decisions'])}")
-    print(f"  Signals fired  : {len(dec_a['signals'])}")
+    print(f"  Signals fired  : {len(sig_a_entries)}")
     print(f"  Blocked bars   : {len(dec_a['blocked'])}")
     print(f"  Trades closed  : {sum_a.get('trades', len(pos_a_closed))}")
     print(f"  W / L          : {sum_a.get('wins','?')} / {sum_a.get('losses','?')}")
@@ -469,7 +474,7 @@ def main():
     # ── 6. SCENARIO B REPORT ──────────────────────────────────────────────────
     hdr("5 ▸ SCENARIO B — PERMISSIVE (max opportunity view)", "═")
     print(f"  Bars evaluated : {len(art_b['decisions'])}")
-    print(f"  Signals fired  : {len(dec_b['signals'])}")
+    print(f"  Signals fired  : {len(sig_b_entries)}")
     print(f"  Blocked bars   : {len(dec_b['blocked'])}")
     print(f"  Trades closed  : {sum_b.get('trades', len(pos_b_closed))}")
     print(f"  W / L          : {sum_b.get('wins','?')} / {sum_b.get('losses','?')}")
@@ -490,7 +495,7 @@ def main():
     hdr("6 ▸ MISSED OPPORTUNITY ANALYSIS", "═")
     print("  (Trades permissive [B] generated that scenario A did NOT take)\n")
 
-    missed = find_missed(dec_b["signals"], dec_a["signals"])
+    missed = find_missed(sig_b_entries, sig_a_entries)
     if not missed:
         print("  ✓ Scenario A captured every opportunity permissive found.")
     else:
