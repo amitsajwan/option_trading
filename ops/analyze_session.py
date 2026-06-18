@@ -39,8 +39,9 @@ _cfg: dict = {
 }
 SIM_BASE_DIR   = Path(os.getenv("SIM_BASE_DIR", "/opt/option_trading/.run/strategy_app_sim"))
 LIVE_RUN_DIR   = Path(os.getenv("LIVE_RUN_DIR",  "/opt/option_trading/.run/strategy_app_historical"))
-POLL_INTERVAL  = 5    # seconds between status polls
-POLL_TIMEOUT   = 900  # 15 min max per SIM run
+POLL_INTERVAL  = 5     # seconds between status polls
+POLL_TIMEOUT   = 900   # 15 min max per SIM run
+DEFAULT_SIM_SPEED = 60 # bars per minute; a 343-bar day completes in ~6 min
 W              = 72   # report width
 
 # Gate groups for attribution summary
@@ -68,12 +69,12 @@ def _api(method: str, path: str, body: Optional[dict] = None) -> dict:
         raise RuntimeError(f"API {method} {path} → {e.code}: {e.read().decode()[:300]}") from e
 
 
-def enqueue_sim(label: str, date: str, env_overrides: dict[str, str]) -> str:
+def enqueue_sim(label: str, date: str, env_overrides: dict[str, str], speed: float) -> str:
     payload = {
         "source_date":  date,
         "source_coll":  "phase1_market_snapshots",
         "label":        label,
-        "speed":        1,
+        "speed":        speed,
         "env_overrides": env_overrides,
     }
     r      = _api("POST", "/api/sim/runs", payload)
@@ -83,8 +84,8 @@ def enqueue_sim(label: str, date: str, env_overrides: dict[str, str]) -> str:
     return run_id
 
 
-def poll_run(run_id: str, label: str) -> dict:
-    deadline = time.monotonic() + POLL_TIMEOUT
+def poll_run(run_id: str, label: str, timeout: int) -> dict:
+    deadline = time.monotonic() + timeout
     dots     = 0
     while time.monotonic() < deadline:
         r      = _api("GET", f"/api/sim/runs/{run_id}")
@@ -95,7 +96,7 @@ def poll_run(run_id: str, label: str) -> dict:
         dots = (dots + 1) % 4
         print(f"\r  {label}: {status} {'.' * dots}   ", end="", flush=True)
         time.sleep(POLL_INTERVAL)
-    raise TimeoutError(f"SIM {run_id} did not finish in {POLL_TIMEOUT}s")
+    raise TimeoutError(f"SIM {run_id} did not finish in {timeout}s")
 
 
 # ── File readers ──────────────────────────────────────────────────────────────
@@ -318,6 +319,10 @@ def main():
                         help="Max session trades for scenario A (default 20)")
     parser.add_argument("--ml-min-prob", type=float, default=0.049,
                         help="ML entry probability threshold (default 0.049)")
+    parser.add_argument("--sim-speed", type=float, default=DEFAULT_SIM_SPEED,
+                        help=f"SIM replay speed in bars/minute (default {DEFAULT_SIM_SPEED})")
+    parser.add_argument("--poll-timeout-sec", type=int, default=POLL_TIMEOUT,
+                        help=f"Max seconds to wait for each SIM run (default {POLL_TIMEOUT})")
     parser.add_argument("--skip-sim", action="store_true",
                         help="Do not run new SIMs; only show live MongoDB data")
     parser.add_argument("--dashboard-url", default=_cfg["dashboard_url"])
@@ -373,6 +378,7 @@ def main():
 
     # ── 2. ENQUEUE SIM SCENARIOS ──────────────────────────────────────────────
     hdr("2 ▸ ENQUEUING SIM SCENARIOS", "═")
+    print(f"  Replay speed: {args.sim_speed:g} bars/min")
 
     common = {
         "ENTRY_ML_MIN_PROB":               str(args.ml_min_prob),
@@ -389,7 +395,8 @@ def main():
             "RISK_MAX_DAILY_LOSS_PCT":    str(args.daily_loss_pct),
             "RISK_MAX_SESSION_TRADES":    str(args.max_trades),
             "RISK_MAX_CONSECUTIVE_LOSSES": "6",
-        }
+        },
+        args.sim_speed,
     )
     print(f"       run_id={scenario_a_id}")
 
@@ -403,14 +410,15 @@ def main():
             "RISK_MAX_DAILY_LOSS_PCT":    "0.99",
             "RISK_MAX_SESSION_TRADES":    "50",
             "RISK_MAX_CONSECUTIVE_LOSSES": "999",
-        }
+        },
+        args.sim_speed,
     )
     print(f"       run_id={scenario_b_id}")
 
     # ── 3. WAIT FOR SIMS ──────────────────────────────────────────────────────
     hdr("3 ▸ WAITING FOR SIM RUNS", "═")
-    ra = poll_run(scenario_a_id, f"[A] {int(args.daily_loss_pct*100)}% daily loss")
-    rb = poll_run(scenario_b_id, "[B] Permissive")
+    ra = poll_run(scenario_a_id, f"[A] {int(args.daily_loss_pct*100)}% daily loss", args.poll_timeout_sec)
+    rb = poll_run(scenario_b_id, "[B] Permissive", args.poll_timeout_sec)
 
     if ra.get("status") != "completed":
         print(f"  ⚠  Scenario A failed: {ra}")
