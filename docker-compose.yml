@@ -397,6 +397,21 @@ services:
       # grader); was previously absent so the .env.compose `consensus` value silently
       # never reached the container — making it explicit removes that landmine.
       ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-composite}"
+      # multi_signal direction: minimum abs score to take a direction (abstain below)
+      ENTRY_MULTI_SIGNAL_MIN: "${ENTRY_MULTI_SIGNAL_MIN:-2.0}"
+      # Shadow direction gate: skip entry bars where 23-signal abs score < this (0=off)
+      ENTRY_SHADOW_SCORE_MIN: "${ENTRY_SHADOW_SCORE_MIN:-0}"
+      # Opportunity gate: rank + select top N entry bars per day by ML prob × ATR
+      OPPORTUNITY_GATE_ENABLED: "${OPPORTUNITY_GATE_ENABLED:-0}"
+      OPP_GATE_MAX_ENTRIES: "${OPP_GATE_MAX_ENTRIES:-3}"
+      OPP_GATE_SELECTION_MODE: "${OPP_GATE_SELECTION_MODE:-percentile}"
+      OPP_GATE_SELECTION_PERCENTILE: "${OPP_GATE_SELECTION_PERCENTILE:-75}"
+      OPP_GATE_MIN_SPACING_MINUTES: "${OPP_GATE_MIN_SPACING_MINUTES:-20}"
+      OPP_GATE_SCORE_CUTOFF: "${OPP_GATE_SCORE_CUTOFF:-0}"
+      # Sideways mixed-returns gate (0=off by default)
+      SIDEWAYS_RETURNS_MIXED_GATE_ENABLED: "${SIDEWAYS_RETURNS_MIXED_GATE_ENABLED:-0}"
+      # Brain dual mode: live = RegimeDirector IS the direction (not shadow/fallback)
+      BRAIN_DUAL_MODE: "${BRAIN_DUAL_MODE:-}"
       REGIME_GUARD_MAX_ORW: "${REGIME_GUARD_MAX_ORW:-}"
       DIRECTION_ML_CONFIDENCE_MIN: "${DIRECTION_ML_CONFIDENCE_MIN:-}"
       ENTRY_DIR_W_ML: "${ENTRY_DIR_W_ML:-0.20}"
@@ -952,6 +967,16 @@ services:
       # grader); was previously absent so the .env.compose `consensus` value silently
       # never reached the container — making it explicit removes that landmine.
       ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-composite}"
+      ENTRY_MULTI_SIGNAL_MIN: "${ENTRY_MULTI_SIGNAL_MIN:-2.0}"
+      ENTRY_SHADOW_SCORE_MIN: "${ENTRY_SHADOW_SCORE_MIN:-0}"
+      OPPORTUNITY_GATE_ENABLED: "${OPPORTUNITY_GATE_ENABLED:-0}"
+      OPP_GATE_MAX_ENTRIES: "${OPP_GATE_MAX_ENTRIES:-3}"
+      OPP_GATE_SELECTION_MODE: "${OPP_GATE_SELECTION_MODE:-percentile}"
+      OPP_GATE_SELECTION_PERCENTILE: "${OPP_GATE_SELECTION_PERCENTILE:-75}"
+      OPP_GATE_MIN_SPACING_MINUTES: "${OPP_GATE_MIN_SPACING_MINUTES:-20}"
+      OPP_GATE_SCORE_CUTOFF: "${OPP_GATE_SCORE_CUTOFF:-0}"
+      SIDEWAYS_RETURNS_MIXED_GATE_ENABLED: "${SIDEWAYS_RETURNS_MIXED_GATE_ENABLED:-0}"
+      BRAIN_DUAL_MODE: "${BRAIN_DUAL_MODE:-}"
       REGIME_GUARD_MAX_ORW: "${REGIME_GUARD_MAX_ORW:-}"
       DIRECTION_ML_CONFIDENCE_MIN: "${DIRECTION_ML_CONFIDENCE_MIN:-}"
       ENTRY_DIR_W_ML: "${ENTRY_DIR_W_ML:-0.20}"
@@ -1068,6 +1093,16 @@ services:
       # grader); was previously absent so the .env.compose `consensus` value silently
       # never reached the container — making it explicit removes that landmine.
       ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-composite}"
+      ENTRY_MULTI_SIGNAL_MIN: "${ENTRY_MULTI_SIGNAL_MIN:-2.0}"
+      ENTRY_SHADOW_SCORE_MIN: "${ENTRY_SHADOW_SCORE_MIN:-0}"
+      OPPORTUNITY_GATE_ENABLED: "${OPPORTUNITY_GATE_ENABLED:-0}"
+      OPP_GATE_MAX_ENTRIES: "${OPP_GATE_MAX_ENTRIES:-3}"
+      OPP_GATE_SELECTION_MODE: "${OPP_GATE_SELECTION_MODE:-percentile}"
+      OPP_GATE_SELECTION_PERCENTILE: "${OPP_GATE_SELECTION_PERCENTILE:-75}"
+      OPP_GATE_MIN_SPACING_MINUTES: "${OPP_GATE_MIN_SPACING_MINUTES:-20}"
+      OPP_GATE_SCORE_CUTOFF: "${OPP_GATE_SCORE_CUTOFF:-0}"
+      SIDEWAYS_RETURNS_MIXED_GATE_ENABLED: "${SIDEWAYS_RETURNS_MIXED_GATE_ENABLED:-0}"
+      BRAIN_DUAL_MODE: "${BRAIN_DUAL_MODE:-}"
       REGIME_GUARD_MAX_ORW: "${REGIME_GUARD_MAX_ORW:-}"
       DIRECTION_ML_CONFIDENCE_MIN: "${DIRECTION_ML_CONFIDENCE_MIN:-}"
       ENTRY_DIR_W_ML: "${ENTRY_DIR_W_ML:-0.20}"
