@@ -28,8 +28,7 @@ _COMMON_SESSION_FIELDS: tuple[str, ...] = (
 )
 
 _V2_ADDITIONAL_ENRICHMENT_FIELDS: tuple[str, ...] = (
-    "adx_14",
-    "vol_spike_ratio",
+    # adx_14 and vol_spike_ratio moved to COMPRESSION_FEATURE_COLUMNS (computed per-bar from OHLCV)
     "ctx_gap_pct",
     "ctx_gap_up",
     "ctx_gap_down",

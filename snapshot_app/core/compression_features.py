@@ -38,6 +38,8 @@ COMPRESSION_FEATURE_COLUMNS: Tuple[str, ...] = (
     "dist_from_ema21",        # (close - ema_21) / ema_21 — structure
     "position_in_day_range",  # (close - day_low) / (day_high - day_low) in [0,1]
     "compression_score",      # raw 0..4 count of compression conditions (NOT a gate — fed raw)
+    "adx_14",                 # ADX(14) — trend strength (Wilder's smoothing, causal per bar)
+    "vol_spike_ratio",        # current bar volume / 20-bar rolling avg volume
 )
 
 _EPS = 1e-12
@@ -48,6 +50,8 @@ _OVERLAP_WINDOW = 10
 _BASELINE_WINDOW = 20
 _EMA_TIGHT = 0.0008          # |ema9-ema21|/close below this == compressed (matches E1 harness)
 _RANGE_CONTRACT = 0.6        # range_ratio below this == contracted (matches E1 harness)
+_ADX_PERIOD = 14
+_VOL_SPIKE_WINDOW = 20
 
 
 def _num(df: pd.DataFrame, col: str) -> pd.Series:
@@ -56,12 +60,31 @@ def _num(df: pd.DataFrame, col: str) -> pd.Series:
     return pd.Series(np.nan, index=df.index, dtype="float64")
 
 
+def _wilder_smooth(s: pd.Series, period: int) -> pd.Series:
+    """Wilder's smoothing: SMA seed for first window, then EMA with alpha=1/period."""
+    alpha = 1.0 / period
+    result = s.copy().astype("float64") * np.nan
+    first_valid = s.first_valid_index()
+    if first_valid is None:
+        return result
+    loc = s.index.get_loc(first_valid)
+    seed_end = loc + period
+    if seed_end > len(s):
+        return result
+    seed = s.iloc[loc:seed_end].mean()
+    result.iloc[seed_end - 1] = seed
+    for i in range(seed_end, len(s)):
+        prev = result.iloc[i - 1]
+        result.iloc[i] = prev + alpha * (s.iloc[i] - prev) if not np.isnan(prev) else np.nan
+    return result
+
+
 def add_compression_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add the BMM compression/structure columns IN PLACE (returns the same frame).
 
     Expects standard internal names: close, high, low, ema_9, ema_21, ema_50,
-    atr_ratio, day_high, day_low. Missing inputs degrade to NaN for the derived
-    column rather than raising — callers must tolerate NaN (the trainer imputes).
+    atr_ratio, day_high, day_low, volume (optional — vol_spike_ratio degrades to NaN).
+    Missing inputs degrade to NaN for the derived column rather than raising.
     Frame MUST be a single trade_date, sorted ascending by time.
     """
     close = _num(df, "close")
@@ -133,6 +156,34 @@ def add_compression_features(df: pd.DataFrame) -> pd.DataFrame:
     score = stack.sum(axis=1, min_count=1)
     df["compression_score"] = score.where(valid_any, np.nan)
 
+    # --- ADX(14): Wilder's Average Directional Index (trend strength, causal per bar) ---
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    prev_high = high.shift(1)
+    prev_low = low.shift(1)
+    raw_dm_plus = high - prev_high
+    raw_dm_minus = prev_low - low
+    dm_plus = raw_dm_plus.where((raw_dm_plus > raw_dm_minus) & (raw_dm_plus > 0), 0.0)
+    dm_minus = raw_dm_minus.where((raw_dm_minus > raw_dm_plus) & (raw_dm_minus > 0), 0.0)
+    tr_s = _wilder_smooth(tr, _ADX_PERIOD)
+    dp_s = _wilder_smooth(dm_plus, _ADX_PERIOD)
+    dm_s = _wilder_smooth(dm_minus, _ADX_PERIOD)
+    safe_tr = tr_s.replace(0.0, np.nan)
+    di_plus = 100.0 * dp_s / safe_tr
+    di_minus = 100.0 * dm_s / safe_tr
+    di_sum = (di_plus + di_minus).replace(0.0, np.nan)
+    dx = 100.0 * (di_plus - di_minus).abs() / di_sum
+    df["adx_14"] = _wilder_smooth(dx, _ADX_PERIOD)
+
+    # --- Volume spike ratio: current bar volume vs 20-bar rolling average ---
+    vol = _num(df, "volume")
+    vol_avg = vol.rolling(_VOL_SPIKE_WINDOW, min_periods=max(1, _VOL_SPIKE_WINDOW // 2)).mean()
+    df["vol_spike_ratio"] = vol / vol_avg.replace(0.0, np.nan)
+
     return df
 
 
@@ -166,6 +217,11 @@ def add_compression_features_from_flat(df: pd.DataFrame) -> pd.DataFrame:
         tmp["atr_ratio"] = np.nan
     tmp["day_high"] = high.cummax()
     tmp["day_low"] = low.cummin()
+    # volume: try common flat-dataset column names
+    for vol_col in ("px_fut_volume", "volume", "vol"):
+        if vol_col in df.columns:
+            tmp["volume"] = _num(df, vol_col)
+            break
 
     add_compression_features(tmp)
     for col in COMPRESSION_FEATURE_COLUMNS:
