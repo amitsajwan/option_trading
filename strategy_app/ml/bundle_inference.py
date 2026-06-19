@@ -54,9 +54,9 @@ def build_feature_row(snap: SnapshotAccessor, features: List[str]) -> Optional[D
         for view_dict in views.values():
             if isinstance(view_dict, dict):
                 _fill(flat, view_dict)
-        for key, value in snap.raw_payload.items():
-            if key not in flat and not isinstance(value, (dict, list)):
-                flat[key] = value
+        # raw_payload scalars: use _fill so root-level values (e.g. compression features)
+        # can overwrite None projected by views for keys the view spec doesn't resolve.
+        _fill(flat, {k: v for k, v in snap.raw_payload.items() if not isinstance(v, (dict, list))})
         vel = snap.velocity_features
         if isinstance(vel, dict):
             # Velocity features (11:30-anchored) fill gaps; per-bar compression values win.
