@@ -296,7 +296,11 @@ def _project_view(snapshot: dict[str, Any], view_name: str) -> dict[str, Any]:
             continue
         block = work.get(block_name) if isinstance(work.get(block_name), dict) else {}
         for field_name in field_names:
-            out[field_name] = block.get(field_name)
+            incoming = block.get(field_name)
+            existing = out.get(field_name)
+            # Non-NaN-wins: never overwrite a good value with None/NaN from a later block.
+            if existing is None or (isinstance(existing, float) and existing != existing):
+                out[field_name] = incoming
     return out
 
 

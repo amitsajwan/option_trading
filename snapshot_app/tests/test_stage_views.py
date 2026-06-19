@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
+from snapshot_app.core.compression_features import COMPRESSION_FEATURE_COLUMNS
 from snapshot_app.core.stage_views import (
+    project_stage_views_v2,
     project_stage_views_v2_from_flat_row,
     project_stage1_entry_view_v2_from_flat_row,
     project_stage3_recipe_view_v2_from_flat_row,
@@ -57,6 +61,30 @@ def test_stage2_direction_view_v2_regime_flags_null_safe() -> None:
     for flag in _REGIME_FLAGS:
         assert flag in stage2, f"'{flag}' key missing from stage2 projection"
         assert stage2[flag] is None, f"'{flag}' expected None when absent from row, got {stage2[flag]!r}"
+
+
+def test_futures_derived_wins_over_velocity_enrichment_for_duplicate_keys() -> None:
+    """futures_derived (per-bar computed) must win over velocity_enrichment (11:30-anchored)
+    for any key that appears in both blocks.  Previously _project_view used last-write-wins
+    which let velocity_enrichment silently overwrite good compression values with NaN."""
+    good_val = 0.89
+    snap = {
+        "snapshot_id": "test_snap",
+        "instrument": "BANKNIFTY26JUNFUT",
+        "trade_date": "2024-08-01",
+        "timestamp": "2024-08-01T11:30:00+05:30",
+        "futures_derived": {col: good_val for col in COMPRESSION_FEATURE_COLUMNS},
+        "velocity_enrichment": {col: float("nan") for col in COMPRESSION_FEATURE_COLUMNS},
+        "session_context": {"session_phase": "ACTIVE", "minutes_since_open": 90},
+    }
+    views = project_stage_views_v2(snap)
+    stage1 = views["stage1_entry_view_v2"]
+    for col in COMPRESSION_FEATURE_COLUMNS:
+        val = stage1.get(col)
+        assert val == good_val, (
+            f"'{col}': futures_derived value ({good_val}) should win over "
+            f"velocity_enrichment NaN, got {val!r}"
+        )
 
 
 def test_stage1_and_stage3_unaffected_by_regime_block() -> None:
