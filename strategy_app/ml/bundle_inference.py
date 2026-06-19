@@ -37,17 +37,30 @@ def build_feature_row(snap: SnapshotAccessor, features: List[str]) -> Optional[D
     try:
         from snapshot_app.core.stage_views import project_stage_views_v2
 
+        import math
+
+        def _is_nan(v: Any) -> bool:
+            return isinstance(v, float) and math.isnan(v)
+
+        def _fill(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
+            """Merge src into dst; never overwrite an existing non-NaN value with NaN."""
+            for k, v in src.items():
+                existing = dst.get(k)
+                if existing is None or _is_nan(existing):
+                    dst[k] = v
+
         views = project_stage_views_v2(snap.raw_payload)
         flat: Dict[str, Any] = {}
         for view_dict in views.values():
             if isinstance(view_dict, dict):
-                flat.update(view_dict)
+                _fill(flat, view_dict)
         for key, value in snap.raw_payload.items():
             if key not in flat and not isinstance(value, (dict, list)):
                 flat[key] = value
         vel = snap.velocity_features
         if isinstance(vel, dict):
-            flat.update(vel)
+            # Velocity features (11:30-anchored) fill gaps; per-bar compression values win.
+            _fill(flat, vel)
         row: Dict[str, float] = {}
         for feature in features:
             val = flat.get(feature)
