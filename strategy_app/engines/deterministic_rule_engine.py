@@ -946,6 +946,19 @@ class DeterministicRuleEngine(StrategyEngine):
             if max(ce_hits, pe_hits) < max(1, min_match):
                 return None  # blocker: trap_gate (per-tick summary)
 
+        # Direction-score gate: abstain when multi-signal scorer is in coin-flip territory.
+        # ENTRY_SHADOW_SCORE_MIN (default 0 = off). Set to 3.0 to skip bars where fewer
+        # than ~3 direction signals agree — those are near-random per OOS analysis.
+        # Applies to ALL entry profiles on the common entry path; no overhead when 0.
+        try:
+            _min_dir_score = float(os.getenv("ENTRY_SHADOW_SCORE_MIN", "0") or "0")
+        except (TypeError, ValueError):
+            _min_dir_score = 0.0
+        if _min_dir_score > 0.0:
+            _, _, _dir_score_now = self._shadow_direction_from_snapshot(snap)
+            if abs(_dir_score_now) < _min_dir_score:
+                return None  # blocker: direction_score_weak (per-tick summary)
+
         # Brain gate: DayScore + consensus (skipped for ML-entry-primary profile when configured).
         skip_brain = (
             self._strategy_profile_id in _PROFILES_ML_ENTRY_DET_DIRECTION
@@ -2147,10 +2160,12 @@ class DeterministicRuleEngine(StrategyEngine):
                 pass
 
         # Apply price-structure score to main scorer (need ≥3 bars for signal to be meaningful).
+        # Weight scales with conviction: each point of _ds adds 0.5 to main score, capped at 2.0.
+        # This lets individual signals (e.g. ema_stack_bull=1) contribute 0.5 rather than being
+        # silently dropped (the old all-or-nothing _pw=0 below 3 suppressed single-signal bars).
         if _n >= 3 and _ds != 0.0:
-            _pw = 2.0 if abs(_ds) >= 5.0 else (1.5 if abs(_ds) >= 3.0 else 0.0)
-            if _pw > 0:
-                score += _pw if _ds > 0 else -_pw
+            _pw = min(2.0, abs(_ds) * 0.5)
+            score += _pw if _ds > 0 else -_pw
 
         basis = ",".join(fired) if fired else "no_signals"
         if score > 0:

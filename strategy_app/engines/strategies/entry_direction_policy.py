@@ -7,8 +7,14 @@ logic stays identical and lives in exactly one place. Both ``ML_ENTRY`` and
 
 Honors the same env knobs as before: ``ML_ENTRY_PE_ONLY`` / ``ML_ENTRY_CE_ONLY``,
 ``ML_ENTRY_DIRECTION_MODE`` (composite | consensus | legacy | momentum |
-regime_dual), ``DIRECTION_ML_MODEL_PATH``, ``BRAIN_DUAL_MODE``,
+regime_dual | multi_signal), ``DIRECTION_ML_MODEL_PATH``, ``BRAIN_DUAL_MODE``,
 ``REGIME_ALLOWED``, ``ENTRY_CONFIRM_PREV_TICK``, ``ML_ENTRY_BLOCK_CE/PE``.
+
+``multi_signal`` mode: stateless 5-signal scorer (VWAP, ORB, straddle premium,
+PCR, VIX) computed from the current snapshot only — no rolling engine state needed.
+Abstains when ``abs(score) < ENTRY_MULTI_SIGNAL_MIN`` (default 2.0).
+This makes the direction decision independent of profile/engine history and
+produces the same result in live AND historical SIM.
 """
 from __future__ import annotations
 
@@ -398,6 +404,72 @@ def resolve_direction_for_entry(
         direction, raw_signals = _regime_council_direction(snap, raw_signals)
         if direction is None:
             return None, raw_signals
+    elif direction_mode == "multi_signal":
+        # Stateless 5-core-signal scorer — same signals as engine's shadow scorer
+        # but only the snapshot-available ones (no rolling buffer needed).
+        # Abstains when score is weak (coin-flip zone). Runs identically live + SIM.
+        _ms_score: float = 0.0
+        _ms_fired: list[str] = []
+        fd = snap.raw_payload.get("futures_derived") or {}
+        orr = snap.raw_payload.get("opening_range") or {}
+        ao = snap.raw_payload.get("atm_options") or {}
+        iv = snap.raw_payload.get("iv_derived") or {}
+
+        # 1. ORB break (weight 2)
+        if orr.get("orh_broken"):
+            _ms_score += 2.0; _ms_fired.append("orh_broken")
+        elif orr.get("orl_broken"):
+            _ms_score -= 2.0; _ms_fired.append("orl_broken")
+
+        # 2. VWAP side (weight 2)
+        pvwap = fd.get("price_vs_vwap")
+        if pvwap is not None and abs(float(pvwap)) > 0.0:
+            _ms_score += 2.0 if float(pvwap) > 0 else -2.0
+            _ms_fired.append("above_vwap" if float(pvwap) > 0 else "below_vwap")
+
+        # 3. Straddle premium dominance (weight 2)
+        ce_p = ao.get("atm_ce_close") or ao.get("atm_ce_ltp")
+        pe_p = ao.get("atm_pe_close") or ao.get("atm_pe_ltp")
+        if ce_p and pe_p and float(ce_p) > 0 and float(pe_p) > 0:
+            _ratio = float(ce_p) / float(pe_p)
+            if _ratio > 1.04:
+                _ms_score += 2.0; _ms_fired.append("ce_prem_dom")
+            elif _ratio < 0.96:
+                _ms_score -= 2.0; _ms_fired.append("pe_prem_dom")
+
+        # 4. PCR change (weight 1) — rising PCR = put building = bearish
+        pcr_chg = snap.pcr_change_5m
+        if pcr_chg is not None and float(pcr_chg) != 0.0:
+            _ms_score += 1.0 if float(pcr_chg) < 0 else -1.0
+            _ms_fired.append("pcr_falling" if float(pcr_chg) < 0 else "pcr_rising")
+
+        # 5. VIX intraday change (weight 1.5) — rising VIX = fear = bearish
+        vix_chg = fd.get("vix_intraday_chg")
+        if vix_chg is not None and abs(float(vix_chg)) >= 3.0:
+            _ms_score += -1.5 if float(vix_chg) > 0 else 1.5
+            _ms_fired.append("vix_rising" if float(vix_chg) > 0 else "vix_falling")
+
+        # 6. EMA order (weight 1) — ema_order > 0 = bullish stack
+        ema_ord = fd.get("ema_order")
+        if ema_ord is not None:
+            try:
+                _eo = int(float(ema_ord))
+                if _eo != 0:
+                    _ms_score += 1.0 if _eo > 0 else -1.0
+                    _ms_fired.append("ema_bull" if _eo > 0 else "ema_bear")
+            except (TypeError, ValueError):
+                pass
+
+        _ms_min = _env_float("ENTRY_MULTI_SIGNAL_MIN", 2.0)
+        raw_signals["direction_source"] = "multi_signal"
+        raw_signals["multi_signal_score"] = round(_ms_score, 2)
+        raw_signals["multi_signal_fired"] = ",".join(_ms_fired)
+        if abs(_ms_score) < _ms_min:
+            raw_signals["multi_signal_result"] = f"abstain(score={_ms_score:.1f}<{_ms_min})"
+            return None, raw_signals  # weak conviction → abstain
+        direction = Direction.CE if _ms_score > 0 else Direction.PE
+        raw_signals["multi_signal_result"] = f"{'CE' if _ms_score > 0 else 'PE'}(score={_ms_score:.1f})"
+
     elif direction_mode in {"momentum", "mom"}:
         dir_result = resolve_entry_direction_momentum(snap)
         if dir_result.vetoed or dir_result.direction is None:

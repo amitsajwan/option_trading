@@ -63,7 +63,15 @@ set_kv "OPP_GATE_SELECTION_MODE"        "percentile"
 set_kv "OPP_GATE_SELECTION_PERCENTILE"  "75"
 set_kv "OPP_GATE_MIN_SPACING_MINUTES"   "20"
 
-# Direction + sideways gate
+# Direction: multi_signal mode — stateless 6-signal scorer, abstains when weak
+# ENTRY_MULTI_SIGNAL_MIN=2.0: need at least 2 signals agreeing (score ≥ 2.0)
+# ENTRY_SHADOW_SCORE_MIN=2.0: common-path gate — skip bars below this conviction
+set_kv "ML_ENTRY_DIRECTION_MODE"          "multi_signal"
+set_kv "ENTRY_MULTI_SIGNAL_MIN"           "2.0"
+set_kv "ENTRY_SHADOW_SCORE_MIN"           "2.0"
+set_kv "BRAIN_DUAL_MODE"                  "live"
+
+# Sideways gate
 set_kv "SIDEWAYS_RETURNS_MIXED_GATE_ENABLED" "0"
 
 echo ""
