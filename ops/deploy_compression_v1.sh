@@ -23,13 +23,54 @@ gsutil cp "$MODEL_GCS" "$MODEL_LOCAL"
 echo "  downloaded -> $MODEL_LOCAL"
 
 echo ""
-echo "=== [3/6] Copy bundle into containers ==="
-for CONTAINER in strategy_app strategy_app_sim; do
-    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
-        # ensure target dir exists
-        docker exec "$CONTAINER" mkdir -p "$(dirname $MODEL_CONTAINER)"
-        docker cp "$MODEL_LOCAL" "${CONTAINER}:${MODEL_CONTAINER}"
-        echo "  ✓ copied to $CONTAINER"
+echo "=== [3/6] Copy bundle + new Python source files into containers ==="
+# Note: containers use the baked image; these files are NOT in the image yet.
+# Must be docker-cp'd after every recreate. TODO: rebuild image to make this permanent.
+NEW_PY_FILES=(
+    "$REPO/snapshot_app/core/compression_features.py:/app/snapshot_app/core/compression_features.py"
+    "$REPO/snapshot_app/core/direction_features.py:/app/snapshot_app/core/direction_features.py"
+    "$REPO/snapshot_app/core/stage_views.py:/app/snapshot_app/core/stage_views.py"
+    "$REPO/snapshot_app/core/velocity_30m.py:/app/snapshot_app/core/velocity_30m.py"
+    "$REPO/snapshot_app/core/live_velocity_state.py:/app/snapshot_app/core/live_velocity_state.py"
+    "$REPO/snapshot_app/core/market_snapshot.py:/app/snapshot_app/core/market_snapshot.py"
+    "$REPO/strategy_app/engines/strategies/entry_direction_policy.py:/app/strategy_app/engines/strategies/entry_direction_policy.py"
+    "$REPO/strategy_app/engines/deterministic_rule_engine.py:/app/strategy_app/engines/deterministic_rule_engine.py"
+)
+
+# Containers that need these files
+STRATEGY_CONTAINERS=("option_trading-strategy_app-1" "option_trading-dashboard-1")
+SNAPSHOT_CONTAINERS=("option_trading-snapshot_app-1")
+
+for CONTAINER in "${STRATEGY_CONTAINERS[@]}"; do
+    if sudo docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+        for PAIR in "${NEW_PY_FILES[@]}"; do
+            SRC="${PAIR%%:*}"
+            DST="${PAIR##*:}"
+            sudo docker cp "$SRC" "${CONTAINER}:${DST}"
+        done
+        # Model is bind-mounted from host, no docker cp needed
+        echo "  ✓ code + model accessible in $CONTAINER"
+    else
+        echo "  ⚠ $CONTAINER not running — skipping"
+    fi
+done
+
+for CONTAINER in "${SNAPSHOT_CONTAINERS[@]}"; do
+    if sudo docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+        SNAPSHOT_FILES=(
+            "$REPO/snapshot_app/core/compression_features.py:/app/snapshot_app/core/compression_features.py"
+            "$REPO/snapshot_app/core/direction_features.py:/app/snapshot_app/core/direction_features.py"
+            "$REPO/snapshot_app/core/stage_views.py:/app/snapshot_app/core/stage_views.py"
+            "$REPO/snapshot_app/core/market_snapshot.py:/app/snapshot_app/core/market_snapshot.py"
+            "$REPO/snapshot_app/core/live_velocity_state.py:/app/snapshot_app/core/live_velocity_state.py"
+            "$REPO/snapshot_app/core/velocity_30m.py:/app/snapshot_app/core/velocity_30m.py"
+        )
+        for PAIR in "${SNAPSHOT_FILES[@]}"; do
+            SRC="${PAIR%%:*}"
+            DST="${PAIR##*:}"
+            sudo docker cp "$SRC" "${CONTAINER}:${DST}"
+        done
+        echo "  ✓ updated $CONTAINER"
     else
         echo "  ⚠ $CONTAINER not running — skipping"
     fi
@@ -75,18 +116,24 @@ set_kv "BRAIN_DUAL_MODE"                  "live"
 set_kv "SIDEWAYS_RETURNS_MIXED_GATE_ENABLED" "0"
 
 echo ""
-echo "=== [5/6] Restart strategy_app ==="
-cd "$REPO" && docker compose --env-file .env.compose restart strategy_app
-echo "  ✓ strategy_app restarted"
+echo "=== [5/6] Recreate strategy_app with updated env ==="
+cd "$REPO" && sudo docker compose --env-file .env.compose up -d --no-deps strategy_app
+sleep 10
+# Re-copy Python files (recreate resets container filesystem)
+for PAIR in "${NEW_PY_FILES[@]}"; do
+    SRC="${PAIR%%:*}"; DST="${PAIR##*:}"
+    sudo docker cp "$SRC" "option_trading-strategy_app-1:${DST}"
+done
+echo "  ✓ strategy_app recreated + code copied"
 
 echo ""
 echo "=== [6/6] Verify settings + model in container ==="
 echo "--- env ---"
-docker exec strategy_app env | grep -E "ENTRY_ML|ENTRY_TIME|OPPORTUNITY|OPP_GATE|SIDEWAYS"
+sudo docker exec option_trading-strategy_app-1 env | grep -E "ENTRY_ML|ENTRY_TIME|OPPORTUNITY|OPP_GATE|SIDEWAYS|BRAIN_DUAL|ML_ENTRY_DIR"
 echo "--- model file ---"
-docker exec strategy_app ls -lh "$MODEL_CONTAINER" && echo "  ✓ model file present"
+sudo docker exec option_trading-strategy_app-1 ls -lh "$MODEL_CONTAINER" && echo "  ✓ model file present (bind-mounted)"
 echo "--- compression features check ---"
-docker exec strategy_app python3 -c "
+sudo docker exec option_trading-strategy_app-1 python3 -c "
 import joblib, sys
 b = joblib.load('$MODEL_CONTAINER')
 feats = b.get('features', [])
