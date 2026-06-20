@@ -1,4 +1,4 @@
-"""Tests for dual direction bundle loading and resolution in ml_entry."""
+"""Tests for dual direction bundle loading and resolution in entry_direction_policy."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -39,7 +39,7 @@ def _make_snap(vix: float = 14.0) -> MagicMock:
 
 class TestResolveDual:
     def test_ce_wins_when_higher(self):
-        from strategy_app.engines.strategies.ml_entry import _resolve_direction_dual
+        from strategy_app.engines.strategies.entry_direction_policy import _resolve_direction_dual
         from strategy_app.contracts import Direction
 
         bundle = _make_dual_bundle(ce_win_prob=0.65, pe_win_prob=0.55)
@@ -50,7 +50,7 @@ class TestResolveDual:
         assert result == Direction.CE
 
     def test_pe_wins_when_higher(self):
-        from strategy_app.engines.strategies.ml_entry import _resolve_direction_dual
+        from strategy_app.engines.strategies.entry_direction_policy import _resolve_direction_dual
         from strategy_app.contracts import Direction
 
         bundle = _make_dual_bundle(ce_win_prob=0.52, pe_win_prob=0.72)
@@ -61,7 +61,7 @@ class TestResolveDual:
         assert result == Direction.PE
 
     def test_argmax_when_both_below_50_default(self):
-        from strategy_app.engines.strategies.ml_entry import _resolve_direction_dual
+        from strategy_app.engines.strategies.entry_direction_policy import _resolve_direction_dual
         from strategy_app.contracts import Direction
 
         bundle = _make_dual_bundle(ce_win_prob=0.45, pe_win_prob=0.48)
@@ -72,7 +72,7 @@ class TestResolveDual:
         assert result == Direction.PE
 
     def test_returns_none_when_both_below_50_strict(self, monkeypatch):
-        from strategy_app.engines.strategies.ml_entry import _resolve_direction_dual
+        from strategy_app.engines.strategies.entry_direction_policy import _resolve_direction_dual
 
         monkeypatch.setenv("DIRECTION_DUAL_MIN_PROB", "0.5")
         bundle = _make_dual_bundle(ce_win_prob=0.45, pe_win_prob=0.48)
@@ -83,7 +83,7 @@ class TestResolveDual:
         assert result is None
 
     def test_returns_none_on_empty_bundles(self):
-        from strategy_app.engines.strategies.ml_entry import _resolve_direction_dual
+        from strategy_app.engines.strategies.entry_direction_policy import _resolve_direction_dual
 
         bundle = {"kind": "direction_dual_bundle", "ce_bundle": None, "pe_bundle": None}
         snap = _make_snap()
@@ -94,7 +94,7 @@ class TestResolveDual:
 class TestLoadDirBundle:
     def test_accepts_dual_bundle_kind(self, tmp_path):
         import joblib
-        from strategy_app.engines.strategies.ml_entry import _load_dir_bundle
+        from strategy_app.engines.strategies.entry_direction_policy import _load_dir_bundle
 
         bundle = {"kind": "direction_dual_bundle", "ce_bundle": {}, "pe_bundle": {}}
         path = tmp_path / "dual.joblib"
@@ -105,7 +105,7 @@ class TestLoadDirBundle:
 
     def test_accepts_single_bundle_kind(self, tmp_path):
         import joblib
-        from strategy_app.engines.strategies.ml_entry import _load_dir_bundle
+        from strategy_app.engines.strategies.entry_direction_policy import _load_dir_bundle
 
         bundle = {"kind": "direction_only_bundle", "model": None, "features": []}
         path = tmp_path / "single.joblib"
@@ -116,7 +116,7 @@ class TestLoadDirBundle:
 
     def test_rejects_unknown_kind(self, tmp_path):
         import joblib
-        from strategy_app.engines.strategies.ml_entry import _load_dir_bundle
+        from strategy_app.engines.strategies.entry_direction_policy import _load_dir_bundle
 
         bundle = {"kind": "unknown_bundle"}
         path = tmp_path / "unknown.joblib"
@@ -125,6 +125,6 @@ class TestLoadDirBundle:
         assert loaded is None
 
     def test_returns_none_on_missing_file(self):
-        from strategy_app.engines.strategies.ml_entry import _load_dir_bundle
+        from strategy_app.engines.strategies.entry_direction_policy import _load_dir_bundle
         result = _load_dir_bundle("/nonexistent/path/model.joblib")
         assert result is None

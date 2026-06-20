@@ -48,14 +48,13 @@ class RiskManagerTests(unittest.TestCase):
             self.assertEqual(mgr.halt_reason, "operator_halt")
 
     def test_budget_per_trade_sizing_uses_notional_budget(self) -> None:
-        with mock.patch.dict(
+        with mock.patch("strategy_app.risk.manager.BANKNIFTY_LOT_SIZE", 15), mock.patch.dict(
             "os.environ",
             {
                 "RISK_LOT_SIZING_MODE": "budget_per_trade",
                 "RISK_NOTIONAL_PER_TRADE": "100000",
                 "RISK_LOT_BUDGET_USES_LOT_SIZE": "1",
                 "RISK_MAX_LOTS_PER_TRADE": "999",
-                "BANKNIFTY_LOT_SIZE": "15",  # pin lot_size; contracts_app/.env may override
             },
             clear=False,
         ):
@@ -67,9 +66,9 @@ class RiskManagerTests(unittest.TestCase):
             self.assertEqual(lots, 21)
 
     def test_aggressive_safe_profile_applies_defaults(self) -> None:
-        with mock.patch.dict(
+        with mock.patch("strategy_app.risk.manager.BANKNIFTY_LOT_SIZE", 15), mock.patch.dict(
             "os.environ",
-            {"RISK_PROFILE": "aggressive_safe_v1", "BANKNIFTY_LOT_SIZE": "15"},
+            {"RISK_PROFILE": "aggressive_safe_v1"},
             clear=False,
         ):
             _clear_ambient_risk_env()
@@ -142,14 +141,13 @@ class RiskManagerTests(unittest.TestCase):
             self.assertEqual(lots, 10)
 
     def test_budget_sizing_scales_within_hard_notional_cap(self) -> None:
-        with mock.patch.dict(
+        with mock.patch("strategy_app.risk.manager.BANKNIFTY_LOT_SIZE", 15), mock.patch.dict(
             "os.environ",
             {
                 "RISK_LOT_SIZING_MODE": "budget_per_trade",
                 "RISK_NOTIONAL_PER_TRADE": "100000",
                 "RISK_LOT_BUDGET_USES_LOT_SIZE": "1",
                 "RISK_MAX_LOTS_PER_TRADE": "999",
-                "BANKNIFTY_LOT_SIZE": "15",  # pin lot_size; contracts_app/.env may override
             },
             clear=False,
         ):
@@ -172,12 +170,11 @@ class RiskManagerTests(unittest.TestCase):
         # capital=500k, risk=0.5%, lot_size=15, entry=200, stop=20%
         # risk_capital=2500, mllpl=600, base_lots=4
         # floor (0.65): int(4*0.65)=2; higher (0.80): int(4*0.80)=3; full (1.0): 4
-        with mock.patch.dict(
+        with mock.patch("strategy_app.risk.manager.BANKNIFTY_LOT_SIZE", 15), mock.patch.dict(
             "os.environ",
             {
                 "RISK_CAPITAL_ALLOCATED": "500000",
                 "RISK_PER_TRADE_PCT": "0.005",
-                "BANKNIFTY_LOT_SIZE": "15",
                 "RISK_MAX_LOTS_PER_TRADE": "20",
             },
             clear=False,

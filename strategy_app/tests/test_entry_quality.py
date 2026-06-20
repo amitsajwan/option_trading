@@ -144,7 +144,8 @@ def test_good_grade_clean_session_goes_live() -> None:
     assert tier.live_would_take is True
 
 
-def test_ok_grade_paper_by_default_min_grade_good() -> None:
+def test_ok_grade_paper_by_default_min_grade_good(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RISK_LIVE_MIN_GRADE", raising=False)
     tier = decide_tier(OK, RiskContext(), confidence=0.9)
     assert tier.tier == "paper"
     assert "grade_below_min" in tier.reason

@@ -7,6 +7,7 @@ are in sync.
 from __future__ import annotations
 
 import os
+from unittest.mock import patch
 
 import pytest
 
@@ -33,21 +34,24 @@ def test_bool_and_csv_formatting():
 def test_env_wins_is_a_noop_over_existing_env(monkeypatch):
     # Pretend live already set a value; env_wins must NOT clobber it.
     monkeypatch.setenv("LOTTERY_HARD_STOP_PCT", "0.99")
-    loader.apply_to_environ(precedence="env_wins")
-    assert os.environ["LOTTERY_HARD_STOP_PCT"] == "0.99"
+    with patch.dict("os.environ"):  # isolate direct os.environ writes in apply_to_environ
+        loader.apply_to_environ(precedence="env_wins")
+        assert os.environ["LOTTERY_HARD_STOP_PCT"] == "0.99"
 
 
 def test_env_wins_fills_absent_keys(monkeypatch):
     monkeypatch.delenv("LOTTERY_TIMESTOP_BARS", raising=False)
-    loader.apply_to_environ(precedence="env_wins")
-    assert os.environ["LOTTERY_TIMESTOP_BARS"] == "90"
+    with patch.dict("os.environ"):  # isolate direct os.environ writes in apply_to_environ
+        loader.apply_to_environ(precedence="env_wins")
+        assert os.environ["LOTTERY_TIMESTOP_BARS"] == "90"
 
 
 def test_yaml_wins_overwrites(monkeypatch):
     monkeypatch.setenv("LOTTERY_HARD_STOP_PCT", "0.99")
-    loader.apply_to_environ(precedence="yaml_wins")
-    # compare as float — YAML renders 0.20 as "0.2" (same value once parsed)
-    assert float(os.environ["LOTTERY_HARD_STOP_PCT"]) == 0.20
+    with patch.dict("os.environ"):  # isolate direct os.environ writes in apply_to_environ
+        loader.apply_to_environ(precedence="yaml_wins")
+        # compare as float — YAML renders 0.20 as "0.2" (same value once parsed)
+        assert float(os.environ["LOTTERY_HARD_STOP_PCT"]) == 0.20
 
 
 def test_invalid_precedence_raises():
