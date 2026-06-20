@@ -302,8 +302,10 @@ class DeterministicRuleEngine(StrategyEngine):
             self._entry_policy = self._injected_entry_policy
             self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)
-        elif _has_payload:
-            # Only rebuild on actual overrides — not on per-snapshot heartbeat calls.
+        elif _has_payload or new_run_id:
+            # Rebuild when: (a) an actual config key is present, OR (b) a new run_id
+            # is starting (reset to defaults). Snapshot events pass run_id=None so they
+            # never trigger a rebuild and don't reload the ML bundle on every bar.
             self._entry_policy = self._build_entry_policy(self._default_policy_config)
             self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)
@@ -705,14 +707,25 @@ class DeterministicRuleEngine(StrategyEngine):
     ) -> list[StrategyVote]:
         """Route to active strategies and collect votes; log shadow vote if no real votes."""
         strategies = self._router.get_strategies(regime_signal.regime, position)
+        is_entry_mode = position is None
+        if not strategies and is_entry_mode:
+            logger.debug(
+                "collect_votes: no strategies registered for regime=%s snap=%s — no votes possible",
+                regime_signal.regime.value, snap.snapshot_id,
+            )
         votes: list[StrategyVote] = []
         for strategy in strategies:
             try:
                 vote = strategy.evaluate(snapshot, position, risk)
             except Exception:
-                logger.exception("strategy failed strategy=%s", strategy.name)
+                logger.exception("strategy failed strategy=%s snap=%s", strategy.name, snap.snapshot_id)
                 continue
             if vote is None:
+                if is_entry_mode:
+                    logger.debug(
+                        "collect_votes: %s returned None snap=%s regime=%s — no vote from this strategy",
+                        strategy.name, snap.snapshot_id, regime_signal.regime.value,
+                    )
                 continue
             vote.raw_signals["_regime"] = regime_signal.regime.value
             vote.raw_signals["_regime_conf"] = round(regime_signal.confidence, 3)
@@ -1763,14 +1776,21 @@ class DeterministicRuleEngine(StrategyEngine):
             record["position_id"] = position.position_id
             ap = record["autopsy"]
             ex = record["execution"]
-            # Numeric flags into the durable POSITION_CLOSE record (strings are
-            # dropped by merge_decision_metrics, so the tag goes only to the log).
+            # Numeric flags into the durable POSITION_CLOSE record.
+            # merge_decision_metrics only accepts floats, so the tag is encoded as
+            # an integer code (1-5) to make it queryable from MongoDB.
+            _TAG_CODES = {
+                "cost_miss": 1.0, "exit_miss": 2.0, "direction_miss": 3.0,
+                "entry_miss": 4.0, "noise": 5.0,
+            }
             if isinstance(position.decision_metrics, dict):
                 position.decision_metrics["reflection_is_loss"] = 1.0 if ap["is_loss"] else 0.0
                 position.decision_metrics["reflection_needs_reasoning"] = 1.0 if ap["needs_reasoning"] else 0.0
                 position.decision_metrics["reflection_overpaid"] = 1.0 if ex["overpaid"] else 0.0
                 if ex["cost_to_edge"] is not None:
                     position.decision_metrics["reflection_cost_to_edge"] = float(ex["cost_to_edge"])
+                if ap.get("tag") in _TAG_CODES:
+                    position.decision_metrics["reflection_tag_code"] = _TAG_CODES[ap["tag"]]
             logger.info("trade_journal %s", json.dumps(record, default=str))
         except Exception as exc:  # journaling must never break the close path
             logger.warning(

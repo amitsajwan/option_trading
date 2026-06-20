@@ -9,11 +9,10 @@ from strategy_app.risk.risk_calculator import FixedFractionRisk, build_risk_calc
 
 class TestFixedFractionRisk:
     def test_basic_sizing(self):
-        calc = FixedFractionRisk(risk_pct=0.01)
-        # capital=500k, entry=1000, stop=4% (0.04), risk=1%
-        # risk_capital = 5000
-        # max_loss_per_lot = 1000 * 15 * 0.04 = 600
-        # lots = floor(5000/600) = 8
+        # Pin lot_size=15 so this test is independent of BANKNIFTY_LOT_SIZE env var.
+        # capital=500k, entry=1000, stop=4% (0.04), risk=1%, lot_size=15
+        # risk_capital = 5000; max_loss_per_lot = 1000 * 15 * 0.04 = 600; lots = floor(5000/600) = 8
+        calc = FixedFractionRisk(risk_pct=0.01, lot_size=15)
         lots = calc.compute_lots(
             entry_premium=1000, stop_loss_pct=0.04, confidence=1.0,
             capital=500_000, max_lots=20,

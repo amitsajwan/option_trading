@@ -55,6 +55,7 @@ class RiskManagerTests(unittest.TestCase):
                 "RISK_NOTIONAL_PER_TRADE": "100000",
                 "RISK_LOT_BUDGET_USES_LOT_SIZE": "1",
                 "RISK_MAX_LOTS_PER_TRADE": "999",
+                "BANKNIFTY_LOT_SIZE": "15",  # pin lot_size; contracts_app/.env may override
             },
             clear=False,
         ):
@@ -66,7 +67,11 @@ class RiskManagerTests(unittest.TestCase):
             self.assertEqual(lots, 21)
 
     def test_aggressive_safe_profile_applies_defaults(self) -> None:
-        with mock.patch.dict("os.environ", {"RISK_PROFILE": "aggressive_safe_v1"}, clear=False):
+        with mock.patch.dict(
+            "os.environ",
+            {"RISK_PROFILE": "aggressive_safe_v1", "BANKNIFTY_LOT_SIZE": "15"},
+            clear=False,
+        ):
             _clear_ambient_risk_env()
             mgr = RiskManager()
             mgr.on_session_start(date(2026, 3, 5))
@@ -144,6 +149,7 @@ class RiskManagerTests(unittest.TestCase):
                 "RISK_NOTIONAL_PER_TRADE": "100000",
                 "RISK_LOT_BUDGET_USES_LOT_SIZE": "1",
                 "RISK_MAX_LOTS_PER_TRADE": "999",
+                "BANKNIFTY_LOT_SIZE": "15",  # pin lot_size; contracts_app/.env may override
             },
             clear=False,
         ):
@@ -162,16 +168,30 @@ class RiskManagerTests(unittest.TestCase):
             self.assertEqual(full, 33)
 
     def test_risk_based_sizing_scales_within_hard_risk_cap(self) -> None:
-        mgr = RiskManager()
-        mgr.on_session_start(date(2026, 3, 5))
+        # Explicit capital/lot_size to be independent of contracts_app/.env auto-load.
+        # capital=500k, risk=0.5%, lot_size=15, entry=200, stop=20%
+        # risk_capital=2500, mllpl=600, base_lots=4
+        # floor (0.65): int(4*0.65)=2; higher (0.80): int(4*0.80)=3; full (1.0): 4
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "RISK_CAPITAL_ALLOCATED": "500000",
+                "RISK_PER_TRADE_PCT": "0.005",
+                "BANKNIFTY_LOT_SIZE": "15",
+                "RISK_MAX_LOTS_PER_TRADE": "20",
+            },
+            clear=False,
+        ):
+            mgr = RiskManager()
+            mgr.on_session_start(date(2026, 3, 5))
 
-        floor = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.20, confidence=0.65)
-        higher = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.20, confidence=0.80)
-        full = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.20, confidence=1.0)
+            floor = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.20, confidence=0.65)
+            higher = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.20, confidence=0.80)
+            full = mgr.compute_lots(entry_premium=200.0, stop_loss_pct=0.20, confidence=1.0)
 
-        self.assertEqual(floor, 2)
-        self.assertEqual(higher, 3)
-        self.assertEqual(full, 4)
+            self.assertEqual(floor, 2)
+            self.assertEqual(higher, 3)
+            self.assertEqual(full, 4)
 
     def test_vix_resume_requires_30min_continuous_below_threshold(self) -> None:
         mgr = RiskManager()

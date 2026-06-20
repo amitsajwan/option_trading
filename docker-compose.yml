@@ -486,6 +486,7 @@ services:
       # ── Exit strategy mode ────────────────────────────────────────────────
       EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
       ADAPTIVE_LOTTERY_REGIMES: "${ADAPTIVE_LOTTERY_REGIMES:-BREAKOUT,TRENDING}"
+      REGIME_DIRECTION_SIGNAL: "${REGIME_DIRECTION_SIGNAL:-weighted}"
       # ── Trend-aware regime + trend-fade guard (2026-06-04 postmortem) ──────
       REGIME_TREND_ALIGNED_BONUS: "${REGIME_TREND_ALIGNED_BONUS:-0.0}"
       REGIME_TREND_SCORE_MIN: "${REGIME_TREND_SCORE_MIN:-2.0}"
@@ -1164,6 +1165,7 @@ services:
       # ── Exit strategy mode ────────────────────────────────────────────────
       EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
       ADAPTIVE_LOTTERY_REGIMES: "${ADAPTIVE_LOTTERY_REGIMES:-BREAKOUT,TRENDING}"
+      REGIME_DIRECTION_SIGNAL: "${REGIME_DIRECTION_SIGNAL:-weighted}"
       # ── Trend-aware regime + trend-fade guard (2026-06-04 postmortem) ──────
       REGIME_TREND_ALIGNED_BONUS: "${REGIME_TREND_ALIGNED_BONUS:-0.0}"
       REGIME_TREND_SCORE_MIN: "${REGIME_TREND_SCORE_MIN:-2.0}"

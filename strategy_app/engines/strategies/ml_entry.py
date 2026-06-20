@@ -38,6 +38,7 @@ class MlEntryStrategy(BaseStrategy):
         self._entry_bundle: Optional[dict[str, Any]] = None
         self._entry_path: str = ""
         self._min_prob: float = _env_float("ENTRY_ML_MIN_PROB", 0.55)
+        self._no_bundle_warned: bool = False
 
     def _ensure_entry_bundle(self) -> Optional[dict[str, Any]]:
         path = os.getenv("ENTRY_ML_MODEL_PATH", "").strip()
@@ -70,12 +71,35 @@ class MlEntryStrategy(BaseStrategy):
     ) -> Optional[StrategyVote]:
         if position is not None:
             return None
+        snap = SnapshotAccessor(snapshot)
+        snap_id = snap.snapshot_id or "unknown"
         bundle = self._ensure_entry_bundle()
         if bundle is None:
+            if not self._no_bundle_warned:
+                path = os.getenv("ENTRY_ML_MODEL_PATH", "").strip()
+                logger.warning(
+                    "ml_entry: no bundle loaded ENTRY_ML_MODEL_PATH=%r — ML_ENTRY will produce no votes (logged once)",
+                    path or "<not set>",
+                )
+                self._no_bundle_warned = True
             return None
-        snap = SnapshotAccessor(snapshot)
+        self._no_bundle_warned = False  # reset if bundle later becomes available
         entry_prob = predict_positive_class_prob(bundle, snap)
         if entry_prob is None:
+            logger.warning(
+                "ml_entry: predict returned None snap=%s — check bundle_inference logs above for NaN/error details",
+                snap_id,
+            )
+            try:
+                from ...runtime.eval_context import set_entry_diag
+                set_entry_diag({
+                    "error": "prediction_failed",
+                    "snapshot_id": snap_id,
+                    "threshold": round(float(self._min_prob), 4),
+                    "fired": False,
+                })
+            except Exception:
+                pass
             return None
         # Record the prob EVERY bar (incl. declines) so the trace captures the
         # full distribution for separation analysis — before the threshold gate.
@@ -85,15 +109,23 @@ class MlEntryStrategy(BaseStrategy):
                 "entry_prob": round(float(entry_prob), 4),
                 "threshold": round(float(self._min_prob), 4),
                 "fired": bool(entry_prob >= self._min_prob),
-                "snapshot_id": snap.snapshot_id,
+                "snapshot_id": snap_id,
             })
         except Exception:
             pass
         if entry_prob < self._min_prob:
+            logger.debug(
+                "ml_entry: prob=%.4f < threshold=%.2f snap=%s — declined",
+                entry_prob, self._min_prob, snap_id,
+            )
             return None
 
         direction, raw_signals = resolve_direction_for_entry(snap)
         if direction is None:
+            logger.warning(
+                "ml_entry: direction resolved to None snap=%s prob=%.4f — no vote (check direction policy)",
+                snap_id, entry_prob,
+            )
             return None
         raw_signals = {
             "entry_prob": round(entry_prob, 4),

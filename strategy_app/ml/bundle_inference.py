@@ -34,6 +34,7 @@ def load_joblib_bundle(path: str, *, expected_kind: str) -> Optional[Dict[str, A
 
 
 def build_feature_row(snap: SnapshotAccessor, features: List[str]) -> Optional[Dict[str, float]]:
+    snap_id = snap.snapshot_id or "unknown"
     try:
         from snapshot_app.core.stage_views import project_stage_views_v2
 
@@ -70,7 +71,11 @@ def build_feature_row(snap: SnapshotAccessor, features: List[str]) -> Optional[D
                 row[feature] = float("nan")
         return row
     except Exception:
-        logger.debug("bundle_inference: feature extraction failed", exc_info=True)
+        logger.warning(
+            "bundle_inference: feature extraction FAILED snap=%s — no vote possible",
+            snap_id,
+            exc_info=True,
+        )
         return None
 
 
@@ -118,8 +123,10 @@ def predict_positive_class_prob(
     except ImportError:
         return None
 
+    snap_id = snap.snapshot_id or "unknown"
     features: List[str] = list(bundle.get("features") or [])
     if not features:
+        logger.warning("bundle_inference: bundle has no features snap=%s", snap_id)
         return None
     row = build_feature_row(snap, features)
     if row is None:
@@ -129,18 +136,17 @@ def predict_positive_class_prob(
     nan_features = [f for f, v in row.items() if not math.isfinite(v)]
     if nan_features:
         logger.warning(
-            "bundle_inference: %d/%d features NaN: %s",
-            len(nan_features), len(features), nan_features[:15],
+            "bundle_inference: %d/%d features NaN snap=%s nan_features=%s",
+            len(nan_features), len(features), snap_id, nan_features[:15],
         )
         if max_nan_features is not None and len(nan_features) > max_nan_features:
-            # Data not ready — refuse to score rather than impute bad medians.
-            # This fires at market open (velocity/delta features need history)
-            # and on stale snapshot formats that lack vel_* fields entirely.
             logger.warning(
-                "bundle_inference: %d NaN > max_nan_features=%d — refusing inference (data not ready)",
-                len(nan_features), max_nan_features,
+                "bundle_inference: %d NaN > max_nan_features=%d snap=%s — refusing inference (data not ready)",
+                len(nan_features), max_nan_features, snap_id,
             )
             return None
+    else:
+        logger.debug("bundle_inference: all %d features finite snap=%s", len(features), snap_id)
 
     row_filled = {
         feature: (value if math.isfinite(value) else medians.get(feature, 0.0))
@@ -151,7 +157,19 @@ def predict_positive_class_prob(
         model = bundle["model"]
         prob = float(model.predict_proba(frame)[0, 1])
         if 0.0 <= prob <= 1.0:
+            logger.debug(
+                "bundle_inference: inference OK snap=%s prob=%.4f nan=%d/%d",
+                snap_id, prob, len(nan_features), len(features),
+            )
             return prob
+        logger.warning(
+            "bundle_inference: prob=%.4f out of [0,1] snap=%s — discarding",
+            prob, snap_id,
+        )
     except Exception:
-        logger.debug("bundle_inference: predict failed", exc_info=True)
+        logger.warning(
+            "bundle_inference: predict_proba FAILED snap=%s features=%d",
+            snap_id, len(features),
+            exc_info=True,
+        )
     return None

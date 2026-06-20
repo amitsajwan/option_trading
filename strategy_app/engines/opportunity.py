@@ -55,15 +55,18 @@ class OpportunityConfig:
     min_spacing_minutes: int = 20
 
     @classmethod
-    def from_env(cls) -> "OpportunityConfig":
+    def from_env(cls, env_override: Optional[dict] = None) -> "OpportunityConfig":
+        _env = dict(os.environ)
+        if env_override:
+            _env.update(env_override)
         def _i(k: str, d: int) -> int:
-            try: return int(os.getenv(k, "") or d)
+            try: return int(_env.get(k, "") or d)
             except ValueError: return d
         def _f(k: str, d: float) -> float:
-            try: return float(os.getenv(k, "") or d)
+            try: return float(_env.get(k, "") or d)
             except ValueError: return d
         def _s(k: str, d: str) -> str:
-            return (os.getenv(k, "") or d).strip()
+            return (_env.get(k, "") or d).strip()
         return cls(
             selection_mode=_s("OPP_GATE_SELECTION_MODE", "percentile"),
             selection_percentile=_f("OPP_GATE_SELECTION_PERCENTILE", 80.0),

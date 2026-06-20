@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from snapshot_app.core.market_snapshot_contract import validate_market_snapshot
-from strategy_app.engines.snapshot_accessor import SnapshotAccessor
+from strategy_app.market.snapshot_accessor import SnapshotAccessor
 
 
 def _valid_snapshot() -> dict:
