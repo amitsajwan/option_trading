@@ -378,6 +378,13 @@ services:
       STRATEGY_PREMIUM_STOP_LOSS_PCT: "${STRATEGY_PREMIUM_STOP_LOSS_PCT:-}"
       ENTRY_ML_MODEL_PATH: "${ENTRY_ML_MODEL_PATH:-}"
       ENTRY_ML_MIN_PROB: "${ENTRY_ML_MIN_PROB:-0.55}"
+      # Optional second entry model (e.g. 10-minute-horizon compression), combined
+      # with model 1 via OR: the entry trigger fires when ANY model clears its own
+      # threshold. Unset -> single-model behaviour (identical to before).
+      ENTRY_ML_MODEL_PATH_2: "${ENTRY_ML_MODEL_PATH_2:-}"
+      ENTRY_ML_MIN_PROB_2: "${ENTRY_ML_MIN_PROB_2:-}"
+      ENTRY_ML_MAX_NAN_FEATURES: "${ENTRY_ML_MAX_NAN_FEATURES:-}"
+      ENTRY_ALLOW_CHOP: "${ENTRY_ALLOW_CHOP:-}"
       ENTRY_VOL_GATE_ENABLED: "${ENTRY_VOL_GATE_ENABLED:-0}"
       ATR_ENTRY_MIN_PCT: "${ATR_ENTRY_MIN_PCT:-0.00088}"
       ATR_ENTRY_MIN_ABS: "${ATR_ENTRY_MIN_ABS:-0}"
@@ -645,6 +652,9 @@ services:
       MONGO_PORT: "27017"
       MONGO_DB: "${MONGO_DB:-trading_ai}"
       EXECUTION_MODE: "live"
+      # File-first credentials: depth_collector reads the auto-refreshed token from
+      # credentials.json (same as ingestion_app), falling back to the env vars below.
+      KITE_CREDENTIALS_PATH: "${KITE_CREDENTIALS_PATH:-/app/secrets/credentials.json}"
       KITE_API_KEY: "${KITE_API_KEY:-}"
       KITE_ACCESS_TOKEN: "${KITE_ACCESS_TOKEN:-}"
       DEPTH_FEED_INSTRUMENTS: "${DEPTH_FEED_INSTRUMENTS:-}"
@@ -654,6 +664,9 @@ services:
       DEPTH_MARKET_CLOSE_IST: "${DEPTH_MARKET_CLOSE_IST:-15:35}"
       DEPTH_MONGO_ENABLED: "${DEPTH_MONGO_ENABLED:-1}"
       DEPTH_MONGO_TTL_DAYS: "${DEPTH_MONGO_TTL_DAYS:-7}"
+    volumes:
+      - ./.run:/app/.run
+      - ./ingestion_app/credentials.json:/app/secrets/credentials.json:ro
     command: ["python", "-m", "ingestion_app.collectors.depth_collector"]
 
   dashboard:
@@ -949,6 +962,13 @@ services:
       STRATEGY_PREMIUM_STOP_LOSS_PCT: "${STRATEGY_PREMIUM_STOP_LOSS_PCT:-}"
       ENTRY_ML_MODEL_PATH: "${ENTRY_ML_MODEL_PATH:-}"
       ENTRY_ML_MIN_PROB: "${ENTRY_ML_MIN_PROB:-0.55}"
+      # Optional second entry model (e.g. 10-minute-horizon compression), combined
+      # with model 1 via OR: the entry trigger fires when ANY model clears its own
+      # threshold. Unset -> single-model behaviour (identical to before).
+      ENTRY_ML_MODEL_PATH_2: "${ENTRY_ML_MODEL_PATH_2:-}"
+      ENTRY_ML_MIN_PROB_2: "${ENTRY_ML_MIN_PROB_2:-}"
+      ENTRY_ML_MAX_NAN_FEATURES: "${ENTRY_ML_MAX_NAN_FEATURES:-}"
+      ENTRY_ALLOW_CHOP: "${ENTRY_ALLOW_CHOP:-}"
       ENTRY_VOL_GATE_ENABLED: "${ENTRY_VOL_GATE_ENABLED:-0}"
       ATR_ENTRY_MIN_PCT: "${ATR_ENTRY_MIN_PCT:-0.00088}"
       ATR_ENTRY_MIN_ABS: "${ATR_ENTRY_MIN_ABS:-0}"
@@ -1079,6 +1099,13 @@ services:
       STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-}"
       ENTRY_ML_MODEL_PATH: "${ENTRY_ML_MODEL_PATH:-}"
       ENTRY_ML_MIN_PROB: "${ENTRY_ML_MIN_PROB:-0.55}"
+      # Optional second entry model (e.g. 10-minute-horizon compression), combined
+      # with model 1 via OR: the entry trigger fires when ANY model clears its own
+      # threshold. Unset -> single-model behaviour (identical to before).
+      ENTRY_ML_MODEL_PATH_2: "${ENTRY_ML_MODEL_PATH_2:-}"
+      ENTRY_ML_MIN_PROB_2: "${ENTRY_ML_MIN_PROB_2:-}"
+      ENTRY_ML_MAX_NAN_FEATURES: "${ENTRY_ML_MAX_NAN_FEATURES:-}"
+      ENTRY_ALLOW_CHOP: "${ENTRY_ALLOW_CHOP:-}"
       ENTRY_VOL_GATE_ENABLED: "${ENTRY_VOL_GATE_ENABLED:-0}"
       ATR_ENTRY_MIN_PCT: "${ATR_ENTRY_MIN_PCT:-0.00088}"
       ATR_ENTRY_MIN_ABS: "${ATR_ENTRY_MIN_ABS:-0}"

@@ -430,6 +430,26 @@ class KiteDataService:
         if not isinstance(rows, list):
             rows = []
 
+        # Rollover guard: Kite's continuous=True futures series can return volume=0 for the
+        # new front-month right after an expiry roll (price + OI come through, volume does not).
+        # When that happens, refetch the SPECIFIC contract (continuous=False) which carries
+        # real per-bar volume. No-op unless volume is entirely missing AND the alt actually
+        # has volume — so the working path (volume present) is never disturbed.
+        if continuous and rows and not any((_to_float(r.get("volume")) or 0) > 0 for r in rows):
+            try:
+                alt = client.historical_data(
+                    instrument_token=token,
+                    from_date=from_dt,
+                    to_date=now_ist,
+                    interval="minute",
+                    continuous=False,
+                    oi=True,
+                )
+                if isinstance(alt, list) and any((_to_float(r.get("volume")) or 0) > 0 for r in alt):
+                    rows = alt
+            except Exception:
+                pass
+
         normalized: List[Dict[str, Any]] = []
         symbol_u = str(instrument).strip().upper()
         for row in rows:

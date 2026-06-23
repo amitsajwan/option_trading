@@ -85,6 +85,26 @@ ALLOWED_ENV_OVERRIDE_KEYS = {
     "RISK_MAX_DAILY_LOSS_PCT",
     "RISK_MAX_CONSECUTIVE_LOSSES",
     "THESIS_FAIL_PNL_PCT",
+    # data-readiness gate (added 2026-06-22) — abstain during feature warmup
+    "ENTRY_ML_MAX_NAN_FEATURES",
+    # CHOP-filter test (added 2026-06-22) — route CHOP regime to entry strategies
+    "ENTRY_ALLOW_CHOP",
+    # opportunity / selection gate (Selection Gate 1) — for boundary analysis
+    "OPPORTUNITY_GATE_ENABLED",
+    "OPP_GATE_SELECTION_PERCENTILE",
+    "OPP_GATE_SCORE_CUTOFF",
+    "OPP_GATE_MAX_ENTRIES",
+    "OPP_GATE_MIN_SPACING_MINUTES",
+    # multi_signal direction tuning (added 2026-06-21)
+    "ENTRY_MULTI_SIGNAL_MIN",
+    "ENTRY_MS_MAXPAIN_ENABLED",
+    "ENTRY_MS_OIWALL_ENABLED",
+    "ENTRY_MS_MIN_FAMILIES",
+    # cost-ratio gate tuning (arm B)
+    "ENTRY_COST_RATIO_GATE_ENABLED",
+    "ENTRY_COST_RATIO_MIN",
+    "ENTRY_COST_HOLD_BARS",
+    "ENTRY_COST_SLIPPAGE_PCT",
 }
 
 SIM_EVENT_START = "sim_run_start"

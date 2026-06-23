@@ -47,6 +47,17 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    return default if raw is None else raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _sign_sum(pairs) -> int:
+    """Sum signed contributions from (condition, sign) pairs → net family lean sign."""
+    total = sum(sign for cond, sign in pairs if cond)
+    return 1 if total > 0 else (-1 if total < 0 else 0)
+
+
 def _load_dir_bundle(path: str) -> Optional[dict[str, Any]]:
     """Load direction bundle — accepts direction_only_bundle or direction_dual_bundle."""
     try:
@@ -414,6 +425,7 @@ def resolve_direction_for_entry(
         orr = snap.raw_payload.get("opening_range") or {}
         ao = snap.raw_payload.get("atm_options") or {}
         iv = snap.raw_payload.get("iv_derived") or {}
+        vix_ctx = snap.raw_payload.get("vix_context") or {}
 
         # 1. ORB break (weight 2)
         if orr.get("orh_broken"):
@@ -444,7 +456,11 @@ def resolve_direction_for_entry(
             _ms_fired.append("pcr_falling" if float(pcr_chg) < 0 else "pcr_rising")
 
         # 5. VIX intraday change (weight 1.5) — rising VIX = fear = bearish
-        vix_chg = fd.get("vix_intraday_chg")
+        # NOTE: lives in vix_context, NOT futures_derived (bug fixed 2026-06-20 —
+        # was reading fd.get(...) which is always None → signal was silently dead).
+        vix_chg = vix_ctx.get("vix_intraday_chg")
+        if vix_chg is None:
+            vix_chg = fd.get("vix_intraday_chg")  # legacy fallback
         if vix_chg is not None and abs(float(vix_chg)) >= 3.0:
             _ms_score += -1.5 if float(vix_chg) > 0 else 1.5
             _ms_fired.append("vix_rising" if float(vix_chg) > 0 else "vix_falling")
@@ -460,15 +476,72 @@ def resolve_direction_for_entry(
             except (TypeError, ValueError):
                 pass
 
+        # 7. Max-pain pin (weight 1) — price gravitates toward max_pain (positioning
+        # magnet). spot below pin → CE lean (pulled up); above → PE. Noise standalone
+        # (~50%) but an INDEPENDENT confirmer — the value is in cross-family agreement
+        # (memory: vwap + max_pain + OI agreement on big moves ≈ 60%). Env-gated for A/B.
+        _maxpain_dir = 0.0
+        if _env_bool("ENTRY_MS_MAXPAIN_ENABLED", True):
+            mp = snap.max_pain
+            spot_mp = snap.fut_close or snap.atm_strike
+            if mp and spot_mp:
+                gap_pct = (float(mp) - float(spot_mp)) / float(spot_mp)
+                if abs(gap_pct) > 0.001:  # ignore when already pinned (noise)
+                    _maxpain_dir = 1.0 if gap_pct > 0 else -1.0
+                    _ms_score += _maxpain_dir
+                    _ms_fired.append("maxpain_above" if gap_pct > 0 else "maxpain_below")
+
+        # 8. OI walls (weight 1) — heavy CE OI = resistance above, heavy PE OI = support
+        # below. Price near the support wall → bounce (CE); near the resistance wall →
+        # rejection (PE). Stateless, independent of PCR (which is the aggregate ratio).
+        _oiwall_dir = 0.0
+        if _env_bool("ENTRY_MS_OIWALL_ENABLED", True):
+            ce_wall, pe_wall = snap.ce_oi_top_strike, snap.pe_oi_top_strike
+            spot_oi = snap.fut_close or snap.atm_strike
+            if ce_wall and pe_wall and spot_oi:
+                d_ce = abs(float(ce_wall) - float(spot_oi))
+                d_pe = abs(float(spot_oi) - float(pe_wall))
+                if d_pe < d_ce:       # near support → bullish
+                    _oiwall_dir = 1.0; _ms_score += 1.0; _ms_fired.append("oi_support")
+                elif d_ce < d_pe:     # near resistance → bearish
+                    _oiwall_dir = -1.0; _ms_score -= 1.0; _ms_fired.append("oi_resistance")
+
         _ms_min = _env_float("ENTRY_MULTI_SIGNAL_MIN", 2.0)
         raw_signals["direction_source"] = "multi_signal"
         raw_signals["multi_signal_score"] = round(_ms_score, 2)
         raw_signals["multi_signal_fired"] = ",".join(_ms_fired)
+
+        # Cross-family agreement — the memory edge is AGREEMENT across orthogonal
+        # families, not a raw sum of correlated price signals. Compute each family's
+        # net lean and how many agree with the winning side. Recorded always; an
+        # OPTIONAL gate (ENTRY_MS_MIN_FAMILIES, default 0=off) can require ≥N families.
+        _winner = 1.0 if _ms_score > 0 else (-1.0 if _ms_score < 0 else 0.0)
+        _pa = _sign_sum([("orh_broken" in _ms_fired, 1), ("orl_broken" in _ms_fired, -1),
+                         ("above_vwap" in _ms_fired, 1), ("below_vwap" in _ms_fired, -1),
+                         ("ema_bull" in _ms_fired, 1), ("ema_bear" in _ms_fired, -1)])
+        _of = _sign_sum([("ce_prem_dom" in _ms_fired, 1), ("pe_prem_dom" in _ms_fired, -1),
+                         ("pcr_falling" in _ms_fired, 1), ("pcr_rising" in _ms_fired, -1),
+                         ("maxpain_above" in _ms_fired, 1), ("maxpain_below" in _ms_fired, -1),
+                         ("oi_support" in _ms_fired, 1), ("oi_resistance" in _ms_fired, -1)])
+        _vol = _sign_sum([("vix_falling" in _ms_fired, 1), ("vix_rising" in _ms_fired, -1)])
+        _families = [_pa, _of, _vol]
+        _families_agree = sum(1 for f in _families if f != 0 and (f > 0) == (_winner > 0)) if _winner else 0
+        raw_signals["ms_family_price_action"] = _pa
+        raw_signals["ms_family_options_flow"] = _of
+        raw_signals["ms_family_volatility"] = _vol
+        raw_signals["ms_families_agree"] = _families_agree
+
         if abs(_ms_score) < _ms_min:
             raw_signals["multi_signal_result"] = f"abstain(score={_ms_score:.1f}<{_ms_min})"
             return None, raw_signals  # weak conviction → abstain
+        _min_fam = int(_env_float("ENTRY_MS_MIN_FAMILIES", 0))
+        if _min_fam > 0 and _families_agree < _min_fam:
+            raw_signals["multi_signal_result"] = f"abstain(families={_families_agree}<{_min_fam})"
+            return None, raw_signals  # not enough independent confirmation
         direction = Direction.CE if _ms_score > 0 else Direction.PE
-        raw_signals["multi_signal_result"] = f"{'CE' if _ms_score > 0 else 'PE'}(score={_ms_score:.1f})"
+        raw_signals["multi_signal_result"] = (
+            f"{'CE' if _ms_score > 0 else 'PE'}(score={_ms_score:.1f},fam={_families_agree})"
+        )
 
     elif direction_mode in {"momentum", "mom"}:
         dir_result = resolve_entry_direction_momentum(snap)

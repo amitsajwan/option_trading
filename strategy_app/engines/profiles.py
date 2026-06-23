@@ -241,7 +241,15 @@ _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP["AVOID"] = []
 # map would route CHOP → SIDEWAYS (which has ML_ENTRY), so we override explicitly.
 # Analysis: 3 consecutive PE losses in CHOP on 2026-06-03, all TIME_STOP at 3 bars,
 # MFE=0.00% on 2 of 3 — market never moved. Root cause: CHOP entry should not happen.
-_TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP["CHOP"] = []
+# CHOP normally blocked (old model lost in CHOP — see above). But the COMPRESSION
+# model predicts moves FROM compression, and compressed/coiled bars often get tagged
+# CHOP — so the CHOP filter can remove exactly the setups it wants. ENTRY_ALLOW_CHOP=1
+# routes CHOP → entry so we can test that hypothesis in sim.
+_TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP["CHOP"] = (
+    ["IV_FILTER", "ML_ENTRY"]
+    if (os.getenv("ENTRY_ALLOW_CHOP", "").strip().lower() in ("1", "true", "yes", "on"))
+    else []
+)
 
 # ML step-① timing + trader_master rule strategies for step-② direction (no direction ML).
 _TRADER_MASTER_ML_ENTRY_DET_DIR_REGIME_ENTRY_MAP: dict[str, list[str]] = {}

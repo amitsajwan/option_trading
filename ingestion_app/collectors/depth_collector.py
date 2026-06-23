@@ -284,16 +284,23 @@ def _poll_once(
     kite_client: Any,
     ttl_sec: int,
     mongo_coll: Optional[Any],
-) -> None:
-    """Fetch depth for all instruments and write to Redis + Mongo."""
+) -> Optional[str]:
+    """Fetch depth for all instruments and write to Redis + Mongo.
+
+    Returns ``None`` on success, or a kite-error category string
+    (``"credential"`` / ``"network"`` / ``"unknown"``) when the quote call
+    fails, so the caller can react (e.g. reload a rotated token).
+    """
     if not instruments:
-        return
+        return None
 
     try:
         quotes = kite_client.quote(instruments)
-    except Exception:
+    except Exception as exc:
+        from ingestion_app.runtime import _classify_kite_error
+
         logger.warning("depth poll: kite quote failed", exc_info=True)
-        return
+        return _classify_kite_error(exc)
 
     mongo_batch: List[Dict[str, Any]] = []
 
@@ -324,14 +331,27 @@ def _poll_once(
         except Exception:
             logger.warning("depth poll: mongo insert failed", exc_info=True)
 
+    return None
+
 
 def main() -> None:
     from ingestion_app.kite_client import create_kite_client
+    from ingestion_app.runtime import _resolve_kite_credentials
 
     instruments_raw = _env_str("DEPTH_FEED_INSTRUMENTS")
     if not instruments_raw:
-        logger.info("depth collector: DEPTH_FEED_INSTRUMENTS not set — sleeping")
+        # WARNING (not INFO): an empty value means NO depth is captured even though
+        # DEPTH_FEED_ENABLED may be 1 — a silent gap. Strategy then runs on the flat
+        # slippage placeholder. Surfaced loudly + repeated so it can't be missed in logs.
+        warned_loops = 0
         while True:
+            if warned_loops % 10 == 0:  # ~ every 10 minutes
+                logger.warning(
+                    "depth collector: DEPTH_FEED_INSTRUMENTS empty — NO depth being captured. "
+                    "Set it to today's ATM CE/PE symbols (changes daily with spot + expiry). "
+                    "Strategy cost-gate falls back to flat slippage placeholder."
+                )
+            warned_loops += 1
             time.sleep(60)
         return
 
@@ -342,11 +362,17 @@ def main() -> None:
     close_hm = _parse_hhmm(_env_str("DEPTH_MARKET_CLOSE_IST", "15:35"), _DEFAULT_CLOSE)
     mongo_enabled = _env_bool("DEPTH_MONGO_ENABLED", True)
 
-    api_key = _env_str("KITE_API_KEY")
-    access_token = _env_str("KITE_ACCESS_TOKEN")
+    # File-first credential resolution: the daily token-refresh writes the
+    # access token into credentials.json (mounted at KITE_CREDENTIALS_PATH).
+    # Reading the stale KITE_ACCESS_TOKEN env var would cause a daily
+    # TokenException; prefer the auto-refreshed file, fall back to env.
+    api_key, access_token, source = _resolve_kite_credentials()
     if not api_key:
-        logger.error("depth collector: KITE_API_KEY not set — aborting")
+        logger.error(
+            "depth collector: no Kite api_key found (credentials file + env) — aborting"
+        )
         return
+    logger.info("depth collector: kite credentials source=%s", source)
 
     kite = create_kite_client(api_key=api_key, access_token=access_token or None)
     redis_client = redis.Redis(**redis_connection_kwargs(decode_responses=True))
@@ -364,7 +390,22 @@ def main() -> None:
     while True:
         now = _now_ist()
         if _is_market_hours(now, open_hm, close_hm):
-            _poll_once(instruments, redis_client, kite, ttl_sec, mongo_coll)
+            err = _poll_once(instruments, redis_client, kite, ttl_sec, mongo_coll)
+            if err == "credential":
+                # Token may have rotated (e.g. daily 08:30 refresh writes a new
+                # access token to credentials.json). Reload from file and rebuild
+                # the client so the collector self-heals without a restart.
+                new_key, new_token, new_source = _resolve_kite_credentials()
+                if new_token and (new_token != access_token or new_key != api_key):
+                    api_key, access_token = new_key, new_token
+                    kite = create_kite_client(
+                        api_key=api_key, access_token=access_token or None
+                    )
+                    logger.warning(
+                        "depth collector: reloaded kite credentials (source=%s) "
+                        "after auth failure",
+                        new_source,
+                    )
         else:
             logger.debug("depth collector: outside market hours (%02d:%02d)", now.hour, now.minute)
         time.sleep(poll_sec)

@@ -134,6 +134,95 @@ def test_ml_entry_block_pe_skips_pe_momentum(monkeypatch) -> None:
     assert vote is None
 
 
+def _entry_bundle() -> dict:
+    return {
+        "kind": "entry_only_bundle",
+        "features": ["fut_return_5m"],
+        "feature_medians": {"fut_return_5m": 0.0},
+        "model": MagicMock(),
+    }
+
+
+def test_ml_entry_or_fires_when_only_second_model_passes(monkeypatch) -> None:
+    # m1 (thr 0.50) prob 0.45 -> declines; m2 (thr 0.40) prob 0.55 -> passes.
+    # OR: the entry trigger must fire on m2 alone.
+    monkeypatch.setenv("ENTRY_ML_MIN_PROB", "0.50")
+    monkeypatch.setenv("ENTRY_ML_MIN_PROB_2", "0.40")
+    monkeypatch.setenv("ML_ENTRY_DIRECTION_MODE", "momentum")
+    strategy = MlEntryStrategy()
+    with patch(
+        "strategy_app.engines.strategies.ml_entry.load_joblib_bundle",
+        return_value=_entry_bundle(),
+    ):
+        with patch(
+            "strategy_app.engines.strategies.ml_entry.predict_positive_class_prob",
+            side_effect=[0.45, 0.55],
+        ):
+            with patch.dict(
+                os.environ,
+                {
+                    "ENTRY_ML_MODEL_PATH": "/fake/m1.joblib",
+                    "ENTRY_ML_MODEL_PATH_2": "/fake/m2.joblib",
+                },
+            ):
+                vote = strategy.evaluate(_minimal_snapshot_payload(), None, MagicMock())
+    assert vote is not None
+    assert vote.raw_signals.get("deciding_model") == "m2"
+    assert vote.raw_signals.get("entry_models_passed") == ["m2"]
+
+
+def test_ml_entry_or_no_vote_when_all_models_below_threshold(monkeypatch) -> None:
+    monkeypatch.setenv("ENTRY_ML_MIN_PROB", "0.50")
+    monkeypatch.setenv("ENTRY_ML_MIN_PROB_2", "0.40")
+    monkeypatch.setenv("ML_ENTRY_DIRECTION_MODE", "momentum")
+    strategy = MlEntryStrategy()
+    with patch(
+        "strategy_app.engines.strategies.ml_entry.load_joblib_bundle",
+        return_value=_entry_bundle(),
+    ):
+        with patch(
+            "strategy_app.engines.strategies.ml_entry.predict_positive_class_prob",
+            side_effect=[0.45, 0.30],
+        ):
+            with patch.dict(
+                os.environ,
+                {
+                    "ENTRY_ML_MODEL_PATH": "/fake/m1.joblib",
+                    "ENTRY_ML_MODEL_PATH_2": "/fake/m2.joblib",
+                },
+            ):
+                vote = strategy.evaluate(_minimal_snapshot_payload(), None, MagicMock())
+    assert vote is None
+
+
+def test_ml_entry_or_deciding_model_is_highest_margin(monkeypatch) -> None:
+    # Both pass; m1 margin = 0.70-0.50 = 0.20, m2 margin = 0.55-0.40 = 0.15.
+    # Deciding model is the larger-margin one (m1).
+    monkeypatch.setenv("ENTRY_ML_MIN_PROB", "0.50")
+    monkeypatch.setenv("ENTRY_ML_MIN_PROB_2", "0.40")
+    monkeypatch.setenv("ML_ENTRY_DIRECTION_MODE", "momentum")
+    strategy = MlEntryStrategy()
+    with patch(
+        "strategy_app.engines.strategies.ml_entry.load_joblib_bundle",
+        return_value=_entry_bundle(),
+    ):
+        with patch(
+            "strategy_app.engines.strategies.ml_entry.predict_positive_class_prob",
+            side_effect=[0.70, 0.55],
+        ):
+            with patch.dict(
+                os.environ,
+                {
+                    "ENTRY_ML_MODEL_PATH": "/fake/m1.joblib",
+                    "ENTRY_ML_MODEL_PATH_2": "/fake/m2.joblib",
+                },
+            ):
+                vote = strategy.evaluate(_minimal_snapshot_payload(), None, MagicMock())
+    assert vote is not None
+    assert vote.raw_signals.get("deciding_model") == "m1"
+    assert sorted(vote.raw_signals.get("entry_models_passed")) == ["m1", "m2"]
+
+
 def test_ml_entry_ce_only_forces_ce(monkeypatch) -> None:
     monkeypatch.setenv("ENTRY_ML_MIN_PROB", "0.50")
     monkeypatch.setenv("ML_ENTRY_CE_ONLY", "1")

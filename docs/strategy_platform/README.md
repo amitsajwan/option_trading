@@ -6,7 +6,10 @@ config-consolidation plan/registry, and superseded gate write-ups moved to
 
 | Doc | What |
 |---|---|
-| [CONFIG.md](CONFIG.md) | **Config — one source** (`.env.compose`) + switchable profiles + deploy. The config doc. |
+| [ENTRY_PIPELINE_AND_OBSERVABILITY_2026-06-21.md](ENTRY_PIPELINE_AND_OBSERVABILITY_2026-06-21.md) | **Authoritative entry flow** — ML floor, cost gate (arm B), feature-health, VIX fix, depth, threshold rationale. Read first for the decision path. |
+| [LIVE_SYSTEM_STATE_2026-06-20.md](LIVE_SYSTEM_STATE_2026-06-20.md) | **Current deployment** — what's running, what branch, SIM verification, monitoring checklist. |
+| [COMPRESSION_ENTRY_FINDINGS_2026.md](COMPRESSION_ENTRY_FINDINGS_2026.md) | Entry model `entry_compression_v1` — validation, architecture, config, seller system. |
+| [CONFIG.md](CONFIG.md) | **Config — one source** (`.env.compose`) + switchable profiles + deploy. |
 | [DIRECTION_STRATEGY_SYNTHESIS.md](DIRECTION_STRATEGY_SYNTHESIS.md) | Direction: every proof + the regime-conditioned confluence council. Direction = the wall. |
 | [OPPORTUNITY_GATE_DESIGN.md](OPPORTUNITY_GATE_DESIGN.md) | Selection Gate 1 — rank-relative-to-today + cost floor + budget (replaces the absolute ATR cliff). |
 

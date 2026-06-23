@@ -378,6 +378,13 @@ services:
       STRATEGY_PREMIUM_STOP_LOSS_PCT: "${STRATEGY_PREMIUM_STOP_LOSS_PCT:-}"
       ENTRY_ML_MODEL_PATH: "${ENTRY_ML_MODEL_PATH:-}"
       ENTRY_ML_MIN_PROB: "${ENTRY_ML_MIN_PROB:-0.55}"
+      # Optional second entry model (e.g. 10-minute-horizon compression), combined
+      # with model 1 via OR: the entry trigger fires when ANY model clears its own
+      # threshold. Unset -> single-model behaviour (identical to before).
+      ENTRY_ML_MODEL_PATH_2: "${ENTRY_ML_MODEL_PATH_2:-}"
+      ENTRY_ML_MIN_PROB_2: "${ENTRY_ML_MIN_PROB_2:-}"
+      ENTRY_ML_MAX_NAN_FEATURES: "${ENTRY_ML_MAX_NAN_FEATURES:-}"
+      ENTRY_ALLOW_CHOP: "${ENTRY_ALLOW_CHOP:-}"
       ENTRY_VOL_GATE_ENABLED: "${ENTRY_VOL_GATE_ENABLED:-0}"
       ATR_ENTRY_MIN_PCT: "${ATR_ENTRY_MIN_PCT:-0.00088}"
       ATR_ENTRY_MIN_ABS: "${ATR_ENTRY_MIN_ABS:-0}"
@@ -634,6 +641,9 @@ services:
       MONGO_PORT: "27017"
       MONGO_DB: "${MONGO_DB:-trading_ai}"
       EXECUTION_MODE: "live"
+      # File-first credentials: depth_collector reads the auto-refreshed token from
+      # credentials.json (same as ingestion_app), falling back to the env vars below.
+      KITE_CREDENTIALS_PATH: "${KITE_CREDENTIALS_PATH:-/app/secrets/credentials.json}"
       KITE_API_KEY: "${KITE_API_KEY:-}"
       KITE_ACCESS_TOKEN: "${KITE_ACCESS_TOKEN:-}"
       DEPTH_FEED_INSTRUMENTS: "${DEPTH_FEED_INSTRUMENTS:-}"
@@ -643,6 +653,9 @@ services:
       DEPTH_MARKET_CLOSE_IST: "${DEPTH_MARKET_CLOSE_IST:-15:35}"
       DEPTH_MONGO_ENABLED: "${DEPTH_MONGO_ENABLED:-1}"
       DEPTH_MONGO_TTL_DAYS: "${DEPTH_MONGO_TTL_DAYS:-7}"
+    volumes:
+      - ./.run:/app/.run
+      - ./ingestion_app/credentials.json:/app/secrets/credentials.json:ro
     command: ["python", "-m", "ingestion_app.collectors.depth_collector"]
 
   dashboard:
@@ -940,6 +953,13 @@ services:
       STRATEGY_PREMIUM_STOP_LOSS_PCT: "${STRATEGY_PREMIUM_STOP_LOSS_PCT:-}"
       ENTRY_ML_MODEL_PATH: "${ENTRY_ML_MODEL_PATH:-}"
       ENTRY_ML_MIN_PROB: "${ENTRY_ML_MIN_PROB:-0.55}"
+      # Optional second entry model (e.g. 10-minute-horizon compression), combined
+      # with model 1 via OR: the entry trigger fires when ANY model clears its own
+      # threshold. Unset -> single-model behaviour (identical to before).
+      ENTRY_ML_MODEL_PATH_2: "${ENTRY_ML_MODEL_PATH_2:-}"
+      ENTRY_ML_MIN_PROB_2: "${ENTRY_ML_MIN_PROB_2:-}"
+      ENTRY_ML_MAX_NAN_FEATURES: "${ENTRY_ML_MAX_NAN_FEATURES:-}"
+      ENTRY_ALLOW_CHOP: "${ENTRY_ALLOW_CHOP:-}"
       ENTRY_VOL_GATE_ENABLED: "${ENTRY_VOL_GATE_ENABLED:-0}"
       ATR_ENTRY_MIN_PCT: "${ATR_ENTRY_MIN_PCT:-0.00088}"
       ATR_ENTRY_MIN_ABS: "${ATR_ENTRY_MIN_ABS:-0}"
@@ -1108,6 +1128,53 @@ services:
       redis:
         condition: service_healthy
     environment:
+      # --- SIM=LIVE parity: mirrored from strategy_app env (added 2026-06-21) ---
+      TZ: "Asia/Kolkata"
+      ML_PURE_THRESHOLD_REPORT: "${ML_PURE_THRESHOLD_REPORT:-}"
+      STRATEGY_ML_PURE_BYPASS_GATES: "${STRATEGY_ML_PURE_BYPASS_GATES:-0}"
+      STRATEGY_ML_PURE_RANDOMIZE_DIRECTION: "${STRATEGY_ML_PURE_RANDOMIZE_DIRECTION:-0}"
+      ML_PURE_UNDERLYING_STOP_PCT: "${ML_PURE_UNDERLYING_STOP_PCT:-}"
+      ML_PURE_UNDERLYING_TARGET_PCT: "${ML_PURE_UNDERLYING_TARGET_PCT:-}"
+      ML_PURE_POST_STOP_COOLDOWN_BARS: "${ML_PURE_POST_STOP_COOLDOWN_BARS:-0}"
+      OPTION_PNL_RISK_BREACH_COOLDOWN_BARS: "${OPTION_PNL_RISK_BREACH_COOLDOWN_BARS:-5}"
+      ML_PURE_MAX_FEATURE_AGE_SEC: "${ML_PURE_MAX_FEATURE_AGE_SEC:-90}"
+      STRATEGY_ENHANCED_VELOCITY: "${STRATEGY_ENHANCED_VELOCITY:-0}"
+      RISK_PROFILE: "${RISK_PROFILE:-}"
+      RISK_LOT_SIZING_MODE: "${RISK_LOT_SIZING_MODE:-risk_based}"
+      RISK_NOTIONAL_PER_TRADE: "${RISK_NOTIONAL_PER_TRADE:-0}"
+      RISK_LOT_BUDGET_USES_LOT_SIZE: "${RISK_LOT_BUDGET_USES_LOT_SIZE:-1}"
+      RISK_MAX_DAILY_LOSS_PCT: "${RISK_MAX_DAILY_LOSS_PCT:-0.02}"
+      RISK_MAX_CONSECUTIVE_LOSSES: "${RISK_MAX_CONSECUTIVE_LOSSES:-3}"
+      RISK_MAX_SESSION_TRADES: "${RISK_MAX_SESSION_TRADES:-6}"
+      RISK_MAX_LOTS_PER_TRADE: "${RISK_MAX_LOTS_PER_TRADE:-5}"
+      RISK_PER_TRADE_PCT: "${RISK_PER_TRADE_PCT:-0.005}"
+      RISK_CAPITAL_ALLOCATED: "${RISK_CAPITAL_ALLOCATED:-500000}"
+      BANKNIFTY_LOT_SIZE: "${BANKNIFTY_LOT_SIZE:-15}"
+      RISK_VIX_HALT_THRESHOLD: "${RISK_VIX_HALT_THRESHOLD:-15}"
+      RISK_VIX_RESUME_THRESHOLD: "${RISK_VIX_RESUME_THRESHOLD:-8}"
+      STRATEGY_STARTUP_WARMUP_MINUTES: "${STRATEGY_STARTUP_WARMUP_MINUTES:-0}"
+      STRATEGY_STARTUP_WARMUP_EVENTS: "${STRATEGY_STARTUP_WARMUP_EVENTS:-0}"
+      STRATEGY_STRIKE_SELECTION_POLICY: "${STRATEGY_STRIKE_SELECTION_POLICY:-atm}"
+      STRATEGY_STRIKE_MAX_OTM_STEPS: "${STRATEGY_STRIKE_MAX_OTM_STEPS:-2}"
+      STRATEGY_STRIKE_MIN_OI: "${STRATEGY_STRIKE_MIN_OI:-50000}"
+      STRATEGY_STRIKE_MIN_VOLUME: "${STRATEGY_STRIKE_MIN_VOLUME:-15000}"
+      STRATEGY_STRIKE_LIQUIDITY_WEIGHT: "${STRATEGY_STRIKE_LIQUIDITY_WEIGHT:-1.0}"
+      STRATEGY_STRIKE_AFFORDABILITY_WEIGHT: "${STRATEGY_STRIKE_AFFORDABILITY_WEIGHT:-0.25}"
+      STRATEGY_STRIKE_DISTANCE_PENALTY: "${STRATEGY_STRIKE_DISTANCE_PENALTY:-0.05}"
+      STRATEGY_PREMIUM_STOP_LOSS_PCT: "${STRATEGY_PREMIUM_STOP_LOSS_PCT:-}"
+      ML_ENTRY_PE_ONLY: "${ML_ENTRY_PE_ONLY:-0}"
+      ML_ENTRY_BLOCK_CE: "${ML_ENTRY_BLOCK_CE:-0}"
+      ML_ENTRY_CE_ONLY: "${ML_ENTRY_CE_ONLY:-0}"
+      BRAIN_CONSENSUS_REQUIRE_DIRECTION: "${BRAIN_CONSENSUS_REQUIRE_DIRECTION:-false}"
+      ML_ENTRY_DET_SKIP_BRAIN_GATE: "${ML_ENTRY_DET_SKIP_BRAIN_GATE:-false}"
+      DEPTH_FEED_ENABLED: "${DEPTH_FEED_ENABLED:-0}"
+      DEPTH_STALE_SEC: "${DEPTH_STALE_SEC:-30}"
+      EXIT_MAX_LOSS_PCT: "${EXIT_MAX_LOSS_PCT:-0.10}"
+      CONSENSUS_BYPASS_MIN_CONFIDENCE: "${CONSENSUS_BYPASS_MIN_CONFIDENCE:-0.65}"
+      DIRECTION_MIN_MARGIN_SIDEWAYS: "${DIRECTION_MIN_MARGIN_SIDEWAYS:-2.0}"
+      RISK_CALCULATOR: "${RISK_CALCULATOR:-fixed_fraction}"
+      RISK_FRACTION_PCT: "${RISK_FRACTION_PCT:-0.01}"
+      STRATEGY_MIN_CONFIDENCE: "${STRATEGY_MIN_CONFIDENCE:-0.65}"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_DB: "${REDIS_DB:-0}"
@@ -1138,6 +1205,13 @@ services:
       STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-}"
       ENTRY_ML_MODEL_PATH: "${ENTRY_ML_MODEL_PATH:-}"
       ENTRY_ML_MIN_PROB: "${ENTRY_ML_MIN_PROB:-0.55}"
+      # Optional second entry model (e.g. 10-minute-horizon compression), combined
+      # with model 1 via OR: the entry trigger fires when ANY model clears its own
+      # threshold. Unset -> single-model behaviour (identical to before).
+      ENTRY_ML_MODEL_PATH_2: "${ENTRY_ML_MODEL_PATH_2:-}"
+      ENTRY_ML_MIN_PROB_2: "${ENTRY_ML_MIN_PROB_2:-}"
+      ENTRY_ML_MAX_NAN_FEATURES: "${ENTRY_ML_MAX_NAN_FEATURES:-}"
+      ENTRY_ALLOW_CHOP: "${ENTRY_ALLOW_CHOP:-}"
       ENTRY_VOL_GATE_ENABLED: "${ENTRY_VOL_GATE_ENABLED:-0}"
       ATR_ENTRY_MIN_PCT: "${ATR_ENTRY_MIN_PCT:-0.00088}"
       ATR_ENTRY_MIN_ABS: "${ATR_ENTRY_MIN_ABS:-0}"
@@ -1160,7 +1234,7 @@ services:
       ML_PURE_RUN_ID: "${ML_PURE_RUN_ID:-}"
       ML_PURE_MODEL_GROUP: "${ML_PURE_MODEL_GROUP:-}"
       ML_PURE_MODEL_PACKAGE: "${ML_PURE_MODEL_PACKAGE:-}"
-      OPTION_PNL_MODEL_BUNDLE: "${OPTION_PNL_MODEL_BUNDLE:-}"
+      OPTION_PNL_MODEL_BUNDLE: "${OPTION_PNL_MODEL_BUNDLE:-/app/ml_pipeline_2/artifacts/option_pnl_bundles/option_pnl_atm_pe_9_20260518_063221/option_pnl_atm_pe_9_20260518_063304,/app/ml_pipeline_2/artifacts/option_pnl_bundles/option_pnl_atm_ce_9_20260518_063305/option_pnl_atm_ce_9_20260518_063335}"
       BRAIN_ENABLED: "${BRAIN_ENABLED:-true}"
       BRAIN_DAILY_FEATURES_PATH: "${BRAIN_DAILY_FEATURES_PATH:-/app/.data/ml_pipeline/daily_regime_features.json}"
       BRAIN_CONSENSUS_MIN_AGREEING: "${BRAIN_CONSENSUS_MIN_AGREEING:-1}"

@@ -3864,6 +3864,19 @@ app.include_router(_monitor_routes.router)
 _sim_routes = DashboardSimRouter()
 app.include_router(_sim_routes.router)
 
+try:
+    try:
+        from .routes.postmortem_routes import DashboardPostmortemRouter as _PostmortemRouter
+    except ImportError:
+        from market_data_dashboard.routes.postmortem_routes import DashboardPostmortemRouter as _PostmortemRouter  # type: ignore
+    _postmortem_routes = _PostmortemRouter(
+        get_db=lambda: _strategy_eval_service._db() if _strategy_eval_service is not None else None,
+    )
+    app.include_router(_postmortem_routes.router)
+except Exception as _pm_exc:
+    import logging as _logging
+    _logging.getLogger(__name__).warning("postmortem routes not loaded: %s", _pm_exc)
+
 _pipeline_routes = PipelineRouter()
 app.include_router(_pipeline_routes.router)
 

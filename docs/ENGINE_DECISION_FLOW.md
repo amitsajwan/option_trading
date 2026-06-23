@@ -42,7 +42,7 @@ startup log (`docker logs <strategy_app> | grep "starting engine"`):
 | `engine=` | **`deterministic`** | file [`deterministic_rule_engine.py`](../strategy_app/engines/deterministic_rule_engine.py) — **this is the one** |
 | `strategy_profile_id=` | **`trader_master_live_v1`** | the active profile (decides which code path runs — see §4) |
 | `pipeline_v2=` | **`False`** | the "v2" entry pipeline is OFF |
-| `ML_ENTRY_DIRECTION_MODE` (env) | **`consensus`** | how the direction is chosen (§5) |
+| `ML_ENTRY_DIRECTION_MODE` (env) | **`multi_signal`** | how the direction is chosen (§5) — stateless 5-signal scorer; abstains when weak |
 
 > ⚠️ **`PureMLEngine`** ([`pure_ml_engine.py`](../strategy_app/engines/pure_ml_engine.py)),
 > documented in [`RUNTIME_DECISION_FLOW.md`](RUNTIME_DECISION_FLOW.md), is **NOT live.**
@@ -106,21 +106,34 @@ best-scoring vote and applies the per-trade gates.
 
 ## 5. Where the live direction is *actually* chosen
 
-In **[`ml_entry.py` :243](../strategy_app/engines/strategies/ml_entry.py#L243)**, when
-`ML_ENTRY_DIRECTION_MODE=consensus`:
+In **[`entry_direction_policy.py`](../strategy_app/engines/strategies/entry_direction_policy.py)**, `resolve_direction_for_entry()`, when `ML_ENTRY_DIRECTION_MODE=multi_signal`:
 
-```python
-hint_dir, hint_source = _resolve_direction(snap)   # ml_entry.py:244  ← the side is chosen HERE
-... ml_direction_ce_prob = <direction model prob>  # :256  (often None — see note)
-direction = hint_dir                               # :260
+```
+Flow AFTER entry_prob ≥ 0.35:
+  multi_signal scorer (stateless, reads only the current snapshot):
+    ORB break       ±2.0
+    VWAP side       ±2.0   (price_vs_vwap sign)
+    Straddle dom    ±2.0   (CE vs PE premium ratio >1.04 / <0.96)
+    PCR change      ±1.0   (pcr_change_5m, rising PCR = bearish)
+    VIX intraday    ±1.5   (vix_intraday_chg ≥ 3%)
+    EMA order       ±1.0   (ema_9>21>50 stack)
+  ───────────────────────────
+  |score| < ENTRY_MULTI_SIGNAL_MIN (default 2.0)  → ABSTAIN → no vote emitted
+  score ≥ 2.0  → CE
+  score ≤ -2.0 → PE
 ```
 
-- The side-picker: [`_resolve_direction()` — ml_entry.py:103](../strategy_app/engines/strategies/ml_entry.py#L103).
-- `composite` mode is a *different branch* of the same function — that's why the
-  A/B (composite 44% vs consensus 59%) is real: it flips this branch.
-- **`ml_direction_ce_prob` is often `None`** (the direction-only model only fills
-  it when `DIRECTION_ML_MODEL_PATH` is set *and* it returns a prob) — this is the
-  "ce_prob coverage gap" that makes a confidence gate hard.
+**Key property**: direction can VETO an otherwise valid entry (ML prob ≥ threshold but
+signals disagree → no trade). This is "entry-first, direction-confirm" — correct design.
+
+Other modes exist in the code (`consensus`, `conviction_ensemble`, `regime_council`,
+`regime_dual`) but are NOT live (`ML_ENTRY_DIRECTION_MODE` sets the active branch).
+
+| Override | Works live? | Note |
+|---|---|---|
+| `ML_ENTRY_DIRECTION_MODE` | ✅ | switches the whole direction resolver |
+| `ENTRY_MULTI_SIGNAL_MIN` | ✅ | abstain threshold (default 2.0; raise to filter more) |
+| `REGIME_DIRECTION_SIGNAL` | ❌ dead for multi_signal | only read by `regime_dual` branch |
 
 ---
 

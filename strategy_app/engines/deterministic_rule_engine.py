@@ -80,6 +80,7 @@ from ..brain.oversight.gate import oversight_entry_veto
 from ..brain.reflection import ClosedTrade, reflect
 from ..brain.sense_runner import run_senses
 from ..cost_model import TradingCostModel
+from ..diagnostics import feature_health
 from ..senses.snapshot_adapter import snapshot_to_sense_context
 from ..brain.context import DayContext
 from ..runtime.runtime_artifacts import resolve_runtime_artifact_paths
@@ -999,7 +1000,8 @@ class DeterministicRuleEngine(StrategyEngine):
             regime_signal.regime.value if hasattr(regime_signal.regime, "value") else regime_signal.regime or ""
         ).upper()
         if (
-            regime_str == "SIDEWAYS"
+            as_bool(os.getenv("SIDEWAYS_RETURNS_MIXED_GATE_ENABLED", "true"))
+            and regime_str == "SIDEWAYS"
             and "returns_mixed" in (regime_signal.reason or "")
         ):
             return None  # blocker: sideways_returns_mixed (per-tick summary)
@@ -2350,7 +2352,8 @@ class DeterministicRuleEngine(StrategyEngine):
         # 1. SIDEWAYS + returns_mixed: market has no intraday conviction.
         #    A trader never enters when returns are contradicting themselves.
         if (
-            regime_signal.regime is not None
+            as_bool(os.getenv("SIDEWAYS_RETURNS_MIXED_GATE_ENABLED", "true"))
+            and regime_signal.regime is not None
             and str(regime_signal.regime.value if hasattr(regime_signal.regime, "value") else regime_signal.regime).upper() == "SIDEWAYS"
             and "returns_mixed" in (regime_signal.reason or "")
         ):
@@ -3090,6 +3093,21 @@ class DeterministicRuleEngine(StrategyEngine):
         # Market-structure context (bottoms / highs / breakouts lens) so the clean
         # record answers "WHERE in the tape did we decide?" without model introspection.
         trace["market_structure"] = self._structure.snapshot(snap)
+        # Data-availability self-report so a trace ALONE tells you whether this
+        # decision ran on full or degraded inputs (caught the VIX-key + depth gaps).
+        # Compact form on the trace: counts + the actionable missing list only.
+        try:
+            _fh = feature_health(snap.raw_payload)
+            trace["feature_health"] = {
+                "required_present": _fh["required_present"],
+                "required_total": _fh["required_total"],
+                "optional_present": _fh["optional_present"],
+                "optional_total": _fh["optional_total"],
+                "missing_required": _fh["missing_required"],
+                "degraded": _fh["degraded"],
+            }
+        except Exception:
+            logger.debug("feature_health failed (ignored)", exc_info=True)
         # Attach brain context to trace so the UI blocker funnel can show
         # day_score and consensus details without a separate API call.
         if self._day_context is not None:
