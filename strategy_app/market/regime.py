@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from .snapshot_accessor import SnapshotAccessor
-from ..utils.env import env_float
+from ..utils.env import env_bool, env_float
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,14 @@ class RegimeClassifier:
         # Phase 3 thresholds
         self._panic_vix_chg_min = env_float("REGIME_PANIC_VIX_CHG_MIN", 5.0) or 5.0
         self._panic_rvol_min = env_float("REGIME_PANIC_RVOL_MIN", 0.012) or 0.012
+        # PANIC currently fires on any high-vol bar (vix_chg + rvol), which also catches a
+        # clean directional trend (a sell-off spikes VIX + realized vol too). That mislabels
+        # tradeable trends as "untradeable chaos" and routes them to AVOID -> no entries
+        # (root cause of the 2026-06-23 ~500pt move being missed). When this flag is on,
+        # PANIC is suppressed for a cleanly multi-timeframe-aligned move (r5m/r15m/r30m same
+        # side beyond the trend threshold) so it falls through to the trend classifier and
+        # becomes TRENDING/BREAKOUT. Default off = legacy behaviour.
+        self._panic_require_nondirectional = env_bool("REGIME_PANIC_REQUIRE_NONDIRECTIONAL", False)
         self._chop_vol_ratio_max = env_float("REGIME_CHOP_VOL_RATIO_MAX", 0.90) or 0.90
         self._chop_candle_overlap_min = env_float("REGIME_CHOP_CANDLE_OVERLAP_MIN", 0.40) or 0.40
         self._dead_vol_ratio_max = env_float("REGIME_DEAD_VOL_RATIO_MAX", 0.30) or 0.30
@@ -168,6 +176,25 @@ class RegimeClassifier:
             )
         return None
 
+    def _is_directional(self, snap: SnapshotAccessor) -> bool:
+        """True when the move has a clear medium-term directional bias.
+
+        Uses the 15m and 30m returns (both aligned beyond the trend threshold) and
+        ignores the 5m return. Rationale: a tradeable grind-trend accumulates the move
+        on the longer windows (30m of a 500pt/day grind ≈ 0.2% > threshold) but its 5m
+        return is dominated by noise and constantly flips sign — so requiring 5m
+        alignment too would only fire on the steepest thrust bars and let the bulk of a
+        real trend stay mislabelled PANIC. True chaos has 15m/30m mixed, so it is still
+        caught by PANIC. Missing 15m/30m history → not directional (stay PANIC)."""
+        r15m = snap.fut_return_15m
+        r30m = snap.fut_return_30m
+        if r15m is None or r30m is None:
+            return False
+        thr = self._trend_return_min
+        aligned_up = r15m > thr and r30m > thr
+        aligned_down = r15m < -thr and r30m < -thr
+        return aligned_up or aligned_down
+
     def _check_panic(self, snap: SnapshotAccessor) -> Optional[RegimeSignal]:
         """Fast intraday volatility spike — not yet at VIX halt level but untradeably fast."""
         vix_chg = snap.vix_intraday_chg
@@ -175,6 +202,10 @@ class RegimeClassifier:
         if vix_chg is None or rvol is None:
             return None
         if vix_chg > self._panic_vix_chg_min and rvol > self._panic_rvol_min:
+            # A cleanly directional move (aligned 5m/15m/30m returns) is a tradeable trend,
+            # not chaos — don't bury it under PANIC; let the trend classifier label it.
+            if self._panic_require_nondirectional and self._is_directional(snap):
+                return None
             return RegimeSignal(
                 regime=Regime.PANIC,
                 confidence=0.88,

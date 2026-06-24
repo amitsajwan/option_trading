@@ -156,6 +156,35 @@ class TestPanicDetection:
         result = clf.classify(snap)
         assert result.regime == Regime.AVOID  # AVOID has higher priority than PANIC
 
+    def test_directional_guard_off_by_default_aligned_move_still_panic(self):
+        # Legacy behaviour preserved: an aligned high-vol move is PANIC unless the flag is set.
+        clf = RegimeClassifier()
+        snap = SnapshotAccessor(_snap(
+            vix_intraday_chg=6.0, realized_vol_30m=0.018,
+            fut_return_5m=-0.003, fut_return_15m=-0.004, fut_return_30m=-0.005))
+        assert clf.classify(snap).regime == Regime.PANIC
+
+    def test_directional_guard_suppresses_panic_on_aligned_trend(self, monkeypatch):
+        # Flag on + cleanly aligned-down move → NOT panic; falls through to the trend
+        # classifier (becomes a tradeable directional regime, not untradeable chaos).
+        monkeypatch.setenv("REGIME_PANIC_REQUIRE_NONDIRECTIONAL", "1")
+        clf = RegimeClassifier()
+        snap = SnapshotAccessor(_snap(
+            vix_intraday_chg=6.0, realized_vol_30m=0.018, vol_ratio=1.6, orl_broken=True,
+            fut_return_5m=-0.003, fut_return_15m=-0.004, fut_return_30m=-0.005))
+        result = clf.classify(snap)
+        assert result.regime != Regime.PANIC
+        assert result.regime in (Regime.BREAKOUT, Regime.TRENDING)
+
+    def test_directional_guard_keeps_panic_on_choppy_highvol(self, monkeypatch):
+        # Flag on but returns NOT aligned (whipsaw chaos) → still PANIC.
+        monkeypatch.setenv("REGIME_PANIC_REQUIRE_NONDIRECTIONAL", "1")
+        clf = RegimeClassifier()
+        snap = SnapshotAccessor(_snap(
+            vix_intraday_chg=6.0, realized_vol_30m=0.018,
+            fut_return_5m=0.004, fut_return_15m=-0.004, fut_return_30m=0.001))
+        assert clf.classify(snap).regime == Regime.PANIC
+
 
 class TestDeadMarketDetection:
     def test_very_low_vol_ratio_returns_dead_market(self):

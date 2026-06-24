@@ -250,6 +250,24 @@ _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP["CHOP"] = (
     if (os.getenv("ENTRY_ALLOW_CHOP", "").strip().lower() in ("1", "true", "yes", "on"))
     else []
 )
+# The compression ML model is a coiled-spring detector: it fires on compression→breakout,
+# NOT on a slow directional grind (verified 2026-06-23 — it maxed prob 0.30 over a clean
+# ~500pt trend and never fired). On such days the ML-only book has no trigger at all. When
+# ML_ENTRY_ADD_MOMENTUM is on, restore the deterministic momentum detectors (ORB, OI_BUILDUP)
+# to the directional regimes so a trend grind has a trigger besides the compression model.
+# Pairs with REGIME_PANIC_REQUIRE_NONDIRECTIONAL (which lets a high-vol trend reach TRENDING
+# instead of being buried in PANIC). Only adds detectors already present in that regime's
+# parent (trader_master) book. Default off = ML-only (legacy live behaviour).
+_ML_ENTRY_MOMENTUM_STRATEGIES = ["ORB", "OI_BUILDUP"]
+if os.getenv("ML_ENTRY_ADD_MOMENTUM", "").strip().lower() in ("1", "true", "yes", "on"):
+    for _regime in ("TRENDING", "SIDEWAYS"):
+        _current = _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP.get(_regime)
+        if not _current:
+            continue
+        _parent = _TRADER_MASTER_REGIME_ENTRY_MAP.get(_regime, [])
+        for _name in _ML_ENTRY_MOMENTUM_STRATEGIES:
+            if _name in _parent and _name not in _current:
+                _current.append(_name)
 
 # ML step-① timing + trader_master rule strategies for step-② direction (no direction ML).
 _TRADER_MASTER_ML_ENTRY_DET_DIR_REGIME_ENTRY_MAP: dict[str, list[str]] = {}

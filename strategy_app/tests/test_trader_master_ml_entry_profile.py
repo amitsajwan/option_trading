@@ -43,6 +43,35 @@ def test_consensus_profile_uses_rule_book_for_direction() -> None:
     assert risk.get("thesis_fail_exit_bars") == 2
 
 
+def test_add_momentum_flag_restores_trend_detectors(monkeypatch) -> None:
+    # ML_ENTRY_ADD_MOMENTUM=1 puts ORB/OI_BUILDUP back into the directional regimes so a
+    # trend grind (which the compression model can't detect) still has a trigger. Env is read
+    # at import, so reload the module under the flag, then restore for the rest of the suite.
+    import importlib
+
+    import strategy_app.engines.profiles as profiles
+
+    monkeypatch.setenv("ML_ENTRY_ADD_MOMENTUM", "1")
+    try:
+        importlib.reload(profiles)
+        mapping = profiles.get_regime_entry_map(profiles.PROFILE_TRADER_MASTER_ML_ENTRY_V1)
+        assert "ML_ENTRY" in mapping["TRENDING"]
+        assert "ORB" in mapping["TRENDING"]
+        assert "OI_BUILDUP" in mapping["TRENDING"]
+        # SIDEWAYS gets OI_BUILDUP (present in its parent) but not ORB (absent there).
+        assert "OI_BUILDUP" in mapping["SIDEWAYS"]
+        assert "ORB" not in mapping["SIDEWAYS"]
+        # AVOID stays empty — momentum is only added to directional regimes.
+        assert mapping["AVOID"] == []
+    finally:
+        monkeypatch.delenv("ML_ENTRY_ADD_MOMENTUM", raising=False)
+        importlib.reload(profiles)
+    # After restore, default ML-only book is back.
+    assert profiles.get_regime_entry_map(profiles.PROFILE_TRADER_MASTER_ML_ENTRY_V1)["TRENDING"] == [
+        "IV_FILTER", "ML_ENTRY",
+    ]
+
+
 def test_ml_entry_router_materializes() -> None:
     router = StrategyRouter()
     router.configure(build_run_metadata(PROFILE_TRADER_MASTER_ML_ENTRY_V1)["router_config"])
