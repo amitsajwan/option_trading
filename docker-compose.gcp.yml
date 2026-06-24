@@ -44,7 +44,7 @@ services:
       MONGO_HOST: mongo
       MONGO_PORT: "27017"
       MONGO_DB: "${MONGO_DB:-trading_ai}"
-      INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26MARFUT}"
+      INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26JULFUT}"
       KITE_CREDENTIALS_PATH: "${KITE_CREDENTIALS_PATH:-/app/secrets/credentials.json}"
       MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
       MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
@@ -113,7 +113,7 @@ services:
       MONGO_HOST: mongo
       MONGO_PORT: "27017"
       MONGO_DB: "${MONGO_DB:-trading_ai}"
-      INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26MARFUT}"
+      INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26JULFUT}"
       KITE_CREDENTIALS_PATH: "${KITE_CREDENTIALS_PATH:-/app/secrets/credentials.json}"
       MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
       MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
@@ -136,7 +136,7 @@ services:
         "snapshot_app.main_live",
         "--foreground",
         "--instrument",
-        "${INSTRUMENT_SYMBOL:-BANKNIFTY26MARFUT}",
+        "${INSTRUMENT_SYMBOL:-BANKNIFTY26JULFUT}",
         "--market-api-base",
         "http://ingestion_app:8004",
         "--dashboard-api-base",
@@ -687,7 +687,7 @@ services:
       STRATEGY_EVAL_RUN_CHANNEL_PREFIX: "${STRATEGY_EVAL_RUN_CHANNEL_PREFIX:-strategy:eval:run:}"
       SIM_COMMAND_TOPIC: "${SIM_COMMAND_TOPIC:-sim:run:command}"
       DASHBOARD_CORS_ORIGINS: "${DASHBOARD_CORS_ORIGINS:-http://localhost:8011,http://127.0.0.1:8011,http://localhost:5173,http://127.0.0.1:5173}"
-      INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26MARFUT}"
+      INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26JULFUT}"
       MARKET_DATA_API_URL: "http://ingestion_app:8004"
       STRATEGY_RUN_DIR: "/app/.run/strategy_app"
     ports:
