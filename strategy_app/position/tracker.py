@@ -29,14 +29,15 @@ class PositionTracker:
         self._position: Optional[PositionContext] = None
         self._closed_positions: list[dict[str, object]] = []
         self._trailing_manager = TrailingStopManager()
-        self._exit_stack_enabled = as_bool(os.getenv("EXIT_POLICY_STACK_ENABLED", "false"))
+        # EXIT_POLICY_STACK_ENABLED defaults ON — the stack is the correct exit authority.
+        # Set EXIT_POLICY_STACK_ENABLED=0 only to revert to legacy inline exits (test isolation).
+        self._exit_stack_enabled = as_bool(os.getenv("EXIT_POLICY_STACK_ENABLED", "true"))
         self._exit_stack: Optional[CompositeExitPolicy] = (
             build_default_exit_stack() if self._exit_stack_enabled else None
         )
-        # Lottery mode: the stack is the SOLE discretionary authority (it carries its
-        # own HardStop + Timestop), so legacy inline exits are suppressed to let
-        # winners run. Scalper mode keeps the inline exits as complementary
-        # stop-loss / timestop backstops (the scalper stack has no hard stop).
+        # In lottery/adaptive mode the stack is the SOLE discretionary authority —
+        # legacy inline exits are suppressed so winners are not cut prematurely.
+        # In scalper mode both stack and legacy inline exits run (stack fires first).
         self._exit_mode = str(os.getenv("EXIT_STRATEGY_MODE", "scalper") or "scalper").strip().lower()
 
     def on_session_start(self, trade_date: date) -> None:
@@ -103,40 +104,6 @@ class PositionTracker:
         exit_reason: Optional[ExitReason] = None
         exit_trigger = None
         has_playbook = isinstance(position.playbook_exit_policy, dict)
-        # Dynamic scratch: if enabled and trade is red, and shadow score now
-        # opposes our direction, exit immediately (do not wait for TIME_STOP or SL).
-        if forced_exit_reason is None and as_bool(os.getenv("DYNAMIC_SCRATCH_ENABLED", "false")):
-            try:
-                score = float(position.current_shadow_score)
-                d = str(position.direction or "").upper()
-                flip = (d == "CE" and score < 0.0) or (d == "PE" and score > 0.0)
-                if position.pnl_pct <= 0.0 and flip:
-                    exit_reason = ExitReason.TIME_STOP
-                    exit_trigger = "dynamic_scratch"
-            except Exception:
-                pass
-        # Opposite-side premium dominance scratch: if enabled and trade is red,
-        # and the opposite option premium dominates by ratio, exit immediately.
-        if forced_exit_reason is None and as_bool(os.getenv("OPP_SIDE_PREM_SCRATCH_ENABLED", "false")) and exit_reason is None:
-            try:
-                ce_p = snap.atm_ce_close
-                pe_p = snap.atm_pe_close
-                if ce_p and pe_p and float(ce_p) > 0 and float(pe_p) > 0:
-                    ratio = 1.10
-                    try:
-                        ratio = float(os.getenv("OPP_SIDE_PREM_DOM_RATIO", "1.10") or 1.10)
-                    except Exception:
-                        ratio = 1.10
-                    d = str(position.direction or "").upper()
-                    if position.pnl_pct <= 0.0:
-                        if d == "CE" and (float(pe_p) / float(ce_p)) >= ratio:
-                            exit_reason = ExitReason.TIME_STOP
-                            exit_trigger = "opp_prem_dom_scratch"
-                        elif d == "PE" and (float(ce_p) / float(pe_p)) >= ratio:
-                            exit_reason = ExitReason.TIME_STOP
-                            exit_trigger = "opp_prem_dom_scratch"
-            except Exception:
-                pass
 
         if forced_exit_reason is None and has_playbook and exit_reason is None:
             playbook_hit = evaluate_playbook_exit(position, snap)
