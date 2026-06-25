@@ -256,21 +256,28 @@ _L0_ALIASES: Dict[str, str] = {
     "close":         "px_fut_close",
     "volume":        "fut_flow_volume",
     "oi":            "fut_flow_oi",
-    # older live names
+    # live-panel futures names (live_ml_flat _PANEL_SOURCE_COLUMNS)
     "fut_close":     "px_fut_close",
     "fut_high":      "px_fut_high",
     "fut_low":       "px_fut_low",
     "fut_open":      "px_fut_open",
+    "fut_volume":    "fut_flow_volume",
+    "fut_oi":        "fut_flow_oi",
     "spot_close":    "px_spot_close",
     "spot_high":     "px_spot_high",
     "spot_low":      "px_spot_low",
     "spot_open":     "px_spot_open",
-    # option flow aliases
+    # option flow aliases (training + live-panel)
     "pcr":           "opt_flow_pcr_oi",
+    "pcr_oi":        "opt_flow_pcr_oi",
     "total_ce_oi":   "opt_flow_ce_oi_total",
     "total_pe_oi":   "opt_flow_pe_oi_total",
+    "ce_oi_total":   "opt_flow_ce_oi_total",
+    "pe_oi_total":   "opt_flow_pe_oi_total",
     "ce_volume":     "opt_flow_ce_volume_total",
     "pe_volume":     "opt_flow_pe_volume_total",
+    "ce_volume_total": "opt_flow_ce_volume_total",
+    "pe_volume_total": "opt_flow_pe_volume_total",
 }
 
 
@@ -472,6 +479,14 @@ def _layer_2b_flow(df: pd.DataFrame) -> pd.DataFrame:
     # ── opt_flow_rows (chain breadth) — pass through if provided ─────────
     if "opt_flow_rows" not in df.columns:
         df["opt_flow_rows"] = _resolve(df, ["opt_flow_rows", "options_rows"])
+
+    # ── ATM IV + skew (training-truth definition: raw ce_iv − pe_iv) ─────
+    ce_iv = _resolve(df, ["atm_ce_iv", "opt_0_ce_iv"])
+    pe_iv = _resolve(df, ["atm_pe_iv", "opt_0_pe_iv"])
+    if "atm_iv" not in df.columns:
+        df["atm_iv"] = (ce_iv + pe_iv) / 2.0
+    if "iv_skew" not in df.columns:
+        df["iv_skew"] = ce_iv - pe_iv
 
     return df
 
