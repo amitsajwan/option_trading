@@ -677,7 +677,15 @@ class KiteDataService:
         return out
 
 
-svc = KiteDataService()
+def _build_svc():
+    """Use DhanDataService when DHAN_ACCESS_TOKEN is set, otherwise fall back to Kite."""
+    if os.getenv("DHAN_ACCESS_TOKEN"):
+        from .dhan_data_service import DhanDataService
+        return DhanDataService()
+    return KiteDataService()
+
+
+svc = _build_svc()
 app = FastAPI(title="Ingestion API", version="1.0")
 app.add_middleware(
     CORSMiddleware,

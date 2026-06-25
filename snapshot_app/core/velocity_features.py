@@ -529,8 +529,227 @@ VELOCITY_INTEGER_COLUMNS: frozenset[str] = frozenset({
 
 VELOCITY_COLUMNS: list[str] = list(_ALL_OUTPUT_COLUMNS)
 
+
+def compute_per_bar_velocity_df(
+    df: pd.DataFrame,
+    *,
+    prev_day_close: Optional[float] = None,
+    prev_day_midday_option_volume: Optional[float] = None,
+    avg_20d_midday_option_volume: Optional[float] = None,
+) -> pd.DataFrame:
+    """
+    Vectorized per-bar velocity features anchored at session open (9:15 IST).
+
+    Computes the SAME _ALL_OUTPUT_COLUMNS as compute_velocity_features() but for
+    EVERY row in df, rolling from bar 0 (9:15) to bar n. No 11:30 restriction.
+
+    Designed for:
+    - Training: dhan_data_pipeline._build_day_indicators() — full day, one call
+    - Runtime:  live_velocity_state.LiveVelocityAccumulator.process() — call on
+                accumulated bars each tick, read last row for current snapshot
+
+    df MUST be:
+    - Single trade_date, sorted ascending by time (earliest first)
+    - 1-minute bars from 9:15 IST
+    - Columns: opt_flow_ce_oi_total, opt_flow_pe_oi_total, opt_flow_pcr_oi,
+               atm_oi_ratio, px_fut_open, px_fut_close, px_fut_high, px_fut_low,
+               opt_flow_ce_volume_total, opt_flow_pe_volume_total,
+               atm_ce_iv, atm_pe_iv, iv_skew, vwap_fut,
+               ctx_opening_range_breakout_up, ctx_opening_range_breakout_down
+               (missing columns degrade the relevant feature to NaN)
+
+    Returns df with vel_* and ctx_am_* columns added IN PLACE.
+    """
+    if df is None or len(df) == 0:
+        return df
+
+    df = df.copy()
+    n = len(df)
+
+    def _col(name: str) -> pd.Series:
+        if name in df.columns:
+            return pd.to_numeric(df[name], errors="coerce")
+        return pd.Series(np.nan, index=df.index, dtype=float)
+
+    ce_oi     = _col(_CE_OI)
+    pe_oi     = _col(_PE_OI)
+    pcr       = _col(_PCR)
+    ratio     = _col(_ATM_OI_RATIO)
+    fut_open  = _col(_FUT_OPEN)
+    fut_close = _col(_FUT_CLOSE)
+    fut_high  = _col(_FUT_HIGH)
+    fut_low   = _col(_FUT_LOW)
+    ce_vol    = _col(_CE_VOL)
+    pe_vol    = _col(_PE_VOL)
+    ce_iv     = _col(_ATM_CE_IV)
+    pe_iv     = _col(_ATM_PE_IV)
+    iv_skew_s = _col(_IV_SKEW)
+    vwap_s    = _col(_VWAP)
+
+    # Open references — bar 0 = 9:15 open
+    ce_oi_open  = float(ce_oi.iloc[0])   if pd.notna(ce_oi.iloc[0])  else float("nan")
+    pe_oi_open  = float(pe_oi.iloc[0])   if pd.notna(pe_oi.iloc[0])  else float("nan")
+    pcr_open    = float(pcr.iloc[0])     if pd.notna(pcr.iloc[0])    else float("nan")
+    ratio_open  = float(ratio.iloc[0])   if pd.notna(ratio.iloc[0])  else float("nan")
+    price_open  = float(fut_open.iloc[0])if pd.notna(fut_open.iloc[0]) else float("nan")
+    ce_iv_open  = float(ce_iv.iloc[0])   if pd.notna(ce_iv.iloc[0])  else float("nan")
+    pe_iv_open  = float(pe_iv.iloc[0])   if pd.notna(pe_iv.iloc[0])  else float("nan")
+    iv_skew_open= float(iv_skew_s.iloc[0]) if pd.notna(iv_skew_s.iloc[0]) else float("nan")
+
+    minutes_elapsed = pd.Series(range(1, n + 1), index=df.index, dtype=float)
+
+    # ── GROUP 1: OI Velocity ──────────────────────────────────────────────────
+    df["vel_ce_oi_delta_open"]   = ce_oi - ce_oi_open
+    df["vel_pe_oi_delta_open"]   = pe_oi - pe_oi_open
+    df["vel_ce_oi_delta_30m"]    = ce_oi - ce_oi.shift(30)
+    df["vel_pe_oi_delta_30m"]    = pe_oi - pe_oi.shift(30)
+    df["vel_oi_ratio_delta_open"]= ratio - ratio_open
+    df["vel_oi_ratio_delta_30m"] = ratio - ratio.shift(30)
+    df["vel_ce_oi_build_rate"]   = df["vel_ce_oi_delta_open"] / minutes_elapsed
+    df["vel_pe_oi_build_rate"]   = df["vel_pe_oi_delta_open"] / minutes_elapsed
+
+    # ── GROUP 2: PCR Velocity ─────────────────────────────────────────────────
+    df["vel_pcr_delta_open"] = pcr - pcr_open
+    df["vel_pcr_delta_30m"]  = pcr - pcr.shift(30)
+    pcr_chg_15m = pcr.diff(15)
+    df["vel_pcr_acceleration"]    = pcr_chg_15m - pcr_chg_15m.shift(15)
+    df["vel_pcr_trend_direction"] = np.sign(
+        pcr.diff(1).rolling(15, min_periods=3).mean()
+    ).astype(float)
+
+    # ── GROUP 3: Price Velocity ───────────────────────────────────────────────
+    df["vel_price_delta_open"] = fut_close - price_open
+    df["vel_price_delta_30m"]  = fut_close - fut_close.shift(30)
+    df["vel_price_delta_60m"]  = fut_close - fut_close.shift(60)
+    last_30m   = df["vel_price_delta_30m"]
+    prior_30m  = fut_close.shift(30) - fut_close.shift(60)
+    df["vel_price_acceleration"] = last_30m - prior_30m
+
+    # Morning range (expanding from 9:15)
+    df["ctx_am_range_high"] = fut_high.expanding().max()
+    df["ctx_am_range_low"]  = fut_low.expanding().min()
+    range_size = (df["ctx_am_range_high"] - df["ctx_am_range_low"]).replace(0.0, np.nan)
+    df["ctx_am_range_size"]       = range_size
+    df["ctx_am_price_position"]   = (
+        (fut_close - df["ctx_am_range_low"]) / range_size
+    ).clip(0.0, 1.0)
+
+    # ctx_am_reversal: direction change in last 30m vs prior 30m
+    recent_sign = np.sign(last_30m.fillna(0.0))
+    prior_sign  = np.sign(prior_30m.fillna(0.0))
+    df["ctx_am_reversal"] = (
+        (prior_sign != 0) & (recent_sign != 0) & (prior_sign != recent_sign)
+    ).astype(float)
+
+    # ctx_am_trend: sign of normalised slope from open to now (proxy)
+    df["ctx_am_trend"]          = np.sign(df["vel_price_delta_open"].fillna(0.0)).astype(float)
+    df["ctx_am_trend_strength"] = (df["vel_price_delta_open"].abs() / max(abs(price_open), 1.0)).fillna(0.0)
+
+    # ctx_am_oi_direction: which OI is growing faster
+    ce_d = df["vel_ce_oi_delta_open"].fillna(0.0)
+    pe_d = df["vel_pe_oi_delta_open"].fillna(0.0)
+    conditions = [
+        ce_d > pe_d.abs() * 0.3,
+        pe_d > ce_d.abs() * 0.3,
+    ]
+    choices = [1.0, -1.0]
+    df["ctx_am_oi_direction"] = np.select(conditions, choices, default=0.0).astype(float)
+
+    # ctx_am_vwap_side: price above/below VWAP
+    vwap_diff = fut_close - vwap_s
+    df["ctx_am_vwap_side"] = np.where(vwap_diff > 0, 1.0, np.where(vwap_diff < 0, -1.0, 0.0)).astype(float)
+
+    # ctx_am_breakout_confirmed: ORB breakout still holding
+    brk_up   = _col("ctx_opening_range_breakout_up")
+    brk_down = _col("ctx_opening_range_breakout_down")
+    df["ctx_am_breakout_confirmed"] = ((brk_up == 1) | (brk_down == 1)).astype(float)
+
+    # Gap features (constant per day — requires prev_day_close)
+    if prev_day_close is not None and math.isfinite(float(prev_day_close)) and not math.isnan(price_open):
+        gap     = price_open - float(prev_day_close)
+        gap_pct = gap / float(prev_day_close) if float(prev_day_close) != 0.0 else float("nan")
+        df["ctx_am_gap_from_yday"] = gap
+        df["ctx_gap_pct"]  = gap_pct
+        df["ctx_gap_up"]   = float(1 if (math.isfinite(gap_pct) and gap_pct > 0.003) else 0)
+        df["ctx_gap_down"] = float(1 if (math.isfinite(gap_pct) and gap_pct < -0.003) else 0)
+        if gap > 0:
+            df["ctx_am_gap_filled"] = (fut_close <= float(prev_day_close)).astype(float)
+        elif gap < 0:
+            df["ctx_am_gap_filled"] = (fut_close >= float(prev_day_close)).astype(float)
+        else:
+            df["ctx_am_gap_filled"] = 0.0
+    else:
+        for c in ["ctx_am_gap_from_yday", "ctx_gap_pct", "ctx_gap_up", "ctx_gap_down", "ctx_am_gap_filled"]:
+            df[c] = np.nan
+
+    # ── GROUP 4: IV Velocity ──────────────────────────────────────────────────
+    df["vel_atm_ce_iv_delta_open"] = ce_iv - ce_iv_open
+    df["vel_atm_pe_iv_delta_open"] = pe_iv - pe_iv_open
+    df["vel_iv_skew_delta_open"]   = iv_skew_s - iv_skew_open
+    df["vel_iv_compression_rate"]  = df["vel_atm_ce_iv_delta_open"] / minutes_elapsed
+
+    # ── GROUP 5: Volume Velocity ──────────────────────────────────────────────
+    df["vel_ce_vol_delta_30m"] = ce_vol - ce_vol.shift(30)
+    df["vel_pe_vol_delta_30m"] = pe_vol - pe_vol.shift(30)
+
+    last_30m_ce  = ce_vol - ce_vol.shift(30)
+    prior_30m_ce = ce_vol.shift(30) - ce_vol.shift(60)
+    last_30m_pe  = pe_vol - pe_vol.shift(30)
+    prior_30m_pe = pe_vol.shift(30) - pe_vol.shift(60)
+    denom_ce = prior_30m_ce.abs().replace(0.0, np.nan)
+    denom_pe = prior_30m_pe.abs().replace(0.0, np.nan)
+    accel_ce = last_30m_ce / denom_ce
+    accel_pe = last_30m_pe / denom_pe
+    df["vel_options_vol_acceleration"] = (accel_ce + accel_pe) / 2.0
+
+    # Rolling volume vs yesterday (if provided) and vs 20-day avg
+    total_vol_now = ce_vol + pe_vol
+    if (
+        prev_day_midday_option_volume is not None
+        and math.isfinite(float(prev_day_midday_option_volume))
+        and float(prev_day_midday_option_volume) > 0.0
+    ):
+        df["ctx_am_vol_vs_yday"] = total_vol_now / float(prev_day_midday_option_volume)
+    else:
+        df["ctx_am_vol_vs_yday"] = np.nan
+
+    if (
+        avg_20d_midday_option_volume is not None
+        and math.isfinite(float(avg_20d_midday_option_volume))
+        and float(avg_20d_midday_option_volume) > 0.0
+    ):
+        df["vol_spike_ratio"] = total_vol_now / float(avg_20d_midday_option_volume)
+    else:
+        df["vol_spike_ratio"] = np.nan
+
+    # ADX(14) — per-bar, Wilder-smoothed (same as compression_features.py)
+    prev_c  = fut_close.shift(1)
+    up_move = fut_high.diff()
+    dn_move = -fut_low.diff()
+    plus_dm  = up_move.where((up_move > dn_move) & (up_move > 0.0), 0.0).fillna(0.0)
+    minus_dm = dn_move.where((dn_move > up_move) & (dn_move > 0.0), 0.0).fillna(0.0)
+    tr = pd.concat(
+        [(fut_high - fut_low).abs(), (fut_high - prev_c).abs(), (fut_low - prev_c).abs()],
+        axis=1,
+    ).max(axis=1).fillna(0.0)
+    atr14   = tr.ewm(alpha=1.0/14, adjust=False, min_periods=1).mean()
+    safe_at = atr14.replace(0.0, np.nan)
+    plus_di  = 100.0 * plus_dm.ewm(alpha=1.0/14, adjust=False, min_periods=1).mean() / safe_at
+    minus_di = 100.0 * minus_dm.ewm(alpha=1.0/14, adjust=False, min_periods=1).mean() / safe_at
+    dx = (100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0.0, np.nan))
+    df["adx_14"] = dx.ewm(alpha=1.0/14, adjust=False, min_periods=1).mean()
+
+    # Ensure every expected output column is present (fill missing with NaN)
+    for col in _ALL_OUTPUT_COLUMNS:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    return df
+
+
 __all__ = [
     "compute_velocity_features",
+    "compute_per_bar_velocity_df",
     "VELOCITY_COLUMNS",
     "VELOCITY_INTEGER_COLUMNS",
 ]

@@ -18,13 +18,20 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from snapshot_app.core.velocity_features import compute_velocity_features
+from snapshot_app.core.velocity_features import (
+    compute_velocity_features,
+    compute_per_bar_velocity_df,
+    VELOCITY_COLUMNS as _VELOCITY_COLS,
+)
+
+_VELOCITY_OUTPUT_SET: frozenset = frozenset(_VELOCITY_COLS)
 
 _log = logging.getLogger(__name__)
 
-# Morning window: accumulate rows with timestamp in [10:00, 11:30)
-_WINDOW_START: Tuple[int, int] = (10, 0)
-_MIDDAY: Tuple[int, int] = (11, 30)
+# Accumulate from session open — velocity valid from 9:45 (30 bars of warmup).
+# No 11:30 restriction: compute_per_bar_velocity_df fires at every bar.
+_WINDOW_START: Tuple[int, int] = (9, 15)
+_MIDDAY: Tuple[int, int] = (11, 30)   # kept for context-loader backward compat
 
 # Mapping: (snapshot_section, key_in_section) → morning_df column name
 # Column names must match those consumed by compute_velocity_features().
@@ -362,7 +369,13 @@ class LiveVelocityAccumulator:
     # ------------------------------------------------------------------
 
     def process(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
-        """Accumulate / compute / inject.  Returns snapshot (possibly with new key)."""
+        """Accumulate / compute / inject.  Returns snapshot (possibly with new key).
+
+        Per-bar computation from 9:15 (no 11:30 restriction).
+        velocity_enrichment is populated from the very first bar onward.
+        Uses compute_per_bar_velocity_df — same function as dhan_data_pipeline —
+        guaranteeing zero train/serve skew.
+        """
         trade_date = snapshot.get("trade_date") or ""
         ts_str = snapshot.get("timestamp") or ""
         hm = _hm(ts_str)
@@ -370,18 +383,16 @@ class LiveVelocityAccumulator:
         if trade_date and trade_date != self._current_trade_date:
             self._reset(trade_date)
 
-        # Accumulate rows inside the morning window (exclude the 11:30 trigger tick
-        # itself — it is passed separately as midday_snapshot to compute_velocity_features)
-        if _WINDOW_START <= hm < _MIDDAY:
+        # Accumulate every bar from 9:15 onwards (including 11:30 and beyond)
+        if hm >= _WINDOW_START:
             self._morning_rows.append(_extract_morning_row(snapshot))
 
-        # Compute once at the 11:30 tick
-        if hm == _MIDDAY and self._computed_for_date != trade_date:
-            self._try_compute(snapshot, trade_date)
+        # Compute per-bar from 9:15 (need ≥3 rows for meaningful features)
+        if len(self._morning_rows) >= 3:
+            self._try_compute_per_bar(trade_date)
 
-        # Inject cached velocity into snapshot (from 11:30 onwards).
-        # Key is "velocity_enrichment" — the canonical block name used by
-        # stage_views._project_view() when projecting V2 stage-view feature rows.
+        # Inject current-bar velocity into snapshot.
+        # Key is "velocity_enrichment" — canonical block consumed by stage_views.
         if self._velocity is not None:
             snapshot = {**snapshot, "velocity_enrichment": self._velocity}
 
@@ -472,4 +483,42 @@ class LiveVelocityAccumulator:
             _log.error(
                 "live_velocity: compute_velocity_features failed for %s: %s",
                 trade_date, exc, exc_info=True,
+            )
+
+    def _try_compute_per_bar(self, trade_date: str) -> None:
+        """Compute per-bar velocity from 9:15 and store last row as current velocity.
+
+        Called at every bar after accumulating ≥3 rows. Uses the same
+        compute_per_bar_velocity_df() function as dhan_data_pipeline — zero skew.
+        """
+        try:
+            accumulated_df = pd.DataFrame(self._morning_rows)
+            for col in accumulated_df.columns:
+                if col not in ("timestamp", "trade_date"):
+                    accumulated_df[col] = pd.to_numeric(accumulated_df[col], errors="coerce")
+
+            enriched = compute_per_bar_velocity_df(
+                accumulated_df,
+                prev_day_close=self._prev_day_close,
+                prev_day_midday_option_volume=self._prev_day_midday_vol,
+                avg_20d_midday_option_volume=self._avg_20d_midday_vol,
+            )
+            # Extract the last row (= current bar) as the velocity dict
+            last = enriched.iloc[-1]
+            self._velocity = {
+                col: float(last[col])
+                for col in enriched.columns
+                if col in _VELOCITY_OUTPUT_SET
+                and pd.notna(last[col])
+            }
+            # Fill missing output columns with NaN so downstream never KeyErrors
+            from snapshot_app.core.velocity_features import _ALL_OUTPUT_COLUMNS as _VCOLS
+            for k in _VCOLS:
+                if k not in self._velocity:
+                    self._velocity[k] = float("nan")
+
+        except Exception as exc:
+            _log.debug(
+                "live_velocity: per-bar compute failed for %s (%d rows): %s",
+                trade_date, len(self._morning_rows), exc,
             )
