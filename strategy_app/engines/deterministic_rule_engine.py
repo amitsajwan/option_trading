@@ -760,6 +760,14 @@ class DeterministicRuleEngine(StrategyEngine):
                 raw, snap, direction=vote.direction, regime=regime_name,
             )
             if quality is None:
+                # Direction mode (e.g. multi_signal) doesn't produce entry_dir_* /
+                # direction_consensus_* fields — grader can't score. Fall through to
+                # decide_tier with a default OK grade so the signal still reaches Dhan.
+                from ..signals.entry_quality import decide_tier, OK
+                tier = decide_tier(OK, risk, confidence=float(vote.confidence or 0.0))
+                raw.update(tier.as_raw_signals())
+                raw["entry_grade"] = OK
+                vote.raw_signals = raw
                 return
             raw.update(quality.as_raw_signals())
             tier = decide_tier(
