@@ -79,22 +79,34 @@ SCHEMA: Dict[str, List[str]] = {
     "technicals": [
         "ema_9", "ema_21", "ema_50",
         "ema_9_21_spread", "ema_above_21",
-        "ema_9_slope", "ema_21_slope",
+        "ema_9_slope", "ema_21_slope", "ema_50_slope",
         "osc_rsi_14",
-        "osc_atr_14", "osc_atr_ratio",
+        "osc_atr_14", "osc_atr_ratio", "osc_atr_percentile", "osc_atr_daily_percentile",
         "adx_14",
         "bb_upper", "bb_lower", "bb_width", "bb_position",
         "realized_vol_5m", "realized_vol_15m", "realized_vol_30m",
         "momentum_5m", "momentum_15m",
         "vol_spike_ratio",
         "fut_flow_oi_change_1m", "fut_flow_oi_change_5m",
-        "opt_flow_pcr_change_5m", "opt_flow_pcr_change_15m", "opt_flow_pcr_change_30m",
+        "pcr_change_5m", "pcr_change_15m", "pcr_change_30m",
+    ],
+    "flow": [
+        "dist_basis", "dist_basis_change_1m",
+        "fut_flow_rel_volume_20", "fut_flow_volume_accel_1m",
+        "fut_flow_oi_rel_20", "fut_flow_oi_zscore_20",
+        "opt_flow_ce_pe_oi_diff", "opt_flow_ce_pe_volume_diff",
+        "opt_flow_options_volume_total", "opt_flow_rel_volume_20",
+        "opt_flow_atm_strike", "opt_flow_rows",
+        "opt_flow_atm_call_return_1m", "opt_flow_atm_put_return_1m",
+        "opt_flow_atm_oi_change_1m",
+        "atm_oi_ratio", "near_atm_oi_ratio",
     ],
     "session": [
         "vwap_fut", "vwap_distance", "ctx_above_vwap",
         "day_high", "day_low", "dist_from_day_high", "dist_from_day_low",
         "ctx_opening_range_high", "ctx_opening_range_low",
         "ctx_opening_range_width", "ctx_orb_width_pct",
+        "ctx_opening_range_ready",
         "ctx_opening_range_breakout_up", "ctx_opening_range_breakout_down",
         "orb_high_reject", "orb_low_reject",
         "time_minute_index", "time_minute_of_day", "time_day_of_week",
@@ -196,6 +208,40 @@ def _col(df: pd.DataFrame, name: str) -> pd.Series:
     return pd.Series(np.nan, index=df.index, dtype=float)
 
 
+def _resolve(df: pd.DataFrame, names: Sequence[str]) -> pd.Series:
+    """First present column among `names` as float series (NaN if none present).
+
+    This is what lets one function serve both naming conventions:
+    training assembly (atm_ce_oi, opt_flow_ce_oi_total) and the live panel
+    (opt_0_ce_oi, ce_oi_total). Add an alias here, not a second code path.
+    """
+    for name in names:
+        if name in df.columns:
+            return pd.to_numeric(df[name], errors="coerce")
+    return pd.Series(np.nan, index=df.index, dtype=float)
+
+
+def _resolve_sum(df: pd.DataFrame, names: Sequence[str]) -> pd.Series:
+    """Sum of all present columns among `names` (NaN if none present, min_count=1)."""
+    present = [pd.to_numeric(df[n], errors="coerce") for n in names if n in df.columns]
+    if not present:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    return pd.concat(present, axis=1).sum(axis=1, min_count=1)
+
+
+def _rel_with_zero_guard(value: pd.Series, window: int = 20, min_p: int = 5) -> pd.Series:
+    """value / rolling-mean(value); a window of all-zeros maps to 0.0 (not NaN).
+
+    Mirrors runtime_features._add_group_features zero-window handling so the
+    rel-volume / rel-OI features match across training and live exactly.
+    """
+    roll = value.rolling(window, min_periods=min_p).mean()
+    out = value / roll.replace(0.0, np.nan)
+    zero_win = value.fillna(0.0).eq(0.0) & roll.fillna(0.0).eq(0.0)
+    out = out.where(~zero_win, 0.0)
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Layer 0 — Schema normalisation
 # Maps raw/alias column names to canonical v2 schema names.
@@ -280,6 +326,8 @@ def _layer_2_technicals(df: pd.DataFrame) -> pd.DataFrame:
         df["ema_9_slope"] = df["ema_9"].diff()
     if "ema_21_slope" not in df.columns:
         df["ema_21_slope"] = df["ema_21"].diff()
+    if "ema_50_slope" not in df.columns:
+        df["ema_50_slope"] = df["ema_50"].diff()
 
     # RSI / ATR / ADX
     if "osc_rsi_14" not in df.columns:
@@ -288,6 +336,13 @@ def _layer_2_technicals(df: pd.DataFrame) -> pd.DataFrame:
         df["osc_atr_14"] = _atr(shi, slo, sc, 14)
     if "osc_atr_ratio" not in df.columns:
         df["osc_atr_ratio"] = df["osc_atr_14"] / sc.replace(0.0, np.nan)
+    if "osc_atr_percentile" not in df.columns:
+        # Intraday expanding percentile rank of atr_ratio (single-day causal).
+        df["osc_atr_percentile"] = df["osc_atr_ratio"].expanding(min_periods=20).rank(pct=True)
+    if "osc_atr_daily_percentile" not in df.columns:
+        # Cross-session feature — inherently needs prior-day history.
+        # Single-day build leaves NaN; the cross-day assemble step fills it.
+        df["osc_atr_daily_percentile"] = np.nan
     if "adx_14" not in df.columns:
         df["adx_14"] = _adx(shi, slo, sc, 14)
 
@@ -325,12 +380,98 @@ def _layer_2_technicals(df: pd.DataFrame) -> pd.DataFrame:
     if "fut_flow_oi_change_5m" not in df.columns:
         df["fut_flow_oi_change_5m"] = foi.diff(5)
 
-    # PCR momentum
-    for window, name in [(5, "opt_flow_pcr_change_5m"),
-                         (15, "opt_flow_pcr_change_15m"),
-                         (30, "opt_flow_pcr_change_30m")]:
-        if name not in df.columns:
-            df[name] = pcr.diff(window)
+    # PCR momentum (contract names pcr_change_5m/15m; 30m kept as extra)
+    if "pcr_change_5m" not in df.columns:
+        df["pcr_change_5m"] = pcr.diff(5)
+    if "pcr_change_15m" not in df.columns:
+        df["pcr_change_15m"] = pcr.diff(15)
+    if "pcr_change_30m" not in df.columns:
+        df["pcr_change_30m"] = pcr.diff(30)
+
+    return df
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Layer 2b — Futures flow, basis, option flow derivatives
+# All contract opt_flow_* / fut_flow_* / dist_basis columns.
+# Alias-resolved inputs → one function serves training + live naming.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _layer_2b_flow(df: pd.DataFrame) -> pd.DataFrame:
+    sc   = _col(df, "px_fut_close")
+    vol  = _col(df, "fut_flow_volume")
+    foi  = _col(df, "fut_flow_oi")
+    spot = _resolve(df, ["px_spot_close", "spot_close"])
+
+    # ── Basis (fut − spot) → contract dist_basis ─────────────────────────
+    if "dist_basis" not in df.columns:
+        basis = sc - spot
+        df["dist_basis"] = basis
+        df["dist_basis_change_1m"] = basis.diff(1)
+
+    # ── Futures flow: rel-volume, accel, rel-OI, OI z-score ──────────────
+    if "fut_flow_rel_volume_20" not in df.columns:
+        df["fut_flow_rel_volume_20"] = _rel_with_zero_guard(vol, 20, 5)
+    if "fut_flow_volume_accel_1m" not in df.columns:
+        df["fut_flow_volume_accel_1m"] = vol.pct_change(1, fill_method=None).replace([np.inf, -np.inf], np.nan)
+    if "fut_flow_oi_rel_20" not in df.columns:
+        df["fut_flow_oi_rel_20"] = _rel_with_zero_guard(foi, 20, 5)
+    if "fut_flow_oi_zscore_20" not in df.columns:
+        oi_roll = foi.rolling(20, min_periods=5).mean()
+        oi_std_raw = foi.rolling(20, min_periods=5).std(ddof=0)
+        z = (foi - oi_roll) / oi_std_raw.replace(0.0, np.nan)
+        zero_win = oi_std_raw.fillna(0.0).eq(0.0) & (foi - oi_roll).fillna(0.0).eq(0.0)
+        df["fut_flow_oi_zscore_20"] = z.where(~zero_win, 0.0)
+
+    # ── Option flow aggregates (alias-resolved CE/PE totals) ─────────────
+    ce_oi  = _resolve(df, ["opt_flow_ce_oi_total", "ce_oi_total"])
+    pe_oi  = _resolve(df, ["opt_flow_pe_oi_total", "pe_oi_total"])
+    ce_vol = _resolve(df, ["opt_flow_ce_volume_total", "ce_volume_total"])
+    pe_vol = _resolve(df, ["opt_flow_pe_volume_total", "pe_volume_total"])
+    pcr    = _resolve(df, ["opt_flow_pcr_oi", "pcr_oi"])
+
+    if "opt_flow_ce_pe_oi_diff" not in df.columns:
+        df["opt_flow_ce_pe_oi_diff"] = ce_oi - pe_oi
+    if "opt_flow_ce_pe_volume_diff" not in df.columns:
+        df["opt_flow_ce_pe_volume_diff"] = ce_vol - pe_vol
+    if "opt_flow_options_volume_total" not in df.columns:
+        df["opt_flow_options_volume_total"] = ce_vol + pe_vol
+    if "opt_flow_rel_volume_20" not in df.columns:
+        df["opt_flow_rel_volume_20"] = _rel_with_zero_guard(ce_vol + pe_vol, 20, 5)
+
+    # ── ATM strike + same-ATM-guarded returns / OI change ────────────────
+    atm_strike = _resolve(df, ["opt_flow_atm_strike", "atm_strike"])
+    if "opt_flow_atm_strike" not in df.columns:
+        df["opt_flow_atm_strike"] = atm_strike
+    same_atm = atm_strike.notna() & atm_strike.eq(atm_strike.shift(1))
+
+    atm_ce_close = _resolve(df, ["opt_0_ce_close", "atm_ce_ltp", "atm_ce_close"])
+    atm_pe_close = _resolve(df, ["opt_0_pe_close", "atm_pe_ltp", "atm_pe_close"])
+    atm_ce_oi    = _resolve(df, ["atm_ce_oi", "opt_0_ce_oi"])
+    atm_pe_oi    = _resolve(df, ["atm_pe_oi", "opt_0_pe_oi"])
+
+    if "opt_flow_atm_call_return_1m" not in df.columns:
+        df["opt_flow_atm_call_return_1m"] = atm_ce_close.pct_change(1, fill_method=None).where(same_atm)
+    if "opt_flow_atm_put_return_1m" not in df.columns:
+        df["opt_flow_atm_put_return_1m"] = atm_pe_close.pct_change(1, fill_method=None).where(same_atm)
+    if "opt_flow_atm_oi_change_1m" not in df.columns:
+        df["opt_flow_atm_oi_change_1m"] = (atm_ce_oi + atm_pe_oi).diff(1).where(same_atm)
+
+    # ── atm_oi_ratio + near_atm_oi_ratio (±1 strike) ─────────────────────
+    if "atm_oi_ratio" not in df.columns:
+        atm_total = (atm_ce_oi + atm_pe_oi).replace(0.0, np.nan)
+        df["atm_oi_ratio"] = (atm_ce_oi / atm_total).where(atm_ce_oi.notna() & atm_pe_oi.notna())
+    if "near_atm_oi_ratio" not in df.columns:
+        near_ce = _resolve_sum(df, ["opt_m1_ce_oi", "opt_0_ce_oi", "opt_p1_ce_oi"])
+        near_pe = _resolve_sum(df, ["opt_m1_pe_oi", "opt_0_pe_oi", "opt_p1_pe_oi"])
+        near_total = (near_ce + near_pe).replace(0.0, np.nan)
+        near_ratio = (near_ce / near_total).where(near_ce.notna() & near_pe.notna())
+        # fall back to atm_oi_ratio when near strikes unavailable
+        df["near_atm_oi_ratio"] = near_ratio.where(near_ratio.notna(), df.get("atm_oi_ratio"))
+
+    # ── opt_flow_rows (chain breadth) — pass through if provided ─────────
+    if "opt_flow_rows" not in df.columns:
+        df["opt_flow_rows"] = _resolve(df, ["opt_flow_rows", "options_rows"])
 
     return df
 
@@ -383,16 +524,27 @@ def _layer_3_session(df: pd.DataFrame, *, n_total_bars: int = 376) -> pd.DataFra
         df["orb_high_reject"]                 = ((sc.shift(1) > orb_high) & (sc < orb_high)).astype(int)
         df["orb_low_reject"]                  = ((sc.shift(1) < orb_low)  & (sc > orb_low)).astype(int)
 
-    # ── Time features (from DatetimeIndex or time_minute_index if present) ─
+    # ── Opening-range ready flag (>= _ORB_BARS bars elapsed) ─────────────
+    if "ctx_opening_range_ready" not in df.columns:
+        bar_pos = np.arange(len(df))
+        df["ctx_opening_range_ready"] = (bar_pos >= _ORB_BARS).astype(int)
+
+    # ── Time features ─────────────────────────────────────────────────────
+    # bar index (0 at 9:15) is always positional; minute_of_day/day_of_week
+    # come from the DatetimeIndex when present so training and live agree.
+    n = len(df)
     if "time_minute_index" not in df.columns:
-        n = len(df)
-        df["time_minute_index"]  = list(range(n))       # 0 at 09:15
-        df["time_minute_of_day"] = list(range(n))
-        if hasattr(df.index, "weekday"):
-            df["time_day_of_week"] = df.index.weekday
+        df["time_minute_index"] = np.arange(n)
+    if "minutes_to_close" not in df.columns:
+        df["minutes_to_close"] = max(0, n_total_bars - 1) - pd.Series(np.arange(n), index=df.index)
+    is_dt_index = isinstance(df.index, pd.DatetimeIndex)
+    if "time_minute_of_day" not in df.columns:
+        if is_dt_index:
+            df["time_minute_of_day"] = df.index.hour * 60 + df.index.minute
         else:
-            df["time_day_of_week"] = np.nan
-        df["minutes_to_close"] = max(0, n_total_bars - 1) - pd.Series(range(n), index=df.index)
+            df["time_minute_of_day"] = np.arange(n)
+    if "time_day_of_week" not in df.columns:
+        df["time_day_of_week"] = df.index.dayofweek if is_dt_index else np.nan
 
     return df
 
@@ -503,8 +655,8 @@ def _layer_6_context(
 # ══════════════════════════════════════════════════════════════════════════════
 
 ALL_LAYERS: Sequence[str] = ("0_normalise", "1_returns", "2_technicals",
-                              "3_session", "4_velocity", "5_compression",
-                              "6_context")
+                              "2b_flow", "3_session", "4_velocity",
+                              "5_compression", "6_context")
 
 
 def build_features(
@@ -554,6 +706,7 @@ def build_features(
     if "0_normalise"  in run: df = _layer_0_normalise(df)
     if "1_returns"    in run: df = _layer_1_returns(df)
     if "2_technicals" in run: df = _layer_2_technicals(df)
+    if "2b_flow"      in run: df = _layer_2b_flow(df)
     if "3_session"    in run: df = _layer_3_session(df, n_total_bars=n_total_bars)
     if "4_velocity"   in run:
         df = _layer_4_velocity(
