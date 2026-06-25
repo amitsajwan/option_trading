@@ -53,10 +53,8 @@ import numpy as np
 import pandas as pd
 import requests
 
-# Shared feature computation — same code used by live snapshot_app.
-# This is the single source of truth that eliminates train/serve skew.
-from snapshot_app.core.velocity_features import compute_per_bar_velocity_df
-from snapshot_app.core.compression_features import add_compression_features_from_flat
+# Shared feature computation — single source of truth for training AND runtime.
+from snapshot_app.core.feature_engine import build_features
 
 # Batch pipeline — suppress fragmentation warning from column-by-column option assembly
 warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
@@ -406,13 +404,6 @@ def _adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) ->
     return dx.ewm(span=period, adjust=False).mean()
 
 
-def _next_weekly_expiry(trade_date: date) -> date:
-    """Nearest weekly BankNifty expiry: Wednesday from 2024, Thursday before."""
-    target_wd = 2 if trade_date.year >= 2024 else 3  # Wed=2, Thu=3
-    days_ahead = (target_wd - trade_date.weekday()) % 7
-    return trade_date + timedelta(days=days_ahead)
-
-
 # ── Step 2: BUILD INDICATORS ──────────────────────────────────────────────────
 
 def run_build(args):
@@ -513,118 +504,22 @@ def _build_day_indicators(
         rows[v2] = idx_al[raw]
     rows["fut_flow_volume"] = idx_al.get("volume", pd.Series(0, index=sess_idx))
 
-    sc  = rows["px_fut_close"]
-    shi = rows["px_fut_high"]
-    slo = rows["px_fut_low"]
-    sop = rows["px_fut_open"]
-
-    # ── Session / time features ───────────────────────────────────────────
     rows["trade_date"] = trade_date
     rows["instrument"] = "BANKNIFTY"
-    bar_idx = list(range(n_bars))
-    rows["time_minute_index"]  = bar_idx          # 0 at 09:15
-    rows["time_minute_of_day"] = bar_idx          # alias used by feature sets
-    rows["time_day_of_week"]   = trade_date.weekday()
-    rows["minutes_to_close"]   = n_bars - 1 - pd.Series(bar_idx, index=sess_idx)
 
-    # ── Underlying returns (v2 names: ret_*) ─────────────────────────────
-    rows["ret_1m"]  = sc.pct_change(1)
-    rows["ret_3m"]  = sc.pct_change(3)
-    rows["ret_5m"]  = sc.pct_change(5)
-    rows["ret_10m"] = sc.pct_change(10)
-    rows["ret_15m"] = sc.pct_change(15)
-    rows["ret_30m"] = sc.pct_change(30)
-    rows["ret_open"] = (sc - sc.iloc[0]) / sc.iloc[0]  # return from day open
-
-    # ── Technical indicators ──────────────────────────────────────────────
-    rows["ema_9"]  = _ema(sc, 9)
-    rows["ema_21"] = _ema(sc, 21)
-    rows["ema_50"] = _ema(sc, 50)
-    rows["ema_9_21_spread"] = (rows["ema_9"] - rows["ema_21"]) / sc
-    rows["ema_above_21"]    = (rows["ema_9"] > rows["ema_21"]).astype(int)
-
-    rows["osc_rsi_14"] = _rsi(sc, 14)
-    rows["osc_atr_14"] = _atr(shi, slo, sc, 14)
-    rows["osc_atr_ratio"] = rows["osc_atr_14"] / sc  # normalized ATR
-    rows["adx_14"]     = _adx(shi, slo, sc, 14)
-
-    # Bollinger bands
-    bb_mid = sc.rolling(20).mean()
-    bb_std = sc.rolling(20).std()
-    rows["bb_upper"] = bb_mid + 2 * bb_std
-    rows["bb_lower"] = bb_mid - 2 * bb_std
-    rows["bb_width"] = (rows["bb_upper"] - rows["bb_lower"]) / bb_mid.replace(0, np.nan)
-    rows["bb_position"] = (sc - rows["bb_lower"]) / (
-        rows["bb_upper"] - rows["bb_lower"]
-    ).replace(0, np.nan)
-
-    # Realized volatility (annualized)
-    log_ret = np.log(sc / sc.shift(1))
-    rows["realized_vol_5m"]  = log_ret.rolling(5).std()  * np.sqrt(375)
-    rows["realized_vol_15m"] = log_ret.rolling(15).std() * np.sqrt(375)
-    rows["realized_vol_30m"] = log_ret.rolling(30).std() * np.sqrt(375)
-
-    # Running day high/low and distances
-    rows["day_high"] = shi.expanding().max()
-    rows["day_low"]  = slo.expanding().min()
-    rows["dist_from_day_high"] = (rows["day_high"] - sc) / sc
-    rows["dist_from_day_low"]  = (sc - rows["day_low"])  / sc
-
-    # Volume features
-    vol = rows["fut_flow_volume"].fillna(0).clip(lower=0)
-    rows["vol_spike_ratio"] = vol / vol.rolling(20).mean().replace(0, np.nan)
-
-    # Momentum (price relative to rolling mean)
-    rows["momentum_5m"]  = (sc - sc.rolling(5).mean())  / sc
-    rows["momentum_15m"] = (sc - sc.rolling(15).mean()) / sc
-
-    # ── VWAP (v2 names) ───────────────────────────────────────────────────
-    pv = sc * vol
-    cum_vol = vol.cumsum()
-    rows["vwap_fut"]      = pv.cumsum() / cum_vol.replace(0, np.nan)
-    rows["ctx_above_vwap"] = (sc > rows["vwap_fut"]).astype(int)
-    rows["vwap_distance"] = (sc - rows["vwap_fut"]) / sc  # v2 schema name
-
-    # ── Opening Range (first 15 min = bars 0-14) ─────────────────────────
-    orb_bars = rows.iloc[:15]
-    orb_high = orb_bars["px_fut_high"].max()
-    orb_low  = orb_bars["px_fut_low"].min()
-    orb_open = sop.iloc[0]
-    rows["ctx_opening_range_high"]         = orb_high
-    rows["ctx_opening_range_low"]          = orb_low
-    rows["ctx_opening_range_width"]        = orb_high - orb_low
-    rows["ctx_orb_width_pct"]              = (orb_high - orb_low) / orb_open * 100
-    rows["ctx_opening_range_breakout_up"]  = (sc > orb_high).astype(int)
-    rows["ctx_opening_range_breakout_down"]= (sc < orb_low).astype(int)
-    rows["orb_high_reject"] = (
-        (sc.shift(1) > orb_high) & (sc < orb_high)
-    ).astype(int)
-    rows["orb_low_reject"] = (
-        (sc.shift(1) < orb_low) & (sc > orb_low)
-    ).astype(int)
-
-    # ── Context / expiry features ─────────────────────────────────────────
-    expiry = _next_weekly_expiry(trade_date)
-    dte    = (expiry - trade_date).days
-    rows["ctx_dte_days"]       = dte
-    rows["ctx_is_expiry_day"]  = int(dte == 0)
-    rows["ctx_is_near_expiry"] = int(dte <= 1)
-    rows["ctx_regime_expiry_near"] = int(dte <= 1)
-
-    # ── VIX ──────────────────────────────────────────────────────────────
+    # ── VIX (raw column — feature_engine Layer 6 will compute ctx_is_high_vix_day) ─
+    vix_open_val: Optional[float] = None
     if not vix_df.empty:
-        vix_ist = vix_df.index.tz_convert(IST)
+        vix_ist  = vix_df.index.tz_convert(IST)
         vix_mask = vix_ist.date == trade_date
-        vix_day = vix_df[vix_mask].tz_convert(IST)
+        vix_day  = vix_df[vix_mask].tz_convert(IST)
         if not vix_day.empty:
             vix_al = vix_day.reindex(sess_idx, method="nearest",
                                      tolerance=pd.Timedelta("90s"))
-            rows["vix"]             = vix_al["close"]
-            vix_open = vix_al["close"].dropna().iloc[0] if vix_al["close"].notna().any() else np.nan
-            rows["vix_open_day"]    = vix_open
-            rows["vix_intraday_chg"]= (rows["vix"] - vix_open) / vix_open * 100
-            is_high_vix = float(vix_open) > 18.0 if not np.isnan(float(vix_open) if vix_open is not None else np.nan) else False
-            rows["ctx_is_high_vix_day"] = int(is_high_vix)
+            rows["vix"] = vix_al["close"]
+            first_valid = vix_al["close"].dropna()
+            if len(first_valid) > 0:
+                vix_open_val = float(first_valid.iloc[0])
 
     # ── Options data ──────────────────────────────────────────────────────
     ce_oi_series, pe_oi_series = [], []
@@ -718,54 +613,28 @@ def _build_day_indicators(
             / combined_oi.rolling(20).std().replace(0, np.nan)
         )
 
-    # PCR momentum (changes over multiple horizons)
-    if "opt_flow_pcr_oi" in rows.columns:
-        pcr = rows["opt_flow_pcr_oi"]
-        rows["pcr_change_5m"]  = pcr.diff(5)
-        rows["pcr_change_15m"] = pcr.diff(15)
-        rows["pcr_change_30m"] = pcr.diff(30)
-
-    # ── IV features ───────────────────────────────────────────────────────
+    # ── IV enrichment (raw inputs for velocity layer) ────────────────────
     if "atm_ce_iv" in rows.columns and "atm_pe_iv" in rows.columns:
         rows["atm_iv"]  = (rows["atm_ce_iv"] + rows["atm_pe_iv"]) / 2
-        rows["iv_skew"] = rows["atm_ce_iv"] - rows["atm_pe_iv"]
+        if "iv_skew" not in rows.columns:
+            rows["iv_skew"] = rows["atm_ce_iv"] - rows["atm_pe_iv"]
         rows["iv_pct_rank_session"] = rows["atm_iv"].rank(pct=True)
-        # Rolling 60-bar IV percentile (intraday momentum)
-        rows["iv_pct_rank_60m"] = rows["atm_iv"].rolling(60).apply(
-            lambda x: pd.Series(x).rank(pct=True).iloc[-1], raw=False
-        )
 
     if "atm_ce_ltp" in rows.columns and "atm_pe_ltp" in rows.columns:
-        rows["atm_straddle_premium"] = rows["atm_ce_ltp"] + rows["atm_pe_ltp"]
+        rows["atm_straddle_premium"]   = rows["atm_ce_ltp"] + rows["atm_pe_ltp"]
         rows["atm_ce_pe_premium_ratio"] = (
             rows["atm_ce_ltp"] / rows["atm_pe_ltp"].replace(0, np.nan)
         )
 
-    # ── Velocity features (vel_* and ctx_am_*) — shared with live runtime ──
-    # compute_per_bar_velocity_df is the SAME function used by live_velocity_state.
-    # No 11:30 restriction: features are valid from bar 0 (9:15) onwards.
-    rows = compute_per_bar_velocity_df(
+    # ── Feature engine — all derived features (L1-L6) ────────────────────
+    # Same build_features() call used by the live runtime.
+    # Layers: returns → technicals → session → velocity → compression → context
+    rows = build_features(
         rows,
+        trade_date=trade_date,
         prev_day_close=prev_day_close,
+        vix_open=vix_open_val,
     )
-
-    # ── Compression / stored-energy features (comp_*) ─────────────────────
-    # add_compression_features_from_flat is the SAME function used by
-    # snapshot_app/core/ at runtime — single source of truth, zero skew.
-    rows = add_compression_features_from_flat(rows)
-
-    # ── Regime context features (ctx_regime_*) ────────────────────────────
-    rows["ctx_regime_trend_up"]   = (
-        (rows["ema_9"] > rows["ema_21"]) & (rows["ema_21"] > rows["ema_50"])
-    ).astype(int)
-    rows["ctx_regime_trend_down"] = (
-        (rows["ema_9"] < rows["ema_21"]) & (rows["ema_21"] < rows["ema_50"])
-    ).astype(int)
-    # ATR regime (vs intraday median)
-    atr_median = atr14.expanding().median()
-    rows["ctx_regime_atr_high"] = (atr14 > atr_median).astype(int)
-    rows["ctx_regime_atr_low"]  = (atr14 < atr_median).astype(int)
-    rows["ctx_regime_vol_high"] = (rows["vol_spike_ratio"] > 1.5).astype(int)
 
     return rows.reset_index()
 
