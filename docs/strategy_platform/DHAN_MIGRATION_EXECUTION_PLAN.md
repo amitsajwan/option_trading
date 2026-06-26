@@ -324,11 +324,22 @@ The bundle's feature list MUST be a subset of I4's columns (else live can't prod
 - The first commit `d30d711` already **interleaves** Dhan-feed files (`dhan_client.py`, `dhan_data_service.py`, `dhan_data_pipeline.py`) with shared feature code (`velocity_features.py`, `live_velocity_state.py` — the per-bar/no-11:30 change). Splitting needs interactive-rebase surgery for marginal benefit.
 - **Dhan code is inert until `DHAN_ACCESS_TOKEN` is set** (auto-select in `api_service._build_svc`). So shipping it dormant is safe — the convergence/skew fixes deploy, Dhan stays off.
 
-**Decision — merge train (this also delivers the `dist_from_day` live fix):**
+> ⚠️ **CORRECTION (2026-06-26, evidence-based — overrides the merge-train deploy framing below).**
+> The audit in §2b proved the convergence is **not a skew-fix** — it's a **convention change**. The
+> deployed v2 model and the live paths currently *match* (old forms); there is **no live bug to
+> fast-track.** Deploying the feature_engine convention to live **against the still-deployed v2 model
+> would CREATE skew** on `dist_from_day` (sign), `ema_spread` (scale), regime/expiry definitions, etc.
+> "Parity-locked across the 3 live paths" ≠ "safe against the v2 model." So:
+> - **Merging to `main` is fine** — the code can land (Dhan dormant; feature changes present in source).
+> - **Deploying the feature changes is NOT** — it must wait for the feature_engine-trained model and
+>   ship **atomically** with it (rule #3). There is **no standalone fast-track.**
+
+**Decision — merge train (deploy gated on the new model):**
 1. Validate + merge `feat/compression-state-engine` → `main` (its own gate; it's the unmerged base).
 2. Merge `feat/dhan-feature-engine` → `main` as a single PR. Dhan feed lands **dormant** (no token).
-3. Rebuild images (rule #1), SIM-validate, deploy. The `dist_from_day` sign fix + 4 other skews reach live here — **no Dhan dependency**.
-4. *(Optional fast-track)* if the skew fix is urgent on its own, do steps 1–3 now and treat Dhan backfill/retrain as the later, separate effort — the feature defs are already correct and parity-locked.
+   The feature_engine convention is now in `main` but **not yet deployed**.
+3. **Do NOT rebuild/deploy the feature changes against the v2 model.** Deploy only once the
+   feature_engine-trained model is ready, atomically (rule #3). Until then `main` ≠ deployed image.
 
 ### Decide BEFORE backfill/retrain (Track 2/3)
 1. **Backfill token bootstrap** — backfill is blocked on a Dhan token. Use a **manually generated** token to unblock the 5-yr fetch while T1 token-automation lands in parallel, or serialize (T1 fully done → then backfill)?
@@ -340,3 +351,36 @@ The bundle's feature list MUST be a subset of I4's columns (else live can't prod
 5. **WebSocket**: official `dhanhq` SDK vs custom binary parser? (Recommend SDK first — WS-A.)
 6. **Greeks** (delta/theta/vega) — Dhan provides them, Kite didn't. Add as model features later? (Evaluate post-cutover; not in the parity contract today.)
 7. **ML VM ownership** during backfill+retrain — backfill (WS-D) and retrain (WS-E) share one box; who schedules off-market windows? (oracle labeling needs ≥64 GB RAM per AGENTS.md.)
+
+---
+
+## 8. Risks, sequencing & data verification (2026-06-26)
+
+### 8.1 Data verification — done, on the ML VM (`~/dhan_pipeline/raw/`)
+
+| Check | Result |
+|---|---|
+| **Completeness** ✅ | Index 1,223 days / VIX 1,222 / ATM options 1,212 days, 2021-08-04→2026-06-25. Index+VIX have only **2 thin days**; ATM options **0 thin days** (~373 bars/day). ≈4.9 yr as expected. **Good to build.** |
+| **Expiry column** ⚠️ | **None.** Raw option parquet cols = `ce_open/high/low/close, ce_iv, ce_oi, ce_volume, spot` — **no expiry date**. So "real expiry from data" is impossible. |
+| Earlier "ATM+1 empty" warnings | Evidently transient/recovered — completeness counts are clean. |
+
+**Consequence:** the expiry-correctness fix (§2b) must use the **holiday-aware NSE calendar already in
+the repo** (`config/nse_holidays.json`), not the raw data, to replace `_next_weekly_expiry`'s naive
+Wed/Thu rule. Probe script: `/tmp/dhan_probe.py` (re-runnable).
+
+### 8.2 Risks the team must hold
+
+1. **Two cutovers, not one — keep them decoupled.** *Feature/model* cutover (feature_engine-live +
+   dhan-trained model — atomic, skew-critical) is **independent** of the *feed* cutover (Kite→Dhan).
+   feature_engine-live can run on the existing Kite feed. Don't bundle them into one risky deploy.
+2. **Migration ≠ edge.** Per our own history (buying has no robust edge; direction is the bottleneck),
+   more data + Greeks may *not* yield a profitable model. Dhan migration is **infrastructure**; it does
+   not by itself clear the real-money gate. Don't let "retrain → done" creep in.
+3. **Validate the data before `build`** ✅ (done, §8.1) — complete, build-ready.
+4. **Expiry fix is calendar-based, not data-based** ✅ (resolved, §8.1) — use `nse_holidays.json`.
+5. **1–2 people = mostly sequential, multi-week critical path.** finalize fe → build (hrs) → assemble
+   → train (days, shared VM) → validate → SIM → cutover. The "3 parallel tracks" framing oversells
+   parallelism at this headcount. The ML VM is contended (training sessions already running).
+6. **Large unmerged branch = drift risk.** Decide: keep `feat/dhan-feature-engine` branched until the
+   new model exists (safer; diverges from main), or merge early **dormant + undeployed** (§7.1). Lean
+   keep-branched until the model exists, OR merge but **never deploy the feature changes vs the v2 model**.
