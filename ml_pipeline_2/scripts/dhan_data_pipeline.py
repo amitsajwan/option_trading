@@ -1037,7 +1037,12 @@ def _build_day_indicators(
         expiry_date=expiry_date,   # monthly expiry (raw data has no expiry column)
     )
 
-    return rows.reset_index()
+    out = rows.reset_index()  # ts_ist column
+    # Contract requires a `timestamp` column (ISO). The index is ts_ist; emit both so
+    # the snapshot_ml_flat contract + stage-view builder (ORDER BY timestamp) are satisfied.
+    if "timestamp" not in out.columns and "ts_ist" in out.columns:
+        out["timestamp"] = pd.to_datetime(out["ts_ist"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M:%S")
+    return out
 
 
 def _verify_indicators(indicators_dir: Path, sample_dates: List[date]):
