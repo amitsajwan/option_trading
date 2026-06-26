@@ -36,12 +36,20 @@ no skew, by construction.
 | Dhan live feed client + service (`dhan_client.py`, `dhan_data_service.py`) | `d30d711` | auto-selected when `DHAN_ACCESS_TOKEN` set |
 | Velocity computed **per-bar from 09:15** (11:30 restriction removed) | `d30d711`, `b46f6b1` | velocity-state tests updated |
 | Parity harness: `feature_engine` ≡ legacy live path, 31 cols exact | `40dabf0` | `test_feature_engine_parity.py` |
-| Convergence: `_add_group_features` + `RollingFeatureState` fixed to match `feature_engine` (5 skews) | *(uncommitted, in progress)* | parity test now 0-divergence on ALL cols |
+| Convergence: `_add_group_features` + `RollingFeatureState` fixed to match `feature_engine` (5 skews) | committed on `feat/dhan-feature-engine` | parity tests 0-divergence on ALL cols |
+| `snapshot_app` suite green — feature_engine, runtime_features, market_snapshot, velocity, contracts | committed | **152 passed** |
+| 5 latent train/serve skews fixed — incl. `dist_from_day` sign flip (deployed model was fed wrong sign) and RSI zero-loss→NaN | committed | parity + unit tests |
+| `strategy_app` targeted: `rolling_feature_state`, batch-vs-stream parity | committed | green |
 
 ### 🔄 In progress (this session)
 
-- Convergence of the live paths (the 5 skew-fixes) — code done, **final full-suite run + commit pending**.
-- Live A (`market_snapshot.prepare_market_snapshot_window`) `dist_from_day_*` fix — **edited, not yet tested/committed**.
+- *(none — feature unification is complete and verified.)*
+
+**Test note:** `snapshot_app` suite 152/152 green; `strategy_app` green except one **pre-existing,
+unrelated** hang — `test_stage_consumers.py::TestStrikeDecisionConsumer::test_publishes_strike_event`
+(an event-bus/Redis consumer test that blocks waiting on a message in this environment; imports no
+feature modules; hangs in isolation on its own). **Not caused by this work** — do not chase it as a
+feature-engine regression.
 
 ### ⛔ Not started
 
@@ -230,7 +238,22 @@ The bundle's feature list MUST be a subset of I4's columns (else live can't prod
 
 ## 7. Open questions for the team / decisions pending
 
-1. WebSocket: official `dhanhq` SDK vs custom binary parser? (Recommend SDK first — WS-A.)
-2. Greeks (delta/theta/vega) — Dhan provides them, Kite didn't. Add as model features in WS-E? (Evaluate, don't block.)
-3. Merge strategy for `feat/dhan-feature-engine` — single PR or split (feature-engine vs Dhan-feed)?
-4. Who owns the ML VM during backfill+retrain (WS-D, WS-E) — they share the box.
+*Updated 2026-06-26 after convergence landed. Tagged so we can pick work off this list.*
+
+### Resolved this session
+- ~~Will the 3 live paths converge to feature_engine with 0 divergence?~~ **Yes** — parity tests 0-divergence on all cols; 5 skews fixed.
+
+### Decide NOW (blocks/affects live before any Dhan cutover)
+1. **Hotfix the live `dist_from_day` sign flip on `main`?** The currently-deployed model is being fed the **wrong sign** today (Live A, `market_snapshot`). Do we cherry-pick just that fix to `main` + rebuild now, or wait for the atomic Dhan cutover? *(Risk: shipping a feature-def change without the matching retrain — but the model trained on the correct sign, so live is the broken half. Lean: hotfix now, it moves live toward train.)*
+2. **Merge strategy for `feat/dhan-feature-engine`** — single PR, or split into (a) feature-engine convergence (mergeable now, no Dhan dep) and (b) Dhan feed/pipeline (gated on token)? Split lets the convergence/skew fixes land + deploy independently of Dhan connectivity.
+
+### Decide BEFORE backfill/retrain (Track 2/3)
+3. **Backfill token bootstrap** — backfill is blocked on a Dhan token. Use a **manually generated** token to unblock the 5-yr fetch while T1 token-automation lands in parallel, or serialize (T1 fully done → then backfill)?
+4. **Dataset identity** — keep new `snapshots_dhan_v1` as a distinct dataset, or land it under the existing `snapshots_ml_flat_v2` name once schema-validated? (Affects every downstream reader / manifest default.)
+5. **Retrain scope** — retrain only entry + direction on `snapshots_dhan_v1`, or also the `option_pnl` bundle? (option_pnl is currently set-but-unused in live deterministic path per memory; confirm before spending VM time.)
+6. **Velocity-from-09:15 distribution shift** — removing the 11:30 restriction changes velocity feature distributions vs what older models trained on. Confirm retrain consumes the new per-bar velocity (it should, single feature_engine) and that no still-deployed model binds the old 11:30-only definition.
+
+### Evaluate, don't block
+7. **WebSocket**: official `dhanhq` SDK vs custom binary parser? (Recommend SDK first — WS-A.)
+8. **Greeks** (delta/theta/vega) — Dhan provides them, Kite didn't. Add as model features later? (Evaluate post-cutover; not in the parity contract today.)
+9. **ML VM ownership** during backfill+retrain — backfill (WS-D) and retrain (WS-E) share one box; who schedules off-market windows? (oracle labeling needs ≥64 GB RAM per AGENTS.md.)
