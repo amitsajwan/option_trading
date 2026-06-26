@@ -163,7 +163,15 @@ def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
     avg_gain = gain.ewm(alpha=1.0 / period, adjust=False, min_periods=1).mean()
     avg_loss = loss.ewm(alpha=1.0 / period, adjust=False, min_periods=1).mean()
     rs       = avg_gain / avg_loss.replace(0.0, np.nan)
-    return 100.0 - (100.0 / (1.0 + rs))
+    rsi      = 100.0 - (100.0 / (1.0 + rs))
+    # Zero-loss windows (pure uptrend) → RSI 100; zero-gain (pure downtrend) → 0.
+    # Without this, avg_loss==0 makes rs NaN → rsi NaN (a pure trend is exactly
+    # when RSI should be saturated, not undefined). avg_gain/avg_loss are NaN only
+    # at the very first bar (no delta yet), which correctly stays NaN.
+    zero_loss = (avg_loss == 0.0) & (avg_gain > 0.0)
+    zero_gain = (avg_gain == 0.0) & (avg_loss > 0.0)
+    rsi = rsi.mask(zero_loss, 100.0).mask(zero_gain, 0.0)
+    return rsi
 
 
 def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:

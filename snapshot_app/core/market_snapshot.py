@@ -1150,8 +1150,13 @@ def prepare_market_snapshot_window(
 
     same_day["day_high"] = same_day["high"].cummax()
     same_day["day_low"] = same_day["low"].cummin()
-    same_day["dist_from_day_high"] = (same_day["close"] - same_day["day_high"]) / same_day["day_high"].replace(0.0, np.nan)
-    same_day["dist_from_day_low"] = (same_day["close"] - same_day["day_low"]) / same_day["day_low"].replace(0.0, np.nan)
+    # Converged onto feature_engine: day_high distance is a non-negative magnitude
+    # (day_high-close)/close; day_low distance is (close-day_low)/close. Was
+    # (close-high)/high / (close-low)/low (opposite sign + different denom).
+    # Training data uses the feature_engine form, so this live path must match.
+    _close_nz = same_day["close"].replace(0.0, np.nan)
+    same_day["dist_from_day_high"] = (same_day["day_high"] - same_day["close"]) / _close_nz
+    same_day["dist_from_day_low"] = (same_day["close"] - same_day["day_low"]) / _close_nz
 
     # BMM compression / stored-energy / structure features (causal). Single source of
     # truth shared with the historical rebuild so there is zero train/serve skew.

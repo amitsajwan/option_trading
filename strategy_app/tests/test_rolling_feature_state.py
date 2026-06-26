@@ -107,8 +107,10 @@ class RollingFeatureStateTests(unittest.TestCase):
         day2_first = state.update(_snap("2026-03-03T09:15:00+05:30", close=51000.0, volume=12000.0))
 
         assert first_day_last is not None
-        self.assertAlmostEqual(float(day2_first["distance_from_day_high"]), (51000.0 - 51010.0) / 51010.0, places=8)
-        self.assertAlmostEqual(float(day2_first["distance_from_day_low"]), (51000.0 - 50990.0) / 50990.0, places=8)
+        # Converged onto feature_engine: dist_high = (day_high-close)/close (non-negative
+        # magnitude), dist_low = (close-day_low)/close. day_high=51010, day_low=50990.
+        self.assertAlmostEqual(float(day2_first["distance_from_day_high"]), (51010.0 - 51000.0) / 51000.0, places=8)
+        self.assertAlmostEqual(float(day2_first["distance_from_day_low"]), (51000.0 - 50990.0) / 51000.0, places=8)
 
     def test_first_bar_and_day_roll_do_not_emit_spurious_atm_oi_change(self) -> None:
         state = RollingFeatureState()

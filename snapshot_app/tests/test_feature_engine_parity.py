@@ -47,20 +47,24 @@ _MATCH_PAIRS = {
     "pcr_change_5m": "pcr_change_5m", "pcr_change_15m": "pcr_change_15m",
     "opening_range_breakout_up": "ctx_opening_range_breakout_up",
     "opening_range_breakout_down": "ctx_opening_range_breakout_down",
+    # formerly-divergent skews, now converged onto feature_engine:
+    "ema_9_21_spread": "ema_9_21_spread",
+    "rsi_14": "osc_rsi_14",
+    "distance_from_day_high": "dist_from_day_high",
+    "distance_from_day_low": "dist_from_day_low",
+    "iv_skew": "iv_skew",
 }
 
-# Deliberate divergences — feature_engine FIXES a pre-existing train/live skew.
-# Documented here so the difference is intentional, reviewed, and not silent.
-_EXPECTED_DIVERGENCES = {
-    "ema_9_21_spread": "fe normalizes (ema9-ema21)/close; legacy was raw. "
-                       "Training data already used the normalized form.",
-    "rsi_14":          "fe uses min_periods=1 (live from bar 1); legacy gated 14 bars. "
-                       "Converge after warmup.",
-    "distance_from_day_high": "fe uses (day_high-close)/close; legacy used "
-                              "(close-high)/high (opposite sign). Training used fe form.",
-    "distance_from_day_low":  "fe uses (close-day_low)/close; legacy used "
-                              "(close-low)/low. Training used fe form.",
-    "iv_skew":         "fe uses raw ce_iv-pe_iv (training def); legacy normalized+clipped.",
+# Formerly-divergent columns — these WERE train/live skews; the convergence
+# commit fixed runtime_features + RollingFeatureState to match feature_engine.
+# They are now MATCH columns. This map documents what was fixed and asserts the
+# fix is not silently reverted (test_former_skews_now_converge).
+_FIXED_SKEWS = {
+    "ema_9_21_spread": "ema_9_21_spread",          # raw -> (ema9-ema21)/close
+    "rsi_14": "osc_rsi_14",                         # local def -> shared feature_engine._rsi
+    "distance_from_day_high": "dist_from_day_high",  # (close-high)/high -> (high-close)/close
+    "distance_from_day_low": "dist_from_day_low",    # (close-low)/low -> (close-low)/close
+    "iv_skew": "iv_skew",                            # normalized+clipped -> raw ce_iv-pe_iv
 }
 
 
@@ -115,26 +119,19 @@ def test_parity_match_columns(legacy, contract):
     )
 
 
-def test_expected_divergences_still_diverge():
-    """Pin the deliberate fixes — if one silently starts matching, we want to know
-    (it would mean a regression undid the skew fix)."""
+@pytest.mark.parametrize("legacy,contract", list(_FIXED_SKEWS.items()))
+def test_former_skews_now_converge(legacy, contract):
+    """The 5 pre-existing train/live skews are now fixed: runtime_features +
+    RollingFeatureState were converged onto feature_engine. Each must match
+    EXACTLY. If one regresses, this fails — guarding the convergence."""
     old, new = _run_both(_panel())
-    fe_pairs = {
-        "ema_9_21_spread": "ema_9_21_spread",
-        "rsi_14": "osc_rsi_14",
-        "distance_from_day_high": "dist_from_day_high",
-        "iv_skew": "iv_skew",
-    }
-    for legacy, contract in fe_pairs.items():
-        assert legacy in _EXPECTED_DIVERGENCES
-        if legacy not in old.columns or contract not in new.columns:
-            continue
-        a = pd.to_numeric(old[legacy], errors="coerce")
-        b = pd.to_numeric(new[contract], errors="coerce")
-        both = a.notna() & b.notna()
-        if both.sum() == 0:
-            continue
-        # documented divergence — they should NOT be identical
-        assert float((a[both] - b[both]).abs().max()) > 1e-9, (
-            f"{legacy} unexpectedly matches legacy; the skew-fix may have been reverted."
-        )
+    assert legacy in old.columns and contract in new.columns
+    a = pd.to_numeric(old[legacy], errors="coerce")
+    b = pd.to_numeric(new[contract], errors="coerce")
+    both = a.notna() & b.notna()
+    assert both.sum() > 0
+    max_abs_diff = float((a[both] - b[both]).abs().max())
+    assert max_abs_diff < 1e-9, (
+        f"{legacy} -> {contract} diverged again (max_abs_diff={max_abs_diff:.3e}); "
+        f"the skew-fix in runtime_features/RollingFeatureState was reverted."
+    )

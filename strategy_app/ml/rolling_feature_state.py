@@ -70,20 +70,13 @@ def _near_atm_oi_ratio(snap: SnapshotAccessor) -> Optional[float]:
 def _rsi_wilder(values: list[float], period: int = 14) -> Optional[float]:
     if len(values) < period + 1:
         return None
-    series = pd.Series(np.asarray(values, dtype=float))
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = (-delta.where(delta < 0, 0.0)).abs()
-    avg_gain = gain.ewm(alpha=1.0 / float(period), min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1.0 / float(period), min_periods=period, adjust=False).mean()
-    g = _to_float(avg_gain.iloc[-1])
-    l = _to_float(avg_loss.iloc[-1])
-    if g is None or l is None:
-        return None
-    if l == 0.0:
-        return 100.0
-    rs = g / l
-    return float(100.0 - (100.0 / (1.0 + rs)))
+    # Single-source the primitive: feature_engine._rsi is the one RSI definition
+    # used by training + every live path. Local gain/loss seeding (where vs clip)
+    # diverged the EWM permanently from the batch/training value — delegating
+    # keeps stream == batch == training exactly. (Same O(n) cost as before.)
+    from snapshot_app.core.feature_engine import _rsi
+    series = _rsi(pd.Series(np.asarray(values, dtype=float)), period)
+    return _to_float(series.iloc[-1])
 
 
 def _atr_wilder(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> Optional[float]:
@@ -391,8 +384,9 @@ class RollingFeatureState:
             "ret_3m": ret_3m,
             "ret_5m": ret_5m,
             "ema_9_21_spread": (
-                float(self._ema_9 - self._ema_21)
-                if (self._ema_9 is not None and self._ema_21 is not None)
+                float((self._ema_9 - self._ema_21) / close)
+                if (self._ema_9 is not None and self._ema_21 is not None
+                    and close is not None and close != 0.0)
                 else None
             ),
             "ema_9_slope": (float(self._ema_9 - prev_ema_9) if (self._ema_9 is not None and prev_ema_9 is not None) else None),
@@ -403,13 +397,13 @@ class RollingFeatureState:
             "atr_daily_percentile": atr_daily_percentile,
             "vwap_distance": (float((close - vwap) / vwap) if (vwap is not None and vwap != 0.0) else None),
             "distance_from_day_high": (
-                float((close - self._day_high) / self._day_high)
-                if (self._day_high is not None and self._day_high != 0.0)
+                float((self._day_high - close) / close)
+                if (self._day_high is not None and close is not None and close != 0.0)
                 else None
             ),
             "distance_from_day_low": (
-                float((close - self._day_low) / self._day_low)
-                if (self._day_low is not None and self._day_low != 0.0)
+                float((close - self._day_low) / close)
+                if (self._day_low is not None and close is not None and close != 0.0)
                 else None
             ),
             "opening_range_breakout_up": (1.0 if snap.orh_broken else 0.0),

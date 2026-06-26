@@ -14,13 +14,11 @@ from contracts_app.regime_thresholds import (
 
 
 def _compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    delta = close.diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = (-delta.where(delta < 0, 0.0)).abs()
-    avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0.0, np.nan)
-    return 100.0 - (100.0 / (1.0 + rs))
+    # Single-source the primitive: feature_engine._rsi is the one definition of
+    # RSI used by training and every live path. (Local clip-vs-where seeding
+    # diverged the EWM permanently; delegating eliminates that skew.)
+    from .feature_engine import _rsi
+    return _rsi(close, period)
 
 
 def _compute_atr(frame: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -89,7 +87,10 @@ def _add_group_features(group: pd.DataFrame) -> pd.DataFrame:
     out["ema_9"] = out["fut_close"].ewm(span=9, adjust=False).mean()
     out["ema_21"] = out["fut_close"].ewm(span=21, adjust=False).mean()
     out["ema_50"] = out["fut_close"].ewm(span=50, adjust=False).mean()
-    out["ema_9_21_spread"] = out["ema_9"] - out["ema_21"]
+    # Normalized by price (matches feature_engine) — level-invariant trend tightness.
+    # Was raw (ema_9 - ema_21); training data used the normalized form, so live
+    # must too. See test_feature_engine_parity for the convergence guard.
+    out["ema_9_21_spread"] = (out["ema_9"] - out["ema_21"]) / out["fut_close"].replace(0.0, np.nan)
     out["ema_9_slope"] = out["ema_9"].diff()
     out["ema_21_slope"] = out["ema_21"].diff()
     out["ema_50_slope"] = out["ema_50"].diff()
@@ -102,10 +103,15 @@ def _add_group_features(group: pd.DataFrame) -> pd.DataFrame:
     out["fut_vwap"] = _session_vwap(out)
     out["vwap_distance"] = (out["fut_close"] - out["fut_vwap"]) / out["fut_vwap"].replace(0.0, np.nan)
 
+    # Normalized by close, with day_high distance as a non-negative magnitude
+    # (matches feature_engine: (day_high-close)/close and (close-day_low)/close).
+    # Was (close-high)/high / (close-low)/low — opposite sign + different denom;
+    # training data used the feature_engine form, so live must match.
     running_high = out["fut_high"].cummax()
     running_low = out["fut_low"].cummin()
-    out["distance_from_day_high"] = (out["fut_close"] - running_high) / running_high.replace(0.0, np.nan)
-    out["distance_from_day_low"] = (out["fut_close"] - running_low) / running_low.replace(0.0, np.nan)
+    close_nz = out["fut_close"].replace(0.0, np.nan)
+    out["distance_from_day_high"] = (running_high - out["fut_close"]) / close_nz
+    out["distance_from_day_low"] = (out["fut_close"] - running_low) / close_nz
 
     out["basis"] = out["fut_close"] - out["spot_close"]
     out["basis_change_1m"] = out["basis"].diff()
@@ -155,8 +161,9 @@ def _add_group_features(group: pd.DataFrame) -> pd.DataFrame:
     ce_iv = pd.to_numeric(out.get("opt_0_ce_iv"), errors="coerce") if "opt_0_ce_iv" in out.columns else pd.Series(np.nan, index=out.index)
     pe_iv = pd.to_numeric(out.get("opt_0_pe_iv"), errors="coerce") if "opt_0_pe_iv" in out.columns else pd.Series(np.nan, index=out.index)
     out["atm_iv"] = (ce_iv + pe_iv) / 2.0
-    iv_denom = out["atm_iv"].abs().clip(lower=1e-4)
-    out["iv_skew"] = ((ce_iv - pe_iv) / iv_denom).clip(lower=-10.0, upper=10.0)
+    # Raw ce_iv - pe_iv (matches feature_engine / training). Was normalized by
+    # |atm_iv| and clipped; training used the raw skew, so live must match.
+    out["iv_skew"] = ce_iv - pe_iv
 
     out["minute_of_day"] = out["timestamp"].dt.hour * 60 + out["timestamp"].dt.minute
     out["day_of_week"] = out["timestamp"].dt.dayofweek
