@@ -1038,10 +1038,27 @@ def _build_day_indicators(
     )
 
     out = rows.reset_index()  # ts_ist column
-    # Contract requires a `timestamp` column (ISO). The index is ts_ist; emit both so
-    # the snapshot_ml_flat contract + stage-view builder (ORDER BY timestamp) are satisfied.
-    if "timestamp" not in out.columns and "ts_ist" in out.columns:
-        out["timestamp"] = pd.to_datetime(out["ts_ist"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M:%S")
+    # ── snapshot_ml_flat contract metadata (REQUIRED_COLUMNS) ─────────────────
+    # feature_engine produces the feature columns; the pipeline must supply the
+    # metadata: timestamp, snapshot_id, year, schema_*, build_*. Without these the
+    # oracle builder (KEY_COLUMNS=[trade_date,timestamp,snapshot_id]) + stage-view
+    # builder fail. snapshot_id = ts.isoformat() (matches live _snapshot_id_from_ts).
+    if "ts_ist" in out.columns:
+        _ts = pd.to_datetime(out["ts_ist"], errors="coerce")
+        if "timestamp" not in out.columns:
+            out["timestamp"] = _ts.dt.strftime("%Y-%m-%dT%H:%M:%S")
+        if "snapshot_id" not in out.columns:
+            out["snapshot_id"] = _ts.apply(lambda t: pd.Timestamp(t).isoformat() if pd.notna(t) else "")
+        if "year" not in out.columns:
+            out["year"] = _ts.dt.year
+    try:
+        from snapshot_app.core.snapshot_ml_flat_contract import SCHEMA_NAME, SCHEMA_VERSION
+    except Exception:
+        SCHEMA_NAME, SCHEMA_VERSION = "SnapshotMLFlat", "3.0"
+    for _col, _val in (("schema_name", SCHEMA_NAME), ("schema_version", SCHEMA_VERSION),
+                       ("build_source", "historical"), ("build_run_id", "dhan_monthly_v1")):
+        if _col not in out.columns:
+            out[_col] = _val
     return out
 
 
