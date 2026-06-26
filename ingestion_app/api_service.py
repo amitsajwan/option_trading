@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -18,6 +19,8 @@ import uvicorn
 from contracts_app import TimestampSourceMode, get_redis_key, isoformat_ist, parse_timestamp_to_ist
 
 from .env_settings import credentials_path_candidates, redis_config, resolve_instrument_symbol
+
+log = logging.getLogger("ingestion_api")
 from .kite_client import create_kite_client
 from .strike_ohlc import StrikeOhlcAccumulator
 
@@ -677,12 +680,57 @@ class KiteDataService:
         return out
 
 
-def _build_svc():
-    """Use DhanDataService when DHAN_ACCESS_TOKEN is set, otherwise fall back to Kite."""
-    if os.getenv("DHAN_ACCESS_TOKEN"):
-        from .dhan_data_service import DhanDataService
-        return DhanDataService()
+# ── Broker market-data registry ───────────────────────────────────────────────
+# The broker is a PLUGGABLE ADAPTER. Swapping Kite/Dhan/Zerodha/any broker must NOT
+# require changes to snapshot_app/strategy_app/feature_engine/models/strategy config —
+# only this registry + that broker's credentials. Adding a broker = implement the
+# MarketDataService interface + add one line to _MARKET_DATA_SERVICES + set BROKER=<name>.
+# Mirrors execution_app's EXECUTION_ADAPTER pattern. Selected by the explicit `BROKER`
+# env var (preferred); falls back to the legacy DHAN_ACCESS_TOKEN-presence heuristic.
+#
+# MarketDataService interface (structural — adapters need not subclass, just implement):
+#   get_tick(instrument) -> dict          get_ohlc(instrument, timeframe) -> dict
+#   get_options_chain(...) / get_option_chain(...) -> dict
+#   get_depth(instrument) -> dict         list_instruments() -> list
+#   health_payload() -> dict              system_mode_payload() -> dict
+
+def _make_kite_service():
     return KiteDataService()
+
+
+def _make_dhan_service():
+    from .dhan_data_service import DhanDataService
+    return DhanDataService()
+
+
+# name -> factory. New broker: add one line (and its adapter module). Nothing else changes.
+_MARKET_DATA_SERVICES = {
+    "kite": _make_kite_service,
+    "zerodha": _make_kite_service,   # alias (Kite Connect is Zerodha's API)
+    "dhan": _make_dhan_service,
+}
+
+
+def _resolve_broker() -> str:
+    """Explicit BROKER env wins; else legacy heuristic (Dhan token present -> dhan, else kite)."""
+    broker = str(os.getenv("BROKER", "") or "").strip().lower()
+    if broker:
+        return broker
+    if os.getenv("DHAN_ACCESS_TOKEN"):
+        return "dhan"
+    return "kite"
+
+
+def _build_svc():
+    broker = _resolve_broker()
+    factory = _MARKET_DATA_SERVICES.get(broker)
+    if factory is None:
+        raise ValueError(
+            f"Unknown BROKER={broker!r}; known brokers: {sorted(_MARKET_DATA_SERVICES)}. "
+            "Add an adapter to _MARKET_DATA_SERVICES to support a new broker."
+        )
+    log.info("ingestion_app: market-data broker = %s", broker)
+    return factory()
 
 
 svc = _build_svc()
