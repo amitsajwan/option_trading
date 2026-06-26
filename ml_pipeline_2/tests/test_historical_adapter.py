@@ -62,3 +62,35 @@ def test_adapter_interface_methods_present():
     # The interface the build step depends on — a new broker must implement all of these.
     for name in ("validate", "fetch_index", "fetch_vix", "fetch_futures", "fetch_option"):
         assert hasattr(mod.DhanHistoricalAdapter, name)
+
+
+# ── Instrument-aware expiry cadence (P2) ───────────────────────────────────────
+
+import datetime as _dt
+
+
+def _weekdays(start: _dt.date, n: int) -> list:
+    return [start + _dt.timedelta(d) for d in range(n) if (start + _dt.timedelta(d)).weekday() < 5]
+
+
+def test_instrument_config_cadence():
+    assert mod.INSTRUMENTS["NIFTY"].expiry_cadence == "weekly"
+    assert mod.INSTRUMENTS["BANKNIFTY"].expiry_cadence == "monthly"
+
+
+def test_weekly_expiry_cadence():
+    days = _weekdays(_dt.date(2024, 11, 1), 120)
+    wk = mod._build_expiry_dates(days, "weekly")
+    assert mod._expiry_for(_dt.date(2024, 11, 7), wk) == _dt.date(2024, 11, 7)   # Thu -> DTE 0
+    assert mod._expiry_for(_dt.date(2024, 11, 8), wk) == _dt.date(2024, 11, 14)  # Fri -> next Thu
+    for td in days[:60]:
+        dte = (mod._expiry_for(td, wk) - td).days
+        assert 0 <= dte <= 7, f"weekly DTE out of range at {td}: {dte}"
+
+
+def test_monthly_expiry_cadence():
+    days = _weekdays(_dt.date(2024, 11, 1), 120)
+    mo = mod._build_expiry_dates(days, "monthly")
+    assert mod._expiry_for(_dt.date(2024, 11, 28), mo) == _dt.date(2024, 11, 28)  # last Thu Nov
+    dte = (mod._expiry_for(_dt.date(2024, 11, 5), mo) - _dt.date(2024, 11, 5)).days
+    assert 20 <= dte <= 31, f"monthly DTE unexpected: {dte}"

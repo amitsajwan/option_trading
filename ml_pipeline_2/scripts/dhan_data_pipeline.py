@@ -85,6 +85,10 @@ class InstrumentConfig:
     index_segment: str       # "IDX_I" for NSE indices
     lot_size: int
     strike_step: int         # Minimum strike increment (points)
+    # Expiry cadence drives the DTE/expiry calendar (instrument-pluggable):
+    #   "weekly"  -> every Thursday (NIFTY; BankNifty pre-Nov-2024)
+    #   "monthly" -> last Thursday of month (BankNifty post-Nov-2024 weekly discontinuation)
+    expiry_cadence: str = "weekly"
     # VIX is shared across all instruments
     vix_security_id: str = "21"
     vix_segment: str = "IDX_I"
@@ -98,6 +102,7 @@ INSTRUMENTS: Dict[str, InstrumentConfig] = {
         index_segment="IDX_I",
         lot_size=30,
         strike_step=100,
+        expiry_cadence="monthly",  # weeklies discontinued ~Nov 2024 -> monthly only
     ),
     "NIFTY": InstrumentConfig(
         name="NIFTY",
@@ -106,6 +111,7 @@ INSTRUMENTS: Dict[str, InstrumentConfig] = {
         index_segment="IDX_I",
         lot_size=75,
         strike_step=50,
+        expiry_cadence="weekly",   # NIFTY weeklies still listed -> 5yr weekly
     ),
 }
 
@@ -761,6 +767,37 @@ def _monthly_expiry_for(td: date, cal: Dict[Tuple[int, int], date]) -> date:
     return cal.get((ny, nm)) or _last_weekday_of_month(ny, nm, 3)
 
 
+def _build_weekly_expiry_calendar(trading_days: List[date]) -> List[date]:
+    """Weekly expiry = Thursday of each week, rolled back to the prior trading day if
+    that Thursday is a holiday. (NIFTY; BankNifty pre-Nov-2024.)"""
+    trading_set = set(trading_days)
+    weeks: Dict[Tuple[int, int], date] = {}
+    for d in trading_days:
+        thu = d + timedelta(days=(3 - d.weekday()))  # Thursday of d's ISO week
+        e = thu
+        for _ in range(7):  # roll back to a trading day if holiday
+            if e in trading_set:
+                break
+            e -= timedelta(days=1)
+        weeks[d.isocalendar()[:2]] = e
+    return sorted(set(weeks.values()))
+
+
+def _build_expiry_dates(trading_days: List[date], cadence: str) -> List[date]:
+    """Sorted list of expiry dates for the instrument's cadence (weekly|monthly)."""
+    if str(cadence).strip().lower() == "monthly":
+        return sorted(set(_build_monthly_expiry_calendar(trading_days).values()))
+    return _build_weekly_expiry_calendar(trading_days)
+
+
+def _expiry_for(td: date, expiry_dates: List[date]) -> Optional[date]:
+    """Nearest expiry on/after td (cadence-agnostic)."""
+    future = [e for e in expiry_dates if e >= td]
+    if future:
+        return future[0]
+    return expiry_dates[-1] if expiry_dates else None
+
+
 # ── Step 2: BUILD INDICATORS ──────────────────────────────────────────────────
 
 def run_build(args):
@@ -792,20 +829,24 @@ def run_build(args):
     ist_index = index_df.index.tz_convert(IST)
     trade_dates = sorted(set(ist_index.date))
 
-    # Scope to the monthly regime (default 2024-11-01) — see plan doc §8a.
+    # Optional date scope (instrument-agnostic; default full range). BankNifty monthly
+    # runs pass --start-date 2024-11-01 (weekly discontinuation, plan §8a); NIFTY uses full.
     start_date_str = getattr(args, "start_date", "") or ""
     if start_date_str:
         cutoff = date.fromisoformat(start_date_str)
         full_n = len(trade_dates)
         trade_dates = [td for td in trade_dates if td >= cutoff]
-        log.info("Scoped to >= %s: %d of %d trading days (monthly regime)",
+        log.info("Scoped to >= %s: %d of %d trading days",
                  cutoff.isoformat(), len(trade_dates), full_n)
 
-    # Monthly expiry calendar from the actual trading days (raw data has no expiry column).
-    # BankNifty monthly = last Thursday of the month, rolled back to the prior trading day
-    # if that Thursday is not a trading day. Built once, passed per day to build_features.
+    # Expiry calendar from the actual trading days (raw data has no expiry column).
+    # Cadence is instrument-driven: NIFTY=weekly (Thursday), BankNifty=monthly (last
+    # Thursday, post-Nov-2024). Holiday-rolled-back. Built once, passed per day.
     all_trading_days = sorted(set(ist_index.date))
-    expiry_by_month = _build_monthly_expiry_calendar(all_trading_days)
+    cadence = getattr(cfg, "expiry_cadence", "weekly")
+    expiry_dates = _build_expiry_dates(all_trading_days, cadence)
+    log.info("Expiry cadence=%s: %d expiry dates %s..%s", cadence, len(expiry_dates),
+             expiry_dates[0] if expiry_dates else "-", expiry_dates[-1] if expiry_dates else "-")
 
     log.info("Building indicators for %d trading days", len(trade_dates))
 
@@ -813,7 +854,7 @@ def run_build(args):
     prev_close: Optional[float] = None
     for td in trade_dates:
         out_file = out_dir / f"{td.isoformat()}.parquet"
-        expiry = _monthly_expiry_for(td, expiry_by_month)
+        expiry = _expiry_for(td, expiry_dates)
         day_df = _build_day_indicators(td, index_df, vix_df, options,
                                        futures_df=futures_df,
                                        prev_day_close=prev_close, expiry_date=expiry)
@@ -1267,8 +1308,9 @@ def main():
     # Default 2024-11-01: scope to the MONTHLY BankNifty regime. The weekly series was
     # discontinued ~Nov 2024 (DTE 0-7 weekly -> DTE 0-30 monthly = different instrument).
     # Train-on-what-you-serve: live is monthly-only. See plan doc §8a. Set "" for full span.
-    p_build.add_argument("--start-date", default="2024-11-01",
-                         help="Only build days >= this (YYYY-MM-DD). Default scopes to monthly regime.")
+    p_build.add_argument("--start-date", default="",
+                         help="Only build days >= this (YYYY-MM-DD). Empty=full range. "
+                              "BankNifty monthly: pass 2024-11-01 (plan §8a). NIFTY: leave empty.")
     p_build.set_defaults(func=run_build)
 
     # assemble
