@@ -64,18 +64,21 @@ atomically with those new models.** We are *retiring* the v2 model, not preservi
 feature_engine's divergence from the v2 convention is fine *by design*. What must hold: **training
 (dhan_data_pipeline) and live both use feature_engine** → consistent for the new model.
 
-### 🔄 Immediate gate (do this before `build`)
+### ✅ Immediate gate — DONE (feature_engine finalized for the monthly regime)
 
-`build` bakes feature_engine's conventions into the training data. So **finalize feature_engine first** —
-not to match v2, but to fix its **objectively-wrong** bits for the new models:
-- **Expiry**: replace the heuristic Wed/Thu rule (`_next_weekly_expiry`) with the **actual expiry from
-  data** — the heuristic is wrong on holiday-shifted expiries.
-- **Normalization consistency**: feature_engine normalizes `ema_9_21_spread` (/close) but leaves
-  `ema_*_slope` raw; v2 did the opposite. Pick one convention and apply it consistently.
+`build` bakes feature_engine's conventions into the training data, so it was finalized first
+(committed on the branch; 64 feature/parity/rolling tests green):
+- **Monthly scope**: `dhan_data_pipeline build --start-date` (default `2024-11-01`) → monthly regime only (§8a).
+- **Monthly expiry**: last-Thursday calendar (holiday-rolled-back via real trading days; raw data has
+  **no expiry column** — so calendar, not data) → passed via `build_features(expiry_date=…)`. Verified
+  `ctx_dte_days=23` (correct monthly) vs the weekly heuristic's wrong `1`.
+- **Normalization consistency**: `ema_*_slope` now `/close` like `ema_9_21_spread`; converged across all
+  3 live paths. (Supersedes the earlier "actual expiry from data" note — data has no expiry column.)
 
 ### ⛔ Not started
 
-- **`build` + `assemble`** on ML VM → `snapshots_dhan_v1` (fetch done; gated on feature_engine finalize).
+- **`build` + `assemble`** on ML VM → `snapshots_dhan_v1` (monthly). *Code gate done; needs code-sync:
+  branch not pushed + VM has no repo checkout → push the branch, build properly (no scp shortcut).*
 - **Train new models** on `snapshots_dhan_v1` + **publish**.
 - **Deploy** (rebuild images, SIM-validate, **atomic** cutover).
 
