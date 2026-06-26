@@ -35,31 +35,55 @@ no skew, by construction.
 | Training pipeline (`dhan_data_pipeline.py`) wired to `feature_engine` | `d30d711`, `ba056c1` | builds `snapshots_dhan_v1` |
 | Dhan live feed client + service (`dhan_client.py`, `dhan_data_service.py`) | `d30d711` | auto-selected when `DHAN_ACCESS_TOKEN` set |
 | Velocity computed **per-bar from 09:15** (11:30 restriction removed) | `d30d711`, `b46f6b1` | velocity-state tests updated |
-| Parity harness: `feature_engine` ≡ legacy live path, 31 cols exact | `40dabf0` | `test_feature_engine_parity.py` |
-| Convergence: `_add_group_features` + `RollingFeatureState` fixed to match `feature_engine` (5 skews) | committed on `feat/dhan-feature-engine` | parity tests 0-divergence on ALL cols |
 | `snapshot_app` suite green — feature_engine, runtime_features, market_snapshot, velocity, contracts | committed | **152 passed** |
-| 5 latent train/serve skews fixed — incl. `dist_from_day` sign flip (deployed model was fed wrong sign) and RSI zero-loss→NaN | committed | parity + unit tests |
-| `strategy_app` targeted: `rolling_feature_state`, batch-vs-stream parity | committed | green |
+| Velocity computed **per-bar from 09:15** (11:30 restriction removed) | `d30d711`, `b46f6b1` | velocity-state tests updated |
+| **Dhan historical FETCH complete** (raw, on ML VM `~/dhan_pipeline/raw/`) | — | 343 MB, 2021-08→2026-06, ATM±5 CE+PE + index + VIX |
 
-### 🔄 In progress (this session)
+### ⚠️ CORRECTION (must read — supersedes earlier claims in this branch's commit messages)
 
-- *(none — feature unification is complete and verified.)*
+An earlier commit (`98d6344`) claimed it "fixed 5 latent train/serve skews" including a
+`dist_from_day` "sign flip the deployed model was fed wrong." **That was based on an unverified
+assumption and it is WRONG.** Verified against `snapshot_app/historical/snapshot_batch.py` (the actual
+builder of the deployed model's `snapshots_ml_flat_v2` training data):
 
-**Test note:** `snapshot_app` suite 152/152 green; `strategy_app` green except one **pre-existing,
-unrelated** hang — `test_stage_consumers.py::TestStrikeDecisionConsumer::test_publishes_strike_event`
-(an event-bus/Redis consumer test that blocks waiting on a message in this environment; imports no
-feature modules; hangs in isolation on its own). **Not caused by this work** — do not chase it as a
-feature-engine regression.
+- **The deployed system was NOT skewed.** v2 training data and all live paths used the *same* old
+  feature forms — they matched. There was/is **no live bug today** on these features.
+- **`feature_engine` is a NEW feature convention**, not a reproduction of v2. A full audit shows it
+  diverges from the deployed-v2 convention on **17 columns** (EMA spread/slopes, RSI, dist_from_day,
+  regime definitions, expiry logic, ATR percentile). See §2b.
+- Therefore the "convergence" commit did **not** fix a bug — it **introduced the new convention** into
+  the live paths. That is acceptable **only** because the goal is **new models** (below), and only via
+  **atomic cutover**. It must **never** be merged to `main`/deployed against the *current* model.
+
+### 🎯 The goal (anchors every decision)
+
+**Train NEW models on Dhan data via `feature_engine`, and cut the live paths over to `feature_engine`
+atomically with those new models.** We are *retiring* the v2 model, not preserving it — so
+feature_engine's divergence from the v2 convention is fine *by design*. What must hold: **training
+(dhan_data_pipeline) and live both use feature_engine** → consistent for the new model.
+
+### 🔄 Immediate gate (do this before `build`)
+
+`build` bakes feature_engine's conventions into the training data. So **finalize feature_engine first** —
+not to match v2, but to fix its **objectively-wrong** bits for the new models:
+- **Expiry**: replace the heuristic Wed/Thu rule (`_next_weekly_expiry`) with the **actual expiry from
+  data** — the heuristic is wrong on holiday-shifted expiries.
+- **Normalization consistency**: feature_engine normalizes `ema_9_21_spread` (/close) but leaves
+  `ema_*_slope` raw; v2 did the opposite. Pick one convention and apply it consistently.
 
 ### ⛔ Not started
 
 - Dhan **token automation** (`dhan_totp_auth.py`).
 - Dhan **WebSocket live feed** (current `dhan_data_service` is REST/poll).
-- **5-year historical backfill** run on the ML VM (fetch → build → assemble).
-- **Retrain** models on `snapshots_dhan_v1` + **publish**.
-- **Deploy** (rebuild images, SIM-validate, cutover).
+- **`build` + `assemble`** on ML VM → `snapshots_dhan_v1` (fetch done; gated on feature_engine finalize).
+- **Train new models** on `snapshots_dhan_v1` + **publish**.
+- **Deploy** (rebuild images, SIM-validate, **atomic** cutover).
 
 ### 📍 The branch is NOT merged. Real money is OFF. Nothing is deployed.
+
+**Test note:** `snapshot_app` 152/152 green; `strategy_app` green except one **pre-existing, unrelated**
+hang (`test_stage_consumers.py::...test_publishes_strike_event` — an event-bus/Redis consumer test that
+blocks on a message; imports no feature modules; hangs in isolation). Not from this work.
 
 ---
 
@@ -103,8 +127,39 @@ That's defense-in-depth, not duplication. `feature_engine` is the **definition**
 
 The old doc said "Only `ingestion_app/` changes; snapshot_app/strategy_app unchanged." **That was the
 pre-feature-engine plan.** Reality: we also unified `snapshot_app/core/` (feature_engine,
-runtime_features, market_snapshot, velocity) and `strategy_app/ml/rolling_feature_state.py`. This was
-necessary — the skew lived in those files. It is a *contained, test-guarded* change.
+runtime_features, market_snapshot, velocity) and `strategy_app/ml/rolling_feature_state.py`. This is a
+*contained, test-guarded* change — but it ships **only** with the new models (§2b).
+
+---
+
+## 2b. feature_engine is a NEW convention — read before touching features
+
+A full audit (`feature_engine.build_features` vs `snapshot_batch._project_rows_to_ml_flat`, the v2/
+deployed-model builder, same input) found feature_engine **diverges on 17 of ~120 columns**. These are
+genuine *definitional* choices, not bugs — and **neither convention is internally consistent** (they
+made opposite calls):
+
+| Feature group | feature_engine | deployed v2 | Note |
+|---|---|---|---|
+| `ema_9_21_spread` | /close (normalized) | raw | fe normalizes |
+| `ema_9/21/50_slope` | raw | /close (normalized) | **fe inconsistent w/ its own spread** |
+| `osc_rsi_14` | clip / NaN-seed | where / 0-seed | fe cleaner (marginal) |
+| `dist_from_day_high/low` | (H−c)/c | (c−H)/H | opposite sign |
+| `ctx_regime_trend_up/down` | stacked EMA (9>21>50) | spread-sign (≥0) | different signal |
+| `ctx_is_expiry / near / regime_expiry` | heuristic Wed/Thu | actual `expiry_code` | **fe wrong on holidays** |
+| `ctx_regime_atr_high/low`, `osc_atr_percentile` | expanding median/rank | percentile threshold | method differs |
+| `ctx_opening_range_breakout_up/down` | computed from price | upstream/stored flag | path differs |
+
+**Why this is OK:** the goal is **new models**. They train on feature_engine output, so they bind to
+feature_engine's convention. v2's convention retires with the v2 model. The 17-column divergence only
+matters at the **cutover boundary** — which is why cutover is atomic.
+
+**What we still fix (correctness, not v2-matching):** the holiday-breaking expiry heuristic and the
+spread-vs-slope normalization inconsistency. Do this **before** `build`.
+
+**Hard rule:** never run a live path on feature_engine against a model trained on the v2 convention
+(or vice versa). That is the skew. Cutover ships feature_engine-live + a feature_engine-trained model
+together, or not at all.
 
 ---
 
@@ -154,15 +209,19 @@ integrate without reading each other's code.
   `atm_*`, `pcr`, `vix` match a Kite parallel-run day; token rotates daily with no manual step.
 - **SECURITY:** never log/print tokens; secret in `/opt/option_trading/.kite_secrets`.
 
-### Track 2 · Data & Features (convergence + 5-yr backfill)  — *convergence done; backfill needs token*
+### Track 2 · Data & Features (finalize feature_engine + build/assemble)  — *fetch DONE; build gated*
 **Owner:** ___ · **Files:** `feature_engine.py`, `runtime_features.py`, `rolling_feature_state.py`, `market_snapshot.py`, `ml_pipeline_2/scripts/dhan_data_pipeline.py`
-- *(done this session)* Feature convergence — 5 skews fixed, parity tests 0-divergence.
-- Backfill on ML VM: fetch BankNifty fut + VIX intraday (90d chunks) + expired options (30d chunks)
-  → `build` (calls **I3** `feature_engine.build_features`) → `assemble` → `snapshots_dhan_v1`.
-- **Verify each step** — the pipeline has per-step verification; check completeness per expiry, no day gaps.
-- **Produces (interface I4):** `snapshots_dhan_v1` parquet conforming to `snapshot_ml_flat` schema.
-- **Acceptance:** covers 2021–2026, schema-valid, no gaps; spot-check 5 days vs known moves; parity
-  tests stay green (the skew alarm).
+- *(done)* feature_engine built; live paths set to its convention; parity tests 0-divergence.
+- *(done)* **Dhan historical fetch** — `~/dhan_pipeline/raw/` on ML VM: 343 MB, 2021-08→2026-06,
+  ATM±5 CE+PE + index + VIX. The slow part is banked.
+- **GATE — finalize feature_engine BEFORE build** (§2b): fix the heuristic expiry → real expiry from
+  data; make spread/slope normalization consistent. `build` bakes these into the training data.
+- Then on ML VM: `build` (calls **I3** `feature_engine.build_features` per day → `~/dhan_pipeline/
+  indicators/`) → `assemble` → `snapshots_dhan_v1`.
+- **Verify each step** — pipeline has per-step verification; check completeness per expiry, no day gaps.
+- **Produces (interface I4):** `snapshots_dhan_v1` conforming to `snapshot_ml_flat` schema.
+- **Acceptance:** covers 2021-08→2026-06, schema-valid, no gaps; spot-check 5 days vs known moves;
+  parity tests stay green (the skew alarm).
 
 ### Track 3 · Models & Deploy (retrain + atomic cutover)  — *after Track 2 data + Track 1 feed*
 **Owner:** ___ · **Files:** ML VM training, `docs/MODELS_INDEX.md`, `.env.compose`, images
@@ -217,10 +276,15 @@ The bundle's feature list MUST be a subset of I4's columns (else live can't prod
    not override. This is the skew alarm.
 3. **Model + feature code cut over atomically.** A model trained on `feature_engine` MUST be served by
    `feature_engine`-conformant live code. Mismatched halves = silent skew = the bug we're killing.
-4. **Verify config from the RUNNING container**, not source. There are two `.env.compose` files; the
+   Corollary: **`feature_engine`-live must NEVER be merged to `main`/deployed against the current v2
+   model** — feature_engine uses a different convention (§2b); that pairing is itself the skew.
+4. **`build` freezes the convention.** Whatever `feature_engine` computes when `build` runs is baked
+   into `snapshots_dhan_v1` and the models trained on it. Finalize feature_engine BEFORE `build`;
+   changing a feature definition after `build` means re-running build + retraining.
+5. **Verify config from the RUNNING container**, not source. There are two `.env.compose` files; the
    wrong one reverts to dangerous defaults.
-5. **Real money OFF** until a net-positive, drop-top-N-robust result on live-regime paper. No exceptions.
-6. **Rotate any chat-pasted token.** Never commit/log/print `DHAN_ACCESS_TOKEN`.
+6. **Real money OFF** until a net-positive, drop-top-N-robust result on live-regime paper. No exceptions.
+7. **Rotate any chat-pasted token.** Never commit/log/print `DHAN_ACCESS_TOKEN`.
 
 ---
 
@@ -242,18 +306,37 @@ The bundle's feature list MUST be a subset of I4's columns (else live can't prod
 
 ### Resolved this session
 - ~~Will the 3 live paths converge to feature_engine with 0 divergence?~~ **Yes** — parity tests 0-divergence on all cols; 5 skews fixed.
+- ~~**Q1 — hotfix `dist_from_day` straight onto `main`?**~~ → **No (infeasible as an isolated cherry-pick); it ships via the merge train instead.** See §7.1.
+- ~~**Q2 — single PR vs split (feature-engine vs Dhan-feed)?**~~ → **Single PR, stacked on `compression-state-engine`. A clean split is not worth the rebase surgery.** See §7.1.
 
-### Decide NOW (blocks/affects live before any Dhan cutover)
-1. **Hotfix the live `dist_from_day` sign flip on `main`?** The currently-deployed model is being fed the **wrong sign** today (Live A, `market_snapshot`). Do we cherry-pick just that fix to `main` + rebuild now, or wait for the atomic Dhan cutover? *(Risk: shipping a feature-def change without the matching retrain — but the model trained on the correct sign, so live is the broken half. Lean: hotfix now, it moves live toward train.)*
-2. **Merge strategy for `feat/dhan-feature-engine`** — single PR, or split into (a) feature-engine convergence (mergeable now, no Dhan dep) and (b) Dhan feed/pipeline (gated on token)? Split lets the convergence/skew fixes land + deploy independently of Dhan connectivity.
+### 7.1 · Merge / hotfix decision (evidence-based, 2026-06-26)
+
+**Branch topology (verified via `git`):** linear stack —
+`main (95c0fc9)` → `feat/compression-state-engine` (regime/entry/exit/tiering, **unmerged**) → `feat/dhan-feature-engine`.
+`main` is the merge-base, so it lacks the **entire** compression line.
+
+**Why no isolated `main` hotfix (Q1):**
+- The skew fix is commit `98d6344`; it edits `feature_engine.py`, `market_snapshot.py`, `runtime_features.py`, `rolling_feature_state.py` only — **no Dhan-feed files**.
+- But `feature_engine.py` **does not exist on `main`**, and the fix binds to it (shared `_rsi`, etc.). `market_snapshot.py` on the branch also carries the compression rewrite (`add_compression_features`) absent from `main`.
+- ∴ cherry-picking "just `dist_from_day`" onto `main` would conflict/dangle. **Don't.**
+
+**Why single PR, not a feature-vs-Dhan split (Q2):**
+- The first commit `d30d711` already **interleaves** Dhan-feed files (`dhan_client.py`, `dhan_data_service.py`, `dhan_data_pipeline.py`) with shared feature code (`velocity_features.py`, `live_velocity_state.py` — the per-bar/no-11:30 change). Splitting needs interactive-rebase surgery for marginal benefit.
+- **Dhan code is inert until `DHAN_ACCESS_TOKEN` is set** (auto-select in `api_service._build_svc`). So shipping it dormant is safe — the convergence/skew fixes deploy, Dhan stays off.
+
+**Decision — merge train (this also delivers the `dist_from_day` live fix):**
+1. Validate + merge `feat/compression-state-engine` → `main` (its own gate; it's the unmerged base).
+2. Merge `feat/dhan-feature-engine` → `main` as a single PR. Dhan feed lands **dormant** (no token).
+3. Rebuild images (rule #1), SIM-validate, deploy. The `dist_from_day` sign fix + 4 other skews reach live here — **no Dhan dependency**.
+4. *(Optional fast-track)* if the skew fix is urgent on its own, do steps 1–3 now and treat Dhan backfill/retrain as the later, separate effort — the feature defs are already correct and parity-locked.
 
 ### Decide BEFORE backfill/retrain (Track 2/3)
-3. **Backfill token bootstrap** — backfill is blocked on a Dhan token. Use a **manually generated** token to unblock the 5-yr fetch while T1 token-automation lands in parallel, or serialize (T1 fully done → then backfill)?
-4. **Dataset identity** — keep new `snapshots_dhan_v1` as a distinct dataset, or land it under the existing `snapshots_ml_flat_v2` name once schema-validated? (Affects every downstream reader / manifest default.)
-5. **Retrain scope** — retrain only entry + direction on `snapshots_dhan_v1`, or also the `option_pnl` bundle? (option_pnl is currently set-but-unused in live deterministic path per memory; confirm before spending VM time.)
-6. **Velocity-from-09:15 distribution shift** — removing the 11:30 restriction changes velocity feature distributions vs what older models trained on. Confirm retrain consumes the new per-bar velocity (it should, single feature_engine) and that no still-deployed model binds the old 11:30-only definition.
+1. **Backfill token bootstrap** — backfill is blocked on a Dhan token. Use a **manually generated** token to unblock the 5-yr fetch while T1 token-automation lands in parallel, or serialize (T1 fully done → then backfill)?
+2. **Dataset identity** — keep new `snapshots_dhan_v1` as a distinct dataset, or land it under the existing `snapshots_ml_flat_v2` name once schema-validated? (Affects every downstream reader / manifest default.)
+3. **Retrain scope** — retrain only entry + direction on `snapshots_dhan_v1`, or also the `option_pnl` bundle? (option_pnl is currently set-but-unused in live deterministic path per memory; confirm before spending VM time.)
+4. **Velocity-from-09:15 distribution shift** — removing the 11:30 restriction changes velocity feature distributions vs what older models trained on. Confirm retrain consumes the new per-bar velocity (it should, single feature_engine) and that no still-deployed model binds the old 11:30-only definition.
 
 ### Evaluate, don't block
-7. **WebSocket**: official `dhanhq` SDK vs custom binary parser? (Recommend SDK first — WS-A.)
-8. **Greeks** (delta/theta/vega) — Dhan provides them, Kite didn't. Add as model features later? (Evaluate post-cutover; not in the parity contract today.)
-9. **ML VM ownership** during backfill+retrain — backfill (WS-D) and retrain (WS-E) share one box; who schedules off-market windows? (oracle labeling needs ≥64 GB RAM per AGENTS.md.)
+5. **WebSocket**: official `dhanhq` SDK vs custom binary parser? (Recommend SDK first — WS-A.)
+6. **Greeks** (delta/theta/vega) — Dhan provides them, Kite didn't. Add as model features later? (Evaluate post-cutover; not in the parity contract today.)
+7. **ML VM ownership** during backfill+retrain — backfill (WS-D) and retrain (WS-E) share one box; who schedules off-market windows? (oracle labeling needs ≥64 GB RAM per AGENTS.md.)
