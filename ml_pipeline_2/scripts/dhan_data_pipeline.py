@@ -480,6 +480,92 @@ def fetch_rolling_option(
     return pd.concat(parts) if parts else pd.DataFrame()
 
 
+# ── Broker historical-data adapter (pluggable) ────────────────────────────────
+# Historical fetch is broker-specific (Dhan: /charts/intraday, /charts/rollingoption,
+# scrip-master). Same pluggability rule as live (ingestion BROKER registry) and execution
+# (EXECUTION_ADAPTER): swapping brokers must NOT change the build/assemble steps (which
+# consume broker-agnostic raw parquets) or feature_engine. A new broker = implement
+# HistoricalDataAdapter + one registry line + set BROKER=<name>. Selected by BROKER env
+# (default dhan — the only historical adapter implemented today).
+
+from abc import ABC, abstractmethod
+
+
+class HistoricalDataAdapter(ABC):
+    """Broker-agnostic historical OHLCV fetch.
+
+    Returns DataFrames in the raw schema the build step expects:
+      index/vix/futures -> open/high/low/close/volume
+      option            -> {side}_open/high/low/close, {side}_iv, {side}_oi, {side}_volume, spot
+    """
+
+    @abstractmethod
+    def validate(self) -> bool: ...
+
+    @abstractmethod
+    def fetch_index(self, cfg: "InstrumentConfig", start: date, end: date) -> pd.DataFrame: ...
+
+    @abstractmethod
+    def fetch_vix(self, cfg: "InstrumentConfig", start: date, end: date) -> pd.DataFrame: ...
+
+    @abstractmethod
+    def fetch_futures(self, cfg: "InstrumentConfig", start: date, end: date, raw_dir: Path) -> pd.DataFrame: ...
+
+    @abstractmethod
+    def fetch_option(self, cfg: "InstrumentConfig", strike: str, option_type: str,
+                     start: date, end: date) -> pd.DataFrame: ...
+
+
+class DhanHistoricalAdapter(HistoricalDataAdapter):
+    """Dhan implementation — wraps DhanClient + the existing rollingoption/intraday/scrip
+    fetch functions (no logic change; this only makes the fetch pluggable by broker)."""
+
+    def __init__(self, token: str, client_id: str, rps: float = 4.0):
+        self._client = DhanClient(token, client_id, rps=rps)
+
+    def validate(self) -> bool:
+        return self._client.validate_token()
+
+    def fetch_index(self, cfg, start, end):
+        return fetch_intraday(self._client, cfg.index_security_id, cfg.index_segment,
+                              "INDEX", start, end, interval=1)
+
+    def fetch_vix(self, cfg, start, end):
+        return fetch_intraday(self._client, cfg.vix_security_id, cfg.vix_segment,
+                              "INDEX", start, end, interval=1)
+
+    def fetch_futures(self, cfg, start, end, raw_dir):
+        scrip = _download_scrip_master(raw_dir / "_scrip_master_cache.csv")
+        contracts = _monthly_futures_contracts(scrip, cfg.name, start, end)
+        if not contracts:
+            return pd.DataFrame()
+        return fetch_futures_continuous(self._client, contracts, cfg.fno_segment)
+
+    def fetch_option(self, cfg, strike, option_type, start, end):
+        return fetch_rolling_option(self._client, cfg, strike, option_type, start, end)
+
+
+# name -> adapter class. New broker: implement HistoricalDataAdapter, add one line here.
+_HISTORICAL_ADAPTERS = {
+    "dhan": DhanHistoricalAdapter,
+    # "kite"/"zerodha": KiteHistoricalAdapter,   # add when implemented
+}
+
+
+def build_historical_adapter(args) -> HistoricalDataAdapter:
+    """Resolve the historical-fetch adapter by BROKER (explicit --broker arg > BROKER env > dhan)."""
+    broker = str(getattr(args, "broker", "") or os.getenv("BROKER", "") or "dhan").strip().lower()
+    adapter_cls = _HISTORICAL_ADAPTERS.get(broker)
+    if adapter_cls is None:
+        raise ValueError(
+            f"No historical adapter for BROKER={broker!r}; known: {sorted(_HISTORICAL_ADAPTERS)}. "
+            "Implement HistoricalDataAdapter for the broker and register it in _HISTORICAL_ADAPTERS."
+        )
+    log.info("historical fetch: broker = %s", broker)
+    return adapter_cls(args.token, args.client_id,
+                       rps=float(getattr(args, "rps", 4.0) or 4.0))
+
+
 def run_fetch(args):
     """Step 1: Download all raw data and save to parquet files."""
     cfg = INSTRUMENTS[args.instrument]
@@ -491,10 +577,10 @@ def run_fetch(args):
     end = date.fromisoformat(args.end)
     strikes = args.strikes.split(",")
 
-    client = DhanClient(args.token, args.client_id, rps=4.0)
+    adapter = build_historical_adapter(args)
 
     # Validate token first
-    if not client.validate_token():
+    if not adapter.validate():
         log.error("Token validation FAILED — check token and client-id")
         sys.exit(1)
     log.info("Token valid. Fetching %s %s->%s, %d strikes", cfg.name, start, end, len(strikes))
@@ -505,8 +591,7 @@ def run_fetch(args):
 
     # ── 1a. Underlying index ──────────────────────────────────────────────────
     log.info("Fetching %s index (securityId=%s)...", cfg.name, cfg.index_security_id)
-    index_df = fetch_intraday(client, cfg.index_security_id, cfg.index_segment,
-                              "INDEX", start, end, interval=1)
+    index_df = adapter.fetch_index(cfg, start, end)
     _save_verify(index_df, raw_dir / "index.parquet", "underlying index",
                  expect_cols=["open", "high", "low", "close", "volume"],
                  price_col="close", price_range=(1000, 200000))
@@ -516,11 +601,8 @@ def run_fetch(args):
     # gets real traded volume (index volume is ~88% zeros for BankNifty IDX_I).
     log.info("Fetching %s monthly futures (continuous, for VWAP)...", cfg.name)
     try:
-        cache_path = raw_dir / "_scrip_master_cache.csv"
-        scrip = _download_scrip_master(cache_path)
-        contracts = _monthly_futures_contracts(scrip, cfg.name, start, end)
-        if contracts:
-            futures_df = fetch_futures_continuous(client, contracts, cfg.fno_segment)
+        futures_df = adapter.fetch_futures(cfg, start, end, raw_dir)
+        if futures_df is not None and not futures_df.empty:
             _save_verify(futures_df, raw_dir / "futures.parquet",
                          "BankNifty monthly futures (continuous)",
                          expect_cols=["open", "high", "low", "close", "volume"],
@@ -532,8 +614,7 @@ def run_fetch(args):
 
     # ── 1b. VIX ──────────────────────────────────────────────────────────────
     log.info("Fetching India VIX (securityId=%s)...", cfg.vix_security_id)
-    vix_df = fetch_intraday(client, cfg.vix_security_id, cfg.vix_segment,
-                            "INDEX", start, end, interval=1)
+    vix_df = adapter.fetch_vix(cfg, start, end)
     _save_verify(vix_df, raw_dir / "vix.parquet", "India VIX",
                  expect_cols=["close"],
                  price_col="close", price_range=(5, 100))
@@ -542,7 +623,7 @@ def run_fetch(args):
     for strike in strikes:
         for option_type, side in [("CALL", "ce"), ("PUT", "pe")]:
             log.info("Fetching %s %s...", strike, option_type)
-            odf = fetch_rolling_option(client, cfg, strike, option_type, start, end)
+            odf = adapter.fetch_option(cfg, strike, option_type, start, end)
             fname = f"option_{strike.replace('+','p').replace('-','m')}_{side}.parquet"
             _save_verify(odf, raw_dir / fname, f"{strike} {side}",
                          expect_cols=[f"{side}_close", f"{side}_iv", f"{side}_oi"],
@@ -1140,6 +1221,8 @@ def main():
     p_fetch.add_argument("--client-id", required=True, help="Dhan client ID (1111957145)")
     p_fetch.add_argument("--out-dir", default=".data/dhan_pipeline")
     p_fetch.add_argument("--strikes", default=",".join(DEFAULT_STRIKES))
+    p_fetch.add_argument("--broker", default="", help="Broker adapter (default: BROKER env, else dhan)")
+    p_fetch.add_argument("--rps", type=float, default=4.0, help="Requests/sec for the broker client")
     p_fetch.add_argument("--dry-run", action="store_true")
     p_fetch.set_defaults(func=run_fetch)
 
