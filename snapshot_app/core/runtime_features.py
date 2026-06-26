@@ -91,9 +91,11 @@ def _add_group_features(group: pd.DataFrame) -> pd.DataFrame:
     # Was raw (ema_9 - ema_21); training data used the normalized form, so live
     # must too. See test_feature_engine_parity for the convergence guard.
     out["ema_9_21_spread"] = (out["ema_9"] - out["ema_21"]) / out["fut_close"].replace(0.0, np.nan)
-    out["ema_9_slope"] = out["ema_9"].diff()
-    out["ema_21_slope"] = out["ema_21"].diff()
-    out["ema_50_slope"] = out["ema_50"].diff()
+    # Normalized by close (matches feature_engine; level-invariant). Was raw diff.
+    _close_nz_s = out["fut_close"].replace(0.0, np.nan)
+    out["ema_9_slope"] = out["ema_9"].diff() / _close_nz_s
+    out["ema_21_slope"] = out["ema_21"].diff() / _close_nz_s
+    out["ema_50_slope"] = out["ema_50"].diff() / _close_nz_s
 
     out["rsi_14"] = _compute_rsi(out["fut_close"], period=14)
     out["atr_14"] = _compute_atr(out, period=14)

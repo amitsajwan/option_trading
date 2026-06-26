@@ -389,9 +389,10 @@ class RollingFeatureState:
                     and close is not None and close != 0.0)
                 else None
             ),
-            "ema_9_slope": (float(self._ema_9 - prev_ema_9) if (self._ema_9 is not None and prev_ema_9 is not None) else None),
-            "ema_21_slope": (float(self._ema_21 - prev_ema_21) if (self._ema_21 is not None and prev_ema_21 is not None) else None),
-            "ema_50_slope": (float(self._ema_50 - prev_ema_50) if (self._ema_50 is not None and prev_ema_50 is not None) else None),
+            # Normalized by close (matches feature_engine; level-invariant). Was raw diff.
+            "ema_9_slope": (float((self._ema_9 - prev_ema_9) / close) if (self._ema_9 is not None and prev_ema_9 is not None and close not in (None, 0.0)) else None),
+            "ema_21_slope": (float((self._ema_21 - prev_ema_21) / close) if (self._ema_21 is not None and prev_ema_21 is not None and close not in (None, 0.0)) else None),
+            "ema_50_slope": (float((self._ema_50 - prev_ema_50) / close) if (self._ema_50 is not None and prev_ema_50 is not None and close not in (None, 0.0)) else None),
             "rsi_14": rsi_14,
             "atr_ratio": atr_ratio,
             "atr_daily_percentile": atr_daily_percentile,

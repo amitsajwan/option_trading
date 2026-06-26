@@ -337,12 +337,16 @@ def _layer_2_technicals(df: pd.DataFrame) -> pd.DataFrame:
         df["ema_9_21_spread"] = (df["ema_9"] - df["ema_21"]) / sc.replace(0.0, np.nan)
     if "ema_above_21" not in df.columns:
         df["ema_above_21"] = (df["ema_9"] > df["ema_21"]).astype(int)
+    # Slopes normalized by close (level-invariant) — consistent with ema_9_21_spread,
+    # which is also /close. (feature_engine was internally inconsistent: spread /close
+    # but slopes raw. All conformant live paths normalize slopes too — see parity tests.)
+    _sc_nz = sc.replace(0.0, np.nan)
     if "ema_9_slope" not in df.columns:
-        df["ema_9_slope"] = df["ema_9"].diff()
+        df["ema_9_slope"] = df["ema_9"].diff() / _sc_nz
     if "ema_21_slope" not in df.columns:
-        df["ema_21_slope"] = df["ema_21"].diff()
+        df["ema_21_slope"] = df["ema_21"].diff() / _sc_nz
     if "ema_50_slope" not in df.columns:
-        df["ema_50_slope"] = df["ema_50"].diff()
+        df["ema_50_slope"] = df["ema_50"].diff() / _sc_nz
 
     # RSI / ATR / ADX
     if "osc_rsi_14" not in df.columns:

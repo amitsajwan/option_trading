@@ -404,6 +404,46 @@ def _adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) ->
     return dx.ewm(span=period, adjust=False).mean()
 
 
+# ── Monthly expiry calendar (raw Dhan data has no expiry column) ───────────────
+# BankNifty is monthly-only post-Nov-2024. Monthly index expiry = last Thursday of
+# the month, rolled back to the prior trading day if that Thursday is a holiday.
+# (NSE's long-standing monthly-index convention. Off-by-one in a rare sub-period is
+# acceptable for v1; documented in plan doc §8a. We pass this into build_features so
+# feature_engine's weekly Wed/Thu heuristic is NOT used for the monthly regime.)
+
+import calendar as _calendar
+
+
+def _last_weekday_of_month(year: int, month: int, weekday: int) -> date:
+    """weekday: Mon=0 … Sun=6 (Thursday=3)."""
+    last_day = _calendar.monthrange(year, month)[1]
+    d = date(year, month, last_day)
+    return d - timedelta(days=(d.weekday() - weekday) % 7)
+
+
+def _build_monthly_expiry_calendar(trading_days: List[date]) -> Dict[Tuple[int, int], date]:
+    trading_set = set(trading_days)
+    cal: Dict[Tuple[int, int], date] = {}
+    for (y, m) in sorted({(d.year, d.month) for d in trading_days}):
+        thu = _last_weekday_of_month(y, m, 3)  # last Thursday
+        d = thu
+        for _ in range(7):  # roll back to a trading day if holiday
+            if d in trading_set:
+                break
+            d -= timedelta(days=1)
+        cal[(y, m)] = d
+    return cal
+
+
+def _monthly_expiry_for(td: date, cal: Dict[Tuple[int, int], date]) -> date:
+    exp = cal.get((td.year, td.month))
+    if exp is not None and td <= exp:
+        return exp
+    ny = td.year + 1 if td.month == 12 else td.year
+    nm = 1 if td.month == 12 else td.month + 1
+    return cal.get((ny, nm)) or _last_weekday_of_month(ny, nm, 3)
+
+
 # ── Step 2: BUILD INDICATORS ──────────────────────────────────────────────────
 
 def run_build(args):
@@ -433,13 +473,31 @@ def run_build(args):
 
     ist_index = index_df.index.tz_convert(IST)
     trade_dates = sorted(set(ist_index.date))
+
+    # Scope to the monthly regime (default 2024-11-01) — see plan doc §8a.
+    start_date_str = getattr(args, "start_date", "") or ""
+    if start_date_str:
+        cutoff = date.fromisoformat(start_date_str)
+        full_n = len(trade_dates)
+        trade_dates = [td for td in trade_dates if td >= cutoff]
+        log.info("Scoped to >= %s: %d of %d trading days (monthly regime)",
+                 cutoff.isoformat(), len(trade_dates), full_n)
+
+    # Monthly expiry calendar from the actual trading days (raw data has no expiry column).
+    # BankNifty monthly = last Thursday of the month, rolled back to the prior trading day
+    # if that Thursday is not a trading day. Built once, passed per day to build_features.
+    all_trading_days = sorted(set(ist_index.date))
+    expiry_by_month = _build_monthly_expiry_calendar(all_trading_days)
+
     log.info("Building indicators for %d trading days", len(trade_dates))
 
     day_files = []
     prev_close: Optional[float] = None
     for td in trade_dates:
         out_file = out_dir / f"{td.isoformat()}.parquet"
-        day_df = _build_day_indicators(td, index_df, vix_df, options, prev_day_close=prev_close)
+        expiry = _monthly_expiry_for(td, expiry_by_month)
+        day_df = _build_day_indicators(td, index_df, vix_df, options,
+                                       prev_day_close=prev_close, expiry_date=expiry)
         if day_df is not None and not day_df.empty:
             day_df.to_parquet(out_file)
             day_files.append(out_file)
@@ -469,6 +527,7 @@ def _build_day_indicators(
     options: Dict[str, Dict[str, pd.DataFrame]],
     *,
     prev_day_close: Optional[float] = None,
+    expiry_date: Optional[date] = None,
 ) -> Optional[pd.DataFrame]:
     """Build one day of indicators. Returns None if no index data for that day.
 
@@ -634,6 +693,7 @@ def _build_day_indicators(
         trade_date=trade_date,
         prev_day_close=prev_day_close,
         vix_open=vix_open_val,
+        expiry_date=expiry_date,   # monthly expiry (raw data has no expiry column)
     )
 
     return rows.reset_index()
@@ -827,6 +887,11 @@ def main():
     p_build = sub.add_parser("build", help="Step 2: Compute indicators from raw data")
     p_build.add_argument("--raw-dir",  required=True)
     p_build.add_argument("--out-dir",  required=True)
+    # Default 2024-11-01: scope to the MONTHLY BankNifty regime. The weekly series was
+    # discontinued ~Nov 2024 (DTE 0-7 weekly -> DTE 0-30 monthly = different instrument).
+    # Train-on-what-you-serve: live is monthly-only. See plan doc §8a. Set "" for full span.
+    p_build.add_argument("--start-date", default="2024-11-01",
+                         help="Only build days >= this (YYYY-MM-DD). Default scopes to monthly regime.")
     p_build.set_defaults(func=run_build)
 
     # assemble

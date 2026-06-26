@@ -38,6 +38,8 @@ no skew, by construction.
 | `snapshot_app` suite green — feature_engine, runtime_features, market_snapshot, velocity, contracts | committed | **152 passed** |
 | Velocity computed **per-bar from 09:15** (11:30 restriction removed) | `d30d711`, `b46f6b1` | velocity-state tests updated |
 | **Dhan historical FETCH complete** (raw, on ML VM `~/dhan_pipeline/raw/`) | — | 343 MB, 2021-08→2026-06, ATM±5 CE+PE + index + VIX |
+| **Token automation** `dhan_totp_auth.py` — client-id + PIN + TOTP → access token; `--dry-run`/`--verify`; `.env.compose` auto-update | committed (Wind) | **9 tests passed** |
+| **WS live feed** `dhan_ws_feed.py` — `dhanhq.MarketFeed` futures+VIX → Redis I2 keys; heartbeat; REST fallback; wired into `DhanDataService.get_tick()` | committed (Wind) | **15 tests passed** |
 
 ### ⚠️ CORRECTION (must read — supersedes earlier claims in this branch's commit messages)
 
@@ -73,8 +75,6 @@ not to match v2, but to fix its **objectively-wrong** bits for the new models:
 
 ### ⛔ Not started
 
-- Dhan **token automation** (`dhan_totp_auth.py`).
-- Dhan **WebSocket live feed** (current `dhan_data_service` is REST/poll).
 - **`build` + `assemble`** on ML VM → `snapshots_dhan_v1` (fetch done; gated on feature_engine finalize).
 - **Train new models** on `snapshots_dhan_v1` + **publish**.
 - **Deploy** (rebuild images, SIM-validate, **atomic** cutover).
@@ -199,15 +199,14 @@ the rest is naturally sequenced (data → models → deploy).
 The **interface contracts** (§4.4) are the seams between tracks — honour those and the tracks
 integrate without reading each other's code.
 
-### Track 1 · Dhan Connectivity (live feed + auth)  — *start now*
-**Owner:** ___ · **Files:** `ingestion_app/dhan_client.py`, `dhan_data_service.py`, new `dhan_totp_auth.py`
-- WebSocket feed (`dhanhq.MarketFeed`) for futures + VIX tick; REST `optionchain` for the full chain.
-- Security-ID lookup: instrument CSV each morning, cached in Redis.
-- Token automation: `POST /app/generateAccessToken` (TOTP+PIN) 08:30 IST; `/v2/RenewToken` fallback; 401 retry.
-- **Produces (interface I1, I2 below):** populated Redis snapshot fields + a daily fresh token.
-- **Acceptance:** `DhanDataService` satisfies **I1** (KiteDataService interface) exactly; live `fut_*`,
-  `atm_*`, `pcr`, `vix` match a Kite parallel-run day; token rotates daily with no manual step.
-- **SECURITY:** never log/print tokens; secret in `/opt/option_trading/.kite_secrets`.
+### Track 1 · Dhan Connectivity (live feed + auth)  — *✅ DONE (Wind, 2026-06-26)*
+**Owner:** Wind · **Files:** `ingestion_app/dhan_client.py`, `dhan_data_service.py`, `dhan_totp_auth.py` *(new)*, `dhan_ws_feed.py` *(new)*
+- ✅ Token automation: `dhan_totp_auth.py` — `POST https://auth.dhan.co/app/generateAccessToken` (client-id + PIN + TOTP); `/v2/RenewToken` thread every 20h; writes `dhan_credentials.json`; updates `DHAN_ACCESS_TOKEN` in `.env.compose`; `--dry-run` / `--verify` CLI. **9 tests**.
+- ✅ WebSocket live feed: `dhan_ws_feed.py` — `dhanhq.MarketFeed` (futures Quote + VIX Ticker); reconnect loop with back-off; publishes to I2 Redis keys; heartbeat TTL health check; `DhanDataService.get_tick()` reads WS cache first, falls back to REST if feed stale. **15 tests**. `DHAN_WS_ENABLED=0` disables.
+- ✅ REST option-chain poll unchanged (Dhan WS does not stream option chains).
+- ✅ `dhanhq>=2.0,<3` added to `ingestion_app/requirements.txt`.
+- **Acceptance remaining (needs live VM):** `--dry-run` TOTP code verified; `generateAccessToken` endpoint hit once; parallel-run day Dhan vs Kite tick values match.
+- **SECURITY:** `DHAN_CLIENT_ID`, `DHAN_PIN`, `DHAN_TOTP_SECRET` in `/opt/option_trading/.kite_secrets` — never in repo/chat. `dhan_credentials.json` gitignored.
 
 ### Track 2 · Data & Features (finalize feature_engine + build/assemble)  — *fetch DONE; build gated*
 **Owner:** ___ · **Files:** `feature_engine.py`, `runtime_features.py`, `rolling_feature_state.py`, `market_snapshot.py`, `ml_pipeline_2/scripts/dhan_data_pipeline.py`
@@ -341,6 +340,16 @@ The bundle's feature list MUST be a subset of I4's columns (else live can't prod
 3. **Do NOT rebuild/deploy the feature changes against the v2 model.** Deploy only once the
    feature_engine-trained model is ready, atomically (rule #3). Until then `main` ≠ deployed image.
 
+**Merge dry-run result (Wind, 2026-06-26 — verified, non-destructive):**
+- `main` is a **strict ancestor** of `compression`, which is a strict ancestor of `dhan` (0 commits on
+  `main` absent from `dhan`). ∴ **both merges fast-forward — zero conflicts to resolve.**
+- Sizes: `main..compression` = **152 commits**; `compression..dhan` = **10 commits**.
+- **Review note:** keep it a 2-PR train (compression→main, then the 10-commit dhan→main) for digestible
+  review, even though git could FF all 162 in one shot.
+- **Branch hygiene:** untracked cruft must NOT ride along — `.run_tmp/`, `*.algo-496203.bak` (×2),
+  `test_result.txt`, `tmp_chk_bundle.py`. Excluded from any commit.
+- **Wind stops at merge** — no rebuild/deploy of the feature changes (per the ⚠️ correction above).
+
 ### Decide BEFORE backfill/retrain (Track 2/3)
 1. **Backfill token bootstrap** — backfill is blocked on a Dhan token. Use a **manually generated** token to unblock the 5-yr fetch while T1 token-automation lands in parallel, or serialize (T1 fully done → then backfill)?
 2. **Dataset identity** — keep new `snapshots_dhan_v1` as a distinct dataset, or land it under the existing `snapshots_ml_flat_v2` name once schema-validated? (Affects every downstream reader / manifest default.)
@@ -351,6 +360,32 @@ The bundle's feature list MUST be a subset of I4's columns (else live can't prod
 5. **WebSocket**: official `dhanhq` SDK vs custom binary parser? (Recommend SDK first — WS-A.)
 6. **Greeks** (delta/theta/vega) — Dhan provides them, Kite didn't. Add as model features later? (Evaluate post-cutover; not in the parity contract today.)
 7. **ML VM ownership** during backfill+retrain — backfill (WS-D) and retrain (WS-E) share one box; who schedules off-market windows? (oracle labeling needs ≥64 GB RAM per AGENTS.md.)
+
+---
+
+## 8a. DECISION — train on the monthly BankNifty regime only (2026-06-26)
+
+**Finding:** the Dhan options data has a structural break at **~Nov 2024** = the NSE BankNifty
+**weekly-options discontinuation**. Before: weekly ATM (DTE 0–7, premium ~250, OI ~3 M). After:
+monthly ATM (DTE 0–30, premium ~700–1090, OI ~0.5–1.0 M). Two different instruments under the same
+column names. Data itself is clean (0 % NaN / 0 % zero-OI throughout).
+
+**Decision (instrument = BankNifty, which is monthly-only now):** train new models on the **monthly
+regime only, 2024-11 → 2026-06 (~1.5 yr)** — *train on what you serve*. The weekly period is a
+different instrument; archived, not in the production training set.
+
+**Consequences:**
+- `build` scopes to `>= 2024-11-01`. Weekly parquets kept but excluded.
+- feature_engine's **weekly Wed/Thu expiry heuristic is wrong here** → compute the **monthly** expiry
+  and pass it in (`build_features(expiry_date=…)`; the kwarg already exists). Raw data has no expiry
+  column, so derive it from a calendar, not data.
+- **Strategy caveat:** monthly ATM = **much lower gamma**. The prior (fragile) weekly buying edge
+  (positive-skew lottery on outlier trend days) was gamma-dependent — it will **not** transfer
+  unchanged. Treat the retrain as a thesis re-validation, not a model swap. 1.5 yr (~18 expiry cycles,
+  ~140 K intraday bars) is thin → watch drop-top-N. Real money stays OFF.
+- **Held in reserve:** futures/index/VIX features are the *same* instrument across the full 4.9 yr
+  (only options changed tenor). A futures-driven magnitude model *could* use the longer history with
+  option-flow features monthly-only — don't complicate the first pass.
 
 ---
 
