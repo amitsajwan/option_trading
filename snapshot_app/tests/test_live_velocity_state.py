@@ -71,11 +71,16 @@ def _morning_snaps(trade_date: str, n: int = 7) -> list[Dict[str, Any]]:
 # ── tests ──────────────────────────────────────────────────────────────────────
 
 class TestAccumulatorBasicFlow:
-    def test_no_velocity_before_midday(self) -> None:
+    def test_velocity_available_from_third_bar(self) -> None:
+        """Per-bar engine (no 11:30 restriction): velocity is injected once >=3
+        bars have accumulated from session open — NOT gated to midday."""
         acc = LiveVelocityAccumulator()
-        for snap in _morning_snaps("2026-04-18", n=6):  # up to 11:15, not 11:30
-            result = acc.process(snap)
-            assert "velocity_enrichment" not in result
+        results = [acc.process(snap) for snap in _morning_snaps("2026-04-18", n=6)]
+        # bars 1,2 (<3 rows) → no velocity; bar 3 onward → velocity present
+        assert "velocity_enrichment" not in results[0]
+        assert "velocity_enrichment" not in results[1]
+        assert "velocity_enrichment" in results[2], "velocity should appear at the 3rd bar"
+        assert "velocity_enrichment" in results[-1]
 
     def test_velocity_injected_at_1130(self) -> None:
         acc = LiveVelocityAccumulator()
@@ -118,7 +123,7 @@ class TestDayBoundaryReset:
         acc = LiveVelocityAccumulator()
         for snap in _morning_snaps("2026-04-18", n=7):
             acc.process(snap)
-        # new day — no velocity until 11:30
+        # new day — state reset, single first bar (<3 rows) → no velocity yet
         early = _snap("2026-04-22", 9, 15)
         result = acc.process(early)
         assert "velocity_enrichment" not in result
@@ -131,45 +136,42 @@ class TestDayBoundaryReset:
             result = acc.process(snap)
         assert "velocity_enrichment" in result
 
-    def test_first_day_velocity_not_leaked_to_second_day_pre_1130(self) -> None:
+    def test_second_day_velocity_is_fresh_not_leaked(self) -> None:
+        """Day boundary resets accumulated bars: the 2nd day's velocity is
+        computed only from 2nd-day data, never carrying 1st-day values."""
         acc = LiveVelocityAccumulator()
         for snap in _morning_snaps("2026-04-18", n=7):
             acc.process(snap)
-        # Next day, before 11:30
-        for snap in _morning_snaps("2026-04-22", n=3):  # 10:00–10:30 only
-            result = acc.process(snap)
-        assert "velocity_enrichment" not in result
+        day1_vel = dict(acc._velocity or {})
+        # Next day — first 2 bars insufficient, 3rd bar yields fresh velocity
+        results = [acc.process(snap) for snap in _morning_snaps("2026-04-22", n=3)]
+        assert "velocity_enrichment" not in results[0]
+        assert "velocity_enrichment" in results[2]
+        day2_vel = results[2]["velocity_enrichment"]
+        # price_delta_open is anchored to the day's own open → must differ across days
+        assert day2_vel.get("vel_price_delta_open") != day1_vel.get("vel_price_delta_open")
 
 
 class TestInsufficientMorningRows:
-    def test_no_velocity_when_fewer_than_3_morning_rows(self) -> None:
+    def test_no_velocity_when_fewer_than_3_rows(self) -> None:
+        """<3 accumulated bars → no velocity (need a minimal window to compute)."""
         acc = LiveVelocityAccumulator()
-        # Only 2 rows before 11:30
-        for snap in _morning_snaps("2026-04-18", n=2):
-            acc.process(snap)
-        midday = _snap("2026-04-18", 11, 30)
-        result = acc.process(midday)
-        # Velocity should NOT be injected — logged warning but no crash
-        assert "velocity_enrichment" not in result
-
-    def test_post_midday_snap_still_has_no_velocity_if_insufficient_rows(self) -> None:
-        acc = LiveVelocityAccumulator()
-        for snap in _morning_snaps("2026-04-18", n=2):
-            acc.process(snap)
-        acc.process(_snap("2026-04-18", 11, 30))
-        post = _snap("2026-04-18", 12, 15)
-        result = acc.process(post)
-        assert "velocity_enrichment" not in result
+        results = [acc.process(snap) for snap in _morning_snaps("2026-04-18", n=2)]
+        for result in results:
+            assert "velocity_enrichment" not in result
 
 
-class TestIdempotentAt1130:
-    def test_velocity_computed_only_once_per_day(self) -> None:
-        """Calling process on a second 11:30 snap (e.g. duplicate tick) should not recompute."""
+class TestPerBarUpdates:
+    def test_velocity_updates_each_bar(self) -> None:
+        """Per-bar engine recomputes on every new bar (no compute-once gate).
+        As fresh bars arrive, velocity reflects the latest data."""
         acc = LiveVelocityAccumulator()
-        for snap in _morning_snaps("2026-04-18", n=7):
+        snaps = _morning_snaps("2026-04-18", n=7)
+        for snap in snaps[:3]:
             acc.process(snap)
-        vel_first = dict(acc._velocity or {})
-        # Process a duplicate 11:30 tick
-        acc.process(_snap("2026-04-18", 11, 30))
-        vel_second = dict(acc._velocity or {})
-        assert vel_first == vel_second
+        vel_at_3 = dict(acc._velocity or {})
+        for snap in snaps[3:]:
+            acc.process(snap)
+        vel_at_7 = dict(acc._velocity or {})
+        # more bars + rising price/OI in the fixture → delta_open grows
+        assert vel_at_7.get("vel_price_delta_open") != vel_at_3.get("vel_price_delta_open")
