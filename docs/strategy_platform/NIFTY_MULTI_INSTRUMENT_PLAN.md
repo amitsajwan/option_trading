@@ -108,6 +108,77 @@ history has the same wall — VWAP excluded for v1, same as BankNifty.)
 
 ---
 
+## 6b. Multi-instrument integration — audit + architecture (one app?)
+
+**Question:** one application / one dashboard / one ingestion WS for NIFTY + BankNifty?
+
+### Audit (verified in code)
+
+| Aspect | Today | Multi-instrument implication |
+|---|---|---|
+| Ingestion keys | `websocket:tick:{instrument}:latest`, `options:{instrument}:chain` — **namespaced** | ✅ one WS, many instruments (Dhan ≤5000/conn) |
+| Topics | `LIVE_TOPIC`/`STRATEGY_*_TOPIC` — global default, env-settable | ⚠️ must namespace by instrument |
+| **Strategy state** | `PositionTracker._position` = **one** open position; engines per-instance — **single-instrument** | ❌ one process = must key ALL state by instrument |
+| **Decision traces** | `BaseDecisionEvent` 8 fields — **no `instrument`**; `signal_logger` → one `STRATEGY_RUN_DIR` (votes/signals/positions/decision_traces.jsonl) | ❌ one process = traces **mix instruments → confusion** |
+| Mongo persistence | `mongo_sink` writes `instrument` + `underlying_symbol`, indexed | ✅ already instrument-tagged |
+
+**Conclusion:** the **data plane is integration-ready** (namespaced keys, instrument-agnostic
+feature_engine, instrument-tagged Mongo). The **trading/trace plane is single-instrument** — state
+isn't keyed and **traces have no instrument tag and share one run-dir**. Forcing strategy into one
+process would *create* the trace confusion you want to avoid.
+
+### Recommended architecture — shared data plane, isolated trading plane
+
+```
+                ┌──────────────────────────────────────────────────────────┐
+  Dhan WS ─────▶│  ONE ingestion_app — multi-instrument WS (NIFTY+BANKNIFTY+ │
+  (1 conn,      │  VIX) → Redis keys websocket:tick:{instr}, options:{instr} │
+   many instr)  └───────────────────────────┬──────────────────────────────┘
+                                            │
+                ┌───────────────────────────▼──────────────────────────────┐
+                │  ONE snapshot_app — loops the INSTRUMENTS list, builds a   │
+                │  snapshot per instrument → topic market:snapshot:{instr}:v1│
+                └─────────┬───────────────────────────────┬────────────────┘
+                          │ (per-instrument topic)         │
+            ┌─────────────▼──────────┐        ┌────────────▼─────────────┐
+            │ strategy (NIFTY)        │        │ strategy (BANKNIFTY)      │   ◀── ISOLATED
+            │ run_dir=.run/nifty      │        │ run_dir=.run/banknifty    │      (own book,
+            │ topics …:nifty:v1       │        │ topics …:banknifty:v1     │       run-dir,
+            └─────────────┬──────────┘        └────────────┬─────────────┘       namespace)
+                          └───────────────┬────────────────┘
+                ┌─────────────────────────▼──────────────────────────────┐
+                │  ONE dashboard — per-instrument panels; reads each       │
+                │  instrument's namespaced topics/run-dir/Mongo (instr key)│
+                └──────────────────────────────────────────────────────────┘
+```
+
+**Why isolate the trading plane:** real-money blast-radius (a NIFTY bug must not touch BankNifty's
+book) **and** clean traces by construction — each instrument's votes/signals/positions/traces live
+in its **own run-dir + namespace**, so there is *zero* mixing. You still get one app to *operate* and
+one dashboard to *watch*; only the risk-bearing consumer is per-instrument.
+
+### "Clean traces / no confusion" — the guarantees (do these regardless)
+
+1. **`instrument` becomes a first-class field on `BaseDecisionEvent`** (and every signal/position/
+   trace record) — so every trace is self-identifying. Cheap, high-value, needed even for the shared
+   dashboard to label/filter. *(This is the one change that most directly kills confusion.)*
+2. **Per-instrument run-dir** (`STRATEGY_RUN_DIR=.run/strategy/{instrument}`) — JSONL traces never
+   share a file across instruments.
+3. **Per-instrument topics + sim namespace** (auto-suffix by instrument) — Redis streams don't cross.
+4. **Dashboard partitions by instrument** — instrument is the top-level selector/column; ops views,
+   KPIs, decision-trace viewer all filtered by instrument. No global "BANKNIFTY" labels (fix the
+   hardcoded ones in §2).
+5. **Mongo** already tags instrument — add the instrument filter to every ops query/view.
+
+### Phased (folds into §6)
+- **MI-1** Add `instrument` to `BaseDecisionEvent` + trace/signal records + per-instrument run-dir. *(no behavior change; pure observability hygiene — do first)*
+- **MI-2** Auto-namespace topics + sim namespace by `INSTRUMENT_SYMBOL`.
+- **MI-3** snapshot_app loops the instrument list (one app, N instruments) + one WS subscribing to all.
+- **MI-4** Dashboard multi-instrument panels (instrument as partition key); fix hardcoded labels.
+- **MI-5** Strategy stays **per-instrument** (own run-dir/namespace/container) — no state-keying refactor, no shared-process real-money risk.
+
+---
+
 ## 7. Risks / watch-items
 - **Topic collision** if P4/§3 not done and per-container topic env forgotten → cross-instrument leakage.
 - **Lot-size** must be set/derived per instrument or NIFTY risk sizing is wrong (uses 30 not 75).
