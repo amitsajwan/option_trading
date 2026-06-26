@@ -127,52 +127,75 @@ column is missing.
 
 ---
 
-## 4. Work breakdown — assignable to the team
+## 4. Work breakdown — 3 tracks for a 1–2 person team
 
-Workstreams are ordered by dependency. **WS-A and WS-D can start in parallel today.** WS-E (retrain)
-depends on WS-D (data). WS-F (deploy) depends on everything.
+Sized for 1–2 people: 6 fine-grained workstreams collapsed into **3 sequential-ish tracks**, each
+ownable end-to-end by one person. Track 1 and the convergence half of Track 2 can run in parallel;
+the rest is naturally sequenced (data → models → deploy).
 
-### WS-A · Dhan live feed (WebSocket) — *can start now*
-**Owner:** ___ · **Depends on:** nothing · **Files:** `ingestion_app/dhan_client.py`, `dhan_data_service.py`
-- Replace REST poll with `dhanhq.MarketFeed` WebSocket (binary parser) for futures + VIX tick.
-- Keep REST `optionchain` for the full chain (1 call/min/expiry).
-- Security-ID lookup: download instrument CSV each morning, cache in Redis.
-- **Acceptance:** live snapshot fields (`fut_*`, `atm_*`, `pcr`, `vix`) populate identically to Kite
-  for a parallel-run day; `dhan_data_service` passes the same interface contract as `KiteDataService`.
+The **interface contracts** (§4.4) are the seams between tracks — honour those and the tracks
+integrate without reading each other's code.
 
-### WS-B · Token automation — *can start now*
-**Owner:** ___ · **Depends on:** Dhan TOTP secret · **Files:** new `ingestion_app/dhan_totp_auth.py`
-- `POST /app/generateAccessToken` (TOTP+PIN) at 08:30 IST; `/v2/RenewToken` fallback; 401 auto-retry.
-- **Acceptance:** fresh token daily with no manual step; rotates the chat-pasted token out.
-- **SECURITY:** never log/print tokens; store secret in `/opt/option_trading/.kite_secrets`.
+### Track 1 · Dhan Connectivity (live feed + auth)  — *start now*
+**Owner:** ___ · **Files:** `ingestion_app/dhan_client.py`, `dhan_data_service.py`, new `dhan_totp_auth.py`
+- WebSocket feed (`dhanhq.MarketFeed`) for futures + VIX tick; REST `optionchain` for the full chain.
+- Security-ID lookup: instrument CSV each morning, cached in Redis.
+- Token automation: `POST /app/generateAccessToken` (TOTP+PIN) 08:30 IST; `/v2/RenewToken` fallback; 401 retry.
+- **Produces (interface I1, I2 below):** populated Redis snapshot fields + a daily fresh token.
+- **Acceptance:** `DhanDataService` satisfies **I1** (KiteDataService interface) exactly; live `fut_*`,
+  `atm_*`, `pcr`, `vix` match a Kite parallel-run day; token rotates daily with no manual step.
+- **SECURITY:** never log/print tokens; secret in `/opt/option_trading/.kite_secrets`.
 
-### WS-C · Finish feature convergence — *in progress, ~done*
-**Owner:** (current) · **Depends on:** nothing · **Files:** `feature_engine.py`, `runtime_features.py`, `rolling_feature_state.py`, `market_snapshot.py`
-- 5 skew-fixes applied (ema_9_21_spread, rsi via shared primitive, dist_from_day ×2, iv_skew).
-- Live A `dist_from_day_*` fix (edited, needs test).
-- **Acceptance:** parity tests assert 0-divergence on ALL shared columns; full snapshot_app +
-  strategy_app suite green. **← blocking gate before any retrain/deploy.**
+### Track 2 · Data & Features (convergence + 5-yr backfill)  — *convergence done; backfill needs token*
+**Owner:** ___ · **Files:** `feature_engine.py`, `runtime_features.py`, `rolling_feature_state.py`, `market_snapshot.py`, `ml_pipeline_2/scripts/dhan_data_pipeline.py`
+- *(done this session)* Feature convergence — 5 skews fixed, parity tests 0-divergence.
+- Backfill on ML VM: fetch BankNifty fut + VIX intraday (90d chunks) + expired options (30d chunks)
+  → `build` (calls **I3** `feature_engine.build_features`) → `assemble` → `snapshots_dhan_v1`.
+- **Verify each step** — the pipeline has per-step verification; check completeness per expiry, no day gaps.
+- **Produces (interface I4):** `snapshots_dhan_v1` parquet conforming to `snapshot_ml_flat` schema.
+- **Acceptance:** covers 2021–2026, schema-valid, no gaps; spot-check 5 days vs known moves; parity
+  tests stay green (the skew alarm).
 
-### WS-D · 5-year historical backfill — *can start now, ML VM*
-**Owner:** ___ · **Depends on:** WS-B (token) · **Files:** `dhan_data_pipeline.py` (fetch/build/assemble)
-- Fetch BankNifty fut + VIX intraday (90d chunks) + expired options (30d chunks).
-- `build` → `feature_engine` per day; `assemble` → `snapshots_dhan_v1`.
-- **Verify each step** (the pipeline has per-step verification — use it; check completeness per expiry).
-- **Acceptance:** `snapshots_dhan_v1` covers 2021–2026, passes schema validation, no day gaps;
-  spot-check 5 days vs known market moves.
+### Track 3 · Models & Deploy (retrain + atomic cutover)  — *after Track 2 data + Track 1 feed*
+**Owner:** ___ · **Files:** ML VM training, `docs/MODELS_INDEX.md`, `.env.compose`, images
+- Gate-check the 3 pending models first (`entry_early_trend_v1`, `entry_allsession_bmm_v1`, `entry_allsession_full_v1`).
+- Train entry/direction on `snapshots_dhan_v1` (**I4**); isotonic calibration + data-driven threshold;
+  publish bundle (**I5**) to GCS.
+- Deploy: rebuild images, SIM-validate, **atomic cutover** (feature_engine-live + dhan-trained model together).
+- **Acceptance:** OOS AUC ≥ current + drop-top-N robust across months; SIM on rebuilt image reproduces
+  expected features; parallel Dhan+Kite 2–3 days; **real money OFF until net-positive gate met.**
 
-### WS-E · Retrain + publish — *depends on WS-C + WS-D*
-**Owner:** ___ · **Files:** ML VM training, `docs/MODELS_INDEX.md`
-- Train entry/direction on `snapshots_dhan_v1`. Isotonic calibration + data-driven threshold.
-- **Acceptance:** OOS AUC ≥ current; drop-top-N robustness across months; publish bundle to GCS.
-- 3 pending models to gate-check first: `entry_early_trend_v1`, `entry_allsession_bmm_v1`, `entry_allsession_full_v1`.
+### 4.4 Interface contracts (the seams — honour these to work independently)
 
-### WS-F · Deploy + cutover — *depends on all*
-**Owner:** ___ · **Files:** `.env.compose`, images
-- **ATOMIC cutover:** feature_engine-live + dhan-trained model ship together (never new feature code
-  with an old model, or vice versa).
-- **Acceptance:** SIM run on rebuilt image reproduces expected features; parallel Dhan+Kite 2–3 days;
-  real money stays OFF until net-positive gate met.
+**I1 · `DhanDataService` ≡ `KiteDataService`** *(Track 1 → snapshot_app)*
+The single seam that lets the feed swap without touching snapshot_app. `DhanDataService` MUST implement,
+with identical return shapes to `KiteDataService`:
+```
+get_tick(instrument)        -> {instrument, timestamp, last_price, best_bid, best_ask, mid, volume, oi}
+get_ohlc(instrument, tf)    -> {instrument, timeframe, open, high, low, close, volume, oi, start_at(ISO IST)}
+get_options_chain(...)      -> {instrument, expiry, strikes[{strike, ce{ltp,oi,iv,volume,bid,ask}, pe{...}}],
+                                 futures_price, pcr, max_pain, atm_strike}
+get_depth(instrument)       -> {buy[5], sell[5]}   (stub allowed; Dhan REST has no depth)
+health_payload()/system_mode_payload()/list_instruments()  -> same shapes as Kite
+```
+Auto-selected when `DHAN_ACCESS_TOKEN` is set (see `api_service._build_svc`).
+
+**I2 · Redis keys** *(Track 1 → snapshot_app)* — publish to the SAME keys Kite used:
+`websocket:tick:{INSTR}:latest`, `options:{INSTR}:{EXPIRY}:chain`, `ohlc_sorted:{INSTR}:1m`. snapshot_app
+reads these unchanged.
+
+**I3 · `feature_engine.build_features(df, *, trade_date, prev_day_close, vix_open, ...)`** *(shared truth)*
+The one function training AND live call. Input: 1-min bars with core columns (alias-resolved — training
+names `atm_ce_oi` or live-panel `opt_0_ce_oi` both work). Output: df with all derived feature columns.
+**Do not compute features anywhere else.** Adding a feature = adding a layer here, once.
+
+**I4 · `snapshots_dhan_v1` schema** *(Track 2 → Track 3)* — every column in
+`snapshot_ml_flat_contract.REQUIRED_COLUMNS_V2` present and typed; validated by
+`validate_snapshot_ml_flat_rows`. This is the train/serve contract the model binds to.
+
+**I5 · Model bundle** *(Track 3 → live)* — published to GCS in the existing bundle format
+(model + calibration + threshold report + feature list). Live loads via `ENTRY_ML_MODEL_PATH`.
+The bundle's feature list MUST be a subset of I4's columns (else live can't produce them → skew).
 
 ---
 
