@@ -75,10 +75,41 @@ feature_engine's divergence from the v2 convention is fine *by design*. What mus
 - **Normalization consistency**: `ema_*_slope` now `/close` like `ema_9_21_spread`; converged across all
   3 live paths. (Supersedes the earlier "actual expiry from data" note — data has no expiry column.)
 
+### ✅ `snapshots_dhan_v1` built (2026-06-26, ML VM)
+
+407 trading days · 153,032 bars · 2024-11 → 2026-06 · 331 columns · ~199 MB.
+Price / returns / EMA / RSI / ATR / OI / IV / velocity / context / DTE / regime — all 0–2% NaN. Clean.
+
+**Compression features:** present under real names (`bb_width_20`, `range_10/30`, `ema_spread_9_21`,
+`compression_score`, `adx_14`, `vol_spike_ratio`). Verify script had stale names — cosmetic fix only.
+
+**⚠️ VWAP/volume limitation (known, non-blocking for v1):**
+`vwap_fut` is 61% NaN because the initial fetch used BankNifty *index* (`securityId=25`, IDX_I segment).
+Indices have no real traded volume (~88% zeros), so all volume-derived features are degraded:
+`vwap_fut`, `vwap_distance`, `ctx_above_vwap`, `fut_flow_rel_volume_20`, `vol_spike_ratio` (partial).
+
+**Fix (futures re-fetch, queued for production model):**
+Monthly BankNifty futures carry real traded volume but require stitching ~18 monthly contracts
+(security IDs rotate on expiry). Code is now ready:
+- `dhan_data_pipeline.py fetch-futures` — downloads Dhan scrip master CSV, resolves monthly
+  contract IDs automatically, fetches each contract's active window, stitches to `futures.parquet`.
+- `dhan_data_pipeline.py fetch` now also auto-fetches futures (inline, same token).
+- `_build_day_indicators` uses `futures.parquet` for `px_fut_*` / VWAP when present, falls back
+  to index otherwise. `px_spot_*` always uses the index.
+
+**Decision:** proceed with exploratory training on v1 (VWAP features excluded/noted). Queue futures
+re-fetch on ML VM in parallel → rebuild `snapshots_dhan_v1` with real volume → production model.
+
 ### ⛔ Not started
 
-- **`build` + `assemble`** on ML VM → `snapshots_dhan_v1` (monthly). *Code gate done; needs code-sync:
-  branch not pushed + VM has no repo checkout → push the branch, build properly (no scp shortcut).*
+- **Futures re-fetch + snapshots_dhan_v1 rebuild** (real volume, VWAP clean):
+  ```bash
+  python ml_pipeline_2/scripts/dhan_data_pipeline.py fetch-futures \
+      --start 2024-11-01 --end 2026-06-26 \
+      --token $DHAN_TOKEN --client-id 1111957145 \
+      --out-dir ~/dhan_pipeline
+  # then re-run build + assemble
+  ```
 - **Train new models** on `snapshots_dhan_v1` + **publish**.
 - **Deploy** (rebuild images, SIM-validate, **atomic** cutover).
 

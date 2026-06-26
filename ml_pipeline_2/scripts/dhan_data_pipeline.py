@@ -159,6 +159,223 @@ class DhanClient:
             return False
 
 
+# ── Dhan Scrip Master ────────────────────────────────────────────────────────
+# Dhan publishes a daily scrip master CSV at the URL below. It maps every tradeable
+# instrument to its securityId used in /charts/intraday.
+
+DHAN_SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
+
+
+def _download_scrip_master(cache_path: Optional[Path] = None) -> pd.DataFrame:
+    """Download (or load from cache) the Dhan scrip master CSV.
+
+    Columns of interest: SEM_EXM_EXCH_ID, SEM_INSTRUMENT_NAME, SEM_TRADING_SYMBOL,
+    SEM_SMST_SECURITY_ID, SEM_EXPIRY_DATE.
+    """
+    if cache_path and cache_path.exists():
+        age_h = (time.time() - cache_path.stat().st_mtime) / 3600
+        if age_h < 12:
+            log.info("Scrip master: using cache (%s, %.1fh old)", cache_path.name, age_h)
+            return pd.read_csv(cache_path, low_memory=False)
+    log.info("Downloading Dhan scrip master from %s ...", DHAN_SCRIP_MASTER_URL)
+    resp = requests.get(DHAN_SCRIP_MASTER_URL, timeout=60)
+    resp.raise_for_status()
+    from io import StringIO
+    df = pd.read_csv(StringIO(resp.text), low_memory=False)
+    if cache_path:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(cache_path, index=False)
+        log.info("Scrip master cached -> %s (%d rows)", cache_path.name, len(df))
+    return df
+
+
+def _monthly_futures_contracts(
+    scrip_master: pd.DataFrame,
+    instrument_name: str,          # e.g. "BANKNIFTY"
+    start: date,
+    end: date,
+) -> List[Dict]:
+    """
+    Return list of {security_id, symbol, expiry_date, active_from, active_to} for all
+    monthly futures contracts whose expiry falls within or after `start` and before
+    `end + 90 days` (to cover partially-active contracts).
+
+    We keep the front-month contract from its listing date up to and including its expiry.
+    For the stitched continuous series we use:
+      active_from = previous expiry + 1 trading day  (first day a contract is "front month")
+      active_to   = contract expiry
+    """
+    # Normalise column names — different CSV versions use slightly different casings
+    sm = scrip_master.copy()
+    sm.columns = [c.strip() for c in sm.columns]
+
+    # Filter: NSE FNO segment, FUTIDX instrument, name matches
+    seg_col  = next((c for c in sm.columns if "EXCH_ID" in c.upper()), None)
+    inst_col = next((c for c in sm.columns if "INSTRUMENT_NAME" in c.upper()), None)
+    sym_col  = next((c for c in sm.columns if "TRADING_SYMBOL" in c.upper()), None)
+    sid_col  = next((c for c in sm.columns if "SECURITY_ID" in c.upper() and "SMST" in c.upper()), None)
+    exp_col  = next((c for c in sm.columns if "EXPIRY" in c.upper()), None)
+
+    if not all([seg_col, inst_col, sym_col, sid_col, exp_col]):
+        log.error("Scrip master column detection failed. Found: %s", list(sm.columns[:20]))
+        raise RuntimeError("Cannot parse Dhan scrip master — unexpected column names")
+
+    filt = (
+        (sm[seg_col].str.upper().str.strip() == "NSE_FNO")
+        & (sm[inst_col].str.upper().str.strip() == "FUTIDX")
+        & (sm[sym_col].str.upper().str.contains(instrument_name.upper()))
+    )
+    fut = sm[filt].copy()
+    if fut.empty:
+        log.warning("No %s FUTIDX contracts found in scrip master (instrument_name=%s)",
+                    instrument_name, instrument_name)
+        return []
+
+    fut["_expiry"] = pd.to_datetime(fut[exp_col], errors="coerce").dt.date
+    # Keep only monthly expiries (skip mid-month/weekly if any exist)
+    # Monthly = expiry is a Thursday in the last week of the month (day >= 25 usually)
+    fut["_is_monthly"] = fut["_expiry"].apply(
+        lambda d: (d is not None and not pd.isna(d)
+                   and d.weekday() == 3  # Thursday
+                   and d.day >= 22)      # last-week heuristic
+    )
+    monthly = fut[fut["_is_monthly"]].copy()
+
+    # Filter to the date window we need (expiry within [start-90d, end+90d])
+    window_start = start - timedelta(days=90)
+    window_end   = end   + timedelta(days=90)
+    monthly = monthly[
+        monthly["_expiry"].apply(
+            lambda d: d is not None and window_start <= d <= window_end
+        )
+    ].copy()
+
+    monthly = monthly.sort_values("_expiry").reset_index(drop=True)
+
+    contracts = []
+    for i, row in monthly.iterrows():
+        exp = row["_expiry"]
+        sid = str(row[sid_col]).strip()
+        sym = str(row[sym_col]).strip()
+        # Active window: from day after previous expiry to this expiry
+        if i == 0:
+            active_from = start
+        else:
+            prev_exp = monthly.iloc[i - 1]["_expiry"]
+            active_from = prev_exp + timedelta(days=1)
+        active_to = exp
+        # Clamp to our fetch window
+        active_from = max(active_from, start)
+        active_to   = min(active_to,   end)
+        if active_from > active_to:
+            continue
+        contracts.append({
+            "security_id": sid,
+            "symbol":       sym,
+            "expiry_date":  exp,
+            "active_from":  active_from,
+            "active_to":    active_to,
+        })
+
+    log.info("Found %d monthly %s futures contracts for %s -> %s",
+             len(contracts), instrument_name, start, end)
+    for c in contracts:
+        log.info("  %s  sid=%-8s  active %s -> %s  (expiry %s)",
+                 c["symbol"], c["security_id"],
+                 c["active_from"], c["active_to"], c["expiry_date"])
+    return contracts
+
+
+def fetch_futures_continuous(
+    client: DhanClient,
+    contracts: List[Dict],
+    fno_segment: str = "NSE_FNO",
+    interval: int = 1,
+) -> pd.DataFrame:
+    """
+    Fetch and stitch a continuous 1-min BankNifty futures series.
+
+    Each contract is fetched only for its active_from..active_to window
+    (= when it is the front-month contract). This gives real traded volume.
+    Returns a single DataFrame with OHLCV columns: open/high/low/close/volume.
+    """
+    if not contracts:
+        log.warning("fetch_futures_continuous: no contracts to fetch")
+        return pd.DataFrame()
+
+    parts = []
+    for c in contracts:
+        log.info("Fetching futures %s (%s -> %s) sid=%s ...",
+                 c["symbol"], c["active_from"], c["active_to"], c["security_id"])
+        df = fetch_intraday(
+            client,
+            security_id=c["security_id"],
+            segment=fno_segment,
+            instrument_type="FUTIDX",
+            start=c["active_from"],
+            end=c["active_to"],
+            interval=interval,
+        )
+        if df.empty:
+            log.warning("  Empty for %s — no data in window", c["symbol"])
+            continue
+        log.info("  %s: %d bars", c["symbol"], len(df))
+        parts.append(df)
+
+    if not parts:
+        log.warning("fetch_futures_continuous: all contracts returned empty")
+        return pd.DataFrame()
+
+    combined = pd.concat(parts).sort_index()
+    # Deduplicate (overlap at roll boundary — keep first occurrence = expiring contract)
+    combined = combined[~combined.index.duplicated(keep="first")]
+    log.info("Continuous futures: %d bars total (%.1f MB raw)",
+             len(combined), combined.memory_usage(deep=True).sum() / 1e6)
+    return combined
+
+
+def run_fetch_futures(args):
+    """Standalone sub-command: fetch BankNifty monthly futures and save futures.parquet."""
+    out_dir = Path(args.out_dir)
+    raw_dir = out_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    start = date.fromisoformat(args.start)
+    end   = date.fromisoformat(args.end)
+
+    client = DhanClient(args.token, args.client_id, rps=3.0)  # slightly slower for futures
+    if not client.validate_token():
+        log.error("Token validation FAILED")
+        sys.exit(1)
+
+    cache_path = raw_dir / "_scrip_master_cache.csv"
+    scrip = _download_scrip_master(cache_path)
+
+    cfg = INSTRUMENTS[args.instrument]
+    contracts = _monthly_futures_contracts(scrip, cfg.name, start, end)
+    if not contracts:
+        log.error("No futures contracts found — cannot fetch.")
+        sys.exit(1)
+
+    if args.dry_run:
+        log.info("[DRY RUN] Would fetch %d contracts:", len(contracts))
+        for c in contracts:
+            log.info("  %s  sid=%s  %s -> %s", c["symbol"], c["security_id"],
+                     c["active_from"], c["active_to"])
+        return
+
+    futures_df = fetch_futures_continuous(client, contracts, cfg.fno_segment)
+    _save_verify(
+        futures_df,
+        raw_dir / "futures.parquet",
+        "BankNifty monthly futures (continuous)",
+        expect_cols=["open", "high", "low", "close", "volume"],
+        price_col="close",
+        price_range=(1000, 200000),
+    )
+    log.info("futures.parquet written to %s", raw_dir)
+
+
 # ── Step 1: FETCH ─────────────────────────────────────────────────────────────
 
 def fetch_intraday(
@@ -293,6 +510,25 @@ def run_fetch(args):
     _save_verify(index_df, raw_dir / "index.parquet", "underlying index",
                  expect_cols=["open", "high", "low", "close", "volume"],
                  price_col="close", price_range=(1000, 200000))
+
+    # ── 1a-ii. Monthly futures (real volume for VWAP) ─────────────────────
+    # Fetch the continuous front-month futures series so _build_day_indicators
+    # gets real traded volume (index volume is ~88% zeros for BankNifty IDX_I).
+    log.info("Fetching %s monthly futures (continuous, for VWAP)...", cfg.name)
+    try:
+        cache_path = raw_dir / "_scrip_master_cache.csv"
+        scrip = _download_scrip_master(cache_path)
+        contracts = _monthly_futures_contracts(scrip, cfg.name, start, end)
+        if contracts:
+            futures_df = fetch_futures_continuous(client, contracts, cfg.fno_segment)
+            _save_verify(futures_df, raw_dir / "futures.parquet",
+                         "BankNifty monthly futures (continuous)",
+                         expect_cols=["open", "high", "low", "close", "volume"],
+                         price_col="close", price_range=(1000, 200000))
+        else:
+            log.warning("No monthly futures contracts found — VWAP will be NaN")
+    except Exception as _fut_err:
+        log.warning("Futures fetch failed (VWAP will be NaN): %s", _fut_err)
 
     # ── 1b. VIX ──────────────────────────────────────────────────────────────
     log.info("Fetching India VIX (securityId=%s)...", cfg.vix_security_id)
@@ -455,8 +691,9 @@ def run_build(args):
     log.info("Loading raw data from %s", raw_dir)
 
     # Load all raw parquet
-    index_df = _load_parquet(raw_dir / "index.parquet", "underlying index")
-    vix_df   = _load_parquet(raw_dir / "vix.parquet",   "VIX")
+    index_df   = _load_parquet(raw_dir / "index.parquet",   "underlying index")
+    vix_df     = _load_parquet(raw_dir / "vix.parquet",     "VIX")
+    futures_df = _load_parquet(raw_dir / "futures.parquet", "futures (continuous)")
 
     # Load all option files — {strike: {"ce": df, "pe": df}}
     options: Dict[str, Dict[str, pd.DataFrame]] = {}
@@ -497,6 +734,7 @@ def run_build(args):
         out_file = out_dir / f"{td.isoformat()}.parquet"
         expiry = _monthly_expiry_for(td, expiry_by_month)
         day_df = _build_day_indicators(td, index_df, vix_df, options,
+                                       futures_df=futures_df,
                                        prev_day_close=prev_close, expiry_date=expiry)
         if day_df is not None and not day_df.empty:
             day_df.to_parquet(out_file)
@@ -526,6 +764,7 @@ def _build_day_indicators(
     vix_df: pd.DataFrame,
     options: Dict[str, Dict[str, pd.DataFrame]],
     *,
+    futures_df: Optional[pd.DataFrame] = None,
     prev_day_close: Optional[float] = None,
     expiry_date: Optional[date] = None,
 ) -> Optional[pd.DataFrame]:
@@ -554,14 +793,35 @@ def _build_day_indicators(
     # ── Underlying OHLCV (v2 schema names: px_fut_* / px_spot_*) ─────────
     idx_al = idx_day.tz_convert(IST).reindex(sess_idx, method="nearest",
                                               tolerance=pd.Timedelta("90s"))
-    for raw, v2 in [("open", "px_fut_open"), ("high", "px_fut_high"),
-                    ("low", "px_fut_low"), ("close", "px_fut_close")]:
-        rows[v2] = idx_al[raw]
-    # Spot = same (we use index as proxy; no basis with Dhan index data)
+
+    # px_spot_* = BankNifty index (IDX_I — the canonical spot reference)
     for raw, v2 in [("open", "px_spot_open"), ("high", "px_spot_high"),
                     ("low", "px_spot_low"), ("close", "px_spot_close")]:
         rows[v2] = idx_al[raw]
-    rows["fut_flow_volume"] = idx_al.get("volume", pd.Series(0, index=sess_idx))
+
+    # px_fut_* = monthly futures if available (real volume, basis-adjusted price),
+    # else fall back to index (px_fut_* == px_spot_*; VWAP will be NaN).
+    fut_day_al = None
+    if futures_df is not None and not futures_df.empty:
+        fut_ist  = futures_df.index.tz_convert(IST)
+        fut_mask = fut_ist.date == trade_date
+        fut_day  = futures_df[fut_mask]
+        if not fut_day.empty:
+            fut_day_al = fut_day.tz_convert(IST).reindex(
+                sess_idx, method="nearest", tolerance=pd.Timedelta("90s")
+            )
+
+    if fut_day_al is not None:
+        for raw, v2 in [("open", "px_fut_open"), ("high", "px_fut_high"),
+                        ("low", "px_fut_low"), ("close", "px_fut_close")]:
+            rows[v2] = fut_day_al[raw]
+        rows["fut_flow_volume"] = fut_day_al["volume"].fillna(0)
+    else:
+        # Fallback: index as futures proxy
+        for raw, v2 in [("open", "px_fut_open"), ("high", "px_fut_high"),
+                        ("low", "px_fut_low"), ("close", "px_fut_close")]:
+            rows[v2] = idx_al[raw]
+        rows["fut_flow_volume"] = idx_al.get("volume", pd.Series(0, index=sess_idx))
 
     rows["trade_date"] = trade_date
     rows["instrument"] = "BANKNIFTY"
@@ -882,6 +1142,18 @@ def main():
     p_fetch.add_argument("--strikes", default=",".join(DEFAULT_STRIKES))
     p_fetch.add_argument("--dry-run", action="store_true")
     p_fetch.set_defaults(func=run_fetch)
+
+    # fetch-futures  (add futures.parquet to an existing raw dir, or standalone re-fetch)
+    p_ff = sub.add_parser("fetch-futures",
+                          help="Fetch BankNifty monthly futures OHLCV -> raw/futures.parquet")
+    p_ff.add_argument("--instrument", default="BANKNIFTY", choices=list(INSTRUMENTS))
+    p_ff.add_argument("--start",  required=True, help="YYYY-MM-DD")
+    p_ff.add_argument("--end",    required=True, help="YYYY-MM-DD")
+    p_ff.add_argument("--token",  required=True, help="Dhan access token")
+    p_ff.add_argument("--client-id", required=True, help="Dhan client ID")
+    p_ff.add_argument("--out-dir", default=".data/dhan_pipeline")
+    p_ff.add_argument("--dry-run", action="store_true")
+    p_ff.set_defaults(func=run_fetch_futures)
 
     # build
     p_build = sub.add_parser("build", help="Step 2: Compute indicators from raw data")

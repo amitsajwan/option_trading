@@ -139,6 +139,8 @@ node_modules/
 *.csv
 !snapshot_app/contracts/snapshot_ml_flat/legacy_to_flat.csv
 ingestion_app/credentials.json
+ingestion_app/dhan_credentials.json
+ingestion_app/dhan_credentials.json.backup
 ops/gcp/operator.env
 ops/gcp/operator.local.env
 .tmp_pip_probe/

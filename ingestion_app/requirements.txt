@@ -10,3 +10,4 @@ pandas-ta>=0.3.14b
 scipy>=1.10,<2
 kiteconnect>=4,<5
 pyotp>=2.9,<3
+dhanhq>=2.0,<3

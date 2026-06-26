@@ -50,6 +50,7 @@ from .dhan_client import (
     _to_float,
     _to_int,
 )
+from .dhan_ws_feed import DhanWsFeed
 
 log = logging.getLogger("dhan_data_service")
 
@@ -82,6 +83,22 @@ class DhanDataService:
         from .env_settings import redis_config
         self.redis_client = redis.Redis(**redis_config(decode_responses=True))
 
+        # WebSocket live feed (futures + VIX ticks; starts only if DHAN_WS_ENABLED != 0)
+        self._ws_feed: Optional[DhanWsFeed] = None
+        if DhanWsFeed.should_enable():
+            try:
+                fut_sid = self._futures_security_id("BANKNIFTY")
+                self._ws_feed = DhanWsFeed(
+                    client_id=client_id,
+                    access_token=token,
+                    futures_security_id=fut_sid,
+                    redis_client=self.redis_client,
+                )
+                self._ws_feed.start()
+            except Exception as _ws_err:
+                log.warning("DhanWsFeed init failed (falling back to REST poll): %s", _ws_err)
+                self._ws_feed = None
+
         # Token auto-renewal (every 20 hours in background)
         self._start_token_renewal()
 
@@ -90,7 +107,9 @@ class DhanDataService:
             while True:
                 time.sleep(20 * 3600)
                 try:
-                    self._client.renew_token()
+                    new_token = self._client.renew_token()
+                    if new_token and self._ws_feed is not None:
+                        self._ws_feed.update_token(new_token)
                 except Exception as e:
                     log.warning("Token renewal failed: %s", e)
 
@@ -171,6 +190,14 @@ class DhanDataService:
         else:
             # Fall back to BankNifty index
             securities = [{"exchangeSegment": "IDX_I", "securityId": IDX_BANKNIFTY, "instrument": "INDEX"}]
+
+        # WS cache-first: if the live feed is healthy, return the cached tick
+        safe_key_lookup = symbol_u.replace(" ", "")
+        ws_redis_key = f"websocket:tick:{safe_key_lookup}:latest"
+        if self._ws_feed is not None:
+            cached = self._ws_feed.get_cached_tick(ws_redis_key)
+            if cached is not None:
+                return cached
 
         try:
             quotes = self._client.get_quotes(securities)
