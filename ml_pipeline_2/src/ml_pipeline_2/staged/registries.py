@@ -42,6 +42,12 @@ def view_registry() -> Dict[str, ViewSpec]:
             "stage3_recipe_view_v3_candidate",
             "stage3",
         ),
+        # Dhan monthly-regime views — built from snapshots_dhan_v1 via
+        # rebuild_stage_views_from_flat (output_stage*_dataset=*_dhan). Same v2
+        # projection; separate datasets so the v2 views are untouched.
+        "stage1_entry_view_dhan": ViewSpec("stage1_entry_view_dhan", "stage1_entry_view_dhan", "stage1"),
+        "stage2_direction_view_dhan": ViewSpec("stage2_direction_view_dhan", "stage2_direction_view_dhan", "stage2"),
+        "stage3_recipe_view_dhan": ViewSpec("stage3_recipe_view_dhan", "stage3_recipe_view_dhan", "stage3"),
     }
 
 

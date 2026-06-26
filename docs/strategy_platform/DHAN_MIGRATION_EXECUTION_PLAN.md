@@ -299,6 +299,25 @@ The bundle's feature list MUST be a subset of I4's columns (else live can't prod
 
 ---
 
+## 4c. Broker abstraction — pluggable across all surfaces (2026-06-26)
+
+**Directive:** swapping brokers (kite/zerodha/dhan/future) must NOT change app code or
+strategy config — only the broker selection + that broker's credentials.
+
+| Surface | Mechanism | Pluggable |
+|---|---|---|
+| Live data (ingestion_app) | `BROKER` env → `_MARKET_DATA_SERVICES` registry (`api_service`) | ✅ |
+| Execution (execution_app) | `EXECUTION_ADAPTER` → `BrokerAdapter` | ✅ |
+| Historical/training fetch (dhan_data_pipeline) | `BROKER` → `_HISTORICAL_ADAPTERS` / `HistoricalDataAdapter` | ✅ |
+| Feature computation (feature_engine) | core data → features | ✅ broker-agnostic by design |
+
+**Add a broker** = implement the interface + **one registry line** + set `BROKER=<name>`. No
+changes to snapshot_app/strategy_app/feature_engine/models/recipes. `kite`/`zerodha` aliased
+(Kite Connect is Zerodha's API). Guard tests: `test_broker_registry.py`, `test_historical_adapter.py`.
+**Runtime:** set `BROKER=dhan` in the live `.env.compose` (gitignored).
+
+---
+
 ## 5. Non-negotiable rules (learned the hard way — see memory)
 
 1. **ALWAYS rebuild the Docker image to deploy. NEVER `docker cp`.** docker-cp reverts on recreate,

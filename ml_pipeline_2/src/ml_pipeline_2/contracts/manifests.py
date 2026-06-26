@@ -97,6 +97,7 @@ def _validate_paths(resolved: Dict[str, Any], errors: List[str]) -> None:
             "stage1_entry_view_v2": "snapshots_ml_flat_v2",
             "stage1_entry_view_v3": "snapshots_ml_flat_v2",
             "stage1_entry_view_v3_candidate": "snapshots_ml_flat_v2",
+            "stage1_entry_view_dhan": "snapshots_dhan_v1",
         }
         expected_support = expected_support_by_stage1_dataset.get(stage1_dataset_name)
         if expected_support and support_dataset != expected_support:
