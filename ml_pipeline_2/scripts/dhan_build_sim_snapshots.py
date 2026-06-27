@@ -147,8 +147,11 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
     written = 0
     state = MarketSnapshotState()  # carries IV/session continuity across days
     for d in all_days:
-        # window = this day + prior context (for prev-day levels / multi-day baselines)
-        window = bars[bars["trade_date"] <= d].copy()
+        # Bounded lookback window (not all history): current day + ~30 prior calendar
+        # days gives ~20 trading days of context — enough for prev-day levels and the
+        # minute-of-day vol baselines. Passing all history made each day O(140k bars).
+        lo = d - pd.Timedelta(days=30).to_pytimedelta()
+        window = bars[(bars["trade_date"] <= d) & (bars["trade_date"] >= lo)].copy()
         fut_window = window.drop(columns=["trade_date"]).reset_index(drop=True)
         try:
             prepared = prepare_market_snapshot_window(fut_window, current_trade_date=pd.Timestamp(d))
@@ -157,6 +160,7 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
 
         today_idx = fut_window.index[fut_window["timestamp"].dt.date == d].tolist()
         rows = []
+        first_err: Optional[str] = None
         for full_idx in today_idx:
             ts = fut_window.iloc[full_idx]["timestamp"]
             chain = _chain_at(ts, options, step, instrument, expiry_hint)
@@ -167,7 +171,9 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
                     prepared_window=prepared, current_index=full_idx,
                 )
             except Exception as exc:
-                log.debug("  %s idx%d: build failed: %s", d, full_idx, exc); continue
+                if first_err is None:
+                    first_err = f"{type(exc).__name__}: {exc}"
+                continue
             rows.append({
                 "trade_date": str(d), "timestamp": ts.isoformat(),
                 "snapshot_id": ts.isoformat(),
@@ -178,6 +184,8 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
             pd.DataFrame(rows).to_parquet(ydir / f"{d}.parquet", index=False)
             written += len(rows)
             log.info("  %s: %d snapshots", d, len(rows))
+        else:
+            log.warning("  %s: 0 snapshots (first build error: %s)", d, first_err)
     log.info("SIM SNAPSHOTS COMPLETE — %d rows in %s", written, snap_root)
     return written
 
