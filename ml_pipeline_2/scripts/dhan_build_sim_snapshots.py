@@ -174,7 +174,8 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
                 )
             except Exception as exc:
                 if first_err is None:
-                    first_err = f"{type(exc).__name__}: {exc}"
+                    import traceback
+                    first_err = f"{type(exc).__name__}: {exc}\n" + "".join(traceback.format_exc()[-800:])
                 continue
             rows.append({
                 "trade_date": str(d), "timestamp": ts.isoformat(),
