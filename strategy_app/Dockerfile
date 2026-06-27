@@ -21,6 +21,7 @@ COPY contracts_app /app/contracts_app
 COPY ml_pipeline_2 /app/ml_pipeline_2
 COPY snapshot_app /app/snapshot_app
 COPY strategy_app /app/strategy_app
+COPY models/ /app/models/
 
 ENV PYTHONPATH=/app
 
