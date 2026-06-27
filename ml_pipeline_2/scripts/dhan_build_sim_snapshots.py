@@ -152,7 +152,9 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
         # minute-of-day vol baselines. Passing all history made each day O(140k bars).
         lo = d - pd.Timedelta(days=30).to_pytimedelta()
         window = bars[(bars["trade_date"] <= d) & (bars["trade_date"] >= lo)].copy()
-        fut_window = window.drop(columns=["trade_date"]).reset_index(drop=True)
+        # keep trade_date as a string column (build_market_snapshot/helpers reference it)
+        window["trade_date"] = window["trade_date"].astype(str)
+        fut_window = window.reset_index(drop=True)
         try:
             prepared = prepare_market_snapshot_window(fut_window, current_trade_date=pd.Timestamp(d))
         except Exception as exc:
