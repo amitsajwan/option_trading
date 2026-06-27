@@ -37,6 +37,7 @@ from snapshot_app.core.market_snapshot import (
     build_market_snapshot,
     prepare_market_snapshot_window,
 )
+from snapshot_app.core.live_velocity_state import LiveVelocityAccumulator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("dhan_sim_snapshots")
@@ -155,6 +156,7 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
     snap_root = out_dir / "snapshots"
     written = 0
     state = MarketSnapshotState()  # carries IV/session continuity across days
+    vel_acc = LiveVelocityAccumulator()  # injects velocity_enrichment per-bar (as live does)
     for d in all_days:
         # Bounded lookback window (not all history): current day + ~30 prior calendar
         # days gives ~20 trading days of context — enough for prev-day levels and the
@@ -183,9 +185,12 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
                 )
             except Exception as exc:
                 if first_err is None:
-                    import traceback
-                    first_err = f"{type(exc).__name__}: {exc}\n" + "".join(traceback.format_exc()[-800:])
+                    first_err = f"{type(exc).__name__}: {exc}"
                 continue
+            try:
+                snap = vel_acc.process(snap)   # inject velocity_enrichment (live parity)
+            except Exception:
+                pass
             rows.append({
                 "trade_date": str(d), "timestamp": ts.isoformat(),
                 "snapshot_id": ts.isoformat(),
