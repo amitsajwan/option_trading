@@ -197,8 +197,10 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
                 "snapshot_raw_json": json.dumps(snap, default=str),
             })
         if rows:
-            ydir = snap_root / f"year={d.year}"; ydir.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(rows).to_parquet(ydir / f"{d}.parquet", index=False)
+            # layout the SIM loader expects: snapshots/<partition>/data.parquet
+            # (parquet_store reads snapshots/**/data.parquet, hive_partitioning=false)
+            ddir = snap_root / f"trade_date={d}"; ddir.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(rows).to_parquet(ddir / "data.parquet", index=False)
             written += len(rows)
             log.info("  %s: %d snapshots", d, len(rows))
         else:
