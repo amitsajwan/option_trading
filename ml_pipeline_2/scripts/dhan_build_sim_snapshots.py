@@ -134,10 +134,19 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
     step = _STRIKE_STEP.get(instrument, 100)
     bars = _load_bars(raw_dir)
     options = _load_options(raw_dir)
+    # vix_daily: build daily OHLC (trade_date, vix_open/high/low/close) from intraday VIX,
+    # the format _compute_vix_block expects.
     vix_df = None
     vp = raw_dir / "vix.parquet"
     if vp.exists():
-        vix_df = pd.read_parquet(vp)
+        v = pd.read_parquet(vp).reset_index()
+        tcol = next(c for c in v.columns if c in ("ts", "timestamp") or "time" in c.lower())
+        v["ts"] = pd.to_datetime(v[tcol], utc=True).dt.tz_convert(IST)
+        v["trade_date"] = v["ts"].dt.date.astype(str)
+        vix_df = (v.groupby("trade_date")
+                  .agg(vix_open=("open", "first"), vix_high=("high", "max"),
+                       vix_low=("low", "min"), vix_close=("close", "last"))
+                  .reset_index())
 
     bars["trade_date"] = bars["timestamp"].dt.date
     all_days = sorted({d for d in bars["trade_date"].unique() if start <= d <= end})
