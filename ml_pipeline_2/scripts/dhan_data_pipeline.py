@@ -1305,8 +1305,8 @@ def main():
 
     # build
     p_build = sub.add_parser("build", help="Step 2: Compute indicators from raw data")
-    p_build.add_argument("--instrument", default="NIFTY", choices=list(INSTRUMENTS),
-                         help="NIFTY (weekly, full range) or BANKNIFTY (monthly, start-date 2024-11-01)")
+    p_build.add_argument("--instrument", default="BANKNIFTY", choices=list(INSTRUMENTS),
+                         help="BANKNIFTY (monthly cadence, pass --start-date 2024-11-01) or NIFTY (weekly, full range)")
     p_build.add_argument("--raw-dir",  required=True)
     p_build.add_argument("--out-dir",  required=True)
     # Default 2024-11-01: scope to the MONTHLY BankNifty regime. The weekly series was
