@@ -843,7 +843,9 @@ def run_build(args):
     # Cadence is instrument-driven: NIFTY=weekly (Thursday), BankNifty=monthly (last
     # Thursday, post-Nov-2024). Holiday-rolled-back. Built once, passed per day.
     all_trading_days = sorted(set(ist_index.date))
-    cadence = getattr(cfg, "expiry_cadence", "weekly")
+    instrument_name = getattr(args, "instrument", "NIFTY")
+    cfg = INSTRUMENTS.get(instrument_name, INSTRUMENTS["NIFTY"])
+    cadence = cfg.expiry_cadence
     expiry_dates = _build_expiry_dates(all_trading_days, cadence)
     log.info("Expiry cadence=%s: %d expiry dates %s..%s", cadence, len(expiry_dates),
              expiry_dates[0] if expiry_dates else "-", expiry_dates[-1] if expiry_dates else "-")
@@ -1303,6 +1305,8 @@ def main():
 
     # build
     p_build = sub.add_parser("build", help="Step 2: Compute indicators from raw data")
+    p_build.add_argument("--instrument", default="NIFTY", choices=list(INSTRUMENTS),
+                         help="NIFTY (weekly, full range) or BANKNIFTY (monthly, start-date 2024-11-01)")
     p_build.add_argument("--raw-dir",  required=True)
     p_build.add_argument("--out-dir",  required=True)
     # Default 2024-11-01: scope to the MONTHLY BankNifty regime. The weekly series was
