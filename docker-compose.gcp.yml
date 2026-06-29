@@ -1476,6 +1476,265 @@ services:
       timeout: 10s
       retries: 3
 
+  # ═══════════════════════════════════════════════════════════════════════════
+  # NIFTY PARALLEL STACK
+  # Mirrors BankNifty services but scoped to NIFTY via STRATEGY_INSTRUMENT.
+  # Uses the SAME images — only env vars differ.
+  # Namespace: *_nifty collections, market:nifty:* topics, separate run-dir.
+  # Launch: docker compose up -d ingestion_app_nifty snapshot_app_nifty
+  #                               strategy_app_nifty strategy_persistence_app_nifty
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  ingestion_app_nifty:
+    image: option_trading-ingestion_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: NIFTY
+      INSTRUMENT_SYMBOL: "${NIFTY_INSTRUMENT_SYMBOL:-NIFTY26JULFUT}"
+      BROKER: dhan
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      IDLE_SLEEP_SECONDS: "${IDLE_SLEEP_SECONDS:-60}"
+      INGESTION_COLLECTORS_ENABLED: "0"
+      LIVE_TOPIC: "market:nifty:snapshot:v1"
+      SNAPSHOT_V1_TOPIC: "market:nifty:snapshot:v1"
+    command:
+      - "python"
+      - "-m"
+      - "ingestion_app.market_session_runner"
+      - "--mode"
+      - "live"
+      - "--holidays-file"
+      - "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      - "--idle-sleep-seconds"
+      - "${IDLE_SLEEP_SECONDS:-60}"
+      - "--state-file"
+      - "/app/.run/ingestion_app_nifty/session_state.json"
+    volumes:
+      - ./.run:/app/.run
+      - ./ingestion_app/credentials.json:/app/secrets/credentials.json:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./models:/app/models:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-m"
+        - "ingestion_app.market_session_runner"
+        - "--healthcheck"
+        - "--state-file"
+        - "/app/.run/ingestion_app_nifty/session_state.json"
+        - "--max-stale-seconds"
+        - "240"
+      interval: 60s
+      timeout: 15s
+      retries: 3
+
+  snapshot_app_nifty:
+    image: option_trading-snapshot_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      ingestion_app_nifty:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: NIFTY
+      INSTRUMENT_SYMBOL: "${NIFTY_INSTRUMENT_SYMBOL:-NIFTY26JULFUT}"
+      BANKNIFTY_LOT_SIZE: "75"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "market:nifty:snapshot:v1"
+      SNAPSHOT_V1_TOPIC: "market:nifty:snapshot:v1"
+      ML_PIPELINE_DISABLE_KITE_BACKFILL: "1"
+    command:
+      - "python"
+      - "-m"
+      - "snapshot_app.main_live"
+      - "--foreground"
+      - "--instrument"
+      - "${NIFTY_INSTRUMENT_SYMBOL:-NIFTY26JULFUT}"
+      - "--market-api-base"
+      - "http://ingestion_app_nifty:8004"
+      - "--out-jsonl"
+      - "/app/.run/snapshot_app_nifty/events.jsonl"
+    volumes:
+      - ./.run:/app/.run
+      - ./ingestion_app/credentials.json:/app/secrets/credentials.json:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./models:/app/models:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-m"
+        - "snapshot_app.health"
+        - "--events-path"
+        - "/app/.run/snapshot_app_nifty/events.jsonl"
+        - "--max-age-seconds"
+        - "300"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  strategy_app_nifty:
+    image: option_trading-strategy_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      snapshot_app_nifty:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      STRATEGY_INSTRUMENT: NIFTY
+      STRATEGY_RUN_DIR: "/app/.run/strategy_app_nifty"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "market:nifty:snapshot:v1"
+      SNAPSHOT_V1_TOPIC: "market:nifty:snapshot:v1"
+      STRATEGY_REDIS_PUBLISH_ENABLED: "1"
+      STRATEGY_VOTE_TOPIC: "market:nifty:strategy:votes:v1"
+      TRADE_SIGNAL_TOPIC: "market:nifty:strategy:signals:v1"
+      STRATEGY_POSITION_TOPIC: "market:nifty:strategy:positions:v1"
+      STRATEGY_DECISION_TRACE_TOPIC: "market:nifty:strategy:decision_trace:v1"
+      # Models
+      ENTRY_ML_MODEL_PATH: "${NIFTY_ENTRY_ML_MODEL_PATH:-}"
+      ENTRY_ML_MIN_PROB: "${NIFTY_ENTRY_ML_MIN_PROB:-0.05}"
+      DIRECTION_ML_MODEL_PATH: "${NIFTY_DIRECTION_ML_MODEL_PATH:-}"
+      ML_ENTRY_DIRECTION_MODE: "direction_ml"
+      # NIFTY-specific sizing
+      STRATEGY_LOT_SIZE: "75"
+      STRATEGY_MIN_CONFIDENCE: "0.05"
+      RISK_MAX_LOTS_PER_TRADE: "1"
+      RISK_CAPITAL_ALLOCATED: "${RISK_CAPITAL_ALLOCATED:-500000}"
+      RISK_PER_TRADE_PCT: "${RISK_PER_TRADE_PCT:-0.005}"
+      RISK_MAX_DAILY_LOSS_PCT: "${RISK_MAX_DAILY_LOSS_PCT:-0.02}"
+      RISK_MAX_SESSION_TRADES: "6"
+      RISK_MAX_CONSECUTIVE_LOSSES: "3"
+      ENTRY_TIERING_ENABLED: "true"
+      EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
+      EXIT_MAX_LOSS_PCT: "${EXIT_MAX_LOSS_PCT:-0.10}"
+      EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+      STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-trader_master_ml_entry_v1}"
+    command:
+      - "python"
+      - "-m"
+      - "strategy_app.main"
+      - "--engine"
+      - "deterministic"
+      - "--min-confidence"
+      - "0.05"
+      - "--strategy-profile-id"
+      - "${STRATEGY_PROFILE_ID:-trader_master_ml_entry_v1}"
+      - "--topic"
+      - "market:nifty:snapshot:v1"
+      - "--rollout-stage"
+      - "paper"
+      - "--position-size-multiplier"
+      - "1.0"
+    volumes:
+      - ./.run:/app/.run
+      - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
+      - ./ops/strategy_config.yml:/app/ops/strategy_config.yml:ro
+      - ./models:/app/models:ro
+    healthcheck:
+      test: ["CMD", "python", "-m", "strategy_app.health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  strategy_persistence_app_nifty:
+    image: option_trading-strategy_persistence_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      strategy_app_nifty:
+        condition: service_started
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: NIFTY
+      STRATEGY_VOTE_TOPIC: "market:nifty:strategy:votes:v1"
+      TRADE_SIGNAL_TOPIC: "market:nifty:strategy:signals:v1"
+      STRATEGY_POSITION_TOPIC: "market:nifty:strategy:positions:v1"
+      STRATEGY_DECISION_TRACE_TOPIC: "market:nifty:strategy:decision_trace:v1"
+      MONGO_COLL_STRATEGY_VOTES: "strategy_votes_nifty"
+      MONGO_COLL_TRADE_SIGNALS: "trade_signals_nifty"
+      MONGO_COLL_STRATEGY_POSITIONS: "strategy_positions_nifty"
+      MONGO_COLL_STRATEGY_DECISION_TRACES: "strategy_decision_traces_nifty"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+    command:
+      - "python"
+      - "-m"
+      - "persistence_app.main_strategy_consumer"
+      - "--foreground"
+      - "--vote-topic"
+      - "market:nifty:strategy:votes:v1"
+      - "--signal-topic"
+      - "market:nifty:strategy:signals:v1"
+      - "--position-topic"
+      - "market:nifty:strategy:positions:v1"
+      - "--trace-topic"
+      - "market:nifty:strategy:decision_trace:v1"
+    volumes:
+      - ./.run:/app/.run
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-m", "persistence_app.strategy_health", "--max-age-seconds", "300"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
 volumes:
   redis_data:
   mongo_data:
