@@ -375,13 +375,25 @@ class DhanDataService:
             spec = self._active_spec()
             scrip_id, seg = int(spec.index_security_id), spec.index_segment
 
+        # Resolve the nearest expiry ourselves so we can stamp it on the result —
+        # Dhan's optionchain response does not echo the expiry back.
+        expiry = ""
         try:
-            resp = self._client.get_option_chain(scrip_id, underlying_seg=seg)
+            expiries = self._client.get_expiry_list(scrip_id, seg)
+            expiry = expiries[0] if expiries else ""
+        except Exception:
+            expiry = ""
+
+        try:
+            resp = self._client.get_option_chain(scrip_id, expiry_date=expiry or None, underlying_seg=seg)
         except Exception as e:
             log.error("get_option_chain failed: %s", e)
             raise HTTPException(status_code=502, detail=f"Dhan optionchain failed: {e}")
 
-        return _parse_option_chain(resp, underlying_u, strike_span)
+        parsed = _parse_option_chain(resp, underlying_u, strike_span)
+        if expiry and not parsed.get("expiry"):
+            parsed["expiry"] = expiry
+        return parsed
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
