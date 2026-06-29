@@ -61,7 +61,7 @@ except Exception:
 # Scrip master: (expiry, strike, option_type) -> (security_id, lot_units)
 # ─────────────────────────────────────────────────────────────────────────────
 class _ScripMaster:
-    """Lazily downloads Dhan's instrument master and indexes BANKNIFTY options.
+    """Lazily downloads Dhan's instrument master and indexes index options.
 
     Refreshed once per UTC day. Thread-safe.
     """
@@ -121,7 +121,7 @@ class _ScripMaster:
                 index[(expiry, strike, opt)] = (sec_id, lot)
             self._index = index
             self._loaded_for = today
-            logger.info("dhan scrip master: indexed %d BANKNIFTY option contracts", len(index))
+            logger.info("dhan scrip master: indexed %d %s option contracts", len(index), _UNDERLYING)
 
     @staticmethod
     def _parse_expiry(v: Optional[str]) -> Optional[str]:
@@ -192,13 +192,20 @@ class DhanAdapter(BrokerAdapter):
         if resolved is None:
             raise ValueError(f"no Dhan securityId for {_UNDERLYING} {expiry} {strike} {option_type}")
         security_id, lot_units = resolved
+        if lot_units <= 0:
+            raise ValueError(
+                f"Dhan scrip master returned lot_units={lot_units} for "
+                f"{_UNDERLYING} {expiry} {strike} {option_type} — cannot size order"
+            )
+        # The scrip master is authoritative for lot size. Our registry constant is an
+        # approximation for risk-sizing. Log a warning when they differ (NSE revises
+        # lot sizes periodically) but always use the scrip master value for execution.
         expected_lot = resolve_lot_size()
         if lot_units != expected_lot:
-            # Fail loud rather than place a wrong-sized live position.
-            raise ValueError(
-                f"lot-size mismatch: Dhan lot_units={lot_units} but "
-                f"resolved lot size={expected_lot} (instrument={_UNDERLYING}); "
-                f"reconcile before live trading"
+            logger.warning(
+                "dhan lot-size drift: scrip_master=%d registry=%d instrument=%s expiry=%s "
+                "— using scrip master. Update contracts_app/instruments.py if this is intentional.",
+                lot_units, expected_lot, _UNDERLYING, expiry,
             )
         return security_id, lots * lot_units
 

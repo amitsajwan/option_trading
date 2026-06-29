@@ -228,6 +228,26 @@ docker exec option_trading-execution_app-1 env | grep DHAN_API_BASE
 # calls sandbox.dhan.co instead of api.dhan.co
 ```
 
+Repeatable adapter smoke (runs fail-closed unless `DHAN_API_BASE=https://sandbox.dhan.co/v2`):
+
+```bash
+docker exec \
+  -e STRATEGY_INSTRUMENT=NIFTY \
+  -e DHAN_API_BASE=https://sandbox.dhan.co/v2 \
+  option_trading-execution_app-1 \
+  python ops/gcp/dhan_sandbox_smoke.py \
+    --expiry YYYY-MM-DD \
+    --strike 24000 \
+    --direction CE
+```
+
+Expected JSON evidence:
+- `dhan_api_base` is `https://sandbox.dhan.co/v2`
+- `instrument` is `NIFTY`
+- `quantity` is `75` for one lot
+- `security_id` is resolved from Dhan scrip master
+- `place.error` captures Dhan sandbox rejects such as `DH-905`/`DH-901`
+
 Key things to verify:
 - NIFTY option order: `quantity = 1 lot × 75 = 75` (not 30 or 15)
 - Security-id resolved from Dhan scrip master (not hardcoded)
