@@ -37,7 +37,7 @@ import urllib.request
 from datetime import date, datetime
 from typing import Optional
 
-from strategy_app.constants import BANKNIFTY_LOT_SIZE
+from strategy_app.constants import resolve_lot_size
 from strategy_app.contracts import PositionContext, TradeSignal
 
 from .base import BrokerAdapter, OrderResult
@@ -46,7 +46,15 @@ logger = logging.getLogger(__name__)
 
 _SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 _EXCHANGE_SEGMENT = "NSE_FNO"
-_UNDERLYING = "BANKNIFTY"
+
+# Underlying this execution container trades — from STRATEGY_INSTRUMENT so a
+# NIFTY container filters the scrip master for NIFTY contracts. Defaults to the
+# primary (BANKNIFTY) when unset, preserving existing behavior.
+try:
+    from contracts_app import current_instrument as _current_instrument
+    _UNDERLYING = _current_instrument()
+except Exception:
+    _UNDERLYING = "BANKNIFTY"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,11 +192,13 @@ class DhanAdapter(BrokerAdapter):
         if resolved is None:
             raise ValueError(f"no Dhan securityId for {_UNDERLYING} {expiry} {strike} {option_type}")
         security_id, lot_units = resolved
-        if lot_units != BANKNIFTY_LOT_SIZE:
+        expected_lot = resolve_lot_size()
+        if lot_units != expected_lot:
             # Fail loud rather than place a wrong-sized live position.
             raise ValueError(
                 f"lot-size mismatch: Dhan lot_units={lot_units} but "
-                f"BANKNIFTY_LOT_SIZE={BANKNIFTY_LOT_SIZE}; reconcile before live trading"
+                f"resolved lot size={expected_lot} (instrument={_UNDERLYING}); "
+                f"reconcile before live trading"
             )
         return security_id, lots * lot_units
 

@@ -130,6 +130,31 @@ except ImportError:
     from market_data_dashboard.routes.pipeline_routes import PipelineRouter  # type: ignore
 
 try:
+    from .routes.instruments_routes import InstrumentsRouter
+except ImportError:
+    from market_data_dashboard.routes.instruments_routes import InstrumentsRouter  # type: ignore
+
+try:
+    from .routes.config_routes import ConfigRouter
+except ImportError:
+    from market_data_dashboard.routes.config_routes import ConfigRouter  # type: ignore
+
+try:
+    from .routes.model_health_routes import ModelHealthRouter
+except ImportError:
+    from market_data_dashboard.routes.model_health_routes import ModelHealthRouter  # type: ignore
+
+try:
+    from .routes.signals_ws_routes import SignalsRouter
+except ImportError:
+    from market_data_dashboard.routes.signals_ws_routes import SignalsRouter  # type: ignore
+
+try:
+    from .routes.trades_routes import TradesRouter
+except ImportError:
+    from market_data_dashboard.routes.trades_routes import TradesRouter  # type: ignore
+
+try:
     from snapshot_app.core.snapshot_ml_flat_contract import load_contract_schema, load_feature_groups, load_legacy_mapping
 except ImportError:
     load_contract_schema = None  # type: ignore
@@ -4024,6 +4049,17 @@ _legacy_trading_routes = DashboardLegacyTradingRouter(
     backtest_timeout_seconds=int(os.getenv("DASHBOARD_LEGACY_BACKTEST_TIMEOUT_SECONDS") or "1800"),
 )
 app.include_router(_legacy_trading_routes.router)
+
+# ── New instrument/config/model-health/signals/trades routes ─────────────────
+try:
+    app.include_router(InstrumentsRouter().router)
+    app.include_router(ConfigRouter().router)
+    app.include_router(ModelHealthRouter().router)
+    app.include_router(SignalsRouter().router)
+    app.include_router(TradesRouter().router)
+except Exception as _new_routes_exc:  # pragma: no cover
+    import logging as _new_logger
+    _new_logger.getLogger(__name__).warning("Failed to register new routes: %s", _new_routes_exc)
 
 # Backward-compatible callables used by local tests/imports.
 home = _operator_routes.home

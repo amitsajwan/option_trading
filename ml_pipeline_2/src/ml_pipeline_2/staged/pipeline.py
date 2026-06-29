@@ -42,6 +42,70 @@ def _normalize_timestamp_series(values: pd.Series) -> pd.Series:
     return out
 
 
+# ── Parquet → snapshot column rename map ──────────────────────────────────────
+# Training parquet uses prefixed column names (opt_flow_*, fut_flow_*, osc_*,
+# ctx_*, time_*) while the runtime snapshot + RollingFeatureState use unprefixed
+# names.  Renaming at load time ensures the model learns feature names that
+# exactly match what the runtime provides — eliminating train/serve skew.
+_PARQUET_TO_SNAPSHOT_RENAME: Dict[str, str] = {
+    # Options flow
+    "opt_flow_pcr_oi": "pcr",
+    "opt_flow_ce_oi_total": "total_ce_oi",
+    "opt_flow_pe_oi_total": "total_pe_oi",
+    "opt_flow_ce_volume_total": "total_ce_volume",
+    "opt_flow_pe_volume_total": "total_pe_volume",
+    "opt_flow_ce_pe_oi_diff": "ce_pe_oi_diff",
+    "opt_flow_ce_pe_volume_diff": "ce_pe_volume_diff",
+    "opt_flow_options_volume_total": "options_volume_total",
+    "opt_flow_rel_volume_20": "options_rel_volume_20",
+    "opt_flow_atm_call_return_1m": "atm_call_return_1m",
+    "opt_flow_atm_put_return_1m": "atm_put_return_1m",
+    "opt_flow_atm_oi_change_1m": "atm_oi_change_1m",
+    "opt_flow_atm_strike": "atm_strike",
+    "opt_flow_rows": "opt_rows",
+    # Futures flow
+    "fut_flow_volume": "fut_volume",
+    "fut_flow_oi": "fut_oi",
+    "fut_flow_rel_volume_20": "fut_rel_volume_20",
+    "fut_flow_volume_accel_1m": "fut_volume_accel_1m",
+    "fut_flow_oi_change_1m": "fut_oi_change_1m",
+    "fut_flow_oi_change_5m": "fut_oi_change_5m",
+    "fut_flow_oi_rel_20": "fut_oi_rel_20",
+    "fut_flow_oi_zscore_20": "fut_oi_zscore_20",
+    # Oscillators
+    "osc_rsi_14": "rsi_14",
+    "osc_atr_14": "atr_14",
+    "osc_atr_ratio": "atr_ratio",
+    "osc_atr_percentile": "atr_percentile",
+    "osc_atr_daily_percentile": "atr_daily_percentile",
+    # Context flags
+    "ctx_dte_days": "dte_days",
+    "ctx_is_expiry_day": "is_expiry_day",
+    "ctx_is_near_expiry": "is_near_expiry",
+    "ctx_is_high_vix_day": "is_high_vix_day",
+    "ctx_regime_atr_high": "regime_atr_high",
+    "ctx_regime_atr_low": "regime_atr_low",
+    "ctx_regime_trend_up": "regime_trend_up",
+    "ctx_regime_trend_down": "regime_trend_down",
+    "ctx_regime_expiry_near": "regime_expiry_near",
+    "ctx_opening_range_ready": "opening_range_ready",
+    "ctx_opening_range_breakout_up": "opening_range_breakout_up",
+    "ctx_opening_range_breakout_down": "opening_range_breakout_down",
+    # Time
+    "time_minute_of_day": "minute_of_day",
+    "time_day_of_week": "day_of_week",
+    "time_minute_index": "minute_index",
+    # VIX
+    "vix": "vix_current",
+    # Other
+    "vwap_fut": "vwap",
+    "dist_basis": "basis",
+    "dist_basis_change_1m": "basis_change_1m",
+    "dist_from_day_high": "distance_from_day_high",
+    "dist_from_day_low": "distance_from_day_low",
+}
+
+
 def _load_dataset(parquet_root: Path, dataset_name: str) -> pd.DataFrame:
     dataset_dir = parquet_root / dataset_name
     if not dataset_dir.exists():
@@ -56,6 +120,11 @@ def _load_dataset(parquet_root: Path, dataset_name: str) -> pd.DataFrame:
     if not files:
         raise FileNotFoundError(f"dataset has no year partitions: {dataset_dir}")
     frame = pd.concat([pd.read_parquet(path) for path in files], ignore_index=True)
+    # Rename parquet columns to match runtime snapshot field names.
+    # Only renames columns that exist in the frame; unknown keys are silently skipped.
+    rename_present = {old: new for old, new in _PARQUET_TO_SNAPSHOT_RENAME.items() if old in frame.columns}
+    if rename_present:
+        frame = frame.rename(columns=rename_present)
     frame["timestamp"] = _normalize_timestamp_series(frame["timestamp"])
     frame = frame.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
     frame["trade_date"] = normalize_trade_date(frame["trade_date"])

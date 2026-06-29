@@ -22,7 +22,7 @@ from typing import Optional
 from contracts_app.decision_events import build_risk_decision_event, parse_strike_decision_event
 from contracts_app.sim_namespace import Namespace
 
-from ..constants import BANKNIFTY_LOT_SIZE, DEFAULT_MAX_LOTS_PER_TRADE
+from ..constants import DEFAULT_MAX_LOTS_PER_TRADE, resolve_lot_size
 from ..market.snapshot_accessor import SnapshotAccessor
 from ..risk.manager import RiskManager
 from ..runtime.stage_bus import StageBus
@@ -40,7 +40,7 @@ def _compute_lots(entry_premium: Optional[float], risk_manager: RiskManager) -> 
     ctx = risk_manager.context
     if entry_premium and entry_premium > 0 and ctx.capital_allocated > 0:
         notional = ctx.capital_allocated * ctx.risk_per_trade_pct
-        raw = int(notional / (entry_premium * BANKNIFTY_LOT_SIZE))
+        raw = int(notional / (entry_premium * resolve_lot_size()))
         return max(1, min(raw, int(ctx.max_lots_per_trade or DEFAULT_MAX_LOTS_PER_TRADE)))
     return 1
 

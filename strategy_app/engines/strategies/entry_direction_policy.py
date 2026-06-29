@@ -7,7 +7,8 @@ logic stays identical and lives in exactly one place. Both ``ML_ENTRY`` and
 
 Honors the same env knobs as before: ``ML_ENTRY_PE_ONLY`` / ``ML_ENTRY_CE_ONLY``,
 ``ML_ENTRY_DIRECTION_MODE`` (composite | consensus | legacy | momentum |
-regime_dual | multi_signal), ``DIRECTION_ML_MODEL_PATH``, ``BRAIN_DUAL_MODE``,
+regime_dual | multi_signal | agreement_lever | agreement_lever_combo),
+``DIRECTION_ML_MODEL_PATH``, ``BRAIN_DUAL_MODE``,
 ``REGIME_ALLOWED``, ``ENTRY_CONFIRM_PREV_TICK``, ``ML_ENTRY_BLOCK_CE/PE``.
 
 ``multi_signal`` mode: stateless 5-signal scorer (VWAP, ORB, straddle premium,
@@ -402,6 +403,27 @@ def resolve_direction_for_entry(
                 _mom = Direction.CE if float(_r1) > 0 else Direction.PE
                 if _mom != direction:
                     return None, raw_signals  # prev_tick_momentum_disagree
+    elif direction_mode in {"agreement_lever", "lever", "agreement_lever_combo", "lever_combo"}:
+        # OOS-validated ~61% on big moves: mom15 + max_pain + OI must ALL agree, else
+        # abstain. This is the literal ~61% setup from project_direction_lever_2026-06-10.
+        # "_combo" variant additionally requires EMA cross to agree (higher conf, less coverage).
+        from ...brain.regime_director import (
+            _detect_agreement_lever,
+            _detect_combo,
+            _detect_ema_cross,
+        )
+        verdict = _detect_agreement_lever(snap)
+        if direction_mode in {"agreement_lever_combo", "lever_combo"}:
+            ema_verdict = _detect_ema_cross(snap)
+            if ema_verdict.side != verdict.side:
+                verdict.side = "ABSTAIN"
+        raw_signals["direction_source"] = direction_mode
+        raw_signals["lever_breakdown"] = verdict.breakdown
+        raw_signals["lever_reason"] = verdict.reason
+        if verdict.side == "ABSTAIN":
+            return None, raw_signals
+        direction = Direction.CE if verdict.side == "CE" else Direction.PE
+
     elif direction_mode in {"legacy", "direction_ml", "bind"}:
         direction, direction_source = _resolve_direction(snap)
         if direction is None:

@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "experiment_kind": "staged_training_grid_v1",
+  "inputs": {
+    "base_manifest_path": "staged_dual_recipe.snapshot_rename_retrain_v1.json"
+  },
+  "outputs": {
+    "artifacts_root": "../../artifacts/research",
+    "run_name": "staged_grid_snapshot_rename_retrain_v1"
+  },
+  "selection": {
+    "ranking_strategy": "stage3_policy_paths_v1",
+    "stage2_hpo_escalation": {
+      "roc_auc_min": 0.55,
+      "brier_max": 0.22
+    },
+    "robustness_probe": {
+      "enabled": true,
+      "top_k": 3,
+      "iterations": 200,
+      "random_seed": 42,
+      "splits": ["research_valid", "final_holdout"],
+      "resample_unit": "trade_date"
+    }
+  },
+  "grid": {
+    "research_only": true,
+    "max_parallel_runs": 2,
+    "runs": [
+      {
+        "run_id": "entry_comprehensive",
+        "model_group_suffix": "_rename_entry",
+        "overrides": {
+          "outputs": { "run_name": "rename_entry_comprehensive" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage1": ["fo_comprehensive"],
+              "stage2": ["fo_midday_direction_regime_v1"],
+              "stage3": ["fo_velocity_v1"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "entry_compression",
+        "model_group_suffix": "_rename_entry_comp",
+        "overrides": {
+          "outputs": { "run_name": "rename_entry_compression" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage1": ["fo_compression_v1"],
+              "stage2": ["fo_midday_direction_regime_v1"],
+              "stage3": ["fo_velocity_v1"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "direction_regime_v1",
+        "model_group_suffix": "_rename_dir_v1",
+        "reuse_stage1_from": "entry_comprehensive",
+        "overrides": {
+          "outputs": { "run_name": "rename_dir_regime_v1" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage1": ["fo_comprehensive"],
+              "stage2": ["fo_midday_direction_regime_v1"],
+              "stage3": ["fo_velocity_v1"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "direction_regime_v2",
+        "model_group_suffix": "_rename_dir_v2",
+        "reuse_stage1_from": "entry_comprehensive",
+        "overrides": {
+          "outputs": { "run_name": "rename_dir_regime_v2" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage1": ["fo_comprehensive"],
+              "stage2": ["fo_midday_direction_regime_v2"],
+              "stage3": ["fo_velocity_v1"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "direction_velocity",
+        "model_group_suffix": "_rename_dir_vel",
+        "reuse_stage1_from": "entry_comprehensive",
+        "overrides": {
+          "outputs": { "run_name": "rename_dir_velocity" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage1": ["fo_comprehensive"],
+              "stage2": ["fo_velocity_v1"],
+              "stage3": ["fo_velocity_v1"]
+            }
+          }
+        }
+      },
+      {
+        "run_id": "direction_oi_pcr",
+        "model_group_suffix": "_rename_dir_oi_pcr",
+        "reuse_stage1_from": "entry_comprehensive",
+        "overrides": {
+          "outputs": { "run_name": "rename_dir_oi_pcr" },
+          "catalog": {
+            "feature_sets_by_stage": {
+              "stage1": ["fo_comprehensive"],
+              "stage2": ["fo_oi_pcr_momentum"],
+              "stage3": ["fo_velocity_v1"]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

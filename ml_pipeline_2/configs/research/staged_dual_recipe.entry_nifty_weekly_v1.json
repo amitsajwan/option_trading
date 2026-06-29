@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "experiment_kind": "staged_dual_recipe_v1",
-  "_comment": "NIFTY weekly-regime entry model (2021-06..2026-06). snapshots_nifty_v1. Weekly expiry throughout — no structural break (unlike BankNifty Nov-2024 monthly switch). min_points=50 => ~0.21% at NIFTY 24000 (matches BankNifty 100pt/50000). VWAP/volume auto-dropped by max_missing_rate=0.35.",
+  "_comment": "NIFTY weekly-regime entry model (2021-06..2026-06). Mirrors entry_dhan_monthly_v1 (proven BankNifty recipe) but: (1) full weekly date range, no monthly cutoff (NIFTY weeklies still listed); (2) label min_points=50 (NIFTY ~24000 * 0.21% ~= 50pt, same ratio as BankNifty 100pt/52000); (3) parquet_root points at the NIFTY-specific data dir. support_dataset MUST stay snapshots_dhan_v1 because stage1_entry_view_dhan requires it (manifests.py:100); NIFTY data is also named snapshots_dhan_v1 so the view check passes. Run from ~/option_trading_repo: python3 -m ml_pipeline_2.run_research --config <this>.",
   "inputs": {
-    "parquet_root": "../../../.data/ml_pipeline/parquet_data",
-    "support_dataset": "snapshots_nifty_v1",
+    "parquet_root": "/home/amits/dhan_pipeline_nifty/parquet_data",
+    "support_dataset": "snapshots_dhan_v1",
     "support_window": {
       "start": "2021-06-01",
       "end": "2026-06-25"
@@ -51,10 +51,10 @@
   "windows": {
     "research_train": {
       "start": "2021-06-01",
-      "end": "2024-12-31"
+      "end": "2025-03-31"
     },
     "research_valid": {
-      "start": "2025-01-01",
+      "start": "2025-04-01",
       "end": "2025-09-30"
     },
     "full_model": {

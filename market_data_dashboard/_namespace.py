@@ -23,7 +23,13 @@ def normalize_kind(kind: Optional[str], *, default: NamespaceKind = "live") -> N
     raise ValueError("kind must be one of: live, oos, sim")
 
 
-def collection_for(base: str, *, kind: Optional[str] = None, run_id: Optional[str] = None) -> str:
-    ns = resolve_namespace(normalize_kind(kind), run_id=run_id)
+def collection_for(
+    base: str,
+    *,
+    kind: Optional[str] = None,
+    run_id: Optional[str] = None,
+    instrument: Optional[str] = None,
+) -> str:
+    ns = resolve_namespace(normalize_kind(kind), run_id=run_id, instrument=instrument)
     return ns.collection_for(base)
 

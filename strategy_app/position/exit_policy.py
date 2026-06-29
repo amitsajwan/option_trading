@@ -110,6 +110,43 @@ class ThesisFailPolicy(ExitPolicy):
         return f"thesis_fail_{self._min_bars}b_mfe={self._min_mfe:.1%}"
 
 
+class GivebackStopPolicy(ExitPolicy):
+    """Exit when a trade that showed initial promise grinds back past a giveback floor.
+
+    Activates only after MFE >= min_mfe (default 3%) — the trade DID move in our
+    favour. Once active, exits if pnl_pct falls below (mfe_pct - giveback_pct).
+
+    Example with min_mfe=0.03, giveback_pct=0.09:
+      MFE hits +3%  → active; floor = 3% - 9% = -6%. Exit if pnl < -6%.
+      MFE hits +6%  → floor = 6% - 9% = -3%. Exit if pnl < -3%.
+      MFE never 3%  → silent (thesis_fail handles the flat losers instead).
+
+    This is the fix for the Jun 4 dead-zone: trade showed an initial +4% MFE then
+    ground all the way to -18% before the hard floor fired. The giveback stop would
+    have exited at -6% (MFE=4%, giveback=10% → floor=-6%).
+
+    Distinct from TrailingStopPolicy (trail=0.5% from peak, scalper-tight) — this
+    uses a much wider giveback tolerance and a higher activation threshold, so it only
+    fires on the "initial promise then grind" pattern without choking scalper micro-moves.
+    """
+
+    def __init__(self, min_mfe: float = 0.03, giveback_pct: float = 0.09):
+        self._min_mfe = min_mfe
+        self._giveback = giveback_pct
+
+    def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
+        if position.mfe_pct < self._min_mfe:
+            return None
+        floor = position.mfe_pct - self._giveback
+        if position.pnl_pct < floor:
+            return ExitReason.TRAILING_STOP
+        return None
+
+    @property
+    def name(self) -> str:
+        return f"giveback_act={self._min_mfe:.0%}_give={self._giveback:.0%}"
+
+
 class CompositeExitPolicy(ExitPolicy):
     """Run all policies in order; first to trigger wins."""
 
@@ -254,8 +291,10 @@ def build_scalper_exit_stack() -> CompositeExitPolicy:
                         on the tracker's legacy inline stop-losses). Disabled when
                         EXIT_SCALPER_HARD_STOP_PCT >= 1.0.
       2. ThesisFail   — cut dead entries early
-      3. TrailingStop — ride winners; trails peak by trail_pct once activated
-      4. PremiumTarget — emergency floor only (default 4%)
+      3. GivebackStop — exit trades that showed initial promise but then ground back
+                        (the Jun-4 dead-zone fix). Gated by EXIT_GIVEBACK_STOP_ENABLED.
+      4. TrailingStop — ride winners; trails peak by trail_pct once activated
+      5. PremiumTarget — emergency floor only (default 4%)
     """
     hard_stop = float(os.getenv("EXIT_SCALPER_HARD_STOP_PCT", "0.25") or "0.25")
     target_pct = float(os.getenv("EXIT_PREMIUM_TARGET_PCT", "0.04") or "0.04")
@@ -263,13 +302,21 @@ def build_scalper_exit_stack() -> CompositeExitPolicy:
     trail_pct = float(os.getenv("EXIT_TRAILING_TRAIL_PCT", "0.005") or "0.005")
     thesis_bars = int(os.getenv("EXIT_THESIS_FAIL_BARS", "3") or "3")
     thesis_min_mfe = float(os.getenv("EXIT_THESIS_FAIL_MIN_MFE", "0.002") or "0.002")
+    giveback_enabled = as_bool(os.getenv("EXIT_GIVEBACK_STOP_ENABLED", "false"))
+    giveback_min_mfe = float(os.getenv("EXIT_GIVEBACK_MIN_MFE", "0.03") or "0.03")
+    giveback_pct = float(os.getenv("EXIT_GIVEBACK_PCT", "0.09") or "0.09")
 
-    return CompositeExitPolicy([
+    policies: list[ExitPolicy] = [
         HardStopPolicy(hard_stop),
         ThesisFailPolicy(thesis_bars, thesis_min_mfe),
+    ]
+    if giveback_enabled:
+        policies.append(GivebackStopPolicy(giveback_min_mfe, giveback_pct))
+    policies += [
         TrailingStopPolicy(activation_pct, trail_pct),
         PremiumTargetPolicy(target_pct),
-    ])
+    ]
+    return CompositeExitPolicy(policies)
 
 
 def build_lottery_exit_stack() -> CompositeExitPolicy:
@@ -279,10 +326,13 @@ def build_lottery_exit_stack() -> CompositeExitPolicy:
       1. HardStop        — cap the ticket loss
       2. ThesisFail      — cut dead/flat tickets (theta drain) but only when MFE
                            never showed promise (lottery min_mfe is higher)
-      3. MomentumReversal — directional thesis broke
-      4. BigTarget       — take the lottery win
-      5. RunnerTrail     — loose giveback only after a big move
-      6. Timestop        — EOD fallback (longer hold)
+      3. GivebackStop    — exit trades that showed initial promise but then ground back.
+                           Uses wider giveback than scalper (default 15%) so it doesn't
+                           choke a genuine lottery winner. Gated by EXIT_GIVEBACK_STOP_ENABLED.
+      4. MomentumReversal — directional thesis broke
+      5. BigTarget       — take the lottery win
+      6. RunnerTrail     — loose giveback only after a big move
+      7. Timestop        — EOD fallback (longer hold)
     """
     hard_stop = float(os.getenv("LOTTERY_HARD_STOP_PCT", "0.20") or "0.20")
     big_target = float(os.getenv("LOTTERY_BIG_TARGET_PCT", "0.50") or "0.50")
@@ -292,11 +342,16 @@ def build_lottery_exit_stack() -> CompositeExitPolicy:
     thesis_min_mfe = float(os.getenv("LOTTERY_THESIS_FAIL_MIN_MFE", "0.03") or "0.03")
     flip = float(os.getenv("LOTTERY_MOMENTUM_FLIP", "1.0") or "1.0")
     timestop = int(os.getenv("LOTTERY_TIMESTOP_BARS", "90") or "90")
+    giveback_enabled = as_bool(os.getenv("EXIT_GIVEBACK_STOP_ENABLED", "false"))
+    giveback_min_mfe = float(os.getenv("EXIT_GIVEBACK_MIN_MFE", "0.03") or "0.03")
+    giveback_pct = float(os.getenv("LOTTERY_GIVEBACK_PCT", "0.15") or "0.15")
 
     policies: list[ExitPolicy] = [
         HardStopPolicy(hard_stop),
         ThesisFailPolicy(thesis_bars, thesis_min_mfe),
     ]
+    if giveback_enabled:
+        policies.append(GivebackStopPolicy(giveback_min_mfe, giveback_pct))
     if flip > 0:
         policies.append(MomentumReversalPolicy(flip))
     policies += [

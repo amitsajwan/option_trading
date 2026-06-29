@@ -33,7 +33,21 @@ from .topics import (
 )
 from .options_math import black_scholes_price, calculate_option_greeks, estimate_risk_free_rate
 from .sim_manifest import SimManifest, TerminalStatus, compute_config_hash, resolve_git_commit
-from .sim_namespace import Kind, Namespace, Transport, resolve_namespace
+from .sim_namespace import (
+    Kind,
+    Namespace,
+    Transport,
+    resolve_namespace,
+    PRIMARY_INSTRUMENT,
+    normalize_instrument,
+    current_instrument,
+)
+from .instruments import (
+    InstrumentSpec,
+    INSTRUMENTS,
+    get_instrument,
+    known_instruments,
+)
 from .event_bus import EventBus, RedisEventBus
 from .parity_mode import ParityMode, infer_parity_mode
 from .decision_events import (
@@ -123,6 +137,13 @@ __all__ = [
     "Namespace",
     "Transport",
     "resolve_namespace",
+    "PRIMARY_INSTRUMENT",
+    "normalize_instrument",
+    "current_instrument",
+    "InstrumentSpec",
+    "INSTRUMENTS",
+    "get_instrument",
+    "known_instruments",
     "EventBus",
     "RedisEventBus",
     "ParityMode",

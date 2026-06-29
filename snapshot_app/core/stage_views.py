@@ -139,6 +139,7 @@ _STAGE_FIELD_SPECS: dict[str, dict[str | None, tuple[str, ...]]] = {
         ),
         "vix_context": (
             "vix_current",
+            "vix_prev_close",
             "vix_intraday_chg",
             "vix_regime",
         ),

@@ -17,7 +17,7 @@ from .position_factory import PositionFactory
 
 logger = logging.getLogger(__name__)
 
-from ..constants import BANKNIFTY_LOT_SIZE, HARD_CLOSE_MINUTE, PRICE_EPS, SOFT_CLOSE_MINUTE
+from ..constants import HARD_CLOSE_MINUTE, PRICE_EPS, SOFT_CLOSE_MINUTE, resolve_lot_size
 from .trailing_manager import TrailingStopManager
 from .exit_policy import CompositeExitPolicy, build_default_exit_stack
 
@@ -454,7 +454,7 @@ def _net_cost_pct(position_record: dict, cost_per_lot: float) -> float:
     if entry_premium <= 0 or lots <= 0:
         return 0.0
     # 2 × cost (entry + exit), expressed as fraction of notional
-    notional_per_lot = entry_premium * BANKNIFTY_LOT_SIZE
+    notional_per_lot = entry_premium * resolve_lot_size()
     if notional_per_lot <= 0:
         return 0.0
     return 2.0 * cost_per_lot * lots / (notional_per_lot * lots)

@@ -15,8 +15,8 @@ def _make_sub_bundle(win_prob: float) -> dict:
     return {
         "kind": "direction_only_bundle",
         "model": model,
-        "features": ["vix_current", "ctx_is_high_vix_day"],
-        "feature_medians": {"vix_current": 15.0, "ctx_is_high_vix_day": 0.0},
+        "features": ["vix_current", "is_high_vix_day"],
+        "feature_medians": {"vix_current": 15.0, "is_high_vix_day": 0.0},
         "label_map": {"CE": 1, "PE": 0},
     }
 
@@ -32,7 +32,7 @@ def _make_dual_bundle(ce_win_prob: float, pe_win_prob: float) -> dict:
 def _make_snap(vix: float = 14.0) -> MagicMock:
     snap = MagicMock()
     snap.velocity_features = {}
-    snap.raw_payload = {"vix_current": vix, "ctx_is_high_vix_day": 0}
+    snap.raw_payload = {"vix_current": vix, "is_high_vix_day": 0}
     snap.fut_return_5m = 0.001
     return snap
 
@@ -45,7 +45,7 @@ class TestResolveDual:
         bundle = _make_dual_bundle(ce_win_prob=0.65, pe_win_prob=0.55)
         snap = _make_snap()
         with patch("strategy_app.ml.bundle_inference.build_feature_row") as mock_features:
-            mock_features.return_value = {"vix_current": 14.0, "ctx_is_high_vix_day": 0.0}
+            mock_features.return_value = {"vix_current": 14.0, "is_high_vix_day": 0.0}
             result = _resolve_direction_dual(bundle, snap)
         assert result == Direction.CE
 
@@ -56,7 +56,7 @@ class TestResolveDual:
         bundle = _make_dual_bundle(ce_win_prob=0.52, pe_win_prob=0.72)
         snap = _make_snap()
         with patch("strategy_app.ml.bundle_inference.build_feature_row") as mock_features:
-            mock_features.return_value = {"vix_current": 14.0, "ctx_is_high_vix_day": 0.0}
+            mock_features.return_value = {"vix_current": 14.0, "is_high_vix_day": 0.0}
             result = _resolve_direction_dual(bundle, snap)
         assert result == Direction.PE
 
@@ -67,7 +67,7 @@ class TestResolveDual:
         bundle = _make_dual_bundle(ce_win_prob=0.45, pe_win_prob=0.48)
         snap = _make_snap()
         with patch("strategy_app.ml.bundle_inference.build_feature_row") as mock_features:
-            mock_features.return_value = {"vix_current": 14.0, "ctx_is_high_vix_day": 0.0}
+            mock_features.return_value = {"vix_current": 14.0, "is_high_vix_day": 0.0}
             result = _resolve_direction_dual(bundle, snap)
         assert result == Direction.PE
 
@@ -78,7 +78,7 @@ class TestResolveDual:
         bundle = _make_dual_bundle(ce_win_prob=0.45, pe_win_prob=0.48)
         snap = _make_snap()
         with patch("strategy_app.ml.bundle_inference.build_feature_row") as mock_features:
-            mock_features.return_value = {"vix_current": 14.0, "ctx_is_high_vix_day": 0.0}
+            mock_features.return_value = {"vix_current": 14.0, "is_high_vix_day": 0.0}
             result = _resolve_direction_dual(bundle, snap)
         assert result is None
 

@@ -144,3 +144,164 @@ def test_velocity_nan_does_not_overwrite_futures_derived_value() -> None:
         "vol_spike_ratio became NaN — velocity_enrichment overwrote futures_derived"
     assert math.isfinite(row.get("adx_14", float("nan"))), \
         "adx_14 became NaN — velocity_enrichment overwrote futures_derived"
+
+
+# ── Direction model feature parity tests ─────────────────────────────────────
+# After retraining with snapshot field names, models use unprefixed feature names.
+# This test verifies _compute_essential_features + stage views resolve all features.
+
+_DIRECTION_FEATURES = [
+    "iv_skew", "atm_iv", "iv_pct_rank_session", "vel_iv_skew_delta_open",
+    "vel_iv_compression_rate", "vel_atm_ce_iv_delta_open", "vel_atm_pe_iv_delta_open",
+    "pcr", "pcr_change_5m", "pcr_change_15m", "pcr_change_30m",
+    "vel_pcr_delta_open", "vel_pcr_acceleration", "vel_pcr_trend_direction",
+    "atm_ce_oi", "atm_pe_oi",
+    "vix_current", "vix_open_day", "vix_intraday_chg", "is_high_vix_day",
+    "ctx_gap_pct", "ctx_gap_up", "ctx_gap_down", "ctx_am_gap_filled",
+    "minute_of_day", "day_of_week",
+]
+
+
+def _make_direction_snap() -> SnapshotAccessor:
+    """Build a snapshot with all blocks populated for direction feature extraction."""
+    return SnapshotAccessor({
+        "snapshot_id": "test_20240801_1130",
+        "instrument": "BANKNIFTY26AUGFUT",
+        "trade_date": "2024-08-01",
+        "timestamp": "2024-08-01T11:30:00+05:30",
+        "session_context": {
+            "snapshot_id": "test_20240801_1130",
+            "timestamp": "2024-08-01T11:30:00+05:30",
+            "date": "2024-08-01",
+            "time": "11:30",
+            "minutes_since_open": 135,
+            "minutes_to_close": 240,
+            "day_of_week": 3,
+            "days_to_expiry": 3,
+            "is_expiry_day": False,
+            "session_phase": "ACTIVE",
+            "is_first_hour": False,
+            "is_last_hour": False,
+        },
+        "futures_bar": {
+            "fut_open": 57780.0, "fut_high": 57820.0, "fut_low": 57760.0,
+            "fut_close": 57800.0, "fut_volume": 420, "fut_oi": 2168000,
+        },
+        "futures_derived": {
+            "fut_return_1m": 0.001, "fut_return_5m": 0.003,
+            "ema_9": 57800.0, "ema_21": 57750.0, "ema_50": 57700.0,
+            "vwap": 57780.0, "price_vs_vwap": 0.001,
+        },
+        "vix_context": {
+            "vix_current": 14.2, "vix_prev_close": 13.8,
+            "vix_intraday_chg": -0.3, "vix_regime": "LOW", "vix_spike_flag": 0,
+        },
+        "chain_aggregates": {
+            "pcr": 0.92, "pcr_change_5m": 0.002, "pcr_change_15m": -0.046,
+            "pcr_change_30m": -0.127, "ce_pe_oi_diff": 0.1,
+        },
+        "atm_options": {
+            "atm_ce_oi": 125000.0, "atm_pe_oi": 118000.0,
+            "atm_ce_iv": 0.124, "atm_pe_iv": 0.128,
+            "atm_ce_close": 220.0, "atm_pe_close": 210.0,
+        },
+        "iv_derived": {
+            "iv_skew": -0.004, "iv_skew_dir": -1, "iv_percentile": 0.45,
+            "iv_regime": "NORMAL", "iv_expiry_type": "weekly",
+        },
+        "velocity_enrichment": {
+            "vel_iv_skew_delta_open": -0.005,
+            "vel_iv_compression_rate": -0.0001,
+            "vel_atm_ce_iv_delta_open": -0.005,
+            "vel_atm_pe_iv_delta_open": 0.0001,
+            "vel_pcr_delta_open": -0.147,
+            "vel_pcr_acceleration": -0.076,
+            "vel_pcr_trend_direction": -1.0,
+            "ctx_gap_pct": 0.002,
+            "ctx_gap_up": 1.0,
+            "ctx_gap_down": 0.0,
+            "ctx_am_gap_filled": 0.0,
+        },
+        "opening_range": {
+            "opening_range_ready": 1, "or_width_pct": 0.0015,
+            "price_vs_orh": 0.002, "price_vs_orl": 0.008,
+            "orh_broken": 0, "orl_broken": 0,
+        },
+        "mtf_derived": {"rsi_14_1m": 52.0, "mtf_aligned": 1.0},
+        "ladder_aggregates": {"near_atm_pcr": 0.95},
+    })
+
+
+def test_direction_features_resolved() -> None:
+    """All direction model training features must resolve to non-NaN values
+    from a realistic runtime snapshot using stage views + essential feature computation."""
+    snap = _make_direction_snap()
+    row = build_feature_row(snap, _DIRECTION_FEATURES)
+    assert row is not None, "build_feature_row returned None"
+
+    nan_features = [
+        f for f in _DIRECTION_FEATURES
+        if f in row and not math.isfinite(row[f])
+    ]
+    assert not nan_features, (
+        f"Direction features were NaN after extraction: {nan_features}. "
+        "Train/serve skew — essential feature computation is missing a feature."
+    )
+
+
+def test_atm_iv_computed_from_ce_pe_average() -> None:
+    """atm_iv must be computed as (atm_ce_iv + atm_pe_iv) / 2 when not directly available."""
+    snap = _make_direction_snap()
+    row = build_feature_row(snap, ["atm_iv"])
+    assert row is not None
+    assert math.isfinite(row["atm_iv"]), "atm_iv was NaN"
+    expected = (0.124 + 0.128) / 2.0
+    assert abs(row["atm_iv"] - expected) < 1e-9, f"atm_iv={row['atm_iv']} != {expected}"
+
+
+def test_vix_current_resolves() -> None:
+    """Feature 'vix_current' must resolve from vix_context."""
+    snap = _make_direction_snap()
+    row = build_feature_row(snap, ["vix_current"])
+    assert row is not None
+    assert math.isfinite(row["vix_current"]), "vix_current was NaN"
+    assert abs(row["vix_current"] - 14.2) < 1e-9
+
+
+def test_pcr_resolves_from_chain_aggregates() -> None:
+    """Feature 'pcr' must resolve from chain_aggregates.pcr."""
+    snap = _make_direction_snap()
+    row = build_feature_row(snap, ["pcr"])
+    assert row is not None
+    assert math.isfinite(row["pcr"]), "pcr was NaN"
+    assert abs(row["pcr"] - 0.92) < 1e-9
+
+
+def test_atm_ce_oi_resolves() -> None:
+    """Feature 'atm_ce_oi' must resolve from atm_options."""
+    snap = _make_direction_snap()
+    row = build_feature_row(snap, ["atm_ce_oi", "atm_pe_oi"])
+    assert row is not None
+    assert math.isfinite(row["atm_ce_oi"]), "atm_ce_oi was NaN"
+    assert math.isfinite(row["atm_pe_oi"]), "atm_pe_oi was NaN"
+    assert abs(row["atm_ce_oi"] - 125000.0) < 1e-3
+    assert abs(row["atm_pe_oi"] - 118000.0) < 1e-3
+
+
+def test_minute_of_day_computed_from_minutes_since_open() -> None:
+    """minute_of_day = minutes_since_open + 555 (9:15 in minutes)."""
+    snap = _make_direction_snap()
+    row = build_feature_row(snap, ["minute_of_day"])
+    assert row is not None
+    assert math.isfinite(row["minute_of_day"])
+    # minutes_since_open=135 → 135 + 555 = 690 (11:30)
+    assert abs(row["minute_of_day"] - 690.0) < 1e-9
+
+
+def test_is_high_vix_day_computed() -> None:
+    """is_high_vix_day must be 0 when vix_prev_close < 18.0."""
+    snap = _make_direction_snap()
+    row = build_feature_row(snap, ["is_high_vix_day"])
+    assert row is not None
+    assert math.isfinite(row["is_high_vix_day"])
+    assert row["is_high_vix_day"] == 0.0  # vix_prev_close=13.8 < 18.0

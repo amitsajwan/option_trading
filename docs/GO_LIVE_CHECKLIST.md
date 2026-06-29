@@ -29,9 +29,55 @@ SSH prefix: `gcloud compute ssh option-trading-runtime-01 --zone asia-south1-b -
 | # | Check | Command | GOOD |
 |---|---|---|---|
 | 1.1 | **YAML ↔ .env.compose parity** | `cd /opt/option_trading && python3 ops/config_parity.py .env.compose --strict; echo $?` | `No real differences` + exit `0` |
-| 1.2 | **Live config (UI panel)** | open `http://34.14.171.45:8008/` → OPS panel, OR `curl -s localhost:8008/api/ops/config` | 60 keys, values below |
-| 1.3 | **Critical values** | (from 1.2) | `ENTRY_VOL_GATE_ENABLED=0`, `ENTRY_ML_MODEL_PATH=/app/ml_pipeline_2/artifacts/entry_only/published/velocity_base_entry_bundle.joblib`, `ENTRY_ML_MIN_PROB=0.049` (top-10% quantile), `ML_ENTRY_DIRECTION_MODE=regime_dual`, `STRATEGY_STRIKE_SELECTION_POLICY=otm`, `SMART_STRIKE_MAX_PREMIUM=1300`, `EXIT_STRATEGY_MODE=adaptive`, `EXIT_MAX_LOSS_PCT=0.1`, `RISK_MAX_SESSION_TRADES=6`, `RISK_MAX_CONSECUTIVE_LOSSES=6`, `STRATEGY_PROFILE_ID=trader_master_live_v1` |
-| 1.4 | **Startup applied config** | `sudo docker logs option_trading-strategy_app-1 2>&1 \| grep 'strategy_config applied' \| tail -1` | `60/60 keys ... real_overrides=0` |
+| 1.2 | **Live config (UI panel)** | open `http://34.14.171.45:8008/` → OPS panel, OR `curl -s localhost:8008/api/ops/config` | 60+ keys, values match §1.3 below |
+| 1.3 | **Critical values** | (from 1.2 or grep below) | See **Live Config Reference** table below |
+| 1.4 | **Startup deployed-config trace** | `sudo docker logs option_trading-strategy_app-1 2>&1 \| grep 'LIVE CONFIG'` | 9-line box printed on every start — all values visible at a glance |
+| 1.5 | **Startup applied config** | `sudo docker logs option_trading-strategy_app-1 2>&1 \| grep 'strategy_config applied' \| tail -1` | `60/60 keys ... real_overrides=0` |
+
+### Live Config Reference (target values for next live deployment)
+
+| Group | Env Var | Target value | Notes |
+|---|---|---|---|
+| **engine** | `ENGINE` | `deterministic` | ml_pure off |
+| **engine** | `STRATEGY_PROFILE_ID` | `trader_master_live_v1` | |
+| **entry** | `ENTRY_VOL_GATE_ENABLED` | `0` | ML entry path |
+| **entry** | `ENTRY_ML_MODEL_PATH` | `…/velocity_base_entry_bundle.joblib` | |
+| **entry** | `ENTRY_ML_MIN_PROB` | `0.049` | top-10% quantile |
+| **direction** | `ML_ENTRY_DIRECTION_MODE` | `regime_dual` | 40% ML / 60% composite |
+| **exit** | `EXIT_STRATEGY_MODE` | `adaptive` | lottery on BREAKOUT/TRENDING |
+| **exit** | `EXIT_MAX_LOSS_PCT` | `0.10` | universal 10% floor |
+| **exit** | `EXIT_POLICY_STACK_ENABLED` | `1` | must be ON |
+| **exit** | `EXIT_SCALPER_HARD_STOP_PCT` | `0.25` | |
+| **exit** | `EXIT_TRAILING_ACTIVATION_PCT` | `0.01` | |
+| **exit** | `EXIT_TRAILING_TRAIL_PCT` | `0.005` | |
+| **exit** | `EXIT_THESIS_FAIL_BARS` | `3` | cut flat entries after 3 bars |
+| **exit** | `LOTTERY_HARD_STOP_PCT` | `0.20` | |
+| **exit** | `ADAPTIVE_LOTTERY_REGIMES` | `BREAKOUT,TRENDING` | |
+| **exit** | `EXIT_GIVEBACK_STOP_ENABLED` | `1` | **NEW — Jun-4 dead-zone fix** |
+| **exit** | `EXIT_GIVEBACK_MIN_MFE` | `0.03` | activate after +3% MFE |
+| **exit** | `EXIT_GIVEBACK_PCT` | `0.09` | scalper: floor = mfe − 9% |
+| **exit** | `LOTTERY_GIVEBACK_PCT` | `0.15` | lottery: floor = mfe − 15% |
+| **risk** | `RISK_MAX_SESSION_TRADES` | `6` | |
+| **risk** | `RISK_MAX_CONSECUTIVE_LOSSES` | `6` | |
+| **risk** | `RISK_MAX_LOTS_PER_TRADE` | `1` | hard cap |
+| **strike** | `STRATEGY_STRIKE_SELECTION_POLICY` | `otm` | |
+| **strike** | `SMART_STRIKE_MAX_PREMIUM` | `1300` | |
+
+```bash
+# One-liner to verify startup trace after deploy:
+sudo docker logs option_trading-strategy_app-1 2>&1 | grep 'LIVE CONFIG'
+# Expected output (9-line box):
+# LIVE CONFIG ┌─────────────────────────────────────────────
+# LIVE CONFIG │ ENGINE          deterministic  profile=trader_master_live_v1
+# LIVE CONFIG │ ENTRY           vol_gate=0  ml_min_prob=0.049  direction=regime_dual
+# LIVE CONFIG │ EXIT mode       adaptive  max_loss=0.10  policy_stack=1
+# LIVE CONFIG │ EXIT scalper    hard_stop=0.25  trail_act=0.01  trail=0.005  thesis_bars=3
+# LIVE CONFIG │ EXIT lottery    hard_stop=0.20  big_target=0.50  regimes=BREAKOUT,TRENDING
+# LIVE CONFIG │ EXIT giveback   ON  (min_mfe=0.03 scalper_pct=0.09 lottery_pct=0.15)
+# LIVE CONFIG │ RISK            max_trades=6  max_consec_loss=6  max_lots=1  capital=41000
+# LIVE CONFIG │ STRIKE          policy=otm  max_premium=1300  max_otm_steps=12
+# LIVE CONFIG └─────────────────────────────────────────────
+```
 
 ---
 
@@ -130,16 +176,35 @@ Run during market hours; tail the live engine and confirm each stage fires.
 
 ---
 
-## §8  Current known state (as of 2026-06-17)
+## §8  Current known state (as of 2026-06-27)
 
-- ❌ **execution_app EXITED 2 days** → §0.1 must be fixed.
-- ❌ **Dhan `Invalid IP`** (478 June rejects) → §0.2 whitelist `34.14.171.45`.
-- ⚠️ **No real fills ever** — June "trades" were paper (`paper_*`) / replay-contaminated. First real fill is unproven; watch §5.6 closely.
-- ⚠️ **Depth not collected** (`DEPTH_FEED_INSTRUMENTS` empty) — not required for go-live, but a known gap.
-- ⚠️ **Entry model switched 2026-06-17:** `VOL_GATE_ENTRY` → `ML_ENTRY` with `velocity_base` bundle at `ENTRY_ML_MIN_PROB=0.049` (top-10% quantile). Bundle is research-grade (`ml_pipeline_2_research_model_package` re-packaged as `entry_only_bundle`).
-  - **Morning-session risk:** before 11:30 IST, 39/54 velocity features are NaN (imputed to medians). Model may produce unreliable probabilities in first 90 minutes.
-  - **vol_spike_ratio permanently NaN** — no 20-day rolling context available.
-  - **Awaiting first live-bar score** — bundle loads on first snapshot tomorrow (2026-06-18) at 09:45 IST.
-- ✅ Config single-source + parity, SIM≡LIVE engine, sim→Dhan leak closed, 1-lot cap, exit stacks correct.
+### Code changes since 2026-06-17 (next deploy will include all)
 
-**Bottom line:** the *strategy/config/data* path is ready; the *execution* path (§0.1, §0.2) is NOT. Real money cannot start until execution_app is up AND the Dhan IP is whitelisted AND a first real `filled` order (not `paper_*`, not `Invalid IP`) is confirmed. The ML_ENTRY switch adds an additional validation requirement: confirm the velocity_base bundle loads cleanly and scores sensibly on the first live bars.
+| Change | Status | Key env var |
+|---|---|---|
+| **GivebackStopPolicy** — Jun-4 dead-zone fix. Exits trade that showed ≥3% MFE then ground below mfe−9% (scalper) / mfe−15% (lottery). Prevents -18% runaway on initially-promising trades. | ✅ merged, **off by default** | `EXIT_GIVEBACK_STOP_ENABLED=1` to enable |
+| **Startup LIVE CONFIG trace** — `docker logs \| grep 'LIVE CONFIG'` now prints a human-readable 9-line config box on every start. | ✅ merged | (automatic) |
+| **Compose env vars** — all three GCP compose blocks (`strategy_app`, `strategy_app_historical`, eval) have the giveback vars wired. | ✅ merged | — |
+
+### Action required before next live session
+
+1. Add to VM `.env.compose`:
+   ```
+   EXIT_GIVEBACK_STOP_ENABLED=1
+   EXIT_GIVEBACK_MIN_MFE=0.03
+   EXIT_GIVEBACK_PCT=0.09
+   LOTTERY_GIVEBACK_PCT=0.15
+   ```
+2. `git pull` on VM → `docker compose -f docker-compose.gcp.yml up -d --force-recreate strategy_app`
+3. Verify: `sudo docker logs option_trading-strategy_app-1 2>&1 | grep 'LIVE CONFIG'` → `EXIT giveback   ON  (min_mfe=0.03 ...)`
+
+### Persistent gaps / watch items
+
+- ❌ **execution_app** — verify it is `Up (healthy)` before enabling real orders (§0.1).
+- ❌ **Dhan IP whitelist** — confirm `34.14.171.45` is whitelisted (§0.2).
+- ⚠️ **No real fills yet** — first real fill unproven; watch §5.6 closely.
+- ⚠️ **Morning-session ML risk** — before 11:30 IST, 39/54 velocity features are NaN; model probabilities may be unreliable in first 90 min.
+- ⚠️ **vol_spike_ratio permanently NaN** — no 20-day rolling context available.
+- ✅ Config single-source + parity, SIM≡LIVE engine, sim→Dhan leak closed, 1-lot cap, exit stacks correct, giveback stop implemented.
+
+**Bottom line:** strategy/config/data path is ready; execution path (§0.1, §0.2) must be confirmed each session. Enable `EXIT_GIVEBACK_STOP_ENABLED=1` on next deploy.

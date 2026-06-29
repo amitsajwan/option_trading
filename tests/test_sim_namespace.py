@@ -281,5 +281,138 @@ class TestKindsAreDistinct(unittest.TestCase):
         self.assertEqual(len({live, oos, sim}), 3)
 
 
+class TestInstrumentParity(unittest.TestCase):
+    """The instrument axis MUST be backward-compatible: the primary instrument
+    (BANKNIFTY) — whether passed explicitly, omitted, empty, or lower-case —
+    produces names byte-identical to the pre-instrument-axis era. If this ever
+    fails, existing live/sim collections, topics, run-dirs and locks have been
+    orphaned. Keep green forever."""
+
+    _BASES = [
+        "phase1_market_snapshots",
+        "strategy_votes",
+        "trade_signals",
+        "strategy_positions",
+        "strategy_decision_traces",
+        "market_depth_ticks",
+    ]
+
+    def _assert_same_surface(self, a, b) -> None:
+        for base in self._BASES:
+            self.assertEqual(a.collection_for(base), b.collection_for(base))
+        for what in ("snapshot", "snapshots", "votes", "decision_trace"):
+            self.assertEqual(a.stream_for(what), b.stream_for(what))
+        self.assertEqual(a.state_key_for("depth:atm_ce:latest"),
+                         b.state_key_for("depth:atm_ce:latest"))
+        self.assertEqual(a.run_dir_for(), b.run_dir_for())
+        self.assertEqual(a.lock_key_for(), b.lock_key_for())
+
+    def test_primary_default_matches_explicit_banknifty(self) -> None:
+        for kind, run_id in (("live", None), ("oos", None), ("sim", "r1")):
+            default = resolve_namespace(kind, run_id=run_id)  # type: ignore[arg-type]
+            explicit = resolve_namespace(kind, run_id=run_id, instrument="BANKNIFTY")  # type: ignore[arg-type]
+            self._assert_same_surface(default, explicit)
+
+    def test_primary_accepts_none_empty_and_lowercase(self) -> None:
+        live = resolve_namespace("live")
+        for variant in (None, "", "   ", "banknifty", "BankNifty"):
+            self._assert_same_surface(live, resolve_namespace("live", instrument=variant))
+
+    def test_primary_live_legacy_names_unchanged(self) -> None:
+        ns = resolve_namespace("live", instrument="BANKNIFTY")
+        self.assertEqual(ns.collection_for("strategy_positions"), "strategy_positions")
+        self.assertEqual(ns.stream_for("snapshot"), "market:snapshot:v1")
+        self.assertEqual(ns.state_key_for("depth:atm_ce:latest"), "live:depth:atm_ce:latest")
+        self.assertEqual(ns.run_dir_for(), Path("/app/.run/strategy_app"))
+        self.assertEqual(ns.lock_key_for(),
+                         "strategy_app:consumer_lock:market:snapshot:v1")
+
+    def test_primary_sim_legacy_names_unchanged(self) -> None:
+        ns = resolve_namespace("sim", run_id="r123", instrument="BANKNIFTY")
+        self.assertEqual(ns.collection_for("phase1_market_snapshots"),
+                         "phase1_market_snapshots_sim")
+        self.assertEqual(ns.stream_for("snapshots"), "stream:snapshots:sim:r123")
+        self.assertEqual(ns.state_key_for("k"), "sim:r123:k")
+        self.assertEqual(ns.run_dir_for(), Path("/app/.run/strategy_app_sim/r123"))
+
+
+class TestSecondaryInstrument(unittest.TestCase):
+    """NIFTY (a secondary instrument) inserts its slug into every name."""
+
+    def test_nifty_live_collections(self) -> None:
+        ns = resolve_namespace("live", instrument="NIFTY")
+        self.assertEqual(ns.collection_for("strategy_positions"), "strategy_positions_nifty")
+        self.assertEqual(ns.collection_for("phase1_market_snapshots"),
+                         "phase1_market_snapshots_nifty")
+
+    def test_nifty_sim_collections(self) -> None:
+        ns = resolve_namespace("sim", run_id="r1", instrument="NIFTY")
+        self.assertEqual(ns.collection_for("strategy_positions"),
+                         "strategy_positions_nifty_sim")
+
+    def test_nifty_oos_collections(self) -> None:
+        ns = resolve_namespace("oos", instrument="NIFTY")
+        self.assertEqual(ns.collection_for("strategy_votes"),
+                         "strategy_votes_nifty_historical")
+
+    def test_nifty_streams(self) -> None:
+        self.assertEqual(resolve_namespace("live", instrument="NIFTY").stream_for("snapshot"),
+                         "market:nifty:snapshot:v1")
+        self.assertEqual(resolve_namespace("oos", instrument="NIFTY").stream_for("snapshot"),
+                         "market:nifty:snapshot:v1:historical")
+        self.assertEqual(
+            resolve_namespace("sim", run_id="r1", instrument="NIFTY").stream_for("snapshots"),
+            "stream:snapshots:nifty:sim:r1",
+        )
+
+    def test_nifty_state_keys(self) -> None:
+        self.assertEqual(resolve_namespace("live", instrument="NIFTY").state_key_for("k"),
+                         "live:nifty:k")
+        self.assertEqual(
+            resolve_namespace("sim", run_id="r1", instrument="NIFTY").state_key_for("k"),
+            "sim:nifty:r1:k",
+        )
+
+    def test_nifty_run_dir_and_lock(self) -> None:
+        ns = resolve_namespace("live", instrument="NIFTY")
+        self.assertEqual(ns.run_dir_for(), Path("/app/.run/strategy_app_nifty"))
+        self.assertEqual(ns.lock_key_for(),
+                         "strategy_app_nifty:consumer_lock:market:nifty:snapshot:v1")
+
+    def test_unknown_instrument_is_allowed_as_slug(self) -> None:
+        # The namespace layer is registry-agnostic: it slugs any name. Validation
+        # against the InstrumentSpec registry happens at the strategy boundary.
+        ns = resolve_namespace("live", instrument="FINNIFTY")
+        self.assertEqual(ns.collection_for("strategy_positions"),
+                         "strategy_positions_finnifty")
+
+
+class TestInstrumentKindCrossProduct(unittest.TestCase):
+    """Every (instrument, kind) pair must yield a UNIQUE collection name —
+    this is the structural guarantee that two stacks never collide in Mongo."""
+
+    def test_all_six_namespaces_distinct(self) -> None:
+        combos = [
+            resolve_namespace("live", instrument="BANKNIFTY"),
+            resolve_namespace("oos", instrument="BANKNIFTY"),
+            resolve_namespace("sim", run_id="r1", instrument="BANKNIFTY"),
+            resolve_namespace("live", instrument="NIFTY"),
+            resolve_namespace("oos", instrument="NIFTY"),
+            resolve_namespace("sim", run_id="r1", instrument="NIFTY"),
+        ]
+        names = {ns.collection_for("strategy_positions") for ns in combos}
+        self.assertEqual(len(names), 6, f"namespaces collide: {names}")
+
+    def test_live_instruments_distinct_for_all_resources(self) -> None:
+        bn = resolve_namespace("live", instrument="BANKNIFTY")
+        nf = resolve_namespace("live", instrument="NIFTY")
+        self.assertNotEqual(bn.collection_for("strategy_votes"),
+                            nf.collection_for("strategy_votes"))
+        self.assertNotEqual(bn.stream_for("snapshot"), nf.stream_for("snapshot"))
+        self.assertNotEqual(bn.state_key_for("k"), nf.state_key_for("k"))
+        self.assertNotEqual(bn.run_dir_for(), nf.run_dir_for())
+        self.assertNotEqual(bn.lock_key_for(), nf.lock_key_for())
+
+
 if __name__ == "__main__":
     unittest.main()

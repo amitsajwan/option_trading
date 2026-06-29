@@ -14,7 +14,6 @@ from ..market.snapshot_accessor import SnapshotAccessor
 logger = logging.getLogger(__name__)
 
 from ..constants import (
-    BANKNIFTY_LOT_SIZE,
     DEFAULT_CAPITAL_ALLOCATED,
     DEFAULT_MAX_CONSECUTIVE_LOSSES,
     DEFAULT_MAX_DAILY_LOSS_PCT,
@@ -22,6 +21,7 @@ from ..constants import (
     DEFAULT_MAX_SESSION_TRADES,
     DEFAULT_RISK_PER_TRADE_PCT,
     RISK_PROFILE_AGGRESSIVE_SAFE_V1,
+    resolve_lot_size,
 )
 from ..utils.env import env_float, env_int
 
@@ -168,9 +168,9 @@ class RiskManager:
     def update(self, snap: SnapshotAccessor, position: Optional[PositionContext]) -> None:
         ctx = self._context
         if position is not None and ctx.capital_allocated > 0:
-            unrealized_value = position.pnl_pct * position.entry_premium * position.lots * BANKNIFTY_LOT_SIZE
+            unrealized_value = position.pnl_pct * position.entry_premium * position.lots * resolve_lot_size()
             ctx.session_unrealised_pnl = unrealized_value / ctx.capital_allocated
-            ctx.capital_at_risk = position.entry_premium * position.lots * BANKNIFTY_LOT_SIZE
+            ctx.capital_at_risk = position.entry_premium * position.lots * resolve_lot_size()
         else:
             ctx.session_unrealised_pnl = 0.0
             ctx.capital_at_risk = 0.0
@@ -206,7 +206,7 @@ class RiskManager:
 
     def record_trade_result(self, *, pnl_pct: float, lots: int = 1, entry_premium: float = 0.0) -> None:
         ctx = self._context
-        trade_pnl_value = pnl_pct * entry_premium * lots * BANKNIFTY_LOT_SIZE
+        trade_pnl_value = pnl_pct * entry_premium * lots * resolve_lot_size()
         pnl_as_capital_pct = (trade_pnl_value / ctx.capital_allocated) if ctx.capital_allocated > 0 else 0.0
         ctx.session_trade_count += 1
         ctx.session_realised_pnl += pnl_as_capital_pct
@@ -240,7 +240,7 @@ class RiskManager:
         if self._lot_sizing_mode in {"budget_per_trade", "notional_budget"} and self._notional_per_trade > 0:
             lot_cost = float(entry_premium)
             if self._lot_budget_uses_lot_size:
-                lot_cost *= BANKNIFTY_LOT_SIZE
+                lot_cost *= resolve_lot_size()
             if lot_cost <= 0:
                 return 1
             base_lots = int(self._notional_per_trade / lot_cost)
@@ -250,7 +250,7 @@ class RiskManager:
         if stop_pct <= 0:
             return 1
         risk_capital = ctx.capital_allocated * ctx.risk_per_trade_pct
-        max_loss_per_lot = entry_premium * BANKNIFTY_LOT_SIZE * stop_pct
+        max_loss_per_lot = entry_premium * resolve_lot_size() * stop_pct
         if max_loss_per_lot <= 0:
             return 1
         base_lots = int(risk_capital / max_loss_per_lot)

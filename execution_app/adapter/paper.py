@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from strategy_app.constants import BANKNIFTY_LOT_SIZE
+from strategy_app.constants import resolve_lot_size
 from strategy_app.contracts import PositionContext, TradeSignal
 
 from .base import BrokerAdapter, OrderResult
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class PaperAdapter(BrokerAdapter):
     def place_entry(self, signal: TradeSignal) -> OrderResult:
         fill_price = signal.entry_premium or 0.0
-        fill_qty = signal.max_lots * BANKNIFTY_LOT_SIZE
+        fill_qty = signal.max_lots * resolve_lot_size()
         logger.info(
             "paper entry: dir=%s strike=%s premium=%.2f lots=%d qty=%d signal_id=%s",
             signal.direction, signal.strike, fill_price, signal.max_lots, fill_qty, signal.signal_id,
@@ -38,7 +38,7 @@ class PaperAdapter(BrokerAdapter):
 
     def place_exit(self, signal: TradeSignal, position: PositionContext) -> OrderResult:
         fill_price = signal.entry_premium or position.current_premium or position.entry_premium
-        fill_qty = position.lots * BANKNIFTY_LOT_SIZE
+        fill_qty = position.lots * resolve_lot_size()
         logger.info(
             "paper exit: pos=%s pnl=%.3f premium=%.2f qty=%d signal_id=%s",
             position.position_id, position.pnl_pct, fill_price, fill_qty, signal.signal_id,

@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from contracts_app import (
     TimestampSourceMode,
+    current_instrument,
     normalize_decision_mode,
     normalize_engine_mode,
     normalize_reason_code,
@@ -14,6 +15,7 @@ from contracts_app import (
     parse_strategy_position_event,
     parse_strategy_vote_event,
     parse_trade_signal_event,
+    resolve_namespace,
 )
 from .time_utils import IST, parse_market_timestamp_ist, to_ist, to_ist_iso
 
@@ -22,6 +24,18 @@ try:
 except Exception:  # pragma: no cover
     ASCENDING = 1
     MongoClient = None
+
+
+def _live_coll(base: str) -> str:
+    """Live collection name for the current instrument (STRATEGY_INSTRUMENT).
+
+    Primary instrument -> legacy unsuffixed name (e.g. ``strategy_positions``);
+    secondary -> suffixed (``strategy_positions_nifty``). This keeps the live
+    write path scoped by one env var AND consistent with what the dashboard
+    reads via the same namespace. An explicit ``MONGO_COLL_*`` env still wins
+    at the call site.
+    """
+    return resolve_namespace("live", instrument=current_instrument()).collection_for(base)
 
 def _parse_ts(value: Any) -> Optional[datetime]:
     return parse_market_timestamp_ist(value)
@@ -158,7 +172,7 @@ def _partial_non_empty_strings(*fields: str) -> dict[str, Any]:
 
 class SnapshotMongoWriter:
     def __init__(self) -> None:
-        self.collection_name = str(os.getenv("MONGO_COLL_SNAPSHOTS") or "phase1_market_snapshots")
+        self.collection_name = str(os.getenv("MONGO_COLL_SNAPSHOTS") or _live_coll("phase1_market_snapshots"))
         self._client: Optional[Any] = None
         self._db: Optional[Any] = None
         self._indexes_ready = False
@@ -242,10 +256,10 @@ class SnapshotMongoWriter:
 
 class StrategyMongoWriter:
     def __init__(self) -> None:
-        self.vote_collection_name = str(os.getenv("MONGO_COLL_STRATEGY_VOTES") or "strategy_votes")
-        self.signal_collection_name = str(os.getenv("MONGO_COLL_TRADE_SIGNALS") or "trade_signals")
-        self.position_collection_name = str(os.getenv("MONGO_COLL_STRATEGY_POSITIONS") or "strategy_positions")
-        self.trace_collection_name = str(os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES") or "strategy_decision_traces")
+        self.vote_collection_name = str(os.getenv("MONGO_COLL_STRATEGY_VOTES") or _live_coll("strategy_votes"))
+        self.signal_collection_name = str(os.getenv("MONGO_COLL_TRADE_SIGNALS") or _live_coll("trade_signals"))
+        self.position_collection_name = str(os.getenv("MONGO_COLL_STRATEGY_POSITIONS") or _live_coll("strategy_positions"))
+        self.trace_collection_name = str(os.getenv("MONGO_COLL_STRATEGY_DECISION_TRACES") or _live_coll("strategy_decision_traces"))
         self._client: Optional[Any] = None
         self._db: Optional[Any] = None
         self._indexes_ready = False

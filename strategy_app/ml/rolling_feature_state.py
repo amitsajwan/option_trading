@@ -160,6 +160,8 @@ class RollingFeatureState:
         self._ema_50: Optional[float] = None
         self._last_day_atr: Optional[float] = None
         self._last_atm_oi_sum: Optional[float] = None
+        self._atm_iv_history: deque[float] = deque(maxlen=self._max_bars)
+        self._vix_open_day: Optional[float] = None
 
     def reset(self) -> None:
         """Reset all state — call at the start of each new replay run for reproducibility."""
@@ -183,6 +185,8 @@ class RollingFeatureState:
         self._ema_50 = None
         self._last_day_atr = None
         self._last_atm_oi_sum = None
+        self._atm_iv_history = deque(maxlen=self._max_bars)
+        self._vix_open_day = None
 
     def on_session_start(self, trade_date: date) -> None:
         self._roll_day(str(trade_date))
@@ -214,6 +218,8 @@ class RollingFeatureState:
         self._ema_50 = None
         self._last_day_atr = None
         self._last_atm_oi_sum = None
+        self._atm_iv_history.clear()
+        self._vix_open_day = None
 
     def update(self, snap: SnapshotAccessor) -> dict[str, object]:
         ts = snap.timestamp
@@ -379,6 +385,26 @@ class RollingFeatureState:
         atm_oi_ratio = _oi_ratio(snap.atm_ce_oi, snap.atm_pe_oi)
         near_atm_oi_ratio = _near_atm_oi_ratio(snap)
 
+        # iv_pct_rank_session: intraday percentile rank of atm_iv (matches training parquet).
+        atm_iv_val = None
+        ce_iv = _to_float(snap.atm_ce_iv)
+        pe_iv = _to_float(snap.atm_pe_iv)
+        if ce_iv is not None and pe_iv is not None:
+            atm_iv_val = float((ce_iv + pe_iv) / 2.0)
+            self._atm_iv_history.append(atm_iv_val)
+        iv_pct_rank_session = None
+        if atm_iv_val is not None and len(self._atm_iv_history) >= 2:
+            iv_history = [x for x in self._atm_iv_history if _to_float(x) is not None]
+            if len(iv_history) >= 2:
+                import numpy as _np
+                arr = _np.asarray(iv_history, dtype=float)
+                iv_pct_rank_session = float((arr <= atm_iv_val).sum() / arr.size)
+
+        # vix_open_day: first VIX value of the day (matches training parquet).
+        if self._vix_open_day is None and vix_current is not None:
+            self._vix_open_day = float(vix_current)
+        vix_open_day = self._vix_open_day
+
         return {
             "ret_1m": ret_1m,
             "ret_3m": ret_3m,
@@ -468,6 +494,8 @@ class RollingFeatureState:
                 if (snap.atm_ce_iv is not None and snap.atm_pe_iv is not None)
                 else None
             ),
+            "iv_pct_rank_session": iv_pct_rank_session,
+            "vix_open_day": vix_open_day,
             "iv_skew": _to_float(snap.iv_skew),
             # Aliases for snapshots_ml_flat_v2 column naming convention.
             # Training used ctx_* and osc_* prefixed names; runtime computes the

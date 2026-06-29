@@ -91,6 +91,17 @@ class DhanWsFeed:
         self._stop       = threading.Event()
         self._feed: Any  = None                # dhanhq.MarketFeed instance
         self._lock       = threading.Lock()
+        # Active instrument's index security-id + label (registry-driven so a
+        # NIFTY container subscribes to NIFTY index, not BankNifty). BankNifty
+        # registry id == "25" == _SID_BANKNIFTY_IDX, so primary is unchanged.
+        try:
+            from contracts_app import current_instrument, get_instrument
+            _spec = get_instrument(current_instrument())
+            self._idx_sid   = str(_spec.index_security_id)
+            self._idx_label = _spec.name
+        except Exception:
+            self._idx_sid   = _SID_BANKNIFTY_IDX
+            self._idx_label = "BANKNIFTY"
 
     @staticmethod
     def should_enable() -> bool:
@@ -144,9 +155,9 @@ class DhanWsFeed:
 
     def _instruments(self) -> List[tuple]:
         return [
-            (_SEG_IDX, _SID_BANKNIFTY_IDX, _MODE_QUOTE),   # BankNifty index
-            (_SEG_IDX, _SID_VIX,           _MODE_TICKER),   # India VIX
-            (_SEG_FNO, self._fut_sid,       _MODE_QUOTE),    # BankNifty futures
+            (_SEG_IDX, self._idx_sid, _MODE_QUOTE),    # active-instrument index
+            (_SEG_IDX, _SID_VIX,      _MODE_TICKER),   # India VIX
+            (_SEG_FNO, self._fut_sid, _MODE_QUOTE),    # active-instrument futures
         ]
 
     def _run_loop(self) -> None:
@@ -265,8 +276,8 @@ class DhanWsFeed:
         """Map security-id + segment back to the instrument label snapshot_app expects."""
         if sid == _SID_VIX:
             return "INDIAVIX"
-        if str(seg) == str(_SEG_IDX) and sid == _SID_BANKNIFTY_IDX:
-            return "BANKNIFTY"
+        if str(seg) == str(_SEG_IDX) and str(sid) == str(self._idx_sid):
+            return self._idx_label
         # Futures — label matches INSTRUMENT_SYMBOL env var
         return str(os.getenv("INSTRUMENT_SYMBOL") or "BANKNIFTYFUT").strip().upper()
 

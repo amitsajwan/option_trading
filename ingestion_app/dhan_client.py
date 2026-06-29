@@ -160,22 +160,45 @@ class DhanLiveClient:
         resp = self._post("/charts/intraday", payload)
         return _parse_intraday_response(resp, exchange_segment)
 
+    def get_expiry_list(
+        self,
+        underlying_scrip: int,
+        underlying_seg: str = "IDX_I",
+    ) -> List[str]:
+        """Valid expiry dates for the underlying, ascending (Dhan /v2/optionchain/expirylist).
+
+        Dhan requires the NUMERIC index security id (e.g. 25 BankNifty, 13 NIFTY)
+        and the underlying's own segment (IDX_I for index options).
+        """
+        payload = {"UnderlyingScrip": int(underlying_scrip), "UnderlyingSeg": underlying_seg}
+        resp = self._post("/optionchain/expirylist", payload) or {}
+        data = resp.get("data") if isinstance(resp, dict) else None
+        return list(data) if isinstance(data, list) else []
+
     def get_option_chain(
         self,
-        underlying: str,
+        underlying_scrip: int,
         expiry_date: Optional[str] = None,
+        underlying_seg: str = "IDX_I",
     ) -> Dict[str, Any]:
         """
         Fetch option chain from /v2/optionchain.
-        underlying: "BANKNIFTY" or "NIFTY"
-        expiry_date: "YYYY-MM-DD" (nearest weekly if omitted)
+
+        underlying_scrip: NUMERIC index security id (25 BankNifty, 13 NIFTY) — Dhan
+                          rejects the string symbol with HTTP 400.
+        underlying_seg:   underlying segment, "IDX_I" for index options.
+        expiry_date:      "YYYY-MM-DD"; if omitted, the nearest valid expiry from
+                          the expirylist is used (Dhan REQUIRES an Expiry).
         """
+        if not expiry_date:
+            expiries = self.get_expiry_list(underlying_scrip, underlying_seg)
+            expiry_date = expiries[0] if expiries else None
         payload: Dict[str, Any] = {
-            "UnderlyingScrip": underlying.upper(),
-            "UnderlyingSeg":   "NSE_FNO",
+            "UnderlyingScrip": int(underlying_scrip),
+            "UnderlyingSeg":   underlying_seg,
         }
         if expiry_date:
-            payload["ExpiryDate"] = expiry_date
+            payload["Expiry"] = expiry_date
         return self._post("/optionchain", payload) or {}
 
     def get_quotes(self, securities: List[Dict[str, str]]) -> List[Dict[str, Any]]:

@@ -32,7 +32,13 @@ from strategy_app.engines.deterministic_rule_engine import DeterministicRuleEngi
 DEFAULT_PARQUET_BASE = DEFAULT_HISTORICAL_PARQUET_BASE
 DEFAULT_OUTPUT_ROOT = Path(".run/strategy_research")
 DEFAULT_CAPITAL = 500000.0
-BANKNIFTY_LOT_SIZE = 15
+# Instrument-aware lot size (NIFTY=75); BankNifty preserves the legacy 15 when
+# STRATEGY_INSTRUMENT is unset.
+try:
+    from strategy_app.constants import resolve_lot_size as _resolve_lot_size
+    BANKNIFTY_LOT_SIZE = _resolve_lot_size()
+except Exception:
+    BANKNIFTY_LOT_SIZE = 15
 from strategy_app.cost_model import (
     DEFAULT_BROKERAGE_PER_ORDER,
     DEFAULT_CHARGES_BPS_PER_SIDE,

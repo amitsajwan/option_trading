@@ -42,7 +42,18 @@ import math
 import os
 from typing import Any, NamedTuple, Optional
 
-from ...senses.cost_ev import CostEvSense
+from ...senses.cost_ev import REF_MOVE_PT, CostEvSense
+from ...constants import resolve_lot_size
+
+# Spot level at which the empirical gain/move anchors (REF_MOVE_PT=117pt,
+# RIGHT_PCT_AT_REF=4%) were measured — BankNifty's ~2026 level. The reference
+# move scales with the live spot so the "gain%-per-underlying-point" anchor is
+# comparable across instruments: an option's premium and the index's point-move
+# both scale ~linearly with spot, so a fixed 117pt anchor would understate a
+# lower-priced index's gain (NIFTY ~24k => moves ~half BankNifty's in points but
+# the SAME % move). BankNifty (spot ≈ this) is byte-identical; NIFTY gets a
+# proportionally smaller, correctly-scaled reference move.
+_ANCHOR_REF_SPOT = 52000.0
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +129,18 @@ def evaluate_cost_gate(snap: Any) -> CostGateResult:
 
     try:
         expected_move_pt = float(atr_ratio) * float(spot) * math.sqrt(hold_bars)
-        sense = CostEvSense(premium_pts=float(premium))
+        # Instrument-correct the cost/gain physics:
+        #  - lot_qty: actual contract size (NIFTY=75) so brokerage% amortizes over
+        #    the real notional (primary_default=30 preserves BankNifty's behavior).
+        #  - ref_move_pt: scale the gain anchor by spot so a lower-priced index's
+        #    smaller point-moves are referenced against a proportionally smaller
+        #    move (BankNifty spot ≈ _ANCHOR_REF_SPOT => unchanged).
+        ref_move_scaled = REF_MOVE_PT * (float(spot) / _ANCHOR_REF_SPOT)
+        sense = CostEvSense(
+            premium_pts=float(premium),
+            lot_qty=resolve_lot_size(primary_default=30),
+            ref_move_pt=ref_move_scaled,
+        )
         gain_if_right_pct = sense.right_at(expected_move_pt)   # right_slope × move
         brokerage_pct = sense.cost_pct()
         slippage_pct, slippage_source = _measure_slippage()  # live depth spread or flat fallback

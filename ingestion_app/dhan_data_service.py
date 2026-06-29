@@ -123,8 +123,19 @@ class DhanDataService:
                     self._scrip = ScripMaster.load()
         return self._scrip
 
-    def _futures_security_id(self, underlying: str = "BANKNIFTY") -> str:
+    def _active_spec(self):
+        """InstrumentSpec for the instrument this ingestion process serves.
+
+        From STRATEGY_INSTRUMENT (current_instrument); defaults to BANKNIFTY.
+        Index ids in the registry match the legacy IDX_* constants (BANKNIFTY=25,
+        NIFTY=13) so BankNifty routing is byte-identical.
+        """
+        from contracts_app import current_instrument, get_instrument
+        return get_instrument(current_instrument())
+
+    def _futures_security_id(self, underlying: Optional[str] = None) -> str:
         """Look up nearest-expiry futures securityId from scrip master."""
+        underlying = underlying or self._active_spec().name
         row = self._scrip_master().find_nearest_futures(underlying)
         if row:
             sid = str(row.get("SEM_SMST_SECURITY_ID") or "").strip()
@@ -184,12 +195,12 @@ class DhanDataService:
         if is_vix:
             securities = [{"exchangeSegment": "IDX_I", "securityId": IDX_VIX, "instrument": "INDEX"}]
         elif symbol_u.endswith("FUT") or "FUT" in symbol_u:
-            # Current-expiry futures
-            sid = self._futures_security_id("BANKNIFTY")
+            # Current-expiry futures for the active instrument
+            sid = self._futures_security_id()
             securities = [{"exchangeSegment": "NSE_FNO", "securityId": sid, "instrument": "FUTIDX"}]
         else:
-            # Fall back to BankNifty index
-            securities = [{"exchangeSegment": "IDX_I", "securityId": IDX_BANKNIFTY, "instrument": "INDEX"}]
+            # Underlying index for the active instrument (BANKNIFTY=25, NIFTY=13)
+            securities = [{"exchangeSegment": "IDX_I", "securityId": self._active_spec().index_security_id, "instrument": "INDEX"}]
 
         # WS cache-first: if the live feed is healthy, return the cached tick
         safe_key_lookup = symbol_u.replace(" ", "")
@@ -253,10 +264,10 @@ class DhanDataService:
         if is_vix:
             seg, sid, inst_type = "IDX_I", IDX_VIX, "INDEX"
         elif is_fut:
-            sid = self._futures_security_id("BANKNIFTY")
+            sid = self._futures_security_id()
             seg, inst_type = "NSE_FNO", "FUTIDX"
         else:
-            seg, sid, inst_type = "IDX_I", IDX_BANKNIFTY, "INDEX"
+            seg, sid, inst_type = "IDX_I", self._active_spec().index_security_id, "INDEX"
 
         try:
             bars = self._client.get_intraday_ohlc(
@@ -354,8 +365,18 @@ class DhanDataService:
         if not underlying_u:
             raise HTTPException(status_code=400, detail=f"cannot infer underlying from {instrument}")
 
+        # Dhan's optionchain needs the NUMERIC index security id + IDX_I segment.
         try:
-            resp = self._client.get_option_chain(underlying_u)
+            from contracts_app import get_instrument
+            spec = get_instrument(underlying_u)
+            scrip_id, seg = int(spec.index_security_id), spec.index_segment
+        except Exception:
+            # Fallback to the active spec's index id (covers the configured instrument).
+            spec = self._active_spec()
+            scrip_id, seg = int(spec.index_security_id), spec.index_segment
+
+        try:
+            resp = self._client.get_option_chain(scrip_id, underlying_seg=seg)
         except Exception as e:
             log.error("get_option_chain failed: %s", e)
             raise HTTPException(status_code=502, detail=f"Dhan optionchain failed: {e}")
@@ -458,39 +479,62 @@ def _parse_option_chain(
     """
     data = (resp or {}).get("data") or resp or {}
 
-    # Underlying spot price
+    # Underlying spot price. Dhan v2 puts it at data.last_price; older/alt shapes
+    # used underlyingDetails.last_price.
     underlying_info = data.get("underlyingDetails") or {}
-    spot = _to_float(underlying_info.get("last_price") or underlying_info.get("LTP"))
+    spot = _to_float(
+        data.get("last_price")
+        or underlying_info.get("last_price")
+        or underlying_info.get("LTP")
+    )
 
-    expiry = str(data.get("expiryDate") or "")
+    expiry = str(data.get("expiry") or data.get("expiryDate") or "")
 
-    option_data = data.get("optionData") or data.get("oc") or []
+    # Normalize to (strike, call, put) rows. Dhan v2 returns ``oc`` as a DICT keyed
+    # by strike string ("58000.000000" -> {"ce": {...}, "pe": {...}}); older/alt
+    # shapes used a list under ``optionData``.
+    oc = data.get("oc")
+    rows: List[Any] = []
+    if isinstance(oc, dict):
+        for k, v in oc.items():
+            vv = v or {}
+            rows.append((_to_float(k), vv.get("ce") or {}, vv.get("pe") or {}))
+    else:
+        for row in (data.get("optionData") or []):
+            if not isinstance(row, dict):
+                continue
+            rows.append((
+                _to_float(row.get("strike_price") or row.get("strikePrice")),
+                row.get("call") or row.get("ce") or {},
+                row.get("put") or row.get("pe") or {},
+            ))
+
+    # Keep ATM ± strike_span only (Dhan returns the full chain ~400 strikes).
+    if math.isfinite(spot) and spot > 0 and strike_span and rows:
+        rows.sort(key=lambda r: abs((r[0] if math.isfinite(r[0]) else 1e18) - spot))
+        rows = rows[: max(1, 2 * int(strike_span) + 1)]
 
     strikes: List[Dict[str, Any]] = []
     total_ce_oi = 0.0
     total_pe_oi = 0.0
 
-    for row in option_data:
-        strike = _to_float(row.get("strike_price") or row.get("strikePrice"))
+    for strike, call, put in rows:
         if not math.isfinite(strike):
             continue
-
-        call = row.get("call") or row.get("ce") or {}
-        put  = row.get("put")  or row.get("pe") or {}
 
         ce_ltp    = _to_float(call.get("last_price") or call.get("LTP"))
         ce_oi     = _to_float(call.get("oi") or call.get("OI")) or 0.0
         ce_volume = _to_float(call.get("volume")) or 0.0
-        ce_iv     = _to_float(call.get("iv") or call.get("impliedVolatility"))
-        ce_bid    = _to_float(call.get("bid_price"))
-        ce_ask    = _to_float(call.get("ask_price"))
+        ce_iv     = _to_float(call.get("implied_volatility") or call.get("iv") or call.get("impliedVolatility"))
+        ce_bid    = _to_float(call.get("top_bid_price") or call.get("bid_price"))
+        ce_ask    = _to_float(call.get("top_ask_price") or call.get("ask_price"))
 
         pe_ltp    = _to_float(put.get("last_price") or put.get("LTP"))
         pe_oi     = _to_float(put.get("oi") or put.get("OI")) or 0.0
         pe_volume = _to_float(put.get("volume")) or 0.0
-        pe_iv     = _to_float(put.get("iv") or put.get("impliedVolatility"))
-        pe_bid    = _to_float(put.get("bid_price"))
-        pe_ask    = _to_float(put.get("ask_price"))
+        pe_iv     = _to_float(put.get("implied_volatility") or put.get("iv") or put.get("impliedVolatility"))
+        pe_bid    = _to_float(put.get("top_bid_price") or put.get("bid_price"))
+        pe_ask    = _to_float(put.get("top_ask_price") or put.get("ask_price"))
 
         total_ce_oi += ce_oi
         total_pe_oi += pe_oi

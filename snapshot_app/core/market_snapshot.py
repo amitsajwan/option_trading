@@ -897,7 +897,24 @@ def _compute_underlying_context(
 
 _BLOCK_TRADE_MIN_LOTS_DEFAULT = 5
 _BANKNIFTY_LOT_SIZE = int(os.getenv("BANKNIFTY_LOT_SIZE") or "15")
-_NIFTY_LOT_SIZE = int(os.getenv("NIFTY_LOT_SIZE") or "50")
+_NIFTY_LOT_SIZE = int(os.getenv("NIFTY_LOT_SIZE") or "75")
+
+
+def _active_lot_size() -> int:
+    """Lot size of the instrument this process serves (block-detection threshold).
+
+    Primary (BANKNIFTY) keeps the legacy ``_BANKNIFTY_LOT_SIZE`` (15 unless env)
+    so existing snapshots/replays are unchanged; secondary instruments resolve
+    from the shared InstrumentSpec registry (NIFTY=75).
+    """
+    try:
+        from contracts_app import current_instrument, get_instrument, PRIMARY_INSTRUMENT
+        inst = current_instrument()
+        if inst == PRIMARY_INSTRUMENT:
+            return _BANKNIFTY_LOT_SIZE
+        return int(get_instrument(inst).lot_size)
+    except Exception:
+        return _BANKNIFTY_LOT_SIZE
 
 
 def _classify_block_direction(
@@ -939,9 +956,10 @@ def _compute_block_flow(
         )
         return {"instrument": label, "quantity": qty, "direction": direction}
 
-    ce_block = _check_block(atm_ce_tick, _BANKNIFTY_LOT_SIZE, "atm_ce")
-    pe_block = _check_block(atm_pe_tick, _BANKNIFTY_LOT_SIZE, "atm_pe")
-    fut_block = _check_block(fut_tick, _BANKNIFTY_LOT_SIZE, "futures")
+    _lot = _active_lot_size()
+    ce_block = _check_block(atm_ce_tick, _lot, "atm_ce")
+    pe_block = _check_block(atm_pe_tick, _lot, "atm_pe")
+    fut_block = _check_block(fut_tick, _lot, "futures")
 
     current_bar: Dict[str, Any] = {}
     for label, blk in [("atm_ce", ce_block), ("atm_pe", pe_block), ("futures", fut_block)]:

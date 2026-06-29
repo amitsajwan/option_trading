@@ -19,6 +19,27 @@ _REASON_RE = re.compile(r"^\[(?P<regime>[^\]]+)\]\s+(?P<strategy>[^:]+):")
 BANKNIFTY_OPTION_LOT_SIZE = 15.0
 
 
+def _lot_size_fallback(*positions: Any) -> float:
+    """Lot-size fallback from the position's own ``instrument`` field.
+
+    Evaluated trades carry their instrument; resolve its registry lot size
+    (NIFTY=75) so NIFTY trades aren't valued at BankNifty's lot. Falls back to
+    the legacy 15 when instrument is absent/unknown.
+    """
+    for pos in positions:
+        if not isinstance(pos, dict):
+            continue
+        inst = str(pos.get("instrument") or "").strip().upper()
+        if not inst:
+            continue
+        try:
+            from contracts_app import get_instrument
+            return float(get_instrument(inst).lot_size)
+        except Exception:
+            continue
+    return BANKNIFTY_OPTION_LOT_SIZE
+
+
 def _parse_csv_filter(raw: Optional[str]) -> list[str]:
     if not raw:
         return []
@@ -805,7 +826,7 @@ class StrategyEvaluationService:
             "lot_size": (
                 _safe_float(open_position.get("lot_size"))
                 or _safe_float(close_position.get("lot_size"))
-                or BANKNIFTY_OPTION_LOT_SIZE
+                or _lot_size_fallback(open_position, close_position)
             ),
             "stop_loss_pct": premium_stop_pct,
             "entry_stop_price": _safe_float(open_position.get("stop_price")),
@@ -856,7 +877,7 @@ class StrategyEvaluationService:
             pnl_pct_net = _safe_float(row.get("pnl_pct_net"))
             entry_premium = _safe_float(row.get("entry_premium"))
             lots = _safe_float(row.get("lots"))
-            lot_size = _safe_float(row.get("lot_size")) or BANKNIFTY_OPTION_LOT_SIZE
+            lot_size = _safe_float(row.get("lot_size")) or _lot_size_fallback(row)
             capital_at_risk = None
             capital_pnl_amount = None
             capital_pnl_pct = None

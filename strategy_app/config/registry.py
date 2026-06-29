@@ -152,6 +152,15 @@ REGISTRY: list[ConfigKey] = [
               "Max hold (min) — real lottery backstop.", sim_overridable=True),
     ConfigKey("exit.lottery.momentum_flip", "LOTTERY_MOMENTUM_FLIP", "float", 1.0, "exit",
               "Exit if shadow score flips by this magnitude. 0 = off.", sim_overridable=True),
+    # giveback stop (both stacks)
+    ConfigKey("exit.giveback.enabled", "EXIT_GIVEBACK_STOP_ENABLED", "bool", False, "exit",
+              "Enable GivebackStopPolicy in scalper+lottery stacks (Jun-4 dead-zone fix).", sim_overridable=True),
+    ConfigKey("exit.giveback.min_mfe", "EXIT_GIVEBACK_MIN_MFE", "float", 0.03, "exit",
+              "GivebackStop activates once MFE >= this (scalper+lottery).", sim_overridable=True),
+    ConfigKey("exit.giveback.scalper_pct", "EXIT_GIVEBACK_PCT", "float", 0.09, "exit",
+              "Scalper giveback tolerance: exit if pnl < mfe - this.", sim_overridable=True),
+    ConfigKey("exit.giveback.lottery_pct", "LOTTERY_GIVEBACK_PCT", "float", 0.15, "exit",
+              "Lottery giveback tolerance: wider so genuine winners aren't choked.", sim_overridable=True),
 
     # ----- strike ---------------------------------------------------------
     ConfigKey("strike.policy", "STRATEGY_STRIKE_SELECTION_POLICY", "str", "otm", "strike",

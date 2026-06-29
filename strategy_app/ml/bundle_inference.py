@@ -33,6 +33,63 @@ def load_joblib_bundle(path: str, *, expected_kind: str) -> Optional[Dict[str, A
         return None
 
 
+def _is_nan_value(v: Any) -> bool:
+    """Check if a value is NaN (float NaN)."""
+    return isinstance(v, float) and v != v
+
+
+_VIX_HIGH_THRESHOLD = 18.0
+
+
+def _compute_essential_features(flat: Dict[str, Any]) -> None:
+    """Compute features not directly available in stage views but needed by retrained models.
+
+    Mutates `flat` in-place, adding keys only if they're missing or NaN.
+    """
+    import math as _math
+
+    def _safe_float(v: Any) -> Optional[float]:
+        try:
+            f = float(v)
+            return f if _math.isfinite(f) else None
+        except (TypeError, ValueError):
+            return None
+
+    # atm_iv = (atm_ce_iv + atm_pe_iv) / 2
+    if not flat.get("atm_iv") or _is_nan_value(flat.get("atm_iv")):
+        ce_iv = _safe_float(flat.get("atm_ce_iv"))
+        pe_iv = _safe_float(flat.get("atm_pe_iv"))
+        if ce_iv is not None and pe_iv is not None:
+            flat["atm_iv"] = (ce_iv + pe_iv) / 2.0
+
+    # iv_pct_rank_session: intraday pct rank of atm_iv — not computable from a single
+    # snapshot. Use iv_percentile (historical) as proxy, same as pre-refactor behaviour.
+    if not flat.get("iv_pct_rank_session") or _is_nan_value(flat.get("iv_pct_rank_session")):
+        iv_pct = _safe_float(flat.get("iv_percentile"))
+        if iv_pct is not None:
+            flat["iv_pct_rank_session"] = iv_pct
+
+    # vix_open_day: first VIX of the day — not available in stage views.
+    # Use vix_prev_close as proxy (same as pre-refactor behaviour).
+    if not flat.get("vix_open_day") or _is_nan_value(flat.get("vix_open_day")):
+        vix_prev = _safe_float(flat.get("vix_prev_close"))
+        if vix_prev is not None:
+            flat["vix_open_day"] = vix_prev
+
+    # is_high_vix_day: 1 if vix_open_day > threshold, else 0.
+    if not flat.get("is_high_vix_day") or _is_nan_value(flat.get("is_high_vix_day")):
+        vix_open = _safe_float(flat.get("vix_open_day"))
+        if vix_open is not None:
+            flat["is_high_vix_day"] = 1.0 if vix_open > _VIX_HIGH_THRESHOLD else 0.0
+
+    # minute_of_day: absolute minutes since midnight (e.g. 555 for 9:15).
+    # Stage views have minutes_since_open (0-based from 9:15). Convert by adding 555.
+    if not flat.get("minute_of_day") or _is_nan_value(flat.get("minute_of_day")):
+        mso = _safe_float(flat.get("minutes_since_open"))
+        if mso is not None:
+            flat["minute_of_day"] = mso + 555.0
+
+
 def build_feature_row(snap: SnapshotAccessor, features: List[str]) -> Optional[Dict[str, float]]:
     snap_id = snap.snapshot_id or "unknown"
     try:
@@ -62,6 +119,10 @@ def build_feature_row(snap: SnapshotAccessor, features: List[str]) -> Optional[D
         if isinstance(vel, dict):
             # Velocity features (11:30-anchored) fill gaps; per-bar compression values win.
             _fill(flat, vel)
+
+        # Compute essential features not available in stage views.
+        _compute_essential_features(flat)
+
         row: Dict[str, float] = {}
         for feature in features:
             val = flat.get(feature)

@@ -10,6 +10,7 @@ import pytest
 from strategy_app.contracts import ExitReason, PositionContext
 from strategy_app.position.exit_policy import (
     CompositeExitPolicy,
+    GivebackStopPolicy,
     PremiumTargetPolicy,
     ThesisFailPolicy,
     TrailingStopPolicy,
@@ -234,6 +235,113 @@ class TestRunnerTrailPolicy:
         # MFE +30%, floor 18%; pnl fell to 15% < 18% → lock it in
         p = RunnerTrailPolicy(activation_mfe=0.20, giveback_frac=0.40)
         assert p.check(_pos(mfe_pct=0.30, pnl_pct=0.15), _snap) == ExitReason.TRAILING_STOP
+
+
+class TestGivebackStopPolicy:
+    def test_silent_before_min_mfe_activation(self):
+        # MFE=2% < activation=3% → policy stays silent regardless of pnl
+        p = GivebackStopPolicy(min_mfe=0.03, giveback_pct=0.09)
+        assert p.check(_pos(mfe_pct=0.02, pnl_pct=-0.10), _snap) is None
+
+    def test_fires_on_jun4_dead_zone_pattern(self):
+        # Jun 4: MFE=+4%, pnl ground to -18%. Floor = 4% - 9% = -5%.
+        # Should fire at -6% (below -5% floor).
+        p = GivebackStopPolicy(min_mfe=0.03, giveback_pct=0.09)
+        assert p.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) == ExitReason.TRAILING_STOP
+
+    def test_fires_exactly_at_floor(self):
+        # MFE=5%, giveback=9% → floor=-4%. pnl exactly at -4% → fires.
+        p = GivebackStopPolicy(min_mfe=0.03, giveback_pct=0.09)
+        assert p.check(_pos(mfe_pct=0.05, pnl_pct=-0.04), _snap) == ExitReason.TRAILING_STOP
+
+    def test_silent_above_floor(self):
+        # MFE=5%, giveback=9% → floor=-4%. pnl=-3% (above floor) → holds.
+        p = GivebackStopPolicy(min_mfe=0.03, giveback_pct=0.09)
+        assert p.check(_pos(mfe_pct=0.05, pnl_pct=-0.03), _snap) is None
+
+    def test_floor_rises_with_mfe(self):
+        # MFE=6%, giveback=9% → floor=-3%. Original entry at MFE=4% had floor=-5%.
+        # The floor is dynamic — it tightens as MFE grows.
+        p = GivebackStopPolicy(min_mfe=0.03, giveback_pct=0.09)
+        assert p.check(_pos(mfe_pct=0.06, pnl_pct=-0.04), _snap) == ExitReason.TRAILING_STOP
+        assert p.check(_pos(mfe_pct=0.06, pnl_pct=-0.02), _snap) is None
+
+    def test_wider_lottery_giveback(self):
+        # Lottery uses 15% giveback so genuine winners aren't choked.
+        # MFE=5%, giveback=15% → floor=-10%; pnl=-8% → still holds.
+        p = GivebackStopPolicy(min_mfe=0.03, giveback_pct=0.15)
+        assert p.check(_pos(mfe_pct=0.05, pnl_pct=-0.08), _snap) is None
+        assert p.check(_pos(mfe_pct=0.05, pnl_pct=-0.11), _snap) == ExitReason.TRAILING_STOP
+
+    def test_name_is_descriptive(self):
+        p = GivebackStopPolicy(min_mfe=0.03, giveback_pct=0.09)
+        assert "giveback_act=3%" in p.name
+        assert "give=9%" in p.name
+
+
+class TestGivebackStopStackWiring:
+    """GivebackStopPolicy wired into scalper and lottery stacks via env vars."""
+
+    def test_disabled_by_default_scalper(self, monkeypatch):
+        monkeypatch.delenv("EXIT_GIVEBACK_STOP_ENABLED", raising=False)
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "scalper")
+        stack = build_default_exit_stack()
+        assert "giveback_act" not in stack.name
+
+    def test_enabled_appears_in_scalper_stack(self, monkeypatch):
+        monkeypatch.setenv("EXIT_GIVEBACK_STOP_ENABLED", "1")
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "scalper")
+        stack = build_default_exit_stack()
+        assert "giveback_act" in stack.name
+
+    def test_enabled_appears_in_lottery_stack(self, monkeypatch):
+        monkeypatch.setenv("EXIT_GIVEBACK_STOP_ENABLED", "1")
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "lottery")
+        stack = build_default_exit_stack()
+        assert "giveback_act" in stack.name
+
+    def test_scalper_giveback_fires_on_dead_zone(self, monkeypatch):
+        # Scalper stack enabled with giveback. MFE=4%, pnl=-7% → floor=-5% → fires.
+        monkeypatch.setenv("EXIT_GIVEBACK_STOP_ENABLED", "1")
+        monkeypatch.setenv("EXIT_GIVEBACK_MIN_MFE", "0.03")
+        monkeypatch.setenv("EXIT_GIVEBACK_PCT", "0.09")
+        monkeypatch.setenv("EXIT_STRATEGY_MODE", "scalper")
+        monkeypatch.setenv("EXIT_MAX_LOSS_PCT", "1.0")  # disable universal floor
+        stack = build_scalper_exit_stack()
+        assert stack.check(_pos(mfe_pct=0.04, pnl_pct=-0.07), _snap) == ExitReason.TRAILING_STOP
+
+    def test_scalper_giveback_silent_before_activation(self, monkeypatch):
+        monkeypatch.setenv("EXIT_GIVEBACK_STOP_ENABLED", "1")
+        monkeypatch.setenv("EXIT_GIVEBACK_MIN_MFE", "0.03")
+        monkeypatch.setenv("EXIT_GIVEBACK_PCT", "0.09")
+        monkeypatch.setenv("EXIT_TRAILING_ACTIVATION_PCT", "0.10")  # raise trail so only giveback matters
+        monkeypatch.setenv("EXIT_SCALPER_HARD_STOP_PCT", "1.0")     # disable hard stop
+        stack = build_scalper_exit_stack()
+        # MFE=2% < giveback activation=3% → giveback stays silent; trade at -5% not fired
+        assert stack.check(_pos(mfe_pct=0.02, pnl_pct=-0.05), _snap) is None
+
+    def test_lottery_uses_wider_giveback(self, monkeypatch):
+        monkeypatch.setenv("EXIT_GIVEBACK_STOP_ENABLED", "1")
+        monkeypatch.setenv("EXIT_GIVEBACK_MIN_MFE", "0.03")
+        monkeypatch.setenv("LOTTERY_GIVEBACK_PCT", "0.15")
+        stack = build_lottery_exit_stack()
+        # MFE=5%, pnl=-8% < -10% floor? No, -8% > floor(-5%+...wait: 5%-15%=-10%)
+        # So -8% > -10% → holds (lottery wider tolerance)
+        assert stack.check(_pos(mfe_pct=0.05, pnl_pct=-0.08), _snap) is None
+        # -11% < -10% → fires
+        assert stack.check(_pos(mfe_pct=0.05, pnl_pct=-0.11), _snap) == ExitReason.TRAILING_STOP
+
+    def test_env_override_min_mfe(self, monkeypatch):
+        monkeypatch.setenv("EXIT_GIVEBACK_STOP_ENABLED", "1")
+        monkeypatch.setenv("EXIT_GIVEBACK_MIN_MFE", "0.05")
+        monkeypatch.setenv("EXIT_GIVEBACK_PCT", "0.09")
+        monkeypatch.setenv("EXIT_TRAILING_ACTIVATION_PCT", "0.20")  # raise trail so only giveback matters
+        monkeypatch.setenv("EXIT_SCALPER_HARD_STOP_PCT", "1.0")     # disable hard stop
+        stack = build_scalper_exit_stack()
+        # Activation threshold raised to 5%; MFE=4% < 5% → giveback silent
+        assert stack.check(_pos(mfe_pct=0.04, pnl_pct=-0.07), _snap) is None
+        # MFE=6% ≥ 5% → active; floor=6%-9%=-3%; pnl=-4% → fires
+        assert stack.check(_pos(mfe_pct=0.06, pnl_pct=-0.04), _snap) == ExitReason.TRAILING_STOP
 
 
 class TestMomentumReversalPolicy:

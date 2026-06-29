@@ -19,7 +19,7 @@ from datetime import date
 
 from kiteconnect import KiteConnect
 
-from strategy_app.constants import BANKNIFTY_LOT_SIZE
+from strategy_app.constants import resolve_lot_size
 from strategy_app.contracts import PositionContext, TradeSignal
 
 from .base import BrokerAdapter, OrderResult
@@ -33,16 +33,26 @@ _MONTH_MAP = {
 
 
 def _build_nfo_symbol(expiry: date, strike: int, option_type: str) -> str:
-    """Build Kite NFO tradingsymbol for BANKNIFTY weekly option.
+    """Build Kite NFO tradingsymbol (monthly format) for the active instrument.
 
-    Format: BANKNIFTY{D}{MON}{YY}{STRIKE}{CE|PE}
+    Format: {UNDERLYING}{D}{MON}{YY}{STRIKE}{CE|PE}
     Example: expiry=2026-06-26, strike=54200, CE → BANKNIFTY26JUN2654200CE
+
+    NOTE: this monthly format matches BankNifty (post-Nov-2024 monthly). NIFTY
+    weeklies use Kite's weekly format (single-char month) — validate before
+    Kite-live NIFTY. Dhan (the live adapter) resolves symbols via the scrip
+    master so it is already instrument-correct.
     """
+    try:
+        from contracts_app import current_instrument
+        underlying = current_instrument()
+    except Exception:
+        underlying = "BANKNIFTY"
     day = expiry.day
     month = _MONTH_MAP[expiry.month]
     year = str(expiry.year)[2:]
     opt = option_type.upper()
-    return f"BANKNIFTY{day}{month}{year}{strike}{opt}"
+    return f"{underlying}{day}{month}{year}{strike}{opt}"
 
 
 class KiteAdapter(BrokerAdapter):
@@ -60,7 +70,7 @@ class KiteAdapter(BrokerAdapter):
             return OrderResult(order_id="", status="rejected", fill_price=None, fill_qty=None,
                                error="missing expiry/strike/direction on signal")
         tradingsymbol = _build_nfo_symbol(signal.expiry, signal.strike, signal.direction)
-        qty = signal.max_lots * BANKNIFTY_LOT_SIZE
+        qty = signal.max_lots * resolve_lot_size()
         try:
             order_id = self._kite.place_order(
                 variety=KiteConnect.VARIETY_REGULAR,
@@ -86,7 +96,7 @@ class KiteAdapter(BrokerAdapter):
             return OrderResult(order_id="", status="rejected", fill_price=None, fill_qty=None,
                                error="missing expiry/strike/direction on exit signal")
         tradingsymbol = _build_nfo_symbol(signal.expiry, signal.strike, signal.direction)
-        qty = position.lots * BANKNIFTY_LOT_SIZE
+        qty = position.lots * resolve_lot_size()
         try:
             order_id = self._kite.place_order(
                 variety=KiteConnect.VARIETY_REGULAR,

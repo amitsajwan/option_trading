@@ -18,8 +18,9 @@ import logging
 import math
 import os
 from abc import ABC, abstractmethod
+from typing import Optional
 
-from ..constants import BANKNIFTY_LOT_SIZE
+from ..constants import resolve_lot_size
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,11 @@ class FixedFractionRisk(RiskCalculator):
     to use a tighter risk-only stop (separate from the exit stop).
     """
 
-    def __init__(self, risk_pct: float = 0.01, lot_size: int = BANKNIFTY_LOT_SIZE):
+    def __init__(self, risk_pct: float = 0.01, lot_size: Optional[int] = None):
         self._risk_pct = risk_pct
-        self._lot_size = lot_size
+        # Resolve from the active instrument's registry lot size when not given
+        # (NIFTY=75, BankNifty preserves legacy behavior).
+        self._lot_size = lot_size if lot_size is not None else resolve_lot_size()
 
     def compute_lots(
         self,

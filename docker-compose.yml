@@ -441,6 +441,11 @@ services:
       EXIT_THESIS_FAIL_MIN_MFE: "${EXIT_THESIS_FAIL_MIN_MFE:-0.002}"
       # Scalper sub-stack hard loss cap (makes adaptive self-sufficient; >=1.0 disables)
       EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+      # Giveback stop (Jun-4 dead-zone fix): off by default; enable with EXIT_GIVEBACK_STOP_ENABLED=1
+      EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
+      EXIT_GIVEBACK_MIN_MFE: "${EXIT_GIVEBACK_MIN_MFE:-0.03}"
+      EXIT_GIVEBACK_PCT: "${EXIT_GIVEBACK_PCT:-0.09}"
+      LOTTERY_GIVEBACK_PCT: "${LOTTERY_GIVEBACK_PCT:-0.15}"
 
       # ── Near-expiry exit override (tighter stack at low DTE; off by default) ─
       EXIT_EXPIRY_OVERRIDE_ENABLED: "${EXIT_EXPIRY_OVERRIDE_ENABLED:-0}"
@@ -1178,6 +1183,11 @@ services:
       EXIT_THESIS_FAIL_MIN_MFE: "${EXIT_THESIS_FAIL_MIN_MFE:-0.002}"
       # Scalper sub-stack hard loss cap (makes adaptive self-sufficient; >=1.0 disables)
       EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+      # Giveback stop (Jun-4 dead-zone fix): off by default; enable with EXIT_GIVEBACK_STOP_ENABLED=1
+      EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
+      EXIT_GIVEBACK_MIN_MFE: "${EXIT_GIVEBACK_MIN_MFE:-0.03}"
+      EXIT_GIVEBACK_PCT: "${EXIT_GIVEBACK_PCT:-0.09}"
+      LOTTERY_GIVEBACK_PCT: "${LOTTERY_GIVEBACK_PCT:-0.15}"
 
       # ── Near-expiry exit override (tighter stack at low DTE; off by default) ─
       EXIT_EXPIRY_OVERRIDE_ENABLED: "${EXIT_EXPIRY_OVERRIDE_ENABLED:-0}"

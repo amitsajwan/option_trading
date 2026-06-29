@@ -1,0 +1,430 @@
+/* multi-instrument.css — Styles for Multi-Instrument Strategy Dashboard */
+
+/* ── Dashboard container ────────────────────────────────────────────────── */
+.mi-dashboard {
+  padding: 16px 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+  color: var(--ink);
+  font-family: var(--f-mono);
+}
+
+/* ── S1: Instrument switcher bar ────────────────────────────────────────── */
+.mi-instrument-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.mi-instrument-card {
+  flex: 1;
+  min-width: 280px;
+  background: var(--paper);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-3);
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+
+.mi-instrument-card:hover {
+  border-color: var(--accent, #5a9fff);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+.mi-instrument-card.mi-selected {
+  border-color: var(--accent, #5a9fff);
+  box-shadow: 0 0 0 2px rgba(90,159,255,0.15);
+}
+
+.mi-instrument-card.mi-stale {
+  border-color: rgba(194,62,47,0.5);
+  background: rgba(194,62,47,0.03);
+}
+
+.mi-inst-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.mi-inst-id {
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+
+.mi-mode-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.05em;
+}
+
+.mi-mode-live { background: rgba(10,143,92,0.12); color: var(--pos, #0a8f5c); }
+.mi-mode-sim  { background: rgba(200,150,20,0.12); color: #c89614; }
+.mi-mode-off  { background: rgba(120,120,120,0.12); color: #787878; }
+
+.mi-inst-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px 12px;
+}
+
+.mi-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mi-k {
+  font-size: 9px;
+  color: var(--ink-3, #8899aa);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mi-v {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.mi-pos { color: var(--pos, #0a8f5c); }
+.mi-neg { color: var(--neg, #c23e2f); }
+.mi-ce  { color: #5a9fff; }
+.mi-pe  { color: #ff8c5a; }
+
+.mi-expiry .mi-v {
+  font-weight: 600;
+}
+
+/* ── Panels grid ────────────────────────────────────────────────────────── */
+.mi-panels-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 1100px) {
+  .mi-panels-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Shared panel styles ────────────────────────────────────────────────── */
+.mi-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mi-panel-loading,
+.mi-panel-error,
+.mi-empty {
+  padding: 20px;
+  color: var(--ink-3, #8899aa);
+  font-size: 12px;
+  text-align: center;
+}
+
+.mi-panel-error {
+  color: var(--neg, #c23e2f);
+}
+
+/* ── S2: Effective config ───────────────────────────────────────────────── */
+.mi-config-panel {
+  background: var(--paper);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-3);
+  padding: 14px 16px;
+}
+
+.mi-config-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.mi-config-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line-1, #eee);
+  vertical-align: top;
+}
+
+.mi-config-key {
+  color: var(--ink-3, #8899aa);
+  white-space: nowrap;
+  width: 35%;
+}
+
+.mi-config-val {
+  font-weight: 500;
+  word-break: break-all;
+}
+
+/* ── S3: Model health ───────────────────────────────────────────────────── */
+.mi-health-panel {
+  background: var(--paper);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-3);
+  padding: 14px 16px;
+}
+
+.mi-health-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mi-health-subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.mi-health-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+.mi-health-stats span {
+  color: var(--ink-3, #8899aa);
+}
+
+.mi-health-pass {
+  font-weight: 600;
+}
+
+.mi-histogram-chart {
+  width: 100%;
+  height: 180px;
+}
+
+/* ── S4: Decision trace viewer ──────────────────────────────────────────── */
+.mi-signals-panel {
+  background: var(--paper);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-3);
+  padding: 14px 16px;
+  grid-column: span 2;
+}
+
+.mi-ws-status {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 400;
+}
+
+.mi-ws-connected { background: rgba(10,143,92,0.12); color: var(--pos, #0a8f5c); }
+.mi-ws-disconnected { background: rgba(120,120,120,0.12); color: #787878; }
+.mi-ws-error { background: rgba(194,62,47,0.12); color: var(--neg, #c23e2f); }
+.mi-ws-connecting { background: rgba(200,150,20,0.12); color: #c89614; }
+
+.mi-signals-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: var(--paper-2, #f6f4ef);
+  border-radius: var(--r-2, 6px);
+}
+
+.mi-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.mi-date-label {
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 6px;
+}
+
+.mi-date-label input[type="date"] {
+  font: inherit;
+  font-size: 11px;
+  border: 1px solid var(--line-1, #ddd);
+  border-radius: var(--r-2, 6px);
+  padding: 2px 6px;
+}
+
+.mi-filter-btn {
+  appearance: none;
+  border: 1px solid var(--line-1, #ddd);
+  background: var(--paper);
+  color: var(--ink-3, #8899aa);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: var(--r-2, 6px);
+  cursor: pointer;
+  font-family: var(--f-mono);
+}
+
+.mi-filter-btn.active {
+  background: var(--accent, #5a9fff);
+  color: #fff;
+  border-color: var(--accent, #5a9fff);
+}
+
+.mi-signals-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.mi-signal-row {
+  border-bottom: 1px solid var(--line-1, #eee);
+  padding: 6px 0;
+}
+
+.mi-signal-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+.mi-signal-main:hover {
+  background: var(--paper-2, #f6f4ef);
+}
+
+.mi-sig-time { width: 40px; color: var(--ink-3, #8899aa); }
+.mi-sig-prob { width: 70px; }
+.mi-sig-dir  { width: 30px; font-weight: 600; }
+.mi-sig-conf { width: 70px; color: var(--ink-3, #8899aa); }
+
+.mi-sig-outcome {
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.mi-outcome-entry_taken { background: rgba(10,143,92,0.12); color: var(--pos, #0a8f5c); }
+.mi-outcome-exit_taken { background: rgba(10,143,92,0.12); color: var(--pos, #0a8f5c); }
+.mi-outcome-blocked { background: rgba(194,62,47,0.12); color: var(--neg, #c23e2f); }
+.mi-outcome-abstained { background: rgba(200,150,20,0.12); color: #c89614; }
+.mi-outcome-hold { background: rgba(120,120,120,0.12); color: #787878; }
+.mi-outcome-manage_only { background: rgba(90,159,255,0.12); color: #5a9fff; }
+
+.mi-sig-block {
+  font-size: 10px;
+  color: var(--neg, #c23e2f);
+  margin-left: auto;
+}
+
+.mi-signal-expanded {
+  padding: 8px 12px;
+  background: var(--paper-2, #f6f4ef);
+  border-radius: var(--r-2, 6px);
+  margin-top: 4px;
+}
+
+.mi-gates-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.mi-gate {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.mi-gate-pass { background: rgba(10,143,92,0.10); color: var(--pos, #0a8f5c); }
+.mi-gate-fail { background: rgba(194,62,47,0.10); color: var(--neg, #c23e2f); }
+
+.mi-raw-trace {
+  font-size: 10px;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--ink-3, #8899aa);
+}
+
+/* ── S5: Trade P&L timeline ─────────────────────────────────────────────── */
+.mi-trades-panel {
+  background: var(--paper);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-3);
+  padding: 14px 16px;
+  grid-column: span 2;
+}
+
+.mi-date-filters {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 11px;
+}
+
+.mi-date-filters input[type="date"] {
+  font: inherit;
+  font-size: 11px;
+  border: 1px solid var(--line-1, #ddd);
+  border-radius: var(--r-2, 6px);
+  padding: 2px 6px;
+}
+
+.mi-trade-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: var(--paper-2, #f6f4ef);
+  border-radius: var(--r-2, 6px);
+}
+
+.mi-scatter-chart {
+  width: 100%;
+  height: 220px;
+  margin-bottom: 12px;
+}
+
+.mi-trades-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.mi-trades-table th {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 2px solid var(--line-1, #ddd);
+  color: var(--ink-3, #8899aa);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.mi-trades-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line-1, #eee);
+}
+
+.mi-trades-table tr:hover {
+  background: var(--paper-2, #f6f4ef);
+}

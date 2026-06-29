@@ -29,9 +29,9 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from strategy_app.constants import (
-    BANKNIFTY_LOT_SIZE,
     HARD_CLOSE_MINUTE,
     SOFT_CLOSE_MINUTE,
+    resolve_lot_size,
 )
 from strategy_app.cost_model import TradingCostModel
 
@@ -63,7 +63,7 @@ class LabelContract:
     """Loaded from option_label_contract.json. Single source of truth for both
     labeler and the runtime equivalence audit."""
 
-    lot_size: int = BANKNIFTY_LOT_SIZE
+    lot_size: int = field(default_factory=resolve_lot_size)
     soft_close_minute: int = SOFT_CLOSE_MINUTE
     hard_close_minute: int = HARD_CLOSE_MINUTE
     min_entry_premium: float = 5.0

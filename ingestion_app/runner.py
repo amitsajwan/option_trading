@@ -80,7 +80,23 @@ def main():
             print(_sanitize_for_console('   [OK] Ingestion API healthy'))
 
         if args.mode == 'live':
-            if args.start_collectors:
+            # Broker selection mirrors api_service._resolve_broker: explicit BROKER wins,
+            # else Dhan-token-presence heuristic. The Dhan ingestion path needs no Kite
+            # preflight or Kite collectors — the ingestion API runs DhanDataService, which
+            # manages its own DhanWsFeed (live ticks -> Redis) plus REST OHLC/chain/depth,
+            # and snapshot_app pulls everything via that API.
+            _broker = (os.getenv('BROKER') or '').strip().lower() or (
+                'dhan' if os.getenv('DHAN_ACCESS_TOKEN') else 'kite'
+            )
+            if args.start_collectors and _broker == 'dhan':
+                print('[INFO] BROKER=dhan: skipping Kite preflight + Kite collectors; '
+                      'DhanDataService (REST) + DhanWsFeed (ticks) serve the live feed.')
+                # Optional L2 depth via the Dhan depth collector (own creds; off by default).
+                if str(os.getenv('DEPTH_COLLECTOR_ENABLED', '0')).strip().lower() in ('1', 'true', 'yes', 'on'):
+                    depth_cmd = [PYTHON, '-m', 'ingestion_app.collectors.depth_collector']
+                    depth_proc = start_process('Depth Collector', depth_cmd, env=os.environ.copy())
+                    procs.append(('Depth Collector', depth_proc))
+            elif args.start_collectors:
                 # Before starting collectors, validate Zerodha credentials unless using mock provider
                 use_mock = os.getenv('USE_MOCK_KITE', '0') in ('1', 'true', 'yes')
                 ok, msg = check_zerodha_credentials()

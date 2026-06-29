@@ -467,6 +467,39 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     except Exception as _e:
         logger.warning("could not write ops_env.json: %s", _e)
 
+    # ── Deployed-config summary — visible in `docker logs` / trace on every start ──
+    # Grep: "LIVE CONFIG"
+    _g = os.getenv
+    _exit_giveback = "ON  (min_mfe={} scalper_pct={} lottery_pct={})".format(
+        _g("EXIT_GIVEBACK_MIN_MFE", "0.03"),
+        _g("EXIT_GIVEBACK_PCT", "0.09"),
+        _g("LOTTERY_GIVEBACK_PCT", "0.15"),
+    ) if _g("EXIT_GIVEBACK_STOP_ENABLED", "0") not in ("", "0", "false", "False") else "OFF"
+    logger.info(
+        "LIVE CONFIG ┌─────────────────────────────────────────────\n"
+        "LIVE CONFIG │ ENGINE          %s  profile=%s\n"
+        "LIVE CONFIG │ ENTRY           vol_gate=%s  ml_min_prob=%s  direction=%s\n"
+        "LIVE CONFIG │ EXIT mode       %s  max_loss=%s  policy_stack=%s\n"
+        "LIVE CONFIG │ EXIT scalper    hard_stop=%s  trail_act=%s  trail=%s  thesis_bars=%s\n"
+        "LIVE CONFIG │ EXIT lottery    hard_stop=%s  big_target=%s  regimes=%s\n"
+        "LIVE CONFIG │ EXIT giveback   %s\n"
+        "LIVE CONFIG │ RISK            max_trades=%s  max_consec_loss=%s  max_lots=%s  capital=%s\n"
+        "LIVE CONFIG │ STRIKE          policy=%s  max_premium=%s  max_otm_steps=%s\n"
+        "LIVE CONFIG └─────────────────────────────────────────────",
+        args.engine, strategy_profile_id,
+        _g("ENTRY_VOL_GATE_ENABLED", "?"), _g("ENTRY_ML_MIN_PROB", "?"), _g("ML_ENTRY_DIRECTION_MODE", "?"),
+        _g("EXIT_STRATEGY_MODE", "scalper"), _g("EXIT_MAX_LOSS_PCT", "0.10"), _g("EXIT_POLICY_STACK_ENABLED", "0"),
+        _g("EXIT_SCALPER_HARD_STOP_PCT", "0.25"), _g("EXIT_TRAILING_ACTIVATION_PCT", "0.01"),
+        _g("EXIT_TRAILING_TRAIL_PCT", "0.005"), _g("EXIT_THESIS_FAIL_BARS", "999"),
+        _g("LOTTERY_HARD_STOP_PCT", "0.20"), _g("LOTTERY_BIG_TARGET_PCT", "0.50"),
+        _g("ADAPTIVE_LOTTERY_REGIMES", "BREAKOUT,TRENDING"),
+        _exit_giveback,
+        _g("RISK_MAX_SESSION_TRADES", "6"), _g("RISK_MAX_CONSECUTIVE_LOSSES", "6"),
+        _g("RISK_MAX_LOTS_PER_TRADE", "1"), _g("RISK_CAPITAL_ALLOCATED", "?"),
+        _g("STRATEGY_STRIKE_SELECTION_POLICY", "otm"), _g("SMART_STRIKE_MAX_PREMIUM", "1300"),
+        _g("STRATEGY_STRIKE_MAX_OTM_STEPS", "12"),
+    )
+
     consumer = RedisSnapshotConsumer(
         engine=engine,
         topic=topic,

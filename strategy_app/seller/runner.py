@@ -35,7 +35,8 @@ class SellerRunner:
         self._brain = SellerBrain()
         self._mgr = PositionManager()
         self._risk = RiskGates()
-        self._lot = int(os.getenv("BANKNIFTY_LOT_SIZE", "30") or 30)
+        from ..constants import resolve_lot_size
+        self._lot = resolve_lot_size(primary_default=int(os.getenv("BANKNIFTY_LOT_SIZE", "30") or 30))
         self._width = int(os.getenv("SELLER_SPREAD_WIDTH", "300") or 300)
         # default gateway = PAPER (no real money)
         self._gw_factory = gateway_factory or (lambda pf: PaperLegGateway(pf, float(os.getenv("SELLER_SLIPPAGE_PTS", "1.0") or 1.0)))

@@ -24,9 +24,20 @@ except Exception:  # pragma: no cover - optional runtime dependency
     ASCENDING = 1
     MongoClient = None
 
+from contracts_app import current_instrument, resolve_namespace
+
 from .time_utils import IST, minute_bucket_ist, parse_market_timestamp_ist, to_ist, to_ist_iso
 
 logger = logging.getLogger(__name__)
+
+
+def _live_coll(base: str) -> str:
+    """Live collection name for the current instrument (STRATEGY_INSTRUMENT).
+
+    Primary -> legacy unsuffixed name; secondary -> suffixed. Explicit
+    ``MONGO_COLL_*`` env wins at the call site.
+    """
+    return resolve_namespace("live", instrument=current_instrument()).collection_for(base)
 
 
 def mongo_config() -> dict[str, Any]:
@@ -93,10 +104,10 @@ class MongoPersistenceSink:
             2.0, float(os.getenv("MONGO_PERSIST_CONNECT_RETRY_SECONDS", "15"))
         )
 
-        self.tick_collection = os.getenv("MONGO_COLL_TICKS", "live_ticks")
-        self.options_collection = os.getenv("MONGO_COLL_OPTIONS", "live_options_chain")
-        self.depth_collection = os.getenv("MONGO_COLL_DEPTH", "live_depth")
-        self.snapshot_collection = os.getenv("MONGO_COLL_SNAPSHOTS", "phase1_market_snapshots")
+        self.tick_collection = os.getenv("MONGO_COLL_TICKS") or _live_coll("live_ticks")
+        self.options_collection = os.getenv("MONGO_COLL_OPTIONS") or _live_coll("live_options_chain")
+        self.depth_collection = os.getenv("MONGO_COLL_DEPTH") or _live_coll("live_depth")
+        self.snapshot_collection = os.getenv("MONGO_COLL_SNAPSHOTS") or _live_coll("phase1_market_snapshots")
 
         self._queue: Queue[Dict[str, Any]] = Queue(maxsize=self.queue_size)
         self._client = None

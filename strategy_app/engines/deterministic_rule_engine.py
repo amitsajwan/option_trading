@@ -1815,7 +1815,8 @@ class DeterministicRuleEngine(StrategyEngine):
         observed live round-trip) if notional can't be reconstructed.
         """
         try:
-            lot_size = int(os.getenv("STRATEGY_LOT_SIZE", "").strip() or 0) or 30
+            from ..constants import resolve_lot_size
+            lot_size = resolve_lot_size(primary_default=30)
             qty = max(1, int(position.lots or 1)) * lot_size
             entry_val = float(position.entry_premium or 0.0) * qty
             if entry_val <= 0:
