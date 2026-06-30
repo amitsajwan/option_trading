@@ -60,8 +60,9 @@ def _model_file_status(path_str: Optional[str]) -> dict[str, Any]:
     }
 
 
-def _load_runtime_config(mode: str = "live") -> dict[str, Any]:
-    run_dir = _resolve_run_dir(mode)
+def _load_runtime_config(mode: str = "live", instrument: str = "BANKNIFTY") -> dict[str, Any]:
+    resolved_mode = "nifty" if instrument.upper() == "NIFTY" else mode
+    run_dir = _resolve_run_dir(resolved_mode)
     cfg_path = run_dir / "runtime_config.json"
     if not cfg_path.exists():
         return {"status": "missing", "path": str(cfg_path)}
@@ -87,16 +88,25 @@ class ConfigRouter:
     ) -> dict[str, Any]:
         now_ist = datetime.now(tz=_IST).isoformat()
 
-        # 1. Runtime config file
-        rc = _load_runtime_config(mode)
+        # 1. Runtime config file — scoped to the correct instrument's run dir
+        rc = _load_runtime_config(mode, instrument)
         rc_payload = rc.get("payload") or {}
 
         # 2. Env vars
         env_vals: dict[str, Optional[str]] = {k: os.getenv(k) for k in _STRATEGY_ENV_KEYS}
 
-        # 3. Entry model file check
-        entry_path = env_vals.get("ENTRY_ML_MODEL_PATH") or ""
-        dir_path = env_vals.get("DIRECTION_ML_MODEL_PATH") or ""
+        # 3. Entry model file check — use instrument-specific paths for NIFTY
+        is_nifty = instrument.upper() == "NIFTY"
+        entry_path = (
+            env_vals.get("NIFTY_ENTRY_ML_MODEL_PATH") or ""
+            if is_nifty
+            else env_vals.get("ENTRY_ML_MODEL_PATH") or ""
+        )
+        dir_path = (
+            env_vals.get("NIFTY_DIRECTION_ML_MODEL_PATH") or ""
+            if is_nifty
+            else env_vals.get("DIRECTION_ML_MODEL_PATH") or ""
+        )
 
         # 4. Compose effective view
         engine = rc_payload.get("engine") or os.getenv("STRATEGY_ENGINE", "")

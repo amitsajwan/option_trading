@@ -617,6 +617,48 @@ services:
       timeout: 5s
       retries: 3
 
+  execution_app_nifty:
+    image: option_trading-execution_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      strategy_app_nifty:
+        condition: service_started
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: NIFTY
+      EXECUTION_ADAPTER: "${EXECUTION_ADAPTER:-paper}"
+      EXECUTION_REQUIRE_LIVE_TIER: "${EXECUTION_REQUIRE_LIVE_TIER:-1}"
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
+      NIFTY_LOT_SIZE: "${NIFTY_LOT_SIZE:-25}"
+      ORDER_FILL_TIMEOUT_SEC: "${ORDER_FILL_TIMEOUT_SEC:-30}"
+      ORDER_POLL_INTERVAL_SEC: "${ORDER_POLL_INTERVAL_SEC:-1}"
+      FILL_TRACKER_ENABLED: "${FILL_TRACKER_ENABLED:-1}"
+      EXECUTION_FILLS_STREAM: "execution:nifty:fills:v1"
+      MONGO_COLL_EXECUTION_FILLS: "${MONGO_COLL_EXECUTION_FILLS:-execution_fills}"
+      MONGO_COLL_STRATEGY_POSITIONS: "strategy_positions_nifty"
+      SHADOW_MAX_LOTS: "${SHADOW_MAX_LOTS:-1}"
+      ALERT_ENABLED: "${ALERT_ENABLED:-0}"
+      ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
+      ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+      TRADE_SIGNAL_TOPIC: "market:nifty:strategy:signals:v1"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8009/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   depth_collector:
     # Live-only side-channel: polls Kite REST API for ATM CE/PE order book depth
     # and writes best-bid/ask to Redis for strategy_app to read as a live signal.
@@ -695,6 +737,13 @@ services:
       INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26JULFUT}"
       MARKET_DATA_API_URL: "http://ingestion_app:8004"
       STRATEGY_RUN_DIR: "/app/.run/strategy_app"
+      # Model path env vars for UI status display
+      ENTRY_ML_MODEL_PATH: "${ENTRY_ML_MODEL_PATH:-}"
+      DIRECTION_ML_MODEL_PATH: "${DIRECTION_ML_MODEL_PATH:-}"
+      NIFTY_ENTRY_ML_MODEL_PATH: "${NIFTY_ENTRY_ML_MODEL_PATH:-}"
+      NIFTY_DIRECTION_ML_MODEL_PATH: "${NIFTY_DIRECTION_ML_MODEL_PATH:-}"
+      STRATEGY_ROLLOUT_STAGE: "${STRATEGY_ROLLOUT_STAGE:-paper}"
+      # Dashboard serves both instruments - leave STRATEGY_INSTRUMENT blank
     ports:
       - "${DASHBOARD_PORT:-8008}:8008"
     volumes:
@@ -705,6 +754,7 @@ services:
       - ./market_data_dashboard/state:/app/market_data_dashboard/state:ro
       - ./market_data_dashboard/routes:/app/market_data_dashboard/routes:ro
       - ./market_data_dashboard/static:/app/market_data_dashboard/static:ro
+      - ./models:/app/models:ro
 
   strategy_eval_orchestrator:
     profiles: ["ui", "historical"]
@@ -1638,8 +1688,9 @@ services:
       ENTRY_ML_MIN_PROB: "${NIFTY_ENTRY_ML_MIN_PROB:-0.05}"
       DIRECTION_ML_MODEL_PATH: "${NIFTY_DIRECTION_ML_MODEL_PATH:-}"
       ML_ENTRY_DIRECTION_MODE: "direction_ml"
-      # NIFTY-specific sizing
-      STRATEGY_LOT_SIZE: "75"
+      # NIFTY-specific sizing — NSE changes lot size per expiry; execution uses scrip master.
+      # Set NIFTY_LOT_SIZE in .env to match the current front-month (25 since late 2024).
+      NIFTY_LOT_SIZE: "${NIFTY_LOT_SIZE:-25}"
       STRATEGY_MIN_CONFIDENCE: "0.05"
       RISK_MAX_LOTS_PER_TRADE: "1"
       RISK_CAPITAL_ALLOCATED: "${RISK_CAPITAL_ALLOCATED:-500000}"
