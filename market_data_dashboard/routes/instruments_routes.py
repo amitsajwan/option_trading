@@ -248,35 +248,53 @@ def _instrument_mode(instrument: str) -> str:
 def _candles_for_instrument(instrument: str, bars: int = 80) -> list[dict]:
     """Read recent 1-min OHLC bars from Redis for the given instrument.
 
-    Redis key candidates (tried in order, matching contracts_app.get_redis_key convention):
-      live:ohlc_sorted:{instrument}:1m   ← primary (ingestion default)
-      paper:ohlc_sorted:{instrument}:1m
-      ohlc_sorted:{instrument}:1m
-      live:ohlc_sorted:{instrument}:1min
-      ohlc_sorted:{instrument}:1min
+    Tries exact keys first, then falls back to SCAN to find the full futures
+    symbol key (e.g. live:ohlc_sorted:BANKNIFTY26JULFUT:1m).
     Returns a list of bar dicts (start_at, open, high, low, close, volume), oldest-first.
     """
     import json as _json
+
+    def _read_key(r, key: str) -> list:
+        entries = r.zrange(key, -bars, -1)
+        if not entries:
+            return []
+        result = []
+        for raw in entries:
+            try:
+                result.append(_json.loads(raw))
+            except Exception:
+                continue
+        return result
+
     host = os.getenv("REDIS_HOST", "localhost")
     port = int(os.getenv("REDIS_PORT", "6379"))
     try:
         r = _redis_lib.Redis(host=host, port=port, db=0, socket_timeout=2, decode_responses=True)
-        keys = [
+
+        # Try exact short-name keys first
+        for key in [
             f"live:ohlc_sorted:{instrument}:1m",
             f"paper:ohlc_sorted:{instrument}:1m",
             f"ohlc_sorted:{instrument}:1m",
             f"live:ohlc_sorted:{instrument}:1min",
             f"ohlc_sorted:{instrument}:1min",
-        ]
-        for key in keys:
-            entries = r.zrange(key, -bars, -1)
-            if entries:
-                result = []
-                for raw in entries:
-                    try:
-                        result.append(_json.loads(raw))
-                    except Exception:
-                        continue
+        ]:
+            result = _read_key(r, key)
+            if result:
+                return result
+
+        # Fallback: scan for full futures symbol key (e.g. BANKNIFTY26JULFUT)
+        for pattern in [
+            f"live:ohlc_sorted:{instrument}*:1m",
+            f"paper:ohlc_sorted:{instrument}*:1m",
+            f"live:ohlc_sorted:{instrument}*:1min",
+        ]:
+            found = []
+            for k in r.scan_iter(pattern, count=10):
+                found.append(k)
+            # prefer most recent (longest symbol = current expiry usually)
+            for k in sorted(found, reverse=True):
+                result = _read_key(r, k)
                 if result:
                     return result
     except Exception:
