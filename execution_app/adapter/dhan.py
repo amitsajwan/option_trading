@@ -186,8 +186,27 @@ class DhanAdapter(BrokerAdapter):
                 return exc.code, {"error": raw or str(exc)}
 
     # ── order quantity, with the safety guard ────────────────────────────────
-    def _resolve_qty(self, expiry: date, strike: int, option_type: str, lots: int) -> tuple[str, int]:
-        """Return (security_id, quantity). Raises ValueError on any unsafe condition."""
+    def _resolve_qty(self, expiry: Optional[date], strike: int, option_type: str, lots: int) -> tuple[str, int]:
+        """Return (security_id, quantity). Raises ValueError on any unsafe condition.
+
+        When ``expiry`` is None (not carried on the signal — e.g. DTE=0 on expiry day),
+        we try the nearest available expiry from the scrip master for this strike so
+        expiry-day signals still route to real orders.
+        """
+        self._scrips._ensure_loaded()
+        if expiry is None:
+            # Find the nearest expiry available for this strike+option_type.
+            candidates = [
+                exp for (exp, s, ot) in self._scrips._index
+                if s == int(strike) and ot == option_type.upper()
+            ]
+            if not candidates:
+                raise ValueError(f"no Dhan securityId for {_UNDERLYING} expiry=None {strike} {option_type} — no candidates")
+            from datetime import date as _date
+            today = _date.today()
+            nearest_str = min(candidates, key=lambda e: abs((_date.fromisoformat(e) - today).days))
+            expiry = _date.fromisoformat(nearest_str)
+            logger.info("_resolve_qty: expiry was None, resolved to nearest=%s for %s %s %s", expiry, _UNDERLYING, strike, option_type)
         resolved = self._scrips.resolve(expiry, strike, option_type)
         if resolved is None:
             raise ValueError(f"no Dhan securityId for {_UNDERLYING} {expiry} {strike} {option_type}")

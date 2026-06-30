@@ -394,6 +394,31 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     except Exception:
         logger.debug("config audit skipped", exc_info=True)
 
+    # Model integrity check — validates bundle paths, kinds, features, medians,
+    # xgboost version parity, and runtime gates BEFORE the first bar is evaluated.
+    # Errors abort the process; warnings surface degraded-but-running states.
+    # Grep: "MODEL INTEGRITY"
+    try:
+        from .diagnostics.model_integrity import run_integrity_check as _model_integrity, format_report as _fmt_integrity
+        _integrity = _model_integrity(dict(os.environ))
+        for _line in format(_fmt_integrity(_integrity)).splitlines():
+            if "[!]" in _line:
+                logger.error("%s", _line)
+            elif "[~]" in _line:
+                logger.warning("%s", _line)
+            else:
+                logger.info("%s", _line)
+        if not _integrity.get("ok"):
+            raise ValueError(
+                "Startup aborted — model integrity errors detected (see MODEL INTEGRITY [!] log lines above). "
+                "Fix bundle paths/kinds in .env.compose and restart. "
+                "Details: " + "; ".join(_integrity.get("errors") or [])
+            )
+    except ValueError:
+        raise
+    except Exception:
+        logger.debug("model integrity check skipped", exc_info=True)
+
     topic = str(args.topic or snapshot_topic()).strip() or snapshot_topic()
     runtime_store = RuntimeArtifactStore(runtime_artifact_paths.root)
     # If the engine has option-P&L bundles loaded (via OPTION_PNL_MODEL_BUNDLE),

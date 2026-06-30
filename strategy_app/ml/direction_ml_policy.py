@@ -126,6 +126,23 @@ def _predict_ce_prob(bundle: Dict[str, Any], snap: SnapshotAccessor) -> Optional
     if row is None:
         return None
 
+    nan_features = [f for f, v in row.items() if not math.isfinite(v)]
+    if nan_features:
+        _max_nan_raw = os.getenv("DIRECTION_ML_MAX_NAN_FEATURES", "").strip()
+        if _max_nan_raw.isdigit():
+            _max_nan = int(_max_nan_raw)
+            if len(nan_features) > _max_nan:
+                logger.warning(
+                    "direction_ml_policy: %d/%d features NaN > DIRECTION_ML_MAX_NAN_FEATURES=%d "
+                    "— abstaining (nan_features=%s)",
+                    len(nan_features), len(features), _max_nan, nan_features[:10],
+                )
+                return None
+        logger.debug(
+            "direction_ml_policy: %d/%d features NaN — filling with medians (nan=%s)",
+            len(nan_features), len(features), nan_features[:10],
+        )
+
     medians: Dict[str, float] = bundle.get("feature_medians", {})
     row_filled = {f: (v if math.isfinite(v) else medians.get(f, 0.0)) for f, v in row.items()}
 

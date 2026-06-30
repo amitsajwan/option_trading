@@ -146,13 +146,17 @@ def _latest_regime(db: Any, instrument: str, today: str) -> Optional[str]:
         doc = coll.find_one(
             {"trade_date_ist": today},
             sort=[("timestamp", -1)],
-            projection={"payload.regime": 1, "payload.regime_context.regime": 1, "_id": 0},
+            projection={"payload": 1, "final_outcome": 1, "_id": 0},
         )
         if not doc:
             return None
         payload = doc.get("payload") or {}
+        # The trace nests regime under payload.trace.regime_context.regime
+        # but older writes put it at payload.regime or payload.regime_context.regime.
+        trace = payload.get("trace") or {}
         regime = (
-            payload.get("regime")
+            (trace.get("regime_context") or {}).get("regime")
+            or payload.get("regime")
             or (payload.get("regime_context") or {}).get("regime")
         )
         return str(regime) if regime else None

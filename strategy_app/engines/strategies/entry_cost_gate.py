@@ -129,19 +129,42 @@ def evaluate_cost_gate(snap: Any) -> CostGateResult:
 
     try:
         expected_move_pt = float(atr_ratio) * float(spot) * math.sqrt(hold_bars)
-        # Instrument-correct the cost/gain physics:
-        #  - lot_qty: actual contract size (NIFTY=75) so brokerage% amortizes over
-        #    the real notional (primary_default=30 preserves BankNifty's behavior).
-        #  - ref_move_pt: scale the gain anchor by spot so a lower-priced index's
-        #    smaller point-moves are referenced against a proportionally smaller
-        #    move (BankNifty spot ≈ _ANCHOR_REF_SPOT => unchanged).
+
+        # ── Lot size: use the actual market lot from snapshot when available. ──
+        # The registry/env lot size can lag NSE revisions (e.g. NIFTY changed 75→65→25
+        # across expiries). Lot only affects brokerage% — bigger lot = lower %cost.
+        # We try: (1) snap.lot_size if the snapshot carries it, else (2) registry.
+        # primary_default=30 preserves BankNifty's historical behavior.
+        try:
+            _snap_lot = int(getattr(snap, "lot_size", None) or 0)
+        except Exception:
+            _snap_lot = 0
+        actual_lot = _snap_lot if _snap_lot > 0 else resolve_lot_size(primary_default=30)
+
+        # ── Gain model: empirical slope vs delta-based on expiry day. ──────────
+        # The empirical slope (4% gain / 117pt BankNifty move, scaled by spot) works
+        # for midday scalping where delta ≈ 0.15-0.30. On EXPIRY DAY ATM options have
+        # delta ≈ 0.5, so a 30pt move gives 50% of move in option price — far more
+        # than the slope implies (2%). Using the wrong model blocks all expiry trades.
+        # Env knob: ENTRY_COST_GATE_EXPIRY_DELTA (default 0.45, conservative ATM est.)
         ref_move_scaled = REF_MOVE_PT * (float(spot) / _ANCHOR_REF_SPOT)
         sense = CostEvSense(
             premium_pts=float(premium),
-            lot_qty=resolve_lot_size(primary_default=30),
+            lot_qty=actual_lot,
             ref_move_pt=ref_move_scaled,
         )
-        gain_if_right_pct = sense.right_at(expected_move_pt)   # right_slope × move
+
+        is_expiry = bool(getattr(snap, "is_expiry_day", False))
+        if is_expiry:
+            # Delta-based gain: on expiry day ATM delta ~ 0.45 (slightly below 0.5
+            # due to time remaining). gain% = delta × move / premium.
+            _delta = _env_float("ENTRY_COST_GATE_EXPIRY_DELTA", 0.45)
+            gain_if_right_pct = _delta * expected_move_pt / float(premium)
+            gain_model = f"expiry_delta={_delta}"
+        else:
+            gain_if_right_pct = sense.right_at(expected_move_pt)   # empirical slope
+            gain_model = "empirical_slope"
+
         brokerage_pct = sense.cost_pct()
         slippage_pct, slippage_source = _measure_slippage()  # live depth spread or flat fallback
         cost_pct = brokerage_pct + slippage_pct
@@ -156,6 +179,8 @@ def evaluate_cost_gate(snap: Any) -> CostGateResult:
     evidence = {
         "expected_move_pt": round(expected_move_pt, 1),
         "gain_if_right_pct": round(gain_if_right_pct, 4),
+        "gain_model": gain_model,
+        "lot_used": actual_lot,
         "brokerage_pct": round(brokerage_pct, 4),
         "slippage_pct": round(slippage_pct, 4),
         "slippage_source": slippage_source,
@@ -163,6 +188,7 @@ def evaluate_cost_gate(snap: Any) -> CostGateResult:
         "cost_ratio": round(ratio, 2),
         "ratio_min": ratio_min,
         "hold_bars": hold_bars,
+        "is_expiry": is_expiry,
     }
     reason = f"cost_ratio={ratio:.2f}{'>=' if ok else '<'}{ratio_min}"
     return CostGateResult(ok, round(ratio, 2), reason, evidence)
