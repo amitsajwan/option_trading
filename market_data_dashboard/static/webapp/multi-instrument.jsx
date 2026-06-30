@@ -74,24 +74,32 @@ function MiniPriceChart({ instrument }) {
   // Load candles and update series
   _e(() => {
     if (!seriesRef.current) return;
-    const IST_SEC = 19800;
+    const IST_SEC = 19800; // +5:30 in seconds, same shift as terminal-live.jsx
     fetch(`/api/candles?instrument=${instrument}&bars=80`)
       .then(r => r.ok ? r.json() : [])
       .then(bars => {
-        if (!seriesRef.current || !Array.isArray(bars) || bars.length === 0) return;
-        // normalise field names: t (ms epoch) or time, c or close
+        if (!seriesRef.current || !Array.isArray(bars) || bars.length === 0) {
+          setError('no data');
+          return;
+        }
+        // Bars from ingestion have: start_at (ISO string), open, high, low, close
         const data = bars
           .map(b => {
-            const tMs = b.t || b.time || b.timestamp_ms;
-            const close = b.c || b.close || b.ltp;
-            if (!tMs || close == null) return null;
-            return { time: Math.floor(tMs / 1000) + IST_SEC, value: close };
+            const iso = b.start_at || b.time || b.timestamp;
+            const close = b.close || b.c || b.ltp;
+            if (!iso || close == null) return null;
+            const utcMs = new Date(iso).getTime();
+            if (!isFinite(utcMs)) return null;
+            return { time: Math.floor(utcMs / 1000) + IST_SEC, value: Number(close) };
           })
-          .filter(Boolean);
+          .filter(Boolean)
+          .sort((a, b) => a.time - b.time);
         if (data.length > 0) {
           seriesRef.current.setData(data);
           chartRef.current && chartRef.current.timeScale().fitContent();
           setError(null);
+        } else {
+          setError('no data');
         }
       })
       .catch(() => setError('no data'));
@@ -106,7 +114,10 @@ function MiniPriceChart({ instrument }) {
 
 // ── S1: Instrument Switcher + Status Bar ───────────────────────────────────
 function ModeBadge({ mode }) {
-  const cls = mode === 'live' ? 'mi-mode-live' : mode === 'sim' ? 'mi-mode-sim' : 'mi-mode-off';
+  const cls = mode === 'live' ? 'mi-mode-live'
+    : mode === 'paper' ? 'mi-mode-paper'
+    : mode === 'sim' ? 'mi-mode-sim'
+    : 'mi-mode-off';
   return React.createElement('span', { className: `mi-mode-badge ${cls}` }, (mode || 'off').toUpperCase());
 }
 

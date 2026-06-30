@@ -64,9 +64,10 @@
   letter-spacing: 0.05em;
 }
 
-.mi-mode-live { background: rgba(10,143,92,0.12); color: var(--pos, #0a8f5c); }
-.mi-mode-sim  { background: rgba(200,150,20,0.12); color: #c89614; }
-.mi-mode-off  { background: rgba(120,120,120,0.12); color: #787878; }
+.mi-mode-live  { background: rgba(10,143,92,0.12); color: var(--pos, #0a8f5c); }
+.mi-mode-paper { background: rgba(90,159,255,0.12); color: #5a9fff; }
+.mi-mode-sim   { background: rgba(200,150,20,0.12); color: #c89614; }
+.mi-mode-off   { background: rgba(120,120,120,0.12); color: #787878; }
 
 .mi-inst-grid {
   display: grid;

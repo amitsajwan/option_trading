@@ -228,8 +228,10 @@ def _instrument_mode(instrument: str) -> str:
             cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
             rollout = str(cfg.get("rollout_stage", "")).lower()
         
-        if rollout in ("live", "capped_live", "paper"):
-            mode = "live" if "live" in rollout else "sim"
+        if "live" in rollout:  # "live" or "capped_live"
+            mode = "live"
+        elif rollout == "paper":
+            mode = "paper"
         else:
             mode = "sim"
 
@@ -244,13 +246,15 @@ def _instrument_mode(instrument: str) -> str:
 
 
 def _candles_for_instrument(instrument: str, bars: int = 80) -> list[dict]:
-    """Read recent 5-min OHLC bars from Redis for the given instrument.
+    """Read recent 1-min OHLC bars from Redis for the given instrument.
 
-    Redis key candidates (tried in order):
-      live:ohlc_sorted:{instrument}:5min
-      ohlc_sorted:{instrument}:5min
-      live:ohlc_sorted:{instrument}:5m
-    Returns a list of {t, o, h, l, c, v} dicts, oldest-first.
+    Redis key candidates (tried in order, matching contracts_app.get_redis_key convention):
+      live:ohlc_sorted:{instrument}:1m   ← primary (ingestion default)
+      paper:ohlc_sorted:{instrument}:1m
+      ohlc_sorted:{instrument}:1m
+      live:ohlc_sorted:{instrument}:1min
+      ohlc_sorted:{instrument}:1min
+    Returns a list of bar dicts (start_at, open, high, low, close, volume), oldest-first.
     """
     import json as _json
     host = os.getenv("REDIS_HOST", "localhost")
@@ -258,9 +262,11 @@ def _candles_for_instrument(instrument: str, bars: int = 80) -> list[dict]:
     try:
         r = _redis_lib.Redis(host=host, port=port, db=0, socket_timeout=2, decode_responses=True)
         keys = [
-            f"live:ohlc_sorted:{instrument}:5min",
-            f"ohlc_sorted:{instrument}:5min",
-            f"live:ohlc_sorted:{instrument}:5m",
+            f"live:ohlc_sorted:{instrument}:1m",
+            f"paper:ohlc_sorted:{instrument}:1m",
+            f"ohlc_sorted:{instrument}:1m",
+            f"live:ohlc_sorted:{instrument}:1min",
+            f"ohlc_sorted:{instrument}:1min",
         ]
         for key in keys:
             entries = r.zrange(key, -bars, -1)
@@ -271,7 +277,8 @@ def _candles_for_instrument(instrument: str, bars: int = 80) -> list[dict]:
                         result.append(_json.loads(raw))
                     except Exception:
                         continue
-                return result
+                if result:
+                    return result
     except Exception:
         pass
     return []
