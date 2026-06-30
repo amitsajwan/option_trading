@@ -86,7 +86,7 @@ def _feed_last_tick_age_sec(r: Any, instrument: str) -> Optional[int]:
         return None
 
 
-def _model_loaded(run_dir_mode: str = "live") -> dict[str, bool]:
+def _model_loaded(run_dir_mode: str = "live", instrument: str = "BANKNIFTY") -> dict[str, bool]:
     """Check runtime_config.json for model load status."""
     try:
         run_dir = _resolve_run_dir(run_dir_mode)
@@ -98,8 +98,12 @@ def _model_loaded(run_dir_mode: str = "live") -> dict[str, bool]:
         engine = str(cfg.get("engine") or "")
         if engine == "deterministic":
             # Deterministic engine: check env vars for model paths
-            entry_path = os.getenv("ENTRY_ML_MODEL_PATH", "")
-            dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "")
+            if instrument == "NIFTY":
+                entry_path = os.getenv("NIFTY_ENTRY_ML_MODEL_PATH", "")
+                dir_path = os.getenv("NIFTY_DIRECTION_ML_MODEL_PATH", "")
+            else:
+                entry_path = os.getenv("ENTRY_ML_MODEL_PATH", "")
+                dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "")
             import pathlib
             return {
                 "entry": bool(entry_path) and pathlib.Path(entry_path).exists(),
@@ -205,24 +209,72 @@ def _next_expiry(instrument: str, today_dt: datetime) -> Optional[str]:
 
 
 def _instrument_mode(instrument: str) -> str:
-    """Determine mode from env vars.
+    """Determine mode from runtime_config.json.
 
-    STRATEGY_MODE env var or ROLLOUT_STAGE → live|sim|off.
-    Single-instrument setup: if instrument matches current subscription → live/sim.
+    Reads rollout stage from strategy container's runtime config.
+    For NIFTY, checks if model paths are configured.
     """
-    rollout = str(os.getenv("ROLLOUT_STAGE", "") or os.getenv("STRATEGY_ROLLOUT_STAGE", "")).lower()
-    if rollout in ("live", "capped_live", "paper"):
-        mode = "live" if "live" in rollout else "sim"
-    else:
-        mode = "sim"
+    try:
+        # Read from appropriate runtime config based on instrument
+        run_dir_mode = "live_nifty" if instrument == "NIFTY" else "live"
+        run_dir = _resolve_run_dir(run_dir_mode)
+        cfg_path = run_dir / "runtime_config.json"
+        
+        if not cfg_path.exists():
+            # Fallback to env vars for backward compatibility
+            rollout = str(os.getenv("ROLLOUT_STAGE", "") or os.getenv("STRATEGY_ROLLOUT_STAGE", "")).lower()
+        else:
+            import json
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            rollout = str(cfg.get("rollout_stage", "")).lower()
+        
+        if rollout in ("live", "capped_live", "paper"):
+            mode = "live" if "live" in rollout else "sim"
+        else:
+            mode = "sim"
 
-    # If NIFTY is not yet deployed (no model paths), report as off
-    if instrument == "NIFTY":
-        nifty_entry = os.getenv("NIFTY_ENTRY_ML_MODEL_PATH", "")
-        bn_only = not bool(nifty_entry)
-        if bn_only:
-            return "off"
-    return mode
+        # If NIFTY is not yet deployed (no model paths), report as off
+        if instrument == "NIFTY":
+            nifty_entry = os.getenv("NIFTY_ENTRY_ML_MODEL_PATH", "")
+            if not nifty_entry:
+                return "off"
+        return mode
+    except Exception:
+        return "sim"
+
+
+def _candles_for_instrument(instrument: str, bars: int = 80) -> list[dict]:
+    """Read recent 5-min OHLC bars from Redis for the given instrument.
+
+    Redis key candidates (tried in order):
+      live:ohlc_sorted:{instrument}:5min
+      ohlc_sorted:{instrument}:5min
+      live:ohlc_sorted:{instrument}:5m
+    Returns a list of {t, o, h, l, c, v} dicts, oldest-first.
+    """
+    import json as _json
+    host = os.getenv("REDIS_HOST", "localhost")
+    port = int(os.getenv("REDIS_PORT", "6379"))
+    try:
+        r = _redis_lib.Redis(host=host, port=port, db=0, socket_timeout=2, decode_responses=True)
+        keys = [
+            f"live:ohlc_sorted:{instrument}:5min",
+            f"ohlc_sorted:{instrument}:5min",
+            f"live:ohlc_sorted:{instrument}:5m",
+        ]
+        for key in keys:
+            entries = r.zrange(key, -bars, -1)
+            if entries:
+                result = []
+                for raw in entries:
+                    try:
+                        result.append(_json.loads(raw))
+                    except Exception:
+                        continue
+                return result
+    except Exception:
+        pass
+    return []
 
 
 class InstrumentsRouter:
@@ -232,6 +284,7 @@ class InstrumentsRouter:
         router = APIRouter(tags=["instruments"])
         router.add_api_route("/api/instruments", self.get_instruments, methods=["GET"])
         router.add_api_route("/api/instruments/{instrument}", self.get_instrument, methods=["GET"])
+        router.add_api_route("/api/candles", self.get_candles, methods=["GET"])
         self.router = router
 
     async def get_instruments(self) -> list[dict[str, Any]]:
@@ -240,6 +293,9 @@ class InstrumentsRouter:
     async def get_instrument(self, instrument: str) -> dict[str, Any]:
         status = _build_instrument_status(instrument.upper())
         return status
+
+    async def get_candles(self, instrument: str = "BANKNIFTY", bars: int = 80) -> list[dict[str, Any]]:
+        return _candles_for_instrument(instrument.upper(), bars)
 
 
 def _build_all_statuses() -> list[dict[str, Any]]:
@@ -269,7 +325,8 @@ def _build_instrument_status(instrument: str) -> dict[str, Any]:
 
 def _build_one(instrument: str, db: Any, r: Any, now: datetime, today: str) -> dict[str, Any]:
     mode = _instrument_mode(instrument)
-    models = _model_loaded("live") if instrument == "BANKNIFTY" else {"entry": False, "direction": False}
+    run_dir_mode = "live_nifty" if instrument == "NIFTY" else "live"
+    models = _model_loaded(run_dir_mode, instrument)
     feed_age = _feed_last_tick_age_sec(r, instrument)
     stats = _today_stats(db, instrument, today) if db is not None else {"today_trades": 0, "today_pnl_pct": 0.0}
     regime = _latest_regime(db, instrument, today) if db is not None else None

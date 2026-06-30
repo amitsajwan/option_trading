@@ -101,6 +101,30 @@
   font-weight: 600;
 }
 
+/* ── Mini price chart ───────────────────────────────────────────────────── */
+.mi-minichart-wrap {
+  position: relative;
+  margin: 6px 0 10px;
+  border-radius: var(--r-2, 6px);
+  overflow: hidden;
+  background: rgba(0,0,0,0.03);
+}
+
+.body.app-dark .mi-minichart-wrap {
+  background: rgba(255,255,255,0.03);
+}
+
+.mi-minichart {
+  display: block;
+}
+
+.mi-minichart-empty {
+  font-size: 10px;
+  color: var(--ink-3, #8899aa);
+  text-align: center;
+  padding: 8px 0;
+}
+
 /* ── Panels grid ────────────────────────────────────────────────────────── */
 .mi-panels-grid {
   display: grid;

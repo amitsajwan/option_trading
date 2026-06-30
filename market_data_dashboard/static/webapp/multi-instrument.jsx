@@ -1,6 +1,6 @@
 // multi-instrument.jsx — Multi-Instrument Strategy Dashboard (Stories S1–S6)
 // Consumes the backend-team instrument-aware routes registered in app.py.
-/* global React, TradingCore, echarts */
+/* global React, TradingCore, echarts, LightweightCharts */
 const { useState: _s, useEffect: _e, useRef: _r, useCallback: _cb } = React;
 const TC = window.TradingCore;
 
@@ -31,6 +31,79 @@ function _tsShort(ts) {
   return ts.length >= 16 ? ts.slice(11, 16) : ts;
 }
 
+// ── Mini Price Chart (LightweightCharts line) ───────────────────────────────
+function MiniPriceChart({ instrument }) {
+  const LWC = window.LightweightCharts;
+  const containerRef = _r(null);
+  const chartRef = _r(null);
+  const seriesRef = _r(null);
+  const [error, setError] = _s(null);
+
+  // Init chart once
+  _e(() => {
+    if (!LWC || !containerRef.current) return;
+    const cs = getComputedStyle(document.documentElement);
+    const get = v => cs.getPropertyValue(v).trim();
+    const chart = LWC.createChart(containerRef.current, {
+      layout: { background: { type: 'solid', color: 'transparent' }, textColor: get('--fg-3') || '#8899aa', fontSize: 9 },
+      grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
+      crosshair: { mode: LWC.CrosshairMode.Magnet },
+      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.1, bottom: 0.1 } },
+      timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
+      handleWheelMove: false,
+      handleScroll: false,
+    });
+    chartRef.current = chart;
+    seriesRef.current = chart.addLineSeries({
+      color: '#5a9fff',
+      lineWidth: 1.5,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+    });
+    const ro = new ResizeObserver(() => {
+      if (containerRef.current && chartRef.current) {
+        const { width, height } = containerRef.current.getBoundingClientRect();
+        chartRef.current.resize(width, Math.max(80, height));
+      }
+    });
+    ro.observe(containerRef.current);
+    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; seriesRef.current = null; };
+  }, []);
+
+  // Load candles and update series
+  _e(() => {
+    if (!seriesRef.current) return;
+    const IST_SEC = 19800;
+    fetch(`/api/candles?instrument=${instrument}&bars=80`)
+      .then(r => r.ok ? r.json() : [])
+      .then(bars => {
+        if (!seriesRef.current || !Array.isArray(bars) || bars.length === 0) return;
+        // normalise field names: t (ms epoch) or time, c or close
+        const data = bars
+          .map(b => {
+            const tMs = b.t || b.time || b.timestamp_ms;
+            const close = b.c || b.close || b.ltp;
+            if (!tMs || close == null) return null;
+            return { time: Math.floor(tMs / 1000) + IST_SEC, value: close };
+          })
+          .filter(Boolean);
+        if (data.length > 0) {
+          seriesRef.current.setData(data);
+          chartRef.current && chartRef.current.timeScale().fitContent();
+          setError(null);
+        }
+      })
+      .catch(() => setError('no data'));
+  }, [instrument]);
+
+  if (!LWC) return React.createElement('div', { className: 'mi-minichart-empty' }, 'chart unavailable');
+  return React.createElement('div', { className: 'mi-minichart-wrap' },
+    React.createElement('div', { ref: containerRef, className: 'mi-minichart', style: { width: '100%', height: 90 } }),
+    error && React.createElement('div', { className: 'mi-minichart-empty' }, error),
+  );
+}
+
 // ── S1: Instrument Switcher + Status Bar ───────────────────────────────────
 function ModeBadge({ mode }) {
   const cls = mode === 'live' ? 'mi-mode-live' : mode === 'sim' ? 'mi-mode-sim' : 'mi-mode-off';
@@ -53,6 +126,7 @@ function InstrumentSwitcher({ instruments, selected, onSelect }) {
           React.createElement('span', { className: 'mi-inst-id' }, inst.id),
           React.createElement(ModeBadge, { mode: inst.mode }),
         ),
+        React.createElement(MiniPriceChart, { instrument: inst.id }),
         React.createElement('div', { className: 'mi-inst-grid' },
           React.createElement('div', { className: 'mi-kv' },
             React.createElement('span', { className: 'mi-k' }, 'Models'),
