@@ -292,8 +292,16 @@ def _candles_for_instrument(instrument: str, bars: int = 80) -> list[dict]:
             found = []
             for k in r.scan_iter(pattern, count=10):
                 found.append(k)
-            # prefer most recent (longest symbol = current expiry usually)
-            for k in sorted(found, reverse=True):
+            if not found:
+                continue
+            # Sort by latest bar timestamp (max score) so current-expiry key wins
+            def _max_score(k):
+                try:
+                    res = r.zrange(k, -1, -1, withscores=True)
+                    return res[0][1] if res else 0.0
+                except Exception:
+                    return 0.0
+            for k in sorted(found, key=_max_score, reverse=True):
                 result = _read_key(r, k)
                 if result:
                     return result
