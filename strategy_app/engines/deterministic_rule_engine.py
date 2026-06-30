@@ -819,6 +819,31 @@ class DeterministicRuleEngine(StrategyEngine):
 
         if best_vote is None:
             return None
+
+        # Trailing-active guard: when the trade is above the trailing-activation
+        # threshold (MFE >= EXIT_TRAILING_ACTIVATION_PCT), strategy-level exits
+        # (e.g. MAX_PAIN_REACHED, PREV_DAY_LEVEL) interrupt the trail unnecessarily.
+        # Suppress them — let the trail manage the exit — unless the vote is a hard
+        # stop or regime shift (safety exits that must always fire).
+        # Gated by EXIT_TRAIL_GUARD_ENABLED (default 1 = on).
+        _trail_guard = str(os.getenv("EXIT_TRAIL_GUARD_ENABLED", "1")).strip().lower() not in ("0","false","no","off")
+        if _trail_guard and position is not None:
+            try:
+                _activation = float(os.getenv("EXIT_TRAILING_ACTIVATION_PCT", "0.05") or "0.05")
+                _vote_reason = best_vote.exit_reason or ExitReason.STRATEGY_EXIT
+                _hard_reasons = {ExitReason.STOP_LOSS, ExitReason.REGIME_SHIFT, ExitReason.TIME_STOP}
+                if (position.mfe_pct >= _activation
+                        and _vote_reason not in _hard_reasons):
+                    logger.info(
+                        "trail_guard: suppressing strategy EXIT vote %s (reason=%s mfe=%.3f >= activation=%.3f) — trail manages exit",
+                        best_vote.strategy_name, _vote_reason, position.mfe_pct, _activation,
+                    )
+                    best_vote = None
+            except Exception:
+                pass
+        if best_vote is None:
+            return None
+
         if self._should_defer_regime_shift_exit(position, best_vote):
             non_regime_votes = [
                 vote for vote in all_exit_votes

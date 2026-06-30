@@ -21,3 +21,12 @@ def _exit_stack_isolation():
         os.environ.pop("EXIT_POLICY_STACK_ENABLED", None)
     else:
         os.environ["EXIT_POLICY_STACK_ENABLED"] = prev
+
+
+@pytest.fixture(autouse=True)
+def _clear_instrument_env(monkeypatch):
+    """Reset instrument-scoped env vars so tests don't leak STRATEGY_INSTRUMENT
+    or STRATEGY_LOT_SIZE into one another (e.g. a NIFTY test leaving lot_size=75
+    and breaking a later BankNifty test)."""
+    monkeypatch.delenv("STRATEGY_INSTRUMENT", raising=False)
+    monkeypatch.delenv("STRATEGY_LOT_SIZE", raising=False)

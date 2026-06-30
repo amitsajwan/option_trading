@@ -11,6 +11,10 @@ from typing import Optional
 # market_snapshot.py, which already reads this same env var). NSE lot size for
 # BANKNIFTY is 30 as of 2026; default stays 15 to preserve existing replays/tests.
 BANKNIFTY_LOT_SIZE = int(os.getenv("BANKNIFTY_LOT_SIZE") or "15")
+# NSE changes NIFTY lot size periodically (was 75, changed to 25 in late 2024).
+# The execution adapter reads the authoritative value per-expiry from scrip master;
+# this env var is used for risk-sizing and warnings. Set NIFTY_LOT_SIZE in .env.
+NIFTY_LOT_SIZE = int(os.getenv("NIFTY_LOT_SIZE") or "25")
 
 
 def resolve_lot_size(instrument: Optional[str] = None, *, primary_default: Optional[int] = None) -> int:
@@ -22,7 +26,9 @@ def resolve_lot_size(instrument: Optional[str] = None, *, primary_default: Optio
          (lets each call site keep its own historical BankNifty default — 15 for
          replay-era cost math, 30 for the live cost model), otherwise the legacy
          ``BANKNIFTY_LOT_SIZE`` constant (default 15, env-overridable).
-      3. Otherwise: the InstrumentSpec registry (NIFTY=75, ...).
+      3. NIFTY: ``NIFTY_LOT_SIZE`` env (default 25) — NSE changes lot size per
+         expiry; the execution adapter uses the scrip master for actual orders.
+      4. Otherwise: the InstrumentSpec registry fallback.
 
     ``instrument`` defaults to STRATEGY_INSTRUMENT via current_instrument().
     """
@@ -41,6 +47,9 @@ def resolve_lot_size(instrument: Optional[str] = None, *, primary_default: Optio
     if inst == "BANKNIFTY":
         # Preserve each call site's legacy BankNifty default.
         return primary_default if primary_default is not None else BANKNIFTY_LOT_SIZE
+    if inst == "NIFTY":
+        # NIFTY_LOT_SIZE env wins over registry (NSE revises per-expiry).
+        return NIFTY_LOT_SIZE
     try:
         return int(get_instrument(inst).lot_size)
     except Exception:

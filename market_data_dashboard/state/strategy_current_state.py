@@ -26,6 +26,7 @@ from typing import Any, Iterable, Optional
 
 DEFAULT_HISTORICAL_RUN_DIR = Path("/app/.run/strategy_app_historical")
 DEFAULT_LIVE_RUN_DIR = Path("/app/.run/strategy_app")
+DEFAULT_LIVE_NIFTY_RUN_DIR = Path("/app/.run/strategy_app_nifty")
 DEFAULT_PUBLISHED_MODELS_ROOT = Path("/app/ml_pipeline_2/artifacts/published_models")
 
 
@@ -50,12 +51,15 @@ def _resolve_run_dir(mode: str) -> Path:
     """Return the on-disk run_dir for the given mode.
 
     Order of precedence:
-      1. Explicit env override (`STRATEGY_RUN_DIR_LIVE` / `STRATEGY_RUN_DIR_HISTORICAL`)
+      1. Explicit env override (`STRATEGY_RUN_DIR_LIVE` / `STRATEGY_RUN_DIR_HISTORICAL`
+         / `STRATEGY_RUN_DIR_LIVE_NIFTY`)
       2. Default by mode
     """
     mode = mode.strip().lower()
     if mode in {"historical", "replay"}:
         return Path(os.getenv("STRATEGY_RUN_DIR_HISTORICAL") or DEFAULT_HISTORICAL_RUN_DIR)
+    if mode in {"live_nifty", "nifty"}:
+        return Path(os.getenv("STRATEGY_RUN_DIR_LIVE_NIFTY") or DEFAULT_LIVE_NIFTY_RUN_DIR)
     return Path(os.getenv("STRATEGY_RUN_DIR_LIVE") or DEFAULT_LIVE_RUN_DIR)
 
 

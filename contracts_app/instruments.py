@@ -53,6 +53,10 @@ INSTRUMENTS: Dict[str, InstrumentSpec] = {
     "NIFTY": InstrumentSpec(
         name="NIFTY",
         index_security_id="13",   # ~24,000 in Jun 2026
+        # NOTE: NSE changed NIFTY lot size from 75 → 25 in late 2024. This static
+        # value is retained for historical training data (pre-2025 replays used 75).
+        # Live runtime uses NIFTY_LOT_SIZE env var via strategy_app.constants.resolve_lot_size().
+        # Execution adapter reads the authoritative per-expiry value from Dhan scrip master.
         lot_size=75,
         strike_step=50,
         expiry_cadence="weekly",   # NIFTY weeklies still listed

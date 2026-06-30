@@ -59,6 +59,11 @@ exit:
     thesis_fail_min_mfe: 0.03
     timestop_bars: 90
     momentum_flip: 1.0
+  giveback:
+    enabled: false
+    min_mfe: 0.03
+    scalper_pct: 0.09
+    lottery_pct: 0.15
 strike:
   policy: otm
   smart_strike_enabled: true
