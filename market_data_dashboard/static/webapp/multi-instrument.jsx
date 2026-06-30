@@ -83,16 +83,20 @@ function MiniPriceChart({ instrument }) {
           return;
         }
         // Bars from ingestion have: start_at (ISO string), open, high, low, close
-        const data = bars
-          .map(b => {
-            const iso = b.start_at || b.time || b.timestamp;
-            const close = b.close || b.c || b.ltp;
-            if (!iso || close == null) return null;
-            const utcMs = new Date(iso).getTime();
-            if (!isFinite(utcMs)) return null;
-            return { time: Math.floor(utcMs / 1000) + IST_SEC, value: Number(close) };
-          })
-          .filter(Boolean)
+        // Deduplicate by time (ingestion writes multiple sub-minute entries per bar);
+        // LWC requires strictly increasing unique timestamps or setData renders nothing.
+        const seen = new Map();
+        for (const b of bars) {
+          const iso = b.start_at || b.time || b.timestamp;
+          const close = b.close || b.c || b.ltp;
+          if (!iso || close == null) continue;
+          const utcMs = new Date(iso).getTime();
+          if (!isFinite(utcMs)) continue;
+          const tSec = Math.floor(utcMs / 1000) + IST_SEC;
+          seen.set(tSec, Number(close)); // last write wins (newest value per bar)
+        }
+        const data = Array.from(seen.entries())
+          .map(([time, value]) => ({ time, value }))
           .sort((a, b) => a.time - b.time);
         if (data.length > 0) {
           seriesRef.current.setData(data);
