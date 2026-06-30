@@ -13,7 +13,6 @@ body.live-terminal #app-shell {
   overflow: hidden;
   display: block;
 }
-body.live-terminal .topnav             { display: none !important; }
 body.live-terminal #kill-banner-slot   { display: none !important; }
 body.live-terminal #page {
   padding: 0 !important;
