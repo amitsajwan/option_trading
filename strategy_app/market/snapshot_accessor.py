@@ -120,13 +120,27 @@ class SnapshotAccessor:
 
     @property
     def days_to_expiry(self) -> Optional[int]:
-        return self._i(self._sc.get("days_to_expiry")) or self._i(self._payload.get("ctx_dte_days"))
+        val = self._i(self._sc.get("days_to_expiry"))
+        if val is not None:
+            return val
+        return self._i(self._payload.get("ctx_dte_days"))
 
     @property
     def is_expiry_day(self) -> bool:
-        if "is_expiry_day" in self._sc:
-            return self._b(self._sc.get("is_expiry_day"))
-        return self._b(self._payload.get("ctx_is_expiry_day"))
+        # Explicit bool in session_context wins when set (not None).
+        sc_val = self._sc.get("is_expiry_day")
+        if sc_val is not None:
+            return self._b(sc_val)
+        # Payload-level fallback (training-pipeline field name).
+        payload_val = self._payload.get("ctx_is_expiry_day")
+        if payload_val is not None:
+            return self._b(payload_val)
+        # Final fallback: infer from days_to_expiry == 0 so that a live
+        # snapshot where is_expiry_day wasn't computed still routes correctly.
+        dte = self.days_to_expiry
+        if dte is not None:
+            return dte == 0
+        return False
 
     @property
     def ctx_is_high_vix_day(self) -> Optional[float]:
