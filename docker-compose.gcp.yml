@@ -1687,6 +1687,8 @@ services:
       ENTRY_ML_MODEL_PATH: "${NIFTY_ENTRY_ML_MODEL_PATH:-}"
       ENTRY_ML_MIN_PROB: "${NIFTY_ENTRY_ML_MIN_PROB:-0.05}"
       DIRECTION_ML_MODEL_PATH: "${NIFTY_DIRECTION_ML_MODEL_PATH:-}"
+      ENTRY_ML_MAX_NAN_FEATURES: "${NIFTY_ENTRY_ML_MAX_NAN_FEATURES:-${ENTRY_ML_MAX_NAN_FEATURES:-}}"
+      DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-}"
       ML_ENTRY_DIRECTION_MODE: "direction_ml"
       # NIFTY-specific sizing — NSE changes lot size per expiry; execution uses scrip master.
       # Set NIFTY_LOT_SIZE in .env to match the current front-month (25 since late 2024).
