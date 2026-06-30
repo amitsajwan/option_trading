@@ -89,6 +89,11 @@ def _build_feature_row(snap: SnapshotAccessor, features: list[str]) -> Optional[
         vel = snap.velocity_features
         if isinstance(vel, dict):
             flat.update(vel)
+        found = sum(1 for f in features if flat.get(f) is not None)
+        logger.debug(
+            "direction_ml_policy: feature extraction found=%d/%d features",
+            found, len(features),
+        )
         row = {}
         for f in features:
             val = flat.get(f)
@@ -99,7 +104,7 @@ def _build_feature_row(snap: SnapshotAccessor, features: list[str]) -> Optional[
             row[f] = fval
         return row
     except Exception:
-        logger.debug("direction_ml_policy: feature extraction failed", exc_info=True)
+        logger.warning("direction_ml_policy: feature extraction failed", exc_info=True)
         return None
 
 

@@ -346,7 +346,54 @@ def project_stage1_entry_view_v2(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def project_stage2_direction_view_v2(snapshot: dict[str, Any]) -> dict[str, Any]:
-    return _project_view(snapshot, "stage2_direction_view_v2")
+    out = _project_view(snapshot, "stage2_direction_view_v2")
+
+    # ── Alias resolution: fill model feature names from their live snapshot equivalents
+    # These features exist under different names in the live snapshot vs. the training
+    # pipeline (feature_engine.py used ctx_*/time_* prefixes). None of these overwrite
+    # an already-present non-null value (Non-NaN-wins).
+
+    sc = (snapshot.get("session_context") or {}) if isinstance(snapshot, dict) else {}
+    atm = (snapshot.get("atm_options") or {}) if isinstance(snapshot, dict) else {}
+    orb = (snapshot.get("opening_range") or {}) if isinstance(snapshot, dict) else {}
+
+    def _fill(key: str, value: Any) -> None:
+        if out.get(key) is None and value is not None:
+            out[key] = value
+
+    # dte_days ← session_context.days_to_expiry (name mismatch only)
+    _fill("dte_days", sc.get("days_to_expiry"))
+
+    # minute_index ← session_context.minutes_since_open (bar index from market open)
+    _fill("minute_index", sc.get("minutes_since_open"))
+
+    # minute_of_day ← absolute minute from snapshot timestamp
+    if out.get("minute_of_day") is None:
+        ts = snapshot.get("timestamp") if isinstance(snapshot, dict) else None
+        if ts:
+            try:
+                from datetime import datetime, timezone, timedelta
+                _IST = timezone(timedelta(hours=5, minutes=30))
+                dt = datetime.fromisoformat(str(ts)).astimezone(_IST)
+                out["minute_of_day"] = dt.hour * 60 + dt.minute
+            except Exception:
+                pass
+
+    # atm_iv ← mean(atm_ce_iv, atm_pe_iv) — both are present in atm_options
+    if out.get("atm_iv") is None:
+        ce_iv = atm.get("atm_ce_iv")
+        pe_iv = atm.get("atm_pe_iv")
+        if ce_iv is not None and pe_iv is not None:
+            try:
+                out["atm_iv"] = (float(ce_iv) + float(pe_iv)) / 2.0
+            except (TypeError, ValueError):
+                pass
+
+    # opening_range_breakout_up/down ← orh_broken/orl_broken (name mismatch only)
+    _fill("opening_range_breakout_up", orb.get("orh_broken"))
+    _fill("opening_range_breakout_down", orb.get("orl_broken"))
+
+    return out
 
 
 def project_stage3_recipe_view_v2(snapshot: dict[str, Any]) -> dict[str, Any]:
