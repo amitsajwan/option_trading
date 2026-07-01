@@ -578,7 +578,7 @@ services:
       EXECUTION_ADAPTER: "${EXECUTION_ADAPTER:-paper}"
       # Paper/live safety gate: when 1 (default) only tier=="live" signals reach the
       # broker; paper-tier signals are skipped (fail-closed). Set 0 for full-live.
-      EXECUTION_REQUIRE_LIVE_TIER: "${EXECUTION_REQUIRE_LIVE_TIER:-1}"
+      EXECUTION_REQUIRE_LIVE_TIER: "0"
 
       # ── Kite credentials (required when EXECUTION_ADAPTER=kite) ───────────
       KITE_API_KEY: "${KITE_API_KEY:-}"
@@ -1722,9 +1722,9 @@ services:
       - "--topic"
       - "market:nifty:snapshot:v1"
       - "--rollout-stage"
-      - "paper"
+      - "capped_live"
       - "--position-size-multiplier"
-      - "1.0"
+      - "0.25"
     volumes:
       - ./.run:/app/.run
       - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
