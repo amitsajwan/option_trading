@@ -1,0 +1,265 @@
+"""Mini HTTP server that impersonates ingestion_app for historical replay.
+
+Serves the three endpoints LiveMarketSnapshotBuilder calls:
+  GET /api/v1/ohlc/{symbol}?timeframe=1m&limit=N&order=asc
+  GET /api/v1/market/tick/{symbol}
+  GET /api/v1/options/chain/{symbol}
+
+The caller advances the bar pointer with set_bar(i), then calls
+LiveMarketSnapshotBuilder.build_snapshot() — which hits this server
+and gets data as-of bar i.  All computation (velocity, compression,
+VWAP, ORB, PCR rolling, IV ranks) runs inside snapshot_app exactly
+as it does live.  The only difference is source="dhan_replay" in the
+published event envelope.
+
+Usage:
+    raw = requests.get("http://ingestion_app:8004/api/v1/historical/day/BANKNIFTY?date=2026-06-29").json()
+    srv = DhanReplayIngestionServer(raw)
+    with srv:
+        builder = LiveMarketSnapshotBuilder(
+            instrument="BANKNIFTY",
+            market_api_base=srv.base_url,
+        )
+        for i in range(len(raw["index_bars"])):
+            srv.set_bar(i)
+            snapshot = builder.build_snapshot()
+            ...
+"""
+from __future__ import annotations
+
+import json
+import logging
+import math
+import socket
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse, parse_qs
+
+logger = logging.getLogger(__name__)
+
+_IST_OFFSET = "+05:30"
+
+
+def _f(v) -> Optional[float]:
+    try:
+        x = float(v)
+        return x if math.isfinite(x) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class DhanReplayIngestionServer:
+    """Context-manager wrapper around the mini HTTP server.
+
+    raw_data: dict returned by ingestion_app /api/v1/historical/day/{instrument}?date=...
+    """
+
+    def __init__(self, raw_data: Dict[str, Any]) -> None:
+        self._raw = raw_data
+        self._index_bars: List[Dict] = raw_data.get("index_bars") or []
+        self._vix_bars:   List[Dict] = raw_data.get("vix_bars")   or []
+        self._options:    Dict       = raw_data.get("options")     or {}
+        self._instrument: str = (raw_data.get("instrument") or "BANKNIFTY").upper()
+        self._step: int   = int(raw_data.get("step") or 100)
+        self._atm: Optional[int] = raw_data.get("atm_strike")
+        self._bar_idx: int = 0
+        self._lock = threading.Lock()
+        self._port = _free_port()
+        self._server: Optional[HTTPServer] = None
+        self._thread: Optional[threading.Thread] = None
+
+    # ── public interface ────────────────────────────────────────────────────
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self._port}"
+
+    def set_bar(self, idx: int) -> None:
+        with self._lock:
+            self._bar_idx = idx
+
+    def start(self) -> None:
+        handler = self._make_handler()
+        self._server = HTTPServer(("127.0.0.1", self._port), handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        logger.info("DhanReplayIngestionServer listening on %s", self.base_url)
+
+    def stop(self) -> None:
+        if self._server:
+            self._server.shutdown()
+            self._server = None
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *_):
+        self.stop()
+
+    # ── internal helpers ────────────────────────────────────────────────────
+
+    def _bars_up_to(self, idx: int) -> List[Dict]:
+        """Return index bars 0..idx (inclusive) normalized to start_at key."""
+        bars = []
+        for b in self._index_bars[:idx + 1]:
+            ts = b.get("ts") or b.get("start_at") or ""
+            bars.append({
+                "start_at":  ts,
+                "open":      _f(b.get("open")),
+                "high":      _f(b.get("high")),
+                "low":       _f(b.get("low")),
+                "close":     _f(b.get("close")),
+                "volume":    _f(b.get("volume")),
+                "instrument": self._instrument,
+                "timeframe":  "1m",
+            })
+        return bars
+
+    def _vix_at(self, idx: int) -> Optional[float]:
+        if idx < len(self._vix_bars):
+            return _f(self._vix_bars[idx].get("close"))
+        return None
+
+    def _option_chain_at(self, idx: int) -> Dict[str, Any]:
+        """Build an option chain dict from the options data at bar idx."""
+        bar = self._index_bars[idx] if idx < len(self._index_bars) else {}
+        spot = _f(bar.get("close") or bar.get("close")) or 0.0
+        ts = bar.get("ts") or bar.get("start_at") or ""
+
+        strikes = []
+        total_ce_oi = 0.0
+        total_pe_oi = 0.0
+
+        for label, sides in self._options.items():
+            # Derive offset
+            if label == "ATM":
+                offset = 0
+            elif label.startswith("ATMp"):
+                offset = int(label[4:])
+            elif label.startswith("ATMm"):
+                offset = -int(label[4:])
+            else:
+                continue
+
+            strike_price = (self._atm or round(spot / self._step) * self._step) + offset * self._step
+            ce_bars = sides.get("ce") or []
+            pe_bars = sides.get("pe") or []
+
+            ce_bar = ce_bars[idx] if idx < len(ce_bars) else {}
+            pe_bar = pe_bars[idx] if idx < len(pe_bars) else {}
+
+            ce_ltp  = _f(ce_bar.get("ce_close"))
+            pe_ltp  = _f(pe_bar.get("pe_close"))
+            ce_iv   = _f(ce_bar.get("ce_iv"))
+            pe_iv   = _f(pe_bar.get("pe_iv"))
+            ce_oi   = _f(ce_bar.get("ce_oi"))  or 0.0
+            pe_oi   = _f(pe_bar.get("pe_oi"))  or 0.0
+
+            total_ce_oi += ce_oi
+            total_pe_oi += pe_oi
+            strikes.append({
+                "strike":  strike_price,
+                "ce_ltp":  ce_ltp,
+                "ce_iv":   ce_iv,
+                "ce_oi":   ce_oi,
+                "pe_ltp":  pe_ltp,
+                "pe_iv":   pe_iv,
+                "pe_oi":   pe_oi,
+            })
+
+        pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else None
+
+        # max_pain: strike where total P&L of option sellers is maximised
+        max_pain_strike = None
+        max_pain_val = None
+        for sk in strikes:
+            s = sk["strike"]
+            val = sum(
+                max(0.0, float(other["strike"]) - float(s)) * float(other.get("ce_oi") or 0)
+                + max(0.0, float(s) - float(other["strike"])) * float(other.get("pe_oi") or 0)
+                for other in strikes
+            )
+            if max_pain_val is None or val < max_pain_val:
+                max_pain_val = val
+                max_pain_strike = s
+
+        return {
+            "spot":       spot,
+            "timestamp":  ts,
+            "pcr":        pcr,
+            "max_pain":   max_pain_strike,
+            "expiry":     None,
+            "strikes":    strikes,
+        }
+
+    # ── request handler factory ─────────────────────────────────────────────
+
+    def _make_handler(self):
+        server_self = self
+
+        class _Handler(BaseHTTPRequestHandler):
+            def log_message(self, fmt, *args):
+                pass  # suppress access logs
+
+            def _send_json(self, data, status=200):
+                body = json.dumps(data, default=str).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                parsed = urlparse(self.path)
+                path = parsed.path.rstrip("/")
+                qs = parse_qs(parsed.query)
+
+                with server_self._lock:
+                    idx = server_self._bar_idx
+
+                # GET /api/v1/ohlc/{symbol} or /api/v1/market/ohlc/{symbol}
+                if "/ohlc/" in path:
+                    limit_str = (qs.get("limit") or ["1800"])[0]
+                    try:
+                        limit = int(limit_str)
+                    except ValueError:
+                        limit = 1800
+                    bars = server_self._bars_up_to(idx)
+                    if limit > 0:
+                        bars = bars[-limit:]
+                    order = (qs.get("order") or ["asc"])[0]
+                    if order == "desc":
+                        bars = list(reversed(bars))
+                    self._send_json(bars)
+                    return
+
+                # GET /api/v1/market/tick/{symbol}
+                if "/market/tick/" in path:
+                    sym = path.split("/market/tick/")[-1].upper()
+                    if "VIX" in sym:
+                        vix = server_self._vix_at(idx)
+                        self._send_json({"last_price": vix, "symbol": sym})
+                    else:
+                        bar = server_self._index_bars[idx] if idx < len(server_self._index_bars) else {}
+                        close = _f(bar.get("close") or bar.get("close"))
+                        self._send_json({"last_price": close, "symbol": sym})
+                    return
+
+                # GET /api/v1/options/chain/{symbol}
+                if "/options/chain/" in path or "/option-chain/" in path:
+                    chain = server_self._option_chain_at(idx)
+                    self._send_json(chain)
+                    return
+
+                # Health / unknown
+                self._send_json({"status": "replay"})
+
+        return _Handler

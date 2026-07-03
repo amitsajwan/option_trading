@@ -62,39 +62,43 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
         logger.info("[%s] %s: %s", run_id[:8], step, msg)
 
     try:
-        # ── Step 1: Fetch from Dhan ──────────────────────────────────────────
-        _progress("fetching", f"Fetching {instrument} {date} from Dhan API...")
+        # ── Step 1: Fetch raw historical data from ingestion_app ─────────────
+        _progress("fetching", f"Fetching {instrument} {date} from Dhan via ingestion_app…")
         job["status"] = "running"
 
         from market_data_dashboard.services.dhan_replay_fetcher import DhanHistoricalFetcher
         fetcher = DhanHistoricalFetcher(progress_cb=_progress)
         raw = fetcher.fetch_day(instrument, date)
 
-        n_bars = len(raw.get("index_bars", []))
+        index_bars = raw.get("index_bars") or []
+        n_bars = len(index_bars)
+        if n_bars == 0:
+            raise RuntimeError(f"No index bars for {instrument} {date} — check ingestion_app logs")
+
         n_opts = sum(
             len(sides.get("ce", [])) + len(sides.get("pe", []))
-            for sides in raw.get("options", {}).values()
+            for sides in (raw.get("options") or {}).values()
         )
         job["fetch_bars"] = n_bars
         job["fetch_option_bars"] = n_opts
-        _progress("building", f"Fetched {n_bars} index bars, {n_opts} option bars. Building snapshots...")
+        _progress("building", f"Fetched {n_bars} bars + {n_opts} option bars. Starting LiveMarketSnapshotBuilder…")
 
-        # ── Step 2: Build snapshots ──────────────────────────────────────────
-        from market_data_dashboard.services.dhan_replay_builder import build_snapshots_from_dhan_data
-        snapshots = build_snapshots_from_dhan_data(raw, progress_cb=_progress)
-        job["snapshot_count"] = len(snapshots)
-        _progress("replaying", f"Built {len(snapshots)} snapshots. Streaming to live topic...")
-
-        # ── Step 3: Publish to Redis live topic ──────────────────────────────
-        import redis as redis_lib
+        # ── Step 2: Run through snapshot_app's LiveMarketSnapshotBuilder ─────
+        # Spin up a mini HTTP server serving historical data bar-by-bar.
+        # LiveMarketSnapshotBuilder calls this server exactly as it calls
+        # ingestion_app in live — so ALL computed features are identical.
+        from market_data_dashboard.services.dhan_replay_ingestion_server import DhanReplayIngestionServer
+        from snapshot_app.core.market_snapshot import LiveMarketSnapshotBuilder
         from contracts_app import build_snapshot_event
 
+        # Resolve live topic by instrument (matches what strategy_app subscribes to)
         topic = (
-            f"market:nifty:snapshot:v1"
+            "market:nifty:snapshot:v1"
             if instrument.upper() == "NIFTY"
             else "market:snapshot:v1"
         )
 
+        import redis as redis_lib
         r = redis_lib.Redis(
             host=os.getenv("REDIS_HOST", "redis"),
             port=int(os.getenv("REDIS_PORT", "6379")),
@@ -104,33 +108,52 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
 
         interval = 60.0 / max(1.0, float(speed))  # seconds per bar
         emitted = 0
-        job["total"] = len(snapshots)
+        last_snapshot_id = None
+        job["total"] = n_bars
         job["emitted"] = 0
 
-        for snap in snapshots:
-            if job.get("cancelled"):
-                _progress("cancelled", "Replay cancelled by user")
-                job["status"] = "cancelled"
-                return
-
-            event = build_snapshot_event(
-                snapshot=snap,
-                source="dhan_replay",
-                metadata={"run_id": run_id, "replay_date": date},
+        with DhanReplayIngestionServer(raw) as srv:
+            builder = LiveMarketSnapshotBuilder(
+                instrument=f"{instrument.upper()}FUT",  # match live instrument symbol format
+                market_api_base=srv.base_url,
+                dashboard_api_base=None,
             )
-            r.publish(topic, json.dumps(event))
-            emitted += 1
-            job["emitted"] = emitted
 
-            if emitted % 50 == 0:
-                _progress("replaying",
-                    f"Published {emitted}/{len(snapshots)} bars to {topic}")
+            for i, _ in enumerate(index_bars):
+                if job.get("cancelled"):
+                    _progress("cancelled", "Replay cancelled by user")
+                    return
 
-            if interval > 0.01:
-                time.sleep(interval)
+                srv.set_bar(i)
+
+                try:
+                    snapshot = builder.build_snapshot(ohlc_limit=i + 5)
+                except Exception as exc:
+                    logger.warning("[%s] build_snapshot bar=%d failed: %s", run_id[:8], i, exc)
+                    continue
+
+                snapshot_id = str(snapshot.get("snapshot_id") or "")
+                if snapshot_id == last_snapshot_id:
+                    continue
+                last_snapshot_id = snapshot_id
+
+                event = build_snapshot_event(
+                    snapshot=snapshot,
+                    source="dhan_replay",
+                    metadata={"run_id": run_id, "replay_date": date, "bar_index": i},
+                )
+                r.publish(topic, json.dumps(event))
+                emitted += 1
+                job["emitted"] = emitted
+
+                if emitted % 50 == 0 or i == n_bars - 1:
+                    _progress("replaying",
+                        f"Processed {i+1}/{n_bars} bars — published {emitted} snapshots to {topic}")
+
+                if interval > 0.01:
+                    time.sleep(interval)
 
         _progress("done", f"Replay complete — {emitted} snapshots published to {topic}")
-        job["status"] = "done"
         job["completed_at"] = datetime.now(tz=_IST).isoformat()
 
     except Exception as exc:
