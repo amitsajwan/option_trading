@@ -61,7 +61,8 @@ class DhanReplayIngestionServer:
     raw_data: dict returned by ingestion_app /api/v1/historical/day/{instrument}?date=...
     """
 
-    def __init__(self, raw_data: Dict[str, Any]) -> None:
+    def __init__(self, raw_data: Dict[str, Any],
+                 prev_day_bars: Optional[List[Dict]] = None) -> None:
         self._raw = raw_data
         self._index_bars: List[Dict] = raw_data.get("index_bars") or []
         self._vix_bars:   List[Dict] = raw_data.get("vix_bars")   or []
@@ -69,6 +70,8 @@ class DhanReplayIngestionServer:
         self._instrument: str = (raw_data.get("instrument") or "BANKNIFTY").upper()
         self._step: int   = int(raw_data.get("step") or 100)
         self._atm: Optional[int] = raw_data.get("atm_strike")
+        # Previous trading day's bars — prepended to OHLC so ctx_gap_* features compute
+        self._prev_day_bars: List[Dict] = prev_day_bars or []
         self._bar_idx: int = 0
         self._lock = threading.Lock()
         self._port = _free_port()
@@ -107,11 +110,12 @@ class DhanReplayIngestionServer:
     # ── internal helpers ────────────────────────────────────────────────────
 
     def _bars_up_to(self, idx: int) -> List[Dict]:
-        """Return index bars 0..idx (inclusive) normalized to start_at key."""
-        bars = []
-        for b in self._index_bars[:idx + 1]:
+        """Return prev-day bars + today's bars 0..idx, normalized to start_at key."""
+        result = []
+        # Prepend yesterday's bars so ctx_gap_* features can be computed
+        for b in self._prev_day_bars:
             ts = b.get("ts") or b.get("start_at") or ""
-            bars.append({
+            result.append({
                 "start_at":  ts,
                 "open":      _f(b.get("open")),
                 "high":      _f(b.get("high")),
@@ -121,7 +125,19 @@ class DhanReplayIngestionServer:
                 "instrument": self._instrument,
                 "timeframe":  "1m",
             })
-        return bars
+        for b in self._index_bars[:idx + 1]:
+            ts = b.get("ts") or b.get("start_at") or ""
+            result.append({
+                "start_at":  ts,
+                "open":      _f(b.get("open")),
+                "high":      _f(b.get("high")),
+                "low":       _f(b.get("low")),
+                "close":     _f(b.get("close")),
+                "volume":    _f(b.get("volume")),
+                "instrument": self._instrument,
+                "timeframe":  "1m",
+            })
+        return result
 
     def _vix_at(self, idx: int) -> Optional[float]:
         if idx < len(self._vix_bars):
@@ -156,23 +172,27 @@ class DhanReplayIngestionServer:
             ce_bar = ce_bars[idx] if idx < len(ce_bars) else {}
             pe_bar = pe_bars[idx] if idx < len(pe_bars) else {}
 
-            ce_ltp  = _f(ce_bar.get("ce_close"))
-            pe_ltp  = _f(pe_bar.get("pe_close"))
-            ce_iv   = _f(ce_bar.get("ce_iv"))
-            pe_iv   = _f(pe_bar.get("pe_iv"))
-            ce_oi   = _f(ce_bar.get("ce_oi"))  or 0.0
-            pe_oi   = _f(pe_bar.get("pe_oi"))  or 0.0
+            ce_ltp    = _f(ce_bar.get("ce_close"))
+            pe_ltp    = _f(pe_bar.get("pe_close"))
+            ce_iv     = _f(ce_bar.get("ce_iv"))
+            pe_iv     = _f(pe_bar.get("pe_iv"))
+            ce_oi     = _f(ce_bar.get("ce_oi"))     or 0.0
+            pe_oi     = _f(pe_bar.get("pe_oi"))     or 0.0
+            ce_volume = _f(ce_bar.get("ce_volume")) or 0.0
+            pe_volume = _f(pe_bar.get("pe_volume")) or 0.0
 
             total_ce_oi += ce_oi
             total_pe_oi += pe_oi
             strikes.append({
-                "strike":  strike_price,
-                "ce_ltp":  ce_ltp,
-                "ce_iv":   ce_iv,
-                "ce_oi":   ce_oi,
-                "pe_ltp":  pe_ltp,
-                "pe_iv":   pe_iv,
-                "pe_oi":   pe_oi,
+                "strike":    strike_price,
+                "ce_ltp":    ce_ltp,
+                "ce_iv":     ce_iv,
+                "ce_oi":     ce_oi,
+                "ce_volume": ce_volume,
+                "pe_ltp":    pe_ltp,
+                "pe_iv":     pe_iv,
+                "pe_oi":     pe_oi,
+                "pe_volume": pe_volume,
             })
 
         pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else None

@@ -83,6 +83,27 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
         job["fetch_option_bars"] = n_opts
         _progress("building", f"Fetched {n_bars} bars + {n_opts} option bars. Starting LiveMarketSnapshotBuilder…")
 
+        # ── Step 1b: Fetch previous trading day's bars (for ctx_gap features) ──
+        # ctx_am_gap_*, ctx_gap_* require yesterday's closing price.
+        # We fetch the previous calendar day's index bars from ingestion_app
+        # and prepend them so LiveMarketSnapshotBuilder can compute the gap.
+        prev_day_bars: list = []
+        try:
+            from market_data_dashboard.services.dhan_replay_fetcher import DhanHistoricalFetcher as _F
+            from datetime import datetime as _dt, timedelta as _td
+            prev_date = (_dt.strptime(date, "%Y-%m-%d") - _td(days=3)).strftime("%Y-%m-%d")
+            # go back up to 5 days to skip weekends/holidays
+            for _offset in range(1, 6):
+                _pd = (_dt.strptime(date, "%Y-%m-%d") - _td(days=_offset)).strftime("%Y-%m-%d")
+                _f2 = _F()
+                _raw2 = _f2.fetch_day(instrument, _pd, strikes=0)  # index only, no options
+                if _raw2.get("index_bars"):
+                    prev_day_bars = _raw2["index_bars"]
+                    _progress("building", f"Fetched {len(prev_day_bars)} prev-day bars ({_pd}) for gap features")
+                    break
+        except Exception as _pe:
+            logger.warning("could not fetch prev-day bars: %s — ctx_gap features will be NaN", _pe)
+
         # ── Step 2: Run through snapshot_app's LiveMarketSnapshotBuilder ─────
         # Spin up a mini HTTP server serving historical data bar-by-bar.
         # LiveMarketSnapshotBuilder calls this server exactly as it calls
@@ -112,7 +133,7 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
         job["total"] = n_bars
         job["emitted"] = 0
 
-        with DhanReplayIngestionServer(raw) as srv:
+        with DhanReplayIngestionServer(raw, prev_day_bars=prev_day_bars) as srv:
             builder = LiveMarketSnapshotBuilder(
                 instrument=f"{instrument.upper()}FUT",
                 market_api_base=srv.base_url,
