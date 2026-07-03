@@ -794,6 +794,31 @@ async def market_instruments() -> List[Dict[str, Any]]:
     return svc.list_instruments()
 
 
+# ── Historical data endpoints (for replay) ────────────────────────────────────
+# Dhan credentials stay in ingestion_app — dashboard must proxy through here.
+
+@app.get("/api/v1/historical/day/{instrument}")
+async def historical_day(
+    instrument: str,
+    date: str = Query(..., description="Trade date YYYY-MM-DD (e.g. 2026-07-01)"),
+    strikes: int = Query(default=5, ge=1, le=10, description="ATM±N strikes to fetch"),
+    interval: str = Query(default="1", description="Bar interval in minutes"),
+) -> Dict[str, Any]:
+    """Fetch a full trading day (index + VIX + options) for replay.
+
+    Returns the same dict structure as DhanHistoricalFetcher.fetch_day():
+        index_bars, vix_bars, futures_bars, options, atm_strike, step, instrument, trade_date
+
+    The dashboard calls this endpoint rather than Dhan directly.
+    """
+    return svc.get_historical_day(
+        instrument=instrument,
+        date=date,
+        atm_offsets=list(range(-strikes, strikes + 1)),
+        interval=int(interval),
+    )
+
+
 def run() -> None:
     host = str(os.getenv("INGESTION_API_HOST") or "0.0.0.0")
     port = int(os.getenv("INGESTION_API_PORT") or os.getenv("MARKET_DATA_API_PORT") or "8004")

@@ -27,7 +27,7 @@ import math
 import os
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, date as _date_type, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import redis
@@ -55,6 +55,7 @@ from .dhan_ws_feed import DhanWsFeed
 log = logging.getLogger("dhan_data_service")
 
 IST = timezone(timedelta(hours=5, minutes=30))
+_IST_TZ = IST  # alias used in get_ohlc date handling
 
 
 def _now_ist() -> datetime:
@@ -247,16 +248,27 @@ class DhanDataService:
 
     # ── get_ohlc ─────────────────────────────────────────────────────────────
 
-    def get_ohlc(self, instrument: str, timeframe: str, limit: int, order: str) -> List[Dict[str, Any]]:
+    def get_ohlc(self, instrument: str, timeframe: str, limit: int, order: str,
+                 date: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Fetch OHLC history for an instrument.
         Returns same shape as KiteDataService.get_ohlc() — list of bar dicts with start_at.
+        If `date` (YYYY-MM-DD) is provided, fetch exactly that historical date.
         """
         symbol_u = str(instrument or "").strip().upper()
         tf, minutes = _parse_interval(timeframe)
-        days_lookback = max(3, int(math.ceil((limit * max(1, minutes)) / 375.0)) + 3)
-        now  = _now_ist()
-        from_dt = now - timedelta(days=days_lookback)
+
+        if date:
+            # Historical date fetch: from 09:00 to 16:00 IST on that date
+            from_dt = datetime.strptime(date, "%Y-%m-%d").replace(
+                hour=9, minute=0, tzinfo=_IST_TZ)
+            to_dt = datetime.strptime(date, "%Y-%m-%d").replace(
+                hour=16, minute=0, tzinfo=_IST_TZ)
+        else:
+            days_lookback = max(3, int(math.ceil((limit * max(1, minutes)) / 375.0)) + 3)
+            now  = _now_ist()
+            from_dt = now - timedelta(days=days_lookback)
+            to_dt = now
 
         is_vix = "VIX" in symbol_u
         is_fut = symbol_u.endswith("FUT") or "FUT" in symbol_u
@@ -275,7 +287,7 @@ class DhanDataService:
                 exchange_segment=seg,
                 instrument=inst_type,
                 from_dt=from_dt,
-                to_dt=now,
+                to_dt=to_dt,
                 interval=1,
             )
         except Exception as e:
@@ -348,6 +360,136 @@ class DhanDataService:
             out.append({"symbol": configured, "exchange": "NSE_FNO"})
         out.append({"symbol": "INDIA VIX", "exchange": "IDX_I"})
         return out
+
+    def get_historical_day(
+        self,
+        instrument: str,
+        date: str,
+        atm_offsets: Optional[List[int]] = None,
+        interval: int = 1,
+    ) -> Dict[str, Any]:
+        """Fetch a full trading day from Dhan historical APIs.
+
+        Returns a dict matching the raw/ layout used by replay/builder:
+            index_bars    : list[dict]   — index OHLCV (1-min)
+            vix_bars      : list[dict]   — VIX OHLCV (1-min)
+            futures_bars  : list[dict]   — same as index_bars (proxy)
+            options       : dict[offset_label, {ce: [...], pe: [...]}]
+            atm_strike    : int
+            step          : int
+            instrument    : str
+            trade_date    : str
+
+        This is the ONLY method for historical data.  Dashboard must call the
+        corresponding ingestion_app endpoint so Dhan credentials never leave this
+        container.
+        """
+        if atm_offsets is None:
+            atm_offsets = list(range(-5, 6))
+
+        underlying = str(instrument or "").strip().upper()
+        try:
+            from contracts_app import get_instrument
+            spec = get_instrument(underlying)
+        except Exception:
+            spec = self._active_spec()
+
+        idx_sid = spec.index_security_id
+        step = spec.strike_step
+        idx_seg = "IDX_I"
+        fno_seg = "NSE_FNO"
+        vix_sid = "21"  # India VIX security id
+
+        from_dt = datetime.strptime(date, "%Y-%m-%d").replace(hour=9, minute=0, tzinfo=_IST_TZ)
+        to_dt   = datetime.strptime(date, "%Y-%m-%d").replace(hour=16, minute=0, tzinfo=_IST_TZ)
+
+        def _intraday_bars(sid: str, seg: str, inst_type: str) -> List[Dict]:
+            try:
+                return self._client.get_intraday_ohlc(
+                    security_id=sid, exchange_segment=seg,
+                    instrument=inst_type, from_dt=from_dt, to_dt=to_dt, interval=interval)
+            except Exception as exc:
+                log.warning("get_historical_day: intraday fetch %s failed: %s", sid, exc)
+                return []
+
+        def _rolling_option_bars(sid: str, strike: int, option_type: str) -> List[Dict]:
+            side = "ce" if option_type == "CALL" else "pe"
+            try:
+                resp = self._client._post("/charts/rollingoption", {
+                    "securityId": sid,
+                    "exchangeSegment": fno_seg,
+                    "instrument": "OPTIDX",
+                    "expiryCode": 1,
+                    "expiryFlag": "WEEK",
+                    "strike": int(strike),
+                    "drvOptionType": option_type,
+                    "requiredData": ["open", "high", "low", "close", "iv", "oi", "spot", "volume"],
+                    "fromDate": date,
+                    "toDate": date,
+                    "interval": str(interval),
+                })
+            except Exception as exc:
+                log.warning("get_historical_day: rollingoption %s %s failed: %s", strike, option_type, exc)
+                return []
+            data = (resp.get("data") or {}).get(side) or {}
+            ts_list = data.get("timestamp") or []
+            closes   = data.get("close")  or []
+            ivs      = data.get("iv")     or []
+            ois      = data.get("oi")     or []
+            volumes  = data.get("volume") or []
+            spots    = data.get("spot")   or []
+            bars = []
+            for i, ts in enumerate(ts_list):
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(IST)
+                bars.append({
+                    "ts": dt.isoformat(),
+                    f"{side}_close":  closes[i]  if i < len(closes)  else None,
+                    f"{side}_iv":     ivs[i]     if i < len(ivs)     else None,
+                    f"{side}_oi":     ois[i]     if i < len(ois)     else None,
+                    f"{side}_volume": volumes[i] if i < len(volumes) else None,
+                    "spot": spots[i] if i < len(spots) else None,
+                })
+            return bars
+
+        log.info("get_historical_day: %s %s — fetching index+VIX OHLC", underlying, date)
+        index_bars = _intraday_bars(idx_sid, idx_seg, "INDEX")
+        vix_bars   = _intraday_bars(vix_sid, idx_seg, "INDEX")
+        log.info("get_historical_day: index=%d vix=%d bars", len(index_bars), len(vix_bars))
+
+        # Derive ATM from mid-session index close
+        atm_strike: Optional[int] = None
+        if index_bars:
+            closes = [b.get("close") for b in index_bars if b.get("close")]
+            if closes:
+                open_close = closes[0]  # first bar = 9:15 open — anchors ATM for the full day
+                atm_strike = round(open_close / step) * step
+
+        # Fetch options
+        options: Dict[str, Dict[str, List]] = {}
+        if atm_strike is not None:
+            total = len(atm_offsets) * 2
+            done = 0
+            for offset in atm_offsets:
+                strike = atm_strike + offset * step
+                label = ("ATM" if offset == 0
+                         else f"ATMp{offset}" if offset > 0
+                         else f"ATMm{abs(offset)}")
+                options[label] = {}
+                for ot, side in [("CALL", "ce"), ("PUT", "pe")]:
+                    done += 1
+                    log.info("get_historical_day: %s %s %s (%d/%d)", underlying, label, ot, done, total)
+                    options[label][side] = _rolling_option_bars(idx_sid, strike, ot)
+
+        return {
+            "instrument": underlying,
+            "trade_date": date,
+            "index_bars": index_bars,
+            "futures_bars": index_bars,
+            "vix_bars": vix_bars,
+            "options": options,
+            "atm_strike": atm_strike,
+            "step": step,
+        }
 
     # Alias — api_service routes call get_options_chain (with 's')
     def get_options_chain(self, instrument: str) -> Dict[str, Any]:

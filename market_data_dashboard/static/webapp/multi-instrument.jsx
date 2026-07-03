@@ -422,6 +422,12 @@ function DecisionTraceViewer({ instrument }) {
                 onClick: () => setExpandedRow(expandedRow === i ? null : i),
               },
                 React.createElement('span', { className: 'mi-sig-time' }, _tsShort(sig.ts)),
+                React.createElement('span', {
+                  className: `mi-sig-inst mi-inst-${(sig.instrument || 'BN').replace('BANKNIFTY','BN').replace('NIFTY','NF').toLowerCase()}`,
+                }, (sig.instrument || '').replace('BANKNIFTY','BN').replace('NIFTY','NF') || instrument.replace('BANKNIFTY','BN').replace('NIFTY','NF')),
+                React.createElement('span', {
+                  className: `mi-sig-source ${(sig.run_id || '').startsWith('replay-') ? 'mi-source-replay' : 'mi-source-live'}`,
+                }, (sig.run_id || '').startsWith('replay-') ? 'REPLAY' : 'LIVE'),
                 React.createElement('span', { className: 'mi-sig-prob' }, `p=${_fmtNum(sig.entry_prob, 3)}`),
                 React.createElement('span', { className: 'mi-sig-dir' }, sig.direction || '—'),
                 React.createElement('span', { className: 'mi-sig-conf' }, `conf=${_fmtNum(sig.direction_conf, 3)}`),

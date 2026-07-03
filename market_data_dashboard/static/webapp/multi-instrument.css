@@ -331,6 +331,20 @@
 }
 
 .mi-sig-time { width: 40px; color: var(--ink-3, #8899aa); }
+.mi-sig-inst {
+  font-size: 10px; font-weight: 700; padding: 1px 5px;
+  border-radius: 3px; letter-spacing: 0.4px;
+}
+.mi-inst-bn  { background: rgba(90,159,255,0.15); color: #3a7fd4; }
+.mi-inst-nf  { background: rgba(10,143,92,0.13);  color: #0a8f5c; }
+
+.mi-sig-source {
+  font-size: 10px; font-weight: 700; padding: 1px 5px;
+  border-radius: 3px; letter-spacing: 0.4px;
+}
+.mi-source-live   { background: rgba(10,143,92,0.10);   color: #0a8f5c; }
+.mi-source-replay { background: rgba(200,150,20,0.15);  color: #b08010; }
+
 .mi-sig-prob { width: 70px; }
 .mi-sig-dir  { width: 30px; font-weight: 600; }
 .mi-sig-conf { width: 70px; color: var(--ink-3, #8899aa); }
