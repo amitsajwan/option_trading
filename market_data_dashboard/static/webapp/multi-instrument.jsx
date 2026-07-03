@@ -557,6 +557,123 @@ function TradePnLTimeline({ instrument }) {
   );
 }
 
+// ── Replay Panel ────────────────────────────────────────────────────────────
+function ReplayPanel({ instrument }) {
+  const [date, setDate] = _s(() => {
+    const d = new Date(); d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0,10);
+  });
+  const [speed, setSpeed] = _s(300);
+  const [run, setRun] = _s(null);
+  const [error, setError] = _s(null);
+  const [runs, setRuns] = _s([]);
+
+  // Poll current run status
+  _e(() => {
+    if (!run || run.status === 'done' || run.status === 'error' || run.status === 'cancelled') return;
+    const id = setInterval(() => {
+      _fetchJSON(`/api/replay/${run.run_id}`)
+        .then(r => setRun(r))
+        .catch(() => {});
+    }, 1500);
+    return () => clearInterval(id);
+  }, [run]);
+
+  // Load recent runs
+  const loadRuns = _cb(() => {
+    _fetchJSON(`/api/replay/runs?instrument=${instrument}&limit=8`)
+      .then(r => setRuns(r)).catch(() => {});
+  }, [instrument]);
+
+  _e(() => { loadRuns(); }, [loadRuns]);
+
+  const startReplay = () => {
+    setError(null);
+    setRun(null);
+    fetch('/api/replay/start', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ date, instrument, speed: parseFloat(speed) }),
+    })
+    .then(r => r.json())
+    .then(r => { if (r.run_id) setRun(r); else setError(r.detail || 'Failed'); loadRuns(); })
+    .catch(e => setError(e.message));
+  };
+
+  const cancelReplay = () => {
+    if (!run) return;
+    fetch(`/api/replay/${run.run_id}`, { method: 'DELETE' })
+      .then(r => r.json()).then(r => setRun(prev => ({...prev, ...r}))).catch(() => {});
+  };
+
+  const statusColor = (s) => ({
+    done:'#4caf50', error:'#f44336', running:'#ffd740', cancelled:'#888', queued:'#888', fetching:'#29b6f6', building:'#ab47bc', replaying:'#ffd740',
+  }[s] || '#888');
+
+  const pct = run ? Math.round(100*(run.emitted||0)/Math.max(1,run.total||1)) : 0;
+
+  return React.createElement('div', { className: 'mi-panel mi-replay-panel' },
+    React.createElement('div', { className: 'mi-panel-title' }, '▶ Replay from Dhan'),
+    React.createElement('div', { className: 'mi-replay-controls' },
+      React.createElement('label', null, 'Date ',
+        React.createElement('input', { type:'date', value:date, onChange:e=>setDate(e.target.value), className:'mi-replay-date' }),
+      ),
+      React.createElement('label', null, ' Speed ',
+        React.createElement('select', { value:speed, onChange:e=>setSpeed(e.target.value), className:'mi-replay-speed' },
+          React.createElement('option', {value:50}, '50× (slow)'),
+          React.createElement('option', {value:150}, '150×'),
+          React.createElement('option', {value:300}, '300× (~75s)'),
+          React.createElement('option', {value:600}, '600× (fast)'),
+        ),
+      ),
+      React.createElement('button', {
+        className: 'mi-replay-btn',
+        onClick: startReplay,
+        disabled: !!(run && ['queued','fetching','building','replaying'].includes(run.status)),
+      }, '▶ Run Replay'),
+      run && !['done','error','cancelled'].includes(run.status) &&
+        React.createElement('button', { className:'mi-replay-cancel', onClick:cancelReplay }, '✕ Cancel'),
+    ),
+    error && React.createElement('div', { className:'mi-panel-error' }, error),
+    run && React.createElement('div', { className:'mi-replay-status' },
+      React.createElement('span', { style:{color:statusColor(run.status), fontWeight:'bold'} },
+        (run.status||'').toUpperCase(),
+      ),
+      ' — ', run.message || '',
+      (run.total > 0) && React.createElement('div', { className:'mi-replay-progress' },
+        React.createElement('div', { className:'mi-replay-bar', style:{width:`${pct}%`} }),
+      ),
+      (run.total > 0) && React.createElement('span', { className:'mi-replay-pct' }, `${pct}% (${run.emitted||0}/${run.total} bars)`),
+      run.status === 'done' && React.createElement('div', { className:'mi-replay-done' },
+        '✓ Done — check Signals and Trades panels above for results',
+        React.createElement('br'),
+        React.createElement('small', null,
+          `Results tagged run_id: ${run.run_id} — filter in Signals panel`,
+        ),
+      ),
+    ),
+    runs.length > 0 && React.createElement('div', { className:'mi-replay-history' },
+      React.createElement('div', { className:'mi-replay-history-title' }, 'Recent replays'),
+      React.createElement('table', { className:'mi-replay-table' },
+        React.createElement('thead', null,
+          React.createElement('tr', null,
+            ['Date', 'Speed', 'Status', 'Bars', 'Started'].map(h => React.createElement('th',{key:h},h)),
+          ),
+        ),
+        React.createElement('tbody', null,
+          runs.map(r => React.createElement('tr', { key:r.run_id },
+            React.createElement('td', null, r.date),
+            React.createElement('td', null, `${r.speed}×`),
+            React.createElement('td', { style:{color:statusColor(r.status)} }, r.status),
+            React.createElement('td', null, r.total || '—'),
+            React.createElement('td', null, r.created_at ? r.created_at.slice(11,16) : '—'),
+          )),
+        ),
+      ),
+    ),
+  );
+}
+
 // ── Main: MultiInstrumentDashboard ─────────────────────────────────────────
 function MultiInstrumentDashboard() {
   const [instruments, setInstruments] = _s([]);
@@ -590,6 +707,7 @@ function MultiInstrumentDashboard() {
       React.createElement(DecisionTraceViewer, { instrument: selected }),
       React.createElement(TradePnLTimeline, { instrument: selected }),
     ),
+    React.createElement(ReplayPanel, { instrument: selected }),
   );
 }
 

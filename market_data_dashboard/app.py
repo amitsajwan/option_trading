@@ -4061,6 +4061,17 @@ except Exception as _new_routes_exc:  # pragma: no cover
     import logging as _new_logger
     _new_logger.getLogger(__name__).warning("Failed to register new routes: %s", _new_routes_exc)
 
+# ── Dhan-powered historical replay routes ─────────────────────────────────────
+try:
+    from .routes.replay_routes import ReplayRouter as _ReplayRouter
+except ImportError:
+    from market_data_dashboard.routes.replay_routes import ReplayRouter as _ReplayRouter  # type: ignore
+try:
+    app.include_router(_ReplayRouter().router)
+except Exception as _replay_exc:  # pragma: no cover
+    import logging as _rlog
+    _rlog.getLogger(__name__).warning("replay routes failed: %s", _replay_exc)
+
 # Backward-compatible callables used by local tests/imports.
 home = _operator_routes.home
 live_strategy = _operator_routes.live_strategy

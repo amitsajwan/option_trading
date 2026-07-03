@@ -453,3 +453,24 @@
 .mi-trades-table tr:hover {
   background: var(--paper-2, #f6f4ef);
 }
+
+/* ── Replay Panel ────────────────────────────────────────────────────────── */
+.mi-replay-panel { margin-top: 20px; background: var(--surface, #1a1f2e); border: 1px solid var(--border, #2a3044); border-radius: 6px; padding: 16px; }
+.mi-replay-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.mi-replay-controls label { font-size: 12px; color: var(--fg-3, #8899aa); display: flex; align-items: center; gap: 6px; }
+.mi-replay-date, .mi-replay-speed { background: var(--surface-2, #232840); border: 1px solid var(--border, #2a3044); color: var(--fg, #e0e8f0); padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+.mi-replay-btn { background: #1976d2; color: #fff; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
+.mi-replay-btn:disabled { background: #444; cursor: not-allowed; }
+.mi-replay-btn:hover:not(:disabled) { background: #1565c0; }
+.mi-replay-cancel { background: transparent; color: #f44336; border: 1px solid #f44336; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.mi-replay-status { font-size: 12px; margin-bottom: 8px; }
+.mi-replay-progress { background: #1a2240; border-radius: 3px; height: 6px; margin: 8px 0 4px; overflow: hidden; }
+.mi-replay-bar { background: #1976d2; height: 100%; transition: width 0.5s ease; border-radius: 3px; }
+.mi-replay-pct { font-size: 11px; color: var(--fg-4, #667788); }
+.mi-replay-done { margin-top: 8px; color: #4caf50; font-size: 12px; line-height: 1.6; }
+.mi-replay-history { margin-top: 16px; }
+.mi-replay-history-title { font-size: 11px; color: var(--fg-4, #667788); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+.mi-replay-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.mi-replay-table th { color: var(--fg-4, #667788); text-align: left; padding: 3px 8px; border-bottom: 1px solid var(--border, #2a3044); }
+.mi-replay-table td { padding: 4px 8px; color: var(--fg-2, #b0c0d4); }
+.mi-replay-table tr:hover td { background: rgba(255,255,255,0.03); }
