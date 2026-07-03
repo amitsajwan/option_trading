@@ -56,6 +56,9 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
         job["step"] = step
         job["message"] = msg
         job["updated_at"] = datetime.now(tz=_IST).isoformat()
+        # keep status in sync so polls never see step=done + status=running
+        if step in ("done", "error", "cancelled"):
+            job["status"] = step
         logger.info("[%s] %s: %s", run_id[:8], step, msg)
 
     try:

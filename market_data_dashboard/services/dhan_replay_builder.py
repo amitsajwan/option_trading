@@ -99,7 +99,7 @@ def build_snapshots_from_dhan_data(
     snapshots = []
 
     for i, bar in enumerate(index_bars):
-        ts_str = bar.get("ts", "")
+        ts_str = bar.get("ts") or bar.get("start_at") or ""
         ts = _ts_ist(ts_str)
         if ts is None:
             continue

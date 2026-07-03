@@ -336,6 +336,8 @@ function DecisionTraceViewer({ instrument }) {
   const [loading, setLoading] = _s(true);
   const [date, setDate] = _s(_todayISO());
   const [outcomeFilter, setOutcomeFilter] = _s('');
+  const [runIdFilter, setRunIdFilter] = _s('');
+  const [sourceFilter, setSourceFilter] = _s('');  // 'live' | 'replay' | ''
   const [expandedRow, setExpandedRow] = _s(null);
   const [wsStatus, setWsStatus] = _s('disconnected');
   const [liveSignals, setLiveSignals] = _s([]);
@@ -380,7 +382,12 @@ function DecisionTraceViewer({ instrument }) {
     return () => { alive = false; clearTimeout(retryId); if (wsRef.current) wsRef.current.close(); };
   }, [instrument]);
 
-  const allSignals = [...liveSignals, ...signals];
+  const allSignals = [...liveSignals, ...signals].filter(sig => {
+    if (sourceFilter === 'live'   && (sig.run_id || '').startsWith('replay-')) return false;
+    if (sourceFilter === 'replay' && !(sig.run_id || '').startsWith('replay-')) return false;
+    if (runIdFilter && !(sig.run_id || '').includes(runIdFilter)) return false;
+    return true;
+  });
 
   if (loading) return React.createElement('div', { className: 'mi-panel-loading' }, 'Loading signals…');
   if (error) return React.createElement('div', { className: 'mi-panel-error' }, `Error: ${error}`);
@@ -399,6 +406,18 @@ function DecisionTraceViewer({ instrument }) {
       React.createElement('button', { className: `mi-filter-btn ${outcomeFilter === 'blocked' ? 'active' : ''}`, onClick: () => setOutcomeFilter('blocked') }, 'Blocked'),
       React.createElement('button', { className: `mi-filter-btn ${outcomeFilter === 'hold' ? 'active' : ''}`, onClick: () => setOutcomeFilter('hold') }, 'Hold'),
       React.createElement('button', { className: `mi-filter-btn ${outcomeFilter === 'manage_only' ? 'active' : ''}`, onClick: () => setOutcomeFilter('manage_only') }, 'Manage'),
+    ),
+    React.createElement('div', { className: 'mi-filter-bar mi-source-bar' },
+      React.createElement('button', { className: `mi-filter-btn ${sourceFilter === '' ? 'active' : ''}`, onClick: () => { setSourceFilter(''); setRunIdFilter(''); } }, 'All Sources'),
+      React.createElement('button', { className: `mi-filter-btn mi-src-live ${sourceFilter === 'live' ? 'active' : ''}`, onClick: () => { setSourceFilter('live'); setRunIdFilter(''); } }, 'Live only'),
+      React.createElement('button', { className: `mi-filter-btn mi-src-replay ${sourceFilter === 'replay' ? 'active' : ''}`, onClick: () => { setSourceFilter('replay'); setRunIdFilter(''); } }, 'Replay only'),
+      React.createElement('input', {
+        className: 'mi-runid-filter',
+        type: 'text',
+        placeholder: 'Filter by run_id…',
+        value: runIdFilter,
+        onChange: e => { setRunIdFilter(e.target.value); setSourceFilter(''); },
+      }),
     ),
     summary && React.createElement('div', { className: 'mi-signals-summary' },
       React.createElement('span', null, `Filtered: ${summary.total_filtered || 0}`),

@@ -405,9 +405,14 @@ class DhanDataService:
 
         def _intraday_bars(sid: str, seg: str, inst_type: str) -> List[Dict]:
             try:
-                return self._client.get_intraday_ohlc(
+                bars = self._client.get_intraday_ohlc(
                     security_id=sid, exchange_segment=seg,
                     instrument=inst_type, from_dt=from_dt, to_dt=to_dt, interval=interval)
+                # Normalize: get_intraday_ohlc returns start_at; builder expects ts
+                for b in bars:
+                    if "ts" not in b and "start_at" in b:
+                        b["ts"] = b["start_at"]
+                return bars
             except Exception as exc:
                 log.warning("get_historical_day: intraday fetch %s failed: %s", sid, exc)
                 return []

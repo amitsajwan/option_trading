@@ -345,6 +345,15 @@
 .mi-source-live   { background: rgba(10,143,92,0.10);   color: #0a8f5c; }
 .mi-source-replay { background: rgba(200,150,20,0.15);  color: #b08010; }
 
+.mi-source-bar { margin-top: 4px; gap: 6px; flex-wrap: wrap; }
+.mi-src-live.active   { background: rgba(10,143,92,0.18);  color: #0a8f5c; }
+.mi-src-replay.active { background: rgba(200,150,20,0.22); color: #b08010; }
+.mi-runid-filter {
+  border: 1px solid var(--border, #ddd); border-radius: 4px;
+  padding: 2px 8px; font-size: 11px; min-width: 180px;
+  background: var(--paper-1, #fff); color: var(--ink-1, #1a2233);
+}
+
 .mi-sig-prob { width: 70px; }
 .mi-sig-dir  { width: 30px; font-weight: 600; }
 .mi-sig-conf { width: 70px; color: var(--ink-3, #8899aa); }
