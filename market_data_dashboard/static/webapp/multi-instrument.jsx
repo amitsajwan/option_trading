@@ -682,12 +682,25 @@ function ReplayPanel({ instrument }) {
       React.createElement('table', { className:'mi-replay-table' },
         React.createElement('thead', null,
           React.createElement('tr', null,
-            ['Date', 'Speed', 'Status', 'Bars', 'Started'].map(h => React.createElement('th',{key:h},h)),
+            ['Date', 'Instrument', 'Speed', 'Status', 'Bars', 'Started'].map(h => React.createElement('th',{key:h},h)),
           ),
         ),
         React.createElement('tbody', null,
-          runs.map(r => React.createElement('tr', { key:r.run_id },
+          runs.map(r => React.createElement('tr', {
+            key: r.run_id,
+            style: { cursor:'pointer' },
+            onClick: () => {
+              // clicking a row pastes its run_id into the signals filter
+              const el = document.querySelector('.mi-runid-filter');
+              if (el) { el.value = r.run_id; el.dispatchEvent(new Event('input', {bubbles:true})); }
+            },
+          },
             React.createElement('td', null, r.date),
+            React.createElement('td', null,
+              React.createElement('span', {
+                className: `mi-sig-inst mi-inst-${(r.instrument||'BN').replace('BANKNIFTY','bn').replace('NIFTY','nf').toLowerCase()}`,
+              }, (r.instrument||'').replace('BANKNIFTY','BN').replace('NIFTY','NF') || '—'),
+            ),
             React.createElement('td', null, `${r.speed}×`),
             React.createElement('td', { style:{color:statusColor(r.status)} }, r.status),
             React.createElement('td', null, r.total || '—'),

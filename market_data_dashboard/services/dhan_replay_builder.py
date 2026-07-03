@@ -216,6 +216,8 @@ def build_snapshots_from_dhan_data(
                 "dist_from_day_high": (close - day_high) / day_high if (close and day_high and day_high > 0) else None,
                 "dist_from_day_low": (close - day_low) / day_low if (close and day_low and day_low > 0) else None,
                 "atr_ratio": _atr_ratio(index_bars, i, 14),
+                "vol_ratio": _vol_ratio(index_bars, i, 30),
+                "realized_vol_30m": _realized_vol_30m(index_bars, i, 30),
             },
             "atm_options": {
                 "atm_ce_ltp": atm_ce_ltp,
@@ -268,6 +270,37 @@ def _pct_chg(bars: List[dict], i: int, n: int) -> Optional[float]:
     if curr and prev and prev > 0:
         return (curr - prev) / prev
     return None
+
+
+def _vol_ratio(bars: List[dict], i: int, period: int = 30) -> Optional[float]:
+    """Current bar volume / average volume over past `period` bars."""
+    curr_vol = _f(bars[i].get("volume"))
+    if curr_vol is None:
+        return None
+    start = max(0, i - period)
+    vols = [_f(bars[j].get("volume")) for j in range(start, i)]
+    vols = [v for v in vols if v is not None and v > 0]
+    if not vols:
+        return None
+    avg = sum(vols) / len(vols)
+    return curr_vol / avg if avg > 0 else None
+
+
+def _realized_vol_30m(bars: List[dict], i: int, period: int = 30) -> Optional[float]:
+    """Std dev of last `period` 1-min log returns — proxy for 30-min realized vol."""
+    import math
+    start = max(1, i - period + 1)
+    rets = []
+    for j in range(start, i + 1):
+        c = _f(bars[j].get("close"))
+        p = _f(bars[j - 1].get("close"))
+        if c and p and p > 0:
+            rets.append(math.log(c / p))
+    if len(rets) < 5:
+        return None
+    mean = sum(rets) / len(rets)
+    variance = sum((r - mean) ** 2 for r in rets) / len(rets)
+    return math.sqrt(variance)
 
 
 def _atr_ratio(bars: List[dict], i: int, period: int = 14) -> Optional[float]:
