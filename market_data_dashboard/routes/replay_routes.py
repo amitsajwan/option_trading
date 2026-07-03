@@ -114,9 +114,9 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
 
         with DhanReplayIngestionServer(raw) as srv:
             builder = LiveMarketSnapshotBuilder(
-                instrument=f"{instrument.upper()}FUT",  # match live instrument symbol format
+                instrument=f"{instrument.upper()}FUT",
                 market_api_base=srv.base_url,
-                dashboard_api_base=None,
+                dashboard_api_base=srv.base_url,  # point at mini server, not real dashboard
             )
 
             for i, _ in enumerate(index_bars):
