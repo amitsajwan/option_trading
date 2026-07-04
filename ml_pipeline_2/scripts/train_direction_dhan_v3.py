@@ -102,6 +102,11 @@ DIRECTION_FEATURES_V3: List[str] = [
 LABEL_HORIZON_MIN = 10
 LABEL_MIN_MOVE_PT = 50   # minimum move to qualify (filter coin-flip bars)
 
+# Session filter: 9:45-15:05 IST. By bar 30 (9:45) all 30m velocity features
+# are available. ctx_am_* update incrementally per bar — no 11:30 restriction.
+SESSION_START_MIN = 9 * 60 + 45   # 9:45 IST
+SESSION_END_MIN   = 15 * 60 + 5   # 15:05 IST
+
 MAX_NAN_FEATURES = 5     # direction model tolerates more NaN (vix×2, ivrank×1, etc.)
 
 
@@ -179,6 +184,15 @@ def add_direction_labels(df: pd.DataFrame) -> pd.DataFrame:
     label[both] = (up_move[both] >= down_move[both]).astype(float)
     # Lookahead invalid
     label[future_max.isna()] = np.nan
+    # Session filter 9:45-15:05: outside window → NaN
+    try:
+        ts_col = pd.to_datetime(df["timestamp"] if "timestamp" in df.columns else df.index)
+        mod = ts_col.dt.hour * 60 + ts_col.dt.minute
+        outside = (mod < SESSION_START_MIN) | (mod > SESSION_END_MIN)
+        label[outside] = np.nan
+        log.info("Session filter 9:45-15:05: excluded %d bars outside window", outside.sum())
+    except Exception:
+        pass
     df["direction_label"] = label
     valid = df["direction_label"].notna()
     log.info("Direction labels: %d valid bars, pos_rate(CE)=%.3f",

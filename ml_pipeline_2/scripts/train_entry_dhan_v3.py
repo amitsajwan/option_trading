@@ -94,6 +94,14 @@ ENTRY_FEATURES_V3: List[str] = [
 LABEL_PT_THRESHOLD = 100   # points
 LABEL_HORIZON_MIN  = 15    # minutes (15-bar lookahead)
 
+# Session filter: train on 9:45-15:05 IST bars only.
+# By 9:45 (bar 30) all 30m velocity features are available (vel_price_delta_30m,
+# vel_pcr_delta_30m etc). ctx_am_range/trend/reversal/vwap_side (need 11:30 AM
+# session) will be NaN before 11:30 — model imputes with median, which is fine.
+# ctx_gap features are available from bar 1 with the velocity_context_provider fix.
+SESSION_START_MIN = 9 * 60 + 45   # 9:45 IST (minute_of_day)
+SESSION_END_MIN   = 15 * 60 + 5   # 15:05 IST
+
 MAX_NAN_FEATURES = 3       # allow up to 3 NaN at inference (typically vix×2 + 1 other)
 
 
@@ -133,11 +141,22 @@ def load_indicators(data_dir: Path, instrument: str,
 
 
 def add_labels(df: pd.DataFrame) -> pd.DataFrame:
-    """Add binary entry label: 1 if |move| >= threshold in horizon_min minutes."""
+    """Add binary entry label: 1 if |move| >= threshold in horizon_min minutes.
+    Only labels bars within the 9:45-15:05 IST session window — by 9:45 all
+    30m velocity features are available; 15:05 avoids end-of-day noise.
+    """
     df = df.sort_values(["trade_date", "timestamp"]).copy()
     close_col = next((c for c in ["px_fut_close", "close", "fut_close"] if c in df.columns), None)
     if close_col is None:
         raise ValueError(f"No close price column found. Columns: {list(df.columns[:20])}")
+
+    # Apply session filter (9:45-15:05 IST)
+    ts_col = df["timestamp"] if "timestamp" in df.columns else pd.to_datetime(df.index)
+    try:
+        minute_of_day = pd.to_datetime(ts_col).dt.hour * 60 + pd.to_datetime(ts_col).dt.minute
+    except Exception:
+        minute_of_day = None
+
     close = pd.to_numeric(df[close_col], errors="coerce")
     # Lookahead: max |close[t+k] - close[t]| / close[t] >= threshold
     n_bars = LABEL_HORIZON_MIN
@@ -149,6 +168,11 @@ def add_labels(df: pd.DataFrame) -> pd.DataFrame:
     df["entry_label"] = (max_move >= LABEL_PT_THRESHOLD).astype(float)
     # Mark lookahead-invalid bars as NaN (last horizon_min bars of each day)
     df.loc[future_max.isna(), "entry_label"] = np.nan
+    # Apply session window filter (9:45-15:05): outside window → NaN label
+    if minute_of_day is not None:
+        outside = (minute_of_day < SESSION_START_MIN) | (minute_of_day > SESSION_END_MIN)
+        df.loc[outside, "entry_label"] = np.nan
+        log.info("Session filter 9:45-15:05: excluded %d bars outside window", outside.sum())
     valid = df["entry_label"].notna()
     log.info("Labels: %d valid bars, pos_rate=%.3f", valid.sum(), df.loc[valid, "entry_label"].mean())
     return df
