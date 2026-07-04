@@ -155,11 +155,37 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
         except Exception as _ee:
             logger.warning("could not fetch expiry date: %s — DTE may be wrong for holiday weeks", _ee)
 
+        # Build a velocity_context_provider so LiveVelocityAccumulator gets prev_day_close.
+        # Without this, the accumulator's loader=None → ctx_gap_* NaN all day even though
+        # the OHLC data has yesterday's close. The provider is a Callable[[trade_date],
+        # (prev_day_close, prev_day_midday_vol, avg_20d_midday_vol)].
+        _prev_day_close: Optional[float] = None
+        if prev_day_bars:
+            last = prev_day_bars[-1]
+            try:
+                v = last.get("close")
+                if v is not None:
+                    _prev_day_close = float(v) or None
+            except (TypeError, ValueError):
+                pass
+        _replay_date = date  # capture for closure
+
+        def _velocity_context_provider(trade_date: str):
+            if trade_date == _replay_date and _prev_day_close is not None:
+                return (_prev_day_close, None, None)
+            return (None, None, None)
+
+        if _prev_day_close:
+            _progress("building", f"Velocity context: prev_day_close={_prev_day_close:.2f} for {date}")
+        else:
+            logger.warning("replay: prev_day_close unavailable — ctx_gap_* will be NaN")
+
         with DhanReplayIngestionServer(raw, prev_day_bars=prev_day_bars, expiry_date=expiry_date) as srv:
             builder = LiveMarketSnapshotBuilder(
                 instrument=f"{instrument.upper()}FUT",
                 market_api_base=srv.base_url,
-                dashboard_api_base=srv.base_url,  # point at mini server, not real dashboard
+                dashboard_api_base=srv.base_url,
+                velocity_context_provider=_velocity_context_provider,
             )
 
             for i, _ in enumerate(index_bars):
