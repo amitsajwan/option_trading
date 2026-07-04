@@ -1688,12 +1688,14 @@ services:
       TRADE_SIGNAL_TOPIC: "market:nifty:strategy:signals:v1"
       STRATEGY_POSITION_TOPIC: "market:nifty:strategy:positions:v1"
       STRATEGY_DECISION_TRACE_TOPIC: "market:nifty:strategy:decision_trace:v1"
-      # Models
-      ENTRY_ML_MODEL_PATH: "${NIFTY_ENTRY_ML_MODEL_PATH:-}"
+      # Models — files must exist in ./models/ (mounted as /app/models:ro)
+      # Override via NIFTY_ENTRY_ML_MODEL_PATH in .env.compose; defaults to the
+      # committed bundle. Do NOT leave blank — strategy_app produces zero votes.
+      ENTRY_ML_MODEL_PATH: "${NIFTY_ENTRY_ML_MODEL_PATH:-/app/models/nifty_entry_bundle_v2.joblib}"
       ENTRY_ML_MIN_PROB: "${NIFTY_ENTRY_ML_MIN_PROB:-0.05}"
-      DIRECTION_ML_MODEL_PATH: "${NIFTY_DIRECTION_ML_MODEL_PATH:-}"
-      ENTRY_ML_MAX_NAN_FEATURES: "${NIFTY_ENTRY_ML_MAX_NAN_FEATURES:-${ENTRY_ML_MAX_NAN_FEATURES:-}}"
-      DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-}"
+      DIRECTION_ML_MODEL_PATH: "${NIFTY_DIRECTION_ML_MODEL_PATH:-/app/models/nifty_direction_v2.joblib}"
+      ENTRY_ML_MAX_NAN_FEATURES: "${NIFTY_ENTRY_ML_MAX_NAN_FEATURES:-2}"
+      DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-10}"
       ML_ENTRY_DIRECTION_MODE: "direction_ml"
       # NIFTY-specific sizing — NSE changes lot size per expiry; execution uses scrip master.
       # Set NIFTY_LOT_SIZE in .env to match the current front-month (25 since late 2024).
