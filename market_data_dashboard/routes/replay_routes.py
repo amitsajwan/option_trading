@@ -96,7 +96,7 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
             for _offset in range(1, 6):
                 _pd = (_dt.strptime(date, "%Y-%m-%d") - _td(days=_offset)).strftime("%Y-%m-%d")
                 _f2 = _F()
-                _raw2 = _f2.fetch_day(instrument, _pd, strikes=0)  # index only, no options
+                _raw2 = _f2.fetch_day(instrument, _pd, strikes=1)  # minimal options, we only use index_bars
                 if _raw2.get("index_bars"):
                     prev_day_bars = _raw2["index_bars"]
                     _progress("building", f"Fetched {len(prev_day_bars)} prev-day bars ({_pd}) for gap features")
