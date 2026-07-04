@@ -583,11 +583,12 @@ function TradePnLTimeline({ instrument }) {
 }
 
 // ── Replay Panel ────────────────────────────────────────────────────────────
-function ReplayPanel({ instrument }) {
+function ReplayPanel({ instrument: defaultInstrument }) {
   const [date, setDate] = _s(() => {
     const d = new Date(); d.setDate(d.getDate() - 1);
     return d.toISOString().slice(0,10);
   });
+  const [instrument, setInstrument] = _s(defaultInstrument || 'BANKNIFTY');
   const [speed, setSpeed] = _s(300);
   const [run, setRun] = _s(null);
   const [error, setError] = _s(null);
@@ -640,7 +641,13 @@ function ReplayPanel({ instrument }) {
   return React.createElement('div', { className: 'mi-panel mi-replay-panel' },
     React.createElement('div', { className: 'mi-panel-title' }, '▶ Replay from Dhan'),
     React.createElement('div', { className: 'mi-replay-controls' },
-      React.createElement('label', null, 'Date ',
+      React.createElement('label', null, 'Instrument ',
+        React.createElement('select', { value:instrument, onChange:e=>setInstrument(e.target.value), className:'mi-replay-inst' },
+          React.createElement('option', {value:'BANKNIFTY'}, 'BankNifty'),
+          React.createElement('option', {value:'NIFTY'}, 'Nifty'),
+        ),
+      ),
+      React.createElement('label', null, ' Date ',
         React.createElement('input', { type:'date', value:date, onChange:e=>setDate(e.target.value), className:'mi-replay-date' }),
       ),
       React.createElement('label', null, ' Speed ',

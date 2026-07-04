@@ -481,7 +481,8 @@
 .mi-replay-panel { margin-top: 20px; background: var(--surface, #1a1f2e); border: 1px solid var(--border, #2a3044); border-radius: 6px; padding: 16px; }
 .mi-replay-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .mi-replay-controls label { font-size: 12px; color: var(--fg-3, #8899aa); display: flex; align-items: center; gap: 6px; }
-.mi-replay-date, .mi-replay-speed { background: var(--surface-2, #232840); border: 1px solid var(--border, #2a3044); color: var(--fg, #e0e8f0); padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+.mi-replay-date, .mi-replay-speed, .mi-replay-inst { background: var(--surface-2, #232840); border: 1px solid var(--border, #2a3044); color: var(--fg, #e0e8f0); padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+.mi-replay-inst { font-weight: 700; }
 .mi-replay-btn { background: #1976d2; color: #fff; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }
 .mi-replay-btn:disabled { background: #444; cursor: not-allowed; }
 .mi-replay-btn:hover:not(:disabled) { background: #1565c0; }
