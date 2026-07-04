@@ -170,7 +170,10 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
                 srv.set_bar(i)
 
                 try:
-                    snapshot = builder.build_snapshot(ohlc_limit=i + 5)
+                    # Large limit — mini server already enforces look-ahead by only
+                    # returning today's bars up to index i; prev_day bars (375) must
+                    # also be visible so ctx_gap_* features can compute prev_day_close.
+                    snapshot = builder.build_snapshot(ohlc_limit=800)
                 except Exception as exc:
                     logger.warning("[%s] build_snapshot bar=%d failed: %s", run_id[:8], i, exc)
                     continue
