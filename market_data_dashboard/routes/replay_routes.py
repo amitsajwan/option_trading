@@ -133,7 +133,29 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
         job["total"] = n_bars
         job["emitted"] = 0
 
-        with DhanReplayIngestionServer(raw, prev_day_bars=prev_day_bars) as srv:
+        # Fetch the real expiry date from ingestion_app so holiday-shifted expiries
+        # (e.g. Thursday is a holiday → expiry moves to Wednesday) are handled correctly.
+        expiry_date: Optional[str] = None
+        try:
+            _ingestion_base = (
+                os.getenv("INGESTION_APP_NIFTY_URL", "http://ingestion_app_nifty:8004")
+                if instrument.upper() == "NIFTY"
+                else os.getenv("INGESTION_APP_BANKNIFTY_URL", "http://ingestion_app:8004")
+            )
+            import requests as _req
+            _exp_resp = _req.get(
+                f"{_ingestion_base}/api/v1/options/chain/{instrument.upper()}",
+                timeout=10,
+            )
+            if _exp_resp.ok:
+                _chain = _exp_resp.json()
+                expiry_date = _chain.get("expiry") or None
+                if expiry_date:
+                    _progress("building", f"Real expiry date from ingestion_app: {expiry_date}")
+        except Exception as _ee:
+            logger.warning("could not fetch expiry date: %s — DTE may be wrong for holiday weeks", _ee)
+
+        with DhanReplayIngestionServer(raw, prev_day_bars=prev_day_bars, expiry_date=expiry_date) as srv:
             builder = LiveMarketSnapshotBuilder(
                 instrument=f"{instrument.upper()}FUT",
                 market_api_base=srv.base_url,

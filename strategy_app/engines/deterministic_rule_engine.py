@@ -257,6 +257,9 @@ class DeterministicRuleEngine(StrategyEngine):
         # E6-S1: preserve session run_id set at startup — snapshot events carry no
         # run_id so calling set_run_context from the consumer would clear it.
         new_run_id = str(run_id or "").strip() or None
+        # Track whether the run_id actually changed — replay passes the same run_id
+        # on every bar which would otherwise trigger a model reload on every bar.
+        run_id_changed = bool(new_run_id and new_run_id != self._run_id)
         if new_run_id:
             self._run_id = new_run_id
         # E6-S3: skip rebuilding entry policy (which reloads the ML model bundle)
@@ -303,10 +306,11 @@ class DeterministicRuleEngine(StrategyEngine):
             self._entry_policy = self._injected_entry_policy
             self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)
-        elif _has_payload or new_run_id:
-            # Rebuild when: (a) an actual config key is present, OR (b) a new run_id
-            # is starting (reset to defaults). Snapshot events pass run_id=None so they
-            # never trigger a rebuild and don't reload the ML bundle on every bar.
+        elif _has_payload or run_id_changed:
+            # Rebuild when: (a) an actual config key is present, OR (b) the run_id
+            # actually changes (new session / eval run starting). Using run_id_changed
+            # rather than new_run_id prevents replay from reloading the ML bundle on
+            # every bar (replay passes the same run_id on all 375 bars).
             self._entry_policy = self._build_entry_policy(self._default_policy_config)
             self._post_halt_resume_boost_enabled = bool(self._default_policy_config.enable_post_halt_resume_boost)
             self._post_halt_resume_boost_score = float(self._default_policy_config.post_halt_resume_boost_score)

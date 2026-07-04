@@ -62,7 +62,8 @@ class DhanReplayIngestionServer:
     """
 
     def __init__(self, raw_data: Dict[str, Any],
-                 prev_day_bars: Optional[List[Dict]] = None) -> None:
+                 prev_day_bars: Optional[List[Dict]] = None,
+                 expiry_date: Optional[str] = None) -> None:
         self._raw = raw_data
         self._index_bars: List[Dict] = raw_data.get("index_bars") or []
         self._vix_bars:   List[Dict] = raw_data.get("vix_bars")   or []
@@ -70,8 +71,9 @@ class DhanReplayIngestionServer:
         self._instrument: str = (raw_data.get("instrument") or "BANKNIFTY").upper()
         self._step: int   = int(raw_data.get("step") or 100)
         self._atm: Optional[int] = raw_data.get("atm_strike")
-        # Previous trading day's bars — prepended to OHLC so ctx_gap_* features compute
         self._prev_day_bars: List[Dict] = prev_day_bars or []
+        # Real expiry date (YYYY-MM-DD) so DTE is correct even with holiday-shifted expiries
+        self._expiry_date: Optional[str] = expiry_date
         self._bar_idx: int = 0
         self._lock = threading.Lock()
         self._port = _free_port()
@@ -216,7 +218,7 @@ class DhanReplayIngestionServer:
             "timestamp":  ts,
             "pcr":        pcr,
             "max_pain":   max_pain_strike,
-            "expiry":     None,
+            "expiry":     self._expiry_date,  # real expiry so DTE is correct
             "strikes":    strikes,
         }
 
