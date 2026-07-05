@@ -154,7 +154,12 @@ def load_indicators(data_dir: Path, instrument: str,
     if not files:
         raise FileNotFoundError(f"No indicator parquet for {inst} in {data_dir}")
     log.info("Loading %d files for %s", len(files), inst)
-    frames = [pd.read_parquet(f) for f in files]
+    frames = []
+    for f in files:
+        try:
+            frames.append(pd.read_parquet(f))
+        except Exception as exc:
+            log.warning("skip %s: %s", f, exc)
     data = pd.concat(frames, ignore_index=True)
     data["trade_date"] = pd.to_datetime(data.get("trade_date", data.index))
     return data[(data["trade_date"] >= start) & (data["trade_date"] <= end)].copy()
