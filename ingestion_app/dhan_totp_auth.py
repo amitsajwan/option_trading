@@ -150,8 +150,8 @@ def generate_access_token(
     try:
         resp = requests.post(
             _DHAN_AUTH_URL,
-            json={"dhanClientId": client_id, "pin": pin, "totp": totp_code},
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            params={"dhanClientId": client_id, "pin": pin, "totp": totp_code},
+            headers={"Accept": "application/json"},
             timeout=20,
         )
     except Exception as exc:
