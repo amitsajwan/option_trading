@@ -80,6 +80,41 @@ class DhanReplayIngestionServer:
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
+        # Build timestamp-indexed option lookup so _option_chain_at doesn't
+        # rely on positional alignment between index_bars and option_bars.
+        # opt_by_ts[label][ts_prefix]["ce"|"pe"] = bar_dict
+        self._opt_by_ts: Dict[str, Dict[str, Dict[str, dict]]] = {}
+        n_opt_bars = 0
+        for label, sides in self._options.items():
+            self._opt_by_ts[label] = {}
+            for side, bars in sides.items():
+                if not isinstance(bars, list):
+                    continue
+                for b in bars:
+                    ts = (b.get("ts") or b.get("start_at") or "")[:16]
+                    if not ts:
+                        continue
+                    if ts not in self._opt_by_ts[label]:
+                        self._opt_by_ts[label][ts] = {}
+                    self._opt_by_ts[label][ts][side] = b
+                    n_opt_bars += 1
+        if n_opt_bars == 0 and self._options:
+            logger.warning(
+                "DhanReplayIngestionServer: options dict has %d labels but 0 bars — "
+                "ce_ltp/pe_ltp will be null for all bars. Check ingestion_app logs.",
+                len(self._options),
+            )
+        elif n_opt_bars == 0:
+            logger.warning(
+                "DhanReplayIngestionServer: no option data (options={}) — "
+                "atm_ce_close will be null → premium=null → 0 trades expected."
+            )
+        else:
+            logger.info(
+                "DhanReplayIngestionServer: loaded %d option bars across %d labels (ts-indexed)",
+                n_opt_bars, len(self._opt_by_ts),
+            )
+
     # ── public interface ────────────────────────────────────────────────────
 
     @property
@@ -147,32 +182,42 @@ class DhanReplayIngestionServer:
         return None
 
     def _option_chain_at(self, idx: int) -> Dict[str, Any]:
-        """Build an option chain dict from the options data at bar idx."""
+        """Build an option chain dict from the options data at bar idx.
+
+        Uses timestamp-based lookup (not positional) so index_bars and option_bars
+        don't need to be exactly aligned in length or start time.
+        """
         bar = self._index_bars[idx] if idx < len(self._index_bars) else {}
         spot = _f(bar.get("close") or bar.get("close")) or 0.0
         ts = bar.get("ts") or bar.get("start_at") or ""
+        ts_key = ts[:16]  # YYYY-MM-DDTHH:MM — used for timestamp lookup
 
         strikes = []
         total_ce_oi = 0.0
         total_pe_oi = 0.0
 
-        for label, sides in self._options.items():
+        for label, sides_by_ts in self._opt_by_ts.items():
             # Derive offset
             if label == "ATM":
                 offset = 0
             elif label.startswith("ATMp"):
-                offset = int(label[4:])
+                try:
+                    offset = int(label[4:])
+                except ValueError:
+                    continue
             elif label.startswith("ATMm"):
-                offset = -int(label[4:])
+                try:
+                    offset = -int(label[4:])
+                except ValueError:
+                    continue
             else:
                 continue
 
             strike_price = (self._atm or round(spot / self._step) * self._step) + offset * self._step
-            ce_bars = sides.get("ce") or []
-            pe_bars = sides.get("pe") or []
 
-            ce_bar = ce_bars[idx] if idx < len(ce_bars) else {}
-            pe_bar = pe_bars[idx] if idx < len(pe_bars) else {}
+            side_data = sides_by_ts.get(ts_key, {})
+            ce_bar = side_data.get("ce", {})
+            pe_bar = side_data.get("pe", {})
 
             ce_ltp    = _f(ce_bar.get("ce_close"))
             pe_ltp    = _f(pe_bar.get("pe_close"))

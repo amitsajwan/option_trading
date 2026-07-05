@@ -454,6 +454,13 @@ class DhanDataService:
                     f"{side}_volume": volumes[i] if i < len(volumes) else None,
                     "spot": spots[i] if i < len(spots) else None,
                 })
+            if not bars:
+                log.warning(
+                    "get_historical_day: rollingoption %s %s %s returned 0 bars "
+                    "(ts_list=%d, resp keys=%s)",
+                    strike, option_type, date, len(ts_list),
+                    list((resp.get("data") or {}).keys()) if isinstance(resp, dict) else "?",
+                )
             return bars
 
         log.info("get_historical_day: %s %s — fetching index+VIX OHLC", underlying, date)

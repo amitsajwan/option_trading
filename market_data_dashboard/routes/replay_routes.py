@@ -82,6 +82,13 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
         job["fetch_bars"] = n_bars
         job["fetch_option_bars"] = n_opts
         _progress("building", f"Fetched {n_bars} bars + {n_opts} option bars. Starting LiveMarketSnapshotBuilder…")
+        if n_opts == 0:
+            logger.warning(
+                "[%s] n_opts=0 — ingestion_app returned NO option chain bars for %s %s. "
+                "All snapshots will have atm_ce_close=null → premium=null → 0 entries. "
+                "Check ingestion_app_nifty logs for rollingoption failures.",
+                run_id[:8], instrument, date,
+            )
 
         # ── Step 1b: Fetch previous trading day's bars (for ctx_gap features) ──
         # ctx_am_gap_*, ctx_gap_* require yesterday's closing price.
