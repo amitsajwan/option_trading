@@ -447,7 +447,8 @@ def main(argv: List[str] | None = None) -> int:
         ),
         # Core contract — inference reads these
         "features":         features,
-        "medians":          medians,         # imputation at inference — NO raw NaN to model
+        "medians":          medians,         # kept for backward compat
+        "feature_medians":  medians,         # serving code reads this key
         "max_nan_features": MAX_NAN_FEATURES,
         "model":            cal,             # calibrated; .predict_proba used at runtime
         # Evaluation

@@ -355,7 +355,8 @@ def main(argv=None):
         "source":       "train_direction_dhan_v3",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "features":     features,
-        "medians":      medians,
+        "medians":      medians,         # kept for backward compat
+        "feature_medians": medians,      # serving code reads this key
         "max_nan_features": MAX_NAN_FEATURES,
         "model":        cal,
         "holdout_eval": holdout_eval,

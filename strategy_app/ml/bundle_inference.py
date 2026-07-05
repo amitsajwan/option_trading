@@ -192,7 +192,7 @@ def predict_positive_class_prob(
     row = build_feature_row(snap, features)
     if row is None:
         return None
-    medians: Dict[str, float] = dict(bundle.get("feature_medians") or {})
+    medians: Dict[str, float] = dict(bundle.get("feature_medians") or bundle.get("medians") or {})
 
     nan_features = [f for f, v in row.items() if not math.isfinite(v)]
     if nan_features:

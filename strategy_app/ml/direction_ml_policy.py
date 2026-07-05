@@ -143,7 +143,7 @@ def _predict_ce_prob(bundle: Dict[str, Any], snap: SnapshotAccessor) -> Optional
             len(nan_features), len(features), nan_features[:10],
         )
 
-    medians: Dict[str, float] = bundle.get("feature_medians", {})
+    medians: Dict[str, float] = bundle.get("feature_medians") or bundle.get("medians") or {}
     row_filled = {f: (v if math.isfinite(v) else medians.get(f, 0.0)) for f, v in row.items()}
 
     try:

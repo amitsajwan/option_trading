@@ -94,7 +94,7 @@ def _check_one_bundle(
         errors.append(f"{label}: bundle has no 'features' list — inference will always return None")
 
     # FM-6: median coverage
-    medians: Dict[str, float] = dict(bundle.get("feature_medians") or {})
+    medians: Dict[str, float] = dict(bundle.get("feature_medians") or bundle.get("medians") or {})
     info["n_medians"] = len(medians)
     missing_medians = len(features) - len(medians)
     if missing_medians > 0:
