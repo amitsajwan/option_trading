@@ -403,10 +403,8 @@ services:
       ENTRY_REGIME_ALLOWED_TAGS: "${ENTRY_REGIME_ALLOWED_TAGS:-}"
       DIRECTION_ML_MODEL_PATH: "${DIRECTION_ML_MODEL_PATH:-}"
       DIRECTION_ML_WEIGHT: "${DIRECTION_ML_WEIGHT:-0.40}"
-      # Direction-selection mode. Default composite (transparent multi-signal vote +
-      # grader); was previously absent so the .env.compose `consensus` value silently
-      # never reached the container — making it explicit removes that landmine.
-      ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-composite}"
+      DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-10}"
+      ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-direction_ml}"
       REGIME_GUARD_MAX_ORW: "${REGIME_GUARD_MAX_ORW:-}"
       DIRECTION_ML_CONFIDENCE_MIN: "${DIRECTION_ML_CONFIDENCE_MIN:-}"
       ENTRY_DIR_W_ML: "${ENTRY_DIR_W_ML:-0.20}"
@@ -1035,10 +1033,8 @@ services:
       ENTRY_REGIME_ALLOWED_TAGS: "${ENTRY_REGIME_ALLOWED_TAGS:-}"
       DIRECTION_ML_MODEL_PATH: "${DIRECTION_ML_MODEL_PATH:-}"
       DIRECTION_ML_WEIGHT: "${DIRECTION_ML_WEIGHT:-0.40}"
-      # Direction-selection mode. Default composite (transparent multi-signal vote +
-      # grader); was previously absent so the .env.compose `consensus` value silently
-      # never reached the container — making it explicit removes that landmine.
-      ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-composite}"
+      DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-10}"
+      ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-direction_ml}"
       REGIME_GUARD_MAX_ORW: "${REGIME_GUARD_MAX_ORW:-}"
       DIRECTION_ML_CONFIDENCE_MIN: "${DIRECTION_ML_CONFIDENCE_MIN:-}"
       ENTRY_DIR_W_ML: "${ENTRY_DIR_W_ML:-0.20}"
@@ -1286,10 +1282,8 @@ services:
       ENTRY_REGIME_ALLOWED_TAGS: "${ENTRY_REGIME_ALLOWED_TAGS:-}"
       DIRECTION_ML_MODEL_PATH: "${DIRECTION_ML_MODEL_PATH:-}"
       DIRECTION_ML_WEIGHT: "${DIRECTION_ML_WEIGHT:-0.40}"
-      # Direction-selection mode. Default composite (transparent multi-signal vote +
-      # grader); was previously absent so the .env.compose `consensus` value silently
-      # never reached the container — making it explicit removes that landmine.
-      ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-composite}"
+      DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-10}"
+      ML_ENTRY_DIRECTION_MODE: "${ML_ENTRY_DIRECTION_MODE:-direction_ml}"
       REGIME_GUARD_MAX_ORW: "${REGIME_GUARD_MAX_ORW:-}"
       DIRECTION_ML_CONFIDENCE_MIN: "${DIRECTION_ML_CONFIDENCE_MIN:-}"
       ENTRY_DIR_W_ML: "${ENTRY_DIR_W_ML:-0.20}"
