@@ -220,8 +220,8 @@ def build_snapshots_from_dhan_data(
                 "realized_vol_30m": _realized_vol_30m(index_bars, i, 30),
             },
             "atm_options": {
-                "atm_ce_ltp": atm_ce_ltp,
-                "atm_pe_ltp": atm_pe_ltp,
+                "atm_ce_close": atm_ce_ltp,
+                "atm_pe_close": atm_pe_ltp,
                 "atm_ce_iv": atm_ce_iv,
                 "atm_pe_iv": atm_pe_iv,
                 "atm_ce_oi": atm_ce_oi,

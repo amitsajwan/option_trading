@@ -449,7 +449,7 @@ class SnapshotAccessor:
 
     @property
     def atm_ce_close(self) -> Optional[float]:
-        value = self._f(self._atm.get("atm_ce_close"))
+        value = self._f(self._atm.get("atm_ce_close")) or self._f(self._atm.get("atm_ce_ltp"))
         return value if value is not None else self._f(self._payload.get("atm_ce_close"))
 
     @property
@@ -466,7 +466,7 @@ class SnapshotAccessor:
 
     @property
     def atm_pe_close(self) -> Optional[float]:
-        value = self._f(self._atm.get("atm_pe_close"))
+        value = self._f(self._atm.get("atm_pe_close")) or self._f(self._atm.get("atm_pe_ltp"))
         return value if value is not None else self._f(self._payload.get("atm_pe_close"))
 
     @property
