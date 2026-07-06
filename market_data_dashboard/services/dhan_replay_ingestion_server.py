@@ -228,6 +228,12 @@ class DhanReplayIngestionServer:
             ce_volume = _f(ce_bar.get("ce_volume")) or 0.0
             pe_volume = _f(pe_bar.get("pe_volume")) or 0.0
 
+            # Skip strikes with no option data — Dhan rollingoption often only returns
+            # even-offset labels (ATM, ATMm2, ATMp2 …). Including empty strikes causes
+            # _nearest_strike to pick a no-data strike (nearest by price) over the real ATM.
+            if ce_ltp is None and pe_ltp is None:
+                continue
+
             total_ce_oi += ce_oi
             total_pe_oi += pe_oi
             strikes.append({
