@@ -99,19 +99,19 @@ class ExecutionConsumer:
             signal_type, signal_id, direction, strike, position_id, tier or "?",
         )
 
-        # ── Hard sim block (NON-BYPASSABLE) ───────────────────────────────────
-        # A sim/replay signal must NEVER reach the broker — regardless of tier OR
-        # EXECUTION_REQUIRE_LIVE_TIER. The tier gate can be turned off (full-live)
-        # or a signal can be mis-tagged tier=="live"; run_id cannot lie. This is
-        # the broker-boundary guard that closes the sim→Dhan leak (2026-06-14):
-        # sim runs (run_id "sim-*") on the shared trade-signal topic were reaching
-        # the live Dhan adapter. Only the un-whitelisted IP accidentally stopped
-        # real fills. This guard stops them deterministically.
+        # ── Hard sim/replay block (NON-BYPASSABLE) ────────────────────────────
+        # Sim and replay signals must NEVER reach the broker — regardless of tier
+        # OR EXECUTION_REQUIRE_LIVE_TIER. run_id cannot lie (unlike tier, which
+        # the strategy sets and could be mis-tagged "live"). Guards:
+        #   sim-*    — sim orchestrator runs on the shared signal topic (2026-06-14 leak)
+        #   replay-* — historical replay via dashboard; historical strikes/expiries
+        #              at current market prices would create unintended real orders
         run_id = str(signal_body.get("run_id") or event.get("run_id") or "").strip()
-        if run_id.lower().startswith("sim-"):
+        _rid_lower = run_id.lower()
+        if _rid_lower.startswith("sim-") or _rid_lower.startswith("replay-"):
             logger.error(
-                "execution consumer: BLOCKED sim signal at broker boundary "
-                "run_id=%s id=%s type=%s (sims must never execute)",
+                "execution consumer: BLOCKED sim/replay signal at broker boundary "
+                "run_id=%s id=%s type=%s (sim/replay must never execute)",
                 run_id, signal_id, signal_type,
             )
             return
