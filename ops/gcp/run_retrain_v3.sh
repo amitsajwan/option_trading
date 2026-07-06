@@ -27,8 +27,17 @@
 set -e
 cd /opt/option_trading
 
+# Activate venv if present (ML VM uses .venv)
+if [ -f .venv/bin/activate ]; then
+    source .venv/bin/activate
+fi
+
 INSTRUMENT="${1:-all}"
 DATA_DIR=".data/dhan_pipeline/indicators"
+# Per-instrument data dirs: train_direction_dhan_v3 load_indicators uses *INST* glob
+# (uppercase) which fails on Linux (case-sensitive). Pass the exact subdirectory instead.
+BN_DATA_DIR="$DATA_DIR/banknifty"
+NF_DATA_DIR="$DATA_DIR/nifty"
 N_TRIALS=80
 
 # BankNifty: monthly regime only (Nov2024 NSE switched from weekly to monthly)
@@ -39,8 +48,8 @@ BN_VALID_END="2026-05-31"
 BN_HOLD_START="2026-06-01"
 BN_HOLD_END="2026-06-30"
 
-# NIFTY: 5 years available (weekly expiry throughout — consistent regime)
-NF_TRAIN_START="2021-06-01"
+# NIFTY: 2 years (2024-01 start — post-regime-shift; 5yr data hurts direction AUC due to stale patterns)
+NF_TRAIN_START="2024-01-01"
 NF_TRAIN_END="2025-12-31"
 NF_VALID_START="2026-01-01"
 NF_VALID_END="2026-04-30"
@@ -69,7 +78,7 @@ run_banknifty_entry() {
     echo ">>> BankNifty ENTRY model v3"
     python -m ml_pipeline_2.scripts.train_entry_dhan_v3 \
         --instrument BANKNIFTY \
-        --data-dir "$DATA_DIR" \
+        --data-dir "$BN_DATA_DIR" \
         --output models/dhan_entry_bundle_v3.joblib \
         --train-start $TRAIN_START --train-end $TRAIN_END \
         --valid-start $VALID_START --valid-end $VALID_END \
@@ -83,7 +92,7 @@ run_nifty_entry() {
     echo ">>> NIFTY ENTRY model v3 (5-year dataset)"
     python -m ml_pipeline_2.scripts.train_entry_dhan_v3 \
         --instrument NIFTY \
-        --data-dir "$DATA_DIR" \
+        --data-dir "$NF_DATA_DIR" \
         --output models/nifty_entry_bundle_v3.joblib \
         --train-start $NF_TRAIN_START --train-end $NF_TRAIN_END \
         --valid-start $NF_VALID_START --valid-end $NF_VALID_END \
@@ -97,7 +106,7 @@ run_banknifty_direction() {
     echo ">>> BankNifty DIRECTION model v3"
     python -m ml_pipeline_2.scripts.train_direction_dhan_v3 \
         --instrument BANKNIFTY \
-        --data-dir "$DATA_DIR" \
+        --data-dir "$BN_DATA_DIR" \
         --output models/direction_dhan_bn_v3.joblib \
         --train-start $TRAIN_START --train-end $TRAIN_END \
         --valid-start $VALID_START --valid-end $VALID_END \
@@ -108,10 +117,10 @@ run_banknifty_direction() {
 
 run_nifty_direction() {
     echo ""
-    echo ">>> NIFTY DIRECTION model v3 (5-year dataset)"
+    echo ">>> NIFTY DIRECTION model v3 (2024-01-01 start — shorter window avoids stale regime patterns)"
     python -m ml_pipeline_2.scripts.train_direction_dhan_v3 \
         --instrument NIFTY \
-        --data-dir "$DATA_DIR" \
+        --data-dir "$NF_DATA_DIR" \
         --output models/direction_dhan_nifty_v3.joblib \
         --train-start $NF_TRAIN_START --train-end $NF_TRAIN_END \
         --valid-start $NF_VALID_START --valid-end $NF_VALID_END \

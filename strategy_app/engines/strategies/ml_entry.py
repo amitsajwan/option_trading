@@ -251,6 +251,20 @@ class MlEntryStrategy(BaseStrategy):
                 "ml_entry: direction resolved to None snap=%s prob=%.4f — no vote (check direction policy)",
                 snap_id, deciding_prob,
             )
+            try:
+                from ...runtime.eval_context import set_entry_diag
+                set_entry_diag({
+                    "entry_prob": round(float(deciding_prob), 4),
+                    "threshold": round(float(deciding_thr), 4),
+                    "fired": True,
+                    "snapshot_id": snap_id,
+                    "entry_models": per_model,
+                    "deciding_model": deciding_model.label,
+                    "cost_gate": {"ok": True, "reason": "passed"},
+                    "direction_none": True,
+                })
+            except Exception:
+                pass
             return None
         passed_labels = [m.label for m, _ in passing]
         raw_signals = {

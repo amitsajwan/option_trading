@@ -1690,7 +1690,12 @@ services:
       DIRECTION_ML_MODEL_PATH: "${NIFTY_DIRECTION_ML_MODEL_PATH:-/app/models/nifty_direction_v2.joblib}"
       ENTRY_ML_MAX_NAN_FEATURES: "${NIFTY_ENTRY_ML_MAX_NAN_FEATURES:-2}"
       DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-10}"
-      ML_ENTRY_DIRECTION_MODE: "direction_ml"
+      ML_ENTRY_DIRECTION_MODE: "${NIFTY_ML_ENTRY_DIRECTION_MODE:-composite}"
+      # Cost gate calibration — NIFTY has smaller absolute point moves and lower
+      # ATM premiums than BankNifty, making brokerage a larger % of trade value.
+      # ratio_min=1.0 (vs BN 1.5) and slippage=0.005 (vs BN 0.008, NIFTY is liquid).
+      ENTRY_COST_RATIO_MIN: "${NIFTY_ENTRY_COST_RATIO_MIN:-1.0}"
+      ENTRY_COST_SLIPPAGE_PCT: "${NIFTY_ENTRY_COST_SLIPPAGE_PCT:-0.005}"
       # NIFTY-specific sizing — NSE changes lot size per expiry; execution uses scrip master.
       # Set NIFTY_LOT_SIZE in .env to match the current front-month (25 since late 2024).
       NIFTY_LOT_SIZE: "${NIFTY_LOT_SIZE:-25}"

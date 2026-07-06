@@ -40,3 +40,34 @@ def get_entry_diag() -> Optional[dict[str, Any]]:
 
 def clear_entry_diag() -> None:
     _entry_diag_var.set(None)
+
+
+def no_votes_blocker_reason() -> str:
+    """Return a specific blocker name when _collect_votes returned [].
+
+    Reads the entry-model diag recorded this bar (set_entry_diag) and converts
+    the raw ML outcome into a trace-level gate name that's immediately readable:
+
+      ml_entry_nan_warmup       — NaN count exceeded max (data not ready)
+      ml_entry_below_threshold  — prob computed but < threshold
+      ml_entry_cost_gate        — prob fired, cost-ratio gate blocked
+      ml_entry_direction_none   — prob fired, cost passed, direction resolved None
+      no_strategy_votes         — fallback (diag absent or unrecognised state)
+
+    The goal: trace primary_blocker_gate is self-explanatory without code diving.
+    """
+    diag = _entry_diag_var.get()
+    if not isinstance(diag, dict):
+        return "no_strategy_votes"
+    if diag.get("error") == "prediction_failed":
+        return "ml_entry_nan_warmup"
+    fired = diag.get("fired")
+    if fired is False:
+        return "ml_entry_below_threshold"
+    if fired is True:
+        cg = diag.get("cost_gate")
+        if isinstance(cg, dict) and not cg.get("ok"):
+            return "ml_entry_cost_gate"
+        if diag.get("direction_none"):
+            return "ml_entry_direction_none"
+    return "no_strategy_votes"
