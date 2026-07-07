@@ -41,7 +41,8 @@
   "must_match_across_services": [
     "EXIT_GIVEBACK_STOP_ENABLED",
     "EXIT_GIVEBACK_MIN_MFE",
-    "EXIT_POLICY_STACK_ENABLED"
+    "EXIT_POLICY_STACK_ENABLED",
+    "EXIT_SCALPER_STALE_BARS"
   ],
   "must_differ_across_services": [
     "ENTRY_ML_MODEL_PATH",

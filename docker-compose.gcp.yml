@@ -432,6 +432,10 @@ services:
       EXIT_THESIS_FAIL_MIN_MFE: "${EXIT_THESIS_FAIL_MIN_MFE:-0.002}"
       # Scalper sub-stack hard loss cap (makes adaptive self-sufficient; >=1.0 disables)
       EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+      # Model-horizon timestop: entry model predicts a move within 15 min; exit
+      # losing/flat positions once that window expires (June A/B: NIFTY Jun-24
+      # -18.8% -> -10.6%, BN book unchanged). 0 = off.
+      EXIT_SCALPER_STALE_BARS: "${EXIT_SCALPER_STALE_BARS:-15}"
       # Giveback stop (Jun-4 dead-zone fix): off by default; enable with EXIT_GIVEBACK_STOP_ENABLED=1
       EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
       EXIT_GIVEBACK_MIN_MFE: "${EXIT_GIVEBACK_MIN_MFE:-0.03}"
@@ -1336,6 +1340,10 @@ services:
       EXIT_THESIS_FAIL_MIN_MFE: "${EXIT_THESIS_FAIL_MIN_MFE:-0.002}"
       # Scalper sub-stack hard loss cap (makes adaptive self-sufficient; >=1.0 disables)
       EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+      # Model-horizon timestop: entry model predicts a move within 15 min; exit
+      # losing/flat positions once that window expires (June A/B: NIFTY Jun-24
+      # -18.8% -> -10.6%, BN book unchanged). 0 = off.
+      EXIT_SCALPER_STALE_BARS: "${EXIT_SCALPER_STALE_BARS:-15}"
       # Giveback stop (Jun-4 dead-zone fix): off by default; enable with EXIT_GIVEBACK_STOP_ENABLED=1
       EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
       EXIT_GIVEBACK_MIN_MFE: "${EXIT_GIVEBACK_MIN_MFE:-0.03}"
@@ -1717,6 +1725,10 @@ services:
       EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
       EXIT_MAX_LOSS_PCT: "${EXIT_MAX_LOSS_PCT:-0.10}"
       EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+      # Model-horizon timestop: entry model predicts a move within 15 min; exit
+      # losing/flat positions once that window expires (June A/B: NIFTY Jun-24
+      # -18.8% -> -10.6%, BN book unchanged). 0 = off.
+      EXIT_SCALPER_STALE_BARS: "${EXIT_SCALPER_STALE_BARS:-15}"
       # Explicit (code defaults true): contract check flagged NIFTY riding the
       # implicit default while BN pins it — pin both so intent is visible.
       EXIT_POLICY_STACK_ENABLED: "${EXIT_POLICY_STACK_ENABLED:-1}"
