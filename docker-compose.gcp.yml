@@ -326,6 +326,11 @@ services:
       STRATEGY_ML_PURE_RANDOMIZE_DIRECTION: "${STRATEGY_ML_PURE_RANDOMIZE_DIRECTION:-0}"
       STRATEGY_SMART_STRIKE_ENABLED: "${STRATEGY_SMART_STRIKE_ENABLED:-0}"
       SMART_STRIKE_MAX_PREMIUM: "${SMART_STRIKE_MAX_PREMIUM:-0}"
+      # Premium floor (BN only): June-2026 A/B — floor 100 re-picks strikes at
+      # >=Rs100 premium (never blocks a signal). Month gross +Rs1,972 -> +Rs3,192
+      # per lot, worst day -Rs1,675 -> -Rs490. Kills sub-Rs30 lottery tickets
+      # where spread+brokerage ate 8-10% before the trade moved.
+      SMART_STRIKE_MIN_PREMIUM: "${BN_SMART_STRIKE_MIN_PREMIUM:-100}"
       SMART_STRIKE_IV_REJECT_PCTILE: "${SMART_STRIKE_IV_REJECT_PCTILE:-}"
       SMART_STRIKE_OTM_CONFIDENCE: "${SMART_STRIKE_OTM_CONFIDENCE:-}"
       SMART_STRIKE_OTM_IV_CEIL: "${SMART_STRIKE_OTM_IV_CEIL:-}"

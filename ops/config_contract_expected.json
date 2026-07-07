@@ -7,6 +7,7 @@
         "ENTRY_ML_MODEL_PATH": "/app/models/dhan_entry_bundle_v3.joblib",
         "ENTRY_ML_MIN_PROB": "0.35",
         "ENTRY_ML_MAX_NAN_FEATURES": "5",
+        "SMART_STRIKE_MIN_PREMIUM": "100",
         "ML_ENTRY_DIRECTION_MODE": "direction_ml",
         "DIRECTION_ML_MODEL_PATH": "/app/models/direction_dhan_bn_v3.joblib",
         "EXIT_GIVEBACK_STOP_ENABLED": "1",
