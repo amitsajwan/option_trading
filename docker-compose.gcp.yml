@@ -1711,6 +1711,9 @@ services:
       EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
       EXIT_MAX_LOSS_PCT: "${EXIT_MAX_LOSS_PCT:-0.10}"
       EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+      # Explicit (code defaults true): contract check flagged NIFTY riding the
+      # implicit default while BN pins it — pin both so intent is visible.
+      EXIT_POLICY_STACK_ENABLED: "${EXIT_POLICY_STACK_ENABLED:-1}"
       # Giveback stop (Jun-4 dead-zone fix): exits trades whose MFE showed promise
       # (>=3%) but then gave back 9% from peak — the July-1 -14% all-day hold gap.
       EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
