@@ -146,6 +146,7 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
     # vix_daily: build daily OHLC (trade_date, vix_open/high/low/close) from intraday VIX,
     # the format _compute_vix_block expects.
     vix_df = None
+    vix_minute = None  # per-bar VIX series (IST-indexed) — live-parity vix_live_current
     vp = raw_dir / "vix.parquet"
     if vp.exists():
         v = pd.read_parquet(vp).reset_index()
@@ -156,6 +157,12 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
                   .agg(vix_open=("open", "first"), vix_high=("high", "max"),
                        vix_low=("low", "min"), vix_close=("close", "last"))
                   .reset_index())
+        # LOOK-AHEAD FIX (2026-07-07): passing vix_live_current=None made
+        # build_market_snapshot fall back to the DAY'S CLOSING VIX for every
+        # intraday bar — a +5% VIX close stamped PANIC on all 375 bars of the
+        # day (Jun 8 / Jun 23 rebuilt as untradeable). The raw feed is 1-min:
+        # use the last VIX close at-or-before each bar, exactly as live ticks.
+        vix_minute = v.set_index("ts")["close"].sort_index()
 
     bars["trade_date"] = bars["timestamp"].dt.date
     all_days = sorted({d for d in bars["trade_date"].unique() if start <= d <= end})
@@ -185,10 +192,15 @@ def build_sim_snapshots(raw_dir: Path, out_dir: Path, instrument: str,
         for full_idx in today_idx:
             ts = fut_window.iloc[full_idx]["timestamp"]
             chain = _chain_at(ts, options, step, instrument, expiry_hint)
+            vix_live = None
+            if vix_minute is not None:
+                _v = vix_minute.asof(ts)  # last VIX close at-or-before this bar
+                if pd.notna(_v):
+                    vix_live = float(_v)
             try:
                 snap = build_market_snapshot(
                     instrument=instrument, ohlc=fut_window, chain=chain, state=state,
-                    vix_daily=vix_df, vix_live_current=None,
+                    vix_daily=vix_df, vix_live_current=vix_live,
                     prepared_window=prepared, current_index=full_idx,
                 )
             except Exception as exc:

@@ -110,6 +110,28 @@ class ThesisFailPolicy(ExitPolicy):
         return f"thesis_fail_{self._min_bars}b_mfe={self._min_mfe:.1%}"
 
 
+class StaleThesisTimestopPolicy(ExitPolicy):
+    """Model-horizon timestop: the entry model predicts a >=threshold move within
+    ~LABEL_HORIZON_MIN (15) minutes. If ``max_bars`` have elapsed and the position
+    has not reached ``min_pnl``, the prediction has EXPIRED — holding further is
+    unpriced risk the model was never validated on (2026-06-24 NIFTY: 21-min bleed
+    to the -18% hard stop; 2026-07-01 BN: 4.7h hold to -14%). Winners are exempt:
+    trailing/giveback manage them."""
+
+    def __init__(self, max_bars: int = 15, min_pnl: float = 0.01):
+        self._max_bars = max_bars
+        self._min_pnl = min_pnl
+
+    def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
+        if position.bars_held >= self._max_bars and (position.pnl_pct or 0.0) < self._min_pnl:
+            return ExitReason.TIME_STOP
+        return None
+
+    @property
+    def name(self) -> str:
+        return f"stale_thesis_{self._max_bars}b_pnl<{self._min_pnl:.1%}"
+
+
 class GivebackStopPolicy(ExitPolicy):
     """Exit when a trade that showed initial promise grinds back past a giveback floor.
 
@@ -305,6 +327,10 @@ def build_scalper_exit_stack() -> CompositeExitPolicy:
     giveback_enabled = as_bool(os.getenv("EXIT_GIVEBACK_STOP_ENABLED", "false"))
     giveback_min_mfe = float(os.getenv("EXIT_GIVEBACK_MIN_MFE", "0.03") or "0.03")
     giveback_pct = float(os.getenv("EXIT_GIVEBACK_PCT", "0.09") or "0.09")
+    # Model-horizon timestop (0 = off): exit losing/flat positions once the entry
+    # model's prediction window (15 min) has expired. Winners are exempt.
+    stale_bars = int(os.getenv("EXIT_SCALPER_STALE_BARS", "0") or "0")
+    stale_min_pnl = float(os.getenv("EXIT_SCALPER_STALE_MIN_PNL", "0.01") or "0.01")
 
     policies: list[ExitPolicy] = [
         HardStopPolicy(hard_stop),
@@ -312,6 +338,8 @@ def build_scalper_exit_stack() -> CompositeExitPolicy:
     ]
     if giveback_enabled:
         policies.append(GivebackStopPolicy(giveback_min_mfe, giveback_pct))
+    if stale_bars > 0:
+        policies.append(StaleThesisTimestopPolicy(stale_bars, stale_min_pnl))
     policies += [
         TrailingStopPolicy(activation_pct, trail_pct),
         PremiumTargetPolicy(target_pct),
