@@ -1711,6 +1711,11 @@ services:
       EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
       EXIT_MAX_LOSS_PCT: "${EXIT_MAX_LOSS_PCT:-0.10}"
       EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+      # Giveback stop (Jun-4 dead-zone fix): exits trades whose MFE showed promise
+      # (>=3%) but then gave back 9% from peak — the July-1 -14% all-day hold gap.
+      EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
+      EXIT_GIVEBACK_MIN_MFE: "${EXIT_GIVEBACK_MIN_MFE:-0.03}"
+      EXIT_GIVEBACK_PCT: "${EXIT_GIVEBACK_PCT:-0.09}"
       STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-trader_master_ml_entry_v1}"
     command:
       - "python"
