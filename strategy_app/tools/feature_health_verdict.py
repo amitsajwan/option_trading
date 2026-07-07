@@ -34,17 +34,18 @@ from ..ml.bundle_inference import build_feature_row, load_joblib_bundle
 # Bars before 09:45 IST are feature warmup by design — exclude from health.
 SESSION_START_HHMM = "09:45"
 
-_EVENTS_CANDIDATES = (
-    "/app/.run/snapshot_app/events.jsonl",
-    "/app/.run/snapshot_app_nifty/events.jsonl",
-)
-
-
-def _find_events(explicit: str | None) -> Path | None:
+def _find_events(explicit: str | None, instrument: str) -> Path | None:
     if explicit:
         p = Path(explicit)
         return p if p.exists() else None
-    for cand in _EVENTS_CANDIDATES:
+    # Instrument-specific path FIRST — containers can mount both instruments'
+    # run dirs, and probing the wrong one silently scores the other book.
+    candidates = (
+        ("/app/.run/snapshot_app_nifty/events.jsonl", "/app/.run/snapshot_app/events.jsonl")
+        if instrument == "NIFTY"
+        else ("/app/.run/snapshot_app/events.jsonl", "/app/.run/snapshot_app_nifty/events.jsonl")
+    )
+    for cand in candidates:
         p = Path(cand)
         if p.exists():
             return p
@@ -82,7 +83,7 @@ def main() -> int:
         return 2
 
     features: list[str] = list(bundle.get("features") or [])
-    events = _find_events(args.events)
+    events = _find_events(args.events, instrument)
     if events is None:
         msg = f"FEATURE HEALTH {instrument} {day}: no events.jsonl found — cannot evaluate"
         print(msg)
