@@ -68,23 +68,48 @@ EOF
 
 # ── Daily self-checks (2026-07-07: silent-degradation + wiring-gap detectors) ──
 
+# 09:00 IST: SYSTEM READY verdict (config contract + container health + Dhan
+# token probe) pushed to Telegram — one message that says "safe to trade".
 cat > /etc/systemd/system/config-contract-check.service <<EOF
 [Unit]
-Description=Config contract check (wiring-gap detector) — fails loudly on env drift
+Description=SYSTEM READY check (contract + health + token) with Telegram push
 After=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 $REPO/ops/check_config_contract.py --quiet
+ExecStart=/bin/bash $REPO/ops/gcp/system_ready_check.sh
 EOF
 
 # 09:00 IST = 03:30 UTC — after containers are up (08:00), before market open (09:15).
 cat > /etc/systemd/system/config-contract-check.timer <<EOF
 [Unit]
-Description=Daily config contract check pre-market
+Description=Daily SYSTEM READY check pre-market
 
 [Timer]
 OnCalendar=Mon..Fri *-*-* 03:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# 09:20 IST: MARKET UP verdict — are snapshots actually flowing post-open?
+cat > /etc/systemd/system/market-open-check.service <<EOF
+[Unit]
+Description=Market-open snapshot-flow check with Telegram push
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $REPO/ops/gcp/market_open_check.sh
+EOF
+
+cat > /etc/systemd/system/market-open-check.timer <<EOF
+[Unit]
+Description=Daily market-open snapshot-flow check at 09:20 IST
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 03:50:00 UTC
 Persistent=true
 
 [Install]
@@ -116,7 +141,7 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now dhan-token-refresh.timer dhan-token-guard.timer \
-  config-contract-check.timer feature-health-verdict.timer
+  config-contract-check.timer feature-health-verdict.timer market-open-check.timer
 echo "installed. next runs:"
 systemctl list-timers dhan-token-refresh.timer dhan-token-guard.timer \
-  config-contract-check.timer feature-health-verdict.timer --no-pager
+  config-contract-check.timer feature-health-verdict.timer market-open-check.timer --no-pager

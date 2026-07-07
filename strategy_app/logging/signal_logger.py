@@ -85,6 +85,13 @@ class SignalLogger:
     def _metadata(self, **extra: Any) -> dict[str, Any]:
         return self._resolver.metadata(run_id=self._run_id, **extra)
 
+    def _alerts_live(self) -> bool:
+        """Trade alerts are for LIVE positions only. Sims and replays flow
+        through this same logger (run_id sim-*/replay-*) — without this gate,
+        one 21-day replay pushes ~64 fake trade messages to Telegram."""
+        rid = str(self._run_id or "")
+        return not rid.startswith(("sim-", "replay-"))
+
     def _publish(self, topic: str, event: dict[str, Any]) -> None:
         self._publisher.publish(topic, event)
 
@@ -403,14 +410,15 @@ class SignalLogger:
                 ),
             ),
         )
-        _try_alert_open(
-            direction=str(position.direction or ""),
-            strike=int(position.strike or 0),
-            entry_premium=float(position.entry_premium or 0),
-            lots=int(position.lots or 1),
-            session_trade_count=1,
-            regime=str(record.get("entry_regime") or ""),
-        )
+        if self._alerts_live():
+            _try_alert_open(
+                direction=str(position.direction or ""),
+                strike=int(position.strike or 0),
+                entry_premium=float(position.entry_premium or 0),
+                lots=int(position.lots or 1),
+                session_trade_count=1,
+                regime=str(record.get("entry_regime") or ""),
+            )
 
     def log_position_manage(self, *, position: PositionContext, timestamp: datetime, snapshot_id: str) -> None:
         record = self._position_event_base(
@@ -478,16 +486,17 @@ class SignalLogger:
             ),
         )
         _dm = record.get("decision_metrics") or {}
-        _try_alert_close(
-            direction=str(position.direction or ""),
-            strike=int(position.strike or 0),
-            pnl_pct=float(position.pnl_pct or 0),
-            exit_reason=str(exit_signal.exit_reason.value if exit_signal.exit_reason else ""),
-            mfe_pct=float(position.mfe_pct or 0),
-            mae_pct=float(position.mae_pct or 0),
-            bars_held=int(position.bars_held or 0),
-            exit_policy_triggered=str(_dm.get("exit_policy_triggered") or ""),
-        )
+        if self._alerts_live():
+            _try_alert_close(
+                direction=str(position.direction or ""),
+                strike=int(position.strike or 0),
+                pnl_pct=float(position.pnl_pct or 0),
+                exit_reason=str(exit_signal.exit_reason.value if exit_signal.exit_reason else ""),
+                mfe_pct=float(position.mfe_pct or 0),
+                mae_pct=float(position.mae_pct or 0),
+                bars_held=int(position.bars_held or 0),
+                exit_policy_triggered=str(_dm.get("exit_policy_triggered") or ""),
+            )
 
     def log_decision_summary(self, summary: dict[str, Any]) -> None:
         """Per-snapshot structured decision trace.
