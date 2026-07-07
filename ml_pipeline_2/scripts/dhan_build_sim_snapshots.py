@@ -79,7 +79,15 @@ def _load_options(raw_dir: Path) -> Dict[str, Dict[str, pd.DataFrame]]:
             if not p.exists():
                 continue
             df = pd.read_parquet(p).reset_index()
-            tcol = next(c for c in df.columns if c in ("ts", "timestamp") or "time" in c.lower())
+            # Fetch writes empty placeholders for offsets Dhan had no data for
+            # (e.g. NIFTY ATM-2..-5 PE) — 0 rows, no columns. Skip, don't crash.
+            tcol = next(
+                (c for c in df.columns if c in ("ts", "timestamp") or "time" in c.lower()),
+                None,
+            )
+            if tcol is None or df.empty:
+                log.warning("skipping %s: empty/no time column", p.name)
+                continue
             df["ts"] = pd.to_datetime(df[tcol], utc=True).dt.tz_convert(IST)
             sides[side] = df.set_index("ts")
         if sides:
