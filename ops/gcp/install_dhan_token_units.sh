@@ -66,7 +66,57 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+# ── Daily self-checks (2026-07-07: silent-degradation + wiring-gap detectors) ──
+
+cat > /etc/systemd/system/config-contract-check.service <<EOF
+[Unit]
+Description=Config contract check (wiring-gap detector) — fails loudly on env drift
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 $REPO/ops/check_config_contract.py --quiet
+EOF
+
+# 09:00 IST = 03:30 UTC — after containers are up (08:00), before market open (09:15).
+cat > /etc/systemd/system/config-contract-check.timer <<EOF
+[Unit]
+Description=Daily config contract check pre-market
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 03:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+cat > /etc/systemd/system/feature-health-verdict.service <<EOF
+[Unit]
+Description=Daily feature-health verdict (dead-feature detector, Telegram push)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'docker exec option_trading-strategy_app-1 python -m strategy_app.tools.feature_health_verdict; docker exec option_trading-strategy_app_nifty-1 python -m strategy_app.tools.feature_health_verdict; true'
+EOF
+
+# 10:00 IST = 04:30 UTC — 45 min into the session, features past warmup.
+cat > /etc/systemd/system/feature-health-verdict.timer <<EOF
+[Unit]
+Description=Daily feature-health verdict at 10:00 IST
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 04:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 systemctl daemon-reload
-systemctl enable --now dhan-token-refresh.timer dhan-token-guard.timer
+systemctl enable --now dhan-token-refresh.timer dhan-token-guard.timer \
+  config-contract-check.timer feature-health-verdict.timer
 echo "installed. next runs:"
-systemctl list-timers dhan-token-refresh.timer dhan-token-guard.timer --no-pager
+systemctl list-timers dhan-token-refresh.timer dhan-token-guard.timer \
+  config-contract-check.timer feature-health-verdict.timer --no-pager
