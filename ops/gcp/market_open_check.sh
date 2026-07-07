@@ -7,7 +7,7 @@ TG="bash $REPO/ops/gcp/tg_send.sh"
 log(){ echo "[$(date -u +%FT%TZ)] $*"; }
 
 check_one(){ # container -> "OK ts" | "STALE ts" | "NONE"
-  docker exec "$1" python3 - <<'EOF' 2>/dev/null
+  docker exec -i "$1" python3 - <<'EOF' 2>/dev/null
 import json, pathlib, datetime
 paths = ["/app/.run/snapshot_app/events.jsonl", "/app/.run/snapshot_app_nifty/events.jsonl"]
 p = next((pathlib.Path(x) for x in paths if pathlib.Path(x).exists()), None)
