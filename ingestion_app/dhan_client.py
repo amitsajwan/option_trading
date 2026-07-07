@@ -205,13 +205,38 @@ class DhanLiveClient:
         """
         Fetch real-time quotes from /v2/marketfeed/quote.
         securities: list of {"exchangeSegment": ..., "securityId": ..., "instrument": ...}
-        Returns list of quote dicts.
+        Returns list of quote dicts (in request order where possible).
+
+        Dhan's quote API body is {"<SEGMENT>": [<int security ids>]} and the
+        response nests quotes as data -> segment -> securityId -> quote. The
+        previous implementation sent {"securities": [...]} and read data as a
+        list — both wrong — so this REST fallback NEVER returned a quote (VIX
+        was null in every live snapshot whenever the WS cache missed).
         """
-        payload = {"securities": securities}
+        payload: Dict[str, List[int]] = {}
+        for sec in securities:
+            seg = str(sec.get("exchangeSegment") or "").strip()
+            sid = str(sec.get("securityId") or "").strip()
+            if not seg or not sid:
+                continue
+            try:
+                payload.setdefault(seg, []).append(int(sid))
+            except ValueError:
+                continue
+        if not payload:
+            return []
         resp = self._post("/marketfeed/quote", payload)
-        if isinstance(resp, dict):
-            return resp.get("data", []) or []
-        return []
+        data = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(data, dict):
+            return []
+        out: List[Dict[str, Any]] = []
+        for sec in securities:
+            seg = str(sec.get("exchangeSegment") or "").strip()
+            sid = str(sec.get("securityId") or "").strip()
+            quote = (data.get(seg) or {}).get(sid)
+            if isinstance(quote, dict):
+                out.append(quote)
+        return out
 
 
 # ── Response parsers ──────────────────────────────────────────────────────────
