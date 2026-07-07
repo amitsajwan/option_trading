@@ -647,7 +647,7 @@ services:
       DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
       DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
       DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
-      NIFTY_LOT_SIZE: "${NIFTY_LOT_SIZE:-25}"
+      NIFTY_LOT_SIZE: "${NIFTY_LOT_SIZE:-65}"
       ORDER_FILL_TIMEOUT_SEC: "${ORDER_FILL_TIMEOUT_SEC:-30}"
       ORDER_POLL_INTERVAL_SEC: "${ORDER_POLL_INTERVAL_SEC:-1}"
       FILL_TRACKER_ENABLED: "${FILL_TRACKER_ENABLED:-1}"
@@ -1621,7 +1621,8 @@ services:
       MONGO_DB: "${MONGO_DB:-trading_ai}"
       STRATEGY_INSTRUMENT: NIFTY
       INSTRUMENT_SYMBOL: "${NIFTY_INSTRUMENT_SYMBOL:-NIFTY26JULFUT}"
-      BANKNIFTY_LOT_SIZE: "75"
+      # NIFTY lot 65 per Dhan scrip master Jul-2026 (was a stale BANKNIFTY_LOT_SIZE:75 hack)
+      NIFTY_LOT_SIZE: "${NIFTY_LOT_SIZE:-65}"
       MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
       MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
       MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
@@ -1702,8 +1703,8 @@ services:
       ENTRY_COST_RATIO_MIN: "${NIFTY_ENTRY_COST_RATIO_MIN:-1.0}"
       ENTRY_COST_SLIPPAGE_PCT: "${NIFTY_ENTRY_COST_SLIPPAGE_PCT:-0.005}"
       # NIFTY-specific sizing — NSE changes lot size per expiry; execution uses scrip master.
-      # Set NIFTY_LOT_SIZE in .env to match the current front-month (25 since late 2024).
-      NIFTY_LOT_SIZE: "${NIFTY_LOT_SIZE:-25}"
+      # Set NIFTY_LOT_SIZE in .env to match the current front-month (65 per Jul-2026 scrip master).
+      NIFTY_LOT_SIZE: "${NIFTY_LOT_SIZE:-65}"
       STRATEGY_MIN_CONFIDENCE: "0.05"
       RISK_LIVE_MIN_GRADE: "${RISK_LIVE_MIN_GRADE:-OK}"
       RISK_MAX_LOTS_PER_TRADE: "1"
