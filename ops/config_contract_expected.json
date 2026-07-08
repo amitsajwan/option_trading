@@ -44,6 +44,22 @@
         "EXIT_MAX_LOSS_PCT",
         "ENTRY_COST_RATIO_MIN"
       ]
+    },
+    "option_trading-seller_app-1": {
+      "instrument": "BANKNIFTY",
+      "expect": {
+        "EXECUTION_ADAPTER": "dhan",
+        "SELLER_LIVE_ENABLED": "1",
+        "SELLER_MAX_CONCURRENT": "1",
+        "SELLER_DAILY_LOSS_CAP_RS": "6000",
+        "ALERT_ENABLED": "1"
+      },
+      "require_nonempty": [
+        "DHAN_CLIENT_ID",
+        "DHAN_ACCESS_TOKEN",
+        "SELLER_IV_RANK_MIN",
+        "SELLER_CONDOR_OFFSET"
+      ]
     }
   },
   "must_match_across_services": [

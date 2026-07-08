@@ -92,6 +92,16 @@ class SellerRunner:
             pass
         logger.info("seller %s %s", event, kw)
 
+    def _alert(self, text: str) -> None:
+        """Telegram trade alert — LIVE mode only (paper/replay never pushes)."""
+        if self._mode != "live":
+            return
+        try:
+            from execution_app.alerts import _send_telegram
+            _send_telegram(text)
+        except Exception:
+            logger.exception("seller: alert send failed (ignored)")
+
     def _latest(self) -> Optional[dict]:
         doc = self._col.find_one(sort=[("timestamp", -1)])
         return (doc.get("payload") or {}).get("snapshot") if doc else None
@@ -156,6 +166,8 @@ class SellerRunner:
                           credit=sp.entry_credit, exit_value=exit_val, pnl_rs=round(pnl, 1))
                 self._mirror_close(sp, reason, held, pnl)
                 self._mgr.remove(sp.spread_id)
+                sign = "+" if pnl >= 0 else ""
+                self._alert(f"<b>SELLER CLOSE {sp.structure}</b>  {sign}₹{pnl:.0f}  [{reason}]  held={held}d")
         # ── entry: once/day, in window, risk-permitting ──
         if self._entered_today:
             return
@@ -164,6 +176,10 @@ class SellerRunner:
             return
         ok, why = self._risk.can_open(len(self._mgr.open_spreads), self._daily_pnl)
         if not ok:
+            return
+        ok, why = self._risk.has_conflicting_bn_position(self._db)
+        if not ok:
+            self._log("entry_skipped_bn_conflict", reason=why)
             return
         if not decision.fires:
             return
@@ -176,6 +192,8 @@ class SellerRunner:
                       credit=spread.entry_credit, legs=[(l.action, l.option_type, l.strike) for l in spread.legs],
                       regime=decision.regime, iv_rank=decision.iv_rank)
             self._mirror_open(spread, decision)
+            legs_txt = " ".join(f"{l.action[0]}{l.option_type}{l.strike}" for l in spread.legs)
+            self._alert(f"<b>SELLER OPEN {spread.structure}</b>  credit={spread.entry_credit:.0f}  {legs_txt}")
 
     def run_forever(self, interval_s: float = 30.0) -> None:
         logger.info("SellerRunner loop start (interval=%.0fs, log=%s)", interval_s, self._log_path)

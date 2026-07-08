@@ -1,10 +1,12 @@
 # S3 seller service overlay — adds the seller daemon to the compose stack.
+# Moved out of docs/archive/ 2026-07-08 when SELLER_LIVE_ENABLED went live for real —
+# this is now live trading infra, not an archived reference doc.
 # Deploy:
-#   cp docs/docker-compose.seller.yml docker-compose.seller.yml   (or keep in docs/ and -f it)
 #   docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml \
 #       -f docker-compose.seller.yml --profile ui build strategy_app dashboard seller_app
 #   docker compose ... up -d
-# PAPER by default. Real money requires EXECUTION_ADAPTER=dhan AND SELLER_LIVE_ENABLED=1.
+# PAPER by default (this file's own default is 0) — SELLER_LIVE_ENABLED=1 is set in
+# .env.compose on the runtime VM only. Real money requires EXECUTION_ADAPTER=dhan too.
 services:
   seller_app:
     build:
@@ -22,6 +24,11 @@ services:
       MONGO_DB: trading_ai
       STRATEGY_RUN_DIR: /seller_run
       EXECUTION_ADAPTER: "${EXECUTION_ADAPTER:-paper}"
+      # Real-money credentials — required when EXECUTION_ADAPTER=dhan + SELLER_LIVE_ENABLED=1,
+      # else DhanAdapter() raises at startup (safe-fail, but must be wired for real trading to work).
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
       SELLER_LIVE_ENABLED: "${SELLER_LIVE_ENABLED:-0}"
       SELLER_CONDOR_OFFSET: "${SELLER_CONDOR_OFFSET:-200}"
       SELLER_IV_RANK_MIN: "${SELLER_IV_RANK_MIN:-30}"
@@ -31,7 +38,14 @@ services:
       SELLER_MAX_HOLD_DAYS: "${SELLER_MAX_HOLD_DAYS:-5}"
       SELLER_ENTRY_WINDOW: "${SELLER_ENTRY_WINDOW:-10:00-14:00}"
       SELLER_LOOP_INTERVAL_S: "${SELLER_LOOP_INTERVAL_S:-30}"
+      # Risk caps (code defaults 1 / 6000 if unset — surfaced here for visibility + contract pin).
+      SELLER_MAX_CONCURRENT: "${SELLER_MAX_CONCURRENT:-1}"
+      SELLER_DAILY_LOSS_CAP_RS: "${SELLER_DAILY_LOSS_CAP_RS:-6000}"
       BANKNIFTY_LOT_SIZE: "${BANKNIFTY_LOT_SIZE:-30}"
+      # Telegram trade alerts (2026-07-08: seller had none — real-money trades were invisible).
+      ALERT_ENABLED: "${ALERT_ENABLED:-0}"
+      ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
+      ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
     volumes:
       - seller_run:/seller_run
     command: ["python", "-m", "strategy_app.seller"]

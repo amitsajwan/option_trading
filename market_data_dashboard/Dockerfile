@@ -24,6 +24,13 @@ COPY ingestion_app /app/ingestion_app
 COPY snapshot_app /app/snapshot_app
 COPY strategy_app /app/strategy_app
 COPY ml_pipeline_2 /app/ml_pipeline_2
+# execution_app: this image also runs the seller_app service (python -m strategy_app.seller
+# via docker-compose.seller.yml), whose real-money gateway does
+# `from execution_app.adapter.dhan import DhanAdapter` and whose trade alerts do
+# `from execution_app.alerts import _send_telegram` — without this, SELLER_LIVE_ENABLED=1
+# fails to import at the exact moment it's needed (found 2026-07-08, same bug class as
+# the strategy_app image before commit ba9cfb8).
+COPY execution_app /app/execution_app
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app \

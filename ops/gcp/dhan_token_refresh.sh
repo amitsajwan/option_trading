@@ -53,10 +53,15 @@ fi
 
 log "recreating ALL Dhan-dependent containers with the fresh token"
 cd "$REPO"
-docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml \
-  up -d --no-deps --force-recreate \
-  ingestion_app \
-  ingestion_app_nifty \
-  execution_app \
-  execution_app_nifty
-log "dhan token refreshed via TOTP + all 4 Dhan containers recreated"
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.gcp.yml)
+RECREATE_SVCS=(ingestion_app ingestion_app_nifty execution_app execution_app_nifty)
+# seller_app (2026-07-08, real money): its DhanAdapter reads DHAN_ACCESS_TOKEN at container
+# startup too — without recreating it here it would trade on a stale token after the first
+# daily refresh. Overlay is optional so the refresh never breaks on a VM without it.
+if [ -f docker-compose.seller.yml ]; then
+  COMPOSE_FILES+=(-f docker-compose.seller.yml)
+  RECREATE_SVCS+=(seller_app)
+fi
+docker compose --env-file .env.compose "${COMPOSE_FILES[@]}" \
+  up -d --no-deps --force-recreate "${RECREATE_SVCS[@]}"
+log "dhan token refreshed via TOTP + ${#RECREATE_SVCS[@]} Dhan containers recreated (${RECREATE_SVCS[*]})"

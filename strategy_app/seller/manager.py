@@ -134,3 +134,22 @@ class RiskGates:
         if daily_pnl_rs <= -self._daily_loss_cap:
             return False, f"daily loss cap ₹{self._daily_loss_cap:.0f} hit ({daily_pnl_rs:.0f})"
         return True, "ok"
+
+    def has_conflicting_bn_position(self, db) -> tuple[bool, str]:
+        """Cross-system guard (2026-07-08): the BN buy-side (strategy_app) and this seller
+        are separate processes that both place real orders on the same Dhan account +
+        BankNifty underlying, with NO coordination between them. Rather than risk-stack a
+        new condor's margin/strikes while the buy-side already has capital at risk, skip
+        the seller's entry this cycle whenever BN holds an open position. Fails CLOSED
+        (blocks the trade) if the check itself errors — a missed entry window costs
+        nothing; opening blind next to an unknown position could.
+        """
+        try:
+            latest = db["strategy_positions"].find_one(sort=[("_id", -1)])
+            if latest and latest.get("event") != "POSITION_CLOSE":
+                return False, (f"BN buy-side position open ({latest.get('direction')} "
+                               f"{latest.get('strike')}) — skip to avoid capital/strike overlap")
+            return True, "ok"
+        except Exception:
+            logger.exception("seller: BN position conflict check failed — failing closed (skip entry)")
+            return False, "BN position check failed (fail-closed)"

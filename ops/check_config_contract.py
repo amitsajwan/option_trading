@@ -71,19 +71,24 @@ def main() -> int:
             if not (env.get(key) or "").strip():
                 failures.append(f"[{cname}] {key} missing or empty (required non-empty)")
 
+    # Cross-checks only compare services where the key is actually SET (non-None).
+    # A service that doesn't reference a var at all (e.g. seller_app has no opinion
+    # on EXIT_GIVEBACK_STOP_ENABLED) is excluded from that check rather than treated
+    # as a mismatch — added 2026-07-08 when seller_app joined as a 3rd, structurally
+    # different service sharing only some vars with the BN/NIFTY strategy services.
     live = {c: e for c, e in envs.items() if e is not None}
     if len(live) >= 2:
         names = sorted(live)
         for key in contract.get("must_match_across_services") or []:
-            vals = {c: live[c].get(key) for c in names}
-            if len(set(vals.values())) > 1:
-                detail = ", ".join(f"{c.split('-')[-2]}='{v}'" for c, v in vals.items())
+            present = {c: live[c][key] for c in names if live[c].get(key) is not None}
+            if len(set(present.values())) > 1:
+                detail = ", ".join(f"{c.split('-')[-2]}='{v}'" for c, v in present.items())
                 failures.append(f"[cross] {key} differs across services: {detail}")
         for key in contract.get("must_differ_across_services") or []:
-            vals = [live[c].get(key) for c in names]
-            if len(set(vals)) == 1:
+            present = [live[c][key] for c in names if live[c].get(key) is not None]
+            if len(present) >= 2 and len(set(present)) == 1:
                 failures.append(
-                    f"[cross] {key} is IDENTICAL across services ('{vals[0]}') — "
+                    f"[cross] {key} is IDENTICAL across services ('{present[0]}') — "
                     "one service is likely reading the other instrument's config"
                 )
 
