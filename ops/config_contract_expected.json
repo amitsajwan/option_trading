@@ -13,7 +13,8 @@
         "EXIT_GIVEBACK_STOP_ENABLED": "1",
         "EXIT_POLICY_STACK_ENABLED": "1",
         "STRATEGY_PROFILE_ID": "trader_master_live_v1",
-        "ALERT_ENABLED": "1"
+        "ALERT_ENABLED": "1",
+        "REGIME_PANIC_REQUIRE_NONDIRECTIONAL": "1"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
@@ -31,7 +32,8 @@
         "ML_ENTRY_DIRECTION_MODE": "composite",
         "EXIT_GIVEBACK_STOP_ENABLED": "1",
         "STRATEGY_PROFILE_ID": "trader_master_live_v1",
-        "ALERT_ENABLED": "1"
+        "ALERT_ENABLED": "1",
+        "REGIME_PANIC_REQUIRE_NONDIRECTIONAL": "1"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",

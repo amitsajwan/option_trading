@@ -442,6 +442,13 @@ services:
       ALERT_ENABLED: "${ALERT_ENABLED:-0}"
       ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
       ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+      # PANIC regime tuning — REQUIRE_NONDIRECTIONAL suppresses PANIC on cleanly
+      # directional moves (aligned 5/15/30m) so a crash is tradeable as a trend.
+      # Was in .env.compose but never passed (found 2026-07-08: the -336pt NIFTY
+      # fall was PANIC-blocked for its entire entry window).
+      REGIME_PANIC_REQUIRE_NONDIRECTIONAL: "${REGIME_PANIC_REQUIRE_NONDIRECTIONAL:-1}"
+      REGIME_PANIC_VIX_CHG_MIN: "${REGIME_PANIC_VIX_CHG_MIN:-5.0}"
+      REGIME_PANIC_RVOL_MIN: "${REGIME_PANIC_RVOL_MIN:-0.012}"
       # Giveback stop (Jun-4 dead-zone fix): off by default; enable with EXIT_GIVEBACK_STOP_ENABLED=1
       EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
       EXIT_GIVEBACK_MIN_MFE: "${EXIT_GIVEBACK_MIN_MFE:-0.03}"
@@ -622,6 +629,13 @@ services:
       ALERT_ENABLED: "${ALERT_ENABLED:-0}"
       ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
       ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+      # PANIC regime tuning — REQUIRE_NONDIRECTIONAL suppresses PANIC on cleanly
+      # directional moves (aligned 5/15/30m) so a crash is tradeable as a trend.
+      # Was in .env.compose but never passed (found 2026-07-08: the -336pt NIFTY
+      # fall was PANIC-blocked for its entire entry window).
+      REGIME_PANIC_REQUIRE_NONDIRECTIONAL: "${REGIME_PANIC_REQUIRE_NONDIRECTIONAL:-1}"
+      REGIME_PANIC_VIX_CHG_MIN: "${REGIME_PANIC_VIX_CHG_MIN:-5.0}"
+      REGIME_PANIC_RVOL_MIN: "${REGIME_PANIC_RVOL_MIN:-0.012}"
 
       # ── Signal subscription ───────────────────────────────────────────────
       TRADE_SIGNAL_TOPIC: "${TRADE_SIGNAL_TOPIC:-market:strategy:signals:v1}"
@@ -668,6 +682,13 @@ services:
       ALERT_ENABLED: "${ALERT_ENABLED:-0}"
       ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
       ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+      # PANIC regime tuning — REQUIRE_NONDIRECTIONAL suppresses PANIC on cleanly
+      # directional moves (aligned 5/15/30m) so a crash is tradeable as a trend.
+      # Was in .env.compose but never passed (found 2026-07-08: the -336pt NIFTY
+      # fall was PANIC-blocked for its entire entry window).
+      REGIME_PANIC_REQUIRE_NONDIRECTIONAL: "${REGIME_PANIC_REQUIRE_NONDIRECTIONAL:-1}"
+      REGIME_PANIC_VIX_CHG_MIN: "${REGIME_PANIC_VIX_CHG_MIN:-5.0}"
+      REGIME_PANIC_RVOL_MIN: "${REGIME_PANIC_RVOL_MIN:-0.012}"
       TRADE_SIGNAL_TOPIC: "market:nifty:strategy:signals:v1"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8009/health')"]
@@ -1356,6 +1377,13 @@ services:
       ALERT_ENABLED: "${ALERT_ENABLED:-0}"
       ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
       ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+      # PANIC regime tuning — REQUIRE_NONDIRECTIONAL suppresses PANIC on cleanly
+      # directional moves (aligned 5/15/30m) so a crash is tradeable as a trend.
+      # Was in .env.compose but never passed (found 2026-07-08: the -336pt NIFTY
+      # fall was PANIC-blocked for its entire entry window).
+      REGIME_PANIC_REQUIRE_NONDIRECTIONAL: "${REGIME_PANIC_REQUIRE_NONDIRECTIONAL:-1}"
+      REGIME_PANIC_VIX_CHG_MIN: "${REGIME_PANIC_VIX_CHG_MIN:-5.0}"
+      REGIME_PANIC_RVOL_MIN: "${REGIME_PANIC_RVOL_MIN:-0.012}"
       # Giveback stop (Jun-4 dead-zone fix): off by default; enable with EXIT_GIVEBACK_STOP_ENABLED=1
       EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
       EXIT_GIVEBACK_MIN_MFE: "${EXIT_GIVEBACK_MIN_MFE:-0.03}"
@@ -1747,6 +1775,13 @@ services:
       ALERT_ENABLED: "${ALERT_ENABLED:-0}"
       ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
       ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+      # PANIC regime tuning — REQUIRE_NONDIRECTIONAL suppresses PANIC on cleanly
+      # directional moves (aligned 5/15/30m) so a crash is tradeable as a trend.
+      # Was in .env.compose but never passed (found 2026-07-08: the -336pt NIFTY
+      # fall was PANIC-blocked for its entire entry window).
+      REGIME_PANIC_REQUIRE_NONDIRECTIONAL: "${REGIME_PANIC_REQUIRE_NONDIRECTIONAL:-1}"
+      REGIME_PANIC_VIX_CHG_MIN: "${REGIME_PANIC_VIX_CHG_MIN:-5.0}"
+      REGIME_PANIC_RVOL_MIN: "${REGIME_PANIC_RVOL_MIN:-0.012}"
       # Explicit (code defaults true): contract check flagged NIFTY riding the
       # implicit default while BN pins it — pin both so intent is visible.
       EXIT_POLICY_STACK_ENABLED: "${EXIT_POLICY_STACK_ENABLED:-1}"
