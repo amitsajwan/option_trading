@@ -1,5 +1,5 @@
 {
-  "_comment": "Config contract — checked by ops/check_config_contract.py after every deploy and at 09:00 IST. Update this file IN THE SAME COMMIT as any intentional config change; a mismatch is a deploy blocker. Born 2026-07-07 after the NIFTY-giveback wiring gap (flag enabled in .env.compose but the NIFTY compose service never passed the var — silent no-op for weeks).",
+  "_comment": "Config contract \u00e2\u20ac\u201d checked by ops/check_config_contract.py after every deploy and at 09:00 IST. Update this file IN THE SAME COMMIT as any intentional config change; a mismatch is a deploy blocker. Born 2026-07-07 after the NIFTY-giveback wiring gap (flag enabled in .env.compose but the NIFTY compose service never passed the var \u00e2\u20ac\u201d silent no-op for weeks).",
   "services": {
     "option_trading-strategy_app-1": {
       "instrument": "BANKNIFTY",
@@ -12,7 +12,8 @@
         "DIRECTION_ML_MODEL_PATH": "/app/models/direction_dhan_bn_v3.joblib",
         "EXIT_GIVEBACK_STOP_ENABLED": "1",
         "EXIT_POLICY_STACK_ENABLED": "1",
-        "STRATEGY_PROFILE_ID": "trader_master_live_v1"
+        "STRATEGY_PROFILE_ID": "trader_master_live_v1",
+        "ALERT_ENABLED": "1"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
@@ -29,7 +30,8 @@
         "NIFTY_LOT_SIZE": "65",
         "ML_ENTRY_DIRECTION_MODE": "composite",
         "EXIT_GIVEBACK_STOP_ENABLED": "1",
-        "STRATEGY_PROFILE_ID": "trader_master_live_v1"
+        "STRATEGY_PROFILE_ID": "trader_master_live_v1",
+        "ALERT_ENABLED": "1"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
@@ -42,7 +44,9 @@
     "EXIT_GIVEBACK_STOP_ENABLED",
     "EXIT_GIVEBACK_MIN_MFE",
     "EXIT_POLICY_STACK_ENABLED",
-    "EXIT_SCALPER_STALE_BARS"
+    "EXIT_SCALPER_STALE_BARS",
+    "ALERT_ENABLED",
+    "ALERT_TELEGRAM_CHAT_ID"
   ],
   "must_differ_across_services": [
     "ENTRY_ML_MODEL_PATH",

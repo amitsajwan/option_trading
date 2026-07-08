@@ -436,6 +436,12 @@ services:
       # losing/flat positions once that window expires (June A/B: NIFTY Jun-24
       # -18.8% -> -10.6%, BN book unchanged). 0 = off.
       EXIT_SCALPER_STALE_BARS: "${EXIT_SCALPER_STALE_BARS:-15}"
+      # Trade alerts (BUY/close/halt) fire from signal_logger INSIDE this container —
+      # without these vars alert_open silently no-ops (found 2026-07-08: first live
+      # trade produced no Telegram message).
+      ALERT_ENABLED: "${ALERT_ENABLED:-0}"
+      ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
+      ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
       # Giveback stop (Jun-4 dead-zone fix): off by default; enable with EXIT_GIVEBACK_STOP_ENABLED=1
       EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
       EXIT_GIVEBACK_MIN_MFE: "${EXIT_GIVEBACK_MIN_MFE:-0.03}"
@@ -1344,6 +1350,12 @@ services:
       # losing/flat positions once that window expires (June A/B: NIFTY Jun-24
       # -18.8% -> -10.6%, BN book unchanged). 0 = off.
       EXIT_SCALPER_STALE_BARS: "${EXIT_SCALPER_STALE_BARS:-15}"
+      # Trade alerts (BUY/close/halt) fire from signal_logger INSIDE this container —
+      # without these vars alert_open silently no-ops (found 2026-07-08: first live
+      # trade produced no Telegram message).
+      ALERT_ENABLED: "${ALERT_ENABLED:-0}"
+      ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
+      ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
       # Giveback stop (Jun-4 dead-zone fix): off by default; enable with EXIT_GIVEBACK_STOP_ENABLED=1
       EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
       EXIT_GIVEBACK_MIN_MFE: "${EXIT_GIVEBACK_MIN_MFE:-0.03}"
@@ -1729,6 +1741,12 @@ services:
       # losing/flat positions once that window expires (June A/B: NIFTY Jun-24
       # -18.8% -> -10.6%, BN book unchanged). 0 = off.
       EXIT_SCALPER_STALE_BARS: "${EXIT_SCALPER_STALE_BARS:-15}"
+      # Trade alerts (BUY/close/halt) fire from signal_logger INSIDE this container —
+      # without these vars alert_open silently no-ops (found 2026-07-08: first live
+      # trade produced no Telegram message).
+      ALERT_ENABLED: "${ALERT_ENABLED:-0}"
+      ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
+      ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
       # Explicit (code defaults true): contract check flagged NIFTY riding the
       # implicit default while BN pins it — pin both so intent is visible.
       EXIT_POLICY_STACK_ENABLED: "${EXIT_POLICY_STACK_ENABLED:-1}"
