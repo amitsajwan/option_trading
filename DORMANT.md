@@ -21,6 +21,12 @@ a new flag; delete rows when enabled-and-observed or when the code is removed.
 | LLM oversight | shadow-only, gated on profitability | 2026-06-08 | 2026-08-04 | A/B showed no improvement — candidate for deletion |
 | S3 seller system (iron condor) | seller_app, real money OFF pending live-cycle paper | 2026-06-12 | 2026-07-28 | 78% win in 2024 backtest; needs paper cycle verdict |
 
+## Closed investigations (do not re-attempt without new evidence)
+
+| What | Tried | Verdict |
+|---|---|---|
+| NIFTY direction ML | 2026-07-08: 3 windows tested — 5yr (AUC 0.567), 2yr/2024-start (0.525), BN-matching recency (0.4727, below coinflip). Monotonically WORSE as window narrows toward BN's recipe — not a recency problem. | **Not learnable at this horizon with this feature set.** Composite (rule-based) is the permanent answer for NIFTY, not a placeholder. Don't retry without new features or a different label. |
+
 ## Watching (enabled recently, not yet observed working in live)
 
 | What | Enabled | Observe |
@@ -31,3 +37,5 @@ a new flag; delete rows when enabled-and-observed or when the code is removed.
 | NIFTY composite direction | 2026-07-06 | First NIFTY live entry with `direction_source=composite` |
 | Token guard timer (15-min probe) | 2026-07-07 | A day of `guard: token healthy` journal lines |
 | Config contract + feature health + deploy.sh | 2026-07-07 | First green run of each on the VM |
+| NIFTY fast entry model-2 (thr 0.08) | 2026-07-08 | First live NIFTY entry with `deciding_model: m2` |
+| BN fast entry model-2 (thr 0.6) | 2026-07-08 | First live BN entry with `deciding_model: m2` |

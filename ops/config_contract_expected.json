@@ -14,7 +14,9 @@
         "EXIT_POLICY_STACK_ENABLED": "1",
         "STRATEGY_PROFILE_ID": "trader_master_live_v1",
         "ALERT_ENABLED": "1",
-        "REGIME_PANIC_REQUIRE_NONDIRECTIONAL": "1"
+        "REGIME_PANIC_REQUIRE_NONDIRECTIONAL": "1",
+        "ENTRY_ML_MODEL_PATH_2": "/app/models/dhan_entry_fast_v1.joblib",
+        "ENTRY_ML_MIN_PROB_2": "0.6"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",

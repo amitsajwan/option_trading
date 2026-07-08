@@ -386,11 +386,13 @@ services:
       STRATEGY_PREMIUM_STOP_LOSS_PCT: "${STRATEGY_PREMIUM_STOP_LOSS_PCT:-}"
       ENTRY_ML_MODEL_PATH: "${ENTRY_ML_MODEL_PATH:-}"
       ENTRY_ML_MIN_PROB: "${ENTRY_ML_MIN_PROB:-0.55}"
-      # Optional second entry model (e.g. 10-minute-horizon compression), combined
-      # with model 1 via OR: the entry trigger fires when ANY model clears its own
-      # threshold. Unset -> single-model behaviour (identical to before).
-      ENTRY_ML_MODEL_PATH_2: "${ENTRY_ML_MODEL_PATH_2:-}"
-      ENTRY_ML_MIN_PROB_2: "${ENTRY_ML_MIN_PROB_2:-}"
+      # Fast-onset model v1 (2026-07-08): 1-15min features, OR-combined with v3.
+      # Catches fast expansions v3's 30-60m windows lag. June calib: threshold 0.6
+      # -> silent on 11 normal days (3 bars, all on the one other volatile day),
+      # fires 93 bars through the 2026-07-08 90-min crash (peak p=1.0). BN's higher
+      # base rate (20% vs NIFTY 1.3%) needed a much higher threshold than NIFTY's 0.08.
+      ENTRY_ML_MODEL_PATH_2: "${ENTRY_ML_MODEL_PATH_2:-/app/models/dhan_entry_fast_v1.joblib}"
+      ENTRY_ML_MIN_PROB_2: "${ENTRY_ML_MIN_PROB_2:-0.6}"
       ENTRY_ML_MAX_NAN_FEATURES: "${ENTRY_ML_MAX_NAN_FEATURES:-}"
       ENTRY_ALLOW_CHOP: "${ENTRY_ALLOW_CHOP:-}"
       ENTRY_VOL_GATE_ENABLED: "${ENTRY_VOL_GATE_ENABLED:-0}"
