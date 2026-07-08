@@ -1711,6 +1711,74 @@ services:
       timeout: 5s
       retries: 5
 
+  # 2026-07-08: NIFTY had NO live-snapshot Mongo persistence at all (only the
+  # JSONL file below) — meaning NEITHER the official sim_orchestrator/Strategy
+  # Eval UI replay (source_coll defaults to phase1_market_snapshots) NOR the
+  # seller's live feed (same collection) could ever see NIFTY. Mirrors BN's
+  # persistence_app exactly; only the instrument/topic/collection differ.
+  persistence_app_nifty:
+    build:
+      context: .
+      dockerfile: persistence_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      snapshot_app_nifty:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: NIFTY
+      # Explicit (not auto-namespace-derived): persistence_app.health reads
+      # MONGO_COLL_SNAPSHOTS directly with a hardcoded BN fallback, not via the
+      # instrument-aware resolve_namespace() the writer (mongo_sink.py) uses —
+      # leaving this unset would make the healthcheck silently watch BN's
+      # collection instead of this container's own. Pin explicitly so both agree.
+      MONGO_COLL_SNAPSHOTS: "phase1_market_snapshots_nifty"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "market:nifty:snapshot:v1"
+      HISTORICAL_TOPIC: "market:nifty:snapshot:v1:historical"
+      SNAPSHOT_V1_TOPIC: "market:nifty:snapshot:v1"
+    command:
+      [
+        "python",
+        "-m",
+        "persistence_app.main_snapshot_consumer",
+        "--foreground",
+        "--event-topic",
+        "market:nifty:snapshot:v1",
+        "--run-dir",
+        ".run/persistence_app_nifty",
+      ]
+    volumes:
+      - ./.run:/app/.run
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "persistence_app.health",
+          "--max-age-seconds",
+          "300",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
   strategy_app_nifty:
     image: option_trading-strategy_app
     restart: unless-stopped
