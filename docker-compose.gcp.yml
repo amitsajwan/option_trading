@@ -1741,6 +1741,11 @@ services:
       # committed bundle. Do NOT leave blank — strategy_app produces zero votes.
       ENTRY_ML_MODEL_PATH: "${NIFTY_ENTRY_ML_MODEL_PATH:-/app/models/nifty_entry_bundle_v2.joblib}"
       ENTRY_ML_MIN_PROB: "${NIFTY_ENTRY_ML_MIN_PROB:-0.05}"
+      # Fast-onset model v1 (2026-07-08): 1-15min features, OR-combined with v3.
+      # Catches fast expansions the v3 model's 30-60m windows lag (Jul-8 crash:
+      # fires 13:57 vs v3 at the bottom). June calib: 7 bars/month at thr 0.08.
+      ENTRY_ML_MODEL_PATH_2: "${NIFTY_ENTRY_ML_MODEL_PATH_2:-/app/models/nifty_entry_fast_v1.joblib}"
+      ENTRY_ML_MIN_PROB_2: "${NIFTY_ENTRY_ML_MIN_PROB_2:-0.08}"
       DIRECTION_ML_MODEL_PATH: "${NIFTY_DIRECTION_ML_MODEL_PATH:-/app/models/nifty_direction_v2.joblib}"
       ENTRY_ML_MAX_NAN_FEATURES: "${NIFTY_ENTRY_ML_MAX_NAN_FEATURES:-2}"
       DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-10}"
