@@ -21,6 +21,10 @@ COPY contracts_app /app/contracts_app
 COPY ml_pipeline_2 /app/ml_pipeline_2
 COPY snapshot_app /app/snapshot_app
 COPY strategy_app /app/strategy_app
+# execution_app: signal_logger lazy-imports execution_app.alerts for trade
+# Telegram alerts. Without it the import failed SILENTLY since day one —
+# no live trade ever produced a message (found 2026-07-08).
+COPY execution_app /app/execution_app
 COPY models/ /app/models/
 
 ENV PYTHONPATH=/app

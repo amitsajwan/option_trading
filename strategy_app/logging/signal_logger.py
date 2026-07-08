@@ -26,27 +26,50 @@ from contracts_app import (
 from ..contracts import PositionContext, StrategyVote, TradeSignal
 from .decision_field_resolver import DecisionFieldResolver
 
-# E5-S1: lazy import so alerts module is optional (avoids hard dep on requests/urllib3)
-def _try_alert_open(**kwargs) -> None:
+# E5-S1: lazy import so alerts module is optional. A failed import must be LOUD
+# (once): execution_app was missing from the strategy image since day one and
+# every trade alert no-op'd silently until 2026-07-08.
+_alert_import_warned = False
+
+
+def _alert_fn(name: str):
+    global _alert_import_warned
     try:
-        from execution_app.alerts import alert_open
-        alert_open(**kwargs)
-    except Exception:
-        pass
+        import execution_app.alerts as _alerts
+        return getattr(_alerts, name)
+    except Exception as exc:
+        if not _alert_import_warned:
+            logging.getLogger(__name__).warning(
+                "trade alerts UNAVAILABLE (%s: %s) — no Telegram trade messages will be sent",
+                type(exc).__name__, exc,
+            )
+            _alert_import_warned = True
+        return None
+
+
+def _try_alert_open(**kwargs) -> None:
+    fn = _alert_fn("alert_open")
+    if fn:
+        try:
+            fn(**kwargs)
+        except Exception:
+            pass
 
 def _try_alert_close(**kwargs) -> None:
-    try:
-        from execution_app.alerts import alert_close
-        alert_close(**kwargs)
-    except Exception:
-        pass
+    fn = _alert_fn("alert_close")
+    if fn:
+        try:
+            fn(**kwargs)
+        except Exception:
+            pass
 
 def _try_alert_halt(**kwargs) -> None:
-    try:
-        from execution_app.alerts import alert_halt
-        alert_halt(**kwargs)
-    except Exception:
-        pass
+    fn = _alert_fn("alert_halt")
+    if fn:
+        try:
+            fn(**kwargs)
+        except Exception:
+            pass
 from .health_marker import HealthMarker
 from .jsonl_sink import append_jsonl, normalize_record_timestamps
 from .redis_event_publisher import RedisEventPublisher
