@@ -28,7 +28,10 @@ _MAX_AGE_S = float(os.getenv("SELLER_CONFLICT_FLAG_MAX_AGE_S", "600") or 600)
 
 
 def flag_path() -> Path:
-    base = os.getenv("SHARED_RUN_DIR") or os.getenv("STRATEGY_RUN_DIR") or "/app/.run"
+    # NOT STRATEGY_RUN_DIR: that is a per-service subdirectory (/app/.run/strategy_app),
+    # but the flag must live at the SHARED mount root so seller (/shared_run) and buyer
+    # (/app/.run) resolve the same host file. Caught by the cross-container smoke test.
+    base = os.getenv("SHARED_RUN_DIR") or "/app/.run"
     return Path(base) / _FLAG_BASENAME
 
 
