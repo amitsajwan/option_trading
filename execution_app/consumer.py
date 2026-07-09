@@ -27,6 +27,7 @@ from strategy_app.contracts import SignalType
 
 from .adapter.base import BrokerAdapter
 from .order_manager import FillEvent, OrderManager
+from .protective_stop import ProtectiveStopManager
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class ExecutionConsumer:
         self._r = redis.Redis(**redis_connection_kwargs(decode_responses=True))
         self._r_pub = redis.Redis(**redis_connection_kwargs(decode_responses=True, for_pubsub=True))
         self._topic = trade_signal_topic()
+        self._protective = ProtectiveStopManager(adapter, self._r)
 
     def run(self) -> None:
         logger.info("execution consumer: subscribing to topic=%s", self._topic)
@@ -133,7 +135,8 @@ class ExecutionConsumer:
         fill: Optional[FillEvent] = None
 
         if signal_type == SignalType.ENTRY.value:
-            order_result = self._adapter.place_entry(_dict_to_signal_stub(signal_body))
+            signal_stub = _dict_to_signal_stub(signal_body)
+            order_result = self._adapter.place_entry(signal_stub)
             fill = self._order_manager.place_and_confirm(
                 order_result=order_result,
                 signal_id=signal_id,
@@ -143,21 +146,44 @@ class ExecutionConsumer:
                 strike=strike,
                 signal_premium=_float(entry_premium),
             )
+            # Broker-side disaster stop: arm right after the entry fill confirms so
+            # the exchange caps the loss even if our stack goes down mid-session.
+            if fill is not None and fill.status == "filled":
+                self._protective.protect_entry(
+                    position_id=position_id,
+                    signal=signal_stub,
+                    fill_price=fill.fill_price or _float(entry_premium),
+                    fill_qty=fill.fill_qty,
+                )
 
         elif signal_type == SignalType.EXIT.value:
-            order_result = self._adapter.place_exit(
-                _dict_to_signal_stub(signal_body),
-                _dict_to_position_stub(signal_body),
-            )
-            fill = self._order_manager.place_and_confirm(
-                order_result=order_result,
-                signal_id=signal_id,
-                signal_type="EXIT",
-                position_id=position_id,
-                direction=direction,
-                strike=strike,
-                signal_premium=_float(entry_premium),
-            )
+            # Cancel the resting broker stop BEFORE selling to close — if it already
+            # executed (outage exit), reconcile from its fill and skip the market sell.
+            stop_fill = self._protective.reconcile_before_exit(position_id)
+            if stop_fill is not None:
+                fill = self._order_manager._make_fill_event(
+                    order_result=stop_fill,
+                    signal_id=signal_id,
+                    signal_type="EXIT",
+                    position_id=position_id,
+                    direction=direction,
+                    strike=strike,
+                    signal_premium=_float(entry_premium),
+                )
+            else:
+                order_result = self._adapter.place_exit(
+                    _dict_to_signal_stub(signal_body),
+                    _dict_to_position_stub(signal_body),
+                )
+                fill = self._order_manager.place_and_confirm(
+                    order_result=order_result,
+                    signal_id=signal_id,
+                    signal_type="EXIT",
+                    position_id=position_id,
+                    direction=direction,
+                    strike=strike,
+                    signal_premium=_float(entry_premium),
+                )
 
         if fill is not None:
             # Shadow mode: the OrderResult carries a _shadow_paper_result attribute.

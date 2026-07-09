@@ -615,6 +615,11 @@ services:
       # ── Order management ──────────────────────────────────────────────────
       ORDER_FILL_TIMEOUT_SEC: "${ORDER_FILL_TIMEOUT_SEC:-30}"
       ORDER_POLL_INTERVAL_SEC: "${ORDER_POLL_INTERVAL_SEC:-1}"
+      # Broker-side disaster stop: resting SL-M SELL armed at the exchange right
+      # after each entry fill (2026-07-09 — protects positions when the stack is
+      # down between 1-min bars / token outages). Wider than the app's own exits.
+      EXEC_BROKER_STOP_ENABLED: "${EXEC_BROKER_STOP_ENABLED:-1}"
+      EXEC_BROKER_STOP_PCT: "${EXEC_BROKER_STOP_PCT:-0.25}"
 
       # ── Fill tracking ─────────────────────────────────────────────────────
       FILL_TRACKER_ENABLED: "${FILL_TRACKER_ENABLED:-1}"
@@ -676,6 +681,8 @@ services:
       NIFTY_LOT_SIZE: "${NIFTY_LOT_SIZE:-65}"
       ORDER_FILL_TIMEOUT_SEC: "${ORDER_FILL_TIMEOUT_SEC:-30}"
       ORDER_POLL_INTERVAL_SEC: "${ORDER_POLL_INTERVAL_SEC:-1}"
+      EXEC_BROKER_STOP_ENABLED: "${EXEC_BROKER_STOP_ENABLED:-1}"
+      EXEC_BROKER_STOP_PCT: "${EXEC_BROKER_STOP_PCT:-0.25}"
       FILL_TRACKER_ENABLED: "${FILL_TRACKER_ENABLED:-1}"
       EXECUTION_FILLS_STREAM: "execution:nifty:fills:v1"
       MONGO_COLL_EXECUTION_FILLS: "${MONGO_COLL_EXECUTION_FILLS:-execution_fills}"

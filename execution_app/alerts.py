@@ -154,3 +154,11 @@ def alert_halt(*, halt_reason, consecutive_losses=0, session_pnl_pct=0.0):
 
 def alert_rejected(*, signal_id, signal_type, error=None):
     _sender.on_fill_rejected(signal_id=signal_id, signal_type=signal_type, error=error)
+
+
+def alert_raw(text: str) -> None:
+    """Send a pre-formatted alert (used by protective_stop for broker-stop events)."""
+    if not _ENABLED:
+        return
+    logger.info("alert: %s", text.replace("\n", " "))
+    _send_telegram(text)

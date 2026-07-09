@@ -5,7 +5,7 @@
       "instrument": "BANKNIFTY",
       "expect": {
         "ENTRY_ML_MODEL_PATH": "/app/models/dhan_entry_bundle_v3.joblib",
-        "ENTRY_ML_MIN_PROB": "0.25",
+        "ENTRY_ML_MIN_PROB": "0.35",
         "ENTRY_ML_MAX_NAN_FEATURES": "5",
         "SMART_STRIKE_MIN_PREMIUM": "100",
         "ML_ENTRY_DIRECTION_MODE": "direction_ml",
@@ -43,6 +43,18 @@
         "EXIT_STRATEGY_MODE",
         "EXIT_MAX_LOSS_PCT",
         "ENTRY_COST_RATIO_MIN"
+      ]
+    },
+    "option_trading-execution_app-1": {
+      "instrument": "BANKNIFTY",
+      "expect": {
+        "EXECUTION_ADAPTER": "dhan",
+        "EXEC_BROKER_STOP_ENABLED": "1",
+        "EXEC_BROKER_STOP_PCT": "0.25"
+      },
+      "require_nonempty": [
+        "DHAN_CLIENT_ID",
+        "DHAN_ACCESS_TOKEN"
       ]
     },
     "option_trading-seller_app-1": {
