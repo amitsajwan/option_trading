@@ -66,6 +66,26 @@ funding available.
 Buyer during all phases: ENTRY_ML_MIN_PROB=0.55, 1 lot, yields to seller — research
 book, not P&L book.
 
+## Requirements from user review (2026-07-09 evening)
+
+1. **Fill-truth P&L** — position books must carry REAL Dhan fill prices, never
+   1-min snapshot premiums (2026-07-09: tracker booked 390.95, Dhan filled 378.00
+   — 3.3% fiction propagating into stops/targets/autopsies). Seller gateway is
+   already fill-truthful (synchronous place→poll→record averageTradedPrice). Buyer
+   fix: tracker consumes the execution fills stream and corrects entry premium
+   ~2s after open; trade records store signal premium (for slippage) AND fill
+   price (the truth); stops/targets compute off real cost basis.
+2. **Condor all-or-nothing + pre-trade card** — NSE/Dhan has no atomic multi-leg
+   order, so enforce the closest real thing, in order: (a) margin pre-check for
+   the WHOLE structure via Dhan margin-calculator BEFORE leg 1; (b) buy hedges
+   first, sell shorts last; (c) unwind on any leg failure + stand down for the
+   day (backoff latch); (d) post-placement verification: 4/4 legs TRADED at real
+   prices or full unwind. Before any entry, log + Telegram a TRADE CARD: strikes
+   + rationale (OI walls), net credit, max profit, max loss (width−credit),
+   breakevens, market sense (neutral condor / bull-put / bear-call + quiet-gate
+   prob + IV-rank + regime), and the margin check result. The card is the audit
+   trail — every trade must explain itself.
+
 ## Current blockers carried in
 
 - Seller container STOPPED (2026-07-09) pending Phase 0.
