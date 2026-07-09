@@ -99,7 +99,7 @@ def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) 
     raw = r.json()
     if not raw.get("index_bars"):
         return 0  # holiday / no session
-    snapshots = build_snapshots_from_dhan_data(raw, instrument=instrument, trade_date=trade_date)
+    snapshots = build_snapshots_from_dhan_data(raw)
     _enrich_for_seller(snapshots, trade_date)
     coll = mongo_db[_COLL]
     coll.delete_many({"trade_date_ist": trade_date})  # idempotent per day
