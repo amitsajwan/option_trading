@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from ..market.snapshot_accessor import SnapshotAccessor
@@ -122,13 +122,28 @@ class SellerRunner:
         except Exception:
             return None
 
-    def _expiry(self, snap: dict) -> date:
-        # TODO: resolve the real nearest BankNifty monthly expiry from the chain/scrip master.
-        raw = ((snap.get("session_context") or {}).get("expiry") or snap.get("expiry"))
+    def _expiry(self, snap: dict) -> Optional[date]:
+        """Real expiry for order legs. 2026-07-09 live bug: snapshots carry no
+        'expiry' field, so this returned the date(2099,1,1) paper placeholder and
+        EVERY real-money leg failed scrip-master resolution — the seller could
+        never open a live position. Snapshots DO carry days_to_expiry, so derive
+        the date from it; as a last resort return None, which DhanAdapter's
+        _resolve_qty resolves to the nearest listed expiry (paper gateway ignores
+        expiry entirely)."""
+        sc = snap.get("session_context") or {}
+        raw = sc.get("expiry") or snap.get("expiry")
         try:
             return date.fromisoformat(str(raw)[:10])
         except Exception:
-            return date(2099, 1, 1)  # paper placeholder
+            pass
+        try:
+            dte = int(sc.get("days_to_expiry"))
+            day = self._trade_date(snap)
+            if day is not None and dte >= 0:
+                return date.fromisoformat(day) + timedelta(days=dte)
+        except Exception:
+            pass
+        return None
 
     def on_snapshot(self, snap: dict) -> None:
         if not snap or not snap.get("strikes"):
