@@ -159,7 +159,9 @@ class ExecutionConsumer:
         elif signal_type == SignalType.EXIT.value:
             # Cancel the resting broker stop BEFORE selling to close — if it already
             # executed (outage exit), reconcile from its fill and skip the market sell.
-            stop_fill = self._protective.reconcile_before_exit(position_id)
+            stop_fill = self._protective.reconcile_before_exit(
+                position_id, direction=direction, strike=strike,
+            )
             if stop_fill is not None:
                 fill = self._order_manager._make_fill_event(
                     order_result=stop_fill,

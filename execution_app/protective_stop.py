@@ -65,6 +65,16 @@ class ProtectiveStopManager:
         self._adapter = adapter
         self._r = redis_client
 
+    @staticmethod
+    def _leg_key(direction, strike) -> Optional[str]:
+        """State key from the leg itself. ENTRY signals carry no position_id
+        (2026-07-09: first live entry after rollout went unprotected because we
+        keyed on it) — direction+strike is present on BOTH entry and exit
+        signals, and the session book holds at most one position per leg."""
+        if not direction or not strike:
+            return None
+        return f"{_KEY_PREFIX}leg:{direction}:{strike}"
+
     # ── after a confirmed live entry fill ────────────────────────────────────
     def protect_entry(self, *, position_id: Optional[str], signal, fill_price: Optional[float],
                       fill_qty: Optional[int]) -> Optional[OrderResult]:
@@ -76,13 +86,26 @@ class ProtectiveStopManager:
         place = getattr(self._adapter, "place_protective_stop", None)
         if place is None:
             return None
-        if not position_id or not fill_price or fill_price <= 0 or not fill_qty or fill_qty <= 0:
+        key = self._leg_key(signal.direction, signal.strike)
+        if not key or not fill_price or fill_price <= 0 or not fill_qty or fill_qty <= 0:
             logger.warning(
-                "protective_stop: cannot protect pos=%s — missing fill data (price=%s qty=%s)",
-                position_id, fill_price, fill_qty,
+                "protective_stop: cannot protect pos=%s leg=%s/%s — missing fill data (price=%s qty=%s)",
+                position_id, getattr(signal, "direction", None), getattr(signal, "strike", None),
+                fill_price, fill_qty,
             )
             self._alert(f"<b>UNPROTECTED POSITION</b> {position_id or '?'} — no fill data for broker stop")
             return None
+        # Re-entry on the same leg: a stale resting stop from a previous position
+        # would double-sell later — cancel it before arming the new one.
+        stale = self._r.get(key)
+        if stale:
+            try:
+                old_id = str(json.loads(stale).get("order_id") or "")
+                if old_id:
+                    self._adapter.cancel_order(old_id)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            self._r.delete(key)
         trigger = fill_price * (1.0 - _stop_pct())
         try:
             result = place(signal, qty_units=int(fill_qty), trigger_price=trigger)
@@ -94,7 +117,7 @@ class ProtectiveStopManager:
             return None
         if result.status == "placed" and result.order_id:
             self._r.set(
-                _KEY_PREFIX + str(position_id),
+                key,
                 json.dumps({"order_id": result.order_id, "trigger": round(trigger, 2),
                             "qty": int(fill_qty)}),
                 ex=_KEY_TTL_SEC,
@@ -116,7 +139,8 @@ class ProtectiveStopManager:
         return result
 
     # ── before an app-driven exit ────────────────────────────────────────────
-    def reconcile_before_exit(self, position_id: Optional[str]) -> Optional[OrderResult]:
+    def reconcile_before_exit(self, position_id: Optional[str], *, direction=None,
+                              strike=None) -> Optional[OrderResult]:
         """Cancel the resting stop before the app sells to close.
 
         Returns None when the exit should proceed normally (stop cancelled, or
@@ -124,10 +148,13 @@ class ProtectiveStopManager:
         stop already closed the position — the caller must SKIP the market sell
         and emit the exit fill from that result instead.
         """
-        if not position_id:
-            return None
-        key = _KEY_PREFIX + str(position_id)
-        raw = self._r.get(key)
+        # Leg key is the primary; the position-id key is legacy fallback for any
+        # stop armed before the 2026-07-09 keying fix (or manually with a pos id).
+        key = self._leg_key(direction, strike)
+        raw = self._r.get(key) if key else None
+        if not raw and position_id:
+            key = _KEY_PREFIX + str(position_id)
+            raw = self._r.get(key)
         if not raw:
             return None
         try:

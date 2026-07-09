@@ -69,15 +69,34 @@ def mgr(monkeypatch):
     return ProtectiveStopManager(adapter, r), adapter, r
 
 
+LEG_KEY = _KEY_PREFIX + "leg:CE:58500"
+
+
 def test_entry_fill_arms_stop_with_filled_qty_and_trigger(mgr, monkeypatch):
     m, adapter, r = mgr
     monkeypatch.setenv("EXEC_BROKER_STOP_PCT", "0.25")
     result = m.protect_entry(position_id="pos-1", signal=FakeSignal(), fill_price=400.0, fill_qty=30)
     assert result is not None and result.status == "placed"
     assert adapter.placed_stops == [{"qty": 30, "trigger": 300.0}]  # 400 * (1 - 0.25)
-    state = json.loads(r.store[_KEY_PREFIX + "pos-1"])
+    # Keyed by leg, NOT position_id — ENTRY signals carry position_id=None live.
+    state = json.loads(r.store[LEG_KEY])
     assert state["order_id"] == "stop-1"
     assert state["qty"] == 30
+
+
+def test_entry_without_position_id_still_arms(mgr):
+    m, adapter, r = mgr
+    result = m.protect_entry(position_id=None, signal=FakeSignal(), fill_price=400.0, fill_qty=30)
+    assert result is not None and result.status == "placed"
+    assert LEG_KEY in r.store
+
+
+def test_reentry_same_leg_cancels_stale_stop_first(mgr):
+    m, adapter, r = mgr
+    m.protect_entry(position_id=None, signal=FakeSignal(), fill_price=400.0, fill_qty=30)
+    m.protect_entry(position_id=None, signal=FakeSignal(), fill_price=380.0, fill_qty=30)
+    assert adapter.cancelled == ["stop-1"]  # stale stop cancelled before re-arming
+    assert len(adapter.placed_stops) == 2
 
 
 def test_disabled_env_is_noop(mgr, monkeypatch):
@@ -106,34 +125,44 @@ def test_adapter_without_stop_support_is_noop(monkeypatch):
 
 def test_exit_cancels_resting_stop_then_proceeds(mgr):
     m, adapter, r = mgr
-    m.protect_entry(position_id="pos-1", signal=FakeSignal(), fill_price=400.0, fill_qty=30)
-    assert m.reconcile_before_exit("pos-1") is None  # None -> caller proceeds with market sell
+    m.protect_entry(position_id=None, signal=FakeSignal(), fill_price=400.0, fill_qty=30)
+    # exit signal carries position_id AND leg fields; leg key must match
+    assert m.reconcile_before_exit("pos-1", direction="CE", strike=58500) is None
     assert adapter.cancelled == ["stop-1"]
-    assert _KEY_PREFIX + "pos-1" not in r.store
+    assert LEG_KEY not in r.store
+
+
+def test_exit_falls_back_to_position_id_key(mgr):
+    # stops armed before the leg-keying fix (or manually) are pos-keyed
+    m, adapter, r = mgr
+    r.set(_KEY_PREFIX + "pos-legacy", json.dumps({"order_id": "stop-9", "qty": 30}))
+    assert m.reconcile_before_exit("pos-legacy", direction="CE", strike=58500) is None
+    assert adapter.cancelled == ["stop-9"]
+    assert _KEY_PREFIX + "pos-legacy" not in r.store
 
 
 def test_exit_with_no_stop_on_record_proceeds(mgr):
     m, adapter, r = mgr
-    assert m.reconcile_before_exit("unknown-pos") is None
+    assert m.reconcile_before_exit("unknown-pos", direction="PE", strike=1) is None
     assert adapter.cancelled == []
 
 
 def test_broker_stop_already_fired_skips_market_sell(mgr):
     m, adapter, r = mgr
-    m.protect_entry(position_id="pos-1", signal=FakeSignal(), fill_price=400.0, fill_qty=30)
+    m.protect_entry(position_id=None, signal=FakeSignal(), fill_price=400.0, fill_qty=30)
     adapter.cancel_ok = False  # cancel fails because the stop already executed
     adapter.status_result = OrderResult("stop-1", "filled", 299.5, 30, None)
-    result = m.reconcile_before_exit("pos-1")
+    result = m.reconcile_before_exit("pos-1", direction="CE", strike=58500)
     assert result is not None and result.is_filled
     assert result.fill_price == 299.5  # caller emits the EXIT fill from this
-    assert _KEY_PREFIX + "pos-1" not in r.store
+    assert LEG_KEY not in r.store
 
 
 def test_ambiguous_cancel_retries_then_proceeds(mgr):
     m, adapter, r = mgr
-    m.protect_entry(position_id="pos-1", signal=FakeSignal(), fill_price=400.0, fill_qty=30)
+    m.protect_entry(position_id=None, signal=FakeSignal(), fill_price=400.0, fill_qty=30)
     adapter.cancel_ok = False
     adapter.status_result = OrderResult("stop-1", "pending", None, None, None)
-    assert m.reconcile_before_exit("pos-1") is None  # proceeds (alerted) rather than stranding
+    assert m.reconcile_before_exit("pos-1", direction="CE", strike=58500) is None
     assert adapter.cancelled == ["stop-1", "stop-1"]  # retried once
-    assert _KEY_PREFIX + "pos-1" not in r.store
+    assert LEG_KEY not in r.store
