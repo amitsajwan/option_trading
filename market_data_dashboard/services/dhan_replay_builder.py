@@ -143,14 +143,18 @@ def build_snapshots_from_dhan_data(
         atm_ce_oi = atm_data.get("ce_oi")
         atm_pe_oi = atm_data.get("pe_oi")
 
-        # Build strikes list for chain
-        strikes = []
+        # Build strikes list for chain. 2026-07-10: rollingoption rungs are
+        # RELATIVE to spot and roll intrabar — each bar carries its true
+        # absolute strike ('strike' in the bar). Key the chain by THAT, merging
+        # CE/PE series that land on the same absolute strike this minute. The
+        # old label-derived strike (open-anchored ATM + offset*step) is only a
+        # fallback for data recorded before the fix.
+        by_strike: Dict[int, Dict[str, Optional[float]]] = {}
         total_ce_oi = 0.0
         total_pe_oi = 0.0
         for label, side_data in opt_ts.items():
             if not label.startswith("ATM"):
                 continue
-            # offset from label: ATM=0, ATMp1=+1, ATMm1=-1
             if label == "ATM":
                 off = 0
             elif label.startswith("ATMp"):
@@ -159,7 +163,17 @@ def build_snapshots_from_dhan_data(
                 off = -int(label[4:])
             else:
                 continue
-            sk = (atm_strike or close) + off * step if atm_strike or close else None
+            fallback_sk = (atm_strike or close) + off * step if atm_strike or close else None
+            sk = side_data.get("strike") or fallback_sk
+            if sk is None:
+                continue
+            row = by_strike.setdefault(int(sk), {})
+            for f in ("ce_close", "ce_oi", "ce_iv", "pe_close", "pe_oi", "pe_iv"):
+                if side_data.get(f) is not None:
+                    row[f] = side_data[f]
+        strikes = []
+        for sk in sorted(by_strike):
+            side_data = by_strike[sk]
             ce_oi = side_data.get("ce_oi") or 0.0
             pe_oi = side_data.get("pe_oi") or 0.0
             total_ce_oi += float(ce_oi) if ce_oi else 0.0

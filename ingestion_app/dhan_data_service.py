@@ -417,8 +417,19 @@ class DhanDataService:
                 log.warning("get_historical_day: intraday fetch %s failed: %s", sid, exc)
                 return []
 
-        def _rolling_option_bars(sid: str, strike: int, option_type: str) -> List[Dict]:
+        def _rolling_option_bars(sid: str, offset: int, option_type: str) -> List[Dict]:
+            """One relative-strike series (offset from ATM) for the day.
+
+            2026-07-10 fix: the API's `strike` parameter is RELATIVE — "ATM",
+            "ATM+1", "ATM-2"... We were passing absolute strikes (e.g. 50100),
+            which Dhan silently ignored, returning the plain ATM series for
+            EVERY rung — the replay's whole option ladder was ATM clones.
+            requiredData now includes "strike" so each bar carries its true
+            absolute strike (the rung ROLLS with spot intrabar); the builder
+            places bars into the chain by that per-bar strike.
+            """
             side = "ce" if option_type == "CALL" else "pe"
+            strike_rel = "ATM" if offset == 0 else (f"ATM+{offset}" if offset > 0 else f"ATM{offset}")
             try:
                 resp = self._client._post("/charts/rollingoption", {
                     "securityId": sid,
@@ -426,15 +437,15 @@ class DhanDataService:
                     "instrument": "OPTIDX",
                     "expiryCode": 1,
                     "expiryFlag": "WEEK",
-                    "strike": int(strike),
+                    "strike": strike_rel,
                     "drvOptionType": option_type,
-                    "requiredData": ["open", "high", "low", "close", "iv", "oi", "spot", "volume"],
+                    "requiredData": ["open", "high", "low", "close", "iv", "oi", "spot", "volume", "strike"],
                     "fromDate": date,
                     "toDate": date,
                     "interval": str(interval),
                 })
             except Exception as exc:
-                log.warning("get_historical_day: rollingoption %s %s failed: %s", strike, option_type, exc)
+                log.warning("get_historical_day: rollingoption %s %s failed: %s", strike_rel, option_type, exc)
                 return []
             data = (resp.get("data") or {}).get(side) or {}
             ts_list = data.get("timestamp") or []
@@ -443,6 +454,7 @@ class DhanDataService:
             ois      = data.get("oi")     or []
             volumes  = data.get("volume") or []
             spots    = data.get("spot")   or []
+            strikes_ = data.get("strike") or []
             bars = []
             for i, ts in enumerate(ts_list):
                 dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(IST)
@@ -453,6 +465,7 @@ class DhanDataService:
                     f"{side}_oi":     ois[i]     if i < len(ois)     else None,
                     f"{side}_volume": volumes[i] if i < len(volumes) else None,
                     "spot": spots[i] if i < len(spots) else None,
+                    "strike": strikes_[i] if i < len(strikes_) else None,
                 })
             if not bars:
                 log.warning(
@@ -490,7 +503,7 @@ class DhanDataService:
                 for ot, side in [("CALL", "ce"), ("PUT", "pe")]:
                     done += 1
                     log.info("get_historical_day: %s %s %s (%d/%d)", underlying, label, ot, done, total)
-                    options[label][side] = _rolling_option_bars(idx_sid, strike, ot)
+                    options[label][side] = _rolling_option_bars(idx_sid, offset, ot)
 
         return {
             "instrument": underlying,
