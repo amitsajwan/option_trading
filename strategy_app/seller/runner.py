@@ -105,7 +105,9 @@ class SellerRunner:
     def _mirror_close(self, spread, reason, held, pnl) -> None:
         try:
             self._db["seller_trades"].insert_one({
-                "source": "live", "spread_id": spread.spread_id, "day": spread.trade_date,
+                # source = the ACTUAL mode: paper trades were being tagged "live"
+                # (2026-07-10 user report: ledger gave no idea what was real).
+                "source": self._mode, "spread_id": spread.spread_id, "day": spread.trade_date,
                 "structure": spread.structure, "credit": spread.entry_credit, "reason": reason,
                 "days_held": held, "pnl_rs": round(pnl), "iv_rank": (spread.meta or {}).get("iv_rank"),
                 "legs": [[l.action, l.option_type, l.strike] for l in spread.legs],

@@ -130,19 +130,21 @@ th{color:var(--mut);font-weight:600}.g{color:var(--g)}.r{color:var(--r)}.mut{col
 <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
   <div class=sub>Results dataset:</div>
   <div class=seg id=seg>
-    <button data-s=sim_2026 class=on>2026 (live regime)</button>
-    <button data-s=live>live paper</button>
+    <button data-s=live class=on>LIVE (real money)</button>
+    <button data-s=paper>paper</button>
+    <button data-s=sim_2026>2026 sim</button>
+    <button data-s=all>all</button>
   </div>
 </div>
 <div class=grid id=kpis></div>
 <div class=card><h3>Equity / per-trade P&amp;L</h3><div class=bar id=bar></div></div>
 <div class=card><h3>Trade ledger</h3><div style="overflow:auto"><table id=tbl><thead><tr>
-<th>date</th><th>IV-rank</th><th>structure</th><th>legs (short/long)</th><th>credit</th><th>outcome</th><th>held</th><th>₹ P&amp;L</th></tr></thead><tbody></tbody></table></div></div>
+<th>mode</th><th>entered</th><th>exited</th><th>IV-rank</th><th>structure</th><th>legs (short/long)</th><th>credit</th><th>outcome</th><th>held</th><th>₹ P&amp;L</th></tr></thead><tbody></tbody></table></div></div>
 
 <div class=warn id=phasebox><b>Seller v2 — phased rollout</b> (docs/SELLER_V2_PLAN.md): Phase 0 safety ✓ (latch · margin pre-check · trade card · reconciliation · credit floor · buyer yields) → Phase 1 truth-harness baseline: <b>28d replay +₹17,656 · 71% win · worst −₹4,120</b> (real SellerRunner code path, sample small) → Phase 2 edge layers → paper → live ramp. Mode above shows the current gate.</div>
 </div>
 <script>
-let SRC="sim_2026";
+let SRC="live";
 const rs=n=>(n>=0?"+":"−")+"₹"+Math.abs(n).toLocaleString("en-IN");
 function fmtLegs(legs){if(!legs||!legs.length)return '—';const m={};legs.forEach(l=>{const a=l[0],t=l[1],k=l[2];m[(a=='SELL'?'s':'b')+t]=k});
  const put=m.sPE!=null?`P ${m.sPE}/${m.bPE}`:'';const call=m.sCE!=null?`C ${m.sCE}/${m.bCE}`:'';return [put,call].filter(Boolean).join(' · ')||'—';}
@@ -192,7 +194,13 @@ async function load(){
   const tb=document.querySelector('#tbl tbody');
   if(td&&td.trades){tb.innerHTML=td.trades.map(t=>{
     const p=t.pnl_rs;const c=p==null?'mut':(p>0?'g':(p<0?'r':'mut'));
-    return `<tr><td>${t.day||t.entry_ts||''}</td><td>${t.iv_rank??'—'}</td><td>${t.structure||''}</td><td class=mut style="font-size:12px">${fmtLegs(t.legs)}</td><td>${t.credit??'—'}</td><td>${t.reason||t.exit_reason||''}</td><td>${t.days_held??'—'}</td><td class=${c}>${p==null?'—':rs(p)}</td></tr>`}).join('')||'<tr><td colspan=8 class=mut>no trades yet — sitting out / low IV</td></tr>';}
+    const src=t.source||'—';
+    const chip=src=='live'?'<span class=pill style="font-size:10px;padding:1px 6px">LIVE</span>'
+      :(src=='paper'?'<span class="pill paper" style="font-size:10px;padding:1px 6px">PAPER</span>'
+      :`<span class=mut style="font-size:11px">${src}</span>`);
+    const entered=(t.day||String(t.entry_ts||'').slice(0,10));
+    const exited=String(t.exit_ts||'').slice(0,10)||'—';
+    return `<tr><td>${chip}</td><td>${entered}</td><td>${exited}</td><td>${t.iv_rank??'—'}</td><td>${t.structure||''}</td><td class=mut style="font-size:12px">${fmtLegs(t.legs)}</td><td>${t.credit??'—'}</td><td>${t.reason||t.exit_reason||''}</td><td>${t.days_held??'—'}</td><td class=${c}>${p==null?'—':rs(p)}</td></tr>`}).join('')||'<tr><td colspan=10 class=mut>no trades yet — sitting out / low IV</td></tr>';}
 }
 document.getElementById('seg').addEventListener('click',e=>{if(e.target.dataset.s){SRC=e.target.dataset.s;
   [...document.querySelectorAll('#seg button')].forEach(b=>b.classList.toggle('on',b.dataset.s===SRC));load();}});
