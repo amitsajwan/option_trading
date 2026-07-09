@@ -51,6 +51,12 @@ class SellerRunner:
         self._entry_fail_count = 0
         self._entry_fail_latch = int(os.getenv("SELLER_ENTRY_FAIL_LATCH", "2") or 2)
         self._min_free_margin = float(os.getenv("SELLER_MIN_FREE_MARGIN_RS", "60000") or 60000)
+        # Credit floor (Phase 1 replay finding, 2026-07-10): the brain sometimes
+        # proposes structures whose chain prices net ~zero or NEGATIVE credit; the
+        # executor only discovers this AFTER filling legs and unwinds — at real
+        # spread cost in live. Gate on the ESTIMATED credit BEFORE leg 1: thin
+        # credit is also just a bad sale (coins in front of the steamroller).
+        self._min_credit_frac = float(os.getenv("SELLER_MIN_CREDIT_FRAC", "0.30") or 0.30)
         self._reconciled_day: Optional[str] = None
         self._mode = "live" if (os.getenv("EXECUTION_ADAPTER", "paper").strip().lower() == "dhan"
                                 and (os.getenv("SELLER_LIVE_ENABLED", "0") or "0").strip() in ("1", "true", "yes")) else "paper"
@@ -315,6 +321,20 @@ class SellerRunner:
                     self._alert(f"<b>SELLER STAND-DOWN</b> free margin Rs{free:.0f} < "
                                 f"Rs{self._min_free_margin:.0f} — no entries until tomorrow")
                 return
+        # Credit floor on the ESTIMATED credit, before any leg exists.
+        est_credit = 0.0
+        priced = True
+        for l in decision.legs:
+            ltp = pf(l.option_type, l.strike)
+            if ltp is None:
+                priced = False
+                break
+            est_credit += ltp if l.action == "SELL" else -ltp
+        if priced and est_credit < self._min_credit_frac * self._width:
+            self._log("entry_skipped_thin_credit", est_credit=round(est_credit, 1),
+                      floor=round(self._min_credit_frac * self._width, 1),
+                      structure=decision.structure)
+            return
         # Trade card: the entry must explain itself BEFORE the first leg goes out.
         self._alert(self._trade_card(decision, pf, expiry, free))
         ex = SafeExecutor(self._gw_factory(pf), self._lot, self._width)

@@ -118,6 +118,22 @@ def test_stale_flag_is_ignored(tmp_path, monkeypatch):
     assert seller_conflict.seller_spread_active() is False
 
 
+def test_thin_credit_skipped_before_any_leg(tmp_path, monkeypatch):
+    """Replay finding: negative/thin-credit structures must be rejected on the
+    ESTIMATE, before the gateway is ever touched (live unwinds cost real money)."""
+    monkeypatch.setenv("STRATEGY_RUN_DIR", str(tmp_path))
+    monkeypatch.setenv("SHARED_RUN_DIR", str(tmp_path))
+    monkeypatch.setenv("SELLER_IV_RANK_MIN", "0")
+    monkeypatch.setenv("SELLER_MIN_CREDIT_FRAC", "0.99")  # impossible floor
+    _FailingGateway.calls = 0
+    r = SellerRunner(_FakeDb(), gateway_factory=lambda pf: _FailingGateway())
+    r._mgr._store = PositionStore(str(tmp_path / "spreads.json"))
+    for _ in range(3):
+        r.on_snapshot(_snap())
+    assert _FailingGateway.calls == 0        # gateway never touched
+    assert r._entry_fail_count == 0          # a skip is not a failure
+
+
 def test_priority_gate_can_be_disabled(tmp_path, monkeypatch):
     monkeypatch.setenv("SHARED_RUN_DIR", str(tmp_path))
     monkeypatch.setenv("SELLER_PRIORITY_ENABLED", "0")
