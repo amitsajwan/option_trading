@@ -229,17 +229,18 @@ class DhanAdapter(BrokerAdapter):
         return security_id, lots * lot_units
 
     def _place(self, *, security_id: str, qty: int, side: str, tag: str,
-               order_type: str = "MARKET", trigger_price: float | None = None) -> OrderResult:
+               order_type: str = "MARKET", price: float = 0,
+               trigger_price: float | None = None) -> OrderResult:
         body = {
             "dhanClientId": self._client_id,
             "transactionType": side,            # BUY | SELL
             "exchangeSegment": _EXCHANGE_SEGMENT,
             "productType": self._product,       # MARGIN | INTRADAY
-            "orderType": order_type,            # MARKET | STOP_LOSS_MARKET
+            "orderType": order_type,            # MARKET | STOP_LOSS
             "validity": "DAY",
             "securityId": security_id,
             "quantity": qty,
-            "price": 0,
+            "price": price,
             "correlationId": tag[:25],
         }
         if trigger_price is not None:
@@ -279,12 +280,18 @@ class DhanAdapter(BrokerAdapter):
         return self._place(security_id=security_id, qty=qty, side="SELL", tag=signal.signal_id)
 
     def place_protective_stop(self, signal, *, qty_units: int, trigger_price: float) -> OrderResult:
-        """Resting STOP_LOSS_MARKET SELL — the broker-side disaster stop.
+        """Resting STOP_LOSS (SL-Limit) SELL — the broker-side disaster stop.
 
         Placed right after an entry fill so the exchange caps the loss even when
         our stack is down (stale token, restart, feed outage). qty_units is the
         FILLED quantity in units (not lots) so partial fills are covered exactly.
-        Trigger is tick-rounded (NSE options tick = 0.05).
+
+        Order type MUST be STOP_LOSS with an explicit limit price: 2026-07-09
+        incident — Dhan silently converted STOP_LOSS_MARKET into an immediate
+        priced LIMIT sell (trigger dropped to 0), flattening the position on the
+        spot. A live probe confirmed STOP_LOSS rests correctly (PENDING, trigger
+        preserved). The limit sits 5% below the trigger so the triggered sell is
+        marketable through a fast move; tick = 0.05.
         """
         if not signal.expiry or not signal.strike or not signal.direction:
             return OrderResult(order_id="", status="rejected", fill_price=None, fill_qty=None,
@@ -293,11 +300,18 @@ class DhanAdapter(BrokerAdapter):
             security_id, _ = self._resolve_qty(signal.expiry, signal.strike, signal.direction, 1)
         except ValueError as exc:
             return OrderResult(order_id="", status="rejected", fill_price=None, fill_qty=None, error=str(exc))
-        trigger = max(round(trigger_price / 0.05) * 0.05, 0.05)
+
+        def _tick(v: float) -> float:
+            return max(round(round(v / 0.05) * 0.05, 2), 0.05)
+
+        trigger = _tick(trigger_price)
+        limit = _tick(trigger * 0.95)
+        if limit >= trigger:  # tick rounding can collapse tiny premiums
+            limit = max(trigger - 0.05, 0.05)
         return self._place(
             security_id=security_id, qty=qty_units, side="SELL",
-            tag=f"psl-{signal.signal_id}", order_type="STOP_LOSS_MARKET",
-            trigger_price=round(trigger, 2),
+            tag=f"psl-{signal.signal_id}", order_type="STOP_LOSS",
+            price=limit, trigger_price=trigger,
         )
 
     def get_order_status(self, order_id: str) -> OrderResult:
