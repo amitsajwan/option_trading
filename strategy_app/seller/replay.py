@@ -8,7 +8,7 @@ real entries impossible (2099-expiry). Never again — this harness IS the
 live code with a recorded feed.
 
 Usage (inside any container with strategy_app + pymongo, e.g. seller_app):
-  python -m ops.seller_replay --from 2026-06-01 --to 2026-07-09 \
+  python -m strategy_app.seller.replay --from 2026-06-01 --to 2026-07-09 \
       [--coll phase1_market_snapshots] [--out /tmp/seller_replay]
 
 Multi-day holds work: ONE runner instance consumes every snapshot in
