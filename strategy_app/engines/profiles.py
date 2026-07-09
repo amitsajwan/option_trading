@@ -199,7 +199,10 @@ _TRADER_MASTER_STAGNANT_20_DYN_EXIT_RISK_CONFIG: dict[str, Any] = {
 _TRADER_MASTER_LIVE_V1_RISK_CONFIG: dict[str, Any] = {
     **_TRADER_MASTER_RISK_CONFIG,
     # Tighter stop: live fills have slippage; cut faster on wrong-side entries.
-    "stop_loss_pct": 0.18,
+    # 2026-07-09: 0.18 -> 0.15 (user call), matched by the broker-side SL-Limit
+    # at the same 15% (EXEC_BROKER_STOP_PCT) — the broker leg triggers tick-level
+    # so it normally fires first; this app stop is the fallback for it.
+    "stop_loss_pct": 0.15,
     # Keep target same — no reason to cap winners in live.
     "target_pct": 0.70,
     # Trail earlier: protect capital once +25% MFE (vs 35% in paper).

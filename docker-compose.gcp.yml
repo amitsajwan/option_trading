@@ -622,7 +622,7 @@ services:
       # flattening the position instantly. Re-enable only after the order type is
       # proven to rest at the broker.
       EXEC_BROKER_STOP_ENABLED: "${EXEC_BROKER_STOP_ENABLED:-0}"
-      EXEC_BROKER_STOP_PCT: "${EXEC_BROKER_STOP_PCT:-0.25}"
+      EXEC_BROKER_STOP_PCT: "${EXEC_BROKER_STOP_PCT:-0.15}"
 
       # ── Fill tracking ─────────────────────────────────────────────────────
       FILL_TRACKER_ENABLED: "${FILL_TRACKER_ENABLED:-1}"
@@ -685,7 +685,7 @@ services:
       ORDER_FILL_TIMEOUT_SEC: "${ORDER_FILL_TIMEOUT_SEC:-30}"
       ORDER_POLL_INTERVAL_SEC: "${ORDER_POLL_INTERVAL_SEC:-1}"
       EXEC_BROKER_STOP_ENABLED: "${EXEC_BROKER_STOP_ENABLED:-0}"
-      EXEC_BROKER_STOP_PCT: "${EXEC_BROKER_STOP_PCT:-0.25}"
+      EXEC_BROKER_STOP_PCT: "${EXEC_BROKER_STOP_PCT:-0.15}"
       FILL_TRACKER_ENABLED: "${FILL_TRACKER_ENABLED:-1}"
       EXECUTION_FILLS_STREAM: "execution:nifty:fills:v1"
       MONGO_COLL_EXECUTION_FILLS: "${MONGO_COLL_EXECUTION_FILLS:-execution_fills}"

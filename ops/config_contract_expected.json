@@ -50,7 +50,7 @@
       "expect": {
         "EXECUTION_ADAPTER": "dhan",
         "EXEC_BROKER_STOP_ENABLED": "1",
-        "EXEC_BROKER_STOP_PCT": "0.25"
+        "EXEC_BROKER_STOP_PCT": "0.15"
       },
       "require_nonempty": [
         "DHAN_CLIENT_ID",
