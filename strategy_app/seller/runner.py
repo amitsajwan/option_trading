@@ -45,6 +45,13 @@ class SellerRunner:
         self._daily_pnl = 0.0
         self._cur_day: Optional[str] = None
         self._entered_today = False
+        # Phase 0 (2026-07-10): entry-failure latch. 2026-07-09 a failed open
+        # (margin) retried every 30s, buying+unwinding hedge legs each cycle
+        # (~₹30-60 burnt per cycle). N failures => stand down for the DAY.
+        self._entry_fail_count = 0
+        self._entry_fail_latch = int(os.getenv("SELLER_ENTRY_FAIL_LATCH", "2") or 2)
+        self._min_free_margin = float(os.getenv("SELLER_MIN_FREE_MARGIN_RS", "60000") or 60000)
+        self._reconciled_day: Optional[str] = None
         self._mode = "live" if (os.getenv("EXECUTION_ADAPTER", "paper").strip().lower() == "dhan"
                                 and (os.getenv("SELLER_LIVE_ENABLED", "0") or "0").strip() in ("1", "true", "yes")) else "paper"
         logger.info("SellerRunner up (lot=%d width=%d mode=%s open=%d)", self._lot, self._width,
@@ -145,12 +152,100 @@ class SellerRunner:
             pass
         return None
 
+    # ── Phase 0 helpers (2026-07-10) ─────────────────────────────────────────
+    def _adapter(self, pf):
+        """The DhanAdapter behind the live gateway, or None in paper mode."""
+        if self._mode != "live":
+            return None
+        try:
+            return getattr(self._gw_factory(pf), "_a", None)
+        except Exception:
+            return None
+
+    def _free_balance(self, adapter) -> Optional[float]:
+        try:
+            st, fl = adapter._request("GET", "/fundlimit")
+            if st == 200:
+                return float(fl.get("availabelBalance") or fl.get("availableBalance") or 0)
+        except Exception:
+            logger.exception("seller: fundlimit check failed")
+        return None
+
+    def _reconcile_with_broker(self, adapter) -> bool:
+        """Startup/daily invariant: every stored leg must exist at the broker.
+        Drift => loud alert + entry latch for the day (manage-only mode).
+        Returns True when the book is clean (or there is nothing to check)."""
+        if not self._mgr.open_spreads:
+            return True
+        try:
+            st, pos = adapter._request("GET", "/positions")
+            broker_legs = set()
+            for p in (pos if isinstance(pos, list) else []):
+                qty = int(p.get("netQty") or 0)
+                if qty == 0:
+                    continue
+                ot = "CE" if str(p.get("drvOptionType", "")).upper().startswith("CALL") else "PE"
+                strike = int(float(p.get("drvStrikePrice") or 0))
+                broker_legs.add((ot, strike, "BUY" if qty > 0 else "SELL"))
+        except Exception:
+            logger.exception("seller: broker reconciliation fetch failed — latching entries (fail-closed)")
+            self._entry_fail_count = self._entry_fail_latch
+            return False
+        warnings = self._mgr.reconcile(broker_legs)
+        if warnings:
+            self._entry_fail_count = self._entry_fail_latch  # manage-only for the day
+            self._alert("<b>SELLER BOOK DRIFT</b>\n" + "\n".join(warnings[:4])
+                        + "\nEntries latched — reconcile manually.")
+            return False
+        logger.info("seller reconcile: book matches broker (%d spread(s))", len(self._mgr.open_spreads))
+        return True
+
+    def _trade_card(self, decision, pf, expiry, free_margin) -> str:
+        """The pre-entry audit card: what we're doing, worst case, and why —
+        logged AND alerted BEFORE the first leg goes out (user req 2026-07-09)."""
+        leg_txt, credit = [], 0.0
+        for l in sorted(decision.legs, key=lambda x: 0 if x.action == "BUY" else 1):
+            ltp = pf(l.option_type, l.strike)
+            leg_txt.append(f"{l.action} {l.option_type}{l.strike}@{ltp if ltp is not None else '?'}")
+            if ltp is not None:
+                credit += ltp if l.action == "SELL" else -ltp
+        wing = self._width
+        max_profit = credit * self._lot
+        max_loss = max(0.0, wing - credit) * self._lot
+        shorts = [l.strike for l in decision.legs if l.action == "SELL"]
+        sense = {"iron_condor": "NEUTRAL", "bull_put": "UP-biased", "bear_call": "DOWN-biased"}.get(
+            decision.structure, decision.structure)
+        lines = [
+            f"<b>SELLER ENTRY CARD</b> {decision.structure} exp={expiry}",
+            "  ".join(leg_txt),
+            f"est credit {credit:.1f}pt | max profit ~Rs{max_profit:.0f} | max loss ~Rs{max_loss:.0f}",
+        ]
+        if shorts:
+            lines.append(f"breakevens ~{min(shorts) - credit:.0f} / {max(shorts) + credit:.0f}")
+        lines.append(
+            f"sense {sense} | IV-rank {decision.iv_rank if decision.iv_rank is not None else '?'} "
+            f"| regime {decision.regime} | free margin Rs{free_margin if free_margin is not None else '?'}"
+        )
+        card = "\n".join(lines)
+        self._log("entry_card", structure=decision.structure, credit_pts=round(credit, 1),
+                  max_profit_rs=round(max_profit), max_loss_rs=round(max_loss),
+                  sense=sense, iv_rank=decision.iv_rank, free_margin=free_margin)
+        return card
+
     def on_snapshot(self, snap: dict) -> None:
         if not snap or not snap.get("strikes"):
             return
         day = self._trade_date(snap)
         if day and day != self._cur_day:   # only reset daily gates on a REAL date rollover
             self._cur_day, self._daily_pnl, self._entered_today = day, 0.0, False
+            self._entry_fail_count = 0
+        # Buyer-coordination flag: maintained every cycle so the buyer's entry
+        # gate always sees fresh truth (stale flag auto-ignored on their side).
+        try:
+            from ..risk.seller_conflict import publish_seller_state
+            publish_seller_state(len(self._mgr.open_spreads))
+        except Exception:
+            pass
         pf = build_price_fn(snap)
         expiry = self._expiry(snap)
         acc = SnapshotAccessor(snap)
@@ -186,6 +281,8 @@ class SellerRunner:
         # ── entry: once/day, in window, risk-permitting ──
         if self._entered_today:
             return
+        if self._entry_fail_count >= self._entry_fail_latch:
+            return  # latched for the day (failed opens / reconcile drift) — manage-only
         hh = self._hhmm(snap)
         if not (self._win[0] <= hh <= self._win[1]):
             return
@@ -198,20 +295,59 @@ class SellerRunner:
             return
         if not decision.fires:
             return
+        adapter = self._adapter(pf)
+        # Daily broker reconciliation before the first entry attempt (live only):
+        # never add risk on top of a book that doesn't match the broker.
+        if adapter is not None and self._reconciled_day != day:
+            self._reconciled_day = day
+            if not self._reconcile_with_broker(adapter):
+                return
+        # Margin pre-check BEFORE leg 1 (2026-07-09: RMS rejected leg 3 of a condor
+        # mid-flight; hedges were bought+unwound at real cost, retrying every 30s).
+        free = None
+        if adapter is not None:
+            free = self._free_balance(adapter)
+            if free is not None and free < self._min_free_margin:
+                self._entry_fail_count += 1
+                self._log("entry_skipped_margin", free=free, required=self._min_free_margin,
+                          fail_count=self._entry_fail_count)
+                if self._entry_fail_count >= self._entry_fail_latch:
+                    self._alert(f"<b>SELLER STAND-DOWN</b> free margin Rs{free:.0f} < "
+                                f"Rs{self._min_free_margin:.0f} — no entries until tomorrow")
+                return
+        # Trade card: the entry must explain itself BEFORE the first leg goes out.
+        self._alert(self._trade_card(decision, pf, expiry, free))
         ex = SafeExecutor(self._gw_factory(pf), self._lot, self._width)
         spread = ex.open_spread(decision, expiry, trade_date=str(day))
-        if spread is not None:
-            self._mgr.add(spread)
-            self._entered_today = True
-            self._log("open", spread_id=spread.spread_id, structure=spread.structure,
-                      credit=spread.entry_credit, legs=[(l.action, l.option_type, l.strike) for l in spread.legs],
-                      regime=decision.regime, iv_rank=decision.iv_rank)
-            self._mirror_open(spread, decision)
-            legs_txt = " ".join(f"{l.action[0]}{l.option_type}{l.strike}" for l in spread.legs)
-            self._alert(f"<b>SELLER OPEN {spread.structure}</b>  credit={spread.entry_credit:.0f}  {legs_txt}")
+        if spread is None:
+            self._entry_fail_count += 1
+            self._log("open_failed", structure=decision.structure, fail_count=self._entry_fail_count)
+            if self._entry_fail_count >= self._entry_fail_latch:
+                self._alert(f"<b>SELLER STAND-DOWN</b> {self._entry_fail_count} failed open(s) — "
+                            f"latched until tomorrow (no retry burn)")
+            return
+        self._mgr.add(spread)
+        self._entered_today = True
+        try:
+            from ..risk.seller_conflict import publish_seller_state
+            publish_seller_state(len(self._mgr.open_spreads))
+        except Exception:
+            pass
+        self._log("open", spread_id=spread.spread_id, structure=spread.structure,
+                  credit=spread.entry_credit, legs=[(l.action, l.option_type, l.strike) for l in spread.legs],
+                  regime=decision.regime, iv_rank=decision.iv_rank)
+        self._mirror_open(spread, decision)
+        legs_txt = " ".join(f"{l.action[0]}{l.option_type}{l.strike}" for l in spread.legs)
+        self._alert(f"<b>SELLER OPEN {spread.structure}</b>  credit={spread.entry_credit:.0f}  {legs_txt}")
 
     def run_forever(self, interval_s: float = 30.0) -> None:
         logger.info("SellerRunner loop start (interval=%.0fs, log=%s)", interval_s, self._log_path)
+        # Startup reconciliation: a restarted seller holding spreads must prove its
+        # book against the broker BEFORE managing anything (Phase 0 invariant).
+        if self._mode == "live" and self._mgr.open_spreads:
+            adapter = self._adapter(lambda ot, s: None)
+            if adapter is not None:
+                self._reconcile_with_broker(adapter)
         while True:
             try:
                 snap = self._latest()

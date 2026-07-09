@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Optional
 
 from .adapter.base import BrokerAdapter, OrderResult
@@ -115,6 +116,16 @@ class ProtectiveStopManager:
             return None
         if result is None:
             return None
+        # Dhan accepts orders (HTTP 200 + orderId) and can REJECT them async at RMS
+        # ~1s later (2026-07-09: an "ARMED" alert went out for a stop that was
+        # already dead — insufficient naked-short margin). Confirm it actually
+        # rests before recording state or telling anyone it's armed.
+        if result.status == "placed" and result.order_id:
+            time.sleep(1.5)
+            live = self._adapter.get_order_status(result.order_id)
+            if live.status in ("rejected", "cancelled"):
+                result = OrderResult(result.order_id, "rejected", None, None,
+                                     live.error or "async RMS rejection")
         if result.status == "placed" and result.order_id:
             self._r.set(
                 key,

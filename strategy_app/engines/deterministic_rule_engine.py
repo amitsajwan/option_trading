@@ -1552,6 +1552,15 @@ class DeterministicRuleEngine(StrategyEngine):
         if direction not in (Direction.CE, Direction.PE):
             return None
 
+        # Seller-priority gate (Phase 0, 2026-07-10): the seller is the edge-bearing
+        # book on this shared account; while it holds a spread, the buyer opens
+        # nothing (shared margin — resting stops + condor legs cannot both fit).
+        # Exits are unaffected (this is entry-signal construction only).
+        from ..risk.seller_conflict import seller_spread_active
+        if seller_spread_active():
+            logger.info("entry skipped: seller_priority (seller spread open — buyer yields)")
+            return None
+
         # Live-only entry gate (single chokepoint for ALL entry paths): when this
         # engine instance is the LIVE book (ENTRY_LIVE_ONLY_GATE=1), only spend its
         # one slot on live-eligible (GOOD) entries, so a low-grade trade never
