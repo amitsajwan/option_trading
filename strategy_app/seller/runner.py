@@ -102,18 +102,24 @@ class SellerRunner:
         except Exception:
             pass
 
-    def _mirror_close(self, spread, reason, held, pnl) -> None:
+    def _mirror_close(self, spread, reason, held, pnl, exit_value=None, exit_hhmm=None) -> None:
         try:
+            meta = spread.meta or {}
+            exit_px = meta.get("exit_prices") or {}
             self._db["seller_trades"].insert_one({
                 # source = the ACTUAL mode: paper trades were being tagged "live"
                 # (2026-07-10 user report: ledger gave no idea what was real).
-                # day/exit_day = MARKET dates (replay-safe); entry_ts/exit_ts are
-                # wall-clock and meaningless in a replay.
+                # day/exit_day + entry_hhmm/exit_hhmm = MARKET time (replay-safe);
+                # entry_ts/exit_ts are wall-clock and meaningless in a replay.
                 "exit_day": self._cur_day,
+                "entry_hhmm": meta.get("entry_hhmm"), "exit_hhmm": exit_hhmm,
+                "exit_value": exit_value, "qty": spread.qty,
                 "source": self._mode, "spread_id": spread.spread_id, "day": spread.trade_date,
                 "structure": spread.structure, "credit": spread.entry_credit, "reason": reason,
-                "days_held": held, "pnl_rs": round(pnl), "iv_rank": (spread.meta or {}).get("iv_rank"),
-                "legs": [[l.action, l.option_type, l.strike] for l in spread.legs],
+                "days_held": held, "pnl_rs": round(pnl), "iv_rank": meta.get("iv_rank"),
+                # per-leg fills: [action, type, strike, entry_price, exit_price]
+                "legs": [[l.action, l.option_type, l.strike, l.entry_price,
+                          exit_px.get(f"{l.option_type}{l.strike}")] for l in spread.legs],
                 "entry_ts": spread.opened_at, "exit_ts": datetime.now(timezone.utc).isoformat()})
             self._db["seller_positions"].delete_one({"spread_id": spread.spread_id})
         except Exception:
@@ -303,7 +309,8 @@ class SellerRunner:
                 self._daily_pnl += pnl
                 self._log("close", spread_id=sp.spread_id, structure=sp.structure, reason=reason,
                           credit=sp.entry_credit, exit_value=exit_val, pnl_rs=round(pnl, 1))
-                self._mirror_close(sp, reason, held, pnl)
+                self._mirror_close(sp, reason, held, pnl, exit_value=exit_val,
+                                   exit_hhmm=self._hhmm(snap))
                 self._mgr.remove(sp.spread_id)
                 sign = "+" if pnl >= 0 else ""
                 self._alert(f"<b>SELLER CLOSE {sp.structure}</b>  {sign}₹{pnl:.0f}  [{reason}]  held={held}d")
@@ -369,6 +376,7 @@ class SellerRunner:
                 self._alert(f"<b>SELLER STAND-DOWN</b> {self._entry_fail_count} failed open(s) — "
                             f"latched until tomorrow (no retry burn)")
             return
+        spread.meta["entry_hhmm"] = hh   # market time of entry (replay-safe)
         self._mgr.add(spread)
         self._entered_today = True
         try:

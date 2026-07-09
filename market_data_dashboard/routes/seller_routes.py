@@ -248,15 +248,30 @@ function kpiRow(el,m){el.innerHTML=
  kpi('Win rate',(m.win_pct||0)+'%')+kpi('Avg / trade',rs(m.avg_rs||0),(m.avg_rs>=0?'g':'r'))+
  kpi('Profit factor',m.profit_factor==null?'—':m.profit_factor)+
  kpi('Max drawdown',rs(m.max_dd_rs||0),'r')+kpi('Worst trade',rs(m.worst_rs||0),'r');}
-function ledgerRows(trades,withMode){return trades.map(t=>{
+function legDetail(t){
+ const legs=t.legs||[];const qty=t.qty||30;
+ if(!legs.length||legs[0].length<4)return '<span class=mut>no leg fills recorded (older trade)</span>';
+ const rows=legs.map(l=>{
+  const[a,ot,k,ein,eout]=l;
+  const pnl=(eout!=null&&ein!=null)?((a=='SELL'?(ein-eout):(eout-ein))*qty):null;
+  return `<tr><td>${a}</td><td>${ot} ${k}</td><td>${num(ein,2)}</td><td>${eout==null?'—':num(eout,2)}</td>`+
+   `<td class=${pnl==null?'mut':(pnl>=0?'g':'r')}>${pnl==null?'—':rs(pnl)}</td></tr>`}).join('');
+ const netline=`credit ${num(t.credit)} → exit ${t.exit_value==null?'—':num(t.exit_value)} pts · qty ${qty}`;
+ return `<div class=mut style="margin:4px 0">${netline}</div>`+
+  `<table style="width:auto"><thead><tr><th>leg</th><th>contract</th><th>entry fill</th><th>exit fill</th><th>leg P&L</th></tr></thead><tbody>${rows}</tbody></table>`;}
+function ledgerRows(trades,withMode){return trades.map((t,i)=>{
  const p=t.pnl_rs;const c=p==null?'mut':(p>0?'g':(p<0?'r':'mut'));
- // market dates first (day/exit_day are simulated-time in replays); wall-clock ts only as fallback
- const entered=t.day?dt(t.day):dt(t.entry_ts);
- const exited=t.exit_day?dt(t.exit_day):dt(t.exit_ts);
- return `<tr>${withMode?`<td>${chip(t.source)}</td>`:''}<td>${entered}</td><td>${exited}</td>`+
-  `<td>${t.structure||''}</td><td class=mut>${fmtLegs(t.legs)}</td><td>${num(t.credit)}</td>`+
+ // market date+time (day/exit_day + hhmm are simulated-time in replays); wall-clock ts only as fallback
+ const entered=t.day?(dt(t.day).slice(0,10)+(t.entry_hhmm?' '+t.entry_hhmm:'')):dt(t.entry_ts);
+ const exited=t.exit_day?(dt(t.exit_day).slice(0,10)+(t.exit_hhmm?' '+t.exit_hhmm:'')):dt(t.exit_ts);
+ const rid=`lg${withMode?'m':'b'}${i}`;
+ return `<tr style="cursor:pointer" onclick="const e=document.getElementById('${rid}');e.style.display=e.style.display=='none'?'':'none'">`+
+  `${withMode?`<td>${chip(t.source)}</td>`:''}<td>${entered}</td><td>${exited}</td>`+
+  `<td>${t.structure||''} <span class=mut>▾</span></td><td class=mut>${fmtLegs(t.legs)}</td><td>${num(t.credit)}</td>`+
   `<td>${t.iv_rank==null?'—':num(t.iv_rank,0)}</td><td>${t.reason||''}</td><td>${t.days_held??'—'}d</td>`+
-  `<td class=${c}>${p==null?'—':rs(p)}</td></tr>`}).join('')||`<tr><td colspan=10 class=mut>no trades</td></tr>`;}
+  `<td class=${c}>${p==null?'—':rs(p)}</td></tr>`+
+  `<tr id=${rid} style="display:none"><td colspan=${withMode?10:9} style="background:#10141c;padding:10px 16px">${legDetail(t)}</td></tr>`;
+ }).join('')||`<tr><td colspan=10 class=mut>no trades</td></tr>`;}
 
 // ── LIVE tab ──
 async function loadLive(){

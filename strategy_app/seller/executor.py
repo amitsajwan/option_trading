@@ -121,6 +121,8 @@ class SafeExecutor:
             exit_prices[(fl.option_type, fl.strike)] = f.price if f.filled else 0.0
         exit_value = (sum(exit_prices.get((fl.option_type, fl.strike), 0.0) for fl in shorts)
                       - sum(exit_prices.get((fl.option_type, fl.strike), 0.0) for fl in longs))
+        # Per-leg exit fills for the trade record (UI leg grouping, 2026-07-10).
+        spread.meta["exit_prices"] = {f"{ot}{k}": round(p, 2) for (ot, k), p in exit_prices.items()}
         logger.info("seller CLOSE %s exit_value=%.2f pnl_pts=%.2f", spread.spread_id,
                     exit_value, spread.entry_credit - exit_value)
         return round(exit_value, 2)
