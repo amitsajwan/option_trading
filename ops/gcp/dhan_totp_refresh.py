@@ -63,12 +63,20 @@ def main():
         print("FAILED: no token in response:", json.dumps(resp)[:200])
         return 1
 
-    s = open(ENVC).read()
+    # 2026-07-09 incident: a stray non-UTF-8 byte in a comment line elsewhere in
+    # .env.compose (Windows-1252 em-dash from a manual edit) crashed this read
+    # with UnicodeDecodeError, silently killing the ENTIRE daily refresh chain —
+    # the token then went stale mid-session with no automatic recovery (the
+    # guard's 400-vs-401 gap compounded it — fixed separately in the guard).
+    # surrogateescape reads ANY byte sequence losslessly and writes it back
+    # unchanged, so a rogue byte in an unrelated comment can never crash this
+    # script again, and we don't silently mangle whatever the byte was.
+    s = open(ENVC, encoding="utf-8", errors="surrogateescape").read()
     if re.search(r"^DHAN_ACCESS_TOKEN=", s, re.M):
         s = re.sub(r"^DHAN_ACCESS_TOKEN=.*$", "DHAN_ACCESS_TOKEN=" + tok, s, flags=re.M)
     else:
         s = s.rstrip("\n") + "\nDHAN_ACCESS_TOKEN=" + tok + "\n"
-    open(ENVC, "w").write(s)
+    open(ENVC, "w", encoding="utf-8", errors="surrogateescape").write(s)
     print(f"OK: fresh Dhan token minted via TOTP and written to .env.compose (len={len(tok)})")
     return 0
 
