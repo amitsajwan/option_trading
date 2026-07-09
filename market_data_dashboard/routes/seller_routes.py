@@ -139,8 +139,7 @@ th{color:var(--mut);font-weight:600}.g{color:var(--g)}.r{color:var(--r)}.mut{col
 <div class=card><h3>Trade ledger</h3><div style="overflow:auto"><table id=tbl><thead><tr>
 <th>date</th><th>IV-rank</th><th>structure</th><th>legs (short/long)</th><th>credit</th><th>outcome</th><th>held</th><th>₹ P&amp;L</th></tr></thead><tbody></tbody></table></div></div>
 
-<div class=warn><b>Paper only — real money OFF.</b> Edge validated mostly on 2024 (higher-IV); the 2026 sample is small (current-regime sanity check). Go-live only after a full live paper cycle (T9) clears net-cost in this regime + Dhan 2-leg execution is proven.</div>
-<div class=sub style="margin-top:10px">2024 backtest (209 days): 71% win · +₹1,427/trade · +₹228k · drop-top3 +₹208k (robust).</div>
+<div class=warn id=phasebox><b>Seller v2 — phased rollout</b> (docs/SELLER_V2_PLAN.md): Phase 0 safety ✓ (latch · margin pre-check · trade card · reconciliation · credit floor · buyer yields) → Phase 1 truth-harness baseline: <b>28d replay +₹17,656 · 71% win · worst −₹4,120</b> (real SellerRunner code path, sample small) → Phase 2 edge layers → paper → live ramp. Mode above shows the current gate.</div>
 </div>
 <script>
 let SRC="sim_2026";
@@ -158,14 +157,25 @@ async function load(){
     const ivr=s.iv_rank==null?'—':s.iv_rank;
     const dec=s.decision||'—';
     const col=(s.fires)?'var(--g)':'var(--mut)';
-    const ops=st.open_positions||[];
+    const sps=s.spreads||[];
+    const latch=s.entry_latched?'<span class=r>LATCHED</span>':(s.entered_today?'entered':'armed');
     document.getElementById('live').innerHTML=
       `<div><span class=dot style="background:${col}"></span><b>${dec}</b></div>`+
       `<div class=mut>IV-rank <b style="color:var(--fg)">${ivr}</b></div>`+
-      `<div class=mut>open positions <b style="color:var(--fg)">${ops.length}</b></div>`+
+      `<div class=mut>entry <b style="color:var(--fg)">${latch}</b>${s.entry_fail_count?` <span class=r>(${s.entry_fail_count} fail)</span>`:''}</div>`+
+      `<div class=mut>day P&L <b style="color:var(--fg)">${s.daily_pnl_rs!=null?rs(s.daily_pnl_rs):'—'}</b></div>`+
       `<div class=mut>last update ${s.time||s.ts||'—'}</div>`+
-      (ops.length?('<div style="flex-basis:100%;margin-top:8px;border-top:1px solid var(--bd);padding-top:8px">'+
-        ops.map(o=>`<div class=mut style="font-size:12px">▸ <b style="color:var(--fg)">${o.structure}</b> ${fmtLegs(o.legs)} · credit ${o.credit}</div>`).join('')+'</div>'):'');
+      (sps.length?('<div style="flex-basis:100%;margin-top:8px;border-top:1px solid var(--bd);padding-top:8px">'+
+        sps.map(o=>{
+          const v=o.value, hasV=v!=null;
+          // value falls toward tp_at (profit) or rises toward stop_at (loss)
+          const pct=hasV?Math.round(100*(o.credit-v)/(o.credit-o.tp_at)):null;
+          const vcol=hasV?(v<=o.credit?'g':'r'):'mut';
+          return `<div style="font-size:12px;margin:3px 0"><b>${o.structure}</b> <span class=mut>${fmtLegs(o.legs)}</span>`+
+            ` · credit ${o.credit} → now <b class=${vcol}>${hasV?v:'—'}</b>`+
+            (hasV?` <span class=mut>(TP@${o.tp_at} · stop@${o.stop_at} · ${pct}% to TP)</span>`:'')+
+            ` <span class=mut>exp ${o.expiry||''}</span></div>`;
+        }).join('')+'</div>'):'');
   }
   const m=await j('/api/seller/metrics?source='+SRC);
   if(m){document.getElementById('kpis').innerHTML=

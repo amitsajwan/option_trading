@@ -64,13 +64,31 @@ class SellerRunner:
                     self._mode, len(self._mgr.open_spreads))
 
     # ── mongo mirror (for the dashboard) ─────────────────────────────────────
-    def _publish_status(self, snap, acc, decision) -> None:
+    def _publish_status(self, snap, acc, decision, pf=None) -> None:
         try:
+            spreads = []
+            for sp in self._mgr.open_spreads:
+                val = PositionManager.spread_value(sp, pf) if pf is not None else None
+                spreads.append({
+                    "structure": sp.structure, "credit": sp.entry_credit,
+                    "value": round(val, 2) if val is not None else None,
+                    "tp_at": round(sp.entry_credit * 0.5, 2),          # exit when value <= this
+                    "stop_at": round(sp.entry_credit * 2.0, 2),        # exit when value >= this
+                    "legs": [[l.action, l.option_type, l.strike] for l in sp.legs],
+                    "trade_date": sp.trade_date, "expiry": sp.expiry,
+                })
             self._db["seller_status"].update_one({"_id": "live"}, {"$set": {
                 "_id": "live", "ts": datetime.now(timezone.utc).isoformat(), "time": self._hhmm(snap),
                 "mode": self._mode, "decision": decision.structure if decision.fires else "SIT OUT",
                 "reason": (decision.reason or "")[:80], "iv_rank": round(acc.iv_percentile or 0, 1),
                 "fires": bool(decision.fires), "open_count": len(self._mgr.open_spreads),
+                # Phase 0 operational state — the dashboard shows what the daemon
+                # is actually allowed to do right now, not just what it wants.
+                "entered_today": self._entered_today,
+                "entry_fail_count": self._entry_fail_count,
+                "entry_latched": self._entry_fail_count >= self._entry_fail_latch,
+                "daily_pnl_rs": round(self._daily_pnl),
+                "spreads": spreads,
             }}, upsert=True)
         except Exception:
             pass
@@ -256,7 +274,7 @@ class SellerRunner:
         expiry = self._expiry(snap)
         acc = SnapshotAccessor(snap)
         decision = self._brain.decide(acc)
-        self._publish_status(snap, acc, decision)
+        self._publish_status(snap, acc, decision, pf)
         # ── manage open spreads INTRADAY ──
         for sp in list(self._mgr.open_spreads):
             val = PositionManager.spread_value(sp, pf)
