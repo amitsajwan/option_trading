@@ -73,12 +73,18 @@ def bn_monthly_expiry(d: date) -> date:
 
 
 def _enrich_for_seller(snapshots: list[dict], trade_date: str) -> None:
-    """Two gaps in the replay builder's output that the seller needs:
-    futures_bar.fut_close (it writes 'close'; SnapshotAccessor reads 'fut_close')
-    and session_context.days_to_expiry (it writes None; DTE drives seller exits)."""
+    """Gaps in the replay builder's output that the seller needs:
+    - futures_bar.fut_close ('close' in builder; SnapshotAccessor reads 'fut_close')
+    - session_context.days_to_expiry (None in builder; DTE drives seller exits)
+    - per-minute strike gaps: rollingoption has minutes where one side didn't
+      trade -> that side's ltp is None -> the chain-shift price fallback quotes a
+      NEIGHBOR strike for it, making short and hedge price identical (est credit
+      0, seller refuses every entry — 2026-07-10 hist smoke). Forward-fill each
+      strike's fields from its own last known value within the day."""
     d = date.fromisoformat(trade_date)
     exp = bn_monthly_expiry(d)
     dte = (exp - d).days
+    last: dict[tuple[int, str], float] = {}   # (strike, field) -> last non-None
     for s in snapshots:
         fb = s.get("futures_bar") or {}
         if "fut_close" not in fb:
@@ -87,6 +93,16 @@ def _enrich_for_seller(snapshots: list[dict], trade_date: str) -> None:
         sc["days_to_expiry"] = dte
         sc["is_expiry_day"] = dte == 0
         sc["expiry"] = exp.isoformat()
+        for row in (s.get("strikes") or []):
+            k = row.get("strike")
+            if k is None:
+                continue
+            k = int(k)
+            for f in ("ce_ltp", "pe_ltp", "ce_iv", "pe_iv", "ce_oi", "pe_oi"):
+                if row.get(f) is not None:
+                    last[(k, f)] = row[f]
+                elif (k, f) in last:
+                    row[f] = last[(k, f)]
 
 
 def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) -> int:
@@ -116,6 +132,38 @@ def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) 
     return len(docs)
 
 
+def iv_percentile_pass(mongo_db, d_from: str, d_to: str, window_days: int = 20) -> None:
+    """Second pass: fill iv_derived.iv_percentile per snapshot — percentile rank
+    of the bar's ATM IV against the pooled per-bar ATM IVs of the TRAILING
+    window_days backfilled days (mirrors the live IV-rank gate's meaning). The
+    seller's core premium-richness gate is dead without it."""
+    from bisect import bisect_right
+
+    coll = mongo_db[_COLL]
+    days = sorted(coll.distinct("trade_date_ist", {"trade_date_ist": {"$gte": d_from, "$lte": d_to}}))
+    day_ivs: dict[str, list[float]] = {}
+    for day in days:
+        ivs = []
+        for doc in coll.find({"trade_date_ist": day}, {"payload.snapshot.atm_options.atm_iv": 1}):
+            v = ((doc.get("payload") or {}).get("snapshot") or {}).get("atm_options", {}).get("atm_iv")
+            if v:
+                ivs.append(float(v))
+        day_ivs[day] = ivs
+    for i, day in enumerate(days):
+        pool = sorted(v for d2 in days[max(0, i - window_days):i] for v in day_ivs[d2])
+        if not pool:
+            continue  # first days have no trailing history — gate stays None (pass-through)
+        for doc in coll.find({"trade_date_ist": day}, {"payload.snapshot.atm_options.atm_iv": 1}):
+            v = ((doc.get("payload") or {}).get("snapshot") or {}).get("atm_options", {}).get("atm_iv")
+            if not v:
+                continue
+            pct = 100.0 * bisect_right(pool, float(v)) / len(pool)
+            coll.update_one({"_id": doc["_id"]},
+                            {"$set": {"payload.snapshot.iv_derived.iv_percentile": round(pct, 1)}})
+        print(f"iv_pass {day} pool={len(pool)}", flush=True)
+    print("IV_PASS_DONE", flush=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--from", dest="d_from", required=True)
@@ -123,12 +171,17 @@ def main() -> int:
     ap.add_argument("--instrument", default="BANKNIFTY")
     ap.add_argument("--strikes", type=int, default=10)  # ingestion endpoint caps le=10 (ATM±10 = 21 strikes; seller legs live within ±5)
     ap.add_argument("--pause", type=float, default=20.0, help="seconds between days (rate limit)")
+    ap.add_argument("--iv-pass", action="store_true", help="only run the iv_percentile second pass")
     args = ap.parse_args()
 
     from pymongo import MongoClient
     db = MongoClient(os.getenv("MONGO_HOST", "mongo"),
                      int(os.getenv("MONGO_PORT", "27017") or 27017))[
         os.getenv("MONGO_DB", "trading_ai")]
+
+    if args.iv_pass:
+        iv_percentile_pass(db, args.d_from, args.d_to)
+        return 0
 
     d = date.fromisoformat(args.d_from)
     end = date.fromisoformat(args.d_to)
