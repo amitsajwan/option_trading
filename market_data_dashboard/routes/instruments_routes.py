@@ -230,7 +230,15 @@ def _instrument_mode(instrument: str) -> str:
         else:
             import json
             cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-            rollout = str(cfg.get("rollout_stage", "")).lower()
+            # runtime_config.json nests this as {"rollout": {"stage": "capped_live"}},
+            # not a flat "rollout_stage" key. The flat read always returned "" ->
+            # every live instrument silently showed the "SIM" badge regardless of
+            # actual mode (found 2026-07-09 during live trading).
+            rollout_obj = cfg.get("rollout")
+            if isinstance(rollout_obj, dict):
+                rollout = str(rollout_obj.get("stage", "")).lower()
+            else:
+                rollout = str(cfg.get("rollout_stage", "")).lower()
         
         if "live" in rollout:  # "live" or "capped_live"
             mode = "live"
@@ -252,8 +260,15 @@ def _instrument_mode(instrument: str) -> str:
 def _candles_for_instrument(instrument: str, bars: int = 80) -> list[dict]:
     """Read recent 1-min OHLC bars from Redis for the given instrument.
 
-    Tries exact keys first, then falls back to SCAN to find the full futures
-    symbol key (e.g. live:ohlc_sorted:BANKNIFTY26JULFUT:1m).
+    Picks the FRESHEST matching key by last-bar timestamp across the full
+    candidate set (exact short names + wildcard-scanned symbol keys), rather
+    than trying exact names first. Old naming conventions leave stale keys
+    behind when the ingestion symbol format changes (e.g. BANKNIFTY26JULFUT
+    -> BANKNIFTY-JUL2026-FUT) — a fixed-priority "try exact name first" list
+    returns whichever candidate EXISTS, not whichever is actually live, so a
+    week-old stale key silently wins over the real feed (found 2026-07-09:
+    BankNifty chart frozen at Jul-1 while NIFTY, which happened to have only
+    current keys, displayed correctly). Freshness is now the only criterion.
     Returns a list of bar dicts (start_at, open, high, low, close, volume), oldest-first.
     """
     import json as _json
@@ -270,45 +285,38 @@ def _candles_for_instrument(instrument: str, bars: int = 80) -> list[dict]:
                 continue
         return result
 
+    def _last_score(r, key: str) -> float:
+        try:
+            res = r.zrange(key, -1, -1, withscores=True)
+            return res[0][1] if res else -1.0
+        except Exception:
+            return -1.0
+
     host = os.getenv("REDIS_HOST", "localhost")
     port = int(os.getenv("REDIS_PORT", "6379"))
     try:
         r = _redis_lib.Redis(host=host, port=port, db=0, socket_timeout=2, decode_responses=True)
 
-        # Try exact short-name keys first
-        for key in [
+        candidates: set[str] = {
             f"live:ohlc_sorted:{instrument}:1m",
             f"paper:ohlc_sorted:{instrument}:1m",
             f"ohlc_sorted:{instrument}:1m",
             f"live:ohlc_sorted:{instrument}:1min",
             f"ohlc_sorted:{instrument}:1min",
-        ]:
-            result = _read_key(r, key)
-            if result:
-                return result
-
-        # Fallback: scan for full futures symbol key (e.g. BANKNIFTY26JULFUT)
+        }
         for pattern in [
             f"live:ohlc_sorted:{instrument}*:1m",
             f"paper:ohlc_sorted:{instrument}*:1m",
             f"live:ohlc_sorted:{instrument}*:1min",
         ]:
-            found = []
             for k in r.scan_iter(pattern, count=10):
-                found.append(k)
-            if not found:
-                continue
-            # Sort by latest bar timestamp (max score) so current-expiry key wins
-            def _max_score(k):
-                try:
-                    res = r.zrange(k, -1, -1, withscores=True)
-                    return res[0][1] if res else 0.0
-                except Exception:
-                    return 0.0
-            for k in sorted(found, key=_max_score, reverse=True):
-                result = _read_key(r, k)
-                if result:
-                    return result
+                candidates.add(k)
+        candidates = {k for k in candidates if r.exists(k)}
+        if not candidates:
+            return []
+
+        best_key = max(candidates, key=lambda k: _last_score(r, k))
+        return _read_key(r, best_key)
     except Exception:
         pass
     return []
