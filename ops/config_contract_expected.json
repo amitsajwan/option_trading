@@ -5,7 +5,7 @@
       "instrument": "BANKNIFTY",
       "expect": {
         "ENTRY_ML_MODEL_PATH": "/app/models/dhan_entry_bundle_v3.joblib",
-        "ENTRY_ML_MIN_PROB": "0.35",
+        "ENTRY_ML_MIN_PROB": "0.55",
         "ENTRY_ML_MAX_NAN_FEATURES": "5",
         "SMART_STRIKE_MIN_PREMIUM": "100",
         "ML_ENTRY_DIRECTION_MODE": "direction_ml",
@@ -28,7 +28,7 @@
       "instrument": "NIFTY",
       "expect": {
         "ENTRY_ML_MODEL_PATH": "/app/models/nifty_entry_bundle_v3.joblib",
-        "ENTRY_ML_MIN_PROB": "0.35",
+        "ENTRY_ML_MIN_PROB": "0.55",
         "ENTRY_ML_MAX_NAN_FEATURES": "10",
         "NIFTY_LOT_SIZE": "65",
         "ML_ENTRY_DIRECTION_MODE": "composite",
@@ -37,7 +37,7 @@
         "ALERT_ENABLED": "1",
         "REGIME_PANIC_REQUIRE_NONDIRECTIONAL": "1",
         "ENTRY_ML_MODEL_PATH_2": "/app/models/nifty_entry_fast_v1.joblib",
-        "ENTRY_ML_MIN_PROB_2": "0.08"
+        "ENTRY_ML_MIN_PROB_2": "0.30"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
