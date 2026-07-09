@@ -49,7 +49,7 @@
       "instrument": "BANKNIFTY",
       "expect": {
         "EXECUTION_ADAPTER": "dhan",
-        "EXEC_BROKER_STOP_ENABLED": "1",
+        "EXEC_BROKER_STOP_ENABLED": "0",
         "EXEC_BROKER_STOP_PCT": "0.25"
       },
       "require_nonempty": [

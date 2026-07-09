@@ -61,7 +61,9 @@ class FakeAdapter:
 
 
 @pytest.fixture
-def mgr():
+def mgr(monkeypatch):
+    # Feature is default-OFF after the 2026-07-09 incident; tests exercise it ON.
+    monkeypatch.setenv("EXEC_BROKER_STOP_ENABLED", "1")
     adapter = FakeAdapter()
     r = FakeRedis()
     return ProtectiveStopManager(adapter, r), adapter, r
@@ -92,7 +94,9 @@ def test_missing_fill_data_does_not_place(mgr):
     assert adapter.placed_stops == []
 
 
-def test_adapter_without_stop_support_is_noop():
+def test_adapter_without_stop_support_is_noop(monkeypatch):
+    monkeypatch.setenv("EXEC_BROKER_STOP_ENABLED", "1")
+
     class Bare:  # paper/kite adapters have no place_protective_stop
         pass
 

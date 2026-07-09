@@ -41,7 +41,11 @@ _KEY_TTL_SEC = 86400  # DAY-validity order; state is meaningless tomorrow
 
 
 def _enabled() -> bool:
-    return str(os.getenv("EXEC_BROKER_STOP_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes"}
+    # Default OFF. 2026-07-09 live incident: Dhan silently converted our
+    # STOP_LOSS_MARKET into an immediate priced LIMIT sell (triggerPrice dropped
+    # to 0) and flattened the open position on the spot. Do NOT re-enable until
+    # the resting-order type is proven to actually rest (see docs/ incident note).
+    return str(os.getenv("EXEC_BROKER_STOP_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes"}
 
 
 def _stop_pct() -> float:
