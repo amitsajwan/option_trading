@@ -250,7 +250,10 @@ function kpiRow(el,m){el.innerHTML=
  kpi('Max drawdown',rs(m.max_dd_rs||0),'r')+kpi('Worst trade',rs(m.worst_rs||0),'r');}
 function ledgerRows(trades,withMode){return trades.map(t=>{
  const p=t.pnl_rs;const c=p==null?'mut':(p>0?'g':(p<0?'r':'mut'));
- return `<tr>${withMode?`<td>${chip(t.source)}</td>`:''}<td>${dt(t.entry_ts||t.day)}</td><td>${dt(t.exit_ts)}</td>`+
+ // market dates first (day/exit_day are simulated-time in replays); wall-clock ts only as fallback
+ const entered=t.day?dt(t.day):dt(t.entry_ts);
+ const exited=t.exit_day?dt(t.exit_day):dt(t.exit_ts);
+ return `<tr>${withMode?`<td>${chip(t.source)}</td>`:''}<td>${entered}</td><td>${exited}</td>`+
   `<td>${t.structure||''}</td><td class=mut>${fmtLegs(t.legs)}</td><td>${num(t.credit)}</td>`+
   `<td>${t.iv_rank==null?'—':num(t.iv_rank,0)}</td><td>${t.reason||''}</td><td>${t.days_held??'—'}d</td>`+
   `<td class=${c}>${p==null?'—':rs(p)}</td></tr>`}).join('')||`<tr><td colspan=10 class=mut>no trades</td></tr>`;}

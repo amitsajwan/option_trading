@@ -107,6 +107,9 @@ class SellerRunner:
             self._db["seller_trades"].insert_one({
                 # source = the ACTUAL mode: paper trades were being tagged "live"
                 # (2026-07-10 user report: ledger gave no idea what was real).
+                # day/exit_day = MARKET dates (replay-safe); entry_ts/exit_ts are
+                # wall-clock and meaningless in a replay.
+                "exit_day": self._cur_day,
                 "source": self._mode, "spread_id": spread.spread_id, "day": spread.trade_date,
                 "structure": spread.structure, "credit": spread.entry_credit, "reason": reason,
                 "days_held": held, "pnl_rs": round(pnl), "iv_rank": (spread.meta or {}).get("iv_rank"),
