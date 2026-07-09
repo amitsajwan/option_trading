@@ -135,6 +135,21 @@ def main() -> int:
     }
     with open(os.path.join(run_dir, "summary.json"), "w") as fh:
         json.dump(summary, fh, indent=1)
+
+    # Mirror into Mongo (`seller_replays`) so the dashboard BACKTEST tab can
+    # browse runs — full trade docs incl. legs and entry/exit timestamps come
+    # from the replay db sink (they never touch the live seller_trades).
+    try:
+        for t in replay_db.trades:
+            t.pop("_id", None)
+        live_db["seller_replays"].update_one(
+            {"_id": f"{args.label}_{args.d_from}_{args.d_to}"},
+            {"$set": {"label": args.label, "from": args.d_from, "to": args.d_to,
+                      "summary": summary, "trades": replay_db.trades[-1000:]}},
+            upsert=True,
+        )
+    except Exception:
+        pass
     print(json.dumps(summary, indent=1))
     return 0
 
