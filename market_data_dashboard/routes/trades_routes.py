@@ -34,10 +34,13 @@ def _win_loss(pnl: Optional[float]) -> Optional[str]:
 def _shape_trade(pos: dict[str, Any]) -> dict[str, Any]:
     pnl = _safe_float(pos.get("actual_return_pct") or pos.get("pnl_pct"))
     entry_time = pos.get("entry_time") or pos.get("market_time_ist") or ""
+    reason = pos.get("reason")
+    reason_dict = reason if isinstance(reason, dict) else {}
     exit_reason = (
         pos.get("exit_reason")
-        or (pos.get("reason") or {}).get("code")
-        or (pos.get("reason") or {}).get("reason_code")
+        or reason_dict.get("code")
+        or reason_dict.get("reason_code")
+        or (reason if isinstance(reason, str) else None)
     )
     return {
         "trade_id": pos.get("position_id"),
@@ -52,7 +55,7 @@ def _shape_trade(pos: dict[str, Any]) -> dict[str, Any]:
         ),
         "ml_ce_prob": _safe_float(pos.get("ml_ce_prob")),
         "ml_pe_prob": _safe_float(pos.get("ml_pe_prob")),
-        "regime": pos.get("regime") or (pos.get("reason") or {}).get("regime"),
+        "regime": pos.get("regime") or reason_dict.get("regime"),
         "strike": pos.get("strike"),
         "entry_price": _safe_float(pos.get("entry_premium")),
         "exit_price": _safe_float(pos.get("exit_premium")),
