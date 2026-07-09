@@ -89,7 +89,7 @@ def _enrich_for_seller(snapshots: list[dict], trade_date: str) -> None:
         sc["expiry"] = exp.isoformat()
 
 
-def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 12) -> int:
+def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) -> int:
     r = requests.get(
         f"{_INGESTION}/api/v1/historical/day/{instrument}",
         params={"date": trade_date, "strikes": strikes, "interval": "1"},
@@ -121,7 +121,7 @@ def main() -> int:
     ap.add_argument("--from", dest="d_from", required=True)
     ap.add_argument("--to", dest="d_to", required=True)
     ap.add_argument("--instrument", default="BANKNIFTY")
-    ap.add_argument("--strikes", type=int, default=12)
+    ap.add_argument("--strikes", type=int, default=10)  # ingestion endpoint caps le=10 (ATM±10 = 21 strikes; seller legs live within ±5)
     ap.add_argument("--pause", type=float, default=20.0, help="seconds between days (rate limit)")
     args = ap.parse_args()
 
