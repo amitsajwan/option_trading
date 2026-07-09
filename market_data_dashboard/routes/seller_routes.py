@@ -60,15 +60,17 @@ class SellerRouter:
             return []
 
     def state(self) -> JSONResponse:
-        doc = None
+        statuses: list = []
         opens: list = []
         if self._db is not None:
             try:
-                doc = self._db["seller_status"].find_one({}, {"_id": 0}, sort=[("ts", -1)])
+                statuses = list(self._db["seller_status"].find({}, {"_id": 0}).sort("instrument", 1))
                 opens = list(self._db["seller_positions"].find({}, {"_id": 0}))
             except Exception:
                 pass
-        return JSONResponse({"status": doc or {"mode": "unknown"}, "open_positions": opens})
+        return JSONResponse({"statuses": statuses,
+                             "status": statuses[0] if statuses else {"mode": "unknown"},
+                             "open_positions": opens})
 
     def trades(self, source: str = Query("live")) -> JSONResponse:
         return JSONResponse({"source": source, "trades": self._trade_docs(source)})
@@ -267,7 +269,7 @@ function ledgerRows(trades,withMode){return trades.map((t,i)=>{
  const rid=`lg${withMode?'m':'b'}${i}`;
  return `<tr style="cursor:pointer" onclick="const e=document.getElementById('${rid}');e.style.display=e.style.display=='none'?'':'none'">`+
   `${withMode?`<td>${chip(t.source)}</td>`:''}<td>${entered}</td><td>${exited}</td>`+
-  `<td>${t.structure||''} <span class=mut>▾</span></td><td class=mut>${fmtLegs(t.legs)}</td><td>${num(t.credit)}</td>`+
+  `<td>${t.instrument?`<span class=mut style="font-size:10px">${t.instrument.slice(0,4)}</span> `:''}${t.structure||''} <span class=mut>▾</span></td><td class=mut>${fmtLegs(t.legs)}</td><td>${num(t.credit)}</td>`+
   `<td>${t.iv_rank==null?'—':num(t.iv_rank,0)}</td><td>${t.reason||''}</td><td>${t.days_held??'—'}d</td>`+
   `<td class=${c}>${p==null?'—':rs(p)}</td></tr>`+
   `<tr id=${rid} style="display:none"><td colspan=${withMode?10:9} style="background:#10141c;padding:10px 16px">${legDetail(t)}</td></tr>`;
@@ -276,30 +278,34 @@ function ledgerRows(trades,withMode){return trades.map((t,i)=>{
 // ── LIVE tab ──
 async function loadLive(){
  const st=await j('/api/seller/state');if(!st)return;
- const s=st.status||{};
+ const all=(st.statuses&&st.statuses.length)?st.statuses:[st.status||{}];
  document.getElementById('conn').textContent='connected';
- document.getElementById('mode').textContent=(s.mode||'?').toUpperCase();
- document.getElementById('mode').className='pill '+((s.mode||'paper')=='live'?'':'paper');
- const col=s.fires?'var(--g)':'var(--mut)';
- document.getElementById('livehead').innerHTML=
-  `<div style="font-size:16px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${col};margin-right:7px"></span><b>${s.decision||'—'}</b></div>`+
-  `<div class=mut>${(s.reason||'').slice(0,60)}</div>`+
-  `<div class=mut>day P&L <b style="color:var(--fg)">${s.daily_pnl_rs!=null?rs(s.daily_pnl_rs):'—'}</b></div>`+
-  `<div class=mut>updated ${s.time||'—'}</div>`;
+ const s0=all[0]||{};
+ document.getElementById('mode').textContent=(s0.mode||'?').toUpperCase();
+ document.getElementById('mode').className='pill '+((s0.mode||'paper')=='live'?'':'paper');
  const g=(name,ok,detail)=>`<span class="gate ${ok===null?'':(ok?'ok':'no')}">${name}${detail?` · ${detail}`:''}</span>`;
- document.getElementById('gates').innerHTML=
+ // one block per instrument (BN + NIFTY sellers share the account)
+ document.getElementById('livehead').innerHTML=all.map(s=>{
+  const col=s.fires?'var(--g)':'var(--mut)';
+  return `<div style="flex-basis:100%;display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:4px 0">`+
+   `<b class=mut style="min-width:88px">${s.instrument||'BANKNIFTY'}</b>`+
+   `<div style="font-size:15px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${col};margin-right:7px"></span><b>${s.decision||'—'}</b></div>`+
+   `<div class=mut>${(s.reason||'').slice(0,48)}</div>`+
+   `<div class=mut>day P&L <b style="color:var(--fg)">${s.daily_pnl_rs!=null?rs(s.daily_pnl_rs):'—'}</b></div>`+
+   `<div class=mut>upd ${s.time||'—'}</div></div>`;}).join('');
+ document.getElementById('gates').innerHTML=all.map(s=>
+  `<span class=mut style="margin-right:4px">${s.instrument||'BN'}:</span>`+
   g('IV-rank',s.iv_rank==null?null:s.iv_rank>=30,s.iv_rank==null?'n/a':num(s.iv_rank,0))+
-  g('entry window 10:00–14:00',null)+
   g('entry',!s.entry_latched,s.entry_latched?'LATCHED':(s.entered_today?'done today':'armed'))+
-  g('fails today',s.entry_fail_count?false:true,String(s.entry_fail_count||0))+
-  g('open slots',(s.open_count||0)<1,`${s.open_count||0}/1`);
- const sps=s.spreads||[];
+  g('fails',s.entry_fail_count?false:true,String(s.entry_fail_count||0))+
+  g('slots',(s.open_count||0)<1,`${s.open_count||0}/1`)).join('<br>');
+ const sps=all.flatMap(s=>(s.spreads||[]).map(o=>({...o,__inst:s.instrument})));
  document.getElementById('mtm').innerHTML=!sps.length?'<span class=mut>none — flat</span>':sps.map(o=>{
   const v=o.value,has=v!=null;
   const range=o.stop_at-o.tp_at;
   const pos=has?Math.min(100,Math.max(0,100*(o.stop_at-v)/range)):null; // 100 = at TP, 0 = at stop
   const pnl=has?(o.credit-v)*30:null;
-  return `<div class=mtm><b>${o.structure}</b> <span class=mut>${fmtLegs(o.legs)} · exp ${o.expiry||''} · entered ${o.trade_date||''}</span><br>`+
+  return `<div class=mtm><b>${o.__inst||''} ${o.structure}</b> <span class=mut>${fmtLegs(o.legs)} · exp ${o.expiry||''} · entered ${o.trade_date||''}</span><br>`+
    `credit ${num(o.credit)} → now <b class=${has&&v<=o.credit?'g':'r'}>${has?num(v):'—'}</b>`+
    (has?` · unrealised <b class=${pnl>=0?'g':'r'}>${rs(pnl)}</b> <span class=mut>(TP ${num(o.tp_at)} · stop ${num(o.stop_at)})</span>`:'')+
    (has?`<div class=mtmbar><i style="left:0;width:${pos}%;background:${pnl>=0?'var(--g)':'var(--r)'}"></i></div>`:'')+

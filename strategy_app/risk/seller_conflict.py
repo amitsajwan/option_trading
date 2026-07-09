@@ -22,17 +22,24 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_FLAG_BASENAME = "seller_active_spread.json"
+# Per-instrument flags (2026-07-10, NIFTY seller added): two seller daemons
+# must never clobber one shared file — a flat NIFTY seller deleting the flag
+# would unblock the buyer while the BN seller still holds a spread.
+_FLAG_PREFIX = "seller_active_spread"
 # A seller that stopped updating the flag for this long is presumed dead/flat.
 _MAX_AGE_S = float(os.getenv("SELLER_CONFLICT_FLAG_MAX_AGE_S", "600") or 600)
 
 
-def flag_path() -> Path:
+def _base_dir() -> Path:
     # NOT STRATEGY_RUN_DIR: that is a per-service subdirectory (/app/.run/strategy_app),
     # but the flag must live at the SHARED mount root so seller (/shared_run) and buyer
     # (/app/.run) resolve the same host file. Caught by the cross-container smoke test.
-    base = os.getenv("SHARED_RUN_DIR") or "/app/.run"
-    return Path(base) / _FLAG_BASENAME
+    return Path(os.getenv("SHARED_RUN_DIR") or "/app/.run")
+
+
+def flag_path(instrument: str | None = None) -> Path:
+    inst = (instrument or os.getenv("STRATEGY_INSTRUMENT") or "BANKNIFTY").upper()
+    return _base_dir() / f"{_FLAG_PREFIX}_{inst}.json"
 
 
 def _enabled() -> bool:
@@ -41,26 +48,30 @@ def _enabled() -> bool:
 
 # ── buyer side ────────────────────────────────────────────────────────────────
 def seller_spread_active() -> bool:
-    """True when the seller currently holds a spread (fresh flag) — the buyer
-    must not open new positions (shared margin + the seller is the priority
-    book). Exits are never gated by this."""
+    """True when ANY seller (BN or NIFTY — shared account margin) holds a
+    spread with a fresh flag — the buyer must not open new positions. Exits
+    are never gated by this."""
     if not _enabled():
         return False
-    p = flag_path()
     try:
-        st = p.stat()
+        candidates = list(_base_dir().glob(f"{_FLAG_PREFIX}*.json"))
     except OSError:
         return False
-    if time.time() - st.st_mtime > _MAX_AGE_S:
-        logger.warning("seller_conflict: flag %s is stale (>%ds) — ignoring", p, _MAX_AGE_S)
-        return False
-    return True
+    now = time.time()
+    for p in candidates:
+        try:
+            if now - p.stat().st_mtime <= _MAX_AGE_S:
+                return True
+            logger.warning("seller_conflict: flag %s is stale (>%ds) — ignoring", p, _MAX_AGE_S)
+        except OSError:
+            continue
+    return False
 
 
 # ── seller side ───────────────────────────────────────────────────────────────
-def publish_seller_state(open_count: int) -> None:
-    """Called by the seller every poll cycle. Maintains (or removes) the flag."""
-    p = flag_path()
+def publish_seller_state(open_count: int, instrument: str | None = None) -> None:
+    """Called by each seller every poll cycle. Maintains (or removes) ITS flag."""
+    p = flag_path(instrument)
     try:
         if open_count > 0:
             p.write_text(json.dumps({"open_spreads": open_count, "ts": time.time()}))

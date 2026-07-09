@@ -48,6 +48,15 @@ def _last_weekday_of_month(year: int, month: int, weekday: int) -> date:
     return d
 
 
+def nifty_weekly_expiry(d: date) -> date:
+    """NIFTY weekly expiry on/after d. Thursday historically; NSE moved index
+    weekly expiry to Tuesday ~Sep-2025 (scrip master shows Tuesdays now).
+    VERIFY against contract notes if DTE-sensitive results look off."""
+    target = 3 if d < date(2025, 9, 1) else 1  # Thu -> Tue
+    exp = d + timedelta(days=(target - d.weekday()) % 7)
+    return exp
+
+
 def bn_monthly_expiry(d: date) -> date:
     """BANKNIFTY monthly expiry for the month containing/after d.
 
@@ -72,7 +81,12 @@ def bn_monthly_expiry(d: date) -> date:
     return exp
 
 
-def _enrich_for_seller(snapshots: list[dict], trade_date: str) -> None:
+def _coll_for(instrument: str) -> str:
+    inst = instrument.strip().upper()
+    return _COLL if inst == "BANKNIFTY" else f"{_COLL}_{inst.lower()}"
+
+
+def _enrich_for_seller(snapshots: list[dict], trade_date: str, instrument: str = "BANKNIFTY") -> None:
     """Gaps in the replay builder's output that the seller needs:
     - futures_bar.fut_close ('close' in builder; SnapshotAccessor reads 'fut_close')
     - session_context.days_to_expiry (None in builder; DTE drives seller exits)
@@ -82,7 +96,7 @@ def _enrich_for_seller(snapshots: list[dict], trade_date: str) -> None:
       0, seller refuses every entry — 2026-07-10 hist smoke). Forward-fill each
       strike's fields from its own last known value within the day."""
     d = date.fromisoformat(trade_date)
-    exp = bn_monthly_expiry(d)
+    exp = bn_monthly_expiry(d) if instrument.upper() == "BANKNIFTY" else nifty_weekly_expiry(d)
     dte = (exp - d).days
     last: dict[tuple[int, str], float] = {}   # (strike, field) -> last non-None
     for s in snapshots:
@@ -116,8 +130,8 @@ def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) 
     if not raw.get("index_bars"):
         return 0  # holiday / no session
     snapshots = build_snapshots_from_dhan_data(raw)
-    _enrich_for_seller(snapshots, trade_date)
-    coll = mongo_db[_COLL]
+    _enrich_for_seller(snapshots, trade_date, instrument)
+    coll = mongo_db[_coll_for(instrument)]
     coll.delete_many({"trade_date_ist": trade_date})  # idempotent per day
     docs = [{
         "event_type": "hist_backfill",
@@ -132,14 +146,14 @@ def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) 
     return len(docs)
 
 
-def iv_percentile_pass(mongo_db, d_from: str, d_to: str, window_days: int = 20) -> None:
+def iv_percentile_pass(mongo_db, d_from: str, d_to: str, window_days: int = 20, coll_name: str = _COLL) -> None:
     """Second pass: fill iv_derived.iv_percentile per snapshot — percentile rank
     of the bar's ATM IV against the pooled per-bar ATM IVs of the TRAILING
     window_days backfilled days (mirrors the live IV-rank gate's meaning). The
     seller's core premium-richness gate is dead without it."""
     from bisect import bisect_right
 
-    coll = mongo_db[_COLL]
+    coll = mongo_db[coll_name]
     days = sorted(coll.distinct("trade_date_ist", {"trade_date_ist": {"$gte": d_from, "$lte": d_to}}))
     day_ivs: dict[str, list[float]] = {}
     for day in days:
@@ -180,7 +194,7 @@ def main() -> int:
         os.getenv("MONGO_DB", "trading_ai")]
 
     if args.iv_pass:
-        iv_percentile_pass(db, args.d_from, args.d_to)
+        iv_percentile_pass(db, args.d_from, args.d_to, coll_name=_coll_for(args.instrument))
         return 0
 
     d = date.fromisoformat(args.d_from)

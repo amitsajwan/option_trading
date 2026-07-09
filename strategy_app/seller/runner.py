@@ -29,7 +29,14 @@ logger = logging.getLogger(__name__)
 
 class SellerRunner:
     def __init__(self, mongo_db, gateway_factory: Optional[Callable[[Callable], LegGateway]] = None,
-                 live_collection: str = "phase1_market_snapshots"):
+                 live_collection: Optional[str] = None):
+        # Instrument-aware (2026-07-10, NIFTY seller): each seller container sets
+        # STRATEGY_INSTRUMENT and reads its own snapshot collection / writes its
+        # own status doc, so BN and NIFTY sellers coexist on one account.
+        self._instrument = (os.getenv("STRATEGY_INSTRUMENT") or "BANKNIFTY").strip().upper()
+        if live_collection is None:
+            live_collection = ("phase1_market_snapshots" if self._instrument == "BANKNIFTY"
+                               else f"phase1_market_snapshots_{self._instrument.lower()}")
         self._db = mongo_db
         self._col = mongo_db[live_collection]
         self._brain = SellerBrain()
@@ -77,8 +84,10 @@ class SellerRunner:
                     "legs": [[l.action, l.option_type, l.strike] for l in sp.legs],
                     "trade_date": sp.trade_date, "expiry": sp.expiry,
                 })
-            self._db["seller_status"].update_one({"_id": "live"}, {"$set": {
-                "_id": "live", "ts": datetime.now(timezone.utc).isoformat(), "time": self._hhmm(snap),
+            sid = f"live_{self._instrument}"
+            self._db["seller_status"].update_one({"_id": sid}, {"$set": {
+                "_id": sid, "instrument": self._instrument,
+                "ts": datetime.now(timezone.utc).isoformat(), "time": self._hhmm(snap),
                 "mode": self._mode, "decision": decision.structure if decision.fires else "SIT OUT",
                 "reason": (decision.reason or "")[:80], "iv_rank": round(acc.iv_percentile or 0, 1),
                 "fires": bool(decision.fires), "open_count": len(self._mgr.open_spreads),
@@ -96,6 +105,7 @@ class SellerRunner:
     def _mirror_open(self, spread, decision) -> None:
         try:
             self._db["seller_positions"].insert_one({
+                "instrument": self._instrument,
                 "spread_id": spread.spread_id, "day": spread.trade_date, "structure": spread.structure,
                 "credit": spread.entry_credit, "iv_rank": decision.iv_rank, "opened_at": spread.opened_at,
                 "legs": [[l.action, l.option_type, l.strike] for l in spread.legs]})
@@ -112,6 +122,7 @@ class SellerRunner:
                 # day/exit_day + entry_hhmm/exit_hhmm = MARKET time (replay-safe);
                 # entry_ts/exit_ts are wall-clock and meaningless in a replay.
                 "exit_day": self._cur_day,
+                "instrument": self._instrument,
                 "entry_hhmm": meta.get("entry_hhmm"), "exit_hhmm": exit_hhmm,
                 "exit_value": exit_value, "qty": spread.qty,
                 "source": self._mode, "spread_id": spread.spread_id, "day": spread.trade_date,
@@ -278,7 +289,7 @@ class SellerRunner:
         # gate always sees fresh truth (stale flag auto-ignored on their side).
         try:
             from ..risk.seller_conflict import publish_seller_state
-            publish_seller_state(len(self._mgr.open_spreads))
+            publish_seller_state(len(self._mgr.open_spreads), self._instrument)
         except Exception:
             pass
         pf = build_price_fn(snap)
@@ -381,7 +392,7 @@ class SellerRunner:
         self._entered_today = True
         try:
             from ..risk.seller_conflict import publish_seller_state
-            publish_seller_state(len(self._mgr.open_spreads))
+            publish_seller_state(len(self._mgr.open_spreads), self._instrument)
         except Exception:
             pass
         self._log("open", spread_id=spread.spread_id, structure=spread.structure,

@@ -145,11 +145,16 @@ class RiskGates:
         nothing; opening blind next to an unknown position could.
         """
         try:
-            latest = db["strategy_positions"].find_one(sort=[("_id", -1)])
+            # Instrument-aware (2026-07-10): each seller checks ITS underlying's
+            # buy-side book (strategy_positions for BN, strategy_positions_nifty
+            # for NIFTY) — same collection naming as the buyer's persistence.
+            inst = (os.getenv("STRATEGY_INSTRUMENT") or "BANKNIFTY").strip().upper()
+            coll = "strategy_positions" if inst == "BANKNIFTY" else f"strategy_positions_{inst.lower()}"
+            latest = db[coll].find_one(sort=[("_id", -1)])
             if latest and latest.get("event") != "POSITION_CLOSE":
-                return False, (f"BN buy-side position open ({latest.get('direction')} "
+                return False, (f"{inst} buy-side position open ({latest.get('direction')} "
                                f"{latest.get('strike')}) — skip to avoid capital/strike overlap")
             return True, "ok"
         except Exception:
-            logger.exception("seller: BN position conflict check failed — failing closed (skip entry)")
-            return False, "BN position check failed (fail-closed)"
+            logger.exception("seller: buy-side conflict check failed — failing closed (skip entry)")
+            return False, "buy-side position check failed (fail-closed)"
