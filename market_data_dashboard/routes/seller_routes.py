@@ -286,10 +286,14 @@ async function loadLive(){
  const all=(st.statuses&&st.statuses.length)?st.statuses:[st.status||{}];
  document.getElementById('conn').textContent='connected';
  const s0=all[0]||{};
- document.getElementById('mode').textContent=(s0.mode||'?').toUpperCase();
+ document.getElementById('mode').textContent=(st.statuses&&st.statuses.length)?(s0.mode||'?').toUpperCase():'OFF-HOURS';
  document.getElementById('mode').className='pill '+((s0.mode||'paper')=='live'?'':'paper');
  const g=(name,ok,detail)=>`<span class="gate ${ok===null?'':(ok?'ok':'no')}">${name}${detail?` · ${detail}`:''}</span>`;
  // one block per instrument (BN + NIFTY sellers share the account)
+ if(!(st.statuses&&st.statuses.length)){
+  document.getElementById('livehead').innerHTML='<div class=mut>no live heartbeat — market closed; daemons resume with the next session</div>';
+  document.getElementById('gates').innerHTML='';
+ } else {
  document.getElementById('livehead').innerHTML=all.map(s=>{
   const col=s.fires?'var(--g)':'var(--mut)';
   return `<div style="flex-basis:100%;display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:4px 0">`+
@@ -303,7 +307,7 @@ async function loadLive(){
   g('IV-rank',s.iv_rank==null?null:s.iv_rank>=30,s.iv_rank==null?'n/a':num(s.iv_rank,0))+
   g('entry',!s.entry_latched,s.entry_latched?'LATCHED':(s.entered_today?'done today':'armed'))+
   g('fails',s.entry_fail_count?false:true,String(s.entry_fail_count||0))+
-  g('slots',(s.open_count||0)<1,`${s.open_count||0}/1`)).join('<br>');
+  g('slots',(s.open_count||0)<1,`${s.open_count||0}/1`)).join('<br>'); }
  let sps=all.flatMap(s=>(s.spreads||[]).map(o=>({...o,__inst:s.instrument})));
  let bookNote='';
  if(!sps.length&&(st.open_positions||[]).length){
@@ -320,7 +324,7 @@ async function loadLive(){
   const pnl=has?(o.credit-v)*30:null;
   return `<div class=mtm><b>${o.__inst||''} ${o.structure}</b> <span class=mut>${fmtLegs(o.legs)} · exp ${o.expiry||''} · entered ${o.trade_date||''}</span><br>`+
    `credit ${num(o.credit)} → now <b class=${has&&v<=o.credit?'g':'r'}>${has?num(v):'—'}</b>`+
-   (has?` · unrealised <b class=${pnl>=0?'g':'r'}>${rs(pnl)}</b> <span class=mut>(TP ${num(o.tp_at)} · stop ${num(o.stop_at)})</span>`:'')+
+   (has?` · unrealised <b class=${pnl>=0?'g':'r'}>${rs(pnl)}</b>`:'')+` <span class=mut>(TP ${num(o.tp_at)} · stop ${num(o.stop_at)})</span>`+
    (has?`<div class=mtmbar><i style="left:0;width:${pos}%;background:${pnl>=0?'var(--g)':'var(--r)'}"></i></div>`:'')+
    `</div>`;}).join('');
  const td=await j('/api/seller/trades?source=all');
