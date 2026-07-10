@@ -64,7 +64,12 @@ class SellerRouter:
         opens: list = []
         if self._db is not None:
             try:
-                statuses = list(self._db["seller_status"].find({}, {"_id": 0}).sort("instrument", 1))
+                from datetime import datetime, timedelta, timezone
+                cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+                # Freshness guard: dead daemons / pre-instrument-era docs must not
+                # render as live state (2026-07-10: three stale SIT OUT ghosts).
+                statuses = list(self._db["seller_status"].find(
+                    {"ts": {"$gte": cutoff}}, {"_id": 0}).sort("instrument", 1))
                 opens = list(self._db["seller_positions"].find({}, {"_id": 0}))
             except Exception:
                 pass
