@@ -119,6 +119,45 @@ def _enrich_for_seller(snapshots: list[dict], trade_date: str, instrument: str =
                     row[f] = last[(k, f)]
 
 
+def _quality_check(snapshots: list[dict]) -> tuple[bool, dict]:
+    """Per-day data-quality gate (2026-07-10 clean-rebuild mandate): a day that
+    fails does NOT enter Mongo. Checks target the failure modes we actually
+    shipped this week: ATM-clone ladders, one-sided chains, missing marks.
+    """
+    rep: dict = {"bars": len(snapshots)}
+    if len(snapshots) < 300:
+        rep["fail"] = "too_few_bars"
+        return False, rep
+    mid = snapshots[len(snapshots) // 2]
+    rows = [r for r in (mid.get("strikes") or []) if r.get("ce_ltp") and r.get("pe_ltp")]
+    rep["mid_strikes_priced"] = len(rows)
+    if len(rows) < 12:
+        rep["fail"] = "thin_chain"
+        return False, rep
+    # anti-clone: premiums must be overwhelmingly distinct across strikes
+    ce = [round(float(r["ce_ltp"]), 2) for r in rows]
+    rep["ce_distinct_frac"] = round(len(set(ce)) / len(ce), 2)
+    if rep["ce_distinct_frac"] < 0.8:
+        rep["fail"] = "clone_ladder"
+        return False, rep
+    # monotonicity: CE falls / PE rises with strike (>=85% of adjacent pairs)
+    rows.sort(key=lambda r: r["strike"])
+    ce_ok = sum(1 for a, b in zip(rows, rows[1:]) if float(a["ce_ltp"]) >= float(b["ce_ltp"]))
+    pe_ok = sum(1 for a, b in zip(rows, rows[1:]) if float(a["pe_ltp"]) <= float(b["pe_ltp"]))
+    rep["ce_monotone_frac"] = round(ce_ok / (len(rows) - 1), 2)
+    rep["pe_monotone_frac"] = round(pe_ok / (len(rows) - 1), 2)
+    if rep["ce_monotone_frac"] < 0.85 or rep["pe_monotone_frac"] < 0.85:
+        rep["fail"] = "non_monotone_chain"
+        return False, rep
+    # coverage: fut_close on every bar; priced strikes on >=95% of bars
+    miss_fut = sum(1 for s in snapshots if not (s.get("futures_bar") or {}).get("fut_close"))
+    rep["missing_fut_close"] = miss_fut
+    if miss_fut > 0:
+        rep["fail"] = "missing_fut_close"
+        return False, rep
+    return True, rep
+
+
 def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) -> int:
     r = requests.get(
         f"{_INGESTION}/api/v1/historical/day/{instrument}",
@@ -131,6 +170,14 @@ def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) 
         return 0  # holiday / no session
     snapshots = build_snapshots_from_dhan_data(raw)
     _enrich_for_seller(snapshots, trade_date, instrument)
+    ok, report = _quality_check(snapshots)
+    report.update({"instrument": instrument, "trade_date": trade_date,
+                   "verified_at": datetime.now(timezone.utc).isoformat(), "passed": ok})
+    mongo_db["dataset_manifests"].update_one(
+        {"_id": f"{_coll_for(instrument)}:{trade_date}"}, {"$set": report}, upsert=True)
+    if not ok:
+        print(f"{trade_date} QUALITY_FAIL {report.get('fail')} — day NOT ingested", flush=True)
+        return -1
     coll = mongo_db[_coll_for(instrument)]
     coll.delete_many({"trade_date_ist": trade_date})  # idempotent per day
     docs = [{
