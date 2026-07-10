@@ -64,6 +64,14 @@ class SellerRunner:
         # spread cost in live. Gate on the ESTIMATED credit BEFORE leg 1: thin
         # credit is also just a bad sale (coins in front of the steamroller).
         self._min_credit_frac = float(os.getenv("SELLER_MIN_CREDIT_FRAC", "0.30") or 0.30)
+        # Stop debounce (2026-07-10): a single bad quote (one-sided book, stale
+        # side, replay reconstruction noise) can spike the marked spread value
+        # through the stop for one bar and cause a real exit at a fictional
+        # price. Require the stop condition on N consecutive marks before
+        # acting. TP/DTE/max-hold are NOT debounced (TP fills are advantageous;
+        # time exits don't depend on marks).
+        self._stop_confirm_bars = int(os.getenv("SELLER_STOP_CONFIRM_BARS", "2") or 2)
+        self._stop_streak: dict[str, int] = {}
         self._reconciled_day: Optional[str] = None
         self._mode = "live" if (os.getenv("EXECUTION_ADAPTER", "paper").strip().lower() == "dhan"
                                 and (os.getenv("SELLER_LIVE_ENABLED", "0") or "0").strip() in ("1", "true", "yes")) else "paper"
@@ -305,6 +313,17 @@ class SellerRunner:
                 held = (date.fromisoformat(day or self._cur_day) - date.fromisoformat(sp.trade_date)).days
             except Exception:
                 held = 0
+            # DTE must be the SPREAD'S OWN expiry, not the snapshot's rolling
+            # front-month (2026-07-10: after the front month expired, snapshot
+            # DTE jumped back to ~28 and a spread lived 2 weeks past its own
+            # expiry in replay with fantasy marks). Fallback to snapshot DTE
+            # only when the spread's expiry is unparseable.
+            dte_own = acc.days_to_expiry
+            try:
+                dte_own = (date.fromisoformat(str(sp.expiry)[:10])
+                           - date.fromisoformat(day or self._cur_day)).days
+            except Exception:
+                pass
             if val is None:
                 # Strikes drifted off the recorded/live chain — the spread can't be
                 # VALUED, but time-based exits need no price. Skipping them here
@@ -313,11 +332,18 @@ class SellerRunner:
                 # 2026-07-10 root-cause of the fullbaseline 15-trade anomaly.
                 # value=entry_credit is neutral: cannot trigger TP (needs <=0.5c)
                 # or stop (needs >=2c), so only the time-based exits can fire.
-                reason = self._mgr.check_exit(sp, sp.entry_credit, held, dte=acc.days_to_expiry)
+                reason = self._mgr.check_exit(sp, sp.entry_credit, held, dte=dte_own)
                 if not reason:
                     continue
             else:
-                reason = self._mgr.check_exit(sp, val, held, dte=acc.days_to_expiry)
+                reason = self._mgr.check_exit(sp, val, held, dte=dte_own)
+            if reason == "stop_2x":
+                streak = self._stop_streak.get(sp.spread_id, 0) + 1
+                self._stop_streak[sp.spread_id] = streak
+                if streak < self._stop_confirm_bars:
+                    reason = None  # one-bar spike — wait for confirmation
+            elif sp.spread_id in self._stop_streak:
+                self._stop_streak.pop(sp.spread_id, None)
             if reason:
                 ex = SafeExecutor(self._gw_factory(pf), sp.qty, self._width)
                 exit_val = ex.close_spread(sp, expiry)
