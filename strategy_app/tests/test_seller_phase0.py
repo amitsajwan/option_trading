@@ -134,6 +134,34 @@ def test_thin_credit_skipped_before_any_leg(tmp_path, monkeypatch):
     assert r._entry_fail_count == 0          # a skip is not a failure
 
 
+def test_unvaluable_spread_still_exits_on_max_hold(tmp_path, monkeypatch):
+    """2026-07-10 root-cause: strikes drifted off the chain -> spread_value None
+    -> ALL exit checks skipped -> spread frozen 11 months in replay (and would
+    strand live multi-day holds). Time-based exits must fire without a price."""
+    monkeypatch.setenv("STRATEGY_RUN_DIR", str(tmp_path))
+    monkeypatch.setenv("SHARED_RUN_DIR", str(tmp_path))
+    from strategy_app.seller.executor import FilledLeg, OpenSpread
+    from strategy_app.seller.gateway import Fill
+
+    class _AlwaysFillGateway:
+        def execute(self, action, option_type, strike, expiry, qty):
+            return Fill(True, 10.0, order_id="x")
+
+    r = SellerRunner(_FakeDb(), gateway_factory=lambda pf: _AlwaysFillGateway())
+    r._mgr._store = PositionStore(str(tmp_path / "spreads.json"))
+    stale = OpenSpread(
+        spread_id="stuck1", structure="iron_condor", expiry="2026-08-25", qty=30,
+        legs=[FilledLeg("SELL", "CE", 99000, 30, 100.0),   # strikes far off any chain
+              FilledLeg("BUY", "CE", 99300, 30, 50.0)],
+        entry_credit=50.0, width=600, opened_at="2026-06-20T05:00:00+00:00",
+        trade_date="2026-06-20",
+    )
+    r._mgr.add(stale)
+    r.on_snapshot(_snap(day="2026-07-10"))   # held 20d >> MAX_HOLD
+    assert all(s.spread_id != "stuck1" for s in r._mgr.open_spreads), \
+        "unvaluable spread must exit via max_hold, not freeze"
+
+
 def test_priority_gate_can_be_disabled(tmp_path, monkeypatch):
     monkeypatch.setenv("SHARED_RUN_DIR", str(tmp_path))
     monkeypatch.setenv("SELLER_PRIORITY_ENABLED", "0")

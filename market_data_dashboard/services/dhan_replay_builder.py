@@ -248,6 +248,10 @@ def build_snapshots_from_dhan_data(
                 "pcr_change_5m": None,
                 "atm_oi_ratio": (atm_ce_oi / atm_pe_oi) if (atm_ce_oi and atm_pe_oi and atm_pe_oi > 0) else None,
                 "near_atm_oi_ratio": None,
+                # Required by chain_utils' far-OTM price proxy — without it, a
+                # strike that drifts off the chain can never be valued (froze a
+                # spread for 11 months in replay; 2026-07-10).
+                "atm_strike": round(close / step) * step if close else None,
             },
             "vix_context": {
                 "vix_current": vix_close,

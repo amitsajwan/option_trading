@@ -300,14 +300,24 @@ class SellerRunner:
         # ── manage open spreads INTRADAY ──
         for sp in list(self._mgr.open_spreads):
             val = PositionManager.spread_value(sp, pf)
-            if val is None:
-                continue
             held = 0  # days held, from the SNAPSHOT date (not wall-clock — replay-safe). review H1
             try:
                 held = (date.fromisoformat(day or self._cur_day) - date.fromisoformat(sp.trade_date)).days
             except Exception:
                 held = 0
-            reason = self._mgr.check_exit(sp, val, held, dte=acc.days_to_expiry)
+            if val is None:
+                # Strikes drifted off the recorded/live chain — the spread can't be
+                # VALUED, but time-based exits need no price. Skipping them here
+                # froze a spread for 11 months in the 19-month replay (and would
+                # strand a live multi-day hold after a big move the same way):
+                # 2026-07-10 root-cause of the fullbaseline 15-trade anomaly.
+                # value=entry_credit is neutral: cannot trigger TP (needs <=0.5c)
+                # or stop (needs >=2c), so only the time-based exits can fire.
+                reason = self._mgr.check_exit(sp, sp.entry_credit, held, dte=acc.days_to_expiry)
+                if not reason:
+                    continue
+            else:
+                reason = self._mgr.check_exit(sp, val, held, dte=acc.days_to_expiry)
             if reason:
                 ex = SafeExecutor(self._gw_factory(pf), sp.qty, self._width)
                 exit_val = ex.close_spread(sp, expiry)
