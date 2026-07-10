@@ -66,7 +66,9 @@
         "SELLER_DAILY_LOSS_CAP_RS": "6000",
         "SELLER_ENTRY_FAIL_LATCH": "2",
         "SELLER_MIN_FREE_MARGIN_RS": "60000",
-        "ALERT_ENABLED": "1"
+        "ALERT_ENABLED": "1",
+        "SELLER_MAX_HOLD_DAYS": "10",
+        "SELLER_STOP_CONFIRM_BARS": "2"
       },
       "require_nonempty": [
         "DHAN_CLIENT_ID",
