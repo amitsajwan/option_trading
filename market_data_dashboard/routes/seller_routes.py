@@ -304,8 +304,16 @@ async function loadLive(){
   g('entry',!s.entry_latched,s.entry_latched?'LATCHED':(s.entered_today?'done today':'armed'))+
   g('fails',s.entry_fail_count?false:true,String(s.entry_fail_count||0))+
   g('slots',(s.open_count||0)<1,`${s.open_count||0}/1`)).join('<br>');
- const sps=all.flatMap(s=>(s.spreads||[]).map(o=>({...o,__inst:s.instrument})));
- document.getElementById('mtm').innerHTML=!sps.length?'<span class=mut>none — flat</span>':sps.map(o=>{
+ let sps=all.flatMap(s=>(s.spreads||[]).map(o=>({...o,__inst:s.instrument})));
+ let bookNote='';
+ if(!sps.length&&(st.open_positions||[]).length){
+   // market closed / daemon heartbeat stale: show the DURABLE BOOK (no marks)
+   sps=st.open_positions.map(o=>({...o,__inst:o.instrument,value:null,
+     tp_at:o.credit!=null?+(o.credit*0.5).toFixed(2):null,
+     stop_at:o.credit!=null?+(o.credit*2).toFixed(2):null,trade_date:o.day}));
+   bookNote='<div class=mut style="font-size:11px;margin-bottom:6px">from durable book — live marks resume with market data</div>';
+ }
+ document.getElementById('mtm').innerHTML=!sps.length?'<span class=mut>none — flat</span>':bookNote+sps.map(o=>{
   const v=o.value,has=v!=null;
   const range=o.stop_at-o.tp_at;
   const pos=has?Math.min(100,Math.max(0,100*(o.stop_at-v)/range)):null; // 100 = at TP, 0 = at stop
