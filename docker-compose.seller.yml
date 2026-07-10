@@ -45,6 +45,7 @@ services:
       # coordination flag on the shared host .run mount (buyer yields to seller).
       SELLER_ENTRY_FAIL_LATCH: "${SELLER_ENTRY_FAIL_LATCH:-2}"
       SELLER_MIN_FREE_MARGIN_RS: "${SELLER_MIN_FREE_MARGIN_RS:-60000}"
+      SELLER_STOP_CONFIRM_BARS: "${SELLER_STOP_CONFIRM_BARS:-2}"
       SHARED_RUN_DIR: /shared_run
       BANKNIFTY_LOT_SIZE: "${BANKNIFTY_LOT_SIZE:-30}"
       # Telegram trade alerts (2026-07-08: seller had none — real-money trades were invisible).
@@ -92,6 +93,7 @@ services:
       SELLER_DAILY_LOSS_CAP_RS: "${SELLER_DAILY_LOSS_CAP_RS:-6000}"
       SELLER_ENTRY_FAIL_LATCH: "${SELLER_ENTRY_FAIL_LATCH:-2}"
       SELLER_MIN_FREE_MARGIN_RS: "${NIFTY_SELLER_MIN_FREE_MARGIN_RS:-45000}"
+      SELLER_STOP_CONFIRM_BARS: "${SELLER_STOP_CONFIRM_BARS:-2}"
       SHARED_RUN_DIR: /shared_run
       ALERT_ENABLED: "${ALERT_ENABLED:-0}"
       ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
