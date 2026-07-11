@@ -17,11 +17,14 @@ import math
 from collections import defaultdict
 
 import joblib
+import pandas as pd
 from pymongo import MongoClient
 
 from strategy_app.market.snapshot_accessor import SnapshotAccessor
 from strategy_app.ml.bundle_inference import build_feature_row
 from strategy_app.brain.regime_director import _detect_agreement_lever
+from snapshot_app.core.compression_features import add_compression_features
+from snapshot_app.core.feature_engine import _ema
 
 BUNDLE = "/shared_run/training_view/movement_banknifty_v1.joblib"
 FIRE = 0.30
@@ -70,9 +73,40 @@ for di, day in enumerate(days):
             bars.append(p)
     if len(bars) < 30:
         continue
-    rows = []
+    # Per-day EMA/compression enrichment via the CANONICAL modules — mirrors
+    # build_training_view_from_mongo._enrich_ema_family. The bundle's 0.30
+    # fire-line was calibrated on the training view (EMA present); scoring the
+    # raw serving row leaves EMA NaN -> median -> scores never reach 0.30
+    # (first run of this study: 0 fires in 412 days = that skew, not reality).
+    day_rows = []
     for p in bars:
         row = build_feature_row(SnapshotAccessor(p), feats_list) or {}
+        fb = p.get("futures_bar") or {}
+        row["_fc"], row["_fh"], row["_fl"], row["_fv"] = (
+            fb.get("fut_close"), fb.get("high"), fb.get("low"), fb.get("volume"))
+        day_rows.append(row)
+    df = pd.DataFrame({
+        "close": [r["_fc"] for r in day_rows], "high": [r["_fh"] for r in day_rows],
+        "low": [r["_fl"] for r in day_rows], "volume": [r["_fv"] for r in day_rows]})
+    close = df["close"].astype(float)
+    for span in (9, 21, 50):
+        df[f"ema_{span}"] = _ema(close, span)
+    df["day_high"] = df["high"].cummax()
+    df["day_low"] = df["low"].cummin()
+    add_compression_features(df)
+    nz = close.replace(0.0, float("nan"))
+    for span in (9, 21, 50):
+        df[f"ema_{span}_slope"] = df[f"ema_{span}"].diff() / nz
+    for i, r in enumerate(day_rows):
+        for col in df.columns:
+            if col in ("close", "high", "low", "volume"):
+                continue
+            cur = r.get(col)
+            if cur is None or (isinstance(cur, float) and math.isnan(cur)):
+                v = df[col].iloc[i]
+                r[col] = None if pd.isna(v) else float(v)
+    rows = []
+    for row in day_rows:
         rows.append([
             med.get(f, 0.0) if (row.get(f) is None or (isinstance(row.get(f), float) and math.isnan(row.get(f)))) else row.get(f)
             for f in feats_list])
