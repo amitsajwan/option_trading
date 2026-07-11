@@ -80,6 +80,15 @@ class SellerRunner:
         self._quiet_bundle_path = (os.getenv("SELLER_QUIET_GATE_BUNDLE") or "").strip()
         self._quiet_max_prob = float(os.getenv("SELLER_QUIET_GATE_MAX_PROB", "0") or 0)
         self._quiet_model = None  # lazy-loaded
+        # Exp-2/3 (spec Amendment 1): ADAPTIVE threshold — rolling p-quantile of
+        # the trailing ~30 sessions' scores (frozen train-quantiles over-block in
+        # hotter regimes: G4 lesson). Modes: entry (crash-only veto), exit
+        # (tripwire: 2 consecutive extreme scores while holding -> exit), both.
+        self._quiet_mode = (os.getenv("SELLER_QUIET_GATE_MODE") or "").strip().lower()
+        self._quiet_quantile = float(os.getenv("SELLER_QUIET_GATE_QUANTILE", "0.97") or 0.97)
+        from collections import deque
+        self._score_hist: "deque[float]" = deque(maxlen=30 * 375)
+        self._trip_streak = 0
         self._reconciled_day: Optional[str] = None
         self._mode = "live" if (os.getenv("EXECUTION_ADAPTER", "paper").strip().lower() == "dhan"
                                 and (os.getenv("SELLER_LIVE_ENABLED", "0") or "0").strip() in ("1", "true", "yes")) else "paper"
@@ -341,6 +350,44 @@ class SellerRunner:
         acc = SnapshotAccessor(snap)
         decision = self._brain.decide(acc)
         self._publish_status(snap, acc, decision, pf)
+        # ── movement score (adaptive gate modes) ──
+        adaptive_thr = None
+        score = None
+        if self._quiet_mode and self._quiet_bundle_path:
+            score = self._movement_risk(snap)
+            if score is not None:
+                self._score_hist.append(score)
+                if len(self._score_hist) >= 2000:  # warmup before the gate acts
+                    ss = sorted(self._score_hist)
+                    adaptive_thr = ss[min(len(ss) - 1, int(self._quiet_quantile * len(ss)))]
+        # Exp-3 exit tripwire: 2 consecutive extreme scores while holding -> exit all
+        if ("exit" in self._quiet_mode or self._quiet_mode == "both") and self._mgr.open_spreads \
+                and adaptive_thr is not None and score is not None:
+            self._trip_streak = self._trip_streak + 1 if score >= adaptive_thr else 0
+            if self._trip_streak >= 2:
+                for sp in list(self._mgr.open_spreads):
+                    ex = SafeExecutor(self._gw_factory(pf), sp.qty, self._width)
+                    exit_val = ex.close_spread(sp, expiry)
+                    if exit_val is None:
+                        self._log("tripwire_close_failed", spread_id=sp.spread_id)
+                        continue
+                    held = 0
+                    try:
+                        held = (date.fromisoformat(day or self._cur_day)
+                                - date.fromisoformat(sp.trade_date)).days
+                    except Exception:
+                        pass
+                    pnl = (sp.entry_credit - exit_val) * sp.qty
+                    self._daily_pnl += pnl
+                    self._log("close", spread_id=sp.spread_id, structure=sp.structure,
+                              reason="movement_tripwire", credit=sp.entry_credit,
+                              exit_value=exit_val, pnl_rs=round(pnl, 1))
+                    self._mirror_close(sp, "movement_tripwire", held, pnl,
+                                       exit_value=exit_val, exit_hhmm=self._hhmm(snap))
+                    self._mgr.remove(sp.spread_id)
+                    self._alert(f"<b>SELLER TRIPWIRE EXIT {sp.structure}</b> "
+                                f"{'+' if pnl >= 0 else ''}₹{pnl:.0f} (movement risk {score:.3f})")
+                self._trip_streak = 0
         # ── manage open spreads INTRADAY ──
         for sp in list(self._mgr.open_spreads):
             val = PositionManager.spread_value(sp, pf)
@@ -414,11 +461,17 @@ class SellerRunner:
             return
         if not decision.fires:
             return
-        risk = self._movement_risk(snap)
-        if risk is not None and risk >= self._quiet_max_prob:
-            self._log("entry_skipped_movement_risk", prob=round(risk, 4),
-                      gate=self._quiet_max_prob)
-            return
+        if "entry" in self._quiet_mode or self._quiet_mode == "both":
+            if score is not None and adaptive_thr is not None and score >= adaptive_thr:
+                self._log("entry_skipped_movement_risk", prob=round(score, 4),
+                          gate=round(adaptive_thr, 4), mode="adaptive")
+                return
+        elif self._quiet_max_prob > 0:   # legacy fixed-threshold mode (G4)
+            risk = self._movement_risk(snap)
+            if risk is not None and risk >= self._quiet_max_prob:
+                self._log("entry_skipped_movement_risk", prob=round(risk, 4),
+                          gate=self._quiet_max_prob)
+                return
         adapter = self._adapter(pf)
         # Daily broker reconciliation before the first entry attempt (live only):
         # never add risk on top of a book that doesn't match the broker.
