@@ -136,6 +136,32 @@ class ExecutionConsumer:
 
         if signal_type == SignalType.ENTRY.value:
             signal_stub = _dict_to_signal_stub(signal_body)
+            # Capital pre-check (2026-07-11 user audit): don't fire orders the
+            # account can't fund — the RMS bounce leaves the tracker holding a
+            # phantom position (2026-07-10 afternoon: every order rejected for
+            # hours while the strategy 'traded'). Requirement = premium cost +
+            # headroom for the protective stop's naked-short margin. Fail-OPEN
+            # on check errors (a broken balance probe must not halt trading).
+            est_cost = (_float(entry_premium) or 0) * 30 * int(signal_body.get("max_lots") or 1)
+            min_free = float(os.getenv("EXEC_MIN_FREE_BALANCE_RS", "80000") or 80000)
+            try:
+                probe = getattr(self._adapter, "_request", None)
+                if probe and est_cost > 0:
+                    st, fl = probe("GET", "/fundlimit")
+                    free = float(fl.get("availabelBalance") or fl.get("availableBalance") or 0)
+                    if free < max(est_cost * 1.1, min_free):
+                        logger.warning(
+                            "execution consumer: ENTRY blocked — insufficient capital "
+                            "(free=%.0f need>=%.0f) id=%s", free, max(est_cost * 1.1, min_free), signal_id)
+                        try:
+                            from .alerts import alert_raw
+                            alert_raw(f"<b>ENTRY BLOCKED — CAPITAL</b> {direction} {strike}: "
+                                      f"free ₹{free:,.0f} < required ₹{max(est_cost*1.1, min_free):,.0f}")
+                        except Exception:
+                            pass
+                        return
+            except Exception:
+                logger.exception("capital pre-check failed — proceeding (fail-open)")
             order_result = self._adapter.place_entry(signal_stub)
             fill = self._order_manager.place_and_confirm(
                 order_result=order_result,
