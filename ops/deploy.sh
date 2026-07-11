@@ -15,8 +15,12 @@
 set -uo pipefail
 REPO=/opt/option_trading
 BRANCH="${DEPLOY_BRANCH:-feat/dhan-feature-engine}"
-CORE_SERVICES="ingestion_app ingestion_app_nifty snapshot_app snapshot_app_nifty strategy_app strategy_app_nifty execution_app execution_app_nifty"
+CORE_SERVICES="ingestion_app ingestion_app_nifty snapshot_app snapshot_app_nifty strategy_app strategy_app_nifty execution_app execution_app_nifty seller_app seller_app_nifty"
 SERVICES="${*:-$CORE_SERVICES}"
+# Sellers live in an overlay file; include it always so `deploy.sh seller_app`
+# and full deploys go through the same one path (2026-07-11: sellers were
+# hand-deployed at go-live and drifted out of this script).
+COMPOSE="docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml -f docker-compose.seller.yml"
 log(){ echo "[deploy $(date -u +%H:%M:%SZ)] $*"; }
 fail(){ log "FAILED: $*"; exit 1; }
 
@@ -28,12 +32,10 @@ git merge --ff-only "origin/$BRANCH" || fail "git pull is not fast-forward — r
 log "at commit: $(git rev-parse --short HEAD) $(git log -1 --format=%s | head -c 60)"
 
 log "2/5 building images: $SERVICES"
-docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml \
-  build $SERVICES || fail "image build"
+$COMPOSE build $SERVICES || fail "image build"
 
 log "3/5 recreating containers"
-docker compose --env-file .env.compose -f docker-compose.yml -f docker-compose.gcp.yml \
-  up -d --no-deps --force-recreate $SERVICES || fail "compose up"
+$COMPOSE up -d --no-deps --force-recreate $SERVICES || fail "compose up"
 sleep 20
 
 log "4/5 verify: code in container == repo"
@@ -43,6 +45,7 @@ code_dir_for(){ # service -> the source dir baked into its image
     snapshot_app*)  echo snapshot_app;;
     strategy_app*)  echo strategy_app;;
     execution_app*) echo execution_app;;
+    seller_app*)    echo strategy_app;;   # seller image bakes strategy_app (runner lives there)
     *)              echo "";;
   esac
 }
