@@ -94,7 +94,12 @@ def _enrich_for_seller(snapshots: list[dict], trade_date: str, instrument: str =
       trade -> that side's ltp is None -> the chain-shift price fallback quotes a
       NEIGHBOR strike for it, making short and hedge price identical (est credit
       0, seller refuses every entry — 2026-07-10 hist smoke). Forward-fill each
-      strike's fields from its own last known value within the day."""
+      strike's fields from its own last known value within the day.
+    - EMA/compression family + max_pain/ATM-OI aggregates (2026-07-11 A4 study):
+      the live builder computes these statefully (runtime_features) but this
+      per-day path never did -> replay/study scores were dampened vs live and
+      the direction lever was blind on hist data. Enriched here via the SAME
+      canonical modules the training view uses (no drift)."""
     d = date.fromisoformat(trade_date)
     exp = bn_monthly_expiry(d) if instrument.upper() == "BANKNIFTY" else nifty_weekly_expiry(d)
     dte = (exp - d).days
@@ -117,6 +122,65 @@ def _enrich_for_seller(snapshots: list[dict], trade_date: str, instrument: str =
                     last[(k, f)] = row[f]
                 elif (k, f) in last:
                     row[f] = last[(k, f)]
+    enrich_day_ema_and_aggregates(snapshots)
+
+
+def enrich_day_ema_and_aggregates(snapshots: list[dict]) -> None:
+    """Per-day EMA/compression family (canonical modules, mirrors the training
+    view's _enrich_ema_family) + max_pain / ATM-OI-change aggregates derived
+    from the stored chain. Values land at snapshot payload ROOT (build_feature_
+    row's root-scalar fill picks them up) and in chain_aggregates/atm_options
+    (SnapshotAccessor paths the direction lever reads). Idempotent — only fills
+    missing/None. Callable standalone for re-enriching already-stored days."""
+    import math
+
+    import pandas as pd
+
+    from snapshot_app.core.compression_features import add_compression_features
+    from snapshot_app.core.feature_engine import _ema
+
+    df = pd.DataFrame({
+        "close": [(s.get("futures_bar") or {}).get("fut_close") for s in snapshots],
+        "high": [(s.get("futures_bar") or {}).get("high") for s in snapshots],
+        "low": [(s.get("futures_bar") or {}).get("low") for s in snapshots],
+        "volume": [(s.get("futures_bar") or {}).get("volume") for s in snapshots],
+    })
+    close = df["close"].astype(float)
+    for span in (9, 21, 50):
+        df[f"ema_{span}"] = _ema(close, span)
+    df["day_high"] = df["high"].cummax()
+    df["day_low"] = df["low"].cummin()
+    add_compression_features(df)
+    nz = close.replace(0.0, float("nan"))
+    for span in (9, 21, 50):
+        df[f"ema_{span}_slope"] = df[f"ema_{span}"].diff() / nz
+
+    oi_hist: list[dict] = []
+    for i, s in enumerate(snapshots):
+        for col in df.columns:
+            if col in ("close", "high", "low", "volume"):
+                continue
+            cur = s.get(col)
+            if cur is None or (isinstance(cur, float) and math.isnan(cur)):
+                v = df[col].iloc[i]
+                if not pd.isna(v):
+                    s[col] = float(v)
+        oi_map = {int(r["strike"]): (float(r.get("ce_oi") or 0), float(r.get("pe_oi") or 0))
+                  for r in (s.get("strikes") or []) if r.get("strike")}
+        oi_hist.append(oi_map)
+        if len(oi_map) >= 10:
+            ca = s.setdefault("chain_aggregates", {})
+            if not ca.get("max_pain"):
+                ca["max_pain"] = min(
+                    sorted(oi_map),
+                    key=lambda S: sum(c * max(0, S - K) + q * max(0, K - S)
+                                      for K, (c, q) in oi_map.items()))
+        atm = (s.get("chain_aggregates") or {}).get("atm_strike")
+        if atm and i >= 30 and atm in oi_map and atm in oi_hist[i - 30]:
+            ao = s.setdefault("atm_options", {})
+            if ao.get("atm_ce_oi_change_30m") is None:
+                ao["atm_ce_oi_change_30m"] = oi_map[atm][0] - oi_hist[i - 30][atm][0]
+                ao["atm_pe_oi_change_30m"] = oi_map[atm][1] - oi_hist[i - 30][atm][1]
 
 
 def _quality_check(snapshots: list[dict]) -> tuple[bool, dict]:
