@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import os
 import re
 from collections import deque
@@ -1849,6 +1850,50 @@ class LiveMarketSnapshotBuilder:
         # vix_open so vix_intraday_chg is non-NaN live (vix_daily is empty live).
         self._session_open_vix: Optional[float] = None
         self._vix_session_date: Optional[str] = None
+        # IV-percentile state persistence (2026-07-12): the 30k-bar IV deques
+        # took ~80 sessions to warm; every restart/deploy zeroed them, leaving
+        # iv_percentile None (seller IV gate blind) until re-warmed. Restore on
+        # boot, persist every ~50 builds into the .run mount.
+        self._iv_state_dir = os.getenv("SNAPSHOT_STATE_DIR", "/app/.run/snapshot_app")
+        self._build_count = 0
+        self._restore_iv_state()
+
+    _iv_logger = logging.getLogger(__name__)
+
+    def _iv_state_path(self) -> str:
+        return os.path.join(self._iv_state_dir, f"iv_state_{self.instrument}.json")
+
+    def _restore_iv_state(self) -> None:
+        try:
+            path = self._iv_state_path()
+            if not os.path.exists(path):
+                return
+            with open(path) as fh:
+                doc = json.load(fh)
+            self.state.iv_history_expiry.extend(
+                float(v) for v in doc.get("expiry", []))
+            self.state.iv_history_non_expiry.extend(
+                float(v) for v in doc.get("non_expiry", []))
+            self._iv_logger.info(
+                "iv-state restored: %d expiry / %d non-expiry bars (saved %s)",
+                len(self.state.iv_history_expiry),
+                len(self.state.iv_history_non_expiry), doc.get("saved_at"))
+        except Exception:
+            self._iv_logger.exception("iv-state restore failed — starting cold (fail-open)")
+
+    def _persist_iv_state(self) -> None:
+        try:
+            os.makedirs(self._iv_state_dir, exist_ok=True)
+            tmp = self._iv_state_path() + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump({
+                    "saved_at": datetime.utcnow().isoformat(),
+                    "expiry": list(self.state.iv_history_expiry),
+                    "non_expiry": list(self.state.iv_history_non_expiry),
+                }, fh)
+            os.replace(tmp, self._iv_state_path())
+        except Exception:
+            self._iv_logger.exception("iv-state persist failed (non-fatal)")
 
     def _update_session_open_vix(
         self, *, ohlc: pd.DataFrame, vix_live: Optional[float],
@@ -2200,6 +2245,9 @@ class LiveMarketSnapshotBuilder:
             snapshot["block_flow"] = cross["block_flow"]
         if self._velocity_acc is not None:
             snapshot = self._velocity_acc.process(snapshot)
+        self._build_count += 1
+        if self._build_count % 50 == 0:
+            self._persist_iv_state()
         return snapshot
 
 
