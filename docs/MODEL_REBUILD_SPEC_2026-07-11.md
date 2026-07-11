@@ -90,3 +90,13 @@ Design, one shot, judged as committed:
   2026-04+ holdout. Also reported: abstain rate on fires, per-side hit rate.
 Fail => buyer stays signal-only; no structure/threshold variants beyond the
 three horizons. Pass => paper-tier live wiring proposal (not auto-live).
+RESULT 2026-07-11 night: INCONCLUSIVE — NOT a verdict. 331 fires, 100%
+abstain: backfilled snapshots carry per-strike OI but never computed the
+chain aggregates the lever reads (max_pain, atm_oi = None), so the trio can
+never reach 3-agree. Two run notes: (1) first run scored the raw serving row
+and got 0 fires in 412 days — the EMA train/serve skew (see
+project_ema_serving_gap memory); fixed via per-day canonical enrichment.
+(2) The same skew means the LIVE fire-line is mute until serving gets
+stateful EMA. Permitted follow-up (data repair, not iteration): enrich
+backfill with max_pain/atm_oi derived from the stored chain, rerun A4 ONCE
+as registered. The lever's 61% claim itself is NOT in question here.
