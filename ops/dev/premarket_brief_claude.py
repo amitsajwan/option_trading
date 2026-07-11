@@ -39,7 +39,9 @@ GCLOUD_CONFIG = "trader-new"
 VM = "trader-runtime-01"
 ZONE = "asia-south1-b"
 PROJECT = "trader-502012"
-VM_BRIEF = "/opt/option_trading/config/premarket_brief.json"
+# Runtime data dir (shared_run mount), NOT the git-tracked config/ — a daily
+# push onto a tracked path leaves the VM worktree dirty and blocks every merge.
+VM_BRIEF = "/opt/option_trading/.run/premarket_brief.json"
 
 VOL_FLAGS = ("calm", "elevated", "high")
 
