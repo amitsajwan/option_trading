@@ -100,3 +100,13 @@ project_ema_serving_gap memory); fixed via per-day canonical enrichment.
 stateful EMA. Permitted follow-up (data repair, not iteration): enrich
 backfill with max_pain/atm_oi derived from the stored chain, rerun A4 ONCE
 as registered. The lever's 61% claim itself is NOT in question here.
+RERUN RESULT 2026-07-11 late night (after data repair): **FAIL, decisive.**
+316 fires, 91% abstain, 30 trades. Post-cost NEGATIVE at every horizon
+(5m -208pts/Rs-6,252 win 10%; 10m -173pts; 15m -160pts win 20%), negative
+in BOTH halves and the 2026-04+ holdout, CE and PE legs both negative.
+The lever hit direction 17/30 = 57% (consistent with its ~61% claim) — yet
+the vertical still lost: at fire moments the chain is already repriced for
+the move, so even directionally-right debit structures bleed. Foresight is
+priced in offensively; it only pays defensively (the veto). Buyer stays
+signal-only. The buyer file is now closed with direction-free (A3) AND
+direction-aware (A4) evidence.
