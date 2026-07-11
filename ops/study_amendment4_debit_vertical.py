@@ -73,6 +73,31 @@ for di, day in enumerate(days):
             bars.append(p)
     if len(bars) < 30:
         continue
+    # Data repair (spec note 2026-07-11): backfilled snapshots store per-strike
+    # OI but never derived the aggregates the direction lever reads. Compute
+    # max_pain (argmin total intrinsic payout) and ATM OI 30m change (same-
+    # strike diff — approximation of the live rolling-ATM series) per bar.
+    oi_hist = []  # per bar: {strike: (ce_oi, pe_oi)}
+    for bi, p in enumerate(bars):
+        rows_s = [r for r in (p.get("strikes") or [])
+                  if r.get("strike") and (r.get("ce_oi") or r.get("pe_oi"))]
+        oi_map = {r["strike"]: (float(r.get("ce_oi") or 0), float(r.get("pe_oi") or 0))
+                  for r in rows_s}
+        oi_hist.append(oi_map)
+        if len(rows_s) >= 10:
+            ks = sorted(oi_map)
+            def _payout(S):
+                return sum(c * max(0, S - K) + q * max(0, K - S)
+                           for K, (c, q) in oi_map.items())
+            ca = p.setdefault("chain_aggregates", {})
+            if not ca.get("max_pain"):
+                ca["max_pain"] = min(ks, key=_payout)
+        atm = (p.get("chain_aggregates") or {}).get("atm_strike")
+        if atm and bi >= 30 and atm in oi_map and atm in oi_hist[bi - 30]:
+            ao = p.setdefault("atm_options", {})
+            if ao.get("atm_ce_oi_change_30m") is None:
+                ao["atm_ce_oi_change_30m"] = oi_map[atm][0] - oi_hist[bi - 30][atm][0]
+                ao["atm_pe_oi_change_30m"] = oi_map[atm][1] - oi_hist[bi - 30][atm][1]
     # Per-day EMA/compression enrichment via the CANONICAL modules — mirrors
     # build_training_view_from_mongo._enrich_ema_family. The bundle's 0.30
     # fire-line was calibrated on the training view (EMA present); scoring the
