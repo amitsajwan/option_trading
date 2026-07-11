@@ -1,0 +1,19 @@
+{
+  "_comment": "Scheduled-event veto for the sellers: on these dates, condor/spread ENTRIES are skipped (holding/exits unaffected). Rationale: IV is rich BEFORE scheduled news precisely because a move is expected — selling into it is adverse selection. Dates seeded 2026-07-11 from public schedules — VERIFY before relying on them; edit freely (the file is read fresh each day).",
+  "events": [
+    {"date": "2026-07-28", "label": "FOMC day 1"},
+    {"date": "2026-07-29", "label": "FOMC day 2 (decision)"},
+    {"date": "2026-08-04", "label": "RBI MPC day 1"},
+    {"date": "2026-08-05", "label": "RBI MPC day 2"},
+    {"date": "2026-08-06", "label": "RBI MPC decision"},
+    {"date": "2026-09-15", "label": "FOMC day 1"},
+    {"date": "2026-09-16", "label": "FOMC day 2 (decision)"},
+    {"date": "2026-09-29", "label": "RBI MPC (verify exact dates)"},
+    {"date": "2026-09-30", "label": "RBI MPC (verify exact dates)"},
+    {"date": "2026-10-27", "label": "FOMC day 1"},
+    {"date": "2026-10-28", "label": "FOMC day 2 (decision)"},
+    {"date": "2026-12-08", "label": "FOMC day 1"},
+    {"date": "2026-12-09", "label": "FOMC day 2 (decision)"},
+    {"date": "2027-02-01", "label": "Union Budget"}
+  ]
+}

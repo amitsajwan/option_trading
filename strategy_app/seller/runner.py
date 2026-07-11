@@ -477,6 +477,20 @@ class SellerRunner:
         if not ok:
             self._log("entry_skipped_bn_conflict", reason=why)
             return
+        # Scheduled-event veto (2026-07-11): IV is rich BEFORE scheduled news
+        # because a move is expected — selling into FOMC/RBI/budget is adverse
+        # selection. Dates from config/event_calendar.json (read fresh daily,
+        # fail-open on any read error). Entries only; managing/exits unaffected.
+        try:
+            cal_path = os.getenv("SELLER_EVENT_CALENDAR", "/app/config/event_calendar.json")
+            if day and os.path.exists(cal_path):
+                cal = json.load(open(cal_path))
+                hit = next((e for e in cal.get("events", []) if e.get("date") == day), None)
+                if hit:
+                    self._log("entry_skipped_event", event=hit.get("label"), date=day)
+                    return
+        except Exception:
+            logger.debug("event calendar check failed — fail-open", exc_info=True)
         if not decision.fires:
             return
         if self._quiet_mode == "shadow":
