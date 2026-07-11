@@ -164,3 +164,4 @@ staged-preflight-*/
 .DS_Store
 Thumbs.db
 .env.alerts
+ops/dev/.*_history.jsonl
