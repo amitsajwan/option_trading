@@ -70,3 +70,23 @@ convention) + 3 pts statutory per round trip = 7 pts, applied per trade.
 PASS bar: post-cost total > 0 in BOTH halves of the 19-month window AND in
 the 2026-04+ holdout months. Fail => buyer stays signal-only; no variants
 beyond the three reported horizons.
+RESULT 2026-07-11: FAIL at every horizon (direction-free straddle bleeds).
+
+## Amendment 4 (pre-registered 2026-07-11 night, before running): fire x lever x debit vertical (BN)
+Hypothesis: Amendment 3 failed because a straddle pays for BOTH sides; the
+validated ~61% big-move direction lever (project_direction_lever_2026-06-10)
+should keep only the paid-for side, and a debit vertical caps the premium
+bleed that killed naked buys.
+Design, one shot, judged as committed:
+- Same fire definition as A3: score >= 0.30 crossing (prev bar < 0.30), no
+  position open, one entry per crossing, BN 19-mo quality-gated snapshots.
+- Direction: the LIVE serving lever `_detect_agreement_lever` (mom15 +
+  max_pain + OI, all-agree-else-abstain). ABSTAIN => no trade (logged).
+- Structure: debit vertical in lever direction at recorded chain prices:
+  BUY ATM, SELL ATM+100 for CE (ATM-100 for PE). Exit both legs at the same
+  strikes' recorded prices t+5m (report 10m/15m variants).
+- Costs: 7 pts per round trip (4 pts slippage + 3 statutory — A3 convention).
+- PASS bar (same shape as A3): post-cost total > 0 in BOTH halves AND in the
+  2026-04+ holdout. Also reported: abstain rate on fires, per-side hit rate.
+Fail => buyer stays signal-only; no structure/threshold variants beyond the
+three horizons. Pass => paper-tier live wiring proposal (not auto-live).

@@ -90,10 +90,15 @@ def _ask_claude():
         '"short name"}. Use exchange-relevant dates (IST). If a meeting spans '
         "days, list each day."
     )
+    # Real .exe, not claude.cmd — batch wrappers re-parse args via cmd.exe,
+    # which eats pipes/quotes inside the prompt.
+    import shutil
+    exe = os.path.join(os.environ.get("APPDATA", ""), "npm", "node_modules",
+                       "@anthropic-ai", "claude-code", "bin", "claude.exe")
     proc = subprocess.run(
-        ["claude", "-p", prompt, "--allowedTools", "WebSearch",
-         "--model", CLAUDE_MODEL],
-        capture_output=True, text=True, timeout=600, shell=(os.name == "nt"))
+        [exe if os.path.exists(exe) else (shutil.which("claude") or "claude"),
+         "-p", prompt, "--allowedTools", "WebSearch", "--model", CLAUDE_MODEL],
+        capture_output=True, text=True, timeout=600)
     if proc.returncode != 0 or not (proc.stdout or "").strip():
         raise RuntimeError(f"claude call failed rc={proc.returncode}: "
                            f"{(proc.stderr or '')[:200]}")
