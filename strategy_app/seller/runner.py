@@ -354,7 +354,7 @@ class SellerRunner:
         acc = SnapshotAccessor(snap)
         decision = self._brain.decide(acc)
         self._publish_status(snap, acc, decision, pf)
-        # ── movement score (adaptive gate modes) ──
+        # ── movement score (adaptive gate modes; 'shadow' = log-only) ──
         adaptive_thr = None
         score = None
         if self._quiet_mode and self._quiet_bundle_path:
@@ -364,6 +364,20 @@ class SellerRunner:
                 if len(self._score_hist) >= 2000:  # warmup before the gate acts
                     ss = sorted(self._score_hist)
                     adaptive_thr = ss[min(len(ss) - 1, int(self._quiet_quantile * len(ss)))]
+                # Buyer fire-line PAPER evidence (spec: buyer stays paper-tier).
+                # Log crossings of the bundle's fire-line with market context so
+                # the week's live precision can be measured against fwd moves.
+                fire = ((self._quiet_model or {}).get("operating_points") or {}).get("buyer_fire_line")
+                if fire and score >= float(fire) and self._hhmm(snap) != getattr(self, "_last_fire_hhmm", None):
+                    self._last_fire_hhmm = self._hhmm(snap)
+                    try:
+                        self._db["movement_signals"].insert_one({
+                            "instrument": self._instrument, "kind": "buyer_fire_paper",
+                            "day": day, "hhmm": self._hhmm(snap), "score": round(score, 4),
+                            "fire_line": fire, "fut_close": acc.fut_close,
+                        })
+                    except Exception:
+                        pass
         # Exp-3 exit tripwire: 2 consecutive extreme scores while holding -> exit all
         if ("exit" in self._quiet_mode or self._quiet_mode == "both") and self._mgr.open_spreads \
                 and adaptive_thr is not None and score is not None:
@@ -465,7 +479,20 @@ class SellerRunner:
             return
         if not decision.fires:
             return
-        if "entry" in self._quiet_mode or self._quiet_mode == "both":
+        if self._quiet_mode == "shadow":
+            # Shadow: record what the crash-veto WOULD do, block nothing.
+            if score is not None and adaptive_thr is not None and score >= adaptive_thr:
+                self._log("quiet_gate_shadow_veto", prob=round(score, 4),
+                          gate=round(adaptive_thr, 4))
+                try:
+                    self._db["movement_signals"].insert_one({
+                        "instrument": self._instrument, "kind": "veto_shadow",
+                        "day": day, "hhmm": self._hhmm(snap), "score": round(score, 4),
+                        "gate": round(adaptive_thr, 4), "fut_close": acc.fut_close,
+                    })
+                except Exception:
+                    pass
+        elif "entry" in self._quiet_mode or self._quiet_mode == "both":
             if score is not None and adaptive_thr is not None and score >= adaptive_thr:
                 self._log("entry_skipped_movement_risk", prob=round(score, 4),
                           gate=round(adaptive_thr, 4), mode="adaptive")
