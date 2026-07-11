@@ -36,3 +36,15 @@ the models were never broken; the label was.
 ## Rollout
 Shadow/paper Monday; live consumption decisions only after ≥1 week of live
 paper agreement. NIFTY follows the same spec after BN validates.
+
+## Amendment 1 (pre-registered 2026-07-11, before running): Exp-2 & Exp-3
+G4-as-specified FAILED (+₹33,604 vs +₹125,398): the frozen train-p90 threshold
+over-blocked in the hotter 2026 regime (scores are non-stationary — thresholds
+must be ADAPTIVE). The tail-kill evidence (worst −₹2.7k vs −₹15.7k) justifies
+exactly two follow-ups, one shot each, judged as committed:
+- **Exp-2 crash-only entry veto**: skip entry when score ≥ rolling p97 of the
+  trailing ~30 sessions' scores (adaptive), warmup-inactive.
+- **Exp-3 movement exit-tripwire**: while holding, score ≥ rolling p97 for 2
+  consecutive bars → exit the spread immediately (reason movement_tripwire).
+PASS bar for each: 19-mo total ≥ +₹125,398 AND sum of 5 worst losses improved
+vs baseline. No further threshold iterations beyond these two runs.
