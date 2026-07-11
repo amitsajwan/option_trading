@@ -141,10 +141,12 @@ def main():
         "refresh_mode": mode,
         "events": merged,
     }
-    tmp = CAL + ".tmp"
-    with open(tmp, "w") as fh:
+    # In-place write (not os.replace): the seller containers file-bind-mount
+    # this path, so the write must reuse the existing inode — an inode swap
+    # leaves them reading a stale ghost. Torn-read risk is covered by the
+    # runner's fail-open try and the pre-market (08:02 IST) schedule.
+    with open(CAL, "w") as fh:
         json.dump(doc, fh, indent=1)
-    os.replace(tmp, CAL)
     nxt = ", ".join(f"{e['date'][5:]} {e['label']}" for e in merged[:6])
     print(f"OK: {len(merged)} events ({mode}); next: {nxt}")
     _telegram(f"<b>EVENT CALENDAR</b> refreshed ({mode}): {len(merged)} events.\n"

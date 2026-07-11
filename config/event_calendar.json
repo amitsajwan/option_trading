@@ -1,19 +1,42 @@
 {
-  "_comment": "Scheduled-event veto for the sellers: on these dates, condor/spread ENTRIES are skipped (holding/exits unaffected). Rationale: IV is rich BEFORE scheduled news precisely because a move is expected — selling into it is adverse selection. Dates seeded 2026-07-11 from public schedules — VERIFY before relying on them; edit freely (the file is read fresh each day).",
-  "events": [
-    {"date": "2026-07-28", "label": "FOMC day 1"},
-    {"date": "2026-07-29", "label": "FOMC day 2 (decision)"},
-    {"date": "2026-08-04", "label": "RBI MPC day 1"},
-    {"date": "2026-08-05", "label": "RBI MPC day 2"},
-    {"date": "2026-08-06", "label": "RBI MPC decision"},
-    {"date": "2026-09-15", "label": "FOMC day 1"},
-    {"date": "2026-09-16", "label": "FOMC day 2 (decision)"},
-    {"date": "2026-09-29", "label": "RBI MPC (verify exact dates)"},
-    {"date": "2026-09-30", "label": "RBI MPC (verify exact dates)"},
-    {"date": "2026-10-27", "label": "FOMC day 1"},
-    {"date": "2026-10-28", "label": "FOMC day 2 (decision)"},
-    {"date": "2026-12-08", "label": "FOMC day 1"},
-    {"date": "2026-12-09", "label": "FOMC day 2 (decision)"},
-    {"date": "2027-02-01", "label": "Union Budget"}
-  ]
+ "_comment": "Seller entry veto dates. AUTO-REFRESHED weekly by ops/dev/event_calendar_refresh_claude.py (Claude headless); add \"manual\": true to any entry you edit by hand and it will be preserved.",
+ "refreshed_at": "2026-07-11",
+ "refresh_mode": "claude-websearch",
+ "events": [
+  {
+   "date": "2026-07-14",
+   "label": "US CPI release (June data)",
+   "source": "llm"
+  },
+  {
+   "date": "2026-07-28",
+   "label": "FOMC meeting day 1",
+   "source": "llm"
+  },
+  {
+   "date": "2026-07-29",
+   "label": "FOMC decision day",
+   "source": "llm"
+  },
+  {
+   "date": "2026-08-03",
+   "label": "RBI MPC meeting day 1",
+   "source": "llm"
+  },
+  {
+   "date": "2026-08-04",
+   "label": "RBI MPC meeting day 2",
+   "source": "llm"
+  },
+  {
+   "date": "2026-08-05",
+   "label": "RBI MPC decision day",
+   "source": "llm"
+  },
+  {
+   "date": "2026-08-12",
+   "label": "US CPI release (July data, est.)",
+   "source": "llm"
+  }
+ ]
 }
