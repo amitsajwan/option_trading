@@ -48,3 +48,14 @@ exactly two follow-ups, one shot each, judged as committed:
   consecutive bars → exit the spread immediately (reason movement_tripwire).
 PASS bar for each: 19-mo total ≥ +₹125,398 AND sum of 5 worst losses improved
 vs baseline. No further threshold iterations beyond these two runs.
+
+## Amendment 2 (pre-registered 2026-07-11 PM): NIFTY iteration
+NIFTY v1 FAILED G1 (0.7498). Design hypothesis (not threshold-fishing): the
+label should match EVENT RARITY (~4-6% base), not BN's raw 0.20%; NIFTY's
+lower vol makes 0.20%/5m too rare (2-3%) and noisy to learn. Procedure:
+1. NIFTY label study (same candidates + 0.15%/5m), pick by walk-forward AUC.
+2. Train NIFTY v2 on the winner; SAME gates G1-G3 (0.78/3x/0.05) — unchanged.
+3. Benchmark: BN model scored cross-instrument on NIFTY (no training).
+4. If gates pass: NIFTY replay with adaptive veto must beat +₹23,377 → shadow.
+One iteration. If v2 fails G1, NIFTY movement modeling is parked (not retried
+weekly) until a materially new feature or data source exists.
