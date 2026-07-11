@@ -72,6 +72,14 @@ class SellerRunner:
         # time exits don't depend on marks).
         self._stop_confirm_bars = int(os.getenv("SELLER_STOP_CONFIRM_BARS", "2") or 2)
         self._stop_streak: dict[str, int] = {}
+        # Quiet-gate (Phase 2 / spec 2026-07-11): skip condor ENTRIES when the
+        # movement model says a big move is likely — "IV is rich BECAUSE a move
+        # is coming" is exactly when selling loses (Apr-2025 stop cluster).
+        # OFF unless both envs are set. Fail-OPEN: any gate error logs and
+        # trades proceed as without the gate.
+        self._quiet_bundle_path = (os.getenv("SELLER_QUIET_GATE_BUNDLE") or "").strip()
+        self._quiet_max_prob = float(os.getenv("SELLER_QUIET_GATE_MAX_PROB", "0") or 0)
+        self._quiet_model = None  # lazy-loaded
         self._reconciled_day: Optional[str] = None
         self._mode = "live" if (os.getenv("EXECUTION_ADAPTER", "paper").strip().lower() == "dhan"
                                 and (os.getenv("SELLER_LIVE_ENABLED", "0") or "0").strip() in ("1", "true", "yes")) else "paper"
@@ -254,6 +262,34 @@ class SellerRunner:
         logger.info("seller reconcile: book matches broker (%d spread(s))", len(self._mgr.open_spreads))
         return True
 
+    def _movement_risk(self, snap) -> Optional[float]:
+        """P(big move soon) from the movement bundle, or None when the gate is
+        unconfigured/unavailable (fail-open)."""
+        if not self._quiet_bundle_path or self._quiet_max_prob <= 0:
+            return None
+        try:
+            if self._quiet_model is None:
+                import joblib
+                self._quiet_model = joblib.load(self._quiet_bundle_path)
+                logger.info("seller quiet-gate: loaded %s (label=%s)",
+                            self._quiet_bundle_path,
+                            (self._quiet_model.get("label_definition") or "?")[:60])
+            b = self._quiet_model
+            from ..market.snapshot_accessor import SnapshotAccessor as _SA
+            from ..ml.bundle_inference import build_feature_row
+            row = build_feature_row(_SA(snap), b["features"])
+            if not row:
+                return None
+            import math
+            feats = [row.get(f) for f in b["features"]]
+            med = b.get("medians") or {}
+            feats = [med.get(f, 0.0) if (v is None or (isinstance(v, float) and math.isnan(v))) else v
+                     for f, v in zip(b["features"], feats)]
+            return float(b["model"].predict_proba([feats])[0][1])
+        except Exception:
+            logger.exception("seller quiet-gate: scoring failed — gate fails OPEN")
+            return None
+
     def _trade_card(self, decision, pf, expiry, free_margin) -> str:
         """The pre-entry audit card: what we're doing, worst case, and why —
         logged AND alerted BEFORE the first leg goes out (user req 2026-07-09)."""
@@ -377,6 +413,11 @@ class SellerRunner:
             self._log("entry_skipped_bn_conflict", reason=why)
             return
         if not decision.fires:
+            return
+        risk = self._movement_risk(snap)
+        if risk is not None and risk >= self._quiet_max_prob:
+            self._log("entry_skipped_movement_risk", prob=round(risk, 4),
+                      gate=self._quiet_max_prob)
             return
         adapter = self._adapter(pf)
         # Daily broker reconciliation before the first entry attempt (live only):
