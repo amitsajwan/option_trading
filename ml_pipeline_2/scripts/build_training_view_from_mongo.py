@@ -73,6 +73,44 @@ def main() -> int:
     print(f"{inst}: {len(verified_days)} quality-verified days in range", flush=True)
 
     features = _feature_list()
+
+    def _enrich_ema_family(day_rows: list[dict]) -> None:
+        """Backfilled snapshots lack the live builder's stateful EMA/compression
+        accumulators (2026-07-11 gap: 6 features incl. the model's top-importance
+        ema_50_slope were 100% NaN). Compute them per day via the CANONICAL
+        modules (feature_engine._ema + compression_features.add_compression_
+        features) — no reimplementation, no drift. Only fills values that are
+        currently NaN/missing."""
+        import math
+
+        from snapshot_app.core.compression_features import add_compression_features
+        from snapshot_app.core.feature_engine import _ema
+
+        df = pd.DataFrame({
+            "close": [r.get("fut_close") for r in day_rows],
+            "high": [r.get("_fut_high") for r in day_rows],
+            "low": [r.get("_fut_low") for r in day_rows],
+            "volume": [r.get("_fut_vol") for r in day_rows],
+        })
+        close = df["close"].astype(float)
+        for span in (9, 21, 50):
+            df[f"ema_{span}"] = _ema(close, span)
+        df["day_high"] = df["high"].cummax()
+        df["day_low"] = df["low"].cummin()
+        add_compression_features(df)
+        nz = close.replace(0.0, float("nan"))
+        df["ema_9_slope"] = df["ema_9"].diff() / nz
+        df["ema_21_slope"] = df["ema_21"].diff() / nz
+        df["ema_50_slope"] = df["ema_50"].diff() / nz
+        for i, r in enumerate(day_rows):
+            for col in df.columns:
+                if col in ("close", "high", "low", "volume"):
+                    continue
+                cur = r.get(col)
+                if cur is None or (isinstance(cur, float) and math.isnan(cur)):
+                    v = df[col].iloc[i]
+                    r[col] = None if pd.isna(v) else float(v)
+
     rows: list[dict] = []
     for day in sorted(verified_days):
         day_rows: list[dict] = []
@@ -82,15 +120,19 @@ def main() -> int:
                 continue
             acc = SnapshotAccessor(snap)
             frow = build_feature_row(acc, features) or {}
-            fut = (snap.get("futures_bar") or {}).get("fut_close")
+            fb = snap.get("futures_bar") or {}
+            fut = fb.get("fut_close")
             day_rows.append({
                 "trade_date": day,
                 "time": (snap.get("session_context") or {}).get("time"),
                 "fut_close": fut,
+                "_fut_high": fb.get("high"), "_fut_low": fb.get("low"),
+                "_fut_vol": fb.get("volume"),
                 "dte": (snap.get("session_context") or {}).get("days_to_expiry"),
                 "iv_pct": (snap.get("iv_derived") or {}).get("iv_percentile"),
                 **frow,
             })
+        _enrich_ema_family(day_rows)
         # label menu from the day's own close series (no cross-day lookahead)
         closes = [r["fut_close"] for r in day_rows]
         n = len(day_rows)
