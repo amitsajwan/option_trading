@@ -274,7 +274,11 @@ class SellerRunner:
     def _movement_risk(self, snap) -> Optional[float]:
         """P(big move soon) from the movement bundle, or None when the gate is
         unconfigured/unavailable (fail-open)."""
-        if not self._quiet_bundle_path or self._quiet_max_prob <= 0:
+        # Bundle is the only requirement — thresholds differ by mode (legacy
+        # fixed MAX_PROB vs adaptive quantile). Requiring MAX_PROB here made
+        # adaptive mode score None on every bar (Exp-2/3 first run = byte-
+        # identical to baseline; caught by the too-identical rule).
+        if not self._quiet_bundle_path:
             return None
         try:
             if self._quiet_model is None:
