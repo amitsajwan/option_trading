@@ -74,6 +74,31 @@ class PositionTracker:
         )
         return self._position
 
+    def cancel_position(self, reason: str) -> None:
+        """Drop a position the broker never opened (fill-truth, 2026-07-12).
+
+        NOT an exit: no exit signal is emitted (there is nothing at the broker
+        to sell — emitting one would create a naked short), no P&L is booked.
+        An audit row goes to closed_positions so the day's record shows the
+        phantom and why it was dropped."""
+        if self._position is None:
+            return
+        pos = self._position
+        logger.warning(
+            "position CANCELLED (%s): id=%s dir=%s strike=%s — broker never filled it",
+            reason, pos.position_id, pos.direction, pos.strike,
+        )
+        self._closed_positions.append({
+            "position_id": pos.position_id,
+            "direction": getattr(pos.direction, "value", pos.direction),
+            "strike": pos.strike,
+            "entry_premium": pos.entry_premium,
+            "exit_reason": f"cancelled_{reason}",
+            "pnl_pct": 0.0,
+            "bars_held": pos.bars_held,
+        })
+        self._position = None
+
     def update(
         self,
         snap: SnapshotAccessor,

@@ -111,7 +111,7 @@ from ..market.snapshot_accessor import SnapshotAccessor
 from .strategy_router import StrategyRouter
 from ..policy.velocity_entry_policy import VelocityEnhancedEntryPolicy
 from ..policy.velocity_regime_classifier import VelocityEnhancedRegimeClassifier
-from ..constants import EXIT_CONFIDENCE, MIN_ENTRY_CONFIDENCE, SOFT_CLOSE_MINUTE
+from ..constants import EXIT_CONFIDENCE, MIN_ENTRY_CONFIDENCE, PRICE_EPS, SOFT_CLOSE_MINUTE
 from ..utils.env import as_bool
 
 logger = logging.getLogger(__name__)
@@ -657,6 +657,52 @@ class DeterministicRuleEngine(StrategyEngine):
         risk: RiskContext,
     ) -> Optional[TradeSignal]:
         """Check for system exits (stop, target, time) and log manage events."""
+        # ── Fill-truth reconciliation (2026-07-12) ────────────────────────────
+        # Confirm the live entry actually filled at the broker before managing
+        # it as real. Rejected/failed => cancel the phantom (no exit signal — a
+        # sell would be a naked short). Filled at a different premium => adopt
+        # the real fill as the P&L base (stop scaled proportionally). No event
+        # after FILL_CONFIRM_BARS bars => assume rejected (covers events the
+        # stream never carried). Fail-open: feedback errors never block exits.
+        aw = getattr(self, "_await_fill", None)
+        if aw is not None and aw.get("position_id") == position.position_id and not aw.get("confirmed"):
+            try:
+                if not hasattr(self, "_fill_feedback"):
+                    from ..position.fill_feedback import FillFeedback
+                    self._fill_feedback = FillFeedback()
+                fills = self._fill_feedback.drain()
+                ev = self._fill_feedback.entry_outcome(fills, position.position_id)
+                if ev is not None:
+                    status = str(ev.get("status") or "").lower()
+                    if status == "filled":
+                        aw["confirmed"] = True
+                        fp = None
+                        try:
+                            fp = float(ev.get("fill_price") or 0) or None
+                        except (TypeError, ValueError):
+                            pass
+                        if fp and position.entry_premium and abs(fp - position.entry_premium) > PRICE_EPS:
+                            scale = fp / position.entry_premium
+                            logger.info(
+                                "fill-truth: entry premium corrected %.2f -> %.2f (pos=%s)",
+                                position.entry_premium, fp, position.position_id)
+                            position.entry_premium = fp
+                            if position.stop_price:
+                                position.stop_price = position.stop_price * scale
+                            position.high_water_premium = max(position.high_water_premium, fp)
+                    else:
+                        self._tracker.cancel_position(f"broker_{status or 'unfilled'}")
+                        self._await_fill = None
+                        return None
+                else:
+                    aw["bars"] = int(aw.get("bars") or 0) + 1
+                    max_bars = int(os.getenv("FILL_CONFIRM_BARS", "5") or 5)
+                    if aw["bars"] >= max_bars:
+                        self._tracker.cancel_position("fill_confirm_timeout")
+                        self._await_fill = None
+                        return None
+            except Exception:
+                logger.exception("fill-truth reconciliation failed — managing as-is (fail-open)")
         # Refresh the shadow (live direction) score EVERY bar. The
         # MomentumReversalPolicy thesis-invalidation exit (active in the lottery
         # stack via LOTTERY_MOMENTUM_FLIP) reads position.current_shadow_score to
@@ -1721,6 +1767,14 @@ class DeterministicRuleEngine(StrategyEngine):
         )
 
         opened = self._tracker.open_position(signal, snap)
+        # Fill-truth (2026-07-12): live-tier entries must be CONFIRMED by a broker
+        # fill; otherwise the tracker is managing a phantom (2026-07-10: hours of
+        # 'trading' on RMS-rejected orders). Paper tier never reaches the broker.
+        _sig_tier = str((signal.raw_signals or {}).get("tier") or "").strip().lower()
+        self._await_fill = (
+            {"position_id": opened.position_id, "bars": 0, "confirmed": False}
+            if _sig_tier == "live" else None
+        )
         self._log.log_signal(signal, acted_on=True)
         self._log.log_position_open(signal, opened)
         logger.info(
