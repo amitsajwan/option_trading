@@ -59,3 +59,14 @@ lower vol makes 0.20%/5m too rare (2-3%) and noisy to learn. Procedure:
 4. If gates pass: NIFTY replay with adaptive veto must beat +₹23,377 → shadow.
 One iteration. If v2 fails G1, NIFTY movement modeling is parked (not retried
 weekly) until a materially new feature or data source exists.
+
+## Amendment 3 (pre-registered 2026-07-11 eve): straddle-on-fire study (BN)
+First buyer P&L test of the movement model — direction-free by construction.
+Design: on each fire-line crossing (score >= 0.30, no position open, one
+entry per crossing), BUY the ATM straddle at the bar's recorded CE+PE prices;
+exit BOTH legs at the SAME strikes' recorded prices t+5m later (also report
+10m/15m variants); costs = 4 pts slippage (1pt/leg/side, seller-replay
+convention) + 3 pts statutory per round trip = 7 pts, applied per trade.
+PASS bar: post-cost total > 0 in BOTH halves of the 19-month window AND in
+the 2026-04+ holdout months. Fail => buyer stays signal-only; no variants
+beyond the three reported horizons.
