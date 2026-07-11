@@ -194,34 +194,48 @@ def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) 
 
 
 def iv_percentile_pass(mongo_db, d_from: str, d_to: str, window_days: int = 20, coll_name: str = _COLL) -> None:
-    """Second pass: fill iv_derived.iv_percentile per snapshot — percentile rank
-    of the bar's ATM IV against the pooled per-bar ATM IVs of the TRAILING
-    window_days backfilled days (mirrors the live IV-rank gate's meaning). The
-    seller's core premium-richness gate is dead without it."""
-    from bisect import bisect_right
+    """Second pass: fill iv_derived.iv_percentile per snapshot, MIRRORING the
+    live algorithm exactly (snapshot_app/core/market_snapshot.py ~1682):
+    per-bar rolling deque maxlen=30000 (~80 sessions), SPLIT expiry-day vs
+    non-expiry histories, percentile computed against history BEFORE appending
+    the current bar. 2026-07-11: the previous 20-day pooled version produced a
+    different IV series than live → different entry days → replay and live
+    were not comparable (3 vs 8 entries on the same window)."""
+    from bisect import bisect_right, insort
+    from collections import deque
 
     coll = mongo_db[coll_name]
     days = sorted(coll.distinct("trade_date_ist", {"trade_date_ist": {"$gte": d_from, "$lte": d_to}}))
-    day_ivs: dict[str, list[float]] = {}
+    hist = {False: deque(maxlen=30000), True: deque(maxlen=30000)}
+    sorted_hist = {False: [], True: []}
+    from pymongo import UpdateOne
     for day in days:
-        ivs = []
-        for doc in coll.find({"trade_date_ist": day}, {"payload.snapshot.atm_options.atm_iv": 1}):
-            v = ((doc.get("payload") or {}).get("snapshot") or {}).get("atm_options", {}).get("atm_iv")
-            if v:
-                ivs.append(float(v))
-        day_ivs[day] = ivs
-    for i, day in enumerate(days):
-        pool = sorted(v for d2 in days[max(0, i - window_days):i] for v in day_ivs[d2])
-        if not pool:
-            continue  # first days have no trailing history — gate stays None (pass-through)
-        for doc in coll.find({"trade_date_ist": day}, {"payload.snapshot.atm_options.atm_iv": 1}):
-            v = ((doc.get("payload") or {}).get("snapshot") or {}).get("atm_options", {}).get("atm_iv")
+        ops = []
+        for doc in coll.find({"trade_date_ist": day},
+                             {"payload.snapshot.atm_options.atm_iv": 1,
+                              "payload.snapshot.session_context.is_expiry_day": 1},
+                             sort=[("timestamp", 1)]):
+            snap = (doc.get("payload") or {}).get("snapshot") or {}
+            v = (snap.get("atm_options") or {}).get("atm_iv")
             if not v:
                 continue
-            pct = 100.0 * bisect_right(pool, float(v)) / len(pool)
-            coll.update_one({"_id": doc["_id"]},
-                            {"$set": {"payload.snapshot.iv_derived.iv_percentile": round(pct, 1)}})
-        print(f"iv_pass {day} pool={len(pool)}", flush=True)
+            v = float(v)
+            exp = bool((snap.get("session_context") or {}).get("is_expiry_day"))
+            sh, dq = sorted_hist[exp], hist[exp]
+            if sh:  # percentile vs history BEFORE append (live order)
+                pct = 100.0 * bisect_right(sh, v) / len(sh)
+                ops.append(UpdateOne({"_id": doc["_id"]},
+                                     {"$set": {"payload.snapshot.iv_derived.iv_percentile": round(pct, 1)}}))
+            if len(dq) == dq.maxlen:  # evict oldest from the sorted view too
+                old = dq[0]
+                i = bisect_right(sh, old) - 1
+                if i >= 0:
+                    sh.pop(i)
+            dq.append(v)
+            insort(sh, v)
+        if ops:
+            coll.bulk_write(ops)
+        print(f"iv_pass {day} hist={len(sorted_hist[False])}/{len(sorted_hist[True])}", flush=True)
     print("IV_PASS_DONE", flush=True)
 
 

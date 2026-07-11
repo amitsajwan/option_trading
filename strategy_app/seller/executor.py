@@ -121,6 +121,25 @@ class SafeExecutor:
             exit_prices[(fl.option_type, fl.strike)] = f.price if f.filled else 0.0
         exit_value = (sum(exit_prices.get((fl.option_type, fl.strike), 0.0) for fl in shorts)
                       - sum(exit_prices.get((fl.option_type, fl.strike), 0.0) for fl in longs))
+        # PAPER/replay fills come from reconstructed chains; when strikes drift
+        # off the chain, legs can price from inconsistent sources (2026-07-11:
+        # a CE leg implied spot 55k while the PE leg implied 53.4k in ONE exit,
+        # fabricating a −₹17k loss). A vertical's value is structurally bounded
+        # to [0, wing width] — enforce that for paper fills, per vertical, like
+        # spread_value does for marks. LIVE broker fills are real: never bounded.
+        from .gateway import PaperLegGateway
+        if isinstance(self._gw, PaperLegGateway):
+            bounded = 0.0
+            for ot in ("CE", "PE"):
+                s_legs = [fl for fl in shorts if fl.option_type == ot]
+                l_legs = [fl for fl in longs if fl.option_type == ot]
+                if not s_legs or not l_legs:
+                    continue
+                w = abs(s_legs[0].strike - l_legs[0].strike)
+                v = (exit_prices.get((ot, s_legs[0].strike), 0.0)
+                     - exit_prices.get((ot, l_legs[0].strike), 0.0))
+                bounded += max(0.0, min(float(w), v))
+            exit_value = bounded
         # Per-leg exit fills for the trade record (UI leg grouping, 2026-07-10).
         spread.meta["exit_prices"] = {f"{ot}{k}": round(p, 2) for (ot, k), p in exit_prices.items()}
         logger.info("seller CLOSE %s exit_value=%.2f pnl_pts=%.2f", spread.spread_id,
