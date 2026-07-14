@@ -123,15 +123,54 @@ def main() -> int:
         via the CANONICAL snapshot_app.core.velocity_features.
         compute_per_bar_velocity_df — the SAME function LiveVelocityAccumulator
         uses live ("zero skew" per its own docstring). Only fills values that
-        are currently NaN/missing (same idempotent pattern as _enrich_ema_family)."""
+        are currently NaN/missing (same idempotent pattern as _enrich_ema_family).
+
+        Uses its OWN field extraction (_extract_hist_row below), not live's
+        _extract_morning_row: verified against a raw stored doc 2026-07-14 that
+        the historical snapshot schema differs from live's in several places —
+        futures_bar keys are open/high/low (not fut_open/fut_high/fut_low),
+        iv_skew lives under atm_options (not iv_derived), atm_oi_ratio lives
+        under chain_aggregates (not atm_options), and total CE/PE OI/volume are
+        never pre-aggregated in storage — OI is summed from the strikes[] array
+        here; CE/PE VOLUME was never captured per-strike in this collection at
+        all, so vel_ce_vol_delta_30m/vel_pe_vol_delta_30m/
+        vel_options_vol_acceleration and vwap_fut-dependent ctx_am_vwap_side
+        stay unavailable (~3-4 of the 38 target features) — would need a fresh
+        Dhan backfill with volume captured, not a re-enrichment of what's here."""
         import math
 
-        from snapshot_app.core.live_velocity_state import _extract_morning_row
+        def _extract_hist_row(snap: dict) -> dict:
+            fb = snap.get("futures_bar") or {}
+            ca = snap.get("chain_aggregates") or {}
+            ao = snap.get("atm_options") or {}
+            strikes = snap.get("strikes") or []
+            ce_oi_sum = sum(float(r.get("ce_oi") or 0) for r in strikes) if strikes else None
+            pe_oi_sum = sum(float(r.get("pe_oi") or 0) for r in strikes) if strikes else None
+            return {
+                "timestamp": snap.get("timestamp"),
+                "trade_date": snap.get("trade_date"),
+                "px_fut_open": fb.get("open"),
+                "px_fut_high": fb.get("high"),
+                "px_fut_low": fb.get("low"),
+                "px_fut_close": fb.get("fut_close"),
+                "opt_flow_ce_oi_total": ce_oi_sum,
+                "opt_flow_pe_oi_total": pe_oi_sum,
+                "opt_flow_pcr_oi": ca.get("pcr"),
+                "atm_oi_ratio": ca.get("atm_oi_ratio"),
+                "atm_ce_iv": ao.get("atm_ce_iv"),
+                "atm_pe_iv": ao.get("atm_pe_iv"),
+                "iv_skew": ao.get("iv_skew"),
+                # Not present in this collection's schema — left NaN deliberately:
+                "opt_flow_ce_volume_total": None,
+                "opt_flow_pe_volume_total": None,
+                "vwap_fut": None,
+            }
+
         from snapshot_app.core.velocity_features import (
             compute_per_bar_velocity_df, _ALL_OUTPUT_COLUMNS as _VCOLS,
         )
 
-        vdf = pd.DataFrame([_extract_morning_row(s) for s in raw_snaps])
+        vdf = pd.DataFrame([_extract_hist_row(s) for s in raw_snaps])
         for col in vdf.columns:
             if col not in ("timestamp", "trade_date"):
                 vdf[col] = pd.to_numeric(vdf[col], errors="coerce")
