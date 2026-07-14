@@ -1833,6 +1833,7 @@ services:
       ENTRY_ML_MAX_NAN_FEATURES: "${NIFTY_ENTRY_ML_MAX_NAN_FEATURES:-2}"
       DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-10}"
       ML_ENTRY_DIRECTION_MODE: "${NIFTY_ML_ENTRY_DIRECTION_MODE:-composite}"
+      ENTRY_BLOCK_PRE_EXPIRY: "${ENTRY_BLOCK_PRE_EXPIRY:-}"
       # Cost gate calibration — NIFTY has smaller absolute point moves and lower
       # ATM premiums than BankNifty, making brokerage a larger % of trade value.
       # ratio_min=1.0 (vs BN 1.5) and slippage=0.005 (vs BN 0.008, NIFTY is liquid).
