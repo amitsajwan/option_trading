@@ -1,0 +1,23 @@
+services:
+  strategy_app_historical:
+    environment:
+      STRATEGY_INSTRUMENT: "NIFTY"
+      ENTRY_ML_MODEL_PATH: "/app/models/nifty_entry_bundle_v3.joblib"
+      ENTRY_ML_MIN_PROB: "0.55"
+      ENTRY_ML_MODEL_PATH_2: "/app/models/nifty_entry_fast_v1.joblib"
+      ENTRY_ML_MIN_PROB_2: "0.30"
+      ENTRY_ML_MAX_NAN_FEATURES: "10"
+      DIRECTION_ML_MODEL_PATH: "/app/models/direction_dhan_nifty_v3.joblib"
+      NIFTY_LOT_SIZE: "65"
+      ML_ENTRY_DIRECTION_MODE: "composite"
+      ENTRY_BLOCK_PRE_EXPIRY: "1"
+      MONGO_COLL_STRATEGY_VOTES_HISTORICAL: "strategy_votes_historical_nifty"
+      MONGO_COLL_TRADE_SIGNALS_HISTORICAL: "trade_signals_historical_nifty"
+      MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL: "strategy_positions_historical_nifty"
+      MONGO_COLL_STRATEGY_DECISION_TRACES_HISTORICAL: "strategy_decision_traces_historical_nifty"
+  strategy_persistence_app_historical:
+    environment:
+      MONGO_COLL_STRATEGY_VOTES_HISTORICAL: "strategy_votes_historical_nifty"
+      MONGO_COLL_TRADE_SIGNALS_HISTORICAL: "trade_signals_historical_nifty"
+      MONGO_COLL_STRATEGY_POSITIONS_HISTORICAL: "strategy_positions_historical_nifty"
+      MONGO_COLL_STRATEGY_DECISION_TRACES_HISTORICAL: "strategy_decision_traces_historical_nifty"
