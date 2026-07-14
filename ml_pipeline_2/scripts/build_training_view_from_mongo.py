@@ -111,9 +111,48 @@ def main() -> int:
                     v = df[col].iloc[i]
                     r[col] = None if pd.isna(v) else float(v)
 
+    def _enrich_velocity_family(
+        day_rows: list[dict], raw_snaps: list[dict],
+        prev_day_close, prev_day_midday_vol, avg_20d_midday_vol,
+    ) -> None:
+        """Backfilled snapshots also lack the live builder's stateful velocity/
+        AM-context accumulators (2026-07-14 gap: 38 features — the entire vel_*
+        and ctx_am_*/ctx_gap_* families — were 100% NaN in both instruments'
+        training views, found while investigating a NIFTY rare-label rebuild
+        that failed at AUC 0.625 with only 9/47 features populated). Computed
+        via the CANONICAL snapshot_app.core.velocity_features.
+        compute_per_bar_velocity_df — the SAME function LiveVelocityAccumulator
+        uses live ("zero skew" per its own docstring). Only fills values that
+        are currently NaN/missing (same idempotent pattern as _enrich_ema_family)."""
+        import math
+
+        from snapshot_app.core.live_velocity_state import _extract_morning_row
+        from snapshot_app.core.velocity_features import (
+            compute_per_bar_velocity_df, _ALL_OUTPUT_COLUMNS as _VCOLS,
+        )
+
+        vdf = pd.DataFrame([_extract_morning_row(s) for s in raw_snaps])
+        for col in vdf.columns:
+            if col not in ("timestamp", "trade_date"):
+                vdf[col] = pd.to_numeric(vdf[col], errors="coerce")
+        enriched = compute_per_bar_velocity_df(
+            vdf, prev_day_close=prev_day_close,
+            prev_day_midday_option_volume=prev_day_midday_vol,
+            avg_20d_midday_option_volume=avg_20d_midday_vol,
+        )
+        for i, r in enumerate(day_rows):
+            for col in _VCOLS:
+                cur = r.get(col)
+                if cur is None or (isinstance(cur, float) and math.isnan(cur)):
+                    v = enriched[col].iloc[i] if col in enriched.columns else None
+                    r[col] = None if (v is None or pd.isna(v)) else float(v)
+
     rows: list[dict] = []
+    _prev_day_close: float | None = None
+    _midday_vol_history: list[float] = []  # most-recent-first, capped at 20
     for day in sorted(verified_days):
         day_rows: list[dict] = []
+        raw_snaps: list[dict] = []
         for doc in db[coll_name].find({"trade_date_ist": day}, sort=[("timestamp", 1)]):
             snap = (doc.get("payload") or {}).get("snapshot")
             if not snap:
@@ -132,7 +171,23 @@ def main() -> int:
                 "iv_pct": (snap.get("iv_derived") or {}).get("iv_percentile"),
                 **frow,
             })
+            raw_snaps.append(snap)
         _enrich_ema_family(day_rows)
+        if raw_snaps:
+            prev_day_midday_vol = _midday_vol_history[0] if _midday_vol_history else None
+            avg_20d_midday_vol = (
+                sum(_midday_vol_history) / len(_midday_vol_history)
+                if _midday_vol_history else None
+            )
+            _enrich_velocity_family(
+                day_rows, raw_snaps, _prev_day_close, prev_day_midday_vol, avg_20d_midday_vol,
+            )
+            _prev_day_close = day_rows[-1].get("fut_close")
+            ca = raw_snaps[-1].get("chain_aggregates") or {}
+            ce_v, pe_v = ca.get("total_ce_volume"), ca.get("total_pe_volume")
+            if ce_v is not None and pe_v is not None:
+                _midday_vol_history.insert(0, float(ce_v) + float(pe_v))
+                _midday_vol_history = _midday_vol_history[:20]
         # label menu from the day's own close series (no cross-day lookahead)
         closes = [r["fut_close"] for r in day_rows]
         n = len(day_rows)
