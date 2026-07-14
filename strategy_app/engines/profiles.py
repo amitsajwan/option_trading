@@ -253,6 +253,14 @@ _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP["CHOP"] = (
     if (os.getenv("ENTRY_ALLOW_CHOP", "").strip().lower() in ("1", "true", "yes", "on"))
     else []
 )
+# PRE_EXPIRY (1 DTE) carries unprotected gap risk no minute-granularity exit
+# check can catch: proven 2026-07-13 real-engine replay — a trade gapped
+# -16.3% inside a single 1-min bar, blowing through both its own 15% stop
+# and the universal 10% max-loss floor, because the whole move happened
+# between two price snapshots (no data in between to check against). Default
+# OFF (existing behaviour, PRE_EXPIRY allowed) unless ENTRY_BLOCK_PRE_EXPIRY=1.
+if os.getenv("ENTRY_BLOCK_PRE_EXPIRY", "").strip().lower() in ("1", "true", "yes", "on"):
+    _TRADER_MASTER_ML_ENTRY_REGIME_ENTRY_MAP["PRE_EXPIRY"] = []
 # The compression ML model is a coiled-spring detector: it fires on compression→breakout,
 # NOT on a slow directional grind (verified 2026-06-23 — it maxed prob 0.30 over a clean
 # ~500pt trend and never fired). On such days the ML-only book has no trigger at all. When
