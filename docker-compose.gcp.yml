@@ -601,7 +601,12 @@ services:
       EXECUTION_ADAPTER: "${EXECUTION_ADAPTER:-paper}"
       # Paper/live safety gate: when 1 (default) only tier=="live" signals reach the
       # broker; paper-tier signals are skipped (fail-closed). Set 0 for full-live.
-      EXECUTION_REQUIRE_LIVE_TIER: "0"
+      # Restored to fail-closed 2026-07-14: the 2026-07-01 hardcode to "0" (5ff8f13)
+      # over-corrected a RISK_LIVE_MIN_GRADE inheritance bug on the NIFTY side by
+      # also disabling this gate on BankNifty, where the grade default (GOOD, line
+      # ~502) was never broken — verified 0 open positions before restoring, see
+      # project_execution_tier_gate_2026-07-14 memory.
+      EXECUTION_REQUIRE_LIVE_TIER: "${EXECUTION_REQUIRE_LIVE_TIER:-1}"
 
       # ── Kite credentials (required when EXECUTION_ADAPTER=kite) ───────────
       KITE_API_KEY: "${KITE_API_KEY:-}"
@@ -678,7 +683,12 @@ services:
       MONGO_DB: "${MONGO_DB:-trading_ai}"
       STRATEGY_INSTRUMENT: NIFTY
       EXECUTION_ADAPTER: "${EXECUTION_ADAPTER:-paper}"
-      EXECUTION_REQUIRE_LIVE_TIER: "0"
+      # Restored to fail-closed 2026-07-14 (was hardcoded "0" since e00c699,
+      # 2026-07-01) — strategy_app_nifty's RISK_LIVE_MIN_GRADE is correctly OK
+      # (not the too-strict GOOD default) since that same commit, so this gate
+      # can safely enforce tier again without re-blocking OK-grade entries.
+      # Verified 0 open NIFTY positions before restoring.
+      EXECUTION_REQUIRE_LIVE_TIER: "${EXECUTION_REQUIRE_LIVE_TIER:-1}"
       DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
       DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
       DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
