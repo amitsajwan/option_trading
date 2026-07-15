@@ -69,6 +69,18 @@ def _day_docs(d):
 
 
 def _build_raw(docs):
+    """FIXED 2026-07-15: previously keyed option series by ATM-relative label
+    ("ATMp1" etc), computed fresh per-bar from that bar's OWN chain_aggregates.
+    atm_strike. Since atm_strike legitimately drifts intraday (spot crossing a
+    step boundary), the SAME label could mean different absolute strikes at
+    different times of day, all appended into one list under that label —
+    then DhanReplayIngestionServer resolved the label back to a strike using
+    only ONE day-level anchor (last bar seen). Confirmed via direct Dhan API
+    verification: a BankNifty 2026-06-01 trade recorded strike=54400 but its
+    entry_premium (880.45) was actually strike 55000's premium — a 6-step
+    (600pt) mismatch from atm drifting from 54300 (09:45) to a different
+    value by end of day. Fix: key option series by ABSOLUTE STRIKE directly —
+    unambiguous regardless of how atm_strike moves during the day."""
     index_bars = []
     opt_ce = {}
     opt_pe = {}
@@ -88,28 +100,28 @@ def _build_raw(docs):
             atm_strike = atm
         for row in (p.get("strikes") or []):
             strike = row.get("strike")
-            if strike is None or atm is None:
+            if strike is None:
                 continue
-            offset = round((strike - atm) / STEP)
-            label = "ATM" if offset == 0 else (f"ATMp{offset}" if offset > 0 else f"ATMm{-offset}")
+            strike = int(strike)
             ts16 = str(ts)[:16]
             if row.get("ce_ltp") is not None:
-                opt_ce.setdefault(label, []).append({
+                opt_ce.setdefault(strike, []).append({
                     "ts": ts16, "ce_close": row.get("ce_ltp"), "ce_iv": row.get("ce_iv"),
                     "ce_oi": row.get("ce_oi"), "ce_volume": 0,
                 })
             if row.get("pe_ltp") is not None:
-                opt_pe.setdefault(label, []).append({
+                opt_pe.setdefault(strike, []).append({
                     "ts": ts16, "pe_close": row.get("pe_ltp"), "pe_iv": row.get("pe_iv"),
                     "pe_oi": row.get("pe_oi"), "pe_volume": 0,
                 })
-    labels = set(opt_ce) | set(opt_pe)
-    options = {lbl: {"ce": opt_ce.get(lbl, []), "pe": opt_pe.get(lbl, [])} for lbl in labels}
+    strikes_seen = set(opt_ce) | set(opt_pe)
+    options = {s: {"ce": opt_ce.get(s, []), "pe": opt_pe.get(s, [])} for s in strikes_seen}
     vix_bars = [{"close": ((doc.get("payload") or {}).get("snapshot") or {}).get("vix_context", {}).get("vix_current")}
                 for doc in docs]
     return {
         "index_bars": index_bars, "vix_bars": vix_bars, "options": options,
         "instrument": instrument.upper(), "step": STEP, "atm_strike": atm_strike,
+        "options_keyed_by_strike": True,
     }
 
 

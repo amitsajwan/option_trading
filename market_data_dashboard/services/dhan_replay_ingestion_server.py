@@ -71,6 +71,13 @@ class DhanReplayIngestionServer:
         self._instrument: str = (raw_data.get("instrument") or "BANKNIFTY").upper()
         self._step: int   = int(raw_data.get("step") or 100)
         self._atm: Optional[int] = raw_data.get("atm_strike")
+        # 2026-07-15 fix: options dict keyed by absolute strike (int) instead of
+        # ATM-relative label ("ATMp1") — the label form was ambiguous whenever
+        # atm_strike drifted intraday, since the same label could represent
+        # different absolute strikes at different times of day within one
+        # stored series. See _build_raw's docstring in
+        # ops/dhan_replay_publish_multiday_from_mongo.py for the confirmed bug.
+        self._by_strike: bool = bool(raw_data.get("options_keyed_by_strike"))
         self._prev_day_bars: List[Dict] = prev_day_bars or []
         # Real expiry date (YYYY-MM-DD) so DTE is correct even with holiday-shifted expiries
         self._expiry_date: Optional[str] = expiry_date
@@ -144,6 +151,7 @@ class DhanReplayIngestionServer:
         self._instrument = (raw_data.get("instrument") or self._instrument).upper()
         self._step = int(raw_data.get("step") or self._step)
         self._atm = raw_data.get("atm_strike")
+        self._by_strike = bool(raw_data.get("options_keyed_by_strike"))
         self._prev_day_bars = prev_day_bars or []
         self._expiry_date = expiry_date
         self._bar_idx = 0
@@ -233,24 +241,30 @@ class DhanReplayIngestionServer:
         total_ce_oi = 0.0
         total_pe_oi = 0.0
 
-        for label, sides_by_ts in self._opt_by_ts.items():
-            # Derive offset
-            if label == "ATM":
-                offset = 0
-            elif label.startswith("ATMp"):
-                try:
-                    offset = int(label[4:])
-                except ValueError:
-                    continue
-            elif label.startswith("ATMm"):
-                try:
-                    offset = -int(label[4:])
-                except ValueError:
-                    continue
+        for key, sides_by_ts in self._opt_by_ts.items():
+            if self._by_strike:
+                # key IS the absolute strike — unambiguous, no atm-drift risk.
+                strike_price = key
             else:
-                continue
-
-            strike_price = (self._atm or round(spot / self._step) * self._step) + offset * self._step
+                # Legacy label form (kept for backward compat with any other
+                # caller still producing ATM-relative raw_data). Ambiguous
+                # whenever atm_strike drifts intraday — see _build_raw docstring.
+                label = key
+                if label == "ATM":
+                    offset = 0
+                elif label.startswith("ATMp"):
+                    try:
+                        offset = int(label[4:])
+                    except ValueError:
+                        continue
+                elif label.startswith("ATMm"):
+                    try:
+                        offset = -int(label[4:])
+                    except ValueError:
+                        continue
+                else:
+                    continue
+                strike_price = (self._atm or round(spot / self._step) * self._step) + offset * self._step
 
             side_data = sides_by_ts.get(ts_key, {})
             ce_bar = side_data.get("ce", {})
