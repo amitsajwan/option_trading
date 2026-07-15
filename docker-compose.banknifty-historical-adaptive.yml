@@ -2,3 +2,10 @@ services:
   strategy_app_historical:
     environment:
       EXIT_STRATEGY_MODE: "adaptive"
+      # Test 2026-07-15: give trades the model's actual 15-min prediction
+      # window instead of ThesisFailPolicy's default 3/5-bar cutoff, which
+      # fires BEFORE the model-horizon stale timestop ever gets a chance
+      # (CompositeExitPolicy = first match wins, ThesisFail is checked first).
+      EXIT_THESIS_FAIL_BARS: "14"
+      LOTTERY_THESIS_FAIL_BARS: "14"
+      EXIT_SCALPER_STALE_BARS: "15"
