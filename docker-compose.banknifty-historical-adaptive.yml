@@ -1,0 +1,4 @@
+services:
+  strategy_app_historical:
+    environment:
+      EXIT_STRATEGY_MODE: "adaptive"
