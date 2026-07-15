@@ -125,6 +125,43 @@ class DhanReplayIngestionServer:
         with self._lock:
             self._bar_idx = idx
 
+    def set_day(self, raw_data: Dict[str, Any],
+                prev_day_bars: Optional[List[Dict]] = None,
+                expiry_date: Optional[str] = None) -> None:
+        """Swap in a new day's data on the SAME running server/port, so a
+        multi-day continuous caller can keep ONE LiveMarketSnapshotBuilder
+        instance alive across day boundaries (2026-07-15: per-day-process
+        replay was found to cold-start builder.state.iv_history_* every
+        single day, pinning iv_percentile near 100 and blocking almost every
+        bar at IV_FILTER — a replay-only artifact, not a real finding).
+        Safe without extra locking: the handler reads these attributes
+        synchronously in response to this same thread's build_snapshot()
+        calls — never call this while a request could be mid-flight."""
+        self._raw = raw_data
+        self._index_bars = raw_data.get("index_bars") or []
+        self._vix_bars = raw_data.get("vix_bars") or []
+        self._options = raw_data.get("options") or {}
+        self._instrument = (raw_data.get("instrument") or self._instrument).upper()
+        self._step = int(raw_data.get("step") or self._step)
+        self._atm = raw_data.get("atm_strike")
+        self._prev_day_bars = prev_day_bars or []
+        self._expiry_date = expiry_date
+        self._bar_idx = 0
+
+        self._opt_by_ts = {}
+        for label, sides in self._options.items():
+            self._opt_by_ts[label] = {}
+            for side, bars in sides.items():
+                if not isinstance(bars, list):
+                    continue
+                for b in bars:
+                    ts = (b.get("ts") or b.get("start_at") or "")[:16]
+                    if not ts:
+                        continue
+                    if ts not in self._opt_by_ts[label]:
+                        self._opt_by_ts[label][ts] = {}
+                    self._opt_by_ts[label][ts][side] = b
+
     def start(self) -> None:
         handler = self._make_handler()
         self._server = HTTPServer(("127.0.0.1", self._port), handler)
