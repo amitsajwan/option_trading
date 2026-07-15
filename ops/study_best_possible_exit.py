@@ -7,7 +7,7 @@ best possible exit within the window had been taken, what would the P&L
 have been? Removes exit-policy timing from the question entirely.
 (2026-07-15, user request.)
 
-Usage: python ops/study_best_possible_exit.py "replay-multiday-2026-06-0[1-4]-banknifty" BANKNIFTY [gte_cutoff_ts] [lt_cutoff_ts]
+Usage: python ops/study_best_possible_exit.py "replay-multiday-2026-06-0[1-4]-banknifty" BANKNIFTY [before|after CUTOFF_TS]
 """
 import sys
 from datetime import datetime, timedelta
@@ -15,8 +15,8 @@ from pymongo import MongoClient
 
 run_pattern = sys.argv[1] if len(sys.argv) > 1 else "replay-multiday-2026-06-0[1-4]-banknifty"
 instrument = sys.argv[2].upper() if len(sys.argv) > 2 else "BANKNIFTY"
-gte_cutoff = sys.argv[3] if len(sys.argv) > 3 else None
-lt_cutoff = sys.argv[4] if len(sys.argv) > 4 else None
+direction = sys.argv[3] if len(sys.argv) > 3 else None
+cutoff = sys.argv[4] if len(sys.argv) > 4 else None
 COLL = "phase1_market_snapshots_hist" if instrument == "BANKNIFTY" else "phase1_market_snapshots_hist_nifty"
 
 db = MongoClient("mongo", 27017).trading_ai
@@ -24,12 +24,10 @@ pos_coll = db.strategy_positions_historical
 snap_coll = db[COLL]
 
 query = {"exit_reason": {"$ne": None}, "run_id": {"$regex": f"^{run_pattern}$"}}
-if gte_cutoff or lt_cutoff:
-    query["received_at_ist"] = {}
-    if gte_cutoff:
-        query["received_at_ist"]["$gte"] = gte_cutoff
-    if lt_cutoff:
-        query["received_at_ist"]["$lt"] = lt_cutoff
+if direction == "before" and cutoff:
+    query["received_at_ist"] = {"$lt": cutoff}
+elif direction == "after" and cutoff:
+    query["received_at_ist"] = {"$gte": cutoff}
 closes = list(pos_coll.find(query).sort("timestamp", 1))
 
 seen = set()
