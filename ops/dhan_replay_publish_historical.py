@@ -39,14 +39,58 @@ TOPIC = "market:snapshot:v1:historical"
 def log(msg):
     print(f"[{date}] {msg}", flush=True)
 
+def _reshape_options_by_strike(raw):
+    """FIXED 2026-07-15: ingestion_app's /historical/day endpoint returns
+    options keyed by ATM-relative label ("ATMp1" etc), one Dhan rollingoption
+    call per label per day. Dhan resolves that label's strike PER-BAR (the
+    rung "rolls" with spot intrabar — that's the API's own name for it), and
+    each returned bar already carries its true absolute strike in a 'strike'
+    field (dhan_data_service.py's 2026-07-10 fix). DhanReplayIngestionServer's
+    legacy label-based lookup never read that field — it re-derived the
+    strike from the day-OPEN ATM anchor + offset*step, which only matches the
+    bar's real strike near the day's open and silently drifts wrong as spot
+    moves away from the 9:15 anchor. Same bug class as the Mongo-sourced
+    scripts' ATM-relative-label keying, different mechanism. Fix: rebucket
+    each bar under its own ground-truth 'strike' field (falling back to the
+    day-anchor formula only when a bar has no strike, e.g. data fetched
+    before the 2026-07-10 requiredData fix) — mirrors dhan_replay_builder.py's
+    already-fixed by_strike logic used by the Mongo backfill path, so all
+    three replay producers now agree."""
+    step = raw.get("step") or (100 if instrument.upper() == "BANKNIFTY" else 50)
+    atm_strike = raw.get("atm_strike")
+    opt_ce, opt_pe = {}, {}
+    for label, sides in (raw.get("options") or {}).items():
+        if label == "ATM":
+            off = 0
+        elif label.startswith("ATMp"):
+            off = int(label[4:])
+        elif label.startswith("ATMm"):
+            off = -int(label[4:])
+        else:
+            continue
+        fallback_sk = (atm_strike + off * step) if atm_strike is not None else None
+        for side, bars in (sides or {}).items():
+            bucket = opt_ce if side == "ce" else opt_pe
+            for b in bars:
+                sk = b.get("strike") or fallback_sk
+                if sk is None:
+                    continue
+                bucket.setdefault(int(sk), []).append(b)
+    strikes_seen = set(opt_ce) | set(opt_pe)
+    raw["options"] = {s: {"ce": opt_ce.get(s, []), "pe": opt_pe.get(s, [])} for s in strikes_seen}
+    raw["options_keyed_by_strike"] = True
+    return raw
+
+
 fetcher = DhanHistoricalFetcher(progress_cb=lambda step, msg: log(f"{step}: {msg}"))
 raw = fetcher.fetch_day(instrument, date)
 index_bars = raw.get("index_bars") or []
 if not index_bars:
     log("NO_BARS — holiday or fetch failure, skipping")
     sys.exit(0)
+raw = _reshape_options_by_strike(raw)
 n_opts = sum(len(s.get("ce", [])) + len(s.get("pe", [])) for s in (raw.get("options") or {}).values())
-log(f"fetched {len(index_bars)} index bars, {n_opts} option bars")
+log(f"fetched {len(index_bars)} index bars, {n_opts} option bars (reshaped to absolute-strike keys)")
 
 prev_day_bars = []
 for offset in range(1, 6):
