@@ -19,10 +19,16 @@ seen = set()
 trades = []
 for p in closes:
     pos = (p.get("payload") or {}).get("position") or {}
-    pid = pos.get("position_id")
-    if not pid or pid in seen:
+    # 2026-07-15: position_id alone under-deduplicates — known duplicate-write
+    # issue (flagged, root cause not chased). Dedup on the full semantic
+    # identity of the closed trade instead: two records with the same date,
+    # strike, direction, bars_held, pnl, and exit_reason are the same logical
+    # trade written twice, not two coincidentally-identical real trades.
+    key = (p.get("trade_date_ist"), p.get("strike"), p.get("direction"),
+           pos.get("bars_held"), round((p.get("pnl_pct") or 0), 6), p.get("exit_reason"))
+    if key in seen:
         continue
-    seen.add(pid)
+    seen.add(key)
     trades.append({
         "date": p.get("trade_date_ist"), "strike": p.get("strike"), "dir": p.get("direction"),
         "bars": pos.get("bars_held"), "pnl": (p.get("pnl_pct") or 0) * 100,
