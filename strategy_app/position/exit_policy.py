@@ -152,20 +152,40 @@ class GivebackStopPolicy(ExitPolicy):
     fires on the "initial promise then grind" pattern without choking scalper micro-moves.
     """
 
-    def __init__(self, min_mfe: float = 0.03, giveback_pct: float = 0.09):
+    def __init__(self, min_mfe: float = 0.03, giveback_pct: float = 0.09,
+                 tiers: Optional[list[tuple[float, float]]] = None):
         self._min_mfe = min_mfe
         self._giveback = giveback_pct
+        # Optional (mfe_threshold, giveback_pct) tiers, ascending by threshold.
+        # 2026-07-16: a flat giveback tuned for "let a real winner run" (e.g. 15%)
+        # gives almost no protection to a trade that only ever peaked at 5-8% MFE
+        # -- floor sits below zero at the peak, so TIME_STOP/REGIME_SHIFT closes
+        # it at whatever price they hit, not near the peak. Tiers keep the floor
+        # tight while MFE is modest and only widen once it's proven itself.
+        self._tiers = tiers
+
+    def _giveback_for(self, mfe_pct: float) -> float:
+        if not self._tiers:
+            return self._giveback
+        result = self._giveback
+        for threshold, gb in self._tiers:
+            if mfe_pct >= threshold:
+                result = gb
+        return result
 
     def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
         if position.mfe_pct < self._min_mfe:
             return None
-        floor = position.mfe_pct - self._giveback
+        floor = position.mfe_pct - self._giveback_for(position.mfe_pct)
         if position.pnl_pct < floor:
             return ExitReason.TRAILING_STOP
         return None
 
     @property
     def name(self) -> str:
+        if self._tiers:
+            tiers_str = ",".join(f"{t:.0%}->{g:.0%}" for t, g in self._tiers)
+            return f"giveback_act={self._min_mfe:.0%}_tiered[{tiers_str}]"
         return f"giveback_act={self._min_mfe:.0%}_give={self._giveback:.0%}"
 
 
@@ -373,13 +393,27 @@ def build_lottery_exit_stack() -> CompositeExitPolicy:
     giveback_enabled = as_bool(os.getenv("EXIT_GIVEBACK_STOP_ENABLED", "false"))
     giveback_min_mfe = float(os.getenv("EXIT_GIVEBACK_MIN_MFE", "0.03") or "0.03")
     giveback_pct = float(os.getenv("LOTTERY_GIVEBACK_PCT", "0.15") or "0.15")
+    # 2026-07-16: flat giveback (tuned for the rare big winner) gives almost no
+    # protection to trades that only ever peak modest -- floor sits below zero
+    # at a 5-8% peak, so TIME_STOP/REGIME_SHIFT closes them well off the peak
+    # instead of the giveback stop locking something in. Opt-in tiering keeps
+    # the floor tight for modest MFE and only widens once it's proven itself,
+    # without touching the big-winner case (still 15% once MFE clears 20%).
+    giveback_tiered = as_bool(os.getenv("LOTTERY_GIVEBACK_TIERED", "false"))
+    giveback_tiers = None
+    if giveback_tiered:
+        t1 = float(os.getenv("LOTTERY_GIVEBACK_TIER1_PCT", "0.02") or "0.02")
+        t2 = float(os.getenv("LOTTERY_GIVEBACK_TIER2_PCT", "0.05") or "0.05")
+        t2_mfe = float(os.getenv("LOTTERY_GIVEBACK_TIER2_MFE", "0.10") or "0.10")
+        t3_mfe = float(os.getenv("LOTTERY_GIVEBACK_TIER3_MFE", "0.20") or "0.20")
+        giveback_tiers = [(giveback_min_mfe, t1), (t2_mfe, t2), (t3_mfe, giveback_pct)]
 
     policies: list[ExitPolicy] = [
         HardStopPolicy(hard_stop),
         ThesisFailPolicy(thesis_bars, thesis_min_mfe),
     ]
     if giveback_enabled:
-        policies.append(GivebackStopPolicy(giveback_min_mfe, giveback_pct))
+        policies.append(GivebackStopPolicy(giveback_min_mfe, giveback_pct, tiers=giveback_tiers))
     if flip > 0:
         policies.append(MomentumReversalPolicy(flip))
     policies += [
