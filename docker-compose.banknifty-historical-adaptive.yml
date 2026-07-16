@@ -2,3 +2,6 @@ services:
   strategy_app_historical:
     environment:
       EXIT_STRATEGY_MODE: "adaptive"
+      ENTRY_ML_MIN_PROB: "0.60"
+      RISK_MAX_SESSION_TRADES: "6"
+      LOTTERY_GIVEBACK_TIERED: "1"
