@@ -641,4 +641,31 @@ def resolve_direction_for_entry(
         return None, raw_signals
     if block_tag != str(raw_signals.get("direction_source") or ""):
         raw_signals["direction_source"] = block_tag
+
+    # Counter-trend veto (opt-in, 2026-07-17): every one of the 16 PE entries in
+    # the June+July replay pool fired on a day the index closed UP (+236..+997pt),
+    # fading an intraday pullback that then resumed — 25% right at the 10-min
+    # horizon vs CE's 69%. Veto entries that fade a trend BOTH price-action
+    # signals agree on (price_vs_vwap sign AND ema_order sign against the entry
+    # side). Genuine reversal days pass: price crosses vwap / EMA stack flips
+    # before the counter-side becomes structurally attractive. Applies to all
+    # direction modes; abstain, don't flip — direction quality is the problem.
+    if env_bool("ENTRY_COUNTERTREND_VETO"):
+        fd_ct = snap.raw_payload.get("futures_derived") or {}
+        try:
+            _pv = float(fd_ct.get("price_vs_vwap") or 0.0)
+        except (TypeError, ValueError):
+            _pv = 0.0
+        try:
+            _eo = int(float(fd_ct.get("ema_order") or 0))
+        except (TypeError, ValueError):
+            _eo = 0
+        _fade_up = direction == Direction.PE and _pv > 0 and _eo > 0
+        _fade_down = direction == Direction.CE and _pv < 0 and _eo < 0
+        if _fade_up or _fade_down:
+            raw_signals["countertrend_veto"] = (
+                f"{direction.value}_against_trend(pvwap={_pv:+.4f},ema_order={_eo:+d})"
+            )
+            return None, raw_signals
+
     return direction, raw_signals
