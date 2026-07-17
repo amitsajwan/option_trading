@@ -5,3 +5,10 @@ services:
       ENTRY_ML_MIN_PROB: "0.55"
       RISK_MAX_SESSION_TRADES: "0"
       LOTTERY_GIVEBACK_TIERED: "1"
+      # Exit-window bundle (2026-07-17 direction-horizon finding): hold trades
+      # through the entry model's ~10-15min prediction window before soft exits.
+      EXIT_THESIS_FAIL_BARS: "14"
+      LOTTERY_THESIS_FAIL_BARS: "14"
+      EXIT_SCALPER_STALE_BARS: "15"
+      REGIME_SHIFT_MIN_HOLD_BARS: "10"
+      LOTTERY_MOMENTUM_FLIP_MIN_BARS: "10"

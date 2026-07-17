@@ -1757,6 +1757,17 @@ class DeterministicRuleEngine(StrategyEngine):
             "confidence": float(combined_confidence),
             "policy_score": (float(policy_decision.score) if policy_decision is not None else None),
         }
+        # Persist the models' own probabilities so position events carry them
+        # (mongo_writer reads entry_prob/direction_up_prob from decision_metrics;
+        # ml_direction_up_prob had been schema'd but always None — 2026-07-17).
+        _vote_rs = best_vote.raw_signals if isinstance(best_vote.raw_signals, dict) else {}
+        for _src, _dst in (("entry_prob", "entry_prob"), ("ml_direction_ce_prob", "direction_up_prob")):
+            _val = _vote_rs.get(_src)
+            if _val is not None:
+                try:
+                    entry_metrics[_dst] = float(_val)
+                except (TypeError, ValueError):
+                    pass
         if playbook_metrics is not None:
             entry_metrics[PLAYBOOK_EXIT_KEY] = playbook_metrics
         self._annotate_signal_contract(
@@ -2352,9 +2363,20 @@ class DeterministicRuleEngine(StrategyEngine):
         if hold_floor is not None and float(position.pnl_pct) >= float(hold_floor):
             self._reset_regime_shift_streak(position.position_id)
             return False
+        # Minimum hold before a regime flip may close the position (2026-07-17:
+        # 29 of 33 REGIME_SHIFT exits fired at bars=1 — entry bar + next bar
+        # satisfies confirm_bars=2 — killing entries whose direction was right
+        # at the model's own 10-min horizon). 0 = off. Hard stops are unaffected;
+        # this only defers the regime-flip exit, the streak keeps counting.
+        try:
+            _min_hold = int(os.getenv("REGIME_SHIFT_MIN_HOLD_BARS", "0") or "0")
+        except ValueError:
+            _min_hold = 0
         required = max(1, int(cfg.regime_shift_confirm_bars))
         streak = int(self._regime_shift_streak.get(position.position_id, 0)) + 1
         self._regime_shift_streak[position.position_id] = streak
+        if int(position.bars_held or 0) < _min_hold:
+            return False
         return streak >= required
 
     def _reset_regime_shift_streak(self, position_id: Optional[str]) -> None:

@@ -286,12 +286,20 @@ class MomentumReversalPolicy(ExitPolicy):
     For a PE (bearish) bet, a strongly positive shadow score means momentum turned
     bullish: the lottery thesis is dead, cut it. Uses current_shadow_score which the
     tracker refreshes each bar. flip_threshold is the magnitude required.
+
+    min_bars: don't flip-exit before the entry model's prediction window has had a
+    chance to play out (2026-07-17 finding: bar-1 REGIME_SHIFT exits killed entries
+    whose direction was right for the next 10 minutes). HardStop still caps a
+    genuinely broken trade during the protected bars.
     """
 
-    def __init__(self, flip_threshold: float = 1.0):
+    def __init__(self, flip_threshold: float = 1.0, min_bars: int = 0):
         self._flip = flip_threshold
+        self._min_bars = max(0, int(min_bars))
 
     def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
+        if int(position.bars_held or 0) < self._min_bars:
+            return None
         try:
             score = float(position.current_shadow_score)
         except (TypeError, ValueError):
@@ -305,7 +313,7 @@ class MomentumReversalPolicy(ExitPolicy):
 
     @property
     def name(self) -> str:
-        return f"momentum_flip_{self._flip:g}"
+        return f"momentum_flip_{self._flip:g}" + (f"_minbars{self._min_bars}" if self._min_bars else "")
 
 
 class TimestopPolicy(ExitPolicy):
@@ -389,6 +397,7 @@ def build_lottery_exit_stack() -> CompositeExitPolicy:
     thesis_bars = int(os.getenv("LOTTERY_THESIS_FAIL_BARS", "5") or "5")
     thesis_min_mfe = float(os.getenv("LOTTERY_THESIS_FAIL_MIN_MFE", "0.03") or "0.03")
     flip = float(os.getenv("LOTTERY_MOMENTUM_FLIP", "1.0") or "1.0")
+    flip_min_bars = int(os.getenv("LOTTERY_MOMENTUM_FLIP_MIN_BARS", "0") or "0")
     timestop = int(os.getenv("LOTTERY_TIMESTOP_BARS", "90") or "90")
     giveback_enabled = as_bool(os.getenv("EXIT_GIVEBACK_STOP_ENABLED", "false"))
     giveback_min_mfe = float(os.getenv("EXIT_GIVEBACK_MIN_MFE", "0.03") or "0.03")
@@ -415,7 +424,7 @@ def build_lottery_exit_stack() -> CompositeExitPolicy:
     if giveback_enabled:
         policies.append(GivebackStopPolicy(giveback_min_mfe, giveback_pct, tiers=giveback_tiers))
     if flip > 0:
-        policies.append(MomentumReversalPolicy(flip))
+        policies.append(MomentumReversalPolicy(flip, min_bars=flip_min_bars))
     policies += [
         BigTargetPolicy(big_target),
         RunnerTrailPolicy(runner_act, runner_give),
