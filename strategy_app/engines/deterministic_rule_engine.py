@@ -2372,6 +2372,22 @@ class DeterministicRuleEngine(StrategyEngine):
             _min_hold = int(os.getenv("REGIME_SHIFT_MIN_HOLD_BARS", "0") or "0")
         except ValueError:
             _min_hold = 0
+        # Scope (28-day A/B attribution, 2026-07-17): min-hold's gain lives in
+        # SIDEWAYS/scalper-stack entries (whose regime label flickers, causing
+        # serial bar-1 kills: June −28.75%→+7.19%); its damage lives in BREAKOUT
+        # entries held to deep stops on cold weeks (July −7.70%→−20.20%).
+        # scalper = apply only to non-lottery-regime entries; lottery = inverse;
+        # all = unconditional (default, pre-scope behavior).
+        _scope = str(os.getenv("REGIME_SHIFT_MIN_HOLD_SCOPE", "all") or "all").strip().lower()
+        if _min_hold > 0 and _scope in ("scalper", "lottery"):
+            _lot_raw = os.getenv("ADAPTIVE_LOTTERY_REGIMES", "") or ""
+            _lot_set = (
+                {r.strip().upper() for r in _lot_raw.split(",") if r.strip()}
+                if _lot_raw.strip() else {"BREAKOUT", "TRENDING"}
+            )
+            _is_lottery = str(position.entry_regime or "").strip().upper() in _lot_set
+            if (_scope == "scalper" and _is_lottery) or (_scope == "lottery" and not _is_lottery):
+                _min_hold = 0
         required = max(1, int(cfg.regime_shift_confirm_bars))
         streak = int(self._regime_shift_streak.get(position.position_id, 0)) + 1
         self._regime_shift_streak[position.position_id] = streak
