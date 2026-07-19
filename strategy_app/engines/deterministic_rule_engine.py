@@ -1761,7 +1761,16 @@ class DeterministicRuleEngine(StrategyEngine):
         # (mongo_writer reads entry_prob/direction_up_prob from decision_metrics;
         # ml_direction_up_prob had been schema'd but always None — 2026-07-17).
         _vote_rs = best_vote.raw_signals if isinstance(best_vote.raw_signals, dict) else {}
-        for _src, _dst in (("entry_prob", "entry_prob"), ("ml_direction_ce_prob", "direction_up_prob")):
+        for _src, _dst in (
+            ("entry_prob", "entry_prob"),
+            ("ml_direction_ce_prob", "direction_up_prob"),
+            # Composite/legacy resolvers emit scores+margin, not a probability —
+            # persist them so every trade records WHY its side was chosen
+            # (2026-07-19: July cold week was undiagnosable without this).
+            ("entry_dir_margin", "direction_margin"),
+            ("entry_dir_ce_score", "direction_ce_score"),
+            ("entry_dir_pe_score", "direction_pe_score"),
+        ):
             _val = _vote_rs.get(_src)
             if _val is not None:
                 try:

@@ -207,7 +207,11 @@ class CompositeExitPolicy(ExitPolicy):
         for policy in self._policies:
             reason = policy.check(position, snap)
             if reason is not None:
-                self.last_triggered = policy.name
+                # Prefer a nested policy's own attribution (e.g. the adaptive
+                # router reports which inner-stack policy actually fired) —
+                # otherwise the persisted trigger is the wrapper's name, one
+                # level short of useful (2026-07-19).
+                self.last_triggered = getattr(policy, "last_triggered", None) or policy.name
                 logger.debug("exit policy triggered: %s pos=%s pnl=%.3f mfe=%.3f bars=%d",
                              policy.name, position.position_id, position.pnl_pct,
                              position.mfe_pct, position.bars_held)
