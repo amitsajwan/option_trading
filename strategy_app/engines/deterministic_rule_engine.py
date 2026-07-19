@@ -1777,6 +1777,18 @@ class DeterministicRuleEngine(StrategyEngine):
                     entry_metrics[_dst] = float(_val)
                 except (TypeError, ValueError):
                     pass
+        # Which composite components actually fired this bar (2026-07-19: the
+        # component LIST was computed every entry and thrown away — depth
+        # sat at weight 1.1 and never once fired in production, undetected
+        # for weeks, because nothing recorded which signals contributed vs
+        # were silently skipped). Persist as a compact tag string; component
+        # liveness is then a plain aggregation query, not a code read.
+        _dir_source = _vote_rs.get("direction_source")
+        if _dir_source:
+            entry_metrics["direction_mode"] = str(_dir_source)
+        _dir_sources = _vote_rs.get("entry_dir_sources")
+        if isinstance(_dir_sources, dict) and _dir_sources:
+            entry_metrics["direction_sources"] = ",".join(sorted(_dir_sources.keys()))
         if playbook_metrics is not None:
             entry_metrics[PLAYBOOK_EXIT_KEY] = playbook_metrics
         self._annotate_signal_contract(

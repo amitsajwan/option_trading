@@ -91,5 +91,24 @@
   "must_differ_across_services": [
     "ENTRY_ML_MODEL_PATH",
     "TRADE_SIGNAL_TOPIC"
+  ],
+  "weight_requires": [
+    {
+      "weight_key": "ENTRY_DIR_W_DEPTH",
+      "weight_default": 1.1,
+      "gate_key": "ML_ENTRY_DIRECTION_MODE",
+      "gate_equals": "composite",
+      "requires_key": "DEPTH_FEED_ENABLED",
+      "requires_equals": "1",
+      "note": "composite's depth signal (heaviest weight) needs the collector running or it never fires -- found dead on NIFTY 2026-07-19, undetected for weeks"
+    },
+    {
+      "weight_key": "ENTRY_DIR_W_ML",
+      "weight_default": 0.20,
+      "gate_key": "ML_ENTRY_DIRECTION_MODE",
+      "gate_equals": "composite",
+      "requires_nonempty": "DIRECTION_ML_MODEL_PATH",
+      "note": "composite's ML term needs a model path set or it never fires"
+    }
   ]
 }

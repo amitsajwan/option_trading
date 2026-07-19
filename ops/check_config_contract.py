@@ -11,6 +11,19 @@ ops/config_contract_expected.json:
   - must_differ_across_services:  value must NOT be identical (catches a
                                   copy-paste service block reading the other
                                   instrument's model/topic)
+  - weight_requires:              a WEIGHTED input (e.g. a direction-scorer
+                                  component) that is >0 but whose runtime
+                                  dependency is missing/disabled fires zero
+                                  times and NOTHING logs it (2026-07-19: NIFTY's
+                                  composite direction scorer carries its depth
+                                  signal at weight 1.1 — the single heaviest
+                                  input — while DEPTH_FEED_ENABLED=0; it has
+                                  never fired once, undetected for weeks,
+                                  because a dead weighted input looks
+                                  byte-identical to a quiet one). gate_key/
+                                  gate_equals scopes the rule to a resolution
+                                  mode (e.g. only applies when
+                                  ML_ENTRY_DIRECTION_MODE=composite).
 
 Born 2026-07-07: EXIT_GIVEBACK_STOP_ENABLED was enabled in .env.compose but
 the NIFTY compose service never passed the variable — a silent no-op this
@@ -92,13 +105,45 @@ def main() -> int:
                     "one service is likely reading the other instrument's config"
                 )
 
+    # weight_requires: catch a >0-weighted input whose dependency is missing —
+    # applied per-service since it's typically scoped to one instrument's mode.
+    for cname, env in live.items():
+        for rule in contract.get("weight_requires") or []:
+            gate_key = rule.get("gate_key")
+            if gate_key and env.get(gate_key) != rule.get("gate_equals"):
+                continue  # rule doesn't apply in this service's active mode
+            wkey = rule["weight_key"]
+            try:
+                weight = float(env.get(wkey, rule.get("weight_default", 0)))
+            except (TypeError, ValueError):
+                weight = float(rule.get("weight_default", 0))
+            if weight <= 0:
+                continue
+            note = rule.get("note", "")
+            rkey = rule.get("requires_key")
+            if rkey is not None:
+                got = env.get(rkey)
+                want = rule.get("requires_equals")
+                if got != want:
+                    failures.append(
+                        f"[{cname}] {wkey}={weight:g} (>0) but {rkey}='{got}' "
+                        f"(needs '{want}') — {note}"
+                    )
+            rnonempty = rule.get("requires_nonempty")
+            if rnonempty and not (env.get(rnonempty) or "").strip():
+                failures.append(
+                    f"[{cname}] {wkey}={weight:g} (>0) but {rnonempty} is empty — {note}"
+                )
+
     if failures:
         print(f"CONFIG CONTRACT: FAIL ({len(failures)} violation(s))")
         for f in failures:
             print(f"  ✗ {f}")
         return 1
     n_keys = sum(len(s.get("expect", {})) + len(s.get("require_nonempty", [])) for s in services.values())
-    print(f"CONFIG CONTRACT: PASS ({len(live)}/{len(services)} services, {n_keys} keys checked)")
+    n_weight_rules = len(contract.get("weight_requires") or [])
+    print(f"CONFIG CONTRACT: PASS ({len(live)}/{len(services)} services, "
+          f"{n_keys} keys, {n_weight_rules} weight-liveness rule(s) checked)")
     if not quiet:
         for cname in sorted(live):
             spec = services[cname]
