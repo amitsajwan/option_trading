@@ -1778,6 +1778,15 @@ class DeterministicRuleEngine(StrategyEngine):
         )
 
         opened = self._tracker.open_position(signal, snap)
+        # Capture the entry-bar shadow score so MomentumReversalPolicy's reversal
+        # mode can distinguish "born disagreeing" (fine — the entry already priced
+        # that in) from "deteriorated since entry" (a genuine reversal).
+        try:
+            _, _, _entry_shadow = self._shadow_direction_from_snapshot(snap)
+            opened.entry_shadow_score = float(_entry_shadow)
+            opened.current_shadow_score = float(_entry_shadow)
+        except Exception:
+            pass
         # Fill-truth (2026-07-12): live-tier entries must be CONFIRMED by a broker
         # fill; otherwise the tracker is managing a phantom (2026-07-10: hours of
         # 'trading' on RMS-rejected orders). Paper tier never reaches the broker.

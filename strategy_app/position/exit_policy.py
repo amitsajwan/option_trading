@@ -190,15 +190,24 @@ class GivebackStopPolicy(ExitPolicy):
 
 
 class CompositeExitPolicy(ExitPolicy):
-    """Run all policies in order; first to trigger wins."""
+    """Run all policies in order; first to trigger wins.
+
+    ``last_triggered`` carries the name of the specific policy that fired the
+    most recent exit — several policies share an ExitReason enum value (e.g.
+    MomentumReversalPolicy emits REGIME_SHIFT), so the enum alone cannot
+    attribute an exit (2026-07-19: this ambiguity cost a full day of root-cause
+    work). The tracker persists it as exit_policy_triggered.
+    """
 
     def __init__(self, policies: list[ExitPolicy]):
         self._policies = policies
+        self.last_triggered: Optional[str] = None
 
     def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
         for policy in self._policies:
             reason = policy.check(position, snap)
             if reason is not None:
+                self.last_triggered = policy.name
                 logger.debug("exit policy triggered: %s pos=%s pnl=%.3f mfe=%.3f bars=%d",
                              policy.name, position.position_id, position.pnl_pct,
                              position.mfe_pct, position.bars_held)
@@ -291,11 +300,30 @@ class MomentumReversalPolicy(ExitPolicy):
     chance to play out (2026-07-17 finding: bar-1 REGIME_SHIFT exits killed entries
     whose direction was right for the next 10 minutes). HardStop still caps a
     genuinely broken trade during the protected bars.
+
+    mode="reversal" (2026-07-19 root cause): the absolute check is NOT a reversal
+    detector — an entry born disagreeing with the shadow score (contrarian model
+    call, e.g. PE bought into an up-day pullback) trips it at the very first
+    manage bar, on the same information the entry already accepted. All 17
+    REGIME_SHIFT exits in the June+July pool came from this path (100% on
+    BREAKOUT/TRENDING entries), 13 at bars=1, killing entries that were 60%
+    right at the model's own 10-min horizon. Reversal mode fires only when the
+    score is against the position AND has deteriorated >= reversal_delta since
+    entry — genuine post-entry flips still exit immediately; born-disagreeing
+    entries are sorted by ThesisFail (no-MFE cut) and HardStop instead.
     """
 
-    def __init__(self, flip_threshold: float = 1.0, min_bars: int = 0):
+    def __init__(
+        self,
+        flip_threshold: float = 1.0,
+        min_bars: int = 0,
+        mode: str = "absolute",
+        reversal_delta: float = 2.0,
+    ):
         self._flip = flip_threshold
         self._min_bars = max(0, int(min_bars))
+        self._mode = mode if mode in ("absolute", "reversal") else "absolute"
+        self._delta = float(reversal_delta)
 
     def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
         if int(position.bars_held or 0) < self._min_bars:
@@ -305,15 +333,24 @@ class MomentumReversalPolicy(ExitPolicy):
         except (TypeError, ValueError):
             return None
         d = str(position.direction or "").upper()
-        if d == "PE" and score >= self._flip:
-            return ExitReason.REGIME_SHIFT
-        if d == "CE" and score <= -self._flip:
-            return ExitReason.REGIME_SHIFT
-        return None
+        against = (d == "PE" and score >= self._flip) or (d == "CE" and score <= -self._flip)
+        if not against:
+            return None
+        if self._mode == "reversal":
+            entry_score = position.entry_shadow_score
+            if entry_score is not None:
+                moved_against = (score - float(entry_score)) if d == "PE" else (float(entry_score) - score)
+                if moved_against < self._delta:
+                    return None
+        return ExitReason.REGIME_SHIFT
 
     @property
     def name(self) -> str:
-        return f"momentum_flip_{self._flip:g}" + (f"_minbars{self._min_bars}" if self._min_bars else "")
+        return (
+            f"momentum_flip_{self._flip:g}"
+            + (f"_minbars{self._min_bars}" if self._min_bars else "")
+            + (f"_rev{self._delta:g}" if self._mode == "reversal" else "")
+        )
 
 
 class TimestopPolicy(ExitPolicy):
@@ -398,6 +435,8 @@ def build_lottery_exit_stack() -> CompositeExitPolicy:
     thesis_min_mfe = float(os.getenv("LOTTERY_THESIS_FAIL_MIN_MFE", "0.03") or "0.03")
     flip = float(os.getenv("LOTTERY_MOMENTUM_FLIP", "1.0") or "1.0")
     flip_min_bars = int(os.getenv("LOTTERY_MOMENTUM_FLIP_MIN_BARS", "0") or "0")
+    flip_mode = str(os.getenv("LOTTERY_MOMENTUM_FLIP_MODE", "absolute") or "absolute").strip().lower()
+    flip_delta = float(os.getenv("LOTTERY_MOMENTUM_FLIP_DELTA", "2.0") or "2.0")
     timestop = int(os.getenv("LOTTERY_TIMESTOP_BARS", "90") or "90")
     giveback_enabled = as_bool(os.getenv("EXIT_GIVEBACK_STOP_ENABLED", "false"))
     giveback_min_mfe = float(os.getenv("EXIT_GIVEBACK_MIN_MFE", "0.03") or "0.03")
@@ -424,7 +463,7 @@ def build_lottery_exit_stack() -> CompositeExitPolicy:
     if giveback_enabled:
         policies.append(GivebackStopPolicy(giveback_min_mfe, giveback_pct, tiers=giveback_tiers))
     if flip > 0:
-        policies.append(MomentumReversalPolicy(flip, min_bars=flip_min_bars))
+        policies.append(MomentumReversalPolicy(flip, min_bars=flip_min_bars, mode=flip_mode, reversal_delta=flip_delta))
     policies += [
         BigTargetPolicy(big_target),
         RunnerTrailPolicy(runner_act, runner_give),
@@ -456,6 +495,7 @@ class RegimeAdaptiveExitPolicy(ExitPolicy):
     def __init__(self, scalper: CompositeExitPolicy, lottery: CompositeExitPolicy):
         self._scalper = scalper
         self._lottery = lottery
+        self.last_triggered: Optional[str] = None
         raw = os.getenv("ADAPTIVE_LOTTERY_REGIMES", "") or ""
         if raw.strip():
             self._lottery_regimes = {r.strip().upper() for r in raw.split(",") if r.strip()}
@@ -467,7 +507,11 @@ class RegimeAdaptiveExitPolicy(ExitPolicy):
         return self._lottery if regime in self._lottery_regimes else self._scalper
 
     def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
-        return self._stack_for(position).check(position, snap)
+        stack = self._stack_for(position)
+        reason = stack.check(position, snap)
+        # Propagate the firing policy's name so the tracker can persist it.
+        self.last_triggered = stack.last_triggered if reason is not None else None
+        return reason
 
     @property
     def name(self) -> str:

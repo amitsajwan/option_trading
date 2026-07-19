@@ -83,9 +83,17 @@ def annotate_signal_contract(
     elif signal.exit_reason is not None:
         signal.decision_reason_code = normalize_reason_code(signal.exit_reason.value)
     if isinstance(decision_metrics, dict):
-        signal.decision_metrics = dict(decision_metrics)
+        # Merge, never replace: the tracker seeds exit signals with
+        # exit_policy_triggered before the engine annotates the contract —
+        # replacing wholesale erased it (2026-07-19: made stack exits
+        # indistinguishable from vote-path exits in every stored close event).
+        merged = dict(signal.decision_metrics or {})
+        merged.update(decision_metrics)
+        signal.decision_metrics = merged
     elif signal.confidence is not None:
-        signal.decision_metrics = {"confidence": float(signal.confidence)}
+        existing = dict(signal.decision_metrics or {})
+        existing.setdefault("confidence", float(signal.confidence))
+        signal.decision_metrics = existing
     signal.strategy_family_version = (
         "ML_PURE_STAGED_V1"
         if (mode == "ml_staged" or engine_mode == "ml_pure")

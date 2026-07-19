@@ -155,7 +155,9 @@ class PositionTracker:
             stack_reason = self._exit_stack.check(position, snap)
             if stack_reason is not None:
                 exit_reason = stack_reason
-                exit_trigger = "exit_stack"
+                # Persist the SPECIFIC policy that fired, not a generic marker —
+                # several policies share ExitReason values (2026-07-19).
+                exit_trigger = getattr(self._exit_stack, "last_triggered", None) or "exit_stack"
 
         # ── Hard safety floors — always apply, even over the exit stack ──
         if forced_exit_reason is not None:

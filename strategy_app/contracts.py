@@ -112,6 +112,11 @@ class PositionContext:
     # Current shadow score — updated each manage bar by the engine so the tracker
     # can evaluate the shadow-crossed-zero condition without knowing how to compute it.
     current_shadow_score: float = 0.0
+    # Shadow score captured at entry. MomentumReversalPolicy's reversal mode
+    # compares against this: an entry BORN disagreeing with momentum (contrarian
+    # model call) must not be insta-exited on the same information one bar later —
+    # only a post-entry deterioration is a genuine reversal (2026-07-19 root cause).
+    entry_shadow_score: Optional[float] = None
 
 
 @dataclass
