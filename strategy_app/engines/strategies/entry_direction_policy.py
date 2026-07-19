@@ -133,6 +133,15 @@ def _resolve_direction(snap: SnapshotAccessor) -> tuple[Optional[Direction], str
                 return _apply_direction_block(direction, "direction_dual_ml")
             ce_prob = predict_positive_class_prob(bundle, snap)
             if ce_prob is not None:
+                # Conviction gate (2026-07-19): direction_ml commits to a side at
+                # ANY probability, including p=0.501 -- a coin flip dressed as a
+                # decision. Composite's resolver has always had a margin-veto
+                # (abstain below min_margin); the single-model path never did.
+                # Abstain when the model itself is near 0.5, rather than trading
+                # its least-informative calls. 0 = off (exact prior behavior).
+                margin = _env_float("DIRECTION_ML_MIN_MARGIN", 0.0)
+                if margin > 0 and abs(float(ce_prob) - 0.5) < margin:
+                    return None, "direction_ml_low_conviction"
                 direction = Direction.CE if ce_prob >= 0.5 else Direction.PE
                 return _apply_direction_block(direction, "direction_ml")
     ret5 = snap.fut_return_5m
