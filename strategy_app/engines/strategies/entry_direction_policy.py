@@ -116,12 +116,20 @@ def _apply_direction_block(
     return direction, source
 
 
-def _resolve_direction(snap: SnapshotAccessor) -> tuple[Optional[Direction], str]:
-    """CE/PE via direction model / momentum fallback. Returns (direction_or_None, source)."""
+def _resolve_direction(snap: SnapshotAccessor) -> tuple[Optional[Direction], str, Optional[float]]:
+    """CE/PE via direction model / momentum fallback.
+
+    Returns (direction_or_None, source, ce_prob_or_None) -- the probability is
+    surfaced (2026-07-19) so callers can persist WHY a side was chosen or a
+    call was abstained; it used to be computed here and discarded, leaving
+    BankNifty's actual live direction-model output unrecorded anywhere,
+    including on winning trades (undetected until building the margin gate
+    below required a real probability distribution to calibrate against).
+    """
     if env_bool("ML_ENTRY_PE_ONLY"):
-        return Direction.PE, "pe_only"
+        return Direction.PE, "pe_only", None
     if env_bool("ML_ENTRY_CE_ONLY"):
-        return Direction.CE, "ce_only"
+        return Direction.CE, "ce_only", None
 
     direction: Optional[Direction]
     dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "").strip()
@@ -130,7 +138,8 @@ def _resolve_direction(snap: SnapshotAccessor) -> tuple[Optional[Direction], str
         if bundle is not None:
             if bundle.get("kind") == _DIRECTION_DUAL_BUNDLE_KIND:
                 direction = _resolve_direction_dual(bundle, snap)
-                return _apply_direction_block(direction, "direction_dual_ml")
+                d, s = _apply_direction_block(direction, "direction_dual_ml")
+                return d, s, None
             ce_prob = predict_positive_class_prob(bundle, snap)
             if ce_prob is not None:
                 # Conviction gate (2026-07-19): direction_ml commits to a side at
@@ -141,15 +150,17 @@ def _resolve_direction(snap: SnapshotAccessor) -> tuple[Optional[Direction], str
                 # its least-informative calls. 0 = off (exact prior behavior).
                 margin = _env_float("DIRECTION_ML_MIN_MARGIN", 0.0)
                 if margin > 0 and abs(float(ce_prob) - 0.5) < margin:
-                    return None, "direction_ml_low_conviction"
+                    return None, "direction_ml_low_conviction", float(ce_prob)
                 direction = Direction.CE if ce_prob >= 0.5 else Direction.PE
-                return _apply_direction_block(direction, "direction_ml")
+                d, s = _apply_direction_block(direction, "direction_ml")
+                return d, s, float(ce_prob)
     ret5 = snap.fut_return_5m
     if ret5 is not None and ret5 != 0:
         direction = Direction.CE if float(ret5) > 0 else Direction.PE
     else:
         direction = Direction.CE
-    return _apply_direction_block(direction, "momentum")
+    d, s = _apply_direction_block(direction, "momentum")
+    return d, s, None
 
 
 def _conviction_ensemble_direction(
@@ -389,7 +400,7 @@ def resolve_direction_for_entry(
     direction: Optional[Direction]
 
     if direction_mode == "consensus":
-        hint_dir, hint_source = _resolve_direction(snap)
+        hint_dir, hint_source, _hint_prob = _resolve_direction(snap)
         ce_prob: Optional[float] = None
         dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "").strip()
         if dir_path:
@@ -434,8 +445,14 @@ def resolve_direction_for_entry(
         direction = Direction.CE if verdict.side == "CE" else Direction.PE
 
     elif direction_mode in {"legacy", "direction_ml", "bind"}:
-        direction, direction_source = _resolve_direction(snap)
+        direction, direction_source, dir_ml_prob = _resolve_direction(snap)
+        # Persist the model's own probability regardless of outcome (2026-07-19)
+        # -- it was computed and silently discarded before; recorded here even
+        # on abstain so a low-conviction veto is diagnosable, not just "no vote".
+        if dir_ml_prob is not None:
+            raw_signals["ml_direction_ce_prob"] = round(dir_ml_prob, 4)
         if direction is None:
+            raw_signals["direction_source"] = direction_source
             return None, raw_signals
         raw_signals["direction_source"] = direction_source
     elif direction_mode in {"conviction_ensemble", "conviction", "ensemble"}:
