@@ -68,5 +68,7 @@
   "early_stop_loss_bars": 0,
   "early_stop_loss_pct": 0.0,
   "current_shadow_score": 0.0,
-  "entry_shadow_score": null
+  "entry_shadow_score": null,
+  "direction_mode": "",
+  "direction_sources": ""
 }

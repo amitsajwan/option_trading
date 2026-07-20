@@ -83,6 +83,13 @@ class PositionContext:
     entry_strategy: str = ""
     entry_regime: str = ""
     entry_reason: str = ""
+    # Which direction resolver fired and (for composite mode) which weighted
+    # components contributed. Sourced directly from signal.decision_metrics in
+    # PositionFactory.build() -- NOT via decision_metrics=merge_decision_metrics(...),
+    # which silently drops any non-float value (2026-07-20 root cause: these two
+    # fields were being computed correctly and thrown away at every position log).
+    direction_mode: str = ""
+    direction_sources: str = ""
     # Live/paper tier carried from the entry signal's grade decision, so the exit
     # signal can re-publish it and execution can gate real orders on tier=="live".
     tier: str = ""

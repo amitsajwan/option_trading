@@ -98,6 +98,10 @@ class PositionFactory:
             entry_strategy=str(signal.entry_strategy_name or ""),
             entry_regime=str(signal.entry_regime_name or ""),
             entry_reason=signal.reason,
+            # Read straight from signal.decision_metrics (still dict[str, Any] here,
+            # not yet run through merge_decision_metrics' float-only sanitizer below).
+            direction_mode=str((signal.decision_metrics or {}).get("direction_mode") or ""),
+            direction_sources=str((signal.decision_metrics or {}).get("direction_sources") or ""),
             tier=str((signal.raw_signals or {}).get("tier") or "") if isinstance(signal.raw_signals, dict) else "",
             decision_metrics=self._resolver.signal_decision_metrics(signal),
             engine_mode=engine_mode,
