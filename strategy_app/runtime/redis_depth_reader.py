@@ -3,9 +3,10 @@
 Depth data is written by ``ingestion_app/collectors/depth_collector.py`` every
 ``DEPTH_POLL_INTERVAL_SEC`` seconds (default 5) during market hours.
 
-Keys (prefixed by execution mode via ``get_redis_key``):
-    depth:atm_ce:latest   — best bid/ask for ATM CE
-    depth:atm_pe:latest   — best bid/ask for ATM PE
+Keys (prefixed by execution mode via ``get_redis_key``, then by
+STRATEGY_INSTRUMENT so BankNifty and NIFTY collectors don't collide, 2026-07-21):
+    depth:<instrument>:atm_ce:latest   — best bid/ask for ATM CE
+    depth:<instrument>:atm_pe:latest   — best bid/ask for ATM PE
 
 The reader returns None when:
   - keys are absent (replay / offline / depth feed not started)
@@ -30,9 +31,19 @@ from ..market.depth_context import DepthContext, StrikeDepth
 
 logger = logging.getLogger(__name__)
 
-_KEY_CE = "depth:atm_ce:latest"
-_KEY_PE = "depth:atm_pe:latest"
 _DEFAULT_STALE_SEC = 30
+
+
+def _instrument_keys() -> tuple[str, str]:
+    # Instrument-namespaced (2026-07-21): running a depth collector per
+    # instrument (BankNifty direction_ml doesn't consume this today, but
+    # NIFTY composite does) means two collectors could otherwise collide on
+    # one shared "the ATM CE" key -- whichever polled last silently wins,
+    # corrupting the other instrument's signal. STRATEGY_INSTRUMENT is
+    # already set per-container (see docker-compose.gcp.yml); reusing it
+    # here needs no new env var.
+    instrument = str(os.getenv("STRATEGY_INSTRUMENT") or "BANKNIFTY").strip().lower()
+    return f"depth:{instrument}:atm_ce:latest", f"depth:{instrument}:atm_pe:latest"
 
 
 def _redis_client():
@@ -95,12 +106,13 @@ class RedisDepthReader:
             if stale_sec is not None
             else float(os.getenv("DEPTH_STALE_SEC", str(_DEFAULT_STALE_SEC)))
         )
+        self._key_ce, self._key_pe = _instrument_keys()
 
     def read_depth(self) -> Optional[DepthContext]:
         """Return ATM depth or None if absent / stale."""
         try:
-            ce_raw = self._client.get(get_redis_key(_KEY_CE))
-            pe_raw = self._client.get(get_redis_key(_KEY_PE))
+            ce_raw = self._client.get(get_redis_key(self._key_ce))
+            pe_raw = self._client.get(get_redis_key(self._key_pe))
         except Exception:
             logger.debug("redis depth read failed", exc_info=True)
             return None

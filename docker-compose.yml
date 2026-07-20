@@ -688,6 +688,84 @@ services:
       - ./ingestion_app/credentials.json:/app/secrets/credentials.json:ro
     command: ["python", "-m", "ingestion_app.collectors.depth_collector"]
 
+  # Dhan port of the above (2026-07-21) -- the Kite version above has been dead
+  # since the Dhan migration (nothing authenticates kite_client.quote() anymore);
+  # DEPTH_FEED_ENABLED has been unset since, and NIFTY composite's heaviest-
+  # weighted signal (depth, weight 1.1) has fired zero times in production,
+  # undetected for weeks (config_contract_expected.json's weight_requires rule
+  # + ops/verify_direction_liveness.py). Auto-rotates ATM strike each poll via
+  # the Dhan scrip master (an improvement on the old Kite runbook's manual
+  # symbol-update process) instead of a static DEPTH_FEED_INSTRUMENTS list.
+  # Writes the SAME Redis keys/schema as depth_collector above -- strategy_app's
+  # RedisDepthReader needs zero changes regardless of which one is running.
+  depth_collector_dhan:
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: ingestion_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      EXECUTION_MODE: "live"
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      DEPTH_UNDERLYING: "BANKNIFTY"
+      DEPTH_STRIKE_STEP: "${DEPTH_STRIKE_STEP_BANKNIFTY:-100}"
+      DEPTH_POLL_INTERVAL_SEC: "${DEPTH_POLL_INTERVAL_SEC:-5}"
+      DEPTH_STALE_TTL_SEC: "${DEPTH_STALE_TTL_SEC:-60}"
+      DEPTH_MARKET_OPEN_IST: "${DEPTH_MARKET_OPEN_IST:-09:15}"
+      DEPTH_MARKET_CLOSE_IST: "${DEPTH_MARKET_CLOSE_IST:-15:35}"
+      DEPTH_MONGO_ENABLED: "${DEPTH_MONGO_ENABLED:-1}"
+      DEPTH_MONGO_TTL_DAYS: "${DEPTH_MONGO_TTL_DAYS:-7}"
+    volumes:
+      - ./.run:/app/.run
+    command: ["python", "-m", "ingestion_app.collectors.dhan_depth_collector"]
+
+  depth_collector_dhan_nifty:
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: ingestion_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      EXECUTION_MODE: "live"
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      DEPTH_UNDERLYING: "NIFTY"
+      DEPTH_STRIKE_STEP: "${DEPTH_STRIKE_STEP_NIFTY:-50}"
+      DEPTH_POLL_INTERVAL_SEC: "${DEPTH_POLL_INTERVAL_SEC:-5}"
+      DEPTH_STALE_TTL_SEC: "${DEPTH_STALE_TTL_SEC:-60}"
+      DEPTH_MARKET_OPEN_IST: "${DEPTH_MARKET_OPEN_IST:-09:15}"
+      DEPTH_MARKET_CLOSE_IST: "${DEPTH_MARKET_CLOSE_IST:-15:35}"
+      DEPTH_MONGO_ENABLED: "${DEPTH_MONGO_ENABLED:-1}"
+      DEPTH_MONGO_TTL_DAYS: "${DEPTH_MONGO_TTL_DAYS:-7}"
+    volumes:
+      - ./.run:/app/.run
+    command: ["python", "-m", "ingestion_app.collectors.dhan_depth_collector"]
+
   dashboard:
     profiles: ["ui"]
     build:

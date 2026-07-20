@@ -62,6 +62,14 @@ if [ -f docker-compose.seller.yml ]; then
   COMPOSE_FILES+=(-f docker-compose.seller.yml)
   RECREATE_SVCS+=(seller_app)
 fi
+# depth_collector_dhan{,_nifty} (2026-07-21): also authenticate with
+# DHAN_ACCESS_TOKEN at startup, same as the services above -- would silently
+# run token-less after the first daily refresh otherwise. profiles:["live"]
+# doesn't block an explicit --no-deps up on a named service (profile
+# filtering only applies to the "no service given" default set), and these
+# are always present in docker-compose.yml so no existence check is needed
+# (unlike the optional seller overlay above).
+RECREATE_SVCS+=(depth_collector_dhan depth_collector_dhan_nifty)
 docker compose --env-file .env.compose "${COMPOSE_FILES[@]}" \
   up -d --no-deps --force-recreate "${RECREATE_SVCS[@]}"
 log "dhan token refreshed via TOTP + ${#RECREATE_SVCS[@]} Dhan containers recreated (${RECREATE_SVCS[*]})"
