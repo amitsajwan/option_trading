@@ -45,6 +45,11 @@ services:
       MONGO_PORT: "27017"
       MONGO_DB: "${MONGO_DB:-trading_ai}"
       INSTRUMENT_SYMBOL: "${INSTRUMENT_SYMBOL:-BANKNIFTY26JULFUT}"
+      # 2026-07-21: ingestion_app is the WS-feed owner (PRIMARY_INSTRUMENT) —
+      # needs NIFTY's futures symbol too, to build the shared WS leg list
+      # (see ingestion_app/dhan_ws_feed.py::build_shared_legs). Same var
+      # ingestion_app_nifty already uses for its own INSTRUMENT_SYMBOL below.
+      NIFTY_INSTRUMENT_SYMBOL: "${NIFTY_INSTRUMENT_SYMBOL:-NIFTY26JULFUT}"
       KITE_CREDENTIALS_PATH: "${KITE_CREDENTIALS_PATH:-/app/secrets/credentials.json}"
       BROKER: "${BROKER:-kite}"
       DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"

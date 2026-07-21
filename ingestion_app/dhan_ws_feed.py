@@ -4,7 +4,27 @@ Replaces the REST-poll get_tick() path for futures + VIX. Publishes to the SAME
 Redis keys that the Kite path used (I2 interface contract) so snapshot_app reads
 unchanged.
 
-Architecture:
+Architecture (2026-07-21: consolidated to ONE shared connection):
+  Previously each per-instrument container (ingestion_app, ingestion_app_nifty)
+  opened its OWN dhanhq.MarketFeed session on the SAME Dhan account/token —
+  found live to be in a permanent HTTP 429 reconnect-fail loop all day
+  (account-wide REST/quote rate contention bleeding into the WS handshake,
+  not a hard per-account connection cap -- Dhan documents 5 concurrent
+  sessions). This also hid a real latent bug: the old single-instrument
+  constructor always resolved the futures leg via a HARDCODED "BANKNIFTY"
+  argument regardless of which instrument the calling container served, so
+  the NIFTY container's futures leg was silently BankNifty's contract, not
+  NIFTY's -- never reached production only because the connection never
+  succeeded.
+
+  Now: ONE process (whichever container holds contracts_app.PRIMARY_INSTRUMENT,
+  see dhan_data_service.py) owns the connection and subscribes to an explicit
+  list of legs covering every known instrument (build_shared_legs()) plus
+  VIX. Other containers construct a legs=[] DhanWsFeed purely to read the
+  shared cache via is_healthy()/get_cached_tick() -- those methods only
+  touch Redis, not the WS connection, so a non-owner instance never calls
+  start() and needs no legs.
+
   DhanWsFeed (this module) — background thread running dhanhq.MarketFeed
     → on each tick: writes websocket:tick:{INSTR}:latest  (JSON)
     → health flag:  dhan:ws:feed:heartbeat              (epoch, TTL 15s)
@@ -17,15 +37,18 @@ in get_option_chain() is unchanged.
 
 ENV VARS
 --------
-DHAN_ACCESS_TOKEN   required
-DHAN_CLIENT_ID      required
-DHAN_WS_ENABLED     set to "0" to force REST-only mode (default: "1")
-INSTRUMENT_SYMBOL   e.g. BANKNIFTY26JULFUT — used to find the futures security-id
+DHAN_ACCESS_TOKEN       required
+DHAN_CLIENT_ID          required
+DHAN_WS_ENABLED         set to "0" to force REST-only mode (default: "1")
+INSTRUMENT_SYMBOL       BankNifty's live futures trading symbol, e.g. BANKNIFTY26JULFUT
+NIFTY_INSTRUMENT_SYMBOL NIFTY's live futures trading symbol, e.g. NIFTY26JULFUT
+  (both read only by build_shared_legs(), on the owner container)
 
 Usage (from DhanDataService.__init__):
-    if DhanWsFeed.should_enable():
-        self._ws_feed = DhanWsFeed(client_id, token, futures_sid)
-        self._ws_feed.start()
+    legs = build_shared_legs(scrip_master) if is_owner else None
+    feed = DhanWsFeed(client_id, token, redis_client, legs=legs)
+    if is_owner:
+        feed.start()
 """
 
 from __future__ import annotations
@@ -51,13 +74,19 @@ _HB_TTL_S   = 15          # seconds; if heartbeat older than this, feed is stale
 _SEG_IDX    = 0            # IDX_I (index segment)
 _SEG_FNO    = 2            # NSE_FNO
 
-# Security IDs for IDX_I segment (stable, from Dhan scrip master)
-_SID_BANKNIFTY_IDX = "25"
-_SID_VIX           = "21"
+_SID_VIX    = "21"
 
 # Subscription mode: Quote (17) carries LTP + OI + bid/ask; Ticker (15) LTP only
 _MODE_QUOTE  = 17
 _MODE_TICKER = 15
+
+# Which env var holds each known instrument's live futures trading symbol
+# (used as the Redis tick label for its futures leg) — matches
+# docker-compose*.yml's INSTRUMENT_SYMBOL / NIFTY_INSTRUMENT_SYMBOL.
+_FUTURES_LABEL_ENV = {
+    "BANKNIFTY": "INSTRUMENT_SYMBOL",
+    "NIFTY": "NIFTY_INSTRUMENT_SYMBOL",
+}
 
 
 def _now_ist() -> datetime:
@@ -68,40 +97,68 @@ def _iso_ist() -> str:
     return _now_ist().isoformat()
 
 
+def build_shared_legs(scrip_master: Any) -> List[Dict[str, Any]]:
+    """Index + nearest-futures legs for every known instrument, plus VIX once.
+
+    Called only by the WS-feed owner. `scrip_master` is a loaded ScripMaster
+    (ingestion_app.dhan_client) — used to resolve each underlying's current
+    nearest-expiry futures security id.
+    """
+    from contracts_app import get_instrument, known_instruments
+
+    legs: List[Dict[str, Any]] = [
+        {"segment": _SEG_IDX, "security_id": _SID_VIX, "mode": _MODE_TICKER, "label": "INDIAVIX"},
+    ]
+    for name in known_instruments():
+        spec = get_instrument(name)
+        legs.append({
+            "segment": _SEG_IDX, "security_id": spec.index_security_id,
+            "mode": _MODE_QUOTE, "label": name,
+        })
+        row = scrip_master.find_nearest_futures(name) if scrip_master is not None else None
+        fut_sid = str(row.get("SEM_SMST_SECURITY_ID") or "").strip() if row else ""
+        env_name = _FUTURES_LABEL_ENV.get(name)
+        fut_label = str(os.getenv(env_name) or "").strip().upper() if env_name else ""
+        if fut_sid and fut_label:
+            legs.append({
+                "segment": _SEG_FNO, "security_id": fut_sid,
+                "mode": _MODE_QUOTE, "label": fut_label,
+            })
+        else:
+            log.warning(
+                "build_shared_legs: skipping %s futures leg (sid=%r label=%r) — "
+                "scrip master lookup or %s env var missing",
+                name, fut_sid, fut_label, env_name,
+            )
+    return legs
+
+
 class DhanWsFeed:
     """
     Background WS feed using dhanhq.MarketFeed.
 
-    Publishes real-time ticks (BankNifty index, VIX, nearest-expiry futures)
-    to Redis. DhanDataService.get_tick() reads from there instead of REST.
+    Publishes real-time ticks for an explicit list of legs to Redis.
+    DhanDataService.get_tick() reads from there instead of REST.
     """
 
     def __init__(
         self,
         client_id: str,
         access_token: str,
-        futures_security_id: str,
         redis_client: Any,
+        legs: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self._client_id  = client_id
         self._token      = access_token
-        self._fut_sid    = futures_security_id
         self._redis      = redis_client
+        self._legs       = list(legs or [])
+        self._sid_label: Dict[tuple, str] = {
+            (str(leg["segment"]), str(leg["security_id"])): leg["label"] for leg in self._legs
+        }
         self._thread: Optional[threading.Thread] = None
         self._stop       = threading.Event()
         self._feed: Any  = None                # dhanhq.MarketFeed instance
         self._lock       = threading.Lock()
-        # Active instrument's index security-id + label (registry-driven so a
-        # NIFTY container subscribes to NIFTY index, not BankNifty). BankNifty
-        # registry id == "25" == _SID_BANKNIFTY_IDX, so primary is unchanged.
-        try:
-            from contracts_app import current_instrument, get_instrument
-            _spec = get_instrument(current_instrument())
-            self._idx_sid   = str(_spec.index_security_id)
-            self._idx_label = _spec.name
-        except Exception:
-            self._idx_sid   = _SID_BANKNIFTY_IDX
-            self._idx_label = "BANKNIFTY"
 
     @staticmethod
     def should_enable() -> bool:
@@ -110,11 +167,19 @@ class DhanWsFeed:
     # ── public API ────────────────────────────────────────────────────────────
 
     def start(self) -> None:
-        """Start the WS feed in a background daemon thread."""
+        """Start the WS feed in a background daemon thread.
+
+        No-op (with a log warning) if this instance has no legs — that's the
+        expected shape for a non-owner container, which only ever calls
+        is_healthy()/get_cached_tick() to read the owner's published ticks.
+        """
+        if not self._legs:
+            log.warning("DhanWsFeed.start() called with no legs — not starting a connection")
+            return
         t = threading.Thread(target=self._run_loop, name="dhan-ws-feed", daemon=True)
         t.start()
         self._thread = t
-        log.info("DhanWsFeed background thread started (futures_sid=%s)", self._fut_sid)
+        log.info("DhanWsFeed background thread started (legs=%d)", len(self._legs))
 
     def stop(self) -> None:
         self._stop.set()
@@ -154,11 +219,7 @@ class DhanWsFeed:
     # ── internal ──────────────────────────────────────────────────────────────
 
     def _instruments(self) -> List[tuple]:
-        return [
-            (_SEG_IDX, self._idx_sid, _MODE_QUOTE),    # active-instrument index
-            (_SEG_IDX, _SID_VIX,      _MODE_TICKER),   # India VIX
-            (_SEG_FNO, self._fut_sid, _MODE_QUOTE),    # active-instrument futures
-        ]
+        return [(leg["segment"], leg["security_id"], leg["mode"]) for leg in self._legs]
 
     def _run_loop(self) -> None:
         """Outer reconnect loop — restarts on any fatal error with back-off."""
@@ -238,6 +299,11 @@ class DhanWsFeed:
                 return
             sid = str(message.get("security_id") or "").strip()
             seg = message.get("exchange_segment")
+            instrument_label = self._sid_to_label(sid, seg)
+            if instrument_label is None:
+                log.debug("DhanWsFeed: message for unregistered leg sid=%s seg=%s", sid, seg)
+                return
+
             ltp = self._flt(message.get("LTP") or message.get("last_price"))
             oi  = self._int(message.get("OI")  or message.get("oi"))
             vol = self._int(message.get("volume"))
@@ -251,7 +317,6 @@ class DhanWsFeed:
                 ask = self._flt(buyers[0].get("ask_price"))
             mid = (bid + ask) / 2.0 if (bid is not None and ask is not None) else None
 
-            instrument_label = self._sid_to_label(sid, seg)
             tick = {
                 "instrument":   instrument_label,
                 "timestamp":    _iso_ist(),
@@ -272,14 +337,9 @@ class DhanWsFeed:
         except Exception as exc:
             log.debug("DhanWsFeed message parse error: %s | msg=%s", exc, str(message)[:200])
 
-    def _sid_to_label(self, sid: str, seg: Any) -> str:
-        """Map security-id + segment back to the instrument label snapshot_app expects."""
-        if sid == _SID_VIX:
-            return "INDIAVIX"
-        if str(seg) == str(_SEG_IDX) and str(sid) == str(self._idx_sid):
-            return self._idx_label
-        # Futures — label matches INSTRUMENT_SYMBOL env var
-        return str(os.getenv("INSTRUMENT_SYMBOL") or "BANKNIFTYFUT").strip().upper()
+    def _sid_to_label(self, sid: str, seg: Any) -> Optional[str]:
+        """Map security-id + segment back to the instrument label this leg was registered under."""
+        return self._sid_label.get((str(seg), str(sid)))
 
     @staticmethod
     def _flt(v: Any) -> Optional[float]:

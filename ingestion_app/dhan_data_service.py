@@ -85,17 +85,35 @@ class DhanDataService:
         self.redis_client = redis.Redis(**redis_config(decode_responses=True))
 
         # WebSocket live feed (futures + VIX ticks; starts only if DHAN_WS_ENABLED != 0)
+        # 2026-07-21: ONE shared connection now, owned by whichever container
+        # holds PRIMARY_INSTRUMENT (BankNifty) — two independent per-instrument
+        # sessions on the same Dhan account were found live in a permanent
+        # HTTP 429 reconnect loop all day. Non-owner containers (NIFTY) still
+        # construct a legs=[] DhanWsFeed to read the owner's published ticks
+        # via is_healthy()/get_cached_tick(), which only touch Redis.
         self._ws_feed: Optional[DhanWsFeed] = None
         if DhanWsFeed.should_enable():
             try:
-                fut_sid = self._futures_security_id("BANKNIFTY")
+                from contracts_app import PRIMARY_INSTRUMENT
+
+                is_ws_owner = self._active_spec().name == PRIMARY_INSTRUMENT
+                legs = None
+                if is_ws_owner:
+                    from .dhan_ws_feed import build_shared_legs
+                    legs = build_shared_legs(self._scrip_master())
                 self._ws_feed = DhanWsFeed(
                     client_id=client_id,
                     access_token=token,
-                    futures_security_id=fut_sid,
                     redis_client=self.redis_client,
+                    legs=legs,
                 )
-                self._ws_feed.start()
+                if is_ws_owner:
+                    self._ws_feed.start()
+                else:
+                    log.info(
+                        "DhanWsFeed: not the WS owner (owner=%s) — reading shared feed only",
+                        PRIMARY_INSTRUMENT,
+                    )
             except Exception as _ws_err:
                 log.warning("DhanWsFeed init failed (falling back to REST poll): %s", _ws_err)
                 self._ws_feed = None
