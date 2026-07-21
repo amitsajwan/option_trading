@@ -2,6 +2,28 @@ from __future__ import annotations
 
 import os
 
+# ---------------------------------------------------------------------------
+# Transport classification (arch/streams-loose-coupling)
+#
+# DURABLE (Redis Streams, stream: prefix):
+#   stream:snapshots:live          — live market snapshots (snapshot_app → strategy_app, persistence_app)
+#   stream:snapshots:historical    — OOS/replay snapshots
+#   stream:eval:commands           — evaluation run commands (dashboard → orchestrator)
+#   stream:eval:progress:{run_id}  — per-run progress events (orchestrator → dashboard history)
+#
+# DISPLAY_ONLY (Redis Pub/Sub, intentionally ephemeral — do NOT migrate to Streams):
+#   market:ohlc:{symbol}:{tf}      — real-time OHLC bars for charting
+#   market:tick:{symbol}:*         — raw tick feed for live price display
+#   indicators:{symbol}:*          — derived indicator values for UI
+#   auth:status                    — auth token push
+#   strategy:eval:run:{id}         — live WS progress bridge (shadow; stream:eval:progress is durable)
+#   strategy:eval:global           — global run lifecycle events (WS bridge)
+#
+# Shadow flags (migration controls, default true during Sprint 1–3):
+#   SNAPSHOT_PUBSUB_SHADOW          — snapshot_app also PUBLISHes while migrating consumers
+#   EVAL_COMMANDS_PUBSUB_SHADOW     — dashboard also PUBLISHes eval command for backward compat
+# ---------------------------------------------------------------------------
+
 
 def snapshot_topic() -> str:
     return (
@@ -45,8 +67,9 @@ def strategy_decision_trace_topic() -> str:
     )
 
 
-# ── Phase 2 stream-native decision pipeline topics (live/oos pubsub mode) ──
-# In sim mode use Namespace.stream_for() instead of these functions.
+# ── Phase 2 stream-native decision pipeline topics ──
+# DISPLAY_ONLY in live/oos mode (pub/sub). In sim mode use Namespace.stream_for().
+# D1 will unify transport so live/oos also routes through streams.
 
 
 def regime_decisions_topic() -> str:

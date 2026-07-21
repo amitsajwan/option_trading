@@ -14,6 +14,7 @@ from typing import Iterable, Optional
 import redis
 
 from contracts_app import configure_ist_logging, find_matching_python_processes, isoformat_ist, redis_connection_kwargs, snapshot_topic
+from contracts_app.event_bus import RedisEventBus
 
 from .health import evaluate as evaluate_health
 from .mongo_writer import SnapshotMongoWriter
@@ -68,6 +69,11 @@ def _launch_detached(*, cmd: list[str], run_dir: str) -> dict:
     return meta
 
 
+_SNAPSHOT_STREAM = os.getenv("PERSISTENCE_SNAPSHOT_STREAM") or "stream:snapshots:live"
+_SNAPSHOT_GROUP = "persistence-snapshots-grp-1"
+_SNAPSHOT_CONSUMER = "persistence-consumer-1"
+
+
 def _redis_client() -> redis.Redis:
     return redis.Redis(**redis_connection_kwargs(decode_responses=True, for_pubsub=True))
 
@@ -100,13 +106,26 @@ def _validate_rollout_context(
 
 
 def run_loop(*, topic: str, health_log_interval_sec: float, rollout_context: Optional[dict[str, object]] = None) -> int:
+    """Consume snapshots from Redis Stream (XREADGROUP) and persist to Mongo.
+
+    Replaces the previous pub/sub subscribe loop (A3 — arch/streams-loose-coupling).
+    PEL re-delivery: on restart, pending un-acked messages are re-delivered before
+    consuming new ones, guaranteeing zero snapshot loss across restarts.
+    """
     writer = SnapshotMongoWriter()
-    client = _redis_client()
-    pubsub = client.pubsub(ignore_subscribe_messages=True)
-    pubsub.subscribe(topic)
-    logger.info("persistence_app subscribed topic=%s", topic)
+    bus = RedisEventBus()
+    stream = _SNAPSHOT_STREAM
+    group = _SNAPSHOT_GROUP
+    consumer = _SNAPSHOT_CONSUMER
+
+    bus.ensure_group(stream, group)
+    logger.info(
+        "persistence_app snapshot consumer started stream=%s group=%s consumer=%s",
+        stream, group, consumer,
+    )
     if isinstance(rollout_context, dict) and rollout_context:
         logger.info("persistence_app rollout_context=%s", json.dumps(rollout_context, ensure_ascii=False, default=str))
+
     consumed_count = 0
     written_count = 0
     ignored_count = 0
@@ -114,11 +133,20 @@ def run_loop(*, topic: str, health_log_interval_sec: float, rollout_context: Opt
     last_message_monotonic: Optional[float] = None
     last_health_log_monotonic = time.monotonic()
 
+    # Read pending (PEL) first on startup, then switch to new messages.
+    read_pending = True
+
     try:
         while True:
             try:
-                msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-                if not msg:
+                stream_id = "0" if read_pending else ">"
+                batch = bus.consume(stream, group, consumer, count=50, block_ms=2000, stream_id=stream_id)
+
+                if read_pending and not batch:
+                    read_pending = False
+                    continue
+
+                if not batch:
                     now_mono = time.monotonic()
                     if health_log_interval_sec > 0 and (now_mono - last_health_log_monotonic) >= health_log_interval_sec:
                         last_age = None
@@ -126,37 +154,41 @@ def run_loop(*, topic: str, health_log_interval_sec: float, rollout_context: Opt
                             last_age = round(now_mono - last_message_monotonic, 3)
                         logger.info(
                             "persistence_app health consumed=%s written=%s ignored=%s errors=%s seconds_since_last_message=%s",
-                            consumed_count,
-                            written_count,
-                            ignored_count,
-                            error_count,
-                            last_age,
+                            consumed_count, written_count, ignored_count, error_count, last_age,
                         )
                         last_health_log_monotonic = now_mono
                     continue
-                data = msg.get("data")
-                if not isinstance(data, str):
-                    continue
-                consumed_count += 1
-                last_message_monotonic = time.monotonic()
-                payload = json.loads(data)
-                ok = writer.write_snapshot_event(payload)
-                if not ok:
-                    ignored_count += 1
-                    logger.debug("ignored non-snapshot payload")
-                else:
-                    written_count += 1
+
+                for msg_id, fields in batch:
+                    try:
+                        raw = fields.get("payload") or ""
+                        if not raw:
+                            bus.acknowledge(stream, group, msg_id)
+                            ignored_count += 1
+                            continue
+                        payload = json.loads(raw)
+                        consumed_count += 1
+                        last_message_monotonic = time.monotonic()
+                        ok = writer.write_snapshot_event(payload)
+                        if not ok:
+                            ignored_count += 1
+                            logger.debug("ignored non-snapshot payload msg_id=%s", msg_id)
+                        else:
+                            written_count += 1
+                        bus.acknowledge(stream, group, msg_id)
+                    except Exception as exc:
+                        error_count += 1
+                        logger.warning("persistence_app message handling error msg_id=%s: %s", msg_id, exc)
+
+            except KeyboardInterrupt:
+                raise
             except Exception as exc:
                 error_count += 1
-                logger.warning("persistence_app message handling error: %s", exc)
-            time.sleep(0.001)
+                logger.warning("persistence_app stream read error: %s", exc)
+                time.sleep(1.0)
+
     except KeyboardInterrupt:
         logger.info("persistence_app interrupted")
-    finally:
-        try:
-            pubsub.close()
-        except Exception:
-            pass
     return 0
 
 

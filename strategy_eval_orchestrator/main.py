@@ -112,8 +112,37 @@ def _global_channel() -> str:
     return str(os.getenv("STRATEGY_EVAL_GLOBAL_CHANNEL") or "strategy:eval:global")
 
 
+def _progress_stream(run_id: str) -> str:
+    prefix = str(os.getenv("STRATEGY_EVAL_PROGRESS_STREAM_PREFIX") or "stream:eval:progress:")
+    return f"{prefix}{run_id}"
+
+
+_PROGRESS_STREAM_MAXLEN = 200
+_PROGRESS_STREAM_TTL_SECS = 86400  # 24 h — allows late UI inspection after run ends
+
+
 def _command_channel() -> str:
     return str(os.getenv("STRATEGY_EVAL_COMMAND_TOPIC") or "strategy:eval:command")
+
+
+def _command_stream() -> str:
+    return str(os.getenv("STRATEGY_EVAL_COMMAND_STREAM") or "stream:eval:commands")
+
+
+def _command_stream_group() -> str:
+    return str(os.getenv("STRATEGY_EVAL_COMMAND_GROUP") or "eval-orchestrator-grp-1")
+
+
+def _eval_commands_pubsub_shadow() -> bool:
+    return str(os.getenv("EVAL_COMMANDS_PUBSUB_SHADOW") or "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _ensure_command_group(redis_client: redis.Redis) -> None:
+    try:
+        redis_client.xgroup_create(_command_stream(), _command_stream_group(), id="0", mkstream=True)
+    except Exception as exc:
+        if "BUSYGROUP" not in str(exc):
+            logger.warning("xgroup_create warn: %s", exc)
 
 
 def _historical_topic() -> str:
@@ -132,6 +161,13 @@ def _write_replay_status_key(redis_client: redis.Redis, payload: dict[str, Any])
         pass
 
 
+def _expire_progress_stream(redis_client: redis.Redis, run_id: str) -> None:
+    try:
+        redis_client.expire(_progress_stream(run_id), _PROGRESS_STREAM_TTL_SECS)
+    except Exception:
+        pass
+
+
 def _update_run(coll: Any, run_id: str, **fields: Any) -> None:
     fields["updated_at"] = _utc_now()
     coll.update_one({"run_id": str(run_id)}, {"$set": fields}, upsert=False)
@@ -142,6 +178,12 @@ def _publish_run_event(redis_client: redis.Redis, run_id: str, payload: dict[str
     body["run_id"] = str(run_id)
     body["timestamp"] = _utc_now()
     rendered = json.dumps(body, ensure_ascii=False, default=str)
+    redis_client.xadd(
+        _progress_stream(run_id),
+        {"payload": rendered, "event_type": str(body.get("event_type") or "")},
+        maxlen=_PROGRESS_STREAM_MAXLEN,
+        approximate=True,
+    )
     redis_client.publish(_run_channel(run_id), rendered)
     redis_client.publish(_global_channel(), rendered)
 
@@ -261,9 +303,14 @@ def _replay_and_publish(
 def _process_command(redis_client: redis.Redis, coll: Any, command: dict[str, Any]) -> None:
     run_id = str(command.get("run_id") or "").strip()
     if not run_id:
+        logger.warning("orchestrator received command with no run_id — ignored")
         return
     date_from = str(command.get("date_from") or "").strip()
     date_to = str(command.get("date_to") or "").strip()
+    logger.info(
+        "orchestrator command received run_id=%s date_from=%s date_to=%s dataset=%s",
+        run_id, date_from, date_to, command.get("dataset") or "historical",
+    )
     dataset = str(command.get("dataset") or "historical").strip().lower()
     speed = float(command.get("speed") or 0.0)
     base_path = str(command.get("base_path") or "").strip() or str(_default_snapshot_parquet_base())
@@ -378,6 +425,7 @@ def _process_command(redis_client: redis.Redis, coll: Any, command: dict[str, An
             run_id,
             {"event_type": "run_failed", "message": "Replay failed", "error": str(exc)},
         )
+        _expire_progress_stream(redis_client, run_id)
         return
 
     status = str(result.get("status") or "complete")
@@ -409,41 +457,92 @@ def _process_command(redis_client: redis.Redis, coll: Any, command: dict[str, An
                 "message": "Evaluation data refreshed",
             },
         )
+        _expire_progress_stream(redis_client, run_id)
         return
 
     _update_run(coll, run_id, status="failed", ended_at=_utc_now(), error="Unknown replay status")
     _publish_run_event(redis_client, run_id, {"event_type": "run_failed", "message": "Unknown replay status"})
+    _expire_progress_stream(redis_client, run_id)
 
 
 def run_loop() -> int:
     redis_client = _redis_client()
     mongo_client, runs_coll = _mongo_collection()
-    pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
-    pubsub.subscribe(_command_channel())
-    logger.info("strategy_eval_orchestrator subscribed topic=%s", _command_channel())
+    stream = _command_stream()
+    group = _command_stream_group()
+    consumer = f"orchestrator-{os.getenv('HOSTNAME') or 'default'}"
+    _ensure_command_group(redis_client)
+    logger.info(
+        "strategy_eval_orchestrator listening stream=%s group=%s consumer=%s",
+        stream, group, consumer,
+    )
+    if _eval_commands_pubsub_shadow():
+        pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
+        pubsub.subscribe(_command_channel())
+        logger.info(
+            "strategy_eval_orchestrator shadow pubsub topic=%s (EVAL_COMMANDS_PUBSUB_SHADOW=true)",
+            _command_channel(),
+        )
+    else:
+        pubsub = None
+
+    read_pending = True
     try:
         while True:
-            msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-            if not msg:
-                time.sleep(0.01)
-                continue
-            data = msg.get("data")
-            if not isinstance(data, str):
-                continue
+            stream_id = "0" if read_pending else ">"
             try:
-                payload = json.loads(data)
-            except Exception:
+                response = redis_client.xreadgroup(
+                    group, consumer, {stream: stream_id}, count=10, block=2000
+                )
+            except Exception as exc:
+                logger.warning("xreadgroup error: %s", exc)
+                time.sleep(1.0)
                 continue
-            if not isinstance(payload, dict):
+
+            if read_pending and not response:
+                read_pending = False
                 continue
-            _process_command(redis_client, runs_coll, payload)
+
+            for _sname, entries in response or []:
+                for entry_id, fields in entries or []:
+                    raw = fields.get("payload") if isinstance(fields, dict) else None
+                    if not isinstance(raw, str):
+                        redis_client.xack(stream, group, entry_id)
+                        continue
+                    try:
+                        payload = json.loads(raw)
+                    except Exception:
+                        redis_client.xack(stream, group, entry_id)
+                        continue
+                    if not isinstance(payload, dict):
+                        redis_client.xack(stream, group, entry_id)
+                        continue
+                    try:
+                        _process_command(redis_client, runs_coll, payload)
+                    except Exception:
+                        logger.exception("_process_command failed entry_id=%s", entry_id)
+                    redis_client.xack(stream, group, entry_id)
+
+            if pubsub is not None:
+                msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=0)
+                if msg:
+                    data = msg.get("data")
+                    if isinstance(data, str):
+                        try:
+                            payload = json.loads(data)
+                            if isinstance(payload, dict):
+                                _process_command(redis_client, runs_coll, payload)
+                        except Exception:
+                            pass
+
     except KeyboardInterrupt:
         logger.info("strategy_eval_orchestrator interrupted")
     finally:
-        try:
-            pubsub.close()
-        except Exception:
-            pass
+        if pubsub is not None:
+            try:
+                pubsub.close()
+            except Exception:
+                pass
         try:
             mongo_client.close()
         except Exception:
