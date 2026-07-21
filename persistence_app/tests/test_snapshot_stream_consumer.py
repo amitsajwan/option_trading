@@ -29,12 +29,22 @@ class TestPendingMessagesRedeliveredOnRestart(unittest.TestCase):
     def _make_bus(self, pending: list, new: list):
         bus = MagicMock()
         bus.ensure_group.return_value = None
-        call_count = {"n": 0}
+        # Real XREADGROUP semantics: a stream_id="0" (PEL) read returns the
+        # pending batch ONCE; after those messages are acked, the PEL is
+        # empty and subsequent stream_id="0" reads return []. The original
+        # version of this mock re-derived its return value from `pending`
+        # every call without ever draining it, so a non-empty `pending` made
+        # every "0" read return the same batch forever — read_pending never
+        # flipped to False and run_loop()'s while-True loop never exited
+        # (hung indefinitely, reproduced standalone with no real Redis).
+        pending_delivered = {"done": False}
 
         def consume_side_effect(stream, group, consumer, count, block_ms, stream_id):
-            call_count["n"] += 1
             if stream_id == "0":
-                return [(f"p{i}", {"payload": _payload(f"snap-p{i}")}) for i in range(len(pending))] if pending else []
+                if pending and not pending_delivered["done"]:
+                    pending_delivered["done"] = True
+                    return [(f"p{i}", {"payload": _payload(f"snap-p{i}")}) for i in range(len(pending))]
+                return []
             # new messages — return one batch then raise KeyboardInterrupt to stop
             if new:
                 msg = new.pop(0)

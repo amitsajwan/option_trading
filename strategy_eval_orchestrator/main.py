@@ -121,10 +121,6 @@ _PROGRESS_STREAM_MAXLEN = 200
 _PROGRESS_STREAM_TTL_SECS = 86400  # 24 h — allows late UI inspection after run ends
 
 
-def _command_channel() -> str:
-    return str(os.getenv("STRATEGY_EVAL_COMMAND_TOPIC") or "strategy:eval:command")
-
-
 def _command_stream() -> str:
     return str(os.getenv("STRATEGY_EVAL_COMMAND_STREAM") or "stream:eval:commands")
 
@@ -466,6 +462,17 @@ def _process_command(redis_client: redis.Redis, coll: Any, command: dict[str, An
 
 
 def run_loop() -> int:
+    # EVAL_COMMANDS_PUBSUB_SHADOW governs the DASHBOARD's producer-side publish
+    # (market_data_dashboard.services.strategy_evaluation_service.queue_replay_run
+    # also PUBLISHes to "strategy:eval:command" for the benefit of any other,
+    # not-yet-migrated consumer of that channel). It does NOT mean
+    # this orchestrator should also subscribe to and act on it: grep confirms
+    # this orchestrator is the sole consumer of strategy:eval:command, and it
+    # already gets every command exactly-once via the stream/consumer-group
+    # below. Consuming both delivery paths for the same command used to run
+    # _process_command() twice, concurrently, for every replay run submitted
+    # -- found and fixed pre-merge, no test previously covered run_loop()'s
+    # consumption path (only the dashboard-side publish was tested).
     redis_client = _redis_client()
     mongo_client, runs_coll = _mongo_collection()
     stream = _command_stream()
@@ -476,15 +483,6 @@ def run_loop() -> int:
         "strategy_eval_orchestrator listening stream=%s group=%s consumer=%s",
         stream, group, consumer,
     )
-    if _eval_commands_pubsub_shadow():
-        pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
-        pubsub.subscribe(_command_channel())
-        logger.info(
-            "strategy_eval_orchestrator shadow pubsub topic=%s (EVAL_COMMANDS_PUBSUB_SHADOW=true)",
-            _command_channel(),
-        )
-    else:
-        pubsub = None
 
     read_pending = True
     try:
@@ -523,26 +521,9 @@ def run_loop() -> int:
                         logger.exception("_process_command failed entry_id=%s", entry_id)
                     redis_client.xack(stream, group, entry_id)
 
-            if pubsub is not None:
-                msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=0)
-                if msg:
-                    data = msg.get("data")
-                    if isinstance(data, str):
-                        try:
-                            payload = json.loads(data)
-                            if isinstance(payload, dict):
-                                _process_command(redis_client, runs_coll, payload)
-                        except Exception:
-                            pass
-
     except KeyboardInterrupt:
         logger.info("strategy_eval_orchestrator interrupted")
     finally:
-        if pubsub is not None:
-            try:
-                pubsub.close()
-            except Exception:
-                pass
         try:
             mongo_client.close()
         except Exception:

@@ -1,10 +1,16 @@
 """Tests for B1 — eval command stream on orchestrator side.
 
 Verifies:
-  - run_loop reads from stream:eval:commands via XREADGROUP (not just pub/sub)
+  - run_loop reads from stream:eval:commands via XREADGROUP
   - Pending messages are re-delivered on restart (stream_id="0" first)
   - After PEL drained, switches to ">" for new messages
-  - EVAL_COMMANDS_PUBSUB_SHADOW=false disables pub/sub subscribe
+  - run_loop does NOT also subscribe to/act on the pub/sub shadow channel
+    (regression test — see run_loop()'s docstring comment: this orchestrator
+    is the sole consumer of strategy:eval:command, and consuming both the
+    stream and the pub/sub shadow used to run _process_command() twice,
+    concurrently, for every single replay run submitted through the
+    dashboard, since EVAL_COMMANDS_PUBSUB_SHADOW defaults to true. Found and
+    fixed pre-merge; previously untested.)
   - _ensure_command_group swallows BUSYGROUP, warns on other errors
 """
 from __future__ import annotations
@@ -18,6 +24,7 @@ from strategy_eval_orchestrator.main import (
     _command_stream_group,
     _ensure_command_group,
     _eval_commands_pubsub_shadow,
+    run_loop,
 )
 
 
@@ -138,6 +145,41 @@ class TestDashboardCommandStream(unittest.TestCase):
             publish_topics = [c[0][0] for c in redis_mock.publish.call_args_list]
             assert "strategy:eval:command" not in publish_topics
             redis_mock.xadd.assert_called_once()
+
+
+class TestRunLoopDoesNotDoubleConsume(unittest.TestCase):
+    """Regression test for the duplicate-processing bug found pre-merge."""
+
+    def test_pubsub_is_never_subscribed_or_read(self):
+        redis_client = MagicMock()
+        redis_client.xreadgroup.side_effect = KeyboardInterrupt  # end the loop after startup
+        mongo_client = MagicMock()
+        runs_coll = MagicMock()
+
+        with patch.dict("os.environ", {"EVAL_COMMANDS_PUBSUB_SHADOW": "true"}), \
+             patch("strategy_eval_orchestrator.main._redis_client", return_value=redis_client), \
+             patch("strategy_eval_orchestrator.main._mongo_collection", return_value=(mongo_client, runs_coll)):
+            run_loop()
+
+        redis_client.pubsub.assert_not_called()
+
+    def test_stream_command_processed_exactly_once(self):
+        redis_client = MagicMock()
+        payload = json.dumps({"event_type": "strategy_eval_run_command", "run_id": "r1"})
+        batch = [("stream:eval:commands", [("1-1", {"payload": payload})])]
+        redis_client.xreadgroup.side_effect = [batch, KeyboardInterrupt]
+        mongo_client = MagicMock()
+        runs_coll = MagicMock()
+
+        with patch.dict("os.environ", {"EVAL_COMMANDS_PUBSUB_SHADOW": "true"}), \
+             patch("strategy_eval_orchestrator.main._redis_client", return_value=redis_client), \
+             patch("strategy_eval_orchestrator.main._mongo_collection", return_value=(mongo_client, runs_coll)), \
+             patch("strategy_eval_orchestrator.main._process_command") as process_mock:
+            run_loop()
+
+        process_mock.assert_called_once()
+        redis_client.xack.assert_called_once_with("stream:eval:commands", "eval-orchestrator-grp-1", "1-1")
+        redis_client.pubsub.assert_not_called()
 
 
 if __name__ == "__main__":

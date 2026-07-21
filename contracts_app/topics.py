@@ -19,9 +19,18 @@ import os
 #   strategy:eval:run:{id}         — live WS progress bridge (shadow; stream:eval:progress is durable)
 #   strategy:eval:global           — global run lifecycle events (WS bridge)
 #
-# Shadow flags (migration controls, default true during Sprint 1–3):
-#   SNAPSHOT_PUBSUB_SHADOW          — snapshot_app also PUBLISHes while migrating consumers
-#   EVAL_COMMANDS_PUBSUB_SHADOW     — dashboard also PUBLISHes eval command for backward compat
+# Shadow flags (migration controls):
+#   SNAPSHOT_PUBSUB_SHADOW          — NOT IMPLEMENTED. snapshot_app/redis_publisher.py's
+#                                     RedisEventPublisher.publish() is XADD-only; this flag
+#                                     is not read anywhere. A1's original dual-write design
+#                                     (ADR-003) was superseded by committing straight to
+#                                     streams-only — this line documented that abandoned
+#                                     design and was never updated. Setting this env var
+#                                     does nothing. There is no pub/sub fallback for snapshot
+#                                     delivery; a real rollback means reverting the deploy.
+#   EVAL_COMMANDS_PUBSUB_SHADOW     — real and implemented (strategy_eval_orchestrator/main.py,
+#                                     market_data_dashboard/services/strategy_evaluation_service.py):
+#                                     dashboard also PUBLISHes eval command for backward compat.
 # ---------------------------------------------------------------------------
 
 

@@ -32,7 +32,6 @@ import queue
 import fnmatch
 import subprocess
 import sys
-from .ws_redis_pool import _pool as _ws_pool
 from collections import deque
 from functools import lru_cache
 from urllib.parse import quote, urlencode
@@ -41,6 +40,11 @@ try:
     from ._namespace import BASE_SNAPSHOTS
 except ImportError:
     from market_data_dashboard._namespace import BASE_SNAPSHOTS  # type: ignore
+
+try:
+    from .ws_redis_pool import _pool as _ws_pool
+except ImportError:
+    from market_data_dashboard.ws_redis_pool import _pool as _ws_pool  # type: ignore
 
 try:
     from .services.live_strategy_monitor_service import LiveStrategyMonitorService

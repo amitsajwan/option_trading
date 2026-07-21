@@ -158,12 +158,27 @@ class SharedRedisPool:
                 socket_timeout=2,
             )
             self._pubsub = self._redis_client.pubsub(ignore_subscribe_messages=True)
+            if restarting:
+                # A fresh pubsub object has zero subscriptions, but
+                # _channel_to_conns/_pattern_to_conns still list every
+                # channel every currently-registered connection believes
+                # it's subscribed to (register()/subscribe() never got
+                # unwound just because the reader thread crashed). Without
+                # re-issuing these, every connected browser tab goes
+                # silently dark on the next transient Redis blip until it
+                # happens to reconnect. Re-queue them for the new thread to
+                # pick up on its first control-queue drain.
+                for ch in self._channel_to_conns:
+                    self._ctrl_q.put(("subscribe", ch))
+                for pat in self._pattern_to_conns:
+                    self._ctrl_q.put(("psubscribe", pat))
             self._thread = threading.Thread(target=self._run, name="ws-pool-reader", daemon=True)
             self._thread.start()
             if restarting:
                 logger.warning(
-                    "ws-pool reader thread RESTARTED (previous thread died) host=%s port=%s",
-                    self._host, self._port,
+                    "ws-pool reader thread RESTARTED (previous thread died) host=%s port=%s "
+                    "re-subscribing %d channel(s), %d pattern(s)",
+                    self._host, self._port, len(self._channel_to_conns), len(self._pattern_to_conns),
                 )
             else:
                 logger.info("ws-pool reader thread started host=%s port=%s", self._host, self._port)

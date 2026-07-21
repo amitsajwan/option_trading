@@ -408,4 +408,17 @@ class RedisSnapshotConsumer:
     def start(self, *, max_events: Optional[int] = None) -> int:
         """Blocking consume loop. Returns consumed event count."""
         max_count = None if max_events is None else max(0, int(max_events))
+        if self._transport == "pubsub":
+            # D2 (arch/streams-loose-coupling) removed ConsumerLock and the
+            # pub/sub consume loop entirely -- this used to silently run
+            # _start_streams() regardless of the requested transport, which
+            # meant STRATEGY_CONSUMER_TRANSPORT=pubsub (the documented A2
+            # rollback lever) was a silent no-op: an operator following the
+            # rollback runbook during an incident would set the env var,
+            # restart, and get streams again with no error and no signal
+            # that their rollback didn't take effect. Fail loud instead.
+            raise ValueError(
+                "transport='pubsub' is no longer supported (pub/sub consume loop "
+                "and ConsumerLock were removed in D2) -- use transport='streams'"
+            )
         return self._start_streams(max_events=max_count)

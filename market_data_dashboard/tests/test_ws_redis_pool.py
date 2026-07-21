@@ -8,12 +8,19 @@ Verifies:
   - _dispatch routes only to matching connections (channel + pattern)
   - Queue drop-oldest on overflow (maxsize=100)
   - MAX_POOL_THREADS == 1 (single shared reader thread)
+  - Reader-thread crash+restart re-subscribes every still-tracked channel
+    and pattern (regression test — found and fixed pre-merge: a fresh
+    pubsub object has zero subscriptions after a restart, but
+    _channel_to_conns/_pattern_to_conns still list every channel every
+    connected browser tab believes it's subscribed to. Without re-issuing
+    them, a transient Redis blip silently blacks out every tab's live data
+    until each one happens to disconnect and reconnect.)
 """
 from __future__ import annotations
 
 import asyncio
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from market_data_dashboard.ws_redis_pool import (
     SharedRedisPool,
@@ -213,6 +220,42 @@ class TestPoolDispatch(unittest.TestCase):
 
         self.assertFalse(q1.empty())
         self.assertTrue(q2.empty())
+
+
+class TestPoolReaderThreadRestart(unittest.TestCase):
+    """Regression: subscriptions must survive a reader-thread crash+restart."""
+
+    def test_restart_resubscribes_all_tracked_channels_and_patterns(self):
+        loop = asyncio.new_event_loop()
+        pool = SharedRedisPool()
+
+        # Simulate connections that registered and subscribed while an
+        # earlier reader thread was alive.
+        pool.register("conn-1", loop)
+        pool.register("conn-2", loop)
+        pool._thread = MagicMock(is_alive=MagicMock(return_value=True))
+        pool.subscribe("conn-1", "channel", "market:tick:BANKNIFTY:latest")
+        pool.subscribe("conn-2", "pattern", "market:ohlc:NIFTY:*")
+
+        # Drain the initial subscribe/psubscribe control messages so the
+        # assertion below only sees what the restart path re-queues.
+        while not pool._ctrl_q.empty():
+            pool._ctrl_q.get_nowait()
+
+        # Reader thread has now died.
+        pool._thread = MagicMock(is_alive=MagicMock(return_value=False))
+
+        with patch("market_data_dashboard.ws_redis_pool.redis.Redis"), \
+             patch("market_data_dashboard.ws_redis_pool.threading.Thread") as thread_cls:
+            thread_cls.return_value = MagicMock()
+            pool._ensure_thread()
+
+        queued = []
+        while not pool._ctrl_q.empty():
+            queued.append(pool._ctrl_q.get_nowait())
+
+        self.assertIn(("subscribe", "market:tick:BANKNIFTY:latest"), queued)
+        self.assertIn(("psubscribe", "market:ohlc:NIFTY:*"), queued)
 
 
 if __name__ == "__main__":

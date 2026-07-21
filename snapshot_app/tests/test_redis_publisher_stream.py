@@ -1,9 +1,12 @@
-"""Tests for A1 — RedisEventPublisher dual-write (Streams + pub/sub shadow).
+"""Tests for A1 — RedisEventPublisher (streams-only, verified pre-merge).
+
+ADR-003's original dual-write shadow design (XADD + PUBLISH, gated by
+SNAPSHOT_PUBSUB_SHADOW) was never implemented -- the shipped code commits
+straight to streams-only. There is no pub/sub fallback for snapshot
+delivery. See docs/architecture_evolution/PLAN.md's top-of-file update note.
 
 Verifies:
-  - Every publish XADDs to the correct stream
-  - SNAPSHOT_PUBSUB_SHADOW=true  → also PUBLISHes to pub/sub
-  - SNAPSHOT_PUBSUB_SHADOW=false → XADD only, no PUBLISH
+  - Every publish XADDs to the correct stream, and ONLY XADDs (no PUBLISH)
   - Stream name routing: live vs historical topic
   - MAXLEN=500 is passed to xadd
 """

@@ -3,6 +3,19 @@
 > Branch: `arch/streams-loose-coupling` (created, not yet active)
 > Status: **PLANNING** — no code changed
 
+> **UPDATE (post-hoc, verified before merge to main):** the branch shipped
+> further than this Sprint-1 plan describes and diverged from it in one
+> safety-relevant way — A1 and A2 committed straight to streams-only instead
+> of implementing the pub/sub shadow/rollback described below. Concretely:
+> `SNAPSHOT_PUBSUB_SHADOW` was never implemented (`RedisEventPublisher.publish()`
+> is XADD-only), and `RedisSnapshotConsumer.start()` no longer has a working
+> pub/sub code path at all (ConsumerLock and the pub/sub loop were deleted in
+> D2). The two **Rollback** lines under A1 and A2 below describe a mechanism
+> that does not exist in the final code — do not follow them during an
+> incident. There is no env-var rollback for snapshot delivery; a real
+> rollback means reverting the deployed image. (`start()` now raises loudly
+> if `transport="pubsub"` is requested, instead of silently ignoring it.)
+
 ## Epics Overview
 
 | Epic | Title | Value | Sprint |
