@@ -174,7 +174,16 @@ class _DhanQuoteClient:
         self._last_call = time.monotonic()
 
     def get_quotes(self, securities: List[Dict[str, str]]) -> Dict[str, Dict[str, Any]]:
-        """Returns {securityId: quote_dict}."""
+        """Returns {securityId: quote_dict}.
+
+        The quote endpoint's 1 req/sec limit is account-wide, shared with
+        ingestion_app/ingestion_app_nifty/execution_app*/seller_app* on the
+        same DHAN_ACCESS_TOKEN -- this collector's own internal throttle
+        can't see those other processes, so occasional 429s are expected
+        contention, not a real failure. Retry a couple times before giving
+        up on this poll cycle (2026-07-21: first deploy saw 0/44 polls
+        succeed over 5 real market minutes with no retry).
+        """
         payload: Dict[str, List[int]] = {}
         for sec in securities:
             seg = str(sec.get("exchangeSegment") or "")
@@ -183,19 +192,24 @@ class _DhanQuoteClient:
                 payload.setdefault(seg, []).append(int(sid))
         if not payload:
             return {}
-        self._throttle()
-        r = self._session.post(f"{_DHAN_BASE}/marketfeed/quote", json=payload, timeout=30)
-        if r.status_code == 429:
-            logger.warning("depth poll (dhan): rate-limited")
-            return {}
-        r.raise_for_status()
-        data = (r.json() or {}).get("data") or {}
-        out: Dict[str, Dict[str, Any]] = {}
-        for seg, by_sid in (data.items() if isinstance(data, dict) else []):
-            if isinstance(by_sid, dict):
-                for sid, quote in by_sid.items():
-                    out[sid] = quote
-        return out
+        for attempt in range(3):
+            self._throttle()
+            r = self._session.post(f"{_DHAN_BASE}/marketfeed/quote", json=payload, timeout=30)
+            if r.status_code == 429:
+                if attempt < 2:
+                    logger.debug("depth poll (dhan): rate-limited, retrying")
+                    continue
+                logger.warning("depth poll (dhan): rate-limited (gave up after retries)")
+                return {}
+            r.raise_for_status()
+            data = (r.json() or {}).get("data") or {}
+            out: Dict[str, Dict[str, Any]] = {}
+            for seg, by_sid in (data.items() if isinstance(data, dict) else []):
+                if isinstance(by_sid, dict):
+                    for sid, quote in by_sid.items():
+                        out[sid] = quote
+            return out
+        return {}
 
 
 def _classify_dhan_error(exc: Exception) -> str:
@@ -242,18 +256,35 @@ def _poll_once(
     ttl_sec: int,
     mongo_coll: Optional[Any],
     last_atm: Optional[int],
-) -> tuple[Optional[str], Optional[int]]:
-    """Returns (error_or_None, atm_used_or_None)."""
-    try:
-        resolved = _resolve_atm_and_legs(quote_client, scrips, underlying, strike_step)
-    except Exception as exc:
-        logger.warning("depth poll (dhan): ATM/leg resolution failed", exc_info=True)
-        return _classify_dhan_error(exc), last_atm
-    if resolved is None:
-        return None, last_atm
-    atm, ce_sid, pe_sid = resolved
-    if atm != last_atm:
-        logger.info("depth collector (dhan): ATM strike now %s (was %s)", atm, last_atm)
+    cached_legs: Optional[tuple[str, str]] = None,
+    force_resolve: bool = True,
+) -> tuple[Optional[str], Optional[int], Optional[tuple[str, str]]]:
+    """Returns (error_or_None, atm_used_or_None, legs_used_or_None).
+
+    ATM/leg resolution costs its own quote call (index spot) on top of the
+    CE/PE depth call. Re-resolving every poll doubles this collector's
+    contribution to the account-wide 1 req/sec quote budget for no real
+    benefit -- the ATM strike essentially never moves a full strike step
+    within one poll interval. Callers pass force_resolve=True only every
+    ATM_RESOLVE_INTERVAL_SEC (main()); otherwise the cached legs are reused
+    and only the depth (CE/PE) quote call is made.
+    """
+    atm = last_atm
+    ce_sid: Optional[str]
+    pe_sid: Optional[str]
+    if force_resolve or not cached_legs:
+        try:
+            resolved = _resolve_atm_and_legs(quote_client, scrips, underlying, strike_step)
+        except Exception as exc:
+            logger.warning("depth poll (dhan): ATM/leg resolution failed", exc_info=True)
+            return _classify_dhan_error(exc), last_atm, cached_legs
+        if resolved is None:
+            return None, last_atm, cached_legs
+        atm, ce_sid, pe_sid = resolved
+        if atm != last_atm:
+            logger.info("depth collector (dhan): ATM strike now %s (was %s)", atm, last_atm)
+    else:
+        ce_sid, pe_sid = cached_legs
 
     legs = [
         (f"{underlying}_ATM_CE", "NSE_FNO", ce_sid),
@@ -265,7 +296,7 @@ def _poll_once(
         )
     except Exception as exc:
         logger.warning("depth poll (dhan): leg quote failed", exc_info=True)
-        return _classify_dhan_error(exc), atm
+        return _classify_dhan_error(exc), atm, (ce_sid, pe_sid)
 
     # Instrument-namespaced keys (2026-07-21): matches
     # strategy_app/runtime/redis_depth_reader.py's STRATEGY_INSTRUMENT-based
@@ -278,9 +309,16 @@ def _poll_once(
     }
     mongo_batch: List[Dict[str, Any]] = []
     for label, _, sid in legs:
+        quote = quotes.get(sid)
+        if not quote:
+            # Rate-limited/empty for this leg (2026-07-21): skip the write
+            # rather than refresh the key's TTL with a null-valued record.
+            # RedisDepthReader.is_available requires real bid/ask, so a null
+            # record wasn't a false-signal risk -- but it silently masked
+            # true staleness and spammed mongo with empty rows.
+            continue
         side = "CE" if label.endswith("CE") else "PE"
         redis_key_suffix = side_keys[side]
-        quote = quotes.get(sid) or {}
         record = _build_record(label, quote)
         try:
             import json
@@ -300,7 +338,7 @@ def _poll_once(
         except Exception:
             logger.warning("depth poll (dhan): mongo insert failed", exc_info=True)
 
-    return None, atm
+    return None, atm, (ce_sid, pe_sid)
 
 
 def main() -> None:
@@ -311,6 +349,12 @@ def main() -> None:
     strike_step = _env_int("DEPTH_STRIKE_STEP", _DEFAULT_STRIKE_STEP.get(underlying, 100))
     poll_sec = max(2, _env_int("DEPTH_POLL_INTERVAL_SEC", _DEFAULT_POLL_SEC))
     ttl_sec = max(poll_sec * 2, _env_int("DEPTH_STALE_TTL_SEC", _DEFAULT_TTL_SEC))
+    # ATM/leg resolution costs an extra quote call (index spot) on top of the
+    # CE/PE depth call -- re-resolving every poll doubles this collector's
+    # share of the account-wide 1 req/sec quote budget. 30s is generous
+    # relative to a strike step (2026-07-21: added after 0/44 polls got
+    # through in the first 5 live market minutes at 2 calls/poll).
+    atm_resolve_sec = max(poll_sec, _env_int("DEPTH_ATM_RESOLVE_INTERVAL_SEC", 30))
     open_hm = _parse_hhmm(_env_str("DEPTH_MARKET_OPEN_IST", "09:15"), _DEFAULT_OPEN)
     close_hm = _parse_hhmm(_env_str("DEPTH_MARKET_CLOSE_IST", "15:35"), _DEFAULT_CLOSE)
     mongo_enabled = _env_bool("DEPTH_MONGO_ENABLED", True)
@@ -334,13 +378,19 @@ def main() -> None:
     )
 
     last_atm: Optional[int] = None
+    cached_legs: Optional[tuple[str, str]] = None
+    last_resolve_ts = 0.0
     while True:
         now = _now_ist()
         if _is_market_hours(now, open_hm, close_hm):
-            err, last_atm = _poll_once(
+            force_resolve = (time.monotonic() - last_resolve_ts) >= atm_resolve_sec
+            err, last_atm, cached_legs = _poll_once(
                 quote_client, scrips, underlying, strike_step,
                 redis_client, ttl_sec, mongo_coll, last_atm,
+                cached_legs=cached_legs, force_resolve=force_resolve,
             )
+            if force_resolve and cached_legs:
+                last_resolve_ts = time.monotonic()
             if err == "credential":
                 logger.warning(
                     "depth collector (dhan): credential error — token likely rotated; "
