@@ -15,7 +15,13 @@ from typing import Any, Callable, Mapping, Optional
 
 import redis
 
-from contracts_app import build_snapshot_event, parse_snapshot_event, redis_connection_kwargs, snapshot_topic
+from contracts_app import (
+    build_snapshot_event,
+    parse_snapshot_event,
+    redis_connection_kwargs,
+    snapshot_topic,
+    stream_name_for_topic,
+)
 from contracts_app.event_bus import EventBus
 
 from ..contracts import StrategyEngine, TradeSignal
@@ -183,7 +189,13 @@ class RedisSnapshotConsumer:
         self._transport = str(transport or env_transport or "streams").strip().lower()
         if self._transport not in {"pubsub", "streams"}:
             raise ValueError("transport must be 'pubsub' or 'streams'")
-        _default_stream = "stream:snapshots:live" if self._transport == "streams" else ""
+        # Instrument-aware default (2026-07-22): must derive from self.topic,
+        # the SAME instrument-scoped string snapshot_app's publisher derives
+        # its XADD target from -- a flat "stream:snapshots:live" default here
+        # would make every instrument's live consumer attach to the SAME
+        # stream regardless of STRATEGY_INSTRUMENT, silently mixing NIFTY and
+        # BANKNIFTY snapshots the moment both ran on streams transport at once.
+        _default_stream = stream_name_for_topic(self.topic) if self._transport == "streams" else ""
         self._stream_name = str(stream_name or os.getenv("STRATEGY_STREAM_NAME") or _default_stream).strip()
         self._stream_group = str(stream_group or STREAM_GROUP_NAME).strip() or STREAM_GROUP_NAME
         self._stream_consumer_name = str(stream_consumer_name or f"consumer-{socket.gethostname()}").strip()

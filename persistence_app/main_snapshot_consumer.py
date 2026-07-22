@@ -13,7 +13,14 @@ from typing import Iterable, Optional
 
 import redis
 
-from contracts_app import configure_ist_logging, find_matching_python_processes, isoformat_ist, redis_connection_kwargs, snapshot_topic
+from contracts_app import (
+    configure_ist_logging,
+    find_matching_python_processes,
+    isoformat_ist,
+    redis_connection_kwargs,
+    snapshot_topic,
+    stream_name_for_topic,
+)
 from contracts_app.event_bus import RedisEventBus
 
 from .health import evaluate as evaluate_health
@@ -69,7 +76,6 @@ def _launch_detached(*, cmd: list[str], run_dir: str) -> dict:
     return meta
 
 
-_SNAPSHOT_STREAM = os.getenv("PERSISTENCE_SNAPSHOT_STREAM") or "stream:snapshots:live"
 _SNAPSHOT_GROUP = "persistence-snapshots-grp-1"
 _SNAPSHOT_CONSUMER = "persistence-consumer-1"
 
@@ -105,6 +111,20 @@ def _validate_rollout_context(
     return None
 
 
+def _snapshot_stream_for(topic: str) -> str:
+    """Instrument-aware stream name for this consumer's target topic.
+
+    An explicit PERSISTENCE_SNAPSHOT_STREAM env override always wins; else
+    derive from `topic` (the same instrument-scoped string snapshot_app's
+    publisher derives its XADD target from). A flat hardcoded default here
+    previously made every instrument's persistence consumer read from the
+    SAME stream regardless of STRATEGY_INSTRUMENT -- fixed 2026-07-22
+    alongside the matching bug in strategy_app's consumer and snapshot_app's
+    publisher.
+    """
+    return str(os.getenv("PERSISTENCE_SNAPSHOT_STREAM") or "").strip() or stream_name_for_topic(topic)
+
+
 def run_loop(*, topic: str, health_log_interval_sec: float, rollout_context: Optional[dict[str, object]] = None) -> int:
     """Consume snapshots from Redis Stream (XREADGROUP) and persist to Mongo.
 
@@ -114,7 +134,7 @@ def run_loop(*, topic: str, health_log_interval_sec: float, rollout_context: Opt
     """
     writer = SnapshotMongoWriter()
     bus = RedisEventBus()
-    stream = _SNAPSHOT_STREAM
+    stream = _snapshot_stream_for(topic)
     group = _SNAPSHOT_GROUP
     consumer = _SNAPSHOT_CONSUMER
 

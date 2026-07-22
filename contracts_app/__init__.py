@@ -26,6 +26,7 @@ from .redis_keys import get_redis_key, get_redis_pattern
 from .topics import (
     historical_snapshot_topic,
     snapshot_topic,
+    stream_name_for_topic,
     strategy_decision_trace_topic,
     strategy_position_topic,
     strategy_vote_topic,
@@ -98,6 +99,7 @@ from .strategy_decision_contract import (
 __all__ = [
     "snapshot_topic",
     "historical_snapshot_topic",
+    "stream_name_for_topic",
     "strategy_vote_topic",
     "trade_signal_topic",
     "strategy_position_topic",

@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import redis
 
-from contracts_app import redis_connection_kwargs
+from contracts_app import redis_connection_kwargs, stream_name_for_topic
 from .publisher import EventPublisher
 
 logger = logging.getLogger(__name__)
@@ -17,12 +17,6 @@ def _redis_client() -> redis.Redis:
     return redis.Redis(**redis_connection_kwargs(decode_responses=True))
 
 
-def _stream_name_for_topic(topic: str) -> str:
-    if "historical" in topic:
-        return "stream:snapshots:historical"
-    return "stream:snapshots:live"
-
-
 class RedisEventPublisher(EventPublisher):
     def __init__(self, client: Optional[redis.Redis] = None) -> None:
         self._client = client or _redis_client()
@@ -31,7 +25,7 @@ class RedisEventPublisher(EventPublisher):
 
     def publish(self, *, topic: str, payload: dict[str, Any]) -> None:
         serialized = json.dumps(payload or {}, ensure_ascii=False, default=str)
-        stream_name = _stream_name_for_topic(str(topic))
+        stream_name = stream_name_for_topic(str(topic))
         try:
             self._client.xadd(
                 stream_name,

@@ -53,10 +53,22 @@ def _resolve_topic(env_names: list[str], default_topic: str) -> str:
 # Transport classification (arch/streams-loose-coupling)
 #
 # DURABLE (Redis Streams, stream: prefix):
-#   stream:snapshots:live          — live market snapshots (snapshot_app → strategy_app, persistence_app)
-#   stream:snapshots:historical    — OOS/replay snapshots
+#   stream:snapshots:live              — primary instrument (BANKNIFTY) live snapshots
+#   stream:snapshots:{instr}:live      — secondary instrument (e.g. NIFTY) live snapshots
+#   stream:snapshots:historical        — primary instrument OOS/replay snapshots
+#   stream:snapshots:{instr}:historical — secondary instrument OOS/replay snapshots
 #   stream:eval:commands           — evaluation run commands (dashboard → orchestrator)
 #   stream:eval:progress:{run_id}  — per-run progress events (orchestrator → dashboard history)
+#
+#   Always derive these via stream_name_for_topic(topic) below, from the SAME
+#   instrument-scoped topic string snapshot_topic()/historical_snapshot_topic()
+#   already produce -- never hardcode "stream:snapshots:live" directly. Found
+#   and fixed 2026-07-22: snapshot_app's publisher, strategy_app's consumer,
+#   and persistence_app's consumer each independently hardcoded that one
+#   string regardless of instrument, so a NIFTY container's live stream would
+#   have silently collided with BANKNIFTY's the moment both ran on streams
+#   transport at once -- caught only because NIFTY was deployed first, alone,
+#   as a rehearsal before BankNifty (which carries real money).
 #
 # DISPLAY_ONLY (Redis Pub/Sub, intentionally ephemeral — do NOT migrate to Streams):
 #   market:ohlc:{symbol}:{tf}      — real-time OHLC bars for charting
@@ -90,6 +102,45 @@ def historical_snapshot_topic() -> str:
     if explicit:
         return explicit
     return f"{snapshot_topic()}:historical"
+
+
+def stream_name_for_topic(topic: str) -> str:
+    """Derive the durable Streams name from a pub/sub-style snapshot topic.
+
+    Producer (snapshot_app's RedisEventPublisher) and consumers (strategy_app's
+    RedisSnapshotConsumer, persistence_app's main_snapshot_consumer) must derive
+    the SAME stream name from the SAME topic string, or different instruments
+    silently share one stream. `topic` is whatever snapshot_topic()/
+    historical_snapshot_topic() already produced (instrument-scoped via
+    STRATEGY_INSTRUMENT or an explicit SNAPSHOT_V1_TOPIC/LIVE_TOPIC override),
+    so no separate instrument lookup is needed here -- just re-shape the string.
+
+        market:snapshot:v1                  -> stream:snapshots:live
+        market:nifty:snapshot:v1            -> stream:snapshots:nifty:live
+        market:snapshot:v1:historical       -> stream:snapshots:historical
+        market:nifty:snapshot:v1:historical -> stream:snapshots:nifty:historical
+
+    Falls back to "stream:snapshots:live" for any topic that doesn't match the
+    expected market:[instr:]snapshot:v1[:historical] shape (e.g. sim's
+    stream:*:sim:{run_id} names, which are already Streams-native and should
+    never reach this function, but a safe default beats a crash).
+    """
+    parts = [p for p in str(topic or "").strip().split(":") if p]
+    is_historical = "historical" in parts
+    instr: Optional[str] = None
+    if len(parts) >= 3 and parts[0] == "market":
+        if parts[1] == "snapshot":
+            instr = None
+        elif len(parts) >= 4 and parts[2] == "snapshot":
+            instr = parts[1]
+        else:
+            return "stream:snapshots:live"
+    else:
+        return "stream:snapshots:live"
+    suffix = "historical" if is_historical else "live"
+    if instr:
+        return f"stream:snapshots:{instr}:{suffix}"
+    return f"stream:snapshots:{suffix}"
 
 
 def strategy_vote_topic() -> str:

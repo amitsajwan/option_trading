@@ -31,6 +31,19 @@ class StreamsDefaultTests(unittest.TestCase):
             consumer = self._make_consumer()
         self.assertEqual(consumer._stream_name, "stream:snapshots:live")
 
+    def test_nifty_default_stream_name_is_instrument_scoped(self) -> None:
+        """Regression (2026-07-22): a flat 'stream:snapshots:live' default made
+        every instrument's live consumer attach to the SAME stream regardless
+        of STRATEGY_INSTRUMENT, silently mixing NIFTY and BANKNIFTY snapshots
+        the moment both ran on streams transport at once. Caught during a
+        NIFTY rehearsal deploy before it ever reached the real-money BankNifty
+        container."""
+        with patch.dict(os.environ, {"STRATEGY_INSTRUMENT": "NIFTY"}, clear=False):
+            os.environ.pop("STRATEGY_CONSUMER_TRANSPORT", None)
+            os.environ.pop("STRATEGY_STREAM_NAME", None)
+            consumer = self._make_consumer()
+        self.assertEqual(consumer._stream_name, "stream:snapshots:nifty:live")
+
     def test_no_consumer_lock_attribute(self) -> None:
         """D2: ConsumerLock removed — _consumer_lock must not exist on consumer."""
         consumer = self._make_consumer()

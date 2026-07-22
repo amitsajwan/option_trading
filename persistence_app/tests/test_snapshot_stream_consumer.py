@@ -12,7 +12,7 @@ import threading
 import unittest
 from unittest.mock import MagicMock, call, patch
 
-from persistence_app.main_snapshot_consumer import run_loop, _SNAPSHOT_STREAM, _SNAPSHOT_GROUP
+from persistence_app.main_snapshot_consumer import run_loop, _snapshot_stream_for, _SNAPSHOT_GROUP
 
 
 def _payload(snapshot_id: str) -> str:
@@ -64,7 +64,7 @@ class TestPendingMessagesRedeliveredOnRestart(unittest.TestCase):
 
         with patch("persistence_app.main_snapshot_consumer.RedisEventBus", return_value=bus), \
              patch("persistence_app.main_snapshot_consumer.SnapshotMongoWriter", return_value=writer):
-            run_loop(topic="stream:snapshots:live", health_log_interval_sec=0)
+            run_loop(topic="market:snapshot:v1", health_log_interval_sec=0)
 
         # PEL messages were acked
         self.assertEqual(bus.acknowledge.call_count, 2)
@@ -80,10 +80,12 @@ class TestPendingMessagesRedeliveredOnRestart(unittest.TestCase):
 
         with patch("persistence_app.main_snapshot_consumer.RedisEventBus", return_value=bus), \
              patch("persistence_app.main_snapshot_consumer.SnapshotMongoWriter", return_value=writer):
-            run_loop(topic="stream:snapshots:live", health_log_interval_sec=0)
+            run_loop(topic="market:snapshot:v1", health_log_interval_sec=0)
 
         # New message was acked
-        bus.acknowledge.assert_called_once_with(_SNAPSHOT_STREAM, _SNAPSHOT_GROUP, "1-1")
+        bus.acknowledge.assert_called_once_with(
+            _snapshot_stream_for("market:snapshot:v1"), _SNAPSHOT_GROUP, "1-1"
+        )
         writer.write_snapshot_event.assert_called_once()
 
     def test_no_pubsub_subscribe_in_run_loop(self):
@@ -96,7 +98,7 @@ class TestPendingMessagesRedeliveredOnRestart(unittest.TestCase):
 
         with patch("persistence_app.main_snapshot_consumer.RedisEventBus", return_value=bus), \
              patch("persistence_app.main_snapshot_consumer.SnapshotMongoWriter", return_value=writer):
-            run_loop(topic="stream:snapshots:live", health_log_interval_sec=0)
+            run_loop(topic="market:snapshot:v1", health_log_interval_sec=0)
 
         # bus is a RedisEventBus mock — it must NEVER have .subscribe() called
         bus.subscribe = MagicMock()
@@ -111,9 +113,27 @@ class TestPendingMessagesRedeliveredOnRestart(unittest.TestCase):
 
         with patch("persistence_app.main_snapshot_consumer.RedisEventBus", return_value=bus), \
              patch("persistence_app.main_snapshot_consumer.SnapshotMongoWriter", return_value=writer):
-            run_loop(topic="stream:snapshots:live", health_log_interval_sec=0)
+            run_loop(topic="market:snapshot:v1", health_log_interval_sec=0)
 
-        bus.ensure_group.assert_called_once_with(_SNAPSHOT_STREAM, _SNAPSHOT_GROUP)
+        bus.ensure_group.assert_called_once_with(
+            _snapshot_stream_for("market:snapshot:v1"), _SNAPSHOT_GROUP
+        )
+
+    def test_nifty_topic_uses_instrument_scoped_stream(self):
+        """Regression (2026-07-22): a flat hardcoded stream name made every
+        instrument's persistence consumer read from the SAME stream
+        regardless of topic, silently mixing NIFTY and BANKNIFTY snapshots
+        the moment both ran on streams transport at once."""
+        bus = MagicMock()
+        bus.ensure_group.return_value = None
+        bus.consume.side_effect = KeyboardInterrupt
+        writer = MagicMock()
+
+        with patch("persistence_app.main_snapshot_consumer.RedisEventBus", return_value=bus), \
+             patch("persistence_app.main_snapshot_consumer.SnapshotMongoWriter", return_value=writer):
+            run_loop(topic="market:nifty:snapshot:v1", health_log_interval_sec=0)
+
+        bus.ensure_group.assert_called_once_with("stream:snapshots:nifty:live", _SNAPSHOT_GROUP)
 
 
 if __name__ == "__main__":

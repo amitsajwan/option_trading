@@ -17,10 +17,10 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from contracts_app import stream_name_for_topic
 from snapshot_app.redis_publisher import (
     RedisEventPublisher,
     _STREAM_MAXLEN,
-    _stream_name_for_topic,
 )
 
 
@@ -31,13 +31,25 @@ def _make_publisher() -> tuple[RedisEventPublisher, MagicMock]:
 
 class TestStreamNameRouting:
     def test_live_topic_maps_to_live_stream(self):
-        assert _stream_name_for_topic("market:snapshot:v1") == "stream:snapshots:live"
+        assert stream_name_for_topic("market:snapshot:v1") == "stream:snapshots:live"
 
     def test_historical_topic_maps_to_historical_stream(self):
-        assert _stream_name_for_topic("market:snapshot:v1:historical") == "stream:snapshots:historical"
+        assert stream_name_for_topic("market:snapshot:v1:historical") == "stream:snapshots:historical"
 
-    def test_any_historical_substring_routes_correctly(self):
-        assert _stream_name_for_topic("market:snapshot:historical:test") == "stream:snapshots:historical"
+    def test_nifty_live_topic_maps_to_nifty_live_stream(self):
+        """Regression: NIFTY and BANKNIFTY must never share a stream name."""
+        assert stream_name_for_topic("market:nifty:snapshot:v1") == "stream:snapshots:nifty:live"
+
+    def test_nifty_historical_topic_maps_to_nifty_historical_stream(self):
+        assert (
+            stream_name_for_topic("market:nifty:snapshot:v1:historical")
+            == "stream:snapshots:nifty:historical"
+        )
+
+    def test_nifty_and_banknifty_streams_never_collide(self):
+        assert stream_name_for_topic("market:snapshot:v1") != stream_name_for_topic(
+            "market:nifty:snapshot:v1"
+        )
 
 
 class TestStreamOnlyPublish:
