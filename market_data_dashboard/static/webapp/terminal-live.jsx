@@ -1920,6 +1920,141 @@ function MobileBottomSheet({ open, title, onClose, children }) {
 }
 
 // ── MobileLiveShell — phone-first layout for LiveMonitorDark ─────────────
+// Shows the most recent bar's decision in plain terms: what happened, the
+// probabilities behind it, the direction/regime context, and (when present)
+// the composite+depth shadow score -- an observational signal that does not
+// drive real orders. Built 2026-07-22 so "why wasn't a trade taken" and
+// "is depth actually being computed" are answerable at a glance instead of
+// requiring a tab click + trace read.
+function LiveDecisionPanel({ row, bf }) {
+  if (!row) {
+    return (
+      <div style={{padding:'10px 12px', fontFamily:'var(--f-mono)', fontSize:10.5, color:'var(--fg-4)'}}>
+        Waiting for first decision of the session…
+      </div>
+    );
+  }
+
+  const outcome = row.outcome || 'unknown';
+  const isTaken = outcome === 'entry_taken' || outcome === 'executed';
+  const isHold = outcome === 'hold';
+  const verdictCls = isTaken ? 'pos' : isHold ? 'warn' : 'neg';
+  const verdictLabel = isTaken ? 'ENTERED' : isHold ? 'HOLD'
+    : outcome === 'blocked' ? 'BLOCKED' : outcome.toUpperCase().replace(/_/g, ' ');
+  const reasonText = row.message || row.reason_code || row.blocker_gate || (isTaken ? 'entry criteria met' : '—');
+  const verdictColor = verdictCls === 'pos' ? 'var(--pos)' : verdictCls === 'warn' ? 'var(--warn)' : 'var(--neg)';
+  const verdictBg = verdictCls === 'pos' ? 'rgba(25,195,125,0.12)' : verdictCls === 'warn' ? 'rgba(245,165,36,0.12)' : 'rgba(242,60,74,0.12)';
+  const verdictBorder = verdictCls === 'pos' ? 'rgba(25,195,125,0.35)' : verdictCls === 'warn' ? 'rgba(245,165,36,0.35)' : 'rgba(242,60,74,0.35)';
+
+  const em = row.entry_model || {};
+  let models = Array.isArray(em.entry_models) ? em.entry_models : [];
+  if (!models.length && row.metrics?.entry_prob != null) {
+    models = [{ label: 'entry', prob: row.metrics.entry_prob, threshold: null, fired: isTaken }];
+  }
+
+  const dir = row.direction || {};
+  const shadow = row.composite_depth_shadow;
+  const shadowDir = row.metrics?.shadow_dir;
+  const shadowScore = row.metrics?.shadow_score;
+  const hasShadow = !!(shadow || shadowDir);
+
+  const chips = [];
+  if (row.regime) chips.push({ k: 'regime', v: row.regime });
+  if (dir.mode) chips.push({ k: 'dir mode', v: dir.mode });
+  if (dir.chosen) chips.push({ k: 'dir', v: dir.chosen, cls: dir.chosen === 'CE' ? 'pos' : dir.chosen === 'PE' ? 'neg' : null });
+  if (dir.tier) chips.push({ k: 'tier', v: dir.tier });
+  if (dir.grade) chips.push({ k: 'grade', v: dir.grade });
+
+  return (
+    <div style={{
+      margin: '8px 12px', border: '1px solid var(--bg-4)', borderRadius: 'var(--r-3)',
+      background: 'var(--bg-1)', overflow: 'hidden',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px',
+        borderBottom: '1px solid var(--bg-3)',
+      }}>
+        <span style={{
+          fontFamily: 'var(--f-mono)', fontSize: 9.5, fontWeight: 800, letterSpacing: '0.08em',
+          padding: '2px 6px', borderRadius: 'var(--r-2)', flexShrink: 0,
+          color: verdictColor, background: verdictBg, border: `1px solid ${verdictBorder}`,
+        }}>{verdictLabel}</span>
+        <span style={{ fontFamily: 'var(--f-sans)', fontSize: 11, color: 'var(--fg-2)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {reasonText}
+        </span>
+        <span style={{ fontFamily: 'var(--f-mono)', fontSize: 9.5, color: 'var(--fg-4)', flexShrink: 0 }}>{row.time}</span>
+      </div>
+
+      {models.length > 0 && (
+        <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6, borderBottom: (chips.length || hasShadow) ? '1px solid var(--bg-3)' : 'none' }}>
+          {models.map((m, i) => {
+            const prob = m.prob != null ? Number(m.prob) : null;
+            const thr = m.threshold != null ? Number(m.threshold) : null;
+            const pct = prob != null ? Math.min(100, Math.max(0, prob * 100)) : 0;
+            const thrPct = thr != null ? Math.min(100, Math.max(0, thr * 100)) : null;
+            const fired = !!m.fired;
+            return (
+              <div key={m.label || i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontFamily: 'var(--f-mono)', fontSize: 9.5, color: 'var(--fg-3)', width: 34, flexShrink: 0 }}>{m.label || `m${i + 1}`}</span>
+                <div style={{ position: 'relative', flex: 1, height: 6, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{
+                    position: 'absolute', left: 0, top: 0, bottom: 0, width: `${pct}%`,
+                    background: fired ? 'var(--pos)' : 'var(--fg-4)', borderRadius: 3,
+                  }} />
+                  {thrPct != null && (
+                    <div style={{ position: 'absolute', left: `${thrPct}%`, top: -1, bottom: -1, width: 2, background: 'var(--accent)' }} />
+                  )}
+                </div>
+                <span style={{ fontFamily: 'var(--f-mono)', fontSize: 9.5, color: fired ? 'var(--pos)' : 'var(--fg-3)', width: 34, textAlign: 'right', flexShrink: 0 }}>
+                  {prob != null ? `${Math.round(prob * 100)}%` : '—'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {chips.length > 0 && (
+        <div style={{ padding: '7px 10px', display: 'flex', flexWrap: 'wrap', gap: 6, borderBottom: hasShadow ? '1px solid var(--bg-3)' : 'none' }}>
+          {chips.map((c, i) => (
+            <span key={i} style={{
+              fontFamily: 'var(--f-mono)', fontSize: 9,
+              color: c.cls === 'pos' ? 'var(--pos)' : c.cls === 'neg' ? 'var(--neg)' : 'var(--fg-3)',
+              background: 'var(--bg-2)', border: '1px solid var(--bg-4)', borderRadius: 'var(--r-2)', padding: '2px 6px',
+            }}>
+              <span style={{ color: 'var(--fg-4)' }}>{c.k}</span> {c.v}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {hasShadow && (
+        <div style={{ padding: '7px 10px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', borderTop: '1px dashed var(--bg-4)', background: 'rgba(56,189,248,0.04)' }}>
+          <span style={{ fontFamily: 'var(--f-mono)', fontSize: 8.5, color: 'var(--info)', letterSpacing: '0.06em', fontWeight: 700, flexShrink: 0 }}>SHADOW</span>
+          {shadow ? (
+            <>
+              <span style={{ fontFamily: 'var(--f-mono)', fontSize: 9.5, color: shadow.dir === 'CE' ? 'var(--pos)' : shadow.dir === 'PE' ? 'var(--neg)' : 'var(--fg-3)' }}>
+                composite+depth → {shadow.dir || '—'}
+              </span>
+              {shadow.margin != null && <span style={{ fontFamily: 'var(--f-mono)', fontSize: 9, color: 'var(--fg-4)' }}>margin {Number(shadow.margin).toFixed(2)}</span>}
+              {shadow.sources && Object.keys(shadow.sources).length > 0 && (
+                <span style={{ fontFamily: 'var(--f-mono)', fontSize: 8.5, color: 'var(--fg-4)' }}>
+                  {Object.entries(shadow.sources).map(([k, v]) => `${k}:${v}`).join('  ')}
+                </span>
+              )}
+            </>
+          ) : (
+            <span style={{ fontFamily: 'var(--f-mono)', fontSize: 9.5, color: 'var(--fg-3)' }}>
+              {shadowDir}{shadowScore != null ? ` (${Number(shadowScore).toFixed(2)})` : ''}
+            </span>
+          )}
+          <span style={{ fontFamily: 'var(--f-mono)', fontSize: 7.5, color: 'var(--fg-4)', marginLeft: 'auto' }}>not live</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MobileLiveShell({
   session, candles, upToIdx, flashIdx, flashId,
   trades, signals, strategies,
@@ -1992,11 +2127,20 @@ function MobileLiveShell({
   const bf  = blockerFunnel || {};
   const tradesDone = (bf.outcomes?.entry_taken || 0) + (bf.outcomes?.executed || 0);
   const maxTrades  = rc.risk_max_session_trades ?? null;
-  // Last entry prob from decision timeline (most recent minute)
-  const lastProb = (() => {
+  // Last entry prob from decision timeline (most recent minute).
+  // metrics.entry_prob is only ever populated by engine modes that write
+  // straight to summary_metrics; the deterministic engine (BANKNIFTY's real
+  // live path) puts its per-model breakdown in entry_model instead, so this
+  // fell back to null there -- silently. Confirmed against real live traces
+  // 2026-07-22. Fall back to entry_model.entry_prob so this actually shows
+  // a value on the account that matters most.
+  const latestRow = (() => {
     const rows = timeline?.decisions;
-    if (!Array.isArray(rows) || !rows.length) return null;
-    const ep = rows[0]?.metrics?.entry_prob;
+    return Array.isArray(rows) && rows.length ? rows[0] : null;
+  })();
+  const lastProb = (() => {
+    if (!latestRow) return null;
+    const ep = latestRow.metrics?.entry_prob ?? latestRow.entry_model?.entry_prob;
     return ep != null ? Math.round(Number(ep) * 100) : null;
   })();
 
@@ -2088,6 +2232,8 @@ function MobileLiveShell({
 
           {/* ── Tape tab ──────────────────────────────────────────────────── */}
           <div className={tab === 'tape' ? '' : 'm-tab-hidden'}>
+            {/* Latest-bar decision detail: verdict, probabilities, direction/regime context, shadow score */}
+            <LiveDecisionPanel row={latestRow} bf={bf} />
             {/* Gate funnel strip — visible when no trades yet or always */}
             {bf.outcomes && (() => {
               const o = bf.outcomes;

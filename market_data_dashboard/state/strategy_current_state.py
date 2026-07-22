@@ -667,10 +667,28 @@ def read_decision_timeline(
             "recipe_prob":    0.0,
             "recipe_margin":  0.0,
             "direction_up_prob": 0.0,
+            "shadow_score":   -10.0,
+            "shadow_dir":     "PE",
+            "shadow_basis":   "multi_signal_pe(score=-10.0:...)",
           },
           "model_diagnostics": {
             "stage1": {"input_hash": "...", "non_null_count": 42, "output_prob": 0.56},
             "stage2": {"input_hash": "...", "non_null_count": 67, "output_prob": 0.52},
+          },
+          "entry_model": {          # deterministic engine only; None otherwise
+            "entry_prob": 0.475, "threshold": 0.55, "fired": False,
+            "entry_models": [{"label": "m1", "prob": 0.475, "threshold": 0.55, "passed": False}],
+          },
+          "direction": {             # None if the direction resolver never ran this bar
+            "mode": "direction_ml", "chosen": None, "source": None,
+            "ml_ce_prob": 0.62, "margin": None,
+            "evidence": {"bull_score": None, "bear_score": None},
+            "grade": None, "tier": None, "grade_evaluated": False,
+          },
+          "composite_depth_shadow": {   # None on bars/instruments that don't run it
+            "dir": "CE", "source": "composite(depth_ce:bid_dom->CE)",
+            "ce_score": 1.2, "pe_score": 0.1, "margin": 1.1,
+            "sources": {"depth_ce:bid_dom->CE": 1.1, "momentum_5m:CE": 1.0},
           },
         }
 
@@ -750,6 +768,16 @@ def read_decision_timeline(
             sm = t.get("summary_metrics") or {}
             rc = t.get("regime_context") or {}
             md = t.get("model_diagnostics") if isinstance(t.get("model_diagnostics"), dict) else {}
+            # shadow_dir/shadow_basis (2026-07-22): these used to be read from
+            # summary_metrics, but the writer (deterministic_rule_engine.py)
+            # only ever put shadow_score there -- dir/basis are strings, and
+            # summary_metrics goes through compact_metrics()'s float-only
+            # sanitizer, so sm.get("shadow_dir"/"shadow_basis") was always
+            # None. Confirmed against real live traces before fixing. Now
+            # written to its own trace["shadow_direction"] key; sm.get(...)
+            # kept as a fallback for any older/replay trace file written
+            # before this fix.
+            shadow_direction = t.get("shadow_direction") or {}
             decisions.append({
                 "time": hhmm,
                 "snapshot_id": t.get("snapshot_id"),
@@ -763,11 +791,29 @@ def read_decision_timeline(
                     "recipe_prob": sm.get("recipe_prob"),
                     "recipe_margin": sm.get("recipe_margin"),
                     "direction_up_prob": sm.get("direction_up_prob"),
-                    "shadow_score": sm.get("shadow_score"),
-                    "shadow_dir": sm.get("shadow_dir"),
-                    "shadow_basis": sm.get("shadow_basis"),
+                    "shadow_score": shadow_direction.get("score", sm.get("shadow_score")),
+                    "shadow_dir": shadow_direction.get("dir", sm.get("shadow_dir")),
+                    "shadow_basis": shadow_direction.get("basis", sm.get("shadow_basis")),
                 },
                 "model_diagnostics": md,
+                # entry_model: the deterministic engine's real per-model
+                # breakdown (e.g. BANKNIFTY's m1/m2 with individual gates) --
+                # richer than a single entry_prob scalar when >1 model is
+                # configured with an OR-combine. Passed through as-written.
+                "entry_model": t.get("entry_model") if isinstance(t.get("entry_model"), dict) else None,
+                # direction: mode/chosen/source/margin/evidence/grade -- the
+                # REAL decision's direction reasoning (see
+                # DeterministicRuleEngine.evaluate()'s trace["direction"]).
+                "direction": t.get("direction") if isinstance(t.get("direction"), dict) else None,
+                # composite_depth_shadow (2026-07-22): what composite scoring
+                # incl. live depth (weight 1.1) would have said this bar --
+                # observation only, never drives real orders. None on bars
+                # from before this feature shipped or on instruments/engine
+                # modes that don't run it.
+                "composite_depth_shadow": (
+                    t.get("composite_depth_shadow")
+                    if isinstance(t.get("composite_depth_shadow"), dict) else None
+                ),
             })
 
     if collapse:

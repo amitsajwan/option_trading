@@ -523,6 +523,97 @@ def test_decision_timeline_limit_and_offset(tmp_path: Path):
     assert [d["time"] for d in out["decisions"]] == ["09:19", "09:20", "09:21"]
 
 
+def test_decision_timeline_shadow_direction_read_from_new_key(tmp_path: Path):
+    """Regression (2026-07-22): shadow_dir/shadow_basis used to be read from
+    summary_metrics, where the writer never actually put them (strings
+    dropped by compact_metrics' float-only sanitizer -- confirmed against
+    real live traces). Now written to trace["shadow_direction"]."""
+    traces = [
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:15:00+05:30",
+         "final_outcome": "blocked", "flow_gates": [],
+         "summary_metrics": {"shadow_score": -10.0},  # old location: no dir/basis here
+         "shadow_direction": {"score": -10.0, "dir": "PE", "basis": "multi_signal_pe(score=-10.0:vwap_below)"}},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path)
+    m = out["decisions"][0]["metrics"]
+    assert m["shadow_dir"] == "PE"
+    assert m["shadow_basis"] == "multi_signal_pe(score=-10.0:vwap_below)"
+    assert m["shadow_score"] == -10.0
+
+
+def test_decision_timeline_shadow_direction_falls_back_to_summary_metrics(tmp_path: Path):
+    """Older/replay trace files written before the fix still degrade gracefully."""
+    traces = [
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:15:00+05:30",
+         "final_outcome": "blocked", "flow_gates": [],
+         "summary_metrics": {"shadow_score": 3.0, "shadow_dir": "CE", "shadow_basis": "legacy"}},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path)
+    m = out["decisions"][0]["metrics"]
+    assert m["shadow_dir"] == "CE"
+    assert m["shadow_basis"] == "legacy"
+
+
+def test_decision_timeline_entry_model_passed_through(tmp_path: Path):
+    entry_model = {
+        "entry_prob": 0.475, "threshold": 0.55, "fired": False,
+        "entry_models": [{"label": "m1", "prob": 0.475, "threshold": 0.55, "passed": False}],
+    }
+    traces = [
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:15:00+05:30",
+         "final_outcome": "blocked", "flow_gates": [], "entry_model": entry_model},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path)
+    assert out["decisions"][0]["entry_model"] == entry_model
+
+
+def test_decision_timeline_entry_model_none_when_absent(tmp_path: Path):
+    traces = [
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:15:00+05:30",
+         "final_outcome": "blocked", "flow_gates": []},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path)
+    assert out["decisions"][0]["entry_model"] is None
+
+
+def test_decision_timeline_composite_depth_shadow_passed_through(tmp_path: Path):
+    shadow = {
+        "dir": "CE", "source": "composite(depth_ce:bid_dom->CE)",
+        "ce_score": 1.2, "pe_score": 0.1, "margin": 1.1,
+        "sources": {"depth_ce:bid_dom->CE": 1.1},
+    }
+    traces = [
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:15:00+05:30",
+         "final_outcome": "blocked", "flow_gates": [], "composite_depth_shadow": shadow},
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:16:00+05:30",
+         "final_outcome": "blocked", "flow_gates": [], "composite_depth_shadow": None},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path)
+    assert out["decisions"][0]["composite_depth_shadow"] == shadow
+    assert out["decisions"][1]["composite_depth_shadow"] is None
+
+
+def test_decision_timeline_direction_passed_through(tmp_path: Path):
+    direction = {
+        "mode": "direction_ml", "chosen": None, "source": None,
+        "ml_ce_prob": 0.62, "margin": None,
+        "evidence": {"bull_score": None, "bear_score": None},
+        "grade": None, "tier": None, "grade_evaluated": False,
+    }
+    traces = [
+        {"trade_date_ist": "2024-10-07", "timestamp": "2024-10-07T09:15:00+05:30",
+         "final_outcome": "blocked", "flow_gates": [], "direction": direction},
+    ]
+    _write_traces(tmp_path / "decision_traces.jsonl", traces)
+    out = read_decision_timeline(mode="replay", date="2024-10-07", run_dir=tmp_path)
+    assert out["decisions"][0]["direction"] == direction
+
+
 def test_mode_alias_replay_and_historical_both_map(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("STRATEGY_RUN_DIR_HISTORICAL", str(tmp_path / "hist"))
     monkeypatch.setenv("STRATEGY_RUN_DIR_LIVE", str(tmp_path / "live"))
