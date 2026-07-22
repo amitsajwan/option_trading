@@ -2347,6 +2347,33 @@ class DeterministicRuleEngine(StrategyEngine):
             return (Direction.CE if float(r5) > 0 else Direction.PE), f"tie_r5m({basis})", 0.0
         return Direction.PE, f"default_pe({basis})", 0.0
 
+    def _composite_depth_shadow_from_snapshot(
+        self, snap: SnapshotAccessor
+    ) -> Optional["EntryDirectionResult"]:
+        """SHADOW ONLY (2026-07-22): what would composite scoring (incl. live
+        depth, weight 1.1 -- the heaviest input) have said on THIS bar.
+
+        Runs unconditionally, every bar, regardless of ML_ENTRY_DIRECTION_MODE
+        or whether the entry-probability gate ever fires -- mirrors
+        _shadow_direction_from_snapshot's placement/discipline exactly. This
+        matters because real direction resolution for direction_ml-mode
+        instruments (BANKNIFTY) only runs AFTER the entry gate passes, which is
+        rare; a shadow gated the same way would rarely fire and take months to
+        accumulate anything. Calling composite directly here, bypassing that
+        gate, is how NIFTY's already-verified composite+depth pipeline gets
+        exercised against BANKNIFTY's real live conditions starting now,
+        instead of waiting on an entry-probability event that may not come for
+        weeks. Purely observational: return value is logged into
+        summary_metrics only, never consulted for gating, sizing, or orders.
+        Never raises -- any failure here must not affect the real decision.
+        """
+        try:
+            from ..ml.entry_direction_resolver import resolve_entry_direction_composite
+            return resolve_entry_direction_composite(snap)
+        except Exception:
+            logger.debug("composite_depth_shadow: scoring failed", exc_info=True)
+            return None
+
     def _select_exit_vote(
         self,
         exit_votes: list[StrategyVote],
@@ -3254,6 +3281,39 @@ class DeterministicRuleEngine(StrategyEngine):
             # thin-margin / chop / iv-skew direction vetoes were bypassed.
             "grade_evaluated": bool(dir_vote_rs.get("entry_grade")),
         }
+        # shadow_dir/shadow_basis were computed above but only ever fed into
+        # summary_metrics, which runs everything through compact_metrics()'s
+        # float-only sanitizer -- both are strings, so they were silently
+        # dropped on every single trace ever written (shadow_score, the only
+        # numeric field of the three, was the sole survivor). Found 2026-07-22
+        # while wiring up the composite+depth shadow below; same root-cause
+        # family as the direction_mode/direction_sources bug fixed 2026-07-21
+        # (contracts_app.merge_decision_metrics). Own top-level key, like
+        # trace["direction"] above, so the strings actually persist.
+        trace["shadow_direction"] = {
+            "score": round(shadow_score, 2),
+            "dir": shadow_dir.value,
+            "basis": shadow_full_basis,
+        }
+        # SHADOW ONLY (2026-07-22): composite scoring incl. live depth
+        # (weight 1.1), evaluated unconditionally every bar regardless of
+        # ML_ENTRY_DIRECTION_MODE -- see _composite_depth_shadow_from_snapshot's
+        # docstring for why this bypasses the entry-probability gate entirely.
+        # Never consulted for gating/sizing/orders; logged for offline
+        # reconciliation against realised outcome once enough bars accumulate.
+        _composite_shadow = self._composite_depth_shadow_from_snapshot(snap)
+        trace["composite_depth_shadow"] = (
+            {
+                "dir": _composite_shadow.direction.value if _composite_shadow.direction else None,
+                "source": _composite_shadow.source,
+                "ce_score": round(_composite_shadow.ce_score, 4),
+                "pe_score": round(_composite_shadow.pe_score, 4),
+                "margin": round(_composite_shadow.margin, 4),
+                "sources": dict(_composite_shadow.sources),
+            }
+            if _composite_shadow is not None
+            else None
+        )
         # Entry-model diagnostics for EVERY bar — incl. declined bars (prob < threshold)
         # that produced no vote/candidate. This is what makes entry separation
         # measurable (fired vs declined prob distribution) — S7.

@@ -428,7 +428,12 @@ services:
       BRAIN_CONSENSUS_MIN_AGREEING: "${BRAIN_CONSENSUS_MIN_AGREEING:-1}"
       BRAIN_CONSENSUS_REQUIRE_DIRECTION: "${BRAIN_CONSENSUS_REQUIRE_DIRECTION:-false}"
       ML_ENTRY_DET_SKIP_BRAIN_GATE: "${ML_ENTRY_DET_SKIP_BRAIN_GATE:-false}"
-      DEPTH_FEED_ENABLED: "${DEPTH_FEED_ENABLED:-0}"
+      # 2026-07-22: flipped default 0 -> 1. BankNifty's real decision (direction_ml)
+      # still never consults depth -- its trained model has zero depth features
+      # (confirmed against the actual bundle). This only feeds the new
+      # composite_depth_shadow observation in deterministic_rule_engine.py,
+      # which needs get_depth_context() to return real data to be worth anything.
+      DEPTH_FEED_ENABLED: "${DEPTH_FEED_ENABLED:-1}"
       DEPTH_STALE_SEC: "${DEPTH_STALE_SEC:-30}"
 
       # ── Exit policy stack (E2) ─────────────────────────────────────────────
@@ -1392,7 +1397,12 @@ services:
       ML_ENTRY_CE_ONLY: "${ML_ENTRY_CE_ONLY:-0}"
       BRAIN_CONSENSUS_REQUIRE_DIRECTION: "${BRAIN_CONSENSUS_REQUIRE_DIRECTION:-false}"
       ML_ENTRY_DET_SKIP_BRAIN_GATE: "${ML_ENTRY_DET_SKIP_BRAIN_GATE:-false}"
-      DEPTH_FEED_ENABLED: "${DEPTH_FEED_ENABLED:-0}"
+      # 2026-07-22: flipped default 0 -> 1. BankNifty's real decision (direction_ml)
+      # still never consults depth -- its trained model has zero depth features
+      # (confirmed against the actual bundle). This only feeds the new
+      # composite_depth_shadow observation in deterministic_rule_engine.py,
+      # which needs get_depth_context() to return real data to be worth anything.
+      DEPTH_FEED_ENABLED: "${DEPTH_FEED_ENABLED:-1}"
       DEPTH_STALE_SEC: "${DEPTH_STALE_SEC:-30}"
       CONSENSUS_BYPASS_MIN_CONFIDENCE: "${CONSENSUS_BYPASS_MIN_CONFIDENCE:-0.65}"
       DIRECTION_MIN_MARGIN_SIDEWAYS: "${DIRECTION_MIN_MARGIN_SIDEWAYS:-2.0}"
