@@ -191,11 +191,13 @@ function EffectiveConfigPanel({ instrument }) {
   const [loading, setLoading] = _s(true);
 
   _e(() => {
+    let alive = true;
     setLoading(true);
     _fetchJSON(`/api/config/effective?instrument=${instrument}&mode=live`)
-      .then(d => { setConfig(d); setError(null); })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (alive) { setConfig(d); setError(null); } })
+      .catch(e => { if (alive) setError(e.message); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
   }, [instrument]);
 
   if (loading) return React.createElement('div', { className: 'mi-panel-loading' }, 'Loading config…');
@@ -247,11 +249,13 @@ function ModelHealthPanel({ instrument }) {
   const chartInstance = _r(null);
 
   _e(() => {
+    let alive = true;
     setLoading(true);
     _fetchJSON(`/api/model-health?instrument=${instrument}&lookback_days=5`)
-      .then(d => { setHealth(d); setError(null); })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (alive) { setHealth(d); setError(null); } })
+      .catch(e => { if (alive) setError(e.message); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
   }, [instrument]);
 
   _e(() => {
@@ -342,15 +346,21 @@ function DecisionTraceViewer({ instrument }) {
   const [wsStatus, setWsStatus] = _s('disconnected');
   const [liveSignals, setLiveSignals] = _s([]);
   const wsRef = _r(null);
+  // Request-token guard: instrument/date/outcomeFilter can all change while a
+  // fetch is in flight (e.g. rapid instrument switching). Without this, an
+  // older response resolving after a newer one silently overwrites the UI
+  // with the wrong instrument's signals. Found 2026-07-22.
+  const reqIdRef = _r(0);
 
   const loadData = _cb(() => {
+    const reqId = ++reqIdRef.current;
     setLoading(true);
     const params = new URLSearchParams({ instrument, date });
     if (outcomeFilter) params.set('outcome', outcomeFilter);
     _fetchJSON(`/api/signals?${params.toString()}`)
-      .then(d => { setSignals(d.signals || []); setSummary(d.summary || null); setError(null); })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (reqIdRef.current === reqId) { setSignals(d.signals || []); setSummary(d.summary || null); setError(null); } })
+      .catch(e => { if (reqIdRef.current === reqId) setError(e.message); })
+      .finally(() => { if (reqIdRef.current === reqId) setLoading(false); });
   }, [instrument, date, outcomeFilter]);
 
   _e(() => { loadData(); }, [loadData]);
@@ -382,7 +392,15 @@ function DecisionTraceViewer({ instrument }) {
     return () => { alive = false; clearTimeout(retryId); if (wsRef.current) wsRef.current.close(); };
   }, [instrument]);
 
-  const allSignals = [...liveSignals, ...signals].filter(sig => {
+  // Both arrays are oldest-first; signals (historical, fetched for the selected
+  // date) must come BEFORE liveSignals (websocket, arriving now) so the
+  // combined array stays chronological. It was [...liveSignals, ...signals],
+  // which put newly-arriving signals at the FRONT of the array: .slice(-200)
+  // then favored keeping old historical rows and could drop live signals
+  // entirely on any day with 200+ historical signals, and .reverse() below
+  // put live signals at the BOTTOM of the display instead of the top.
+  // Found 2026-07-22.
+  const allSignals = [...signals, ...liveSignals].filter(sig => {
     if (sourceFilter === 'live'   && (sig.run_id || '').startsWith('replay-')) return false;
     if (sourceFilter === 'replay' && !(sig.run_id || '').startsWith('replay-')) return false;
     if (runIdFilter && !(sig.run_id || '').includes(runIdFilter)) return false;
@@ -481,12 +499,14 @@ function TradePnLTimeline({ instrument }) {
   const chartInstance = _r(null);
 
   _e(() => {
+    let alive = true;
     setLoading(true);
     const params = new URLSearchParams({ instrument, from: fromDate, to: toDate });
     _fetchJSON(`/api/trades?${params.toString()}`)
-      .then(d => { setData(d); setError(null); })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (alive) { setData(d); setError(null); } })
+      .catch(e => { if (alive) setError(e.message); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
   }, [instrument, fromDate, toDate]);
 
   _e(() => {

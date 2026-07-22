@@ -412,8 +412,11 @@ function PaginatedTable({ columns, rows, page, pageSize, onPage, onExportCsv, em
             </thead>
             <tbody>
               {safeRows.map((row, idx) => {
-                const key = row.id || row.trade_id || row.date || idx;
-                const selected = selectedKey && String(selectedKey) === String(row.date || key);
+                // ?? not || : row.id/trade_id/selectedKey of 0 are legitimate values,
+                // not "missing" -- || silently fell through to the wrong key/never
+                // matched selection for a 0-based id. Found 2026-07-22.
+                const key = row.id ?? row.trade_id ?? row.date ?? idx;
+                const selected = selectedKey != null && String(selectedKey) === String(row.date ?? key);
                 const extraCls = rowCls ? rowCls(row) : '';
                 return (
                   <tr key={key} className={[selected ? 'selected' : '', extraCls].filter(Boolean).join(' ')} onClick={() => onRowClick && onRowClick(row)}>

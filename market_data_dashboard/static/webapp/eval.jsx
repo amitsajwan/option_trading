@@ -471,6 +471,14 @@ function EvalMonitor({ tweaks }) {
   const [strategyFilterAllCatalog, setStrategyFilterAllCatalog] = _evalUseState(false);
   const clientRef = _evalUseRef(null);
   const pollRef = _evalUseRef(null);
+  // connectRun() is only called when a run starts/resumes, not on every
+  // filter edit -- pollRun (defined once inside connectRun) closed over
+  // `filters` from that moment, so if the user edits the date range/dataset
+  // while a run is still in flight, the run-completion refresh silently
+  // reloads the OLD filter window instead of the current one. Read via ref
+  // instead. Found 2026-07-22.
+  const filtersRef = _evalUseRef(filters);
+  filtersRef.current = filters;
 
   const runActive = runStatus && !['completed', 'failed', 'cancelled'].includes(String(runStatus.status || '').toLowerCase());
   const progressPct = Number(runEvent?.progress_pct ?? runStatus?.progress_pct ?? 0);
@@ -708,8 +716,8 @@ function EvalMonitor({ tweaks }) {
       if (['completed', 'failed'].includes(String(status.status || '').toLowerCase())) {
         if (pollRef.current) window.clearInterval(pollRef.current);
         setWsState('disconnected');
-        refreshRunsList(filters.dataset);
-        loadData(filters, 1, 1, '', runId);
+        refreshRunsList(filtersRef.current.dataset);
+        loadData(filtersRef.current, 1, 1, '', runId);
       }
     }).catch(() => undefined);
 

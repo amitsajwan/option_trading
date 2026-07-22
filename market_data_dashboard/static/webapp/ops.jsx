@@ -142,7 +142,12 @@ function exitClass(label) {
   if (l.includes('trail') || l.includes('trailing_stop')) return 'trailing';
   if (l.includes('target') || l.includes('target_hit')) return 'target';
   if (l.includes('thesis')) return 'thesis';
-  if (l.includes('exit_stack')) return 'target';  // exit_stack with exit_reason = actual trigger
+  // Bare "exit_stack" is tracker.py's fallback when the specific rule that
+  // fired (last_triggered) wasn't recorded -- i.e. genuinely unknown, could
+  // be a stop-loss as easily as a target hit. Any KNOWN reason already
+  // matched trail/target/thesis above. Was mapped to the green 'target' tag,
+  // which misrepresented losing exits as wins in the trade review table.
+  // Falls through to the neutral 'timestop' default instead. Found 2026-07-22.
   return 'timestop';
 }
 
@@ -261,7 +266,7 @@ function TradeTable({ trades }) {
                 <td style={{color:'var(--ink-3)'}}>{t.time_in}→{t.time_out}</td>
                 <td>{t.direction}</td>
                 <td>{t.strike || '?'}</td>
-                <td>{t.prem_in ? t.prem_in.toFixed(0) : '—'}</td>
+                <td>{t.prem_in != null ? t.prem_in.toFixed(0) : '—'}</td>
                 <td className={cls}>{pct(t.pnl_pct)}</td>
                 <td>{pct(t.mfe_pct)}</td>
                 <td><span className={`exit-tag ${eClass}`}>{t.exit || 'TIME_STOP'}</span></td>
@@ -289,6 +294,12 @@ function OpsPage() {
   const [jobId, setJobId]   = _s(null);
   const [job, setJob]       = _s(null);
   const [polling, setPolling] = _s(false);
+  // isRunning derives from job.status, which is only set AFTER the POST
+  // resolves -- the button stayed enabled for the whole round-trip, so a
+  // double-click (or a slow response) fired two concurrent sim jobs and
+  // the UI only ever tracked the second jobId, orphaning the first. This
+  // flag closes that window synchronously. Found 2026-07-22.
+  const [submitting, setSubmitting] = _s(false);
 
   // Load config on mount
   _e(() => {
@@ -327,6 +338,8 @@ function OpsPage() {
   const progress = job ? (job.total > 0 ? job.progress / job.total : 0) : 0;
 
   const handleRun = () => {
+    if (submitting || isRunning) return;
+    setSubmitting(true);
     const overrides = {};
     changedKeys.forEach(k => { overrides[k] = cfg[k]; });
     fetch('/api/ops/sim/today', {
@@ -339,7 +352,8 @@ function OpsPage() {
         setJobId(data.job_id);
         setPolling(true);
         setJob({status: 'queued', progress: 0, total: 0, trades: [], actual_trades: []});
-      });
+      })
+      .finally(() => setSubmitting(false));
   };
 
   const handleReset = () => setCfg({...liveEnv});
@@ -622,10 +636,10 @@ function OpsPage() {
             {changedKeys.length > 0 && (
               <button className="ops-reset-btn" onClick={handleReset}>Reset to live</button>
             )}
-            <button className={`ops-run-btn${isRunning ? ' running' : ''}`}
-                    disabled={!!isRunning}
+            <button className={`ops-run-btn${(isRunning || submitting) ? ' running' : ''}`}
+                    disabled={!!isRunning || submitting}
                     onClick={handleRun}>
-              {isRunning ? '⏳ Running…' : '▶  Run Sim'}
+              {(isRunning || submitting) ? '⏳ Running…' : '▶  Run Sim'}
             </button>
             {job?.status === 'done' && (
               <>

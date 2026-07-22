@@ -51,6 +51,20 @@ function _bridgeTrade(tr) {
   };
 }
 
+// `trades` arrays here are in ascending exitIdx order (oldest first) --
+// confirmed by the dead Tape component's explicit `sort((a,b)=>b.sortIdx-a.sortIdx)`
+// to get newest-first for display. Several call sites picked trades[0] believing
+// it was the latest trade (one even commented "Default to latest trade");
+// that was actually the FIRST trade of the session. Found 2026-07-22 review.
+function _latestTrade(trades) {
+  if (!Array.isArray(trades) || !trades.length) return null;
+  return trades.reduce((latest, t) => {
+    const li = latest?.exitIdx ?? -Infinity;
+    const ti = t?.exitIdx ?? -Infinity;
+    return ti >= li ? t : latest;
+  }, trades[0]);
+}
+
 // Grade -> color for the tape dot. GREEN=GOOD, YELLOW=OK, RED=BAD.
 function _gradeColor(g) {
   const u = String(g || '').toUpperCase();
@@ -1948,8 +1962,14 @@ function LiveDecisionPanel({ row, bf }) {
 
   const em = row.entry_model || {};
   let models = Array.isArray(em.entry_models) ? em.entry_models : [];
-  if (!models.length && row.metrics?.entry_prob != null) {
-    models = [{ label: 'entry', prob: row.metrics.entry_prob, threshold: null, fired: isTaken }];
+  if (!models.length) {
+    // Same fallback as the header's "ep" cell: metrics.entry_prob is only
+    // populated by engine modes that write straight to summary_metrics;
+    // the deterministic engine puts its scalar prob in entry_model.entry_prob.
+    const fallbackProb = row.metrics?.entry_prob ?? em.entry_prob;
+    if (fallbackProb != null) {
+      models = [{ label: 'entry', prob: fallbackProb, threshold: em.threshold ?? null, fired: isTaken }];
+    }
   }
 
   const dir = row.direction || {};
@@ -2068,7 +2088,7 @@ function MobileLiveShell({
   const [sheet, setSheet] = _s(null); // null | 'ops'
   const [lastTickAt, setLastTickAt] = _s(Date.now());
   const [now, setNow] = _s(Date.now());
-  const inspectorTrade = selectedTrade || (trades.length ? trades[0] : null);
+  const inspectorTrade = selectedTrade || _latestTrade(trades);
   const [showInspector, setShowInspector] = _s(false);
   const [inspectorMax, setInspectorMax] = _s(false);
   const isMobile = _useIsMobile();
@@ -2732,11 +2752,11 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   const wins           = rawTrades.filter(t => (t.pnlPct || 0) > 0).length;
   const winRate        = rawTrades.length ? Math.round(wins / rawTrades.length * 100) : 0;
   const _latestSignal  = (session.signals || []).reduce((a, s) => (!a || s.idx > a.idx ? s : a), null);
-  const regime         = session.regime || _latestSignal?.regime || (trades[0]?.regime) || '—';
+  const regime         = session.regime || _latestSignal?.regime || (_latestTrade(trades)?.regime) || '—';
   const engine         = runtimeConfig?.engine || runtimeConfig?.model_type || session.engine || '—';
 
   // Default to latest trade in inspector
-  const displayTrade   = selectedTrade || (trades.length > 0 ? trades[0] : null);
+  const displayTrade   = selectedTrade || _latestTrade(trades);
 
   return (
     <MobileLiveShell
@@ -2791,7 +2811,7 @@ function MobileReplayShell({
     key: 'term.inspH', axis: 'y', dir: -1, def: 320, min: 180,
     max: () => Math.max(220, window.innerHeight - 220),
   });
-  const inspectorTrade = selectedTrade || ((trades||[]).length ? trades[0] : null);
+  const inspectorTrade = selectedTrade || _latestTrade(trades || []);
   const pct      = total > 0 ? ((upToIdx + 1) / total * 100).toFixed(0) : 0;
   const pnlCls   = (sessionPnl||0) > 0.0005 ? 'pos' : (sessionPnl||0) < -0.0005 ? 'neg' : 'flat';
   const pnlGlyph = (sessionPnl||0) > 0.0005 ? '▲' : (sessionPnl||0) < -0.0005 ? '▼' : '◆';

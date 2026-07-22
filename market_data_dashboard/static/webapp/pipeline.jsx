@@ -139,8 +139,12 @@ function TraceTimeline({ trace }) {
               {(() => {
                 const skip = new Set(['gate_id','gate_group','message','reason_code','skip_reason',
                                       'evidence','reason','reason_codes','approved','vetoed']);
+                // typeof v !== 'object' alone also excludes arrays (typeof [] === 'object'),
+                // silently dropping any array-valued gate field not explicitly hand-coded
+                // elsewhere below. Allow non-empty arrays through. Found 2026-07-22.
                 const kvs = Object.entries(p).filter(([k,v]) =>
-                  !skip.has(k) && v != null && typeof v !== 'object' && v !== ''
+                  !skip.has(k) && v != null && v !== '' &&
+                  (typeof v !== 'object' || (Array.isArray(v) && v.length > 0))
                 );
                 return kvs.length > 0 ? (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
@@ -225,7 +229,10 @@ function TraceTimeline({ trace }) {
               ) : null}
 
               {/* Risk / direction text reasons */}
-              {p.skip_reason && !p.ce_bid_strength && (
+              {/* ce_bid_strength == null, not !ce_bid_strength -- a legitimate 0 bid
+                  strength was falsy, so skip_reason rendered twice (once above in
+                  the depth-gauges block, once here). Found 2026-07-22. */}
+              {p.skip_reason && p.ce_bid_strength == null && (
                 <div style={_mono({ fontSize: 10, color: '#ef4444', marginTop: 3 })}>✗ {p.skip_reason}</div>
               )}
               {p.rejection_reason && (

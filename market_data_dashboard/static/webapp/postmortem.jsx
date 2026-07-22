@@ -168,12 +168,14 @@
 
     useEffect(() => {
       if (!pos_id) return;
+      let stale = false;
       setLoading(true);
       setErr(null);
       fetch(`/api/postmortem/position/${pos_id}?kind=${kind}`)
         .then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e.detail || 'fetch error')))
-        .then(d => { setDetail(d); setLoading(false); })
-        .catch(e => { setErr(String(e)); setLoading(false); });
+        .then(d => { if (!stale) { setDetail(d); setLoading(false); } })
+        .catch(e => { if (!stale) { setErr(String(e)); setLoading(false); } });
+      return () => { stale = true; };
     }, [pos_id, kind]);
 
     if (!pos_id) return <div style={{ padding: '32px', color: 'var(--ink-3)', fontSize: '13px', fontFamily: 'var(--f-mono)' }}>← Select a trade to inspect</div>;
