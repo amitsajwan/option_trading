@@ -8,6 +8,7 @@ story (docs/SCRUM_BOARD_SIM_REPLAY.md, SIM-1 section).
 from __future__ import annotations
 
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from contracts_app import Namespace, resolve_namespace
@@ -325,8 +326,9 @@ class TestInstrumentParity(unittest.TestCase):
         self.assertEqual(ns.stream_for("snapshot"), "market:snapshot:v1")
         self.assertEqual(ns.state_key_for("depth:atm_ce:latest"), "live:depth:atm_ce:latest")
         self.assertEqual(ns.run_dir_for(), Path("/app/.run/strategy_app"))
-        self.assertEqual(ns.lock_key_for(),
-                         "strategy_app:consumer_lock:market:snapshot:v1")
+        # D2 (arch/streams-loose-coupling): ConsumerLock removed, lock_key_for()
+        # always returns None now -- see TestSecondaryInstrument.test_nifty_run_dir_and_lock.
+        self.assertIsNone(ns.lock_key_for())
 
     def test_primary_sim_legacy_names_unchanged(self) -> None:
         ns = resolve_namespace("sim", run_id="r123", instrument="BANKNIFTY")
@@ -377,8 +379,8 @@ class TestSecondaryInstrument(unittest.TestCase):
     def test_nifty_run_dir_and_lock(self) -> None:
         ns = resolve_namespace("live", instrument="NIFTY")
         self.assertEqual(ns.run_dir_for(), Path("/app/.run/strategy_app_nifty"))
-        self.assertEqual(ns.lock_key_for(),
-                         "strategy_app_nifty:consumer_lock:market:nifty:snapshot:v1")
+        # D2: ConsumerLock removed -- no per-instrument lock key any more.
+        self.assertIsNone(ns.lock_key_for())
 
     def test_unknown_instrument_is_allowed_as_slug(self) -> None:
         # The namespace layer is registry-agnostic: it slugs any name. Validation
@@ -412,7 +414,10 @@ class TestInstrumentKindCrossProduct(unittest.TestCase):
         self.assertNotEqual(bn.stream_for("snapshot"), nf.stream_for("snapshot"))
         self.assertNotEqual(bn.state_key_for("k"), nf.state_key_for("k"))
         self.assertNotEqual(bn.run_dir_for(), nf.run_dir_for())
-        self.assertNotEqual(bn.lock_key_for(), nf.lock_key_for())
+        # D2: lock_key_for() always returns None regardless of instrument now
+        # (ConsumerLock removed) -- distinctness no longer applies to it.
+        self.assertIsNone(bn.lock_key_for())
+        self.assertIsNone(nf.lock_key_for())
 
 
 if __name__ == "__main__":
