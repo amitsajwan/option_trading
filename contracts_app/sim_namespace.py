@@ -149,8 +149,17 @@ class Namespace:
 
     # ── transport / topic / stream naming ────────────────────────────────
     def transport(self) -> Transport:
-        """``streams`` for sim, ``pubsub`` for live and oos."""
-        return "streams" if self.kind == "sim" else "pubsub"
+        """Return the transport for this namespace.
+
+        D1 (arch/streams-loose-coupling): returns ``streams`` for all modes.
+        Set ``NAMESPACE_STREAMS_TRANSPORT=false`` to revert to legacy behaviour
+        (``pubsub`` for live/oos, ``streams`` for sim) during rollback.
+        """
+        import os
+        legacy = str(os.getenv("NAMESPACE_STREAMS_TRANSPORT") or "true").strip().lower() in {"0", "false", "no", "off"}
+        if legacy:
+            return "streams" if self.kind == "sim" else "pubsub"
+        return "streams"
 
     def stream_for(self, what: str) -> str:
         """Return the per-mode stream/topic name for an event kind.
@@ -208,24 +217,15 @@ class Namespace:
             return Path(f"{_OOS_RUN_DIR}{suffix}")
         return Path(f"{_LIVE_RUN_DIR}{suffix}")
 
-    # ── consumer lock ────────────────────────────────────────────────────
+    # ── consumer lock (D2: removed) ──────────────────────────────────────
     def lock_key_for(self) -> Optional[str]:
-        """Redis consumer-lock key. ``None`` for sim — by design, sim runs
-        use ephemeral consumer containers + Redis Streams consumer groups,
-        so locking is unnecessary and was actively harmful in early designs.
+        """Deprecated — always returns ``None``.
+
+        ConsumerLock was removed in D2 (arch/streams-loose-coupling).
+        All snapshot consumers now use Redis Streams consumer groups which
+        provide exclusive delivery without a separate distributed lock.
         """
-        if self.kind == "sim":
-            return None
-        # The lock key references this namespace's own snapshot stream so two
-        # instrument stacks (each consuming a different snapshot topic) take
-        # independent locks.
-        snapshot_stream = self.stream_for("snapshot")
-        instr = self._instr_seg
-        if self.kind == "oos":
-            app = f"strategy_app_{instr}_historical" if instr else "strategy_app_historical"
-            return f"{app}:consumer_lock:{snapshot_stream}"
-        app = f"strategy_app_{instr}" if instr else "strategy_app"
-        return f"{app}:consumer_lock:{snapshot_stream}"
+        return None
 
 
 def resolve_namespace(

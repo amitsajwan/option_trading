@@ -49,6 +49,37 @@ def _resolve_topic(env_names: list[str], default_topic: str) -> str:
             return raw
     return _scope_to_instrument(default_topic)
 
+# ---------------------------------------------------------------------------
+# Transport classification (arch/streams-loose-coupling)
+#
+# DURABLE (Redis Streams, stream: prefix):
+#   stream:snapshots:live          — live market snapshots (snapshot_app → strategy_app, persistence_app)
+#   stream:snapshots:historical    — OOS/replay snapshots
+#   stream:eval:commands           — evaluation run commands (dashboard → orchestrator)
+#   stream:eval:progress:{run_id}  — per-run progress events (orchestrator → dashboard history)
+#
+# DISPLAY_ONLY (Redis Pub/Sub, intentionally ephemeral — do NOT migrate to Streams):
+#   market:ohlc:{symbol}:{tf}      — real-time OHLC bars for charting
+#   market:tick:{symbol}:*         — raw tick feed for live price display
+#   indicators:{symbol}:*          — derived indicator values for UI
+#   auth:status                    — auth token push
+#   strategy:eval:run:{id}         — live WS progress bridge (shadow; stream:eval:progress is durable)
+#   strategy:eval:global           — global run lifecycle events (WS bridge)
+#
+# Shadow flags (migration controls):
+#   SNAPSHOT_PUBSUB_SHADOW          — NOT IMPLEMENTED. snapshot_app/redis_publisher.py's
+#                                     RedisEventPublisher.publish() is XADD-only; this flag
+#                                     is not read anywhere. A1's original dual-write design
+#                                     (ADR-003) was superseded by committing straight to
+#                                     streams-only — this line documented that abandoned
+#                                     design and was never updated. Setting this env var
+#                                     does nothing. There is no pub/sub fallback for snapshot
+#                                     delivery; a real rollback means reverting the deploy.
+#   EVAL_COMMANDS_PUBSUB_SHADOW     — real and implemented (strategy_eval_orchestrator/main.py,
+#                                     market_data_dashboard/services/strategy_evaluation_service.py):
+#                                     dashboard also PUBLISHes eval command for backward compat.
+# ---------------------------------------------------------------------------
+
 
 def snapshot_topic() -> str:
     return _resolve_topic(["SNAPSHOT_V1_TOPIC", "LIVE_TOPIC"], "market:snapshot:v1")
@@ -77,8 +108,9 @@ def strategy_decision_trace_topic() -> str:
     return _resolve_topic(["STRATEGY_DECISION_TRACE_TOPIC"], "market:strategy:decision_trace:v1")
 
 
-# ── Phase 2 stream-native decision pipeline topics (live/oos pubsub mode) ──
-# In sim mode use Namespace.stream_for() instead of these functions.
+# ── Phase 2 stream-native decision pipeline topics ──
+# DISPLAY_ONLY in live/oos mode (pub/sub). In sim mode use Namespace.stream_for().
+# D1 will unify transport so live/oos also routes through streams.
 
 
 def regime_decisions_topic() -> str:

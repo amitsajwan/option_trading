@@ -252,6 +252,33 @@ class StrategyEvaluationService:
     def _command_channel(self) -> str:
         return str(os.getenv("STRATEGY_EVAL_COMMAND_TOPIC") or "strategy:eval:command")
 
+    def _command_stream(self) -> str:
+        return str(os.getenv("STRATEGY_EVAL_COMMAND_STREAM") or "stream:eval:commands")
+
+    def _eval_commands_pubsub_shadow(self) -> bool:
+        return str(os.getenv("EVAL_COMMANDS_PUBSUB_SHADOW") or "true").strip().lower() not in {"0", "false", "no", "off"}
+
+    def _progress_stream(self, run_id: str) -> str:
+        prefix = str(os.getenv("STRATEGY_EVAL_PROGRESS_STREAM_PREFIX") or "stream:eval:progress:")
+        return f"{prefix}{run_id}"
+
+    def get_run_progress_history(self, run_id: str, *, count: int = 200) -> list[dict[str, Any]]:
+        stream = self._progress_stream(str(run_id).strip())
+        try:
+            entries = self._redis().xrange(stream, count=max(1, int(count)))
+        except Exception:
+            return []
+        result = []
+        for _entry_id, fields in entries or []:
+            raw = fields.get("payload") if isinstance(fields, dict) else None
+            if not isinstance(raw, str):
+                continue
+            try:
+                result.append(json.loads(raw))
+            except Exception:
+                continue
+        return result
+
     def _publish_run_event(self, run_id: str, payload: dict[str, Any]) -> None:
         body = dict(payload or {})
         body["run_id"] = run_id
@@ -310,7 +337,15 @@ class StrategyEvaluationService:
             "risk_config": dict(risk_config or {}),
             "submitted_at": submitted_at,
         }
-        self._redis().publish(self._command_channel(), json.dumps(command, ensure_ascii=False, default=str))
+        serialized_command = json.dumps(command, ensure_ascii=False, default=str)
+        self._redis().xadd(
+            self._command_stream(),
+            {"payload": serialized_command, "run_id": run_id},
+            maxlen=1000,
+            approximate=True,
+        )
+        if self._eval_commands_pubsub_shadow():
+            self._redis().publish(self._command_channel(), serialized_command)
         self._publish_run_event(
             run_id,
             {

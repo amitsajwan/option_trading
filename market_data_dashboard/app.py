@@ -42,6 +42,11 @@ except ImportError:
     from market_data_dashboard._namespace import BASE_SNAPSHOTS  # type: ignore
 
 try:
+    from .ws_redis_pool import _pool as _ws_pool
+except ImportError:
+    from market_data_dashboard.ws_redis_pool import _pool as _ws_pool  # type: ignore
+
+try:
     from .services.live_strategy_monitor_service import LiveStrategyMonitorService
 except ImportError:
     try:
@@ -206,6 +211,8 @@ if _redis_env_config is not None:
 else:
     REDIS_HOST = os.getenv("REDIS_HOST") or os.getenv("DEFAULT_REDIS_HOST") or "localhost"
     REDIS_PORT = int(os.getenv("REDIS_PORT") or os.getenv("DEFAULT_REDIS_PORT") or "6379")
+
+_ws_pool.configure(REDIS_HOST, REDIS_PORT)
 
 _default_instrument_raw = (
     (resolve_instrument_symbol() if resolve_instrument_symbol else "")
@@ -3408,6 +3415,9 @@ def _stomp_destination_to_redis(destination: str) -> List[Tuple[str, str]]:
     """Map a STOMP destination to one or more Redis pub/sub subscriptions.
 
     Returns list of (kind, name) where kind is 'channel' or 'pattern'.
+
+    DISPLAY_ONLY: all destinations here map to intentionally ephemeral pub/sub
+    channels (not Redis Streams).  Do NOT add stream-backed channels here.
     """
     # Auth status
     if destination == "/topic/auth/status":
@@ -3479,9 +3489,9 @@ async def websocket_stomp(ws: WebSocket):
 
     client_host = (ws.client.host if ws.client else "unknown")
     logger.info("ws connect conn=%s proto=%s client=%s", conn_id, selected_subprotocol or "legacy", client_host)
+
     loop = asyncio.get_running_loop()
-    stop_event = threading.Event()
-    ctrl_q: "queue.SimpleQueue[tuple[str, str]]" = queue.SimpleQueue()
+    _conn_q = _ws_pool.register(conn_id, loop)
 
     # STOMP subscriptions (internal_id -> {stomp_id, destination, kind, name})
     stomp_subs: Dict[str, Dict[str, str]] = {}
@@ -3578,39 +3588,20 @@ async def websocket_stomp(ws: WebSocket):
         except Exception as e:
             logger.warning("WS forward error (%s): %s", conn_id, e)
 
-    def _redis_thread() -> None:
-        """Blocking Redis pubsub loop running in a background thread."""
-        try:
-            while not stop_event.is_set():
-                # Apply any pending control commands
-                while True:
-                    try:
-                        action, name = ctrl_q.get_nowait()
-                    except Exception:
-                        break
-                    try:
-                        if action == "subscribe":
-                            pubsub.subscribe(name)
-                        elif action == "psubscribe":
-                            pubsub.psubscribe(name)
-                        elif action == "unsubscribe":
-                            pubsub.unsubscribe(name)
-                        elif action == "punsubscribe":
-                            pubsub.punsubscribe(name)
-                    except Exception:
-                        continue
+    async def _pool_reader() -> None:
+        """Drain the per-connection asyncio.Queue fed by the shared pool threads."""
+        while True:
+            try:
+                msg = await asyncio.wait_for(_conn_q.get(), timeout=1.0)
+                await _handle_redis_message(msg)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.debug("pool_reader error conn=%s: %s", conn_id, exc)
 
-                msg = pubsub.get_message(timeout=1.0)
-                if msg:
-                    try:
-                        asyncio.run_coroutine_threadsafe(_handle_redis_message(msg), loop)
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.warning("Redis WS thread ended (%s): %s", conn_id, e)
-
-    t = threading.Thread(target=_redis_thread, name=f"ws-redis-{conn_id}", daemon=True)
-    t.start()
+    _pool_reader_task = asyncio.ensure_future(_pool_reader())
 
     async def _legacy_subscribe(channels: list[str]):
         # Best-effort mapping from old dashboard channel list to actual Redis channels.
@@ -3618,23 +3609,23 @@ async def websocket_stomp(ws: WebSocket):
             # already includes timeframe?
             if ch.startswith("market:ohlc:") and ch.count(":") == 2:
                 # old: market:ohlc:{instrument} -> subscribe to all TF
-                ctrl_q.put(("psubscribe", f"{ch}:*"))
+                _ws_pool.subscribe(conn_id, "pattern", f"{ch}:*")
                 legacy_subs[ch] = {"destination": ch, "kind": "pattern", "name": f"{ch}:*"}
                 continue
             if ch.startswith("indicators:") and ch.count(":") == 1:
                 # old: indicators:{instrument} -> indicators:{instrument}:*
                 pat = f"{ch}:*"
-                ctrl_q.put(("psubscribe", pat))
+                _ws_pool.subscribe(conn_id, "pattern", pat)
                 legacy_subs[ch] = {"destination": ch, "kind": "pattern", "name": pat}
                 continue
             if ch.startswith("market:tick:") and ch.count(":") == 2:
                 # old: market:tick:{instrument} -> market:tick:{instrument}:*
                 pat = f"{ch}:*"
-                ctrl_q.put(("psubscribe", pat))
+                _ws_pool.subscribe(conn_id, "pattern", pat)
                 legacy_subs[ch] = {"destination": ch, "kind": "pattern", "name": pat}
                 continue
 
-            ctrl_q.put(("subscribe", ch))
+            _ws_pool.subscribe(conn_id, "channel", ch)
             legacy_subs[ch] = {"destination": ch, "kind": "channel", "name": ch}
 
         logger.debug("ws legacy_subscribe conn=%s channels=%s", conn_id, channels)
@@ -3737,9 +3728,9 @@ async def websocket_stomp(ws: WebSocket):
                             "name": name,
                         }
                         if kind == "pattern":
-                            ctrl_q.put(("psubscribe", name))
+                            _ws_pool.subscribe(conn_id, "pattern", name)
                         else:
-                            ctrl_q.put(("subscribe", name))
+                            _ws_pool.subscribe(conn_id, "channel", name)
 
                     receipt = headers.get("receipt")
                     if receipt:
@@ -3754,9 +3745,9 @@ async def websocket_stomp(ws: WebSocket):
                         if not sub:
                             continue
                         if sub.get("kind") == "pattern":
-                            ctrl_q.put(("punsubscribe", sub.get("name", "")))
+                            _ws_pool.unsubscribe(conn_id, "pattern", sub.get("name", ""))
                         else:
-                            ctrl_q.put(("unsubscribe", sub.get("name", "")))
+                            _ws_pool.unsubscribe(conn_id, "channel", sub.get("name", ""))
                     continue
 
                 if command == "DISCONNECT":
@@ -3772,7 +3763,10 @@ async def websocket_stomp(ws: WebSocket):
                     if destination.startswith("/app/redis/publish"):
                         redis_channel = headers.get("redis-channel")
                         if redis_channel:
-                            await redis_client.publish(redis_channel, body)
+                            try:
+                                _redis_sync_client().publish(redis_channel, body)
+                            except Exception:
+                                pass
                     continue
 
     except WebSocketDisconnect:
@@ -3781,17 +3775,11 @@ async def websocket_stomp(ws: WebSocket):
         logger.warning("ws error conn=%s: %s", conn_id, e)
     finally:
         try:
-            stop_event.set()
+            _pool_reader_task.cancel()
         except Exception:
             pass
-        try:
-            pubsub.close()
-        except Exception:
-            pass
-        try:
-            redis_client.close()
-        except Exception:
-            pass
+        _ws_pool.unregister(conn_id)
+        logger.debug("ws cleanup done conn=%s", conn_id)
 
 def _truthy(value: Any, default: bool = False) -> bool:
     if value is None:
