@@ -88,9 +88,25 @@ class RedisEventBus(EventBus):
 
         kwargs = dict(redis_kwargs or redis_connection_kwargs(decode_responses=True, for_pubsub=False))
         # socket_timeout must exceed the largest block_ms used in XREADGROUP calls
-        # (currently 2000 ms = 2s).  Set 30s so blocking reads never time out.
-        kwargs.setdefault("socket_timeout", 30.0)
-        kwargs.setdefault("socket_connect_timeout", 5.0)
+        # (currently 5000 ms = 5s, strategy_app's consumer). Enforce >= 30s so
+        # blocking reads never time out client-side before the server's own
+        # BLOCK duration elapses.
+        #
+        # BUG (found 2026-07-22, predates the streams-loose-coupling merge):
+        # this used kwargs.setdefault("socket_timeout", 30.0), but
+        # redis_connection_kwargs(for_pubsub=False) already populates
+        # socket_timeout=2.0 unconditionally (not missing/None) -- setdefault
+        # is a no-op against an already-present key, so the intended 30s
+        # floor never took effect. Every default-constructed RedisEventBus()
+        # (persistence_app's snapshot consumer, strategy_eval_orchestrator's
+        # command stream, etc.) was racing a 2s client socket timeout against
+        # its own 2000-5000ms XREADGROUP block_ms -- a near-guaranteed
+        # "Timeout reading from socket" on almost every idle poll. Not a data
+        # loss risk (PEL redelivery recovers anything the server actually
+        # recorded), but real, constant, previously-invisible noise and
+        # latency. Caught live during a NIFTY rehearsal deploy.
+        kwargs["socket_timeout"] = max(float(kwargs.get("socket_timeout") or 0.0), 30.0)
+        kwargs["socket_connect_timeout"] = max(float(kwargs.get("socket_connect_timeout") or 0.0), 5.0)
         self._client: _redis.Redis = _redis.Redis(**kwargs)
 
     # ── publish ────────────────────────────────────────────────────────────

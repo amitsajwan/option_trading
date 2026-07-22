@@ -80,5 +80,43 @@ class TestTopicScoping(unittest.TestCase):
             self.assertNotEqual(bn, nf)
 
 
+class TestStreamNameForTopic(unittest.TestCase):
+    """Regression (2026-07-22): the Streams name must derive from the SAME
+    instrument-scoped topic string as the pub/sub path, or two instruments
+    running streams transport at once silently share one stream. Caught
+    live during a NIFTY rehearsal deploy, before it reached BankNifty."""
+
+    def test_primary_live(self) -> None:
+        self.assertEqual(topics.stream_name_for_topic("market:snapshot:v1"),
+                          "stream:snapshots:live")
+
+    def test_primary_historical(self) -> None:
+        self.assertEqual(topics.stream_name_for_topic("market:snapshot:v1:historical"),
+                          "stream:snapshots:historical")
+
+    def test_secondary_live(self) -> None:
+        self.assertEqual(topics.stream_name_for_topic("market:nifty:snapshot:v1"),
+                          "stream:snapshots:nifty:live")
+
+    def test_secondary_historical(self) -> None:
+        self.assertEqual(
+            topics.stream_name_for_topic("market:nifty:snapshot:v1:historical"),
+            "stream:snapshots:nifty:historical",
+        )
+
+    def test_matches_live_pubsub_topic_derivation(self) -> None:
+        """Feed real snapshot_topic() output through the deriver for both
+        instruments -- ties this test to the actual topic-generation path,
+        not just hand-written literal strings."""
+        with _EnvGuard():
+            os.environ["STRATEGY_INSTRUMENT"] = "BANKNIFTY"
+            bn_stream = topics.stream_name_for_topic(topics.snapshot_topic())
+            os.environ["STRATEGY_INSTRUMENT"] = "NIFTY"
+            nf_stream = topics.stream_name_for_topic(topics.snapshot_topic())
+        self.assertNotEqual(bn_stream, nf_stream)
+        self.assertEqual(bn_stream, "stream:snapshots:live")
+        self.assertEqual(nf_stream, "stream:snapshots:nifty:live")
+
+
 if __name__ == "__main__":
     unittest.main()
