@@ -2548,15 +2548,25 @@ class DeterministicRuleEngine(StrategyEngine):
 
         # 1. SIDEWAYS + returns_mixed: market has no intraday conviction.
         #    A trader never enters when returns are contradicting themselves.
+        # This used to also read a SIDEWAYS_MIXED_COOLDOWN_BARS env var and
+        # skip the block once nonzero -- but the REAL gate (_process_entry_votes,
+        # ~line 1086) never implemented that cooldown, so a nonzero value
+        # appeared to relax the block (per this mirror's trace) while the real
+        # gate kept blocking every entry exactly as before, AND the trace
+        # stopped reporting "sideways_returns_mixed" -- corrupting the exact
+        # telemetry someone would use to notice the config wasn't working.
+        # Removed rather than implemented in the real gate: doing so would be
+        # a live trading-behavior change, not a mirror-fidelity fix. No
+        # behavior change here since the env var's only use defaulted to "0"
+        # (always the block-immediately path) and was never set anywhere.
+        # Found 2026-07-22.
         if (
             as_bool(os.getenv("SIDEWAYS_RETURNS_MIXED_GATE_ENABLED", "true"))
             and regime_signal.regime is not None
             and str(regime_signal.regime.value if hasattr(regime_signal.regime, "value") else regime_signal.regime).upper() == "SIDEWAYS"
             and "returns_mixed" in (regime_signal.reason or "")
         ):
-            cooldown_bars = int(os.getenv("SIDEWAYS_MIXED_COOLDOWN_BARS", "0"))
-            if cooldown_bars == 0:
-                return "sideways_returns_mixed"
+            return "sideways_returns_mixed"
 
         # 2. Post-STOP_LOSS cooldown: after a stop, wait N bars before re-entering.
         stop_cooldown = int(os.getenv("STOP_LOSS_COOLDOWN_BARS", "5"))

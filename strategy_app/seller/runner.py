@@ -451,6 +451,11 @@ class SellerRunner:
                 if exit_val is None:
                     # A leg failed to square off. KEEP the spread in the durable store and retry
                     # next tick — NEVER drop a still-live position from tracking. (review C1)
+                    # Persist now: close_spread() may have flattened SOME legs this attempt
+                    # (recorded in sp.closed_legs) before the failing one -- without a flush
+                    # here, a restart before the next successful attempt would lose that
+                    # progress and re-submit an already-closed leg's buy-back order.
+                    self._mgr.persist()
                     self._log("close_failed", spread_id=sp.spread_id, reason=reason)
                     continue
                 pnl = (sp.entry_credit - exit_val) * sp.qty

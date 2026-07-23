@@ -76,6 +76,19 @@ class PositionManager:
         self._open = [s for s in self._open if s.spread_id != spread_id]
         self._store.save(self._open)
 
+    def persist(self) -> None:
+        """Flush current in-memory spread state to disk.
+
+        close_spread() mutates OpenSpread.closed_legs in place as each leg
+        confirms flat, but a failed/partial close attempt doesn't call add()
+        or remove() -- without an explicit flush here, that progress lives
+        only in memory and a restart between retry attempts loses it,
+        reproducing the exact re-buy-back-an-already-closed-leg bug the
+        closed_legs tracking exists to prevent. Call after every close
+        attempt, success or failure. Found 2026-07-22.
+        """
+        self._store.save(self._open)
+
     # ── mark-to-market + exit decision ───────────────────────────────────────
     @staticmethod
     def spread_value(spread: OpenSpread, price_fn: Callable[[str, int], Optional[float]]) -> Optional[float]:

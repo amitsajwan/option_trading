@@ -193,6 +193,16 @@ class TradeSignal:
     strike: Optional[int] = None
     expiry: Optional[date] = None
     entry_premium: Optional[float] = None
+    # EXIT signals only: the actual computed exit price. Added 2026-07-22 --
+    # previously the only premium field on this contract was entry_premium,
+    # which _close_position() always sets to the ORIGINAL entry price even on
+    # an exit signal (so execution/adapters could look up "which position at
+    # what basis"). That left no channel for the real exit price to reach
+    # execution_app at all: PaperAdapter.place_exit's fallback chain
+    # (signal.entry_premium or position.current_premium or ...) always
+    # resolved to the entry price, so every paper-mode exit "filled" at the
+    # entry premium and paper P&L was silently always ~0%.
+    exit_premium: Optional[float] = None
     max_hold_bars: Optional[int] = None
     position_side: str = "LONG"
     stop_loss_pct: float = 0.40

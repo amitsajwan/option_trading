@@ -94,6 +94,7 @@ class ExecutionConsumer:
         strike = signal_body.get("strike")
         position_id = signal_body.get("position_id")
         entry_premium = signal_body.get("entry_premium")
+        exit_premium = signal_body.get("exit_premium")
         tier = str(signal_body.get("tier") or "").strip().lower()
 
         logger.info(
@@ -142,7 +143,14 @@ class ExecutionConsumer:
             # hours while the strategy 'traded'). Requirement = premium cost +
             # headroom for the protective stop's naked-short margin. Fail-OPEN
             # on check errors (a broken balance probe must not halt trading).
-            est_cost = (_float(entry_premium) or 0) * 30 * int(signal_body.get("max_lots") or 1)
+            # Was a bare literal 30 -- matches BankNifty's "30 for the live
+            # cost model" convention (see resolve_lot_size docstring, and its
+            # other call sites) but bypassed resolve_lot_size() entirely, so
+            # it silently ignored STRATEGY_LOT_SIZE overrides and used
+            # BankNifty's headroom value for NIFTY too instead of
+            # NIFTY_LOT_SIZE. Found 2026-07-22.
+            from strategy_app.constants import resolve_lot_size
+            est_cost = (_float(entry_premium) or 0) * resolve_lot_size(primary_default=30) * int(signal_body.get("max_lots") or 1)
             min_free = float(os.getenv("EXEC_MIN_FREE_BALANCE_RS", "80000") or 80000)
             try:
                 probe = getattr(self._adapter, "_request", None)
@@ -278,6 +286,8 @@ def _dict_to_signal_stub(d: dict):
         direction = d.get("direction")
         strike = d.get("strike")
         entry_premium = _float(d.get("entry_premium"))
+        # EXIT only -- the real exit price. See TradeSignal.exit_premium.
+        exit_premium = _float(d.get("exit_premium"))
         max_lots = int(d.get("max_lots") or 1)
         expiry = _parse_date(d.get("expiry"))
         signal_type = d.get("signal_type")
@@ -287,12 +297,27 @@ def _dict_to_signal_stub(d: dict):
 
 def _dict_to_position_stub(d: dict):
     """Minimal duck-typed stub for position context fields needed by adapters."""
+    # current_premium must reflect the EXIT price on an exit signal, not the
+    # entry price -- previously both fields read entry_premium unconditionally,
+    # so PaperAdapter.place_exit's fallback chain never had a real exit price
+    # to fall through to and every paper exit filled at entry (P&L ~0%).
+    # Found 2026-07-22.
+    _exit_or_entry = _float(d.get("exit_premium"))
+    if _exit_or_entry is None:
+        _exit_or_entry = _float(d.get("entry_premium")) or 0.0
+
     class _Stub:
         position_id = str(d.get("position_id") or "")
         lots = int(d.get("max_lots") or 1)
-        current_premium = _float(d.get("entry_premium")) or 0.0
+        current_premium = _exit_or_entry
         entry_premium = _float(d.get("entry_premium")) or 0.0
         direction = d.get("direction")
         strike = d.get("strike")
+        # PaperAdapter.place_exit logs position.pnl_pct; this stub never
+        # defined it, so every paper-mode exit raised AttributeError inside
+        # place_exit (caught by the outer message-handler try/except and
+        # silently logged, never reaching the fill-emission step at all).
+        # Found 2026-07-22 while testing the exit_premium fix.
+        pnl_pct = 0.0
 
     return _Stub()

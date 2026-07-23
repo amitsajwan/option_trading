@@ -37,7 +37,14 @@ class PaperAdapter(BrokerAdapter):
         )
 
     def place_exit(self, signal: TradeSignal, position: PositionContext) -> OrderResult:
-        fill_price = signal.entry_premium or position.current_premium or position.entry_premium
+        # signal.exit_premium is the real exit price (added 2026-07-22 -- see
+        # TradeSignal.exit_premium docstring). signal.entry_premium was the
+        # only field ever populated here and is ALWAYS the original entry
+        # price even on an exit signal, so it used to win this fallback chain
+        # every time and every paper exit silently "filled" at entry (P&L ~0%).
+        fill_price = signal.exit_premium
+        if fill_price is None:
+            fill_price = position.current_premium or position.entry_premium
         fill_qty = position.lots * resolve_lot_size()
         logger.info(
             "paper exit: pos=%s pnl=%.3f premium=%.2f qty=%d signal_id=%s",

@@ -193,31 +193,47 @@ class PositionTracker:
             ):
                 exit_reason = ExitReason.TIME_STOP
                 exit_trigger = "stagnant_profit_exit"
-        elif not has_playbook and position.underlying_stop_pct is not None and self._is_underlying_stop_hit(position, current_futures_price):
+        # exit_reason is None guards added 2026-07-22: this is one elif chain,
+        # but only the STAGNANT_PROFIT branch above checked exit_reason is None
+        # before this fix. In default scalper mode (_stack_active False), if
+        # the exit stack above already set exit_reason and one of these
+        # legacy conditions ALSO happened to be true the same bar (unrelated
+        # coincidence -- these don't know about the stack's decision), the
+        # legacy branch still fired (its own condition was independently true)
+        # and silently overwrote the stack's already-correct exit_reason/
+        # exit_trigger label -- exactly the exit-misattribution failure mode
+        # CompositeExitPolicy's docstring says cost a full day of root-cause
+        # work on 2026-07-19. Exit PRICE was unaffected (current_premium is
+        # fixed before this chain runs); only the reason/trigger label was at risk.
+        elif exit_reason is None and not has_playbook and position.underlying_stop_pct is not None and self._is_underlying_stop_hit(position, current_futures_price):
             exit_reason = ExitReason.STOP_LOSS
             exit_trigger = "underlying_stop"
-        elif not has_playbook and self._is_early_stop_hit(position):
+        elif exit_reason is None and not has_playbook and self._is_early_stop_hit(position):
             exit_reason = ExitReason.STOP_LOSS
             exit_trigger = "early_stop"
-        elif not has_playbook and self._is_thesis_fail_exit(position):
+        elif exit_reason is None and not has_playbook and self._is_thesis_fail_exit(position):
             exit_reason = ExitReason.TIME_STOP
             exit_trigger = "thesis_fail"
-        elif not has_playbook and self._is_premium_stop_hit(position, current_premium):
+        elif exit_reason is None and not has_playbook and self._is_premium_stop_hit(position, current_premium):
             exit_reason = self._resolve_stop_exit_reason(position)
             exit_trigger = "premium_stop"
-        elif not has_playbook and position.underlying_target_pct is not None and self._is_underlying_target_hit(position, current_futures_price):
+        elif exit_reason is None and not has_playbook and position.underlying_target_pct is not None and self._is_underlying_target_hit(position, current_futures_price):
             exit_reason = ExitReason.TARGET_HIT
             exit_trigger = "underlying_target"
-        elif not has_playbook and position.target_pct > 0 and position.pnl_pct >= position.target_pct:
+        elif exit_reason is None and not has_playbook and position.target_pct > 0 and position.pnl_pct >= position.target_pct:
             exit_reason = ExitReason.TARGET_HIT
             exit_trigger = "premium_target"
-        elif not has_playbook and position.max_hold_bars is not None and position.bars_held >= int(position.max_hold_bars):
+        elif exit_reason is None and not has_playbook and position.max_hold_bars is not None and position.bars_held >= int(position.max_hold_bars):
             exit_reason = ExitReason.TIME_STOP
             exit_trigger = "max_hold"
-        elif not has_playbook and self._is_stagnant_exit(position):
+        elif exit_reason is None and not has_playbook and self._is_stagnant_exit(position):
             exit_reason = ExitReason.TIME_STOP
             exit_trigger = "stagnant_exit"
-        elif self._minute_of_day(snap) >= SOFT_CLOSE_MINUTE:
+        # Bottom-of-chain fallback, not a hard safety floor (those are above,
+        # lines ~163-171, and deliberately don't check exit_reason). The
+        # _stack_active branch's own soft_close (line ~175) already guards on
+        # exit_reason is None; this one didn't, so it was inconsistent.
+        elif exit_reason is None and self._minute_of_day(snap) >= SOFT_CLOSE_MINUTE:
             exit_reason = ExitReason.TIME_STOP
             exit_trigger = "soft_close"
 
@@ -282,11 +298,17 @@ class PositionTracker:
         stop_pct = float(position.underlying_stop_pct or 0.0)
         if stop_pct <= 0:
             return False
-        if position.direction == "CE":
+        # direction alone assumes CE==bullish-long / PE==bearish-long. For a
+        # SHORT position (e.g. _r1s_short_ce, _playbook_brain) that's backwards:
+        # a short CE profits when the underlying falls and loses when it rises.
+        # _is_premium_stop_hit already branches on _is_short() a few lines below
+        # -- this pair of functions was missed. Found 2026-07-22.
+        bullish_stop = position.direction == "CE"
+        if self._is_short(position):
+            bullish_stop = not bullish_stop
+        if bullish_stop:
             return current_futures_price <= position.entry_futures_price * (1.0 - stop_pct)
-        if position.direction == "PE":
-            return current_futures_price >= position.entry_futures_price * (1.0 + stop_pct)
-        return False
+        return current_futures_price >= position.entry_futures_price * (1.0 + stop_pct)
 
     def _is_underlying_target_hit(self, position: PositionContext, current_futures_price: Optional[float]) -> bool:
         if current_futures_price is None or current_futures_price <= 0:
@@ -296,11 +318,13 @@ class PositionTracker:
         target_pct = float(position.underlying_target_pct or 0.0)
         if target_pct <= 0:
             return False
-        if position.direction == "CE":
+        # See _is_underlying_stop_hit: side-aware for the same reason.
+        bullish_target = position.direction == "CE"
+        if self._is_short(position):
+            bullish_target = not bullish_target
+        if bullish_target:
             return current_futures_price >= position.entry_futures_price * (1.0 + target_pct)
-        if position.direction == "PE":
-            return current_futures_price <= position.entry_futures_price * (1.0 - target_pct)
-        return False
+        return current_futures_price <= position.entry_futures_price * (1.0 - target_pct)
 
     @staticmethod
     def _is_short(position: PositionContext) -> bool:
@@ -454,6 +478,7 @@ class PositionTracker:
             # on exit (a live position must be exitable, not stranded).
             expiry=getattr(position, "expiry", None),
             entry_premium=position.entry_premium,
+            exit_premium=exit_premium,
             position_id=position.position_id,
             exit_reason=reason,
             reason=(

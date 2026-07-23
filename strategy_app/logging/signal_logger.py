@@ -249,6 +249,10 @@ class SignalLogger:
             # (Dhan maps (expiry, strike, CE/PE) -> securityId). Serialize as ISO date.
             "expiry": signal.expiry.isoformat() if getattr(signal, "expiry", None) else None,
             "entry_premium": signal.entry_premium,
+            # EXIT only. Additive (2026-07-22) -- see TradeSignal.exit_premium
+            # docstring: without this, execution_app had no way to learn the
+            # real exit price and paper-mode exits always "filled" at entry.
+            "exit_premium": signal.exit_premium,
             "max_hold_bars": signal.max_hold_bars,
             "stop_loss_pct": signal.stop_loss_pct,
             "target_pct": signal.target_pct,

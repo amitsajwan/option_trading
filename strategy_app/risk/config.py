@@ -8,6 +8,17 @@ from typing import Any, Optional
 from ..utils.env import as_bool, as_optional_float, as_positive_int
 
 
+def _float_or(value: Optional[float], default: float) -> float:
+    """value if explicitly set (including a legitimate 0.0), else default.
+
+    `float(as_optional_float(x) or default)` silently replaced a deliberately
+    configured 0 (e.g. "activate trailing immediately at MFE=0") with the
+    hardcoded default, since 0.0 is falsy in Python -- a config change
+    believed to zero out a gate had no effect. Found 2026-07-22.
+    """
+    return default if value is None else float(value)
+
+
 @dataclass(frozen=True)
 class StrategyTrailConfig:
     activation_mfe: float = 0.15
@@ -21,9 +32,9 @@ class StrategyTrailConfig:
         if not isinstance(payload, dict):
             return cls()
         return cls(
-            activation_mfe=max(0.0, float(as_optional_float(payload.get("activation_mfe")) or 0.15)),
-            trail_offset=max(0.0, float(as_optional_float(payload.get("trail_offset")) or 0.08)),
-            min_lock_pct=max(0.0, float(as_optional_float(payload.get("min_lock_pct")) or 0.05)),
+            activation_mfe=max(0.0, _float_or(as_optional_float(payload.get("activation_mfe")), 0.15)),
+            trail_offset=max(0.0, _float_or(as_optional_float(payload.get("trail_offset")), 0.08)),
+            min_lock_pct=max(0.0, _float_or(as_optional_float(payload.get("min_lock_pct")), 0.05)),
             priority_over_regime=as_bool(payload.get("priority_over_regime"), default=True),
             regime_filter=(str(payload.get("regime_filter") or "").strip().upper() or None),
         )
@@ -92,8 +103,8 @@ class PositionRiskConfig:
             stop_loss_pct=as_optional_float(payload.get("stop_loss_pct")),
             target_pct=as_optional_float(payload.get("target_pct")),
             trailing_enabled=as_bool(payload.get("trailing_enabled"), default=False),
-            trailing_activation_pct=max(0.0, float(as_optional_float(payload.get("trailing_activation_pct")) or 0.10)),
-            trailing_offset_pct=max(0.0, float(as_optional_float(payload.get("trailing_offset_pct")) or 0.05)),
+            trailing_activation_pct=max(0.0, _float_or(as_optional_float(payload.get("trailing_activation_pct")), 0.10)),
+            trailing_offset_pct=max(0.0, _float_or(as_optional_float(payload.get("trailing_offset_pct")), 0.05)),
             trailing_lock_breakeven=as_bool(payload.get("trailing_lock_breakeven"), default=True),
             orb_trail=StrategyTrailConfig.from_payload(payload.get("orb_trail")),
             oi_trail=StrategyTrailConfig.from_payload(payload.get("oi_trail")),
@@ -102,12 +113,12 @@ class PositionRiskConfig:
             underlying_stop_pct=as_optional_float(payload.get("underlying_stop_pct")),
             underlying_target_pct=as_optional_float(payload.get("underlying_target_pct")),
             stagnant_exit_bars=max(0, int(as_optional_float(payload.get("stagnant_exit_bars")) or 0)),
-            stagnant_min_gain_pct=max(0.0, float(as_optional_float(payload.get("stagnant_min_gain_pct")) or 0.05)),
+            stagnant_min_gain_pct=max(0.0, _float_or(as_optional_float(payload.get("stagnant_min_gain_pct")), 0.05)),
             stagnant_exit_condition=str(payload.get("stagnant_exit_condition") or ""),
-            orb_max_range_pts=max(0.0, float(as_optional_float(payload.get("orb_max_range_pts")) or 0.0)),
+            orb_max_range_pts=max(0.0, _float_or(as_optional_float(payload.get("orb_max_range_pts")), 0.0)),
             thesis_fail_exit_bars=max(0, int(as_optional_float(payload.get("thesis_fail_exit_bars")) or 0)),
-            thesis_fail_min_mfe_pct=max(0.0, float(as_optional_float(payload.get("thesis_fail_min_mfe_pct")) or 0.02)),
-            thesis_fail_pnl_pct=float(as_optional_float(payload.get("thesis_fail_pnl_pct")) or -0.08),
+            thesis_fail_min_mfe_pct=max(0.0, _float_or(as_optional_float(payload.get("thesis_fail_min_mfe_pct")), 0.02)),
+            thesis_fail_pnl_pct=_float_or(as_optional_float(payload.get("thesis_fail_pnl_pct")), -0.08),
             early_stop_loss_bars=max(0, int(as_optional_float(payload.get("early_stop_loss_bars")) or 0)),
             early_stop_loss_pct=as_optional_float(payload.get("early_stop_loss_pct")),
             atm_strike_only=as_bool(payload.get("atm_strike_only"), default=False),

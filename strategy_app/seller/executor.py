@@ -46,6 +46,13 @@ class OpenSpread:
     trade_date: str
     direction: Optional[str] = None
     meta: dict = field(default_factory=dict)
+    # Legs already confirmed flat during a close attempt, keyed by "{option_type}{strike}"
+    # -> fill price. close_spread() is called again on every tick until it succeeds
+    # (runner.py keeps a spread tracked on any failure so a live position is never
+    # dropped) -- without this, a retry re-issued the buy-back order for legs that
+    # had ALREADY closed successfully in a prior attempt, opening a real unintended
+    # position every retry. Found 2026-07-22.
+    closed_legs: dict = field(default_factory=dict)
 
     @property
     def max_risk(self) -> float:
@@ -104,21 +111,49 @@ class SafeExecutor:
                 logger.exception("seller unwind: failed to flatten %s%d — MANUAL CHECK", fl.option_type, fl.strike)
 
     # ── CLOSE ────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _leg_key(fl: FilledLeg) -> str:
+        return f"{fl.option_type}{fl.strike}"
+
     def close_spread(self, spread: OpenSpread, expiry: date) -> Optional[float]:
-        """Square off: buy-back SHORT legs first, then sell longs. Returns exit value (points)."""
+        """Square off: buy-back SHORT legs first, then sell longs. Returns exit value (points).
+
+        Resumable across retries: legs already confirmed flat in a prior attempt
+        (spread.closed_legs) are never re-submitted, and a failure on EITHER side
+        (short buy-back or long sell) returns None so the caller retries next tick
+        instead of the position silently going untracked with a real leg still open.
+        """
         shorts = [fl for fl in spread.legs if fl.action == "SELL"]
         longs = [fl for fl in spread.legs if fl.action == "BUY"]
-        exit_prices: dict[tuple[str, int], float] = {}
         for fl in shorts:                      # buy back shorts FIRST (remove risk)
+            key = self._leg_key(fl)
+            if key in spread.closed_legs:
+                continue                        # already flattened in a prior attempt
             f = self._gw.execute("BUY", fl.option_type, fl.strike, expiry, fl.qty)
             if not f.filled:
                 logger.error("seller close: buy-back %s%d FAILED (%s) — position still risk-capped, retry needed",
                              fl.option_type, fl.strike, f.error)
                 return None
-            exit_prices[(fl.option_type, fl.strike)] = f.price
+            spread.closed_legs[key] = f.price
         for fl in longs:                       # then sell the long hedges
+            key = self._leg_key(fl)
+            if key in spread.closed_legs:
+                continue                        # already sold in a prior attempt
             f = self._gw.execute("SELL", fl.option_type, fl.strike, expiry, fl.qty)
-            exit_prices[(fl.option_type, fl.strike)] = f.price if f.filled else 0.0
+            if not f.filled:
+                # Previously recorded price=0.0 and let the close "succeed" anyway,
+                # which dropped the spread from tracking while this leg stayed open
+                # at the broker (untracked, unhedged risk) and understated pnl_rs.
+                # Retry like the shorts loop -- the risk-reducing legs above are
+                # already recorded in closed_legs so they won't be re-submitted.
+                logger.error("seller close: hedge sell %s%d FAILED (%s) — leg still open, retry needed",
+                             fl.option_type, fl.strike, f.error)
+                return None
+            spread.closed_legs[key] = f.price
+        exit_prices: dict[tuple[str, int], float] = {
+            (fl.option_type, fl.strike): spread.closed_legs[self._leg_key(fl)]
+            for fl in spread.legs
+        }
         exit_value = (sum(exit_prices.get((fl.option_type, fl.strike), 0.0) for fl in shorts)
                       - sum(exit_prices.get((fl.option_type, fl.strike), 0.0) for fl in longs))
         # PAPER/replay fills come from reconstructed chains; when strikes drift
