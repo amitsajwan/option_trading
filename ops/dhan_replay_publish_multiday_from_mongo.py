@@ -155,7 +155,12 @@ def _prev_day_bars_for(date):
 # streams migration. Fixed to use the same RedisEventBus.publish() path
 # snapshot_app's live producer uses, which XADDs when the resolved name
 # starts with "stream:" (see contracts_app/event_bus.py).
-_bus = RedisEventBus()
+_bus = RedisEventBus(redis_kwargs={
+    "host": os.getenv("REDIS_HOST", "redis"),
+    "port": int(os.getenv("REDIS_PORT", "6379")),
+    "db": 0,
+    "decode_responses": True,
+})
 _stream_name = stream_name_for_topic(TOPIC)
 log(f"publishing via Redis Streams: topic={TOPIC} -> stream={_stream_name}", "multiday")
 interval = 60.0 / max(1.0, speed)
