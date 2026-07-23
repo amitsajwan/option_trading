@@ -107,7 +107,18 @@ class _ScripMaster:
             for row in reader:
                 if (row.get("SEM_INSTRUMENT_NAME") or "") != "OPTIDX":
                     continue
-                if _UNDERLYING not in (row.get("SEM_TRADING_SYMBOL") or "").upper():
+                # Exact leading-token match, NOT substring: "NIFTY" is a substring of
+                # BANKNIFTY/FINNIFTY/MIDCPNIFTY/NIFTYNXT50's trading symbols too, so the
+                # old `_UNDERLYING in symbol` check silently pulled in all of them for a
+                # NIFTY container. All 5 families share (expiry, strike, option_type)
+                # ranges (confirmed: 122 real collisions with FINNIFTY alone in NIFTY's
+                # near-the-money 23000-26000 zone for the 2026-07-28 expiry) and this is
+                # a plain dict, so whichever family's row the CSV iterated last silently
+                # overwrote the correct entry -- resolve() could return FINNIFTY's
+                # security_id/lot for what was meant to be a NIFTY order. Found 2026-07-23
+                # via a lot-size drift warning (scrip_master=60 registry=65, i.e. FINNIFTY's
+                # lot winning over NIFTY's). Dhan symbols are "{FAMILY}-{expiry}-{strike}-{CE|PE}".
+                if ((row.get("SEM_TRADING_SYMBOL") or "").upper().split("-", 1)[0]) != _UNDERLYING:
                     continue
                 opt = (row.get("SEM_OPTION_TYPE") or "").upper()
                 if opt not in ("CE", "PE"):
