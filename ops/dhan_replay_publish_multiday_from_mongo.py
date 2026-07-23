@@ -49,7 +49,8 @@ from pymongo import MongoClient
 from market_data_dashboard.services.dhan_replay_ingestion_server import DhanReplayIngestionServer
 from snapshot_app.core.market_snapshot import LiveMarketSnapshotBuilder
 from contracts_app import build_snapshot_event
-import redis as redis_lib
+from contracts_app.event_bus import RedisEventBus
+from contracts_app.topics import stream_name_for_topic
 
 TOPIC = "market:snapshot:v1:historical"
 STEP = 100 if instrument.upper() == "BANKNIFTY" else 50
@@ -142,8 +143,21 @@ def _prev_day_bars_for(date):
     return []
 
 
-r = redis_lib.Redis(host=os.getenv("REDIS_HOST", "redis"), port=int(os.getenv("REDIS_PORT", "6379")),
-                    db=0, decode_responses=True)
+
+# Was raw redis.Redis(...).publish(TOPIC, ...) -- plain Pub/Sub. strategy_app's
+# consumer moved to Redis Streams (XREADGROUP, confirmed by its own startup
+# log: "stream consumer group created stream=..."); Pub/Sub messages are a
+# completely separate mechanism and are never delivered to a Streams
+# consumer. This script silently published into the void -- no error,
+# emitted counts looked fine, but strategy_app_historical never saw a single
+# bar (confirmed via its consumer health log: events=0 for the entire run).
+# Found 2026-07-23 running the first OOS validation replay since the
+# streams migration. Fixed to use the same RedisEventBus.publish() path
+# snapshot_app's live producer uses, which XADDs when the resolved name
+# starts with "stream:" (see contracts_app/event_bus.py).
+_bus = RedisEventBus()
+_stream_name = stream_name_for_topic(TOPIC)
+log(f"publishing via Redis Streams: topic={TOPIC} -> stream={_stream_name}", "multiday")
 interval = 60.0 / max(1.0, speed)
 
 # One server, one builder, alive for the whole run — the entire point of
@@ -214,7 +228,7 @@ try:
                 snapshot=snapshot, source="dhan_replay_multiday_from_mongo",
                 metadata={"run_id": f"replay-multiday-{date}-{instrument.lower()}",
                           "replay_date": date, "bar_index": i})
-            r.publish(TOPIC, json.dumps(event, default=str))
+            _bus.publish(_stream_name, event)
             emitted += 1
             if emitted % 100 == 0:
                 log(f"published {emitted}/{len(raw['index_bars'])}", date)
