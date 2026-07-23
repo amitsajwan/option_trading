@@ -1,0 +1,13 @@
+services:
+  strategy_app_historical:
+    environment:
+      # Isolated test (2026-07-23): the just-completed 0.15%-model OOS replay
+      # showed 4 of 5 trades killed at bar 1 by REGIME_SHIFT under the default
+      # "absolute" flip mode -- MomentumReversalPolicy's already-diagnosed and
+      # fixed defect (commit 674270b), shipped opt-in and never flipped on for
+      # this container. This override changes ONLY that one flag, deliberately
+      # not bundling in any of the other experimental exit-tuning overrides in
+      # docker-compose.banknifty-historical-adaptive.yml, so the re-run isolates
+      # the entry model's real quality from this one specific confound and
+      # nothing else.
+      LOTTERY_MOMENTUM_FLIP_MODE: "reversal"
