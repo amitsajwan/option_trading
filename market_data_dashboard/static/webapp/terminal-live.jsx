@@ -2154,9 +2154,22 @@ function MobileLiveShell({
   // fell back to null there -- silently. Confirmed against real live traces
   // 2026-07-22. Fall back to entry_model.entry_prob so this actually shows
   // a value on the account that matters most.
+  //
+  // rows[0] is the OLDEST bar, not the latest: read_decision_timeline()
+  // (market_data_dashboard/state/strategy_current_state.py) streams
+  // decision_traces.jsonl in natural file-append order (chronological
+  // ascending) with no sort/reverse -- confirmed directly against the live
+  // API (limit=1 returned 09:15, the session's opening bar, hours stale).
+  // Same bug class as the trades[0]-is-oldest fix from the 2026-07-22 UI
+  // review; this one was in code added AFTER that review and never
+  // actually verified against real data until a live screenshot showed a
+  // "latest decision" panel stuck at 09:15. The backend's own tests
+  // (test_decision_timeline_returns_per_minute_rows et al.) and the
+  // collapse feature's time/time_end semantics depend on ascending order,
+  // so the fix is here, not in the backend. Found 2026-07-23.
   const latestRow = (() => {
     const rows = timeline?.decisions;
-    return Array.isArray(rows) && rows.length ? rows[0] : null;
+    return Array.isArray(rows) && rows.length ? rows[rows.length - 1] : null;
   })();
   const lastProb = (() => {
     if (!latestRow) return null;
