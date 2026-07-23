@@ -1811,10 +1811,29 @@ class DeterministicRuleEngine(StrategyEngine):
         # Fill-truth (2026-07-12): live-tier entries must be CONFIRMED by a broker
         # fill; otherwise the tracker is managing a phantom (2026-07-10: hours of
         # 'trading' on RMS-rejected orders). Paper tier never reaches the broker.
+        #
+        # sim/replay exclusion (found 2026-07-23): this mechanism was armed for
+        # EVERY tier=="live" signal regardless of run_id. execution_app is never
+        # in the loop during a sim/replay run (its own signals are hard-blocked
+        # at the broker boundary by the same run_id prefix check), so no fill
+        # confirmation event can ever arrive -- every tier=live position was
+        # silently cancelled via cancel_position("fill_confirm_timeout") after
+        # exactly FILL_CONFIRM_BARS (default 5) bars, with NO exit signal and NO
+        # positions.jsonl close record. Confirmed live: a 2026-07-23 OOS replay
+        # showed 5 phantom "trades" opening every ~6 bars on one day alone, all
+        # tier=live, zero EXIT signals in signals.jsonl, engine_state.has_position
+        # flipping True->False with no exit_taken bar in between. This was
+        # previously masked in most replays by an unrelated bar-1 REGIME_SHIFT
+        # bug that killed positions before bar 5 anyway; it only became visible
+        # once that bug's fix (LOTTERY_MOMENTUM_FLIP_MODE=reversal) let positions
+        # survive long enough to hit this one. Replay/sim signals are already
+        # implicitly "filled" (matches PaperAdapter and every other replay path
+        # in this codebase) so the wait is simply skipped, not shortened.
         _sig_tier = str((signal.raw_signals or {}).get("tier") or "").strip().lower()
+        _is_sim_or_replay = str(self._run_id or "").strip().lower().startswith(("sim-", "replay-"))
         self._await_fill = (
             {"position_id": opened.position_id, "bars": 0, "confirmed": False}
-            if _sig_tier == "live" else None
+            if _sig_tier == "live" and not _is_sim_or_replay else None
         )
         self._log.log_signal(signal, acted_on=True)
         self._log.log_position_open(signal, opened)
