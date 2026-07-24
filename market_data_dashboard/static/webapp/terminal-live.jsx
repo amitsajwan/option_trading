@@ -2075,6 +2075,164 @@ function LiveDecisionPanel({ row, bf }) {
   );
 }
 
+// ── NIFTY live panel ────────────────────────────────────────────────────────
+// Dual-instrument manual-trading aid (2026-07-24). The Live view's session WS
+// pipeline is BankNifty-only, so NIFTY gets a self-contained panel instead:
+// the engine's latest per-minute gated decision (rendered by the SAME
+// LiveDecisionPanel component BankNifty uses above it) plus a lightweight SVG
+// price sparkline from /api/candles. Deliberately shows the engine's gated
+// verdict — probability vs threshold, direction, regime, tier, block reason —
+// not a bare signal: the point is "what would the system do this minute",
+// so a manual trade decision is made against the system's own discipline.
+// Backend: /api/strategy/decisions?mode=live_nifty (reads
+// .run/strategy_app_nifty/decision_traces.jsonl, same producer/shape as
+// BankNifty's mode=live).
+function _todayISTStr() {
+  const now = new Date();
+  const ist = new Date(now.getTime() + (now.getTimezoneOffset() + 330) * 60000);
+  return ist.toISOString().slice(0, 10);
+}
+
+function InstrumentCaption({ name, price, chgPct, barTime, stale }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px 0',
+      fontFamily: 'var(--f-mono)',
+    }}>
+      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', color: 'var(--fg-2)' }}>{name}</span>
+      {price != null && (
+        <span style={{ fontSize: 10, color: 'var(--fg-2)' }}>
+          {Number(price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </span>
+      )}
+      {chgPct != null && (
+        <span style={{ fontSize: 9.5, color: chgPct >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
+          {chgPct >= 0 ? '+' : ''}{chgPct.toFixed(2)}%
+        </span>
+      )}
+      <span style={{ fontSize: 8.5, color: stale ? 'var(--warn)' : 'var(--fg-4)', marginLeft: 'auto' }}>
+        {barTime ? `bar ${barTime}` : ''}{stale ? ' · STALE' : ''}
+      </span>
+    </div>
+  );
+}
+
+function PriceSparkline({ closes }) {
+  if (!Array.isArray(closes) || closes.length < 2) {
+    return <div style={{ height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--f-mono)', fontSize: 9, color: 'var(--fg-4)' }}>no chart data</div>;
+  }
+  const min = Math.min(...closes), max = Math.max(...closes);
+  const range = (max - min) || 1;
+  const pts = closes.map((c, i) => {
+    const x = (i / (closes.length - 1)) * 100;
+    const y = 28 - ((c - min) / range) * 26; // 1px pad top/bottom in a 0..29 box
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(' ');
+  const up = closes[closes.length - 1] >= closes[0];
+  const color = up ? 'var(--pos)' : 'var(--neg)';
+  return (
+    <div style={{ padding: '4px 12px 0' }}>
+      <svg viewBox="0 0 100 30" preserveAspectRatio="none" style={{ width: '100%', height: 44, display: 'block' }}>
+        <polyline points={pts} fill="none" stroke={color} strokeWidth="0.7"
+          vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+      </svg>
+    </div>
+  );
+}
+
+function NiftyLivePanel() {
+  const [row, setRow] = _s(null);
+  const [openPos, setOpenPos] = _s(null);
+  const [closes, setCloses] = _s(null);
+  const [lastBarISO, setLastBarISO] = _s(null);
+  const [failed, setFailed] = _s(false);
+
+  // Latest engine decision + open position — every 30s (bars are 1-min).
+  _e(() => {
+    let alive = true;
+    const load = () => {
+      const date = _todayISTStr();
+      const tlP = fetch(`/api/strategy/decisions?mode=live_nifty&date=${date}&limit=500`)
+        .then(r => r.ok ? r.json() : null).catch(() => null);
+      const stP = fetch(`/api/strategy/current/state?mode=live_nifty&latest_n=0`)
+        .then(r => r.ok ? r.json() : null).catch(() => null);
+      Promise.all([tlP, stP]).then(([tl, st]) => {
+        if (!alive) return;
+        const rows = tl?.decisions;
+        // rows are chronological ascending (same contract as BankNifty's
+        // timeline — see the latestRow comment in MobileLiveShell).
+        setRow(Array.isArray(rows) && rows.length ? rows[rows.length - 1] : null);
+        setOpenPos(st?.open_position || null);
+        setFailed(tl == null);
+      });
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  // Price sparkline — every 60s. Dedupe sub-minute rows by bar start
+  // (last write wins), same as the Multi page's mini chart.
+  _e(() => {
+    let alive = true;
+    const load = () => fetch(`/api/candles?instrument=NIFTY&bars=80`)
+      .then(r => r.ok ? r.json() : [])
+      .catch(() => [])
+      .then(bars => {
+        if (!alive || !Array.isArray(bars)) return;
+        const seen = new Map();
+        let lastISO = null;
+        for (const b of bars) {
+          const iso = b.start_at || b.time || b.timestamp;
+          const close = b.close ?? b.c ?? b.ltp;
+          if (!iso || close == null) continue;
+          const ms = new Date(iso).getTime();
+          if (!isFinite(ms)) continue;
+          seen.set(Math.floor(ms / 60000), Number(close));
+          if (!lastISO || iso > lastISO) lastISO = iso;
+        }
+        const series = Array.from(seen.entries()).sort((a, b) => a[0] - b[0]).map(([, v]) => v);
+        setCloses(series.length ? series : null);
+        setLastBarISO(lastISO);
+      });
+    load();
+    const id = setInterval(load, 60000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  const last = closes && closes.length ? closes[closes.length - 1] : null;
+  const chgPct = closes && closes.length > 1 ? ((closes[closes.length - 1] / closes[0]) - 1) * 100 : null;
+  const staleMs = lastBarISO ? (Date.now() - new Date(lastBarISO).getTime()) : null;
+  const stale = staleMs != null && staleMs > 3 * 60000;
+
+  return (
+    <div style={{ borderTop: '1px solid var(--bg-4)', marginTop: 6, paddingBottom: 2 }}>
+      <InstrumentCaption name="NIFTY" price={last} chgPct={chgPct} barTime={row?.time} stale={stale} />
+      <PriceSparkline closes={closes} />
+      {openPos && (
+        <div style={{
+          margin: '6px 12px 0', padding: '4px 8px', display: 'flex', alignItems: 'center', gap: 8,
+          fontFamily: 'var(--f-mono)', fontSize: 9.5, borderRadius: 'var(--r-2)',
+          background: 'rgba(255,160,0,0.10)', border: '1px solid rgba(255,160,0,0.25)',
+        }}>
+          <span style={{ color: 'var(--warn)', fontWeight: 700 }}>OPEN</span>
+          <span style={{ color: 'var(--fg-2)' }}>{openPos.option_type || openPos.direction} {openPos.strike ? Math.round(openPos.strike) : ''}</span>
+          {openPos.pnl_pct != null && (
+            <span style={{ color: Number(openPos.pnl_pct) >= 0 ? 'var(--pos)' : 'var(--neg)', fontWeight: 700 }}>
+              {Number(openPos.pnl_pct) >= 0 ? '+' : ''}{(Number(openPos.pnl_pct) * 100).toFixed(2)}%
+            </span>
+          )}
+        </div>
+      )}
+      {failed
+        ? <div style={{ padding: '8px 12px', fontFamily: 'var(--f-mono)', fontSize: 9.5, color: 'var(--fg-4)' }}>
+            NIFTY decision feed unavailable
+          </div>
+        : <LiveDecisionPanel row={row} />}
+    </div>
+  );
+}
+
 function MobileLiveShell({
   session, candles, upToIdx, flashIdx, flashId,
   trades, signals, strategies,
@@ -2266,7 +2424,15 @@ function MobileLiveShell({
           {/* ── Tape tab ──────────────────────────────────────────────────── */}
           <div className={tab === 'tape' ? '' : 'm-tab-hidden'}>
             {/* Latest-bar decision detail: verdict, probabilities, direction/regime context, shadow score */}
+            {watchMode !== 'sim' && (
+              <div style={{ padding: '7px 12px 0', fontFamily: 'var(--f-mono)', fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', color: 'var(--fg-2)' }}>
+                {session.instrument || 'BANKNIFTY'}
+              </div>
+            )}
             <LiveDecisionPanel row={latestRow} bf={bf} />
+            {/* NIFTY: engine decision + sparkline — live only (sim watch is
+                single-instrument). See NiftyLivePanel for rationale. */}
+            {watchMode !== 'sim' && <NiftyLivePanel />}
             {/* Gate funnel strip — visible when no trades yet or always */}
             {bf.outcomes && (() => {
               const o = bf.outcomes;
