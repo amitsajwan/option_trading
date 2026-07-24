@@ -153,7 +153,8 @@ class GivebackStopPolicy(ExitPolicy):
     """
 
     def __init__(self, min_mfe: float = 0.03, giveback_pct: float = 0.09,
-                 tiers: Optional[list[tuple[float, float]]] = None):
+                 tiers: Optional[list[tuple[float, float]]] = None,
+                 confirm_bars: int = 1):
         self._min_mfe = min_mfe
         self._giveback = giveback_pct
         # Optional (mfe_threshold, giveback_pct) tiers, ascending by threshold.
@@ -163,6 +164,20 @@ class GivebackStopPolicy(ExitPolicy):
         # it at whatever price they hit, not near the peak. Tiers keep the floor
         # tight while MFE is modest and only widen once it's proven itself.
         self._tiers = tiers
+        # Confirmation bars (2026-07-24): default 1 = fire on the FIRST breach,
+        # byte-identical to prior behavior. A 2026-07-24 live BankNifty trade
+        # hit +4.01% MFE then closed at -0.51% one bar later -- the tier-1
+        # floor (4.01%-2%=2.01%) was breached by a single noisy bar, and the
+        # position never got a chance to recover; price kept climbing another
+        # ~140pts in the following minutes without us in it. Unlike the hard
+        # stop (HardStopPolicy, checked separately, always instant -- never
+        # touched by this), the giveback floor is a "did the move fade" read
+        # that benefits from requiring the breach to persist, same debounce
+        # pattern already proven for the seller's stop_2x
+        # (SELLER_STOP_CONFIRM_BARS). >1 requires N CONSECUTIVE breached bars;
+        # a bar back above the floor resets the streak to 0, not just -1.
+        self._confirm_bars = max(1, int(confirm_bars))
+        self._breach_streak: dict[str, int] = {}
 
     def _giveback_for(self, mfe_pct: float) -> float:
         if not self._tiers:
@@ -174,12 +189,20 @@ class GivebackStopPolicy(ExitPolicy):
         return result
 
     def check(self, position: PositionContext, snap: SnapshotAccessor) -> Optional[ExitReason]:
+        pid = position.position_id
         if position.mfe_pct < self._min_mfe:
+            self._breach_streak.pop(pid, None)
             return None
         floor = position.mfe_pct - self._giveback_for(position.mfe_pct)
-        if position.pnl_pct < floor:
-            return ExitReason.TRAILING_STOP
-        return None
+        if position.pnl_pct >= floor:
+            self._breach_streak.pop(pid, None)
+            return None
+        streak = self._breach_streak.get(pid, 0) + 1
+        if streak < self._confirm_bars:
+            self._breach_streak[pid] = streak
+            return None
+        self._breach_streak.pop(pid, None)
+        return ExitReason.TRAILING_STOP
 
     @property
     def name(self) -> str:
@@ -396,6 +419,7 @@ def build_scalper_exit_stack() -> CompositeExitPolicy:
     giveback_enabled = as_bool(os.getenv("EXIT_GIVEBACK_STOP_ENABLED", "false"))
     giveback_min_mfe = float(os.getenv("EXIT_GIVEBACK_MIN_MFE", "0.03") or "0.03")
     giveback_pct = float(os.getenv("EXIT_GIVEBACK_PCT", "0.09") or "0.09")
+    giveback_confirm_bars = int(os.getenv("EXIT_GIVEBACK_CONFIRM_BARS", "1") or "1")
     # Model-horizon timestop (0 = off): exit losing/flat positions once the entry
     # model's prediction window (15 min) has expired. Winners are exempt.
     stale_bars = int(os.getenv("EXIT_SCALPER_STALE_BARS", "0") or "0")
@@ -406,7 +430,8 @@ def build_scalper_exit_stack() -> CompositeExitPolicy:
         ThesisFailPolicy(thesis_bars, thesis_min_mfe),
     ]
     if giveback_enabled:
-        policies.append(GivebackStopPolicy(giveback_min_mfe, giveback_pct))
+        policies.append(GivebackStopPolicy(giveback_min_mfe, giveback_pct,
+                                            confirm_bars=giveback_confirm_bars))
     if stale_bars > 0:
         policies.append(StaleThesisTimestopPolicy(stale_bars, stale_min_pnl))
     policies += [
@@ -445,6 +470,7 @@ def build_lottery_exit_stack() -> CompositeExitPolicy:
     giveback_enabled = as_bool(os.getenv("EXIT_GIVEBACK_STOP_ENABLED", "false"))
     giveback_min_mfe = float(os.getenv("EXIT_GIVEBACK_MIN_MFE", "0.03") or "0.03")
     giveback_pct = float(os.getenv("LOTTERY_GIVEBACK_PCT", "0.15") or "0.15")
+    giveback_confirm_bars = int(os.getenv("LOTTERY_GIVEBACK_CONFIRM_BARS", "1") or "1")
     # 2026-07-16: flat giveback (tuned for the rare big winner) gives almost no
     # protection to trades that only ever peak modest -- floor sits below zero
     # at a 5-8% peak, so TIME_STOP/REGIME_SHIFT closes them well off the peak
@@ -465,7 +491,8 @@ def build_lottery_exit_stack() -> CompositeExitPolicy:
         ThesisFailPolicy(thesis_bars, thesis_min_mfe),
     ]
     if giveback_enabled:
-        policies.append(GivebackStopPolicy(giveback_min_mfe, giveback_pct, tiers=giveback_tiers))
+        policies.append(GivebackStopPolicy(giveback_min_mfe, giveback_pct, tiers=giveback_tiers,
+                                            confirm_bars=giveback_confirm_bars))
     if flip > 0:
         policies.append(MomentumReversalPolicy(flip, min_bars=flip_min_bars, mode=flip_mode, reversal_delta=flip_delta))
     policies += [

@@ -279,6 +279,52 @@ class TestGivebackStopPolicy:
         assert "give=9%" in p.name
 
 
+class TestGivebackStopConfirmBars:
+    """Confirmation-bars debounce (2026-07-24): default confirm_bars=1 is
+    byte-identical to the old fire-on-first-breach behavior (covered by
+    TestGivebackStopPolicy above, all called with the implicit default).
+    These pin the >1 behavior: N CONSECUTIVE breached bars required, a bar
+    back above the floor resets the streak to zero (not decrements it), and
+    state is tracked per position_id so it can't leak across positions."""
+
+    def test_single_breach_does_not_fire_with_confirm_2(self):
+        p = GivebackStopPolicy(min_mfe=0.03, giveback_pct=0.09, confirm_bars=2)
+        # Same inputs as test_fires_on_jun4_dead_zone_pattern, which fires at
+        # confirm_bars=1 -- with confirm_bars=2 a single bar must NOT fire.
+        assert p.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) is None
+
+    def test_second_consecutive_breach_fires(self):
+        p = GivebackStopPolicy(min_mfe=0.03, giveback_pct=0.09, confirm_bars=2)
+        assert p.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) is None
+        assert p.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) == ExitReason.TRAILING_STOP
+
+    def test_recovery_bar_resets_streak_not_decrements(self):
+        p = GivebackStopPolicy(min_mfe=0.03, giveback_pct=0.09, confirm_bars=3)
+        assert p.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) is None  # streak=1
+        assert p.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) is None  # streak=2
+        # Recovers above floor for one bar -- streak must reset to 0, not 1.
+        assert p.check(_pos(mfe_pct=0.05, pnl_pct=-0.02), _snap) is None
+        assert p.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) is None  # streak=1, not 3
+        assert p.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) is None  # streak=2
+        assert p.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) == ExitReason.TRAILING_STOP  # streak=3
+
+    def test_hard_stop_is_a_separate_policy_never_debounced(self):
+        """The user's explicit requirement: hard stop-loss must always fire
+        instantly regardless of any giveback confirm_bars setting. HardStopPolicy
+        has no confirm_bars parameter at all -- this pins that it fires on the
+        very first bar, unaffected by whatever the giveback policy is doing."""
+        hard = HardStopPolicy(stop_pct=0.15)
+        assert hard.check(_pos(mfe_pct=0.0, pnl_pct=-0.16), _snap) == ExitReason.STOP_LOSS
+
+    def test_streak_is_per_position_id(self):
+        p = GivebackStopPolicy(min_mfe=0.03, giveback_pct=0.09, confirm_bars=2)
+        assert p.check(_pos(position_id="pos-A", mfe_pct=0.04, pnl_pct=-0.06), _snap) is None
+        # A different position's first breach must not inherit pos-A's streak.
+        assert p.check(_pos(position_id="pos-B", mfe_pct=0.04, pnl_pct=-0.06), _snap) is None
+        # pos-A's second consecutive breach now fires; pos-B's streak is untouched at 1.
+        assert p.check(_pos(position_id="pos-A", mfe_pct=0.04, pnl_pct=-0.06), _snap) == ExitReason.TRAILING_STOP
+
+
 class TestGivebackStopStackWiring:
     """GivebackStopPolicy wired into scalper and lottery stacks via env vars."""
 
@@ -342,6 +388,33 @@ class TestGivebackStopStackWiring:
         assert stack.check(_pos(mfe_pct=0.04, pnl_pct=-0.07), _snap) is None
         # MFE=6% ≥ 5% → active; floor=6%-9%=-3%; pnl=-4% → fires
         assert stack.check(_pos(mfe_pct=0.06, pnl_pct=-0.04), _snap) == ExitReason.TRAILING_STOP
+
+    def test_lottery_confirm_bars_env_wired(self, monkeypatch):
+        # LOTTERY_GIVEBACK_CONFIRM_BARS is the knob that's actually live for
+        # BankNifty (build_lottery_exit_stack -- see trader_master_live_v1's
+        # strategy_family_version). Default (unset) must stay 1 = old behavior.
+        monkeypatch.setenv("EXIT_GIVEBACK_STOP_ENABLED", "1")
+        monkeypatch.setenv("EXIT_GIVEBACK_MIN_MFE", "0.03")
+        monkeypatch.setenv("LOTTERY_GIVEBACK_PCT", "0.09")
+        monkeypatch.delenv("LOTTERY_GIVEBACK_CONFIRM_BARS", raising=False)
+        stack = build_lottery_exit_stack()
+        assert stack.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) == ExitReason.TRAILING_STOP
+
+        monkeypatch.setenv("LOTTERY_GIVEBACK_CONFIRM_BARS", "2")
+        stack2 = build_lottery_exit_stack()
+        assert stack2.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) is None
+        assert stack2.check(_pos(mfe_pct=0.04, pnl_pct=-0.06), _snap) == ExitReason.TRAILING_STOP
+
+    def test_scalper_confirm_bars_env_wired(self, monkeypatch):
+        monkeypatch.setenv("EXIT_GIVEBACK_STOP_ENABLED", "1")
+        monkeypatch.setenv("EXIT_GIVEBACK_MIN_MFE", "0.03")
+        monkeypatch.setenv("EXIT_GIVEBACK_PCT", "0.09")
+        monkeypatch.setenv("EXIT_GIVEBACK_CONFIRM_BARS", "2")
+        monkeypatch.setenv("EXIT_TRAILING_ACTIVATION_PCT", "0.20")  # isolate giveback
+        monkeypatch.setenv("EXIT_SCALPER_HARD_STOP_PCT", "1.0")
+        stack = build_scalper_exit_stack()
+        assert stack.check(_pos(mfe_pct=0.04, pnl_pct=-0.07), _snap) is None
+        assert stack.check(_pos(mfe_pct=0.04, pnl_pct=-0.07), _snap) == ExitReason.TRAILING_STOP
 
 
 class TestMomentumReversalPolicy:
