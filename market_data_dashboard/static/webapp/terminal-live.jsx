@@ -2094,7 +2094,7 @@ function _todayISTStr() {
   return ist.toISOString().slice(0, 10);
 }
 
-function InstrumentCaption({ name, price, chgPct, barTime, stale }) {
+function InstrumentCaption({ name, price, chgPct, barTime, stale, hint }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px 0',
@@ -2114,6 +2114,7 @@ function InstrumentCaption({ name, price, chgPct, barTime, stale }) {
       <span style={{ fontSize: 8.5, color: stale ? 'var(--warn)' : 'var(--fg-4)', marginLeft: 'auto' }}>
         {barTime ? `bar ${barTime}` : ''}{stale ? ' · STALE' : ''}
       </span>
+      {hint && <span style={{ fontSize: 8, color: 'var(--accent)', flexShrink: 0 }}>{hint}</span>}
     </div>
   );
 }
@@ -2141,7 +2142,7 @@ function PriceSparkline({ closes }) {
   );
 }
 
-function SecondaryInstrumentPanel({ instrument = 'NIFTY' }) {
+function SecondaryInstrumentPanel({ instrument = 'NIFTY', onSwitch }) {
   const mode = instrument === 'NIFTY' ? 'live_nifty' : 'live';
   const [row, setRow] = _s(null);
   const [openPos, setOpenPos] = _s(null);
@@ -2209,7 +2210,12 @@ function SecondaryInstrumentPanel({ instrument = 'NIFTY' }) {
 
   return (
     <div style={{ borderTop: '1px solid var(--bg-4)', marginTop: 6, paddingBottom: 2 }}>
-      <InstrumentCaption name={instrument} price={last} chgPct={chgPct} barTime={row?.time} stale={stale} />
+      <div onClick={onSwitch ? () => onSwitch(instrument) : undefined}
+        title={onSwitch ? `Switch main view to ${instrument}` : undefined}
+        style={onSwitch ? { cursor: 'pointer' } : undefined}>
+        <InstrumentCaption name={instrument} price={last} chgPct={chgPct} barTime={row?.time} stale={stale}
+          hint={onSwitch ? 'tap to view →' : null} />
+      </div>
       <PriceSparkline closes={closes} />
       {openPos && (
         <div style={{
@@ -2442,13 +2448,17 @@ function MobileLiveShell({
             {/* Latest-bar decision detail: verdict, probabilities, direction/regime context, shadow score */}
             {watchMode !== 'sim' && (
               <div style={{ padding: '7px 12px 0', fontFamily: 'var(--f-mono)', fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', color: 'var(--fg-2)' }}>
-                {session.instrument || 'BANKNIFTY'}
+                {/* session.instrument is the raw futures contract symbol
+                    (e.g. BANKNIFTY26JULFUT — the candles ARE futures bars);
+                    show the clean family name, consistent with the
+                    secondary panel's label. */}
+                {String(session.instrument || instrument || 'BANKNIFTY').replace(/\d.*$/, '')}
               </div>
             )}
             <LiveDecisionPanel row={latestRow} bf={bf} />
             {/* The OTHER instrument: engine decision + sparkline — live only
                 (sim watch is single-instrument). */}
-            {watchMode !== 'sim' && <SecondaryInstrumentPanel instrument={instrument === 'NIFTY' ? 'BANKNIFTY' : 'NIFTY'} />}
+            {watchMode !== 'sim' && <SecondaryInstrumentPanel instrument={instrument === 'NIFTY' ? 'BANKNIFTY' : 'NIFTY'} onSwitch={onInstrumentSwitch} />}
             {/* Gate funnel strip — visible when no trades yet or always */}
             {bf.outcomes && (() => {
               const o = bf.outcomes;
