@@ -11,3 +11,10 @@ services:
       # the entry model's real quality from this one specific confound and
       # nothing else.
       LOTTERY_MOMENTUM_FLIP_MODE: "reversal"
+      # A/B test (2026-07-24): confirm_bars debounce for GivebackStopPolicy
+      # (commit 17c6097). Baseline (confirm_bars=1, this var unset) already
+      # captured in .run/strategy_app_historical/positions.jsonl from the
+      # 2026-07-23 14-day run (6 opens/6 closes, 83.3% win, +27.75% sum) --
+      # re-run with ONLY this flag added, same 14-day window, to isolate the
+      # confirm-bars effect from everything else.
+      LOTTERY_GIVEBACK_CONFIRM_BARS: "2"
