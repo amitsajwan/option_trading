@@ -55,12 +55,21 @@ log "recreating ALL Dhan-dependent containers with the fresh token"
 cd "$REPO"
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.gcp.yml)
 RECREATE_SVCS=(ingestion_app ingestion_app_nifty execution_app execution_app_nifty)
-# seller_app (2026-07-08, real money): its DhanAdapter reads DHAN_ACCESS_TOKEN at container
-# startup too — without recreating it here it would trade on a stale token after the first
-# daily refresh. Overlay is optional so the refresh never breaks on a VM without it.
+# seller_app + seller_app_nifty (2026-07-08 / 2026-07-24, real money): each has
+# its own independent DhanAdapter instance that reads DHAN_ACCESS_TOKEN at
+# container startup — without recreating both here, whichever is skipped keeps
+# trading on its old token after the daily refresh. Found 2026-07-24:
+# seller_app_nifty was missing from this list (seller_app was added 2026-07-08
+# but the NIFTY twin never was); Dhan appears to invalidate the previous token
+# once a new one is minted, so seller_app_nifty's held-over token failed with a
+# genuine 401 ("invalid or expired") on its next real order attempt hours
+# after that morning's refresh — not a gradual expiry, an instant cliff at
+# mint time. Cost two real, valid NIFTY seller entries before
+# SELLER_ENTRY_FAIL_LATCH stopped further attempts for the day. Overlay is
+# optional so the refresh never breaks on a VM without it.
 if [ -f docker-compose.seller.yml ]; then
   COMPOSE_FILES+=(-f docker-compose.seller.yml)
-  RECREATE_SVCS+=(seller_app)
+  RECREATE_SVCS+=(seller_app seller_app_nifty)
 fi
 # depth_collector_dhan{,_nifty} (2026-07-21): also authenticate with
 # DHAN_ACCESS_TOKEN at startup, same as the services above -- would silently
