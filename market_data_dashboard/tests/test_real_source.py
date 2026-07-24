@@ -449,3 +449,25 @@ class LiveMongoSourceTickRefreshTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveMongoSourceInstrumentAxisTests(unittest.TestCase):
+    """Instrument axis (2026-07-24): NIFTY main-chart parity. The source must
+    read the _nifty-suffixed collections when instrument=NIFTY and stay
+    byte-identical to legacy behavior for BANKNIFTY/None."""
+
+    def test_nifty_instrument_swaps_all_five_collections(self) -> None:
+        from market_data_dashboard.real_source import LiveMongoSource
+        src = LiveMongoSource(db=object(), trade_date="2026-07-24", instrument="NIFTY")
+        self.assertEqual(src._coll_snapshots, "phase1_market_snapshots_nifty")
+        self.assertEqual(src._coll_votes, "strategy_votes_nifty")
+        self.assertEqual(src._coll_signals, "trade_signals_nifty")
+        self.assertEqual(src._coll_positions, "strategy_positions_nifty")
+        self.assertEqual(src._coll_traces, "strategy_decision_traces_nifty")
+
+    def test_primary_and_none_stay_legacy(self) -> None:
+        from market_data_dashboard.real_source import LiveMongoSource
+        for inst in (None, "", "BANKNIFTY", "banknifty"):
+            src = LiveMongoSource(db=object(), trade_date="2026-07-24", instrument=inst)
+            self.assertEqual(src._coll_snapshots, "phase1_market_snapshots", inst)
+            self.assertEqual(src._coll_positions, "strategy_positions", inst)

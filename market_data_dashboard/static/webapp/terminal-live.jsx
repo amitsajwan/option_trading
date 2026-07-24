@@ -2075,9 +2075,10 @@ function LiveDecisionPanel({ row, bf }) {
   );
 }
 
-// ── NIFTY live panel ────────────────────────────────────────────────────────
-// Dual-instrument manual-trading aid (2026-07-24). The Live view's session WS
-// pipeline is BankNifty-only, so NIFTY gets a self-contained panel instead:
+// ── Secondary-instrument live panel ─────────────────────────────────────────
+// Dual-instrument manual-trading aid (2026-07-24). The main chart/tape follow
+// the header's instrument toggle; this panel always shows the OTHER
+// instrument at a glance so both are visible at once:
 // the engine's latest per-minute gated decision (rendered by the SAME
 // LiveDecisionPanel component BankNifty uses above it) plus a lightweight SVG
 // price sparkline from /api/candles. Deliberately shows the engine's gated
@@ -2140,7 +2141,8 @@ function PriceSparkline({ closes }) {
   );
 }
 
-function NiftyLivePanel() {
+function SecondaryInstrumentPanel({ instrument = 'NIFTY' }) {
+  const mode = instrument === 'NIFTY' ? 'live_nifty' : 'live';
   const [row, setRow] = _s(null);
   const [openPos, setOpenPos] = _s(null);
   const [closes, setCloses] = _s(null);
@@ -2152,9 +2154,9 @@ function NiftyLivePanel() {
     let alive = true;
     const load = () => {
       const date = _todayISTStr();
-      const tlP = fetch(`/api/strategy/decisions?mode=live_nifty&date=${date}&limit=500`)
+      const tlP = fetch(`/api/strategy/decisions?mode=${mode}&date=${date}&limit=500`)
         .then(r => r.ok ? r.json() : null).catch(() => null);
-      const stP = fetch(`/api/strategy/current/state?mode=live_nifty&latest_n=0`)
+      const stP = fetch(`/api/strategy/current/state?mode=${mode}&latest_n=0`)
         .then(r => r.ok ? r.json() : null).catch(() => null);
       Promise.all([tlP, stP]).then(([tl, st]) => {
         if (!alive) return;
@@ -2169,13 +2171,13 @@ function NiftyLivePanel() {
     load();
     const id = setInterval(load, 30000);
     return () => { alive = false; clearInterval(id); };
-  }, []);
+  }, [instrument]);
 
   // Price sparkline — every 60s. Dedupe sub-minute rows by bar start
   // (last write wins), same as the Multi page's mini chart.
   _e(() => {
     let alive = true;
-    const load = () => fetch(`/api/candles?instrument=NIFTY&bars=80`)
+    const load = () => fetch(`/api/candles?instrument=${instrument}&bars=80`)
       .then(r => r.ok ? r.json() : [])
       .catch(() => [])
       .then(bars => {
@@ -2198,7 +2200,7 @@ function NiftyLivePanel() {
     load();
     const id = setInterval(load, 60000);
     return () => { alive = false; clearInterval(id); };
-  }, []);
+  }, [instrument]);
 
   const last = closes && closes.length ? closes[closes.length - 1] : null;
   const chgPct = closes && closes.length > 1 ? ((closes[closes.length - 1] / closes[0]) - 1) * 100 : null;
@@ -2207,7 +2209,7 @@ function NiftyLivePanel() {
 
   return (
     <div style={{ borderTop: '1px solid var(--bg-4)', marginTop: 6, paddingBottom: 2 }}>
-      <InstrumentCaption name="NIFTY" price={last} chgPct={chgPct} barTime={row?.time} stale={stale} />
+      <InstrumentCaption name={instrument} price={last} chgPct={chgPct} barTime={row?.time} stale={stale} />
       <PriceSparkline closes={closes} />
       {openPos && (
         <div style={{
@@ -2226,7 +2228,7 @@ function NiftyLivePanel() {
       )}
       {failed
         ? <div style={{ padding: '8px 12px', fontFamily: 'var(--f-mono)', fontSize: 9.5, color: 'var(--fg-4)' }}>
-            NIFTY decision feed unavailable
+            {instrument} decision feed unavailable
           </div>
         : <LiveDecisionPanel row={row} />}
     </div>
@@ -2238,6 +2240,7 @@ function MobileLiveShell({
   trades, signals, strategies,
   quote, sessionPnl, winRate, regime, engine,
   brainData, wsStatus, watchMode, watchRunId, simRuns,
+  instrument, onInstrumentSwitch,
   runtimeConfig, availableModels, blockerFunnel, timeline, heatmap, openPosition,
   selectedTrade, onSelectTrade,
   onHaltClick, onModeSwitch, onBackToLive, onWatchChange,
@@ -2341,6 +2344,19 @@ function MobileLiveShell({
       <header className="m-header" role="banner">
         <div className="m-header-row1">
           <div className="m-brand"><span className="m-brand-mark"/>QUANT</div>
+          {watchMode !== 'sim' && onInstrumentSwitch && (
+            <div style={{ display: 'flex', gap: 2, background: 'var(--bg-2)', border: '1px solid var(--bg-4)', borderRadius: 'var(--r-2)', padding: 2, flexShrink: 0 }}>
+              {['BANKNIFTY', 'NIFTY'].map(inst => (
+                <button key={inst} onClick={() => inst !== instrument && onInstrumentSwitch(inst)}
+                  style={{
+                    fontFamily: 'var(--f-mono)', fontSize: 8.5, fontWeight: 800, letterSpacing: '0.05em',
+                    padding: '3px 7px', borderRadius: 3, border: 'none', cursor: 'pointer',
+                    background: inst === instrument ? 'var(--accent)' : 'transparent',
+                    color: inst === instrument ? 'var(--bg-0)' : 'var(--fg-3)',
+                  }}>{inst === 'BANKNIFTY' ? 'BN' : 'N'}</button>
+              ))}
+            </div>
+          )}
           <div className="m-symbol">
             <span className="sym">{quote?.symbol || session.instrument}</span>
             <span className="px">{quote ? quote.spot.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'}</span>
@@ -2430,9 +2446,9 @@ function MobileLiveShell({
               </div>
             )}
             <LiveDecisionPanel row={latestRow} bf={bf} />
-            {/* NIFTY: engine decision + sparkline — live only (sim watch is
-                single-instrument). See NiftyLivePanel for rationale. */}
-            {watchMode !== 'sim' && <NiftyLivePanel />}
+            {/* The OTHER instrument: engine decision + sparkline — live only
+                (sim watch is single-instrument). */}
+            {watchMode !== 'sim' && <SecondaryInstrumentPanel instrument={instrument === 'NIFTY' ? 'BANKNIFTY' : 'NIFTY'} />}
             {/* Gate funnel strip — visible when no trades yet or always */}
             {bf.outcomes && (() => {
               const o = bf.outcomes;
@@ -2735,6 +2751,22 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   const [watchMode, setWatchMode] = _s('live');
   const [watchRunId, setWatchRunId] = _s('');
   const [watchDate, setWatchDate] = _s('');
+  // Instrument axis (2026-07-24): the whole Live view — main chart (WS
+  // session), decision panel, tape, funnel, heatmap — follows this toggle.
+  // NIFTY maps to mode=live_nifty on HTTP routes and instrument=NIFTY on the
+  // WS subscribe (server swaps in the _nifty-suffixed mongo collections).
+  const [instrument, setInstrument] = _s(() => {
+    try { return localStorage.getItem('live_instrument') === 'NIFTY' ? 'NIFTY' : 'BANKNIFTY'; }
+    catch { return 'BANKNIFTY'; }
+  });
+  const switchInstrument = (inst) => {
+    setInstrument(inst);
+    setSelectedTrade(null);
+    setSession(null); // force the loading state until the new WS snapshot lands
+    try { localStorage.setItem('live_instrument', inst); } catch {}
+  };
+  // live-mode HTTP mode string for the selected instrument
+  const liveModeQ = instrument === 'NIFTY' ? 'live_nifty' : 'live';
   const wsRef         = _r(null);
   const sessionRef    = _r(null);
   const prevIdxRef    = _r(null);
@@ -2749,7 +2781,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
   _e(() => {
     let alive = true;
     const kindQ = watchMode === 'sim' ? `&kind=sim${watchRunId ? `&run_id=${encodeURIComponent(watchRunId)}` : ''}` : '';
-    const modeQ = watchMode === 'sim' ? 'replay' : 'live';
+    const modeQ = watchMode === 'sim' ? 'replay' : liveModeQ;
     const load = () => fetch(`/api/strategy/current/state?mode=${modeQ}&latest_n=0${kindQ}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`state HTTP ${r.status}`)))
       .then(s => {
@@ -2762,12 +2794,12 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     load();
     const id = setInterval(load, 30000);
     return () => { alive = false; clearInterval(id); };
-  }, [watchMode, watchRunId]);
+  }, [watchMode, watchRunId, instrument]);
 
   // Live brain status — initial fetch + refresh every 30s.
   _e(() => {
     let alive = true;
-    const modeQ = watchMode === 'sim' ? 'replay' : 'live';
+    const modeQ = watchMode === 'sim' ? 'replay' : liveModeQ;
     const kindQ = watchMode === 'sim' ? `&kind=sim${watchRunId ? `&run_id=${encodeURIComponent(watchRunId)}` : ''}` : '';
     const load = () => fetch(`/api/strategy/brain/status?mode=${modeQ}${kindQ}`)
       .then(r => r.ok ? r.json() : Promise.resolve({ available: false, reason: `HTTP ${r.status}` }))
@@ -2776,14 +2808,14 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     load();
     const id = setInterval(load, 30000);
     return () => { alive = false; clearInterval(id); };
-  }, [watchMode, watchRunId]);
+  }, [watchMode, watchRunId, instrument]);
 
   // Live blocker funnel + decision timeline for today (IST). Refresh every 30s.
   _e(() => {
     let alive = true;
     const load = () => {
       const date = watchMode === 'sim' ? (watchDate || _todayIST()) : _todayIST();
-      const modeQ = watchMode === 'sim' ? 'replay' : 'live';
+      const modeQ = watchMode === 'sim' ? 'replay' : liveModeQ;
       const kindQ = watchMode === 'sim' ? `&kind=sim${watchRunId ? `&run_id=${encodeURIComponent(watchRunId)}` : ''}` : '';
       const funnelP = fetch(`/api/strategy/blocker-funnel?mode=${modeQ}&date=${date}${kindQ}`)
         .then(r => r.ok ? r.json() : null).catch(() => null);
@@ -2798,14 +2830,14 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     load();
     const id = setInterval(load, 30000);
     return () => { alive = false; clearInterval(id); };
-  }, [watchMode, watchRunId, watchDate]);
+  }, [watchMode, watchRunId, watchDate, instrument]);
 
   // Session heatmap for today. Refresh every 60s.
   _e(() => {
     let alive = true;
     const load = () => {
       const date = watchMode === 'sim' ? (watchDate || _todayIST()) : _todayIST();
-      const modeQ = watchMode === 'sim' ? 'replay' : 'live';
+      const modeQ = watchMode === 'sim' ? 'replay' : liveModeQ;
       fetch(`/api/strategy/session-heatmap?mode=${modeQ}&date=${date}`)
         .then(r => r.ok ? r.json() : null).catch(() => null)
         .then(d => { if (alive) setHeatmapData(d); });
@@ -2813,7 +2845,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     load();
     const id = setInterval(load, 60000);
     return () => { alive = false; clearInterval(id); };
-  }, [watchMode, watchRunId, watchDate]);
+  }, [watchMode, watchRunId, watchDate, instrument]);
 
   _e(() => {
     let alive = true;
@@ -2837,6 +2869,10 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
         if (watchMode === 'sim') {
           if (watchRunId) payload.run_id = watchRunId;
           if (watchDate) payload.date = watchDate;
+        } else {
+          // Server swaps in the instrument's namespaced collections; omitting
+          // it (or BANKNIFTY) keeps the legacy primary behavior.
+          payload.instrument = instrument;
         }
         return payload;
       },
@@ -2851,7 +2887,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
           } else if (msg.type === 'waiting') {
             setSession({
               date: new Date().toISOString().slice(0, 10),
-              instrument: 'BANKNIFTY',
+              instrument,
               candles: [],
               signals: [],
               trades: [],
@@ -2861,7 +2897,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
           } else if (msg.type === 'error') {
             setSession({
               date: new Date().toISOString().slice(0, 10),
-              instrument: 'BANKNIFTY',
+              instrument,
               candles: [],
               signals: [],
               trades: [],
@@ -2890,7 +2926,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
     );
     wsRef.current = ws;
     return () => ws.close();
-  }, [watchMode, watchRunId, watchDate]);
+  }, [watchMode, watchRunId, watchDate, instrument]);
 
   // keyboard nav
   _e(() => {
@@ -2950,6 +2986,7 @@ function LiveMonitorDark({ onModeSwitch, onKillClick }) {
       blockerFunnel={blockerFunnel} timeline={timeline}
       heatmap={heatmapData ? { data: heatmapData } : null}
       watchMode={watchMode} watchRunId={watchRunId} simRuns={simRunsToday}
+      instrument={instrument} onInstrumentSwitch={switchInstrument}
       selectedTrade={displayTrade} onSelectTrade={setSelectedTrade}
       onHaltClick={onKillClick} onModeSwitch={onModeSwitch}
       onBackToLive={() => { setWatchMode('live'); setWatchRunId(''); setWatchDate(''); }}

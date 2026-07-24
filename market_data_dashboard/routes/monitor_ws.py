@@ -122,7 +122,7 @@ def _build_kpi_live(state: _LiveSessionState) -> List[MonitorKpiItem]:
     wr = (wins / len(visible) * 100) if visible else 0.0
     return [
         MonitorKpiItem(label="ENGINE", value=str(session.engine or "—"), sub=session.instrument),
-        MonitorKpiItem(label="INSTRUMENT", value=session.instrument, cls="pos", sub="live · BANKNIFTY"),
+        MonitorKpiItem(label="INSTRUMENT", value=session.instrument, cls="pos", sub=f"live · {session.instrument}"),
         MonitorKpiItem(
             label="SESSION P&L",
             value=f"{total_pnl:+.2f}%",
@@ -326,11 +326,15 @@ class DashboardMonitorRouter:
                     date_str = str(msg.get("date") or "").strip() or None
                     run_id_str = str(msg.get("run_id") or "").strip() or None
                     book_str = str(msg.get("book") or "").strip().lower() or None
+                    # Instrument axis (2026-07-24): NIFTY main-chart parity.
+                    # Empty/BANKNIFTY resolves to the primary collections
+                    # unchanged; NIFTY swaps in the _nifty-suffixed ones.
+                    instrument_str = str(msg.get("instrument") or "").strip().upper() or None
 
                     try:
                         db = _make_db()
                         if mode == "live" and kind == "live":
-                            src = LiveMongoSource(db=db, trade_date=date_str, kind="live")
+                            src = LiveMongoSource(db=db, trade_date=date_str, kind="live", instrument=instrument_str)
                             state = _LiveSessionState(src)
                             kpi = _build_kpi_live(state)
                         else:

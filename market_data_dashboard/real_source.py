@@ -1353,16 +1353,23 @@ class LiveMongoSource:
         *,
         kind: str = "live",
         run_id: Optional[str] = None,
+        instrument: Optional[str] = None,
     ) -> None:
         self._db = db
         self._trade_date = trade_date or _today_ist()
         self._run_id = str(run_id or "").strip() or None
         self._kind = normalize_kind(kind, default="live")
-        self._coll_snapshots = collection_for(BASE_SNAPSHOTS, kind=self._kind, run_id=self._run_id)
-        self._coll_votes = collection_for(BASE_VOTES, kind=self._kind, run_id=self._run_id)
-        self._coll_signals = collection_for(BASE_SIGNALS, kind=self._kind, run_id=self._run_id)
-        self._coll_positions = collection_for(BASE_POSITIONS, kind=self._kind, run_id=self._run_id)
-        self._coll_traces = collection_for(BASE_DECISION_TRACES, kind=self._kind, run_id=self._run_id)
+        # Instrument axis (2026-07-24): NIFTY's live stack persists to its own
+        # namespaced collections (phase1_market_snapshots_nifty, ...). Primary
+        # (BANKNIFTY/None) contributes an empty slug, so existing callers get
+        # byte-identical collection names — see contracts_app/sim_namespace.py.
+        self._instrument = str(instrument or "").strip().upper() or None
+        _ck = dict(kind=self._kind, run_id=self._run_id, instrument=self._instrument)
+        self._coll_snapshots = collection_for(BASE_SNAPSHOTS, **_ck)
+        self._coll_votes = collection_for(BASE_VOTES, **_ck)
+        self._coll_signals = collection_for(BASE_SIGNALS, **_ck)
+        self._coll_positions = collection_for(BASE_POSITIONS, **_ck)
+        self._coll_traces = collection_for(BASE_DECISION_TRACES, **_ck)
         self._session: Optional[MonitorSession] = None
         self._candle_ts_sorted: List[int] = []
 
@@ -1376,11 +1383,17 @@ class LiveMongoSource:
         try:
             import json as _json
             from pathlib import Path as _Path
-            run_dir = (
-                os.getenv("STRATEGY_RUN_DIR_LIVE")
-                or os.getenv("STRATEGY_RUN_DIR")
-                or "/app/.run/strategy_app"
-            )
+            if self._instrument == "NIFTY":
+                run_dir = (
+                    os.getenv("STRATEGY_RUN_DIR_LIVE_NIFTY")
+                    or "/app/.run/strategy_app_nifty"
+                )
+            else:
+                run_dir = (
+                    os.getenv("STRATEGY_RUN_DIR_LIVE")
+                    or os.getenv("STRATEGY_RUN_DIR")
+                    or "/app/.run/strategy_app"
+                )
             rc_path = _Path(run_dir) / "runtime_config.json"
             if rc_path.exists():
                 rc = _json.loads(rc_path.read_text(encoding="utf-8"))

@@ -25,6 +25,12 @@ def _run_dir(mode: str) -> Path:
     if mode in {"historical", "replay"}:
         env = os.getenv("STRATEGY_RUN_DIR_HISTORICAL", "")
         return Path(env) if env else _DEFAULT_HISTORICAL_DIR
+    if mode in {"live_nifty", "nifty"}:
+        # Without this branch, mode=live_nifty silently fell through to the
+        # BankNifty live dir — the dashboard would show the wrong instrument's
+        # brain context with no error (2026-07-24).
+        env = os.getenv("STRATEGY_RUN_DIR_LIVE_NIFTY", "")
+        return Path(env) if env else Path("/app/.run/strategy_app_nifty")
     env = os.getenv("STRATEGY_RUN_DIR_LIVE", "")
     return Path(env) if env else _DEFAULT_LIVE_DIR
 
