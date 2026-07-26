@@ -113,6 +113,21 @@ INSTRUMENTS: Dict[str, InstrumentConfig] = {
         strike_step=50,
         expiry_cadence="weekly",   # NIFTY weeklies still listed -> 5yr weekly
     ),
+    "FINNIFTY": InstrumentConfig(
+        name="FINNIFTY",
+        index_security_id="27",   # Confirmed live 2026-07-26: ~26,300, scrip master
+        fno_segment="NSE_FNO",
+        index_segment="IDX_I",
+        lot_size=60,               # Confirmed live scrip master (2026-07-26)
+        strike_step=50,            # Near-ATM step confirmed from live chain (50/100/400/500 by moneyness)
+        # Confirmed live 2026-07-26: only monthly expiries listed (07-28, 08-25,
+        # 09-29) -- NSE discontinued FINNIFTY weeklies at some point before this
+        # date. UNVERIFIED: the exact transition date, so a training window that
+        # crosses it would mix weekly-era and monthly-era dynamics the same way
+        # BankNifty's pre/post-Nov-2024 break did. Until that date is pinned down,
+        # keep the training window conservatively recent (see fetch invocation).
+        expiry_cadence="monthly",
+    ),
 }
 
 # ── Dhan API Client ───────────────────────────────────────────────────────────
@@ -215,21 +230,47 @@ def _monthly_futures_contracts(
     sm = scrip_master.copy()
     sm.columns = [c.strip() for c in sm.columns]
 
-    # Filter: NSE FNO segment, FUTIDX instrument, name matches
-    seg_col  = next((c for c in sm.columns if "EXCH_ID" in c.upper()), None)
+    # Filter: NSE FNO segment, FUTIDX instrument, name matches.
+    #
+    # BUG (found 2026-07-26 while onboarding FINNIFTY, confirmed to ALSO affect
+    # BANKNIFTY/NIFTY silently): this used to match on SEM_EXM_EXCH_ID ==
+    # "NSE_FNO". That column only ever holds the plain exchange code ("NSE",
+    # "BSE", "MCX") -- "NSE_FNO" is a *segment*, not an exchange, and lives in
+    # the separate SEM_SEGMENT column as a single-letter code ('D' = F&O
+    # derivatives). The old filter's segment clause matched ZERO rows for
+    # every instrument tested (confirmed BANKNIFTY, FINNIFTY, NIFTY all
+    # returned 0), so `if fut.empty: return []` silently fired every time
+    # and monthly-futures VWAP has been NaN in every historical training run
+    # this pipeline has ever produced -- not a FINNIFTY-only gap. Do not
+    # confuse this with EXECUTION_APP's `exchangeSegment` REST API field,
+    # which correctly IS the literal string "NSE_FNO" for order placement
+    # (a different API, different encoding) -- untouched here.
+    seg_col  = next((c for c in sm.columns if c.upper() == "SEM_SEGMENT"), None)
     inst_col = next((c for c in sm.columns if "INSTRUMENT_NAME" in c.upper()), None)
     sym_col  = next((c for c in sm.columns if "TRADING_SYMBOL" in c.upper()), None)
     sid_col  = next((c for c in sm.columns if "SECURITY_ID" in c.upper() and "SMST" in c.upper()), None)
-    exp_col  = next((c for c in sm.columns if "EXPIRY" in c.upper()), None)
+    # BUG (found alongside the segment one above, same root cause): "EXPIRY" in
+    # c.upper() also matches SEM_EXPIRY_CODE (a tiny 0-3 cycle-position integer,
+    # NOT a date), which sorts before SEM_EXPIRY_DATE in the CSV's column order
+    # -- next() picked the wrong one. pd.to_datetime() on a 0-3 int parses as a
+    # Unix timestamp of a few seconds past epoch, i.e. every contract's
+    # "_expiry" silently became 1970-01-01, which never passes the
+    # is-monthly-Thursday check, so `monthly` was always empty downstream too.
+    exp_col  = next((c for c in sm.columns if c.upper() == "SEM_EXPIRY_DATE"), None)
 
     if not all([seg_col, inst_col, sym_col, sid_col, exp_col]):
         log.error("Scrip master column detection failed. Found: %s", list(sm.columns[:20]))
         raise RuntimeError("Cannot parse Dhan scrip master — unexpected column names")
 
+    # Exact leading-token match, NOT substring (same bug/fix as
+    # execution_app/adapter/dhan.py's _ScripMaster, found 2026-07-23): "NIFTY"
+    # is a substring of "BANKNIFTY"/"FINNIFTY"/etc, so .str.contains() here
+    # returned BANKNIFTY's future for a NIFTY request. Symbols are
+    # "{FAMILY}-{expiry}-FUT".
     filt = (
-        (sm[seg_col].str.upper().str.strip() == "NSE_FNO")
+        (sm[seg_col].astype(str).str.upper().str.strip() == "D")
         & (sm[inst_col].str.upper().str.strip() == "FUTIDX")
-        & (sm[sym_col].str.upper().str.contains(instrument_name.upper()))
+        & (sm[sym_col].str.upper().str.split("-").str[0] == instrument_name.upper())
     )
     fut = sm[filt].copy()
     if fut.empty:
@@ -239,10 +280,22 @@ def _monthly_futures_contracts(
 
     fut["_expiry"] = pd.to_datetime(fut[exp_col], errors="coerce").dt.date
     # Keep only monthly expiries (skip mid-month/weekly if any exist)
-    # Monthly = expiry is a Thursday in the last week of the month (day >= 25 usually)
+    # Monthly = expiry in the last week of the month, on the exchange's weekly
+    # expiry day. BUG (found alongside the two above): hardcoded to Thursday
+    # (weekday()==3). NSE moved index F&O to a single Tuesday weekly-expiry day
+    # exchange-wide (~Sept 2025, SEBI's one-weekly-expiry-per-exchange mandate
+    # -- see project memory "NIFTY weeklies moved Thu->Tue ~Sep-2025"). Live
+    # scrip master confirms all current/upcoming BANKNIFTY/FINNIFTY monthly
+    # contracts (2026-07-28, 08-25, 09-29) are Tuesdays (weekday()==1), not
+    # Thursdays -- the old check has matched zero contracts since that shift,
+    # for every instrument, silently NaN-ing the futures VWAP feature in every
+    # training run since. Not re-deriving this dynamically (e.g. from the
+    # already-correct expiry-day rule tables in hist_backfill) to keep this
+    # fix minimal and scoped; if NSE changes the day again this constant needs
+    # updating too, same as that other rule table does.
     fut["_is_monthly"] = fut["_expiry"].apply(
         lambda d: (d is not None and not pd.isna(d)
-                   and d.weekday() == 3  # Thursday
+                   and d.weekday() == 1  # Tuesday, post ~Sep-2025
                    and d.day >= 22)      # last-week heuristic
     )
     monthly = fut[fut["_is_monthly"]].copy()

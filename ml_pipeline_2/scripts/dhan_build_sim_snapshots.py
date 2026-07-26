@@ -50,7 +50,7 @@ for _i in range(1, 6):
     _OFFSETS[f"ATMm{_i}"] = -_i
 
 # instrument -> (strike_step, underlying label)
-_STRIKE_STEP = {"BANKNIFTY": 100, "NIFTY": 50}
+_STRIKE_STEP = {"BANKNIFTY": 100, "NIFTY": 50, "FINNIFTY": 50}  # near-ATM step; confirmed live 2026-07-26
 
 
 def _load_bars(raw_dir: Path) -> pd.DataFrame:
