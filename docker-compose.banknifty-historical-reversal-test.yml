@@ -11,10 +11,19 @@ services:
       # the entry model's real quality from this one specific confound and
       # nothing else.
       LOTTERY_MOMENTUM_FLIP_MODE: "reversal"
-      # A/B test (2026-07-24): confirm_bars debounce for GivebackStopPolicy
-      # (commit 17c6097). Baseline (confirm_bars=1, this var unset) already
-      # captured in .run/strategy_app_historical/positions.jsonl from the
-      # 2026-07-23 14-day run (6 opens/6 closes, 83.3% win, +27.75% sum) --
-      # re-run with ONLY this flag added, same 14-day window, to isolate the
-      # confirm-bars effect from everything else.
-      LOTTERY_GIVEBACK_CONFIRM_BARS: "2"
+      # confirm_bars debounce A/B (2026-07-24) tested and found net negative
+      # on this OOS window (+22.69% vs baseline +27.75%, same win rate) --
+      # reverted to unset (default=1, prior behavior) so this override again
+      # isolates exactly one variable at a time.
+      #
+      # A/B test (2026-07-24): ENTRY_ALLOW_CHOP. Blocker-gate analysis of the
+      # 14-day baseline run showed CHOP is a fully-blocked regime by default
+      # (ENTRY_ALLOW_CHOP unset) and accounts for 28.3% of ALL bars in the
+      # window (1487/1489 CHOP bars = no_strategy_votes) -- by far the
+      # single biggest regime-level block, nearly 3x AVOID+PANIC+DEAD_MARKET
+      # combined (17.9%). This flag was originally built to test whether the
+      # compression model could find real setups inside CHOP-tagged bars;
+      # testing it now against the live 0.15%-model + reversal-mode config.
+      # Baseline (this var unset) already captured in
+      # decision_traces_baseline_confirm1.jsonl.bak / positions_baseline_confirm1.jsonl.bak.
+      ENTRY_ALLOW_CHOP: "1"
