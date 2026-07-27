@@ -27,9 +27,17 @@ import argparse
 import glob
 import json
 import sys
+from datetime import datetime, timezone
 
 import pandas as pd
 from pymongo import MongoClient
+
+# Reuse the CANONICAL quality gate + collection-naming helpers, not a
+# reimplementation -- build_training_view_from_mongo.py only trusts days
+# with a passing dataset_manifests entry (2026-07-10 clean-rebuild mandate:
+# "a day that fails does NOT enter Mongo"), and this loader must honor the
+# exact same bar BankNifty/NIFTY historical data was held to.
+from market_data_dashboard.services.hist_backfill import _coll_for, _quality_check
 
 
 def main() -> int:
@@ -40,7 +48,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    coll_name = f"phase1_market_snapshots_hist_{args.instrument.lower()}"
+    coll_name = _coll_for(args.instrument)
     db = MongoClient("mongo", 27017).trading_ai
     coll = db[coll_name]
 
@@ -52,35 +60,44 @@ def main() -> int:
     print(f"Found {len(files)} day-partition file(s), target collection={coll_name}")
 
     total_inserted = 0
+    total_failed = 0
     for fpath in files:
         df = pd.read_parquet(fpath)
-        docs = []
-        for _, row in df.iterrows():
-            snap = json.loads(row["snapshot_raw_json"]) if isinstance(row["snapshot_raw_json"], str) else dict(row["snapshot_raw_json"])
-            snapshot_id = snap.get("snapshot_id") or row.get("snapshot_id")
-            ts = snap.get("timestamp") or row.get("timestamp")
-            trade_date = snap.get("trade_date") or row.get("trade_date")
-            docs.append({
-                "event_type": "hist_backfill",
-                "snapshot_id": snapshot_id,
-                "instrument": args.instrument,
-                "timestamp": ts,
-                "trade_date_ist": trade_date,
-                "payload": {"snapshot": snap},
-            })
-        if args.dry_run:
-            print(f"[DRY RUN] {fpath}: would insert {len(docs)} docs (sample snapshot_id={docs[0]['snapshot_id'] if docs else None})")
-            continue
-        if docs:
-            # Idempotent: drop any prior docs for these exact snapshot_ids first,
-            # so re-running this loader (e.g. after a fix) doesn't duplicate.
-            ids = [d["snapshot_id"] for d in docs]
-            coll.delete_many({"instrument": args.instrument, "snapshot_id": {"$in": ids}})
-            result = coll.insert_many(docs)
-            total_inserted += len(result.inserted_ids)
-            print(f"  {fpath}: inserted {len(result.inserted_ids)} docs")
+        snapshots = [
+            json.loads(row["snapshot_raw_json"]) if isinstance(row["snapshot_raw_json"], str)
+            else dict(row["snapshot_raw_json"])
+            for _, row in df.iterrows()
+        ]
+        trade_date = snapshots[0].get("trade_date") if snapshots else None
+        ok, report = _quality_check(snapshots)
+        report.update({"instrument": args.instrument, "trade_date": trade_date,
+                        "verified_at": datetime.now(timezone.utc).isoformat(), "passed": ok})
 
-    print(f"TOTAL inserted: {total_inserted}")
+        if args.dry_run:
+            print(f"[DRY RUN] {fpath}: quality={'PASS' if ok else 'FAIL:' + str(report.get('fail'))} n={len(snapshots)}")
+            continue
+
+        db["dataset_manifests"].update_one(
+            {"_id": f"{coll_name}:{trade_date}"}, {"$set": report}, upsert=True)
+        if not ok:
+            total_failed += 1
+            print(f"  {fpath}: QUALITY_FAIL {report.get('fail')} -- day NOT ingested")
+            continue
+
+        docs = [{
+            "event_type": "hist_backfill",
+            "snapshot_id": s.get("snapshot_id"),
+            "instrument": args.instrument,
+            "timestamp": s.get("timestamp"),
+            "trade_date_ist": trade_date,
+            "payload": {"snapshot": s},
+        } for s in snapshots]
+        coll.delete_many({"trade_date_ist": trade_date})  # idempotent per day, same as hist_backfill.backfill_day
+        result = coll.insert_many(docs)
+        total_inserted += len(result.inserted_ids)
+        print(f"  {fpath}: inserted {len(result.inserted_ids)} docs")
+
+    print(f"TOTAL inserted: {total_inserted}  failed_quality_gate: {total_failed}")
     return 0
 
 
