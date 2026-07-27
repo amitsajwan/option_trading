@@ -23,6 +23,7 @@ skipped; holidays return 0 index bars and are skipped automatically. Throttled
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -193,7 +194,16 @@ def _quality_check(snapshots: list[dict]) -> tuple[bool, dict]:
         rep["fail"] = "too_few_bars"
         return False, rep
     mid = snapshots[len(snapshots) // 2]
-    rows = [r for r in (mid.get("strikes") or []) if r.get("ce_ltp") and r.get("pe_ltp")]
+    # BUG (found 2026-07-26 onboarding FINNIFTY, also reachable by
+    # BANKNIFTY/NIFTY on any illiquid strike): `if r.get("ce_ltp")` treats a
+    # float NaN as truthy (only None/0/"" are falsy in Python), so a strike
+    # with ce_ltp=nan was NOT excluded here -- it then flowed into the
+    # monotonicity check below, where `nan >= x` and `nan <= x` are ALWAYS
+    # False, registering as a fake "non_monotone_chain" violation that has
+    # nothing to do with real chain shape. _valid() explicitly rejects NaN.
+    def _valid(v: object) -> bool:
+        return v is not None and not (isinstance(v, float) and math.isnan(v))
+    rows = [r for r in (mid.get("strikes") or []) if _valid(r.get("ce_ltp")) and _valid(r.get("pe_ltp"))]
     rep["mid_strikes_priced"] = len(rows)
     if len(rows) < 12:
         rep["fail"] = "thin_chain"
