@@ -44,8 +44,16 @@ log = logging.getLogger("dhan_sim_snapshots")
 
 IST = "Asia/Kolkata"
 # offset label -> integer k (ATM=0, ATM+1=+1, ATM-1=-1, ...)
+# Widened from range(1,6) [ATM+-5, 11 total] to range(1,11) [ATM+-10, 21
+# total] (2026-07-26): matches hist_backfill.py's own default strikes=10,
+# the width BankNifty/NIFTY's real historical data actually clears
+# build_training_view_from_mongo.py's quality gate with (>=12 priced
+# strikes at the midday bar). ATM+-5 alone fails that gate ("thin_chain").
+# _load_options below already skips any offset file that doesn't exist
+# (fetch writes fewer strikes for some instruments), so this is backward
+# compatible for any narrower-fetch dataset -- it just loads fewer.
 _OFFSETS: Dict[str, int] = {"ATM": 0}
-for _i in range(1, 6):
+for _i in range(1, 11):
     _OFFSETS[f"ATMp{_i}"] = _i
     _OFFSETS[f"ATMm{_i}"] = -_i
 
