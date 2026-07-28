@@ -181,6 +181,34 @@ class TestRunLoopDoesNotDoubleConsume(unittest.TestCase):
         redis_client.xack.assert_called_once_with("stream:eval:commands", "eval-orchestrator-grp-1", "1-1")
         redis_client.pubsub.assert_not_called()
 
+    def test_empty_pel_switches_to_blocking_reads_not_infinite_spin(self):
+        """Regression test for the 2026-07-28 stuck-CPU incident.
+
+        With id="0" (pending-entries read), real Redis/redis-py returns
+        [[stream_name, []]] once the stream/group exists -- a non-empty outer
+        list even when nothing is pending. A bare `not response` check never
+        sees this as empty, so read_pending never flips to ">" and the loop
+        spins forever without blocking (block= is ignored for id="0" reads).
+        Found live: strategy_eval_orchestrator spun at ~78% CPU for 4+ days,
+        last-delivered-id stuck at "0-0" despite lag=2 real messages waiting.
+        """
+        redis_client = MagicMock()
+        empty_pel = [("stream:eval:commands", [])]
+        redis_client.xreadgroup.side_effect = [empty_pel, KeyboardInterrupt]
+        mongo_client = MagicMock()
+        runs_coll = MagicMock()
+
+        with patch.dict("os.environ", {"EVAL_COMMANDS_PUBSUB_SHADOW": "true"}), \
+             patch("strategy_eval_orchestrator.main._redis_client", return_value=redis_client), \
+             patch("strategy_eval_orchestrator.main._mongo_collection", return_value=(mongo_client, runs_coll)):
+            run_loop()
+
+        # First call must read the PEL (id="0"); second call must have
+        # switched to ">" -- proving read_pending flipped instead of spinning.
+        first_call, second_call = redis_client.xreadgroup.call_args_list
+        assert first_call[0][2] == {"stream:eval:commands": "0"}
+        assert second_call[0][2] == {"stream:eval:commands": ">"}
+
 
 if __name__ == "__main__":
     unittest.main()

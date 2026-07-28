@@ -497,7 +497,18 @@ def run_loop() -> int:
                 time.sleep(1.0)
                 continue
 
-            if read_pending and not response:
+            # NOTE: with id="0" (pending-entries read), xreadgroup returns
+            # [[stream_name, []]] once the stream/group exists -- a non-empty
+            # outer list even when there are zero pending entries. `not response`
+            # is therefore always False here, so read_pending never flipped and
+            # the loop never switched to ">" (blocking, live-message) reads.
+            # Since block=2000 is silently ignored for id="0" reads, this spun
+            # in a tight, non-blocking loop forever (found 2026-07-28: stuck
+            # since 2026-07-23, ~78% CPU, 215GB accumulated network I/O,
+            # last-delivered-id never advanced past "0-0"). Check the actual
+            # per-stream entries, not the outer response list.
+            has_entries = any(entries for _sname, entries in (response or []))
+            if read_pending and not has_entries:
                 read_pending = False
                 continue
 
