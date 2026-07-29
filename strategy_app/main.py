@@ -353,6 +353,13 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             "model_run_id": (ml_pure_switch_meta or {}).get("run_id"),
             "strategy_profile_id": strategy_profile_id,
             "model_group": (ml_pure_switch_meta or {}).get("model_group"),
+            # Book-keeping only: when on, ML_ENTRY still scores probability +
+            # direction on bars where the regime gate excludes it from real
+            # entries (PRE_EXPIRY/CHOP) -- logged as a SKIP vote, never
+            # actionable. Default off: zero behavior change. See
+            # DeterministicRuleEngine._build_ml_shadow_vote.
+            "ml_score_all_snapshots": str(os.getenv("ML_SCORE_ALL_SNAPSHOTS", "0")).strip().lower()
+            in ("1", "true", "yes", "on"),
         }
         if engine_key == "deterministic" and strategy_profile_id in known_profile_ids():
             profile_meta = build_run_metadata(strategy_profile_id)

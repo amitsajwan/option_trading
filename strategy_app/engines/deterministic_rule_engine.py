@@ -535,9 +535,11 @@ class DeterministicRuleEngine(StrategyEngine):
             regime_signal.reason,
         )
         with self._eval_timer.measure("shadow_vote"):
-            shadow_vote = self._build_ml_shadow_vote(snap=snap, regime_signal=regime_signal)
+            shadow_vote = self._build_ml_shadow_vote(
+                snapshot=snapshot, position=position, risk=risk, regime_signal=regime_signal,
+            )
         with self._eval_timer.measure("collect_votes"):
-            votes = self._collect_votes(snapshot, snap, regime_signal, position, risk, shadow_vote)
+            votes = self._collect_votes(snapshot, snap, regime_signal, position, risk)
         if not votes:
             # Trace EVERY bar — incl. bars where no strategy voted (e.g. entry model
             # declined, prob < min_prob). Without this the trace only captured fired
@@ -755,9 +757,8 @@ class DeterministicRuleEngine(StrategyEngine):
         regime_signal: RegimeSignal,
         position: Optional[PositionContext],
         risk: RiskContext,
-        shadow_vote: Optional[StrategyVote],
     ) -> list[StrategyVote]:
-        """Route to active strategies and collect votes; log shadow vote if no real votes."""
+        """Route to active strategies and collect votes."""
         strategies = self._router.get_strategies(regime_signal.regime, position)
         is_entry_mode = position is None
         if not strategies and is_entry_mode:
@@ -786,9 +787,9 @@ class DeterministicRuleEngine(StrategyEngine):
             self._annotate_vote_contract(vote)
             votes.append(vote)
 
-        if not votes and shadow_vote is not None:
-            self._annotate_vote_contract(shadow_vote)
-            self._log.log_vote(shadow_vote)
+        # shadow_vote (if any) is logged once by the caller (_evaluate_impl),
+        # unconditionally -- not here, to avoid double-logging it when votes
+        # is empty.
         return votes
 
     def _grade_and_tier_vote(self, vote, snap, regime_name, risk) -> None:
@@ -2046,45 +2047,44 @@ class DeterministicRuleEngine(StrategyEngine):
     def _build_ml_shadow_vote(
         self,
         *,
-        snap: SnapshotAccessor,
+        snapshot: SnapshotPayload,
+        position: Optional[PositionContext],
+        risk: RiskContext,
         regime_signal: RegimeSignal,
     ) -> Optional[StrategyVote]:
-        if not self._ml_score_all_snapshots:
+        """Book-keeping only: when the regime gate excludes the ML entry
+        trigger (ML_ENTRY / VOL_GATE_ENTRY) from this bar's active strategy
+        set (e.g. PRE_EXPIRY, CHOP), still run it so its real probability +
+        direction get logged/traced. The returned vote is always SignalType.SKIP
+        and is never added to `votes` -- it cannot become a real trade, only
+        _process_entry_votes/_process_exit_votes decide that, and neither ever
+        sees this vote. Gated by ml_score_all_snapshots (default off; live
+        trading currently never sets this).
+        """
+        if not self._ml_score_all_snapshots or position is not None:
             return None
-        evaluator = getattr(self._entry_policy, "evaluate_shadow", None)
-        if not callable(evaluator):
+        trigger = self._router.get_strategy("ML_ENTRY")
+        if trigger is None:
             return None
-        direction, basis, _ = self._shadow_direction_from_snapshot(snap)
-        strike = snap.atm_strike
-        premium = snap.option_ltp(direction.value, strike) if strike is not None and int(strike) > 0 else None
-        vote = StrategyVote(
-            strategy_name="ML_SHADOW",
-            snapshot_id=snap.snapshot_id,
-            timestamp=snap.timestamp_or_now,
-            trade_date=snap.timestamp_or_now.date().isoformat(),
-            signal_type=SignalType.SKIP,
-            direction=direction,
-            confidence=0.0,
-            reason="ml_shadow: pending",
-            raw_signals={
-                "_regime": regime_signal.regime.value,
-                "_regime_conf": round(regime_signal.confidence, 3),
-                "_regime_reason": regime_signal.reason,
-                "_ml_shadow": True,
-                "_ml_shadow_mode": "score_all_snapshots",
-                "_ml_shadow_direction_basis": basis,
-            },
-            proposed_strike=(int(strike) if strike is not None and int(strike) > 0 else None),
-            proposed_entry_premium=(float(premium) if premium is not None and premium > 0 else None),
-        )
+        active = self._router.get_strategies(regime_signal.regime, position)
+        if trigger in active:
+            return None  # already evaluated live by _collect_votes -- avoid double inference
         try:
-            decision = evaluator(snap=snap, vote=vote, regime=regime_signal)
+            vote = trigger.evaluate(snapshot, position, risk)
         except Exception:
-            logger.exception("ml shadow scoring failed snapshot=%s", snap.snapshot_id)
+            logger.exception("ml shadow scoring failed strategy=%s snapshot=%s", trigger.name, getattr(snapshot, "snapshot_id", None))
             return None
-        self._annotate_policy(vote, decision)
-        vote.reason = decision.reason
-        vote.confidence = round(max(0.0, min(1.0, float(decision.score))), 3)
+        if vote is None:
+            # Declined (prob below threshold) or no bundle loaded -- the model's
+            # probability is still captured in this bar's entry_diag by evaluate()
+            # itself, so there's nothing further to log here.
+            return None
+        vote.signal_type = SignalType.SKIP
+        vote.raw_signals["_regime"] = regime_signal.regime.value
+        vote.raw_signals["_regime_conf"] = round(regime_signal.confidence, 3)
+        vote.raw_signals["_regime_reason"] = regime_signal.reason
+        vote.raw_signals["_ml_shadow"] = True
+        vote.raw_signals["_ml_shadow_reason"] = f"regime_blocked:{regime_signal.regime.value}"
         self._annotate_vote_contract(vote)
         return vote
 

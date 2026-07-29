@@ -185,6 +185,12 @@ class StrategyRouter:
     def available_strategy_names(self) -> list[str]:
         return sorted(self._strategy_registry.keys())
 
+    def get_strategy(self, name: str) -> Optional[BaseStrategy]:
+        """Look up a registered strategy by name regardless of the current
+        regime's entry set -- for shadow/book-keeping evaluation that must run
+        even when the regime gate excludes the strategy from real entries."""
+        return self._strategy_registry.get(self._resolve_strategy_name(name))
+
     def _resolve_strategy_name(self, name: str) -> str:
         """Swap the ML entry trigger for the non-ML volatility gate when
         ENTRY_VOL_GATE_ENABLED=1 — same regime map + downstream pipeline, only
