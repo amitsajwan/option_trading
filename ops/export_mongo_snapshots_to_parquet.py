@@ -75,7 +75,12 @@ def main() -> int:
                 snap = (doc.get("payload") or {}).get("snapshot")
                 if not snap:
                     continue
-                rows.append({"snapshot_raw_json": json.dumps(snap, default=str)})
+                rows.append({
+                    "trade_date": snap.get("trade_date") or td,
+                    "timestamp": snap.get("timestamp"),
+                    "snapshot_id": snap.get("snapshot_id"),
+                    "snapshot_raw_json": json.dumps(snap, default=str),
+                })
             if rows:
                 day_dir = out_root / f"trade_date={td}"
                 day_dir.mkdir(parents=True, exist_ok=True)
