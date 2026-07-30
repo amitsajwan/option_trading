@@ -1,0 +1,15 @@
+services:
+  strategy_app_historical:
+    environment:
+      # Threshold recalibration test (2026-07-31): live decision-trace analysis
+      # of the whole 2026-07-20..07-30 window showed BankNifty's ENTRY_ML_MIN_PROB=0.60
+      # sits right at the model's own observed P99 (0.633) -- by design very
+      # selective, but it meant a genuinely clean trend day (2026-07-22, 804pt
+      # range, 85% directional) peaked at only 0.537 and never fired. The
+      # startup MODEL INTEGRITY check independently flags 0.60 as "looks high"
+      # vs the model's calibrated 0.40-0.50 range. This overlay tests a lower
+      # threshold (near the model's own P95-P97) against real historical data
+      # before touching the live value -- baseline is the unmodified compose
+      # stack (no overlay), which reads ENTRY_ML_MIN_PROB=0.60 from .env.compose,
+      # same as live.
+      ENTRY_ML_MIN_PROB: "0.55"

@@ -1,0 +1,18 @@
+services:
+  strategy_app_historical:
+    environment:
+      # Threshold recalibration test (2026-07-31): layer ON TOP of
+      # docker-compose.nifty-historical.yml (same -f order, this file last).
+      # Live decision-trace analysis of the whole 2026-07-20..07-30 window
+      # showed NIFTY's entry-probability distribution sits at roughly HALF of
+      # BankNifty's across the board (mean 0.135 vs 0.333, p99 0.352 vs 0.633),
+      # despite comparable holdout AUC -- a calibration difference, not a
+      # live-serving bug (feature_health was clean on the missed-opportunity
+      # day, 2026-07-22, prob 0.03 despite a 79%-directional 141pt move).
+      # NIFTY's configured ENTRY_ML_MIN_PROB=0.50 sits ABOVE its own observed
+      # P99 (0.352) -- effectively unreachable under normal conditions. This
+      # overlay tests a threshold recalibrated to NIFTY's own distribution
+      # (near its P95-P97) against real historical data before touching the
+      # live value. Baseline is docker-compose.nifty-historical.yml alone
+      # (ENTRY_ML_MIN_PROB=0.50), matching live NIFTY's actual config.
+      ENTRY_ML_MIN_PROB: "0.32"
