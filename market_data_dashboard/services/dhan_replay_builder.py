@@ -248,6 +248,18 @@ def build_snapshots_from_dhan_data(
                 "pcr_change_5m": None,
                 "atm_oi_ratio": (atm_ce_oi / atm_pe_oi) if (atm_ce_oi and atm_pe_oi and atm_pe_oi > 0) else None,
                 "near_atm_oi_ratio": None,
+                # Already summed above for pcr (2026-07-31 fix) -- omitting these
+                # left every OI-based velocity feature (vel_ce_oi_delta_*, etc.)
+                # permanently NaN, since live_velocity_state._extract_morning_row
+                # reads them from here. Dhan's rollingoption endpoint doesn't
+                # carry per-strike option VOLUME (only premium/IV/OI), so
+                # total_ce_volume/total_pe_volume stay unavailable here --
+                # that's a real upstream data-source limit, not fixable at this
+                # layer; it also means the velocity context provider's prior-day
+                # midday-volume lookup (which needs volume, not OI) will keep
+                # returning None here, leaving ctx_gap_*/vol_spike_ratio NaN.
+                "total_ce_oi": total_ce_oi,
+                "total_pe_oi": total_pe_oi,
                 # Required by chain_utils' far-OTM price proxy — without it, a
                 # strike that drifts off the chain can never be valued (froze a
                 # spread for 11 months in replay; 2026-07-10).
