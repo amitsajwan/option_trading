@@ -32,6 +32,10 @@ from datetime import date, datetime, timedelta, timezone
 import requests
 
 from .dhan_replay_builder import build_snapshots_from_dhan_data
+from snapshot_app.core.live_velocity_state import (
+    LiveVelocityAccumulator,
+    make_mongo_context_provider,
+)
 
 _INGESTION = os.getenv("INGESTION_BASE", "http://ingestion_app:8004")
 _COLL = "phase1_market_snapshots_hist"
@@ -232,6 +236,30 @@ def _quality_check(snapshots: list[dict]) -> tuple[bool, dict]:
     return True, rep
 
 
+def _inject_velocity(mongo_db, snapshots: list, instrument: str) -> None:
+    """Port of LiveMarketSnapshotBuilder's per-bar velocity injection (2026-07-31 fix).
+
+    Historical backfill never ran LiveVelocityAccumulator, so every backfilled
+    day was missing snapshot["velocity_enrichment"] entirely (confirmed: live
+    snapshots have it from ~9:18 onward, backfilled ones had zero vel_* fields
+    at ANY time of day, not just before the old 11:30 anchor -- this is a real
+    gap, not the accumulator's legitimate pre-warmup NaN window). ~19 of a
+    47-feature entry-model bundle are vel_*, so this silently degraded any
+    model trained or backtested against phase1_market_snapshots_hist{,_*} to
+    ~40% real features, median-imputed for the rest. Mutates snapshots in place.
+    Requires snapshots sorted ascending by timestamp (same-day, single
+    accumulator instance replicates the live per-day state-reset boundary).
+    """
+    snapshots.sort(key=lambda s: s.get("timestamp") or "")
+    acc = LiveVelocityAccumulator(
+        context_provider=make_mongo_context_provider(
+            mongo_db, collections=(_coll_for(instrument),)
+        )
+    )
+    for i, snap in enumerate(snapshots):
+        snapshots[i] = acc.process(snap)
+
+
 def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) -> int:
     r = requests.get(
         f"{_INGESTION}/api/v1/historical/day/{instrument}",
@@ -244,6 +272,7 @@ def backfill_day(mongo_db, instrument: str, trade_date: str, strikes: int = 10) 
         return 0  # holiday / no session
     snapshots = build_snapshots_from_dhan_data(raw)
     _enrich_for_seller(snapshots, trade_date, instrument)
+    _inject_velocity(mongo_db, snapshots, instrument)
     ok, report = _quality_check(snapshots)
     report.update({"instrument": instrument, "trade_date": trade_date,
                    "verified_at": datetime.now(timezone.utc).isoformat(), "passed": ok})
