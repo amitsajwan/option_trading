@@ -15,6 +15,7 @@ class TestRegistry(unittest.TestCase):
     def test_known_instruments(self) -> None:
         self.assertIn("BANKNIFTY", known_instruments())
         self.assertIn("NIFTY", known_instruments())
+        self.assertIn("FINNIFTY", known_instruments())
 
     def test_banknifty_facts(self) -> None:
         spec = get_instrument("BANKNIFTY")
@@ -29,6 +30,20 @@ class TestRegistry(unittest.TestCase):
         self.assertEqual(spec.lot_size, 75)
         self.assertEqual(spec.strike_step, 50)
         self.assertEqual(spec.expiry_cadence, "weekly")
+
+    def test_finnifty_facts(self) -> None:
+        # Regression for the 2026-08-02 corruption bug: FINNIFTY was entirely
+        # absent from this registry, and ingestion_app.dhan_data_service used
+        # to swallow the resulting KeyError and silently fall back to the
+        # container's own default instrument (BankNifty) instead of raising.
+        # Every FINNIFTY historical-day fetch returned BankNifty's real data
+        # mislabeled as FINNIFTY until both the registry entry and the
+        # silent-fallback were fixed.
+        spec = get_instrument("FINNIFTY")
+        self.assertEqual(spec.index_security_id, "27")
+        self.assertEqual(spec.lot_size, 60)
+        self.assertEqual(spec.strike_step, 50)
+        self.assertEqual(spec.expiry_cadence, "monthly")
 
     def test_default_is_primary(self) -> None:
         self.assertEqual(get_instrument(None).name, PRIMARY_INSTRUMENT)

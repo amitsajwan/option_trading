@@ -61,6 +61,24 @@ INSTRUMENTS: Dict[str, InstrumentSpec] = {
         strike_step=50,
         expiry_cadence="weekly",   # NIFTY weeklies still listed
     ),
+    "FINNIFTY": InstrumentSpec(
+        # BUG (found 2026-08-02): this entry was missing entirely. get_instrument()
+        # correctly raises for unknown names ("fail loud"), but
+        # ingestion_app.dhan_data_service.get_historical_day() wraps that call in a
+        # bare except-and-fall-back-to-self._active_spec() -- which silently
+        # substituted the CONTAINER's own default instrument (BankNifty, since this
+        # only runs inside the BankNifty-flavored ingestion_app) for every FINNIFTY
+        # historical-day request. Every FINNIFTY backfill run through
+        # hist_backfill.py before this fix (incl. two full multi-hundred-day runs
+        # on 2026-07-31 and 2026-08-01) silently ingested BankNifty's index,
+        # futures, AND options data mislabeled as FINNIFTY and needs re-running.
+        # Facts confirmed live 2026-07-26 (see ml_pipeline_2/scripts/dhan_data_pipeline.py).
+        name="FINNIFTY",
+        index_security_id="27",   # ~26,300 confirmed live 2026-07-26, scrip master
+        lot_size=60,               # confirmed live scrip master 2026-07-26
+        strike_step=50,            # near-ATM step confirmed from live chain
+        expiry_cadence="monthly",  # only monthly expiries listed as of 2026-07-26
+    ),
 }
 
 # The primary instrument is re-exported from sim_namespace so callers have one

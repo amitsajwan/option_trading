@@ -406,11 +406,21 @@ class DhanDataService:
             atm_offsets = list(range(-5, 6))
 
         underlying = str(instrument or "").strip().upper()
-        try:
-            from contracts_app import get_instrument
-            spec = get_instrument(underlying)
-        except Exception:
-            spec = self._active_spec()
+        from contracts_app import get_instrument
+        # BUG (found 2026-08-02): this used to be try/except-and-fall-back-to-
+        # self._active_spec() around the whole get_instrument() call, which
+        # silently substituted THIS CONTAINER's own default instrument
+        # (BankNifty, for the BankNifty-flavored ingestion_app) for any
+        # genuinely-unknown, non-empty instrument name -- defeating
+        # contracts_app.get_instrument()'s own documented "fail loud rather
+        # than silently trading the wrong contract size" design. Every
+        # FINNIFTY historical-day request before this fix silently returned
+        # BankNifty's index/futures/options data mislabeled as FINNIFTY.
+        # An empty/None instrument still resolves safely to the primary via
+        # normalize_instrument()'s own `raw or PRIMARY_INSTRUMENT` fallback --
+        # only a genuinely unknown non-empty name should ever reach here, and
+        # that case must raise, not substitute a different real instrument.
+        spec = get_instrument(underlying)
 
         idx_sid = spec.index_security_id
         step = spec.strike_step
