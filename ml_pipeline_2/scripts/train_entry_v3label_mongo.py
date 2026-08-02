@@ -83,7 +83,7 @@ def add_v3_label(df: pd.DataFrame, label_pt: Optional[float], label_pct: Optiona
 
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--instrument", required=True, choices=["BANKNIFTY", "NIFTY"])
+    ap.add_argument("--instrument", required=True, choices=["BANKNIFTY", "NIFTY", "FINNIFTY"])
     ap.add_argument("--training-view", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--train-start", default="2024-11-01")
