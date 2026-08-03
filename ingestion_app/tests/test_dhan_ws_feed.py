@@ -211,12 +211,14 @@ def _scrip_master_stub(rows_by_underlying):
     return stub
 
 
-def test_build_shared_legs_covers_both_instruments(monkeypatch):
+def test_build_shared_legs_covers_all_three_instruments(monkeypatch):
     monkeypatch.setenv("INSTRUMENT_SYMBOL", "BANKNIFTY26JULFUT")
     monkeypatch.setenv("NIFTY_INSTRUMENT_SYMBOL", "NIFTY26JULFUT")
+    monkeypatch.setenv("FINNIFTY_INSTRUMENT_SYMBOL", "FINNIFTY26AUGFUT")
     scrip = _scrip_master_stub({
         "BANKNIFTY": {"SEM_SMST_SECURITY_ID": "62326"},
         "NIFTY": {"SEM_SMST_SECURITY_ID": "77001"},
+        "FINNIFTY": {"SEM_SMST_SECURITY_ID": "58070"},
     })
 
     legs = build_shared_legs(scrip)
@@ -225,12 +227,17 @@ def test_build_shared_legs_covers_both_instruments(monkeypatch):
     assert by_label["INDIAVIX"]["security_id"] == "21"
     assert by_label["BANKNIFTY"]["security_id"] == "25"
     assert by_label["NIFTY"]["security_id"] == "13"
+    assert by_label["FINNIFTY"]["security_id"] == "27"
     # Regression guard for the 2026-07-21 bug: each underlying's futures leg
-    # must resolve to ITS OWN security id, not both silently pointing at
+    # must resolve to ITS OWN security id, not all silently pointing at
     # BankNifty's (the old hardcoded-"BANKNIFTY" constructor argument bug).
     assert by_label["BANKNIFTY26JULFUT"]["security_id"] == "62326"
     assert by_label["NIFTY26JULFUT"]["security_id"] == "77001"
-    assert by_label["BANKNIFTY26JULFUT"]["security_id"] != by_label["NIFTY26JULFUT"]["security_id"]
+    assert by_label["FINNIFTY26AUGFUT"]["security_id"] == "58070"
+    ids = {by_label["BANKNIFTY26JULFUT"]["security_id"],
+           by_label["NIFTY26JULFUT"]["security_id"],
+           by_label["FINNIFTY26AUGFUT"]["security_id"]}
+    assert len(ids) == 3
 
 
 def test_build_shared_legs_skips_futures_leg_when_scrip_lookup_fails(monkeypatch):
@@ -257,3 +264,19 @@ def test_build_shared_legs_skips_futures_leg_when_env_missing(monkeypatch):
     legs = build_shared_legs(scrip)
     labels = {leg["label"] for leg in legs}
     assert "NIFTY26JULFUT" not in labels
+
+
+def test_build_shared_legs_skips_finnifty_futures_leg_when_env_missing(monkeypatch):
+    monkeypatch.setenv("INSTRUMENT_SYMBOL", "BANKNIFTY26JULFUT")
+    monkeypatch.setenv("NIFTY_INSTRUMENT_SYMBOL", "NIFTY26JULFUT")
+    monkeypatch.delenv("FINNIFTY_INSTRUMENT_SYMBOL", raising=False)
+    scrip = _scrip_master_stub({
+        "BANKNIFTY": {"SEM_SMST_SECURITY_ID": "62326"},
+        "NIFTY": {"SEM_SMST_SECURITY_ID": "77001"},
+        "FINNIFTY": {"SEM_SMST_SECURITY_ID": "58070"},
+    })
+
+    legs = build_shared_legs(scrip)
+    labels = {leg["label"] for leg in legs}
+    assert "FINNIFTY26AUGFUT" not in labels        # skipped, not silently wrong
+    assert "FINNIFTY" in labels                     # index leg unaffected

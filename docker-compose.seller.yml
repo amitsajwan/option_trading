@@ -113,6 +113,61 @@ services:
     healthcheck:
       disable: true
 
+  # FINNIFTY seller (2026-08-03): same image/code, instrument-scoped by env.
+  # Monthly expiries like BankNifty (hold-days axis), 50-pt strikes like NIFTY
+  # (offset/width axis) -- FINNIFTY sits between the two, see the onboarding
+  # plan's config-value reasoning. EXECUTION_ADAPTER/SELLER_LIVE_ENABLED are
+  # deliberately FINNIFTY_-prefixed, NOT the shared vars seller_app/seller_app_nifty
+  # both read -- flipping FINNIFTY live/paper must never touch the already-live
+  # BankNifty/NIFTY sellers.
+  seller_app_finnifty:
+    image: option_trading-seller_app
+    restart: unless-stopped
+    working_dir: /app
+    depends_on:
+      - mongo
+    environment:
+      TZ: "Asia/Kolkata"
+      PYTHONPATH: /app
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: trading_ai
+      STRATEGY_INSTRUMENT: FINNIFTY
+      STRATEGY_RUN_DIR: /seller_run
+      EXECUTION_ADAPTER: "${FINNIFTY_EXECUTION_ADAPTER:-paper}"
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
+      SELLER_LIVE_ENABLED: "${FINNIFTY_SELLER_LIVE_ENABLED:-0}"
+      FINNIFTY_LOT_SIZE: "${FINNIFTY_LOT_SIZE:-60}"
+      SELLER_CONDOR_OFFSET: "${FINNIFTY_SELLER_CONDOR_OFFSET:-100}"
+      SELLER_IV_RANK_MIN: "${SELLER_IV_RANK_MIN:-30}"
+      SELLER_SPREAD_WIDTH: "${FINNIFTY_SELLER_SPREAD_WIDTH:-150}"
+      SELLER_TP_FRAC: "${SELLER_TP_FRAC:-0.50}"
+      SELLER_STOP_MULT: "${SELLER_STOP_MULT:-2.0}"
+      SELLER_MAX_HOLD_DAYS: "${FINNIFTY_SELLER_MAX_HOLD_DAYS:-5}"
+      SELLER_ENTRY_WINDOW: "${SELLER_ENTRY_WINDOW:-10:00-14:00}"
+      SELLER_LOOP_INTERVAL_S: "${SELLER_LOOP_INTERVAL_S:-30}"
+      SELLER_MAX_CONCURRENT: "${FINNIFTY_SELLER_MAX_CONCURRENT:-1}"
+      SELLER_DAILY_LOSS_CAP_RS: "${SELLER_DAILY_LOSS_CAP_RS:-6000}"
+      SELLER_ENTRY_FAIL_LATCH: "${SELLER_ENTRY_FAIL_LATCH:-2}"
+      SELLER_MIN_FREE_MARGIN_RS: "${FINNIFTY_SELLER_MIN_FREE_MARGIN_RS:-45000}"
+      SELLER_STOP_CONFIRM_BARS: "${SELLER_STOP_CONFIRM_BARS:-2}"
+      SELLER_QUIET_GATE_MODE: "${SELLER_QUIET_GATE_MODE:-}"
+      SELLER_QUIET_GATE_BUNDLE: "${FINNIFTY_SELLER_QUIET_GATE_BUNDLE:-}"
+      SELLER_QUIET_GATE_QUANTILE: "${SELLER_QUIET_GATE_QUANTILE:-0.97}"
+      SHARED_RUN_DIR: /shared_run
+      ALERT_ENABLED: "${ALERT_ENABLED:-0}"
+      ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
+      ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+    volumes:
+      - seller_finnifty_run:/seller_run
+      - ./.run:/shared_run
+      - ./config/event_calendar.json:/app/config/event_calendar.json:ro
+    command: ["python", "-m", "strategy_app.seller"]
+    healthcheck:
+      disable: true
+
   # Use the LOCAL build of the dashboard (with the /seller route baked in) instead of the
   # pinned GHCR image, so the route survives recreate. (gcp override pins image+pull_policy:always.)
   dashboard:
@@ -124,3 +179,4 @@ services:
 volumes:
   seller_run:
   seller_nifty_run:
+  seller_finnifty_run:

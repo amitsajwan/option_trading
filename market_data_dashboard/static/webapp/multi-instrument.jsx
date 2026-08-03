@@ -460,8 +460,8 @@ function DecisionTraceViewer({ instrument }) {
               },
                 React.createElement('span', { className: 'mi-sig-time' }, _tsShort(sig.ts)),
                 React.createElement('span', {
-                  className: `mi-sig-inst mi-inst-${(sig.instrument || 'BN').replace('BANKNIFTY','BN').replace('NIFTY','NF').toLowerCase()}`,
-                }, (sig.instrument || '').replace('BANKNIFTY','BN').replace('NIFTY','NF') || instrument.replace('BANKNIFTY','BN').replace('NIFTY','NF')),
+                  className: `mi-sig-inst mi-inst-${(sig.instrument || 'BN').replace('BANKNIFTY','BN').replace('FINNIFTY','FN').replace('NIFTY','NF').toLowerCase()}`,
+                }, (sig.instrument || '').replace('BANKNIFTY','BN').replace('FINNIFTY','FN').replace('NIFTY','NF') || instrument.replace('BANKNIFTY','BN').replace('FINNIFTY','FN').replace('NIFTY','NF')),
                 React.createElement('span', {
                   className: `mi-sig-source ${(sig.run_id || '').startsWith('replay-') ? 'mi-source-replay' : 'mi-source-live'}`,
                 }, (sig.run_id || '').startsWith('replay-') ? 'REPLAY' : 'LIVE'),
@@ -665,6 +665,7 @@ function ReplayPanel({ instrument: defaultInstrument }) {
         React.createElement('select', { value:instrument, onChange:e=>setInstrument(e.target.value), className:'mi-replay-inst' },
           React.createElement('option', {value:'BANKNIFTY'}, 'BankNifty'),
           React.createElement('option', {value:'NIFTY'}, 'Nifty'),
+          React.createElement('option', {value:'FINNIFTY'}, 'FinNifty'),
         ),
       ),
       React.createElement('label', null, ' Date ',
@@ -725,8 +726,8 @@ function ReplayPanel({ instrument: defaultInstrument }) {
             React.createElement('td', null, r.date),
             React.createElement('td', null,
               React.createElement('span', {
-                className: `mi-sig-inst mi-inst-${(r.instrument||'BN').replace('BANKNIFTY','bn').replace('NIFTY','nf').toLowerCase()}`,
-              }, (r.instrument||'').replace('BANKNIFTY','BN').replace('NIFTY','NF') || '—'),
+                className: `mi-sig-inst mi-inst-${(r.instrument||'BN').replace('BANKNIFTY','bn').replace('FINNIFTY','fn').replace('NIFTY','nf').toLowerCase()}`,
+              }, (r.instrument||'').replace('BANKNIFTY','BN').replace('FINNIFTY','FN').replace('NIFTY','NF') || '—'),
             ),
             React.createElement('td', null, `${r.speed}×`),
             React.createElement('td', { style:{color:statusColor(r.status)} }, r.status),

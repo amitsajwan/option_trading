@@ -50,6 +50,9 @@ services:
       # (see ingestion_app/dhan_ws_feed.py::build_shared_legs). Same var
       # ingestion_app_nifty already uses for its own INSTRUMENT_SYMBOL below.
       NIFTY_INSTRUMENT_SYMBOL: "${NIFTY_INSTRUMENT_SYMBOL:-NIFTY26JULFUT}"
+      # Same reasoning as NIFTY_INSTRUMENT_SYMBOL above — the shared WS owner
+      # needs FINNIFTY's futures symbol too, to build its leg (2026-08-03).
+      FINNIFTY_INSTRUMENT_SYMBOL: "${FINNIFTY_INSTRUMENT_SYMBOL:-FINNIFTY26AUGFUT}"
       KITE_CREDENTIALS_PATH: "${KITE_CREDENTIALS_PATH:-/app/secrets/credentials.json}"
       BROKER: "${BROKER:-kite}"
       DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
@@ -735,6 +738,58 @@ services:
       REGIME_PANIC_VIX_CHG_MIN: "${REGIME_PANIC_VIX_CHG_MIN:-5.0}"
       REGIME_PANIC_RVOL_MIN: "${REGIME_PANIC_RVOL_MIN:-0.012}"
       TRADE_SIGNAL_TOPIC: "market:nifty:strategy:signals:v1"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8009/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  execution_app_finnifty:
+    image: option_trading-execution_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      strategy_app_finnifty:
+        condition: service_started
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: FINNIFTY
+      # Deliberately its OWN var (not the shared EXECUTION_ADAPTER BankNifty/
+      # NIFTY use) so flipping FINNIFTY live/paper can never accidentally
+      # touch the already-live BankNifty/NIFTY execution adapters. Starts on
+      # "paper" for the Stage 3 smoke test; flip FINNIFTY_EXECUTION_ADAPTER=dhan
+      # only at Stage 6, after config-contract + sandbox checks pass.
+      EXECUTION_ADAPTER: "${FINNIFTY_EXECUTION_ADAPTER:-paper}"
+      EXECUTION_REQUIRE_LIVE_TIER: "${EXECUTION_REQUIRE_LIVE_TIER:-1}"
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      DHAN_PRODUCT_TYPE: "${DHAN_PRODUCT_TYPE:-MARGIN}"
+      FINNIFTY_LOT_SIZE: "${FINNIFTY_LOT_SIZE:-60}"
+      ORDER_FILL_TIMEOUT_SEC: "${ORDER_FILL_TIMEOUT_SEC:-30}"
+      ORDER_POLL_INTERVAL_SEC: "${ORDER_POLL_INTERVAL_SEC:-1}"
+      EXEC_BROKER_STOP_ENABLED: "${EXEC_BROKER_STOP_ENABLED:-0}"
+      EXEC_BROKER_STOP_PCT: "${EXEC_BROKER_STOP_PCT:-0.15}"
+      FILL_TRACKER_ENABLED: "${FILL_TRACKER_ENABLED:-1}"
+      EXECUTION_FILLS_STREAM: "execution:finnifty:fills:v1"
+      MONGO_COLL_EXECUTION_FILLS: "${MONGO_COLL_EXECUTION_FILLS:-execution_fills}"
+      MONGO_COLL_STRATEGY_POSITIONS: "strategy_positions_finnifty"
+      SHADOW_MAX_LOTS: "${SHADOW_MAX_LOTS:-1}"
+      ALERT_ENABLED: "${ALERT_ENABLED:-0}"
+      ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
+      ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+      REGIME_PANIC_REQUIRE_NONDIRECTIONAL: "${REGIME_PANIC_REQUIRE_NONDIRECTIONAL:-1}"
+      REGIME_PANIC_VIX_CHG_MIN: "${REGIME_PANIC_VIX_CHG_MIN:-5.0}"
+      REGIME_PANIC_RVOL_MIN: "${REGIME_PANIC_RVOL_MIN:-0.012}"
+      TRADE_SIGNAL_TOPIC: "market:finnifty:strategy:signals:v1"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8009/health')"]
       interval: 30s
@@ -1790,6 +1845,68 @@ services:
       timeout: 15s
       retries: 3
 
+  ingestion_app_finnifty:
+    image: option_trading-ingestion_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: FINNIFTY
+      INSTRUMENT_SYMBOL: "${FINNIFTY_INSTRUMENT_SYMBOL:-FINNIFTY26AUGFUT}"
+      BROKER: dhan
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      IDLE_SLEEP_SECONDS: "${IDLE_SLEEP_SECONDS:-60}"
+      INGESTION_COLLECTORS_ENABLED: "0"
+      LIVE_TOPIC: "market:finnifty:snapshot:v1"
+      SNAPSHOT_V1_TOPIC: "market:finnifty:snapshot:v1"
+    command:
+      - "python"
+      - "-m"
+      - "ingestion_app.market_session_runner"
+      - "--mode"
+      - "live"
+      - "--holidays-file"
+      - "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      - "--idle-sleep-seconds"
+      - "${IDLE_SLEEP_SECONDS:-60}"
+      - "--state-file"
+      - "/app/.run/ingestion_app_finnifty/session_state.json"
+    volumes:
+      - ./.run:/app/.run
+      - ./ingestion_app/credentials.json:/app/secrets/credentials.json:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./models:/app/models:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-m"
+        - "ingestion_app.market_session_runner"
+        - "--healthcheck"
+        - "--state-file"
+        - "/app/.run/ingestion_app_finnifty/session_state.json"
+        - "--max-stale-seconds"
+        - "240"
+      interval: 60s
+      timeout: 15s
+      retries: 3
+
   snapshot_app_nifty:
     image: option_trading-snapshot_app
     restart: unless-stopped
@@ -1850,6 +1967,65 @@ services:
       timeout: 5s
       retries: 5
 
+  snapshot_app_finnifty:
+    image: option_trading-snapshot_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      ingestion_app_finnifty:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: FINNIFTY
+      INSTRUMENT_SYMBOL: "${FINNIFTY_INSTRUMENT_SYMBOL:-FINNIFTY26AUGFUT}"
+      FINNIFTY_LOT_SIZE: "${FINNIFTY_LOT_SIZE:-60}"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "market:finnifty:snapshot:v1"
+      SNAPSHOT_V1_TOPIC: "market:finnifty:snapshot:v1"
+      ML_PIPELINE_DISABLE_KITE_BACKFILL: "1"
+    command:
+      - "python"
+      - "-m"
+      - "snapshot_app.main_live"
+      - "--foreground"
+      - "--instrument"
+      - "${FINNIFTY_INSTRUMENT_SYMBOL:-FINNIFTY26AUGFUT}"
+      - "--market-api-base"
+      - "http://ingestion_app_finnifty:8004"
+      - "--out-jsonl"
+      - "/app/.run/snapshot_app_finnifty/events.jsonl"
+    volumes:
+      - ./.run:/app/.run
+      - ./ingestion_app/credentials.json:/app/secrets/credentials.json:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./models:/app/models:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-m"
+        - "snapshot_app.health"
+        - "--events-path"
+        - "/app/.run/snapshot_app_finnifty/events.jsonl"
+        - "--max-age-seconds"
+        - "300"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
   # 2026-07-08: NIFTY had NO live-snapshot Mongo persistence at all (only the
   # JSONL file below) — meaning NEITHER the official sim_orchestrator/Strategy
   # Eval UI replay (source_coll defaults to phase1_market_snapshots) NOR the
@@ -1900,6 +2076,67 @@ services:
         "market:nifty:snapshot:v1",
         "--run-dir",
         ".run/persistence_app_nifty",
+      ]
+    volumes:
+      - ./.run:/app/.run
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "persistence_app.health",
+          "--max-age-seconds",
+          "300",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  persistence_app_finnifty:
+    build:
+      context: .
+      dockerfile: persistence_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      snapshot_app_finnifty:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: FINNIFTY
+      # Explicit (not auto-namespace-derived) — same gotcha as NIFTY's block
+      # above: persistence_app.health reads MONGO_COLL_SNAPSHOTS directly with
+      # a hardcoded BN fallback, not via the instrument-aware resolver.
+      MONGO_COLL_SNAPSHOTS: "phase1_market_snapshots_finnifty"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "market:finnifty:snapshot:v1"
+      HISTORICAL_TOPIC: "market:finnifty:snapshot:v1:historical"
+      SNAPSHOT_V1_TOPIC: "market:finnifty:snapshot:v1"
+    command:
+      [
+        "python",
+        "-m",
+        "persistence_app.main_snapshot_consumer",
+        "--foreground",
+        "--event-topic",
+        "market:finnifty:snapshot:v1",
+        "--run-dir",
+        ".run/persistence_app_finnifty",
       ]
     volumes:
       - ./.run:/app/.run
@@ -2041,6 +2278,121 @@ services:
       timeout: 10s
       retries: 3
 
+  strategy_app_finnifty:
+    image: option_trading-strategy_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      snapshot_app_finnifty:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      STRATEGY_INSTRUMENT: FINNIFTY
+      STRATEGY_RUN_DIR: "/app/.run/strategy_app_finnifty"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+      LIVE_TOPIC: "market:finnifty:snapshot:v1"
+      SNAPSHOT_V1_TOPIC: "market:finnifty:snapshot:v1"
+      STRATEGY_REDIS_PUBLISH_ENABLED: "1"
+      STRATEGY_VOTE_TOPIC: "market:finnifty:strategy:votes:v1"
+      TRADE_SIGNAL_TOPIC: "market:finnifty:strategy:signals:v1"
+      STRATEGY_POSITION_TOPIC: "market:finnifty:strategy:positions:v1"
+      STRATEGY_DECISION_TRACE_TOPIC: "market:finnifty:strategy:decision_trace:v1"
+      # 2026-08-03: first-ever FINNIFTY entry model, trained on correctly
+      # re-backfilled data this session (finnifty_entry_015pct_v1). FAILED its
+      # own ship gates (holdout AUC 0.576) and its calibrated probability never
+      # exceeds 0.540 anywhere in Jun-Jul 2026 data -- copying BN/NIFTY's 0.60
+      # or 0.05 threshold is meaningless for this bundle's real range. Computed
+      # empirically: scored against 8604 Jun-Jul FINNIFTY rows, distribution is
+      # heavily quantized (shallow max_depth=3 tree) with a sharp cliff at 0.54
+      # -- the model's own top-confidence bucket, ~7.6% fire rate (28 bars/day).
+      # 0.54 = the ceiling itself: maximally selective while still reachable.
+      ENTRY_ML_MODEL_PATH: "${FINNIFTY_ENTRY_ML_MODEL_PATH:-/app/models/finnifty_entry_015pct_v1.joblib}"
+      ENTRY_ML_MIN_PROB: "${FINNIFTY_ENTRY_ML_MIN_PROB:-0.54}"
+      # No FINNIFTY direction-ML bundle exists yet -- DIRECTION_ML_MODEL_PATH
+      # intentionally left unset. ENTRY_DIR_W_ML explicitly zeroed (the
+      # resolver's own documented way to disable the ML term) rather than left
+      # at its 0.20 default with no model behind it -- a >0 weight on a dead
+      # input is exactly the silent-gap failure mode the config contract's
+      # weight_requires check exists to catch (see NIFTY's 2026-07-19 depth
+      # incident). ML_ENTRY_DIRECTION_MODE=composite still runs its rule-based
+      # terms fully.
+      ENTRY_ML_MAX_NAN_FEATURES: "${FINNIFTY_ENTRY_ML_MAX_NAN_FEATURES:-2}"
+      ML_ENTRY_DIRECTION_MODE: "${FINNIFTY_ML_ENTRY_DIRECTION_MODE:-composite}"
+      ENTRY_DIR_W_ML: "${FINNIFTY_ENTRY_DIR_W_ML:-0}"
+      # Composite's depth signal (heaviest weight) needs depth_collector_dhan_finnifty
+      # live from day one -- NIFTY's own depth feed was silently dead for weeks
+      # the first time this was missed (2026-07-21).
+      DEPTH_FEED_ENABLED: "${DEPTH_FEED_ENABLED_FINNIFTY:-1}"
+      ENTRY_BLOCK_PRE_EXPIRY: "${ENTRY_BLOCK_PRE_EXPIRY:-}"
+      FINNIFTY_LOT_SIZE: "${FINNIFTY_LOT_SIZE:-60}"
+      STRATEGY_MIN_CONFIDENCE: "0.05"
+      # GOOD (BankNifty's stricter bar, not NIFTY's OK) -- deliberate extra
+      # safety margin given this specific model's known-weak calibration;
+      # grade is computed from direction-resolver signals independent of the
+      # entry model's own quality, so this is the one lever that can compensate.
+      RISK_LIVE_MIN_GRADE: "${FINNIFTY_RISK_LIVE_MIN_GRADE:-GOOD}"
+      RISK_MAX_LOTS_PER_TRADE: "1"
+      RISK_CAPITAL_ALLOCATED: "${RISK_CAPITAL_ALLOCATED:-500000}"
+      RISK_PER_TRADE_PCT: "${RISK_PER_TRADE_PCT:-0.005}"
+      RISK_MAX_DAILY_LOSS_PCT: "${RISK_MAX_DAILY_LOSS_PCT:-0.02}"
+      RISK_MAX_SESSION_TRADES: "6"
+      RISK_MAX_CONSECUTIVE_LOSSES: "3"
+      ENTRY_TIERING_ENABLED: "true"
+      EXIT_STRATEGY_MODE: "${EXIT_STRATEGY_MODE:-scalper}"
+      EXIT_MAX_LOSS_PCT: "${EXIT_MAX_LOSS_PCT:-0.10}"
+      EXIT_SCALPER_HARD_STOP_PCT: "${EXIT_SCALPER_HARD_STOP_PCT:-0.25}"
+      EXIT_SCALPER_STALE_BARS: "${EXIT_SCALPER_STALE_BARS:-15}"
+      ALERT_ENABLED: "${ALERT_ENABLED:-0}"
+      ALERT_TELEGRAM_TOKEN: "${ALERT_TELEGRAM_TOKEN:-}"
+      ALERT_TELEGRAM_CHAT_ID: "${ALERT_TELEGRAM_CHAT_ID:-}"
+      REGIME_PANIC_REQUIRE_NONDIRECTIONAL: "${REGIME_PANIC_REQUIRE_NONDIRECTIONAL:-1}"
+      REGIME_PANIC_VIX_CHG_MIN: "${REGIME_PANIC_VIX_CHG_MIN:-5.0}"
+      REGIME_PANIC_RVOL_MIN: "${REGIME_PANIC_RVOL_MIN:-0.012}"
+      EXIT_POLICY_STACK_ENABLED: "${EXIT_POLICY_STACK_ENABLED:-1}"
+      EXIT_GIVEBACK_STOP_ENABLED: "${EXIT_GIVEBACK_STOP_ENABLED:-0}"
+      EXIT_GIVEBACK_MIN_MFE: "${EXIT_GIVEBACK_MIN_MFE:-0.03}"
+      EXIT_GIVEBACK_PCT: "${EXIT_GIVEBACK_PCT:-0.09}"
+      STRATEGY_PROFILE_ID: "${STRATEGY_PROFILE_ID:-trader_master_ml_entry_v1}"
+    command:
+      - "python"
+      - "-m"
+      - "strategy_app.main"
+      - "--engine"
+      - "deterministic"
+      - "--min-confidence"
+      - "0.05"
+      - "--strategy-profile-id"
+      - "${STRATEGY_PROFILE_ID:-trader_master_ml_entry_v1}"
+      - "--topic"
+      - "market:finnifty:snapshot:v1"
+      # 2026-08-03: starts on "paper" (Stage 3 smoke test) -- flip
+      # FINNIFTY_ROLLOUT_STAGE=capped_live in .env.compose only after Stage 4/5
+      # verification passes (config contract + Dhan sandbox order-path check).
+      - "--rollout-stage"
+      - "${FINNIFTY_ROLLOUT_STAGE:-paper}"
+      - "--position-size-multiplier"
+      - "${FINNIFTY_POSITION_SIZE_MULTIPLIER:-0.25}"
+    volumes:
+      - ./.run:/app/.run
+      - ./.data/ml_pipeline:/app/.data/ml_pipeline:ro
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+      - ./ml_pipeline_2/artifacts:/app/ml_pipeline_2/artifacts:ro
+      - ./ops/strategy_config.yml:/app/ops/strategy_config.yml:ro
+      - ./models:/app/models:ro
+    healthcheck:
+      test: ["CMD", "python", "-m", "strategy_app.health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
   strategy_persistence_app_nifty:
     image: option_trading-strategy_persistence_app
     restart: unless-stopped
@@ -2086,6 +2438,60 @@ services:
       - "market:nifty:strategy:positions:v1"
       - "--trace-topic"
       - "market:nifty:strategy:decision_trace:v1"
+    volumes:
+      - ./.run:/app/.run
+      - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-m", "persistence_app.strategy_health", "--max-age-seconds", "300"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  strategy_persistence_app_finnifty:
+    image: option_trading-strategy_persistence_app
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      strategy_app_finnifty:
+        condition: service_started
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      STRATEGY_INSTRUMENT: FINNIFTY
+      STRATEGY_VOTE_TOPIC: "market:finnifty:strategy:votes:v1"
+      TRADE_SIGNAL_TOPIC: "market:finnifty:strategy:signals:v1"
+      STRATEGY_POSITION_TOPIC: "market:finnifty:strategy:positions:v1"
+      STRATEGY_DECISION_TRACE_TOPIC: "market:finnifty:strategy:decision_trace:v1"
+      MONGO_COLL_STRATEGY_VOTES: "strategy_votes_finnifty"
+      MONGO_COLL_TRADE_SIGNALS: "trade_signals_finnifty"
+      MONGO_COLL_STRATEGY_POSITIONS: "strategy_positions_finnifty"
+      MONGO_COLL_STRATEGY_DECISION_TRACES: "strategy_decision_traces_finnifty"
+      MARKET_SESSION_ENABLED: "${MARKET_SESSION_ENABLED:-1}"
+      MARKET_TIMEZONE: "${MARKET_TIMEZONE:-Asia/Kolkata}"
+      MARKET_OPEN_TIME: "${MARKET_OPEN_TIME:-09:15}"
+      MARKET_CLOSE_TIME: "${MARKET_CLOSE_TIME:-15:30}"
+      NSE_HOLIDAYS_FILE: "${NSE_HOLIDAYS_FILE:-/app/config/nse_holidays.json}"
+    command:
+      - "python"
+      - "-m"
+      - "persistence_app.main_strategy_consumer"
+      - "--foreground"
+      - "--vote-topic"
+      - "market:finnifty:strategy:votes:v1"
+      - "--signal-topic"
+      - "market:finnifty:strategy:signals:v1"
+      - "--position-topic"
+      - "market:finnifty:strategy:positions:v1"
+      - "--trace-topic"
+      - "market:finnifty:strategy:decision_trace:v1"
     volumes:
       - ./.run:/app/.run
       - ./config/nse_holidays.json:/app/config/nse_holidays.json:ro

@@ -34,13 +34,14 @@ logger = logging.getLogger(__name__)
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
-# Instruments known to the system — extend when NIFTY is deployed.
-_KNOWN_INSTRUMENTS = ["BANKNIFTY", "NIFTY"]
+# Instruments known to the system — extend when a new instrument is deployed.
+_KNOWN_INSTRUMENTS = ["BANKNIFTY", "NIFTY", "FINNIFTY"]
 
 # Expiry cadence for DTE calculation.
 _EXPIRY_CADENCE: dict[str, str] = {
     "BANKNIFTY": "monthly",   # post-Nov 2024: last Thursday of month
     "NIFTY":     "weekly",    # every Thursday
+    "FINNIFTY":  "monthly",   # only monthly expiries listed as of 2026-07-26
 }
 
 
@@ -101,6 +102,9 @@ def _model_loaded(run_dir_mode: str = "live", instrument: str = "BANKNIFTY") -> 
             if instrument == "NIFTY":
                 entry_path = os.getenv("NIFTY_ENTRY_ML_MODEL_PATH", "")
                 dir_path = os.getenv("NIFTY_DIRECTION_ML_MODEL_PATH", "")
+            elif instrument == "FINNIFTY":
+                entry_path = os.getenv("FINNIFTY_ENTRY_ML_MODEL_PATH", "")
+                dir_path = os.getenv("FINNIFTY_DIRECTION_ML_MODEL_PATH", "")
             else:
                 entry_path = os.getenv("ENTRY_ML_MODEL_PATH", "")
                 dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "")
@@ -220,7 +224,12 @@ def _instrument_mode(instrument: str) -> str:
     """
     try:
         # Read from appropriate runtime config based on instrument
-        run_dir_mode = "live_nifty" if instrument == "NIFTY" else "live"
+        if instrument == "NIFTY":
+            run_dir_mode = "live_nifty"
+        elif instrument == "FINNIFTY":
+            run_dir_mode = "live_finnifty"
+        else:
+            run_dir_mode = "live"
         run_dir = _resolve_run_dir(run_dir_mode)
         cfg_path = run_dir / "runtime_config.json"
         
@@ -247,10 +256,14 @@ def _instrument_mode(instrument: str) -> str:
         else:
             mode = "sim"
 
-        # If NIFTY is not yet deployed (no model paths), report as off
+        # If a secondary instrument is not yet deployed (no model paths), report as off
         if instrument == "NIFTY":
             nifty_entry = os.getenv("NIFTY_ENTRY_ML_MODEL_PATH", "")
             if not nifty_entry:
+                return "off"
+        elif instrument == "FINNIFTY":
+            finnifty_entry = os.getenv("FINNIFTY_ENTRY_ML_MODEL_PATH", "")
+            if not finnifty_entry:
                 return "off"
         return mode
     except Exception:
@@ -370,7 +383,12 @@ def _build_instrument_status(instrument: str) -> dict[str, Any]:
 
 def _build_one(instrument: str, db: Any, r: Any, now: datetime, today: str) -> dict[str, Any]:
     mode = _instrument_mode(instrument)
-    run_dir_mode = "live_nifty" if instrument == "NIFTY" else "live"
+    if instrument == "NIFTY":
+        run_dir_mode = "live_nifty"
+    elif instrument == "FINNIFTY":
+        run_dir_mode = "live_finnifty"
+    else:
+        run_dir_mode = "live"
     models = _model_loaded(run_dir_mode, instrument)
     feed_age = _feed_last_tick_age_sec(r, instrument)
     stats = _today_stats(db, instrument, today) if db is not None else {"today_trades": 0, "today_pnl_pct": 0.0}

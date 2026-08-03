@@ -15,7 +15,7 @@
 set -uo pipefail
 REPO=/opt/option_trading
 BRANCH="${DEPLOY_BRANCH:-feat/dhan-feature-engine}"
-CORE_SERVICES="ingestion_app ingestion_app_nifty snapshot_app snapshot_app_nifty strategy_app strategy_app_nifty execution_app execution_app_nifty seller_app seller_app_nifty"
+CORE_SERVICES="ingestion_app ingestion_app_nifty ingestion_app_finnifty snapshot_app snapshot_app_nifty snapshot_app_finnifty strategy_app strategy_app_nifty strategy_app_finnifty execution_app execution_app_nifty execution_app_finnifty seller_app seller_app_nifty seller_app_finnifty"
 SERVICES="${*:-$CORE_SERVICES}"
 # Sellers live in an overlay file; include it always so `deploy.sh seller_app`
 # and full deploys go through the same one path (2026-07-11: sellers were
