@@ -23,9 +23,9 @@ security_ids only when the ATM strike actually changes.
 ENV VARS (Dhan-specific; poll/TTL/market-hours/mongo vars unchanged from
 depth_collector.py, see that module's docstring)
 ------------------------------------------------
-DEPTH_UNDERLYING        BANKNIFTY | NIFTY (default BANKNIFTY)
+DEPTH_UNDERLYING        BANKNIFTY | NIFTY | FINNIFTY (default BANKNIFTY)
 DEPTH_STRIKE_STEP       Strike spacing for ATM rounding (default: 100 for
-                        BANKNIFTY, 50 for NIFTY)
+                        BANKNIFTY, 50 for NIFTY/FINNIFTY)
 DHAN_ACCESS_TOKEN / DHAN_CLIENT_ID   Same credentials as execution_app/
                         ingestion_app — this collector is recreated by the
                         same daily dhan-token-refresh cycle, so no separate
@@ -74,8 +74,8 @@ logger = logging.getLogger(__name__)
 
 _SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 _DHAN_BASE = "https://api.dhan.co/v2"
-_INDEX_SECURITY_ID = {"BANKNIFTY": "25", "NIFTY": "13"}
-_DEFAULT_STRIKE_STEP = {"BANKNIFTY": 100, "NIFTY": 50}
+_INDEX_SECURITY_ID = {"BANKNIFTY": "25", "NIFTY": "13", "FINNIFTY": "27"}
+_DEFAULT_STRIKE_STEP = {"BANKNIFTY": 100, "NIFTY": 50, "FINNIFTY": 50}
 
 
 # ── Scrip master: (expiry, strike, CE/PE) -> security_id ───────────────────
