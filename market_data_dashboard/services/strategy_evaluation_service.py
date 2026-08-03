@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -37,6 +38,14 @@ def _lot_size_fallback(*positions: Any) -> float:
             return float(get_instrument(inst).lot_size)
         except Exception:
             continue
+    # Loud, not silent: a position with no/unknown instrument valued at the
+    # legacy BankNifty replay lot (15) is a 4x P&L error for a FINNIFTY trade
+    # (lot 60). Keep the value for replay-era compat, but never quietly.
+    logging.getLogger(__name__).warning(
+        "lot-size fallback: position(s) missing/unknown 'instrument' field -- "
+        "valuing at legacy BankNifty replay lot %s; P&L may be wrong for other instruments",
+        BANKNIFTY_OPTION_LOT_SIZE,
+    )
     return BANKNIFTY_OPTION_LOT_SIZE
 
 

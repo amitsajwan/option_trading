@@ -16,11 +16,23 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# ingestion_app host per instrument (resolved by Docker compose network names)
-_INGESTION_HOSTS = {
-    "BANKNIFTY": os.getenv("INGESTION_APP_BANKNIFTY_URL", "http://ingestion_app:8004"),
-    "NIFTY":     os.getenv("INGESTION_APP_NIFTY_URL",     "http://ingestion_app_nifty:8004"),
-}
+def ingestion_base_url(instrument: str) -> str:
+    """ingestion_app base URL for an instrument (compose network names).
+
+    Generic on purpose (2026-08-04): the old 2-entry _INGESTION_HOSTS dict
+    raised for FINNIFTY despite ingestion_app_finnifty running in compose.
+    Convention: primary (BANKNIFTY) container is unsuffixed `ingestion_app`,
+    every other instrument gets `ingestion_app_{slug}` — same rule as
+    contracts_app.sim_namespace uses for collections/topics/run-dirs.
+    `INGESTION_APP_{INSTRUMENT}_URL` env overrides per instrument.
+    """
+    inst = str(instrument or "").strip().upper()
+    env = os.getenv(f"INGESTION_APP_{inst}_URL", "").strip()
+    if env:
+        return env
+    if inst == "BANKNIFTY":
+        return "http://ingestion_app:8004"
+    return f"http://ingestion_app_{inst.lower()}:8004"
 
 
 class DhanHistoricalFetcher:
@@ -43,9 +55,7 @@ class DhanHistoricalFetcher:
     def fetch_day(self, instrument: str, trade_date: str, strikes: int = 5) -> Dict[str, Any]:
         """Call ingestion_app and return the historical day dict."""
         inst = instrument.upper()
-        base_url = _INGESTION_HOSTS.get(inst)
-        if not base_url:
-            raise ValueError(f"No ingestion_app configured for instrument {inst}")
+        base_url = ingestion_base_url(inst)
 
         url = f"{base_url}/api/v1/historical/day/{inst}"
         params = {"date": trade_date, "strikes": strikes, "interval": "1"}

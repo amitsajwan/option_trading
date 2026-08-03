@@ -42,6 +42,7 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
+from contracts_app.instruments import known_instruments  # noqa: E402
 from ml_pipeline_2.scripts.train_entry_dhan_v3 import (  # noqa: E402
     ENTRY_FEATURES_V3, build_feature_matrix, compute_medians, evaluate, run_hpo,
 )
@@ -72,7 +73,7 @@ def add_rare_label(df: pd.DataFrame, label_pct: float) -> pd.DataFrame:
 
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--instrument", required=True, choices=["BANKNIFTY", "NIFTY"])
+    ap.add_argument("--instrument", required=True, choices=known_instruments())
     ap.add_argument("--training-view", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--train-start", default="2024-11-01")

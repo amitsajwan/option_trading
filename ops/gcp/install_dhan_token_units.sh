@@ -116,6 +116,10 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+# Instrument-GENERIC (2026-08-04): loop over every running strategy container
+# instead of a hardcoded list -- the old two-name ExecStart silently left
+# FINNIFTY (and any future instrument) with zero feature-health coverage,
+# the exact dead-feature-invisible-for-weeks failure this timer exists to catch.
 cat > /etc/systemd/system/feature-health-verdict.service <<EOF
 [Unit]
 Description=Daily feature-health verdict (dead-feature detector, Telegram push)
@@ -123,7 +127,7 @@ After=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'docker exec option_trading-strategy_app-1 python -m strategy_app.tools.feature_health_verdict; docker exec option_trading-strategy_app_nifty-1 python -m strategy_app.tools.feature_health_verdict; true'
+ExecStart=/bin/bash -c 'for c in \$(docker ps --format "{{.Names}}" | grep -E "^option_trading-strategy_app(_[a-z]+)?-1\$" | grep -v historical | sort); do docker exec "\$c" python -m strategy_app.tools.feature_health_verdict; done; true'
 EOF
 
 # 10:00 IST = 04:30 UTC — 45 min into the session, features past warmup.

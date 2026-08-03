@@ -38,18 +38,16 @@ def _find_events(explicit: str | None, instrument: str) -> Path | None:
     if explicit:
         p = Path(explicit)
         return p if p.exists() else None
-    # Instrument-specific path FIRST — containers can mount both instruments'
-    # run dirs, and probing the wrong one silently scores the other book.
-    candidates = (
-        ("/app/.run/snapshot_app_nifty/events.jsonl", "/app/.run/snapshot_app/events.jsonl")
-        if instrument == "NIFTY"
-        else ("/app/.run/snapshot_app/events.jsonl", "/app/.run/snapshot_app_nifty/events.jsonl")
-    )
-    for cand in candidates:
-        p = Path(cand)
-        if p.exists():
-            return p
-    return None
+    # THIS instrument's run dir ONLY (2026-08-04). Two fixes over the old
+    # NIFTY-vs-else ternary: (1) generic — any instrument's dir is derived
+    # from its slug, the old else-branch sent FINNIFTY to BankNifty's path;
+    # (2) no cross-instrument fallback — probing another book's events.jsonl
+    # silently scores the WRONG instrument's bars and reports them under this
+    # instrument's name, which is worse than reporting "no events found".
+    inst = str(instrument or "").strip().upper()
+    suffix = "" if inst in ("", "BANKNIFTY") else f"_{inst.lower()}"
+    p = Path(f"/app/.run/snapshot_app{suffix}/events.jsonl")
+    return p if p.exists() else None
 
 
 def _send_telegram(text: str) -> None:

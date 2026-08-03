@@ -26,9 +26,15 @@ def resolve_lot_size(instrument: Optional[str] = None, *, primary_default: Optio
          (lets each call site keep its own historical BankNifty default — 15 for
          replay-era cost math, 30 for the live cost model), otherwise the legacy
          ``BANKNIFTY_LOT_SIZE`` constant (default 15, env-overridable).
-      3. NIFTY: ``NIFTY_LOT_SIZE`` env (default 25) — NSE changes lot size per
-         expiry; the execution adapter uses the scrip master for actual orders.
-      4. Otherwise: the InstrumentSpec registry fallback.
+      3. Any other instrument: its ``{INSTRUMENT}_LOT_SIZE`` env var if set
+         (NSE revises lot sizes per-expiry; the env var is the operator's live
+         correction lever — the execution adapter still uses the scrip master
+         for actual orders), else the InstrumentSpec registry value.
+         GENERIC on purpose (2026-08-04): the old per-name branches meant
+         FINNIFTY_LOT_SIZE was set in four compose files but read by NOTHING —
+         a silent no-op on a real-money sizing path, only coincidentally
+         harmless because env and registry both said 60. Instrument #4's
+         ``{NAME}_LOT_SIZE`` var now works the day it's added to the registry.
 
     ``instrument`` defaults to STRATEGY_INSTRUMENT via current_instrument().
     """
@@ -47,9 +53,12 @@ def resolve_lot_size(instrument: Optional[str] = None, *, primary_default: Optio
     if inst == "BANKNIFTY":
         # Preserve each call site's legacy BankNifty default.
         return primary_default if primary_default is not None else BANKNIFTY_LOT_SIZE
-    if inst == "NIFTY":
-        # NIFTY_LOT_SIZE env wins over registry (NSE revises per-expiry).
-        return NIFTY_LOT_SIZE
+    env_lot = os.getenv(f"{inst}_LOT_SIZE", "").strip()
+    if env_lot:
+        try:
+            return int(env_lot)
+        except ValueError:
+            pass
     try:
         return int(get_instrument(inst).lot_size)
     except Exception:

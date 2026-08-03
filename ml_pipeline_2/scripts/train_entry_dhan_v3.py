@@ -48,6 +48,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("train_entry_v3")
 
 _REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from contracts_app.instruments import known_instruments  # noqa: E402
 
 # ── Feature set ────────────────────────────────────────────────────────────────
 # Same as current 45-feat BN entry model + vix_current + vix_intraday_chg.
@@ -314,7 +317,7 @@ def evaluate(model: Any, X: pd.DataFrame, y: np.ndarray,
 
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--instrument", required=True, choices=["BANKNIFTY", "NIFTY"])
+    ap.add_argument("--instrument", required=True, choices=known_instruments())
     ap.add_argument("--data-dir",  required=True, help="Path to dhan_data_pipeline indicators dir")
     ap.add_argument("--output",    required=True, help="Output bundle path (.joblib)")
     ap.add_argument("--train-start",   default="2024-11-01")

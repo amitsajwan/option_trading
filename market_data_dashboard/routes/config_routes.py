@@ -46,6 +46,8 @@ _STRATEGY_ENV_KEYS = [
     "STRATEGY_INSTRUMENT",
     "NIFTY_ENTRY_ML_MODEL_PATH",
     "NIFTY_DIRECTION_ML_MODEL_PATH",
+    "FINNIFTY_ENTRY_ML_MODEL_PATH",
+    "FINNIFTY_DIRECTION_ML_MODEL_PATH",
 ]
 
 
@@ -61,7 +63,10 @@ def _model_file_status(path_str: Optional[str]) -> dict[str, Any]:
 
 
 def _load_runtime_config(mode: str = "live", instrument: str = "BANKNIFTY") -> dict[str, Any]:
-    resolved_mode = "nifty" if instrument.upper() == "NIFTY" else mode
+    inst = instrument.upper()
+    # Non-primary instruments map to their own run-dir mode (live_nifty /
+    # live_finnifty / ...); primary keeps the caller's mode (live | replay).
+    resolved_mode = mode if inst == "BANKNIFTY" else f"live_{inst.lower()}"
     run_dir = _resolve_run_dir(resolved_mode)
     cfg_path = run_dir / "runtime_config.json"
     if not cfg_path.exists():

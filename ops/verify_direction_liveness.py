@@ -29,10 +29,30 @@ try:
 except ImportError:
     MongoClient = None
 
-SERVICES = {
-    "option_trading-strategy_app-1": "BANKNIFTY",
-    "option_trading-strategy_app_nifty-1": "NIFTY",
-}
+def _registry_services() -> dict:
+    """Registry-derived container -> instrument map (2026-08-04: the old
+    hardcoded 2-entry dict skipped FINNIFTY entirely)."""
+    try:
+        import sys
+        from pathlib import Path
+        repo = Path(__file__).resolve().parents[1]
+        if str(repo) not in sys.path:
+            sys.path.insert(0, str(repo))
+        from contracts_app.instruments import known_instruments
+        from contracts_app.sim_namespace import PRIMARY_INSTRUMENT
+        out = {}
+        for inst in known_instruments():
+            suffix = "" if inst == PRIMARY_INSTRUMENT else f"_{inst.lower()}"
+            out[f"option_trading-strategy_app{suffix}-1"] = inst
+        return out
+    except Exception:
+        return {
+            "option_trading-strategy_app-1": "BANKNIFTY",
+            "option_trading-strategy_app_nifty-1": "NIFTY",
+        }
+
+
+SERVICES = _registry_services()
 
 # Mirrors the weight_requires rules in config_contract_expected.json — kept
 # inline here so this script has no dependency on that file's schema.
@@ -98,7 +118,11 @@ def observed_check(n: int = 200) -> list[str]:
         return ["(pymongo not available, skipping observed check)"]
     lines = []
     db = MongoClient("mongodb://localhost:27017")["trading_ai"]
-    for coll, instrument in (("strategy_positions", "BANKNIFTY"), ("strategy_positions_nifty", "NIFTY")):
+    pairs = []
+    for cname, inst in SERVICES.items():
+        suffix = "" if inst == "BANKNIFTY" else f"_{inst.lower()}"
+        pairs.append((f"strategy_positions{suffix}", inst))
+    for coll, instrument in pairs:
         try:
             rows = list(db[coll].find(
                 {"event": "POSITION_OPEN"},

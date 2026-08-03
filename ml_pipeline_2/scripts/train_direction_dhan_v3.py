@@ -43,6 +43,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("train_direction_v3")
 
 _REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from contracts_app.instruments import known_instruments  # noqa: E402
 
 # ── Feature set ────────────────────────────────────────────────────────────────
 # 75-feature set from current direction_monthly_v2 — VIX kept (imputed in live).
@@ -277,7 +280,7 @@ def evaluate(model, X, y, label="holdout"):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--instrument", required=True, choices=["BANKNIFTY", "NIFTY"])
+    ap.add_argument("--instrument", required=True, choices=known_instruments())
     ap.add_argument("--data-dir",  required=True)
     ap.add_argument("--output",    required=True)
     ap.add_argument("--train-start",   default="2024-11-01")

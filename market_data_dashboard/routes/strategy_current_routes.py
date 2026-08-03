@@ -36,7 +36,24 @@ from ..state.direction_shadow_state import read_direction_shadow
 # .run/strategy_app_nifty) in _resolve_run_dir — the state layer supported
 # this all along; only this router's validation rejected it. Needed by the
 # dashboard's dual-instrument manual-trading panel (2026-07-24).
-_ALLOWED_MODES = {"live", "replay", "historical", "live_nifty", "nifty"}
+def _build_allowed_modes() -> set[str]:
+    """Registry-derived: every non-primary instrument gets '<slug>' and
+    'live_<slug>' modes automatically (2026-08-04: the old hardcoded set
+    stopped at live_nifty -- FINNIFTY's routes were 400-rejected)."""
+    modes = {"live", "replay", "historical"}
+    try:
+        from contracts_app import known_instruments, PRIMARY_INSTRUMENT
+        for inst in known_instruments():
+            if inst == PRIMARY_INSTRUMENT:
+                continue
+            slug = inst.lower()
+            modes |= {slug, f"live_{slug}"}
+    except Exception:
+        modes |= {"nifty", "live_nifty"}
+    return modes
+
+
+_ALLOWED_MODES = _build_allowed_modes()
 
 
 class StrategyCurrentRouter:

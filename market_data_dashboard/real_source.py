@@ -1383,10 +1383,14 @@ class LiveMongoSource:
         try:
             import json as _json
             from pathlib import Path as _Path
-            if self._instrument == "NIFTY":
+            # Generic per-instrument run dir (2026-08-04): the old NIFTY-only
+            # branch silently read BankNifty's run dir for FINNIFTY.
+            inst = str(self._instrument or "BANKNIFTY").strip().upper()
+            if inst and inst != "BANKNIFTY":
+                slug = inst.lower()
                 run_dir = (
-                    os.getenv("STRATEGY_RUN_DIR_LIVE_NIFTY")
-                    or "/app/.run/strategy_app_nifty"
+                    os.getenv(f"STRATEGY_RUN_DIR_LIVE_{inst}")
+                    or f"/app/.run/strategy_app_{slug}"
                 )
             else:
                 run_dir = (

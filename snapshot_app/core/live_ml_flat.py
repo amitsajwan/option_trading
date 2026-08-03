@@ -539,9 +539,12 @@ def _extract_option_slice_from_chain(chain: Dict[str, Any], fut_price: float) ->
 def _spot_symbol_candidates(instrument: str) -> list[str]:
     underlying = _extract_underlying_symbol(instrument)
     compact = str(underlying or "").replace(" ", "").upper()
+    # NSE display-name aliases for underlyings whose index symbol differs from
+    # the F&O family name. FINNIFTY's display name is "NIFTY FIN SERVICE".
     candidates = {
         "BANKNIFTY": ["NIFTY BANK", "BANKNIFTY"],
         "NIFTY": ["NIFTY 50", "NIFTY"],
+        "FINNIFTY": ["NIFTY FIN SERVICE", "FINNIFTY"],
     }.get(compact, [underlying])
     out: list[str] = []
     seen: set[str] = set()

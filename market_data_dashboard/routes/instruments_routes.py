@@ -34,15 +34,18 @@ logger = logging.getLogger(__name__)
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
-# Instruments known to the system — extend when a new instrument is deployed.
-_KNOWN_INSTRUMENTS = ["BANKNIFTY", "NIFTY", "FINNIFTY"]
-
-# Expiry cadence for DTE calculation.
-_EXPIRY_CADENCE: dict[str, str] = {
-    "BANKNIFTY": "monthly",   # post-Nov 2024: last Thursday of month
-    "NIFTY":     "weekly",    # every Thursday
-    "FINNIFTY":  "monthly",   # only monthly expiries listed as of 2026-07-26
-}
+# Instruments + expiry cadence come from the registry — a new instrument in
+# contracts_app/instruments.py shows up on the dashboard with zero edits here
+# (2026-08-04: the old hardcoded copies went stale for FINNIFTY).
+try:
+    from contracts_app import known_instruments as _known_instruments, get_instrument as _get_instrument
+    _KNOWN_INSTRUMENTS = _known_instruments()
+    _EXPIRY_CADENCE: dict[str, str] = {
+        name: _get_instrument(name).expiry_cadence for name in _KNOWN_INSTRUMENTS
+    }
+except Exception:  # pragma: no cover - defensive for partial installs
+    _KNOWN_INSTRUMENTS = ["BANKNIFTY", "NIFTY", "FINNIFTY"]
+    _EXPIRY_CADENCE = {"BANKNIFTY": "monthly", "NIFTY": "weekly", "FINNIFTY": "monthly"}
 
 
 def _now_ist() -> datetime:
@@ -98,16 +101,15 @@ def _model_loaded(run_dir_mode: str = "live", instrument: str = "BANKNIFTY") -> 
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         engine = str(cfg.get("engine") or "")
         if engine == "deterministic":
-            # Deterministic engine: check env vars for model paths
-            if instrument == "NIFTY":
-                entry_path = os.getenv("NIFTY_ENTRY_ML_MODEL_PATH", "")
-                dir_path = os.getenv("NIFTY_DIRECTION_ML_MODEL_PATH", "")
-            elif instrument == "FINNIFTY":
-                entry_path = os.getenv("FINNIFTY_ENTRY_ML_MODEL_PATH", "")
-                dir_path = os.getenv("FINNIFTY_DIRECTION_ML_MODEL_PATH", "")
-            else:
+            # Deterministic engine: check env vars for model paths.
+            # Primary uses the unprefixed vars; every other instrument uses
+            # {INSTRUMENT}_-prefixed ones (generic -- no per-name branches).
+            if instrument == "BANKNIFTY":
                 entry_path = os.getenv("ENTRY_ML_MODEL_PATH", "")
                 dir_path = os.getenv("DIRECTION_ML_MODEL_PATH", "")
+            else:
+                entry_path = os.getenv(f"{instrument}_ENTRY_ML_MODEL_PATH", "")
+                dir_path = os.getenv(f"{instrument}_DIRECTION_ML_MODEL_PATH", "")
             import pathlib
             return {
                 "entry": bool(entry_path) and pathlib.Path(entry_path).exists(),
@@ -223,13 +225,9 @@ def _instrument_mode(instrument: str) -> str:
     For NIFTY, checks if model paths are configured.
     """
     try:
-        # Read from appropriate runtime config based on instrument
-        if instrument == "NIFTY":
-            run_dir_mode = "live_nifty"
-        elif instrument == "FINNIFTY":
-            run_dir_mode = "live_finnifty"
-        else:
-            run_dir_mode = "live"
+        # Read from appropriate runtime config based on instrument (generic:
+        # primary = "live", everything else = "live_<slug>")
+        run_dir_mode = "live" if instrument == "BANKNIFTY" else f"live_{instrument.lower()}"
         run_dir = _resolve_run_dir(run_dir_mode)
         cfg_path = run_dir / "runtime_config.json"
         
@@ -257,13 +255,8 @@ def _instrument_mode(instrument: str) -> str:
             mode = "sim"
 
         # If a secondary instrument is not yet deployed (no model paths), report as off
-        if instrument == "NIFTY":
-            nifty_entry = os.getenv("NIFTY_ENTRY_ML_MODEL_PATH", "")
-            if not nifty_entry:
-                return "off"
-        elif instrument == "FINNIFTY":
-            finnifty_entry = os.getenv("FINNIFTY_ENTRY_ML_MODEL_PATH", "")
-            if not finnifty_entry:
+        if instrument != "BANKNIFTY":
+            if not os.getenv(f"{instrument}_ENTRY_ML_MODEL_PATH", ""):
                 return "off"
         return mode
     except Exception:
@@ -383,12 +376,7 @@ def _build_instrument_status(instrument: str) -> dict[str, Any]:
 
 def _build_one(instrument: str, db: Any, r: Any, now: datetime, today: str) -> dict[str, Any]:
     mode = _instrument_mode(instrument)
-    if instrument == "NIFTY":
-        run_dir_mode = "live_nifty"
-    elif instrument == "FINNIFTY":
-        run_dir_mode = "live_finnifty"
-    else:
-        run_dir_mode = "live"
+    run_dir_mode = "live" if instrument == "BANKNIFTY" else f"live_{instrument.lower()}"
     models = _model_loaded(run_dir_mode, instrument)
     feed_age = _feed_last_tick_age_sec(r, instrument)
     stats = _today_stats(db, instrument, today) if db is not None else {"today_trades": 0, "today_pnl_pct": 0.0}

@@ -144,11 +144,8 @@ def _run_replay(run_id: str, date: str, instrument: str, speed: float):
         # (e.g. Thursday is a holiday → expiry moves to Wednesday) are handled correctly.
         expiry_date: Optional[str] = None
         try:
-            _ingestion_base = (
-                os.getenv("INGESTION_APP_NIFTY_URL", "http://ingestion_app_nifty:8004")
-                if instrument.upper() == "NIFTY"
-                else os.getenv("INGESTION_APP_BANKNIFTY_URL", "http://ingestion_app:8004")
-            )
+            from market_data_dashboard.services.dhan_replay_fetcher import ingestion_base_url
+            _ingestion_base = ingestion_base_url(instrument)
             import requests as _req
             _exp_resp = _req.get(
                 f"{_ingestion_base}/api/v1/options/chain/{instrument.upper()}",
@@ -264,8 +261,9 @@ class ReplayRouter:
             raise HTTPException(400, "date must be YYYY-MM-DD")
 
         inst = body.instrument.upper()
-        if inst not in ("NIFTY", "BANKNIFTY"):
-            raise HTTPException(400, "instrument must be NIFTY or BANKNIFTY")
+        from contracts_app import known_instruments
+        if inst not in known_instruments():
+            raise HTTPException(400, f"instrument must be one of {known_instruments()}")
 
         run_id = f"replay-{body.date}-{inst.lower()}-{uuid.uuid4().hex[:6]}"
         job: Dict[str, Any] = {

@@ -48,8 +48,8 @@
     "option_trading-strategy_app_finnifty-1": {
       "instrument": "FINNIFTY",
       "expect": {
-        "ENTRY_ML_MODEL_PATH": "/app/models/finnifty_entry_015pct_v1.joblib",
-        "ENTRY_ML_MIN_PROB": "0.54",
+        "ENTRY_ML_MODEL_PATH": "/app/models/finnifty_entry_015pct_v2.joblib",
+        "ENTRY_ML_MIN_PROB": "0.57",
         "ENTRY_ML_MAX_NAN_FEATURES": "2",
         "FINNIFTY_LOT_SIZE": "60",
         "ML_ENTRY_DIRECTION_MODE": "composite",
@@ -96,6 +96,39 @@
         "DHAN_ACCESS_TOKEN",
         "SELLER_IV_RANK_MIN",
         "SELLER_CONDOR_OFFSET"
+      ]
+    },
+    "option_trading-execution_app_nifty-1": {
+      "instrument": "NIFTY",
+      "_comment": "Added 2026-08-04: NIFTY's execution/seller containers had NO contract coverage at all (live money, zero drift detection) while BankNifty and FINNIFTY both did. Values pinned from the running container.",
+      "expect": {
+        "EXECUTION_ADAPTER": "dhan",
+        "EXECUTION_REQUIRE_LIVE_TIER": "1",
+        "NIFTY_LOT_SIZE": "65",
+        "EXEC_BROKER_STOP_ENABLED": "1",
+        "EXEC_BROKER_STOP_PCT": "0.15"
+      },
+      "require_nonempty": [
+        "DHAN_CLIENT_ID",
+        "DHAN_ACCESS_TOKEN"
+      ]
+    },
+    "option_trading-seller_app_nifty-1": {
+      "instrument": "NIFTY",
+      "expect": {
+        "EXECUTION_ADAPTER": "dhan",
+        "SELLER_LIVE_ENABLED": "1",
+        "SELLER_MAX_CONCURRENT": "1",
+        "SELLER_MAX_HOLD_DAYS": "10",
+        "SELLER_CONDOR_OFFSET": "100",
+        "SELLER_SPREAD_WIDTH": "150",
+        "SELLER_MIN_FREE_MARGIN_RS": "60000",
+        "ALERT_ENABLED": "1"
+      },
+      "require_nonempty": [
+        "DHAN_CLIENT_ID",
+        "DHAN_ACCESS_TOKEN",
+        "SELLER_IV_RANK_MIN"
       ]
     },
     "option_trading-execution_app_finnifty-1": {

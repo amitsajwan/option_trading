@@ -917,6 +917,40 @@ services:
       - ./.run:/app/.run
     command: ["python", "-m", "ingestion_app.collectors.dhan_depth_collector"]
 
+  depth_collector_dhan_finnifty:
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: ingestion_app/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      TZ: "Asia/Kolkata"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "${REDIS_DB:-0}"
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DB: "${MONGO_DB:-trading_ai}"
+      EXECUTION_MODE: "live"
+      DHAN_CLIENT_ID: "${DHAN_CLIENT_ID:-}"
+      DHAN_ACCESS_TOKEN: "${DHAN_ACCESS_TOKEN:-}"
+      DEPTH_UNDERLYING: "FINNIFTY"
+      DEPTH_STRIKE_STEP: "${DEPTH_STRIKE_STEP_FINNIFTY:-50}"
+      DEPTH_POLL_INTERVAL_SEC: "${DEPTH_POLL_INTERVAL_SEC:-5}"
+      DEPTH_STALE_TTL_SEC: "${DEPTH_STALE_TTL_SEC:-60}"
+      DEPTH_MARKET_OPEN_IST: "${DEPTH_MARKET_OPEN_IST:-09:15}"
+      DEPTH_MARKET_CLOSE_IST: "${DEPTH_MARKET_CLOSE_IST:-15:35}"
+      DEPTH_MONGO_ENABLED: "${DEPTH_MONGO_ENABLED:-1}"
+      DEPTH_MONGO_TTL_DAYS: "${DEPTH_MONGO_TTL_DAYS:-7}"
+    volumes:
+      - ./.run:/app/.run
+    command: ["python", "-m", "ingestion_app.collectors.dhan_depth_collector"]
+
   dashboard:
     profiles: ["ui"]
     build:
@@ -2305,17 +2339,17 @@ services:
       TRADE_SIGNAL_TOPIC: "market:finnifty:strategy:signals:v1"
       STRATEGY_POSITION_TOPIC: "market:finnifty:strategy:positions:v1"
       STRATEGY_DECISION_TRACE_TOPIC: "market:finnifty:strategy:decision_trace:v1"
-      # 2026-08-03: first-ever FINNIFTY entry model, trained on correctly
-      # re-backfilled data this session (finnifty_entry_015pct_v1). FAILED its
-      # own ship gates (holdout AUC 0.576) and its calibrated probability never
-      # exceeds 0.540 anywhere in Jun-Jul 2026 data -- copying BN/NIFTY's 0.60
-      # or 0.05 threshold is meaningless for this bundle's real range. Computed
-      # empirically: scored against 8604 Jun-Jul FINNIFTY rows, distribution is
-      # heavily quantized (shallow max_depth=3 tree) with a sharp cliff at 0.54
-      # -- the model's own top-confidence bucket, ~7.6% fire rate (28 bars/day).
-      # 0.54 = the ceiling itself: maximally selective while still reachable.
-      ENTRY_ML_MODEL_PATH: "${FINNIFTY_ENTRY_ML_MODEL_PATH:-/app/models/finnifty_entry_015pct_v1.joblib}"
-      ENTRY_ML_MIN_PROB: "${FINNIFTY_ENTRY_ML_MIN_PROB:-0.54}"
+      # 2026-08-04: v2 -- retrained after the hist_backfill DTE bug fix (v1's
+      # training data carried NIFTY's WEEKLY expiry on every FINNIFTY snapshot;
+      # repaired in Mongo from the empirical straddle-collapse calendar, then
+      # retrained). Holdout AUC 0.60 (v1: 0.576), Jun/Jul-2026 AUC 0.70/0.68.
+      # Still fails the absolute ship gates -- threshold must come from THIS
+      # bundle's real output range, not BN/NIFTY's. Empirical (8604 Jun-Jul
+      # rows): sharply two-bucketed distribution, 0.4298 bucket fires ~110
+      # bars/day (too loose); top-confidence bucket at 0.5738 fires ~9.3
+      # bars/day (2.5%). 0.57 selects exactly that top bucket.
+      ENTRY_ML_MODEL_PATH: "${FINNIFTY_ENTRY_ML_MODEL_PATH:-/app/models/finnifty_entry_015pct_v2.joblib}"
+      ENTRY_ML_MIN_PROB: "${FINNIFTY_ENTRY_ML_MIN_PROB:-0.57}"
       # No FINNIFTY direction-ML bundle exists yet -- DIRECTION_ML_MODEL_PATH
       # intentionally left unset. ENTRY_DIR_W_ML explicitly zeroed (the
       # resolver's own documented way to disable the ML term) rather than left

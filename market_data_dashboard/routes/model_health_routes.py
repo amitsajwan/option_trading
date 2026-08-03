@@ -69,7 +69,7 @@ class ModelHealthRouter:
 
     async def get_model_health(
         self,
-        instrument: str = Query("BANKNIFTY", description="BANKNIFTY | NIFTY"),
+        instrument: str = Query("BANKNIFTY", description="any registry instrument (BANKNIFTY | NIFTY | FINNIFTY | ...)"),
         lookback_days: int = Query(5, ge=1, le=30, description="days to include in histogram"),
         kind: str = Query("live", description="live | oos | sim"),
     ) -> dict[str, Any]:

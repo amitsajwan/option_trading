@@ -26,8 +26,9 @@ from typing import Any, Iterable, Optional
 
 DEFAULT_HISTORICAL_RUN_DIR = Path("/app/.run/strategy_app_historical")
 DEFAULT_LIVE_RUN_DIR = Path("/app/.run/strategy_app")
-DEFAULT_LIVE_NIFTY_RUN_DIR = Path("/app/.run/strategy_app_nifty")
-DEFAULT_LIVE_FINNIFTY_RUN_DIR = Path("/app/.run/strategy_app_finnifty")
+# Non-primary instruments' run dirs are derived generically in
+# _resolve_run_dir() (/app/.run/strategy_app_<slug>) -- no per-instrument
+# constants needed.
 DEFAULT_PUBLISHED_MODELS_ROOT = Path("/app/ml_pipeline_2/artifacts/published_models")
 
 
@@ -53,17 +54,24 @@ def _resolve_run_dir(mode: str) -> Path:
 
     Order of precedence:
       1. Explicit env override (`STRATEGY_RUN_DIR_LIVE` / `STRATEGY_RUN_DIR_HISTORICAL`
-         / `STRATEGY_RUN_DIR_LIVE_NIFTY` / `STRATEGY_RUN_DIR_LIVE_FINNIFTY`)
+         / `STRATEGY_RUN_DIR_LIVE_{INSTRUMENT}`)
       2. Default by mode
+
+    Instrument modes are GENERIC (2026-08-04): any registry instrument's
+    '<slug>' / 'live_<slug>' mode resolves to /app/.run/strategy_app_<slug>
+    with a STRATEGY_RUN_DIR_LIVE_<SLUG> env override -- the old per-instrument
+    if-chain needed a new constant + env var + branch per instrument.
     """
     mode = mode.strip().lower()
     if mode in {"historical", "replay"}:
         return Path(os.getenv("STRATEGY_RUN_DIR_HISTORICAL") or DEFAULT_HISTORICAL_RUN_DIR)
-    if mode in {"live_nifty", "nifty"}:
-        return Path(os.getenv("STRATEGY_RUN_DIR_LIVE_NIFTY") or DEFAULT_LIVE_NIFTY_RUN_DIR)
-    if mode in {"live_finnifty", "finnifty"}:
-        return Path(os.getenv("STRATEGY_RUN_DIR_LIVE_FINNIFTY") or DEFAULT_LIVE_FINNIFTY_RUN_DIR)
-    return Path(os.getenv("STRATEGY_RUN_DIR_LIVE") or DEFAULT_LIVE_RUN_DIR)
+    if mode in {"live", ""}:
+        return Path(os.getenv("STRATEGY_RUN_DIR_LIVE") or DEFAULT_LIVE_RUN_DIR)
+    slug = mode[5:] if mode.startswith("live_") else mode
+    if slug in {"", "banknifty"}:  # primary is the unsuffixed live dir
+        return Path(os.getenv("STRATEGY_RUN_DIR_LIVE") or DEFAULT_LIVE_RUN_DIR)
+    env = os.getenv(f"STRATEGY_RUN_DIR_LIVE_{slug.upper()}")
+    return Path(env or f"/app/.run/strategy_app_{slug}")
 
 
 def _tail_lines(path: Path, n: int = 50, max_bytes_back: int = 2_000_000) -> list[str]:

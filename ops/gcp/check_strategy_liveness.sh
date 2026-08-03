@@ -66,5 +66,19 @@ PY
   fi
 }
 
-check "BANKNIFTY buyer (strategy_app)" "strategy_decision_traces"
-check "NIFTY buyer (strategy_app_nifty)" "strategy_decision_traces_nifty"
+# Instrument-GENERIC (2026-08-04): derive the instrument set from the running
+# strategy containers, and each one's trace collection from the container-name
+# suffix (same "{base}" primary / "{base}_{slug}" secondary rule as
+# contracts_app.sim_namespace). The old hardcoded two-check list silently left
+# FINNIFTY's buyer with zero liveness coverage.
+for c in $(sudo docker ps --format '{{.Names}}' \
+             | grep -E '^option_trading-strategy_app(_[a-z]+)?-1$' \
+             | grep -v historical | sort); do
+  suffix=$(echo "$c" | sed -E 's/^option_trading-strategy_app(_[a-z]+)?-1$/\1/')
+  if [ -z "$suffix" ]; then
+    check "BANKNIFTY buyer (strategy_app)" "strategy_decision_traces"
+  else
+    inst=$(echo "${suffix#_}" | tr '[:lower:]' '[:upper:]')
+    check "${inst} buyer (strategy_app${suffix})" "strategy_decision_traces${suffix}"
+  fi
+done

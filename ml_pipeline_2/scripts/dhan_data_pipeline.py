@@ -897,7 +897,11 @@ def run_build(args):
     # Thursday, post-Nov-2024). Holiday-rolled-back. Built once, passed per day.
     all_trading_days = sorted(set(ist_index.date))
     instrument_name = getattr(args, "instrument", "NIFTY")
-    cfg = INSTRUMENTS.get(instrument_name, INSTRUMENTS["NIFTY"])
+    # Fail loud on an unknown instrument -- the old .get(name, INSTRUMENTS["NIFTY"])
+    # silently built the WRONG instrument's expiry calendar (weekly for a monthly
+    # instrument), the same silent-substitution bug shape that corrupted every
+    # FINNIFTY historical backfill until 0635ea8 (2026-08-02).
+    cfg = INSTRUMENTS[instrument_name]
     cadence = cfg.expiry_cadence
     expiry_dates = _build_expiry_dates(all_trading_days, cadence)
     log.info("Expiry cadence=%s: %d expiry dates %s..%s", cadence, len(expiry_dates),
@@ -912,7 +916,8 @@ def run_build(args):
         expiry = _expiry_for(td, expiry_dates)
         day_df = _build_day_indicators(td, index_df, vix_df, options,
                                        futures_df=futures_df,
-                                       prev_day_close=prev_close, expiry_date=expiry)
+                                       prev_day_close=prev_close, expiry_date=expiry,
+                                       instrument=instrument_name)
         if day_df is not None and not day_df.empty:
             day_df.to_parquet(out_file)
             day_files.append(out_file)
@@ -944,6 +949,7 @@ def _build_day_indicators(
     futures_df: Optional[pd.DataFrame] = None,
     prev_day_close: Optional[float] = None,
     expiry_date: Optional[date] = None,
+    instrument: str = "BANKNIFTY",
 ) -> Optional[pd.DataFrame]:
     """Build one day of indicators. Returns None if no index data for that day.
 
@@ -1001,7 +1007,11 @@ def _build_day_indicators(
         rows["fut_flow_volume"] = idx_al.get("volume", pd.Series(0, index=sess_idx))
 
     rows["trade_date"] = trade_date
-    rows["instrument"] = "BANKNIFTY"
+    # Stamp the ACTUAL instrument, not a hardcoded "BANKNIFTY" -- every NIFTY/
+    # FINNIFTY parquet row this pipeline ever emitted was mislabeled BANKNIFTY
+    # at the row level (found 2026-08-04 sweep); dataset_manifests and training
+    # -view filters key on this column.
+    rows["instrument"] = instrument
 
     # ── VIX (raw column — feature_engine Layer 6 will compute ctx_is_high_vix_day) ─
     vix_open_val: Optional[float] = None

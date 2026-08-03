@@ -240,8 +240,15 @@ def _infer_exchange_for_symbol(symbol: str) -> Optional[str]:
         return None
     if normalized.endswith(("FUT", "CE", "PE")):
         return "NFO"
-    if normalized in {"INDIA VIX", "INDIAVIX", "BANKNIFTY", "NIFTY", "NIFTY BANK", "NIFTY 50"}:
+    if normalized in {"INDIA VIX", "INDIAVIX", "NIFTY BANK", "NIFTY 50", "NIFTY FIN SERVICE"}:
         return "NSE"
+    try:
+        from contracts_app import known_instruments
+        if normalized in known_instruments():
+            return "NSE"
+    except Exception:
+        if normalized in {"BANKNIFTY", "NIFTY", "FINNIFTY"}:
+            return "NSE"
     return None
 
 

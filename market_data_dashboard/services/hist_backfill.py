@@ -106,7 +106,16 @@ def _enrich_for_seller(snapshots: list[dict], trade_date: str, instrument: str =
       the direction lever was blind on hist data. Enriched here via the SAME
       canonical modules the training view uses (no drift)."""
     d = date.fromisoformat(trade_date)
-    exp = bn_monthly_expiry(d) if instrument.upper() == "BANKNIFTY" else nifty_weekly_expiry(d)
+    # Cadence from the registry, NOT a BANKNIFTY-vs-everyone-else binary:
+    # that binary gave FINNIFTY (monthly per registry) NIFTY's WEEKLY expiry on
+    # every backfilled snapshot -- wrong days_to_expiry/is_expiry_day/expiry on
+    # all 359 days of its first clean backfill (found 2026-08-04 sweep). DTE
+    # drives seller exits and is a model feature. NOTE: bn_monthly_expiry's
+    # era-dependent weekday table (Wed->Thu->Tue) is exchange-wide for index
+    # monthlies, so it applies to any monthly-cadence instrument, not just BN.
+    from contracts_app import get_instrument
+    cadence = get_instrument(instrument).expiry_cadence
+    exp = bn_monthly_expiry(d) if cadence == "monthly" else nifty_weekly_expiry(d)
     dte = (exp - d).days
     last: dict[tuple[int, str], float] = {}   # (strike, field) -> last non-None
     for s in snapshots:
