@@ -54,31 +54,30 @@ fi
 log "recreating ALL Dhan-dependent containers with the fresh token"
 cd "$REPO"
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.gcp.yml)
-RECREATE_SVCS=(ingestion_app ingestion_app_nifty execution_app execution_app_nifty)
-# seller_app + seller_app_nifty (2026-07-08 / 2026-07-24, real money): each has
-# its own independent DhanAdapter instance that reads DHAN_ACCESS_TOKEN at
-# container startup — without recreating both here, whichever is skipped keeps
-# trading on its old token after the daily refresh. Found 2026-07-24:
-# seller_app_nifty was missing from this list (seller_app was added 2026-07-08
-# but the NIFTY twin never was); Dhan appears to invalidate the previous token
-# once a new one is minted, so seller_app_nifty's held-over token failed with a
-# genuine 401 ("invalid or expired") on its next real order attempt hours
-# after that morning's refresh — not a gradual expiry, an instant cliff at
-# mint time. Cost two real, valid NIFTY seller entries before
-# SELLER_ENTRY_FAIL_LATCH stopped further attempts for the day. Overlay is
-# optional so the refresh never breaks on a VM without it.
 if [ -f docker-compose.seller.yml ]; then
   COMPOSE_FILES+=(-f docker-compose.seller.yml)
-  RECREATE_SVCS+=(seller_app seller_app_nifty)
 fi
-# depth_collector_dhan{,_nifty} (2026-07-21): also authenticate with
-# DHAN_ACCESS_TOKEN at startup, same as the services above -- would silently
-# run token-less after the first daily refresh otherwise. profiles:["live"]
-# doesn't block an explicit --no-deps up on a named service (profile
-# filtering only applies to the "no service given" default set), and these
-# are always present in docker-compose.yml so no existence check is needed
-# (unlike the optional seller overlay above).
-RECREATE_SVCS+=(depth_collector_dhan depth_collector_dhan_nifty)
+# Instrument-GENERIC (2026-08-04): the four Dhan-authenticating service
+# FAMILIES (ingestion_app, execution_app, seller_app, depth_collector_dhan)
+# each independently authenticate with DHAN_ACCESS_TOKEN at container startup
+# -- any instrument's container skipped here keeps trading on its stale token
+# until it hits a hard 401. This bug shape hit real money TWICE with a
+# hardcoded list: 2026-07-24 (seller_app_nifty missing -- cost two real NIFTY
+# seller entries before the fail-latch caught it) and 2026-08-04 (FINNIFTY
+# missing entirely -- discovered when snapshot_app_finnifty went unhealthy at
+# market open, "no OHLC bars available", because ingestion_app_finnifty was
+# still authenticating with yesterday's invalidated token). Derive the list
+# from the ACTUALLY RUNNING containers instead of a name list that must be
+# remembered per instrument.
+RECREATE_SVCS=($(docker ps --format '{{.Names}}' \
+  | grep -E '^option_trading-(ingestion_app|execution_app|seller_app|depth_collector_dhan)(_[a-z]+)?-1$' \
+  | grep -v historical \
+  | sed -E 's/^option_trading-//; s/-1$//' \
+  | sort))
+if [ "${#RECREATE_SVCS[@]}" -eq 0 ]; then
+  log "FAILED: no Dhan-dependent containers found running -- refusing to no-op recreate"
+  exit 1
+fi
 docker compose --env-file .env.compose "${COMPOSE_FILES[@]}" \
   up -d --no-deps --force-recreate "${RECREATE_SVCS[@]}"
 log "dhan token refreshed via TOTP + ${#RECREATE_SVCS[@]} Dhan containers recreated (${RECREATE_SVCS[*]})"

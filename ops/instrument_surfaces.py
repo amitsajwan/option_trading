@@ -279,6 +279,15 @@ def surface_checks(instrument: str) -> list[tuple[str, bool, str]]:
     add("liveness probe is instrument-generic",
         "strategy_app(_[a-z]+)?-1" in liveness,
         "restore the generic docker-ps loop in check_strategy_liveness.sh")
+    # 2026-08-04: this exact hardcoded-list shape hit REAL MONEY twice
+    # (2026-07-24 seller_app_nifty missing from the daily token-refresh list;
+    # 2026-08-04 FINNIFTY missing entirely, discovered at market open when
+    # ingestion_app_finnifty was still authenticating on yesterday's token).
+    # A bash script, so the AST scan above (Python-only) can't catch it.
+    token_refresh = _read("ops/gcp/dhan_token_refresh.sh")
+    add("dhan token-refresh recreate-list is instrument-generic",
+        "(ingestion_app|execution_app|seller_app|depth_collector_dhan)(_[a-z]+)?-1" in token_refresh,
+        "restore the generic docker-ps loop in ops/gcp/dhan_token_refresh.sh")
 
     # 12. lot-size env is actually read (the FINNIFTY_LOT_SIZE no-op class)
     consts = _read("strategy_app/constants.py")
