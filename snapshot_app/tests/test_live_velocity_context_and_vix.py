@@ -184,3 +184,67 @@ def test_builder_session_open_vix_ignores_nonfinite():
     assert b._session_open_vix is None
     b._update_session_open_vix(ohlc=day1, vix_live=14.0)
     assert b._session_open_vix == 14.0
+
+
+# ─── _build_mongo_velocity_context_provider instrument scoping (2026-08-04) ───
+# Live regression: make_mongo_context_provider's default `collections` is
+# BankNifty's own (phase1_market_snapshots[_historical]) -- the live builder
+# called it with NO collections= override, so every non-primary instrument's
+# snapshot_app silently read BankNifty's prev_day_close/volume context. Caught
+# live: FINNIFTY AND NIFTY (real money) both logged prev_close=57851 (BN's
+# range) instead of their own on 2026-08-04 market open.
+
+def test_mongo_velocity_context_provider_scopes_collections_to_instrument(monkeypatch):
+    from snapshot_app import main_live
+
+    captured: dict = {}
+
+    def _fake_make_provider(db, *, collections=(), lookback=25):
+        captured["collections"] = collections
+        return lambda trade_date: (None, None, None)
+
+    class _FakeMongoClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __getitem__(self, name):
+            return {}
+
+    monkeypatch.setattr("pymongo.MongoClient", _FakeMongoClient)
+    monkeypatch.setenv("STRATEGY_INSTRUMENT", "FINNIFTY")
+    monkeypatch.setattr(
+        "snapshot_app.core.live_velocity_state.make_mongo_context_provider",
+        _fake_make_provider,
+    )
+    main_live._build_mongo_velocity_context_provider()
+    assert captured["collections"][0] == "phase1_market_snapshots_finnifty"
+    assert "phase1_market_snapshots" != captured["collections"][0]
+
+
+def test_mongo_velocity_context_provider_primary_instrument_unchanged(monkeypatch):
+    from snapshot_app import main_live
+
+    captured: dict = {}
+
+    def _fake_make_provider(db, *, collections=(), lookback=25):
+        captured["collections"] = collections
+        return lambda trade_date: (None, None, None)
+
+    class _FakeMongoClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __getitem__(self, name):
+            return {}
+
+    monkeypatch.setattr("pymongo.MongoClient", _FakeMongoClient)
+    monkeypatch.setenv("STRATEGY_INSTRUMENT", "BANKNIFTY")
+    monkeypatch.setattr(
+        "snapshot_app.core.live_velocity_state.make_mongo_context_provider",
+        _fake_make_provider,
+    )
+    main_live._build_mongo_velocity_context_provider()
+    assert captured["collections"] == (
+        "phase1_market_snapshots",
+        "phase1_market_snapshots_historical",
+    )

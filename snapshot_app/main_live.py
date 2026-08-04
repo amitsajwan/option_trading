@@ -403,10 +403,24 @@ def _build_mongo_velocity_context_provider() -> Optional[Any]:
     try:
         client = MongoClient(host=host, port=port, serverSelectionTimeoutMS=5000)
         db = client[db_name]
+        # THIS instrument's own collections -- make_mongo_context_provider's
+        # default is BankNifty's (phase1_market_snapshots[_historical]). Found
+        # 2026-08-04, live: every non-primary instrument's snapshot_app was
+        # silently reading BankNifty's prev_day_close/volume context (FINNIFTY
+        # logged prev_close=57851, BankNifty's own range, not ~26000).
+        try:
+            from contracts_app import current_instrument, normalize_instrument
+            inst = normalize_instrument(os.getenv("STRATEGY_INSTRUMENT") or current_instrument())
+        except Exception:
+            inst = str(os.getenv("STRATEGY_INSTRUMENT") or "BANKNIFTY").strip().upper()
+        suffix = "" if inst == "BANKNIFTY" else f"_{inst.lower()}"
+        collections = (f"phase1_market_snapshots{suffix}",
+                       f"phase1_market_snapshots_historical{suffix}")
         logger.info(
-            "velocity context: mongo provider enabled host=%s db=%s", host, db_name
+            "velocity context: mongo provider enabled host=%s db=%s instrument=%s collections=%s",
+            host, db_name, inst, collections,
         )
-        return make_mongo_context_provider(db)
+        return make_mongo_context_provider(db, collections=collections)
     except Exception as exc:
         logger.warning(
             "velocity context: mongo connect failed (%s); context will be NaN", exc
