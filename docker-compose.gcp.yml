@@ -402,6 +402,12 @@ services:
       ENTRY_ML_MODEL_PATH_2: "${ENTRY_ML_MODEL_PATH_2:-/app/models/dhan_entry_fast_v1.joblib}"
       ENTRY_ML_MIN_PROB_2: "${ENTRY_ML_MIN_PROB_2:-0.6}"
       ENTRY_ML_MAX_NAN_FEATURES: "${ENTRY_ML_MAX_NAN_FEATURES:-}"
+      # Shadow-only (2026-08-05): logs what ML_ENTRY would have said on bars the
+      # regime gate excludes it from (CHOP/PRE_EXPIRY/AVOID) -- never actionable,
+      # SignalType.SKIP, never added to real votes. Enabled to build evidence on
+      # whether the CHOP exclusion (justified by a single 2026-06-03 incident) is
+      # still earning its keep, without risking any money either way.
+      ML_SCORE_ALL_SNAPSHOTS: "${ML_SCORE_ALL_SNAPSHOTS:-1}"
       ENTRY_ALLOW_CHOP: "${ENTRY_ALLOW_CHOP:-}"
       ENTRY_BLOCK_PRE_EXPIRY: "${ENTRY_BLOCK_PRE_EXPIRY:-}"
       ENTRY_VOL_GATE_ENABLED: "${ENTRY_VOL_GATE_ENABLED:-0}"
@@ -2230,6 +2236,10 @@ services:
       DIRECTION_ML_MIN_MARGIN: "${DIRECTION_ML_MIN_MARGIN:-0}"
       ENTRY_ML_MAX_NAN_FEATURES: "${NIFTY_ENTRY_ML_MAX_NAN_FEATURES:-2}"
       DIRECTION_ML_MAX_NAN_FEATURES: "${DIRECTION_ML_MAX_NAN_FEATURES:-10}"
+      # Shadow-only (2026-08-05): see strategy_app's own comment above. NIFTY is
+      # the instrument where this matters most -- 52% of its live bars never
+      # reach ML_ENTRY at all (CHOP 100%, AVOID 100%, PRE_EXPIRY ~84% blocked).
+      ML_SCORE_ALL_SNAPSHOTS: "${ML_SCORE_ALL_SNAPSHOTS:-1}"
       ML_ENTRY_DIRECTION_MODE: "${NIFTY_ML_ENTRY_DIRECTION_MODE:-composite}"
       # 2026-07-21: composite's depth signal (weight 1.1, heaviest) had been
       # dead for weeks -- depth_collector was Kite-only, never ported to Dhan.

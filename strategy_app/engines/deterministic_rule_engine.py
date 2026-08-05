@@ -553,10 +553,19 @@ class DeterministicRuleEngine(StrategyEngine):
                 else self._build_entry_trace(
                     snap=snap, regime_signal=regime_signal, votes=[], signal=None,
                     blocker=no_votes_blocker_reason(), warmup_blocked=False, warmup_reason="",
+                    ml_shadow_vote=shadow_vote,
                 )
             )
             self.last_decision_trace = no_vote_trace
             self._log.log_decision_trace(no_vote_trace)
+            # Fixed 2026-08-05: this used to only be reached below (line ~604) when
+            # `votes` was non-empty -- for the exact CHOP/AVOID/PRE_EXPIRY bars this
+            # shadow path exists to observe, the vote was computed then silently
+            # dropped without this. Now logged here too so ML_SCORE_ALL_SNAPSHOTS
+            # actually delivers visibility into regime-excluded bars.
+            if shadow_vote is not None:
+                self._annotate_vote_contract(shadow_vote)
+                self._log.log_vote(shadow_vote)
             self._emit_decision_summary(
                 snap=snap,
                 action=("manage_only" if position is not None else "hold"),
@@ -3178,6 +3187,7 @@ class DeterministicRuleEngine(StrategyEngine):
         blocker: Optional[str],
         warmup_blocked: bool,
         warmup_reason: str,
+        ml_shadow_vote: Optional[StrategyVote] = None,
     ) -> dict[str, Any]:
         builder = DecisionTraceBuilder(
             snapshot_id=snap.snapshot_id,
@@ -3239,6 +3249,30 @@ class DeterministicRuleEngine(StrategyEngine):
                 terminal_reason_code=vote.decision_reason_code,
                 selected=selected,
                 extra_metrics=compact_metrics(vote.decision_metrics),
+            )
+        if ml_shadow_vote is not None:
+            # Book-keeping only (2026-08-05 fix): _build_ml_shadow_vote() computes
+            # this on every regime-excluded bar (CHOP/PRE_EXPIRY/AVOID) when
+            # ML_SCORE_ALL_SNAPSHOTS=1, but the caller only reaches this point via
+            # the `if not votes:` branch -- exactly the bars where `votes` is empty
+            # and this candidate loop above never runs. Without this, the shadow
+            # vote was silently computed and discarded, never logged/traced, for
+            # precisely the regimes the feature exists to give visibility into.
+            # candidate_type="ml_shadow" + terminal_status="shadow_only" keep it
+            # unambiguously non-actionable and distinct from real candidates.
+            shadow_candidate = builder.add_candidate(
+                strategy_name=ml_shadow_vote.strategy_name,
+                candidate_type="ml_shadow",
+                direction=(ml_shadow_vote.direction.value if ml_shadow_vote.direction is not None else None),
+                confidence=ml_shadow_vote.confidence,
+                metrics=compact_metrics(ml_shadow_vote.decision_metrics),
+            )
+            builder.finalize_candidate(
+                shadow_candidate,
+                terminal_status="shadow_only",
+                terminal_gate_id="regime_excludes_ml_entry",
+                terminal_reason_code=str(ml_shadow_vote.raw_signals.get("_ml_shadow_reason") or ""),
+                selected=False,
             )
         final_outcome = "entry_taken" if signal is not None else ("blocked" if blocker is not None or warmup_blocked else "hold")
         shadow_dir, shadow_full_basis, shadow_score = self._shadow_direction_from_snapshot(snap)

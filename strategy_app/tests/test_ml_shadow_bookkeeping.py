@@ -117,6 +117,47 @@ class MlShadowBookkeepingTest(unittest.TestCase):
         mock_eval.assert_not_called()
         self.assertIsNone(vote)
 
+    def test_shadow_vote_survives_the_no_votes_early_return(self):
+        """The real gap (found 2026-08-05, live): _evaluate_impl computes the
+        shadow vote BEFORE checking `if not votes:`, but that branch used to
+        return early and never reach the log_vote()/candidate-building code --
+        so for CHOP/AVOID (where votes is ALWAYS empty, unlike PRE_EXPIRY which
+        can still have other active strategies), the shadow vote was silently
+        computed and discarded. Turning on ML_SCORE_ALL_SNAPSHOTS delivered
+        nothing for exactly the regimes it exists to observe. This exercises
+        the real end-to-end evaluate() path, not just _build_ml_shadow_vote()
+        in isolation (which is what let the gap through the first time)."""
+        with tempfile.TemporaryDirectory() as d:
+            engine = self._engine(d)
+            engine._ml_score_all_snapshots = True
+            regime_signal = _regime_signal(Regime.CHOP)
+
+            trigger = engine._router.get_strategy("ML_ENTRY")
+            from datetime import datetime, timezone
+            from strategy_app.contracts import StrategyVote
+            shadow_vote = StrategyVote(
+                strategy_name="ML_ENTRY", snapshot_id="snap-shadow-ml-1",
+                timestamp=datetime(2024, 8, 15, 6, 0, tzinfo=timezone.utc), trade_date="2024-08-15",
+                signal_type=SignalType.ENTRY, direction=Direction.CE, confidence=0.75,
+                reason="ml_entry prob=0.75", decision_metrics={"entry_prob": 0.75},
+                raw_signals={},
+            )
+            with patch.object(engine, "_regime") as mock_regime, \
+                 patch.object(engine._router, "get_strategies", return_value=[]), \
+                 patch.object(trigger, "evaluate", return_value=shadow_vote), \
+                 patch.object(engine, "_collect_votes", return_value=[]):
+                mock_regime.classify.return_value = regime_signal
+                engine.evaluate(_snapshot_payload())
+
+        trace = engine.last_decision_trace
+        self.assertIsInstance(trace, dict)
+        shadow_candidates = [c for c in trace.get("candidates", []) if c.get("candidate_type") == "ml_shadow"]
+        self.assertEqual(len(shadow_candidates), 1, f"expected exactly 1 ml_shadow candidate, trace candidates={trace.get('candidates')}")
+        cand = shadow_candidates[0]
+        self.assertEqual(cand["direction"], "CE")
+        self.assertEqual(cand["terminal_status"], "shadow_only")
+        self.assertFalse(cand["selected"])  # never actionable
+
     def test_never_raises_on_strategy_exception(self):
         with tempfile.TemporaryDirectory() as d:
             engine = self._engine(d)

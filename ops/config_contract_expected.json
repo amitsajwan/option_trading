@@ -16,7 +16,8 @@
         "ALERT_ENABLED": "1",
         "REGIME_PANIC_REQUIRE_NONDIRECTIONAL": "1",
         "ENTRY_ML_MODEL_PATH_2": "/app/models/dhan_entry_fast_v1.joblib",
-        "ENTRY_ML_MIN_PROB_2": "0.6"
+        "ENTRY_ML_MIN_PROB_2": "0.6",
+        "ML_SCORE_ALL_SNAPSHOTS": "1"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
@@ -37,7 +38,8 @@
         "ALERT_ENABLED": "1",
         "REGIME_PANIC_REQUIRE_NONDIRECTIONAL": "1",
         "ENTRY_ML_MODEL_PATH_2": "/app/models/nifty_entry_fast_v1.joblib",
-        "ENTRY_ML_MIN_PROB_2": "0.30"
+        "ENTRY_ML_MIN_PROB_2": "0.30",
+        "ML_SCORE_ALL_SNAPSHOTS": "1"
       },
       "require_nonempty": [
         "EXIT_STRATEGY_MODE",
